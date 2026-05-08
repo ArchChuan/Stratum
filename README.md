@@ -22,7 +22,8 @@
 | 图数据库 | Neo4j | 知识图谱存储 |
 | 日志 | Uber Zap | 结构化日志 |
 | 配置 | Spf13 Viper | 配置管理 |
-| 可观测 | 结构化日志 + 指标 | 链路追踪与监控 |
+| 可观测 | OpenTelemetry | 链路追踪与监控 |
+| 部署 | Kubernetes/Helm | 云原生部署 |
 
 ## 架构分层
 
@@ -44,47 +45,16 @@
 └─────────────────────────────────────────┘
 ```
 
-## 项目结构
-
-```
-clawhermes-ai-go/
-├── cmd/server/              # 应用入口
-├── api/                     # HTTP API 层
-│   ├── router.go            # 路由定义
-│   ├── model/               # 请求/响应模型
-│   ├── handler/             # 请求处理器
-│   └── middleware/          # 中间件
-├── internal/                # 内部业务逻辑
-│   ├── config/              # 配置管理
-│   ├── hermes/              # NATS 事件总线
-│   ├── skill/               # Skill 定义与执行
-│   ├── orchestrator/        # Skill 编排与注册
-│   ├── llmgateway/          # LLM 网关
-│   └── knowledge/           # GraphRAG 知识管理
-├── pkg/                     # 公共库
-│   ├── mcp/                 # MCP 协议
-│   └── observability/       # 日志、指标、链路追踪
-├── go.mod                   # Go 模块定义
-├── go.sum                   # 依赖校验和
-├── Makefile                 # 构建脚本
-├── docker-compose.yml       # 容器编排
-├── .env.example             # 环境变量示例
-├── start.sh                 # 启动脚本
-├── stop.sh                  # 停止脚本
-├── CLAUDE.md                # Claude Code 开发指南
-└── docs/                    # 文档
-    ├── LLM_INTEGRATION.md   # LLM 集成指南
-    ├── QUICKSTART_LLM.md    # LLM 快速开始
-    └── DEPENDENCIES.md      # 依赖集成指南
-```
-
 ## 快速启动
 
 ### 前置要求
 
 - Go 1.22+
-- Docker & Docker Compose
+- Docker
 - Make
+- Kubernetes (kubectl) - 用于云原生部署
+- Helm - 用于包管理
+- (可选) WSL 2 - 用于 Windows 环境
 
 ### 1. 克隆项目
 
@@ -99,39 +69,101 @@ cd clawhermes-ai-go
 cp .env.example .env
 ```
 
-### 3. 一键启动（推荐）
+### 3. 本地开发启动
 
 ```bash
-# 启动所有服务（包括依赖和应用）
+# 构建并运行应用
 ./start.sh
 ```
 
 或者手动启动：
 
 ```bash
-# 启动依赖服务
-make docker-up
+# 构建应用
+make build
 
 # 运行应用
 make run
 ```
 
-### 4. 验证健康状态
+### 4. 云原生部署 (Kubernetes)
+
+#### 4.1 使用 Kubectl 部署
+
+```bash
+# 构建 Docker 镜像
+make docker-build
+
+# 部署依赖服务
+kubectl apply -f k8s/dependencies.yaml
+
+# 等待依赖服务就绪
+kubectl wait --for=condition=ready pod -l app=nats --timeout=120s
+kubectl wait --for=condition=ready pod -l app=neo4j --timeout=120s
+kubectl wait --for=condition=ready pod -l app=milvus --timeout=120s
+
+# 部署主应用
+kubectl apply -f k8s/deployment.yaml
+```
+
+#### 4.2 使用 Helm 部署
+
+```bash
+# 构建 Docker 镜像
+make docker-build
+
+# 安装 Helm Chart
+make helm-install
+```
+
+### 5. WSL 2 部署 (适用于 Windows)
+
+```bash
+# 确保已启用 WSL 2 和 Kubernetes (Docker Desktop 或 Minikube)
+./wsl-start.sh
+```
+
+### 6. 验证健康状态
 
 ```bash
 curl http://localhost:8080/health
 # 响应: {"status":"ok"}
 ```
 
-### 5. 停止服务
+### 7. 停止服务
 
+#### 本地环境
 ```bash
-# 停止所有服务
+# 停止服务
 ./stop.sh
-
-# 或手动停止
-make docker-down
 ```
+
+#### Kubernetes 环境
+```bash
+# 使用 kubectl
+make k8s-delete
+
+# 或使用 Helm
+make helm-uninstall
+```
+
+#### WSL 环境
+```bash
+./wsl-stop.sh
+```
+
+## 部署详情
+
+更详细的部署说明请参见 [部署指南](docs/DEPLOYMENT_GUIDE.md) 文档，其中包括：
+
+- 本地开发环境搭建
+- Kubernetes 云原生部署
+- Helm 包管理部署
+- WSL 2 环境部署
+- 环境配置说明
+- 故障排除指南
+- 监控和可观测性配置
+- 升级和维护说明
 
 ## API 端点
 
@@ -210,6 +242,16 @@ GET /health
 }
 ```
 
+## 可观测性
+
+项目集成了 OpenTelemetry，支持分布式追踪、指标收集和日志记录：
+
+- **追踪**: 通过 OTLP 协议发送到 collector
+- **指标**: 收集请求延迟、错误率、吞吐量等
+- **日志**: 结构化日志输出到标准输出
+
+配置参考 [otel-collector-config.yaml](otel-collector-config.yaml)
+
 ## 常用命令
 
 ```bash
@@ -234,14 +276,17 @@ make vet
 # Lint 检查
 make lint
 
-# Docker 启动
-make docker-up
+# Docker 相关
+make docker-build       # 构建应用镜像
+make docker-run         # 运行应用容器
 
-# Docker 停止
-make docker-down
+# Kubernetes 相关
+make k8s-deploy         # 部署到 Kubernetes
+make k8s-delete         # 从 Kubernetes 删除
 
-# 查看 Docker 日志
-make docker-logs
+# Helm 相关
+make helm-install       # 使用 Helm 安装
+make helm-uninstall     # 使用 Helm 卸载
 
 # 清理构建产物
 make clean
@@ -411,10 +456,36 @@ make test-coverage
 - 使用 `make vet` 进行静态检查
 - 使用 `make lint` 进行 Lint 检查
 
+## 云原生特性
+
+### Kubernetes 部署
+
+项目提供了完整的 Kubernetes 部署方案：
+
+- **Helm Chart**: 用于简化部署和管理
+- **ConfigMap/Secret**: 管理配置和敏感信息
+- **PersistentVolume**: 数据持久化存储
+- **Service**: 服务发现和负载均衡
+- **Health Checks**: 存活和就绪探针
+
+### 可观测性
+
+- **OpenTelemetry**: 统一遥测数据收集
+- **分布式追踪**: 跨服务请求追踪
+- **指标监控**: 性能和业务指标
+- **结构化日志**: 统一日志格式
+
+### 容器化
+
+- **多阶段构建**: 减小镜像大小
+- **安全基线**: 非root用户运行
+- **最小依赖**: 只包含运行时必要组件
+
 ## 商业化能力
 
 - ✅ 多租户隔离
 - ✅ 私有化部署
+- ✅ 云原生支持
 - 🔄 Skill 插件市场
 - 🔄 AI 成本治理
 - 🔄 灰度发布
@@ -448,27 +519,14 @@ go mod download
 PORT=8081
 ```
 
-### NATS 连接失败
+### Kubernetes 部署问题
 
-确保 Docker 容器正在运行：
-
-```bash
-docker-compose ps
-```
-
-如果容器未运行，执行：
+检查 Pod 状态：
 
 ```bash
-make docker-up
-```
-
-### 数据库连接失败
-
-检查 Neo4j 和 Milvus 的连接配置：
-
-```bash
-# 查看容器日志
-make docker-logs
+kubectl get pods
+kubectl describe pod <pod-name>
+kubectl logs <pod-name>
 ```
 
 ## 许可证

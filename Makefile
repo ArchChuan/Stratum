@@ -1,4 +1,4 @@
-.PHONY: build run test lint docker-up docker-down clean
+.PHONY: build run test lint clean k8s-deploy k8s-delete helm-install helm-uninstall
 
 build:
 	go build -o bin/server ./cmd/server
@@ -22,16 +22,35 @@ fmt:
 vet:
 	go vet ./...
 
-docker-up:
-	docker-compose up -d
+# Container targets
+docker-build:
+	docker build -t clawhermes-ai-go:latest .
 
-docker-down:
-	docker-compose down
+docker-run:
+	docker run -p 8080:8080 clawhermes-ai-go:latest
 
-docker-logs:
-	docker-compose logs -f
+# Kubernetes targets
+k8s-deploy:
+	kubectl apply -f k8s/security.yaml
+	kubectl apply -f k8s/dependencies.yaml
+	kubectl apply -f k8s/monitoring.yaml
+	kubectl apply -f k8s/deployment.yaml
 
+k8s-delete:
+	kubectl delete -f k8s/deployment.yaml
+	kubectl delete -f k8s/monitoring.yaml
+	kubectl delete -f k8s/dependencies.yaml
+	kubectl delete -f k8s/security.yaml
+
+# Helm targets
+helm-install:
+	kubectl create namespace clawhermes-system --dry-run=client -o yaml | kubectl apply -f -
+	helm install clawhermes-release ./helm -f helm/values.yaml -n clawhermes-system
+
+helm-uninstall:
+	helm uninstall clawhermes-release -n clawhermes-system
+
+# Clean target
 clean:
 	rm -rf bin/
 	rm -f coverage.out
-

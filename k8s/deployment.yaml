@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clawhermes-ai-go
+  namespace: clawhermes-system
+  labels:
+    app: clawhermes-ai-go
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clawhermes-ai-go
+  template:
+    metadata:
+      labels:
+        app: clawhermes-ai-go
+    spec:
+      containers:
+      - name: clawhermes-ai-go
+        image: clawhermes-ai-go:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        - name: NATS_URL
+          value: "nats://nats:4222"
+        - name: MILVUS_HOST
+          value: "milvus"
+        - name: MILVUS_PORT
+          value: "19530"
+        - name: NEO4J_URI
+          value: "bolt://neo4j:7687"
+        - name: NEO4J_USER
+          valueFrom:
+            secretKeyRef:
+              name: neo4j-secret
+              key: username
+        - name: NEO4J_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: neo4j-secret
+              key: password
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector:4317"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clawhermes-ai-go-service
+  namespace: clawhermes-system
+  labels:
+    app: clawhermes-ai-go
+spec:
+  selector:
+    app: clawhermes-ai-go
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP

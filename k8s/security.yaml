@@ -1,0 +1,132 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: clawhermes-system
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: clawhermes-quota
+  namespace: clawhermes-system
+spec:
+  hard:
+    pods: "10"
+    requests.cpu: "2"
+    requests.memory: 4Gi
+    limits.cpu: "4"
+    limits.memory: 8Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: clawhermes-netpol
+  namespace: clawhermes-system
+spec:
+  podSelector:
+    matchLabels:
+      app: clawhermes-ai-go
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: clawhermes-system
+    - podSelector:
+        matchLabels:
+          role: proxy
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: clawhermes-system
+    - podSelector:
+        matchLabels:
+          app: nats
+    - podSelector:
+        matchLabels:
+          app: neo4j
+    - podSelector:
+        matchLabels:
+          app: milvus
+    - podSelector:
+        matchLabels:
+          app: otel-collector
+    ports:
+    - protocol: TCP
+      port: 4222  # NATS
+    - protocol: TCP
+      port: 7687  # Neo4j
+    - protocol: TCP
+      port: 19530 # Milvus
+    - protocol: TCP
+      port: 4317  # OTel Collector
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: clawhermes-service-account
+  namespace: clawhermes-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: clawhermes-system
+  name: clawhermes-role
+rules:
+- apiGroups: [""] # "" 表示核心 API 组
+  resources: ["pods", "services", "configmaps", "secrets"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: clawhermes-rolebinding
+  namespace: clawhermes-system
+subjects:
+- kind: ServiceAccount
+  name: clawhermes-service-account
+  namespace: clawhermes-system
+roleRef:
+  kind: Role
+  name: clawhermes-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: clawhermes-webhook
+webhooks:
+- name: validator.clawhermes.ai
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    operations: ["CREATE", "UPDATE"]
+    resources: ["pods"]
+    scope: "Namespaced"
+  clientConfig:
+    service:
+      name: clawhermes-validator
+      namespace: clawhermes-system
+      path: "/validate"
+    caBundle: Cg==
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  timeoutSeconds: 5

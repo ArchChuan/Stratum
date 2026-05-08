@@ -1,0 +1,74 @@
+# Global settings
+global:
+  imagePullPolicy: IfNotPresent
+  # imagePullSecrets:
+  #   - name: regcred
+
+# Application settings
+app:
+  replicaCount: 1
+  image:
+    repository: clawhermes-ai-go
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+
+# Configuration settings
+config:
+  port: "8080"
+  natsUrl: "nats://nats:4222"
+  milvusHost: "milvus"
+  milvusPort: "19530"
+  neo4jUri: "bolt://neo4j:7687"
+
+# Database settings
+neo4j:
+  enabled: true
+  authEnabled: true
+  username: "neo4j"
+  password: "password"
+
+# Message queue settings
+nats:
+  enabled: true
+
+# Vector database settings
+milvus:
+  enabled: true
+
+# Observability settings
+observability:
+  enabled: true
+  otelCollectorEndpoint: "http://otel-collector:4317"
+
+# Persistence settings
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 10Gi
+
+# Ingress settings
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: chart-example.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
