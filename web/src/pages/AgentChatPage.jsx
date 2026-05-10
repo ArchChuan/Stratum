@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Card, 
-  Typography, 
-  Input, 
-  Button, 
-  List, 
-  Select, 
-  Space, 
+import {
+  Card,
+  Typography,
+  Input,
+  Button,
+  List,
+  Select,
+  Space,
   Alert,
   Spin,
   Tag
@@ -84,13 +84,13 @@ const AgentChatPage = () => {
       };
 
       const response = await executeAgent(selectedAgent, task);
-      
+
       // 添加Agent响应
       const agentMessage = {
         id: Date.now() + 1,
         type: 'agent',
-        content: typeof response.data.result === 'string' 
-          ? response.data.result 
+        content: typeof response.data.result === 'string'
+          ? response.data.result
           : JSON.stringify(response.data.result, null, 2),
         timestamp: new Date().toLocaleTimeString(),
         steps: response.data.steps || [],
@@ -154,7 +154,7 @@ const AgentChatPage = () => {
             >
               {agentOptions}
             </Select>
-            
+
             {agentDetails && (
               <div style={{ marginTop: 10, padding: '10px', backgroundColor: '#f9f9f9', borderRadius: '4px' }}>
                 <Text strong>{agentDetails.name}</Text>
@@ -181,20 +181,20 @@ const AgentChatPage = () => {
         </Space>
       </Card>
 
-      <Card 
-        style={{ 
-          height: 500, 
-          overflowY: 'auto', 
+      <Card
+        style={{
+          height: 500,
+          overflowY: 'auto',
           marginBottom: 16,
           display: 'flex',
           flexDirection: 'column'
         }}
       >
         {messages.length === 0 ? (
-          <div style={{ 
-            flex: 1, 
-            display: 'flex', 
-            justifyContent: 'center', 
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            justifyContent: 'center',
             alignItems: 'center',
             color: '#aaa'
           }}>
@@ -210,13 +210,13 @@ const AgentChatPage = () => {
           <List
             dataSource={messages}
             renderItem={item => (
-              <List.Item 
-                style={{ 
+              <List.Item
+                style={{
                   justifyContent: item.type === 'user' ? 'flex-end' : 'flex-start',
                   padding: '8px 0'
                 }}
               >
-                <div 
+                <div
                   style={{
                     maxWidth: '80%',
                     padding: '12px 16px',
@@ -237,7 +237,7 @@ const AgentChatPage = () => {
                       {item.timestamp}
                     </Text>
                   </div>
-                  
+
                   {item.isError ? (
                     <Text type="danger">{item.content}</Text>
                   ) : (
@@ -245,7 +245,7 @@ const AgentChatPage = () => {
                       {item.content}
                     </Text>
                   )}
-                  
+
                   {item.steps && item.steps.length > 0 && (
                     <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #eee' }}>
                       <Text type="secondary" strong>执行步骤:</Text>

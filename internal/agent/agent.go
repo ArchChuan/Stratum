@@ -6,26 +6,26 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/skill"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
 	"go.uber.org/zap"
 )
 
 // Agent represents an AI agent that can execute tasks using skills
 type Agent struct {
-	ID             string                 `json:"id"`
-	Name           string                 `json:"name"`
-	Description    string                 `json:"description"`
-	Persona        string                 `json:"persona"`
-	AllowedSkills  []string               `json:"allowed_skills"`
-	SystemPrompt   string                 `json:"system_prompt"`
-	LLMModel       string                 `json:"llm_model"`
-	MaxIterations  int                    `json:"max_iterations"`
-	LLMGateway     *llmgateway.Gateway    `json:"-"`
-	Logger         *zap.Logger            `json:"-"`
-	orchestrator   *orchestrator.Registry `json:"-"`
-	mu             sync.Mutex             `json:"-"`
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name"`
+	Description   string                 `json:"description"`
+	Persona       string                 `json:"persona"`
+	AllowedSkills []string               `json:"allowed_skills"`
+	SystemPrompt  string                 `json:"system_prompt"`
+	LLMModel      string                 `json:"llm_model"`
+	MaxIterations int                    `json:"max_iterations"`
+	LLMGateway    *llmgateway.Gateway    `json:"-"`
+	Logger        *zap.Logger            `json:"-"`
+	orchestrator  *orchestrator.Registry `json:"-"`
+	mu            sync.Mutex             `json:"-"`
 }
 
 // AgentTask represents a task that an agent will execute
@@ -37,18 +37,18 @@ type AgentTask struct {
 
 // AgentResponse represents the response from an agent
 type AgentResponse struct {
-	TaskID      string                 `json:"task_id"`
-	Status      string                 `json:"status"` // "running", "completed", "failed"
-	Result      interface{}            `json:"result,omitempty"`
-	Steps       []AgentStep            `json:"steps,omitempty"`
-	Error       string                 `json:"error,omitempty"`
-	Usage       map[string]interface{} `json:"usage,omitempty"`
+	TaskID string                 `json:"task_id"`
+	Status string                 `json:"status"` // "running", "completed", "failed"
+	Result interface{}            `json:"result,omitempty"`
+	Steps  []AgentStep            `json:"steps,omitempty"`
+	Error  string                 `json:"error,omitempty"`
+	Usage  map[string]interface{} `json:"usage,omitempty"`
 }
 
 // AgentStep represents a single step in agent execution
 type AgentStep struct {
 	Iteration int         `json:"iteration"`
-	Action    string      `json:"action"`   // "planning", "skill_execution", "reasoning", "finalizing"
+	Action    string      `json:"action"` // "planning", "skill_execution", "reasoning", "finalizing"
 	Tool      string      `json:"tool,omitempty"`
 	Input     interface{} `json:"input,omitempty"`
 	Output    interface{} `json:"output,omitempty"`
@@ -100,7 +100,7 @@ func (a *Agent) Execute(ctx context.Context, task *AgentTask) (*AgentResponse, e
 		Action:    "planning",
 		Input:     task.Query,
 	}
-	
+
 	// Plan the execution based on the query
 	plan, err := a.planExecution(task)
 	if err != nil {
@@ -144,14 +144,14 @@ func (a *Agent) Execute(ctx context.Context, task *AgentTask) (*AgentResponse, e
 		if action.Type == "skill_execution" {
 			step.Action = "skill_execution"
 			step.Tool = action.Data["skill_id"].(string)
-			
+
 			skillOutput, err := a.executeSkill(action.Data["skill_id"].(string), action.Data["input"])
 			if err != nil {
 				response.Status = "failed"
 				response.Error = fmt.Sprintf("Skill execution failed: %v", err)
 				return response, err
 			}
-			
+
 			step.Input = action.Data
 			step.Output = skillOutput
 			currentContext["last_skill_result"] = skillOutput
@@ -183,13 +183,13 @@ func (a *Agent) planExecution(task *AgentTask) (interface{}, error) {
 }
 
 // determineAction uses the LLM to determine the next action
-func (a *Agent) determineAction(task *AgentTask, context map[string]interface{}) (*Action, error) {
+func (a *Agent) determineAction(task *AgentTask, currentContext map[string]interface{}) (*Action, error) {
 	if a.LLMGateway == nil {
 		return nil, fmt.Errorf("LLM gateway not configured")
 	}
 
 	// Prepare the prompt for the LLM
-	contextJSON, _ := json.Marshal(context)
+	contextJSON, _ := json.Marshal(currentContext)
 	taskJSON, _ := json.Marshal(task)
 
 	prompt := fmt.Sprintf(`
