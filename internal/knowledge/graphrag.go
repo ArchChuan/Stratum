@@ -2,53 +2,173 @@ package knowledge
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/neo4j/neo4j-go-driver/v5"
 	"go.uber.org/zap"
 )
 
 type GraphRAG struct {
-	uri      string
-	user     string
-	password string
-	logger   *zap.Logger
-	// TODO: 实现 Neo4j 驱动连接
+	driver  neo4j.DriverWithContext
+	uri     string
+	user    string
+	passwd   string
+	logger  *zap.Logger
+	session neo4j.SessionWithContext
 }
 
 func NewGraphRAG(uri, user, password string, logger *zap.Logger) *GraphRAG {
 	return &GraphRAG{
-		uri:      uri,
-		user:     user,
-		password: password,
-		logger:   logger,
+		uri:    uri,
+		user:   user,
+		passwd:  password,
+		logger: logger,
 	}
 }
 
 func (g *GraphRAG) Connect(ctx context.Context) error {
 	g.logger.Info("connecting to Neo4j", zap.String("uri", g.uri))
-	// TODO: 实现 Neo4j 连接逻辑
-	return nil
-}
+	driver, err := neo4j.NewDriverWithContext(g.uri, neo4j.BasicAuth(g.user, g.passwd))
+	if err != nil {
+		g.logger.Error("failed to create Neo4j driver", zap.Error(err))
+		return fmt.Errorf("failed to create Neo4j driver: %w", err)
+	}
+	g.driver = driver
 
-func (g *GraphRAG) Query(ctx context.Context, query string) (interface{}, error) {
-	g.logger.Debug("executing graph query", zap.String("query", query))
-	// TODO: 实现图查询逻辑
-	return nil, nil
+	session := driver.NewSession(ctx, neo4j.AccessModeWrite)
+	g.session = session
+
+	err = session.Run(ctx, "RETURN 1", nil, nil)
+	if err != nil {
+		g.logger.Error("failed to verify Neo4j connection", zap.Error(err))
+		return fmt.Errorf("failed to verify connection: %w", err)
+	}
+
+	g.logger.Info("connected to Neo4j successfully")
+	return nil
 }
 
 func (g *GraphRAG) CreateNode(ctx context.Context, label string, properties map[string]interface{}) error {
 	g.logger.Debug("creating node", zap.String("label", label))
-	// TODO: 实现节点创建逻辑
+	cypher := fmt.Sprintf("CREATE (n:%s $props)", label)
+	result, err := g.session.Run(ctx, cypher, map[string]interface{}{
+		"props": properties,
+	})
+	if err != nil {
+		g.logger.Error("failed to create node", zap.Error(err))
+		return fmt.Errorf("failed to create node: %w", err)
+	}
+	if result.Err() != nil {
+		return result.Err()
+	}
+	result.Consume()
 	return nil
 }
 
 func (g *GraphRAG) CreateRelationship(ctx context.Context, fromID, toID, relType string) error {
 	g.logger.Debug("creating relationship", zap.String("type", relType))
-	// TODO: 实现关系创建逻辑
+	cypher := `
+		MATCH (a), (b)
+		WHERE elementId(a) = $fromId AND elementId(b) = $toId
+		CREATE (a)-[r:%s]->(b)
+		SET r.created_at = datetime()
+	`
+	result, err := g.session.Run(ctx, cypher, map[string]interface{}{
+		"fromId": fromID,
+		"toId":   toID,
+	})
+	if err != nil {
+		g.logger.Error("failed to create relationship", zap.Error(err))
+		return fmt.Errorf("failed to create relationship: %w", err)
+	}
+	if result.Err() != nil {
+		return result.Err()
+	}
+	result.Consume()
 	return nil
+}
+
+func (g *GraphRAG) Query(ctx context.Context, query string) (interface{}, error) {
+	g.logger.Debug("executing graph query")
+	result, err := g.session.Run(ctx, query, nil)
+	if err != nil {
+		g.logger.Error("failed to execute query", zap.Error(err))
+		return nil, fmt.Errorf("failed to execute query: %w", err)
+	}
+	if result.Err() != nil {
+		return nil, result.Err()
+	}
+
+	var results []interface{}
+	_, err = result.Collect(&results)
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (g *GraphRAG) GetNeighborNodes(ctx context.Context, nodeID string, maxDepth int) ([]map[string]interface{}, error) {
+	cypher := `
+		MATCH (n)<-[r*1..%d]-(neighbor)
+		WHERE elementId(n) = $nodeId
+		RETURN neighbor, r, n
+		ORDER BY r.created_at DESC
+		LIMIT 20
+	`
+	result, err := g.session.Run(ctx, cypher, map[string]interface{}{
+		"nodeId": nodeID,
+		"maxDepth": maxDepth,
+	})
+	if err != nil {
+		g.logger.Error("failed to get neighbor nodes", zap.Error(err))
+		return nil, fmt.Errorf("failed to get neighbor nodes: %w", err)
+	}
+	if result.Err() != nil {
+		return nil, result.Err()
+	}
+
+	var nodes []map[string]interface{}
+	_, err = result.Collect(&nodes)
+	if err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
+
+func (g *GraphRAG) FullTextSearch(ctx context.Context, searchTerm string, limit int) ([]map[string]interface{}, error) {
+	cypher := `
+		CALL db.index.fulltext.queryNodes('entity_fulltext', $searchTerm) YIELD node, score
+		RETURN node, score
+		ORDER BY score DESC
+		LIMIT $limit
+	`
+	result, err := g.session.Run(ctx, cypher, map[string]interface{}{
+		"searchTerm": fmt.Sprintf("*%s*", searchTerm),
+		"limit":     limit,
+	})
+	if err != nil {
+		g.logger.Error("failed to perform full text search", zap.Error(err))
+		return nil, fmt.Errorf("failed to perform full text search: %w", err)
+	}
+	if result.Err() != nil {
+		return nil, result.Err()
+	}
+
+	var results []map[string]interface{}
+	_, err = result.Collect(&results)
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 func (g *GraphRAG) Close() error {
 	g.logger.Info("closing Neo4j connection")
-	// TODO: 实现连接关闭逻辑
+	if g.session != nil {
+		g.session.Close(ctx.Background())
+	}
+	if g.driver != nil {
+		return g.driver.Close()
+	}
 	return nil
 }

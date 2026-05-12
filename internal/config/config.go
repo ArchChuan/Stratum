@@ -1,11 +1,8 @@
 package config
 
 import (
-	"context"
 	"os"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/knowledge"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/mcp"
 	"go.uber.org/zap"
 )
 
@@ -18,6 +15,7 @@ type Config struct {
 	Neo4jUser         string
 	Neo4jPassword     string
 	OtelEndpoint      string
+	OpenAIAPIKey      string
 }
 
 type Services struct {
@@ -35,24 +33,20 @@ func Load() (*Config, error) {
 		Neo4jUser:         getEnv("NEO4J_USER", "neo4j"),
 		Neo4jPassword:     getEnv("NEO4J_PASSWORD", "password"),
 		OtelEndpoint:      getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
+		OpenAIAPIKey:     getEnv("OPENAI_API_KEY", ""),
 	}, nil
 }
 
 func InitializeServices(cfg *Config, logger *zap.Logger) (*Services, error) {
-	ctx := context.Background()
-
-	// 初始化 GraphRAG
 	graphrag := knowledge.NewGraphRAG(cfg.Neo4jURI, cfg.Neo4jUser, cfg.Neo4jPassword, logger)
-	if err := graphrag.Connect(ctx); err != nil {
-		logger.Error("failed to connect to Neo4j", zap.Error(err))
+	if err := graphrag.Connect(nil); err != nil {
+		logger.Warn("failed to connect to Neo4j", zap.Error(err))
 		return nil, err
 	}
 
-	// 初始化 VectorStore
 	vectorStore := mcp.NewVectorStore(cfg.MilvusHost, cfg.MilvusPort, logger)
-	if err := vectorStore.Connect(ctx); err != nil {
-		logger.Error("failed to connect to Milvus", zap.Error(err))
-		graphrag.Close()
+	if err := vectorStore.Connect(nil); err != nil {
+		logger.Warn("failed to connect to Milvus", zap.Error(err))
 		return nil, err
 	}
 
