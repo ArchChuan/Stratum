@@ -3,8 +3,8 @@ package document
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/ledongthuc/pdf"
@@ -17,198 +17,127 @@ type Parser struct {
 }
 
 func NewParser(logger *zap.Logger) *Parser {
-	return &Parser{logger: logger}
+	return &Parser{
+		logger: logger,
+	}
 }
 
-type ParsedDocument struct {
-	Content string
-	Title   string
-	Format  string
-}
+func (p *Parser) ParseFile(filePath string) (string, error) {
+	p.logger.Debug("parsing file", zap.String("path", filePath))
 
-func (p *Parser) ParseFile(filePath string) (*ParsedDocument, error) {
-	p.logger.Info("parsing document", zap.String("path", filePath))
-
-	ext := strings.ToLower(filepath.Ext(filePath))
-	switch ext {
-	case ".pdf":
+	switch {
+	case strings.HasSuffix(filePath, ".pdf"):
 		return p.parsePDF(filePath)
-	case ".docx", ".doc":
+	case strings.HasSuffix(filePath, ".docx"):
 		return p.parseDOCX(filePath)
-	case ".txt":
+	case strings.HasSuffix(filePath, ".txt"), strings.HasSuffix(filePath, ".md"):
 		return p.parseTXT(filePath)
-	case ".md":
-		return p.parseMarkdown(filePath)
 	default:
-		return nil, fmt.Errorf("unsupported file format: %s", ext)
+		return "", fmt.Errorf("unsupported file type: %s", filePath)
 	}
 }
 
-func (p *Parser) parsePDF(filePath string) (*ParsedDocument, error) {
-	f, err := pdf.Open(filePath)
-	if err != nil {
-		p.logger.Error("failed to open PDF", zap.String("path", filePath), zap.Error(err))
-		return nil, fmt.Errorf("failed to open PDF: %w", err)
+func (p *Parser) ParseBytes(data []byte, contentType string) (string, error) {
+	p.logger.Debug("parsing bytes", zap.String("type", contentType))
+
+	switch contentType {
+	case "application/pdf":
+		return p.parsePDFBytes(data)
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		return p.parseDOCXBytes(data)
+	case "text/plain", "text/markdown":
+		return string(data), nil
+	default:
+		return "", fmt.Errorf("unsupported content type: %s", contentType)
 	}
+}
+
+func (p *Parser) parsePDF(filePath string) (string, error) {
+	f, r, err := pdf.Open(filePath)
 	defer f.Close()
+	if err != nil {
+		p.logger.Error("failed to open PDF", zap.Error(err))
+		return "", fmt.Errorf("failed to open PDF: %w", err)
+	}
 
 	var buf bytes.Buffer
-	totalPages := f.NumPage()
-
-	for i := 1; i <= totalPages; i++ {
-		pages, err := f.GetPageN(i)
-		if err != nil {
-			p.logger.Warn("failed to get page", zap.Int("page", i), zap.Error(err))
-			continue
-		}
-		text, err := pages.GetPlainText()
-		if err != nil {
-			p.logger.Warn("failed to extract text", zap.Int("page", i), zap.Error(err))
-			continue
-		}
-		buf.WriteString(text)
-		buf.WriteString("\n\n")
+	contentReader, err := r.GetPlainText()
+	if err != nil {
+		p.logger.Error("failed to get PDF text", zap.Error(err))
+		return "", fmt.Errorf("failed to get PDF text: %w", err)
+	}
+	if _, err := io.Copy(&buf, contentReader); err != nil {
+		return "", fmt.Errorf("failed to read PDF content: %w", err)
 	}
 
-	content := buf.String()
-	p.logger.Info("PDF parsed", zap.Int("pages", totalPages), zap.Int("content_length", len(content)))
-
-	return &ParsedDocument{
-		Content: content,
-		Title:   filepath.Base(filePath),
-		Format:  "pdf",
-	}, nil
+	return buf.String(), nil
 }
 
-func (p *Parser) parseDOCX(filePath string) (*ParsedDocument, error) {
+func (p *Parser) parsePDFBytes(data []byte) (string, error) {
+	r, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		p.logger.Error("failed to read PDF bytes", zap.Error(err))
+		return "", fmt.Errorf("failed to read PDF bytes: %w", err)
+	}
+
+	var buf bytes.Buffer
+	contentReader, err := r.GetPlainText()
+	if err != nil {
+		p.logger.Error("failed to get PDF text", zap.Error(err))
+		return "", fmt.Errorf("failed to get PDF text: %w", err)
+	}
+	if _, err := io.Copy(&buf, contentReader); err != nil {
+		return "", fmt.Errorf("failed to read PDF content: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func (p *Parser) parseDOCX(filePath string) (string, error) {
 	doc, err := document.Open(filePath)
 	if err != nil {
-		p.logger.Error("failed to open DOCX", zap.String("path", filePath), zap.Error(err))
-		return nil, fmt.Errorf("failed to open DOCX: %w", err)
+		p.logger.Error("failed to open DOCX", zap.Error(err))
+		return "", fmt.Errorf("failed to open DOCX: %w", err)
 	}
 	defer doc.Close()
 
-	paragraphs := doc.Paragraphs()
-	var content strings.Builder
-
-	for _, para := range paragraphs {
-		content.WriteString(para.Text)
-		content.WriteString("\n")
-	}
-
-	p.logger.Info("DOCX parsed", zap.Int("paragraphs", len(paragraphs)))
-
-	return &ParsedDocument{
-		Content: content.String(),
-		Title:   filepath.Base(filePath),
-		Format:  "docx",
-	}, nil
-}
-
-func (p *Parser) parseTXT(filePath string) (*ParsedDocument, error) {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		p.logger.Error("failed to read TXT", zap.String("path", filePath), zap.Error(err))
-		return nil, fmt.Errorf("failed to read TXT: %w", err)
-	}
-
-	p.logger.Info("TXT parsed", zap.Int("content_length", len(content)))
-
-	return &ParsedDocument{
-		Content: string(content),
-		Title:   filepath.Base(filePath),
-		Format:  "txt",
-	}, nil
-}
-
-func (p *Parser) parseMarkdown(filePath string) (*ParsedDocument, error) {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		p.logger.Error("failed to read Markdown", zap.String("path", filePath), zap.Error(err))
-		return nil, fmt.Errorf("failed to read Markdown: %w", err)
-	}
-
-	p.logger.Info("Markdown parsed", zap.Int("content_length", len(content)))
-
-	return &ParsedDocument{
-		Content: string(content),
-		Title:   filepath.Base(filePath),
-		Format:  "md",
-	}, nil
-}
-
-func (p *Parser) ParseBytes(data []byte, filename string) (*ParsedDocument, error) {
-	ext := strings.ToLower(filepath.Ext(filename))
-	switch ext {
-	case ".pdf":
-		return p.parsePDFBytes(data, filename)
-	case ".docx", ".doc":
-		return p.parseDOCXBytes(data, filename)
-	case ".txt":
-		return &ParsedDocument{
-			Content: string(data),
-			Title:   filename,
-			Format:  "txt",
-		}, nil
-	case ".md":
-		return &ParsedDocument{
-			Content: string(data),
-			Title:   filename,
-			Format:  "md",
-		}, nil
-	default:
-		return nil, fmt.Errorf("unsupported file format: %s", ext)
-	}
-}
-
-func (p *Parser) parsePDFBytes(data []byte, filename string) (*ParsedDocument, error) {
-	f, err := pdf.New(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse PDF bytes: %w", err)
-	}
-	defer f.Close()
-
-	var buf bytes.Buffer
-	totalPages := f.NumPage()
-
-	for i := 1; i <= totalPages; i++ {
-		pages, err := f.GetPageN(i)
-		if err != nil {
-			continue
+	var textBuilder strings.Builder
+	for _, para := range doc.Paragraphs() {
+		for _, run := range para.Runs() {
+			textBuilder.WriteString(run.Text())
 		}
-		text, err := pages.GetPlainText()
-		if err != nil {
-			continue
-		}
-		buf.WriteString(text)
-		buf.WriteString("\n\n")
+		textBuilder.WriteString("\n")
 	}
 
-	return &ParsedDocument{
-		Content: buf.String(),
-		Title:   filename,
-		Format:  "pdf",
-	}, nil
+	return textBuilder.String(), nil
 }
 
-func (p *Parser) parseDOCXBytes(data []byte, filename string) (*ParsedDocument, error) {
-	doc, err := document.NewReader(bytes.NewReader(data), int64(len(data)))
+func (p *Parser) parseDOCXBytes(data []byte) (string, error) {
+	r := bytes.NewReader(data)
+	doc, err := document.Read(r, int64(len(data)))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse DOCX bytes: %w", err)
+		p.logger.Error("failed to read DOCX bytes", zap.Error(err))
+		return "", fmt.Errorf("failed to read DOCX bytes: %w", err)
 	}
 	defer doc.Close()
 
-	paragraphs := doc.Paragraphs()
-	var content strings.Builder
-
-	for _, para := range paragraphs {
-		content.WriteString(para.Text)
-		content.WriteString("\n")
+	var textBuilder strings.Builder
+	for _, para := range doc.Paragraphs() {
+		for _, run := range para.Runs() {
+			textBuilder.WriteString(run.Text())
+		}
+		textBuilder.WriteString("\n")
 	}
 
-	return &ParsedDocument{
-		Content: content.String(),
-		Title:   filename,
-		Format:  "docx",
-	}, nil
+	return textBuilder.String(), nil
+}
+
+func (p *Parser) parseTXT(filePath string) (string, error) {
+	file, err := os.ReadFile(filePath)
+	if err != nil {
+		p.logger.Error("failed to read TXT", zap.Error(err))
+		return "", fmt.Errorf("failed to read TXT: %w", err)
+	}
+
+	return string(file), nil
 }

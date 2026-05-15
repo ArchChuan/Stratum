@@ -1,8 +1,11 @@
 package config
 
 import (
+	"context"
 	"os"
 
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/knowledge"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/mcp"
 	"go.uber.org/zap"
 )
 
@@ -38,16 +41,18 @@ func Load() (*Config, error) {
 }
 
 func InitializeServices(cfg *Config, logger *zap.Logger) (*Services, error) {
+	ctx := context.Background()
+
 	graphrag := knowledge.NewGraphRAG(cfg.Neo4jURI, cfg.Neo4jUser, cfg.Neo4jPassword, logger)
-	if err := graphrag.Connect(nil); err != nil {
+	if err := graphrag.Connect(ctx); err != nil {
 		logger.Warn("failed to connect to Neo4j", zap.Error(err))
-		return nil, err
+		// 不中断启动，继续运行
 	}
 
 	vectorStore := mcp.NewVectorStore(cfg.MilvusHost, cfg.MilvusPort, logger)
-	if err := vectorStore.Connect(nil); err != nil {
+	if err := vectorStore.Connect(ctx); err != nil {
 		logger.Warn("failed to connect to Milvus", zap.Error(err))
-		return nil, err
+		// 不中断启动，继续运行
 	}
 
 	return &Services{

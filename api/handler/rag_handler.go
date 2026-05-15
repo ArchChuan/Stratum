@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"time"
 
@@ -149,11 +150,11 @@ func (h *RAGHandler) Query(c *gin.Context) {
 	}
 
 	graphContext := make([]gin.H, 0, len(result.GraphContext))
-	for i, entity := range result.GraphContext {
+	for i, e := range result.GraphContext {
 		graphContext[i] = gin.H{
-			"id":         entity.ID,
-			"label":      entity.Label,
-			"properties": entity.Properties,
+			"id":         e.ID,
+			"label":      e.Label,
+			"properties": e.Properties,
 		}
 	}
 
@@ -227,8 +228,6 @@ func (h *RAGHandler) DeleteWorkspace(c *gin.Context) {
 	}
 
 	h.logger.Info("deleting workspace", zap.String("workspace", workspace))
-
-	collectionName := fmt.Sprintf("%s_kb", workspace)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":   true,

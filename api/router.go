@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"net/http"
+	"time"
 
 	"github.com/byteBuilderX/ClawHermes-AI-Go/api/handler"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/api/middleware"
@@ -10,32 +12,47 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/document"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/embedding"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/knowledge"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/textchunk"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/mcp"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
-func NewRouter(cfg *config.Config, registry *orchestrator.Registry, logger *zap.Logger, gateway *llmgateway.Gateway) *gin.Engine {
+// SetupRouter configures and returns the Gin router
+func SetupRouter(
+	cfg *config.Config,
+	logger *zap.Logger,
+	registry *orchestrator.Registry,
+	gateway *llmgateway.Gateway,
+) *gin.Engine {
 	router := gin.Default()
 
-	router.Use(middleware.CORSMiddleware())
+	// Middleware
 	router.Use(middleware.ErrorHandler(logger))
 
-	skillHandler := handler.NewSkillHandler(registry, logger, gateway)
+	// Health check
+	router.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status": "ok",
+			"service": "ClawHermes AI Go",
+		})
+	})
 
-	agentRegistry := agent.NewRegistry(registry, gateway, logger)
-	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway)
-
-	parser := document.NewParser(logger)
-	chunker := textchunk.NewChunker(logger)
-	embeddingSvc := embedding.NewEmbeddingService(cfg.OpenAIAPIKey, logger)
+	// Initialize services
 	vectorStore := mcp.NewVectorStore(cfg.MilvusHost, cfg.MilvusPort, logger)
 	graphRAG := knowledge.NewGraphRAG(cfg.Neo4jURI, cfg.Neo4jUser, cfg.Neo4jPassword, logger)
 
-	ctx := context.Background()
+	embedSvc := embedding.NewEmbeddingService(cfg.OpenAIAPIKey, logger)
+	parser := document.NewParser(logger)
+	chunker := textchunk.NewChunker(logger)
+
+	// Connect to external services with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
 	if err := vectorStore.Connect(ctx); err != nil {
 		logger.Warn("failed to connect to Milvus", zap.Error(err))
 	}
@@ -43,37 +60,62 @@ func NewRouter(cfg *config.Config, registry *orchestrator.Registry, logger *zap.
 		logger.Warn("failed to connect to Neo4j", zap.Error(err))
 	}
 
-	ingestSvc := knowledge.NewKnowledgeIngest(parser, chunker, embeddingSvc, vectorStore, graphRAG, logger)
-	ragService := knowledge.NewRAGService(embeddingSvc, vectorStore, graphRAG, logger)
+	// Knowledge services
+	ingestSvc := knowledge.NewKnowledgeIngest(parser, chunker, embedSvc, vectorStore, graphRAG, logger)
+	ragService := knowledge.NewRAGService(embedSvc, vectorStore, graphRAG, logger)
+
+	// Handlers
+	skillHandler := handler.NewSkillHandler(registry, logger, gateway)
 	ragHandler := handler.NewRAGHandler(ingestSvc, ragService, logger)
 
+	// Initialize agent registry and handler
+	agentRegistry := agent.NewRegistry(logger)
+	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway)
+
+	// Initialize memory system
+	memoryConfig := memory.DefaultMemoryConfig()
+	memoryManager := memory.NewMemoryManager(memoryConfig, logger, nil, nil, nil)
+	memoryHandler := handler.NewMemoryHandler(memoryManager, logger)
+
+	// Skill endpoints
 	skills := router.Group("/skills")
 	{
+		skills.GET("", skillHandler.GetAllSkills)
 		skills.POST("", skillHandler.CreateSkill)
 		skills.GET("/:id", skillHandler.GetSkill)
 	}
 
+	// Agent endpoints
 	agents := router.Group("/agents")
 	{
+		agents.GET("", agentHandler.GetAllAgents)
 		agents.POST("", agentHandler.CreateAgent)
-		agents.GET("", agentHandler.ListAgents)
 		agents.GET("/:id", agentHandler.GetAgent)
 		agents.POST("/:id/execute", agentHandler.ExecuteAgent)
+		agents.DELETE("/:id", agentHandler.DeleteAgent)
 	}
 
+	// Knowledge endpoints
 	knowledge := router.Group("/knowledge")
 	{
-		knowledge.POST("/upload", ragHandler.UploadDocument)
+		knowledge.POST("/ingest", ragHandler.UploadDocument)
 		knowledge.POST("/query", ragHandler.Query)
-		knowledge.POST("/workspaces", ragHandler.CreateWorkspace)
-		knowledge.GET("/workspaces", ragHandler.ListWorkspaces)
-		knowledge.GET("/workspaces/:workspace/stats", ragHandler.GetWorkspaceStats)
-		knowledge.DELETE("/workspaces/:workspace", ragHandler.DeleteWorkspace)
 	}
 
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
-	})
+	// Memory endpoints
+	mem := router.Group("/memory")
+	{
+		mem.POST("/sessions", memoryHandler.CreateSession)
+		mem.POST("", memoryHandler.AddMemory)
+		mem.GET("/:id", memoryHandler.GetMemory)
+		mem.POST("/search", memoryHandler.SearchMemory)
+		mem.DELETE("/:id", memoryHandler.DeleteMemory)
+		mem.GET("/stats", memoryHandler.GetStats)
+		mem.DELETE("/session/:session_id", memoryHandler.ClearSession)
+		mem.GET("/entities", memoryHandler.GetEntities)
+		mem.POST("/extract-entities", memoryHandler.ExtractEntities)
+		mem.GET("/summary/:session_id", memoryHandler.GetSummary)
+	}
 
 	return router
 }

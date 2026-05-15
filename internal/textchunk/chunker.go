@@ -2,7 +2,6 @@ package textchunk
 
 import (
 	"strings"
-	"unicode"
 
 	"go.uber.org/zap"
 )
@@ -104,7 +103,7 @@ func (c *Chunker) splitSentences(text string) []string {
 	var currentSentence strings.Builder
 
 	for _, r := range text {
-		if r == '。' || r == '！' || r == '？' || r == '？' || r == '．' {
+		if r == '。' || r == '！' || r == '？' || r == '．' {
 			currentSentence.WriteRune(r)
 			if currentSentence.Len() > 0 {
 				sentences = append(sentences, currentSentence.String())
@@ -112,7 +111,7 @@ func (c *Chunker) splitSentences(text string) []string {
 			}
 		} else if r == '.' || r == '!' || r == '?' {
 			currentSentence.WriteRune(r)
-			nextIndex := strings.IndexRune(text[start:end+len(currentSentence.String())], " ")
+			// Check if this is likely end of a Latin sentence
 			if c.isLatinChar(r) {
 				sentences = append(sentences, currentSentence.String())
 				currentSentence.Reset()
@@ -136,7 +135,7 @@ func (c *Chunker) splitSentences(text string) []string {
 
 func (c *Chunker) isLatinChar(r rune) bool {
 	return (r >= 0x0041 && r <= 0x007A) ||
-		(r >= 0x0041 && r <= 0x007A) ||
+		(r >= 0x00C0 && r <= 0x00D6) ||
 		(r >= 0x0030 && r <= 0x0039)
 }
 
@@ -149,7 +148,7 @@ func (c *Chunker) ChunkByParagraphs(text string) []TextChunk {
 	var currentChunk strings.Builder
 	currentChunkSize := 0
 
-	for i, para := range paragraphs {
+	for _, para := range paragraphs {
 		para = strings.TrimSpace(para)
 		if len(para) == 0 {
 			continue

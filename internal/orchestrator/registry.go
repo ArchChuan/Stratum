@@ -22,3 +22,11 @@ func (r *Registry) Get(id string) (skill.Skill, bool) {
 	s, ok := r.skills[id]
 	return s, ok
 }
+
+func (r *Registry) GetAll() []skill.Skill {
+	skills := make([]skill.Skill, 0, len(r.skills))
+	for _, s := range r.skills {
+		skills = append(skills, s)
+	}
+	return skills
+}

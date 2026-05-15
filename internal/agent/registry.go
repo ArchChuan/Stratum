@@ -1,47 +1,50 @@
 package agent
 
 import (
+	"fmt"
 	"sync"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
 	"go.uber.org/zap"
 )
 
 // Registry manages the collection of agents
 type Registry struct {
-	agents     map[string]*Agent
-	orchestrator *orchestrator.Registry
-	gateway    *llmgateway.Gateway
-	logger     *zap.Logger
-	mu         sync.RWMutex
+	agents   map[string]Agent
+	logger   *zap.Logger
+	mu       sync.RWMutex
 }
 
 // NewRegistry creates a new agent registry
-func NewRegistry(orchestrator *orchestrator.Registry, gateway *llmgateway.Gateway, logger *zap.Logger) *Registry {
+func NewRegistry(logger *zap.Logger) *Registry {
 	return &Registry{
-		agents:       make(map[string]*Agent),
-		orchestrator: orchestrator,
-		gateway:      gateway,
-		logger:       logger,
+		agents: make(map[string]Agent),
+		logger: logger,
+		mu:     sync.RWMutex{},
 	}
 }
 
 // Register adds a new agent to the registry
-func (r *Registry) Register(agent *Agent) {
+func (r *Registry) Register(agent Agent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Assign dependencies
-	agent.SetOrchestrator(r.orchestrator)
-	agent.SetGateway(r.gateway)
-	agent.SetLogger(r.logger)
+	config := agent.GetConfig()
+	if _, exists := r.agents[config.ID]; exists {
+		return fmt.Errorf("agent with ID %s already registered", config.ID)
+	}
 
-	r.agents[agent.ID] = agent
+	r.agents[config.ID] = agent
+
+	r.logger.Info("agent registered",
+		zap.String("agent_id", config.ID),
+		zap.String("name", config.Name),
+		zap.String("type", string(config.Type)))
+
+	return nil
 }
 
 // Get retrieves an agent by ID
-func (r *Registry) Get(id string) (*Agent, bool) {
+func (r *Registry) Get(id string) (Agent, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -49,22 +52,36 @@ func (r *Registry) Get(id string) (*Agent, bool) {
 	return agent, exists
 }
 
-// GetAll returns all agents
-func (r *Registry) GetAll() []*Agent {
+// GetAll returns all registered agents
+func (r *Registry) GetAll() []Agent {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	agents := make([]*Agent, 0, len(r.agents))
+	agents := make([]Agent, 0, len(r.agents))
+	i := 0
 	for _, agent := range r.agents {
-		agents = append(agents, agent)
+		agents[i] = agent
+		i++
 	}
+
 	return agents
 }
 
 // Remove removes an agent from the registry
-func (r *Registry) Remove(id string) {
+func (r *Registry) Remove(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if _, exists := r.agents[id]; !exists {
+		r.logger.Warn("attempted to remove non-existent agent",
+			zap.String("agent_id", id))
+		return fmt.Errorf("agent with ID %s not found", id)
+	}
+
 	delete(r.agents, id)
+
+	r.logger.Info("agent removed",
+		zap.String("agent_id", id))
+
+	return nil
 }

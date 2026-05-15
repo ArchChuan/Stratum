@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -12,27 +15,119 @@ import (
 	"go.uber.org/zap"
 )
 
-// AgentHandler handles agent-related requests
 type AgentHandler struct {
-	registry *agent.Registry
-	logger   *zap.Logger
-	gateway  *llmgateway.Gateway
+	agentRegistry *agent.Registry
+	logger        *zap.Logger
+	gateway       *llmgateway.Gateway
 }
 
-// NewAgentHandler creates a new agent handler
-func NewAgentHandler(registry *agent.Registry, logger *zap.Logger, gateway *llmgateway.Gateway) *AgentHandler {
+type CreateAgentRequest struct {
+	Name          string   `json:"name" binding:"required"`
+	Type          string   `json:"type"`
+	Description   string   `json:"description"`
+	Persona       string   `json:"persona"`
+	SystemPrompt  string   `json:"systemPrompt"`
+	LLMModel      string   `json:"llmModel" binding:"required"`
+	MaxIterations int      `json:"maxIterations" binding:"required"`
+	AllowedSkills []string `json:"allowedSkills"`
+}
+
+type AgentResponse struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Type          string   `json:"type"`
+	Description   string   `json:"description"`
+	Persona       string   `json:"persona"`
+	SystemPrompt  string   `json:"systemPrompt"`
+	LLMModel      string   `json:"llmModel"`
+	MaxIterations int      `json:"maxIterations"`
+	AllowedSkills []string `json:"allowedSkills"`
+	CreatedAt     string   `json:"createdAt"`
+}
+
+type ExecuteAgentRequest struct {
+	Query   string                 `json:"query"`
+	Context map[string]interface{} `json:"context"`
+	Options map[string]interface{} `json:"options"`
+}
+
+type AgentExecutionResult struct {
+	AgentID    string                 `json:"agentId"`
+	Input      string                 `json:"input"`
+	Output     string                 `json:"output"`
+	Steps      int                    `json:"steps"`
+	TokensUsed int                    `json:"tokensUsed"`
+	Duration   string                 `json:"duration"`
+	Thoughts   []agent.Thought        `json:"thoughts"`
+	ToolCalls  []agent.ToolCall       `json:"toolCalls"`
+	Metadata   map[string]interface{} `json:"metadata"`
+	Error      string                 `json:"error,omitempty"`
+}
+
+func NewAgentHandler(agentRegistry *agent.Registry, logger *zap.Logger, gateway *llmgateway.Gateway) *AgentHandler {
 	return &AgentHandler{
-		registry: registry,
-		logger:   logger,
-		gateway:  gateway,
+		agentRegistry: agentRegistry,
+		logger:        logger,
+		gateway:       gateway,
 	}
 }
 
-// CreateAgent handles agent creation
+func (h *AgentHandler) GetAllAgents(c *gin.Context) {
+	agents := h.agentRegistry.GetAll()
+	responses := make([]AgentResponse, 0, len(agents))
+
+	for _, a := range agents {
+		cfg := a.GetConfig()
+		responses = append(responses, AgentResponse{
+			ID:            cfg.ID,
+			Name:          cfg.Name,
+			Type:          string(cfg.Type),
+			Description:   cfg.Description,
+			Persona:       cfg.Persona,
+			SystemPrompt:  cfg.SystemPrompt,
+			LLMModel:      cfg.LLMModel,
+			MaxIterations: cfg.MaxIterations,
+			AllowedSkills: []string{},
+			CreatedAt:     time.Now().Format(time.RFC3339),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"agents": responses,
+	})
+}
+
+func (h *AgentHandler) GetAgent(c *gin.Context) {
+	id := c.Param("id")
+	a, ok := h.agentRegistry.Get(id)
+	if !ok {
+		h.logger.Warn("agent not found", zap.String("id", id))
+		c.JSON(http.StatusNotFound, model.ErrorResponse{
+			Code:    http.StatusNotFound,
+			Message: "agent not found",
+		})
+		return
+	}
+
+	cfg := a.GetConfig()
+	c.JSON(http.StatusOK, AgentResponse{
+		ID:            cfg.ID,
+		Name:          cfg.Name,
+		Type:          string(cfg.Type),
+		Description:   cfg.Description,
+		Persona:       cfg.Persona,
+		SystemPrompt:  cfg.SystemPrompt,
+		LLMModel:      cfg.LLMModel,
+		MaxIterations: cfg.MaxIterations,
+		AllowedSkills: []string{},
+		CreatedAt:     time.Now().Format(time.RFC3339),
+	})
+}
+
 func (h *AgentHandler) CreateAgent(c *gin.Context) {
-	var req model.CreateAgentRequest
+	var req CreateAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn("invalid agent creation request", zap.Error(err))
+		h.logger.Warn("invalid request", zap.Error(err))
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{
 			Code:    http.StatusBadRequest,
 			Message: err.Error(),
@@ -41,23 +136,52 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 	}
 
 	id := uuid.New().String()
-	newAgent := agent.NewAgent(
-		id,
-		req.Name,
-		req.Description,
-		req.Persona,
-		req.SystemPrompt,
-		req.LLMModel,
-		req.MaxIterations,
-		req.AllowedSkills,
-	)
 
-	h.registry.Register(newAgent)
+	agentType := agent.ReActAgent
+	switch req.Type {
+	case "react":
+		agentType = agent.ReActAgent
+	case "cot":
+		agentType = agent.CoTAgent
+	case "planning":
+		agentType = agent.PlanningAgent
+	case "tool_calling":
+		agentType = agent.ToolCallingAgent
+	case "rag":
+		agentType = agent.RAGAgent
+	case "swarm":
+		agentType = agent.SwarmAgent
+	}
+
+	cfg := &agent.AgentConfig{
+		ID:           id,
+		Name:         req.Name,
+		Type:         agentType,
+		Description:  req.Description,
+		Persona:      req.Persona,
+		SystemPrompt: req.SystemPrompt,
+		LLMModel:     req.LLMModel,
+		MaxIterations: req.MaxIterations,
+		Capabilities: []agent.AgentCapability{},
+	}
+
+	a := agent.NewBaseAgent(cfg, h.logger)
+
+	if err := h.agentRegistry.Register(a); err != nil {
+		h.logger.Error("failed to register agent", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Code:    http.StatusInternalServerError,
+			Message: fmt.Sprintf("failed to create agent: %v", err),
+		})
+		return
+	}
+
 	h.logger.Info("agent created", zap.String("id", id), zap.String("name", req.Name))
 
-	c.JSON(http.StatusCreated, model.AgentResponse{
+	c.JSON(http.StatusCreated, AgentResponse{
 		ID:            id,
 		Name:          req.Name,
+		Type:          string(agentType),
 		Description:   req.Description,
 		Persona:       req.Persona,
 		SystemPrompt:  req.SystemPrompt,
@@ -68,11 +192,10 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 	})
 }
 
-// GetAgent handles retrieving a specific agent
-func (h *AgentHandler) GetAgent(c *gin.Context) {
+func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 	id := c.Param("id")
-	agent, exists := h.registry.Get(id)
-	if !exists {
+	a, ok := h.agentRegistry.Get(id)
+	if !ok {
 		h.logger.Warn("agent not found", zap.String("id", id))
 		c.JSON(http.StatusNotFound, model.ErrorResponse{
 			Code:    http.StatusNotFound,
@@ -81,47 +204,9 @@ func (h *AgentHandler) GetAgent(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, model.AgentResponse{
-		ID:            agent.ID,
-		Name:          agent.Name,
-		Description:   agent.Description,
-		Persona:       agent.Persona,
-		SystemPrompt:  agent.SystemPrompt,
-		LLMModel:      agent.LLMModel,
-		MaxIterations: agent.MaxIterations,
-		AllowedSkills: agent.AllowedSkills,
-		CreatedAt:     time.Now().Format(time.RFC3339),
-	})
-}
-
-// ListAgents handles listing all agents
-func (h *AgentHandler) ListAgents(c *gin.Context) {
-	agents := h.registry.GetAll()
-
-	var agentResponses []model.AgentResponse
-	for _, a := range agents {
-		agentResponses = append(agentResponses, model.AgentResponse{
-			ID:            a.ID,
-			Name:          a.Name,
-			Description:   a.Description,
-			Persona:       a.Persona,
-			SystemPrompt:  a.SystemPrompt,
-			LLMModel:      a.LLMModel,
-			MaxIterations: a.MaxIterations,
-			AllowedSkills: a.AllowedSkills,
-			CreatedAt:     time.Now().Format(time.RFC3339),
-		})
-	}
-
-	c.JSON(http.StatusOK, gin.H{"agents": agentResponses})
-}
-
-// ExecuteAgent handles executing an agent with a task
-func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
-	id := c.Param("id")
-	var req model.ExecuteAgentRequest
+	var req ExecuteAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn("invalid agent execution request", zap.Error(err))
+		h.logger.Warn("invalid request", zap.Error(err))
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{
 			Code:    http.StatusBadRequest,
 			Message: err.Error(),
@@ -129,9 +214,59 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 		return
 	}
 
-	agt, exists := h.registry.Get(id)
-	if !exists {
-		h.logger.Warn("agent not found", zap.String("id", id))
+	options := []agent.ExecutionOption{
+		agent.WithMaxSteps(a.GetConfig().MaxIterations),
+	}
+
+	if req.Options != nil {
+		if maxSteps, ok := req.Options["maxSteps"].(float64); ok {
+			options = append(options, agent.WithMaxSteps(int(maxSteps)))
+		}
+		if timeout, ok := req.Options["timeout"].(float64); ok {
+			options = append(options, agent.WithTimeout(time.Duration(timeout)*time.Second))
+		}
+	}
+
+	ctx := context.Background()
+	result, err := a.Execute(ctx, req.Query, options...)
+
+	if err != nil {
+		h.logger.Error("agent execution failed", zap.String("agentId", id), zap.Error(err))
+		c.JSON(http.StatusOK, AgentExecutionResult{
+			AgentID:  id,
+			Input:    req.Query,
+			Output:   "",
+			Steps:    0,
+			Duration: "0s",
+			Error:    err.Error(),
+		})
+		return
+	}
+
+	thoughtsJSON, _ := json.Marshal(result.Thoughts)
+	toolCallsJSON, _ := json.Marshal(result.ToolCalls)
+
+	c.JSON(http.StatusOK, AgentExecutionResult{
+		AgentID:    id,
+		Input:      req.Query,
+		Output:     result.Output,
+		Steps:      result.Steps,
+		TokensUsed: result.TokensUsed,
+		Duration:   result.Duration.String(),
+		Thoughts:   result.Thoughts,
+		ToolCalls:  result.ToolCalls,
+		Metadata: map[string]interface{}{
+			"thoughtsJSON":  string(thoughtsJSON),
+			"toolCallsJSON": string(toolCallsJSON),
+		},
+	})
+}
+
+func (h *AgentHandler) DeleteAgent(c *gin.Context) {
+	id := c.Param("id")
+
+	if err := h.agentRegistry.Remove(id); err != nil {
+		h.logger.Warn("agent not found or removal failed", zap.String("id", id), zap.Error(err))
 		c.JSON(http.StatusNotFound, model.ErrorResponse{
 			Code:    http.StatusNotFound,
 			Message: "agent not found",
@@ -139,41 +274,8 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 		return
 	}
 
-	task := &agent.AgentTask{
-		Query:     req.Query,
-		Context:   req.Context,
-		Variables: req.Variables,
-	}
-
-	result, err := agt.Execute(c.Request.Context(), task)
-	if err != nil {
-		h.logger.Error("agent execution failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ExecuteAgentResponse{
-			Error: err.Error(),
-		})
-		return
-	}
-
-	h.logger.Info("agent executed", zap.String("id", id))
-	c.JSON(http.StatusOK, model.ExecuteAgentResponse{
-		Result: result.Result,
-		Steps:  convertStepsToModel(result.Steps),
-		Status: result.Status,
-		Error:  result.Error,
+	h.logger.Info("agent deleted", zap.String("id", id))
+	c.JSON(http.StatusOK, gin.H{
+		"message": "agent deleted successfully",
 	})
-}
-
-// Helper function to convert internal steps to model steps
-func convertStepsToModel(steps []agent.AgentStep) []model.AgentStep {
-	modelSteps := make([]model.AgentStep, len(steps))
-	for i, step := range steps {
-		modelSteps[i] = model.AgentStep{
-			Iteration: step.Iteration,
-			Action:    step.Action,
-			Tool:      step.Tool,
-			Input:     step.Input,
-			Output:    step.Output,
-		}
-	}
-	return modelSteps
 }

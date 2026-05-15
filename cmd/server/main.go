@@ -55,7 +55,7 @@ func main() {
 	registry := orchestrator.NewRegistry()
 
 	// 创建路由
-	router := api.NewRouter(cfg, registry, logger, gateway)
+	router := api.SetupRouter(cfg, logger, registry, gateway)
 
 	logger.Info("Starting server", zap.String("port", cfg.Port))
 	if err := router.Run(":" + cfg.Port); err != nil {

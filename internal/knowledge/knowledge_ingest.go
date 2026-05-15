@@ -69,15 +69,15 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 		Errors:      []string{},
 	}
 
-	parsedDoc, err := ki.parser.ParseBytes(req.DocumentData, req.FileName)
+	content, err := ki.parser.ParseBytes(req.DocumentData, req.FileName)
 	if err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("parse failed: %v", err))
 		return result, fmt.Errorf("failed to parse document: %w", err)
 	}
 
-	ki.logger.Info("document parsed", zap.String("format", parsedDoc.Format))
+	ki.logger.Info("document parsed", zap.Int("content_length", len(content)))
 
-	chunks := ki.chunker.SmartChunk(parsedDoc.Content)
+	chunks := ki.chunker.SmartChunk(content)
 	result.TotalChunks = len(chunks)
 
 	ki.logger.Info("text chunked", zap.Int("num_chunks", len(chunks)))
@@ -106,14 +106,14 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 
 	collectionName := fmt.Sprintf("%s_kb", req.Workspace)
 
-	hasCollection := true
+	// Create collection if not exists
 	if err := ki.vectorStore.CreateCollection(ctx, collectionName); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			ki.logger.Error("failed to create collection", zap.Error(err))
 			result.Errors = append(result.Errors, fmt.Sprintf("collection create failed: %v", err))
 			return result, err
 		}
-		hasCollection = false
+		ki.logger.Info("collection already exists or created successfully")
 	}
 
 	if err := ki.vectorStore.Insert(ctx, collectionName, vectors); err != nil {
@@ -136,8 +136,8 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 		ki.logger.Info("creating knowledge graph nodes")
 		docNodeProps := map[string]interface{}{
 			"id":        req.DocumentID,
-			"title":     parsedDoc.Title,
-			"format":    parsedDoc.Format,
+			"title":     req.FileName,
+			"format":    req.FileName,
 			"workspace": req.Workspace,
 			"created_at": time.Now().Unix(),
 		}
@@ -213,8 +213,8 @@ func (ki *KnowledgeIngest) GetWorkspaceStats(ctx context.Context, workspace stri
 	}
 
 	docCount := 0
-	if len(docCountResult) > 0 {
-		if m, ok := docCountResult[0].(map[string]interface{}); ok {
+	if resultList, ok := docCountResult.([]interface{}); ok && len(resultList) > 0 {
+		if m, ok := resultList[0].(map[string]interface{}); ok {
 			if c, ok := m["doc_count"].(int64); ok {
 				docCount = int(c)
 			}

@@ -87,3 +87,22 @@ func (h *SkillHandler) GetSkill(c *gin.Context) {
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	})
 }
+
+func (h *SkillHandler) GetAllSkills(c *gin.Context) {
+	skills := h.registry.GetAll()
+	responses := make([]model.SkillResponse, 0, len(skills))
+
+	for _, s := range skills {
+		responses = append(responses, model.SkillResponse{
+			ID:          s.GetID(),
+			Name:        s.GetName(),
+			Description: s.GetDescription(),
+			Type:        s.GetType(),
+			CreatedAt:   time.Now().Format(time.RFC3339),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"skills": responses,
+	})
+}

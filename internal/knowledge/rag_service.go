@@ -81,7 +81,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	collectionName := fmt.Sprintf("%s_kb", req.Workspace)
 
 	switch req.Mode {
-	case "vector", "hybrid":
+	case "vector":
 		vectorResults, err := rs.queryVector(ctx, req.Question, collectionName, req.TopK)
 		if err != nil {
 			rs.logger.Error("vector query failed", zap.Error(err))
@@ -107,6 +107,22 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		result.GraphContext = graphEntities
 
 	case "hybrid":
+		vectorResults, err := rs.queryVector(ctx, req.Question, collectionName, req.TopK)
+		if err != nil {
+			rs.logger.Error("vector query failed", zap.Error(err))
+			return nil, fmt.Errorf("vector query failed: %w", err)
+		}
+		result.VectorResults = vectorResults
+
+		for _, vr := range vectorResults {
+			result.Sources = append(result.Sources, Source{
+				DocumentID:  vr.ID,
+				Content:    vr.Content,
+				ChunkIndex: vr.ChunkIndex,
+				Score:      vr.Score,
+			})
+		}
+
 		graphEntities, err := rs.queryGraph(ctx, req.Question)
 		if err != nil {
 			rs.logger.Warn("graph query failed, using vector only", zap.Error(err))
