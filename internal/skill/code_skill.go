@@ -1,5 +1,9 @@
 package skill
 
+import (
+	"fmt"
+)
+
 type CodeSkill struct {
 	*BaseSkill
 	Code     string
@@ -20,6 +24,17 @@ func NewCodeSkill(id, name, description, code, language string) *CodeSkill {
 }
 
 func (cs *CodeSkill) Execute(input interface{}) (interface{}, error) {
-	// TODO: Implement code execution
-	return nil, nil
+	// 解析输入
+	_, ok := input.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid input format")
+	}
+
+	// For now, return a placeholder response
+	return map[string]interface{}{
+		"code":      cs.Code,
+		"language":  cs.Language,
+		"output":    "Code execution not yet implemented",
+		"error":     nil,
+	}, nil
 }

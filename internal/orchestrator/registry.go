@@ -2,12 +2,14 @@ package orchestrator
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/skill"
 )
 
 type Registry struct {
 	skills map[string]skill.Skill
+	mu     sync.RWMutex
 }
 
 func NewRegistry() *Registry {
@@ -17,25 +19,33 @@ func NewRegistry() *Registry {
 }
 
 func (r *Registry) Register(id string, s skill.Skill) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.skills[id] = s
 }
 
 func (r *Registry) Get(id string) (skill.Skill, bool) {
-	skill, ok := r.skills[id]
-	return skill, ok
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	s, ok := r.skills[id]
+	return s, ok
 }
 
 func (r *Registry) GetAll() []skill.Skill {
-	skills := make([]skill.Skill, 0, len(r.skills))
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	skillList := make([]skill.Skill, 0, len(r.skills))
 	for _, s := range r.skills {
-		skills = append(skills, s)
+		skillList = append(skillList, s)
 	}
-	return skills
+	return skillList
 }
 
 // Remove removes a skill by ID
 func (r *Registry) Remove(id string) error {
-	s, ok := r.skills[id]
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.skills[id]
 	if !ok {
 		return fmt.Errorf("skill not found: %s", id)
 	}
