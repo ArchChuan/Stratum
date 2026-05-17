@@ -12,10 +12,10 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/document"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/embedding"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/knowledge"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/textchunk"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/mcp"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -36,7 +36,7 @@ func SetupRouter(
 	// Health check
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"status": "ok",
+			"status":  "ok",
 			"service": "ClawHermes AI Go",
 		})
 	})
