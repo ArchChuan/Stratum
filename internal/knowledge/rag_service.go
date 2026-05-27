@@ -43,7 +43,7 @@ type RAGQueryResult struct {
 	Answer        string
 	Sources       []Source
 	GraphContext  []GraphEntity
-	VectorResults []mcp.SearchResult
+	VectorResults []vector.SearchResult
 	Mode          string
 	Latency       time.Duration
 }
@@ -141,7 +141,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	return result, nil
 }
 
-func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int) ([]mcp.SearchResult, error) {
+func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int) ([]vector.SearchResult, error) {
 	rs.logger.Debug("querying vector store")
 
 	queryVector, err := rs.embeddingSvc.EmbedVector(ctx, question)

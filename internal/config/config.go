@@ -49,7 +49,7 @@ func InitializeServices(cfg *Config, logger *zap.Logger) (*Services, error) {
 		// 不中断启动，继续运行
 	}
 
-	vectorStore := mcp.NewVectorStore(cfg.MilvusHost, cfg.MilvusPort, logger)
+	vectorStore := vector.NewVectorStore(cfg.MilvusHost, cfg.MilvusPort, logger)
 	if err := vectorStore.Connect(ctx); err != nil {
 		logger.Warn("failed to connect to Milvus", zap.Error(err))
 		// 不中断启动，继续运行

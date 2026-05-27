@@ -17,7 +17,7 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/textchunk"
-	mcppkg "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
+	vectorstore "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -43,7 +43,7 @@ func SetupRouter(
 	})
 
 	// Initialize services
-	vectorStore := mcppkg.NewVectorStore(cfg.MilvusHost, cfg.MilvusPort, logger)
+	vectorStore := vectorstore.NewVectorStore(cfg.MilvusHost, cfg.MilvusPort, logger)
 	graphRAG := knowledge.NewGraphRAG(cfg.Neo4jURI, cfg.Neo4jUser, cfg.Neo4jPassword, logger)
 
 	embedSvc := embedding.NewEmbeddingService(cfg.OpenAIAPIKey, logger)

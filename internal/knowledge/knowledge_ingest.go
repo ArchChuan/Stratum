@@ -82,9 +82,9 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 
 	ki.logger.Info("text chunked", zap.Int("num_chunks", len(chunks)))
 
-	var vectors []mcp.DocumentChunk
+	var vectors []vector.DocumentChunk
 	for i, chunk := range chunks {
-		vector, err := ki.embeddingSvc.EmbedVector(ctx, chunk.Content)
+		embedVec, err := ki.embeddingSvc.EmbedVector(ctx, chunk.Content)
 		if err != nil {
 			ki.logger.Warn("failed to embed chunk", zap.Int("chunk_index", i), zap.Error(err))
 			result.Errors = append(result.Errors, fmt.Sprintf("chunk %d embed failed: %v", i, err))
@@ -92,12 +92,12 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 		}
 
 		docID := fmt.Sprintf("%s_chunk_%d", req.DocumentID, i)
-		vectors = append(vectors, mcp.DocumentChunk{
+		vectors = append(vectors, vector.DocumentChunk{
 			ID:             docID,
 			Content:        chunk.Content,
 			SourceDocument: req.DocumentID,
 			ChunkIndex:     int64(i),
-			Vector:         vector,
+			Vector:         embedVec,
 		})
 	}
 
