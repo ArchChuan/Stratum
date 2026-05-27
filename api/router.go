@@ -13,10 +13,11 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/embedding"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/knowledge"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/mcp"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/textchunk"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/mcp"
+	mcppkg "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/mcp"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -42,7 +43,7 @@ func SetupRouter(
 	})
 
 	// Initialize services
-	vectorStore := mcp.NewVectorStore(cfg.MilvusHost, cfg.MilvusPort, logger)
+	vectorStore := mcppkg.NewVectorStore(cfg.MilvusHost, cfg.MilvusPort, logger)
 	graphRAG := knowledge.NewGraphRAG(cfg.Neo4jURI, cfg.Neo4jUser, cfg.Neo4jPassword, logger)
 
 	embedSvc := embedding.NewEmbeddingService(cfg.OpenAIAPIKey, logger)
@@ -76,6 +77,11 @@ func SetupRouter(
 	memoryConfig := memory.DefaultMemoryConfig()
 	memoryManager := memory.NewMemoryManager(memoryConfig, logger, nil, nil, nil)
 	memoryHandler := handler.NewMemoryHandler(memoryManager, logger)
+
+	// Initialize MCP system
+	mcpManager := mcp.NewClientManager(logger, nil)
+	mcpRegistry := mcp.NewMCPSkillRegistry(mcpManager, logger)
+	mcpHandler := handler.NewMCPHandler(mcpRegistry, mcpManager, logger)
 
 	// Skill endpoints
 	skills := router.Group("/skills")
@@ -118,6 +124,9 @@ func SetupRouter(
 		mem.POST("/extract-entities", memoryHandler.ExtractEntities)
 		mem.GET("/summary/:session_id", memoryHandler.GetSummary)
 	}
+
+	// MCP endpoints
+	mcpHandler.RegisterRoutes(router)
 
 	return router
 }

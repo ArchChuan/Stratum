@@ -33,7 +33,7 @@ func TestExecutor(t *testing.T) {
 
 	ctx := ExecutionContext{
 		SkillID: "test-1",
-		Input:   "test input",
+		Input:   map[string]interface{}{"test": "input"},
 		Timeout: 5 * time.Second,
 	}
 
@@ -74,6 +74,39 @@ func TestExecutorTimeout(t *testing.T) {
 
 	if result.Error == nil {
 		t.Error("expected timeout error")
+	}
+}
+
+func TestExecutorNotFound(t *testing.T) {
+	registry := &mockRegistry{
+		skills: make(map[string]Skill),
+	}
+
+	executor := NewExecutor(registry)
+
+	ctx := ExecutionContext{
+		SkillID: "nonexistent",
+		Input:   map[string]interface{}{},
+		Timeout: 5 * time.Second,
+	}
+
+	result := executor.Execute(ctx)
+
+	if result.Error == nil {
+		t.Error("expected error for nonexistent skill")
+	}
+}
+
+func TestCodeSkillExecute(t *testing.T) {
+	cs := NewCodeSkill("test-1", "Test", "Test", "code", "python")
+
+	output, err := cs.Execute(map[string]interface{}{"key": "value"})
+	if err != nil {
+		t.Errorf("Execute() failed: %v", err)
+	}
+
+	if output == nil {
+		t.Error("expected non-nil output")
 	}
 }
 

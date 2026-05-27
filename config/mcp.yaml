@@ -1,0 +1,59 @@
+mcp:
+  servers:
+    # GitHub MCP 服务器示例
+    - id: "github-mcp"
+      name: "GitHub MCP Server"
+      version: "1.0.0"
+      transport: "stdio"
+      command: "node"
+      args:
+        - "/opt/mcp-servers/github/dist/index.js"
+      env:
+        GITHUB_TOKEN: "${GITHUB_TOKEN}"
+      capabilities:
+        - tools
+        - resources
+      timeout: 30s
+
+    # Web MCP 服务器示例
+    - id: "web-mcp"
+      name: "Web MCP Server"
+      version: "1.0.0"
+      transport: "sse"
+      url: "http://localhost:3001/mcp"
+      capabilities:
+        - tools
+        - resources
+      timeout: 30s
+
+    # 文件系统 MCP 服务器示例
+    - id: "filesystem-mcp"
+      name: "Filesystem MCP Server"
+      version: "1.0.0"
+      transport: "stdio"
+      command: "node"
+      args:
+        - "/opt/mcp-servers/filesystem/dist/index.js"
+      capabilities:
+        - tools
+        - resources
+      timeout: 30s
+
+  # 连接池配置
+  connection_pool:
+    max_connections: 10
+    idle_timeout: 300s
+    max_retries: 3
+    retry_backoff: 1s
+
+  # 缓存配置
+  cache:
+    enabled: true
+    ttl: 3600s
+    max_size: 1000
+
+  # 监控配置
+  monitoring:
+    enabled: true
+    metrics_interval: 30s
+    health_check_interval: 30s

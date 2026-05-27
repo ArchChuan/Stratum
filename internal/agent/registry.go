@@ -58,10 +58,8 @@ func (r *Registry) GetAll() []Agent {
 	defer r.mu.RUnlock()
 
 	agents := make([]Agent, 0, len(r.agents))
-	i := 0
 	for _, agent := range r.agents {
-		agents[i] = agent
-		i++
+		agents = append(agents, agent)
 	}
 
 	return agents
