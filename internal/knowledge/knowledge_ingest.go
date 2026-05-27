@@ -9,7 +9,7 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/document"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/embedding"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/textchunk"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/mcp"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
 	"go.uber.org/zap"
 )
 
@@ -17,7 +17,7 @@ type KnowledgeIngest struct {
 	parser       *document.Parser
 	chunker      *textchunk.Chunker
 	embeddingSvc *embedding.EmbeddingService
-	vectorStore  *mcp.VectorStore
+	vectorStore  *vector.VectorStore
 	graphRAG     *GraphRAG
 	logger       *zap.Logger
 }
@@ -26,7 +26,7 @@ func NewKnowledgeIngest(
 	parser *document.Parser,
 	chunker *textchunk.Chunker,
 	embeddingSvc *embedding.EmbeddingService,
-	vectorStore *mcp.VectorStore,
+	vectorStore *vector.VectorStore,
 	graphRAG *GraphRAG,
 	logger *zap.Logger,
 ) *KnowledgeIngest {

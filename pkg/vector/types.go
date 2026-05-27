@@ -1,4 +1,4 @@
-package mcp
+package vector
 
 type MCPRequest struct {
 	Method string      `json:"method"`

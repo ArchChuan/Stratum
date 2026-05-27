@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/knowledge"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/mcp"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
 	"go.uber.org/zap"
 )
 
@@ -23,7 +23,7 @@ type Config struct {
 
 type Services struct {
 	GraphRAG    *knowledge.GraphRAG
-	VectorStore *mcp.VectorStore
+	VectorStore *vector.VectorStore
 }
 
 func Load() (*Config, error) {

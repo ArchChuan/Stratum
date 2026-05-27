@@ -7,20 +7,20 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/embedding"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/mcp"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
 	"go.uber.org/zap"
 )
 
 type RAGService struct {
 	embeddingSvc *embedding.EmbeddingService
-	vectorStore  *mcp.VectorStore
+	vectorStore  *vector.VectorStore
 	graphRAG     *GraphRAG
 	logger       *zap.Logger
 }
 
 func NewRAGService(
 	embeddingSvc *embedding.EmbeddingService,
-	vectorStore *mcp.VectorStore,
+	vectorStore *vector.VectorStore,
 	graphRAG *GraphRAG,
 	logger *zap.Logger,
 ) *RAGService {

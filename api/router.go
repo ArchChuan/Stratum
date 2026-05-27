@@ -17,7 +17,7 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/textchunk"
-	mcppkg "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/mcp"
+	mcppkg "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
