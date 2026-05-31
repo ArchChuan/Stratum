@@ -327,6 +327,34 @@ func BenchmarkCacheStore(b *testing.B) {
 	}
 }
 
+// TestStoreToolsRespectsMaxSize 验证 StoreTools 不超过 maxSize
+func TestStoreToolsRespectsMaxSize(t *testing.T) {
+	cache := NewCapabilityCache(2, 1*time.Hour)
+	tools := []*MCPTool{{Name: "tool1"}}
+
+	cache.StoreTools("server1", tools)
+	cache.StoreTools("server2", tools)
+	cache.StoreTools("server3", tools)
+
+	if cache.Size() > 2 {
+		t.Errorf("cache size %d exceeds maxSize 2", cache.Size())
+	}
+}
+
+// TestStoreResourcesRespectsMaxSize 验证 StoreResources 不超过 maxSize
+func TestStoreResourcesRespectsMaxSize(t *testing.T) {
+	cache := NewCapabilityCache(2, 1*time.Hour)
+	resources := []*MCPResource{{URI: "res1"}}
+
+	cache.StoreResources("server1", resources)
+	cache.StoreResources("server2", resources)
+	cache.StoreResources("server3", resources)
+
+	if cache.Size() > 2 {
+		t.Errorf("cache size %d exceeds maxSize 2", cache.Size())
+	}
+}
+
 // BenchmarkCacheGetTools 基准测试缓存获取工具
 func BenchmarkCacheGetTools(b *testing.B) {
 	cache := NewCapabilityCache(1000, 1*time.Hour)

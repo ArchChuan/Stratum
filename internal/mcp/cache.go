@@ -56,6 +56,12 @@ func (c *CapabilityCache) StoreTools(serverID string, tools []*MCPTool) {
 
 	entry, exists := c.entries[serverID]
 	if !exists {
+		if len(c.entries) >= c.maxSize {
+			for k := range c.entries {
+				delete(c.entries, k)
+				break
+			}
+		}
 		entry = &CacheEntry{}
 		c.entries[serverID] = entry
 	}
@@ -71,6 +77,12 @@ func (c *CapabilityCache) StoreResources(serverID string, resources []*MCPResour
 
 	entry, exists := c.entries[serverID]
 	if !exists {
+		if len(c.entries) >= c.maxSize {
+			for k := range c.entries {
+				delete(c.entries, k)
+				break
+			}
+		}
 		entry = &CacheEntry{}
 		c.entries[serverID] = entry
 	}
