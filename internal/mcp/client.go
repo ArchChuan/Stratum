@@ -440,27 +440,33 @@ func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCP
 
 // HealthCheck 执行健康检查
 func (c *BaseClient) HealthCheck(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	connected := c.connected
+	c.mu.RUnlock()
 
-	if !c.connected {
+	if !connected {
+		c.mu.Lock()
 		c.healthy = false
+		c.mu.Unlock()
 		return fmt.Errorf("not connected")
 	}
 
-	// 尝试列出工具作为健康检查
+	// 网络调用在锁外执行，不阻塞并发读
 	req := MCPRequest{
 		Method: "tools/list",
 	}
 
 	_, err := c.sendRequest(ctx, &req)
+
+	c.mu.Lock()
 	if err != nil {
 		c.healthy = false
 		c.logger.Warn("health check failed", zap.Error(err))
-		return err
+	} else {
+		c.healthy = true
+		c.lastHealthy = time.Now()
 	}
+	c.mu.Unlock()
 
-	c.healthy = true
-	c.lastHealthy = time.Now()
-	return nil
+	return err
 }
