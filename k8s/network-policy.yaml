@@ -13,6 +13,15 @@ spec:
     - Ingress
     - Egress
   ingress:
+    # 允许来自 Ingress Controller 的流量
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+    # 允许来自 namespace 内部的流量
     - from:
         - podSelector: {}
       ports:
