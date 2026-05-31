@@ -324,7 +324,7 @@ spec:
             memory: 512Mi
           limits:
             cpu: 500m
-            memory: 512Mi
+            memory: 768Mi
       volumes:
       - name: neo4j-data
         persistentVolumeClaim:
