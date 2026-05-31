@@ -11,6 +11,7 @@ import (
 
 // MCPSkillWrapper 将 MCP 工具包装为 Skill
 type MCPSkillWrapper struct {
+	ctx         context.Context
 	ID          string
 	Name        string
 	Description string
@@ -43,7 +44,10 @@ func (w *MCPSkillWrapper) GetType() string {
 
 // Execute 执行工具
 func (w *MCPSkillWrapper) Execute(input any) (any, error) {
-	ctx := context.Background()
+	ctx := w.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	result, err := w.Manager.CallTool(ctx, w.ServerID, w.Tool.Name, input)
 	if err != nil {
 		w.logger.Error("failed to execute MCP tool",
@@ -90,6 +94,7 @@ func (a *MCPSkillAdapter) DiscoverSkills(ctx context.Context) ([]*MCPSkillWrappe
 		skillID := fmt.Sprintf("mcp:%s:%s", a.serverID, tool.Name)
 
 		wrapper := &MCPSkillWrapper{
+			ctx:         ctx,
 			ID:          skillID,
 			Name:        tool.Name,
 			Description: tool.Description,
