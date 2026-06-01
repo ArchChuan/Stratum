@@ -8,6 +8,7 @@ import (
 
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/embedding"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j/dbtype"
 	"go.uber.org/zap"
 )
 
@@ -184,23 +185,28 @@ func (rs *RAGService) queryGraph(ctx context.Context, question string) ([]GraphE
 
 	var graphEntities []GraphEntity
 	for _, m := range records {
-		node, ok := m["node"]
+		raw, ok := m["node"]
 		if !ok {
 			continue
 		}
-		props, ok := node.(map[string]interface{})
+		n, ok := raw.(dbtype.Node)
 		if !ok {
+			rs.logger.Warn("unexpected node type", zap.String("type", fmt.Sprintf("%T", raw)))
 			continue
 		}
-		id, _ := props["id"].(string)
+		id, _ := n.Props["id"].(string)
 		if id == "" {
 			rs.logger.Warn("graph search result missing id, skipping")
 			continue
 		}
+		label := "Entity"
+		if len(n.Labels) > 0 {
+			label = n.Labels[0]
+		}
 		graphEntities = append(graphEntities, GraphEntity{
 			ID:         id,
-			Label:      "Entity",
-			Properties: props,
+			Label:      label,
+			Properties: n.Props,
 		})
 	}
 

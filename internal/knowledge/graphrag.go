@@ -13,11 +13,22 @@ import (
 // validCypherIdentifier matches safe Neo4j label and relationship type names.
 var validCypherIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+var luceneSpecial = strings.NewReplacer(
+	`\`, `\\`, `+`, `\+`, `-`, `\-`, `!`, `\!`,
+	`(`, `\(`, `)`, `\)`, `{`, `\{`, `}`, `\}`,
+	`[`, `\[`, `]`, `\]`, `^`, `\^`, `"`, `\"`,
+	`~`, `\~`, `?`, `\?`, `:`, `\:`, `/`, `\/`,
+)
+
 func validateCypherIdentifier(s string) error {
 	if !validCypherIdentifier.MatchString(s) {
 		return fmt.Errorf("invalid Cypher identifier: %q", s)
 	}
 	return nil
+}
+
+func escapeLucene(s string) string {
+	return luceneSpecial.Replace(s)
 }
 
 type GraphRAG struct {
@@ -192,8 +203,8 @@ func (g *GraphRAG) FullTextSearch(ctx context.Context, searchTerm string, limit 
 		LIMIT $limit
 	`
 	result, err := g.session.Run(ctx, cypher, map[string]interface{}{
-		"searchTerm": searchTerm + "*",
-		"limit":     limit,
+		"searchTerm": escapeLucene(searchTerm) + "*",
+		"limit":      limit,
 	})
 	if err != nil {
 		g.logger.Error("failed to perform full text search", zap.Error(err))
