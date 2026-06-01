@@ -63,3 +63,33 @@ func TestValidateCypherIdentifier(t *testing.T) {
 		})
 	}
 }
+
+func TestEscapeLucene(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"hello", "hello"},
+		{"+", `\+`},
+		{`\`, `\\`},
+		{`\+`, `\\\+`},
+		{"a+b", `a\+b`},
+		{`a\+b`, `a\\\+b`},
+		{"test:value", `test\:value`},
+		{"path/to/file", `path\/to\/file`},
+		{"C++ error", `C\+\+ error`},
+		{"[ERROR]", `\[ERROR\]`},
+		{`query"with"quotes`, `query\"with\"quotes`},
+		{"range~0.5", `range\~0.5`},
+		{"field?wildcard", `field\?wildcard`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := escapeLucene(tt.input)
+			if got != tt.expected {
+				t.Errorf("escapeLucene(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
