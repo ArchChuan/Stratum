@@ -14,10 +14,11 @@ import (
 var validCypherIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 var luceneSpecial = strings.NewReplacer(
-	`\`, `\\`, `+`, `\+`, `-`, `\-`, `!`, `\!`,
+	`+`, `\+`, `-`, `\-`, `!`, `\!`,
 	`(`, `\(`, `)`, `\)`, `{`, `\{`, `}`, `\}`,
 	`[`, `\[`, `]`, `\]`, `^`, `\^`, `"`, `\"`,
 	`~`, `\~`, `?`, `\?`, `:`, `\:`, `/`, `\/`,
+	`\`, `\\`,
 )
 
 func validateCypherIdentifier(s string) error {
