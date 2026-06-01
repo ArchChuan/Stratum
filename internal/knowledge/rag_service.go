@@ -49,10 +49,10 @@ type RAGQueryResult struct {
 }
 
 type Source struct {
-	DocumentID    string
-	Content      string
-	ChunkIndex   int64
-	Score        float32
+	DocumentID string
+	Content    string
+	ChunkIndex int64
+	Score      float32
 }
 
 type GraphEntity struct {
@@ -69,8 +69,8 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 
 	result := &RAGQueryResult{
 		Mode:    req.Mode,
-		Answer:   "",
-		Sources:  []Source{},
+		Answer:  "",
+		Sources: []Source{},
 		Latency: 0,
 	}
 
@@ -91,7 +91,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 
 		for _, vr := range vectorResults {
 			result.Sources = append(result.Sources, Source{
-				DocumentID:  vr.ID,
+				DocumentID: vr.ID,
 				Content:    vr.Content,
 				ChunkIndex: vr.ChunkIndex,
 				Score:      vr.Score,
@@ -116,7 +116,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 
 		for _, vr := range vectorResults {
 			result.Sources = append(result.Sources, Source{
-				DocumentID:  vr.ID,
+				DocumentID: vr.ID,
 				Content:    vr.Content,
 				ChunkIndex: vr.ChunkIndex,
 				Score:      vr.Score,

@@ -1,7 +1,7 @@
-.PHONY: build run test lint clean k8s-deploy k8s-delete helm-install helm-uninstall install typecheck test-local \
-	minikube-start minikube-stop minikube-status minikube-clean \
-	local-ci local-deploy local-verify local-rollback \
-	docker-build docker-push local-pipeline
+.PHONY: build run test lint clean k8s-deploy k8s-delete helm-install helm-uninstall install typecheck \
+	docker-build docker-push \
+	frontend-install frontend-dev frontend-dev-debug frontend-build \
+	frontend-docker-build frontend-clean
 
 # 5 条项目命令规范
 
@@ -82,7 +82,7 @@ bench:
 	@echo "✓ 基准测试完成"
 
 # 完整检查（所有检查）
-check-all: install typecheck lint security-scan test-full
+check-all: install frontend-install typecheck lint security-scan test-full frontend-build
 	@echo "✅ 所有检查通过"
 
 test:
@@ -95,21 +95,22 @@ test-coverage:
 vet:
 	go vet ./...
 
-# Container targets
-docker-build:
-	docker build -t clawhermes-ai-go:latest .
-
-docker-run:
-	docker run -p 8080:8080 clawhermes-ai-go:latest
-
 # Kubernetes targets
 k8s-deploy:
 	kubectl apply -f k8s/security.yaml
 	kubectl apply -f k8s/dependencies.yaml
 	kubectl apply -f k8s/monitoring.yaml
 	kubectl apply -f k8s/deployment.yaml
+	kubectl apply -f k8s/frontend-configmap.yaml
+	kubectl apply -f k8s/frontend-deployment.yaml
+	kubectl apply -f k8s/frontend-service.yaml
+	kubectl apply -f k8s/frontend-ingress.yaml
 
 k8s-delete:
+	kubectl delete -f k8s/frontend-ingress.yaml --ignore-not-found
+	kubectl delete -f k8s/frontend-service.yaml --ignore-not-found
+	kubectl delete -f k8s/frontend-deployment.yaml --ignore-not-found
+	kubectl delete -f k8s/frontend-configmap.yaml --ignore-not-found
 	kubectl delete -f k8s/deployment.yaml
 	kubectl delete -f k8s/monitoring.yaml
 	kubectl delete -f k8s/dependencies.yaml
@@ -127,158 +128,49 @@ helm-uninstall:
 clean:
 	rm -rf bin/
 	rm -f coverage.out
+	@$(MAKE) frontend-clean
 
 # ============================================
-# 本地 Minikube 环境管理
-# ============================================
-
-minikube-start:
-	@echo "🚀 启动 Minikube..."
-	@bash scripts/minikube/start.sh
-
-minikube-stop:
-	@echo "⏹️  停止 Minikube..."
-	minikube stop
-
-minikube-status:
-	@echo "📊 Minikube 状态..."
-	minikube status
-	@echo ""
-	@echo "📦 Pods 状态:"
-	kubectl get pods -n clawhermes --no-headers 2>/dev/null || echo "clawhermes namespace 未就绪"
-
-minikube-clean:
-	@echo "🗑️  清理 Minikube..."
-	minikube delete
-	@echo "✓ Minikube 已删除"
-
-minikube-shell:
-	@echo "🔌 进入 Minikube 容器..."
-	minikube ssh
-
-minikube-logs:
-	@echo "📋 Minikube 日志..."
-	minikube logs --tail=50
-
-# ============================================
-# 本地 Docker 镜像构建
+# Docker 镜像构建
 # ============================================
 
 docker-build:
-	@echo "🐳 构建 Docker 镜像..."
+	@echo "🐳 构建后端 Docker 镜像..."
 	docker build -t clawhermes-ai-go:local -f Dockerfile .
 	@echo "✓ 镜像构建完成: clawhermes-ai-go:local"
 
-docker-build-minikube:
-	@echo "🐳 为 Minikube 构建镜像（使用 Minikube Docker）..."
-	@eval $$(minikube docker-env) && docker build -t clawhermes-ai-go:local -f Dockerfile .
-	@echo "✓ 镜像已推送到 Minikube: clawhermes-ai-go:local"
-
 docker-run:
-	@echo "🚀 运行 Docker 容器..."
+	@echo "🚀 运行后端 Docker 容器..."
 	docker run -p 8080:8080 clawhermes-ai-go:local
 
 # ============================================
-# 本地 CI/CD 流程
+# 前端管理
 # ============================================
 
-local-pipeline: typecheck lint security-scan test-full docker-build-minikube local-deploy local-verify
-	@echo "✅ 本地 CI/CD 流程完成！"
+frontend-install:
+	@echo "📦 安装前端依赖..."
+	cd web && npm install
+	@echo "✓ 前端依赖安装完成"
 
-local-ci:
-	@echo "🔄 运行本地 CI 检查..."
-	@bash scripts/local-ci/run.sh
+frontend-dev: frontend-install
+	@echo "🚀 启动前端开发服务器（本地模式）..."
+	cd web && npm run dev
 
-local-deploy:
-	@echo "📦 部署到本地 Minikube..."
-	@bash scripts/deploy/deploy-local.sh
+frontend-dev-debug: frontend-install
+	@echo "🔍 启动前端调试模式（Node.js inspector）..."
+	cd web && npm run dev:debug
 
-local-verify:
-	@echo "✅ 验证本地部署..."
-	@bash scripts/deploy/verify.sh clawhermes dev
+frontend-build: frontend-install
+	@echo "🏗️  构建前端生产包..."
+	cd web && npm run build
+	@echo "✓ 前端构建完成: web/dist/"
 
-local-rollback:
-	@echo "⏮️  回滚本地部署..."
-	kubectl rollout undo deployment/clawhermes-ai -n clawhermes
-	@bash scripts/deploy/verify.sh clawhermes dev
+frontend-clean:
+	@echo "🗑️  清理前端构建产物..."
+	rm -rf web/dist web/node_modules/.cache
+	@echo "✓ 前端清理完成"
 
-# ============================================
-# 开发辅助命令
-# ============================================
-
-dev-logs:
-	@echo "📋 查看应用日志..."
-	kubectl logs -n clawhermes -l app=clawhermes-ai -f --tail=100 2>/dev/null || echo "❌ 无法获取日志"
-
-dev-port-forward:
-	@echo "🔌 端口转发..."
-	@echo "应用: http://localhost:8080"
-	@echo "Prometheus: http://localhost:9090"
-	@echo "Grafana: http://localhost:3000"
-	@echo "Jaeger: http://localhost:16686"
-	kubectl port-forward -n clawhermes svc/clawhermes-ai 8080:80 &
-	kubectl port-forward -n clawhermes svc/prometheus 9090:9090 &
-	kubectl port-forward -n clawhermes svc/grafana 3000:3000 &
-	kubectl port-forward -n clawhermes svc/jaeger 16686:16686 &
-	@echo "✓ 端口转发已启动（按 Ctrl+C 停止）"
-
-dev-shell:
-	@echo "🔌 进入 Pod shell..."
-	@POD=$$(kubectl get pods -n clawhermes -l app=clawhermes-ai -o jsonpath='{.items[0].metadata.name}'); \
-	[ -z "$$POD" ] && echo "❌ 无法找到 Pod" && exit 1 || kubectl exec -it $$POD -n clawhermes -- sh
-
-dev-metrics:
-	@echo "📊 查看 Pod 资源使用..."
-	kubectl top pods -n clawhermes -l app=clawhermes-ai
-
-dev-events:
-	@echo "📌 查看最近事件..."
-	kubectl get events -n clawhermes --sort-by='.lastTimestamp' | tail -20
-
-dev-describe:
-	@echo "📝 查看 Deployment 详情..."
-	kubectl describe deployment clawhermes-ai -n clawhermes
-
-# ============================================
-# 完整工作流
-# ============================================
-
-setup-local:
-	@echo "⚙️  设置本地开发环境..."
-	@bash scripts/minikube/start.sh
-	@bash scripts/deploy/init.sh dev
-	@echo "✓ 本地环境设置完成"
-
-full-reset:
-	@echo "🔄 完全重置本地环境..."
-	@make local-rollback || true
-	@make k8s-delete || true
-	@make minikube-clean
-	@echo "✓ 本地环境已重置"
-
-help-local:
-	@echo "📚 本地 CI/CD 命令参考:"
-	@echo ""
-	@echo "Minikube 管理:"
-	@echo "  make minikube-start      - 启动 Minikube"
-	@echo "  make minikube-stop       - 停止 Minikube"
-	@echo "  make minikube-status     - 查看状态"
-	@echo "  make minikube-clean      - 删除 Minikube"
-	@echo ""
-	@echo "本地 CI/CD:"
-	@echo "  make local-pipeline      - 完整 CI/CD 流程"
-	@echo "  make local-ci            - 只运行 CI 检查"
-	@echo "  make local-deploy        - 部署到 Minikube"
-	@echo "  make local-verify        - 验证部署"
-	@echo "  make local-rollback      - 回滚部署"
-	@echo ""
-	@echo "开发辅助:"
-	@echo "  make dev-logs            - 查看日志"
-	@echo "  make dev-port-forward    - 端口转发"
-	@echo "  make dev-shell           - 进入 Pod shell"
-	@echo "  make dev-metrics         - 查看资源使用"
-	@echo "  make dev-describe        - 查看详情"
-	@echo ""
-	@echo "快速开始:"
-	@echo "  make setup-local         - 初始化本地环境"
-	@echo "  make full-reset          - 重置本地环境"
+frontend-docker-build:
+	@echo "🐳 构建前端 Docker 镜像..."
+	docker build -t clawhermes-frontend:local -f web/Dockerfile web/
+	@echo "✓ 前端镜像构建完成: clawhermes-frontend:local"

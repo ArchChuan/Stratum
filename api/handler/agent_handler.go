@@ -154,15 +154,15 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 	}
 
 	cfg := &agent.AgentConfig{
-		ID:           id,
-		Name:         req.Name,
-		Type:         agentType,
-		Description:  req.Description,
-		Persona:      req.Persona,
-		SystemPrompt: req.SystemPrompt,
-		LLMModel:     req.LLMModel,
+		ID:            id,
+		Name:          req.Name,
+		Type:          agentType,
+		Description:   req.Description,
+		Persona:       req.Persona,
+		SystemPrompt:  req.SystemPrompt,
+		LLMModel:      req.LLMModel,
 		MaxIterations: req.MaxIterations,
-		Capabilities: []agent.AgentCapability{},
+		Capabilities:  []agent.AgentCapability{},
 	}
 
 	a := agent.NewBaseAgent(cfg, h.logger)

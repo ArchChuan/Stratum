@@ -55,8 +55,8 @@ func (e *EmbeddingService) EmbedBatch(ctx context.Context, texts []string) ([][]
 			Model: openai.SmallEmbedding3,
 		})
 		if err != nil {
-			e.logger.Error("failed to create batch embeddings", 
-				zap.Int("batch_start", i), 
+			e.logger.Error("failed to create batch embeddings",
+				zap.Int("batch_start", i),
 				zap.Int("batch_end", end),
 				zap.Error(err))
 			return nil, fmt.Errorf("failed to create batch embeddings: %w", err)

@@ -14,12 +14,12 @@ import (
 type AgentType string
 
 const (
-	ReActAgent AgentType = "react"
-	CoTAgent AgentType = "cot"
-	PlanningAgent AgentType = "planning"
+	ReActAgent       AgentType = "react"
+	CoTAgent         AgentType = "cot"
+	PlanningAgent    AgentType = "planning"
 	ToolCallingAgent AgentType = "tool_calling"
-	RAGAgent AgentType = "rag"
-	SwarmAgent AgentType = "swarm"
+	RAGAgent         AgentType = "rag"
+	SwarmAgent       AgentType = "swarm"
 )
 
 // AgentCapability defines what an agent can do
@@ -33,16 +33,16 @@ type AgentCapability struct {
 
 // Message represents a message in agent's conversation history
 type Message struct {
-	Role      string
-	Content   string
-	Timestamp time.Time
-	Metadata  map[string]interface{}
+	Role       string
+	Content    string
+	Timestamp  time.Time
+	Metadata   map[string]interface{}
 	TokenCount int
 }
 
 // Thought represents a single reasoning step in CoT
 type Thought struct {
-	Step       int
+	Step        int
 	Observation string
 	Thought     string
 }
@@ -51,9 +51,9 @@ type Thought struct {
 type ToolCall struct {
 	ToolName string
 	Input    map[string]interface{}
-	Output    interface{}
-	Error     error
-	Duration  time.Duration
+	Output   interface{}
+	Error    error
+	Duration time.Duration
 }
 
 // ExecutionConfig holds configuration for agent execution
@@ -74,10 +74,10 @@ type AgentConfig struct {
 	Type          AgentType
 	Description   string
 	Persona       string
-	SystemPrompt   string
+	SystemPrompt  string
 	LLMModel      string
 	MaxIterations int
-	Capabilities   []AgentCapability
+	Capabilities  []AgentCapability
 }
 
 // AgentResult represents output from an agent execution
@@ -86,7 +86,7 @@ type AgentResult struct {
 	Input      string
 	Output     string
 	Thoughts   []Thought
-	ToolCalls   []ToolCall
+	ToolCalls  []ToolCall
 	Steps      int
 	TokensUsed int
 	Duration   time.Duration
@@ -116,9 +116,9 @@ type BaseAgent struct {
 // AgentState represents the current state of an agent
 type AgentState struct {
 	StepsTaken int
-	Thoughts    []Thought
-	ToolCalls   []ToolCall
-	TokensUsed  int
+	Thoughts   []Thought
+	ToolCalls  []ToolCall
+	TokensUsed int
 }
 
 // NewBaseAgent creates a new base agent
@@ -188,14 +188,14 @@ func (a *BaseAgent) AddToMemory(msg Message) {
 	// Also add to memory manager if available
 	if a.MemoryManager != nil && a.SessionContext != nil {
 		entry := &memory.MemoryEntry{
-			Role:       msg.Role,
-			Content:    msg.Content,
-			Timestamp:  msg.Timestamp,
-			TenantID:   a.SessionContext.TenantID,
-			UserID:     a.SessionContext.UserID,
-			SessionID:  a.SessionContext.SessionID,
-			AgentID:    a.SessionContext.AgentID,
-			Metadata:   msg.Metadata,
+			Role:      msg.Role,
+			Content:   msg.Content,
+			Timestamp: msg.Timestamp,
+			TenantID:  a.SessionContext.TenantID,
+			UserID:    a.SessionContext.UserID,
+			SessionID: a.SessionContext.SessionID,
+			AgentID:   a.SessionContext.AgentID,
+			Metadata:  msg.Metadata,
 		}
 		ctx := context.Background()
 		if err := a.MemoryManager.Add(ctx, entry); err != nil {
@@ -242,8 +242,8 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		zap.String("input", input))
 
 	result := &AgentResult{
-		AgentID: a.ID,
-		Input:   input,
+		AgentID:  a.ID,
+		Input:    input,
 		Metadata: map[string]interface{}{},
 	}
 
@@ -251,7 +251,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	case ReActAgent:
 		for i := 0; i < cfg.MaxSteps; i++ {
 			thought := Thought{
-				Step:      i + 1,
+				Step:        i + 1,
 				Observation: input,
 				Thought:     "Observing user input",
 			}
@@ -267,7 +267,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	case CoTAgent:
 		for i := 0; i < cfg.MaxSteps; i++ {
 			thought := Thought{
-				Step:      i + 1,
+				Step:        i + 1,
 				Observation: "Thinking about: " + input,
 				Thought:     "Considering possible responses",
 			}

@@ -189,7 +189,7 @@ func (m *ConversationBufferMemory) GetStats(ctx context.Context, sessionCtx *Ses
 	}
 
 	return &MemoryStats{
-		TotalEntries:  int64(count),
+		TotalEntries:   int64(count),
 		ShortTermCount: int64(count),
 		LastAccessTime: time.Now(),
 	}, nil
@@ -324,9 +324,10 @@ func (m *ConversationSummaryMemory) updateSummary() {
 	userMessages := 0
 	assistantMessages := 0
 	for _, entry := range recent {
-		if entry.Role == "user" {
+		switch entry.Role {
+		case "user":
 			userMessages++
-		} else if entry.Role == "assistant" {
+		case "assistant":
 			assistantMessages++
 		}
 	}

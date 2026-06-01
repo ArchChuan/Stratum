@@ -1,0 +1,19 @@
+{{- if .Values.frontend.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "clawhermes-ai-go.fullname" . }}-frontend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "clawhermes-ai-go.labels" . | nindent 4 }}
+    component: frontend
+spec:
+  selector:
+    {{- include "clawhermes-ai-go.selectorLabels" . | nindent 4 }}
+    component: frontend
+  ports:
+    - name: http
+      port: {{ .Values.frontend.service.port }}
+      targetPort: 80
+  type: {{ .Values.frontend.service.type }}
+{{- end }}

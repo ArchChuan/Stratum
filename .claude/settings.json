@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '✓ ClawHermes AI Go 项目规范已加载' && echo '📋 5条项目命令: make install | make typecheck | make lint | make test-local | make test-full' && echo '🚫 5条项目边界已启用' && echo '🔄 CI/CD: GitHub Actions configured' && echo '🛡️ Security: Semgrep + pre-commit hooks enabled'",
+            "command": "echo '✓ ClawHermes AI Go 项目规范已加载' && echo '📋 5条项目命令: make install | make typecheck | make lint | make test-local | make test-full' && echo '🚫 5条项目边界已启用' && echo '🔄 CI/CD: GitHub Actions configured' && echo '🛡️ Security: go vet enabled'",
             "statusMessage": "加载项目规范"
           }
         ]
@@ -78,6 +78,17 @@
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath'); if [[ -f \"$f\" ]]; then /usr/local/bin/shieldbot-mcp \"$f\" 2>&1 | head -40 || true; fi",
+            "statusMessage": "运行 shieldbot-mcp 安全扫描",
+            "async": true
+          }
+        ]
+      },
       {
         "matcher": "Bash",
         "hooks": [

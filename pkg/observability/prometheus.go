@@ -17,8 +17,9 @@ type PrometheusMetrics struct {
 	httpRequestsInFlight  prometheus.Gauge
 
 	// Skill 执行指标
-	skillExecutionsTotal  *prometheus.CounterVec
-	skillExecutionDuration *prometheus.HistogramVec
+	skillExecutionsTotal    *prometheus.CounterVec
+	skillExecutionDuration  *prometheus.HistogramVec
+	skillCircuitBreakerState *prometheus.GaugeVec
 
 	// Agent 执行指标
 	agentExecutionsTotal  *prometheus.CounterVec
@@ -72,13 +73,20 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 				Name: "skill_executions_total",
 				Help: "Total number of skill executions",
 			},
-			[]string{"skill_id", "status"},
+			[]string{"skill_id", "skill_type", "status"},
 		),
 		skillExecutionDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "skill_execution_duration_seconds",
 				Help:    "Skill execution duration in seconds",
 				Buckets: prometheus.DefBuckets,
+			},
+			[]string{"skill_id"},
+		),
+		skillCircuitBreakerState: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "skill_circuit_breaker_state",
+				Help: "Circuit breaker state per skill (0=closed, 1=open, 2=half_open)",
 			},
 			[]string{"skill_id"},
 		),
@@ -187,8 +195,13 @@ func (m *PrometheusMetrics) DecHTTPRequestsInFlight() {
 // Skill 指标方法
 
 // IncSkillExecution 增加技能执行计数
-func (m *PrometheusMetrics) IncSkillExecution(skillID string, status string) {
-	m.skillExecutionsTotal.WithLabelValues(skillID, status).Inc()
+func (m *PrometheusMetrics) IncSkillExecution(skillID, skillType, status string) {
+	m.skillExecutionsTotal.WithLabelValues(skillID, skillType, status).Inc()
+}
+
+// SetSkillCircuitBreakerState 设置熔断器状态 gauge
+func (m *PrometheusMetrics) SetSkillCircuitBreakerState(skillID string, state float64) {
+	m.skillCircuitBreakerState.WithLabelValues(skillID).Set(state)
 }
 
 // RecordSkillExecutionDuration 记录技能执行持续时间

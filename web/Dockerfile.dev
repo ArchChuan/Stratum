@@ -1,0 +1,12 @@
+# Dockerfile.dev — 开发模式，支持热重载
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --prefer-offline
+
+# 源码通过 volume 挂载，不 COPY
+EXPOSE 3002
+
+CMD ["npm", "run", "dev:docker"]

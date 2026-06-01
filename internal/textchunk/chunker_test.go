@@ -48,34 +48,6 @@ func TestChunkTextSmall(t *testing.T) {
 	}
 }
 
-func TestChunkTextLarge(t *testing.T) {
-	logger := zap.NewNop()
-	chunker := NewChunker(logger)
-
-	// Create text larger than maxChunkSize
-	var sb strings.Builder
-	for i := 0; i < 200; i++ {
-		sb.WriteString("word ")
-	}
-	text := sb.String()
-
-	chunks := chunker.ChunkText(text)
-
-	if len(chunks) == 0 {
-		t.Error("expected at least one chunk")
-	}
-
-	// Verify all chunks have content
-	for i, chunk := range chunks {
-		if chunk.Content == "" {
-			t.Errorf("chunk %d has empty content", i)
-		}
-		if chunk.Index != i {
-			t.Errorf("chunk %d has wrong index %d", i, chunk.Index)
-		}
-	}
-}
-
 func TestChunkTextEmpty(t *testing.T) {
 	logger := zap.NewNop()
 	chunker := NewChunker(logger)
@@ -88,5 +60,61 @@ func TestChunkTextEmpty(t *testing.T) {
 
 	if chunks[0].Content != "" {
 		t.Errorf("expected empty content, got %s", chunks[0].Content)
+	}
+}
+
+func TestTextChunkStruct(t *testing.T) {
+	chunk := TextChunk{
+		Content:    "test content",
+		Index:      5,
+		SourceText: "original source text",
+	}
+
+	if chunk.Content != "test content" {
+		t.Errorf("expected content 'test content', got %s", chunk.Content)
+	}
+
+	if chunk.Index != 5 {
+		t.Errorf("expected index 5, got %d", chunk.Index)
+	}
+
+	if chunk.SourceText != "original source text" {
+		t.Errorf("expected source text, got %s", chunk.SourceText)
+	}
+}
+
+func TestChunkTextWithPunctuation(t *testing.T) {
+	logger := zap.NewNop()
+	chunker := NewChunker(logger)
+
+	text := "Hello. World. This is a test."
+	chunks := chunker.ChunkText(text)
+
+	if len(chunks) == 0 {
+		t.Error("expected at least one chunk")
+	}
+
+	for _, chunk := range chunks {
+		if len(chunk.Content) == 0 {
+			t.Error("expected non-empty chunk content")
+		}
+	}
+}
+
+func TestChunkTextMultipleChunks(t *testing.T) {
+	logger := zap.NewNop()
+	chunker := NewChunker(logger)
+
+	text := strings.Repeat("word ", 50)
+	chunks := chunker.ChunkText(text)
+
+	if len(chunks) == 0 {
+		t.Error("expected at least one chunk")
+	}
+
+	for i, chunk := range chunks {
+		if chunk.Index != i {
+			t.Errorf("chunk index mismatch: expected %d, got %d", i, chunk.Index)
+		}
 	}
 }

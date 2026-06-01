@@ -27,6 +27,27 @@ app:
     initialDelaySeconds: 5
     periodSeconds: 5
 
+# Frontend settings
+frontend:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: clawhermes-frontend
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+  # nginx 反代后端的地址（集群内 service 名）
+  backendServiceName: clawhermes-ai
+  backendServicePort: 80
+
 # Configuration settings
 config:
   port: "8080"

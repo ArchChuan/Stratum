@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Layout, Menu, Space, Typography } from 'antd';
-import { 
-  AppstoreOutlined, 
-  PlusCircleOutlined, 
+import {
+  AppstoreOutlined,
+  PlusCircleOutlined,
   HistoryOutlined,
   DashboardOutlined,
   RobotOutlined,
-  CommentOutlined
+  CommentOutlined,
+  DatabaseOutlined
 } from '@ant-design/icons';
 import { Routes, Route, useNavigate, Link } from 'react-router-dom';
 
@@ -17,6 +18,7 @@ import DashboardPage from './pages/DashboardPage';
 import AgentsListPage from './pages/AgentsListPage';
 import CreateAgentPage from './pages/CreateAgentPage';
 import AgentChatPage from './pages/AgentChatPage';
+import MemoryPage from './pages/MemoryPage';
 import { checkHealth } from './services/api';
 
 const { Header, Content, Sider } = Layout;

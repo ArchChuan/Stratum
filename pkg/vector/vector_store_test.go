@@ -6,9 +6,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// TestVectorStore_NewVectorStore tests constructor
 func TestVectorStore_NewVectorStore(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := zap.NewNop()
 	vs := NewVectorStore("localhost", "19530", logger)
 
 	if vs.host != "localhost" {
@@ -22,9 +21,25 @@ func TestVectorStore_NewVectorStore(t *testing.T) {
 	if vs.dim != 1536 {
 		t.Errorf("expected dim 1536, got %d", vs.dim)
 	}
+
+	if vs.logger == nil {
+		t.Error("expected non-nil logger")
+	}
 }
 
-// TestSearchResult tests SearchResult struct
+func TestVectorStore_NewVectorStoreCustomPort(t *testing.T) {
+	logger := zap.NewNop()
+	vs := NewVectorStore("milvus.example.com", "9999", logger)
+
+	if vs.host != "milvus.example.com" {
+		t.Errorf("expected host milvus.example.com, got %s", vs.host)
+	}
+
+	if vs.port != "9999" {
+		t.Errorf("expected port 9999, got %s", vs.port)
+	}
+}
+
 func TestSearchResult(t *testing.T) {
 	result := SearchResult{
 		ID:             "test-id",
@@ -55,7 +70,28 @@ func TestSearchResult(t *testing.T) {
 	}
 }
 
-// TestDocumentChunk tests DocumentChunk struct
+func TestSearchResultZeroScore(t *testing.T) {
+	result := SearchResult{
+		ID:    "id",
+		Score: 0.0,
+	}
+
+	if result.Score != 0.0 {
+		t.Errorf("expected score 0.0, got %f", result.Score)
+	}
+}
+
+func TestSearchResultHighScore(t *testing.T) {
+	result := SearchResult{
+		ID:    "id",
+		Score: 1.0,
+	}
+
+	if result.Score != 1.0 {
+		t.Errorf("expected score 1.0, got %f", result.Score)
+	}
+}
+
 func TestDocumentChunk(t *testing.T) {
 	chunk := DocumentChunk{
 		ID:             "chunk-1",
@@ -83,5 +119,74 @@ func TestDocumentChunk(t *testing.T) {
 
 	if len(chunk.Vector) != 1536 {
 		t.Errorf("got Vector length %d, want 1536", len(chunk.Vector))
+	}
+}
+
+func TestDocumentChunkMultipleChunks(t *testing.T) {
+	chunks := []DocumentChunk{
+		{
+			ID:         "chunk-1",
+			ChunkIndex: 0,
+			Vector:     make([]float32, 1536),
+		},
+		{
+			ID:         "chunk-2",
+			ChunkIndex: 1,
+			Vector:     make([]float32, 1536),
+		},
+		{
+			ID:         "chunk-3",
+			ChunkIndex: 2,
+			Vector:     make([]float32, 1536),
+		},
+	}
+
+	if len(chunks) != 3 {
+		t.Errorf("expected 3 chunks, got %d", len(chunks))
+	}
+
+	for i, chunk := range chunks {
+		if chunk.ChunkIndex != int64(i) {
+			t.Errorf("chunk %d: expected index %d, got %d", i, i, chunk.ChunkIndex)
+		}
+	}
+}
+
+func TestDocumentChunkEmptyVector(t *testing.T) {
+	chunk := DocumentChunk{
+		ID:     "chunk-1",
+		Vector: []float32{},
+	}
+
+	if len(chunk.Vector) != 0 {
+		t.Errorf("expected empty vector, got length %d", len(chunk.Vector))
+	}
+}
+
+func TestDocumentChunkLargeVector(t *testing.T) {
+	largeVector := make([]float32, 4096)
+	chunk := DocumentChunk{
+		ID:     "chunk-1",
+		Vector: largeVector,
+	}
+
+	if len(chunk.Vector) != 4096 {
+		t.Errorf("expected vector length 4096, got %d", len(chunk.Vector))
+	}
+}
+
+func TestSearchResultMultiple(t *testing.T) {
+	results := []SearchResult{
+		{ID: "id-1", Score: 0.95},
+		{ID: "id-2", Score: 0.87},
+		{ID: "id-3", Score: 0.72},
+	}
+
+	if len(results) != 3 {
+		t.Errorf("expected 3 results, got %d", len(results))
+	}
+
+	if results[0].Score < results[1].Score {
+		t.Error("expected results sorted by score descending")
 	}
 }
