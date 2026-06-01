@@ -29,6 +29,7 @@ func InitializeGateway(cfg *Config, logger *zap.Logger) *Gateway {
 	if cfg.OpenAIKey != "" {
 		openaiClient := NewOpenAIClient(cfg.OpenAIKey, "", logger)
 		gateway.RegisterClient(ProviderOpenAI, openaiClient)
+		gateway.RegisterEmbeddingClient(ProviderOpenAI, openaiClient)
 	}
 
 	// 注册 Anthropic 客户端
