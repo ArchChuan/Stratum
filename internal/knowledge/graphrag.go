@@ -139,16 +139,15 @@ func (g *GraphRAG) Query(ctx context.Context, query string) (interface{}, error)
 }
 
 func (g *GraphRAG) GetNeighborNodes(ctx context.Context, nodeID string, maxDepth int) ([]map[string]interface{}, error) {
-	cypher := `
+	cypher := fmt.Sprintf(`
 		MATCH (n)<-[r*1..%d]-(neighbor)
 		WHERE elementId(n) = $nodeId
 		RETURN neighbor, r, n
 		ORDER BY r.created_at DESC
 		LIMIT 20
-	`
+	`, maxDepth)
 	result, err := g.session.Run(ctx, cypher, map[string]interface{}{
-		"nodeId":   nodeID,
-		"maxDepth": maxDepth,
+		"nodeId": nodeID,
 	})
 	if err != nil {
 		g.logger.Error("failed to get neighbor nodes", zap.Error(err))

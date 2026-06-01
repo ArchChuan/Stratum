@@ -32,3 +32,34 @@ func TestNewRAGService(t *testing.T) {
 		t.Error("expected RAGService to be non-nil")
 	}
 }
+
+func TestValidateCypherIdentifier(t *testing.T) {
+	tests := []struct {
+		input   string
+		wantErr bool
+	}{
+		// Valid identifiers
+		{"Document", false},
+		{"HAS_CHUNK", false},
+		{"_private", false},
+		{"Type123", false},
+		{"a", false},
+		// Invalid identifiers
+		{"", true},
+		{"has chunk", true},
+		{"has-chunk", true},
+		{"123start", true},
+		{"type;DROP", true},
+		{"label`injection", true},
+		{"中文", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			err := validateCypherIdentifier(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateCypherIdentifier(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
