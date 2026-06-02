@@ -23,6 +23,10 @@
 - 多 GitHub OAuth App 支持
 - 租户间资源共享
 
+### 1.3 初始化说明
+
+`global_admin` 账号通过环境变量 `GLOBAL_ADMIN_GITHUB_LOGIN` 在服务首次启动时种子写入 `public.users`，不通过注册流程创建。
+
 ---
 
 ## 2. 角色体系
@@ -120,7 +124,7 @@ invitations (
 refresh_tokens (
   id              UUID PRIMARY KEY,
   user_id         UUID REFERENCES users(id),
-  tenant_id       UUID REFERENCES tenants(id),
+  tenant_id       UUID REFERENCES tenants(id),  -- global_admin 为 NULL
   token_hash      TEXT NOT NULL,         -- SHA256，不存明文
   device_info     JSONB,                 -- user-agent, IP
   issued_at       TIMESTAMPTZ DEFAULT now(),
