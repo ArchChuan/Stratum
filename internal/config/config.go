@@ -10,15 +10,15 @@ import (
 )
 
 type Config struct {
-	Port              string
-	NatsURL           string
-	MilvusHost        string
-	MilvusPort        string
-	Neo4jURI          string
-	Neo4jUser         string
-	Neo4jPassword     string
-	OtelEndpoint      string
-	OpenAIAPIKey      string
+	Port          string
+	NatsURL       string
+	MilvusHost    string
+	MilvusPort    string
+	Neo4jURI      string
+	Neo4jUser     string
+	Neo4jPassword string
+	OtelEndpoint  string
+	OpenAIAPIKey  string
 }
 
 type Services struct {
@@ -28,15 +28,15 @@ type Services struct {
 
 func Load() (*Config, error) {
 	return &Config{
-		Port:              getEnv("PORT", "8080"),
-		NatsURL:           getEnv("NATS_URL", "nats://localhost:4222"),
-		MilvusHost:        getEnv("MILVUS_HOST", "localhost"),
-		MilvusPort:        getEnv("MILVUS_PORT", "19530"),
-		Neo4jURI:          getEnv("NEO4J_URI", "bolt://localhost:7687"),
-		Neo4jUser:         getEnv("NEO4J_USER", "neo4j"),
-		Neo4jPassword:     getEnv("NEO4J_PASSWORD", "password"),
-		OtelEndpoint:      getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
-		OpenAIAPIKey:     getEnv("OPENAI_API_KEY", ""),
+		Port:          getEnv("PORT", "8080"),
+		NatsURL:       getEnv("NATS_URL", "nats://localhost:4222"),
+		MilvusHost:    getEnv("MILVUS_HOST", "localhost"),
+		MilvusPort:    getEnv("MILVUS_PORT", "19530"),
+		Neo4jURI:      getEnv("NEO4J_URI", "bolt://localhost:7687"),
+		Neo4jUser:     getEnv("NEO4J_USER", "neo4j"),
+		Neo4jPassword: getEnv("NEO4J_PASSWORD", "password"),
+		OtelEndpoint:  getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
+		OpenAIAPIKey:  getEnv("OPENAI_API_KEY", ""),
 	}, nil
 }
 

@@ -1,191 +1,186 @@
-.PHONY: build run test lint clean k8s-deploy k8s-delete helm-install helm-uninstall install typecheck \
-	docker-build docker-push \
-	frontend-install frontend-dev frontend-dev-debug frontend-build \
-	frontend-docker-build frontend-clean \
-	dev-local dev-k8s
+.PHONY: \
+	be-install be-fmt be-lint be-test be-build be-docker-build \
+	fe-install fe-lint fe-build fe-docker-build \
+	infra-up infra-down infra-wait infra-status \
+	obs-up obs-down \
+	k8s-deploy k8s-delete k8s-logs \
+	helm-install helm-upgrade helm-uninstall helm-diff helm-lint \
+	ci-backend ci-frontend ci-docker \
+	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
+	dev-up dev-down \
+	run fe-dev help clean
 
-# 5 条项目命令规范
+# ─── 全局变量（CI/CD 可自动覆盖）────────────────────────────────────────────
+BE_IMAGE    ?= clawhermes-ai-go
+FE_IMAGE    ?= clawhermes-frontend
+IMAGE_TAG   ?= local
+REGISTRY    ?= ghcr.io/bytebuilderx
+NAMESPACE   ?= clawhermes-system
+HELM_RELEASE ?= clawhermes-release
+WEB_DIR     := web
+DC          := docker compose
+HELM_DIR    := ./helm
+VALUES_FILE := $(HELM_DIR)/values.yaml
 
-# 1. 安装依赖
-install:
-	@echo "📦 安装项目依赖..."
+# ─── Help 帮助菜单 ──────────────────────────────────────────────────────────
+help:
+	@echo "===== ClawHermes AI Platform - Makefile ====="
+	@echo "本地开发: make dev-up → make run → make fe-dev"
+	@echo "CI 构建: make ci-backend ci-frontend ci-docker"
+	@echo "CD 部署: make cd-deploy-dev / staging / prod"
+	@echo "K8s: make k8s-deploy k8s-delete k8s-logs"
+	@echo "Helm: make helm-diff helm-lint"
+
+# ─── Backend 后端 ──────────────────────────────────────────────────────────
+be-install:
 	go mod download
 	go mod tidy
-	@echo "✓ 依赖安装完成"
 
-# 2. 类型检查
-typecheck:
-	@echo "🔍 执行类型检查..."
-	go vet ./...
-	@echo "✓ 类型检查通过"
+be-fmt:
+	go fmt ./...
+	gofmt -s -w .
 
-# 3. Lint 检查
-lint:
-	@echo "🎯 执行代码检查..."
-	@command -v golangci-lint >/dev/null 2>&1 || (echo "❌ golangci-lint 未安装，请运行: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest" && exit 1)
+be-lint:
+	@command -v golangci-lint >/dev/null 2>&1 || \
+		(echo "安装 golangci-lint: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest" && exit 1)
 	golangci-lint run ./... --timeout=5m
-	@echo "✓ 代码检查通过"
 
-# 4. 局部测试（快速测试）
-test-local:
-	@echo "🧪 执行局部测试..."
-	go test -v -short ./... -timeout=30s
-	@echo "✓ 局部测试通过"
-
-# 5. 全量测试
-test-full:
-	@echo "🧪 执行全量测试..."
+be-test:
 	go test -v -race -coverprofile=coverage.out ./... -timeout=5m
 	go tool cover -func=coverage.out | tail -1
-	@echo "✓ 全量测试通过"
 
-build:
+be-build:
 	go build -o bin/server ./cmd/server
+
+be-docker-build:
+	docker build -t $(BE_IMAGE):$(IMAGE_TAG) -f Dockerfile .
+
+# ─── Frontend 前端 ─────────────────────────────────────────────────────────
+fe-install:
+	cd $(WEB_DIR) && npm ci
+
+fe-lint:
+	cd $(WEB_DIR) && npm run lint
+
+fe-build:
+	cd $(WEB_DIR) && npm run build
+
+fe-docker-build:
+	docker build -t $(FE_IMAGE):$(IMAGE_TAG) -f $(WEB_DIR)/Dockerfile $(WEB_DIR)/
+
+# ─── 本地基础设施 Infra ───────────────────────────────────────────────────
+infra-up:
+	$(DC) up -d nats neo4j etcd minio milvus
+
+infra-down:
+	$(DC) down nats neo4j etcd minio milvus
+
+infra-wait:
+	@echo "Waiting for NATS..."
+	@timeout 60 sh -c 'until docker compose exec -T nats nats-server --version >/dev/null 2>&1; do sleep 2; done'
+	@echo "Waiting for Neo4j..."
+	@timeout 90 sh -c 'until docker compose exec -T neo4j cypher-shell -u neo4j -p password "RETURN 1" >/dev/null 2>&1; do sleep 3; done'
+	@echo "Waiting for Milvus..."
+	@timeout 120 sh -c 'until curl -sf http://localhost:9091/healthz >/dev/null 2>&1; do sleep 3; done'
+	@echo "All core services ready."
+
+infra-status:
+	$(DC) ps nats neo4j etcd minio milvus
+
+# ─── 可观测性监控 ──────────────────────────────────────────────────────────
+obs-up:
+	$(DC) up -d otel-collector jaeger prometheus grafana
+
+obs-down:
+	$(DC) down otel-collector jaeger prometheus grafana
+
+# ─── K8s 原生 YAML 部署 ───────────────────────────────────────────────────
+k8s-deploy:
+	kubectl apply -f k8s/
+
+k8s-delete:
+	kubectl delete -f k8s/ --ignore-not-found
+
+k8s-logs:
+	kubectl logs -f deployment/clawhermes-ai-go -n $(NAMESPACE)
+
+# ─── Helm 核心操作 ─────────────────────────────────────────────────────────
+helm-lint:
+	helm lint $(HELM_DIR) -f $(VALUES_FILE)
+
+helm-diff:
+	@command -v helm diff >/dev/null 2>&1 || helm plugin install https://github.com/databus23/helm-diff
+	helm diff upgrade $(HELM_RELEASE) $(HELM_DIR) -f $(VALUES_FILE) -n $(NAMESPACE)
+
+helm-install:
+	kubectl create namespace $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+	helm install $(HELM_RELEASE) $(HELM_DIR) -f $(VALUES_FILE) -n $(NAMESPACE) \
+		--set app.image.repository=$(REGISTRY)/$(BE_IMAGE) \
+		--set app.image.tag=$(IMAGE_TAG) \
+		--set frontend.image.repository=$(REGISTRY)/$(FE_IMAGE) \
+		--set frontend.image.tag=$(IMAGE_TAG)
+
+helm-upgrade:
+	helm upgrade $(HELM_RELEASE) $(HELM_DIR) -f $(VALUES_FILE) -n $(NAMESPACE) \
+		--set app.image.repository=$(REGISTRY)/$(BE_IMAGE) \
+		--set app.image.tag=$(IMAGE_TAG) \
+		--set frontend.image.repository=$(REGISTRY)/$(FE_IMAGE) \
+		--set frontend.image.tag=$(IMAGE_TAG) \
+		--atomic --timeout=5m --cleanup-on-fail
+
+helm-uninstall:
+	helm uninstall $(HELM_RELEASE) -n $(NAMESPACE)
+
+# ─── CI 持续集成（构建+测试+推镜像）───────────────────────────────────────
+ci-backend: be-install be-fmt be-lint
+	$(MAKE) infra-up
+	$(MAKE) infra-wait
+	$(MAKE) be-test be-build
+	$(MAKE) infra-down
+
+ci-frontend: fe-install fe-lint fe-build
+
+ci-docker:
+	docker build -t $(REGISTRY)/$(BE_IMAGE):$(IMAGE_TAG) -f Dockerfile .
+	docker build -t $(REGISTRY)/$(FE_IMAGE):$(IMAGE_TAG) -f $(WEB_DIR)/Dockerfile $(WEB_DIR)/
+	docker push $(REGISTRY)/$(BE_IMAGE):$(IMAGE_TAG)
+	docker push $(REGISTRY)/$(FE_IMAGE):$(IMAGE_TAG)
+
+# ─── ✅ CD 持续部署（K8s + Helm 正式发布）【新增核心模块】──────────────────
+cd-validate: helm-lint helm-diff
+	@echo "✅ CD 前置检查通过：语法校验 + 变更预览完成"
+
+# 开发环境 CD
+cd-deploy-dev: cd-validate
+	$(MAKE) helm-upgrade NAMESPACE=clawhermes-dev
+	@echo "✅ 开发环境部署完成"
+
+# 测试环境 CD
+cd-deploy-staging: cd-validate
+	$(MAKE) helm-upgrade NAMESPACE=clawhermes-staging
+	@echo "✅ 测试环境部署完成"
+
+# 生产环境 CD（强安全模式）
+cd-deploy-prod: cd-validate
+	$(MAKE) helm-upgrade NAMESPACE=clawhermes-prod
+	@echo "✅ 生产环境部署完成（原子发布+自动回滚已启用）"
+
+# 全链路 CI+CD
+ci-cd-full: ci-backend ci-frontend ci-docker cd-deploy-dev
+
+# ─── 本地开发模式 ─────────────────────────────────────────────────────────
+dev-up: infra-up obs-up
+	@echo "All services up. Run 'make run' and 'make fe-dev' to start app."
+
+dev-down: obs-down infra-down
 
 run:
 	go run ./cmd/server
 
-# 预提交检查
-pre-commit:
-	@echo "🔍 执行预提交检查..."
-	pre-commit run --all-files
-	@echo "✓ 预提交检查通过"
+fe-dev:
+	cd $(WEB_DIR) && npm run dev
 
-# 安全扫描
-security-scan:
-	@echo "🛡️ 执行安全扫描..."
-	semgrep --config=p/security-audit --config=p/go ./...
-	@echo "✓ 安全扫描完成"
-
-# 代码格式化
-fmt:
-	@echo "📝 格式化代码..."
-	go fmt ./...
-	gofmt -s -w .
-	@echo "✓ 代码格式化完成"
-
-# 依赖审计
-audit:
-	@echo "🔐 审计依赖..."
-	go list -json -m all | nancy sleuth
-	@echo "✓ 依赖审计完成"
-
-# 生成文档
-docs:
-	@echo "📚 生成文档..."
-	godoc -http=:6060
-	@echo "✓ 文档已生成，访问 http://localhost:6060"
-
-# 性能基准测试
-bench:
-	@echo "⚡ 执行基准测试..."
-	go test -bench=. -benchmem ./...
-	@echo "✓ 基准测试完成"
-
-# 完整检查（所有检查）
-check-all: install frontend-install typecheck lint security-scan test-full frontend-build
-	@echo "✅ 所有检查通过"
-
-test:
-	go test -v ./...
-
-test-coverage:
-	go test -v -coverprofile=coverage.out ./...
-	go tool cover -html=coverage.out
-
-vet:
-	go vet ./...
-
-# Kubernetes targets
-k8s-deploy:
-	kubectl apply -f k8s/security.yaml
-	kubectl apply -f k8s/dependencies.yaml
-	kubectl apply -f k8s/monitoring.yaml
-	kubectl apply -f k8s/deployment.yaml
-	kubectl apply -f k8s/frontend-configmap.yaml
-	kubectl apply -f k8s/frontend-deployment.yaml
-	kubectl apply -f k8s/frontend-service.yaml
-	kubectl apply -f k8s/frontend-ingress.yaml
-
-k8s-delete:
-	kubectl delete -f k8s/frontend-ingress.yaml --ignore-not-found
-	kubectl delete -f k8s/frontend-service.yaml --ignore-not-found
-	kubectl delete -f k8s/frontend-deployment.yaml --ignore-not-found
-	kubectl delete -f k8s/frontend-configmap.yaml --ignore-not-found
-	kubectl delete -f k8s/deployment.yaml
-	kubectl delete -f k8s/monitoring.yaml
-	kubectl delete -f k8s/dependencies.yaml
-	kubectl delete -f k8s/security.yaml
-
-# Helm targets
-helm-install:
-	kubectl create namespace clawhermes-system --dry-run=client -o yaml | kubectl apply -f -
-	helm install clawhermes-release ./helm -f helm/values.yaml -n clawhermes-system
-
-helm-uninstall:
-	helm uninstall clawhermes-release -n clawhermes-system
-
-# Clean target
+# ─── 清理 ─────────────────────────────────────────────────────────────────
 clean:
-	rm -rf bin/
-	rm -f coverage.out
-	@$(MAKE) frontend-clean
-
-# ============================================
-# Docker 镜像构建
-# ============================================
-
-docker-build:
-	@echo "🐳 构建后端 Docker 镜像..."
-	docker build -t clawhermes-ai-go:local -f Dockerfile .
-	@echo "✓ 镜像构建完成: clawhermes-ai-go:local"
-
-docker-run:
-	@echo "🚀 运行后端 Docker 容器..."
-	docker run -p 8080:8080 clawhermes-ai-go:local
-
-# ============================================
-# 前端管理
-# ============================================
-
-frontend-install:
-	@echo "📦 安装前端依赖..."
-	cd web && npm install
-	@echo "✓ 前端依赖安装完成"
-
-frontend-dev: frontend-install
-	@echo "🚀 启动前端开发服务器（本地模式）..."
-	cd web && npm run dev
-
-frontend-dev-debug: frontend-install
-	@echo "🔍 启动前端调试模式（Node.js inspector）..."
-	cd web && npm run dev:debug
-
-frontend-build: frontend-install
-	@echo "🏗️  构建前端生产包..."
-	cd web && npm run build
-	@echo "✓ 前端构建完成: web/dist/"
-
-frontend-clean:
-	@echo "🗑️  清理前端构建产物..."
-	rm -rf web/dist web/node_modules/.cache
-	@echo "✓ 前端清理完成"
-
-frontend-docker-build:
-	@echo "🐳 构建前端 Docker 镜像..."
-	docker build -t clawhermes-frontend:local -f web/Dockerfile web/
-	@echo "✓ 前端镜像构建完成: clawhermes-frontend:local"
-
-# ============================================
-# 本地开发访问（minikube）
-# ============================================
-
-# 方案一：本地前端 dev server + minikube 后端 port-forward（热重载，适合日常开发）
-dev-local:
-	@echo "🚀 方案一：本地前端 + minikube 后端..."
-	@bash dev-local.sh
-
-# 方案二：全 minikube 部署，Ingress 统一入口（适合集成验证）
-dev-k8s:
-	@echo "🚀 方案二：全 minikube 部署..."
-	@bash dev-k8s.sh
+	rm -rf bin/ coverage.out
+	rm -rf $(WEB_DIR)/dist $(WEB_DIR)/node_modules/.cache
