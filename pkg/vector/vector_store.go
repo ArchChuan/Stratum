@@ -1,3 +1,5 @@
+// Package vector provides vector database integration.
+
 package vector
 
 import (

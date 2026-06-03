@@ -1,3 +1,5 @@
+// Package model defines API data models and types.
+
 package model
 
 // CreateAgentRequest represents the request to create a new agent

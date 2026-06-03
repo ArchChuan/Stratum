@@ -1,3 +1,5 @@
+// Package observability provides monitoring and tracing.
+
 package observability
 
 // Meter is a thin interface for recording raw numeric measurements.

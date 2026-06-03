@@ -1,3 +1,5 @@
+// Package tenantdb provides tenant database isolation and execution helpers.
+
 package tenantdb
 
 import (

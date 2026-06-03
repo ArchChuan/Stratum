@@ -1,3 +1,5 @@
+// Package api provides HTTP API router setup and configuration.
+
 package api
 
 import (

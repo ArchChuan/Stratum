@@ -1,3 +1,5 @@
+// Package observability provides monitoring and tracing.
+
 package observability
 
 import (

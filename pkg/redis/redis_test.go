@@ -1,5 +1,6 @@
 //go:build integration
 
+// Package redis provides Redis caching utilities.
 package redis_test
 
 import (

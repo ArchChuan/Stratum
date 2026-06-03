@@ -1,3 +1,5 @@
+// Package model defines API data models and types.
+
 package model
 
 import "time"

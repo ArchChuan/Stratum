@@ -1,3 +1,5 @@
+// Package observability provides monitoring and tracing.
+
 package observability
 
 // MetricsProvider is the pluggable interface for all observability metrics.

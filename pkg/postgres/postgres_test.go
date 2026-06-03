@@ -1,5 +1,6 @@
 //go:build integration
 
+// Package postgres provides PostgreSQL database utilities.
 package postgres_test
 
 import (
