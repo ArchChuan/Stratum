@@ -1000,3 +1000,306 @@ git commit -m "feat(handler): add TenantHandler for member and settings manageme
 **Files:**
 - Create: `api/handler/tenant_handler_test.go`
 
+- [ ] **Step 1: 创建 tenant_handler_test.go**
+
+```go
+// api/handler/tenant_handler_test.go
+package handler
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/pashagolub/pgxmock/v2"
+	"go.uber.org/zap"
+)
+
+func setupTenantRouter(h *TenantHandler) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	// Inject tenant_id the way auth middleware would
+	inject := func(c *gin.Context) { c.Set("tenant_id", "tenant-abc") }
+	r.GET("/tenant/members", inject, h.ListMembers)
+	r.POST("/tenant/members/invite", inject, h.InviteMember)
+	r.DELETE("/tenant/members/:user_id", inject, h.RemoveMember)
+	return r
+}
+
+func TestListMembers_success(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	// COUNT query
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs("tenant-abc").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+
+	// LIST query
+	now := time.Now()
+	mock.ExpectQuery("SELECT tm.user_id").
+		WithArgs("tenant-abc", 20, 0).
+		WillReturnRows(pgxmock.NewRows([]string{"user_id", "email", "role", "created_at"}).
+			AddRow("user-1", "alice@example.com", "admin", now))
+
+	h := &TenantHandler{db: mock, logger: zap.NewNop(), frontendURL: "http://localhost:3000"}
+	r := setupTenantRouter(h)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/tenant/members", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	members, _ := resp["members"].([]interface{})
+	if len(members) != 1 {
+		t.Fatalf("expected 1 member, got %d", len(members))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %v", err)
+	}
+}
+
+func TestInviteMember_success(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	mock.ExpectExec("INSERT INTO public.invitations").
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	h := &TenantHandler{db: mock, logger: zap.NewNop(), frontendURL: "http://localhost:3000"}
+	r := setupTenantRouter(h)
+
+	body := `{"email":"bob@example.com","role":"member"}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/tenant/members/invite", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	// Verify invitation_url contains the frontend URL prefix
+	url, _ := resp["invitation_url"].(string)
+	if !strings.HasPrefix(url, "http://localhost:3000/onboarding?invitation=") {
+		t.Errorf("unexpected invitation_url: %s", url)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %v", err)
+	}
+}
+
+func TestInviteMember_invalidEmail(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	h := &TenantHandler{db: mock, logger: zap.NewNop(), frontendURL: "http://localhost:3000"}
+	r := setupTenantRouter(h)
+
+	body := `{"email":"not-an-email","role":"member"}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/tenant/members/invite", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestRemoveMember_success(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	mock.ExpectExec("DELETE FROM public.tenant_members").
+		WithArgs("tenant-abc", "user-1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+
+	h := &TenantHandler{db: mock, logger: zap.NewNop(), frontendURL: "http://localhost:3000"}
+	r := setupTenantRouter(h)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodDelete, "/tenant/members/user-1", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %v", err)
+	}
+}
+
+func TestRemoveMember_notFound(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	mock.ExpectExec("DELETE FROM public.tenant_members").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+
+	h := &TenantHandler{db: mock, logger: zap.NewNop(), frontendURL: "http://localhost:3000"}
+	r := setupTenantRouter(h)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodDelete, "/tenant/members/ghost-user", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+```
+
+- [ ] **Step 2: 运行测试**
+
+```bash
+go test -v -race ./api/handler/... -short -run "TestListMembers|TestInviteMember|TestRemoveMember"
+```
+
+期望：5 个测试全 PASS。
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add api/handler/tenant_handler_test.go
+git commit -m "test(handler): add TenantHandler unit tests with pgxmock"
+```
+
+---
+
+### Task 7: 注册路由
+
+**Files:**
+- Modify: `api/router.go`
+
+前置条件：`pgxpool.Pool` 实例由调用方（`cmd/server/main.go`）创建后传入 `SetupRouter`；本 Task 只修改 `router.go`，不触碰 main.go（main.go 的改动属于 Plan 5 部署阶段）。`SetupRouter` 签名扩展一个可选的 `*pgxpool.Pool` 参数。
+
+- [ ] **Step 1: 修改 SetupRouter 签名，添加 pgxpool 和 frontendURL 参数**
+
+编辑 `api/router.go`，将函数签名改为：
+
+```go
+func SetupRouter(
+    cfg *config.Config,
+    logger *zap.Logger,
+    registry *orchestrator.Registry,
+    gateway *llmgateway.Gateway,
+    db *pgxpool.Pool, // nil-safe: admin/tenant routes skipped when nil
+) *gin.Engine {
+```
+
+在 import 块中追加：
+
+```go
+"github.com/jackc/pgx/v5/pgxpool"
+```
+
+- [ ] **Step 2: 在 router.go 末尾（return router 之前）添加 admin 和 tenant 路由组**
+
+```go
+	// Admin + Tenant endpoints (require pgxpool; skipped in tests that pass nil)
+	if db != nil {
+		adminHandler := handler.NewAdminHandler(db, logger)
+		tenantHandler := handler.NewTenantHandler(db, logger, cfg.FrontendURL)
+
+		// Global admin routes: require global_admin role
+		admin := router.Group("/admin")
+		admin.Use(middleware.RequireGlobalAdmin())
+		{
+			admin.GET("/tenants", adminHandler.ListTenants)
+			admin.POST("/tenants", adminHandler.CreateTenant)
+			admin.GET("/tenants/:id", adminHandler.GetTenant)
+			admin.PATCH("/tenants/:id", adminHandler.UpdateTenant)
+			admin.DELETE("/tenants/:id", adminHandler.DeleteTenant)
+		}
+
+		// Tenant admin routes: require at least tenant admin role
+		tenant := router.Group("/tenant")
+		tenant.Use(middleware.RequireTenantRole("admin"))
+		{
+			tenant.GET("/members", tenantHandler.ListMembers)
+			tenant.POST("/members/invite", tenantHandler.InviteMember)
+			tenant.PATCH("/members/:user_id/role", tenantHandler.UpdateMemberRole)
+			tenant.DELETE("/members/:user_id", tenantHandler.RemoveMember)
+			tenant.GET("/settings", tenantHandler.GetSettings)
+			tenant.PATCH("/settings", tenantHandler.UpdateSettings)
+		}
+	}
+```
+
+- [ ] **Step 3: 更新所有 SetupRouter 调用方**
+
+搜索项目中所有调用 `SetupRouter` 的地方，补充 `db` 参数：
+
+- `cmd/server/main.go`（若已存在）：传入已初始化的 `*pgxpool.Pool`，未接入 postgres 时传 `nil`
+- 测试文件中（若有）：传 `nil`
+
+```bash
+grep -rn "SetupRouter" /home/yang/go-projects/ClawHermes-AI-Go --include="*.go"
+```
+
+逐一确认并修改，确保编译通过。
+
+- [ ] **Step 4: 编译验证**
+
+```bash
+go build ./...
+```
+
+期望：无编译错误。
+
+- [ ] **Step 5: 运行全量短测试**
+
+```bash
+go test -v -race ./... -short
+```
+
+期望：所有已有测试 PASS，新增测试 PASS，无 data race。
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add api/router.go
+git commit -m "feat(router): register /admin/* and /tenant/* route groups with role middleware"
+```
+
+---
+
+## 验收标准
+
+| 检查项 | 标准 |
+|---|---|
+| 权限中间件 | `RequireGlobalAdmin` 和 `RequireTenantRole` 各自通过 4 个单元测试 |
+| Admin API | `ListTenants` 支持 `?status` 过滤和分页；`DeleteTenant` 设 `deleted_at` 不删行 |
+| Tenant API | `InviteMember` 仅存 SHA-256 hash，邀请链接含原始 token；`UpdateSettings` 不可改 `plan` |
+| 测试覆盖 | `admin_handler_test.go` 4 个用例；`tenant_handler_test.go` 5 个用例 |
+| 编译 | `go build ./...` 零错误 |
+| 测试命令 | `go test -v -race ./... -short` 全 PASS |
