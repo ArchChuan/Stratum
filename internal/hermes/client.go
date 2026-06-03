@@ -1,3 +1,4 @@
+// Package hermes provides Hermes event bus integration.
 package hermes
 
 import (

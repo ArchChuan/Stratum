@@ -1,3 +1,4 @@
+// Package providers implements skill providers for MCP, LLM, and code execution.
 package providers
 
 import (

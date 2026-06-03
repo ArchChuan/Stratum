@@ -1,3 +1,4 @@
+// Package llmgateway provides LLM gateway abstraction.
 package llmgateway
 
 import (

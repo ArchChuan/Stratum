@@ -1,3 +1,4 @@
+// Package orchestrator provides task orchestration and coordination.
 package orchestrator
 
 import (

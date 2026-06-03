@@ -1,3 +1,4 @@
+// Package skill provides skill execution framework.
 package skill
 
 type Skill interface {

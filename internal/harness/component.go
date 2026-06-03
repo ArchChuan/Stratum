@@ -1,3 +1,4 @@
+// Package harness provides the component harness framework.
 package harness
 
 import (

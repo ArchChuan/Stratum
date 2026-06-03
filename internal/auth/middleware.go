@@ -1,3 +1,4 @@
+// Package auth provides JWT token management and authentication.
 package auth
 
 import (

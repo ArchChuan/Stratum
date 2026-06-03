@@ -1,3 +1,4 @@
+// Package document provides document parsing and processing.
 package document
 
 import (

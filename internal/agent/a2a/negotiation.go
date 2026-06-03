@@ -1,3 +1,4 @@
+// Package a2a provides agent-to-agent communication and orchestration.
 package a2a
 
 import (

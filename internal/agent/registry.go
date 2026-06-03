@@ -1,3 +1,4 @@
+// Package agent provides the core agent system.
 package agent
 
 import (

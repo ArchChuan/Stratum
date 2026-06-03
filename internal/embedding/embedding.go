@@ -1,3 +1,4 @@
+// Package embedding provides text embedding and vectorization.
 package embedding
 
 import (

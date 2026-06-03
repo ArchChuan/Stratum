@@ -1,3 +1,4 @@
+// Package knowledge provides knowledge base and RAG services.
 package knowledge
 
 import (

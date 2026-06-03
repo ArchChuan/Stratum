@@ -1,3 +1,4 @@
+// Package skillgateway provides skill gateway and routing.
 package skillgateway
 
 import "github.com/google/uuid"

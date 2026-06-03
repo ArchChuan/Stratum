@@ -1,3 +1,4 @@
+// Package memory provides agent memory management.
 package memory
 
 import (

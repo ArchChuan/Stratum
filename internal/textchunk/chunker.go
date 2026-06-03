@@ -1,3 +1,4 @@
+// Package textchunk provides text chunking utilities.
 package textchunk
 
 import (
