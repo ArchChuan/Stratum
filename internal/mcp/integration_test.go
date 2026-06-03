@@ -137,7 +137,7 @@ func TestMCPIntegration(t *testing.T) {
 
 	// 测试 MCP 配置
 	mcpConfig := &MCPConfig{
-		Servers: []*MCPServerConfig{config},
+		Servers:        []*MCPServerConfig{config},
 		ConnectionPool: poolConfig,
 		Cache:          cacheConfig,
 		Monitoring:     monitoringConfig,

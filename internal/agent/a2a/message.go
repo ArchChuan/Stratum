@@ -12,26 +12,26 @@ type MessageType string
 
 const (
 	// Discovery messages
-	MessageTypeDiscoveryRequest  MessageType = "discovery.request"
-	MessageTypeDiscoveryResponse MessageType = "discovery.response"
+	MessageTypeDiscoveryRequest       MessageType = "discovery.request"
+	MessageTypeDiscoveryResponse      MessageType = "discovery.response"
 	MessageTypeCapabilityAnnouncement MessageType = "capability.announcement"
-	MessageTypeAgentDeparture    MessageType = "agent.departure"
+	MessageTypeAgentDeparture         MessageType = "agent.departure"
 
 	// Negotiation messages
-	MessageTypeTaskProposal       MessageType = "task.proposal"
-	MessageTypeTaskResponse       MessageType = "task.response"
-	MessageTypeTaskStart          MessageType = "task.start"
-	MessageTypeTaskComplete       MessageType = "task.complete"
-	MessageTypeTaskCancel         MessageType = "task.cancel"
+	MessageTypeTaskProposal MessageType = "task.proposal"
+	MessageTypeTaskResponse MessageType = "task.response"
+	MessageTypeTaskStart    MessageType = "task.start"
+	MessageTypeTaskComplete MessageType = "task.complete"
+	MessageTypeTaskCancel   MessageType = "task.cancel"
 
 	// Collaboration messages
-	MessageTypeCollaborationProposal MessageType = "collaboration.proposal"
-	MessageTypeCollaborationAccept     MessageType = "collaboration.accept"
-	MessageTypeCollaborationReject     MessageType = "collaboration.reject"
-	MessageTypeCollaborationStarted    MessageType = "collaboration.started"
-	MessageTypeCollaborationCompleted  MessageType = "collaboration.completed"
-	MessageTypeJoinCollaboration       MessageType = "collaboration.join"
-	MessageTypeLeaveCollaboration      MessageType = "collaboration.leave"
+	MessageTypeCollaborationProposal  MessageType = "collaboration.proposal"
+	MessageTypeCollaborationAccept    MessageType = "collaboration.accept"
+	MessageTypeCollaborationReject    MessageType = "collaboration.reject"
+	MessageTypeCollaborationStarted   MessageType = "collaboration.started"
+	MessageTypeCollaborationCompleted MessageType = "collaboration.completed"
+	MessageTypeJoinCollaboration      MessageType = "collaboration.join"
+	MessageTypeLeaveCollaboration     MessageType = "collaboration.leave"
 
 	// Data exchange messages
 	MessageTypeDataRequest  MessageType = "data.request"
@@ -39,9 +39,9 @@ const (
 	MessageTypeDataExchange MessageType = "data.exchange"
 
 	// Control messages
-	MessageTypeHeartbeat     MessageType = "control.heartbeat"
+	MessageTypeHeartbeat      MessageType = "control.heartbeat"
 	MessageTypeProgressUpdate MessageType = "control.progress"
-	MessageTypeError         MessageType = "control.error"
+	MessageTypeError          MessageType = "control.error"
 )
 
 // Priority defines message priority
@@ -56,12 +56,12 @@ const (
 
 // AgentIdentity represents an agent's identity
 type AgentIdentity struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Type        string            `json:"type"`
-	Endpoint    string            `json:"endpoint"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	LastSeen    time.Time         `json:"last_seen"`
+	ID       string            `json:"id"`
+	Name     string            `json:"name"`
+	Type     string            `json:"type"`
+	Endpoint string            `json:"endpoint"`
+	Labels   map[string]string `json:"labels,omitempty"`
+	LastSeen time.Time         `json:"last_seen"`
 }
 
 // Capability represents an agent's capability
@@ -74,19 +74,19 @@ type Capability struct {
 
 // Message represents an A2A protocol message
 type Message struct {
-	ID          string                 `json:"id"`
-	Type        MessageType            `json:"type"`
-	From        AgentIdentity          `json:"from"`
-	To          AgentIdentity          `json:"to"`
-	Timestamp   time.Time              `json:"timestamp"`
-	Payload     map[string]interface{} `json:"payload"`
-	Priority    Priority               `json:"priority,omitempty"`
-	InReplyTo   string                 `json:"in_reply_to,omitempty"`
-	ReplyTo     string                 `json:"reply_to,omitempty"`
-	Headers     map[string]string      `json:"headers,omitempty"`
-	Retries     int                    `json:"retries,omitempty"`
-	TraceID     string                 `json:"trace_id,omitempty"`
-	SpanID      string                 `json:"span_id,omitempty"`
+	ID        string                 `json:"id"`
+	Type      MessageType            `json:"type"`
+	From      AgentIdentity          `json:"from"`
+	To        AgentIdentity          `json:"to"`
+	Timestamp time.Time              `json:"timestamp"`
+	Payload   map[string]interface{} `json:"payload"`
+	Priority  Priority               `json:"priority,omitempty"`
+	InReplyTo string                 `json:"in_reply_to,omitempty"`
+	ReplyTo   string                 `json:"reply_to,omitempty"`
+	Headers   map[string]string      `json:"headers,omitempty"`
+	Retries   int                    `json:"retries,omitempty"`
+	TraceID   string                 `json:"trace_id,omitempty"`
+	SpanID    string                 `json:"span_id,omitempty"`
 }
 
 // NewMessage creates a new message

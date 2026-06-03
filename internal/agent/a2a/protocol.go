@@ -11,12 +11,12 @@ import (
 
 // ProtocolConfig defines configuration for the A2A protocol
 type ProtocolConfig struct {
-	HeartbeatInterval    time.Duration
-	TaskTimeout          time.Duration
-	MaxRetries           int
-	RetryBackoff         time.Duration
-	PeerCleanupInterval  time.Duration
-	EnableTracing        bool
+	HeartbeatInterval   time.Duration
+	TaskTimeout         time.Duration
+	MaxRetries          int
+	RetryBackoff        time.Duration
+	PeerCleanupInterval time.Duration
+	EnableTracing       bool
 }
 
 // DefaultProtocolConfig returns default protocol configuration
@@ -33,29 +33,29 @@ func DefaultProtocolConfig() *ProtocolConfig {
 
 // ProtocolMetrics tracks protocol metrics
 type ProtocolMetrics struct {
-	mu               sync.RWMutex
-	MessagesSent     int64
-	MessagesReceived int64
-	MessagesFailed   int64
+	mu                sync.RWMutex
+	MessagesSent      int64
+	MessagesReceived  int64
+	MessagesFailed    int64
 	NegotiationsTotal int64
-	Collaborations   int64
-	BytesTransferred int64
+	Collaborations    int64
+	BytesTransferred  int64
 }
 
 // A2AProtocol is the main A2A protocol implementation
 type A2AProtocol struct {
-	config     *ProtocolConfig
-	discovery  *DiscoveryService
-	negotiation *NegotiationService
+	config       *ProtocolConfig
+	discovery    *DiscoveryService
+	negotiation  *NegotiationService
 	orchestrator *Orchestrator
-	handler    *ProtocolHandler
-	metrics    *ProtocolMetrics
-	clients    map[string]*A2AClient
-	logger     *zap.Logger
-	ctx        context.Context
-	cancel     context.CancelFunc
-	running    bool
-	mu         sync.RWMutex
+	handler      *ProtocolHandler
+	metrics      *ProtocolMetrics
+	clients      map[string]*A2AClient
+	logger       *zap.Logger
+	ctx          context.Context
+	cancel       context.CancelFunc
+	running      bool
+	mu           sync.RWMutex
 }
 
 // NewA2AProtocol creates a new A2A protocol instance
@@ -65,15 +65,15 @@ func NewA2AProtocol(config *ProtocolConfig, logger *zap.Logger) *A2AProtocol {
 	}
 
 	return &A2AProtocol{
-		config:      config,
-		discovery:   NewDiscoveryService(logger),
-		negotiation: NewNegotiationService(logger),
+		config:       config,
+		discovery:    NewDiscoveryService(logger),
+		negotiation:  NewNegotiationService(logger),
 		orchestrator: NewOrchestrator(logger),
-		handler:     NewProtocolHandler(logger),
-		metrics:     &ProtocolMetrics{},
-		clients:     make(map[string]*A2AClient),
-		logger:      logger.Named("a2a-protocol"),
-		running:     false,
+		handler:      NewProtocolHandler(logger),
+		metrics:      &ProtocolMetrics{},
+		clients:      make(map[string]*A2AClient),
+		logger:       logger.Named("a2a-protocol"),
+		running:      false,
 	}
 }
 

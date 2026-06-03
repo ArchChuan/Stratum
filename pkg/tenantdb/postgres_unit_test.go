@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestExecTenant_MissingContext_Unit(t *testing.T) {

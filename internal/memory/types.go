@@ -21,38 +21,38 @@ const (
 
 // MemoryEntry represents a single memory entry
 type MemoryEntry struct {
-	ID        string                 `json:"id"`
-	Type      MemoryType             `json:"type"`
-	Role      string                 `json:"role"`     // "user", "assistant", "system"
-	Content   string                 `json:"content"`
-	Timestamp time.Time              `json:"timestamp"`
-	TenantID  string                 `json:"tenant_id"`
-	UserID    string                 `json:"user_id"`
-	SessionID string                 `json:"session_id"`
-	AgentID   string                 `json:"agent_id"`
-	Metadata  map[string]interface{} `json:"metadata"`
-	Vector    []float32              `json:"vector,omitempty"` // For semantic search
-	Tags      []string               `json:"tags,omitempty"`
-	Importance float64               `json:"importance"`        // 0.0 to 1.0
-	ExpiresAt time.Time              `json:"expires_at,omitempty"`
+	ID         string                 `json:"id"`
+	Type       MemoryType             `json:"type"`
+	Role       string                 `json:"role"` // "user", "assistant", "system"
+	Content    string                 `json:"content"`
+	Timestamp  time.Time              `json:"timestamp"`
+	TenantID   string                 `json:"tenant_id"`
+	UserID     string                 `json:"user_id"`
+	SessionID  string                 `json:"session_id"`
+	AgentID    string                 `json:"agent_id"`
+	Metadata   map[string]interface{} `json:"metadata"`
+	Vector     []float32              `json:"vector,omitempty"` // For semantic search
+	Tags       []string               `json:"tags,omitempty"`
+	Importance float64                `json:"importance"` // 0.0 to 1.0
+	ExpiresAt  time.Time              `json:"expires_at,omitempty"`
 }
 
 // MemoryConfig holds configuration for memory systems
 type MemoryConfig struct {
 	// Short-term memory
-	MaxShortTermMessages int           `json:"max_short_term_messages"`
-	ShortTermWindowSize int           `json:"short_term_window_size"`
-	EnableSummary       bool          `json:"enable_summary"`
+	MaxShortTermMessages int  `json:"max_short_term_messages"`
+	ShortTermWindowSize  int  `json:"short_term_window_size"`
+	EnableSummary        bool `json:"enable_summary"`
 
 	// Long-term memory
-	EnableVectorSearch  bool          `json:"enable_vector_search"`
-	VectorCollection    string        `json:"vector_collection"`
-	MaxVectorResults    int           `json:"max_vector_results"`
-	MinRelevanceScore   float64       `json:"min_relevance_score"`
+	EnableVectorSearch bool    `json:"enable_vector_search"`
+	VectorCollection   string  `json:"vector_collection"`
+	MaxVectorResults   int     `json:"max_vector_results"`
+	MinRelevanceScore  float64 `json:"min_relevance_score"`
 
 	// Entity memory
-	EnableEntityExtraction bool          `json:"enable_entity_extraction"`
-	EntityThreshold        float64       `json:"entity_threshold"`
+	EnableEntityExtraction bool    `json:"enable_entity_extraction"`
+	EntityThreshold        float64 `json:"entity_threshold"`
 
 	// Persistence
 	EnablePersistence   bool          `json:"enable_persistence"`
@@ -109,7 +109,7 @@ type MemorySearchResult struct {
 
 // MemoryStats holds memory statistics
 type MemoryStats struct {
-	TotalEntries      int64
+	TotalEntries     int64
 	ShortTermCount   int64
 	LongTermCount    int64
 	EntityCount      int64
@@ -146,12 +146,12 @@ type EntityRelation struct {
 
 // MemoryEvent represents a memory-related event for Hermes
 type MemoryEvent struct {
-	EventType string      `json:"event_type"` // "created", "updated", "deleted", "searched"
+	EventType string       `json:"event_type"` // "created", "updated", "deleted", "searched"
 	Entry     *MemoryEntry `json:"entry,omitempty"`
-	Query     string      `json:"query,omitempty"`
-	TenantID  string      `json:"tenant_id"`
-	UserID    string      `json:"user_id"`
-	SessionID string      `json:"session_id"`
+	Query     string       `json:"query,omitempty"`
+	TenantID  string       `json:"tenant_id"`
+	UserID    string       `json:"user_id"`
+	SessionID string       `json:"session_id"`
 }
 
 // DefaultMemoryConfig returns the default memory configuration
@@ -161,10 +161,10 @@ func DefaultMemoryConfig() *MemoryConfig {
 		ShortTermWindowSize:  10,
 		EnableSummary:        true,
 
-		EnableVectorSearch:  true,
-		VectorCollection:    "memory_vectors",
-		MaxVectorResults:    5,
-		MinRelevanceScore:   0.7,
+		EnableVectorSearch: true,
+		VectorCollection:   "memory_vectors",
+		MaxVectorResults:   5,
+		MinRelevanceScore:  0.7,
 
 		EnableEntityExtraction: true,
 		EntityThreshold:        0.8,

@@ -8,9 +8,9 @@ import (
 
 // CacheEntry 缓存条目
 type CacheEntry struct {
-	Tools      []*MCPTool
-	Resources  []*MCPResource
-	ExpiresAt  time.Time
+	Tools     []*MCPTool
+	Resources []*MCPResource
+	ExpiresAt time.Time
 }
 
 // CapabilityCache 能力缓存

@@ -126,9 +126,9 @@ func (t *logTracer) StartSpan(ctx context.Context, name string) (context.Context
 	)
 
 	return newCtx, &logSpan{
-		logger:  t.logger,
-		sc:      sc,
-		attrs:   make(map[string]interface{}),
+		logger: t.logger,
+		sc:     sc,
+		attrs:  make(map[string]interface{}),
 	}
 }
 
@@ -189,6 +189,6 @@ func (t *noopTracer) StartSpan(ctx context.Context, _ string) (context.Context, 
 
 type noopSpan struct{}
 
-func (*noopSpan) End()                             {}
+func (*noopSpan) End()                                 {}
 func (*noopSpan) SetAttribute(_ string, _ interface{}) {}
-func (*noopSpan) RecordError(_ error)              {}
+func (*noopSpan) RecordError(_ error)                  {}

@@ -18,4 +18,3 @@ func TestNewClient(t *testing.T) {
 		t.Error("expected either client or error")
 	}
 }
-

@@ -24,4 +24,3 @@ func NewLogger(env string) (*Logger, error) {
 
 	return &Logger{logger}, nil
 }
-

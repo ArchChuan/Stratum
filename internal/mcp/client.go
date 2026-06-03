@@ -151,7 +151,7 @@ func (c *BaseClient) CallTool(ctx context.Context, toolName string, input interf
 	req := MCPRequest{
 		Method: "tools/call",
 		Params: map[string]interface{}{
-			"name": toolName,
+			"name":      toolName,
 			"arguments": input,
 		},
 	}

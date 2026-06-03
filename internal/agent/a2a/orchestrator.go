@@ -13,44 +13,44 @@ import (
 type CollaborationStrategy string
 
 const (
-	StrategySequential    CollaborationStrategy = "sequential"
-	StrategyParallel      CollaborationStrategy = "parallel"
-	StrategyHierarchical  CollaborationStrategy = "hierarchical"
-	StrategyConsensus     CollaborationStrategy = "consensus"
-	StrategySwarm         CollaborationStrategy = "swarm"
-	StrategyPipeline      CollaborationStrategy = "pipeline"
-	StrategyVoting        CollaborationStrategy = "voting"
-	StrategyAdaptive      CollaborationStrategy = "adaptive"
+	StrategySequential   CollaborationStrategy = "sequential"
+	StrategyParallel     CollaborationStrategy = "parallel"
+	StrategyHierarchical CollaborationStrategy = "hierarchical"
+	StrategyConsensus    CollaborationStrategy = "consensus"
+	StrategySwarm        CollaborationStrategy = "swarm"
+	StrategyPipeline     CollaborationStrategy = "pipeline"
+	StrategyVoting       CollaborationStrategy = "voting"
+	StrategyAdaptive     CollaborationStrategy = "adaptive"
 )
 
 // TaskStep represents a step in a collaboration workflow
 type TaskStep struct {
-	ID            string
-	Name          string
-	AgentID       string
-	Dependencies  []string
-	Input         map[string]interface{}
-	Output        map[string]interface{}
-	Status        string
-	StartedAt     time.Time
-	CompletedAt   time.Time
-	Error         error
-	mu            sync.RWMutex
+	ID           string
+	Name         string
+	AgentID      string
+	Dependencies []string
+	Input        map[string]interface{}
+	Output       map[string]interface{}
+	Status       string
+	StartedAt    time.Time
+	CompletedAt  time.Time
+	Error        error
+	mu           sync.RWMutex
 }
 
 // ExecutionPlan defines how a collaboration will be executed
 type ExecutionPlan struct {
-	ID            string
+	ID              string
 	CollaborationID string
 	TaskDescription string
-	Strategy      CollaborationStrategy
-	Steps         []*TaskStep
-	CurrentStep   int
-	Status        string
-	CreatedAt     time.Time
-	StartedAt     time.Time
-	CompletedAt   time.Time
-	mu            sync.RWMutex
+	Strategy        CollaborationStrategy
+	Steps           []*TaskStep
+	CurrentStep     int
+	Status          string
+	CreatedAt       time.Time
+	StartedAt       time.Time
+	CompletedAt     time.Time
+	mu              sync.RWMutex
 }
 
 // SharedContext holds shared data for collaboration
@@ -62,10 +62,10 @@ type SharedContext struct {
 
 // Orchestrator manages multi-agent collaboration
 type Orchestrator struct {
-	plans       map[string]*ExecutionPlan
-	contexts    map[string]*SharedContext
-	mu          sync.RWMutex
-	logger      *zap.Logger
+	plans    map[string]*ExecutionPlan
+	contexts map[string]*SharedContext
+	mu       sync.RWMutex
+	logger   *zap.Logger
 }
 
 // NewOrchestrator creates a new orchestrator
@@ -309,7 +309,7 @@ func (o *Orchestrator) Cleanup(maxAge time.Duration) {
 }
 
 var (
-	ErrPlanNotFound   = &A2AError{Type: ErrorTypeOrchestration, Message: "plan not found"}
+	ErrPlanNotFound    = &A2AError{Type: ErrorTypeOrchestration, Message: "plan not found"}
 	ErrContextNotFound = &A2AError{Type: ErrorTypeOrchestration, Message: "context not found"}
-	ErrStepNotFound   = &A2AError{Type: ErrorTypeOrchestration, Message: "step not found"}
+	ErrStepNotFound    = &A2AError{Type: ErrorTypeOrchestration, Message: "step not found"}
 )

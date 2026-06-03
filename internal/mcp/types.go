@@ -7,16 +7,16 @@ import (
 
 // MCPServerConfig 定义 MCP 服务器配置
 type MCPServerConfig struct {
-	ID          string            `json:"id" yaml:"id"`
-	Name        string            `json:"name" yaml:"name"`
-	Version     string            `json:"version" yaml:"version"`
-	Transport   string            `json:"transport" yaml:"transport"` // stdio, sse, http
-	Command     string            `json:"command" yaml:"command"`
-	Args        []string          `json:"args" yaml:"args"`
-	URL         string            `json:"url" yaml:"url"`
-	Env         map[string]string `json:"env" yaml:"env"`
-	Capabilities []string         `json:"capabilities" yaml:"capabilities"`
-	Timeout     time.Duration     `json:"timeout" yaml:"timeout"`
+	ID           string            `json:"id" yaml:"id"`
+	Name         string            `json:"name" yaml:"name"`
+	Version      string            `json:"version" yaml:"version"`
+	Transport    string            `json:"transport" yaml:"transport"` // stdio, sse, http
+	Command      string            `json:"command" yaml:"command"`
+	Args         []string          `json:"args" yaml:"args"`
+	URL          string            `json:"url" yaml:"url"`
+	Env          map[string]string `json:"env" yaml:"env"`
+	Capabilities []string          `json:"capabilities" yaml:"capabilities"`
+	Timeout      time.Duration     `json:"timeout" yaml:"timeout"`
 }
 
 // MCPTool 定义 MCP 工具
@@ -49,7 +49,7 @@ type MCPServerInfo struct {
 	Transport   string
 	Tools       []*MCPTool
 	Resources   []*MCPResource
-	Status      string    // connected, disconnected, error
+	Status      string // connected, disconnected, error
 	LastUpdated time.Time
 	Error       string
 }
@@ -75,8 +75,8 @@ type ToolFilter struct {
 
 // ResourceFilter 定义资源过滤条件
 type ResourceFilter struct {
-	ServerID string
-	Type     string
+	ServerID   string
+	Type       string
 	URIPattern string
 }
 
@@ -109,15 +109,15 @@ type CacheConfig struct {
 
 // MonitoringConfig 定义监控配置
 type MonitoringConfig struct {
-	Enabled              bool          `yaml:"enabled"`
-	MetricsInterval      time.Duration `yaml:"metrics_interval"`
-	HealthCheckInterval  time.Duration `yaml:"health_check_interval"`
+	Enabled             bool          `yaml:"enabled"`
+	MetricsInterval     time.Duration `yaml:"metrics_interval"`
+	HealthCheckInterval time.Duration `yaml:"health_check_interval"`
 }
 
 // MCPConfig 定义 MCP 总体配置
 type MCPConfig struct {
-	Servers       []*MCPServerConfig `yaml:"servers"`
+	Servers        []*MCPServerConfig    `yaml:"servers"`
 	ConnectionPool *ConnectionPoolConfig `yaml:"connection_pool"`
-	Cache         *CacheConfig       `yaml:"cache"`
-	Monitoring    *MonitoringConfig  `yaml:"monitoring"`
+	Cache          *CacheConfig          `yaml:"cache"`
+	Monitoring     *MonitoringConfig     `yaml:"monitoring"`
 }

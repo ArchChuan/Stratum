@@ -11,7 +11,7 @@ type Meter interface {
 
 type noopMeter struct{}
 
-func (noopMeter) RecordInt64(_ string, _ int64)    {}
+func (noopMeter) RecordInt64(_ string, _ int64)     {}
 func (noopMeter) RecordFloat64(_ string, _ float64) {}
 
 // GetMeter returns a no-op Meter. Replace with a real implementation as needed.

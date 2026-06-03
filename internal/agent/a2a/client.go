@@ -12,14 +12,14 @@ import (
 
 // A2AClient provides a client interface for agents to participate in the A2A protocol
 type A2AClient struct {
-	protocol      *A2AProtocol
-	agentID       string
-	agentName     string
-	capabilities  []Capability
-	logger        *zap.Logger
-	mu            sync.RWMutex
-	listeners     map[MessageType][]MessageHandler
-	replyChans    map[string]chan *Message
+	protocol       *A2AProtocol
+	agentID        string
+	agentName      string
+	capabilities   []Capability
+	logger         *zap.Logger
+	mu             sync.RWMutex
+	listeners      map[MessageType][]MessageHandler
+	replyChans     map[string]chan *Message
 	collaborations map[string]*CollaborationSession
 }
 
@@ -28,26 +28,26 @@ type MessageHandler func(ctx context.Context, msg *Message) (*Message, error)
 
 // CollaborationSession represents an active collaboration
 type CollaborationSession struct {
-	ID           string
+	ID              string
 	CollaborationID string
-	Role         string
-	Participants []AgentIdentity
-	State        string
-	CreatedAt    time.Time
-	SharedData   map[string]interface{}
-	mu           sync.RWMutex
+	Role            string
+	Participants    []AgentIdentity
+	State           string
+	CreatedAt       time.Time
+	SharedData      map[string]interface{}
+	mu              sync.RWMutex
 }
 
 // NewA2AClient creates a new A2A client for an agent
 func NewA2AClient(protocol *A2AProtocol, agentID, agentName string, logger *zap.Logger) *A2AClient {
 	client := &A2AClient{
-		protocol:      protocol,
-		agentID:       agentID,
-		agentName:     agentName,
-		capabilities:  []Capability{},
-		logger:        logger.With(zap.String("agent_id", agentID)),
-		listeners:     make(map[MessageType][]MessageHandler),
-		replyChans:    make(map[string]chan *Message),
+		protocol:       protocol,
+		agentID:        agentID,
+		agentName:      agentName,
+		capabilities:   []Capability{},
+		logger:         logger.With(zap.String("agent_id", agentID)),
+		listeners:      make(map[MessageType][]MessageHandler),
+		replyChans:     make(map[string]chan *Message),
 		collaborations: make(map[string]*CollaborationSession),
 	}
 
@@ -107,12 +107,12 @@ func (c *A2AClient) ProposeTask(ctx context.Context, to AgentIdentity, taskDescr
 		To:        to,
 		Timestamp: time.Now(),
 		Payload: map[string]interface{}{
-			"task_id":           generateMessageID(),
-			"description":       taskDescription,
-			"requirements":      requirements,
-			"proposed_by":       c.agentID,
+			"task_id":            generateMessageID(),
+			"description":        taskDescription,
+			"requirements":       requirements,
+			"proposed_by":        c.agentID,
 			"estimated_duration": 300,
-			"priority":          PriorityNormal,
+			"priority":           PriorityNormal,
 		},
 	}
 
@@ -443,7 +443,7 @@ func (c *A2AClient) registerDefaultHandlers() {
 			To:        msg.From,
 			Timestamp: time.Now(),
 			Payload: map[string]interface{}{
-				"data": nil,
+				"data":  nil,
 				"error": "data not available",
 			},
 		}
@@ -460,13 +460,13 @@ func (c *A2AClient) registerDefaultHandlers() {
 
 		// Create a collaboration session
 		session := &CollaborationSession{
-			ID:             generateMessageID(),
+			ID:              generateMessageID(),
 			CollaborationID: collabID,
-			Role:           "participant",
-			Participants:   msg.Payload["participants"].([]AgentIdentity),
-			State:          "invited",
-			CreatedAt:      time.Now(),
-			SharedData:     make(map[string]interface{}),
+			Role:            "participant",
+			Participants:    msg.Payload["participants"].([]AgentIdentity),
+			State:           "invited",
+			CreatedAt:       time.Now(),
+			SharedData:      make(map[string]interface{}),
 		}
 
 		c.mu.Lock()

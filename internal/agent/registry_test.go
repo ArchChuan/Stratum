@@ -17,7 +17,7 @@ func (m *mockAgent) GetConfig() *AgentConfig { return m.config }
 func (m *mockAgent) Execute(ctx context.Context, input string, options ...ExecutionOption) (*AgentResult, error) {
 	return &AgentResult{AgentID: m.config.ID, Input: input, Output: "mock"}, nil
 }
-func (m *mockAgent) Reset()              {}
+func (m *mockAgent) Reset()               {}
 func (m *mockAgent) GetMemory() []Message { return nil }
 
 func tenantCtx(tenantID string) context.Context {

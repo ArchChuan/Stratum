@@ -41,17 +41,17 @@ func TestDefaultMemoryConfig(t *testing.T) {
 
 func TestMemoryEntry(t *testing.T) {
 	entry := &MemoryEntry{
-		ID:        "entry-1",
-		Type:      ShortTermMemory,
-		Role:      "user",
-		Content:   "test content",
-		Timestamp: time.Now(),
-		TenantID:  "tenant-1",
-		UserID:    "user-1",
-		SessionID: "session-1",
-		AgentID:   "agent-1",
-		Metadata:  map[string]interface{}{"key": "value"},
-		Tags:      []string{"tag1", "tag2"},
+		ID:         "entry-1",
+		Type:       ShortTermMemory,
+		Role:       "user",
+		Content:    "test content",
+		Timestamp:  time.Now(),
+		TenantID:   "tenant-1",
+		UserID:     "user-1",
+		SessionID:  "session-1",
+		AgentID:    "agent-1",
+		Metadata:   map[string]interface{}{"key": "value"},
+		Tags:       []string{"tag1", "tag2"},
 		Importance: 0.8,
 	}
 
@@ -154,9 +154,9 @@ func TestSessionContext(t *testing.T) {
 
 func TestMemorySearchRequest(t *testing.T) {
 	req := &MemorySearchRequest{
-		Query:  "test query",
-		Types:  []MemoryType{ShortTermMemory},
-		Limit:  10,
+		Query:    "test query",
+		Types:    []MemoryType{ShortTermMemory},
+		Limit:    10,
 		MinScore: 0.7,
 	}
 
@@ -218,13 +218,13 @@ func TestMemorySearchResult(t *testing.T) {
 
 func TestMemoryStats(t *testing.T) {
 	stats := &MemoryStats{
-		TotalEntries:    100,
-		ShortTermCount:  50,
-		LongTermCount:   30,
-		EntityCount:     20,
-		SessionsCount:   5,
-		ActiveUsers:     3,
-		VectorCount:     30,
+		TotalEntries:     100,
+		ShortTermCount:   50,
+		LongTermCount:    30,
+		EntityCount:      20,
+		SessionsCount:    5,
+		ActiveUsers:      3,
+		VectorCount:      30,
 		StorageSizeBytes: 1024000,
 	}
 

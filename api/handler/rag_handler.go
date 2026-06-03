@@ -30,7 +30,7 @@ func NewRAGHandler(
 }
 
 type UploadDocumentRequest struct {
-	Workspace string `form:"workspace" binding:"required"`
+	Workspace string                `form:"workspace" binding:"required"`
 	File      *multipart.FileHeader `form:"file" binding:"required"`
 }
 
@@ -46,10 +46,10 @@ type CreateWorkspaceRequest struct {
 }
 
 type IngestDocumentRequest struct {
-	Workspace     string `json:"workspace" binding:"required"`
-	DocumentData  []byte `json:"document_data" binding:"required"`
-	FileName      string `json:"filename" binding:"required"`
-	DocumentID    string `json:"document_id" binding:"required"`
+	Workspace    string `json:"workspace" binding:"required"`
+	DocumentData []byte `json:"document_data" binding:"required"`
+	FileName     string `json:"filename" binding:"required"`
+	DocumentID   string `json:"document_id" binding:"required"`
 }
 
 func (h *RAGHandler) UploadDocument(c *gin.Context) {

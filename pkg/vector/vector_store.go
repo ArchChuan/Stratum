@@ -17,11 +17,11 @@ import (
 )
 
 type VectorStore struct {
-	client   client.Client
-	host     string
-	port     string
-	logger   *zap.Logger
-	dim      int
+	client client.Client
+	host   string
+	port   string
+	logger *zap.Logger
+	dim    int
 }
 
 func NewVectorStore(host, port string, logger *zap.Logger) *VectorStore {
@@ -90,8 +90,8 @@ func (vs *VectorStore) CreateCollection(ctx context.Context, collectionName stri
 	schema := &entity.Schema{
 		CollectionName: collectionName,
 		Description:    "RAG knowledge collection",
-			AutoID:         false,
-			Fields: []*entity.Field{
+		AutoID:         false,
+		Fields: []*entity.Field{
 			{
 				Name:       "id",
 				DataType:   entity.FieldTypeVarChar,
@@ -105,7 +105,7 @@ func (vs *VectorStore) CreateCollection(ctx context.Context, collectionName stri
 			},
 			{
 				Name:       "source_document",
-				DataType:  	entity.FieldTypeVarChar,
+				DataType:   entity.FieldTypeVarChar,
 				TypeParams: map[string]string{"max_length": "255"},
 			},
 			{
@@ -192,8 +192,8 @@ func (vs *VectorStore) Search(ctx context.Context, collectionName string, queryV
 		"",         // expression (empty means no filtering)
 		[]string{"id", "content", "source_document", "chunk_index"}, // output fields
 		vectors,
-		"vector",   // vector field name
-		entity.L2,  // metric type
+		"vector",  // vector field name
+		entity.L2, // metric type
 		topK,
 		sp,
 	)
@@ -204,7 +204,7 @@ func (vs *VectorStore) Search(ctx context.Context, collectionName string, queryV
 
 	// Process results - returns []client.SearchResult
 	searchResults := make([]SearchResult, 0)
-	if results != nil && len(results) > 0 {
+	if len(results) > 0 {
 		result := results[0]
 
 		// Get columns from fields

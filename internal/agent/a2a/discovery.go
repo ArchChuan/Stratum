@@ -11,11 +11,11 @@ import (
 
 // PeerInfo represents information about a peer agent
 type PeerInfo struct {
-	Identity    AgentIdentity
-	Capabilities []Capability
-	LastSeen    time.Time
+	Identity          AgentIdentity
+	Capabilities      []Capability
+	LastSeen          time.Time
 	HeartbeatInterval time.Duration
-	mu          sync.RWMutex
+	mu                sync.RWMutex
 }
 
 // DiscoveryEvent represents a discovery event
@@ -27,20 +27,20 @@ type DiscoveryEvent struct {
 
 // DiscoveryService handles agent discovery and capability matching
 type DiscoveryService struct {
-	peers       map[string]*PeerInfo
+	peers        map[string]*PeerInfo
 	capabilities map[string]map[string]*PeerInfo // capability name -> peers
-	eventChans  []chan DiscoveryEvent
-	mu          sync.RWMutex
-	logger      *zap.Logger
+	eventChans   []chan DiscoveryEvent
+	mu           sync.RWMutex
+	logger       *zap.Logger
 }
 
 // NewDiscoveryService creates a new discovery service
 func NewDiscoveryService(logger *zap.Logger) *DiscoveryService {
 	return &DiscoveryService{
-		peers:       make(map[string]*PeerInfo),
+		peers:        make(map[string]*PeerInfo),
 		capabilities: make(map[string]map[string]*PeerInfo),
-		eventChans:  make([]chan DiscoveryEvent, 0),
-		logger:      logger.Named("discovery"),
+		eventChans:   make([]chan DiscoveryEvent, 0),
+		logger:       logger.Named("discovery"),
 	}
 }
 
@@ -52,7 +52,7 @@ func (d *DiscoveryService) RegisterPeer(ctx context.Context, identity AgentIdent
 	peer := &PeerInfo{
 		Identity:          identity,
 		Capabilities:      capabilities,
-		LastSeen:         time.Now(),
+		LastSeen:          time.Now(),
 		HeartbeatInterval: 30 * time.Second,
 	}
 

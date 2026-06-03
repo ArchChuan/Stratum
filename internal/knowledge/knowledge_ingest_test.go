@@ -134,10 +134,10 @@ func TestRAGQueryResult(t *testing.T) {
 
 func TestSourceStructure(t *testing.T) {
 	source := Source{
-		DocumentID:  "doc-1",
-		Content:     "test content",
-		ChunkIndex:  0,
-		Score:       0.95,
+		DocumentID: "doc-1",
+		Content:    "test content",
+		ChunkIndex: 0,
+		Score:      0.95,
 	}
 
 	if source.DocumentID != "doc-1" {
@@ -183,8 +183,8 @@ func TestBuildPrompt(t *testing.T) {
 	chunks := []string{"chunk1", "chunk2"}
 	graphContext := []GraphEntity{
 		{
-			ID:    "e1",
-			Label: "Entity",
+			ID:         "e1",
+			Label:      "Entity",
 			Properties: map[string]interface{}{"name": "test"},
 		},
 	}
@@ -212,4 +212,3 @@ func contains(s, substr string) bool {
 	}
 	return false
 }
-

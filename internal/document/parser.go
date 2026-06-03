@@ -77,7 +77,7 @@ func (p *Parser) parsePDF(filePath string) (string, error) {
 	if err != nil {
 		p.logger.Error("failed to open PDF", zap.Error(err))
 		return "", fmt.Errorf("failed to open PDF: %w", err)
-	} 
+	}
 	defer f.Close()
 
 	var buf bytes.Buffer

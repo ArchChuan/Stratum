@@ -41,22 +41,22 @@ type MetricsProvider interface {
 // NoopMetrics satisfies MetricsProvider with no-ops. Safe for tests and disabled mode.
 type NoopMetrics struct{}
 
-func (NoopMetrics) IncHTTPRequest(_, _ string, _ int)                    {}
-func (NoopMetrics) RecordHTTPRequestDuration(_, _ string, _ float64)     {}
-func (NoopMetrics) IncHTTPRequestsInFlight()                             {}
-func (NoopMetrics) DecHTTPRequestsInFlight()                             {}
-func (NoopMetrics) IncSkillExecution(_, _, _ string)                     {}
-func (NoopMetrics) RecordSkillExecutionDuration(_ string, _ float64)     {}
-func (NoopMetrics) SetSkillCircuitBreakerState(_ string, _ float64)      {}
-func (NoopMetrics) IncAgentExecution(_, _, _ string)                     {}
-func (NoopMetrics) RecordAgentExecutionDuration(_, _ string, _ float64)  {}
-func (NoopMetrics) RecordAgentStepCount(_, _ string, _ int)              {}
-func (NoopMetrics) IncLLMRequest(_, _, _ string)                         {}
-func (NoopMetrics) RecordLLMRequestDuration(_, _ string, _ float64)      {}
-func (NoopMetrics) IncLLMTokenUsage(_, _ string, _ int64)                {}
-func (NoopMetrics) RecordLLMTokenHistogram(_, _ string, _ float64)       {}
-func (NoopMetrics) IncKnowledgeQuery(_, _ string)                        {}
-func (NoopMetrics) RecordKnowledgeQueryDuration(_ string, _ float64)     {}
-func (NoopMetrics) RecordMemoryRetrievalDuration(_ string, _ float64)    {}
-func (NoopMetrics) IncHermesEvent(_ string)                              {}
-func (NoopMetrics) IncHermesEventProcessed(_, _ string)                  {}
+func (NoopMetrics) IncHTTPRequest(_, _ string, _ int)                   {}
+func (NoopMetrics) RecordHTTPRequestDuration(_, _ string, _ float64)    {}
+func (NoopMetrics) IncHTTPRequestsInFlight()                            {}
+func (NoopMetrics) DecHTTPRequestsInFlight()                            {}
+func (NoopMetrics) IncSkillExecution(_, _, _ string)                    {}
+func (NoopMetrics) RecordSkillExecutionDuration(_ string, _ float64)    {}
+func (NoopMetrics) SetSkillCircuitBreakerState(_ string, _ float64)     {}
+func (NoopMetrics) IncAgentExecution(_, _, _ string)                    {}
+func (NoopMetrics) RecordAgentExecutionDuration(_, _ string, _ float64) {}
+func (NoopMetrics) RecordAgentStepCount(_, _ string, _ int)             {}
+func (NoopMetrics) IncLLMRequest(_, _, _ string)                        {}
+func (NoopMetrics) RecordLLMRequestDuration(_, _ string, _ float64)     {}
+func (NoopMetrics) IncLLMTokenUsage(_, _ string, _ int64)               {}
+func (NoopMetrics) RecordLLMTokenHistogram(_, _ string, _ float64)      {}
+func (NoopMetrics) IncKnowledgeQuery(_, _ string)                       {}
+func (NoopMetrics) RecordKnowledgeQueryDuration(_ string, _ float64)    {}
+func (NoopMetrics) RecordMemoryRetrievalDuration(_ string, _ float64)   {}
+func (NoopMetrics) IncHermesEvent(_ string)                             {}
+func (NoopMetrics) IncHermesEventProcessed(_, _ string)                 {}

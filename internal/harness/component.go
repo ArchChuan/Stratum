@@ -46,8 +46,8 @@ func (b *BaseComponent) HealthCheck(ctx context.Context) error {
 // SimpleComponent is a wrapper for simple functions
 type SimpleComponent struct {
 	*BaseComponent
-	startFunc      func(context.Context) error
-	stopFunc       func(context.Context) error
+	startFunc       func(context.Context) error
+	stopFunc        func(context.Context) error
 	healthCheckFunc func(context.Context) error
 }
 
@@ -115,11 +115,11 @@ func (s *SimpleComponent) HealthCheck(ctx context.Context) error {
 
 // ComponentBuilder helps construct components with dependencies
 type ComponentBuilder struct {
-	name    string
-	logger  *zap.Logger
-	deps    map[string]interface{}
-	startFn func(context.Context, map[string]interface{}) error
-	stopFn  func(context.Context) error
+	name     string
+	logger   *zap.Logger
+	deps     map[string]interface{}
+	startFn  func(context.Context, map[string]interface{}) error
+	stopFn   func(context.Context) error
 	healthFn func(context.Context) error
 }
 

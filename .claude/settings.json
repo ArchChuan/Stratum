@@ -41,8 +41,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '✓ ClawHermes AI Go 项目规范已加载' && echo '📋 5条项目命令: make install | make typecheck | make lint | make test-local | make test-full' && echo '🚫 5条项目边界已启用' && echo '🔄 CI/CD: GitHub Actions configured' && echo '🛡️ Security: go vet enabled'",
-            "statusMessage": "加载项目规范"
+            "command": "echo '\u2713 ClawHermes AI Go \u9879\u76ee\u89c4\u8303\u5df2\u52a0\u8f7d' && echo '\ud83d\udccb 5\u6761\u9879\u76ee\u547d\u4ee4: make install | make typecheck | make lint | make test-local | make test-full' && echo '\ud83d\udeab 5\u6761\u9879\u76ee\u8fb9\u754c\u5df2\u542f\u7528' && echo '\ud83d\udd04 CI/CD: GitHub Actions configured' && echo '\ud83d\udee1\ufe0f Security: go vet enabled'",
+            "statusMessage": "\u52a0\u8f7d\u9879\u76ee\u89c4\u8303"
           }
         ]
       }
@@ -53,9 +53,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cmd=$(jq -r '.tool_input.command'); if echo \"$cmd\" | grep -qE '^(rm -rf|sudo|chmod 777|chown|dd if=|mkfs|fdisk)'; then echo '{\"continue\": false, \"stopReason\": \"🚫 边界1-禁止命令: 该命令可能造成数据丢失或安全风险\"}'; else echo '{\"continue\": true}'; fi",
+            "command": "cmd=$(jq -r '.tool_input.command'); if echo \"$cmd\" | grep -qE '^(rm -rf|sudo|chmod 777|chown|dd if=|mkfs|fdisk)'; then echo '{\"continue\": false, \"stopReason\": \"\ud83d\udeab \u8fb9\u754c1-\u7981\u6b62\u547d\u4ee4: \u8be5\u547d\u4ee4\u53ef\u80fd\u9020\u6210\u6570\u636e\u4e22\u5931\u6216\u5b89\u5168\u98ce\u9669\"}'; else echo '{\"continue\": true}'; fi",
             "if": "Bash(*)",
-            "statusMessage": "检查禁止命令"
+            "statusMessage": "\u68c0\u67e5\u7981\u6b62\u547d\u4ee4"
           }
         ]
       },
@@ -64,9 +64,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "path=$(jq -r '.tool_input.file_path // .tool_response.filePath'); if echo \"$path\" | grep -qE '^(/etc|/sys|/proc|/dev|/root|/var/log|/boot)'; then echo '{\"continue\": false, \"stopReason\": \"🚫 边界2-危险目录: 禁止修改系统关键目录\"}'; else echo '{\"continue\": true}'; fi",
+            "command": "path=$(jq -r '.tool_input.file_path // .tool_response.filePath'); if echo \"$path\" | grep -qE '^(/etc|/sys|/proc|/dev|/root|/var/log|/boot)'; then echo '{\"continue\": false, \"stopReason\": \"\ud83d\udeab \u8fb9\u754c2-\u5371\u9669\u76ee\u5f55: \u7981\u6b62\u4fee\u6539\u7cfb\u7edf\u5173\u952e\u76ee\u5f55\"}'; else echo '{\"continue\": true}'; fi",
             "if": "Write|Edit",
-            "statusMessage": "检查目录权限"
+            "statusMessage": "\u68c0\u67e5\u76ee\u5f55\u6743\u9650"
           }
         ]
       },
@@ -75,9 +75,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "path=$(jq -r '.tool_input.file_path'); if echo \"$path\" | grep -qE '(/root/.ssh|/root/.aws|/etc/shadow|/etc/passwd)'; then echo '{\"continue\": false, \"stopReason\": \"🚫 边界3-只读文件: 禁止读取敏感凭证文件\"}'; else echo '{\"continue\": true}'; fi",
+            "command": "path=$(jq -r '.tool_input.file_path'); if echo \"$path\" | grep -qE '(/root/.ssh|/root/.aws|/etc/shadow|/etc/passwd)'; then echo '{\"continue\": false, \"stopReason\": \"\ud83d\udeab \u8fb9\u754c3-\u53ea\u8bfb\u6587\u4ef6: \u7981\u6b62\u8bfb\u53d6\u654f\u611f\u51ed\u8bc1\u6587\u4ef6\"}'; else echo '{\"continue\": true}'; fi",
             "if": "Read",
-            "statusMessage": "检查文件访问权限"
+            "statusMessage": "\u68c0\u67e5\u6587\u4ef6\u8bbf\u95ee\u6743\u9650"
           }
         ]
       }
@@ -89,7 +89,7 @@
           {
             "type": "command",
             "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath'); if [[ -f \"$f\" ]]; then /usr/local/bin/shieldbot-mcp \"$f\" 2>&1 | head -40 || true; fi",
-            "statusMessage": "运行 shieldbot-mcp 安全扫描",
+            "statusMessage": "\u8fd0\u884c shieldbot-mcp \u5b89\u5168\u626b\u63cf",
             "async": true
           }
         ]
@@ -99,8 +99,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cmd=$(jq -r '.tool_input.command'); if echo \"$cmd\" | grep -qE '^make (install|typecheck|lint|test-local|test-full)'; then echo '✓ 命令执行成功'; fi",
-            "statusMessage": "验证项目命令",
+            "command": "cmd=$(jq -r '.tool_input.command'); if echo \"$cmd\" | grep -qE '^make (install|typecheck|lint|test-local|test-full)'; then echo '\u2713 \u547d\u4ee4\u6267\u884c\u6210\u529f'; fi",
+            "statusMessage": "\u9a8c\u8bc1\u9879\u76ee\u547d\u4ee4",
             "async": true
           }
         ]
@@ -110,8 +110,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cmd=$(jq -r '.tool_input.command'); if echo \"$cmd\" | grep -qE '(--dry-run|--dry_run|-n|--no-op)'; then echo '✓ 边界4-数据dry-run: 已启用安全模式'; fi",
-            "statusMessage": "检查安全模式",
+            "command": "cmd=$(jq -r '.tool_input.command'); if echo \"$cmd\" | grep -qE '(--dry-run|--dry_run|-n|--no-op)'; then echo '\u2713 \u8fb9\u754c4-\u6570\u636edry-run: \u5df2\u542f\u7528\u5b89\u5168\u6a21\u5f0f'; fi",
+            "statusMessage": "\u68c0\u67e5\u5b89\u5168\u6a21\u5f0f",
             "async": true
           }
         ]
@@ -140,5 +140,8 @@
         "/.aws/credentials"
       ]
     }
+  },
+  "worktree": {
+    "bgIsolation": "none"
   }
 }

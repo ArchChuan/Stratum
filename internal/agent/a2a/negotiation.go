@@ -13,26 +13,26 @@ import (
 type NegotiationState string
 
 const (
-	NegotiationStatePending   NegotiationState = "pending"
+	NegotiationStatePending     NegotiationState = "pending"
 	NegotiationStateNegotiating NegotiationState = "negotiating"
-	NegotiationStateAccepted  NegotiationState = "accepted"
-	NegotiationStateRejected  NegotiationState = "rejected"
-	NegotiationStateCancelled NegotiationState = "cancelled"
+	NegotiationStateAccepted    NegotiationState = "accepted"
+	NegotiationStateRejected    NegotiationState = "rejected"
+	NegotiationStateCancelled   NegotiationState = "cancelled"
 )
 
 // TaskOffer represents a task offer
 type TaskOffer struct {
-	ID             string
-	From           AgentIdentity
-	To             AgentIdentity
-	Description    string
-	Requirements   []string
-	Priority       Priority
-	Timeout        time.Duration
-	EstDuration    time.Duration
-	ProposedAt     time.Time
-	ExpiresAt      time.Time
-	mu             sync.RWMutex
+	ID           string
+	From         AgentIdentity
+	To           AgentIdentity
+	Description  string
+	Requirements []string
+	Priority     Priority
+	Timeout      time.Duration
+	EstDuration  time.Duration
+	ProposedAt   time.Time
+	ExpiresAt    time.Time
+	mu           sync.RWMutex
 }
 
 // TaskResponse represents a response to a task offer
@@ -254,6 +254,6 @@ func (n *NegotiationService) GetStats() *NegotiationStats {
 }
 
 var (
-	ErrNegotiationNotFound    = &A2AError{Type: ErrorTypeNegotiation, Message: "negotiation not found"}
+	ErrNegotiationNotFound     = &A2AError{Type: ErrorTypeNegotiation, Message: "negotiation not found"}
 	ErrInvalidNegotiationState = &A2AError{Type: ErrorTypeNegotiation, Message: "invalid negotiation state"}
 )
