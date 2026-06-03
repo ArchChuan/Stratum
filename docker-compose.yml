@@ -242,6 +242,8 @@ services:
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     networks:
       - clawhermes
+    volumes:
+      - redis_data:/data
 
 networks:
   clawhermes:
@@ -258,3 +260,4 @@ volumes:
   minio_data:
   milvus_data:
   postgres_data:
+  redis_data:

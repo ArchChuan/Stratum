@@ -17,6 +17,7 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/textchunk"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
 	vectorstore "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -31,8 +32,18 @@ func SetupRouter(
 ) *gin.Engine {
 	router := gin.Default()
 
+	// Observability: single shared PrometheusMetrics instance
+	metrics := observability.NewPrometheusMetrics(logger)
+
+	// Inject metrics into LLM gateway
+	gateway.WithMetrics(metrics)
+
 	// Middleware
 	router.Use(middleware.ErrorHandler(logger))
+	router.Use(middleware.MetricsMiddleware(metrics))
+
+	// Prometheus scrape endpoint
+	router.GET("/metrics", gin.WrapH(metrics.GetHandler()))
 
 	// Health check
 	router.GET("/health", func(c *gin.Context) {
@@ -71,7 +82,7 @@ func SetupRouter(
 
 	// Initialize agent registry and handler
 	agentRegistry := agent.NewRegistry(logger)
-	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway)
+	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway, metrics)
 
 	// Initialize memory system
 	memoryConfig := memory.DefaultMemoryConfig()

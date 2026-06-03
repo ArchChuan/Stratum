@@ -70,10 +70,10 @@ fe-docker-build:
 
 # ─── 本地基础设施 Infra ───────────────────────────────────────────────────
 infra-up:
-	$(DC) up -d nats neo4j etcd minio milvus
+	$(DC) up -d nats neo4j etcd minio milvus postgres redis
 
 infra-down:
-	$(DC) down nats neo4j etcd minio milvus
+	$(DC) down nats neo4j etcd minio milvus postgres redis
 
 infra-wait:
 	@echo "Waiting for NATS..."
@@ -82,10 +82,14 @@ infra-wait:
 	@timeout 90 sh -c 'until docker compose exec -T neo4j cypher-shell -u neo4j -p password "RETURN 1" >/dev/null 2>&1; do sleep 3; done'
 	@echo "Waiting for Milvus..."
 	@timeout 120 sh -c 'until curl -sf http://localhost:9091/healthz >/dev/null 2>&1; do sleep 3; done'
+	@echo "Waiting for PostgreSQL..."
+	@timeout 60 sh -c 'until docker compose exec -T postgres pg_isready -U clawhermes >/dev/null 2>&1; do sleep 2; done'
+	@echo "Waiting for Redis..."
+	@timeout 30 sh -c 'until docker compose exec -T redis redis-cli ping >/dev/null 2>&1; do sleep 1; done'
 	@echo "All core services ready."
 
 infra-status:
-	$(DC) ps nats neo4j etcd minio milvus
+	$(DC) ps nats neo4j etcd minio milvus postgres redis
 
 # ─── 可观测性监控 ──────────────────────────────────────────────────────────
 obs-up:

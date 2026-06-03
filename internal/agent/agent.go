@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
 	"go.uber.org/zap"
 )
 
@@ -106,6 +107,7 @@ type Agent interface {
 type BaseAgent struct {
 	*AgentConfig
 	Logger         *zap.Logger
+	metrics        observability.MetricsProvider
 	State          AgentState
 	Memory         []Message
 	mu             sync.Mutex
@@ -126,6 +128,7 @@ func NewBaseAgent(config *AgentConfig, logger *zap.Logger) *BaseAgent {
 	return &BaseAgent{
 		AgentConfig:    config,
 		Logger:         logger,
+		metrics:        observability.NoopMetrics{},
 		State:          AgentState{},
 		Memory:         []Message{},
 		mu:             sync.Mutex{},
@@ -139,12 +142,21 @@ func NewBaseAgentWithMemory(config *AgentConfig, logger *zap.Logger, memoryManag
 	return &BaseAgent{
 		AgentConfig:    config,
 		Logger:         logger,
+		metrics:        observability.NoopMetrics{},
 		State:          AgentState{},
 		Memory:         []Message{},
 		mu:             sync.Mutex{},
 		MemoryManager:  memoryManager,
 		SessionContext: sessionCtx,
 	}
+}
+
+// WithMetrics injects a MetricsProvider. Must be called before the agent is shared across goroutines.
+func (a *BaseAgent) WithMetrics(m observability.MetricsProvider) *BaseAgent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.metrics = m
+	return a
 }
 
 // SetMemoryManager sets the memory manager for the agent
@@ -247,6 +259,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		Metadata: map[string]interface{}{},
 	}
 
+	var execErr error
 	switch a.Type {
 	case ReActAgent:
 		for i := 0; i < cfg.MaxSteps; i++ {
@@ -282,15 +295,25 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 
 	case PlanningAgent, ToolCallingAgent, RAGAgent, SwarmAgent:
 		result.Output = fmt.Sprintf("%s agent type not yet implemented", string(a.Type))
-		return result, fmt.Errorf("agent type %s not implemented", a.Type)
+		execErr = fmt.Errorf("agent type %s not implemented", a.Type)
 
 	default:
 		result.Output = "Unknown agent type"
-		return result, fmt.Errorf("unknown agent type: %s", a.Type)
+		execErr = fmt.Errorf("unknown agent type: %s", a.Type)
 	}
 
 	result.Duration = time.Since(startTime)
-	return result, nil
+	result.Steps = a.State.StepsTaken
+
+	status := "success"
+	if execErr != nil {
+		status = "error"
+	}
+	a.metrics.IncAgentExecution(a.ID, string(a.Type), status)
+	a.metrics.RecordAgentExecutionDuration(a.ID, string(a.Type), result.Duration.Seconds())
+	a.metrics.RecordAgentStepCount(a.ID, string(a.Type), result.Steps)
+
+	return result, execErr
 }
 
 // shouldTerminate checks if execution should stop

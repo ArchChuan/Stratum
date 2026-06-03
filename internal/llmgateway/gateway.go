@@ -3,6 +3,9 @@ package llmgateway
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
 )
 
 type ModelProvider string
@@ -60,13 +63,23 @@ type Gateway struct {
 	clients          map[ModelProvider]LLMClient
 	embeddingClients map[ModelProvider]EmbeddingClient
 	defaultProvider  ModelProvider
+	metrics          observability.MetricsProvider
 }
 
+// NewGateway creates a Gateway with a no-op metrics provider.
+// Call WithMetrics to inject a real provider.
 func NewGateway() *Gateway {
 	return &Gateway{
 		clients:          make(map[ModelProvider]LLMClient),
 		embeddingClients: make(map[ModelProvider]EmbeddingClient),
+		metrics:          observability.NoopMetrics{},
 	}
+}
+
+// WithMetrics injects a MetricsProvider into the gateway.
+func (g *Gateway) WithMetrics(m observability.MetricsProvider) *Gateway {
+	g.metrics = m
+	return g
 }
 
 func (g *Gateway) RegisterClient(provider ModelProvider, client LLMClient) {
@@ -89,10 +102,34 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 
 	client, ok := g.clients[provider]
 	if !ok {
+		g.metrics.IncLLMRequest(req.Model, string(provider), "error")
 		return nil, fmt.Errorf("provider not found: %s", provider)
 	}
 
-	return client.Complete(ctx, req)
+	start := time.Now()
+	resp, err := client.Complete(ctx, req)
+	elapsed := time.Since(start).Seconds()
+
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+
+	g.metrics.IncLLMRequest(req.Model, string(provider), status)
+	g.metrics.RecordLLMRequestDuration(req.Model, string(provider), elapsed)
+
+	if err == nil && resp != nil {
+		if resp.Usage.PromptTokens > 0 {
+			g.metrics.IncLLMTokenUsage(req.Model, "prompt", int64(resp.Usage.PromptTokens))
+			g.metrics.RecordLLMTokenHistogram(req.Model, "prompt", float64(resp.Usage.PromptTokens))
+		}
+		if resp.Usage.CompletionTokens > 0 {
+			g.metrics.IncLLMTokenUsage(req.Model, "completion", int64(resp.Usage.CompletionTokens))
+			g.metrics.RecordLLMTokenHistogram(req.Model, "completion", float64(resp.Usage.CompletionTokens))
+		}
+	}
+
+	return resp, err
 }
 
 func (g *Gateway) CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {

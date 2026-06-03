@@ -2,6 +2,7 @@ package observability
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -9,159 +10,146 @@ import (
 	"go.uber.org/zap"
 )
 
-// PrometheusMetrics 封装 Prometheus 指标
+// PrometheusMetrics implements MetricsProvider using Prometheus counters/histograms.
 type PrometheusMetrics struct {
-	// HTTP 指标
-	httpRequestsTotal     *prometheus.CounterVec
-	httpRequestDuration   *prometheus.HistogramVec
-	httpRequestsInFlight  prometheus.Gauge
+	reg *prometheus.Registry
 
-	// Skill 执行指标
-	skillExecutionsTotal    *prometheus.CounterVec
-	skillExecutionDuration  *prometheus.HistogramVec
+	// HTTP
+	httpRequestsTotal    *prometheus.CounterVec
+	httpRequestDuration  *prometheus.HistogramVec
+	httpRequestsInFlight prometheus.Gauge
+
+	// Skill
+	skillExecutionsTotal     *prometheus.CounterVec
+	skillExecutionDuration   *prometheus.HistogramVec
 	skillCircuitBreakerState *prometheus.GaugeVec
 
-	// Agent 执行指标
-	agentExecutionsTotal  *prometheus.CounterVec
+	// Agent
+	agentExecutionsTotal   *prometheus.CounterVec
 	agentExecutionDuration *prometheus.HistogramVec
+	agentStepCount         *prometheus.HistogramVec
 
-	// LLM 调用指标
-	llmRequestsTotal      *prometheus.CounterVec
-	llmRequestDuration    *prometheus.HistogramVec
-	llmTokenUsage         *prometheus.CounterVec
+	// LLM – core
+	llmRequestsTotal   *prometheus.CounterVec
+	llmRequestDuration *prometheus.HistogramVec
+	llmTokenUsage      *prometheus.CounterVec
+	// LLM – AI-specific
+	llmTokenHistogram    *prometheus.HistogramVec
+	llmFirstTokenLatency *prometheus.HistogramVec
 
-	// 知识库指标
-	knowledgeQueriesTotal *prometheus.CounterVec
-	knowledgeQueryDuration *prometheus.HistogramVec
+	// Knowledge / Memory
+	knowledgeQueriesTotal   *prometheus.CounterVec
+	knowledgeQueryDuration  *prometheus.HistogramVec
+	memoryRetrievalDuration *prometheus.HistogramVec
 
-	// Hermes 事件指标
+	// Hermes
 	hermesEventsTotal     *prometheus.CounterVec
 	hermesEventsProcessed *prometheus.CounterVec
 
 	logger *zap.Logger
 }
 
-// NewPrometheusMetrics 创建新的 Prometheus 指标
+// NewPrometheusMetrics registers all metrics and returns a ready MetricsProvider.
 func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
+	tokenBuckets := []float64{64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384}
+	latencyBuckets := []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60}
+
+	// Use a private registry so multiple instances (e.g. in tests) don't conflict.
+	reg := prometheus.NewRegistry()
+	factory := promauto.With(reg)
+
 	return &PrometheusMetrics{
-		// HTTP 指标
-		httpRequestsTotal: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "http_requests_total",
-				Help: "Total number of HTTP requests",
-			},
+		reg: reg,
+		// HTTP
+		httpRequestsTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "http_requests_total", Help: "Total HTTP requests"},
 			[]string{"method", "path", "status"},
 		),
-		httpRequestDuration: promauto.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    "http_request_duration_seconds",
-				Help:    "HTTP request duration in seconds",
-				Buckets: prometheus.DefBuckets,
-			},
+		httpRequestDuration: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "http_request_duration_seconds", Help: "HTTP request duration", Buckets: prometheus.DefBuckets},
 			[]string{"method", "path"},
 		),
-		httpRequestsInFlight: promauto.NewGauge(
-			prometheus.GaugeOpts{
-				Name: "http_requests_in_flight",
-				Help: "Number of HTTP requests currently in flight",
-			},
+		httpRequestsInFlight: factory.NewGauge(
+			prometheus.GaugeOpts{Name: "http_requests_in_flight", Help: "In-flight HTTP requests"},
 		),
 
-		// Skill 执行指标
-		skillExecutionsTotal: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "skill_executions_total",
-				Help: "Total number of skill executions",
-			},
+		// Skill
+		skillExecutionsTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "skill_executions_total", Help: "Total skill executions"},
 			[]string{"skill_id", "skill_type", "status"},
 		),
-		skillExecutionDuration: promauto.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    "skill_execution_duration_seconds",
-				Help:    "Skill execution duration in seconds",
-				Buckets: prometheus.DefBuckets,
-			},
+		skillExecutionDuration: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "skill_execution_duration_seconds", Help: "Skill execution duration", Buckets: prometheus.DefBuckets},
 			[]string{"skill_id"},
 		),
-		skillCircuitBreakerState: promauto.NewGaugeVec(
-			prometheus.GaugeOpts{
-				Name: "skill_circuit_breaker_state",
-				Help: "Circuit breaker state per skill (0=closed, 1=open, 2=half_open)",
-			},
+		skillCircuitBreakerState: factory.NewGaugeVec(
+			prometheus.GaugeOpts{Name: "skill_circuit_breaker_state", Help: "Circuit breaker state (0=closed,1=open,2=half_open)"},
 			[]string{"skill_id"},
 		),
 
-		// Agent 执行指标
-		agentExecutionsTotal: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "agent_executions_total",
-				Help: "Total number of agent executions",
-			},
+		// Agent
+		agentExecutionsTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "agent_executions_total", Help: "Total agent executions"},
 			[]string{"agent_id", "agent_type", "status"},
 		),
-		agentExecutionDuration: promauto.NewHistogramVec(
+		agentExecutionDuration: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "agent_execution_duration_seconds", Help: "Agent execution duration", Buckets: latencyBuckets},
+			[]string{"agent_id", "agent_type"},
+		),
+		agentStepCount: factory.NewHistogramVec(
 			prometheus.HistogramOpts{
-				Name:    "agent_execution_duration_seconds",
-				Help:    "Agent execution duration in seconds",
-				Buckets: prometheus.DefBuckets,
+				Name:    "agent_step_count",
+				Help:    "Number of reasoning steps per agent execution",
+				Buckets: []float64{1, 2, 3, 5, 8, 13, 21, 34},
 			},
 			[]string{"agent_id", "agent_type"},
 		),
 
-		// LLM 调用指标
-		llmRequestsTotal: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "llm_requests_total",
-				Help: "Total number of LLM requests",
-			},
+		// LLM – core
+		llmRequestsTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "llm_requests_total", Help: "Total LLM requests"},
 			[]string{"model", "provider", "status"},
 		),
-		llmRequestDuration: promauto.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    "llm_request_duration_seconds",
-				Help:    "LLM request duration in seconds",
-				Buckets: prometheus.DefBuckets,
-			},
+		llmRequestDuration: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "llm_request_duration_seconds", Help: "LLM request duration", Buckets: latencyBuckets},
 			[]string{"model", "provider"},
 		),
-		llmTokenUsage: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "llm_token_usage_total",
-				Help: "Total number of LLM tokens used",
-			},
+		llmTokenUsage: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "llm_token_usage_total", Help: "Cumulative LLM tokens used"},
 			[]string{"model", "type"},
 		),
 
-		// 知识库指标
-		knowledgeQueriesTotal: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "knowledge_queries_total",
-				Help: "Total number of knowledge queries",
-			},
-			[]string{"query_type", "status"},
+		// LLM – AI-specific
+		llmTokenHistogram: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "llm_token_count", Help: "Token count distribution per LLM call", Buckets: tokenBuckets},
+			[]string{"model", "type"},
 		),
-		knowledgeQueryDuration: promauto.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    "knowledge_query_duration_seconds",
-				Help:    "Knowledge query duration in seconds",
-				Buckets: prometheus.DefBuckets,
-			},
-			[]string{"query_type"},
+		llmFirstTokenLatency: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "llm_first_token_latency_seconds", Help: "Time to first token (TTFT)", Buckets: prometheus.DefBuckets},
+			[]string{"model", "provider"},
 		),
 
-		// Hermes 事件指标
-		hermesEventsTotal: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "hermes_events_total",
-				Help: "Total number of Hermes events published",
-			},
+		// Knowledge / Memory
+		knowledgeQueriesTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "knowledge_queries_total", Help: "Total knowledge queries"},
+			[]string{"query_type", "status"},
+		),
+		knowledgeQueryDuration: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "knowledge_query_duration_seconds", Help: "Knowledge query duration", Buckets: prometheus.DefBuckets},
+			[]string{"query_type"},
+		),
+		memoryRetrievalDuration: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "memory_retrieval_duration_seconds", Help: "Memory retrieval/storage duration", Buckets: prometheus.DefBuckets},
+			[]string{"operation"},
+		),
+
+		// Hermes
+		hermesEventsTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "hermes_events_total", Help: "Total Hermes events published"},
 			[]string{"event_type"},
 		),
-		hermesEventsProcessed: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "hermes_events_processed_total",
-				Help: "Total number of Hermes events processed",
-			},
+		hermesEventsProcessed: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "hermes_events_processed_total", Help: "Total Hermes events processed"},
 			[]string{"event_type", "status"},
 		),
 
@@ -169,116 +157,97 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 	}
 }
 
-// HTTP 指标方法
-
-// IncHTTPRequest 增加HTTP请求计数
-func (m *PrometheusMetrics) IncHTTPRequest(method, path string, statusCode int) {
-	status := httpStatusCategory(statusCode)
-	m.httpRequestsTotal.WithLabelValues(method, path, status).Inc()
+// GetHandler returns a Prometheus scrape handler scoped to this instance's registry.
+func (m *PrometheusMetrics) GetHandler() http.Handler {
+	return promhttp.HandlerFor(m.reg, promhttp.HandlerOpts{})
 }
 
-// RecordHTTPRequestDuration 记录HTTP请求持续时间
+// --- HTTP ---
+
+func (m *PrometheusMetrics) IncHTTPRequest(method, path string, statusCode int) {
+	if statusCode <= 0 {
+		statusCode = 200
+	}
+	m.httpRequestsTotal.WithLabelValues(method, path, strconv.Itoa(statusCode/100)+"xx").Inc()
+}
+
 func (m *PrometheusMetrics) RecordHTTPRequestDuration(method, path string, duration float64) {
 	m.httpRequestDuration.WithLabelValues(method, path).Observe(duration)
 }
 
-// IncHTTPRequestsInFlight 增加正在处理的HTTP请求
-func (m *PrometheusMetrics) IncHTTPRequestsInFlight() {
-	m.httpRequestsInFlight.Inc()
-}
+func (m *PrometheusMetrics) IncHTTPRequestsInFlight() { m.httpRequestsInFlight.Inc() }
+func (m *PrometheusMetrics) DecHTTPRequestsInFlight() { m.httpRequestsInFlight.Dec() }
 
-// DecHTTPRequestsInFlight 减少正在处理的HTTP请求
-func (m *PrometheusMetrics) DecHTTPRequestsInFlight() {
-	m.httpRequestsInFlight.Dec()
-}
+// --- Skill ---
 
-// Skill 指标方法
-
-// IncSkillExecution 增加技能执行计数
 func (m *PrometheusMetrics) IncSkillExecution(skillID, skillType, status string) {
 	m.skillExecutionsTotal.WithLabelValues(skillID, skillType, status).Inc()
 }
 
-// SetSkillCircuitBreakerState 设置熔断器状态 gauge
-func (m *PrometheusMetrics) SetSkillCircuitBreakerState(skillID string, state float64) {
-	m.skillCircuitBreakerState.WithLabelValues(skillID).Set(state)
-}
-
-// RecordSkillExecutionDuration 记录技能执行持续时间
 func (m *PrometheusMetrics) RecordSkillExecutionDuration(skillID string, duration float64) {
 	m.skillExecutionDuration.WithLabelValues(skillID).Observe(duration)
 }
 
-// Agent 指标方法
+func (m *PrometheusMetrics) SetSkillCircuitBreakerState(skillID string, state float64) {
+	m.skillCircuitBreakerState.WithLabelValues(skillID).Set(state)
+}
 
-// IncAgentExecution 增加代理执行计数
+// --- Agent ---
+
 func (m *PrometheusMetrics) IncAgentExecution(agentID, agentType, status string) {
 	m.agentExecutionsTotal.WithLabelValues(agentID, agentType, status).Inc()
 }
 
-// RecordAgentExecutionDuration 记录代理执行持续时间
 func (m *PrometheusMetrics) RecordAgentExecutionDuration(agentID, agentType string, duration float64) {
 	m.agentExecutionDuration.WithLabelValues(agentID, agentType).Observe(duration)
 }
 
-// LLM 指标方法
+func (m *PrometheusMetrics) RecordAgentStepCount(agentID, agentType string, steps int) {
+	m.agentStepCount.WithLabelValues(agentID, agentType).Observe(float64(steps))
+}
 
-// IncLLMRequest 增加LLM请求计数
+// --- LLM ---
+
 func (m *PrometheusMetrics) IncLLMRequest(model, provider, status string) {
 	m.llmRequestsTotal.WithLabelValues(model, provider, status).Inc()
 }
 
-// RecordLLMRequestDuration 记录LLM请求持续时间
 func (m *PrometheusMetrics) RecordLLMRequestDuration(model, provider string, duration float64) {
 	m.llmRequestDuration.WithLabelValues(model, provider).Observe(duration)
 }
 
-// IncLLMTokenUsage 增加LLM token使用计数
 func (m *PrometheusMetrics) IncLLMTokenUsage(model, tokenType string, count int64) {
 	m.llmTokenUsage.WithLabelValues(model, tokenType).Add(float64(count))
 }
 
-// 知识库指标方法
+func (m *PrometheusMetrics) RecordLLMTokenHistogram(model, tokenType string, count float64) {
+	m.llmTokenHistogram.WithLabelValues(model, tokenType).Observe(count)
+}
 
-// IncKnowledgeQuery 增加知识库查询计数
+func (m *PrometheusMetrics) RecordLLMFirstTokenLatency(model, provider string, latency float64) {
+	m.llmFirstTokenLatency.WithLabelValues(model, provider).Observe(latency)
+}
+
+// --- Knowledge / Memory ---
+
 func (m *PrometheusMetrics) IncKnowledgeQuery(queryType, status string) {
 	m.knowledgeQueriesTotal.WithLabelValues(queryType, status).Inc()
 }
 
-// RecordKnowledgeQueryDuration 记录知识库查询持续时间
 func (m *PrometheusMetrics) RecordKnowledgeQueryDuration(queryType string, duration float64) {
 	m.knowledgeQueryDuration.WithLabelValues(queryType).Observe(duration)
 }
 
-// Hermes 事件指标方法
+func (m *PrometheusMetrics) RecordMemoryRetrievalDuration(operation string, duration float64) {
+	m.memoryRetrievalDuration.WithLabelValues(operation).Observe(duration)
+}
 
-// IncHermesEvent 增加Hermes事件计数
+// --- Hermes ---
+
 func (m *PrometheusMetrics) IncHermesEvent(eventType string) {
 	m.hermesEventsTotal.WithLabelValues(eventType).Inc()
 }
 
-// IncHermesEventProcessed 增加Hermes事件处理计数
 func (m *PrometheusMetrics) IncHermesEventProcessed(eventType, status string) {
 	m.hermesEventsProcessed.WithLabelValues(eventType, status).Inc()
-}
-
-// GetHandler 返回 Prometheus metrics handler
-func (m *PrometheusMetrics) GetHandler() http.Handler {
-	return promhttp.Handler()
-}
-
-// httpStatusCategory 返回 HTTP 状态码分类
-func httpStatusCategory(statusCode int) string {
-	switch {
-	case statusCode >= 200 && statusCode < 300:
-		return "2xx"
-	case statusCode >= 300 && statusCode < 400:
-		return "3xx"
-	case statusCode >= 400 && statusCode < 500:
-		return "4xx"
-	case statusCode >= 500:
-		return "5xx"
-	default:
-		return "unknown"
-	}
 }

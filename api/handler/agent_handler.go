@@ -10,6 +10,7 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/api/model"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -19,6 +20,7 @@ type AgentHandler struct {
 	agentRegistry *agent.Registry
 	logger        *zap.Logger
 	gateway       *llmgateway.Gateway
+	metrics       observability.MetricsProvider
 }
 
 type CreateAgentRequest struct {
@@ -64,11 +66,12 @@ type AgentExecutionResult struct {
 	Error      string                 `json:"error,omitempty"`
 }
 
-func NewAgentHandler(agentRegistry *agent.Registry, logger *zap.Logger, gateway *llmgateway.Gateway) *AgentHandler {
+func NewAgentHandler(agentRegistry *agent.Registry, logger *zap.Logger, gateway *llmgateway.Gateway, metrics observability.MetricsProvider) *AgentHandler {
 	return &AgentHandler{
 		agentRegistry: agentRegistry,
 		logger:        logger,
 		gateway:       gateway,
+		metrics:       metrics,
 	}
 }
 
@@ -165,7 +168,7 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 		Capabilities:  []agent.AgentCapability{},
 	}
 
-	a := agent.NewBaseAgent(cfg, h.logger)
+	a := agent.NewBaseAgent(cfg, h.logger).WithMetrics(h.metrics)
 
 	if err := h.agentRegistry.Register(a); err != nil {
 		h.logger.Error("failed to register agent", zap.Error(err))

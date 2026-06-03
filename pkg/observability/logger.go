@@ -25,35 +25,3 @@ func NewLogger(env string) (*Logger, error) {
 	return &Logger{logger}, nil
 }
 
-type Metrics struct {
-	logger *Logger
-}
-
-func NewMetrics(logger *Logger) *Metrics {
-	return &Metrics{logger: logger}
-}
-
-func (m *Metrics) RecordSkillExecution(skillID string, duration float64, success bool) {
-	status := "success"
-	if !success {
-		status = "failed"
-	}
-	m.logger.Info("skill execution recorded",
-		zap.String("skill_id", skillID),
-		zap.Float64("duration_ms", duration),
-		zap.String("status", status),
-	)
-}
-
-func (m *Metrics) RecordAPIRequest(method, path string, statusCode int, duration float64) {
-	m.logger.Info("api request recorded",
-		zap.String("method", method),
-		zap.String("path", path),
-		zap.Int("status_code", statusCode),
-		zap.Float64("duration_ms", duration),
-	)
-}
-
-func (m *Metrics) RecordEventPublished(eventType string) {
-	m.logger.Debug("event published recorded", zap.String("event_type", eventType))
-}

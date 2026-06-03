@@ -1,4 +1,10 @@
 {
+  "env": {
+    "GO_VERSION": "1.22",
+    "DOCKER_BUILDKIT": "1",
+    "COMPOSE_DOCKER_CLI_BUILD": "1",
+    "GOPROXY": "https://proxy.golang.org,direct"
+  },
   "permissions": {
     "allow": [
       "Bash(go *)",
@@ -25,7 +31,6 @@
       "Bash(docker-compose down)",
       "Bash(git push *)",
       "Bash(git reset --hard)",
-      "Bash(go mod tidy)",
       "Bash(make clean)"
     ]
   },
@@ -112,12 +117,6 @@
         ]
       }
     ]
-  },
-  "env": {
-    "GO_VERSION": "1.22",
-    "DOCKER_BUILDKIT": "1",
-    "COMPOSE_DOCKER_CLI_BUILD": "1",
-    "GOPROXY": "https://proxy.golang.org,direct"
   },
   "sandbox": {
     "filesystem": {

@@ -3,6 +3,7 @@ package handler
 import (
 	"testing"
 
+	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
 	"go.uber.org/zap"
 )
 
@@ -26,7 +27,7 @@ func TestNewRAGHandler(t *testing.T) {
 
 func TestNewAgentHandler(t *testing.T) {
 	logger := zap.NewNop()
-	handler := NewAgentHandler(nil, logger, nil)
+	handler := NewAgentHandler(nil, logger, nil, observability.NoopMetrics{})
 
 	if handler == nil {
 		t.Error("expected AgentHandler to be non-nil")
