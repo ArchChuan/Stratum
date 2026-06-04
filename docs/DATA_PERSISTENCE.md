@@ -17,12 +17,14 @@ command: -js -sd /data
 ```
 
 **特点**:
+
 - 启用 JetStream 模式 (`-js`)
 - 指定存储目录 (`-sd /data`)
 - 事件消息持久化到磁盘
 - 容器重启后消息不丢失
 
 **验证**:
+
 ```bash
 # 查看 NATS 数据
 docker exec clawhermes-ai-go-nats-1 ls -la /data
@@ -42,12 +44,14 @@ volumes:
 ```
 
 **特点**:
+
 - `/data` 存储数据库文件
 - `/logs` 存储日志文件
 - 支持事务日志恢复
 - 容器删除后数据保留
 
 **验证**:
+
 ```bash
 # 查看 Neo4j 数据
 docker exec clawhermes-ai-go-neo4j-1 ls -la /data
@@ -78,11 +82,13 @@ minio:
 ```
 
 **特点**:
+
 - **etcd**: 存储元数据（集合定义、索引信息）
 - **MinIO**: 存储向量数据（S3 兼容对象存储）
 - **milvus_data**: 本地缓存
 
 **验证**:
+
 ```bash
 # 查看 etcd 数据
 docker exec clawhermes-ai-go-etcd-1 etcdctl get --prefix ""
@@ -104,6 +110,7 @@ volumes:
 ```
 
 **特点**:
+
 - 配置文件持久化
 - 日志导出到文件系统
 - 支持多种导出器

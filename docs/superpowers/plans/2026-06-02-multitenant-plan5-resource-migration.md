@@ -14,6 +14,7 @@
 
 - Plan 1 已落地：`pkg/postgres` 包存在，`postgres.Pool` 可注入
 - Plan 3 已落地：`pkg/tenantdb` 包存在，提供以下函数：
+
   ```go
   // 在 tenant_{tenantID} schema 下执行 fn
   func ExecTenant(ctx context.Context, pool *pgxpool.Pool, tenantID string, fn func(pgx.Tx) error) error
@@ -27,6 +28,7 @@
   // 生成租户专属 Neo4j 节点 subject，如 "tenant_abc::doc_id"
   func TenantSubject(tenantID, id string) string
   ```
+
 - `api/middleware` 中存在 `TenantMiddleware`，会将 `tenantID` 注入 `context.Context`（key: `"tenant_id"`）
 - 运行 `docker compose up -d` 启动 Postgres、Milvus、Neo4j
 
@@ -155,6 +157,7 @@ CREATE TABLE IF NOT EXISTS skills (
 ### Task 1: Tenant Helper + Agent Registry 持久化
 
 **Files:**
+
 - Create: `api/handler/tenant.go`
 - Modify: `internal/agent/registry.go`
 - Modify: `internal/agent/registry_test.go`
@@ -403,12 +406,12 @@ git add api/handler/tenant.go internal/agent/registry.go internal/agent/registry
 git commit -m "feat(agent): persist registry to PostgreSQL with tenant isolation"
 ```
 
-
 ---
 
 ### Task 2: Agent Handler 改造
 
 **Files:**
+
 - Modify: `api/handler/agent_handler.go`
 - Modify: `api/handler/agent_handler_test.go`
 
@@ -619,12 +622,12 @@ git add api/handler/agent_handler.go api/handler/agent_handler_test.go api/handl
 git commit -m "feat(handler/agent): add tenant isolation to agent handler"
 ```
 
-
 ---
 
 ### Task 3: Memory Manager 持久化
 
 **Files:**
+
 - Modify: `internal/memory/manager.go`
 - Modify: `internal/memory/manager_test.go`
 
@@ -701,13 +704,14 @@ go test -tags=integration ./internal/memory/ -run TestMemoryManagerPersist -v 2>
 在 `internal/memory/manager.go` 中：
 
 1. 给 `MemoryManager` struct 加字段：
+
 ```go
 pool *pgxpool.Pool
 ```
 
-2. `NewMemoryManager` 函数签名末尾加 `pool *pgxpool.Pool`，并在返回前赋值 `m.pool = pool`。
+1. `NewMemoryManager` 函数签名末尾加 `pool *pgxpool.Pool`，并在返回前赋值 `m.pool = pool`。
 
-3. 改造 `Add` 方法，在成功写短期内存后，持久化到 DB：
+2. 改造 `Add` 方法，在成功写短期内存后，持久化到 DB：
 
 ```go
 func (m *MemoryManager) Add(ctx context.Context, entry *MemoryEntry) error {
@@ -755,7 +759,7 @@ func (m *MemoryManager) Add(ctx context.Context, entry *MemoryEntry) error {
 }
 ```
 
-4. 改造 `Delete` 方法，DB 侧删除（需要从 entry 取 tenantID，所以先 Get，再删）：
+1. 改造 `Delete` 方法，DB 侧删除（需要从 entry 取 tenantID，所以先 Get，再删）：
 
 ```go
 func (m *MemoryManager) Delete(ctx context.Context, id string) error {
@@ -782,7 +786,7 @@ func (m *MemoryManager) Delete(ctx context.Context, id string) error {
 }
 ```
 
-5. 在 `manager.go` 加 import：
+1. 在 `manager.go` 加 import：
 
 ```go
 import (
@@ -815,12 +819,12 @@ git add internal/memory/manager.go internal/memory/manager_test.go
 git commit -m "feat(memory): persist entries to PostgreSQL with tenant isolation"
 ```
 
-
 ---
 
 ### Task 4: Memory Handler 改造
 
 **Files:**
+
 - Modify: `api/handler/memory_handler.go`
 - Modify: `api/handler/memory_handler_test.go`
 
@@ -948,12 +952,12 @@ git add api/handler/memory_handler.go api/handler/memory_handler_test.go
 git commit -m "feat(handler/memory): inject tenant isolation into memory handler"
 ```
 
-
 ---
 
 ### Task 5: Knowledge Ingest 改造
 
 **Files:**
+
 - Modify: `internal/knowledge/knowledge_ingest.go`
 - Modify: `internal/knowledge/knowledge_ingest_test.go`
 
@@ -1045,18 +1049,20 @@ go test -tags=integration ./internal/knowledge/ -run TestIngestDocumentPersisten
 在 `internal/knowledge/knowledge_ingest.go` 中：
 
 1. 给 `KnowledgeIngest` struct 加字段：
+
 ```go
 pool *pgxpool.Pool
 ```
 
-2. `NewKnowledgeIngest` 函数签名末尾加 `pool *pgxpool.Pool`，并赋值。
+1. `NewKnowledgeIngest` 函数签名末尾加 `pool *pgxpool.Pool`，并赋值。
 
-3. 在 `IngestDocumentRequest` struct 加字段：
+2. 在 `IngestDocumentRequest` struct 加字段：
+
 ```go
 TenantID string
 ```
 
-4. 新增内部方法 `PersistDocMeta`（供 `IngestDocument` 和测试调用）：
+1. 新增内部方法 `PersistDocMeta`（供 `IngestDocument` 和测试调用）：
 
 ```go
 // PersistDocMeta 将文档元信息写入 tenant_{tenantID}.knowledge_docs 表。
@@ -1076,7 +1082,7 @@ func (ki *KnowledgeIngest) PersistDocMeta(ctx context.Context, req IngestDocumen
 }
 ```
 
-5. 在 `IngestDocument` 方法的 `ki.vectorStore.Flush` 之后调用：
+1. 在 `IngestDocument` 方法的 `ki.vectorStore.Flush` 之后调用：
 
 ```go
 if err := ki.PersistDocMeta(ctx, req, len(chunks)); err != nil {
@@ -1085,7 +1091,7 @@ if err := ki.PersistDocMeta(ctx, req, len(chunks)); err != nil {
 }
 ```
 
-6. 将 Milvus 集合名 `fmt.Sprintf("%s_kb", req.Workspace)` 替换为：
+1. 将 Milvus 集合名 `fmt.Sprintf("%s_kb", req.Workspace)` 替换为：
 
 ```go
 // Before (two occurrences):
@@ -1098,7 +1104,7 @@ if req.TenantID != "" {
 }
 ```
 
-7. 将 `graphRAG.CreateNode` 中的 Neo4j label 替换为租户化标签：
+1. 将 `graphRAG.CreateNode` 中的 Neo4j label 替换为租户化标签：
 
 ```go
 // Before:
@@ -1117,7 +1123,7 @@ ki.graphRAG.CreateNode(ctx, docLabel, docNodeProps)
 // ... chunkLabel 同理 ...
 ```
 
-8. 在 `knowledge_ingest.go` 加 import：
+1. 在 `knowledge_ingest.go` 加 import：
 
 ```go
 import (
@@ -1150,12 +1156,12 @@ git add internal/knowledge/knowledge_ingest.go internal/knowledge/knowledge_inge
 git commit -m "feat(knowledge): persist docs to PostgreSQL, use TenantCollection/Label for Milvus/Neo4j"
 ```
 
-
 ---
 
 ### Task 6: RAG Service 改造
 
 **Files:**
+
 - Modify: `internal/knowledge/rag_service.go`
 - Modify: `internal/knowledge/rag_service.go` (RAGQueryRequest 加 TenantID)
 - Modify: `api/handler/rag_handler.go`
@@ -1324,12 +1330,12 @@ git add internal/knowledge/rag_service.go api/handler/rag_handler.go api/handler
 git commit -m "feat(rag): inject tenant isolation into RAG query and ingest"
 ```
 
-
 ---
 
 ### Task 7: MCP Config 持久化
 
 **Files:**
+
 - Modify: `internal/mcp/client_manager.go`
 - Modify: `internal/mcp/mcp_test.go`
 - Modify: `api/handler/mcp_handler.go`
@@ -1419,13 +1425,14 @@ go test -tags=integration ./internal/mcp/ -run TestMCPClientManagerPersist -v 2>
 - [ ] **Step 3: 改造 `client_manager.go`**
 
 1. 给 `ClientManager` struct 加字段：
+
 ```go
 pool *pgxpool.Pool
 ```
 
-2. `NewClientManager` 函数签名末尾加 `pool *pgxpool.Pool`，并赋值。
+1. `NewClientManager` 函数签名末尾加 `pool *pgxpool.Pool`，并赋值。
 
-3. 新增三个方法：
+2. 新增三个方法：
 
 ```go
 // PersistConfig 将 MCP server 配置持久化到 tenant schema。
@@ -1489,9 +1496,9 @@ func (m *ClientManager) DeleteConfig(ctx context.Context, tenantID, serverID str
 }
 ```
 
-4. 在 `Connect` 末尾调用 `PersistConfig`（tenantID 从调用方传入，`Connect` 签名暂不改——在 handler 层单独调用 `PersistConfig`）。
+1. 在 `Connect` 末尾调用 `PersistConfig`（tenantID 从调用方传入，`Connect` 签名暂不改——在 handler 层单独调用 `PersistConfig`）。
 
-5. 在 `client_manager.go` 加 import：
+2. 在 `client_manager.go` 加 import：
 
 ```go
 import (
@@ -1607,12 +1614,12 @@ git add internal/mcp/client_manager.go internal/mcp/mcp_test.go \
 git commit -m "feat(mcp): persist configs to PostgreSQL with tenant isolation"
 ```
 
-
 ---
 
 ### Task 8: Skill Registry 持久化 + Handler 改造
 
 **Files:**
+
 - Modify: `internal/orchestrator/registry.go`
 - Modify: `internal/orchestrator/registry_test.go`
 - Modify: `api/handler/skill_handler.go`
@@ -2005,12 +2012,12 @@ git add internal/orchestrator/registry.go internal/orchestrator/registry_test.go
 git commit -m "feat(skill): persist registry to PostgreSQL with tenant isolation"
 ```
 
-
 ---
 
 ### Task 9: Router 接入 TenantMiddleware + 注入 Pool
 
 **Files:**
+
 - Modify: `api/router.go`
 
 改造目标：`SetupRouter` 接受 `*pgxpool.Pool`；将 pool 注入各 Registry/Manager 构造函数；五个资源路由组（`/skills`、`/agents`、`/knowledge`、`/memory`、`/api/v1/mcp`）加 `TenantMiddleware`。
@@ -2083,6 +2090,7 @@ ragHandler := handler.NewRAGHandler(ingestSvc, ragService, logger)
 ```
 
 加 import：
+
 ```go
 "github.com/jackc/pgx/v5/pgxpool"
 ```

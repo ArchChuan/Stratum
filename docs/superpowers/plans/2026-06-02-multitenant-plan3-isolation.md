@@ -35,6 +35,7 @@
 ### Task 1: TenantContext — context.go
 
 **Files:**
+
 - Create: `pkg/tenantdb/context.go`
 - Create: `pkg/tenantdb/context_test.go`
 
@@ -59,31 +60,31 @@ import "context"
 type Role string
 
 const (
-	RoleTenantAdmin Role = "tenant_admin"
-	RoleTenantUser  Role = "tenant_user"
-	RoleGlobalAdmin Role = "global_admin"
+ RoleTenantAdmin Role = "tenant_admin"
+ RoleTenantUser  Role = "tenant_user"
+ RoleGlobalAdmin Role = "global_admin"
 )
 
 // TenantContext carries tenant identity through the request lifecycle.
 // TenantID is empty for global_admin requests.
 type TenantContext struct {
-	TenantID string
-	UserID   string
-	Role     Role
+ TenantID string
+ UserID   string
+ Role     Role
 }
 
 type ctxKey struct{}
 
 // WithTenant returns a new context with tc embedded.
 func WithTenant(ctx context.Context, tc *TenantContext) context.Context {
-	return context.WithValue(ctx, ctxKey{}, tc)
+ return context.WithValue(ctx, ctxKey{}, tc)
 }
 
 // FromContext extracts the TenantContext from ctx.
 // Returns (nil, false) if not present.
 func FromContext(ctx context.Context) (*TenantContext, bool) {
-	tc, ok := ctx.Value(ctxKey{}).(*TenantContext)
-	return tc, ok && tc != nil
+ tc, ok := ctx.Value(ctxKey{}).(*TenantContext)
+ return tc, ok && tc != nil
 }
 ```
 
@@ -93,57 +94,57 @@ func FromContext(ctx context.Context) (*TenantContext, bool) {
 package tenantdb_test
 
 import (
-	"context"
-	"testing"
+ "context"
+ "testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 )
 
 func TestWithTenantAndFromContext(t *testing.T) {
-	tc := &tenantdb.TenantContext{
-		TenantID: "acme",
-		UserID:   "user-1",
-		Role:     tenantdb.RoleTenantAdmin,
-	}
+ tc := &tenantdb.TenantContext{
+  TenantID: "acme",
+  UserID:   "user-1",
+  Role:     tenantdb.RoleTenantAdmin,
+ }
 
-	ctx := tenantdb.WithTenant(context.Background(), tc)
+ ctx := tenantdb.WithTenant(context.Background(), tc)
 
-	got, ok := tenantdb.FromContext(ctx)
-	if !ok {
-		t.Fatal("expected TenantContext in context, got none")
-	}
-	if got.TenantID != "acme" {
-		t.Errorf("TenantID: want %q, got %q", "acme", got.TenantID)
-	}
-	if got.UserID != "user-1" {
-		t.Errorf("UserID: want %q, got %q", "user-1", got.UserID)
-	}
-	if got.Role != tenantdb.RoleTenantAdmin {
-		t.Errorf("Role: want %q, got %q", tenantdb.RoleTenantAdmin, got.Role)
-	}
+ got, ok := tenantdb.FromContext(ctx)
+ if !ok {
+  t.Fatal("expected TenantContext in context, got none")
+ }
+ if got.TenantID != "acme" {
+  t.Errorf("TenantID: want %q, got %q", "acme", got.TenantID)
+ }
+ if got.UserID != "user-1" {
+  t.Errorf("UserID: want %q, got %q", "user-1", got.UserID)
+ }
+ if got.Role != tenantdb.RoleTenantAdmin {
+  t.Errorf("Role: want %q, got %q", tenantdb.RoleTenantAdmin, got.Role)
+ }
 }
 
 func TestFromContext_Missing(t *testing.T) {
-	_, ok := tenantdb.FromContext(context.Background())
-	if ok {
-		t.Fatal("expected no TenantContext in empty context")
-	}
+ _, ok := tenantdb.FromContext(context.Background())
+ if ok {
+  t.Fatal("expected no TenantContext in empty context")
+ }
 }
 
 func TestGlobalAdminEmptyTenantID(t *testing.T) {
-	tc := &tenantdb.TenantContext{
-		TenantID: "",
-		UserID:   "admin-1",
-		Role:     tenantdb.RoleGlobalAdmin,
-	}
-	ctx := tenantdb.WithTenant(context.Background(), tc)
-	got, ok := tenantdb.FromContext(ctx)
-	if !ok {
-		t.Fatal("expected TenantContext in context")
-	}
-	if got.TenantID != "" {
-		t.Errorf("global_admin should have empty TenantID, got %q", got.TenantID)
-	}
+ tc := &tenantdb.TenantContext{
+  TenantID: "",
+  UserID:   "admin-1",
+  Role:     tenantdb.RoleGlobalAdmin,
+ }
+ ctx := tenantdb.WithTenant(context.Background(), tc)
+ got, ok := tenantdb.FromContext(ctx)
+ if !ok {
+  t.Fatal("expected TenantContext in context")
+ }
+ if got.TenantID != "" {
+  t.Errorf("global_admin should have empty TenantID, got %q", got.TenantID)
+ }
 }
 ```
 
@@ -155,6 +156,7 @@ go test -v -race ./pkg/tenantdb/ -run TestWith -short
 ```
 
 Expected:
+
 ```
 --- PASS: TestWithTenantAndFromContext (0.00s)
 --- PASS: TestFromContext_Missing (0.00s)
@@ -182,6 +184,7 @@ git commit -m "feat(tenantdb): add TenantContext with WithTenant/FromContext"
 ### Task 2: PostgreSQL 隔离 — postgres.go
 
 **Files:**
+
 - Create: `pkg/tenantdb/postgres.go`
 - Create: `pkg/tenantdb/postgres_test.go`
 
@@ -193,63 +196,63 @@ git commit -m "feat(tenantdb): add TenantContext with WithTenant/FromContext"
 package tenantdb
 
 import (
-	"context"
-	"fmt"
+ "context"
+ "fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+ "github.com/jackc/pgx/v5"
+ "github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ExecTenant runs fn inside a transaction whose search_path is set to
 // "tenant_{id}, public". Returns an error if ctx has no TenantContext.
 func ExecTenant(ctx context.Context, pool *pgxpool.Pool, fn func(ctx context.Context, tx pgx.Tx) error) error {
-	tc, ok := FromContext(ctx)
-	if !ok {
-		return fmt.Errorf("tenantdb: missing tenant context")
-	}
-	if tc.TenantID == "" {
-		return fmt.Errorf("tenantdb: tenant_id is empty (global_admin cannot use ExecTenant)")
-	}
+ tc, ok := FromContext(ctx)
+ if !ok {
+  return fmt.Errorf("tenantdb: missing tenant context")
+ }
+ if tc.TenantID == "" {
+  return fmt.Errorf("tenantdb: tenant_id is empty (global_admin cannot use ExecTenant)")
+ }
 
-	// sanitise: TenantID must only contain safe chars (validated at onboard time,
-	// but we guard here too to prevent SQL injection via search_path)
-	for _, r := range tc.TenantID {
-		if !isSafeTenantIDChar(r) {
-			return fmt.Errorf("tenantdb: invalid tenant_id %q", tc.TenantID)
-		}
-	}
+ // sanitise: TenantID must only contain safe chars (validated at onboard time,
+ // but we guard here too to prevent SQL injection via search_path)
+ for _, r := range tc.TenantID {
+  if !isSafeTenantIDChar(r) {
+   return fmt.Errorf("tenantdb: invalid tenant_id %q", tc.TenantID)
+  }
+ }
 
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("tenantdb: begin tx: %w", err)
-	}
-	defer func() {
-		if p := recover(); p != nil {
-			_ = tx.Rollback(ctx)
-			panic(p)
-		}
-	}()
+ tx, err := pool.Begin(ctx)
+ if err != nil {
+  return fmt.Errorf("tenantdb: begin tx: %w", err)
+ }
+ defer func() {
+  if p := recover(); p != nil {
+   _ = tx.Rollback(ctx)
+   panic(p)
+  }
+ }()
 
-	schema := "tenant_" + tc.TenantID
-	if _, err := tx.Exec(ctx, "SET LOCAL search_path = "+schema+", public"); err != nil {
-		_ = tx.Rollback(ctx)
-		return fmt.Errorf("tenantdb: set search_path: %w", err)
-	}
+ schema := "tenant_" + tc.TenantID
+ if _, err := tx.Exec(ctx, "SET LOCAL search_path = "+schema+", public"); err != nil {
+  _ = tx.Rollback(ctx)
+  return fmt.Errorf("tenantdb: set search_path: %w", err)
+ }
 
-	if err := fn(ctx, tx); err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
+ if err := fn(ctx, tx); err != nil {
+  _ = tx.Rollback(ctx)
+  return err
+ }
 
-	return tx.Commit(ctx)
+ return tx.Commit(ctx)
 }
 
 // isSafeTenantIDChar returns true for characters safe in a PostgreSQL identifier.
 // Tenant IDs must be lowercase alphanumeric + underscore + hyphen.
 func isSafeTenantIDChar(r rune) bool {
-	return (r >= 'a' && r <= 'z') ||
-		(r >= '0' && r <= '9') ||
-		r == '_' || r == '-'
+ return (r >= 'a' && r <= 'z') ||
+  (r >= '0' && r <= '9') ||
+  r == '_' || r == '-'
 }
 ```
 
@@ -261,54 +264,54 @@ func isSafeTenantIDChar(r rune) bool {
 package tenantdb_test
 
 import (
-	"context"
-	"os"
-	"testing"
+ "context"
+ "os"
+ "testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+ "github.com/jackc/pgx/v5/pgxpool"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 )
 
 // Integration test — requires a live PostgreSQL instance.
 // Set TEST_POSTGRES_URL=postgres://user:pass@localhost:5432/dbname
 func TestExecTenant_SetsSearchPath(t *testing.T) {
-	url := os.Getenv("TEST_POSTGRES_URL")
-	if url == "" {
-		t.Skip("TEST_POSTGRES_URL not set")
-	}
+ url := os.Getenv("TEST_POSTGRES_URL")
+ if url == "" {
+  t.Skip("TEST_POSTGRES_URL not set")
+ }
 
-	pool, err := pgxpool.New(context.Background(), url)
-	if err != nil {
-		t.Fatalf("pgxpool.New: %v", err)
-	}
-	defer pool.Close()
+ pool, err := pgxpool.New(context.Background(), url)
+ if err != nil {
+  t.Fatalf("pgxpool.New: %v", err)
+ }
+ defer pool.Close()
 
-	tc := &tenantdb.TenantContext{TenantID: "testco", UserID: "u1", Role: tenantdb.RoleTenantAdmin}
-	ctx := tenantdb.WithTenant(context.Background(), tc)
+ tc := &tenantdb.TenantContext{TenantID: "testco", UserID: "u1", Role: tenantdb.RoleTenantAdmin}
+ ctx := tenantdb.WithTenant(context.Background(), tc)
 
-	var searchPath string
-	err = tenantdb.ExecTenant(ctx, pool, func(ctx context.Context, tx interface{ QueryRow(context.Context, string, ...any) interface{ Scan(...any) error } }) error {
-		return tx.QueryRow(ctx, "SHOW search_path").Scan(&searchPath)
-	})
-	if err != nil {
-		t.Fatalf("ExecTenant: %v", err)
-	}
-	if searchPath != "tenant_testco, public" && searchPath != `"tenant_testco", "public"` {
-		t.Errorf("unexpected search_path: %q", searchPath)
-	}
+ var searchPath string
+ err = tenantdb.ExecTenant(ctx, pool, func(ctx context.Context, tx interface{ QueryRow(context.Context, string, ...any) interface{ Scan(...any) error } }) error {
+  return tx.QueryRow(ctx, "SHOW search_path").Scan(&searchPath)
+ })
+ if err != nil {
+  t.Fatalf("ExecTenant: %v", err)
+ }
+ if searchPath != "tenant_testco, public" && searchPath != `"tenant_testco", "public"` {
+  t.Errorf("unexpected search_path: %q", searchPath)
+ }
 }
 
 func TestExecTenant_MissingContext(t *testing.T) {
-	// pool can be nil because the error should be caught before any DB call
-	err := tenantdb.ExecTenant(context.Background(), nil, func(_ context.Context, _ interface{ QueryRow(context.Context, string, ...any) interface{ Scan(...any) error } }) error {
-		return nil
-	})
-	if err == nil {
-		t.Fatal("expected error for missing tenant context")
-	}
-	if err.Error() != "tenantdb: missing tenant context" {
-		t.Errorf("unexpected error: %v", err)
-	}
+ // pool can be nil because the error should be caught before any DB call
+ err := tenantdb.ExecTenant(context.Background(), nil, func(_ context.Context, _ interface{ QueryRow(context.Context, string, ...any) interface{ Scan(...any) error } }) error {
+  return nil
+ })
+ if err == nil {
+  t.Fatal("expected error for missing tenant context")
+ }
+ if err.Error() != "tenantdb: missing tenant context" {
+  t.Errorf("unexpected error: %v", err)
+ }
 }
 ```
 
@@ -320,61 +323,61 @@ The integration test uses `pgx.Tx` directly. Revise to use the proper pgx.Tx typ
 package tenantdb_test
 
 import (
-	"context"
-	"os"
-	"testing"
+ "context"
+ "os"
+ "testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+ "github.com/jackc/pgx/v5"
+ "github.com/jackc/pgx/v5/pgxpool"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 )
 
 func TestExecTenant_SetsSearchPath(t *testing.T) {
-	url := os.Getenv("TEST_POSTGRES_URL")
-	if url == "" {
-		t.Skip("TEST_POSTGRES_URL not set")
-	}
+ url := os.Getenv("TEST_POSTGRES_URL")
+ if url == "" {
+  t.Skip("TEST_POSTGRES_URL not set")
+ }
 
-	pool, err := pgxpool.New(context.Background(), url)
-	if err != nil {
-		t.Fatalf("pgxpool.New: %v", err)
-	}
-	defer pool.Close()
+ pool, err := pgxpool.New(context.Background(), url)
+ if err != nil {
+  t.Fatalf("pgxpool.New: %v", err)
+ }
+ defer pool.Close()
 
-	tc := &tenantdb.TenantContext{TenantID: "testco", UserID: "u1", Role: tenantdb.RoleTenantAdmin}
-	ctx := tenantdb.WithTenant(context.Background(), tc)
+ tc := &tenantdb.TenantContext{TenantID: "testco", UserID: "u1", Role: tenantdb.RoleTenantAdmin}
+ ctx := tenantdb.WithTenant(context.Background(), tc)
 
-	var searchPath string
-	err = tenantdb.ExecTenant(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, "SHOW search_path").Scan(&searchPath)
-	})
-	if err != nil {
-		t.Fatalf("ExecTenant: %v", err)
-	}
-	// PostgreSQL returns search_path like `tenant_testco, public` or quoted form
-	if searchPath == "" {
-		t.Error("search_path is empty")
-	}
+ var searchPath string
+ err = tenantdb.ExecTenant(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+  return tx.QueryRow(ctx, "SHOW search_path").Scan(&searchPath)
+ })
+ if err != nil {
+  t.Fatalf("ExecTenant: %v", err)
+ }
+ // PostgreSQL returns search_path like `tenant_testco, public` or quoted form
+ if searchPath == "" {
+  t.Error("search_path is empty")
+ }
 }
 
 func TestExecTenant_MissingContext(t *testing.T) {
-	err := tenantdb.ExecTenant(context.Background(), nil, func(_ context.Context, _ pgx.Tx) error {
-		return nil
-	})
-	if err == nil {
-		t.Fatal("expected error for missing tenant context")
-	}
+ err := tenantdb.ExecTenant(context.Background(), nil, func(_ context.Context, _ pgx.Tx) error {
+  return nil
+ })
+ if err == nil {
+  t.Fatal("expected error for missing tenant context")
+ }
 }
 
 func TestExecTenant_EmptyTenantID(t *testing.T) {
-	tc := &tenantdb.TenantContext{TenantID: "", UserID: "admin", Role: tenantdb.RoleGlobalAdmin}
-	ctx := tenantdb.WithTenant(context.Background(), tc)
-	err := tenantdb.ExecTenant(ctx, nil, func(_ context.Context, _ pgx.Tx) error {
-		return nil
-	})
-	if err == nil {
-		t.Fatal("expected error for empty tenant_id")
-	}
+ tc := &tenantdb.TenantContext{TenantID: "", UserID: "admin", Role: tenantdb.RoleGlobalAdmin}
+ ctx := tenantdb.WithTenant(context.Background(), tc)
+ err := tenantdb.ExecTenant(ctx, nil, func(_ context.Context, _ pgx.Tx) error {
+  return nil
+ })
+ if err == nil {
+  t.Fatal("expected error for empty tenant_id")
+ }
 }
 ```
 
@@ -394,31 +397,31 @@ Expected: 两个 PASS（这两个 case 不需要 DB，build tag 为 integration 
 package tenantdb_test
 
 import (
-	"context"
-	"testing"
+ "context"
+ "testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+ "github.com/jackc/pgx/v5"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 )
 
 func TestExecTenant_MissingContext_Unit(t *testing.T) {
-	err := tenantdb.ExecTenant(context.Background(), nil, func(_ context.Context, _ pgx.Tx) error {
-		return nil
-	})
-	if err == nil {
-		t.Fatal("expected error for missing tenant context")
-	}
+ err := tenantdb.ExecTenant(context.Background(), nil, func(_ context.Context, _ pgx.Tx) error {
+  return nil
+ })
+ if err == nil {
+  t.Fatal("expected error for missing tenant context")
+ }
 }
 
 func TestExecTenant_EmptyTenantID_Unit(t *testing.T) {
-	tc := &tenantdb.TenantContext{TenantID: "", UserID: "admin", Role: tenantdb.RoleGlobalAdmin}
-	ctx := tenantdb.WithTenant(context.Background(), tc)
-	err := tenantdb.ExecTenant(ctx, nil, func(_ context.Context, _ pgx.Tx) error {
-		return nil
-	})
-	if err == nil {
-		t.Fatal("expected error for empty tenant_id")
-	}
+ tc := &tenantdb.TenantContext{TenantID: "", UserID: "admin", Role: tenantdb.RoleGlobalAdmin}
+ ctx := tenantdb.WithTenant(context.Background(), tc)
+ err := tenantdb.ExecTenant(ctx, nil, func(_ context.Context, _ pgx.Tx) error {
+  return nil
+ })
+ if err == nil {
+  t.Fatal("expected error for empty tenant_id")
+ }
 }
 ```
 
@@ -430,6 +433,7 @@ go test -v -race ./pkg/tenantdb/ -run "TestExecTenant.*Unit" -short
 ```
 
 Expected:
+
 ```
 --- PASS: TestExecTenant_MissingContext_Unit
 --- PASS: TestExecTenant_EmptyTenantID_Unit
@@ -456,6 +460,7 @@ git commit -m "feat(tenantdb): add ExecTenant for PostgreSQL schema isolation"
 ### Task 3: Milvus 隔离 — milvus.go
 
 **Files:**
+
 - Create: `pkg/tenantdb/milvus.go`
 - Create: `pkg/tenantdb/milvus_test.go`
 
@@ -465,8 +470,8 @@ git commit -m "feat(tenantdb): add ExecTenant for PostgreSQL schema isolation"
 package tenantdb
 
 import (
-	"context"
-	"fmt"
+ "context"
+ "fmt"
 )
 
 // TenantCollection returns the Milvus collection name for a given kind,
@@ -474,14 +479,14 @@ import (
 // Example: kind="knowledge" → "tenant_acme_knowledge"
 // Returns an error if ctx has no TenantContext or TenantID is empty.
 func TenantCollection(ctx context.Context, kind string) (string, error) {
-	tc, ok := FromContext(ctx)
-	if !ok {
-		return "", fmt.Errorf("tenantdb: missing tenant context")
-	}
-	if tc.TenantID == "" {
-		return "", fmt.Errorf("tenantdb: tenant_id is empty")
-	}
-	return "tenant_" + tc.TenantID + "_" + kind, nil
+ tc, ok := FromContext(ctx)
+ if !ok {
+  return "", fmt.Errorf("tenantdb: missing tenant context")
+ }
+ if tc.TenantID == "" {
+  return "", fmt.Errorf("tenantdb: tenant_id is empty")
+ }
+ return "tenant_" + tc.TenantID + "_" + kind, nil
 }
 ```
 
@@ -491,40 +496,40 @@ func TenantCollection(ctx context.Context, kind string) (string, error) {
 package tenantdb_test
 
 import (
-	"context"
-	"testing"
+ "context"
+ "testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 )
 
 func TestTenantCollection(t *testing.T) {
-	tc := &tenantdb.TenantContext{TenantID: "acme", UserID: "u1", Role: tenantdb.RoleTenantAdmin}
-	ctx := tenantdb.WithTenant(context.Background(), tc)
+ tc := &tenantdb.TenantContext{TenantID: "acme", UserID: "u1", Role: tenantdb.RoleTenantAdmin}
+ ctx := tenantdb.WithTenant(context.Background(), tc)
 
-	got, err := tenantdb.TenantCollection(ctx, "knowledge")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := "tenant_acme_knowledge"
-	if got != want {
-		t.Errorf("want %q, got %q", want, got)
-	}
+ got, err := tenantdb.TenantCollection(ctx, "knowledge")
+ if err != nil {
+  t.Fatalf("unexpected error: %v", err)
+ }
+ want := "tenant_acme_knowledge"
+ if got != want {
+  t.Errorf("want %q, got %q", want, got)
+ }
 }
 
 func TestTenantCollection_MissingContext(t *testing.T) {
-	_, err := tenantdb.TenantCollection(context.Background(), "knowledge")
-	if err == nil {
-		t.Fatal("expected error for missing tenant context")
-	}
+ _, err := tenantdb.TenantCollection(context.Background(), "knowledge")
+ if err == nil {
+  t.Fatal("expected error for missing tenant context")
+ }
 }
 
 func TestTenantCollection_EmptyTenantID(t *testing.T) {
-	tc := &tenantdb.TenantContext{TenantID: "", UserID: "admin", Role: tenantdb.RoleGlobalAdmin}
-	ctx := tenantdb.WithTenant(context.Background(), tc)
-	_, err := tenantdb.TenantCollection(ctx, "knowledge")
-	if err == nil {
-		t.Fatal("expected error for empty tenant_id")
-	}
+ tc := &tenantdb.TenantContext{TenantID: "", UserID: "admin", Role: tenantdb.RoleGlobalAdmin}
+ ctx := tenantdb.WithTenant(context.Background(), tc)
+ _, err := tenantdb.TenantCollection(ctx, "knowledge")
+ if err == nil {
+  t.Fatal("expected error for empty tenant_id")
+ }
 }
 ```
 
@@ -536,6 +541,7 @@ go test -v -race ./pkg/tenantdb/ -run TestTenantCollection -short
 ```
 
 Expected:
+
 ```
 --- PASS: TestTenantCollection (0.00s)
 --- PASS: TestTenantCollection_MissingContext (0.00s)
@@ -555,6 +561,7 @@ git commit -m "feat(tenantdb): add TenantCollection for Milvus isolation"
 ### Task 4: Neo4j 隔离 — neo4j.go
 
 **Files:**
+
 - Create: `pkg/tenantdb/neo4j.go`
 - Create: `pkg/tenantdb/neo4j_test.go`
 
@@ -564,8 +571,8 @@ git commit -m "feat(tenantdb): add TenantCollection for Milvus isolation"
 package tenantdb
 
 import (
-	"context"
-	"fmt"
+ "context"
+ "fmt"
 )
 
 // TenantLabel returns the Neo4j node label for a given base label,
@@ -573,14 +580,14 @@ import (
 // Example: label="Document" → "T_acme_Document"
 // Returns an error if ctx has no TenantContext or TenantID is empty.
 func TenantLabel(ctx context.Context, label string) (string, error) {
-	tc, ok := FromContext(ctx)
-	if !ok {
-		return "", fmt.Errorf("tenantdb: missing tenant context")
-	}
-	if tc.TenantID == "" {
-		return "", fmt.Errorf("tenantdb: tenant_id is empty")
-	}
-	return "T_" + tc.TenantID + "_" + label, nil
+ tc, ok := FromContext(ctx)
+ if !ok {
+  return "", fmt.Errorf("tenantdb: missing tenant context")
+ }
+ if tc.TenantID == "" {
+  return "", fmt.Errorf("tenantdb: tenant_id is empty")
+ }
+ return "T_" + tc.TenantID + "_" + label, nil
 }
 ```
 
@@ -590,40 +597,40 @@ func TenantLabel(ctx context.Context, label string) (string, error) {
 package tenantdb_test
 
 import (
-	"context"
-	"testing"
+ "context"
+ "testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 )
 
 func TestTenantLabel(t *testing.T) {
-	tc := &tenantdb.TenantContext{TenantID: "acme", UserID: "u1", Role: tenantdb.RoleTenantAdmin}
-	ctx := tenantdb.WithTenant(context.Background(), tc)
+ tc := &tenantdb.TenantContext{TenantID: "acme", UserID: "u1", Role: tenantdb.RoleTenantAdmin}
+ ctx := tenantdb.WithTenant(context.Background(), tc)
 
-	got, err := tenantdb.TenantLabel(ctx, "Document")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := "T_acme_Document"
-	if got != want {
-		t.Errorf("want %q, got %q", want, got)
-	}
+ got, err := tenantdb.TenantLabel(ctx, "Document")
+ if err != nil {
+  t.Fatalf("unexpected error: %v", err)
+ }
+ want := "T_acme_Document"
+ if got != want {
+  t.Errorf("want %q, got %q", want, got)
+ }
 }
 
 func TestTenantLabel_MissingContext(t *testing.T) {
-	_, err := tenantdb.TenantLabel(context.Background(), "Document")
-	if err == nil {
-		t.Fatal("expected error for missing tenant context")
-	}
+ _, err := tenantdb.TenantLabel(context.Background(), "Document")
+ if err == nil {
+  t.Fatal("expected error for missing tenant context")
+ }
 }
 
 func TestTenantLabel_EmptyTenantID(t *testing.T) {
-	tc := &tenantdb.TenantContext{TenantID: "", UserID: "admin", Role: tenantdb.RoleGlobalAdmin}
-	ctx := tenantdb.WithTenant(context.Background(), tc)
-	_, err := tenantdb.TenantLabel(ctx, "Document")
-	if err == nil {
-		t.Fatal("expected error for empty tenant_id")
-	}
+ tc := &tenantdb.TenantContext{TenantID: "", UserID: "admin", Role: tenantdb.RoleGlobalAdmin}
+ ctx := tenantdb.WithTenant(context.Background(), tc)
+ _, err := tenantdb.TenantLabel(ctx, "Document")
+ if err == nil {
+  t.Fatal("expected error for empty tenant_id")
+ }
 }
 ```
 
@@ -635,6 +642,7 @@ go test -v -race ./pkg/tenantdb/ -run TestTenantLabel -short
 ```
 
 Expected:
+
 ```
 --- PASS: TestTenantLabel (0.00s)
 --- PASS: TestTenantLabel_MissingContext (0.00s)
@@ -654,6 +662,7 @@ git commit -m "feat(tenantdb): add TenantLabel for Neo4j isolation"
 ### Task 5: NATS 隔离 — nats.go
 
 **Files:**
+
 - Create: `pkg/tenantdb/nats.go`
 - Create: `pkg/tenantdb/nats_test.go`
 
@@ -663,22 +672,22 @@ git commit -m "feat(tenantdb): add TenantLabel for Neo4j isolation"
 package tenantdb
 
 import (
-	"context"
-	"fmt"
+ "context"
+ "fmt"
 )
 
 // TenantSubject returns the NATS subject scoped to the tenant in ctx.
 // Example: subject="exec.completed" → "tenant.acme.exec.completed"
 // Returns an error if ctx has no TenantContext or TenantID is empty.
 func TenantSubject(ctx context.Context, subject string) (string, error) {
-	tc, ok := FromContext(ctx)
-	if !ok {
-		return "", fmt.Errorf("tenantdb: missing tenant context")
-	}
-	if tc.TenantID == "" {
-		return "", fmt.Errorf("tenantdb: tenant_id is empty")
-	}
-	return "tenant." + tc.TenantID + "." + subject, nil
+ tc, ok := FromContext(ctx)
+ if !ok {
+  return "", fmt.Errorf("tenantdb: missing tenant context")
+ }
+ if tc.TenantID == "" {
+  return "", fmt.Errorf("tenantdb: tenant_id is empty")
+ }
+ return "tenant." + tc.TenantID + "." + subject, nil
 }
 ```
 
@@ -688,40 +697,40 @@ func TenantSubject(ctx context.Context, subject string) (string, error) {
 package tenantdb_test
 
 import (
-	"context"
-	"testing"
+ "context"
+ "testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 )
 
 func TestTenantSubject(t *testing.T) {
-	tc := &tenantdb.TenantContext{TenantID: "acme", UserID: "u1", Role: tenantdb.RoleTenantAdmin}
-	ctx := tenantdb.WithTenant(context.Background(), tc)
+ tc := &tenantdb.TenantContext{TenantID: "acme", UserID: "u1", Role: tenantdb.RoleTenantAdmin}
+ ctx := tenantdb.WithTenant(context.Background(), tc)
 
-	got, err := tenantdb.TenantSubject(ctx, "exec.completed")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := "tenant.acme.exec.completed"
-	if got != want {
-		t.Errorf("want %q, got %q", want, got)
-	}
+ got, err := tenantdb.TenantSubject(ctx, "exec.completed")
+ if err != nil {
+  t.Fatalf("unexpected error: %v", err)
+ }
+ want := "tenant.acme.exec.completed"
+ if got != want {
+  t.Errorf("want %q, got %q", want, got)
+ }
 }
 
 func TestTenantSubject_MissingContext(t *testing.T) {
-	_, err := tenantdb.TenantSubject(context.Background(), "exec.completed")
-	if err == nil {
-		t.Fatal("expected error for missing tenant context")
-	}
+ _, err := tenantdb.TenantSubject(context.Background(), "exec.completed")
+ if err == nil {
+  t.Fatal("expected error for missing tenant context")
+ }
 }
 
 func TestTenantSubject_EmptyTenantID(t *testing.T) {
-	tc := &tenantdb.TenantContext{TenantID: "", UserID: "admin", Role: tenantdb.RoleGlobalAdmin}
-	ctx := tenantdb.WithTenant(context.Background(), tc)
-	_, err := tenantdb.TenantSubject(ctx, "exec.completed")
-	if err == nil {
-		t.Fatal("expected error for empty tenant_id")
-	}
+ tc := &tenantdb.TenantContext{TenantID: "", UserID: "admin", Role: tenantdb.RoleGlobalAdmin}
+ ctx := tenantdb.WithTenant(context.Background(), tc)
+ _, err := tenantdb.TenantSubject(ctx, "exec.completed")
+ if err == nil {
+  t.Fatal("expected error for empty tenant_id")
+ }
 }
 ```
 
@@ -733,6 +742,7 @@ go test -v -race ./pkg/tenantdb/ -run TestTenantSubject -short
 ```
 
 Expected:
+
 ```
 --- PASS: TestTenantSubject (0.00s)
 --- PASS: TestTenantSubject_MissingContext (0.00s)
@@ -752,6 +762,7 @@ git commit -m "feat(tenantdb): add TenantSubject for NATS isolation"
 ### Task 6: Per-tenant Schema DDL — tenant_schema.sql
 
 **Files:**
+
 - Create: `internal/migration/sql/tenant_schema.sql`
 
 - [ ] **Step 1: 创建目录**
@@ -980,6 +991,7 @@ git commit -m "feat(migration): add per-tenant schema DDL for all tenant tables"
 ### Task 7: ProvisionTenantSchema — schema.go
 
 **Files:**
+
 - Create: `pkg/tenantdb/schema.go`
 - Create: `pkg/tenantdb/schema_test.go`
 
@@ -991,12 +1003,12 @@ git commit -m "feat(migration): add per-tenant schema DDL for all tenant tables"
 package tenantdb
 
 import (
-	"context"
-	_ "embed"
-	"fmt"
-	"strings"
+ "context"
+ _ "embed"
+ "fmt"
+ "strings"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+ "github.com/jackc/pgx/v5/pgxpool"
 )
 
 //go:embed ../../internal/migration/sql/tenant_schema.sql
@@ -1007,58 +1019,58 @@ var tenantSchemaDDL string
 //
 // tenantID must match [a-z0-9_-]+ (validated by isSafeTenantIDChar).
 func ProvisionTenantSchema(ctx context.Context, pool *pgxpool.Pool, tenantID string) error {
-	if tenantID == "" {
-		return fmt.Errorf("tenantdb: tenantID must not be empty")
-	}
-	for _, r := range tenantID {
-		if !isSafeTenantIDChar(r) {
-			return fmt.Errorf("tenantdb: invalid tenantID %q", tenantID)
-		}
-	}
+ if tenantID == "" {
+  return fmt.Errorf("tenantdb: tenantID must not be empty")
+ }
+ for _, r := range tenantID {
+  if !isSafeTenantIDChar(r) {
+   return fmt.Errorf("tenantdb: invalid tenantID %q", tenantID)
+  }
+ }
 
-	schemaName := "tenant_" + tenantID
+ schemaName := "tenant_" + tenantID
 
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("tenantdb: acquire conn: %w", err)
-	}
-	defer conn.Release()
+ conn, err := pool.Acquire(ctx)
+ if err != nil {
+  return fmt.Errorf("tenantdb: acquire conn: %w", err)
+ }
+ defer conn.Release()
 
-	// 1. Create schema
-	if _, err := conn.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schemaName); err != nil {
-		return fmt.Errorf("tenantdb: create schema %s: %w", schemaName, err)
-	}
+ // 1. Create schema
+ if _, err := conn.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schemaName); err != nil {
+  return fmt.Errorf("tenantdb: create schema %s: %w", schemaName, err)
+ }
 
-	// 2. Set search_path for this connection
-	if _, err := conn.Exec(ctx, "SET search_path = "+schemaName+", public"); err != nil {
-		return fmt.Errorf("tenantdb: set search_path: %w", err)
-	}
+ // 2. Set search_path for this connection
+ if _, err := conn.Exec(ctx, "SET search_path = "+schemaName+", public"); err != nil {
+  return fmt.Errorf("tenantdb: set search_path: %w", err)
+ }
 
-	// 3. Execute each DDL statement from the embedded SQL file
-	stmts := splitStatements(tenantSchemaDDL)
-	for i, stmt := range stmts {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" || strings.HasPrefix(stmt, "--") {
-			continue
-		}
-		if _, err := conn.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("tenantdb: exec statement %d: %w", i, err)
-		}
-	}
+ // 3. Execute each DDL statement from the embedded SQL file
+ stmts := splitStatements(tenantSchemaDDL)
+ for i, stmt := range stmts {
+  stmt = strings.TrimSpace(stmt)
+  if stmt == "" || strings.HasPrefix(stmt, "--") {
+   continue
+  }
+  if _, err := conn.Exec(ctx, stmt); err != nil {
+   return fmt.Errorf("tenantdb: exec statement %d: %w", i, err)
+  }
+ }
 
-	return nil
+ return nil
 }
 
 // splitStatements splits a SQL file on semicolons, returning non-empty statements.
 func splitStatements(sql string) []string {
-	parts := strings.Split(sql, ";")
-	result := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if s := strings.TrimSpace(p); s != "" {
-			result = append(result, s)
-		}
-	}
-	return result
+ parts := strings.Split(sql, ";")
+ result := make([]string, 0, len(parts))
+ for _, p := range parts {
+  if s := strings.TrimSpace(p); s != "" {
+   result = append(result, s)
+  }
+ }
+ return result
 }
 ```
 
@@ -1070,75 +1082,75 @@ func splitStatements(sql string) []string {
 package tenantdb_test
 
 import (
-	"context"
-	"os"
-	"testing"
+ "context"
+ "os"
+ "testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+ "github.com/jackc/pgx/v5/pgxpool"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 )
 
 func TestProvisionTenantSchema(t *testing.T) {
-	url := os.Getenv("TEST_POSTGRES_URL")
-	if url == "" {
-		t.Skip("TEST_POSTGRES_URL not set")
-	}
+ url := os.Getenv("TEST_POSTGRES_URL")
+ if url == "" {
+  t.Skip("TEST_POSTGRES_URL not set")
+ }
 
-	pool, err := pgxpool.New(context.Background(), url)
-	if err != nil {
-		t.Fatalf("pgxpool.New: %v", err)
-	}
-	defer pool.Close()
+ pool, err := pgxpool.New(context.Background(), url)
+ if err != nil {
+  t.Fatalf("pgxpool.New: %v", err)
+ }
+ defer pool.Close()
 
-	tenantID := "integtest"
-	if err := tenantdb.ProvisionTenantSchema(context.Background(), pool, tenantID); err != nil {
-		t.Fatalf("ProvisionTenantSchema: %v", err)
-	}
+ tenantID := "integtest"
+ if err := tenantdb.ProvisionTenantSchema(context.Background(), pool, tenantID); err != nil {
+  t.Fatalf("ProvisionTenantSchema: %v", err)
+ }
 
-	// Verify schema exists
-	var exists bool
-	err = pool.QueryRow(context.Background(),
-		"SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = $1)",
-		"tenant_integtest",
-	).Scan(&exists)
-	if err != nil {
-		t.Fatalf("query schema existence: %v", err)
-	}
-	if !exists {
-		t.Error("schema tenant_integtest was not created")
-	}
+ // Verify schema exists
+ var exists bool
+ err = pool.QueryRow(context.Background(),
+  "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = $1)",
+  "tenant_integtest",
+ ).Scan(&exists)
+ if err != nil {
+  t.Fatalf("query schema existence: %v", err)
+ }
+ if !exists {
+  t.Error("schema tenant_integtest was not created")
+ }
 
-	// Verify at least one table exists (agents)
-	var tableExists bool
-	err = pool.QueryRow(context.Background(),
-		"SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'agents')",
-		"tenant_integtest",
-	).Scan(&tableExists)
-	if err != nil {
-		t.Fatalf("query table existence: %v", err)
-	}
-	if !tableExists {
-		t.Error("table agents was not created in tenant_integtest schema")
-	}
+ // Verify at least one table exists (agents)
+ var tableExists bool
+ err = pool.QueryRow(context.Background(),
+  "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'agents')",
+  "tenant_integtest",
+ ).Scan(&tableExists)
+ if err != nil {
+  t.Fatalf("query table existence: %v", err)
+ }
+ if !tableExists {
+  t.Error("table agents was not created in tenant_integtest schema")
+ }
 
-	// Calling twice is idempotent (IF NOT EXISTS)
-	if err := tenantdb.ProvisionTenantSchema(context.Background(), pool, tenantID); err != nil {
-		t.Fatalf("second ProvisionTenantSchema: %v", err)
-	}
+ // Calling twice is idempotent (IF NOT EXISTS)
+ if err := tenantdb.ProvisionTenantSchema(context.Background(), pool, tenantID); err != nil {
+  t.Fatalf("second ProvisionTenantSchema: %v", err)
+ }
 }
 
 func TestProvisionTenantSchema_InvalidTenantID(t *testing.T) {
-	err := tenantdb.ProvisionTenantSchema(context.Background(), nil, "bad tenant!")
-	if err == nil {
-		t.Fatal("expected error for invalid tenantID")
-	}
+ err := tenantdb.ProvisionTenantSchema(context.Background(), nil, "bad tenant!")
+ if err == nil {
+  t.Fatal("expected error for invalid tenantID")
+ }
 }
 
 func TestProvisionTenantSchema_EmptyTenantID(t *testing.T) {
-	err := tenantdb.ProvisionTenantSchema(context.Background(), nil, "")
-	if err == nil {
-		t.Fatal("expected error for empty tenantID")
-	}
+ err := tenantdb.ProvisionTenantSchema(context.Background(), nil, "")
+ if err == nil {
+  t.Fatal("expected error for empty tenantID")
+ }
 }
 ```
 
@@ -1148,24 +1160,24 @@ func TestProvisionTenantSchema_EmptyTenantID(t *testing.T) {
 package tenantdb_test
 
 import (
-	"context"
-	"testing"
+ "context"
+ "testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 )
 
 func TestProvisionTenantSchema_EmptyTenantID_Unit(t *testing.T) {
-	err := tenantdb.ProvisionTenantSchema(context.Background(), nil, "")
-	if err == nil {
-		t.Fatal("expected error for empty tenantID")
-	}
+ err := tenantdb.ProvisionTenantSchema(context.Background(), nil, "")
+ if err == nil {
+  t.Fatal("expected error for empty tenantID")
+ }
 }
 
 func TestProvisionTenantSchema_InvalidTenantID_Unit(t *testing.T) {
-	err := tenantdb.ProvisionTenantSchema(context.Background(), nil, "bad tenant!")
-	if err == nil {
-		t.Fatal("expected error for invalid tenantID")
-	}
+ err := tenantdb.ProvisionTenantSchema(context.Background(), nil, "bad tenant!")
+ if err == nil {
+  t.Fatal("expected error for invalid tenantID")
+ }
 }
 ```
 
@@ -1177,6 +1189,7 @@ go test -v -race ./pkg/tenantdb/ -run "TestProvisionTenantSchema.*Unit" -short
 ```
 
 Expected:
+
 ```
 --- PASS: TestProvisionTenantSchema_EmptyTenantID_Unit
 --- PASS: TestProvisionTenantSchema_InvalidTenantID_Unit
@@ -1203,12 +1216,14 @@ git commit -m "feat(tenantdb): add ProvisionTenantSchema with embedded DDL"
 ### Task 8: Tenant Middleware — api/middleware/tenant.go
 
 **Files:**
+
 - Create: `api/middleware/tenant.go`
 - Create: `api/middleware/tenant_test.go`
 
 前置条件：`github.com/golang-jwt/jwt/v5` 已在 Task 1 Step 1 中引入。
 
 JWT Claims 结构约定：
+
 - `sub` — user_id
 - `tenant_id` — 租户 ID（global_admin 时为空字符串或缺失）
 - `role` — "tenant_admin" | "tenant_user" | "global_admin"
@@ -1219,22 +1234,22 @@ JWT Claims 结构约定：
 package middleware
 
 import (
-	"errors"
-	"net/http"
-	"strings"
+ "errors"
+ "net/http"
+ "strings"
 
-	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
-	"go.uber.org/zap"
+ "github.com/gin-gonic/gin"
+ "github.com/golang-jwt/jwt/v5"
+ "go.uber.org/zap"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 )
 
 // TenantClaims extends jwt.RegisteredClaims with tenant-specific fields.
 type TenantClaims struct {
-	jwt.RegisteredClaims
-	TenantID string          `json:"tenant_id"`
-	Role     tenantdb.Role   `json:"role"`
+ jwt.RegisteredClaims
+ TenantID string          `json:"tenant_id"`
+ Role     tenantdb.Role   `json:"role"`
 }
 
 // TenantMiddleware parses the Bearer JWT token from the Authorization header
@@ -1245,58 +1260,58 @@ type TenantClaims struct {
 //
 // jwtSecret is the HMAC-SHA256 signing secret used to verify the token.
 func TenantMiddleware(jwtSecret []byte, logger *zap.Logger) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing Authorization header"})
-			return
-		}
+ return func(c *gin.Context) {
+  authHeader := c.GetHeader("Authorization")
+  if authHeader == "" {
+   c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing Authorization header"})
+   return
+  }
 
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid Authorization format, expected Bearer token"})
-			return
-		}
-		tokenStr := parts[1]
+  parts := strings.SplitN(authHeader, " ", 2)
+  if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+   c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid Authorization format, expected Bearer token"})
+   return
+  }
+  tokenStr := parts[1]
 
-		claims := &TenantClaims{}
-		token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
-			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, errors.New("unexpected signing method")
-			}
-			return jwtSecret, nil
-		})
-		if err != nil || !token.Valid {
-			logger.Warn("invalid JWT token", zap.Error(err))
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
-			return
-		}
+  claims := &TenantClaims{}
+  token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
+   if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+    return nil, errors.New("unexpected signing method")
+   }
+   return jwtSecret, nil
+  })
+  if err != nil || !token.Valid {
+   logger.Warn("invalid JWT token", zap.Error(err))
+   c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
+   return
+  }
 
-		// Validate role
-		switch claims.Role {
-		case tenantdb.RoleTenantAdmin, tenantdb.RoleTenantUser, tenantdb.RoleGlobalAdmin:
-			// valid
-		default:
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "unknown role in token"})
-			return
-		}
+  // Validate role
+  switch claims.Role {
+  case tenantdb.RoleTenantAdmin, tenantdb.RoleTenantUser, tenantdb.RoleGlobalAdmin:
+   // valid
+  default:
+   c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "unknown role in token"})
+   return
+  }
 
-		// Non-admin roles must have a tenant_id
-		if claims.Role != tenantdb.RoleGlobalAdmin && claims.TenantID == "" {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "tenant_id required for non-global_admin role"})
-			return
-		}
+  // Non-admin roles must have a tenant_id
+  if claims.Role != tenantdb.RoleGlobalAdmin && claims.TenantID == "" {
+   c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "tenant_id required for non-global_admin role"})
+   return
+  }
 
-		tc := &tenantdb.TenantContext{
-			TenantID: claims.TenantID,
-			UserID:   claims.Subject,
-			Role:     claims.Role,
-		}
+  tc := &tenantdb.TenantContext{
+   TenantID: claims.TenantID,
+   UserID:   claims.Subject,
+   Role:     claims.Role,
+  }
 
-		ctx := tenantdb.WithTenant(c.Request.Context(), tc)
-		c.Request = c.Request.WithContext(ctx)
-		c.Next()
-	}
+  ctx := tenantdb.WithTenant(c.Request.Context(), tc)
+  c.Request = c.Request.WithContext(ctx)
+  c.Next()
+ }
 }
 ```
 
@@ -1306,128 +1321,128 @@ func TenantMiddleware(jwtSecret []byte, logger *zap.Logger) gin.HandlerFunc {
 package middleware_test
 
 import (
-	"net/http"
-	"net/http/httptest"
-	"testing"
-	"time"
+ "net/http"
+ "net/http/httptest"
+ "testing"
+ "time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
-	"go.uber.org/zap"
+ "github.com/gin-gonic/gin"
+ "github.com/golang-jwt/jwt/v5"
+ "go.uber.org/zap"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/api/middleware"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/api/middleware"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 )
 
 func init() {
-	gin.SetMode(gin.TestMode)
+ gin.SetMode(gin.TestMode)
 }
 
 var testSecret = []byte("test-secret-key-32-bytes-minimum!")
 
 func makeToken(tenantID string, role tenantdb.Role, userID string) string {
-	claims := middleware.TenantClaims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   userID,
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
-		},
-		TenantID: tenantID,
-		Role:     role,
-	}
-	token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(testSecret)
-	return token
+ claims := middleware.TenantClaims{
+  RegisteredClaims: jwt.RegisteredClaims{
+   Subject:   userID,
+   ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+  },
+  TenantID: tenantID,
+  Role:     role,
+ }
+ token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(testSecret)
+ return token
 }
 
 func TestTenantMiddleware_ValidTenantAdmin(t *testing.T) {
-	r := gin.New()
-	r.Use(middleware.TenantMiddleware(testSecret, zap.NewNop()))
-	r.GET("/test", func(c *gin.Context) {
-		tc, ok := tenantdb.FromContext(c.Request.Context())
-		if !ok {
-			c.JSON(500, gin.H{"error": "no tenant context"})
-			return
-		}
-		c.JSON(200, gin.H{"tenant_id": tc.TenantID, "role": string(tc.Role)})
-	})
+ r := gin.New()
+ r.Use(middleware.TenantMiddleware(testSecret, zap.NewNop()))
+ r.GET("/test", func(c *gin.Context) {
+  tc, ok := tenantdb.FromContext(c.Request.Context())
+  if !ok {
+   c.JSON(500, gin.H{"error": "no tenant context"})
+   return
+  }
+  c.JSON(200, gin.H{"tenant_id": tc.TenantID, "role": string(tc.Role)})
+ })
 
-	token := makeToken("acme", tenantdb.RoleTenantAdmin, "user-1")
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+ token := makeToken("acme", tenantdb.RoleTenantAdmin, "user-1")
+ req := httptest.NewRequest(http.MethodGet, "/test", nil)
+ req.Header.Set("Authorization", "Bearer "+token)
+ w := httptest.NewRecorder()
+ r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
+ if w.Code != http.StatusOK {
+  t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+ }
 }
 
 func TestTenantMiddleware_GlobalAdmin_NoTenantID(t *testing.T) {
-	r := gin.New()
-	r.Use(middleware.TenantMiddleware(testSecret, zap.NewNop()))
-	r.GET("/test", func(c *gin.Context) {
-		tc, ok := tenantdb.FromContext(c.Request.Context())
-		if !ok {
-			c.JSON(500, gin.H{"error": "no tenant context"})
-			return
-		}
-		c.JSON(200, gin.H{"tenant_id": tc.TenantID, "role": string(tc.Role)})
-	})
+ r := gin.New()
+ r.Use(middleware.TenantMiddleware(testSecret, zap.NewNop()))
+ r.GET("/test", func(c *gin.Context) {
+  tc, ok := tenantdb.FromContext(c.Request.Context())
+  if !ok {
+   c.JSON(500, gin.H{"error": "no tenant context"})
+   return
+  }
+  c.JSON(200, gin.H{"tenant_id": tc.TenantID, "role": string(tc.Role)})
+ })
 
-	token := makeToken("", tenantdb.RoleGlobalAdmin, "admin-1")
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+ token := makeToken("", tenantdb.RoleGlobalAdmin, "admin-1")
+ req := httptest.NewRequest(http.MethodGet, "/test", nil)
+ req.Header.Set("Authorization", "Bearer "+token)
+ w := httptest.NewRecorder()
+ r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
+ if w.Code != http.StatusOK {
+  t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+ }
 }
 
 func TestTenantMiddleware_MissingHeader(t *testing.T) {
-	r := gin.New()
-	r.Use(middleware.TenantMiddleware(testSecret, zap.NewNop()))
-	r.GET("/test", func(c *gin.Context) { c.Status(200) })
+ r := gin.New()
+ r.Use(middleware.TenantMiddleware(testSecret, zap.NewNop()))
+ r.GET("/test", func(c *gin.Context) { c.Status(200) })
 
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+ req := httptest.NewRequest(http.MethodGet, "/test", nil)
+ w := httptest.NewRecorder()
+ r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
-	}
+ if w.Code != http.StatusUnauthorized {
+  t.Fatalf("expected 401, got %d", w.Code)
+ }
 }
 
 func TestTenantMiddleware_InvalidToken(t *testing.T) {
-	r := gin.New()
-	r.Use(middleware.TenantMiddleware(testSecret, zap.NewNop()))
-	r.GET("/test", func(c *gin.Context) { c.Status(200) })
+ r := gin.New()
+ r.Use(middleware.TenantMiddleware(testSecret, zap.NewNop()))
+ r.GET("/test", func(c *gin.Context) { c.Status(200) })
 
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("Authorization", "Bearer not.a.valid.token")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+ req := httptest.NewRequest(http.MethodGet, "/test", nil)
+ req.Header.Set("Authorization", "Bearer not.a.valid.token")
+ w := httptest.NewRecorder()
+ r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
-	}
+ if w.Code != http.StatusUnauthorized {
+  t.Fatalf("expected 401, got %d", w.Code)
+ }
 }
 
 func TestTenantMiddleware_NonAdminMissingTenantID(t *testing.T) {
-	r := gin.New()
-	r.Use(middleware.TenantMiddleware(testSecret, zap.NewNop()))
-	r.GET("/test", func(c *gin.Context) { c.Status(200) })
+ r := gin.New()
+ r.Use(middleware.TenantMiddleware(testSecret, zap.NewNop()))
+ r.GET("/test", func(c *gin.Context) { c.Status(200) })
 
-	// tenant_user with no tenant_id — should be rejected
-	token := makeToken("", tenantdb.RoleTenantUser, "user-x")
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+ // tenant_user with no tenant_id — should be rejected
+ token := makeToken("", tenantdb.RoleTenantUser, "user-x")
+ req := httptest.NewRequest(http.MethodGet, "/test", nil)
+ req.Header.Set("Authorization", "Bearer "+token)
+ w := httptest.NewRecorder()
+ r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d", w.Code)
-	}
+ if w.Code != http.StatusForbidden {
+  t.Fatalf("expected 403, got %d", w.Code)
+ }
 }
 ```
 
@@ -1439,6 +1454,7 @@ go test -v -race ./api/middleware/ -run TestTenantMiddleware -short
 ```
 
 Expected:
+
 ```
 --- PASS: TestTenantMiddleware_ValidTenantAdmin
 --- PASS: TestTenantMiddleware_GlobalAdmin_NoTenantID

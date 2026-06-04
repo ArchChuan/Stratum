@@ -48,6 +48,7 @@ client.Search(
 `pkg/vector/vector_store.go` 使用 `net.Dialer` 预检端口可达性（2s 超时），防止 SDK 无限阻塞。连接在独立 goroutine 中执行，通过 channel + `ctx.Done()` 实现超时控制。
 
 `router.go` 中连接使用 3s 整体超时：
+
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 defer cancel()
@@ -66,6 +67,7 @@ vectorStore.Connect(ctx)  // 失败仅 Warn，不阻塞启动
 ## Migration Notes
 
 升级 Milvus SDK 版本时：
+
 1. 检查 `Search` API 签名是否变化
 2. 检查 `entity` 包类型是否重命名
 3. 运行 `go build ./...` 验证编译

@@ -18,6 +18,7 @@
 ```
 
 示例：
+
 - `skill.executed` — Skill 执行完成
 - `agent.started` — Agent 开始执行
 - `memory.persisted` — 记忆持久化完成

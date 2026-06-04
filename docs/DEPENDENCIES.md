@@ -29,6 +29,7 @@
 **端口**: 4222
 
 **集成代码** (`internal/hermes/client.go`):
+
 ```go
 client, err := hermes.NewClient("nats://localhost:4222", logger)
 defer client.Close()
@@ -49,6 +50,7 @@ client.Subscribe("skill.executed", func(event *hermes.Event) error {
 ```
 
 **启动检查**:
+
 ```bash
 # 检查连接
 nc -z localhost 4222
@@ -68,6 +70,7 @@ docker logs clawhermes-ai-go-nats-1
 **默认凭证**: neo4j / password
 
 **集成代码** (`internal/knowledge/graphrag.go`):
+
 ```go
 graphrag := knowledge.NewGraphRAG(
     "bolt://localhost:7687",
@@ -88,9 +91,10 @@ graphrag.CreateNode(ctx, "Skill", map[string]interface{}{
 result, err := graphrag.Query(ctx, "MATCH (n) RETURN n LIMIT 10")
 ```
 
-**Web 界面**: http://localhost:7474
+**Web 界面**: <http://localhost:7474>
 
 **启动检查**:
+
 ```bash
 # 检查连接
 nc -z localhost 7687
@@ -108,6 +112,7 @@ docker logs clawhermes-ai-go-neo4j-1
 **端口**: 19530
 
 **集成代码** (`pkg/mcp/vector_store.go`):
+
 ```go
 vectorStore := mcp.NewVectorStore("localhost", "19530", logger)
 err := vectorStore.Connect(ctx)
@@ -125,6 +130,7 @@ results, err := vectorStore.Search(ctx, "embeddings", []float32{0.1, 0.2, 0.3}, 
 ```
 
 **启动检查**:
+
 ```bash
 # 检查连接
 nc -z localhost 19530
@@ -142,6 +148,7 @@ docker logs clawhermes-ai-go-milvus-1
 **端口**: 4317 (gRPC)
 
 **集成代码** (`pkg/observability/logger.go`):
+
 ```go
 logger, err := observability.NewLogger("production")
 defer logger.Sync()
@@ -153,6 +160,7 @@ metrics.RecordAPIRequest("POST", "/skills", 201, 45.67)
 ```
 
 **启动检查**:
+
 ```bash
 # 检查连接
 nc -z localhost 4317
@@ -325,6 +333,7 @@ OLLAMA_ENDPOINT=http://localhost:11434
 ### 2. 缓存
 
 可在应用层实现缓存：
+
 ```go
 type CachedGraphRAG struct {
     *GraphRAG
@@ -335,6 +344,7 @@ type CachedGraphRAG struct {
 ### 3. 批量操作
 
 Milvus 支持批量插入向量：
+
 ```go
 vectorStore.Insert(ctx, "collection", batchVectors)
 ```
@@ -367,6 +377,7 @@ docker-compose logs -f milvus
 ### 指标收集
 
 应用自动记录：
+
 - Skill 执行时间和成功率
 - API 请求延迟和状态码
 - 事件发布数量

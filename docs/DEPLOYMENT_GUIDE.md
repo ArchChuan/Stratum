@@ -37,29 +37,34 @@ ClawHermes-AI-Go项目采用云原生架构，底层依赖服务包括：
 #### 步骤
 
 1. 克隆项目：
+
    ```bash
    git clone https://github.com/clawhermes/clawhermes-ai-go.git
    cd clawhermes-ai-go
    ```
 
 2. 配置环境变量：
+
    ```bash
    cp .env.example .env
    # 根据实际环境编辑 .env 文件
    ```
 
 3. 启动应用：
+
    ```bash
    ./start.sh
    ```
 
 4. 验证服务：
+
    ```bash
    curl http://localhost:8080/health
    # 响应: {"status":"ok"}
    ```
 
 5. 停止服务：
+
    ```bash
    ./stop.sh
    ```
@@ -75,16 +80,19 @@ ClawHermes-AI-Go项目采用云原生架构，底层依赖服务包括：
 #### 步骤
 
 1. 构建 Docker 镜像：
+
    ```bash
    make docker-build
    ```
 
 2. 部署依赖服务：
+
    ```bash
    kubectl apply -f k8s/dependencies.yaml
    ```
 
 3. 等待依赖服务就绪：
+
    ```bash
    kubectl wait --for=condition=ready pod -l app=nats --timeout=120s
    kubectl wait --for=condition=ready pod -l app=neo4j --timeout=120s
@@ -92,23 +100,27 @@ ClawHermes-AI-Go项目采用云原生架构，底层依赖服务包括：
    ```
 
 4. 部署主应用：
+
    ```bash
    kubectl apply -f k8s/deployment.yaml
    ```
 
 5. 验证部署：
+
    ```bash
    kubectl get pods
    kubectl get services
    ```
 
 6. 访问服务：
+
    ```bash
    # 端口转发到本地
    kubectl port-forward svc/clawhermes-ai-go-service 8080:80
    ```
 
 7. 停止部署：
+
    ```bash
    make k8s-delete
    ```
@@ -140,22 +152,26 @@ Helm 是 Kubernetes 的包管理工具，提供更便捷的部署方式。
 #### 步骤
 
 1. 构建 Docker 镜像：
+
    ```bash
    make docker-build
    ```
 
 2. 安装 Helm Chart：
+
    ```bash
    make helm-install
    ```
 
 3. 验证部署：
+
    ```bash
    helm status clawhermes-release
    kubectl get pods
    ```
 
 4. 卸载 Helm Release：
+
    ```bash
    make helm-uninstall
    ```
@@ -182,23 +198,27 @@ Helm 是 Kubernetes 的包管理工具，提供更便捷的部署方式。
 #### 步骤
 
 1. 确保 WSL 环境已准备好：
+
    ```bash
    kubectl cluster-info
    helm version
    ```
 
 2. 运行 WSL 部署脚本：
+
    ```bash
    ./wsl-start.sh
    ```
 
 3. 验证部署：
+
    ```bash
    kubectl get pods
    kubectl get services
    ```
 
 4. 停止部署：
+
    ```bash
    ./wsl-stop.sh
    ```
@@ -263,6 +283,7 @@ DEFAULT_LLM_PROVIDER=openai
 ### Kubernetes 特有问题
 
 1. **Pod 无法启动**
+
    ```bash
    kubectl describe pod <pod-name>
    kubectl logs <pod-name>
@@ -312,6 +333,7 @@ kubectl logs -f deployment/clawhermes-ai-go
 ### 健康检查
 
 应用提供健康检查端点：
+
 ```bash
 curl http://localhost:8080/health
 ```

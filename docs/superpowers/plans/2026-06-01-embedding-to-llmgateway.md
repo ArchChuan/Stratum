@@ -25,6 +25,7 @@
 ### Task 1: 在 llmgateway 中定义 EmbeddingClient 接口
 
 **Files:**
+
 - Modify: `internal/llmgateway/gateway.go`
 
 - [ ] **Step 1: 在 `gateway.go` 末尾追加 embedding 相关类型和接口**
@@ -33,16 +34,16 @@
 
 ```go
 type EmbeddingRequest struct {
-	Input []string `json:"input"`
-	Model string   `json:"model"`
+ Input []string `json:"input"`
+ Model string   `json:"model"`
 }
 
 type EmbeddingResponse struct {
-	Embeddings [][]float32 `json:"embeddings"`
+ Embeddings [][]float32 `json:"embeddings"`
 }
 
 type EmbeddingClient interface {
-	CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error)
+ CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error)
 }
 ```
 
@@ -54,134 +55,134 @@ type EmbeddingClient interface {
 package llmgateway
 
 import (
-	"context"
-	"fmt"
+ "context"
+ "fmt"
 )
 
 type ModelProvider string
 
 const (
-	ProviderOpenAI ModelProvider = "openai"
-	ProviderClaude ModelProvider = "claude"
-	ProviderGemini ModelProvider = "gemini"
-	ProviderOllama ModelProvider = "ollama"
-	ProviderLLaMA  ModelProvider = "llama"
+ ProviderOpenAI ModelProvider = "openai"
+ ProviderClaude ModelProvider = "claude"
+ ProviderGemini ModelProvider = "gemini"
+ ProviderOllama ModelProvider = "ollama"
+ ProviderLLaMA  ModelProvider = "llama"
 )
 
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+ Role    string `json:"role"`
+ Content string `json:"content"`
 }
 
 type CompletionRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Temperature float32   `json:"temperature,omitempty"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	TopP        float32   `json:"top_p,omitempty"`
+ Model       string    `json:"model"`
+ Messages    []Message `json:"messages"`
+ Temperature float32   `json:"temperature,omitempty"`
+ MaxTokens   int       `json:"max_tokens,omitempty"`
+ TopP        float32   `json:"top_p,omitempty"`
 }
 
 type CompletionResponse struct {
-	Content string `json:"content"`
-	Model   string `json:"model"`
-	Usage   struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage"`
+ Content string `json:"content"`
+ Model   string `json:"model"`
+ Usage   struct {
+  PromptTokens     int `json:"prompt_tokens"`
+  CompletionTokens int `json:"completion_tokens"`
+  TotalTokens      int `json:"total_tokens"`
+ } `json:"usage"`
 }
 
 type LLMClient interface {
-	Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error)
-	Health(ctx context.Context) error
+ Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error)
+ Health(ctx context.Context) error
 }
 
 type EmbeddingRequest struct {
-	Input []string `json:"input"`
-	Model string   `json:"model"`
+ Input []string `json:"input"`
+ Model string   `json:"model"`
 }
 
 type EmbeddingResponse struct {
-	Embeddings [][]float32 `json:"embeddings"`
+ Embeddings [][]float32 `json:"embeddings"`
 }
 
 type EmbeddingClient interface {
-	CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error)
+ CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error)
 }
 
 type Gateway struct {
-	clients          map[ModelProvider]LLMClient
-	embeddingClients map[ModelProvider]EmbeddingClient
-	defaultProvider  ModelProvider
+ clients          map[ModelProvider]LLMClient
+ embeddingClients map[ModelProvider]EmbeddingClient
+ defaultProvider  ModelProvider
 }
 
 func NewGateway() *Gateway {
-	return &Gateway{
-		clients:          make(map[ModelProvider]LLMClient),
-		embeddingClients: make(map[ModelProvider]EmbeddingClient),
-	}
+ return &Gateway{
+  clients:          make(map[ModelProvider]LLMClient),
+  embeddingClients: make(map[ModelProvider]EmbeddingClient),
+ }
 }
 
 func (g *Gateway) RegisterClient(provider ModelProvider, client LLMClient) {
-	g.clients[provider] = client
+ g.clients[provider] = client
 }
 
 func (g *Gateway) RegisterEmbeddingClient(provider ModelProvider, client EmbeddingClient) {
-	g.embeddingClients[provider] = client
+ g.embeddingClients[provider] = client
 }
 
 func (g *Gateway) SetDefault(provider ModelProvider) {
-	g.defaultProvider = provider
+ g.defaultProvider = provider
 }
 
 func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error) {
-	provider := g.defaultProvider
-	if req.Model != "" {
-		provider = g.parseProvider(req.Model)
-	}
+ provider := g.defaultProvider
+ if req.Model != "" {
+  provider = g.parseProvider(req.Model)
+ }
 
-	client, ok := g.clients[provider]
-	if !ok {
-		return nil, fmt.Errorf("provider not found: %s", provider)
-	}
+ client, ok := g.clients[provider]
+ if !ok {
+  return nil, fmt.Errorf("provider not found: %s", provider)
+ }
 
-	return client.Complete(ctx, req)
+ return client.Complete(ctx, req)
 }
 
 func (g *Gateway) CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
-	client, ok := g.embeddingClients[g.defaultProvider]
-	if !ok {
-		// 回退到 OpenAI
-		client, ok = g.embeddingClients[ProviderOpenAI]
-		if !ok {
-			return nil, fmt.Errorf("no embedding client registered")
-		}
-	}
-	return client.CreateEmbeddings(ctx, req)
+ client, ok := g.embeddingClients[g.defaultProvider]
+ if !ok {
+  // 回退到 OpenAI
+  client, ok = g.embeddingClients[ProviderOpenAI]
+  if !ok {
+   return nil, fmt.Errorf("no embedding client registered")
+  }
+ }
+ return client.CreateEmbeddings(ctx, req)
 }
 
 func (g *Gateway) Health(ctx context.Context) error {
-	for provider, client := range g.clients {
-		if err := client.Health(ctx); err != nil {
-			return fmt.Errorf("provider %s health check failed: %w", provider, err)
-		}
-	}
-	return nil
+ for provider, client := range g.clients {
+  if err := client.Health(ctx); err != nil {
+   return fmt.Errorf("provider %s health check failed: %w", provider, err)
+  }
+ }
+ return nil
 }
 
 func (g *Gateway) parseProvider(model string) ModelProvider {
-	switch model {
-	case "gpt-4", "gpt-3.5-turbo":
-		return ProviderOpenAI
-	case "claude-3-opus", "claude-3-sonnet":
-		return ProviderClaude
-	case "gemini-pro":
-		return ProviderGemini
-	case "ollama":
-		return ProviderOllama
-	default:
-		return g.defaultProvider
-	}
+ switch model {
+ case "gpt-4", "gpt-3.5-turbo":
+  return ProviderOpenAI
+ case "claude-3-opus", "claude-3-sonnet":
+  return ProviderClaude
+ case "gemini-pro":
+  return ProviderGemini
+ case "ollama":
+  return ProviderOllama
+ default:
+  return g.defaultProvider
+ }
 }
 ```
 
@@ -205,6 +206,7 @@ git commit -m "feat(llmgateway): add EmbeddingClient interface and Gateway embed
 ### Task 2: OpenAIClient 实现 EmbeddingClient 接口
 
 **Files:**
+
 - Modify: `internal/llmgateway/openai.go`
 
 - [ ] **Step 1: 在 `openai.go` 中为 `OpenAIClient` 添加 `CreateEmbeddings` 方法**
@@ -213,68 +215,68 @@ git commit -m "feat(llmgateway): add EmbeddingClient interface and Gateway embed
 
 ```go
 func (c *OpenAIClient) CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
-	model := req.Model
-	if model == "" {
-		model = "text-embedding-3-small"
-	}
+ model := req.Model
+ if model == "" {
+  model = "text-embedding-3-small"
+ }
 
-	openaiReq := map[string]interface{}{
-		"input": req.Input,
-		"model": model,
-	}
+ openaiReq := map[string]interface{}{
+  "input": req.Input,
+  "model": model,
+ }
 
-	body, err := json.Marshal(openaiReq)
-	if err != nil {
-		c.logger.Error("failed to marshal embedding request", zap.Error(err))
-		return nil, err
-	}
+ body, err := json.Marshal(openaiReq)
+ if err != nil {
+  c.logger.Error("failed to marshal embedding request", zap.Error(err))
+  return nil, err
+ }
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint+"/embeddings", bytes.NewReader(body))
-	if err != nil {
-		c.logger.Error("failed to create embedding request", zap.Error(err))
-		return nil, err
-	}
+ httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint+"/embeddings", bytes.NewReader(body))
+ if err != nil {
+  c.logger.Error("failed to create embedding request", zap.Error(err))
+  return nil, err
+ }
 
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
+ httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+ httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		c.logger.Error("failed to call OpenAI embeddings API", zap.Error(err))
-		return nil, err
-	}
-	defer resp.Body.Close()
+ resp, err := c.client.Do(httpReq)
+ if err != nil {
+  c.logger.Error("failed to call OpenAI embeddings API", zap.Error(err))
+  return nil, err
+ }
+ defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		c.logger.Error("OpenAI embeddings API error",
-			zap.Int("status", resp.StatusCode),
-			zap.String("body", string(respBody)))
-		return nil, fmt.Errorf("OpenAI embeddings API error: %d", resp.StatusCode)
-	}
+ if resp.StatusCode != http.StatusOK {
+  respBody, _ := io.ReadAll(resp.Body)
+  c.logger.Error("OpenAI embeddings API error",
+   zap.Int("status", resp.StatusCode),
+   zap.String("body", string(respBody)))
+  return nil, fmt.Errorf("OpenAI embeddings API error: %d", resp.StatusCode)
+ }
 
-	var openaiResp struct {
-		Data []struct {
-			Embedding []float32 `json:"embedding"`
-		} `json:"data"`
-	}
+ var openaiResp struct {
+  Data []struct {
+   Embedding []float32 `json:"embedding"`
+  } `json:"data"`
+ }
 
-	if err := json.NewDecoder(resp.Body).Decode(&openaiResp); err != nil {
-		c.logger.Error("failed to decode embedding response", zap.Error(err))
-		return nil, err
-	}
+ if err := json.NewDecoder(resp.Body).Decode(&openaiResp); err != nil {
+  c.logger.Error("failed to decode embedding response", zap.Error(err))
+  return nil, err
+ }
 
-	result := &EmbeddingResponse{
-		Embeddings: make([][]float32, len(openaiResp.Data)),
-	}
-	for i, d := range openaiResp.Data {
-		result.Embeddings[i] = d.Embedding
-	}
+ result := &EmbeddingResponse{
+  Embeddings: make([][]float32, len(openaiResp.Data)),
+ }
+ for i, d := range openaiResp.Data {
+  result.Embeddings[i] = d.Embedding
+ }
 
-	c.logger.Info("OpenAI embeddings success",
-		zap.String("model", model),
-		zap.Int("count", len(result.Embeddings)))
-	return result, nil
+ c.logger.Info("OpenAI embeddings success",
+  zap.String("model", model),
+  zap.Int("count", len(result.Embeddings)))
+ return result, nil
 }
 ```
 
@@ -298,6 +300,7 @@ git commit -m "feat(llmgateway): OpenAIClient implements EmbeddingClient interfa
 ### Task 3: InitializeGateway 注册 embedding 客户端
 
 **Files:**
+
 - Modify: `internal/llmgateway/config.go`
 
 - [ ] **Step 1: 在 `InitializeGateway` 中注册 OpenAI embedding 客户端**
@@ -333,6 +336,7 @@ git commit -m "feat(llmgateway): register OpenAI as embedding client in Initiali
 ### Task 4: 重构 EmbeddingService 使用 llmgateway.EmbeddingClient
 
 **Files:**
+
 - Modify: `internal/embedding/embedding.go`
 
 - [ ] **Step 1: 替换 embedding.go 全部内容**
@@ -341,75 +345,75 @@ git commit -m "feat(llmgateway): register OpenAI as embedding client in Initiali
 package embedding
 
 import (
-	"context"
-	"fmt"
+ "context"
+ "fmt"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
-	"go.uber.org/zap"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
+ "go.uber.org/zap"
 )
 
 type EmbeddingService struct {
-	client llmgateway.EmbeddingClient
-	model  string
-	logger *zap.Logger
+ client llmgateway.EmbeddingClient
+ model  string
+ logger *zap.Logger
 }
 
 func NewEmbeddingService(client llmgateway.EmbeddingClient, logger *zap.Logger) *EmbeddingService {
-	return &EmbeddingService{
-		client: client,
-		model:  "text-embedding-3-small",
-		logger: logger,
-	}
+ return &EmbeddingService{
+  client: client,
+  model:  "text-embedding-3-small",
+  logger: logger,
+ }
 }
 
 func (e *EmbeddingService) EmbedVector(ctx context.Context, text string) ([]float32, error) {
-	resp, err := e.client.CreateEmbeddings(ctx, &llmgateway.EmbeddingRequest{
-		Input: []string{text},
-		Model: e.model,
-	})
-	if err != nil {
-		e.logger.Error("failed to create embedding", zap.Error(err))
-		return nil, fmt.Errorf("failed to create embedding: %w", err)
-	}
+ resp, err := e.client.CreateEmbeddings(ctx, &llmgateway.EmbeddingRequest{
+  Input: []string{text},
+  Model: e.model,
+ })
+ if err != nil {
+  e.logger.Error("failed to create embedding", zap.Error(err))
+  return nil, fmt.Errorf("failed to create embedding: %w", err)
+ }
 
-	if len(resp.Embeddings) == 0 {
-		return nil, fmt.Errorf("no embedding returned")
-	}
+ if len(resp.Embeddings) == 0 {
+  return nil, fmt.Errorf("no embedding returned")
+ }
 
-	return resp.Embeddings[0], nil
+ return resp.Embeddings[0], nil
 }
 
 func (e *EmbeddingService) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	const batchSize = 100
-	var allVectors [][]float32
+ const batchSize = 100
+ var allVectors [][]float32
 
-	for i := 0; i < len(texts); i += batchSize {
-		end := i + batchSize
-		if end > len(texts) {
-			end = len(texts)
-		}
+ for i := 0; i < len(texts); i += batchSize {
+  end := i + batchSize
+  if end > len(texts) {
+   end = len(texts)
+  }
 
-		batch := texts[i:end]
-		resp, err := e.client.CreateEmbeddings(ctx, &llmgateway.EmbeddingRequest{
-			Input: batch,
-			Model: e.model,
-		})
-		if err != nil {
-			e.logger.Error("failed to create batch embeddings",
-				zap.Int("batch_start", i),
-				zap.Int("batch_end", end),
-				zap.Error(err))
-			return nil, fmt.Errorf("failed to create batch embeddings: %w", err)
-		}
+  batch := texts[i:end]
+  resp, err := e.client.CreateEmbeddings(ctx, &llmgateway.EmbeddingRequest{
+   Input: batch,
+   Model: e.model,
+  })
+  if err != nil {
+   e.logger.Error("failed to create batch embeddings",
+    zap.Int("batch_start", i),
+    zap.Int("batch_end", end),
+    zap.Error(err))
+   return nil, fmt.Errorf("failed to create batch embeddings: %w", err)
+  }
 
-		allVectors = append(allVectors, resp.Embeddings...)
-	}
+  allVectors = append(allVectors, resp.Embeddings...)
+ }
 
-	return allVectors, nil
+ return allVectors, nil
 }
 
 func (e *EmbeddingService) GetVectorDimension() int {
-	return 1536
+ return 1536
 }
 ```
 
@@ -433,6 +437,7 @@ git commit -m "refactor(embedding): replace openai.Client with llmgateway.Embedd
 ### Task 5: 更新 embedding 测试
 
 **Files:**
+
 - Modify: `internal/embedding/embedding_test.go`
 
 - [ ] **Step 1: 替换 embedding_test.go 全部内容，使用 mock EmbeddingClient**
@@ -441,101 +446,101 @@ git commit -m "refactor(embedding): replace openai.Client with llmgateway.Embedd
 package embedding
 
 import (
-	"context"
-	"fmt"
-	"testing"
+ "context"
+ "fmt"
+ "testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
-	"go.uber.org/zap"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
+ "go.uber.org/zap"
 )
 
 type mockEmbeddingClient struct {
-	embeddings [][]float32
-	err        error
+ embeddings [][]float32
+ err        error
 }
 
 func (m *mockEmbeddingClient) CreateEmbeddings(_ context.Context, req *llmgateway.EmbeddingRequest) (*llmgateway.EmbeddingResponse, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	result := make([][]float32, len(req.Input))
-	for i := range req.Input {
-		if i < len(m.embeddings) {
-			result[i] = m.embeddings[i]
-		} else {
-			result[i] = []float32{0.1, 0.2, 0.3}
-		}
-	}
-	return &llmgateway.EmbeddingResponse{Embeddings: result}, nil
+ if m.err != nil {
+  return nil, m.err
+ }
+ result := make([][]float32, len(req.Input))
+ for i := range req.Input {
+  if i < len(m.embeddings) {
+   result[i] = m.embeddings[i]
+  } else {
+   result[i] = []float32{0.1, 0.2, 0.3}
+  }
+ }
+ return &llmgateway.EmbeddingResponse{Embeddings: result}, nil
 }
 
 func TestNewEmbeddingService(t *testing.T) {
-	logger := zap.NewNop()
-	mock := &mockEmbeddingClient{}
-	service := NewEmbeddingService(mock, logger)
+ logger := zap.NewNop()
+ mock := &mockEmbeddingClient{}
+ service := NewEmbeddingService(mock, logger)
 
-	if service == nil {
-		t.Error("expected service to be non-nil")
-	}
-	if service.client == nil {
-		t.Error("expected client to be non-nil")
-	}
-	if service.logger == nil {
-		t.Error("expected logger to be non-nil")
-	}
+ if service == nil {
+  t.Error("expected service to be non-nil")
+ }
+ if service.client == nil {
+  t.Error("expected client to be non-nil")
+ }
+ if service.logger == nil {
+  t.Error("expected logger to be non-nil")
+ }
 }
 
 func TestEmbedVector(t *testing.T) {
-	logger := zap.NewNop()
-	want := []float32{0.1, 0.2, 0.3}
-	mock := &mockEmbeddingClient{embeddings: [][]float32{want}}
-	service := NewEmbeddingService(mock, logger)
+ logger := zap.NewNop()
+ want := []float32{0.1, 0.2, 0.3}
+ mock := &mockEmbeddingClient{embeddings: [][]float32{want}}
+ service := NewEmbeddingService(mock, logger)
 
-	got, err := service.EmbedVector(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(got) != len(want) {
-		t.Fatalf("expected %d dims, got %d", len(want), len(got))
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("dim %d: want %f, got %f", i, want[i], got[i])
-		}
-	}
+ got, err := service.EmbedVector(context.Background(), "hello")
+ if err != nil {
+  t.Fatalf("unexpected error: %v", err)
+ }
+ if len(got) != len(want) {
+  t.Fatalf("expected %d dims, got %d", len(want), len(got))
+ }
+ for i := range want {
+  if got[i] != want[i] {
+   t.Errorf("dim %d: want %f, got %f", i, want[i], got[i])
+  }
+ }
 }
 
 func TestEmbedVectorError(t *testing.T) {
-	logger := zap.NewNop()
-	mock := &mockEmbeddingClient{err: fmt.Errorf("api error")}
-	service := NewEmbeddingService(mock, logger)
+ logger := zap.NewNop()
+ mock := &mockEmbeddingClient{err: fmt.Errorf("api error")}
+ service := NewEmbeddingService(mock, logger)
 
-	_, err := service.EmbedVector(context.Background(), "hello")
-	if err == nil {
-		t.Error("expected error, got nil")
-	}
+ _, err := service.EmbedVector(context.Background(), "hello")
+ if err == nil {
+  t.Error("expected error, got nil")
+ }
 }
 
 func TestEmbedBatch(t *testing.T) {
-	logger := zap.NewNop()
-	mock := &mockEmbeddingClient{}
-	service := NewEmbeddingService(mock, logger)
+ logger := zap.NewNop()
+ mock := &mockEmbeddingClient{}
+ service := NewEmbeddingService(mock, logger)
 
-	texts := []string{"a", "b", "c"}
-	got, err := service.EmbedBatch(context.Background(), texts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(got) != len(texts) {
-		t.Fatalf("expected %d vectors, got %d", len(texts), len(got))
-	}
+ texts := []string{"a", "b", "c"}
+ got, err := service.EmbedBatch(context.Background(), texts)
+ if err != nil {
+  t.Fatalf("unexpected error: %v", err)
+ }
+ if len(got) != len(texts) {
+  t.Fatalf("expected %d vectors, got %d", len(texts), len(got))
+ }
 }
 
 func TestGetVectorDimension(t *testing.T) {
-	service := NewEmbeddingService(&mockEmbeddingClient{}, zap.NewNop())
-	if service.GetVectorDimension() != 1536 {
-		t.Errorf("expected 1536, got %d", service.GetVectorDimension())
-	}
+ service := NewEmbeddingService(&mockEmbeddingClient{}, zap.NewNop())
+ if service.GetVectorDimension() != 1536 {
+  t.Errorf("expected 1536, got %d", service.GetVectorDimension())
+ }
 }
 ```
 

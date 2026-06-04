@@ -3,6 +3,7 @@
 ## 项目现状
 
 ✅ **已完成**：
+
 - 所有底层依赖已集成（NATS、Neo4j、Milvus、OpenTelemetry）
 - API 层完整（Skill 创建、查询、执行）
 - Skill 执行引擎完整（支持 Code、LLM、Builtin 三种类型）
@@ -23,6 +24,7 @@ cd /home/yang/go-projects/ClawHermes-AI-Go
 ```
 
 这会自动：
+
 1. 检查 Docker、Docker Compose、Go 环境
 2. 启动 NATS、Neo4j、Milvus、OpenTelemetry 容器
 3. 构建应用
@@ -227,6 +229,7 @@ kill -9 <PID>
 ## 下一步
 
 1. **配置 LLM API Key**
+
    ```bash
    export OPENAI_API_KEY=sk-your-key
    # 或

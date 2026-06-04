@@ -29,6 +29,7 @@
 ### Task 1: docker-compose 添加 postgres 和 redis
 
 **Files:**
+
 - Modify: `docker-compose.yml`
 
 - [ ] **Step 1: 在 docker-compose.yml 的 services 块末尾添加 postgres 和 redis**
@@ -95,6 +96,7 @@ git commit -m "chore: add postgres and redis to docker-compose"
 ### Task 2: 添加 Go 依赖
 
 **Files:**
+
 - Modify: `go.mod`, `go.sum`
 
 - [ ] **Step 1: 安装依赖**
@@ -128,6 +130,7 @@ git commit -m "chore: add pgx, go-redis, golang-migrate dependencies"
 ### Task 3: 封装 PostgreSQL 连接池
 
 **Files:**
+
 - Create: `pkg/postgres/postgres.go`
 - Create: `pkg/postgres/postgres_test.go`
 
@@ -141,30 +144,30 @@ git commit -m "chore: add pgx, go-redis, golang-migrate dependencies"
 package postgres_test
 
 import (
-	"context"
-	"os"
-	"testing"
+ "context"
+ "os"
+ "testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/postgres"
-	"go.uber.org/zap"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/postgres"
+ "go.uber.org/zap"
 )
 
 func TestNew_Connect(t *testing.T) {
-	url := os.Getenv("POSTGRES_URL")
-	if url == "" {
-		url = "postgres://clawhermes:clawhermes@localhost:5432/clawhermes"
-	}
+ url := os.Getenv("POSTGRES_URL")
+ if url == "" {
+  url = "postgres://clawhermes:clawhermes@localhost:5432/clawhermes"
+ }
 
-	logger := zap.NewNop()
-	pool, err := postgres.New(context.Background(), url, logger)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	defer pool.Close()
+ logger := zap.NewNop()
+ pool, err := postgres.New(context.Background(), url, logger)
+ if err != nil {
+  t.Fatalf("New() error = %v", err)
+ }
+ defer pool.Close()
 
-	if err := pool.DB().Ping(context.Background()); err != nil {
-		t.Fatalf("Ping() error = %v", err)
-	}
+ if err := pool.DB().Ping(context.Background()); err != nil {
+  t.Fatalf("Ping() error = %v", err)
+ }
 }
 ```
 
@@ -184,60 +187,60 @@ Expected: `FAIL` — package postgres not found
 package postgres
 
 import (
-	"context"
-	"fmt"
+ "context"
+ "fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"go.uber.org/zap"
+ "github.com/jackc/pgx/v5/pgxpool"
+ "go.uber.org/zap"
 )
 
 type Pool struct {
-	pool   *pgxpool.Pool
-	logger *zap.Logger
+ pool   *pgxpool.Pool
+ logger *zap.Logger
 }
 
 func New(ctx context.Context, url string, logger *zap.Logger) (*Pool, error) {
-	cfg, err := pgxpool.ParseConfig(url)
-	if err != nil {
-		return nil, fmt.Errorf("postgres: parse config: %w", err)
-	}
-	cfg.MaxConns = 20
-	cfg.MinConns = 2
+ cfg, err := pgxpool.ParseConfig(url)
+ if err != nil {
+  return nil, fmt.Errorf("postgres: parse config: %w", err)
+ }
+ cfg.MaxConns = 20
+ cfg.MinConns = 2
 
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("postgres: connect: %w", err)
-	}
+ pool, err := pgxpool.NewWithConfig(ctx, cfg)
+ if err != nil {
+  return nil, fmt.Errorf("postgres: connect: %w", err)
+ }
 
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("postgres: ping: %w", err)
-	}
+ if err := pool.Ping(ctx); err != nil {
+  pool.Close()
+  return nil, fmt.Errorf("postgres: ping: %w", err)
+ }
 
-	logger.Info("postgres connected", zap.String("url", maskPassword(url)))
-	return &Pool{pool: pool, logger: logger}, nil
+ logger.Info("postgres connected", zap.String("url", maskPassword(url)))
+ return &Pool{pool: pool, logger: logger}, nil
 }
 
 func (p *Pool) DB() *pgxpool.Pool { return p.pool }
 
 func (p *Pool) Close() {
-	p.pool.Close()
-	p.logger.Info("postgres connection closed")
+ p.pool.Close()
+ p.logger.Info("postgres connection closed")
 }
 
 func maskPassword(url string) string {
-	// 仅用于日志，隐藏密码部分
-	return "postgres://***@" + extractHost(url)
+ // 仅用于日志，隐藏密码部分
+ return "postgres://***@" + extractHost(url)
 }
 
 func extractHost(url string) string {
-	// 简单提取 @host 部分用于日志
-	for i := len(url) - 1; i >= 0; i-- {
-		if url[i] == '@' {
-			return url[i+1:]
-		}
-	}
-	return url
+ // 简单提取 @host 部分用于日志
+ for i := len(url) - 1; i >= 0; i-- {
+  if url[i] == '@' {
+   return url[i+1:]
+  }
+ }
+ return url
 }
 ```
 
@@ -261,6 +264,7 @@ git commit -m "feat(postgres): add connection pool package"
 ### Task 4: 封装 Redis 客户端
 
 **Files:**
+
 - Create: `pkg/redis/redis.go`
 - Create: `pkg/redis/redis_test.go`
 
@@ -274,30 +278,30 @@ git commit -m "feat(postgres): add connection pool package"
 package redis_test
 
 import (
-	"context"
-	"os"
-	"testing"
+ "context"
+ "os"
+ "testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/redis"
-	"go.uber.org/zap"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/redis"
+ "go.uber.org/zap"
 )
 
 func TestNew_Ping(t *testing.T) {
-	url := os.Getenv("REDIS_URL")
-	if url == "" {
-		url = "redis://localhost:6379"
-	}
+ url := os.Getenv("REDIS_URL")
+ if url == "" {
+  url = "redis://localhost:6379"
+ }
 
-	logger := zap.NewNop()
-	client, err := redis.New(context.Background(), url, logger)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	defer client.Close()
+ logger := zap.NewNop()
+ client, err := redis.New(context.Background(), url, logger)
+ if err != nil {
+  t.Fatalf("New() error = %v", err)
+ }
+ defer client.Close()
 
-	if err := client.Client().Ping(context.Background()).Err(); err != nil {
-		t.Fatalf("Ping() error = %v", err)
-	}
+ if err := client.Client().Ping(context.Background()).Err(); err != nil {
+  t.Fatalf("Ping() error = %v", err)
+ }
 }
 ```
 
@@ -317,39 +321,39 @@ Expected: `FAIL` — package redis not found
 package redis
 
 import (
-	"context"
-	"fmt"
+ "context"
+ "fmt"
 
-	goredis "github.com/redis/go-redis/v9"
-	"go.uber.org/zap"
+ goredis "github.com/redis/go-redis/v9"
+ "go.uber.org/zap"
 )
 
 type Client struct {
-	client *goredis.Client
-	logger *zap.Logger
+ client *goredis.Client
+ logger *zap.Logger
 }
 
 func New(ctx context.Context, url string, logger *zap.Logger) (*Client, error) {
-	opts, err := goredis.ParseURL(url)
-	if err != nil {
-		return nil, fmt.Errorf("redis: parse url: %w", err)
-	}
+ opts, err := goredis.ParseURL(url)
+ if err != nil {
+  return nil, fmt.Errorf("redis: parse url: %w", err)
+ }
 
-	client := goredis.NewClient(opts)
-	if err := client.Ping(ctx).Err(); err != nil {
-		client.Close()
-		return nil, fmt.Errorf("redis: ping: %w", err)
-	}
+ client := goredis.NewClient(opts)
+ if err := client.Ping(ctx).Err(); err != nil {
+  client.Close()
+  return nil, fmt.Errorf("redis: ping: %w", err)
+ }
 
-	logger.Info("redis connected", zap.String("addr", opts.Addr))
-	return &Client{client: client, logger: logger}, nil
+ logger.Info("redis connected", zap.String("addr", opts.Addr))
+ return &Client{client: client, logger: logger}, nil
 }
 
 func (c *Client) Client() *goredis.Client { return c.client }
 
 func (c *Client) Close() error {
-	c.logger.Info("redis connection closed")
-	return c.client.Close()
+ c.logger.Info("redis connection closed")
+ return c.client.Close()
 }
 ```
 
@@ -373,6 +377,7 @@ git commit -m "feat(redis): add client package"
 ### Task 5: Public Schema Migration
 
 **Files:**
+
 - Create: `internal/migration/migration.go`
 - Create: `internal/migration/sql/001_public_schema.up.sql`
 - Create: `internal/migration/sql/001_public_schema.down.sql`
@@ -566,27 +571,27 @@ DROP EXTENSION IF EXISTS "uuid-ossp";
 package migration
 
 import (
-	"fmt"
+ "fmt"
 
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"go.uber.org/zap"
+ "github.com/golang-migrate/migrate/v4"
+ _ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
+ _ "github.com/golang-migrate/migrate/v4/source/file"
+ "go.uber.org/zap"
 )
 
 func RunPublicSchema(postgresURL string, logger *zap.Logger) error {
-	m, err := migrate.New("file://internal/migration/sql", postgresURL)
-	if err != nil {
-		return fmt.Errorf("migration: init: %w", err)
-	}
-	defer m.Close()
+ m, err := migrate.New("file://internal/migration/sql", postgresURL)
+ if err != nil {
+  return fmt.Errorf("migration: init: %w", err)
+ }
+ defer m.Close()
 
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("migration: up: %w", err)
-	}
+ if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+  return fmt.Errorf("migration: up: %w", err)
+ }
 
-	logger.Info("public schema migration complete")
-	return nil
+ logger.Info("public schema migration complete")
+ return nil
 }
 ```
 
@@ -600,23 +605,23 @@ func RunPublicSchema(postgresURL string, logger *zap.Logger) error {
 package migration_test
 
 import (
-	"os"
-	"testing"
+ "os"
+ "testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/migration"
-	"go.uber.org/zap"
+ "github.com/byteBuilderX/ClawHermes-AI-Go/internal/migration"
+ "go.uber.org/zap"
 )
 
 func TestRunPublicSchema(t *testing.T) {
-	url := os.Getenv("POSTGRES_URL")
-	if url == "" {
-		url = "pgx5://clawhermes:clawhermes@localhost:5432/clawhermes"
-	}
+ url := os.Getenv("POSTGRES_URL")
+ if url == "" {
+  url = "pgx5://clawhermes:clawhermes@localhost:5432/clawhermes"
+ }
 
-	logger := zap.NewNop()
-	if err := migration.RunPublicSchema(url, logger); err != nil {
-		t.Fatalf("RunPublicSchema() error = %v", err)
-	}
+ logger := zap.NewNop()
+ if err := migration.RunPublicSchema(url, logger); err != nil {
+  t.Fatalf("RunPublicSchema() error = %v", err)
+ }
 }
 ```
 
@@ -640,6 +645,7 @@ git commit -m "feat(migration): add public schema DDL and migration runner"
 ### Task 6: 更新 Config，接入 main.go
 
 **Files:**
+
 - Modify: `internal/config/config.go`
 - Modify: `cmd/server/main.go`
 

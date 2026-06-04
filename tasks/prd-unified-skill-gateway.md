@@ -3,6 +3,7 @@
 ## 1. 介绍
 
 当前项目中 skill 包存在以下问题：
+
 - `internal/skill` 定义了基础接口，但原子执行能力薄弱（无可观测性、无限流、无统一错误体系）
 - `internal/mcp/skill_adapter.go` 和 `internal/orchestrator/registry.go` 各自独立，没有统一的编排入口
 - 流程化 skill 调用（多 skill 组合、条件分支、状态传递）完全缺失
@@ -27,9 +28,11 @@
 ## 3. 用户故事
 
 ### US-001: 统一 SkillGateway 接口定义
+
 **描述：** 作为项目内部开发者，我需要一个统一的 `SkillGateway` Go 接口，使得 agent、orchestrator、handler 等模块通过同一入口调用任意类型的 skill，而不需要关心底层实现。
 
 **验收标准：**
+
 - [ ] 定义 `SkillGateway` 接口，包含 `Execute(ctx, req) (resp, error)` 和 `ExecutePipeline(ctx, pipeline) (resp, error)` 方法
 - [ ] 定义标准 `SkillRequest` 和 `SkillResponse` 结构体，包含 `TraceID`、`SkillID`、`Input`、`Metadata` 字段
 - [ ] 定义统一错误类型 `SkillError`，包含 `Code`、`Message`、`Cause` 字段
@@ -37,9 +40,11 @@
 - [ ] `go build ./...` 通过，无编译错误
 
 ### US-002: 原子 skill 执行（含企业级能力）
+
 **描述：** 作为调用方，我希望通过 `SkillGateway.Execute` 调用单个 skill 时，自动获得超时控制、重试、熔断、metrics 上报和 trace span 注入，无需在调用方重复实现。
 
 **验收标准：**
+
 - [ ] 每次 `Execute` 调用自动注入 `trace_id`（若上游未传则生成新 UUID）
 - [ ] 支持可配置超时（默认 30s），超时返回 `ErrSkillTimeout` 错误码
 - [ ] 支持可配置重试次数（默认 0），指数退避，仅对幂等错误重试
@@ -49,9 +54,11 @@
 - [ ] `go test ./internal/skillgateway/...` 通过
 
 ### US-003: 流程化 skill 编排（Pipeline）
+
 **描述：** 作为 agent 开发者，我希望通过 Go DSL（builder 模式）定义多步骤 skill 流程，支持顺序执行、条件分支和上下文变量传递，并通过 `SkillGateway.ExecutePipeline` 统一执行。
 
 **验收标准：**
+
 - [ ] 提供 `PipelineBuilder` 支持链式调用：`.Step(skillID, input).If(condition).Then(...).Else(...).Build()`
 - [ ] 支持步骤间上下文传递：前一步的 `Output` 可作为后一步的 `Input` 参数（通过 `$prev.output` 引用）
 - [ ] 支持并行步骤：`.Parallel(step1, step2)` 并发执行，等待全部完成
@@ -60,9 +67,11 @@
 - [ ] `go test ./internal/skillgateway/...` 中 pipeline 相关测试通过
 
 ### US-004: 插件化 skill 注册与发现
+
 **描述：** 作为扩展开发者，我希望通过实现标准接口并调用 `Register` 方法注册新 skill 类型，无需修改 gateway 核心代码。
 
 **验收标准：**
+
 - [ ] 定义 `SkillProvider` 接口，实现者可通过 `gateway.RegisterProvider(provider)` 注册
 - [ ] 内置三个 Provider：`LLMSkillProvider`、`CodeSkillProvider`、`MCPSkillProvider`（适配现有代码）
 - [ ] `MCPSkillProvider` 复用现有 `MCPSkillAdapter` 逻辑，不重复实现
@@ -71,9 +80,11 @@
 - [ ] `go test ./internal/skillgateway/...` 通过
 
 ### US-005: 统一错误码体系与熔断
+
 **描述：** 作为运维人员，我希望所有 skill 调用失败都有明确的错误码，并且对持续失败的 skill 自动熔断，防止级联故障。
 
 **验收标准：**
+
 - [ ] 定义错误码枚举：`ErrSkillNotFound(4001)`、`ErrSkillTimeout(4002)`、`ErrSkillExecFailed(5001)`、`ErrCircuitOpen(5002)`、`ErrPipelineStepFailed(5003)`
 - [ ] 集成熔断器（使用 `sony/gobreaker` 或自实现）：连续失败 5 次后熔断，30s 后半开
 - [ ] 熔断状态变更写入日志并上报 Prometheus gauge `skill_circuit_breaker_state`

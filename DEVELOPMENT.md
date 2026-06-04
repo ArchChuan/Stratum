@@ -5,6 +5,7 @@ This guide provides comprehensive instructions for developing ClawHermes AI Go.
 ## Quick Start
 
 ### Prerequisites
+
 - Go 1.22+
 - Docker & Docker Compose
 - Make
@@ -30,11 +31,13 @@ make run
 ## Development Workflow
 
 ### 1. Create Feature Branch
+
 ```bash
 git checkout -b feature/your-feature-name
 ```
 
 ### 2. Make Changes
+
 ```bash
 # Edit code
 vim internal/your/file.go
@@ -50,6 +53,7 @@ make lint
 ```
 
 ### 3. Test Changes
+
 ```bash
 # Quick local tests
 make test-local
@@ -62,6 +66,7 @@ make security-scan
 ```
 
 ### 4. Pre-commit Checks
+
 ```bash
 # Run all pre-commit hooks
 make pre-commit
@@ -71,6 +76,7 @@ pre-commit run --all-files
 ```
 
 ### 5. Commit & Push
+
 ```bash
 git add .
 git commit -m "feat: add your feature"
@@ -78,6 +84,7 @@ git push origin feature/your-feature-name
 ```
 
 ### 6. Create Pull Request
+
 - Push to GitHub
 - Create PR with detailed description
 - Wait for CI/CD to pass
@@ -110,18 +117,21 @@ git push origin feature/your-feature-name
 ## Code Style Guidelines
 
 ### Go Code Style
+
 - Follow [Effective Go](https://golang.org/doc/effective_go)
 - Use `gofmt` for formatting
 - Use `golangci-lint` for linting
 - Write tests for all public functions
 
 ### Naming Conventions
+
 - Package names: lowercase, single word
 - Function names: CamelCase, exported functions start with uppercase
 - Variable names: camelCase
 - Constants: UPPER_SNAKE_CASE
 
 ### Comments
+
 - Write comments for all exported functions
 - Use `//` for single-line comments
 - Use `/* */` for multi-line comments
@@ -130,6 +140,7 @@ git push origin feature/your-feature-name
 ## Testing Guidelines
 
 ### Unit Tests
+
 ```go
 func TestFunctionName(t *testing.T) {
     // Arrange
@@ -147,11 +158,13 @@ func TestFunctionName(t *testing.T) {
 ```
 
 ### Test Coverage
+
 - Aim for >80% coverage
 - Test both happy path and error cases
 - Use table-driven tests for multiple scenarios
 
 ### Running Tests
+
 ```bash
 # Run all tests
 go test ./...
@@ -169,6 +182,7 @@ go test -v ./...
 ## Security Guidelines
 
 ### Code Security
+
 - Never hardcode secrets (use environment variables)
 - Validate all user input
 - Use parameterized queries for database operations
@@ -176,6 +190,7 @@ go test -v ./...
 - Use HTTPS for all external communications
 
 ### Dependency Security
+
 ```bash
 # Audit dependencies
 make audit
@@ -185,6 +200,7 @@ go list -json -m all | nancy sleuth
 ```
 
 ### Secret Management
+
 - Use `.env` files for local development (never commit)
 - Use environment variables in production
 - Rotate secrets regularly
@@ -193,11 +209,13 @@ go list -json -m all | nancy sleuth
 ## Debugging
 
 ### Enable Debug Logging
+
 ```bash
 DEBUG=true make run
 ```
 
 ### Use Delve Debugger
+
 ```bash
 # Install delve
 go install github.com/go-delve/delve/cmd/dlv@latest
@@ -209,17 +227,21 @@ dlv debug ./cmd/server
 ### Common Issues
 
 **Issue**: Tests fail locally but pass in CI
+
 - Solution: Check Go version, run `go mod tidy`, clear cache with `go clean -testcache`
 
 **Issue**: Linter errors
+
 - Solution: Run `make fmt` to auto-fix, check `.golangci.yml` for rules
 
 **Issue**: Docker build fails
+
 - Solution: Check Dockerfile, ensure all dependencies are listed
 
 ## Performance Optimization
 
 ### Profiling
+
 ```bash
 # CPU profiling
 go test -cpuprofile=cpu.prof ./...
@@ -231,6 +253,7 @@ go tool pprof mem.prof
 ```
 
 ### Benchmarking
+
 ```bash
 # Run benchmarks
 make bench
@@ -242,12 +265,14 @@ go test -bench=BenchmarkFunctionName -benchmem ./...
 ## Documentation
 
 ### Generate API Documentation
+
 ```bash
 make docs
 # Visit http://localhost:6060
 ```
 
 ### Update README
+
 - Keep README.md up-to-date
 - Include setup instructions
 - Document API endpoints
@@ -256,6 +281,7 @@ make docs
 ## CI/CD Pipeline
 
 ### GitHub Actions Workflow
+
 The project uses GitHub Actions for automated testing and deployment:
 
 1. **Type Check** - Runs `go vet`
@@ -267,6 +293,7 @@ The project uses GitHub Actions for automated testing and deployment:
 7. **Quality** - Generate coverage reports
 
 ### Viewing CI/CD Status
+
 - Check GitHub Actions tab in repository
 - View workflow runs and logs
 - Check status badges in README
@@ -276,6 +303,7 @@ The project uses GitHub Actions for automated testing and deployment:
 ### Common Problems
 
 **Problem**: `go mod tidy` fails
+
 ```bash
 # Solution
 rm go.sum
@@ -284,6 +312,7 @@ go mod tidy
 ```
 
 **Problem**: Pre-commit hooks fail
+
 ```bash
 # Solution
 pre-commit clean
@@ -292,6 +321,7 @@ pre-commit run --all-files
 ```
 
 **Problem**: Docker build fails
+
 ```bash
 # Solution
 docker system prune

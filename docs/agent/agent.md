@@ -56,6 +56,7 @@ baseAgent.SessionContext = &memory.SessionContext{SessionID: sessionID}
 ```
 
 三层记忆策略由 `MemoryConfig` 控制：
+
 - `ShortTermWindowSize > 0` → `ConversationWindowMemory`
 - `EnableSummary = true` → `ConversationSummaryMemory`
 - 否则 → `ConversationBufferMemory`

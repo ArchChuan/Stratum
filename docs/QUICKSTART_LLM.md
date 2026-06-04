@@ -40,6 +40,7 @@ curl -X POST http://localhost:8080/skills \
 ```
 
 响应：
+
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
@@ -66,6 +67,7 @@ curl -X POST http://localhost:8080/skills/550e8400-e29b-41d4-a716-446655440000/e
 ```
 
 响应：
+
 ```json
 {
   "result": {
@@ -133,44 +135,44 @@ curl -X POST http://localhost:8080/skills/{skill_id}/execute \
 package main
 
 import (
-	"context"
-	"log"
+ "context"
+ "log"
 
-	"clawhermes-ai-go/internal/llmgateway"
-	"clawhermes-ai-go/internal/skill"
-	"go.uber.org/zap"
+ "clawhermes-ai-go/internal/llmgateway"
+ "clawhermes-ai-go/internal/skill"
+ "go.uber.org/zap"
 )
 
 func main() {
-	logger, _ := zap.NewProduction()
-	defer logger.Sync()
+ logger, _ := zap.NewProduction()
+ defer logger.Sync()
 
-	// 初始化 Gateway
-	cfg := llmgateway.LoadConfig()
-	gateway := llmgateway.InitializeGateway(cfg, logger)
+ // 初始化 Gateway
+ cfg := llmgateway.LoadConfig()
+ gateway := llmgateway.InitializeGateway(cfg, logger)
 
-	// 创建 LLM Skill
-	llmSkill := skill.NewLLMSkill(
-		"my-skill",
-		"My LLM Skill",
-		"My first LLM skill",
-		gateway,
-		logger,
-	)
+ // 创建 LLM Skill
+ llmSkill := skill.NewLLMSkill(
+  "my-skill",
+  "My LLM Skill",
+  "My first LLM skill",
+  gateway,
+  logger,
+ )
 
-	// 执行
-	result, err := llmSkill.Execute(map[string]interface{}{
-		"model":       "gpt-4",
-		"prompt":      "Hello, how are you?",
-		"temperature": 0.7,
-		"max_tokens":  100,
-	})
+ // 执行
+ result, err := llmSkill.Execute(map[string]interface{}{
+  "model":       "gpt-4",
+  "prompt":      "Hello, how are you?",
+  "temperature": 0.7,
+  "max_tokens":  100,
+ })
 
-	if err != nil {
-		log.Fatal(err)
-	}
+ if err != nil {
+  log.Fatal(err)
+ }
 
-	log.Printf("Result: %v", result)
+ log.Printf("Result: %v", result)
 }
 ```
 
@@ -211,13 +213,17 @@ print(result["result"]["content"])
 ## 常见问题
 
 ### Q: 如何切换模型？
+
 A: 在执行 Skill 时，通过 `model` 参数指定不同的模型。Gateway 会自动路由到对应的提供商。
 
 ### Q: 支持流式响应吗？
+
 A: 当前版本不支持流式响应，但可以通过扩展 LLMClient 接口实现。
 
 ### Q: 如何处理 API 超时？
+
 A: 可以通过 context 设置超时：
+
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancel()
@@ -225,9 +231,11 @@ resp, err := gateway.Complete(ctx, req)
 ```
 
 ### Q: 如何监控 token 使用量？
+
 A: 响应中包含 `usage` 字段，记录了 prompt_tokens、completion_tokens 和 total_tokens。
 
 ### Q: 支持自定义模型吗？
+
 A: 支持。实现 `LLMClient` 接口，然后通过 `gateway.RegisterClient()` 注册。
 
 ## 下一步

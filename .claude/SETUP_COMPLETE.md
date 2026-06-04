@@ -7,6 +7,7 @@ Complete overview of all development standards, automation, and tools configured
 ### 1. Project Standards (`.claude/settings.json`)
 
 **5 Core Commands**:
+
 - `make install` - Install dependencies
 - `make typecheck` - Type checking (go vet)
 - `make lint` - Code quality checks (golangci-lint)
@@ -14,6 +15,7 @@ Complete overview of all development standards, automation, and tools configured
 - `make test-full` - Full test suite + coverage
 
 **5 Project Boundaries**:
+
 1. **Forbidden Commands** - Blocks dangerous operations (rm -rf, sudo, chmod 777, etc.)
 2. **Protected Directories** - Prevents modification of system directories (/etc, /sys, /root, etc.)
 3. **Protected Files** - Prevents reading sensitive files (.ssh, .aws, /etc/shadow, etc.)
@@ -21,6 +23,7 @@ Complete overview of all development standards, automation, and tools configured
 5. **Test Reporting** - Validates project command execution
 
 **Permission Rules**:
+
 - Allowed: Go, Make, Docker, Git, NPM, curl, wget, Read, Edit, Write
 - Denied: rm -rf, sudo, chmod 777, chown, dd, mkfs, fdisk
 - Ask: docker-compose down, git push, git reset --hard, go mod tidy, make clean
@@ -28,6 +31,7 @@ Complete overview of all development standards, automation, and tools configured
 ### 2. Pre-commit Hooks (`.pre-commit-config.yaml`)
 
 Automated checks before each commit:
+
 - Go formatting (gofmt)
 - Go linting (golangci-lint)
 - Go vet analysis
@@ -41,6 +45,7 @@ Automated checks before each commit:
 ### 3. CI/CD Pipeline (`.github/workflows/ci-cd.yml`)
 
 7-stage automated pipeline:
+
 1. **Type Check** - go vet validation
 2. **Lint Check** - golangci-lint analysis
 3. **Security Scan** - Semgrep security audit
@@ -52,6 +57,7 @@ Automated checks before each commit:
 ### 4. Code Coverage (`.codecov.yml`)
 
 Coverage tracking configuration:
+
 - Precision: 2 decimal places
 - Range: 70-100%
 - Automatic PR comments with coverage reports
@@ -60,6 +66,7 @@ Coverage tracking configuration:
 ### 5. Security Scanning (`.semgrep.yml`)
 
 Custom Semgrep rules:
+
 - Hardcoded secrets detection
 - SQL injection prevention
 - Unsafe deserialization detection
@@ -70,6 +77,7 @@ Custom Semgrep rules:
 ### 6. Build System (`Makefile`)
 
 **5 Core Commands**:
+
 ```bash
 make install          # Install dependencies
 make typecheck        # Type checking
@@ -79,6 +87,7 @@ make test-full       # Full test suite
 ```
 
 **Additional Commands**:
+
 ```bash
 make fmt             # Format code
 make security-scan   # Security scanning
@@ -92,6 +101,7 @@ make check-all       # Run all checks
 ### 7. Git Configuration (`.gitignore`)
 
 Comprehensive ignore rules for:
+
 - Build artifacts (bin/, dist/, build/)
 - Dependencies (vendor/, node_modules/)
 - Environment files (.env, .env.local)
@@ -105,6 +115,7 @@ Comprehensive ignore rules for:
 ### 8. Documentation
 
 **DEVELOPMENT.md**:
+
 - Quick start guide
 - Development workflow
 - Code style guidelines
@@ -115,6 +126,7 @@ Comprehensive ignore rules for:
 - CI/CD pipeline overview
 
 **CONTRIBUTING.md**:
+
 - Code of conduct
 - Getting started
 - Commit guidelines
@@ -124,6 +136,7 @@ Comprehensive ignore rules for:
 - Release process
 
 **PROJECT_RULES.md**:
+
 - 5 project commands detailed
 - 5 project boundaries explained
 - Permission rules
@@ -133,12 +146,14 @@ Comprehensive ignore rules for:
 ## 🔄 Automation Features
 
 ### Pre-commit Automation
+
 - Automatic code formatting
 - Automatic linting
 - Security scanning
 - Conflict detection
 
 ### CI/CD Automation
+
 - Automatic testing on push/PR
 - Automatic security scanning
 - Automatic Docker build
@@ -146,6 +161,7 @@ Comprehensive ignore rules for:
 - Automatic PR comments
 
 ### Hook-based Automation
+
 - SessionStart: Load project standards
 - PreToolUse: Validate commands before execution
 - PostToolUse: Confirm command execution
@@ -153,17 +169,20 @@ Comprehensive ignore rules for:
 ## 📊 Quality Metrics
 
 ### Code Quality
+
 - Linting: golangci-lint
 - Type checking: go vet
 - Formatting: gofmt
 - Security: Semgrep
 
 ### Test Coverage
+
 - Target: >80%
 - Tracked: Codecov
 - Reported: GitHub PR comments
 
 ### Security
+
 - Pre-commit scanning
 - CI/CD scanning
 - Dependency auditing
@@ -172,18 +191,21 @@ Comprehensive ignore rules for:
 ## 🛠️ Tool Integration
 
 ### Development Tools
+
 - Go 1.22+
 - golangci-lint
 - Semgrep
 - pre-commit
 
 ### CI/CD Tools
+
 - GitHub Actions
 - Codecov
 - Docker
 - Semgrep
 
 ### Documentation Tools
+
 - Godoc
 - Markdown
 - GitHub Pages
@@ -211,6 +233,7 @@ Comprehensive ignore rules for:
 ## 🚀 Quick Start
 
 ### Setup
+
 ```bash
 # Install dependencies
 make install
@@ -223,6 +246,7 @@ make check-all
 ```
 
 ### Development
+
 ```bash
 # Type checking
 make typecheck
@@ -238,6 +262,7 @@ make test-full
 ```
 
 ### Before Commit
+
 ```bash
 # Run pre-commit hooks
 make pre-commit
@@ -262,6 +287,7 @@ pre-commit run --all-files
 ## 📈 Next Steps
 
 ### Recommended Actions
+
 1. Install pre-commit hooks: `pre-commit install`
 2. Run initial checks: `make check-all`
 3. Review DEVELOPMENT.md for workflow
@@ -269,6 +295,7 @@ pre-commit run --all-files
 5. Start development with confidence!
 
 ### Optional Enhancements
+
 - Configure Codecov badge in README
 - Setup GitHub branch protection rules
 - Configure Dependabot for dependency updates
@@ -278,6 +305,7 @@ pre-commit run --all-files
 ## 📞 Support
 
 For questions or issues:
+
 1. Check DEVELOPMENT.md
 2. Check CONTRIBUTING.md
 3. Review GitHub issues

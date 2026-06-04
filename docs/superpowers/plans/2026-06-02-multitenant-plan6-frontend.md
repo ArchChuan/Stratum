@@ -31,6 +31,7 @@
 ### Task 1: 确认 axios 已安装，配置 .env 模板
 
 **Files:**
+
 - Check: `web/package.json`
 - Modify: `web/.env.example`（如不存在则 create）
 
@@ -72,10 +73,12 @@ git commit -m "chore(web): ensure VITE_API_BASE_URL env var template"
 ### Task 2: 创建 AuthContext + useAuth hook
 
 **Files:**
+
 - Create: `web/src/contexts/AuthContext.jsx`
 - Create: `web/src/hooks/useAuth.js`
 
 AuthContext 存储：
+
 - `user`: `{ id, github_login, avatar_url, global_role, current_tenant, role }` | `null`
 - `accessToken`: string | `null`（内存，不写 localStorage）
 - `login(user, token)` — 由 CallbackPage 在拿到 `/auth/me` 响应后调用
@@ -185,6 +188,7 @@ git commit -m "feat(web): add AuthContext and useAuth hook"
 ### Task 3: 改造 api.js — Bearer token 注入 + 401 自动刷新重试
 
 **Files:**
+
 - Modify: `web/src/services/api.js`
 
 注意：axios 实例已存在，只需补充拦截器逻辑。`withCredentials: true` 让浏览器在跨域请求时携带 httpOnly cookie（refresh_token）。
@@ -354,6 +358,7 @@ git commit -m "feat(web): axios interceptors — Bearer token inject + 401 auto-
 ### Task 4: LoginPage
 
 **Files:**
+
 - Create: `web/src/pages/auth/LoginPage.jsx`
 
 - [ ] **Step 1: 创建目录并写文件**
@@ -418,9 +423,11 @@ export default LoginPage;
 - [ ] **Step 2: 手动测试步骤**
 
 启动 dev server：
+
 ```bash
 cd /home/yang/go-projects/ClawHermes-AI-Go/web && npm run dev
 ```
+
 访问 `http://localhost:5173/login`，应看到居中卡片 + "使用 GitHub 登录" 按钮。点击按钮，浏览器应跳转到 `http://localhost:8080/auth/github`（后端未启动时会报连接失败，属正常）。
 
 - [ ] **Step 3: Commit**
@@ -436,9 +443,11 @@ git commit -m "feat(web): add GitHub OAuth LoginPage"
 ### Task 5: CallbackPage — 处理 OAuth 回调
 
 **Files:**
+
 - Create: `web/src/pages/auth/CallbackPage.jsx`
 
 CallbackPage 挂载时：
+
 1. 读取 URL query param `is_new`（由后端在回调 URL 中附加）
 2. 调 `GET /auth/me` 获取用户信息和 access_token
 3. 调 `login(user, token)` 写入 AuthContext
@@ -518,6 +527,7 @@ git commit -m "feat(web): add OAuth CallbackPage with is_new routing"
 ### Task 6: OnboardingPage — 创建 / 加入租户
 
 **Files:**
+
 - Create: `web/src/pages/auth/OnboardingPage.jsx`
 
 - [ ] **Step 1: 创建 `web/src/pages/auth/OnboardingPage.jsx`**
@@ -645,6 +655,7 @@ export default OnboardingPage;
 - [ ] **Step 2: 手动测试步骤**
 
 访问 `http://localhost:5173/onboarding`：
+
 - "创建新租户" tab：填写名称和 slug，点击提交，验证调用 `POST /tenants`
 - "加入已有租户" tab：填写邀请码，验证调用 `POST /tenants/join`
 - 表单验证：slug 填写 `My Team`（大写+空格）应报错
@@ -663,9 +674,11 @@ git commit -m "feat(web): add OnboardingPage — create or join tenant"
 ### Task 7: PrivateRoute — 路由守卫
 
 **Files:**
+
 - Create: `web/src/components/PrivateRoute.jsx`
 
 守卫逻辑：
+
 1. `loading === true` → 显示全屏 Spin（等待会话恢复）
 2. `user === null` → Navigate to `/login`
 3. `user.current_tenant === null && pathname !== '/onboarding'` → Navigate to `/onboarding`
@@ -729,6 +742,7 @@ export default PrivateRoute;
 - [ ] **Step 2: 手动测试步骤**
 
 （此步骤在 Task 11 集成路由后可验证）
+
 - 未登录时访问 `/`，应跳转到 `/login`
 - 已登录但无租户时，访问 `/`，应跳转到 `/onboarding`
 - 访问 `/admin/tenants`（需要 global_admin），普通用户应看到 403 页面
@@ -746,6 +760,7 @@ git commit -m "feat(web): add PrivateRoute guard — auth/tenant/role checks"
 ### Task 8: MembersPage — 成员列表 + 邀请 + 移除
 
 **Files:**
+
 - Create: `web/src/pages/tenant/MembersPage.jsx`
 
 - [ ] **Step 1: 创建目录**
@@ -919,6 +934,7 @@ export default MembersPage;
 - [ ] **Step 3: 手动测试步骤**
 
 访问 `http://localhost:5173/tenant/members`（Task 11 注册路由后）：
+
 - admin 角色：应看到"邀请成员"按钮和每行"移除"按钮
 - member 角色：按钮不可见
 - 点击"邀请成员"，填写表单，验证 `POST /tenants/members/invite` 被调用
@@ -937,6 +953,7 @@ git commit -m "feat(web): add MembersPage with invite modal and remove action"
 ### Task 9: SettingsPage + TenantsListPage
 
 **Files:**
+
 - Create: `web/src/pages/tenant/SettingsPage.jsx`
 - Create: `web/src/pages/admin/TenantsListPage.jsx`
 
@@ -1120,9 +1137,11 @@ git commit -m "feat(web): add SettingsPage and TenantsListPage"
 ### Task 10: NavBar 改造 — 右上角用户 Dropdown
 
 **Files:**
+
 - Modify: `web/src/App.jsx`（Header 部分内联修改，不单独提取组件）
 
 Header 右上角需增加：头像 + 用户名 + Dropdown 菜单，包含：
+
 - 租户成员（/tenant/members，需有 current_tenant）
 - 租户设置（/tenant/settings，需 admin 角色）
 - 全局管理（/admin/tenants，需 global_admin）
@@ -1171,6 +1190,7 @@ const userMenuItems = [
 ### Task 11: App.jsx 路由整合 — AuthProvider + 新路由 + PrivateRoute
 
 **Files:**
+
 - Modify: `web/src/App.jsx`
 
 这是最终集成任务，将前面所有 Task 的组件串联起来。
@@ -1372,6 +1392,7 @@ cd /home/yang/go-projects/ClawHermes-AI-Go/web && npm run dev
 ```
 
 验证清单：
+
 - 访问 `http://localhost:5173/` → 未登录，应跳转到 `/login`
 - 访问 `http://localhost:5173/login` → 看到 GitHub 登录卡片
 - 访问 `http://localhost:5173/onboarding` → 看到两 Tab 表单

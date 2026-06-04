@@ -75,9 +75,11 @@ mcp:
 ### 2. 支持的传输方式
 
 #### stdio
+
 - 用于本地命令行工具
 - 通过标准输入/输出通信
 - 配置示例：
+
   ```yaml
   transport: "stdio"
   command: "node"
@@ -85,18 +87,22 @@ mcp:
   ```
 
 #### SSE (Server-Sent Events)
+
 - 用于 HTTP 服务器
 - 基于事件流的单向通信
 - 配置示例：
+
   ```yaml
   transport: "sse"
   url: "http://localhost:3001/mcp"
   ```
 
 #### HTTP
+
 - 用于 REST API 服务器
 - 基于 HTTP POST 的请求-响应通信
 - 配置示例：
+
   ```yaml
   transport: "http"
   url: "http://localhost:3000"
@@ -116,6 +122,7 @@ mcp:
 - `POST /api/v1/mcp/tools/:toolId/execute` - 执行工具
 
 请求体：
+
 ```json
 {
   "param1": "value1",
@@ -124,6 +131,7 @@ mcp:
 ```
 
 响应：
+
 ```json
 {
   "result": {
@@ -143,6 +151,7 @@ mcp:
 - `GET /api/v1/mcp/status` - 获取 MCP 系统状态
 
 响应：
+
 ```json
 {
   "total": 3,
@@ -223,24 +232,28 @@ result, err := skill.(mcp.SkillExecutor).Execute(map[string]interface{}{
 ## 企业级功能
 
 ### 1. 连接池管理
+
 - 自动连接复用
 - 空闲超时管理
 - 最大连接数限制
 - 自动重试机制
 
 ### 2. 能力缓存
+
 - TTL 过期机制
 - LRU 驱逐策略
 - 可配置的缓存大小
 - 线程安全的并发访问
 
 ### 3. 健康检查
+
 - 定期服务器健康检查
 - 自动故障检测
 - 自动重连机制
 - 详细的错误日志
 
 ### 4. 监控和指标
+
 - 连接状态监控
 - 工具执行统计
 - 缓存命中率

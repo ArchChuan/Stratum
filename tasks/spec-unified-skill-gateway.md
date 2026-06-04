@@ -1,23 +1,23 @@
-  # SPEC: Unified Skill Gateway
+# SPEC: Unified Skill Gateway
 
   > 技术规范来源：tasks/prd-unified-skill-gateway.md
   > 生成日期：2026-05-30 | 目标分支：feat/local-cicd-setup | Commit：deaf2c2
 
-  ## 1. Summary
+## 1. Summary
 
-  ### 1.1 What This SPEC Covers
+### 1.1 What This SPEC Covers
 
   本 SPEC 定义 `internal/skillgateway` 包的完整技术实现，该包作为项目内所有 skill 调用的统一对内 Go
   入口。覆盖：核心接口定义、原子执行引擎（含超时/重试/熔断）、Pipeline 编排引擎（顺序/条件/并行）、插件化 Provider 注册机制、可观测性集成（Prometheus +
   结构化审计日志）、统一错误码体系，以及与现有 `orchestrator.Registry`、`MCPSkillAdapter`、`skill_handler.go` 的向后兼容适配层。
 
-  ### 1.2 PRD Reference
+### 1.2 PRD Reference
 
-  - Source: `tasks/prd-unified-skill-gateway.md`
-  - User Stories covered: US-001, US-002, US-003, US-004, US-005
-  - Functional Requirements covered: FR-1 ~ FR-11
+- Source: `tasks/prd-unified-skill-gateway.md`
+- User Stories covered: US-001, US-002, US-003, US-004, US-005
+- Functional Requirements covered: FR-1 ~ FR-11
 
-  ### 1.3 Design Decisions Summary
+### 1.3 Design Decisions Summary
 
   | Decision | Choice | Rationale |
   |----------|--------|-----------|
@@ -32,9 +32,9 @@
 
   ---
   
-  ## 2. Architecture
+## 2. Architecture
   
-  ### 2.1 System Context
+### 2.1 System Context
   
   ┌─────────────────────────────────────────────────────────┐
   │                    调用方（内部）                          │
@@ -62,32 +62,38 @@
                       │           │
                 llmgateway   mcp.MCPSkillAdapter
 
-  ### 2.2 Component Design
+### 2.2 Component Design
 
   **`SkillGateway`（接口）**
-  - 对外暴露两个方法：`Execute` 和 `ExecutePipeline`
-  - 实现类 `DefaultGateway` 组合 `AtomicEngine`、`PipelineEngine`、`ProviderRegistry`
+
+- 对外暴露两个方法：`Execute` 和 `ExecutePipeline`
+- 实现类 `DefaultGateway` 组合 `AtomicEngine`、`PipelineEngine`、`ProviderRegistry`
 
   **`AtomicEngine`**
-  - 职责：单个 skill 的标准化执行
-  - 内置：trace_id 注入、超时控制、指数退避重试、熔断器检查、metrics 上报、审计日志
+
+- 职责：单个 skill 的标准化执行
+- 内置：trace_id 注入、超时控制、指数退避重试、熔断器检查、metrics 上报、审计日志
 
   **`PipelineEngine`**
-  - 职责：多步骤 skill 编排执行
-  - 内置：步骤间上下文传递、条件分支求值、并行步骤协调
+
+- 职责：多步骤 skill 编排执行
+- 内置：步骤间上下文传递、条件分支求值、并行步骤协调
 
   **`ProviderRegistry`**
-  - 职责：管理所有 `SkillProvider` 实现，按 skill_id 路由到对应 provider
-  - 内置：重复注册检测、并发安全
+
+- 职责：管理所有 `SkillProvider` 实现，按 skill_id 路由到对应 provider
+- 内置：重复注册检测、并发安全
 
   **`CircuitBreaker`**
-  - 职责：per-skill 熔断状态管理
-  - 状态：`Closed → Open → HalfOpen → Closed`
+
+- 职责：per-skill 熔断状态管理
+- 状态：`Closed → Open → HalfOpen → Closed`
 
   **`PipelineBuilder`**
-  - 职责：提供链式 DSL 构建 `Pipeline` 定义
 
-  ### 2.3 Module Interactions
+- 职责：提供链式 DSL 构建 `Pipeline` 定义
+
+### 2.3 Module Interactions
 
   **原子执行流程：**
   调用方
@@ -118,7 +124,7 @@
         → 任一步失败: 返回 PipelineError{FailedStep, Cause}
     → 返回 PipelineResult
 
-  ### 2.4 File Structure
+### 2.4 File Structure
 
   internal/skillgateway/
   ├── gateway.go              [NEW] SkillGateway 接口 + DefaultGateway 实现
@@ -146,9 +152,9 @@
 
   ---
 
-  ## 3. Data Model
+## 3. Data Model
 
-  ### 3.1 核心类型定义
+### 3.1 核心类型定义
 
   ```go
   // types.go

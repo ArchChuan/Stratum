@@ -71,6 +71,7 @@ hermes_events_total{type, status}
 ### Circuit Breaker 状态说明
 
 `skill_circuit_breaker_state` 取值：
+
 - `0` = Closed（正常放行）
 - `1` = Open（熔断，全部拒绝）
 - `2` = HalfOpen（探测恢复中，只放一个请求）
@@ -78,6 +79,7 @@ hermes_events_total{type, status}
 ### Adding New Metrics
 
 在 `pkg/observability/prometheus.go` 中添加，遵循命名约定：
+
 - Counter：`{domain}_{action}_total`
 - Histogram：`{domain}_{action}_seconds`
 - Gauge：`{domain}_{state}`
@@ -118,9 +120,9 @@ logger.Error("operation failed",
 
 | 服务 | 地址 | 说明 |
 |------|------|------|
-| Prometheus | http://localhost:9090 | 指标查询 |
-| Grafana | http://localhost:3000 | 仪表板（admin/admin）|
-| Jaeger UI | http://localhost:16686 | 链路追踪 |
-| Metrics 端点 | http://localhost:8080/metrics | Prometheus scrape |
+| Prometheus | <http://localhost:9090> | 指标查询 |
+| Grafana | <http://localhost:3000> | 仪表板（admin/admin）|
+| Jaeger UI | <http://localhost:16686> | 链路追踪 |
+| Metrics 端点 | <http://localhost:8080/metrics> | Prometheus scrape |
 
 Grafana 数据源配置见 `grafana/datasources/prometheus.yaml`，仪表板配置见 `grafana/dashboards/`。
