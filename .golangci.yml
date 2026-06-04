@@ -30,7 +30,7 @@ issues:
   exclusions:
     rules:
       # Test files: unchecked errors and gosec/gocritic findings are acceptable
-      - path: _test\.go
+      - path: '.*_test\.go'
         linters:
           - errcheck
           - gosec
