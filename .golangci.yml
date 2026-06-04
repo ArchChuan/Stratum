@@ -2,16 +2,33 @@ version: "2"
 
 run:
   timeout: 5m
-  tests: false
 
 linters:
   default: none
   enable:
+    # correctness
     - errcheck
     - govet
     - ineffassign
     - staticcheck
     - unused
+    # security
+    - gosec
+    # HTTP safety
+    - bodyclose
+    - noctx
+    # style / quality
+    - revive
+    - gocritic
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+        - name: unused-parameter
+          disabled: true
 
 formatters:
   enable:
@@ -19,59 +36,71 @@ formatters:
     - goimports
 
 issues:
-  exclude-rules:
-    # Test files: unchecked errors are acceptable
-    - path: _test\.go
-      linters:
-        - errcheck
+  exclusions:
+    rules:
+      # Test files: unchecked errors and gosec/gocritic/noctx findings are acceptable
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - gocritic
+          - noctx
 
-    # defer Close/Sync is idiomatic Go — error not actionable at call site
-    - text: 'Error return value of `.*\.(Close|Sync|Stop)` is not checked'
-      linters:
-        - errcheck
+      # defer Close/Sync is idiomatic Go — error not actionable at call site
+      - text: 'Error return value of `.*\.(Close|Sync|Stop)` is not checked'
+        linters:
+          - errcheck
 
-    # Known pre-existing staticcheck issues in existing code
-    - path: 'internal/agent/agent\.go'
-      linters: [staticcheck]
-      text: 'S1008'
+      # G104: //nolint:errcheck annotated lines are intentional
+      - text: 'G104'
+        linters:
+          - gosec
 
-    - path: 'internal/knowledge/rag_service\.go'
-      linters: [staticcheck]
-      text: 'QF1012'
+      # G101: OAuth URL constant is not a credential
+      - text: 'G101'
+        linters:
+          - gosec
 
-    - path: 'internal/textchunk/chunker\.go'
-      linters: [staticcheck]
-      text: 'QF1003'
+      # G304: intentional file read by path
+      - text: 'G304'
+        linters:
+          - gosec
 
-    - path: 'api/handler/skill_handler\.go'
-      linters: [staticcheck]
-      text: 'QF1008'
+      # G204: exec.CommandContext with MCP stdio — by design
+      - text: 'G204'
+        linters:
+          - gosec
 
-    - path: 'internal/config/config_test\.go'
-      linters: [staticcheck]
-      text: 'SA5011'
+      # SA5011: pre-existing possible nil dereference in tests — pattern is safe
+      - text: 'SA5011'
+        linters:
+          - staticcheck
 
-    - path: 'internal/document/parser_test\.go'
-      linters: [staticcheck]
-      text: 'SA5011'
+      # Known pre-existing staticcheck issues in existing code
+      - text: 'S1008'
+        linters: [staticcheck]
 
-    - path: 'internal/memory/manager_test\.go'
-      linters: [staticcheck]
-      text: 'SA5011'
+      - text: 'QF1012'
+        linters: [staticcheck]
 
-    - path: 'internal/llmgateway/'
-      linters: [staticcheck]
-      text: 'ST1005'
+      - text: 'QF1003'
+        linters: [staticcheck]
 
-    # Known pre-existing unused fields (reserved for future use)
-    - path: 'internal/agent/a2a/'
-      linters: [unused]
+      - text: 'QF1008'
+        linters: [staticcheck]
 
-    - path: 'internal/mcp/client\.go'
-      linters: [unused]
+      - text: 'ST1005'
+        linters: [staticcheck]
 
-    - path: 'internal/skill/executor\.go'
-      linters: [unused]
+      # Known pre-existing unused fields (reserved for future use)
+      - path: 'internal/agent/a2a/'
+        linters: [unused]
 
-    - path: 'internal/skillgateway/'
-      linters: [unused]
+      - path: 'internal/mcp/client\.go'
+        linters: [unused]
+
+      - path: 'internal/skill/executor\.go'
+        linters: [unused]
+
+      - path: 'internal/skillgateway/'
+        linters: [unused]

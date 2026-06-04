@@ -21,7 +21,7 @@ func New(ctx context.Context, url string, logger *zap.Logger) (*Client, error) {
 
 	client := goredis.NewClient(opts)
 	if err := client.Ping(ctx).Err(); err != nil {
-		client.Close() //nolint:errcheck
+		client.Close() //nolint:errcheck,gosec
 		return nil, fmt.Errorf("redis: ping: %w", err)
 	}
 

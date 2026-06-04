@@ -235,7 +235,7 @@ func (g *GraphRAG) FullTextSearch(ctx context.Context, searchTerm string, limit 
 func (g *GraphRAG) Close() error {
 	g.logger.Info("closing Neo4j connection")
 	if g.session != nil {
-		g.session.Close(context.Background()) //nolint:errcheck
+		g.session.Close(context.Background()) //nolint:errcheck,gosec
 	}
 	if g.driver != nil {
 		return g.driver.Close(context.Background())

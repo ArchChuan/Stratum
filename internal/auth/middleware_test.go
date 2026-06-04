@@ -28,7 +28,7 @@ func TestJWTMiddleware_ValidToken(t *testing.T) {
 		c.JSON(http.StatusOK, gin.H{"sub": sub, "tid": tid})
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil) //nolint:noctx
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -47,7 +47,7 @@ func TestJWTMiddleware_MissingToken(t *testing.T) {
 	r.Use(auth.JWTMiddleware(svc))
 	r.GET("/protected", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil) //nolint:noctx
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

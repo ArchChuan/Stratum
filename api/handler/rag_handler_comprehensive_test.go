@@ -54,7 +54,7 @@ func TestRAGHandlerUploadDocument(t *testing.T) {
 	body, _ := json.Marshal(req)
 
 	w := httptest.NewRecorder()
-	httpReq, _ := http.NewRequest("POST", "/upload", bytes.NewBuffer(body))
+	httpReq, _ := http.NewRequest("POST", "/upload", bytes.NewBuffer(body)) //nolint:noctx
 	httpReq.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, httpReq)
 
@@ -78,7 +78,7 @@ func TestRAGHandlerQuery(t *testing.T) {
 	body, _ := json.Marshal(req)
 
 	w := httptest.NewRecorder()
-	httpReq, _ := http.NewRequest("POST", "/query", bytes.NewBuffer(body))
+	httpReq, _ := http.NewRequest("POST", "/query", bytes.NewBuffer(body)) //nolint:noctx
 	httpReq.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, httpReq)
 
@@ -94,7 +94,7 @@ func TestRAGHandlerUploadDocumentInvalidRequest(t *testing.T) {
 	router.POST("/upload", handler.UploadDocument)
 
 	w := httptest.NewRecorder()
-	httpReq, _ := http.NewRequest("POST", "/upload", bytes.NewBuffer([]byte("invalid json")))
+	httpReq, _ := http.NewRequest("POST", "/upload", bytes.NewBuffer([]byte("invalid json"))) //nolint:noctx
 	httpReq.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, httpReq)
 
@@ -110,7 +110,7 @@ func TestRAGHandlerQueryInvalidRequest(t *testing.T) {
 	router.POST("/query", handler.Query)
 
 	w := httptest.NewRecorder()
-	httpReq, _ := http.NewRequest("POST", "/query", bytes.NewBuffer([]byte("invalid json")))
+	httpReq, _ := http.NewRequest("POST", "/query", bytes.NewBuffer([]byte("invalid json"))) //nolint:noctx
 	httpReq.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, httpReq)
 

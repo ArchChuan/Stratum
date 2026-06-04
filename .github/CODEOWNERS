@@ -1,0 +1,32 @@
+# CODEOWNERS
+# 格式：路径模式 + GitHub 用户/团队
+# 参考: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# 默认 owner（所有未覆盖文件）
+*                               @byteBuilderX
+
+# 认证 / 安全核心（禁止未授权修改）
+/internal/auth/                 @byteBuilderX
+/config/prod.yaml               @byteBuilderX
+
+# Agent 核心逻辑
+/internal/agent/                @byteBuilderX
+
+# API 层
+/api/                           @byteBuilderX
+
+# 基础设施配置
+/k8s/                           @byteBuilderX
+/helm/                          @byteBuilderX
+
+# CI/CD 配置（变更需 owner 审批）
+/.github/                       @byteBuilderX
+/Makefile                       @byteBuilderX
+
+# 向量数据库 / 知识库
+/pkg/vector/                    @byteBuilderX
+/internal/knowledge/            @byteBuilderX
+
+# 项目规范文档
+/CLAUDE.md                      @byteBuilderX
+/docs/agent/                    @byteBuilderX

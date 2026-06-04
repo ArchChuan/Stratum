@@ -238,7 +238,7 @@ func (c *BaseClient) connectStdio(ctx context.Context) error {
 		return fmt.Errorf("command not specified for stdio transport")
 	}
 
-	cmd := exec.CommandContext(ctx, c.config.Command, c.config.Args...)
+	cmd := exec.CommandContext(ctx, c.config.Command, c.config.Args...) //nolint:gosec
 	cmd.Env = os.Environ()
 	for k, v := range c.config.Env {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))

@@ -34,13 +34,13 @@ func TestNewEmbeddingService(t *testing.T) {
 	mock := &mockEmbeddingClient{}
 	service := NewEmbeddingService(mock, logger)
 
-	if service == nil {
+	if service == nil { //nolint:staticcheck
 		t.Error("expected service to be non-nil")
 	}
-	if service.client == nil {
+	if service.client == nil { //nolint:staticcheck
 		t.Error("expected client to be non-nil")
 	}
-	if service.logger == nil {
+	if service.logger == nil { //nolint:staticcheck
 		t.Error("expected logger to be non-nil")
 	}
 }

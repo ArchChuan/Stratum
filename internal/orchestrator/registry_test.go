@@ -105,7 +105,7 @@ func TestRegistryMultipleOperations(t *testing.T) {
 		t.Errorf("expected 5 skills, got %d", len(skills))
 	}
 
-	registry.Remove(ctx, "skill-1")
+	_ = registry.Remove(ctx, "skill-1")
 	skills = registry.GetAll()
 	if len(skills) != 4 {
 		t.Errorf("expected 4 skills after removal, got %d", len(skills))

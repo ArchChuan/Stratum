@@ -54,7 +54,7 @@ func TestListMembers_success(t *testing.T) {
 	r := setupTenantHandlerRouter(h)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/tenant/members", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/tenant/members", nil) //nolint:noctx
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -89,7 +89,7 @@ func TestInviteMember_success(t *testing.T) {
 
 	body := `{"email":"bob@example.com","role":"member"}`
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/tenant/members/invite", strings.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, "/tenant/members/invite", strings.NewReader(body)) //nolint:noctx
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 
@@ -118,7 +118,7 @@ func TestInviteMember_invalidEmail(t *testing.T) {
 
 	body := `{"email":"not-an-email","role":"member"}`
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/tenant/members/invite", strings.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, "/tenant/members/invite", strings.NewReader(body)) //nolint:noctx
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 
@@ -142,7 +142,7 @@ func TestRemoveMember_success(t *testing.T) {
 	r := setupTenantHandlerRouter(h)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodDelete, "/tenant/members/user-1", nil)
+	req, _ := http.NewRequest(http.MethodDelete, "/tenant/members/user-1", nil) //nolint:noctx
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -165,7 +165,7 @@ func TestRemoveMember_notFound(t *testing.T) {
 	r := setupTenantHandlerRouter(h)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodDelete, "/tenant/members/ghost-user", nil)
+	req, _ := http.NewRequest(http.MethodDelete, "/tenant/members/ghost-user", nil) //nolint:noctx
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {

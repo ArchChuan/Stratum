@@ -13,7 +13,7 @@ import (
 func TestExchangeCode_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"access_token": "gho_test123", "token_type": "bearer"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "gho_test123", "token_type": "bearer"})
 	}))
 	defer ts.Close()
 
@@ -30,7 +30,7 @@ func TestExchangeCode_Success(t *testing.T) {
 func TestGetUser_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"id":         int64(42),
 			"login":      "byteBuilderX",
 			"email":      "dev@example.com",

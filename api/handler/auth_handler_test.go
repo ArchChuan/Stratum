@@ -42,7 +42,7 @@ func TestAuthHandler_Register_MissingOnboardingToken(t *testing.T) {
 	h := newNilDepsHandler()
 	r := setupAuthRouter(h)
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{}`))
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{}`)) //nolint:noctx
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -51,7 +51,7 @@ func TestAuthHandler_Register_MissingOnboardingToken(t *testing.T) {
 		t.Errorf("expected 400, got %d", w.Code)
 	}
 	var body map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&body)
+	_ = json.NewDecoder(w.Body).Decode(&body)
 	if _, ok := body["error"]; !ok {
 		t.Error("expected 'error' field in response body")
 	}
@@ -61,7 +61,7 @@ func TestAuthHandler_Refresh_NoCookie(t *testing.T) {
 	h := newNilDepsHandler()
 	r := setupAuthRouter(h)
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil) //nolint:noctx
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -74,7 +74,7 @@ func TestAuthHandler_Me_NoToken(t *testing.T) {
 	h := newNilDepsHandler()
 	r := setupAuthRouter(h)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil) //nolint:noctx
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -82,7 +82,7 @@ func TestAuthHandler_Me_NoToken(t *testing.T) {
 		t.Errorf("expected 401, got %d", w.Code)
 	}
 	var body map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&body)
+	_ = json.NewDecoder(w.Body).Decode(&body)
 	if _, ok := body["error"]; !ok {
 		t.Error("expected 'error' field in response body")
 	}
@@ -92,7 +92,7 @@ func TestAuthHandler_Logout_NoCookie(t *testing.T) {
 	h := newNilDepsHandler()
 	r := setupAuthRouter(h)
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil) //nolint:noctx
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -106,7 +106,7 @@ func TestAuthHandler_Register_InvalidAction(t *testing.T) {
 	r := setupAuthRouter(h)
 
 	body := `{"onboarding_token":"sometoken","action":"invalid"}`
-	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body)) //nolint:noctx
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

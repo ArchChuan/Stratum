@@ -21,7 +21,7 @@ func TestMCPHandlerListServers(t *testing.T) {
 	router.GET("/servers", handler.ListServers)
 
 	w := httptest.NewRecorder()
-	httpReq, _ := http.NewRequest("GET", "/servers", nil)
+	httpReq, _ := http.NewRequest("GET", "/servers", nil) //nolint:noctx
 	router.ServeHTTP(w, httpReq)
 
 	if w.Code != http.StatusOK {
@@ -40,7 +40,7 @@ func TestMCPHandlerGetServer(t *testing.T) {
 	router.GET("/servers/:name", handler.GetServer)
 
 	w := httptest.NewRecorder()
-	httpReq, _ := http.NewRequest("GET", "/servers/test-server", nil)
+	httpReq, _ := http.NewRequest("GET", "/servers/test-server", nil) //nolint:noctx
 	router.ServeHTTP(w, httpReq)
 
 	if w.Code != http.StatusOK && w.Code != http.StatusNotFound {
@@ -59,7 +59,7 @@ func TestMCPHandlerListTools(t *testing.T) {
 	router.GET("/servers/:id/tools", handler.ListTools)
 
 	w := httptest.NewRecorder()
-	httpReq, _ := http.NewRequest("GET", "/servers/test-server/tools", nil)
+	httpReq, _ := http.NewRequest("GET", "/servers/test-server/tools", nil) //nolint:noctx
 	router.ServeHTTP(w, httpReq)
 
 	// server 不存在时返回 500（client not found），这是预期行为
@@ -79,7 +79,7 @@ func TestMCPHandlerGetServerStatus(t *testing.T) {
 	router.GET("/status", handler.GetServerStatus)
 
 	w := httptest.NewRecorder()
-	httpReq, _ := http.NewRequest("GET", "/status", nil)
+	httpReq, _ := http.NewRequest("GET", "/status", nil) //nolint:noctx
 	router.ServeHTTP(w, httpReq)
 
 	if w.Code != http.StatusOK {

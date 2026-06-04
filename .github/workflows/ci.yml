@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  GO_VERSION: "1.22"
+  GOPROXY: "https://goproxy.cn,direct"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install golangci-lint v2
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.1.6
+
+      - name: Run golangci-lint
+        run: golangci-lint run --timeout=5m
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out ./... -timeout=5m
+
+      - name: Report coverage
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${COVERAGE}%"
+          if awk "BEGIN{exit !($COVERAGE < 80)}"; then
+            echo "::warning::Coverage ${COVERAGE}% is below the 80% target"
+          fi
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 7
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build binary
+        run: go build -o bin/server ./cmd/server
+
+      - name: go vet
+        run: go vet ./...
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run gosec
+        run: gosec -fmt=sarif -out=results.sarif ./... || true
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: results.sarif
+        continue-on-error: true

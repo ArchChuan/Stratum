@@ -49,11 +49,12 @@ func NewMemoryManager(
 	}
 
 	// Initialize short-term memory based on config
-	if config.ShortTermWindowSize > 0 {
+	switch {
+	case config.ShortTermWindowSize > 0:
 		m.shortTerm = NewConversationWindowMemory(config, logger)
-	} else if config.EnableSummary {
+	case config.EnableSummary:
 		m.shortTerm = NewConversationSummaryMemory(config, logger)
-	} else {
+	default:
 		m.shortTerm = NewConversationBufferMemory(config, logger)
 	}
 

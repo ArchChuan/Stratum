@@ -47,7 +47,12 @@ be-lint:
 
 be-test:
 	go test -v -race -coverprofile=coverage.out ./... -timeout=5m
-	go tool cover -func=coverage.out | tail -1
+	@COVERAGE=$$(go tool cover -func=coverage.out | tail -1 | awk '{print $$3}' | tr -d '%'); \
+	echo "Total coverage: $${COVERAGE}%"; \
+	if awk "BEGIN{exit !($${COVERAGE} < 80)}"; then \
+		echo "FAIL: coverage $${COVERAGE}% is below the 80% threshold"; \
+		exit 1; \
+	fi
 
 be-build:
 	go build -o bin/server ./cmd/server

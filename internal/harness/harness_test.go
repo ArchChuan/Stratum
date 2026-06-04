@@ -72,7 +72,7 @@ func TestHarnessRegisterDuplicate(t *testing.T) {
 	comp1 := &mockComponent{name: "test"}
 	comp2 := &mockComponent{name: "test"}
 
-	h.Register(comp1)
+	_ = h.Register(comp1)
 	err := h.Register(comp2)
 
 	if err == nil {
@@ -84,10 +84,10 @@ func TestHarnessRegisterAfterStart(t *testing.T) {
 	logger := zap.NewNop()
 	h := New(logger)
 	comp1 := &mockComponent{name: "comp1"}
-	h.Register(comp1)
+	_ = h.Register(comp1)
 
 	ctx := context.Background()
-	h.Start(ctx)
+	_ = h.Start(ctx)
 
 	comp2 := &mockComponent{name: "comp2"}
 	err := h.Register(comp2)
@@ -101,7 +101,7 @@ func TestHarnessStart(t *testing.T) {
 	logger := zap.NewNop()
 	h := New(logger)
 	comp := &mockComponent{name: "test"}
-	h.Register(comp)
+	_ = h.Register(comp)
 
 	ctx := context.Background()
 	err := h.Start(ctx)
@@ -123,10 +123,10 @@ func TestHarnessStartAlreadyStarted(t *testing.T) {
 	logger := zap.NewNop()
 	h := New(logger)
 	comp := &mockComponent{name: "test"}
-	h.Register(comp)
+	_ = h.Register(comp)
 
 	ctx := context.Background()
-	h.Start(ctx)
+	_ = h.Start(ctx)
 	err := h.Start(ctx)
 
 	if err == nil {
@@ -138,7 +138,7 @@ func TestHarnessStartComponentError(t *testing.T) {
 	logger := zap.NewNop()
 	h := New(logger)
 	comp := &mockComponent{name: "test", startErr: errors.New("start failed")}
-	h.Register(comp)
+	_ = h.Register(comp)
 
 	ctx := context.Background()
 	err := h.Start(ctx)
@@ -156,10 +156,10 @@ func TestHarnessStop(t *testing.T) {
 	logger := zap.NewNop()
 	h := New(logger)
 	comp := &mockComponent{name: "test"}
-	h.Register(comp)
+	_ = h.Register(comp)
 
 	ctx := context.Background()
-	h.Start(ctx)
+	_ = h.Start(ctx)
 	err := h.Stop(ctx)
 
 	if err != nil {
@@ -192,8 +192,8 @@ func TestHarnessHealthCheck(t *testing.T) {
 	h := New(logger)
 	comp1 := &mockComponent{name: "comp1", healthErr: nil}
 	comp2 := &mockComponent{name: "comp2", healthErr: errors.New("unhealthy")}
-	h.Register(comp1)
-	h.Register(comp2)
+	_ = h.Register(comp1)
+	_ = h.Register(comp2)
 
 	ctx := context.Background()
 	results := h.HealthCheck(ctx)
@@ -215,7 +215,7 @@ func TestHarnessGetComponent(t *testing.T) {
 	logger := zap.NewNop()
 	h := New(logger)
 	comp := &mockComponent{name: "test"}
-	h.Register(comp)
+	_ = h.Register(comp)
 
 	retrieved, exists := h.GetComponent("test")
 
@@ -246,9 +246,9 @@ func TestHarnessMultipleComponents(t *testing.T) {
 	comp2 := &mockComponent{name: "comp2"}
 	comp3 := &mockComponent{name: "comp3"}
 
-	h.Register(comp1)
-	h.Register(comp2)
-	h.Register(comp3)
+	_ = h.Register(comp1)
+	_ = h.Register(comp2)
+	_ = h.Register(comp3)
 
 	ctx := context.Background()
 	err := h.Start(ctx)
@@ -261,7 +261,7 @@ func TestHarnessMultipleComponents(t *testing.T) {
 		t.Error("expected all components to be started")
 	}
 
-	h.Stop(ctx)
+	_ = h.Stop(ctx)
 
 	if !comp1.stopped || !comp2.stopped || !comp3.stopped {
 		t.Error("expected all components to be stopped")
@@ -272,7 +272,7 @@ func TestHarnessRun(t *testing.T) {
 	logger := zap.NewNop()
 	h := New(logger)
 	comp := &mockComponent{name: "test"}
-	h.Register(comp)
+	_ = h.Register(comp)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -296,7 +296,7 @@ func TestHarnessRunStartError(t *testing.T) {
 	logger := zap.NewNop()
 	h := New(logger)
 	comp := &mockComponent{name: "test", startErr: errors.New("start failed")}
-	h.Register(comp)
+	_ = h.Register(comp)
 
 	ctx := context.Background()
 	err := h.Run(ctx)

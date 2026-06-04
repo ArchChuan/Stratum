@@ -148,8 +148,9 @@ func main() {
 	// 5. HTTP Server component
 	router := api.SetupRouter(cfg, logger, registry, gateway, pgPool.DB(), redisClient.Client())
 	srv := &http.Server{
-		Addr:    ":" + cfg.Port,
-		Handler: router,
+		Addr:              ":" + cfg.Port,
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 	httpServer := harnesspkg.NewSimpleComponent("http-server", logger,
 		harnesspkg.WithStartFunc(func(ctx context.Context) error {

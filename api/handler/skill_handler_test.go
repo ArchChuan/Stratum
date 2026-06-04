@@ -35,7 +35,7 @@ func TestSkillHandlerCreateSkill(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(req)
-	httpReq := httptest.NewRequest("POST", "/skills", bytes.NewReader(body))
+	httpReq := httptest.NewRequest("POST", "/skills", bytes.NewReader(body)) //nolint:noctx
 	httpReq.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -46,7 +46,7 @@ func TestSkillHandlerCreateSkill(t *testing.T) {
 	}
 
 	var resp model.SkillResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp.Name != "test-skill" {
 		t.Errorf("expected name 'test-skill', got '%s'", resp.Name)
 	}
@@ -66,7 +66,7 @@ func TestSkillHandlerGetSkill(t *testing.T) {
 	router := gin.New()
 	router.GET("/skills/:id", handler.GetSkill)
 
-	httpReq := httptest.NewRequest("GET", "/skills/test-id", nil)
+	httpReq := httptest.NewRequest("GET", "/skills/test-id", nil) //nolint:noctx
 	w := httptest.NewRecorder()
 
 	router.ServeHTTP(w, httpReq)
@@ -92,7 +92,7 @@ func TestSkillHandlerGetAllSkills(t *testing.T) {
 	router := gin.New()
 	router.GET("/skills", handler.GetAllSkills)
 
-	httpReq := httptest.NewRequest("GET", "/skills", nil)
+	httpReq := httptest.NewRequest("GET", "/skills", nil) //nolint:noctx
 	w := httptest.NewRecorder()
 
 	router.ServeHTTP(w, httpReq)
@@ -116,7 +116,7 @@ func TestSkillHandlerDeleteSkill(t *testing.T) {
 	router := gin.New()
 	router.DELETE("/skills/:id", handler.DeleteSkill)
 
-	httpReq := httptest.NewRequest("DELETE", "/skills/test-id", nil)
+	httpReq := httptest.NewRequest("DELETE", "/skills/test-id", nil) //nolint:noctx
 	w := httptest.NewRecorder()
 
 	router.ServeHTTP(w, httpReq)

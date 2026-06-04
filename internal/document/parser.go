@@ -153,7 +153,7 @@ func (p *Parser) parseDOCXBytes(data []byte) (string, error) {
 }
 
 func (p *Parser) parseTXT(filePath string) (string, error) {
-	file, err := os.ReadFile(filePath)
+	file, err := os.ReadFile(filePath) //nolint:gosec
 	if err != nil {
 		p.logger.Error("failed to read TXT", zap.Error(err))
 		return "", fmt.Errorf("failed to read TXT: %w", err)

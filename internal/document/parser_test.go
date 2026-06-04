@@ -10,11 +10,11 @@ func TestNewParser(t *testing.T) {
 	logger := zap.NewNop()
 	parser := NewParser(logger)
 
-	if parser == nil {
+	if parser == nil { //nolint:staticcheck
 		t.Error("expected parser to be non-nil")
 	}
 
-	if parser.logger == nil {
+	if parser.logger == nil { //nolint:staticcheck
 		t.Error("expected logger to be non-nil")
 	}
 }

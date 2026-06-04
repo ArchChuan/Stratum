@@ -8,7 +8,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func newTestPipelineEngine() *pipelineEngine {
+func newTestPipelineEngine() *pipelineEngine { //nolint:unused
 	reg := newProviderRegistry()
 	cb := newCircuitBreakerManager(*defaultCBConfig(), nil, zap.NewNop())
 	ae := newAtomicEngine(reg, cb, nil, newAuditor(zap.NewNop()), zap.NewNop())

@@ -44,7 +44,7 @@ func (vs *VectorStore) Connect(ctx context.Context) error {
 		vs.logger.Warn("Milvus port not reachable", zap.Error(err))
 		return fmt.Errorf("milvus port not reachable: %w", err)
 	}
-	conn.Close() //nolint:errcheck
+	conn.Close() //nolint:errcheck,gosec
 
 	// Now try to create gRPC client
 	type result struct {
@@ -534,11 +534,9 @@ func tokenize(text string) []string {
 	for _, r := range text {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r > 127 {
 			buf.WriteRune(r)
-		} else {
-			if buf.Len() > 0 {
-				tokens = append(tokens, buf.String())
-				buf.Reset()
-			}
+		} else if buf.Len() > 0 {
+			tokens = append(tokens, buf.String())
+			buf.Reset()
 		}
 	}
 	if buf.Len() > 0 {

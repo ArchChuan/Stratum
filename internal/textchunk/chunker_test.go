@@ -11,11 +11,11 @@ func TestNewChunker(t *testing.T) {
 	logger := zap.NewNop()
 	chunker := NewChunker(logger)
 
-	if chunker == nil {
+	if chunker == nil { //nolint:staticcheck
 		t.Error("expected chunker to be non-nil")
 	}
 
-	if chunker.maxChunkSize != 1000 {
+	if chunker.maxChunkSize != 1000 { //nolint:staticcheck
 		t.Errorf("expected maxChunkSize 1000, got %d", chunker.maxChunkSize)
 	}
 

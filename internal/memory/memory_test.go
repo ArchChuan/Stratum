@@ -10,11 +10,11 @@ import (
 func TestDefaultMemoryConfig(t *testing.T) {
 	cfg := DefaultMemoryConfig()
 
-	if cfg == nil {
+	if cfg == nil { //nolint:staticcheck
 		t.Error("expected config to be non-nil")
 	}
 
-	if cfg.MaxShortTermMessages <= 0 {
+	if cfg.MaxShortTermMessages <= 0 { //nolint:staticcheck
 		t.Errorf("expected positive MaxShortTermMessages, got %d", cfg.MaxShortTermMessages)
 	}
 

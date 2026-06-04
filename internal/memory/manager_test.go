@@ -13,15 +13,15 @@ func TestNewMemoryManagerDefault(t *testing.T) {
 
 	manager := NewMemoryManager(cfg, logger, nil, nil, nil, nil)
 
-	if manager == nil {
+	if manager == nil { //nolint:staticcheck
 		t.Error("expected non-nil manager")
 	}
 
-	if manager.config != cfg {
+	if manager.config != cfg { //nolint:staticcheck
 		t.Error("config not set correctly")
 	}
 
-	if manager.logger != logger {
+	if manager.logger != logger { //nolint:staticcheck
 		t.Error("logger not set correctly")
 	}
 }
@@ -31,11 +31,11 @@ func TestNewMemoryManagerWithNilConfig(t *testing.T) {
 
 	manager := NewMemoryManager(nil, logger, nil, nil, nil, nil)
 
-	if manager == nil {
+	if manager == nil { //nolint:staticcheck
 		t.Error("expected non-nil manager")
 	}
 
-	if manager.config == nil {
+	if manager.config == nil { //nolint:staticcheck
 		t.Error("expected default config to be set")
 	}
 }
@@ -54,11 +54,11 @@ func TestMemoryManagerWithWindowSize(t *testing.T) {
 
 	manager := NewMemoryManager(cfg, logger, nil, nil, nil, nil)
 
-	if manager == nil {
+	if manager == nil { //nolint:staticcheck
 		t.Error("expected non-nil manager")
 	}
 
-	if manager.shortTerm == nil {
+	if manager.shortTerm == nil { //nolint:staticcheck
 		t.Error("expected short-term memory to be initialized")
 	}
 }
@@ -77,11 +77,11 @@ func TestMemoryManagerWithSummary(t *testing.T) {
 
 	manager := NewMemoryManager(cfg, logger, nil, nil, nil, nil)
 
-	if manager == nil {
+	if manager == nil { //nolint:staticcheck
 		t.Error("expected non-nil manager")
 	}
 
-	if manager.shortTerm == nil {
+	if manager.shortTerm == nil { //nolint:staticcheck
 		t.Error("expected short-term memory to be initialized")
 	}
 }
@@ -100,11 +100,11 @@ func TestMemoryManagerWithBuffer(t *testing.T) {
 
 	manager := NewMemoryManager(cfg, logger, nil, nil, nil, nil)
 
-	if manager == nil {
+	if manager == nil { //nolint:staticcheck
 		t.Error("expected non-nil manager")
 	}
 
-	if manager.shortTerm == nil {
+	if manager.shortTerm == nil { //nolint:staticcheck
 		t.Error("expected short-term memory to be initialized")
 	}
 }

@@ -42,7 +42,7 @@ func TestListTenants_noFilter(t *testing.T) {
 	r := setupAdminRouter(h)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/admin/tenants", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/admin/tenants", nil) //nolint:noctx
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -77,7 +77,7 @@ func TestCreateTenant_success(t *testing.T) {
 
 	body := `{"name":"Acme","slug":"acme","plan":"pro","status":"active"}`
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/admin/tenants", strings.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, "/admin/tenants", strings.NewReader(body)) //nolint:noctx
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 
@@ -104,7 +104,7 @@ func TestDeleteTenant_softDelete(t *testing.T) {
 	r := setupAdminRouter(h)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodDelete, "/admin/tenants/tid1", nil)
+	req, _ := http.NewRequest(http.MethodDelete, "/admin/tenants/tid1", nil) //nolint:noctx
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -130,7 +130,7 @@ func TestDeleteTenant_notFound(t *testing.T) {
 	r := setupAdminRouter(h)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodDelete, "/admin/tenants/nonexistent", nil)
+	req, _ := http.NewRequest(http.MethodDelete, "/admin/tenants/nonexistent", nil) //nolint:noctx
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {

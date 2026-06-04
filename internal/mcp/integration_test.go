@@ -15,7 +15,7 @@ import (
 // TestMCPIntegration 测试 MCP 系统的端到端集成
 func TestMCPIntegration(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	defer func() { _ = logger.Sync() }()
 
 	// 创建客户端管理器
 	manager := NewClientManager(logger, nil, nil)
@@ -153,7 +153,7 @@ func TestMCPIntegration(t *testing.T) {
 // TestMCPSkillExecutionFlow 测试技能执行流程
 func TestMCPSkillExecutionFlow(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	defer func() { _ = logger.Sync() }()
 
 	manager := NewClientManager(logger, nil, nil)
 
@@ -235,7 +235,7 @@ func TestSSETransportFunctional(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(MCPResponse{
+		_ = json.NewEncoder(w).Encode(MCPResponse{
 			Result: json.RawMessage(`[]`),
 		})
 	})
@@ -275,7 +275,7 @@ func TestHealthCheckDoesNotBlockConcurrentReads(t *testing.T) {
 			time.Sleep(200 * time.Millisecond)
 		})
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(MCPResponse{Result: json.RawMessage(`[]`)})
+		_ = json.NewEncoder(w).Encode(MCPResponse{Result: json.RawMessage(`[]`)})
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -299,12 +299,12 @@ func TestHealthCheckDoesNotBlockConcurrentReads(t *testing.T) {
 	start := time.Now()
 	go func() {
 		defer wg.Done()
-		client.HealthCheck(ctx) //nolint:errcheck
+		client.HealthCheck(ctx) //nolint:errcheck,gosec
 	}()
 	go func() {
 		defer wg.Done()
 		time.Sleep(10 * time.Millisecond)
-		client.ListTools(ctx) //nolint:errcheck
+		client.ListTools(ctx) //nolint:errcheck,gosec
 	}()
 	wg.Wait()
 

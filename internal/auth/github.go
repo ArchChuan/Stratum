@@ -32,7 +32,7 @@ type GitHubClient struct {
 // Pass tokenURL="" and userURL="" to use GitHub production endpoints.
 func NewGitHubClient(clientID, clientSecret, tokenURL, userURL string) *GitHubClient {
 	if tokenURL == "" {
-		tokenURL = "https://github.com/login/oauth/access_token"
+		tokenURL = "https://github.com/login/oauth/access_token" //nolint:gosec
 	}
 	if userURL == "" {
 		userURL = "https://api.github.com/user"

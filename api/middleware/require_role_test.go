@@ -16,7 +16,7 @@ func TestRequireGlobalAdmin_allowed(t *testing.T) {
 		c.Status(http.StatusOK)
 	})
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/", nil) //nolint:noctx
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -28,7 +28,7 @@ func TestRequireGlobalAdmin_denied(t *testing.T) {
 	r := gin.New()
 	r.GET("/", middleware.RequireGlobalAdmin(), func(c *gin.Context) { c.Status(http.StatusOK) })
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/", nil) //nolint:noctx
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", w.Code)
@@ -42,7 +42,7 @@ func TestRequireTenantRole_ownerAllowedForAdmin(t *testing.T) {
 		c.Status(http.StatusOK)
 	})
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/", nil) //nolint:noctx
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -56,7 +56,7 @@ func TestRequireTenantRole_memberDeniedForAdmin(t *testing.T) {
 		c.Status(http.StatusOK)
 	})
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/", nil) //nolint:noctx
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", w.Code)
@@ -68,7 +68,7 @@ func TestRequireTenantRole_noRoleDenied(t *testing.T) {
 	r := gin.New()
 	r.GET("/", middleware.RequireTenantRole("member"), func(c *gin.Context) { c.Status(http.StatusOK) })
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/", nil) //nolint:noctx
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", w.Code)

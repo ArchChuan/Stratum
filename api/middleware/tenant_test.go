@@ -52,7 +52,7 @@ func TestTenantAuthMiddleware_ValidToken(t *testing.T) {
 	r, _ := setupTenantRouter()
 	tok := makeToken("acme", "user-1", tenantdb.RoleTenantAdmin, testSecret, 15*time.Minute)
 
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil) //nolint:noctx
 	req.Header.Set("Authorization", "Bearer "+tok)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -64,7 +64,7 @@ func TestTenantAuthMiddleware_ValidToken(t *testing.T) {
 
 func TestTenantAuthMiddleware_MissingHeader(t *testing.T) {
 	r, _ := setupTenantRouter()
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil) //nolint:noctx
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
@@ -74,7 +74,7 @@ func TestTenantAuthMiddleware_MissingHeader(t *testing.T) {
 
 func TestTenantAuthMiddleware_InvalidToken(t *testing.T) {
 	r, _ := setupTenantRouter()
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil) //nolint:noctx
 	req.Header.Set("Authorization", "Bearer invalid.token.here")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -87,7 +87,7 @@ func TestTenantAuthMiddleware_GlobalAdmin_EmptyTenantID(t *testing.T) {
 	r, _ := setupTenantRouter()
 	tok := makeToken("", "admin-1", tenantdb.RoleGlobalAdmin, testSecret, 15*time.Minute)
 
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil) //nolint:noctx
 	req.Header.Set("Authorization", "Bearer "+tok)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -101,7 +101,7 @@ func TestTenantAuthMiddleware_NonAdminEmptyTenantID(t *testing.T) {
 	r, _ := setupTenantRouter()
 	tok := makeToken("", "user-1", tenantdb.RoleTenantUser, testSecret, 15*time.Minute)
 
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil) //nolint:noctx
 	req.Header.Set("Authorization", "Bearer "+tok)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -115,7 +115,7 @@ func TestTenantAuthMiddleware_ExpiredToken(t *testing.T) {
 	r, _ := setupTenantRouter()
 	tok := makeToken("acme", "user-1", tenantdb.RoleTenantAdmin, testSecret, -1*time.Minute)
 
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil) //nolint:noctx
 	req.Header.Set("Authorization", "Bearer "+tok)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

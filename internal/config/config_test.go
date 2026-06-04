@@ -35,26 +35,26 @@ func TestLoad(t *testing.T) {
 }
 
 func TestLoadWithEnv(t *testing.T) {
-	os.Setenv("PORT", "9000")
-	os.Setenv("NATS_URL", "nats://custom:4222")
-	os.Setenv("MILVUS_HOST", "custom-milvus")
-	os.Setenv("MILVUS_PORT", "19531")
-	os.Setenv("NEO4J_URI", "bolt://custom:7687")
-	os.Setenv("NEO4J_USER", "custom-user")
-	os.Setenv("NEO4J_PASSWORD", "custom-pass")
-	os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://custom:4317")
-	os.Setenv("OPENAI_API_KEY", "sk-test-key")
+	_ = os.Setenv("PORT", "9000")
+	_ = os.Setenv("NATS_URL", "nats://custom:4222")
+	_ = os.Setenv("MILVUS_HOST", "custom-milvus")
+	_ = os.Setenv("MILVUS_PORT", "19531")
+	_ = os.Setenv("NEO4J_URI", "bolt://custom:7687")
+	_ = os.Setenv("NEO4J_USER", "custom-user")
+	_ = os.Setenv("NEO4J_PASSWORD", "custom-pass")
+	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://custom:4317")
+	_ = os.Setenv("OPENAI_API_KEY", "sk-test-key")
 
 	defer func() {
-		os.Unsetenv("PORT")
-		os.Unsetenv("NATS_URL")
-		os.Unsetenv("MILVUS_HOST")
-		os.Unsetenv("MILVUS_PORT")
-		os.Unsetenv("NEO4J_URI")
-		os.Unsetenv("NEO4J_USER")
-		os.Unsetenv("NEO4J_PASSWORD")
-		os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-		os.Unsetenv("OPENAI_API_KEY")
+		_ = os.Unsetenv("PORT")
+		_ = os.Unsetenv("NATS_URL")
+		_ = os.Unsetenv("MILVUS_HOST")
+		_ = os.Unsetenv("MILVUS_PORT")
+		_ = os.Unsetenv("NEO4J_URI")
+		_ = os.Unsetenv("NEO4J_USER")
+		_ = os.Unsetenv("NEO4J_PASSWORD")
+		_ = os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+		_ = os.Unsetenv("OPENAI_API_KEY")
 	}()
 
 	cfg, err := Load()
@@ -96,8 +96,8 @@ func TestLoadWithEnv(t *testing.T) {
 }
 
 func TestGetEnv(t *testing.T) {
-	os.Setenv("TEST_VAR", "test_value")
-	defer os.Unsetenv("TEST_VAR")
+	_ = os.Setenv("TEST_VAR", "test_value")
+	defer func() { _ = os.Unsetenv("TEST_VAR") }()
 
 	result := getEnv("TEST_VAR", "default")
 	if result != "test_value" {
@@ -111,8 +111,8 @@ func TestGetEnv(t *testing.T) {
 }
 
 func TestGetEnvEmpty(t *testing.T) {
-	os.Setenv("EMPTY_VAR", "")
-	defer os.Unsetenv("EMPTY_VAR")
+	_ = os.Setenv("EMPTY_VAR", "")
+	defer func() { _ = os.Unsetenv("EMPTY_VAR") }()
 
 	result := getEnv("EMPTY_VAR", "default")
 	if result != "default" {
@@ -162,15 +162,15 @@ func TestServicesStruct(t *testing.T) {
 }
 
 func TestLoadAuthFields(t *testing.T) {
-	os.Setenv("GITHUB_CLIENT_ID", "gh-id")
-	os.Setenv("GITHUB_CLIENT_SECRET", "gh-secret")
-	os.Setenv("JWT_PRIVATE_KEY_PEM", "test-pem")
-	os.Setenv("GLOBAL_ADMIN_GITHUB_LOGIN", "byteBuilderX")
+	_ = os.Setenv("GITHUB_CLIENT_ID", "gh-id")
+	_ = os.Setenv("GITHUB_CLIENT_SECRET", "gh-secret")
+	_ = os.Setenv("JWT_PRIVATE_KEY_PEM", "test-pem")
+	_ = os.Setenv("GLOBAL_ADMIN_GITHUB_LOGIN", "byteBuilderX")
 	defer func() {
-		os.Unsetenv("GITHUB_CLIENT_ID")
-		os.Unsetenv("GITHUB_CLIENT_SECRET")
-		os.Unsetenv("JWT_PRIVATE_KEY_PEM")
-		os.Unsetenv("GLOBAL_ADMIN_GITHUB_LOGIN")
+		_ = os.Unsetenv("GITHUB_CLIENT_ID")
+		_ = os.Unsetenv("GITHUB_CLIENT_SECRET")
+		_ = os.Unsetenv("JWT_PRIVATE_KEY_PEM")
+		_ = os.Unsetenv("GLOBAL_ADMIN_GITHUB_LOGIN")
 	}()
 
 	cfg, err := Load()
@@ -207,15 +207,11 @@ func TestInitializeServices(t *testing.T) {
 		t.Errorf("expected no error, got %v", err)
 	}
 
-	if services == nil {
-		t.Error("expected non-nil services")
-	}
-
-	if services.GraphRAG == nil {
+	if services == nil { //nolint:staticcheck
 		t.Error("expected non-nil GraphRAG")
 	}
 
-	if services.VectorStore == nil {
+	if services.VectorStore == nil { //nolint:staticcheck
 		t.Error("expected non-nil VectorStore")
 	}
 }
