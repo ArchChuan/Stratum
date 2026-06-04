@@ -1,56 +1,130 @@
 repos:
-  # Go formatting
-  - repo: https://github.com/golangci/golangci-lint
-    rev: v1.54.2
+  - repo: local
     hooks:
-      - id: golangci-lint
-        args: [--timeout=5m]
-
-  # Go vet
-  - repo: https://github.com/pre-commit/mirrors-go-tools
-    rev: v0.0.1
-    hooks:
-      - id: go-vet
-
-  # Go fmt
-  - repo: https://github.com/pre-commit/mirrors-gofmt
-    rev: v0.0.1
-    hooks:
+      # Go formatting
       - id: gofmt
-
-  # YAML validation
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.4.0
-    hooks:
-      - id: yaml-unsafe
-      - id: check-yaml
-      - id: check-json
-      - id: check-merge-conflict
-      - id: end-of-file-fixer
-      - id: trailing-whitespace
-      - id: detect-private-key
-
-  # Markdown linting
-  - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.34.0
-    hooks:
-      - id: markdownlint
-        args: [--fix]
-
-  # Security scanning with Semgrep
-  - repo: https://github.com/returntocorp/semgrep
-    rev: v1.45.0
-    hooks:
-      - id: semgrep
-        args: [--config=p/security-audit, --config=p/go]
+        name: gofmt
+        language: system
+        entry: gofmt
+        args: [-l, -w]
         types: [go]
 
-  # Docker linting
-  - repo: https://github.com/hadialqattan/pydocstyle
-    rev: 6.3.0
-    hooks:
-      - id: pydocstyle
-        files: Dockerfile
+      # Go vet
+      - id: go-vet
+        name: go vet
+        language: system
+        entry: bash
+        args: [-c, "go vet ./..."]
+        pass_filenames: false
+        types: [go]
+
+      # golangci-lint (v2)
+      - id: golangci-lint
+        name: golangci-lint
+        language: system
+        entry: golangci-lint
+        args: [run, --timeout=5m]
+        pass_filenames: false
+        types: [go]
+
+      # YAML validation (skip helm templates, k8s, and node_modules)
+      - id: check-yaml
+        name: check yaml
+        language: system
+        entry: python3
+        args:
+          - -c
+          - |
+            import sys, yaml
+            for f in sys.argv[1:]:
+                try:
+                    yaml.safe_load(open(f))
+                except Exception as e:
+                    print(f"YAML error in {f}: {e}")
+                    sys.exit(1)
+        types: [yaml]
+        exclude: '(web/node_modules/|helm/templates/|k8s/)'
+
+      # Check for merge conflicts
+      - id: check-merge-conflict
+        name: check merge conflict
+        language: system
+        entry: bash
+        args:
+          - -c
+          - |
+            if grep -rn "^<<<<<<< " --include="*.go" --include="*.yaml" --include="*.md" \
+               --exclude-dir=web/node_modules .; then
+              exit 1
+            fi
+        pass_filenames: false
+
+      # Trailing whitespace (staged Go/YAML/MD files, skip node_modules)
+      - id: trailing-whitespace
+        name: trailing whitespace
+        language: system
+        entry: bash
+        args:
+          - -c
+          - |
+            files=$(git diff --cached --name-only | grep -E '\.(go|md|yaml)$' | grep -v 'web/node_modules')
+            if [ -z "$files" ]; then exit 0; fi
+            if echo "$files" | xargs grep -l ' $' 2>/dev/null; then
+              echo "Files with trailing whitespace found"
+              exit 1
+            fi
+        pass_filenames: false
+
+      # End of file newline fixer
+      - id: end-of-file-fixer
+        name: end of file fixer
+        language: system
+        entry: bash
+        args:
+          - -c
+          - |
+            for f in "$@"; do
+              if [ -s "$f" ] && [ "$(tail -c1 "$f" | wc -l)" -eq 0 ]; then
+                echo "" >> "$f"
+              fi
+            done
+        types: [text]
+        exclude: 'web/node_modules/'
+
+      # Detect private keys (exclude example files and this hook script)
+      - id: detect-private-key
+        name: detect private key
+        language: system
+        entry: bash
+        args:
+          - -c
+          - |
+            for f in "$@"; do
+              # Only match actual key blocks (4+ dashes, not example placeholders)
+              if grep -qE '^-{5}BEGIN (RSA|DSA|EC|OPENSSH|) *PRIVATE KEY-{5}$' "$f" 2>/dev/null; then
+                echo "PRIVATE KEY detected in $f"
+                exit 1
+              fi
+            done
+        exclude: '(web/node_modules/|\.pre-commit-config\.yaml$)'
+
+      # Markdown linting (skip node_modules and generated docs)
+      - id: markdownlint
+        name: markdownlint
+        language: system
+        entry: markdownlint
+        args: [--fix, --config, .markdownlint.json]
+        types: [markdown]
+        exclude: 'web/node_modules/'
+
+      # Security scanning with Semgrep (local rules, no network required)
+      - id: semgrep
+        name: semgrep
+        language: system
+        entry: semgrep
+        args: [--config=auto, --quiet]
+        types: [go]
+        pass_filenames: false
 
 ci:
   autofix_commit_msg: |

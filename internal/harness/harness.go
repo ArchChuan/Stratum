@@ -165,7 +165,7 @@ func (h *Harness) Run(ctx context.Context) error {
 	if err := h.Start(startCtx); err != nil {
 		return err
 	}
-	defer h.Stop(ctx)
+	defer h.Stop(ctx) //nolint:errcheck
 
 	<-ctx.Done()
 	return ctx.Err()

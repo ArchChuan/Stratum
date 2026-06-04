@@ -15,7 +15,7 @@ func RunPublicSchema(postgresURL string, sqlDir string, logger *zap.Logger) erro
 	if err != nil {
 		return fmt.Errorf("migration: init: %w", err)
 	}
-	defer m.Close()
+	defer m.Close() //nolint:errcheck
 
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		return fmt.Errorf("migration: up: %w", err)

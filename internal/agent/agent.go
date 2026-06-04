@@ -325,11 +325,7 @@ func (a *BaseAgent) shouldTerminate(ctx context.Context, cfg *ExecutionConfig, o
 	default:
 	}
 
-	if a.State.StepsTaken >= cfg.MaxSteps {
-		return true
-	}
-
-	return false
+	return a.State.StepsTaken >= cfg.MaxSteps
 }
 
 // ExecutionOption configures agent execution behavior

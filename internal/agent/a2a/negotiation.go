@@ -32,7 +32,6 @@ type TaskOffer struct {
 	EstDuration  time.Duration
 	ProposedAt   time.Time
 	ExpiresAt    time.Time
-	mu           sync.RWMutex
 }
 
 // TaskResponse represents a response to a task offer

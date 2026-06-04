@@ -167,8 +167,3 @@ func (m *Message) Clone() *Message {
 func generateMessageID() string {
 	return uuid.New().String()
 }
-
-// currentTime returns the current time
-func currentTime() time.Time {
-	return time.Now()
-}

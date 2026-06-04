@@ -27,7 +27,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create logger: %v", err)
 	}
-	defer logger.Sync()
+	defer logger.Sync() //nolint:errcheck
 
 	// Load configuration
 	cfg, err := config.Load()
@@ -48,7 +48,7 @@ func main() {
 	if err != nil {
 		logger.Fatal("failed to connect redis", zap.Error(err))
 	}
-	defer redisClient.Close()
+	defer redisClient.Close() //nolint:errcheck
 
 	// Run public schema migration
 	if err := migration.RunPublicSchema(cfg.PostgresURL, "internal/migration/sql", logger); err != nil {
@@ -64,7 +64,7 @@ func main() {
 	if err != nil {
 		logger.Fatal("Failed to initialize services", zap.Error(err))
 	}
-	defer services.Close()
+	defer services.Close() //nolint:errcheck
 
 	// 2. Hermes event bus component
 	var hermesClient *hermes.Client

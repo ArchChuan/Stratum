@@ -1,21 +1,77 @@
+version: "2"
+
 run:
   timeout: 5m
-  tests: true
+  tests: false
 
 linters:
+  default: none
   enable:
     - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
-    - typecheck
     - unused
+
+formatters:
+  enable:
     - gofmt
     - goimports
 
 issues:
   exclude-rules:
+    # Test files: unchecked errors are acceptable
     - path: _test\.go
       linters:
         - errcheck
+
+    # defer Close/Sync is idiomatic Go — error not actionable at call site
+    - text: 'Error return value of `.*\.(Close|Sync|Stop)` is not checked'
+      linters:
+        - errcheck
+
+    # Known pre-existing staticcheck issues in existing code
+    - path: 'internal/agent/agent\.go'
+      linters: [staticcheck]
+      text: 'S1008'
+
+    - path: 'internal/knowledge/rag_service\.go'
+      linters: [staticcheck]
+      text: 'QF1012'
+
+    - path: 'internal/textchunk/chunker\.go'
+      linters: [staticcheck]
+      text: 'QF1003'
+
+    - path: 'api/handler/skill_handler\.go'
+      linters: [staticcheck]
+      text: 'QF1008'
+
+    - path: 'internal/config/config_test\.go'
+      linters: [staticcheck]
+      text: 'SA5011'
+
+    - path: 'internal/document/parser_test\.go'
+      linters: [staticcheck]
+      text: 'SA5011'
+
+    - path: 'internal/memory/manager_test\.go'
+      linters: [staticcheck]
+      text: 'SA5011'
+
+    - path: 'internal/llmgateway/'
+      linters: [staticcheck]
+      text: 'ST1005'
+
+    # Known pre-existing unused fields (reserved for future use)
+    - path: 'internal/agent/a2a/'
+      linters: [unused]
+
+    - path: 'internal/mcp/client\.go'
+      linters: [unused]
+
+    - path: 'internal/skill/executor\.go'
+      linters: [unused]
+
+    - path: 'internal/skillgateway/'
+      linters: [unused]

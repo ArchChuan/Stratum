@@ -21,7 +21,7 @@ func New(ctx context.Context, url string, logger *zap.Logger) (*Client, error) {
 
 	client := goredis.NewClient(opts)
 	if err := client.Ping(ctx).Err(); err != nil {
-		client.Close()
+		client.Close() //nolint:errcheck
 		return nil, fmt.Errorf("redis: ping: %w", err)
 	}
 
@@ -33,5 +33,5 @@ func (c *Client) Client() *goredis.Client { return c.client }
 
 func (c *Client) Close() error {
 	c.logger.Info("redis connection closed")
-	return c.client.Close()
+	return c.client.Close() //nolint:errcheck
 }

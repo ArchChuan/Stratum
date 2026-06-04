@@ -69,12 +69,12 @@ func (c *AnthropicClient) Complete(ctx context.Context, req *CompletionRequest) 
 		c.logger.Error("failed to call Anthropic API", zap.Error(err))
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		c.logger.Error("Anthropic API error", zap.Int("status", resp.StatusCode), zap.String("body", string(body)))
-		return nil, fmt.Errorf("Anthropic API error: %d", resp.StatusCode)
+		return nil, fmt.Errorf("anthropic API error: %d", resp.StatusCode)
 	}
 
 	var anthropicResp struct {
@@ -120,10 +120,10 @@ func (c *AnthropicClient) Health(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Anthropic health check failed: %d", resp.StatusCode)
+		return fmt.Errorf("anthropic health check failed: %d", resp.StatusCode)
 	}
 
 	return nil

@@ -42,9 +42,9 @@ func (vs *VectorStore) Connect(ctx context.Context) error {
 	conn, err := dialer.DialContext(ctx, "tcp", milvusAddr)
 	if err != nil {
 		vs.logger.Warn("Milvus port not reachable", zap.Error(err))
-		return fmt.Errorf("Milvus port not reachable: %w", err)
+		return fmt.Errorf("milvus port not reachable: %w", err)
 	}
-	conn.Close()
+	conn.Close() //nolint:errcheck
 
 	// Now try to create gRPC client
 	type result struct {
@@ -69,7 +69,7 @@ func (vs *VectorStore) Connect(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		vs.logger.Warn("Milvus connection timeout")
-		return fmt.Errorf("Milvus connection timeout")
+		return fmt.Errorf("milvus connection timeout")
 	}
 }
 

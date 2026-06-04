@@ -78,7 +78,7 @@ func (p *Parser) parsePDF(filePath string) (string, error) {
 		p.logger.Error("failed to open PDF", zap.Error(err))
 		return "", fmt.Errorf("failed to open PDF: %w", err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	var buf bytes.Buffer
 	contentReader, err := r.GetPlainText()
@@ -119,7 +119,7 @@ func (p *Parser) parseDOCX(filePath string) (string, error) {
 		p.logger.Error("failed to open DOCX", zap.Error(err))
 		return "", fmt.Errorf("failed to open DOCX: %w", err)
 	}
-	defer doc.Close()
+	defer doc.Close() //nolint:errcheck
 
 	var textBuilder strings.Builder
 	for _, para := range doc.Paragraphs() {
@@ -139,7 +139,7 @@ func (p *Parser) parseDOCXBytes(data []byte) (string, error) {
 		p.logger.Error("failed to read DOCX bytes", zap.Error(err))
 		return "", fmt.Errorf("failed to read DOCX bytes: %w", err)
 	}
-	defer doc.Close()
+	defer doc.Close() //nolint:errcheck
 
 	var textBuilder strings.Builder
 	for _, para := range doc.Paragraphs() {

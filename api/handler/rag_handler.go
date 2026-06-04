@@ -74,7 +74,7 @@ func (h *RAGHandler) UploadDocument(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open file"})
 		return
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck
 
 	fileData := make([]byte, req.File.Size)
 	if _, err := file.Read(fileData); err != nil {

@@ -60,7 +60,7 @@ func (c *OpenAIClient) Complete(ctx context.Context, req *CompletionRequest) (*C
 		c.logger.Error("failed to call OpenAI API", zap.Error(err))
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -114,7 +114,7 @@ func (c *OpenAIClient) Health(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("OpenAI health check failed: %d", resp.StatusCode)
@@ -154,7 +154,7 @@ func (c *OpenAIClient) CreateEmbeddings(ctx context.Context, req *EmbeddingReque
 		c.logger.Error("failed to call OpenAI embeddings API", zap.Error(err))
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)

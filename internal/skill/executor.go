@@ -3,7 +3,6 @@ package skill
 
 import (
 	"fmt"
-	"sync"
 	"time"
 )
 
@@ -28,7 +27,6 @@ type SkillRegistry interface {
 
 type Executor struct {
 	registry SkillRegistry
-	mu       sync.RWMutex
 }
 
 func NewExecutor(registry SkillRegistry) *Executor {

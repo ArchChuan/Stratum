@@ -169,7 +169,9 @@ func (p *A2AProtocol) sendHeartbeats() {
 
 	for _, peer := range peers {
 		msg.WithRecipient(peer.Identity)
-		p.handler.SendMessage(context.Background(), msg, "")
+		if err := p.handler.SendMessage(context.Background(), msg, ""); err != nil {
+			p.logger.Warn("failed to send heartbeat", zap.Error(err))
+		}
 	}
 }
 

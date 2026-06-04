@@ -59,12 +59,12 @@ func (c *OllamaClient) Complete(ctx context.Context, req *CompletionRequest) (*C
 		c.logger.Error("failed to call Ollama API", zap.Error(err))
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		c.logger.Error("Ollama API error", zap.Int("status", resp.StatusCode), zap.String("body", string(body)))
-		return nil, fmt.Errorf("Ollama API error: %d", resp.StatusCode)
+		return nil, fmt.Errorf("ollama API error: %d", resp.StatusCode)
 	}
 
 	var ollamaResp struct {
@@ -98,10 +98,10 @@ func (c *OllamaClient) Health(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Ollama health check failed: %d", resp.StatusCode)
+		return fmt.Errorf("ollama health check failed: %d", resp.StatusCode)
 	}
 
 	return nil

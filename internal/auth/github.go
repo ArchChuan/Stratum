@@ -68,7 +68,7 @@ func (c *GitHubClient) ExchangeCode(ctx context.Context, code, redirectURI strin
 	if err != nil {
 		return "", fmt.Errorf("github: token request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -102,7 +102,7 @@ func (c *GitHubClient) GetUser(ctx context.Context, accessToken string) (*GitHub
 	if err != nil {
 		return nil, fmt.Errorf("github: user request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

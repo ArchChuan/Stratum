@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -39,16 +38,11 @@ type BaseClient struct {
 	lastHealthy time.Time
 	mu          sync.RWMutex
 	logger      *zap.Logger
-	retries     int
-
 	// 传输相关字段
 	cmd        *exec.Cmd
 	stdin      io.WriteCloser
 	stdout     io.ReadCloser
 	httpClient *http.Client
-	sseConn    net.Conn
-	requestID  int64
-	reqMu      sync.Mutex
 }
 
 // NewBaseClient 创建新的基础客户端
@@ -187,7 +181,9 @@ func (c *BaseClient) ListTools(ctx context.Context) ([]*MCPTool, error) {
 	// 解析响应
 	var tools []*MCPTool
 	data, _ := json.Marshal(resp.Result)
-	json.Unmarshal(data, &tools)
+	if err := json.Unmarshal(data, &tools); err != nil {
+		c.logger.Warn("failed to unmarshal tools", zap.Error(err))
+	}
 
 	c.mu.Lock()
 	c.serverInfo.Tools = tools
@@ -217,7 +213,9 @@ func (c *BaseClient) ListResources(ctx context.Context) ([]*MCPResource, error) 
 	// 解析响应
 	var resources []*MCPResource
 	data, _ := json.Marshal(resp.Result)
-	json.Unmarshal(data, &resources)
+	if err := json.Unmarshal(data, &resources); err != nil {
+		c.logger.Warn("failed to unmarshal resources", zap.Error(err))
+	}
 
 	c.mu.Lock()
 	c.serverInfo.Resources = resources
@@ -284,7 +282,7 @@ func (c *BaseClient) connectSSE(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to SSE server: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	c.httpClient = &http.Client{Timeout: c.config.Timeout}
 	c.logger.Info("SSE connection established", zap.String("url", c.config.URL))
@@ -308,7 +306,7 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to HTTP server: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP server returned status %d", resp.StatusCode)
@@ -383,7 +381,7 @@ func (c *BaseClient) sendSSERequest(ctx context.Context, req *MCPRequest) (*MCPR
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -419,7 +417,7 @@ func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCP
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

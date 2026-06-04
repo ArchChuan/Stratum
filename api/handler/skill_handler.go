@@ -144,8 +144,8 @@ func (h *SkillHandler) UpdateSkill(c *gin.Context) {
 			})
 			return
 		}
-		codeSkill.BaseSkill.Name = req.Name
-		codeSkill.BaseSkill.Description = req.Description
+		codeSkill.Name = req.Name
+		codeSkill.Description = req.Description
 		codeSkill.Code = req.Code
 		codeSkill.Language = req.Language
 
@@ -159,8 +159,8 @@ func (h *SkillHandler) UpdateSkill(c *gin.Context) {
 			})
 			return
 		}
-		llmSkill.BaseSkill.Name = req.Name
-		llmSkill.BaseSkill.Description = req.Description
+		llmSkill.Name = req.Name
+		llmSkill.Description = req.Description
 
 	default:
 		h.logger.Warn("unsupported skill type", zap.String("type", s.GetType()))

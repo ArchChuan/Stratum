@@ -104,25 +104,26 @@ func (c *Chunker) splitSentences(text string) []string {
 	var currentSentence strings.Builder
 
 	for _, r := range text {
-		if r == '。' || r == '！' || r == '？' || r == '．' {
+		switch r {
+		case '。', '！', '？', '．':
 			currentSentence.WriteRune(r)
 			if currentSentence.Len() > 0 {
 				sentences = append(sentences, currentSentence.String())
 				currentSentence.Reset()
 			}
-		} else if r == '.' || r == '!' || r == '?' {
+		case '.', '!', '?':
 			currentSentence.WriteRune(r)
 			// Check if this is likely end of a Latin sentence
 			if c.isLatinChar(r) {
 				sentences = append(sentences, currentSentence.String())
 				currentSentence.Reset()
 			}
-		} else if r == '\n' {
+		case '\n':
 			if currentSentence.Len() > 0 {
 				sentences = append(sentences, currentSentence.String())
 				currentSentence.Reset()
 			}
-		} else {
+		default:
 			currentSentence.WriteRune(r)
 		}
 	}

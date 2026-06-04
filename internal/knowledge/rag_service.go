@@ -252,12 +252,12 @@ func (rs *RAGService) BuildPrompt(question string, chunks []string, graphContext
 	var prompt strings.Builder
 
 	prompt.WriteString("Answer the following question based on the provided context:\n\n")
-	prompt.WriteString(fmt.Sprintf("Question: %s\n\n", question))
+	fmt.Fprintf(&prompt, "Question: %s\n\n", question)
 
 	if len(chunks) > 0 {
 		prompt.WriteString("Relevant document chunks:\n")
 		for i, chunk := range chunks {
-			prompt.WriteString(fmt.Sprintf("%d. %s\n", i+1, chunk))
+			fmt.Fprintf(&prompt, "%d. %s\n", i+1, chunk)
 		}
 		prompt.WriteString("\n")
 	}
@@ -265,7 +265,7 @@ func (rs *RAGService) BuildPrompt(question string, chunks []string, graphContext
 	if len(graphContext) > 0 {
 		prompt.WriteString("Knowledge graph context:\n")
 		for _, entity := range graphContext {
-			prompt.WriteString(fmt.Sprintf("- Entity %s: %v\n", entity.ID, entity.Properties))
+			fmt.Fprintf(&prompt, "- Entity %s: %v\n", entity.ID, entity.Properties)
 		}
 		prompt.WriteString("\n")
 	}
