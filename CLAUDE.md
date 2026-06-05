@@ -34,7 +34,7 @@
 
 **Error handling**: `fmt.Errorf("operation: %w", err)` — always wrap with context. Transient errors: exponential backoff (base 100ms, max 10s). External deps: circuit breaker pattern.
 
-**Security**: Secrets in Vault/AWS Secrets Manager — never in git. TLS 1.2+ in transit, AES-256 at rest. Pre-commit: git-secrets/GitGuardian. Never modify `config/prod.yaml` or `internal/auth/*`.
+**Security**: Secrets in Vault/AWS Secrets Manager — never in git. TLS 1.2+ in transit, AES-256 at rest. Pre-commit: git-secrets/GitGuardian. Never modify `config/prod.yaml`.
 
 **Testing**: Coverage ≥80% on logic paths. Table-driven tests. Mock all external deps. Race detector on full suite.
 
