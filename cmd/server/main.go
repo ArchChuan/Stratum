@@ -19,6 +19,7 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/postgres"
 	pkgredis "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/redis"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	"go.uber.org/zap"
 )
 
