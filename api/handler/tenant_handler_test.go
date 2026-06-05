@@ -47,8 +47,8 @@ func TestListMembers_success(t *testing.T) {
 	now := time.Now()
 	mock.ExpectQuery("SELECT tm.user_id").
 		WithArgs("tenant-abc", 20, 0).
-		WillReturnRows(pgxmock.NewRows([]string{"user_id", "email", "role", "created_at"}).
-			AddRow("user-1", "alice@example.com", "admin", now))
+		WillReturnRows(pgxmock.NewRows([]string{"user_id", "github_login", "avatar_url", "role", "joined_at"}).
+			AddRow("user-1", "alice", "https://avatars.githubusercontent.com/alice", "admin", now))
 
 	h := &TenantHandler{db: mock, logger: zap.NewNop(), frontendURL: "http://localhost:3000"}
 	r := setupTenantHandlerRouter(h)
