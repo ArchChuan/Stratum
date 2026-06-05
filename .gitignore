@@ -162,3 +162,5 @@ coverage.txt
 dist/
 
 .claude/worktrees/
+
+.rtk
