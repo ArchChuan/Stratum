@@ -1,8 +1,4 @@
-# OpenTelemetry Collector 配置
-# 支持全链路追踪、指标和日志的收集、处理和导出
-
 receivers:
-  # OTLP 接收器 - 接收来自应用的 telemetry 数据
   otlp:
     protocols:
       grpc:
@@ -11,7 +7,6 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
 
-  # Prometheus 接收器 - 用于抓取 Prometheus 指标
   prometheus:
     config:
       scrape_configs:
@@ -21,93 +16,72 @@ receivers:
             - targets: ['host.docker.internal:8080']
           metrics_path: /metrics
 
-  # Zipkin 接收器 - 兼容 Zipkin 协议
   zipkin:
     endpoint: 0.0.0.0:9411
 
 processors:
-  # 批处理处理器 - 批量发送以减少网络开销
   batch:
     timeout: 5s
     send_batch_size: 512
     send_batch_max_size: 1024
 
-  # 内存限制处理器 - 防止内存溢出
   memory_limiter:
     check_interval: 5s
     limit_mib: 512
     spike_limit_mib: 128
 
-  # 资源处理器 - 添加资源属性
   resource:
     attributes:
       - key: environment
         value: production
         action: upsert
 
-  # 属性处理器 - 处理 span 属性
+  # ====================== 最终修复：convert 必须加 converted_type ======================
   attributes:
     actions:
       - key: http.status_code
         action: convert
-        pattern: ^\d+$
+        converted_type: int
 
-  # 采样处理器 - 采样率控制
   tail_sampling:
     policies:
       - name: error-policy
         type: status_code
         status_code:
           status_codes: [ERROR]
-        ratio: 1.0
+
       - name: slow-policy
         type: latency
         latency:
           threshold_ms: 1000
-        ratio: 0.5
+
       - name: default-policy
         type: probabilistic
         probabilistic:
           sampling_percentage: 10
 
 exporters:
-  # Jaeger 导出器 - 导出 traces 到 Jaeger
-  jaeger:
-    endpoint: jaeger:14250
+  otlp:
+    endpoint: jaeger:4317
     tls:
       insecure: true
-    tags:
-      environment: production
 
-  # Prometheus 导出器 - 导出 metrics 到 Prometheus
   prometheus:
     endpoint: 0.0.0.0:8889
     namespace: clawhermes
     const_labels:
       cluster: production
 
-  # OTLP 导出器 - 导出到外部 OTLP 端点
-  otlp:
-    endpoint: otelcol:4317
-    tls:
-      insecure: true
-
-  # Logging 导出器 - 导出到日志（开发环境）
   logging:
-    loglevel: info
+    verbosity: normal
     sampling_initial: 5
     sampling_thereafter: 100
 
 extensions:
-  # 健康检查扩展
   health_check:
     endpoint: 0.0.0.0:13133
-
-  # Pprof 扩展 - 性能分析
   pprof:
     endpoint: 0.0.0.0:1777
-
-  # zPages 扩展 - 内部状态查看
   zpages:
     endpoint: 0.0.0.0:55679
 
@@ -121,19 +95,16 @@ service:
   extensions: [health_check, pprof, zpages]
 
   pipelines:
-    # Traces 管道 - 收集、处理、导出 traces
     traces:
       receivers: [otlp, zipkin]
       processors: [memory_limiter, resource, attributes, tail_sampling, batch]
-      exporters: [jaeger, logging]
+      exporters: [otlp, logging]
 
-    # Metrics 管道 - 收集、处理、导出 metrics
     metrics:
       receivers: [otlp, prometheus]
       processors: [memory_limiter, batch]
       exporters: [prometheus, logging]
 
-    # Logs 管道 - 收集、处理、导出 logs（可选）
     logs:
       receivers: [otlp]
       processors: [memory_limiter, batch]

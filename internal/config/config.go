@@ -46,7 +46,7 @@ func Load() (*Config, error) {
 		Neo4jPassword:          getEnv("NEO4J_PASSWORD", "password"),
 		OtelEndpoint:           getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
 		OpenAIAPIKey:           getEnv("OPENAI_API_KEY", ""),
-		PostgresURL:            getEnv("POSTGRES_URL", "postgres://clawhermes:clawhermes@localhost:5432/clawhermes"),
+		PostgresURL:            getEnv("POSTGRES_URL", "postgres://clawhermes:clawhermes@localhost:5432/clawhermes?sslmode=disable"),
 		RedisURL:               getEnv("REDIS_URL", "redis://localhost:6379"),
 		GitHubClientID:         getEnv("GITHUB_CLIENT_ID", ""),
 		GitHubClientSecret:     getEnv("GITHUB_CLIENT_SECRET", ""),
