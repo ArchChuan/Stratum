@@ -80,12 +80,28 @@
             "statusMessage": "\u68c0\u67e5\u6587\u4ef6\u8bbf\u95ee\u6743\u9650"
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "path=$(jq -r '.tool_input.file_path'); if echo \"$path\" | grep -qE 'config/prod\\.yaml|internal/auth/'; then echo '{\"continue\": false, \"stopReason\": \"\ud83d\udeab \u8fb9\u754c5-\u751f\u4ea7\u914d\u7f6e: config/prod.yaml \u548c internal/auth/ \u7981\u6b62\u4fee\u6539\"}'; else echo '{\"continue\": true}'; fi",
+            "statusMessage": "\u4fdd\u62a4\u751f\u4ea7\u914d\u7f6e\u548c\u9274\u6743\u6a21\u5757"
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit",
         "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath'); if [[ \"$f\" == *.go ]]; then proj_root=\"/home/yang/go-projects/ClawHermes-AI-Go\"; rel=$(dirname \"${f#$proj_root/}\"); cd \"$proj_root\" && go vet \"./$rel/...\" 2>&1 | head -20 || true; fi",
+            "statusMessage": "go vet \u68c0\u67e5",
+            "async": true
+          },
           {
             "type": "command",
             "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath'); if [[ -f \"$f\" ]]; then /usr/local/bin/shieldbot-mcp \"$f\" 2>&1 | head -40 || true; fi",
