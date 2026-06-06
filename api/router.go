@@ -84,6 +84,8 @@ func SetupRouter(
 				authRoutes.POST("/refresh", authHandler.Refresh)
 				authRoutes.POST("/logout", authHandler.Logout)
 				authRoutes.GET("/me", authHandler.Me)
+				authRoutes.POST("/switch-tenant", authHandler.SwitchTenant)
+				authRoutes.POST("/create-tenant", authHandler.CreateUserTenant)
 			}
 
 			// Admin routes — require JWT + global_admin role
@@ -110,6 +112,9 @@ func SetupRouter(
 					tenantGroup.GET("/settings", tenantHandler.GetSettings)
 					tenantGroup.PATCH("/settings", tenantHandler.UpdateSettings)
 				}
+
+				// /tenant/list only needs JWT, not a specific tenant context.
+				router.GET("/tenant/list", jwtMW, tenantHandler.ListUserTenants)
 			}
 		}
 	}
@@ -148,11 +153,15 @@ func SetupRouter(
 
 	// Handlers
 	skillHandler := handler.NewSkillHandler(registry, logger, gateway)
-	ragHandler := handler.NewRAGHandler(ingestSvc, ragService, logger)
+	ragHandler := handler.NewRAGHandler(ingestSvc, ragService, db, logger)
 
 	// Initialize agent registry and handler
 	agentRegistry := agent.NewRegistry(db, logger)
-	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway, metrics)
+	var execStore *agent.ExecutionStore
+	if db != nil {
+		execStore = agent.NewExecutionStore(db)
+	}
+	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway, metrics, execStore)
 
 	// Initialize memory system
 	memoryConfig := memory.DefaultMemoryConfig()
@@ -163,6 +172,15 @@ func SetupRouter(
 	mcpManager := mcp.NewClientManager(logger, nil, db)
 	mcpRegistry := mcp.NewMCPSkillRegistry(mcpManager, logger)
 	mcpHandler := handler.NewMCPHandler(mcpRegistry, mcpManager, logger)
+
+	// Restore persisted MCP connections from DB
+	if db != nil {
+		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer restoreCancel()
+		if err := mcpManager.RestoreFromDB(restoreCtx); err != nil {
+			logger.Warn("failed to restore MCP connections from DB", zap.Error(err))
+		}
+	}
 
 	// Skill endpoints
 	skills := router.Group("/skills")
@@ -183,16 +201,33 @@ func SetupRouter(
 	{
 		agents.GET("", agentHandler.GetAllAgents)
 		agents.POST("", agentHandler.CreateAgent)
+		agents.GET("/executions", agentHandler.ListExecutions)
 		agents.GET("/:id", agentHandler.GetAgent)
 		agents.POST("/:id/execute", agentHandler.ExecuteAgent)
 		agents.DELETE("/:id", agentHandler.DeleteAgent)
 	}
 
-	// Knowledge endpoints
-	knowledge := router.Group("/knowledge")
+	// Knowledge endpoints — 所有路由均需 JWT + 租户上下文
+	var knowledgeMW []gin.HandlerFunc
+	if jwtSvc != nil {
+		knowledgeMW = append(knowledgeMW, auth.JWTMiddleware(jwtSvc), middleware.InjectTenantContext(), middleware.RequireTenantRole("member"))
+	}
+	knowledgeGroup := router.Group("/knowledge", knowledgeMW...)
 	{
-		knowledge.POST("/ingest", ragHandler.UploadDocument)
-		knowledge.POST("/query", ragHandler.Query)
+		// member 可访问
+		knowledgeGroup.GET("/workspaces", ragHandler.ListWorkspaces)
+		knowledgeGroup.GET("/workspaces/:name/stats", ragHandler.GetWorkspaceStats)
+		knowledgeGroup.POST("/query", ragHandler.Query)
+
+		// admin/owner 专属
+		var adminMW []gin.HandlerFunc
+		if jwtSvc != nil {
+			adminMW = append(adminMW, middleware.RequireTenantRole("admin"))
+		}
+		knowledgeGroup.POST("/workspaces", append(adminMW, ragHandler.CreateWorkspace)...)
+		knowledgeGroup.PATCH("/workspaces/:name", append(adminMW, ragHandler.UpdateWorkspace)...)
+		knowledgeGroup.DELETE("/workspaces/:name", append(adminMW, ragHandler.DeleteWorkspace)...)
+		knowledgeGroup.POST("/ingest", append(adminMW, ragHandler.UploadDocument)...)
 	}
 
 	// Memory endpoints

@@ -4,6 +4,7 @@ package llmgateway
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
@@ -12,11 +13,8 @@ import (
 type ModelProvider string
 
 const (
-	ProviderOpenAI ModelProvider = "openai"
-	ProviderClaude ModelProvider = "claude"
-	ProviderGemini ModelProvider = "gemini"
-	ProviderOllama ModelProvider = "ollama"
-	ProviderLLaMA  ModelProvider = "llama"
+	ProviderQwen  ModelProvider = "qwen"
+	ProviderZhipu ModelProvider = "zhipu"
 )
 
 type Message struct {
@@ -134,9 +132,10 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 }
 
 func (g *Gateway) CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
-	client, ok := g.embeddingClients[g.defaultProvider]
+	provider := g.parseProvider(req.Model)
+	client, ok := g.embeddingClients[provider]
 	if !ok {
-		client, ok = g.embeddingClients[ProviderOpenAI]
+		client, ok = g.embeddingClients[g.defaultProvider]
 		if !ok {
 			return nil, fmt.Errorf("no embedding client registered")
 		}
@@ -154,15 +153,11 @@ func (g *Gateway) Health(ctx context.Context) error {
 }
 
 func (g *Gateway) parseProvider(model string) ModelProvider {
-	switch model {
-	case "gpt-4", "gpt-3.5-turbo":
-		return ProviderOpenAI
-	case "claude-3-opus", "claude-3-sonnet":
-		return ProviderClaude
-	case "gemini-pro":
-		return ProviderGemini
-	case "ollama":
-		return ProviderOllama
+	switch {
+	case strings.HasPrefix(model, "text-embedding-v3"), strings.HasPrefix(model, "qwen-"):
+		return ProviderQwen
+	case strings.HasPrefix(model, "embedding-3"), strings.HasPrefix(model, "glm-"):
+		return ProviderZhipu
 	default:
 		return g.defaultProvider
 	}

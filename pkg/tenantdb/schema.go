@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 )
 
 //go:embed tenant_schema.sql
@@ -34,11 +35,11 @@ func ProvisionTenantSchema(ctx context.Context, pool *pgxpool.Pool, tenantID str
 	}
 	defer conn.Release()
 
-	if _, err := conn.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schemaName); err != nil {
+	if _, err := conn.Exec(ctx, fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS "%s"`, schemaName)); err != nil {
 		return fmt.Errorf("tenantdb: create schema %s: %w", schemaName, err)
 	}
 
-	if _, err := conn.Exec(ctx, "SET search_path = "+schemaName+", public"); err != nil {
+	if _, err := conn.Exec(ctx, fmt.Sprintf(`SET search_path = "%s", public`, schemaName)); err != nil {
 		return fmt.Errorf("tenantdb: set search_path: %w", err)
 	}
 
@@ -64,4 +65,32 @@ func splitStatements(sql string) []string {
 		}
 	}
 	return result
+}
+
+// ProvisionAllTenantSchemas iterates all tenants in the public.tenants table and
+// calls ProvisionTenantSchema for each. Safe to call on startup — all DDL is idempotent.
+func ProvisionAllTenantSchemas(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) error {
+	rows, err := pool.Query(ctx, `SELECT id FROM tenants WHERE deleted_at IS NULL`)
+	if err != nil {
+		return fmt.Errorf("tenantdb: list tenants: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("tenantdb: scan tenant id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+
+	for _, id := range ids {
+		if err := ProvisionTenantSchema(ctx, pool, id); err != nil {
+			logger.Warn("failed to provision tenant schema", zap.String("tenant_id", id), zap.Error(err))
+		} else {
+			logger.Info("provisioned tenant schema", zap.String("tenant_id", id))
+		}
+	}
+	return nil
 }

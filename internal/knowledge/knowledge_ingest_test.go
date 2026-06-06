@@ -174,7 +174,7 @@ func TestGraphEntityStructure(t *testing.T) {
 
 func TestBuildPrompt(t *testing.T) {
 	logger := zap.NewNop()
-	embedSvc := embedding.NewEmbeddingService(llmgateway.NewOpenAIClient("", "", logger), logger)
+	embedSvc := embedding.NewEmbeddingService(llmgateway.NewQwenClient("", logger), logger)
 	vectorStore := vector.NewVectorStore("localhost", "19530", logger)
 	graphRAG := NewGraphRAG("bolt://localhost:7687", "neo4j", "password", logger)
 

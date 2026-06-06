@@ -60,13 +60,25 @@ func (h *AdminHandler) ListTenants(c *gin.Context) {
 		totalRow = h.db.QueryRow(c.Request.Context(),
 			"SELECT COUNT(*) FROM public.tenants WHERE deleted_at IS NULL AND status=$1", status)
 		rows, err = h.db.Query(c.Request.Context(),
-			"SELECT id, name, slug, plan, status, created_at FROM public.tenants WHERE deleted_at IS NULL AND status=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+			`SELECT t.id, t.name, t.slug, t.plan, t.status, t.created_at,
+			        COUNT(tm.user_id) AS member_count
+			 FROM public.tenants t
+			 LEFT JOIN public.tenant_members tm ON tm.tenant_id = t.id
+			 WHERE t.deleted_at IS NULL AND t.status=$1
+			 GROUP BY t.id
+			 ORDER BY t.created_at DESC LIMIT $2 OFFSET $3`,
 			status, pageSize, offset)
 	} else {
 		totalRow = h.db.QueryRow(c.Request.Context(),
 			"SELECT COUNT(*) FROM public.tenants WHERE deleted_at IS NULL")
 		rows, err = h.db.Query(c.Request.Context(),
-			"SELECT id, name, slug, plan, status, created_at FROM public.tenants WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+			`SELECT t.id, t.name, t.slug, t.plan, t.status, t.created_at,
+			        COUNT(tm.user_id) AS member_count
+			 FROM public.tenants t
+			 LEFT JOIN public.tenant_members tm ON tm.tenant_id = t.id
+			 WHERE t.deleted_at IS NULL
+			 GROUP BY t.id
+			 ORDER BY t.created_at DESC LIMIT $1 OFFSET $2`,
 			pageSize, offset)
 	}
 
@@ -86,7 +98,7 @@ func (h *AdminHandler) ListTenants(c *gin.Context) {
 	tenants := make([]model.TenantResponse, 0)
 	for rows.Next() {
 		var t model.TenantResponse
-		if err := rows.Scan(&t.ID, &t.Name, &t.Slug, &t.Plan, &t.Status, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Slug, &t.Plan, &t.Status, &t.CreatedAt, &t.MemberCount); err != nil {
 			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "scan error"})
 			return
 		}

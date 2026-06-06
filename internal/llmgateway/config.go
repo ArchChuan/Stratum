@@ -1,4 +1,3 @@
-// Package llmgateway provides LLM gateway abstraction.
 package llmgateway
 
 import (
@@ -8,48 +7,38 @@ import (
 )
 
 type Config struct {
-	OpenAIKey       string
-	AnthropicKey    string
-	OllamaEndpoint  string
+	QwenAPIKey      string
+	ZhipuAPIKey     string
 	DefaultProvider ModelProvider
 }
 
 func LoadConfig() *Config {
 	return &Config{
-		OpenAIKey:       os.Getenv("OPENAI_API_KEY"),
-		AnthropicKey:    os.Getenv("ANTHROPIC_API_KEY"),
-		OllamaEndpoint:  os.Getenv("OLLAMA_ENDPOINT"),
-		DefaultProvider: ModelProvider(os.Getenv("DEFAULT_LLM_PROVIDER")),
+		QwenAPIKey:      os.Getenv("QWEN_API_KEY"),
+		ZhipuAPIKey:     os.Getenv("ZHIPU_API_KEY"),
+		DefaultProvider: ProviderQwen,
 	}
 }
 
 func InitializeGateway(cfg *Config, logger *zap.Logger) *Gateway {
 	gateway := NewGateway()
 
-	// 注册 OpenAI 客户端
-	if cfg.OpenAIKey != "" {
-		openaiClient := NewOpenAIClient(cfg.OpenAIKey, "", logger)
-		gateway.RegisterClient(ProviderOpenAI, openaiClient)
-		gateway.RegisterEmbeddingClient(ProviderOpenAI, openaiClient)
+	if cfg.QwenAPIKey != "" {
+		qwenClient := NewQwenClient(cfg.QwenAPIKey, logger)
+		gateway.RegisterClient(ProviderQwen, qwenClient)
+		gateway.RegisterEmbeddingClient(ProviderQwen, qwenClient)
 	}
 
-	// 注册 Anthropic 客户端
-	if cfg.AnthropicKey != "" {
-		anthropicClient := NewAnthropicClient(cfg.AnthropicKey, "", logger)
-		gateway.RegisterClient(ProviderClaude, anthropicClient)
+	if cfg.ZhipuAPIKey != "" {
+		zhipuClient := NewZhipuClient(cfg.ZhipuAPIKey, logger)
+		gateway.RegisterClient(ProviderZhipu, zhipuClient)
+		gateway.RegisterEmbeddingClient(ProviderZhipu, zhipuClient)
 	}
 
-	// 注册 Ollama 客户端
-	if cfg.OllamaEndpoint != "" {
-		ollamaClient := NewOllamaClient(cfg.OllamaEndpoint, logger)
-		gateway.RegisterClient(ProviderOllama, ollamaClient)
-	}
-
-	// 设置默认 provider
 	if cfg.DefaultProvider != "" {
 		gateway.SetDefault(cfg.DefaultProvider)
 	} else {
-		gateway.SetDefault(ProviderOpenAI)
+		gateway.SetDefault(ProviderQwen)
 	}
 
 	return gateway

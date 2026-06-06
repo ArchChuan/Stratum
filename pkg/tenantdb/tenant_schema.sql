@@ -2,17 +2,20 @@
 -- Execute after: SET search_path = tenant_{id}, public
 
 CREATE TABLE IF NOT EXISTS agents (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name         TEXT NOT NULL,
-    description  TEXT,
-    config       JSONB NOT NULL DEFAULT '{}',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL,
+    type           TEXT NOT NULL DEFAULT 'react',
+    description    TEXT NOT NULL DEFAULT '',
+    persona        TEXT NOT NULL DEFAULT '',
+    system_prompt  TEXT NOT NULL DEFAULT '',
+    llm_model      TEXT NOT NULL DEFAULT '',
+    max_iterations INT  NOT NULL DEFAULT 10,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS skills (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id     UUID REFERENCES agents(id) ON DELETE CASCADE,
+    id           TEXT PRIMARY KEY,
     name         TEXT NOT NULL,
     type         TEXT NOT NULL,
     config       JSONB NOT NULL DEFAULT '{}',
@@ -20,17 +23,23 @@ CREATE TABLE IF NOT EXISTS skills (
 );
 
 CREATE TABLE IF NOT EXISTS mcp_configs (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id     UUID REFERENCES agents(id) ON DELETE CASCADE,
-    server_id    TEXT NOT NULL,
-    transport    TEXT NOT NULL,
-    config       JSONB NOT NULL DEFAULT '{}',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL DEFAULT '',
+    transport     TEXT NOT NULL,
+    command       TEXT NOT NULL DEFAULT '',
+    url           TEXT NOT NULL DEFAULT '',
+    args          JSONB NOT NULL DEFAULT '[]',
+    env           JSONB NOT NULL DEFAULT '{}',
+    capabilities  JSONB NOT NULL DEFAULT '[]',
+    timeout_sec   INT  NOT NULL DEFAULT 30,
+    enabled       BOOL NOT NULL DEFAULT true,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id     UUID REFERENCES agents(id) ON DELETE SET NULL,
+    agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
     user_id      TEXT NOT NULL,
     metadata     JSONB NOT NULL DEFAULT '{}',
     started_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -78,9 +87,9 @@ CREATE TABLE IF NOT EXISTS knowledge_docs (
 
 CREATE TABLE IF NOT EXISTS exec_history (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id     UUID REFERENCES agents(id) ON DELETE SET NULL,
+    agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
     session_id   UUID REFERENCES sessions(id) ON DELETE SET NULL,
-    skill_id     UUID REFERENCES skills(id) ON DELETE SET NULL,
+    skill_id     TEXT REFERENCES skills(id) ON DELETE SET NULL,
     input        JSONB NOT NULL DEFAULT '{}',
     output       JSONB NOT NULL DEFAULT '{}',
     status       TEXT NOT NULL DEFAULT 'pending',
@@ -154,7 +163,7 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name         TEXT NOT NULL,
     cron_expr    TEXT NOT NULL,
-    agent_id     UUID REFERENCES agents(id) ON DELETE CASCADE,
+    agent_id     TEXT REFERENCES agents(id) ON DELETE CASCADE,
     payload      JSONB NOT NULL DEFAULT '{}',
     enabled      BOOLEAN NOT NULL DEFAULT TRUE,
     last_run_at  TIMESTAMPTZ,
@@ -179,4 +188,13 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
     status_code  INT,
     response     TEXT,
     delivered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS rag_workspaces (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT,
+    config      JSONB NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

@@ -75,10 +75,10 @@ fe-docker-build:
 
 # ─── 本地基础设施 Infra ───────────────────────────────────────────────────
 infra-up:
-	$(DC) up -d nats neo4j etcd minio milvus postgres redis
+	$(DC) up -d nats neo4j etcd minio milvus postgres redis adminer redis-commander attu
 
 infra-down:
-	$(DC) down nats neo4j etcd minio milvus postgres redis
+	$(DC) down nats neo4j etcd minio milvus postgres redis adminer redis-commander attu
 
 infra-wait:
 	@echo "Waiting for NATS..."
@@ -94,7 +94,7 @@ infra-wait:
 	@echo "All core services ready."
 
 infra-status:
-	$(DC) ps nats neo4j etcd minio milvus postgres redis
+	$(DC) ps nats neo4j etcd minio milvus postgres redis adminer redis-commander attu
 
 # ─── 可观测性监控 ──────────────────────────────────────────────────────────
 obs-up:

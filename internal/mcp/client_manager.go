@@ -3,6 +3,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -52,12 +53,23 @@ func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig
 	if m.pool == nil {
 		return
 	}
+	argsJSON, _ := json.Marshal(cfg.Args)
+	envJSON, _ := json.Marshal(cfg.Env)
+	capsJSON, _ := json.Marshal(cfg.Capabilities)
+	timeoutSec := int(cfg.Timeout.Seconds())
+	if timeoutSec <= 0 {
+		timeoutSec = 30
+	}
 	_ = tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO mcp_configs (id, name, transport, command, url, enabled)
-			VALUES ($1, $2, $3, $4, $5, true)
-			ON CONFLICT (id) DO UPDATE SET name=$2, transport=$3, command=$4, url=$5, enabled=true`,
-			cfg.ID, cfg.Name, cfg.Transport, cfg.Command, cfg.URL)
+			INSERT INTO mcp_configs (id, name, transport, command, url, args, env, capabilities, timeout_sec, enabled, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, NOW())
+			ON CONFLICT (id) DO UPDATE SET
+				name=$2, transport=$3, command=$4, url=$5,
+				args=$6, env=$7, capabilities=$8, timeout_sec=$9,
+				enabled=true, updated_at=NOW()`,
+			cfg.ID, cfg.Name, cfg.Transport, cfg.Command, cfg.URL,
+			argsJSON, envJSON, capsJSON, timeoutSec)
 		return err
 	})
 }
@@ -263,6 +275,81 @@ func (m *ClientManager) performHealthCheck() {
 			}
 		}
 	}
+}
+
+// RestoreFromDB 从数据库读取 enabled=true 的 MCP 配置并重建连接。
+// 连接失败只记 warn，不返回错误，不阻塞启动。
+func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
+	if m.pool == nil {
+		return nil
+	}
+
+	type row struct {
+		id         string
+		name       string
+		transport  string
+		command    string
+		url        string
+		args       []byte
+		env        []byte
+		caps       []byte
+		timeoutSec int
+	}
+
+	var rows []row
+	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
+		pgRows, err := tx.Query(ctx, `
+			SELECT id, name, transport, command, url, args, env, capabilities, timeout_sec
+			FROM mcp_configs WHERE enabled = true`)
+		if err != nil {
+			return fmt.Errorf("restore mcp_configs query: %w", err)
+		}
+		defer pgRows.Close()
+		for pgRows.Next() {
+			var r row
+			if err := pgRows.Scan(&r.id, &r.name, &r.transport, &r.command, &r.url,
+				&r.args, &r.env, &r.caps, &r.timeoutSec); err != nil {
+				return fmt.Errorf("restore mcp_configs scan: %w", err)
+			}
+			rows = append(rows, r)
+		}
+		return pgRows.Err()
+	})
+	if err != nil {
+		return fmt.Errorf("RestoreFromDB: %w", err)
+	}
+
+	for _, r := range rows {
+		var args []string
+		var env map[string]string
+		var caps []string
+		_ = json.Unmarshal(r.args, &args)
+		_ = json.Unmarshal(r.env, &env)
+		_ = json.Unmarshal(r.caps, &caps)
+
+		cfg := &MCPServerConfig{
+			ID:           r.id,
+			Name:         r.name,
+			Transport:    r.transport,
+			Command:      r.command,
+			URL:          r.url,
+			Args:         args,
+			Env:          env,
+			Capabilities: caps,
+			Timeout:      time.Duration(r.timeoutSec) * time.Second,
+		}
+
+		if err := m.Connect(ctx, cfg); err != nil {
+			m.logger.Warn("RestoreFromDB: failed to reconnect MCP server",
+				zap.String("server_id", cfg.ID),
+				zap.Error(err))
+		} else {
+			m.logger.Info("RestoreFromDB: reconnected MCP server",
+				zap.String("server_id", cfg.ID))
+		}
+	}
+
+	return nil
 }
 
 // Stop 停止管理器

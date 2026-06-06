@@ -19,6 +19,7 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/postgres"
 	pkgredis "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/redis"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	"go.uber.org/zap"
 )
@@ -54,6 +55,11 @@ func main() {
 	// Run public schema migration
 	if err := migration.RunPublicSchema(cfg.PostgresURL, "internal/migration/sql", logger); err != nil {
 		logger.Fatal("migration failed", zap.Error(err))
+	}
+
+	// Provision all existing tenant schemas — idempotent, picks up new tables added to tenant_schema.sql.
+	if err := tenantdb.ProvisionAllTenantSchemas(ctx, pgPool.DB(), logger); err != nil {
+		logger.Warn("failed to provision tenant schemas", zap.Error(err))
 	}
 
 	// Create Harness for unified component lifecycle management

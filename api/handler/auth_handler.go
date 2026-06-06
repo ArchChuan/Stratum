@@ -105,27 +105,77 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 		globalRole = "global_admin"
 	}
 
-	// Returning user: skip onboarding and issue tokens directly.
+	// Returning user: check all tenants, pick the right one per rules.
 	githubIDStr := fmt.Sprintf("%d", ghUser.ID)
-	userID, tenantID, exists, lookupErr := h.deps.OnboardSvc.GetUserTenant(ctx, githubIDStr)
+	userID, dbGlobalRole, tenants, exists, lookupErr := h.deps.OnboardSvc.GetUserTenants(ctx, githubIDStr)
 	if lookupErr != nil {
-		h.deps.Logger.Warn("get user tenant failed, falling back to onboarding", zap.Error(lookupErr))
+		h.deps.Logger.Warn("get user tenants failed, falling back to auto-join", zap.Error(lookupErr))
 	}
-	if lookupErr == nil && exists && tenantID != "" {
-		rawRT, accessJWT, err := h.issueTokenPair(ctx, userID, tenantID, "admin", globalRole, ghUser.AvatarURL, ghUser.Login)
+
+	// Config-based GlobalAdmin overrides DB value; also sync DB if needed.
+	if globalRole == "global_admin" {
+		if dbGlobalRole != "global_admin" && userID != "" {
+			_ = h.deps.OnboardSvc.SetGlobalRole(ctx, userID, "global_admin")
+		}
+	} else if dbGlobalRole != "" {
+		globalRole = dbGlobalRole
+	}
+
+	var targetTenantID string
+	var tenantRole string
+	if lookupErr == nil && exists && len(tenants) > 0 {
+		// Pick earliest non-default tenant; fall back to default tenant.
+		for _, t := range tenants {
+			if !t.IsDefault {
+				targetTenantID = t.TenantID
+				tenantRole = t.Role
+				break
+			}
+		}
+		if targetTenantID == "" {
+			targetTenantID = tenants[0].TenantID
+			tenantRole = tenants[0].Role
+		}
+		rawRT, accessJWT, err := h.issueTokenPair(ctx, userID, targetTenantID, tenantRole, globalRole, ghUser.AvatarURL, ghUser.Login)
 		if err != nil {
 			h.deps.Logger.Error("issue token pair for returning user", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "token issuance failed"})
 			return
 		}
 		h.setRefreshCookie(c, rawRT)
-		h.deps.Logger.Info("returning user login, redirecting with access_token",
-			zap.String("user_id", userID), zap.String("tenant_id", tenantID))
+		h.deps.Logger.Info("returning user login", zap.String("user_id", userID), zap.String("tenant_id", targetTenantID))
 		c.Redirect(http.StatusFound, frontendURL+"/auth/callback?access_token="+accessJWT)
 		return
 	}
-	h.deps.Logger.Info("new user, redirecting to onboarding",
-		zap.String("github_login", ghUser.Login), zap.Bool("exists", exists), zap.String("tenant_id", tenantID))
+
+	// New user: auto-join default tenant.
+	userID, targetTenantID, dbGlobalRole, err = h.deps.OnboardSvc.AutoJoinDefaultTenant(ctx, ghUser.ID, ghUser.Login, ghUser.AvatarURL, h.deps.GlobalAdmin)
+	if err != nil {
+		h.deps.Logger.Warn("auto-join default tenant failed, falling back to onboarding", zap.Error(err))
+	} else {
+		// Sync global_admin from config on first join.
+		if globalRole == "global_admin" && dbGlobalRole != "global_admin" {
+			_ = h.deps.OnboardSvc.SetGlobalRole(ctx, userID, "global_admin")
+		} else if globalRole == "" && dbGlobalRole != "" {
+			globalRole = dbGlobalRole
+		}
+		rawRT, accessJWT, err := h.issueTokenPair(ctx, userID, targetTenantID, func() string {
+			if h.deps.GlobalAdmin != "" && strings.EqualFold(ghUser.Login, h.deps.GlobalAdmin) {
+				return "owner"
+			}
+			return "member"
+		}(), globalRole, ghUser.AvatarURL, ghUser.Login)
+		if err != nil {
+			h.deps.Logger.Error("issue token pair for new user", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "token issuance failed"})
+			return
+		}
+		h.setRefreshCookie(c, rawRT)
+		h.deps.Logger.Info("new user auto-joined default tenant", zap.String("user_id", userID), zap.String("tenant_id", targetTenantID))
+		c.Redirect(http.StatusFound, frontendURL+"/auth/callback?access_token="+accessJWT)
+		return
+	}
+	h.deps.Logger.Info("new user, redirecting to onboarding", zap.String("github_login", ghUser.Login))
 
 	ob := auth.OnboardingClaims{
 		GitHubID:    ghUser.ID,
@@ -198,6 +248,15 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		}
 		tenantID = result.TenantID
 		userID = result.UserUUID
+		// Sync global_admin from config into DB on first create.
+		if globalRole == "global_admin" {
+			_ = h.deps.OnboardSvc.SetGlobalRole(ctx, userID, "global_admin")
+		} else {
+			// Read existing DB role in case it was set before.
+			if dbRole, rErr := h.deps.OnboardSvc.GetGlobalRole(ctx, userID); rErr == nil && dbRole != "" {
+				globalRole = dbRole
+			}
+		}
 
 	case "join":
 		if req.InvitationToken == "" {
@@ -218,7 +277,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	rawRT, accessJWT, err := h.issueTokenPair(ctx, userID, tenantID, "admin", globalRole, ob.AvatarURL, ob.GitHubLogin)
+	rawRT, accessJWT, err := h.issueTokenPair(ctx, userID, tenantID, "owner", globalRole, ob.AvatarURL, ob.GitHubLogin)
 	if err != nil {
 		h.deps.Logger.Error("issue token pair", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "token issuance failed"})
@@ -267,9 +326,26 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		return
 	}
 
+	// Read global_role from DB so it stays current across refreshes.
+	globalRole := ""
+	if h.deps.OnboardSvc != nil {
+		if dbRole, rErr := h.deps.OnboardSvc.GetGlobalRole(ctx, storedClaims.UserID); rErr == nil {
+			globalRole = dbRole
+		}
+	}
+
+	// Read actual tenant role from DB so role changes take effect on next refresh.
+	tenantRole := "member"
+	if h.deps.OnboardSvc != nil {
+		if r, rErr := h.deps.OnboardSvc.GetTenantRole(ctx, storedClaims.UserID, storedClaims.TenantID); rErr == nil {
+			tenantRole = r
+		}
+	}
+
 	claims := auth.TokenClaims{
-		Sub: storedClaims.UserID, TenantID: storedClaims.TenantID, Role: "admin", JTI: newRawRT[:8],
-		AvatarURL: storedClaims.AvatarURL, GitHubLogin: storedClaims.GitHubLogin,
+		Sub: storedClaims.UserID, TenantID: storedClaims.TenantID, Role: tenantRole, JTI: newRawRT[:8],
+		GlobalRole: globalRole,
+		AvatarURL:  storedClaims.AvatarURL, GitHubLogin: storedClaims.GitHubLogin,
 	}
 	accessJWT, err := h.deps.JWTService.Sign(claims, accessTokenTTL)
 	if err != nil {
@@ -356,6 +432,111 @@ func (h *AuthHandler) setRefreshCookie(c *gin.Context, value string) {
 		c.SetSameSite(http.SameSiteLaxMode)
 	}
 	c.SetCookie(refreshTokenCookie, value, maxAge, "/", "", h.deps.SecureCookies, true)
+}
+
+// SwitchTenant issues a new token pair scoped to a different tenant the user belongs to.
+// POST /auth/switch-tenant
+func (h *AuthHandler) SwitchTenant(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	authHeader := c.GetHeader("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing Authorization header"})
+		return
+	}
+	claims, err := h.deps.JWTService.Verify(strings.TrimPrefix(authHeader, "Bearer "))
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		return
+	}
+
+	var req struct {
+		TenantID string `json:"tenant_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id required"})
+		return
+	}
+
+	// Verify the user is a member of the requested tenant.
+	isMember, err := h.deps.OnboardSvc.IsMember(ctx, claims.Sub, req.TenantID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "membership check failed"})
+		return
+	}
+	if !isMember {
+		c.JSON(http.StatusForbidden, gin.H{"error": "not a member of this tenant"})
+		return
+	}
+
+	// Always read global_role from DB so it reflects the latest value.
+	globalRole, err := h.deps.OnboardSvc.GetGlobalRole(ctx, claims.Sub)
+	if err != nil {
+		globalRole = claims.GlobalRole // fallback to token value on DB error
+	}
+
+	// Read the actual tenant role from DB for the target tenant.
+	tenantRole, err := h.deps.OnboardSvc.GetTenantRole(ctx, claims.Sub, req.TenantID)
+	if err != nil {
+		tenantRole = "member" // safe fallback
+	}
+
+	rawRT, accessJWT, err := h.issueTokenPair(ctx, claims.Sub, req.TenantID, tenantRole, globalRole, claims.AvatarURL, claims.GitHubLogin)
+	if err != nil {
+		h.deps.Logger.Error("switch tenant: issue token pair", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "token issuance failed"})
+		return
+	}
+	h.setRefreshCookie(c, rawRT)
+	c.JSON(http.StatusOK, gin.H{"access_token": accessJWT, "tenant_id": req.TenantID})
+}
+
+// CreateUserTenant creates a new tenant for an already-authenticated user and switches
+// them to it as owner. Requires a valid Bearer JWT.
+// POST /auth/create-tenant
+func (h *AuthHandler) CreateUserTenant(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	authHeader := c.GetHeader("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing Authorization header"})
+		return
+	}
+	claims, err := h.deps.JWTService.Verify(strings.TrimPrefix(authHeader, "Bearer "))
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		return
+	}
+
+	var req struct {
+		TenantName string `json:"tenant_name" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.TenantName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_name required"})
+		return
+	}
+
+	// For authenticated users we already have their user UUID; use a minimal CreateTenant
+	// that skips the GitHub re-upsert by passing a sentinel GitHubID of 0 (owner insert
+	// happens through a raw INSERT instead). We use OnboardSvc.CreateTenantForUser.
+	tenantID, err := h.deps.OnboardSvc.CreateTenantForUser(ctx, claims.Sub, req.TenantName)
+	if err != nil {
+		h.deps.Logger.Error("create tenant for user", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create tenant"})
+		return
+	}
+
+	globalRole, _ := h.deps.OnboardSvc.GetGlobalRole(ctx, claims.Sub)
+
+	rawRT, accessJWT, err := h.issueTokenPair(ctx, claims.Sub, tenantID, "owner", globalRole, claims.AvatarURL, claims.GitHubLogin)
+	if err != nil {
+		h.deps.Logger.Error("issue token pair after create tenant", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "token issuance failed"})
+		return
+	}
+
+	h.setRefreshCookie(c, rawRT)
+	c.JSON(http.StatusCreated, gin.H{"access_token": accessJWT, "tenant_id": tenantID})
 }
 
 func randomState() (string, error) {

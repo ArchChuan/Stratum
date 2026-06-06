@@ -19,7 +19,8 @@ type Config struct {
 	Neo4jUser              string
 	Neo4jPassword          string
 	OtelEndpoint           string
-	OpenAIAPIKey           string
+	QwenAPIKey             string
+	ZhipuAPIKey            string
 	PostgresURL            string
 	RedisURL               string
 	GitHubClientID         string
@@ -46,7 +47,8 @@ func Load() (*Config, error) {
 		Neo4jUser:          getEnv("NEO4J_USER", "neo4j"),
 		Neo4jPassword:      getEnv("NEO4J_PASSWORD", "password"),
 		OtelEndpoint:       getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
-		OpenAIAPIKey:       getEnv("OPENAI_API_KEY", ""),
+		QwenAPIKey:         getEnv("QWEN_API_KEY", ""),
+		ZhipuAPIKey:        getEnv("ZHIPU_API_KEY", ""),
 		PostgresURL:        getEnv("POSTGRES_URL", "postgres://clawhermes:clawhermes@localhost:5432/clawhermes?sslmode=disable"),
 		RedisURL:           getEnv("REDIS_URL", "redis://localhost:6379"),
 		GitHubClientID:     getEnv("GITHUB_CLIENT_ID", "Ov23liGDZ841fQatJmA0"),

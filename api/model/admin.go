@@ -20,13 +20,14 @@ type UpdateTenantRequest struct {
 
 // TenantResponse is the shape returned by all tenant endpoints.
 type TenantResponse struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Slug      string     `json:"slug"`
-	Plan      string     `json:"plan"`
-	Status    string     `json:"status"`
-	CreatedAt time.Time  `json:"created_at"`
-	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Slug        string     `json:"slug"`
+	Plan        string     `json:"plan"`
+	Status      string     `json:"status"`
+	MemberCount int        `json:"member_count"`
+	CreatedAt   time.Time  `json:"created_at"`
+	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
 }
 
 // ListTenantsResponse wraps paginated tenant results.
@@ -40,7 +41,7 @@ type ListTenantsResponse struct {
 // InviteMemberRequest is the body for POST /tenant/members/invite.
 type InviteMemberRequest struct {
 	Email string `json:"email" binding:"required,email"`
-	Role  string `json:"role" binding:"required,oneof=member admin owner"`
+	Role  string `json:"role" binding:"required,oneof=member admin"`
 }
 
 // InviteMemberResponse is returned after creating an invitation.
@@ -54,7 +55,7 @@ type InviteMemberResponse struct {
 
 // UpdateMemberRoleRequest is the body for PATCH /tenant/members/:user_id/role.
 type UpdateMemberRoleRequest struct {
-	Role string `json:"role" binding:"required,oneof=member admin owner"`
+	Role string `json:"role" binding:"required,oneof=member admin"`
 }
 
 // MemberResponse represents a single tenant member.
@@ -76,7 +77,8 @@ type ListMembersResponse struct {
 
 // UpdateSettingsRequest is the body for PATCH /tenant/settings.
 type UpdateSettingsRequest struct {
-	Settings map[string]interface{} `json:"settings" binding:"required"`
+	Name     string                 `json:"name"`
+	Settings map[string]interface{} `json:"settings"`
 }
 
 // SettingsResponse wraps the current settings JSONB.
@@ -84,4 +86,16 @@ type SettingsResponse struct {
 	TenantID   string                 `json:"tenant_id"`
 	TenantName string                 `json:"tenant_name"`
 	Settings   map[string]interface{} `json:"settings"`
+}
+
+// TenantListItem represents one tenant the current user belongs to.
+type TenantListItem struct {
+	TenantID  string `json:"tenant_id"`
+	Name      string `json:"name"`
+	IsDefault bool   `json:"is_default"`
+}
+
+// TenantListResponse is returned by GET /tenant/list.
+type TenantListResponse struct {
+	Tenants []TenantListItem `json:"tenants"`
 }

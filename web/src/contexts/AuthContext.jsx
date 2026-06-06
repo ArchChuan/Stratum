@@ -1,11 +1,13 @@
 import React, { createContext, useState, useEffect, useRef } from 'react';
 import api from '../services/api';
+import { getTenantList, switchTenant as apiSwitchTenant } from '../services/api';
 
 export const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [accessToken, setAccessToken] = useState(null);
+  const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(true);
   const tokenRef = useRef(null);
 
@@ -36,18 +38,32 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const fetchTenants = async (token) => {
+    try {
+      const res = await api.get('/tenant/list', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        _retry: true,
+      });
+      return res.data.tenants || [];
+    } catch {
+      return [];
+    }
+  };
+
   useEffect(() => {
     const restoreSession = async () => {
       const savedToken = localStorage.getItem('access_token');
 
       if (savedToken) {
         try {
-          const [meRes, tenantName] = await Promise.all([
+          const [meRes, tenantName, tenantList] = await Promise.all([
             api.get('/auth/me', { headers: { Authorization: `Bearer ${savedToken}` }, _retry: true }),
             fetchTenantName(savedToken),
+            fetchTenants(savedToken),
           ]);
           updateToken(savedToken);
           setUser(buildUser(meRes.data, tenantName));
+          setTenants(tenantList);
           setLoading(false);
           return;
         } catch {
@@ -61,14 +77,17 @@ export const AuthProvider = ({ children }) => {
         updateToken(token);
         localStorage.setItem('access_token', token);
 
-        const [meRes, tenantName] = await Promise.all([
+        const [meRes, tenantName, tenantList] = await Promise.all([
           api.get('/auth/me', { headers: { Authorization: `Bearer ${token}` }, _retry: true }),
           fetchTenantName(token),
+          fetchTenants(token),
         ]);
         setUser(buildUser(meRes.data, tenantName));
+        setTenants(tenantList);
       } catch {
         setUser(null);
         updateToken(null);
+        setTenants([]);
       } finally {
         setLoading(false);
       }
@@ -82,6 +101,8 @@ export const AuthProvider = ({ children }) => {
     if (token) {
       localStorage.setItem('access_token', token);
     }
+    // Fetch tenants after login (async, non-blocking).
+    fetchTenants(token).then(setTenants);
   };
 
   const logout = async () => {
@@ -93,11 +114,30 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem('access_token');
     setUser(null);
     updateToken(null);
+    setTenants([]);
+  };
+
+  const switchTenant = async (tenantId) => {
+    try {
+      const res = await apiSwitchTenant(tenantId);
+      const newToken = res.data.access_token;
+      updateToken(newToken);
+      localStorage.setItem('access_token', newToken);
+
+      const [meRes, tenantName] = await Promise.all([
+        api.get('/auth/me', { headers: { Authorization: `Bearer ${newToken}` }, _retry: true }),
+        api.get('/tenant/settings', { headers: { Authorization: `Bearer ${newToken}` }, _retry: true })
+          .then(r => r.data.tenant_name || '').catch(() => ''),
+      ]);
+      setUser(buildUser(meRes.data, tenantName));
+    } catch (err) {
+      throw err;
+    }
   };
 
   return (
     <AuthContext.Provider
-      value={{ user, accessToken, tokenRef, loading, login, logout, setAccessToken: updateToken }}
+      value={{ user, accessToken, tokenRef, loading, tenants, login, logout, switchTenant, setAccessToken: updateToken }}
     >
       {children}
     </AuthContext.Provider>

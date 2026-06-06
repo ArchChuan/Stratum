@@ -1,133 +1,133 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Statistic, Button, Space, Table, Typography } from 'antd';
-import { ArrowUpOutlined, ArrowDownOutlined, PlusOutlined } from '@ant-design/icons';
-import { getAllSkills } from '../services/api';
+import { Card, Row, Col, Statistic, Table, Typography, Tag, message } from 'antd';
+import {
+  AppstoreOutlined,
+  RobotOutlined,
+  ApiOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
+import { getAllSkills, getAllAgents, getAgentExecutions } from '../services/api';
+import api from '../services/api';
 
 const { Title } = Typography;
 
+const statusColor = { success: 'green', error: 'red' };
+
+const execColumns = [
+  {
+    title: 'Agent',
+    dataIndex: 'agent_name',
+    key: 'agent_name',
+    ellipsis: true,
+  },
+  {
+    title: '状态',
+    dataIndex: 'status',
+    key: 'status',
+    width: 70,
+    render: (s) => <Tag color={statusColor[s] || 'default'}>{s === 'success' ? '成功' : '失败'}</Tag>,
+  },
+  {
+    title: '输入',
+    dataIndex: 'input_preview',
+    key: 'input_preview',
+    ellipsis: true,
+  },
+  {
+    title: 'Token',
+    dataIndex: 'total_tokens',
+    key: 'total_tokens',
+    width: 80,
+  },
+  {
+    title: '时间',
+    dataIndex: 'created_at',
+    key: 'created_at',
+    width: 160,
+    render: (d) => new Date(d).toLocaleString('zh-CN'),
+  },
+];
+
 const DashboardPage = () => {
-  const [stats, setStats] = useState({
-    totalSkills: 0,
-    codeSkills: 0,
-    llmSkills: 0,
-    otherSkills: 0
-  });
-  
-  const [recentSkills, setRecentSkills] = useState([]);
+  const [counts, setCounts] = useState({ skills: 0, agents: 0, mcpServers: 0, executions: 0 });
+  const [recentExecs, setRecentExecs] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchData();
+    let cancelled = false;
+
+    const fetchAll = async () => {
+      setLoading(true);
+      try {
+        const [skillsRes, agentsRes, execsRes, mcpRes] = await Promise.allSettled([
+          getAllSkills(),
+          getAllAgents(),
+          getAgentExecutions(),
+          api.get('/api/v1/mcp/servers'),
+        ]);
+
+        if (cancelled) return;
+
+        const skills = skillsRes.status === 'fulfilled' ? (skillsRes.value.data || []) : [];
+        const agents = agentsRes.status === 'fulfilled' ? (agentsRes.value.data?.agents || []) : [];
+        const execs  = execsRes.status  === 'fulfilled' ? (execsRes.value.data?.executions || []) : [];
+        const mcpServers = mcpRes.status === 'fulfilled' ? (mcpRes.value.data?.servers || []) : [];
+
+        setCounts({
+          skills: skills.length,
+          agents: agents.length,
+          mcpServers: mcpServers.length,
+          executions: execs.length,
+        });
+        setRecentExecs(execs.slice(0, 8));
+      } catch {
+        if (!cancelled) message.error('加载仪表盘数据失败');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    fetchAll();
+    return () => { cancelled = true; };
   }, []);
 
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      const response = await getAllSkills();
-      const skills = response.data;
-      
-      // 计算统计数据
-      const totalSkills = skills.length;
-      const codeSkills = skills.filter(skill => skill.type === 'code').length;
-      const llmSkills = skills.filter(skill => skill.type === 'llm').length;
-      const otherSkills = skills.filter(skill => skill.type !== 'code' && skill.type !== 'llm').length;
-      
-      setStats({
-        totalSkills,
-        codeSkills,
-        llmSkills,
-        otherSkills
-      });
-      
-      // 最近创建的技能（按时间排序取前5个）
-      setRecentSkills(skills.slice(0, 5));
-    } catch (error) {
-      console.error('Error fetching dashboard data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const columns = [
-    {
-      title: '技能名称',
-      dataIndex: 'name',
-      key: 'name',
-    },
-    {
-      title: '类型',
-      dataIndex: 'type',
-      key: 'type',
-    },
-    {
-      title: '描述',
-      dataIndex: 'description',
-      key: 'description',
-    },
-    {
-      title: '创建时间',
-      dataIndex: 'createdAt',
-      key: 'createdAt',
-    },
+  const statCards = [
+    { title: 'Agent 数量', value: counts.agents, icon: <RobotOutlined />, color: '#1677ff' },
+    { title: '技能数量', value: counts.skills, icon: <AppstoreOutlined />, color: '#52c41a' },
+    { title: 'MCP 服务器', value: counts.mcpServers, icon: <ApiOutlined />, color: '#722ed1' },
+    { title: '近30天执行', value: counts.executions, icon: <ThunderboltOutlined />, color: '#fa8c16' },
   ];
 
   return (
     <div>
       <Row gutter={16}>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="总技能数"
-              value={stats.totalSkills}
-              prefix={stats.totalSkills > 0 ? <ArrowUpOutlined /> : null}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="代码技能"
-              value={stats.codeSkills}
-              valueStyle={{ color: '#3f8600' }}
-              prefix={stats.codeSkills > 0 ? <ArrowUpOutlined /> : null}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="LLM技能"
-              value={stats.llmSkills}
-              valueStyle={{ color: '#3f8600' }}
-              prefix={stats.llmSkills > 0 ? <ArrowUpOutlined /> : null}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="其他技能"
-              value={stats.otherSkills}
-              prefix={stats.otherSkills > 0 ? <ArrowUpOutlined /> : null}
-            />
-          </Card>
-        </Col>
+        {statCards.map((s) => (
+          <Col span={6} key={s.title}>
+            <Card loading={loading}>
+              <Statistic
+                title={s.title}
+                value={s.value}
+                prefix={<span style={{ color: s.color, marginRight: 4 }}>{s.icon}</span>}
+                valueStyle={{ color: s.color }}
+              />
+            </Card>
+          </Col>
+        ))}
       </Row>
 
       <div style={{ marginTop: 24 }}>
-        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Title level={3}>最近创建的技能</Title>
-          <Button type="primary" icon={<PlusOutlined />} href="/skills/create">
-            创建新技能
-          </Button>
-        </div>
-        <Table 
-          dataSource={recentSkills} 
-          columns={columns} 
-          rowKey="id" 
-          loading={loading}
-          pagination={{ pageSize: 5 }}
-        />
+        <Title level={4} style={{ marginBottom: 12 }}>最近执行记录</Title>
+        <Card>
+          <Table
+            dataSource={recentExecs}
+            columns={execColumns}
+            rowKey="id"
+            loading={loading}
+            pagination={false}
+            locale={{ emptyText: '暂无执行记录' }}
+            size="small"
+          />
+        </Card>
       </div>
     </div>
   );
