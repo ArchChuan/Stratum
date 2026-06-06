@@ -121,12 +121,12 @@ function ServerDetailDrawer({ server, onClose }) {
     setResError(null);
 
     getMCPServerTools(server.id)
-      .then((r) => setTools(r.data || []))
+      .then((r) => setTools(r.data?.tools || []))
       .catch((e) => setToolsError(e.response?.data?.error || '加载工具失败'))
       .finally(() => setLoadingTools(false));
 
     getMCPServerResources(server.id)
-      .then((r) => setResources(r.data || []))
+      .then((r) => setResources(r.data?.resources || []))
       .catch((e) => setResError(e.response?.data?.error || '加载资源失败'))
       .finally(() => setLoadingRes(false));
   }, [server]);
@@ -199,7 +199,7 @@ export default function MCPServersPage() {
     setLoading(true);
     try {
       const res = await getMCPServers();
-      setServers(res.data || []);
+      setServers(res.data?.servers || []);
     } catch {
       message.error('获取 MCP 服务器列表失败');
     } finally {
