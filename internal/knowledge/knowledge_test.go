@@ -66,26 +66,27 @@ func TestValidateCypherIdentifier(t *testing.T) {
 
 func TestEscapeLucene(t *testing.T) {
 	tests := []struct {
+		name     string
 		input    string
 		expected string
 	}{
-		{"hello", "hello"},
-		{"+", `\+`},
-		{`\`, `\\`},
-		{`\+`, `\\\+`},
-		{"a+b", `a\+b`},
-		{`a\+b`, `a\\\+b`},
-		{"test:value", `test\:value`},
-		{"path/to/file", `path\/to\/file`},
-		{"C++ error", `C\+\+ error`},
-		{"[ERROR]", `\[ERROR\]`},
-		{`query"with"quotes`, `query\"with\"quotes`},
-		{"range~0.5", `range\~0.5`},
-		{"field?wildcard", `field\?wildcard`},
+		{"plain", "hello", "hello"},
+		{"plus", "+", `\+`},
+		{"backslash", `\`, `\\`},
+		{"backslash_plus", `\+`, `\\\+`},
+		{"inline_plus", "a+b", `a\+b`},
+		{"inline_backslash_plus", `a\+b`, `a\\\+b`},
+		{"colon", "test:value", `test\:value`},
+		{"slash", "path/to/file", `path\/to\/file`},
+		{"double_plus", "C++ error", `C\+\+ error`},
+		{"brackets", "[ERROR]", `\[ERROR\]`},
+		{"quotes", `query"with"quotes`, `query\"with\"quotes`},
+		{"tilde", "range~0.5", `range\~0.5`},
+		{"question", "field?wildcard", `field\?wildcard`},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			got := escapeLucene(tt.input)
 			if got != tt.expected {
 				t.Errorf("escapeLucene(%q) = %q, want %q", tt.input, got, tt.expected)
