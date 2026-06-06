@@ -153,4 +153,14 @@ export const disconnectMCPServer = (id) => api.delete(`/api/v1/mcp/servers/${id}
 export const getMCPServerTools = (id) => api.get(`/api/v1/mcp/servers/${id}/tools`);
 export const getMCPServerResources = (id) => api.get(`/api/v1/mcp/servers/${id}/resources`);
 
+// Knowledge Workspaces
+export const listWorkspaces = () => api.get('/knowledge/workspaces');
+export const createWorkspace = (data) => api.post('/knowledge/workspaces', data);
+export const getWorkspaceStats = (name) => api.get(`/knowledge/workspaces/${name}/stats`);
+export const updateWorkspace = (name, data) => api.patch(`/knowledge/workspaces/${name}`, data);
+export const deleteWorkspace = (name) => api.delete(`/knowledge/workspaces/${name}`);
+export const ingestDocument = (formData) =>
+  api.post('/knowledge/ingest', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const queryKnowledge = (data) => api.post('/knowledge/query', data);
+
 export default api;
