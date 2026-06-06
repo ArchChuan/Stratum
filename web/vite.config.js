@@ -32,6 +32,7 @@ export default defineConfig(({ command, mode }) => {
         '/tenant': { target: apiTarget, changeOrigin: true, bypass: (req) => req.headers.accept?.includes('text/html') ? '/index.html' : undefined },
         '/admin': { target: apiTarget, changeOrigin: true, bypass: (req) => req.headers.accept?.includes('text/html') ? '/index.html' : undefined },
         '/metrics': { target: apiTarget, changeOrigin: true },
+        '/api': { target: apiTarget, changeOrigin: true },
       },
     },
 
