@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Menu, Space, Typography, Dropdown, Avatar } from 'antd';
+import { Layout, Menu, Space, Typography, Dropdown, Avatar, message, Modal, Form, Input, Button } from 'antd';
 import {
   AppstoreOutlined, PlusCircleOutlined, HistoryOutlined, DashboardOutlined,
   RobotOutlined, CommentOutlined, DatabaseOutlined, UserOutlined, LogoutOutlined,
-  TeamOutlined, SettingOutlined, GlobalOutlined,
+  TeamOutlined, SettingOutlined, GlobalOutlined, SwapOutlined, ApiOutlined,
 } from '@ant-design/icons';
 import { Routes, Route, useNavigate, Link, useLocation } from 'react-router-dom';
 
@@ -15,6 +15,7 @@ import AgentsListPage from './pages/AgentsListPage';
 import CreateAgentPage from './pages/CreateAgentPage';
 import AgentChatPage from './pages/AgentChatPage';
 import MemoryPage from './pages/MemoryPage';
+import MCPServersPage from './pages/MCPServersPage';
 import LoginPage from './pages/auth/LoginPage';
 import CallbackPage from './pages/auth/CallbackPage';
 import OnboardingPage from './pages/auth/OnboardingPage';
@@ -24,7 +25,7 @@ import TenantsListPage from './pages/admin/TenantsListPage';
 import PrivateRoute from './components/PrivateRoute';
 import { AuthProvider } from './contexts/AuthContext';
 import { useAuth } from './hooks/useAuth';
-import { setupApiInterceptors, checkHealth } from './services/api';
+import { setupApiInterceptors, checkHealth, createUserTenant } from './services/api';
 
 const { Header, Content, Sider } = Layout;
 const { Title } = Typography;
@@ -32,9 +33,13 @@ const { Title } = Typography;
 const AppInner = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [switchingTenant, setSwitchingTenant] = useState(false);
+  const [createTenantOpen, setCreateTenantOpen] = useState(false);
+  const [createTenantLoading, setCreateTenantLoading] = useState(false);
+  const [createTenantForm] = Form.useForm();
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, logout, tokenRef } = useAuth();
+  const { user, logout, tokenRef, tenants, switchTenant } = useAuth();
 
   useEffect(() => {
     setupApiInterceptors(tokenRef, () => { logout(); navigate('/login', { replace: true }); });
@@ -56,6 +61,55 @@ const AppInner = () => {
     );
   }
 
+  const handleSwitchTenant = async (tenantId) => {
+    if (tenantId === user?.tenant_id) return;
+    setSwitchingTenant(true);
+    try {
+      await switchTenant(tenantId);
+      navigate('/', { replace: true });
+    } catch {
+      message.error('切换租户失败');
+    } finally {
+      setSwitchingTenant(false);
+    }
+  };
+
+  // Build tenant switcher dropdown items.
+
+  const handleCreateTenant = async (values) => {
+    setCreateTenantLoading(true);
+    try {
+      const res = await createUserTenant(values.tenant_name);
+      const newToken = res.data.access_token;
+      await switchTenant(res.data.tenant_id);
+      setCreateTenantOpen(false);
+      createTenantForm.resetFields();
+      // switchTenant already updates auth state; update localStorage too
+      localStorage.setItem('access_token', newToken);
+      navigate('/', { replace: true });
+    } catch (err) {
+      message.error(err.response?.data?.error || '创建租户失败');
+    } finally {
+      setCreateTenantLoading(false);
+    }
+  };
+  const tenantMenuItems = [
+    ...tenants.map(t => ({
+      key: `tenant-${t.tenant_id}`,
+      icon: <SwapOutlined />,
+      label: t.tenant_id === user?.tenant_id ? <b>{t.name}（当前）</b> : t.name,
+      disabled: t.tenant_id === user?.tenant_id || switchingTenant,
+      onClick: () => handleSwitchTenant(t.tenant_id),
+    })),
+    { type: 'divider' },
+    {
+      key: 'create-tenant',
+      icon: <PlusCircleOutlined />,
+      label: '创建新租户',
+      onClick: () => setCreateTenantOpen(true),
+    },
+  ];
+
   const menuItems = [
     { key: '/', icon: <DashboardOutlined />, label: <Link to="/">仪表盘</Link> },
     { key: '/skills', icon: <AppstoreOutlined />, label: <Link to="/skills">技能管理</Link> },
@@ -64,6 +118,7 @@ const AppInner = () => {
     { key: '/agents/create', icon: <PlusCircleOutlined />, label: <Link to="/agents/create">创建代理</Link> },
     { key: '/chat', icon: <CommentOutlined />, label: <Link to="/chat">代理对话</Link> },
     { key: '/memory', icon: <DatabaseOutlined />, label: <Link to="/memory">记忆管理</Link> },
+    { key: '/mcp', icon: <ApiOutlined />, label: <Link to="/mcp">MCP 服务器</Link> },
     { key: '/history', icon: <HistoryOutlined />, label: <Link to="/history">执行历史</Link> },
     ...(user?.current_tenant ? [{ key: '/tenant/members', icon: <TeamOutlined />, label: <Link to="/tenant/members">成员管理</Link> }] : []),
     ...(user?.global_role === 'global_admin' ? [{ key: '/admin/tenants', icon: <GlobalOutlined />, label: <Link to="/admin/tenants">全局租户</Link> }] : []),
@@ -93,10 +148,14 @@ const AppInner = () => {
           <Space>
             <span>状态:</span>
             <span style={{ color: connected ? 'green' : 'red' }}>{connected ? '已连接' : '未连接'}</span>
-            {user?.current_tenant?.name && (
+            {user?.current_tenant?.name && tenants.length > 0 && (
               <>
                 <span style={{ color: '#bbb' }}>|</span>
-                <span style={{ color: '#1677ff', fontWeight: 500 }}>{user.current_tenant.name}</span>
+                <Dropdown menu={{ items: tenantMenuItems }} placement="bottomLeft" trigger={['click']}>
+                  <span style={{ color: '#1677ff', fontWeight: 500, cursor: 'pointer' }}>
+                    {user.current_tenant.name} ▾
+                  </span>
+                </Dropdown>
               </>
             )}
           </Space>
@@ -122,6 +181,7 @@ const AppInner = () => {
               <Route path="/agents/create" element={<PrivateRoute><CreateAgentPage /></PrivateRoute>} />
               <Route path="/chat" element={<PrivateRoute><AgentChatPage /></PrivateRoute>} />
               <Route path="/memory" element={<PrivateRoute><MemoryPage /></PrivateRoute>} />
+              <Route path="/mcp" element={<PrivateRoute><MCPServersPage /></PrivateRoute>} />
               <Route path="/history" element={<PrivateRoute><ExecutionHistoryPage /></PrivateRoute>} />
               <Route path="/tenant/members" element={<PrivateRoute><MembersPage /></PrivateRoute>} />
               <Route path="/tenant/settings" element={<PrivateRoute><SettingsPage /></PrivateRoute>} />
@@ -133,6 +193,22 @@ const AppInner = () => {
           </div>
         </Content>
       </Layout>
+      <Modal
+        title="创建新租户"
+        open={createTenantOpen}
+        onCancel={() => { setCreateTenantOpen(false); createTenantForm.resetFields(); }}
+        footer={null}
+        destroyOnClose
+      >
+        <Form form={createTenantForm} layout="vertical" onFinish={handleCreateTenant}>
+          <Form.Item label="租户名称" name="tenant_name" rules={[{ required: true, message: '请输入租户名称' }]}>
+            <Input placeholder="例如：我的团队" maxLength={64} />
+          </Form.Item>
+          <Form.Item>
+            <Button type="primary" htmlType="submit" block loading={createTenantLoading}>创建</Button>
+          </Form.Item>
+        </Form>
+      </Modal>
     </Layout>
   );
 };
