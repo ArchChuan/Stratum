@@ -2,17 +2,20 @@
 -- Execute after: SET search_path = tenant_{id}, public
 
 CREATE TABLE IF NOT EXISTS agents (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name         TEXT NOT NULL,
-    description  TEXT,
-    config       JSONB NOT NULL DEFAULT '{}',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL,
+    type           TEXT NOT NULL DEFAULT 'react',
+    description    TEXT NOT NULL DEFAULT '',
+    persona        TEXT NOT NULL DEFAULT '',
+    system_prompt  TEXT NOT NULL DEFAULT '',
+    llm_model      TEXT NOT NULL DEFAULT '',
+    max_iterations INT  NOT NULL DEFAULT 10,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS skills (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id     UUID REFERENCES agents(id) ON DELETE CASCADE,
+    id           TEXT PRIMARY KEY,
     name         TEXT NOT NULL,
     type         TEXT NOT NULL,
     config       JSONB NOT NULL DEFAULT '{}',
@@ -20,12 +23,18 @@ CREATE TABLE IF NOT EXISTS skills (
 );
 
 CREATE TABLE IF NOT EXISTS mcp_configs (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id     UUID REFERENCES agents(id) ON DELETE CASCADE,
-    server_id    TEXT NOT NULL,
-    transport    TEXT NOT NULL,
-    config       JSONB NOT NULL DEFAULT '{}',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL DEFAULT '',
+    transport     TEXT NOT NULL,
+    command       TEXT NOT NULL DEFAULT '',
+    url           TEXT NOT NULL DEFAULT '',
+    args          JSONB NOT NULL DEFAULT '[]',
+    env           JSONB NOT NULL DEFAULT '{}',
+    capabilities  JSONB NOT NULL DEFAULT '[]',
+    timeout_sec   INT  NOT NULL DEFAULT 30,
+    enabled       BOOL NOT NULL DEFAULT true,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
