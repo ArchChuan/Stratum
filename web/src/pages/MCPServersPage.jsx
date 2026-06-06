@@ -172,7 +172,7 @@ function ServerDetailDrawer({ server, onClose }) {
     >
       {server && (
         <>
-          <Descriptions size="small" column={2} style={{ marginBottom: 16 }}>
+          <Descriptions size="small" column={4} style={{ marginBottom: 16 }}>
             <Descriptions.Item label="ID">{server.id}</Descriptions.Item>
             <Descriptions.Item label="Transport">
               <Tag color={TRANSPORT_COLORS[server.transport]}>{server.transport}</Tag>

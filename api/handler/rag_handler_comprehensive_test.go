@@ -32,7 +32,7 @@ func setupRAGRouter(handler *RAGHandler) *gin.Engine {
 func newTestRAGHandler(logger *zap.Logger) *RAGHandler {
 	parser := document.NewParser(logger)
 	chunker := textchunk.NewChunker(logger)
-	embedSvc := embedding.NewEmbeddingService(llmgateway.NewOpenAIClient("", "", logger), logger)
+	embedSvc := embedding.NewEmbeddingService(llmgateway.NewQwenClient("", logger), logger)
 	vectorStore := vector.NewVectorStore("localhost", "19530", logger)
 	graphRAG := knowledge.NewGraphRAG("bolt://localhost:7687", "neo4j", "password", logger)
 	ingestSvc := knowledge.NewKnowledgeIngest(parser, chunker, embedSvc, vectorStore, graphRAG, logger)

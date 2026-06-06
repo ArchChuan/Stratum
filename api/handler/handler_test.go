@@ -27,7 +27,7 @@ func TestNewRAGHandler(t *testing.T) {
 
 func TestNewAgentHandler(t *testing.T) {
 	logger := zap.NewNop()
-	handler := NewAgentHandler(nil, logger, nil, observability.NoopMetrics{})
+	handler := NewAgentHandler(nil, logger, nil, observability.NoopMetrics{}, nil)
 
 	if handler == nil {
 		t.Error("expected AgentHandler to be non-nil")

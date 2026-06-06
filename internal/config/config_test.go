@@ -43,7 +43,7 @@ func TestLoadWithEnv(t *testing.T) {
 	_ = os.Setenv("NEO4J_USER", "custom-user")
 	_ = os.Setenv("NEO4J_PASSWORD", "custom-pass")
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://custom:4317")
-	_ = os.Setenv("OPENAI_API_KEY", "sk-test-key")
+	_ = os.Setenv("QWEN_API_KEY", "sk-test-key")
 
 	defer func() {
 		_ = os.Unsetenv("PORT")
@@ -54,7 +54,7 @@ func TestLoadWithEnv(t *testing.T) {
 		_ = os.Unsetenv("NEO4J_USER")
 		_ = os.Unsetenv("NEO4J_PASSWORD")
 		_ = os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-		_ = os.Unsetenv("OPENAI_API_KEY")
+		_ = os.Unsetenv("QWEN_API_KEY")
 	}()
 
 	cfg, err := Load()
@@ -90,8 +90,8 @@ func TestLoadWithEnv(t *testing.T) {
 		t.Errorf("expected Neo4jPassword custom-pass, got %s", cfg.Neo4jPassword)
 	}
 
-	if cfg.OpenAIAPIKey != "sk-test-key" {
-		t.Errorf("expected OpenAIAPIKey sk-test-key, got %s", cfg.OpenAIAPIKey)
+	if cfg.QwenAPIKey != "sk-test-key" {
+		t.Errorf("expected QwenAPIKey sk-test-key, got %s", cfg.QwenAPIKey)
 	}
 }
 
@@ -130,7 +130,7 @@ func TestConfigStruct(t *testing.T) {
 		Neo4jUser:     "neo4j",
 		Neo4jPassword: "password",
 		OtelEndpoint:  "http://localhost:4317",
-		OpenAIAPIKey:  "sk-test",
+		QwenAPIKey:    "sk-test",
 	}
 
 	if cfg.Port != "8080" {

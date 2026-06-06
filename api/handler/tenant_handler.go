@@ -143,7 +143,37 @@ func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "tenant_id missing"})
 		return
 	}
+
+	// only owner may change roles
+	roleVal, _ := c.Get("auth.role")
+	if roleVal != "owner" {
+		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "owner role required"})
+		return
+	}
+
 	userID := c.Param("user_id")
+
+	// prevent changing own role
+	callerID, _ := c.Get("auth.sub")
+	if callerID == userID {
+		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "cannot change your own role"})
+		return
+	}
+
+	// prevent changing owner's role
+	var targetRole string
+	if err := h.db.QueryRow(c.Request.Context(),
+		"SELECT role FROM public.tenant_members WHERE tenant_id=$1 AND user_id=$2",
+		tenantID, userID,
+	).Scan(&targetRole); err != nil {
+		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: 404, Message: "member not found"})
+		return
+	}
+	if targetRole == "owner" {
+		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "cannot change owner's role"})
+		return
+	}
+
 	var req model.UpdateMemberRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: err.Error()})
@@ -171,7 +201,46 @@ func (h *TenantHandler) RemoveMember(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "tenant_id missing"})
 		return
 	}
+
+	// only owner or admin may remove members
+	roleVal, _ := c.Get("auth.role")
+	callerRole, _ := roleVal.(string)
+	if callerRole != "owner" && callerRole != "admin" {
+		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "admin or owner role required"})
+		return
+	}
+
 	userID := c.Param("user_id")
+
+	// prevent self-removal
+	callerID, _ := c.Get("auth.sub")
+	if callerID == userID {
+		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "cannot remove yourself"})
+		return
+	}
+
+	// get target's current role
+	var targetRole string
+	if err := h.db.QueryRow(c.Request.Context(),
+		"SELECT role FROM public.tenant_members WHERE tenant_id=$1 AND user_id=$2",
+		tenantID, userID,
+	).Scan(&targetRole); err != nil {
+		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: 404, Message: "member not found"})
+		return
+	}
+
+	// owner cannot be removed
+	if targetRole == "owner" {
+		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "cannot remove owner"})
+		return
+	}
+
+	// admin can only remove regular members, not other admins
+	if callerRole == "admin" && targetRole == "admin" {
+		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "admin cannot remove another admin"})
+		return
+	}
+
 	tag, err := h.db.Exec(c.Request.Context(),
 		"DELETE FROM public.tenant_members WHERE tenant_id=$1 AND user_id=$2",
 		tenantID, userID)
@@ -259,4 +328,44 @@ func (h *TenantHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "settings updated"})
+}
+
+// ListUserTenants returns all tenants the current user belongs to.
+// GET /tenant/list
+func (h *TenantHandler) ListUserTenants(c *gin.Context) {
+	userID, ok := c.Get("auth.sub")
+	if !ok || userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "unauthorized"})
+		return
+	}
+
+	rows, err := h.db.Query(c.Request.Context(),
+		`SELECT t.id, t.name, t.is_default
+		 FROM tenant_members tm
+		 JOIN tenants t ON t.id = tm.tenant_id
+		 WHERE tm.user_id = $1 AND t.deleted_at IS NULL
+		 ORDER BY t.is_default DESC, t.created_at ASC`,
+		userID,
+	)
+	if err != nil {
+		h.logger.Error("list user tenants", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "database error"})
+		return
+	}
+	defer rows.Close()
+
+	var items []model.TenantListItem
+	for rows.Next() {
+		var item model.TenantListItem
+		if err := rows.Scan(&item.TenantID, &item.Name, &item.IsDefault); err != nil {
+			h.logger.Error("scan tenant row", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "scan error"})
+			return
+		}
+		items = append(items, item)
+	}
+	if items == nil {
+		items = []model.TenantListItem{}
+	}
+	c.JSON(http.StatusOK, model.TenantListResponse{Tenants: items})
 }

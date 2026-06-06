@@ -157,7 +157,11 @@ func SetupRouter(
 
 	// Initialize agent registry and handler
 	agentRegistry := agent.NewRegistry(db, logger)
-	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway, metrics)
+	var execStore *agent.ExecutionStore
+	if db != nil {
+		execStore = agent.NewExecutionStore(db)
+	}
+	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway, metrics, execStore)
 
 	// Initialize memory system
 	memoryConfig := memory.DefaultMemoryConfig()
@@ -197,6 +201,7 @@ func SetupRouter(
 	{
 		agents.GET("", agentHandler.GetAllAgents)
 		agents.POST("", agentHandler.CreateAgent)
+		agents.GET("/executions", agentHandler.ListExecutions)
 		agents.GET("/:id", agentHandler.GetAgent)
 		agents.POST("/:id/execute", agentHandler.ExecuteAgent)
 		agents.DELETE("/:id", agentHandler.DeleteAgent)

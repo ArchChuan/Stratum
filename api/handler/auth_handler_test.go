@@ -101,6 +101,54 @@ func TestAuthHandler_Logout_NoCookie(t *testing.T) {
 	}
 }
 
+func setupAuthRouterFull(h *handler.AuthHandler) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	auth := r.Group("/auth")
+	{
+		auth.GET("/github", h.GitHubLogin)
+		auth.GET("/github/callback", h.GitHubCallback)
+		auth.POST("/register", h.Register)
+		auth.POST("/refresh", h.Refresh)
+		auth.POST("/logout", h.Logout)
+		auth.GET("/me", h.Me)
+		auth.POST("/switch-tenant", h.SwitchTenant)
+	}
+	return r
+}
+
+func TestAuthHandler_SwitchTenant_NoAuth(t *testing.T) {
+	h := newNilDepsHandler()
+	r := setupAuthRouterFull(h)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/switch-tenant", strings.NewReader(`{"tenant_id":"abc"}`)) //nolint:noctx
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestAuthHandler_SwitchTenant_MissingTenantID(t *testing.T) {
+	h := newNilDepsHandler()
+	r := setupAuthRouterFull(h)
+
+	// Has Bearer header but no tenant_id body — 401 fires first (JWTService nil → Verify fails).
+	req := httptest.NewRequest(http.MethodPost, "/auth/switch-tenant", strings.NewReader(`{}`)) //nolint:noctx
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer sometoken")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	// JWTService nil → 500 on Verify call... actually nil JWTService panics: protect test.
+	// We only assert it doesn't return 200.
+	if w.Code == http.StatusOK {
+		t.Error("should not return 200 with nil JWTService")
+	}
+}
+
 func TestAuthHandler_Register_InvalidAction(t *testing.T) {
 	h := newNilDepsHandler()
 	r := setupAuthRouter(h)

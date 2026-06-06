@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,10 +17,11 @@ import (
 )
 
 type AgentHandler struct {
-	agentRegistry *agent.Registry
-	logger        *zap.Logger
-	gateway       *llmgateway.Gateway
-	metrics       observability.MetricsProvider
+	agentRegistry  *agent.Registry
+	logger         *zap.Logger
+	gateway        *llmgateway.Gateway
+	metrics        observability.MetricsProvider
+	executionStore *agent.ExecutionStore
 }
 
 type CreateAgentRequest struct {
@@ -65,12 +67,13 @@ type AgentExecutionResult struct {
 	Error      string                 `json:"error,omitempty"`
 }
 
-func NewAgentHandler(agentRegistry *agent.Registry, logger *zap.Logger, gateway *llmgateway.Gateway, metrics observability.MetricsProvider) *AgentHandler {
+func NewAgentHandler(agentRegistry *agent.Registry, logger *zap.Logger, gateway *llmgateway.Gateway, metrics observability.MetricsProvider, execStore *agent.ExecutionStore) *AgentHandler {
 	return &AgentHandler{
-		agentRegistry: agentRegistry,
-		logger:        logger,
-		gateway:       gateway,
-		metrics:       metrics,
+		agentRegistry:  agentRegistry,
+		logger:         logger,
+		gateway:        gateway,
+		metrics:        metrics,
+		executionStore: execStore,
 	}
 }
 
@@ -246,7 +249,37 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
+	tenantID, _ := tenantIDFromCtx(c)
+	userID, _ := userIDFromCtx(c)
+	start := time.Now()
 	result, err := a.Execute(ctx, req.Query, options...)
+	durationMs := int(time.Since(start).Milliseconds())
+
+	// fire-and-forget execution record
+	if h.executionStore != nil {
+		rec := agent.ExecutionRecord{
+			TenantID:     tenantID,
+			AgentID:      id,
+			UserID:       userID,
+			AgentName:    a.GetConfig().Name,
+			InputPreview: truncate(req.Query, 50),
+			TotalTokens:  0,
+			DurationMs:   durationMs,
+		}
+		if err != nil {
+			rec.Status = "error"
+			rec.ErrorMessage = err.Error()
+		} else {
+			rec.Status = "success"
+			rec.OutputPreview = truncate(result.Output, 50)
+			rec.TotalTokens = result.TokensUsed
+		}
+		go func() {
+			if insertErr := h.executionStore.Insert(context.Background(), rec); insertErr != nil {
+				h.logger.Warn("execution record insert failed", zap.Error(insertErr))
+			}
+		}()
+	}
 
 	if err != nil {
 		h.logger.Error("agent execution failed", zap.String("agentId", id), zap.Error(err))
@@ -300,4 +333,54 @@ func (h *AgentHandler) DeleteAgent(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "agent deleted successfully",
 	})
+}
+
+// ListExecutions returns agent execution history for the current tenant (last 30 days).
+// GET /agents/executions
+func (h *AgentHandler) ListExecutions(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	if h.executionStore == nil {
+		c.JSON(http.StatusOK, gin.H{"executions": []struct{}{}})
+		return
+	}
+	records, err := h.executionStore.List(c.Request.Context(), tenantID)
+	if err != nil {
+		h.logger.Error("list executions failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "failed to list executions"})
+		return
+	}
+	type row struct {
+		ID            string `json:"id"`
+		AgentID       string `json:"agent_id"`
+		AgentName     string `json:"agent_name"`
+		UserID        string `json:"user_id"`
+		Status        string `json:"status"`
+		InputPreview  string `json:"input_preview"`
+		OutputPreview string `json:"output_preview"`
+		ErrorMessage  string `json:"error_message"`
+		TotalTokens   int    `json:"total_tokens"`
+		DurationMs    int    `json:"duration_ms"`
+		CreatedAt     string `json:"created_at"`
+	}
+	out := make([]row, 0, len(records))
+	for _, r := range records {
+		out = append(out, row{
+			ID:            r.ID,
+			AgentID:       r.AgentID,
+			AgentName:     r.AgentName,
+			UserID:        r.UserID,
+			Status:        r.Status,
+			InputPreview:  r.InputPreview,
+			OutputPreview: r.OutputPreview,
+			ErrorMessage:  r.ErrorMessage,
+			TotalTokens:   r.TotalTokens,
+			DurationMs:    r.DurationMs,
+			CreatedAt:     r.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"executions": out})
 }
