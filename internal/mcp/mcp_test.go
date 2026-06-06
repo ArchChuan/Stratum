@@ -390,3 +390,28 @@ func BenchmarkCacheGetTools(b *testing.B) {
 		cache.GetTools("server")
 	}
 }
+
+func TestPersistConnectNilPool(t *testing.T) {
+	logger := zap.NewNop()
+	m := NewClientManager(logger, nil, nil)
+	cfg := &MCPServerConfig{
+		ID:           "test-id",
+		Name:         "Test Server",
+		Transport:    "stdio",
+		Command:      "node",
+		Args:         []string{"--arg1", "val"},
+		Env:          map[string]string{"KEY": "VAL"},
+		Capabilities: []string{"tools"},
+		Timeout:      30 * time.Second,
+	}
+	m.persistConnect(context.Background(), cfg) // pool=nil → must not panic
+}
+
+func TestRestoreFromDB_NilPool(t *testing.T) {
+	logger := zap.NewNop()
+	m := NewClientManager(logger, nil, nil)
+	err := m.RestoreFromDB(context.Background())
+	if err != nil {
+		t.Errorf("expected nil error with nil pool, got %v", err)
+	}
+}
