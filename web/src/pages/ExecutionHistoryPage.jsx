@@ -1,197 +1,130 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Table, 
-  Card, 
-  Typography, 
-  Tag,
-  Empty,
-  Button,
-  Space 
-} from 'antd';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Table, Card, Typography, Tag, Button, Space, message } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
+import { getAgentExecutions } from '../services/api';
 
 const { Title } = Typography;
 
-// 模拟执行历史数据，实际项目中应该从API获取
-const mockExecutionHistory = [
+const statusColor = { success: 'green', error: 'red' };
+
+const columns = [
   {
-    id: 'exec-1',
-    skillId: 'skill-1',
-    skillName: 'Python Calculator',
-    status: 'success',
-    result: { result: 8 },
-    executedAt: '2026-05-08T22:30:00Z',
-    input: { a: 5, b: 3 }
+    title: 'Agent 名称',
+    dataIndex: 'agent_name',
+    key: 'agent_name',
+    sorter: (a, b) => a.agent_name.localeCompare(b.agent_name),
   },
   {
-    id: 'exec-2',
-    skillId: 'skill-2',
-    skillName: 'Text Summarizer',
-    status: 'success',
-    result: { result: 'This is a summary...' },
-    executedAt: '2026-05-08T22:25:00Z',
-    input: { text: 'Long text to summarize...' }
+    title: '状态',
+    dataIndex: 'status',
+    key: 'status',
+    render: (s) => <Tag color={statusColor[s] || 'default'}>{s === 'success' ? '成功' : '失败'}</Tag>,
+    filters: [
+      { text: '成功', value: 'success' },
+      { text: '失败', value: 'error' },
+    ],
+    onFilter: (value, record) => record.status === value,
   },
   {
-    id: 'exec-3',
-    skillId: 'skill-3',
-    skillName: 'Data Validator',
-    status: 'error',
-    result: { error: 'Validation failed: Invalid format' },
-    executedAt: '2026-05-08T22:20:00Z',
-    input: { data: 'invalid_data' }
-  }
+    title: '输入预览',
+    dataIndex: 'input_preview',
+    key: 'input_preview',
+    ellipsis: true,
+  },
+  {
+    title: '输出预览',
+    dataIndex: 'output_preview',
+    key: 'output_preview',
+    ellipsis: true,
+    render: (text, record) =>
+      record.status === 'error' ? (
+        <span style={{ color: '#ff4d4f' }}>{record.error_message}</span>
+      ) : (
+        text
+      ),
+  },
+  {
+    title: 'Token',
+    dataIndex: 'total_tokens',
+    key: 'total_tokens',
+    width: 90,
+    sorter: (a, b) => a.total_tokens - b.total_tokens,
+  },
+  {
+    title: '耗时(ms)',
+    dataIndex: 'duration_ms',
+    key: 'duration_ms',
+    width: 100,
+    sorter: (a, b) => a.duration_ms - b.duration_ms,
+  },
+  {
+    title: '时间',
+    dataIndex: 'created_at',
+    key: 'created_at',
+    width: 170,
+    render: (d) => new Date(d).toLocaleString('zh-CN'),
+    sorter: (a, b) => new Date(a.created_at) - new Date(b.created_at),
+    defaultSortOrder: 'descend',
+  },
 ];
 
 const ExecutionHistoryPage = () => {
   const [executions, setExecutions] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    // 在实际项目中，这里应该从API获取执行历史
-    // loadExecutionHistory();
-    setExecutions(mockExecutionHistory);
-  }, []);
-
-  const loadExecutionHistory = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      // 实际API调用示例
-      // const response = await getExecutionHistory();
-      // setExecutions(response.data);
-      setExecutions(mockExecutionHistory);
-    } catch (error) {
-      console.error('Error loading execution history:', error);
+      const res = await getAgentExecutions();
+      setExecutions(res.data.executions || []);
+    } catch (err) {
+      message.error(err.response?.data?.error || '加载执行历史失败');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const columns = [
-    {
-      title: '执行ID',
-      dataIndex: 'id',
-      key: 'id',
-      width: 150,
-      ellipsis: true,
-    },
-    {
-      title: '技能名称',
-      dataIndex: 'skillName',
-      key: 'skillName',
-      sorter: (a, b) => a.skillName.localeCompare(b.skillName),
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      render: (status) => {
-        let color = 'default';
-        if (status === 'success') color = 'green';
-        else if (status === 'error') color = 'red';
-        
-        return <Tag color={color}>{status}</Tag>;
-      },
-    },
-    {
-      title: '执行时间',
-      dataIndex: 'executedAt',
-      key: 'executedAt',
-      render: (date) => new Date(date).toLocaleString(),
-      sorter: (a, b) => new Date(a.executedAt) - new Date(b.executedAt),
-    },
-    {
-      title: '输入',
-      dataIndex: 'input',
-      key: 'input',
-      render: (input) => (
-        <pre style={{ 
-          margin: 0, 
-          padding: '4px', 
-          backgroundColor: '#f5f5f5', 
-          borderRadius: '2px',
-          fontSize: '12px',
-          maxHeight: '60px',
-          overflow: 'auto'
-        }}>
-          {JSON.stringify(input, null, 1)}
-        </pre>
-      ),
-    },
-    {
-      title: '结果',
-      dataIndex: 'result',
-      key: 'result',
-      render: (result) => {
-        if (result.error) {
-          return (
-            <pre style={{ 
-              margin: 0, 
-              padding: '4px', 
-              backgroundColor: '#fff1f0', 
-              borderRadius: '2px',
-              color: '#ff4d4f',
-              fontSize: '12px',
-              maxHeight: '60px',
-              overflow: 'auto'
-            }}>
-              {result.error}
-            </pre>
-          );
-        }
-        return (
-          <pre style={{ 
-            margin: 0, 
-            padding: '4px', 
-            backgroundColor: '#f6ffed', 
-            borderRadius: '2px',
-            color: '#52c41a',
-            fontSize: '12px',
-            maxHeight: '60px',
-            overflow: 'auto'
-          }}>
-            {JSON.stringify(result.result || result, null, 1)}
-          </pre>
-        );
-      },
-    },
-  ];
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      setLoading(true);
+      try {
+        const res = await getAgentExecutions();
+        if (!cancelled) setExecutions(res.data.executions || []);
+      } catch (err) {
+        if (!cancelled) message.error(err.response?.data?.error || '加载执行历史失败');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <div>
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Title level={2}>执行历史</Title>
         <Space>
-          <Button 
-            icon={<ReloadOutlined />} 
-            onClick={loadExecutionHistory}
-            loading={loading}
-          >
+          <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
             刷新
           </Button>
         </Space>
       </div>
-
       <Card>
-        {executions.length > 0 ? (
-          <Table 
-            dataSource={executions} 
-            columns={columns} 
-            rowKey="id" 
-            loading={loading}
-            pagination={{ 
-              pageSize: 10,
-              showSizeChanger: true,
-              showQuickJumper: true,
-              showTotal: (total) => `总计 ${total} 条`,
-            }}
-          />
-        ) : (
-          <Empty 
-            description="暂无执行历史"
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-          />
-        )}
+        <Table
+          dataSource={executions}
+          columns={columns}
+          rowKey="id"
+          loading={loading}
+          locale={{ emptyText: '最近 30 天暂无执行记录' }}
+          pagination={{
+            pageSize: 20,
+            showSizeChanger: true,
+            showQuickJumper: true,
+            showTotal: (total) => `共 ${total} 条`,
+          }}
+        />
       </Card>
     </div>
   );

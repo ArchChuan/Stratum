@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS mcp_configs (
 
 CREATE TABLE IF NOT EXISTS sessions (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id     UUID REFERENCES agents(id) ON DELETE SET NULL,
+    agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
     user_id      TEXT NOT NULL,
     metadata     JSONB NOT NULL DEFAULT '{}',
     started_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -87,9 +87,9 @@ CREATE TABLE IF NOT EXISTS knowledge_docs (
 
 CREATE TABLE IF NOT EXISTS exec_history (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id     UUID REFERENCES agents(id) ON DELETE SET NULL,
+    agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
     session_id   UUID REFERENCES sessions(id) ON DELETE SET NULL,
-    skill_id     UUID REFERENCES skills(id) ON DELETE SET NULL,
+    skill_id     TEXT REFERENCES skills(id) ON DELETE SET NULL,
     input        JSONB NOT NULL DEFAULT '{}',
     output       JSONB NOT NULL DEFAULT '{}',
     status       TEXT NOT NULL DEFAULT 'pending',
@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name         TEXT NOT NULL,
     cron_expr    TEXT NOT NULL,
-    agent_id     UUID REFERENCES agents(id) ON DELETE CASCADE,
+    agent_id     TEXT REFERENCES agents(id) ON DELETE CASCADE,
     payload      JSONB NOT NULL DEFAULT '{}',
     enabled      BOOLEAN NOT NULL DEFAULT TRUE,
     last_run_at  TIMESTAMPTZ,

@@ -38,7 +38,7 @@ func ExecTenant(ctx context.Context, pool *pgxpool.Pool, fn func(ctx context.Con
 	}()
 
 	schema := "tenant_" + tc.TenantID
-	if _, err := tx.Exec(ctx, "SET LOCAL search_path = "+schema+", public"); err != nil {
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL search_path = "%s", public`, schema)); err != nil {
 		_ = tx.Rollback(ctx)
 		return fmt.Errorf("tenantdb: set search_path: %w", err)
 	}

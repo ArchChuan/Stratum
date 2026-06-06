@@ -35,11 +35,11 @@ func ProvisionTenantSchema(ctx context.Context, pool *pgxpool.Pool, tenantID str
 	}
 	defer conn.Release()
 
-	if _, err := conn.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schemaName); err != nil {
+	if _, err := conn.Exec(ctx, fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS "%s"`, schemaName)); err != nil {
 		return fmt.Errorf("tenantdb: create schema %s: %w", schemaName, err)
 	}
 
-	if _, err := conn.Exec(ctx, "SET search_path = "+schemaName+", public"); err != nil {
+	if _, err := conn.Exec(ctx, fmt.Sprintf(`SET search_path = "%s", public`, schemaName)); err != nil {
 		return fmt.Errorf("tenantdb: set search_path: %w", err)
 	}
 

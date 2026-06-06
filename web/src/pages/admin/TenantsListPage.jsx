@@ -22,10 +22,11 @@ const TenantsListPage = () => {
 
   useEffect(() => { fetchTenants(); }, []);
 
-  const handleToggle = async (tenantId, currentEnabled) => {
+  const handleToggle = async (tenantId, currentStatus) => {
+    const enabling = currentStatus !== 'active';
     try {
-      await setTenantEnabled(tenantId, !currentEnabled);
-      message.success(currentEnabled ? '已禁用' : '已启用');
+      await setTenantEnabled(tenantId, enabling);
+      message.success(enabling ? '已启用' : '已禁用');
       fetchTenants();
     } catch (err) {
       message.error(err.response?.data?.message || '操作失败');
@@ -38,18 +39,18 @@ const TenantsListPage = () => {
     { title: 'Slug', dataIndex: 'slug' },
     { title: '成员数', dataIndex: 'member_count', render: (v) => v ?? '-' },
     {
-      title: '状态', dataIndex: 'enabled',
-      render: (enabled) => <Tag color={enabled ? 'green' : 'red'}>{enabled ? '启用' : '禁用'}</Tag>,
+      title: '状态', dataIndex: 'status',
+      render: (status) => <Tag color={status === 'active' ? 'green' : 'red'}>{status === 'active' ? '启用' : '禁用'}</Tag>,
     },
     {
       title: '操作', key: 'action',
       render: (_, record) => (
         <Popconfirm
-          title={`确认${record.enabled ? '禁用' : '启用'}该租户？`}
-          onConfirm={() => handleToggle(record.id, record.enabled)}
+          title={`确认${record.status === 'active' ? '禁用' : '启用'}该租户？`}
+          onConfirm={() => handleToggle(record.id, record.status)}
           okText="确认" cancelText="取消"
         >
-          <Button size="small" danger={record.enabled}>{record.enabled ? '禁用' : '启用'}</Button>
+          <Button size="small" danger={record.status === 'active'}>{record.status === 'active' ? '禁用' : '启用'}</Button>
         </Popconfirm>
       ),
     },
