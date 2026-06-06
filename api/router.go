@@ -84,6 +84,8 @@ func SetupRouter(
 				authRoutes.POST("/refresh", authHandler.Refresh)
 				authRoutes.POST("/logout", authHandler.Logout)
 				authRoutes.GET("/me", authHandler.Me)
+				authRoutes.POST("/switch-tenant", authHandler.SwitchTenant)
+				authRoutes.POST("/create-tenant", authHandler.CreateUserTenant)
 			}
 
 			// Admin routes — require JWT + global_admin role
@@ -110,6 +112,9 @@ func SetupRouter(
 					tenantGroup.GET("/settings", tenantHandler.GetSettings)
 					tenantGroup.PATCH("/settings", tenantHandler.UpdateSettings)
 				}
+
+				// /tenant/list only needs JWT, not a specific tenant context.
+				router.GET("/tenant/list", jwtMW, tenantHandler.ListUserTenants)
 			}
 		}
 	}
@@ -163,6 +168,15 @@ func SetupRouter(
 	mcpManager := mcp.NewClientManager(logger, nil, db)
 	mcpRegistry := mcp.NewMCPSkillRegistry(mcpManager, logger)
 	mcpHandler := handler.NewMCPHandler(mcpRegistry, mcpManager, logger)
+
+	// Restore persisted MCP connections from DB
+	if db != nil {
+		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer restoreCancel()
+		if err := mcpManager.RestoreFromDB(restoreCtx); err != nil {
+			logger.Warn("failed to restore MCP connections from DB", zap.Error(err))
+		}
+	}
 
 	// Skill endpoints
 	skills := router.Group("/skills")
