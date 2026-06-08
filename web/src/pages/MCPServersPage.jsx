@@ -48,7 +48,9 @@ function ConnectDrawer({ open, onClose, onSuccess }) {
       form.resetFields();
       onSuccess();
     } catch (err) {
-      message.error(err.response?.data?.error || '连接失败');
+      if (err.response?.status !== 403) {
+        message.error(err.response?.data?.error || '连接失败');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -215,7 +217,9 @@ export default function MCPServersPage() {
       message.success('已断开连接');
       fetchServers();
     } catch (err) {
-      message.error(err.response?.data?.error || '断开失败');
+      if (err.response?.status !== 403) {
+        message.error(err.response?.data?.error || '断开失败');
+      }
     }
   };
 

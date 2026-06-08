@@ -54,7 +54,9 @@ const KnowledgePage = () => {
       form.resetFields();
       fetchWorkspaces();
     } catch (err) {
-      message.error(err.response?.data?.error || '创建失败');
+      if (err.response?.status !== 403) {
+        message.error(err.response?.data?.error || '创建失败');
+      }
     } finally {
       setCreateLoading(false);
     }
@@ -66,7 +68,9 @@ const KnowledgePage = () => {
       message.success('知识库已删除');
       fetchWorkspaces();
     } catch (err) {
-      message.error(err.response?.data?.error || '删除失败');
+      if (err.response?.status !== 403) {
+        message.error(err.response?.data?.error || '删除失败');
+      }
     }
   };
 

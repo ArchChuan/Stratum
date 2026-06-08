@@ -33,10 +33,10 @@ func TestListTenants_noFilter(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
 
 	now := time.Now()
-	mock.ExpectQuery("SELECT id, name, slug, plan, status, created_at FROM").
+	mock.ExpectQuery(`SELECT t\.id`).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "slug", "plan", "status", "created_at"}).
-			AddRow("tid1", "Acme", "acme", "pro", "active", now))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "slug", "plan", "status", "created_at", "member_count"}).
+			AddRow("tid1", "Acme", "acme", "pro", "active", now, 0))
 
 	h := &AdminHandler{db: mock, logger: zap.NewNop()}
 	r := setupAdminRouter(h)

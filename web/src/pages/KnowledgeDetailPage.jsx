@@ -61,7 +61,9 @@ const KnowledgeDetailPage = () => {
       message.success('配置已保存');
       fetchStats();
     } catch (err) {
-      message.error(err.response?.data?.error || '保存失败');
+      if (err.response?.status !== 403) {
+        message.error(err.response?.data?.error || '保存失败');
+      }
     } finally {
       setConfigLoading(false);
     }
@@ -77,7 +79,9 @@ const KnowledgeDetailPage = () => {
       message.success(`上传成功，共 ${res.data.total_chunks} 个分块`);
       fetchStats();
     } catch (err) {
-      message.error(err.response?.data?.error || '上传失败');
+      if (err.response?.status !== 403) {
+        message.error(err.response?.data?.error || '上传失败');
+      }
     } finally {
       setUploadLoading(false);
     }
