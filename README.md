@@ -157,6 +157,9 @@ curl http://localhost:8080/health
 | POST | `/auth/refresh` | 刷新 JWT |
 | POST | `/auth/logout` | 退出登录 |
 | GET | `/auth/me` | 获取当前用户信息 |
+| POST | `/auth/switch-tenant` | 切换当前租户 |
+| POST | `/auth/create-tenant` | 创建新租户 |
+| GET | `/tenant/list` | 列出当前用户所属租户 |
 
 > 认证路由仅在配置了 `GITHUB_CLIENT_ID` 时启用。
 
@@ -183,6 +186,8 @@ curl http://localhost:8080/health
 
 ### Skill
 
+写操作需要租户处于 `active` 状态。
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/skills` | 列出所有 Skill |
@@ -196,16 +201,24 @@ curl http://localhost:8080/health
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/agents` | 列出所有 Agent |
-| POST | `/agents` | 创建 Agent |
+| POST | `/agents` | 创建 Agent（租户 active 时） |
 | GET | `/agents/:id` | 获取 Agent 详情 |
-| POST | `/agents/:id/execute` | 执行 Agent |
+| POST | `/agents/:id/execute` | 执行 Agent（租户 active 时） |
+| GET | `/agents/executions` | 列出执行历史 |
 | DELETE | `/agents/:id` | 删除 Agent |
 
 ### 知识库 (Knowledge / RAG)
 
+需要 JWT + 租户上下文，写操作需 `admin` 角色且租户 `active`。
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/knowledge/ingest` | 上传并摄入文档 |
+| GET | `/knowledge/workspaces` | 列出知识库工作区 |
+| GET | `/knowledge/workspaces/:name/stats` | 获取工作区统计 |
+| POST | `/knowledge/workspaces` | 创建工作区（admin） |
+| PATCH | `/knowledge/workspaces/:name` | 更新工作区（admin） |
+| DELETE | `/knowledge/workspaces/:name` | 删除工作区（admin） |
+| POST | `/knowledge/ingest` | 上传并摄入文档（admin） |
 | POST | `/knowledge/query` | RAG 查询 |
 
 ### 记忆 (Memory)
@@ -225,7 +238,21 @@ curl http://localhost:8080/health
 
 ### MCP
 
-MCP 路由由 `MCPHandler.RegisterRoutes` 动态注册，详见 `internal/mcp/` 配置。
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/mcp/servers` | 列出所有 MCP 服务器 |
+| GET | `/api/v1/mcp/servers/:id` | 获取服务器详情 |
+| GET | `/api/v1/mcp/servers/:id/tools` | 列出服务器工具 |
+| GET | `/api/v1/mcp/servers/:id/resources` | 列出服务器资源 |
+| POST | `/api/v1/mcp/servers` | 连接 MCP 服务器（需 active） |
+| DELETE | `/api/v1/mcp/servers/:id` | 断开服务器（需 active） |
+| POST | `/api/v1/mcp/tools/:toolId/execute` | 执行工具（需 active） |
+| GET | `/api/v1/mcp/skills` | 列出 MCP Skills |
+| GET | `/api/v1/mcp/skills/:id` | 获取 Skill 详情 |
+| POST | `/api/v1/mcp/skills/refresh` | 刷新 Skills（需 active） |
+| GET | `/api/v1/mcp/status` | 服务器连接状态统计 |
+
+MCP 服务器配置持久化至 PostgreSQL，服务启动时自动恢复连接。
 
 ### 其他
 
@@ -329,18 +356,18 @@ memManager := memory.NewMemoryManager(config, logger, vectorMemory, entityMemory
 
 ```go
 gateway := llmgateway.NewGateway()
-gateway.RegisterClient(llmgateway.ProviderOpenAI, openaiClient)
-gateway.RegisterClient(llmgateway.ProviderAnthropic, anthropicClient)
-gateway.RegisterEmbeddingClient(llmgateway.ProviderOpenAI, embedClient)
-gateway.SetDefault(llmgateway.ProviderOpenAI)
+gateway.RegisterClient(llmgateway.ProviderQwen, qwenClient)
+gateway.RegisterClient(llmgateway.ProviderZhipu, zhipuClient)
+gateway.RegisterEmbeddingClient(llmgateway.ProviderQwen, embedClient)
+gateway.SetDefault(llmgateway.ProviderQwen)
 
 resp, err := gateway.Complete(ctx, &llmgateway.CompletionRequest{
-    Model: "gpt-4",
+    Model: "qwen-plus",
     Messages: []llmgateway.Message{{Role: "user", Content: "Hello"}},
 })
 ```
 
-**支持的提供商：** OpenAI · Anthropic · Ollama
+**支持的提供商：** 通义千问 (Qwen) · 智谱 AI (Zhipu)
 
 ### GraphRAG 知识引擎
 
@@ -354,9 +381,11 @@ resp, err := gateway.Complete(ctx, &llmgateway.CompletionRequest{
 
 ### 多租户隔离
 
-- 每个租户在 PostgreSQL 中拥有独立 schema：`tenant_<tenant_id>`
+- 每个租户在 PostgreSQL 中拥有独立 schema：`tenant_<tenant_id>`（UUID，含连字符，schema 名双引号转义）
 - JWT Claims 携带 `tenant_id` + `role`，中间件自动设置 `search_path`
 - 角色体系：`global_admin` > `owner` > `admin` > `member`
+- 租户状态：`active` 正常 / `suspended` 禁用 — suspended 状态下所有写操作和 Agent 执行被 `RequireActiveTenant` 中间件拦截（HTTP 403），读接口不受影响
+- 用户可属于多个租户，通过 `POST /auth/switch-tenant` 切换
 
 ### Harness 生命周期
 
@@ -401,7 +430,7 @@ hermes_events_total{type, status}
 PORT=8080
 
 # PostgreSQL
-POSTGRES_URL=postgres://user:password@localhost:5432/clawhermes
+POSTGRES_URL=postgres://user:password@localhost:5432/clawhermes?sslmode=disable
 
 # Redis
 REDIS_URL=redis://localhost:6379
@@ -424,11 +453,9 @@ GITHUB_CLIENT_SECRET=your-client-secret
 JWT_PRIVATE_KEY_PEM=-----BEGIN RSA PRIVATE KEY-----...
 GLOBAL_ADMIN_GITHUB_LOGIN=your-github-login
 
-# LLM
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-OLLAMA_ENDPOINT=http://localhost:11434
-DEFAULT_LLM_PROVIDER=openai
+# LLM（通义千问 / 智谱 AI）
+QWEN_API_KEY=sk-...
+ZHIPU_API_KEY=...
 
 # OpenTelemetry
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
@@ -478,12 +505,19 @@ make test-coverage                  # 生成覆盖率报告
 
 ## 商业化能力
 
-- ✅ 多租户隔离（PostgreSQL schema 级）
-- ✅ GitHub OAuth + JWT RS256 认证
+- ✅ 多租户隔离（PostgreSQL schema 级，UUID schema 名安全转义）
+- ✅ GitHub OAuth + JWT RS256 认证，3 天免登录
+- ✅ 租户禁用强制拦截（suspended 状态写操作 403）
+- ✅ 多租户切换（用户可属于多个租户）
+- ✅ 成员角色管理（owner/admin/member + 邀请流程）
 - ✅ Skill 熔断器 + 流水线编排
 - ✅ A2A 多智能体协作（5 种策略）
 - ✅ 三层记忆系统
-- ✅ GraphRAG 知识增强
+- ✅ GraphRAG 知识增强（工作区 CRUD + 文档摄入）
+- ✅ MCP 服务器管理（持久化 + 自动恢复连接）
+- ✅ Agent 执行历史记录与查询
+- ✅ 通义千问 / 智谱 AI LLM 接入
+- ✅ Web 控制台（React）：Dashboard · Agents · Skills · 知识库 · 记忆 · MCP · 成员管理 · 租户设置
 - ✅ 私有化部署 / 云原生 Kubernetes
 - ✅ 全链路可观测（OTel + Prometheus + Grafana）
 - 🔄 Skill 插件市场
