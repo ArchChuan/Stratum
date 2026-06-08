@@ -5,8 +5,9 @@ import {
   RobotOutlined,
   ApiOutlined,
   ThunderboltOutlined,
+  DatabaseOutlined,
 } from '@ant-design/icons';
-import { getAllSkills, getAllAgents, getAgentExecutions } from '../services/api';
+import { getAllSkills, getAllAgents, getAgentExecutions, getKnowledgeWorkspaces } from '../services/api';
 import api from '../services/api';
 
 const { Title } = Typography;
@@ -49,7 +50,7 @@ const execColumns = [
 ];
 
 const DashboardPage = () => {
-  const [counts, setCounts] = useState({ skills: 0, agents: 0, mcpServers: 0, executions: 0 });
+  const [counts, setCounts] = useState({ skills: 0, agents: 0, mcpServers: 0, executions: 0, knowledge: 0 });
   const [recentExecs, setRecentExecs] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -59,11 +60,12 @@ const DashboardPage = () => {
     const fetchAll = async () => {
       setLoading(true);
       try {
-        const [skillsRes, agentsRes, execsRes, mcpRes] = await Promise.allSettled([
+        const [skillsRes, agentsRes, execsRes, mcpRes, knowledgeRes] = await Promise.allSettled([
           getAllSkills(),
           getAllAgents(),
           getAgentExecutions(),
           api.get('/api/v1/mcp/servers'),
+          getKnowledgeWorkspaces(),
         ]);
 
         if (cancelled) return;
@@ -72,12 +74,14 @@ const DashboardPage = () => {
         const agents = agentsRes.status === 'fulfilled' ? (agentsRes.value.data?.agents || []) : [];
         const execs  = execsRes.status  === 'fulfilled' ? (execsRes.value.data?.executions || []) : [];
         const mcpServers = mcpRes.status === 'fulfilled' ? (mcpRes.value.data?.servers || []) : [];
+        const workspaces = knowledgeRes.status === 'fulfilled' ? (knowledgeRes.value.data?.workspaces || knowledgeRes.value.data || []) : [];
 
         setCounts({
           skills: skills.length,
           agents: agents.length,
           mcpServers: mcpServers.length,
           executions: execs.length,
+          knowledge: workspaces.length,
         });
         setRecentExecs(execs.slice(0, 8));
       } catch {
@@ -94,6 +98,7 @@ const DashboardPage = () => {
   const statCards = [
     { title: 'Agent 数量', value: counts.agents, icon: <RobotOutlined />, color: '#1677ff' },
     { title: '技能数量', value: counts.skills, icon: <AppstoreOutlined />, color: '#52c41a' },
+    { title: '知识库', value: counts.knowledge, icon: <DatabaseOutlined />, color: '#13c2c2' },
     { title: 'MCP 服务器', value: counts.mcpServers, icon: <ApiOutlined />, color: '#722ed1' },
     { title: '近30天执行', value: counts.executions, icon: <ThunderboltOutlined />, color: '#fa8c16' },
   ];
@@ -102,7 +107,7 @@ const DashboardPage = () => {
     <div>
       <Row gutter={16}>
         {statCards.map((s) => (
-          <Col span={6} key={s.title}>
+          <Col flex="20%" key={s.title}>
             <Card loading={loading}>
               <Statistic
                 title={s.title}

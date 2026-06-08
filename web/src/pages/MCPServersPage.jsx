@@ -220,7 +220,7 @@ export default function MCPServersPage() {
   };
 
   const columns = [
-    { title: '名称', dataIndex: 'name' },
+    { title: '名称', dataIndex: 'name', width: 200, ellipsis: true },
     { title: 'ID', dataIndex: 'id', ellipsis: true, width: 180 },
     {
       title: 'Transport', dataIndex: 'transport', width: 100,

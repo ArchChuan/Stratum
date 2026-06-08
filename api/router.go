@@ -182,14 +182,17 @@ func SetupRouter(
 		}
 	}
 
+	// requireActive blocks writes when the tenant is suspended.
+	requireActive := middleware.RequireActiveTenant(db)
+
 	// Skill endpoints
 	skills := router.Group("/skills")
 	{
 		skills.GET("", skillHandler.GetAllSkills)
-		skills.POST("", skillHandler.CreateSkill)
+		skills.POST("", requireActive, skillHandler.CreateSkill)
 		skills.GET("/:id", skillHandler.GetSkill)
-		skills.PUT("/:id", skillHandler.UpdateSkill)
-		skills.DELETE("/:id", skillHandler.DeleteSkill)
+		skills.PUT("/:id", requireActive, skillHandler.UpdateSkill)
+		skills.DELETE("/:id", requireActive, skillHandler.DeleteSkill)
 	}
 
 	// Agent endpoints
@@ -200,11 +203,11 @@ func SetupRouter(
 	agents := router.Group("/agents", agentMiddlewares...)
 	{
 		agents.GET("", agentHandler.GetAllAgents)
-		agents.POST("", agentHandler.CreateAgent)
+		agents.POST("", requireActive, agentHandler.CreateAgent)
 		agents.GET("/executions", agentHandler.ListExecutions)
 		agents.GET("/:id", agentHandler.GetAgent)
-		agents.POST("/:id/execute", agentHandler.ExecuteAgent)
-		agents.DELETE("/:id", agentHandler.DeleteAgent)
+		agents.POST("/:id/execute", requireActive, agentHandler.ExecuteAgent)
+		agents.DELETE("/:id", requireActive, agentHandler.DeleteAgent)
 	}
 
 	// Knowledge endpoints — 所有路由均需 JWT + 租户上下文
@@ -214,20 +217,20 @@ func SetupRouter(
 	}
 	knowledgeGroup := router.Group("/knowledge", knowledgeMW...)
 	{
-		// member 可访问
+		// member 可访问（读）
 		knowledgeGroup.GET("/workspaces", ragHandler.ListWorkspaces)
 		knowledgeGroup.GET("/workspaces/:name/stats", ragHandler.GetWorkspaceStats)
-		knowledgeGroup.POST("/query", ragHandler.Query)
+		knowledgeGroup.POST("/query", requireActive, ragHandler.Query)
 
-		// admin/owner 专属
+		// admin/owner 专属写操作（均需 active）
 		var adminMW []gin.HandlerFunc
 		if jwtSvc != nil {
 			adminMW = append(adminMW, middleware.RequireTenantRole("admin"))
 		}
-		knowledgeGroup.POST("/workspaces", append(adminMW, ragHandler.CreateWorkspace)...)
-		knowledgeGroup.PATCH("/workspaces/:name", append(adminMW, ragHandler.UpdateWorkspace)...)
-		knowledgeGroup.DELETE("/workspaces/:name", append(adminMW, ragHandler.DeleteWorkspace)...)
-		knowledgeGroup.POST("/ingest", append(adminMW, ragHandler.UploadDocument)...)
+		knowledgeGroup.POST("/workspaces", append(adminMW, requireActive, ragHandler.CreateWorkspace)...)
+		knowledgeGroup.PATCH("/workspaces/:name", append(adminMW, requireActive, ragHandler.UpdateWorkspace)...)
+		knowledgeGroup.DELETE("/workspaces/:name", append(adminMW, requireActive, ragHandler.DeleteWorkspace)...)
+		knowledgeGroup.POST("/ingest", append(adminMW, requireActive, ragHandler.UploadDocument)...)
 	}
 
 	// Memory endpoints
@@ -237,20 +240,20 @@ func SetupRouter(
 	}
 	mem := router.Group("/memory", memMiddlewares...)
 	{
-		mem.POST("/sessions", memoryHandler.CreateSession)
-		mem.POST("", memoryHandler.AddMemory)
+		mem.POST("/sessions", requireActive, memoryHandler.CreateSession)
+		mem.POST("", requireActive, memoryHandler.AddMemory)
 		mem.GET("/:id", memoryHandler.GetMemory)
 		mem.POST("/search", memoryHandler.SearchMemory)
-		mem.DELETE("/:id", memoryHandler.DeleteMemory)
+		mem.DELETE("/:id", requireActive, memoryHandler.DeleteMemory)
 		mem.GET("/stats", memoryHandler.GetStats)
-		mem.DELETE("/session/:session_id", memoryHandler.ClearSession)
+		mem.DELETE("/session/:session_id", requireActive, memoryHandler.ClearSession)
 		mem.GET("/entities", memoryHandler.GetEntities)
 		mem.POST("/extract-entities", memoryHandler.ExtractEntities)
 		mem.GET("/summary/:session_id", memoryHandler.GetSummary)
 	}
 
 	// MCP endpoints
-	mcpHandler.RegisterRoutes(router)
+	mcpHandler.RegisterRoutes(router, requireActive)
 
 	return router
 }

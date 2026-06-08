@@ -79,7 +79,7 @@ func (m *MemoryManager) execTenant(ctx context.Context, tenantID string, fn func
 			panic(p)
 		}
 	}()
-	if _, err := tx.Exec(ctx, "SET LOCAL search_path = tenant_"+tenantID+", public"); err != nil {
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL search_path = "tenant_%s", public`, tenantID)); err != nil {
 		_ = tx.Rollback(ctx)
 		return fmt.Errorf("memory: set search_path: %w", err)
 	}

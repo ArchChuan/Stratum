@@ -134,6 +134,9 @@ export const executeAgent = (id, task) => api.post(`/agents/${id}/execute`, task
 export const deleteAgent = (id) => api.delete(`/agents/${id}`);
 export const getAgentExecutions = () => api.get('/agents/executions');
 
+// Knowledge
+export const getKnowledgeWorkspaces = () => api.get('/knowledge/workspaces');
+
 // Memory
 export const createSession = (data) => api.post('/memory/sessions', data);
 export const addMemory = (data) => api.post('/memory', data);

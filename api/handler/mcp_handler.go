@@ -203,8 +203,8 @@ func (h *MCPHandler) GetServerStatus(c *gin.Context) {
 	})
 }
 
-// RegisterRoutes 注册 MCP 路由
-func (h *MCPHandler) RegisterRoutes(router *gin.Engine) {
+// RegisterRoutes 注册 MCP 路由。writeMW 会附加到所有写操作路由（POST/DELETE）。
+func (h *MCPHandler) RegisterRoutes(router *gin.Engine, writeMW ...gin.HandlerFunc) {
 	v1 := router.Group("/api/v1/mcp")
 
 	// 服务器相关
@@ -212,16 +212,16 @@ func (h *MCPHandler) RegisterRoutes(router *gin.Engine) {
 	v1.GET("/servers/:id", h.GetServer)
 	v1.GET("/servers/:id/tools", h.ListTools)
 	v1.GET("/servers/:id/resources", h.ListResources)
-	v1.POST("/servers", h.ConnectServer)
-	v1.DELETE("/servers/:id", h.DisconnectServer)
+	v1.POST("/servers", append(writeMW, h.ConnectServer)...)
+	v1.DELETE("/servers/:id", append(writeMW, h.DisconnectServer)...)
 
 	// 工具相关
-	v1.POST("/tools/:toolId/execute", h.ExecuteTool)
+	v1.POST("/tools/:toolId/execute", append(writeMW, h.ExecuteTool)...)
 
 	// Skills 相关
 	v1.GET("/skills", h.ListSkills)
 	v1.GET("/skills/:id", h.GetSkill)
-	v1.POST("/skills/refresh", h.RefreshSkills)
+	v1.POST("/skills/refresh", append(writeMW, h.RefreshSkills)...)
 
 	// 状态相关
 	v1.GET("/status", h.GetServerStatus)
