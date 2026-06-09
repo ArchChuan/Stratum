@@ -83,6 +83,12 @@ npm run lint && npm run build            # 前端 PR 前
 
 PR 描述必须包含：What · Why · HowToTest。CI（lint/test/scan）全绿才合并。
 
+### AI 辅助测试
+
+用 AI 写测试时，**必须提供模板文件**，不要让 AI 自由发挥。
+做法：指定一个已有的好测试文件（如 `api/handler/tenant_handler_test.go`），说"按这个模式给 X 写完整测试"。
+AI 会复用 mock 构造方式、断言风格、边界用例覆盖，生成质量稳定、可直接运行的测试。
+
 ### 安全底线
 
 - 密钥走 Vault/AWS Secrets Manager，禁止入 git

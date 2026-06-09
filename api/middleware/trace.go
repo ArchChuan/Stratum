@@ -3,35 +3,44 @@
 package middleware
 
 import (
-	"go.uber.org/zap"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
-// TraceMiddleware 为每个 HTTP 请求记录信息（当前简化实现以避免依赖问题）
+const traceIDHeader = "X-Request-ID"
+const traceIDKey = "request_id"
+
+// TraceMiddleware assigns a request_id and logs each request at Info level.
 func TraceMiddleware(logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 记录请求信息
-		logger.Debug("request received",
-			zap.String("method", c.Request.Method),
-			zap.String("path", c.Request.URL.Path),
-			zap.String("remote_addr", c.Request.RemoteAddr),
-			zap.String("user_agent", c.Request.UserAgent()),
-		)
+		requestID := c.GetHeader(traceIDHeader)
+		if requestID == "" {
+			requestID = uuid.New().String()
+		}
+		c.Set(traceIDKey, requestID)
+		c.Header(traceIDHeader, requestID)
 
-		// 处理请求
+		start := time.Now()
 		c.Next()
 
-		// 记录响应信息
-		logger.Debug("request completed",
+		logger.Info("http",
 			zap.String("method", c.Request.Method),
 			zap.String("path", c.Request.URL.Path),
+			zap.String("query", c.Request.URL.RawQuery),
 			zap.Int("status", c.Writer.Status()),
+			zap.Duration("latency", time.Since(start)),
+			zap.String("request_id", requestID),
+			zap.String("remote_addr", c.ClientIP()),
 		)
 	}
 }
 
-// GetTraceID 从 gin context 中获取 trace ID
+// GetTraceID retrieves the request_id set by TraceMiddleware.
 func GetTraceID(c *gin.Context) string {
-	return "" // 简化实现返回空字符串
+	id, _ := c.Get(traceIDKey)
+	s, _ := id.(string)
+	return s
 }

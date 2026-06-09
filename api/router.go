@@ -43,19 +43,22 @@ func SetupRouter(
 	rdb *goredis.Client,
 	temporalClient agent.TemporalWorkflowStarter,
 ) *gin.Engine {
-	router := gin.Default()
+	router := gin.New()
+	router.Use(gin.Recovery())
 
 	// Observability: single shared PrometheusMetrics instance
 	metrics := observability.NewPrometheusMetrics(logger)
 
 	aesKey := pkgcrypto.DeriveAESKey(cfg.JWTPrivateKeyPEM)
 	gatewayCache := llmgateway.NewTenantGatewayCache()
+	requireActive := middleware.RequireActiveTenant(db)
 
 	// Inject metrics into LLM gateway
 	gateway.WithMetrics(metrics)
 
 	// Middleware
 	router.Use(middleware.ErrorHandler(logger))
+	router.Use(middleware.TraceMiddleware(logger))
 	router.Use(middleware.CORSMiddleware(cfg.FrontendURL))
 	router.Use(middleware.MetricsMiddleware(metrics))
 
@@ -115,7 +118,7 @@ func SetupRouter(
 					tenantGroup.PATCH("/members/:user_id/role", tenantHandler.UpdateMemberRole)
 					tenantGroup.DELETE("/members/:user_id", tenantHandler.RemoveMember)
 					tenantGroup.GET("/settings", tenantHandler.GetSettings)
-					tenantGroup.PATCH("/settings", tenantHandler.UpdateSettings)
+					tenantGroup.PATCH("/settings", requireActive, tenantHandler.UpdateSettings)
 				}
 
 				// /tenant/list only needs JWT, not a specific tenant context.
@@ -184,9 +187,6 @@ func SetupRouter(
 	mcpManager := mcp.NewClientManager(logger, nil, db)
 	mcpRegistry := mcp.NewMCPSkillRegistry(mcpManager, logger)
 	mcpHandler := handler.NewMCPHandler(mcpRegistry, mcpManager, logger)
-
-	// requireActive blocks writes when the tenant is suspended.
-	requireActive := middleware.RequireActiveTenant(db)
 
 	// Skill endpoints — JWT + InjectTenantContext required (same pattern as agents)
 	var skillMW []gin.HandlerFunc

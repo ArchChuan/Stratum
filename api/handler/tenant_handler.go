@@ -462,9 +462,9 @@ func maskAPIKey(key string) string {
 	if key == "" {
 		return ""
 	}
-	n := len(key)
-	if n > 32 {
-		n = 32
+	show := 6
+	if len(key) <= show {
+		show = len(key) / 2
 	}
-	return strings.Repeat("•", n)
+	return key[:show] + strings.Repeat("•", 8)
 }

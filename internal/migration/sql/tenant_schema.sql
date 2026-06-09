@@ -2,12 +2,13 @@
 -- Execute after: SET search_path = tenant_{id}, public
 
 CREATE TABLE IF NOT EXISTS agents (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name         TEXT NOT NULL,
-    description  TEXT,
-    config       JSONB NOT NULL DEFAULT '{}',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name           TEXT NOT NULL,
+    description    TEXT,
+    config         JSONB NOT NULL DEFAULT '{}',
+    allowed_skills TEXT[] NOT NULL DEFAULT '{}',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS skills (
@@ -161,6 +162,9 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     next_run_at  TIMESTAMPTZ,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- idempotent backfill: existing tenants provisioned before allowed_skills was added
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS allowed_skills TEXT[] NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS webhooks (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),

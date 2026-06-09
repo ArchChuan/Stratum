@@ -27,7 +27,7 @@ func setupTenantHandlerRouter(h *TenantHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	inject := injectTenant("tenant-abc")
-	injectAdmin := func(c *gin.Context) { c.Set("auth.role", "admin"); c.Next() }
+	injectAdmin := func(c *gin.Context) { c.Set("auth.role", "admin"); c.Set("auth.sub", "user-1"); c.Next() }
 	r.GET("/tenant/members", inject, h.ListMembers)
 	r.POST("/tenant/members/invite", inject, injectAdmin, h.InviteMember)
 	r.DELETE("/tenant/members/:user_id", inject, injectAdmin, h.RemoveMember)
@@ -82,7 +82,7 @@ func TestInviteMember_success(t *testing.T) {
 	defer mock.Close()
 
 	mock.ExpectExec("INSERT INTO public.invitations").
-		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	h := &TenantHandler{db: mock, logger: zap.NewNop(), frontendURL: "http://localhost:3000"}
@@ -136,18 +136,18 @@ func TestRemoveMember_success(t *testing.T) {
 	defer mock.Close()
 
 	mock.ExpectQuery("SELECT role FROM public.tenant_members").
-		WithArgs("tenant-abc", "user-1").
+		WithArgs("tenant-abc", "user-2").
 		WillReturnRows(pgxmock.NewRows([]string{"role"}).AddRow("member"))
 
 	mock.ExpectExec("DELETE FROM public.tenant_members").
-		WithArgs("tenant-abc", "user-1").
+		WithArgs("tenant-abc", "user-2").
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 
 	h := &TenantHandler{db: mock, logger: zap.NewNop(), frontendURL: "http://localhost:3000"}
 	r := setupTenantHandlerRouter(h)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodDelete, "/tenant/members/user-1", nil) //nolint:noctx
+	req, _ := http.NewRequest(http.MethodDelete, "/tenant/members/user-2", nil) //nolint:noctx
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {

@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/byteBuilderX/ClawHermes-AI-Go/api"
 	agentpkg "github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent"
 	agentworkflow "github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent/workflow"
@@ -33,6 +35,10 @@ import (
 var _ agentpkg.TemporalWorkflowStarter = (*agentworkflow.TemporalWorkerComponent)(nil)
 
 func main() {
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		log.Printf("Warning: could not load .env file: %v", err)
+	}
+
 	logger, err := zap.NewProduction()
 	if err != nil {
 		log.Fatalf("Failed to create logger: %v", err)
