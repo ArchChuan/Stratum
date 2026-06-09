@@ -21,7 +21,7 @@ export const AuthProvider = ({ children }) => {
     tenant_id: meData.tenant_id,
     role: meData.role,
     global_role: meData.global_role,
-    current_tenant: meData.tenant_id ? { id: meData.tenant_id, name: tenantName || meData.tenant_id } : null,
+    current_tenant: meData.tenant_id ? { id: meData.tenant_id, name: tenantName || meData.tenant_id, role: meData.role } : null,
     avatar_url: meData.avatar_url || '',
     github_login: meData.github_login || '',
   });

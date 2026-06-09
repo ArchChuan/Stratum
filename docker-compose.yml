@@ -276,7 +276,7 @@ services:
 
   # Attu - Milvus 向量数据库管理界面 http://localhost:8000
   attu:
-    image: zilliztech/attu:v2.4
+    image: zilliz/attu:v2.4
     environment:
       - MILVUS_URL=milvus:19530
     ports:
@@ -285,6 +285,39 @@ services:
       - clawhermes
     depends_on:
       - milvus
+
+  # Temporal server (auto-setup with postgres backend)
+  temporal:
+    image: temporalio/auto-setup:1.24.2
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=clawhermes
+      - POSTGRES_PWD=clawhermes
+      - POSTGRES_SEEDS=postgres
+    ports:
+      - "7233:7233"
+    networks:
+      - clawhermes
+    depends_on:
+      - postgres
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  # Temporal Web UI http://localhost:8088
+  temporal-ui:
+    image: temporalio/ui:2.26.2
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+    ports:
+      - "8088:8080"
+    networks:
+      - clawhermes
+    depends_on:
+      - temporal
 
 networks:
   clawhermes:

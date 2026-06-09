@@ -45,7 +45,7 @@ const MembersPage = () => {
       form.resetFields();
       fetchMembers();
     } catch (err) {
-      message.error(err.response?.data?.message || '邀请失败');
+      if (err.response?.status !== 403) message.error(err.response?.data?.message || '邀请失败');
     } finally {
       setInviteLoading(false);
     }
@@ -57,7 +57,7 @@ const MembersPage = () => {
       message.success('成员已移除');
       fetchMembers();
     } catch (err) {
-      message.error(err.response?.data?.message || '移除失败');
+      if (err.response?.status !== 403) message.error(err.response?.data?.message || '移除失败');
     }
   };
 
@@ -67,7 +67,7 @@ const MembersPage = () => {
       message.success('角色已更新');
       fetchMembers();
     } catch (err) {
-      message.error(err.response?.data?.message || '更新角色失败');
+      if (err.response?.status !== 403) message.error(err.response?.data?.message || '更新角色失败');
     }
   };
 

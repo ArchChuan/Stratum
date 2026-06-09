@@ -7,10 +7,18 @@ import (
 	"sync"
 	"time"
 
+	agentworkflow "github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent/workflow"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
+	temporalclient "go.temporal.io/sdk/client"
 	"go.uber.org/zap"
 )
+
+// TemporalWorkflowStarter is a minimal interface over temporal client for testability.
+type TemporalWorkflowStarter interface {
+	ExecuteWorkflow(ctx context.Context, options temporalclient.StartWorkflowOptions, workflow interface{}, args ...interface{}) (temporalclient.WorkflowRun, error)
+}
 
 // AgentType defines different agent architectures
 type AgentType string
@@ -79,6 +87,7 @@ type AgentConfig struct {
 	SystemPrompt  string
 	LLMModel      string
 	MaxIterations int
+	AllowedSkills []string
 	Capabilities  []AgentCapability
 }
 
@@ -114,6 +123,8 @@ type BaseAgent struct {
 	mu             sync.Mutex
 	MemoryManager  *memory.MemoryManager
 	SessionContext *memory.SessionContext
+	TemporalClient TemporalWorkflowStarter
+	CapGateway     capgateway.CapabilityGateway
 }
 
 // AgentState represents the current state of an agent
@@ -168,6 +179,14 @@ func (a *BaseAgent) SetMemoryManager(manager *memory.MemoryManager, sessionCtx *
 	a.SessionContext = sessionCtx
 }
 
+func (a *BaseAgent) SetTemporalClient(c TemporalWorkflowStarter) {
+	a.TemporalClient = c
+}
+
+func (a *BaseAgent) SetCapGateway(gw capgateway.CapabilityGateway) {
+	a.CapGateway = gw
+}
+
 // GetConfig implements Agent interface
 func (a *BaseAgent) GetConfig() *AgentConfig {
 	return a.AgentConfig
@@ -203,7 +222,6 @@ func (a *BaseAgent) AddToMemory(msg Message) {
 		entry := &memory.MemoryEntry{
 			Role:      msg.Role,
 			Content:   msg.Content,
-			Timestamp: msg.Timestamp,
 			TenantID:  a.SessionContext.TenantID,
 			UserID:    a.SessionContext.UserID,
 			SessionID: a.SessionContext.SessionID,
@@ -263,20 +281,38 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	var execErr error
 	switch a.Type {
 	case ReActAgent:
-		for i := 0; i < cfg.MaxSteps; i++ {
-			thought := Thought{
-				Step:        i + 1,
-				Observation: input,
-				Thought:     "Observing user input",
-			}
-			result.Thoughts = append(result.Thoughts, thought)
-			a.State.StepsTaken++
-
-			if a.shouldTerminate(ctx, cfg, nil) {
-				result.Output = fmt.Sprintf("Processed: %s", input)
-				break
-			}
+		if a.TemporalClient == nil {
+			execErr = fmt.Errorf("react: TemporalClient not set")
+			break
 		}
+		wfReq := agentworkflow.ReActRequest{
+			TenantID: a.ID,
+			AgentID:  a.ID,
+			Input:    input,
+			AgentCfg: agentworkflow.AgentWorkflowConfig{
+				ID:            a.ID,
+				Name:          a.Name,
+				LLMModel:      a.LLMModel,
+				SystemPrompt:  a.SystemPrompt,
+				MaxIterations: a.MaxIterations,
+			},
+		}
+		wfOpts := temporalclient.StartWorkflowOptions{
+			ID:        fmt.Sprintf("react-%s-%d", a.ID, time.Now().UnixNano()),
+			TaskQueue: agentworkflow.TaskQueue,
+		}
+		run, err := a.TemporalClient.ExecuteWorkflow(ctx, wfOpts, agentworkflow.ReActWorkflow, wfReq)
+		if err != nil {
+			execErr = fmt.Errorf("react: start workflow: %w", err)
+			break
+		}
+		var wfResult *agentworkflow.ReActResult
+		if err := run.Get(ctx, &wfResult); err != nil {
+			execErr = fmt.Errorf("react: workflow: %w", err)
+			break
+		}
+		result.Output = wfResult.Output
+		result.Steps = wfResult.Steps
 
 	case CoTAgent:
 		for i := 0; i < cfg.MaxSteps; i++ {
@@ -315,17 +351,6 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	a.metrics.RecordAgentStepCount(a.ID, string(a.Type), result.Steps)
 
 	return result, execErr
-}
-
-// shouldTerminate checks if execution should stop
-func (a *BaseAgent) shouldTerminate(ctx context.Context, cfg *ExecutionConfig, observation interface{}) bool {
-	select {
-	case <-ctx.Done():
-		return true
-	default:
-	}
-
-	return a.State.StepsTaken >= cfg.MaxSteps
 }
 
 // ExecutionOption configures agent execution behavior

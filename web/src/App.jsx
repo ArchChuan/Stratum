@@ -13,6 +13,7 @@ import ExecutionHistoryPage from './pages/ExecutionHistoryPage';
 import DashboardPage from './pages/DashboardPage';
 import AgentsListPage from './pages/AgentsListPage';
 import CreateAgentPage from './pages/CreateAgentPage';
+import EditAgentPage from './pages/EditAgentPage';
 import AgentChatPage from './pages/AgentChatPage';
 import MemoryPage from './pages/MemoryPage';
 import MCPServersPage from './pages/MCPServersPage';
@@ -124,14 +125,11 @@ const AppInner = () => {
     { key: '/knowledge', icon: <BookOutlined />, label: <Link to="/knowledge">知识库</Link> },
     { key: '/history', icon: <HistoryOutlined />, label: <Link to="/history">执行历史</Link> },
     ...(user?.current_tenant ? [{ key: '/tenant/members', icon: <TeamOutlined />, label: <Link to="/tenant/members">成员管理</Link> }] : []),
+    ...(user?.current_tenant ? [{ key: '/tenant/settings', icon: <SettingOutlined />, label: <Link to="/tenant/settings">租户设置</Link> }] : []),
     ...(user?.global_role === 'global_admin' ? [{ key: '/admin/tenants', icon: <GlobalOutlined />, label: <Link to="/admin/tenants">全局租户</Link> }] : []),
   ];
 
   const userMenuItems = [
-    ...(user?.current_tenant ? [{ key: 'members', icon: <TeamOutlined />, label: <Link to="/tenant/members">成员管理</Link> }] : []),
-    ...(user?.role === 'admin' ? [{ key: 'settings', icon: <SettingOutlined />, label: <Link to="/tenant/settings">租户设置</Link> }] : []),
-    ...(user?.global_role === 'global_admin' ? [{ key: 'admin', icon: <GlobalOutlined />, label: <Link to="/admin/tenants">全局管理</Link> }] : []),
-    { type: 'divider' },
     { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true, onClick: () => { logout(); navigate('/login', { replace: true }); } },
   ];
 
@@ -182,6 +180,7 @@ const AppInner = () => {
               <Route path="/skills/create" element={<PrivateRoute><CreateSkillPage /></PrivateRoute>} />
               <Route path="/agents" element={<PrivateRoute><AgentsListPage /></PrivateRoute>} />
               <Route path="/agents/create" element={<PrivateRoute><CreateAgentPage /></PrivateRoute>} />
+              <Route path="/agents/:id/edit" element={<PrivateRoute><EditAgentPage /></PrivateRoute>} />
               <Route path="/chat" element={<PrivateRoute><AgentChatPage /></PrivateRoute>} />
               <Route path="/memory" element={<PrivateRoute><MemoryPage /></PrivateRoute>} />
               <Route path="/mcp" element={<PrivateRoute><MCPServersPage /></PrivateRoute>} />

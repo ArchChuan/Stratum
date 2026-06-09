@@ -10,13 +10,20 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/byteBuilderX/ClawHermes-AI-Go/api"
+	agentpkg "github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent"
+	agentworkflow "github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent/workflow"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/config"
 	harnesspkg "github.com/byteBuilderX/ClawHermes-AI-Go/internal/harness"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/hermes"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/migration"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/skillgateway"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/postgres"
 	pkgredis "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/redis"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
@@ -24,7 +31,14 @@ import (
 	"go.uber.org/zap"
 )
 
+// compile-time interface assertion
+var _ agentpkg.TemporalWorkflowStarter = (*agentworkflow.TemporalWorkerComponent)(nil)
+
 func main() {
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		log.Printf("Warning: could not load .env file: %v", err)
+	}
+
 	logger, err := zap.NewProduction()
 	if err != nil {
 		log.Fatalf("Failed to create logger: %v", err)
@@ -152,8 +166,19 @@ func main() {
 		logger.Fatal("Failed to register Skill Registry component", zap.Error(err))
 	}
 
-	// 5. HTTP Server component
-	router := api.SetupRouter(cfg, logger, registry, gateway, pgPool.DB(), redisClient.Client())
+	// 5. CapabilityGateway + Temporal Worker
+	skillGW := skillgateway.NewDefaultGateway(observability.NewPrometheusMetrics(logger), logger, nil)
+	llmAdapter := capgateway.NewLLMAdapter(gateway, logger)
+	skillAdapter := capgateway.NewSkillAdapter(skillGW, logger)
+	capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, skillAdapter, logger)
+
+	temporalWorker := agentworkflow.NewTemporalWorkerComponent(&cfg.Temporal, capGW, logger)
+	if err := appHarness.Register(temporalWorker); err != nil {
+		logger.Fatal("Failed to register Temporal Worker component", zap.Error(err))
+	}
+
+	// 6. HTTP Server component
+	router := api.SetupRouter(cfg, logger, registry, gateway, pgPool.DB(), redisClient.Client(), temporalWorker)
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           router,

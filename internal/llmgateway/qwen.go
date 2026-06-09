@@ -68,8 +68,10 @@ func (c *QwenClient) Complete(ctx context.Context, req *CompletionRequest) (*Com
 
 	var out struct {
 		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
+				Content   string     `json:"content"`
+				ToolCalls []ToolCall `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
 		Model string `json:"model"`
@@ -87,8 +89,9 @@ func (c *QwenClient) Complete(ctx context.Context, req *CompletionRequest) (*Com
 	}
 
 	return &CompletionResponse{
-		Content: out.Choices[0].Message.Content,
-		Model:   out.Model,
+		Content:   out.Choices[0].Message.Content,
+		Model:     out.Model,
+		ToolCalls: out.Choices[0].Message.ToolCalls,
 		Usage: struct {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`

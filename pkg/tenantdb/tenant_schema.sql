@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS agents (
     system_prompt  TEXT NOT NULL DEFAULT '',
     llm_model      TEXT NOT NULL DEFAULT '',
     max_iterations INT  NOT NULL DEFAULT 10,
+    allowed_skills TEXT[] NOT NULL DEFAULT '{}',
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

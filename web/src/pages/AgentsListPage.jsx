@@ -11,13 +11,15 @@ import {
   notification,
   message
 } from 'antd';
-import { PlusOutlined, PlayCircleOutlined, DeleteOutlined, RobotOutlined } from '@ant-design/icons';
+import { PlusOutlined, PlayCircleOutlined, DeleteOutlined, RobotOutlined, EditOutlined } from '@ant-design/icons';
 import { getAllAgents, executeAgent, deleteAgent } from '../services/api';
+import { useNavigate } from 'react-router-dom';
 
 const { Search } = Input;
 const { Title } = Typography;
 
 const AgentsListPage = () => {
+  const navigate = useNavigate();
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
@@ -137,9 +139,16 @@ const AgentsListPage = () => {
       key: 'actions',
       render: (_, record) => (
         <Space size="middle">
-          <Button 
-            type="link" 
-            icon={<PlayCircleOutlined />} 
+          <Button
+            type="link"
+            icon={<EditOutlined />}
+            onClick={() => navigate(`/agents/${record.id}/edit`)}
+          >
+            编辑
+          </Button>
+          <Button
+            type="link"
+            icon={<PlayCircleOutlined />}
             onClick={() => handleExecuteAgent(record)}
           >
             执行

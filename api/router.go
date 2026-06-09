@@ -24,6 +24,7 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/textchunk"
+	pkgcrypto "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/crypto"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
 	vectorstore "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
 	"github.com/gin-gonic/gin"
@@ -40,17 +41,24 @@ func SetupRouter(
 	gateway *llmgateway.Gateway,
 	db *pgxpool.Pool,
 	rdb *goredis.Client,
+	temporalClient agent.TemporalWorkflowStarter,
 ) *gin.Engine {
-	router := gin.Default()
+	router := gin.New()
+	router.Use(gin.Recovery())
 
 	// Observability: single shared PrometheusMetrics instance
 	metrics := observability.NewPrometheusMetrics(logger)
+
+	aesKey := pkgcrypto.DeriveAESKey(cfg.JWTPrivateKeyPEM)
+	gatewayCache := llmgateway.NewTenantGatewayCache()
+	requireActive := middleware.RequireActiveTenant(db)
 
 	// Inject metrics into LLM gateway
 	gateway.WithMetrics(metrics)
 
 	// Middleware
 	router.Use(middleware.ErrorHandler(logger))
+	router.Use(middleware.TraceMiddleware(logger))
 	router.Use(middleware.CORSMiddleware(cfg.FrontendURL))
 	router.Use(middleware.MetricsMiddleware(metrics))
 
@@ -92,7 +100,7 @@ func SetupRouter(
 			if db != nil {
 				jwtMW := auth.JWTMiddleware(jwtSvc)
 				adminHandler := handler.NewAdminHandler(db, logger)
-				tenantHandler := handler.NewTenantHandler(db, logger, cfg.FrontendURL)
+				tenantHandler := handler.NewTenantHandler(db, logger, cfg.FrontendURL, aesKey, gatewayCache)
 
 				adminGroup := router.Group("/admin", jwtMW, middleware.RequireGlobalAdmin())
 				{
@@ -110,7 +118,7 @@ func SetupRouter(
 					tenantGroup.PATCH("/members/:user_id/role", tenantHandler.UpdateMemberRole)
 					tenantGroup.DELETE("/members/:user_id", tenantHandler.RemoveMember)
 					tenantGroup.GET("/settings", tenantHandler.GetSettings)
-					tenantGroup.PATCH("/settings", tenantHandler.UpdateSettings)
+					tenantGroup.PATCH("/settings", requireActive, tenantHandler.UpdateSettings)
 				}
 
 				// /tenant/list only needs JWT, not a specific tenant context.
@@ -161,11 +169,14 @@ func SetupRouter(
 
 	// Initialize agent registry and handler
 	agentRegistry := agent.NewRegistry(db, logger)
+	if temporalClient != nil {
+		agentRegistry.SetTemporalClient(temporalClient)
+	}
 	var execStore *agent.ExecutionStore
 	if db != nil {
 		execStore = agent.NewExecutionStore(db)
 	}
-	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway, metrics, execStore)
+	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway, metrics, execStore, db, aesKey, gatewayCache)
 
 	// Initialize memory system
 	memoryConfig := memory.DefaultMemoryConfig()
@@ -176,18 +187,6 @@ func SetupRouter(
 	mcpManager := mcp.NewClientManager(logger, nil, db)
 	mcpRegistry := mcp.NewMCPSkillRegistry(mcpManager, logger)
 	mcpHandler := handler.NewMCPHandler(mcpRegistry, mcpManager, logger)
-
-	// Restore persisted MCP connections from DB
-	if db != nil {
-		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer restoreCancel()
-		if err := mcpManager.RestoreFromDB(restoreCtx); err != nil {
-			logger.Warn("failed to restore MCP connections from DB", zap.Error(err))
-		}
-	}
-
-	// requireActive blocks writes when the tenant is suspended.
-	requireActive := middleware.RequireActiveTenant(db)
 
 	// Skill endpoints — JWT + InjectTenantContext required (same pattern as agents)
 	var skillMW []gin.HandlerFunc
@@ -215,6 +214,7 @@ func SetupRouter(
 		agents.GET("/executions", agentHandler.ListExecutions)
 		agents.GET("/:id", agentHandler.GetAgent)
 		agents.POST("/:id/execute", requireActive, agentHandler.ExecuteAgent)
+		agents.PUT("/:id", requireActive, agentHandler.UpdateAgent)
 		agents.DELETE("/:id", requireActive, agentHandler.DeleteAgent)
 	}
 

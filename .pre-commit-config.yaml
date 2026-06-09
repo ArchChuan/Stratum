@@ -117,6 +117,14 @@ repos:
         types: [markdown]
         exclude: 'web/node_modules/'
 
+      # Secret scanning with gitleaks
+      - id: gitleaks
+        name: gitleaks
+        language: system
+        entry: gitleaks
+        args: [protect, --staged, --redact, -v]
+        pass_filenames: false
+
       # Security scanning with Semgrep (local rules, no network required)
       - id: semgrep
         name: semgrep
