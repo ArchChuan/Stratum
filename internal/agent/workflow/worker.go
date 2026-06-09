@@ -86,3 +86,17 @@ func (c *TemporalWorkerComponent) HealthCheck(_ context.Context) error {
 
 // Client returns the Temporal client for workflow submission (used by BaseAgent).
 func (c *TemporalWorkerComponent) Client() client.Client { return c.client }
+
+// ExecuteWorkflow implements agent.TemporalWorkflowStarter.
+// Delegates to the underlying Temporal client initialized in Start().
+func (c *TemporalWorkerComponent) ExecuteWorkflow(
+	ctx context.Context,
+	options client.StartWorkflowOptions,
+	workflow interface{},
+	args ...interface{},
+) (client.WorkflowRun, error) {
+	if c.client == nil {
+		return nil, fmt.Errorf("temporal-worker: client not initialized (worker not started)")
+	}
+	return c.client.ExecuteWorkflow(ctx, options, workflow, args...)
+}
