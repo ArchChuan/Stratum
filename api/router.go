@@ -24,6 +24,7 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/textchunk"
+	pkgcrypto "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/crypto"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
 	vectorstore "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
 	"github.com/gin-gonic/gin"
@@ -46,6 +47,9 @@ func SetupRouter(
 
 	// Observability: single shared PrometheusMetrics instance
 	metrics := observability.NewPrometheusMetrics(logger)
+
+	aesKey := pkgcrypto.DeriveAESKey(cfg.JWTPrivateKeyPEM)
+	gatewayCache := llmgateway.NewTenantGatewayCache()
 
 	// Inject metrics into LLM gateway
 	gateway.WithMetrics(metrics)
@@ -93,7 +97,7 @@ func SetupRouter(
 			if db != nil {
 				jwtMW := auth.JWTMiddleware(jwtSvc)
 				adminHandler := handler.NewAdminHandler(db, logger)
-				tenantHandler := handler.NewTenantHandler(db, logger, cfg.FrontendURL)
+				tenantHandler := handler.NewTenantHandler(db, logger, cfg.FrontendURL, aesKey, gatewayCache)
 
 				adminGroup := router.Group("/admin", jwtMW, middleware.RequireGlobalAdmin())
 				{
@@ -169,7 +173,7 @@ func SetupRouter(
 	if db != nil {
 		execStore = agent.NewExecutionStore(db)
 	}
-	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway, metrics, execStore)
+	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway, metrics, execStore, db, aesKey, gatewayCache)
 
 	// Initialize memory system
 	memoryConfig := memory.DefaultMemoryConfig()
@@ -180,15 +184,6 @@ func SetupRouter(
 	mcpManager := mcp.NewClientManager(logger, nil, db)
 	mcpRegistry := mcp.NewMCPSkillRegistry(mcpManager, logger)
 	mcpHandler := handler.NewMCPHandler(mcpRegistry, mcpManager, logger)
-
-	// Restore persisted MCP connections from DB
-	if db != nil {
-		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer restoreCancel()
-		if err := mcpManager.RestoreFromDB(restoreCtx); err != nil {
-			logger.Warn("failed to restore MCP connections from DB", zap.Error(err))
-		}
-	}
 
 	// requireActive blocks writes when the tenant is suspended.
 	requireActive := middleware.RequireActiveTenant(db)

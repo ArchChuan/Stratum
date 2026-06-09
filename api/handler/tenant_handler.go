@@ -117,13 +117,20 @@ func (h *TenantHandler) InviteMember(c *gin.Context) {
 	sum := sha256.Sum256([]byte(rawToken))
 	tokenHash := hex.EncodeToString(sum[:])
 
+	inviterID, _ := c.Get("auth.sub")
+	inviterIDStr, _ := inviterID.(string)
+	if inviterIDStr == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "inviter identity missing"})
+		return
+	}
+
 	invitationID := uuid.New().String()
 	expiresAt := time.Now().UTC().Add(72 * time.Hour)
 
 	_, err := h.db.Exec(c.Request.Context(),
-		`INSERT INTO public.invitations(id, tenant_id, email, role, token_hash, expires_at, created_at)
-		 VALUES($1, $2, $3, $4, $5, $6, $7)`,
-		invitationID, tenantID, req.Email, req.Role, tokenHash, expiresAt, time.Now().UTC())
+		`INSERT INTO public.invitations(id, tenant_id, email, role, token_hash, expires_at, created_at, invited_by)
+		 VALUES($1, $2, $3, $4, $5, $6, $7, $8)`,
+		invitationID, tenantID, req.Email, req.Role, tokenHash, expiresAt, time.Now().UTC(), inviterIDStr)
 	if err != nil {
 		h.logger.Error("insert invitation failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "invitation creation failed"})

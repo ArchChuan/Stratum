@@ -3,13 +3,16 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/byteBuilderX/ClawHermes-AI-Go/api/model"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
+	pkgcrypto "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/crypto"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -22,6 +25,9 @@ type AgentHandler struct {
 	gateway        *llmgateway.Gateway
 	metrics        observability.MetricsProvider
 	executionStore *agent.ExecutionStore
+	db             PgxPool
+	aesKey         [32]byte
+	gatewayCache   *llmgateway.TenantGatewayCache
 }
 
 type CreateAgentRequest struct {
@@ -67,13 +73,25 @@ type AgentExecutionResult struct {
 	Error      string                 `json:"error,omitempty"`
 }
 
-func NewAgentHandler(agentRegistry *agent.Registry, logger *zap.Logger, gateway *llmgateway.Gateway, metrics observability.MetricsProvider, execStore *agent.ExecutionStore) *AgentHandler {
+func NewAgentHandler(
+	agentRegistry *agent.Registry,
+	logger *zap.Logger,
+	gateway *llmgateway.Gateway,
+	metrics observability.MetricsProvider,
+	execStore *agent.ExecutionStore,
+	db PgxPool,
+	aesKey [32]byte,
+	gatewayCache *llmgateway.TenantGatewayCache,
+) *AgentHandler {
 	return &AgentHandler{
 		agentRegistry:  agentRegistry,
 		logger:         logger,
 		gateway:        gateway,
 		metrics:        metrics,
 		executionStore: execStore,
+		db:             db,
+		aesKey:         aesKey,
+		gatewayCache:   gatewayCache,
 	}
 }
 
@@ -96,7 +114,7 @@ func (h *AgentHandler) GetAllAgents(c *gin.Context) {
 			SystemPrompt:  cfg.SystemPrompt,
 			LLMModel:      cfg.LLMModel,
 			MaxIterations: cfg.MaxIterations,
-			AllowedSkills: []string{},
+			AllowedSkills: cfg.AllowedSkills,
 			CreatedAt:     time.Now().Format(time.RFC3339),
 		})
 	}
@@ -132,7 +150,7 @@ func (h *AgentHandler) GetAgent(c *gin.Context) {
 		SystemPrompt:  cfg.SystemPrompt,
 		LLMModel:      cfg.LLMModel,
 		MaxIterations: cfg.MaxIterations,
-		AllowedSkills: []string{},
+		AllowedSkills: cfg.AllowedSkills,
 		CreatedAt:     time.Now().Format(time.RFC3339),
 	})
 }
@@ -179,6 +197,7 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 		SystemPrompt:  req.SystemPrompt,
 		LLMModel:      req.LLMModel,
 		MaxIterations: req.MaxIterations,
+		AllowedSkills: req.AllowedSkills,
 		Capabilities:  []agent.AgentCapability{},
 	}
 
@@ -205,6 +224,96 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 		LLMModel:      req.LLMModel,
 		MaxIterations: req.MaxIterations,
 		AllowedSkills: req.AllowedSkills,
+		CreatedAt:     time.Now().Format(time.RFC3339),
+	})
+}
+
+func (h *AgentHandler) UpdateAgent(c *gin.Context) {
+	if _, ok := tenantIDFromCtx(c); !ok {
+		respondMissingTenant(c)
+		return
+	}
+	id := c.Param("id")
+
+	var req CreateAgentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.logger.Warn("invalid request", zap.Error(err))
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+			Code:    http.StatusBadRequest,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	if _, ok := h.agentRegistry.Get(c.Request.Context(), id); !ok {
+		c.JSON(http.StatusNotFound, model.ErrorResponse{
+			Code:    http.StatusNotFound,
+			Message: "agent not found",
+		})
+		return
+	}
+
+	agentType := agent.ReActAgent
+	switch req.Type {
+	case "react":
+		agentType = agent.ReActAgent
+	case "cot":
+		agentType = agent.CoTAgent
+	case "planning":
+		agentType = agent.PlanningAgent
+	case "tool_calling":
+		agentType = agent.ToolCallingAgent
+	case "rag":
+		agentType = agent.RAGAgent
+	case "swarm":
+		agentType = agent.SwarmAgent
+	}
+
+	skills := req.AllowedSkills
+	if skills == nil {
+		skills = []string{}
+	}
+
+	cfg := &agent.AgentConfig{
+		ID:            id,
+		Name:          req.Name,
+		Type:          agentType,
+		Description:   req.Description,
+		Persona:       req.Persona,
+		SystemPrompt:  req.SystemPrompt,
+		LLMModel:      req.LLMModel,
+		MaxIterations: req.MaxIterations,
+		AllowedSkills: skills,
+	}
+
+	if err := h.agentRegistry.Update(c.Request.Context(), cfg); err != nil {
+		if errors.Is(err, agent.ErrNotFound) {
+			c.JSON(http.StatusNotFound, model.ErrorResponse{
+				Code:    http.StatusNotFound,
+				Message: "agent not found",
+			})
+			return
+		}
+		h.logger.Error("failed to update agent", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Code:    http.StatusInternalServerError,
+			Message: fmt.Sprintf("failed to update agent: %v", err),
+		})
+		return
+	}
+
+	h.logger.Info("agent updated", zap.String("id", id), zap.String("name", req.Name))
+
+	c.JSON(http.StatusOK, AgentResponse{
+		ID:            id,
+		Name:          req.Name,
+		Type:          string(agentType),
+		Description:   req.Description,
+		Persona:       req.Persona,
+		SystemPrompt:  req.SystemPrompt,
+		LLMModel:      req.LLMModel,
+		MaxIterations: req.MaxIterations,
+		AllowedSkills: skills,
 		CreatedAt:     time.Now().Format(time.RFC3339),
 	})
 }
@@ -251,6 +360,19 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 	ctx := c.Request.Context()
 	tenantID, _ := tenantIDFromCtx(c)
 	userID, _ := userIDFromCtx(c)
+
+	// inject per-tenant LLM gateway if tenant has configured API keys
+	if tenantGW := h.resolveTenantGateway(ctx, tenantID); tenantGW != nil {
+		llmAdapter := capgateway.NewLLMAdapter(tenantGW, h.logger)
+		capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, nil, h.logger)
+		type capGWSetter interface {
+			SetCapGateway(capgateway.CapabilityGateway)
+		}
+		if setter, ok := a.(capGWSetter); ok {
+			setter.SetCapGateway(capGW)
+		}
+	}
+
 	start := time.Now()
 	result, err := a.Execute(ctx, req.Query, options...)
 	durationMs := int(time.Since(start).Milliseconds())
@@ -383,4 +505,79 @@ func (h *AgentHandler) ListExecutions(c *gin.Context) {
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"executions": out})
+}
+
+// resolveTenantGateway looks up per-tenant LLM API keys from DB settings,
+// decrypts them, builds a Gateway, and caches with 5-minute TTL.
+// Returns nil when no keys are configured or on any error (fallback to global gateway).
+func (h *AgentHandler) resolveTenantGateway(ctx context.Context, tenantID string) *llmgateway.Gateway {
+	if h.db == nil || h.gatewayCache == nil {
+		return nil
+	}
+	if gw, ok := h.gatewayCache.Get(tenantID); ok {
+		return gw
+	}
+
+	var settingsJSON []byte
+	err := h.db.QueryRow(ctx,
+		"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL",
+		tenantID,
+	).Scan(&settingsJSON)
+	if err != nil {
+		h.logger.Warn("resolveTenantGateway: settings query failed",
+			zap.String("tenant_id", tenantID), zap.Error(err))
+		return nil
+	}
+
+	var settings map[string]interface{}
+	if err := json.Unmarshal(settingsJSON, &settings); err != nil {
+		return nil
+	}
+
+	apiKeysRaw, ok := settings["llm_api_keys"].(map[string]interface{})
+	if !ok || len(apiKeysRaw) == 0 {
+		return nil
+	}
+
+	decrypted := make(map[string]string, len(apiKeysRaw))
+	for provider, enc := range apiKeysRaw {
+		encStr, ok := enc.(string)
+		if !ok || encStr == "" {
+			continue
+		}
+		plain, err := pkgcrypto.Decrypt(h.aesKey, encStr)
+		if err != nil {
+			h.logger.Warn("resolveTenantGateway: decrypt failed",
+				zap.String("tenant_id", tenantID), zap.String("provider", provider))
+			continue
+		}
+		decrypted[provider] = plain
+	}
+
+	if len(decrypted) == 0 {
+		return nil
+	}
+
+	gw := llmgateway.NewGateway()
+	if qwenKey, ok := decrypted["qwen"]; ok {
+		qwenClient := llmgateway.NewQwenClient(qwenKey, h.logger)
+		gw.RegisterClient(llmgateway.ProviderQwen, qwenClient)
+		gw.RegisterEmbeddingClient(llmgateway.ProviderQwen, qwenClient)
+	}
+	if zhipuKey, ok := decrypted["zhipu"]; ok {
+		zhipuClient := llmgateway.NewZhipuClient(zhipuKey, h.logger)
+		gw.RegisterClient(llmgateway.ProviderZhipu, zhipuClient)
+		gw.RegisterEmbeddingClient(llmgateway.ProviderZhipu, zhipuClient)
+	}
+
+	// set default to first available provider
+	for _, pref := range []llmgateway.ModelProvider{llmgateway.ProviderQwen, llmgateway.ProviderZhipu} {
+		if _, ok := decrypted[string(pref)]; ok {
+			gw.SetDefault(pref)
+			break
+		}
+	}
+
+	h.gatewayCache.Set(tenantID, gw, 5*time.Minute)
+	return gw
 }
