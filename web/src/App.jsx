@@ -13,6 +13,7 @@ import ExecutionHistoryPage from './pages/ExecutionHistoryPage';
 import DashboardPage from './pages/DashboardPage';
 import AgentsListPage from './pages/AgentsListPage';
 import CreateAgentPage from './pages/CreateAgentPage';
+import EditAgentPage from './pages/EditAgentPage';
 import AgentChatPage from './pages/AgentChatPage';
 import MemoryPage from './pages/MemoryPage';
 import MCPServersPage from './pages/MCPServersPage';
@@ -182,6 +183,7 @@ const AppInner = () => {
               <Route path="/skills/create" element={<PrivateRoute><CreateSkillPage /></PrivateRoute>} />
               <Route path="/agents" element={<PrivateRoute><AgentsListPage /></PrivateRoute>} />
               <Route path="/agents/create" element={<PrivateRoute><CreateAgentPage /></PrivateRoute>} />
+              <Route path="/agents/:id/edit" element={<PrivateRoute><EditAgentPage /></PrivateRoute>} />
               <Route path="/chat" element={<PrivateRoute><AgentChatPage /></PrivateRoute>} />
               <Route path="/memory" element={<PrivateRoute><MemoryPage /></PrivateRoute>} />
               <Route path="/mcp" element={<PrivateRoute><MCPServersPage /></PrivateRoute>} />
