@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/ClawHermes-AI-Go/api/model"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
+	pkgcrypto "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/crypto"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -22,10 +24,12 @@ type TenantHandler struct {
 	db          PgxPool
 	logger      *zap.Logger
 	frontendURL string
+	aesKey      [32]byte
+	cache       *llmgateway.TenantGatewayCache
 }
 
-func NewTenantHandler(db PgxPool, logger *zap.Logger, frontendURL string) *TenantHandler {
-	return &TenantHandler{db: db, logger: logger, frontendURL: frontendURL}
+func NewTenantHandler(db PgxPool, logger *zap.Logger, frontendURL string, aesKey [32]byte, cache *llmgateway.TenantGatewayCache) *TenantHandler {
+	return &TenantHandler{db: db, logger: logger, frontendURL: frontendURL, aesKey: aesKey, cache: cache}
 }
 
 // ListMembers GET /tenant/members?page=1&page_size=20
@@ -281,6 +285,22 @@ func (h *TenantHandler) GetSettings(c *gin.Context) {
 	} else {
 		settings = map[string]interface{}{}
 	}
+	if apiKeys, ok := settings["llm_api_keys"].(map[string]interface{}); ok {
+		masked := make(map[string]interface{}, len(apiKeys))
+		for provider, val := range apiKeys {
+			if s, ok := val.(string); ok && s != "" {
+				decrypted, err := pkgcrypto.Decrypt(h.aesKey, s)
+				if err == nil {
+					masked[provider] = maskAPIKey(decrypted)
+				} else {
+					masked[provider] = ""
+				}
+			} else {
+				masked[provider] = ""
+			}
+		}
+		settings["llm_api_keys"] = masked
+	}
 	c.JSON(http.StatusOK, model.SettingsResponse{TenantID: tenantID, TenantName: tenantName, Settings: settings})
 }
 
@@ -291,6 +311,14 @@ func (h *TenantHandler) UpdateSettings(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "tenant_id missing"})
 		return
 	}
+
+	roleVal, _ := c.Get("auth.role")
+	roleStr, _ := roleVal.(string)
+	if roleStr != "admin" && roleStr != "owner" {
+		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "admin or owner role required"})
+		return
+	}
+
 	var req model.UpdateSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: err.Error()})
@@ -313,7 +341,49 @@ func (h *TenantHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	if req.Settings != nil {
-		settingsJSON, err := json.Marshal(req.Settings)
+		var existingJSON []byte
+		_ = h.db.QueryRow(c.Request.Context(),
+			"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL", tenantID,
+		).Scan(&existingJSON)
+
+		merged := map[string]interface{}{}
+		if len(existingJSON) > 0 {
+			_ = json.Unmarshal(existingJSON, &merged)
+		}
+
+		if apiKeys, ok := req.Settings["llm_api_keys"].(map[string]interface{}); ok {
+			encrypted := make(map[string]interface{}, len(apiKeys))
+			for provider, val := range apiKeys {
+				plaintext, ok := val.(string)
+				if !ok || plaintext == "" {
+					continue
+				}
+				enc, err := pkgcrypto.Encrypt(h.aesKey, plaintext)
+				if err != nil {
+					h.logger.Error("encrypt api key failed", zap.String("provider", provider), zap.Error(err))
+					c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "encryption failed"})
+					return
+				}
+				encrypted[provider] = enc
+			}
+			existing, _ := merged["llm_api_keys"].(map[string]interface{})
+			if existing == nil {
+				existing = map[string]interface{}{}
+			}
+			for k, v := range encrypted {
+				existing[k] = v
+			}
+			merged["llm_api_keys"] = existing
+		}
+
+		for k, v := range req.Settings {
+			if k == "llm_api_keys" {
+				continue
+			}
+			merged[k] = v
+		}
+
+		settingsJSON, err := json.Marshal(merged)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: "invalid settings"})
 			return
@@ -324,6 +394,10 @@ func (h *TenantHandler) UpdateSettings(c *gin.Context) {
 			h.logger.Error("update settings failed", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "update failed"})
 			return
+		}
+
+		if h.cache != nil {
+			h.cache.Invalidate(tenantID)
 		}
 	}
 
@@ -368,4 +442,15 @@ func (h *TenantHandler) ListUserTenants(c *gin.Context) {
 		items = []model.TenantListItem{}
 	}
 	c.JSON(http.StatusOK, model.TenantListResponse{Tenants: items})
+}
+
+// maskAPIKey returns a masked version of an API key showing only the last 4 chars.
+func maskAPIKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	if len(key) <= 4 {
+		return "****"
+	}
+	return "****" + key[len(key)-4:]
 }
