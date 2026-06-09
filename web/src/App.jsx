@@ -130,7 +130,7 @@ const AppInner = () => {
 
   const userMenuItems = [
     ...(user?.current_tenant ? [{ key: 'members', icon: <TeamOutlined />, label: <Link to="/tenant/members">成员管理</Link> }] : []),
-    ...(user?.role === 'admin' ? [{ key: 'settings', icon: <SettingOutlined />, label: <Link to="/tenant/settings">租户设置</Link> }] : []),
+    ...(user?.current_tenant ? [{ key: 'settings', icon: <SettingOutlined />, label: <Link to="/tenant/settings">租户设置</Link> }] : []),
     ...(user?.global_role === 'global_admin' ? [{ key: 'admin', icon: <GlobalOutlined />, label: <Link to="/admin/tenants">全局管理</Link> }] : []),
     { type: 'divider' },
     { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true, onClick: () => { logout(); navigate('/login', { replace: true }); } },
