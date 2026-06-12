@@ -3,45 +3,39 @@ package agent_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent"
-	agentworkflow "github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent/workflow"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
 	"github.com/stretchr/testify/require"
-	"go.temporal.io/sdk/client"
 	"go.uber.org/zap"
 )
 
-// mockWorkflowRun implements client.WorkflowRun.
-type mockWorkflowRun struct {
-	result *agentworkflow.ReActResult
-	err    error
+// mockCapGW drives LLM responses in sequence; tools always succeed.
+type mockCapGW struct {
+	mu        sync.Mutex
+	responses []capgateway.CapabilityResponse
+	idx       int
+	toolResp  capgateway.CapabilityResponse
+	err       error
 }
 
-func (m *mockWorkflowRun) GetID() string    { return "test-wf-id" }
-func (m *mockWorkflowRun) GetRunID() string { return "test-run-id" }
-func (m *mockWorkflowRun) Get(_ context.Context, valuePtr interface{}) error {
+func (m *mockCapGW) Route(_ context.Context, req capgateway.CapabilityRequest) (capgateway.CapabilityResponse, error) {
 	if m.err != nil {
-		return m.err
+		return capgateway.CapabilityResponse{}, m.err
 	}
-	if p, ok := valuePtr.(**agentworkflow.ReActResult); ok {
-		*p = m.result
+	if req.Type == capgateway.CapSkill {
+		return m.toolResp, nil
 	}
-	return nil
-}
-func (m *mockWorkflowRun) GetWithOptions(ctx context.Context, valuePtr interface{}, _ client.WorkflowRunGetOptions) error {
-	return m.Get(ctx, valuePtr)
-}
-
-// mockTemporalClient implements agent.TemporalWorkflowStarter.
-type mockTemporalClient struct {
-	run client.WorkflowRun
-	err error
-}
-
-func (m *mockTemporalClient) ExecuteWorkflow(_ context.Context, _ client.StartWorkflowOptions, _ interface{}, _ ...interface{}) (client.WorkflowRun, error) {
-	return m.run, m.err
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.idx < len(m.responses) {
+		r := m.responses[m.idx]
+		m.idx++
+		return r, nil
+	}
+	return capgateway.CapabilityResponse{Content: "done"}, nil
 }
 
 func newReActAgent() *agent.BaseAgent {
@@ -58,40 +52,73 @@ func newReActAgent() *agent.BaseAgent {
 
 func TestBaseAgent_ReActExecute_DirectAnswer(t *testing.T) {
 	a := newReActAgent()
+	gw := &mockCapGW{responses: []capgateway.CapabilityResponse{{Content: "42"}}}
+	a.SetCapGateway(gw)
 
-	wfResult := &agentworkflow.ReActResult{
-		Output: "42",
-		Steps:  1,
-	}
-	mockClient := &mockTemporalClient{run: &mockWorkflowRun{result: wfResult}}
-	mockGW := &mockCapGateway{}
-
-	a.SetTemporalClient(mockClient)
-	a.SetCapGateway(mockGW)
-
-	result, err := a.Execute(context.Background(), "what is 6x7?")
+	result, err := a.Execute(context.Background(), "what is 6x7?",
+		agent.WithTenantID("t1"),
+	)
 	require.NoError(t, err)
 	require.Equal(t, "42", result.Output)
 	require.Equal(t, "agent-001", result.AgentID)
+	require.Equal(t, 1, result.Steps)
 }
 
-func TestBaseAgent_ReActExecute_TemporalError(t *testing.T) {
+func TestBaseAgent_ReActExecute_WithToolCall(t *testing.T) {
 	a := newReActAgent()
+	gw := &mockCapGW{
+		responses: []capgateway.CapabilityResponse{
+			{ToolCalls: []capgateway.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{"expr": "6*7"}}}},
+			{Content: "The answer is 42"},
+		},
+		toolResp: capgateway.CapabilityResponse{Content: "42"},
+	}
+	a.SetCapGateway(gw)
 
-	mockClient := &mockTemporalClient{err: errors.New("temporal unavailable")}
-	mockGW := &mockCapGateway{}
+	result, err := a.Execute(context.Background(), "calc 6*7",
+		agent.WithTenantID("t1"),
+		agent.WithMaxSteps(10),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "The answer is 42", result.Output)
+	require.Equal(t, 2, result.Steps)
+	require.Len(t, result.ToolCalls, 1)
+	require.Equal(t, "calc", result.ToolCalls[0].ToolName)
+}
 
-	a.SetTemporalClient(mockClient)
-	a.SetCapGateway(mockGW)
+func TestBaseAgent_ReActExecute_CapGWNil(t *testing.T) {
+	a := newReActAgent()
+	// no SetCapGateway call → CapGateway is nil
 
 	_, err := a.Execute(context.Background(), "hello")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "temporal unavailable")
+	require.Contains(t, err.Error(), "CapGateway not set")
 }
 
-// mockCapGateway satisfies capgateway.CapabilityGateway (unused in these tests but required by SetCapGateway).
-type mockCapGateway struct{}
+func TestBaseAgent_ReActExecute_LLMError(t *testing.T) {
+	a := newReActAgent()
+	gw := &mockCapGW{err: errors.New("llm unavailable")}
+	a.SetCapGateway(gw)
 
-func (m *mockCapGateway) Route(_ context.Context, _ capgateway.CapabilityRequest) (capgateway.CapabilityResponse, error) {
-	return capgateway.CapabilityResponse{}, nil
+	_, err := a.Execute(context.Background(), "hello")
+	require.Error(t, err)
+}
+
+func TestBaseAgent_SetCapGateway_DataRace(t *testing.T) {
+	a := newReActAgent()
+	gw := &mockCapGW{responses: []capgateway.CapabilityResponse{{Content: "ok"}}}
+	var wg sync.WaitGroup
+	// concurrent SetCapGateway + Execute
+	for i := 0; i < 10; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			a.SetCapGateway(gw)
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = a.Execute(context.Background(), "ping")
+		}()
+	}
+	wg.Wait()
 }

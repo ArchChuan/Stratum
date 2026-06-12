@@ -13,8 +13,6 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/byteBuilderX/ClawHermes-AI-Go/api"
-	agentpkg "github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent"
-	agentworkflow "github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent/workflow"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/config"
 	harnesspkg "github.com/byteBuilderX/ClawHermes-AI-Go/internal/harness"
@@ -31,8 +29,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// compile-time interface assertion
-var _ agentpkg.TemporalWorkflowStarter = (*agentworkflow.TemporalWorkerComponent)(nil)
+// compile-time interface assertion removed (Temporal deleted)
 
 func main() {
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
@@ -166,19 +163,14 @@ func main() {
 		logger.Fatal("Failed to register Skill Registry component", zap.Error(err))
 	}
 
-	// 5. CapabilityGateway + Temporal Worker
+	// 5. CapabilityGateway
 	skillGW := skillgateway.NewDefaultGateway(observability.NewPrometheusMetrics(logger), logger, nil)
 	llmAdapter := capgateway.NewLLMAdapter(gateway, logger)
 	skillAdapter := capgateway.NewSkillAdapter(skillGW, logger)
 	capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, skillAdapter, logger)
 
-	temporalWorker := agentworkflow.NewTemporalWorkerComponent(&cfg.Temporal, capGW, logger)
-	if err := appHarness.Register(temporalWorker); err != nil {
-		logger.Fatal("Failed to register Temporal Worker component", zap.Error(err))
-	}
-
 	// 6. HTTP Server component
-	router := api.SetupRouter(cfg, logger, registry, gateway, pgPool.DB(), redisClient.Client(), temporalWorker)
+	router := api.SetupRouter(cfg, logger, registry, gateway, pgPool.DB(), redisClient.Client(), capGW)
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           router,

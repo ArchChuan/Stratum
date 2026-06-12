@@ -7,18 +7,12 @@ import (
 	"sync"
 	"time"
 
-	agentworkflow "github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent/workflow"
+	agentgraph "github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent/graph"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
-	temporalclient "go.temporal.io/sdk/client"
 	"go.uber.org/zap"
 )
-
-// TemporalWorkflowStarter is a minimal interface over temporal client for testability.
-type TemporalWorkflowStarter interface {
-	ExecuteWorkflow(ctx context.Context, options temporalclient.StartWorkflowOptions, workflow interface{}, args ...interface{}) (temporalclient.WorkflowRun, error)
-}
 
 // AgentType defines different agent architectures
 type AgentType string
@@ -75,6 +69,8 @@ type ExecutionConfig struct {
 	EnableTools    bool
 	AvailableTools []string
 	Stream         bool
+	TenantID       string
+	LLMAPIKeys     map[string]string
 }
 
 // AgentConfig holds agent configuration
@@ -123,7 +119,6 @@ type BaseAgent struct {
 	mu             sync.Mutex
 	MemoryManager  *memory.MemoryManager
 	SessionContext *memory.SessionContext
-	TemporalClient TemporalWorkflowStarter
 	CapGateway     capgateway.CapabilityGateway
 }
 
@@ -179,11 +174,9 @@ func (a *BaseAgent) SetMemoryManager(manager *memory.MemoryManager, sessionCtx *
 	a.SessionContext = sessionCtx
 }
 
-func (a *BaseAgent) SetTemporalClient(c TemporalWorkflowStarter) {
-	a.TemporalClient = c
-}
-
 func (a *BaseAgent) SetCapGateway(gw capgateway.CapabilityGateway) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.CapGateway = gw
 }
 
@@ -281,38 +274,42 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	var execErr error
 	switch a.Type {
 	case ReActAgent:
-		if a.TemporalClient == nil {
-			execErr = fmt.Errorf("react: TemporalClient not set")
+		if a.CapGateway == nil {
+			execErr = fmt.Errorf("react: CapGateway not set")
 			break
 		}
-		wfReq := agentworkflow.ReActRequest{
-			TenantID: a.ID,
-			AgentID:  a.ID,
-			Input:    input,
-			AgentCfg: agentworkflow.AgentWorkflowConfig{
-				ID:            a.ID,
-				Name:          a.Name,
-				LLMModel:      a.LLMModel,
-				SystemPrompt:  a.SystemPrompt,
-				MaxIterations: a.MaxIterations,
-			},
-		}
-		wfOpts := temporalclient.StartWorkflowOptions{
-			ID:        fmt.Sprintf("react-%s-%d", a.ID, time.Now().UnixNano()),
-			TaskQueue: agentworkflow.TaskQueue,
-		}
-		run, err := a.TemporalClient.ExecuteWorkflow(ctx, wfOpts, agentworkflow.ReActWorkflow, wfReq)
-		if err != nil {
-			execErr = fmt.Errorf("react: start workflow: %w", err)
+		cg, buildErr := agentgraph.BuildReActGraph(a.CapGateway)
+		if buildErr != nil {
+			execErr = fmt.Errorf("react: build graph: %w", buildErr)
 			break
 		}
-		var wfResult *agentworkflow.ReActResult
-		if err := run.Get(ctx, &wfResult); err != nil {
-			execErr = fmt.Errorf("react: workflow: %w", err)
+		initMessages := make([]capgateway.LLMMessage, 0, 2)
+		if a.SystemPrompt != "" {
+			initMessages = append(initMessages, capgateway.LLMMessage{Role: "system", Content: a.SystemPrompt})
+		}
+		initMessages = append(initMessages, capgateway.LLMMessage{Role: "user", Content: input})
+		initState := agentgraph.ReActState{
+			TenantID:   cfg.TenantID,
+			LLMAPIKeys: cfg.LLMAPIKeys,
+			Model:      a.LLMModel,
+			Messages:   initMessages,
+		}
+		execCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+		defer cancel()
+		finalState, runErr := cg.Invoke(execCtx, initState, agentgraph.RunConfig{MaxSteps: cfg.MaxSteps})
+		if runErr != nil {
+			execErr = fmt.Errorf("react: %w", runErr)
 			break
 		}
-		result.Output = wfResult.Output
-		result.Steps = wfResult.Steps
+		result.Output = finalState.Output
+		result.Steps = finalState.Steps
+		a.State.StepsTaken = finalState.Steps
+		for _, tc := range finalState.AllToolCalls {
+			result.ToolCalls = append(result.ToolCalls, ToolCall{
+				ToolName: tc.Name,
+				Input:    tc.Arguments,
+			})
+		}
 
 	case CoTAgent:
 		for i := 0; i < cfg.MaxSteps; i++ {
@@ -396,6 +393,20 @@ func WithTools(tools []string) ExecutionOption {
 func WithStream(enable bool) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.Stream = enable
+	}
+}
+
+// WithTenantID sets the tenant ID for the execution context.
+func WithTenantID(id string) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.TenantID = id
+	}
+}
+
+// WithLLMAPIKeys injects per-tenant decrypted LLM API keys into the execution.
+func WithLLMAPIKeys(keys map[string]string) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.LLMAPIKeys = keys
 	}
 }
 

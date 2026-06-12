@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,9 +22,9 @@ var _ poolIface = (*pgxpool.Pool)(nil) // compile-time check
 
 // Registry persists Agent configs in PostgreSQL under per-tenant schemas.
 type Registry struct {
-	pool           poolIface
-	logger         *zap.Logger
-	temporalClient TemporalWorkflowStarter
+	pool   poolIface
+	logger *zap.Logger
+	capGW  capgateway.CapabilityGateway
 }
 
 // NewRegistry creates a Registry. pool must not be nil.
@@ -31,9 +32,9 @@ func NewRegistry(pool *pgxpool.Pool, logger *zap.Logger) *Registry {
 	return &Registry{pool: pool, logger: logger}
 }
 
-// SetTemporalClient injects a Temporal client so agents created via Get/GetAll have it wired.
-func (r *Registry) SetTemporalClient(c TemporalWorkflowStarter) {
-	r.temporalClient = c
+// SetCapGateway injects a CapabilityGateway so agents created via Get/GetAll have it wired.
+func (r *Registry) SetCapGateway(gw capgateway.CapabilityGateway) {
+	r.capGW = gw
 }
 
 // execTenant runs fn in a transaction with search_path set to the tenant schema from ctx.
@@ -106,8 +107,8 @@ func (r *Registry) Get(ctx context.Context, id string) (Agent, bool) {
 	}
 	cfg.Type = AgentType(agentType)
 	a := NewBaseAgent(&cfg, r.logger)
-	if r.temporalClient != nil {
-		a.SetTemporalClient(r.temporalClient)
+	if r.capGW != nil {
+		a.SetCapGateway(r.capGW)
 	}
 	return a, true
 }
@@ -135,8 +136,8 @@ func (r *Registry) GetAll(ctx context.Context) []Agent {
 			}
 			cfg.Type = AgentType(agentType)
 			a := NewBaseAgent(&cfg, r.logger)
-			if r.temporalClient != nil {
-				a.SetTemporalClient(r.temporalClient)
+			if r.capGW != nil {
+				a.SetCapGateway(r.capGW)
 			}
 			agents = append(agents, a)
 		}

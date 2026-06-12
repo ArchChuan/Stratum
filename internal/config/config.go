@@ -4,20 +4,11 @@ package config
 import (
 	"context"
 	"os"
-	"strconv"
 
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/knowledge"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
 	"go.uber.org/zap"
 )
-
-type TemporalConfig struct {
-	HostPort                      string
-	Namespace                     string
-	TaskQueue                     string
-	WorkerMaxConcurrentActivities int
-	WorkerMaxConcurrentWorkflows  int
-}
 
 type Config struct {
 	Port                   string
@@ -39,7 +30,6 @@ type Config struct {
 	FrontendURL            string
 	GitHubCallbackURL      string
 	SecureCookies          bool
-	Temporal               TemporalConfig
 }
 
 type Services struct {
@@ -68,13 +58,6 @@ func Load() (*Config, error) {
 		FrontendURL:            getEnv("FRONTEND_URL", "http://localhost:3002"),
 		GitHubCallbackURL:      getEnv("GITHUB_CALLBACK_URL", "http://localhost:3002/auth/github/callback"),
 		SecureCookies:          getEnv("SECURE_COOKIES", "") == "true",
-		Temporal: TemporalConfig{
-			HostPort:                      getEnv("TEMPORAL_HOST_PORT", "localhost:7233"),
-			Namespace:                     getEnv("TEMPORAL_NAMESPACE", "clawhermes"),
-			TaskQueue:                     getEnv("TEMPORAL_TASK_QUEUE", "agent-react"),
-			WorkerMaxConcurrentActivities: getEnvInt("TEMPORAL_WORKER_MAX_ACTIVITIES", 20),
-			WorkerMaxConcurrentWorkflows:  getEnvInt("TEMPORAL_WORKER_MAX_WORKFLOWS", 100),
-		},
 	}, nil
 }
 
@@ -112,15 +95,6 @@ func (s *Services) Close() error {
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
-	}
-	return defaultValue
-}
-
-func getEnvInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if i, err := strconv.Atoi(value); err == nil {
-			return i
-		}
 	}
 	return defaultValue
 }

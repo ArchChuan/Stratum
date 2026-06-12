@@ -15,6 +15,7 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/api/middleware"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/auth"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/config"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/document"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/embedding"
@@ -41,7 +42,7 @@ func SetupRouter(
 	gateway *llmgateway.Gateway,
 	db *pgxpool.Pool,
 	rdb *goredis.Client,
-	temporalClient agent.TemporalWorkflowStarter,
+	capGW capgateway.CapabilityGateway,
 ) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -169,8 +170,8 @@ func SetupRouter(
 
 	// Initialize agent registry and handler
 	agentRegistry := agent.NewRegistry(db, logger)
-	if temporalClient != nil {
-		agentRegistry.SetTemporalClient(temporalClient)
+	if capGW != nil {
+		agentRegistry.SetCapGateway(capGW)
 	}
 	var execStore *agent.ExecutionStore
 	if db != nil {
