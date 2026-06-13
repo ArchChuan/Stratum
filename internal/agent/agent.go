@@ -69,22 +69,31 @@ type ExecutionConfig struct {
 	EnableTools    bool
 	AvailableTools []string
 	Stream         bool
+	TokenCallback  func(string) // called per token when streaming; implies Stream=true
 	TenantID       string
 	LLMAPIKeys     map[string]string
+	RAGSearchFn    func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	ExtraTools     []capgateway.ToolDefinition
+	ConversationID string
+	UserID         string
+	HistoryWindow  int
 }
 
 // AgentConfig holds agent configuration
 type AgentConfig struct {
-	ID            string
-	Name          string
-	Type          AgentType
-	Description   string
-	Persona       string
-	SystemPrompt  string
-	LLMModel      string
-	MaxIterations int
-	AllowedSkills []string
-	Capabilities  []AgentCapability
+	ID                      string
+	Name                    string
+	Type                    AgentType
+	Description             string
+	Persona                 string
+	SystemPrompt            string
+	LLMModel                string
+	MaxIterations           int
+	AllowedSkills           []string
+	MCPServerIDs            []string
+	Capabilities            []AgentCapability
+	KnowledgeWorkspaceIDs   []string
+	KnowledgeWorkspaceNames []string
 }
 
 // AgentResult represents output from an agent execution
@@ -256,7 +265,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		cfg.MaxSteps = a.MaxIterations
 	}
 	if cfg.Timeout == 0 {
-		cfg.Timeout = 30 * time.Second
+		cfg.Timeout = 120 * time.Second
 	}
 	agentID := a.ID
 	agentType := a.Type
@@ -264,6 +273,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	llmModel := a.LLMModel
 	capGW := a.CapGateway
 	metrics := a.metrics
+	workspaceNames := a.KnowledgeWorkspaceNames
 	a.mu.Unlock()
 
 	a.Logger.Info("agent execution started",
@@ -284,7 +294,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			execErr = fmt.Errorf("react: CapGateway not set")
 			break
 		}
-		cg, buildErr := agentgraph.BuildReActGraph(capGW)
+		cg, buildErr := agentgraph.BuildReActGraph(capGW, a.Logger)
 		if buildErr != nil {
 			execErr = fmt.Errorf("react: build graph: %w", buildErr)
 			break
@@ -294,12 +304,49 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			initMessages = append(initMessages, capgateway.LLMMessage{Role: "system", Content: systemPrompt})
 		}
 		initMessages = append(initMessages, capgateway.LLMMessage{Role: "user", Content: input})
+
+		var availableTools []capgateway.ToolDefinition
+		if len(workspaceNames) > 0 && cfg.RAGSearchFn != nil {
+			enumVals := make([]interface{}, len(workspaceNames))
+			for i, n := range workspaceNames {
+				enumVals[i] = n
+			}
+			availableTools = append(availableTools, capgateway.ToolDefinition{
+				Name:        "search_knowledge",
+				Description: "Search one or more knowledge bases for relevant information. Pass all relevant workspaces to search simultaneously.",
+				InputSchema: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"workspaces": map[string]interface{}{
+							"type":        "array",
+							"description": "Knowledge workspaces to search (one or more)",
+							"items": map[string]interface{}{
+								"type": "string",
+								"enum": enumVals,
+							},
+							"minItems": 1,
+						},
+						"query": map[string]interface{}{
+							"type":        "string",
+							"description": "Search query",
+						},
+						"top_k": map[string]interface{}{
+							"type":        "integer",
+							"description": "Number of results per workspace (1-20, default 5)",
+						},
+					},
+					"required": []string{"workspaces", "query"},
+				},
+			})
+		}
 		initState := agentgraph.ReActState{
-			TenantID:   cfg.TenantID,
-			LLMAPIKeys: cfg.LLMAPIKeys,
-			Model:      llmModel,
-			Messages:   initMessages,
-			// TODO: resolve cfg.AvailableTools []string → []capgateway.ToolDefinition via skill catalog
+			TenantID:       cfg.TenantID,
+			LLMAPIKeys:     cfg.LLMAPIKeys,
+			Model:          llmModel,
+			Messages:       initMessages,
+			OnToken:        cfg.TokenCallback,
+			AvailableTools: append(availableTools, cfg.ExtraTools...),
+			RAGSearchFn:    cfg.RAGSearchFn,
 		}
 		execCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 		defer cancel()
@@ -410,6 +457,14 @@ func WithStream(enable bool) ExecutionOption {
 	}
 }
 
+// WithTokenCallback sets a per-token callback, enabling streaming automatically.
+func WithTokenCallback(cb func(string)) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.TokenCallback = cb
+		cfg.Stream = true
+	}
+}
+
 // WithTenantID sets the tenant ID for the execution context.
 func WithTenantID(id string) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
@@ -421,6 +476,38 @@ func WithTenantID(id string) ExecutionOption {
 func WithLLMAPIKeys(keys map[string]string) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.LLMAPIKeys = keys
+	}
+}
+
+// WithRAGSearchFn injects a knowledge-base search function for the search_knowledge tool.
+func WithRAGSearchFn(fn func(ctx context.Context, workspaces []string, query string, topK int) (string, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.RAGSearchFn = fn
+	}
+}
+
+// WithExtraTools appends extra tool definitions (from MCP servers and allowed skills) to AvailableTools.
+func WithExtraTools(tools []capgateway.ToolDefinition) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.ExtraTools = tools
+	}
+}
+
+func WithConversationID(id string) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.ConversationID = id
+	}
+}
+
+func WithUserID(id string) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.UserID = id
+	}
+}
+
+func WithHistoryWindow(n int) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.HistoryWindow = n
 	}
 }
 

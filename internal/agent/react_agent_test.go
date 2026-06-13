@@ -52,7 +52,9 @@ func newReActAgent() *agent.BaseAgent {
 
 func TestBaseAgent_ReActExecute_DirectAnswer(t *testing.T) {
 	a := newReActAgent()
-	gw := &mockCapGW{responses: []capgateway.CapabilityResponse{{Content: "42"}}}
+	gw := &mockCapGW{responses: []capgateway.CapabilityResponse{
+		{Content: "42", Usage: capgateway.TokenUsage{Total: 20}},
+	}}
 	a.SetCapGateway(gw)
 
 	result, err := a.Execute(context.Background(), "what is 6x7?",
@@ -62,6 +64,7 @@ func TestBaseAgent_ReActExecute_DirectAnswer(t *testing.T) {
 	require.Equal(t, "42", result.Output)
 	require.Equal(t, "agent-001", result.AgentID)
 	require.Equal(t, 1, result.Steps)
+	require.Equal(t, 20, result.TokensUsed)
 }
 
 func TestBaseAgent_ReActExecute_WithToolCall(t *testing.T) {
@@ -102,6 +105,24 @@ func TestBaseAgent_ReActExecute_LLMError(t *testing.T) {
 
 	_, err := a.Execute(context.Background(), "hello")
 	require.Error(t, err)
+}
+
+func TestWithConversationID_SetsField(t *testing.T) {
+	cfg := &agent.ExecutionConfig{}
+	agent.WithConversationID("conv-123")(cfg)
+	require.Equal(t, "conv-123", cfg.ConversationID)
+}
+
+func TestWithUserID_SetsField(t *testing.T) {
+	cfg := &agent.ExecutionConfig{}
+	agent.WithUserID("user-456")(cfg)
+	require.Equal(t, "user-456", cfg.UserID)
+}
+
+func TestWithHistoryWindow_SetsField(t *testing.T) {
+	cfg := &agent.ExecutionConfig{}
+	agent.WithHistoryWindow(10)(cfg)
+	require.Equal(t, 10, cfg.HistoryWindow)
 }
 
 func TestBaseAgent_SetCapGateway_DataRace(t *testing.T) {
