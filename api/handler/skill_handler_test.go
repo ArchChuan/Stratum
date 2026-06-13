@@ -20,7 +20,7 @@ func TestSkillHandlerCreateSkill(t *testing.T) {
 	logger := zap.NewNop()
 	registry := orchestrator.NewRegistry(nil)
 	gateway := llmgateway.NewGateway()
-	handler := NewSkillHandler(registry, logger, gateway)
+	handler := NewSkillHandler(registry, logger, gateway, nil)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -57,7 +57,7 @@ func TestSkillHandlerGetSkill(t *testing.T) {
 	logger := zap.NewNop()
 	registry := orchestrator.NewRegistry(nil)
 	gateway := llmgateway.NewGateway()
-	handler := NewSkillHandler(registry, logger, gateway)
+	handler := NewSkillHandler(registry, logger, gateway, nil)
 
 	s := skill.NewCodeSkill("test-id", "test", "desc", "code", "python")
 	registry.Register(ctx, "test-id", s)
@@ -81,7 +81,7 @@ func TestSkillHandlerGetAllSkills(t *testing.T) {
 	logger := zap.NewNop()
 	registry := orchestrator.NewRegistry(nil)
 	gateway := llmgateway.NewGateway()
-	handler := NewSkillHandler(registry, logger, gateway)
+	handler := NewSkillHandler(registry, logger, gateway, nil)
 
 	s1 := skill.NewCodeSkill("id1", "skill1", "desc1", "code", "python")
 	s2 := skill.NewCodeSkill("id2", "skill2", "desc2", "code", "go")
@@ -107,7 +107,7 @@ func TestSkillHandlerDeleteSkill(t *testing.T) {
 	logger := zap.NewNop()
 	registry := orchestrator.NewRegistry(nil)
 	gateway := llmgateway.NewGateway()
-	handler := NewSkillHandler(registry, logger, gateway)
+	handler := NewSkillHandler(registry, logger, gateway, nil)
 
 	s := skill.NewCodeSkill("test-id", "test", "desc", "code", "python")
 	registry.Register(ctx, "test-id", s)

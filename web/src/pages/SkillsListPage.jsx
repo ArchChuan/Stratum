@@ -37,9 +37,16 @@ const SkillCard = ({ skill, onDelete }) => {
         }}>
           {meta.icon}
         </div>
-        <Tag style={{ border: 'none', borderRadius: 6, fontSize: 11, background: meta.bg, color: meta.color, fontWeight: 500 }}>
-          {meta.label}
-        </Tag>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <Tag style={{ border: 'none', borderRadius: 6, fontSize: 11, background: meta.bg, color: meta.color, fontWeight: 500 }}>
+            {meta.label}
+          </Tag>
+          {skill.type === 'code' && skill.config?.language && (
+            <Tag style={{ border: 'none', borderRadius: 6, fontSize: 10, background: '#f5f5f5', color: '#666', margin: 0 }}>
+              {skill.config.language}
+            </Tag>
+          )}
+        </div>
       </div>
 
       <Text strong style={{ fontSize: 15, marginBottom: 4, display: 'block' }}>{skill.name}</Text>

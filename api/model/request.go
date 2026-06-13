@@ -6,7 +6,7 @@ type CreateSkillRequest struct {
 	Type        string `json:"type" binding:"required,oneof=code llm http"`
 	// code
 	Code     string `json:"code"`
-	Language string `json:"language"`
+	Language string `json:"language" binding:"omitempty,oneof=python javascript"`
 	// llm
 	SystemPrompt string  `json:"systemPrompt"`
 	Model        string  `json:"model"`
@@ -21,12 +21,13 @@ type CreateSkillRequest struct {
 }
 
 type SkillResponse struct {
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Type        string         `json:"type"`
-	Config      map[string]any `json:"config,omitempty"`
-	CreatedAt   string         `json:"created_at"`
+	ID             string         `json:"id"`
+	Name           string         `json:"name"`
+	Description    string         `json:"description"`
+	Type           string         `json:"type"`
+	Config         map[string]any `json:"config,omitempty"`
+	AnalysisErrors []string       `json:"analysis_errors,omitempty"`
+	CreatedAt      string         `json:"created_at"`
 }
 
 type ErrorResponse struct {
@@ -40,5 +41,16 @@ type ExecuteSkillRequest struct {
 
 type ExecuteSkillResponse struct {
 	Result interface{} `json:"result"`
+	Error  string      `json:"error,omitempty"`
+}
+
+// RunSkillRequest is the request body for POST /skills/:id/run.
+type RunSkillRequest struct {
+	Input map[string]interface{} `json:"input"`
+}
+
+// RunSkillResponse is the response for POST /skills/:id/run.
+type RunSkillResponse struct {
+	Output interface{} `json:"output"`
 	Error  string      `json:"error,omitempty"`
 }

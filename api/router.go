@@ -23,6 +23,7 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/mcp"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
+	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/skill"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/textchunk"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/constants"
 	pkgcrypto "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/crypto"
@@ -166,7 +167,8 @@ func SetupRouter(
 	ragService := knowledge.NewRAGService(embedSvc, vectorStore, graphRAG, logger)
 
 	// Handlers
-	skillHandler := handler.NewSkillHandler(registry, logger, gateway)
+	codeExecutor := skill.NewCodeExecutor(skill.DefaultCodeExecutorConfig())
+	skillHandler := handler.NewSkillHandler(registry, logger, gateway, codeExecutor)
 	ragHandler := handler.NewRAGHandler(ingestSvc, ragService, db, logger)
 
 	// Initialize agent registry and handler
@@ -205,6 +207,7 @@ func SetupRouter(
 		skills.GET("/:id", skillHandler.GetSkill)
 		skills.PUT("/:id", requireActive, skillHandler.UpdateSkill)
 		skills.DELETE("/:id", requireActive, skillHandler.DeleteSkill)
+		skills.POST("/:id/run", requireActive, skillHandler.RunSkill)
 	}
 
 	// Agent endpoints

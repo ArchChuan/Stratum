@@ -38,13 +38,17 @@ type SkillHandler struct {
 	registry *orchestrator.Registry
 	logger   *zap.Logger
 	gateway  *llmgateway.Gateway
+	executor *skill.CodeExecutor
+	analyzer skill.StaticAnalyzer
 }
 
-func NewSkillHandler(registry *orchestrator.Registry, logger *zap.Logger, gateway *llmgateway.Gateway) *SkillHandler {
+func NewSkillHandler(registry *orchestrator.Registry, logger *zap.Logger, gateway *llmgateway.Gateway, executor *skill.CodeExecutor) *SkillHandler {
 	return &SkillHandler{
 		registry: registry,
 		logger:   logger,
 		gateway:  gateway,
+		executor: executor,
+		analyzer: skill.NewStaticAnalyzer(),
 	}
 }
 
@@ -64,7 +68,13 @@ func (h *SkillHandler) CreateSkill(c *gin.Context) {
 
 	switch req.Type {
 	case "code":
-		s = skill.NewCodeSkill(id, req.Name, req.Description, req.Code, req.Language)
+		if result := h.analyzer.Check(req.Language, req.Code); !result.Safe {
+			c.JSON(http.StatusBadRequest, model.SkillResponse{
+				AnalysisErrors: result.Reasons,
+			})
+			return
+		}
+		s = skill.NewCodeSkillWithExecutor(id, req.Name, req.Description, req.Code, req.Language, h.executor)
 	case "llm":
 		s = skill.NewLLMSkill(id, req.Name, req.Description, req.SystemPrompt, req.Model, req.Temperature, req.MaxTokens, h.gateway, h.logger)
 	case "http":
@@ -139,6 +149,12 @@ func (h *SkillHandler) UpdateSkill(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: "type mismatch"})
 			return
 		}
+		if result := h.analyzer.Check(req.Language, req.Code); !result.Safe {
+			c.JSON(http.StatusBadRequest, model.SkillResponse{
+				AnalysisErrors: result.Reasons,
+			})
+			return
+		}
 		cs.Name = req.Name
 		cs.Description = req.Description
 		cs.Code = req.Code
@@ -204,4 +220,57 @@ func (h *SkillHandler) DeleteSkill(c *gin.Context) {
 	}
 	h.logger.Info("skill deleted", zap.String("id", id))
 	c.JSON(http.StatusOK, gin.H{"message": "skill deleted successfully"})
+}
+
+// RunSkill executes a code skill on demand.
+// POST /skills/:id/run
+func (h *SkillHandler) RunSkill(c *gin.Context) {
+	id := c.Param("id")
+
+	s, ok := h.registry.Get(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
+		return
+	}
+
+	cs, ok := s.(*skill.CodeSkill)
+	if !ok {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: "skill is not a code skill"})
+		return
+	}
+
+	var req model.RunSkillRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
+		return
+	}
+
+	tenantID, _ := c.Get("tenant_id")
+	input := req.Input
+	if input == nil {
+		input = make(map[string]interface{})
+	}
+	if tid, ok := tenantID.(string); ok && tid != "" {
+		input["__tenant_id"] = tid
+	}
+
+	start := time.Now()
+	out, err := cs.Execute(c.Request.Context(), input)
+	if err != nil {
+		if errors.Is(err, skill.ErrConcurrencyLimit) {
+			c.JSON(http.StatusTooManyRequests, model.RunSkillResponse{Error: "concurrency limit reached"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, model.RunSkillResponse{Error: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.RunSkillResponse{
+		Output: out,
+		Error:  "",
+	})
+	h.logger.Info("skill executed",
+		zap.String("id", id),
+		zap.Int64("latency_ms", time.Since(start).Milliseconds()),
+	)
 }

@@ -45,10 +45,6 @@ const CODE_EXAMPLES = {
     const result = inputData.query || "";
     return { output: result.toUpperCase() };
 }`,
-  go: `func process(inputData map[string]interface{}) map[string]interface{} {
-    query, _ := inputData["query"].(string)
-    return map[string]interface{}{"output": strings.ToUpper(query)}
-}`,
 };
 
 const FALLBACK_MODELS = ['glm-4', 'glm-4-flash', 'qwen-plus', 'qwen-turbo'];
@@ -97,7 +93,24 @@ const CreateSkillPage = () => {
       message.success(`技能 "${values.name}" 创建成功`);
       navigate('/skills');
     } catch (err) {
-      if (err.response?.status !== 403) {
+      if (err.response?.status === 400) {
+        const analysisErrors = err.response?.data?.analysis_errors;
+        if (analysisErrors?.length) {
+          message.error({
+            content: (
+              <div>
+                <div>代码安全检测失败：</div>
+                {analysisErrors.map((e, i) => (
+                  <div key={i} style={{ color: '#ff4d4f', fontSize: 12 }}>• {e}</div>
+                ))}
+              </div>
+            ),
+            duration: 8,
+          });
+        } else {
+          message.error(err.response?.data?.error || '创建失败');
+        }
+      } else if (err.response?.status !== 403) {
         message.error(err.response?.data?.error || '创建失败');
       }
     } finally {
@@ -154,8 +167,6 @@ const CreateSkillPage = () => {
               <Select>
                 <Option value="python">Python</Option>
                 <Option value="javascript">JavaScript</Option>
-                <Option value="go">Go</Option>
-                <Option value="other">其他</Option>
               </Select>
             </Form.Item>
             <Form.Item label="代码" name="code" rules={[{ required: true, message: '请输入代码' }]}>
