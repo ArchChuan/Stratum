@@ -73,9 +73,11 @@ type AgentResponse struct {
 }
 
 type ExecuteAgentRequest struct {
-	Query   string                 `json:"query"`
-	Context map[string]interface{} `json:"context"`
-	Options map[string]interface{} `json:"options"`
+	Query          string                 `json:"query"`
+	ConversationID string                 `json:"conversation_id"`
+	UserID         string                 `json:"user_id"`
+	Context        map[string]interface{} `json:"context"`
+	Options        map[string]interface{} `json:"options"`
 }
 
 type AgentExecutionResult struct {
@@ -413,6 +415,10 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 		}
 	}
 	options = append(options, agent.WithTenantID(tenantID))
+	if req.ConversationID != "" {
+		options = append(options, agent.WithConversationID(req.ConversationID))
+	}
+	options = append(options, agent.WithUserID(userID))
 
 	// build extra tools from MCPServerIDs and AllowedSkills
 	options = append(options, agent.WithExtraTools(h.buildExtraTools(a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills)))
@@ -588,6 +594,10 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		}
 	}
 	options = append(options, agent.WithTenantID(tenantID))
+	if req.ConversationID != "" {
+		options = append(options, agent.WithConversationID(req.ConversationID))
+	}
+	options = append(options, agent.WithUserID(userID))
 
 	// build extra tools from MCPServerIDs and AllowedSkills
 	options = append(options, agent.WithExtraTools(h.buildExtraTools(a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills)))

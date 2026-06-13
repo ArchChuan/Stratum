@@ -9,7 +9,7 @@ import (
 
 func TestNewSkillHandler(t *testing.T) {
 	logger := zap.NewNop()
-	handler := NewSkillHandler(nil, logger, nil)
+	handler := NewSkillHandler(nil, logger, nil, nil)
 
 	if handler == nil {
 		t.Error("expected SkillHandler to be non-nil")
@@ -40,5 +40,19 @@ func TestNewMemoryHandler(t *testing.T) {
 
 	if handler == nil {
 		t.Error("expected MemoryHandler to be non-nil")
+	}
+}
+
+func TestExecuteAgentRequest_HasConversationIDField(t *testing.T) {
+	req := ExecuteAgentRequest{
+		Query:          "hello",
+		ConversationID: "conv-111",
+		UserID:         "user-999",
+	}
+	if req.ConversationID != "conv-111" {
+		t.Errorf("expected ConversationID conv-111, got %s", req.ConversationID)
+	}
+	if req.UserID != "user-999" {
+		t.Errorf("expected UserID user-999, got %s", req.UserID)
 	}
 }
