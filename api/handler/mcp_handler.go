@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/mcp"
@@ -242,6 +243,10 @@ func (h *MCPHandler) ConnectServer(c *gin.Context) {
 	}
 
 	if err := h.manager.Connect(c.Request.Context(), &cfg); err != nil {
+		if errors.Is(err, mcp.ErrNameConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 		h.logger.Error("failed to connect MCP server", zap.String("server_id", cfg.ID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

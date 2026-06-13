@@ -87,7 +87,15 @@ func (h *SkillHandler) CreateSkill(c *gin.Context) {
 		return
 	}
 
-	h.registry.Register(c.Request.Context(), id, s)
+	if err := h.registry.Register(c.Request.Context(), id, s); err != nil {
+		if errors.Is(err, orchestrator.ErrNameConflict) {
+			c.JSON(http.StatusConflict, model.ErrorResponse{Code: http.StatusConflict, Message: err.Error()})
+			return
+		}
+		h.logger.Error("failed to register skill", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to create skill"})
+		return
+	}
 	h.logger.Info("skill created", zap.String("id", id), zap.String("name", req.Name))
 
 	createdAt, _ := h.registry.GetCreatedAt(id)
@@ -195,7 +203,15 @@ func (h *SkillHandler) UpdateSkill(c *gin.Context) {
 		return
 	}
 
-	h.registry.Register(c.Request.Context(), id, s)
+	if err := h.registry.Register(c.Request.Context(), id, s); err != nil {
+		if errors.Is(err, orchestrator.ErrNameConflict) {
+			c.JSON(http.StatusConflict, model.ErrorResponse{Code: http.StatusConflict, Message: err.Error()})
+			return
+		}
+		h.logger.Error("failed to register skill", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to update skill"})
+		return
+	}
 	h.logger.Info("skill updated", zap.String("id", id))
 	createdAt, _ := h.registry.GetCreatedAt(id)
 	c.JSON(http.StatusOK, buildSkillResponse(s, createdAt))

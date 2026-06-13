@@ -9,6 +9,7 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
@@ -78,6 +79,10 @@ func (r *Registry) replaceSkills(ctx context.Context, tx pgx.Tx, agentID string,
 			`INSERT INTO agent_skill_links (agent_id, skill_id) VALUES ($1, $2)`,
 			agentID, sid,
 		); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+				return fmt.Errorf("%w: %s", ErrInvalidSkill, sid)
+			}
 			return fmt.Errorf("replace agent_skill_links insert agent %s skill %s: %w", agentID, sid, err)
 		}
 	}
@@ -194,6 +199,10 @@ func (r *Registry) Register(ctx context.Context, a Agent) error {
 			cfg.Persona, cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations,
 		)
 		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				return fmt.Errorf("%w: agent name %q", ErrNameConflict, cfg.Name)
+			}
 			return fmt.Errorf("register agent %s: %w", cfg.ID, err)
 		}
 		if err := r.replaceSkills(ctx, tx, cfg.ID, cfg.AllowedSkills); err != nil {
@@ -329,6 +338,12 @@ func (r *Registry) Remove(ctx context.Context, id string) error {
 
 // ErrNotFound is returned by Update when no agent with the given ID exists.
 var ErrNotFound = errors.New("agent not found")
+
+// ErrNameConflict is returned by Register when an agent with the same name already exists in the tenant.
+var ErrNameConflict = errors.New("agent name already exists")
+
+// ErrInvalidSkill is returned when a skill ID does not exist in the tenant's skills table.
+var ErrInvalidSkill = errors.New("skill not found")
 
 // Update replaces an agent's mutable fields in the tenant schema.
 func (r *Registry) Update(ctx context.Context, cfg *AgentConfig) error {

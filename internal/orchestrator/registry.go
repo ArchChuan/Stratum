@@ -35,7 +35,10 @@ func NewRegistry(pool *pgxpool.Pool) *Registry {
 	}
 }
 
-func (r *Registry) Register(ctx context.Context, id string, s skill.Skill) {
+// ErrNameConflict is returned by Register when a skill with the same name already exists in the tenant.
+var ErrNameConflict = errors.New("skill name already exists")
+
+func (r *Registry) Register(ctx context.Context, id string, s skill.Skill) error {
 	now := time.Now()
 	r.mu.Lock()
 	r.skills[id] = s
@@ -43,7 +46,7 @@ func (r *Registry) Register(ctx context.Context, id string, s skill.Skill) {
 	r.mu.Unlock()
 
 	if r.pool != nil {
-		_ = tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
 			cfg := []byte("{}")
 			if c, ok := s.(configurable); ok {
 				if b, err := json.Marshal(c.GetConfig()); err == nil {
@@ -56,8 +59,19 @@ func (r *Registry) Register(ctx context.Context, id string, s skill.Skill) {
 				ON CONFLICT (id) DO UPDATE SET name=$2, description=$3, type=$4, config=$5`,
 				id, s.GetName(), s.GetDescription(), s.GetType(), cfg)
 			return err
-		})
+		}); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				r.mu.Lock()
+				delete(r.skills, id)
+				delete(r.createdAt, id)
+				r.mu.Unlock()
+				return fmt.Errorf("%w: skill name %q", ErrNameConflict, s.GetName())
+			}
+			return fmt.Errorf("persist skill %s: %w", id, err)
+		}
 	}
+	return nil
 }
 
 func (r *Registry) Get(id string) (skill.Skill, bool) {

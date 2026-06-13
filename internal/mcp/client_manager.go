@@ -4,6 +4,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/constants"
 	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
@@ -50,9 +52,12 @@ func NewClientManager(logger *zap.Logger, poolConfig *ConnectionPoolConfig, pool
 	}
 }
 
-func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig) {
+// ErrNameConflict is returned by Connect when an MCP server with the same name already exists in the tenant.
+var ErrNameConflict = errors.New("mcp server name already exists")
+
+func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig) error {
 	if m.pool == nil {
-		return
+		return nil
 	}
 	argsJSON, _ := json.Marshal(cfg.Args)
 	envJSON, _ := json.Marshal(cfg.Env)
@@ -61,7 +66,7 @@ func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig
 	if timeoutSec <= 0 {
 		timeoutSec = 30
 	}
-	_ = tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
+	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO mcp_configs (id, name, transport, command, url, args, env, capabilities, timeout_sec, enabled, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, NOW())
@@ -73,6 +78,14 @@ func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig
 			argsJSON, envJSON, capsJSON, timeoutSec)
 		return err
 	})
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("%w: mcp server name %q", ErrNameConflict, cfg.Name)
+		}
+		return fmt.Errorf("persist mcp config %s: %w", cfg.ID, err)
+	}
+	return nil
 }
 
 func (m *ClientManager) persistDisconnect(ctx context.Context, serverID string) {
@@ -116,11 +129,15 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 	// 缓存能力
 	m.cache.Store(config.ID, tools, resources)
 
+	// 持久化到 DB（先落库，名称冲突则不写内存）
+	if err := m.persistConnect(ctx, config); err != nil {
+		m.cache.Delete(config.ID)
+		return err
+	}
+
 	// 保存客户端和配置
 	m.clients[config.ID] = client
 	m.configs[config.ID] = config
-
-	m.persistConnect(ctx, config)
 
 	m.logger.Info("connected to MCP server",
 		zap.String("server_id", config.ID),

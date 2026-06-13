@@ -3,7 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS agents (
     id             TEXT PRIMARY KEY,
-    name           TEXT NOT NULL,
+    name           TEXT NOT NULL UNIQUE,
     type           TEXT NOT NULL DEFAULT 'react',
     description    TEXT NOT NULL DEFAULT '',
     persona        TEXT NOT NULL DEFAULT '',
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS agents (
 
 CREATE TABLE IF NOT EXISTS skills (
     id           TEXT PRIMARY KEY,
-    name         TEXT NOT NULL,
+    name         TEXT NOT NULL UNIQUE,
     description  TEXT NOT NULL DEFAULT '',
     type         TEXT NOT NULL,
     config       JSONB NOT NULL DEFAULT '{}',
@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS skills (
 
 CREATE TABLE IF NOT EXISTS mcp_configs (
     id            TEXT PRIMARY KEY,
-    name          TEXT NOT NULL DEFAULT '',
+    name          TEXT NOT NULL DEFAULT '' UNIQUE,
     transport     TEXT NOT NULL,
     command       TEXT NOT NULL DEFAULT '',
     url           TEXT NOT NULL DEFAULT '',

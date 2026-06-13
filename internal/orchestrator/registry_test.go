@@ -18,7 +18,9 @@ func TestRegistry(t *testing.T) {
 		Type:        "builtin",
 	}
 
-	registry.Register(ctx, s.ID, s)
+	if err := registry.Register(ctx, s.ID, s); err != nil {
+		t.Fatalf("unexpected register error: %v", err)
+	}
 
 	retrieved, ok := registry.Get(s.ID)
 	if !ok {
@@ -50,8 +52,12 @@ func TestRegistryGetAll(t *testing.T) {
 	s1 := &skill.BaseSkill{ID: "skill-1", Name: "Skill 1", Type: "builtin"}
 	s2 := &skill.BaseSkill{ID: "skill-2", Name: "Skill 2", Type: "builtin"}
 
-	registry.Register(ctx, s1.ID, s1)
-	registry.Register(ctx, s2.ID, s2)
+	if err := registry.Register(ctx, s1.ID, s1); err != nil {
+		t.Fatalf("unexpected register error: %v", err)
+	}
+	if err := registry.Register(ctx, s2.ID, s2); err != nil {
+		t.Fatalf("unexpected register error: %v", err)
+	}
 
 	skills := registry.GetAll()
 	if len(skills) != 2 {
@@ -64,7 +70,9 @@ func TestRegistryRemove(t *testing.T) {
 	registry := NewRegistry(nil)
 
 	s := &skill.BaseSkill{ID: "test-1", Name: "Test", Type: "builtin"}
-	registry.Register(ctx, s.ID, s)
+	if err := registry.Register(ctx, s.ID, s); err != nil {
+		t.Fatalf("unexpected register error: %v", err)
+	}
 
 	err := registry.Remove(ctx, s.ID)
 	if err != nil {
@@ -97,7 +105,9 @@ func TestRegistryMultipleOperations(t *testing.T) {
 			Name: "Skill " + string(rune(48+i)),
 			Type: "builtin",
 		}
-		registry.Register(ctx, s.ID, s)
+		if err := registry.Register(ctx, s.ID, s); err != nil {
+			t.Fatalf("unexpected register error: %v", err)
+		}
 	}
 
 	skills := registry.GetAll()

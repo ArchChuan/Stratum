@@ -238,6 +238,10 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 	a := agent.NewBaseAgent(cfg, h.logger).WithMetrics(h.metrics)
 
 	if err := h.agentRegistry.Register(c.Request.Context(), a); err != nil {
+		if errors.Is(err, agent.ErrNameConflict) {
+			c.JSON(http.StatusConflict, model.ErrorResponse{Code: http.StatusConflict, Message: err.Error()})
+			return
+		}
 		h.logger.Error("failed to register agent", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Code:    http.StatusInternalServerError,
@@ -329,6 +333,13 @@ func (h *AgentHandler) UpdateAgent(c *gin.Context) {
 			c.JSON(http.StatusNotFound, model.ErrorResponse{
 				Code:    http.StatusNotFound,
 				Message: "agent not found",
+			})
+			return
+		}
+		if errors.Is(err, agent.ErrInvalidSkill) {
+			c.JSON(http.StatusUnprocessableEntity, model.ErrorResponse{
+				Code:    http.StatusUnprocessableEntity,
+				Message: fmt.Sprintf("invalid skill: %v", err),
 			})
 			return
 		}

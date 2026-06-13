@@ -400,7 +400,7 @@ func TestPersistConnectNilPool(t *testing.T) {
 		Capabilities: []string{"tools"},
 		Timeout:      30 * time.Second,
 	}
-	m.persistConnect(context.Background(), cfg) // pool=nil → must not panic
+	_ = m.persistConnect(context.Background(), cfg) // pool=nil → must not panic
 }
 
 func TestRestoreFromDB_NilPool(t *testing.T) {
