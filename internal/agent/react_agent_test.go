@@ -272,3 +272,12 @@ func TestBuildInitMessages_DefaultWindow(t *testing.T) {
 	msgs := agent.BuildInitMessages("sys", history, 0) // 0 → default 20
 	require.Len(t, msgs, 21)                           // 20 history + 1 system
 }
+
+func TestBaseAgent_AddToMemory_StillAddsToSlice(t *testing.T) {
+	a := newReActAgent()
+	a.AddToMemory(agent.Message{Role: "user", Content: "hello"})
+	mem := a.GetMemory()
+	require.Len(t, mem, 1)
+	require.Equal(t, "user", mem[0].Role)
+	require.Equal(t, "hello", mem[0].Content)
+}

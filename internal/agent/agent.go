@@ -218,7 +218,8 @@ func (a *BaseAgent) GetMemory() []Message {
 	return a.Memory
 }
 
-// AddToMemory adds a message to the agent's memory
+// AddToMemory adds a message to the in-process memory slice.
+// Long-term indexing via MemoryManager is handled asynchronously in Execute().
 func (a *BaseAgent) AddToMemory(msg Message) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -226,23 +227,6 @@ func (a *BaseAgent) AddToMemory(msg Message) {
 	a.Memory = append(a.Memory, msg)
 	if len(a.Memory) > 100 {
 		a.Memory = a.Memory[len(a.Memory)-100:]
-	}
-
-	// Also add to memory manager if available
-	if a.MemoryManager != nil && a.SessionContext != nil {
-		entry := &memory.MemoryEntry{
-			Role:      msg.Role,
-			Content:   msg.Content,
-			TenantID:  a.SessionContext.TenantID,
-			UserID:    a.SessionContext.UserID,
-			SessionID: a.SessionContext.SessionID,
-			AgentID:   a.SessionContext.AgentID,
-			Metadata:  msg.Metadata,
-		}
-		ctx := context.Background()
-		if err := a.MemoryManager.Add(ctx, entry); err != nil {
-			a.Logger.Warn("failed to add to memory manager", zap.Error(err))
-		}
 	}
 }
 
