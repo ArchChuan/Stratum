@@ -1,10 +1,10 @@
 # 部署指南
 
-本文档详细介绍了ClawHermes-AI-Go项目的各种部署方式，包括本地开发环境、Kubernetes云原生环境和WSL环境。
+本文档详细介绍了stratum项目的各种部署方式，包括本地开发环境、Kubernetes云原生环境和WSL环境。
 
 ## 部署架构
 
-ClawHermes-AI-Go项目采用云原生架构，底层依赖服务包括：
+stratum项目采用云原生架构，底层依赖服务包括：
 
 - **NATS** - 事件驱动消息队列系统
 - **Milvus** - 向量数据库，用于向量存储与检索
@@ -39,8 +39,8 @@ ClawHermes-AI-Go项目采用云原生架构，底层依赖服务包括：
 1. 克隆项目：
 
    ```bash
-   git clone https://github.com/clawhermes/clawhermes-ai-go.git
-   cd clawhermes-ai-go
+   git clone https://github.com/stratum/stratum.git
+   cd stratum
    ```
 
 2. 配置环境变量：
@@ -116,7 +116,7 @@ ClawHermes-AI-Go项目采用云原生架构，底层依赖服务包括：
 
    ```bash
    # 端口转发到本地
-   kubectl port-forward svc/clawhermes-ai-go-service 8080:80
+   kubectl port-forward svc/stratum-service 8080:80
    ```
 
 7. 停止部署：
@@ -137,7 +137,7 @@ kubectl get pods
 kubectl get services
 
 # 查看应用日志
-kubectl logs -f deployment/clawhermes-ai-go
+kubectl logs -f deployment/stratum
 
 # 查看依赖服务日志
 kubectl logs -f deployment/nats
@@ -166,7 +166,7 @@ Helm 是 Kubernetes 的包管理工具，提供更便捷的部署方式。
 3. 验证部署：
 
    ```bash
-   helm status clawhermes-release
+   helm status stratum-release
    kubectl get pods
    ```
 
@@ -178,7 +178,7 @@ Helm 是 Kubernetes 的包管理工具，提供更便捷的部署方式。
 
 #### 自定义配置
 
-可以通过编辑 [helm/values.yaml](file:///home/yang/go-projects/ClawHermes-AI-Go/helm/values.yaml) 文件来自定义部署配置：
+可以通过编辑 [helm/values.yaml](file:///home/yang/go-projects/stratum/helm/values.yaml) 文件来自定义部署配置：
 
 - 修改副本数量
 - 调整资源限制
@@ -227,7 +227,7 @@ Helm 是 Kubernetes 的包管理工具，提供更便捷的部署方式。
 
 ### 配置文件
 
-项目使用 [.env](file:///home/yang/go-projects/ClawHermes-AI-Go/.env.example) 文件进行环境配置，主要配置项包括：
+项目使用 [.env](file:///home/yang/go-projects/stratum/.env.example) 文件进行环境配置，主要配置项包括：
 
 ```env
 # 服务配置
@@ -304,7 +304,7 @@ DEFAULT_LLM_PROVIDER=openai
    - 确认 kubectl 配置正确
 
 2. **镜像无法加载**
-   - 对于 Kind 集群：使用 `kind load docker-image clawhermes-ai-go:latest`
+   - 对于 Kind 集群：使用 `kind load docker-image stratum:latest`
    - 对于 Minikube：使用 `eval $(minikube docker-env)` 然后重新构建镜像
 
 ## 监控和可观测性
@@ -315,7 +315,7 @@ DEFAULT_LLM_PROVIDER=openai
 
 ```bash
 # Kubernetes 环境
-kubectl logs -f deployment/clawhermes-ai-go
+kubectl logs -f deployment/stratum
 
 # 本地环境
 ./start.sh
@@ -346,7 +346,7 @@ curl http://localhost:8080/health
 
 ```bash
 make docker-build
-kubectl set image deployment/clawhermes-ai-go clawhermes-ai-go=clawhermes-ai-go:new-version
+kubectl set image deployment/stratum stratum=stratum:new-version
 ```
 
 ### 依赖服务升级
@@ -363,5 +363,5 @@ kubectl set image deployment/neo4j neo4j=neo4j:latest
 如果升级出现问题，可以回滚到之前的版本：
 
 ```bash
-kubectl rollout undo deployment/clawhermes-ai-go
+kubectl rollout undo deployment/stratum
 ```

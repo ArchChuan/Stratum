@@ -2,7 +2,7 @@
 
 ## 完成状态 ✓
 
-MCP (Model Context Protocol) 集成已成功实现并集成到 ClawHermes AI Go 项目中。
+MCP (Model Context Protocol) 集成已成功实现并集成到 Stratum 项目中。
 
 ## 实现内容
 

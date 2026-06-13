@@ -1,4 +1,4 @@
-module github.com/byteBuilderX/ClawHermes-AI-Go
+module github.com/byteBuilderX/stratum
 
 go 1.24.1
 

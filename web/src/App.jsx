@@ -217,7 +217,7 @@ const AppInner = () => {
           </div>
           {!collapsed && (
             <span style={{ color: '#fff', fontWeight: 600, fontSize: 15, whiteSpace: 'nowrap' }}>
-              ClawHermes AI
+              Stratum AI
             </span>
           )}
         </div>

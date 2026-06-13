@@ -52,7 +52,7 @@ type TraceConfig struct {
 // DefaultTraceConfig returns safe defaults for development.
 func DefaultTraceConfig() *TraceConfig {
 	return &TraceConfig{
-		ServiceName:    "clawhermes-ai",
+		ServiceName:    "stratum-ai",
 		ServiceVersion: "1.0.0",
 		Environment:    "development",
 		ExporterType:   "log",

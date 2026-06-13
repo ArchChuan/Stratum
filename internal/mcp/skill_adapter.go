@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/skill"
+	"github.com/byteBuilderX/stratum/internal/skill"
 	"go.uber.org/zap"
 )
 

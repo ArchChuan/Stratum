@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/document"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/embedding"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/textchunk"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
+	"github.com/byteBuilderX/stratum/internal/document"
+	"github.com/byteBuilderX/stratum/internal/embedding"
+	"github.com/byteBuilderX/stratum/internal/textchunk"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
+	"github.com/byteBuilderX/stratum/pkg/vector"
 	"go.uber.org/zap"
 )
 

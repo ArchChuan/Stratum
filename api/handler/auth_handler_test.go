@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/api/handler"
+	"github.com/byteBuilderX/stratum/api/handler"
 	"github.com/gin-gonic/gin"
 )
 

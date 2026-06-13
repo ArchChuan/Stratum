@@ -5,8 +5,8 @@ import (
 	"context"
 	"os"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/knowledge"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
+	"github.com/byteBuilderX/stratum/internal/knowledge"
+	"github.com/byteBuilderX/stratum/pkg/vector"
 	"go.uber.org/zap"
 )
 
@@ -49,7 +49,7 @@ func Load() (*Config, error) {
 		OtelEndpoint:           getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
 		QwenAPIKey:             getEnv("QWEN_API_KEY", ""),
 		ZhipuAPIKey:            getEnv("ZHIPU_API_KEY", ""),
-		PostgresURL:            getEnv("POSTGRES_URL", "postgres://clawhermes:clawhermes@localhost:5432/clawhermes?sslmode=disable"),
+		PostgresURL:            getEnv("POSTGRES_URL", "postgres://stratum:stratum@localhost:5432/stratum?sslmode=disable"),
 		RedisURL:               getEnv("REDIS_URL", "redis://localhost:6379"),
 		GitHubClientID:         getEnv("GITHUB_CLIENT_ID", ""),
 		GitHubClientSecret:     getEnv("GITHUB_CLIENT_SECRET", ""),

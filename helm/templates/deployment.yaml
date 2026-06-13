@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "clawhermes-ai-go.fullname" . }}
+  name: {{ include "stratum.fullname" . }}
   labels:
-    {{- include "clawhermes-ai-go.labels" . | nindent 4 }}
+    {{- include "stratum.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.app.replicaCount }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "clawhermes-ai-go.selectorLabels" . | nindent 6 }}
+      {{- include "stratum.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       {{- with .Values.podAnnotations }}
@@ -18,13 +18,13 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
-        {{- include "clawhermes-ai-go.selectorLabels" . | nindent 8 }}
+        {{- include "stratum.selectorLabels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "clawhermes-ai-go.serviceAccountName" . }}
+      serviceAccountName: {{ include "stratum.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -51,12 +51,12 @@ spec:
             - name: NEO4J_USER
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "clawhermes-ai-go.fullname" . }}-neo4j-secret
+                  name: {{ include "stratum.fullname" . }}-neo4j-secret
                   key: username
             - name: NEO4J_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "clawhermes-ai-go.fullname" . }}-neo4j-secret
+                  name: {{ include "stratum.fullname" . }}-neo4j-secret
                   key: password
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.observability.otelCollectorEndpoint | quote }}

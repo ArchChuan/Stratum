@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/embedding"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
+	"github.com/byteBuilderX/stratum/internal/embedding"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
+	"github.com/byteBuilderX/stratum/pkg/vector"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j/dbtype"
 	"go.uber.org/zap"
 )

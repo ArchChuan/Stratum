@@ -1,4 +1,4 @@
-# ClawHermes AI Go
+# Stratum
 
 企业级 AI 原生应用架构底座 | AI Native Application Framework
 

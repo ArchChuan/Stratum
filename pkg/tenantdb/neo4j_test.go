@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 )
 
 func TestTenantLabel(t *testing.T) {

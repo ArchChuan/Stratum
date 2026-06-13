@@ -3,7 +3,7 @@ package middleware
 import (
 	"net/http"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )

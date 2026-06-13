@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
+	"github.com/byteBuilderX/stratum/internal/capgateway"
+	"github.com/byteBuilderX/stratum/internal/llmgateway"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )

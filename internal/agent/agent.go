@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	agentgraph "github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent/graph"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
+	agentgraph "github.com/byteBuilderX/stratum/internal/agent/graph"
+	"github.com/byteBuilderX/stratum/internal/capgateway"
+	"github.com/byteBuilderX/stratum/internal/memory"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"go.uber.org/zap"
 )
 
@@ -190,11 +190,16 @@ func (a *BaseAgent) SetCapGateway(gw capgateway.CapabilityGateway) {
 	a.CapGateway = gw
 }
 
-// WithChatStore sets the chat store for conversation history persistence.
-func (a *BaseAgent) WithChatStore(cs ChatStore) *BaseAgent {
+// SetChatStore sets the chat store for conversation history persistence (void, for interface assertion).
+func (a *BaseAgent) SetChatStore(cs ChatStore) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.ChatStore = cs
+}
+
+// WithChatStore sets the chat store for conversation history persistence.
+func (a *BaseAgent) WithChatStore(cs ChatStore) *BaseAgent {
+	a.SetChatStore(cs)
 	return a
 }
 
@@ -421,50 +426,6 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 				zap.String("conversation_id", cfg.ConversationID),
 				zap.Error(err))
 		}
-	}
-
-	// Async long-term indexing: fire-and-forget, does not block the caller.
-	if a.MemoryManager != nil && a.SessionContext != nil && execErr == nil {
-		memMgr := a.MemoryManager
-		sessCtx := a.SessionContext
-		capturedInput := input
-		capturedOutput := result.Output
-		capturedAgentID := agentID
-		// WithoutCancel detaches from request cancellation so indexing survives
-		// the HTTP response, while still carrying trace/tenant context values.
-		detachedCtx := context.WithoutCancel(ctx)
-		go func() {
-			idxCtx, cancel := context.WithTimeout(detachedCtx, 10*time.Second)
-			defer cancel()
-			userEntry := &memory.MemoryEntry{
-				Role:      "user",
-				Content:   capturedInput,
-				TenantID:  sessCtx.TenantID,
-				UserID:    sessCtx.UserID,
-				SessionID: sessCtx.SessionID,
-				AgentID:   sessCtx.AgentID,
-			}
-			if err := memMgr.Add(idxCtx, userEntry); err != nil {
-				a.Logger.Warn("agent: long-term indexing failed for user turn",
-					zap.String("agent_id", capturedAgentID),
-					zap.Error(err))
-			}
-			if capturedOutput != "" {
-				agentEntry := &memory.MemoryEntry{
-					Role:      "assistant",
-					Content:   capturedOutput,
-					TenantID:  sessCtx.TenantID,
-					UserID:    sessCtx.UserID,
-					SessionID: sessCtx.SessionID,
-					AgentID:   sessCtx.AgentID,
-				}
-				if err := memMgr.Add(idxCtx, agentEntry); err != nil {
-					a.Logger.Warn("agent: long-term indexing failed for agent turn",
-						zap.String("agent_id", capturedAgentID),
-						zap.Error(err))
-				}
-			}
-		}()
 	}
 
 	result.Duration = time.Since(startTime)

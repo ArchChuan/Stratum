@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"go.uber.org/zap"
 )
 

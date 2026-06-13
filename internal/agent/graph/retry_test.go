@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent/graph"
+	"github.com/byteBuilderX/stratum/internal/agent/graph"
 	"github.com/stretchr/testify/require"
 )
 

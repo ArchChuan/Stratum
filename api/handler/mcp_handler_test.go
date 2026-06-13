@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/mcp"
+	"github.com/byteBuilderX/stratum/internal/mcp"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )

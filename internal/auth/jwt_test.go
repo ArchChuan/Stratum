@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/auth"
+	"github.com/byteBuilderX/stratum/internal/auth"
 )
 
 func generateTestRSAKey(t *testing.T) *rsa.PrivateKey {

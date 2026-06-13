@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
+	"github.com/byteBuilderX/stratum/internal/llmgateway"
 )
 
 func TestTenantGatewayCache_SetAndGet(t *testing.T) {

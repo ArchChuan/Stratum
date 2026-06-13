@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/skillgateway"
+	"github.com/byteBuilderX/stratum/internal/skillgateway"
 	"go.uber.org/zap"
 )
 

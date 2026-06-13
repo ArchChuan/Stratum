@@ -1,12 +1,12 @@
 # 依赖集成指南
 
-本文档说明 ClawHermes AI Go 如何集成各个底层依赖。
+本文档说明 Stratum 如何集成各个底层依赖。
 
 ## 架构概览
 
 ```
 ┌─────────────────────────────────────────────────┐
-│         ClawHermes AI Go 应用                    │
+│         Stratum 应用                    │
 ├─────────────────────────────────────────────────┤
 │  API Layer (Gin)                                │
 ├─────────────────────────────────────────────────┤
@@ -56,7 +56,7 @@ client.Subscribe("skill.executed", func(event *hermes.Event) error {
 nc -z localhost 4222
 
 # 查看日志
-docker logs clawhermes-ai-go-nats-1
+docker logs stratum-nats-1
 ```
 
 ### 2. Neo4j (图数据库)
@@ -100,7 +100,7 @@ result, err := graphrag.Query(ctx, "MATCH (n) RETURN n LIMIT 10")
 nc -z localhost 7687
 
 # 查看日志
-docker logs clawhermes-ai-go-neo4j-1
+docker logs stratum-neo4j-1
 ```
 
 ### 3. Milvus (向量数据库)
@@ -136,7 +136,7 @@ results, err := vectorStore.Search(ctx, "embeddings", []float32{0.1, 0.2, 0.3}, 
 nc -z localhost 19530
 
 # 查看日志
-docker logs clawhermes-ai-go-milvus-1
+docker logs stratum-milvus-1
 ```
 
 ### 4. OpenTelemetry Collector (可观测)
@@ -166,7 +166,7 @@ metrics.RecordAPIRequest("POST", "/skills", 201, 45.67)
 nc -z localhost 4317
 
 # 查看日志
-docker logs clawhermes-ai-go-otel-collector-1
+docker logs stratum-otel-collector-1
 ```
 
 ## 启动流程
@@ -244,7 +244,7 @@ nc -z localhost 4317 && echo "OTEL OK" || echo "OTEL FAILED"
 docker ps | grep nats
 
 # 查看日志
-docker logs clawhermes-ai-go-nats-1
+docker logs stratum-nats-1
 
 # 重启容器
 docker-compose restart nats
@@ -257,7 +257,7 @@ docker-compose restart nats
 docker ps | grep neo4j
 
 # 查看日志
-docker logs clawhermes-ai-go-neo4j-1
+docker logs stratum-neo4j-1
 
 # 重启容器
 docker-compose restart neo4j
@@ -273,7 +273,7 @@ open http://localhost:7474
 docker ps | grep milvus
 
 # 查看日志
-docker logs clawhermes-ai-go-milvus-1
+docker logs stratum-milvus-1
 
 # 重启容器
 docker-compose restart milvus

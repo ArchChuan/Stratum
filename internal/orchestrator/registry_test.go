@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/skill"
+	"github.com/byteBuilderX/stratum/internal/skill"
 )
 
 func TestRegistry(t *testing.T) {

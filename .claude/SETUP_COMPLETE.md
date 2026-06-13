@@ -1,6 +1,6 @@
 # Project Configuration Summary
 
-Complete overview of all development standards, automation, and tools configured for ClawHermes AI Go.
+Complete overview of all development standards, automation, and tools configured for Stratum.
 
 ## 📋 Configuration Overview
 

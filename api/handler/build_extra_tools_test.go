@@ -3,7 +3,7 @@ package handler
 import (
 	"testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/mcp"
+	"github.com/byteBuilderX/stratum/internal/mcp"
 	"go.uber.org/zap"
 )
 

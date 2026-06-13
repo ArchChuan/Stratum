@@ -1,4 +1,4 @@
-# ClawHermes AI Go Project Development Standards
+# Stratum Project Development Standards
 
 This document defines development standards that are automatically enforced through hooks and permission rules in `.claude/settings.json`. No manual intervention required.
 

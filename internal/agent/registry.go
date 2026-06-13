@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+	"github.com/byteBuilderX/stratum/internal/capgateway"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"

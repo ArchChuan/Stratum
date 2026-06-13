@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '✓ ClawHermes AI Go 项目规范已加载' && echo '📋 5条项目命令: make install | make typecheck | make lint | make test-local | make test-full' && echo '🚫 5条项目边界已启用' && echo '🔄 CI/CD: GitHub Actions configured' && echo '🛡️ Security: go vet enabled'",
+            "command": "echo '✓ Stratum 项目规范已加载' && echo '📋 5条项目命令: make install | make typecheck | make lint | make test-local | make test-full' && echo '🚫 5条项目边界已启用' && echo '🔄 CI/CD: GitHub Actions configured' && echo '🛡️ Security: go vet enabled'",
             "statusMessage": "加载项目规范"
           }
         ]
@@ -98,7 +98,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath'); if [[ \"$f\" == *.go ]]; then proj_root=\"/home/yang/go-projects/ClawHermes-AI-Go\"; rel=$(dirname \"${f#$proj_root/}\"); cd \"$proj_root\" && go vet \"./$rel/...\" 2>&1 | head -20 || true; fi",
+            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath'); if [[ \"$f\" == *.go ]]; then proj_root=\"/home/yang/go-projects/stratum\"; rel=$(dirname \"${f#$proj_root/}\"); cd \"$proj_root\" && go vet \"./$rel/...\" 2>&1 | head -20 || true; fi",
             "statusMessage": "go vet 检查",
             "async": true
           },

@@ -3,7 +3,7 @@ import { message as msg } from 'antd';
 import {
   getAllAgents, executeAgentStream,
   listConversations, createConversation, renameConversation, deleteConversation,
-  listMessages, addMessage,
+  listMessages,
 } from '../services/api';
 
 const SS_AGENT = 'chat:lastAgentId';
@@ -28,7 +28,15 @@ export function useChatPage() {
     (async () => {
       try {
         const r = await getAllAgents();
-        if (!cancelled) setAgents(r.data.agents || []);
+        if (!cancelled) {
+          const list = r.data.agents || [];
+          setAgents(list);
+          setSelectedAgent(prev => {
+            if (prev && list.some(a => a.id === prev)) return prev;
+            sessionStorage.removeItem(SS_AGENT);
+            return null;
+          });
+        }
       } catch {
         if (!cancelled) msg.error('加载 Agent 列表失败');
       }
@@ -89,15 +97,6 @@ export function useChatPage() {
     setInput('');
     setSending(true);
     try {
-      await addMessage(selectedConv, 'user', text);
-    } catch (err) {
-      setMessages(prev => prev.filter(m => m.id !== tmpId));
-      setInput(text);
-      setSending(false);
-      msg.error(err.response?.data?.error || '消息保存失败');
-      return;
-    }
-    try {
       const streamMsgId = `a-${Date.now()}`;
       // insert empty assistant message to stream tokens into
       setMessages(prev => [...prev, { id: streamMsgId, role: 'agent', content: '', created_at: new Date().toISOString() }]);
@@ -105,7 +104,7 @@ export function useChatPage() {
       await new Promise((resolve) => {
         executeAgentStream(
           selectedAgent,
-          { query: text, context: {}, variables: {} },
+          { query: text, conversation_id: selectedConv, context: {}, variables: {} },
           {
             onToken: (token) => {
               setMessages(prev =>
@@ -117,7 +116,6 @@ export function useChatPage() {
               setMessages(prev =>
                 prev.map(m => m.id === streamMsgId ? { ...m, content: finalContent, steps: d.steps } : m)
               );
-              try { await addMessage(selectedConv, 'agent', finalContent); } catch { /* non-fatal */ }
               resolve();
             },
             onError: (err) => {

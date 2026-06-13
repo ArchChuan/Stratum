@@ -3,7 +3,7 @@ package handler
 import (
 	"testing"
 
-	pkgcrypto "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/crypto"
+	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 )
 
 func TestMaskAPIKey(t *testing.T) {

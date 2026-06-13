@@ -121,7 +121,7 @@ const OnboardingPage = () => {
       <Card style={{ width: 440, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <div style={{ textAlign: 'center' }}>
-            <Title level={3} style={{ marginBottom: 4 }}>欢迎使用 ClawHermes</Title>
+            <Title level={3} style={{ marginBottom: 4 }}>欢迎使用 Stratum</Title>
             <Text type="secondary">创建您的租户空间，或加入已有团队</Text>
           </div>
           <Tabs defaultActiveKey="create" items={tabItems} />

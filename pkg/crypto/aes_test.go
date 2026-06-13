@@ -3,7 +3,7 @@ package crypto_test
 import (
 	"testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/crypto"
+	"github.com/byteBuilderX/stratum/pkg/crypto"
 )
 
 func TestEncryptDecryptRoundtrip(t *testing.T) {

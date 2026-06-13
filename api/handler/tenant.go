@@ -1,8 +1,8 @@
 package handler
 
 import (
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/auth"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+	"github.com/byteBuilderX/stratum/internal/auth"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 )
 

@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/api/model"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/constants"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+	"github.com/byteBuilderX/stratum/api/model"
+	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"

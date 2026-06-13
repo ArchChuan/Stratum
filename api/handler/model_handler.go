@@ -3,7 +3,7 @@ package handler
 import (
 	"net/http"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
+	"github.com/byteBuilderX/stratum/internal/llmgateway"
 	"github.com/gin-gonic/gin"
 )
 

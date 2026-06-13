@@ -11,17 +11,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/api/model"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/knowledge"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/mcp"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/constants"
-	pkgcrypto "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/crypto"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+	"github.com/byteBuilderX/stratum/api/model"
+	"github.com/byteBuilderX/stratum/internal/agent"
+	"github.com/byteBuilderX/stratum/internal/capgateway"
+	"github.com/byteBuilderX/stratum/internal/knowledge"
+	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	"github.com/byteBuilderX/stratum/internal/mcp"
+	"github.com/byteBuilderX/stratum/internal/orchestrator"
+	"github.com/byteBuilderX/stratum/pkg/constants"
+	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
+	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -42,6 +42,7 @@ type AgentHandler struct {
 	mcpRegistry    *mcp.MCPSkillRegistry
 	skillAdapter   capgateway.Adapter
 	skillRegistry  *orchestrator.Registry
+	chatStore      agent.ChatStore
 }
 
 type CreateAgentRequest struct {
@@ -106,6 +107,7 @@ func NewAgentHandler(
 	mcpRegistry *mcp.MCPSkillRegistry,
 	skillAdapter capgateway.Adapter,
 	skillRegistry *orchestrator.Registry,
+	chatStore agent.ChatStore,
 ) *AgentHandler {
 	return &AgentHandler{
 		agentRegistry:  agentRegistry,
@@ -120,6 +122,7 @@ func NewAgentHandler(
 		mcpRegistry:    mcpRegistry,
 		skillAdapter:   skillAdapter,
 		skillRegistry:  skillRegistry,
+		chatStore:      chatStore,
 	}
 }
 
@@ -425,9 +428,18 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 			options = append(options, agent.WithLLMAPIKeys(apiKeys))
 		}
 	}
+	if h.chatStore != nil {
+		type chatStoreSetter interface {
+			SetChatStore(agent.ChatStore)
+		}
+		if setter, ok := a.(chatStoreSetter); ok {
+			setter.SetChatStore(h.chatStore)
+		}
+	}
 	options = append(options, agent.WithTenantID(tenantID))
 	if req.ConversationID != "" {
 		options = append(options, agent.WithConversationID(req.ConversationID))
+		options = append(options, agent.WithHistoryWindow(20))
 	}
 	options = append(options, agent.WithUserID(userID))
 
@@ -604,9 +616,18 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 			options = append(options, agent.WithLLMAPIKeys(apiKeys))
 		}
 	}
+	if h.chatStore != nil {
+		type chatStoreSetter interface {
+			SetChatStore(agent.ChatStore)
+		}
+		if setter, ok := a.(chatStoreSetter); ok {
+			setter.SetChatStore(h.chatStore)
+		}
+	}
 	options = append(options, agent.WithTenantID(tenantID))
 	if req.ConversationID != "" {
 		options = append(options, agent.WithConversationID(req.ConversationID))
+		options = append(options, agent.WithHistoryWindow(20))
 	}
 	options = append(options, agent.WithUserID(userID))
 
@@ -870,7 +891,7 @@ func (h *AgentHandler) resolveTenantGateway(ctx context.Context, tenantID string
 		return nil, nil
 	}
 
-	gw := llmgateway.NewGateway()
+	gw := llmgateway.NewGateway().WithLogger(h.logger)
 	if qwenKey, ok := decrypted["qwen"]; ok {
 		qwenClient := llmgateway.NewQwenClient(qwenKey, h.logger)
 		gw.RegisterClient(llmgateway.ProviderQwen, qwenClient)

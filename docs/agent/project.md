@@ -80,7 +80,7 @@ grafana/                    - Grafana 数据源 + 仪表板配置
 
 ## Build & Deploy
 
-- 编译产物：`bin/clawhermes`
+- 编译产物：`bin/stratum`
 - Docker 镜像：`Dockerfile` 多阶段构建，非 root 用户运行
 - 本地开发：`./start.sh`（启动 docker-compose + 应用）
 - K8s 部署：`helm install` 使用 `helm/` chart

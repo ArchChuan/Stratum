@@ -1,6 +1,6 @@
 # 快速开始：调用大模型
 
-本指南展示如何在 ClawHermes 中快速集成和调用大模型。
+本指南展示如何在 Stratum 中快速集成和调用大模型。
 
 ## 1. 配置 API Key
 
@@ -138,8 +138,8 @@ import (
  "context"
  "log"
 
- "clawhermes-ai-go/internal/llmgateway"
- "clawhermes-ai-go/internal/skill"
+ "stratum/internal/llmgateway"
+ "stratum/internal/skill"
  "go.uber.org/zap"
 )
 

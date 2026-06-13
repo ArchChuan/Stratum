@@ -4,7 +4,7 @@ package knowledge
 import (
 	"context"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
+	"github.com/byteBuilderX/stratum/pkg/vector"
 )
 
 type MockGraphRAG struct {

@@ -2,8 +2,8 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: clawhermes-config
-  namespace: clawhermes
+  name: stratum-config
+  namespace: stratum
 data:
   # 应用配置
   PORT: "8080"
@@ -12,7 +12,7 @@ data:
 
   # NATS 配置
   NATS_URL: "nats://nats:4222"
-  NATS_CLUSTER_ID: "clawhermes-cluster"
+  NATS_CLUSTER_ID: "stratum-cluster"
 
   # Milvus 配置
   MILVUS_HOST: "milvus"
@@ -24,7 +24,7 @@ data:
 
   # OpenTelemetry 配置
   OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
-  OTEL_SERVICE_NAME: "clawhermes-ai"
+  OTEL_SERVICE_NAME: "stratum-ai"
   OTEL_EXPORTER_TYPE: "otlp"
   OTEL_SAMPLING_RATIO: "0.1"
 

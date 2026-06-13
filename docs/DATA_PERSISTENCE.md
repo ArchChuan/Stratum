@@ -2,7 +2,7 @@
 
 ## 概述
 
-ClawHermes AI Go 的所有依赖服务都运行在 Docker 容器中，通过 Docker Volumes 实现数据持久化。
+Stratum 的所有依赖服务都运行在 Docker 容器中，通过 Docker Volumes 实现数据持久化。
 
 ## 持久化方案
 
@@ -27,10 +27,10 @@ command: -js -sd /data
 
 ```bash
 # 查看 NATS 数据
-docker exec clawhermes-ai-go-nats-1 ls -la /data
+docker exec stratum-nats-1 ls -la /data
 
 # 查看 JetStream 状态
-docker exec clawhermes-ai-go-nats-1 nats stream list
+docker exec stratum-nats-1 nats stream list
 ```
 
 ### 2. Neo4j (图数据库)
@@ -54,10 +54,10 @@ volumes:
 
 ```bash
 # 查看 Neo4j 数据
-docker exec clawhermes-ai-go-neo4j-1 ls -la /data
+docker exec stratum-neo4j-1 ls -la /data
 
 # 查看数据库大小
-docker exec clawhermes-ai-go-neo4j-1 du -sh /data
+docker exec stratum-neo4j-1 du -sh /data
 ```
 
 ### 3. Milvus (向量数据库)
@@ -91,13 +91,13 @@ minio:
 
 ```bash
 # 查看 etcd 数据
-docker exec clawhermes-ai-go-etcd-1 etcdctl get --prefix ""
+docker exec stratum-etcd-1 etcdctl get --prefix ""
 
 # 查看 MinIO 数据
-docker exec clawhermes-ai-go-minio-1 ls -la /minio_data
+docker exec stratum-minio-1 ls -la /minio_data
 
 # 查看 Milvus 集合
-docker exec clawhermes-ai-go-milvus-1 milvus-cli
+docker exec stratum-milvus-1 milvus-cli
 ```
 
 ### 4. OpenTelemetry Collector
@@ -120,28 +120,28 @@ volumes:
 ### 查看所有数据卷
 
 ```bash
-docker volume ls | grep clawhermes
+docker volume ls | grep stratum
 ```
 
 ### 查看数据卷详情
 
 ```bash
-docker volume inspect clawhermes-ai-go_neo4j_data
+docker volume inspect stratum_neo4j_data
 ```
 
 ### 备份数据
 
 ```bash
 # 备份 Neo4j 数据
-docker run --rm -v clawhermes-ai-go_neo4j_data:/data -v $(pwd):/backup \
+docker run --rm -v stratum_neo4j_data:/data -v $(pwd):/backup \
   alpine tar czf /backup/neo4j_backup.tar.gz -C /data .
 
 # 备份 Milvus 数据
-docker run --rm -v clawhermes-ai-go_minio_data:/data -v $(pwd):/backup \
+docker run --rm -v stratum_minio_data:/data -v $(pwd):/backup \
   alpine tar czf /backup/minio_backup.tar.gz -C /data .
 
 # 备份 etcd 数据
-docker run --rm -v clawhermes-ai-go_etcd_data:/data -v $(pwd):/backup \
+docker run --rm -v stratum_etcd_data:/data -v $(pwd):/backup \
   alpine tar czf /backup/etcd_backup.tar.gz -C /data .
 ```
 
@@ -149,15 +149,15 @@ docker run --rm -v clawhermes-ai-go_etcd_data:/data -v $(pwd):/backup \
 
 ```bash
 # 恢复 Neo4j 数据
-docker run --rm -v clawhermes-ai-go_neo4j_data:/data -v $(pwd):/backup \
+docker run --rm -v stratum_neo4j_data:/data -v $(pwd):/backup \
   alpine tar xzf /backup/neo4j_backup.tar.gz -C /data
 
 # 恢复 Milvus 数据
-docker run --rm -v clawhermes-ai-go_minio_data:/data -v $(pwd):/backup \
+docker run --rm -v stratum_minio_data:/data -v $(pwd):/backup \
   alpine tar xzf /backup/minio_backup.tar.gz -C /data
 
 # 恢复 etcd 数据
-docker run --rm -v clawhermes-ai-go_etcd_data:/data -v $(pwd):/backup \
+docker run --rm -v stratum_etcd_data:/data -v $(pwd):/backup \
   alpine tar xzf /backup/etcd_backup.tar.gz -C /data
 ```
 
@@ -168,7 +168,7 @@ docker run --rm -v clawhermes-ai-go_etcd_data:/data -v $(pwd):/backup \
 docker-compose down -v
 
 # 删除特定数据卷
-docker volume rm clawhermes-ai-go_neo4j_data
+docker volume rm stratum_neo4j_data
 ```
 
 ## 数据卷位置
@@ -180,7 +180,7 @@ docker volume rm clawhermes-ai-go_neo4j_data
 docker info | grep "Docker Root Dir"
 
 # 通常位置
-/var/lib/docker/volumes/clawhermes-ai-go_*/_data
+/var/lib/docker/volumes/stratum_*/_data
 ```
 
 ### macOS
@@ -272,7 +272,7 @@ environment:
 ```bash
 # 清理 NATS 数据并重启
 docker-compose down
-docker volume rm clawhermes-ai-go_nats_data
+docker volume rm stratum_nats_data
 docker-compose up -d nats
 ```
 
@@ -280,11 +280,11 @@ docker-compose up -d nats
 
 ```bash
 # 检查日志
-docker logs clawhermes-ai-go-neo4j-1
+docker logs stratum-neo4j-1
 
 # 清理并重启
 docker-compose down
-docker volume rm clawhermes-ai-go_neo4j_data
+docker volume rm stratum_neo4j_data
 docker-compose up -d neo4j
 ```
 
@@ -307,9 +307,9 @@ docker-compose restart milvus
 docker system df -v
 
 # 查看特定卷大小
-docker run --rm -v clawhermes-ai-go_neo4j_data:/data alpine du -sh /data
-docker run --rm -v clawhermes-ai-go_minio_data:/data alpine du -sh /data
-docker run --rm -v clawhermes-ai-go_etcd_data:/data alpine du -sh /data
+docker run --rm -v stratum_neo4j_data:/data alpine du -sh /data
+docker run --rm -v stratum_minio_data:/data alpine du -sh /data
+docker run --rm -v stratum_etcd_data:/data alpine du -sh /data
 ```
 
 ## 生产环境建议

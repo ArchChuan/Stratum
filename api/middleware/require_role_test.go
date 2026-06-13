@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/api/middleware"
+	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/gin-gonic/gin"
 )
 

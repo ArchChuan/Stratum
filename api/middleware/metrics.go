@@ -5,7 +5,7 @@ package middleware
 import (
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/gin-gonic/gin"
 )
 

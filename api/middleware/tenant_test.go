@@ -10,8 +10,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/api/middleware"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+	"github.com/byteBuilderX/stratum/api/middleware"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 )
 
 func init() {

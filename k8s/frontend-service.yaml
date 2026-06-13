@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: frontend-service
-  namespace: clawhermes
+  namespace: stratum
   labels:
     app: frontend
 spec:
@@ -20,7 +20,7 @@ spec:
 # kind: Service
 # metadata:
 #   name: frontend-nodeport
-#   namespace: clawhermes
+#   namespace: stratum
 # spec:
 #   selector:
 #     app: frontend

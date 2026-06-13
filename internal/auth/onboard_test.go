@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/auth"
+	"github.com/byteBuilderX/stratum/internal/auth"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -15,7 +15,7 @@ func setupOnboardTest(t *testing.T) (*auth.OnboardService, *pgxpool.Pool, func()
 	t.Helper()
 	pgURL := os.Getenv("TEST_POSTGRES_URL")
 	if pgURL == "" {
-		pgURL = "postgres://clawhermes:clawhermes@localhost:5432/clawhermes?sslmode=disable"
+		pgURL = "postgres://stratum:stratum@localhost:5432/stratum?sslmode=disable"
 	}
 	pool, err := pgxpool.New(context.Background(), pgURL)
 	if err != nil {
