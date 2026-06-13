@@ -308,10 +308,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			execErr = fmt.Errorf("react: build graph: %w", buildErr)
 			break
 		}
-		initMessages := make([]capgateway.LLMMessage, 0, 2)
-		if systemPrompt != "" {
-			initMessages = append(initMessages, capgateway.LLMMessage{Role: "system", Content: systemPrompt})
-		}
+		initMessages := BuildInitMessages(systemPrompt, nil, cfg.HistoryWindow)
 		initMessages = append(initMessages, capgateway.LLMMessage{Role: "user", Content: input})
 
 		var availableTools []capgateway.ToolDefinition
@@ -530,4 +527,28 @@ func (cfg *ExecutionConfig) ApplyOptions(opts []ExecutionOption) {
 	for _, opt := range opts {
 		opt(cfg)
 	}
+}
+
+// BuildInitMessages constructs the initial LLM message slice from a system prompt and
+// chat history. History is truncated to the most recent window messages; role "agent"
+// is normalized to "assistant" for LLM protocol. window ≤ 0 defaults to 20.
+func BuildInitMessages(systemPrompt string, history []*ChatMessage, window int) []capgateway.LLMMessage {
+	if window <= 0 {
+		window = 20
+	}
+	if len(history) > window {
+		history = history[len(history)-window:]
+	}
+	msgs := make([]capgateway.LLMMessage, 0, len(history)+1)
+	if systemPrompt != "" {
+		msgs = append(msgs, capgateway.LLMMessage{Role: "system", Content: systemPrompt})
+	}
+	for _, m := range history {
+		role := m.Role
+		if role == "agent" {
+			role = "assistant"
+		}
+		msgs = append(msgs, capgateway.LLMMessage{Role: role, Content: m.Content})
+	}
+	return msgs
 }

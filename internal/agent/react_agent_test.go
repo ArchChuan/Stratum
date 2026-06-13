@@ -171,3 +171,41 @@ func TestBaseAgent_WithChatStore_SetsField(t *testing.T) {
 	result := a.WithChatStore(cs)
 	require.NotNil(t, result)
 }
+
+func TestBuildInitMessages_EmptyHistory(t *testing.T) {
+	msgs := agent.BuildInitMessages("You are helpful.", nil, 0)
+	require.Len(t, msgs, 1)
+	require.Equal(t, "system", msgs[0].Role)
+	require.Equal(t, "You are helpful.", msgs[0].Content)
+}
+
+func TestBuildInitMessages_NormalizesAgentRole(t *testing.T) {
+	history := []*agent.ChatMessage{
+		{Role: "user", Content: "hello"},
+		{Role: "agent", Content: "hi there"},
+	}
+	msgs := agent.BuildInitMessages("sys", history, 10)
+	require.Len(t, msgs, 3)
+	require.Equal(t, "system", msgs[0].Role)
+	require.Equal(t, "user", msgs[1].Role)
+	require.Equal(t, "assistant", msgs[2].Role) // "agent" → "assistant"
+}
+
+func TestBuildInitMessages_WindowTruncation(t *testing.T) {
+	history := make([]*agent.ChatMessage, 25)
+	for i := range history {
+		history[i] = &agent.ChatMessage{Role: "user", Content: "msg"}
+	}
+	msgs := agent.BuildInitMessages("", history, 20)
+	// 20 history + 0 system (empty string)
+	require.Len(t, msgs, 20)
+}
+
+func TestBuildInitMessages_DefaultWindow(t *testing.T) {
+	history := make([]*agent.ChatMessage, 25)
+	for i := range history {
+		history[i] = &agent.ChatMessage{Role: "user", Content: "msg"}
+	}
+	msgs := agent.BuildInitMessages("sys", history, 0) // 0 → default 20
+	require.Len(t, msgs, 21)                           // 20 history + 1 system
+}
