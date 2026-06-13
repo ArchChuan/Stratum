@@ -1,6 +1,6 @@
-# ClawHermes-AI-Go 前端界面
+# stratum 前端界面
 
-这是一个为 ClawHermes-AI-Go 项目开发的前端界面，用于管理和执行 AI Skills。
+这是一个为 stratum 项目开发的前端界面，用于管理和执行 AI Skills。
 
 ## 功能特性
 

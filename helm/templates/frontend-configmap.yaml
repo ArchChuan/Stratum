@@ -2,10 +2,10 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "clawhermes-ai-go.fullname" . }}-frontend-nginx
+  name: {{ include "stratum.fullname" . }}-frontend-nginx
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "clawhermes-ai-go.labels" . | nindent 4 }}
+    {{- include "stratum.labels" . | nindent 4 }}
     component: frontend
 data:
   default.conf: |

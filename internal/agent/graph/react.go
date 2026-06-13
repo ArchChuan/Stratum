@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
+	"github.com/byteBuilderX/stratum/internal/capgateway"
 	"go.uber.org/zap"
 )
 

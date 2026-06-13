@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
 

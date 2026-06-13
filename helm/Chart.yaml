@@ -1,6 +1,6 @@
 apiVersion: v2
-name: clawhermes-ai-go
-description: A Helm chart for ClawHermes AI Go application
+name: stratum
+description: A Helm chart for Stratum application
 
 # A chart can be either an 'application' or a 'library' chart.
 #

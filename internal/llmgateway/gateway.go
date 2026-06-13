@@ -3,12 +3,13 @@ package llmgateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"go.uber.org/zap"
 )
 
@@ -148,6 +149,12 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 		return nil, fmt.Errorf("provider not found: %s", provider)
 	}
 
+	if g.logger.Core().Enabled(zap.DebugLevel) {
+		if raw, merr := json.Marshal(req.Messages); merr == nil {
+			g.logger.Debug("llm.request", zap.String("model", req.Model), zap.ByteString("messages", raw))
+		}
+	}
+
 	start := time.Now()
 	resp, err := client.Complete(ctx, req)
 	elapsed := time.Since(start).Seconds()
@@ -196,6 +203,11 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 	if !ok {
 		g.metrics.IncLLMRequest(req.Model, string(provider), "error")
 		return nil, fmt.Errorf("llmgateway: no client for provider %q", provider)
+	}
+	if g.logger.Core().Enabled(zap.DebugLevel) {
+		if raw, merr := json.Marshal(req.Messages); merr == nil {
+			g.logger.Debug("llm.request", zap.String("model", req.Model), zap.ByteString("messages", raw))
+		}
 	}
 	start := time.Now()
 	var (

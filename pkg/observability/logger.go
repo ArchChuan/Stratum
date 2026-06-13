@@ -38,7 +38,7 @@ func NewLogger(env string) (*zap.Logger, error) {
 	host, _ := os.Hostname()
 	core := zapcore.NewCore(enc, zapcore.Lock(os.Stdout), level)
 	logger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel)).With(
-		zap.String("app", "clawhermes"),
+		zap.String("app", "stratum"),
 		zap.String("env", env),
 		zap.String("host", host),
 	)

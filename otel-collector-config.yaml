@@ -10,7 +10,7 @@ receivers:
   prometheus:
     config:
       scrape_configs:
-        - job_name: 'clawhermes-ai'
+        - job_name: 'stratum-ai'
           scrape_interval: 30s
           static_configs:
             - targets: ['host.docker.internal:8080']
@@ -68,7 +68,7 @@ exporters:
 
   prometheus:
     endpoint: 0.0.0.0:8889
-    namespace: clawhermes
+    namespace: stratum
     const_labels:
       cluster: production
 

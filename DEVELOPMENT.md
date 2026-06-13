@@ -1,6 +1,6 @@
 # Development Guide
 
-This guide provides comprehensive instructions for developing ClawHermes AI Go.
+This guide provides comprehensive instructions for developing Stratum.
 
 ## Quick Start
 
@@ -15,8 +15,8 @@ This guide provides comprehensive instructions for developing ClawHermes AI Go.
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/yourusername/ClawHermes-AI-Go.git
-cd ClawHermes-AI-Go
+git clone https://github.com/yourusername/stratum.git
+cd stratum
 
 # 2. Install dependencies
 make install
@@ -146,10 +146,10 @@ func TestFunctionName(t *testing.T) {
     // Arrange
     input := "test"
     expected := "result"
-    
+
     // Act
     result := FunctionName(input)
-    
+
     // Assert
     if result != expected {
         t.Errorf("expected %s, got %s", expected, result)
@@ -325,7 +325,7 @@ pre-commit run --all-files
 ```bash
 # Solution
 docker system prune
-docker build --no-cache -t clawhermes-ai-go:latest .
+docker build --no-cache -t stratum:latest .
 ```
 
 ## Getting Help

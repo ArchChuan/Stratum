@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v2"

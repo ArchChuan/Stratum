@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: clawhermes
+  name: stratum
   labels:
-    name: clawhermes
+    name: stratum
     environment: production

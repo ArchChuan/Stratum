@@ -1,6 +1,6 @@
 # LLM 集成指南
 
-ClawHermes AI Go 支持多种大模型调用方式，包括云端 API 和本地部署模型。
+Stratum 支持多种大模型调用方式，包括云端 API 和本地部署模型。
 
 ## 支持的模型提供商
 
@@ -154,18 +154,18 @@ curl -X POST http://localhost:8080/skills/{skill_id}/execute \
 package main
 
 import (
- "clawhermes-ai-go/internal/llmgateway"
- "clawhermes-ai-go/internal/skill"
+ "stratum/internal/llmgateway"
+ "stratum/internal/skill"
  "go.uber.org/zap"
 )
 
 func main() {
  logger, _ := zap.NewProduction()
- 
+
  // 初始化 LLM Gateway
  cfg := llmgateway.LoadConfig()
  gateway := llmgateway.InitializeGateway(cfg, logger)
- 
+
  // 创建 LLM Skill
  llmSkill := skill.NewLLMSkill(
   "skill-1",
@@ -174,7 +174,7 @@ func main() {
   gateway,
   logger,
  )
- 
+
  // 执行 Skill
  result, err := llmSkill.Execute(map[string]interface{}{
   "model":   "gpt-4",
@@ -182,12 +182,12 @@ func main() {
   "temperature": 0.7,
   "max_tokens": 100,
  })
- 
+
  if err != nil {
   logger.Error("execution failed", zap.Error(err))
   return
  }
- 
+
  logger.Info("result", zap.Any("output", result))
 }
 ```

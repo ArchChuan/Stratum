@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/api/model"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
+	"github.com/byteBuilderX/stratum/api/model"
+	"github.com/byteBuilderX/stratum/internal/memory"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"

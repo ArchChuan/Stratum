@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/auth"
+	"github.com/byteBuilderX/stratum/internal/auth"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
@@ -19,7 +19,7 @@ func setupTokenStoreTest(t *testing.T) (*auth.TokenStore, func()) {
 
 	pgURL := os.Getenv("TEST_POSTGRES_URL")
 	if pgURL == "" {
-		pgURL = "postgres://clawhermes:clawhermes@localhost:5432/clawhermes?sslmode=disable"
+		pgURL = "postgres://stratum:stratum@localhost:5432/stratum?sslmode=disable"
 	}
 	pool, err := pgxpool.New(ctx, pgURL)
 	if err != nil {

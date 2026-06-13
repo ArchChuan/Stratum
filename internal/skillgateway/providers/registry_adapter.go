@@ -5,8 +5,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/skill"
+	"github.com/byteBuilderX/stratum/internal/orchestrator"
+	"github.com/byteBuilderX/stratum/internal/skill"
 )
 
 // RegistryAdapter 将 orchestrator.Registry 适配为 SkillProvider

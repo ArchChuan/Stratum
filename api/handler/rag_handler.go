@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/knowledge"
-	skillpkg "github.com/byteBuilderX/ClawHermes-AI-Go/internal/skill"
+	"github.com/byteBuilderX/stratum/internal/knowledge"
+	skillpkg "github.com/byteBuilderX/stratum/internal/skill"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"

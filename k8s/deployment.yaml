@@ -2,10 +2,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: clawhermes-ai
-  namespace: clawhermes
+  name: stratum-ai
+  namespace: stratum
   labels:
-    app: clawhermes-ai
+    app: stratum-ai
     version: v1
 spec:
   replicas: 3
@@ -16,25 +16,25 @@ spec:
       maxUnavailable: 0
   selector:
     matchLabels:
-      app: clawhermes-ai
+      app: stratum-ai
   template:
     metadata:
       labels:
-        app: clawhermes-ai
+        app: stratum-ai
         version: v1
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8080"
         prometheus.io/path: "/metrics"
     spec:
-      serviceAccountName: clawhermes-ai
+      serviceAccountName: stratum-ai
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         fsGroup: 1000
       containers:
-        - name: clawhermes-ai
-          image: clawhermes-ai:latest
+        - name: stratum-ai
+          image: stratum-ai:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -48,79 +48,79 @@ spec:
             - name: PORT
               valueFrom:
                 configMapKeyRef:
-                  name: clawhermes-config
+                  name: stratum-config
                   key: PORT
             - name: LOG_LEVEL
               valueFrom:
                 configMapKeyRef:
-                  name: clawhermes-config
+                  name: stratum-config
                   key: LOG_LEVEL
             - name: ENVIRONMENT
               valueFrom:
                 configMapKeyRef:
-                  name: clawhermes-config
+                  name: stratum-config
                   key: ENVIRONMENT
             - name: NATS_URL
               valueFrom:
                 configMapKeyRef:
-                  name: clawhermes-config
+                  name: stratum-config
                   key: NATS_URL
             - name: MILVUS_HOST
               valueFrom:
                 configMapKeyRef:
-                  name: clawhermes-config
+                  name: stratum-config
                   key: MILVUS_HOST
             - name: MILVUS_PORT
               valueFrom:
                 configMapKeyRef:
-                  name: clawhermes-config
+                  name: stratum-config
                   key: MILVUS_PORT
             - name: NEO4J_URI
               valueFrom:
                 configMapKeyRef:
-                  name: clawhermes-config
+                  name: stratum-config
                   key: NEO4J_URI
             - name: NEO4J_USER
               valueFrom:
                 configMapKeyRef:
-                  name: clawhermes-config
+                  name: stratum-config
                   key: NEO4J_USER
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               valueFrom:
                 configMapKeyRef:
-                  name: clawhermes-config
+                  name: stratum-config
                   key: OTEL_EXPORTER_OTLP_ENDPOINT
             - name: OTEL_SERVICE_NAME
               valueFrom:
                 configMapKeyRef:
-                  name: clawhermes-config
+                  name: stratum-config
                   key: OTEL_SERVICE_NAME
             - name: OTEL_EXPORTER_TYPE
               valueFrom:
                 configMapKeyRef:
-                  name: clawhermes-config
+                  name: stratum-config
                   key: OTEL_EXPORTER_TYPE
             - name: OTEL_SAMPLING_RATIO
               valueFrom:
                 configMapKeyRef:
-                  name: clawhermes-config
+                  name: stratum-config
                   key: OTEL_SAMPLING_RATIO
 
             # 从 Secret 读取敏感配置
             - name: NEO4J_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: clawhermes-secrets
+                  name: stratum-secrets
                   key: NEO4J_PASSWORD
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: clawhermes-secrets
+                  name: stratum-secrets
                   key: OPENAI_API_KEY
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: clawhermes-secrets
+                  name: stratum-secrets
                   key: JWT_SECRET
 
             # Pod 信息
@@ -178,17 +178,17 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: clawhermes-ai
-  namespace: clawhermes
+  name: stratum-ai
+  namespace: stratum
   labels:
-    app: clawhermes-ai
+    app: stratum-ai
   annotations:
     prometheus.io/scrape: "true"
     prometheus.io/port: "8080"
     prometheus.io/path: "/metrics"
 spec:
   selector:
-    app: clawhermes-ai
+    app: stratum-ai
   ports:
     - name: http
       port: 80
@@ -204,13 +204,13 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: clawhermes-ai-hpa
-  namespace: clawhermes
+  name: stratum-ai-hpa
+  namespace: stratum
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: clawhermes-ai
+    name: stratum-ai
   minReplicas: 2
   maxReplicas: 10
   metrics:
@@ -244,19 +244,19 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: clawhermes-ai
-  namespace: clawhermes
+  name: stratum-ai
+  namespace: stratum
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/clawhermes-role
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/stratum-role
 
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: clawhermes-ai-pdb
-  namespace: clawhermes
+  name: stratum-ai-pdb
+  namespace: stratum
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: clawhermes-ai
+      app: stratum-ai

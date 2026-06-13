@@ -10,25 +10,25 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/api/handler"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/api/middleware"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/agent"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/auth"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/capgateway"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/config"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/document"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/embedding"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/knowledge"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/mcp"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/memory"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/skill"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/textchunk"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/constants"
-	pkgcrypto "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/crypto"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/observability"
-	vectorstore "github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
+	"github.com/byteBuilderX/stratum/api/handler"
+	"github.com/byteBuilderX/stratum/api/middleware"
+	"github.com/byteBuilderX/stratum/internal/agent"
+	"github.com/byteBuilderX/stratum/internal/auth"
+	"github.com/byteBuilderX/stratum/internal/capgateway"
+	"github.com/byteBuilderX/stratum/internal/config"
+	"github.com/byteBuilderX/stratum/internal/document"
+	"github.com/byteBuilderX/stratum/internal/embedding"
+	"github.com/byteBuilderX/stratum/internal/knowledge"
+	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	"github.com/byteBuilderX/stratum/internal/mcp"
+	"github.com/byteBuilderX/stratum/internal/memory"
+	"github.com/byteBuilderX/stratum/internal/orchestrator"
+	"github.com/byteBuilderX/stratum/internal/skill"
+	"github.com/byteBuilderX/stratum/internal/textchunk"
+	"github.com/byteBuilderX/stratum/pkg/constants"
+	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
+	"github.com/byteBuilderX/stratum/pkg/observability"
+	vectorstore "github.com/byteBuilderX/stratum/pkg/vector"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
@@ -135,7 +135,7 @@ func SetupRouter(
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"status":  "ok",
-			"service": "ClawHermes AI Go",
+			"service": "Stratum",
 		})
 	})
 
@@ -187,7 +187,7 @@ func SetupRouter(
 	mcpRegistry := mcp.NewMCPSkillRegistry(mcpManager, logger)
 	mcpHandler := handler.NewMCPHandler(mcpRegistry, mcpManager, logger)
 
-	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway, metrics, execStore, db, aesKey, gatewayCache, ragService, mcpRegistry, skillAdapter, registry)
+	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway, metrics, execStore, db, aesKey, gatewayCache, ragService, mcpRegistry, skillAdapter, registry, chatStore)
 	chatHandler := handler.NewChatHandler(chatStore, logger)
 
 	// Initialize memory system

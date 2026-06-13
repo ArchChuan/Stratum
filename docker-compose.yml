@@ -6,7 +6,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: clawhermes-ai-go:local
+    image: stratum:local
     ports:
       - "8080:8080"
     environment:
@@ -18,9 +18,9 @@ services:
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=password
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-      - OTEL_SERVICE_NAME=clawhermes-ai
+      - OTEL_SERVICE_NAME=stratum-ai
     networks:
-      - clawhermes
+      - stratum
     depends_on:
       - nats
       - milvus
@@ -35,11 +35,11 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
-    image: clawhermes-frontend:local
+    image: stratum-frontend:local
     ports:
       - "3002:80"
     networks:
-      - clawhermes
+      - stratum
     depends_on:
       - backend
     profiles:
@@ -52,7 +52,7 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile.dev
-    image: clawhermes-frontend-dev:local
+    image: stratum-frontend-dev:local
     ports:
       - "3002:3002"
     volumes:
@@ -62,7 +62,7 @@ services:
     environment:
       - VITE_API_BASE_URL=http://backend:8080
     networks:
-      - clawhermes
+      - stratum
     depends_on:
       - backend
     profiles:
@@ -84,7 +84,7 @@ services:
       - "1777:1777"  # pprof
       - "55679:55679"  # zPages
     networks:
-      - clawhermes
+      - stratum
     depends_on:
       - jaeger
 
@@ -104,7 +104,7 @@ services:
       - "14250:14250"    # accept model.proto
       - "9411:9411"      # Zipkin compatible endpoint
     networks:
-      - clawhermes
+      - stratum
     volumes:
       - jaeger_data:/var/lib/jaeger
 
@@ -122,7 +122,7 @@ services:
     ports:
       - "9090:9090"
     networks:
-      - clawhermes
+      - stratum
 
   # Grafana - 可视化仪表板
   grafana:
@@ -138,7 +138,7 @@ services:
     ports:
       - "3000:3000"
     networks:
-      - clawhermes
+      - stratum
     depends_on:
       - prometheus
 
@@ -151,7 +151,7 @@ services:
       - "6222:6222"
       - "8222:8222"
     networks:
-      - clawhermes
+      - stratum
     volumes:
       - nats_data:/data
 
@@ -167,7 +167,7 @@ services:
       - "7474:7474"
       - "7687:7687"
     networks:
-      - clawhermes
+      - stratum
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
@@ -184,7 +184,7 @@ services:
       - etcd_data:/etcd
     command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
     networks:
-      - clawhermes
+      - stratum
 
   # MinIO - Milvus 对象存储
   minio:
@@ -199,7 +199,7 @@ services:
       - "9000:9000"
       - "9001:9001"
     networks:
-      - clawhermes
+      - stratum
 
   # Milvus Standalone - 向量数据库
   milvus:
@@ -213,7 +213,7 @@ services:
     ports:
       - "19530:19530"
     networks:
-      - clawhermes
+      - stratum
     depends_on:
       - etcd
       - minio
@@ -222,15 +222,15 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: clawhermes
-      POSTGRES_PASSWORD: clawhermes
-      POSTGRES_DB: clawhermes
+      POSTGRES_USER: stratum
+      POSTGRES_PASSWORD: stratum
+      POSTGRES_DB: stratum
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - clawhermes
+      - stratum
 
   # Redis - 缓存和会话存储
   redis:
@@ -239,7 +239,7 @@ services:
       - "6379:6379"
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     networks:
-      - clawhermes
+      - stratum
     volumes:
       - redis_data:/data
 
@@ -258,7 +258,7 @@ services:
     environment:
       - ADMINER_DEFAULT_SERVER=postgres
     networks:
-      - clawhermes
+      - stratum
     depends_on:
       - postgres
 
@@ -270,7 +270,7 @@ services:
     ports:
       - "8081:8081"
     networks:
-      - clawhermes
+      - stratum
     depends_on:
       - redis
 
@@ -282,7 +282,7 @@ services:
     ports:
       - "8000:3000"
     networks:
-      - clawhermes
+      - stratum
     depends_on:
       - milvus
 
@@ -292,13 +292,13 @@ services:
     environment:
       - DB=postgres12
       - DB_PORT=5432
-      - POSTGRES_USER=clawhermes
-      - POSTGRES_PWD=clawhermes
+      - POSTGRES_USER=stratum
+      - POSTGRES_PWD=stratum
       - POSTGRES_SEEDS=postgres
     ports:
       - "7233:7233"
     networks:
-      - clawhermes
+      - stratum
     depends_on:
       - postgres
     healthcheck:
@@ -315,12 +315,12 @@ services:
     ports:
       - "8088:8080"
     networks:
-      - clawhermes
+      - stratum
     depends_on:
       - temporal
 
 networks:
-  clawhermes:
+  stratum:
     driver: bridge
 
 volumes:

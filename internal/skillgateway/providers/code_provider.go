@@ -4,7 +4,7 @@ package providers
 import (
 	"context"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/skill"
+	"github.com/byteBuilderX/stratum/internal/skill"
 )
 
 // CodeSkillProvider 将 skill.CodeSkill 适配为 SkillProvider

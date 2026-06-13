@@ -3,9 +3,9 @@ package knowledge
 import (
 	"testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/embedding"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
+	"github.com/byteBuilderX/stratum/internal/embedding"
+	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	"github.com/byteBuilderX/stratum/pkg/vector"
 	"go.uber.org/zap"
 )
 

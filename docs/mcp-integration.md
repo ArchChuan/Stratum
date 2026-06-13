@@ -1,10 +1,10 @@
 # MCP 集成指南
 
-本文档说明如何在 ClawHermes AI Go 项目中使用 MCP (Model Context Protocol) 集成。
+本文档说明如何在 Stratum 项目中使用 MCP (Model Context Protocol) 集成。
 
 ## 概述
 
-MCP 集成允许 ClawHermes 连接到多个 MCP 服务器，并将 MCP 工具转换为 Skill 对象，从而无缝集成到现有的 Skill 系统中。
+MCP 集成允许 Stratum 连接到多个 MCP 服务器，并将 MCP 工具转换为 Skill 对象，从而无缝集成到现有的 Skill 系统中。
 
 ## 架构
 
@@ -166,7 +166,7 @@ mcp:
 ### 初始化 MCP 系统
 
 ```go
-import "github.com/byteBuilderX/ClawHermes-AI-Go/internal/mcp"
+import "github.com/byteBuilderX/stratum/internal/mcp"
 
 // 创建客户端管理器
 manager := mcp.NewClientManager(logger, nil)

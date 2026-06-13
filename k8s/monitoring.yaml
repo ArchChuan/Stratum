@@ -65,10 +65,10 @@ data:
       - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
         action: keep
         regex: default;kubernetes;https
-    - job_name: 'clawhermes-ai-go'
+    - job_name: 'stratum'
       kubernetes_sd_configs:
       - role: pod
-      namespace: clawhermes-system
+      namespace: stratum-system
       relabel_configs:
       - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
         action: keep

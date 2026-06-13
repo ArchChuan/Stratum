@@ -2,16 +2,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "clawhermes-ai-go.fullname" . }}-frontend
+  name: {{ include "stratum.fullname" . }}-frontend
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "clawhermes-ai-go.labels" . | nindent 4 }}
+    {{- include "stratum.labels" . | nindent 4 }}
     component: frontend
 spec:
   replicas: {{ .Values.frontend.replicaCount }}
   selector:
     matchLabels:
-      {{- include "clawhermes-ai-go.selectorLabels" . | nindent 6 }}
+      {{- include "stratum.selectorLabels" . | nindent 6 }}
       component: frontend
   strategy:
     type: RollingUpdate
@@ -21,7 +21,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "clawhermes-ai-go.selectorLabels" . | nindent 8 }}
+        {{- include "stratum.selectorLabels" . | nindent 8 }}
         component: frontend
     spec:
       containers:
@@ -53,5 +53,5 @@ spec:
       volumes:
         - name: nginx-config
           configMap:
-            name: {{ include "clawhermes-ai-go.fullname" . }}-frontend-nginx
+            name: {{ include "stratum.fullname" . }}-frontend-nginx
 {{- end }}

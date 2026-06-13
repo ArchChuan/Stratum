@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/auth"
+	"github.com/byteBuilderX/stratum/internal/auth"
 )
 
 func TestExchangeCode_Success(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/vector"
+	"github.com/byteBuilderX/stratum/pkg/vector"
 )
 
 func TestMockGraphRAGInterface(t *testing.T) {

@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: clawhermes-system
+  name: stratum-system
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: nats
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   replicas: 1
   selector:
@@ -46,7 +46,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: nats
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   selector:
     app: nats
@@ -59,7 +59,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: nats-pvc
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   accessModes:
   - ReadWriteOnce
@@ -71,7 +71,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: etcd
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   replicas: 1
   selector:
@@ -118,7 +118,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: etcd
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   selector:
     app: etcd
@@ -131,7 +131,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: etcd-pvc
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   accessModes:
   - ReadWriteOnce
@@ -143,7 +143,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: minio
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   replicas: 1
   selector:
@@ -187,7 +187,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: minio
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   selector:
     app: minio
@@ -200,7 +200,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: minio-pvc
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   accessModes:
   - ReadWriteOnce
@@ -212,7 +212,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: milvus
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   replicas: 1
   selector:
@@ -254,7 +254,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: milvus
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   selector:
     app: milvus
@@ -267,7 +267,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: milvus-pvc
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   accessModes:
   - ReadWriteOnce
@@ -279,7 +279,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: neo4j-secret
-  namespace: clawhermes-system
+  namespace: stratum-system
 type: Opaque
 data:
   username: bmVvNGo=
@@ -289,7 +289,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: neo4j
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   replicas: 1
   selector:
@@ -337,7 +337,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: neo4j
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   selector:
     app: neo4j
@@ -355,7 +355,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: neo4j-data-pvc
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   accessModes:
   - ReadWriteOnce
@@ -367,7 +367,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: neo4j-logs-pvc
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   accessModes:
   - ReadWriteOnce
@@ -379,7 +379,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: otel-collector
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   replicas: 1
   selector:
@@ -415,7 +415,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: otel-collector
-  namespace: clawhermes-system
+  namespace: stratum-system
 spec:
   selector:
     app: otel-collector
@@ -428,7 +428,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: otel-collector-config
-  namespace: clawhermes-system
+  namespace: stratum-system
 data:
   otel-collector-config.yaml: "receivers:\n  otlp:\n    protocols:\n      grpc:\n\
     \        endpoint: 0.0.0.0:4317\nprocessors:\n  batch:\n    timeout: 1s\nexporters:\n\

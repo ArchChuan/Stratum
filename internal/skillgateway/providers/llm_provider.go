@@ -4,7 +4,7 @@ package providers
 import (
 	"context"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/skill"
+	"github.com/byteBuilderX/stratum/internal/skill"
 )
 
 // LLMSkillProvider 将 skill.LLMSkill 适配为 SkillProvider

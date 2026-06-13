@@ -2,12 +2,12 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: frontend-ingress
-  namespace: clawhermes
+  namespace: stratum
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
   rules:
-    - host: clawhermes.local   # 替换为实际域名
+    - host: stratum.local   # 替换为实际域名
       http:
         paths:
           - path: /

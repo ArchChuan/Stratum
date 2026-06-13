@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/mcp"
+	"github.com/byteBuilderX/stratum/internal/mcp"
 )
 
 // MCPSkillProvider 将 mcp.MCPSkillAdapter 适配为 SkillProvider

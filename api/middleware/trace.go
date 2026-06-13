@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/pkg/tenantdb"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -99,7 +99,7 @@ func TraceMiddleware(logger *zap.Logger) gin.HandlerFunc {
 		// capture request body (non-sensitive JSON only); restore body for downstream handlers
 		var reqBody string
 		if !sensitive && c.Request.Body != nil && isJSONContent(c.Request.Header.Get("Content-Type")) {
-			raw, _ := io.ReadAll(io.LimitReader(c.Request.Body, maxBodyLogSize+1))
+			raw, _ := io.ReadAll(c.Request.Body)
 			c.Request.Body = io.NopCloser(bytes.NewReader(raw))
 			if len(raw) > maxBodyLogSize {
 				reqBody = string(raw[:maxBodyLogSize]) + "...[truncated]"

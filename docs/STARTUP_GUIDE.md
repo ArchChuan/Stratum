@@ -17,7 +17,7 @@
 ### 方式 1：一键启动（推荐）
 
 ```bash
-cd /home/yang/go-projects/ClawHermes-AI-Go
+cd /home/yang/go-projects/stratum
 
 # 启动所有服务
 ./start.sh
@@ -33,7 +33,7 @@ cd /home/yang/go-projects/ClawHermes-AI-Go
 ### 方式 2：手动启动
 
 ```bash
-cd /home/yang/go-projects/ClawHermes-AI-Go
+cd /home/yang/go-projects/stratum
 
 # 1. 启动依赖服务
 make docker-up
@@ -48,7 +48,7 @@ make run
 ### 方式 3：后台运行
 
 ```bash
-cd /home/yang/go-projects/ClawHermes-AI-Go
+cd /home/yang/go-projects/stratum
 
 # 启动依赖
 make docker-up
@@ -210,7 +210,7 @@ docker-compose up -d
 docker network ls
 
 # 检查容器网络
-docker inspect clawhermes-ai-go-nats-1 | grep -A 5 NetworkSettings
+docker inspect stratum-nats-1 | grep -A 5 NetworkSettings
 ```
 
 ### Q: 端口被占用
@@ -249,7 +249,7 @@ kill -9 <PID>
 ## 项目结构
 
 ```
-clawhermes-ai-go/
+stratum/
 ├── cmd/server/              # 应用入口
 ├── api/                     # HTTP API 层
 ├── internal/                # 内部业务逻辑

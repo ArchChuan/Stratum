@@ -2,13 +2,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: clawhermes-system
+  name: stratum-system
 ---
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: clawhermes-quota
-  namespace: clawhermes-system
+  name: stratum-quota
+  namespace: stratum-system
 spec:
   hard:
     pods: "10"
@@ -20,12 +20,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: clawhermes-netpol
-  namespace: clawhermes-system
+  name: stratum-netpol
+  namespace: stratum-system
 spec:
   podSelector:
     matchLabels:
-      app: clawhermes-ai-go
+      app: stratum
   policyTypes:
   - Ingress
   - Egress
@@ -33,7 +33,7 @@ spec:
   - from:
     - namespaceSelector:
         matchLabels:
-          name: clawhermes-system
+          name: stratum-system
     - podSelector:
         matchLabels:
           role: proxy
@@ -53,7 +53,7 @@ spec:
   - to:
     - namespaceSelector:
         matchLabels:
-          name: clawhermes-system
+          name: stratum-system
     - podSelector:
         matchLabels:
           app: nats
@@ -79,14 +79,14 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: clawhermes-service-account
-  namespace: clawhermes-system
+  name: stratum-service-account
+  namespace: stratum-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  namespace: clawhermes-system
-  name: clawhermes-role
+  namespace: stratum-system
+  name: stratum-role
 rules:
 - apiGroups: [""] # "" 表示核心 API 组
   resources: ["pods", "services", "configmaps", "secrets"]
@@ -98,23 +98,23 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: clawhermes-rolebinding
-  namespace: clawhermes-system
+  name: stratum-rolebinding
+  namespace: stratum-system
 subjects:
 - kind: ServiceAccount
-  name: clawhermes-service-account
-  namespace: clawhermes-system
+  name: stratum-service-account
+  namespace: stratum-system
 roleRef:
   kind: Role
-  name: clawhermes-role
+  name: stratum-role
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
-  name: clawhermes-webhook
+  name: stratum-webhook
 webhooks:
-- name: validator.clawhermes.ai
+- name: validator.stratum.ai
   rules:
   - apiGroups: [""]
     apiVersions: ["v1"]
@@ -123,8 +123,8 @@ webhooks:
     scope: "Namespaced"
   clientConfig:
     service:
-      name: clawhermes-validator
-      namespace: clawhermes-system
+      name: stratum-validator
+      namespace: stratum-system
       path: "/validate"
     caBundle: Cg==
   admissionReviewVersions: ["v1"]

@@ -8,10 +8,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/api/model"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/orchestrator"
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/skill"
+	"github.com/byteBuilderX/stratum/api/model"
+	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	"github.com/byteBuilderX/stratum/internal/orchestrator"
+	"github.com/byteBuilderX/stratum/internal/skill"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )

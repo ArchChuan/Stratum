@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Button, Select, Input, Space, Tag, Typography, Tooltip, Spin, Empty, Skeleton, Popconfirm } from 'antd';
+import { Button, Select, Input, Space, Tag, Typography, Tooltip, Spin, Empty, Skeleton, Popconfirm, message as antdMsg } from 'antd';
 import {
   SendOutlined, RobotOutlined, UserOutlined, PlusOutlined,
   EditOutlined, DeleteOutlined, ThunderboltOutlined, CheckOutlined,
@@ -108,7 +108,22 @@ export default function AgentChatPage() {
                   style={{ flex: 1, fontSize: 12 }}
                 />
               ) : (
-                <Text ellipsis style={{ flex: 1, fontSize: 13, color: c.id === selectedConv ? '#1677ff' : undefined }}>{c.name}</Text>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                <Text ellipsis style={{ display: 'block', fontSize: 13, color: c.id === selectedConv ? '#1677ff' : undefined }}>{c.name}</Text>
+                {c.id === selectedConv && (
+                  <Tooltip title={c.id}>
+                    <Text
+                      type="secondary"
+                      ellipsis
+                      style={{ display: 'block', fontSize: 10, fontFamily: 'monospace', cursor: 'pointer' }}
+                      onClick={e => {
+                        e.stopPropagation();
+                        navigator.clipboard.writeText(c.id).then(() => antdMsg.success('会话 ID 已复制'));
+                      }}
+                    >{c.id}</Text>
+                  </Tooltip>
+                )}
+              </div>
               )}
               {c.id === selectedConv && editingId !== c.id && (
                 <Space size={2}>

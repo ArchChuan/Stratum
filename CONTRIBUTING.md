@@ -1,4 +1,4 @@
-# Contributing to ClawHermes AI Go
+# Contributing to Stratum
 
 Thank you for your interest in contributing! This document provides guidelines and instructions for contributing to the project.
 
@@ -15,11 +15,11 @@ Thank you for your interest in contributing! This document provides guidelines a
 
 ```bash
 # Fork on GitHub, then clone your fork
-git clone https://github.com/YOUR_USERNAME/ClawHermes-AI-Go.git
-cd ClawHermes-AI-Go
+git clone https://github.com/YOUR_USERNAME/stratum.git
+cd stratum
 
 # Add upstream remote
-git remote add upstream https://github.com/ORIGINAL_OWNER/ClawHermes-AI-Go.git
+git remote add upstream https://github.com/ORIGINAL_OWNER/stratum.git
 ```
 
 ### 2. Create Feature Branch
@@ -315,6 +315,6 @@ By contributing, you agree that your contributions will be licensed under the sa
 
 ---
 
-**Thank you for contributing to ClawHermes AI Go!**
+**Thank you for contributing to Stratum!**
 
 **Last Updated**: 2026-05-22

@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/byteBuilderX/ClawHermes-AI-Go/internal/llmgateway"
+	"github.com/byteBuilderX/stratum/internal/llmgateway"
 	"go.uber.org/zap"
 )
 

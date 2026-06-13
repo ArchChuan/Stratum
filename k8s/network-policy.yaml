@@ -3,12 +3,12 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: clawhermes-ai-netpol
-  namespace: clawhermes
+  name: stratum-ai-netpol
+  namespace: stratum
 spec:
   podSelector:
     matchLabels:
-      app: clawhermes-ai
+      app: stratum-ai
   policyTypes:
     - Ingress
     - Egress
@@ -54,8 +54,8 @@ spec:
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: clawhermes-quota
-  namespace: clawhermes
+  name: stratum-quota
+  namespace: stratum
 spec:
   hard:
     requests.cpu: "4"
@@ -72,8 +72,8 @@ spec:
 apiVersion: v1
 kind: LimitRange
 metadata:
-  name: clawhermes-limits
-  namespace: clawhermes
+  name: stratum-limits
+  namespace: stratum
 spec:
   limits:
     - type: Container

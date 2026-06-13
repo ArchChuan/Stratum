@@ -21,7 +21,7 @@ func LoadConfig() *Config {
 }
 
 func InitializeGateway(cfg *Config, logger *zap.Logger) *Gateway {
-	gateway := NewGateway()
+	gateway := NewGateway().WithLogger(logger)
 
 	if cfg.QwenAPIKey != "" {
 		qwenClient := NewQwenClient(cfg.QwenAPIKey, logger)

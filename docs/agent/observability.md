@@ -8,7 +8,7 @@ TracerProvider 在 `cmd/server/main.go` 初始化，通过 context 传播。
 
 ```go
 cfg := &observability.TraceConfig{
-    ServiceName:    "clawhermes-ai",
+    ServiceName:    "stratum-ai",
     ServiceVersion: "1.0.0",
     Environment:    "production",
     ExporterType:   "otlp",         // otlp | jaeger | stdout | log | none
