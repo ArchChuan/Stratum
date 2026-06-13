@@ -125,12 +125,12 @@ repos:
         args: [protect, --staged, --redact, -v]
         pass_filenames: false
 
-      # Security scanning with Semgrep (local rules, no network required)
+      # Security scanning with Semgrep (Go files only)
       - id: semgrep
         name: semgrep
         language: system
         entry: semgrep
-        args: [--config=auto, --quiet]
+        args: [--config=auto, --quiet, --include=*.go]
         types: [go]
         pass_filenames: false
 

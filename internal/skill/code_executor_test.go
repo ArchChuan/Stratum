@@ -2,6 +2,7 @@ package skill
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -10,15 +11,19 @@ import (
 func TestCodeExecutor_JS_Basic(t *testing.T) {
 	exec := NewCodeExecutor(DefaultCodeExecutorConfig())
 	code := `function process(input) { return { result: input.x + input.y }; }`
-	input := map[string]interface{}{"x": 3, "y": 4}
+	input := map[string]any{"x": 3, "y": 4}
 
 	out, err := exec.Execute(context.Background(), "javascript", code, "t1", input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	m, ok := out.(map[string]interface{})
+	raw, ok := out.(json.RawMessage)
 	if !ok {
-		t.Fatalf("want map, got %T: %v", out, out)
+		t.Fatalf("want json.RawMessage, got %T: %v", out, out)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
 	}
 	result, _ := m["result"].(float64)
 	if result != 7 {
@@ -50,9 +55,13 @@ func TestCodeExecutor_JS_UnsafeGlobals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	m, ok := out.(map[string]interface{})
+	raw, ok := out.(json.RawMessage)
 	if !ok {
-		t.Fatalf("want map, got %T", out)
+		t.Fatalf("want json.RawMessage, got %T", out)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
 	}
 	if m["ok"] != true {
 		t.Errorf("fetch should be undefined, got ok=%v", m["ok"])
@@ -92,15 +101,19 @@ func TestCodeExecutor_Python_Basic(t *testing.T) {
 	}
 	exec := NewCodeExecutor(DefaultCodeExecutorConfig())
 	code := `def process(input): return {"sum": input["a"] + input["b"]}`
-	input := map[string]interface{}{"a": 10, "b": 5}
+	input := map[string]any{"a": 10, "b": 5}
 
 	out, err := exec.Execute(context.Background(), "python", code, "t1", input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	m, ok := out.(map[string]interface{})
+	raw, ok := out.(json.RawMessage)
 	if !ok {
-		t.Fatalf("want map, got %T: %v", out, out)
+		t.Fatalf("want json.RawMessage, got %T: %v", out, out)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
 	}
 	sum, _ := m["sum"].(float64)
 	if sum != 15 {

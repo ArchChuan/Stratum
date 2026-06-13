@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -102,13 +103,26 @@ except Exception as e:
 
 	memBytes := strconv.Itoa(e.cfg.PythonMemoryMB * 1024 * 1024)
 
+	// Write wrapper to a temp file so subprocess args contain no user code directly.
+	f, err := os.CreateTemp("", "skill-*.py")
+	if err != nil {
+		return nil, fmt.Errorf("create temp script: %w", err)
+	}
+	defer func() { _ = os.Remove(f.Name()) }()
+	if _, err := f.WriteString(wrapper); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("write temp script: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("close temp script: %w", err)
+	}
+
 	// prlimit wraps python3 with: virtual-address-space, CPU time (5s hard), open files (16)
-	// #nosec G204 -- user code is pre-validated by StaticAnalyzer before reaching this point
-	cmd := exec.CommandContext(ctx, "prlimit",
+	cmd := exec.CommandContext(ctx, "prlimit", //#nosec G204
 		"--as="+memBytes,
 		"--cpu=5",
 		"--nofile=16",
-		"python3", "-c", wrapper,
+		"python3", f.Name(),
 	)
 
 	var stdout, stderr bytes.Buffer
@@ -131,7 +145,7 @@ except Exception as e:
 		return nil, nil
 	}
 
-	var result interface{}
+	var result json.RawMessage
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		return out, nil // return raw string if not JSON
 	}
@@ -145,7 +159,9 @@ func (e *CodeExecutor) runJS(ctx context.Context, code string, input map[string]
 
 	// Disable potentially dangerous globals.
 	for _, g := range []string{"require", "XMLHttpRequest", "fetch"} {
-		vm.Set(g, goja.Undefined()) //nolint:gosec,errcheck // #nosec G104
+		if err := vm.Set(g, goja.Undefined()); err != nil {
+			return nil, fmt.Errorf("disable global %s: %w", g, err)
+		}
 	}
 
 	// Inject input as __input__ global.
@@ -179,7 +195,7 @@ JSON.stringify(__result__);
 			ch <- runResult{val: val.Export()}
 			return
 		}
-		var result interface{}
+		var result json.RawMessage
 		if jsonErr := json.Unmarshal([]byte(raw), &result); jsonErr != nil {
 			ch <- runResult{val: raw}
 			return
