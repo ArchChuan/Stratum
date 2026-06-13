@@ -245,54 +245,61 @@ func (a *BaseAgent) RetrieveMemory(ctx context.Context, query string, limit int)
 
 // Execute implements the Agent interface - base implementation with ReAct pattern
 func (a *BaseAgent) Execute(ctx context.Context, input string, options ...ExecutionOption) (*AgentResult, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	startTime := time.Now()
 
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
 
+	// Snapshot mutable fields under lock, then release before the long LLM call.
+	a.mu.Lock()
 	if cfg.MaxSteps == 0 {
 		cfg.MaxSteps = a.MaxIterations
 	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 30 * time.Second
 	}
+	agentID := a.ID
+	agentType := a.Type
+	systemPrompt := a.SystemPrompt
+	llmModel := a.LLMModel
+	capGW := a.CapGateway
+	metrics := a.metrics
+	a.mu.Unlock()
 
 	a.Logger.Info("agent execution started",
-		zap.String("agent_id", a.ID),
-		zap.String("type", string(a.Type)),
+		zap.String("agent_id", agentID),
+		zap.String("type", string(agentType)),
 		zap.String("input", input))
 
 	result := &AgentResult{
-		AgentID:  a.ID,
+		AgentID:  agentID,
 		Input:    input,
 		Metadata: map[string]interface{}{},
 	}
 
 	var execErr error
-	switch a.Type {
+	switch agentType {
 	case ReActAgent:
-		if a.CapGateway == nil {
+		if capGW == nil {
 			execErr = fmt.Errorf("react: CapGateway not set")
 			break
 		}
-		cg, buildErr := agentgraph.BuildReActGraph(a.CapGateway)
+		cg, buildErr := agentgraph.BuildReActGraph(capGW)
 		if buildErr != nil {
 			execErr = fmt.Errorf("react: build graph: %w", buildErr)
 			break
 		}
 		initMessages := make([]capgateway.LLMMessage, 0, 2)
-		if a.SystemPrompt != "" {
-			initMessages = append(initMessages, capgateway.LLMMessage{Role: "system", Content: a.SystemPrompt})
+		if systemPrompt != "" {
+			initMessages = append(initMessages, capgateway.LLMMessage{Role: "system", Content: systemPrompt})
 		}
 		initMessages = append(initMessages, capgateway.LLMMessage{Role: "user", Content: input})
 		initState := agentgraph.ReActState{
 			TenantID:   cfg.TenantID,
 			LLMAPIKeys: cfg.LLMAPIKeys,
-			Model:      a.LLMModel,
+			Model:      llmModel,
 			Messages:   initMessages,
+			// TODO: resolve cfg.AvailableTools []string → []capgateway.ToolDefinition via skill catalog
 		}
 		execCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 		defer cancel()
@@ -303,7 +310,10 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		}
 		result.Output = finalState.Output
 		result.Steps = finalState.Steps
+		result.TokensUsed = finalState.TotalTokens
+		a.mu.Lock()
 		a.State.StepsTaken = finalState.Steps
+		a.mu.Unlock()
 		for _, tc := range finalState.AllToolCalls {
 			result.ToolCalls = append(result.ToolCalls, ToolCall{
 				ToolName: tc.Name,
@@ -319,7 +329,9 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 				Thought:     "Considering possible responses",
 			}
 			result.Thoughts = append(result.Thoughts, thought)
+			a.mu.Lock()
 			a.State.StepsTaken++
+			a.mu.Unlock()
 
 			if i >= 2 {
 				result.Output = fmt.Sprintf("Response for: %s", input)
@@ -328,24 +340,26 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		}
 
 	case PlanningAgent, ToolCallingAgent, RAGAgent, SwarmAgent:
-		result.Output = fmt.Sprintf("%s agent type not yet implemented", string(a.Type))
-		execErr = fmt.Errorf("agent type %s not implemented", a.Type)
+		result.Output = fmt.Sprintf("%s agent type not yet implemented", string(agentType))
+		execErr = fmt.Errorf("agent type %s not implemented", agentType)
 
 	default:
 		result.Output = "Unknown agent type"
-		execErr = fmt.Errorf("unknown agent type: %s", a.Type)
+		execErr = fmt.Errorf("unknown agent type: %s", agentType)
 	}
 
 	result.Duration = time.Since(startTime)
+	a.mu.Lock()
 	result.Steps = a.State.StepsTaken
+	a.mu.Unlock()
 
 	status := "success"
 	if execErr != nil {
 		status = "error"
 	}
-	a.metrics.IncAgentExecution(a.ID, string(a.Type), status)
-	a.metrics.RecordAgentExecutionDuration(a.ID, string(a.Type), result.Duration.Seconds())
-	a.metrics.RecordAgentStepCount(a.ID, string(a.Type), result.Steps)
+	metrics.IncAgentExecution(agentID, string(agentType), status)
+	metrics.RecordAgentExecutionDuration(agentID, string(agentType), result.Duration.Seconds())
+	metrics.RecordAgentStepCount(agentID, string(agentType), result.Steps)
 
 	return result, execErr
 }

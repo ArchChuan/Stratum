@@ -29,8 +29,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// compile-time interface assertion removed (Temporal deleted)
-
 func main() {
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
 		log.Printf("Warning: could not load .env file: %v", err)

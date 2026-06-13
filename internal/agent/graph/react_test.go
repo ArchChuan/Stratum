@@ -56,10 +56,9 @@ func TestBuildReActGraph_DirectAnswer(t *testing.T) {
 	require.NoError(t, err)
 
 	state := graph.ReActState{
-		TenantID:     "t1",
-		Model:        "qwen-turbo",
-		SystemPrompt: "You are helpful.",
-		Messages:     []capgateway.LLMMessage{{Role: "user", Content: "what is 6x7?"}},
+		TenantID: "t1",
+		Model:    "qwen-turbo",
+		Messages: []capgateway.LLMMessage{{Role: "user", Content: "what is 6x7?"}},
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 5})
 	require.NoError(t, err)
@@ -120,6 +119,44 @@ func TestBuildReActGraph_LLMError(t *testing.T) {
 	}
 	_, err = cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 5})
 	require.Error(t, err)
+}
+
+func TestBuildReActGraph_TokensAccumulated(t *testing.T) {
+	stub := &capGWSequence{
+		responses: []capgateway.CapabilityResponse{
+			{Content: "result", Usage: capgateway.TokenUsage{Prompt: 10, Completion: 5, Total: 15}},
+		},
+	}
+	cg, err := graph.BuildReActGraph(stub)
+	require.NoError(t, err)
+
+	state := graph.ReActState{
+		Model:    "qwen-turbo",
+		Messages: []capgateway.LLMMessage{{Role: "user", Content: "hi"}},
+	}
+	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 5})
+	require.NoError(t, err)
+	require.Equal(t, 15, out.TotalTokens)
+}
+
+func TestBuildReActGraph_TokensAccumulatedOverMultipleSteps(t *testing.T) {
+	stub := &capGWSequence{
+		responses: []capgateway.CapabilityResponse{
+			{ToolCalls: []capgateway.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{}}}, Usage: capgateway.TokenUsage{Total: 20}},
+			{Content: "done", Usage: capgateway.TokenUsage{Total: 10}},
+		},
+		toolResp: capgateway.CapabilityResponse{Content: "ok"},
+	}
+	cg, err := graph.BuildReActGraph(stub)
+	require.NoError(t, err)
+
+	state := graph.ReActState{
+		Model:    "qwen-turbo",
+		Messages: []capgateway.LLMMessage{{Role: "user", Content: "go"}},
+	}
+	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
+	require.NoError(t, err)
+	require.Equal(t, 30, out.TotalTokens)
 }
 
 func TestBuildReActGraph_ContextTimeout(t *testing.T) {

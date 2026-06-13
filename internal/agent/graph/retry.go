@@ -20,6 +20,9 @@ var DefaultRetry = RetryConfig{Attempts: 3, Base: 100 * time.Millisecond, Max: 1
 // Returns the first successful result or the last error.
 func RetryFn[T any](ctx context.Context, cfg RetryConfig, fn func() (T, error)) (T, error) {
 	var zero T
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
 	delay := cfg.Base
 	var lastErr error
 	for i := 0; i < cfg.Attempts; i++ {

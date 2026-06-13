@@ -19,12 +19,12 @@ type ReActState struct {
 	TraceID        string
 	LLMAPIKeys     map[string]string
 	Model          string
-	SystemPrompt   string
 	AvailableTools []capgateway.ToolDefinition
 	Messages       []capgateway.LLMMessage
 	AllToolCalls   []capgateway.ToolCall
 	Output         string
 	Steps          int
+	TotalTokens    int
 }
 
 // BuildReActGraph constructs and compiles the ReAct agent graph.
@@ -67,6 +67,7 @@ func makeLLMNode(capGW capgateway.CapabilityGateway) NodeFunc[ReActState] {
 			return s, fmt.Errorf("react llm node: %w", err)
 		}
 		s.Steps++
+		s.TotalTokens += resp.Usage.Total
 		if len(resp.ToolCalls) == 0 {
 			s.Output = resp.Content
 			s.Messages = append(s.Messages, capgateway.LLMMessage{

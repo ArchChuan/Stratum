@@ -73,6 +73,13 @@ func (g *StateGraph[S]) Compile() (*CompiledGraph[S], error) {
 	if _, ok := g.nodes[g.entry]; !ok {
 		return nil, fmt.Errorf("graph: entry node %q not registered", g.entry)
 	}
+	for from, to := range g.edges {
+		if to != END {
+			if _, ok := g.nodes[to]; !ok {
+				return nil, fmt.Errorf("graph: edge %q → %q: target node not registered", from, to)
+			}
+		}
+	}
 	return &CompiledGraph[S]{g: g}, nil
 }
 
@@ -87,6 +94,11 @@ func (c *CompiledGraph[S]) Invoke(ctx context.Context, initial S, cfg RunConfig)
 	for step := 0; step < maxSteps; step++ {
 		if current == END {
 			return state, nil
+		}
+		select {
+		case <-ctx.Done():
+			return state, ctx.Err()
+		default:
 		}
 		nodeFn, ok := c.g.nodes[current]
 		if !ok {
