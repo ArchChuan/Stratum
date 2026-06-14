@@ -166,6 +166,9 @@ func TestChatStore_AddMessage(t *testing.T) {
 	mock.ExpectQuery("INSERT INTO chat_messages").
 		WithArgs("conv-1", "user", "hello", steps, false).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("msg-uuid", now))
+	mock.ExpectExec("INSERT INTO memory_outbox").
+		WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
 	if err := store.AddMessage(context.Background(), "t1", msg); err != nil {
@@ -198,6 +201,9 @@ func TestChatStore_AddMessage_nilStepsDefaultsToEmpty(t *testing.T) {
 	mock.ExpectQuery("INSERT INTO chat_messages").
 		WithArgs("conv-1", "user", "hi", json.RawMessage("[]"), false).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("msg-2", now))
+	mock.ExpectExec("INSERT INTO memory_outbox").
+		WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
 	if err := store.AddMessage(context.Background(), "t1", msg); err != nil {
