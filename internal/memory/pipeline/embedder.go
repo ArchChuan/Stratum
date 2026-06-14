@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/embedding"
@@ -82,6 +83,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	ev, err := UnmarshalRawEvent(msg.Data())
 	if err != nil {
 		w.logger.Error("memory.embed.unmarshal", zap.Error(err))
+		embedTotal.With(prometheus.Labels{"tenant_id": "unknown", "status": "error"}).Inc()
 		_ = msg.Ack()
 		return
 	}
@@ -97,6 +99,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("message_id", ev.MessageID),
 			zap.String("tenant_id", ev.TenantID),
 			zap.Error(err))
+		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
 		_ = msg.Nak()
 		return
 	}
@@ -113,6 +116,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		w.logger.Error("memory.embed.milvus",
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
+		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
 		_ = msg.Nak()
 		return
 	}
@@ -124,6 +128,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	data, err := enrichedEv.Marshal()
 	if err != nil {
 		w.logger.Error("memory.embed.marshal_enriched", zap.Error(err))
+		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
 		_ = msg.Nak()
 		return
 	}
@@ -133,9 +138,13 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		w.logger.Error("memory.embed.publish_enriched",
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
+		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
 		_ = msg.Nak()
 		return
 	}
+
+	embedDuration.Observe(time.Since(start).Seconds())
+	embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "success"}).Inc()
 
 	_ = msg.Ack()
 	w.logger.Info("memory.embed.success",

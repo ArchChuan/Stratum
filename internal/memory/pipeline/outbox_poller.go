@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -133,5 +134,6 @@ func (p *OutboxPoller) pollTenant(ctx context.Context, schema string) error {
 		return fmt.Errorf("delete outbox: %w", err)
 	}
 	p.logger.Debug("memory.outbox.published", zap.String("schema", schema), zap.Int("count", len(ids)))
+	outboxPublished.With(prometheus.Labels{"tenant_id": schema, "status": "success"}).Inc()
 	return tx.Commit(ctx)
 }

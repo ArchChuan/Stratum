@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway"
@@ -113,6 +114,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	ev, err := UnmarshalEnrichedEvent(msg.Data())
 	if err != nil {
 		w.logger.Error("memory.enrich.unmarshal", zap.Error(err))
+		enrichTotal.With(prometheus.Labels{"tenant_id": "unknown", "status": "error"}).Inc()
 		_ = msg.Ack()
 		return
 	}
@@ -126,6 +128,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		w.logger.Error("memory.enrich.llm",
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
+		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
 		_ = msg.Nak()
 		return
 	}
@@ -134,9 +137,13 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		w.logger.Error("memory.enrich.persist",
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
+		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
 		_ = msg.Nak()
 		return
 	}
+
+	enrichDuration.Observe(time.Since(start).Seconds())
+	enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "success"}).Inc()
 
 	_ = msg.Ack()
 	w.logger.Info("memory.enrich.success",
@@ -281,6 +288,8 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, tx pgx.Tx, ev 
 	if err != nil {
 		return fmt.Errorf("insert summary: %w", err)
 	}
+
+	summaryTriggered.Inc()
 
 	w.logger.Info("memory.enrich.summary",
 		zap.String("conversation_id", ev.ConversationID),
