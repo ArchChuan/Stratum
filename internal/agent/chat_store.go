@@ -193,12 +193,33 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *Chat
 		); err != nil {
 			return err
 		}
-		return tx.QueryRow(ctx,
+		if err := tx.QueryRow(ctx,
 			`INSERT INTO chat_messages (conversation_id, role, content, steps_json, is_error)
 			 VALUES ($1, $2, $3, $4, $5)
 			 RETURNING id, created_at`,
 			msg.ConversationID, msg.Role, msg.Content, msg.StepsJSON, msg.IsError,
-		).Scan(&msg.ID, &msg.CreatedAt)
+		).Scan(&msg.ID, &msg.CreatedAt); err != nil {
+			return err
+		}
+
+		outboxPayload, err := json.Marshal(map[string]interface{}{
+			"message_id":      msg.ID,
+			"conversation_id": msg.ConversationID,
+			"tenant_id":       tenantID,
+			"role":            msg.Role,
+			"content":         msg.Content,
+			"created_at":      msg.CreatedAt,
+		})
+		if err != nil {
+			return fmt.Errorf("marshal outbox payload: %w", err)
+		}
+		_, err = tx.Exec(ctx,
+			`INSERT INTO memory_outbox (payload) VALUES ($1)`,
+			outboxPayload)
+		if err != nil {
+			return fmt.Errorf("insert memory_outbox: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("chat_store: add message: %w", err)

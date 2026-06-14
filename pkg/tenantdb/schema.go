@@ -94,3 +94,25 @@ func ProvisionAllTenantSchemas(ctx context.Context, pool *pgxpool.Pool, logger *
 	}
 	return nil
 }
+
+// ListTenantSchemas returns schema names ("tenant_<id>") for all active tenants.
+func ListTenantSchemas(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+	rows, err := pool.Query(ctx, `SELECT id FROM tenants WHERE deleted_at IS NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("tenantdb: list schemas: %w", err)
+	}
+	defer rows.Close()
+
+	var schemas []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("tenantdb: scan tenant id: %w", err)
+		}
+		schemas = append(schemas, "tenant_"+id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tenantdb: rows iteration: %w", err)
+	}
+	return schemas, nil
+}
