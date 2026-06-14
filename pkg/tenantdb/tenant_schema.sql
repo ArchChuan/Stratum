@@ -76,8 +76,13 @@ CREATE TABLE IF NOT EXISTS entities (
     name         TEXT NOT NULL,
     type         TEXT NOT NULL,
     properties   JSONB NOT NULL DEFAULT '{}',
+    confidence   FLOAT NOT NULL DEFAULT 0.5,
+    user_id      TEXT,
+    last_seen    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_name_type_user
+    ON entities (name, type, user_id);
 
 CREATE TABLE IF NOT EXISTS entity_relations (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),

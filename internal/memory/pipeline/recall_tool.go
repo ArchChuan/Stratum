@@ -103,6 +103,11 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID st
 	args := []any{}
 	argIdx := 1
 
+	// Text search filter using the query
+	baseQuery += fmt.Sprintf(" AND content ILIKE '%%' || $%d || '%%'", argIdx)
+	args = append(args, req.Query)
+	argIdx++
+
 	switch req.Scope {
 	case "private":
 		baseQuery += fmt.Sprintf(" AND user_id = $%d AND agent_id = $%d", argIdx, argIdx+1)

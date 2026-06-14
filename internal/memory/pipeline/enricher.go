@@ -207,12 +207,12 @@ func (w *EnricherWorker) persistEnrichment(ctx context.Context, ev *MemoryEnrich
 
 	for _, entity := range enrichment.Entities {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO memory_entities (name, type, confidence, first_seen, last_seen, tenant_id, user_id)
-			VALUES ($1, $2, $3, NOW(), NOW(), $4, $5)
-			ON CONFLICT (name, type, tenant_id, user_id) DO UPDATE SET
-				confidence = GREATEST(memory_entities.confidence, EXCLUDED.confidence),
+			INSERT INTO entities (name, type, confidence, user_id, last_seen)
+			VALUES ($1, $2, $3, $4, NOW())
+			ON CONFLICT (name, type, user_id) DO UPDATE SET
+				confidence = GREATEST(entities.confidence, EXCLUDED.confidence),
 				last_seen = NOW()`,
-			entity.Name, entity.Type, entity.Confidence, ev.TenantID, ev.UserID)
+			entity.Name, entity.Type, entity.Confidence, ev.UserID)
 		if err != nil {
 			return fmt.Errorf("upsert entity %s: %w", entity.Name, err)
 		}

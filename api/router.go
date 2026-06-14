@@ -22,6 +22,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/llmgateway"
 	"github.com/byteBuilderX/stratum/internal/mcp"
 	"github.com/byteBuilderX/stratum/internal/memory"
+	"github.com/byteBuilderX/stratum/internal/memory/pipeline"
 	"github.com/byteBuilderX/stratum/internal/orchestrator"
 	"github.com/byteBuilderX/stratum/internal/skill"
 	"github.com/byteBuilderX/stratum/internal/textchunk"
@@ -175,6 +176,10 @@ func SetupRouter(
 	agentRegistry := agent.NewRegistry(db, logger)
 	if capGW != nil {
 		agentRegistry.SetCapGateway(capGW)
+	}
+	if db != nil {
+		memInjector := pipeline.NewMemoryInjector(db, logger)
+		agentRegistry.SetMemoryInjector(memInjector)
 	}
 	var execStore *agent.ExecutionStore
 	var chatStore agent.ChatStore

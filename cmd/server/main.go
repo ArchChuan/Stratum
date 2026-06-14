@@ -146,6 +146,7 @@ func main() {
 
 	// 3b. Memory Pipeline component
 	var memPipeline *mempipeline.Pipeline
+	var pipelineNC *nats.Conn
 	pipelineCfg := mempipeline.DefaultConfig()
 	pipelineCfg.Enabled = cfg.MemoryPipelineEnabled
 	pipelineCfg.NatsURL = cfg.NatsURL
@@ -161,6 +162,7 @@ func main() {
 				logger.Warn("memory-pipeline: NATS connect failed", zap.Error(err))
 				return nil
 			}
+			pipelineNC = nc
 			embedSvc := embedding.NewEmbeddingService(gateway, logger)
 			vectorAdapter := mempipeline.NewMilvusVectorAdapter(services.VectorStore)
 			memPipeline = mempipeline.New(pipelineCfg, pgPool.DB(), nc, embedSvc, vectorAdapter, gateway, logger)
@@ -169,6 +171,9 @@ func main() {
 		harnesspkg.WithStopFunc(func(ctx context.Context) error {
 			if memPipeline != nil {
 				memPipeline.Stop()
+			}
+			if pipelineNC != nil {
+				_ = pipelineNC.Drain()
 			}
 			return nil
 		}),

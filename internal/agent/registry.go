@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/byteBuilderX/stratum/internal/capgateway"
+	"github.com/byteBuilderX/stratum/internal/memory/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -23,9 +24,10 @@ var _ poolIface = (*pgxpool.Pool)(nil) // compile-time check
 
 // Registry persists Agent configs in PostgreSQL under per-tenant schemas.
 type Registry struct {
-	pool   poolIface
-	logger *zap.Logger
-	capGW  capgateway.CapabilityGateway
+	pool        poolIface
+	logger      *zap.Logger
+	capGW       capgateway.CapabilityGateway
+	memInjector *pipeline.MemoryInjector
 }
 
 // NewRegistry creates a Registry. pool must not be nil.
@@ -36,6 +38,11 @@ func NewRegistry(pool *pgxpool.Pool, logger *zap.Logger) *Registry {
 // SetCapGateway injects a CapabilityGateway so agents created via Get/GetAll have it wired.
 func (r *Registry) SetCapGateway(gw capgateway.CapabilityGateway) {
 	r.capGW = gw
+}
+
+// SetMemoryInjector injects a MemoryInjector so agents created via Get/GetAll have it wired.
+func (r *Registry) SetMemoryInjector(inj *pipeline.MemoryInjector) {
+	r.memInjector = inj
 }
 
 // execTenant runs fn in a transaction with search_path set to the tenant schema from ctx.
@@ -263,6 +270,9 @@ func (r *Registry) Get(ctx context.Context, id string) (Agent, bool) {
 	if r.capGW != nil {
 		a.SetCapGateway(r.capGW)
 	}
+	if r.memInjector != nil {
+		a.MemoryInjector = r.memInjector
+	}
 	return a, true
 }
 
@@ -313,6 +323,9 @@ func (r *Registry) GetAll(ctx context.Context) []Agent {
 			a := NewBaseAgent(&cfg, r.logger)
 			if r.capGW != nil {
 				a.SetCapGateway(r.capGW)
+			}
+			if r.memInjector != nil {
+				a.MemoryInjector = r.memInjector
 			}
 			agents = append(agents, a)
 		}
