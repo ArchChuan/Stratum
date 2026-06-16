@@ -52,7 +52,6 @@ func TestContracts(t *testing.T) {
 		t.Skip("no golden files: run `make record-contracts` first")
 	}
 	for _, f := range files {
-		f := f
 		t.Run(filepath.Base(f), func(t *testing.T) {
 			data, err := os.ReadFile(f)
 			if err != nil {
