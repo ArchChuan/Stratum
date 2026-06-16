@@ -44,8 +44,8 @@ func ProvisionTenantSchema(ctx context.Context, pool *pgxpool.Pool, tenantID str
 	}
 
 	for i, stmt := range splitStatements(tenantSchemaDDL) {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" || strings.HasPrefix(stmt, "--") {
+		stmt = stripSQLLineComments(strings.TrimSpace(stmt))
+		if stmt == "" {
 			continue
 		}
 		if _, err := conn.Exec(ctx, stmt); err != nil {
@@ -54,6 +54,20 @@ func ProvisionTenantSchema(ctx context.Context, pool *pgxpool.Pool, tenantID str
 	}
 
 	return nil
+}
+
+// stripSQLLineComments removes all `--` comment lines from a SQL statement block.
+// Required because splitStatements groups a comment + following statement into one chunk,
+// and the loop would skip the entire chunk if it starts with `--`.
+func stripSQLLineComments(stmt string) string {
+	lines := strings.Split(stmt, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), "--") {
+			kept = append(kept, line)
+		}
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 func splitStatements(sql string) []string {
@@ -65,6 +79,33 @@ func splitStatements(sql string) []string {
 		}
 	}
 	return result
+}
+
+const defaultTenantName = "默认租户"
+const defaultTenantSlug = "default"
+
+// EnsureDefaultTenant creates the global default tenant if one does not already exist.
+// Idempotent — checks the partial unique index (is_default = true) via SELECT first.
+func EnsureDefaultTenant(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) error {
+	var existing string
+	err := pool.QueryRow(ctx, `SELECT id FROM tenants WHERE is_default = true LIMIT 1`).Scan(&existing)
+	if err == nil {
+		logger.Info("default tenant already exists", zap.String("tenant_id", existing))
+		return nil
+	}
+
+	var id string
+	err = pool.QueryRow(ctx, `
+		INSERT INTO tenants (name, slug, plan, status, settings, is_default, created_at, updated_at)
+		VALUES ($1, $2, 'free', 'active', '{}'::jsonb, true, now(), now())
+		RETURNING id`,
+		defaultTenantName, defaultTenantSlug,
+	).Scan(&id)
+	if err != nil {
+		return fmt.Errorf("tenantdb: ensure default tenant: %w", err)
+	}
+	logger.Info("created default tenant", zap.String("tenant_id", id))
+	return nil
 }
 
 // ProvisionAllTenantSchemas iterates all tenants in the public.tenants table and

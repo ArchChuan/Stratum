@@ -37,4 +37,6 @@ const (
 	EnricherSummaryTokenThreshold = 4096
 	EnricherMaxInjectionTokens    = 500
 	EnricherTopEntities           = 10
+	EnricherSummaryMaxMessages    = 100 // max messages fetched per summary to avoid unbounded query
+	MemoryLongTermTopK            = 5
 )

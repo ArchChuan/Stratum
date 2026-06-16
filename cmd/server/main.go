@@ -7,8 +7,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
+
+	"encoding/json"
 
 	"github.com/joho/godotenv"
 
@@ -23,6 +26,7 @@ import (
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/pipeline"
 	"github.com/byteBuilderX/stratum/internal/migration"
 	"github.com/byteBuilderX/stratum/internal/orchestrator"
+	"github.com/byteBuilderX/stratum/internal/skill"
 	"github.com/byteBuilderX/stratum/internal/skillgateway"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -70,6 +74,11 @@ func main() {
 	// Run public schema migration
 	if err := migration.RunPublicSchema(cfg.PostgresURL, "internal/migration/sql", logger); err != nil {
 		logger.Fatal("migration failed", zap.Error(err))
+	}
+
+	// Ensure the global default tenant exists (idempotent).
+	if err := tenantdb.EnsureDefaultTenant(ctx, pgPool.DB(), logger); err != nil {
+		logger.Fatal("failed to ensure default tenant", zap.Error(err))
 	}
 
 	// Provision all existing tenant schemas — idempotent, picks up new tables added to tenant_schema.sql.
@@ -164,7 +173,24 @@ func main() {
 			}
 			pipelineNC = nc
 			embedSvc := embedding.NewEmbeddingService(gateway, logger)
-			vectorAdapter := mempipeline.NewMilvusVectorAdapter(services.VectorStore)
+			dimResolver := mempipeline.DimResolver(func(ctx context.Context, tenantID string) int {
+				var settingsJSON []byte
+				if err := pgPool.DB().QueryRow(ctx,
+					"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL",
+					tenantID,
+				).Scan(&settingsJSON); err != nil {
+					return 1536
+				}
+				var s map[string]interface{}
+				if err := json.Unmarshal(settingsJSON, &s); err != nil {
+					return 1536
+				}
+				if d, ok := s["embedding_dim"].(float64); ok && d > 0 {
+					return int(d)
+				}
+				return 1536
+			})
+			vectorAdapter := mempipeline.NewMilvusVectorAdapter(services.VectorStore).WithDimResolver(dimResolver)
 			memPipeline = mempipeline.New(pipelineCfg, pgPool.DB(), nc, embedSvc, vectorAdapter, gateway, logger)
 			return memPipeline.Start(ctx)
 		}),
@@ -195,6 +221,21 @@ func main() {
 	registry := orchestrator.NewRegistry(pgPool.DB())
 	skillRegistryComponent := harnesspkg.NewSimpleComponent("skill-registry", logger,
 		harnesspkg.WithStartFunc(func(ctx context.Context) error {
+			schemas, err := tenantdb.ListTenantSchemas(ctx, pgPool.DB())
+			if err != nil {
+				logger.Warn("skill registry: failed to list tenants", zap.Error(err))
+				return nil
+			}
+			codeExec := skill.NewCodeExecutor(skill.DefaultCodeExecutorConfig())
+			for _, schema := range schemas {
+				tenantID := strings.TrimPrefix(schema, "tenant_")
+				tc := &tenantdb.TenantContext{TenantID: tenantID}
+				tctx := tenantdb.WithTenant(ctx, tc)
+				if err := registry.LoadAll(tctx, gateway, logger, codeExec); err != nil {
+					logger.Warn("skill registry: failed to load skills for tenant",
+						zap.String("tenant_id", tenantID), zap.Error(err))
+				}
+			}
 			logger.Info("Skill registry initialized")
 			return nil
 		}),
@@ -264,7 +305,7 @@ func main() {
 	}
 
 	// 6. HTTP Server component
-	router := api.SetupRouter(cfg, logger, registry, gateway, pgPool.DB(), redisClient.Client(), capGW, skillAdapter)
+	router := api.SetupRouter(cfg, logger, registry, gateway, pgPool.DB(), redisClient.Client(), capGW, skillAdapter, memPipeline)
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           router,

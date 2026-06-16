@@ -23,6 +23,15 @@ func NewEmbeddingService(client llmgateway.EmbeddingClient, logger *zap.Logger) 
 	}
 }
 
+// NewEmbeddingServiceWithModel creates an EmbeddingService with a specific model name.
+func NewEmbeddingServiceWithModel(client llmgateway.EmbeddingClient, model string, logger *zap.Logger) *EmbeddingService {
+	return &EmbeddingService{
+		client: client,
+		model:  model,
+		logger: logger,
+	}
+}
+
 func (e *EmbeddingService) EmbedVector(ctx context.Context, text string) ([]float32, error) {
 	resp, err := e.client.CreateEmbeddings(ctx, &llmgateway.EmbeddingRequest{
 		Input: []string{text},
@@ -70,5 +79,12 @@ func (e *EmbeddingService) EmbedBatch(ctx context.Context, texts []string) ([][]
 }
 
 func (e *EmbeddingService) GetVectorDimension() int {
-	return 1536
+	switch e.model {
+	case "text-embedding-v2", "text-embedding-v3", "text-embedding-v4":
+		return 1024 // Qwen default
+	case "embedding-3":
+		return 2048 // Zhipu
+	default:
+		return 1536 // OpenAI text-embedding-3-small / ada-002
+	}
 }

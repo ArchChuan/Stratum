@@ -6,9 +6,11 @@ import (
 	"context"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/byteBuilderX/stratum/api/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -46,6 +48,7 @@ func SetupRouter(
 	rdb *goredis.Client,
 	capGW capgateway.CapabilityGateway,
 	skillAdapter capgateway.Adapter,
+	memPipeline *pipeline.Pipeline,
 ) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -83,6 +86,7 @@ func SetupRouter(
 				TokenStore:    tokenStore,
 				OnboardSvc:    onboardSvc,
 				Logger:        logger,
+				Pool:          db,
 				CallbackURL:   cfg.GitHubCallbackURL,
 				FrontendURL:   cfg.FrontendURL,
 				GlobalAdmin:   cfg.GlobalAdminGitHubLogin,
@@ -123,6 +127,7 @@ func SetupRouter(
 					tenantGroup.DELETE("/members/:user_id", tenantHandler.RemoveMember)
 					tenantGroup.GET("/settings", tenantHandler.GetSettings)
 					tenantGroup.PATCH("/settings", requireActive, tenantHandler.UpdateSettings)
+					tenantGroup.PATCH("/embed-model", requireActive, tenantHandler.SetEmbedModel)
 				}
 
 				// /tenant/list only needs JWT, not a specific tenant context.
@@ -148,7 +153,12 @@ func SetupRouter(
 	vectorStore := vectorstore.NewVectorStore(cfg.MilvusHost, cfg.MilvusPort, logger)
 	graphRAG := knowledge.NewGraphRAG(cfg.Neo4jURI, cfg.Neo4jUser, cfg.Neo4jPassword, logger)
 
-	embedSvc := embedding.NewEmbeddingService(gateway, logger)
+	var embedSvc *embedding.EmbeddingService
+	if gateway.HasEmbeddingClient() {
+		embedSvc = embedding.NewEmbeddingService(gateway, logger)
+	} else {
+		logger.Info("no global embedding client, will resolve per-tenant at runtime")
+	}
 	parser := document.NewParser(logger)
 	chunker := textchunk.NewChunker(logger)
 
@@ -165,6 +175,9 @@ func SetupRouter(
 
 	// Knowledge services
 	ingestSvc := knowledge.NewKnowledgeIngest(parser, chunker, embedSvc, vectorStore, graphRAG, logger)
+	if db != nil {
+		ingestSvc.SetEmbedResolver(buildKnowledgeEmbedResolver(db, gatewayCache, aesKey, logger))
+	}
 	ragService := knowledge.NewRAGService(embedSvc, vectorStore, graphRAG, logger)
 
 	// Handlers
@@ -178,8 +191,12 @@ func SetupRouter(
 		agentRegistry.SetCapGateway(capGW)
 	}
 	if db != nil {
-		memInjector := pipeline.NewMemoryInjector(db, logger)
+		memInjector := pipeline.NewMemoryInjector(db, logger, nil, vectorStore)
+		memInjector.SetEmbedResolver(buildEmbedResolver(db, gatewayCache, aesKey, logger))
 		agentRegistry.SetMemoryInjector(memInjector)
+		if memPipeline != nil {
+			memPipeline.SetEmbedResolver(buildEmbedResolver(db, gatewayCache, aesKey, logger))
+		}
 	}
 	var execStore *agent.ExecutionStore
 	var chatStore agent.ChatStore
@@ -301,6 +318,7 @@ func parseRSAPrivateKey(pemStr string) (*rsa.PrivateKey, error) {
 	if pemStr == "" {
 		return nil, fmt.Errorf("JWT_PRIVATE_KEY_PEM is empty")
 	}
+	pemStr = strings.ReplaceAll(pemStr, `\n`, "\n")
 	block, _ := pem.Decode([]byte(pemStr))
 	if block == nil {
 		return nil, fmt.Errorf("failed to decode PEM block")
@@ -310,4 +328,152 @@ func parseRSAPrivateKey(pemStr string) (*rsa.PrivateKey, error) {
 		return nil, fmt.Errorf("parse RSA key: %w", err)
 	}
 	return key, nil
+}
+
+// buildEmbedResolver creates a per-tenant EmbedServiceResolver that resolves
+// embedding capability from tenant DB settings via the gateway cache.
+func buildEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatewayCache, aesKey [32]byte, logger *zap.Logger) pipeline.EmbedServiceResolver {
+	return func(ctx context.Context, tenantID string) pipeline.EmbedClient {
+		// Read settings first so embed_model is available on both cache-hit and miss paths.
+		var settingsJSON []byte
+		if err := db.QueryRow(ctx,
+			"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL",
+			tenantID,
+		).Scan(&settingsJSON); err != nil {
+			return nil
+		}
+		var settings map[string]interface{}
+		if err := json.Unmarshal(settingsJSON, &settings); err != nil {
+			return nil
+		}
+		embedModel, _ := settings["embed_model"].(string)
+
+		if gw, _, ok := cache.Get(tenantID); ok && gw.HasEmbeddingClient() {
+			m := embedModel
+			if m == "" {
+				m = gw.DefaultEmbeddingModel()
+			}
+			return embedding.NewEmbeddingServiceWithModel(gw, m, logger)
+		}
+
+		apiKeysRaw, ok := settings["llm_api_keys"].(map[string]interface{})
+		if !ok || len(apiKeysRaw) == 0 {
+			return nil
+		}
+
+		decrypted := make(map[string]string, len(apiKeysRaw))
+		for provider, enc := range apiKeysRaw {
+			encStr, ok := enc.(string)
+			if !ok || encStr == "" {
+				continue
+			}
+			plain, err := pkgcrypto.Decrypt(aesKey, encStr)
+			if err != nil {
+				continue
+			}
+			decrypted[provider] = plain
+		}
+		if len(decrypted) == 0 {
+			return nil
+		}
+
+		gw := llmgateway.NewGateway().WithLogger(logger)
+		if qwenKey, ok := decrypted["qwen"]; ok {
+			qwenClient := llmgateway.NewQwenClient(qwenKey, logger)
+			gw.RegisterClient(llmgateway.ProviderQwen, qwenClient)
+			gw.RegisterEmbeddingClient(llmgateway.ProviderQwen, qwenClient)
+		}
+		if zhipuKey, ok := decrypted["zhipu"]; ok {
+			zhipuClient := llmgateway.NewZhipuClient(zhipuKey, logger)
+			gw.RegisterClient(llmgateway.ProviderZhipu, zhipuClient)
+			gw.RegisterEmbeddingClient(llmgateway.ProviderZhipu, zhipuClient)
+		}
+		for _, pref := range []llmgateway.ModelProvider{llmgateway.ProviderQwen, llmgateway.ProviderZhipu} {
+			if _, ok := decrypted[string(pref)]; ok {
+				gw.SetDefault(pref)
+				break
+			}
+		}
+
+		cache.Set(tenantID, gw, decrypted, constants.GatewayCacheTTL)
+		m := embedModel
+		if m == "" {
+			m = gw.DefaultEmbeddingModel()
+		}
+		return embedding.NewEmbeddingServiceWithModel(gw, m, logger)
+	}
+}
+
+// buildKnowledgeEmbedResolver returns a knowledge.EmbedResolver that resolves
+// the embedding client for a given tenant, honouring the workspace-level model.
+func buildKnowledgeEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatewayCache, aesKey [32]byte, logger *zap.Logger) knowledge.EmbedResolver {
+	return func(ctx context.Context, tenantID, model string) knowledge.EmbedClient {
+		// Try gateway cache first.
+		if gw, _, ok := cache.Get(tenantID); ok && gw.HasEmbeddingClient() {
+			m := model
+			if m == "" {
+				m = gw.DefaultEmbeddingModel()
+			}
+			return embedding.NewEmbeddingServiceWithModel(gw, m, logger)
+		}
+
+		// Fall back to tenant DB settings to build gateway.
+		var settingsJSON []byte
+		if err := db.QueryRow(ctx,
+			"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL",
+			tenantID,
+		).Scan(&settingsJSON); err != nil {
+			return nil
+		}
+		var settings map[string]interface{}
+		if err := json.Unmarshal(settingsJSON, &settings); err != nil {
+			return nil
+		}
+
+		apiKeysRaw, ok := settings["llm_api_keys"].(map[string]interface{})
+		if !ok || len(apiKeysRaw) == 0 {
+			return nil
+		}
+
+		decrypted := make(map[string]string, len(apiKeysRaw))
+		for provider, enc := range apiKeysRaw {
+			encStr, ok := enc.(string)
+			if !ok || encStr == "" {
+				continue
+			}
+			plain, err := pkgcrypto.Decrypt(aesKey, encStr)
+			if err != nil {
+				continue
+			}
+			decrypted[provider] = plain
+		}
+		if len(decrypted) == 0 {
+			return nil
+		}
+
+		gw := llmgateway.NewGateway().WithLogger(logger)
+		if qwenKey, ok := decrypted["qwen"]; ok {
+			qwenClient := llmgateway.NewQwenClient(qwenKey, logger)
+			gw.RegisterClient(llmgateway.ProviderQwen, qwenClient)
+			gw.RegisterEmbeddingClient(llmgateway.ProviderQwen, qwenClient)
+		}
+		if zhipuKey, ok := decrypted["zhipu"]; ok {
+			zhipuClient := llmgateway.NewZhipuClient(zhipuKey, logger)
+			gw.RegisterClient(llmgateway.ProviderZhipu, zhipuClient)
+			gw.RegisterEmbeddingClient(llmgateway.ProviderZhipu, zhipuClient)
+		}
+		for _, pref := range []llmgateway.ModelProvider{llmgateway.ProviderQwen, llmgateway.ProviderZhipu} {
+			if _, ok := decrypted[string(pref)]; ok {
+				gw.SetDefault(pref)
+				break
+			}
+		}
+
+		cache.Set(tenantID, gw, decrypted, constants.GatewayCacheTTL)
+		m := model
+		if m == "" {
+			m = gw.DefaultEmbeddingModel()
+		}
+		return embedding.NewEmbeddingServiceWithModel(gw, m, logger)
+	}
 }

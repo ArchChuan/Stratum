@@ -78,7 +78,12 @@ func (h *SkillHandler) CreateSkill(c *gin.Context) {
 	case "llm":
 		s = skill.NewLLMSkill(id, req.Name, req.Description, req.SystemPrompt, req.Model, req.Temperature, req.MaxTokens, h.gateway, h.logger)
 	case "http":
-		s = skill.NewHTTPSkill(id, req.Name, req.Description, req.URL, req.Method, req.Headers, req.BodyTemplate, req.TimeoutSec)
+		httpSkill, err := skill.NewHTTPSkill(id, req.Name, req.Description, req.URL, req.Method, req.Headers, req.BodyTemplate, req.TimeoutSec)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
+			return
+		}
+		s = httpSkill
 	default:
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{
 			Code:    http.StatusBadRequest,
@@ -185,6 +190,10 @@ func (h *SkillHandler) UpdateSkill(c *gin.Context) {
 		hs, ok := s.(*skill.HTTPSkill)
 		if !ok {
 			c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: "type mismatch"})
+			return
+		}
+		if err := skill.ValidateSkillURL(req.URL); err != nil {
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
 			return
 		}
 		hs.Name = req.Name

@@ -31,7 +31,7 @@ type RecallResult []RecallEntry
 // RecallToolDefinition returns the tool schema for recall_memory.
 func RecallToolDefinition() map[string]any {
 	return map[string]any{
-		"name":        "recall_memory",
+		"name":        "stratum_recall_memory",
 		"description": "Search long-term memory for relevant past interactions, entities, and context. Use when you need to recall information from previous conversations.",
 		"input_schema": map[string]any{
 			"type": "object",
@@ -118,7 +118,10 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID st
 		args = append(args, userID)
 		argIdx++
 	case "shared":
-		// no additional filter
+		// shared still scopes to the requesting user — avoids cross-user leakage within tenant
+		baseQuery += fmt.Sprintf(" AND user_id = $%d", argIdx)
+		args = append(args, userID)
+		argIdx++
 	}
 
 	baseQuery += " ORDER BY importance DESC, created_at DESC"

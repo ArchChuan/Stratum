@@ -9,6 +9,7 @@ import (
 	"net"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/milvus-io/milvus-sdk-go/v2/client"
@@ -17,11 +18,13 @@ import (
 )
 
 type VectorStore struct {
-	client client.Client
-	host   string
-	port   string
-	logger *zap.Logger
-	dim    int
+	mu       sync.RWMutex
+	client   client.Client
+	host     string
+	port     string
+	logger   *zap.Logger
+	dim      int
+	dimCache sync.Map // collectionName -> int
 }
 
 func NewVectorStore(host, port string, logger *zap.Logger) *VectorStore {
@@ -33,11 +36,10 @@ func NewVectorStore(host, port string, logger *zap.Logger) *VectorStore {
 	}
 }
 
-func (vs *VectorStore) Connect(ctx context.Context) error {
+func (vs *VectorStore) doConnect(ctx context.Context) error {
 	vs.logger.Info("connecting to Milvus", zap.String("host", vs.host), zap.String("port", vs.port))
 	milvusAddr := fmt.Sprintf("%s:%s", vs.host, vs.port)
 
-	// First check if the port is reachable using net.Dialer with timeout
 	dialer := &net.Dialer{Timeout: 2 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", milvusAddr)
 	if err != nil {
@@ -46,7 +48,6 @@ func (vs *VectorStore) Connect(ctx context.Context) error {
 	}
 	conn.Close() //nolint:errcheck,gosec
 
-	// Now try to create gRPC client
 	type result struct {
 		client client.Client
 		err    error
@@ -73,8 +74,37 @@ func (vs *VectorStore) Connect(ctx context.Context) error {
 	}
 }
 
+func (vs *VectorStore) Connect(ctx context.Context) error {
+	return vs.ensureConnected(ctx)
+}
+
+func (vs *VectorStore) ensureConnected(ctx context.Context) error {
+	vs.mu.RLock()
+	if vs.client != nil {
+		vs.mu.RUnlock()
+		return nil
+	}
+	vs.mu.RUnlock()
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+	if vs.client != nil {
+		return nil
+	}
+	return vs.doConnect(ctx)
+}
+
 func (vs *VectorStore) CreateCollection(ctx context.Context, collectionName string) error {
-	vs.logger.Info("creating collection", zap.String("collection", collectionName))
+	return vs.CreateCollectionWithDim(ctx, collectionName, vs.dim)
+}
+
+// CreateCollectionWithDim creates a collection with a custom vector dimension.
+// The schema includes a user_id field for per-user filtering.
+// dim is cached in dimCache so Insert can pick it up without a signature change.
+func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionName string, dim int) error {
+	if err := vs.ensureConnected(ctx); err != nil {
+		return fmt.Errorf("milvus not available: %w", err)
+	}
+	vs.logger.Info("creating collection", zap.String("collection", collectionName), zap.Int("dim", dim))
 
 	hasCollection, err := vs.client.HasCollection(ctx, collectionName)
 	if err != nil {
@@ -84,12 +114,13 @@ func (vs *VectorStore) CreateCollection(ctx context.Context, collectionName stri
 
 	if hasCollection {
 		vs.logger.Info("collection already exists", zap.String("collection", collectionName))
+		vs.dimCache.Store(collectionName, dim)
 		return nil
 	}
 
 	schema := &entity.Schema{
 		CollectionName: collectionName,
-		Description:    "RAG knowledge collection",
+		Description:    "memory collection",
 		AutoID:         false,
 		Fields: []*entity.Field{
 			{
@@ -97,6 +128,11 @@ func (vs *VectorStore) CreateCollection(ctx context.Context, collectionName stri
 				DataType:   entity.FieldTypeVarChar,
 				PrimaryKey: true,
 				TypeParams: map[string]string{"max_length": "65535"},
+			},
+			{
+				Name:       "user_id",
+				DataType:   entity.FieldTypeVarChar,
+				TypeParams: map[string]string{"max_length": "128"},
 			},
 			{
 				Name:       "content",
@@ -116,7 +152,7 @@ func (vs *VectorStore) CreateCollection(ctx context.Context, collectionName stri
 				Name:     "vector",
 				DataType: entity.FieldTypeFloatVector,
 				TypeParams: map[string]string{
-					"dim": fmt.Sprintf("%d", vs.dim),
+					"dim": fmt.Sprintf("%d", dim),
 				},
 			},
 		},
@@ -126,7 +162,8 @@ func (vs *VectorStore) CreateCollection(ctx context.Context, collectionName stri
 		vs.logger.Error("failed to create collection", zap.String("collection", collectionName), zap.Error(err))
 		return fmt.Errorf("failed to create collection %s: %w", collectionName, err)
 	}
-	vs.logger.Info("collection created successfully")
+	vs.dimCache.Store(collectionName, dim)
+	vs.logger.Info("collection created successfully", zap.String("collection", collectionName))
 	return nil
 }
 
@@ -134,9 +171,18 @@ func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs [
 	if len(docs) == 0 {
 		return nil
 	}
+	if err := vs.ensureConnected(ctx); err != nil {
+		return fmt.Errorf("milvus not available: %w", err)
+	}
 	vs.logger.Debug("inserting vectors", zap.String("collection", collectionName), zap.Int("count", len(docs)))
 
+	dim := vs.dim
+	if cached, ok := vs.dimCache.Load(collectionName); ok {
+		dim = cached.(int)
+	}
+
 	ids := make([]string, len(docs))
+	userIDs := make([]string, len(docs))
 	contents := make([]string, len(docs))
 	sources := make([]string, len(docs))
 	chunkIndices := make([]int64, len(docs))
@@ -144,6 +190,7 @@ func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs [
 
 	for i, doc := range docs {
 		ids[i] = doc.ID
+		userIDs[i] = doc.UserID
 		contents[i] = doc.Content
 		sources[i] = doc.SourceDocument
 		chunkIndices[i] = doc.ChunkIndex
@@ -151,12 +198,13 @@ func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs [
 	}
 
 	idCol := entity.NewColumnVarChar("id", ids)
+	userIDCol := entity.NewColumnVarChar("user_id", userIDs)
 	contentCol := entity.NewColumnVarChar("content", contents)
 	sourceCol := entity.NewColumnVarChar("source_document", sources)
 	chunkIdxCol := entity.NewColumnInt64("chunk_index", chunkIndices)
-	vectorCol := entity.NewColumnFloatVector("vector", vs.dim, vectors)
+	vectorCol := entity.NewColumnFloatVector("vector", dim, vectors)
 
-	_, err := vs.client.Insert(ctx, collectionName, "", idCol, contentCol, sourceCol, chunkIdxCol, vectorCol)
+	_, err := vs.client.Insert(ctx, collectionName, "", idCol, userIDCol, contentCol, sourceCol, chunkIdxCol, vectorCol)
 	if err != nil {
 		vs.logger.Error("failed to insert vectors", zap.Error(err))
 		return fmt.Errorf("failed to insert vectors: %w", err)
@@ -166,6 +214,15 @@ func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs [
 }
 
 func (vs *VectorStore) Search(ctx context.Context, collectionName string, queryVector []float32, topK int) ([]SearchResult, error) {
+	return vs.SearchWithFilter(ctx, collectionName, queryVector, topK, "")
+}
+
+// SearchWithFilter performs vector search with an optional Milvus boolean expression filter.
+// Pass expression="" for unfiltered search. Example: `user_id == "abc"` for per-user isolation.
+func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName string, queryVector []float32, topK int, expression string) ([]SearchResult, error) {
+	if err := vs.ensureConnected(ctx); err != nil {
+		return nil, fmt.Errorf("milvus not available: %w", err)
+	}
 	vs.logger.Debug("searching vectors", zap.String("collection", collectionName), zap.Int("topK", topK))
 
 	if err := vs.client.LoadCollection(ctx, collectionName, false); err != nil {
@@ -189,7 +246,7 @@ func (vs *VectorStore) Search(ctx context.Context, collectionName string, queryV
 		ctx,
 		collectionName,
 		[]string{}, // partition names
-		"",         // expression (empty means no filtering)
+		expression,
 		[]string{"id", "content", "source_document", "chunk_index"}, // output fields
 		vectors,
 		"vector",  // vector field name
@@ -280,6 +337,9 @@ func (vs *VectorStore) Search(ctx context.Context, collectionName string, queryV
 }
 
 func (vs *VectorStore) Flush(ctx context.Context, collectionName string) error {
+	if err := vs.ensureConnected(ctx); err != nil {
+		return fmt.Errorf("milvus not available: %w", err)
+	}
 	vs.logger.Debug("flushing collection", zap.String("collection", collectionName))
 	if err := vs.client.Flush(ctx, collectionName, false); err != nil {
 		vs.logger.Error("failed to flush collection", zap.Error(err))
@@ -288,7 +348,33 @@ func (vs *VectorStore) Flush(ctx context.Context, collectionName string) error {
 	return nil
 }
 
+// DeleteByDocumentIDs removes all vectors whose source_document matches any of
+// the given document IDs. Used when deleting a workspace to clean up vectors.
+func (vs *VectorStore) DeleteByDocumentIDs(ctx context.Context, collectionName string, docIDs []string) error {
+	if len(docIDs) == 0 {
+		return nil
+	}
+	if err := vs.ensureConnected(ctx); err != nil {
+		return fmt.Errorf("milvus not available: %w", err)
+	}
+	quoted := make([]string, len(docIDs))
+	for i, id := range docIDs {
+		quoted[i] = fmt.Sprintf("%q", id)
+	}
+	expr := fmt.Sprintf("source_document in [%s]", strings.Join(quoted, ","))
+	vs.logger.Info("deleting vectors by document IDs",
+		zap.String("collection", collectionName),
+		zap.Int("doc_count", len(docIDs)))
+	if err := vs.client.Delete(ctx, collectionName, "", expr); err != nil {
+		return fmt.Errorf("failed to delete vectors: %w", err)
+	}
+	return nil
+}
+
 func (vs *VectorStore) DeleteCollection(ctx context.Context, collectionName string) error {
+	if err := vs.ensureConnected(ctx); err != nil {
+		return fmt.Errorf("milvus not available: %w", err)
+	}
 	vs.logger.Info("deleting collection", zap.String("collection", collectionName))
 	if err := vs.client.DropCollection(ctx, collectionName); err != nil {
 		vs.logger.Error("failed to delete collection", zap.String("collection", collectionName), zap.Error(err))
@@ -301,6 +387,9 @@ func (vs *VectorStore) DeleteCollection(ctx context.Context, collectionName stri
 // KeywordSearch performs TF-IDF based keyword search on the collection.
 // Fetches all documents and ranks them by relevance to query terms.
 func (vs *VectorStore) KeywordSearch(ctx context.Context, collectionName string, query string, topK int) ([]SearchResult, error) {
+	if err := vs.ensureConnected(ctx); err != nil {
+		return nil, fmt.Errorf("milvus not available: %w", err)
+	}
 	vs.logger.Debug("keyword searching", zap.String("collection", collectionName), zap.String("query", query))
 
 	if err := vs.client.LoadCollection(ctx, collectionName, false); err != nil {
@@ -546,15 +635,20 @@ func tokenize(text string) []string {
 }
 
 func (vs *VectorStore) Close() error {
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
 	vs.logger.Info("closing Milvus connection")
 	if vs.client != nil {
-		return vs.client.Close()
+		err := vs.client.Close()
+		vs.client = nil
+		return err
 	}
 	return nil
 }
 
 type DocumentChunk struct {
 	ID             string
+	UserID         string
 	Content        string
 	SourceDocument string
 	ChunkIndex     int64

@@ -1,14 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import {
-  Form, Input, Select, Button, Typography, message, Tag, InputNumber,
+  Form, Input, Select, Button, Typography, Tag, InputNumber,
 } from 'antd';
 import {
   ArrowLeftOutlined, ThunderboltOutlined, CodeOutlined, RobotOutlined, GlobalOutlined,
 } from '@ant-design/icons';
-
-import { createSkill, getAvailableModels } from '../services/api';
-import { useNavigate } from 'react-router-dom';
 import { SKILL_DEFAULT_TEMPERATURE, SKILL_DEFAULT_MAX_TOKENS, SKILL_DEFAULT_TIMEOUT_SEC } from '../constants';
+import useCreateSkillPage from '../hooks/useCreateSkillPage';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -47,76 +45,11 @@ const CODE_EXAMPLES = {
 }`,
 };
 
-const FALLBACK_MODELS = ['glm-4', 'glm-4-flash', 'qwen-plus', 'qwen-turbo'];
-
 const CreateSkillPage = () => {
-  const [form] = Form.useForm();
-  const [loading, setLoading] = useState(false);
-  const [availableModels, setAvailableModels] = useState([]);
-  const [modelsLoading, setModelsLoading] = useState(true);
-  const navigate = useNavigate();
-  const skillType = Form.useWatch('type', form);
-  const language = Form.useWatch('language', form);
-
-  useEffect(() => {
-    let cancelled = false;
-    getAvailableModels()
-      .then((res) => {
-        if (!cancelled) {
-          const models = res.data.models?.length > 0 ? res.data.models : FALLBACK_MODELS;
-          setAvailableModels(models);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setAvailableModels(FALLBACK_MODELS);
-      })
-      .finally(() => {
-        if (!cancelled) setModelsLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, []);
-
-  const onFinish = async (values) => {
-    // parse headers JSON string → object for http type
-    if (values.type === 'http' && values.headersJson) {
-      try {
-        values.headers = JSON.parse(values.headersJson);
-      } catch {
-        message.error('请求头 JSON 格式有误');
-        return;
-      }
-      delete values.headersJson;
-    }
-    setLoading(true);
-    try {
-      await createSkill(values);
-      message.success(`技能 "${values.name}" 创建成功`);
-      navigate('/skills');
-    } catch (err) {
-      if (err.response?.status === 400) {
-        const analysisErrors = err.response?.data?.analysis_errors;
-        if (analysisErrors?.length) {
-          message.error({
-            content: (
-              <div>
-                <div>代码安全检测失败：</div>
-                {analysisErrors.map((e, i) => (
-                  <div key={i} style={{ color: '#ff4d4f', fontSize: 12 }}>• {e}</div>
-                ))}
-              </div>
-            ),
-            duration: 8,
-          });
-        } else {
-          message.error(err.response?.data?.error || '创建失败');
-        }
-      } else if (err.response?.status !== 403) {
-        message.error(err.response?.data?.error || '创建失败');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+  const {
+    form, loading, availableModels, modelsLoading,
+    skillType, language, navigate, onFinish,
+  } = useCreateSkillPage();
 
   const selectedMeta = TYPE_META[skillType] || TYPE_META.code;
 

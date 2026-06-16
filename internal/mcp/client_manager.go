@@ -62,20 +62,27 @@ func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig
 	argsJSON, _ := json.Marshal(cfg.Args)
 	envJSON, _ := json.Marshal(cfg.Env)
 	capsJSON, _ := json.Marshal(cfg.Capabilities)
+	hdrsJSON, _ := json.Marshal(cfg.Headers)
+	authJSON, _ := json.Marshal(cfg.Auth)
+	retryJSON, _ := json.Marshal(cfg.Retry)
 	timeoutSec := int(cfg.Timeout.Seconds())
 	if timeoutSec <= 0 {
 		timeoutSec = 30
 	}
 	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO mcp_configs (id, name, transport, command, url, args, env, capabilities, timeout_sec, enabled, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, NOW())
+			INSERT INTO mcp_configs
+				(id, name, transport, command, url, args, env, capabilities, timeout_sec,
+				 enabled, version, headers, auth_config, retry_config, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $11, $12, $13, NOW())
 			ON CONFLICT (id) DO UPDATE SET
 				name=$2, transport=$3, command=$4, url=$5,
 				args=$6, env=$7, capabilities=$8, timeout_sec=$9,
-				enabled=true, updated_at=NOW()`,
+				enabled=true, version=$10, headers=$11, auth_config=$12, retry_config=$13,
+				updated_at=NOW()`,
 			cfg.ID, cfg.Name, cfg.Transport, cfg.Command, cfg.URL,
-			argsJSON, envJSON, capsJSON, timeoutSec)
+			argsJSON, envJSON, capsJSON, timeoutSec,
+			cfg.Version, hdrsJSON, authJSON, retryJSON)
 		return err
 	})
 	if err != nil {
@@ -303,21 +310,26 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 	}
 
 	type row struct {
-		id         string
-		name       string
-		transport  string
-		command    string
-		url        string
-		args       []byte
-		env        []byte
-		caps       []byte
-		timeoutSec int
+		id          string
+		name        string
+		transport   string
+		command     string
+		url         string
+		version     string
+		args        []byte
+		env         []byte
+		caps        []byte
+		headers     []byte
+		authConfig  []byte
+		retryConfig []byte
+		timeoutSec  int
 	}
 
 	var rows []row
 	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
 		pgRows, err := tx.Query(ctx, `
-			SELECT id, name, transport, command, url, args, env, capabilities, timeout_sec
+			SELECT id, name, transport, command, url, version,
+			       args, env, capabilities, headers, auth_config, retry_config, timeout_sec
 			FROM mcp_configs WHERE enabled = true`)
 		if err != nil {
 			return fmt.Errorf("restore mcp_configs query: %w", err)
@@ -325,8 +337,8 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 		defer pgRows.Close()
 		for pgRows.Next() {
 			var r row
-			if err := pgRows.Scan(&r.id, &r.name, &r.transport, &r.command, &r.url,
-				&r.args, &r.env, &r.caps, &r.timeoutSec); err != nil {
+			if err := pgRows.Scan(&r.id, &r.name, &r.transport, &r.command, &r.url, &r.version,
+				&r.args, &r.env, &r.caps, &r.headers, &r.authConfig, &r.retryConfig, &r.timeoutSec); err != nil {
 				return fmt.Errorf("restore mcp_configs scan: %w", err)
 			}
 			rows = append(rows, r)
@@ -341,9 +353,15 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 		var args []string
 		var env map[string]string
 		var caps []string
+		var headers map[string]string
+		var auth *MCPAuthConfig
+		var retry *MCPRetryConfig
 		_ = json.Unmarshal(r.args, &args)
 		_ = json.Unmarshal(r.env, &env)
 		_ = json.Unmarshal(r.caps, &caps)
+		_ = json.Unmarshal(r.headers, &headers)
+		_ = json.Unmarshal(r.authConfig, &auth)
+		_ = json.Unmarshal(r.retryConfig, &retry)
 
 		cfg := &MCPServerConfig{
 			ID:           r.id,
@@ -351,9 +369,13 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 			Transport:    r.transport,
 			Command:      r.command,
 			URL:          r.url,
+			Version:      r.version,
 			Args:         args,
 			Env:          env,
 			Capabilities: caps,
+			Headers:      headers,
+			Auth:         auth,
+			Retry:        retry,
 			Timeout:      time.Duration(r.timeoutSec) * time.Second,
 		}
 

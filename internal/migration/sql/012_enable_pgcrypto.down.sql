@@ -1,0 +1,2 @@
+-- pgcrypto is left installed intentionally; other extensions or functions may depend on it.
+-- gen_uuid_v7() is dropped by 011_uuidv7_func.down.sql when that migration is rolled back.

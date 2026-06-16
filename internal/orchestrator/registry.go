@@ -9,11 +9,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/llmgateway"
 	"github.com/byteBuilderX/stratum/internal/skill"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 )
 
 type configurable interface {
@@ -128,4 +130,111 @@ func (r *Registry) Remove(ctx context.Context, id string) error {
 	delete(r.createdAt, id)
 	r.mu.Unlock()
 	return nil
+}
+
+// LoadAll restores all skills persisted in the current tenant's schema into the in-memory registry.
+// Must be called with a ctx that has a valid TenantContext.
+func (r *Registry) LoadAll(ctx context.Context, gw *llmgateway.Gateway, logger *zap.Logger, codeExec *skill.CodeExecutor) error {
+	if r.pool == nil {
+		return nil
+	}
+	type row struct {
+		id          string
+		name        string
+		description string
+		skillType   string
+		config      []byte
+		createdAt   time.Time
+	}
+	var rows []row
+	if err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+		pgrows, err := tx.Query(ctx, `SELECT id, name, description, type, config, created_at FROM skills`)
+		if err != nil {
+			return err
+		}
+		defer pgrows.Close()
+		for pgrows.Next() {
+			var ro row
+			if err := pgrows.Scan(&ro.id, &ro.name, &ro.description, &ro.skillType, &ro.config, &ro.createdAt); err != nil {
+				return err
+			}
+			rows = append(rows, ro)
+		}
+		return pgrows.Err()
+	}); err != nil {
+		return fmt.Errorf("registry.LoadAll: %w", err)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ro := range rows {
+		var cfg map[string]any
+		_ = json.Unmarshal(ro.config, &cfg)
+		if cfg == nil {
+			cfg = map[string]any{}
+		}
+		var s skill.Skill
+		switch ro.skillType {
+		case "http":
+			headers := map[string]string{}
+			if h, ok := cfg["headers"].(map[string]any); ok {
+				for k, v := range h {
+					if sv, ok := v.(string); ok {
+						headers[k] = sv
+					}
+				}
+			}
+			hs, err := skill.NewHTTPSkill(
+				ro.id, ro.name, ro.description,
+				stringVal(cfg, "url"), stringVal(cfg, "method"),
+				headers, stringVal(cfg, "body_template"), intVal(cfg, "timeout_sec"),
+			)
+			if err != nil {
+				logger.Warn("LoadAll: skip invalid http skill", zap.String("id", ro.id), zap.Error(err))
+				continue
+			}
+			s = hs
+		case "llm":
+			s = skill.NewLLMSkill(
+				ro.id, ro.name, ro.description,
+				stringVal(cfg, "system_prompt"), stringVal(cfg, "model"),
+				float32Val(cfg, "temperature"), intVal(cfg, "max_tokens"),
+				gw, logger,
+			)
+		case "code":
+			s = skill.NewCodeSkillWithExecutor(
+				ro.id, ro.name, ro.description,
+				stringVal(cfg, "code"), stringVal(cfg, "language"),
+				codeExec,
+			)
+		default:
+			logger.Warn("LoadAll: unknown skill type", zap.String("id", ro.id), zap.String("type", ro.skillType))
+			continue
+		}
+		r.skills[ro.id] = s
+		r.createdAt[ro.id] = ro.createdAt
+	}
+	return nil
+}
+
+func stringVal(m map[string]any, key string) string {
+	v, _ := m[key].(string)
+	return v
+}
+
+func intVal(m map[string]any, key string) int {
+	switch v := m[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return 0
+}
+
+func float32Val(m map[string]any, key string) float32 {
+	if v, ok := m[key].(float64); ok {
+		return float32(v)
+	}
+	return 0
 }

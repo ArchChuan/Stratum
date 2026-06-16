@@ -76,7 +76,7 @@ func (e *Executor) Execute(ctx ExecutionContext) *ExecutionResult {
 
 	timeout := ctx.Timeout
 	if timeout == 0 {
-		timeout = 30 * time.Second
+		timeout = DefaultSkillTimeout
 	}
 
 	select {

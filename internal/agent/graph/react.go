@@ -2,10 +2,12 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/capgateway"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
 
@@ -19,6 +21,7 @@ const (
 type ReActState struct {
 	TenantID       string
 	TraceID        string
+	ConversationID string
 	LLMAPIKeys     map[string]string
 	Model          string
 	AvailableTools []capgateway.ToolDefinition
@@ -72,14 +75,27 @@ func makeLLMNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFun
 		})
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
-			logger.Error("react.llm",
-				zap.String("trace_id", s.TraceID),
-				zap.String("tenant_id", s.TenantID),
-				zap.String("model", s.Model),
-				zap.Int("step", s.Steps+1),
-				zap.Int64("latency_ms", latencyMs),
-				zap.Error(err),
-			)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				logger.Info("react.llm",
+					zap.String("trace_id", s.TraceID),
+					zap.String("tenant_id", s.TenantID),
+					zap.String("conversation_id", s.ConversationID),
+					zap.String("model", s.Model),
+					zap.Int("step", s.Steps+1),
+					zap.Int64("latency_ms", latencyMs),
+					zap.String("error", "context canceled"),
+				)
+			} else {
+				logger.Error("react.llm",
+					zap.String("trace_id", s.TraceID),
+					zap.String("tenant_id", s.TenantID),
+					zap.String("conversation_id", s.ConversationID),
+					zap.String("model", s.Model),
+					zap.Int("step", s.Steps+1),
+					zap.Int64("latency_ms", latencyMs),
+					zap.Error(err),
+				)
+			}
 			return s, fmt.Errorf("react llm node: %w", err)
 		}
 		s.Steps++
@@ -87,6 +103,7 @@ func makeLLMNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFun
 		logger.Info("react.llm",
 			zap.String("trace_id", s.TraceID),
 			zap.String("tenant_id", s.TenantID),
+			zap.String("conversation_id", s.ConversationID),
 			zap.String("model", s.Model),
 			zap.Int("step", s.Steps),
 			zap.Int("tokens", resp.Usage.Total),
@@ -120,9 +137,9 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 			toolStart := time.Now()
 			var content string
 			switch tc.Name {
-			case "search_knowledge":
+			case "stratum_search_knowledge":
 				if s.RAGSearchFn == nil {
-					content = "error: search_knowledge tool not configured"
+					content = "error: stratum_search_knowledge tool not configured"
 				} else {
 					var workspaces []string
 					if raw, ok := tc.Arguments["workspaces"].([]interface{}); ok {
@@ -136,8 +153,8 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 					topK := 5
 					if v, ok := tc.Arguments["top_k"].(float64); ok {
 						topK = int(v)
-						if topK > 20 {
-							topK = 20
+						if topK > constants.MaxRAGTopK {
+							topK = constants.MaxRAGTopK
 						}
 					}
 					var ragErr error
@@ -150,12 +167,13 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 				logger.Info("react.tool",
 					zap.String("trace_id", s.TraceID),
 					zap.String("tenant_id", s.TenantID),
+					zap.String("conversation_id", s.ConversationID),
 					zap.String("tool_name", tc.Name),
 					zap.Int64("latency_ms", toolLatencyMs),
 				)
-			case "recall_memory":
+			case "stratum_recall_memory":
 				if s.RecallMemoryFn == nil {
-					content = "error: recall_memory tool not configured"
+					content = "error: stratum_recall_memory tool not configured"
 				} else {
 					var recallErr error
 					content, recallErr = s.RecallMemoryFn(ctx, tc.Arguments)
@@ -167,6 +185,7 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 				logger.Info("react.tool",
 					zap.String("trace_id", s.TraceID),
 					zap.String("tenant_id", s.TenantID),
+					zap.String("conversation_id", s.ConversationID),
 					zap.String("tool_name", tc.Name),
 					zap.Int64("latency_ms", toolLatencyMs),
 				)
@@ -184,6 +203,7 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 					logger.Error("react.tool",
 						zap.String("trace_id", s.TraceID),
 						zap.String("tenant_id", s.TenantID),
+						zap.String("conversation_id", s.ConversationID),
 						zap.String("tool_name", tc.Name),
 						zap.Int64("latency_ms", toolLatencyMs),
 						zap.Error(err),
@@ -193,6 +213,7 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 					logger.Info("react.tool",
 						zap.String("trace_id", s.TraceID),
 						zap.String("tenant_id", s.TenantID),
+						zap.String("conversation_id", s.ConversationID),
 						zap.String("tool_name", tc.Name),
 						zap.Int64("latency_ms", toolLatencyMs),
 					)
@@ -201,6 +222,7 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 					logger.Info("react.tool",
 						zap.String("trace_id", s.TraceID),
 						zap.String("tenant_id", s.TenantID),
+						zap.String("conversation_id", s.ConversationID),
 						zap.String("tool_name", tc.Name),
 						zap.Int64("latency_ms", toolLatencyMs),
 					)

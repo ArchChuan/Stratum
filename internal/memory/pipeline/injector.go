@@ -10,18 +10,33 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/vector"
 )
 
-// MemoryInjector fetches memory context (summaries, entities) and formats it
-// for injection into the agent's system prompt.
+// EmbedServiceResolver resolves an embedding client for a given tenant at call time.
+// Returns nil if the tenant has no embedding capability configured.
+type EmbedServiceResolver func(ctx context.Context, tenantID string) EmbedClient
+
+// MemoryInjector fetches memory context (summaries, entities, long-term vectors)
+// and formats it for injection into the agent's system prompt.
 type MemoryInjector struct {
-	pool   *pgxpool.Pool
-	logger *zap.Logger
+	pool          *pgxpool.Pool
+	logger        *zap.Logger
+	embedSvc      EmbedClient
+	embedResolver EmbedServiceResolver
+	vectorDB      *vector.VectorStore
 }
 
 // NewMemoryInjector creates a MemoryInjector backed by the given pool.
-func NewMemoryInjector(pool *pgxpool.Pool, logger *zap.Logger) *MemoryInjector {
-	return &MemoryInjector{pool: pool, logger: logger}
+// embedSvc and vectorDB are optional; if nil, long-term vector retrieval is skipped
+// unless embedResolver is set (see SetEmbedResolver).
+func NewMemoryInjector(pool *pgxpool.Pool, logger *zap.Logger, embedSvc EmbedClient, vectorDB *vector.VectorStore) *MemoryInjector {
+	return &MemoryInjector{pool: pool, logger: logger, embedSvc: embedSvc, vectorDB: vectorDB}
+}
+
+// SetEmbedResolver sets a per-tenant embedding resolver used when the global embedSvc is nil.
+func (inj *MemoryInjector) SetEmbedResolver(r EmbedServiceResolver) {
+	inj.embedResolver = r
 }
 
 // Pool returns the underlying connection pool (used by RecallHandler).
@@ -35,6 +50,7 @@ type InjectionContext struct {
 	UserID         string
 	AgentID        string
 	ConversationID string
+	Query          string // user input text; used for long-term vector search
 }
 
 // BuildContext fetches the latest conversation summary and top entities,
@@ -65,10 +81,10 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 	// Fetch top entities ordered by last_seen
 	rows, err := tx.Query(ctx, `
 		SELECT name FROM entities
-		WHERE user_id = $1 AND (agent_id = $2 OR agent_id IS NULL)
+		WHERE user_id = $1
 		ORDER BY last_seen DESC
-		LIMIT $3`,
-		ic.UserID, ic.AgentID, constants.EnricherTopEntities)
+		LIMIT $2`,
+		ic.UserID, constants.EnricherTopEntities)
 	if err != nil {
 		return "", fmt.Errorf("fetch entities: %w", err)
 	}
@@ -83,7 +99,46 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 		entityNames = append(entityNames, name)
 	}
 
-	if summary == "" && len(entityNames) == 0 {
+	// Long-term: vector search using the query text
+	var longTermSnippets []string
+	embedSvc := inj.embedSvc
+	if embedSvc == nil && inj.embedResolver != nil {
+		embedSvc = inj.embedResolver(ctx, ic.TenantID)
+	}
+	if ic.Query != "" && embedSvc != nil && inj.vectorDB != nil {
+		vec, err := embedSvc.EmbedVector(ctx, ic.Query)
+		if err != nil {
+			inj.logger.Warn("memory inject: embed query failed", zap.Error(err))
+		} else {
+			collection := memoryCollectionName(ic.TenantID)
+			// userID comes from validated JWT; guard against filter injection
+			userID := ic.UserID
+			if strings.ContainsAny(userID, `"'\`) {
+				inj.logger.Warn("memory inject: invalid userID format, skipping vector search", zap.String("user_id", userID))
+				userID = ""
+			}
+			var expr string
+			if userID != "" {
+				expr = fmt.Sprintf(`user_id == "%s"`, userID)
+			}
+			results, err := inj.vectorDB.SearchWithFilter(ctx, collection, vec, constants.MemoryLongTermTopK, expr)
+			if err != nil {
+				if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "not exist") {
+					inj.logger.Debug("memory inject: collection not yet created", zap.String("collection", collection))
+				} else {
+					inj.logger.Warn("memory inject: vector search failed", zap.Error(err))
+				}
+			} else {
+				for _, r := range results {
+					if r.Content != "" {
+						longTermSnippets = append(longTermSnippets, r.Content)
+					}
+				}
+			}
+		}
+	}
+
+	if summary == "" && len(entityNames) == 0 && len(longTermSnippets) == 0 {
 		return "", nil
 	}
 
@@ -98,6 +153,14 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 		sb.WriteString("Key Entities: ")
 		sb.WriteString(strings.Join(entityNames, ", "))
 		sb.WriteString("\n")
+	}
+	if len(longTermSnippets) > 0 {
+		sb.WriteString("Long-term Memory:\n")
+		for _, s := range longTermSnippets {
+			sb.WriteString("- ")
+			sb.WriteString(s)
+			sb.WriteString("\n")
+		}
 	}
 
 	return sb.String(), nil

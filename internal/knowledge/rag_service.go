@@ -134,6 +134,10 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 
 	case "hybrid":
 		// Hybrid = Vector + Keyword (RRF fusion)
+		if rs.embeddingSvc == nil {
+			return nil, fmt.Errorf("embedding service not configured: set an embedding model in tenant settings")
+		}
+
 		queryVector, err := rs.embeddingSvc.EmbedVector(ctx, req.Question)
 		if err != nil {
 			rs.logger.Error("failed to embed query", zap.Error(err))
@@ -169,6 +173,10 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 
 func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int) ([]vector.SearchResult, error) {
 	rs.logger.Debug("querying vector store")
+
+	if rs.embeddingSvc == nil {
+		return nil, fmt.Errorf("embedding service not configured: set an embedding model in tenant settings")
+	}
 
 	queryVector, err := rs.embeddingSvc.EmbedVector(ctx, question)
 	if err != nil {
@@ -285,7 +293,7 @@ func (rs *RAGService) GetWorkspaceCollections(ctx context.Context) ([]string, er
 		ORDER BY workspace
 	`
 
-	results, err := rs.graphRAG.Query(ctx, cypher)
+	results, err := rs.graphRAG.Query(ctx, cypher, nil)
 	if err != nil {
 		return nil, err
 	}

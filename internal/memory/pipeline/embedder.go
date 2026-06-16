@@ -3,37 +3,39 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
-	"github.com/byteBuilderX/stratum/internal/embedding"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 // VectorStore abstracts vector database operations for the embedder.
 type VectorStore interface {
-	Upsert(ctx context.Context, tenantID string, id string, vector []float32, metadata map[string]any) error
+	Upsert(ctx context.Context, tenantID string, userID string, id string, vector []float32, metadata map[string]any) error
 }
 
 // EmbedderWorker consumes from MEMORY_RAW stream, generates embeddings,
 // stores vectors in Milvus, and publishes enriched events to MEMORY_ENRICHED.
 type EmbedderWorker struct {
-	consumer jetstream.Consumer
-	js       jetstream.JetStream
-	embedSvc *embedding.EmbeddingService
-	vectorDB VectorStore
-	logger   *zap.Logger
-	stopCh   chan struct{}
+	consumer      jetstream.Consumer
+	js            jetstream.JetStream
+	embedSvc      EmbedClient
+	embedResolver EmbedServiceResolver
+	vectorDB      VectorStore
+	logger        *zap.Logger
+	stopCh        chan struct{}
+	stopOnce      sync.Once
 }
 
 // NewEmbedderWorker creates an EmbedderWorker.
 func NewEmbedderWorker(
 	consumer jetstream.Consumer,
 	js jetstream.JetStream,
-	embedSvc *embedding.EmbeddingService,
+	embedSvc EmbedClient,
 	vectorDB VectorStore,
 	logger *zap.Logger,
 ) *EmbedderWorker {
@@ -45,6 +47,12 @@ func NewEmbedderWorker(
 		logger:   logger,
 		stopCh:   make(chan struct{}),
 	}
+}
+
+// WithEmbedResolver sets a per-tenant embedding resolver as fallback when embedSvc is nil.
+func (w *EmbedderWorker) WithEmbedResolver(r EmbedServiceResolver) *EmbedderWorker {
+	w.embedResolver = r
+	return w
 }
 
 // Start begins consuming messages. Blocks until ctx is cancelled or Stop is called.
@@ -74,7 +82,7 @@ func (w *EmbedderWorker) Start(ctx context.Context) {
 
 // Stop signals the worker to exit.
 func (w *EmbedderWorker) Stop() {
-	close(w.stopCh)
+	w.stopOnce.Do(func() { close(w.stopCh) })
 }
 
 func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) {
@@ -93,7 +101,19 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		zap.String("tenant_id", ev.TenantID),
 		zap.Int("content_length", len(ev.Content)))
 
-	vector, err := w.embedSvc.EmbedVector(ctx, ev.Content)
+	embedSvc := w.embedSvc
+	if embedSvc == nil && w.embedResolver != nil {
+		embedSvc = w.embedResolver(ctx, ev.TenantID)
+	}
+	if embedSvc == nil {
+		w.logger.Warn("memory.embed.skip: no embedding service",
+			zap.String("message_id", ev.MessageID),
+			zap.String("tenant_id", ev.TenantID))
+		_ = msg.Ack()
+		return
+	}
+
+	vector, err := embedSvc.EmbedVector(ctx, ev.Content)
 	if err != nil {
 		w.logger.Error("memory.embed.error",
 			zap.String("message_id", ev.MessageID),
@@ -112,7 +132,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		"content":         ev.Content,
 		"created_at":      ev.CreatedAt.Format(time.RFC3339),
 	}
-	if err := w.vectorDB.Upsert(ctx, ev.TenantID, ev.MessageID, vector, metadata); err != nil {
+	if err := w.vectorDB.Upsert(ctx, ev.TenantID, ev.UserID, ev.MessageID, vector, metadata); err != nil {
 		w.logger.Error("memory.embed.milvus",
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))

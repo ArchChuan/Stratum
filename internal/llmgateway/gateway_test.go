@@ -29,8 +29,8 @@ func TestListChatModels_empty(t *testing.T) {
 
 func TestListChatModels_sorted(t *testing.T) {
 	g := NewGateway()
-	g.RegisterClient(ProviderZhipu, &ZhipuClient{})
-	g.RegisterClient(ProviderQwen, &QwenClient{})
+	g.RegisterClient(ProviderZhipu, NewZhipuClient("fake", zap.NewNop()))
+	g.RegisterClient(ProviderQwen, NewQwenClient("fake", zap.NewNop()))
 
 	models := g.ListChatModels()
 	if len(models) == 0 {

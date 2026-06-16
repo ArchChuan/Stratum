@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -38,19 +39,20 @@ type EntityExtraction struct {
 type EnricherWorker struct {
 	consumer     jetstream.Consumer
 	pool         *pgxpool.Pool
-	llm          *llmgateway.Gateway
+	llm          LLMClient
 	logger       *zap.Logger
 	model        string
 	summaryModel string
 	threshold    int
 	stopCh       chan struct{}
+	stopOnce     sync.Once
 }
 
 // NewEnricherWorker creates an enricher configured from the pipeline Config.
 func NewEnricherWorker(
 	consumer jetstream.Consumer,
 	pool *pgxpool.Pool,
-	llm *llmgateway.Gateway,
+	llm LLMClient,
 	logger *zap.Logger,
 	cfg Config,
 ) *EnricherWorker {
@@ -105,7 +107,7 @@ func (w *EnricherWorker) Start(ctx context.Context) {
 
 // Stop signals the worker to exit its consume loop.
 func (w *EnricherWorker) Stop() {
-	close(w.stopCh)
+	w.stopOnce.Do(func() { close(w.stopCh) })
 }
 
 func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) {
@@ -245,10 +247,22 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, tx pgx.Tx, ev 
 		return nil
 	}
 
-	// Fetch recent messages for summary
+	// Guard: skip if a summary was already generated after the last token reset
+	var existingCount int
+	err = tx.QueryRow(ctx,
+		"SELECT COUNT(*) FROM memory_summaries WHERE conversation_id = $1 AND created_at > NOW() - INTERVAL '1 minute'",
+		ev.ConversationID).Scan(&existingCount)
+	if err != nil {
+		return fmt.Errorf("check existing summary: %w", err)
+	}
+	if existingCount > 0 {
+		return nil
+	}
+
+	// Fetch recent messages for summary (bounded to avoid unbounded query on long conversations)
 	rows, err := tx.Query(ctx,
-		"SELECT role, content FROM memory_entries WHERE conversation_id = $1 ORDER BY created_at ASC",
-		ev.ConversationID)
+		"SELECT role, content FROM memory_entries WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2",
+		ev.ConversationID, constants.EnricherSummaryMaxMessages)
 	if err != nil {
 		return fmt.Errorf("fetch messages for summary: %w", err)
 	}

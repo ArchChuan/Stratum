@@ -5,18 +5,52 @@ import (
 	"time"
 )
 
+// AuthType HTTP transport authentication type.
+type AuthType string
+
+const (
+	AuthTypeNone   AuthType = "none"
+	AuthTypeBearer AuthType = "bearer"
+	AuthTypeAPIKey AuthType = "api_key"
+	AuthTypeOAuth2 AuthType = "oauth2"
+)
+
+// MCPAuthConfig authentication for HTTP/SSE transports.
+type MCPAuthConfig struct {
+	Type               AuthType `json:"type" yaml:"type"`
+	Token              string   `json:"token,omitempty" yaml:"token,omitempty"`
+	APIKeyHeader       string   `json:"api_key_header,omitempty" yaml:"api_key_header,omitempty"`
+	APIKeyValue        string   `json:"api_key_value,omitempty" yaml:"api_key_value,omitempty"`
+	OAuth2ClientID     string   `json:"oauth2_client_id,omitempty" yaml:"oauth2_client_id,omitempty"`
+	OAuth2ClientSecret string   `json:"oauth2_client_secret,omitempty" yaml:"oauth2_client_secret,omitempty"`
+	OAuth2TokenURL     string   `json:"oauth2_token_url,omitempty" yaml:"oauth2_token_url,omitempty"`
+	OAuth2Scopes       []string `json:"oauth2_scopes,omitempty" yaml:"oauth2_scopes,omitempty"`
+}
+
+// MCPRetryConfig reconnect / exponential-backoff configuration.
+type MCPRetryConfig struct {
+	Enabled        bool    `json:"enabled" yaml:"enabled"`
+	MaxRetries     int     `json:"max_retries" yaml:"max_retries"`
+	InitialDelayMs int64   `json:"initial_delay_ms" yaml:"initial_delay_ms"`
+	MaxDelayMs     int64   `json:"max_delay_ms" yaml:"max_delay_ms"`
+	BackoffFactor  float64 `json:"backoff_factor" yaml:"backoff_factor"`
+}
+
 // MCPServerConfig 定义 MCP 服务器配置
 type MCPServerConfig struct {
 	ID           string            `json:"id" yaml:"id"`
 	Name         string            `json:"name" yaml:"name"`
 	Version      string            `json:"version" yaml:"version"`
-	Transport    string            `json:"transport" yaml:"transport"` // stdio, sse, http
+	Transport    string            `json:"transport" yaml:"transport"` // stdio, sse, http, streamable-http
 	Command      string            `json:"command" yaml:"command"`
 	Args         []string          `json:"args" yaml:"args"`
 	URL          string            `json:"url" yaml:"url"`
 	Env          map[string]string `json:"env" yaml:"env"`
+	Headers      map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
 	Capabilities []string          `json:"capabilities" yaml:"capabilities"`
 	Timeout      time.Duration     `json:"timeout" yaml:"timeout"`
+	Auth         *MCPAuthConfig    `json:"auth,omitempty" yaml:"auth,omitempty"`
+	Retry        *MCPRetryConfig   `json:"retry,omitempty" yaml:"retry,omitempty"`
 }
 
 // MCPTool 定义 MCP 工具

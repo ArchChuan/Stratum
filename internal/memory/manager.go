@@ -16,7 +16,6 @@ var uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 
 // MemoryManager orchestrates all memory systems
 type MemoryManager struct {
-	shortTerm   Memory
 	longTerm    VectorMemory
 	entity      EntityMemory
 	persistence Persistence
@@ -46,16 +45,6 @@ func NewMemoryManager(
 		entity:      entityMemory,
 		persistence: persistence,
 		pool:        pool,
-	}
-
-	// Initialize short-term memory based on config
-	switch {
-	case config.ShortTermWindowSize > 0:
-		m.shortTerm = NewConversationWindowMemory(config, logger)
-	case config.EnableSummary:
-		m.shortTerm = NewConversationSummaryMemory(config, logger)
-	default:
-		m.shortTerm = NewConversationBufferMemory(config, logger)
 	}
 
 	return m
@@ -95,11 +84,6 @@ func (m *MemoryManager) Add(ctx context.Context, entry *MemoryEntry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Add to short-term memory
-	if err := m.shortTerm.Add(ctx, entry); err != nil {
-		m.logger.Warn("failed to add to short-term memory", zap.Error(err))
-	}
-
 	// Add to long-term memory if vector search is enabled
 	if m.config.EnableVectorSearch && m.longTerm != nil {
 		if err := m.longTerm.AddWithVector(ctx, entry, entry.Vector); err != nil {
@@ -120,14 +104,14 @@ func (m *MemoryManager) Add(ctx context.Context, entry *MemoryEntry) error {
 		}
 	}
 
-	// Persist to DB when pool and tenantID are available
+	// Persist to DB
 	if err := m.execTenant(ctx, entry.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
-			`INSERT INTO memory_entries (id, type, role, content, session_id, user_id, agent_id, importance, expires_at)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`,
+			`INSERT INTO memory_entries (id, type, role, content, session_id, user_id, agent_id, importance, tags, metadata, expires_at)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (id) DO NOTHING`,
 			entry.ID, string(entry.Type), entry.Role, entry.Content,
 			entry.SessionID, entry.UserID, entry.AgentID,
-			entry.Importance, entry.ExpiresAt,
+			entry.Importance, entry.Tags, entry.Metadata, entry.ExpiresAt,
 		)
 		return err
 	}); err != nil {
@@ -137,11 +121,35 @@ func (m *MemoryManager) Add(ctx context.Context, entry *MemoryEntry) error {
 	return nil
 }
 
-// Get retrieves a memory entry by ID from short-term memory
+// Get retrieves a memory entry by ID from the database
 func (m *MemoryManager) Get(ctx context.Context, id string) (*MemoryEntry, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.shortTerm.Get(ctx, id)
+
+	if m.pool == nil {
+		return nil, ErrNotFound
+	}
+
+	var entry *MemoryEntry
+	tenantID, _ := ctx.Value(tenantIDKey{}).(string)
+	if err := m.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		row := tx.QueryRow(ctx,
+			`SELECT id, type, role, content, session_id, user_id, agent_id, importance, tags, metadata, expires_at
+			 FROM memory_entries WHERE id = $1`, id)
+		e := &MemoryEntry{}
+		if err := row.Scan(&e.ID, &e.Type, &e.Role, &e.Content, &e.SessionID, &e.UserID, &e.AgentID,
+			&e.Importance, &e.Tags, &e.Metadata, &e.ExpiresAt); err != nil {
+			if err == pgx.ErrNoRows {
+				return ErrNotFound
+			}
+			return err
+		}
+		entry = e
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return entry, nil
 }
 
 // Search searches across all memory systems
@@ -151,13 +159,41 @@ func (m *MemoryManager) Search(ctx context.Context, req *MemorySearchRequest) ([
 
 	var allResults []*MemorySearchResult
 
-	// Search short-term memory
-	if req.Query == "" || len(req.Types) == 0 {
-		shortTermResults, err := m.shortTerm.Search(ctx, req)
-		if err != nil {
-			m.logger.Warn("failed to search short-term memory", zap.Error(err))
-		} else {
-			allResults = append(allResults, shortTermResults...)
+	// Search database for matching entries
+	if m.pool != nil {
+		tenantID := ""
+		sessionID := ""
+		if req.Context != nil {
+			tenantID = req.Context.TenantID
+			sessionID = req.Context.SessionID
+		}
+		lim := req.Limit
+		if lim <= 0 {
+			lim = 20
+		}
+		if err := m.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+			rows, err := tx.Query(ctx,
+				`SELECT id, type, role, content, session_id, user_id, agent_id, importance
+				 FROM memory_entries
+				 WHERE ($1 = '' OR session_id = $1)
+				 ORDER BY importance DESC
+				 LIMIT $2`,
+				sessionID, lim,
+			)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				e := &MemoryEntry{}
+				if err := rows.Scan(&e.ID, &e.Type, &e.Role, &e.Content, &e.SessionID, &e.UserID, &e.AgentID, &e.Importance); err != nil {
+					continue
+				}
+				allResults = append(allResults, &MemorySearchResult{Entry: e, Score: e.Importance})
+			}
+			return rows.Err()
+		}); err != nil {
+			m.logger.Warn("failed to search memory in db", zap.Error(err))
 		}
 	}
 
@@ -194,33 +230,33 @@ func (m *MemoryManager) Search(ctx context.Context, req *MemorySearchRequest) ([
 	return allResults, nil
 }
 
-// Delete removes a memory entry from all memory systems
+// Delete removes a memory entry from the database
 func (m *MemoryManager) Delete(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Delete from short-term memory
-	if err := m.shortTerm.Delete(ctx, id); err != nil {
-		m.logger.Warn("failed to delete from short-term memory", zap.Error(err))
+	if m.pool == nil {
+		return nil
 	}
-
-	// Note: Long-term memory deletion requires more complex handling
-	// For now, we only delete from short-term
-
-	return nil
+	tenantID, _ := ctx.Value(tenantIDKey{}).(string)
+	return m.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM memory_entries WHERE id = $1`, id)
+		return err
+	})
 }
 
-// Clear removes all memory entries for a session
+// Clear removes all memory entries for a session from the database
 func (m *MemoryManager) Clear(ctx context.Context, sessionCtx *SessionContext) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Clear short-term memory
-	if err := m.shortTerm.Clear(ctx, sessionCtx); err != nil {
-		m.logger.Warn("failed to clear short-term memory", zap.Error(err))
+	if m.pool == nil || sessionCtx == nil {
+		return nil
 	}
-
-	return nil
+	return m.execTenant(ctx, sessionCtx.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM memory_entries WHERE session_id = $1`, sessionCtx.SessionID)
+		return err
+	})
 }
 
 // GetStats returns memory statistics by querying actual pipeline tables.
@@ -247,15 +283,9 @@ func (m *MemoryManager) GetStats(ctx context.Context, sessionCtx *SessionContext
 	return stats, nil
 }
 
-// Cleanup removes expired entries from all memory systems
+// Cleanup removes expired entries from the database
 func (m *MemoryManager) Cleanup(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if err := m.shortTerm.Cleanup(ctx); err != nil {
-		m.logger.Warn("failed to cleanup short-term memory", zap.Error(err))
-	}
-
+	// No-op: expiry is handled at query time via expires_at column
 	return nil
 }
 
@@ -286,7 +316,7 @@ func (m *MemoryManager) ExtractEntities(ctx context.Context, text string, sessio
 // AddRelation adds a relation between entities
 func (m *MemoryManager) AddRelation(ctx context.Context, relation *EntityRelation) error {
 	m.mu.Lock()
-	defer m.mu.RUnlock()
+	defer m.mu.Unlock()
 
 	if m.entity == nil {
 		return fmt.Errorf("entity memory not initialized")
@@ -309,15 +339,16 @@ func (m *MemoryManager) GetEntityRelations(ctx context.Context, entityID string)
 
 // GetSummary retrieves conversation summary
 func (m *MemoryManager) GetSummary(ctx context.Context, sessionCtx *SessionContext) (string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	// Try to get summary from summary memory
-	if summaryMem, ok := m.shortTerm.(*ConversationSummaryMemory); ok {
-		return summaryMem.GetSummary(), nil
+	var summary string
+	err := m.execTenant(ctx, sessionCtx.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			"SELECT summary FROM memory_summaries WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1",
+			sessionCtx.SessionID).Scan(&summary)
+	})
+	if err != nil {
+		return "", err
 	}
-
-	return "", fmt.Errorf("summary not available")
+	return summary, nil
 }
 
 // GetRecentMemory retrieves recent memory entries
@@ -373,7 +404,7 @@ func (m *MemoryManager) HybridSearch(ctx context.Context, req *MemorySearchReque
 // UpdateEntity updates an entity
 func (m *MemoryManager) UpdateEntity(ctx context.Context, entity *Entity) error {
 	m.mu.Lock()
-	defer m.mu.RUnlock()
+	defer m.mu.Unlock()
 
 	if m.entity == nil {
 		return fmt.Errorf("entity memory not initialized")

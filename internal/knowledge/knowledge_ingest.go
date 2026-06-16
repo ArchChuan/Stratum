@@ -16,13 +16,23 @@ import (
 	"go.uber.org/zap"
 )
 
+// EmbedClient is the minimal interface KnowledgeIngest needs for vectorization.
+type EmbedClient interface {
+	EmbedVector(ctx context.Context, text string) ([]float32, error)
+	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
+}
+
+// EmbedResolver resolves an EmbedClient for a given tenant and model at request time.
+type EmbedResolver func(ctx context.Context, tenantID, model string) EmbedClient
+
 type KnowledgeIngest struct {
-	parser       *document.Parser
-	chunker      *textchunk.Chunker
-	embeddingSvc *embedding.EmbeddingService
-	vectorStore  *vector.VectorStore
-	graphRAG     *GraphRAG
-	logger       *zap.Logger
+	parser        *document.Parser
+	chunker       *textchunk.Chunker
+	embeddingSvc  *embedding.EmbeddingService
+	embedResolver EmbedResolver
+	vectorStore   *vector.VectorStore
+	graphRAG      *GraphRAG
+	logger        *zap.Logger
 }
 
 func NewKnowledgeIngest(
@@ -43,12 +53,18 @@ func NewKnowledgeIngest(
 	}
 }
 
+// SetEmbedResolver injects a per-tenant/per-model embed resolver.
+func (ki *KnowledgeIngest) SetEmbedResolver(r EmbedResolver) {
+	ki.embedResolver = r
+}
+
 type IngestDocumentRequest struct {
-	TenantID     string
-	Workspace    string
-	DocumentData []byte
-	FileName     string
-	DocumentID   string
+	TenantID       string
+	Workspace      string
+	EmbeddingModel string
+	DocumentData   []byte
+	FileName       string
+	DocumentID     string
 }
 
 type IngestResult struct {
@@ -85,13 +101,25 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 	result.TotalChunks = len(chunks)
 	ki.logger.Info("text chunked", zap.Int("num_chunks", len(chunks)))
 
+	// Resolve embed client: prefer per-workspace resolver, fall back to global svc.
+	var embedClient EmbedClient
+	if ki.embedResolver != nil && req.TenantID != "" {
+		embedClient = ki.embedResolver(ctx, req.TenantID, req.EmbeddingModel)
+	}
+	if embedClient == nil {
+		embedClient = ki.embeddingSvc
+	}
+	if embedClient == nil {
+		return result, fmt.Errorf("embedding service not configured: set an embedding model in workspace settings")
+	}
+
 	// Batch embed all chunks in one API call
 	chunkTexts := make([]string, len(chunks))
 	for i, c := range chunks {
 		chunkTexts[i] = c.Content
 	}
 
-	embedVecs, err := ki.embeddingSvc.EmbedBatch(ctx, chunkTexts)
+	embedVecs, err := embedClient.EmbedBatch(ctx, chunkTexts)
 	if err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("batch embed failed: %v", err))
 		return result, fmt.Errorf("failed to embed chunks: %w", err)
@@ -211,6 +239,45 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 	return result, nil
 }
 
+// DeleteWorkspaceData removes all Milvus vectors and Neo4j nodes for the given
+// workspace. Deletion order: query docIDs (read-only) → delete Milvus → delete
+// Neo4j → caller deletes PG. This ordering makes every step idempotent on retry:
+// if Neo4j already ran, QueryWorkspaceDocumentIDs returns [] → Milvus delete is
+// a no-op; DETACH DELETE on already-absent nodes is also a no-op.
+func (ki *KnowledgeIngest) DeleteWorkspaceData(ctx context.Context, workspace string) error {
+	collectionName := fmt.Sprintf("%s_kb", workspace)
+	if col, err := tenantdb.TenantCollection(ctx, "kb"); err == nil {
+		collectionName = col
+	}
+
+	// Step 1: query docIDs from Neo4j (read-only — safe to repeat on retry)
+	var docIDs []string
+	if ki.graphRAG != nil {
+		ids, err := ki.graphRAG.QueryWorkspaceDocumentIDs(ctx, workspace)
+		if err != nil {
+			return fmt.Errorf("failed to query workspace document IDs: %w", err)
+		}
+		docIDs = ids
+	}
+
+	// Step 2: delete Milvus vectors (docIDs still valid; Neo4j untouched yet)
+	if err := ki.vectorStore.DeleteByDocumentIDs(ctx, collectionName, docIDs); err != nil {
+		return fmt.Errorf("failed to delete workspace vectors: %w", err)
+	}
+
+	// Step 3: delete Neo4j nodes (idempotent — DETACH DELETE on absent nodes is a no-op)
+	if ki.graphRAG != nil {
+		if err := ki.graphRAG.DeleteWorkspaceNodes(ctx, workspace); err != nil {
+			return fmt.Errorf("failed to delete workspace graph nodes: %w", err)
+		}
+	}
+
+	ki.logger.Info("workspace storage resources deleted",
+		zap.String("workspace", workspace),
+		zap.Int("doc_count", len(docIDs)))
+	return nil
+}
+
 func (ki *KnowledgeIngest) IngestBatch(ctx context.Context, requests []IngestDocumentRequest) ([]IngestResult, error) {
 	ki.logger.Info("starting batch ingestion", zap.Int("count", len(requests)))
 
@@ -243,7 +310,7 @@ func (ki *KnowledgeIngest) GetWorkspaceStats(ctx context.Context, workspace stri
 		WHERE d.workspace = $workspace
 		RETURN count(d) as doc_count
 	`
-	docCountResult, err := ki.graphRAG.Query(ctx, cypher)
+	docCountResult, err := ki.graphRAG.Query(ctx, cypher, map[string]interface{}{"workspace": workspace})
 	if err != nil {
 		return nil, err
 	}

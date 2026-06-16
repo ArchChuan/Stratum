@@ -12,18 +12,11 @@ func TestDefaultMemoryConfig(t *testing.T) {
 
 	if cfg == nil { //nolint:staticcheck
 		t.Error("expected config to be non-nil")
+		return
 	}
 
-	if cfg.MaxShortTermMessages <= 0 { //nolint:staticcheck
-		t.Errorf("expected positive MaxShortTermMessages, got %d", cfg.MaxShortTermMessages)
-	}
-
-	if cfg.MaxVectorResults <= 0 {
+	if cfg.MaxVectorResults <= 0 { //nolint:staticcheck
 		t.Errorf("expected positive MaxVectorResults, got %d", cfg.MaxVectorResults)
-	}
-
-	if !cfg.EnableSummary {
-		t.Error("expected EnableSummary to be true")
 	}
 
 	if !cfg.EnableVectorSearch {

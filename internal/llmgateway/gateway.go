@@ -58,15 +58,50 @@ type CompletionRequest struct {
 	Stream      bool      `json:"stream,omitempty"`
 }
 
+type TokenUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 type CompletionResponse struct {
 	Content   string     `json:"content"`
 	Model     string     `json:"model"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-	Usage     struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage"`
+	Usage     TokenUsage `json:"usage"`
+}
+
+// openAICompletionResp is the shared decode type for OpenAI-compatible completion responses.
+type openAICompletionResp struct {
+	Choices []struct {
+		FinishReason string `json:"finish_reason"`
+		Message      struct {
+			Content   string     `json:"content"`
+			ToolCalls []ToolCall `json:"tool_calls"`
+		} `json:"message"`
+	} `json:"choices"`
+	Model string     `json:"model"`
+	Usage TokenUsage `json:"usage"`
+}
+
+// openAIStreamChunk is the shared decode type for OpenAI-compatible SSE stream chunks.
+type openAIStreamChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content   string     `json:"content"`
+			ToolCalls []ToolCall `json:"tool_calls"`
+		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Model string      `json:"model"`
+	Usage *TokenUsage `json:"usage"`
+}
+
+// openAIEmbedResp is the shared decode type for OpenAI-compatible embedding responses.
+type openAIEmbedResp struct {
+	Data []struct {
+		Embedding []float32 `json:"embedding"`
+	} `json:"data"`
 }
 
 type LLMClient interface {
@@ -131,6 +166,22 @@ func (g *Gateway) RegisterClient(provider ModelProvider, client LLMClient) {
 
 func (g *Gateway) RegisterEmbeddingClient(provider ModelProvider, client EmbeddingClient) {
 	g.embeddingClients[provider] = client
+}
+
+func (g *Gateway) HasEmbeddingClient() bool {
+	return len(g.embeddingClients) > 0
+}
+
+// DefaultEmbeddingModel returns the appropriate embedding model name for the default provider.
+func (g *Gateway) DefaultEmbeddingModel() string {
+	switch g.defaultProvider {
+	case ProviderQwen:
+		return "text-embedding-v3"
+	case ProviderZhipu:
+		return "embedding-3"
+	default:
+		return "text-embedding-3-small"
+	}
 }
 
 func (g *Gateway) SetDefault(provider ModelProvider) {
@@ -259,6 +310,23 @@ func (g *Gateway) Health(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// ListEmbeddingModels returns embedding model names for all registered embedding providers, sorted.
+func (g *Gateway) ListEmbeddingModels() []string {
+	var models []string
+	for provider := range g.embeddingClients {
+		switch provider {
+		case ProviderQwen:
+			models = append(models, "text-embedding-v3", "text-embedding-v2")
+		case ProviderZhipu:
+			models = append(models, "embedding-3")
+		default:
+			models = append(models, "text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002")
+		}
+	}
+	sort.Strings(models)
+	return models
 }
 
 // ListChatModels returns all chat model names across registered providers, sorted.

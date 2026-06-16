@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS agents (
     description    TEXT,
     config         JSONB NOT NULL DEFAULT '{}',
     allowed_skills TEXT[] NOT NULL DEFAULT '{}',
+    max_context_tokens INTEGER NOT NULL DEFAULT 8000,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -171,6 +172,8 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
 
 -- idempotent backfill: existing tenants provisioned before allowed_skills was added
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS allowed_skills TEXT[] NOT NULL DEFAULT '{}';
+-- idempotent backfill: existing tenants provisioned before max_context_tokens was added
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 8000;
 
 CREATE TABLE IF NOT EXISTS webhooks (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -287,3 +290,8 @@ ALTER TABLE entities ADD COLUMN IF NOT EXISTS occurrence_count INT NOT NULL DEFA
 ALTER TABLE entities ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS idx_entities_scope ON entities (user_id, agent_id, scope_layer);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_name_type ON entities (user_id, COALESCE(agent_id, ''), name, type);
+
+CREATE INDEX IF NOT EXISTS idx_memory_entries_content_trgm ON memory_entries USING GIN (content gin_trgm_ops);
+
+-- idempotent backfill: embed_model for tenant-level inheritance
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS embed_model TEXT NOT NULL DEFAULT '';

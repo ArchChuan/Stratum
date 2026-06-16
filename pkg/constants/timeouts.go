@@ -7,8 +7,12 @@ const (
 	HTTPReadHeaderTimeout = 10 * time.Second
 	HTTPShutdownTimeout   = 10 * time.Second
 
-	// Agent execution
-	AgentExecTimeout = 120 * time.Second
+	// Agent execution — kept under Cloudflare's 100s proxy read timeout so the
+	// origin always closes before CF fires a 524.
+	AgentExecTimeout = 90 * time.Second
+
+	// SSE heartbeat interval — must be shorter than Cloudflare proxy read timeout.
+	SSEHeartbeatInterval = 15 * time.Second
 
 	// LLM per-request
 	LLMRequestTimeout = 60 * time.Second

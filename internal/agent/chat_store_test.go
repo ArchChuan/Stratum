@@ -116,9 +116,9 @@ func TestChatStore_DeleteConversation_success(t *testing.T) {
 	defer mock.Close()
 
 	expectTenantTx(mock)
-	mock.ExpectExec("DELETE FROM chat_conversations").
+	mock.ExpectExec("UPDATE chat_conversations").
 		WithArgs("conv-1", "user-1").
-		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 
 	if err := store.DeleteConversation(context.Background(), "t1", "conv-1", "user-1"); err != nil {
@@ -134,9 +134,9 @@ func TestChatStore_DeleteConversation_notOwned(t *testing.T) {
 	defer mock.Close()
 
 	expectTenantTx(mock)
-	mock.ExpectExec("DELETE FROM chat_conversations").
+	mock.ExpectExec("UPDATE chat_conversations").
 		WithArgs("conv-1", "other-user").
-		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectRollback()
 
 	err := store.DeleteConversation(context.Background(), "t1", "conv-1", "other-user")
@@ -167,7 +167,7 @@ func TestChatStore_AddMessage(t *testing.T) {
 		WithArgs("conv-1", "user", "hello", steps, false).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("msg-uuid", now))
 	mock.ExpectExec("INSERT INTO memory_outbox").
-		WithArgs(pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -202,7 +202,7 @@ func TestChatStore_AddMessage_nilStepsDefaultsToEmpty(t *testing.T) {
 		WithArgs("conv-1", "user", "hi", json.RawMessage("[]"), false).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("msg-2", now))
 	mock.ExpectExec("INSERT INTO memory_outbox").
-		WithArgs(pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -249,7 +249,7 @@ func TestChatStore_CleanupExpired(t *testing.T) {
 	defer mock.Close()
 
 	expectTenantTx(mock)
-	mock.ExpectExec("DELETE FROM chat_conversations WHERE expires_at").
+	mock.ExpectExec("DELETE FROM chat_conversations").
 		WillReturnResult(pgxmock.NewResult("DELETE", 3))
 	mock.ExpectCommit()
 

@@ -9,22 +9,35 @@ import (
 	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 
-	"github.com/byteBuilderX/stratum/internal/embedding"
 	"github.com/byteBuilderX/stratum/internal/llmgateway"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
+// EmbedClient produces a vector embedding for a piece of text.
+// Defined consumer-side so the pipeline depends on behavior rather than the concrete
+// embedding.EmbeddingService implementation.
+type EmbedClient interface {
+	EmbedVector(ctx context.Context, text string) ([]float32, error)
+}
+
+// LLMClient performs a single non-streaming completion against an LLM provider.
+// Defined consumer-side; concrete *llmgateway.Gateway satisfies it structurally.
+type LLMClient interface {
+	Complete(ctx context.Context, req *llmgateway.CompletionRequest) (*llmgateway.CompletionResponse, error)
+}
+
 // Pipeline orchestrates all memory pipeline workers: outbox poller,
 // embedder workers, and enricher workers.
 type Pipeline struct {
-	cfg      Config
-	pool     *pgxpool.Pool
-	nc       *nats.Conn
-	jsm      *JetStreamManager
-	embedSvc *embedding.EmbeddingService
-	vectorDB VectorStore
-	llm      *llmgateway.Gateway
-	logger   *zap.Logger
+	cfg           Config
+	pool          *pgxpool.Pool
+	nc            *nats.Conn
+	jsm           *JetStreamManager
+	embedSvc      EmbedClient
+	embedResolver EmbedServiceResolver
+	vectorDB      VectorStore
+	llm           LLMClient
+	logger        *zap.Logger
 
 	poller    *OutboxPoller
 	embedders []*EmbedderWorker
@@ -39,9 +52,9 @@ func New(
 	cfg Config,
 	pool *pgxpool.Pool,
 	nc *nats.Conn,
-	embedSvc *embedding.EmbeddingService,
+	embedSvc EmbedClient,
 	vectorDB VectorStore,
-	llm *llmgateway.Gateway,
+	llm LLMClient,
 	logger *zap.Logger,
 ) *Pipeline {
 	return &Pipeline{
@@ -53,6 +66,12 @@ func New(
 		llm:      llm,
 		logger:   logger,
 	}
+}
+
+// SetEmbedResolver sets a per-tenant embedding resolver used by EmbedderWorkers.
+// Must be called before Start.
+func (p *Pipeline) SetEmbedResolver(r EmbedServiceResolver) {
+	p.embedResolver = r
 }
 
 // Start initializes JetStream infrastructure, creates consumers, and launches
@@ -102,6 +121,9 @@ func (p *Pipeline) Start(ctx context.Context) error {
 
 	for i := 0; i < p.cfg.EmbedWorkers; i++ {
 		worker := NewEmbedderWorker(embedConsumer, js, p.embedSvc, p.vectorDB, p.logger)
+		if p.embedResolver != nil {
+			worker.WithEmbedResolver(p.embedResolver)
+		}
 		p.embedders = append(p.embedders, worker)
 		p.wg.Add(1)
 		go func() {

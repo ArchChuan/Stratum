@@ -173,26 +173,27 @@ func (r *Registry) replaceKnowledgeWorkspaces(ctx context.Context, tx pgx.Tx, ag
 
 // loadKnowledgeWorkspaces queries agent_workspaces + rag_workspaces for the given agentID.
 // Returns (ids, names, error).
-func loadKnowledgeWorkspaces(ctx context.Context, tx pgx.Tx, agentID string) ([]string, []string, error) {
+func loadKnowledgeWorkspaces(ctx context.Context, tx pgx.Tx, agentID string) ([]string, []string, []string, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT aw.workspace_id::text, rw.name
+		`SELECT aw.workspace_id::text, rw.name, COALESCE(rw.description, '')
 		   FROM agent_workspaces aw
 		   JOIN rag_workspaces rw ON rw.id = aw.workspace_id
 		  WHERE aw.agent_id = $1`, agentID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load knowledge_workspaces agent %s: %w", agentID, err)
+		return nil, nil, nil, fmt.Errorf("load knowledge_workspaces agent %s: %w", agentID, err)
 	}
 	defer rows.Close()
-	var ids, names []string
+	var ids, names, descs []string
 	for rows.Next() {
-		var id, name string
-		if err := rows.Scan(&id, &name); err != nil {
-			return nil, nil, err
+		var id, name, desc string
+		if err := rows.Scan(&id, &name, &desc); err != nil {
+			return nil, nil, nil, err
 		}
 		ids = append(ids, id)
 		names = append(names, name)
+		descs = append(descs, desc)
 	}
-	return ids, names, rows.Err()
+	return ids, names, descs, rows.Err()
 }
 
 // Register writes the agent config into the tenant schema agents table.
@@ -200,10 +201,10 @@ func (r *Registry) Register(ctx context.Context, a Agent) error {
 	cfg := a.GetConfig()
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
-			`INSERT INTO agents (id, name, type, description, persona, system_prompt, llm_model, max_iterations)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			`INSERT INTO agents (id, name, type, description, persona, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 			cfg.ID, cfg.Name, string(cfg.Type), cfg.Description,
-			cfg.Persona, cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations,
+			cfg.Persona, cfg.SystemPrompt, cfg.LLMModel, cfg.EmbedModel, cfg.MaxIterations, cfg.MaxContextTokens,
 		)
 		if err != nil {
 			var pgErr *pgconn.PgError
@@ -232,10 +233,10 @@ func (r *Registry) Get(ctx context.Context, id string) (Agent, bool) {
 	var agentType string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
-			`SELECT id, name, type, description, persona, system_prompt, llm_model, max_iterations
+			`SELECT id, name, type, description, persona, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens
 			 FROM agents WHERE id = $1`, id).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
-				&cfg.Persona, &cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations); err != nil {
+				&cfg.Persona, &cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens); err != nil {
 			return err
 		}
 		skillIDs, err := loadSkillIDs(ctx, tx, id)
@@ -248,12 +249,13 @@ func (r *Registry) Get(ctx context.Context, id string) (Agent, bool) {
 			return err
 		}
 		cfg.MCPServerIDs = ids
-		wsIDs, wsNames, err := loadKnowledgeWorkspaces(ctx, tx, id)
+		wsIDs, wsNames, wsDescs, err := loadKnowledgeWorkspaces(ctx, tx, id)
 		if err != nil {
 			return err
 		}
 		cfg.KnowledgeWorkspaceIDs = wsIDs
 		cfg.KnowledgeWorkspaceNames = wsNames
+		cfg.KnowledgeWorkspaceDescriptions = wsDescs
 		return nil
 	})
 	if err != nil {
@@ -281,7 +283,7 @@ func (r *Registry) GetAll(ctx context.Context) []Agent {
 	var agents []Agent
 	_ = r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT id, name, type, description, persona, system_prompt, llm_model, max_iterations
+			`SELECT id, name, type, description, persona, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens
 			 FROM agents ORDER BY created_at`)
 		if err != nil {
 			return err
@@ -291,7 +293,7 @@ func (r *Registry) GetAll(ctx context.Context) []Agent {
 			var cfg AgentConfig
 			var agentType string
 			if err := rows.Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
-				&cfg.Persona, &cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations); err != nil {
+				&cfg.Persona, &cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens); err != nil {
 				continue
 			}
 			cfg.Type = AgentType(agentType)
@@ -309,16 +311,20 @@ func (r *Registry) GetAll(ctx context.Context) []Agent {
 			if cfg.MCPServerIDs == nil {
 				cfg.MCPServerIDs = []string{}
 			}
-			wsIDs, wsNames, err := loadKnowledgeWorkspaces(ctx, tx, cfg.ID)
+			wsIDs, wsNames, wsDescs, err := loadKnowledgeWorkspaces(ctx, tx, cfg.ID)
 			if err == nil {
 				cfg.KnowledgeWorkspaceIDs = wsIDs
 				cfg.KnowledgeWorkspaceNames = wsNames
+				cfg.KnowledgeWorkspaceDescriptions = wsDescs
 			}
 			if cfg.KnowledgeWorkspaceIDs == nil {
 				cfg.KnowledgeWorkspaceIDs = []string{}
 			}
 			if cfg.KnowledgeWorkspaceNames == nil {
 				cfg.KnowledgeWorkspaceNames = []string{}
+			}
+			if cfg.KnowledgeWorkspaceDescriptions == nil {
+				cfg.KnowledgeWorkspaceDescriptions = []string{}
 			}
 			a := NewBaseAgent(&cfg, r.logger)
 			if r.capGW != nil {
@@ -364,11 +370,11 @@ func (r *Registry) Update(ctx context.Context, cfg *AgentConfig) error {
 		tag, err := tx.Exec(ctx,
 			`UPDATE agents
 			 SET name=$1, description=$2, persona=$3, system_prompt=$4,
-			     llm_model=$5, max_iterations=$6,
+			     llm_model=$5, max_iterations=$6, max_context_tokens=$7,
 			     updated_at=NOW()
-			 WHERE id=$7`,
+			 WHERE id=$8`,
 			cfg.Name, cfg.Description, cfg.Persona, cfg.SystemPrompt,
-			cfg.LLMModel, cfg.MaxIterations, cfg.ID,
+			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.ID,
 		)
 		if err != nil {
 			return fmt.Errorf("update agent %s: %w", cfg.ID, err)

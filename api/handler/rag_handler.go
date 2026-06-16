@@ -104,6 +104,18 @@ func (h *RAGHandler) UploadDocument(c *gin.Context) {
 		zap.String("workspace", req.Workspace),
 		zap.String("filename", req.File.Filename))
 
+	// Fetch workspace config to get the configured embedding model.
+	schema := "tenant_" + tenantID
+	var wsCfg WorkspaceConfig
+	err := h.db.QueryRow(c.Request.Context(),
+		fmt.Sprintf(`SELECT config FROM "%s".rag_workspaces WHERE name = $1`, schema),
+		req.Workspace,
+	).Scan(&wsCfg)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+		return
+	}
+
 	file, err := req.File.Open()
 	if err != nil {
 		h.logger.Error("failed to open uploaded file", zap.Error(err))
@@ -122,11 +134,12 @@ func (h *RAGHandler) UploadDocument(c *gin.Context) {
 	documentID := uuid.New().String()
 
 	ingestReq := knowledge.IngestDocumentRequest{
-		TenantID:     tenantID,
-		Workspace:    req.Workspace,
-		DocumentData: fileData,
-		FileName:     req.File.Filename,
-		DocumentID:   documentID,
+		TenantID:       tenantID,
+		Workspace:      req.Workspace,
+		EmbeddingModel: wsCfg.EmbeddingModel,
+		DocumentData:   fileData,
+		FileName:       req.File.Filename,
+		DocumentID:     documentID,
 	}
 
 	result, err := h.ingestSvc.IngestDocument(c.Request.Context(), ingestReq)
@@ -362,12 +375,16 @@ func (h *RAGHandler) UpdateWorkspace(c *gin.Context) {
 		if req.Config.QueryMode == "" {
 			req.Config.QueryMode = currentCfg.QueryMode
 		}
-		if req.Config.ChunkSize <= 0 {
-			req.Config.ChunkSize = currentCfg.ChunkSize
+		if req.Config.ChunkSize > 0 && req.Config.ChunkSize != currentCfg.ChunkSize {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "chunk_size is immutable after creation"})
+			return
 		}
-		if req.Config.ChunkOverlap <= 0 {
-			req.Config.ChunkOverlap = currentCfg.ChunkOverlap
+		req.Config.ChunkSize = currentCfg.ChunkSize
+		if req.Config.ChunkOverlap > 0 && req.Config.ChunkOverlap != currentCfg.ChunkOverlap {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "chunk_overlap is immutable after creation"})
+			return
 		}
+		req.Config.ChunkOverlap = currentCfg.ChunkOverlap
 		if req.Config.TopK <= 0 {
 			req.Config.TopK = currentCfg.TopK
 		}
@@ -447,6 +464,12 @@ func (h *RAGHandler) DeleteWorkspace(c *gin.Context) {
 	name := c.Param("name")
 	if name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workspace parameter required"})
+		return
+	}
+
+	if err := h.ingestSvc.DeleteWorkspaceData(c.Request.Context(), name); err != nil {
+		h.logger.Error("failed to clean workspace storage resources", zap.String("name", name), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to clean storage: %v", err)})
 		return
 	}
 

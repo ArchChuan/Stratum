@@ -63,16 +63,12 @@ func NewBaseClient(config *MCPServerConfig, logger *zap.Logger) *BaseClient {
 
 // Connect 连接到 MCP 服务器
 func (c *BaseClient) Connect(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	return c.ensureConnected(ctx)
+}
 
-	if c.connected {
-		return nil
-	}
-
+func (c *BaseClient) doConnect(ctx context.Context) error {
 	c.logger.Info("connecting to MCP server", zap.String("transport", c.config.Transport))
 
-	// 根据传输方式选择连接方法
 	var err error
 	switch c.config.Transport {
 	case "stdio":
@@ -97,8 +93,22 @@ func (c *BaseClient) Connect(ctx context.Context) error {
 	c.serverInfo.Status = "connected"
 	c.serverInfo.LastUpdated = time.Now()
 	c.logger.Info("connected to MCP server")
-
 	return nil
+}
+
+func (c *BaseClient) ensureConnected(ctx context.Context) error {
+	c.mu.RLock()
+	if c.connected {
+		c.mu.RUnlock()
+		return nil
+	}
+	c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.connected {
+		return nil
+	}
+	return c.doConnect(ctx)
 }
 
 // Disconnect 断开连接
@@ -134,12 +144,9 @@ func (c *BaseClient) IsHealthy() bool {
 
 // CallTool 调用工具
 func (c *BaseClient) CallTool(ctx context.Context, toolName string, input interface{}) (interface{}, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("client not connected")
+	if err := c.ensureConnected(ctx); err != nil {
+		return nil, err
 	}
-	c.mu.RUnlock()
 
 	// 构建请求
 	req := MCPRequest{
@@ -162,12 +169,9 @@ func (c *BaseClient) CallTool(ctx context.Context, toolName string, input interf
 
 // ListTools 列出所有工具
 func (c *BaseClient) ListTools(ctx context.Context) ([]*MCPTool, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("client not connected")
+	if err := c.ensureConnected(ctx); err != nil {
+		return nil, err
 	}
-	c.mu.RUnlock()
 
 	req := MCPRequest{
 		Method: "tools/list",
@@ -194,12 +198,9 @@ func (c *BaseClient) ListTools(ctx context.Context) ([]*MCPTool, error) {
 
 // ListResources 列出所有资源
 func (c *BaseClient) ListResources(ctx context.Context) ([]*MCPResource, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("client not connected")
+	if err := c.ensureConnected(ctx); err != nil {
+		return nil, err
 	}
-	c.mu.RUnlock()
 
 	req := MCPRequest{
 		Method: "resources/list",

@@ -17,11 +17,15 @@ func NewModelHandler(gateway *llmgateway.Gateway) *ModelHandler {
 	return &ModelHandler{gateway: gateway}
 }
 
-// ListModels GET /models — returns all chat model names, sorted, no auth required.
+// ListModels GET /models — returns chat and embedding model names, sorted, no auth required.
 func (h *ModelHandler) ListModels(c *gin.Context) {
 	models := h.gateway.ListChatModels()
 	if models == nil {
 		models = []string{}
 	}
-	c.JSON(http.StatusOK, gin.H{"models": models})
+	embeddingModels := h.gateway.ListEmbeddingModels()
+	if embeddingModels == nil {
+		embeddingModels = []string{}
+	}
+	c.JSON(http.StatusOK, gin.H{"models": models, "embedding_models": embeddingModels})
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	"go.uber.org/zap"
@@ -36,6 +37,7 @@ func escapeLucene(s string) string {
 }
 
 type GraphRAG struct {
+	mu      sync.RWMutex
 	driver  neo4j.DriverWithContext
 	uri     string
 	user    string
@@ -53,7 +55,7 @@ func NewGraphRAG(uri, user, password string, logger *zap.Logger) *GraphRAG {
 	}
 }
 
-func (g *GraphRAG) Connect(ctx context.Context) error {
+func (g *GraphRAG) doConnect(ctx context.Context) error {
 	g.logger.Info("connecting to Neo4j", zap.String("uri", g.uri))
 
 	driver, err := neo4j.NewDriverWithContext(g.uri, neo4j.BasicAuth(g.user, g.passwd, ""))
@@ -76,7 +78,29 @@ func (g *GraphRAG) Connect(ctx context.Context) error {
 	return nil
 }
 
+func (g *GraphRAG) Connect(ctx context.Context) error {
+	return g.ensureConnected(ctx)
+}
+
+func (g *GraphRAG) ensureConnected(ctx context.Context) error {
+	g.mu.RLock()
+	if g.session != nil {
+		g.mu.RUnlock()
+		return nil
+	}
+	g.mu.RUnlock()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.session != nil {
+		return nil
+	}
+	return g.doConnect(ctx)
+}
+
 func (g *GraphRAG) CreateNode(ctx context.Context, label string, properties map[string]interface{}) error {
+	if err := g.ensureConnected(ctx); err != nil {
+		return fmt.Errorf("neo4j not available: %w", err)
+	}
 	g.logger.Debug("creating node", zap.String("label", label))
 
 	if err := validateCypherIdentifier(label); err != nil {
@@ -102,6 +126,9 @@ func (g *GraphRAG) CreateNode(ctx context.Context, label string, properties map[
 }
 
 func (g *GraphRAG) CreateRelationship(ctx context.Context, fromID, toID, relType string) error {
+	if err := g.ensureConnected(ctx); err != nil {
+		return fmt.Errorf("neo4j not available: %w", err)
+	}
 	g.logger.Debug("creating relationship", zap.String("type", relType))
 
 	if err := validateCypherIdentifier(relType); err != nil {
@@ -131,10 +158,13 @@ func (g *GraphRAG) CreateRelationship(ctx context.Context, fromID, toID, relType
 	return nil
 }
 
-func (g *GraphRAG) Query(ctx context.Context, query string) (interface{}, error) {
+func (g *GraphRAG) Query(ctx context.Context, query string, params map[string]interface{}) (interface{}, error) {
+	if err := g.ensureConnected(ctx); err != nil {
+		return nil, fmt.Errorf("neo4j not available: %w", err)
+	}
 	g.logger.Debug("executing graph query")
 
-	result, err := g.session.Run(ctx, query, nil)
+	result, err := g.session.Run(ctx, query, params)
 	if err != nil {
 		g.logger.Error("failed to execute query", zap.Error(err))
 		return nil, fmt.Errorf("failed to execute query: %w", err)
@@ -155,6 +185,9 @@ func (g *GraphRAG) Query(ctx context.Context, query string) (interface{}, error)
 }
 
 func (g *GraphRAG) GetNeighborNodes(ctx context.Context, nodeID string, maxDepth int) ([]map[string]interface{}, error) {
+	if err := g.ensureConnected(ctx); err != nil {
+		return nil, fmt.Errorf("neo4j not available: %w", err)
+	}
 	if maxDepth <= 0 || maxDepth > 10 {
 		return nil, fmt.Errorf("maxDepth must be between 1 and 10, got %d", maxDepth)
 	}
@@ -193,6 +226,9 @@ func (g *GraphRAG) GetNeighborNodes(ctx context.Context, nodeID string, maxDepth
 }
 
 func (g *GraphRAG) FullTextSearch(ctx context.Context, searchTerm string, limit int) ([]map[string]interface{}, error) {
+	if err := g.ensureConnected(ctx); err != nil {
+		return nil, fmt.Errorf("neo4j not available: %w", err)
+	}
 	if strings.TrimSpace(searchTerm) == "" {
 		return nil, fmt.Errorf("searchTerm must not be empty")
 	}
@@ -234,13 +270,68 @@ func (g *GraphRAG) FullTextSearch(ctx context.Context, searchTerm string, limit 
 	return results, nil
 }
 
+// QueryWorkspaceDocumentIDs returns the IDs of all Document nodes for the given
+// workspace without modifying any data. Used to collect IDs before Milvus deletion
+// so that a retry can re-query if the downstream step fails.
+func (g *GraphRAG) QueryWorkspaceDocumentIDs(ctx context.Context, workspace string) ([]string, error) {
+	if err := g.ensureConnected(ctx); err != nil {
+		return nil, fmt.Errorf("neo4j not available: %w", err)
+	}
+	queryResult, err := g.session.Run(ctx,
+		`MATCH (d:Document {workspace: $workspace}) RETURN d.id AS id`,
+		map[string]interface{}{"workspace": workspace},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query workspace documents: %w", err)
+	}
+	records, err := queryResult.Collect(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect workspace document IDs: %w", err)
+	}
+	docIDs := make([]string, 0, len(records))
+	for _, rec := range records {
+		if id, ok := rec.Get("id"); ok {
+			if s, ok := id.(string); ok {
+				docIDs = append(docIDs, s)
+			}
+		}
+	}
+	return docIDs, nil
+}
+
+// DeleteWorkspaceNodes deletes all Document and DocumentChunk nodes for the given
+// workspace. Call QueryWorkspaceDocumentIDs first to obtain IDs for Milvus cleanup
+// before invoking this, so that a retry remains safe: if this step already ran,
+// QueryWorkspaceDocumentIDs returns an empty slice and Milvus deletion is a no-op.
+func (g *GraphRAG) DeleteWorkspaceNodes(ctx context.Context, workspace string) error {
+	if err := g.ensureConnected(ctx); err != nil {
+		return fmt.Errorf("neo4j not available: %w", err)
+	}
+	_, err := g.session.Run(ctx,
+		`MATCH (d:Document {workspace: $workspace})
+		 OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:DocumentChunk)
+		 DETACH DELETE d, c`,
+		map[string]interface{}{"workspace": workspace},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete workspace nodes: %w", err)
+	}
+	g.logger.Info("deleted workspace graph nodes", zap.String("workspace", workspace))
+	return nil
+}
+
 func (g *GraphRAG) Close() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.logger.Info("closing Neo4j connection")
 	if g.session != nil {
 		g.session.Close(context.Background()) //nolint:errcheck,gosec
+		g.session = nil
 	}
 	if g.driver != nil {
-		return g.driver.Close(context.Background())
+		err := g.driver.Close(context.Background())
+		g.driver = nil
+		return err
 	}
 	return nil
 }
