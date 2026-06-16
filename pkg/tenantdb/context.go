@@ -1,36 +1,29 @@
-// Package tenantdb provides tenant database isolation and execution helpers.
-
+// Package tenantdb re-exports tenant context primitives from
+// pkg/storage/postgres for backwards compatibility.
+//
+// New code should import github.com/byteBuilderX/stratum/pkg/storage/postgres
+// directly; this shim will be removed in phase 5 of the DDD refactor.
 package tenantdb
 
-import "context"
-
-// Role represents the access role encoded in a JWT claim.
-type Role string
-
-const (
-	RoleTenantAdmin Role = "tenant_admin"
-	RoleTenantUser  Role = "tenant_user"
-	RoleGlobalAdmin Role = "global_admin"
+import (
+	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
 
-// TenantContext carries tenant identity through the request lifecycle.
-// TenantID is empty for global_admin requests.
-type TenantContext struct {
-	TenantID string
-	UserID   string
-	Role     Role
-}
+// Role is an alias for postgres.Role.
+type Role = postgres.Role
 
-type ctxKey struct{}
+// TenantContext is an alias for postgres.TenantContext.
+type TenantContext = postgres.TenantContext
 
-// WithTenant returns a new context with tc embedded.
-func WithTenant(ctx context.Context, tc *TenantContext) context.Context {
-	return context.WithValue(ctx, ctxKey{}, tc)
-}
+// Role constants re-exported from pkg/storage/postgres.
+const (
+	RoleTenantAdmin = postgres.RoleTenantAdmin
+	RoleTenantUser  = postgres.RoleTenantUser
+	RoleGlobalAdmin = postgres.RoleGlobalAdmin
+)
 
-// FromContext extracts the TenantContext from ctx.
-// Returns (nil, false) if not present.
-func FromContext(ctx context.Context) (*TenantContext, bool) {
-	tc, ok := ctx.Value(ctxKey{}).(*TenantContext)
-	return tc, ok && tc != nil
-}
+// WithTenant re-exports postgres.WithTenant.
+var WithTenant = postgres.WithTenant
+
+// FromContext re-exports postgres.FromContext.
+var FromContext = postgres.FromContext

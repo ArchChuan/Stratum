@@ -30,6 +30,8 @@ linters:
         - name: unused-parameter
           disabled: true
   exclusions:
+    paths:
+      - web/node_modules
     rules:
       # Test files: unchecked errors and gosec/gocritic/noctx findings are acceptable
       - path: _test\.go
