@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "POST",
+    "path": "/auth/register",
+    "body": {
+      "error": "onboarding_token required"
+    },
+    "want_status": 400
+  }
+]

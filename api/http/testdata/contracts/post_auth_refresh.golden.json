@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "POST",
+    "path": "/auth/refresh",
+    "body": {
+      "error": "refresh token cookie missing"
+    },
+    "want_status": 401
+  }
+]

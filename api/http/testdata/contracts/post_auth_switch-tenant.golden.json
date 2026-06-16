@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "POST",
+    "path": "/auth/switch-tenant",
+    "body": {
+      "error": "missing Authorization header"
+    },
+    "want_status": 401
+  }
+]

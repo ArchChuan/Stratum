@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "PUT",
+    "path": "/agents/:id",
+    "body": {
+      "error": "missing bearer token"
+    },
+    "want_status": 401
+  }
+]

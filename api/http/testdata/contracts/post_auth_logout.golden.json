@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "POST",
+    "path": "/auth/logout",
+    "body": {
+      "message": "logged out"
+    },
+    "want_status": 200
+  }
+]

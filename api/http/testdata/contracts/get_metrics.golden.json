@@ -1,0 +1,8 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "GET",
+    "path": "/metrics",
+    "want_status": 200
+  }
+]

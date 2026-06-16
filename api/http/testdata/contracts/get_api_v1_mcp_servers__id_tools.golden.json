@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "GET",
+    "path": "/api/v1/mcp/servers/:id/tools",
+    "body": {
+      "error": "client not found: :id"
+    },
+    "want_status": 500
+  }
+]
