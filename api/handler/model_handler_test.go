@@ -46,8 +46,8 @@ func TestListModels_withProviders(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodGet, "/models", nil) //nolint:noctx
 
 	gw := llmgateway.NewGateway()
-	gw.RegisterClient(llmgateway.ProviderQwen, &llmgateway.QwenClient{})
-	gw.RegisterClient(llmgateway.ProviderZhipu, &llmgateway.ZhipuClient{})
+	gw.RegisterClient(llmgateway.ProviderQwen, llmgateway.NewQwenClient("test", nil))
+	gw.RegisterClient(llmgateway.ProviderZhipu, llmgateway.NewZhipuClient("test", nil))
 
 	h := NewModelHandler(gw)
 	h.ListModels(c)
