@@ -4,13 +4,17 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/graph"
 	"github.com/byteBuilderX/stratum/internal/capgateway"
 	"github.com/byteBuilderX/stratum/internal/memory"
+	"github.com/byteBuilderX/stratum/internal/memory/pipeline"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
 )
 
@@ -65,12 +69,12 @@ type ExecutionConfig struct {
 	MaxSteps       int
 	Timeout        time.Duration
 	Temperature    float32
-	EnableMemory   bool
 	EnableTools    bool
 	AvailableTools []string
 	Stream         bool
 	TokenCallback  func(string) // called per token when streaming; implies Stream=true
 	TenantID       string
+	TraceID        string
 	LLMAPIKeys     map[string]string
 	RAGSearchFn    func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
 	ExtraTools     []capgateway.ToolDefinition
@@ -81,19 +85,22 @@ type ExecutionConfig struct {
 
 // AgentConfig holds agent configuration
 type AgentConfig struct {
-	ID                      string
-	Name                    string
-	Type                    AgentType
-	Description             string
-	Persona                 string
-	SystemPrompt            string
-	LLMModel                string
-	MaxIterations           int
-	AllowedSkills           []string
-	MCPServerIDs            []string
-	Capabilities            []AgentCapability
-	KnowledgeWorkspaceIDs   []string
-	KnowledgeWorkspaceNames []string
+	ID                             string
+	Name                           string
+	Type                           AgentType
+	Description                    string
+	Persona                        string
+	SystemPrompt                   string
+	LLMModel                       string
+	EmbedModel                     string
+	MaxIterations                  int
+	AllowedSkills                  []string
+	MCPServerIDs                   []string
+	Capabilities                   []AgentCapability
+	KnowledgeWorkspaceIDs          []string
+	KnowledgeWorkspaceNames        []string
+	KnowledgeWorkspaceDescriptions []string
+	MaxContextTokens               int
 }
 
 // AgentResult represents output from an agent execution
@@ -130,6 +137,7 @@ type BaseAgent struct {
 	SessionContext *memory.SessionContext
 	CapGateway     capgateway.CapabilityGateway
 	ChatStore      ChatStore
+	MemoryInjector *pipeline.MemoryInjector
 }
 
 // AgentState represents the current state of an agent
@@ -267,16 +275,37 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	}
 	agentID := a.ID
 	agentType := a.Type
-	systemPrompt := a.SystemPrompt
+	systemPrompt := buildSystemPrompt(a.Persona, a.SystemPrompt)
 	llmModel := a.LLMModel
 	capGW := a.CapGateway
 	chatStore := a.ChatStore
 	metrics := a.metrics
 	workspaceNames := a.KnowledgeWorkspaceNames
+	workspaceDescs := a.KnowledgeWorkspaceDescriptions
+	maxContextTokens := a.MaxContextTokens
 	a.mu.Unlock()
+
+	// Inject memory context into system prompt
+	var memCtx string
+	if a.MemoryInjector != nil && cfg.ConversationID != "" {
+		ic := pipeline.InjectionContext{
+			TenantID:       cfg.TenantID,
+			UserID:         cfg.UserID,
+			AgentID:        agentID,
+			ConversationID: cfg.ConversationID,
+			Query:          input,
+		}
+		if mctx, err := a.MemoryInjector.BuildContext(ctx, ic); err != nil {
+			a.Logger.Warn("memory injection failed", zap.Error(err))
+		} else {
+			memCtx = mctx
+		}
+	}
 
 	a.Logger.Info("agent execution started",
 		zap.String("agent_id", agentID),
+		zap.String("trace_id", cfg.TraceID),
+		zap.String("conversation_id", cfg.ConversationID),
 		zap.String("type", string(agentType)),
 		zap.String("input", input))
 
@@ -310,8 +339,11 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			execErr = fmt.Errorf("react: build graph: %w", buildErr)
 			break
 		}
-		initMessages := BuildInitMessages(systemPrompt, history, cfg.HistoryWindow)
-		initMessages = append(initMessages, capgateway.LLMMessage{Role: "user", Content: input})
+		maxTokens := maxContextTokens
+		if maxTokens <= 0 {
+			maxTokens = constants.DefaultAgentContextTokens
+		}
+		initMessages := BuildContextMessages(systemPrompt, memCtx, history, input, maxTokens, cfg.HistoryWindow)
 
 		var availableTools []capgateway.ToolDefinition
 		if len(workspaceNames) > 0 && cfg.RAGSearchFn != nil {
@@ -320,8 +352,23 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 				enumVals[i] = n
 			}
 			availableTools = append(availableTools, capgateway.ToolDefinition{
-				Name:        "search_knowledge",
-				Description: "Search one or more knowledge bases for relevant information. Pass all relevant workspaces to search simultaneously.",
+				Name: "stratum_search_knowledge",
+				Description: func() string {
+					var b strings.Builder
+					b.WriteString("Search one or more knowledge bases for relevant information. Available workspaces:\n")
+					for i, n := range workspaceNames {
+						desc := ""
+						if i < len(workspaceDescs) {
+							desc = workspaceDescs[i]
+						}
+						if desc != "" {
+							b.WriteString("- " + n + ": " + desc + "\n")
+						} else {
+							b.WriteString("- " + n + "\n")
+						}
+					}
+					return strings.TrimRight(b.String(), "\n")
+				}(),
 				InputSchema: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -347,16 +394,54 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 				},
 			})
 		}
+		if a.MemoryInjector != nil {
+			availableTools = append(availableTools, capgateway.ToolDefinition{
+				Name:        "stratum_recall_memory",
+				Description: "Search long-term memory for relevant past interactions, entities, and context. Use when you need to recall information from previous conversations.",
+				InputSchema: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"query": map[string]interface{}{
+							"type":        "string",
+							"description": "Search query to find relevant memories",
+						},
+						"scope": map[string]interface{}{
+							"type":        "string",
+							"enum":        []string{"private", "personal", "shared"},
+							"description": "private=this user+agent, personal=this user across agents, shared=all tenant memories",
+						},
+						"limit": map[string]interface{}{
+							"type":        "integer",
+							"description": "Max results (1-20, default 5)",
+						},
+					},
+					"required": []string{"query"},
+				},
+			})
+		}
 		initState := agentgraph.ReActState{
 			TenantID:       cfg.TenantID,
+			TraceID:        cfg.TraceID,
+			ConversationID: cfg.ConversationID,
 			LLMAPIKeys:     cfg.LLMAPIKeys,
 			Model:          llmModel,
 			Messages:       initMessages,
 			OnToken:        cfg.TokenCallback,
-			AvailableTools: append(availableTools, cfg.ExtraTools...),
+			AvailableTools: mergeTools(availableTools, cfg.ExtraTools, a.Logger),
 			RAGSearchFn:    cfg.RAGSearchFn,
 		}
+		if a.MemoryInjector != nil {
+			recallHandler := pipeline.NewRecallHandler(
+				a.MemoryInjector.Pool(), a.Logger,
+				a.MemoryInjector.EmbedSvc(), a.MemoryInjector.EmbedResolver(), a.MemoryInjector.VectorDB(),
+			)
+			initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
+				return recallHandler.Handle(ctx, cfg.TenantID, cfg.UserID, agentID, input)
+			}
+		}
 		execCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+		execCtx = reqctx.WithTraceID(execCtx, cfg.TraceID)
+		execCtx = reqctx.WithTenantID(execCtx, cfg.TenantID)
 		defer cancel()
 		finalState, runErr := cg.Invoke(execCtx, initState, agentgraph.RunConfig{MaxSteps: cfg.MaxSteps})
 		if runErr != nil {
@@ -410,6 +495,8 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			ConversationID: cfg.ConversationID,
 			Role:           "user",
 			Content:        input,
+			UserID:         cfg.UserID,
+			AgentID:        agentID,
 		}
 		if err := chatStore.AddMessage(saveCtx, cfg.TenantID, userMsg); err != nil {
 			a.Logger.Warn("agent: failed to save user message",
@@ -420,6 +507,8 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			ConversationID: cfg.ConversationID,
 			Role:           "agent",
 			Content:        result.Output,
+			UserID:         cfg.UserID,
+			AgentID:        agentID,
 		}
 		if err := chatStore.AddMessage(saveCtx, cfg.TenantID, agentMsg); err != nil {
 			a.Logger.Warn("agent: failed to save agent message",
@@ -468,13 +557,6 @@ func WithTemperature(temperature float32) ExecutionOption {
 	}
 }
 
-// WithMemory enables memory usage
-func WithMemory(enable bool) ExecutionOption {
-	return func(cfg *ExecutionConfig) {
-		cfg.EnableMemory = enable
-	}
-}
-
 // WithTools enables tool usage
 func WithTools(tools []string) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
@@ -502,6 +584,12 @@ func WithTokenCallback(cb func(string)) ExecutionOption {
 func WithTenantID(id string) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.TenantID = id
+	}
+}
+
+func WithTraceID(id string) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.TraceID = id
 	}
 }
 
@@ -561,7 +649,7 @@ func (cfg *ExecutionConfig) ApplyOptions(opts []ExecutionOption) {
 // is normalized to "assistant" for LLM protocol. window ≤ 0 defaults to 20.
 func BuildInitMessages(systemPrompt string, history []*ChatMessage, window int) []capgateway.LLMMessage {
 	if window <= 0 {
-		window = 20
+		window = constants.DefaultInitHistoryWindow
 	}
 	if len(history) > window {
 		history = history[len(history)-window:]
@@ -578,4 +666,37 @@ func BuildInitMessages(systemPrompt string, history []*ChatMessage, window int) 
 		msgs = append(msgs, capgateway.LLMMessage{Role: role, Content: m.Content})
 	}
 	return msgs
+}
+
+// mergeTools combines built-in and extra tools, dropping duplicates (by name) with a warning.
+// Built-in tools take priority: if an extra tool shares a name, it is silently dropped.
+func mergeTools(builtins []capgateway.ToolDefinition, extras []capgateway.ToolDefinition, logger *zap.Logger) []capgateway.ToolDefinition {
+	seen := make(map[string]struct{}, len(builtins)+len(extras))
+	out := make([]capgateway.ToolDefinition, 0, len(builtins)+len(extras))
+	for _, t := range builtins {
+		seen[t.Name] = struct{}{}
+		out = append(out, t)
+	}
+	for _, t := range extras {
+		if _, dup := seen[t.Name]; dup {
+			logger.Warn("tool name collision: extra tool shadowed by built-in, skipping",
+				zap.String("tool_name", t.Name))
+			continue
+		}
+		seen[t.Name] = struct{}{}
+		out = append(out, t)
+	}
+	return out
+}
+
+// buildSystemPrompt prepends persona to systemPrompt with a blank line separator.
+// If persona is empty, systemPrompt is returned as-is.
+func buildSystemPrompt(persona, systemPrompt string) string {
+	if persona == "" {
+		return systemPrompt
+	}
+	if systemPrompt == "" {
+		return persona
+	}
+	return persona + "\n\n" + systemPrompt
 }

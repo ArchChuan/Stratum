@@ -1,113 +1,23 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import {
-  Card, Descriptions, Form, InputNumber, Select, Button, Upload, Input,
-  message, Skeleton, Tag, Space, Divider, Typography, Badge,
+  Card, Form, InputNumber, Select, Button, Upload, Input,
+  Skeleton, Tag, Space, Divider, Typography, Badge,
 } from 'antd';
-import { UploadOutlined, SendOutlined, ArrowLeftOutlined, InboxOutlined } from '@ant-design/icons';
-import { useParams, useNavigate } from 'react-router-dom';
-import { getWorkspaceStats, updateWorkspace, ingestDocument, queryKnowledge } from '../services/api';
-import { useAuth } from '../hooks/useAuth';
+import { SendOutlined, ArrowLeftOutlined, InboxOutlined } from '@ant-design/icons';
+import useKnowledgeDetailPage from '../hooks/useKnowledgeDetailPage';
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 
 const KnowledgeDetailPage = () => {
-  const { name } = useParams();
-  const navigate = useNavigate();
-  const { user } = useAuth();
-  const isAdmin = user?.role === 'admin' || user?.role === 'owner';
-
-  const [stats, setStats] = useState(null);
-  const [statsLoading, setStatsLoading] = useState(false);
-  const [configForm] = Form.useForm();
-  const [configLoading, setConfigLoading] = useState(false);
-  const [uploadLoading, setUploadLoading] = useState(false);
-  const [queryForm] = Form.useForm();
-  const [queryLoading, setQueryLoading] = useState(false);
-  const [queryResult, setQueryResult] = useState(null);
-
-  const fetchStats = async () => {
-    setStatsLoading(true);
-    try {
-      const res = await getWorkspaceStats(name);
-      setStats(res.data);
-      configForm.setFieldsValue({
-        chunk_size: res.data.config?.chunk_size,
-        chunk_overlap: res.data.config?.chunk_overlap,
-        query_mode: res.data.config?.query_mode,
-        top_k: res.data.config?.top_k,
-      });
-    } catch (err) {
-      message.error(err.response?.data?.error || '获取知识库详情失败');
-    } finally {
-      setStatsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchStats();
-  }, [name]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleConfigSave = async (values) => {
-    setConfigLoading(true);
-    try {
-      await updateWorkspace(name, {
-        config: {
-          embedding_model: stats?.config?.embedding_model,
-          chunk_size: values.chunk_size,
-          chunk_overlap: values.chunk_overlap,
-          query_mode: values.query_mode,
-          top_k: values.top_k,
-        },
-      });
-      message.success('配置已保存');
-      fetchStats();
-    } catch (err) {
-      if (err.response?.status !== 403) {
-        message.error(err.response?.data?.error || '保存失败');
-      }
-    } finally {
-      setConfigLoading(false);
-    }
-  };
-
-  const handleUpload = async ({ file }) => {
-    const formData = new FormData();
-    formData.append('workspace', name);
-    formData.append('file', file);
-    setUploadLoading(true);
-    try {
-      const res = await ingestDocument(formData);
-      message.success(`上传成功，共 ${res.data.total_chunks} 个分块`);
-      fetchStats();
-    } catch (err) {
-      if (err.response?.status !== 403) {
-        message.error(err.response?.data?.error || '上传失败');
-      }
-    } finally {
-      setUploadLoading(false);
-    }
-    return false;
-  };
-
-  const handleQuery = async (values) => {
-    setQueryLoading(true);
-    setQueryResult(null);
-    try {
-      const res = await queryKnowledge({
-        question: values.question,
-        workspace: name,
-        mode: values.mode || stats?.config?.query_mode || 'hybrid',
-        topK: values.top_k || stats?.config?.top_k || 5,
-      });
-      setQueryResult(res.data);
-    } catch (err) {
-      message.error(err.response?.data?.error || '查询失败');
-    } finally {
-      setQueryLoading(false);
-    }
-  };
+  const {
+    name, navigate, isAdmin,
+    stats, statsLoading,
+    configForm, configLoading,
+    uploadLoading, queryForm, queryLoading, queryResult,
+    handleConfigSave, handleUpload, handleQuery,
+  } = useKnowledgeDetailPage();
 
   if (statsLoading && !stats) {
     return (
@@ -170,11 +80,11 @@ const KnowledgeDetailPage = () => {
                 <Option value="graph">图谱</Option>
               </Select>
             </Form.Item>
-            <Form.Item label="分块大小" name="chunk_size">
-              <InputNumber min={64} max={2048} style={{ width: 100 }} />
+            <Form.Item label="分块大小" name="chunk_size" tooltip="创建后不可修改">
+              <InputNumber min={64} max={2048} style={{ width: 100 }} disabled />
             </Form.Item>
-            <Form.Item label="分块重叠" name="chunk_overlap">
-              <InputNumber min={0} max={512} style={{ width: 100 }} />
+            <Form.Item label="分块重叠" name="chunk_overlap" tooltip="创建后不可修改">
+              <InputNumber min={0} max={512} style={{ width: 100 }} disabled />
             </Form.Item>
             <Form.Item label="Top-K" name="top_k">
               <InputNumber min={1} max={20} style={{ width: 80 }} />

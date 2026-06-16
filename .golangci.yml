@@ -29,13 +29,6 @@ linters:
           disabled: true
         - name: unused-parameter
           disabled: true
-
-formatters:
-  enable:
-    - gofmt
-    - goimports
-
-issues:
   exclusions:
     rules:
       # Test files: unchecked errors and gosec/gocritic/noctx findings are acceptable
@@ -104,3 +97,8 @@ issues:
 
       - path: 'internal/skillgateway/'
         linters: [unused]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

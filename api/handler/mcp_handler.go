@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/mcp"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -60,7 +61,10 @@ func (h *MCPHandler) ListTools(c *gin.Context) {
 
 	tools, err := h.manager.ListTools(c.Request.Context(), serverID)
 	if err != nil {
-		h.logger.Error("failed to list tools", zap.String("server_id", serverID), zap.Error(err))
+		h.logger.Error("failed to list tools",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.String("server_id", serverID),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
 		})
@@ -80,7 +84,10 @@ func (h *MCPHandler) ListResources(c *gin.Context) {
 
 	resources, err := h.manager.ListResources(c.Request.Context(), serverID)
 	if err != nil {
-		h.logger.Error("failed to list resources", zap.String("server_id", serverID), zap.Error(err))
+		h.logger.Error("failed to list resources",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.String("server_id", serverID),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
 		})
@@ -108,7 +115,10 @@ func (h *MCPHandler) ExecuteTool(c *gin.Context) {
 
 	result, err := h.skillRegistry.ExecuteSkill(toolID, input)
 	if err != nil {
-		h.logger.Error("failed to execute tool", zap.String("tool_id", toolID), zap.Error(err))
+		h.logger.Error("failed to execute tool",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.String("tool_id", toolID),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
 		})
@@ -167,7 +177,9 @@ func (h *MCPHandler) GetSkill(c *gin.Context) {
 func (h *MCPHandler) RefreshSkills(c *gin.Context) {
 	err := h.skillRegistry.RefreshSkills(c.Request.Context())
 	if err != nil {
-		h.logger.Error("failed to refresh skills", zap.Error(err))
+		h.logger.Error("failed to refresh skills",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
 		})
@@ -247,9 +259,19 @@ func (h *MCPHandler) ConnectServer(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}
-		h.logger.Error("failed to connect MCP server", zap.String("server_id", cfg.ID), zap.Error(err))
+		h.logger.Error("failed to connect MCP server",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.String("server_id", cfg.ID),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	if err := h.skillRegistry.RegisterServer(c.Request.Context(), cfg.ID); err != nil {
+		h.logger.Warn("failed to register MCP skills",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.String("server_id", cfg.ID),
+			zap.Error(err))
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"message": "connected", "server_id": cfg.ID})
@@ -265,7 +287,10 @@ func (h *MCPHandler) DisconnectServer(c *gin.Context) {
 
 	serverID := c.Param("id")
 	if err := h.manager.Disconnect(c.Request.Context(), serverID); err != nil {
-		h.logger.Error("failed to disconnect MCP server", zap.String("server_id", serverID), zap.Error(err))
+		h.logger.Error("failed to disconnect MCP server",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.String("server_id", serverID),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

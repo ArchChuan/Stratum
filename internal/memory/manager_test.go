@@ -40,14 +40,11 @@ func TestNewMemoryManagerWithNilConfig(t *testing.T) {
 	}
 }
 
-func TestMemoryManagerWithWindowSize(t *testing.T) {
+func TestMemoryManagerWithVectorConfig(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &MemoryConfig{
-		ShortTermWindowSize:    10,
-		MaxShortTermMessages:   100,
 		MaxVectorResults:       10,
-		EnableSummary:          false,
-		EnableVectorSearch:     false,
+		EnableVectorSearch:     true,
 		EnableEntityExtraction: false,
 		EnablePersistence:      false,
 	}
@@ -56,56 +53,11 @@ func TestMemoryManagerWithWindowSize(t *testing.T) {
 
 	if manager == nil { //nolint:staticcheck
 		t.Error("expected non-nil manager")
+		return
 	}
 
-	if manager.shortTerm == nil { //nolint:staticcheck
-		t.Error("expected short-term memory to be initialized")
-	}
-}
-
-func TestMemoryManagerWithSummary(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := &MemoryConfig{
-		ShortTermWindowSize:    0,
-		MaxShortTermMessages:   100,
-		MaxVectorResults:       10,
-		EnableSummary:          true,
-		EnableVectorSearch:     false,
-		EnableEntityExtraction: false,
-		EnablePersistence:      false,
-	}
-
-	manager := NewMemoryManager(cfg, logger, nil, nil, nil, nil)
-
-	if manager == nil { //nolint:staticcheck
-		t.Error("expected non-nil manager")
-	}
-
-	if manager.shortTerm == nil { //nolint:staticcheck
-		t.Error("expected short-term memory to be initialized")
-	}
-}
-
-func TestMemoryManagerWithBuffer(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := &MemoryConfig{
-		ShortTermWindowSize:    0,
-		MaxShortTermMessages:   100,
-		MaxVectorResults:       10,
-		EnableSummary:          false,
-		EnableVectorSearch:     false,
-		EnableEntityExtraction: false,
-		EnablePersistence:      false,
-	}
-
-	manager := NewMemoryManager(cfg, logger, nil, nil, nil, nil)
-
-	if manager == nil { //nolint:staticcheck
-		t.Error("expected non-nil manager")
-	}
-
-	if manager.shortTerm == nil { //nolint:staticcheck
-		t.Error("expected short-term memory to be initialized")
+	if manager.config == nil { //nolint:staticcheck
+		t.Error("expected config to be set")
 	}
 }
 
@@ -128,86 +80,6 @@ func TestMemoryManagerAdd(t *testing.T) {
 	}
 
 	err := manager.Add(ctx, entry)
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-}
-
-func TestConversationBufferMemory(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := DefaultMemoryConfig()
-
-	mem := NewConversationBufferMemory(cfg, logger)
-
-	if mem == nil {
-		t.Error("expected non-nil memory")
-	}
-
-	ctx := context.Background()
-	entry := &MemoryEntry{
-		ID:      "entry-1",
-		Type:    ShortTermMemory,
-		Role:    "user",
-		Content: "test content",
-	}
-
-	err := mem.Add(ctx, entry)
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-}
-
-func TestConversationSummaryMemory(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := DefaultMemoryConfig()
-
-	mem := NewConversationSummaryMemory(cfg, logger)
-
-	if mem == nil {
-		t.Error("expected non-nil memory")
-	}
-
-	ctx := context.Background()
-	entry := &MemoryEntry{
-		ID:      "entry-1",
-		Type:    ShortTermMemory,
-		Role:    "user",
-		Content: "test content",
-	}
-
-	err := mem.Add(ctx, entry)
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-}
-
-func TestConversationWindowMemory(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := &MemoryConfig{
-		ShortTermWindowSize:    5,
-		MaxShortTermMessages:   100,
-		MaxVectorResults:       10,
-		EnableSummary:          false,
-		EnableVectorSearch:     false,
-		EnableEntityExtraction: false,
-		EnablePersistence:      false,
-	}
-
-	mem := NewConversationWindowMemory(cfg, logger)
-
-	if mem == nil {
-		t.Error("expected non-nil memory")
-	}
-
-	ctx := context.Background()
-	entry := &MemoryEntry{
-		ID:      "entry-1",
-		Type:    ShortTermMemory,
-		Role:    "user",
-		Content: "test content",
-	}
-
-	err := mem.Add(ctx, entry)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}

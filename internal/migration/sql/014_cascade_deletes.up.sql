@@ -1,0 +1,1 @@
+-- no-op: model_providers and models tables are not used by any business code

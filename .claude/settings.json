@@ -1,6 +1,6 @@
 {
   "env": {
-    "GO_VERSION": "1.22",
+    "GO_VERSION": "1.25",
     "DOCKER_BUILDKIT": "1",
     "COMPOSE_DOCKER_CLI_BUILD": "1",
     "GOPROXY": "https://goproxy.cn,direct"
@@ -88,6 +88,17 @@
             "type": "command",
             "command": "path=$(jq -r '.tool_input.file_path'); if echo \"$path\" | grep -qE 'config/prod\\.yaml'; then echo '{\"continue\": false, \"stopReason\": \"🚫 边界5-生产配置: config/prod.yaml 禁止修改\"}'; else echo '{\"continue\": true}'; fi",
             "statusMessage": "保护生产配置"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /home/yang/go-projects/stratum/.claude/hooks/check-migration-tenant-tables.sh",
+            "statusMessage": "检查迁移文件 tenant 表违规",
+            "timeout": 10
           }
         ]
       }

@@ -24,7 +24,7 @@ func TestMockGraphRAGInterface(t *testing.T) {
 	}
 
 	mockGraphRAG.SetQueryResult([]interface{}{"test result"})
-	result, err := mockGraphRAG.Query(ctx, "test query")
+	result, err := mockGraphRAG.Query(ctx, "test query", nil)
 	if err != nil {
 		t.Errorf("expected no error from Query, got %v", err)
 	}
@@ -111,7 +111,7 @@ func TestMockGraphRAGSetters(t *testing.T) {
 	mockGraphRAG.SetQueryResult(testResult)
 
 	ctx := context.Background()
-	result, err := mockGraphRAG.Query(ctx, "test")
+	result, err := mockGraphRAG.Query(ctx, "test", nil)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}

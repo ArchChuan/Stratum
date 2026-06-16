@@ -5,7 +5,7 @@ import {
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, SearchOutlined, ThunderboltOutlined,
-  CodeOutlined, RobotOutlined, PartitionOutlined, GlobalOutlined,
+  CodeOutlined, RobotOutlined, PartitionOutlined, GlobalOutlined, EditOutlined,
 } from '@ant-design/icons';
 import { getAllSkills, deleteSkill } from '../services/api';
 import { useNavigate } from 'react-router-dom';
@@ -21,6 +21,7 @@ const TYPE_META = {
 const typeMeta = (t) => TYPE_META[t] || TYPE_META.default;
 
 const SkillCard = ({ skill, onDelete }) => {
+  const navigate = useNavigate();
   const meta = typeMeta(skill.type);
   return (
     <Card
@@ -62,7 +63,10 @@ const SkillCard = ({ skill, onDelete }) => {
         <Text type="secondary" style={{ fontSize: 12 }}>
           {skill.created_at ? new Date(skill.created_at).toLocaleDateString('zh-CN') : '-'}
         </Text>
-        <Tooltip title="通过 Agent 执行此技能">
+        <Space size={0}>
+          <Tooltip title="编辑技能">
+            <Button type="text" size="small" icon={<EditOutlined />} onClick={() => navigate(`/skills/${skill.id}/edit`)} />
+          </Tooltip>
           <Popconfirm
             title={`确定删除技能 "${skill.name}" 吗？`}
             onConfirm={() => onDelete(skill.id)}
@@ -70,7 +74,7 @@ const SkillCard = ({ skill, onDelete }) => {
           >
             <Button type="text" size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
-        </Tooltip>
+        </Space>
       </div>
     </Card>
   );

@@ -31,7 +31,7 @@ func (m *MockGraphRAG) CreateRelationship(ctx context.Context, fromID, toID, rel
 	return nil
 }
 
-func (m *MockGraphRAG) Query(ctx context.Context, query string) (interface{}, error) {
+func (m *MockGraphRAG) Query(ctx context.Context, query string, params map[string]interface{}) (interface{}, error) {
 	if m.queryErr != nil {
 		return nil, m.queryErr
 	}

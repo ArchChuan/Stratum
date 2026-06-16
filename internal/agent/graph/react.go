@@ -2,10 +2,12 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/capgateway"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
 
@@ -19,6 +21,7 @@ const (
 type ReActState struct {
 	TenantID       string
 	TraceID        string
+	ConversationID string
 	LLMAPIKeys     map[string]string
 	Model          string
 	AvailableTools []capgateway.ToolDefinition
@@ -29,6 +32,7 @@ type ReActState struct {
 	TotalTokens    int
 	OnToken        func(string) // if non-nil, stream tokens from the final LLM response
 	RAGSearchFn    func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	RecallMemoryFn func(ctx context.Context, input map[string]any) (string, error)
 }
 
 // BuildReActGraph constructs and compiles the ReAct agent graph.
@@ -71,14 +75,27 @@ func makeLLMNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFun
 		})
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
-			logger.Error("react.llm",
-				zap.String("trace_id", s.TraceID),
-				zap.String("tenant_id", s.TenantID),
-				zap.String("model", s.Model),
-				zap.Int("step", s.Steps+1),
-				zap.Int64("latency_ms", latencyMs),
-				zap.Error(err),
-			)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				logger.Info("react.llm",
+					zap.String("trace_id", s.TraceID),
+					zap.String("tenant_id", s.TenantID),
+					zap.String("conversation_id", s.ConversationID),
+					zap.String("model", s.Model),
+					zap.Int("step", s.Steps+1),
+					zap.Int64("latency_ms", latencyMs),
+					zap.String("error", "context canceled"),
+				)
+			} else {
+				logger.Error("react.llm",
+					zap.String("trace_id", s.TraceID),
+					zap.String("tenant_id", s.TenantID),
+					zap.String("conversation_id", s.ConversationID),
+					zap.String("model", s.Model),
+					zap.Int("step", s.Steps+1),
+					zap.Int64("latency_ms", latencyMs),
+					zap.Error(err),
+				)
+			}
 			return s, fmt.Errorf("react llm node: %w", err)
 		}
 		s.Steps++
@@ -86,13 +103,28 @@ func makeLLMNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFun
 		logger.Info("react.llm",
 			zap.String("trace_id", s.TraceID),
 			zap.String("tenant_id", s.TenantID),
+			zap.String("conversation_id", s.ConversationID),
 			zap.String("model", s.Model),
 			zap.Int("step", s.Steps),
-			zap.Int("tokens", resp.Usage.Total),
+			zap.Int("prompt_tokens", resp.Usage.Prompt),
+			zap.Int("completion_tokens", resp.Usage.Completion),
 			zap.Int("total_tokens", s.TotalTokens),
 			zap.Int64("latency_ms", latencyMs),
 			zap.Bool("has_tool_calls", len(resp.ToolCalls) > 0),
 		)
+		if logger.Core().Enabled(zap.DebugLevel) {
+			preview := resp.Content
+			if len(preview) > 200 {
+				preview = preview[:200] + "..."
+			}
+			logger.Debug("react.llm.response",
+				zap.String("trace_id", s.TraceID),
+				zap.String("model", s.Model),
+				zap.Int("step", s.Steps),
+				zap.Int("tool_calls", len(resp.ToolCalls)),
+				zap.String("content_preview", preview),
+			)
+		}
 		if len(resp.ToolCalls) == 0 {
 			s.Output = resp.Content
 			s.Messages = append(s.Messages, capgateway.LLMMessage{
@@ -118,9 +150,10 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 		for _, tc := range last.ToolCalls {
 			toolStart := time.Now()
 			var content string
-			if tc.Name == "search_knowledge" {
+			switch tc.Name {
+			case "stratum_search_knowledge":
 				if s.RAGSearchFn == nil {
-					content = "error: search_knowledge tool not configured"
+					content = "error: stratum_search_knowledge tool not configured"
 				} else {
 					var workspaces []string
 					if raw, ok := tc.Arguments["workspaces"].([]interface{}); ok {
@@ -134,8 +167,8 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 					topK := 5
 					if v, ok := tc.Arguments["top_k"].(float64); ok {
 						topK = int(v)
-						if topK > 20 {
-							topK = 20
+						if topK > constants.MaxRAGTopK {
+							topK = constants.MaxRAGTopK
 						}
 					}
 					var ragErr error
@@ -148,10 +181,29 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 				logger.Info("react.tool",
 					zap.String("trace_id", s.TraceID),
 					zap.String("tenant_id", s.TenantID),
+					zap.String("conversation_id", s.ConversationID),
 					zap.String("tool_name", tc.Name),
 					zap.Int64("latency_ms", toolLatencyMs),
 				)
-			} else {
+			case "stratum_recall_memory":
+				if s.RecallMemoryFn == nil {
+					content = "error: stratum_recall_memory tool not configured"
+				} else {
+					var recallErr error
+					content, recallErr = s.RecallMemoryFn(ctx, tc.Arguments)
+					if recallErr != nil {
+						content = fmt.Sprintf("error: %v", recallErr)
+					}
+				}
+				toolLatencyMs := time.Since(toolStart).Milliseconds()
+				logger.Info("react.tool",
+					zap.String("trace_id", s.TraceID),
+					zap.String("tenant_id", s.TenantID),
+					zap.String("conversation_id", s.ConversationID),
+					zap.String("tool_name", tc.Name),
+					zap.Int64("latency_ms", toolLatencyMs),
+				)
+			default:
 				toolResp, err := capGW.Route(ctx, capgateway.CapabilityRequest{
 					TraceID:  s.TraceID,
 					TenantID: s.TenantID,
@@ -165,6 +217,7 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 					logger.Error("react.tool",
 						zap.String("trace_id", s.TraceID),
 						zap.String("tenant_id", s.TenantID),
+						zap.String("conversation_id", s.ConversationID),
 						zap.String("tool_name", tc.Name),
 						zap.Int64("latency_ms", toolLatencyMs),
 						zap.Error(err),
@@ -174,6 +227,7 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 					logger.Info("react.tool",
 						zap.String("trace_id", s.TraceID),
 						zap.String("tenant_id", s.TenantID),
+						zap.String("conversation_id", s.ConversationID),
 						zap.String("tool_name", tc.Name),
 						zap.Int64("latency_ms", toolLatencyMs),
 					)
@@ -182,11 +236,24 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 					logger.Info("react.tool",
 						zap.String("trace_id", s.TraceID),
 						zap.String("tenant_id", s.TenantID),
+						zap.String("conversation_id", s.ConversationID),
 						zap.String("tool_name", tc.Name),
 						zap.Int64("latency_ms", toolLatencyMs),
 					)
 					content = toolResp.Content
 				}
+			}
+			if logger.Core().Enabled(zap.DebugLevel) {
+				preview := content
+				if len(preview) > 200 {
+					preview = preview[:200] + "..."
+				}
+				logger.Debug("react.tool.response",
+					zap.String("trace_id", s.TraceID),
+					zap.String("tool_name", tc.Name),
+					zap.Int("step", s.Steps),
+					zap.String("content_preview", preview),
+				)
 			}
 			s.Messages = append(s.Messages, capgateway.LLMMessage{
 				Role:       "tool",

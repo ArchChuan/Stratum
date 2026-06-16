@@ -35,6 +35,13 @@ func NewCodeSkillWithExecutor(id, name, description, code, language string, exec
 	return cs
 }
 
+func (cs *CodeSkill) GetConfig() map[string]any {
+	return map[string]any{
+		"code":     cs.Code,
+		"language": cs.Language,
+	}
+}
+
 // Execute delegates to CodeExecutor if one is set, otherwise returns a placeholder.
 // The input map may contain a "__tenant_id" key for per-tenant rate limiting.
 func (cs *CodeSkill) Execute(ctx context.Context, input interface{}) (interface{}, error) {

@@ -1,18 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import {
-  Button, Modal, Form, Input, Select, Space, message, Popconfirm, Tag,
+  Button, Modal, Form, Input, Select, Space, Popconfirm, Tag,
   Typography, Card, Row, Col, Skeleton, Empty, Tooltip,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, ArrowRightOutlined, BookOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
-import { listWorkspaces, createWorkspace, deleteWorkspace } from '../services/api';
-import { useAuth } from '../hooks/useAuth';
+import useKnowledgePage from '../hooks/useKnowledgePage';
+import { EMBEDDING_MODEL_OPTIONS } from '../constants';
 
 const { Title, Text, Paragraph } = Typography;
-const { Option } = Select;
 
 const MODE_COLORS = { hybrid: 'purple', vector: 'blue', graph: 'green' };
 const MODE_LABELS = { hybrid: '混合', vector: '向量', graph: '图谱' };
@@ -77,76 +75,13 @@ const WorkspaceCard = ({ ws, onDelete, onOpen, isAdmin }) => (
 );
 
 const KnowledgePage = () => {
-  const [workspaces, setWorkspaces] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [createLoading, setCreateLoading] = useState(false);
-  const [searchText, setSearchText] = useState('');
-  const [form] = Form.useForm();
-  const navigate = useNavigate();
-  const { user } = useAuth();
-  const isAdmin = user?.role === 'admin' || user?.role === 'owner';
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const res = await listWorkspaces();
-        if (!cancelled) setWorkspaces(res.data.workspaces || []);
-      } catch (err) {
-        if (!cancelled) message.error(err.response?.data?.error || '获取知识库列表失败');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
-  const handleCreate = async (values) => {
-    setCreateLoading(true);
-    try {
-      await createWorkspace({
-        name: values.name,
-        description: values.description || '',
-        config: {
-          embedding_model: values.embedding_model,
-          chunk_size: values.chunk_size || 512,
-          chunk_overlap: values.chunk_overlap || 64,
-          query_mode: values.query_mode || 'hybrid',
-          top_k: values.top_k || 5,
-        },
-      });
-      message.success('知识库创建成功');
-      setCreateOpen(false);
-      form.resetFields();
-      const res = await listWorkspaces();
-      setWorkspaces(res.data.workspaces || []);
-    } catch (err) {
-      if (err.response?.status !== 403) {
-        message.error(err.response?.data?.error || '创建失败');
-      }
-    } finally {
-      setCreateLoading(false);
-    }
-  };
-
-  const handleDelete = async (name) => {
-    try {
-      await deleteWorkspace(name);
-      message.success('知识库已删除');
-      setWorkspaces(prev => prev.filter(w => w.name !== name));
-    } catch (err) {
-      if (err.response?.status !== 403) {
-        message.error(err.response?.data?.error || '删除失败');
-      }
-    }
-  };
-
-  const filtered = workspaces.filter(w =>
-    w.name.toLowerCase().includes(searchText.toLowerCase()) ||
-    (w.description || '').toLowerCase().includes(searchText.toLowerCase())
-  );
+  const {
+    workspaces, loading, isAdmin,
+    createOpen, setCreateOpen, createLoading,
+    searchText, setSearchText,
+    form, navigate,
+    handleCreate, handleDelete,
+  } = useKnowledgePage();
 
   return (
     <div>
@@ -182,7 +117,7 @@ const KnowledgePage = () => {
             </Col>
           ))}
         </Row>
-      ) : filtered.length === 0 ? (
+      ) : workspaces.length === 0 ? (
         <Empty
           image={<BookOutlined style={{ fontSize: 48, color: '#d9d9d9' }} />}
           description={searchText ? '没有找到匹配的知识库' : '还没有知识库'}
@@ -196,7 +131,7 @@ const KnowledgePage = () => {
         </Empty>
       ) : (
         <Row gutter={[16, 16]}>
-          {filtered.map(ws => (
+          {workspaces.map(ws => (
             <Col xs={24} sm={12} lg={8} key={ws.name}>
               <WorkspaceCard
                 ws={ws}
@@ -221,14 +156,16 @@ const KnowledgePage = () => {
           <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入知识库名称' }]}>
             <Input placeholder="仅支持字母、数字、连字符" />
           </Form.Item>
-          <Form.Item label="描述" name="description">
-            <Input.TextArea rows={2} />
+          <Form.Item
+            label="描述"
+            name="description"
+            rules={[{ required: true, message: '请输入知识库描述' }]}
+            extra="此描述会直接展示给 AI 模型，请准确描述本知识库的内容范围，以便模型判断是否需要搜索"
+          >
+            <Input.TextArea rows={3} placeholder="例：包含产品手册、版本说明与常见问题，适用于产品功能咨询" />
           </Form.Item>
           <Form.Item label="嵌入模型" name="embedding_model" initialValue="text-embedding-v3" rules={[{ required: true }]}>
-            <Select>
-              <Option value="text-embedding-v3">text-embedding-v3（千问，1536维）</Option>
-              <Option value="embedding-3">embedding-3（智谱，2048维）</Option>
-            </Select>
+            <Select options={EMBEDDING_MODEL_OPTIONS} style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item label="查询模式" name="query_mode" initialValue="hybrid">
             <Select>

@@ -2,8 +2,15 @@
 package memory
 
 import (
+	"errors"
 	"time"
 )
+
+// ErrNotFound is returned when a memory entry is not found.
+var ErrNotFound = errors.New("memory entry not found")
+
+// tenantIDKey is the context key for tenant ID.
+type tenantIDKey struct{}
 
 // MemoryType defines the type of memory
 type MemoryType string
@@ -39,11 +46,6 @@ type MemoryEntry struct {
 
 // MemoryConfig holds configuration for memory systems
 type MemoryConfig struct {
-	// Short-term memory
-	MaxShortTermMessages int  `json:"max_short_term_messages"`
-	ShortTermWindowSize  int  `json:"short_term_window_size"`
-	EnableSummary        bool `json:"enable_summary"`
-
 	// Long-term memory
 	EnableVectorSearch bool    `json:"enable_vector_search"`
 	VectorCollection   string  `json:"vector_collection"`
@@ -157,10 +159,6 @@ type MemoryEvent struct {
 // DefaultMemoryConfig returns the default memory configuration
 func DefaultMemoryConfig() *MemoryConfig {
 	return &MemoryConfig{
-		MaxShortTermMessages: DefaultMaxMessages,
-		ShortTermWindowSize:  DefaultWindowSize,
-		EnableSummary:        true,
-
 		EnableVectorSearch: true,
 		VectorCollection:   "memory_vectors",
 		MaxVectorResults:   5,

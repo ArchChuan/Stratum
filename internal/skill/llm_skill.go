@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"go.uber.org/zap"
 )
 
@@ -88,11 +89,19 @@ func (ls *LLMSkill) Execute(ctx context.Context, input interface{}) (interface{}
 
 	resp, err := gw.Complete(ctx, req)
 	if err != nil {
-		ls.logger.Error("LLM call failed", zap.Error(err))
+		sc, _ := observability.SpanFromContext(ctx)
+		ls.logger.Error("LLM call failed",
+			zap.String("trace_id", sc.TraceID),
+			zap.String("model", model),
+			zap.Error(err))
 		return nil, err
 	}
 
-	ls.logger.Info("LLM call success", zap.String("model", model), zap.Int("tokens", resp.Usage.TotalTokens))
+	sc, _ := observability.SpanFromContext(ctx)
+	ls.logger.Info("LLM call success",
+		zap.String("trace_id", sc.TraceID),
+		zap.String("model", model),
+		zap.Int("tokens", resp.Usage.TotalTokens))
 
 	return map[string]interface{}{
 		"content": resp.Content,

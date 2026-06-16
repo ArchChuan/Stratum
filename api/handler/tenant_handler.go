@@ -457,6 +457,63 @@ func (h *TenantHandler) ListUserTenants(c *gin.Context) {
 	c.JSON(http.StatusOK, model.TenantListResponse{Tenants: items})
 }
 
+// SetEmbedModel PATCH /tenant/embed-model — set-once: fails if embed_model already configured.
+func (h *TenantHandler) SetEmbedModel(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		return
+	}
+	roleVal, _ := c.Get("auth.role")
+	roleStr, _ := roleVal.(string)
+	if roleStr != "admin" && roleStr != "owner" {
+		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "admin or owner role required"})
+		return
+	}
+	var req struct {
+		EmbedModel string `json:"embed_model" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: err.Error()})
+		return
+	}
+	var existingJSON []byte
+	_ = h.db.QueryRow(c.Request.Context(),
+		"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL", tenantID,
+	).Scan(&existingJSON)
+	existing := map[string]interface{}{}
+	if len(existingJSON) > 0 {
+		_ = json.Unmarshal(existingJSON, &existing)
+	}
+	if v, ok := existing["embed_model"]; ok && v != "" {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: "embed_model already set and cannot be changed"})
+		return
+	}
+	existing["embed_model"] = req.EmbedModel
+	merged, err := json.Marshal(existing)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "marshal failed"})
+		return
+	}
+	tag, err := h.db.Exec(c.Request.Context(),
+		"UPDATE public.tenants SET settings=$1, updated_at=now() WHERE id=$2 AND deleted_at IS NULL",
+		merged, tenantID,
+	)
+	if err != nil {
+		h.logger.Error("set embed_model failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "update failed"})
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: 404, Message: "tenant not found"})
+		return
+	}
+	if h.cache != nil {
+		h.cache.Invalidate(tenantID)
+	}
+	c.JSON(http.StatusOK, gin.H{"embed_model": req.EmbedModel})
+}
+
 // maskAPIKey shows the first 6 chars then 8 bullets — enough to identify the key without exposing it.
 func maskAPIKey(key string) string {
 	if key == "" {

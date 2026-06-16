@@ -30,6 +30,7 @@ type Config struct {
 	FrontendURL            string
 	GitHubCallbackURL      string
 	SecureCookies          bool
+	MemoryPipelineEnabled  bool
 }
 
 type Services struct {
@@ -58,6 +59,7 @@ func Load() (*Config, error) {
 		FrontendURL:            getEnv("FRONTEND_URL", "http://localhost:3002"),
 		GitHubCallbackURL:      getEnv("GITHUB_CALLBACK_URL", "http://localhost:3002/auth/github/callback"),
 		SecureCookies:          getEnv("SECURE_COOKIES", "") == "true",
+		MemoryPipelineEnabled:  getEnv("MEMORY_PIPELINE_ENABLED", "") == "true",
 	}, nil
 }
 

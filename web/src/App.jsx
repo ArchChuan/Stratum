@@ -10,6 +10,7 @@ import { Routes, Route, useNavigate, Link, useLocation } from 'react-router-dom'
 
 import SkillsListPage from './pages/SkillsListPage';
 import CreateSkillPage from './pages/CreateSkillPage';
+import EditSkillPage from './pages/EditSkillPage';
 import ExecutionHistoryPage from './pages/ExecutionHistoryPage';
 import DashboardPage from './pages/DashboardPage';
 import AgentsListPage from './pages/AgentsListPage';
@@ -18,6 +19,7 @@ import EditAgentPage from './pages/EditAgentPage';
 import AgentChatPage from './pages/AgentChatPage';
 import MemoryPage from './pages/MemoryPage';
 import MCPServersPage from './pages/MCPServersPage';
+import CreateMCPPage from './pages/CreateMCPPage';
 import LoginPage from './pages/auth/LoginPage';
 import CallbackPage from './pages/auth/CallbackPage';
 import OnboardingPage from './pages/auth/OnboardingPage';
@@ -28,6 +30,7 @@ import KnowledgePage from './pages/KnowledgePage';
 import KnowledgeDetailPage from './pages/KnowledgeDetailPage';
 import PrivateRoute from './components/PrivateRoute';
 import { AuthProvider } from './contexts/AuthContext';
+import { ChatStreamProvider } from './contexts/ChatStreamContext';
 import { useAuth } from './hooks/useAuth';
 import { setupApiInterceptors, checkHealth, createUserTenant } from './services/api';
 
@@ -81,11 +84,9 @@ const AppInner = () => {
     setCreateTenantLoading(true);
     try {
       const res = await createUserTenant(values.tenant_name);
-      const newToken = res.data.access_token;
       await switchTenant(res.data.tenant_id);
       setCreateTenantOpen(false);
       createTenantForm.resetFields();
-      localStorage.setItem('access_token', newToken);
       navigate('/', { replace: true });
     } catch (err) {
       message.error(err.response?.data?.error || '创建租户失败');
@@ -147,9 +148,13 @@ const AppInner = () => {
       ],
     },
     {
-      key: '/mcp',
+      key: 'mcp-group',
       icon: <ApiOutlined />,
-      label: <Link to="/mcp">MCP 服务器</Link>,
+      label: 'MCP 服务器',
+      children: [
+        { key: '/mcp', icon: <ApiOutlined />, label: <Link to="/mcp">服务器列表</Link> },
+        { key: '/mcp/create', icon: <PlusCircleOutlined />, label: <Link to="/mcp/create">添加服务器</Link> },
+      ],
     },
     ...(user?.current_tenant ? [
       {
@@ -178,9 +183,11 @@ const AppInner = () => {
       ? ['skill-group']
       : ['/knowledge', '/memory'].some(p => location.pathname.startsWith(p))
         ? ['knowledge-group']
-        : ['/tenant'].some(p => location.pathname.startsWith(p))
-          ? ['tenant-group']
-          : [];
+        : ['/mcp'].some(p => location.pathname.startsWith(p))
+          ? ['mcp-group']
+          : ['/tenant'].some(p => location.pathname.startsWith(p))
+            ? ['tenant-group']
+            : [];
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -297,12 +304,14 @@ const AppInner = () => {
             <Route path="/" element={<PrivateRoute><DashboardPage /></PrivateRoute>} />
             <Route path="/skills" element={<PrivateRoute><SkillsListPage /></PrivateRoute>} />
             <Route path="/skills/create" element={<PrivateRoute><CreateSkillPage /></PrivateRoute>} />
+            <Route path="/skills/:id/edit" element={<PrivateRoute><EditSkillPage /></PrivateRoute>} />
             <Route path="/agents" element={<PrivateRoute><AgentsListPage /></PrivateRoute>} />
             <Route path="/agents/create" element={<PrivateRoute><CreateAgentPage /></PrivateRoute>} />
             <Route path="/agents/:id/edit" element={<PrivateRoute><EditAgentPage /></PrivateRoute>} />
             <Route path="/chat" element={<PrivateRoute><AgentChatPage /></PrivateRoute>} />
             <Route path="/memory" element={<PrivateRoute><MemoryPage /></PrivateRoute>} />
             <Route path="/mcp" element={<PrivateRoute><MCPServersPage /></PrivateRoute>} />
+            <Route path="/mcp/create" element={<PrivateRoute><CreateMCPPage /></PrivateRoute>} />
             <Route path="/knowledge" element={<PrivateRoute><KnowledgePage /></PrivateRoute>} />
             <Route path="/knowledge/:name" element={<PrivateRoute><KnowledgeDetailPage /></PrivateRoute>} />
             <Route path="/history" element={<PrivateRoute><ExecutionHistoryPage /></PrivateRoute>} />
@@ -338,7 +347,9 @@ const AppInner = () => {
 
 const App = () => (
   <AuthProvider>
-    <AppInner />
+    <ChatStreamProvider>
+      <AppInner />
+    </ChatStreamProvider>
   </AuthProvider>
 );
 

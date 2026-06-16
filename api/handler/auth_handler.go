@@ -12,7 +12,9 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/auth"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
 
@@ -25,6 +27,7 @@ type AuthHandlerDeps struct {
 	TokenStore    *auth.TokenStore
 	OnboardSvc    *auth.OnboardService
 	Logger        *zap.Logger
+	Pool          *pgxpool.Pool
 	CallbackURL   string
 	FrontendURL   string
 	GlobalAdmin   string
@@ -243,6 +246,11 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		}
 		tenantID = result.TenantID
 		userID = result.UserUUID
+		if h.deps.Pool != nil {
+			if pErr := tenantdb.ProvisionTenantSchema(ctx, h.deps.Pool, tenantID); pErr != nil {
+				h.deps.Logger.Error("provision tenant schema", zap.String("tenant_id", tenantID), zap.Error(pErr))
+			}
+		}
 		// Sync global_admin from config into DB on first create.
 		if globalRole == "global_admin" {
 			_ = h.deps.OnboardSvc.SetGlobalRole(ctx, userID, "global_admin")
@@ -519,6 +527,11 @@ func (h *AuthHandler) CreateUserTenant(c *gin.Context) {
 		h.deps.Logger.Error("create tenant for user", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create tenant"})
 		return
+	}
+	if h.deps.Pool != nil {
+		if pErr := tenantdb.ProvisionTenantSchema(ctx, h.deps.Pool, tenantID); pErr != nil {
+			h.deps.Logger.Error("provision tenant schema", zap.String("tenant_id", tenantID), zap.Error(pErr))
+		}
 	}
 
 	globalRole, _ := h.deps.OnboardSvc.GetGlobalRole(ctx, claims.Sub)

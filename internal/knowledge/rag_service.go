@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/embedding"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/byteBuilderX/stratum/pkg/vector"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j/dbtype"
@@ -67,7 +68,9 @@ type GraphEntity struct {
 
 func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQueryResult, error) {
 	startTime := time.Now()
+	sc, _ := observability.SpanFromContext(ctx)
 	rs.logger.Info("executing RAG query",
+		zap.String("trace_id", sc.TraceID),
 		zap.String("question", req.Question),
 		zap.String("mode", req.Mode))
 
@@ -82,18 +85,16 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		req.TopK = 5
 	}
 
-	collectionName := req.Workspace + "_kb"
-	if req.TenantID != "" {
-		if name, err := tenantdb.TenantCollection(ctx, "kb"); err == nil {
-			collectionName = name
-		}
+	collectionName := fmt.Sprintf("%s_kb", req.Workspace)
+	if col, err := tenantdb.WorkspaceCollection(ctx, req.Workspace); err == nil {
+		collectionName = col
 	}
 
 	switch req.Mode {
 	case "vector":
 		vectorResults, err := rs.queryVector(ctx, req.Question, collectionName, req.TopK)
 		if err != nil {
-			rs.logger.Error("vector query failed", zap.Error(err))
+			rs.logger.Error("vector query failed", zap.String("trace_id", sc.TraceID), zap.Error(err))
 			return nil, fmt.Errorf("vector query failed: %w", err)
 		}
 		result.VectorResults = vectorResults
@@ -110,7 +111,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	case "keyword":
 		keywordResults, err := rs.queryKeyword(ctx, req.Question, collectionName, req.TopK)
 		if err != nil {
-			rs.logger.Error("keyword query failed", zap.Error(err))
+			rs.logger.Error("keyword query failed", zap.String("trace_id", sc.TraceID), zap.Error(err))
 			return nil, fmt.Errorf("keyword query failed: %w", err)
 		}
 		result.VectorResults = keywordResults
@@ -127,22 +128,26 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	case "graph":
 		graphEntities, err := rs.queryGraph(ctx, req.Question)
 		if err != nil {
-			rs.logger.Error("graph query failed", zap.Error(err))
+			rs.logger.Error("graph query failed", zap.String("trace_id", sc.TraceID), zap.Error(err))
 			return nil, fmt.Errorf("graph query failed: %w", err)
 		}
 		result.GraphContext = graphEntities
 
 	case "hybrid":
 		// Hybrid = Vector + Keyword (RRF fusion)
+		if rs.embeddingSvc == nil {
+			return nil, fmt.Errorf("embedding service not configured: set an embedding model in tenant settings")
+		}
+
 		queryVector, err := rs.embeddingSvc.EmbedVector(ctx, req.Question)
 		if err != nil {
-			rs.logger.Error("failed to embed query", zap.Error(err))
+			rs.logger.Error("failed to embed query", zap.String("trace_id", sc.TraceID), zap.Error(err))
 			return nil, fmt.Errorf("failed to embed query: %w", err)
 		}
 
 		hybridResults, err := rs.vectorStore.HybridSearch(ctx, collectionName, queryVector, req.Question, req.TopK)
 		if err != nil {
-			rs.logger.Error("hybrid query failed", zap.Error(err))
+			rs.logger.Error("hybrid query failed", zap.String("trace_id", sc.TraceID), zap.Error(err))
 			return nil, fmt.Errorf("hybrid query failed: %w", err)
 		}
 		result.VectorResults = hybridResults
@@ -160,6 +165,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	result.Latency = time.Since(startTime)
 
 	rs.logger.Info("RAG query completed",
+		zap.String("trace_id", sc.TraceID),
 		zap.Int("vector_results", len(result.VectorResults)),
 		zap.Int("graph_entities", len(result.GraphContext)),
 		zap.Duration("latency", result.Latency))
@@ -169,6 +175,10 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 
 func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int) ([]vector.SearchResult, error) {
 	rs.logger.Debug("querying vector store")
+
+	if rs.embeddingSvc == nil {
+		return nil, fmt.Errorf("embedding service not configured: set an embedding model in tenant settings")
+	}
 
 	queryVector, err := rs.embeddingSvc.EmbedVector(ctx, question)
 	if err != nil {
@@ -184,7 +194,8 @@ func (rs *RAGService) queryVector(ctx context.Context, question string, collecti
 }
 
 func (rs *RAGService) queryGraph(ctx context.Context, question string) ([]GraphEntity, error) {
-	rs.logger.Debug("querying knowledge graph")
+	sc, _ := observability.SpanFromContext(ctx)
+	rs.logger.Debug("querying knowledge graph", zap.String("trace_id", sc.TraceID))
 
 	records, err := rs.graphRAG.FullTextSearch(ctx, question, 20)
 	if err != nil {
@@ -199,12 +210,12 @@ func (rs *RAGService) queryGraph(ctx context.Context, question string) ([]GraphE
 		}
 		n, ok := raw.(dbtype.Node)
 		if !ok {
-			rs.logger.Warn("unexpected node type", zap.String("type", fmt.Sprintf("%T", raw)))
+			rs.logger.Warn("unexpected node type", zap.String("trace_id", sc.TraceID), zap.String("type", fmt.Sprintf("%T", raw)))
 			continue
 		}
 		id, _ := n.Props["id"].(string)
 		if id == "" {
-			rs.logger.Warn("graph search result missing id, skipping")
+			rs.logger.Warn("graph search result missing id, skipping", zap.String("trace_id", sc.TraceID))
 			continue
 		}
 		label := "Entity"
@@ -234,6 +245,9 @@ func (rs *RAGService) queryKeyword(ctx context.Context, question string, collect
 
 func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, question string, workspace string, topK int) ([]string, error) {
 	collectionName := fmt.Sprintf("%s_kb", workspace)
+	if col, err := tenantdb.WorkspaceCollection(ctx, workspace); err == nil {
+		collectionName = col
+	}
 
 	vectorResults, err := rs.queryVector(ctx, question, collectionName, topK)
 	if err != nil {
@@ -285,7 +299,7 @@ func (rs *RAGService) GetWorkspaceCollections(ctx context.Context) ([]string, er
 		ORDER BY workspace
 	`
 
-	results, err := rs.graphRAG.Query(ctx, cypher)
+	results, err := rs.graphRAG.Query(ctx, cypher, nil)
 	if err != nil {
 		return nil, err
 	}
