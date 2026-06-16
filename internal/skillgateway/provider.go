@@ -21,8 +21,9 @@ type SkillProvider interface {
 
 // ProviderRegistry 管理所有 SkillProvider，按 skill_id 路由
 type ProviderRegistry struct {
-	providers map[string]SkillProvider // skill_id -> provider
-	mu        sync.RWMutex
+	providers    map[string]SkillProvider // skill_id -> provider (缓存索引)
+	allProviders []SkillProvider          // 所有已注册 provider（用于 fallback 遍历）
+	mu           sync.RWMutex
 }
 
 func newProviderRegistry() *ProviderRegistry {
@@ -47,15 +48,30 @@ func (r *ProviderRegistry) Register(provider SkillProvider) error {
 	for _, id := range provider.SkillIDs() {
 		r.providers[id] = provider
 	}
+	r.allProviders = append(r.allProviders, provider)
 	return nil
 }
 
-// Resolve 查找 skill_id 对应的 provider
+// Resolve 查找 skill_id 对应的 provider。
+// 先查静态索引，miss 时 fallback 遍历所有 provider 的 Has() 方法（支持动态加载的 skill）。
 func (r *ProviderRegistry) Resolve(skillID string) (SkillProvider, bool) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	p, ok := r.providers[skillID]
-	return p, ok
+	if ok {
+		r.mu.RUnlock()
+		return p, true
+	}
+	for _, provider := range r.allProviders {
+		if provider.Has(skillID) {
+			r.mu.RUnlock()
+			r.mu.Lock()
+			r.providers[skillID] = provider
+			r.mu.Unlock()
+			return provider, true
+		}
+	}
+	r.mu.RUnlock()
+	return nil, false
 }
 
 // TypeOf 返回 skill 的类型字符串，用于 metrics label

@@ -17,7 +17,7 @@ func TestMemoryRawEvent_RoundTrip(t *testing.T) {
 		AgentID:        "agent-1",
 		Role:           "user",
 		Content:        "Hello world",
-		CreatedAt:      time.Now().Truncate(time.Millisecond),
+		CreatedAt:      time.Now().UTC().Truncate(time.Millisecond),
 	}
 	data, err := ev.Marshal()
 	require.NoError(t, err)
@@ -37,7 +37,7 @@ func TestMemoryEnrichedEvent_RoundTrip(t *testing.T) {
 			AgentID:        "agent-2",
 			Role:           "agent",
 			Content:        "Response text",
-			CreatedAt:      time.Now().Truncate(time.Millisecond),
+			CreatedAt:      time.Now().UTC().Truncate(time.Millisecond),
 		},
 		VectorID: "vec-001",
 	}

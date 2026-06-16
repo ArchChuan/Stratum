@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/api/model"
 	"github.com/byteBuilderX/stratum/internal/memory"
 	"github.com/gin-gonic/gin"
@@ -140,7 +141,9 @@ func (h *MemoryHandler) CreateSession(c *gin.Context) {
 
 	var req CreateSessionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn("invalid create session request", zap.Error(err))
+		h.logger.Warn("invalid create session request",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{
 			Code:    http.StatusBadRequest,
 			Message: err.Error(),
@@ -160,7 +163,9 @@ func (h *MemoryHandler) CreateSession(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	if _, err := h.manager.GetStats(ctx, sessionCtx); err != nil {
-		h.logger.Error("failed to initialize session", zap.Error(err))
+		h.logger.Error("failed to initialize session",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Code:    http.StatusInternalServerError,
 			Message: "failed to create session",
@@ -169,6 +174,7 @@ func (h *MemoryHandler) CreateSession(c *gin.Context) {
 	}
 
 	h.logger.Info("session created",
+		zap.String("trace_id", middleware.GetTraceID(c)),
 		zap.String("session_id", sessionID),
 		zap.String("tenant_id", tenantID),
 		zap.String("user_id", userID))
@@ -197,7 +203,9 @@ func (h *MemoryHandler) AddMemory(c *gin.Context) {
 
 	var req AddMemoryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn("invalid add memory request", zap.Error(err))
+		h.logger.Warn("invalid add memory request",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{
 			Code:    http.StatusBadRequest,
 			Message: err.Error(),
@@ -227,7 +235,9 @@ func (h *MemoryHandler) AddMemory(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	if err := h.manager.Add(ctx, entry); err != nil {
-		h.logger.Error("failed to add memory entry", zap.Error(err))
+		h.logger.Error("failed to add memory entry",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Code:    http.StatusInternalServerError,
 			Message: "failed to add memory entry",
@@ -236,6 +246,7 @@ func (h *MemoryHandler) AddMemory(c *gin.Context) {
 	}
 
 	h.logger.Info("memory entry added",
+		zap.String("trace_id", middleware.GetTraceID(c)),
 		zap.String("id", entry.ID),
 		zap.String("session_id", req.SessionID))
 
@@ -267,7 +278,10 @@ func (h *MemoryHandler) GetMemory(c *gin.Context) {
 	ctx := c.Request.Context()
 	entry, err := h.manager.Get(ctx, id)
 	if err != nil {
-		h.logger.Warn("memory entry not found", zap.String("id", id), zap.Error(err))
+		h.logger.Warn("memory entry not found",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.String("id", id),
+			zap.Error(err))
 		c.JSON(http.StatusNotFound, model.ErrorResponse{
 			Code:    http.StatusNotFound,
 			Message: "memory entry not found",
@@ -307,7 +321,9 @@ func (h *MemoryHandler) SearchMemory(c *gin.Context) {
 
 	var req SearchMemoryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn("invalid search memory request", zap.Error(err))
+		h.logger.Warn("invalid search memory request",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{
 			Code:    http.StatusBadRequest,
 			Message: err.Error(),
@@ -343,7 +359,9 @@ func (h *MemoryHandler) SearchMemory(c *gin.Context) {
 	ctx := c.Request.Context()
 	results, err := h.manager.Search(ctx, searchReq)
 	if err != nil {
-		h.logger.Error("failed to search memory", zap.Error(err))
+		h.logger.Error("failed to search memory",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Code:    http.StatusInternalServerError,
 			Message: "failed to search memory",
@@ -375,6 +393,7 @@ func (h *MemoryHandler) SearchMemory(c *gin.Context) {
 	}
 
 	h.logger.Info("memory search completed",
+		zap.String("trace_id", middleware.GetTraceID(c)),
 		zap.String("query", req.Query),
 		zap.Int("results", len(items)))
 
@@ -402,7 +421,10 @@ func (h *MemoryHandler) DeleteMemory(c *gin.Context) {
 	}
 
 	if err := h.manager.Delete(ctx, id); err != nil {
-		h.logger.Warn("failed to delete memory entry", zap.String("id", id), zap.Error(err))
+		h.logger.Warn("failed to delete memory entry",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.String("id", id),
+			zap.Error(err))
 		c.JSON(http.StatusNotFound, model.ErrorResponse{
 			Code:    http.StatusNotFound,
 			Message: "memory entry not found",
@@ -410,7 +432,9 @@ func (h *MemoryHandler) DeleteMemory(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("memory entry deleted", zap.String("id", id))
+	h.logger.Info("memory entry deleted",
+		zap.String("trace_id", middleware.GetTraceID(c)),
+		zap.String("id", id))
 	c.JSON(http.StatusOK, gin.H{
 		"message": "memory entry deleted successfully",
 	})
@@ -437,7 +461,9 @@ func (h *MemoryHandler) GetStats(c *gin.Context) {
 	ctx := c.Request.Context()
 	stats, err := h.manager.GetStats(ctx, sessionCtx)
 	if err != nil {
-		h.logger.Error("failed to get memory stats", zap.Error(err))
+		h.logger.Error("failed to get memory stats",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Code:    http.StatusInternalServerError,
 			Message: "failed to get memory stats",
@@ -480,7 +506,9 @@ func (h *MemoryHandler) ClearSession(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	if err := h.manager.Clear(ctx, sessionCtx); err != nil {
-		h.logger.Error("failed to clear session", zap.Error(err))
+		h.logger.Error("failed to clear session",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Code:    http.StatusInternalServerError,
 			Message: "failed to clear session",
@@ -488,7 +516,9 @@ func (h *MemoryHandler) ClearSession(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("session cleared", zap.String("session_id", sessionID))
+	h.logger.Info("session cleared",
+		zap.String("trace_id", middleware.GetTraceID(c)),
+		zap.String("session_id", sessionID))
 	c.JSON(http.StatusOK, gin.H{
 		"message": "session cleared successfully",
 	})
@@ -517,7 +547,9 @@ func (h *MemoryHandler) GetEntities(c *gin.Context) {
 	ctx := c.Request.Context()
 	entities, err := h.manager.GetEntities(ctx, sessionCtx)
 	if err != nil {
-		h.logger.Error("failed to get entities", zap.Error(err))
+		h.logger.Error("failed to get entities",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Code:    http.StatusInternalServerError,
 			Message: "failed to get entities",
@@ -578,7 +610,9 @@ func (h *MemoryHandler) ExtractEntities(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn("invalid extract entities request", zap.Error(err))
+		h.logger.Warn("invalid extract entities request",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{
 			Code:    http.StatusBadRequest,
 			Message: err.Error(),
@@ -596,7 +630,9 @@ func (h *MemoryHandler) ExtractEntities(c *gin.Context) {
 	ctx := c.Request.Context()
 	entities, err := h.manager.ExtractEntities(ctx, req.Text, sessionCtx)
 	if err != nil {
-		h.logger.Error("failed to extract entities", zap.Error(err))
+		h.logger.Error("failed to extract entities",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Code:    http.StatusInternalServerError,
 			Message: "failed to extract entities",
@@ -651,7 +687,9 @@ func (h *MemoryHandler) GetSummary(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"session_id": sessionID, "summary": ""})
 			return
 		}
-		h.logger.Error("failed to get summary", zap.Error(err))
+		h.logger.Error("failed to get summary",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Code:    http.StatusInternalServerError,
 			Message: "failed to get summary",

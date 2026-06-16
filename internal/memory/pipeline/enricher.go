@@ -121,13 +121,16 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		return
 	}
 
+	traceID := ev.TraceID
 	w.logger.Debug("memory.enrich.start",
+		zap.String("trace_id", traceID),
 		zap.String("message_id", ev.MessageID),
 		zap.String("tenant_id", ev.TenantID))
 
 	enrichment, err := w.callEnrichLLM(ctx, ev.Role, ev.Content)
 	if err != nil {
 		w.logger.Error("memory.enrich.llm",
+			zap.String("trace_id", traceID),
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
@@ -137,6 +140,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 
 	if err := w.persistEnrichment(ctx, ev, enrichment); err != nil {
 		w.logger.Error("memory.enrich.persist",
+			zap.String("trace_id", traceID),
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
@@ -149,6 +153,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 
 	_ = msg.Ack()
 	w.logger.Info("memory.enrich.success",
+		zap.String("trace_id", traceID),
 		zap.String("message_id", ev.MessageID),
 		zap.String("tenant_id", ev.TenantID),
 		zap.Float64("importance", enrichment.Importance),
@@ -223,6 +228,7 @@ func (w *EnricherWorker) persistEnrichment(ctx context.Context, ev *MemoryEnrich
 	// Check token budget for summary trigger
 	if err := w.maybeTriggerSummary(ctx, tx, ev); err != nil {
 		w.logger.Warn("memory.enrich.summary_check",
+			zap.String("trace_id", ev.TraceID),
 			zap.String("conversation_id", ev.ConversationID),
 			zap.Error(err))
 	}
@@ -306,6 +312,7 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, tx pgx.Tx, ev 
 	summaryTriggered.Inc()
 
 	w.logger.Info("memory.enrich.summary",
+		zap.String("trace_id", ev.TraceID),
 		zap.String("conversation_id", ev.ConversationID),
 		zap.Int("token_budget", accumulated),
 		zap.Int("summary_length", len(summary)))

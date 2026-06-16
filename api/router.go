@@ -25,7 +25,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/mcp"
 	"github.com/byteBuilderX/stratum/internal/memory"
 	"github.com/byteBuilderX/stratum/internal/memory/pipeline"
-	"github.com/byteBuilderX/stratum/internal/orchestrator"
 	"github.com/byteBuilderX/stratum/internal/skill"
 	"github.com/byteBuilderX/stratum/internal/textchunk"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -42,7 +41,6 @@ import (
 func SetupRouter(
 	cfg *config.Config,
 	logger *zap.Logger,
-	registry *orchestrator.Registry,
 	gateway *llmgateway.Gateway,
 	db *pgxpool.Pool,
 	rdb *goredis.Client,
@@ -182,7 +180,7 @@ func SetupRouter(
 
 	// Handlers
 	codeExecutor := skill.NewCodeExecutor(skill.DefaultCodeExecutorConfig())
-	skillHandler := handler.NewSkillHandler(registry, logger, gateway, codeExecutor)
+	skillHandler := handler.NewSkillHandler(db, logger, gateway, codeExecutor)
 	ragHandler := handler.NewRAGHandler(ingestSvc, ragService, db, logger)
 
 	// Initialize agent registry and handler
@@ -209,7 +207,18 @@ func SetupRouter(
 	mcpRegistry := mcp.NewMCPSkillRegistry(mcpManager, logger)
 	mcpHandler := handler.NewMCPHandler(mcpRegistry, mcpManager, logger)
 
-	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway, metrics, execStore, db, aesKey, gatewayCache, ragService, mcpRegistry, skillAdapter, registry, chatStore)
+	if db != nil {
+		if err := mcpManager.RestoreFromDB(ctx); err != nil {
+			logger.Warn("failed to restore MCP servers from DB", zap.Error(err))
+		}
+		// RegisterServer is intentionally NOT called here for all restored clients.
+		// MCP tools are per-agent: only servers mounted to an agent are injected
+		// at execution time via buildExtraTools (agent_handler.go), which calls
+		// GetAdapterForServer lazily — adapter is created on first access.
+		// Bulk pre-registration would expose all tenant MCP tools to every agent.
+	}
+
+	agentHandler := handler.NewAgentHandler(agentRegistry, logger, gateway, metrics, execStore, db, aesKey, gatewayCache, ragService, mcpRegistry, skillAdapter, chatStore)
 	chatHandler := handler.NewChatHandler(chatStore, logger)
 
 	// Initialize memory system
@@ -395,6 +404,9 @@ func buildEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatewayCache, 
 			}
 		}
 
+		if !gw.HasEmbeddingClient() {
+			return nil
+		}
 		cache.Set(tenantID, gw, decrypted, constants.GatewayCacheTTL)
 		m := embedModel
 		if m == "" {

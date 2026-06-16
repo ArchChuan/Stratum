@@ -94,7 +94,7 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 	}
 	options = append(options, agent.WithUserID(userID))
 
-	options = append(options, agent.WithExtraTools(h.buildExtraTools(a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills)))
+	options = append(options, agent.WithExtraTools(h.buildExtraTools(c.Request.Context(), a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills)))
 
 	if h.ragService != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
 		rs := h.ragService
@@ -236,7 +236,7 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	}
 	options = append(options, agent.WithUserID(userID))
 
-	options = append(options, agent.WithExtraTools(h.buildExtraTools(a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills)))
+	options = append(options, agent.WithExtraTools(h.buildExtraTools(c.Request.Context(), a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills)))
 
 	if h.ragService != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
 		rs := h.ragService

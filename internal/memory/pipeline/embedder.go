@@ -96,7 +96,9 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		return
 	}
 
+	traceID := ev.TraceID
 	w.logger.Debug("memory.embed.start",
+		zap.String("trace_id", traceID),
 		zap.String("message_id", ev.MessageID),
 		zap.String("tenant_id", ev.TenantID),
 		zap.Int("content_length", len(ev.Content)))
@@ -107,6 +109,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	}
 	if embedSvc == nil {
 		w.logger.Warn("memory.embed.skip: no embedding service",
+			zap.String("trace_id", traceID),
 			zap.String("message_id", ev.MessageID),
 			zap.String("tenant_id", ev.TenantID))
 		_ = msg.Ack()
@@ -116,6 +119,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	vector, err := embedSvc.EmbedVector(ctx, ev.Content)
 	if err != nil {
 		w.logger.Error("memory.embed.error",
+			zap.String("trace_id", traceID),
 			zap.String("message_id", ev.MessageID),
 			zap.String("tenant_id", ev.TenantID),
 			zap.Error(err))
@@ -134,6 +138,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	}
 	if err := w.vectorDB.Upsert(ctx, ev.TenantID, ev.UserID, ev.MessageID, vector, metadata); err != nil {
 		w.logger.Error("memory.embed.milvus",
+			zap.String("trace_id", traceID),
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
@@ -147,7 +152,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	}
 	data, err := enrichedEv.Marshal()
 	if err != nil {
-		w.logger.Error("memory.embed.marshal_enriched", zap.Error(err))
+		w.logger.Error("memory.embed.marshal_enriched", zap.String("trace_id", traceID), zap.Error(err))
 		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
 		_ = msg.Nak()
 		return
@@ -156,6 +161,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	subject := fmt.Sprintf("%s.%s", constants.MemoryEnrichedSubject, ev.TenantID)
 	if _, err := w.js.Publish(ctx, subject, data); err != nil {
 		w.logger.Error("memory.embed.publish_enriched",
+			zap.String("trace_id", traceID),
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
@@ -168,6 +174,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 
 	_ = msg.Ack()
 	w.logger.Info("memory.embed.success",
+		zap.String("trace_id", traceID),
 		zap.String("message_id", ev.MessageID),
 		zap.String("tenant_id", ev.TenantID),
 		zap.Int("vector_dim", len(vector)),

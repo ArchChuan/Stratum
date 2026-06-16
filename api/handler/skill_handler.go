@@ -1,18 +1,23 @@
 // Package handler implements HTTP API request handlers.
-
 package handler
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/byteBuilderX/stratum/api/model"
 	"github.com/byteBuilderX/stratum/internal/llmgateway"
-	"github.com/byteBuilderX/stratum/internal/orchestrator"
 	"github.com/byteBuilderX/stratum/internal/skill"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
 
@@ -20,31 +25,17 @@ type configurable interface {
 	GetConfig() map[string]any
 }
 
-func buildSkillResponse(s skill.Skill, createdAt time.Time) model.SkillResponse {
-	resp := model.SkillResponse{
-		ID:          s.GetID(),
-		Name:        s.GetName(),
-		Description: s.GetDescription(),
-		Type:        s.GetType(),
-		CreatedAt:   createdAt.Format(time.RFC3339),
-	}
-	if c, ok := s.(configurable); ok {
-		resp.Config = c.GetConfig()
-	}
-	return resp
-}
-
 type SkillHandler struct {
-	registry *orchestrator.Registry
+	pool     *pgxpool.Pool
 	logger   *zap.Logger
 	gateway  *llmgateway.Gateway
 	executor *skill.CodeExecutor
 	analyzer skill.StaticAnalyzer
 }
 
-func NewSkillHandler(registry *orchestrator.Registry, logger *zap.Logger, gateway *llmgateway.Gateway, executor *skill.CodeExecutor) *SkillHandler {
+func NewSkillHandler(pool *pgxpool.Pool, logger *zap.Logger, gateway *llmgateway.Gateway, executor *skill.CodeExecutor) *SkillHandler {
 	return &SkillHandler{
-		registry: registry,
+		pool:     pool,
 		logger:   logger,
 		gateway:  gateway,
 		executor: executor,
@@ -56,191 +47,171 @@ func (h *SkillHandler) CreateSkill(c *gin.Context) {
 	var req model.CreateSkillRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.logger.Warn("invalid request", zap.Error(err))
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{
-			Code:    http.StatusBadRequest,
-			Message: err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
 		return
 	}
 
 	id := uuid.New().String()
-	var s skill.Skill
-
-	switch req.Type {
-	case "code":
-		if result := h.analyzer.Check(req.Language, req.Code); !result.Safe {
-			c.JSON(http.StatusBadRequest, model.SkillResponse{
-				AnalysisErrors: result.Reasons,
-			})
+	s, err := h.buildSkillFromRequest(id, req)
+	if err != nil {
+		var aErr *analysisError
+		if errors.As(err, &aErr) {
+			c.JSON(http.StatusBadRequest, model.SkillResponse{AnalysisErrors: aErr.reasons})
 			return
 		}
-		s = skill.NewCodeSkillWithExecutor(id, req.Name, req.Description, req.Code, req.Language, h.executor)
-	case "llm":
-		s = skill.NewLLMSkill(id, req.Name, req.Description, req.SystemPrompt, req.Model, req.Temperature, req.MaxTokens, h.gateway, h.logger)
-	case "http":
-		httpSkill, err := skill.NewHTTPSkill(id, req.Name, req.Description, req.URL, req.Method, req.Headers, req.BodyTemplate, req.TimeoutSec)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
-			return
-		}
-		s = httpSkill
-	default:
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{
-			Code:    http.StatusBadRequest,
-			Message: "unsupported skill type",
-		})
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
 		return
 	}
 
-	if err := h.registry.Register(c.Request.Context(), id, s); err != nil {
-		if errors.Is(err, orchestrator.ErrNameConflict) {
-			c.JSON(http.StatusConflict, model.ErrorResponse{Code: http.StatusConflict, Message: err.Error()})
+	cfgJSON, _ := json.Marshal(skillConfig(s))
+
+	var createdAt time.Time
+	if err := tenantdb.ExecTenant(c.Request.Context(), h.pool, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO skills (id, name, description, type, config)
+			 VALUES ($1, $2, $3, $4, $5)
+			 RETURNING created_at`,
+			id, s.GetName(), s.GetDescription(), s.GetType(), cfgJSON,
+		).Scan(&createdAt)
+	}); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			c.JSON(http.StatusConflict, model.ErrorResponse{Code: http.StatusConflict, Message: "skill name already exists"})
 			return
 		}
-		h.logger.Error("failed to register skill", zap.Error(err))
+		h.logger.Error("failed to create skill", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to create skill"})
 		return
 	}
 	h.logger.Info("skill created", zap.String("id", id), zap.String("name", req.Name))
-
-	createdAt, _ := h.registry.GetCreatedAt(id)
-	c.JSON(http.StatusCreated, buildSkillResponse(s, createdAt))
+	c.JSON(http.StatusCreated, skillRow{id: id, name: s.GetName(), desc: s.GetDescription(), typ: s.GetType(), cfg: skillConfig(s), createdAt: createdAt}.toResponse())
 }
 
 func (h *SkillHandler) GetSkill(c *gin.Context) {
 	id := c.Param("id")
-	s, ok := h.registry.Get(id)
-	if !ok {
-		h.logger.Warn("skill not found", zap.String("id", id))
-		c.JSON(http.StatusNotFound, model.ErrorResponse{
-			Code:    http.StatusNotFound,
-			Message: "skill not found",
-		})
+	var row skillRow
+	found := false
+	if err := tenantdb.ExecTenant(c.Request.Context(), h.pool, func(ctx context.Context, tx pgx.Tx) error {
+		var cfgJSON []byte
+		err := tx.QueryRow(ctx,
+			`SELECT id, name, description, type, config, created_at FROM skills WHERE id=$1`, id,
+		).Scan(&row.id, &row.name, &row.desc, &row.typ, &cfgJSON, &row.createdAt)
+		if err != nil {
+			return err
+		}
+		found = true
+		return json.Unmarshal(cfgJSON, &row.cfg)
+	}); err != nil || !found {
+		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
 		return
 	}
-
-	createdAt, _ := h.registry.GetCreatedAt(id)
-	c.JSON(http.StatusOK, buildSkillResponse(s, createdAt))
+	c.JSON(http.StatusOK, row.toResponse())
 }
 
 func (h *SkillHandler) GetAllSkills(c *gin.Context) {
-	skills := h.registry.GetAll()
-	responses := make([]model.SkillResponse, 0, len(skills))
-	for _, s := range skills {
-		createdAt, _ := h.registry.GetCreatedAt(s.GetID())
-		responses = append(responses, buildSkillResponse(s, createdAt))
+	var rows []skillRow
+	if err := tenantdb.ExecTenant(c.Request.Context(), h.pool, func(ctx context.Context, tx pgx.Tx) error {
+		pgRows, err := tx.Query(ctx, `SELECT id, name, description, type, config, created_at FROM skills ORDER BY created_at`)
+		if err != nil {
+			return err
+		}
+		defer pgRows.Close()
+		for pgRows.Next() {
+			var r skillRow
+			var cfgJSON []byte
+			if err := pgRows.Scan(&r.id, &r.name, &r.desc, &r.typ, &cfgJSON, &r.createdAt); err != nil {
+				return err
+			}
+			_ = json.Unmarshal(cfgJSON, &r.cfg)
+			rows = append(rows, r)
+		}
+		return pgRows.Err()
+	}); err != nil {
+		h.logger.Error("failed to list skills", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to list skills"})
+		return
+	}
+	responses := make([]model.SkillResponse, 0, len(rows))
+	for _, r := range rows {
+		responses = append(responses, r.toResponse())
 	}
 	c.JSON(http.StatusOK, gin.H{"skills": responses})
 }
 
 func (h *SkillHandler) UpdateSkill(c *gin.Context) {
 	id := c.Param("id")
-	s, ok := h.registry.Get(id)
-	if !ok {
-		h.logger.Warn("skill not found", zap.String("id", id))
-		c.JSON(http.StatusNotFound, model.ErrorResponse{
-			Code:    http.StatusNotFound,
-			Message: "skill not found",
-		})
-		return
-	}
 
 	var req model.CreateSkillRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.logger.Warn("invalid request", zap.Error(err))
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{
-			Code:    http.StatusBadRequest,
-			Message: err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
 		return
 	}
 
-	switch s.GetType() {
-	case "code":
-		cs, ok := s.(*skill.CodeSkill)
-		if !ok {
-			c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: "type mismatch"})
-			return
-		}
-		if result := h.analyzer.Check(req.Language, req.Code); !result.Safe {
-			c.JSON(http.StatusBadRequest, model.SkillResponse{
-				AnalysisErrors: result.Reasons,
-			})
-			return
-		}
-		cs.Name = req.Name
-		cs.Description = req.Description
-		cs.Code = req.Code
-		cs.Language = req.Language
-
-	case "llm":
-		ls, ok := s.(*skill.LLMSkill)
-		if !ok {
-			c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: "type mismatch"})
-			return
-		}
-		ls.Name = req.Name
-		ls.Description = req.Description
-		ls.SystemPrompt = req.SystemPrompt
-		ls.Model = req.Model
-		ls.Temperature = req.Temperature
-		ls.MaxTokens = req.MaxTokens
-
-	case "http":
-		hs, ok := s.(*skill.HTTPSkill)
-		if !ok {
-			c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: "type mismatch"})
-			return
-		}
-		if err := skill.ValidateSkillURL(req.URL); err != nil {
-			c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
-			return
-		}
-		hs.Name = req.Name
-		hs.Description = req.Description
-		hs.URL = req.URL
-		hs.Method = req.Method
-		hs.Headers = req.Headers
-		hs.BodyTemplate = req.BodyTemplate
-		hs.TimeoutSec = req.TimeoutSec
-
-	default:
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{
-			Code:    http.StatusBadRequest,
-			Message: "unsupported skill type",
-		})
+	// Validate type hasn't changed and build new config.
+	var existingType string
+	if err := tenantdb.ExecTenant(c.Request.Context(), h.pool, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT type FROM skills WHERE id=$1`, id).Scan(&existingType)
+	}); err != nil {
+		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
+		return
+	}
+	if existingType != req.Type {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: "cannot change skill type"})
 		return
 	}
 
-	if err := h.registry.Register(c.Request.Context(), id, s); err != nil {
-		if errors.Is(err, orchestrator.ErrNameConflict) {
-			c.JSON(http.StatusConflict, model.ErrorResponse{Code: http.StatusConflict, Message: err.Error()})
+	s, err := h.buildSkillFromRequest(id, req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
+		return
+	}
+
+	cfgJSON, _ := json.Marshal(skillConfig(s))
+
+	var createdAt time.Time
+	if err := tenantdb.ExecTenant(c.Request.Context(), h.pool, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`UPDATE skills SET name=$2, description=$3, type=$4, config=$5 WHERE id=$1 RETURNING created_at`,
+			id, s.GetName(), s.GetDescription(), s.GetType(), cfgJSON,
+		).Scan(&createdAt)
+	}); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			c.JSON(http.StatusConflict, model.ErrorResponse{Code: http.StatusConflict, Message: "skill name already exists"})
 			return
 		}
-		h.logger.Error("failed to register skill", zap.Error(err))
+		h.logger.Error("failed to update skill", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to update skill"})
 		return
 	}
 	h.logger.Info("skill updated", zap.String("id", id))
-	createdAt, _ := h.registry.GetCreatedAt(id)
-	c.JSON(http.StatusOK, buildSkillResponse(s, createdAt))
+	c.JSON(http.StatusOK, skillRow{id: id, name: s.GetName(), desc: s.GetDescription(), typ: s.GetType(), cfg: skillConfig(s), createdAt: createdAt}.toResponse())
 }
 
 func (h *SkillHandler) DeleteSkill(c *gin.Context) {
 	id := c.Param("id")
-	if err := h.registry.Remove(c.Request.Context(), id); err != nil {
-		if errors.Is(err, orchestrator.ErrSkillInUse) {
-			c.JSON(http.StatusConflict, model.ErrorResponse{
-				Code:    http.StatusConflict,
-				Message: err.Error(),
-			})
+	if err := tenantdb.ExecTenant(c.Request.Context(), h.pool, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM skills WHERE id=$1`, id)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return errSkillNotFound
+		}
+		return nil
+	}); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			c.JSON(http.StatusConflict, model.ErrorResponse{Code: http.StatusConflict, Message: "skill still linked to agents"})
 			return
 		}
-		h.logger.Warn("skill not found or removal failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusNotFound, model.ErrorResponse{
-			Code:    http.StatusNotFound,
-			Message: "skill not found",
-		})
+		if errors.Is(err, errSkillNotFound) {
+			c.JSON(http.StatusNotFound, model.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
+			return
+		}
+		h.logger.Error("failed to delete skill", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to delete skill"})
 		return
 	}
 	h.logger.Info("skill deleted", zap.String("id", id))
@@ -252,17 +223,35 @@ func (h *SkillHandler) DeleteSkill(c *gin.Context) {
 func (h *SkillHandler) RunSkill(c *gin.Context) {
 	id := c.Param("id")
 
-	s, ok := h.registry.Get(id)
-	if !ok {
-		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
+	var cfgJSON []byte
+	if err := tenantdb.ExecTenant(c.Request.Context(), h.pool, func(ctx context.Context, tx pgx.Tx) error {
+		var typ string
+		if err := tx.QueryRow(ctx,
+			`SELECT type, config FROM skills WHERE id=$1`, id,
+		).Scan(&typ, &cfgJSON); err != nil {
+			return errSkillNotFound
+		}
+		if typ != "code" {
+			return errNotCodeSkill
+		}
+		return nil
+	}); err != nil {
+		if errors.Is(err, errSkillNotFound) {
+			c.JSON(http.StatusNotFound, model.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
+			return
+		}
+		if errors.Is(err, errNotCodeSkill) {
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: "skill is not a code skill"})
+			return
+		}
+		h.logger.Error("failed to load skill for run", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to load skill"})
 		return
 	}
 
-	cs, ok := s.(*skill.CodeSkill)
-	if !ok {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: "skill is not a code skill"})
-		return
-	}
+	var cfg map[string]any
+	_ = json.Unmarshal(cfgJSON, &cfg)
+	cs := skill.NewCodeSkillWithExecutor(id, "", "", stringCfgVal(cfg, "code"), stringCfgVal(cfg, "language"), h.executor)
 
 	var req model.RunSkillRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -289,13 +278,71 @@ func (h *SkillHandler) RunSkill(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, model.RunSkillResponse{Error: err.Error()})
 		return
 	}
-
-	c.JSON(http.StatusOK, model.RunSkillResponse{
-		Output: out,
-		Error:  "",
-	})
+	c.JSON(http.StatusOK, model.RunSkillResponse{Output: out})
 	h.logger.Info("skill executed",
 		zap.String("id", id),
 		zap.Int64("latency_ms", time.Since(start).Milliseconds()),
 	)
+}
+
+// buildSkillFromRequest constructs a Skill object from the request, performing validation.
+func (h *SkillHandler) buildSkillFromRequest(id string, req model.CreateSkillRequest) (skill.Skill, error) {
+	switch req.Type {
+	case "code":
+		if result := h.analyzer.Check(req.Language, req.Code); !result.Safe {
+			return nil, &analysisError{reasons: result.Reasons}
+		}
+		return skill.NewCodeSkillWithExecutor(id, req.Name, req.Description, req.Code, req.Language, h.executor), nil
+	case "llm":
+		return skill.NewLLMSkill(id, req.Name, req.Description, req.SystemPrompt, req.Model, req.Temperature, req.MaxTokens, h.gateway, h.logger), nil
+	case "http":
+		return skill.NewHTTPSkill(id, req.Name, req.Description, req.URL, req.Method, req.Headers, req.BodyTemplate, req.TimeoutSec)
+	default:
+		return nil, fmt.Errorf("unsupported skill type: %s", req.Type)
+	}
+}
+
+// skillConfig extracts the config map from a Skill.
+func skillConfig(s skill.Skill) map[string]any {
+	if c, ok := s.(configurable); ok {
+		return c.GetConfig()
+	}
+	return map[string]any{}
+}
+
+func stringCfgVal(m map[string]any, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+var (
+	errSkillNotFound = errors.New("skill not found")
+	errNotCodeSkill  = errors.New("not a code skill")
+)
+
+type analysisError struct{ reasons []string }
+
+func (e *analysisError) Error() string { return "code analysis failed" }
+
+// skillRow holds raw DB columns for building responses.
+type skillRow struct {
+	id        string
+	name      string
+	desc      string
+	typ       string
+	cfg       map[string]any
+	createdAt time.Time
+}
+
+func (r skillRow) toResponse() model.SkillResponse {
+	return model.SkillResponse{
+		ID:          r.id,
+		Name:        r.name,
+		Description: r.desc,
+		Type:        r.typ,
+		Config:      r.cfg,
+		CreatedAt:   r.createdAt.Format(time.RFC3339),
+	}
 }

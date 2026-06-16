@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
+	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/observability"
+	vector "github.com/byteBuilderX/stratum/pkg/vector"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -56,14 +60,19 @@ func RecallToolDefinition() map[string]any {
 }
 
 // RecallHandler executes recall_memory queries against the memory_entries table.
+// When embedResolver and vectorDB are available, it uses vector search for semantic recall;
+// otherwise falls back to ILIKE text search.
 type RecallHandler struct {
-	pool   *pgxpool.Pool
-	logger *zap.Logger
+	pool          *pgxpool.Pool
+	logger        *zap.Logger
+	embedSvc      EmbedClient
+	embedResolver EmbedServiceResolver
+	vectorDB      *vector.VectorStore
 }
 
 // NewRecallHandler creates a RecallHandler backed by the given pool.
-func NewRecallHandler(pool *pgxpool.Pool, logger *zap.Logger) *RecallHandler {
-	return &RecallHandler{pool: pool, logger: logger}
+func NewRecallHandler(pool *pgxpool.Pool, logger *zap.Logger, embedSvc EmbedClient, embedResolver EmbedServiceResolver, vectorDB *vector.VectorStore) *RecallHandler {
+	return &RecallHandler{pool: pool, logger: logger, embedSvc: embedSvc, embedResolver: embedResolver, vectorDB: vectorDB}
 }
 
 // Handle executes the recall_memory tool invocation.
@@ -87,6 +96,64 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID st
 		req.Scope = "private"
 	}
 
+	// Try vector search first (semantic recall)
+	if results := h.tryVectorSearch(ctx, tenantID, userID, req); len(results) > 0 {
+		sc, _ := observability.SpanFromContext(ctx)
+		out, _ := json.Marshal(results)
+		h.logger.Debug("memory.recall.vector",
+			zap.String("trace_id", sc.TraceID),
+			zap.String("tenant_id", tenantID),
+			zap.String("query", req.Query),
+			zap.Int("results", len(results)))
+		return string(out), nil
+	}
+
+	// Fallback: ILIKE text search
+	return h.textSearch(ctx, tenantID, userID, agentID, req)
+}
+
+func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID string, req RecallRequest) RecallResult {
+	embedSvc := h.embedSvc
+	if embedSvc == nil && h.embedResolver != nil {
+		embedSvc = h.embedResolver(ctx, tenantID)
+	}
+	if embedSvc == nil || h.vectorDB == nil {
+		return nil
+	}
+
+	vec, err := embedSvc.EmbedVector(ctx, req.Query)
+	if err != nil {
+		h.logger.Debug("memory.recall: embed failed, falling back to text search", zap.Error(err))
+		return nil
+	}
+
+	collection := memoryCollectionName(tenantID)
+	if strings.ContainsAny(userID, `"'\`) {
+		return nil
+	}
+	var expr string
+	if userID != "" {
+		expr = fmt.Sprintf(`user_id == "%s"`, userID)
+	}
+
+	results, err := h.vectorDB.SearchWithFilter(ctx, collection, vec, constants.MemoryLongTermTopK, expr)
+	if err != nil {
+		h.logger.Debug("memory.recall: vector search failed, falling back", zap.Error(err))
+		return nil
+	}
+
+	var entries RecallResult
+	for _, r := range results {
+		if r.Content != "" {
+			entries = append(entries, RecallEntry{
+				Content: r.Content,
+			})
+		}
+	}
+	return entries
+}
+
+func (h *RecallHandler) textSearch(ctx context.Context, tenantID, userID, agentID string, req RecallRequest) (string, error) {
 	schema := "tenant_" + tenantID
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -98,7 +165,6 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID st
 		return "", fmt.Errorf("set schema: %w", err)
 	}
 
-	// Build query with parameterized filters
 	baseQuery := `SELECT content, role, importance, created_at FROM memory_entries WHERE enriched_at IS NOT NULL`
 	args := []any{}
 	argIdx := 1
@@ -150,7 +216,9 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID st
 	}
 
 	out, _ := json.Marshal(results)
+	sc, _ := observability.SpanFromContext(ctx)
 	h.logger.Debug("memory.recall",
+		zap.String("trace_id", sc.TraceID),
 		zap.String("tenant_id", tenantID),
 		zap.String("query", req.Query),
 		zap.Int("results", len(results)))

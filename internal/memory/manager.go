@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sync"
 
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -87,7 +88,8 @@ func (m *MemoryManager) Add(ctx context.Context, entry *MemoryEntry) error {
 	// Add to long-term memory if vector search is enabled
 	if m.config.EnableVectorSearch && m.longTerm != nil {
 		if err := m.longTerm.AddWithVector(ctx, entry, entry.Vector); err != nil {
-			m.logger.Warn("failed to add to long-term memory", zap.Error(err))
+			sc, _ := observability.SpanFromContext(ctx)
+			m.logger.Warn("failed to add to long-term memory", zap.String("trace_id", sc.TraceID), zap.Error(err))
 		}
 	}
 
@@ -100,7 +102,8 @@ func (m *MemoryManager) Add(ctx context.Context, entry *MemoryEntry) error {
 			AgentID:   entry.AgentID,
 		}
 		if _, err := m.entity.ExtractEntities(ctx, entry.Content, sessionCtx); err != nil {
-			m.logger.Warn("failed to extract entities", zap.Error(err))
+			sc, _ := observability.SpanFromContext(ctx)
+			m.logger.Warn("failed to extract entities", zap.String("trace_id", sc.TraceID), zap.Error(err))
 		}
 	}
 
@@ -115,7 +118,8 @@ func (m *MemoryManager) Add(ctx context.Context, entry *MemoryEntry) error {
 		)
 		return err
 	}); err != nil {
-		m.logger.Warn("failed to persist memory entry", zap.Error(err))
+		sc, _ := observability.SpanFromContext(ctx)
+		m.logger.Warn("failed to persist memory entry", zap.String("trace_id", sc.TraceID), zap.Error(err))
 	}
 
 	return nil
@@ -193,7 +197,8 @@ func (m *MemoryManager) Search(ctx context.Context, req *MemorySearchRequest) ([
 			}
 			return rows.Err()
 		}); err != nil {
-			m.logger.Warn("failed to search memory in db", zap.Error(err))
+			sc, _ := observability.SpanFromContext(ctx)
+			m.logger.Warn("failed to search memory in db", zap.String("trace_id", sc.TraceID), zap.Error(err))
 		}
 	}
 
@@ -205,7 +210,8 @@ func (m *MemoryManager) Search(ctx context.Context, req *MemorySearchRequest) ([
 		}
 		longTermResults, err := m.longTerm.SemanticSearch(ctx, req.Query, sessionCtx, req.Limit)
 		if err != nil {
-			m.logger.Warn("failed to search long-term memory", zap.Error(err))
+			sc, _ := observability.SpanFromContext(ctx)
+			m.logger.Warn("failed to search long-term memory", zap.String("trace_id", sc.TraceID), zap.Error(err))
 		} else {
 			allResults = append(allResults, longTermResults...)
 		}

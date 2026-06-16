@@ -11,6 +11,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/document"
 	"github.com/byteBuilderX/stratum/internal/embedding"
 	"github.com/byteBuilderX/stratum/internal/textchunk"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/byteBuilderX/stratum/pkg/vector"
 	"go.uber.org/zap"
@@ -79,7 +80,9 @@ type IngestResult struct {
 
 func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumentRequest) (*IngestResult, error) {
 	startTime := time.Now()
+	sc, _ := observability.SpanFromContext(ctx)
 	ki.logger.Info("starting document ingestion",
+		zap.String("trace_id", sc.TraceID),
 		zap.String("workspace", req.Workspace),
 		zap.String("filename", req.FileName))
 
@@ -95,11 +98,11 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 		return result, fmt.Errorf("failed to parse document: %w", err)
 	}
 
-	ki.logger.Info("document parsed", zap.Int("content_length", len(content)))
+	ki.logger.Info("document parsed", zap.String("trace_id", sc.TraceID), zap.Int("content_length", len(content)))
 
 	chunks := ki.chunker.SmartChunk(content)
 	result.TotalChunks = len(chunks)
-	ki.logger.Info("text chunked", zap.Int("num_chunks", len(chunks)))
+	ki.logger.Info("text chunked", zap.String("trace_id", sc.TraceID), zap.Int("num_chunks", len(chunks)))
 
 	// Resolve embed client: prefer per-workspace resolver, fall back to global svc.
 	var embedClient EmbedClient
@@ -143,37 +146,37 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 	}
 
 	result.TotalVectors = len(docChunks)
-	ki.logger.Info("vectors generated", zap.Int("count", len(docChunks)))
+	ki.logger.Info("vectors generated", zap.String("trace_id", sc.TraceID), zap.Int("count", len(docChunks)))
 
 	collectionName := fmt.Sprintf("%s_kb", req.Workspace)
-	if col, err := tenantdb.TenantCollection(ctx, "kb"); err == nil {
+	if col, err := tenantdb.WorkspaceCollection(ctx, req.Workspace); err == nil {
 		collectionName = col
 	}
 
 	if err := ki.vectorStore.CreateCollection(ctx, collectionName); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
-			ki.logger.Error("failed to create collection", zap.Error(err))
+			ki.logger.Error("failed to create collection", zap.String("trace_id", sc.TraceID), zap.Error(err))
 			result.Errors = append(result.Errors, fmt.Sprintf("collection create failed: %v", err))
 			return result, err
 		}
 	}
 
 	if err := ki.vectorStore.Insert(ctx, collectionName, docChunks); err != nil {
-		ki.logger.Error("failed to insert vectors", zap.Error(err))
+		ki.logger.Error("failed to insert vectors", zap.String("trace_id", sc.TraceID), zap.Error(err))
 		result.Errors = append(result.Errors, fmt.Sprintf("vector insert failed: %v", err))
 		return result, fmt.Errorf("failed to insert vectors: %w", err)
 	}
 
 	if err := ki.vectorStore.Flush(ctx, collectionName); err != nil {
-		ki.logger.Error("failed to flush vectors", zap.Error(err))
+		ki.logger.Error("failed to flush vectors", zap.String("trace_id", sc.TraceID), zap.Error(err))
 		result.Errors = append(result.Errors, fmt.Sprintf("flush failed: %v", err))
 		return result, fmt.Errorf("failed to flush collection: %w", err)
 	}
 
-	ki.logger.Info("vectors inserted and flushed", zap.String("collection", collectionName))
+	ki.logger.Info("vectors inserted and flushed", zap.String("trace_id", sc.TraceID), zap.String("collection", collectionName))
 
 	if ki.graphRAG != nil {
-		ki.logger.Info("creating knowledge graph nodes")
+		ki.logger.Info("creating knowledge graph nodes", zap.String("trace_id", sc.TraceID))
 		now := time.Now().Unix()
 
 		docNodeProps := map[string]interface{}{
@@ -188,7 +191,7 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 			docLabel = l
 		}
 		if err := ki.graphRAG.CreateNode(ctx, docLabel, docNodeProps); err != nil {
-			ki.logger.Warn("failed to create document node", zap.Error(err))
+			ki.logger.Warn("failed to create document node", zap.String("trace_id", sc.TraceID), zap.Error(err))
 			result.Errors = append(result.Errors, fmt.Sprintf("graph document node failed: %v", err))
 		} else {
 			result.TotalNodes++
@@ -207,7 +210,7 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 					chunkLabel = l
 				}
 				if err := ki.graphRAG.CreateNode(ctx, chunkLabel, chunkProps); err != nil {
-					ki.logger.Warn("failed to create chunk node", zap.Int("chunk", i), zap.Error(err))
+					ki.logger.Warn("failed to create chunk node", zap.String("trace_id", sc.TraceID), zap.Int("chunk", i), zap.Error(err))
 					result.Errors = append(result.Errors, fmt.Sprintf("graph chunk %d node failed: %v", i, err))
 					continue
 				}
@@ -215,7 +218,7 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 
 				// Link chunk to its parent document
 				if err := ki.graphRAG.CreateRelationship(ctx, req.DocumentID, chunkID, "HAS_CHUNK"); err != nil {
-					ki.logger.Warn("failed to create HAS_CHUNK relationship", zap.Int("chunk", i), zap.Error(err))
+					ki.logger.Warn("failed to create HAS_CHUNK relationship", zap.String("trace_id", sc.TraceID), zap.Int("chunk", i), zap.Error(err))
 					result.Errors = append(result.Errors, fmt.Sprintf("graph chunk %d relationship failed: %v", i, err))
 				}
 			}
@@ -226,6 +229,7 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 
 	if len(result.Errors) == 0 {
 		ki.logger.Info("document ingestion completed",
+			zap.String("trace_id", sc.TraceID),
 			zap.String("document_id", result.DocumentID),
 			zap.Int("total_chunks", result.TotalChunks),
 			zap.Int("total_vectors", result.TotalVectors),
@@ -233,6 +237,7 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 			zap.Duration("duration", result.Duration))
 	} else {
 		ki.logger.Warn("document ingestion completed with errors",
+			zap.String("trace_id", sc.TraceID),
 			zap.Int("error_count", len(result.Errors)))
 	}
 
@@ -240,32 +245,21 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 }
 
 // DeleteWorkspaceData removes all Milvus vectors and Neo4j nodes for the given
-// workspace. Deletion order: query docIDs (read-only) → delete Milvus → delete
-// Neo4j → caller deletes PG. This ordering makes every step idempotent on retry:
-// if Neo4j already ran, QueryWorkspaceDocumentIDs returns [] → Milvus delete is
-// a no-op; DETACH DELETE on already-absent nodes is also a no-op.
+// workspace. Deletion order: drop Milvus collection → delete Neo4j →
+// caller deletes PG. Collection-per-workspace means a single DropCollection
+// replaces the prior docID-query + per-vector delete.
 func (ki *KnowledgeIngest) DeleteWorkspaceData(ctx context.Context, workspace string) error {
 	collectionName := fmt.Sprintf("%s_kb", workspace)
-	if col, err := tenantdb.TenantCollection(ctx, "kb"); err == nil {
+	if col, err := tenantdb.WorkspaceCollection(ctx, workspace); err == nil {
 		collectionName = col
 	}
 
-	// Step 1: query docIDs from Neo4j (read-only — safe to repeat on retry)
-	var docIDs []string
-	if ki.graphRAG != nil {
-		ids, err := ki.graphRAG.QueryWorkspaceDocumentIDs(ctx, workspace)
-		if err != nil {
-			return fmt.Errorf("failed to query workspace document IDs: %w", err)
-		}
-		docIDs = ids
+	// Step 1: drop the per-workspace Milvus collection
+	if err := ki.vectorStore.DeleteCollection(ctx, collectionName); err != nil {
+		return fmt.Errorf("failed to delete workspace collection: %w", err)
 	}
 
-	// Step 2: delete Milvus vectors (docIDs still valid; Neo4j untouched yet)
-	if err := ki.vectorStore.DeleteByDocumentIDs(ctx, collectionName, docIDs); err != nil {
-		return fmt.Errorf("failed to delete workspace vectors: %w", err)
-	}
-
-	// Step 3: delete Neo4j nodes (idempotent — DETACH DELETE on absent nodes is a no-op)
+	// Step 2: delete Neo4j nodes (idempotent — DETACH DELETE on absent nodes is a no-op)
 	if ki.graphRAG != nil {
 		if err := ki.graphRAG.DeleteWorkspaceNodes(ctx, workspace); err != nil {
 			return fmt.Errorf("failed to delete workspace graph nodes: %w", err)
@@ -273,19 +267,21 @@ func (ki *KnowledgeIngest) DeleteWorkspaceData(ctx context.Context, workspace st
 	}
 
 	ki.logger.Info("workspace storage resources deleted",
-		zap.String("workspace", workspace),
-		zap.Int("doc_count", len(docIDs)))
+		zap.String("trace_id", func() string { sc, _ := observability.SpanFromContext(ctx); return sc.TraceID }()),
+		zap.String("workspace", workspace))
 	return nil
 }
 
 func (ki *KnowledgeIngest) IngestBatch(ctx context.Context, requests []IngestDocumentRequest) ([]IngestResult, error) {
-	ki.logger.Info("starting batch ingestion", zap.Int("count", len(requests)))
+	bsc, _ := observability.SpanFromContext(ctx)
+	ki.logger.Info("starting batch ingestion", zap.String("trace_id", bsc.TraceID), zap.Int("count", len(requests)))
 
 	results := make([]IngestResult, len(requests))
 	for i, req := range requests {
 		result, err := ki.IngestDocument(ctx, req)
 		if err != nil {
 			ki.logger.Error("document ingestion failed",
+				zap.String("trace_id", bsc.TraceID),
 				zap.Int("index", i),
 				zap.String("document_id", req.DocumentID),
 				zap.Error(err))
@@ -305,6 +301,9 @@ func (ki *KnowledgeIngest) IngestBatch(ctx context.Context, requests []IngestDoc
 
 func (ki *KnowledgeIngest) GetWorkspaceStats(ctx context.Context, workspace string) (map[string]interface{}, error) {
 	collectionName := fmt.Sprintf("%s_kb", workspace)
+	if col, err := tenantdb.WorkspaceCollection(ctx, workspace); err == nil {
+		collectionName = col
+	}
 	cypher := `
 		MATCH (d:Document)
 		WHERE d.workspace = $workspace

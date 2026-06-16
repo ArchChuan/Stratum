@@ -14,6 +14,7 @@ type MemoryRawEvent struct {
 	Role           string    `json:"role"`
 	Content        string    `json:"content"`
 	CreatedAt      time.Time `json:"created_at"`
+	TraceID        string    `json:"trace_id,omitempty"`
 }
 
 func (e *MemoryRawEvent) Marshal() ([]byte, error) {
@@ -25,6 +26,7 @@ func UnmarshalRawEvent(data []byte) (*MemoryRawEvent, error) {
 	if err := json.Unmarshal(data, &ev); err != nil {
 		return nil, err
 	}
+	ev.CreatedAt = ev.CreatedAt.UTC()
 	return &ev, nil
 }
 
@@ -42,5 +44,6 @@ func UnmarshalEnrichedEvent(data []byte) (*MemoryEnrichedEvent, error) {
 	if err := json.Unmarshal(data, &ev); err != nil {
 		return nil, err
 	}
+	ev.CreatedAt = ev.CreatedAt.UTC()
 	return &ev, nil
 }

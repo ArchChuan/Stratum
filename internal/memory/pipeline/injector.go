@@ -99,46 +99,7 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 		entityNames = append(entityNames, name)
 	}
 
-	// Long-term: vector search using the query text
-	var longTermSnippets []string
-	embedSvc := inj.embedSvc
-	if embedSvc == nil && inj.embedResolver != nil {
-		embedSvc = inj.embedResolver(ctx, ic.TenantID)
-	}
-	if ic.Query != "" && embedSvc != nil && inj.vectorDB != nil {
-		vec, err := embedSvc.EmbedVector(ctx, ic.Query)
-		if err != nil {
-			inj.logger.Warn("memory inject: embed query failed", zap.Error(err))
-		} else {
-			collection := memoryCollectionName(ic.TenantID)
-			// userID comes from validated JWT; guard against filter injection
-			userID := ic.UserID
-			if strings.ContainsAny(userID, `"'\`) {
-				inj.logger.Warn("memory inject: invalid userID format, skipping vector search", zap.String("user_id", userID))
-				userID = ""
-			}
-			var expr string
-			if userID != "" {
-				expr = fmt.Sprintf(`user_id == "%s"`, userID)
-			}
-			results, err := inj.vectorDB.SearchWithFilter(ctx, collection, vec, constants.MemoryLongTermTopK, expr)
-			if err != nil {
-				if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "not exist") {
-					inj.logger.Debug("memory inject: collection not yet created", zap.String("collection", collection))
-				} else {
-					inj.logger.Warn("memory inject: vector search failed", zap.Error(err))
-				}
-			} else {
-				for _, r := range results {
-					if r.Content != "" {
-						longTermSnippets = append(longTermSnippets, r.Content)
-					}
-				}
-			}
-		}
-	}
-
-	if summary == "" && len(entityNames) == 0 && len(longTermSnippets) == 0 {
+	if summary == "" && len(entityNames) == 0 {
 		return "", nil
 	}
 
@@ -154,14 +115,12 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 		sb.WriteString(strings.Join(entityNames, ", "))
 		sb.WriteString("\n")
 	}
-	if len(longTermSnippets) > 0 {
-		sb.WriteString("Long-term Memory:\n")
-		for _, s := range longTermSnippets {
-			sb.WriteString("- ")
-			sb.WriteString(s)
-			sb.WriteString("\n")
-		}
-	}
 
 	return sb.String(), nil
 }
+
+func (inj *MemoryInjector) EmbedResolver() EmbedServiceResolver { return inj.embedResolver }
+
+func (inj *MemoryInjector) VectorDB() *vector.VectorStore { return inj.vectorDB }
+
+func (inj *MemoryInjector) EmbedSvc() EmbedClient { return inj.embedSvc }

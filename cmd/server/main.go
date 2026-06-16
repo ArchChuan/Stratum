@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -25,9 +24,9 @@ import (
 	"github.com/byteBuilderX/stratum/internal/llmgateway"
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/pipeline"
 	"github.com/byteBuilderX/stratum/internal/migration"
-	"github.com/byteBuilderX/stratum/internal/orchestrator"
 	"github.com/byteBuilderX/stratum/internal/skill"
 	"github.com/byteBuilderX/stratum/internal/skillgateway"
+	"github.com/byteBuilderX/stratum/internal/skillgateway/providers"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/postgres"
@@ -172,7 +171,10 @@ func main() {
 				return nil
 			}
 			pipelineNC = nc
-			embedSvc := embedding.NewEmbeddingService(gateway, logger)
+			var embedSvc mempipeline.EmbedClient
+			if gateway.HasEmbeddingClient() {
+				embedSvc = embedding.NewEmbeddingService(gateway, logger)
+			}
 			dimResolver := mempipeline.DimResolver(func(ctx context.Context, tenantID string) int {
 				var settingsJSON []byte
 				if err := pgPool.DB().QueryRow(ctx,
@@ -217,46 +219,12 @@ func main() {
 		logger.Fatal("Failed to register memory pipeline component", zap.Error(err))
 	}
 
-	// 4. Skill Registry component
-	registry := orchestrator.NewRegistry(pgPool.DB())
-	skillRegistryComponent := harnesspkg.NewSimpleComponent("skill-registry", logger,
-		harnesspkg.WithStartFunc(func(ctx context.Context) error {
-			schemas, err := tenantdb.ListTenantSchemas(ctx, pgPool.DB())
-			if err != nil {
-				logger.Warn("skill registry: failed to list tenants", zap.Error(err))
-				return nil
-			}
-			codeExec := skill.NewCodeExecutor(skill.DefaultCodeExecutorConfig())
-			for _, schema := range schemas {
-				tenantID := strings.TrimPrefix(schema, "tenant_")
-				tc := &tenantdb.TenantContext{TenantID: tenantID}
-				tctx := tenantdb.WithTenant(ctx, tc)
-				if err := registry.LoadAll(tctx, gateway, logger, codeExec); err != nil {
-					logger.Warn("skill registry: failed to load skills for tenant",
-						zap.String("tenant_id", tenantID), zap.Error(err))
-				}
-			}
-			logger.Info("Skill registry initialized")
-			return nil
-		}),
-		harnesspkg.WithStopFunc(func(ctx context.Context) error {
-			logger.Info("Skill registry stopped")
-			return nil
-		}),
-		harnesspkg.WithHealthCheckFunc(func(ctx context.Context) error {
-			// Simple check: registry is not nil
-			if registry == nil {
-				return fmt.Errorf("skill registry not initialized")
-			}
-			return nil
-		}),
-	)
-	if err := appHarness.Register(skillRegistryComponent); err != nil {
-		logger.Fatal("Failed to register Skill Registry component", zap.Error(err))
-	}
-
 	// 5. CapabilityGateway
+	codeExec := skill.NewCodeExecutor(skill.DefaultCodeExecutorConfig())
 	skillGW := skillgateway.NewDefaultGateway(observability.NewPrometheusMetrics(logger), logger, nil)
+	if err := skillGW.RegisterProvider(providers.NewDBSkillAdapter(pgPool.DB(), gateway, logger, codeExec)); err != nil {
+		logger.Fatal("failed to register skill provider", zap.Error(err))
+	}
 	llmAdapter := capgateway.NewLLMAdapter(gateway, logger)
 	skillAdapter := capgateway.NewSkillAdapter(skillGW, logger)
 	capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, skillAdapter, logger)
@@ -305,7 +273,7 @@ func main() {
 	}
 
 	// 6. HTTP Server component
-	router := api.SetupRouter(cfg, logger, registry, gateway, pgPool.DB(), redisClient.Client(), capGW, skillAdapter, memPipeline)
+	router := api.SetupRouter(cfg, logger, gateway, pgPool.DB(), redisClient.Client(), capGW, skillAdapter, memPipeline)
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           router,

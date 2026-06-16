@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Form, Input, Select, Button, Typography, Tag, InputNumber, Spin,
+  Form, Input, Select, Button, Typography, Tag, InputNumber, Spin, Collapse,
 } from 'antd';
 import {
   ArrowLeftOutlined, ThunderboltOutlined, CodeOutlined, RobotOutlined, GlobalOutlined,
@@ -131,14 +131,25 @@ const EditSkillPage = () => {
                   {availableModels.map((m) => <Option key={m} value={m}>{m}</Option>)}
                 </Select>
               </Form.Item>
-              <div style={{ display: 'flex', gap: 16 }}>
-                <Form.Item label="Temperature" name="temperature" style={{ flex: 1 }}>
-                  <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
-                </Form.Item>
-                <Form.Item label="Max Tokens" name="maxTokens" style={{ flex: 1 }}>
-                  <InputNumber min={1} max={32000} step={256} style={{ width: '100%' }} />
-                </Form.Item>
-              </div>
+              <Collapse
+                ghost
+                size="small"
+                defaultActiveKey={[]}
+                items={[{
+                  key: 'advanced',
+                  label: <Text type="secondary" style={{ fontSize: 13 }}>高级参数</Text>,
+                  children: (
+                    <div style={{ display: 'flex', gap: 16 }}>
+                      <Form.Item label="Temperature" name="temperature" style={{ flex: 1 }}>
+                        <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
+                      </Form.Item>
+                      <Form.Item label="Max Tokens" name="maxTokens" style={{ flex: 1, marginBottom: 0 }}>
+                        <InputNumber min={1} max={32000} step={256} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </div>
+                  ),
+                }]}
+              />
             </div>
           )}
 

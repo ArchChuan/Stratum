@@ -3,16 +3,17 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/byteBuilderX/stratum/internal/agent"
 	"github.com/byteBuilderX/stratum/internal/capgateway"
 	"github.com/byteBuilderX/stratum/internal/knowledge"
 	"github.com/byteBuilderX/stratum/internal/llmgateway"
 	"github.com/byteBuilderX/stratum/internal/mcp"
-	"github.com/byteBuilderX/stratum/internal/orchestrator"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"go.uber.org/zap"
 )
 
@@ -30,7 +31,6 @@ type AgentHandler struct {
 	ragService     *knowledge.RAGService
 	mcpRegistry    *mcp.MCPSkillRegistry
 	skillAdapter   capgateway.Adapter
-	skillRegistry  *orchestrator.Registry
 	chatStore      agent.ChatStore
 }
 
@@ -115,7 +115,6 @@ func NewAgentHandler(
 	ragService *knowledge.RAGService,
 	mcpRegistry *mcp.MCPSkillRegistry,
 	skillAdapter capgateway.Adapter,
-	skillRegistry *orchestrator.Registry,
 	chatStore agent.ChatStore,
 ) *AgentHandler {
 	return &AgentHandler{
@@ -130,7 +129,6 @@ func NewAgentHandler(
 		ragService:     ragService,
 		mcpRegistry:    mcpRegistry,
 		skillAdapter:   skillAdapter,
-		skillRegistry:  skillRegistry,
 		chatStore:      chatStore,
 	}
 }
@@ -230,7 +228,7 @@ func (h *AgentHandler) resolveTenantGateway(ctx context.Context, tenantID string
 }
 
 // buildExtraTools converts MCPServerIDs and AllowedSkills into ToolDefinitions for the ReAct loop.
-func (h *AgentHandler) buildExtraTools(mcpServerIDs, allowedSkills []string) []capgateway.ToolDefinition {
+func (h *AgentHandler) buildExtraTools(ctx context.Context, mcpServerIDs, allowedSkills []string) []capgateway.ToolDefinition {
 	var tools []capgateway.ToolDefinition
 
 	for _, serverID := range mcpServerIDs {
@@ -257,10 +255,13 @@ func (h *AgentHandler) buildExtraTools(mcpServerIDs, allowedSkills []string) []c
 	for _, skillID := range allowedSkills {
 		name := skillID
 		description := skillID
-		if h.skillRegistry != nil {
-			if s, ok := h.skillRegistry.Get(skillID); ok {
-				name = s.GetName()
-				description = s.GetDescription()
+		if h.db != nil {
+			if tc, ok := tenantdb.FromContext(ctx); ok && tc.TenantID != "" {
+				schema := `"tenant_` + tc.TenantID + `"`
+				_ = h.db.QueryRow(ctx,
+					fmt.Sprintf(`SELECT name, description FROM %s.skills WHERE id=$1`, schema),
+					skillID,
+				).Scan(&name, &description)
 			}
 		}
 		tools = append(tools, capgateway.ToolDefinition{

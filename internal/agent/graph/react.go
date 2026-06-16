@@ -106,11 +106,25 @@ func makeLLMNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFun
 			zap.String("conversation_id", s.ConversationID),
 			zap.String("model", s.Model),
 			zap.Int("step", s.Steps),
-			zap.Int("tokens", resp.Usage.Total),
+			zap.Int("prompt_tokens", resp.Usage.Prompt),
+			zap.Int("completion_tokens", resp.Usage.Completion),
 			zap.Int("total_tokens", s.TotalTokens),
 			zap.Int64("latency_ms", latencyMs),
 			zap.Bool("has_tool_calls", len(resp.ToolCalls) > 0),
 		)
+		if logger.Core().Enabled(zap.DebugLevel) {
+			preview := resp.Content
+			if len(preview) > 200 {
+				preview = preview[:200] + "..."
+			}
+			logger.Debug("react.llm.response",
+				zap.String("trace_id", s.TraceID),
+				zap.String("model", s.Model),
+				zap.Int("step", s.Steps),
+				zap.Int("tool_calls", len(resp.ToolCalls)),
+				zap.String("content_preview", preview),
+			)
+		}
 		if len(resp.ToolCalls) == 0 {
 			s.Output = resp.Content
 			s.Messages = append(s.Messages, capgateway.LLMMessage{
@@ -228,6 +242,18 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 					)
 					content = toolResp.Content
 				}
+			}
+			if logger.Core().Enabled(zap.DebugLevel) {
+				preview := content
+				if len(preview) > 200 {
+					preview = preview[:200] + "..."
+				}
+				logger.Debug("react.tool.response",
+					zap.String("trace_id", s.TraceID),
+					zap.String("tool_name", tc.Name),
+					zap.Int("step", s.Steps),
+					zap.String("content_preview", preview),
+				)
 			}
 			s.Messages = append(s.Messages, capgateway.LLMMessage{
 				Role:       "tool",

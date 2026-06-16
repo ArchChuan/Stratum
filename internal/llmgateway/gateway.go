@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
 )
 
@@ -200,10 +201,16 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 		return nil, fmt.Errorf("provider not found: %s", provider)
 	}
 
-	if g.logger.Core().Enabled(zap.DebugLevel) {
-		if raw, merr := json.Marshal(req.Messages); merr == nil {
-			g.logger.Debug("llm.request", zap.String("model", req.Model), zap.ByteString("messages", raw))
-		}
+	traceID := reqctx.TraceIDFromContext(ctx)
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	if raw, merr := json.Marshal(req.Messages); merr == nil {
+		g.logger.Info("llm.request",
+			zap.String("trace_id", traceID),
+			zap.String("tenant_id", tenantID),
+			zap.String("model", req.Model),
+			zap.String("provider", string(provider)),
+			zap.ByteString("messages", raw),
+		)
 	}
 
 	start := time.Now()
@@ -228,16 +235,22 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 			g.metrics.RecordLLMTokenHistogram(req.Model, "completion", float64(resp.Usage.CompletionTokens))
 		}
 		g.logger.Info("llm.complete",
+			zap.String("trace_id", traceID),
+			zap.String("tenant_id", tenantID),
 			zap.String("model", req.Model),
 			zap.String("provider", string(provider)),
+			zap.Bool("stream", false),
 			zap.Int64("latency_ms", int64(elapsed*1000)),
 			zap.Int("prompt_tokens", resp.Usage.PromptTokens),
 			zap.Int("completion_tokens", resp.Usage.CompletionTokens),
 		)
 	} else if err != nil {
 		g.logger.Error("llm.complete",
+			zap.String("trace_id", traceID),
+			zap.String("tenant_id", tenantID),
 			zap.String("model", req.Model),
 			zap.String("provider", string(provider)),
+			zap.Bool("stream", false),
 			zap.Int64("latency_ms", int64(elapsed*1000)),
 			zap.Error(err),
 		)
@@ -259,6 +272,17 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 		if raw, merr := json.Marshal(req.Messages); merr == nil {
 			g.logger.Debug("llm.request", zap.String("model", req.Model), zap.ByteString("messages", raw))
 		}
+	}
+	streamTraceID := reqctx.TraceIDFromContext(ctx)
+	streamTenantID := reqctx.TenantIDFromContext(ctx)
+	if raw, merr := json.Marshal(req.Messages); merr == nil {
+		g.logger.Info("llm.request",
+			zap.String("trace_id", streamTraceID),
+			zap.String("tenant_id", streamTenantID),
+			zap.String("model", req.Model),
+			zap.String("provider", string(provider)),
+			zap.ByteString("messages", raw),
+		)
 	}
 	start := time.Now()
 	var (
@@ -287,6 +311,26 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 		if resp.Usage.CompletionTokens > 0 {
 			g.metrics.IncLLMTokenUsage(req.Model, "completion", int64(resp.Usage.CompletionTokens))
 		}
+		g.logger.Info("llm.complete",
+			zap.String("trace_id", streamTraceID),
+			zap.String("tenant_id", streamTenantID),
+			zap.String("model", req.Model),
+			zap.String("provider", string(provider)),
+			zap.Bool("stream", true),
+			zap.Int64("latency_ms", int64(elapsed*1000)),
+			zap.Int("prompt_tokens", resp.Usage.PromptTokens),
+			zap.Int("completion_tokens", resp.Usage.CompletionTokens),
+		)
+	} else if err != nil {
+		g.logger.Error("llm.complete",
+			zap.String("trace_id", streamTraceID),
+			zap.String("tenant_id", streamTenantID),
+			zap.String("model", req.Model),
+			zap.String("provider", string(provider)),
+			zap.Bool("stream", true),
+			zap.Int64("latency_ms", int64(elapsed*1000)),
+			zap.Error(err),
+		)
 	}
 	return resp, err
 }

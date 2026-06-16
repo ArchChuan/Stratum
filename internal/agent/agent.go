@@ -14,6 +14,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/memory/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
 )
 
@@ -274,7 +275,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	}
 	agentID := a.ID
 	agentType := a.Type
-	systemPrompt := a.SystemPrompt
+	systemPrompt := buildSystemPrompt(a.Persona, a.SystemPrompt)
 	llmModel := a.LLMModel
 	capGW := a.CapGateway
 	chatStore := a.ChatStore
@@ -430,12 +431,17 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			RAGSearchFn:    cfg.RAGSearchFn,
 		}
 		if a.MemoryInjector != nil {
-			recallHandler := pipeline.NewRecallHandler(a.MemoryInjector.Pool(), a.Logger)
+			recallHandler := pipeline.NewRecallHandler(
+				a.MemoryInjector.Pool(), a.Logger,
+				a.MemoryInjector.EmbedSvc(), a.MemoryInjector.EmbedResolver(), a.MemoryInjector.VectorDB(),
+			)
 			initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
 				return recallHandler.Handle(ctx, cfg.TenantID, cfg.UserID, agentID, input)
 			}
 		}
 		execCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+		execCtx = reqctx.WithTraceID(execCtx, cfg.TraceID)
+		execCtx = reqctx.WithTenantID(execCtx, cfg.TenantID)
 		defer cancel()
 		finalState, runErr := cg.Invoke(execCtx, initState, agentgraph.RunConfig{MaxSteps: cfg.MaxSteps})
 		if runErr != nil {
@@ -681,4 +687,16 @@ func mergeTools(builtins []capgateway.ToolDefinition, extras []capgateway.ToolDe
 		out = append(out, t)
 	}
 	return out
+}
+
+// buildSystemPrompt prepends persona to systemPrompt with a blank line separator.
+// If persona is empty, systemPrompt is returned as-is.
+func buildSystemPrompt(persona, systemPrompt string) string {
+	if persona == "" {
+		return systemPrompt
+	}
+	if systemPrompt == "" {
+		return persona
+	}
+	return persona + "\n\n" + systemPrompt
 }
