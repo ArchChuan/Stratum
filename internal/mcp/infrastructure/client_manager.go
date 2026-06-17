@@ -1,4 +1,4 @@
-// Package mcp provides MCP (Model Context Protocol) client implementation.
+// Package infrastructure provides MCP (Model Context Protocol) client implementation.
 package infrastructure
 
 import (
