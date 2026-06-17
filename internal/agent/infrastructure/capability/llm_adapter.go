@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"go.uber.org/zap"
 )
 

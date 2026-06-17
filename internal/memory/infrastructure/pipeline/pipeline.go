@@ -9,7 +9,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
