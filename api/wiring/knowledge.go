@@ -9,6 +9,7 @@ import (
 
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
+	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/persistence"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
@@ -30,6 +31,7 @@ type Knowledge struct {
 	EmbedSvc          *embedding.EmbeddingService
 	Ingest            *knowledge.KnowledgeIngest
 	RAGService        *knowledge.RAGService
+	WorkspaceService  *knowledge.WorkspaceService
 	EmbedResolver     pipeline.EmbedServiceResolver
 	KnowledgeResolver knowledge.EmbedResolver
 }
@@ -74,6 +76,10 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		RAGService:        rag,
 		EmbedResolver:     pipelineResolver,
 		KnowledgeResolver: knowledgeResolver,
+	}
+	if db != nil {
+		repo := persistence.NewWorkspaceRepo(db)
+		c.Knowledge.WorkspaceService = knowledge.NewWorkspaceService(repo, ingest, c.Logger)
 	}
 	return nil
 }

@@ -1,4 +1,4 @@
-package application_test
+package middleware_test
 
 import (
 	"crypto/rand"
@@ -8,7 +8,8 @@ import (
 	"testing"
 	"time"
 
-	application "github.com/byteBuilderX/stratum/internal/iam/application"
+	"github.com/byteBuilderX/stratum/api/middleware"
+	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/gin-gonic/gin"
 )
 
@@ -21,10 +22,10 @@ func TestJWTMiddleware_ValidToken(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(application.JWTMiddleware(svc))
+	r.Use(middleware.JWTMiddleware(svc))
 	r.GET("/protected", func(c *gin.Context) {
-		sub, _ := c.Get(application.ContextKeySub)
-		tid, _ := c.Get(application.ContextKeyTenantID)
+		sub, _ := c.Get(middleware.ContextKeySub)
+		tid, _ := c.Get(middleware.ContextKeyTenantID)
 		c.JSON(http.StatusOK, gin.H{"sub": sub, "tid": tid})
 	})
 
@@ -44,7 +45,7 @@ func TestJWTMiddleware_MissingToken(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(application.JWTMiddleware(svc))
+	r.Use(middleware.JWTMiddleware(svc))
 	r.GET("/protected", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil) //nolint:noctx

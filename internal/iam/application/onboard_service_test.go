@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	application "github.com/byteBuilderX/stratum/internal/iam/application"
+	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -21,7 +22,7 @@ func setupOnboardTest(t *testing.T) (*application.OnboardService, *pgxpool.Pool,
 	if err != nil {
 		t.Fatalf("pgxpool: %v", err)
 	}
-	svc := application.NewOnboardService(pool)
+	svc := application.NewOnboardService(iampersistence.NewOnboardRepo(pool))
 	return svc, pool, func() { pool.Close() }
 }
 

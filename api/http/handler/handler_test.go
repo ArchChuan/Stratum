@@ -18,7 +18,7 @@ func TestNewSkillHandler(t *testing.T) {
 
 func TestNewRAGHandler(t *testing.T) {
 	logger := zap.NewNop()
-	handler := NewRAGHandler(nil, nil, nil, logger)
+	handler := NewRAGHandler(nil, nil, logger)
 
 	if handler == nil {
 		t.Error("expected RAGHandler to be non-nil")

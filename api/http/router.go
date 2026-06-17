@@ -9,7 +9,6 @@ import (
 	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/api/wiring"
-	"github.com/byteBuilderX/stratum/internal/iam/application"
 )
 
 // NewRouter assembles the HTTP gin engine from an already-built Container.
@@ -75,7 +74,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	if db == nil {
 		return
 	}
-	jwtMW := application.JWTMiddleware(jwtSvc)
+	jwtMW := middleware.JWTMiddleware(jwtSvc)
 	adminHandler := handler.NewAdminHandler(db, c.Logger)
 	tenantHandler := handler.NewTenantHandler(c.IAM.TenantService, c.Logger)
 
@@ -118,7 +117,7 @@ func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 
 	var mw []gin.HandlerFunc
 	if c.Platform.JWTService != nil {
-		mw = append(mw, application.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
+		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
 	}
 	skills := r.Group("/skills", mw...)
 	{
@@ -152,7 +151,7 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 
 	var mw []gin.HandlerFunc
 	if c.Platform.JWTService != nil {
-		mw = append(mw, application.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
+		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
 	}
 	agents := r.Group("/agents", mw...)
 	{
@@ -179,11 +178,11 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 // registerKnowledge wires /knowledge/* under JWT + tenant context with
 // member/admin role split for read vs write.
 func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	ragHandler := handler.NewRAGHandler(c.Knowledge.Ingest, c.Knowledge.RAGService, c.DB(), c.Logger)
+	ragHandler := handler.NewRAGHandler(c.Knowledge.RAGService, c.Knowledge.WorkspaceService, c.Logger)
 
 	var mw []gin.HandlerFunc
 	if c.Platform.JWTService != nil {
-		mw = append(mw, application.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext(), middleware.RequireTenantRole("member"))
+		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext(), middleware.RequireTenantRole("member"))
 	}
 	knowledgeGroup := r.Group("/knowledge", mw...)
 	{
@@ -208,7 +207,7 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 
 	var mw []gin.HandlerFunc
 	if c.Platform.JWTService != nil {
-		mw = append(mw, application.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
+		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
 	}
 	mem := r.Group("/memory", mw...)
 	{
@@ -232,7 +231,7 @@ func registerMCP(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFu
 
 	var mw []gin.HandlerFunc
 	if c.Platform.JWTService != nil {
-		mw = append(mw, application.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
+		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
 	}
 	mcpHandler.RegisterRoutes(r, mw, requireActive)
 }

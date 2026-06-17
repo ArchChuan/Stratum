@@ -55,7 +55,7 @@ func (c *Container) buildPlatform(_ context.Context) error {
 				if c.Storage.Redis != nil {
 					p.TokenStore = iampersistence.NewTokenStore(db, c.Storage.Redis.Client())
 				}
-				p.OnboardSvc = application.NewOnboardService(db)
+				p.OnboardSvc = application.NewOnboardService(iampersistence.NewOnboardRepo(db))
 			}
 		}
 	}

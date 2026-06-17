@@ -1,14 +1,19 @@
-// Package application provides IAM application services (JWT, middleware, onboarding).
-package application
+// Package middleware provides HTTP cross-cutting concerns. JWTMiddleware
+// validates Bearer tokens via iam.JWTService and exposes the resulting
+// claims as Gin context keys consumed downstream by handlers, tenant
+// injectors, and role guards.
+package middleware
 
 import (
 	"net/http"
 	"strings"
 
+	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/gin-gonic/gin"
 )
 
-// Context keys for values injected by JWTMiddleware.
+// Context keys for values injected by JWTMiddleware. These string
+// constants are the public contract used by the rest of the HTTP layer.
 const (
 	ContextKeySub        = "auth.sub"
 	ContextKeyTenantID   = "auth.tenant_id"
@@ -17,8 +22,9 @@ const (
 	ContextKeyJTI        = "auth.jti"
 )
 
-// JWTMiddleware validates the Bearer token and injects claims into the Gin context.
-func JWTMiddleware(svc *JWTService) gin.HandlerFunc {
+// JWTMiddleware validates the Bearer token and injects claims into the
+// Gin context. Returns 401 on missing or invalid token.
+func JWTMiddleware(svc *application.JWTService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {

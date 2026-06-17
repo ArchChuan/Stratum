@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"github.com/byteBuilderX/stratum/internal/iam/application"
+	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 )
@@ -15,7 +15,7 @@ func tenantIDFromCtx(c *gin.Context) (string, bool) {
 }
 
 func userIDFromCtx(c *gin.Context) (string, bool) {
-	v, ok := c.Get(application.ContextKeySub)
+	v, ok := c.Get(middleware.ContextKeySub)
 	if !ok {
 		return "", false
 	}

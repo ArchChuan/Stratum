@@ -7,15 +7,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
-	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
-	"github.com/byteBuilderX/stratum/pkg/textchunk"
 	"github.com/byteBuilderX/stratum/pkg/vector"
-	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 )
 
 func setupRAGRouter(handler *RAGHandler) *gin.Engine {
@@ -29,15 +28,16 @@ func setupRAGRouter(handler *RAGHandler) *gin.Engine {
 	return router
 }
 
+// newTestRAGHandler builds a handler with a real RAGService (the tests below
+// only exercise the binding/error-path layers, so the WorkspaceService is
+// constructed with nil deps — never reached on these inputs).
 func newTestRAGHandler(logger *zap.Logger) *RAGHandler {
-	parser := document.NewParser(logger)
-	chunker := textchunk.NewChunker(logger)
 	embedSvc := embedding.NewEmbeddingService(llmgateway.NewQwenClient("", logger), logger)
 	vectorStore := vector.NewVectorStore("localhost", "19530", logger)
 	graphRAG := knowledge.NewGraphRAG("bolt://localhost:7687", "neo4j", "password", logger)
-	ingestSvc := knowledge.NewKnowledgeIngest(parser, chunker, embedSvc, vectorStore, graphRAG, logger)
 	ragService := knowledge.NewRAGService(embedSvc, vectorStore, graphRAG, logger)
-	return NewRAGHandler(ingestSvc, ragService, nil, logger)
+	wsService := knowledge.NewWorkspaceService(nil, nil, logger)
+	return NewRAGHandler(ragService, wsService, logger)
 }
 
 func TestRAGHandlerUploadDocument(t *testing.T) {

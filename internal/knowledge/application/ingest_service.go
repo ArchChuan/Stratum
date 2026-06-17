@@ -8,8 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
-	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
+	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/byteBuilderX/stratum/pkg/textchunk"
@@ -17,19 +16,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// EmbedClient is the minimal interface KnowledgeIngest needs for vectorization.
-type EmbedClient interface {
-	EmbedVector(ctx context.Context, text string) ([]float32, error)
-	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
-}
+// EmbedClient is an alias to the consumer-side embedder port. Kept exported so
+// the per-tenant resolver type below stays stable for callers in api/wiring.
+type EmbedClient = port.Embedder
 
 // EmbedResolver resolves an EmbedClient for a given tenant and model at request time.
 type EmbedResolver func(ctx context.Context, tenantID, model string) EmbedClient
 
 type KnowledgeIngest struct {
-	parser        *document.Parser
+	parser        port.DocumentParser
 	chunker       *textchunk.Chunker
-	embeddingSvc  *embedding.EmbeddingService
+	embeddingSvc  port.Embedder
 	embedResolver EmbedResolver
 	vectorStore   *vector.VectorStore
 	graphRAG      *GraphRAG
@@ -37,9 +34,9 @@ type KnowledgeIngest struct {
 }
 
 func NewKnowledgeIngest(
-	parser *document.Parser,
+	parser port.DocumentParser,
 	chunker *textchunk.Chunker,
-	embeddingSvc *embedding.EmbeddingService,
+	embeddingSvc port.Embedder,
 	vectorStore *vector.VectorStore,
 	graphRAG *GraphRAG,
 	logger *zap.Logger,
@@ -105,7 +102,7 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 	ki.logger.Info("text chunked", zap.String("trace_id", sc.TraceID), zap.Int("num_chunks", len(chunks)))
 
 	// Resolve embed client: prefer per-workspace resolver, fall back to global svc.
-	var embedClient EmbedClient
+	var embedClient port.Embedder
 	if ki.embedResolver != nil && req.TenantID != "" {
 		embedClient = ki.embedResolver(ctx, req.TenantID, req.EmbeddingModel)
 	}

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
+	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/byteBuilderX/stratum/pkg/vector"
@@ -16,14 +16,14 @@ import (
 )
 
 type RAGService struct {
-	embeddingSvc *embedding.EmbeddingService
+	embeddingSvc port.Embedder
 	vectorStore  *vector.VectorStore
 	graphRAG     *GraphRAG
 	logger       *zap.Logger
 }
 
 func NewRAGService(
-	embeddingSvc *embedding.EmbeddingService,
+	embeddingSvc port.Embedder,
 	vectorStore *vector.VectorStore,
 	graphRAG *GraphRAG,
 	logger *zap.Logger,
