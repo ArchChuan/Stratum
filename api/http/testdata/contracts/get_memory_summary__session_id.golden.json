@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "GET",
+    "path": "/memory/summary/:session_id",
+    "body": {
+      "error": "missing bearer token"
+    },
+    "want_status": 401
+  }
+]

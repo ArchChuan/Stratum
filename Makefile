@@ -193,3 +193,8 @@ fe-dev:
 clean:
 	rm -rf bin/ coverage.out
 	rm -rf $(WEB_DIR)/dist $(WEB_DIR)/node_modules/.cache
+
+# ─── HTTP 契约录制（DDD 重构 Phase 0）─────────────────────────────────────
+.PHONY: record-contracts
+record-contracts:
+	go run -tags=contracts ./scripts/record-contracts.go api/http/testdata/contracts

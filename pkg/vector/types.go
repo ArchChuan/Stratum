@@ -1,11 +1,9 @@
 package vector
 
-type MCPRequest struct {
-	Method string      `json:"method"`
-	Params interface{} `json:"params"`
-}
+import storagemilvus "github.com/byteBuilderX/stratum/pkg/storage/milvus"
 
-type MCPResponse struct {
-	Result interface{} `json:"result"`
-	Error  string      `json:"error,omitempty"`
-}
+// MCPRequest is an alias for milvus.MCPRequest.
+type MCPRequest = storagemilvus.MCPRequest
+
+// MCPResponse is an alias for milvus.MCPResponse.
+type MCPResponse = storagemilvus.MCPResponse

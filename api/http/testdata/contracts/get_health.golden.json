@@ -1,0 +1,12 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "GET",
+    "path": "/health",
+    "body": {
+      "service": "Stratum",
+      "status": "ok"
+    },
+    "want_status": 200
+  }
+]

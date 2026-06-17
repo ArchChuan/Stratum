@@ -1,22 +1,11 @@
 // Package tenantdb provides tenant database isolation and execution helpers.
-
+//
+// Neo4j naming helpers were moved to pkg/storage/tenantnaming. This file
+// retains a re-export for backward compatibility and will be removed in a
+// later DDD refactor phase.
 package tenantdb
 
-import (
-	"context"
-	"fmt"
-)
+import "github.com/byteBuilderX/stratum/pkg/storage/tenantnaming"
 
-// TenantLabel returns the Neo4j node label for a given base label,
-// scoped to the tenant in ctx.
-// Example: label="Document" → "T_acme_Document"
-func TenantLabel(ctx context.Context, label string) (string, error) {
-	tc, ok := FromContext(ctx)
-	if !ok {
-		return "", fmt.Errorf("tenantdb: missing tenant context")
-	}
-	if tc.TenantID == "" {
-		return "", fmt.Errorf("tenantdb: tenant_id is empty")
-	}
-	return "T_" + tc.TenantID + "_" + label, nil
-}
+// TenantLabel re-exports tenantnaming.TenantLabel.
+var TenantLabel = tenantnaming.TenantLabel

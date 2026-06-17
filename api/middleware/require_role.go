@@ -8,7 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Context key constants matching internal/auth/middleware.go
+// Context key constants matching internal/iam/application/middleware.go
 const (
 	ctxGlobalRole = "auth.global_role"
 	ctxRole       = "auth.role"

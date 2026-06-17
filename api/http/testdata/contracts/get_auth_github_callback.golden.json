@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "GET",
+    "path": "/auth/github/callback",
+    "body": {
+      "error": "invalid oauth state"
+    },
+    "want_status": 400
+  }
+]

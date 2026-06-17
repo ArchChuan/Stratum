@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "GET",
+    "path": "/api/v1/mcp/skills/:id",
+    "body": {
+      "error": "skill not found"
+    },
+    "want_status": 404
+  }
+]

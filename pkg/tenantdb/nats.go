@@ -1,21 +1,11 @@
 // Package tenantdb provides tenant database isolation and execution helpers.
-
+//
+// NATS naming helpers were moved to pkg/storage/tenantnaming. This file
+// retains a re-export for backward compatibility and will be removed in a
+// later DDD refactor phase.
 package tenantdb
 
-import (
-	"context"
-	"fmt"
-)
+import "github.com/byteBuilderX/stratum/pkg/storage/tenantnaming"
 
-// TenantSubject returns the NATS subject scoped to the tenant in ctx.
-// Example: subject="exec.completed" → "tenant.acme.exec.completed"
-func TenantSubject(ctx context.Context, subject string) (string, error) {
-	tc, ok := FromContext(ctx)
-	if !ok {
-		return "", fmt.Errorf("tenantdb: missing tenant context")
-	}
-	if tc.TenantID == "" {
-		return "", fmt.Errorf("tenantdb: tenant_id is empty")
-	}
-	return "tenant." + tc.TenantID + "." + subject, nil
-}
+// TenantSubject re-exports tenantnaming.TenantSubject.
+var TenantSubject = tenantnaming.TenantSubject

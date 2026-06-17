@@ -1,0 +1,82 @@
+version: 3
+allow:
+  depOnAnyVendor: true
+
+components:
+  pkg:
+    in: pkg/**
+
+  api:
+    in: api/**
+
+  cmd:
+    in: cmd/**
+
+  # Domain layer (no infra deps allowed).
+  domain-agent:     { in: internal/agent/domain/** }
+  domain-memory:    { in: internal/memory/domain/** }
+  domain-knowledge: { in: internal/knowledge/domain/** }
+  domain-skill:     { in: internal/skill/domain/** }
+  domain-mcp:       { in: internal/mcp/domain/** }
+  domain-iam:       { in: internal/iam/domain/** }
+  domain-llm:       { in: internal/llmgateway/domain/** }
+  domain-platform:  { in: internal/platform/domain/** }
+
+  # Application layer.
+  app-agent:     { in: internal/agent/application/** }
+  app-memory:    { in: internal/memory/application/** }
+  app-knowledge: { in: internal/knowledge/application/** }
+  app-skill:     { in: internal/skill/application/** }
+  app-mcp:       { in: internal/mcp/application/** }
+  app-iam:       { in: internal/iam/application/** }
+  app-llm:       { in: internal/llmgateway/application/** }
+  app-platform:  { in: internal/platform/application/** }
+
+  # Infrastructure layer.
+  infra-agent:     { in: internal/agent/infrastructure/** }
+  infra-memory:    { in: internal/memory/infrastructure/** }
+  infra-knowledge: { in: internal/knowledge/infrastructure/** }
+  infra-skill:     { in: internal/skill/infrastructure/** }
+  infra-mcp:       { in: internal/mcp/infrastructure/** }
+  infra-iam:       { in: internal/iam/infrastructure/** }
+  infra-llm:       { in: internal/llmgateway/infrastructure/** }
+  infra-platform:  { in: internal/platform/infrastructure/** }
+
+deps:
+  pkg:
+    mayDependOn: [pkg]
+    cannotDependOn: [api, cmd, domain-agent, domain-memory, domain-knowledge, domain-skill, domain-mcp, domain-iam, domain-llm, domain-platform, app-agent, app-memory, app-knowledge, app-skill, app-mcp, app-iam, app-llm, app-platform, infra-agent, infra-memory, infra-knowledge, infra-skill, infra-mcp, infra-iam, infra-llm, infra-platform]
+
+  domain-agent:     { mayDependOn: [domain-agent] }
+  domain-memory:    { mayDependOn: [domain-memory] }
+  domain-knowledge: { mayDependOn: [domain-knowledge] }
+  domain-skill:     { mayDependOn: [domain-skill] }
+  domain-mcp:       { mayDependOn: [domain-mcp] }
+  domain-iam:       { mayDependOn: [domain-iam] }
+  domain-llm:       { mayDependOn: [domain-llm] }
+  domain-platform:  { mayDependOn: [domain-platform] }
+
+  app-agent:     { mayDependOn: [domain-agent, pkg] }
+  app-memory:    { mayDependOn: [domain-memory, pkg] }
+  app-knowledge: { mayDependOn: [domain-knowledge, pkg] }
+  app-skill:     { mayDependOn: [domain-skill, pkg] }
+  app-mcp:       { mayDependOn: [domain-mcp, pkg] }
+  app-iam:       { mayDependOn: [domain-iam, pkg] }
+  app-llm:       { mayDependOn: [domain-llm, pkg] }
+  app-platform:  { mayDependOn: [domain-platform, pkg] }
+
+  infra-agent:     { mayDependOn: [domain-agent, app-agent, pkg] }
+  infra-memory:    { mayDependOn: [domain-memory, app-memory, pkg] }
+  infra-knowledge: { mayDependOn: [domain-knowledge, app-knowledge, pkg] }
+  infra-skill:     { mayDependOn: [domain-skill, app-skill, pkg] }
+  infra-mcp:       { mayDependOn: [domain-mcp, app-mcp, pkg] }
+  infra-iam:       { mayDependOn: [domain-iam, app-iam, pkg] }
+  infra-llm:       { mayDependOn: [domain-llm, app-llm, pkg] }
+  infra-platform:  { mayDependOn: [domain-platform, app-platform, pkg] }
+
+  api:
+    mayDependOn: [pkg, domain-agent, domain-memory, domain-knowledge, domain-skill, domain-mcp, domain-iam, domain-llm, domain-platform, app-agent, app-memory, app-knowledge, app-skill, app-mcp, app-iam, app-llm, app-platform, infra-agent, infra-memory, infra-knowledge, infra-skill, infra-mcp, infra-iam, infra-llm, infra-platform]
+    cannotDependOn: [cmd]
+
+  cmd:
+    mayDependOn: [pkg, api, domain-agent, domain-memory, domain-knowledge, domain-skill, domain-mcp, domain-iam, domain-llm, domain-platform, app-agent, app-memory, app-knowledge, app-skill, app-mcp, app-iam, app-llm, app-platform, infra-agent, infra-memory, infra-knowledge, infra-skill, infra-mcp, infra-iam, infra-llm, infra-platform]

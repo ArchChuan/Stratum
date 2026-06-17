@@ -1,36 +1,14 @@
 // Package tenantdb provides tenant database isolation and execution helpers.
-
+//
+// Milvus naming helpers were moved to pkg/storage/tenantnaming. This file
+// retains re-exports for backward compatibility and will be removed in a
+// later DDD refactor phase.
 package tenantdb
 
-import (
-	"context"
-	"fmt"
-)
+import "github.com/byteBuilderX/stratum/pkg/storage/tenantnaming"
 
-// TenantCollection returns the Milvus collection name for a given kind,
-// scoped to the tenant in ctx.
-// Example: kind="knowledge" → "tenant_acme_knowledge"
-func TenantCollection(ctx context.Context, kind string) (string, error) {
-	tc, ok := FromContext(ctx)
-	if !ok {
-		return "", fmt.Errorf("tenantdb: missing tenant context")
-	}
-	if tc.TenantID == "" {
-		return "", fmt.Errorf("tenantdb: tenant_id is empty")
-	}
-	return "tenant_" + tc.TenantID + "_" + kind, nil
-}
+// TenantCollection re-exports tenantnaming.TenantCollection.
+var TenantCollection = tenantnaming.TenantCollection
 
-// WorkspaceCollection returns the Milvus collection name for a specific workspace,
-// scoped to the tenant in ctx.
-// Example: tenant=acme, workspace=demo → "tenant_acme_kb_demo"
-func WorkspaceCollection(ctx context.Context, workspace string) (string, error) {
-	tc, ok := FromContext(ctx)
-	if !ok {
-		return "", fmt.Errorf("tenantdb: missing tenant context")
-	}
-	if tc.TenantID == "" {
-		return "", fmt.Errorf("tenantdb: tenant_id is empty")
-	}
-	return "tenant_" + tc.TenantID + "_kb_" + workspace, nil
-}
+// WorkspaceCollection re-exports tenantnaming.WorkspaceCollection.
+var WorkspaceCollection = tenantnaming.WorkspaceCollection

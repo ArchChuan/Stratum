@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "POST",
+    "path": "/conversations/:convID/messages",
+    "body": {
+      "error": "missing bearer token"
+    },
+    "want_status": 401
+  }
+]
