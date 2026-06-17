@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// PgxPool is the minimal pgxpool interface used by admin and tenant handlers.
+// PgxPool is the minimal pgxpool interface used by admin and agent handlers.
 type PgxPool interface {
 	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
 	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)

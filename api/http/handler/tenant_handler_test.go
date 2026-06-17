@@ -1,19 +1,89 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/iam/application"
+	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5"
-	"github.com/pashagolub/pgxmock/v2"
 	"go.uber.org/zap"
 )
+
+// fakeTenantRepo is an in-memory port.TenantRepo for handler tests.
+type fakeTenantRepo struct {
+	count          int
+	members        []domain.Member
+	memberRoles    map[string]string
+	deleteErr      error
+	deleted        []string
+	createInvErr   error
+	invitations    []domain.Invitation
+	tenantName     string
+	tenantSettings []byte
+}
+
+func (f *fakeTenantRepo) CountMembers(_ context.Context, _ string) (int, error) {
+	return f.count, nil
+}
+
+func (f *fakeTenantRepo) ListMembers(_ context.Context, _ string, _, _ int) ([]domain.Member, error) {
+	return f.members, nil
+}
+
+func (f *fakeTenantRepo) GetMemberRole(_ context.Context, _, userID string) (string, error) {
+	if r, ok := f.memberRoles[userID]; ok {
+		return r, nil
+	}
+	return "", domain.ErrMemberNotFound
+}
+
+func (f *fakeTenantRepo) UpdateMemberRole(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+func (f *fakeTenantRepo) DeleteMember(_ context.Context, _, userID string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	if _, ok := f.memberRoles[userID]; !ok {
+		return domain.ErrMemberNotFound
+	}
+	f.deleted = append(f.deleted, userID)
+	return nil
+}
+
+func (f *fakeTenantRepo) CreateInvitation(_ context.Context, inv domain.Invitation) error {
+	if f.createInvErr != nil {
+		return f.createInvErr
+	}
+	f.invitations = append(f.invitations, inv)
+	return nil
+}
+
+func (f *fakeTenantRepo) GetTenantSettings(_ context.Context, _ string) (string, []byte, error) {
+	return f.tenantName, f.tenantSettings, nil
+}
+
+func (f *fakeTenantRepo) UpdateTenantName(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (f *fakeTenantRepo) UpdateTenantSettings(_ context.Context, _ string, b []byte) error {
+	f.tenantSettings = b
+	return nil
+}
+
+func (f *fakeTenantRepo) ListUserTenants(_ context.Context, _ string) ([]domain.UserTenantInfo, error) {
+	return nil, nil
+}
 
 func injectTenant(tenantID string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -21,6 +91,11 @@ func injectTenant(tenantID string) gin.HandlerFunc {
 		c.Request = c.Request.WithContext(tenantdb.WithTenant(c.Request.Context(), tc))
 		c.Next()
 	}
+}
+
+func newTenantHandler(repo *fakeTenantRepo) *TenantHandler {
+	svc := application.NewTenantService(repo, zap.NewNop(), "http://localhost:3000", [32]byte{}, nil)
+	return NewTenantHandler(svc, zap.NewNop())
 }
 
 func setupTenantHandlerRouter(h *TenantHandler) *gin.Engine {
@@ -35,23 +110,14 @@ func setupTenantHandlerRouter(h *TenantHandler) *gin.Engine {
 }
 
 func TestListMembers_success(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mock.Close()
-
-	mock.ExpectQuery("SELECT COUNT").
-		WithArgs("tenant-abc").
-		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
-
 	now := time.Now()
-	mock.ExpectQuery("SELECT tm.user_id").
-		WithArgs("tenant-abc", 20, 0).
-		WillReturnRows(pgxmock.NewRows([]string{"user_id", "github_login", "avatar_url", "role", "joined_at"}).
-			AddRow("user-1", "alice", "https://avatars.githubusercontent.com/alice", "admin", now))
-
-	h := &TenantHandler{db: mock, logger: zap.NewNop(), frontendURL: "http://localhost:3000"}
+	repo := &fakeTenantRepo{
+		count: 1,
+		members: []domain.Member{
+			{UserID: "user-1", GitHubLogin: "alice", AvatarURL: "https://avatars.githubusercontent.com/alice", Role: "admin", JoinedAt: now},
+		},
+	}
+	h := newTenantHandler(repo)
 	r := setupTenantHandlerRouter(h)
 
 	w := httptest.NewRecorder()
@@ -69,23 +135,11 @@ func TestListMembers_success(t *testing.T) {
 	if len(members) != 1 {
 		t.Fatalf("expected 1 member, got %d", len(members))
 	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unfulfilled expectations: %v", err)
-	}
 }
 
 func TestInviteMember_success(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mock.Close()
-
-	mock.ExpectExec("INSERT INTO public.invitations").
-		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
-
-	h := &TenantHandler{db: mock, logger: zap.NewNop(), frontendURL: "http://localhost:3000"}
+	repo := &fakeTenantRepo{}
+	h := newTenantHandler(repo)
 	r := setupTenantHandlerRouter(h)
 
 	body := `{"email":"bob@example.com","role":"member"}`
@@ -105,16 +159,14 @@ func TestInviteMember_success(t *testing.T) {
 	if !strings.HasPrefix(url, "http://localhost:3000/onboarding?invitation=") {
 		t.Errorf("unexpected invitation_url: %s", url)
 	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unfulfilled expectations: %v", err)
+	if len(repo.invitations) != 1 {
+		t.Errorf("expected 1 invitation persisted, got %d", len(repo.invitations))
 	}
 }
 
 func TestInviteMember_invalidEmail(t *testing.T) {
-	mock, _ := pgxmock.NewPool()
-	defer mock.Close()
-
-	h := &TenantHandler{db: mock, logger: zap.NewNop(), frontendURL: "http://localhost:3000"}
+	repo := &fakeTenantRepo{}
+	h := newTenantHandler(repo)
 	r := setupTenantHandlerRouter(h)
 
 	body := `{"email":"not-an-email","role":"member"}`
@@ -129,21 +181,10 @@ func TestInviteMember_invalidEmail(t *testing.T) {
 }
 
 func TestRemoveMember_success(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatal(err)
+	repo := &fakeTenantRepo{
+		memberRoles: map[string]string{"user-2": "member"},
 	}
-	defer mock.Close()
-
-	mock.ExpectQuery("SELECT role FROM public.tenant_members").
-		WithArgs("tenant-abc", "user-2").
-		WillReturnRows(pgxmock.NewRows([]string{"role"}).AddRow("member"))
-
-	mock.ExpectExec("DELETE FROM public.tenant_members").
-		WithArgs("tenant-abc", "user-2").
-		WillReturnResult(pgxmock.NewResult("DELETE", 1))
-
-	h := &TenantHandler{db: mock, logger: zap.NewNop(), frontendURL: "http://localhost:3000"}
+	h := newTenantHandler(repo)
 	r := setupTenantHandlerRouter(h)
 
 	w := httptest.NewRecorder()
@@ -153,24 +194,17 @@ func TestRemoveMember_success(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unfulfilled expectations: %v", err)
+	if len(repo.deleted) != 1 || repo.deleted[0] != "user-2" {
+		t.Errorf("expected user-2 deleted, got %v", repo.deleted)
 	}
 }
 
 func TestRemoveMember_notFound(t *testing.T) {
-	mock, _ := pgxmock.NewPool()
-	defer mock.Close()
-
-	mock.ExpectQuery("SELECT role FROM public.tenant_members").
-		WithArgs("tenant-abc", "ghost-user").
-		WillReturnError(pgx.ErrNoRows)
-
-	mock.ExpectExec("DELETE FROM public.tenant_members").
-		WithArgs("tenant-abc", "ghost-user").
-		WillReturnResult(pgxmock.NewResult("DELETE", 0))
-
-	h := &TenantHandler{db: mock, logger: zap.NewNop(), frontendURL: "http://localhost:3000"}
+	repo := &fakeTenantRepo{
+		memberRoles: map[string]string{},
+		deleteErr:   errors.New("never reached"),
+	}
+	h := newTenantHandler(repo)
 	r := setupTenantHandlerRouter(h)
 
 	w := httptest.NewRecorder()

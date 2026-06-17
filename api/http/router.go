@@ -77,7 +77,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	}
 	jwtMW := application.JWTMiddleware(jwtSvc)
 	adminHandler := handler.NewAdminHandler(db, c.Logger)
-	tenantHandler := handler.NewTenantHandler(db, c.Logger, cfg.FrontendURL, c.Platform.AESKey, c.Platform.GatewayCache)
+	tenantHandler := handler.NewTenantHandler(c.IAM.TenantService, c.Logger)
 
 	adminGroup := r.Group("/admin", jwtMW, middleware.RequireGlobalAdmin())
 	{
