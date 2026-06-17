@@ -10,9 +10,9 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/document"
 	"github.com/byteBuilderX/stratum/internal/embedding"
-	"github.com/byteBuilderX/stratum/internal/textchunk"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
+	"github.com/byteBuilderX/stratum/pkg/textchunk"
 	"github.com/byteBuilderX/stratum/pkg/vector"
 	"go.uber.org/zap"
 )

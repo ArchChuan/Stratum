@@ -6,12 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/byteBuilderX/stratum/pkg/httpclient"
 )
 
 type HTTPSkill struct {
@@ -35,34 +36,6 @@ func ValidateSkillURL(rawURL string) error {
 		return fmt.Errorf("URL must have a host")
 	}
 	return nil
-}
-
-func isPrivateIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
-}
-
-// newSSRFSafeTransport returns an http.Transport that blocks connections to
-// private/internal IP addresses at dial time, preventing SSRF attacks even
-// in the presence of DNS rebinding.
-func newSSRFSafeTransport() *http.Transport {
-	return &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, fmt.Errorf("invalid address: %w", err)
-			}
-			addrs, err := net.DefaultResolver.LookupHost(ctx, host)
-			if err != nil {
-				return nil, fmt.Errorf("DNS lookup failed: %w", err)
-			}
-			for _, a := range addrs {
-				if ip := net.ParseIP(a); ip != nil && isPrivateIP(ip) {
-					return nil, fmt.Errorf("connection to private/internal address denied: %s", a)
-				}
-			}
-			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(addrs[0], port))
-		},
-	}
 }
 
 func NewHTTPSkill(id, name, description, rawURL, method string, headers map[string]string, bodyTemplate string, timeoutSec int) (*HTTPSkill, error) {
@@ -123,13 +96,13 @@ func (hs *HTTPSkill) Execute(ctx context.Context, input interface{}) (interface{
 		bodyReader = bytes.NewReader(b)
 	}
 
-	client := &http.Client{
-		Timeout:   time.Duration(hs.TimeoutSec) * time.Second,
-		Transport: newSSRFSafeTransport(),
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	client := httpclient.NewSSRFSafe(
+		httpclient.WithTimeout(time.Duration(hs.TimeoutSec)*time.Second),
+		httpclient.WithUserAgent("stratum-skill/1.0"),
+		httpclient.WithCheckRedirect(func(req *http.Request, via []*http.Request) error {
 			return fmt.Errorf("redirects are not allowed for HTTP skills")
-		},
-	}
+		}),
+	)
 	req, err := http.NewRequestWithContext(ctx, strings.ToUpper(hs.Method), hs.URL, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
