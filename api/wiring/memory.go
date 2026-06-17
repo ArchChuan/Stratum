@@ -82,12 +82,9 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 			p.SetEmbedResolver(c.Knowledge.EmbedResolver)
 		}
-		if err := p.Start(ctx); err != nil {
-			c.Logger.Warn("memory-pipeline: start failed", zap.Error(err))
-		} else {
-			c.shutdown = append(c.shutdown, func(_ context.Context) error { p.Stop(); return nil })
-			mem.Pipeline = p
-		}
+		// Pipeline lifecycle (Start/Stop) is owned by the cmd/server Harness
+		// memory-pipeline component, so wiring only constructs and exposes it.
+		mem.Pipeline = p
 	}
 
 	c.Memory = mem
