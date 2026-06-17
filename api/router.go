@@ -16,7 +16,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/wiring"
 	"github.com/byteBuilderX/stratum/internal/capgateway"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
-	mempipeline "github.com/byteBuilderX/stratum/internal/memory/pipeline"
+	mempipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/internal/platform/config"
 )
 

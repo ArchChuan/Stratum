@@ -9,7 +9,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/api/middleware"
-	"github.com/byteBuilderX/stratum/internal/memory"
+	memory "github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"

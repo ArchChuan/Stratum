@@ -10,8 +10,8 @@ import (
 
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/graph"
 	"github.com/byteBuilderX/stratum/internal/capgateway"
-	"github.com/byteBuilderX/stratum/internal/memory"
-	"github.com/byteBuilderX/stratum/internal/memory/pipeline"
+	memory "github.com/byteBuilderX/stratum/internal/memory/application"
+	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"

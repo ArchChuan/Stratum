@@ -11,7 +11,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
-	"github.com/byteBuilderX/stratum/internal/memory/pipeline"
+	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/textchunk"

@@ -8,8 +8,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
-	"github.com/byteBuilderX/stratum/internal/memory"
-	"github.com/byteBuilderX/stratum/internal/memory/pipeline"
+	memory "github.com/byteBuilderX/stratum/internal/memory/application"
+	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 )
 
 // Memory groups memory-system services: the user-facing manager, the

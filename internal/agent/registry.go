@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/byteBuilderX/stratum/internal/capgateway"
-	"github.com/byteBuilderX/stratum/internal/memory/pipeline"
+	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"

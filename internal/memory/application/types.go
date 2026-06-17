@@ -1,5 +1,5 @@
-// Package memory provides agent memory management.
-package memory
+// Package application provides agent memory management orchestration.
+package application
 
 import (
 	"errors"
