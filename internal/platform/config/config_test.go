@@ -3,8 +3,6 @@ package config
 import (
 	"os"
 	"testing"
-
-	"go.uber.org/zap"
 )
 
 func TestLoad(t *testing.T) {
@@ -146,21 +144,6 @@ func TestConfigStruct(t *testing.T) {
 	}
 }
 
-func TestServicesStruct(t *testing.T) {
-	services := &Services{
-		GraphRAG:    nil,
-		VectorStore: nil,
-	}
-
-	if services.GraphRAG != nil {
-		t.Error("expected nil GraphRAG")
-	}
-
-	if services.VectorStore != nil {
-		t.Error("expected nil VectorStore")
-	}
-}
-
 func TestLoadAuthFields(t *testing.T) {
 	_ = os.Setenv("GITHUB_CLIENT_ID", "gh-id")
 	_ = os.Setenv("GITHUB_CLIENT_SECRET", "gh-secret")
@@ -188,30 +171,5 @@ func TestLoadAuthFields(t *testing.T) {
 	}
 	if cfg.GlobalAdminGitHubLogin != "byteBuilderX" {
 		t.Errorf("GlobalAdminGitHubLogin: got %s", cfg.GlobalAdminGitHubLogin)
-	}
-}
-
-func TestInitializeServices(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := &Config{
-		Neo4jURI:      "bolt://localhost:7687",
-		Neo4jUser:     "neo4j",
-		Neo4jPassword: "password",
-		MilvusHost:    "localhost",
-		MilvusPort:    "19530",
-	}
-
-	services, err := InitializeServices(cfg, logger)
-
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-
-	if services == nil { //nolint:staticcheck
-		t.Error("expected non-nil GraphRAG")
-	}
-
-	if services.VectorStore == nil { //nolint:staticcheck
-		t.Error("expected non-nil VectorStore")
 	}
 }

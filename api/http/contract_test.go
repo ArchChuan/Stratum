@@ -15,8 +15,8 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api"
-	"github.com/byteBuilderX/stratum/internal/config"
 	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	"github.com/byteBuilderX/stratum/internal/platform/config"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 

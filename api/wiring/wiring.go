@@ -13,9 +13,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/capgateway"
-	"github.com/byteBuilderX/stratum/internal/config"
 	"github.com/byteBuilderX/stratum/internal/llmgateway"
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/pipeline"
+	"github.com/byteBuilderX/stratum/internal/platform/config"
 	"github.com/byteBuilderX/stratum/internal/skill"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/storage/milvus"
