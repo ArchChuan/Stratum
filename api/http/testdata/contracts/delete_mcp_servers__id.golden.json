@@ -1,8 +1,8 @@
 [
   {
     "name": "default-unauth",
-    "method": "GET",
-    "path": "/skills/:id",
+    "method": "DELETE",
+    "path": "/mcp/servers/:id",
     "body": {
       "error": "missing bearer token"
     },

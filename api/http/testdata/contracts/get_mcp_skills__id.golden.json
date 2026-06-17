@@ -1,8 +1,8 @@
 [
   {
     "name": "default-unauth",
-    "method": "POST",
-    "path": "/api/v1/mcp/skills/refresh",
+    "method": "GET",
+    "path": "/mcp/skills/:id",
     "body": {
       "error": "missing bearer token"
     },

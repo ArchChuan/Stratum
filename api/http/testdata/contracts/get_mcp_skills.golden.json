@@ -2,7 +2,7 @@
   {
     "name": "default-unauth",
     "method": "GET",
-    "path": "/skills/:id",
+    "path": "/mcp/skills",
     "body": {
       "error": "missing bearer token"
     },

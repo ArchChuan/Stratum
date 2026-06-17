@@ -2,7 +2,7 @@
   {
     "name": "default-unauth",
     "method": "POST",
-    "path": "/api/v1/mcp/tools/:toolId/execute",
+    "path": "/mcp/skills/refresh",
     "body": {
       "error": "missing bearer token"
     },

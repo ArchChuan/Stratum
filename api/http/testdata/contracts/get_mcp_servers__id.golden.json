@@ -1,8 +1,8 @@
 [
   {
     "name": "default-unauth",
-    "method": "POST",
-    "path": "/api/v1/mcp/servers",
+    "method": "GET",
+    "path": "/mcp/servers/:id",
     "body": {
       "error": "missing bearer token"
     },
