@@ -1,6 +1,6 @@
 //go:build integration
 
-package auth_test
+package persistence_test
 
 import (
 	"context"
@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/auth"
+	persistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
-func setupTokenStoreTest(t *testing.T) (*auth.TokenStore, func()) {
+func setupTokenStoreTest(t *testing.T) (*persistence.TokenStore, func()) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -48,7 +48,7 @@ func setupTokenStoreTest(t *testing.T) (*auth.TokenStore, func()) {
 	}
 	rdb := redis.NewClient(opt)
 
-	store := auth.NewTokenStore(pool, rdb)
+	store := persistence.NewTokenStore(pool, rdb)
 	return store, func() {
 		pool.Close()
 		rdb.Close()

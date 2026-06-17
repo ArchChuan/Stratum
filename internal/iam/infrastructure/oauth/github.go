@@ -1,5 +1,5 @@
-// Package auth provides JWT token management and authentication.
-package auth
+// Package oauth implements IAM OAuth identity providers (GitHub, etc.).
+package oauth
 
 import (
 	"context"

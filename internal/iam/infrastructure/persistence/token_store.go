@@ -1,5 +1,5 @@
-// Package auth provides JWT token management and authentication.
-package auth
+// Package persistence holds IAM persistence adapters (token store, sessions).
+package persistence
 
 import (
 	"context"

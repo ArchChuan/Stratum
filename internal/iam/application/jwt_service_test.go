@@ -1,4 +1,4 @@
-package auth_test
+package application_test
 
 import (
 	"crypto/rand"
@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/auth"
+	application "github.com/byteBuilderX/stratum/internal/iam/application"
 )
 
 func generateTestRSAKey(t *testing.T) *rsa.PrivateKey {
@@ -20,9 +20,9 @@ func generateTestRSAKey(t *testing.T) *rsa.PrivateKey {
 
 func TestJWT_SignAndVerify(t *testing.T) {
 	key := generateTestRSAKey(t)
-	svc := auth.NewJWTService(key)
+	svc := application.NewJWTService(key)
 
-	claims := auth.TokenClaims{
+	claims := application.TokenClaims{
 		Sub:        "user-uuid-1",
 		TenantID:   "tenant-uuid-1",
 		Role:       "admin",
@@ -55,9 +55,9 @@ func TestJWT_SignAndVerify(t *testing.T) {
 
 func TestJWT_Expired(t *testing.T) {
 	key := generateTestRSAKey(t)
-	svc := auth.NewJWTService(key)
+	svc := application.NewJWTService(key)
 
-	claims := auth.TokenClaims{Sub: "u1", TenantID: "t1", Role: "member", JTI: "jti-exp"}
+	claims := application.TokenClaims{Sub: "u1", TenantID: "t1", Role: "member", JTI: "jti-exp"}
 	token, err := svc.Sign(claims, -1*time.Second)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
@@ -71,9 +71,9 @@ func TestJWT_Expired(t *testing.T) {
 
 func TestJWT_OnboardingToken(t *testing.T) {
 	key := generateTestRSAKey(t)
-	svc := auth.NewJWTService(key)
+	svc := application.NewJWTService(key)
 
-	ob := auth.OnboardingClaims{
+	ob := application.OnboardingClaims{
 		GitHubID:    42,
 		GitHubLogin: "byteBuilderX",
 		AvatarURL:   "https://avatars.githubusercontent.com/u/42",

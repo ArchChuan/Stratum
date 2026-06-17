@@ -1,4 +1,4 @@
-package auth_test
+package application_test
 
 import (
 	"crypto/rand"
@@ -8,23 +8,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/auth"
+	application "github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/gin-gonic/gin"
 )
 
 func TestJWTMiddleware_ValidToken(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	svc := auth.NewJWTService(key)
+	svc := application.NewJWTService(key)
 
-	claims := auth.TokenClaims{Sub: "u1", TenantID: "t1", Role: "admin", JTI: "j1"}
+	claims := application.TokenClaims{Sub: "u1", TenantID: "t1", Role: "admin", JTI: "j1"}
 	token, _ := svc.Sign(claims, 15*time.Minute)
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(auth.JWTMiddleware(svc))
+	r.Use(application.JWTMiddleware(svc))
 	r.GET("/protected", func(c *gin.Context) {
-		sub, _ := c.Get(auth.ContextKeySub)
-		tid, _ := c.Get(auth.ContextKeyTenantID)
+		sub, _ := c.Get(application.ContextKeySub)
+		tid, _ := c.Get(application.ContextKeyTenantID)
 		c.JSON(http.StatusOK, gin.H{"sub": sub, "tid": tid})
 	})
 
@@ -40,11 +40,11 @@ func TestJWTMiddleware_ValidToken(t *testing.T) {
 
 func TestJWTMiddleware_MissingToken(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	svc := auth.NewJWTService(key)
+	svc := application.NewJWTService(key)
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(auth.JWTMiddleware(svc))
+	r.Use(application.JWTMiddleware(svc))
 	r.GET("/protected", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil) //nolint:noctx

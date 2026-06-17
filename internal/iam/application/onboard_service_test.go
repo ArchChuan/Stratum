@@ -1,17 +1,17 @@
 //go:build integration
 
-package auth_test
+package application_test
 
 import (
 	"context"
 	"os"
 	"testing"
 
-	"github.com/byteBuilderX/stratum/internal/auth"
+	application "github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func setupOnboardTest(t *testing.T) (*auth.OnboardService, *pgxpool.Pool, func()) {
+func setupOnboardTest(t *testing.T) (*application.OnboardService, *pgxpool.Pool, func()) {
 	t.Helper()
 	pgURL := os.Getenv("TEST_POSTGRES_URL")
 	if pgURL == "" {
@@ -21,7 +21,7 @@ func setupOnboardTest(t *testing.T) (*auth.OnboardService, *pgxpool.Pool, func()
 	if err != nil {
 		t.Fatalf("pgxpool: %v", err)
 	}
-	svc := auth.NewOnboardService(pool)
+	svc := application.NewOnboardService(pool)
 	return svc, pool, func() { pool.Close() }
 }
 
@@ -39,7 +39,7 @@ func TestCreateTenant_Success(t *testing.T) {
 	pool.Exec(ctx, `DELETE FROM tenant_members WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = 'testcorp')`)
 	pool.Exec(ctx, `DELETE FROM tenants WHERE slug = 'testcorp'`)
 
-	result, err := svc.CreateTenant(ctx, auth.CreateTenantInput{
+	result, err := svc.CreateTenant(ctx, application.CreateTenantInput{
 		UserID:    userID,
 		Name:      "Test Corp",
 		GitHubOrg: "testcorp",
@@ -60,7 +60,7 @@ func TestJoinTenant_InvalidToken(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	err := svc.JoinTenant(ctx, auth.JoinTenantInput{
+	err := svc.JoinTenant(ctx, application.JoinTenantInput{
 		UserID:          "00000000-0000-0000-0000-000000000011",
 		InvitationToken: "nonexistent-token",
 	})

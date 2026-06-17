@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent"
-	"github.com/byteBuilderX/stratum/internal/auth"
+	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -57,7 +57,7 @@ func setupChatRouter(h *ChatHandler) *gin.Engine {
 		tc := &tenantdb.TenantContext{TenantID: "t1", UserID: "u1", Role: tenantdb.RoleTenantAdmin}
 		ctx := tenantdb.WithTenant(c.Request.Context(), tc)
 		c.Request = c.Request.WithContext(ctx)
-		c.Set(auth.ContextKeySub, "u1")
+		c.Set(application.ContextKeySub, "u1")
 		c.Next()
 	}
 	r.Use(mid)

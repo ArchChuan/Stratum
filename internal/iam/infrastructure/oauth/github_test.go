@@ -1,4 +1,4 @@
-package auth_test
+package oauth_test
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/byteBuilderX/stratum/internal/auth"
+	oauth "github.com/byteBuilderX/stratum/internal/iam/infrastructure/oauth"
 )
 
 func TestExchangeCode_Success(t *testing.T) {
@@ -17,7 +17,7 @@ func TestExchangeCode_Success(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := auth.NewGitHubClient("clientid", "clientsecret", ts.URL+"/login/oauth/access_token", ts.URL+"/user")
+	client := oauth.NewGitHubClient("clientid", "clientsecret", ts.URL+"/login/oauth/access_token", ts.URL+"/user")
 	token, err := client.ExchangeCode(context.Background(), "code123", "http://localhost/callback")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -39,7 +39,7 @@ func TestGetUser_Success(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := auth.NewGitHubClient("clientid", "clientsecret", ts.URL+"/token", ts.URL+"/user")
+	client := oauth.NewGitHubClient("clientid", "clientsecret", ts.URL+"/token", ts.URL+"/user")
 	user, err := client.GetUser(context.Background(), "gho_test123")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

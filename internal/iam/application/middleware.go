@@ -1,5 +1,5 @@
-// Package auth provides JWT token management and authentication.
-package auth
+// Package application provides IAM application services (JWT, middleware, onboarding).
+package application
 
 import (
 	"net/http"

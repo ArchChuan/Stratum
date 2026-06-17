@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/byteBuilderX/stratum/internal/auth"
+	"github.com/byteBuilderX/stratum/internal/iam/application"
+	iamoauth "github.com/byteBuilderX/stratum/internal/iam/infrastructure/oauth"
+	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
@@ -22,10 +24,10 @@ const refreshTokenCookie = "refresh_token"
 
 // AuthHandlerDeps groups all dependencies for AuthHandler.
 type AuthHandlerDeps struct {
-	GitHubClient  *auth.GitHubClient
-	JWTService    *auth.JWTService
-	TokenStore    *auth.TokenStore
-	OnboardSvc    *auth.OnboardService
+	GitHubClient  *iamoauth.GitHubClient
+	JWTService    *application.JWTService
+	TokenStore    *iampersistence.TokenStore
+	OnboardSvc    *application.OnboardService
 	Logger        *zap.Logger
 	Pool          *pgxpool.Pool
 	CallbackURL   string
@@ -175,7 +177,7 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 	}
 	h.deps.Logger.Info("new user, redirecting to onboarding", zap.String("github_login", ghUser.Login))
 
-	ob := auth.OnboardingClaims{
+	ob := application.OnboardingClaims{
 		GitHubID:    ghUser.ID,
 		GitHubLogin: ghUser.Login,
 		AvatarURL:   ghUser.AvatarURL,
@@ -232,7 +234,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_name required for action=create"})
 			return
 		}
-		result, err := h.deps.OnboardSvc.CreateTenant(ctx, auth.CreateTenantInput{
+		result, err := h.deps.OnboardSvc.CreateTenant(ctx, application.CreateTenantInput{
 			GitHubID:    ob.GitHubID,
 			GitHubLogin: ob.GitHubLogin,
 			AvatarURL:   ob.AvatarURL,
@@ -266,7 +268,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invitation_token required for action=join"})
 			return
 		}
-		if err := h.deps.OnboardSvc.JoinTenant(ctx, auth.JoinTenantInput{
+		if err := h.deps.OnboardSvc.JoinTenant(ctx, application.JoinTenantInput{
 			UserID: ob.GitHubLogin, InvitationToken: req.InvitationToken,
 		}); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid invitation token"})
@@ -345,7 +347,7 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		}
 	}
 
-	claims := auth.TokenClaims{
+	claims := application.TokenClaims{
 		Sub: storedClaims.UserID, TenantID: storedClaims.TenantID, Role: tenantRole, JTI: newRawRT[:8],
 		GlobalRole: globalRole,
 		AvatarURL:  storedClaims.AvatarURL, GitHubLogin: storedClaims.GitHubLogin,
@@ -411,7 +413,7 @@ func (h *AuthHandler) issueTokenPair(ctx context.Context, userID, tenantID, role
 	if err = h.deps.TokenStore.Create(ctx, userID, tenantID, rawRT, constants.RefreshTokenTTL); err != nil {
 		return "", "", fmt.Errorf("store refresh token: %w", err)
 	}
-	claims := auth.TokenClaims{
+	claims := application.TokenClaims{
 		Sub: userID, TenantID: tenantID, Role: role, GlobalRole: globalRole, JTI: jti,
 		AvatarURL: avatarURL, GitHubLogin: githubLogin,
 	}
