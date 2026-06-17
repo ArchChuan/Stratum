@@ -7,7 +7,7 @@ import (
 	"net/http"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
-	"github.com/byteBuilderX/stratum/internal/mcp"
+	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )

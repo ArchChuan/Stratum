@@ -5,7 +5,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/byteBuilderX/stratum/internal/mcp"
+	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
 )
 
 // MCP holds the Model-Context-Protocol client manager and the skill

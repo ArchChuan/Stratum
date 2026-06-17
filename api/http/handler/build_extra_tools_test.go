@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/byteBuilderX/stratum/internal/mcp"
+	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
 	"go.uber.org/zap"
 )
 

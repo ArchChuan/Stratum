@@ -1,5 +1,5 @@
 // Package mcp provides MCP (Model Context Protocol) client implementation.
-package mcp
+package infrastructure
 
 import (
 	"context"

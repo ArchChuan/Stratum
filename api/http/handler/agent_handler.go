@@ -9,7 +9,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/capgateway"
 	"github.com/byteBuilderX/stratum/internal/knowledge"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
-	"github.com/byteBuilderX/stratum/internal/mcp"
+	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/observability"

@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/byteBuilderX/stratum/internal/mcp"
+	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
 )
 
 // MCPSkillProvider 将 mcp.MCPSkillAdapter 适配为 SkillProvider
