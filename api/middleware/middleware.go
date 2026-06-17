@@ -1,8 +1,6 @@
 package middleware
 
 import (
-	"net/http"
-
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -24,17 +22,24 @@ func ErrorHandler(logger *zap.Logger) gin.HandlerFunc {
 			tenantID = tc.TenantID
 		}
 
-		logger.Error("request error",
+		status := MapErrorToStatus(ginErr.Err)
+
+		logFn := logger.Error
+		if status >= 400 && status < 500 {
+			logFn = logger.Warn
+		}
+		logFn("request error",
 			zap.String("request_id", asStr(requestID)),
 			zap.String("method", c.Request.Method),
 			zap.String("path", c.Request.URL.Path),
 			zap.String("tenant_id", tenantID),
+			zap.Int("status", status),
 			zap.Uint64("error_type", uint64(ginErr.Type)),
 			zap.Error(ginErr.Err),
 		)
 
 		if !c.Writer.Written() {
-			c.JSON(http.StatusBadRequest, gin.H{
+			c.JSON(status, gin.H{
 				"error": ginErr.Error(),
 			})
 		}

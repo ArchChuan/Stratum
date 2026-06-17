@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
@@ -101,6 +102,7 @@ func newTenantHandler(repo *fakeTenantRepo) *TenantHandler {
 func setupTenantHandlerRouter(h *TenantHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
 	inject := injectTenant("tenant-abc")
 	injectAdmin := func(c *gin.Context) { c.Set("auth.role", "admin"); c.Set("auth.sub", "user-1"); c.Next() }
 	r.GET("/tenant/members", inject, h.ListMembers)
