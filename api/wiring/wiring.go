@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/config"
@@ -22,22 +23,50 @@ type Container struct {
 
 	Storage    *Storage
 	LLMGateway *LLMGateway
+	Platform   *Platform
+	MCP        *MCP
+	Skill      *Skill
+	Knowledge  *Knowledge
+	Memory     *Memory
+	IAM        *IAM
+	Agent      *Agent
 
 	shutdown []func(context.Context) error
+}
+
+// buildStep names a wiring stage and its builder. The name is used in
+// the wrapped error returned to BuildContainer's caller.
+type buildStep struct {
+	name string
+	fn   func(context.Context) error
 }
 
 // BuildContainer wires all dependencies in dependency order. On any
 // error after partial construction, it invokes Shutdown to release
 // already-built resources before returning.
+//
+// Order: storage → llmgateway → platform → mcp → skill → knowledge →
+// memory → iam → agent. Shutdown reverses construction.
 func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*Container, error) {
 	c := &Container{Config: cfg, Logger: logger}
 
-	if err := c.buildStorage(ctx); err != nil {
-		return nil, fmt.Errorf("wiring.storage: %w", err)
+	steps := []buildStep{
+		{"storage", c.buildStorage},
+		{"llmgateway", c.buildLLMGateway},
+		{"platform", c.buildPlatform},
+		{"mcp", c.buildMCP},
+		{"skill", c.buildSkill},
+		{"knowledge", c.buildKnowledge},
+		{"memory", c.buildMemory},
+		{"iam", c.buildIAM},
+		{"agent", c.buildAgent},
 	}
-	if err := c.buildLLMGateway(ctx); err != nil {
-		_ = c.Shutdown(ctx)
-		return nil, fmt.Errorf("wiring.llmgateway: %w", err)
+
+	for _, step := range steps {
+		if err := step.fn(ctx); err != nil {
+			_ = c.Shutdown(ctx)
+			return nil, fmt.Errorf("wiring.%s: %w", step.name, err)
+		}
 	}
 	return c, nil
 }
@@ -52,4 +81,15 @@ func (c *Container) Shutdown(ctx context.Context) error {
 		}
 	}
 	return firstErr
+}
+
+// dbOrNil returns the underlying pgxpool.Pool if Storage and its PG
+// pool are present, otherwise nil. Builders use this to degrade
+// gracefully when running without a database (matches main.go/router.go
+// nil-checks).
+func (c *Container) dbOrNil() *pgxpool.Pool {
+	if c.Storage == nil || c.Storage.PG == nil {
+		return nil
+	}
+	return c.Storage.PG.DB()
 }
