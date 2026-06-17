@@ -72,3 +72,11 @@ var (
 	_ TxBeginner   = (*Pool)(nil)
 	_ TenantExecer = (*Pool)(nil)
 )
+
+// Wrap returns a Pool wrapping an externally-owned *pgxpool.Pool.
+// The caller retains ownership; calling Close on the returned Pool
+// closes the underlying pool. Used by api/wiring.NewFromExisting to
+// adopt the pool created by cmd/server/main.go without reconnecting.
+func Wrap(p *pgxpool.Pool) *Pool {
+	return &Pool{Pool: p}
+}

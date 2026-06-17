@@ -9,9 +9,18 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	goredis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/internal/capgateway"
 	"github.com/byteBuilderX/stratum/internal/config"
+	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	mempipeline "github.com/byteBuilderX/stratum/internal/memory/pipeline"
+	"github.com/byteBuilderX/stratum/internal/skill"
+	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/storage/milvus"
+	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
+	pkgredis "github.com/byteBuilderX/stratum/pkg/storage/redis"
 )
 
 // Container is the root holder for all wired dependencies. It is
@@ -92,4 +101,105 @@ func (c *Container) dbOrNil() *pgxpool.Pool {
 		return nil
 	}
 	return c.Storage.PG.DB()
+}
+
+// DB returns the underlying *pgxpool.Pool, or nil when no PostgreSQL
+// pool is available. Exported counterpart to dbOrNil for use by api/http.
+func (c *Container) DB() *pgxpool.Pool {
+	return c.dbOrNil()
+}
+
+// NewFromExisting wires a Container around dependencies already created
+// by cmd/server/main.go. It bypasses buildStorage / buildLLMGateway /
+// buildSkill (those resources come from the caller) and runs only the
+// derived sub-builders.
+//
+// This exists for transitional compatibility while Task 10c migrates
+// main.go to BuildContainer. After that migration this function is
+// deleted.
+func NewFromExisting(
+	ctx context.Context,
+	cfg *config.Config,
+	logger *zap.Logger,
+	gateway *llmgateway.Gateway,
+	db *pgxpool.Pool,
+	rdb *goredis.Client,
+	capGW capgateway.CapabilityGateway,
+	skillAdapter capgateway.Adapter,
+	memPipeline *mempipeline.Pipeline,
+) (*Container, error) {
+	c := &Container{Config: cfg, Logger: logger}
+
+	// Storage: adopt existing pgx + redis; Milvus + NATS still owned by
+	// downstream sub-builders that need them (knowledge / memory).
+	storage := &Storage{}
+	if db != nil {
+		storage.PG = postgres.Wrap(db)
+	}
+	if rdb != nil {
+		storage.Redis = pkgredis.Wrap(rdb)
+	}
+	mil := milvus.NewVectorStore(cfg.MilvusHost, cfg.MilvusPort, logger)
+	if err := mil.Connect(ctx); err != nil {
+		logger.Warn("failed to connect to Milvus", zap.Error(err))
+	}
+	storage.Milvus = mil
+	c.Storage = storage
+	c.shutdown = append(c.shutdown, func(_ context.Context) error { return mil.Close() })
+
+	// LLMGateway: adopt the gateway main.go already initialized;
+	// build a fresh metrics provider (router used to do this inline).
+	metrics := observability.NewPrometheusMetrics(logger)
+	gateway.WithMetrics(metrics)
+	c.LLMGateway = &LLMGateway{Gateway: gateway, Metrics: metrics}
+
+	// Run the derived sub-builders that don't need Skill or Memory yet.
+	for _, step := range []buildStep{
+		{"platform", c.buildPlatform},
+		{"mcp", c.buildMCP},
+		{"knowledge", c.buildKnowledge},
+	} {
+		if err := step.fn(ctx); err != nil {
+			_ = c.Shutdown(ctx)
+			return nil, fmt.Errorf("wiring.%s: %w", step.name, err)
+		}
+	}
+
+	// Skill: prefer caller-provided capGW/skillAdapter so wiring stays
+	// compatible with main.go's existing wiring path. The CodeExecutor
+	// is constructed locally to mirror buildSkill — handlers depend on
+	// it via Skill.CodeExecutor. The interface-typed skillAdapter is
+	// asserted to the concrete *capgateway.SkillAdapter that main.go is
+	// known to pass; assertion failure leaves the field nil (handlers
+	// that depend on it must nil-check, matching main.go's behavior).
+	c.Skill = &Skill{
+		CodeExecutor: skill.NewCodeExecutor(skill.DefaultCodeExecutorConfig()),
+		CapGateway:   capGW,
+	}
+	if sa, ok := skillAdapter.(*capgateway.SkillAdapter); ok {
+		c.Skill.SkillAdapter = sa
+	}
+
+	// Memory: build injector + reuse caller's pipeline.
+	if err := c.buildMemory(ctx); err != nil {
+		_ = c.Shutdown(ctx)
+		return nil, fmt.Errorf("wiring.memory: %w", err)
+	}
+	if memPipeline != nil {
+		// Replace freshly-built pipeline with the caller's instance.
+		c.Memory.Pipeline = memPipeline
+		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
+			memPipeline.SetEmbedResolver(c.Knowledge.EmbedResolver)
+		}
+	}
+
+	if err := c.buildIAM(ctx); err != nil {
+		_ = c.Shutdown(ctx)
+		return nil, fmt.Errorf("wiring.iam: %w", err)
+	}
+	if err := c.buildAgent(ctx); err != nil {
+		_ = c.Shutdown(ctx)
+		return nil, fmt.Errorf("wiring.agent: %w", err)
+	}
+	return c, nil
 }

@@ -37,3 +37,10 @@ func (c *Client) Close() error {
 	c.logger.Info("redis connection closed")
 	return c.client.Close() //nolint:errcheck
 }
+
+// Wrap returns a Client wrapping an externally-owned *goredis.Client.
+// Symmetric with postgres.Wrap; used to adopt connections owned by
+// cmd/server/main.go without reconnecting.
+func Wrap(c *goredis.Client) *Client {
+	return &Client{client: c}
+}
