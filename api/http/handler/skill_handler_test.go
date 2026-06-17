@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
-	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )

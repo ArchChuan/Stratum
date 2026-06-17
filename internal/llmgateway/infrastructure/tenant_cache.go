@@ -1,4 +1,4 @@
-package llmgateway
+package infrastructure
 
 import (
 	"sync"

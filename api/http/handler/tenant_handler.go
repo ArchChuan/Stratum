@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
-	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/gin-gonic/gin"

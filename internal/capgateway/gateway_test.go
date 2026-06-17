@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/capgateway"
-	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/skillgateway"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"

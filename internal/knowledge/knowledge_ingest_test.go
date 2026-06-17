@@ -3,8 +3,8 @@ package knowledge
 import (
 	"testing"
 
-	"github.com/byteBuilderX/stratum/internal/embedding"
-	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	"github.com/byteBuilderX/stratum/pkg/vector"
 	"go.uber.org/zap"
 )

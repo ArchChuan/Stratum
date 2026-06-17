@@ -1,10 +1,10 @@
-package llmgateway_test
+package infrastructure_test
 
 import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 )
 
 func TestTenantGatewayCache_SetAndGet(t *testing.T) {

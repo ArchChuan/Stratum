@@ -13,7 +13,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/iam/application"
 	iamoauth "github.com/byteBuilderX/stratum/internal/iam/infrastructure/oauth"
 	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
-	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )

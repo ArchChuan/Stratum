@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/llmgateway"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"go.uber.org/zap"
 )
 
