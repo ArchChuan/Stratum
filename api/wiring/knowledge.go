@@ -7,8 +7,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
-	"github.com/byteBuilderX/stratum/internal/document"
-	"github.com/byteBuilderX/stratum/internal/knowledge"
+	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	"github.com/byteBuilderX/stratum/internal/memory/pipeline"

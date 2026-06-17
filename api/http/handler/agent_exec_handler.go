@@ -14,7 +14,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/agent"
 	"github.com/byteBuilderX/stratum/internal/capgateway"
-	"github.com/byteBuilderX/stratum/internal/knowledge"
+	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"

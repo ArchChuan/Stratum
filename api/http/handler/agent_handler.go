@@ -7,7 +7,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent"
 	"github.com/byteBuilderX/stratum/internal/capgateway"
-	"github.com/byteBuilderX/stratum/internal/knowledge"
+	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
 	"github.com/byteBuilderX/stratum/pkg/constants"

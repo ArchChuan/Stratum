@@ -1,5 +1,5 @@
-// Package knowledge provides knowledge base and RAG services.
-package knowledge
+// Package application implements knowledge bounded context use-cases.
+package application
 
 import (
 	"context"

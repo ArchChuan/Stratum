@@ -1,5 +1,5 @@
-// Package knowledge provides knowledge base and RAG services.
-package knowledge
+// Package application implements knowledge bounded context use-cases.
+package application
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/document"
+	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"

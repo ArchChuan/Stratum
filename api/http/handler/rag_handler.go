@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/knowledge"
+	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	skillpkg "github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
