@@ -8,9 +8,9 @@ import (
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
 	knowledgedomain "github.com/byteBuilderX/stratum/internal/knowledge/domain"
-	mcpinfra "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	memoryapp "github.com/byteBuilderX/stratum/internal/memory/application"
-	skillinfra "github.com/byteBuilderX/stratum/internal/skill/infrastructure"
+	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -78,7 +78,7 @@ func MapErrorToStatus(err error) int {
 	case errors.Is(err, knowledgedomain.ErrWorkspaceConflict),
 		errors.Is(err, knowledgedomain.ErrWorkspaceLinked),
 		errors.Is(err, agentapp.ErrNameConflict),
-		errors.Is(err, mcpinfra.ErrNameConflict):
+		errors.Is(err, mcpdomain.ErrNameConflict):
 		return http.StatusConflict
 
 	// 422 — Unprocessable Entity
@@ -86,7 +86,7 @@ func MapErrorToStatus(err error) int {
 		return http.StatusUnprocessableEntity
 
 	// 429 — Too Many Requests
-	case errors.Is(err, skillinfra.ErrConcurrencyLimit):
+	case errors.Is(err, skilldomain.ErrConcurrencyLimit):
 		return http.StatusTooManyRequests
 
 	// 401 — Unauthorized
@@ -104,7 +104,12 @@ func MapErrorToStatus(err error) int {
 
 	// 400 — Validation / Bad Request
 	case errors.Is(err, iamapp.ErrInvalidSettings),
-		errors.Is(err, iamapp.ErrEmbedModelAlreadySet):
+		errors.Is(err, iamapp.ErrEmbedModelAlreadySet),
+		errors.Is(err, knowledgedomain.ErrInvalidEmbeddingModel),
+		errors.Is(err, knowledgedomain.ErrInvalidQueryMode),
+		errors.Is(err, knowledgedomain.ErrEmbeddingModelImmutable),
+		errors.Is(err, knowledgedomain.ErrChunkSizeImmutable),
+		errors.Is(err, knowledgedomain.ErrChunkOverlapImmutable):
 		return http.StatusBadRequest
 	}
 

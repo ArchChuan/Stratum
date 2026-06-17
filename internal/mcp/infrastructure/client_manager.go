@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
@@ -53,8 +54,9 @@ func NewClientManager(logger *zap.Logger, poolConfig *ConnectionPoolConfig, pool
 	}
 }
 
-// ErrNameConflict is returned by Connect when an MCP server with the same name already exists in the tenant.
-var ErrNameConflict = errors.New("mcp server name already exists")
+// ErrNameConflict is the canonical sentinel for an MCP server name collision.
+// Kept here as an alias so existing consumers remain source-compatible.
+var ErrNameConflict = mcpdomain.ErrNameConflict
 
 func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig) error {
 	if m.pool == nil {
