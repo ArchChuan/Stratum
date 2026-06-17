@@ -4,6 +4,7 @@ import (
 	"context"
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	persistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
 )
 
 // Agent groups the agent persistence/registry services and execution
@@ -12,13 +13,19 @@ import (
 // time.
 type Agent struct {
 	Registry  *agent.Registry
-	ExecStore *agent.ExecutionStore
+	ExecStore agent.ExecutionStore
 	ChatStore agent.ChatStore
 }
 
 func (c *Container) buildAgent(_ context.Context) error {
 	db := c.dbOrNil()
-	registry := agent.NewRegistry(db, c.Logger)
+
+	var registry *agent.Registry
+	if db != nil {
+		registry = agent.NewRegistry(persistence.NewPgAgentRepo(db), c.Logger)
+	} else {
+		registry = agent.NewRegistry(nil, c.Logger)
+	}
 	if c.Skill != nil && c.Skill.CapGateway != nil {
 		registry.SetCapGateway(c.Skill.CapGateway)
 	}
@@ -31,8 +38,8 @@ func (c *Container) buildAgent(_ context.Context) error {
 
 	a := &Agent{Registry: registry}
 	if db != nil {
-		a.ExecStore = agent.NewExecutionStore(db)
-		a.ChatStore = agent.NewPgChatStore(db)
+		a.ExecStore = persistence.NewPgExecutionStore(db)
+		a.ChatStore = persistence.NewPgChatStore(db)
 	}
 	c.Agent = a
 	return nil

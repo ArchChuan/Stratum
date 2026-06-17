@@ -24,7 +24,7 @@ type AgentHandler struct {
 	logger         *zap.Logger
 	gateway        *llmgateway.Gateway
 	metrics        observability.MetricsProvider
-	executionStore *agent.ExecutionStore
+	executionStore agent.ExecutionStore
 	db             PgxPool
 	aesKey         [32]byte
 	gatewayCache   *llmgateway.TenantGatewayCache
@@ -108,7 +108,7 @@ func NewAgentHandler(
 	logger *zap.Logger,
 	gateway *llmgateway.Gateway,
 	metrics observability.MetricsProvider,
-	execStore *agent.ExecutionStore,
+	execStore agent.ExecutionStore,
 	db PgxPool,
 	aesKey [32]byte,
 	gatewayCache *llmgateway.TenantGatewayCache,

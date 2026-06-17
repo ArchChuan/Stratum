@@ -9,6 +9,7 @@ import (
 	"time"
 
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	memory "github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -17,26 +18,23 @@ import (
 	"go.uber.org/zap"
 )
 
-// AgentType defines different agent architectures
-type AgentType string
-
-const (
-	ReActAgent       AgentType = "react"
-	CoTAgent         AgentType = "cot"
-	PlanningAgent    AgentType = "planning"
-	ToolCallingAgent AgentType = "tool_calling"
-	RAGAgent         AgentType = "rag"
-	SwarmAgent       AgentType = "swarm"
+// Domain type aliases — canonical definitions live in
+// internal/agent/domain. Aliases preserve source-compat for the dozens
+// of call-sites still spelled `application.AgentType`, etc.
+type (
+	AgentType       = domain.AgentType
+	AgentCapability = domain.AgentCapability
+	AgentConfig     = domain.AgentConfig
 )
 
-// AgentCapability defines what an agent can do
-type AgentCapability struct {
-	Name        string
-	Description string
-	CanUseTools bool
-	CanPlan     bool
-	CanReason   bool
-}
+const (
+	ReActAgent       = domain.ReActAgent
+	CoTAgent         = domain.CoTAgent
+	PlanningAgent    = domain.PlanningAgent
+	ToolCallingAgent = domain.ToolCallingAgent
+	RAGAgent         = domain.RAGAgent
+	SwarmAgent       = domain.SwarmAgent
+)
 
 // Message represents a message in agent's conversation history
 type Message struct {
@@ -80,26 +78,6 @@ type ExecutionConfig struct {
 	ConversationID string
 	UserID         string
 	HistoryWindow  int
-}
-
-// AgentConfig holds agent configuration
-type AgentConfig struct {
-	ID                             string
-	Name                           string
-	Type                           AgentType
-	Description                    string
-	Persona                        string
-	SystemPrompt                   string
-	LLMModel                       string
-	EmbedModel                     string
-	MaxIterations                  int
-	AllowedSkills                  []string
-	MCPServerIDs                   []string
-	Capabilities                   []AgentCapability
-	KnowledgeWorkspaceIDs          []string
-	KnowledgeWorkspaceNames        []string
-	KnowledgeWorkspaceDescriptions []string
-	MaxContextTokens               int
 }
 
 // AgentResult represents output from an agent execution

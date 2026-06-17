@@ -1,4 +1,4 @@
-package application
+package persistence
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/pashagolub/pgxmock/v2"
 )
 
@@ -151,7 +152,7 @@ func TestChatStore_AddMessage(t *testing.T) {
 
 	now := time.Now()
 	steps := json.RawMessage(`[{"type":"think","content":"hmm"}]`)
-	msg := &ChatMessage{
+	msg := &domain.ChatMessage{
 		ConversationID: "conv-1",
 		Role:           "user",
 		Content:        "hello",
@@ -187,11 +188,11 @@ func TestChatStore_AddMessage_nilStepsDefaultsToEmpty(t *testing.T) {
 	defer mock.Close()
 
 	now := time.Now()
-	msg := &ChatMessage{
+	msg := &domain.ChatMessage{
 		ConversationID: "conv-1",
 		Role:           "user",
 		Content:        "hi",
-		StepsJSON:      nil, // should be defaulted to []
+		StepsJSON:      nil,
 	}
 
 	expectTenantTx(mock)
@@ -269,7 +270,6 @@ func TestChatStore_InvalidTenantID(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid tenant_id")
 	}
-	// mock should have no expectations called
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet: %v", err)
 	}
