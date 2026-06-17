@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
@@ -26,7 +26,7 @@ var _ poolIface = (*pgxpool.Pool)(nil) // compile-time check
 type Registry struct {
 	pool        poolIface
 	logger      *zap.Logger
-	capGW       capgateway.CapabilityGateway
+	capGW       port.CapabilityGateway
 	memInjector *pipeline.MemoryInjector
 }
 
@@ -36,7 +36,7 @@ func NewRegistry(pool *pgxpool.Pool, logger *zap.Logger) *Registry {
 }
 
 // SetCapGateway injects a CapabilityGateway so agents created via Get/GetAll have it wired.
-func (r *Registry) SetCapGateway(gw capgateway.CapabilityGateway) {
+func (r *Registry) SetCapGateway(gw port.CapabilityGateway) {
 	r.capGW = gw
 }
 

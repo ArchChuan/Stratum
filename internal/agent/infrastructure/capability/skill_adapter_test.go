@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	skillgateway "github.com/byteBuilderX/stratum/internal/skill/infrastructure/gateway"
 	"github.com/stretchr/testify/require"
@@ -26,15 +27,15 @@ func TestSkillAdapter_RouteSuccess(t *testing.T) {
 	}
 	adapter := capgateway.NewSkillAdapter(mock, zap.NewNop())
 
-	req := capgateway.CapabilityRequest{
+	req := port.CapabilityRequest{
 		TraceID:  "tr1",
 		TenantID: "t1",
-		Type:     capgateway.CapSkill,
-		Skill:    &capgateway.SkillCapRequest{SkillID: "skill_a", Input: map[string]any{"x": 1}},
+		Type:     port.CapSkill,
+		Skill:    &port.SkillCapRequest{SkillID: "skill_a", Input: map[string]any{"x": 1}},
 	}
 	resp, err := adapter.Route(context.Background(), req)
 	require.NoError(t, err)
-	require.Equal(t, capgateway.CapSkill, resp.Type)
+	require.Equal(t, port.CapSkill, resp.Type)
 	require.Equal(t, "42", resp.Output)
 }
 
@@ -42,9 +43,9 @@ func TestSkillAdapter_RouteError(t *testing.T) {
 	mock := &mockSkillGateway{err: errors.New("skill failed")}
 	adapter := capgateway.NewSkillAdapter(mock, zap.NewNop())
 
-	req := capgateway.CapabilityRequest{
-		Type:  capgateway.CapSkill,
-		Skill: &capgateway.SkillCapRequest{SkillID: "skill_b"},
+	req := port.CapabilityRequest{
+		Type:  port.CapSkill,
+		Skill: &port.SkillCapRequest{SkillID: "skill_b"},
 	}
 	_, err := adapter.Route(context.Background(), req)
 	require.Error(t, err)

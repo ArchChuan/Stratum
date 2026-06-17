@@ -14,7 +14,7 @@ import (
 
 	apihttp "github.com/byteBuilderX/stratum/api/http"
 	"github.com/byteBuilderX/stratum/api/wiring"
-	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/internal/platform/config"
@@ -28,8 +28,8 @@ func SetupRouter(
 	gateway *llmgateway.Gateway,
 	db *pgxpool.Pool,
 	rdb *goredis.Client,
-	capGW capgateway.CapabilityGateway,
-	skillAdapter capgateway.Adapter,
+	capGW port.CapabilityGateway,
+	skillAdapter port.Adapter,
 	memPipeline *mempipeline.Pipeline,
 ) *gin.Engine {
 	c, err := wiring.NewFromExisting(context.Background(), cfg, logger, gateway, db, rdb, capGW, skillAdapter, memPipeline)

@@ -13,6 +13,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
@@ -69,7 +70,7 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 		llmAdapter := capgateway.NewLLMAdapter(tenantGW, h.logger)
 		capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, h.skillAdapter, h.logger)
 		type capGWSetter interface {
-			SetCapGateway(capgateway.CapabilityGateway)
+			SetCapGateway(port.CapabilityGateway)
 		}
 		if setter, ok := a.(capGWSetter); ok {
 			setter.SetCapGateway(capGW)
@@ -211,7 +212,7 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		llmAdapter := capgateway.NewLLMAdapter(tenantGW, h.logger)
 		capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, h.skillAdapter, h.logger)
 		type capGWSetter interface {
-			SetCapGateway(capgateway.CapabilityGateway)
+			SetCapGateway(port.CapabilityGateway)
 		}
 		if setter, ok := a.(capGWSetter); ok {
 			setter.SetCapGateway(capGW)

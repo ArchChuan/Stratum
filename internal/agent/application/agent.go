@@ -9,7 +9,7 @@ import (
 	"time"
 
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
-	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	memory "github.com/byteBuilderX/stratum/internal/memory/application"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -77,7 +77,7 @@ type ExecutionConfig struct {
 	TraceID        string
 	LLMAPIKeys     map[string]string
 	RAGSearchFn    func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
-	ExtraTools     []capgateway.ToolDefinition
+	ExtraTools     []port.ToolDefinition
 	ConversationID string
 	UserID         string
 	HistoryWindow  int
@@ -135,7 +135,7 @@ type BaseAgent struct {
 	mu             sync.Mutex
 	MemoryManager  *memory.MemoryManager
 	SessionContext *memory.SessionContext
-	CapGateway     capgateway.CapabilityGateway
+	CapGateway     port.CapabilityGateway
 	ChatStore      ChatStore
 	MemoryInjector *pipeline.MemoryInjector
 }
@@ -192,7 +192,7 @@ func (a *BaseAgent) SetMemoryManager(manager *memory.MemoryManager, sessionCtx *
 	a.SessionContext = sessionCtx
 }
 
-func (a *BaseAgent) SetCapGateway(gw capgateway.CapabilityGateway) {
+func (a *BaseAgent) SetCapGateway(gw port.CapabilityGateway) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.CapGateway = gw
@@ -345,13 +345,13 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		}
 		initMessages := BuildContextMessages(systemPrompt, memCtx, history, input, maxTokens, cfg.HistoryWindow)
 
-		var availableTools []capgateway.ToolDefinition
+		var availableTools []port.ToolDefinition
 		if len(workspaceNames) > 0 && cfg.RAGSearchFn != nil {
 			enumVals := make([]interface{}, len(workspaceNames))
 			for i, n := range workspaceNames {
 				enumVals[i] = n
 			}
-			availableTools = append(availableTools, capgateway.ToolDefinition{
+			availableTools = append(availableTools, port.ToolDefinition{
 				Name: "stratum_search_knowledge",
 				Description: func() string {
 					var b strings.Builder
@@ -395,7 +395,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			})
 		}
 		if a.MemoryInjector != nil {
-			availableTools = append(availableTools, capgateway.ToolDefinition{
+			availableTools = append(availableTools, port.ToolDefinition{
 				Name:        "stratum_recall_memory",
 				Description: "Search long-term memory for relevant past interactions, entities, and context. Use when you need to recall information from previous conversations.",
 				InputSchema: map[string]interface{}{
@@ -608,7 +608,7 @@ func WithRAGSearchFn(fn func(ctx context.Context, workspaces []string, query str
 }
 
 // WithExtraTools appends extra tool definitions (from MCP servers and allowed skills) to AvailableTools.
-func WithExtraTools(tools []capgateway.ToolDefinition) ExecutionOption {
+func WithExtraTools(tools []port.ToolDefinition) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.ExtraTools = tools
 	}
@@ -647,32 +647,32 @@ func (cfg *ExecutionConfig) ApplyOptions(opts []ExecutionOption) {
 // BuildInitMessages constructs the initial LLM message slice from a system prompt and
 // chat history. History is truncated to the most recent window messages; role "agent"
 // is normalized to "assistant" for LLM protocol. window ≤ 0 defaults to 20.
-func BuildInitMessages(systemPrompt string, history []*ChatMessage, window int) []capgateway.LLMMessage {
+func BuildInitMessages(systemPrompt string, history []*ChatMessage, window int) []port.LLMMessage {
 	if window <= 0 {
 		window = constants.DefaultInitHistoryWindow
 	}
 	if len(history) > window {
 		history = history[len(history)-window:]
 	}
-	msgs := make([]capgateway.LLMMessage, 0, len(history)+1)
+	msgs := make([]port.LLMMessage, 0, len(history)+1)
 	if systemPrompt != "" {
-		msgs = append(msgs, capgateway.LLMMessage{Role: "system", Content: systemPrompt})
+		msgs = append(msgs, port.LLMMessage{Role: "system", Content: systemPrompt})
 	}
 	for _, m := range history {
 		role := m.Role
 		if role == "agent" {
 			role = "assistant"
 		}
-		msgs = append(msgs, capgateway.LLMMessage{Role: role, Content: m.Content})
+		msgs = append(msgs, port.LLMMessage{Role: role, Content: m.Content})
 	}
 	return msgs
 }
 
 // mergeTools combines built-in and extra tools, dropping duplicates (by name) with a warning.
 // Built-in tools take priority: if an extra tool shares a name, it is silently dropped.
-func mergeTools(builtins []capgateway.ToolDefinition, extras []capgateway.ToolDefinition, logger *zap.Logger) []capgateway.ToolDefinition {
+func mergeTools(builtins []port.ToolDefinition, extras []port.ToolDefinition, logger *zap.Logger) []port.ToolDefinition {
 	seen := make(map[string]struct{}, len(builtins)+len(extras))
-	out := make([]capgateway.ToolDefinition, 0, len(builtins)+len(extras))
+	out := make([]port.ToolDefinition, 0, len(builtins)+len(extras))
 	for _, t := range builtins {
 		seen[t.Name] = struct{}{}
 		out = append(out, t)

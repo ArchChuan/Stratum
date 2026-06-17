@@ -1,7 +1,7 @@
 package application
 
 import (
-	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
@@ -9,7 +9,7 @@ func estimateTokens(s string) int {
 	return len([]rune(s)) / 3
 }
 
-func estimateMessagesTokens(msgs []capgateway.LLMMessage) int {
+func estimateMessagesTokens(msgs []port.LLMMessage) int {
 	total := 0
 	for _, m := range msgs {
 		total += estimateTokens(m.Content)
@@ -26,7 +26,7 @@ func BuildContextMessages(
 	currentInput string,
 	maxTokens int,
 	historyWindow int,
-) []capgateway.LLMMessage {
+) []port.LLMMessage {
 	if historyWindow <= 0 {
 		historyWindow = constants.DefaultContextHistoryWindow
 	}
@@ -39,7 +39,7 @@ func BuildContextMessages(
 	// 1. Reserve budget for current input (highest priority)
 	budget -= estimateTokens(currentInput)
 	if budget <= 0 {
-		return []capgateway.LLMMessage{{Role: "user", Content: currentInput}}
+		return []port.LLMMessage{{Role: "user", Content: currentInput}}
 	}
 
 	// 2. System prompt — guarantee MinSystemPromptTokens, truncate if over budget
@@ -71,13 +71,13 @@ func BuildContextMessages(
 	}
 
 	// 4. Convert history to LLM messages and trim oldest to fit remaining budget
-	histMsgs := make([]capgateway.LLMMessage, 0, len(history))
+	histMsgs := make([]port.LLMMessage, 0, len(history))
 	for _, m := range history {
 		role := m.Role
 		if role == "agent" {
 			role = "assistant"
 		}
-		histMsgs = append(histMsgs, capgateway.LLMMessage{Role: role, Content: m.Content})
+		histMsgs = append(histMsgs, port.LLMMessage{Role: role, Content: m.Content})
 	}
 	for len(histMsgs) > 0 && estimateMessagesTokens(histMsgs) > budget {
 		histMsgs = histMsgs[1:]
@@ -89,11 +89,11 @@ func BuildContextMessages(
 		systemFull = memoryCtx + "\n" + systemPromptBase
 	}
 
-	msgs := make([]capgateway.LLMMessage, 0, len(histMsgs)+2)
+	msgs := make([]port.LLMMessage, 0, len(histMsgs)+2)
 	if systemFull != "" {
-		msgs = append(msgs, capgateway.LLMMessage{Role: "system", Content: systemFull})
+		msgs = append(msgs, port.LLMMessage{Role: "system", Content: systemFull})
 	}
 	msgs = append(msgs, histMsgs...)
-	msgs = append(msgs, capgateway.LLMMessage{Role: "user", Content: currentInput})
+	msgs = append(msgs, port.LLMMessage{Role: "user", Content: currentInput})
 	return msgs
 }

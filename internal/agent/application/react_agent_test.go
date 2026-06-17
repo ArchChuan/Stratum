@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
-	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -36,17 +36,17 @@ func (m *mockChatStore) AddMessage(ctx context.Context, tenantID string, msg *ag
 // mockCapGW drives LLM responses in sequence; tools always succeed.
 type mockCapGW struct {
 	mu        sync.Mutex
-	responses []capgateway.CapabilityResponse
+	responses []port.CapabilityResponse
 	idx       int
-	toolResp  capgateway.CapabilityResponse
+	toolResp  port.CapabilityResponse
 	err       error
 }
 
-func (m *mockCapGW) Route(_ context.Context, req capgateway.CapabilityRequest) (capgateway.CapabilityResponse, error) {
+func (m *mockCapGW) Route(_ context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
 	if m.err != nil {
-		return capgateway.CapabilityResponse{}, m.err
+		return port.CapabilityResponse{}, m.err
 	}
-	if req.Type == capgateway.CapSkill {
+	if req.Type == port.CapSkill {
 		return m.toolResp, nil
 	}
 	m.mu.Lock()
@@ -56,7 +56,7 @@ func (m *mockCapGW) Route(_ context.Context, req capgateway.CapabilityRequest) (
 		m.idx++
 		return r, nil
 	}
-	return capgateway.CapabilityResponse{Content: "done"}, nil
+	return port.CapabilityResponse{Content: "done"}, nil
 }
 
 func newReActAgent() *agent.BaseAgent {
@@ -73,8 +73,8 @@ func newReActAgent() *agent.BaseAgent {
 
 func TestBaseAgent_ReActExecute_DirectAnswer(t *testing.T) {
 	a := newReActAgent()
-	gw := &mockCapGW{responses: []capgateway.CapabilityResponse{
-		{Content: "42", Usage: capgateway.TokenUsage{Total: 20}},
+	gw := &mockCapGW{responses: []port.CapabilityResponse{
+		{Content: "42", Usage: port.TokenUsage{Total: 20}},
 	}}
 	a.SetCapGateway(gw)
 
@@ -91,11 +91,11 @@ func TestBaseAgent_ReActExecute_DirectAnswer(t *testing.T) {
 func TestBaseAgent_ReActExecute_WithToolCall(t *testing.T) {
 	a := newReActAgent()
 	gw := &mockCapGW{
-		responses: []capgateway.CapabilityResponse{
-			{ToolCalls: []capgateway.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{"expr": "6*7"}}}},
+		responses: []port.CapabilityResponse{
+			{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{"expr": "6*7"}}}},
 			{Content: "The answer is 42"},
 		},
-		toolResp: capgateway.CapabilityResponse{Content: "42"},
+		toolResp: port.CapabilityResponse{Content: "42"},
 	}
 	a.SetCapGateway(gw)
 
@@ -148,7 +148,7 @@ func TestWithHistoryWindow_SetsField(t *testing.T) {
 
 func TestBaseAgent_SetCapGateway_DataRace(t *testing.T) {
 	a := newReActAgent()
-	gw := &mockCapGW{responses: []capgateway.CapabilityResponse{{Content: "ok"}}}
+	gw := &mockCapGW{responses: []port.CapabilityResponse{{Content: "ok"}}}
 	var wg sync.WaitGroup
 	// concurrent SetCapGateway + Execute
 	for i := 0; i < 10; i++ {
@@ -175,8 +175,8 @@ func TestBaseAgent_WithChatStore_SetsField(t *testing.T) {
 func TestExecute_PersistsMessagesToChatStore(t *testing.T) {
 	a := newReActAgent()
 	gw := &mockCapGW{
-		responses: []capgateway.CapabilityResponse{
-			{Content: "six", Usage: capgateway.TokenUsage{Total: 5}},
+		responses: []port.CapabilityResponse{
+			{Content: "six", Usage: port.TokenUsage{Total: 5}},
 		},
 	}
 	a.SetCapGateway(gw)
@@ -209,8 +209,8 @@ func TestExecute_PersistsMessagesToChatStore(t *testing.T) {
 func TestExecute_LoadsHistoryFromChatStore(t *testing.T) {
 	a := newReActAgent()
 	gw := &mockCapGW{
-		responses: []capgateway.CapabilityResponse{
-			{Content: "I remember you asked before", Usage: capgateway.TokenUsage{Total: 5}},
+		responses: []port.CapabilityResponse{
+			{Content: "I remember you asked before", Usage: port.TokenUsage{Total: 5}},
 		},
 	}
 	a.SetCapGateway(gw)

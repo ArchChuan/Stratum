@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
-	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
@@ -30,7 +30,7 @@ type AgentHandler struct {
 	gatewayCache   *llmgateway.TenantGatewayCache
 	ragService     *knowledge.RAGService
 	mcpRegistry    *mcp.MCPSkillRegistry
-	skillAdapter   capgateway.Adapter
+	skillAdapter   port.Adapter
 	chatStore      agent.ChatStore
 }
 
@@ -114,7 +114,7 @@ func NewAgentHandler(
 	gatewayCache *llmgateway.TenantGatewayCache,
 	ragService *knowledge.RAGService,
 	mcpRegistry *mcp.MCPSkillRegistry,
-	skillAdapter capgateway.Adapter,
+	skillAdapter port.Adapter,
 	chatStore agent.ChatStore,
 ) *AgentHandler {
 	return &AgentHandler{
@@ -228,8 +228,8 @@ func (h *AgentHandler) resolveTenantGateway(ctx context.Context, tenantID string
 }
 
 // buildExtraTools converts MCPServerIDs and AllowedSkills into ToolDefinitions for the ReAct loop.
-func (h *AgentHandler) buildExtraTools(ctx context.Context, mcpServerIDs, allowedSkills []string) []capgateway.ToolDefinition {
-	var tools []capgateway.ToolDefinition
+func (h *AgentHandler) buildExtraTools(ctx context.Context, mcpServerIDs, allowedSkills []string) []port.ToolDefinition {
+	var tools []port.ToolDefinition
 
 	for _, serverID := range mcpServerIDs {
 		if h.mcpRegistry == nil {
@@ -244,7 +244,7 @@ func (h *AgentHandler) buildExtraTools(ctx context.Context, mcpServerIDs, allowe
 			if !ok {
 				continue
 			}
-			tools = append(tools, capgateway.ToolDefinition{
+			tools = append(tools, port.ToolDefinition{
 				Name:        w.GetID(),
 				Description: w.Tool.Description,
 				InputSchema: w.Tool.InputSchema,
@@ -264,7 +264,7 @@ func (h *AgentHandler) buildExtraTools(ctx context.Context, mcpServerIDs, allowe
 				).Scan(&name, &description)
 			}
 		}
-		tools = append(tools, capgateway.ToolDefinition{
+		tools = append(tools, port.ToolDefinition{
 			Name:        skillID,
 			Description: name + ": " + description,
 			InputSchema: map[string]interface{}{"type": "object"},

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/stretchr/testify/require"
@@ -39,13 +40,13 @@ func TestLLMAdapter_RouteTextContent(t *testing.T) {
 	}
 	adapter := capgateway.NewLLMAdapter(mock, zap.NewNop())
 
-	req := capgateway.CapabilityRequest{
+	req := port.CapabilityRequest{
 		TraceID:  "trace-1",
 		TenantID: "t1",
-		Type:     capgateway.CapLLM,
-		LLM: &capgateway.LLMCapRequest{
+		Type:     port.CapLLM,
+		LLM: &port.LLMCapRequest{
 			Model:    "qwen-turbo",
-			Messages: []capgateway.LLMMessage{{Role: "user", Content: "hi"}},
+			Messages: []port.LLMMessage{{Role: "user", Content: "hi"}},
 		},
 	}
 	resp, err := adapter.Route(context.Background(), req)
@@ -69,9 +70,9 @@ func TestLLMAdapter_RouteToolCalls(t *testing.T) {
 	}
 	adapter := capgateway.NewLLMAdapter(mock, zap.NewNop())
 
-	req := capgateway.CapabilityRequest{
-		Type: capgateway.CapLLM,
-		LLM:  &capgateway.LLMCapRequest{Model: "qwen-turbo", Messages: []capgateway.LLMMessage{{Role: "user", Content: "weather?"}}},
+	req := port.CapabilityRequest{
+		Type: port.CapLLM,
+		LLM:  &port.LLMCapRequest{Model: "qwen-turbo", Messages: []port.LLMMessage{{Role: "user", Content: "weather?"}}},
 	}
 	resp, err := adapter.Route(context.Background(), req)
 	require.NoError(t, err)
@@ -84,9 +85,9 @@ func TestLLMAdapter_RouteError(t *testing.T) {
 	mock := &mockLLMGateway{err: errors.New("upstream down")}
 	adapter := capgateway.NewLLMAdapter(mock, zap.NewNop())
 
-	req := capgateway.CapabilityRequest{
-		Type: capgateway.CapLLM,
-		LLM:  &capgateway.LLMCapRequest{Model: "qwen-turbo", Messages: []capgateway.LLMMessage{{Role: "user", Content: "hi"}}},
+	req := port.CapabilityRequest{
+		Type: port.CapLLM,
+		LLM:  &port.LLMCapRequest{Model: "qwen-turbo", Messages: []port.LLMMessage{{Role: "user", Content: "hi"}}},
 	}
 	_, err := adapter.Route(context.Background(), req)
 	require.Error(t, err)

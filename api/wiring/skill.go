@@ -5,6 +5,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/executors/code"
 	skillgateway "github.com/byteBuilderX/stratum/internal/skill/infrastructure/gateway"
@@ -20,7 +21,7 @@ type Skill struct {
 	Gateway      *skillgateway.DefaultGateway
 	LLMAdapter   *capgateway.LLMAdapter
 	SkillAdapter *capgateway.SkillAdapter
-	CapGateway   capgateway.CapabilityGateway
+	CapGateway   port.CapabilityGateway
 }
 
 func (c *Container) buildSkill(_ context.Context) error {

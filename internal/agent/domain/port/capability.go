@@ -1,10 +1,25 @@
-// Package capgateway provides the unified capability routing facade.
-package capgateway
+// Package port defines outbound interfaces consumed by the agent
+// application layer. Concrete implementations live in infrastructure.
+package port
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
+
+// CapabilityGateway is the unified capability routing facade consumed by
+// the agent application layer. Implementations live in
+// internal/agent/infrastructure/capability.
+type CapabilityGateway interface {
+	Route(ctx context.Context, req CapabilityRequest) (CapabilityResponse, error)
+}
+
+// Adapter is the per-capability routing seam (LLM / Skill). Held by the
+// application layer; concrete adapters live in infrastructure.
+type Adapter interface {
+	Route(ctx context.Context, req CapabilityRequest) (CapabilityResponse, error)
+}
 
 type CapabilityType string
 
@@ -20,22 +35,22 @@ type CapabilityRequest struct {
 	LLM         *LLMCapRequest
 	Skill       *SkillCapRequest
 	Timeout     time.Duration
-	LLMAPIKeys  map[string]string // per-tenant decrypted keys; non-nil overrides global gateway
-	TokenStream func(string)      // if non-nil, stream tokens to this callback (LLM only)
+	LLMAPIKeys  map[string]string
+	TokenStream func(string)
 }
 
 func (r CapabilityRequest) Validate() error {
 	switch r.Type {
 	case CapLLM:
 		if r.LLM == nil {
-			return fmt.Errorf("capgateway: LLM request required for type %q", CapLLM)
+			return fmt.Errorf("capability: LLM request required for type %q", CapLLM)
 		}
 	case CapSkill:
 		if r.Skill == nil {
-			return fmt.Errorf("capgateway: Skill request required for type %q", CapSkill)
+			return fmt.Errorf("capability: Skill request required for type %q", CapSkill)
 		}
 	default:
-		return fmt.Errorf("capgateway: unknown capability type %q", r.Type)
+		return fmt.Errorf("capability: unknown capability type %q", r.Type)
 	}
 	return nil
 }

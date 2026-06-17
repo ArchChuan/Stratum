@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	skillgateway "github.com/byteBuilderX/stratum/internal/skill/infrastructure/gateway"
 	"go.uber.org/zap"
 )
@@ -23,7 +24,7 @@ func NewSkillAdapter(gw SkillExecutor, logger *zap.Logger) *SkillAdapter {
 	return &SkillAdapter{gw: gw, logger: logger}
 }
 
-func (a *SkillAdapter) Route(ctx context.Context, req CapabilityRequest) (CapabilityResponse, error) {
+func (a *SkillAdapter) Route(ctx context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
 	start := time.Now()
 	skillReq := skillgateway.SkillRequest{
 		TraceID: req.TraceID,
@@ -32,11 +33,11 @@ func (a *SkillAdapter) Route(ctx context.Context, req CapabilityRequest) (Capabi
 	}
 	skillResp, err := a.gw.Execute(ctx, skillReq)
 	if err != nil {
-		return CapabilityResponse{}, fmt.Errorf("skill_adapter: %w", err)
+		return port.CapabilityResponse{}, fmt.Errorf("skill_adapter: %w", err)
 	}
-	return CapabilityResponse{
+	return port.CapabilityResponse{
 		TraceID:  req.TraceID,
-		Type:     CapSkill,
+		Type:     port.CapSkill,
 		Duration: time.Since(start),
 		Output:   skillResp.Output,
 	}, nil
