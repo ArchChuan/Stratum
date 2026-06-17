@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/agent"
+	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"

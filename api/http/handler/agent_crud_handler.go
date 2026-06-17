@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
-	"github.com/byteBuilderX/stratum/internal/agent"
+	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"

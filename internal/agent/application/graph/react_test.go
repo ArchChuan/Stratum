@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/agent/graph"
-	"github.com/byteBuilderX/stratum/internal/capgateway"
+	"github.com/byteBuilderX/stratum/internal/agent/application/graph"
+	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )

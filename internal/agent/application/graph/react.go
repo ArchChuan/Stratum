@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/capgateway"
+	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )

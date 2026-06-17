@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/byteBuilderX/stratum/internal/agent"
+	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/capgateway"
+	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	"github.com/stretchr/testify/require"
 )
 

@@ -5,7 +5,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/byteBuilderX/stratum/internal/capgateway"
+	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/executors/code"
 	skillgateway "github.com/byteBuilderX/stratum/internal/skill/infrastructure/gateway"
 	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/gateway/providers"

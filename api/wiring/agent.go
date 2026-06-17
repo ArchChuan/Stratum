@@ -3,7 +3,7 @@ package wiring
 import (
 	"context"
 
-	"github.com/byteBuilderX/stratum/internal/agent"
+	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 )
 
 // Agent groups the agent persistence/registry services and execution

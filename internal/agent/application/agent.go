@@ -1,5 +1,5 @@
-// Package agent provides the core agent system.
-package agent
+// Package application provides the core agent system.
+package application
 
 import (
 	"context"
@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	agentgraph "github.com/byteBuilderX/stratum/internal/agent/graph"
-	"github.com/byteBuilderX/stratum/internal/capgateway"
+	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
+	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	memory "github.com/byteBuilderX/stratum/internal/memory/application"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/constants"

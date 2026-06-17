@@ -14,7 +14,7 @@ import (
 
 	apihttp "github.com/byteBuilderX/stratum/api/http"
 	"github.com/byteBuilderX/stratum/api/wiring"
-	"github.com/byteBuilderX/stratum/internal/capgateway"
+	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/internal/platform/config"

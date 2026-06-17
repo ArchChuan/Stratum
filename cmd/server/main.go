@@ -17,7 +17,7 @@ import (
 
 	apihttp "github.com/byteBuilderX/stratum/api/http"
 	"github.com/byteBuilderX/stratum/api/wiring"
-	agentpkg "github.com/byteBuilderX/stratum/internal/agent"
+	agentpkg "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/iam/infrastructure/hermes"
 	"github.com/byteBuilderX/stratum/internal/platform/config"
 	harnesspkg "github.com/byteBuilderX/stratum/internal/platform/harness"

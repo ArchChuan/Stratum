@@ -1,12 +1,12 @@
-// Package agent provides the core agent system.
-package agent
+// Package application provides the core agent system.
+package application
 
 import (
 	"context"
 	"errors"
 	"fmt"
 
-	"github.com/byteBuilderX/stratum/internal/capgateway"
+	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
@@ -259,6 +259,7 @@ func (r *Registry) Get(ctx context.Context, id string) (Agent, bool) {
 		return nil
 	})
 	if err != nil {
+		r.logGetError(id, err)
 		return nil, false
 	}
 	if cfg.AllowedSkills == nil {
@@ -266,6 +267,9 @@ func (r *Registry) Get(ctx context.Context, id string) (Agent, bool) {
 	}
 	if cfg.MCPServerIDs == nil {
 		cfg.MCPServerIDs = []string{}
+	}
+	if cfg.KnowledgeWorkspaceIDs == nil {
+		cfg.KnowledgeWorkspaceIDs = []string{}
 	}
 	cfg.Type = AgentType(agentType)
 	a := NewBaseAgent(&cfg, r.logger)
@@ -276,6 +280,20 @@ func (r *Registry) Get(ctx context.Context, id string) (Agent, bool) {
 		a.MemoryInjector = r.memInjector
 	}
 	return a, true
+}
+
+// agent.Get error swallow: pgx.ErrNoRows is a legitimate 404; everything else
+// is logged so DB / tenant-context issues don't masquerade as not-found.
+func (r *Registry) logGetError(id string, err error) {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return
+	}
+	if r.logger != nil {
+		r.logger.Error("registry: get agent failed",
+			zap.String("agent_id", id),
+			zap.Error(err),
+		)
+	}
 }
 
 // GetAll returns all agents in the tenant schema.

@@ -1,4 +1,4 @@
-package agent_test
+package application_test
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/byteBuilderX/stratum/internal/agent"
-	"github.com/byteBuilderX/stratum/internal/capgateway"
+	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )

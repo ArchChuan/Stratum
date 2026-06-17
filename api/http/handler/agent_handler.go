@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/byteBuilderX/stratum/internal/agent"
-	"github.com/byteBuilderX/stratum/internal/capgateway"
+	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
