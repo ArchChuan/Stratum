@@ -25,6 +25,9 @@ func (c *Container) buildAgent(_ context.Context) error {
 	if c.Memory != nil && c.Memory.Injector != nil {
 		registry.SetMemoryInjector(c.Memory.Injector)
 	}
+	if c.Memory != nil && c.Memory.RecallFn != nil {
+		registry.SetRecallMemoryFn(c.Memory.RecallFn)
+	}
 
 	a := &Agent{Registry: registry}
 	if db != nil {

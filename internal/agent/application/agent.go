@@ -11,7 +11,6 @@ import (
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	memory "github.com/byteBuilderX/stratum/internal/memory/application"
-	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
@@ -137,7 +136,8 @@ type BaseAgent struct {
 	SessionContext *memory.SessionContext
 	CapGateway     port.CapabilityGateway
 	ChatStore      ChatStore
-	MemoryInjector *pipeline.MemoryInjector
+	MemoryInjector port.MemoryInjector
+	RecallMemoryFn port.RecallMemoryFn
 }
 
 // AgentState represents the current state of an agent
@@ -288,7 +288,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	// Inject memory context into system prompt
 	var memCtx string
 	if a.MemoryInjector != nil && cfg.ConversationID != "" {
-		ic := pipeline.InjectionContext{
+		ic := port.InjectionContext{
 			TenantID:       cfg.TenantID,
 			UserID:         cfg.UserID,
 			AgentID:        agentID,
@@ -430,13 +430,10 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			AvailableTools: mergeTools(availableTools, cfg.ExtraTools, a.Logger),
 			RAGSearchFn:    cfg.RAGSearchFn,
 		}
-		if a.MemoryInjector != nil {
-			recallHandler := pipeline.NewRecallHandler(
-				a.MemoryInjector.Pool(), a.Logger,
-				a.MemoryInjector.EmbedSvc(), a.MemoryInjector.EmbedResolver(), a.MemoryInjector.VectorDB(),
-			)
+		if a.RecallMemoryFn != nil {
+			fn := a.RecallMemoryFn
 			initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
-				return recallHandler.Handle(ctx, cfg.TenantID, cfg.UserID, agentID, input)
+				return fn(ctx, cfg.TenantID, cfg.UserID, agentID, input)
 			}
 		}
 		execCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)

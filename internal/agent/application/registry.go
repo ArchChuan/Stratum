@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -27,7 +26,8 @@ type Registry struct {
 	pool        poolIface
 	logger      *zap.Logger
 	capGW       port.CapabilityGateway
-	memInjector *pipeline.MemoryInjector
+	memInjector port.MemoryInjector
+	recallFn    port.RecallMemoryFn
 }
 
 // NewRegistry creates a Registry. pool must not be nil.
@@ -41,8 +41,15 @@ func (r *Registry) SetCapGateway(gw port.CapabilityGateway) {
 }
 
 // SetMemoryInjector injects a MemoryInjector so agents created via Get/GetAll have it wired.
-func (r *Registry) SetMemoryInjector(inj *pipeline.MemoryInjector) {
+func (r *Registry) SetMemoryInjector(inj port.MemoryInjector) {
 	r.memInjector = inj
+}
+
+// SetRecallMemoryFn injects a recall_memory tool handler. Wiring builds the
+// concrete handler (pgx + vector + embed) and binds it here so the application
+// layer never reaches into infrastructure.
+func (r *Registry) SetRecallMemoryFn(fn port.RecallMemoryFn) {
+	r.recallFn = fn
 }
 
 // execTenant runs fn in a transaction with search_path set to the tenant schema from ctx.
@@ -279,6 +286,9 @@ func (r *Registry) Get(ctx context.Context, id string) (Agent, bool) {
 	if r.memInjector != nil {
 		a.MemoryInjector = r.memInjector
 	}
+	if r.recallFn != nil {
+		a.RecallMemoryFn = r.recallFn
+	}
 	return a, true
 }
 
@@ -350,6 +360,9 @@ func (r *Registry) GetAll(ctx context.Context) []Agent {
 			}
 			if r.memInjector != nil {
 				a.MemoryInjector = r.memInjector
+			}
+			if r.recallFn != nil {
+				a.RecallMemoryFn = r.recallFn
 			}
 			agents = append(agents, a)
 		}

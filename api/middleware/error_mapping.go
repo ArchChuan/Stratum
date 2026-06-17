@@ -10,6 +10,7 @@ import (
 	knowledgedomain "github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	memoryapp "github.com/byteBuilderX/stratum/internal/memory/application"
+	memorydomain "github.com/byteBuilderX/stratum/internal/memory/domain"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/jackc/pgx/v5"
 )
@@ -71,7 +72,9 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, iamdomain.ErrMemberNotFound),
 		errors.Is(err, iamdomain.ErrTenantNotFound),
 		errors.Is(err, agentapp.ErrNotFound),
-		errors.Is(err, memoryapp.ErrNotFound):
+		errors.Is(err, memoryapp.ErrNotFound),
+		errors.Is(err, memorydomain.ErrEntryNotFound),
+		errors.Is(err, memorydomain.ErrSessionNotFound):
 		return http.StatusNotFound
 
 	// 409 — Conflict
