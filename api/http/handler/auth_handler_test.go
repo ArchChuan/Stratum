@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/byteBuilderX/stratum/api/handler"
+	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/gin-gonic/gin"
 )
 

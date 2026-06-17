@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/byteBuilderX/stratum/api/model"
+	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/internal/llmgateway"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
@@ -38,7 +38,7 @@ func NewTenantHandler(db PgxPool, logger *zap.Logger, frontendURL string, aesKey
 func (h *TenantHandler) ListMembers(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
 		return
 	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -56,7 +56,7 @@ func (h *TenantHandler) ListMembers(c *gin.Context) {
 		"SELECT COUNT(*) FROM public.tenant_members WHERE tenant_id=$1", tenantID,
 	).Scan(&total); err != nil {
 		h.logger.Error("count members failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "database error"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "database error"})
 		return
 	}
 
@@ -69,21 +69,21 @@ func (h *TenantHandler) ListMembers(c *gin.Context) {
 		tenantID, pageSize, offset)
 	if err != nil {
 		h.logger.Error("list members failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "database error"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "database error"})
 		return
 	}
 	defer rows.Close()
 
-	members := make([]model.MemberResponse, 0)
+	members := make([]dto.MemberResponse, 0)
 	for rows.Next() {
-		var m model.MemberResponse
+		var m dto.MemberResponse
 		if err := rows.Scan(&m.UserID, &m.GitHubLogin, &m.AvatarURL, &m.Role, &m.JoinedAt); err != nil {
-			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "scan error"})
+			c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "scan error"})
 			return
 		}
 		members = append(members, m)
 	}
-	c.JSON(http.StatusOK, model.ListMembersResponse{
+	c.JSON(http.StatusOK, dto.ListMembersResponse{
 		Members: members, Total: total, Page: page, PageSize: pageSize,
 	})
 }
@@ -92,7 +92,7 @@ func (h *TenantHandler) ListMembers(c *gin.Context) {
 func (h *TenantHandler) InviteMember(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
 		return
 	}
 
@@ -100,19 +100,19 @@ func (h *TenantHandler) InviteMember(c *gin.Context) {
 	roleVal, _ := c.Get("auth.role")
 	roleStr, _ := roleVal.(string)
 	if roleStr != "admin" && roleStr != "owner" {
-		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "admin or owner role required"})
+		c.JSON(http.StatusForbidden, dto.ErrorResponse{Code: 403, Message: "admin or owner role required"})
 		return
 	}
 
-	var req model.InviteMemberRequest
+	var req dto.InviteMemberRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Code: 400, Message: err.Error()})
 		return
 	}
 
 	rawBytes := make([]byte, 32)
 	if _, err := rand.Read(rawBytes); err != nil {
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "token generation failed"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "token generation failed"})
 		return
 	}
 	rawToken := hex.EncodeToString(rawBytes)
@@ -122,7 +122,7 @@ func (h *TenantHandler) InviteMember(c *gin.Context) {
 	inviterID, _ := c.Get("auth.sub")
 	inviterIDStr, _ := inviterID.(string)
 	if inviterIDStr == "" {
-		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "inviter identity missing"})
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "inviter identity missing"})
 		return
 	}
 
@@ -135,12 +135,12 @@ func (h *TenantHandler) InviteMember(c *gin.Context) {
 		invitationID, tenantID, req.Email, req.Role, tokenHash, expiresAt, time.Now().UTC(), inviterIDStr)
 	if err != nil {
 		h.logger.Error("insert invitation failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "invitation creation failed"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "invitation creation failed"})
 		return
 	}
 
 	invitationURL := fmt.Sprintf("%s/onboarding?invitation=%s", h.frontendURL, rawToken)
-	c.JSON(http.StatusCreated, model.InviteMemberResponse{
+	c.JSON(http.StatusCreated, dto.InviteMemberResponse{
 		InvitationID:  invitationID,
 		Email:         req.Email,
 		Role:          req.Role,
@@ -153,14 +153,14 @@ func (h *TenantHandler) InviteMember(c *gin.Context) {
 func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
 		return
 	}
 
 	// only owner may change roles
 	roleVal, _ := c.Get("auth.role")
 	if roleVal != "owner" {
-		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "owner role required"})
+		c.JSON(http.StatusForbidden, dto.ErrorResponse{Code: 403, Message: "owner role required"})
 		return
 	}
 
@@ -169,7 +169,7 @@ func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 	// prevent changing own role
 	callerID, _ := c.Get("auth.sub")
 	if callerID == userID {
-		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "cannot change your own role"})
+		c.JSON(http.StatusForbidden, dto.ErrorResponse{Code: 403, Message: "cannot change your own role"})
 		return
 	}
 
@@ -179,17 +179,17 @@ func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 		"SELECT role FROM public.tenant_members WHERE tenant_id=$1 AND user_id=$2",
 		tenantID, userID,
 	).Scan(&targetRole); err != nil {
-		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: 404, Message: "member not found"})
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Code: 404, Message: "member not found"})
 		return
 	}
 	if targetRole == "owner" {
-		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "cannot change owner's role"})
+		c.JSON(http.StatusForbidden, dto.ErrorResponse{Code: 403, Message: "cannot change owner's role"})
 		return
 	}
 
-	var req model.UpdateMemberRoleRequest
+	var req dto.UpdateMemberRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Code: 400, Message: err.Error()})
 		return
 	}
 	tag, err := h.db.Exec(c.Request.Context(),
@@ -197,11 +197,11 @@ func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 		req.Role, tenantID, userID)
 	if err != nil {
 		h.logger.Error("update member role failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "update failed"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "update failed"})
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: 404, Message: "member not found"})
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Code: 404, Message: "member not found"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "role updated"})
@@ -211,7 +211,7 @@ func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 func (h *TenantHandler) RemoveMember(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
 		return
 	}
 
@@ -219,7 +219,7 @@ func (h *TenantHandler) RemoveMember(c *gin.Context) {
 	roleVal, _ := c.Get("auth.role")
 	callerRole, _ := roleVal.(string)
 	if callerRole != "owner" && callerRole != "admin" {
-		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "admin or owner role required"})
+		c.JSON(http.StatusForbidden, dto.ErrorResponse{Code: 403, Message: "admin or owner role required"})
 		return
 	}
 
@@ -228,7 +228,7 @@ func (h *TenantHandler) RemoveMember(c *gin.Context) {
 	// prevent self-removal
 	callerID, _ := c.Get("auth.sub")
 	if callerID == userID {
-		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "cannot remove yourself"})
+		c.JSON(http.StatusForbidden, dto.ErrorResponse{Code: 403, Message: "cannot remove yourself"})
 		return
 	}
 
@@ -238,19 +238,19 @@ func (h *TenantHandler) RemoveMember(c *gin.Context) {
 		"SELECT role FROM public.tenant_members WHERE tenant_id=$1 AND user_id=$2",
 		tenantID, userID,
 	).Scan(&targetRole); err != nil {
-		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: 404, Message: "member not found"})
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Code: 404, Message: "member not found"})
 		return
 	}
 
 	// owner cannot be removed
 	if targetRole == "owner" {
-		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "cannot remove owner"})
+		c.JSON(http.StatusForbidden, dto.ErrorResponse{Code: 403, Message: "cannot remove owner"})
 		return
 	}
 
 	// admin can only remove regular members, not other admins
 	if callerRole == "admin" && targetRole == "admin" {
-		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "admin cannot remove another admin"})
+		c.JSON(http.StatusForbidden, dto.ErrorResponse{Code: 403, Message: "admin cannot remove another admin"})
 		return
 	}
 
@@ -259,11 +259,11 @@ func (h *TenantHandler) RemoveMember(c *gin.Context) {
 		tenantID, userID)
 	if err != nil {
 		h.logger.Error("remove member failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "remove failed"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "remove failed"})
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: 404, Message: "member not found"})
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Code: 404, Message: "member not found"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "member removed"})
@@ -273,7 +273,7 @@ func (h *TenantHandler) RemoveMember(c *gin.Context) {
 func (h *TenantHandler) GetSettings(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
 		return
 	}
 	var tenantName string
@@ -282,13 +282,13 @@ func (h *TenantHandler) GetSettings(c *gin.Context) {
 		"SELECT name, settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL", tenantID,
 	).Scan(&tenantName, &settingsJSON)
 	if err != nil {
-		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: 404, Message: "tenant not found"})
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Code: 404, Message: "tenant not found"})
 		return
 	}
 	var settings map[string]interface{}
 	if len(settingsJSON) > 0 {
 		if err := json.Unmarshal(settingsJSON, &settings); err != nil {
-			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "settings parse error"})
+			c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "settings parse error"})
 			return
 		}
 	} else {
@@ -310,27 +310,27 @@ func (h *TenantHandler) GetSettings(c *gin.Context) {
 		}
 		settings["llm_api_keys"] = masked
 	}
-	c.JSON(http.StatusOK, model.SettingsResponse{TenantID: tenantID, TenantName: tenantName, Settings: settings})
+	c.JSON(http.StatusOK, dto.SettingsResponse{TenantID: tenantID, TenantName: tenantName, Settings: settings})
 }
 
 // UpdateSettings PATCH /tenant/settings
 func (h *TenantHandler) UpdateSettings(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
 		return
 	}
 
 	roleVal, _ := c.Get("auth.role")
 	roleStr, _ := roleVal.(string)
 	if roleStr != "admin" && roleStr != "owner" {
-		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "admin or owner role required"})
+		c.JSON(http.StatusForbidden, dto.ErrorResponse{Code: 403, Message: "admin or owner role required"})
 		return
 	}
 
-	var req model.UpdateSettingsRequest
+	var req dto.UpdateSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Code: 400, Message: err.Error()})
 		return
 	}
 
@@ -340,11 +340,11 @@ func (h *TenantHandler) UpdateSettings(c *gin.Context) {
 			req.Name, tenantID)
 		if err != nil {
 			h.logger.Error("update tenant name failed", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "update failed"})
+			c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "update failed"})
 			return
 		}
 		if tag.RowsAffected() == 0 {
-			c.JSON(http.StatusNotFound, model.ErrorResponse{Code: 404, Message: "tenant not found"})
+			c.JSON(http.StatusNotFound, dto.ErrorResponse{Code: 404, Message: "tenant not found"})
 			return
 		}
 	}
@@ -374,7 +374,7 @@ func (h *TenantHandler) UpdateSettings(c *gin.Context) {
 				enc, err := pkgcrypto.Encrypt(h.aesKey, plaintext)
 				if err != nil {
 					h.logger.Error("encrypt api key failed", zap.String("provider", provider), zap.Error(err))
-					c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "encryption failed"})
+					c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "encryption failed"})
 					return
 				}
 				encrypted[provider] = enc
@@ -398,14 +398,14 @@ func (h *TenantHandler) UpdateSettings(c *gin.Context) {
 
 		settingsJSON, err := json.Marshal(merged)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: "invalid settings"})
+			c.JSON(http.StatusBadRequest, dto.ErrorResponse{Code: 400, Message: "invalid settings"})
 			return
 		}
 		if _, err := h.db.Exec(c.Request.Context(),
 			"UPDATE public.tenants SET settings=$1, updated_at=now() WHERE id=$2 AND deleted_at IS NULL",
 			settingsJSON, tenantID); err != nil {
 			h.logger.Error("update settings failed", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "update failed"})
+			c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "update failed"})
 			return
 		}
 
@@ -422,7 +422,7 @@ func (h *TenantHandler) UpdateSettings(c *gin.Context) {
 func (h *TenantHandler) ListUserTenants(c *gin.Context) {
 	userID, ok := c.Get("auth.sub")
 	if !ok || userID == "" {
-		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "unauthorized"})
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "unauthorized"})
 		return
 	}
 
@@ -436,45 +436,45 @@ func (h *TenantHandler) ListUserTenants(c *gin.Context) {
 	)
 	if err != nil {
 		h.logger.Error("list user tenants", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "database error"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "database error"})
 		return
 	}
 	defer rows.Close()
 
-	var items []model.TenantListItem
+	var items []dto.TenantListItem
 	for rows.Next() {
-		var item model.TenantListItem
+		var item dto.TenantListItem
 		if err := rows.Scan(&item.TenantID, &item.Name, &item.IsDefault); err != nil {
 			h.logger.Error("scan tenant row", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "scan error"})
+			c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "scan error"})
 			return
 		}
 		items = append(items, item)
 	}
 	if items == nil {
-		items = []model.TenantListItem{}
+		items = []dto.TenantListItem{}
 	}
-	c.JSON(http.StatusOK, model.TenantListResponse{Tenants: items})
+	c.JSON(http.StatusOK, dto.TenantListResponse{Tenants: items})
 }
 
 // SetEmbedModel PATCH /tenant/embed-model — set-once: fails if embed_model already configured.
 func (h *TenantHandler) SetEmbedModel(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
 		return
 	}
 	roleVal, _ := c.Get("auth.role")
 	roleStr, _ := roleVal.(string)
 	if roleStr != "admin" && roleStr != "owner" {
-		c.JSON(http.StatusForbidden, model.ErrorResponse{Code: 403, Message: "admin or owner role required"})
+		c.JSON(http.StatusForbidden, dto.ErrorResponse{Code: 403, Message: "admin or owner role required"})
 		return
 	}
 	var req struct {
 		EmbedModel string `json:"embed_model" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Code: 400, Message: err.Error()})
 		return
 	}
 	var existingJSON []byte
@@ -486,13 +486,13 @@ func (h *TenantHandler) SetEmbedModel(c *gin.Context) {
 		_ = json.Unmarshal(existingJSON, &existing)
 	}
 	if v, ok := existing["embed_model"]; ok && v != "" {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: "embed_model already set and cannot be changed"})
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Code: 400, Message: "embed_model already set and cannot be changed"})
 		return
 	}
 	existing["embed_model"] = req.EmbedModel
 	merged, err := json.Marshal(existing)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "marshal failed"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "marshal failed"})
 		return
 	}
 	tag, err := h.db.Exec(c.Request.Context(),
@@ -501,11 +501,11 @@ func (h *TenantHandler) SetEmbedModel(c *gin.Context) {
 	)
 	if err != nil {
 		h.logger.Error("set embed_model failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "update failed"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "update failed"})
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: 404, Message: "tenant not found"})
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Code: 404, Message: "tenant not found"})
 		return
 	}
 	if h.cache != nil {

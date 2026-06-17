@@ -1,4 +1,4 @@
-package model
+package dto
 
 type CreateSkillRequest struct {
 	Name        string `json:"name" binding:"required"`

@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/byteBuilderX/stratum/api/model"
+	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/internal/llmgateway"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -38,7 +38,7 @@ func TestSkillHandlerCreateSkill_InvalidType(t *testing.T) {
 	r := gin.New()
 	r.POST("/skills", h.CreateSkill)
 
-	body, _ := json.Marshal(model.CreateSkillRequest{Name: "x", Type: "invalid"})
+	body, _ := json.Marshal(dto.CreateSkillRequest{Name: "x", Type: "invalid"})
 	req := httptest.NewRequest("POST", "/skills", bytes.NewReader(body)) //nolint:noctx
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

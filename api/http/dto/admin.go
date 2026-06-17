@@ -1,6 +1,6 @@
-// Package model defines API data models and types.
+// Package dto defines API data models and types.
 
-package model
+package dto
 
 import "time"
 

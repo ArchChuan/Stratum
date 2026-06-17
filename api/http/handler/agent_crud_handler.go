@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/byteBuilderX/stratum/api/model"
+	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/internal/agent"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -55,7 +55,7 @@ func (h *AgentHandler) GetAgent(c *gin.Context) {
 	a, ok := h.agentRegistry.Get(c.Request.Context(), id)
 	if !ok {
 		h.logger.Warn("agent not found", zap.String("id", id))
-		c.JSON(http.StatusNotFound, model.ErrorResponse{
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{
 			Code:    http.StatusNotFound,
 			Message: "agent not found",
 		})
@@ -90,7 +90,7 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 	var req CreateAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.logger.Warn("invalid request", zap.Error(err))
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
 			Code:    http.StatusBadRequest,
 			Message: err.Error(),
 		})
@@ -136,11 +136,11 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 
 	if err := h.agentRegistry.Register(c.Request.Context(), a); err != nil {
 		if errors.Is(err, agent.ErrNameConflict) {
-			c.JSON(http.StatusConflict, model.ErrorResponse{Code: http.StatusConflict, Message: err.Error()})
+			c.JSON(http.StatusConflict, dto.ErrorResponse{Code: http.StatusConflict, Message: err.Error()})
 			return
 		}
 		h.logger.Error("failed to register agent", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
 			Code:    http.StatusInternalServerError,
 			Message: fmt.Sprintf("failed to create agent: %v", err),
 		})
@@ -177,7 +177,7 @@ func (h *AgentHandler) UpdateAgent(c *gin.Context) {
 	var req UpdateAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.logger.Warn("invalid request", zap.Error(err))
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
 			Code:    http.StatusBadRequest,
 			Message: err.Error(),
 		})
@@ -186,7 +186,7 @@ func (h *AgentHandler) UpdateAgent(c *gin.Context) {
 
 	existing, ok := h.agentRegistry.Get(c.Request.Context(), id)
 	if !ok {
-		c.JSON(http.StatusNotFound, model.ErrorResponse{
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{
 			Code:    http.StatusNotFound,
 			Message: "agent not found",
 		})
@@ -218,21 +218,21 @@ func (h *AgentHandler) UpdateAgent(c *gin.Context) {
 
 	if err := h.agentRegistry.Update(c.Request.Context(), cfg); err != nil {
 		if errors.Is(err, agent.ErrNotFound) {
-			c.JSON(http.StatusNotFound, model.ErrorResponse{
+			c.JSON(http.StatusNotFound, dto.ErrorResponse{
 				Code:    http.StatusNotFound,
 				Message: "agent not found",
 			})
 			return
 		}
 		if errors.Is(err, agent.ErrInvalidSkill) {
-			c.JSON(http.StatusUnprocessableEntity, model.ErrorResponse{
+			c.JSON(http.StatusUnprocessableEntity, dto.ErrorResponse{
 				Code:    http.StatusUnprocessableEntity,
 				Message: fmt.Sprintf("invalid skill: %v", err),
 			})
 			return
 		}
 		h.logger.Error("failed to update agent", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
 			Code:    http.StatusInternalServerError,
 			Message: fmt.Sprintf("failed to update agent: %v", err),
 		})
@@ -268,7 +268,7 @@ func (h *AgentHandler) DeleteAgent(c *gin.Context) {
 
 	if err := h.agentRegistry.Remove(c.Request.Context(), id); err != nil {
 		h.logger.Warn("agent not found or removal failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusNotFound, model.ErrorResponse{
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{
 			Code:    http.StatusNotFound,
 			Message: "agent not found",
 		})
@@ -295,7 +295,7 @@ func (h *AgentHandler) ListExecutions(c *gin.Context) {
 	records, total, err := h.executionStore.List(c.Request.Context(), agent.ListOptions{Page: page, PageSize: pageSize})
 	if err != nil {
 		h.logger.Error("list executions failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: "failed to list executions"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "failed to list executions"})
 		return
 	}
 	type row struct {

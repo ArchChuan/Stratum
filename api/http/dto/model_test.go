@@ -1,5 +1,5 @@
-// Package model defines API data models and types.
-package model
+// Package dto defines API data models and types.
+package dto
 
 import (
 	"testing"

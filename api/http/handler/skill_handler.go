@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/byteBuilderX/stratum/api/model"
+	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/internal/llmgateway"
 	"github.com/byteBuilderX/stratum/internal/skill"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
@@ -44,10 +44,10 @@ func NewSkillHandler(pool *pgxpool.Pool, logger *zap.Logger, gateway *llmgateway
 }
 
 func (h *SkillHandler) CreateSkill(c *gin.Context) {
-	var req model.CreateSkillRequest
+	var req dto.CreateSkillRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.logger.Warn("invalid request", zap.Error(err))
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
 		return
 	}
 
@@ -56,10 +56,10 @@ func (h *SkillHandler) CreateSkill(c *gin.Context) {
 	if err != nil {
 		var aErr *analysisError
 		if errors.As(err, &aErr) {
-			c.JSON(http.StatusBadRequest, model.SkillResponse{AnalysisErrors: aErr.reasons})
+			c.JSON(http.StatusBadRequest, dto.SkillResponse{AnalysisErrors: aErr.reasons})
 			return
 		}
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
 		return
 	}
 
@@ -76,11 +76,11 @@ func (h *SkillHandler) CreateSkill(c *gin.Context) {
 	}); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			c.JSON(http.StatusConflict, model.ErrorResponse{Code: http.StatusConflict, Message: "skill name already exists"})
+			c.JSON(http.StatusConflict, dto.ErrorResponse{Code: http.StatusConflict, Message: "skill name already exists"})
 			return
 		}
 		h.logger.Error("failed to create skill", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to create skill"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to create skill"})
 		return
 	}
 	h.logger.Info("skill created", zap.String("id", id), zap.String("name", req.Name))
@@ -102,7 +102,7 @@ func (h *SkillHandler) GetSkill(c *gin.Context) {
 		found = true
 		return json.Unmarshal(cfgJSON, &row.cfg)
 	}); err != nil || !found {
-		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
 		return
 	}
 	c.JSON(http.StatusOK, row.toResponse())
@@ -128,10 +128,10 @@ func (h *SkillHandler) GetAllSkills(c *gin.Context) {
 		return pgRows.Err()
 	}); err != nil {
 		h.logger.Error("failed to list skills", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to list skills"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to list skills"})
 		return
 	}
-	responses := make([]model.SkillResponse, 0, len(rows))
+	responses := make([]dto.SkillResponse, 0, len(rows))
 	for _, r := range rows {
 		responses = append(responses, r.toResponse())
 	}
@@ -141,10 +141,10 @@ func (h *SkillHandler) GetAllSkills(c *gin.Context) {
 func (h *SkillHandler) UpdateSkill(c *gin.Context) {
 	id := c.Param("id")
 
-	var req model.CreateSkillRequest
+	var req dto.CreateSkillRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.logger.Warn("invalid request", zap.Error(err))
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
 		return
 	}
 
@@ -153,17 +153,17 @@ func (h *SkillHandler) UpdateSkill(c *gin.Context) {
 	if err := tenantdb.ExecTenant(c.Request.Context(), h.pool, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT type FROM skills WHERE id=$1`, id).Scan(&existingType)
 	}); err != nil {
-		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
 		return
 	}
 	if existingType != req.Type {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: "cannot change skill type"})
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Code: http.StatusBadRequest, Message: "cannot change skill type"})
 		return
 	}
 
 	s, err := h.buildSkillFromRequest(id, req)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
 		return
 	}
 
@@ -178,11 +178,11 @@ func (h *SkillHandler) UpdateSkill(c *gin.Context) {
 	}); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			c.JSON(http.StatusConflict, model.ErrorResponse{Code: http.StatusConflict, Message: "skill name already exists"})
+			c.JSON(http.StatusConflict, dto.ErrorResponse{Code: http.StatusConflict, Message: "skill name already exists"})
 			return
 		}
 		h.logger.Error("failed to update skill", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to update skill"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to update skill"})
 		return
 	}
 	h.logger.Info("skill updated", zap.String("id", id))
@@ -203,15 +203,15 @@ func (h *SkillHandler) DeleteSkill(c *gin.Context) {
 	}); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-			c.JSON(http.StatusConflict, model.ErrorResponse{Code: http.StatusConflict, Message: "skill still linked to agents"})
+			c.JSON(http.StatusConflict, dto.ErrorResponse{Code: http.StatusConflict, Message: "skill still linked to agents"})
 			return
 		}
 		if errors.Is(err, errSkillNotFound) {
-			c.JSON(http.StatusNotFound, model.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
+			c.JSON(http.StatusNotFound, dto.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
 			return
 		}
 		h.logger.Error("failed to delete skill", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to delete skill"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to delete skill"})
 		return
 	}
 	h.logger.Info("skill deleted", zap.String("id", id))
@@ -237,15 +237,15 @@ func (h *SkillHandler) RunSkill(c *gin.Context) {
 		return nil
 	}); err != nil {
 		if errors.Is(err, errSkillNotFound) {
-			c.JSON(http.StatusNotFound, model.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
+			c.JSON(http.StatusNotFound, dto.ErrorResponse{Code: http.StatusNotFound, Message: "skill not found"})
 			return
 		}
 		if errors.Is(err, errNotCodeSkill) {
-			c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: "skill is not a code skill"})
+			c.JSON(http.StatusBadRequest, dto.ErrorResponse{Code: http.StatusBadRequest, Message: "skill is not a code skill"})
 			return
 		}
 		h.logger.Error("failed to load skill for run", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to load skill"})
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: http.StatusInternalServerError, Message: "failed to load skill"})
 		return
 	}
 
@@ -253,9 +253,9 @@ func (h *SkillHandler) RunSkill(c *gin.Context) {
 	_ = json.Unmarshal(cfgJSON, &cfg)
 	cs := skill.NewCodeSkillWithExecutor(id, "", "", stringCfgVal(cfg, "code"), stringCfgVal(cfg, "language"), h.executor)
 
-	var req model.RunSkillRequest
+	var req dto.RunSkillRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Code: http.StatusBadRequest, Message: err.Error()})
 		return
 	}
 
@@ -272,13 +272,13 @@ func (h *SkillHandler) RunSkill(c *gin.Context) {
 	out, err := cs.Execute(c.Request.Context(), input)
 	if err != nil {
 		if errors.Is(err, skill.ErrConcurrencyLimit) {
-			c.JSON(http.StatusTooManyRequests, model.RunSkillResponse{Error: "concurrency limit reached"})
+			c.JSON(http.StatusTooManyRequests, dto.RunSkillResponse{Error: "concurrency limit reached"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, model.RunSkillResponse{Error: err.Error()})
+		c.JSON(http.StatusInternalServerError, dto.RunSkillResponse{Error: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, model.RunSkillResponse{Output: out})
+	c.JSON(http.StatusOK, dto.RunSkillResponse{Output: out})
 	h.logger.Info("skill executed",
 		zap.String("id", id),
 		zap.Int64("latency_ms", time.Since(start).Milliseconds()),
@@ -286,7 +286,7 @@ func (h *SkillHandler) RunSkill(c *gin.Context) {
 }
 
 // buildSkillFromRequest constructs a Skill object from the request, performing validation.
-func (h *SkillHandler) buildSkillFromRequest(id string, req model.CreateSkillRequest) (skill.Skill, error) {
+func (h *SkillHandler) buildSkillFromRequest(id string, req dto.CreateSkillRequest) (skill.Skill, error) {
 	switch req.Type {
 	case "code":
 		if result := h.analyzer.Check(req.Language, req.Code); !result.Safe {
@@ -336,8 +336,8 @@ type skillRow struct {
 	createdAt time.Time
 }
 
-func (r skillRow) toResponse() model.SkillResponse {
-	return model.SkillResponse{
+func (r skillRow) toResponse() dto.SkillResponse {
+	return dto.SkillResponse{
 		ID:          r.id,
 		Name:        r.name,
 		Description: r.desc,

@@ -1,6 +1,6 @@
-// Package model defines API data models and types.
+// Package dto defines API data models and types.
 
-package model
+package dto
 
 // CreateAgentRequest represents the request to create a new agent
 type CreateAgentRequest struct {

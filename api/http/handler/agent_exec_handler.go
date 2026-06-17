@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/api/middleware"
-	"github.com/byteBuilderX/stratum/api/model"
 	"github.com/byteBuilderX/stratum/internal/agent"
 	"github.com/byteBuilderX/stratum/internal/capgateway"
 	"github.com/byteBuilderX/stratum/internal/knowledge"
@@ -31,7 +31,7 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 	a, ok := h.agentRegistry.Get(c.Request.Context(), id)
 	if !ok {
 		h.logger.Warn("agent not found", zap.String("id", id))
-		c.JSON(http.StatusNotFound, model.ErrorResponse{
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{
 			Code:    http.StatusNotFound,
 			Message: "agent not found",
 		})
@@ -41,7 +41,7 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 	var req ExecuteAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.logger.Warn("invalid request", zap.Error(err))
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
 			Code:    http.StatusBadRequest,
 			Message: err.Error(),
 		})
@@ -175,7 +175,7 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	a, ok := h.agentRegistry.Get(c.Request.Context(), id)
 	if !ok {
 		h.logger.Warn("agent not found", zap.String("id", id))
-		c.JSON(http.StatusNotFound, model.ErrorResponse{
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{
 			Code:    http.StatusNotFound,
 			Message: "agent not found",
 		})
@@ -185,7 +185,7 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	var req ExecuteAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.logger.Warn("invalid request", zap.Error(err))
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
 			Code:    http.StatusBadRequest,
 			Message: err.Error(),
 		})

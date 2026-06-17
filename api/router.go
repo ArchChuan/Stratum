@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/byteBuilderX/stratum/api/handler"
+	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/agent"
 	"github.com/byteBuilderX/stratum/internal/auth"
