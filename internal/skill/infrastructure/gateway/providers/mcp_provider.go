@@ -40,9 +40,5 @@ func (p *MCPSkillProvider) Execute(ctx context.Context, skillID string, input an
 	if s == nil {
 		return nil, fmt.Errorf("MCP skill not found: %s", skillID)
 	}
-	executor, ok := s.(interface{ Execute(any) (any, error) })
-	if !ok {
-		return nil, fmt.Errorf("MCP skill %s does not implement Execute", skillID)
-	}
-	return executor.Execute(input)
+	return s.Execute(ctx, input)
 }

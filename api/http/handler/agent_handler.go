@@ -239,11 +239,7 @@ func (h *AgentHandler) buildExtraTools(ctx context.Context, mcpServerIDs, allowe
 		if adapter == nil {
 			continue
 		}
-		for _, s := range adapter.GetAllSkills() {
-			w, ok := s.(*mcp.MCPSkillWrapper)
-			if !ok {
-				continue
-			}
+		for _, w := range adapter.GetAllSkills() {
 			tools = append(tools, port.ToolDefinition{
 				Name:        w.GetID(),
 				Description: w.Tool.Description,
