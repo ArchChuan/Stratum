@@ -230,10 +230,9 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 func registerMCP(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
 	mcpHandler := handler.NewMCPHandler(c.MCP.Registry, c.MCP.Manager, c.Logger)
 
-	var writeMW []gin.HandlerFunc
+	var mw []gin.HandlerFunc
 	if c.Platform.JWTService != nil {
-		writeMW = append(writeMW, application.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
+		mw = append(mw, application.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
 	}
-	writeMW = append(writeMW, requireActive)
-	mcpHandler.RegisterRoutes(r, writeMW...)
+	mcpHandler.RegisterRoutes(r, mw, requireActive)
 }

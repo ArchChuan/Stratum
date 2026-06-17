@@ -29,7 +29,7 @@ func NewMCPHandler(skillRegistry *mcp.MCPSkillRegistry, manager *mcp.ClientManag
 }
 
 // ListServers 列出所有 MCP 服务器
-// GET /api/v1/mcp/servers
+// GET /mcp/servers
 func (h *MCPHandler) ListServers(c *gin.Context) {
 	servers := h.manager.GetAllServerInfo()
 	c.JSON(http.StatusOK, gin.H{
@@ -39,7 +39,7 @@ func (h *MCPHandler) ListServers(c *gin.Context) {
 }
 
 // GetServer 获取 MCP 服务器详情
-// GET /api/v1/mcp/servers/:id
+// GET /mcp/servers/:id
 func (h *MCPHandler) GetServer(c *gin.Context) {
 	serverID := c.Param("id")
 	server := h.manager.GetServerInfo(serverID)
@@ -55,7 +55,7 @@ func (h *MCPHandler) GetServer(c *gin.Context) {
 }
 
 // ListTools 列出 MCP 服务器的工具
-// GET /api/v1/mcp/servers/:id/tools
+// GET /mcp/servers/:id/tools
 func (h *MCPHandler) ListTools(c *gin.Context) {
 	serverID := c.Param("id")
 
@@ -78,7 +78,7 @@ func (h *MCPHandler) ListTools(c *gin.Context) {
 }
 
 // ListResources 列出 MCP 服务器的资源
-// GET /api/v1/mcp/servers/:id/resources
+// GET /mcp/servers/:id/resources
 func (h *MCPHandler) ListResources(c *gin.Context) {
 	serverID := c.Param("id")
 
@@ -101,7 +101,7 @@ func (h *MCPHandler) ListResources(c *gin.Context) {
 }
 
 // ExecuteTool 执行 MCP 工具
-// POST /api/v1/mcp/tools/:toolId/execute
+// POST /mcp/tools/:toolId/execute
 func (h *MCPHandler) ExecuteTool(c *gin.Context) {
 	toolID := c.Param("toolId")
 
@@ -131,7 +131,7 @@ func (h *MCPHandler) ExecuteTool(c *gin.Context) {
 }
 
 // ListSkills 列出所有 MCP Skills
-// GET /api/v1/mcp/skills
+// GET /mcp/skills
 func (h *MCPHandler) ListSkills(c *gin.Context) {
 	skills := h.skillRegistry.GetAllSkills()
 
@@ -152,7 +152,7 @@ func (h *MCPHandler) ListSkills(c *gin.Context) {
 }
 
 // GetSkill 获取 MCP Skill 详情
-// GET /api/v1/mcp/skills/:id
+// GET /mcp/skills/:id
 func (h *MCPHandler) GetSkill(c *gin.Context) {
 	skillID := c.Param("id")
 	skill := h.skillRegistry.GetSkill(skillID)
@@ -173,7 +173,7 @@ func (h *MCPHandler) GetSkill(c *gin.Context) {
 }
 
 // RefreshSkills 刷新所有 MCP Skills
-// POST /api/v1/mcp/skills/refresh
+// POST /mcp/skills/refresh
 func (h *MCPHandler) RefreshSkills(c *gin.Context) {
 	err := h.skillRegistry.RefreshSkills(c.Request.Context())
 	if err != nil {
@@ -192,7 +192,7 @@ func (h *MCPHandler) RefreshSkills(c *gin.Context) {
 }
 
 // GetServerStatus 获取服务器状态
-// GET /api/v1/mcp/status
+// GET /mcp/status
 func (h *MCPHandler) GetServerStatus(c *gin.Context) {
 	servers := h.manager.GetAllServerInfo()
 
@@ -216,9 +216,11 @@ func (h *MCPHandler) GetServerStatus(c *gin.Context) {
 	})
 }
 
-// RegisterRoutes 注册 MCP 路由。writeMW 会附加到所有写操作路由（POST/DELETE）。
-func (h *MCPHandler) RegisterRoutes(router *gin.Engine, writeMW ...gin.HandlerFunc) {
-	v1 := router.Group("/api/v1/mcp")
+// RegisterRoutes 注册 MCP 路由。
+// mw       — JWT + InjectTenantContext，挂在所有 /mcp 路由上（读写均要租户上下文）。
+// writeMW  — 仅写操作再追加（如 RequireActiveTenant）。
+func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, writeMW ...gin.HandlerFunc) {
+	v1 := router.Group("/mcp", mw...)
 
 	// 服务器相关
 	v1.GET("/servers", h.ListServers)
@@ -241,7 +243,7 @@ func (h *MCPHandler) RegisterRoutes(router *gin.Engine, writeMW ...gin.HandlerFu
 }
 
 // ConnectServer connects a new MCP server
-// POST /api/v1/mcp/servers
+// POST /mcp/servers
 func (h *MCPHandler) ConnectServer(c *gin.Context) {
 	if _, ok := tenantIDFromCtx(c); !ok {
 		respondMissingTenant(c)
@@ -278,7 +280,7 @@ func (h *MCPHandler) ConnectServer(c *gin.Context) {
 }
 
 // DisconnectServer disconnects an MCP server
-// DELETE /api/v1/mcp/servers/:id
+// DELETE /mcp/servers/:id
 func (h *MCPHandler) DisconnectServer(c *gin.Context) {
 	if _, ok := tenantIDFromCtx(c); !ok {
 		respondMissingTenant(c)
