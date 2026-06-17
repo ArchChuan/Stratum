@@ -11,7 +11,10 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
-	"github.com/byteBuilderX/stratum/internal/skill"
+	"github.com/byteBuilderX/stratum/internal/skill/domain"
+	skillinfra "github.com/byteBuilderX/stratum/internal/skill/infrastructure"
+	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/executors"
+	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/executors/code"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -29,17 +32,17 @@ type SkillHandler struct {
 	pool     *pgxpool.Pool
 	logger   *zap.Logger
 	gateway  *llmgateway.Gateway
-	executor *skill.CodeExecutor
-	analyzer skill.StaticAnalyzer
+	executor *code.CodeExecutor
+	analyzer skillinfra.StaticAnalyzer
 }
 
-func NewSkillHandler(pool *pgxpool.Pool, logger *zap.Logger, gateway *llmgateway.Gateway, executor *skill.CodeExecutor) *SkillHandler {
+func NewSkillHandler(pool *pgxpool.Pool, logger *zap.Logger, gateway *llmgateway.Gateway, executor *code.CodeExecutor) *SkillHandler {
 	return &SkillHandler{
 		pool:     pool,
 		logger:   logger,
 		gateway:  gateway,
 		executor: executor,
-		analyzer: skill.NewStaticAnalyzer(),
+		analyzer: skillinfra.NewStaticAnalyzer(),
 	}
 }
 
@@ -251,7 +254,7 @@ func (h *SkillHandler) RunSkill(c *gin.Context) {
 
 	var cfg map[string]any
 	_ = json.Unmarshal(cfgJSON, &cfg)
-	cs := skill.NewCodeSkillWithExecutor(id, "", "", stringCfgVal(cfg, "code"), stringCfgVal(cfg, "language"), h.executor)
+	cs := code.NewCodeSkillWithExecutor(id, "", "", stringCfgVal(cfg, "code"), stringCfgVal(cfg, "language"), h.executor)
 
 	var req dto.RunSkillRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -271,7 +274,7 @@ func (h *SkillHandler) RunSkill(c *gin.Context) {
 	start := time.Now()
 	out, err := cs.Execute(c.Request.Context(), input)
 	if err != nil {
-		if errors.Is(err, skill.ErrConcurrencyLimit) {
+		if errors.Is(err, skillinfra.ErrConcurrencyLimit) {
 			c.JSON(http.StatusTooManyRequests, dto.RunSkillResponse{Error: "concurrency limit reached"})
 			return
 		}
@@ -286,24 +289,24 @@ func (h *SkillHandler) RunSkill(c *gin.Context) {
 }
 
 // buildSkillFromRequest constructs a Skill object from the request, performing validation.
-func (h *SkillHandler) buildSkillFromRequest(id string, req dto.CreateSkillRequest) (skill.Skill, error) {
+func (h *SkillHandler) buildSkillFromRequest(id string, req dto.CreateSkillRequest) (domain.Skill, error) {
 	switch req.Type {
 	case "code":
 		if result := h.analyzer.Check(req.Language, req.Code); !result.Safe {
 			return nil, &analysisError{reasons: result.Reasons}
 		}
-		return skill.NewCodeSkillWithExecutor(id, req.Name, req.Description, req.Code, req.Language, h.executor), nil
+		return code.NewCodeSkillWithExecutor(id, req.Name, req.Description, req.Code, req.Language, h.executor), nil
 	case "llm":
-		return skill.NewLLMSkill(id, req.Name, req.Description, req.SystemPrompt, req.Model, req.Temperature, req.MaxTokens, h.gateway, h.logger), nil
+		return executors.NewLLMSkill(id, req.Name, req.Description, req.SystemPrompt, req.Model, req.Temperature, req.MaxTokens, h.gateway, h.logger), nil
 	case "http":
-		return skill.NewHTTPSkill(id, req.Name, req.Description, req.URL, req.Method, req.Headers, req.BodyTemplate, req.TimeoutSec)
+		return executors.NewHTTPSkill(id, req.Name, req.Description, req.URL, req.Method, req.Headers, req.BodyTemplate, req.TimeoutSec)
 	default:
 		return nil, fmt.Errorf("unsupported skill type: %s", req.Type)
 	}
 }
 
 // skillConfig extracts the config map from a Skill.
-func skillConfig(s skill.Skill) map[string]any {
+func skillConfig(s domain.Skill) map[string]any {
 	if c, ok := s.(configurable); ok {
 		return c.GetConfig()
 	}

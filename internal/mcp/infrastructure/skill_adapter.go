@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/byteBuilderX/stratum/internal/skill"
+	"github.com/byteBuilderX/stratum/internal/skill/domain"
 	"go.uber.org/zap"
 )
 
@@ -120,7 +120,7 @@ func (a *MCPSkillAdapter) AddSkillForTest(w *MCPSkillWrapper) {
 }
 
 // GetSkill 获取 Skill
-func (a *MCPSkillAdapter) GetSkill(skillID string) skill.Skill {
+func (a *MCPSkillAdapter) GetSkill(skillID string) domain.Skill {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
@@ -131,11 +131,11 @@ func (a *MCPSkillAdapter) GetSkill(skillID string) skill.Skill {
 }
 
 // GetAllSkills 获取所有 Skills
-func (a *MCPSkillAdapter) GetAllSkills() []skill.Skill {
+func (a *MCPSkillAdapter) GetAllSkills() []domain.Skill {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	var skills []skill.Skill
+	var skills []domain.Skill
 	for _, wrapper := range a.skills {
 		skills = append(skills, wrapper)
 	}
@@ -213,7 +213,7 @@ func (r *MCPSkillRegistry) UnregisterServer(serverID string) error {
 }
 
 // GetSkill 获取 Skill
-func (r *MCPSkillRegistry) GetSkill(skillID string) skill.Skill {
+func (r *MCPSkillRegistry) GetSkill(skillID string) domain.Skill {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -226,11 +226,11 @@ func (r *MCPSkillRegistry) GetSkill(skillID string) skill.Skill {
 }
 
 // GetAllSkills 获取所有 Skills
-func (r *MCPSkillRegistry) GetAllSkills() []skill.Skill {
+func (r *MCPSkillRegistry) GetAllSkills() []domain.Skill {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var skills []skill.Skill
+	var skills []domain.Skill
 	for _, adapter := range r.adapters {
 		skills = append(skills, adapter.GetAllSkills()...)
 	}
@@ -244,7 +244,7 @@ func (r *MCPSkillRegistry) ExecuteSkill(skillID string, input any) (any, error) 
 		return nil, fmt.Errorf("skill not found: %s", skillID)
 	}
 
-	if executor, ok := s.(skill.SkillExecutor); ok {
+	if executor, ok := s.(domain.SkillExecutor); ok {
 		return executor.Execute(context.Background(), input)
 	}
 

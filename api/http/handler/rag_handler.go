@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/knowledge"
-	skillpkg "github.com/byteBuilderX/stratum/internal/skill"
+	skillpkg "github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"

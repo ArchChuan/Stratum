@@ -7,7 +7,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/capgateway"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
-	"github.com/byteBuilderX/stratum/internal/skillgateway"
+	skillgateway "github.com/byteBuilderX/stratum/internal/skill/infrastructure/gateway"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )

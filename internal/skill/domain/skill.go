@@ -1,15 +1,39 @@
 // Package domain holds skill context entities.
 package domain
 
-type Kind string
+import "context"
 
-const (
-	KindHTTP Kind = "http"
-	KindLLM  Kind = "llm"
-	KindCode Kind = "code"
-)
+type Skill interface {
+	GetID() string
+	GetName() string
+	GetDescription() string
+	GetType() string
+}
 
-type Skill struct {
-	ID, Name, Description string
-	Kind                  Kind
+type BaseSkill struct {
+	ID          string
+	Name        string
+	Description string
+	Type        string
+}
+
+func (s *BaseSkill) GetID() string {
+	return s.ID
+}
+
+func (s *BaseSkill) GetName() string {
+	return s.Name
+}
+
+func (s *BaseSkill) GetDescription() string {
+	return s.Description
+}
+
+func (s *BaseSkill) GetType() string {
+	return s.Type
+}
+
+type SkillExecutor interface {
+	Skill
+	Execute(ctx context.Context, input interface{}) (interface{}, error)
 }

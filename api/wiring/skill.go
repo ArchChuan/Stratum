@@ -6,9 +6,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/capgateway"
-	"github.com/byteBuilderX/stratum/internal/skill"
-	"github.com/byteBuilderX/stratum/internal/skillgateway"
-	"github.com/byteBuilderX/stratum/internal/skillgateway/providers"
+	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/executors/code"
+	skillgateway "github.com/byteBuilderX/stratum/internal/skill/infrastructure/gateway"
+	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/gateway/providers"
 )
 
 // Skill groups the skill execution stack: the sandboxed code executor,
@@ -16,7 +16,7 @@ import (
 // adapters that bridge LLM/Skill capabilities under the unified
 // CapabilityGateway facade consumed by agents.
 type Skill struct {
-	CodeExecutor *skill.CodeExecutor
+	CodeExecutor *code.CodeExecutor
 	Gateway      *skillgateway.DefaultGateway
 	LLMAdapter   *capgateway.LLMAdapter
 	SkillAdapter *capgateway.SkillAdapter
@@ -24,7 +24,7 @@ type Skill struct {
 }
 
 func (c *Container) buildSkill(_ context.Context) error {
-	codeExec := skill.NewCodeExecutor(skill.DefaultCodeExecutorConfig())
+	codeExec := code.NewCodeExecutor(code.DefaultCodeExecutorConfig())
 	gw := skillgateway.NewDefaultGateway(c.Platform.Metrics, c.Logger, nil)
 
 	db := c.dbOrNil()

@@ -16,7 +16,7 @@ import (
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/pipeline"
 	"github.com/byteBuilderX/stratum/internal/platform/config"
-	"github.com/byteBuilderX/stratum/internal/skill"
+	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/executors/code"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/storage/milvus"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -173,7 +173,7 @@ func NewFromExisting(
 	// known to pass; assertion failure leaves the field nil (handlers
 	// that depend on it must nil-check, matching main.go's behavior).
 	c.Skill = &Skill{
-		CodeExecutor: skill.NewCodeExecutor(skill.DefaultCodeExecutorConfig()),
+		CodeExecutor: code.NewCodeExecutor(code.DefaultCodeExecutorConfig()),
 		CapGateway:   capGW,
 	}
 	if sa, ok := skillAdapter.(*capgateway.SkillAdapter); ok {
