@@ -322,7 +322,7 @@ func (r *PgAgentRepo) Remove(ctx context.Context, id string) error {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
-			return fmt.Errorf("agent with ID %s not found", id)
+			return fmt.Errorf("remove agent %s: %w", id, domain.ErrNotFound)
 		}
 		return nil
 	})

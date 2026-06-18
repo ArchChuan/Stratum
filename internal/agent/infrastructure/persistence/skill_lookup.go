@@ -2,8 +2,10 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -24,8 +26,10 @@ func (s *PgSkillLookup) LookupSkill(ctx context.Context, tenantID, skillID strin
 		skillID,
 	).Scan(&name, &description)
 	if err != nil {
-		// not found is a no-op; caller falls back to skillID as name
-		return "", "", nil
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", nil
+		}
+		return "", "", fmt.Errorf("lookup skill %s: %w", skillID, err)
 	}
 	return name, description, nil
 }
