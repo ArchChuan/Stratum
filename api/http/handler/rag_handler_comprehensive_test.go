@@ -10,9 +10,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/api/middleware"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/byteBuilderX/stratum/pkg/vector"
 )
@@ -20,6 +21,7 @@ import (
 func setupRAGRouter(handler *RAGHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
+	router.Use(middleware.ErrorHandler(zap.NewNop()))
 	router.Use(func(c *gin.Context) {
 		tc := &tenantdb.TenantContext{TenantID: "tenant-1", UserID: "user-1", Role: tenantdb.RoleTenantAdmin}
 		c.Request = c.Request.WithContext(tenantdb.WithTenant(c.Request.Context(), tc))
@@ -34,7 +36,7 @@ func setupRAGRouter(handler *RAGHandler) *gin.Engine {
 func newTestRAGHandler(logger *zap.Logger) *RAGHandler {
 	embedSvc := embedding.NewEmbeddingService(llmgateway.NewQwenClient("", logger), logger)
 	vectorStore := vector.NewVectorStore("localhost", "19530", logger)
-	graphRAG := knowledge.NewGraphRAG("bolt://localhost:7687", "neo4j", "password", logger)
+	graphRAG := knowledge.NewMockGraphStore()
 	ragService := knowledge.NewRAGService(embedSvc, vectorStore, graphRAG, logger)
 	wsService := knowledge.NewWorkspaceService(nil, nil, logger)
 	return NewRAGHandler(ragService, wsService, logger)
