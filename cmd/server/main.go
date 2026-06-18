@@ -52,7 +52,7 @@ func main() {
 
 	// Public schema migration uses its own connection (golang-migrate);
 	// must run before BuildContainer opens the shared pool.
-	if err := migration.RunPublicSchema(cfg.PostgresURL, "internal/migration/sql", logger); err != nil {
+	if err := migration.RunPublicSchema(cfg.PostgresURL, "pkg/migration/sql", logger); err != nil {
 		logger.Fatal("migration failed", zap.Error(err))
 	}
 
