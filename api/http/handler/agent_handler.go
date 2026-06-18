@@ -1,29 +1,27 @@
+// Package handler — agent_handler.go.
+//
+// Transport-only seam for agent HTTP endpoints. Handlers bind requests,
+// extract tenant/user/trace from middleware context, delegate to
+// AgentService, and render DTOs. No SQL, no infrastructure imports.
 package handler
 
 import (
-	"context"
-
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
-	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
-	"github.com/byteBuilderX/stratum/pkg/observability"
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"go.uber.org/zap"
 )
 
-const previewMaxChars = 50
-
+// AgentHandler is a transport-only façade. All business logic lives in
+// agent.AgentService; this type only holds the service handle and a
+// logger for transport-layer events.
 type AgentHandler struct {
-	agentRegistry   *agent.Registry
-	logger          *zap.Logger
-	metrics         observability.MetricsProvider
-	executionStore  agent.ExecutionStore
-	skillLookup     port.SkillLookup
-	tenantSettings  port.TenantSettings
-	tenantResolver  port.TenantCapabilityResolver
-	ragService      *knowledge.RAGService
-	mcpToolProvider port.MCPToolProvider
-	chatStore       agent.ChatStore
+	svc    *agent.AgentService
+	logger *zap.Logger
+}
+
+// NewAgentHandler constructs an AgentHandler. The service handle is
+// produced by api/wiring; nothing else is allowed in.
+func NewAgentHandler(svc *agent.AgentService, logger *zap.Logger) *AgentHandler {
+	return &AgentHandler{svc: svc, logger: logger}
 }
 
 type CreateAgentRequest struct {
@@ -41,8 +39,8 @@ type CreateAgentRequest struct {
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 }
 
-// UpdateAgentRequest is identical to CreateAgentRequest but omits EmbedModel —
-// the embedding model is immutable after creation.
+// UpdateAgentRequest mirrors CreateAgentRequest minus EmbedModel — the
+// embedding model is immutable post-create.
 type UpdateAgentRequest struct {
 	Name                  string   `json:"name" binding:"required"`
 	Type                  string   `json:"type"`
@@ -95,79 +93,23 @@ type AgentExecutionResult struct {
 	Error      string                 `json:"error,omitempty"`
 }
 
-func NewAgentHandler(
-	agentRegistry *agent.Registry,
-	logger *zap.Logger,
-	metrics observability.MetricsProvider,
-	execStore agent.ExecutionStore,
-	skillLookup port.SkillLookup,
-	tenantSettings port.TenantSettings,
-	tenantResolver port.TenantCapabilityResolver,
-	ragService *knowledge.RAGService,
-	mcpToolProvider port.MCPToolProvider,
-	chatStore agent.ChatStore,
-) *AgentHandler {
-	return &AgentHandler{
-		agentRegistry:   agentRegistry,
-		logger:          logger,
-		metrics:         metrics,
-		executionStore:  execStore,
-		skillLookup:     skillLookup,
-		tenantSettings:  tenantSettings,
-		tenantResolver:  tenantResolver,
-		ragService:      ragService,
-		mcpToolProvider: mcpToolProvider,
-		chatStore:       chatStore,
+// dtoToResponse maps the service-side AgentDTO to the wire AgentResponse.
+// Field-for-field copy — no transformation logic here.
+func dtoToResponse(d agent.AgentDTO) AgentResponse {
+	return AgentResponse{
+		ID:                    d.ID,
+		Name:                  d.Name,
+		Type:                  d.Type,
+		Description:           d.Description,
+		Persona:               d.Persona,
+		SystemPrompt:          d.SystemPrompt,
+		LLMModel:              d.LLMModel,
+		EmbedModel:            d.EmbedModel,
+		MaxIterations:         d.MaxIterations,
+		MaxContextTokens:      d.MaxContextTokens,
+		AllowedSkills:         d.AllowedSkills,
+		MCPServerIDs:          d.MCPServerIDs,
+		KnowledgeWorkspaceIDs: d.KnowledgeWorkspaceIDs,
+		CreatedAt:             d.CreatedAt,
 	}
-}
-
-func parseAgentType(t string) agent.AgentType {
-	switch t {
-	case "react":
-		return agent.ReActAgent
-	case "cot":
-		return agent.CoTAgent
-	case "planning":
-		return agent.PlanningAgent
-	case "tool_calling":
-		return agent.ToolCallingAgent
-	case "rag":
-		return agent.RAGAgent
-	case "swarm":
-		return agent.SwarmAgent
-	default:
-		return agent.ReActAgent
-	}
-}
-
-// buildExtraTools converts MCPServerIDs and AllowedSkills into ToolDefinitions for the ReAct loop.
-func (h *AgentHandler) buildExtraTools(ctx context.Context, mcpServerIDs, allowedSkills []string) []port.ToolDefinition {
-	var tools []port.ToolDefinition
-
-	for _, serverID := range mcpServerIDs {
-		if h.mcpToolProvider == nil {
-			continue
-		}
-		tools = append(tools, h.mcpToolProvider.ToolsForServer(ctx, serverID)...)
-	}
-
-	for _, skillID := range allowedSkills {
-		name := skillID
-		description := skillID
-		if h.skillLookup != nil {
-			if tc, ok := tenantdb.FromContext(ctx); ok && tc.TenantID != "" {
-				if n, d, err := h.skillLookup.LookupSkill(ctx, tc.TenantID, skillID); err == nil && n != "" {
-					name = n
-					description = d
-				}
-			}
-		}
-		tools = append(tools, port.ToolDefinition{
-			Name:        skillID,
-			Description: name + ": " + description,
-			InputSchema: map[string]interface{}{"type": "object"},
-		})
-	}
-
-	return tools
 }

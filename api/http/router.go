@@ -132,18 +132,7 @@ func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 // registerAgents wires /agents/* and /conversations/* under JWT + tenant
 // context. Agent + chat handlers share middleware.
 func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	agentHandler := handler.NewAgentHandler(
-		c.Agent.Registry,
-		c.Logger,
-		c.Platform.Metrics,
-		c.Agent.ExecStore,
-		c.Agent.SkillLookup,
-		c.Agent.TenantSettings,
-		c.Agent.TenantResolver,
-		c.Knowledge.RAGService,
-		c.MCP.AgentToolProvider,
-		c.Agent.ChatStore,
-	)
+	agentHandler := handler.NewAgentHandler(c.Agent.Service, c.Logger)
 	chatHandler := handler.NewChatHandler(c.Agent.ChatStore, c.Logger)
 
 	var mw []gin.HandlerFunc

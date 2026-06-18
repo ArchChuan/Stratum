@@ -33,12 +33,3 @@ var errMissingTenant = errors.New("tenant context required")
 func respondMissingTenant(c *gin.Context) {
 	_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errMissingTenant))
 }
-
-// truncate returns s truncated to maxRunes runes (not bytes).
-func truncate(s string, maxRunes int) string {
-	runes := []rune(s)
-	if len(runes) <= maxRunes {
-		return s
-	}
-	return string(runes[:maxRunes])
-}

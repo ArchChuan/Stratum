@@ -1,3 +1,9 @@
+// Package handler — agent_exec_handler.go.
+//
+// Transport layer for /agents/:id/execute and /execute/stream. SSE
+// mechanics (heartbeat, client-cancel watcher, token writer) live here;
+// orchestration (registry lookup, capability injection, recording)
+// lives in agent.AgentService.
 package handler
 
 import (
@@ -10,10 +16,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
-	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	"github.com/byteBuilderX/stratum/pkg/constants"
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -26,30 +29,29 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	a, ok := h.agentRegistry.Get(c.Request.Context(), id)
-	if !ok {
-		_ = c.Error(agent.ErrNotFound)
-		return
-	}
 	var req ExecuteAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-
 	userID, _ := userIDFromCtx(c)
-	_, options := h.assembleOptions(c, a, req, tenantID, userID, false)
 
-	execCtx, execCancel := context.WithTimeout(context.Background(), constants.AgentExecTimeout)
-	defer execCancel()
-
-	start := time.Now()
-	result, err := a.Execute(execCtx, req.Query, options...)
-	durationMs := int(time.Since(start).Milliseconds())
-
-	h.recordExecution(c.Request.Context(), id, userID, a.GetConfig().Name, req.Query, result, err, durationMs)
+	result, _, err := h.svc.Execute(c.Request.Context(), id, agent.ExecRequest{
+		Query:          req.Query,
+		ConversationID: req.ConversationID,
+		UserID:         userID,
+		MaxSteps:       intOption(req.Options, "maxSteps"),
+		Timeout:        timeoutOption(req.Options, "timeout"),
+	}, agent.ExecMeta{
+		TenantID: tenantID,
+		TraceID:  middleware.GetTraceID(c),
+	})
 
 	if err != nil {
+		if errors.Is(err, agent.ErrNotFound) {
+			_ = c.Error(err)
+			return
+		}
 		h.logger.Error("agent execution failed", zap.String("agentId", id), zap.Error(err))
 		c.JSON(http.StatusOK, AgentExecutionResult{
 			AgentID: id, Input: req.Query, Output: "", Steps: 0, Duration: "0s", Error: err.Error(),
@@ -82,19 +84,12 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	a, ok := h.agentRegistry.Get(c.Request.Context(), id)
-	if !ok {
-		_ = c.Error(agent.ErrNotFound)
-		return
-	}
 	var req ExecuteAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-
 	userID, _ := userIDFromCtx(c)
-	streamCtx, options := h.assembleOptions(c, a, req, tenantID, userID, true)
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -115,12 +110,32 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	}
 
 	clientCtx := c.Request.Context()
-	execCtx, execCancel := context.WithTimeout(streamCtx, constants.AgentExecTimeout)
-	defer execCancel()
+	tokenCb := func(token string) {
+		payload, _ := json.Marshal(map[string]string{"token": token})
+		writeEvent(string(payload))
+	}
+
+	execCtx, cancel, run, err := h.svc.ExecuteStream(clientCtx, id, agent.ExecRequest{
+		Query:          req.Query,
+		ConversationID: req.ConversationID,
+		UserID:         userID,
+		MaxSteps:       intOption(req.Options, "maxSteps"),
+		Timeout:        timeoutOption(req.Options, "timeout"),
+	}, agent.ExecMeta{
+		TenantID: tenantID,
+		TraceID:  middleware.GetTraceID(c),
+		Stream:   true,
+	}, tokenCb)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	defer cancel()
+
 	go func() {
 		select {
 		case <-clientCtx.Done():
-			execCancel()
+			cancel()
 		case <-execCtx.Done():
 		}
 	}()
@@ -142,26 +157,13 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		}
 	}()
 
-	options = append(options, agent.WithTokenCallback(func(token string) {
-		if execCtx.Err() != nil {
+	result, _, runErr := run()
+	if runErr != nil {
+		if errors.Is(runErr, context.Canceled) && clientCtx.Err() != nil {
 			return
 		}
-		payload, _ := json.Marshal(map[string]string{"token": token})
-		writeEvent(string(payload))
-	}))
-
-	start := time.Now()
-	result, err := a.Execute(execCtx, req.Query, options...)
-	durationMs := int(time.Since(start).Milliseconds())
-
-	h.recordExecution(c.Request.Context(), id, userID, a.GetConfig().Name, req.Query, result, err, durationMs)
-
-	if err != nil {
-		if errors.Is(err, context.Canceled) && clientCtx.Err() != nil {
-			return
-		}
-		h.logger.Error("agent stream execution failed", zap.String("agentId", id), zap.Error(err))
-		payload, _ := json.Marshal(map[string]interface{}{"error": err.Error()})
+		h.logger.Error("agent stream execution failed", zap.String("agentId", id), zap.Error(runErr))
+		payload, _ := json.Marshal(map[string]interface{}{"error": runErr.Error()})
 		writeEvent(string(payload))
 		return
 	}
@@ -175,108 +177,26 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	writeEvent(string(donePayload))
 }
 
-// assembleOptions builds the ExecutionOption slice shared by sync + stream paths.
-// When stream is true, returns a context that carries the per-tenant LLM completer
-// (used by streaming RAG / inner LLM calls); otherwise returns the request context unchanged.
-func (h *AgentHandler) assembleOptions(
-	c *gin.Context, a agent.Agent, req ExecuteAgentRequest, tenantID, userID string, stream bool,
-) (context.Context, []agent.ExecutionOption) {
-	options := []agent.ExecutionOption{agent.WithMaxSteps(a.GetConfig().MaxIterations)}
-	options = append(options, optionsFromRequest(req)...)
-
-	ctx := c.Request.Context()
-	if h.tenantResolver != nil {
-		if capGW, apiKeys, ok := h.tenantResolver.Resolve(ctx, tenantID); ok {
-			if stream {
-				ctx = h.tenantResolver.InjectCompleter(ctx, tenantID)
-			}
-			type capGWSetter interface {
-				SetCapGateway(port.CapabilityGateway)
-			}
-			if setter, ok := a.(capGWSetter); ok {
-				setter.SetCapGateway(capGW)
-			}
-			if len(apiKeys) > 0 {
-				options = append(options, agent.WithLLMAPIKeys(apiKeys))
-			}
-		}
+// intOption pulls a numeric option from req.Options. Returns 0 when
+// missing or wrong type — service treats 0 as "use default".
+func intOption(opts map[string]interface{}, key string) int {
+	if opts == nil {
+		return 0
 	}
-	h.attachChatStore(a)
-
-	options = append(options,
-		agent.WithTenantID(tenantID),
-		agent.WithTraceID(middleware.GetTraceID(c)),
-		agent.WithUserID(userID),
-	)
-	if req.ConversationID != "" {
-		options = append(options,
-			agent.WithConversationID(req.ConversationID),
-			agent.WithHistoryWindow(20),
-		)
+	if v, ok := opts[key].(float64); ok {
+		return int(v)
 	}
-	options = append(options, agent.WithExtraTools(
-		h.buildExtraTools(c.Request.Context(), a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills),
-	))
-	if h.ragService != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
-		options = append(options, agent.WithRAGSearchFn(knowledge.NewRAGSearchFn(h.ragService, tenantID)))
-	}
-	return ctx, options
+	return 0
 }
 
-func optionsFromRequest(req ExecuteAgentRequest) []agent.ExecutionOption {
-	if req.Options == nil {
-		return nil
+// timeoutOption pulls a duration option (in seconds) from req.Options.
+// Returns 0 when missing — service treats 0 as "use default".
+func timeoutOption(opts map[string]interface{}, key string) time.Duration {
+	if opts == nil {
+		return 0
 	}
-	var out []agent.ExecutionOption
-	if maxSteps, ok := req.Options["maxSteps"].(float64); ok {
-		out = append(out, agent.WithMaxSteps(int(maxSteps)))
+	if v, ok := opts[key].(float64); ok {
+		return time.Duration(v) * time.Second
 	}
-	if timeout, ok := req.Options["timeout"].(float64); ok {
-		out = append(out, agent.WithTimeout(time.Duration(timeout)*time.Second))
-	}
-	return out
-}
-
-func (h *AgentHandler) attachChatStore(a agent.Agent) {
-	if h.chatStore == nil {
-		return
-	}
-	type chatStoreSetter interface {
-		SetChatStore(agent.ChatStore)
-	}
-	if setter, ok := a.(chatStoreSetter); ok {
-		setter.SetChatStore(h.chatStore)
-	}
-}
-
-// recordExecution fire-and-forget inserts a per-tenant execution record.
-func (h *AgentHandler) recordExecution(
-	reqCtx context.Context, id, userID, agentName, query string,
-	result *agent.AgentResult, err error, durationMs int,
-) {
-	if h.executionStore == nil {
-		return
-	}
-	tc, _ := tenantdb.FromContext(reqCtx)
-	rec := agent.ExecutionRecord{
-		AgentID:      id,
-		UserID:       userID,
-		AgentName:    agentName,
-		InputPreview: truncate(query, previewMaxChars),
-		DurationMs:   durationMs,
-	}
-	if err != nil {
-		rec.Status = "error"
-		rec.ErrorMessage = err.Error()
-	} else {
-		rec.Status = "success"
-		rec.OutputPreview = truncate(result.Output, previewMaxChars)
-		rec.TotalTokens = result.TokensUsed
-	}
-	insertCtx := tenantdb.WithTenant(context.Background(), tc)
-	go func() {
-		if insertErr := h.executionStore.Insert(insertCtx, rec); insertErr != nil {
-			h.logger.Warn("execution record insert failed", zap.Error(insertErr))
-		}
-	}()
+	return 0
 }

@@ -3,7 +3,6 @@ package handler
 import (
 	"testing"
 
-	"github.com/byteBuilderX/stratum/pkg/observability"
 	"go.uber.org/zap"
 )
 
@@ -27,7 +26,7 @@ func TestNewRAGHandler(t *testing.T) {
 
 func TestNewAgentHandler(t *testing.T) {
 	logger := zap.NewNop()
-	handler := NewAgentHandler(nil, logger, observability.NoopMetrics{}, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAgentHandler(nil, logger)
 
 	if handler == nil {
 		t.Error("expected AgentHandler to be non-nil")
