@@ -5,9 +5,8 @@
 package application
 
 import (
-	"context"
-
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 )
 
 // Type aliases keep handler/test source-compat after canonical hoisting.
@@ -16,8 +15,6 @@ type (
 	ListOptions     = domain.ListOptions
 )
 
-// ExecutionStore persists and retrieves agent execution history.
-type ExecutionStore interface {
-	Insert(ctx context.Context, r ExecutionRecord) error
-	List(ctx context.Context, opts ListOptions) ([]ExecutionRecord, int64, error)
-}
+// ExecutionStore is an alias for port.ExecutionRepo. Canonical definition
+// lives in internal/agent/domain/port/repository.go.
+type ExecutionStore = port.ExecutionRepo

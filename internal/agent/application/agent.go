@@ -11,7 +11,7 @@ import (
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	memory "github.com/byteBuilderX/stratum/internal/memory/application"
+	memdomain "github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
@@ -25,43 +25,16 @@ type (
 	AgentType       = domain.AgentType
 	AgentCapability = domain.AgentCapability
 	AgentConfig     = domain.AgentConfig
+	Message         = domain.Message
+	Thought         = domain.Thought
+	ToolCall        = domain.ToolCall
+	AgentResult     = domain.AgentResult
+	AgentState      = domain.AgentState
 )
 
-const (
-	ReActAgent       = domain.ReActAgent
-	CoTAgent         = domain.CoTAgent
-	PlanningAgent    = domain.PlanningAgent
-	ToolCallingAgent = domain.ToolCallingAgent
-	RAGAgent         = domain.RAGAgent
-	SwarmAgent       = domain.SwarmAgent
-)
-
-// Message represents a message in agent's conversation history
-type Message struct {
-	Role       string
-	Content    string
-	Timestamp  time.Time
-	Metadata   map[string]interface{}
-	TokenCount int
-}
-
-// Thought represents a single reasoning step in CoT
-type Thought struct {
-	Step        int
-	Observation string
-	Thought     string
-}
-
-// ToolCall represents a structured tool invocation
-type ToolCall struct {
-	ToolName string
-	Input    map[string]interface{}
-	Output   interface{}
-	Error    error
-	Duration time.Duration
-}
-
-// ExecutionConfig holds configuration for agent execution
+// ExecutionConfig holds parameters for a single agent execution. It lives
+// in the application layer because it references port.ToolDefinition and
+// function types that depend on cross-context ports.
 type ExecutionConfig struct {
 	MaxSteps       int
 	Timeout        time.Duration
@@ -69,7 +42,7 @@ type ExecutionConfig struct {
 	EnableTools    bool
 	AvailableTools []string
 	Stream         bool
-	TokenCallback  func(string) // called per token when streaming; implies Stream=true
+	TokenCallback  func(string)
 	TenantID       string
 	TraceID        string
 	LLMAPIKeys     map[string]string
@@ -80,19 +53,14 @@ type ExecutionConfig struct {
 	HistoryWindow  int
 }
 
-// AgentResult represents output from an agent execution
-type AgentResult struct {
-	AgentID    string
-	Input      string
-	Output     string
-	Thoughts   []Thought
-	ToolCalls  []ToolCall
-	Steps      int
-	TokensUsed int
-	Duration   time.Duration
-	Error      error
-	Metadata   map[string]interface{}
-}
+const (
+	ReActAgent       = domain.ReActAgent
+	CoTAgent         = domain.CoTAgent
+	PlanningAgent    = domain.PlanningAgent
+	ToolCallingAgent = domain.ToolCallingAgent
+	RAGAgent         = domain.RAGAgent
+	SwarmAgent       = domain.SwarmAgent
+)
 
 // Agent defines the interface for all agent types
 type Agent interface {
@@ -110,47 +78,22 @@ type BaseAgent struct {
 	State          AgentState
 	Memory         []Message
 	mu             sync.Mutex
-	MemoryManager  *memory.MemoryManager
-	SessionContext *memory.SessionContext
+	MemorySearcher port.MemorySearcher
 	CapGateway     port.CapabilityGateway
 	ChatStore      ChatStore
 	MemoryInjector port.MemoryInjector
 	RecallMemoryFn port.RecallMemoryFn
 }
 
-// AgentState represents the current state of an agent
-type AgentState struct {
-	StepsTaken int
-	Thoughts   []Thought
-	ToolCalls  []ToolCall
-	TokensUsed int
-}
-
 // NewBaseAgent creates a new base agent
 func NewBaseAgent(config *AgentConfig, logger *zap.Logger) *BaseAgent {
 	return &BaseAgent{
-		AgentConfig:    config,
-		Logger:         logger,
-		metrics:        observability.NoopMetrics{},
-		State:          AgentState{},
-		Memory:         []Message{},
-		mu:             sync.Mutex{},
-		MemoryManager:  nil,
-		SessionContext: nil,
-	}
-}
-
-// NewBaseAgentWithMemory creates a new base agent with memory support
-func NewBaseAgentWithMemory(config *AgentConfig, logger *zap.Logger, memoryManager *memory.MemoryManager, sessionCtx *memory.SessionContext) *BaseAgent {
-	return &BaseAgent{
-		AgentConfig:    config,
-		Logger:         logger,
-		metrics:        observability.NoopMetrics{},
-		State:          AgentState{},
-		Memory:         []Message{},
-		mu:             sync.Mutex{},
-		MemoryManager:  memoryManager,
-		SessionContext: sessionCtx,
+		AgentConfig: config,
+		Logger:      logger,
+		metrics:     observability.NoopMetrics{},
+		State:       AgentState{},
+		Memory:      []Message{},
+		mu:          sync.Mutex{},
 	}
 }
 
@@ -162,12 +105,11 @@ func (a *BaseAgent) WithMetrics(m observability.MetricsProvider) *BaseAgent {
 	return a
 }
 
-// SetMemoryManager sets the memory manager for the agent
-func (a *BaseAgent) SetMemoryManager(manager *memory.MemoryManager, sessionCtx *memory.SessionContext) {
+// SetMemorySearcher injects a MemorySearcher for semantic memory retrieval.
+func (a *BaseAgent) SetMemorySearcher(ms port.MemorySearcher) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.MemoryManager = manager
-	a.SessionContext = sessionCtx
+	a.MemorySearcher = ms
 }
 
 func (a *BaseAgent) SetCapGateway(gw port.CapabilityGateway) {
@@ -221,19 +163,18 @@ func (a *BaseAgent) AddToMemory(msg Message) {
 	}
 }
 
-// RetrieveMemory retrieves relevant memory entries for context
-func (a *BaseAgent) RetrieveMemory(ctx context.Context, query string, limit int) ([]*memory.MemorySearchResult, error) {
-	if a.MemoryManager == nil || a.SessionContext == nil {
-		return []*memory.MemorySearchResult{}, nil
+// RetrieveMemory retrieves relevant memory entries for semantic context augmentation.
+func (a *BaseAgent) RetrieveMemory(ctx context.Context, query string, limit int) ([]*memdomain.MemorySearchResult, error) {
+	if a.MemorySearcher == nil {
+		return []*memdomain.MemorySearchResult{}, nil
 	}
 
-	searchReq := &memory.MemorySearchRequest{
-		Query:   query,
-		Context: a.SessionContext,
-		Limit:   limit,
+	searchReq := &memdomain.MemorySearchRequest{
+		Query: query,
+		Limit: limit,
 	}
 
-	return a.MemoryManager.Search(ctx, searchReq)
+	return a.MemorySearcher.Search(ctx, searchReq)
 }
 
 // Execute implements the Agent interface - base implementation with ReAct pattern

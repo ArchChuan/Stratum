@@ -1,6 +1,10 @@
 package port
 
-import "context"
+import (
+	"context"
+
+	memdomain "github.com/byteBuilderX/stratum/internal/memory/domain"
+)
 
 // MemoryInjector builds a memory-context string (summaries + entities + long-term)
 // for injection into the system prompt. Implemented by infrastructure (e.g. memory/pipeline).
@@ -22,6 +26,12 @@ type InjectionContext struct {
 // is constructed in wiring and bound here as a function so the application layer
 // stays free of pipeline / pgx / vector dependencies.
 type RecallMemoryFn func(ctx context.Context, tenantID, userID, agentID string, input map[string]any) (string, error)
+
+// MemorySearcher is the consumer-side port for semantic memory retrieval.
+// Implemented by memory.MemoryManager (memory/application).
+type MemorySearcher interface {
+	Search(ctx context.Context, req *memdomain.MemorySearchRequest) ([]*memdomain.MemorySearchResult, error)
+}
 
 // MemoryRecaller / MemoryWriter are reserved for future agent-side memory ops.
 type MemoryRecaller interface {

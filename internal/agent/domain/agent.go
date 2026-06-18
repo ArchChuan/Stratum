@@ -100,6 +100,53 @@ type ListOptions struct {
 	PageSize int
 }
 
+// Message represents a single message in an agent's in-memory conversation history.
+type Message struct {
+	Role       string
+	Content    string
+	Timestamp  time.Time
+	Metadata   map[string]interface{}
+	TokenCount int
+}
+
+// Thought represents a single reasoning step in Chain-of-Thought execution.
+type Thought struct {
+	Step        int
+	Observation string
+	Thought     string
+}
+
+// ToolCall represents a structured tool invocation and its result.
+type ToolCall struct {
+	ToolName string
+	Input    map[string]interface{}
+	Output   interface{}
+	Error    error
+	Duration time.Duration
+}
+
+// AgentResult holds the output of a completed agent execution.
+type AgentResult struct {
+	AgentID    string
+	Input      string
+	Output     string
+	Thoughts   []Thought
+	ToolCalls  []ToolCall
+	Steps      int
+	TokensUsed int
+	Duration   time.Duration
+	Error      error
+	Metadata   map[string]interface{}
+}
+
+// AgentState tracks mutable execution progress during a single run.
+type AgentState struct {
+	StepsTaken int
+	Thoughts   []Thought
+	ToolCalls  []ToolCall
+	TokensUsed int
+}
+
 // Sentinel errors returned by repositories. Application layer aliases
 // these (`var ErrNotFound = domain.ErrNotFound`) so external call-sites
 // keep matching with `errors.Is`.

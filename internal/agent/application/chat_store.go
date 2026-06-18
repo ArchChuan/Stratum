@@ -6,9 +6,8 @@
 package application
 
 import (
-	"context"
-
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 )
 
 // Type aliases keep `application.ChatConversation` /
@@ -26,13 +25,6 @@ var (
 	ErrInvalidSkill = domain.ErrInvalidSkill
 )
 
-// ChatStore persists chat conversations and messages in the per-tenant schema.
-type ChatStore interface {
-	CreateConversation(ctx context.Context, tenantID, agentID, userID, name string) (*ChatConversation, error)
-	ListConversations(ctx context.Context, tenantID, agentID, userID string) ([]*ChatConversation, error)
-	RenameConversation(ctx context.Context, tenantID, convID, userID, name string) error
-	DeleteConversation(ctx context.Context, tenantID, convID, userID string) error
-	AddMessage(ctx context.Context, tenantID string, msg *ChatMessage) error
-	ListMessages(ctx context.Context, tenantID, convID, userID string) ([]*ChatMessage, error)
-	CleanupExpired(ctx context.Context, tenantID string) error
-}
+// ChatStore is an alias for port.ChatRepo. Canonical definition lives in
+// internal/agent/domain/port/repository.go.
+type ChatStore = port.ChatRepo

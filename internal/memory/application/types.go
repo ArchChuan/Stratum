@@ -25,7 +25,6 @@ type (
 	TimeRange           = memdomain.TimeRange
 	MemorySearchRequest = memdomain.MemorySearchRequest
 	MemorySearchResult  = memdomain.MemorySearchResult
-	MemoryFilter        = memdomain.MemoryFilter
 	MemoryStats         = memdomain.MemoryStats
 	Entity              = memdomain.Entity
 	EntityRelation      = memdomain.EntityRelation
