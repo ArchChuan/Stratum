@@ -14,6 +14,7 @@ import (
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/byteBuilderX/stratum/pkg/vector"
 )
@@ -24,7 +25,9 @@ func setupRAGRouter(handler *RAGHandler) *gin.Engine {
 	router.Use(middleware.ErrorHandler(zap.NewNop()))
 	router.Use(func(c *gin.Context) {
 		tc := &tenantdb.TenantContext{TenantID: "tenant-1", UserID: "user-1", Role: tenantdb.RoleTenantAdmin}
-		c.Request = c.Request.WithContext(tenantdb.WithTenant(c.Request.Context(), tc))
+		ctx := tenantdb.WithTenant(c.Request.Context(), tc)
+		ctx = reqctx.WithTenantID(ctx, "tenant-1")
+		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	})
 	return router

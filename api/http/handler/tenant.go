@@ -5,16 +5,16 @@ import (
 	"net/http"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
 )
 
 func tenantIDFromCtx(c *gin.Context) (string, bool) {
-	tc, ok := tenantdb.FromContext(c.Request.Context())
-	if !ok || tc.TenantID == "" {
+	tid := reqctx.TenantIDFromContext(c.Request.Context())
+	if tid == "" {
 		return "", false
 	}
-	return tc.TenantID, true
+	return tid, true
 }
 
 func userIDFromCtx(c *gin.Context) (string, bool) {

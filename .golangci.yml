@@ -49,13 +49,15 @@ linters:
             - pkg: "github.com/byteBuilderX/stratum/internal/platform/infrastructure"
               desc: "application 不得直接 import infrastructure；改为 domain/port + wiring 注入"
         handler-no-infra:
-          # agent_handler / auth_handler 耦合已通过 consumer-side port 模式拆解完毕。
+          # agent_handler 全家已通过 consumer-side port + AgentService 完成拆解。
           # 唯一遗留：auth_handler 依赖 iam/infrastructure/oauth.GitHubClient（OAuth 回调专用），
           # 该依赖无法通过纯 port 接口消除（需要完整 OAuth 流程实现），作为已知技术债保留。
           list-mode: lax
           files:
             - "**/api/http/handler/**"
           deny:
+            - pkg: "github.com/byteBuilderX/stratum/internal/agent/infrastructure"
+              desc: "handler 不得 import agent/infrastructure；通过 AgentService 调用"
             - pkg: "github.com/byteBuilderX/stratum/internal/memory/infrastructure"
               desc: "handler 不得 import internal infrastructure；通过 application service 调用"
             - pkg: "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure"
@@ -66,6 +68,23 @@ linters:
               desc: "handler 不得 import internal infrastructure；通过 application service 调用"
             - pkg: "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
               desc: "handler 不得 import internal infrastructure；通过 application service 调用"
+        handler-no-rawdb:
+          # handler 不得直接使用原生 DB / 缓存 / 向量库驱动；
+          # 所有数据访问必须经过 application service。
+          list-mode: lax
+          files:
+            - "**/api/http/handler/**"
+          deny:
+            - pkg: "github.com/jackc/pgx"
+              desc: "handler 禁止 pgx 直连；通过 application service"
+            - pkg: "github.com/jackc/pgx/v5"
+              desc: "handler 禁止 pgx 直连；通过 application service"
+            - pkg: "github.com/redis/go-redis"
+              desc: "handler 禁止 redis 直连；通过 application service"
+            - pkg: "github.com/milvus-io/milvus-sdk-go"
+              desc: "handler 禁止 milvus 直连；通过 application service"
+            - pkg: "github.com/byteBuilderX/stratum/pkg/tenantdb"
+              desc: "handler 禁止使用 tenantdb；通过 reqctx + application service 获取租户上下文"
         domain-no-thirdparty:
           # domain 层禁止引入除 stdlib + pkg/constants 之外的第三方依赖
           list-mode: lax

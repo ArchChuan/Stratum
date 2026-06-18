@@ -13,6 +13,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 )
 
@@ -20,7 +21,9 @@ import (
 func injectRAGTenant(tenantID string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tc := &tenantdb.TenantContext{TenantID: tenantID, UserID: "user-test", Role: tenantdb.RoleTenantAdmin}
-		c.Request = c.Request.WithContext(tenantdb.WithTenant(c.Request.Context(), tc))
+		ctx := tenantdb.WithTenant(c.Request.Context(), tc)
+		ctx = reqctx.WithTenantID(ctx, tenantID)
+		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}
 }

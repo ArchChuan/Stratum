@@ -10,6 +10,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 )
 
@@ -68,6 +69,7 @@ func TenantAuthMiddleware(jwtSecret []byte, logger *zap.Logger) gin.HandlerFunc 
 			Role:     claims.Role,
 		}
 		ctx := tenantdb.WithTenant(c.Request.Context(), tc)
+		ctx = reqctx.WithTenantID(ctx, claims.TenantID)
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}

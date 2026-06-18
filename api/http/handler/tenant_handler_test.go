@@ -13,6 +13,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -89,7 +90,9 @@ func (f *fakeTenantRepo) ListUserTenants(_ context.Context, _ string) ([]domain.
 func injectTenant(tenantID string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tc := &tenantdb.TenantContext{TenantID: tenantID, UserID: "user-1", Role: tenantdb.RoleTenantAdmin}
-		c.Request = c.Request.WithContext(tenantdb.WithTenant(c.Request.Context(), tc))
+		ctx := tenantdb.WithTenant(c.Request.Context(), tc)
+		ctx = reqctx.WithTenantID(ctx, tenantID)
+		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}
 }

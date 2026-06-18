@@ -1,12 +1,14 @@
 package middleware
 
 import (
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 )
 
 // InjectTenantContext bridges auth.JWTMiddleware (which sets Gin context keys)
-// to tenantdb.TenantContext (which handlers read via c.Request.Context()).
+// to tenantdb.TenantContext (which infrastructure adapters read via
+// c.Request.Context()) and reqctx tenant ID (which handler/application read).
 func InjectTenantContext() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID, _ := c.Get("auth.tenant_id")
@@ -24,6 +26,7 @@ func InjectTenantContext() gin.HandlerFunc {
 				Role:     tenantdb.Role(r),
 			}
 			ctx := tenantdb.WithTenant(c.Request.Context(), tc)
+			ctx = reqctx.WithTenantID(ctx, tid)
 			c.Request = c.Request.WithContext(ctx)
 		}
 		c.Next()
