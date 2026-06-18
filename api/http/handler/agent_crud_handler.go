@@ -1,18 +1,16 @@
+// Package handler — agent_crud_handler.go.
+//
+// CRUD HTTP transport for /agents. Each handler binds → calls
+// AgentService → renders. No registry, repo, or SQL knowledge here.
 package handler
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
+	"github.com/byteBuilderX/stratum/api/middleware"
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	"go.uber.org/zap"
 )
 
 func (h *AgentHandler) GetAllAgents(c *gin.Context) {
@@ -20,29 +18,15 @@ func (h *AgentHandler) GetAllAgents(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	agents := h.agentRegistry.GetAll(c.Request.Context())
-	responses := make([]AgentResponse, 0, len(agents))
-
-	for _, a := range agents {
-		cfg := a.GetConfig()
-		responses = append(responses, AgentResponse{
-			ID:                    cfg.ID,
-			Name:                  cfg.Name,
-			Type:                  string(cfg.Type),
-			Description:           cfg.Description,
-			Persona:               cfg.Persona,
-			SystemPrompt:          cfg.SystemPrompt,
-			LLMModel:              cfg.LLMModel,
-			EmbedModel:            cfg.EmbedModel,
-			MaxIterations:         cfg.MaxIterations,
-			MaxContextTokens:      cfg.MaxContextTokens,
-			AllowedSkills:         cfg.AllowedSkills,
-			MCPServerIDs:          cfg.MCPServerIDs,
-			KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,
-			CreatedAt:             time.Now().Format(time.RFC3339),
-		})
+	dtos, err := h.svc.List(c.Request.Context())
+	if err != nil {
+		_ = c.Error(err)
+		return
 	}
-
+	responses := make([]AgentResponse, 0, len(dtos))
+	for _, d := range dtos {
+		responses = append(responses, dtoToResponse(d))
+	}
 	c.JSON(http.StatusOK, gin.H{"agents": responses})
 }
 
@@ -51,34 +35,12 @@ func (h *AgentHandler) GetAgent(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	id := c.Param("id")
-	a, ok := h.agentRegistry.Get(c.Request.Context(), id)
-	if !ok {
-		h.logger.Warn("agent not found", zap.String("id", id))
-		c.JSON(http.StatusNotFound, dto.ErrorResponse{
-			Code:    http.StatusNotFound,
-			Message: "agent not found",
-		})
+	dto, err := h.svc.Get(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
 		return
 	}
-
-	cfg := a.GetConfig()
-	c.JSON(http.StatusOK, AgentResponse{
-		ID:                    cfg.ID,
-		Name:                  cfg.Name,
-		Type:                  string(cfg.Type),
-		Description:           cfg.Description,
-		Persona:               cfg.Persona,
-		SystemPrompt:          cfg.SystemPrompt,
-		LLMModel:              cfg.LLMModel,
-		EmbedModel:            cfg.EmbedModel,
-		MaxIterations:         cfg.MaxIterations,
-		MaxContextTokens:      cfg.MaxContextTokens,
-		AllowedSkills:         cfg.AllowedSkills,
-		MCPServerIDs:          cfg.MCPServerIDs,
-		KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,
-		CreatedAt:             time.Now().Format(time.RFC3339),
-	})
+	c.JSON(http.StatusOK, dtoToResponse(dto))
 }
 
 func (h *AgentHandler) CreateAgent(c *gin.Context) {
@@ -89,82 +51,29 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 	}
 	var req CreateAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn("invalid request", zap.Error(err))
-		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
-			Code:    http.StatusBadRequest,
-			Message: err.Error(),
-		})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-
-	// Inherit embed_model from tenant settings.
-	embedModel := req.EmbedModel
-	if embedModel == "" && h.db != nil {
-		var settingsJSON []byte
-		_ = h.db.QueryRow(c.Request.Context(),
-			"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL",
-			tenantID,
-		).Scan(&settingsJSON)
-		var ts map[string]interface{}
-		if len(settingsJSON) > 0 {
-			_ = json.Unmarshal(settingsJSON, &ts)
-		}
-		embedModel, _ = ts["embed_model"].(string)
-	}
-
-	id := uuid.New().String()
-	agentType := parseAgentType(req.Type)
-
-	cfg := &agent.AgentConfig{
-		ID:                    id,
+	dto, err := h.svc.Create(c.Request.Context(), agent.CreateAgentInput{
+		TenantID:              tenantID,
 		Name:                  req.Name,
-		Type:                  agentType,
+		Type:                  req.Type,
 		Description:           req.Description,
 		Persona:               req.Persona,
 		SystemPrompt:          req.SystemPrompt,
 		LLMModel:              req.LLMModel,
-		EmbedModel:            embedModel,
+		EmbedModel:            req.EmbedModel,
 		MaxIterations:         req.MaxIterations,
 		MaxContextTokens:      req.MaxContextTokens,
 		AllowedSkills:         req.AllowedSkills,
 		MCPServerIDs:          req.MCPServerIDs,
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
-		Capabilities:          []agent.AgentCapability{},
-	}
-
-	a := agent.NewBaseAgent(cfg, h.logger).WithMetrics(h.metrics)
-
-	if err := h.agentRegistry.Register(c.Request.Context(), a); err != nil {
-		if errors.Is(err, agent.ErrNameConflict) {
-			c.JSON(http.StatusConflict, dto.ErrorResponse{Code: http.StatusConflict, Message: err.Error()})
-			return
-		}
-		h.logger.Error("failed to register agent", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
-			Code:    http.StatusInternalServerError,
-			Message: fmt.Sprintf("failed to create agent: %v", err),
-		})
-		return
-	}
-
-	h.logger.Info("agent created", zap.String("id", id), zap.String("name", req.Name))
-
-	c.JSON(http.StatusCreated, AgentResponse{
-		ID:                    id,
-		Name:                  req.Name,
-		Type:                  string(agentType),
-		Description:           req.Description,
-		Persona:               req.Persona,
-		SystemPrompt:          req.SystemPrompt,
-		LLMModel:              req.LLMModel,
-		EmbedModel:            embedModel,
-		MaxIterations:         req.MaxIterations,
-		MaxContextTokens:      req.MaxContextTokens,
-		AllowedSkills:         req.AllowedSkills,
-		MCPServerIDs:          req.MCPServerIDs,
-		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
-		CreatedAt:             time.Now().Format(time.RFC3339),
 	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusCreated, dtoToResponse(dto))
 }
 
 func (h *AgentHandler) UpdateAgent(c *gin.Context) {
@@ -172,91 +81,29 @@ func (h *AgentHandler) UpdateAgent(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	id := c.Param("id")
-
 	var req UpdateAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn("invalid request", zap.Error(err))
-		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
-			Code:    http.StatusBadRequest,
-			Message: err.Error(),
-		})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-
-	existing, ok := h.agentRegistry.Get(c.Request.Context(), id)
-	if !ok {
-		c.JSON(http.StatusNotFound, dto.ErrorResponse{
-			Code:    http.StatusNotFound,
-			Message: "agent not found",
-		})
-		return
-	}
-	existingEmbedModel := existing.GetConfig().EmbedModel
-	agentType := parseAgentType(req.Type)
-
-	skills := req.AllowedSkills
-	if skills == nil {
-		skills = []string{}
-	}
-
-	cfg := &agent.AgentConfig{
-		ID:                    id,
+	dto, err := h.svc.Update(c.Request.Context(), c.Param("id"), agent.UpdateAgentInput{
 		Name:                  req.Name,
-		Type:                  agentType,
+		Type:                  req.Type,
 		Description:           req.Description,
 		Persona:               req.Persona,
 		SystemPrompt:          req.SystemPrompt,
 		LLMModel:              req.LLMModel,
-		EmbedModel:            existingEmbedModel,
 		MaxIterations:         req.MaxIterations,
 		MaxContextTokens:      req.MaxContextTokens,
-		AllowedSkills:         skills,
+		AllowedSkills:         req.AllowedSkills,
 		MCPServerIDs:          req.MCPServerIDs,
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
-	}
-
-	if err := h.agentRegistry.Update(c.Request.Context(), cfg); err != nil {
-		if errors.Is(err, agent.ErrNotFound) {
-			c.JSON(http.StatusNotFound, dto.ErrorResponse{
-				Code:    http.StatusNotFound,
-				Message: "agent not found",
-			})
-			return
-		}
-		if errors.Is(err, agent.ErrInvalidSkill) {
-			c.JSON(http.StatusUnprocessableEntity, dto.ErrorResponse{
-				Code:    http.StatusUnprocessableEntity,
-				Message: fmt.Sprintf("invalid skill: %v", err),
-			})
-			return
-		}
-		h.logger.Error("failed to update agent", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
-			Code:    http.StatusInternalServerError,
-			Message: fmt.Sprintf("failed to update agent: %v", err),
-		})
-		return
-	}
-
-	h.logger.Info("agent updated", zap.String("id", id), zap.String("name", req.Name))
-
-	c.JSON(http.StatusOK, AgentResponse{
-		ID:                    id,
-		Name:                  req.Name,
-		Type:                  string(agentType),
-		Description:           req.Description,
-		Persona:               req.Persona,
-		SystemPrompt:          req.SystemPrompt,
-		LLMModel:              req.LLMModel,
-		EmbedModel:            existingEmbedModel,
-		MaxIterations:         req.MaxIterations,
-		MaxContextTokens:      req.MaxContextTokens,
-		AllowedSkills:         skills,
-		MCPServerIDs:          req.MCPServerIDs,
-		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
-		CreatedAt:             time.Now().Format(time.RFC3339),
 	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, dtoToResponse(dto))
 }
 
 func (h *AgentHandler) DeleteAgent(c *gin.Context) {
@@ -264,19 +111,27 @@ func (h *AgentHandler) DeleteAgent(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	id := c.Param("id")
-
-	if err := h.agentRegistry.Remove(c.Request.Context(), id); err != nil {
-		h.logger.Warn("agent not found or removal failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusNotFound, dto.ErrorResponse{
-			Code:    http.StatusNotFound,
-			Message: "agent not found",
-		})
+	if err := h.svc.Delete(c.Request.Context(), c.Param("id")); err != nil {
+		_ = c.Error(err)
 		return
 	}
-
-	h.logger.Info("agent deleted", zap.String("id", id))
 	c.JSON(http.StatusOK, gin.H{"message": "agent deleted successfully"})
+}
+
+// executionRow is the wire shape rendered by ListExecutions. JSON tags
+// are frozen by the contract test; do not rename.
+type executionRow struct {
+	ID            string `json:"id"`
+	AgentID       string `json:"agent_id"`
+	AgentName     string `json:"agent_name"`
+	UserID        string `json:"user_id"`
+	Status        string `json:"status"`
+	InputPreview  string `json:"input_preview"`
+	OutputPreview string `json:"output_preview"`
+	ErrorMessage  string `json:"error_message"`
+	TotalTokens   int    `json:"total_tokens"`
+	DurationMs    int    `json:"duration_ms"`
+	CreatedAt     string `json:"created_at"`
 }
 
 func (h *AgentHandler) ListExecutions(c *gin.Context) {
@@ -284,36 +139,17 @@ func (h *AgentHandler) ListExecutions(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	if h.executionStore == nil {
-		c.JSON(http.StatusOK, gin.H{"executions": []struct{}{}, "total": 0})
-		return
-	}
-
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 
-	records, total, err := h.executionStore.List(c.Request.Context(), agent.ListOptions{Page: page, PageSize: pageSize})
+	rows, total, err := h.svc.ListExecutions(c.Request.Context(), page, pageSize)
 	if err != nil {
-		h.logger.Error("list executions failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Code: 500, Message: "failed to list executions"})
+		_ = c.Error(err)
 		return
 	}
-	type row struct {
-		ID            string `json:"id"`
-		AgentID       string `json:"agent_id"`
-		AgentName     string `json:"agent_name"`
-		UserID        string `json:"user_id"`
-		Status        string `json:"status"`
-		InputPreview  string `json:"input_preview"`
-		OutputPreview string `json:"output_preview"`
-		ErrorMessage  string `json:"error_message"`
-		TotalTokens   int    `json:"total_tokens"`
-		DurationMs    int    `json:"duration_ms"`
-		CreatedAt     string `json:"created_at"`
-	}
-	out := make([]row, 0, len(records))
-	for _, r := range records {
-		out = append(out, row{
+	out := make([]executionRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, executionRow{
 			ID:            r.ID,
 			AgentID:       r.AgentID,
 			AgentName:     r.AgentName,
@@ -324,7 +160,7 @@ func (h *AgentHandler) ListExecutions(c *gin.Context) {
 			ErrorMessage:  r.ErrorMessage,
 			TotalTokens:   r.TotalTokens,
 			DurationMs:    r.DurationMs,
-			CreatedAt:     r.CreatedAt.Format(time.RFC3339),
+			CreatedAt:     r.CreatedAt,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"executions": out, "total": total})

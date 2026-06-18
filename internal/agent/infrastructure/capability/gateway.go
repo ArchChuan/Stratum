@@ -1,42 +1,35 @@
+// Package capgateway provides the unified capability routing facade,
+// implementing internal/agent/domain/port.CapabilityGateway.
 package capgateway
 
 import (
 	"context"
 	"fmt"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"go.uber.org/zap"
 )
 
-// CapabilityGateway is the unified capability routing facade.
-type CapabilityGateway interface {
-	Route(ctx context.Context, req CapabilityRequest) (CapabilityResponse, error)
-}
-
-// Adapter is the common interface for LLM and Skill adapters.
-type Adapter interface {
-	Route(ctx context.Context, req CapabilityRequest) (CapabilityResponse, error)
-}
-
 type DefaultCapabilityGateway struct {
-	llm    Adapter
-	skill  Adapter
+	llm    port.Adapter
+	skill  port.Adapter
 	logger *zap.Logger
 }
 
-func NewDefaultCapabilityGateway(llm Adapter, skill Adapter, logger *zap.Logger) *DefaultCapabilityGateway {
+func NewDefaultCapabilityGateway(llm port.Adapter, skill port.Adapter, logger *zap.Logger) *DefaultCapabilityGateway {
 	return &DefaultCapabilityGateway{llm: llm, skill: skill, logger: logger}
 }
 
-func (g *DefaultCapabilityGateway) Route(ctx context.Context, req CapabilityRequest) (CapabilityResponse, error) {
+func (g *DefaultCapabilityGateway) Route(ctx context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
 	if err := req.Validate(); err != nil {
-		return CapabilityResponse{}, err
+		return port.CapabilityResponse{}, err
 	}
 	switch req.Type {
-	case CapLLM:
+	case port.CapLLM:
 		return g.llm.Route(ctx, req)
-	case CapSkill:
+	case port.CapSkill:
 		return g.skill.Route(ctx, req)
 	default:
-		return CapabilityResponse{}, fmt.Errorf("capgateway: unknown type %q", req.Type)
+		return port.CapabilityResponse{}, fmt.Errorf("capgateway: unknown type %q", req.Type)
 	}
 }

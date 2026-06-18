@@ -6,9 +6,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/gin-gonic/gin"
+
+	llmapp "github.com/byteBuilderX/stratum/internal/llmgateway/application"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 )
+
+func newModelHandler(gw *llmgateway.Gateway) *ModelHandler {
+	return NewModelHandler(llmapp.NewModelService(gw))
+}
 
 func TestListModels_emptyGateway(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -16,7 +22,7 @@ func TestListModels_emptyGateway(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/models", nil) //nolint:noctx
 
-	h := NewModelHandler(llmgateway.NewGateway())
+	h := newModelHandler(llmgateway.NewGateway())
 	h.ListModels(c)
 
 	if w.Code != http.StatusOK {
@@ -49,7 +55,7 @@ func TestListModels_withProviders(t *testing.T) {
 	gw.RegisterClient(llmgateway.ProviderQwen, llmgateway.NewQwenClient("test", nil))
 	gw.RegisterClient(llmgateway.ProviderZhipu, llmgateway.NewZhipuClient("test", nil))
 
-	h := NewModelHandler(gw)
+	h := newModelHandler(gw)
 	h.ListModels(c)
 
 	if w.Code != http.StatusOK {

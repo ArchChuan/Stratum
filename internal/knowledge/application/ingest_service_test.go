@@ -1,11 +1,10 @@
 package application
 
 import (
+	"context"
+	"errors"
 	"testing"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
-	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
-	"github.com/byteBuilderX/stratum/pkg/vector"
 	"go.uber.org/zap"
 )
 
@@ -174,11 +173,9 @@ func TestGraphEntityStructure(t *testing.T) {
 
 func TestBuildPrompt(t *testing.T) {
 	logger := zap.NewNop()
-	embedSvc := embedding.NewEmbeddingService(llmgateway.NewQwenClient("", logger), logger)
-	vectorStore := vector.NewVectorStore("localhost", "19530", logger)
-	graphRAG := NewGraphRAG("bolt://localhost:7687", "neo4j", "password", logger)
+	graphRAG := NewMockGraphStore()
 
-	ragService := NewRAGService(embedSvc, vectorStore, graphRAG, logger)
+	ragService := NewRAGService(nil, nil, graphRAG, logger)
 
 	chunks := []string{"chunk1", "chunk2"}
 	graphContext := []GraphEntity{
@@ -211,4 +208,58 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestGetWorkspaceStats(t *testing.T) {
+	logger := zap.NewNop()
+
+	tests := []struct {
+		name        string
+		docCount    int
+		docCountErr error
+		wantCount   int
+		wantErr     bool
+	}{
+		{
+			name:      "success: returns doc count",
+			docCount:  5,
+			wantCount: 5,
+		},
+		{
+			name:        "error: propagates db error",
+			docCountErr: errors.New("db error"),
+			wantErr:     true,
+		},
+		{
+			name:      "zero: returns stat with count 0",
+			docCount:  0,
+			wantCount: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockGraphStore()
+			mock.SetDocCountResult(tc.docCount, tc.docCountErr)
+			svc := NewKnowledgeIngest(nil, nil, nil, nil, mock, logger)
+
+			stats, err := svc.GetWorkspaceStats(context.Background(), "test-ws")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			got, ok := stats["document_count"].(int)
+			if !ok {
+				t.Fatalf("document_count not int, got %T", stats["document_count"])
+			}
+			if got != tc.wantCount {
+				t.Errorf("document_count: want %d, got %d", tc.wantCount, got)
+			}
+		})
+	}
 }

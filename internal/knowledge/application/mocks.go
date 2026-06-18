@@ -4,58 +4,72 @@ package application
 import (
 	"context"
 
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/vector"
 )
 
-type MockGraphRAG struct {
-	queryResult interface{}
-	queryErr    error
-	connected   bool
+// Compile-time check: MockGraphStore implements port.GraphStore.
+var _ knowledgeport.GraphStore = (*MockGraphStore)(nil)
+
+type MockGraphStore struct {
+	docCount          int
+	docCountErr       error
+	workspaceNames    []string
+	workspaceNamesErr error
 }
 
-func NewMockGraphRAG() *MockGraphRAG {
-	return &MockGraphRAG{
-		connected: true,
-	}
+func NewMockGraphStore() *MockGraphStore {
+	return &MockGraphStore{}
 }
 
-func (m *MockGraphRAG) Connect(ctx context.Context) error {
+func (m *MockGraphStore) Connect(_ context.Context) error {
 	return nil
 }
 
-func (m *MockGraphRAG) CreateNode(ctx context.Context, label string, props map[string]interface{}) error {
+func (m *MockGraphStore) CreateNode(_ context.Context, _ string, _ map[string]interface{}) error {
 	return nil
 }
 
-func (m *MockGraphRAG) CreateRelationship(ctx context.Context, fromID, toID, relType string) error {
+func (m *MockGraphStore) CreateRelationship(_ context.Context, _, _, _ string) error {
 	return nil
 }
 
-func (m *MockGraphRAG) Query(ctx context.Context, query string, params map[string]interface{}) (interface{}, error) {
-	if m.queryErr != nil {
-		return nil, m.queryErr
-	}
-	return m.queryResult, nil
-}
-
-func (m *MockGraphRAG) GetNeighborNodes(ctx context.Context, nodeID string, maxDepth int) ([]map[string]interface{}, error) {
+func (m *MockGraphStore) GetNeighborNodes(_ context.Context, _ string, _ int) ([]map[string]interface{}, error) {
 	return []map[string]interface{}{}, nil
 }
 
-func (m *MockGraphRAG) FullTextSearch(ctx context.Context, searchTerm string, limit int) ([]map[string]interface{}, error) {
-	return []map[string]interface{}{}, nil
+func (m *MockGraphStore) FullTextSearch(_ context.Context, _ string, _ int) ([]knowledgeport.GraphNodeResult, error) {
+	return []knowledgeport.GraphNodeResult{}, nil
 }
 
-func (m *MockGraphRAG) Close() error {
+func (m *MockGraphStore) QueryWorkspaceDocumentIDs(_ context.Context, _ string) ([]string, error) {
+	return []string{}, nil
+}
+
+func (m *MockGraphStore) DeleteWorkspaceNodes(_ context.Context, _ string) error {
 	return nil
 }
 
-func (m *MockGraphRAG) SetQueryResult(result interface{}) {
-	m.queryResult = result
+func (m *MockGraphStore) GetWorkspaceDocCount(_ context.Context, _ string) (int, error) {
+	return m.docCount, m.docCountErr
 }
 
-func (m *MockGraphRAG) SetQueryError(err error) {
-	m.queryErr = err
+func (m *MockGraphStore) GetWorkspaceNames(_ context.Context) ([]string, error) {
+	return m.workspaceNames, m.workspaceNamesErr
+}
+
+func (m *MockGraphStore) SetDocCountResult(n int, err error) {
+	m.docCount = n
+	m.docCountErr = err
+}
+
+func (m *MockGraphStore) SetWorkspaceNamesResult(names []string, err error) {
+	m.workspaceNames = names
+	m.workspaceNamesErr = err
+}
+
+func (m *MockGraphStore) Close() error {
+	return nil
 }
 
 type MockVectorStore struct {

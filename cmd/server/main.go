@@ -17,7 +17,7 @@ import (
 
 	apihttp "github.com/byteBuilderX/stratum/api/http"
 	"github.com/byteBuilderX/stratum/api/wiring"
-	agentpkg "github.com/byteBuilderX/stratum/internal/agent/application"
+	agentpersistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/internal/iam/infrastructure/hermes"
 	"github.com/byteBuilderX/stratum/internal/platform/config"
 	harnesspkg "github.com/byteBuilderX/stratum/internal/platform/harness"
@@ -52,7 +52,7 @@ func main() {
 
 	// Public schema migration uses its own connection (golang-migrate);
 	// must run before BuildContainer opens the shared pool.
-	if err := migration.RunPublicSchema(cfg.PostgresURL, "internal/migration/sql", logger); err != nil {
+	if err := migration.RunPublicSchema(cfg.PostgresURL, "pkg/migration/sql", logger); err != nil {
 		logger.Fatal("migration failed", zap.Error(err))
 	}
 
@@ -217,7 +217,7 @@ func main() {
 // runChatCleanup periodically prunes expired conversations across all tenants.
 // Exits when ctx is cancelled.
 func runChatCleanup(ctx context.Context, db *pgxpool.Pool, interval time.Duration, logger *zap.Logger) {
-	chatStore := agentpkg.NewPgChatStore(db)
+	chatStore := agentpersistence.NewPgChatStore(db)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

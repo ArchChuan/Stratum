@@ -7,13 +7,17 @@ import (
 	"strings"
 	"testing"
 
+	"go.uber.org/zap"
+
 	"github.com/byteBuilderX/stratum/api/http/handler"
+	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/gin-gonic/gin"
 )
 
 func setupAuthRouter(h *handler.AuthHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
 	auth := r.Group("/auth")
 	{
 		auth.GET("/github", h.GitHubLogin)
@@ -26,13 +30,30 @@ func setupAuthRouter(h *handler.AuthHandler) *gin.Engine {
 	return r
 }
 
+func setupAuthRouterFull(h *handler.AuthHandler) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	auth := r.Group("/auth")
+	{
+		auth.GET("/github", h.GitHubLogin)
+		auth.GET("/github/callback", h.GitHubCallback)
+		auth.POST("/register", h.Register)
+		auth.POST("/refresh", h.Refresh)
+		auth.POST("/logout", h.Logout)
+		auth.GET("/me", h.Me)
+		auth.POST("/switch-tenant", h.SwitchTenant)
+	}
+	return r
+}
+
 func newNilDepsHandler() *handler.AuthHandler {
 	return handler.NewAuthHandler(handler.AuthHandlerDeps{
 		GitHubClient: nil,
 		JWTService:   nil,
 		TokenStore:   nil,
 		OnboardSvc:   nil,
-		Logger:       nil,
+		Logger:       zap.NewNop(),
 		CallbackURL:  "http://localhost/auth/github/callback",
 		GlobalAdmin:  "",
 	})
@@ -101,22 +122,6 @@ func TestAuthHandler_Logout_NoCookie(t *testing.T) {
 	}
 }
 
-func setupAuthRouterFull(h *handler.AuthHandler) *gin.Engine {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	auth := r.Group("/auth")
-	{
-		auth.GET("/github", h.GitHubLogin)
-		auth.GET("/github/callback", h.GitHubCallback)
-		auth.POST("/register", h.Register)
-		auth.POST("/refresh", h.Refresh)
-		auth.POST("/logout", h.Logout)
-		auth.GET("/me", h.Me)
-		auth.POST("/switch-tenant", h.SwitchTenant)
-	}
-	return r
-}
-
 func TestAuthHandler_SwitchTenant_NoAuth(t *testing.T) {
 	h := newNilDepsHandler()
 	r := setupAuthRouterFull(h)
@@ -135,15 +140,13 @@ func TestAuthHandler_SwitchTenant_MissingTenantID(t *testing.T) {
 	h := newNilDepsHandler()
 	r := setupAuthRouterFull(h)
 
-	// Has Bearer header but no tenant_id body — 401 fires first (JWTService nil → Verify fails).
+	// Has Bearer header but JWTService nil → Verify returns error → 401
 	req := httptest.NewRequest(http.MethodPost, "/auth/switch-tenant", strings.NewReader(`{}`)) //nolint:noctx
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer sometoken")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// JWTService nil → 500 on Verify call... actually nil JWTService panics: protect test.
-	// We only assert it doesn't return 200.
 	if w.Code == http.StatusOK {
 		t.Error("should not return 200 with nil JWTService")
 	}

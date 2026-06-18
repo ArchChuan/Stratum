@@ -7,8 +7,10 @@ import (
 	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	memory "github.com/byteBuilderX/stratum/internal/memory/application"
+	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/persistence"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 )
 
@@ -20,22 +22,31 @@ import (
 // reachable; downstream consumers must nil-check before use.
 type Memory struct {
 	Manager  *memory.MemoryManager
-	Injector *pipeline.MemoryInjector
+	Injector port.MemoryInjector
 	Pipeline *pipeline.Pipeline
+	RecallFn port.RecallMemoryFn
 }
 
 func (c *Container) buildMemory(ctx context.Context) error {
+	memRepo := persistence.NewMemoryRepo(c.dbOrNil())
 	mem := &Memory{
-		Manager: memory.NewMemoryManager(memory.DefaultMemoryConfig(), c.Logger, nil, nil, nil, c.dbOrNil()),
+		Manager: memory.NewMemoryManager(memory.DefaultMemoryConfig(), c.Logger, nil, nil, nil, memRepo),
 	}
 
 	db := c.dbOrNil()
 	if db != nil && c.Storage != nil && c.Storage.Milvus != nil {
 		inj := pipeline.NewMemoryInjector(db, c.Logger, nil, c.Storage.Milvus)
+		var embedResolver pipeline.EmbedServiceResolver
 		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 			inj.SetEmbedResolver(c.Knowledge.EmbedResolver)
+			embedResolver = c.Knowledge.EmbedResolver
 		}
-		mem.Injector = inj
+		mem.Injector = injectorAdapter{inj: inj}
+
+		recallHandler := pipeline.NewRecallHandler(db, c.Logger, nil, embedResolver, c.Storage.Milvus)
+		mem.RecallFn = func(ctx context.Context, tenantID, userID, agentID string, input map[string]any) (string, error) {
+			return recallHandler.Handle(ctx, tenantID, userID, agentID, input)
+		}
 	}
 
 	// Memory pipeline — degrades to nil if disabled or NATS unavailable.
@@ -89,4 +100,19 @@ func (c *Container) buildMemory(ctx context.Context) error {
 
 	c.Memory = mem
 	return nil
+}
+
+// injectorAdapter adapts *pipeline.MemoryInjector to port.MemoryInjector.
+// Pipeline keeps its own InjectionContext VO; this thin shim copies fields
+// so the application layer (port) stays free of pipeline imports.
+type injectorAdapter struct{ inj *pipeline.MemoryInjector }
+
+func (a injectorAdapter) BuildContext(ctx context.Context, ic port.InjectionContext) (string, error) {
+	return a.inj.BuildContext(ctx, pipeline.InjectionContext{
+		TenantID:       ic.TenantID,
+		UserID:         ic.UserID,
+		AgentID:        ic.AgentID,
+		ConversationID: ic.ConversationID,
+		Query:          ic.Query,
+	})
 }

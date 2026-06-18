@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	skillgateway "github.com/byteBuilderX/stratum/internal/skill/infrastructure/gateway"
@@ -21,12 +22,12 @@ func TestDefaultCapabilityGateway_RouteLLM(t *testing.T) {
 		zap.NewNop(),
 	)
 
-	req := capgateway.CapabilityRequest{
+	req := port.CapabilityRequest{
 		TraceID:  "t1",
 		TenantID: "tenant1",
-		Type:     capgateway.CapLLM,
+		Type:     port.CapLLM,
 		Timeout:  5 * time.Second,
-		LLM:      &capgateway.LLMCapRequest{Model: "qwen-turbo", Messages: []capgateway.LLMMessage{{Role: "user", Content: "hi"}}},
+		LLM:      &port.LLMCapRequest{Model: "qwen-turbo", Messages: []port.LLMMessage{{Role: "user", Content: "hi"}}},
 	}
 	resp, err := gw.Route(context.Background(), req)
 	require.NoError(t, err)
@@ -42,9 +43,9 @@ func TestDefaultCapabilityGateway_RouteSkill(t *testing.T) {
 		zap.NewNop(),
 	)
 
-	req := capgateway.CapabilityRequest{
-		Type:  capgateway.CapSkill,
-		Skill: &capgateway.SkillCapRequest{SkillID: "s1", Input: "data"},
+	req := port.CapabilityRequest{
+		Type:  port.CapSkill,
+		Skill: &port.SkillCapRequest{SkillID: "s1", Input: "data"},
 	}
 	resp, err := gw.Route(context.Background(), req)
 	require.NoError(t, err)
@@ -57,7 +58,7 @@ func TestDefaultCapabilityGateway_RouteValidationError(t *testing.T) {
 		capgateway.NewSkillAdapter(&mockSkillGateway{}, zap.NewNop()),
 		zap.NewNop(),
 	)
-	req := capgateway.CapabilityRequest{Type: capgateway.CapLLM} // LLM == nil
+	req := port.CapabilityRequest{Type: port.CapLLM} // LLM == nil
 	_, err := gw.Route(context.Background(), req)
 	require.Error(t, err)
 }

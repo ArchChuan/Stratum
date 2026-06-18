@@ -9,62 +9,32 @@ import (
 	"time"
 
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
-	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
-	memory "github.com/byteBuilderX/stratum/internal/memory/application"
-	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	memdomain "github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
 )
 
-// AgentType defines different agent architectures
-type AgentType string
-
-const (
-	ReActAgent       AgentType = "react"
-	CoTAgent         AgentType = "cot"
-	PlanningAgent    AgentType = "planning"
-	ToolCallingAgent AgentType = "tool_calling"
-	RAGAgent         AgentType = "rag"
-	SwarmAgent       AgentType = "swarm"
+// Domain type aliases — canonical definitions live in
+// internal/agent/domain. Aliases preserve source-compat for the dozens
+// of call-sites still spelled `application.AgentType`, etc.
+type (
+	AgentType       = domain.AgentType
+	AgentCapability = domain.AgentCapability
+	AgentConfig     = domain.AgentConfig
+	Message         = domain.Message
+	Thought         = domain.Thought
+	ToolCall        = domain.ToolCall
+	AgentResult     = domain.AgentResult
+	AgentState      = domain.AgentState
 )
 
-// AgentCapability defines what an agent can do
-type AgentCapability struct {
-	Name        string
-	Description string
-	CanUseTools bool
-	CanPlan     bool
-	CanReason   bool
-}
-
-// Message represents a message in agent's conversation history
-type Message struct {
-	Role       string
-	Content    string
-	Timestamp  time.Time
-	Metadata   map[string]interface{}
-	TokenCount int
-}
-
-// Thought represents a single reasoning step in CoT
-type Thought struct {
-	Step        int
-	Observation string
-	Thought     string
-}
-
-// ToolCall represents a structured tool invocation
-type ToolCall struct {
-	ToolName string
-	Input    map[string]interface{}
-	Output   interface{}
-	Error    error
-	Duration time.Duration
-}
-
-// ExecutionConfig holds configuration for agent execution
+// ExecutionConfig holds parameters for a single agent execution. It lives
+// in the application layer because it references port.ToolDefinition and
+// function types that depend on cross-context ports.
 type ExecutionConfig struct {
 	MaxSteps       int
 	Timeout        time.Duration
@@ -72,50 +42,25 @@ type ExecutionConfig struct {
 	EnableTools    bool
 	AvailableTools []string
 	Stream         bool
-	TokenCallback  func(string) // called per token when streaming; implies Stream=true
+	TokenCallback  func(string)
 	TenantID       string
 	TraceID        string
 	LLMAPIKeys     map[string]string
 	RAGSearchFn    func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
-	ExtraTools     []capgateway.ToolDefinition
+	ExtraTools     []port.ToolDefinition
 	ConversationID string
 	UserID         string
 	HistoryWindow  int
 }
 
-// AgentConfig holds agent configuration
-type AgentConfig struct {
-	ID                             string
-	Name                           string
-	Type                           AgentType
-	Description                    string
-	Persona                        string
-	SystemPrompt                   string
-	LLMModel                       string
-	EmbedModel                     string
-	MaxIterations                  int
-	AllowedSkills                  []string
-	MCPServerIDs                   []string
-	Capabilities                   []AgentCapability
-	KnowledgeWorkspaceIDs          []string
-	KnowledgeWorkspaceNames        []string
-	KnowledgeWorkspaceDescriptions []string
-	MaxContextTokens               int
-}
-
-// AgentResult represents output from an agent execution
-type AgentResult struct {
-	AgentID    string
-	Input      string
-	Output     string
-	Thoughts   []Thought
-	ToolCalls  []ToolCall
-	Steps      int
-	TokensUsed int
-	Duration   time.Duration
-	Error      error
-	Metadata   map[string]interface{}
-}
+const (
+	ReActAgent       = domain.ReActAgent
+	CoTAgent         = domain.CoTAgent
+	PlanningAgent    = domain.PlanningAgent
+	ToolCallingAgent = domain.ToolCallingAgent
+	RAGAgent         = domain.RAGAgent
+	SwarmAgent       = domain.SwarmAgent
+)
 
 // Agent defines the interface for all agent types
 type Agent interface {
@@ -133,46 +78,22 @@ type BaseAgent struct {
 	State          AgentState
 	Memory         []Message
 	mu             sync.Mutex
-	MemoryManager  *memory.MemoryManager
-	SessionContext *memory.SessionContext
-	CapGateway     capgateway.CapabilityGateway
+	MemorySearcher port.MemorySearcher
+	CapGateway     port.CapabilityGateway
 	ChatStore      ChatStore
-	MemoryInjector *pipeline.MemoryInjector
-}
-
-// AgentState represents the current state of an agent
-type AgentState struct {
-	StepsTaken int
-	Thoughts   []Thought
-	ToolCalls  []ToolCall
-	TokensUsed int
+	MemoryInjector port.MemoryInjector
+	RecallMemoryFn port.RecallMemoryFn
 }
 
 // NewBaseAgent creates a new base agent
 func NewBaseAgent(config *AgentConfig, logger *zap.Logger) *BaseAgent {
 	return &BaseAgent{
-		AgentConfig:    config,
-		Logger:         logger,
-		metrics:        observability.NoopMetrics{},
-		State:          AgentState{},
-		Memory:         []Message{},
-		mu:             sync.Mutex{},
-		MemoryManager:  nil,
-		SessionContext: nil,
-	}
-}
-
-// NewBaseAgentWithMemory creates a new base agent with memory support
-func NewBaseAgentWithMemory(config *AgentConfig, logger *zap.Logger, memoryManager *memory.MemoryManager, sessionCtx *memory.SessionContext) *BaseAgent {
-	return &BaseAgent{
-		AgentConfig:    config,
-		Logger:         logger,
-		metrics:        observability.NoopMetrics{},
-		State:          AgentState{},
-		Memory:         []Message{},
-		mu:             sync.Mutex{},
-		MemoryManager:  memoryManager,
-		SessionContext: sessionCtx,
+		AgentConfig: config,
+		Logger:      logger,
+		metrics:     observability.NoopMetrics{},
+		State:       AgentState{},
+		Memory:      []Message{},
+		mu:          sync.Mutex{},
 	}
 }
 
@@ -184,15 +105,14 @@ func (a *BaseAgent) WithMetrics(m observability.MetricsProvider) *BaseAgent {
 	return a
 }
 
-// SetMemoryManager sets the memory manager for the agent
-func (a *BaseAgent) SetMemoryManager(manager *memory.MemoryManager, sessionCtx *memory.SessionContext) {
+// SetMemorySearcher injects a MemorySearcher for semantic memory retrieval.
+func (a *BaseAgent) SetMemorySearcher(ms port.MemorySearcher) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.MemoryManager = manager
-	a.SessionContext = sessionCtx
+	a.MemorySearcher = ms
 }
 
-func (a *BaseAgent) SetCapGateway(gw capgateway.CapabilityGateway) {
+func (a *BaseAgent) SetCapGateway(gw port.CapabilityGateway) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.CapGateway = gw
@@ -243,19 +163,18 @@ func (a *BaseAgent) AddToMemory(msg Message) {
 	}
 }
 
-// RetrieveMemory retrieves relevant memory entries for context
-func (a *BaseAgent) RetrieveMemory(ctx context.Context, query string, limit int) ([]*memory.MemorySearchResult, error) {
-	if a.MemoryManager == nil || a.SessionContext == nil {
-		return []*memory.MemorySearchResult{}, nil
+// RetrieveMemory retrieves relevant memory entries for semantic context augmentation.
+func (a *BaseAgent) RetrieveMemory(ctx context.Context, query string, limit int) ([]*memdomain.MemorySearchResult, error) {
+	if a.MemorySearcher == nil {
+		return []*memdomain.MemorySearchResult{}, nil
 	}
 
-	searchReq := &memory.MemorySearchRequest{
-		Query:   query,
-		Context: a.SessionContext,
-		Limit:   limit,
+	searchReq := &memdomain.MemorySearchRequest{
+		Query: query,
+		Limit: limit,
 	}
 
-	return a.MemoryManager.Search(ctx, searchReq)
+	return a.MemorySearcher.Search(ctx, searchReq)
 }
 
 // Execute implements the Agent interface - base implementation with ReAct pattern
@@ -288,7 +207,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	// Inject memory context into system prompt
 	var memCtx string
 	if a.MemoryInjector != nil && cfg.ConversationID != "" {
-		ic := pipeline.InjectionContext{
+		ic := port.InjectionContext{
 			TenantID:       cfg.TenantID,
 			UserID:         cfg.UserID,
 			AgentID:        agentID,
@@ -345,13 +264,13 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		}
 		initMessages := BuildContextMessages(systemPrompt, memCtx, history, input, maxTokens, cfg.HistoryWindow)
 
-		var availableTools []capgateway.ToolDefinition
+		var availableTools []port.ToolDefinition
 		if len(workspaceNames) > 0 && cfg.RAGSearchFn != nil {
 			enumVals := make([]interface{}, len(workspaceNames))
 			for i, n := range workspaceNames {
 				enumVals[i] = n
 			}
-			availableTools = append(availableTools, capgateway.ToolDefinition{
+			availableTools = append(availableTools, port.ToolDefinition{
 				Name: "stratum_search_knowledge",
 				Description: func() string {
 					var b strings.Builder
@@ -395,7 +314,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			})
 		}
 		if a.MemoryInjector != nil {
-			availableTools = append(availableTools, capgateway.ToolDefinition{
+			availableTools = append(availableTools, port.ToolDefinition{
 				Name:        "stratum_recall_memory",
 				Description: "Search long-term memory for relevant past interactions, entities, and context. Use when you need to recall information from previous conversations.",
 				InputSchema: map[string]interface{}{
@@ -430,13 +349,10 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			AvailableTools: mergeTools(availableTools, cfg.ExtraTools, a.Logger),
 			RAGSearchFn:    cfg.RAGSearchFn,
 		}
-		if a.MemoryInjector != nil {
-			recallHandler := pipeline.NewRecallHandler(
-				a.MemoryInjector.Pool(), a.Logger,
-				a.MemoryInjector.EmbedSvc(), a.MemoryInjector.EmbedResolver(), a.MemoryInjector.VectorDB(),
-			)
+		if a.RecallMemoryFn != nil {
+			fn := a.RecallMemoryFn
 			initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
-				return recallHandler.Handle(ctx, cfg.TenantID, cfg.UserID, agentID, input)
+				return fn(ctx, cfg.TenantID, cfg.UserID, agentID, input)
 			}
 		}
 		execCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
@@ -608,7 +524,7 @@ func WithRAGSearchFn(fn func(ctx context.Context, workspaces []string, query str
 }
 
 // WithExtraTools appends extra tool definitions (from MCP servers and allowed skills) to AvailableTools.
-func WithExtraTools(tools []capgateway.ToolDefinition) ExecutionOption {
+func WithExtraTools(tools []port.ToolDefinition) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.ExtraTools = tools
 	}
@@ -647,32 +563,32 @@ func (cfg *ExecutionConfig) ApplyOptions(opts []ExecutionOption) {
 // BuildInitMessages constructs the initial LLM message slice from a system prompt and
 // chat history. History is truncated to the most recent window messages; role "agent"
 // is normalized to "assistant" for LLM protocol. window ≤ 0 defaults to 20.
-func BuildInitMessages(systemPrompt string, history []*ChatMessage, window int) []capgateway.LLMMessage {
+func BuildInitMessages(systemPrompt string, history []*ChatMessage, window int) []port.LLMMessage {
 	if window <= 0 {
 		window = constants.DefaultInitHistoryWindow
 	}
 	if len(history) > window {
 		history = history[len(history)-window:]
 	}
-	msgs := make([]capgateway.LLMMessage, 0, len(history)+1)
+	msgs := make([]port.LLMMessage, 0, len(history)+1)
 	if systemPrompt != "" {
-		msgs = append(msgs, capgateway.LLMMessage{Role: "system", Content: systemPrompt})
+		msgs = append(msgs, port.LLMMessage{Role: "system", Content: systemPrompt})
 	}
 	for _, m := range history {
 		role := m.Role
 		if role == "agent" {
 			role = "assistant"
 		}
-		msgs = append(msgs, capgateway.LLMMessage{Role: role, Content: m.Content})
+		msgs = append(msgs, port.LLMMessage{Role: role, Content: m.Content})
 	}
 	return msgs
 }
 
 // mergeTools combines built-in and extra tools, dropping duplicates (by name) with a warning.
 // Built-in tools take priority: if an extra tool shares a name, it is silently dropped.
-func mergeTools(builtins []capgateway.ToolDefinition, extras []capgateway.ToolDefinition, logger *zap.Logger) []capgateway.ToolDefinition {
+func mergeTools(builtins []port.ToolDefinition, extras []port.ToolDefinition, logger *zap.Logger) []port.ToolDefinition {
 	seen := make(map[string]struct{}, len(builtins)+len(extras))
-	out := make([]capgateway.ToolDefinition, 0, len(builtins)+len(extras))
+	out := make([]port.ToolDefinition, 0, len(builtins)+len(extras))
 	for _, t := range builtins {
 		seen[t.Name] = struct{}{}
 		out = append(out, t)

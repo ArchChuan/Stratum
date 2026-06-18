@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/byteBuilderX/stratum/api/middleware"
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -28,7 +29,7 @@ func (h *ChatHandler) CreateConversation(c *gin.Context) {
 	}
 	userID, ok := userIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user context required"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errUnauthorized))
 		return
 	}
 	agentID := c.Param("id")
@@ -44,8 +45,7 @@ func (h *ChatHandler) CreateConversation(c *gin.Context) {
 
 	conv, err := h.store.CreateConversation(c.Request.Context(), tenantID, agentID, userID, name)
 	if err != nil {
-		h.logger.Error("create conversation", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})
+		_ = c.Error(err)
 		return
 	}
 	c.JSON(http.StatusCreated, conversationResponse(conv))
@@ -60,15 +60,14 @@ func (h *ChatHandler) ListConversations(c *gin.Context) {
 	}
 	userID, ok := userIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user context required"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errUnauthorized))
 		return
 	}
 	agentID := c.Param("id")
 
 	convs, err := h.store.ListConversations(c.Request.Context(), tenantID, agentID, userID)
 	if err != nil {
-		h.logger.Error("list conversations", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取会话列表失败"})
+		_ = c.Error(err)
 		return
 	}
 	out := make([]gin.H, 0, len(convs))
@@ -87,7 +86,7 @@ func (h *ChatHandler) RenameConversation(c *gin.Context) {
 	}
 	userID, ok := userIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user context required"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errUnauthorized))
 		return
 	}
 	convID := c.Param("convID")
@@ -96,18 +95,12 @@ func (h *ChatHandler) RenameConversation(c *gin.Context) {
 		Name string `json:"name" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "name 不能为空"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("name 不能为空")))
 		return
 	}
 
-	err := h.store.RenameConversation(c.Request.Context(), tenantID, convID, userID, req.Name)
-	if err != nil {
-		if errors.Is(err, agent.ErrNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "会话不存在或无权操作"})
-			return
-		}
-		h.logger.Error("rename conversation", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "重命名失败"})
+	if err := h.store.RenameConversation(c.Request.Context(), tenantID, convID, userID, req.Name); err != nil {
+		_ = c.Error(err)
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -122,19 +115,13 @@ func (h *ChatHandler) DeleteConversation(c *gin.Context) {
 	}
 	userID, ok := userIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user context required"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errUnauthorized))
 		return
 	}
 	convID := c.Param("convID")
 
-	err := h.store.DeleteConversation(c.Request.Context(), tenantID, convID, userID)
-	if err != nil {
-		if errors.Is(err, agent.ErrNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "会话不存在或无权操作"})
-			return
-		}
-		h.logger.Error("delete conversation", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除会话失败"})
+	if err := h.store.DeleteConversation(c.Request.Context(), tenantID, convID, userID); err != nil {
+		_ = c.Error(err)
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -149,15 +136,14 @@ func (h *ChatHandler) ListMessages(c *gin.Context) {
 	}
 	userID, ok := userIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user context required"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errUnauthorized))
 		return
 	}
 	convID := c.Param("convID")
 
 	msgs, err := h.store.ListMessages(c.Request.Context(), tenantID, convID, userID)
 	if err != nil {
-		h.logger.Error("list messages", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取消息失败"})
+		_ = c.Error(err)
 		return
 	}
 	out := make([]gin.H, 0, len(msgs))
@@ -176,7 +162,7 @@ func (h *ChatHandler) AddMessage(c *gin.Context) {
 	}
 	userID, ok := userIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "user context required"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errUnauthorized))
 		return
 	}
 	convID := c.Param("convID")
@@ -186,11 +172,11 @@ func (h *ChatHandler) AddMessage(c *gin.Context) {
 		Content string `json:"content" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "role 和 content 必填"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("role 和 content 必填")))
 		return
 	}
 	if req.Role != "user" && req.Role != "agent" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "role 必须为 user 或 agent"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("role 必须为 user 或 agent")))
 		return
 	}
 
@@ -198,9 +184,9 @@ func (h *ChatHandler) AddMessage(c *gin.Context) {
 	convs, err := h.store.ListMessages(c.Request.Context(), tenantID, convID, userID)
 	_ = convs
 	if err != nil {
-		// ListMessages already enforces ownership via JOIN; any DB error means forbidden-or-missing.
+		// ListMessages enforces ownership via JOIN; any DB error means forbidden-or-missing.
 		h.logger.Error("add message: ownership check", zap.Error(err))
-		c.JSON(http.StatusForbidden, gin.H{"error": "会话不存在或无权操作"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusForbidden, errors.New("会话不存在或无权操作")))
 		return
 	}
 
@@ -210,8 +196,7 @@ func (h *ChatHandler) AddMessage(c *gin.Context) {
 		Content:        req.Content,
 	}
 	if err := h.store.AddMessage(c.Request.Context(), tenantID, msg); err != nil {
-		h.logger.Error("add message", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存消息失败"})
+		_ = c.Error(err)
 		return
 	}
 	c.JSON(http.StatusCreated, messageResponse(msg))

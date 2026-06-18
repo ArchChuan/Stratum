@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
@@ -24,9 +24,9 @@ type ReActState struct {
 	ConversationID string
 	LLMAPIKeys     map[string]string
 	Model          string
-	AvailableTools []capgateway.ToolDefinition
-	Messages       []capgateway.LLMMessage
-	AllToolCalls   []capgateway.ToolCall
+	AvailableTools []port.ToolDefinition
+	Messages       []port.LLMMessage
+	AllToolCalls   []port.ToolCall
 	Output         string
 	Steps          int
 	TotalTokens    int
@@ -36,7 +36,7 @@ type ReActState struct {
 }
 
 // BuildReActGraph constructs and compiles the ReAct agent graph.
-func BuildReActGraph(capGW capgateway.CapabilityGateway, logger *zap.Logger) (*CompiledGraph[ReActState], error) {
+func BuildReActGraph(capGW port.CapabilityGateway, logger *zap.Logger) (*CompiledGraph[ReActState], error) {
 	g := New[ReActState]()
 	g.AddNode(nodeLLM, makeLLMNode(capGW, logger))
 	g.AddNode(nodeTool, makeToolNode(capGW, logger))
@@ -55,18 +55,18 @@ func BuildReActGraph(capGW capgateway.CapabilityGateway, logger *zap.Logger) (*C
 	return g.Compile()
 }
 
-func makeLLMNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFunc[ReActState] {
+func makeLLMNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReActState] {
 	return func(ctx context.Context, s ReActState) (ReActState, error) {
 		start := time.Now()
-		resp, err := RetryFn(ctx, DefaultRetry, func() (capgateway.CapabilityResponse, error) {
-			return capGW.Route(ctx, capgateway.CapabilityRequest{
+		resp, err := RetryFn(ctx, DefaultRetry, func() (port.CapabilityResponse, error) {
+			return capGW.Route(ctx, port.CapabilityRequest{
 				TraceID:     s.TraceID,
 				TenantID:    s.TenantID,
-				Type:        capgateway.CapLLM,
+				Type:        port.CapLLM,
 				Timeout:     reactLLMTimeout,
 				LLMAPIKeys:  s.LLMAPIKeys,
 				TokenStream: s.OnToken,
-				LLM: &capgateway.LLMCapRequest{
+				LLM: &port.LLMCapRequest{
 					Model:    s.Model,
 					Messages: s.Messages,
 					Tools:    s.AvailableTools,
@@ -127,12 +127,12 @@ func makeLLMNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFun
 		}
 		if len(resp.ToolCalls) == 0 {
 			s.Output = resp.Content
-			s.Messages = append(s.Messages, capgateway.LLMMessage{
+			s.Messages = append(s.Messages, port.LLMMessage{
 				Role:    "assistant",
 				Content: resp.Content,
 			})
 		} else {
-			s.Messages = append(s.Messages, capgateway.LLMMessage{
+			s.Messages = append(s.Messages, port.LLMMessage{
 				Role:      "assistant",
 				ToolCalls: resp.ToolCalls,
 			})
@@ -141,7 +141,7 @@ func makeLLMNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFun
 	}
 }
 
-func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFunc[ReActState] {
+func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReActState] {
 	return func(ctx context.Context, s ReActState) (ReActState, error) {
 		if len(s.Messages) == 0 {
 			return s, nil
@@ -204,12 +204,12 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 					zap.Int64("latency_ms", toolLatencyMs),
 				)
 			default:
-				toolResp, err := capGW.Route(ctx, capgateway.CapabilityRequest{
+				toolResp, err := capGW.Route(ctx, port.CapabilityRequest{
 					TraceID:  s.TraceID,
 					TenantID: s.TenantID,
-					Type:     capgateway.CapSkill,
+					Type:     port.CapSkill,
 					Timeout:  30 * time.Second,
-					Skill:    &capgateway.SkillCapRequest{SkillID: tc.Name, Input: tc.Arguments},
+					Skill:    &port.SkillCapRequest{SkillID: tc.Name, Input: tc.Arguments},
 				})
 				toolLatencyMs := time.Since(toolStart).Milliseconds()
 				switch {
@@ -255,7 +255,7 @@ func makeToolNode(capGW capgateway.CapabilityGateway, logger *zap.Logger) NodeFu
 					zap.String("content_preview", preview),
 				)
 			}
-			s.Messages = append(s.Messages, capgateway.LLMMessage{
+			s.Messages = append(s.Messages, port.LLMMessage{
 				Role:       "tool",
 				Content:    content,
 				ToolCallID: tc.ID,

@@ -10,8 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/byteBuilderX/stratum/api/middleware"
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
-	"github.com/byteBuilderX/stratum/internal/iam/application"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -53,11 +54,13 @@ func (m *mockChatStore) CleanupExpired(ctx context.Context, tenantID string) err
 func setupChatRouter(h *ChatHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
 	mid := func(c *gin.Context) {
 		tc := &tenantdb.TenantContext{TenantID: "t1", UserID: "u1", Role: tenantdb.RoleTenantAdmin}
 		ctx := tenantdb.WithTenant(c.Request.Context(), tc)
+		ctx = reqctx.WithTenantID(ctx, "t1")
 		c.Request = c.Request.WithContext(ctx)
-		c.Set(application.ContextKeySub, "u1")
+		c.Set(middleware.ContextKeySub, "u1")
 		c.Next()
 	}
 	r.Use(mid)

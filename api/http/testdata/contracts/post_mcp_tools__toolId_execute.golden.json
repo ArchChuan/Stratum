@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "POST",
+    "path": "/mcp/tools/:toolId/execute",
+    "body": {
+      "error": "missing bearer token"
+    },
+    "want_status": 401
+  }
+]

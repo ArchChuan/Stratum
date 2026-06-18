@@ -7,293 +7,176 @@ import (
 	"net/http"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
-	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
+	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
 // MCPHandler 处理 MCP 相关的 HTTP 请求
 type MCPHandler struct {
-	skillRegistry *mcp.MCPSkillRegistry
-	manager       *mcp.ClientManager
-	logger        *zap.Logger
+	svc    *mcpapp.MCPService
+	logger *zap.Logger
 }
 
 // NewMCPHandler 创建新的 MCP 处理器
-func NewMCPHandler(skillRegistry *mcp.MCPSkillRegistry, manager *mcp.ClientManager, logger *zap.Logger) *MCPHandler {
-	return &MCPHandler{
-		skillRegistry: skillRegistry,
-		manager:       manager,
-		logger:        logger.Named("handler.mcp"),
-	}
+func NewMCPHandler(svc *mcpapp.MCPService, logger *zap.Logger) *MCPHandler {
+	return &MCPHandler{svc: svc, logger: logger.Named("handler.mcp")}
 }
 
-// ListServers 列出所有 MCP 服务器
-// GET /api/v1/mcp/servers
+// ListServers GET /mcp/servers
 func (h *MCPHandler) ListServers(c *gin.Context) {
-	servers := h.manager.GetAllServerInfo()
-	c.JSON(http.StatusOK, gin.H{
-		"servers": servers,
-		"count":   len(servers),
-	})
+	servers := h.svc.ListServers()
+	c.JSON(http.StatusOK, gin.H{"servers": servers, "count": len(servers)})
 }
 
-// GetServer 获取 MCP 服务器详情
-// GET /api/v1/mcp/servers/:id
+// GetServer GET /mcp/servers/:id
 func (h *MCPHandler) GetServer(c *gin.Context) {
-	serverID := c.Param("id")
-	server := h.manager.GetServerInfo(serverID)
-
-	if server == nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": "server not found",
-		})
+	server, err := h.svc.GetServer(c.Param("id"))
+	if err != nil {
+		c.Error(err) //nolint:errcheck
 		return
 	}
-
 	c.JSON(http.StatusOK, server)
 }
 
-// ListTools 列出 MCP 服务器的工具
-// GET /api/v1/mcp/servers/:id/tools
+// ListTools GET /mcp/servers/:id/tools
 func (h *MCPHandler) ListTools(c *gin.Context) {
 	serverID := c.Param("id")
-
-	tools, err := h.manager.ListTools(c.Request.Context(), serverID)
+	tools, err := h.svc.ListTools(c.Request.Context(), serverID)
 	if err != nil {
 		h.logger.Error("failed to list tools",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", serverID),
 			zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
+		_ = c.Error(err)
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"tools": tools,
-		"count": len(tools),
-	})
+	c.JSON(http.StatusOK, gin.H{"tools": tools, "count": len(tools)})
 }
 
-// ListResources 列出 MCP 服务器的资源
-// GET /api/v1/mcp/servers/:id/resources
+// ListResources GET /mcp/servers/:id/resources
 func (h *MCPHandler) ListResources(c *gin.Context) {
 	serverID := c.Param("id")
-
-	resources, err := h.manager.ListResources(c.Request.Context(), serverID)
+	resources, err := h.svc.ListResources(c.Request.Context(), serverID)
 	if err != nil {
 		h.logger.Error("failed to list resources",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", serverID),
 			zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
+		_ = c.Error(err)
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"resources": resources,
-		"count":     len(resources),
-	})
+	c.JSON(http.StatusOK, gin.H{"resources": resources, "count": len(resources)})
 }
 
-// ExecuteTool 执行 MCP 工具
-// POST /api/v1/mcp/tools/:toolId/execute
+// ExecuteTool POST /mcp/tools/:toolId/execute
 func (h *MCPHandler) ExecuteTool(c *gin.Context) {
 	toolID := c.Param("toolId")
-
 	var input any
 	if err := c.BindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "invalid input",
-		})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("invalid input")))
 		return
 	}
-
-	result, err := h.skillRegistry.ExecuteSkill(toolID, input)
+	result, err := h.svc.ExecuteTool(toolID, input)
 	if err != nil {
 		h.logger.Error("failed to execute tool",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("tool_id", toolID),
 			zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
+		_ = c.Error(err)
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"result": result,
-	})
+	c.JSON(http.StatusOK, gin.H{"result": result})
 }
 
-// ListSkills 列出所有 MCP Skills
-// GET /api/v1/mcp/skills
+// ListSkills GET /mcp/skills
 func (h *MCPHandler) ListSkills(c *gin.Context) {
-	skills := h.skillRegistry.GetAllSkills()
-
-	var skillInfos []gin.H
-	for _, skill := range skills {
-		skillInfos = append(skillInfos, gin.H{
-			"id":          skill.GetID(),
-			"name":        skill.GetName(),
-			"description": skill.GetDescription(),
-			"type":        skill.GetType(),
-		})
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"skills": skillInfos,
-		"count":  len(skillInfos),
-	})
+	skills := h.svc.ListSkills()
+	c.JSON(http.StatusOK, gin.H{"skills": skills, "count": len(skills)})
 }
 
-// GetSkill 获取 MCP Skill 详情
-// GET /api/v1/mcp/skills/:id
+// GetSkill GET /mcp/skills/:id
 func (h *MCPHandler) GetSkill(c *gin.Context) {
-	skillID := c.Param("id")
-	skill := h.skillRegistry.GetSkill(skillID)
-
-	if skill == nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": "skill not found",
-		})
+	skill, err := h.svc.GetSkill(c.Param("id"))
+	if err != nil {
+		c.Error(err) //nolint:errcheck
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"id":          skill.GetID(),
-		"name":        skill.GetName(),
-		"description": skill.GetDescription(),
-		"type":        skill.GetType(),
-	})
+	c.JSON(http.StatusOK, skill)
 }
 
-// RefreshSkills 刷新所有 MCP Skills
-// POST /api/v1/mcp/skills/refresh
+// RefreshSkills POST /mcp/skills/refresh
 func (h *MCPHandler) RefreshSkills(c *gin.Context) {
-	err := h.skillRegistry.RefreshSkills(c.Request.Context())
-	if err != nil {
+	if err := h.svc.RefreshSkills(c.Request.Context()); err != nil {
 		h.logger.Error("failed to refresh skills",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
+		_ = c.Error(err)
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message": "skills refreshed successfully",
-	})
+	c.JSON(http.StatusOK, gin.H{"message": "skills refreshed successfully"})
 }
 
-// GetServerStatus 获取服务器状态
-// GET /api/v1/mcp/status
+// GetServerStatus GET /mcp/status
 func (h *MCPHandler) GetServerStatus(c *gin.Context) {
-	servers := h.manager.GetAllServerInfo()
-
-	var connected, disconnected, error int
-	for _, server := range servers {
-		switch server.Status {
-		case "connected":
-			connected++
-		case "disconnected":
-			disconnected++
-		case "error":
-			error++
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"total":        len(servers),
-		"connected":    connected,
-		"disconnected": disconnected,
-		"error":        error,
-	})
+	c.JSON(http.StatusOK, h.svc.ServerStatus())
 }
 
-// RegisterRoutes 注册 MCP 路由。writeMW 会附加到所有写操作路由（POST/DELETE）。
-func (h *MCPHandler) RegisterRoutes(router *gin.Engine, writeMW ...gin.HandlerFunc) {
-	v1 := router.Group("/api/v1/mcp")
-
-	// 服务器相关
+// RegisterRoutes 注册 MCP 路由。
+// mw       — JWT + InjectTenantContext，挂在所有 /mcp 路由上（读写均要租户上下文）。
+// writeMW  — 仅写操作再追加（如 RequireActiveTenant）。
+func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, writeMW ...gin.HandlerFunc) {
+	v1 := router.Group("/mcp", mw...)
 	v1.GET("/servers", h.ListServers)
 	v1.GET("/servers/:id", h.GetServer)
 	v1.GET("/servers/:id/tools", h.ListTools)
 	v1.GET("/servers/:id/resources", h.ListResources)
 	v1.POST("/servers", append(writeMW, h.ConnectServer)...)
 	v1.DELETE("/servers/:id", append(writeMW, h.DisconnectServer)...)
-
-	// 工具相关
 	v1.POST("/tools/:toolId/execute", append(writeMW, h.ExecuteTool)...)
-
-	// Skills 相关
 	v1.GET("/skills", h.ListSkills)
 	v1.GET("/skills/:id", h.GetSkill)
 	v1.POST("/skills/refresh", append(writeMW, h.RefreshSkills)...)
-
-	// 状态相关
 	v1.GET("/status", h.GetServerStatus)
 }
 
-// ConnectServer connects a new MCP server
-// POST /api/v1/mcp/servers
+// ConnectServer POST /mcp/servers
 func (h *MCPHandler) ConnectServer(c *gin.Context) {
 	if _, ok := tenantIDFromCtx(c); !ok {
 		respondMissingTenant(c)
 		return
 	}
-
-	var cfg mcp.MCPServerConfig
+	var cfg mcpdomain.ServerConfig
 	if err := c.ShouldBindJSON(&cfg); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-
-	if err := h.manager.Connect(c.Request.Context(), &cfg); err != nil {
-		if errors.Is(err, mcp.ErrNameConflict) {
-			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-			return
-		}
+	if err := h.svc.ConnectServer(c.Request.Context(), &cfg); err != nil {
 		h.logger.Error("failed to connect MCP server",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", cfg.ID),
 			zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		_ = c.Error(err)
 		return
 	}
-
-	if err := h.skillRegistry.RegisterServer(c.Request.Context(), cfg.ID); err != nil {
-		h.logger.Warn("failed to register MCP skills",
-			zap.String("trace_id", middleware.GetTraceID(c)),
-			zap.String("server_id", cfg.ID),
-			zap.Error(err))
-	}
-
 	c.JSON(http.StatusCreated, gin.H{"message": "connected", "server_id": cfg.ID})
 }
 
-// DisconnectServer disconnects an MCP server
-// DELETE /api/v1/mcp/servers/:id
+// DisconnectServer DELETE /mcp/servers/:id
 func (h *MCPHandler) DisconnectServer(c *gin.Context) {
 	if _, ok := tenantIDFromCtx(c); !ok {
 		respondMissingTenant(c)
 		return
 	}
-
 	serverID := c.Param("id")
-	if err := h.manager.Disconnect(c.Request.Context(), serverID); err != nil {
+	if err := h.svc.DisconnectServer(c.Request.Context(), serverID); err != nil {
 		h.logger.Error("failed to disconnect MCP server",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", serverID),
 			zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		_ = c.Error(err)
 		return
 	}
-
 	c.JSON(http.StatusOK, gin.H{"message": "disconnected"})
 }

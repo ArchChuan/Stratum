@@ -9,7 +9,6 @@ import (
 	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/api/wiring"
-	"github.com/byteBuilderX/stratum/internal/iam/application"
 )
 
 // NewRouter assembles the HTTP gin engine from an already-built Container.
@@ -46,19 +45,18 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		return
 	}
 	jwtSvc := c.Platform.JWTService
-	db := c.DB()
 
 	authHandler := handler.NewAuthHandler(handler.AuthHandlerDeps{
-		GitHubClient:  c.Platform.GitHubClient,
-		JWTService:    jwtSvc,
-		TokenStore:    c.Platform.TokenStore,
-		OnboardSvc:    c.Platform.OnboardSvc,
-		Logger:        c.Logger,
-		Pool:          db,
-		CallbackURL:   cfg.GitHubCallbackURL,
-		FrontendURL:   cfg.FrontendURL,
-		GlobalAdmin:   cfg.GlobalAdminGitHubLogin,
-		SecureCookies: cfg.SecureCookies,
+		GitHubClient:      c.Platform.GitHubClient,
+		SchemaProvisioner: c.Platform.SchemaProvisioner,
+		JWTService:        jwtSvc,
+		TokenStore:        c.Platform.TokenStore,
+		OnboardSvc:        c.Platform.OnboardSvc,
+		Logger:            c.Logger,
+		CallbackURL:       cfg.GitHubCallbackURL,
+		FrontendURL:       cfg.FrontendURL,
+		GlobalAdmin:       cfg.GlobalAdminGitHubLogin,
+		SecureCookies:     cfg.SecureCookies,
 	})
 	authRoutes := r.Group("/auth")
 	{
@@ -72,12 +70,12 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		authRoutes.POST("/create-tenant", authHandler.CreateUserTenant)
 	}
 
-	if db == nil {
+	if c.DB() == nil {
 		return
 	}
-	jwtMW := application.JWTMiddleware(jwtSvc)
-	adminHandler := handler.NewAdminHandler(db, c.Logger)
-	tenantHandler := handler.NewTenantHandler(db, c.Logger, cfg.FrontendURL, c.Platform.AESKey, c.Platform.GatewayCache)
+	jwtMW := middleware.JWTMiddleware(jwtSvc)
+	adminHandler := handler.NewAdminHandler(c.IAM.AdminService, c.Logger)
+	tenantHandler := handler.NewTenantHandler(c.IAM.TenantService, c.Logger)
 
 	adminGroup := r.Group("/admin", jwtMW, middleware.RequireGlobalAdmin())
 	{
@@ -108,17 +106,17 @@ func registerHealth(r *gin.Engine, c *wiring.Container) {
 	r.GET("/health", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{"status": "ok", "service": "Stratum"})
 	})
-	modelHandler := handler.NewModelHandler(c.LLMGateway.Gateway)
+	modelHandler := handler.NewModelHandler(c.LLMGateway.ModelService)
 	r.GET("/models", modelHandler.ListModels)
 }
 
 // registerSkills wires /skills/* under JWT + tenant context.
 func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	skillHandler := handler.NewSkillHandler(c.DB(), c.Logger, c.LLMGateway.Gateway, c.Skill.CodeExecutor)
+	skillHandler := handler.NewSkillHandler(c.Skill.Service, c.Logger)
 
 	var mw []gin.HandlerFunc
 	if c.Platform.JWTService != nil {
-		mw = append(mw, application.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
+		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
 	}
 	skills := r.Group("/skills", mw...)
 	{
@@ -134,25 +132,12 @@ func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 // registerAgents wires /agents/* and /conversations/* under JWT + tenant
 // context. Agent + chat handlers share middleware.
 func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	agentHandler := handler.NewAgentHandler(
-		c.Agent.Registry,
-		c.Logger,
-		c.LLMGateway.Gateway,
-		c.Platform.Metrics,
-		c.Agent.ExecStore,
-		c.DB(),
-		c.Platform.AESKey,
-		c.Platform.GatewayCache,
-		c.Knowledge.RAGService,
-		c.MCP.Registry,
-		c.Skill.SkillAdapter,
-		c.Agent.ChatStore,
-	)
+	agentHandler := handler.NewAgentHandler(c.Agent.Service, c.Logger)
 	chatHandler := handler.NewChatHandler(c.Agent.ChatStore, c.Logger)
 
 	var mw []gin.HandlerFunc
 	if c.Platform.JWTService != nil {
-		mw = append(mw, application.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
+		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
 	}
 	agents := r.Group("/agents", mw...)
 	{
@@ -179,11 +164,11 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 // registerKnowledge wires /knowledge/* under JWT + tenant context with
 // member/admin role split for read vs write.
 func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	ragHandler := handler.NewRAGHandler(c.Knowledge.Ingest, c.Knowledge.RAGService, c.DB(), c.Logger)
+	ragHandler := handler.NewRAGHandler(c.Knowledge.RAGService, c.Knowledge.WorkspaceService, c.Logger)
 
 	var mw []gin.HandlerFunc
 	if c.Platform.JWTService != nil {
-		mw = append(mw, application.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext(), middleware.RequireTenantRole("member"))
+		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext(), middleware.RequireTenantRole("member"))
 	}
 	knowledgeGroup := r.Group("/knowledge", mw...)
 	{
@@ -208,7 +193,7 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 
 	var mw []gin.HandlerFunc
 	if c.Platform.JWTService != nil {
-		mw = append(mw, application.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
+		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
 	}
 	mem := r.Group("/memory", mw...)
 	{
@@ -228,12 +213,11 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 // registerMCP wires /mcp/* via the handler's RegisterRoutes. Write
 // routes require JWT + tenant context (same pattern as agents/skills).
 func registerMCP(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	mcpHandler := handler.NewMCPHandler(c.MCP.Registry, c.MCP.Manager, c.Logger)
+	mcpHandler := handler.NewMCPHandler(c.MCP.Service, c.Logger)
 
-	var writeMW []gin.HandlerFunc
+	var mw []gin.HandlerFunc
 	if c.Platform.JWTService != nil {
-		writeMW = append(writeMW, application.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
+		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
 	}
-	writeMW = append(writeMW, requireActive)
-	mcpHandler.RegisterRoutes(r, writeMW...)
+	mcpHandler.RegisterRoutes(r, mw, requireActive)
 }

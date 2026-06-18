@@ -1,19 +1,12 @@
 package application
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"go.uber.org/zap"
 )
-
-func TestNewGraphRAG(t *testing.T) {
-	logger := zap.NewNop()
-	rag := NewGraphRAG("bolt://localhost:7687", "neo4j", "password", logger)
-
-	if rag == nil {
-		t.Error("expected GraphRAG to be non-nil")
-	}
-}
 
 func TestNewKnowledgeIngest(t *testing.T) {
 	logger := zap.NewNop()
@@ -33,63 +26,61 @@ func TestNewRAGService(t *testing.T) {
 	}
 }
 
-func TestValidateCypherIdentifier(t *testing.T) {
+func TestGetWorkspaceCollections(t *testing.T) {
+	logger := zap.NewNop()
+
 	tests := []struct {
-		input   string
-		wantErr bool
+		name       string
+		names      []string
+		namesErr   error
+		wantNames  []string
+		wantErr    bool
+		wantNonNil bool
 	}{
-		// Valid identifiers
-		{"Document", false},
-		{"HAS_CHUNK", false},
-		{"_private", false},
-		{"Type123", false},
-		{"a", false},
-		// Invalid identifiers
-		{"", true},
-		{"has chunk", true},
-		{"has-chunk", true},
-		{"123start", true},
-		{"type;DROP", true},
-		{"label`injection", true},
-		{"中文", true},
+		{
+			name:      "success: returns workspace names",
+			names:     []string{"ws1", "ws2"},
+			wantNames: []string{"ws1", "ws2"},
+		},
+		{
+			name:     "error: propagates db error",
+			namesErr: errors.New("db error"),
+			wantErr:  true,
+		},
+		{
+			name:       "empty: returns empty slice not nil",
+			names:      []string{},
+			wantNames:  []string{},
+			wantNonNil: true,
+		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			err := validateCypherIdentifier(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("validateCypherIdentifier(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockGraphStore()
+			mock.SetWorkspaceNamesResult(tc.names, tc.namesErr)
+			svc := NewRAGService(nil, nil, mock, logger)
+
+			got, err := svc.GetWorkspaceCollections(context.Background())
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
 			}
-		})
-	}
-}
-
-func TestEscapeLucene(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"plain", "hello", "hello"},
-		{"plus", "+", `\+`},
-		{"backslash", `\`, `\\`},
-		{"backslash_plus", `\+`, `\\\+`},
-		{"inline_plus", "a+b", `a\+b`},
-		{"inline_backslash_plus", `a\+b`, `a\\\+b`},
-		{"colon", "test:value", `test\:value`},
-		{"slash", "path/to/file", `path\/to\/file`},
-		{"double_plus", "C++ error", `C\+\+ error`},
-		{"brackets", "[ERROR]", `\[ERROR\]`},
-		{"quotes", `query"with"quotes`, `query\"with\"quotes`},
-		{"tilde", "range~0.5", `range\~0.5`},
-		{"question", "field?wildcard", `field\?wildcard`},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := escapeLucene(tt.input)
-			if got != tt.expected {
-				t.Errorf("escapeLucene(%q) = %q, want %q", tt.input, got, tt.expected)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantNonNil && got == nil {
+				t.Fatal("expected non-nil slice, got nil")
+			}
+			if len(got) != len(tc.wantNames) {
+				t.Fatalf("len: want %d, got %d", len(tc.wantNames), len(got))
+			}
+			for i, name := range tc.wantNames {
+				if got[i] != name {
+					t.Errorf("index %d: want %q, got %q", i, name, got[i])
+				}
 			}
 		})
 	}

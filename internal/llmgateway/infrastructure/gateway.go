@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
@@ -21,56 +22,19 @@ const (
 	ProviderZhipu ModelProvider = "zhipu"
 )
 
-type Tool struct {
-	Type     string       `json:"type"` // "function"
-	Function ToolFunction `json:"function"`
-}
-
-type ToolFunction struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Parameters  map[string]any `json:"parameters"`
-}
-
-type ToolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"` // "function"
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"` // JSON string
-	} `json:"function"`
-}
-
-type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-}
-
-type CompletionRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Temperature float32   `json:"temperature,omitempty"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	TopP        float32   `json:"top_p,omitempty"`
-	Tools       []Tool    `json:"tools,omitempty"`
-	ToolChoice  string    `json:"tool_choice,omitempty"`
-	Stream      bool      `json:"stream,omitempty"`
-}
-
-type TokenUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
-type CompletionResponse struct {
-	Content   string     `json:"content"`
-	Model     string     `json:"model"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-	Usage     TokenUsage `json:"usage"`
-}
+// LLM IO 类型在 domain 层定义；infra 通过 alias 暴露给内部实现，
+// 同时允许跨 ctx 消费者直接 import domain，避免越层依赖。
+type (
+	Tool               = domain.Tool
+	ToolFunction       = domain.ToolFunction
+	ToolCall           = domain.ToolCall
+	Message            = domain.Message
+	CompletionRequest  = domain.CompletionRequest
+	TokenUsage         = domain.TokenUsage
+	CompletionResponse = domain.CompletionResponse
+	EmbeddingRequest   = domain.EmbeddingRequest
+	EmbeddingResponse  = domain.EmbeddingResponse
+)
 
 // openAICompletionResp is the shared decode type for OpenAI-compatible completion responses.
 type openAICompletionResp struct {
@@ -115,15 +79,6 @@ type LLMClient interface {
 // StreamingLLMClient is an optional extension of LLMClient for providers that support token streaming.
 type StreamingLLMClient interface {
 	CompleteStream(ctx context.Context, req *CompletionRequest, onToken func(string)) (*CompletionResponse, error)
-}
-
-type EmbeddingRequest struct {
-	Input []string `json:"input"`
-	Model string   `json:"model"`
-}
-
-type EmbeddingResponse struct {
-	Embeddings [][]float32 `json:"embeddings"`
 }
 
 type EmbeddingClient interface {
@@ -394,15 +349,18 @@ func (g *Gateway) parseProvider(model string) ModelProvider {
 	}
 }
 
-type contextKeyGateway struct{}
-
 // WithGateway returns a new context carrying gw as the LLM gateway override.
+// 内部委派给 domain.WithCompleter，使消费方可仅依赖 domain 接口。
 func WithGateway(ctx context.Context, gw *Gateway) context.Context {
-	return context.WithValue(ctx, contextKeyGateway{}, gw)
+	return domain.WithCompleter(ctx, gw)
 }
 
 // GatewayFromContext returns the gateway stored in ctx (from WithGateway), or (nil, false).
 func GatewayFromContext(ctx context.Context) (*Gateway, bool) {
-	gw, ok := ctx.Value(contextKeyGateway{}).(*Gateway)
+	c, ok := domain.CompleterFromContext(ctx)
+	if !ok {
+		return nil, false
+	}
+	gw, ok := c.(*Gateway)
 	return gw, ok
 }

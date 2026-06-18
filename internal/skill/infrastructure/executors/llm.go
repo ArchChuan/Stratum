@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"go.uber.org/zap"
@@ -17,11 +17,11 @@ type LLMSkill struct {
 	Model        string
 	Temperature  float32
 	MaxTokens    int
-	gateway      *llmgateway.Gateway
+	completer    llmgateway.LLMCompleter
 	logger       *zap.Logger
 }
 
-func NewLLMSkill(id, name, description, systemPrompt, model string, temperature float32, maxTokens int, gateway *llmgateway.Gateway, logger *zap.Logger) *LLMSkill {
+func NewLLMSkill(id, name, description, systemPrompt, model string, temperature float32, maxTokens int, completer llmgateway.LLMCompleter, logger *zap.Logger) *LLMSkill {
 	return &LLMSkill{
 		BaseSkill: &domain.BaseSkill{
 			ID:          id,
@@ -33,7 +33,7 @@ func NewLLMSkill(id, name, description, systemPrompt, model string, temperature 
 		Model:        model,
 		Temperature:  temperature,
 		MaxTokens:    maxTokens,
-		gateway:      gateway,
+		completer:    completer,
 		logger:       logger,
 	}
 }
@@ -48,14 +48,13 @@ func (ls *LLMSkill) GetConfig() map[string]any {
 }
 
 func (ls *LLMSkill) Execute(ctx context.Context, input interface{}) (interface{}, error) {
-	gw := ls.gateway
-	if override, ok := llmgateway.GatewayFromContext(ctx); ok {
-		gw = override
+	c := ls.completer
+	if override, ok := llmgateway.CompleterFromContext(ctx); ok {
+		c = override
 	}
 
 	inputMap, _ := input.(map[string]interface{})
 
-	// model: stored config is default, input can override
 	model := ls.Model
 	if m, ok := inputMap["model"].(string); ok && m != "" {
 		model = m
@@ -88,7 +87,7 @@ func (ls *LLMSkill) Execute(ctx context.Context, input interface{}) (interface{}
 		req.MaxTokens = m
 	}
 
-	resp, err := gw.Complete(ctx, req)
+	resp, err := c.Complete(ctx, req)
 	if err != nil {
 		sc, _ := observability.SpanFromContext(ctx)
 		ls.logger.Error("LLM call failed",

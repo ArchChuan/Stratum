@@ -5,27 +5,81 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/byteBuilderX/stratum/pkg/vector"
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j/dbtype"
 	"go.uber.org/zap"
 )
 
+// NewRAGSearchFn returns a knowledge search function suitable for the agent's
+// WithRAGSearchFn hook. It fans out across workspaces concurrently and
+// concatenates results; the first error is returned only when no content was
+// produced.
+func NewRAGSearchFn(rs *RAGService, tenantID string) func(
+	ctx context.Context, workspaces []string, query string, topK int,
+) (string, error) {
+	return func(ctx context.Context, workspaces []string, query string, topK int) (string, error) {
+		type wsResult struct {
+			content string
+			err     error
+		}
+		results := make([]wsResult, len(workspaces))
+		var wg sync.WaitGroup
+		for i, ws := range workspaces {
+			wg.Add(1)
+			go func(i int, ws string) {
+				defer wg.Done()
+				out, err := rs.Query(ctx, RAGQueryRequest{
+					Workspace: ws,
+					Question:  query,
+					TenantID:  tenantID,
+					Mode:      "vector",
+					TopK:      topK,
+				})
+				if err != nil {
+					results[i] = wsResult{err: err}
+					return
+				}
+				var sb strings.Builder
+				for _, src := range out.Sources {
+					sb.WriteString(src.Content)
+					sb.WriteString("\n---\n")
+				}
+				results[i] = wsResult{content: sb.String()}
+			}(i, ws)
+		}
+		wg.Wait()
+		var combined strings.Builder
+		var firstErr error
+		for _, r := range results {
+			if r.err != nil && firstErr == nil {
+				firstErr = r.err
+				continue
+			}
+			combined.WriteString(r.content)
+		}
+		if combined.Len() == 0 && firstErr != nil {
+			return "", firstErr
+		}
+		return combined.String(), nil
+	}
+}
+
 type RAGService struct {
-	embeddingSvc *embedding.EmbeddingService
+	embeddingSvc knowledgeport.Embedder
 	vectorStore  *vector.VectorStore
-	graphRAG     *GraphRAG
+	graphRAG     knowledgeport.GraphStore
 	logger       *zap.Logger
 }
 
 func NewRAGService(
-	embeddingSvc *embedding.EmbeddingService,
+	embeddingSvc knowledgeport.Embedder,
 	vectorStore *vector.VectorStore,
-	graphRAG *GraphRAG,
+	graphRAG knowledgeport.GraphStore,
 	logger *zap.Logger,
 ) *RAGService {
 	return &RAGService{
@@ -203,18 +257,8 @@ func (rs *RAGService) queryGraph(ctx context.Context, question string) ([]GraphE
 	}
 
 	var graphEntities []GraphEntity
-	for _, m := range records {
-		raw, ok := m["node"]
-		if !ok {
-			continue
-		}
-		n, ok := raw.(dbtype.Node)
-		if !ok {
-			rs.logger.Warn("unexpected node type", zap.String("trace_id", sc.TraceID), zap.String("type", fmt.Sprintf("%T", raw)))
-			continue
-		}
-		id, _ := n.Props["id"].(string)
-		if id == "" {
+	for _, n := range records {
+		if n.ID == "" {
 			rs.logger.Warn("graph search result missing id, skipping", zap.String("trace_id", sc.TraceID))
 			continue
 		}
@@ -223,9 +267,9 @@ func (rs *RAGService) queryGraph(ctx context.Context, question string) ([]GraphE
 			label = n.Labels[0]
 		}
 		graphEntities = append(graphEntities, GraphEntity{
-			ID:         id,
+			ID:         n.ID,
 			Label:      label,
-			Properties: n.Props,
+			Properties: n.Properties,
 		})
 	}
 
@@ -292,28 +336,9 @@ func (rs *RAGService) BuildPrompt(question string, chunks []string, graphContext
 func (rs *RAGService) GetWorkspaceCollections(ctx context.Context) ([]string, error) {
 	rs.logger.Debug("getting workspace collections")
 
-	cypher := `
-		MATCH (d:Document)
-		WITH d.workspace as workspace
-		RETURN DISTINCT workspace
-		ORDER BY workspace
-	`
-
-	results, err := rs.graphRAG.Query(ctx, cypher, nil)
+	workspaces, err := rs.graphRAG.GetWorkspaceNames(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	var workspaces []string
-	if resultList, ok := results.([]interface{}); ok {
-		for _, r := range resultList {
-			if workspace, ok := r.(map[string]interface{}); ok {
-				if ws, ok := workspace["workspace"].(string); ok {
-					workspaces = append(workspaces, ws)
-				}
-			}
-		}
-	}
-
 	return workspaces, nil
 }

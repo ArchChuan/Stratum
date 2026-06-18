@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"go.uber.org/zap"
 )
 
@@ -26,7 +27,7 @@ func NewLLMAdapter(gw LLMCompleter, logger *zap.Logger) *LLMAdapter {
 	return &LLMAdapter{gw: gw, logger: logger}
 }
 
-func (a *LLMAdapter) Route(ctx context.Context, req CapabilityRequest) (CapabilityResponse, error) {
+func (a *LLMAdapter) Route(ctx context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
 	start := time.Now()
 	llmReq := buildLLMRequest(req.LLM)
 	var (
@@ -39,12 +40,12 @@ func (a *LLMAdapter) Route(ctx context.Context, req CapabilityRequest) (Capabili
 		raw, err = a.gw.Complete(ctx, llmReq)
 	}
 	if err != nil {
-		return CapabilityResponse{}, fmt.Errorf("llm_adapter: %w", err)
+		return port.CapabilityResponse{}, fmt.Errorf("llm_adapter: %w", err)
 	}
 	return buildCapabilityResponse(req.TraceID, raw, time.Since(start)), nil
 }
 
-func buildLLMRequest(r *LLMCapRequest) *llmgateway.CompletionRequest {
+func buildLLMRequest(r *port.LLMCapRequest) *llmgateway.CompletionRequest {
 	msgs := make([]llmgateway.Message, len(r.Messages))
 	for i, m := range r.Messages {
 		msgs[i] = llmgateway.Message{
@@ -84,8 +85,8 @@ func choiceFromTools(tools []llmgateway.Tool) string {
 	return "auto"
 }
 
-func buildCapabilityResponse(traceID string, raw *llmgateway.CompletionResponse, dur time.Duration) CapabilityResponse {
-	tcs := make([]ToolCall, 0, len(raw.ToolCalls))
+func buildCapabilityResponse(traceID string, raw *llmgateway.CompletionResponse, dur time.Duration) port.CapabilityResponse {
+	tcs := make([]port.ToolCall, 0, len(raw.ToolCalls))
 	for _, tc := range raw.ToolCalls {
 		var args map[string]any
 		if tc.Function.Arguments != "" {
@@ -93,20 +94,20 @@ func buildCapabilityResponse(traceID string, raw *llmgateway.CompletionResponse,
 				args = map[string]any{"_raw": tc.Function.Arguments}
 			}
 		}
-		tcs = append(tcs, ToolCall{
+		tcs = append(tcs, port.ToolCall{
 			ID:        tc.ID,
 			Name:      tc.Function.Name,
 			Arguments: args,
 		})
 	}
 
-	return CapabilityResponse{
+	return port.CapabilityResponse{
 		TraceID:   traceID,
-		Type:      CapLLM,
+		Type:      port.CapLLM,
 		Duration:  dur,
 		Content:   raw.Content,
 		ToolCalls: tcs,
-		Usage: TokenUsage{
+		Usage: port.TokenUsage{
 			Prompt:     raw.Usage.PromptTokens,
 			Completion: raw.Usage.CompletionTokens,
 			Total:      raw.Usage.TotalTokens,
@@ -114,7 +115,7 @@ func buildCapabilityResponse(traceID string, raw *llmgateway.CompletionResponse,
 	}
 }
 
-func convertToolCallsToGW(tcs []ToolCall) []llmgateway.ToolCall {
+func convertToolCallsToGW(tcs []port.ToolCall) []llmgateway.ToolCall {
 	if len(tcs) == 0 {
 		return nil
 	}

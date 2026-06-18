@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "GET",
+    "path": "/mcp/servers/:id/resources",
+    "body": {
+      "error": "missing bearer token"
+    },
+    "want_status": 401
+  }
+]

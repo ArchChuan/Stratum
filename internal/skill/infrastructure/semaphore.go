@@ -3,12 +3,14 @@ package infrastructure
 
 import (
 	"context"
-	"errors"
 	"sync"
+
+	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
 )
 
-// ErrConcurrencyLimit is returned when the global or per-tenant concurrency cap is reached.
-var ErrConcurrencyLimit = errors.New("concurrency limit reached")
+// ErrConcurrencyLimit is the canonical sentinel for cap-exceeded execution.
+// Kept here as an alias so existing consumers remain source-compatible.
+var ErrConcurrencyLimit = skilldomain.ErrConcurrencyLimit
 
 // Semaphore enforces a global execution cap and an optional per-tenant sub-limit.
 type Semaphore struct {

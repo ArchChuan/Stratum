@@ -8,7 +8,10 @@ import (
 	"go.uber.org/zap"
 
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
+	neo4jadapter "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/neo4j"
+	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/persistence"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
@@ -24,19 +27,20 @@ import (
 // as the typed alias used by knowledge/ingest.
 type Knowledge struct {
 	VectorStore       *vectorstore.VectorStore
-	GraphRAG          *knowledge.GraphRAG
+	GraphRAG          knowledgeport.GraphStore
 	Parser            *document.Parser
 	Chunker           *textchunk.Chunker
 	EmbedSvc          *embedding.EmbeddingService
 	Ingest            *knowledge.KnowledgeIngest
 	RAGService        *knowledge.RAGService
+	WorkspaceService  *knowledge.WorkspaceService
 	EmbedResolver     pipeline.EmbedServiceResolver
 	KnowledgeResolver knowledge.EmbedResolver
 }
 
 func (c *Container) buildKnowledge(ctx context.Context) error {
 	vs := c.Storage.Milvus
-	graphRAG := knowledge.NewGraphRAG(c.Config.Neo4jURI, c.Config.Neo4jUser, c.Config.Neo4jPassword, c.Logger)
+	graphRAG := neo4jadapter.NewGraphAdapter(c.Config.Neo4jURI, c.Config.Neo4jUser, c.Config.Neo4jPassword, c.Logger)
 	if err := graphRAG.Connect(ctx); err != nil {
 		c.Logger.Warn("failed to connect to Neo4j", zap.Error(err))
 	}
@@ -74,6 +78,10 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		RAGService:        rag,
 		EmbedResolver:     pipelineResolver,
 		KnowledgeResolver: knowledgeResolver,
+	}
+	if db != nil {
+		repo := persistence.NewWorkspaceRepo(db)
+		c.Knowledge.WorkspaceService = knowledge.NewWorkspaceService(repo, ingest, c.Logger)
 	}
 	return nil
 }

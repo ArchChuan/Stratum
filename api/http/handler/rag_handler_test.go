@@ -8,27 +8,51 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+
+	"github.com/byteBuilderX/stratum/api/middleware"
+	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 )
 
 // injectRAGTenant sets a tenant context for RAG handler tests.
 func injectRAGTenant(tenantID string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tc := &tenantdb.TenantContext{TenantID: tenantID, UserID: "user-test", Role: tenantdb.RoleTenantAdmin}
-		c.Request = c.Request.WithContext(tenantdb.WithTenant(c.Request.Context(), tc))
+		ctx := tenantdb.WithTenant(c.Request.Context(), tc)
+		ctx = reqctx.WithTenantID(ctx, tenantID)
+		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}
 }
 
+// newMinimalRAGHandler constructs a handler suitable for missing-tenant tests
+// where the service is never reached.
 func newMinimalRAGHandler() *RAGHandler {
-	return NewRAGHandler(nil, nil, nil, zap.NewNop())
+	return NewRAGHandler(nil, nil, zap.NewNop())
+}
+
+// newValidationRAGHandler constructs a handler whose WorkspaceService is wired
+// with a nil repo. Validation errors come from the domain factory before the
+// repo is ever called, so the nil repo is never dereferenced.
+func newValidationRAGHandler() *RAGHandler {
+	ws := knowledge.NewWorkspaceService(nil, nil, zap.NewNop())
+	return NewRAGHandler(nil, ws, zap.NewNop())
+}
+
+// newRouterWithErrorHandler returns a gin engine with the centralised error
+// mapping middleware installed so domain sentinels surface as JSON.
+func newRouterWithErrorHandler() *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	return r
 }
 
 func TestListWorkspaces_MissingTenant(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := newRouterWithErrorHandler()
 	h := newMinimalRAGHandler()
 	r.GET("/knowledge/workspaces", h.ListWorkspaces)
 
@@ -42,8 +66,7 @@ func TestListWorkspaces_MissingTenant(t *testing.T) {
 }
 
 func TestCreateWorkspace_MissingTenant(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := newRouterWithErrorHandler()
 	h := newMinimalRAGHandler()
 	r.POST("/knowledge/workspaces", h.CreateWorkspace)
 
@@ -59,9 +82,8 @@ func TestCreateWorkspace_MissingTenant(t *testing.T) {
 }
 
 func TestCreateWorkspace_InvalidEmbeddingModel(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	h := newMinimalRAGHandler()
+	r := newRouterWithErrorHandler()
+	h := newValidationRAGHandler()
 	r.POST("/knowledge/workspaces", injectRAGTenant("test-tenant-id"), h.CreateWorkspace)
 
 	body, _ := json.Marshal(map[string]any{
@@ -84,9 +106,8 @@ func TestCreateWorkspace_InvalidEmbeddingModel(t *testing.T) {
 }
 
 func TestCreateWorkspace_InvalidQueryMode(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	h := newMinimalRAGHandler()
+	r := newRouterWithErrorHandler()
+	h := newValidationRAGHandler()
 	r.POST("/knowledge/workspaces", injectRAGTenant("test-tenant-id"), h.CreateWorkspace)
 
 	body, _ := json.Marshal(map[string]any{
@@ -109,8 +130,7 @@ func TestCreateWorkspace_InvalidQueryMode(t *testing.T) {
 }
 
 func TestQuery_MissingTenant(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := newRouterWithErrorHandler()
 	h := newMinimalRAGHandler()
 	r.POST("/knowledge/query", h.Query)
 
@@ -128,8 +148,7 @@ func TestQuery_MissingTenant(t *testing.T) {
 }
 
 func TestDeleteWorkspace_MissingTenant(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := newRouterWithErrorHandler()
 	h := newMinimalRAGHandler()
 	r.DELETE("/knowledge/workspaces/:name", h.DeleteWorkspace)
 

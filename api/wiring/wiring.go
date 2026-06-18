@@ -12,7 +12,9 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
+	llmapp "github.com/byteBuilderX/stratum/internal/llmgateway/application"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/internal/platform/config"
@@ -124,8 +126,8 @@ func NewFromExisting(
 	gateway *llmgateway.Gateway,
 	db *pgxpool.Pool,
 	rdb *goredis.Client,
-	capGW capgateway.CapabilityGateway,
-	skillAdapter capgateway.Adapter,
+	capGW port.CapabilityGateway,
+	skillAdapter port.Adapter,
 	memPipeline *mempipeline.Pipeline,
 ) (*Container, error) {
 	c := &Container{Config: cfg, Logger: logger}
@@ -151,7 +153,11 @@ func NewFromExisting(
 	// build a fresh metrics provider (router used to do this inline).
 	metrics := observability.NewPrometheusMetrics(logger)
 	gateway.WithMetrics(metrics)
-	c.LLMGateway = &LLMGateway{Gateway: gateway, Metrics: metrics}
+	c.LLMGateway = &LLMGateway{
+		Gateway:      gateway,
+		Metrics:      metrics,
+		ModelService: llmapp.NewModelService(gateway),
+	}
 
 	// Run the derived sub-builders that don't need Skill or Memory yet.
 	for _, step := range []buildStep{
