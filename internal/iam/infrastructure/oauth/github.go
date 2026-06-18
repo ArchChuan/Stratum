@@ -9,13 +9,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 )
 
-// GitHubUser holds the fields we need from the GitHub /user API.
-type GitHubUser struct {
+// githubUserJSON is the internal decode type for the GitHub /user API.
+type githubUserJSON struct {
 	ID        int64  `json:"id"`
 	Login     string `json:"login"`
-	Email     string `json:"email"`
 	AvatarURL string `json:"avatar_url"`
 }
 
@@ -90,7 +91,7 @@ func (c *GitHubClient) ExchangeCode(ctx context.Context, code, redirectURI strin
 }
 
 // GetUser fetches GitHub user info using the given access token.
-func (c *GitHubClient) GetUser(ctx context.Context, accessToken string) (*GitHubUser, error) {
+func (c *GitHubClient) GetUser(ctx context.Context, accessToken string) (*iamport.GitHubProfile, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.userURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("github: build user request: %w", err)
@@ -109,9 +110,9 @@ func (c *GitHubClient) GetUser(ctx context.Context, accessToken string) (*GitHub
 		return nil, fmt.Errorf("github: user endpoint returned %d: %s", resp.StatusCode, string(body))
 	}
 
-	var user GitHubUser
-	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+	var raw githubUserJSON
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("github: decode user response: %w", err)
 	}
-	return &user, nil
+	return &iamport.GitHubProfile{ID: raw.ID, Login: raw.Login, AvatarURL: raw.AvatarURL}, nil
 }

@@ -5,20 +5,28 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/api/middleware"
+	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
-func TestMCPHandlerListServers(t *testing.T) {
+func newTestMCPHandler(t *testing.T) *MCPHandler {
+	t.Helper()
 	logger := zap.NewNop()
 	manager := mcp.NewClientManager(logger, nil, nil)
 	registry := mcp.NewMCPSkillRegistry(manager, logger)
-	handler := NewMCPHandler(registry, manager, logger)
+	svc := mcpapp.NewMCPService(mcp.SkillRegistryAsPort(registry), mcp.ServerManagerAsPort(manager), logger)
+	return NewMCPHandler(svc, logger)
+}
+
+func TestMCPHandlerListServers(t *testing.T) {
+	h := newTestMCPHandler(t)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.GET("/servers", handler.ListServers)
+	router.GET("/servers", h.ListServers)
 
 	w := httptest.NewRecorder()
 	httpReq, _ := http.NewRequest("GET", "/servers", nil) //nolint:noctx
@@ -30,14 +38,12 @@ func TestMCPHandlerListServers(t *testing.T) {
 }
 
 func TestMCPHandlerGetServer(t *testing.T) {
-	logger := zap.NewNop()
-	manager := mcp.NewClientManager(logger, nil, nil)
-	registry := mcp.NewMCPSkillRegistry(manager, logger)
-	handler := NewMCPHandler(registry, manager, logger)
+	h := newTestMCPHandler(t)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.GET("/servers/:name", handler.GetServer)
+	router.Use(middleware.ErrorHandler(zap.NewNop()))
+	router.GET("/servers/:id", h.GetServer)
 
 	w := httptest.NewRecorder()
 	httpReq, _ := http.NewRequest("GET", "/servers/test-server", nil) //nolint:noctx
@@ -49,14 +55,11 @@ func TestMCPHandlerGetServer(t *testing.T) {
 }
 
 func TestMCPHandlerListTools(t *testing.T) {
-	logger := zap.NewNop()
-	manager := mcp.NewClientManager(logger, nil, nil)
-	registry := mcp.NewMCPSkillRegistry(manager, logger)
-	handler := NewMCPHandler(registry, manager, logger)
+	h := newTestMCPHandler(t)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.GET("/servers/:id/tools", handler.ListTools)
+	router.GET("/servers/:id/tools", h.ListTools)
 
 	w := httptest.NewRecorder()
 	httpReq, _ := http.NewRequest("GET", "/servers/test-server/tools", nil) //nolint:noctx
@@ -69,14 +72,11 @@ func TestMCPHandlerListTools(t *testing.T) {
 }
 
 func TestMCPHandlerGetServerStatus(t *testing.T) {
-	logger := zap.NewNop()
-	manager := mcp.NewClientManager(logger, nil, nil)
-	registry := mcp.NewMCPSkillRegistry(manager, logger)
-	handler := NewMCPHandler(registry, manager, logger)
+	h := newTestMCPHandler(t)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.GET("/status", handler.GetServerStatus)
+	router.GET("/status", h.GetServerStatus)
 
 	w := httptest.NewRecorder()
 	httpReq, _ := http.NewRequest("GET", "/status", nil) //nolint:noctx

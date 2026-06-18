@@ -16,9 +16,9 @@ import (
 // repo) behind a single domain interface. All persistence work is delegated
 // to a domain-side MemoryRepo port; the application layer holds no SQL.
 type MemoryManager struct {
-	longTerm    VectorMemory
-	entity      EntityMemory
-	persistence Persistence
+	longTerm    memport.VectorMemory
+	entity      memport.EntityMemory
+	persistence memport.Persistence
 	repo        memport.MemoryRepo
 	config      *MemoryConfig
 	logger      *zap.Logger
@@ -30,9 +30,9 @@ type MemoryManager struct {
 func NewMemoryManager(
 	config *MemoryConfig,
 	logger *zap.Logger,
-	vectorMemory VectorMemory,
-	entityMemory EntityMemory,
-	persistence Persistence,
+	vectorMemory memport.VectorMemory,
+	entityMemory memport.EntityMemory,
+	persistence memport.Persistence,
 	repo memport.MemoryRepo,
 ) *MemoryManager {
 	if config == nil {

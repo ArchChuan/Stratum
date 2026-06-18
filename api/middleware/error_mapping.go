@@ -74,14 +74,19 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, agentapp.ErrNotFound),
 		errors.Is(err, memoryapp.ErrNotFound),
 		errors.Is(err, memorydomain.ErrEntryNotFound),
-		errors.Is(err, memorydomain.ErrSessionNotFound):
+		errors.Is(err, memorydomain.ErrSessionNotFound),
+		errors.Is(err, skilldomain.ErrSkillNotFound),
+		errors.Is(err, mcpdomain.ErrServerNotFound),
+		errors.Is(err, mcpdomain.ErrSkillNotFound):
 		return http.StatusNotFound
 
 	// 409 — Conflict
 	case errors.Is(err, knowledgedomain.ErrWorkspaceConflict),
 		errors.Is(err, knowledgedomain.ErrWorkspaceLinked),
 		errors.Is(err, agentapp.ErrNameConflict),
-		errors.Is(err, mcpdomain.ErrNameConflict):
+		errors.Is(err, mcpdomain.ErrNameConflict),
+		errors.Is(err, skilldomain.ErrSkillNameConflict),
+		errors.Is(err, skilldomain.ErrSkillLinked):
 		return http.StatusConflict
 
 	// 422 — Unprocessable Entity
@@ -112,7 +117,11 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, knowledgedomain.ErrInvalidQueryMode),
 		errors.Is(err, knowledgedomain.ErrEmbeddingModelImmutable),
 		errors.Is(err, knowledgedomain.ErrChunkSizeImmutable),
-		errors.Is(err, knowledgedomain.ErrChunkOverlapImmutable):
+		errors.Is(err, knowledgedomain.ErrChunkOverlapImmutable),
+		errors.Is(err, skilldomain.ErrSkillTypeImmutable),
+		errors.Is(err, skilldomain.ErrNotCodeSkill),
+		errors.Is(err, skilldomain.ErrSkillUnsupportedType),
+		errors.Is(err, skilldomain.ErrSkillCodeAnalysis):
 		return http.StatusBadRequest
 	}
 

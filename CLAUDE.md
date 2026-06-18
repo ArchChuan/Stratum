@@ -10,13 +10,13 @@
 
 | 层 | 路径 | 职责 |
 |----|------|------|
-| 入口 | `cmd/server/main.go` | 初始化 Harness，注册所有组件 |
-| 路由 | `api/router.go` | Gin 路由组，所有端点集中定义 |
-| Handler | `api/handler/` | 每域一个文件，只做请求解析 + 响应组装 |
-| DTO | `api/model/` | Request/Response 结构体，无业务逻辑 |
-| 中间件 | `api/middleware/` | ErrorHandler · MetricsMiddleware · Auth · Trace |
-| 业务 | `internal/` | Agent · Memory · Skill · LLMGateway · Knowledge |
-| 基础设施 | `pkg/` | Zap · OTEL · pgxpool · go-redis · tenantdb · Milvus |
+| 入口 | `cmd/server/main.go` | 由 `api/wiring.BuildContainer` 构图，启停 Harness（≤30 行） |
+| 路由 | `api/http/router.go` | Gin 路由组，从 `Container` 装配 handler |
+| Handler | `api/http/handler/` | 每域一个文件，只做请求解析 + 响应组装 |
+| DTO | `api/http/dto/` | Request/Response 结构体，无业务逻辑 |
+| 中间件 | `api/http/middleware/` | ErrorHandler · MetricsMiddleware · Auth · Trace |
+| 业务 | `internal/<ctx>/{domain,application,infrastructure}` | 8 个 bounded context（见下方架构分层） |
+| 基础设施 | `pkg/{storage,messaging,httpclient,observability,...}` | 数据库/消息/HTTP/日志等无业务抽象 |
 
 关键依赖版本：Gin v1.9 · NATS JetStream v1.31 · Milvus SDK v2.4.2 · pgx v5 · go-redis v9 · JWT RS256（golang-jwt v5）· OTEL v1.21 · Viper v1.18
 
@@ -56,36 +56,34 @@ React 18 · Vite 4 · Ant Design 5.2 · React Router 6 · Axios · Moment.js
 - 向 `tenant_schema.sql` 的 `CREATE TABLE` 新增列后，必须紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 做 backfill，否则已有租户的旧表不含该列，后续 INDEX / 查询会报 `column does not exist`（反例：entities.user_id 漏 backfill）
 - `golang-migrate` dirty 状态修复：`force <version>` 将指定版本标记为 clean，再次 `Up()` 从下一版本继续；勿直接手改 `schema_migrations` 表
 
-### 包间依赖与接口化（DIP）
+### 架构分层（DDD bounded context）
 
-**单向依赖**：`pkg/` → 无 internal 依赖；`internal/<biz>` 之间通过消费者侧接口解耦，禁止反向 import；wiring 全部集中在 `cmd/server/main.go` + `api/router.go`。
+- 目录：`api/{http/{handler,dto,middleware},wiring}` · `internal/<ctx>/{domain/{,port/},application,infrastructure}` · `pkg/storage/{postgres,redis,milvus,tenantnaming}` · `pkg/{messaging/nats,httpclient,observability,crypto,constants,migration,textchunk}`
+- 8 个 bounded context：`agent · memory · knowledge · skill · mcp · iam · llmgateway · platform`；跨域路由层（如 `capgateway`）作为 ACL，必要时下沉进消费上下文
+- 依赖方向：`handler → application → domain/port`；`infrastructure` 实现 port，由 `api/wiring/Container` 集中装配；Shutdown 逆序释放
+- 跨 context 调用走「消费者侧」port（接口放消费方 `domain/port/`），禁止 import 兄弟上下文的 `application` / `infrastructure`
+- 单向底线：`pkg/` 不 import `internal/`；`domain/` 零第三方依赖（仅 stdlib + `pkg/constants`）；`application/` 不 import `pgx`/`redis`/`nats`/`gin`；`handler` 不 import `internal/*/infrastructure` 与 `pgx`/`redis`/`milvus`
+- 错误分层：domain 定义 `Err*` → infrastructure 翻译 → application 编排 → middleware 映射 HTTP；响应体 `{"error":"..."}` 冻结
+- API 向后兼容由 `api/http/contract_test.go` + `testdata/contracts/*.golden.json` 守护；CI 用 `go-arch-lint` + `depguard` 固化分层
 
-**消费者定义接口**（不在被依赖方暴露）：
+### 各层职责速查
 
-| 消费者 | 接口位置 | 满足者 |
-|--------|----------|--------|
-| `internal/memory/pipeline.EmbedClient` | `pipeline.go` | `*embedding.EmbeddingService` 隐式满足 |
-| `internal/memory/pipeline.LLMClient` | `pipeline.go` | `*llmgateway.Gateway` 隐式满足 |
+| 层 | 该做的事 | 不能做 |
+|----|---------|--------|
+| `dto/` | 结构 + binding tag | 业务规则、白名单、计算 |
+| `handler/` | bind → 取 tenant → call service → render（≤15 行/方法），错误用 `c.Error(err)` 交给 ErrorHandler | import `pgx*`/`redis*`/`milvus*`/`internal/*/infrastructure`；散写白名单/SQL/编排 |
+| `middleware/` | 横切：auth · trace · metrics · `domain.Err* → HTTP` 映射 | 任何业务编排 |
+| `wiring/` | 组合根：构造 application + infrastructure，塞 Container，反向 Shutdown；跨 ctx ACL（≤30 行 thin adapter） | 处理 HTTP/业务规则 |
+| `application/` | 用例编排 · 事务/Saga 边界 · DTO↔聚合 · 鉴权检查 · 发领域事件 | SQL、HTTP、序列化、业务不变量校验（让 domain 自检） |
+| `domain/` | 实体、值对象、聚合根、不变量、领域算法（评分/状态机/切块策略）；`domain/port/` 出向接口契约 | 任何第三方依赖（`pkg/constants` 除外）；存在「贫血结构体」（无方法纯字段） |
+| `infrastructure/<adapter>/` | 唯一职责：实现 `domain/port/` 接口；DB/MQ/HTTP IO；错误翻译（`pgconn.PgError → domain.ErrXxx`） | 业务规则、跨 ctx import 兄弟 `domain`/`infrastructure`、port 接口定义 |
 
-规则：
+### 消费者侧接口与运行时解析
 
-- 业务包（如 `pipeline`）只声明自己需要的最小方法集，不 import 具体实现包
-- 具体实现位于 `internal/embedding`、`internal/llmgateway`，由 wiring 层注入
-- 单元测试直接 mock 接口，无需启动真实 LLM/Embedding 服务
-
-**多租户运行时解析**：跨租户的 client 必须通过 `Resolver` 函数类型在请求时延迟解析，例：
-
-```go
-type EmbedServiceResolver func(ctx context.Context, tenantID string) EmbedClient
-```
-
-实现位于 `api/router.go:buildEmbedResolver`，从 `llmgateway.TenantGatewayCache` 取出 per-tenant gateway，AES 解密 API key 后构造 `EmbedClient`。Pipeline 与 Injector 都通过 `SetEmbedResolver` 注入；resolver 为 nil 时回退到全局静态 client。
-
-**新增依赖时的判断**：
-
-- 跨包调用 → 在消费者侧定义接口
-- 接口出现在 ≥2 个消费者 → 提取到共享文件（如 `pipeline.go`）但仍由消费者包持有
-- 单元测试需要替身 → 必须接口化；不允许通过 build tag 或 init 替换实现
+- 跨 ctx：消费方在自己 `domain/port/` 定接口 → provider 在自己 `infrastructure/` 实现 → `api/wiring/` thin adapter 转接
+- 跨租户：通过 `Resolver` 函数类型请求时延迟解析，例 `type EmbedServiceResolver func(ctx, tenantID) EmbedClient`，由 wiring 注入
+- 接口最小化：消费者只声明需要的方法集；接口被 ≥2 个消费者复用时仍放消费方包，不去被依赖方暴露
+- 单元测试必须能 mock port，不允许 build tag / init 替换实现
 
 ---
 

@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"errors"
+	"net/http"
+
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
@@ -23,8 +26,12 @@ func userIDFromCtx(c *gin.Context) (string, bool) {
 	return s, ok
 }
 
+// errMissingTenant is the canonical sentinel for missing tenant context. Routed
+// through ErrorHandler middleware so the response shape stays uniform.
+var errMissingTenant = errors.New("tenant context required")
+
 func respondMissingTenant(c *gin.Context) {
-	c.JSON(401, gin.H{"error": "tenant context required"})
+	_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errMissingTenant))
 }
 
 // truncate returns s truncated to maxRunes runes (not bytes).

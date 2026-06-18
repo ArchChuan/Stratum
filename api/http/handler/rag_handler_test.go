@@ -49,8 +49,7 @@ func newRouterWithErrorHandler() *gin.Engine {
 }
 
 func TestListWorkspaces_MissingTenant(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := newRouterWithErrorHandler()
 	h := newMinimalRAGHandler()
 	r.GET("/knowledge/workspaces", h.ListWorkspaces)
 
@@ -64,8 +63,7 @@ func TestListWorkspaces_MissingTenant(t *testing.T) {
 }
 
 func TestCreateWorkspace_MissingTenant(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := newRouterWithErrorHandler()
 	h := newMinimalRAGHandler()
 	r.POST("/knowledge/workspaces", h.CreateWorkspace)
 
@@ -129,8 +127,7 @@ func TestCreateWorkspace_InvalidQueryMode(t *testing.T) {
 }
 
 func TestQuery_MissingTenant(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := newRouterWithErrorHandler()
 	h := newMinimalRAGHandler()
 	r.POST("/knowledge/query", h.Query)
 
@@ -148,8 +145,7 @@ func TestQuery_MissingTenant(t *testing.T) {
 }
 
 func TestDeleteWorkspace_MissingTenant(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := newRouterWithErrorHandler()
 	h := newMinimalRAGHandler()
 	r.DELETE("/knowledge/workspaces/:name", h.DeleteWorkspace)
 

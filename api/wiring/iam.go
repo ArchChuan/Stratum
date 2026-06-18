@@ -10,6 +10,7 @@ import (
 // IAM holds identity & access management bounded-context services.
 type IAM struct {
 	TenantService *application.TenantService
+	AdminService  *application.AdminService
 }
 
 func (c *Container) buildIAM(_ context.Context) error {
@@ -24,6 +25,7 @@ func (c *Container) buildIAM(_ context.Context) error {
 			c.Platform.AESKey,
 			c.Platform.GatewayCache,
 		)
+		iam.AdminService = application.NewAdminService(iampersistence.NewAdminTenantRepo(db))
 	}
 	c.IAM = iam
 	return nil

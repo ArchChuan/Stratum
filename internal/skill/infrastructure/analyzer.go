@@ -1,31 +1,25 @@
 package infrastructure
 
-import "strings"
+import (
+	"strings"
 
-// AnalysisResult holds the outcome of a static code analysis pass.
-type AnalysisResult struct {
-	Safe    bool
-	Reasons []string
-}
+	"github.com/byteBuilderX/stratum/internal/skill/domain/port"
+)
 
-// StaticAnalyzer checks source code for forbidden constructs before execution.
-type StaticAnalyzer interface {
-	Check(lang, code string) AnalysisResult
-}
-
+// staticAnalyzer implements port.CodeAnalyzer via pure string checks.
 type staticAnalyzer struct{}
 
-// NewStaticAnalyzer returns the default StaticAnalyzer.
-func NewStaticAnalyzer() StaticAnalyzer { return &staticAnalyzer{} }
+// NewStaticAnalyzer returns the default CodeAnalyzer.
+func NewStaticAnalyzer() port.CodeAnalyzer { return &staticAnalyzer{} }
 
-func (a *staticAnalyzer) Check(lang, code string) AnalysisResult {
+func (a *staticAnalyzer) Check(lang, code string) port.AnalysisResult {
 	switch lang {
 	case "python":
 		return checkPython(code)
 	case "javascript":
 		return checkJS(code)
 	default:
-		return AnalysisResult{Safe: false, Reasons: []string{"unsupported language: " + lang}}
+		return port.AnalysisResult{Safe: false, Reasons: []string{"unsupported language: " + lang}}
 	}
 }
 
@@ -42,7 +36,7 @@ var pyForbiddenBuiltins = []string{
 	"delattr", "dir",
 }
 
-func checkPython(code string) AnalysisResult {
+func checkPython(code string) port.AnalysisResult {
 	var reasons []string
 
 	for _, mod := range pyForbiddenImports {
@@ -57,7 +51,7 @@ func checkPython(code string) AnalysisResult {
 		}
 	}
 
-	return AnalysisResult{Safe: len(reasons) == 0, Reasons: reasons}
+	return port.AnalysisResult{Safe: len(reasons) == 0, Reasons: reasons}
 }
 
 // containsPyImport matches `import mod`, `import mod.x`, `from mod import ...`
@@ -94,7 +88,7 @@ var jsForbiddenPatterns = []string{
 	"new Function(", "__proto__", "prototype.constructor",
 }
 
-func checkJS(code string) AnalysisResult {
+func checkJS(code string) port.AnalysisResult {
 	var reasons []string
 
 	for _, g := range jsForbiddenAccessors {
@@ -121,7 +115,7 @@ func checkJS(code string) AnalysisResult {
 		}
 	}
 
-	return AnalysisResult{Safe: len(reasons) == 0, Reasons: reasons}
+	return port.AnalysisResult{Safe: len(reasons) == 0, Reasons: reasons}
 }
 
 // containsToken checks that `name` appears as a standalone identifier.

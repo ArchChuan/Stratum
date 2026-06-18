@@ -5,30 +5,26 @@ import (
 	"context"
 	"fmt"
 
-	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
+	"github.com/byteBuilderX/stratum/internal/skill/domain/port"
 )
 
-// MCPSkillProvider 将 mcp.MCPSkillAdapter 适配为 SkillProvider
+// MCPSkillProvider adapts an MCP adapter (read view) to the SkillProvider
+// contract used by the skill gateway.
 type MCPSkillProvider struct {
-	adapter *mcp.MCPSkillAdapter
+	adapter port.MCPAdapterReader
 }
 
-// NewMCPSkillProvider 创建 MCP provider
-func NewMCPSkillProvider(adapter *mcp.MCPSkillAdapter) *MCPSkillProvider {
+// NewMCPSkillProvider wires the adapter.
+func NewMCPSkillProvider(adapter port.MCPAdapterReader) *MCPSkillProvider {
 	return &MCPSkillProvider{adapter: adapter}
 }
 
 func (p *MCPSkillProvider) SkillIDs() []string {
-	skills := p.adapter.GetAllSkills()
-	ids := make([]string, 0, len(skills))
-	for _, s := range skills {
-		ids = append(ids, s.GetID())
-	}
-	return ids
+	return p.adapter.SkillIDs()
 }
 
 func (p *MCPSkillProvider) Has(skillID string) bool {
-	return p.adapter.GetSkill(skillID) != nil
+	return p.adapter.Has(skillID)
 }
 
 func (p *MCPSkillProvider) SkillType() string {
@@ -36,9 +32,8 @@ func (p *MCPSkillProvider) SkillType() string {
 }
 
 func (p *MCPSkillProvider) Execute(ctx context.Context, skillID string, input any) (any, error) {
-	s := p.adapter.GetSkill(skillID)
-	if s == nil {
+	if !p.adapter.Has(skillID) {
 		return nil, fmt.Errorf("MCP skill not found: %s", skillID)
 	}
-	return s.Execute(ctx, input)
+	return p.adapter.Execute(ctx, skillID, input)
 }

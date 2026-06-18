@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
+	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
@@ -64,7 +66,7 @@ func (h *RAGHandler) UploadDocument(c *gin.Context) {
 	}
 	var req dto.UploadDocumentRequest
 	if err := c.ShouldBind(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
 
@@ -98,7 +100,7 @@ func (h *RAGHandler) Query(c *gin.Context) {
 	}
 	var req dto.QueryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
 
@@ -158,7 +160,7 @@ func (h *RAGHandler) CreateWorkspace(c *gin.Context) {
 	}
 	var req dto.CreateWorkspaceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
 
@@ -216,13 +218,13 @@ func (h *RAGHandler) UpdateWorkspace(c *gin.Context) {
 	}
 	name := c.Param("name")
 	if name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "workspace name required"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("workspace name required")))
 		return
 	}
 
 	var req dto.UpdateWorkspaceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
 
@@ -249,7 +251,7 @@ func (h *RAGHandler) GetWorkspaceStats(c *gin.Context) {
 	}
 	name := c.Param("name")
 	if name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "workspace name required"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("workspace name required")))
 		return
 	}
 
@@ -275,7 +277,7 @@ func (h *RAGHandler) DeleteWorkspace(c *gin.Context) {
 	}
 	name := c.Param("name")
 	if name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "workspace parameter required"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("workspace parameter required")))
 		return
 	}
 

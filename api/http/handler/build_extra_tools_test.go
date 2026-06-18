@@ -4,13 +4,15 @@ import (
 	"context"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
 	"go.uber.org/zap"
 )
 
-func newTestMCPRegistry(t *testing.T) *mcp.MCPSkillRegistry {
+func newTestMCPToolProvider(t *testing.T) (port.MCPToolProvider, *mcp.MCPSkillRegistry) {
 	t.Helper()
-	return mcp.NewMCPSkillRegistry(nil, zap.NewNop())
+	registry := mcp.NewMCPSkillRegistry(nil, zap.NewNop())
+	return mcp.RegistryAsAgentToolProvider(registry), registry
 }
 
 func injectMCPTool(t *testing.T, registry *mcp.MCPSkillRegistry, serverID string, id, name, desc string) {
@@ -32,15 +34,16 @@ func TestBuildExtraTools_EmptyInputs(t *testing.T) {
 }
 
 func TestBuildExtraTools_NilMCPRegistry(t *testing.T) {
-	h := &AgentHandler{mcpRegistry: nil}
+	h := &AgentHandler{mcpToolProvider: nil}
 	tools := h.buildExtraTools(context.Background(), []string{"srv1"}, nil)
 	if len(tools) != 0 {
-		t.Fatalf("nil mcpRegistry: expected 0, got %d", len(tools))
+		t.Fatalf("nil mcpToolProvider: expected 0, got %d", len(tools))
 	}
 }
 
 func TestBuildExtraTools_MCPServerNotRegistered(t *testing.T) {
-	h := &AgentHandler{mcpRegistry: newTestMCPRegistry(t)}
+	provider, _ := newTestMCPToolProvider(t)
+	h := &AgentHandler{mcpToolProvider: provider}
 	tools := h.buildExtraTools(context.Background(), []string{"ghost"}, nil)
 	if len(tools) != 0 {
 		t.Fatalf("unregistered server: expected 0, got %d", len(tools))
@@ -48,10 +51,10 @@ func TestBuildExtraTools_MCPServerNotRegistered(t *testing.T) {
 }
 
 func TestBuildExtraTools_MCPSkillExpanded(t *testing.T) {
-	registry := newTestMCPRegistry(t)
+	provider, registry := newTestMCPToolProvider(t)
 	injectMCPTool(t, registry, "srv1", "mcp:srv1:search", "search", "web search")
 
-	h := &AgentHandler{mcpRegistry: registry}
+	h := &AgentHandler{mcpToolProvider: provider}
 	tools := h.buildExtraTools(context.Background(), []string{"srv1"}, nil)
 
 	if len(tools) != 1 {
@@ -107,10 +110,10 @@ func TestBuildExtraTools_MultipleSkills_Fallback(t *testing.T) {
 }
 
 func TestBuildExtraTools_Combined_MCPAndSkill(t *testing.T) {
-	registry := newTestMCPRegistry(t)
+	provider, registry := newTestMCPToolProvider(t)
 	injectMCPTool(t, registry, "s1", "mcp:s1:calc", "calc", "a calculator")
 
-	h := &AgentHandler{mcpRegistry: registry}
+	h := &AgentHandler{mcpToolProvider: provider}
 	tools := h.buildExtraTools(context.Background(), []string{"s1"}, []string{"send-email"})
 
 	if len(tools) != 2 {
@@ -119,7 +122,7 @@ func TestBuildExtraTools_Combined_MCPAndSkill(t *testing.T) {
 }
 
 func TestBuildExtraTools_MCPMultipleTools(t *testing.T) {
-	registry := newTestMCPRegistry(t)
+	provider, registry := newTestMCPToolProvider(t)
 	adapter := mcp.NewMCPSkillAdapter("multi", nil, zap.NewNop())
 	for _, name := range []string{"tool1", "tool2", "tool3"} {
 		adapter.AddSkillForTest(&mcp.MCPSkillWrapper{
@@ -130,7 +133,7 @@ func TestBuildExtraTools_MCPMultipleTools(t *testing.T) {
 	}
 	registry.RegisterAdapterForTest("multi", adapter)
 
-	h := &AgentHandler{mcpRegistry: registry}
+	h := &AgentHandler{mcpToolProvider: provider}
 	tools := h.buildExtraTools(context.Background(), []string{"multi"}, nil)
 	if len(tools) != 3 {
 		t.Fatalf("expected 3 tools, got %d", len(tools))

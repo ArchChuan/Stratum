@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
@@ -99,16 +100,8 @@ func (s *TokenStore) Revoke(ctx context.Context, rawToken string) error {
 	return nil
 }
 
-// StoredClaims holds the user/tenant info persisted with a refresh token.
-type StoredClaims struct {
-	UserID      string
-	TenantID    string
-	AvatarURL   string
-	GitHubLogin string
-}
-
-// GetActiveClaims returns the user/tenant claims for a non-revoked, non-expired token.
-func (s *TokenStore) GetActiveClaims(ctx context.Context, rawToken string) (*StoredClaims, error) {
+// GetActiveClaims returns the user/tenant session for a non-revoked, non-expired token.
+func (s *TokenStore) GetActiveClaims(ctx context.Context, rawToken string) (*iamdomain.StoredSession, error) {
 	hash := hashToken(rawToken)
 	var userID string
 	var tenantID *string
@@ -127,7 +120,7 @@ func (s *TokenStore) GetActiveClaims(ctx context.Context, rawToken string) (*Sto
 	if tenantID != nil {
 		tid = *tenantID
 	}
-	return &StoredClaims{UserID: userID, TenantID: tid, AvatarURL: avatarURL, GitHubLogin: githubLogin}, nil
+	return &iamdomain.StoredSession{UserID: userID, TenantID: tid, AvatarURL: avatarURL, GitHubLogin: githubLogin}, nil
 }
 
 // IsBlacklisted checks the Redis blacklist for a given raw token.

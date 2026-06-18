@@ -31,7 +31,7 @@ func NewTenantHandler(svc *application.TenantService, logger *zap.Logger) *Tenan
 func (h *TenantHandler) ListMembers(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		respondMissingTenant(c)
 		return
 	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -65,7 +65,7 @@ func (h *TenantHandler) ListMembers(c *gin.Context) {
 func (h *TenantHandler) InviteMember(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		respondMissingTenant(c)
 		return
 	}
 
@@ -103,7 +103,7 @@ func (h *TenantHandler) InviteMember(c *gin.Context) {
 func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		respondMissingTenant(c)
 		return
 	}
 	roleVal, _ := c.Get("auth.role")
@@ -120,10 +120,8 @@ func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 		return
 	}
 
-	// Match original handler ordering: probe target role before body bind.
 	targetRole, err := h.svc.GetMemberRole(c.Request.Context(), tenantID, userID)
 	if err != nil {
-		// repo returns domain.ErrMemberNotFound — let middleware map it.
 		if !errors.Is(err, domain.ErrMemberNotFound) {
 			err = middleware.NewHTTPError(http.StatusNotFound, domain.ErrMemberNotFound)
 		}
@@ -152,7 +150,7 @@ func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 func (h *TenantHandler) RemoveMember(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		respondMissingTenant(c)
 		return
 	}
 	roleVal, _ := c.Get("auth.role")
@@ -172,7 +170,7 @@ func (h *TenantHandler) RemoveMember(c *gin.Context) {
 func (h *TenantHandler) GetSettings(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		respondMissingTenant(c)
 		return
 	}
 	name, settings, err := h.svc.GetSettings(c.Request.Context(), tenantID)
@@ -187,7 +185,7 @@ func (h *TenantHandler) GetSettings(c *gin.Context) {
 func (h *TenantHandler) UpdateSettings(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		respondMissingTenant(c)
 		return
 	}
 	roleVal, _ := c.Get("auth.role")
@@ -219,7 +217,7 @@ func (h *TenantHandler) ListUserTenants(c *gin.Context) {
 	userID, ok := c.Get("auth.sub")
 	userIDStr, _ := userID.(string)
 	if !ok || userIDStr == "" {
-		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "unauthorized"})
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errUnauthorized))
 		return
 	}
 	tenants, err := h.svc.ListUserTenants(c.Request.Context(), userIDStr)
@@ -238,7 +236,7 @@ func (h *TenantHandler) ListUserTenants(c *gin.Context) {
 func (h *TenantHandler) SetEmbedModel(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{Code: 401, Message: "tenant_id missing"})
+		respondMissingTenant(c)
 		return
 	}
 	roleVal, _ := c.Get("auth.role")

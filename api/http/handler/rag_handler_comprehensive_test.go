@@ -12,8 +12,8 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
-	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/byteBuilderX/stratum/pkg/vector"
 )

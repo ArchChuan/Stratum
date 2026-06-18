@@ -6,101 +6,39 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
-	"sync"
 	"time"
 
-	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
+// ExecuteAgent runs an agent synchronously and returns the full result.
 func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
-	if _, ok := tenantIDFromCtx(c); !ok {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
 		respondMissingTenant(c)
 		return
 	}
 	id := c.Param("id")
 	a, ok := h.agentRegistry.Get(c.Request.Context(), id)
 	if !ok {
-		h.logger.Warn("agent not found", zap.String("id", id))
-		c.JSON(http.StatusNotFound, dto.ErrorResponse{
-			Code:    http.StatusNotFound,
-			Message: "agent not found",
-		})
+		_ = c.Error(agent.ErrNotFound)
 		return
 	}
-
 	var req ExecuteAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn("invalid request", zap.Error(err))
-		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
-			Code:    http.StatusBadRequest,
-			Message: err.Error(),
-		})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
 
-	options := []agent.ExecutionOption{
-		agent.WithMaxSteps(a.GetConfig().MaxIterations),
-	}
-
-	if req.Options != nil {
-		if maxSteps, ok := req.Options["maxSteps"].(float64); ok {
-			options = append(options, agent.WithMaxSteps(int(maxSteps)))
-		}
-		if timeout, ok := req.Options["timeout"].(float64); ok {
-			options = append(options, agent.WithTimeout(time.Duration(timeout)*time.Second))
-		}
-	}
-
-	reqCtx := c.Request.Context()
-	tenantID, _ := tenantIDFromCtx(c)
 	userID, _ := userIDFromCtx(c)
-
-	if tenantGW, apiKeys := h.resolveTenantGateway(reqCtx, tenantID); tenantGW != nil {
-		llmAdapter := capgateway.NewLLMAdapter(tenantGW, h.logger)
-		capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, h.skillAdapter, h.logger)
-		type capGWSetter interface {
-			SetCapGateway(port.CapabilityGateway)
-		}
-		if setter, ok := a.(capGWSetter); ok {
-			setter.SetCapGateway(capGW)
-		}
-		if len(apiKeys) > 0 {
-			options = append(options, agent.WithLLMAPIKeys(apiKeys))
-		}
-	}
-	if h.chatStore != nil {
-		type chatStoreSetter interface {
-			SetChatStore(agent.ChatStore)
-		}
-		if setter, ok := a.(chatStoreSetter); ok {
-			setter.SetChatStore(h.chatStore)
-		}
-	}
-	options = append(options, agent.WithTenantID(tenantID))
-	options = append(options, agent.WithTraceID(middleware.GetTraceID(c)))
-	if req.ConversationID != "" {
-		options = append(options, agent.WithConversationID(req.ConversationID))
-		options = append(options, agent.WithHistoryWindow(20))
-	}
-	options = append(options, agent.WithUserID(userID))
-
-	options = append(options, agent.WithExtraTools(h.buildExtraTools(c.Request.Context(), a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills)))
-
-	if h.ragService != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
-		rs := h.ragService
-		options = append(options, agent.WithRAGSearchFn(buildRAGSearchFn(rs, tenantID)))
-	}
+	_, options := h.assembleOptions(c, a, req, tenantID, userID, false)
 
 	execCtx, execCancel := context.WithTimeout(context.Background(), constants.AgentExecTimeout)
 	defer execCancel()
@@ -109,47 +47,17 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 	result, err := a.Execute(execCtx, req.Query, options...)
 	durationMs := int(time.Since(start).Milliseconds())
 
-	if h.executionStore != nil {
-		tc, _ := tenantdb.FromContext(c.Request.Context())
-		rec := agent.ExecutionRecord{
-			AgentID:      id,
-			UserID:       userID,
-			AgentName:    a.GetConfig().Name,
-			InputPreview: truncate(req.Query, previewMaxChars),
-			DurationMs:   durationMs,
-		}
-		if err != nil {
-			rec.Status = "error"
-			rec.ErrorMessage = err.Error()
-		} else {
-			rec.Status = "success"
-			rec.OutputPreview = truncate(result.Output, previewMaxChars)
-			rec.TotalTokens = result.TokensUsed
-		}
-		insertCtx := tenantdb.WithTenant(context.Background(), tc)
-		go func() {
-			if insertErr := h.executionStore.Insert(insertCtx, rec); insertErr != nil {
-				h.logger.Warn("execution record insert failed", zap.Error(insertErr))
-			}
-		}()
-	}
+	h.recordExecution(c.Request.Context(), id, userID, a.GetConfig().Name, req.Query, result, err, durationMs)
 
 	if err != nil {
 		h.logger.Error("agent execution failed", zap.String("agentId", id), zap.Error(err))
 		c.JSON(http.StatusOK, AgentExecutionResult{
-			AgentID:  id,
-			Input:    req.Query,
-			Output:   "",
-			Steps:    0,
-			Duration: "0s",
-			Error:    err.Error(),
+			AgentID: id, Input: req.Query, Output: "", Steps: 0, Duration: "0s", Error: err.Error(),
 		})
 		return
 	}
-
 	thoughtsJSON, _ := json.Marshal(result.Thoughts)
 	toolCallsJSON, _ := json.Marshal(result.ToolCalls)
-
 	c.JSON(http.StatusOK, AgentExecutionResult{
 		AgentID:    id,
 		Input:      req.Query,
@@ -166,6 +74,7 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 	})
 }
 
+// ExecuteAgentStream runs an agent and streams tokens via SSE.
 func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
@@ -175,74 +84,17 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	id := c.Param("id")
 	a, ok := h.agentRegistry.Get(c.Request.Context(), id)
 	if !ok {
-		h.logger.Warn("agent not found", zap.String("id", id))
-		c.JSON(http.StatusNotFound, dto.ErrorResponse{
-			Code:    http.StatusNotFound,
-			Message: "agent not found",
-		})
+		_ = c.Error(agent.ErrNotFound)
 		return
 	}
-
 	var req ExecuteAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn("invalid request", zap.Error(err))
-		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
-			Code:    http.StatusBadRequest,
-			Message: err.Error(),
-		})
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
-	}
-
-	options := []agent.ExecutionOption{
-		agent.WithMaxSteps(a.GetConfig().MaxIterations),
-	}
-	if req.Options != nil {
-		if maxSteps, ok := req.Options["maxSteps"].(float64); ok {
-			options = append(options, agent.WithMaxSteps(int(maxSteps)))
-		}
-		if timeout, ok := req.Options["timeout"].(float64); ok {
-			options = append(options, agent.WithTimeout(time.Duration(timeout)*time.Second))
-		}
 	}
 
 	userID, _ := userIDFromCtx(c)
-	streamCtx := c.Request.Context()
-	if tenantGW, apiKeys := h.resolveTenantGateway(streamCtx, tenantID); tenantGW != nil {
-		streamCtx = llmgateway.WithGateway(streamCtx, tenantGW)
-		llmAdapter := capgateway.NewLLMAdapter(tenantGW, h.logger)
-		capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, h.skillAdapter, h.logger)
-		type capGWSetter interface {
-			SetCapGateway(port.CapabilityGateway)
-		}
-		if setter, ok := a.(capGWSetter); ok {
-			setter.SetCapGateway(capGW)
-		}
-		if len(apiKeys) > 0 {
-			options = append(options, agent.WithLLMAPIKeys(apiKeys))
-		}
-	}
-	if h.chatStore != nil {
-		type chatStoreSetter interface {
-			SetChatStore(agent.ChatStore)
-		}
-		if setter, ok := a.(chatStoreSetter); ok {
-			setter.SetChatStore(h.chatStore)
-		}
-	}
-	options = append(options, agent.WithTenantID(tenantID))
-	options = append(options, agent.WithTraceID(middleware.GetTraceID(c)))
-	if req.ConversationID != "" {
-		options = append(options, agent.WithConversationID(req.ConversationID))
-		options = append(options, agent.WithHistoryWindow(20))
-	}
-	options = append(options, agent.WithUserID(userID))
-
-	options = append(options, agent.WithExtraTools(h.buildExtraTools(c.Request.Context(), a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills)))
-
-	if h.ragService != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
-		rs := h.ragService
-		options = append(options, agent.WithRAGSearchFn(buildRAGSearchFn(rs, tenantID)))
-	}
+	streamCtx, options := h.assembleOptions(c, a, req, tenantID, userID, true)
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -251,16 +103,12 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	c.Header("Transfer-Encoding", "chunked")
 
 	flusher, hasFlusher := c.Writer.(http.Flusher)
-
 	writeEvent := func(data string) {
 		fmt.Fprintf(c.Writer, "data: %s\n\n", data) //nolint:errcheck
 		if hasFlusher {
 			flusher.Flush()
 		}
 	}
-
-	// Send an initial heartbeat immediately so Cloudflare sees response body
-	// data and resets its proxy read timeout before agent execution begins.
 	fmt.Fprint(c.Writer, ": heartbeat\n\n") //nolint:errcheck
 	if hasFlusher {
 		flusher.Flush()
@@ -276,9 +124,6 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		case <-execCtx.Done():
 		}
 	}()
-
-	// Periodic heartbeat keeps the Cloudflare proxy read timeout alive when
-	// the LLM is silent between tokens (e.g. long first-token latency).
 	go func() {
 		ticker := time.NewTicker(constants.SSEHeartbeatInterval)
 		defer ticker.Stop()
@@ -309,30 +154,7 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	result, err := a.Execute(execCtx, req.Query, options...)
 	durationMs := int(time.Since(start).Milliseconds())
 
-	if h.executionStore != nil {
-		tc, _ := tenantdb.FromContext(c.Request.Context())
-		rec := agent.ExecutionRecord{
-			AgentID:      id,
-			UserID:       userID,
-			AgentName:    a.GetConfig().Name,
-			InputPreview: truncate(req.Query, previewMaxChars),
-			DurationMs:   durationMs,
-		}
-		if err != nil {
-			rec.Status = "error"
-			rec.ErrorMessage = err.Error()
-		} else {
-			rec.Status = "success"
-			rec.OutputPreview = truncate(result.Output, previewMaxChars)
-			rec.TotalTokens = result.TokensUsed
-		}
-		insertCtx := tenantdb.WithTenant(context.Background(), tc)
-		go func() {
-			if insertErr := h.executionStore.Insert(insertCtx, rec); insertErr != nil {
-				h.logger.Warn("execution record insert failed", zap.Error(insertErr))
-			}
-		}()
-	}
+	h.recordExecution(c.Request.Context(), id, userID, a.GetConfig().Name, req.Query, result, err, durationMs)
 
 	if err != nil {
 		if errors.Is(err, context.Canceled) && clientCtx.Err() != nil {
@@ -343,7 +165,6 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		writeEvent(string(payload))
 		return
 	}
-
 	donePayload, _ := json.Marshal(map[string]interface{}{
 		"done":       true,
 		"output":     result.Output,
@@ -354,50 +175,108 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	writeEvent(string(donePayload))
 }
 
-func buildRAGSearchFn(rs *knowledge.RAGService, tenantID string) func(ctx context.Context, workspaces []string, query string, topK int) (string, error) {
-	return func(ctx context.Context, workspaces []string, query string, topK int) (string, error) {
-		type wsResult struct {
-			content string
-			err     error
-		}
-		results := make([]wsResult, len(workspaces))
-		var wg sync.WaitGroup
-		for i, ws := range workspaces {
-			wg.Add(1)
-			go func(i int, ws string) {
-				defer wg.Done()
-				result, err := rs.Query(ctx, knowledge.RAGQueryRequest{
-					Workspace: ws,
-					Question:  query,
-					TenantID:  tenantID,
-					Mode:      "vector",
-					TopK:      topK,
-				})
-				if err != nil {
-					results[i] = wsResult{err: err}
-					return
-				}
-				var sb strings.Builder
-				for _, src := range result.Sources {
-					sb.WriteString(src.Content)
-					sb.WriteString("\n---\n")
-				}
-				results[i] = wsResult{content: sb.String()}
-			}(i, ws)
-		}
-		wg.Wait()
-		var combined strings.Builder
-		var firstErr error
-		for _, r := range results {
-			if r.err != nil && firstErr == nil {
-				firstErr = r.err
-				continue
+// assembleOptions builds the ExecutionOption slice shared by sync + stream paths.
+// When stream is true, returns a context that carries the per-tenant LLM completer
+// (used by streaming RAG / inner LLM calls); otherwise returns the request context unchanged.
+func (h *AgentHandler) assembleOptions(
+	c *gin.Context, a agent.Agent, req ExecuteAgentRequest, tenantID, userID string, stream bool,
+) (context.Context, []agent.ExecutionOption) {
+	options := []agent.ExecutionOption{agent.WithMaxSteps(a.GetConfig().MaxIterations)}
+	options = append(options, optionsFromRequest(req)...)
+
+	ctx := c.Request.Context()
+	if h.tenantResolver != nil {
+		if capGW, apiKeys, ok := h.tenantResolver.Resolve(ctx, tenantID); ok {
+			if stream {
+				ctx = h.tenantResolver.InjectCompleter(ctx, tenantID)
 			}
-			combined.WriteString(r.content)
+			type capGWSetter interface {
+				SetCapGateway(port.CapabilityGateway)
+			}
+			if setter, ok := a.(capGWSetter); ok {
+				setter.SetCapGateway(capGW)
+			}
+			if len(apiKeys) > 0 {
+				options = append(options, agent.WithLLMAPIKeys(apiKeys))
+			}
 		}
-		if combined.Len() == 0 && firstErr != nil {
-			return "", firstErr
-		}
-		return combined.String(), nil
 	}
+	h.attachChatStore(a)
+
+	options = append(options,
+		agent.WithTenantID(tenantID),
+		agent.WithTraceID(middleware.GetTraceID(c)),
+		agent.WithUserID(userID),
+	)
+	if req.ConversationID != "" {
+		options = append(options,
+			agent.WithConversationID(req.ConversationID),
+			agent.WithHistoryWindow(20),
+		)
+	}
+	options = append(options, agent.WithExtraTools(
+		h.buildExtraTools(c.Request.Context(), a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills),
+	))
+	if h.ragService != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
+		options = append(options, agent.WithRAGSearchFn(knowledge.NewRAGSearchFn(h.ragService, tenantID)))
+	}
+	return ctx, options
+}
+
+func optionsFromRequest(req ExecuteAgentRequest) []agent.ExecutionOption {
+	if req.Options == nil {
+		return nil
+	}
+	var out []agent.ExecutionOption
+	if maxSteps, ok := req.Options["maxSteps"].(float64); ok {
+		out = append(out, agent.WithMaxSteps(int(maxSteps)))
+	}
+	if timeout, ok := req.Options["timeout"].(float64); ok {
+		out = append(out, agent.WithTimeout(time.Duration(timeout)*time.Second))
+	}
+	return out
+}
+
+func (h *AgentHandler) attachChatStore(a agent.Agent) {
+	if h.chatStore == nil {
+		return
+	}
+	type chatStoreSetter interface {
+		SetChatStore(agent.ChatStore)
+	}
+	if setter, ok := a.(chatStoreSetter); ok {
+		setter.SetChatStore(h.chatStore)
+	}
+}
+
+// recordExecution fire-and-forget inserts a per-tenant execution record.
+func (h *AgentHandler) recordExecution(
+	reqCtx context.Context, id, userID, agentName, query string,
+	result *agent.AgentResult, err error, durationMs int,
+) {
+	if h.executionStore == nil {
+		return
+	}
+	tc, _ := tenantdb.FromContext(reqCtx)
+	rec := agent.ExecutionRecord{
+		AgentID:      id,
+		UserID:       userID,
+		AgentName:    agentName,
+		InputPreview: truncate(query, previewMaxChars),
+		DurationMs:   durationMs,
+	}
+	if err != nil {
+		rec.Status = "error"
+		rec.ErrorMessage = err.Error()
+	} else {
+		rec.Status = "success"
+		rec.OutputPreview = truncate(result.Output, previewMaxChars)
+		rec.TotalTokens = result.TokensUsed
+	}
+	insertCtx := tenantdb.WithTenant(context.Background(), tc)
+	go func() {
+		if insertErr := h.executionStore.Insert(insertCtx, rec); insertErr != nil {
+			h.logger.Warn("execution record insert failed", zap.Error(insertErr))
+		}
+	}()
 }

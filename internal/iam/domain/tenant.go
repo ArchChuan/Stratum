@@ -29,3 +29,36 @@ type UserTenantInfo struct {
 	Name      string
 	IsDefault bool
 }
+
+// Tenant aggregates the public.tenants row used by admin flows.
+type Tenant struct {
+	ID          string
+	Name        string
+	Slug        string
+	Plan        string
+	Status      string
+	CreatedAt   time.Time
+	DeletedAt   *time.Time
+	MemberCount int
+}
+
+// TenantFilter narrows admin tenant listing.
+type TenantFilter struct {
+	Status   string
+	Page     int
+	PageSize int
+}
+
+// TenantPatch carries optional fields for tenant updates. Empty strings mean "leave alone".
+type TenantPatch struct {
+	Plan   string
+	Status string
+}
+
+// StoredSession holds the user/tenant context persisted alongside a refresh token.
+type StoredSession struct {
+	UserID      string
+	TenantID    string
+	AvatarURL   string
+	GitHubLogin string
+}
