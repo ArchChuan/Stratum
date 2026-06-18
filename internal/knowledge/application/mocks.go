@@ -12,8 +12,6 @@ import (
 var _ knowledgeport.GraphStore = (*MockGraphStore)(nil)
 
 type MockGraphStore struct {
-	queryResult       interface{}
-	queryErr          error
 	docCount          int
 	docCountErr       error
 	workspaceNames    []string
@@ -34,13 +32,6 @@ func (m *MockGraphStore) CreateNode(_ context.Context, _ string, _ map[string]in
 
 func (m *MockGraphStore) CreateRelationship(_ context.Context, _, _, _ string) error {
 	return nil
-}
-
-func (m *MockGraphStore) Query(_ context.Context, _ string, _ map[string]interface{}) (interface{}, error) {
-	if m.queryErr != nil {
-		return nil, m.queryErr
-	}
-	return m.queryResult, nil
 }
 
 func (m *MockGraphStore) GetNeighborNodes(_ context.Context, _ string, _ int) ([]map[string]interface{}, error) {
@@ -79,14 +70,6 @@ func (m *MockGraphStore) SetWorkspaceNamesResult(names []string, err error) {
 
 func (m *MockGraphStore) Close() error {
 	return nil
-}
-
-func (m *MockGraphStore) SetQueryResult(result interface{}) {
-	m.queryResult = result
-}
-
-func (m *MockGraphStore) SetQueryError(err error) {
-	m.queryErr = err
 }
 
 type MockVectorStore struct {

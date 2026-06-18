@@ -166,32 +166,6 @@ func (g *GraphAdapter) CreateRelationship(ctx context.Context, fromID, toID, rel
 	return nil
 }
 
-func (g *GraphAdapter) Query(ctx context.Context, query string, params map[string]interface{}) (interface{}, error) {
-	if err := g.ensureConnected(ctx); err != nil {
-		return nil, fmt.Errorf("neo4j not available: %w", err)
-	}
-	g.logger.Debug("executing graph query")
-
-	result, err := g.session.Run(ctx, query, params)
-	if err != nil {
-		g.logger.Error("failed to execute query", zap.Error(err))
-		return nil, fmt.Errorf("failed to execute query: %w", err)
-	}
-	if result.Err() != nil {
-		return nil, result.Err()
-	}
-
-	var results []interface{}
-	records, err := result.Collect(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, record := range records {
-		results = append(results, record.Values)
-	}
-	return results, nil
-}
-
 func (g *GraphAdapter) GetNeighborNodes(ctx context.Context, nodeID string, maxDepth int) ([]map[string]interface{}, error) {
 	if err := g.ensureConnected(ctx); err != nil {
 		return nil, fmt.Errorf("neo4j not available: %w", err)
