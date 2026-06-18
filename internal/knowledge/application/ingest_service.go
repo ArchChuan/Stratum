@@ -301,23 +301,9 @@ func (ki *KnowledgeIngest) GetWorkspaceStats(ctx context.Context, workspace stri
 	if col, err := tenantdb.WorkspaceCollection(ctx, workspace); err == nil {
 		collectionName = col
 	}
-	cypher := `
-		MATCH (d:Document)
-		WHERE d.workspace = $workspace
-		RETURN count(d) as doc_count
-	`
-	docCountResult, err := ki.graphRAG.Query(ctx, cypher, map[string]interface{}{"workspace": workspace})
+	docCount, err := ki.graphRAG.GetWorkspaceDocCount(ctx, workspace)
 	if err != nil {
 		return nil, err
-	}
-
-	docCount := 0
-	if resultList, ok := docCountResult.([]interface{}); ok && len(resultList) > 0 {
-		if m, ok := resultList[0].(map[string]interface{}); ok {
-			if c, ok := m["doc_count"].(int64); ok {
-				docCount = int(c)
-			}
-		}
 	}
 
 	stats := map[string]interface{}{

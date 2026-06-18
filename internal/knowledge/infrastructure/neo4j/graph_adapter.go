@@ -338,6 +338,59 @@ func (g *GraphAdapter) DeleteWorkspaceNodes(ctx context.Context, workspace strin
 	return nil
 }
 
+// GetWorkspaceDocCount returns the number of Document nodes for the given workspace.
+func (g *GraphAdapter) GetWorkspaceDocCount(ctx context.Context, workspace string) (int, error) {
+	if err := g.ensureConnected(ctx); err != nil {
+		return 0, fmt.Errorf("neo4j not available: %w", err)
+	}
+	result, err := g.session.Run(ctx,
+		`MATCH (d:Document) WHERE d.workspace = $workspace RETURN count(d) AS doc_count`,
+		map[string]interface{}{"workspace": workspace},
+	)
+	if err != nil {
+		return 0, fmt.Errorf("graph: workspace doc count: %w", err)
+	}
+	records, err := result.Collect(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("graph: collect doc count: %w", err)
+	}
+	if len(records) == 0 {
+		return 0, nil
+	}
+	raw, _ := records[0].Get("doc_count")
+	if c, ok := raw.(int64); ok {
+		return int(c), nil
+	}
+	return 0, nil
+}
+
+// GetWorkspaceNames returns all distinct workspace names present in the graph.
+func (g *GraphAdapter) GetWorkspaceNames(ctx context.Context) ([]string, error) {
+	if err := g.ensureConnected(ctx); err != nil {
+		return nil, fmt.Errorf("neo4j not available: %w", err)
+	}
+	result, err := g.session.Run(ctx,
+		`MATCH (d:Document) WITH d.workspace AS workspace RETURN DISTINCT workspace ORDER BY workspace`,
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("graph: workspace names: %w", err)
+	}
+	records, err := result.Collect(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("graph: collect workspace names: %w", err)
+	}
+	names := make([]string, 0, len(records))
+	for _, rec := range records {
+		if raw, ok := rec.Get("workspace"); ok {
+			if s, ok := raw.(string); ok {
+				names = append(names, s)
+			}
+		}
+	}
+	return names, nil
+}
+
 func (g *GraphAdapter) Close() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()

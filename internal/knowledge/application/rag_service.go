@@ -336,28 +336,9 @@ func (rs *RAGService) BuildPrompt(question string, chunks []string, graphContext
 func (rs *RAGService) GetWorkspaceCollections(ctx context.Context) ([]string, error) {
 	rs.logger.Debug("getting workspace collections")
 
-	cypher := `
-		MATCH (d:Document)
-		WITH d.workspace as workspace
-		RETURN DISTINCT workspace
-		ORDER BY workspace
-	`
-
-	results, err := rs.graphRAG.Query(ctx, cypher, nil)
+	workspaces, err := rs.graphRAG.GetWorkspaceNames(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	var workspaces []string
-	if resultList, ok := results.([]interface{}); ok {
-		for _, r := range resultList {
-			if workspace, ok := r.(map[string]interface{}); ok {
-				if ws, ok := workspace["workspace"].(string); ok {
-					workspaces = append(workspaces, ws)
-				}
-			}
-		}
-	}
-
 	return workspaces, nil
 }

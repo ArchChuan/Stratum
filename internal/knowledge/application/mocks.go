@@ -55,6 +55,14 @@ func (m *MockGraphStore) DeleteWorkspaceNodes(_ context.Context, _ string) error
 	return nil
 }
 
+func (m *MockGraphStore) GetWorkspaceDocCount(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
+
+func (m *MockGraphStore) GetWorkspaceNames(_ context.Context) ([]string, error) {
+	return []string{}, nil
+}
+
 func (m *MockGraphStore) Close() error {
 	return nil
 }

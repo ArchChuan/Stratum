@@ -22,5 +22,7 @@ type GraphStore interface {
 	FullTextSearch(ctx context.Context, searchTerm string, limit int) ([]GraphNodeResult, error)
 	QueryWorkspaceDocumentIDs(ctx context.Context, workspace string) ([]string, error)
 	DeleteWorkspaceNodes(ctx context.Context, workspace string) error
+	GetWorkspaceDocCount(ctx context.Context, workspace string) (int, error)
+	GetWorkspaceNames(ctx context.Context) ([]string, error)
 	Close() error
 }
