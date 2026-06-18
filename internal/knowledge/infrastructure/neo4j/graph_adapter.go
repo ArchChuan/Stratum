@@ -358,10 +358,11 @@ func (g *GraphAdapter) GetWorkspaceDocCount(ctx context.Context, workspace strin
 		return 0, nil
 	}
 	raw, _ := records[0].Get("doc_count")
-	if c, ok := raw.(int64); ok {
-		return int(c), nil
+	c, ok := raw.(int64)
+	if !ok {
+		return 0, fmt.Errorf("graph: unexpected doc_count type %T", raw)
 	}
-	return 0, nil
+	return int(c), nil
 }
 
 // GetWorkspaceNames returns all distinct workspace names present in the graph.

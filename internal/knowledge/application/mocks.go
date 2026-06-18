@@ -12,8 +12,12 @@ import (
 var _ knowledgeport.GraphStore = (*MockGraphStore)(nil)
 
 type MockGraphStore struct {
-	queryResult interface{}
-	queryErr    error
+	queryResult       interface{}
+	queryErr          error
+	docCount          int
+	docCountErr       error
+	workspaceNames    []string
+	workspaceNamesErr error
 }
 
 func NewMockGraphStore() *MockGraphStore {
@@ -56,11 +60,21 @@ func (m *MockGraphStore) DeleteWorkspaceNodes(_ context.Context, _ string) error
 }
 
 func (m *MockGraphStore) GetWorkspaceDocCount(_ context.Context, _ string) (int, error) {
-	return 0, nil
+	return m.docCount, m.docCountErr
 }
 
 func (m *MockGraphStore) GetWorkspaceNames(_ context.Context) ([]string, error) {
-	return []string{}, nil
+	return m.workspaceNames, m.workspaceNamesErr
+}
+
+func (m *MockGraphStore) SetDocCountResult(n int, err error) {
+	m.docCount = n
+	m.docCountErr = err
+}
+
+func (m *MockGraphStore) SetWorkspaceNamesResult(names []string, err error) {
+	m.workspaceNames = names
+	m.workspaceNamesErr = err
 }
 
 func (m *MockGraphStore) Close() error {
