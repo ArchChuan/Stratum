@@ -9,7 +9,7 @@ import (
 
 func TestNewSkillHandler(t *testing.T) {
 	logger := zap.NewNop()
-	handler := NewSkillHandler(nil, logger, nil, nil)
+	handler := NewSkillHandler(nil, logger)
 
 	if handler == nil {
 		t.Error("expected SkillHandler to be non-nil")
@@ -27,7 +27,7 @@ func TestNewRAGHandler(t *testing.T) {
 
 func TestNewAgentHandler(t *testing.T) {
 	logger := zap.NewNop()
-	handler := NewAgentHandler(nil, logger, nil, observability.NoopMetrics{}, nil, nil, [32]byte{}, nil, nil, nil, nil, nil)
+	handler := NewAgentHandler(nil, logger, observability.NoopMetrics{}, nil, nil, nil, nil, nil, nil, nil)
 
 	if handler == nil {
 		t.Error("expected AgentHandler to be non-nil")

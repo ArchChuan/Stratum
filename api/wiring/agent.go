@@ -4,6 +4,7 @@ import (
 	"context"
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	persistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
 )
 
@@ -12,9 +13,12 @@ import (
 // so agents resolved from DB inherit those capabilities at construction
 // time.
 type Agent struct {
-	Registry  *agent.Registry
-	ExecStore agent.ExecutionStore
-	ChatStore agent.ChatStore
+	Registry       *agent.Registry
+	ExecStore      agent.ExecutionStore
+	ChatStore      agent.ChatStore
+	TenantResolver agentport.TenantCapabilityResolver
+	SkillLookup    agentport.SkillLookup
+	TenantSettings agentport.TenantSettings
 }
 
 func (c *Container) buildAgent(_ context.Context) error {
@@ -40,6 +44,11 @@ func (c *Container) buildAgent(_ context.Context) error {
 	if db != nil {
 		a.ExecStore = persistence.NewPgExecutionStore(db)
 		a.ChatStore = persistence.NewPgChatStore(db)
+		a.SkillLookup = persistence.NewPgSkillLookup(db)
+		a.TenantSettings = persistence.NewPgTenantSettings(db)
+		if c.Skill != nil {
+			a.TenantResolver = newTenantCapabilityResolver(db, c.Platform.AESKey, c.Platform.GatewayCache, c.Skill.SkillAdapter, c.Logger)
+		}
 	}
 	c.Agent = a
 	return nil

@@ -45,19 +45,18 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		return
 	}
 	jwtSvc := c.Platform.JWTService
-	db := c.DB()
 
 	authHandler := handler.NewAuthHandler(handler.AuthHandlerDeps{
-		GitHubClient:  c.Platform.GitHubClient,
-		JWTService:    jwtSvc,
-		TokenStore:    c.Platform.TokenStore,
-		OnboardSvc:    c.Platform.OnboardSvc,
-		Logger:        c.Logger,
-		Pool:          db,
-		CallbackURL:   cfg.GitHubCallbackURL,
-		FrontendURL:   cfg.FrontendURL,
-		GlobalAdmin:   cfg.GlobalAdminGitHubLogin,
-		SecureCookies: cfg.SecureCookies,
+		GitHubClient:      c.Platform.GitHubClient,
+		SchemaProvisioner: c.Platform.SchemaProvisioner,
+		JWTService:        jwtSvc,
+		TokenStore:        c.Platform.TokenStore,
+		OnboardSvc:        c.Platform.OnboardSvc,
+		Logger:            c.Logger,
+		CallbackURL:       cfg.GitHubCallbackURL,
+		FrontendURL:       cfg.FrontendURL,
+		GlobalAdmin:       cfg.GlobalAdminGitHubLogin,
+		SecureCookies:     cfg.SecureCookies,
 	})
 	authRoutes := r.Group("/auth")
 	{
@@ -71,11 +70,11 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		authRoutes.POST("/create-tenant", authHandler.CreateUserTenant)
 	}
 
-	if db == nil {
+	if c.DB() == nil {
 		return
 	}
 	jwtMW := middleware.JWTMiddleware(jwtSvc)
-	adminHandler := handler.NewAdminHandler(db, c.Logger)
+	adminHandler := handler.NewAdminHandler(c.IAM.AdminService, c.Logger)
 	tenantHandler := handler.NewTenantHandler(c.IAM.TenantService, c.Logger)
 
 	adminGroup := r.Group("/admin", jwtMW, middleware.RequireGlobalAdmin())
@@ -107,13 +106,13 @@ func registerHealth(r *gin.Engine, c *wiring.Container) {
 	r.GET("/health", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{"status": "ok", "service": "Stratum"})
 	})
-	modelHandler := handler.NewModelHandler(c.LLMGateway.Gateway)
+	modelHandler := handler.NewModelHandler(c.LLMGateway.ModelService)
 	r.GET("/models", modelHandler.ListModels)
 }
 
 // registerSkills wires /skills/* under JWT + tenant context.
 func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	skillHandler := handler.NewSkillHandler(c.DB(), c.Logger, c.LLMGateway.Gateway, c.Skill.CodeExecutor)
+	skillHandler := handler.NewSkillHandler(c.Skill.Service, c.Logger)
 
 	var mw []gin.HandlerFunc
 	if c.Platform.JWTService != nil {
@@ -136,15 +135,13 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 	agentHandler := handler.NewAgentHandler(
 		c.Agent.Registry,
 		c.Logger,
-		c.LLMGateway.Gateway,
 		c.Platform.Metrics,
 		c.Agent.ExecStore,
-		c.DB(),
-		c.Platform.AESKey,
-		c.Platform.GatewayCache,
+		c.Agent.SkillLookup,
+		c.Agent.TenantSettings,
+		c.Agent.TenantResolver,
 		c.Knowledge.RAGService,
-		c.MCP.Registry,
-		c.Skill.SkillAdapter,
+		c.MCP.AgentToolProvider,
 		c.Agent.ChatStore,
 	)
 	chatHandler := handler.NewChatHandler(c.Agent.ChatStore, c.Logger)
@@ -227,7 +224,7 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 // registerMCP wires /mcp/* via the handler's RegisterRoutes. Write
 // routes require JWT + tenant context (same pattern as agents/skills).
 func registerMCP(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	mcpHandler := handler.NewMCPHandler(c.MCP.Registry, c.MCP.Manager, c.Logger)
+	mcpHandler := handler.NewMCPHandler(c.MCP.Service, c.Logger)
 
 	var mw []gin.HandlerFunc
 	if c.Platform.JWTService != nil {
