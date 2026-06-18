@@ -258,8 +258,7 @@ func (rs *RAGService) queryGraph(ctx context.Context, question string) ([]GraphE
 
 	var graphEntities []GraphEntity
 	for _, n := range records {
-		id, _ := n.Properties["id"].(string)
-		if id == "" {
+		if n.ID == "" {
 			rs.logger.Warn("graph search result missing id, skipping", zap.String("trace_id", sc.TraceID))
 			continue
 		}
@@ -268,7 +267,7 @@ func (rs *RAGService) queryGraph(ctx context.Context, question string) ([]GraphE
 			label = n.Labels[0]
 		}
 		graphEntities = append(graphEntities, GraphEntity{
-			ID:         id,
+			ID:         n.ID,
 			Label:      label,
 			Properties: n.Properties,
 		})

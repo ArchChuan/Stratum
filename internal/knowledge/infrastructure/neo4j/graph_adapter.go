@@ -277,8 +277,10 @@ func (g *GraphAdapter) FullTextSearch(ctx context.Context, searchTerm string, li
 			g.logger.Warn("unexpected node type in FullTextSearch", zap.String("type", fmt.Sprintf("%T", raw)))
 			continue
 		}
+		// Use the application-managed "id" property (string UUID), not n.Id (internal rowid).
+		domainID, _ := n.Props["id"].(string)
 		nodes = append(nodes, knowledgeport.GraphNodeResult{
-			ID:         fmt.Sprintf("%d", n.Id),
+			ID:         domainID,
 			Labels:     n.Labels,
 			Properties: n.Props,
 		})
