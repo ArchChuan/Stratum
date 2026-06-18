@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j/dbtype"
 	"go.uber.org/zap"
 
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
@@ -232,7 +233,7 @@ func (g *GraphAdapter) GetNeighborNodes(ctx context.Context, nodeID string, maxD
 	return nodes, nil
 }
 
-func (g *GraphAdapter) FullTextSearch(ctx context.Context, searchTerm string, limit int) ([]map[string]interface{}, error) {
+func (g *GraphAdapter) FullTextSearch(ctx context.Context, searchTerm string, limit int) ([]knowledgeport.GraphNodeResult, error) {
 	if err := g.ensureConnected(ctx); err != nil {
 		return nil, fmt.Errorf("neo4j not available: %w", err)
 	}
@@ -261,20 +262,28 @@ func (g *GraphAdapter) FullTextSearch(ctx context.Context, searchTerm string, li
 		return nil, result.Err()
 	}
 
-	var results []map[string]interface{}
 	records, err := result.Collect(ctx)
 	if err != nil {
 		return nil, err
 	}
+	nodes := make([]knowledgeport.GraphNodeResult, 0, len(records))
 	for _, record := range records {
-		resultMap := make(map[string]interface{})
-		for _, key := range record.Keys {
-			value, _ := record.Get(key)
-			resultMap[key] = value
+		raw, ok := record.Get("node")
+		if !ok {
+			continue
 		}
-		results = append(results, resultMap)
+		n, ok := raw.(dbtype.Node)
+		if !ok {
+			g.logger.Warn("unexpected node type in FullTextSearch", zap.String("type", fmt.Sprintf("%T", raw)))
+			continue
+		}
+		nodes = append(nodes, knowledgeport.GraphNodeResult{
+			ID:         fmt.Sprintf("%d", n.Id),
+			Labels:     n.Labels,
+			Properties: n.Props,
+		})
 	}
-	return results, nil
+	return nodes, nil
 }
 
 // QueryWorkspaceDocumentIDs returns the IDs of all Document nodes for the given

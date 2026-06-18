@@ -3,10 +3,6 @@ package application
 import (
 	"testing"
 
-	neo4jadapter "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/neo4j"
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
-	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
-	"github.com/byteBuilderX/stratum/pkg/vector"
 	"go.uber.org/zap"
 )
 
@@ -175,11 +171,9 @@ func TestGraphEntityStructure(t *testing.T) {
 
 func TestBuildPrompt(t *testing.T) {
 	logger := zap.NewNop()
-	embedSvc := embedding.NewEmbeddingService(llmgateway.NewQwenClient("", logger), logger)
-	vectorStore := vector.NewVectorStore("localhost", "19530", logger)
-	graphRAG := neo4jadapter.NewGraphAdapter("bolt://localhost:7687", "neo4j", "password", logger)
+	graphRAG := NewMockGraphStore()
 
-	ragService := NewRAGService(embedSvc, vectorStore, graphRAG, logger)
+	ragService := NewRAGService(nil, nil, graphRAG, logger)
 
 	chunks := []string{"chunk1", "chunk2"}
 	graphContext := []GraphEntity{

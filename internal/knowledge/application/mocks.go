@@ -43,8 +43,8 @@ func (m *MockGraphStore) GetNeighborNodes(_ context.Context, _ string, _ int) ([
 	return []map[string]interface{}{}, nil
 }
 
-func (m *MockGraphStore) FullTextSearch(_ context.Context, _ string, _ int) ([]map[string]interface{}, error) {
-	return []map[string]interface{}{}, nil
+func (m *MockGraphStore) FullTextSearch(_ context.Context, _ string, _ int) ([]knowledgeport.GraphNodeResult, error) {
+	return []knowledgeport.GraphNodeResult{}, nil
 }
 
 func (m *MockGraphStore) QueryWorkspaceDocumentIDs(_ context.Context, _ string) ([]string, error) {

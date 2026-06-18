@@ -12,7 +12,6 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/byteBuilderX/stratum/pkg/vector"
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j/dbtype"
 	"go.uber.org/zap"
 )
 
@@ -258,17 +257,8 @@ func (rs *RAGService) queryGraph(ctx context.Context, question string) ([]GraphE
 	}
 
 	var graphEntities []GraphEntity
-	for _, m := range records {
-		raw, ok := m["node"]
-		if !ok {
-			continue
-		}
-		n, ok := raw.(dbtype.Node)
-		if !ok {
-			rs.logger.Warn("unexpected node type", zap.String("trace_id", sc.TraceID), zap.String("type", fmt.Sprintf("%T", raw)))
-			continue
-		}
-		id, _ := n.Props["id"].(string)
+	for _, n := range records {
+		id, _ := n.Properties["id"].(string)
 		if id == "" {
 			rs.logger.Warn("graph search result missing id, skipping", zap.String("trace_id", sc.TraceID))
 			continue
@@ -280,7 +270,7 @@ func (rs *RAGService) queryGraph(ctx context.Context, question string) ([]GraphE
 		graphEntities = append(graphEntities, GraphEntity{
 			ID:         id,
 			Label:      label,
-			Properties: n.Props,
+			Properties: n.Properties,
 		})
 	}
 
