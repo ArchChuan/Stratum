@@ -14,10 +14,13 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+const previewMaxChars = 50
 
 // AgentServiceDeps groups the consumer-side dependencies of AgentService.
 // Everything is an interface or value type — no concrete infrastructure
@@ -242,4 +245,258 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,
 		CreatedAt:             time.Now().Format(time.RFC3339),
 	}
+}
+
+// ExecRequest is the wire-agnostic execute payload AgentService accepts
+// from transport layers.
+type ExecRequest struct {
+	Query          string
+	ConversationID string
+	UserID         string
+	MaxSteps       int
+	Timeout        time.Duration
+}
+
+// ExecMeta carries per-call routing metadata sourced from middleware
+// (tenant, trace) — never inferred from request body.
+type ExecMeta struct {
+	TenantID string
+	TraceID  string
+	Stream   bool
+}
+
+// ExecutionRowDTO is the wire shape emitted by ListExecutions.
+type ExecutionRowDTO struct {
+	ID            string
+	AgentID       string
+	AgentName     string
+	UserID        string
+	Status        string
+	InputPreview  string
+	OutputPreview string
+	ErrorMessage  string
+	TotalTokens   int
+	DurationMs    int
+	CreatedAt     string
+}
+
+// Execute runs an agent synchronously, persisting an execution record
+// on completion. The returned context is for streaming callers — it is
+// nil here. Callers receive (*AgentResult, durationMs, error) so the
+// transport can render Duration uniformly.
+func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta) (*AgentResult, int, error) {
+	a, ok := s.deps.Registry.Get(ctx, agentID)
+	if !ok {
+		return nil, 0, ErrNotFound
+	}
+	_, options := s.assembleOptions(ctx, a, req, meta)
+
+	execCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), constants.AgentExecTimeout)
+	defer cancel()
+
+	start := time.Now()
+	result, err := a.Execute(execCtx, req.Query, options...)
+	durationMs := int(time.Since(start).Milliseconds())
+
+	s.recordExecution(ctx, agentID, req.UserID, a.GetConfig().Name, req.Query, result, err, durationMs)
+	return result, durationMs, err
+}
+
+// ExecuteStream runs an agent with token streaming. tokenCb is invoked
+// per LLM token; it must be safe for concurrent use with this call's
+// goroutine. The returned context carries the per-tenant LLM completer
+// (for inner streaming RAG / tool calls) — transport must use it for
+// the SSE write loop. cancel() releases the per-call deadline.
+func (s *AgentService) ExecuteStream(
+	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, tokenCb func(string),
+) (execCtx context.Context, cancel context.CancelFunc, run func() (*AgentResult, int, error), err error) {
+	a, ok := s.deps.Registry.Get(ctx, agentID)
+	if !ok {
+		return nil, nil, nil, ErrNotFound
+	}
+	streamCtx, options := s.assembleOptions(ctx, a, req, meta)
+	options = append(options, WithTokenCallback(tokenCb))
+
+	execCtx, cancel = context.WithTimeout(context.WithoutCancel(streamCtx), constants.AgentExecTimeout)
+	run = func() (*AgentResult, int, error) {
+		start := time.Now()
+		res, runErr := a.Execute(execCtx, req.Query, options...)
+		durationMs := int(time.Since(start).Milliseconds())
+		s.recordExecution(ctx, agentID, req.UserID, a.GetConfig().Name, req.Query, res, runErr, durationMs)
+		return res, durationMs, runErr
+	}
+	return execCtx, cancel, run, nil
+}
+
+// ListExecutions paginates the per-tenant execution history.
+func (s *AgentService) ListExecutions(ctx context.Context, page, pageSize int) ([]ExecutionRowDTO, int64, error) {
+	if s.deps.ExecStore == nil {
+		return []ExecutionRowDTO{}, 0, nil
+	}
+	records, total, err := s.deps.ExecStore.List(ctx, ListOptions{Page: page, PageSize: pageSize})
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([]ExecutionRowDTO, 0, len(records))
+	for _, r := range records {
+		out = append(out, ExecutionRowDTO{
+			ID:            r.ID,
+			AgentID:       r.AgentID,
+			AgentName:     r.AgentName,
+			UserID:        r.UserID,
+			Status:        r.Status,
+			InputPreview:  r.InputPreview,
+			OutputPreview: r.OutputPreview,
+			ErrorMessage:  r.ErrorMessage,
+			TotalTokens:   r.TotalTokens,
+			DurationMs:    r.DurationMs,
+			CreatedAt:     r.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	return out, total, nil
+}
+
+// assembleOptions builds the ExecutionOption slice and resolves the
+// per-tenant CapabilityGateway. When meta.Stream is true, the returned
+// ctx carries the per-tenant LLM completer for streaming inner calls.
+func (s *AgentService) assembleOptions(
+	ctx context.Context, a Agent, req ExecRequest, meta ExecMeta,
+) (context.Context, []ExecutionOption) {
+	options := []ExecutionOption{WithMaxSteps(a.GetConfig().MaxIterations)}
+	if req.MaxSteps > 0 {
+		options = append(options, WithMaxSteps(req.MaxSteps))
+	}
+	if req.Timeout > 0 {
+		options = append(options, WithTimeout(req.Timeout))
+	}
+
+	if s.deps.TenantResolver != nil {
+		if capGW, apiKeys, ok := s.deps.TenantResolver.Resolve(ctx, meta.TenantID); ok {
+			if meta.Stream {
+				ctx = s.deps.TenantResolver.InjectCompleter(ctx, meta.TenantID)
+			}
+			type capGWSetter interface {
+				SetCapGateway(port.CapabilityGateway)
+			}
+			if setter, ok := a.(capGWSetter); ok {
+				setter.SetCapGateway(capGW)
+			}
+			if len(apiKeys) > 0 {
+				options = append(options, WithLLMAPIKeys(apiKeys))
+			}
+		}
+	}
+	s.attachChatStore(a)
+
+	options = append(options,
+		WithTenantID(meta.TenantID),
+		WithTraceID(meta.TraceID),
+		WithUserID(req.UserID),
+	)
+	if req.ConversationID != "" {
+		options = append(options,
+			WithConversationID(req.ConversationID),
+			WithHistoryWindow(constants.DefaultInitHistoryWindow),
+		)
+	}
+	options = append(options, WithExtraTools(
+		s.buildExtraTools(ctx, meta.TenantID, a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills),
+	))
+	if s.deps.RAGSearch != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
+		tenantID := meta.TenantID
+		options = append(options, WithRAGSearchFn(func(rctx context.Context, workspaces []string, query string, topK int) (string, error) {
+			return s.deps.RAGSearch.SearchKnowledge(rctx, tenantID, workspaces, query, topK)
+		}))
+	}
+	return ctx, options
+}
+
+// attachChatStore wires the configured ChatStore onto the running agent
+// when the agent type supports it.
+func (s *AgentService) attachChatStore(a Agent) {
+	if s.deps.ChatStore == nil {
+		return
+	}
+	type chatStoreSetter interface {
+		SetChatStore(ChatStore)
+	}
+	if setter, ok := a.(chatStoreSetter); ok {
+		setter.SetChatStore(s.deps.ChatStore)
+	}
+}
+
+// buildExtraTools converts MCPServerIDs and AllowedSkills into
+// ToolDefinitions for the ReAct loop. Skill descriptions fall back to
+// the skill ID when the lookup is unavailable or returns blank.
+func (s *AgentService) buildExtraTools(ctx context.Context, tenantID string, mcpServerIDs, allowedSkills []string) []port.ToolDefinition {
+	var tools []port.ToolDefinition
+
+	for _, serverID := range mcpServerIDs {
+		if s.deps.MCPTools == nil {
+			continue
+		}
+		tools = append(tools, s.deps.MCPTools.ToolsForServer(ctx, serverID)...)
+	}
+
+	for _, skillID := range allowedSkills {
+		name := skillID
+		description := skillID
+		if s.deps.SkillLookup != nil && tenantID != "" {
+			if n, d, err := s.deps.SkillLookup.LookupSkill(ctx, tenantID, skillID); err == nil && n != "" {
+				name = n
+				description = d
+			}
+		}
+		tools = append(tools, port.ToolDefinition{
+			Name:        skillID,
+			Description: name + ": " + description,
+			InputSchema: map[string]any{"type": "object"},
+		})
+	}
+	return tools
+}
+
+// recordExecution fire-and-forget inserts a per-tenant execution record.
+// The insert reuses reqCtx — which carries the tenant — but detaches its
+// cancel signal so the goroutine survives the HTTP response lifecycle.
+func (s *AgentService) recordExecution(
+	reqCtx context.Context, id, userID, agentName, query string,
+	result *AgentResult, err error, durationMs int,
+) {
+	if s.deps.ExecStore == nil {
+		return
+	}
+	rec := domain.ExecutionRecord{
+		AgentID:      id,
+		UserID:       userID,
+		AgentName:    agentName,
+		InputPreview: truncateRunes(query, previewMaxChars),
+		DurationMs:   durationMs,
+	}
+	switch {
+	case err != nil:
+		rec.Status = "error"
+		rec.ErrorMessage = err.Error()
+	case result != nil:
+		rec.Status = "success"
+		rec.OutputPreview = truncateRunes(result.Output, previewMaxChars)
+		rec.TotalTokens = result.TokensUsed
+	default:
+		rec.Status = "success"
+	}
+	insertCtx := context.WithoutCancel(reqCtx)
+	go func() {
+		if insertErr := s.deps.ExecStore.Insert(insertCtx, rec); insertErr != nil {
+			s.deps.Logger.Warn("execution record insert failed", zap.Error(insertErr))
+		}
+	}()
+}
+
+// truncateRunes returns s truncated to maxRunes runes (not bytes).
+func truncateRunes(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes])
 }
