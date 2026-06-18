@@ -3,6 +3,7 @@ package application
 import (
 	"testing"
 
+	neo4jadapter "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/neo4j"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	"github.com/byteBuilderX/stratum/pkg/vector"
@@ -176,7 +177,7 @@ func TestBuildPrompt(t *testing.T) {
 	logger := zap.NewNop()
 	embedSvc := embedding.NewEmbeddingService(llmgateway.NewQwenClient("", logger), logger)
 	vectorStore := vector.NewVectorStore("localhost", "19530", logger)
-	graphRAG := NewGraphRAG("bolt://localhost:7687", "neo4j", "password", logger)
+	graphRAG := neo4jadapter.NewGraphAdapter("bolt://localhost:7687", "neo4j", "password", logger)
 
 	ragService := NewRAGService(embedSvc, vectorStore, graphRAG, logger)
 

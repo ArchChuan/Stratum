@@ -5,9 +5,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/byteBuilderX/stratum/pkg/vector"
@@ -15,17 +16,71 @@ import (
 	"go.uber.org/zap"
 )
 
+// NewRAGSearchFn returns a knowledge search function suitable for the agent's
+// WithRAGSearchFn hook. It fans out across workspaces concurrently and
+// concatenates results; the first error is returned only when no content was
+// produced.
+func NewRAGSearchFn(rs *RAGService, tenantID string) func(
+	ctx context.Context, workspaces []string, query string, topK int,
+) (string, error) {
+	return func(ctx context.Context, workspaces []string, query string, topK int) (string, error) {
+		type wsResult struct {
+			content string
+			err     error
+		}
+		results := make([]wsResult, len(workspaces))
+		var wg sync.WaitGroup
+		for i, ws := range workspaces {
+			wg.Add(1)
+			go func(i int, ws string) {
+				defer wg.Done()
+				out, err := rs.Query(ctx, RAGQueryRequest{
+					Workspace: ws,
+					Question:  query,
+					TenantID:  tenantID,
+					Mode:      "vector",
+					TopK:      topK,
+				})
+				if err != nil {
+					results[i] = wsResult{err: err}
+					return
+				}
+				var sb strings.Builder
+				for _, src := range out.Sources {
+					sb.WriteString(src.Content)
+					sb.WriteString("\n---\n")
+				}
+				results[i] = wsResult{content: sb.String()}
+			}(i, ws)
+		}
+		wg.Wait()
+		var combined strings.Builder
+		var firstErr error
+		for _, r := range results {
+			if r.err != nil && firstErr == nil {
+				firstErr = r.err
+				continue
+			}
+			combined.WriteString(r.content)
+		}
+		if combined.Len() == 0 && firstErr != nil {
+			return "", firstErr
+		}
+		return combined.String(), nil
+	}
+}
+
 type RAGService struct {
-	embeddingSvc port.Embedder
+	embeddingSvc knowledgeport.Embedder
 	vectorStore  *vector.VectorStore
-	graphRAG     *GraphRAG
+	graphRAG     knowledgeport.GraphStore
 	logger       *zap.Logger
 }
 
 func NewRAGService(
-	embeddingSvc port.Embedder,
+	embeddingSvc knowledgeport.Embedder,
 	vectorStore *vector.VectorStore,
-	graphRAG *GraphRAG,
+	graphRAG knowledgeport.GraphStore,
 	logger *zap.Logger,
 ) *RAGService {
 	return &RAGService{

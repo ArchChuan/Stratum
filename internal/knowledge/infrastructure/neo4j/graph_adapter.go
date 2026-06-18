@@ -1,5 +1,5 @@
-// Package application implements knowledge bounded context use-cases.
-package application
+// Package neo4j implements the knowledge GraphStore port using the Neo4j driver.
+package neo4j
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	"go.uber.org/zap"
+
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 )
 
 // validCypherIdentifier matches safe Neo4j label and relationship type names.
@@ -36,7 +38,8 @@ func escapeLucene(s string) string {
 	return luceneSpecial.Replace(s)
 }
 
-type GraphRAG struct {
+// GraphAdapter implements knowledgeport.GraphStore using the Neo4j driver.
+type GraphAdapter struct {
 	mu      sync.RWMutex
 	driver  neo4j.DriverWithContext
 	uri     string
@@ -46,8 +49,12 @@ type GraphRAG struct {
 	session neo4j.SessionWithContext
 }
 
-func NewGraphRAG(uri, user, password string, logger *zap.Logger) *GraphRAG {
-	return &GraphRAG{
+// Compile-time interface satisfaction check.
+var _ knowledgeport.GraphStore = (*GraphAdapter)(nil)
+
+// NewGraphAdapter constructs a GraphAdapter and returns it as a GraphStore.
+func NewGraphAdapter(uri, user, password string, logger *zap.Logger) knowledgeport.GraphStore {
+	return &GraphAdapter{
 		uri:    uri,
 		user:   user,
 		passwd: password,
@@ -55,7 +62,7 @@ func NewGraphRAG(uri, user, password string, logger *zap.Logger) *GraphRAG {
 	}
 }
 
-func (g *GraphRAG) doConnect(ctx context.Context) error {
+func (g *GraphAdapter) doConnect(ctx context.Context) error {
 	g.logger.Info("connecting to Neo4j", zap.String("uri", g.uri))
 
 	driver, err := neo4j.NewDriverWithContext(g.uri, neo4j.BasicAuth(g.user, g.passwd, ""))
@@ -78,11 +85,11 @@ func (g *GraphRAG) doConnect(ctx context.Context) error {
 	return nil
 }
 
-func (g *GraphRAG) Connect(ctx context.Context) error {
+func (g *GraphAdapter) Connect(ctx context.Context) error {
 	return g.ensureConnected(ctx)
 }
 
-func (g *GraphRAG) ensureConnected(ctx context.Context) error {
+func (g *GraphAdapter) ensureConnected(ctx context.Context) error {
 	g.mu.RLock()
 	if g.session != nil {
 		g.mu.RUnlock()
@@ -97,7 +104,7 @@ func (g *GraphRAG) ensureConnected(ctx context.Context) error {
 	return g.doConnect(ctx)
 }
 
-func (g *GraphRAG) CreateNode(ctx context.Context, label string, properties map[string]interface{}) error {
+func (g *GraphAdapter) CreateNode(ctx context.Context, label string, properties map[string]interface{}) error {
 	if err := g.ensureConnected(ctx); err != nil {
 		return fmt.Errorf("neo4j not available: %w", err)
 	}
@@ -125,7 +132,7 @@ func (g *GraphRAG) CreateNode(ctx context.Context, label string, properties map[
 	return nil
 }
 
-func (g *GraphRAG) CreateRelationship(ctx context.Context, fromID, toID, relType string) error {
+func (g *GraphAdapter) CreateRelationship(ctx context.Context, fromID, toID, relType string) error {
 	if err := g.ensureConnected(ctx); err != nil {
 		return fmt.Errorf("neo4j not available: %w", err)
 	}
@@ -158,7 +165,7 @@ func (g *GraphRAG) CreateRelationship(ctx context.Context, fromID, toID, relType
 	return nil
 }
 
-func (g *GraphRAG) Query(ctx context.Context, query string, params map[string]interface{}) (interface{}, error) {
+func (g *GraphAdapter) Query(ctx context.Context, query string, params map[string]interface{}) (interface{}, error) {
 	if err := g.ensureConnected(ctx); err != nil {
 		return nil, fmt.Errorf("neo4j not available: %w", err)
 	}
@@ -184,7 +191,7 @@ func (g *GraphRAG) Query(ctx context.Context, query string, params map[string]in
 	return results, nil
 }
 
-func (g *GraphRAG) GetNeighborNodes(ctx context.Context, nodeID string, maxDepth int) ([]map[string]interface{}, error) {
+func (g *GraphAdapter) GetNeighborNodes(ctx context.Context, nodeID string, maxDepth int) ([]map[string]interface{}, error) {
 	if err := g.ensureConnected(ctx); err != nil {
 		return nil, fmt.Errorf("neo4j not available: %w", err)
 	}
@@ -225,7 +232,7 @@ func (g *GraphRAG) GetNeighborNodes(ctx context.Context, nodeID string, maxDepth
 	return nodes, nil
 }
 
-func (g *GraphRAG) FullTextSearch(ctx context.Context, searchTerm string, limit int) ([]map[string]interface{}, error) {
+func (g *GraphAdapter) FullTextSearch(ctx context.Context, searchTerm string, limit int) ([]map[string]interface{}, error) {
 	if err := g.ensureConnected(ctx); err != nil {
 		return nil, fmt.Errorf("neo4j not available: %w", err)
 	}
@@ -273,7 +280,7 @@ func (g *GraphRAG) FullTextSearch(ctx context.Context, searchTerm string, limit 
 // QueryWorkspaceDocumentIDs returns the IDs of all Document nodes for the given
 // workspace without modifying any data. Used to collect IDs before Milvus deletion
 // so that a retry can re-query if the downstream step fails.
-func (g *GraphRAG) QueryWorkspaceDocumentIDs(ctx context.Context, workspace string) ([]string, error) {
+func (g *GraphAdapter) QueryWorkspaceDocumentIDs(ctx context.Context, workspace string) ([]string, error) {
 	if err := g.ensureConnected(ctx); err != nil {
 		return nil, fmt.Errorf("neo4j not available: %w", err)
 	}
@@ -303,7 +310,7 @@ func (g *GraphRAG) QueryWorkspaceDocumentIDs(ctx context.Context, workspace stri
 // workspace. Call QueryWorkspaceDocumentIDs first to obtain IDs for Milvus cleanup
 // before invoking this, so that a retry remains safe: if this step already ran,
 // QueryWorkspaceDocumentIDs returns an empty slice and Milvus deletion is a no-op.
-func (g *GraphRAG) DeleteWorkspaceNodes(ctx context.Context, workspace string) error {
+func (g *GraphAdapter) DeleteWorkspaceNodes(ctx context.Context, workspace string) error {
 	if err := g.ensureConnected(ctx); err != nil {
 		return fmt.Errorf("neo4j not available: %w", err)
 	}
@@ -320,7 +327,7 @@ func (g *GraphRAG) DeleteWorkspaceNodes(ctx context.Context, workspace string) e
 	return nil
 }
 
-func (g *GraphRAG) Close() error {
+func (g *GraphAdapter) Close() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.logger.Info("closing Neo4j connection")

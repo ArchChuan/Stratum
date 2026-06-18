@@ -7,24 +7,24 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/vector"
 )
 
-func TestMockGraphRAGInterface(t *testing.T) {
+func TestMockGraphStoreInterface(t *testing.T) {
 	ctx := context.Background()
-	mockGraphRAG := NewMockGraphRAG()
+	mockGraphStore := NewMockGraphStore()
 
-	if err := mockGraphRAG.Connect(ctx); err != nil {
+	if err := mockGraphStore.Connect(ctx); err != nil {
 		t.Errorf("expected no error from Connect, got %v", err)
 	}
 
-	if err := mockGraphRAG.CreateNode(ctx, "Test", map[string]interface{}{}); err != nil {
+	if err := mockGraphStore.CreateNode(ctx, "Test", map[string]interface{}{}); err != nil {
 		t.Errorf("expected no error from CreateNode, got %v", err)
 	}
 
-	if err := mockGraphRAG.CreateRelationship(ctx, "from", "to", "rel"); err != nil {
+	if err := mockGraphStore.CreateRelationship(ctx, "from", "to", "rel"); err != nil {
 		t.Errorf("expected no error from CreateRelationship, got %v", err)
 	}
 
-	mockGraphRAG.SetQueryResult([]interface{}{"test result"})
-	result, err := mockGraphRAG.Query(ctx, "test query", nil)
+	mockGraphStore.SetQueryResult([]interface{}{"test result"})
+	result, err := mockGraphStore.Query(ctx, "test query", nil)
 	if err != nil {
 		t.Errorf("expected no error from Query, got %v", err)
 	}
@@ -33,7 +33,7 @@ func TestMockGraphRAGInterface(t *testing.T) {
 		t.Error("expected non-nil query result")
 	}
 
-	neighbors, err := mockGraphRAG.GetNeighborNodes(ctx, "node-1", 2)
+	neighbors, err := mockGraphStore.GetNeighborNodes(ctx, "node-1", 2)
 	if err != nil {
 		t.Errorf("expected no error from GetNeighborNodes, got %v", err)
 	}
@@ -42,7 +42,7 @@ func TestMockGraphRAGInterface(t *testing.T) {
 		t.Errorf("expected 0 neighbors, got %d", len(neighbors))
 	}
 
-	results, err := mockGraphRAG.FullTextSearch(ctx, "search", 10)
+	results, err := mockGraphStore.FullTextSearch(ctx, "search", 10)
 	if err != nil {
 		t.Errorf("expected no error from FullTextSearch, got %v", err)
 	}
@@ -51,7 +51,7 @@ func TestMockGraphRAGInterface(t *testing.T) {
 		t.Errorf("expected 0 results, got %d", len(results))
 	}
 
-	if err := mockGraphRAG.Close(); err != nil {
+	if err := mockGraphStore.Close(); err != nil {
 		t.Errorf("expected no error from Close, got %v", err)
 	}
 }
@@ -104,14 +104,14 @@ func TestMockVectorStoreInterface(t *testing.T) {
 	}
 }
 
-func TestMockGraphRAGSetters(t *testing.T) {
-	mockGraphRAG := NewMockGraphRAG()
+func TestMockGraphStoreSetters(t *testing.T) {
+	mockGraphStore := NewMockGraphStore()
 
 	testResult := []interface{}{"result1", "result2"}
-	mockGraphRAG.SetQueryResult(testResult)
+	mockGraphStore.SetQueryResult(testResult)
 
 	ctx := context.Background()
-	result, err := mockGraphRAG.Query(ctx, "test", nil)
+	result, err := mockGraphStore.Query(ctx, "test", nil)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}

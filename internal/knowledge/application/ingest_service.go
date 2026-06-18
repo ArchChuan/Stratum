@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/byteBuilderX/stratum/pkg/textchunk"
@@ -18,27 +18,27 @@ import (
 
 // EmbedClient is an alias to the consumer-side embedder port. Kept exported so
 // the per-tenant resolver type below stays stable for callers in api/wiring.
-type EmbedClient = port.Embedder
+type EmbedClient = knowledgeport.Embedder
 
 // EmbedResolver resolves an EmbedClient for a given tenant and model at request time.
 type EmbedResolver func(ctx context.Context, tenantID, model string) EmbedClient
 
 type KnowledgeIngest struct {
-	parser        port.DocumentParser
+	parser        knowledgeport.DocumentParser
 	chunker       *textchunk.Chunker
-	embeddingSvc  port.Embedder
+	embeddingSvc  knowledgeport.Embedder
 	embedResolver EmbedResolver
 	vectorStore   *vector.VectorStore
-	graphRAG      *GraphRAG
+	graphRAG      knowledgeport.GraphStore
 	logger        *zap.Logger
 }
 
 func NewKnowledgeIngest(
-	parser port.DocumentParser,
+	parser knowledgeport.DocumentParser,
 	chunker *textchunk.Chunker,
-	embeddingSvc port.Embedder,
+	embeddingSvc knowledgeport.Embedder,
 	vectorStore *vector.VectorStore,
-	graphRAG *GraphRAG,
+	graphRAG knowledgeport.GraphStore,
 	logger *zap.Logger,
 ) *KnowledgeIngest {
 	return &KnowledgeIngest{
@@ -102,7 +102,7 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 	ki.logger.Info("text chunked", zap.String("trace_id", sc.TraceID), zap.Int("num_chunks", len(chunks)))
 
 	// Resolve embed client: prefer per-workspace resolver, fall back to global svc.
-	var embedClient port.Embedder
+	var embedClient knowledgeport.Embedder
 	if ki.embedResolver != nil && req.TenantID != "" {
 		embedClient = ki.embedResolver(ctx, req.TenantID, req.EmbeddingModel)
 	}
