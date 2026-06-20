@@ -70,12 +70,6 @@ func (c *OpenAICompatClient) Complete(ctx context.Context, req *CompletionReques
 		)
 		return nil, fmt.Errorf("%s: status %d: %s", c.cfg.Name, resp.StatusCode, string(raw))
 	}
-	c.logger.Info("llm.inbound", // TEMP DEBUG
-		zap.String("provider", c.cfg.Name),
-		zap.String("model", req.Model),
-		zap.ByteString("raw", raw),
-	)
-
 	var out openAICompletionResp
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("%s: decode response: %w", c.cfg.Name, err)
