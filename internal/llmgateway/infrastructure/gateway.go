@@ -221,6 +221,15 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 			zap.Int("prompt_tokens", resp.Usage.PromptTokens),
 			zap.Int("completion_tokens", resp.Usage.CompletionTokens),
 		)
+		if g.logger.Core().Enabled(zap.DebugLevel) {
+			if raw, merr := json.Marshal(resp); merr == nil {
+				g.logger.Debug("llm.response",
+					zap.String("trace_id", traceID),
+					zap.String("model", req.Model),
+					zap.ByteString("output", raw),
+				)
+			}
+		}
 	} else if err != nil {
 		g.logger.Error("llm.complete",
 			zap.String("trace_id", traceID),
@@ -308,6 +317,15 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 			zap.Int("prompt_tokens", resp.Usage.PromptTokens),
 			zap.Int("completion_tokens", resp.Usage.CompletionTokens),
 		)
+		if g.logger.Core().Enabled(zap.DebugLevel) {
+			if raw, merr := json.Marshal(resp); merr == nil {
+				g.logger.Debug("llm.response",
+					zap.String("trace_id", streamTraceID),
+					zap.String("model", req.Model),
+					zap.ByteString("output", raw),
+				)
+			}
+		}
 	} else if err != nil {
 		g.logger.Error("llm.complete",
 			zap.String("trace_id", streamTraceID),
