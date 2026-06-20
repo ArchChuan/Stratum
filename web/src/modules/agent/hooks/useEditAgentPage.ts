@@ -44,7 +44,6 @@ export const useEditAgentPage = () => {
             name: a.name,
             description: a.description,
             type: a.type || 'react',
-            persona: a.persona,
             systemPrompt: a.systemPrompt,
             llmModel: a.llmModel,
             maxIterations: a.maxIterations ?? 25,

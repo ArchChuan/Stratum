@@ -25,7 +25,7 @@ func TestAgentRepo_Register(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO agents").
-		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "", "gpt-4o", "", 5, 0).
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", "", 5, 0).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -58,7 +58,7 @@ func TestAgentRepo_Register_WithMCP(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO agents").
-		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "", "gpt-4o", "", 5, 0).
+		WithArgs("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", "", 5, 0).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -99,8 +99,8 @@ func TestAgentRepo_Get(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
 		WithArgs(pgxmock.AnyArg()).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "persona", "system_prompt", "llm_model", "embed_model", "max_iterations", "max_context_tokens"}).
-			AddRow("a1", "Alpha", string(domain.ReActAgent), "", "", "", "gpt-4o", "", 5, 8000))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "embed_model", "max_iterations", "max_context_tokens"}).
+			AddRow("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", "", 5, 8000))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").
 		WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
@@ -145,7 +145,7 @@ func TestAgentRepo_GetNotFound(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
 		WithArgs("missing").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "persona", "system_prompt", "llm_model", "embed_model", "max_iterations", "max_context_tokens"}))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "embed_model", "max_iterations", "max_context_tokens"}))
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
@@ -191,7 +191,7 @@ func TestAgentRepo_Update_Success(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("UPDATE agents").
-		WithArgs("Beta", "", "", "", "gpt-4o", 5, 0, "a1").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
@@ -224,7 +224,7 @@ func TestAgentRepo_Update_NotFound(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("UPDATE agents").
-		WithArgs("Beta", "", "", "", "gpt-4o", 5, 0, "missing").
+		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "missing").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	pool.ExpectRollback()
 

@@ -53,13 +53,25 @@ type openAICompletionResp struct {
 type openAIStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string     `json:"content"`
-			ToolCalls []ToolCall `json:"tool_calls"`
+			Content   string                `json:"content"`
+			ToolCalls []streamToolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Model string      `json:"model"`
 	Usage *TokenUsage `json:"usage"`
+}
+
+// streamToolCallDelta is the per-chunk tool call fragment from an SSE stream.
+// Index identifies which tool call slot this delta belongs to.
+type streamToolCallDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }
 
 // openAIEmbedResp is the shared decode type for OpenAI-compatible embedding responses.
@@ -159,13 +171,23 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 	traceID := reqctx.TraceIDFromContext(ctx)
 	tenantID := reqctx.TenantIDFromContext(ctx)
 	if raw, merr := json.Marshal(req.Messages); merr == nil {
-		g.logger.Info("llm.request",
+		fields := []zap.Field{
 			zap.String("trace_id", traceID),
 			zap.String("tenant_id", tenantID),
 			zap.String("model", req.Model),
 			zap.String("provider", string(provider)),
 			zap.ByteString("messages", raw),
-		)
+			zap.Int("tool_count", len(req.Tools)),
+		}
+		if len(req.Tools) > 0 {
+			if toolsRaw, terr := json.Marshal(req.Tools); terr == nil {
+				fields = append(fields, zap.ByteString("tools", toolsRaw))
+			}
+			if req.ToolChoice != "" {
+				fields = append(fields, zap.String("tool_choice", req.ToolChoice))
+			}
+		}
+		g.logger.Info("llm.request", fields...)
 	}
 
 	start := time.Now()
@@ -231,13 +253,23 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 	streamTraceID := reqctx.TraceIDFromContext(ctx)
 	streamTenantID := reqctx.TenantIDFromContext(ctx)
 	if raw, merr := json.Marshal(req.Messages); merr == nil {
-		g.logger.Info("llm.request",
+		fields := []zap.Field{
 			zap.String("trace_id", streamTraceID),
 			zap.String("tenant_id", streamTenantID),
 			zap.String("model", req.Model),
 			zap.String("provider", string(provider)),
 			zap.ByteString("messages", raw),
-		)
+			zap.Int("tool_count", len(req.Tools)),
+		}
+		if len(req.Tools) > 0 {
+			if toolsRaw, terr := json.Marshal(req.Tools); terr == nil {
+				fields = append(fields, zap.ByteString("tools", toolsRaw))
+			}
+			if req.ToolChoice != "" {
+				fields = append(fields, zap.String("tool_choice", req.ToolChoice))
+			}
+		}
+		g.logger.Info("llm.request", fields...)
 	}
 	start := time.Now()
 	var (

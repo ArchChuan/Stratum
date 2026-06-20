@@ -40,6 +40,7 @@ type EnricherWorker struct {
 	consumer     jetstream.Consumer
 	pool         *pgxpool.Pool
 	llm          LLMClient
+	llmResolver  LLMResolver
 	logger       *zap.Logger
 	model        string
 	summaryModel string
@@ -58,7 +59,7 @@ func NewEnricherWorker(
 ) *EnricherWorker {
 	model := cfg.EnrichModel
 	if model == "" {
-		model = "gpt-4o-mini"
+		model = "qwen-turbo"
 	}
 	summaryModel := cfg.SummaryModel
 	if summaryModel == "" {
@@ -78,6 +79,26 @@ func NewEnricherWorker(
 		threshold:    threshold,
 		stopCh:       make(chan struct{}),
 	}
+}
+
+// WithLLMResolver sets a per-tenant LLM resolver used as the primary client
+// for enrich/summary calls. The base llm is kept only as a fallback for
+// resolver-less single-tenant test setups.
+func (w *EnricherWorker) WithLLMResolver(r LLMResolver) *EnricherWorker {
+	w.llmResolver = r
+	return w
+}
+
+// llmFor returns the LLMClient for tenantID. Prefers the resolver-supplied
+// per-tenant client; falls back to the base llm if the resolver is unset or
+// returns nil.
+func (w *EnricherWorker) llmFor(ctx context.Context, tenantID string) LLMClient {
+	if w.llmResolver != nil {
+		if c := w.llmResolver(ctx, tenantID); c != nil {
+			return c
+		}
+	}
+	return w.llm
 }
 
 // Start begins the consume loop. It blocks until ctx is cancelled or Stop is called.
@@ -127,7 +148,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		zap.String("message_id", ev.MessageID),
 		zap.String("tenant_id", ev.TenantID))
 
-	enrichment, err := w.callEnrichLLM(ctx, ev.Role, ev.Content)
+	enrichment, err := w.callEnrichLLM(ctx, ev.TenantID, ev.Role, ev.Content)
 	if err != nil {
 		w.logger.Error("memory.enrich.llm",
 			zap.String("trace_id", traceID),
@@ -161,7 +182,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		zap.Int64("latency_ms", time.Since(start).Milliseconds()))
 }
 
-func (w *EnricherWorker) callEnrichLLM(ctx context.Context, role, content string) (*EnrichmentResult, error) {
+func (w *EnricherWorker) callEnrichLLM(ctx context.Context, tenantID, role, content string) (*EnrichmentResult, error) {
 	prompt := formatEnrichmentPrompt(role, content)
 	req := &llmgateway.CompletionRequest{
 		Model: w.model,
@@ -171,7 +192,7 @@ func (w *EnricherWorker) callEnrichLLM(ctx context.Context, role, content string
 		Temperature: 0.1,
 	}
 
-	resp, err := w.llm.Complete(ctx, req)
+	resp, err := w.llmFor(ctx, tenantID).Complete(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("llm complete: %w", err)
 	}
@@ -195,18 +216,21 @@ func (w *EnricherWorker) persistEnrichment(ctx context.Context, ev *MemoryEnrich
 		return fmt.Errorf("set schema: %w", err)
 	}
 
-	keywordsJSON, _ := json.Marshal(enrichment.Keywords)
+	keywords := enrichment.Keywords
+	if keywords == nil {
+		keywords = []string{}
+	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO memory_entries (id, user_id, agent_id, role, content, type, importance, keywords, token_estimate, scope_layer, enriched_at, conversation_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, 'long_term', $6, $7, $8, 1, NOW(), $9, $10)
+		INSERT INTO memory_entries (id, user_id, agent_id, role, content, type, importance, keywords, token_estimate, enriched_at, conversation_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, 'long_term', $6, $7, $8, NOW(), $9, $10)
 		ON CONFLICT (id) DO UPDATE SET
 			importance = EXCLUDED.importance,
 			keywords = EXCLUDED.keywords,
 			token_estimate = EXCLUDED.token_estimate,
 			enriched_at = NOW()`,
 		ev.MessageID, ev.UserID, ev.AgentID, ev.Role, ev.Content,
-		enrichment.Importance, keywordsJSON, enrichment.TokenEstimate,
+		enrichment.Importance, keywords, enrichment.TokenEstimate,
 		ev.ConversationID, ev.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert memory_entries: %w", err)
@@ -294,7 +318,7 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, tx pgx.Tx, ev 
 		},
 		Temperature: 0.3,
 	}
-	resp, err := w.llm.Complete(ctx, req)
+	resp, err := w.llmFor(ctx, ev.TenantID).Complete(ctx, req)
 	if err != nil {
 		return fmt.Errorf("summary llm: %w", err)
 	}

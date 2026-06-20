@@ -47,7 +47,7 @@ func Load() (*Config, error) {
 		JWTPrivateKeyPEM:       getEnv("JWT_PRIVATE_KEY_PEM", ""),
 		GlobalAdminGitHubLogin: getEnv("GLOBAL_ADMIN_GITHUB_LOGIN", "ArchChuan"),
 		FrontendURL:            getEnv("FRONTEND_URL", "http://localhost:3002"),
-		GitHubCallbackURL:      getEnv("GITHUB_CALLBACK_URL", "http://localhost:3002/auth/github/callback"),
+		GitHubCallbackURL:      getEnv("GITHUB_CALLBACK_URL", "http://localhost:8080/auth/github/callback"),
 		SecureCookies:          getEnv("SECURE_COOKIES", "") == "true",
 		MemoryPipelineEnabled:  getEnv("MEMORY_PIPELINE_ENABLED", "") == "true",
 	}, nil

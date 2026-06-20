@@ -17,7 +17,6 @@ import (
 // RecallRequest holds the parsed input for the recall_memory tool.
 type RecallRequest struct {
 	Query string `json:"query"`
-	Scope string `json:"scope"`
 	Limit int    `json:"limit"`
 }
 
@@ -43,11 +42,6 @@ func RecallToolDefinition() map[string]any {
 				"query": map[string]any{
 					"type":        "string",
 					"description": "Search query to find relevant memories",
-				},
-				"scope": map[string]any{
-					"type":        "string",
-					"enum":        []string{"private", "personal", "shared"},
-					"description": "private=this user+agent, personal=this user across agents, shared=all tenant memories",
 				},
 				"limit": map[string]any{
 					"type":        "integer",
@@ -92,9 +86,6 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID st
 	if req.Limit <= 0 || req.Limit > 20 {
 		req.Limit = 5
 	}
-	if req.Scope == "" {
-		req.Scope = "private"
-	}
 
 	// Try vector search first (semantic recall)
 	if results := h.tryVectorSearch(ctx, tenantID, userID, req); len(results) > 0 {
@@ -109,7 +100,7 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID st
 	}
 
 	// Fallback: ILIKE text search
-	return h.textSearch(ctx, tenantID, userID, agentID, req)
+	return h.textSearch(ctx, tenantID, userID, req)
 }
 
 func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID string, req RecallRequest) RecallResult {
@@ -153,7 +144,7 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID st
 	return entries
 }
 
-func (h *RecallHandler) textSearch(ctx context.Context, tenantID, userID, agentID string, req RecallRequest) (string, error) {
+func (h *RecallHandler) textSearch(ctx context.Context, tenantID, userID string, req RecallRequest) (string, error) {
 	schema := "tenant_" + tenantID
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -169,26 +160,15 @@ func (h *RecallHandler) textSearch(ctx context.Context, tenantID, userID, agentI
 	args := []any{}
 	argIdx := 1
 
-	// Text search filter using the query
+	// Text search filter
 	baseQuery += fmt.Sprintf(" AND content ILIKE '%%' || $%d || '%%'", argIdx)
 	args = append(args, req.Query)
 	argIdx++
 
-	switch req.Scope {
-	case "private":
-		baseQuery += fmt.Sprintf(" AND user_id = $%d AND agent_id = $%d", argIdx, argIdx+1)
-		args = append(args, userID, agentID)
-		argIdx += 2
-	case "personal":
-		baseQuery += fmt.Sprintf(" AND user_id = $%d", argIdx)
-		args = append(args, userID)
-		argIdx++
-	case "shared":
-		// shared still scopes to the requesting user — avoids cross-user leakage within tenant
-		baseQuery += fmt.Sprintf(" AND user_id = $%d", argIdx)
-		args = append(args, userID)
-		argIdx++
-	}
+	// Always scope to requesting user
+	baseQuery += fmt.Sprintf(" AND user_id = $%d", argIdx)
+	args = append(args, userID)
+	argIdx++
 
 	baseQuery += " ORDER BY importance DESC, created_at DESC"
 	baseQuery += fmt.Sprintf(" LIMIT $%d", argIdx)

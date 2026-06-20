@@ -70,6 +70,11 @@ func (c *OpenAICompatClient) Complete(ctx context.Context, req *CompletionReques
 		)
 		return nil, fmt.Errorf("%s: status %d: %s", c.cfg.Name, resp.StatusCode, string(raw))
 	}
+	c.logger.Info("llm.inbound", // TEMP DEBUG
+		zap.String("provider", c.cfg.Name),
+		zap.String("model", req.Model),
+		zap.ByteString("raw", raw),
+	)
 
 	var out openAICompletionResp
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -116,6 +121,7 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 	}
 
 	var result CompletionResponse
+	tcAcc := make(map[int]*streamToolCallDelta) // accumulates tool call deltas by index
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -143,8 +149,36 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 				result.Content += t
 				onToken(t)
 			}
-			if len(chunk.Choices[0].Delta.ToolCalls) > 0 {
-				result.ToolCalls = chunk.Choices[0].Delta.ToolCalls
+			for _, d := range chunk.Choices[0].Delta.ToolCalls {
+				acc, ok := tcAcc[d.Index]
+				if !ok {
+					acc = &streamToolCallDelta{Index: d.Index}
+					tcAcc[d.Index] = acc
+				}
+				if d.ID != "" {
+					acc.ID = d.ID
+				}
+				if d.Type != "" {
+					acc.Type = d.Type
+				}
+				if d.Function.Name != "" {
+					acc.Function.Name = d.Function.Name
+				}
+				acc.Function.Arguments += d.Function.Arguments
+			}
+		}
+	}
+	// convert accumulated deltas to ToolCall slice ordered by index
+	result.ToolCalls = make([]ToolCall, len(tcAcc))
+	for idx, acc := range tcAcc {
+		if idx < len(result.ToolCalls) {
+			result.ToolCalls[idx] = ToolCall{
+				ID:   acc.ID,
+				Type: acc.Type,
+				Function: struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				}{Name: acc.Function.Name, Arguments: acc.Function.Arguments},
 			}
 		}
 	}

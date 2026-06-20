@@ -1,5 +1,6 @@
 import { SettingOutlined } from '@ant-design/icons';
 import { Form, Input, Button } from 'antd';
+import { useEffect } from 'react';
 
 import { SectionHeader } from '@/shared/ui';
 
@@ -11,6 +12,11 @@ interface Props {
 
 export const TenantBasicCard = ({ initialName, loading, onSave }: Props) => {
   const [form] = Form.useForm<{ name: string }>();
+
+  useEffect(() => {
+    form.setFieldsValue({ name: initialName });
+  }, [form, initialName]);
+
   return (
     <div
       style={{

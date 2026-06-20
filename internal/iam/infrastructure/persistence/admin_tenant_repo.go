@@ -47,7 +47,7 @@ func (r *AdminTenantRepo) List(ctx context.Context, filter domain.TenantFilter) 
 	if filter.Status != "" {
 		rows, err = r.pool.Query(ctx,
 			`SELECT t.id, t.name, t.slug, t.plan, t.status, t.created_at,
-			        COUNT(tm.user_id) AS member_count
+			        COUNT(tm.user_id) AS member_count, t.is_default
 			 FROM public.tenants t
 			 LEFT JOIN public.tenant_members tm ON tm.tenant_id = t.id
 			 WHERE t.deleted_at IS NULL AND t.status=$1
@@ -57,7 +57,7 @@ func (r *AdminTenantRepo) List(ctx context.Context, filter domain.TenantFilter) 
 	} else {
 		rows, err = r.pool.Query(ctx,
 			`SELECT t.id, t.name, t.slug, t.plan, t.status, t.created_at,
-			        COUNT(tm.user_id) AS member_count
+			        COUNT(tm.user_id) AS member_count, t.is_default
 			 FROM public.tenants t
 			 LEFT JOIN public.tenant_members tm ON tm.tenant_id = t.id
 			 WHERE t.deleted_at IS NULL
@@ -73,7 +73,7 @@ func (r *AdminTenantRepo) List(ctx context.Context, filter domain.TenantFilter) 
 	out := make([]domain.Tenant, 0)
 	for rows.Next() {
 		var t domain.Tenant
-		if err := rows.Scan(&t.ID, &t.Name, &t.Slug, &t.Plan, &t.Status, &t.CreatedAt, &t.MemberCount); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Slug, &t.Plan, &t.Status, &t.CreatedAt, &t.MemberCount, &t.IsDefault); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -118,6 +118,19 @@ func (r *AdminTenantRepo) UpdatePatch(ctx context.Context, id string, patch doma
 }
 
 func (r *AdminTenantRepo) SoftDelete(ctx context.Context, id string) error {
+	var isDefault bool
+	err := r.pool.QueryRow(ctx,
+		"SELECT is_default FROM public.tenants WHERE id=$1 AND deleted_at IS NULL", id,
+	).Scan(&isDefault)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrTenantNotFound
+		}
+		return err
+	}
+	if isDefault {
+		return domain.ErrDefaultTenantDelete
+	}
 	tag, err := r.pool.Exec(ctx,
 		"UPDATE public.tenants SET deleted_at=$1 WHERE id=$2 AND deleted_at IS NULL",
 		time.Now().UTC(), id,

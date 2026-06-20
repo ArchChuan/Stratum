@@ -12,65 +12,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// AddMemory adds a memory entry.
-func (h *MemoryHandler) AddMemory(c *gin.Context) {
-	tenantID, ok := tenantIDFromCtx(c)
-	if !ok {
-		respondMissingTenant(c)
-		return
-	}
-	userID, ok := userIDFromCtx(c)
-	if !ok {
-		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errUnauthorized))
-		return
-	}
-
-	var req dto.AddMemoryRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn("invalid add memory request",
-			zap.String("trace_id", middleware.GetTraceID(c)),
-			zap.Error(err))
-		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
-		return
-	}
-
-	entry := &memory.MemoryEntry{
-		ID:         uuid.New().String(),
-		Role:       req.Role,
-		Content:    req.Content,
-		Timestamp:  time.Now(),
-		TenantID:   tenantID,
-		UserID:     userID,
-		SessionID:  req.SessionID,
-		AgentID:    req.AgentID,
-		Metadata:   req.Metadata,
-		Tags:       req.Tags,
-		Importance: req.Importance,
-	}
-
-	if req.ExpiresAt != "" {
-		if t, err := time.Parse(time.RFC3339, req.ExpiresAt); err == nil {
-			entry.ExpiresAt = t
-		}
-	}
-
-	ctx := c.Request.Context()
-	if err := h.manager.Add(ctx, entry); err != nil {
-		h.logger.Error("failed to add memory entry",
-			zap.String("trace_id", middleware.GetTraceID(c)),
-			zap.Error(err))
-		_ = c.Error(err)
-		return
-	}
-
-	h.logger.Info("memory entry added",
-		zap.String("trace_id", middleware.GetTraceID(c)),
-		zap.String("id", entry.ID),
-		zap.String("session_id", req.SessionID))
-
-	c.JSON(http.StatusCreated, toMemoryEntryResponse(entry))
-}
-
 // GetMemory retrieves a memory entry by ID.
 func (h *MemoryHandler) GetMemory(c *gin.Context) {
 	if _, ok := tenantIDFromCtx(c); !ok {
@@ -159,11 +100,6 @@ func (h *MemoryHandler) SearchMemory(c *gin.Context) {
 		})
 	}
 
-	h.logger.Info("memory search completed",
-		zap.String("trace_id", middleware.GetTraceID(c)),
-		zap.String("query", req.Query),
-		zap.Int("results", len(items)))
-
 	c.JSON(http.StatusOK, dto.SearchMemoryResponse{
 		Results: items,
 		Count:   len(items),
@@ -193,8 +129,97 @@ func (h *MemoryHandler) DeleteMemory(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("memory entry deleted",
-		zap.String("trace_id", middleware.GetTraceID(c)),
-		zap.String("id", id))
 	c.JSON(http.StatusOK, gin.H{"message": "memory entry deleted successfully"})
+}
+
+// AddMemory adds a new memory entry.
+func (h *MemoryHandler) AddMemory(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	userID, ok := userIDFromCtx(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errUnauthorized))
+		return
+	}
+
+	var req dto.AddMemoryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+
+	entry := &memory.MemoryEntry{
+		ID:         uuid.New().String(),
+		Type:       memory.MemoryType(req.Type),
+		Role:       req.Role,
+		Content:    req.Content,
+		TenantID:   tenantID,
+		UserID:     userID,
+		SessionID:  req.SessionID,
+		AgentID:    req.AgentID,
+		Importance: req.Importance,
+		Tags:       req.Tags,
+		Metadata:   req.Metadata,
+		Timestamp:  time.Now(),
+	}
+
+	ctx := c.Request.Context()
+	if err := h.manager.Add(ctx, entry); err != nil {
+		h.logger.Error("failed to add memory entry",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.Error(err))
+		_ = c.Error(err)
+		return
+	}
+
+	c.JSON(http.StatusCreated, toMemoryEntryResponse(entry))
+}
+
+// CreateSession creates a new memory session and returns its ID.
+func (h *MemoryHandler) CreateSession(c *gin.Context) {
+	if _, ok := tenantIDFromCtx(c); !ok {
+		respondMissingTenant(c)
+		return
+	}
+	if _, ok := userIDFromCtx(c); !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errUnauthorized))
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"session_id": uuid.New().String()})
+}
+
+// DeleteSession clears all memory for a session.
+func (h *MemoryHandler) DeleteSession(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	userID, ok := userIDFromCtx(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errUnauthorized))
+		return
+	}
+	sessionID := c.Param("session_id")
+
+	sessionCtx := &memory.SessionContext{
+		TenantID:  tenantID,
+		UserID:    userID,
+		SessionID: sessionID,
+	}
+
+	ctx := c.Request.Context()
+	if err := h.manager.Clear(ctx, sessionCtx); err != nil {
+		h.logger.Warn("failed to clear memory session",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.String("session_id", sessionID),
+			zap.Error(err))
+		_ = c.Error(err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "session cleared"})
 }

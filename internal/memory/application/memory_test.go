@@ -3,34 +3,7 @@ package application
 import (
 	"testing"
 	"time"
-
-	"go.uber.org/zap"
 )
-
-func TestDefaultMemoryConfig(t *testing.T) {
-	cfg := DefaultMemoryConfig()
-
-	if cfg == nil { //nolint:staticcheck
-		t.Error("expected config to be non-nil")
-		return
-	}
-
-	if cfg.MaxVectorResults <= 0 { //nolint:staticcheck
-		t.Errorf("expected positive MaxVectorResults, got %d", cfg.MaxVectorResults)
-	}
-
-	if !cfg.EnableVectorSearch {
-		t.Error("expected EnableVectorSearch to be true")
-	}
-
-	if !cfg.EnableEntityExtraction {
-		t.Error("expected EnableEntityExtraction to be true")
-	}
-
-	if !cfg.EnablePersistence {
-		t.Error("expected EnablePersistence to be true")
-	}
-}
 
 func TestMemoryEntry(t *testing.T) {
 	entry := &MemoryEntry{
@@ -245,7 +218,6 @@ func TestEntity(t *testing.T) {
 		FirstSeen:  time.Now(),
 		LastSeen:   time.Now(),
 		Attributes: map[string]interface{}{"age": 30},
-		Relations:  []EntityRelation{},
 	}
 
 	if entity.ID != "entity-1" {
@@ -262,29 +234,6 @@ func TestEntity(t *testing.T) {
 
 	if entity.Confidence != 0.95 {
 		t.Errorf("expected confidence 0.95, got %f", entity.Confidence)
-	}
-}
-
-func TestEntityRelation(t *testing.T) {
-	rel := &EntityRelation{
-		FromEntityID: "entity-1",
-		ToEntityID:   "entity-2",
-		RelationType: "works_for",
-		Confidence:   0.85,
-		LastSeen:     time.Now(),
-		Metadata:     map[string]interface{}{"since": "2020"},
-	}
-
-	if rel.FromEntityID != "entity-1" {
-		t.Errorf("expected from entity-1, got %s", rel.FromEntityID)
-	}
-
-	if rel.RelationType != "works_for" {
-		t.Errorf("expected relation works_for, got %s", rel.RelationType)
-	}
-
-	if rel.Confidence != 0.85 {
-		t.Errorf("expected confidence 0.85, got %f", rel.Confidence)
 	}
 }
 
@@ -313,16 +262,5 @@ func TestMemoryEvent(t *testing.T) {
 
 	if event.Query != "test query" {
 		t.Errorf("expected query 'test query', got %s", event.Query)
-	}
-}
-
-func TestNewMemoryManager(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := DefaultMemoryConfig()
-
-	manager := NewMemoryManager(cfg, logger, nil, nil, nil, nil)
-
-	if manager == nil {
-		t.Error("expected manager to be non-nil")
 	}
 }

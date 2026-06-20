@@ -63,9 +63,6 @@ export const AgentFormSections = ({
         title="提示词"
         subtitle="定义 Agent 的角色和行为"
       />
-      <Form.Item name="persona" hidden>
-        <Input />
-      </Form.Item>
       <Form.Item
         label="系统提示词"
         name="systemPrompt"

@@ -226,7 +226,7 @@ func TestAgentService_BuildExtraTools_Empty(t *testing.T) {
 		Registry: application.NewRegistry(new(mockAgentRepo), zap.NewNop()),
 		Logger:   zap.NewNop(),
 	})
-	tools := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, nil)
+	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, nil)
 	assert.Empty(t, tools)
 }
 
@@ -241,7 +241,7 @@ func TestAgentService_BuildExtraTools_MCPDelegates(t *testing.T) {
 		MCPTools: mcpProv,
 		Logger:   zap.NewNop(),
 	})
-	tools := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", []string{"srv1"}, nil)
+	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", []string{"srv1"}, nil)
 	assert.Len(t, tools, 1)
 	assert.Equal(t, "mcp:srv1:search", tools[0].Name)
 	mcpProv.AssertExpectations(t)
@@ -252,9 +252,9 @@ func TestAgentService_BuildExtraTools_SkillFallback_NoLookup(t *testing.T) {
 		Registry: application.NewRegistry(new(mockAgentRepo), zap.NewNop()),
 		Logger:   zap.NewNop(),
 	})
-	tools := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"my-skill"})
+	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"my-skill"})
 	assert.Len(t, tools, 1)
-	assert.Equal(t, "my-skill", tools[0].Name)
+	assert.Equal(t, "tenant_tenant-1_my-skill", tools[0].Name)
 	assert.Equal(t, "my-skill: my-skill", tools[0].Description)
 	assert.NotNil(t, tools[0].InputSchema)
 }
@@ -269,9 +269,9 @@ func TestAgentService_BuildExtraTools_SkillLookupOverridesDescription(t *testing
 		SkillLookup: skillLookup,
 		Logger:      zap.NewNop(),
 	})
-	tools := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"skill-id"})
+	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"skill-id"})
 	assert.Len(t, tools, 1)
-	assert.Equal(t, "skill-id", tools[0].Name)
+	assert.Equal(t, "tenant_tenant-1_PrettyName", tools[0].Name)
 	assert.Equal(t, "PrettyName: tool description", tools[0].Description)
 }
 
@@ -285,7 +285,7 @@ func TestAgentService_BuildExtraTools_SkillLookupErrorFallsBack(t *testing.T) {
 		SkillLookup: skillLookup,
 		Logger:      zap.NewNop(),
 	})
-	tools := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"skill-id"})
+	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"skill-id"})
 	assert.Len(t, tools, 1)
 	assert.Equal(t, "skill-id: skill-id", tools[0].Description)
 }

@@ -75,7 +75,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	}
 	jwtMW := middleware.JWTMiddleware(jwtSvc)
 	adminHandler := handler.NewAdminHandler(c.IAM.AdminService, c.Logger)
-	tenantHandler := handler.NewTenantHandler(c.IAM.TenantService, c.Logger)
+	tenantHandler := handler.NewTenantHandler(c.IAM.TenantService, c.IAM.AdminService, c.Logger)
 
 	adminGroup := r.Group("/admin", jwtMW, middleware.RequireGlobalAdmin())
 	{
@@ -95,6 +95,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		tenantGroup.GET("/settings", tenantHandler.GetSettings)
 		tenantGroup.PATCH("/settings", requireActive, tenantHandler.UpdateSettings)
 		tenantGroup.PATCH("/embed-model", requireActive, tenantHandler.SetEmbedModel)
+		tenantGroup.DELETE("", middleware.RequireTenantRole("owner"), tenantHandler.DeleteSelf)
 	}
 
 	r.GET("/tenant/list", jwtMW, tenantHandler.ListUserTenants)
@@ -197,15 +198,13 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 	}
 	mem := r.Group("/memory", mw...)
 	{
-		mem.POST("/sessions", requireActive, memoryHandler.CreateSession)
-		mem.POST("", requireActive, memoryHandler.AddMemory)
+		mem.POST("", memoryHandler.AddMemory)
+		mem.POST("/sessions", memoryHandler.CreateSession)
 		mem.GET("/:id", memoryHandler.GetMemory)
 		mem.POST("/search", memoryHandler.SearchMemory)
 		mem.DELETE("/:id", requireActive, memoryHandler.DeleteMemory)
+		mem.DELETE("/session/:session_id", requireActive, memoryHandler.DeleteSession)
 		mem.GET("/stats", memoryHandler.GetStats)
-		mem.DELETE("/session/:session_id", requireActive, memoryHandler.ClearSession)
-		mem.GET("/entities", memoryHandler.GetEntities)
-		mem.POST("/extract-entities", memoryHandler.ExtractEntities)
 		mem.GET("/summary/:session_id", memoryHandler.GetSummary)
 	}
 }

@@ -4,100 +4,161 @@
 
 | 类型 | 常量 | 适用场景 |
 |------|------|---------|
-| ReAct | `agent.ReActAgent` | 观察-推理-行动循环 |
-| CoT | `agent.CoTAgent` | 多步推理链 |
-| Planning | `agent.PlanningAgent` | 任务分解与规划 |
-| Tool Calling | `agent.ToolCallingAgent` | 结构化工具调用 |
-| RAG | `agent.RAGAgent` | 检索增强生成 |
-| Swarm | `agent.SwarmAgent` | 多智能体协同 |
+| ReAct | `domain.ReActAgent` | 观察-推理-行动循环（主要生产类型）|
+| CoT | `domain.CoTAgent` | 多步推理链 |
+| Planning | `domain.PlanningAgent` | 任务分解与规划 |
+| Tool Calling | `domain.ToolCallingAgent` | 结构化工具调用 |
+| RAG | `domain.RAGAgent` | 检索增强生成 |
+| Swarm | `domain.SwarmAgent` | 多智能体协同 |
 
-## Creating an Agent
+> `application` 包通过 `type AgentType = domain.AgentType` 以及同名常量保持向后兼容，两种引用方式均可。
+
+## AgentConfig 字段
 
 ```go
-config := &agent.AgentConfig{
-    ID:            "unique-id",       // 全局唯一
-    Name:          "Display Name",
-    Type:          agent.ReActAgent,
-    Description:   "Description",
-    Persona:       "角色设定",
-    SystemPrompt:  "系统提示词",
-    LLMModel:      "gpt-4",
-    MaxIterations: 10,                // 防止无限循环，默认 10
+// 位于 internal/agent/domain/agent.go
+type AgentConfig struct {
+    ID                             string
+    Name                           string
+    Type                           AgentType
+    Description                    string
+    SystemPrompt                   string
+    LLMModel                       string            // e.g. "gpt-4o", "claude-3-5-sonnet"
+    EmbedModel                     string            // 租户级 embedding 模型
+    MaxIterations                  int               // 默认 10，防无限循环
+    AllowedSkills                  []string          // skill UUID 列表
+    MCPServerIDs                   []string          // MCP 服务器 ID 列表
+    Capabilities                   []AgentCapability
+    KnowledgeWorkspaceIDs          []string          // RAG workspace UUID 列表
+    KnowledgeWorkspaceNames        []string
+    KnowledgeWorkspaceDescriptions []string
+    MaxContextTokens               int
 }
-a := agent.NewBaseAgent(config, logger)
-// 持久化到当前租户 PostgreSQL schema
-registry.Register(ctx, a)
 ```
 
-> `Registry.Register` 需要 `ctx` 中携带 `TenantContext`，写入对应租户 schema 的 `agents` 表。
+> `Persona` 字段已不存在于 AgentConfig — 角色设定通过 `SystemPrompt` 表达，不再作为独立字段。
+
+## Creating and Registering an Agent
+
+```go
+cfg := &domain.AgentConfig{
+    ID:            uuid.NewString(),
+    Name:          "My Agent",
+    Type:          domain.ReActAgent,
+    SystemPrompt:  "你是一个助手...",
+    LLMModel:      "gpt-4o",
+    MaxIterations: 10,
+    AllowedSkills: []string{"skill-uuid-1"},
+}
+// Registry 由 api/wiring/agent.go 在启动时构建并注入
+err := registry.Register(ctx, agent.NewBaseAgent(cfg, logger))
+```
+
+> `Registry.Register` 需要 ctx 中携带 TenantContext（由 `middleware.InjectTenantContext()` 注入），写入对应租户 schema 的 `agents` 表。
 
 ## Execution Options
 
 ```go
 result, err := a.Execute(ctx, "用户输入",
     agent.WithMaxSteps(10),
-    agent.WithMemory(true),
-    agent.WithTemperature(0.7),
     agent.WithTimeout(30*time.Second),
+    agent.WithTemperature(0.7),
+    agent.WithStream(true),
+    agent.WithTokenCallback(func(token string) { /* 流式输出 */ }),
+    agent.WithExtraTools(toolDefs),          // 注入 skill/MCP 工具
+    agent.WithSkillToolIndex(skillIndex),    // toolName → skillUUID 映射
+    agent.WithHistoryWindow(20),             // 对话历史窗口（条数）
 )
 ```
 
 `AgentResult` 字段：`Output` / `Thoughts` / `ToolCalls` / `Steps` / `TokensUsed` / `Duration` / `Error`
 
-## Memory Integration
+## ReAct Loop & Built-in Tools
 
-通过 `MemoryManager` 注入，执行时自动检索相关记忆并写入结果：
+ReAct 状态机位于 `internal/agent/application/graph/react.go`，`ReActState` 关键字段：
 
 ```go
-memManager := memory.NewMemoryManager(config, logger, vectorMemory, entityMemory, persistence, pool)
-// BaseAgent 直接赋值字段
-baseAgent.MemoryManager = memManager
-baseAgent.SessionContext = &memory.SessionContext{SessionID: sessionID}
+type ReActState struct {
+    TenantID       string
+    AvailableTools []port.ToolDefinition
+    SkillToolIndex map[string]string  // "tenant_{id}_{name}" → skillUUID
+    Messages       []port.LLMMessage
+    RAGSearchFn    func(...)
+    RecallMemoryFn func(...)
+    // ...
+}
 ```
 
-三层记忆策略由 `MemoryConfig` 控制：
+内置工具（直接在 switch 分支处理，不经过 CapabilityGateway）：
 
-- `ShortTermWindowSize > 0` → `ConversationWindowMemory`
-- `EnableSummary = true` → `ConversationSummaryMemory`
-- 否则 → `ConversationBufferMemory`
+| 工具名 | 触发条件 | 功能 |
+|--------|---------|------|
+| `stratum_search_knowledge` | `AgentConfig.KnowledgeWorkspaceIDs` 非空 | RAG 知识库检索 |
+| `stratum_recall_memory` | `RecallMemoryFn` 已注入 | 长期记忆召回 |
+
+外部 skill 工具名格式：`tenant_{tenantID}_{skill_name}`，default 分支通过 `SkillToolIndex` 反查 UUID 后路由至 `CapabilityGateway`。
+
+## CapabilityGateway 路由
+
+```
+CapabilityGateway.Route(req)
+  ├── req.Type == CapLLM  → LLMAdapter  → llmgateway.Gateway
+  └── req.Type == CapSkill → SkillAdapter → skillgateway.DefaultGateway
+                                              └── atomicEngine.execute
+                                                    └── DBSkillAdapter (SQL WHERE id=$1)
+```
+
+实现位于 `internal/agent/infrastructure/capability/`。
+
+## Memory Integration
+
+Memory 通过三个独立 port 注入 BaseAgent，由 `api/wiring/agent.go` 的 `buildAgent` 完成装配：
+
+```go
+// MemoryInjector: 注入对话历史摘要 + 实体 + 长期记忆到 system prompt
+type MemoryInjector interface {
+    BuildContext(ctx context.Context, ic InjectionContext) (string, error)
+}
+
+// RecallMemoryFn: recall_memory 工具的实现函数
+type RecallMemoryFn func(ctx context.Context, tenantID, userID, agentID string, input map[string]any) (string, error)
+
+// MemorySearcher: 语义记忆检索（供应用层直接调用）
+type MemorySearcher interface {
+    Search(ctx context.Context, req *memdomain.MemorySearchRequest) ([]*memdomain.MemorySearchResult, error)
+}
+```
+
+> 不再直接在 BaseAgent 上挂载 `MemoryManager`。三层记忆策略的选择（ConversationWindow / Summary / Buffer）由 memory 上下文的 `MemoryService` 处理，agent 侧只关心接口。
+
+## Skill Tool Naming Convention
+
+传给模型的工具名格式：`tenant_{tenantID}_{skill_name}`
+
+- `buildExtraTools` 构建 `ToolDefinition.Name` 为此格式，同时产出 `SkillToolIndex` map
+- 执行阶段 `react.go` 从 `SkillToolIndex` 反查 skillUUID，再通过 `CapabilityGateway` 路由
+- MCP 工具名由 MCP 服务器自己定义，不应用此前缀
 
 ## A2A Protocol
 
-多智能体协作实现于 `internal/agent/a2a/`，组件说明：
+多智能体协作实现于 `internal/agent/application/a2a/`：
 
 | 组件 | 文件 | 作用 |
 |------|------|------|
-| Protocol | `protocol.go` | 心跳、超时、重试等协议配置，消息收发与指标统计 |
+| Protocol | `protocol.go` | 心跳、超时、重试、消息收发、指标统计 |
 | Client | `client.go` | Agent 注册、能力公告、发现/协商/协作发起 |
 | Discovery | `discovery.go` | Peer 注册表，能力匹配查询 |
 | Negotiation | `negotiation.go` | 协作条件协商 |
 | Orchestrator | `orchestrator.go` | 创建执行计划，分配步骤 |
 | Message | `message.go` | 消息格式，Inbox/Outbox 异步处理 |
 
-**支持的 5 种协作策略：**
-
-| 策略 | 常量 | 说明 |
-|------|------|------|
-| 顺序 | `StrategySequential` | 参与者依次执行 |
-| 并行 | `StrategyParallel` | 参与者同时执行 |
-| 层级 | `StrategyHierarchical` | 主控 Agent 指挥子 Agent |
-| 流水线 | `StrategyPipeline` | 上一步输出作为下一步输入 |
-| 群体 | `StrategySwarm` | 去中心化协同 |
-
-```go
-orch := a2a.NewOrchestrator(logger)
-plan, err := orch.CreatePlan(ctx,
-    collaborationID,
-    "任务描述",
-    a2a.StrategyParallel,
-    participants,  // []AgentIdentity
-)
-```
+五种协作策略：`StrategySequential` / `StrategyParallel` / `StrategyHierarchical` / `StrategyPipeline` / `StrategySwarm`
 
 ## Rules
 
-1. Agent ID 必须全局唯一；重复注册同一 ID 会覆盖原有记录
-2. `Execute` 内部持有锁，同一 Agent 不支持并发执行
-3. `MaxIterations` 防止无限循环，默认 10
-4. `Reset()` 会清空内存和状态，谨慎使用
-5. 不要在 handler 中直接存储 Agent 实例；通过 Registry 按 ID 查询
+1. Agent ID 全局唯一；重复注册同一 ID 会覆盖原记录（返回 `ErrNameConflict`）
+2. `Execute` 内部持有 `sync.Mutex`，同一 Agent 不支持并发执行
+3. `MaxIterations` 防无限循环，默认值在 `pkg/constants/agent.go`
+4. `Reset()` 清空内存和状态，谨慎使用
+5. 不要在 handler 中持有 Agent 实例；每次请求通过 `Registry.Get(ctx, id)` 获取
+6. Skill 工具注册后不可与内置工具（`stratum_*`）重名；`mergeTools` 会静默丢弃同名 extra 工具

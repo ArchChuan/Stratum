@@ -2,12 +2,7 @@ import { message } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 
 import { memoryApi } from '../api/memory.api';
-import type {
-  MemoryEntity,
-  MemorySearchResult,
-  MemoryStats,
-  NewMemoryInput,
-} from '../model/memory';
+import type { MemorySearchResult, MemoryStats } from '../model/memory';
 
 import { MEMORY_SEARCH_LIMIT } from '@/constants';
 import { useAuth } from '@/modules/iam';
@@ -21,17 +16,8 @@ export const useMemoryPage = () => {
   const [searchResults, setSearchResults] = useState<MemorySearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState<MemoryStats | null>(null);
-  const [entities, setEntities] = useState<MemoryEntity[]>([]);
   const [summary, setSummary] = useState('');
   const [sessionIdInput, setSessionIdInput] = useState('');
-  const [createOpen, setCreateOpen] = useState(false);
-  const [newMemory, setNewMemory] = useState<NewMemoryInput>({
-    role: 'user',
-    content: '',
-    tags: [],
-    importance: 0.5,
-  });
-
   const loadStats = useCallback(async () => {
     try {
       setStats(await memoryApi.stats());
@@ -56,23 +42,6 @@ export const useMemoryPage = () => {
     [searchQuery],
   );
 
-  const handleAddMemory = useCallback(async () => {
-    if (!newMemory.content.trim()) {
-      message.warning('请输入记忆内容');
-      return;
-    }
-    try {
-      await memoryApi.add({ ...newMemory, user_id: userId });
-      message.success('记忆添加成功');
-      setCreateOpen(false);
-      setNewMemory({ role: 'user', content: '', tags: [], importance: 0.5 });
-      loadStats();
-      if (searchQuery.trim()) handleSearch(searchQuery);
-    } catch {
-      message.error('添加记忆失败');
-    }
-  }, [newMemory, userId, searchQuery, loadStats, handleSearch]);
-
   const handleDeleteMemory = useCallback(
     async (id: string) => {
       try {
@@ -86,14 +55,6 @@ export const useMemoryPage = () => {
     },
     [loadStats],
   );
-
-  const loadEntities = useCallback(async () => {
-    try {
-      setEntities(await memoryApi.entities({ tenant_id: tenantId, user_id: userId }));
-    } catch {
-      message.error('加载实体失败');
-    }
-  }, [tenantId, userId]);
 
   const loadSummary = useCallback(async () => {
     if (!sessionIdInput.trim()) {
@@ -111,30 +72,17 @@ export const useMemoryPage = () => {
     loadStats();
   }, [loadStats]);
 
-  const resetNewMemory = useCallback(() => {
-    setCreateOpen(false);
-    setNewMemory({ role: 'user', content: '', tags: [], importance: 0.5 });
-  }, []);
-
   return {
     searchQuery,
     setSearchQuery,
     searchResults,
     loading,
     stats,
-    entities,
     summary,
     sessionIdInput,
     setSessionIdInput,
-    createOpen,
-    setCreateOpen,
-    newMemory,
-    setNewMemory,
     handleSearch,
-    handleAddMemory,
     handleDeleteMemory,
-    loadEntities,
     loadSummary,
-    resetNewMemory,
   };
 };

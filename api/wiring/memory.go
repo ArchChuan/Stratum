@@ -2,7 +2,6 @@ package wiring
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
@@ -30,7 +29,7 @@ type Memory struct {
 func (c *Container) buildMemory(ctx context.Context) error {
 	memRepo := persistence.NewMemoryRepo(c.dbOrNil())
 	mem := &Memory{
-		Manager: memory.NewMemoryManager(memory.DefaultMemoryConfig(), c.Logger, nil, nil, nil, memRepo),
+		Manager: memory.NewMemoryManager(c.Logger, memRepo),
 	}
 
 	db := c.dbOrNil()
@@ -71,19 +70,17 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		}
 
 		dimResolver := pipeline.DimResolver(func(ctx context.Context, tenantID string) int {
-			var settingsJSON []byte
-			if err := db.QueryRow(ctx,
-				"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL",
-				tenantID,
-			).Scan(&settingsJSON); err != nil {
-				return 1536
+			if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
+				if ec := c.Knowledge.EmbedResolver(ctx, tenantID); ec != nil {
+					if d := ec.GetVectorDimension(); d > 0 {
+						return d
+					}
+				}
 			}
-			var s map[string]interface{}
-			if err := json.Unmarshal(settingsJSON, &s); err != nil {
-				return 1536
-			}
-			if d, ok := s["embedding_dim"].(float64); ok && d > 0 {
-				return int(d)
+			if embedSvc != nil {
+				if d := embedSvc.GetVectorDimension(); d > 0 {
+					return d
+				}
 			}
 			return 1536
 		})
@@ -92,6 +89,16 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		p := pipeline.New(pipelineCfg, db, nc, embedSvc, vectorAdapter, c.LLMGateway.Gateway, c.Logger)
 		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 			p.SetEmbedResolver(c.Knowledge.EmbedResolver)
+		}
+		if c.Platform != nil && c.Platform.GatewayCache != nil {
+			llmRes := newTenantCapabilityResolver(db, c.Platform.AESKey, c.Platform.GatewayCache, nil, c.Logger).(*tenantCapabilityResolver)
+			p.SetLLMResolver(func(ctx context.Context, tenantID string) pipeline.LLMClient {
+				gw := llmRes.ResolveLLM(ctx, tenantID)
+				if gw == nil {
+					return nil
+				}
+				return gw
+			})
 		}
 		// Pipeline lifecycle (Start/Stop) is owned by the cmd/server Harness
 		// memory-pipeline component, so wiring only constructs and exposes it.

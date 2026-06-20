@@ -110,5 +110,6 @@ func tenantToDTO(t iamdomain.Tenant) dto.TenantResponse {
 		CreatedAt:   t.CreatedAt,
 		DeletedAt:   t.DeletedAt,
 		MemberCount: t.MemberCount,
+		IsDefault:   t.IsDefault,
 	}
 }

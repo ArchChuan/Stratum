@@ -4,7 +4,8 @@ import { Button, Card, Typography, Space } from 'antd';
 const { Title, Text } = Typography;
 
 const handleGithubLogin = () => {
-  window.location.href = '/auth/github';
+  const base = (import.meta.env.VITE_API_BASE_URL as string) || '';
+  window.location.href = `${base}/auth/github`;
 };
 
 export const LoginPage = () => (

@@ -4,7 +4,10 @@
 
 当前使用 `github.com/milvus-io/milvus-sdk-go/v2` v2.4.2。
 
-核心封装位于 `pkg/vector/vector_store.go`（`VectorStore` struct）。
+核心封装：
+
+- `pkg/vector/vector_store.go` — 通用 `VectorStore` struct（知识库 workspace 使用）
+- `internal/memory/infrastructure/pipeline/vector_adapter.go` — Memory pipeline 专用适配器，封装 tenant-scoped collection 命名与批量写入
 
 ## VectorStore API
 

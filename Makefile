@@ -3,6 +3,7 @@
 	fe-install fe-lint fe-build fe-docker-build \
 	infra-up infra-down infra-wait infra-status \
 	obs-up obs-down \
+	docker-start \
 	k8s-deploy k8s-delete k8s-logs \
 	helm-install helm-upgrade helm-uninstall helm-diff helm-lint \
 	ci-backend ci-frontend ci-docker \
@@ -176,6 +177,10 @@ cd-deploy-prod: cd-validate
 
 # 全链路 CI+CD
 ci-cd-full: ci-backend ci-frontend ci-docker cd-deploy-dev
+
+# ─── 启动 Docker daemon ───────────────────────────────────────────────────
+docker-start:
+	sudo service docker start
 
 # ─── 本地开发模式 ─────────────────────────────────────────────────────────
 dev-up: infra-up obs-up

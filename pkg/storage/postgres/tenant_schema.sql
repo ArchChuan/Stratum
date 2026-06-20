@@ -6,7 +6,6 @@ CREATE TABLE IF NOT EXISTS agents (
     name           TEXT NOT NULL UNIQUE,
     type           TEXT NOT NULL DEFAULT 'react',
     description    TEXT NOT NULL DEFAULT '',
-    persona        TEXT NOT NULL DEFAULT '',
     system_prompt  TEXT NOT NULL DEFAULT '',
     llm_model      TEXT NOT NULL DEFAULT '',
     embed_model    TEXT NOT NULL DEFAULT '',
@@ -308,19 +307,21 @@ CREATE TABLE IF NOT EXISTS memory_token_budgets (
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES chat_conversations(id) ON DELETE SET NULL;
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS keywords TEXT[] NOT NULL DEFAULT '{}';
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS token_estimate INT NOT NULL DEFAULT 0;
-ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS scope_layer INT NOT NULL DEFAULT 1;
+ALTER TABLE memory_entries DROP COLUMN IF EXISTS scope_layer;
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ;
 
 -- entities extensions for pipeline
 ALTER TABLE entities ADD COLUMN IF NOT EXISTS agent_id TEXT;
-ALTER TABLE entities ADD COLUMN IF NOT EXISTS scope_layer INT NOT NULL DEFAULT 1;
+ALTER TABLE entities DROP COLUMN IF EXISTS scope_layer;
 ALTER TABLE entities ADD COLUMN IF NOT EXISTS occurrence_count INT NOT NULL DEFAULT 1;
-CREATE INDEX IF NOT EXISTS idx_entities_scope ON entities (user_id, agent_id, scope_layer);
+CREATE INDEX IF NOT EXISTS idx_entities_user ON entities (user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_name_type ON entities (user_id, COALESCE(agent_id, ''), name, type);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_user_id ON memory_entries (user_id);
 
 -- agents extensions
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 8000;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS embed_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE agents DROP COLUMN IF EXISTS persona;
 
 -- chat_conversations soft-delete backfill
 ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;

@@ -10,7 +10,6 @@ type CreateAgentRequest struct {
 	Name                  string   `json:"name" binding:"required"`
 	Type                  string   `json:"type"`
 	Description           string   `json:"description"`
-	Persona               string   `json:"persona"`
 	SystemPrompt          string   `json:"systemPrompt"`
 	LLMModel              string   `json:"llmModel" binding:"required"`
 	EmbedModel            string   `json:"embedModel"`
@@ -27,10 +26,9 @@ type UpdateAgentRequest struct {
 	Name                  string   `json:"name" binding:"required"`
 	Type                  string   `json:"type"`
 	Description           string   `json:"description"`
-	Persona               string   `json:"persona"`
 	SystemPrompt          string   `json:"systemPrompt"`
 	LLMModel              string   `json:"llmModel" binding:"required"`
-	MaxIterations         int      `json:"maxIterations" binding:"required"`
+	MaxIterations         int      `json:"maxIterations"`
 	MaxContextTokens      int      `json:"maxContextTokens"`
 	AllowedSkills         []string `json:"allowedSkills"`
 	MCPServerIDs          []string `json:"mcpServerIds"`
@@ -42,7 +40,6 @@ type AgentResponse struct {
 	Name                  string   `json:"name"`
 	Type                  string   `json:"type"`
 	Description           string   `json:"description"`
-	Persona               string   `json:"persona"`
 	SystemPrompt          string   `json:"systemPrompt"`
 	LLMModel              string   `json:"llmModel"`
 	EmbedModel            string   `json:"embedModel"`
@@ -83,7 +80,6 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		Name:                  d.Name,
 		Type:                  d.Type,
 		Description:           d.Description,
-		Persona:               d.Persona,
 		SystemPrompt:          d.SystemPrompt,
 		LLMModel:              d.LLMModel,
 		EmbedModel:            d.EmbedModel,

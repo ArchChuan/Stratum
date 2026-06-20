@@ -40,7 +40,6 @@ type AgentConfig struct {
 	Name                           string
 	Type                           AgentType
 	Description                    string
-	Persona                        string
 	SystemPrompt                   string
 	LLMModel                       string
 	EmbedModel                     string

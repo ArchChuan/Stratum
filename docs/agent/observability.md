@@ -33,39 +33,63 @@ span.SetStatus(codes.Error, err.Error())
 
 ### Rules
 
-- 每个 Handler 方法通过 `middleware/trace.go` 自动获得 Span
+- 每个 Handler 方法通过 `middleware/trace.go` (`TraceMiddleware`) 自动获得 Span
 - internal 层关键操作手动创建子 Span
 - Span 命名格式：`{component}.{operation}`，例如 `agent.execute`、`memory.search`、`skill.execute`
 
 ## Metrics (Prometheus)
 
-### 完整内置指标
+### 内置指标
+
+**HTTP**（`api/middleware/metrics.go` + `prometheus.go`）
 
 ```
-# HTTP
 http_requests_total{method, path, status}
 http_request_duration_seconds{method, path}
+```
 
-# Skill
+**Skill**（`internal/skill/infrastructure/gateway/`）
+
+```
 skill_executions_total{skill_id, status}        // status: success|error|timeout|circuit_open
 skill_execution_duration_seconds{skill_id}
 skill_circuit_breaker_state{skill_id}           // 0=closed 1=open 2=half_open
+```
 
-# Agent
+**Agent**（`pkg/observability/prometheus.go`）
+
+```
 agent_executions_total{agent_id, type, status}
 agent_execution_duration_seconds{agent_id}
+```
 
-# LLM
+**LLM**（`internal/llmgateway/`）
+
+```
 llm_requests_total{model, provider, status}
 llm_request_duration_seconds{model, provider}
 llm_token_usage_total{model, token_type}        // token_type: prompt|completion
 llm_token_histogram{model, token_type}
+```
 
-# Knowledge
+**Knowledge**（`internal/knowledge/`）
+
+```
 knowledge_queries_total{type, status}
+```
 
-# Hermes
-hermes_events_total{type, status}
+**Memory Pipeline**（`internal/memory/infrastructure/pipeline/metrics.go`）
+
+```
+outbox_pending                                  // Gauge: 待处理 outbox 条数
+outbox_published_total{tenant_id, status}       // Counter
+embed_duration_seconds                          // Histogram
+embed_total{status}                             // Counter
+enrich_duration_seconds                         // Histogram
+enrich_total{status}                            // Counter
+summary_triggered_total                         // Counter: 触发摘要次数
+dlq_total{reason}                               // Counter: 进入 DLQ 次数
+entities_extracted_total                        // Counter: 实体抽取总数
 ```
 
 ### Circuit Breaker 状态说明
@@ -86,7 +110,28 @@ hermes_events_total{type, status}
 
 同时在 `observability.MetricsProvider` 接口中添加对应方法，并在 `PrometheusMetrics` 和 `NoopMetrics` 中实现。
 
+Memory pipeline 专属指标在 `pipeline/metrics.go` 中单独注册（`RegisterMetrics`），不经过 `MetricsProvider` 接口。
+
 ## Logging (Zap)
+
+### 初始化
+
+```go
+// pkg/observability/logger.go
+logger := observability.NewLogger(env) // production → JSON, 其他 → console+color
+```
+
+固定字段 `app` / `env` / `host` 在初始化时注入。
+
+### 字段分层
+
+| 层 | 字段 | 注入位置 |
+|----|------|---------|
+| 链路 | `request_id` `trace_id` `tenant_id` `user_id` | TraceMiddleware per-request |
+| LLM | `model` `provider` `prompt_tokens` `completion_tokens` `latency_ms` | `llm.complete` 事件 |
+| ReAct | `trace_id` `tenant_id` `model` `step` `tokens` `tool_name` `latency_ms` | `react.llm` / `react.tool` 事件 |
+| 访问 | `method` `path` `status` `latency_ms` `client_ip` `ua` | TraceMiddleware after |
+| Memory | `tenant_id` `status` `duration` | pipeline workers |
 
 ### Usage Standards
 
@@ -102,19 +147,18 @@ logger.Error("operation failed",
 )
 ```
 
-### Rules
+### 级别规则
 
-- 禁止用 `fmt.Sprintf` 构造日志消息，使用结构化字段
-- ERROR 级别：需要人工介入
-- WARN 级别：可自动恢复但需关注（如熔断器状态变更、外部依赖连接失败）
-- INFO 级别：关键业务事件（组件启停、Agent 注册/执行、Skill 熔断）
-- DEBUG 级别：开发调试信息
+| 级别 | 场景 |
+|------|------|
+| DEBUG | 开发调试，production 不输出 |
+| INFO | 正常业务路径（HTTP < 400，LLM 成功，ReAct step，Pipeline 处理成功） |
+| WARN | 可预期异常（HTTP 4xx，重试中，连接失败但不阻断启动） |
+| ERROR | 需处理异常（HTTP 5xx，外部调用失败，DLQ 溢出）；自动附加 stacktrace |
 
-### 必填上下文字段（尽量携带）
+**安全红线**：禁止记录 `password / token / api_key / PII`；禁止打印原始 HTTP response body
 
-`request_id` / `user_id` / `tenant_id` / `operation` / `timestamp`
-
-禁止记录：密码 / Token / PII / API Key
+**禁止** 使用 `fmt.Sprintf` 构造日志消息，使用结构化字段。
 
 ## Local Access
 
@@ -125,4 +169,4 @@ logger.Error("operation failed",
 | Jaeger UI | <http://localhost:16686> | 链路追踪 |
 | Metrics 端点 | <http://localhost:8080/metrics> | Prometheus scrape |
 
-Grafana 数据源配置见 `grafana/datasources/prometheus.yaml`，仪表板配置见 `grafana/dashboards/`。
+Grafana 数据源：`grafana/datasources/prometheus.yaml`，仪表板：`grafana/dashboards/`。

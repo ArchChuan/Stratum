@@ -14,6 +14,8 @@ export const useTenantSettings = () => {
   const [maskedKeys, setMaskedKeys] = useState<Record<string, string>>({});
   const [embedModel, setEmbedModel] = useState('');
   const [embedLoading, setEmbedLoading] = useState(false);
+  const [tenantName, setTenantName] = useState('');
+  const [isDefault, setIsDefault] = useState(false);
 
   const role = user?.current_tenant?.role || user?.role;
   const canEditKeys = role === 'owner' || role === 'admin';
@@ -23,6 +25,8 @@ export const useTenantSettings = () => {
       const settings = await tenantApi.settings();
       setMaskedKeys(settings.llm_api_keys || {});
       setEmbedModel(settings.embed_model || '');
+      setTenantName(settings.tenant_name || '');
+      setIsDefault(settings.is_default ?? false);
     } catch (err: any) {
       if (err?.response?.status !== 403) message.error(extractErrorMessage(err, '加载设置失败'));
     } finally {
@@ -39,6 +43,7 @@ export const useTenantSettings = () => {
     try {
       await tenantApi.updateSettings(values);
       message.success('设置已保存');
+      setTenantName(values.name);
       if (user) {
         login(
           { ...user, current_tenant: { ...(user.current_tenant ?? {}), ...values } },
@@ -100,6 +105,8 @@ export const useTenantSettings = () => {
     maskedKeys,
     embedModel,
     embedLoading,
+    tenantName,
+    isDefault,
     handleBasicSave,
     handleEmbedSave,
     handleKeySave,

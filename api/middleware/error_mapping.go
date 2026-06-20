@@ -113,6 +113,7 @@ func MapErrorToStatus(err error) int {
 	// 400 — Validation / Bad Request
 	case errors.Is(err, iamapp.ErrInvalidSettings),
 		errors.Is(err, iamapp.ErrEmbedModelAlreadySet),
+		errors.Is(err, iamdomain.ErrDefaultTenantDelete),
 		errors.Is(err, knowledgedomain.ErrInvalidEmbeddingModel),
 		errors.Is(err, knowledgedomain.ErrInvalidQueryMode),
 		errors.Is(err, knowledgedomain.ErrEmbeddingModelImmutable),

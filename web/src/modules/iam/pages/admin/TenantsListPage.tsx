@@ -1,4 +1,4 @@
-import { Table, Button, Tag, Typography, message, Card } from 'antd';
+import { Table, Button, Tag, Typography, message, Card, Space } from 'antd';
 import { useEffect, useState } from 'react';
 
 import { tenantApi } from '../../api/tenant.api';
@@ -12,10 +12,10 @@ import { DangerPopconfirm } from '@/shared/ui';
 const { Title, Text } = Typography;
 
 export const TenantsListPage = () => {
-  // useAuth not strictly needed but kept for parity if future role gating required
   useAuth();
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
   const [loading, setLoading] = useState(false);
+  const [deleteLoadingId, setDeleteLoadingId] = useState<string | null>(null);
 
   const fetchTenants = async () => {
     setLoading(true);
@@ -40,6 +40,19 @@ export const TenantsListPage = () => {
       fetchTenants();
     } catch (err) {
       message.error(extractErrorMessage(err, '操作失败'));
+    }
+  };
+
+  const handleDelete = async (tenantId: string) => {
+    setDeleteLoadingId(tenantId);
+    try {
+      await tenantApi.adminDeleteTenant(tenantId);
+      message.success('租户已删除');
+      fetchTenants();
+    } catch (err) {
+      message.error(extractErrorMessage(err, '删除失败'));
+    } finally {
+      setDeleteLoadingId(null);
     }
   };
 
@@ -78,16 +91,35 @@ export const TenantsListPage = () => {
       key: 'action',
       render: (_: unknown, record: AdminTenant) => {
         const isActive = record.status === 'active';
+        const id = String(record.id);
         return (
-          <DangerPopconfirm
-            title={`确认${isActive ? '禁用' : '启用'}该租户？`}
-            okText={isActive ? '禁用' : '启用'}
-            onConfirm={() => handleToggle(String(record.id), record.status)}
-          >
-            <Button size="small" danger={isActive}>
-              {isActive ? '禁用' : '启用'}
-            </Button>
-          </DangerPopconfirm>
+          <Space>
+            <DangerPopconfirm
+              title={`确认${isActive ? '禁用' : '启用'}该租户？`}
+              okText={isActive ? '禁用' : '启用'}
+              onConfirm={() => handleToggle(id, record.status)}
+            >
+              <Button size="small" danger={isActive}>
+                {isActive ? '禁用' : '启用'}
+              </Button>
+            </DangerPopconfirm>
+            <DangerPopconfirm
+              title={`确认删除租户「${record.name}」？此操作不可恢复，所有数据将被永久清除。`}
+              okText="确认删除"
+              onConfirm={() => handleDelete(id)}
+              disabled={record.is_default}
+            >
+              <Button
+                size="small"
+                danger
+                loading={deleteLoadingId === id}
+                disabled={record.is_default}
+                title={record.is_default ? '默认租户不可删除' : undefined}
+              >
+                删除
+              </Button>
+            </DangerPopconfirm>
+          </Space>
         );
       },
     },
@@ -118,3 +150,4 @@ export const TenantsListPage = () => {
 };
 
 export default TenantsListPage;
+

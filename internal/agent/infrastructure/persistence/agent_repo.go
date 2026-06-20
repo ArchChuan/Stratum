@@ -183,10 +183,10 @@ func loadKnowledgeWorkspaces(ctx context.Context, tx pgx.Tx, agentID string) ([]
 func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
-			`INSERT INTO agents (id, name, type, description, persona, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 			cfg.ID, cfg.Name, string(cfg.Type), cfg.Description,
-			cfg.Persona, cfg.SystemPrompt, cfg.LLMModel, cfg.EmbedModel, cfg.MaxIterations, cfg.MaxContextTokens,
+			cfg.SystemPrompt, cfg.LLMModel, cfg.EmbedModel, cfg.MaxIterations, cfg.MaxContextTokens,
 		)
 		if err != nil {
 			var pgErr *pgconn.PgError
@@ -214,10 +214,10 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 	var agentType string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
-			`SELECT id, name, type, description, persona, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens
+			`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens
 			 FROM agents WHERE id = $1`, id).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
-				&cfg.Persona, &cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens); err != nil {
+				&cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens); err != nil {
 			return err
 		}
 		skillIDs, err := loadSkillIDs(ctx, tx, id)
@@ -259,59 +259,136 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 }
 
 // GetAll returns all agents in the tenant schema.
+//
+// Uses 4 batched queries (agents + 3 association tables via WHERE agent_id = ANY($1))
+// instead of fanning out per-agent loaders, so cost is O(1) round-trips, not O(N).
 func (r *PgAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, error) {
 	var out []*domain.AgentConfig
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx,
-			`SELECT id, name, type, description, persona, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens
-			 FROM agents ORDER BY created_at`)
+		cfgs, ids, err := scanAgents(ctx, tx)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var cfg domain.AgentConfig
-			var agentType string
-			if err := rows.Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
-				&cfg.Persona, &cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens); err != nil {
-				continue
-			}
-			cfg.Type = domain.AgentType(agentType)
-			skillIDs, err := loadSkillIDs(ctx, tx, cfg.ID)
-			if err == nil {
-				cfg.AllowedSkills = skillIDs
-			}
-			if cfg.AllowedSkills == nil {
-				cfg.AllowedSkills = []string{}
-			}
-			ids, err := loadMCPServerIDs(ctx, tx, cfg.ID)
-			if err == nil {
-				cfg.MCPServerIDs = ids
-			}
-			if cfg.MCPServerIDs == nil {
-				cfg.MCPServerIDs = []string{}
-			}
-			wsIDs, wsNames, wsDescs, err := loadKnowledgeWorkspaces(ctx, tx, cfg.ID)
-			if err == nil {
-				cfg.KnowledgeWorkspaceIDs = wsIDs
-				cfg.KnowledgeWorkspaceNames = wsNames
-				cfg.KnowledgeWorkspaceDescriptions = wsDescs
-			}
-			if cfg.KnowledgeWorkspaceIDs == nil {
-				cfg.KnowledgeWorkspaceIDs = []string{}
-			}
-			if cfg.KnowledgeWorkspaceNames == nil {
-				cfg.KnowledgeWorkspaceNames = []string{}
-			}
-			if cfg.KnowledgeWorkspaceDescriptions == nil {
-				cfg.KnowledgeWorkspaceDescriptions = []string{}
-			}
-			cp := cfg
-			out = append(out, &cp)
+		if len(cfgs) == 0 {
+			return nil
 		}
-		return rows.Err()
+		skills, err := loadSkillsByAgents(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+		mcps, err := loadMCPsByAgents(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+		wsIDs, wsNames, wsDescs, err := loadWorkspacesByAgents(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+		for _, cfg := range cfgs {
+			cfg.AllowedSkills = nonNil(skills[cfg.ID])
+			cfg.MCPServerIDs = nonNil(mcps[cfg.ID])
+			cfg.KnowledgeWorkspaceIDs = nonNil(wsIDs[cfg.ID])
+			cfg.KnowledgeWorkspaceNames = nonNil(wsNames[cfg.ID])
+			cfg.KnowledgeWorkspaceDescriptions = nonNil(wsDescs[cfg.ID])
+		}
+		out = cfgs
+		return nil
 	})
 	return out, err
+}
+
+func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens
+		 FROM agents ORDER BY created_at`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list agents: %w", err)
+	}
+	defer rows.Close()
+	var cfgs []*domain.AgentConfig
+	var ids []string
+	for rows.Next() {
+		var cfg domain.AgentConfig
+		var agentType string
+		if err := rows.Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
+			&cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens); err != nil {
+			return nil, nil, fmt.Errorf("scan agent row: %w", err)
+		}
+		cfg.Type = domain.AgentType(agentType)
+		cfgs = append(cfgs, &cfg)
+		ids = append(ids, cfg.ID)
+	}
+	return cfgs, ids, rows.Err()
+}
+
+func loadSkillsByAgents(ctx context.Context, tx pgx.Tx, agentIDs []string) (map[string][]string, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT agent_id, skill_id FROM agent_skill_links WHERE agent_id = ANY($1)`, agentIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load skill_links: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string][]string, len(agentIDs))
+	for rows.Next() {
+		var aid, sid string
+		if err := rows.Scan(&aid, &sid); err != nil {
+			return nil, err
+		}
+		out[aid] = append(out[aid], sid)
+	}
+	return out, rows.Err()
+}
+
+func loadMCPsByAgents(ctx context.Context, tx pgx.Tx, agentIDs []string) (map[string][]string, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT agent_id, server_id FROM agent_mcp_links WHERE agent_id = ANY($1)`, agentIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load mcp_links: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string][]string, len(agentIDs))
+	for rows.Next() {
+		var aid, sid string
+		if err := rows.Scan(&aid, &sid); err != nil {
+			return nil, err
+		}
+		out[aid] = append(out[aid], sid)
+	}
+	return out, rows.Err()
+}
+
+func loadWorkspacesByAgents(ctx context.Context, tx pgx.Tx, agentIDs []string) (
+	map[string][]string, map[string][]string, map[string][]string, error,
+) {
+	rows, err := tx.Query(ctx,
+		`SELECT aw.agent_id, aw.workspace_id::text, rw.name, COALESCE(rw.description, '')
+		   FROM agent_workspaces aw
+		   JOIN rag_workspaces rw ON rw.id = aw.workspace_id
+		  WHERE aw.agent_id = ANY($1)`, agentIDs)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("load knowledge_workspaces: %w", err)
+	}
+	defer rows.Close()
+	ids := make(map[string][]string, len(agentIDs))
+	names := make(map[string][]string, len(agentIDs))
+	descs := make(map[string][]string, len(agentIDs))
+	for rows.Next() {
+		var aid, wid, name, desc string
+		if err := rows.Scan(&aid, &wid, &name, &desc); err != nil {
+			return nil, nil, nil, err
+		}
+		ids[aid] = append(ids[aid], wid)
+		names[aid] = append(names[aid], name)
+		descs[aid] = append(descs[aid], desc)
+	}
+	return ids, names, descs, rows.Err()
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // Remove deletes an agent from the tenant schema.
@@ -333,11 +410,11 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig) error
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
 			`UPDATE agents
-			 SET name=$1, description=$2, persona=$3, system_prompt=$4,
-			     llm_model=$5, max_iterations=$6, max_context_tokens=$7,
+			 SET name=$1, description=$2, system_prompt=$3,
+			     llm_model=$4, max_iterations=$5, max_context_tokens=$6,
 			     updated_at=NOW()
-			 WHERE id=$8`,
-			cfg.Name, cfg.Description, cfg.Persona, cfg.SystemPrompt,
+			 WHERE id=$7`,
+			cfg.Name, cfg.Description, cfg.SystemPrompt,
 			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.ID,
 		)
 		if err != nil {

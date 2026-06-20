@@ -18,13 +18,14 @@ import (
 
 // TenantHandler handles /tenant/* endpoints; it delegates business logic to TenantService.
 type TenantHandler struct {
-	svc    *application.TenantService
-	logger *zap.Logger
+	svc      *application.TenantService
+	adminSvc *application.AdminService
+	logger   *zap.Logger
 }
 
 // NewTenantHandler returns a TenantHandler bound to the given service.
-func NewTenantHandler(svc *application.TenantService, logger *zap.Logger) *TenantHandler {
-	return &TenantHandler{svc: svc, logger: logger}
+func NewTenantHandler(svc *application.TenantService, adminSvc *application.AdminService, logger *zap.Logger) *TenantHandler {
+	return &TenantHandler{svc: svc, adminSvc: adminSvc, logger: logger}
 }
 
 // ListMembers GET /tenant/members?page=1&page_size=20
@@ -173,12 +174,12 @@ func (h *TenantHandler) GetSettings(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	name, settings, err := h.svc.GetSettings(c.Request.Context(), tenantID)
+	name, isDefault, settings, err := h.svc.GetSettings(c.Request.Context(), tenantID)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.SettingsResponse{TenantID: tenantID, TenantName: name, Settings: settings})
+	c.JSON(http.StatusOK, dto.SettingsResponse{TenantID: tenantID, TenantName: name, IsDefault: isDefault, Settings: settings})
 }
 
 // UpdateSettings PATCH /tenant/settings
@@ -257,4 +258,27 @@ func (h *TenantHandler) SetEmbedModel(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"embed_model": req.EmbedModel})
+}
+
+// DeleteSelf DELETE /tenant — tenant owner deletes their own tenant and all associated storage.
+func (h *TenantHandler) DeleteSelf(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	roleStr, _ := c.Get("tenant_role")
+	if roleStr != "owner" {
+		_ = c.Error(middleware.NewHTTPError(http.StatusForbidden, application.ErrForbiddenOwner))
+		return
+	}
+	if h.adminSvc == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("admin service unavailable")))
+		return
+	}
+	if err := h.adminSvc.DeleteTenant(c.Request.Context(), tenantID); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "tenant deleted"})
 }

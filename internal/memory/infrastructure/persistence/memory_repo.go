@@ -99,8 +99,8 @@ func (r *MemoryRepo) Get(ctx context.Context, tenantID, id string) (*domain.Memo
 	return entry, nil
 }
 
-// Search returns up to limit entries scoped by sessionID (empty = all).
-func (r *MemoryRepo) Search(ctx context.Context, tenantID, sessionID string, limit int) ([]*domain.MemoryEntry, error) {
+// Search returns up to limit entries scoped by userID (empty = all users in tenant).
+func (r *MemoryRepo) Search(ctx context.Context, tenantID, userID, query string, limit int) ([]*domain.MemoryEntry, error) {
 	if r.pool == nil {
 		return nil, nil
 	}
@@ -112,10 +112,11 @@ func (r *MemoryRepo) Search(ctx context.Context, tenantID, sessionID string, lim
 		rows, err := tx.Query(ctx,
 			`SELECT id, type, role, content, session_id, user_id, agent_id, importance
 			 FROM memory_entries
-			 WHERE ($1 = '' OR session_id = $1)
+			 WHERE ($1::text = '' OR user_id = $1::text)
+			   AND ($2::text = '' OR content ILIKE '%' || $2 || '%')
 			 ORDER BY importance DESC
-			 LIMIT $2`,
-			sessionID, limit,
+			 LIMIT $3`,
+			userID, query, limit,
 		)
 		if err != nil {
 			return err

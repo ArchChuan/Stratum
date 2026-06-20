@@ -14,7 +14,7 @@ type TenantRepo interface {
 	UpdateMemberRole(ctx context.Context, tenantID, userID, role string) error
 	DeleteMember(ctx context.Context, tenantID, userID string) error
 	CreateInvitation(ctx context.Context, inv domain.Invitation) error
-	GetTenantSettings(ctx context.Context, tenantID string) (name string, settingsJSON []byte, err error)
+	GetTenantSettings(ctx context.Context, tenantID string) (name string, isDefault bool, settingsJSON []byte, err error)
 	UpdateTenantName(ctx context.Context, tenantID, name string) error
 	UpdateTenantSettings(ctx context.Context, tenantID string, settingsJSON []byte) error
 	ListUserTenants(ctx context.Context, userID string) ([]domain.UserTenantInfo, error)

@@ -23,7 +23,14 @@ export const tenantApi = {
   },
   settings: async (token?: string): Promise<TenantSettings> => {
     const res = await api.get('/tenant/settings', withBearer(token));
-    return tenantSettingsSchema.parse(res.data?.settings ?? res.data);
+    const data = res.data ?? {};
+    const inner = (data.settings ?? {}) as Record<string, unknown>;
+    return tenantSettingsSchema.parse({
+      tenant_id: data.tenant_id,
+      tenant_name: data.tenant_name,
+      embed_model: inner.embed_model,
+      llm_api_keys: inner.llm_api_keys,
+    });
   },
   updateSettings: (patch: Record<string, unknown>) => api.patch('/tenant/settings', patch),
   setEmbedModel: (embedModel: string) =>
@@ -53,4 +60,6 @@ export const tenantApi = {
       status: enabled ? 'active' : 'suspended',
     }),
   createTenant: (data: { name: string }) => api.post('/admin/tenants', data),
+  adminDeleteTenant: (tenantId: string) => api.delete(`/admin/tenants/${tenantId}`),
+  deleteSelf: () => api.delete('/tenant'),
 };

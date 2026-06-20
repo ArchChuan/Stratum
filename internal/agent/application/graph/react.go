@@ -25,6 +25,8 @@ type ReActState struct {
 	LLMAPIKeys     map[string]string
 	Model          string
 	AvailableTools []port.ToolDefinition
+	// SkillToolIndex maps tenant-scoped tool names ("tenant_{id}_{name}") to their skill UUIDs.
+	SkillToolIndex map[string]string
 	Messages       []port.LLMMessage
 	AllToolCalls   []port.ToolCall
 	Output         string
@@ -58,6 +60,8 @@ func BuildReActGraph(capGW port.CapabilityGateway, logger *zap.Logger) (*Compile
 func makeLLMNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReActState] {
 	return func(ctx context.Context, s ReActState) (ReActState, error) {
 		start := time.Now()
+		// Always stream: tool-decision turns typically produce empty content so no tokens
+		// reach the client; final-answer turns stream the output to the frontend as required.
 		resp, err := RetryFn(ctx, DefaultRetry, func() (port.CapabilityResponse, error) {
 			return capGW.Route(ctx, port.CapabilityRequest{
 				TraceID:     s.TraceID,
@@ -204,12 +208,16 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					zap.Int64("latency_ms", toolLatencyMs),
 				)
 			default:
+				skillID := tc.Name
+				if id, ok := s.SkillToolIndex[tc.Name]; ok {
+					skillID = id
+				}
 				toolResp, err := capGW.Route(ctx, port.CapabilityRequest{
 					TraceID:  s.TraceID,
 					TenantID: s.TenantID,
 					Type:     port.CapSkill,
 					Timeout:  30 * time.Second,
-					Skill:    &port.SkillCapRequest{SkillID: tc.Name, Input: tc.Arguments},
+					Skill:    &port.SkillCapRequest{SkillID: skillID, Input: tc.Arguments},
 				})
 				toolLatencyMs := time.Since(toolStart).Milliseconds()
 				switch {

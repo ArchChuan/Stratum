@@ -1,5 +1,5 @@
-import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
-import { Button, Empty, Input, Space } from 'antd';
+import { SearchOutlined } from '@ant-design/icons';
+import { Empty, Input, Space } from 'antd';
 
 import type { MemorySearchResult } from '../model/memory';
 
@@ -13,7 +13,6 @@ interface MemorySearchTabProps {
   loading: boolean;
   results: MemorySearchResult[];
   onSearch: (v: string) => void;
-  onCreate: () => void;
   onDelete: (id: string) => void;
 }
 
@@ -23,29 +22,23 @@ export const MemorySearchTab = ({
   loading,
   results,
   onSearch,
-  onCreate,
   onDelete,
 }: MemorySearchTabProps) => (
   <Space direction="vertical" style={{ width: '100%' }} size="middle">
-    <Space>
-      <Search
-        placeholder="搜索记忆..."
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-        onSearch={onSearch}
-        enterButton={
-          <>
-            <SearchOutlined /> 搜索
-          </>
-        }
-        style={{ width: 400 }}
-        loading={loading}
-        allowClear
-      />
-      <Button icon={<PlusOutlined />} type="primary" onClick={onCreate}>
-        添加记忆
-      </Button>
-    </Space>
+    <Search
+      placeholder="搜索记忆..."
+      value={searchQuery}
+      onChange={(e) => setSearchQuery(e.target.value)}
+      onSearch={onSearch}
+      enterButton={
+        <>
+          <SearchOutlined /> 搜索
+        </>
+      }
+      style={{ width: 400 }}
+      loading={loading}
+      allowClear
+    />
     {results.length > 0 ? (
       <MemoryEntryTable results={results} onDelete={onDelete} />
     ) : (

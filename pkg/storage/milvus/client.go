@@ -116,9 +116,27 @@ func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionNa
 	}
 
 	if hasCollection {
-		vs.logger.Info("collection already exists", zap.String("collection", collectionName))
-		vs.dimCache.Store(collectionName, dim)
-		return nil
+		existingDim, derr := vs.collectionDim(ctx, collectionName)
+		if derr != nil {
+			vs.logger.Warn("failed to describe existing collection, will reuse",
+				zap.String("collection", collectionName), zap.Error(derr))
+			vs.dimCache.Store(collectionName, dim)
+			return nil
+		}
+		if existingDim == dim {
+			vs.logger.Info("collection already exists",
+				zap.String("collection", collectionName), zap.Int("dim", dim))
+			vs.dimCache.Store(collectionName, dim)
+			return nil
+		}
+		vs.logger.Warn("collection dim mismatch, recreating",
+			zap.String("collection", collectionName),
+			zap.Int("existing_dim", existingDim),
+			zap.Int("required_dim", dim))
+		if derr := vs.client.DropCollection(ctx, collectionName); derr != nil {
+			return fmt.Errorf("failed to drop stale collection %s: %w", collectionName, derr)
+		}
+		vs.dimCache.Delete(collectionName)
 	}
 
 	schema := &entity.Schema{
@@ -635,6 +653,33 @@ func tokenize(text string) []string {
 		tokens = append(tokens, buf.String())
 	}
 	return tokens
+}
+
+// collectionDim reads the vector field dim from an existing collection's schema.
+// Returns an error if the collection has no float-vector field or the dim is unparseable.
+func (vs *VectorStore) collectionDim(ctx context.Context, collectionName string) (int, error) {
+	coll, err := vs.client.DescribeCollection(ctx, collectionName)
+	if err != nil {
+		return 0, fmt.Errorf("describe collection %s: %w", collectionName, err)
+	}
+	if coll == nil || coll.Schema == nil {
+		return 0, fmt.Errorf("collection %s has no schema", collectionName)
+	}
+	for _, f := range coll.Schema.Fields {
+		if f.DataType != entity.FieldTypeFloatVector {
+			continue
+		}
+		raw, ok := f.TypeParams["dim"]
+		if !ok {
+			return 0, fmt.Errorf("vector field of %s has no dim type-param", collectionName)
+		}
+		var d int
+		if _, err := fmt.Sscanf(raw, "%d", &d); err != nil {
+			return 0, fmt.Errorf("parse dim %q of %s: %w", raw, collectionName, err)
+		}
+		return d, nil
+	}
+	return 0, fmt.Errorf("collection %s has no float-vector field", collectionName)
 }
 
 func (vs *VectorStore) Close() error {
