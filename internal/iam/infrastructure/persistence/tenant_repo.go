@@ -115,20 +115,21 @@ func (r *TenantRepo) CreateInvitation(ctx context.Context, inv domain.Invitation
 	return nil
 }
 
-// GetTenantSettings returns the tenant name and raw settings JSON.
-func (r *TenantRepo) GetTenantSettings(ctx context.Context, tenantID string) (string, []byte, error) {
+// GetTenantSettings returns the tenant name, is_default flag, and raw settings JSON.
+func (r *TenantRepo) GetTenantSettings(ctx context.Context, tenantID string) (string, bool, []byte, error) {
 	var name string
+	var isDefault bool
 	var settingsJSON []byte
 	err := r.db.QueryRow(ctx,
-		"SELECT name, settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL", tenantID,
-	).Scan(&name, &settingsJSON)
+		"SELECT name, is_default, settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL", tenantID,
+	).Scan(&name, &isDefault, &settingsJSON)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", nil, domain.ErrTenantNotFound
+			return "", false, nil, domain.ErrTenantNotFound
 		}
-		return "", nil, fmt.Errorf("tenant_repo: get tenant settings: %w", err)
+		return "", false, nil, fmt.Errorf("tenant_repo: get tenant settings: %w", err)
 	}
-	return name, settingsJSON, nil
+	return name, isDefault, settingsJSON, nil
 }
 
 // UpdateTenantName changes a tenant's display name; ErrTenantNotFound on miss.

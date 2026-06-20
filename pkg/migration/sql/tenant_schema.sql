@@ -279,17 +279,18 @@ CREATE TABLE IF NOT EXISTS memory_token_budgets (
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES chat_conversations(id) ON DELETE SET NULL;
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS keywords TEXT[] NOT NULL DEFAULT '{}';
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS token_estimate INT NOT NULL DEFAULT 0;
-ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS scope_layer INT NOT NULL DEFAULT 1;
+ALTER TABLE memory_entries DROP COLUMN IF EXISTS scope_layer;
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ;
 
 ALTER TABLE entities ADD COLUMN IF NOT EXISTS user_id TEXT;
 ALTER TABLE entities ADD COLUMN IF NOT EXISTS agent_id TEXT;
 ALTER TABLE entities ADD COLUMN IF NOT EXISTS confidence FLOAT8 NOT NULL DEFAULT 0;
-ALTER TABLE entities ADD COLUMN IF NOT EXISTS scope_layer INT NOT NULL DEFAULT 1;
+ALTER TABLE entities DROP COLUMN IF EXISTS scope_layer;
 ALTER TABLE entities ADD COLUMN IF NOT EXISTS occurrence_count INT NOT NULL DEFAULT 1;
 ALTER TABLE entities ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW();
-CREATE INDEX IF NOT EXISTS idx_entities_scope ON entities (user_id, agent_id, scope_layer);
+CREATE INDEX IF NOT EXISTS idx_entities_user ON entities (user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_name_type ON entities (user_id, COALESCE(agent_id, ''), name, type);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_user_id ON memory_entries (user_id);
 
 CREATE INDEX IF NOT EXISTS idx_memory_entries_content_trgm ON memory_entries USING GIN (content gin_trgm_ops);
 

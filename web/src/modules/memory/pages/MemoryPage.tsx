@@ -1,7 +1,5 @@
 import { Tabs, Typography } from 'antd';
 
-import { MemoryCreateModal } from '../components/MemoryCreateModal';
-import { MemoryEntitiesTab } from '../components/MemoryEntitiesTab';
 import { MemorySearchTab } from '../components/MemorySearchTab';
 import { MemoryStatsTab } from '../components/MemoryStatsTab';
 import { MemorySummaryTab } from '../components/MemorySummaryTab';
@@ -16,20 +14,12 @@ export const MemoryPage = () => {
     searchResults,
     loading,
     stats,
-    entities,
     summary,
     sessionIdInput,
     setSessionIdInput,
-    createOpen,
-    setCreateOpen,
-    newMemory,
-    setNewMemory,
     handleSearch,
-    handleAddMemory,
     handleDeleteMemory,
-    loadEntities,
     loadSummary,
-    resetNewMemory,
   } = useMemoryPage();
 
   return (
@@ -48,7 +38,6 @@ export const MemoryPage = () => {
                 loading={loading}
                 results={searchResults}
                 onSearch={handleSearch}
-                onCreate={() => setCreateOpen(true)}
                 onDelete={handleDeleteMemory}
               />
             ),
@@ -57,11 +46,6 @@ export const MemoryPage = () => {
             key: 'stats',
             label: '统计',
             children: <MemoryStatsTab stats={stats} />,
-          },
-          {
-            key: 'entities',
-            label: '实体图谱',
-            children: <MemoryEntitiesTab entities={entities} onLoad={loadEntities} />,
           },
           {
             key: 'summary',
@@ -76,13 +60,6 @@ export const MemoryPage = () => {
             ),
           },
         ]}
-      />
-      <MemoryCreateModal
-        open={createOpen}
-        value={newMemory}
-        onChange={setNewMemory}
-        onOk={handleAddMemory}
-        onCancel={resetNewMemory}
       />
     </div>
   );

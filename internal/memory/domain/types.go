@@ -30,21 +30,6 @@ type MemoryEntry struct {
 	ExpiresAt  time.Time              `json:"expires_at,omitempty"`
 }
 
-// MemoryConfig holds runtime config for the memory subsystem.
-type MemoryConfig struct {
-	EnableVectorSearch bool    `json:"enable_vector_search"`
-	VectorCollection   string  `json:"vector_collection"`
-	MaxVectorResults   int     `json:"max_vector_results"`
-	MinRelevanceScore  float64 `json:"min_relevance_score"`
-
-	EnableEntityExtraction bool    `json:"enable_entity_extraction"`
-	EntityThreshold        float64 `json:"entity_threshold"`
-
-	EnablePersistence   bool          `json:"enable_persistence"`
-	PersistenceInterval time.Duration `json:"persistence_interval"`
-	MaxMemoryAge        time.Duration `json:"max_memory_age"`
-}
-
 // TenantContext carries tenant defaults.
 type TenantContext struct {
 	TenantID string
@@ -116,17 +101,6 @@ type Entity struct {
 	FirstSeen  time.Time
 	LastSeen   time.Time
 	Attributes map[string]interface{}
-	Relations  []EntityRelation
-}
-
-// EntityRelation links two entities.
-type EntityRelation struct {
-	FromEntityID string
-	ToEntityID   string
-	RelationType string
-	Confidence   float64
-	LastSeen     time.Time
-	Metadata     map[string]interface{}
 }
 
 // MemoryEvent describes a memory mutation broadcast on the bus.

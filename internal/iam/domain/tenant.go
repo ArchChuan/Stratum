@@ -40,6 +40,7 @@ type Tenant struct {
 	CreatedAt   time.Time
 	DeletedAt   *time.Time
 	MemberCount int
+	IsDefault   bool
 }
 
 // TenantFilter narrows admin tenant listing.

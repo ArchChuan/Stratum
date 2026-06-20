@@ -70,8 +70,8 @@ func (f *fakeTenantRepo) CreateInvitation(_ context.Context, inv domain.Invitati
 	return nil
 }
 
-func (f *fakeTenantRepo) GetTenantSettings(_ context.Context, _ string) (string, []byte, error) {
-	return f.tenantName, f.tenantSettings, nil
+func (f *fakeTenantRepo) GetTenantSettings(_ context.Context, _ string) (string, bool, []byte, error) {
+	return f.tenantName, false, f.tenantSettings, nil
 }
 
 func (f *fakeTenantRepo) UpdateTenantName(_ context.Context, _, _ string) error {
@@ -99,7 +99,7 @@ func injectTenant(tenantID string) gin.HandlerFunc {
 
 func newTenantHandler(repo *fakeTenantRepo) *TenantHandler {
 	svc := application.NewTenantService(repo, zap.NewNop(), "http://localhost:3000", [32]byte{}, nil)
-	return NewTenantHandler(svc, zap.NewNop())
+	return NewTenantHandler(svc, nil, zap.NewNop())
 }
 
 func setupTenantHandlerRouter(h *TenantHandler) *gin.Engine {

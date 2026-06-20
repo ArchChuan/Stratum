@@ -6,7 +6,6 @@ package dto
 type CreateAgentRequest struct {
 	Name          string   `json:"name" binding:"required"`
 	Description   string   `json:"description"`
-	Persona       string   `json:"persona"`
 	SystemPrompt  string   `json:"system_prompt"`
 	LLMModel      string   `json:"llm_model" binding:"required"`
 	MaxIterations int      `json:"max_iterations" binding:"required,min=1,max=20"`
@@ -18,7 +17,6 @@ type AgentResponse struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
 	Description   string   `json:"description"`
-	Persona       string   `json:"persona"`
 	SystemPrompt  string   `json:"system_prompt"`
 	LLMModel      string   `json:"llm_model"`
 	MaxIterations int      `json:"max_iterations"`

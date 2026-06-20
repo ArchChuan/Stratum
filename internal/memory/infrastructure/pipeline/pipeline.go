@@ -18,6 +18,7 @@ import (
 // embedding.EmbeddingService implementation.
 type EmbedClient interface {
 	EmbedVector(ctx context.Context, text string) ([]float32, error)
+	GetVectorDimension() int
 }
 
 // LLMClient performs a single non-streaming completion against an LLM provider.
@@ -25,6 +26,12 @@ type EmbedClient interface {
 type LLMClient interface {
 	Complete(ctx context.Context, req *llmgateway.CompletionRequest) (*llmgateway.CompletionResponse, error)
 }
+
+// LLMResolver returns a per-tenant LLM client at call time. Returns nil when
+// the tenant has no provider configured. Mirrors EmbedServiceResolver so the
+// pipeline can drive enrich/summary jobs against tenant-private gateways
+// (which is where API keys live — the global gateway has none).
+type LLMResolver func(ctx context.Context, tenantID string) LLMClient
 
 // Pipeline orchestrates all memory pipeline workers: outbox poller,
 // embedder workers, and enricher workers.
@@ -37,6 +44,7 @@ type Pipeline struct {
 	embedResolver EmbedServiceResolver
 	vectorDB      VectorStore
 	llm           LLMClient
+	llmResolver   LLMResolver
 	logger        *zap.Logger
 
 	poller    *OutboxPoller
@@ -72,6 +80,14 @@ func New(
 // Must be called before Start.
 func (p *Pipeline) SetEmbedResolver(r EmbedServiceResolver) {
 	p.embedResolver = r
+}
+
+// SetLLMResolver sets a per-tenant LLM resolver used by EnricherWorkers.
+// Must be called before Start. Without it, enrich/summary fall back to the
+// shared p.llm (which has no provider clients in production), so callers
+// running multi-tenant pipelines should always set this.
+func (p *Pipeline) SetLLMResolver(r LLMResolver) {
+	p.llmResolver = r
 }
 
 // Start initializes JetStream infrastructure, creates consumers, and launches
@@ -146,6 +162,9 @@ func (p *Pipeline) Start(ctx context.Context) error {
 
 	for i := 0; i < p.cfg.EnrichWorkers; i++ {
 		worker := NewEnricherWorker(enrichConsumer, p.pool, p.llm, p.logger, p.cfg)
+		if p.llmResolver != nil {
+			worker.WithLLMResolver(p.llmResolver)
+		}
 		p.enrichers = append(p.enrichers, worker)
 		p.wg.Add(1)
 		go func() {

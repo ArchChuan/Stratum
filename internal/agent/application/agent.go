@@ -48,6 +48,8 @@ type ExecutionConfig struct {
 	LLMAPIKeys     map[string]string
 	RAGSearchFn    func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
 	ExtraTools     []port.ToolDefinition
+	// SkillToolIndex maps tenant-scoped tool names to skill UUIDs for execution routing.
+	SkillToolIndex map[string]string
 	ConversationID string
 	UserID         string
 	HistoryWindow  int
@@ -194,7 +196,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	}
 	agentID := a.ID
 	agentType := a.Type
-	systemPrompt := buildSystemPrompt(a.Persona, a.SystemPrompt)
+	systemPrompt := a.SystemPrompt
 	llmModel := a.LLMModel
 	capGW := a.CapGateway
 	chatStore := a.ChatStore
@@ -324,11 +326,6 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 							"type":        "string",
 							"description": "Search query to find relevant memories",
 						},
-						"scope": map[string]interface{}{
-							"type":        "string",
-							"enum":        []string{"private", "personal", "shared"},
-							"description": "private=this user+agent, personal=this user across agents, shared=all tenant memories",
-						},
 						"limit": map[string]interface{}{
 							"type":        "integer",
 							"description": "Max results (1-20, default 5)",
@@ -347,6 +344,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			Messages:       initMessages,
 			OnToken:        cfg.TokenCallback,
 			AvailableTools: mergeTools(availableTools, cfg.ExtraTools, a.Logger),
+			SkillToolIndex: cfg.SkillToolIndex,
 			RAGSearchFn:    cfg.RAGSearchFn,
 		}
 		if a.RecallMemoryFn != nil {
@@ -530,6 +528,13 @@ func WithExtraTools(tools []port.ToolDefinition) ExecutionOption {
 	}
 }
 
+// WithSkillToolIndex sets the mapping from tenant-scoped tool names to skill UUIDs.
+func WithSkillToolIndex(index map[string]string) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.SkillToolIndex = index
+	}
+}
+
 // WithConversationID sets the conversation ID for multi-turn history loading.
 func WithConversationID(id string) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
@@ -603,16 +608,4 @@ func mergeTools(builtins []port.ToolDefinition, extras []port.ToolDefinition, lo
 		out = append(out, t)
 	}
 	return out
-}
-
-// buildSystemPrompt prepends persona to systemPrompt with a blank line separator.
-// If persona is empty, systemPrompt is returned as-is.
-func buildSystemPrompt(persona, systemPrompt string) string {
-	if persona == "" {
-		return systemPrompt
-	}
-	if systemPrompt == "" {
-		return persona
-	}
-	return persona + "\n\n" + systemPrompt
 }

@@ -6,6 +6,4 @@ export type {
   MemoryEntry,
   MemorySearchResult,
   MemoryStats,
-  MemoryEntity,
-  NewMemoryInput,
 } from './model/memory';

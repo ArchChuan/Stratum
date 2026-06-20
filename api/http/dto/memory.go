@@ -2,37 +2,6 @@
 
 package dto
 
-// CreateSessionRequest is the body for POST /memory/sessions.
-type CreateSessionRequest struct {
-	TenantID string                 `json:"tenant_id"`
-	UserID   string                 `json:"user_id"`
-	AgentID  string                 `json:"agent_id"`
-	Metadata map[string]interface{} `json:"metadata"`
-}
-
-// CreateSessionResponse is returned by POST /memory/sessions.
-type CreateSessionResponse struct {
-	SessionID string `json:"session_id"`
-	TenantID  string `json:"tenant_id"`
-	UserID    string `json:"user_id"`
-	AgentID   string `json:"agent_id"`
-	StartTime string `json:"start_time"`
-}
-
-// AddMemoryRequest is the body for POST /memory.
-type AddMemoryRequest struct {
-	Role       string                 `json:"role" binding:"required,oneof=user assistant system"`
-	Content    string                 `json:"content" binding:"required"`
-	SessionID  string                 `json:"session_id" binding:"required"`
-	TenantID   string                 `json:"tenant_id"`
-	UserID     string                 `json:"user_id"`
-	AgentID    string                 `json:"agent_id"`
-	Metadata   map[string]interface{} `json:"metadata"`
-	Tags       []string               `json:"tags"`
-	Importance float64                `json:"importance"`
-	ExpiresAt  string                 `json:"expires_at"`
-}
-
 // MemoryEntryResponse is the canonical entry shape returned by /memory endpoints.
 type MemoryEntryResponse struct {
 	ID         string                 `json:"id"`
@@ -75,6 +44,18 @@ type MemorySearchResultItem struct {
 	Distance float64              `json:"distance,omitempty"`
 }
 
+// AddMemoryRequest is the body for POST /memory.
+type AddMemoryRequest struct {
+	Type       string                 `json:"type"`
+	Role       string                 `json:"role"`
+	Content    string                 `json:"content" binding:"required"`
+	SessionID  string                 `json:"session_id"`
+	AgentID    string                 `json:"agent_id"`
+	Importance float64                `json:"importance"`
+	Tags       []string               `json:"tags"`
+	Metadata   map[string]interface{} `json:"metadata"`
+}
+
 // MemoryStatsResponse is the response for GET /memory/stats.
 type MemoryStatsResponse struct {
 	TotalEntries     int64  `json:"total_entries"`
@@ -86,34 +67,4 @@ type MemoryStatsResponse struct {
 	VectorCount      int64  `json:"vector_count"`
 	LastAccessTime   string `json:"last_access_time"`
 	StorageSizeBytes int64  `json:"storage_size_bytes"`
-}
-
-// EntityResponse is a single entity returned by /memory/entities.
-type EntityResponse struct {
-	ID         string                 `json:"id"`
-	Name       string                 `json:"name"`
-	Type       string                 `json:"type"`
-	Confidence float64                `json:"confidence"`
-	FirstSeen  string                 `json:"first_seen"`
-	LastSeen   string                 `json:"last_seen"`
-	Attributes map[string]interface{} `json:"attributes"`
-	Relations  []EntityRelationItem   `json:"relations"`
-}
-
-// EntityRelationItem is one edge attached to an EntityResponse.
-type EntityRelationItem struct {
-	FromEntityID string                 `json:"from_entity_id"`
-	ToEntityID   string                 `json:"to_entity_id"`
-	RelationType string                 `json:"relation_type"`
-	Confidence   float64                `json:"confidence"`
-	LastSeen     string                 `json:"last_seen"`
-	Metadata     map[string]interface{} `json:"metadata"`
-}
-
-// ExtractEntitiesRequest is the body for POST /memory/extract-entities.
-type ExtractEntitiesRequest struct {
-	Text      string                 `json:"text" binding:"required"`
-	SessionID string                 `json:"session_id" binding:"required"`
-	UserID    string                 `json:"user_id"`
-	Metadata  map[string]interface{} `json:"metadata"`
 }

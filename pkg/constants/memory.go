@@ -2,7 +2,17 @@ package constants
 
 import "time"
 
-// Outbox poller
+// Outbox pre-filter — lightweight rules applied before INSERT INTO memory_outbox.
+// Only messages passing all rules are enqueued for embedding.
+const (
+	// MemoryOutboxMinRunes is the minimum rune count for a message to be recorded.
+	// Short acks ("OK", "好", "继续") carry no semantic value.
+	MemoryOutboxMinRunes = 10
+	// MemoryOutboxMaxRunes is the maximum rune count stored in the outbox payload.
+	// Content beyond this is truncated to limit noise in the embedding vector.
+	MemoryOutboxMaxRunes = 2000
+)
+
 const (
 	MemoryOutboxPollInterval = 1 * time.Second
 	MemoryOutboxBatchSize    = 50

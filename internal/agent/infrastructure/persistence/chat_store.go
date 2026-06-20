@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -181,24 +182,26 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 			return err
 		}
 
-		outboxPayload, err := json.Marshal(map[string]interface{}{
-			"message_id":      msg.ID,
-			"conversation_id": msg.ConversationID,
-			"tenant_id":       tenantID,
-			"role":            msg.Role,
-			"content":         msg.Content,
-			"created_at":      msg.CreatedAt,
-			"user_id":         msg.UserID,
-			"agent_id":        msg.AgentID,
-		})
-		if err != nil {
-			return fmt.Errorf("marshal outbox payload: %w", err)
-		}
-		_, err = tx.Exec(ctx,
-			`INSERT INTO memory_outbox (message_id, payload) VALUES ($1, $2)`,
-			msg.ID, outboxPayload)
-		if err != nil {
-			return fmt.Errorf("insert memory_outbox: %w", err)
+		outboxContent := memoryOutboxContent(msg.Role, msg.Content)
+		if outboxContent != "" && !msg.IsError {
+			outboxPayload, err := json.Marshal(map[string]interface{}{
+				"message_id":      msg.ID,
+				"conversation_id": msg.ConversationID,
+				"tenant_id":       tenantID,
+				"role":            msg.Role,
+				"content":         outboxContent,
+				"created_at":      msg.CreatedAt,
+				"user_id":         msg.UserID,
+				"agent_id":        msg.AgentID,
+			})
+			if err != nil {
+				return fmt.Errorf("marshal outbox payload: %w", err)
+			}
+			if _, err = tx.Exec(ctx,
+				`INSERT INTO memory_outbox (message_id, payload) VALUES ($1, $2)`,
+				msg.ID, outboxPayload); err != nil {
+				return fmt.Errorf("insert memory_outbox: %w", err)
+			}
 		}
 		return nil
 	})
@@ -251,4 +254,27 @@ func (s *PgChatStore) CleanupExpired(ctx context.Context, tenantID string) error
 		return fmt.Errorf("chat_store: cleanup expired: %w", err)
 	}
 	return nil
+}
+
+// memoryOutboxContent decides whether a message should be written to memory_outbox
+// and returns the (possibly truncated) content to store.
+//
+// Rules (industry-standard lightweight pre-filter):
+//   - role must be "user" or "assistant" — system/tool messages are internal signals
+//   - content must be at least MemoryOutboxMinRunes runes — short acks carry no value
+//   - content is truncated to MemoryOutboxMaxRunes runes — prevents noisy oversized vectors
+//
+// Returns "" when the message should be skipped.
+func memoryOutboxContent(role, content string) string {
+	if role != "user" && role != "assistant" {
+		return ""
+	}
+	runes := []rune(content)
+	if len(runes) < constants.MemoryOutboxMinRunes {
+		return ""
+	}
+	if len(runes) > constants.MemoryOutboxMaxRunes {
+		return string(runes[:constants.MemoryOutboxMaxRunes])
+	}
+	return content
 }

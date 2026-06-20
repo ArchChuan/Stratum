@@ -28,6 +28,7 @@ type TenantResponse struct {
 	MemberCount int        `json:"member_count"`
 	CreatedAt   time.Time  `json:"created_at"`
 	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+	IsDefault   bool       `json:"is_default"`
 }
 
 // ListTenantsResponse wraps paginated tenant results.
@@ -85,6 +86,7 @@ type UpdateSettingsRequest struct {
 type SettingsResponse struct {
 	TenantID   string                 `json:"tenant_id"`
 	TenantName string                 `json:"tenant_name"`
+	IsDefault  bool                   `json:"is_default"`
 	Settings   map[string]interface{} `json:"settings"`
 }
 

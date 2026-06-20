@@ -22,6 +22,8 @@ export const useChatPage = () => {
   const [loadingConvs, setLoadingConvs] = useState(false);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const pinnedToBottomRef = useRef(true); // auto-scroll only when user is at the bottom
   const agentIdRef = useRef(selectedAgent);
   const streamMsgIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -208,13 +210,35 @@ export const useChatPage = () => {
     accumulatedContent,
   ]);
 
+  const lastMsgCountRef = useRef(0);
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior });
+    const el = bottomRef.current;
+    if (!el) return;
+    const newMessages = messages.length > lastMsgCountRef.current;
+    lastMsgCountRef.current = messages.length;
+    // On initial load or new conversation: always scroll instantly.
+    if (newMessages && !sending) {
+      pinnedToBottomRef.current = true;
+      el.scrollIntoView({ behavior: 'instant' });
+      return;
+    }
+    // During streaming: only scroll if user is pinned to bottom.
+    if (sending && pinnedToBottomRef.current) {
+      el.scrollIntoView({ behavior: 'instant' });
+    }
   }, [messages, sending]);
 
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if (!text || !selectedAgent || !selectedConv || sending) return;
+    if (!text || !selectedAgent || !selectedConv) return;
+
+    // If currently streaming, mark that message as interrupted before starting a new one.
+    const prevMsgId = streamMsgIdRef.current;
+    if (prevMsgId) {
+      setMessages((prev) => prev.map((m) => (m.id === prevMsgId ? { ...m, interrupted: true } : m)));
+      streamMsgIdRef.current = null;
+    }
+
     const tmpId = `tmp-${Date.now()}`;
     setMessages((prev) => [
       ...prev,
@@ -236,7 +260,7 @@ export const useChatPage = () => {
       context: {},
       variables: {},
     });
-  }, [input, selectedAgent, selectedConv, sending, startStream]);
+  }, [input, selectedAgent, selectedConv, startStream]);
 
   const handleCreateConv = useCallback(async () => {
     if (!selectedAgent) return;
@@ -286,6 +310,8 @@ export const useChatPage = () => {
     input,
     setInput,
     bottomRef,
+    scrollContainerRef,
+    pinnedToBottomRef,
     handleSend,
     handleCreateConv,
     handleRenameConv,

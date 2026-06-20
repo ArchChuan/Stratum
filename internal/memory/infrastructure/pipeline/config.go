@@ -32,8 +32,8 @@ func DefaultConfig() Config {
 		EmbedAckWait:          constants.EmbedderAckWait,
 		EnrichAckWait:         constants.EnricherAckWait,
 		MaxDeliver:            constants.EmbedderMaxDeliver,
-		EnrichModel:           "gpt-4o-mini",
-		SummaryModel:          "gpt-4o-mini",
+		EnrichModel:           "qwen-turbo",
+		SummaryModel:          "qwen-plus",
 		SummaryTokenThreshold: constants.EnricherSummaryTokenThreshold,
 	}
 }

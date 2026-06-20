@@ -60,6 +60,7 @@ export const adminTenantSchema = z
     status: z.string().optional().default(''),
     member_count: z.number().optional(),
     created_at: z.string().optional(),
+    is_default: z.boolean().optional().default(false),
   })
   .passthrough();
 export type AdminTenant = z.infer<typeof adminTenantSchema>;

@@ -49,7 +49,6 @@ describe('agentSchema', () => {
     const parsed = agentSchema.parse(baseAgent);
     expect(parsed.description).toBe('');
     expect(parsed.type).toBe('react');
-    expect(parsed.persona).toBe('');
     expect(parsed.systemPrompt).toBe('');
   });
 

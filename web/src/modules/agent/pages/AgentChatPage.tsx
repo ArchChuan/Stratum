@@ -19,6 +19,8 @@ export const AgentChatPage = () => {
     input,
     setInput,
     bottomRef,
+    scrollContainerRef,
+    pinnedToBottomRef,
     handleSend,
     handleCreateConv,
     handleRenameConv,
@@ -56,6 +58,8 @@ export const AgentChatPage = () => {
           selectedConv={selectedConv}
           selectedAgent={selectedAgent}
           bottomRef={bottomRef}
+          scrollContainerRef={scrollContainerRef}
+          pinnedToBottomRef={pinnedToBottomRef}
         />
         <ChatComposer
           input={input}

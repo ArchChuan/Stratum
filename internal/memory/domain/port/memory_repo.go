@@ -15,7 +15,7 @@ import (
 type MemoryRepo interface {
 	Add(ctx context.Context, entry *domain.MemoryEntry) error
 	Get(ctx context.Context, tenantID, id string) (*domain.MemoryEntry, error)
-	Search(ctx context.Context, tenantID, sessionID string, limit int) ([]*domain.MemoryEntry, error)
+	Search(ctx context.Context, tenantID, userID, query string, limit int) ([]*domain.MemoryEntry, error)
 	Delete(ctx context.Context, tenantID, id string) error
 	ClearSession(ctx context.Context, tenantID, sessionID string) error
 	Stats(ctx context.Context, tenantID string) (*domain.MemoryStats, error)

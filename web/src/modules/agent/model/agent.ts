@@ -6,7 +6,6 @@ export const agentSchema = z
     name: z.string(),
     description: z.string().optional().default(''),
     type: z.string().optional().default('react'),
-    persona: z.string().optional().default(''),
     systemPrompt: z.string().optional().default(''),
     llmModel: z.string().optional().default(''),
     maxIterations: z.number().optional(),
@@ -24,7 +23,6 @@ export interface AgentFormValues {
   name: string;
   description?: string;
   type?: string;
-  persona?: string;
   systemPrompt?: string;
   llmModel: string;
   maxIterations: number;
@@ -64,6 +62,7 @@ export const chatMessageSchema = z
     content: z.string().optional().default(''),
     created_at: z.string().optional(),
     steps: z.array(chatStepSchema).optional(),
+    interrupted: z.boolean().optional(),
   })
   .passthrough();
 export type ChatMessage = z.infer<typeof chatMessageSchema>;

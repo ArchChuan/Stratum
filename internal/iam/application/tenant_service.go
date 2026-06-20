@@ -157,15 +157,15 @@ func (s *TenantService) RemoveMember(ctx context.Context, tenantID, callerID, ca
 }
 
 // GetSettings reads tenant settings, decrypts and masks llm_api_keys.
-func (s *TenantService) GetSettings(ctx context.Context, tenantID string) (string, map[string]interface{}, error) {
-	name, raw, err := s.repo.GetTenantSettings(ctx, tenantID)
+func (s *TenantService) GetSettings(ctx context.Context, tenantID string) (string, bool, map[string]interface{}, error) {
+	name, isDefault, raw, err := s.repo.GetTenantSettings(ctx, tenantID)
 	if err != nil {
-		return "", nil, err
+		return "", false, nil, err
 	}
 	settings := map[string]interface{}{}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &settings); err != nil {
-			return "", nil, fmt.Errorf("tenant: settings unmarshal: %w", err)
+			return "", false, nil, fmt.Errorf("tenant: settings unmarshal: %w", err)
 		}
 	}
 	if apiKeys, ok := settings["llm_api_keys"].(map[string]interface{}); ok {
@@ -184,7 +184,7 @@ func (s *TenantService) GetSettings(ctx context.Context, tenantID string) (strin
 		}
 		settings["llm_api_keys"] = masked
 	}
-	return name, settings, nil
+	return name, isDefault, settings, nil
 }
 
 // UpdateSettings merges tenant settings, encrypting any llm_api_keys.
@@ -204,7 +204,7 @@ func (s *TenantService) UpdateSettings(ctx context.Context, tenantID, callerRole
 		return nil
 	}
 
-	_, existingJSON, _ := s.repo.GetTenantSettings(ctx, tenantID)
+	_, _, existingJSON, _ := s.repo.GetTenantSettings(ctx, tenantID)
 	merged := map[string]interface{}{}
 	if len(existingJSON) > 0 {
 		_ = json.Unmarshal(existingJSON, &merged)
@@ -273,7 +273,7 @@ func (s *TenantService) SetEmbedModel(ctx context.Context, tenantID, callerRole,
 	if callerRole != "admin" && callerRole != "owner" {
 		return ErrForbiddenAdminOrOwner
 	}
-	_, existingJSON, _ := s.repo.GetTenantSettings(ctx, tenantID)
+	_, _, existingJSON, _ := s.repo.GetTenantSettings(ctx, tenantID)
 	existing := map[string]interface{}{}
 	if len(existingJSON) > 0 {
 		_ = json.Unmarshal(existingJSON, &existing)

@@ -60,7 +60,6 @@ type CreateAgentInput struct {
 	Name                  string
 	Type                  string
 	Description           string
-	Persona               string
 	SystemPrompt          string
 	LLMModel              string
 	EmbedModel            string
@@ -76,7 +75,6 @@ type UpdateAgentInput struct {
 	Name                  string
 	Type                  string
 	Description           string
-	Persona               string
 	SystemPrompt          string
 	LLMModel              string
 	MaxIterations         int
@@ -93,7 +91,6 @@ type AgentDTO struct {
 	Name                  string
 	Type                  string
 	Description           string
-	Persona               string
 	SystemPrompt          string
 	LLMModel              string
 	EmbedModel            string
@@ -123,7 +120,6 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		Name:                  in.Name,
 		Type:                  parseAgentTypeWire(in.Type),
 		Description:           in.Description,
-		Persona:               in.Persona,
 		SystemPrompt:          in.SystemPrompt,
 		LLMModel:              in.LLMModel,
 		EmbedModel:            embedModel,
@@ -181,7 +177,6 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		Name:                  in.Name,
 		Type:                  parseAgentTypeWire(in.Type),
 		Description:           in.Description,
-		Persona:               in.Persona,
 		SystemPrompt:          in.SystemPrompt,
 		LLMModel:              in.LLMModel,
 		EmbedModel:            existing.GetConfig().EmbedModel,
@@ -234,7 +229,6 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		Name:                  cfg.Name,
 		Type:                  string(cfg.Type),
 		Description:           cfg.Description,
-		Persona:               cfg.Persona,
 		SystemPrompt:          cfg.SystemPrompt,
 		LLMModel:              cfg.LLMModel,
 		EmbedModel:            cfg.EmbedModel,
@@ -399,9 +393,11 @@ func (s *AgentService) assembleOptions(
 			WithHistoryWindow(constants.DefaultInitHistoryWindow),
 		)
 	}
-	options = append(options, WithExtraTools(
-		s.buildExtraTools(ctx, meta.TenantID, a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills),
-	))
+	extraTools, skillIndex := s.buildExtraTools(ctx, meta.TenantID, a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills)
+	options = append(options,
+		WithExtraTools(extraTools),
+		WithSkillToolIndex(skillIndex),
+	)
 	if s.deps.RAGSearch != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
 		tenantID := meta.TenantID
 		options = append(options, WithRAGSearchFn(func(rctx context.Context, workspaces []string, query string, topK int) (string, error) {
@@ -425,11 +421,12 @@ func (s *AgentService) attachChatStore(a Agent) {
 	}
 }
 
-// buildExtraTools converts MCPServerIDs and AllowedSkills into
-// ToolDefinitions for the ReAct loop. Skill descriptions fall back to
-// the skill ID when the lookup is unavailable or returns blank.
-func (s *AgentService) buildExtraTools(ctx context.Context, tenantID string, mcpServerIDs, allowedSkills []string) []port.ToolDefinition {
+// buildExtraTools converts MCPServerIDs and AllowedSkills into ToolDefinitions
+// for the ReAct loop. Skill tool names are formatted as "tenant_{tenantID}_{skill_name}".
+// The returned index maps those tool names back to skill UUIDs for execution routing.
+func (s *AgentService) buildExtraTools(ctx context.Context, tenantID string, mcpServerIDs, allowedSkills []string) ([]port.ToolDefinition, map[string]string) {
 	var tools []port.ToolDefinition
+	index := make(map[string]string, len(allowedSkills))
 
 	for _, serverID := range mcpServerIDs {
 		if s.deps.MCPTools == nil {
@@ -447,13 +444,24 @@ func (s *AgentService) buildExtraTools(ctx context.Context, tenantID string, mcp
 				description = d
 			}
 		}
+		toolName := fmt.Sprintf("tenant_%s_%s", tenantID, name)
+		index[toolName] = skillID
 		tools = append(tools, port.ToolDefinition{
-			Name:        skillID,
+			Name:        toolName,
 			Description: name + ": " + description,
-			InputSchema: map[string]any{"type": "object"},
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"prompt": map[string]any{
+						"type":        "string",
+						"description": "需要 skill 处理的文本输入",
+					},
+				},
+				"required": []string{"prompt"},
+			},
 		})
 	}
-	return tools
+	return tools, index
 }
 
 // recordExecution fire-and-forget inserts a per-tenant execution record.

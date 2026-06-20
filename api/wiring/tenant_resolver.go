@@ -57,12 +57,12 @@ func (r *tenantCapabilityResolver) resolveGateway(ctx context.Context, tenantID 
 		return nil, nil, false
 	}
 
-	var settings map[string]interface{}
+	var settings map[string]any
 	if err := json.Unmarshal(settingsJSON, &settings); err != nil {
 		return nil, nil, false
 	}
 
-	apiKeysRaw, ok := settings["llm_api_keys"].(map[string]interface{})
+	apiKeysRaw, ok := settings["llm_api_keys"].(map[string]any)
 	if !ok || len(apiKeysRaw) == 0 {
 		return nil, nil, false
 	}
@@ -117,6 +117,17 @@ func (r *tenantCapabilityResolver) Resolve(ctx context.Context, tenantID string)
 	llmAdapter := capgateway.NewLLMAdapter(gw, r.logger)
 	capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, r.skillAdapter, r.logger)
 	return capGW, keys, true
+}
+
+// ResolveLLM returns the tenant's LLM gateway as a pipeline.LLMClient. Returns
+// nil when the tenant has no provider configured. Used by the memory pipeline
+// to drive enrich/summary jobs against tenant-private gateways.
+func (r *tenantCapabilityResolver) ResolveLLM(ctx context.Context, tenantID string) *llmgateway.Gateway {
+	gw, _, ok := r.resolveGateway(ctx, tenantID)
+	if !ok {
+		return nil
+	}
+	return gw
 }
 
 // InjectCompleter injects the per-tenant LLM completer into ctx for streaming.

@@ -2,159 +2,198 @@
 
 ## Route Registration
 
-所有路由集中注册于 `api/router.go`，禁止在 handler 文件中散落注册。
+所有路由集中注册于 `api/http/router.go`，按域拆分为独立私有函数，禁止在 handler 文件中散落注册。
 
 ```go
-// 路由组织方式
-authRoutes  := router.Group("/auth")
-adminGroup  := router.Group("/admin",  jwtMW, middleware.RequireGlobalAdmin())
-tenantGroup := router.Group("/tenant", jwtMW, middleware.RequireTenantRole("member"))
-skills      := router.Group("/skills")
-agents      := router.Group("/agents")
-knowledge   := router.Group("/knowledge")
-mem         := router.Group("/memory")
-// MCP 路由由 mcpHandler.RegisterRoutes(router) 动态注册
+// router.go 中注册顺序
+registerAuth(r, c, requireActive)
+registerHealth(r, c)
+registerSkills(r, c, requireActive)
+registerAgents(r, c, requireActive)
+registerKnowledge(r, c, requireActive)
+registerMemory(r, c, requireActive)
+registerMCP(r, c, requireActive)
 ```
 
 ## Complete Route List
 
 ### 无需认证
 
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/health` | 服务健康检查，返回 `{"status":"ok"}` |
+| GET | `/metrics` | Prometheus scrape 端点 |
+| GET | `/models` | 列出所有可用 LLM 模型 |
+
+### Auth（GitHub OAuth，需配置 `GITHUB_CLIENT_ID`）
+
 | 方法 | 路径 | Handler |
 |------|------|---------|
-| GET | `/health` | 内联函数 |
-| GET | `/metrics` | PrometheusMetrics.GetHandler() |
-
-### Auth（需配置 GitHub OAuth）
-
-| 方法 | 路径 | Handler 方法 |
-|------|------|-------------|
-| GET | `/auth/github` | AuthHandler.GitHubLogin |
-| GET | `/auth/github/callback` | AuthHandler.GitHubCallback |
-| POST | `/auth/register` | AuthHandler.Register |
-| POST | `/auth/refresh` | AuthHandler.Refresh |
-| POST | `/auth/logout` | AuthHandler.Logout |
-| GET | `/auth/me` | AuthHandler.Me |
+| GET | `/auth/github` | GitHubLogin |
+| GET | `/auth/github/callback` | GitHubCallback |
+| POST | `/auth/register` | Register（邮箱注册） |
+| POST | `/auth/refresh` | Refresh（刷新 JWT） |
+| POST | `/auth/logout` | Logout |
+| GET | `/auth/me` | Me（当前用户信息） |
+| POST | `/auth/switch-tenant` | SwitchTenant（切换租户，重新签发 JWT） |
+| POST | `/auth/create-tenant` | CreateUserTenant（用户创建自己的租户） |
 
 ### Admin（JWT + global_admin 角色）
 
-| 方法 | 路径 | Handler 方法 |
-|------|------|-------------|
-| GET | `/admin/tenants` | AdminHandler.ListTenants |
-| POST | `/admin/tenants` | AdminHandler.CreateTenant |
-| GET | `/admin/tenants/:id` | AdminHandler.GetTenant |
-| PATCH | `/admin/tenants/:id` | AdminHandler.UpdateTenant |
-| DELETE | `/admin/tenants/:id` | AdminHandler.DeleteTenant |
+| 方法 | 路径 | Handler |
+|------|------|---------|
+| GET | `/admin/tenants` | ListTenants |
+| POST | `/admin/tenants` | CreateTenant |
+| GET | `/admin/tenants/:id` | GetTenant |
+| PATCH | `/admin/tenants/:id` | UpdateTenant |
+| DELETE | `/admin/tenants/:id` | DeleteTenant |
 
 ### Tenant（JWT + member 角色）
 
-| 方法 | 路径 | Handler 方法 |
-|------|------|-------------|
-| GET | `/tenant/members` | TenantHandler.ListMembers |
-| POST | `/tenant/members/invite` | TenantHandler.InviteMember（需 admin/owner）|
-| PATCH | `/tenant/members/:user_id/role` | TenantHandler.UpdateMemberRole |
-| DELETE | `/tenant/members/:user_id` | TenantHandler.RemoveMember |
-| GET | `/tenant/settings` | TenantHandler.GetSettings |
-| PATCH | `/tenant/settings` | TenantHandler.UpdateSettings |
+| 方法 | 路径 | Handler | 额外权限 |
+|------|------|---------|---------|
+| GET | `/tenant/members` | ListMembers | — |
+| POST | `/tenant/members/invite` | InviteMember | admin/owner |
+| PATCH | `/tenant/members/:user_id/role` | UpdateMemberRole | — |
+| DELETE | `/tenant/members/:user_id` | RemoveMember | — |
+| GET | `/tenant/settings` | GetSettings | — |
+| PATCH | `/tenant/settings` | UpdateSettings | requireActive |
+| PATCH | `/tenant/embed-model` | SetEmbedModel | requireActive |
+| DELETE | `/tenant` | DeleteSelf | owner |
+| GET | `/tenant/list` | ListUserTenants | — (仅 JWT) |
 
-### Skill
+### Skill（JWT + tenant context）
 
-| 方法 | 路径 | Handler 方法 |
-|------|------|-------------|
-| GET | `/skills` | SkillHandler.GetAllSkills |
-| POST | `/skills` | SkillHandler.CreateSkill |
-| GET | `/skills/:id` | SkillHandler.GetSkill |
-| PUT | `/skills/:id` | SkillHandler.UpdateSkill |
-| DELETE | `/skills/:id` | SkillHandler.DeleteSkill |
+| 方法 | 路径 | Handler | 额外权限 |
+|------|------|---------|---------|
+| GET | `/skills` | GetAllSkills | — |
+| POST | `/skills` | CreateSkill | requireActive |
+| GET | `/skills/:id` | GetSkill | — |
+| PUT | `/skills/:id` | UpdateSkill | requireActive |
+| DELETE | `/skills/:id` | DeleteSkill | requireActive |
+| POST | `/skills/:id/run` | RunSkill | requireActive |
 
-### Agent
+### Agent（JWT + tenant context）
 
-| 方法 | 路径 | Handler 方法 |
-|------|------|-------------|
-| GET | `/agents` | AgentHandler.GetAllAgents |
-| POST | `/agents` | AgentHandler.CreateAgent |
-| GET | `/agents/:id` | AgentHandler.GetAgent |
-| POST | `/agents/:id/execute` | AgentHandler.ExecuteAgent |
-| DELETE | `/agents/:id` | AgentHandler.DeleteAgent |
+| 方法 | 路径 | Handler | 额外权限 |
+|------|------|---------|---------|
+| GET | `/agents` | GetAllAgents | — |
+| POST | `/agents` | CreateAgent | requireActive |
+| GET | `/agents/executions` | ListExecutions | — |
+| GET | `/agents/:id` | GetAgent | — |
+| POST | `/agents/:id/execute` | ExecuteAgent | requireActive |
+| POST | `/agents/:id/execute/stream` | ExecuteAgentStream（SSE）| requireActive |
+| PUT | `/agents/:id` | UpdateAgent | requireActive |
+| DELETE | `/agents/:id` | DeleteAgent | requireActive |
+| POST | `/agents/:id/conversations` | CreateConversation | — |
+| GET | `/agents/:id/conversations` | ListConversations | — |
 
-### Knowledge（RAG）
+### Conversations（JWT + tenant context）
 
-| 方法 | 路径 | Handler 方法 |
-|------|------|-------------|
-| POST | `/knowledge/ingest` | RAGHandler.UploadDocument |
-| POST | `/knowledge/query` | RAGHandler.Query |
+| 方法 | 路径 | Handler |
+|------|------|---------|
+| PATCH | `/conversations/:convID` | RenameConversation |
+| DELETE | `/conversations/:convID` | DeleteConversation |
+| GET | `/conversations/:convID/messages` | ListMessages |
+| POST | `/conversations/:convID/messages` | AddMessage |
 
-### Memory
+### Knowledge / RAG（JWT + tenant context + member 角色）
 
-| 方法 | 路径 | Handler 方法 |
-|------|------|-------------|
-| POST | `/memory/sessions` | MemoryHandler.CreateSession |
-| POST | `/memory` | MemoryHandler.AddMemory |
-| GET | `/memory/:id` | MemoryHandler.GetMemory |
-| POST | `/memory/search` | MemoryHandler.SearchMemory |
-| DELETE | `/memory/:id` | MemoryHandler.DeleteMemory |
-| GET | `/memory/stats` | MemoryHandler.GetStats |
-| DELETE | `/memory/session/:session_id` | MemoryHandler.ClearSession |
-| GET | `/memory/entities` | MemoryHandler.GetEntities |
-| POST | `/memory/extract-entities` | MemoryHandler.ExtractEntities |
-| GET | `/memory/summary/:session_id` | MemoryHandler.GetSummary |
+| 方法 | 路径 | Handler | 额外权限 |
+|------|------|---------|---------|
+| GET | `/knowledge/workspaces` | ListWorkspaces | — |
+| GET | `/knowledge/workspaces/:name/stats` | GetWorkspaceStats | — |
+| POST | `/knowledge/query` | Query | requireActive |
+| POST | `/knowledge/workspaces` | CreateWorkspace | admin + requireActive |
+| PATCH | `/knowledge/workspaces/:name` | UpdateWorkspace | admin + requireActive |
+| DELETE | `/knowledge/workspaces/:name` | DeleteWorkspace | admin + requireActive |
+| POST | `/knowledge/ingest` | UploadDocument | admin + requireActive |
+
+### Memory（JWT + tenant context）
+
+| 方法 | 路径 | Handler | 额外权限 |
+|------|------|---------|---------|
+| POST | `/memory` | AddMemory | — |
+| POST | `/memory/sessions` | CreateSession | — |
+| GET | `/memory/:id` | GetMemory | — |
+| POST | `/memory/search` | SearchMemory | — |
+| DELETE | `/memory/:id` | DeleteMemory | requireActive |
+| DELETE | `/memory/session/:session_id` | DeleteSession | requireActive |
+| GET | `/memory/stats` | GetStats | — |
+| GET | `/memory/summary/:session_id` | GetSummary | — |
+
+### MCP（JWT + tenant context，由 `MCPHandler.RegisterRoutes` 动态注册）
+
+MCP 路由在 `api/http/handler/mcp_handler.go` 中的 `RegisterRoutes` 方法定义，读路由无需额外权限，写路由需 requireActive。
 
 ## Handler Writing Standards
 
-### File Naming
+### File Locations
 
-每域一个文件：`handler/skill_handler.go`、`handler/agent_handler.go`、`handler/memory_handler.go` 等。
+```
+api/http/handler/   ← handler 实现（每域一个文件）
+api/http/dto/       ← Request/Response 结构体（无业务逻辑）
+```
 
 ### Struct Pattern
 
 ```go
-type SkillHandler struct {
-    registry *orchestrator.Registry
-    logger   *zap.Logger
+type AgentHandler struct {
+    svc    *application.AgentService
+    logger *zap.Logger
 }
 
-func NewSkillHandler(registry *orchestrator.Registry, logger *zap.Logger, ...) *SkillHandler {
-    return &SkillHandler{registry: registry, logger: logger}
+func NewAgentHandler(svc *application.AgentService, logger *zap.Logger) *AgentHandler {
+    return &AgentHandler{svc: svc, logger: logger}
 }
 ```
 
 ### Request/Response
 
-- Request 结构体定义在 `api/model/` 目录
-- 用 `c.ShouldBindJSON(&req)` 绑定，失败返回 400
-- 成功：`c.JSON(http.StatusOK, data)`
-- 失败：`c.JSON(statusCode, model.ErrorResponse{Code: ..., Message: ...})`
+- DTO 定义于 `api/http/dto/`，与 handler 分离
+- 绑定：`c.ShouldBindJSON(&req)`，失败 `c.Error(err)` → ErrorHandler 返回 400
+- 错误必须通过 `c.Error(err)` 传给 ErrorHandler，**不要** 在 handler 内直接 `c.JSON` 错误
+- 成功：`c.JSON(http.StatusOK, resp)` 或 `c.JSON(http.StatusCreated, resp)`
 
 ### HTTP 状态码约定
 
 | HTTP 状态 | 场景 |
 |-----------|------|
-| 200 | 查询/更新成功 |
+| 200 | 查询/更新/执行成功 |
 | 201 | 创建成功 |
 | 400 | 请求参数非法 |
 | 401 | 未认证 |
-| 403 | 无权限 |
-| 404 | 资源不存在 |
-| 409 | 资源冲突（重复创建）|
+| 403 | 无权限（RequireGlobalAdmin / RequireTenantRole 拒绝）|
+| 404 | 资源不存在（domain.ErrNotFound） |
+| 409 | 资源冲突（domain.ErrNameConflict） |
+| 423 | 租户未激活（RequireActiveTenant 拒绝）|
 | 500 | 内部错误 |
 
 ## Middleware
 
-注册顺序：ErrorHandler → MetricsMiddleware → Routes
+注册顺序（`NewRouter` 中）：
+
+```
+ErrorHandler → TraceMiddleware → CORSMiddleware → MetricsMiddleware → Routes
+```
 
 | 文件 | 功能 |
 |------|------|
-| `middleware/metrics.go` | Prometheus 请求指标收集 |
-| `middleware/prometheus.go` | PrometheusMetrics 实现 |
-| `middleware/trace.go` | OpenTelemetry Span 注入 |
-| `middleware/require_role.go` | `RequireGlobalAdmin()` / `RequireTenantRole(role)` |
-| `middleware/tenant.go` | 从 JWT Claims 提取 tenant_id 注入 context |
+| `middleware.go` | `ErrorHandler`（domain error → HTTP）、`CORSMiddleware` |
+| `trace.go` | `TraceMiddleware`：OTEL Span 注入，输出结构化访问日志 |
+| `metrics.go` | `MetricsMiddleware`：Prometheus HTTP 指标收集 |
+| `jwt.go` | `JWTMiddleware`：RS256 验证，Claims 注入 context |
+| `inject_tenant.go` | `InjectTenantContext`：从 Claims 提取 tenant_id，切换 pg schema |
+| `require_role.go` | `RequireGlobalAdmin()` / `RequireTenantRole(role)` |
+| `require_active_tenant.go` | `RequireActiveTenant`：租户状态激活检查 |
+| `error_mapping.go` | domain sentinel → HTTP status code 映射表 |
 
 ## New Endpoint Checklist
 
-1. 在 `api/model/` 中定义 Request/Response 结构体
-2. 在 `handler/` 对应文件中实现 handler 方法
-3. 在 `router.go` 注册路由（指定正确的 middleware 链）
-4. 确认 Metrics 覆盖（MetricsMiddleware 全局生效）
+1. 在 `api/http/dto/` 中定义 Request/Response 结构体（加 binding tag）
+2. 在 `api/http/handler/` 对应文件中实现 handler 方法（≤15 行/方法）
+3. 在 `api/http/router.go` 对应 `registerXxx` 函数中注册路由（指定正确 middleware 链）
+4. domain sentinel 错误在 `api/middleware/error_mapping.go` 中添加映射规则
 5. 运行 `go build ./...` 验证编译
-6. 编写 `*_test.go` 用 httptest 覆盖主路径
+6. 按 `api/http/handler/tenant_handler_test.go` 模式编写 handler 测试
+7. 若 API 对外，更新 `api/http/testdata/contracts/*.golden.json`

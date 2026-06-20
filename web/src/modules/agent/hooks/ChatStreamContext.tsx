@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useRef,
   useState,
   type ReactNode,
@@ -64,7 +65,25 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
     ctrl: null,
   });
 
-  const notify = () => setTick((t) => t + 1);
+  const rafRef = useRef<number | null>(null);
+
+  // Batch token updates via RAF to avoid one re-render per token.
+  const scheduleNotify = useCallback(() => {
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      setTick((t) => t + 1);
+    });
+  }, []);
+
+  // Cancel pending RAF on unmount.
+  useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
+  const notify = useCallback(() => setTick((t) => t + 1), []);
 
   const startStream = useCallback((agentId: string, payload: ExecuteAgentPayload) => {
     const s = stateRef.current;
@@ -80,16 +99,19 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 
     const ctrl = executeAgentStream(agentId, payload, {
       onToken: (token) => {
+        if (stateRef.current.ctrl !== ctrl) return;
         stateRef.current.content += token;
-        notify();
+        scheduleNotify(); // batched: ~1 render per animation frame (~60fps)
       },
       onDone: (data) => {
+        if (stateRef.current.ctrl !== ctrl) return;
         stateRef.current.done = true;
         stateRef.current.result = data;
         stateRef.current.ctrl = null;
-        notify();
+        notify(); // immediate: stream is over
       },
       onError: (err) => {
+        if (stateRef.current.ctrl !== ctrl) return;
         stateRef.current.done = true;
         stateRef.current.error = err.message || String(err);
         stateRef.current.ctrl = null;
@@ -97,7 +119,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
       },
     });
     s.ctrl = ctrl;
-  }, []);
+  }, [notify, scheduleNotify]);
 
   const cancelStream = useCallback(() => {
     const s = stateRef.current;
