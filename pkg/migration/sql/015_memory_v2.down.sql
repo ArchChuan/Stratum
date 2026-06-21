@@ -1,0 +1,3 @@
+-- Rollback for 015_memory_v2.up.sql
+-- Memory v2 tables are managed in tenant_schema.sql.
+-- Down migration does not drop tables (handled by tenant teardown).
