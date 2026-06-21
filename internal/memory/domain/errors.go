@@ -31,4 +31,10 @@ var (
 
 	// ErrInvalidStatus is returned when an invalid status transition is attempted.
 	ErrInvalidStatus = errors.New("invalid memory fact status")
+
+	// ErrUserIDMismatch is returned when userID validation fails.
+	ErrUserIDMismatch = errors.New("memory fact userID required")
+
+	// ErrEmptyContent is returned when fact content is empty.
+	ErrEmptyContent = errors.New("memory fact content cannot be empty")
 )
