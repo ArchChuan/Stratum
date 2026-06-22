@@ -312,6 +312,28 @@ func (r *FactRepo) scanFacts(rows pgx.Rows) ([]*domain.MemoryFact, error) {
 	return facts, rows.Err()
 }
 
+// CountActive returns active (not superseded) fact count for a tenant.
+func (r *FactRepo) CountActive(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	query := `SELECT COUNT(*) FROM memory_facts WHERE superseded_by IS NULL AND deleted_at IS NULL`
+	err := r.pool.QueryRow(ctx, query).Scan(&count)
+	if err != nil {
+		return 0, translatePgError(err, "count active facts")
+	}
+	return count, nil
+}
+
+// CountSuperseded returns superseded fact count for a tenant.
+func (r *FactRepo) CountSuperseded(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	query := `SELECT COUNT(*) FROM memory_facts WHERE superseded_by IS NOT NULL AND deleted_at IS NULL`
+	err := r.pool.QueryRow(ctx, query).Scan(&count)
+	if err != nil {
+		return 0, translatePgError(err, "count superseded facts")
+	}
+	return count, nil
+}
+
 // translatePgError converts pgx errors to domain errors.
 func translatePgError(err error, operation string) error {
 	if err == nil {

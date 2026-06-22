@@ -60,6 +60,14 @@ func (r *stubFactRepo) DeleteOldSoftDeleted(ctx context.Context, retentionDays i
 	return 0, nil
 }
 
+func (r *stubFactRepo) CountActive(ctx context.Context, tenantID string) (int, error) {
+	return 0, nil
+}
+
+func (r *stubFactRepo) CountSuperseded(ctx context.Context, tenantID string) (int, error) {
+	return 0, nil
+}
+
 type stubSuperseder struct {
 	judgeFunc func(context.Context, string, string) (*port.SupersedeJudgment, error)
 }

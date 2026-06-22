@@ -40,6 +40,10 @@ func (q *stubExtractionQueue) DeleteOldCompleted(ctx context.Context, retentionD
 	return 0, nil
 }
 
+func (q *stubExtractionQueue) PendingCount(ctx context.Context, tenantID string) (int, error) {
+	return 0, nil
+}
+
 type stubFactExtractor struct {
 	extractFunc func(context.Context, *application.ExtractFactsRequest) error
 }

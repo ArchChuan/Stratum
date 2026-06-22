@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
+	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 )
 
@@ -40,6 +41,10 @@ func (r *stubEntityRepo) ListProfiles(ctx context.Context, filter domain.ScopeFi
 
 func (r *stubEntityRepo) CountByUser(ctx context.Context, userID string) (int, error) {
 	return 0, nil
+}
+
+func (r *stubEntityRepo) TopByFactCount(ctx context.Context, tenantID string, limit int) ([]port.EntityFactCount, error) {
+	return nil, nil
 }
 
 type stubProfiler struct {

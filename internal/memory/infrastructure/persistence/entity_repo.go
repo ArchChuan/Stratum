@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
+	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -234,4 +235,33 @@ func (r *EntityRepo) scanEntities(rows pgx.Rows) ([]*domain.MemoryEntity, error)
 	}
 
 	return entities, rows.Err()
+}
+
+// TopByFactCount returns entities with highest fact counts.
+func (r *EntityRepo) TopByFactCount(ctx context.Context, tenantID string, limit int) ([]port.EntityFactCount, error) {
+	query := `
+		SELECT e.name, COUNT(f.id) as fact_count
+		FROM entities e
+		LEFT JOIN entity_facts ef ON e.id = ef.entity_id
+		LEFT JOIN memory_facts f ON ef.fact_id = f.id AND f.deleted_at IS NULL
+		GROUP BY e.id, e.name
+		ORDER BY fact_count DESC
+		LIMIT $1
+	`
+	rows, err := r.pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []port.EntityFactCount
+	for rows.Next() {
+		var ec port.EntityFactCount
+		if err := rows.Scan(&ec.Name, &ec.Count); err != nil {
+			return nil, err
+		}
+		results = append(results, ec)
+	}
+
+	return results, rows.Err()
 }

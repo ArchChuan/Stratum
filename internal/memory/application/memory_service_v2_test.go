@@ -69,6 +69,16 @@ func (m *MockFactRepo) DeleteOldSoftDeleted(ctx context.Context, retentionDays i
 	return args.Int(0), args.Error(1)
 }
 
+func (m *MockFactRepo) CountActive(ctx context.Context, tenantID string) (int, error) {
+	args := m.Called(ctx, tenantID)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockFactRepo) CountSuperseded(ctx context.Context, tenantID string) (int, error) {
+	args := m.Called(ctx, tenantID)
+	return args.Int(0), args.Error(1)
+}
+
 type MockEntityRepo struct {
 	mock.Mock
 }
@@ -112,6 +122,14 @@ func (m *MockEntityRepo) CountByUser(ctx context.Context, userID string) (int, e
 	return args.Int(0), args.Error(1)
 }
 
+func (m *MockEntityRepo) TopByFactCount(ctx context.Context, tenantID string, limit int) ([]port.EntityFactCount, error) {
+	args := m.Called(ctx, tenantID, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]port.EntityFactCount), args.Error(1)
+}
+
 type MockExtractionQueue struct {
 	mock.Mock
 }
@@ -141,6 +159,11 @@ func (m *MockExtractionQueue) MarkFailed(ctx context.Context, taskID int64, errM
 
 func (m *MockExtractionQueue) DeleteOldCompleted(ctx context.Context, retentionDays int) (int, error) {
 	args := m.Called(ctx, retentionDays)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockExtractionQueue) PendingCount(ctx context.Context, tenantID string) (int, error) {
+	args := m.Called(ctx, tenantID)
 	return args.Int(0), args.Error(1)
 }
 

@@ -140,3 +140,14 @@ func (q *ExtractionQueue) DeleteOldCompleted(ctx context.Context, retentionDays 
 
 	return int(tag.RowsAffected()), nil
 }
+
+// PendingCount returns count of pending tasks for a tenant.
+func (q *ExtractionQueue) PendingCount(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	query := `SELECT COUNT(*) FROM extraction_queue WHERE status = 'pending'`
+	err := q.pool.QueryRow(ctx, query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count pending tasks: %w", err)
+	}
+	return count, nil
+}

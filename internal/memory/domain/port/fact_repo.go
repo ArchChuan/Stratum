@@ -29,6 +29,12 @@ type FactRepo interface {
 	// CountByUser returns total fact count for a user.
 	CountByUser(ctx context.Context, userID string) (int, error)
 
+	// CountActive returns active (not superseded) fact count for a tenant.
+	CountActive(ctx context.Context, tenantID string) (int, error)
+
+	// CountSuperseded returns superseded fact count for a tenant.
+	CountSuperseded(ctx context.Context, tenantID string) (int, error)
+
 	// DeleteOldSoftDeleted removes soft-deleted facts older than retention days.
 	DeleteOldSoftDeleted(ctx context.Context, retentionDays int) (int, error)
 }
