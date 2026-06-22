@@ -14,7 +14,7 @@ export const BUBBLE: Record<string, CSSProperties> = {
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
   },
-  agent: {
+  assistant: {
     maxWidth: '72%',
     background: '#fff',
     color: '#262626',

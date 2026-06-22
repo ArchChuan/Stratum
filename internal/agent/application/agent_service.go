@@ -114,7 +114,7 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		embedModel = inherited
 	}
 
-	id := uuid.New().String()
+	id := uuid.Must(uuid.NewV7()).String()
 	cfg := &domain.AgentConfig{
 		ID:                    id,
 		Name:                  in.Name,
@@ -366,9 +366,7 @@ func (s *AgentService) assembleOptions(
 
 	if s.deps.TenantResolver != nil {
 		if capGW, apiKeys, ok := s.deps.TenantResolver.Resolve(ctx, meta.TenantID); ok {
-			if meta.Stream {
-				ctx = s.deps.TenantResolver.InjectCompleter(ctx, meta.TenantID)
-			}
+			ctx = s.deps.TenantResolver.InjectCompleter(ctx, meta.TenantID)
 			type capGWSetter interface {
 				SetCapGateway(port.CapabilityGateway)
 			}

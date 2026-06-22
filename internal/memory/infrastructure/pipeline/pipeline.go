@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
@@ -43,7 +44,6 @@ type Pipeline struct {
 	embedSvc      EmbedClient
 	embedResolver EmbedServiceResolver
 	vectorDB      VectorStore
-	llm           LLMClient
 	llmResolver   LLMResolver
 	logger        *zap.Logger
 
@@ -51,8 +51,9 @@ type Pipeline struct {
 	embedders []*EmbedderWorker
 	enrichers []*EnricherWorker
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	stopOnce sync.Once
 }
 
 // New creates a Pipeline orchestrator. Call Start to begin processing.
@@ -62,7 +63,6 @@ func New(
 	nc *nats.Conn,
 	embedSvc EmbedClient,
 	vectorDB VectorStore,
-	llm LLMClient,
 	logger *zap.Logger,
 ) *Pipeline {
 	return &Pipeline{
@@ -71,7 +71,6 @@ func New(
 		nc:       nc,
 		embedSvc: embedSvc,
 		vectorDB: vectorDB,
-		llm:      llm,
 		logger:   logger,
 	}
 }
@@ -114,13 +113,18 @@ func (p *Pipeline) Start(ctx context.Context) error {
 	// Outbox poller
 	p.poller = NewOutboxPoller(p.pool, js, p.logger, p.cfg)
 
-	pipeCtx, cancel := context.WithCancel(ctx)
+	// 关键：worker 生命周期 ctx 必须独立于 ctx 参数。
+	// Harness.Run 把 startCtx 设成 30s 超时，Start 返回后会 cancel()，
+	// 如果直接 context.WithCancel(ctx) 派生，会让所有 worker 在启动 30s 后被
+	// ctx_done 拖死（症状：poller_stopped cause=ctx_done，时间和启动间隔一致）。
+	// Pipeline 自己持有 cancel，由 Pipeline.Stop() 触发，Harness 反向 Stop 时调用。
+	pipeCtx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
-		p.poller.Start(pipeCtx)
+		runWithRestart(pipeCtx, "outbox-poller", p.logger, p.poller.Start)
 	}()
 
 	// Embedder workers
@@ -141,10 +145,11 @@ func (p *Pipeline) Start(ctx context.Context) error {
 			worker.WithEmbedResolver(p.embedResolver)
 		}
 		p.embedders = append(p.embedders, worker)
+		label := fmt.Sprintf("embed-worker-%d", i)
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
-			worker.Start(pipeCtx)
+			runWithRestart(pipeCtx, label, p.logger, worker.Start)
 		}()
 	}
 
@@ -161,43 +166,133 @@ func (p *Pipeline) Start(ctx context.Context) error {
 	}
 
 	for i := 0; i < p.cfg.EnrichWorkers; i++ {
-		worker := NewEnricherWorker(enrichConsumer, p.pool, p.llm, p.logger, p.cfg)
+		worker := NewEnricherWorker(enrichConsumer, p.pool, p.logger, p.cfg)
 		if p.llmResolver != nil {
 			worker.WithLLMResolver(p.llmResolver)
 		}
 		p.enrichers = append(p.enrichers, worker)
+		label := fmt.Sprintf("enrich-worker-%d", i)
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
-			worker.Start(pipeCtx)
+			runWithRestart(pipeCtx, label, p.logger, worker.Start)
 		}()
 	}
 
 	p.logger.Info("memory pipeline started",
 		zap.Int("embed_workers", p.cfg.EmbedWorkers),
-		zap.Int("enrich_workers", p.cfg.EnrichWorkers))
+		zap.Int("enrich_workers", p.cfg.EnrichWorkers),
+		zap.Bool("embed_resolver_set", p.embedResolver != nil),
+		zap.Bool("llm_resolver_set", p.llmResolver != nil),
+		zap.Bool("global_embed_set", p.embedSvc != nil))
 
 	return nil
 }
 
 // Stop gracefully shuts down all workers and waits for goroutines to exit.
+// Safe to call multiple times — concurrent shutdown signals (Harness + OS signal)
+// won't double-close internal channels.
 func (p *Pipeline) Stop() {
-	if p.cancel == nil {
-		return
-	}
-	p.logger.Info("memory pipeline stopping")
+	p.stopOnce.Do(func() {
+		if p.cancel == nil {
+			return
+		}
+		p.logger.Info("memory pipeline stopping")
 
-	if p.poller != nil {
-		p.poller.Stop()
-	}
-	for _, w := range p.embedders {
-		w.Stop()
-	}
-	for _, w := range p.enrichers {
-		w.Stop()
-	}
+		p.cancel()
 
-	p.cancel()
-	p.wg.Wait()
-	p.logger.Info("memory pipeline stopped")
+		if p.poller != nil {
+			p.poller.Stop()
+		}
+		for _, w := range p.embedders {
+			w.Stop()
+		}
+		for _, w := range p.enrichers {
+			w.Stop()
+		}
+
+		p.wg.Wait()
+		p.logger.Info("memory pipeline stopped")
+	})
+}
+
+// runWithRestart runs fn in a loop, recovering from panics and restarting with
+// exponential backoff. Returns only when ctx is cancelled.
+func runWithRestart(ctx context.Context, label string, logger *zap.Logger, fn func(context.Context)) {
+	const (
+		baseBackoff = 100 * time.Millisecond
+		maxBackoff  = 30 * time.Second
+		// 单位窗口内连续快速退出多少次后强制冷却到 maxBackoff，避免 stopCh 被关闭但 ctx 未取消时的死循环
+		fastExitThreshold = 5
+		fastExitWindow    = 5 * time.Second
+	)
+	backoff := baseBackoff
+	fastExits := 0
+	for {
+		start := time.Now()
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Error("memory.pipeline.worker_panic",
+						zap.String("worker", label),
+						zap.Any("panic", r),
+						zap.Stack("stack"))
+				}
+			}()
+			fn(ctx)
+		}()
+
+		if ctx.Err() != nil {
+			return
+		}
+
+		runtime := time.Since(start)
+		if runtime > time.Minute {
+			backoff = baseBackoff
+			fastExits = 0
+		}
+		if runtime < fastExitWindow {
+			fastExits++
+			if fastExits >= fastExitThreshold {
+				logger.Error("memory.pipeline.worker_fast_exit_loop",
+					zap.String("worker", label),
+					zap.Int("consecutive_fast_exits", fastExits),
+					zap.Duration("last_runtime", runtime),
+					zap.Duration("forced_backoff", maxBackoff))
+				backoff = maxBackoff
+				fastExits = 0
+			}
+		} else {
+			fastExits = 0
+		}
+		logger.Warn("memory.pipeline.worker_exited",
+			zap.String("worker", label),
+			zap.Duration("runtime", runtime),
+			zap.Duration("backoff", backoff))
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, maxBackoff)
+	}
+}
+
+// sleepCtx 等待 d，期间若 ctx 取消或 stopCh 关闭立即返回 false。
+// 用于 Fetch 失败后的退避等待，确保关闭信号能立即生效。
+func sleepCtx(ctx context.Context, stopCh <-chan struct{}, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-stopCh:
+		return false
+	case <-t.C:
+		return true
+	}
 }

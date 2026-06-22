@@ -39,7 +39,6 @@ type EntityExtraction struct {
 type EnricherWorker struct {
 	consumer     jetstream.Consumer
 	pool         *pgxpool.Pool
-	llm          LLMClient
 	llmResolver  LLMResolver
 	logger       *zap.Logger
 	model        string
@@ -53,7 +52,6 @@ type EnricherWorker struct {
 func NewEnricherWorker(
 	consumer jetstream.Consumer,
 	pool *pgxpool.Pool,
-	llm LLMClient,
 	logger *zap.Logger,
 	cfg Config,
 ) *EnricherWorker {
@@ -72,7 +70,6 @@ func NewEnricherWorker(
 	return &EnricherWorker{
 		consumer:     consumer,
 		pool:         pool,
-		llm:          llm,
 		logger:       logger,
 		model:        model,
 		summaryModel: summaryModel,
@@ -91,18 +88,19 @@ func (w *EnricherWorker) WithLLMResolver(r LLMResolver) *EnricherWorker {
 
 // llmFor returns the LLMClient for tenantID. Prefers the resolver-supplied
 // per-tenant client; falls back to the base llm if the resolver is unset or
-// returns nil.
+// returns nil. Returns nil only when no LLM is wired at all — callers must
+// llmFor returns the per-tenant LLMClient. Returns nil when no resolver is set
+// or the resolver returns nil — callers must nil-check before calling Complete.
 func (w *EnricherWorker) llmFor(ctx context.Context, tenantID string) LLMClient {
 	if w.llmResolver != nil {
-		if c := w.llmResolver(ctx, tenantID); c != nil {
-			return c
-		}
+		return w.llmResolver(ctx, tenantID)
 	}
-	return w.llm
+	return nil
 }
 
 // Start begins the consume loop. It blocks until ctx is cancelled or Stop is called.
 func (w *EnricherWorker) Start(ctx context.Context) {
+	backoff := constants.MemoryFetchBackoffBase
 	for {
 		select {
 		case <-ctx.Done():
@@ -117,11 +115,24 @@ func (w *EnricherWorker) Start(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
+			w.logger.Warn("memory.enrich.fetch_failed",
+				zap.Error(err),
+				zap.Duration("backoff", backoff))
+			if !sleepCtx(ctx, w.stopCh, backoff) {
+				return
+			}
+			if backoff < constants.MemoryFetchBackoffMax {
+				backoff *= 2
+				if backoff > constants.MemoryFetchBackoffMax {
+					backoff = constants.MemoryFetchBackoffMax
+				}
+			}
 			continue
 		}
+		backoff = constants.MemoryFetchBackoffBase
 
 		for msg := range msgs.Messages() {
-			w.processMessage(ctx, msg)
+			w.safeProcessMessage(ctx, msg)
 		}
 	}
 }
@@ -129,6 +140,22 @@ func (w *EnricherWorker) Start(ctx context.Context) {
 // Stop signals the worker to exit its consume loop.
 func (w *EnricherWorker) Stop() {
 	w.stopOnce.Do(func() { close(w.stopCh) })
+}
+
+// safeProcessMessage isolates per-message panics so a single bad payload can't
+// take down the whole worker goroutine.
+func (w *EnricherWorker) safeProcessMessage(ctx context.Context, msg jetstream.Msg) {
+	defer func() {
+		if r := recover(); r != nil {
+			w.logger.Error("memory.enrich.panic",
+				zap.Any("panic", r),
+				zap.String("subject", msg.Subject()),
+				zap.Stack("stack"))
+			enrichTotal.With(prometheus.Labels{"tenant_id": "unknown", "status": "panic"}).Inc()
+			_ = msg.Nak()
+		}
+	}()
+	w.processMessage(ctx, msg)
 }
 
 func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) {
@@ -172,7 +199,12 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	enrichDuration.Observe(time.Since(start).Seconds())
 	enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "success"}).Inc()
 
-	_ = msg.Ack()
+	if err := msg.Ack(); err != nil {
+		w.logger.Warn("memory.enrich.ack_failed",
+			zap.String("trace_id", traceID),
+			zap.String("message_id", ev.MessageID),
+			zap.Error(err))
+	}
 	w.logger.Info("memory.enrich.success",
 		zap.String("trace_id", traceID),
 		zap.String("message_id", ev.MessageID),
@@ -180,9 +212,37 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		zap.Float64("importance", enrichment.Importance),
 		zap.Int("entities", len(enrichment.Entities)),
 		zap.Int64("latency_ms", time.Since(start).Milliseconds()))
+
+	// 关键：摘要触发必须在 Ack 之后、事务之外执行。
+	// 原实现把 LLM 调用塞在 persistEnrichment 的事务里，单次摘要 30s+，
+	// 一个慢富化能把整个 pgxpool 连接池耗尽，连带主流程 DB 调用全部超时。
+	// 这里独立 ctx + 独立 tx + 独立 panic recover，失败只 warn 不影响主流程。
+	w.runSummaryAsyncSafe(ctx, ev)
+}
+
+func (w *EnricherWorker) runSummaryAsyncSafe(ctx context.Context, ev *MemoryEnrichedEvent) {
+	defer func() {
+		if r := recover(); r != nil {
+			w.logger.Error("memory.enrich.summary_panic",
+				zap.String("trace_id", ev.TraceID),
+				zap.String("conversation_id", ev.ConversationID),
+				zap.Any("panic", r),
+				zap.Stack("stack"))
+		}
+	}()
+	if err := w.maybeTriggerSummary(ctx, ev); err != nil {
+		w.logger.Warn("memory.enrich.summary_check",
+			zap.String("trace_id", ev.TraceID),
+			zap.String("conversation_id", ev.ConversationID),
+			zap.Error(err))
+	}
 }
 
 func (w *EnricherWorker) callEnrichLLM(ctx context.Context, tenantID, role, content string) (*EnrichmentResult, error) {
+	llm := w.llmFor(ctx, tenantID)
+	if llm == nil {
+		return nil, fmt.Errorf("no llm client configured for tenant %s", tenantID)
+	}
 	prompt := formatEnrichmentPrompt(role, content)
 	req := &llmgateway.CompletionRequest{
 		Model: w.model,
@@ -192,7 +252,9 @@ func (w *EnricherWorker) callEnrichLLM(ctx context.Context, tenantID, role, cont
 		Temperature: 0.1,
 	}
 
-	resp, err := w.llmFor(ctx, tenantID).Complete(ctx, req)
+	llmCtx, cancel := context.WithTimeout(ctx, constants.MemoryEnrichLLMTimeout)
+	defer cancel()
+	resp, err := llm.Complete(llmCtx, req)
 	if err != nil {
 		return nil, fmt.Errorf("llm complete: %w", err)
 	}
@@ -249,67 +311,34 @@ func (w *EnricherWorker) persistEnrichment(ctx context.Context, ev *MemoryEnrich
 		}
 	}
 
-	// Check token budget for summary trigger
-	if err := w.maybeTriggerSummary(ctx, tx, ev); err != nil {
-		w.logger.Warn("memory.enrich.summary_check",
-			zap.String("trace_id", ev.TraceID),
-			zap.String("conversation_id", ev.ConversationID),
-			zap.Error(err))
-	}
-
 	return tx.Commit(ctx)
 }
 
-func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, tx pgx.Tx, ev *MemoryEnrichedEvent) error {
+// maybeTriggerSummary 走完全独立的事务生命周期：
+//  1. 短事务读阈值 + 历史消息（持锁 ≤几十 ms）
+//  2. Rollback 后调 LLM（30s+，与 DB 解耦）
+//  3. 新事务写 memory_summaries
+//
+// 老实现把 LLM Complete 塞在 persistEnrichment 的事务里，单条记录持锁 30s+，
+// 高 QPS 下 pgxpool 连接耗尽，主流程全部 DB 调用排队超时甚至拖崩 worker。
+func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnrichedEvent) error {
 	if ev.ConversationID == "" {
 		return nil
 	}
 
-	var accumulated int
-	err := tx.QueryRow(ctx,
-		"SELECT COALESCE(SUM(token_estimate), 0) FROM memory_entries WHERE conversation_id = $1 AND enriched_at IS NOT NULL",
-		ev.ConversationID).Scan(&accumulated)
+	schema := "tenant_" + ev.TenantID
+	accumulated, sb, err := w.fetchSummaryInputs(ctx, schema, ev.ConversationID)
 	if err != nil {
-		return fmt.Errorf("check token budget: %w", err)
+		return err
+	}
+	if sb == nil {
+		return nil // 阈值未达 / 已有近期摘要
 	}
 
-	if accumulated < w.threshold {
-		return nil
+	llm := w.llmFor(ctx, ev.TenantID)
+	if llm == nil {
+		return fmt.Errorf("no llm client configured for tenant %s", ev.TenantID)
 	}
-
-	// Guard: skip if a summary was already generated after the last token reset
-	var existingCount int
-	err = tx.QueryRow(ctx,
-		"SELECT COUNT(*) FROM memory_summaries WHERE conversation_id = $1 AND created_at > NOW() - INTERVAL '1 minute'",
-		ev.ConversationID).Scan(&existingCount)
-	if err != nil {
-		return fmt.Errorf("check existing summary: %w", err)
-	}
-	if existingCount > 0 {
-		return nil
-	}
-
-	// Fetch recent messages for summary (bounded to avoid unbounded query on long conversations)
-	rows, err := tx.Query(ctx,
-		"SELECT role, content FROM memory_entries WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2",
-		ev.ConversationID, constants.EnricherSummaryMaxMessages)
-	if err != nil {
-		return fmt.Errorf("fetch messages for summary: %w", err)
-	}
-	defer rows.Close()
-
-	var sb strings.Builder
-	for rows.Next() {
-		var role, content string
-		if err := rows.Scan(&role, &content); err != nil {
-			return fmt.Errorf("scan message: %w", err)
-		}
-		fmt.Fprintf(&sb, "[%s]: %s\n", role, content)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("rows err: %w", err)
-	}
-
 	prompt := formatSummaryPrompt(sb.String())
 	req := &llmgateway.CompletionRequest{
 		Model: w.summaryModel,
@@ -318,28 +347,99 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, tx pgx.Tx, ev 
 		},
 		Temperature: 0.3,
 	}
-	resp, err := w.llmFor(ctx, ev.TenantID).Complete(ctx, req)
+	llmCtx, cancel := context.WithTimeout(ctx, constants.MemorySummaryLLMTimeout)
+	defer cancel()
+	resp, err := llm.Complete(llmCtx, req)
 	if err != nil {
 		return fmt.Errorf("summary llm: %w", err)
 	}
-
 	summary := strings.TrimSpace(resp.Content)
 
-	_, err = tx.Exec(ctx, `
-		INSERT INTO memory_summaries (conversation_id, user_id, agent_id, summary, covered_until, token_count)
-		VALUES ($1, $2, $3, $4, NOW(), $5)`,
-		ev.ConversationID, ev.UserID, ev.AgentID, summary, resp.Usage.CompletionTokens)
-	if err != nil {
-		return fmt.Errorf("insert summary: %w", err)
+	if err := w.writeSummary(ctx, schema, ev, summary, resp.Usage.CompletionTokens); err != nil {
+		return err
 	}
 
 	summaryTriggered.Inc()
-
 	w.logger.Info("memory.enrich.summary",
 		zap.String("trace_id", ev.TraceID),
 		zap.String("conversation_id", ev.ConversationID),
 		zap.Int("token_budget", accumulated),
 		zap.Int("summary_length", len(summary)))
+	return nil
+}
 
+// fetchSummaryInputs 在短事务里检查阈值并捞历史消息，立即释放事务后再去调 LLM。
+// 返回 (累计 token, 历史消息文本 builder, err)。当 builder 为 nil 时表示无需触发摘要。
+func (w *EnricherWorker) fetchSummaryInputs(ctx context.Context, schema, convID string) (int, *strings.Builder, error) {
+	tx, err := w.pool.Begin(ctx)
+	if err != nil {
+		return 0, nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL search_path = %s, public", pgx.Identifier{schema}.Sanitize())); err != nil {
+		return 0, nil, fmt.Errorf("set schema: %w", err)
+	}
+
+	var accumulated int
+	if err := tx.QueryRow(ctx,
+		"SELECT COALESCE(SUM(token_estimate), 0) FROM memory_entries WHERE conversation_id = $1 AND enriched_at IS NOT NULL",
+		convID).Scan(&accumulated); err != nil {
+		return 0, nil, fmt.Errorf("check token budget: %w", err)
+	}
+	if accumulated < w.threshold {
+		return accumulated, nil, nil
+	}
+
+	var existingCount int
+	if err := tx.QueryRow(ctx,
+		"SELECT COUNT(*) FROM memory_summaries WHERE conversation_id = $1 AND created_at > NOW() - INTERVAL '1 minute'",
+		convID).Scan(&existingCount); err != nil {
+		return 0, nil, fmt.Errorf("check existing summary: %w", err)
+	}
+	if existingCount > 0 {
+		return accumulated, nil, nil
+	}
+
+	rows, err := tx.Query(ctx,
+		"SELECT role, content FROM memory_entries WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2",
+		convID, constants.EnricherSummaryMaxMessages)
+	if err != nil {
+		return 0, nil, fmt.Errorf("fetch messages: %w", err)
+	}
+	defer rows.Close()
+
+	var sb strings.Builder
+	for rows.Next() {
+		var role, content string
+		if err := rows.Scan(&role, &content); err != nil {
+			return 0, nil, fmt.Errorf("scan message: %w", err)
+		}
+		fmt.Fprintf(&sb, "[%s]: %s\n", role, content)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, nil, fmt.Errorf("rows err: %w", err)
+	}
+	return accumulated, &sb, nil
+}
+
+func (w *EnricherWorker) writeSummary(ctx context.Context, schema string, ev *MemoryEnrichedEvent, summary string, tokens int) error {
+	tx, err := w.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin write tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL search_path = %s, public", pgx.Identifier{schema}.Sanitize())); err != nil {
+		return fmt.Errorf("set schema: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO memory_summaries (conversation_id, user_id, agent_id, summary, covered_until, token_count)
+		VALUES ($1, $2, $3, $4, NOW(), $5)`,
+		ev.ConversationID, ev.UserID, ev.AgentID, summary, tokens); err != nil {
+		return fmt.Errorf("insert summary: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit summary: %w", err)
+	}
 	return nil
 }

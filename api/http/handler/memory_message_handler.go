@@ -152,7 +152,7 @@ func (h *MemoryHandler) AddMemory(c *gin.Context) {
 	}
 
 	entry := &memory.MemoryEntry{
-		ID:         uuid.New().String(),
+		ID:         uuid.Must(uuid.NewV7()).String(),
 		Type:       memory.MemoryType(req.Type),
 		Role:       req.Role,
 		Content:    req.Content,
@@ -188,7 +188,7 @@ func (h *MemoryHandler) CreateSession(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errUnauthorized))
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"session_id": uuid.New().String()})
+	c.JSON(http.StatusCreated, gin.H{"session_id": uuid.Must(uuid.NewV7()).String()})
 }
 
 // DeleteSession clears all memory for a session.

@@ -180,7 +180,6 @@ func NewFromExisting(
 	// that depend on it must nil-check, matching main.go's behavior).
 	c.Skill = &Skill{
 		CodeExecutor: code.NewCodeExecutor(code.DefaultCodeExecutorConfig()),
-		CapGateway:   capGW,
 	}
 	if sa, ok := skillAdapter.(*capgateway.SkillAdapter); ok {
 		c.Skill.SkillAdapter = sa

@@ -94,7 +94,7 @@ func (s *TenantService) InviteMember(ctx context.Context, tenantID, inviterID, e
 	sum := sha256.Sum256([]byte(rawToken))
 	tokenHash := hex.EncodeToString(sum[:])
 
-	invitationID := uuid.New().String()
+	invitationID := uuid.Must(uuid.NewV7()).String()
 	now := time.Now().UTC()
 	expiresAt := now.Add(constants.InviteTokenTTL)
 

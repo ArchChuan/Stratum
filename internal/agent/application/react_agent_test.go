@@ -200,7 +200,7 @@ func TestExecute_PersistsMessagesToChatStore(t *testing.T) {
 	require.Len(t, savedMsgs, 2)
 	require.Equal(t, "user", savedMsgs[0].Role)
 	require.Equal(t, "what is 3+3?", savedMsgs[0].Content)
-	require.Equal(t, "agent", savedMsgs[1].Role)
+	require.Equal(t, "assistant", savedMsgs[1].Role)
 	require.Equal(t, "six", savedMsgs[1].Content)
 	require.Equal(t, "conv-xyz", savedMsgs[0].ConversationID)
 	require.Equal(t, "conv-xyz", savedMsgs[1].ConversationID)
@@ -217,7 +217,7 @@ func TestExecute_LoadsHistoryFromChatStore(t *testing.T) {
 
 	history := []*agent.ChatMessage{
 		{Role: "user", Content: "what is 2+2?"},
-		{Role: "agent", Content: "2+2=4"},
+		{Role: "assistant", Content: "2+2=4"},
 	}
 	cs := &mockChatStore{
 		listMsgs: func(ctx context.Context, tenantID, convID, userID string) ([]*agent.ChatMessage, error) {
@@ -242,16 +242,16 @@ func TestBuildInitMessages_EmptyHistory(t *testing.T) {
 	require.Equal(t, "You are helpful.", msgs[0].Content)
 }
 
-func TestBuildInitMessages_NormalizesAgentRole(t *testing.T) {
+func TestBuildInitMessages_PreservesAssistantRole(t *testing.T) {
 	history := []*agent.ChatMessage{
 		{Role: "user", Content: "hello"},
-		{Role: "agent", Content: "hi there"},
+		{Role: "assistant", Content: "hi there"},
 	}
 	msgs := agent.BuildInitMessages("sys", history, 10)
 	require.Len(t, msgs, 3)
 	require.Equal(t, "system", msgs[0].Role)
 	require.Equal(t, "user", msgs[1].Role)
-	require.Equal(t, "assistant", msgs[2].Role) // "agent" → "assistant"
+	require.Equal(t, "assistant", msgs[2].Role)
 }
 
 func TestBuildInitMessages_WindowTruncation(t *testing.T) {

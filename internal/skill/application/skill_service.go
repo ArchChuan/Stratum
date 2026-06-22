@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"time"
 
-	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/domain/port"
 	"github.com/google/uuid"
@@ -39,30 +38,27 @@ func viewFromRow(r port.SkillRow) SkillView {
 
 // SkillService orchestrates skill CRUD and execution.
 type SkillService struct {
-	repo      port.SkillRepo
-	completer llmdomain.LLMCompleter
-	factory   port.SkillFactory
-	logger    *zap.Logger
+	repo    port.SkillRepo
+	factory port.SkillFactory
+	logger  *zap.Logger
 }
 
-// NewSkillService wires the repo + LLM completer + skill factory.
+// NewSkillService wires the repo + skill factory.
 func NewSkillService(
 	repo port.SkillRepo,
-	completer llmdomain.LLMCompleter,
 	factory port.SkillFactory,
 	logger *zap.Logger,
 ) *SkillService {
 	return &SkillService{
-		repo:      repo,
-		completer: completer,
-		factory:   factory,
-		logger:    logger,
+		repo:    repo,
+		factory: factory,
+		logger:  logger,
 	}
 }
 
 // Create validates, persists, and returns the new skill view.
 func (s *SkillService) Create(ctx context.Context, in SkillInput) (SkillView, error) {
-	id := uuid.New().String()
+	id := uuid.Must(uuid.NewV7()).String()
 	skill, err := s.buildSkill(id, in)
 	if err != nil {
 		return SkillView{}, err

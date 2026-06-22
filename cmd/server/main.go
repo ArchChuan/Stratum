@@ -107,22 +107,7 @@ func main() {
 		logger.Fatal("register hermes", zap.Error(err))
 	}
 
-	// 2. LLM gateway health.
-	gateway := container.LLMGateway.Gateway
-	if err := appHarness.Register(harnesspkg.NewSimpleComponent("llm-gateway", logger,
-		harnesspkg.WithStartFunc(func(ctx context.Context) error {
-			if err := gateway.Health(ctx); err != nil {
-				logger.Warn("LLM gateway health check failed", zap.Error(err))
-			}
-			return nil
-		}),
-		harnesspkg.WithStopFunc(func(_ context.Context) error { return nil }),
-		harnesspkg.WithHealthCheckFunc(func(ctx context.Context) error { return gateway.Health(ctx) }),
-	)); err != nil {
-		logger.Fatal("register llm-gateway", zap.Error(err))
-	}
-
-	// 3. Memory pipeline — wiring constructed it; Harness owns lifecycle.
+	// 2. Memory pipeline — wiring constructed it; Harness owns lifecycle.
 	if err := appHarness.Register(harnesspkg.NewSimpleComponent("memory-pipeline", logger,
 		harnesspkg.WithStartFunc(func(ctx context.Context) error {
 			if container.Memory == nil || container.Memory.Pipeline == nil {
@@ -217,7 +202,7 @@ func main() {
 // runChatCleanup periodically prunes expired conversations across all tenants.
 // Exits when ctx is cancelled.
 func runChatCleanup(ctx context.Context, db *pgxpool.Pool, interval time.Duration, logger *zap.Logger) {
-	chatStore := agentpersistence.NewPgChatStore(db)
+	chatStore := agentpersistence.NewPgChatStore(db, logger)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

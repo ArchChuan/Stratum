@@ -29,7 +29,7 @@ func ErrorHandler(logger *zap.Logger) gin.HandlerFunc {
 			logFn = logger.Warn
 		}
 		logFn("request error",
-			zap.String("request_id", asStr(requestID)),
+			zap.String("trace_id", asStr(requestID)),
 			zap.String("method", c.Request.Method),
 			zap.String("path", c.Request.URL.Path),
 			zap.String("tenant_id", tenantID),

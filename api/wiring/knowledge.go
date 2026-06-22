@@ -50,14 +50,17 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	chunker := textchunk.NewChunker(c.Logger)
 
 	var embedSvc *embedding.EmbeddingService
-	if c.LLMGateway.Gateway.HasEmbeddingClient() {
-		embedSvc = embedding.NewEmbeddingService(c.LLMGateway.Gateway, c.Logger)
-	} else {
-		c.Logger.Info("no global embedding client, will resolve per-tenant at runtime")
+
+	// Guard against typed-nil interface trap: a *EmbeddingService nil passed as
+	// knowledgeport.Embedder produces a non-nil interface, bypassing nil checks inside
+	// the services.
+	var embedIface knowledgeport.Embedder
+	if embedSvc != nil {
+		embedIface = embedSvc
 	}
 
-	ingest := knowledge.NewKnowledgeIngest(parser, chunker, embedSvc, vs, graphRAG, c.Logger)
-	rag := knowledge.NewRAGService(embedSvc, vs, graphRAG, c.Logger)
+	ingest := knowledge.NewKnowledgeIngest(parser, chunker, embedIface, vs, graphRAG, c.Logger)
+	rag := knowledge.NewRAGService(embedIface, vs, graphRAG, c.Logger)
 
 	var pipelineResolver pipeline.EmbedServiceResolver
 	var knowledgeResolver knowledge.EmbedResolver

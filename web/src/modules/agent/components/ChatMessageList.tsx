@@ -51,7 +51,7 @@ export const ChatMessageList = ({
   scrollContainerRef,
   pinnedToBottomRef,
 }: Props) => {
-  // The last message is the in-flight agent bubble while streaming.
+  // The last message is the in-flight assistant bubble while streaming.
   const streamingMsgId = sending && messages.length > 0 ? messages[messages.length - 1].id : null;
 
   // Detect manual scroll: unpin when user scrolls up, re-pin when near bottom.
@@ -97,17 +97,17 @@ export const ChatMessageList = ({
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
               {m.role !== 'user' &&
-                (m.role === 'agent' ? (
+                (m.role === 'assistant' ? (
                   <RobotOutlined style={{ color: '#1677ff' }} />
                 ) : (
                   <ThunderboltOutlined style={{ color: '#ff4d4f' }} />
                 ))}
               <Text type="secondary" style={{ fontSize: 11 }}>
-                {m.role === 'user' ? '你' : m.role === 'agent' ? 'Agent' : '错误'}
+                {m.role === 'user' ? '你' : m.role === 'assistant' ? 'Agent' : '错误'}
               </Text>
               {m.role === 'user' && <UserOutlined style={{ color: '#8c8c8c' }} />}
             </div>
-            <div style={BUBBLE[m.role] || BUBBLE.agent}>
+            <div style={BUBBLE[m.role] || BUBBLE.assistant}>
               {m.role === 'user' ? (
                 <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content}</span>
               ) : m.id === streamingMsgId ? (
@@ -120,13 +120,13 @@ export const ChatMessageList = ({
                   <Tag color="orange">已中断</Tag>
                 </div>
               )}
-              {m.role === 'agent' && m.id !== streamingMsgId && (
+              {m.role === 'assistant' && m.id !== streamingMsgId && (
                 <ChatStepList steps={m.steps} />
               )}
             </div>
           </div>
         ))}
-      {sending && messages[messages.length - 1]?.role !== 'agent' && (
+      {sending && messages[messages.length - 1]?.role !== 'assistant' && (
         <div
           style={{
             display: 'flex',

@@ -7,7 +7,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	memory "github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/persistence"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
@@ -65,9 +64,6 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		c.shutdown = append(c.shutdown, func(_ context.Context) error { return nc.Drain() })
 
 		var embedSvc pipeline.EmbedClient
-		if c.LLMGateway.Gateway.HasEmbeddingClient() {
-			embedSvc = embedding.NewEmbeddingService(c.LLMGateway.Gateway, c.Logger)
-		}
 
 		dimResolver := pipeline.DimResolver(func(ctx context.Context, tenantID string) int {
 			if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
@@ -86,7 +82,7 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		})
 
 		vectorAdapter := pipeline.NewMilvusVectorAdapter(c.Storage.Milvus).WithDimResolver(dimResolver)
-		p := pipeline.New(pipelineCfg, db, nc, embedSvc, vectorAdapter, c.LLMGateway.Gateway, c.Logger)
+		p := pipeline.New(pipelineCfg, db, nc, embedSvc, vectorAdapter, c.Logger)
 		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 			p.SetEmbedResolver(c.Knowledge.EmbedResolver)
 		}

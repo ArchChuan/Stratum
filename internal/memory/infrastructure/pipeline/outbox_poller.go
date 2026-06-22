@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -25,6 +26,7 @@ type OutboxPoller struct {
 	interval time.Duration
 	batch    int
 	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 // NewOutboxPoller creates an OutboxPoller with the given configuration.
@@ -49,13 +51,18 @@ func NewOutboxPoller(pool *pgxpool.Pool, js jetstream.JetStream, logger *zap.Log
 
 // Start begins the polling loop. Blocks until ctx is cancelled or Stop is called.
 func (p *OutboxPoller) Start(ctx context.Context) {
+	p.logger.Info("memory.outbox.poller_started",
+		zap.Duration("interval", p.interval),
+		zap.Int("batch", p.batch))
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			p.logger.Info("memory.outbox.poller_stopped", zap.String("cause", "ctx_done"))
 			return
 		case <-p.stopCh:
+			p.logger.Info("memory.outbox.poller_stopped", zap.String("cause", "stop_called"))
 			return
 		case <-ticker.C:
 			if err := p.poll(ctx); err != nil {
@@ -65,9 +72,9 @@ func (p *OutboxPoller) Start(ctx context.Context) {
 	}
 }
 
-// Stop signals the polling loop to exit.
+// Stop signals the polling loop to exit. Safe to call multiple times.
 func (p *OutboxPoller) Stop() {
-	close(p.stopCh)
+	p.stopOnce.Do(func() { close(p.stopCh) })
 }
 
 func (p *OutboxPoller) poll(ctx context.Context) error {
@@ -118,8 +125,17 @@ func (p *OutboxPoller) pollTenant(ctx context.Context, schema string) error {
 		}
 
 		subject := fmt.Sprintf("%s.%s", constants.MemoryRawSubject, ev.TenantID)
-		if _, err := p.js.Publish(ctx, subject, payload); err != nil {
-			return fmt.Errorf("publish id=%d: %w", id, err)
+		pubCtx, cancel := context.WithTimeout(ctx, constants.MemoryOutboxPublishTimeout)
+		_, pubErr := p.js.Publish(pubCtx, subject, payload)
+		cancel()
+		if pubErr != nil {
+			p.logger.Warn("memory.outbox.publish_failed",
+				zap.String("schema", schema),
+				zap.Int64("id", id),
+				zap.String("subject", subject),
+				zap.Error(pubErr))
+			outboxPublished.With(prometheus.Labels{"tenant_id": schema, "status": "error"}).Inc()
+			return fmt.Errorf("publish id=%d: %w", id, pubErr)
 		}
 		ids = append(ids, id)
 	}
@@ -133,7 +149,7 @@ func (p *OutboxPoller) pollTenant(ctx context.Context, schema string) error {
 	if _, err := tx.Exec(ctx, "DELETE FROM memory_outbox WHERE id = ANY($1)", ids); err != nil {
 		return fmt.Errorf("delete outbox: %w", err)
 	}
-	p.logger.Debug("memory.outbox.published", zap.String("schema", schema), zap.Int("count", len(ids)))
+	p.logger.Info("memory.outbox.published", zap.String("schema", schema), zap.Int("count", len(ids)))
 	outboxPublished.With(prometheus.Labels{"tenant_id": schema, "status": "success"}).Inc()
 	return tx.Commit(ctx)
 }

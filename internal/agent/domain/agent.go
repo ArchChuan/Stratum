@@ -69,7 +69,7 @@ type ChatConversation struct {
 type ChatMessage struct {
 	ID             string
 	ConversationID string
-	Role           string // "user" | "agent"
+	Role           string // "user" | "assistant"
 	Content        string
 	StepsJSON      json.RawMessage
 	IsError        bool

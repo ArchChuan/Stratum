@@ -419,7 +419,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		}
 		agentMsg := &ChatMessage{
 			ConversationID: cfg.ConversationID,
-			Role:           "agent",
+			Role:           "assistant",
 			Content:        result.Output,
 			UserID:         cfg.UserID,
 			AgentID:        agentID,
@@ -566,8 +566,8 @@ func (cfg *ExecutionConfig) ApplyOptions(opts []ExecutionOption) {
 }
 
 // BuildInitMessages constructs the initial LLM message slice from a system prompt and
-// chat history. History is truncated to the most recent window messages; role "agent"
-// is normalized to "assistant" for LLM protocol. window ≤ 0 defaults to 20.
+// chat history. History is truncated to the most recent window messages.
+// window ≤ 0 defaults to 20.
 func BuildInitMessages(systemPrompt string, history []*ChatMessage, window int) []port.LLMMessage {
 	if window <= 0 {
 		window = constants.DefaultInitHistoryWindow
@@ -580,11 +580,7 @@ func BuildInitMessages(systemPrompt string, history []*ChatMessage, window int) 
 		msgs = append(msgs, port.LLMMessage{Role: "system", Content: systemPrompt})
 	}
 	for _, m := range history {
-		role := m.Role
-		if role == "agent" {
-			role = "assistant"
-		}
-		msgs = append(msgs, port.LLMMessage{Role: role, Content: m.Content})
+		msgs = append(msgs, port.LLMMessage{Role: m.Role, Content: m.Content})
 	}
 	return msgs
 }

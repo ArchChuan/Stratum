@@ -35,7 +35,7 @@ func TestMemoryEnrichedEvent_RoundTrip(t *testing.T) {
 			TenantID:       "tenant-2",
 			UserID:         "user-2",
 			AgentID:        "agent-2",
-			Role:           "agent",
+			Role:           "assistant",
 			Content:        "Response text",
 			CreatedAt:      time.Now().UTC().Truncate(time.Millisecond),
 		},

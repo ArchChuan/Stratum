@@ -157,7 +157,7 @@ func (s *WorkspaceService) IngestUpload(ctx context.Context, tenantID, workspace
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	documentID := uuid.New().String()
+	documentID := uuid.Must(uuid.NewV7()).String()
 	result, err := s.ingestSvc.IngestDocument(ctx, IngestDocumentRequest{
 		TenantID:       tenantID,
 		Workspace:      workspace,

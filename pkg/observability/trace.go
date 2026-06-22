@@ -88,6 +88,22 @@ func (t *Tracer) StartSpan(ctx context.Context, name string) (context.Context, S
 	return t.provider.StartSpan(ctx, name)
 }
 
+// WithTraceID seeds ctx with a SpanContext carrying the given traceID so that
+// any subsequent StartSpan call in the same request propagates the same ID.
+// Call this once per request in the HTTP middleware after the trace ID is known.
+func WithTraceID(ctx context.Context, traceID string) context.Context {
+	if traceID == "" {
+		return ctx
+	}
+	sc := SpanContext{
+		TraceID: traceID,
+		SpanID:  uuid.Must(uuid.NewV7()).String(),
+		Name:    "request",
+		Start:   time.Now(),
+	}
+	return context.WithValue(ctx, spanKey{}, sc)
+}
+
 // SpanFromContext retrieves the current SpanContext, if any.
 func SpanFromContext(ctx context.Context) (SpanContext, bool) {
 	sc, ok := ctx.Value(spanKey{}).(SpanContext)
@@ -107,9 +123,9 @@ func (t *logTracer) StartSpan(ctx context.Context, name string) (context.Context
 
 	traceID := parent.TraceID
 	if traceID == "" {
-		traceID = uuid.New().String()
+		traceID = uuid.Must(uuid.NewV7()).String()
 	}
-	spanID := uuid.New().String()
+	spanID := uuid.Must(uuid.NewV7()).String()
 
 	sc := SpanContext{
 		TraceID: traceID,

@@ -486,3 +486,414 @@ stateDiagram-v2
 - handler ≤15 行/方法：`ExecuteAgentStream` 实测 ~60 行（SSE 模板代码无可压缩，已是最简）
 - 跨 ctx 通过消费方 port：`port.CapabilityGateway` 定义在 agent 的 `domain/port/`，由 capgateway 实现
 - 多租户：`SET LOCAL search_path` 在 TenantMiddleware 注入；execCtx 通过 `context.WithoutCancel` 隔离，但 `tenantdb` 已在 ctx 中绑定
+
+---
+
+## 11. 异步记忆写入管道（详细）
+
+ChatStore 落盘的 `chat_messages` 只是"短期记忆"（按 conversation_id 直读）。**长期记忆**走 outbox → JetStream → embedder → enricher 三段式异步管道，最终落到 Milvus 向量库 + PostgreSQL `memory_entries` + `entities` 表。
+
+### 11.1 三段式管道总览
+
+```mermaid
+flowchart LR
+    subgraph Tx["事务边界 (BaseAgent.Execute)"]
+        Save[保存 chat_messages]
+        OB[INSERT memory_outbox<br/>同事务原子提交]
+    end
+
+    subgraph Stage1["Stage 1: Outbox Poller (每 N 秒轮询全租户)"]
+        Pol[轮询每个 tenant_xxx schema<br/>FOR UPDATE SKIP LOCKED]
+        Pub1[NATS Publish<br/>memory.raw.<tenant_id>]
+        Del[DELETE FROM memory_outbox]
+        Pol --> Pub1 --> Del
+    end
+
+    subgraph Stage2["Stage 2: Embedder Worker (N 个并发)"]
+        Fetch1[JetStream Fetch 1 msg]
+        Resolve1[per-tenant EmbedClient resolver]
+        Embed[EmbedVector text → []float32]
+        Mil[Milvus.Upsert<br/>tenantID + userID + msgID + vector + metadata]
+        Pub2[NATS Publish<br/>memory.enriched.<tenant_id>]
+        Ack1[msg.Ack]
+        Fetch1 --> Resolve1 --> Embed --> Mil --> Pub2 --> Ack1
+    end
+
+    subgraph Stage3["Stage 3: Enricher Worker (N 个并发)"]
+        Fetch2[JetStream Fetch 1 msg]
+        Resolve2[per-tenant LLMClient resolver]
+        Llm[LLM.Complete<br/>抽取实体/关键词/重要度<br/>Temperature=0.1]
+        Tx2[BEGIN tx · SET LOCAL search_path]
+        Up1[UPSERT memory_entries<br/>type=long_term + importance + keywords]
+        Up2[UPSERT entities<br/>GREATEST confidence 合并]
+        Commit[COMMIT]
+        Ack2[msg.Ack]
+        Fetch2 --> Resolve2 --> Llm --> Tx2 --> Up1 --> Up2 --> Commit --> Ack2
+    end
+
+    Save --> OB
+    OB -.每 N 秒.-> Pol
+    Pub1 -. JetStream MEMORY_RAW .-> Fetch1
+    Pub2 -. JetStream MEMORY_ENRICHED .-> Fetch2
+```
+
+### 11.2 Outbox：原子写入 + 解耦发布
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Base as BaseAgent.Execute
+    participant CS as ChatStore (同事务)
+    participant OB as memory_outbox 表
+    participant Poll as OutboxPoller
+    participant JS as NATS JetStream
+
+    Base->>CS: BEGIN TX
+    CS->>CS: INSERT chat_messages (user)
+    CS->>CS: INSERT chat_messages (assistant)
+    Note over CS,OB: 同一事务里写消息 + outbox<br/>保证"消息可见 ⟺ 事件可发"
+    CS->>OB: INSERT memory_outbox(payload=MemoryRawEvent)
+    Base->>CS: COMMIT
+
+    loop 每 PollInterval (默认 ~5s)
+        Poll->>Poll: ListTenantSchemas (全租户)
+        loop 每个 tenant_xxx
+            Poll->>OB: BEGIN TX · SET search_path · SELECT FOR UPDATE SKIP LOCKED LIMIT batch
+            Poll->>JS: Publish memory.raw.<tenant_id>
+            Poll->>OB: DELETE WHERE id = ANY(ids)
+            Poll->>OB: COMMIT
+        end
+    end
+```
+
+**关键设计**
+
+| 设计点 | 含义 |
+|---|---|
+| 同事务双写 | 业务表 + outbox 必须原子提交，否则消息可见但事件丢失（或反之） |
+| `FOR UPDATE SKIP LOCKED` | 多 poller 实例并存时不互相阻塞，"谁锁到谁负责" |
+| `SET LOCAL search_path` | 每个 tenant 独立 schema，poller 顺序轮询所有 schema |
+| 主题路由 `memory.raw.<tenant_id>` | JetStream 按 tenant 分流，下游可按租户做配额/限流 |
+| DELETE 在 publish 之后 | "至少一次"语义；publish 失败回滚事务保留行，下次再发 |
+
+### 11.3 Embedder：向量化 + Milvus Upsert
+
+```mermaid
+flowchart TB
+    Start([Fetch from MEMORY_RAW]) --> Unmar[UnmarshalRawEvent]
+    Unmar -- 解析失败 --> Ack0[Ack 丢弃 · log error]
+    Unmar -- ok --> Resolve{embedSvc nil?}
+    Resolve -- 否 --> Use[使用全局 embedSvc]
+    Resolve -- 是 --> Per[embedResolver ctx, tenantID]
+    Per --> Skip{nil?}
+    Skip -- 是 --> AckSkip[Ack 跳过 · log warn<br/>该租户未配 embedding]
+    Skip -- 否 --> Use
+    Use --> Embed[EmbedVector content]
+    Embed -- 失败 --> Nak1[Nak 重投递 · maxDeliver 后进 DLQ]
+    Embed -- ok --> Up[Milvus.Upsert<br/>tenantID/userID/msgID/vector + metadata]
+    Up -- 失败 --> Nak1
+    Up -- ok --> Pub[Publish memory.enriched.<tenant_id>]
+    Pub -- 失败 --> Nak1
+    Pub -- ok --> Ack1[msg.Ack · 计数 success]
+```
+
+**Milvus 写入 metadata 字段**
+
+```text
+conversation_id · user_id · agent_id · role · content · created_at(RFC3339)
+```
+
+向量 ID = `MessageID`（chat_message 主键）；后续 recall 时通过 ID 反查 `memory_entries` 拿到富化结果。
+
+### 11.4 Enricher：LLM 富化 + 关系图谱写入
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Worker as EnricherWorker
+    participant JS as JetStream
+    participant LLM as Per-Tenant LLM
+    participant DB as PostgreSQL (tenant schema)
+
+    Worker->>JS: Fetch from MEMORY_ENRICHED
+    Worker->>Worker: UnmarshalEnrichedEvent
+
+    Worker->>LLM: Complete(prompt, T=0.1)
+    Note right of LLM: prompt 模板要求返回严格 JSON:<br/>{importance, keywords[], entities[], token_estimate}
+
+    LLM-->>Worker: JSON content
+    Worker->>Worker: json.Unmarshal → EnrichmentResult
+
+    alt 解析失败
+        Worker->>JS: msg.Nak (重试)
+    else 解析成功
+        Worker->>DB: BEGIN
+        Worker->>DB: SET LOCAL search_path = tenant_<id>
+        Worker->>DB: UPSERT memory_entries<br/>type=long_term · importance · keywords · token_estimate · enriched_at
+        loop 每个抽取出的 entity
+            Worker->>DB: UPSERT entities<br/>ON CONFLICT(name,type,user_id)<br/>confidence = GREATEST(old, new)
+        end
+        Worker->>DB: COMMIT
+        Worker->>JS: msg.Ack
+    end
+```
+
+**重要不变量**
+
+- `memory_entries.id = chat_messages.id = vector_id`（Milvus），三库通过同一 UUID 串联
+- `entities` 唯一键 `(name, type, user_id)`：实体属于用户，不属于租户也不属于 conversation
+- 富化结果是**只读**事实：用户 UI 不直接展示 importance/keywords，只在 recall 时用做排序/过滤
+- LLM 解析失败会一直 Nak，达到 `maxDeliver` 后消息进死信队列；不会污染数据
+
+### 11.5 召回：从 stratum_recall_memory 工具到 LLM
+
+```mermaid
+flowchart LR
+    Tool[stratum_recall_memory<br/>query 参数] --> RecallFn[BaseAgent.RecallMemoryFn]
+    RecallFn --> Inj[MemoryInjector.Recall<br/>InjectionContext: tenant + user + agent + conv]
+    Inj --> Query[memory_repo.Search<br/>当前实现: 纯 SQL 搜索 memory_entries]
+    Query --> Format[拼装为 markdown 摘要文字]
+    Format --> Tooled[作为 role=tool 消息回填 ReActState.Messages]
+    Tooled --> NextLLM[下一轮 LLM 决定是否继续工具调用 / 直接答]
+```
+
+> 当前 `memory_repo.Search` 采用 PostgreSQL 全文/关键字检索（不是向量召回）；Milvus 向量库已写入但**召回路径暂未启用语义检索**，是已识别的演进点（参见观察 5279）。
+
+### 11.6 失败语义与背压
+
+| 失败位置 | 语义 | 防护 |
+|---|---|---|
+| outbox 同事务写入 | 业务事务回滚 → 事件不发布 | 业务表与 outbox 强一致 |
+| poller publish 失败 | 事务 rollback 保留 outbox 行 | 下次轮询重发 |
+| embedder Embed 失败 | Nak → 重新投递 | `maxDeliver` 上限后转 DLQ |
+| embedder Milvus 失败 | Nak | 同上；vectorDB 故障时 backlog 累积 |
+| enricher LLM 失败 | Nak | 同上；DLQ 由人工 / 巡检处理 |
+| 全管道关闭 | `Pipeline.Stop()` 取消 ctx + Wait wg | outbox 行保留，重启后续传 |
+
+---
+
+## 12. 登录、认证与授权
+
+Stratum 的认证体系基于 GitHub OAuth + 双 JWT（access + onboarding）+ 刷新 cookie；授权采用三层（global_role / tenant_role / 资源所有者）+ 租户激活检查。
+
+### 12.1 登录全景：三种结果分支
+
+```mermaid
+flowchart TB
+    Start([GET /auth/github 浏览器]) --> SetState[生成随机 state<br/>SetCookie oauth_state · 5min]
+    SetState --> Redir[302 → github.com/login/oauth/authorize<br/>client_id + redirect_uri + scope=user:email + state]
+    Redir --> User[用户在 GitHub 授权]
+    User --> CB[GET /auth/github/callback?code=...&state=...]
+
+    CB --> Verify{state cookie<br/>== query state?}
+    Verify -- 否 --> Err1[/400 invalid oauth state/]
+    Verify -- 是 --> Clear[清掉 oauth_state cookie]
+
+    Clear --> Exchange[GitHub.ExchangeCode → access_token]
+    Exchange --> GetUser[GitHub.GetUser → ID/Login/AvatarURL]
+
+    GetUser --> Lookup[OnboardSvc.GetUserTenants github_id]
+
+    Lookup --> Branch{用户存在 + 有 tenant?}
+    Branch -- 是 老用户 --> ReturnFlow
+    Branch -- 否 --> AutoJoin[OnboardSvc.AutoJoinDefaultTenant<br/>找/建 default tenant 并自动入驻]
+    AutoJoin -- 成功 --> NewFlow
+    AutoJoin -- 失败 --> Onboard
+
+    subgraph ReturnFlow["返流: 已注册用户"]
+        R1[选 non-default tenant 优先]
+        R2[issueTokenPair: refresh + access]
+        R3[setRefreshCookie: HttpOnly · Secure · SameSite]
+        R4[302 → frontend/auth/callback?access_token=JWT]
+    end
+
+    subgraph NewFlow["新用户已自动入驻 default tenant"]
+        N1[role=member<br/>若 GlobalAdmin 名单匹配则 owner]
+        N2[issueTokenPair]
+        N3[setRefreshCookie]
+        N4[302 → frontend/auth/callback?access_token=JWT]
+    end
+
+    subgraph Onboard["前端引导建租户"]
+        O1[SignOnboarding: 短 TTL 仅含 github 信息]
+        O2[302 → frontend/auth/callback?onboarding_token=...&github_login=...]
+        O3[前端弹建租户表单]
+        O4[POST /auth/onboard/create-tenant<br/>onboarding_token + tenant_name]
+        O5[后端 VerifyOnboarding · 创建 tenant + 入驻 + 签 access JWT]
+    end
+```
+
+**三种产物对比**
+
+| 类型 | TTL | 载荷 | 用途 |
+|---|---|---|---|
+| access JWT (RS256) | 短（分钟级） | `sub, tid, role, global_role, ava, ghl, jti` | 业务请求 `Authorization: Bearer` |
+| refresh token | 长（HttpOnly cookie） | server 端 token_store 里的随机串 | `/auth/refresh` 续 access |
+| onboarding JWT (RS256) | 极短 | `github_id, github_login, avatar_url` | 仅用于建租户那一次 |
+
+### 12.2 已认证请求的中间件链
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client
+    participant Gin as Gin Router
+    participant CORS as CORS
+    participant Trace as TraceMiddleware
+    participant JWT as JWTMiddleware
+    participant Inj as InjectTenantContext
+    participant Active as RequireActiveTenant
+    participant Role as RequireTenantRole/Global
+    participant H as Handler
+
+    Client->>Gin: HTTP req + Authorization: Bearer <jwt>
+    Gin->>CORS: CORS 校验
+    CORS->>Trace: 注入 trace_id (header / 新生成)<br/>写访问日志 latency
+    Trace->>JWT: 进入认证
+
+    JWT->>JWT: parts := split "Bearer "
+    JWT->>JWT: jwtService.Verify(token) 用 RSA public key
+    alt 缺/无效/过期
+        JWT-->>Client: 401 missing or invalid token
+    else 有效
+        JWT->>JWT: c.Set auth.sub / auth.tenant_id / auth.role / auth.global_role / auth.jti
+    end
+
+    JWT->>Inj: 进入 InjectTenantContext
+    Inj->>Inj: 读 c.Get auth.* → 构 tenantdb.TenantContext
+    Inj->>Inj: ctx = WithTenant + reqctx.WithTenantID
+    Note right of Inj: 关键! tenantdb 后续在 DB 查询时<br/>会 SET LOCAL search_path
+
+    Inj->>Active: 路由若挂了 RequireActiveTenant
+    Active->>Active: SELECT status FROM public.tenants WHERE id=$1
+    alt status != active
+        Active-->>Client: 403 租户已被禁用
+    else active
+        Active->>Role: 进入角色守卫
+    end
+
+    Role->>Role: rank[role] >= rank[minRole]?
+    alt 不足
+        Role-->>Client: 403 insufficient role
+    else 足
+        Role->>H: 进入业务 handler
+        H->>H: 处理请求 (DB 查询自动 SET search_path)
+        H-->>Client: 200 / 4xx / 5xx
+    end
+```
+
+### 12.3 授权三层模型
+
+```mermaid
+flowchart TB
+    Req[请求 + JWT claims] --> L1{global_role}
+    L1 -- global_admin --> Pass1[跨租户全权]
+    L1 -- 空 --> L2
+
+    L2{tenant_role 等级<br/>owner=3 > admin=2 > member=1} -- 不足 minRole --> R403_role[/403 insufficient tenant role/]
+    L2 -- 足 --> L3
+
+    L3{租户激活态}
+    L3 -- status != active --> R403_tenant[/403 租户已被禁用/]
+    L3 -- active --> L4
+
+    L4{资源所有者校验}
+    L4 -- 业务层 user_id != claims.sub --> R403_owner[/403 not owner/]
+    L4 -- ok --> Allow[执行业务]
+```
+
+**职责分配**
+
+| 检查项 | 责任层 | 实现 |
+|---|---|---|
+| 是否登录 | middleware | `JWTMiddleware` 验签 + Bearer |
+| 全局管理员 | middleware | `RequireGlobalAdmin` 检查 `auth.global_role` |
+| 租户角色门槛 | middleware | `RequireTenantRole(minRole)` 比较 rank |
+| 租户激活态 | middleware | `RequireActiveTenant` 查 `public.tenants.status` |
+| 资源归属 | application 层 | service 比较 `userID == record.UserID`（如 conversation 仅 owner 可读写） |
+| 多租户隔离 | infrastructure | `tenantdb.SET LOCAL search_path = tenant_<id>` —— 跨租户访问物理上读不到表 |
+
+### 12.4 RBAC 角色矩阵
+
+```mermaid
+classDiagram
+    class GlobalRole {
+        global_admin
+        (空)
+    }
+    class TenantRole {
+        owner
+        admin
+        member
+    }
+    class Resource {
+        Tenants
+        Users / Onboarding
+        Agents / Conversations
+        Knowledge / Skills / MCP
+        Memories
+    }
+
+    GlobalRole --> Resource: 跨租户读写所有资源
+    TenantRole --> Resource: 在自己 tenant_<id> schema 内读写
+    Resource: owner-only: 删租户/转让/计费
+    Resource: admin: 管理用户与配置
+    Resource: member: 只能用业务功能
+```
+
+### 12.5 Token 续期与失效
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant FE as 前端
+    participant API as /auth/refresh
+    participant TStore as token_store (DB)
+    participant JWT as JWTService
+
+    Note over FE: access JWT 401 expired
+    FE->>API: POST /auth/refresh<br/>(自动带 HttpOnly refresh cookie)
+    API->>API: 取 cookie raw_rt
+    API->>TStore: lookup hash(raw_rt)<br/>未撤销 + 未过期 + 用户存在
+    alt 校验失败
+        API-->>FE: 401 → 跳登录
+    else ok
+        API->>JWT: Sign 新 access JWT (RS256)
+        API->>TStore: 旋转 refresh token<br/>写新行 + 撤销旧行 (一次性)
+        API->>FE: SetCookie 新 refresh + body 新 access
+    end
+
+    Note over FE: 用户登出
+    FE->>API: POST /auth/logout
+    API->>TStore: 撤销当前 refresh token<br/>(可选: 把 jti 加入 access blacklist)
+    API->>FE: 清 cookie + 200
+```
+
+**安全要点**
+
+- access JWT 用 **RS256**：边缘网关只需公钥即可验签，不接触私钥
+- refresh token 走 **HttpOnly + Secure + SameSite cookie**，不暴露给 JS
+- token_store 存 hash 不存原值；轮换时旧值立即作废（refresh token rotation）
+- onboarding token 单次使用：建租户成功后即作废
+- 前端**禁止把 access JWT 写 localStorage**（CLAUDE.md 已有约束）；存内存 Context
+
+### 12.6 关键代码索引
+
+| 关注点 | 路径 |
+|---|---|
+| GitHub OAuth 重定向/回调 | `api/http/handler/auth_oauth_handler.go` |
+| 登录注册/会话/租户 handler | `api/http/handler/auth_session_handler.go` · `auth_register_handler.go` · `auth_tenant_handler.go` |
+| JWT 签发与验签 | `internal/iam/application/jwt_service.go` |
+| OnboardService 自动入驻 | `internal/iam/application/onboard_service.go` |
+| GitHub Client | `internal/iam/infrastructure/oauth/github.go` |
+| Token 持久化 | `internal/iam/infrastructure/persistence/token_store.go` |
+| JWT Middleware | `api/middleware/jwt.go` |
+| Tenant 注入 | `api/middleware/inject_tenant.go` |
+| 角色守卫 | `api/middleware/require_role.go` |
+| 租户激活检查 | `api/middleware/require_active_tenant.go` |
+| Outbox poller | `internal/memory/infrastructure/pipeline/outbox_poller.go` |
+| Embedder worker | `internal/memory/infrastructure/pipeline/embedder.go` |
+| Enricher worker | `internal/memory/infrastructure/pipeline/enricher.go` |
+| 管道编排 | `internal/memory/infrastructure/pipeline/pipeline.go` |
+| 事件结构 | `internal/memory/infrastructure/pipeline/events.go` |
+| JetStream 配置 | `internal/memory/infrastructure/pipeline/jetstream.go` |

@@ -257,7 +257,7 @@ func TestChatHandler_DeleteConversation_notOwned(t *testing.T) {
 func TestChatHandler_ListMessages_success(t *testing.T) {
 	store := &mockChatStore{
 		listMsgsFn: func(_ context.Context, _, _, _ string) ([]*agent.ChatMessage, error) {
-			return []*agent.ChatMessage{nowMsg("m1", "user", "hi"), nowMsg("m2", "agent", "hello")}, nil
+			return []*agent.ChatMessage{nowMsg("m1", "user", "hi"), nowMsg("m2", "assistant", "hello")}, nil
 		},
 	}
 	h := NewChatHandler(store, zap.NewNop())

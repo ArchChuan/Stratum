@@ -140,6 +140,178 @@ func (r *FactRepo) Update(ctx context.Context, fact *domain.MemoryFact) error {
 	return nil
 }
 
+// ListActive returns active facts within a scope.
+func (r *FactRepo) ListActive(ctx context.Context, filter domain.ScopeFilter, limit int) ([]*domain.MemoryFact, error) {
+	query := `
+		SELECT id, user_id, agent_id, scope, content, importance,
+			status, superseded_by, access_count, last_accessed_at,
+			created_at, updated_at, deleted_at
+		FROM memory_facts
+		WHERE user_id = $1
+			AND status = 'active'
+			AND (
+				(scope = 'user' AND $2 = true)
+				OR (scope = 'agent' AND agent_id = $3 AND $4 = true)
+			)
+		ORDER BY last_accessed_at DESC
+		LIMIT $5`
+
+	rows, err := r.pool.Query(ctx, query,
+		filter.UserID, filter.IncludeUserScope, filter.AgentID, filter.IncludeAgentScope, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list active facts: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanFacts(rows)
+}
+
+// SearchByContent performs full-text search on fact content.
+func (r *FactRepo) SearchByContent(ctx context.Context, filter domain.ScopeFilter, query string, limit int) ([]*domain.MemoryFact, error) {
+	sql := `
+		SELECT id, user_id, agent_id, scope, content, importance,
+			status, superseded_by, access_count, last_accessed_at,
+			created_at, updated_at, deleted_at
+		FROM memory_facts
+		WHERE user_id = $1
+			AND status = 'active'
+			AND content ILIKE $2
+			AND (
+				(scope = 'user' AND $3 = true)
+				OR (scope = 'agent' AND agent_id = $4 AND $5 = true)
+			)
+		ORDER BY importance DESC
+		LIMIT $6`
+
+	searchPattern := "%" + query + "%"
+	rows, err := r.pool.Query(ctx, sql,
+		filter.UserID, searchPattern, filter.IncludeUserScope, filter.AgentID, filter.IncludeAgentScope, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search facts by content: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanFacts(rows)
+}
+
+// FindSupersedeCandidates returns facts that may be superseded by new content.
+// Uses trigram similarity (requires pg_trgm extension).
+func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, userID, agentID, content string, minSimilarity, maxCount float64) ([]*domain.MemoryFact, error) {
+	query := `
+		SELECT id, user_id, agent_id, scope, content, importance,
+			status, superseded_by, access_count, last_accessed_at,
+			created_at, updated_at, deleted_at,
+			similarity(content, $2) as sim
+		FROM memory_facts
+		WHERE user_id = $1
+			AND status = 'active'
+			AND similarity(content, $2) > $3
+		ORDER BY sim DESC
+		LIMIT $4`
+
+	rows, err := r.pool.Query(ctx, query, userID, content, minSimilarity, int(maxCount))
+	if err != nil {
+		return nil, fmt.Errorf("find supersede candidates: %w", err)
+	}
+	defer rows.Close()
+
+	var facts []*domain.MemoryFact
+	for rows.Next() {
+		var f domain.MemoryFact
+		var agentID, supersededBy *string
+		var deletedAt *time.Time
+		var scope string
+		var sim float64
+
+		err := rows.Scan(
+			&f.ID, &f.UserID, &agentID, &scope, &f.Content, &f.Importance,
+			&f.Status, &supersededBy, &f.AccessCount, &f.LastAccessAt,
+			&f.CreatedAt, &f.UpdatedAt, &deletedAt, &sim,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan supersede candidate: %w", err)
+		}
+
+		f.Scope = domain.Scope(scope)
+		if agentID != nil {
+			f.AgentID = *agentID
+		}
+		if supersededBy != nil {
+			f.SupersededBy = *supersededBy
+		}
+		if deletedAt != nil {
+			f.DeletedAt = *deletedAt
+		}
+
+		facts = append(facts, &f)
+	}
+
+	return facts, rows.Err()
+}
+
+// CountByUser returns total fact count for a user.
+func (r *FactRepo) CountByUser(ctx context.Context, userID string) (int, error) {
+	var count int
+	err := r.pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM memory_facts WHERE user_id = $1 AND status = 'active'",
+		userID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count facts by user: %w", err)
+	}
+	return count, nil
+}
+
+// DeleteOldSoftDeleted removes soft-deleted facts older than retention days.
+func (r *FactRepo) DeleteOldSoftDeleted(ctx context.Context, retentionDays int) (int, error) {
+	query := `
+		DELETE FROM memory_facts
+		WHERE status = 'deleted'
+			AND deleted_at < NOW() - ($1 || ' days')::INTERVAL`
+
+	tag, err := r.pool.Exec(ctx, query, retentionDays)
+	if err != nil {
+		return 0, fmt.Errorf("delete old soft-deleted facts: %w", err)
+	}
+
+	return int(tag.RowsAffected()), nil
+}
+
+// scanFacts is a helper to scan multiple fact rows.
+func (r *FactRepo) scanFacts(rows pgx.Rows) ([]*domain.MemoryFact, error) {
+	var facts []*domain.MemoryFact
+
+	for rows.Next() {
+		var f domain.MemoryFact
+		var agentID, supersededBy *string
+		var deletedAt *time.Time
+		var scope string
+
+		err := rows.Scan(
+			&f.ID, &f.UserID, &agentID, &scope, &f.Content, &f.Importance,
+			&f.Status, &supersededBy, &f.AccessCount, &f.LastAccessAt,
+			&f.CreatedAt, &f.UpdatedAt, &deletedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan fact: %w", err)
+		}
+
+		f.Scope = domain.Scope(scope)
+		if agentID != nil {
+			f.AgentID = *agentID
+		}
+		if supersededBy != nil {
+			f.SupersededBy = *supersededBy
+		}
+		if deletedAt != nil {
+			f.DeletedAt = *deletedAt
+		}
+
+		facts = append(facts, &f)
+	}
+
+	return facts, rows.Err()
+}
+
 // translatePgError converts pgx errors to domain errors.
 func translatePgError(err error, operation string) error {
 	if err == nil {

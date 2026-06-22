@@ -80,7 +80,7 @@ func newPipelineEngine(ae *atomicEngine, logger *zap.Logger) *pipelineEngine {
 }
 
 func (e *pipelineEngine) execute(ctx context.Context, p Pipeline) (PipelineResult, error) {
-	traceID := uuid.New().String()
+	traceID := uuid.Must(uuid.NewV7()).String()
 	ctx = context.WithValue(ctx, traceIDKey, traceID)
 
 	start := time.Now()

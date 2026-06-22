@@ -52,6 +52,9 @@ func (ls *LLMSkill) Execute(ctx context.Context, input interface{}) (interface{}
 	if override, ok := llmgateway.CompleterFromContext(ctx); ok {
 		c = override
 	}
+	if c == nil {
+		return nil, fmt.Errorf("llm skill %q: no LLM completer available — tenant has no provider configured", ls.GetID())
+	}
 
 	inputMap, _ := input.(map[string]interface{})
 

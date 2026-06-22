@@ -89,7 +89,7 @@ func (s *AdminService) GetTenant(ctx context.Context, id string) (*domain.Tenant
 // CreateTenant inserts a new tenant row and provisions its schema.
 func (s *AdminService) CreateTenant(ctx context.Context, name, slug, plan, status string) (*domain.Tenant, error) {
 	t := domain.Tenant{
-		ID:        uuid.New().String(),
+		ID:        uuid.Must(uuid.NewV7()).String(),
 		Name:      name,
 		Slug:      slug,
 		Plan:      plan,
