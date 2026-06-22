@@ -46,10 +46,7 @@ func (s *MemoryService) BufferMessage(ctx context.Context, req *BufferMessageReq
 }
 
 // ExtractFacts processes batch messages, extracts facts via LLM, checks supersede, normalizes entities.
-func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsRequest) error {
-	// TODO: implement in Task 3
-	return nil
-}
+// Implementation in extraction.go
 
 // RecallMemory performs hybrid retrieval (vector + trigram + RRF), returns top-K facts.
 func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryRequest) (*RecallMemoryResponse, error) {
