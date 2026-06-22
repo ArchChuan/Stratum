@@ -130,6 +130,30 @@ func main() {
 		logger.Fatal("register memory-pipeline", zap.Error(err))
 	}
 
+	// 3. Memory workers — background processing (extraction, supersede, embed, profile, GC).
+	memWorkers := wiring.BuildMemoryWorkers(container)
+	if len(memWorkers) > 0 {
+		if err := appHarness.Register(harnesspkg.NewSimpleComponent("memory-workers", logger,
+			harnesspkg.WithStartFunc(func(ctx context.Context) error {
+				for _, w := range memWorkers {
+					go w.Start(ctx)
+				}
+				logger.Info("Memory workers started", zap.Int("worker_count", len(memWorkers)))
+				return nil
+			}),
+			harnesspkg.WithStopFunc(func(_ context.Context) error {
+				for _, w := range memWorkers {
+					w.Stop()
+				}
+				logger.Info("Memory workers stopped")
+				return nil
+			}),
+			harnesspkg.WithHealthCheckFunc(func(_ context.Context) error { return nil }),
+		)); err != nil {
+			logger.Fatal("register memory-workers", zap.Error(err))
+		}
+	}
+
 	// 4. Chat cleanup — daily prune of inactive conversations.
 	if err := appHarness.Register(harnesspkg.NewSimpleComponent("chat-cleanup", logger,
 		harnesspkg.WithStartFunc(func(ctx context.Context) error {

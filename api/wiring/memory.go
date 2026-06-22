@@ -119,3 +119,36 @@ func (a injectorAdapter) BuildContext(ctx context.Context, ic port.InjectionCont
 		Query:          ic.Query,
 	})
 }
+
+// BuildMemoryWorkers constructs all memory background workers.
+// Returns a slice of workers that implement Start(ctx) and Stop().
+//
+// TODO(phase-5): Implement full worker construction once Memory struct
+// exposes FactRepo, EntityRepo, ExtractionQueue, Embedder, VectorStore, etc.
+// For now, returns empty slice as infrastructure dependencies need to be
+// wired through Container.Memory first.
+func BuildMemoryWorkers(c *Container) []interface {
+	Start(context.Context)
+	Stop()
+} {
+	if c.Memory == nil {
+		return nil
+	}
+
+	logger := c.Logger
+	_ = logger // Suppress unused warning
+
+	var result []interface {
+		Start(context.Context)
+		Stop()
+	}
+
+	// Workers need dependencies not yet exposed on Memory struct:
+	// - ExtractionWorker: needs ExtractionQueue, MemoryService
+	// - SupersedeWorker: needs FactRepo, LLMSuperseder
+	// - EmbedWorker: needs FactRepo, Embedder, VectorStore
+	// - ProfileWorker: needs EntityRepo, FactRepo, EntityProfiler
+	// - GCWorker: needs FactRepo
+
+	return result
+}
