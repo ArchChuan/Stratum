@@ -15,8 +15,9 @@ import (
 )
 
 type stubFactRepo struct {
-	findCandidatesFunc func(context.Context, string, string, string, float64, float64) ([]*domain.MemoryFact, error)
-	updateFunc         func(context.Context, *domain.MemoryFact) error
+	findCandidatesFunc   func(context.Context, string, string, string, float64, float64) ([]*domain.MemoryFact, error)
+	updateFunc           func(context.Context, *domain.MemoryFact) error
+	deleteOldSoftDeleted func(context.Context, int) (int, error)
 }
 
 func (r *stubFactRepo) Create(ctx context.Context, fact *domain.MemoryFact) error {
@@ -53,6 +54,9 @@ func (r *stubFactRepo) CountByUser(ctx context.Context, userID string) (int, err
 }
 
 func (r *stubFactRepo) DeleteOldSoftDeleted(ctx context.Context, retentionDays int) (int, error) {
+	if r.deleteOldSoftDeleted != nil {
+		return r.deleteOldSoftDeleted(ctx, retentionDays)
+	}
 	return 0, nil
 }
 
