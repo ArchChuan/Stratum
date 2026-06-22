@@ -2,8 +2,10 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/redis/go-redis/v9"
 )
@@ -53,7 +55,28 @@ func (s *MemoryService) BufferMessage(ctx context.Context, req *BufferMessageReq
 
 // ForgetMemory marks a fact as soft-deleted, schedules async Milvus cleanup.
 func (s *MemoryService) ForgetMemory(ctx context.Context, req *ForgetMemoryRequest) error {
-	// TODO: implement in Task 5
+	// Step 1: Fetch fact to verify ownership
+	fact, err := s.factRepo.GetByID(ctx, req.FactID)
+	if err != nil {
+		return fmt.Errorf("get fact: %w", err)
+	}
+
+	if fact.UserID != req.UserID {
+		return domain.ErrScopeMismatch
+	}
+
+	// Step 2: Soft delete via domain method
+	fact.MarkDeleted()
+
+	if err := s.factRepo.Update(ctx, fact); err != nil {
+		return fmt.Errorf("update fact: %w", err)
+	}
+
+	// Step 3: Delete from Milvus (best-effort, eventual consistency)
+	collectionName := fmt.Sprintf("memory_facts_%s", req.TenantID)
+	_ = s.vectorStore.Delete(ctx, collectionName, []string{req.FactID})
+	// Intentionally ignore Milvus errors - GC worker will clean up orphaned vectors
+
 	return nil
 }
 

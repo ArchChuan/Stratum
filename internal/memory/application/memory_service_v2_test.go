@@ -252,16 +252,67 @@ func TestMemoryService_RecallMemory_NotImplemented(t *testing.T) {
 	assert.Nil(t, resp) // TODO placeholder returns nil
 }
 
-func TestMemoryService_ForgetMemory_NotImplemented(t *testing.T) {
-	svc := NewMemoryService(nil, nil, nil, nil, nil, nil, nil)
+func TestMemoryService_ForgetMemory_Success(t *testing.T) {
+	ctx := context.Background()
+	factRepo := new(MockFactRepo)
+	entityRepo := new(MockEntityRepo)
+	queue := new(MockExtractionQueue)
+	vectorStore := new(MockVectorStore)
+	llmExtract := new(MockLLMExtractor)
+	embedClient := new(MockEmbedClient)
+
+	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil)
+
+	fact, _ := domain.NewFact("user1", "agent1", "user", "old fact", 0.5, []string{})
+
+	// Mock fact retrieval
+	factRepo.On("GetByID", ctx, fact.ID).Return(fact, nil)
+
+	// Mock update after soft delete
+	factRepo.On("Update", ctx, mock.AnythingOfType("*domain.MemoryFact")).Return(nil)
+
+	// Mock Milvus delete (best-effort)
+	vectorStore.On("Delete", ctx, "memory_facts_tenant1", []string{fact.ID}).Return(nil)
+
 	req := &ForgetMemoryRequest{
 		TenantID: "tenant1",
 		UserID:   "user1",
-		FactID:   "fact1",
+		FactID:   fact.ID,
 	}
 
-	err := svc.ForgetMemory(context.Background(), req)
-	assert.NoError(t, err) // TODO placeholder returns nil
+	err := svc.ForgetMemory(ctx, req)
+	assert.NoError(t, err)
+
+	factRepo.AssertExpectations(t)
+	vectorStore.AssertExpectations(t)
+}
+
+func TestMemoryService_ForgetMemory_ScopeMismatch(t *testing.T) {
+	ctx := context.Background()
+	factRepo := new(MockFactRepo)
+	entityRepo := new(MockEntityRepo)
+	queue := new(MockExtractionQueue)
+	vectorStore := new(MockVectorStore)
+	llmExtract := new(MockLLMExtractor)
+	embedClient := new(MockEmbedClient)
+
+	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil)
+
+	fact, _ := domain.NewFact("user1", "agent1", "user", "old fact", 0.5, []string{})
+
+	// Mock fact retrieval
+	factRepo.On("GetByID", ctx, fact.ID).Return(fact, nil)
+
+	req := &ForgetMemoryRequest{
+		TenantID: "tenant1",
+		UserID:   "user2", // different user
+		FactID:   fact.ID,
+	}
+
+	err := svc.ForgetMemory(ctx, req)
+	assert.ErrorIs(t, err, domain.ErrScopeMismatch)
+
+	factRepo.AssertExpectations(t)
 }
 
 func TestMemoryService_BuildContext_NotImplemented(t *testing.T) {
