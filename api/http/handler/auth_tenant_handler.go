@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
+	"github.com/byteBuilderX/stratum/internal/iam/domain"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -54,7 +55,15 @@ func (h *AuthHandler) SwitchTenant(c *gin.Context) {
 		tenantRole = "member"
 	}
 
-	rawRT, accessJWT, err := h.issueTokenPair(ctx, claims.Sub, req.TenantID, tenantRole, globalRole, claims.AvatarURL, claims.GitHubLogin)
+	// Derive SystemRole from all user memberships
+	// For now, use a simple derivation based on current tenant role
+	// A full implementation would query all user tenants
+	memberships := []domain.TenantMembership{
+		{TenantID: req.TenantID, Role: tenantRole},
+	}
+	systemRole := domain.DeriveSystemRole(memberships)
+
+	rawRT, accessJWT, err := h.issueTokenPair(ctx, claims.Sub, req.TenantID, tenantRole, globalRole, systemRole, claims.AvatarURL, claims.GitHubLogin)
 	if err != nil {
 		h.deps.Logger.Error("switch tenant: issue token pair", zap.Error(err))
 		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("token issuance failed")))
@@ -103,7 +112,14 @@ func (h *AuthHandler) CreateUserTenant(c *gin.Context) {
 
 	globalRole, _ := h.deps.OnboardSvc.GetGlobalRole(ctx, claims.Sub)
 
-	rawRT, accessJWT, err := h.issueTokenPair(ctx, claims.Sub, tenantID, "owner", globalRole, claims.AvatarURL, claims.GitHubLogin)
+	// Derive SystemRole - new tenant makes user owner
+	// For simplicity, derive from the new tenant owner role
+	memberships := []domain.TenantMembership{
+		{TenantID: tenantID, Role: "owner"},
+	}
+	systemRole := domain.DeriveSystemRole(memberships)
+
+	rawRT, accessJWT, err := h.issueTokenPair(ctx, claims.Sub, tenantID, "owner", globalRole, systemRole, claims.AvatarURL, claims.GitHubLogin)
 	if err != nil {
 		h.deps.Logger.Error("issue token pair after create tenant", zap.Error(err))
 		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("token issuance failed")))

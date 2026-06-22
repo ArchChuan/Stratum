@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -15,6 +16,7 @@ type TokenClaims struct {
 	TenantID    string
 	Role        string
 	GlobalRole  string
+	SystemRole  domain.SystemRole
 	JTI         string
 	AvatarURL   string
 	GitHubLogin string
@@ -28,11 +30,12 @@ type OnboardingClaims struct {
 }
 
 type jwtAccessClaims struct {
-	TenantID    string `json:"tid,omitempty"`
-	Role        string `json:"role,omitempty"`
-	GlobalRole  string `json:"global_role,omitempty"`
-	AvatarURL   string `json:"ava,omitempty"`
-	GitHubLogin string `json:"ghl,omitempty"`
+	TenantID    string            `json:"tid,omitempty"`
+	Role        string            `json:"role,omitempty"`
+	GlobalRole  string            `json:"global_role,omitempty"`
+	SystemRole  domain.SystemRole `json:"system_role,omitempty"`
+	AvatarURL   string            `json:"ava,omitempty"`
+	GitHubLogin string            `json:"ghl,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -61,6 +64,7 @@ func (s *JWTService) Sign(c TokenClaims, ttl time.Duration) (string, error) {
 		TenantID:    c.TenantID,
 		Role:        c.Role,
 		GlobalRole:  c.GlobalRole,
+		SystemRole:  c.SystemRole,
 		AvatarURL:   c.AvatarURL,
 		GitHubLogin: c.GitHubLogin,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -98,6 +102,7 @@ func (s *JWTService) Verify(tokenStr string) (*TokenClaims, error) {
 		TenantID:    c.TenantID,
 		Role:        c.Role,
 		GlobalRole:  c.GlobalRole,
+		SystemRole:  c.SystemRole,
 		JTI:         c.ID,
 		AvatarURL:   c.AvatarURL,
 		GitHubLogin: c.GitHubLogin,

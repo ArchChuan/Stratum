@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/byteBuilderX/stratum/internal/iam/application"
+	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/gin-gonic/gin"
@@ -42,7 +43,7 @@ func NewAuthHandler(deps AuthHandlerDeps) *AuthHandler {
 	return &AuthHandler{deps: deps}
 }
 
-func (h *AuthHandler) issueTokenPair(ctx context.Context, userID, tenantID, role, globalRole, avatarURL, githubLogin string) (rawRT, accessJWT string, err error) {
+func (h *AuthHandler) issueTokenPair(ctx context.Context, userID, tenantID, role, globalRole string, systemRole domain.SystemRole, avatarURL, githubLogin string) (rawRT, accessJWT string, err error) {
 	rawRT, err = randomState()
 	if err != nil {
 		return "", "", err
@@ -52,7 +53,7 @@ func (h *AuthHandler) issueTokenPair(ctx context.Context, userID, tenantID, role
 		return "", "", fmt.Errorf("store refresh token: %w", err)
 	}
 	claims := application.TokenClaims{
-		Sub: userID, TenantID: tenantID, Role: role, GlobalRole: globalRole, JTI: jti,
+		Sub: userID, TenantID: tenantID, Role: role, GlobalRole: globalRole, SystemRole: systemRole, JTI: jti,
 		AvatarURL: avatarURL, GitHubLogin: githubLogin,
 	}
 	accessJWT, err = h.deps.JWTService.Sign(claims, constants.AccessTokenTTL)
