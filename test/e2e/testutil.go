@@ -19,6 +19,9 @@ type MemoryTestEnv struct {
 	PGPool        *pgxpool.Pool
 	Redis         *redis.Client
 	MemoryService *application.MemoryService
+	FactRepo      port.FactRepo
+	EntityRepo    port.EntityRepo
+	Queue         port.ExtractionQueue
 	TenantID      string
 	UserID        string
 	AgentID       string
@@ -113,12 +116,15 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	}
 
 	// Step 6: Build MemoryService with mocked LLM/Vector/Embed
-	memoryService := newMemoryService(pool, redisClient)
+	memoryService, factRepo, entityRepo, queue := newMemoryService(pool, redisClient)
 
 	env := &MemoryTestEnv{
 		PGPool:        pool,
 		Redis:         redisClient,
 		MemoryService: memoryService,
+		FactRepo:      factRepo,
+		EntityRepo:    entityRepo,
+		Queue:         queue,
 		TenantID:      tenantID,
 		UserID:        "test-user-001",
 		AgentID:       "test-agent-001",
@@ -139,12 +145,12 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 }
 
 // newMemoryService constructs MemoryService with mocked LLM extractor.
-func newMemoryService(pool *pgxpool.Pool, redis *redis.Client) *application.MemoryService {
+func newMemoryService(pool *pgxpool.Pool, redis *redis.Client) (*application.MemoryService, port.FactRepo, port.EntityRepo, port.ExtractionQueue) {
 	factRepo := persistence.NewFactRepo(pool)
 	entityRepo := persistence.NewEntityRepo(pool)
 	queue := persistence.NewExtractionQueue(pool)
 
-	return application.NewMemoryService(
+	service := application.NewMemoryService(
 		factRepo,
 		entityRepo,
 		queue,
@@ -153,6 +159,8 @@ func newMemoryService(pool *pgxpool.Pool, redis *redis.Client) *application.Memo
 		&mockEmbedClient{},
 		redis,
 	)
+
+	return service, factRepo, entityRepo, queue
 }
 
 // mockLLMExtractor returns deterministic facts for testing.
