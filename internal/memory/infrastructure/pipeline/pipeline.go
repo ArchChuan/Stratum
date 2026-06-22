@@ -41,7 +41,6 @@ type Pipeline struct {
 	pool          *pgxpool.Pool
 	nc            *nats.Conn
 	jsm           *JetStreamManager
-	embedSvc      EmbedClient
 	embedResolver EmbedServiceResolver
 	vectorDB      VectorStore
 	llmResolver   LLMResolver
@@ -61,7 +60,6 @@ func New(
 	cfg Config,
 	pool *pgxpool.Pool,
 	nc *nats.Conn,
-	embedSvc EmbedClient,
 	vectorDB VectorStore,
 	logger *zap.Logger,
 ) *Pipeline {
@@ -69,7 +67,6 @@ func New(
 		cfg:      cfg,
 		pool:     pool,
 		nc:       nc,
-		embedSvc: embedSvc,
 		vectorDB: vectorDB,
 		logger:   logger,
 	}
@@ -140,7 +137,7 @@ func (p *Pipeline) Start(ctx context.Context) error {
 	}
 
 	for i := 0; i < p.cfg.EmbedWorkers; i++ {
-		worker := NewEmbedderWorker(embedConsumer, js, p.embedSvc, p.vectorDB, p.logger)
+		worker := NewEmbedderWorker(embedConsumer, js, nil, p.vectorDB, p.logger)
 		if p.embedResolver != nil {
 			worker.WithEmbedResolver(p.embedResolver)
 		}
@@ -183,8 +180,7 @@ func (p *Pipeline) Start(ctx context.Context) error {
 		zap.Int("embed_workers", p.cfg.EmbedWorkers),
 		zap.Int("enrich_workers", p.cfg.EnrichWorkers),
 		zap.Bool("embed_resolver_set", p.embedResolver != nil),
-		zap.Bool("llm_resolver_set", p.llmResolver != nil),
-		zap.Bool("global_embed_set", p.embedSvc != nil))
+		zap.Bool("llm_resolver_set", p.llmResolver != nil))
 
 	return nil
 }

@@ -187,7 +187,6 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 	}
 }
 
-
 // registerMCP wires /mcp/* via the handler's RegisterRoutes. Write
 // routes require JWT + tenant context (same pattern as agents/skills).
 func registerMCP(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {

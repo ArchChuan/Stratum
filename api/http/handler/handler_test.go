@@ -33,15 +33,6 @@ func TestNewAgentHandler(t *testing.T) {
 	}
 }
 
-func TestNewMemoryHandler(t *testing.T) {
-	logger := zap.NewNop()
-	handler := NewMemoryHandler(nil, logger)
-
-	if handler == nil {
-		t.Error("expected MemoryHandler to be non-nil")
-	}
-}
-
 func TestExecuteAgentRequest_HasConversationIDField(t *testing.T) {
 	req := ExecuteAgentRequest{
 		Query:          "hello",

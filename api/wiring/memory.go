@@ -63,8 +63,6 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		}
 		c.shutdown = append(c.shutdown, func(_ context.Context) error { return nc.Drain() })
 
-		var embedSvc pipeline.EmbedClient
-
 		dimResolver := pipeline.DimResolver(func(ctx context.Context, tenantID string) int {
 			if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 				if ec := c.Knowledge.EmbedResolver(ctx, tenantID); ec != nil {
@@ -73,16 +71,11 @@ func (c *Container) buildMemory(ctx context.Context) error {
 					}
 				}
 			}
-			if embedSvc != nil {
-				if d := embedSvc.GetVectorDimension(); d > 0 {
-					return d
-				}
-			}
 			return 1536
 		})
 
 		vectorAdapter := pipeline.NewMilvusVectorAdapter(c.Storage.Milvus).WithDimResolver(dimResolver)
-		p := pipeline.New(pipelineCfg, db, nc, embedSvc, vectorAdapter, c.Logger)
+		p := pipeline.New(pipelineCfg, db, nc, vectorAdapter, c.Logger)
 		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 			p.SetEmbedResolver(c.Knowledge.EmbedResolver)
 		}
