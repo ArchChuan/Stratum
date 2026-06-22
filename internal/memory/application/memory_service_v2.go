@@ -81,10 +81,7 @@ func (s *MemoryService) ForgetMemory(ctx context.Context, req *ForgetMemoryReque
 }
 
 // BuildContext returns frecency-ranked facts + entity profiles for prompt injection.
-func (s *MemoryService) BuildContext(ctx context.Context, req *BuildContextRequest) (*BuildContextResponse, error) {
-	// TODO: implement in Task 6
-	return nil, nil
-}
+// Implementation in context_builder.go
 
 // --- DTOs ---
 
@@ -149,11 +146,12 @@ type ForgetMemoryRequest struct {
 
 // BuildContextRequest requests frecency-ranked context injection.
 type BuildContextRequest struct {
-	TenantID string
-	UserID   string
-	AgentID  string
-	Query    string
-	TopK     int
+	TenantID  string
+	UserID    string
+	AgentID   string
+	Query     string
+	TopK      int
+	ReadScope string // "user" or "agent"
 }
 
 // BuildContextResponse contains facts and entity profiles for prompt injection.

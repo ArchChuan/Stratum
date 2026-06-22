@@ -223,35 +223,6 @@ func TestNewMemoryService(t *testing.T) {
 	assert.Equal(t, embedClient, svc.embedClient)
 }
 
-func TestMemoryService_ExtractFacts_NotImplemented(t *testing.T) {
-	svc := NewMemoryService(nil, nil, nil, nil, nil, nil, nil)
-	req := &ExtractFactsRequest{
-		TenantID: "tenant1",
-		UserID:   "user1",
-		AgentID:  "agent1",
-		Messages: []MessageDTO{
-			{Role: "user", Content: "test message"},
-		},
-	}
-
-	err := svc.ExtractFacts(context.Background(), req)
-	assert.NoError(t, err) // TODO placeholder returns nil
-}
-
-func TestMemoryService_RecallMemory_NotImplemented(t *testing.T) {
-	svc := NewMemoryService(nil, nil, nil, nil, nil, nil, nil)
-	req := &RecallMemoryRequest{
-		TenantID: "tenant1",
-		UserID:   "user1",
-		Query:    "test query",
-		TopK:     10,
-	}
-
-	resp, err := svc.RecallMemory(context.Background(), req)
-	assert.NoError(t, err)
-	assert.Nil(t, resp) // TODO placeholder returns nil
-}
-
 func TestMemoryService_ForgetMemory_Success(t *testing.T) {
 	ctx := context.Background()
 	factRepo := new(MockFactRepo)
@@ -313,20 +284,6 @@ func TestMemoryService_ForgetMemory_ScopeMismatch(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrScopeMismatch)
 
 	factRepo.AssertExpectations(t)
-}
-
-func TestMemoryService_BuildContext_NotImplemented(t *testing.T) {
-	svc := NewMemoryService(nil, nil, nil, nil, nil, nil, nil)
-	req := &BuildContextRequest{
-		TenantID: "tenant1",
-		UserID:   "user1",
-		Query:    "test query",
-		TopK:     10,
-	}
-
-	resp, err := svc.BuildContext(context.Background(), req)
-	assert.NoError(t, err)
-	assert.Nil(t, resp) // TODO placeholder returns nil
 }
 
 func TestBufferMessageRequest_Fields(t *testing.T) {
