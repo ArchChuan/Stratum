@@ -20,6 +20,16 @@ export const SKILL_DEFAULT_TIMEOUT_SEC = 30;
 
 export const MEMORY_SEARCH_LIMIT = 20;
 
+// Memory v2
+export const MEMORY_SCOPE_OPTIONS = [
+  { value: 'off', label: '关闭' },
+  { value: 'user', label: '用户级' },
+  { value: 'agent', label: 'Agent 级' },
+];
+
+export const MEMORY_DIAGNOSTICS_REFRESH_INTERVAL_MS = 30000; // 30s
+export const MEMORY_TOP_ENTITIES_LIMIT = 10;
+
 interface ModelOption {
   value: string;
   label: string;
