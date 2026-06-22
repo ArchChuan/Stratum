@@ -106,3 +106,17 @@ const (
 	MemorySupersedeCandidateMin = 0.6 // min similarity to consider supersede
 	MemorySupersedeCandidateMax = 3   // max candidates to check per fact
 )
+
+// Memory Workers - background processing intervals and batch sizes
+const (
+	MemoryExtractionBatchSize = 10                  // facts per extraction queue poll
+	MemorySupersedeBatchSize  = 20                  // facts per supersede judgment batch
+	MemoryEmbedInterval       = 10 * time.Second    // embed worker poll interval
+	MemoryEmbedBatchSize      = 50                  // facts per embed batch
+	MemoryProfileInterval     = 5 * time.Minute     // profile rebuild poll interval
+	MemoryProfileBatchSize    = 10                  // entities per profile rebuild batch
+	MemoryGCInterval          = 24 * time.Hour      // garbage collection interval
+	MemoryGCBatchSize         = 100                 // facts per GC batch
+	MemoryDeletedRetention    = 30 * 24 * time.Hour // purge deleted after 30 days
+	MemorySupersededRetention = 90 * 24 * time.Hour // purge superseded after 90 days
+)
