@@ -10,4 +10,7 @@ const (
 
 	// OAuthStateCookieMaxAge is in seconds (http.SetCookie accepts int).
 	OAuthStateCookieMaxAge = 300
+
+	// DefaultTenantID is the system tenant for global and system admins.
+	DefaultTenantID = "tenant_default"
 )
