@@ -1,6 +1,8 @@
 import { RobotOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Collapse, Form, Input, InputNumber, Select, Tag, Typography } from 'antd';
 
+import { AgentMemoryConfig } from './AgentMemoryConfig';
+
 import { CHAT_MODEL_OPTIONS } from '@/constants';
 import type { Workspace } from '@/modules/knowledge';
 import type { MCPServer } from '@/modules/mcp';
@@ -177,5 +179,7 @@ export const AgentFormSections = ({
         ]}
       />
     </div>
+
+    <AgentMemoryConfig />
   </>
 );

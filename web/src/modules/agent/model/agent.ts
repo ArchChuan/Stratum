@@ -13,6 +13,9 @@ export const agentSchema = z
     allowedSkills: z.array(z.string()).nullish().transform((v) => v ?? []),
     mcpServerIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     knowledgeWorkspaceIds: z.array(z.string()).nullish().transform((v) => v ?? []),
+    memory_enabled: z.boolean().optional().default(false),
+    memory_write_scope: z.string().optional().default('off'),
+    memory_read_scope: z.string().optional().default('off'),
     created_at: z.string().optional(),
     updated_at: z.string().optional(),
   })
@@ -30,6 +33,9 @@ export interface AgentFormValues {
   allowedSkills?: string[];
   mcpServerIds?: string[];
   knowledgeWorkspaceIds?: string[];
+  memory_enabled?: boolean;
+  memory_write_scope?: string;
+  memory_read_scope?: string;
 }
 
 export const conversationSchema = z
