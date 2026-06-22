@@ -10,6 +10,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var errUnauthorized = errors.New("unauthorized")
+
 // ChatHandler handles conversation and message endpoints.
 type ChatHandler struct {
 	store  agent.ChatStore
