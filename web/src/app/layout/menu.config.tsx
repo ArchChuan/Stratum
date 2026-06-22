@@ -95,12 +95,33 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
     });
   }
 
-  if (user?.global_role === 'global_admin') {
-    base.push({
-      key: '/admin/tenants',
-      icon: <GlobalOutlined />,
-      label: <Link to="/admin/tenants">全局租户</Link>,
-    });
+  if (user?.global_role === 'global_admin' || user?.system_role === 'system_admin') {
+    const adminItems: MenuItem[] = [];
+
+    if (user?.system_role === 'system_admin' || user?.global_role === 'global_admin') {
+      adminItems.push({
+        key: '/admin/memory',
+        icon: <DatabaseOutlined />,
+        label: <Link to="/admin/memory">内存诊断</Link>,
+      });
+    }
+
+    if (user?.global_role === 'global_admin') {
+      adminItems.push({
+        key: '/admin/tenants',
+        icon: <GlobalOutlined />,
+        label: <Link to="/admin/tenants">全局租户</Link>,
+      });
+    }
+
+    if (adminItems.length > 0) {
+      base.push({
+        key: 'admin-group',
+        icon: <SettingOutlined />,
+        label: '系统管理',
+        children: adminItems,
+      });
+    }
   }
 
   return base;
@@ -112,5 +133,6 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (['/knowledge', '/memory'].some((p) => pathname.startsWith(p))) return ['knowledge-group'];
   if (pathname.startsWith('/mcp')) return ['mcp-group'];
   if (pathname.startsWith('/tenant')) return ['tenant-group'];
+  if (pathname.startsWith('/admin')) return ['admin-group'];
   return [];
 };
