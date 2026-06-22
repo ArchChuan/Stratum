@@ -75,6 +75,7 @@ const (
 const (
 	MemoryRecallTopK     = 10   // max facts per recall
 	MemoryFrecencyLambda = 0.05 // decay rate for frecency scoring
+	MemoryRRFConstant    = 60   // RRF k parameter for hybrid retrieval fusion
 )
 
 // Memory GC - controls soft-delete cleanup

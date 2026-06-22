@@ -49,10 +49,7 @@ func (s *MemoryService) BufferMessage(ctx context.Context, req *BufferMessageReq
 // Implementation in extraction.go
 
 // RecallMemory performs hybrid retrieval (vector + trigram + RRF), returns top-K facts.
-func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryRequest) (*RecallMemoryResponse, error) {
-	// TODO: implement in Task 4
-	return nil, nil
-}
+// Implementation in retrieval.go
 
 // ForgetMemory marks a fact as soft-deleted, schedules async Milvus cleanup.
 func (s *MemoryService) ForgetMemory(ctx context.Context, req *ForgetMemoryRequest) error {
