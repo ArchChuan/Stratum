@@ -52,13 +52,9 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       ],
     },
     {
-      key: 'knowledge-group',
+      key: '/knowledge',
       icon: <BookOutlined />,
-      label: '知识与记忆',
-      children: [
-        { key: '/knowledge', icon: <BookOutlined />, label: <Link to="/knowledge">知识库</Link> },
-        { key: '/memory', icon: <DatabaseOutlined />, label: <Link to="/memory">记忆管理</Link> },
-      ],
+      label: <Link to="/knowledge">知识库</Link>,
     },
     {
       key: 'mcp-group',
@@ -130,7 +126,6 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
 export const resolveOpenKeys = (pathname: string): string[] => {
   if (['/agents', '/chat', '/history'].some((p) => pathname.startsWith(p))) return ['agent-group'];
   if (pathname.startsWith('/skills')) return ['skill-group'];
-  if (['/knowledge', '/memory'].some((p) => pathname.startsWith(p))) return ['knowledge-group'];
   if (pathname.startsWith('/mcp')) return ['mcp-group'];
   if (pathname.startsWith('/tenant')) return ['tenant-group'];
   if (pathname.startsWith('/admin')) return ['admin-group'];
