@@ -19,6 +19,7 @@ const (
 	ContextKeyTenantID   = "auth.tenant_id"
 	ContextKeyRole       = "auth.role"
 	ContextKeyGlobalRole = "auth.global_role"
+	ContextKeySystemRole = "auth.system_role"
 	ContextKeyJTI        = "auth.jti"
 )
 
@@ -41,6 +42,7 @@ func JWTMiddleware(svc *application.JWTService) gin.HandlerFunc {
 		c.Set(ContextKeyTenantID, claims.TenantID)
 		c.Set(ContextKeyRole, claims.Role)
 		c.Set(ContextKeyGlobalRole, claims.GlobalRole)
+		c.Set(ContextKeySystemRole, string(claims.SystemRole))
 		c.Set(ContextKeyJTI, claims.JTI)
 		c.Next()
 	}

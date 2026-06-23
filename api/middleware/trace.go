@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -15,7 +16,7 @@ import (
 )
 
 const traceIDHeader = "X-Request-ID"
-const traceIDKey = "request_id"
+const traceIDKey = "trace_id"
 const maxBodyLogSize = 2048
 
 // bodyWriter wraps gin.ResponseWriter to capture the response body for logging.
@@ -89,10 +90,14 @@ func TraceMiddleware(logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		requestID := c.GetHeader(traceIDHeader)
 		if requestID == "" {
-			requestID = uuid.New().String()
+			requestID = uuid.Must(uuid.NewV7()).String()
 		}
 		c.Set(traceIDKey, requestID)
 		c.Header(traceIDHeader, requestID)
+		// Inject trace ID into the standard context so business-layer SpanFromContext
+		// picks up the same ID without generating a new one.
+		ctx := observability.WithTraceID(c.Request.Context(), requestID)
+		c.Request = c.Request.WithContext(ctx)
 
 		sensitive := isSensitivePath(c.Request.URL.Path)
 
@@ -126,7 +131,7 @@ func TraceMiddleware(logger *zap.Logger) gin.HandlerFunc {
 		}
 
 		fields := []zap.Field{
-			zap.String("request_id", requestID),
+			zap.String("trace_id", requestID),
 			zap.String("method", c.Request.Method),
 			zap.String("path", c.Request.URL.Path),
 			zap.String("query", c.Request.URL.RawQuery),

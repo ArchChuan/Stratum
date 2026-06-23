@@ -3,6 +3,8 @@ package milvus
 type DocumentChunk struct {
 	ID             string
 	UserID         string
+	AgentID        string
+	Scope          string
 	Content        string
 	SourceDocument string
 	ChunkIndex     int64

@@ -1,0 +1,1 @@
+-- DDL belongs in pkg/migration/sql/tenant_schema.sql (agents is a tenant-only table)

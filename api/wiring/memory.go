@@ -4,10 +4,10 @@ import (
 	"context"
 
 	"github.com/nats-io/nats.go"
+	goredis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	memory "github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/persistence"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
@@ -21,6 +21,7 @@ import (
 // reachable; downstream consumers must nil-check before use.
 type Memory struct {
 	Manager  *memory.MemoryManager
+	Service  *memory.MemoryService
 	Injector port.MemoryInjector
 	Pipeline *pipeline.Pipeline
 	RecallFn port.RecallMemoryFn
@@ -33,6 +34,18 @@ func (c *Container) buildMemory(ctx context.Context) error {
 	}
 
 	db := c.dbOrNil()
+	if db != nil {
+		factRepo := persistence.NewFactRepo(db)
+		entityRepo := persistence.NewEntityRepo(db)
+		queue := persistence.NewExtractionQueue(db)
+
+		var redisClient *goredis.Client
+		if c.Storage != nil && c.Storage.Redis != nil {
+			redisClient = c.Storage.Redis.Client()
+		}
+
+		mem.Service = memory.NewMemoryService(factRepo, entityRepo, queue, nil, nil, nil, redisClient)
+	}
 	if db != nil && c.Storage != nil && c.Storage.Milvus != nil {
 		inj := pipeline.NewMemoryInjector(db, c.Logger, nil, c.Storage.Milvus)
 		var embedResolver pipeline.EmbedServiceResolver
@@ -43,8 +56,8 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		mem.Injector = injectorAdapter{inj: inj}
 
 		recallHandler := pipeline.NewRecallHandler(db, c.Logger, nil, embedResolver, c.Storage.Milvus)
-		mem.RecallFn = func(ctx context.Context, tenantID, userID, agentID string, input map[string]any) (string, error) {
-			return recallHandler.Handle(ctx, tenantID, userID, agentID, input)
+		mem.RecallFn = func(ctx context.Context, tenantID, userID, agentID, scope string, input map[string]any) (string, error) {
+			return recallHandler.Handle(ctx, tenantID, userID, agentID, scope, input)
 		}
 	}
 
@@ -64,11 +77,6 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		}
 		c.shutdown = append(c.shutdown, func(_ context.Context) error { return nc.Drain() })
 
-		var embedSvc pipeline.EmbedClient
-		if c.LLMGateway.Gateway.HasEmbeddingClient() {
-			embedSvc = embedding.NewEmbeddingService(c.LLMGateway.Gateway, c.Logger)
-		}
-
 		dimResolver := pipeline.DimResolver(func(ctx context.Context, tenantID string) int {
 			if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 				if ec := c.Knowledge.EmbedResolver(ctx, tenantID); ec != nil {
@@ -77,16 +85,11 @@ func (c *Container) buildMemory(ctx context.Context) error {
 					}
 				}
 			}
-			if embedSvc != nil {
-				if d := embedSvc.GetVectorDimension(); d > 0 {
-					return d
-				}
-			}
 			return 1536
 		})
 
 		vectorAdapter := pipeline.NewMilvusVectorAdapter(c.Storage.Milvus).WithDimResolver(dimResolver)
-		p := pipeline.New(pipelineCfg, db, nc, embedSvc, vectorAdapter, c.LLMGateway.Gateway, c.Logger)
+		p := pipeline.New(pipelineCfg, db, nc, vectorAdapter, c.Logger)
 		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 			p.SetEmbedResolver(c.Knowledge.EmbedResolver)
 		}
@@ -122,4 +125,37 @@ func (a injectorAdapter) BuildContext(ctx context.Context, ic port.InjectionCont
 		ConversationID: ic.ConversationID,
 		Query:          ic.Query,
 	})
+}
+
+// BuildMemoryWorkers constructs all memory background workers.
+// Returns a slice of workers that implement Start(ctx) and Stop().
+//
+// TODO(phase-5): Implement full worker construction once Memory struct
+// exposes FactRepo, EntityRepo, ExtractionQueue, Embedder, VectorStore, etc.
+// For now, returns empty slice as infrastructure dependencies need to be
+// wired through Container.Memory first.
+func BuildMemoryWorkers(c *Container) []interface {
+	Start(context.Context)
+	Stop()
+} {
+	if c.Memory == nil {
+		return nil
+	}
+
+	logger := c.Logger
+	_ = logger // Suppress unused warning
+
+	var result []interface {
+		Start(context.Context)
+		Stop()
+	}
+
+	// Workers need dependencies not yet exposed on Memory struct:
+	// - ExtractionWorker: needs ExtractionQueue, MemoryService
+	// - SupersedeWorker: needs FactRepo, LLMSuperseder
+	// - EmbedWorker: needs FactRepo, Embedder, VectorStore
+	// - ProfileWorker: needs EntityRepo, FactRepo, EntityProfiler
+	// - GCWorker: needs FactRepo
+
+	return result
 }

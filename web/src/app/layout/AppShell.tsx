@@ -99,7 +99,6 @@ export const AppShell = ({ children }: AppShellProps) => {
         onCollapse={setCollapsed}
         width={220}
         style={{
-          overflow: 'auto',
           height: '100vh',
           position: 'fixed',
           left: 0,
@@ -108,48 +107,53 @@ export const AppShell = ({ children }: AppShellProps) => {
           background: '#141414',
         }}
       >
-        <div
-          style={{
-            padding: collapsed ? '18px 8px' : '18px 20px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            borderBottom: '1px solid rgba(255,255,255,0.06)',
-            marginBottom: 4,
-          }}
-        >
+        <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div
             style={{
-              width: 28,
-              height: 28,
-              borderRadius: 8,
-              background: 'linear-gradient(135deg, #1677ff 0%, #722ed1 100%)',
+              padding: collapsed ? '18px 8px' : '18px 20px',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
+              gap: 10,
+              borderBottom: '1px solid rgba(255,255,255,0.06)',
+              marginBottom: 4,
               flexShrink: 0,
             }}
           >
-            <RobotOutlined style={{ color: '#fff', fontSize: 14 }} />
+            <div
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 8,
+                background: 'linear-gradient(135deg, #1677ff 0%, #722ed1 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <RobotOutlined style={{ color: '#fff', fontSize: 14 }} />
+            </div>
+            {!collapsed && (
+              <span style={{ color: '#fff', fontWeight: 600, fontSize: 15, whiteSpace: 'nowrap' }}>
+                Stratum AI
+              </span>
+            )}
           </div>
-          {!collapsed && (
-            <span style={{ color: '#fff', fontWeight: 600, fontSize: 15, whiteSpace: 'nowrap' }}>
-              Stratum AI
-            </span>
-          )}
-        </div>
 
-        <Menu
-          theme="dark"
-          selectedKeys={[location.pathname]}
-          defaultOpenKeys={openKeys}
-          mode="inline"
-          items={menuItems}
-          style={{ background: '#141414', borderRight: 0 }}
-          onClick={({ key }) => {
-            if (!key.endsWith('-group')) navigate(key);
-          }}
-        />
+          <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+            <Menu
+              theme="dark"
+              selectedKeys={[location.pathname]}
+              defaultOpenKeys={openKeys}
+              mode="inline"
+              items={menuItems}
+              style={{ background: '#141414', borderRight: 0 }}
+              onClick={({ key }) => {
+                if (!key.endsWith('-group')) navigate(key);
+              }}
+            />
+          </div>
+        </div>
       </Sider>
 
       <Layout style={{ marginLeft: collapsed ? 80 : 220, transition: 'margin-left 0.2s' }}>

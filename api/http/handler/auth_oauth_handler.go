@@ -8,6 +8,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/iam/application"
+	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -99,7 +100,15 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 			targetTenantID = tenants[0].TenantID
 			tenantRole = tenants[0].Role
 		}
-		rawRT, accessJWT, err := h.issueTokenPair(ctx, userID, targetTenantID, tenantRole, globalRole, ghUser.AvatarURL, ghUser.Login)
+
+		// Derive SystemRole from tenant memberships
+		memberships := make([]domain.TenantMembership, len(tenants))
+		for i, t := range tenants {
+			memberships[i] = domain.TenantMembership{TenantID: t.TenantID, Role: t.Role}
+		}
+		systemRole := domain.DeriveSystemRole(memberships)
+
+		rawRT, accessJWT, err := h.issueTokenPair(ctx, userID, targetTenantID, tenantRole, globalRole, systemRole, ghUser.AvatarURL, ghUser.Login)
 		if err != nil {
 			h.deps.Logger.Error("issue token pair for returning user", zap.Error(err))
 			_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("token issuance failed")))
@@ -122,7 +131,13 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 		if h.deps.GlobalAdmin != "" && strings.EqualFold(ghUser.Login, h.deps.GlobalAdmin) {
 			role = "owner"
 		}
-		rawRT, accessJWT, tErr := h.issueTokenPair(ctx, userID, targetTenantID, role, globalRole, ghUser.AvatarURL, ghUser.Login)
+
+		// Derive SystemRole for default tenant
+		systemRole := domain.DeriveSystemRole([]domain.TenantMembership{
+			{TenantID: targetTenantID, Role: role},
+		})
+
+		rawRT, accessJWT, tErr := h.issueTokenPair(ctx, userID, targetTenantID, role, globalRole, systemRole, ghUser.AvatarURL, ghUser.Login)
 		if tErr != nil {
 			h.deps.Logger.Error("issue token pair for new user", zap.Error(tErr))
 			_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("token issuance failed")))

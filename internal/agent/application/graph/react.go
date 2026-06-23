@@ -35,6 +35,9 @@ type ReActState struct {
 	OnToken        func(string) // if non-nil, stream tokens from the final LLM response
 	RAGSearchFn    func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
 	RecallMemoryFn func(ctx context.Context, input map[string]any) (string, error)
+	// MaxLLMSteps caps LLM-node invocations; on the last allowed call tools are
+	// stripped and the model is asked to produce a final answer from collected context.
+	MaxLLMSteps int
 }
 
 // BuildReActGraph constructs and compiles the ReAct agent graph.
@@ -60,6 +63,17 @@ func BuildReActGraph(capGW port.CapabilityGateway, logger *zap.Logger) (*Compile
 func makeLLMNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReActState] {
 	return func(ctx context.Context, s ReActState) (ReActState, error) {
 		start := time.Now()
+
+		tools := s.AvailableTools
+		messages := s.Messages
+		if s.MaxLLMSteps > 0 && s.Steps >= s.MaxLLMSteps-1 {
+			tools = nil
+			messages = append(messages, port.LLMMessage{
+				Role:    "user",
+				Content: "You have reached the maximum reasoning steps. Based on your analysis and tool results so far, provide your final answer now. Do not call any tools.",
+			})
+		}
+
 		// Always stream: tool-decision turns typically produce empty content so no tokens
 		// reach the client; final-answer turns stream the output to the frontend as required.
 		resp, err := RetryFn(ctx, DefaultRetry, func() (port.CapabilityResponse, error) {
@@ -72,8 +86,8 @@ func makeLLMNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReAc
 				TokenStream: s.OnToken,
 				LLM: &port.LLMCapRequest{
 					Model:    s.Model,
-					Messages: s.Messages,
-					Tools:    s.AvailableTools,
+					Messages: messages,
+					Tools:    tools,
 				},
 			})
 		})

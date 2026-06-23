@@ -10,6 +10,7 @@ import (
 
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	pgcontext "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/byteBuilderX/stratum/pkg/vector"
 	"go.uber.org/zap"
@@ -70,10 +71,12 @@ func NewRAGSearchFn(rs *RAGService, tenantID string) func(
 }
 
 type RAGService struct {
-	embeddingSvc knowledgeport.Embedder
-	vectorStore  *vector.VectorStore
-	graphRAG     knowledgeport.GraphStore
-	logger       *zap.Logger
+	embeddingSvc  knowledgeport.Embedder
+	embedResolver EmbedResolver
+	wsRepo        knowledgeport.WorkspaceRepo
+	vectorStore   *vector.VectorStore
+	graphRAG      knowledgeport.GraphStore
+	logger        *zap.Logger
 }
 
 func NewRAGService(
@@ -90,12 +93,26 @@ func NewRAGService(
 	}
 }
 
+func (rs *RAGService) SetEmbedResolver(r EmbedResolver)                  { rs.embedResolver = r }
+func (rs *RAGService) SetWorkspaceRepo(repo knowledgeport.WorkspaceRepo) { rs.wsRepo = repo }
+
+func (rs *RAGService) resolveEmbedder(ctx context.Context, req RAGQueryRequest) knowledgeport.Embedder {
+	if rs.embedResolver != nil && req.TenantID != "" {
+		if c := rs.embedResolver(ctx, req.TenantID, req.EmbeddingModel); c != nil {
+			return c
+		}
+	}
+	return rs.embeddingSvc
+}
+
 type RAGQueryRequest struct {
-	Question  string
-	Workspace string
-	TenantID  string
-	Mode      string // "vector", "keyword", "graph", "hybrid"
-	TopK      int
+	Question       string
+	Workspace      string
+	WorkspaceID    string // stable ID for collection naming; resolved from Workspace if empty
+	TenantID       string
+	Mode           string // "vector", "keyword", "graph", "hybrid"
+	TopK           int
+	EmbeddingModel string
 }
 
 type RAGQueryResult struct {
@@ -139,14 +156,25 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		req.TopK = 5
 	}
 
-	collectionName := fmt.Sprintf("%s_kb", req.Workspace)
-	if col, err := tenantdb.WorkspaceCollection(ctx, req.Workspace); err == nil {
+	wsID := req.WorkspaceID
+	if wsID == "" {
+		wsID = req.Workspace
+	}
+	if rs.wsRepo != nil {
+		if tc, ok := pgcontext.FromContext(ctx); ok && tc.TenantID != "" {
+			if ws, err := rs.wsRepo.GetByName(ctx, tc.TenantID, wsID); err == nil {
+				wsID = ws.ID
+			}
+		}
+	}
+	collectionName := fmt.Sprintf("%s_kb", wsID)
+	if col, err := tenantdb.WorkspaceCollection(ctx, wsID); err == nil {
 		collectionName = col
 	}
 
 	switch req.Mode {
 	case "vector":
-		vectorResults, err := rs.queryVector(ctx, req.Question, collectionName, req.TopK)
+		vectorResults, err := rs.queryVector(ctx, req.Question, collectionName, req.TopK, rs.resolveEmbedder(ctx, req))
 		if err != nil {
 			rs.logger.Error("vector query failed", zap.String("trace_id", sc.TraceID), zap.Error(err))
 			return nil, fmt.Errorf("vector query failed: %w", err)
@@ -189,11 +217,12 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 
 	case "hybrid":
 		// Hybrid = Vector + Keyword (RRF fusion)
-		if rs.embeddingSvc == nil {
+		embedder := rs.resolveEmbedder(ctx, req)
+		if embedder == nil {
 			return nil, fmt.Errorf("embedding service not configured: set an embedding model in tenant settings")
 		}
 
-		queryVector, err := rs.embeddingSvc.EmbedVector(ctx, req.Question)
+		queryVector, err := embedder.EmbedVector(ctx, req.Question)
 		if err != nil {
 			rs.logger.Error("failed to embed query", zap.String("trace_id", sc.TraceID), zap.Error(err))
 			return nil, fmt.Errorf("failed to embed query: %w", err)
@@ -227,20 +256,24 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	return result, nil
 }
 
-func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int) ([]vector.SearchResult, error) {
+func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int, embedder knowledgeport.Embedder) ([]vector.SearchResult, error) {
 	rs.logger.Debug("querying vector store")
 
-	if rs.embeddingSvc == nil {
+	if embedder == nil {
 		return nil, fmt.Errorf("embedding service not configured: set an embedding model in tenant settings")
 	}
 
-	queryVector, err := rs.embeddingSvc.EmbedVector(ctx, question)
+	queryVector, err := embedder.EmbedVector(ctx, question)
 	if err != nil {
 		return nil, fmt.Errorf("failed to embed query: %w", err)
 	}
 
 	results, err := rs.vectorStore.Search(ctx, collection, queryVector, topK)
 	if err != nil {
+		if strings.Contains(err.Error(), "collection not found") {
+			rs.logger.Warn("vector collection not found, skipping", zap.String("collection", collection))
+			return nil, nil
+		}
 		return nil, err
 	}
 
@@ -288,12 +321,20 @@ func (rs *RAGService) queryKeyword(ctx context.Context, question string, collect
 }
 
 func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, question string, workspace string, topK int) ([]string, error) {
-	collectionName := fmt.Sprintf("%s_kb", workspace)
-	if col, err := tenantdb.WorkspaceCollection(ctx, workspace); err == nil {
+	wsID := workspace
+	if rs.wsRepo != nil {
+		if tc, ok := pgcontext.FromContext(ctx); ok && tc.TenantID != "" {
+			if ws, err := rs.wsRepo.GetByName(ctx, tc.TenantID, workspace); err == nil {
+				wsID = ws.ID
+			}
+		}
+	}
+	collectionName := fmt.Sprintf("%s_kb", wsID)
+	if col, err := tenantdb.WorkspaceCollection(ctx, wsID); err == nil {
 		collectionName = col
 	}
 
-	vectorResults, err := rs.queryVector(ctx, question, collectionName, topK)
+	vectorResults, err := rs.queryVector(ctx, question, collectionName, topK, rs.embeddingSvc)
 	if err != nil {
 		return nil, err
 	}

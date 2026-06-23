@@ -67,6 +67,8 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 		AllowedSkills:         req.AllowedSkills,
 		MCPServerIDs:          req.MCPServerIDs,
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
+		MemoryEnabled:         req.MemoryEnabled,
+		MemoryScope:           req.MemoryScope,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -96,6 +98,8 @@ func (h *AgentHandler) UpdateAgent(c *gin.Context) {
 		AllowedSkills:         req.AllowedSkills,
 		MCPServerIDs:          req.MCPServerIDs,
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
+		MemoryEnabled:         req.MemoryEnabled,
+		MemoryScope:           req.MemoryScope,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -105,11 +109,12 @@ func (h *AgentHandler) UpdateAgent(c *gin.Context) {
 }
 
 func (h *AgentHandler) DeleteAgent(c *gin.Context) {
-	if _, ok := tenantIDFromCtx(c); !ok {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
 		respondMissingTenant(c)
 		return
 	}
-	if err := h.svc.Delete(c.Request.Context(), c.Param("id")); err != nil {
+	if err := h.svc.Delete(c.Request.Context(), tenantID, c.Param("id")); err != nil {
 		_ = c.Error(err)
 		return
 	}

@@ -26,13 +26,11 @@ type LLMGateway struct {
 
 func (c *Container) buildLLMGateway(_ context.Context) error {
 	metrics := observability.NewPrometheusMetrics(c.Logger)
-	gw := llmgateway.NewGateway().
-		WithLogger(c.Logger).
-		WithMetrics(metrics)
+	gw := llmgateway.NewGateway().WithLogger(c.Logger).WithMetrics(metrics)
 	c.LLMGateway = &LLMGateway{
 		Gateway:      gw,
 		Metrics:      metrics,
-		ModelService: llmapp.NewModelService(gw),
+		ModelService: llmapp.NewModelService(llmgateway.StaticModelCatalog{}),
 	}
 	return nil
 }

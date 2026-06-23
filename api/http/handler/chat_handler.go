@@ -10,6 +10,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var errUnauthorized = errors.New("unauthorized")
+
 // ChatHandler handles conversation and message endpoints.
 type ChatHandler struct {
 	store  agent.ChatStore
@@ -175,8 +177,8 @@ func (h *ChatHandler) AddMessage(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("role 和 content 必填")))
 		return
 	}
-	if req.Role != "user" && req.Role != "agent" {
-		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("role 必须为 user 或 agent")))
+	if req.Role != "user" && req.Role != "assistant" {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("role 必须为 user 或 assistant")))
 		return
 	}
 

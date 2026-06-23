@@ -6,7 +6,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
@@ -23,14 +22,11 @@ import (
 type Skill struct {
 	CodeExecutor *code.CodeExecutor
 	Gateway      *skillgateway.DefaultGateway
-	LLMAdapter   *capgateway.LLMAdapter
 	SkillAdapter *capgateway.SkillAdapter
-	CapGateway   port.CapabilityGateway
 	Service      *skillapp.SkillService
 }
 
 // wiringSkillFactory implements skilldomainport.SkillFactory in the composition root.
-// This is the ONLY place where infrastructure/executors are wired together.
 type wiringSkillFactory struct {
 	executor *code.CodeExecutor
 	analyzer skilldomainport.CodeAnalyzer
@@ -49,6 +45,7 @@ func (f *wiringSkillFactory) Build(id string, in skilldomainport.SkillInput) (sk
 		}
 		return code.NewCodeSkillWithExecutor(id, in.Name, in.Description, in.Code, in.Language, f.executor), nil
 	case "llm":
+		// completer is nil; LLMSkill.Execute resolves it from ctx at call time.
 		return executors.NewLLMSkill(id, in.Name, in.Description, in.SystemPrompt, in.Model, in.Temperature, in.MaxTokens, nil, f.logger), nil
 	case "http":
 		return executors.NewHTTPSkill(id, in.Name, in.Description, in.URL, in.Method, in.Headers, in.BodyTemplate, in.TimeoutSec)
@@ -66,27 +63,24 @@ func (c *Container) buildSkill(_ context.Context) error {
 
 	db := c.dbOrNil()
 	if db != nil {
-		if err := gw.RegisterProvider(providers.NewDBSkillAdapter(db, c.LLMGateway.Gateway, c.Logger, codeExec)); err != nil {
+		// completer is nil; DBSkillAdapter resolves it from ctx via InjectCompleter.
+		if err := gw.RegisterProvider(providers.NewDBSkillAdapter(db, c.Logger, codeExec)); err != nil {
 			c.Logger.Warn("failed to register DB skill provider", zap.Error(err))
 		}
 	}
 
-	llmAdapter := capgateway.NewLLMAdapter(c.LLMGateway.Gateway, c.Logger)
 	skillAdapter := capgateway.NewSkillAdapter(gw, c.Logger)
-	capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, skillAdapter, c.Logger)
 
 	var svc *skillapp.SkillService
 	if db != nil {
 		repo := skillpersist.NewPgSkillRepo(db)
-		svc = skillapp.NewSkillService(repo, c.LLMGateway.Gateway, factory, c.Logger)
+		svc = skillapp.NewSkillService(repo, factory, c.Logger)
 	}
 
 	c.Skill = &Skill{
 		CodeExecutor: codeExec,
 		Gateway:      gw,
-		LLMAdapter:   llmAdapter,
 		SkillAdapter: skillAdapter,
-		CapGateway:   capGW,
 		Service:      svc,
 	}
 	return nil

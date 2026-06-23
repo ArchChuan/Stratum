@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/executors"
 	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/executors/code"
@@ -16,14 +15,13 @@ import (
 )
 
 type DBSkillAdapter struct {
-	pool      *pgxpool.Pool
-	completer llmgateway.LLMCompleter
-	logger    *zap.Logger
-	executor  *code.CodeExecutor
+	pool     *pgxpool.Pool
+	logger   *zap.Logger
+	executor *code.CodeExecutor
 }
 
-func NewDBSkillAdapter(pool *pgxpool.Pool, completer llmgateway.LLMCompleter, logger *zap.Logger, executor *code.CodeExecutor) *DBSkillAdapter {
-	return &DBSkillAdapter{pool: pool, completer: completer, logger: logger, executor: executor}
+func NewDBSkillAdapter(pool *pgxpool.Pool, logger *zap.Logger, executor *code.CodeExecutor) *DBSkillAdapter {
+	return &DBSkillAdapter{pool: pool, logger: logger, executor: executor}
 }
 
 // SkillIDs returns nil — no precomputed index; Resolve falls through to Has().
@@ -47,7 +45,7 @@ func (a *DBSkillAdapter) Execute(ctx context.Context, skillID string, input any)
 		var cfg map[string]any
 		_ = json.Unmarshal(cfgJSON, &cfg)
 		var err error
-		s, err = buildSkill(id, name, desc, skillType, cfg, a.completer, a.logger, a.executor)
+		s, err = buildSkill(id, name, desc, skillType, cfg, a.logger, a.executor)
 		return err
 	}); err != nil {
 		return nil, err
@@ -59,7 +57,7 @@ func (a *DBSkillAdapter) Execute(ctx context.Context, skillID string, input any)
 	return executor.Execute(ctx, input)
 }
 
-func buildSkill(id, name, desc, skillType string, cfg map[string]any, c llmgateway.LLMCompleter, logger *zap.Logger, executor *code.CodeExecutor) (domain.Skill, error) {
+func buildSkill(id, name, desc, skillType string, cfg map[string]any, logger *zap.Logger, executor *code.CodeExecutor) (domain.Skill, error) {
 	switch skillType {
 	case "http":
 		headers := map[string]string{}
@@ -78,7 +76,7 @@ func buildSkill(id, name, desc, skillType string, cfg map[string]any, c llmgatew
 		return executors.NewLLMSkill(id, name, desc,
 			stringVal(cfg, "system_prompt"), stringVal(cfg, "model"),
 			float32Val(cfg, "temperature"), intVal(cfg, "max_tokens"),
-			c, logger,
+			nil, logger,
 		), nil
 	case "code":
 		return code.NewCodeSkillWithExecutor(id, name, desc,

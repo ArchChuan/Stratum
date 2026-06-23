@@ -59,7 +59,7 @@ func (e *atomicEngine) execute(ctx context.Context, req SkillRequest) (SkillResp
 	// 1. trace_id 注入/传播
 	traceID := req.TraceID
 	if traceID == "" {
-		traceID = uuid.New().String()
+		traceID = uuid.Must(uuid.NewV7()).String()
 	}
 	ctx = context.WithValue(ctx, traceIDKey, traceID)
 

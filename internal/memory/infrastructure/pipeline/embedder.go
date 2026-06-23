@@ -57,6 +57,7 @@ func (w *EmbedderWorker) WithEmbedResolver(r EmbedServiceResolver) *EmbedderWork
 
 // Start begins consuming messages. Blocks until ctx is cancelled or Stop is called.
 func (w *EmbedderWorker) Start(ctx context.Context) {
+	backoff := constants.MemoryFetchBackoffBase
 	for {
 		select {
 		case <-ctx.Done():
@@ -71,11 +72,24 @@ func (w *EmbedderWorker) Start(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
+			w.logger.Warn("memory.embed.fetch_failed",
+				zap.Error(err),
+				zap.Duration("backoff", backoff))
+			if !sleepCtx(ctx, w.stopCh, backoff) {
+				return
+			}
+			if backoff < constants.MemoryFetchBackoffMax {
+				backoff *= 2
+				if backoff > constants.MemoryFetchBackoffMax {
+					backoff = constants.MemoryFetchBackoffMax
+				}
+			}
 			continue
 		}
+		backoff = constants.MemoryFetchBackoffBase
 
 		for msg := range msgs.Messages() {
-			w.processMessage(ctx, msg)
+			w.safeProcessMessage(ctx, msg)
 		}
 	}
 }
@@ -83,6 +97,22 @@ func (w *EmbedderWorker) Start(ctx context.Context) {
 // Stop signals the worker to exit.
 func (w *EmbedderWorker) Stop() {
 	w.stopOnce.Do(func() { close(w.stopCh) })
+}
+
+// safeProcessMessage isolates per-message panics so a single bad payload can't
+// take down the whole worker goroutine.
+func (w *EmbedderWorker) safeProcessMessage(ctx context.Context, msg jetstream.Msg) {
+	defer func() {
+		if r := recover(); r != nil {
+			w.logger.Error("memory.embed.panic",
+				zap.Any("panic", r),
+				zap.String("subject", msg.Subject()),
+				zap.Stack("stack"))
+			embedTotal.With(prometheus.Labels{"tenant_id": "unknown", "status": "panic"}).Inc()
+			_ = msg.Nak()
+		}
+	}()
+	w.processMessage(ctx, msg)
 }
 
 func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) {
@@ -132,9 +162,18 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		"conversation_id": ev.ConversationID,
 		"user_id":         ev.UserID,
 		"agent_id":        ev.AgentID,
+		"scope":           ev.Scope,
 		"role":            ev.Role,
 		"content":         ev.Content,
 		"created_at":      ev.CreatedAt.Format(time.RFC3339),
+	}
+	if w.vectorDB == nil {
+		w.logger.Warn("memory.embed.skip: vector store not configured",
+			zap.String("trace_id", traceID),
+			zap.String("message_id", ev.MessageID),
+			zap.String("tenant_id", ev.TenantID))
+		_ = msg.Ack()
+		return
 	}
 	if err := w.vectorDB.Upsert(ctx, ev.TenantID, ev.UserID, ev.MessageID, vector, metadata); err != nil {
 		w.logger.Error("memory.embed.milvus",

@@ -1,6 +1,8 @@
 import { RobotOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Collapse, Form, Input, InputNumber, Select, Tag, Typography } from 'antd';
 
+import { AgentMemoryConfig } from './AgentMemoryConfig';
+
 import { CHAT_MODEL_OPTIONS } from '@/constants';
 import type { Workspace } from '@/modules/knowledge';
 import type { MCPServer } from '@/modules/mcp';
@@ -141,7 +143,7 @@ export const AgentFormSections = ({
       <Collapse
         ghost
         size="small"
-        defaultActiveKey={[]}
+        defaultActiveKey={['advanced']}
         items={[
           {
             key: 'advanced',
@@ -155,8 +157,7 @@ export const AgentFormSections = ({
                 <Form.Item
                   label="最大迭代次数"
                   name="maxIterations"
-                  rules={[{ required: true }]}
-                  tooltip="每次 LLM 推理和工具调用各计 1 步。例如设为 25 则允许约 12 轮「思考→使用工具」循环"
+                  rules={[{ required: true, message: '请输入最大迭代次数' }, { type: 'number', min: 1, message: '最小值为 1' }]}
                   extra="推荐值：简单对话 10，多步工具调用 20-30，复杂任务 40-50"
                 >
                   <InputNumber min={1} max={50} style={{ width: '100%' }} />
@@ -164,8 +165,7 @@ export const AgentFormSections = ({
                 <Form.Item
                   label="最大上下文 Token"
                   name="maxContextTokens"
-                  rules={[{ required: true }]}
-                  tooltip="每次 LLM 调用时，发送消息的估算 Token 上限（CJK 字符按 1/3 估算）"
+                  rules={[{ required: true, message: '请输入最大上下文 Token' }, { type: 'number', min: 1000, message: '最小值为 1000' }]}
                   extra="推荐值：轻量对话 4000，标准 8000，长文档处理 32000-128000"
                   style={{ marginBottom: 0 }}
                 >
@@ -177,5 +177,7 @@ export const AgentFormSections = ({
         ]}
       />
     </div>
+
+    <AgentMemoryConfig />
   </>
 );

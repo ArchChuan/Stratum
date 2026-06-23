@@ -12,7 +12,7 @@ type PipelineBuilder struct {
 // NewPipelineBuilder 创建 builder；id 为空时自动生成
 func NewPipelineBuilder(id string) *PipelineBuilder {
 	if id == "" {
-		id = uuid.New().String()
+		id = uuid.Must(uuid.NewV7()).String()
 	}
 	return &PipelineBuilder{id: id}
 }

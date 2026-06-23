@@ -31,8 +31,8 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerSkills(r, c, requireActive)
 	registerAgents(r, c, requireActive)
 	registerKnowledge(r, c, requireActive)
-	registerMemory(r, c, requireActive)
 	registerMCP(r, c, requireActive)
+	registerMemory(r, c, requireActive)
 	return r
 }
 
@@ -188,27 +188,6 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 	}
 }
 
-// registerMemory wires /memory/* under JWT + tenant context.
-func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	memoryHandler := handler.NewMemoryHandler(c.Memory.Manager, c.Logger)
-
-	var mw []gin.HandlerFunc
-	if c.Platform.JWTService != nil {
-		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
-	}
-	mem := r.Group("/memory", mw...)
-	{
-		mem.POST("", memoryHandler.AddMemory)
-		mem.POST("/sessions", memoryHandler.CreateSession)
-		mem.GET("/:id", memoryHandler.GetMemory)
-		mem.POST("/search", memoryHandler.SearchMemory)
-		mem.DELETE("/:id", requireActive, memoryHandler.DeleteMemory)
-		mem.DELETE("/session/:session_id", requireActive, memoryHandler.DeleteSession)
-		mem.GET("/stats", memoryHandler.GetStats)
-		mem.GET("/summary/:session_id", memoryHandler.GetSummary)
-	}
-}
-
 // registerMCP wires /mcp/* via the handler's RegisterRoutes. Write
 // routes require JWT + tenant context (same pattern as agents/skills).
 func registerMCP(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
@@ -219,4 +198,20 @@ func registerMCP(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFu
 		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
 	}
 	mcpHandler.RegisterRoutes(r, mw, requireActive)
+}
+
+func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Memory == nil || c.Platform.JWTService == nil {
+		return
+	}
+
+	jwtMW := middleware.JWTMiddleware(c.Platform.JWTService)
+	injectTenant := middleware.InjectTenantContext()
+
+	// User-scoped endpoints: authenticated users managing their own memories.
+	if c.Memory.Service != nil {
+		userHandler := handler.NewUserMemoryHandler(c.Memory.Service)
+		userGroup := r.Group("/api/memory", jwtMW, injectTenant, requireActive)
+		userGroup.DELETE("/clear", userHandler.ClearMemories)
+	}
 }

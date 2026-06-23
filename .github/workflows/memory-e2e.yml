@@ -1,0 +1,103 @@
+name: Memory E2E Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'internal/memory/**'
+      - 'test/e2e/**'
+      - 'go.mod'
+      - 'go.sum'
+  push:
+    branches: [main]
+    paths:
+      - 'internal/memory/**'
+      - 'test/e2e/**'
+
+env:
+  GO_VERSION: "1.25"
+  GOPROXY: "https://goproxy.cn,direct"
+
+jobs:
+  e2e-memory:
+    name: Memory E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: stratum_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Wait for PostgreSQL
+        run: |
+          timeout 30 bash -c 'until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done'
+        env:
+          PGPASSWORD: postgres
+
+      - name: Wait for Redis
+        run: |
+          timeout 30 bash -c 'until redis-cli -h localhost -p 6379 ping; do sleep 1; done'
+
+      - name: Run E2E tests
+        run: |
+          go test -v -timeout 10m ./test/e2e/... \
+            -count=1 \
+            -p=1
+        env:
+          # PostgreSQL connection
+          PGHOST: localhost
+          PGPORT: 5432
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: stratum_test
+          # Redis connection
+          REDIS_ADDR: localhost:6379
+
+      - name: Cleanup test schemas
+        if: always()
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d stratum_test -c \
+            "SELECT 'DROP SCHEMA IF EXISTS ' || nspname || ' CASCADE;'
+             FROM pg_namespace
+             WHERE nspname LIKE 'tenant_test_%'" \
+            | grep DROP | PGPASSWORD=postgres psql -h localhost -U postgres -d stratum_test || true
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-logs
+          path: |
+            /tmp/stratum-e2e-*.log
+          retention-days: 7
+          if-no-files-found: ignore

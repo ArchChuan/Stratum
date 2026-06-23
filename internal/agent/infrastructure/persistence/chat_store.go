@@ -17,6 +17,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 )
 
 // chatPoolIface is the minimal pool surface needed by PgChatStore (allows pgxmock injection).
@@ -26,12 +27,16 @@ type chatPoolIface interface {
 
 // PgChatStore implements port.ChatRepo using pgxpool with per-tenant search_path.
 type PgChatStore struct {
-	pool chatPoolIface
+	pool   chatPoolIface
+	logger *zap.Logger
 }
 
-// NewPgChatStore creates a PgChatStore.
-func NewPgChatStore(pool *pgxpool.Pool) *PgChatStore {
-	return &PgChatStore{pool: pool}
+// NewPgChatStore creates a PgChatStore. If logger is nil, a no-op logger is used.
+func NewPgChatStore(pool *pgxpool.Pool, logger *zap.Logger) *PgChatStore {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &PgChatStore{pool: pool, logger: logger}
 }
 
 // execTenantID runs fn in a transaction scoped to tenant_{id}'s search_path.
@@ -164,6 +169,8 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 	if msg.StepsJSON == nil {
 		msg.StepsJSON = json.RawMessage("[]")
 	}
+	var outboxQueued bool
+	var outboxSkipReason string
 	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`UPDATE chat_conversations
@@ -183,32 +190,77 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 		}
 
 		outboxContent := memoryOutboxContent(msg.Role, msg.Content)
-		if outboxContent != "" && !msg.IsError {
-			outboxPayload, err := json.Marshal(map[string]interface{}{
-				"message_id":      msg.ID,
-				"conversation_id": msg.ConversationID,
-				"tenant_id":       tenantID,
-				"role":            msg.Role,
-				"content":         outboxContent,
-				"created_at":      msg.CreatedAt,
-				"user_id":         msg.UserID,
-				"agent_id":        msg.AgentID,
-			})
-			if err != nil {
-				return fmt.Errorf("marshal outbox payload: %w", err)
-			}
-			if _, err = tx.Exec(ctx,
-				`INSERT INTO memory_outbox (message_id, payload) VALUES ($1, $2)`,
-				msg.ID, outboxPayload); err != nil {
-				return fmt.Errorf("insert memory_outbox: %w", err)
-			}
+		if outboxContent == "" {
+			outboxSkipReason = describeOutboxSkip(msg.Role, msg.Content)
+			return nil
 		}
+		if msg.IsError {
+			outboxSkipReason = "is_error"
+			return nil
+		}
+		if msg.SkipOutbox {
+			outboxSkipReason = "memory_disabled"
+			return nil
+		}
+		outboxPayload, err := json.Marshal(map[string]any{
+			"message_id":      msg.ID,
+			"conversation_id": msg.ConversationID,
+			"tenant_id":       tenantID,
+			"role":            msg.Role,
+			"content":         outboxContent,
+			"created_at":      msg.CreatedAt,
+			"user_id":         msg.UserID,
+			"agent_id":        msg.AgentID,
+			"scope":           msg.MemoryScope,
+		})
+		if err != nil {
+			return fmt.Errorf("marshal outbox payload: %w", err)
+		}
+		if _, err = tx.Exec(ctx,
+			`INSERT INTO memory_outbox (message_id, payload) VALUES ($1, $2)`,
+			msg.ID, outboxPayload); err != nil {
+			return fmt.Errorf("insert memory_outbox: %w", err)
+		}
+		outboxQueued = true
 		return nil
 	})
 	if err != nil {
+		s.logger.Warn("chat.outbox.tx_failed",
+			zap.String("tenant_id", tenantID),
+			zap.String("conversation_id", msg.ConversationID),
+			zap.String("role", msg.Role),
+			zap.Error(err))
 		return fmt.Errorf("chat_store: add message: %w", err)
 	}
+	if outboxQueued {
+		s.logger.Info("chat.outbox.queued",
+			zap.String("tenant_id", tenantID),
+			zap.String("conversation_id", msg.ConversationID),
+			zap.String("message_id", msg.ID),
+			zap.String("role", msg.Role),
+			zap.Int("content_runes", len([]rune(msg.Content))))
+	} else {
+		s.logger.Debug("chat.outbox.skip",
+			zap.String("tenant_id", tenantID),
+			zap.String("conversation_id", msg.ConversationID),
+			zap.String("message_id", msg.ID),
+			zap.String("role", msg.Role),
+			zap.String("reason", outboxSkipReason))
+	}
 	return nil
+}
+
+// describeOutboxSkip returns a human-readable reason explaining why
+// memoryOutboxContent rejected the message — used purely for diagnostic logs.
+func describeOutboxSkip(role, content string) string {
+	if role != "user" && role != "assistant" {
+		return "role_not_persistable:" + role
+	}
+	runes := []rune(content)
+	if len(runes) < constants.MemoryOutboxMinRunes {
+		return fmt.Sprintf("content_too_short:%d<%d", len(runes), constants.MemoryOutboxMinRunes)
+	}
+	return "unknown"
 }
 
 func (s *PgChatStore) ListMessages(ctx context.Context, tenantID, convID, userID string) ([]*domain.ChatMessage, error) {

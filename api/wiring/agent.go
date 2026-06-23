@@ -46,9 +46,6 @@ func (c *Container) buildAgent(_ context.Context) error {
 	} else {
 		registry = agent.NewRegistry(nil, c.Logger)
 	}
-	if c.Skill != nil && c.Skill.CapGateway != nil {
-		registry.SetCapGateway(c.Skill.CapGateway)
-	}
 	if c.Memory != nil && c.Memory.Injector != nil {
 		registry.SetMemoryInjector(c.Memory.Injector)
 	}
@@ -59,7 +56,7 @@ func (c *Container) buildAgent(_ context.Context) error {
 	a := &Agent{Registry: registry}
 	if db != nil {
 		a.ExecStore = persistence.NewPgExecutionStore(db)
-		a.ChatStore = persistence.NewPgChatStore(db)
+		a.ChatStore = persistence.NewPgChatStore(db, c.Logger)
 		a.SkillLookup = persistence.NewPgSkillLookup(db)
 		a.TenantSettings = persistence.NewPgTenantSettings(db)
 		if c.Skill != nil {
@@ -84,6 +81,9 @@ func (c *Container) buildAgent(_ context.Context) error {
 	}
 	if c.Platform != nil {
 		deps.Metrics = c.Platform.Metrics
+	}
+	if c.Memory != nil && c.Memory.Service != nil {
+		deps.MemoryCleaner = c.Memory.Service
 	}
 	a.Service = agent.NewAgentService(deps)
 

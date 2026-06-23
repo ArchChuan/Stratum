@@ -124,19 +124,37 @@ func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionNa
 			return nil
 		}
 		if existingDim == dim {
-			vs.logger.Info("collection already exists",
-				zap.String("collection", collectionName), zap.Int("dim", dim))
-			vs.dimCache.Store(collectionName, dim)
-			return nil
+			if !vs.collectionHasField(ctx, collectionName, "agent_id") {
+				vs.logger.Warn("collection missing required field, recreating",
+					zap.String("collection", collectionName), zap.String("field", "agent_id"))
+				if derr := vs.client.DropCollection(ctx, collectionName); derr != nil {
+					return fmt.Errorf("failed to drop stale collection %s: %w", collectionName, derr)
+				}
+				vs.dimCache.Delete(collectionName)
+				// fall through to recreate
+			} else {
+				vs.logger.Info("collection already exists",
+					zap.String("collection", collectionName), zap.Int("dim", dim))
+				vs.dimCache.Store(collectionName, dim)
+				idxList, _ := vs.client.DescribeIndex(ctx, collectionName, "vector")
+				if len(idxList) == 0 {
+					flatIdx, ierr := entity.NewIndexFlat(entity.L2)
+					if ierr == nil {
+						_ = vs.client.CreateIndex(ctx, collectionName, "vector", flatIdx, false)
+					}
+				}
+				return nil
+			}
+		} else {
+			vs.logger.Warn("collection dim mismatch, recreating",
+				zap.String("collection", collectionName),
+				zap.Int("existing_dim", existingDim),
+				zap.Int("required_dim", dim))
+			if derr := vs.client.DropCollection(ctx, collectionName); derr != nil {
+				return fmt.Errorf("failed to drop stale collection %s: %w", collectionName, derr)
+			}
+			vs.dimCache.Delete(collectionName)
 		}
-		vs.logger.Warn("collection dim mismatch, recreating",
-			zap.String("collection", collectionName),
-			zap.Int("existing_dim", existingDim),
-			zap.Int("required_dim", dim))
-		if derr := vs.client.DropCollection(ctx, collectionName); derr != nil {
-			return fmt.Errorf("failed to drop stale collection %s: %w", collectionName, derr)
-		}
-		vs.dimCache.Delete(collectionName)
 	}
 
 	schema := &entity.Schema{
@@ -154,6 +172,16 @@ func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionNa
 				Name:       "user_id",
 				DataType:   entity.FieldTypeVarChar,
 				TypeParams: map[string]string{"max_length": "128"},
+			},
+			{
+				Name:       "agent_id",
+				DataType:   entity.FieldTypeVarChar,
+				TypeParams: map[string]string{"max_length": "128"},
+			},
+			{
+				Name:       "scope",
+				DataType:   entity.FieldTypeVarChar,
+				TypeParams: map[string]string{"max_length": "20"},
 			},
 			{
 				Name:       "content",
@@ -183,6 +211,13 @@ func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionNa
 		vs.logger.Error("failed to create collection", zap.String("collection", collectionName), zap.Error(err))
 		return fmt.Errorf("failed to create collection %s: %w", collectionName, err)
 	}
+	idx, err := entity.NewIndexFlat(entity.L2)
+	if err != nil {
+		return fmt.Errorf("failed to build index param: %w", err)
+	}
+	if err := vs.client.CreateIndex(ctx, collectionName, "vector", idx, false); err != nil {
+		return fmt.Errorf("failed to create index on %s: %w", collectionName, err)
+	}
 	vs.dimCache.Store(collectionName, dim)
 	vs.logger.Info("collection created successfully", zap.String("collection", collectionName))
 	return nil
@@ -204,6 +239,8 @@ func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs [
 
 	ids := make([]string, len(docs))
 	userIDs := make([]string, len(docs))
+	agentIDs := make([]string, len(docs))
+	scopes := make([]string, len(docs))
 	contents := make([]string, len(docs))
 	sources := make([]string, len(docs))
 	chunkIndices := make([]int64, len(docs))
@@ -212,6 +249,8 @@ func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs [
 	for i, doc := range docs {
 		ids[i] = doc.ID
 		userIDs[i] = doc.UserID
+		agentIDs[i] = doc.AgentID
+		scopes[i] = doc.Scope
 		contents[i] = doc.Content
 		sources[i] = doc.SourceDocument
 		chunkIndices[i] = doc.ChunkIndex
@@ -220,12 +259,14 @@ func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs [
 
 	idCol := entity.NewColumnVarChar("id", ids)
 	userIDCol := entity.NewColumnVarChar("user_id", userIDs)
+	agentIDCol := entity.NewColumnVarChar("agent_id", agentIDs)
+	scopeCol := entity.NewColumnVarChar("scope", scopes)
 	contentCol := entity.NewColumnVarChar("content", contents)
 	sourceCol := entity.NewColumnVarChar("source_document", sources)
 	chunkIdxCol := entity.NewColumnInt64("chunk_index", chunkIndices)
 	vectorCol := entity.NewColumnFloatVector("vector", dim, vectors)
 
-	_, err := vs.client.Insert(ctx, collectionName, "", idCol, userIDCol, contentCol, sourceCol, chunkIdxCol, vectorCol)
+	_, err := vs.client.Insert(ctx, collectionName, "", idCol, userIDCol, agentIDCol, scopeCol, contentCol, sourceCol, chunkIdxCol, vectorCol)
 	if err != nil {
 		vs.logger.Error("failed to insert vectors", zap.Error(err))
 		return fmt.Errorf("failed to insert vectors: %w", err)
@@ -247,6 +288,9 @@ func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName stri
 	vs.logger.Debug("searching vectors", zap.String("collection", collectionName), zap.Int("topK", topK))
 
 	if err := vs.client.LoadCollection(ctx, collectionName, false); err != nil {
+		if strings.Contains(err.Error(), "index not found") {
+			return []SearchResult{}, nil
+		}
 		vs.logger.Error("failed to load collection", zap.Error(err))
 		return nil, fmt.Errorf("failed to load collection %s: %w", collectionName, err)
 	}
@@ -276,6 +320,11 @@ func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName stri
 		sp,
 	)
 	if searchErr != nil {
+		if strings.Contains(searchErr.Error(), "field agent_id not exist") {
+			vs.logger.Warn("memory collection has stale schema, returning empty results",
+				zap.String("collection", collectionName))
+			return nil, nil
+		}
 		vs.logger.Error("failed to search vectors", zap.Error(searchErr))
 		return nil, fmt.Errorf("failed to search vectors: %w", searchErr)
 	}
@@ -396,12 +445,17 @@ func (vs *VectorStore) DeleteCollection(ctx context.Context, collectionName stri
 	if err := vs.ensureConnected(ctx); err != nil {
 		return fmt.Errorf("milvus not available: %w", err)
 	}
-	vs.logger.Info("deleting collection", zap.String("collection", collectionName))
+	exists, err := vs.client.HasCollection(ctx, collectionName)
+	if err != nil {
+		return fmt.Errorf("failed to check collection %s: %w", collectionName, err)
+	}
+	if !exists {
+		return nil
+	}
 	if err := vs.client.DropCollection(ctx, collectionName); err != nil {
-		vs.logger.Error("failed to delete collection", zap.String("collection", collectionName), zap.Error(err))
 		return fmt.Errorf("failed to delete collection %s: %w", collectionName, err)
 	}
-	vs.logger.Info("collection deleted successfully")
+	vs.logger.Info("collection deleted", zap.String("collection", collectionName))
 	return nil
 }
 
@@ -414,10 +468,11 @@ func (vs *VectorStore) KeywordSearch(ctx context.Context, collectionName string,
 	vs.logger.Debug("keyword searching", zap.String("collection", collectionName), zap.String("query", query))
 
 	if err := vs.client.LoadCollection(ctx, collectionName, false); err != nil {
+		if strings.Contains(err.Error(), "index not found") {
+			return []SearchResult{}, nil
+		}
 		return nil, fmt.Errorf("failed to load collection %s: %w", collectionName, err)
 	}
-
-	// Query all documents
 	rows, err := vs.client.Query(
 		ctx,
 		collectionName,
@@ -680,6 +735,19 @@ func (vs *VectorStore) collectionDim(ctx context.Context, collectionName string)
 		return d, nil
 	}
 	return 0, fmt.Errorf("collection %s has no float-vector field", collectionName)
+}
+
+func (vs *VectorStore) collectionHasField(ctx context.Context, collectionName, fieldName string) bool {
+	coll, err := vs.client.DescribeCollection(ctx, collectionName)
+	if err != nil || coll == nil || coll.Schema == nil {
+		return false
+	}
+	for _, f := range coll.Schema.Fields {
+		if f.Name == fieldName {
+			return true
+		}
+	}
+	return false
 }
 
 func (vs *VectorStore) Close() error {

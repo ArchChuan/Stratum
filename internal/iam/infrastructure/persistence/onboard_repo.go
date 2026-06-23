@@ -26,7 +26,7 @@ func NewOnboardRepo(db *pgxpool.Pool) *OnboardRepo {
 
 // CreateTenant runs upsert-user + insert-tenant + insert-member + create-schema in one tx.
 func (r *OnboardRepo) CreateTenant(ctx context.Context, in domain.CreateTenantInput) (*domain.CreateTenantResult, error) {
-	tenantID := uuid.New().String()
+	tenantID := uuid.Must(uuid.NewV7()).String()
 	schemaName := "tenant_" + tenantID
 
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
@@ -81,7 +81,7 @@ func (r *OnboardRepo) CreateTenant(ctx context.Context, in domain.CreateTenantIn
 
 // CreateTenantForUser creates a new tenant for an existing user (no upsert).
 func (r *OnboardRepo) CreateTenantForUser(ctx context.Context, userID, name string) (string, error) {
-	tenantID := uuid.New().String()
+	tenantID := uuid.Must(uuid.NewV7()).String()
 	schemaName := "tenant_" + tenantID
 
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})

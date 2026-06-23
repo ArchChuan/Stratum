@@ -11,6 +11,7 @@ type MemoryRawEvent struct {
 	TenantID       string    `json:"tenant_id"`
 	UserID         string    `json:"user_id"`
 	AgentID        string    `json:"agent_id"`
+	Scope          string    `json:"scope,omitempty"`
 	Role           string    `json:"role"`
 	Content        string    `json:"content"`
 	CreatedAt      time.Time `json:"created_at"`

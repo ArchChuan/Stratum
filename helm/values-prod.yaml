@@ -1,0 +1,84 @@
+# Production environment overrides
+
+# Application settings
+app:
+  replicaCount: 3
+  image:
+    repository: registry.cn-hangzhou.aliyuncs.com/your-org/stratum-backend
+    tag: latest  # CI 会通过 --set image.tag 覆盖
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2000m"
+
+# Frontend settings
+frontend:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: registry.cn-hangzhou.aliyuncs.com/your-org/stratum-frontend
+    tag: latest  # CI 会通过 --set image.tag 覆盖
+
+# Configuration settings
+config:
+  port: "8080"
+  natsUrl: "nats://nats.stratum.svc.cluster.local:4222"
+  milvusHost: "milvus.stratum.svc.cluster.local"
+  milvusPort: "19530"
+
+# Database settings - 使用托管 RDS
+database:
+  external: true
+  host: "rm-xxxxx.postgres.rds.aliyuncs.com"
+  port: 5432
+  name: "stratum"
+  user: "stratum"
+  # password 从 K8s Secret 注入
+
+# Redis settings - 使用托管 Redis
+redis:
+  external: true
+  host: "r-xxxxx.redis.rds.aliyuncs.com"
+  port: 6379
+
+# Message queue settings
+nats:
+  enabled: true
+
+# Vector database settings
+milvus:
+  enabled: true
+
+# Observability settings
+observability:
+  enabled: true
+  otelCollectorEndpoint: "http://otel-collector.stratum.svc.cluster.local:4317"
+
+# Ingress settings
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+  hosts:
+    - host: api.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: stratum-tls
+      hosts:
+        - api.yourdomain.com
+
+# Autoscaling
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80

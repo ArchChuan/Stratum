@@ -1,0 +1,68 @@
+# Development environment overrides
+
+# Application settings
+app:
+  replicaCount: 1
+  image:
+    repository: registry.cn-hangzhou.aliyuncs.com/your-org/stratum-backend
+    tag: dev-latest  # CI 会通过 --set image.tag 覆盖
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+# Frontend settings
+frontend:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: registry.cn-hangzhou.aliyuncs.com/your-org/stratum-frontend
+    tag: dev-latest
+
+# Configuration settings
+config:
+  port: "8080"
+  natsUrl: "nats://nats.stratum-dev.svc.cluster.local:4222"
+  milvusHost: "milvus.stratum-dev.svc.cluster.local"
+  milvusPort: "19530"
+
+# Database settings - 开发环境可用小规格 RDS 或集群内 PostgreSQL
+database:
+  external: false  # 或设为 true 使用开发 RDS
+
+# Redis settings
+redis:
+  external: false  # 或设为 true 使用开发 Redis
+
+# Message queue settings
+nats:
+  enabled: true
+
+# Vector database settings
+milvus:
+  enabled: true
+
+# Observability settings
+observability:
+  enabled: true
+  otelCollectorEndpoint: "http://otel-collector.stratum-dev.svc.cluster.local:4317"
+
+# Ingress settings
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+  hosts:
+    - host: api-dev.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []  # 开发环境可不用 HTTPS
+
+# Autoscaling - 开发环境关闭
+autoscaling:
+  enabled: false

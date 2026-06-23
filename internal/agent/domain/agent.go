@@ -51,6 +51,8 @@ type AgentConfig struct {
 	KnowledgeWorkspaceNames        []string
 	KnowledgeWorkspaceDescriptions []string
 	MaxContextTokens               int
+	MemoryEnabled                  bool
+	MemoryScope                    string
 }
 
 // ChatConversation is a named conversation thread between a user and an agent.
@@ -69,13 +71,15 @@ type ChatConversation struct {
 type ChatMessage struct {
 	ID             string
 	ConversationID string
-	Role           string // "user" | "agent"
+	Role           string // "user" | "assistant"
 	Content        string
 	StepsJSON      json.RawMessage
 	IsError        bool
 	CreatedAt      time.Time
 	UserID         string
 	AgentID        string
+	MemoryScope    string
+	SkipOutbox     bool
 }
 
 // ExecutionRecord is an agent execution history entry.

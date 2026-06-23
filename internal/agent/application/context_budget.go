@@ -73,11 +73,7 @@ func BuildContextMessages(
 	// 4. Convert history to LLM messages and trim oldest to fit remaining budget
 	histMsgs := make([]port.LLMMessage, 0, len(history))
 	for _, m := range history {
-		role := m.Role
-		if role == "agent" {
-			role = "assistant"
-		}
-		histMsgs = append(histMsgs, port.LLMMessage{Role: role, Content: m.Content})
+		histMsgs = append(histMsgs, port.LLMMessage{Role: m.Role, Content: m.Content})
 	}
 	for len(histMsgs) > 0 && estimateMessagesTokens(histMsgs) > budget {
 		histMsgs = histMsgs[1:]

@@ -32,6 +32,7 @@ type CreateWorkspaceInput struct {
 
 // UpdateWorkspaceInput carries the application-level shape of PATCH /knowledge/workspaces/:name.
 type UpdateWorkspaceInput struct {
+	Name        *string
 	Description *string
 	Config      *domain.WorkspaceConfig
 }
@@ -92,6 +93,14 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 		return nil, err
 	}
 
+	if in.Name != nil && *in.Name != name {
+		if err := s.repo.UpdateName(ctx, tenantID, name, *in.Name); err != nil {
+			return nil, err
+		}
+		current.Name = *in.Name
+		name = *in.Name
+	}
+
 	newCfg := current.Config
 	if in.Config != nil {
 		merged, mergeErr := current.Config.MergeUpdate(*in.Config)
@@ -117,7 +126,7 @@ func (s *WorkspaceService) GetWorkspaceStats(ctx context.Context, tenantID, name
 	if err != nil {
 		return nil, err
 	}
-	stats, statsErr := s.ingestSvc.GetWorkspaceStats(ctx, name)
+	stats, statsErr := s.ingestSvc.GetWorkspaceStats(ctx, ws.ID)
 	if statsErr != nil {
 		s.logger.Warn("failed to get milvus stats", zap.String("workspace", name), zap.Error(statsErr))
 		stats = map[string]any{"error": statsErr.Error()}
@@ -132,16 +141,24 @@ func (s *WorkspaceService) GetWorkspaceStats(ctx context.Context, tenantID, name
 
 // DeleteWorkspace cleans milvus + graph storage then removes the DB row.
 func (s *WorkspaceService) DeleteWorkspace(ctx context.Context, tenantID, name string) error {
-	if err := s.ingestSvc.DeleteWorkspaceData(ctx, name); err != nil {
+	ws, err := s.repo.GetByName(ctx, tenantID, name)
+	if err != nil {
+		return err
+	}
+	if err := s.ingestSvc.DeleteWorkspaceData(ctx, ws.ID); err != nil {
 		s.logger.Error("failed to clean workspace storage resources", zap.String("name", name), zap.Error(err))
 		return fmt.Errorf("failed to clean storage: %w", err)
 	}
 	return s.repo.Delete(ctx, tenantID, name)
 }
 
+func (s *WorkspaceService) GetConfig(ctx context.Context, tenantID, workspace string) (domain.WorkspaceConfig, error) {
+	return s.repo.GetConfigForUpload(ctx, tenantID, workspace)
+}
+
 // IngestUpload reads the uploaded file and dispatches ingestion using the workspace's configured embedding model.
 func (s *WorkspaceService) IngestUpload(ctx context.Context, tenantID, workspace string, fileHeader *multipart.FileHeader) (*IngestUploadResult, error) {
-	cfg, err := s.repo.GetConfigForUpload(ctx, tenantID, workspace)
+	ws, err := s.repo.GetByName(ctx, tenantID, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -157,11 +174,12 @@ func (s *WorkspaceService) IngestUpload(ctx context.Context, tenantID, workspace
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	documentID := uuid.New().String()
+	documentID := uuid.Must(uuid.NewV7()).String()
 	result, err := s.ingestSvc.IngestDocument(ctx, IngestDocumentRequest{
 		TenantID:       tenantID,
 		Workspace:      workspace,
-		EmbeddingModel: cfg.EmbeddingModel,
+		WorkspaceID:    ws.ID,
+		EmbeddingModel: ws.Config.EmbeddingModel,
 		DocumentData:   fileData,
 		FileName:       fileHeader.Filename,
 		DocumentID:     documentID,

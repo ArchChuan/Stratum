@@ -7,6 +7,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/iam/application"
+	"github.com/byteBuilderX/stratum/internal/iam/domain"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -94,7 +95,10 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	rawRT, accessJWT, err := h.issueTokenPair(ctx, userID, tenantID, "owner", globalRole, ob.AvatarURL, ob.GitHubLogin)
+	systemRole := domain.DeriveSystemRole([]domain.TenantMembership{
+		{TenantID: tenantID, Role: "owner"},
+	})
+	rawRT, accessJWT, err := h.issueTokenPair(ctx, userID, tenantID, "owner", globalRole, systemRole, ob.AvatarURL, ob.GitHubLogin)
 	if err != nil {
 		h.deps.Logger.Error("issue token pair", zap.Error(err))
 		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("token issuance failed")))

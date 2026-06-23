@@ -36,6 +36,7 @@ export const CallbackPage = () => {
               tenant_id: me.tenant_id,
               role: me.role,
               global_role: me.global_role,
+              system_role: me.system_role,
               current_tenant: me.tenant_id ? { id: me.tenant_id, name: '' } : null,
               avatar_url: me.avatar_url || '',
               github_login: me.github_login || '',

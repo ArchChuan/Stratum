@@ -113,12 +113,20 @@ func (h *RAGHandler) Query(c *gin.Context) {
 		req.TopK = skillpkg.DefaultTopK
 	}
 
+	var embedModel string
+	if h.wsService != nil {
+		if cfg, err := h.wsService.GetConfig(c.Request.Context(), tenantID, req.Workspace); err == nil {
+			embedModel = cfg.EmbeddingModel
+		}
+	}
+
 	result, err := h.ragService.Query(c.Request.Context(), knowledge.RAGQueryRequest{
-		Question:  req.Question,
-		Workspace: req.Workspace,
-		TenantID:  tenantID,
-		Mode:      req.Mode,
-		TopK:      req.TopK,
+		Question:       req.Question,
+		Workspace:      req.Workspace,
+		TenantID:       tenantID,
+		Mode:           req.Mode,
+		TopK:           req.TopK,
+		EmbeddingModel: embedModel,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -228,7 +236,7 @@ func (h *RAGHandler) UpdateWorkspace(c *gin.Context) {
 		return
 	}
 
-	in := knowledge.UpdateWorkspaceInput{Description: req.Description}
+	in := knowledge.UpdateWorkspaceInput{Name: req.Name, Description: req.Description}
 	if req.Config != nil {
 		cfg := fromDTOConfig(*req.Config)
 		in.Config = &cfg

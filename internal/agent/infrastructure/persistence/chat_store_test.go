@@ -8,6 +8,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/pashagolub/pgxmock/v2"
+	"go.uber.org/zap"
 )
 
 // newChatStoreWithMock returns a PgChatStore backed by pgxmock.
@@ -17,7 +18,7 @@ func newChatStoreWithMock(t *testing.T) (*PgChatStore, pgxmock.PgxPoolIface) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &PgChatStore{pool: pool}, pool
+	return &PgChatStore{pool: pool, logger: zap.NewNop()}, pool
 }
 
 // expectTenantTx expects BEGIN + SET LOCAL search_path for tenant t1.
@@ -221,7 +222,7 @@ func TestChatStore_ListMessages(t *testing.T) {
 			"id", "conversation_id", "role", "content", "steps_json", "is_error", "created_at",
 		}).
 			AddRow("m1", "conv-1", "user", "hi", json.RawMessage("[]"), false, now).
-			AddRow("m2", "conv-1", "agent", "hello back", json.RawMessage("[]"), false, now))
+			AddRow("m2", "conv-1", "assistant", "hello back", json.RawMessage("[]"), false, now))
 	mock.ExpectCommit()
 
 	msgs, err := store.ListMessages(context.Background(), "t1", "conv-1", "user-1")
@@ -231,7 +232,7 @@ func TestChatStore_ListMessages(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Errorf("want 2 messages, got %d", len(msgs))
 	}
-	if msgs[0].Role != "user" || msgs[1].Role != "agent" {
+	if msgs[0].Role != "user" || msgs[1].Role != "assistant" {
 		t.Errorf("unexpected roles: %s, %s", msgs[0].Role, msgs[1].Role)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

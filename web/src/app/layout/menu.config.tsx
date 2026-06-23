@@ -23,6 +23,7 @@ type MenuItem = NonNullable<MenuProps['items']>[number];
 export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
   const base: MenuItem[] = [
     { key: '/', icon: <DashboardOutlined />, label: <Link to="/">概览</Link> },
+    { key: '/chat', icon: <CommentOutlined />, label: <Link to="/chat">Agent 对话</Link> },
     {
       key: 'agent-group',
       icon: <RobotOutlined />,
@@ -34,7 +35,6 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
           icon: <PlusCircleOutlined />,
           label: <Link to="/agents/create">创建 Agent</Link>,
         },
-        { key: '/chat', icon: <CommentOutlined />, label: <Link to="/chat">Agent 对话</Link> },
         { key: '/history', icon: <HistoryOutlined />, label: <Link to="/history">执行历史</Link> },
       ],
     },
@@ -52,13 +52,9 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       ],
     },
     {
-      key: 'knowledge-group',
+      key: '/knowledge',
       icon: <BookOutlined />,
-      label: '知识与记忆',
-      children: [
-        { key: '/knowledge', icon: <BookOutlined />, label: <Link to="/knowledge">知识库</Link> },
-        { key: '/memory', icon: <DatabaseOutlined />, label: <Link to="/memory">记忆管理</Link> },
-      ],
+      label: <Link to="/knowledge">知识库</Link>,
     },
     {
       key: 'mcp-group',
@@ -95,22 +91,35 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
     });
   }
 
-  if (user?.global_role === 'global_admin') {
-    base.push({
-      key: '/admin/tenants',
-      icon: <GlobalOutlined />,
-      label: <Link to="/admin/tenants">全局租户</Link>,
-    });
+  if (user?.global_role === 'global_admin' || user?.system_role === 'system_admin') {
+    const adminItems: MenuItem[] = [];
+
+    if (user?.global_role === 'global_admin') {
+      adminItems.push({
+        key: '/admin/tenants',
+        icon: <GlobalOutlined />,
+        label: <Link to="/admin/tenants">全局租户</Link>,
+      });
+    }
+
+    if (adminItems.length > 0) {
+      base.push({
+        key: 'admin-group',
+        icon: <SettingOutlined />,
+        label: '系统管理',
+        children: adminItems,
+      });
+    }
   }
 
   return base;
 };
 
 export const resolveOpenKeys = (pathname: string): string[] => {
-  if (['/agents', '/chat', '/history'].some((p) => pathname.startsWith(p))) return ['agent-group'];
+  if (['/agents', '/history'].some((p) => pathname.startsWith(p))) return ['agent-group'];
   if (pathname.startsWith('/skills')) return ['skill-group'];
-  if (['/knowledge', '/memory'].some((p) => pathname.startsWith(p))) return ['knowledge-group'];
   if (pathname.startsWith('/mcp')) return ['mcp-group'];
   if (pathname.startsWith('/tenant')) return ['tenant-group'];
+  if (pathname.startsWith('/admin')) return ['admin-group'];
   return [];
 };

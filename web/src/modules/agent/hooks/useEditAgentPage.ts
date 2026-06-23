@@ -51,6 +51,8 @@ export const useEditAgentPage = () => {
             allowedSkills: a.allowedSkills || [],
             mcpServerIds: a.mcpServerIds || [],
             knowledgeWorkspaceIds: a.knowledgeWorkspaceIds || [],
+            memoryEnabled: a.memoryEnabled ?? false,
+            memoryScope: a.memoryScope || 'agent',
           });
         } else {
           message.error(extractErrorMessage(agentRes.reason, '加载 Agent 信息失败'));

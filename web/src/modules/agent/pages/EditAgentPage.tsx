@@ -59,7 +59,13 @@ export const EditAgentPage = () => {
         form={form}
         layout="vertical"
         onFinish={onFinish}
-        initialValues={{ maxIterations: 25, maxContextTokens: 8000, allowedSkills: [] }}
+        initialValues={{
+          maxIterations: 25,
+          maxContextTokens: 8000,
+          allowedSkills: [],
+          memoryEnabled: false,
+          memoryScope: 'agent',
+        }}
       >
         <AgentFormSections skills={skills} mcpServers={mcpServers} workspaces={workspaces} />
 

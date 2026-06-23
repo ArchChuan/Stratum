@@ -135,21 +135,21 @@ export const useChatPage = () => {
               ...restored,
               {
                 id: msgId,
-                role: 'agent',
+                role: 'assistant',
                 content: st.content,
                 created_at: new Date().toISOString(),
               } as ChatMessage,
             ]);
           } else if (st.done && st.content) {
             const lastLoaded = loaded[loaded.length - 1];
-            const alreadySaved = lastLoaded && lastLoaded.role === 'agent';
+            const alreadySaved = lastLoaded && lastLoaded.role === 'assistant';
             if (!alreadySaved) {
               const finalContent = st.result?.output || st.content;
               setMessages([
                 ...restored,
                 {
                   id: `a-done-${Date.now()}`,
-                  role: st.error ? 'error' : 'agent',
+                  role: st.error ? 'error' : 'assistant',
                   content: st.error || finalContent,
                   created_at: new Date().toISOString(),
                   steps: st.result?.steps,
@@ -251,7 +251,7 @@ export const useChatPage = () => {
     streamMsgIdRef.current = msgId;
     setMessages((prev) => [
       ...prev,
-      { id: msgId, role: 'agent', content: '', created_at: new Date().toISOString() } as ChatMessage,
+      { id: msgId, role: 'assistant', content: '', created_at: new Date().toISOString() } as ChatMessage,
     ]);
 
     startStream(selectedAgent, {

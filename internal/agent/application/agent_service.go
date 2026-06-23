@@ -34,6 +34,7 @@ type AgentServiceDeps struct {
 	MCPTools       port.MCPToolProvider
 	ExecStore      ExecutionStore
 	ChatStore      ChatStore
+	MemoryCleaner  port.AgentMemoryCleaner
 	Metrics        observability.MetricsProvider
 	Logger         *zap.Logger
 }
@@ -68,6 +69,8 @@ type CreateAgentInput struct {
 	AllowedSkills         []string
 	MCPServerIDs          []string
 	KnowledgeWorkspaceIDs []string
+	MemoryEnabled         bool
+	MemoryScope           string
 }
 
 // UpdateAgentInput mirrors CreateAgentInput minus immutable EmbedModel.
@@ -82,6 +85,8 @@ type UpdateAgentInput struct {
 	AllowedSkills         []string
 	MCPServerIDs          []string
 	KnowledgeWorkspaceIDs []string
+	MemoryEnabled         bool
+	MemoryScope           string
 }
 
 // AgentDTO is the wire shape returned by AgentService for transport
@@ -100,6 +105,8 @@ type AgentDTO struct {
 	MCPServerIDs          []string
 	KnowledgeWorkspaceIDs []string
 	CreatedAt             string
+	MemoryEnabled         bool
+	MemoryScope           string
 }
 
 // Create persists a new agent for the tenant. Inherits embed_model from
@@ -114,7 +121,7 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		embedModel = inherited
 	}
 
-	id := uuid.New().String()
+	id := uuid.Must(uuid.NewV7()).String()
 	cfg := &domain.AgentConfig{
 		ID:                    id,
 		Name:                  in.Name,
@@ -128,6 +135,8 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		AllowedSkills:         in.AllowedSkills,
 		MCPServerIDs:          in.MCPServerIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
+		MemoryEnabled:         in.MemoryEnabled,
+		MemoryScope:           in.MemoryScope,
 		Capabilities:          []domain.AgentCapability{},
 	}
 
@@ -185,6 +194,8 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		AllowedSkills:         skills,
 		MCPServerIDs:          in.MCPServerIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
+		MemoryEnabled:         in.MemoryEnabled,
+		MemoryScope:           in.MemoryScope,
 	}
 	if err := s.deps.Registry.Update(ctx, cfg); err != nil {
 		return AgentDTO{}, err
@@ -193,10 +204,13 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	return cfgToDTO(cfg), nil
 }
 
-// Delete removes an agent.
-func (s *AgentService) Delete(ctx context.Context, id string) error {
+// Delete removes an agent and its associated memories.
+func (s *AgentService) Delete(ctx context.Context, tenantID, id string) error {
 	if err := s.deps.Registry.Remove(ctx, id); err != nil {
 		return err
+	}
+	if s.deps.MemoryCleaner != nil {
+		_ = s.deps.MemoryCleaner.ClearAgentMemories(ctx, tenantID, id)
 	}
 	s.deps.Logger.Info("agent deleted", zap.String("id", id))
 	return nil
@@ -238,6 +252,8 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		MCPServerIDs:          cfg.MCPServerIDs,
 		KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,
 		CreatedAt:             time.Now().Format(time.RFC3339),
+		MemoryEnabled:         cfg.MemoryEnabled,
+		MemoryScope:           cfg.MemoryScope,
 	}
 }
 
@@ -366,9 +382,7 @@ func (s *AgentService) assembleOptions(
 
 	if s.deps.TenantResolver != nil {
 		if capGW, apiKeys, ok := s.deps.TenantResolver.Resolve(ctx, meta.TenantID); ok {
-			if meta.Stream {
-				ctx = s.deps.TenantResolver.InjectCompleter(ctx, meta.TenantID)
-			}
+			ctx = s.deps.TenantResolver.InjectCompleter(ctx, meta.TenantID)
 			type capGWSetter interface {
 				SetCapGateway(port.CapabilityGateway)
 			}

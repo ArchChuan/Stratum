@@ -70,7 +70,7 @@ func NewRecallHandler(pool *pgxpool.Pool, logger *zap.Logger, embedSvc EmbedClie
 }
 
 // Handle executes the recall_memory tool invocation.
-func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID string, input map[string]any) (string, error) {
+func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID, scope string, input map[string]any) (string, error) {
 	raw, err := json.Marshal(input)
 	if err != nil {
 		return "", fmt.Errorf("marshal input: %w", err)
@@ -88,7 +88,7 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID st
 	}
 
 	// Try vector search first (semantic recall)
-	if results := h.tryVectorSearch(ctx, tenantID, userID, req); len(results) > 0 {
+	if results := h.tryVectorSearch(ctx, tenantID, userID, agentID, scope, req); len(results) > 0 {
 		sc, _ := observability.SpanFromContext(ctx)
 		out, _ := json.Marshal(results)
 		h.logger.Debug("memory.recall.vector",
@@ -103,7 +103,7 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID st
 	return h.textSearch(ctx, tenantID, userID, req)
 }
 
-func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID string, req RecallRequest) RecallResult {
+func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, agentID, scope string, req RecallRequest) RecallResult {
 	embedSvc := h.embedSvc
 	if embedSvc == nil && h.embedResolver != nil {
 		embedSvc = h.embedResolver(ctx, tenantID)
@@ -123,7 +123,9 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID st
 		return nil
 	}
 	var expr string
-	if userID != "" {
+	if scope == "agent" && agentID != "" && !strings.ContainsAny(agentID, `"'\`) {
+		expr = fmt.Sprintf(`user_id == "%s" && agent_id == "%s"`, userID, agentID)
+	} else if userID != "" {
 		expr = fmt.Sprintf(`user_id == "%s"`, userID)
 	}
 

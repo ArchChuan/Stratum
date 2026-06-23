@@ -7,6 +7,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/iam/application"
+	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -67,6 +68,7 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 	claims := application.TokenClaims{
 		Sub: storedClaims.UserID, TenantID: storedClaims.TenantID, Role: tenantRole, JTI: newRawRT[:8],
 		GlobalRole: globalRole,
+		SystemRole: domain.DeriveSystemRole([]domain.TenantMembership{{TenantID: storedClaims.TenantID, Role: tenantRole}}),
 		AvatarURL:  storedClaims.AvatarURL, GitHubLogin: storedClaims.GitHubLogin,
 	}
 	accessJWT, err := h.deps.JWTService.Sign(claims, constants.AccessTokenTTL)
@@ -117,6 +119,7 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		"tenant_id":    claims.TenantID,
 		"role":         claims.Role,
 		"global_role":  claims.GlobalRole,
+		"system_role":  string(claims.SystemRole),
 		"avatar_url":   claims.AvatarURL,
 		"github_login": claims.GitHubLogin,
 	})

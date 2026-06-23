@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "path=$(jq -r '.tool_input.file_path'); if echo \"$path\" | grep -qE 'config/prod\\.yaml'; then echo '{\"continue\": false, \"stopReason\": \"🚫 边界5-生产配置: config/prod.yaml 禁止修改\"}'; else echo '{\"continue\": true}'; fi",
+            "statusMessage": "保护生产配置"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '\\\\wsl$\\Ubuntu\\home\\yang\\go-projects\\stratum\\.codex\\hooks\\check-migration-tenant-tables.sh'",
+            "timeout": 10,
+            "statusMessage": "检查迁移文件 tenant 表违规"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/yang/.local/bin/headroom init hook ensure --profile init-stratum-8ec96697 --marker headroom-init-claude",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "SessionStart",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '✓ Stratum 项目规范已加载' && echo '📋 5条项目命令: make install | make typecheck | make lint | make test-local | make test-full' && echo '🚫 5条项目边界已启用' && echo '🔄 CI/CD: GitHub Actions configured' && echo '🛡️ Security: go vet enabled'",
+            "statusMessage": "加载项目规范"
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/yang/.local/bin/headroom init hook ensure --profile init-stratum-8ec96697 --marker headroom-init-claude",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

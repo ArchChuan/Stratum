@@ -18,7 +18,7 @@ import (
 // DB operations require integration tests with a real pgxpool.Pool.
 
 func newTestSkillHandler() *SkillHandler {
-	svc := skillapp.NewSkillService(nil, nil, nil, zap.NewNop())
+	svc := skillapp.NewSkillService(nil, nil, zap.NewNop())
 	return NewSkillHandler(svc, zap.NewNop())
 }
 

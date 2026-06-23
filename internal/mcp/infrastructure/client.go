@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -38,14 +40,17 @@ type BaseClient struct {
 	lastHealthy time.Time
 	mu          sync.RWMutex
 	logger      *zap.Logger
+	reqID       atomic.Int32
 	// 传输相关字段
 	cmd        *exec.Cmd
 	stdin      io.WriteCloser
 	stdout     io.ReadCloser
 	httpClient *http.Client
+	sessionID  string
 }
 
-// NewBaseClient 创建新的基础客户端
+func (c *BaseClient) nextID() int { return int(c.reqID.Add(1)) }
+
 func NewBaseClient(config *MCPServerConfig, logger *zap.Logger) *BaseClient {
 	return &BaseClient{
 		config: config,
@@ -73,9 +78,7 @@ func (c *BaseClient) doConnect(ctx context.Context) error {
 	switch c.config.Transport {
 	case "stdio":
 		err = c.connectStdio(ctx)
-	case "sse":
-		err = c.connectSSE(ctx)
-	case "http":
+	case "http", "streamable-http":
 		err = c.connectHTTP(ctx)
 	default:
 		return fmt.Errorf("unsupported transport: %s", c.config.Transport)
@@ -150,7 +153,9 @@ func (c *BaseClient) CallTool(ctx context.Context, toolName string, input interf
 
 	// 构建请求
 	req := MCPRequest{
-		Method: "tools/call",
+		JSONRPC: "2.0",
+		ID:      c.nextID(),
+		Method:  "tools/call",
 		Params: map[string]interface{}{
 			"name":      toolName,
 			"arguments": input,
@@ -174,7 +179,9 @@ func (c *BaseClient) ListTools(ctx context.Context) ([]*MCPTool, error) {
 	}
 
 	req := MCPRequest{
-		Method: "tools/list",
+		JSONRPC: "2.0",
+		ID:      c.nextID(),
+		Method:  "tools/list",
 	}
 
 	resp, err := c.sendRequest(ctx, &req)
@@ -182,11 +189,14 @@ func (c *BaseClient) ListTools(ctx context.Context) ([]*MCPTool, error) {
 		return nil, err
 	}
 
-	// 解析响应
-	var tools []*MCPTool
+	var toolsWrapper struct {
+		Tools []*MCPTool `json:"tools"`
+	}
 	data, _ := json.Marshal(resp.Result)
-	if err := json.Unmarshal(data, &tools); err != nil {
-		c.logger.Warn("failed to unmarshal tools", zap.Error(err))
+	_ = json.Unmarshal(data, &toolsWrapper)
+	tools := toolsWrapper.Tools
+	if tools == nil {
+		tools = []*MCPTool{}
 	}
 
 	c.mu.Lock()
@@ -203,7 +213,9 @@ func (c *BaseClient) ListResources(ctx context.Context) ([]*MCPResource, error) 
 	}
 
 	req := MCPRequest{
-		Method: "resources/list",
+		JSONRPC: "2.0",
+		ID:      c.nextID(),
+		Method:  "resources/list",
 	}
 
 	resp, err := c.sendRequest(ctx, &req)
@@ -211,11 +223,14 @@ func (c *BaseClient) ListResources(ctx context.Context) ([]*MCPResource, error) 
 		return nil, err
 	}
 
-	// 解析响应
-	var resources []*MCPResource
+	var resWrapper struct {
+		Resources []*MCPResource `json:"resources"`
+	}
 	data, _ := json.Marshal(resp.Result)
-	if err := json.Unmarshal(data, &resources); err != nil {
-		c.logger.Warn("failed to unmarshal resources", zap.Error(err))
+	_ = json.Unmarshal(data, &resWrapper)
+	resources := resWrapper.Resources
+	if resources == nil {
+		resources = []*MCPResource{}
 	}
 
 	c.mu.Lock()
@@ -267,29 +282,6 @@ func (c *BaseClient) connectStdio(ctx context.Context) error {
 	return nil
 }
 
-func (c *BaseClient) connectSSE(ctx context.Context) error {
-	if c.config.URL == "" {
-		return fmt.Errorf("URL not specified for SSE transport")
-	}
-
-	// 验证 URL 可达性
-	req, err := http.NewRequestWithContext(ctx, "GET", c.config.URL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to connect to SSE server: %w", err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	c.httpClient = &http.Client{Timeout: c.config.Timeout}
-	c.logger.Info("SSE connection established", zap.String("url", c.config.URL))
-	return nil
-}
-
 func (c *BaseClient) connectHTTP(ctx context.Context) error {
 	if c.config.URL == "" {
 		return fmt.Errorf("URL not specified for HTTP transport")
@@ -297,11 +289,27 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 
 	c.httpClient = &http.Client{Timeout: c.config.Timeout}
 
-	// 测试连接
-	req, err := http.NewRequestWithContext(ctx, "GET", c.config.URL+"/health", nil)
-	if err != nil {
-		return fmt.Errorf("failed to create health check request: %w", err)
+	initReq := MCPRequest{
+		JSONRPC: "2.0",
+		ID:      c.nextID(),
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]interface{}{},
+			"clientInfo":      map[string]interface{}{"name": "stratum", "version": "1.0"},
+		},
 	}
+	data, err := json.Marshal(initReq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal initialize request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.config.URL, bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("failed to create initialize request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -309,11 +317,11 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP server returned status %d", resp.StatusCode)
+	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
+		c.sessionID = sid
 	}
 
-	c.logger.Info("HTTP connection established", zap.String("url", c.config.URL))
+	c.logger.Info("HTTP connection established", zap.String("url", c.config.URL), zap.String("session_id", c.sessionID))
 	return nil
 }
 
@@ -321,9 +329,7 @@ func (c *BaseClient) sendRequest(ctx context.Context, req *MCPRequest) (*MCPResp
 	switch c.config.Transport {
 	case "stdio":
 		return c.sendStdioRequest(ctx, req)
-	case "sse":
-		return c.sendSSERequest(ctx, req)
-	case "http":
+	case "http", "streamable-http":
 		return c.sendHTTPRequest(ctx, req)
 	default:
 		return nil, fmt.Errorf("unsupported transport: %s", c.config.Transport)
@@ -360,12 +366,11 @@ func (c *BaseClient) sendStdioRequest(ctx context.Context, req *MCPRequest) (*MC
 	return &resp, nil
 }
 
-func (c *BaseClient) sendSSERequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {
+func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {
 	if c.httpClient == nil {
-		return nil, fmt.Errorf("SSE connection not established")
+		return nil, fmt.Errorf("HTTP client not initialized")
 	}
 
-	// 构建 HTTP 请求
 	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -377,42 +382,10 @@ func (c *BaseClient) sendSSERequest(ctx context.Context, req *MCPRequest) (*MCPR
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
+	if c.sessionID != "" {
+		httpReq.Header.Set("Mcp-Session-Id", c.sessionID)
 	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	var mcpResp MCPResponse
-	if err := json.Unmarshal(body, &mcpResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &mcpResp, nil
-}
-
-func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {
-	if c.httpClient == nil {
-		return nil, fmt.Errorf("HTTP client not initialized")
-	}
-
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.URL+"/rpc", bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -430,8 +403,18 @@ func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCP
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
+	jsonBody := body
+	if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "text/event-stream") {
+		for _, line := range bytes.Split(body, []byte("\n")) {
+			if bytes.HasPrefix(line, []byte("data:")) {
+				jsonBody = bytes.TrimSpace(line[5:])
+				break
+			}
+		}
+	}
+
 	var mcpResp MCPResponse
-	if err := json.Unmarshal(body, &mcpResp); err != nil {
+	if err := json.Unmarshal(jsonBody, &mcpResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
@@ -453,7 +436,9 @@ func (c *BaseClient) HealthCheck(ctx context.Context) error {
 
 	// 网络调用在锁外执行，不阻塞并发读
 	req := MCPRequest{
-		Method: "tools/list",
+		JSONRPC: "2.0",
+		ID:      c.nextID(),
+		Method:  "tools/list",
 	}
 
 	_, err := c.sendRequest(ctx, &req)

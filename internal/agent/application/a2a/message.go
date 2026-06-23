@@ -165,5 +165,5 @@ func (m *Message) Clone() *Message {
 
 // generateMessageID generates a unique message ID
 func generateMessageID() string {
-	return uuid.New().String()
+	return uuid.Must(uuid.NewV7()).String()
 }

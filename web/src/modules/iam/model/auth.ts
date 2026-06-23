@@ -24,6 +24,7 @@ export const userSchema = z
     tenant_id: z.string().optional(),
     role: z.string().optional(),
     global_role: z.string().optional(),
+    system_role: z.string().optional(),
     current_tenant: currentTenantSchema.nullable().optional(),
     avatar_url: z.string().optional().default(''),
     github_login: z.string().optional().default(''),

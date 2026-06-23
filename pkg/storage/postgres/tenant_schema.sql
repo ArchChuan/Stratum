@@ -359,3 +359,84 @@ ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS version TEXT NOT NULL DEFAULT '
 ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS headers JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS auth_config JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS retry_config JSONB NOT NULL DEFAULT '{}';
+
+-- chat_messages: rename role 'agent' → 'assistant' (LLM protocol alignment).
+-- Idempotent: drop old check, backfill rows, re-add with new constraint.
+ALTER TABLE chat_messages DROP CONSTRAINT IF EXISTS chat_messages_role_check;
+UPDATE chat_messages SET role = 'assistant' WHERE role = 'agent';
+ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_role_check
+    CHECK (role IN ('user', 'assistant'));
+
+-- =============================================================================
+-- Memory v2 Tables (fact-centric model)
+-- =============================================================================
+
+-- memory_facts: core fact storage with frecency scoring
+CREATE TABLE IF NOT EXISTS memory_facts (
+    id              UUID PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    user_id         TEXT NOT NULL,
+    agent_id        TEXT,
+    scope           TEXT NOT NULL CHECK (scope IN ('user', 'agent')),
+    content         TEXT NOT NULL,
+    importance      FLOAT8 NOT NULL DEFAULT 0.5 CHECK (importance BETWEEN 0 AND 1),
+    frecency_score  FLOAT8 NOT NULL DEFAULT 0,
+    access_count    INT NOT NULL DEFAULT 0,
+    last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    superseded_by   UUID REFERENCES memory_facts(id) ON DELETE SET NULL,
+    status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded', 'archived', 'deleted')),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_memory_facts_user_scope ON memory_facts (user_id, scope, status);
+CREATE INDEX IF NOT EXISTS idx_memory_facts_frecency ON memory_facts (frecency_score DESC) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_memory_facts_content_trgm ON memory_facts USING GIN (content gin_trgm_ops);
+-- Enforce only one active fact can supersede another (prevent supersede loops)
+CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_one_active_supersede
+    ON memory_facts (superseded_by)
+    WHERE status = 'active';
+
+-- memory_entities: recognized entities with rolling profiles
+CREATE TABLE IF NOT EXISTS memory_entities (
+    id                      UUID PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    user_id                 TEXT NOT NULL,
+    agent_id                TEXT,
+    scope                   TEXT NOT NULL CHECK (scope IN ('user', 'agent')),
+    name                    TEXT NOT NULL,
+    entity_type             TEXT NOT NULL,
+    profile                 TEXT NOT NULL DEFAULT '',
+    fact_count              INT NOT NULL DEFAULT 0,
+    fact_count_since_rebuild INT NOT NULL DEFAULT 0,
+    last_seen_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_profile_rebuild_at TIMESTAMPTZ,
+    status                  TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'deleted')),
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_memory_entities_user_scope ON memory_entities (user_id, scope, status);
+CREATE INDEX IF NOT EXISTS idx_memory_entities_name_trgm ON memory_entities USING GIN (name gin_trgm_ops);
+
+-- extraction_queue: async LLM extraction tasks
+CREATE TABLE IF NOT EXISTS memory_extraction_queue (
+    id          BIGSERIAL PRIMARY KEY,
+    message_id  TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    agent_id    TEXT,
+    content     TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+    retry_count INT NOT NULL DEFAULT 0,
+    error_msg   TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_extraction_queue_status ON memory_extraction_queue (status, created_at);
+
+-- agents extensions for memory v2 config
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_write_scope TEXT NOT NULL DEFAULT 'user' CHECK (memory_write_scope IN ('user', 'agent'));
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_read_scope TEXT NOT NULL DEFAULT 'user' CHECK (memory_read_scope IN ('user', 'agent'));
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'agent';
+
+-- backfill agents created before max_iterations/max_context_tokens were wired in the form
+UPDATE agents SET max_iterations = 10 WHERE max_iterations = 0;
+UPDATE agents SET max_context_tokens = 8000 WHERE max_context_tokens = 0;
