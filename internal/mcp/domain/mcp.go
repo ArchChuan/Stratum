@@ -15,7 +15,7 @@ type Tool struct {
 	InputSchema map[string]interface{} `json:"inputSchema"`
 }
 
-// AuthType identifies the authentication scheme used for HTTP/SSE transports.
+// AuthType identifies the authentication scheme used for streamable-http transport.
 type AuthType string
 
 const (
@@ -79,16 +79,16 @@ type Resource struct {
 
 // ServerInfo is the read model for a connected MCP server.
 type ServerInfo struct {
-	ID          string
-	Name        string
-	Version     string
-	Protocol    string
-	Transport   string
-	Tools       []*Tool
-	Resources   []*Resource
-	Status      string
-	LastUpdated time.Time
-	Error       string
+	ID          string      `json:"id"`
+	Name        string      `json:"name"`
+	Version     string      `json:"version"`
+	Protocol    string      `json:"protocol"`
+	Transport   string      `json:"transport"`
+	Tools       []*Tool     `json:"tools,omitempty"`
+	Resources   []*Resource `json:"resources,omitempty"`
+	Status      string      `json:"status"`
+	LastUpdated time.Time   `json:"last_updated"`
+	Error       string      `json:"error,omitempty"`
 }
 
 // SkillSummary is the read model for a registered MCP skill.

@@ -69,6 +69,8 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		pipelineResolver = buildEmbedResolver(db, c.Platform.GatewayCache, c.Platform.AESKey, c.Logger)
 		knowledgeResolver = buildKnowledgeEmbedResolver(db, c.Platform.GatewayCache, c.Platform.AESKey, c.Logger)
 		ingest.SetEmbedResolver(knowledgeResolver)
+		rag.SetEmbedResolver(knowledgeResolver)
+		rag.SetWorkspaceRepo(persistence.NewWorkspaceRepo(db))
 	}
 
 	c.Knowledge = &Knowledge{

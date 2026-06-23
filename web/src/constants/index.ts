@@ -22,7 +22,6 @@ export const MEMORY_SEARCH_LIMIT = 20;
 
 // Memory v2
 export const MEMORY_SCOPE_OPTIONS = [
-  { value: 'off', label: '关闭' },
   { value: 'user', label: '用户级' },
   { value: 'agent', label: 'Agent 级' },
 ];

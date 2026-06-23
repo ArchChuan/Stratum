@@ -198,6 +198,10 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 			outboxSkipReason = "is_error"
 			return nil
 		}
+		if msg.SkipOutbox {
+			outboxSkipReason = "memory_disabled"
+			return nil
+		}
 		outboxPayload, err := json.Marshal(map[string]any{
 			"message_id":      msg.ID,
 			"conversation_id": msg.ConversationID,
@@ -207,6 +211,7 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 			"created_at":      msg.CreatedAt,
 			"user_id":         msg.UserID,
 			"agent_id":        msg.AgentID,
+			"scope":           msg.MemoryScope,
 		})
 		if err != nil {
 			return fmt.Errorf("marshal outbox payload: %w", err)

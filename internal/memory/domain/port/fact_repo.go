@@ -8,33 +8,14 @@ import (
 
 // FactRepo manages memory facts persistence.
 type FactRepo interface {
-	// Create inserts a new fact.
-	Create(ctx context.Context, fact *domain.MemoryFact) error
-
-	// GetByID retrieves a fact by ID.
-	GetByID(ctx context.Context, id string) (*domain.MemoryFact, error)
-
-	// Update modifies an existing fact.
-	Update(ctx context.Context, fact *domain.MemoryFact) error
-
-	// ListActive returns active facts within a scope.
-	ListActive(ctx context.Context, filter domain.ScopeFilter, limit int) ([]*domain.MemoryFact, error)
-
-	// SearchByContent performs full-text search on fact content.
-	SearchByContent(ctx context.Context, filter domain.ScopeFilter, query string, limit int) ([]*domain.MemoryFact, error)
-
-	// FindSupersedeCandidates returns facts that may be superseded by new content.
-	FindSupersedeCandidates(ctx context.Context, userID, agentID, content string, minSimilarity, maxCount float64) ([]*domain.MemoryFact, error)
-
-	// CountByUser returns total fact count for a user.
-	CountByUser(ctx context.Context, userID string) (int, error)
-
-	// CountActive returns active (not superseded) fact count for a tenant.
-	CountActive(ctx context.Context, tenantID string) (int, error)
-
-	// CountSuperseded returns superseded fact count for a tenant.
-	CountSuperseded(ctx context.Context, tenantID string) (int, error)
-
-	// DeleteOldSoftDeleted removes soft-deleted facts older than retention days.
-	DeleteOldSoftDeleted(ctx context.Context, retentionDays int) (int, error)
+	Create(ctx context.Context, tenantID string, fact *domain.MemoryFact) error
+	GetByID(ctx context.Context, tenantID, id string) (*domain.MemoryFact, error)
+	Update(ctx context.Context, tenantID string, fact *domain.MemoryFact) error
+	ListActive(ctx context.Context, tenantID string, filter domain.ScopeFilter, limit int) ([]*domain.MemoryFact, error)
+	SearchByContent(ctx context.Context, tenantID string, filter domain.ScopeFilter, query string, limit int) ([]*domain.MemoryFact, error)
+	FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*domain.MemoryFact, error)
+	CountByUser(ctx context.Context, tenantID, userID string) (int, error)
+	DeleteOldSoftDeleted(ctx context.Context, tenantID string, retentionDays int) (int, error)
+	DeleteAllByUser(ctx context.Context, tenantID, userID string) ([]string, error)
+	DeleteAllByAgent(ctx context.Context, tenantID, agentID string) ([]string, error)
 }

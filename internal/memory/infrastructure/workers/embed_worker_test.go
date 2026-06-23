@@ -47,11 +47,11 @@ func (s *stubVectorStore) CreateCollection(ctx context.Context, collectionName s
 }
 
 func TestEmbedWorker_EmbedsFactsWithoutVectors(t *testing.T) {
-	fact1, _ := domain.NewFact("user1", "agent1", string(domain.ScopeUser), "I like coffee", 0.8, nil)
-	fact2, _ := domain.NewFact("user1", "agent1", string(domain.ScopeUser), "I prefer tea", 0.7, nil)
+	fact1, _ := domain.NewFact("", "user1", "agent1", string(domain.ScopeUser), "I like coffee", 0.8, nil)
+	fact2, _ := domain.NewFact("", "user1", "agent1", string(domain.ScopeUser), "I prefer tea", 0.7, nil)
 
 	repo := &stubFactRepo{
-		findCandidatesFunc: func(ctx context.Context, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
+		findCandidatesFunc: func(ctx context.Context, tenantID, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
 			// Simulate returning facts needing embedding
 			return []*domain.MemoryFact{fact1, fact2}, nil
 		},
@@ -73,7 +73,7 @@ func TestEmbedWorker_EmbedsFactsWithoutVectors(t *testing.T) {
 		},
 	}
 
-	worker := workers.NewEmbedWorker(repo, embedder, vectorStore, zap.NewNop())
+	worker := workers.NewEmbedWorker("", repo, embedder, vectorStore, zap.NewNop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -90,10 +90,10 @@ func TestEmbedWorker_EmbedsFactsWithoutVectors(t *testing.T) {
 }
 
 func TestEmbedWorker_HandlesEmbedError(t *testing.T) {
-	fact, _ := domain.NewFact("user1", "agent1", string(domain.ScopeUser), "test", 0.5, nil)
+	fact, _ := domain.NewFact("", "user1", "agent1", string(domain.ScopeUser), "test", 0.5, nil)
 
 	repo := &stubFactRepo{
-		findCandidatesFunc: func(ctx context.Context, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
+		findCandidatesFunc: func(ctx context.Context, tenantID, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
 			return []*domain.MemoryFact{fact}, nil
 		},
 	}
@@ -111,7 +111,7 @@ func TestEmbedWorker_HandlesEmbedError(t *testing.T) {
 		},
 	}
 
-	worker := workers.NewEmbedWorker(repo, embedder, vectorStore, zap.NewNop())
+	worker := workers.NewEmbedWorker("", repo, embedder, vectorStore, zap.NewNop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -125,12 +125,12 @@ func TestEmbedWorker_HandlesEmbedError(t *testing.T) {
 
 func TestEmbedWorker_GracefulShutdown(t *testing.T) {
 	repo := &stubFactRepo{
-		findCandidatesFunc: func(ctx context.Context, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
+		findCandidatesFunc: func(ctx context.Context, tenantID, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
 			return nil, nil
 		},
 	}
 
-	worker := workers.NewEmbedWorker(repo, &stubEmbedder{}, &stubVectorStore{}, zap.NewNop())
+	worker := workers.NewEmbedWorker("", repo, &stubEmbedder{}, &stubVectorStore{}, zap.NewNop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

@@ -56,7 +56,7 @@ func (s *MemoryService) BufferMessage(ctx context.Context, req *BufferMessageReq
 // ForgetMemory marks a fact as soft-deleted, schedules async Milvus cleanup.
 func (s *MemoryService) ForgetMemory(ctx context.Context, req *ForgetMemoryRequest) error {
 	// Step 1: Fetch fact to verify ownership
-	fact, err := s.factRepo.GetByID(ctx, req.FactID)
+	fact, err := s.factRepo.GetByID(ctx, req.TenantID, req.FactID)
 	if err != nil {
 		return fmt.Errorf("get fact: %w", err)
 	}
@@ -68,7 +68,7 @@ func (s *MemoryService) ForgetMemory(ctx context.Context, req *ForgetMemoryReque
 	// Step 2: Soft delete via domain method
 	fact.MarkDeleted()
 
-	if err := s.factRepo.Update(ctx, fact); err != nil {
+	if err := s.factRepo.Update(ctx, req.TenantID, fact); err != nil {
 		return fmt.Errorf("update fact: %w", err)
 	}
 
@@ -77,6 +77,35 @@ func (s *MemoryService) ForgetMemory(ctx context.Context, req *ForgetMemoryReque
 	_ = s.vectorStore.Delete(ctx, collectionName, []string{req.FactID})
 	// Intentionally ignore Milvus errors - GC worker will clean up orphaned vectors
 
+	return nil
+}
+
+// ClearUserMemories soft-deletes all facts belonging to the caller, then schedules async vector cleanup.
+func (s *MemoryService) ClearUserMemories(ctx context.Context, req *ClearUserMemoriesRequest) error {
+	factIDs, err := s.factRepo.DeleteAllByUser(ctx, req.TenantID, req.UserID)
+	if err != nil {
+		return fmt.Errorf("clear user memories: %w", err)
+	}
+
+	if len(factIDs) > 0 && s.vectorStore != nil {
+		collectionName := fmt.Sprintf("memory_facts_%s", req.TenantID)
+		_ = s.vectorStore.Delete(ctx, collectionName, factIDs)
+		// Intentionally ignore Milvus errors - GC worker will clean up orphaned vectors
+	}
+
+	return nil
+}
+
+// ClearAgentMemories soft-deletes all facts belonging to the agent, then schedules async vector cleanup.
+func (s *MemoryService) ClearAgentMemories(ctx context.Context, tenantID, agentID string) error {
+	factIDs, err := s.factRepo.DeleteAllByAgent(ctx, tenantID, agentID)
+	if err != nil {
+		return fmt.Errorf("clear agent memories: %w", err)
+	}
+	if len(factIDs) > 0 && s.vectorStore != nil {
+		collectionName := fmt.Sprintf("memory_facts_%s", tenantID)
+		_ = s.vectorStore.Delete(ctx, collectionName, factIDs)
+	}
 	return nil
 }
 
@@ -142,6 +171,18 @@ type ForgetMemoryRequest struct {
 	TenantID string
 	UserID   string
 	FactID   string
+}
+
+// ClearUserMemoriesRequest requests deletion of all facts for a user.
+type ClearUserMemoriesRequest struct {
+	TenantID string
+	UserID   string
+}
+
+// ClearAgentMemoriesRequest requests deletion of all facts belonging to an agent.
+type ClearAgentMemoriesRequest struct {
+	TenantID string
+	AgentID  string
 }
 
 // BuildContextRequest requests frecency-ranked context injection.

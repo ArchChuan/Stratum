@@ -68,6 +68,8 @@ func (a *MilvusVectorAdapter) Upsert(ctx context.Context, tenantID string, userI
 	doc := vector.DocumentChunk{
 		ID:             id,
 		UserID:         userID,
+		AgentID:        metadataString(metadata, "agent_id"),
+		Scope:          metadataString(metadata, "scope"),
 		Content:        metadataString(metadata, "content"),
 		SourceDocument: metadataString(metadata, "conversation_id"),
 		ChunkIndex:     0,

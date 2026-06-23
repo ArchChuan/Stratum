@@ -28,6 +28,7 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 		// Check supersede candidates (trigram similarity > 0.6)
 		candidates, err := s.factRepo.FindSupersedeCandidates(
 			ctx,
+			req.TenantID,
 			req.UserID,
 			req.AgentID,
 			extractedFact.Content,
@@ -52,19 +53,20 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 
 		// Step 4: Create fact domain object
 		fact, err := domain.NewFact(
+			req.TenantID,
 			req.UserID,
 			req.AgentID,
-			string(domain.ScopeUser), // default to user scope
+			string(domain.ScopeUser),
 			extractedFact.Content,
 			extractedFact.Importance,
-			extractedFact.Entities, // entity names
+			extractedFact.Entities,
 		)
 		if err != nil {
 			return fmt.Errorf("new fact: %w", err)
 		}
 
 		// Step 5: Insert fact to DB
-		if err := s.factRepo.Create(ctx, fact); err != nil {
+		if err := s.factRepo.Create(ctx, req.TenantID, fact); err != nil {
 			return fmt.Errorf("insert fact: %w", err)
 		}
 

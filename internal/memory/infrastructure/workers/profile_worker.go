@@ -14,6 +14,7 @@ import (
 
 // ProfileWorker periodically rebuilds entity profiles.
 type ProfileWorker struct {
+	tenantID   string
 	entityRepo port.EntityRepo
 	factRepo   port.FactRepo
 	profiler   port.EntityProfiler
@@ -22,9 +23,10 @@ type ProfileWorker struct {
 	stopOnce   sync.Once
 }
 
-// NewProfileWorker creates a profile worker.
-func NewProfileWorker(entityRepo port.EntityRepo, factRepo port.FactRepo, profiler port.EntityProfiler, logger *zap.Logger) *ProfileWorker {
+// NewProfileWorker creates a profile worker for a specific tenant.
+func NewProfileWorker(tenantID string, entityRepo port.EntityRepo, factRepo port.FactRepo, profiler port.EntityProfiler, logger *zap.Logger) *ProfileWorker {
 	return &ProfileWorker{
+		tenantID:   tenantID,
 		entityRepo: entityRepo,
 		factRepo:   factRepo,
 		profiler:   profiler,
@@ -69,7 +71,7 @@ func (w *ProfileWorker) RunOnce(ctx context.Context) {
 	start := time.Now()
 
 	// Find entities needing profile rebuild
-	entities, err := w.entityRepo.ListProfiles(ctx, domain.ScopeFilter{}, constants.MemoryProfileBatchSize)
+	entities, err := w.entityRepo.ListProfiles(ctx, domain.ScopeFilter{TenantID: w.tenantID, IncludeUserScope: true, IncludeAgentScope: true}, constants.MemoryProfileBatchSize)
 	if err != nil {
 		w.logger.Error("memory.profile_worker.list_profiles_failed", zap.Error(err))
 		return
@@ -108,11 +110,12 @@ func (w *ProfileWorker) rebuildProfile(ctx context.Context, entity *domain.Memor
 	// Using FindSupersedeCandidates with entity name as content (workaround)
 	facts, err := w.factRepo.FindSupersedeCandidates(
 		ctx,
+		w.tenantID,
 		entity.UserID,
 		entity.AgentID,
 		entity.Name,
-		0.5, // Similarity threshold for entity mention
-		50,  // Max facts
+		0.5,
+		50,
 	)
 	if err != nil {
 		return err

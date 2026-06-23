@@ -35,8 +35,8 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 	}
 
 	// Step 3: Trigram search (retrieve 2*topK candidates)
-	scopeFilter := domain.BuildScopeFilter(req.UserID, req.AgentID, "user")
-	trigramFacts, err := s.factRepo.SearchByContent(ctx, scopeFilter, req.Query, req.TopK*2)
+	scopeFilter := domain.BuildScopeFilter(req.TenantID, req.UserID, req.AgentID, "user")
+	trigramFacts, err := s.factRepo.SearchByContent(ctx, req.TenantID, scopeFilter, req.Query, req.TopK*2)
 	if err != nil {
 		return nil, fmt.Errorf("trigram search: %w", err)
 	}
@@ -79,7 +79,7 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 		}
 
 		// Fetch full fact
-		fact, err := s.factRepo.GetByID(ctx, id)
+		fact, err := s.factRepo.GetByID(ctx, req.TenantID, id)
 		if err != nil {
 			continue // skip if not found
 		}
@@ -105,7 +105,7 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 		// Increment access count (best-effort, don't fail recall on update error)
 		fact.AccessCount++
 		fact.LastAccessAt = time.Now()
-		_ = s.factRepo.Update(ctx, fact)
+		_ = s.factRepo.Update(ctx, req.TenantID, fact)
 
 		dtos = append(dtos, FactDTO{
 			ID:          fact.ID,

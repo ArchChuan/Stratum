@@ -204,17 +204,20 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	workspaceNames := a.KnowledgeWorkspaceNames
 	workspaceDescs := a.KnowledgeWorkspaceDescriptions
 	maxContextTokens := a.MaxContextTokens
+	memoryEnabled := a.MemoryEnabled
+	memoryScope := a.MemoryScope
 	a.mu.Unlock()
 
 	// Inject memory context into system prompt
 	var memCtx string
-	if a.MemoryInjector != nil && cfg.ConversationID != "" {
+	if a.MemoryInjector != nil && cfg.ConversationID != "" && memoryEnabled {
 		ic := port.InjectionContext{
 			TenantID:       cfg.TenantID,
 			UserID:         cfg.UserID,
 			AgentID:        agentID,
 			ConversationID: cfg.ConversationID,
 			Query:          input,
+			Scope:          memoryScope,
 		}
 		if mctx, err := a.MemoryInjector.BuildContext(ctx, ic); err != nil {
 			a.Logger.Warn("memory injection failed", zap.Error(err))
@@ -315,7 +318,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 				},
 			})
 		}
-		if a.MemoryInjector != nil {
+		if a.MemoryInjector != nil && memoryEnabled {
 			availableTools = append(availableTools, port.ToolDefinition{
 				Name:        "stratum_recall_memory",
 				Description: "Search long-term memory for relevant past interactions, entities, and context. Use when you need to recall information from previous conversations.",
@@ -346,11 +349,12 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			AvailableTools: mergeTools(availableTools, cfg.ExtraTools, a.Logger),
 			SkillToolIndex: cfg.SkillToolIndex,
 			RAGSearchFn:    cfg.RAGSearchFn,
+			MaxLLMSteps:    cfg.MaxSteps,
 		}
-		if a.RecallMemoryFn != nil {
+		if a.RecallMemoryFn != nil && memoryEnabled {
 			fn := a.RecallMemoryFn
 			initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
-				return fn(ctx, cfg.TenantID, cfg.UserID, agentID, input)
+				return fn(ctx, cfg.TenantID, cfg.UserID, agentID, memoryScope, input)
 			}
 		}
 		execCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
@@ -411,6 +415,8 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			Content:        input,
 			UserID:         cfg.UserID,
 			AgentID:        agentID,
+			MemoryScope:    memoryScope,
+			SkipOutbox:     !memoryEnabled,
 		}
 		if err := chatStore.AddMessage(saveCtx, cfg.TenantID, userMsg); err != nil {
 			a.Logger.Warn("agent: failed to save user message",
@@ -423,6 +429,8 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			Content:        result.Output,
 			UserID:         cfg.UserID,
 			AgentID:        agentID,
+			MemoryScope:    memoryScope,
+			SkipOutbox:     !memoryEnabled,
 		}
 		if err := chatStore.AddMessage(saveCtx, cfg.TenantID, agentMsg); err != nil {
 			a.Logger.Warn("agent: failed to save agent message",

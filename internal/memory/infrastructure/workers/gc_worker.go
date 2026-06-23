@@ -13,15 +13,17 @@ import (
 
 // GCWorker periodically purges old deleted and superseded facts.
 type GCWorker struct {
+	tenantID string
 	factRepo port.FactRepo
 	logger   *zap.Logger
 	stopCh   chan struct{}
 	stopOnce sync.Once
 }
 
-// NewGCWorker creates a garbage collection worker.
-func NewGCWorker(repo port.FactRepo, logger *zap.Logger) *GCWorker {
+// NewGCWorker creates a garbage collection worker for a specific tenant.
+func NewGCWorker(tenantID string, repo port.FactRepo, logger *zap.Logger) *GCWorker {
 	return &GCWorker{
+		tenantID: tenantID,
 		factRepo: repo,
 		logger:   logger,
 		stopCh:   make(chan struct{}),
@@ -65,7 +67,7 @@ func (w *GCWorker) RunOnce(ctx context.Context) {
 
 	// Purge deleted facts older than retention
 	deletedRetentionDays := int(constants.MemoryDeletedRetention.Hours() / 24)
-	deletedCount, err := w.factRepo.DeleteOldSoftDeleted(ctx, deletedRetentionDays)
+	deletedCount, err := w.factRepo.DeleteOldSoftDeleted(ctx, w.tenantID, deletedRetentionDays)
 	if err != nil {
 		w.logger.Error("memory.gc_worker.purge_deleted_failed", zap.Error(err))
 		return

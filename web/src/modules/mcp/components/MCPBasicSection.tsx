@@ -12,8 +12,6 @@ const { Text } = Typography;
 
 const TRANSPORT_DESCS: Record<string, string> = {
   stdio: '通过标准输入/输出通信，适合本地命令行工具',
-  sse: '通过 HTTP SSE 长连接通信，适合远程 MCP 服务',
-  http: '通过 HTTP 请求/响应通信，适合无状态远程服务',
   'streamable-http': '流式 HTTP，MCP 2025-03-26 规范推荐方式',
 };
 

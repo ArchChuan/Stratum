@@ -7,7 +7,6 @@ import { dashboardRoutes } from '@/modules/dashboard';
 import { iamPublicRoutes, iamPrivateRoutes, useAuth } from '@/modules/iam';
 import { knowledgeRoutes } from '@/modules/knowledge';
 import { mcpRoutes } from '@/modules/mcp';
-import { memoryRoutes } from '@/modules/memory';
 import { skillRoutes } from '@/modules/skill';
 
 const AUTH_PATHS = ['/login', '/auth/callback', '/onboarding'];
@@ -25,8 +24,6 @@ export const AppRouter = () => {
     <AppShell>
       <Routes key={user?.tenant_id || 'no-tenant'}>
         {dashboardRoutes}
-        {iamPrivateRoutes}
-        {memoryRoutes}
         {mcpRoutes}
         {knowledgeRoutes}
         {skillRoutes}

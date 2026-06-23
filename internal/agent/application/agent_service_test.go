@@ -214,7 +214,7 @@ func TestAgentService_Delete(t *testing.T) {
 	svc, repo, _ := newTestService(t)
 	repo.On("Remove", mock.Anything, "agent-1").Return(nil)
 
-	err := svc.Delete(context.Background(), "agent-1")
+	err := svc.Delete(context.Background(), "tenant-1", "agent-1")
 	assert.NoError(t, err)
 	repo.AssertExpectations(t)
 }

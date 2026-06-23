@@ -435,3 +435,8 @@ CREATE INDEX IF NOT EXISTS idx_extraction_queue_status ON memory_extraction_queu
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_enabled BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_write_scope TEXT NOT NULL DEFAULT 'user' CHECK (memory_write_scope IN ('user', 'agent'));
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_read_scope TEXT NOT NULL DEFAULT 'user' CHECK (memory_read_scope IN ('user', 'agent'));
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'agent';
+
+-- backfill agents created before max_iterations/max_context_tokens were wired in the form
+UPDATE agents SET max_iterations = 10 WHERE max_iterations = 0;
+UPDATE agents SET max_context_tokens = 8000 WHERE max_context_tokens = 0;

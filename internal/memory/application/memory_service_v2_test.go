@@ -17,66 +17,72 @@ type MockFactRepo struct {
 	mock.Mock
 }
 
-func (m *MockFactRepo) Create(ctx context.Context, fact *domain.MemoryFact) error {
-	args := m.Called(ctx, fact)
+func (m *MockFactRepo) Create(ctx context.Context, tenantID string, fact *domain.MemoryFact) error {
+	args := m.Called(ctx, tenantID, fact)
 	return args.Error(0)
 }
 
-func (m *MockFactRepo) GetByID(ctx context.Context, id string) (*domain.MemoryFact, error) {
-	args := m.Called(ctx, id)
+func (m *MockFactRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.MemoryFact, error) {
+	args := m.Called(ctx, tenantID, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.MemoryFact), args.Error(1)
 }
 
-func (m *MockFactRepo) Update(ctx context.Context, fact *domain.MemoryFact) error {
-	args := m.Called(ctx, fact)
+func (m *MockFactRepo) Update(ctx context.Context, tenantID string, fact *domain.MemoryFact) error {
+	args := m.Called(ctx, tenantID, fact)
 	return args.Error(0)
 }
 
-func (m *MockFactRepo) ListActive(ctx context.Context, filter domain.ScopeFilter, limit int) ([]*domain.MemoryFact, error) {
-	args := m.Called(ctx, filter, limit)
+func (m *MockFactRepo) ListActive(ctx context.Context, tenantID string, filter domain.ScopeFilter, limit int) ([]*domain.MemoryFact, error) {
+	args := m.Called(ctx, tenantID, filter, limit)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]*domain.MemoryFact), args.Error(1)
 }
 
-func (m *MockFactRepo) SearchByContent(ctx context.Context, filter domain.ScopeFilter, query string, limit int) ([]*domain.MemoryFact, error) {
-	args := m.Called(ctx, filter, query, limit)
+func (m *MockFactRepo) SearchByContent(ctx context.Context, tenantID string, filter domain.ScopeFilter, query string, limit int) ([]*domain.MemoryFact, error) {
+	args := m.Called(ctx, tenantID, filter, query, limit)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]*domain.MemoryFact), args.Error(1)
 }
 
-func (m *MockFactRepo) FindSupersedeCandidates(ctx context.Context, userID, agentID, content string, minSimilarity, maxCount float64) ([]*domain.MemoryFact, error) {
-	args := m.Called(ctx, userID, agentID, content, minSimilarity, maxCount)
+func (m *MockFactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*domain.MemoryFact, error) {
+	args := m.Called(ctx, tenantID, userID, agentID, content, minSimilarity, maxCount)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]*domain.MemoryFact), args.Error(1)
 }
 
-func (m *MockFactRepo) CountByUser(ctx context.Context, userID string) (int, error) {
-	args := m.Called(ctx, userID)
+func (m *MockFactRepo) CountByUser(ctx context.Context, tenantID, userID string) (int, error) {
+	args := m.Called(ctx, tenantID, userID)
 	return args.Int(0), args.Error(1)
 }
 
-func (m *MockFactRepo) DeleteOldSoftDeleted(ctx context.Context, retentionDays int) (int, error) {
-	args := m.Called(ctx, retentionDays)
+func (m *MockFactRepo) DeleteOldSoftDeleted(ctx context.Context, tenantID string, retentionDays int) (int, error) {
+	args := m.Called(ctx, tenantID, retentionDays)
 	return args.Int(0), args.Error(1)
 }
 
-func (m *MockFactRepo) CountActive(ctx context.Context, tenantID string) (int, error) {
-	args := m.Called(ctx, tenantID)
-	return args.Int(0), args.Error(1)
+func (m *MockFactRepo) DeleteAllByUser(ctx context.Context, tenantID, userID string) ([]string, error) {
+	args := m.Called(ctx, tenantID, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
 }
 
-func (m *MockFactRepo) CountSuperseded(ctx context.Context, tenantID string) (int, error) {
-	args := m.Called(ctx, tenantID)
-	return args.Int(0), args.Error(1)
+func (m *MockFactRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) ([]string, error) {
+	args := m.Called(ctx, tenantID, agentID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
 }
 
 type MockEntityRepo struct {
@@ -122,14 +128,6 @@ func (m *MockEntityRepo) CountByUser(ctx context.Context, userID string) (int, e
 	return args.Int(0), args.Error(1)
 }
 
-func (m *MockEntityRepo) TopByFactCount(ctx context.Context, tenantID string, limit int) ([]port.EntityFactCount, error) {
-	args := m.Called(ctx, tenantID, limit)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]port.EntityFactCount), args.Error(1)
-}
-
 type MockExtractionQueue struct {
 	mock.Mock
 }
@@ -159,11 +157,6 @@ func (m *MockExtractionQueue) MarkFailed(ctx context.Context, taskID int64, errM
 
 func (m *MockExtractionQueue) DeleteOldCompleted(ctx context.Context, retentionDays int) (int, error) {
 	args := m.Called(ctx, retentionDays)
-	return args.Int(0), args.Error(1)
-}
-
-func (m *MockExtractionQueue) PendingCount(ctx context.Context, tenantID string) (int, error) {
-	args := m.Called(ctx, tenantID)
 	return args.Int(0), args.Error(1)
 }
 
@@ -257,13 +250,13 @@ func TestMemoryService_ForgetMemory_Success(t *testing.T) {
 
 	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil)
 
-	fact, _ := domain.NewFact("user1", "agent1", "user", "old fact", 0.5, []string{})
+	fact, _ := domain.NewFact("", "user1", "agent1", "user", "old fact", 0.5, []string{})
 
 	// Mock fact retrieval
-	factRepo.On("GetByID", ctx, fact.ID).Return(fact, nil)
+	factRepo.On("GetByID", ctx, "tenant1", fact.ID).Return(fact, nil)
 
 	// Mock update after soft delete
-	factRepo.On("Update", ctx, mock.AnythingOfType("*domain.MemoryFact")).Return(nil)
+	factRepo.On("Update", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryFact")).Return(nil)
 
 	// Mock Milvus delete (best-effort)
 	vectorStore.On("Delete", ctx, "memory_facts_tenant1", []string{fact.ID}).Return(nil)
@@ -292,10 +285,10 @@ func TestMemoryService_ForgetMemory_ScopeMismatch(t *testing.T) {
 
 	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil)
 
-	fact, _ := domain.NewFact("user1", "agent1", "user", "old fact", 0.5, []string{})
+	fact, _ := domain.NewFact("", "user1", "agent1", "user", "old fact", 0.5, []string{})
 
 	// Mock fact retrieval
-	factRepo.On("GetByID", ctx, fact.ID).Return(fact, nil)
+	factRepo.On("GetByID", ctx, "tenant1", fact.ID).Return(fact, nil)
 
 	req := &ForgetMemoryRequest{
 		TenantID: "tenant1",

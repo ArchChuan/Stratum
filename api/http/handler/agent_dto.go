@@ -18,6 +18,8 @@ type CreateAgentRequest struct {
 	AllowedSkills         []string `json:"allowedSkills"`
 	MCPServerIDs          []string `json:"mcpServerIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
+	MemoryEnabled         bool     `json:"memoryEnabled"`
+	MemoryScope           string   `json:"memoryScope"`
 }
 
 // UpdateAgentRequest mirrors CreateAgentRequest minus EmbedModel — the
@@ -33,6 +35,8 @@ type UpdateAgentRequest struct {
 	AllowedSkills         []string `json:"allowedSkills"`
 	MCPServerIDs          []string `json:"mcpServerIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
+	MemoryEnabled         bool     `json:"memoryEnabled"`
+	MemoryScope           string   `json:"memoryScope"`
 }
 
 type AgentResponse struct {
@@ -49,6 +53,8 @@ type AgentResponse struct {
 	MCPServerIDs          []string `json:"mcpServerIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 	CreatedAt             string   `json:"createdAt"`
+	MemoryEnabled         bool     `json:"memoryEnabled"`
+	MemoryScope           string   `json:"memoryScope"`
 }
 
 type ExecuteAgentRequest struct {
@@ -89,5 +95,7 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		MCPServerIDs:          d.MCPServerIDs,
 		KnowledgeWorkspaceIDs: d.KnowledgeWorkspaceIDs,
 		CreatedAt:             d.CreatedAt,
+		MemoryEnabled:         d.MemoryEnabled,
+		MemoryScope:           d.MemoryScope,
 	}
 }

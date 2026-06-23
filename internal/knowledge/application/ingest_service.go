@@ -58,7 +58,8 @@ func (ki *KnowledgeIngest) SetEmbedResolver(r EmbedResolver) {
 
 type IngestDocumentRequest struct {
 	TenantID       string
-	Workspace      string
+	Workspace      string // display name (for logging)
+	WorkspaceID    string // stable ID used for Milvus collection naming
 	EmbeddingModel string
 	DocumentData   []byte
 	FileName       string
@@ -145,12 +146,12 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 	result.TotalVectors = len(docChunks)
 	ki.logger.Info("vectors generated", zap.String("trace_id", sc.TraceID), zap.Int("count", len(docChunks)))
 
-	collectionName := fmt.Sprintf("%s_kb", req.Workspace)
-	if col, err := tenantdb.WorkspaceCollection(ctx, req.Workspace); err == nil {
+	collectionName := fmt.Sprintf("%s_kb", req.WorkspaceID)
+	if col, err := tenantdb.WorkspaceCollection(ctx, req.WorkspaceID); err == nil {
 		collectionName = col
 	}
 
-	if err := ki.vectorStore.CreateCollection(ctx, collectionName); err != nil {
+	if err := ki.vectorStore.CreateCollectionWithDim(ctx, collectionName, embedClient.GetVectorDimension()); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			ki.logger.Error("failed to create collection", zap.String("trace_id", sc.TraceID), zap.Error(err))
 			result.Errors = append(result.Errors, fmt.Sprintf("collection create failed: %v", err))
@@ -179,7 +180,7 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 		docNodeProps := map[string]interface{}{
 			"id":         req.DocumentID,
 			"title":      req.FileName,
-			"workspace":  req.Workspace,
+			"workspace":  req.WorkspaceID,
 			"created_at": now,
 		}
 
@@ -245,9 +246,9 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 // workspace. Deletion order: drop Milvus collection → delete Neo4j →
 // caller deletes PG. Collection-per-workspace means a single DropCollection
 // replaces the prior docID-query + per-vector delete.
-func (ki *KnowledgeIngest) DeleteWorkspaceData(ctx context.Context, workspace string) error {
-	collectionName := fmt.Sprintf("%s_kb", workspace)
-	if col, err := tenantdb.WorkspaceCollection(ctx, workspace); err == nil {
+func (ki *KnowledgeIngest) DeleteWorkspaceData(ctx context.Context, workspaceID string) error {
+	collectionName := fmt.Sprintf("%s_kb", workspaceID)
+	if col, err := tenantdb.WorkspaceCollection(ctx, workspaceID); err == nil {
 		collectionName = col
 	}
 
@@ -258,14 +259,14 @@ func (ki *KnowledgeIngest) DeleteWorkspaceData(ctx context.Context, workspace st
 
 	// Step 2: delete Neo4j nodes (idempotent — DETACH DELETE on absent nodes is a no-op)
 	if ki.graphRAG != nil {
-		if err := ki.graphRAG.DeleteWorkspaceNodes(ctx, workspace); err != nil {
+		if err := ki.graphRAG.DeleteWorkspaceNodes(ctx, workspaceID); err != nil {
 			return fmt.Errorf("failed to delete workspace graph nodes: %w", err)
 		}
 	}
 
 	ki.logger.Info("workspace storage resources deleted",
 		zap.String("trace_id", func() string { sc, _ := observability.SpanFromContext(ctx); return sc.TraceID }()),
-		zap.String("workspace", workspace))
+		zap.String("workspace", workspaceID))
 	return nil
 }
 
@@ -296,18 +297,18 @@ func (ki *KnowledgeIngest) IngestBatch(ctx context.Context, requests []IngestDoc
 	return results, nil
 }
 
-func (ki *KnowledgeIngest) GetWorkspaceStats(ctx context.Context, workspace string) (map[string]interface{}, error) {
-	collectionName := fmt.Sprintf("%s_kb", workspace)
-	if col, err := tenantdb.WorkspaceCollection(ctx, workspace); err == nil {
+func (ki *KnowledgeIngest) GetWorkspaceStats(ctx context.Context, workspaceID string) (map[string]interface{}, error) {
+	collectionName := fmt.Sprintf("%s_kb", workspaceID)
+	if col, err := tenantdb.WorkspaceCollection(ctx, workspaceID); err == nil {
 		collectionName = col
 	}
-	docCount, err := ki.graphRAG.GetWorkspaceDocCount(ctx, workspace)
+	docCount, err := ki.graphRAG.GetWorkspaceDocCount(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 
 	stats := map[string]interface{}{
-		"workspace":      workspace,
+		"workspace":      workspaceID,
 		"document_count": docCount,
 		"collection":     collectionName,
 	}

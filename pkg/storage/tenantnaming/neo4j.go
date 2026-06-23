@@ -3,6 +3,7 @@ package tenantnaming
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	pgcontext "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
@@ -18,5 +19,5 @@ func TenantLabel(ctx context.Context, label string) (string, error) {
 	if tc.TenantID == "" {
 		return "", fmt.Errorf("tenantnaming: tenant_id is empty")
 	}
-	return "T_" + tc.TenantID + "_" + label, nil
+	return "T_" + strings.ReplaceAll(tc.TenantID, "-", "") + "_" + label, nil
 }

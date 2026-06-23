@@ -82,6 +82,9 @@ func (c *Container) buildAgent(_ context.Context) error {
 	if c.Platform != nil {
 		deps.Metrics = c.Platform.Metrics
 	}
+	if c.Memory != nil && c.Memory.Service != nil {
+		deps.MemoryCleaner = c.Memory.Service
+	}
 	a.Service = agent.NewAgentService(deps)
 
 	c.Agent = a

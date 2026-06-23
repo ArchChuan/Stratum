@@ -15,6 +15,7 @@ import (
 
 // EmbedWorker periodically embeds facts and upserts to vector store.
 type EmbedWorker struct {
+	tenantID string
 	factRepo port.FactRepo
 	embed    port.Embedder
 	store    port.VectorStore
@@ -23,9 +24,10 @@ type EmbedWorker struct {
 	stopOnce sync.Once
 }
 
-// NewEmbedWorker creates an embed worker.
-func NewEmbedWorker(repo port.FactRepo, embed port.Embedder, store port.VectorStore, logger *zap.Logger) *EmbedWorker {
+// NewEmbedWorker creates an embed worker for a specific tenant.
+func NewEmbedWorker(tenantID string, repo port.FactRepo, embed port.Embedder, store port.VectorStore, logger *zap.Logger) *EmbedWorker {
 	return &EmbedWorker{
+		tenantID: tenantID,
 		factRepo: repo,
 		embed:    embed,
 		store:    store,
@@ -72,7 +74,7 @@ func (w *EmbedWorker) RunOnce(ctx context.Context) {
 	// Find facts needing embedding
 	// Using FindSupersedeCandidates with empty content as a workaround to get recent facts
 	// In production, we'd add FactRepo.FindMissingEmbeddings method
-	facts, err := w.factRepo.FindSupersedeCandidates(ctx, "", "", "", 0, float64(constants.MemoryEmbedBatchSize))
+	facts, err := w.factRepo.FindSupersedeCandidates(ctx, w.tenantID, "", "", "", 0, float64(constants.MemoryEmbedBatchSize))
 	if err != nil {
 		w.logger.Error("memory.embed_worker.find_facts_failed", zap.Error(err))
 		return
@@ -108,7 +110,7 @@ func (w *EmbedWorker) embedAndUpsert(ctx context.Context, fact *domain.MemoryFac
 		return fmt.Errorf("embed: %w", err)
 	}
 
-	collectionName := fmt.Sprintf("memory_facts_%s", fact.UserID)
+	collectionName := fmt.Sprintf("memory_facts_%s", w.tenantID)
 	doc := &port.VectorDoc{
 		ID:        fact.ID,
 		Embedding: vector,

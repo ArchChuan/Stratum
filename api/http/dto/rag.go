@@ -37,6 +37,7 @@ type CreateWorkspaceRequest struct {
 
 // UpdateWorkspaceRequest is bound from PATCH /knowledge/workspaces/:name JSON body.
 type UpdateWorkspaceRequest struct {
+	Name        *string          `json:"name"`
 	Description *string          `json:"description"`
 	Config      *WorkspaceConfig `json:"config"`
 }

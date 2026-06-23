@@ -20,6 +20,8 @@ export const KnowledgeDetailPage = () => {
     queryLoading,
     queryResult,
     handleConfigSave,
+    handleDescriptionSave,
+    handleNameSave,
     handleUpload,
     handleQuery,
   } = useKnowledgeDetailPage();
@@ -34,6 +36,8 @@ export const KnowledgeDetailPage = () => {
         name={name}
         description={stats?.description}
         onBack={() => navigate('/knowledge')}
+        onDescriptionSave={isAdmin ? handleDescriptionSave : undefined}
+        onNameSave={isAdmin ? handleNameSave : undefined}
       />
 
       <WorkspaceStatsCard stats={stats ?? undefined} />

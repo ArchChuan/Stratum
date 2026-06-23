@@ -35,9 +35,8 @@ export const CreateAgentPage = () => {
           maxIterations: 25,
           maxContextTokens: 8000,
           allowedSkills: [],
-          memory_enabled: false,
-          memory_write_scope: 'off',
-          memory_read_scope: 'off',
+          memoryEnabled: false,
+          memoryScope: 'agent',
         }}
       >
         <AgentFormSections skills={skills} mcpServers={mcpServers} workspaces={workspaces} />

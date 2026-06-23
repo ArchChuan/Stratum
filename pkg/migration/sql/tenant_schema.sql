@@ -8,9 +8,13 @@ CREATE TABLE IF NOT EXISTS agents (
     config         JSONB NOT NULL DEFAULT '{}',
     allowed_skills TEXT[] NOT NULL DEFAULT '{}',
     max_context_tokens INTEGER NOT NULL DEFAULT 8000,
+    memory_enabled BOOLEAN NOT NULL DEFAULT true,
+    memory_scope   VARCHAR(20) NOT NULL DEFAULT 'user',
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_enabled BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope VARCHAR(20) NOT NULL DEFAULT 'user';
 
 CREATE TABLE IF NOT EXISTS skills (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),

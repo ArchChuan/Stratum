@@ -10,7 +10,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
-	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 )
 
@@ -43,10 +42,6 @@ func (r *stubEntityRepo) CountByUser(ctx context.Context, userID string) (int, e
 	return 0, nil
 }
 
-func (r *stubEntityRepo) TopByFactCount(ctx context.Context, tenantID string, limit int) ([]port.EntityFactCount, error) {
-	return nil, nil
-}
-
 type stubProfiler struct {
 	generateFunc func(context.Context, string, string, []string) (string, error)
 }
@@ -74,9 +69,9 @@ func TestProfileWorker_RebuildsProfiles(t *testing.T) {
 	}
 
 	factRepo := &stubFactRepo{
-		findCandidatesFunc: func(ctx context.Context, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
-			fact1, _ := domain.NewFact("user1", "agent1", string(domain.ScopeUser), "Alice loves coffee", 0.8, nil)
-			fact2, _ := domain.NewFact("user1", "agent1", string(domain.ScopeUser), "Alice works at Acme", 0.7, nil)
+		findCandidatesFunc: func(ctx context.Context, tenantID, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
+			fact1, _ := domain.NewFact("", "user1", "agent1", string(domain.ScopeUser), "Alice loves coffee", 0.8, nil)
+			fact2, _ := domain.NewFact("", "user1", "agent1", string(domain.ScopeUser), "Alice works at Acme", 0.7, nil)
 			return []*domain.MemoryFact{fact1, fact2}, nil
 		},
 	}
@@ -89,7 +84,7 @@ func TestProfileWorker_RebuildsProfiles(t *testing.T) {
 		},
 	}
 
-	worker := workers.NewProfileWorker(entityRepo, factRepo, profiler, zap.NewNop())
+	worker := workers.NewProfileWorker("", entityRepo, factRepo, profiler, zap.NewNop())
 	worker.RunOnce(context.Background())
 
 	require.NotNil(t, updatedEntity, "should update entity")
@@ -114,7 +109,7 @@ func TestProfileWorker_SkipsIfNotNeeded(t *testing.T) {
 		},
 	}
 
-	worker := workers.NewProfileWorker(entityRepo, &stubFactRepo{}, &stubProfiler{}, zap.NewNop())
+	worker := workers.NewProfileWorker("", entityRepo, &stubFactRepo{}, &stubProfiler{}, zap.NewNop())
 	worker.RunOnce(context.Background())
 
 	require.False(t, updated, "should not update if rebuild not needed")
@@ -135,8 +130,8 @@ func TestProfileWorker_HandlesProfilerError(t *testing.T) {
 	}
 
 	factRepo := &stubFactRepo{
-		findCandidatesFunc: func(ctx context.Context, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
-			fact, _ := domain.NewFact("user1", "agent1", string(domain.ScopeUser), "test", 0.5, nil)
+		findCandidatesFunc: func(ctx context.Context, tenantID, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
+			fact, _ := domain.NewFact("", "user1", "agent1", string(domain.ScopeUser), "test", 0.5, nil)
 			return []*domain.MemoryFact{fact}, nil
 		},
 	}
@@ -147,7 +142,7 @@ func TestProfileWorker_HandlesProfilerError(t *testing.T) {
 		},
 	}
 
-	worker := workers.NewProfileWorker(entityRepo, factRepo, profiler, zap.NewNop())
+	worker := workers.NewProfileWorker("", entityRepo, factRepo, profiler, zap.NewNop())
 	// Should not panic
 	worker.RunOnce(context.Background())
 }
@@ -159,7 +154,7 @@ func TestProfileWorker_GracefulShutdown(t *testing.T) {
 		},
 	}
 
-	worker := workers.NewProfileWorker(entityRepo, &stubFactRepo{}, &stubProfiler{}, zap.NewNop())
+	worker := workers.NewProfileWorker("", entityRepo, &stubFactRepo{}, &stubProfiler{}, zap.NewNop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

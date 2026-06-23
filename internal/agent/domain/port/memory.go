@@ -20,12 +20,13 @@ type InjectionContext struct {
 	AgentID        string
 	ConversationID string
 	Query          string
+	Scope          string
 }
 
 // RecallMemoryFn executes the recall_memory tool. The infrastructure-side handler
 // is constructed in wiring and bound here as a function so the application layer
 // stays free of pipeline / pgx / vector dependencies.
-type RecallMemoryFn func(ctx context.Context, tenantID, userID, agentID string, input map[string]any) (string, error)
+type RecallMemoryFn func(ctx context.Context, tenantID, userID, agentID, scope string, input map[string]any) (string, error)
 
 // MemorySearcher is the consumer-side port for semantic memory retrieval.
 // Implemented by memory.MemoryManager (memory/application).
@@ -40,4 +41,10 @@ type MemoryRecaller interface {
 
 type MemoryWriter interface {
 	Write(ctx context.Context, tenantID, userID, content string, importance float32) error
+}
+
+// AgentMemoryCleaner is the consumer-side port for clearing all memories tied to an agent.
+// Implemented by memory.MemoryService.
+type AgentMemoryCleaner interface {
+	ClearAgentMemories(ctx context.Context, tenantID, agentID string) error
 }

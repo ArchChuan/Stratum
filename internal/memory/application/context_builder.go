@@ -23,10 +23,10 @@ func (s *MemoryService) BuildContext(ctx context.Context, req *BuildContextReque
 		readScope = "user"
 	}
 
-	filter := domain.BuildScopeFilter(req.UserID, req.AgentID, readScope)
+	filter := domain.BuildScopeFilter(req.TenantID, req.UserID, req.AgentID, readScope)
 
 	// Step 1: Fetch active facts (over-fetch for frecency ranking)
-	facts, err := s.factRepo.ListActive(ctx, filter, 50)
+	facts, err := s.factRepo.ListActive(ctx, req.TenantID, filter, 50)
 	if err != nil {
 		return nil, fmt.Errorf("list active facts: %w", err)
 	}

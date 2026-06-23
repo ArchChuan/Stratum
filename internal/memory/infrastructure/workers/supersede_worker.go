@@ -14,6 +14,7 @@ import (
 
 // SupersedeWorker periodically checks for superseded facts.
 type SupersedeWorker struct {
+	tenantID string
 	factRepo port.FactRepo
 	judge    port.LLMSuperseder
 	logger   *zap.Logger
@@ -21,9 +22,10 @@ type SupersedeWorker struct {
 	stopOnce sync.Once
 }
 
-// NewSupersedeWorker creates a supersede worker.
-func NewSupersedeWorker(repo port.FactRepo, judge port.LLMSuperseder, logger *zap.Logger) *SupersedeWorker {
+// NewSupersedeWorker creates a supersede worker for a specific tenant.
+func NewSupersedeWorker(tenantID string, repo port.FactRepo, judge port.LLMSuperseder, logger *zap.Logger) *SupersedeWorker {
 	return &SupersedeWorker{
+		tenantID: tenantID,
 		factRepo: repo,
 		judge:    judge,
 		logger:   logger,
@@ -68,7 +70,7 @@ func (w *SupersedeWorker) RunOnce(ctx context.Context) {
 
 	// Find recent active facts that might have supersede candidates
 	// Using empty filter to check across all active facts (simplified for v1)
-	recentFacts, err := w.factRepo.ListActive(ctx, domain.ScopeFilter{}, constants.MemorySupersedeBatchSize)
+	recentFacts, err := w.factRepo.ListActive(ctx, w.tenantID, domain.ScopeFilter{IncludeUserScope: true, IncludeAgentScope: true}, constants.MemorySupersedeBatchSize)
 	if err != nil {
 		w.logger.Error("memory.supersede_worker.list_active_failed", zap.Error(err))
 		return
@@ -83,6 +85,7 @@ func (w *SupersedeWorker) RunOnce(ctx context.Context) {
 		// Find candidates that this fact might supersede
 		candidates, err := w.factRepo.FindSupersedeCandidates(
 			ctx,
+			fact.TenantID,
 			fact.UserID,
 			fact.AgentID,
 			fact.Content,
@@ -124,7 +127,7 @@ func (w *SupersedeWorker) RunOnce(ctx context.Context) {
 					continue
 				}
 
-				if err := w.factRepo.Update(ctx, candidate); err != nil {
+				if err := w.factRepo.Update(ctx, candidate.TenantID, candidate); err != nil {
 					w.logger.Error("memory.supersede_worker.update_failed",
 						zap.String("fact_id", candidate.ID),
 						zap.Error(err))

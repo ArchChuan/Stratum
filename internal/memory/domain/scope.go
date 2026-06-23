@@ -20,6 +20,7 @@ func ValidateScope(s string) error {
 
 // ScopeFilter encapsulates scope filtering logic for queries
 type ScopeFilter struct {
+	TenantID          string
 	UserID            string
 	AgentID           string
 	IncludeUserScope  bool
@@ -29,10 +30,11 @@ type ScopeFilter struct {
 // BuildScopeFilter constructs a filter based on read_scope configuration
 // readScope: "user" includes both user-scoped and agent-scoped facts
 // readScope: "agent" includes only agent-scoped facts
-func BuildScopeFilter(userID, agentID, readScope string) ScopeFilter {
+func BuildScopeFilter(tenantID, userID, agentID, readScope string) ScopeFilter {
 	filter := ScopeFilter{
-		UserID:  userID,
-		AgentID: agentID,
+		TenantID: tenantID,
+		UserID:   userID,
+		AgentID:  agentID,
 	}
 	switch readScope {
 	case "user":

@@ -7,7 +7,7 @@ import (
 )
 
 func TestNewFact(t *testing.T) {
-	fact, err := domain.NewFact("user123", "", "user", "User prefers Vim", 0.85, []string{"vim", "preference"})
+	fact, err := domain.NewFact("", "user123", "", "user", "User prefers Vim", 0.85, []string{"vim", "preference"})
 	if err != nil {
 		t.Fatalf("NewFact failed: %v", err)
 	}
@@ -26,24 +26,24 @@ func TestNewFact(t *testing.T) {
 }
 
 func TestNewFact_Validation(t *testing.T) {
-	_, err := domain.NewFact("", "", "user", "content", 0.5, nil)
+	_, err := domain.NewFact("", "", "", "user", "content", 0.5, nil)
 	if err != domain.ErrUserIDMismatch {
 		t.Errorf("expected ErrUserIDMismatch for empty userID, got %v", err)
 	}
 
-	_, err = domain.NewFact("user123", "", "invalid_scope", "content", 0.5, nil)
+	_, err = domain.NewFact("", "user123", "", "invalid_scope", "content", 0.5, nil)
 	if err == nil {
 		t.Error("expected error for invalid scope")
 	}
 
-	_, err = domain.NewFact("user123", "", "user", "", 0.5, nil)
+	_, err = domain.NewFact("", "user123", "", "user", "", 0.5, nil)
 	if err != domain.ErrEmptyContent {
 		t.Errorf("expected ErrEmptyContent, got %v", err)
 	}
 }
 
 func TestFactStatusTransitions(t *testing.T) {
-	fact, _ := domain.NewFact("user123", "", "user", "content", 0.5, nil)
+	fact, _ := domain.NewFact("", "user123", "", "user", "content", 0.5, nil)
 
 	if !fact.CanTransitionTo("deleted") {
 		t.Error("active → deleted should be allowed")
@@ -70,7 +70,7 @@ func TestFactStatusTransitions(t *testing.T) {
 }
 
 func TestFactMarkSuperseded(t *testing.T) {
-	fact, _ := domain.NewFact("user123", "", "user", "old fact", 0.5, nil)
+	fact, _ := domain.NewFact("", "user123", "", "user", "old fact", 0.5, nil)
 	newFactID := "new-fact-uuid"
 
 	err := fact.MarkSuperseded(newFactID)

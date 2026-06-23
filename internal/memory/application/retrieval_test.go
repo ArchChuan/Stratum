@@ -31,8 +31,8 @@ func TestRecallMemory_HybridRetrieval(t *testing.T) {
 		Return([]float32{0.1, 0.2, 0.3}, nil)
 
 	// Mock vector search (returns 2 docs)
-	fact1, _ := domain.NewFact("user1", "agent1", "user", "Python is great", 0.8, []string{"Python"})
-	fact2, _ := domain.NewFact("user1", "agent1", "user", "Go is fast", 0.7, []string{"Go"})
+	fact1, _ := domain.NewFact("", "user1", "agent1", "user", "Python is great", 0.8, []string{"Python"})
+	fact2, _ := domain.NewFact("", "user1", "agent1", "user", "Go is fast", 0.7, []string{"Go"})
 
 	vectorStore.On("Search", ctx, "memory_facts_tenant1", mock.Anything, 20, mock.Anything).
 		Return([]*port.VectorDoc{
@@ -41,18 +41,18 @@ func TestRecallMemory_HybridRetrieval(t *testing.T) {
 		}, nil)
 
 	// Mock trigram search (returns 2 facts, 1 overlap)
-	fact3, _ := domain.NewFact("user1", "agent1", "user", "Python for ML", 0.75, []string{"Python"})
+	fact3, _ := domain.NewFact("", "user1", "agent1", "user", "Python for ML", 0.75, []string{"Python"})
 
-	factRepo.On("SearchByContent", ctx, mock.AnythingOfType("domain.ScopeFilter"), "Python programming", 20).
+	factRepo.On("SearchByContent", ctx, "tenant1", mock.AnythingOfType("domain.ScopeFilter"), "Python programming", 20).
 		Return([]*domain.MemoryFact{fact1, fact3}, nil)
 
 	// Mock GetByID for RRF fusion
-	factRepo.On("GetByID", ctx, fact1.ID).Return(fact1, nil)
-	factRepo.On("GetByID", ctx, fact2.ID).Return(fact2, nil)
-	factRepo.On("GetByID", ctx, fact3.ID).Return(fact3, nil)
+	factRepo.On("GetByID", ctx, "tenant1", fact1.ID).Return(fact1, nil)
+	factRepo.On("GetByID", ctx, "tenant1", fact2.ID).Return(fact2, nil)
+	factRepo.On("GetByID", ctx, "tenant1", fact3.ID).Return(fact3, nil)
 
 	// Mock Update for access count
-	factRepo.On("Update", ctx, mock.AnythingOfType("*domain.MemoryFact")).Return(nil).Times(3)
+	factRepo.On("Update", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryFact")).Return(nil).Times(3)
 
 	req := &RecallMemoryRequest{
 		TenantID: "tenant1",
@@ -90,7 +90,7 @@ func TestRecallMemory_EmptyResults(t *testing.T) {
 	vectorStore.On("Search", ctx, "memory_facts_tenant1", mock.Anything, 20, mock.Anything).
 		Return([]*port.VectorDoc{}, nil)
 
-	factRepo.On("SearchByContent", ctx, mock.AnythingOfType("domain.ScopeFilter"), "nonexistent query", 20).
+	factRepo.On("SearchByContent", ctx, "tenant1", mock.AnythingOfType("domain.ScopeFilter"), "nonexistent query", 20).
 		Return([]*domain.MemoryFact{}, nil)
 
 	req := &RecallMemoryRequest{

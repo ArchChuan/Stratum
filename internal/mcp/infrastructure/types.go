@@ -74,14 +74,18 @@ type ResourceFilter struct {
 
 // MCPRequest 定义 MCP 请求
 type MCPRequest struct {
-	Method string      `json:"method"`
-	Params interface{} `json:"params"`
+	JSONRPC string      `json:"jsonrpc"`
+	ID      int         `json:"id"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params,omitempty"`
 }
 
 // MCPResponse 定义 MCP 响应
 type MCPResponse struct {
-	Result interface{} `json:"result"`
-	Error  string      `json:"error,omitempty"`
+	JSONRPC string      `json:"jsonrpc,omitempty"`
+	ID      int         `json:"id,omitempty"`
+	Result  interface{} `json:"result"`
+	Error   string      `json:"error,omitempty"`
 }
 
 // ConnectionPoolConfig 定义连接池配置

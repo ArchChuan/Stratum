@@ -32,6 +32,7 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerAgents(r, c, requireActive)
 	registerKnowledge(r, c, requireActive)
 	registerMCP(r, c, requireActive)
+	registerMemory(r, c, requireActive)
 	return r
 }
 
@@ -197,4 +198,20 @@ func registerMCP(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFu
 		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
 	}
 	mcpHandler.RegisterRoutes(r, mw, requireActive)
+}
+
+func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Memory == nil || c.Platform.JWTService == nil {
+		return
+	}
+
+	jwtMW := middleware.JWTMiddleware(c.Platform.JWTService)
+	injectTenant := middleware.InjectTenantContext()
+
+	// User-scoped endpoints: authenticated users managing their own memories.
+	if c.Memory.Service != nil {
+		userHandler := handler.NewUserMemoryHandler(c.Memory.Service)
+		userGroup := r.Group("/api/memory", jwtMW, injectTenant, requireActive)
+		userGroup.DELETE("/clear", userHandler.ClearMemories)
+	}
 }

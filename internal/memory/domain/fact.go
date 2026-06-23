@@ -9,6 +9,7 @@ import (
 // MemoryFact is the aggregate root for a memory fact
 type MemoryFact struct {
 	ID           string
+	TenantID     string
 	UserID       string
 	AgentID      string
 	Scope        Scope
@@ -25,7 +26,7 @@ type MemoryFact struct {
 }
 
 // NewFact creates a new memory fact with validation
-func NewFact(userID, agentID string, scope string, content string, importance float64, entityNames []string) (*MemoryFact, error) {
+func NewFact(tenantID, userID, agentID string, scope string, content string, importance float64, entityNames []string) (*MemoryFact, error) {
 	if userID == "" {
 		return nil, ErrUserIDMismatch
 	}
@@ -39,6 +40,7 @@ func NewFact(userID, agentID string, scope string, content string, importance fl
 	now := time.Now()
 	return &MemoryFact{
 		ID:           uuid.NewString(),
+		TenantID:     tenantID,
 		UserID:       userID,
 		AgentID:      agentID,
 		Scope:        Scope(scope),

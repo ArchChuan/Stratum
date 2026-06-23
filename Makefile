@@ -189,7 +189,7 @@ dev-up: infra-up obs-up
 dev-down: obs-down infra-down
 
 run:
-	go run ./cmd/server
+	go run ./cmd/server 2>&1 | tee /tmp/stratum.log
 
 fe-dev:
 	cd $(WEB_DIR) && npm run dev

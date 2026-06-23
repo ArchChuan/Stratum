@@ -6,7 +6,7 @@ import { SectionHeader } from '@/shared/ui';
 
 export const AgentMemoryConfig = () => {
   const form = Form.useFormInstance();
-  const memoryEnabled = Form.useWatch('memory_enabled', form);
+  const memoryEnabled = Form.useWatch('memoryEnabled', form);
 
   return (
     <div
@@ -26,7 +26,7 @@ export const AgentMemoryConfig = () => {
 
       <Form.Item
         label="启用记忆"
-        name="memory_enabled"
+        name="memoryEnabled"
         valuePropName="checked"
         extra="启用后，Agent 将自动记录和检索对话中的事实与实体"
       >
@@ -34,31 +34,14 @@ export const AgentMemoryConfig = () => {
       </Form.Item>
 
       <Form.Item
-        label="写入作用域"
-        name="memory_write_scope"
-        rules={[
-          {
-            required: memoryEnabled,
-            message: '启用记忆时必须选择写入作用域',
-          },
-        ]}
-        extra="决定记忆的存储范围"
-      >
-        <Select
-          placeholder="选择写入作用域"
-          options={MEMORY_SCOPE_OPTIONS}
-          disabled={!memoryEnabled}
-        />
-      </Form.Item>
-
-      <Form.Item
-        label="读取作用域"
-        name="memory_read_scope"
-        extra="决定检索记忆的范围"
+        label="作用域"
+        name="memoryScope"
+        rules={[{ required: memoryEnabled, message: '启用记忆时必须选择作用域' }]}
+        extra="决定记忆的存储与检索范围"
         style={{ marginBottom: 0 }}
       >
         <Select
-          placeholder="选择读取作用域"
+          placeholder="选择作用域"
           options={MEMORY_SCOPE_OPTIONS}
           disabled={!memoryEnabled}
         />

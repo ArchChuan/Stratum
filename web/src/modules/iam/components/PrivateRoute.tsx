@@ -36,19 +36,30 @@ export const PrivateRoute = ({ children, requiredRole }: PrivateRouteProps) => {
     return <Navigate to="/onboarding" replace />;
   }
 
-  if (requiredRole && user.global_role !== requiredRole) {
-    return (
-      <Result
-        status="403"
-        title="403"
-        subTitle="您没有访问此页面的权限。"
-        extra={
-          <Button type="primary" onClick={() => window.history.back()}>
-            返回
-          </Button>
-        }
-      />
-    );
+  if (requiredRole) {
+    const isGlobalAdmin = user.global_role === 'global_admin';
+    const isSystemAdmin = user.system_role === 'system_admin' || isGlobalAdmin;
+    const ok =
+      requiredRole === 'global_admin'
+        ? isGlobalAdmin
+        : requiredRole === 'system_admin'
+          ? isSystemAdmin
+          : user.global_role === requiredRole || user.system_role === requiredRole;
+
+    if (!ok) {
+      return (
+        <Result
+          status="403"
+          title="403"
+          subTitle="您没有访问此页面的权限。"
+          extra={
+            <Button type="primary" onClick={() => window.history.back()}>
+              返回
+            </Button>
+          }
+        />
+      );
+    }
   }
 
   return <>{children}</>;

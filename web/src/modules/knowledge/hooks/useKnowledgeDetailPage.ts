@@ -58,6 +58,33 @@ export const useKnowledgeDetailPage = () => {
     fetchStats();
   }, [fetchStats]);
 
+  const handleNameSave = useCallback(
+    async (newName: string) => {
+      if (!newName || newName === name) return;
+      try {
+        await knowledgeApi.update(name, { name: newName });
+        message.success('名称已更新');
+        navigate(`/knowledge/${encodeURIComponent(newName)}`);
+      } catch (err) {
+        message.error(extractErrorMessage(err) || '更新失败');
+      }
+    },
+    [name, navigate],
+  );
+
+  const handleDescriptionSave = useCallback(
+    async (description: string) => {
+      try {
+        await knowledgeApi.update(name, { description });
+        message.success('描述已更新');
+        fetchStats();
+      } catch (err) {
+        message.error(extractErrorMessage(err) || '更新失败');
+      }
+    },
+    [name, fetchStats],
+  );
+
   const handleConfigSave = useCallback(
     async (values: ConfigValues) => {
       setConfigLoading(true);
@@ -93,8 +120,14 @@ export const useKnowledgeDetailPage = () => {
       setUploadLoading(true);
       try {
         const res = await knowledgeApi.ingest(formData);
-        const totalChunks = (res.data as { total_chunks?: number })?.total_chunks ?? 0;
-        message.success(`上传成功，共 ${totalChunks} 个分块`);
+        const data = res.data as { total_chunks?: number; errors?: string[] };
+        const totalChunks = data?.total_chunks ?? 0;
+        const errs = data?.errors ?? [];
+        if (errs.length > 0) {
+          message.warning(`上传完成，但存在错误：${errs[0]}`);
+        } else {
+          message.success(`上传成功，共 ${totalChunks} 个分块`);
+        }
         fetchStats();
       } catch (err: unknown) {
         const status = (err as { response?: { status?: number } })?.response?.status;
@@ -143,6 +176,8 @@ export const useKnowledgeDetailPage = () => {
     queryLoading,
     queryResult,
     handleConfigSave,
+    handleDescriptionSave,
+    handleNameSave,
     handleUpload,
     handleQuery,
   };

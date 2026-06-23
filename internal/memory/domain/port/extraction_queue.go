@@ -32,9 +32,6 @@ type ExtractionQueue interface {
 	// MarkFailed increments retry count or marks permanently failed.
 	MarkFailed(ctx context.Context, taskID int64, errMsg string) error
 
-	// PendingCount returns count of pending tasks for a tenant.
-	PendingCount(ctx context.Context, tenantID string) (int, error)
-
 	// DeleteOldCompleted removes completed tasks older than retention days.
 	DeleteOldCompleted(ctx context.Context, retentionDays int) (int, error)
 }

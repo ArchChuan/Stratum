@@ -23,6 +23,7 @@ type MenuItem = NonNullable<MenuProps['items']>[number];
 export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
   const base: MenuItem[] = [
     { key: '/', icon: <DashboardOutlined />, label: <Link to="/">概览</Link> },
+    { key: '/chat', icon: <CommentOutlined />, label: <Link to="/chat">Agent 对话</Link> },
     {
       key: 'agent-group',
       icon: <RobotOutlined />,
@@ -34,7 +35,6 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
           icon: <PlusCircleOutlined />,
           label: <Link to="/agents/create">创建 Agent</Link>,
         },
-        { key: '/chat', icon: <CommentOutlined />, label: <Link to="/chat">Agent 对话</Link> },
         { key: '/history', icon: <HistoryOutlined />, label: <Link to="/history">执行历史</Link> },
       ],
     },
@@ -94,14 +94,6 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
   if (user?.global_role === 'global_admin' || user?.system_role === 'system_admin') {
     const adminItems: MenuItem[] = [];
 
-    if (user?.system_role === 'system_admin' || user?.global_role === 'global_admin') {
-      adminItems.push({
-        key: '/admin/memory',
-        icon: <DatabaseOutlined />,
-        label: <Link to="/admin/memory">内存诊断</Link>,
-      });
-    }
-
     if (user?.global_role === 'global_admin') {
       adminItems.push({
         key: '/admin/tenants',
@@ -124,7 +116,7 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
 };
 
 export const resolveOpenKeys = (pathname: string): string[] => {
-  if (['/agents', '/chat', '/history'].some((p) => pathname.startsWith(p))) return ['agent-group'];
+  if (['/agents', '/history'].some((p) => pathname.startsWith(p))) return ['agent-group'];
   if (pathname.startsWith('/skills')) return ['skill-group'];
   if (pathname.startsWith('/mcp')) return ['mcp-group'];
   if (pathname.startsWith('/tenant')) return ['tenant-group'];

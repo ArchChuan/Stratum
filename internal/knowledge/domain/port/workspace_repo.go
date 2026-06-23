@@ -12,6 +12,7 @@ type WorkspaceRepo interface {
 	GetByName(ctx context.Context, tenantID, name string) (*domain.Workspace, error)
 	List(ctx context.Context, tenantID string) ([]*domain.Workspace, error)
 	UpdateDescriptionAndConfig(ctx context.Context, tenantID, name string, description *string, cfg domain.WorkspaceConfig) error
+	UpdateName(ctx context.Context, tenantID, oldName, newName string) error
 	Delete(ctx context.Context, tenantID, name string) error
 	GetConfigForUpload(ctx context.Context, tenantID, name string) (domain.WorkspaceConfig, error)
 }

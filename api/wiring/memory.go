@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/nats-io/nats.go"
+	goredis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
@@ -20,6 +21,7 @@ import (
 // reachable; downstream consumers must nil-check before use.
 type Memory struct {
 	Manager  *memory.MemoryManager
+	Service  *memory.MemoryService
 	Injector port.MemoryInjector
 	Pipeline *pipeline.Pipeline
 	RecallFn port.RecallMemoryFn
@@ -32,6 +34,18 @@ func (c *Container) buildMemory(ctx context.Context) error {
 	}
 
 	db := c.dbOrNil()
+	if db != nil {
+		factRepo := persistence.NewFactRepo(db)
+		entityRepo := persistence.NewEntityRepo(db)
+		queue := persistence.NewExtractionQueue(db)
+
+		var redisClient *goredis.Client
+		if c.Storage != nil && c.Storage.Redis != nil {
+			redisClient = c.Storage.Redis.Client()
+		}
+
+		mem.Service = memory.NewMemoryService(factRepo, entityRepo, queue, nil, nil, nil, redisClient)
+	}
 	if db != nil && c.Storage != nil && c.Storage.Milvus != nil {
 		inj := pipeline.NewMemoryInjector(db, c.Logger, nil, c.Storage.Milvus)
 		var embedResolver pipeline.EmbedServiceResolver
@@ -42,8 +56,8 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		mem.Injector = injectorAdapter{inj: inj}
 
 		recallHandler := pipeline.NewRecallHandler(db, c.Logger, nil, embedResolver, c.Storage.Milvus)
-		mem.RecallFn = func(ctx context.Context, tenantID, userID, agentID string, input map[string]any) (string, error) {
-			return recallHandler.Handle(ctx, tenantID, userID, agentID, input)
+		mem.RecallFn = func(ctx context.Context, tenantID, userID, agentID, scope string, input map[string]any) (string, error) {
+			return recallHandler.Handle(ctx, tenantID, userID, agentID, scope, input)
 		}
 	}
 

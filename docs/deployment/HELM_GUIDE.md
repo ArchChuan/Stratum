@@ -79,6 +79,7 @@ name: {{ .Values.name | upper | trunc 63 | trimSuffix "-" }}
 ```
 
 示例：
+
 ```bash
 helm install stratum ./helm \
   -f helm/values.yaml \           # 基础配置
@@ -112,6 +113,7 @@ dependencies:
 ```
 
 **配置依赖**（在父 Chart 的 values.yaml 中）:
+
 ```yaml
 # helm/values.yaml
 postgresql:
@@ -138,6 +140,7 @@ redis:
 ```
 
 **部署命令**:
+
 ```bash
 # 1. 下载依赖 Chart
 helm dependency update ./helm
@@ -165,6 +168,7 @@ database:
 ```
 
 **模板中判断**:
+
 ```yaml
 # helm/templates/deployment.yaml
 env:
@@ -433,6 +437,7 @@ spec:
 ```
 
 **触发时机**:
+
 - `pre-install`: 安装前执行（如数据库初始化）
 - `post-install`: 安装后执行（如发送通知）
 - `pre-upgrade`: 升级前执行（如数据库迁移）
@@ -524,6 +529,7 @@ postgresql:
 ### 1. Secret 管理
 
 **❌ 错误做法**（硬编码密码）:
+
 ```yaml
 # values.yaml
 database:
@@ -531,6 +537,7 @@ database:
 ```
 
 **✅ 正确做法**（外部注入）:
+
 ```bash
 # 方式 1: 通过 K8s Secret
 kubectl create secret generic db-creds \

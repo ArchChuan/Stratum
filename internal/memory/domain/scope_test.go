@@ -31,7 +31,7 @@ func TestValidateScope(t *testing.T) {
 }
 
 func TestBuildScopeFilter(t *testing.T) {
-	userFilter := domain.BuildScopeFilter("user123", "agent456", "user")
+	userFilter := domain.BuildScopeFilter("tenant1", "user123", "agent456", "user")
 	if userFilter.UserID != "user123" {
 		t.Errorf("expected userID user123")
 	}
@@ -42,7 +42,7 @@ func TestBuildScopeFilter(t *testing.T) {
 		t.Error("expected agent scope included for read_scope=user")
 	}
 
-	agentFilter := domain.BuildScopeFilter("user123", "agent456", "agent")
+	agentFilter := domain.BuildScopeFilter("tenant1", "user123", "agent456", "agent")
 	if agentFilter.IncludeUserScope {
 		t.Error("expected user scope excluded for read_scope=agent")
 	}

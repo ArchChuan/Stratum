@@ -148,9 +148,11 @@ git push origin main
 ### Step 2: 启用 GitLab Runner
 
 **使用 Shared Runners**：
+
 - Settings → CI/CD → Runners → Enable shared runners
 
 **或配置专用 Runner**：
+
 ```bash
 # 1. 安装 gitlab-runner
 curl -L https://packages.gitlab.com/install/repositories/runner/gitlab-runner/script.rpm.sh | sudo bash
@@ -229,9 +231,11 @@ git push origin main     # 手动触发生产部署
 ### 查看 CI 日志
 
 **GitHub Actions**：
+
 - Actions 标签 → 选择 workflow run → 展开 job → 查看 step 日志
 
 **GitLab CI**：
+
 - CI/CD → Pipelines → 点击 pipeline → 点击 job → 查看日志
 
 ### 常见问题
@@ -253,6 +257,7 @@ Error: Unable to connect to the server
 ```
 
 **解决**：
+
 ```bash
 # 验证 KUBE_CONFIG 内容
 echo "$KUBE_CONFIG" | base64 -d | kubectl --kubeconfig=/dev/stdin cluster-info
@@ -267,6 +272,7 @@ Error: timed out waiting for the condition
 ```
 
 **解决**：
+
 ```bash
 # 检查 Pod 状态
 kubectl get pods -n stratum
@@ -283,6 +289,7 @@ Error: secret "stratum-secrets" not found
 ```
 
 **解决**：检查 Secret 创建 step 是否执行成功，手动创建：
+
 ```bash
 kubectl create secret generic stratum-secrets \
   --from-literal=postgresPassword="xxx" \
@@ -323,6 +330,7 @@ git push origin v1.2.3
 ### 3. 回滚策略
 
 **方式 1：Helm 回滚**
+
 ```bash
 # 查看历史
 helm history stratum -n stratum
@@ -335,6 +343,7 @@ helm rollback stratum 3 -n stratum
 ```
 
 **方式 2：重新部署旧镜像**
+
 ```bash
 helm upgrade stratum ./helm \
   -f helm/values-prod.yaml \

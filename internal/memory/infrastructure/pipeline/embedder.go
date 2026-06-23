@@ -162,6 +162,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		"conversation_id": ev.ConversationID,
 		"user_id":         ev.UserID,
 		"agent_id":        ev.AgentID,
+		"scope":           ev.Scope,
 		"role":            ev.Role,
 		"content":         ev.Content,
 		"created_at":      ev.CreatedAt.Format(time.RFC3339),

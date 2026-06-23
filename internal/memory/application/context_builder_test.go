@@ -28,20 +28,20 @@ func TestBuildContext_FrecencyRanking(t *testing.T) {
 
 	// Create facts with different frecency patterns
 	now := time.Now()
-	fact1, _ := domain.NewFact("user1", "agent1", "user", "Recent high-importance fact", 0.9, []string{})
+	fact1, _ := domain.NewFact("", "user1", "agent1", "user", "Recent high-importance fact", 0.9, []string{})
 	fact1.AccessCount = 5
 	fact1.LastAccessAt = now.Add(-1 * 24 * time.Hour) // 1 day ago
 
-	fact2, _ := domain.NewFact("user1", "agent1", "user", "Old low-importance fact", 0.3, []string{})
+	fact2, _ := domain.NewFact("", "user1", "agent1", "user", "Old low-importance fact", 0.3, []string{})
 	fact2.AccessCount = 1
 	fact2.LastAccessAt = now.Add(-30 * 24 * time.Hour) // 30 days ago
 
-	fact3, _ := domain.NewFact("user1", "agent1", "user", "Medium fact", 0.6, []string{})
+	fact3, _ := domain.NewFact("", "user1", "agent1", "user", "Medium fact", 0.6, []string{})
 	fact3.AccessCount = 3
 	fact3.LastAccessAt = now.Add(-7 * 24 * time.Hour) // 7 days ago
 
 	// Mock fact retrieval
-	factRepo.On("ListActive", ctx, mock.AnythingOfType("domain.ScopeFilter"), 50).
+	factRepo.On("ListActive", ctx, "tenant1", mock.AnythingOfType("domain.ScopeFilter"), 50).
 		Return([]*domain.MemoryFact{fact1, fact2, fact3}, nil)
 
 	// Mock entity profiles
@@ -86,7 +86,7 @@ func TestBuildContext_EmptyFacts(t *testing.T) {
 	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil)
 
 	// No facts
-	factRepo.On("ListActive", ctx, mock.AnythingOfType("domain.ScopeFilter"), 50).
+	factRepo.On("ListActive", ctx, "tenant1", mock.AnythingOfType("domain.ScopeFilter"), 50).
 		Return([]*domain.MemoryFact{}, nil)
 
 	// No entities

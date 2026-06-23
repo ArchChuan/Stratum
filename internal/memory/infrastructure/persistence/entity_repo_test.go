@@ -87,7 +87,7 @@ func TestEntityRepo_ListProfiles(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, e1))
 	require.NoError(t, repo.Create(ctx, e2))
 
-	filter := domain.BuildScopeFilter("user123", "agent1", "user")
+	filter := domain.BuildScopeFilter("", "user123", "agent1", "user")
 	entities, err := repo.ListProfiles(ctx, filter, 10)
 	require.NoError(t, err)
 	require.Len(t, entities, 2)

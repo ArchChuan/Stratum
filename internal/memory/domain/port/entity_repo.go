@@ -25,13 +25,4 @@ type EntityRepo interface {
 
 	// CountByUser returns total entity count for a user.
 	CountByUser(ctx context.Context, userID string) (int, error)
-
-	// TopByFactCount returns entities with highest fact counts.
-	TopByFactCount(ctx context.Context, tenantID string, limit int) ([]EntityFactCount, error)
-}
-
-// EntityFactCount holds entity name and associated fact count.
-type EntityFactCount struct {
-	Name  string
-	Count int
 }

@@ -141,7 +141,26 @@ func (r *WorkspaceRepo) UpdateDescriptionAndConfig(ctx context.Context, tenantID
 	return nil
 }
 
-// Delete removes the workspace; ErrWorkspaceLinked on FK violation, ErrWorkspaceNotFound on 0 rows.
+// UpdateName renames a workspace; ErrWorkspaceNotFound on 0 rows, ErrWorkspaceConflict on duplicate.
+func (r *WorkspaceRepo) UpdateName(ctx context.Context, tenantID, oldName, newName string) error {
+	schema := schemaFor(tenantID)
+	tag, err := r.db.Exec(ctx,
+		fmt.Sprintf(`UPDATE "%s".rag_workspaces SET name = $1, updated_at = NOW() WHERE name = $2`, schema),
+		newName, oldName,
+	)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return domain.ErrWorkspaceConflict
+		}
+		return fmt.Errorf("workspace_repo: update_name: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrWorkspaceNotFound
+	}
+	return nil
+}
+
 func (r *WorkspaceRepo) Delete(ctx context.Context, tenantID, name string) error {
 	schema := schemaFor(tenantID)
 	tag, err := r.db.Exec(ctx,
