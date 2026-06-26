@@ -158,6 +158,7 @@ func newMemoryService(pool *pgxpool.Pool, redis *redis.Client) (*application.Mem
 		&mockLLMExtractor{},
 		&mockEmbedClient{},
 		redis,
+		nil,
 	)
 
 	return service, factRepo, entityRepo, queue
@@ -255,6 +256,10 @@ func (m *mockVectorStore) Delete(ctx context.Context, collectionName string, ids
 	}
 	return nil
 }
+
+func (m *mockVectorStore) DeleteAllByUser(_ context.Context, _, _ string) error { return nil }
+
+func (m *mockVectorStore) DeleteAllByAgent(_ context.Context, _, _ string) error { return nil }
 
 func (m *mockVectorStore) CreateCollection(ctx context.Context, collectionName string, dimension int) error {
 	return nil // no-op for in-memory mock

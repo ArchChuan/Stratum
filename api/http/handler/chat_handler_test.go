@@ -21,6 +21,7 @@ import (
 // mockChatStore is a test double for agent.ChatStore.
 type mockChatStore struct {
 	createFn    func(ctx context.Context, tenantID, agentID, userID, name string) (*agent.ChatConversation, error)
+	getConvFn   func(ctx context.Context, tenantID, convID string) (*agent.ChatConversation, error)
 	listConvsFn func(ctx context.Context, tenantID, agentID, userID string) ([]*agent.ChatConversation, error)
 	renameFn    func(ctx context.Context, tenantID, convID, userID, name string) error
 	deleteFn    func(ctx context.Context, tenantID, convID, userID string) error
@@ -29,6 +30,12 @@ type mockChatStore struct {
 	cleanupFn   func(ctx context.Context, tenantID string) error
 }
 
+func (m *mockChatStore) GetConversation(ctx context.Context, tenantID, convID string) (*agent.ChatConversation, error) {
+	if m.getConvFn != nil {
+		return m.getConvFn(ctx, tenantID, convID)
+	}
+	return nil, errors.New("not found")
+}
 func (m *mockChatStore) CreateConversation(ctx context.Context, tenantID, agentID, userID, name string) (*agent.ChatConversation, error) {
 	return m.createFn(ctx, tenantID, agentID, userID, name)
 }
@@ -50,6 +57,7 @@ func (m *mockChatStore) ListMessages(ctx context.Context, tenantID, convID, user
 func (m *mockChatStore) CleanupExpired(ctx context.Context, tenantID string) error {
 	return m.cleanupFn(ctx, tenantID)
 }
+func (m *mockChatStore) DeleteByAgent(_ context.Context, _, _ string) error { return nil }
 
 func setupChatRouter(h *ChatHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
@@ -282,9 +290,8 @@ func TestChatHandler_ListMessages_success(t *testing.T) {
 
 func TestChatHandler_AddMessage_success(t *testing.T) {
 	store := &mockChatStore{
-		// ListMessages used for ownership check: return empty, no error = owned
-		listMsgsFn: func(_ context.Context, _, _, _ string) ([]*agent.ChatMessage, error) {
-			return nil, nil
+		getConvFn: func(_ context.Context, _, _ string) (*agent.ChatConversation, error) {
+			return &agent.ChatConversation{ID: "c1", AgentID: "a1", UserID: "u1"}, nil
 		},
 		addMsgFn: func(_ context.Context, _ string, msg *agent.ChatMessage) error {
 			msg.ID = "m-new"
@@ -329,8 +336,8 @@ func TestChatHandler_AddMessage_invalidRole(t *testing.T) {
 
 func TestChatHandler_AddMessage_ownershipFailed(t *testing.T) {
 	store := &mockChatStore{
-		listMsgsFn: func(_ context.Context, _, _, _ string) ([]*agent.ChatMessage, error) {
-			return nil, errors.New("no rows or forbidden")
+		getConvFn: func(_ context.Context, _, _ string) (*agent.ChatConversation, error) {
+			return nil, errors.New("not found")
 		},
 	}
 	h := NewChatHandler(store, zap.NewNop())

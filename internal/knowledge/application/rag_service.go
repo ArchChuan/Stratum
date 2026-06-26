@@ -4,14 +4,16 @@ package application
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	pgcontext "github.com/byteBuilderX/stratum/pkg/storage/postgres"
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/byteBuilderX/stratum/pkg/vector"
 	"go.uber.org/zap"
 )
@@ -34,12 +36,27 @@ func NewRAGSearchFn(rs *RAGService, tenantID string) func(
 			wg.Add(1)
 			go func(i int, ws string) {
 				defer wg.Done()
+				mode := "vector"
+				effectiveTopK := topK
+				embedModel := ""
+				if rs.wsRepo != nil {
+					if cfg, err := rs.wsRepo.GetConfigForUpload(ctx, tenantID, ws); err == nil {
+						if cfg.QueryMode != "" {
+							mode = cfg.QueryMode
+						}
+						if cfg.TopK > 0 {
+							effectiveTopK = cfg.TopK
+						}
+						embedModel = cfg.EmbeddingModel
+					}
+				}
 				out, err := rs.Query(ctx, RAGQueryRequest{
-					Workspace: ws,
-					Question:  query,
-					TenantID:  tenantID,
-					Mode:      "vector",
-					TopK:      topK,
+					Workspace:      ws,
+					Question:       query,
+					TenantID:       tenantID,
+					Mode:           mode,
+					TopK:           effectiveTopK,
+					EmbeddingModel: embedModel,
 				})
 				if err != nil {
 					results[i] = wsResult{err: err}
@@ -74,27 +91,26 @@ type RAGService struct {
 	embeddingSvc  knowledgeport.Embedder
 	embedResolver EmbedResolver
 	wsRepo        knowledgeport.WorkspaceRepo
+	chunkRepo     knowledgeport.ChunkRepo
 	vectorStore   *vector.VectorStore
-	graphRAG      knowledgeport.GraphStore
 	logger        *zap.Logger
 }
 
 func NewRAGService(
 	embeddingSvc knowledgeport.Embedder,
 	vectorStore *vector.VectorStore,
-	graphRAG knowledgeport.GraphStore,
 	logger *zap.Logger,
 ) *RAGService {
 	return &RAGService{
 		embeddingSvc: embeddingSvc,
 		vectorStore:  vectorStore,
-		graphRAG:     graphRAG,
 		logger:       logger,
 	}
 }
 
 func (rs *RAGService) SetEmbedResolver(r EmbedResolver)                  { rs.embedResolver = r }
 func (rs *RAGService) SetWorkspaceRepo(repo knowledgeport.WorkspaceRepo) { rs.wsRepo = repo }
+func (rs *RAGService) SetChunkRepo(repo knowledgeport.ChunkRepo)         { rs.chunkRepo = repo }
 
 func (rs *RAGService) resolveEmbedder(ctx context.Context, req RAGQueryRequest) knowledgeport.Embedder {
 	if rs.embedResolver != nil && req.TenantID != "" {
@@ -118,7 +134,6 @@ type RAGQueryRequest struct {
 type RAGQueryResult struct {
 	Answer        string
 	Sources       []Source
-	GraphContext  []GraphEntity
 	VectorResults []vector.SearchResult
 	Mode          string
 	Latency       time.Duration
@@ -129,12 +144,6 @@ type Source struct {
 	Content    string
 	ChunkIndex int64
 	Score      float32
-}
-
-type GraphEntity struct {
-	ID         string
-	Label      string
-	Properties map[string]interface{}
 }
 
 func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQueryResult, error) {
@@ -156,21 +165,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		req.TopK = 5
 	}
 
-	wsID := req.WorkspaceID
-	if wsID == "" {
-		wsID = req.Workspace
-	}
-	if rs.wsRepo != nil {
-		if tc, ok := pgcontext.FromContext(ctx); ok && tc.TenantID != "" {
-			if ws, err := rs.wsRepo.GetByName(ctx, tc.TenantID, wsID); err == nil {
-				wsID = ws.ID
-			}
-		}
-	}
-	collectionName := fmt.Sprintf("%s_kb", wsID)
-	if col, err := tenantdb.WorkspaceCollection(ctx, wsID); err == nil {
-		collectionName = col
-	}
+	collectionName := constants.CollectionName(req.TenantID, req.WorkspaceID)
 
 	switch req.Mode {
 	case "vector":
@@ -191,57 +186,94 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		}
 
 	case "keyword":
-		keywordResults, err := rs.queryKeyword(ctx, req.Question, collectionName, req.TopK)
+		if rs.chunkRepo == nil {
+			return nil, fmt.Errorf("keyword search not available: chunk store not configured")
+		}
+		chunks, err := rs.chunkRepo.KeywordSearch(ctx, req.TenantID, req.Workspace, req.Question, req.TopK)
 		if err != nil {
 			rs.logger.Error("keyword query failed", zap.String("trace_id", sc.TraceID), zap.Error(err))
 			return nil, fmt.Errorf("keyword query failed: %w", err)
 		}
-		result.VectorResults = keywordResults
-
-		for _, kr := range keywordResults {
+		for _, c := range chunks {
 			result.Sources = append(result.Sources, Source{
-				DocumentID: kr.ID,
-				Content:    kr.Content,
-				ChunkIndex: kr.ChunkIndex,
-				Score:      kr.Score,
+				DocumentID: c.ID,
+				Content:    c.Text,
+				ChunkIndex: c.Index,
 			})
 		}
 
-	case "graph":
-		graphEntities, err := rs.queryGraph(ctx, req.Question)
-		if err != nil {
-			rs.logger.Error("graph query failed", zap.String("trace_id", sc.TraceID), zap.Error(err))
-			return nil, fmt.Errorf("graph query failed: %w", err)
-		}
-		result.GraphContext = graphEntities
-
 	case "hybrid":
-		// Hybrid = Vector + Keyword (RRF fusion)
 		embedder := rs.resolveEmbedder(ctx, req)
 		if embedder == nil {
 			return nil, fmt.Errorf("embedding service not configured: set an embedding model in tenant settings")
 		}
-
-		queryVector, err := embedder.EmbedVector(ctx, req.Question)
-		if err != nil {
-			rs.logger.Error("failed to embed query", zap.String("trace_id", sc.TraceID), zap.Error(err))
-			return nil, fmt.Errorf("failed to embed query: %w", err)
+		if rs.chunkRepo == nil {
+			return nil, fmt.Errorf("hybrid search not available: chunk store not configured")
 		}
-
-		hybridResults, err := rs.vectorStore.HybridSearch(ctx, collectionName, queryVector, req.Question, req.TopK)
-		if err != nil {
-			rs.logger.Error("hybrid query failed", zap.String("trace_id", sc.TraceID), zap.Error(err))
-			return nil, fmt.Errorf("hybrid query failed: %w", err)
+		type vRes struct {
+			r []vector.SearchResult
+			e error
 		}
-		result.VectorResults = hybridResults
-
-		for _, hr := range hybridResults {
-			result.Sources = append(result.Sources, Source{
-				DocumentID: hr.ID,
-				Content:    hr.Content,
-				ChunkIndex: hr.ChunkIndex,
-				Score:      hr.Score,
-			})
+		type kRes struct {
+			r []domain.Chunk
+			e error
+		}
+		vCh := make(chan vRes, 1)
+		kCh := make(chan kRes, 1)
+		go func() {
+			r, e := rs.queryVector(ctx, req.Question, collectionName, req.TopK*2, embedder)
+			vCh <- vRes{r, e}
+		}()
+		go func() {
+			r, e := rs.chunkRepo.KeywordSearch(ctx, req.TenantID, req.Workspace, req.Question, req.TopK*2)
+			kCh <- kRes{r, e}
+		}()
+		vr := <-vCh
+		kr := <-kCh
+		if vr.e != nil {
+			rs.logger.Error("hybrid vector search failed", zap.String("trace_id", sc.TraceID), zap.Error(vr.e))
+			return nil, fmt.Errorf("vector search failed: %w", vr.e)
+		}
+		if kr.e != nil {
+			rs.logger.Error("hybrid keyword search failed", zap.String("trace_id", sc.TraceID), zap.Error(kr.e))
+			return nil, fmt.Errorf("keyword search failed: %w", kr.e)
+		}
+		const rrfK = 60.0
+		rrfScores := make(map[string]float64)
+		for rank, r := range vr.r {
+			rrfScores[r.ID] += 1.0 / (rrfK + float64(rank+1))
+		}
+		for rank, c := range kr.r {
+			rrfScores[c.ID] += 1.0 / (rrfK + float64(rank+1))
+		}
+		srcMap := make(map[string]Source)
+		for _, r := range vr.r {
+			srcMap[r.ID] = Source{DocumentID: r.ID, Content: r.Content, ChunkIndex: r.ChunkIndex}
+		}
+		for _, c := range kr.r {
+			if _, ok := srcMap[c.ID]; !ok {
+				srcMap[c.ID] = Source{DocumentID: c.ID, Content: c.Text, ChunkIndex: c.Index}
+			}
+		}
+		type scoredSrc struct {
+			src   Source
+			score float64
+		}
+		all := make([]scoredSrc, 0, len(rrfScores))
+		for id, score := range rrfScores {
+			if s, ok := srcMap[id]; ok {
+				all = append(all, scoredSrc{s, score})
+			}
+		}
+		sort.Slice(all, func(i, j int) bool { return all[i].score > all[j].score })
+		topN := req.TopK
+		if topN > len(all) {
+			topN = len(all)
+		}
+		for i := 0; i < topN; i++ {
+			s := all[i].src
+			s.Score = float32(all[i].score)
+			result.Sources = append(result.Sources, s)
 		}
 	}
 
@@ -250,7 +282,6 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	rs.logger.Info("RAG query completed",
 		zap.String("trace_id", sc.TraceID),
 		zap.Int("vector_results", len(result.VectorResults)),
-		zap.Int("graph_entities", len(result.GraphContext)),
 		zap.Duration("latency", result.Latency))
 
 	return result, nil
@@ -280,59 +311,12 @@ func (rs *RAGService) queryVector(ctx context.Context, question string, collecti
 	return results, nil
 }
 
-func (rs *RAGService) queryGraph(ctx context.Context, question string) ([]GraphEntity, error) {
-	sc, _ := observability.SpanFromContext(ctx)
-	rs.logger.Debug("querying knowledge graph", zap.String("trace_id", sc.TraceID))
-
-	records, err := rs.graphRAG.FullTextSearch(ctx, question, 20)
-	if err != nil {
-		return nil, err
-	}
-
-	var graphEntities []GraphEntity
-	for _, n := range records {
-		if n.ID == "" {
-			rs.logger.Warn("graph search result missing id, skipping", zap.String("trace_id", sc.TraceID))
-			continue
-		}
-		label := "Entity"
-		if len(n.Labels) > 0 {
-			label = n.Labels[0]
-		}
-		graphEntities = append(graphEntities, GraphEntity{
-			ID:         n.ID,
-			Label:      label,
-			Properties: n.Properties,
-		})
-	}
-
-	return graphEntities, nil
-}
-
-func (rs *RAGService) queryKeyword(ctx context.Context, question string, collection string, topK int) ([]vector.SearchResult, error) {
-	rs.logger.Debug("querying keyword store")
-
-	results, err := rs.vectorStore.KeywordSearch(ctx, collection, question, topK)
-	if err != nil {
-		return nil, err
-	}
-
-	return results, nil
-}
-
 func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, question string, workspace string, topK int) ([]string, error) {
-	wsID := workspace
-	if rs.wsRepo != nil {
-		if tc, ok := pgcontext.FromContext(ctx); ok && tc.TenantID != "" {
-			if ws, err := rs.wsRepo.GetByName(ctx, tc.TenantID, workspace); err == nil {
-				wsID = ws.ID
-			}
-		}
+	tenantID := ""
+	if tc, ok := pgcontext.FromContext(ctx); ok {
+		tenantID = tc.TenantID
 	}
-	collectionName := fmt.Sprintf("%s_kb", wsID)
-	if col, err := tenantdb.WorkspaceCollection(ctx, wsID); err == nil {
-		collectionName = col
-	}
+	collectionName := constants.CollectionName(tenantID, workspace)
 
 	vectorResults, err := rs.queryVector(ctx, question, collectionName, topK, rs.embeddingSvc)
 	if err != nil {
@@ -347,7 +331,7 @@ func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, question strin
 	return chunks, nil
 }
 
-func (rs *RAGService) BuildPrompt(question string, chunks []string, graphContext []GraphEntity) string {
+func (rs *RAGService) BuildPrompt(question string, chunks []string) string {
 	var prompt strings.Builder
 
 	prompt.WriteString("Answer the following question based on the provided context:\n\n")
@@ -361,25 +345,7 @@ func (rs *RAGService) BuildPrompt(question string, chunks []string, graphContext
 		prompt.WriteString("\n")
 	}
 
-	if len(graphContext) > 0 {
-		prompt.WriteString("Knowledge graph context:\n")
-		for _, entity := range graphContext {
-			fmt.Fprintf(&prompt, "- Entity %s: %v\n", entity.ID, entity.Properties)
-		}
-		prompt.WriteString("\n")
-	}
-
 	prompt.WriteString("Provide a clear, accurate answer based on the context above. If the context doesn't contain enough information, say so explicitly.")
 
 	return prompt.String()
-}
-
-func (rs *RAGService) GetWorkspaceCollections(ctx context.Context) ([]string, error) {
-	rs.logger.Debug("getting workspace collections")
-
-	workspaces, err := rs.graphRAG.GetWorkspaceNames(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return workspaces, nil
 }

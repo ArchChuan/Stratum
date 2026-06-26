@@ -144,7 +144,7 @@ func (w *ProfileWorker) rebuildProfile(ctx context.Context, entity *domain.Memor
 	entity.FactCountSinceRebuild = 0
 	entity.UpdatedAt = time.Now()
 
-	if err := w.entityRepo.Update(ctx, entity); err != nil {
+	if err := w.entityRepo.Update(ctx, w.tenantID, entity); err != nil {
 		return err
 	}
 

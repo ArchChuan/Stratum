@@ -38,7 +38,7 @@ func (r *PgSkillRepo) Insert(ctx context.Context, row port.SkillRow) (time.Time,
 			`INSERT INTO skills (id, name, description, type, config)
 			 VALUES ($1, $2, $3, $4, $5)
 			 RETURNING created_at`,
-			row.ID, row.Name, row.Description, row.Type, cfgJSON,
+			row.ID, row.Name, row.Description, row.Type, string(cfgJSON),
 		).Scan(&createdAt)
 	})
 	if err != nil {
@@ -120,7 +120,7 @@ func (r *PgSkillRepo) Update(ctx context.Context, row port.SkillRow) (time.Time,
 	err = tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			`UPDATE skills SET name=$2, description=$3, type=$4, config=$5 WHERE id=$1 RETURNING created_at`,
-			row.ID, row.Name, row.Description, row.Type, cfgJSON,
+			row.ID, row.Name, row.Description, row.Type, string(cfgJSON),
 		).Scan(&createdAt)
 	})
 	if err != nil {

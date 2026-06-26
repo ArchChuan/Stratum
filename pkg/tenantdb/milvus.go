@@ -11,4 +11,12 @@ import "github.com/byteBuilderX/stratum/pkg/storage/tenantnaming"
 var TenantCollection = tenantnaming.TenantCollection
 
 // WorkspaceCollection re-exports tenantnaming.WorkspaceCollection.
+//
+//nolint:staticcheck
 var WorkspaceCollection = tenantnaming.WorkspaceCollection
+
+// KnowledgeCollection re-exports tenantnaming.KnowledgeCollection.
+var KnowledgeCollection = tenantnaming.KnowledgeCollection
+
+// WorkspacePartition re-exports tenantnaming.WorkspacePartition.
+var WorkspacePartition = tenantnaming.WorkspacePartition

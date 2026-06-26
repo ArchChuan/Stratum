@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
@@ -24,7 +25,7 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 	}
 
 	// Step 2: Vector search (retrieve 2*topK candidates)
-	collectionName := fmt.Sprintf("memory_facts_%s", req.TenantID)
+	collectionName := fmt.Sprintf("memory_facts_%s", strings.ReplaceAll(req.TenantID, "-", "_"))
 	filter := map[string]interface{}{
 		"user_id": req.UserID,
 	}

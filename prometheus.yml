@@ -43,13 +43,6 @@ scrape_configs:
       - targets: ['nats:8222']
     metrics_path: '/metrics'
 
-  # Neo4j 指标
-  - job_name: 'neo4j'
-    static_configs:
-      - targets: ['neo4j:7474']
-    metrics_path: '/metrics'
-    scrape_interval: 60s
-
   # Milvus 指标
   - job_name: 'milvus'
     static_configs:

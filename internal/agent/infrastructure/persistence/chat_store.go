@@ -71,6 +71,22 @@ func execTenantID(ctx context.Context, pool chatPoolIface, tenantID string, fn f
 	return tx.Commit(ctx)
 }
 
+func (s *PgChatStore) GetConversation(ctx context.Context, tenantID, convID string) (*domain.ChatConversation, error) {
+	var conv domain.ChatConversation
+	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT id, agent_id, user_id, name, created_at, updated_at, expires_at
+			 FROM chat_conversations WHERE id = $1 AND deleted_at IS NULL`,
+			convID,
+		).Scan(&conv.ID, &conv.AgentID, &conv.UserID, &conv.Name,
+			&conv.CreatedAt, &conv.UpdatedAt, &conv.ExpiresAt)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("chat_store: get conversation: %w", err)
+	}
+	return &conv, nil
+}
+
 func (s *PgChatStore) CreateConversation(ctx context.Context, tenantID, agentID, userID, name string) (*domain.ChatConversation, error) {
 	var conv domain.ChatConversation
 	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
@@ -144,8 +160,14 @@ func (s *PgChatStore) RenameConversation(ctx context.Context, tenantID, convID, 
 
 func (s *PgChatStore) DeleteConversation(ctx context.Context, tenantID, convID, userID string) error {
 	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM chat_messages WHERE conversation_id = $1`,
+			convID,
+		); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx,
-			`UPDATE chat_conversations SET deleted_at=NOW() WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`,
+			`DELETE FROM chat_conversations WHERE id = $1 AND user_id = $2`,
 			convID, userID,
 		)
 		if err != nil {
@@ -184,7 +206,7 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 			`INSERT INTO chat_messages (conversation_id, role, content, steps_json, is_error)
 			 VALUES ($1, $2, $3, $4, $5)
 			 RETURNING id, created_at`,
-			msg.ConversationID, msg.Role, msg.Content, msg.StepsJSON, msg.IsError,
+			msg.ConversationID, msg.Role, msg.Content, string(msg.StepsJSON), msg.IsError,
 		).Scan(&msg.ID, &msg.CreatedAt); err != nil {
 			return err
 		}
@@ -218,7 +240,7 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 		}
 		if _, err = tx.Exec(ctx,
 			`INSERT INTO memory_outbox (message_id, payload) VALUES ($1, $2)`,
-			msg.ID, outboxPayload); err != nil {
+			msg.ID, string(outboxPayload)); err != nil {
 			return fmt.Errorf("insert memory_outbox: %w", err)
 		}
 		outboxQueued = true
@@ -292,6 +314,18 @@ func (s *PgChatStore) ListMessages(ctx context.Context, tenantID, convID, userID
 		return nil, fmt.Errorf("chat_store: list messages: %w", err)
 	}
 	return out, nil
+}
+
+func (s *PgChatStore) DeleteByAgent(ctx context.Context, tenantID, agentID string) error {
+	return execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM chat_messages WHERE conversation_id IN (SELECT id FROM chat_conversations WHERE agent_id = $1)`,
+			agentID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM chat_conversations WHERE agent_id = $1`, agentID)
+		return err
+	})
 }
 
 func (s *PgChatStore) CleanupExpired(ctx context.Context, tenantID string) error {

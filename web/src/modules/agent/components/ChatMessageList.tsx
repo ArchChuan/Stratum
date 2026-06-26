@@ -25,7 +25,7 @@ interface Props {
 // parent replaces the message content and the normal ChatMarkdown path renders.
 const StreamingBubble = ({ content }: { content: string }) => (
   <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-    {content}
+    {content.replace(/^\n+/, '')}
     <span
       style={{
         display: 'inline-block',

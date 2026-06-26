@@ -79,7 +79,7 @@ func (i *Index) Upsert(ctx context.Context, name string, docs []Document) error 
 		}
 		chunks[j] = chunk
 	}
-	return i.store.Insert(ctx, name, chunks)
+	return i.store.Insert(ctx, name, chunks, "")
 }
 
 func (i *Index) Search(ctx context.Context, name string, vec []float32, topK int, filter string) ([]SearchHit, error) {

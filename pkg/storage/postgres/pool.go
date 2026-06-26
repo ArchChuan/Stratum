@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	pgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
@@ -29,6 +30,8 @@ func New(ctx context.Context, url string, logger *zap.Logger) (*Pool, error) {
 	}
 	cfg.MaxConns = defaultMaxConns
 	cfg.MinConns = defaultMinConns
+	// PgBouncer transaction mode incompatible with pgx prepared statement cache
+	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

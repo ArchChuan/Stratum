@@ -183,10 +183,10 @@ func loadKnowledgeWorkspaces(ctx context.Context, tx pgx.Tx, agentID string) ([]
 func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
-			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_enabled, memory_scope)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_scope)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 			cfg.ID, cfg.Name, string(cfg.Type), cfg.Description,
-			cfg.SystemPrompt, cfg.LLMModel, cfg.EmbedModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryEnabled, cfg.MemoryScope,
+			cfg.SystemPrompt, cfg.LLMModel, cfg.EmbedModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope,
 		)
 		if err != nil {
 			var pgErr *pgconn.PgError
@@ -214,10 +214,10 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 	var agentType string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
-			`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_enabled, memory_scope
+			`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_scope
 			 FROM agents WHERE id = $1`, id).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
-				&cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryEnabled, &cfg.MemoryScope); err != nil {
+				&cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope); err != nil {
 			return err
 		}
 		skillIDs, err := loadSkillIDs(ctx, tx, id)
@@ -299,7 +299,7 @@ func (r *PgAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 
 func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_enabled, memory_scope
+		`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_scope
 		 FROM agents ORDER BY created_at`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list agents: %w", err)
@@ -311,7 +311,7 @@ func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string
 		var cfg domain.AgentConfig
 		var agentType string
 		if err := rows.Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
-			&cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryEnabled, &cfg.MemoryScope); err != nil {
+			&cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope); err != nil {
 			return nil, nil, fmt.Errorf("scan agent row: %w", err)
 		}
 		cfg.Type = domain.AgentType(agentType)
@@ -412,10 +412,10 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig) error
 			`UPDATE agents
 			 SET name=$1, description=$2, system_prompt=$3,
 			     llm_model=$4, max_iterations=$5, max_context_tokens=$6,
-			     memory_enabled=$7, memory_scope=$8, updated_at=NOW()
-			 WHERE id=$9`,
+			     memory_scope=$7, updated_at=NOW()
+			 WHERE id=$8`,
 			cfg.Name, cfg.Description, cfg.SystemPrompt,
-			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryEnabled, cfg.MemoryScope, cfg.ID,
+			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.ID,
 		)
 		if err != nil {
 			return fmt.Errorf("update agent %s: %w", cfg.ID, err)

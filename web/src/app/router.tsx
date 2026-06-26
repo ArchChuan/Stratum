@@ -28,6 +28,7 @@ export const AppRouter = () => {
         {knowledgeRoutes}
         {skillRoutes}
         {agentRoutes}
+        {iamPrivateRoutes}
         {iamPublicRoutes}
       </Routes>
     </AppShell>

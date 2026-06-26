@@ -2,6 +2,7 @@ package wiring
 
 import (
 	"context"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -35,6 +36,9 @@ func (c *Container) buildMCP(ctx context.Context) error {
 			c.Logger.Warn("failed to restore MCP servers from DB", zap.Error(err))
 		}
 	}
+
+	manager.StartHealthCheck(30 * time.Second)
+	c.shutdown = append(c.shutdown, manager.Stop)
 
 	c.MCP = &MCP{
 		Manager:           manager,

@@ -1,8 +1,6 @@
 package application
 
 import (
-	"context"
-	"errors"
 	"testing"
 
 	"go.uber.org/zap"
@@ -35,7 +33,6 @@ func TestIngestResultInitialization(t *testing.T) {
 		Workspace:    "ws-1",
 		TotalChunks:  10,
 		TotalVectors: 10,
-		TotalNodes:   1,
 		Errors:       []string{},
 	}
 
@@ -49,10 +46,6 @@ func TestIngestResultInitialization(t *testing.T) {
 
 	if result.TotalVectors != 10 {
 		t.Errorf("expected 10 vectors, got %d", result.TotalVectors)
-	}
-
-	if result.TotalNodes != 1 {
-		t.Errorf("expected 1 node, got %d", result.TotalNodes)
 	}
 
 	if len(result.Errors) != 0 {
@@ -112,10 +105,9 @@ func TestRAGQueryRequestHybridMode(t *testing.T) {
 
 func TestRAGQueryResult(t *testing.T) {
 	result := &RAGQueryResult{
-		Answer:       "AI is artificial intelligence",
-		Mode:         "vector",
-		Sources:      []Source{},
-		GraphContext: []GraphEntity{},
+		Answer:  "AI is artificial intelligence",
+		Mode:    "vector",
+		Sources: []Source{},
 	}
 
 	if result.Answer != "AI is artificial intelligence" {
@@ -148,45 +140,14 @@ func TestSourceStructure(t *testing.T) {
 	}
 }
 
-func TestGraphEntityStructure(t *testing.T) {
-	entity := GraphEntity{
-		ID:    "entity-1",
-		Label: "Person",
-		Properties: map[string]interface{}{
-			"name": "John",
-			"age":  30,
-		},
-	}
-
-	if entity.ID != "entity-1" {
-		t.Errorf("expected ID entity-1, got %s", entity.ID)
-	}
-
-	if entity.Label != "Person" {
-		t.Errorf("expected label Person, got %s", entity.Label)
-	}
-
-	if len(entity.Properties) != 2 {
-		t.Errorf("expected 2 properties, got %d", len(entity.Properties))
-	}
-}
-
 func TestBuildPrompt(t *testing.T) {
 	logger := zap.NewNop()
-	graphRAG := NewMockGraphStore()
 
-	ragService := NewRAGService(nil, nil, graphRAG, logger)
+	ragService := NewRAGService(nil, nil, logger)
 
 	chunks := []string{"chunk1", "chunk2"}
-	graphContext := []GraphEntity{
-		{
-			ID:         "e1",
-			Label:      "Entity",
-			Properties: map[string]interface{}{"name": "test"},
-		},
-	}
 
-	prompt := ragService.BuildPrompt("What is this?", chunks, graphContext)
+	prompt := ragService.BuildPrompt("What is this?", chunks)
 
 	if len(prompt) == 0 {
 		t.Error("expected non-empty prompt")
@@ -208,58 +169,4 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
-}
-
-func TestGetWorkspaceStats(t *testing.T) {
-	logger := zap.NewNop()
-
-	tests := []struct {
-		name        string
-		docCount    int
-		docCountErr error
-		wantCount   int
-		wantErr     bool
-	}{
-		{
-			name:      "success: returns doc count",
-			docCount:  5,
-			wantCount: 5,
-		},
-		{
-			name:        "error: propagates db error",
-			docCountErr: errors.New("db error"),
-			wantErr:     true,
-		},
-		{
-			name:      "zero: returns stat with count 0",
-			docCount:  0,
-			wantCount: 0,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockGraphStore()
-			mock.SetDocCountResult(tc.docCount, tc.docCountErr)
-			svc := NewKnowledgeIngest(nil, nil, nil, nil, mock, logger)
-
-			stats, err := svc.GetWorkspaceStats(context.Background(), "test-ws")
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			got, ok := stats["document_count"].(int)
-			if !ok {
-				t.Fatalf("document_count not int, got %T", stats["document_count"])
-			}
-			if got != tc.wantCount {
-				t.Errorf("document_count: want %d, got %d", tc.wantCount, got)
-			}
-		})
-	}
 }

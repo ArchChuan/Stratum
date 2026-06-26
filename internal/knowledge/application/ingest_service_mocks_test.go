@@ -7,38 +7,6 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/vector"
 )
 
-func TestMockGraphStoreInterface(t *testing.T) {
-	ctx := context.Background()
-	mockGraphStore := NewMockGraphStore()
-
-	if err := mockGraphStore.Connect(ctx); err != nil {
-		t.Errorf("expected no error from Connect, got %v", err)
-	}
-	if err := mockGraphStore.CreateNode(ctx, "Test", map[string]interface{}{}); err != nil {
-		t.Errorf("expected no error from CreateNode, got %v", err)
-	}
-	if err := mockGraphStore.CreateRelationship(ctx, "from", "to", "rel"); err != nil {
-		t.Errorf("expected no error from CreateRelationship, got %v", err)
-	}
-	neighbors, err := mockGraphStore.GetNeighborNodes(ctx, "node-1", 2)
-	if err != nil {
-		t.Errorf("expected no error from GetNeighborNodes, got %v", err)
-	}
-	if len(neighbors) != 0 {
-		t.Errorf("expected 0 neighbors, got %d", len(neighbors))
-	}
-	results, err := mockGraphStore.FullTextSearch(ctx, "search", 10)
-	if err != nil {
-		t.Errorf("expected no error from FullTextSearch, got %v", err)
-	}
-	if len(results) != 0 {
-		t.Errorf("expected 0 results, got %d", len(results))
-	}
-	if err := mockGraphStore.Close(); err != nil {
-		t.Errorf("expected no error from Close, got %v", err)
-	}
-}
-
 func TestMockVectorStoreInterface(t *testing.T) {
 	ctx := context.Background()
 	mockVectorStore := NewMockVectorStore()

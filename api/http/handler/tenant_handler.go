@@ -62,44 +62,6 @@ func (h *TenantHandler) ListMembers(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// InviteMember POST /tenant/members/invite
-func (h *TenantHandler) InviteMember(c *gin.Context) {
-	tenantID, ok := tenantIDFromCtx(c)
-	if !ok {
-		respondMissingTenant(c)
-		return
-	}
-
-	roleVal, _ := c.Get("auth.role")
-	roleStr, _ := roleVal.(string)
-	if roleStr != "admin" && roleStr != "owner" {
-		_ = c.Error(middleware.NewHTTPError(http.StatusForbidden, application.ErrForbiddenAdminOrOwner))
-		return
-	}
-
-	var req dto.InviteMemberRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
-		return
-	}
-
-	inviterID, _ := c.Get("auth.sub")
-	inviterIDStr, _ := inviterID.(string)
-
-	invitationID, invitationURL, expiresAt, err := h.svc.InviteMember(c.Request.Context(), tenantID, inviterIDStr, req.Email, req.Role)
-	if err != nil {
-		_ = c.Error(err)
-		return
-	}
-	c.JSON(http.StatusCreated, dto.InviteMemberResponse{
-		InvitationID:  invitationID,
-		Email:         req.Email,
-		Role:          req.Role,
-		InvitationURL: invitationURL,
-		ExpiresAt:     expiresAt,
-	})
-}
-
 // UpdateMemberRole PATCH /tenant/members/:user_id/role
 func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)

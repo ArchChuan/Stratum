@@ -222,9 +222,15 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					zap.Int64("latency_ms", toolLatencyMs),
 				)
 			default:
-				skillID := tc.Name
-				if id, ok := s.SkillToolIndex[tc.Name]; ok {
-					skillID = id
+				skillID, ok := s.SkillToolIndex[tc.Name]
+				if !ok {
+					content = fmt.Sprintf("error: unknown tool %q", tc.Name)
+					logger.Error("react.tool.unknown",
+						zap.String("trace_id", s.TraceID),
+						zap.String("tool_name", tc.Name),
+						zap.String("tool_call_id", tc.ID),
+					)
+					break
 				}
 				toolResp, err := capGW.Route(ctx, port.CapabilityRequest{
 					TraceID:  s.TraceID,

@@ -14,7 +14,6 @@ type (
 	TenantInfo         = domain.TenantInfo
 	CreateTenantInput  = domain.CreateTenantInput
 	CreateTenantResult = domain.CreateTenantResult
-	JoinTenantInput    = domain.JoinTenantInput
 )
 
 // OnboardService coordinates tenant creation and joining via OnboardRepo.
@@ -76,9 +75,4 @@ func (s *OnboardService) GetTenantRole(ctx context.Context, userID, tenantID str
 // IsMember reports whether userID is an active member of tenantID.
 func (s *OnboardService) IsMember(ctx context.Context, userID, tenantID string) (bool, error) {
 	return s.repo.IsMember(ctx, userID, tenantID)
-}
-
-// JoinTenant accepts an invitation token and adds the user to the tenant.
-func (s *OnboardService) JoinTenant(ctx context.Context, in JoinTenantInput) error {
-	return s.repo.JoinTenant(ctx, in)
 }

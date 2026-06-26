@@ -24,15 +24,15 @@ func TestRecallMemory_HybridRetrieval(t *testing.T) {
 	llmExtract := new(MockLLMExtractor)
 	embedClient := new(MockEmbedClient)
 
-	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil)
+	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil, nil)
 
 	// Mock embedding
 	embedClient.On("Embed", ctx, "Python programming").
 		Return([]float32{0.1, 0.2, 0.3}, nil)
 
 	// Mock vector search (returns 2 docs)
-	fact1, _ := domain.NewFact("", "user1", "agent1", "user", "Python is great", 0.8, []string{"Python"})
-	fact2, _ := domain.NewFact("", "user1", "agent1", "user", "Go is fast", 0.7, []string{"Go"})
+	fact1, _ := domain.NewFact("", "user1", "agent1", "", "user", "Python is great", 0.8, []string{"Python"})
+	fact2, _ := domain.NewFact("", "user1", "agent1", "", "user", "Go is fast", 0.7, []string{"Go"})
 
 	vectorStore.On("Search", ctx, "memory_facts_tenant1", mock.Anything, 20, mock.Anything).
 		Return([]*port.VectorDoc{
@@ -41,7 +41,7 @@ func TestRecallMemory_HybridRetrieval(t *testing.T) {
 		}, nil)
 
 	// Mock trigram search (returns 2 facts, 1 overlap)
-	fact3, _ := domain.NewFact("", "user1", "agent1", "user", "Python for ML", 0.75, []string{"Python"})
+	fact3, _ := domain.NewFact("", "user1", "agent1", "", "user", "Python for ML", 0.75, []string{"Python"})
 
 	factRepo.On("SearchByContent", ctx, "tenant1", mock.AnythingOfType("domain.ScopeFilter"), "Python programming", 20).
 		Return([]*domain.MemoryFact{fact1, fact3}, nil)
@@ -82,7 +82,7 @@ func TestRecallMemory_EmptyResults(t *testing.T) {
 	llmExtract := new(MockLLMExtractor)
 	embedClient := new(MockEmbedClient)
 
-	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil)
+	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil, nil)
 
 	embedClient.On("Embed", ctx, "nonexistent query").
 		Return([]float32{0.1, 0.2, 0.3}, nil)

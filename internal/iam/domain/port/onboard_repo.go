@@ -27,6 +27,4 @@ type OnboardRepo interface {
 	GetTenantRole(ctx context.Context, userID, tenantID string) (string, error)
 	// IsMember reports whether userID is an active member of tenantID.
 	IsMember(ctx context.Context, userID, tenantID string) (bool, error)
-	// JoinTenant accepts an invitation token and adds the user to the tenant.
-	JoinTenant(ctx context.Context, in domain.JoinTenantInput) error
 }

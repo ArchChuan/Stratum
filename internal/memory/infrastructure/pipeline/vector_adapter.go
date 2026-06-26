@@ -75,7 +75,7 @@ func (a *MilvusVectorAdapter) Upsert(ctx context.Context, tenantID string, userI
 		ChunkIndex:     0,
 		Vector:         vec,
 	}
-	return a.vs.Insert(ctx, collectionName, []vector.DocumentChunk{doc})
+	return a.vs.Insert(ctx, collectionName, []vector.DocumentChunk{doc}, "")
 }
 
 func metadataString(m map[string]any, key string) string {

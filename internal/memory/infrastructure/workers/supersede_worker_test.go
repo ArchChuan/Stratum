@@ -15,9 +15,8 @@ import (
 )
 
 type stubFactRepo struct {
-	findCandidatesFunc   func(context.Context, string, string, string, string, float64, float64) ([]*domain.MemoryFact, error)
-	updateFunc           func(context.Context, string, *domain.MemoryFact) error
-	deleteOldSoftDeleted func(context.Context, string, int) (int, error)
+	findCandidatesFunc func(context.Context, string, string, string, string, float64, float64) ([]*domain.MemoryFact, error)
+	updateFunc         func(context.Context, string, *domain.MemoryFact) error
 }
 
 func (r *stubFactRepo) Create(ctx context.Context, tenantID string, fact *domain.MemoryFact) error {
@@ -34,7 +33,7 @@ func (r *stubFactRepo) Update(ctx context.Context, tenantID string, fact *domain
 
 func (r *stubFactRepo) ListActive(ctx context.Context, tenantID string, filter domain.ScopeFilter, limit int) ([]*domain.MemoryFact, error) {
 	if r.findCandidatesFunc != nil {
-		newFact, _ := domain.NewFact("", "user1", "agent1", string(domain.ScopeUser), "I like coffee now", 0.8, nil)
+		newFact, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "I like coffee now", 0.8, nil)
 		return []*domain.MemoryFact{newFact}, nil
 	}
 	return nil, nil
@@ -52,11 +51,8 @@ func (r *stubFactRepo) CountByUser(ctx context.Context, tenantID, userID string)
 	return 0, nil
 }
 
-func (r *stubFactRepo) DeleteOldSoftDeleted(ctx context.Context, tenantID string, retentionDays int) (int, error) {
-	if r.deleteOldSoftDeleted != nil {
-		return r.deleteOldSoftDeleted(ctx, tenantID, retentionDays)
-	}
-	return 0, nil
+func (r *stubFactRepo) Delete(ctx context.Context, tenantID, id string) error {
+	return nil
 }
 
 func (r *stubFactRepo) DeleteAllByUser(ctx context.Context, tenantID, userID string) ([]string, error) {
@@ -76,7 +72,7 @@ func (s *stubSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact st
 }
 
 func TestSupersedeWorker_MarksSuperseeded(t *testing.T) {
-	oldFact, _ := domain.NewFact("", "user1", "agent1", string(domain.ScopeUser), "I like tea", 0.7, nil)
+	oldFact, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "I like tea", 0.7, nil)
 	var updatedFact *domain.MemoryFact
 
 	repo := &stubFactRepo{
@@ -103,7 +99,7 @@ func TestSupersedeWorker_MarksSuperseeded(t *testing.T) {
 }
 
 func TestSupersedeWorker_KeepsOnNoSupersede(t *testing.T) {
-	oldFact, _ := domain.NewFact("", "user1", "agent1", string(domain.ScopeUser), "I like coffee", 0.8, nil)
+	oldFact, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "I like coffee", 0.8, nil)
 	var updated bool
 
 	repo := &stubFactRepo{
@@ -141,7 +137,7 @@ func TestSupersedeWorker_RecoversPanic(t *testing.T) {
 }
 
 func TestSupersedeWorker_HandlesJudgeError(t *testing.T) {
-	oldFact, _ := domain.NewFact("", "user1", "agent1", string(domain.ScopeUser), "test", 0.5, nil)
+	oldFact, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "test", 0.5, nil)
 
 	repo := &stubFactRepo{
 		findCandidatesFunc: func(ctx context.Context, tenantID, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {

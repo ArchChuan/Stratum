@@ -35,6 +35,7 @@ type AgentServiceDeps struct {
 	ExecStore      ExecutionStore
 	ChatStore      ChatStore
 	MemoryCleaner  port.AgentMemoryCleaner
+	MemoryBuffer   port.BufferMemoryFn
 	Metrics        observability.MetricsProvider
 	Logger         *zap.Logger
 }
@@ -69,7 +70,6 @@ type CreateAgentInput struct {
 	AllowedSkills         []string
 	MCPServerIDs          []string
 	KnowledgeWorkspaceIDs []string
-	MemoryEnabled         bool
 	MemoryScope           string
 }
 
@@ -85,7 +85,6 @@ type UpdateAgentInput struct {
 	AllowedSkills         []string
 	MCPServerIDs          []string
 	KnowledgeWorkspaceIDs []string
-	MemoryEnabled         bool
 	MemoryScope           string
 }
 
@@ -105,7 +104,6 @@ type AgentDTO struct {
 	MCPServerIDs          []string
 	KnowledgeWorkspaceIDs []string
 	CreatedAt             string
-	MemoryEnabled         bool
 	MemoryScope           string
 }
 
@@ -135,7 +133,6 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		AllowedSkills:         in.AllowedSkills,
 		MCPServerIDs:          in.MCPServerIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
-		MemoryEnabled:         in.MemoryEnabled,
 		MemoryScope:           in.MemoryScope,
 		Capabilities:          []domain.AgentCapability{},
 	}
@@ -194,7 +191,6 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		AllowedSkills:         skills,
 		MCPServerIDs:          in.MCPServerIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
-		MemoryEnabled:         in.MemoryEnabled,
 		MemoryScope:           in.MemoryScope,
 	}
 	if err := s.deps.Registry.Update(ctx, cfg); err != nil {
@@ -204,13 +200,16 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	return cfgToDTO(cfg), nil
 }
 
-// Delete removes an agent and its associated memories.
+// Delete removes an agent and cascades deletion to conversations and memories.
 func (s *AgentService) Delete(ctx context.Context, tenantID, id string) error {
 	if err := s.deps.Registry.Remove(ctx, id); err != nil {
 		return err
 	}
 	if s.deps.MemoryCleaner != nil {
 		_ = s.deps.MemoryCleaner.ClearAgentMemories(ctx, tenantID, id)
+	}
+	if s.deps.ChatStore != nil {
+		_ = s.deps.ChatStore.DeleteByAgent(ctx, tenantID, id)
 	}
 	s.deps.Logger.Info("agent deleted", zap.String("id", id))
 	return nil
@@ -252,7 +251,6 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		MCPServerIDs:          cfg.MCPServerIDs,
 		KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,
 		CreatedAt:             time.Now().Format(time.RFC3339),
-		MemoryEnabled:         cfg.MemoryEnabled,
 		MemoryScope:           cfg.MemoryScope,
 	}
 }
@@ -294,12 +292,33 @@ type ExecutionRowDTO struct {
 // on completion. The returned context is for streaming callers — it is
 // nil here. Callers receive (*AgentResult, durationMs, error) so the
 // transport can render Duration uniformly.
+func (s *AgentService) ensureConversation(ctx context.Context, tenantID, agentID, userID string, req *ExecRequest) {
+	if req.ConversationID != "" || s.deps.ChatStore == nil {
+		return
+	}
+	conv, err := s.deps.ChatStore.CreateConversation(ctx, tenantID, agentID, userID, "新会话")
+	if err != nil {
+		s.deps.Logger.Warn("agent: auto-create conversation failed", zap.Error(err))
+		return
+	}
+	req.ConversationID = conv.ID
+}
+
 func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta) (*AgentResult, int, error) {
 	a, ok := s.deps.Registry.Get(ctx, agentID)
 	if !ok {
 		return nil, 0, ErrNotFound
 	}
+	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
 	_, options := s.assembleOptions(ctx, a, req, meta)
+
+	s.deps.Logger.Debug("agent.execute",
+		zap.String("agent_id", agentID),
+		zap.String("trace_id", meta.TraceID),
+		zap.String("tenant_id", meta.TenantID),
+		zap.String("user_id", req.UserID),
+		zap.String("conversation_id", req.ConversationID),
+	)
 
 	execCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), constants.AgentExecTimeout)
 	defer cancel()
@@ -308,7 +327,31 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 	result, err := a.Execute(execCtx, req.Query, options...)
 	durationMs := int(time.Since(start).Milliseconds())
 
+	if err != nil {
+		s.deps.Logger.Error("agent.execute",
+			zap.String("agent_id", agentID),
+			zap.String("trace_id", meta.TraceID),
+			zap.String("tenant_id", meta.TenantID),
+			zap.String("user_id", req.UserID),
+			zap.Int("duration_ms", durationMs),
+			zap.Error(err),
+		)
+	} else {
+		s.deps.Logger.Info("agent.execute",
+			zap.String("agent_id", agentID),
+			zap.String("trace_id", meta.TraceID),
+			zap.String("tenant_id", meta.TenantID),
+			zap.String("user_id", req.UserID),
+			zap.Int("duration_ms", durationMs),
+		)
+	}
+
 	s.recordExecution(ctx, agentID, req.UserID, a.GetConfig().Name, req.Query, result, err, durationMs)
+	if err == nil && result != nil && s.deps.MemoryBuffer != nil {
+		scope := a.GetConfig().MemoryScope
+		_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "user", req.Query)
+		_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "assistant", result.Output)
+	}
 	return result, durationMs, err
 }
 
@@ -324,15 +367,44 @@ func (s *AgentService) ExecuteStream(
 	if !ok {
 		return nil, nil, nil, ErrNotFound
 	}
+	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
 	streamCtx, options := s.assembleOptions(ctx, a, req, meta)
 	options = append(options, WithTokenCallback(tokenCb))
 
 	execCtx, cancel = context.WithTimeout(context.WithoutCancel(streamCtx), constants.AgentExecTimeout)
 	run = func() (*AgentResult, int, error) {
+		s.deps.Logger.Debug("agent.execute_stream",
+			zap.String("agent_id", agentID),
+			zap.String("trace_id", meta.TraceID),
+			zap.String("tenant_id", meta.TenantID),
+			zap.String("user_id", req.UserID),
+			zap.String("conversation_id", req.ConversationID),
+		)
 		start := time.Now()
 		res, runErr := a.Execute(execCtx, req.Query, options...)
 		durationMs := int(time.Since(start).Milliseconds())
+		if runErr != nil {
+			s.deps.Logger.Error("agent.execute_stream",
+				zap.String("agent_id", agentID),
+				zap.String("trace_id", meta.TraceID),
+				zap.String("tenant_id", meta.TenantID),
+				zap.Int("duration_ms", durationMs),
+				zap.Error(runErr),
+			)
+		} else {
+			s.deps.Logger.Info("agent.execute_stream",
+				zap.String("agent_id", agentID),
+				zap.String("trace_id", meta.TraceID),
+				zap.String("tenant_id", meta.TenantID),
+				zap.Int("duration_ms", durationMs),
+			)
+		}
 		s.recordExecution(ctx, agentID, req.UserID, a.GetConfig().Name, req.Query, res, runErr, durationMs)
+		if runErr == nil && res != nil && s.deps.MemoryBuffer != nil {
+			scope := a.GetConfig().MemoryScope
+			_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "user", req.Query)
+			_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "assistant", res.Output)
+		}
 		return res, durationMs, runErr
 	}
 	return execCtx, cancel, run, nil

@@ -28,6 +28,7 @@ type ClientManager struct {
 	logger     *zap.Logger
 	poolConfig *ConnectionPoolConfig
 	stopCh     chan struct{}
+	stopOnce   sync.Once
 	wg         sync.WaitGroup
 	pool       *pgxpool.Pool
 }
@@ -58,16 +59,27 @@ func NewClientManager(logger *zap.Logger, poolConfig *ConnectionPoolConfig, pool
 // Kept here as an alias so existing consumers remain source-compatible.
 var ErrNameConflict = mcpdomain.ErrNameConflict
 
+func tenantKey(tenantID, serverID string) string { return tenantID + ":" + serverID }
+
+func tenantIDFromCtx(ctx context.Context) string {
+	if tc, ok := tenantdb.FromContext(ctx); ok {
+		return tc.TenantID
+	}
+	return ""
+}
+
 func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig) error {
 	if m.pool == nil {
 		return nil
 	}
-	argsJSON, _ := json.Marshal(cfg.Args)
-	envJSON, _ := json.Marshal(cfg.Env)
-	capsJSON, _ := json.Marshal(cfg.Capabilities)
-	hdrsJSON, _ := json.Marshal(cfg.Headers)
-	authJSON, _ := json.Marshal(cfg.Auth)
-	retryJSON, _ := json.Marshal(cfg.Retry)
+	argsB, _ := json.Marshal(cfg.Args)
+	envB, _ := json.Marshal(cfg.Env)
+	capsB, _ := json.Marshal(cfg.Capabilities)
+	hdrsB, _ := json.Marshal(cfg.Headers)
+	authB, _ := json.Marshal(cfg.Auth)
+	retryB, _ := json.Marshal(cfg.Retry)
+	argsJSON, envJSON, capsJSON, hdrsJSON, authJSON, retryJSON :=
+		string(argsB), string(envB), string(capsB), string(hdrsB), string(authB), string(retryB)
 	timeoutSec := int(cfg.Timeout.Seconds())
 	if timeoutSec <= 0 {
 		timeoutSec = 30
@@ -113,19 +125,17 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.clients[config.ID]; exists {
+	key := tenantKey(tenantIDFromCtx(ctx), config.ID)
+	if _, exists := m.clients[key]; exists {
 		return fmt.Errorf("client already connected: %s", config.ID)
 	}
 
-	// 创建客户端
 	client := NewBaseClient(config, m.logger)
 
-	// 连接
 	if err := client.Connect(ctx); err != nil {
 		return err
 	}
 
-	// 发现能力
 	tools, err := client.ListTools(ctx)
 	if err != nil {
 		m.logger.Warn("failed to list tools", zap.String("server_id", config.ID), zap.Error(err))
@@ -136,18 +146,15 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 		m.logger.Warn("failed to list resources", zap.String("server_id", config.ID), zap.Error(err))
 	}
 
-	// 缓存能力
-	m.cache.Store(config.ID, tools, resources)
+	m.cache.Store(key, tools, resources)
 
-	// 持久化到 DB（先落库，名称冲突则不写内存）
 	if err := m.persistConnect(ctx, config); err != nil {
-		m.cache.Delete(config.ID)
+		m.cache.Delete(key)
 		return err
 	}
 
-	// 保存客户端和配置
-	m.clients[config.ID] = client
-	m.configs[config.ID] = config
+	m.clients[key] = client
+	m.configs[key] = config
 
 	m.logger.Info("connected to MCP server",
 		zap.String("server_id", config.ID),
@@ -162,7 +169,8 @@ func (m *ClientManager) Disconnect(ctx context.Context, serverID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	client, exists := m.clients[serverID]
+	key := tenantKey(tenantIDFromCtx(ctx), serverID)
+	client, exists := m.clients[key]
 	if !exists {
 		return fmt.Errorf("client not found: %s", serverID)
 	}
@@ -171,9 +179,9 @@ func (m *ClientManager) Disconnect(ctx context.Context, serverID string) error {
 		return err
 	}
 
-	delete(m.clients, serverID)
-	delete(m.configs, serverID)
-	m.cache.Delete(serverID)
+	delete(m.clients, key)
+	delete(m.configs, key)
+	m.cache.Delete(key)
 
 	m.persistDisconnect(ctx, serverID)
 
@@ -182,27 +190,31 @@ func (m *ClientManager) Disconnect(ctx context.Context, serverID string) error {
 }
 
 // GetClient 获取客户端
-func (m *ClientManager) GetClient(serverID string) MCPClient {
+func (m *ClientManager) GetClient(ctx context.Context, serverID string) MCPClient {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.clients[serverID]
+	return m.clients[tenantKey(tenantIDFromCtx(ctx), serverID)]
 }
 
-// GetAllClients 获取所有客户端
-func (m *ClientManager) GetAllClients() map[string]MCPClient {
+// GetAllClients 获取当前租户所有客户端
+func (m *ClientManager) GetAllClients(ctx context.Context) map[string]MCPClient {
+	tenantID := tenantIDFromCtx(ctx)
+	prefix := tenantID + ":"
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	result := make(map[string]MCPClient)
 	for k, v := range m.clients {
-		result[k] = v
+		if strings.HasPrefix(k, prefix) {
+			result[strings.TrimPrefix(k, prefix)] = v
+		}
 	}
 	return result
 }
 
 // CallTool 调用工具
 func (m *ClientManager) CallTool(ctx context.Context, serverID, toolName string, input any) (any, error) {
-	client := m.GetClient(serverID)
+	client := m.GetClient(ctx, serverID)
 	if client == nil {
 		return nil, fmt.Errorf("client not found: %s", serverID)
 	}
@@ -212,12 +224,12 @@ func (m *ClientManager) CallTool(ctx context.Context, serverID, toolName string,
 
 // ListTools 列出工具
 func (m *ClientManager) ListTools(ctx context.Context, serverID string) ([]*MCPTool, error) {
-	// 先尝试从缓存获取
-	if tools, ok := m.cache.GetTools(serverID); ok {
+	key := tenantKey(tenantIDFromCtx(ctx), serverID)
+	if tools, ok := m.cache.GetTools(key); ok {
 		return tools, nil
 	}
 
-	client := m.GetClient(serverID)
+	client := m.GetClient(ctx, serverID)
 	if client == nil {
 		return nil, fmt.Errorf("client not found: %s", serverID)
 	}
@@ -227,18 +239,18 @@ func (m *ClientManager) ListTools(ctx context.Context, serverID string) ([]*MCPT
 		return nil, err
 	}
 
-	m.cache.StoreTools(serverID, tools)
+	m.cache.StoreTools(key, tools)
 	return tools, nil
 }
 
 // ListResources 列出资源
 func (m *ClientManager) ListResources(ctx context.Context, serverID string) ([]*MCPResource, error) {
-	// 先尝试从缓存获取
-	if resources, ok := m.cache.GetResources(serverID); ok {
+	key := tenantKey(tenantIDFromCtx(ctx), serverID)
+	if resources, ok := m.cache.GetResources(key); ok {
 		return resources, nil
 	}
 
-	client := m.GetClient(serverID)
+	client := m.GetClient(ctx, serverID)
 	if client == nil {
 		return nil, fmt.Errorf("client not found: %s", serverID)
 	}
@@ -248,7 +260,7 @@ func (m *ClientManager) ListResources(ctx context.Context, serverID string) ([]*
 		return nil, err
 	}
 
-	m.cache.StoreResources(serverID, resources)
+	m.cache.StoreResources(key, resources)
 	return resources, nil
 }
 
@@ -275,34 +287,49 @@ func (m *ClientManager) StartHealthCheck(interval time.Duration) {
 // performHealthCheck 执行健康检查
 func (m *ClientManager) performHealthCheck() {
 	m.mu.RLock()
-	clients := make(map[string]MCPClient)
+	unhealthy := make(map[string]*MCPServerConfig)
 	for k, v := range m.clients {
-		clients[k] = v
+		if !v.IsHealthy() {
+			unhealthy[k] = m.configs[k]
+		}
 	}
 	m.mu.RUnlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	for serverID, client := range clients {
-		if !client.IsHealthy() {
-			m.logger.Warn("client unhealthy, attempting reconnect",
-				zap.String("server_id", serverID))
-
-			// 尝试重新连接
-			m.mu.RLock()
-			config := m.configs[serverID]
-			m.mu.RUnlock()
-
-			if config != nil {
-				if err := client.Connect(ctx); err != nil {
-					m.logger.Error("reconnect failed",
-						zap.String("server_id", serverID),
-						zap.Error(err))
-				}
-			}
-		}
+	if len(unhealthy) == 0 {
+		return
 	}
+
+	sem := make(chan struct{}, m.poolConfig.MaxConnections)
+	var wg sync.WaitGroup
+	for key, cfg := range unhealthy {
+		if cfg == nil {
+			continue
+		}
+		key, cfg := key, cfg
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer func() {
+				if r := recover(); r != nil {
+					m.logger.Error("reconnect panic", zap.String("key", key), zap.Any("panic", r))
+				}
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			m.logger.Warn("client unhealthy, attempting reconnect", zap.String("key", key))
+			fresh := NewBaseClient(cfg, m.logger)
+			if err := fresh.Connect(ctx); err != nil {
+				m.logger.Error("reconnect failed", zap.String("key", key), zap.Error(err))
+				return
+			}
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			m.clients[key] = fresh
+		}()
+	}
+	wg.Wait()
 }
 
 // RestoreFromDB 遍历所有租户，从各自 schema 读取 enabled=true 的 MCP 配置并重建连接。
@@ -421,7 +448,7 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 
 // Stop 停止管理器
 func (m *ClientManager) Stop(ctx context.Context) error {
-	close(m.stopCh)
+	m.stopOnce.Do(func() { close(m.stopCh) })
 	m.wg.Wait()
 
 	m.mu.Lock()
@@ -442,22 +469,156 @@ func (m *ClientManager) Stop(ctx context.Context) error {
 }
 
 // GetServerInfo 获取服务器信息
-func (m *ClientManager) GetServerInfo(serverID string) *MCPServerInfo {
-	client := m.GetClient(serverID)
+func (m *ClientManager) GetServerInfo(ctx context.Context, serverID string) *MCPServerInfo {
+	client := m.GetClient(ctx, serverID)
 	if client == nil {
 		return nil
 	}
 	return client.GetServerInfo()
 }
 
-// GetAllServerInfo 获取所有服务器信息
-func (m *ClientManager) GetAllServerInfo() []*MCPServerInfo {
+// GetAllServerInfo 获取当前租户所有服务器信息（从 DB 读取配置，以内存连接状态覆盖）
+func (m *ClientManager) GetAllServerInfo(ctx context.Context) []*MCPServerInfo {
+	tenantID := tenantIDFromCtx(ctx)
+
+	if m.pool == nil {
+		prefix := tenantID + ":"
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		var infos []*MCPServerInfo
+		for key, client := range m.clients {
+			if strings.HasPrefix(key, prefix) {
+				infos = append(infos, client.GetServerInfo())
+			}
+		}
+		return infos
+	}
+
+	type dbRow struct {
+		id, name, version, transport string
+	}
+	var rows []dbRow
+	_ = tenantdb.ExecTenant(ctx, m.pool, func(qctx context.Context, tx pgx.Tx) error {
+		pgRows, err := tx.Query(qctx,
+			`SELECT id, name, version, transport FROM mcp_configs`)
+		if err != nil {
+			return err
+		}
+		defer pgRows.Close()
+		for pgRows.Next() {
+			var r dbRow
+			if err := pgRows.Scan(&r.id, &r.name, &r.version, &r.transport); err != nil {
+				return err
+			}
+			rows = append(rows, r)
+		}
+		return pgRows.Err()
+	})
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var infos []*MCPServerInfo
-	for _, client := range m.clients {
-		infos = append(infos, client.GetServerInfo())
+	infos := make([]*MCPServerInfo, 0, len(rows))
+	for _, r := range rows {
+		if client, ok := m.clients[tenantKey(tenantID, r.id)]; ok {
+			infos = append(infos, client.GetServerInfo())
+		} else {
+			infos = append(infos, &MCPServerInfo{
+				ID:        r.id,
+				Name:      r.name,
+				Version:   r.version,
+				Transport: r.transport,
+				Status:    "disconnected",
+			})
+		}
 	}
 	return infos
+}
+
+// UpdateServer disconnects the existing connection and reconnects with the new config.
+func (m *ClientManager) UpdateServer(ctx context.Context, cfg *MCPServerConfig) error {
+	key := tenantKey(tenantIDFromCtx(ctx), cfg.ID)
+	m.mu.Lock()
+	if client, exists := m.clients[key]; exists {
+		_ = client.Disconnect(ctx)
+		delete(m.clients, key)
+		delete(m.configs, key)
+		m.cache.Delete(key)
+	}
+	m.mu.Unlock()
+	return m.Connect(ctx, cfg)
+}
+
+// Reconnect reads the saved config for serverID from DB and reconnects.
+func (m *ClientManager) Reconnect(ctx context.Context, serverID string) error {
+	cfg, err := m.GetServerConfig(ctx, serverID)
+	if err != nil {
+		return fmt.Errorf("reconnect %s: %w", serverID, err)
+	}
+	return m.Connect(ctx, cfg)
+}
+
+// Delete disconnects the server if connected and hard-deletes its config from DB.
+// agent_mcp_servers is removed via ON DELETE CASCADE.
+func (m *ClientManager) Delete(ctx context.Context, serverID string) error {
+	m.mu.Lock()
+	key := tenantKey(tenantIDFromCtx(ctx), serverID)
+	if client, exists := m.clients[key]; exists {
+		_ = client.Disconnect(ctx)
+		delete(m.clients, key)
+		delete(m.configs, key)
+		m.cache.Delete(key)
+	}
+	m.mu.Unlock()
+
+	if m.pool == nil {
+		return nil
+	}
+	return tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM mcp_configs WHERE id=$1`, serverID)
+		return err
+	})
+}
+
+// GetServerConfig returns the full config for serverID, checking memory then DB.
+func (m *ClientManager) GetServerConfig(ctx context.Context, serverID string) (*MCPServerConfig, error) {
+	key := tenantKey(tenantIDFromCtx(ctx), serverID)
+	m.mu.RLock()
+	cfg := m.configs[key]
+	m.mu.RUnlock()
+	if cfg != nil {
+		return cfg, nil
+	}
+	if m.pool == nil {
+		return nil, mcpdomain.ErrServerNotFound
+	}
+	var out MCPServerConfig
+	var argsStr, envStr, capsStr, hdrsStr, authStr, retryStr string
+	var timeoutSec int
+	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT id, name, transport, command, url, args, env, capabilities,
+			       timeout_sec, version, headers, auth_config, retry_config
+			FROM mcp_configs WHERE id=$1`, serverID).
+			Scan(&out.ID, &out.Name, &out.Transport, &out.Command, &out.URL,
+				&argsStr, &envStr, &capsStr, &timeoutSec,
+				&out.Version, &hdrsStr, &authStr, &retryStr)
+	})
+	if err != nil {
+		return nil, mcpdomain.ErrServerNotFound
+	}
+	out.Timeout = time.Duration(timeoutSec) * time.Second
+	_ = json.Unmarshal([]byte(argsStr), &out.Args)
+	_ = json.Unmarshal([]byte(envStr), &out.Env)
+	_ = json.Unmarshal([]byte(capsStr), &out.Capabilities)
+	_ = json.Unmarshal([]byte(hdrsStr), &out.Headers)
+	if authStr != "" && authStr != "null" {
+		out.Auth = &mcpdomain.AuthConfig{}
+		_ = json.Unmarshal([]byte(authStr), out.Auth)
+	}
+	if retryStr != "" && retryStr != "null" {
+		out.Retry = &mcpdomain.RetryConfig{}
+		_ = json.Unmarshal([]byte(retryStr), out.Retry)
+	}
+	return &out, nil
 }

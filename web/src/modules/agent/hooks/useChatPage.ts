@@ -185,8 +185,10 @@ export const useChatPage = () => {
 
   useEffect(() => {
     if (!streamDone || !streamMsgIdRef.current) return;
-    if (streamConversationId !== selectedConv) return;
     const msgId = streamMsgIdRef.current;
+    streamMsgIdRef.current = null;
+    setSending(false);
+    if (streamConversationId !== selectedConv) return;
     if (streamResult) {
       const finalContent = streamResult.output || accumulatedContent;
       setMessages((prev) =>
@@ -199,8 +201,6 @@ export const useChatPage = () => {
         prev.map((m) => (m.id === msgId ? { ...m, role: 'error', content: streamError } : m)),
       );
     }
-    streamMsgIdRef.current = null;
-    setSending(false);
   }, [
     streamDone,
     streamResult,

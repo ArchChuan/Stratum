@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -18,8 +19,9 @@ type FactExtractor interface {
 	ExtractFacts(ctx context.Context, req *application.ExtractFactsRequest) error
 }
 
-// ExtractionWorker polls the extraction queue and processes tasks.
+// ExtractionWorker polls the extraction queue for a single tenant and processes tasks.
 type ExtractionWorker struct {
+	tenantID string
 	queue    port.ExtractionQueue
 	service  FactExtractor
 	logger   *zap.Logger
@@ -27,19 +29,23 @@ type ExtractionWorker struct {
 	stopOnce sync.Once
 }
 
-// NewExtractionWorker creates an extraction worker.
-func NewExtractionWorker(queue port.ExtractionQueue, service FactExtractor, logger *zap.Logger) *ExtractionWorker {
+// NewExtractionWorker creates an extraction worker for a specific tenant.
+func NewExtractionWorker(tenantID string, queue port.ExtractionQueue, service FactExtractor, logger *zap.Logger) *ExtractionWorker {
 	return &ExtractionWorker{
-		queue:   queue,
-		service: service,
-		logger:  logger,
-		stopCh:  make(chan struct{}),
+		tenantID: tenantID,
+		queue:    queue,
+		service:  service,
+		logger:   logger,
+		stopCh:   make(chan struct{}),
 	}
 }
 
-// Start begins polling the queue until ctx is cancelled or Stop is called.
 func (w *ExtractionWorker) Start(ctx context.Context) {
-	w.logger.Info("memory.extraction_worker.start")
+	runWithRestart(ctx, w.stopCh, w.logger, "memory.extraction_worker", w.run)
+}
+
+func (w *ExtractionWorker) run(ctx context.Context) {
+	w.logger.Info("memory.extraction_worker.start", zap.String("tenant_id", w.tenantID))
 	backoff := constants.MemoryFetchBackoffBase
 
 	for {
@@ -53,8 +59,11 @@ func (w *ExtractionWorker) Start(ctx context.Context) {
 		default:
 		}
 
-		task, err := w.queue.Dequeue(ctx)
+		task, err := w.queue.Dequeue(ctx, w.tenantID)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			w.logger.Error("memory.extraction_worker.dequeue_failed", zap.Error(err))
 			SleepCtx(ctx, w.stopCh, backoff)
 			backoff = min(backoff*2, constants.MemoryFetchBackoffMax)
@@ -62,7 +71,6 @@ func (w *ExtractionWorker) Start(ctx context.Context) {
 		}
 
 		if task == nil {
-			// No task available, reset backoff and sleep
 			backoff = constants.MemoryFetchBackoffBase
 			if !SleepCtx(ctx, w.stopCh, backoff) {
 				return
@@ -70,7 +78,6 @@ func (w *ExtractionWorker) Start(ctx context.Context) {
 			continue
 		}
 
-		// Process task
 		backoff = constants.MemoryFetchBackoffBase
 		w.processTask(ctx, task)
 	}
@@ -86,18 +93,23 @@ func (w *ExtractionWorker) processTask(ctx context.Context, task *port.Extractio
 				zap.Int64("task_id", task.ID),
 				zap.Any("panic", r),
 				zap.Stack("stack"))
-			_ = w.queue.MarkFailed(ctx, task.ID, fmt.Sprintf("panic: %v", r))
+			_ = w.queue.MarkFailed(ctx, task.TenantID, task.ID, fmt.Sprintf("panic: %v", r))
 			WorkerMessagesProcessed.WithLabelValues("extraction", task.UserID, "panic").Inc()
 		}
 	}()
 
+	var msgs []application.MessageDTO
+	if err := json.Unmarshal([]byte(task.Content), &msgs); err != nil {
+		msgs = []application.MessageDTO{{Role: "user", Content: task.Content}}
+	}
+
 	req := &application.ExtractFactsRequest{
-		TenantID: "", // ExtractionTask doesn't carry tenant_id; service must infer or we need to extend the schema
-		UserID:   task.UserID,
-		AgentID:  task.AgentID,
-		Messages: []application.MessageDTO{
-			{Role: "user", Content: task.Content},
-		},
+		TenantID:       task.TenantID,
+		UserID:         task.UserID,
+		AgentID:        task.AgentID,
+		ConversationID: task.ConversationID,
+		Scope:          task.Scope,
+		Messages:       msgs,
 	}
 
 	err := w.service.ExtractFacts(ctx, req)
@@ -105,12 +117,12 @@ func (w *ExtractionWorker) processTask(ctx context.Context, task *port.Extractio
 		w.logger.Warn("memory.extraction_worker.extract_failed",
 			zap.Int64("task_id", task.ID),
 			zap.Error(err))
-		_ = w.queue.MarkFailed(ctx, task.ID, err.Error())
+		_ = w.queue.MarkFailed(ctx, task.TenantID, task.ID, err.Error())
 		WorkerMessagesProcessed.WithLabelValues("extraction", task.UserID, "error").Inc()
 		return
 	}
 
-	if err := w.queue.MarkCompleted(ctx, task.ID); err != nil {
+	if err := w.queue.MarkCompleted(ctx, task.TenantID, task.ID); err != nil {
 		w.logger.Error("memory.extraction_worker.mark_completed_failed",
 			zap.Int64("task_id", task.ID),
 			zap.Error(err))

@@ -15,6 +15,7 @@ import (
 type GCWorker struct {
 	tenantID string
 	factRepo port.FactRepo
+	queue    port.ExtractionQueue // optional: purge old completed queue tasks
 	logger   *zap.Logger
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -30,15 +31,21 @@ func NewGCWorker(tenantID string, repo port.FactRepo, logger *zap.Logger) *GCWor
 	}
 }
 
-// Start begins periodic garbage collection until ctx is cancelled or Stop is called.
+// WithQueue sets an optional extraction queue for purging old completed tasks.
+func (w *GCWorker) WithQueue(q port.ExtractionQueue) *GCWorker {
+	w.queue = q
+	return w
+}
+
 func (w *GCWorker) Start(ctx context.Context) {
+	runWithRestart(ctx, w.stopCh, w.logger, "memory.gc_worker", w.run)
+}
+
+func (w *GCWorker) run(ctx context.Context) {
 	w.logger.Info("memory.gc_worker.start")
 	ticker := time.NewTicker(constants.MemoryGCInterval)
 	defer ticker.Stop()
-
-	// Run once immediately
 	w.RunOnce(ctx)
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -63,24 +70,15 @@ func (w *GCWorker) RunOnce(ctx context.Context) {
 		}
 	}()
 
-	start := time.Now()
-
-	// Purge deleted facts older than retention
-	deletedRetentionDays := int(constants.MemoryDeletedRetention.Hours() / 24)
-	deletedCount, err := w.factRepo.DeleteOldSoftDeleted(ctx, w.tenantID, deletedRetentionDays)
-	if err != nil {
-		w.logger.Error("memory.gc_worker.purge_deleted_failed", zap.Error(err))
-		return
-	}
-
-	// Note: FactRepo doesn't have DeleteOldSuperseded method
-	// In a full implementation, we'd add that method or extend DeleteOldSoftDeleted
-	// to handle both deleted and superseded facts
-
-	if deletedCount > 0 {
-		w.logger.Info("memory.gc_worker.batch_complete",
-			zap.Int("deleted_purged", deletedCount),
-			zap.Int64("latency_ms", time.Since(start).Milliseconds()))
+	if w.queue != nil {
+		n, err := w.queue.DeleteOldCompleted(ctx, w.tenantID, constants.MemoryGCQueueRetentionDays)
+		if err != nil {
+			w.logger.Error("memory.gc_worker.delete_old_completed_failed",
+				zap.String("tenant_id", w.tenantID), zap.Error(err))
+		} else if n > 0 {
+			w.logger.Info("memory.gc_worker.deleted_old_completed",
+				zap.String("tenant_id", w.tenantID), zap.Int("count", n))
+		}
 	}
 }
 

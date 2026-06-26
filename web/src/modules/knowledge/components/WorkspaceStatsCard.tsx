@@ -32,10 +32,10 @@ export const WorkspaceStatsCard = ({ stats }: WorkspaceStatsCardProps) => (
       </div>
       <div>
         <Text type="secondary" style={{ fontSize: 12 }}>
-          向量数
+          文档数
         </Text>
         <div>
-          <Text strong>{stats?.stats?.row_count ?? '—'}</Text>
+          <Text strong>{stats?.stats?.doc_count ?? '—'}</Text>
         </div>
       </div>
       <div>

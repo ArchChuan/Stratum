@@ -46,18 +46,6 @@ spec:
               value: {{ .Values.config.milvusHost | quote }}
             - name: MILVUS_PORT
               value: {{ .Values.config.milvusPort | quote }}
-            - name: NEO4J_URI
-              value: {{ .Values.config.neo4jUri | quote }}
-            - name: NEO4J_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "stratum.fullname" . }}-neo4j-secret
-                  key: username
-            - name: NEO4J_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "stratum.fullname" . }}-neo4j-secret
-                  key: password
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.observability.otelCollectorEndpoint | quote }}
           livenessProbe:

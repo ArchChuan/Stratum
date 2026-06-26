@@ -50,7 +50,8 @@ type InjectionContext struct {
 	UserID         string
 	AgentID        string
 	ConversationID string
-	Query          string // user input text; used for long-term vector search
+	Query          string
+	Scope          string // "user" or "agent"
 }
 
 // BuildContext fetches the latest conversation summary and top entities,
@@ -78,13 +79,23 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 		return "", fmt.Errorf("fetch summary: %w", err)
 	}
 
-	// Fetch top entities ordered by last_seen
-	rows, err := tx.Query(ctx, `
-		SELECT name FROM entities
-		WHERE user_id = $1
-		ORDER BY last_seen DESC
-		LIMIT $2`,
-		ic.UserID, constants.EnricherTopEntities)
+	// Fetch top entities filtered by scope
+	var rows pgx.Rows
+	if ic.Scope == "agent" && ic.AgentID != "" {
+		rows, err = tx.Query(ctx, `
+			SELECT name FROM memory_entities
+			WHERE user_id = $1 AND agent_id = $2 AND scope = 'agent' AND status = 'active'
+			ORDER BY last_seen_at DESC
+			LIMIT $3`,
+			ic.UserID, ic.AgentID, constants.EnricherTopEntities)
+	} else {
+		rows, err = tx.Query(ctx, `
+			SELECT name FROM memory_entities
+			WHERE user_id = $1 AND scope = 'user' AND status = 'active'
+			ORDER BY last_seen_at DESC
+			LIMIT $2`,
+			ic.UserID, constants.EnricherTopEntities)
+	}
 	if err != nil {
 		return "", fmt.Errorf("fetch entities: %w", err)
 	}

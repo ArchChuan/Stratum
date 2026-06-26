@@ -13,8 +13,7 @@ export const agentSchema = z
     allowedSkills: z.array(z.string()).nullish().transform((v) => v ?? []),
     mcpServerIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     knowledgeWorkspaceIds: z.array(z.string()).nullish().transform((v) => v ?? []),
-    memoryEnabled: z.boolean().optional().default(false),
-    memoryScope: z.string().optional().default('agent'),
+    memoryScope: z.string().optional().default('user'),
     created_at: z.string().optional(),
     updated_at: z.string().optional(),
   })
@@ -32,7 +31,6 @@ export interface AgentFormValues {
   allowedSkills?: string[];
   mcpServerIds?: string[];
   knowledgeWorkspaceIds?: string[];
-  memoryEnabled?: boolean;
   memoryScope?: string;
 }
 

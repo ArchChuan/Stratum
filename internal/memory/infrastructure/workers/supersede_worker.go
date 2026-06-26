@@ -33,15 +33,15 @@ func NewSupersedeWorker(tenantID string, repo port.FactRepo, judge port.LLMSuper
 	}
 }
 
-// Start begins periodic supersede checking until ctx is cancelled or Stop is called.
 func (w *SupersedeWorker) Start(ctx context.Context) {
+	runWithRestart(ctx, w.stopCh, w.logger, "memory.supersede_worker", w.run)
+}
+
+func (w *SupersedeWorker) run(ctx context.Context) {
 	w.logger.Info("memory.supersede_worker.start")
-	ticker := time.NewTicker(constants.MemoryProfileInterval) // Reuse profile interval for now
+	ticker := time.NewTicker(constants.MemoryProfileInterval)
 	defer ticker.Stop()
-
-	// Run once immediately
 	w.RunOnce(ctx)
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -81,6 +81,8 @@ func (w *SupersedeWorker) RunOnce(ctx context.Context) {
 	}
 
 	supersededCount := 0
+	llmCalls := 0
+outer:
 	for _, fact := range recentFacts {
 		// Find candidates that this fact might supersede
 		candidates, err := w.factRepo.FindSupersedeCandidates(
@@ -110,7 +112,12 @@ func (w *SupersedeWorker) RunOnce(ctx context.Context) {
 				continue
 			}
 
+			if llmCalls >= constants.MemorySupersedeLLMCallsPerRun {
+				break outer
+			}
+
 			judgment, err := w.judge.JudgeSupersede(ctx, candidate.Content, fact.Content)
+			llmCalls++
 			if err != nil {
 				w.logger.Warn("memory.supersede_worker.judge_failed",
 					zap.String("old_fact_id", candidate.ID),

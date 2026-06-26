@@ -22,10 +22,10 @@ export const WorkspaceConfigForm = ({ form, loading, onSubmit }: WorkspaceConfig
   >
     <Form form={form} layout="inline" onFinish={onSubmit}>
       <Form.Item label="查询模式" name="query_mode">
-        <Select style={{ width: 140 }}>
-          <Option value="hybrid">混合</Option>
-          <Option value="vector">向量</Option>
-          <Option value="graph">图谱</Option>
+        <Select style={{ width: 160 }}>
+          <Option value="vector">向量检索</Option>
+          <Option value="keyword">关键词检索</Option>
+          <Option value="hybrid">混合检索</Option>
         </Select>
       </Form.Item>
       <Form.Item label="分块大小" name="chunk_size" tooltip="创建后不可修改">

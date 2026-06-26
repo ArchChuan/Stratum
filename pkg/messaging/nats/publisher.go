@@ -2,13 +2,14 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/nats-io/nats.go"
 )
 
-// Publisher publishes raw bytes to a subject. ctx is reserved for future
-// timeout/tracing wiring; current NATS Go client is synchronous.
+// Publisher publishes raw bytes to a subject.
 type Publisher interface {
 	Publish(ctx context.Context, subject string, data []byte) error
 }
@@ -23,12 +24,31 @@ func NewJetStreamPublisher(js nats.JetStreamContext) *JetStreamPublisher {
 	return &JetStreamPublisher{js: js}
 }
 
-// Publish sends data to subject via JetStream.
-func (p *JetStreamPublisher) Publish(_ context.Context, subject string, data []byte) error {
-	if _, err := p.js.Publish(subject, data); err != nil {
-		return fmt.Errorf("nats: publish %q: %w", subject, err)
+// Publish sends data to subject via JetStream with 3-attempt exponential backoff.
+func (p *JetStreamPublisher) Publish(ctx context.Context, subject string, data []byte) error {
+	const (
+		attempts = 3
+		base     = 100 * time.Millisecond
+		max      = 10 * time.Second
+	)
+	delay := base
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		if _, err := p.js.Publish(subject, data); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if i < attempts-1 {
+			select {
+			case <-ctx.Done():
+				return errors.Join(lastErr, ctx.Err())
+			case <-time.After(delay):
+			}
+			delay = min(delay*2, max)
+		}
 	}
-	return nil
+	return fmt.Errorf("nats: publish %q: %w", subject, lastErr)
 }
 
 var _ Publisher = (*JetStreamPublisher)(nil)

@@ -30,10 +30,12 @@ type ExecutionRepo interface {
 // ChatRepo persists chat conversations and messages in the tenant schema.
 type ChatRepo interface {
 	CreateConversation(ctx context.Context, tenantID, agentID, userID, name string) (*domain.ChatConversation, error)
+	GetConversation(ctx context.Context, tenantID, convID string) (*domain.ChatConversation, error)
 	ListConversations(ctx context.Context, tenantID, agentID, userID string) ([]*domain.ChatConversation, error)
 	RenameConversation(ctx context.Context, tenantID, convID, userID, name string) error
 	DeleteConversation(ctx context.Context, tenantID, convID, userID string) error
 	AddMessage(ctx context.Context, tenantID string, msg *domain.ChatMessage) error
 	ListMessages(ctx context.Context, tenantID, convID, userID string) ([]*domain.ChatMessage, error)
 	CleanupExpired(ctx context.Context, tenantID string) error
+	DeleteByAgent(ctx context.Context, tenantID, agentID string) error
 }

@@ -15,28 +15,28 @@ import (
 )
 
 type stubExtractionQueue struct {
-	dequeueFunc       func(context.Context) (*port.ExtractionTask, error)
-	markCompletedFunc func(context.Context, int64) error
-	markFailedFunc    func(context.Context, int64, string) error
+	dequeueFunc       func(context.Context, string) (*port.ExtractionTask, error)
+	markCompletedFunc func(context.Context, string, int64) error
+	markFailedFunc    func(context.Context, string, int64, string) error
 }
 
-func (q *stubExtractionQueue) Enqueue(ctx context.Context, task *port.ExtractionTask) error {
+func (q *stubExtractionQueue) Enqueue(ctx context.Context, tenantID string, task *port.ExtractionTask) error {
 	return nil
 }
 
-func (q *stubExtractionQueue) Dequeue(ctx context.Context) (*port.ExtractionTask, error) {
-	return q.dequeueFunc(ctx)
+func (q *stubExtractionQueue) Dequeue(ctx context.Context, tenantID string) (*port.ExtractionTask, error) {
+	return q.dequeueFunc(ctx, tenantID)
 }
 
-func (q *stubExtractionQueue) MarkCompleted(ctx context.Context, taskID int64) error {
-	return q.markCompletedFunc(ctx, taskID)
+func (q *stubExtractionQueue) MarkCompleted(ctx context.Context, tenantID string, taskID int64) error {
+	return q.markCompletedFunc(ctx, tenantID, taskID)
 }
 
-func (q *stubExtractionQueue) MarkFailed(ctx context.Context, taskID int64, errMsg string) error {
-	return q.markFailedFunc(ctx, taskID, errMsg)
+func (q *stubExtractionQueue) MarkFailed(ctx context.Context, tenantID string, taskID int64, errMsg string) error {
+	return q.markFailedFunc(ctx, tenantID, taskID, errMsg)
 }
 
-func (q *stubExtractionQueue) DeleteOldCompleted(ctx context.Context, retentionDays int) (int, error) {
+func (q *stubExtractionQueue) DeleteOldCompleted(ctx context.Context, tenantID string, retentionDays int) (int, error) {
 	return 0, nil
 }
 
@@ -59,22 +59,23 @@ func TestExtractionWorker_ProcessesTask(t *testing.T) {
 
 	var completedID int64
 	queue := &stubExtractionQueue{
-		dequeueFunc: func(ctx context.Context) (*port.ExtractionTask, error) {
+		dequeueFunc: func(ctx context.Context, tenantID string) (*port.ExtractionTask, error) {
 			return &port.ExtractionTask{
 				ID:        123,
+				TenantID:  "tenant1",
 				UserID:    "user1",
 				AgentID:   "agent1",
 				MessageID: "msg1",
 				Content:   "I like coffee",
 			}, nil
 		},
-		markCompletedFunc: func(ctx context.Context, taskID int64) error {
+		markCompletedFunc: func(ctx context.Context, tenantID string, taskID int64) error {
 			completedID = taskID
 			return nil
 		},
 	}
 
-	worker := workers.NewExtractionWorker(queue, extractor, zap.NewNop())
+	worker := workers.NewExtractionWorker("tenant1", queue, extractor, zap.NewNop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -99,17 +100,17 @@ func TestExtractionWorker_HandlesExtractionError(t *testing.T) {
 	var failedID int64
 	var failReason string
 	queue := &stubExtractionQueue{
-		dequeueFunc: func(ctx context.Context) (*port.ExtractionTask, error) {
-			return &port.ExtractionTask{ID: 456, Content: "test"}, nil
+		dequeueFunc: func(ctx context.Context, tenantID string) (*port.ExtractionTask, error) {
+			return &port.ExtractionTask{ID: 456, TenantID: "tenant1", Content: "test"}, nil
 		},
-		markFailedFunc: func(ctx context.Context, taskID int64, errMsg string) error {
+		markFailedFunc: func(ctx context.Context, tenantID string, taskID int64, errMsg string) error {
 			failedID = taskID
 			failReason = errMsg
 			return nil
 		},
 	}
 
-	worker := workers.NewExtractionWorker(queue, extractor, zap.NewNop())
+	worker := workers.NewExtractionWorker("tenant1", queue, extractor, zap.NewNop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -125,12 +126,12 @@ func TestExtractionWorker_HandlesExtractionError(t *testing.T) {
 
 func TestExtractionWorker_GracefulShutdown(t *testing.T) {
 	queue := &stubExtractionQueue{
-		dequeueFunc: func(ctx context.Context) (*port.ExtractionTask, error) {
+		dequeueFunc: func(ctx context.Context, tenantID string) (*port.ExtractionTask, error) {
 			return nil, nil // idle
 		},
 	}
 
-	worker := workers.NewExtractionWorker(queue, &stubFactExtractor{}, zap.NewNop())
+	worker := workers.NewExtractionWorker("tenant1", queue, &stubFactExtractor{}, zap.NewNop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

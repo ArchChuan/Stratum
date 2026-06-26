@@ -267,11 +267,11 @@ func (r *MCPSkillRegistry) RefreshSkills(ctx context.Context) error {
 }
 
 // GetServerInfo 获取服务器信息
-func (r *MCPSkillRegistry) GetServerInfo(serverID string) any {
-	return r.manager.GetServerInfo(serverID)
+func (r *MCPSkillRegistry) GetServerInfo(ctx context.Context, serverID string) any {
+	return r.manager.GetServerInfo(ctx, serverID)
 }
 
 // GetAllServerInfo 获取所有服务器信息
-func (r *MCPSkillRegistry) GetAllServerInfo() []*MCPServerInfo {
-	return r.manager.GetAllServerInfo()
+func (r *MCPSkillRegistry) GetAllServerInfo(ctx context.Context) []*MCPServerInfo {
+	return r.manager.GetAllServerInfo(ctx)
 }

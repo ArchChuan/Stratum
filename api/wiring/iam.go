@@ -5,6 +5,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/iam/application"
 	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
+	knowledgepersistence "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/persistence"
 )
 
 // IAM holds identity & access management bounded-context services.
@@ -21,11 +22,22 @@ func (c *Container) buildIAM(_ context.Context) error {
 		iam.TenantService = application.NewTenantService(
 			repo,
 			c.Logger,
-			c.Config.FrontendURL,
 			c.Platform.AESKey,
 			c.Platform.GatewayCache,
 		)
-		iam.AdminService = application.NewAdminService(iampersistence.NewAdminTenantRepo(db))
+		opts := []application.AdminServiceOption{
+			application.WithSchemaCleaner(iampersistence.NewTenantSchemaCleaner(db)),
+			application.WithAdminLogger(c.Logger),
+		}
+		if c.Storage != nil && c.Storage.Milvus != nil {
+			opts = append(opts, application.WithVectorCleaner(
+				knowledgepersistence.NewTenantVectorCleaner(db, c.Storage.Milvus),
+			))
+		}
+		iam.AdminService = application.NewAdminService(
+			iampersistence.NewAdminTenantRepo(db),
+			opts...,
+		)
 	}
 	c.IAM = iam
 	return nil

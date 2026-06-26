@@ -150,6 +150,22 @@ func (r *MemoryRepo) ClearSession(ctx context.Context, tenantID, sessionID strin
 	})
 }
 
+// DeleteAllByUser hard-deletes every memory entry belonging to userID within the tenant schema.
+func (r *MemoryRepo) DeleteAllByUser(ctx context.Context, tenantID, userID string) error {
+	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM memory_entries WHERE user_id = $1`, userID)
+		return err
+	})
+}
+
+// DeleteAllByAgent hard-deletes every memory entry belonging to agentID within the tenant schema.
+func (r *MemoryRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
+	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM memory_entries WHERE agent_id = $1`, agentID)
+		return err
+	})
+}
+
 // Stats aggregates per-tenant memory volume from memory_entries / entities /
 // chat_conversations. Errors are swallowed (matches legacy behaviour) — caller
 // receives a zero-value MemoryStats.

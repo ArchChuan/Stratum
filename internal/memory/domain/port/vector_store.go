@@ -23,6 +23,12 @@ type VectorStore interface {
 	// Delete removes documents by IDs.
 	Delete(ctx context.Context, collectionName string, ids []string) error
 
+	// DeleteAllByUser removes all vectors for a user from the tenant's memory collection.
+	DeleteAllByUser(ctx context.Context, tenantID, userID string) error
+
+	// DeleteAllByAgent removes all vectors for an agent from the tenant's memory collection.
+	DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error
+
 	// CreateCollection initializes a vector collection with specified dimension.
 	CreateCollection(ctx context.Context, collectionName string, dimension int) error
 }

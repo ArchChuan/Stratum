@@ -11,7 +11,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
 )
 
-// TenantRepo persists tenant members, invitations, and settings in PostgreSQL (public schema).
+// TenantRepo persists tenant members and settings in PostgreSQL (public schema).
 type TenantRepo struct {
 	db *pgxpool.Pool
 }
@@ -103,18 +103,6 @@ func (r *TenantRepo) DeleteMember(ctx context.Context, tenantID, userID string) 
 	return nil
 }
 
-// CreateInvitation inserts a new invitation row.
-func (r *TenantRepo) CreateInvitation(ctx context.Context, inv domain.Invitation) error {
-	_, err := r.db.Exec(ctx,
-		`INSERT INTO public.invitations(id, tenant_id, email, role, token_hash, expires_at, created_at, invited_by)
-		 VALUES($1, $2, $3, $4, $5, $6, $7, $8)`,
-		inv.ID, inv.TenantID, inv.Email, inv.Role, inv.TokenHash, inv.ExpiresAt, inv.CreatedAt, inv.InvitedBy)
-	if err != nil {
-		return fmt.Errorf("tenant_repo: create invitation: %w", err)
-	}
-	return nil
-}
-
 // GetTenantSettings returns the tenant name, is_default flag, and raw settings JSON.
 func (r *TenantRepo) GetTenantSettings(ctx context.Context, tenantID string) (string, bool, []byte, error) {
 	var name string
@@ -150,7 +138,7 @@ func (r *TenantRepo) UpdateTenantName(ctx context.Context, tenantID, name string
 func (r *TenantRepo) UpdateTenantSettings(ctx context.Context, tenantID string, settingsJSON []byte) error {
 	tag, err := r.db.Exec(ctx,
 		"UPDATE public.tenants SET settings=$1, updated_at=now() WHERE id=$2 AND deleted_at IS NULL",
-		settingsJSON, tenantID)
+		string(settingsJSON), tenantID)
 	if err != nil {
 		return fmt.Errorf("tenant_repo: update tenant settings: %w", err)
 	}

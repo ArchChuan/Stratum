@@ -1,0 +1,1 @@
+-- intentionally empty: redundant tables are not restored

@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -32,14 +33,15 @@ type jsonbConfig struct {
 	TopK           int    `json:"top_k"`
 }
 
-func toJSONB(c domain.WorkspaceConfig) jsonbConfig {
-	return jsonbConfig{
+func toJSONB(c domain.WorkspaceConfig) string {
+	b, _ := json.Marshal(jsonbConfig{
 		EmbeddingModel: c.EmbeddingModel,
 		ChunkSize:      c.ChunkSize,
 		ChunkOverlap:   c.ChunkOverlap,
 		QueryMode:      c.QueryMode,
 		TopK:           c.TopK,
-	}
+	})
+	return string(b)
 }
 
 func fromJSONB(c jsonbConfig) domain.WorkspaceConfig {

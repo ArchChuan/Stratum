@@ -13,11 +13,12 @@ import (
 // Registry orchestrates Agent CRUD via a port-backed AgentRepo and
 // hydrates returned Agents with capability/memory/recall hooks.
 type Registry struct {
-	repo        port.AgentRepo
-	logger      *zap.Logger
-	capGW       port.CapabilityGateway
-	memInjector port.MemoryInjector
-	recallFn    port.RecallMemoryFn
+	repo               port.AgentRepo
+	logger             *zap.Logger
+	capGW              port.CapabilityGateway
+	memInjector        port.MemoryInjector
+	recallFn           port.RecallMemoryFn
+	globalSystemSuffix string
 }
 
 // NewRegistry constructs a Registry around a domain-port AgentRepo.
@@ -34,6 +35,9 @@ func (r *Registry) SetMemoryInjector(inj port.MemoryInjector) { r.memInjector = 
 // SetRecallMemoryFn injects a recall_memory tool handler.
 func (r *Registry) SetRecallMemoryFn(fn port.RecallMemoryFn) { r.recallFn = fn }
 
+// SetGlobalSystemSuffix injects a platform-level system prompt appended to every agent's prompt.
+func (r *Registry) SetGlobalSystemSuffix(s string) { r.globalSystemSuffix = s }
+
 func (r *Registry) hydrate(cfg *domain.AgentConfig) Agent {
 	a := NewBaseAgent(cfg, r.logger)
 	if r.capGW != nil {
@@ -44,6 +48,9 @@ func (r *Registry) hydrate(cfg *domain.AgentConfig) Agent {
 	}
 	if r.recallFn != nil {
 		a.RecallMemoryFn = r.recallFn
+	}
+	if r.globalSystemSuffix != "" {
+		a.GlobalSystemSuffix = r.globalSystemSuffix
 	}
 	return a
 }

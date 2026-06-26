@@ -56,6 +56,32 @@ export const useMCPServersPage = () => {
     [refreshServers],
   );
 
+  const handleReconnect = useCallback(
+    async (id: string) => {
+      try {
+        await mcpApi.reconnect(id);
+        message.success('已重新连接');
+        refreshServers();
+      } catch (err: unknown) {
+        message.error(extractErrorMessage(err) || '连接失败');
+      }
+    },
+    [refreshServers],
+  );
+
+  const handleDelete = useCallback(
+    async (id: string) => {
+      try {
+        await mcpApi.delete(id);
+        message.success('已删除');
+        refreshServers();
+      } catch (err: unknown) {
+        message.error(extractErrorMessage(err) || '删除失败');
+      }
+    },
+    [refreshServers],
+  );
+
   return {
     servers,
     loading,
@@ -63,5 +89,7 @@ export const useMCPServersPage = () => {
     setDetailServer,
     fetchServers: refreshServers,
     handleDisconnect,
+    handleReconnect,
+    handleDelete,
   };
 };

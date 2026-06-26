@@ -43,13 +43,13 @@ func NewMCPService(skillRegistry port.SkillRegistry, manager port.ServerManager,
 }
 
 // ListServers returns metadata for every known MCP server.
-func (s *MCPService) ListServers() []*domain.ServerInfo {
-	return s.manager.GetAllServerInfo()
+func (s *MCPService) ListServers(ctx context.Context) []*domain.ServerInfo {
+	return s.manager.GetAllServerInfo(ctx)
 }
 
 // GetServer returns server info for id, or domain.ErrServerNotFound when absent.
-func (s *MCPService) GetServer(id string) (*domain.ServerInfo, error) {
-	info := s.manager.GetServerInfo(id)
+func (s *MCPService) GetServer(ctx context.Context, id string) (*domain.ServerInfo, error) {
+	info := s.manager.GetServerInfo(ctx, id)
 	if info == nil {
 		return nil, domain.ErrServerNotFound
 	}
@@ -106,8 +106,8 @@ func (s *MCPService) RefreshSkills(ctx context.Context) error {
 }
 
 // ServerStatus aggregates connection counts across all servers.
-func (s *MCPService) ServerStatus() ServerStatusBreakdown {
-	servers := s.manager.GetAllServerInfo()
+func (s *MCPService) ServerStatus(ctx context.Context) ServerStatusBreakdown {
+	servers := s.manager.GetAllServerInfo(ctx)
 	out := ServerStatusBreakdown{Total: len(servers)}
 	for _, srv := range servers {
 		switch srv.Status {
@@ -128,15 +128,61 @@ func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig
 	if err := s.manager.Connect(ctx, cfg); err != nil {
 		return err
 	}
+	s.logger.Info("mcp.server_connected",
+		zap.String("server_id", cfg.ID),
+		zap.String("server_name", cfg.Name),
+	)
 	if err := s.skillRegistry.RegisterServer(ctx, cfg.ID); err != nil {
 		s.logger.Warn("failed to register MCP skills", zap.String("server_id", cfg.ID), zap.Error(err))
 	}
 	return nil
 }
 
+// DeleteServer permanently removes an MCP server config and cascades to agent relations.
+func (s *MCPService) DeleteServer(ctx context.Context, serverID string) error {
+	if err := s.manager.Delete(ctx, serverID); err != nil {
+		return err
+	}
+	s.logger.Info("mcp.server_deleted", zap.String("server_id", serverID))
+	return nil
+}
+
 // DisconnectServer drops the connection to serverID.
 func (s *MCPService) DisconnectServer(ctx context.Context, serverID string) error {
-	return s.manager.Disconnect(ctx, serverID)
+	if err := s.manager.Disconnect(ctx, serverID); err != nil {
+		return err
+	}
+	s.logger.Info("mcp.server_disconnected", zap.String("server_id", serverID))
+	return nil
+}
+
+// ReconnectServer restores a previously disconnected MCP server.
+func (s *MCPService) ReconnectServer(ctx context.Context, serverID string) error {
+	if err := s.manager.Reconnect(ctx, serverID); err != nil {
+		return err
+	}
+	s.logger.Info("mcp.server_reconnected", zap.String("server_id", serverID))
+	if err := s.skillRegistry.RegisterServer(ctx, serverID); err != nil {
+		s.logger.Warn("failed to register MCP skills after reconnect", zap.String("server_id", serverID), zap.Error(err))
+	}
+	return nil
+}
+
+// UpdateServer disconnects and reconnects an existing MCP server with new config.
+func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig) error {
+	if err := s.manager.UpdateServer(ctx, cfg); err != nil {
+		return err
+	}
+	s.logger.Info("mcp.server_updated", zap.String("server_id", cfg.ID))
+	if err := s.skillRegistry.RegisterServer(ctx, cfg.ID); err != nil {
+		s.logger.Warn("failed to re-register MCP skills", zap.String("server_id", cfg.ID), zap.Error(err))
+	}
+	return nil
+}
+
+// GetServerConfig returns the full configuration for serverID.
+func (s *MCPService) GetServerConfig(ctx context.Context, serverID string) (*domain.ServerConfig, error) {
+	return s.manager.GetServerConfig(ctx, serverID)
 }
 
 // IsNameConflict reports whether err is the canonical mcp name-conflict sentinel.

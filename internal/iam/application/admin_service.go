@@ -110,21 +110,22 @@ func (s *AdminService) UpdateTenant(ctx context.Context, id string, patch domain
 	return s.repo.UpdatePatch(ctx, id, patch)
 }
 
-// DeleteTenant soft-deletes the tenant row and best-effort cleans all associated storage.
-// PG schema and Milvus collection failures are logged as warnings and do not abort the operation;
-// the soft-delete is the authoritative gate against new writes.
+// DeleteTenant hard-deletes the tenant row (cascades to all public-schema FK tables)
+// then drops the tenant PG schema and Milvus collections.
+// Storage cleanup failures are logged as warnings; the public row deletion is authoritative.
 func (s *AdminService) DeleteTenant(ctx context.Context, id string) error {
-	if err := s.repo.SoftDelete(ctx, id); err != nil {
+	if err := s.repo.HardDelete(ctx, id); err != nil {
 		return err
+	}
+	// Vector cleaner must run before schema drop — it queries tenant schema for RAG workspace names.
+	if s.vectorCleaner != nil {
+		if err := s.vectorCleaner.DropTenantCollections(ctx, id); err != nil {
+			s.logger.Warn("failed to drop tenant vector collections", zap.String("tenant_id", id), zap.Error(err))
+		}
 	}
 	if s.schemaCleaner != nil {
 		if err := s.schemaCleaner.DropTenantSchema(ctx, id); err != nil {
 			s.logger.Warn("failed to drop tenant schema", zap.String("tenant_id", id), zap.Error(err))
-		}
-	}
-	if s.vectorCleaner != nil {
-		if err := s.vectorCleaner.DropTenantCollections(ctx, id); err != nil {
-			s.logger.Warn("failed to drop tenant vector collections", zap.String("tenant_id", id), zap.Error(err))
 		}
 	}
 	if s.cacheInvalidator != nil {

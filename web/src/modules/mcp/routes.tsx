@@ -1,6 +1,7 @@
 import { Route } from 'react-router-dom';
 
 import { CreateMCPPage } from './pages/CreateMCPPage';
+import { EditMCPPage } from './pages/EditMCPPage';
 import { MCPServersPage } from './pages/MCPServersPage';
 
 import { PrivateRoute } from '@/modules/iam';
@@ -21,6 +22,15 @@ export const mcpRoutes = [
     element={
       <PrivateRoute>
         <CreateMCPPage />
+      </PrivateRoute>
+    }
+  />,
+  <Route
+    key="mcp-edit"
+    path="/mcp/:id/edit"
+    element={
+      <PrivateRoute>
+        <EditMCPPage />
       </PrivateRoute>
     }
   />,

@@ -183,10 +183,8 @@ func (h *ChatHandler) AddMessage(c *gin.Context) {
 	}
 
 	// Verify the conversation belongs to the calling user before writing.
-	convs, err := h.store.ListMessages(c.Request.Context(), tenantID, convID, userID)
-	_ = convs
-	if err != nil {
-		// ListMessages enforces ownership via JOIN; any DB error means forbidden-or-missing.
+	conv, err := h.store.GetConversation(c.Request.Context(), tenantID, convID)
+	if err != nil || conv.UserID != userID {
 		h.logger.Error("add message: ownership check", zap.Error(err))
 		_ = c.Error(middleware.NewHTTPError(http.StatusForbidden, errors.New("会话不存在或无权操作")))
 		return
@@ -196,6 +194,8 @@ func (h *ChatHandler) AddMessage(c *gin.Context) {
 		ConversationID: convID,
 		Role:           req.Role,
 		Content:        req.Content,
+		AgentID:        conv.AgentID,
+		UserID:         userID,
 	}
 	if err := h.store.AddMessage(c.Request.Context(), tenantID, msg); err != nil {
 		_ = c.Error(err)

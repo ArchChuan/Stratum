@@ -14,6 +14,6 @@ type AdminTenantRepo interface {
 	Get(ctx context.Context, id string) (*domain.Tenant, error)
 	Create(ctx context.Context, t domain.Tenant) error
 	UpdatePatch(ctx context.Context, id string, patch domain.TenantPatch) error
-	SoftDelete(ctx context.Context, id string) error
+	HardDelete(ctx context.Context, id string) error
 	ProvisionSchema(ctx context.Context, tenantID string) error
 }

@@ -51,7 +51,6 @@ type AgentConfig struct {
 	KnowledgeWorkspaceNames        []string
 	KnowledgeWorkspaceDescriptions []string
 	MaxContextTokens               int
-	MemoryEnabled                  bool
 	MemoryScope                    string
 }
 

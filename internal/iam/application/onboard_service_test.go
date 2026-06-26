@@ -55,17 +55,3 @@ func TestCreateTenant_Success(t *testing.T) {
 		t.Errorf("schema name mismatch: %s", result.SchemaName)
 	}
 }
-
-func TestJoinTenant_InvalidToken(t *testing.T) {
-	svc, _, cleanup := setupOnboardTest(t)
-	defer cleanup()
-	ctx := context.Background()
-
-	err := svc.JoinTenant(ctx, application.JoinTenantInput{
-		UserID:          "00000000-0000-0000-0000-000000000011",
-		InvitationToken: "nonexistent-token",
-	})
-	if err == nil {
-		t.Fatal("expected error for invalid invitation token")
-	}
-}

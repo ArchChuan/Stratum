@@ -24,7 +24,7 @@ type UploadDocumentRequest struct {
 type QueryRequest struct {
 	Question  string `json:"question" binding:"required"`
 	Workspace string `json:"workspace" binding:"required"`
-	Mode      string `json:"mode" binding:"required,oneof=vector graph hybrid"`
+	Mode      string `json:"mode" binding:"required,oneof=vector keyword hybrid"`
 	TopK      int    `json:"topK"`
 }
 

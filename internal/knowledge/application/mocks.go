@@ -4,73 +4,8 @@ package application
 import (
 	"context"
 
-	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/vector"
 )
-
-// Compile-time check: MockGraphStore implements port.GraphStore.
-var _ knowledgeport.GraphStore = (*MockGraphStore)(nil)
-
-type MockGraphStore struct {
-	docCount          int
-	docCountErr       error
-	workspaceNames    []string
-	workspaceNamesErr error
-}
-
-func NewMockGraphStore() *MockGraphStore {
-	return &MockGraphStore{}
-}
-
-func (m *MockGraphStore) Connect(_ context.Context) error {
-	return nil
-}
-
-func (m *MockGraphStore) CreateNode(_ context.Context, _ string, _ map[string]interface{}) error {
-	return nil
-}
-
-func (m *MockGraphStore) CreateRelationship(_ context.Context, _, _, _ string) error {
-	return nil
-}
-
-func (m *MockGraphStore) GetNeighborNodes(_ context.Context, _ string, _ int) ([]map[string]interface{}, error) {
-	return []map[string]interface{}{}, nil
-}
-
-func (m *MockGraphStore) FullTextSearch(_ context.Context, _ string, _ int) ([]knowledgeport.GraphNodeResult, error) {
-	return []knowledgeport.GraphNodeResult{}, nil
-}
-
-func (m *MockGraphStore) QueryWorkspaceDocumentIDs(_ context.Context, _ string) ([]string, error) {
-	return []string{}, nil
-}
-
-func (m *MockGraphStore) DeleteWorkspaceNodes(_ context.Context, _ string) error {
-	return nil
-}
-
-func (m *MockGraphStore) GetWorkspaceDocCount(_ context.Context, _ string) (int, error) {
-	return m.docCount, m.docCountErr
-}
-
-func (m *MockGraphStore) GetWorkspaceNames(_ context.Context) ([]string, error) {
-	return m.workspaceNames, m.workspaceNamesErr
-}
-
-func (m *MockGraphStore) SetDocCountResult(n int, err error) {
-	m.docCount = n
-	m.docCountErr = err
-}
-
-func (m *MockGraphStore) SetWorkspaceNamesResult(names []string, err error) {
-	m.workspaceNames = names
-	m.workspaceNamesErr = err
-}
-
-func (m *MockGraphStore) Close() error {
-	return nil
-}
 
 type MockVectorStore struct {
 	searchResults []interface{}
