@@ -48,3 +48,8 @@ type MemoryWriter interface {
 type AgentMemoryCleaner interface {
 	ClearAgentMemories(ctx context.Context, tenantID, agentID string) error
 }
+
+// BufferMemoryFn buffers a single conversation message for async memory extraction.
+// Wiring constructs this as a closure over memory.MemoryService so application stays free
+// of cross-context imports.
+type BufferMemoryFn func(ctx context.Context, tenantID, userID, agentID, conversationID, scope, role, content string) error

@@ -11,8 +11,9 @@ const (
 	// origin always closes before CF fires a 524.
 	AgentExecTimeout = 90 * time.Second
 
-	// SSE heartbeat interval — must be shorter than Cloudflare proxy read timeout.
-	SSEHeartbeatInterval = 15 * time.Second
+	// SSE heartbeat interval — keep well below proxy idle-connection timeout (CF: 100s,
+	// nginx default: 60s). 5s prevents slow LLMs from triggering proxy disconnects.
+	SSEHeartbeatInterval = 5 * time.Second
 
 	// LLM per-request
 	LLMRequestTimeout = 60 * time.Second

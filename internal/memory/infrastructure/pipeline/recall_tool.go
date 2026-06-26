@@ -100,7 +100,7 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID, s
 	}
 
 	// Fallback: ILIKE text search
-	return h.textSearch(ctx, tenantID, userID, req)
+	return h.textSearch(ctx, tenantID, userID, agentID, scope, req)
 }
 
 func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, agentID, scope string, req RecallRequest) RecallResult {
@@ -124,9 +124,9 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, a
 	}
 	var expr string
 	if scope == "agent" && agentID != "" && !strings.ContainsAny(agentID, `"'\`) {
-		expr = fmt.Sprintf(`user_id == "%s" && agent_id == "%s"`, userID, agentID)
+		expr = fmt.Sprintf(`user_id == "%s" && agent_id == "%s" && scope == "agent"`, userID, agentID)
 	} else if userID != "" {
-		expr = fmt.Sprintf(`user_id == "%s"`, userID)
+		expr = fmt.Sprintf(`user_id == "%s" && scope == "user"`, userID)
 	}
 
 	results, err := h.vectorDB.SearchWithFilter(ctx, collection, vec, constants.MemoryLongTermTopK, expr)
@@ -146,7 +146,7 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, a
 	return entries
 }
 
-func (h *RecallHandler) textSearch(ctx context.Context, tenantID, userID string, req RecallRequest) (string, error) {
+func (h *RecallHandler) textSearch(ctx context.Context, tenantID, userID, agentID, scope string, req RecallRequest) (string, error) {
 	schema := "tenant_" + tenantID
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -167,10 +167,17 @@ func (h *RecallHandler) textSearch(ctx context.Context, tenantID, userID string,
 	args = append(args, req.Query)
 	argIdx++
 
-	// Always scope to requesting user
 	baseQuery += fmt.Sprintf(" AND user_id = $%d", argIdx)
 	args = append(args, userID)
 	argIdx++
+
+	if scope == "agent" && agentID != "" {
+		baseQuery += fmt.Sprintf(" AND agent_id = $%d AND scope = 'agent'", argIdx)
+		args = append(args, agentID)
+		argIdx++
+	} else {
+		baseQuery += " AND scope = 'user'"
+	}
 
 	baseQuery += " ORDER BY importance DESC, created_at DESC"
 	baseQuery += fmt.Sprintf(" LIMIT $%d", argIdx)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/storage/milvus"
 )
 
@@ -30,30 +31,34 @@ func (c *TenantVectorCleaner) DropTenantCollections(ctx context.Context, tenantI
 		return nil
 	}
 
+	tid := strings.ReplaceAll(tenantID, "-", "_")
 	var errs []string
 
-	// memory collection
-	memCol := "memory_" + strings.ReplaceAll(tenantID, "-", "_")
-	if err := c.vs.DeleteCollection(ctx, memCol); err != nil {
-		errs = append(errs, fmt.Sprintf("memory collection %s: %v", memCol, err))
+	for _, col := range []string{
+		"memory_" + tid,
+		"memory_facts_" + tid,
+	} {
+		if err := c.vs.DeleteCollection(ctx, col); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", col, err))
+		}
 	}
 
-	// RAG workspace collections — query workspace names from PG
+	// knowledge workspace collections — keyed by workspace UUID
 	if c.pool != nil {
 		schema := fmt.Sprintf("tenant_%s", tenantID)
 		rows, err := c.pool.Query(ctx,
-			fmt.Sprintf(`SELECT name FROM "%s".rag_workspaces`, schema),
+			fmt.Sprintf(`SELECT id FROM "%s".rag_workspaces`, schema),
 		)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
-				var name string
-				if err := rows.Scan(&name); err != nil {
+				var id string
+				if err := rows.Scan(&id); err != nil {
 					continue
 				}
-				col := name + "_kb"
+				col := constants.CollectionName(tenantID, id)
 				if err := c.vs.DeleteCollection(ctx, col); err != nil {
-					errs = append(errs, fmt.Sprintf("rag collection %s: %v", col, err))
+					errs = append(errs, fmt.Sprintf("%s: %v", col, err))
 				}
 			}
 		}

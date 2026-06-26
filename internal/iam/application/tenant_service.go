@@ -2,16 +2,11 @@ package application
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
@@ -34,7 +29,6 @@ var (
 	ErrForbiddenOwnerRole    = errors.New("iam: cannot change owner's role")
 	ErrForbiddenRemoveOwner  = errors.New("iam: cannot remove owner")
 	ErrForbiddenAdminRemove  = errors.New("iam: admin cannot remove another admin")
-	ErrInviterMissing        = errors.New("iam: inviter identity missing")
 	ErrEmbedModelAlreadySet  = errors.New("iam: embed_model already set and cannot be changed")
 	ErrInvalidSettings       = errors.New("iam: invalid settings")
 )
@@ -48,16 +42,14 @@ type TenantGatewayCache interface {
 
 // TenantService orchestrates tenant member, settings, and embed-model operations.
 type TenantService struct {
-	repo        port.TenantRepo
-	logger      *zap.Logger
-	frontendURL string
-	aesKey      [32]byte
-	cache       TenantGatewayCache
+	repo   port.TenantRepo
+	logger *zap.Logger
+	aesKey [32]byte
+	cache  TenantGatewayCache
 }
 
-// NewTenantService constructs a TenantService.
-func NewTenantService(repo port.TenantRepo, logger *zap.Logger, frontendURL string, aesKey [32]byte, cache TenantGatewayCache) *TenantService {
-	return &TenantService{repo: repo, logger: logger, frontendURL: frontendURL, aesKey: aesKey, cache: cache}
+func NewTenantService(repo port.TenantRepo, logger *zap.Logger, aesKey [32]byte, cache TenantGatewayCache) *TenantService {
+	return &TenantService{repo: repo, logger: logger, aesKey: aesKey, cache: cache}
 }
 
 // ListMembers returns a paginated list of members; page/pageSize are normalized.
@@ -79,40 +71,6 @@ func (s *TenantService) ListMembers(ctx context.Context, tenantID string, page, 
 		return nil, 0, page, pageSize, fmt.Errorf("tenant: list members: %w", err)
 	}
 	return members, total, page, pageSize, nil
-}
-
-// InviteMember creates an invitation row and returns the user-facing URL.
-func (s *TenantService) InviteMember(ctx context.Context, tenantID, inviterID, email, role string) (string, string, time.Time, error) {
-	if inviterID == "" {
-		return "", "", time.Time{}, ErrInviterMissing
-	}
-	rawBytes := make([]byte, 32)
-	if _, err := rand.Read(rawBytes); err != nil {
-		return "", "", time.Time{}, fmt.Errorf("tenant: token generation: %w", err)
-	}
-	rawToken := hex.EncodeToString(rawBytes)
-	sum := sha256.Sum256([]byte(rawToken))
-	tokenHash := hex.EncodeToString(sum[:])
-
-	invitationID := uuid.Must(uuid.NewV7()).String()
-	now := time.Now().UTC()
-	expiresAt := now.Add(constants.InviteTokenTTL)
-
-	if err := s.repo.CreateInvitation(ctx, domain.Invitation{
-		ID:        invitationID,
-		TenantID:  tenantID,
-		Email:     email,
-		Role:      role,
-		TokenHash: tokenHash,
-		ExpiresAt: expiresAt,
-		CreatedAt: now,
-		InvitedBy: inviterID,
-	}); err != nil {
-		return "", "", time.Time{}, fmt.Errorf("tenant: create invitation: %w", err)
-	}
-
-	invitationURL := fmt.Sprintf("%s/onboarding?invitation=%s", s.frontendURL, rawToken)
-	return invitationID, invitationURL, expiresAt, nil
 }
 
 // UpdateMemberRole changes a member's role with full permission rules.

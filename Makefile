@@ -76,16 +76,14 @@ fe-docker-build:
 
 # ─── 本地基础设施 Infra ───────────────────────────────────────────────────
 infra-up:
-	$(DC) up -d nats neo4j etcd minio milvus postgres redis adminer redis-commander attu
+	$(DC) up -d nats etcd minio milvus postgres pgbouncer redis adminer redis-commander attu
 
 infra-down:
-	$(DC) down nats neo4j etcd minio milvus postgres redis adminer redis-commander attu
+	$(DC) down nats etcd minio milvus postgres pgbouncer redis adminer redis-commander attu
 
 infra-wait:
 	@echo "Waiting for NATS..."
 	@timeout 60 sh -c 'until docker compose exec -T nats nats-server --version >/dev/null 2>&1; do sleep 2; done'
-	@echo "Waiting for Neo4j..."
-	@timeout 90 sh -c 'until docker compose exec -T neo4j cypher-shell -u neo4j -p password "RETURN 1" >/dev/null 2>&1; do sleep 3; done'
 	@echo "Waiting for Milvus..."
 	@timeout 120 sh -c 'until curl -sf http://localhost:9091/healthz >/dev/null 2>&1; do sleep 3; done'
 	@echo "Waiting for PostgreSQL..."
@@ -95,7 +93,7 @@ infra-wait:
 	@echo "All core services ready."
 
 infra-status:
-	$(DC) ps nats neo4j etcd minio milvus postgres redis adminer redis-commander attu
+	$(DC) ps nats etcd minio milvus postgres redis adminer redis-commander attu
 
 # ─── 可观测性监控 ──────────────────────────────────────────────────────────
 obs-up:
@@ -189,7 +187,7 @@ dev-up: infra-up obs-up
 dev-down: obs-down infra-down
 
 run:
-	go run ./cmd/server 2>&1 | tee /tmp/stratum.log
+	go run ./cmd/server 2>&1 | tee ./stratum.log
 
 fe-dev:
 	cd $(WEB_DIR) && npm run dev

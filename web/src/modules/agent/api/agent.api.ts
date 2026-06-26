@@ -88,30 +88,38 @@ export const executeAgentStream = (
       if (!reader) throw new Error('No readable stream');
       const decoder = new TextDecoder();
       let buf = '';
+      let completed = false;
 
       const pump = (): Promise<void> =>
         reader.read().then(({ done, value }) => {
-          if (done) return;
+          if (done) {
+            if (!completed) onError(new Error('Stream closed unexpectedly'));
+            return;
+          }
           buf += decoder.decode(value, { stream: true });
           const parts = buf.split('\n\n');
           buf = parts.pop() ?? '';
-          parts.forEach((part) => {
+          for (const part of parts) {
             const line = part.trim();
-            if (!line.startsWith('data:')) return;
+            if (!line.startsWith('data:')) continue;
             const json = line.slice(5).trim();
             try {
               const evt = JSON.parse(json);
               if (evt.error) {
+                completed = true;
                 onError(new Error(evt.error));
+                return;
               } else if (evt.done) {
+                completed = true;
                 onDone(evt);
+                return;
               } else if (evt.token != null) {
                 onToken(String(evt.token));
               }
             } catch {
               /* malformed chunk, skip */
             }
-          });
+          }
           return pump();
         });
 

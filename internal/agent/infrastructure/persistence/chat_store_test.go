@@ -118,9 +118,12 @@ func TestChatStore_DeleteConversation_success(t *testing.T) {
 	defer mock.Close()
 
 	expectTenantTx(mock)
-	mock.ExpectExec("UPDATE chat_conversations").
+	mock.ExpectExec("DELETE FROM chat_messages").
+		WithArgs("conv-1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 3))
+	mock.ExpectExec("DELETE FROM chat_conversations").
 		WithArgs("conv-1", "user-1").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectCommit()
 
 	if err := store.DeleteConversation(context.Background(), "t1", "conv-1", "user-1"); err != nil {
@@ -136,9 +139,12 @@ func TestChatStore_DeleteConversation_notOwned(t *testing.T) {
 	defer mock.Close()
 
 	expectTenantTx(mock)
-	mock.ExpectExec("UPDATE chat_conversations").
+	mock.ExpectExec("DELETE FROM chat_messages").
+		WithArgs("conv-1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectExec("DELETE FROM chat_conversations").
 		WithArgs("conv-1", "other-user").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectRollback()
 
 	err := store.DeleteConversation(context.Background(), "t1", "conv-1", "other-user")

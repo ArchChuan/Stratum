@@ -26,10 +26,16 @@ const summaryPrompt = `Summarize this conversation concisely, preserving key dec
 Conversation:
 %s`
 
-func formatEnrichmentPrompt(role, content string) string {
-	return fmt.Sprintf(enrichmentPrompt, role, content)
+func formatEnrichmentPrompt(tmpl, role, content string) string {
+	if tmpl == "" {
+		tmpl = enrichmentPrompt
+	}
+	return fmt.Sprintf(tmpl, role, content)
 }
 
-func formatSummaryPrompt(conversation string) string {
-	return fmt.Sprintf(summaryPrompt, conversation)
+func formatSummaryPrompt(tmpl, conversation string) string {
+	if tmpl == "" {
+		tmpl = summaryPrompt
+	}
+	return fmt.Sprintf(tmpl, conversation)
 }

@@ -3,7 +3,6 @@ package persistence
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -117,10 +116,10 @@ func (r *AdminTenantRepo) UpdatePatch(ctx context.Context, id string, patch doma
 	return nil
 }
 
-func (r *AdminTenantRepo) SoftDelete(ctx context.Context, id string) error {
+func (r *AdminTenantRepo) HardDelete(ctx context.Context, id string) error {
 	var isDefault bool
 	err := r.pool.QueryRow(ctx,
-		"SELECT is_default FROM public.tenants WHERE id=$1 AND deleted_at IS NULL", id,
+		"SELECT is_default FROM public.tenants WHERE id=$1", id,
 	).Scan(&isDefault)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -131,10 +130,7 @@ func (r *AdminTenantRepo) SoftDelete(ctx context.Context, id string) error {
 	if isDefault {
 		return domain.ErrDefaultTenantDelete
 	}
-	tag, err := r.pool.Exec(ctx,
-		"UPDATE public.tenants SET deleted_at=$1 WHERE id=$2 AND deleted_at IS NULL",
-		time.Now().UTC(), id,
-	)
+	tag, err := r.pool.Exec(ctx, "DELETE FROM public.tenants WHERE id=$1", id)
 	if err != nil {
 		return err
 	}

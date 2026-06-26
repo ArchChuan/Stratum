@@ -34,17 +34,12 @@ type Executor struct {
 }
 
 func NewExecutor(registry SkillRegistry) *Executor {
-	return &Executor{
-		registry: registry,
-	}
+	return &Executor{registry: registry}
 }
 
 func (e *Executor) Execute(ctx ExecutionContext) *ExecutionResult {
 	start := time.Now()
-	result := &ExecutionResult{
-		SkillID:   ctx.SkillID,
-		Timestamp: start,
-	}
+	result := &ExecutionResult{SkillID: ctx.SkillID, Timestamp: start}
 
 	skill, ok := e.registry.Get(ctx.SkillID)
 	if !ok {
@@ -60,14 +55,27 @@ func (e *Executor) Execute(ctx ExecutionContext) *ExecutionResult {
 		return result
 	}
 
+	baseCtx := ctx.Ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	timeout := ctx.Timeout
+	if timeout == 0 {
+		timeout = domain.DefaultSkillTimeout
+	}
+	// execCtx is passed to executor so cancellation stops the goroutine
+	execCtx, cancel := context.WithTimeout(baseCtx, timeout)
+	defer cancel()
+
 	done := make(chan interface{}, 1)
 	errChan := make(chan error, 1)
 
 	go func() {
-		execCtx := ctx.Ctx
-		if execCtx == nil {
-			execCtx = context.Background()
-		}
+		defer func() {
+			if r := recover(); r != nil {
+				errChan <- fmt.Errorf("skill panic: %v", r)
+			}
+		}()
 		output, err := executor.Execute(execCtx, ctx.Input)
 		if err != nil {
 			errChan <- err
@@ -76,17 +84,12 @@ func (e *Executor) Execute(ctx ExecutionContext) *ExecutionResult {
 		}
 	}()
 
-	timeout := ctx.Timeout
-	if timeout == 0 {
-		timeout = domain.DefaultSkillTimeout
-	}
-
 	select {
 	case output := <-done:
 		result.Output = output
 	case err := <-errChan:
 		result.Error = err
-	case <-time.After(timeout):
+	case <-execCtx.Done():
 		result.Error = fmt.Errorf("skill execution timeout: %s", ctx.SkillID)
 	}
 

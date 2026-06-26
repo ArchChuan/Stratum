@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -26,8 +25,6 @@ type fakeTenantRepo struct {
 	memberRoles    map[string]string
 	deleteErr      error
 	deleted        []string
-	createInvErr   error
-	invitations    []domain.Invitation
 	tenantName     string
 	tenantSettings []byte
 }
@@ -62,14 +59,6 @@ func (f *fakeTenantRepo) DeleteMember(_ context.Context, _, userID string) error
 	return nil
 }
 
-func (f *fakeTenantRepo) CreateInvitation(_ context.Context, inv domain.Invitation) error {
-	if f.createInvErr != nil {
-		return f.createInvErr
-	}
-	f.invitations = append(f.invitations, inv)
-	return nil
-}
-
 func (f *fakeTenantRepo) GetTenantSettings(_ context.Context, _ string) (string, bool, []byte, error) {
 	return f.tenantName, false, f.tenantSettings, nil
 }
@@ -98,7 +87,7 @@ func injectTenant(tenantID string) gin.HandlerFunc {
 }
 
 func newTenantHandler(repo *fakeTenantRepo) *TenantHandler {
-	svc := application.NewTenantService(repo, zap.NewNop(), "http://localhost:3000", [32]byte{}, nil)
+	svc := application.NewTenantService(repo, zap.NewNop(), [32]byte{}, nil)
 	return NewTenantHandler(svc, nil, zap.NewNop())
 }
 
@@ -109,7 +98,6 @@ func setupTenantHandlerRouter(h *TenantHandler) *gin.Engine {
 	inject := injectTenant("tenant-abc")
 	injectAdmin := func(c *gin.Context) { c.Set("auth.role", "admin"); c.Set("auth.sub", "user-1"); c.Next() }
 	r.GET("/tenant/members", inject, h.ListMembers)
-	r.POST("/tenant/members/invite", inject, injectAdmin, h.InviteMember)
 	r.DELETE("/tenant/members/:user_id", inject, injectAdmin, h.RemoveMember)
 	return r
 }
@@ -139,49 +127,6 @@ func TestListMembers_success(t *testing.T) {
 	members, _ := resp["members"].([]interface{})
 	if len(members) != 1 {
 		t.Fatalf("expected 1 member, got %d", len(members))
-	}
-}
-
-func TestInviteMember_success(t *testing.T) {
-	repo := &fakeTenantRepo{}
-	h := newTenantHandler(repo)
-	r := setupTenantHandlerRouter(h)
-
-	body := `{"email":"bob@example.com","role":"member"}`
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/tenant/members/invite", strings.NewReader(body)) //nolint:noctx
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp map[string]interface{}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	url, _ := resp["invitation_url"].(string)
-	if !strings.HasPrefix(url, "http://localhost:3000/onboarding?invitation=") {
-		t.Errorf("unexpected invitation_url: %s", url)
-	}
-	if len(repo.invitations) != 1 {
-		t.Errorf("expected 1 invitation persisted, got %d", len(repo.invitations))
-	}
-}
-
-func TestInviteMember_invalidEmail(t *testing.T) {
-	repo := &fakeTenantRepo{}
-	h := newTenantHandler(repo)
-	r := setupTenantHandlerRouter(h)
-
-	body := `{"email":"not-an-email","role":"member"}`
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/tenant/members/invite", strings.NewReader(body)) //nolint:noctx
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 

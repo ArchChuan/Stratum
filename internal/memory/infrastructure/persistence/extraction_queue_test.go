@@ -17,6 +17,8 @@ func setupQueueTest(t *testing.T) (*pgxpool.Pool, *persistence.ExtractionQueue) 
 	return pool, queue
 }
 
+const testQueueTenant = "tenant_test_queue"
+
 func TestExtractionQueue_EnqueueAndDequeue(t *testing.T) {
 	_, queue := setupQueueTest(t)
 	ctx := context.Background()
@@ -29,11 +31,11 @@ func TestExtractionQueue_EnqueueAndDequeue(t *testing.T) {
 		Status:    "pending",
 	}
 
-	err := queue.Enqueue(ctx, task)
+	err := queue.Enqueue(ctx, testQueueTenant, task)
 	require.NoError(t, err)
 	require.NotZero(t, task.ID, "ID should be assigned")
 
-	dequeued, err := queue.Dequeue(ctx)
+	dequeued, err := queue.Dequeue(ctx, testQueueTenant)
 	require.NoError(t, err)
 	require.Equal(t, "user123", dequeued.UserID)
 	require.Equal(t, "processing", dequeued.Status)
@@ -49,12 +51,11 @@ func TestExtractionQueue_MarkCompleted(t *testing.T) {
 		AgentID:   "agent456",
 		Content:   "Test content",
 	}
-	require.NoError(t, queue.Enqueue(ctx, task))
+	require.NoError(t, queue.Enqueue(ctx, testQueueTenant, task))
 
-	require.NoError(t, queue.MarkCompleted(ctx, task.ID))
+	require.NoError(t, queue.MarkCompleted(ctx, testQueueTenant, task.ID))
 
-	// Completed tasks should not be dequeued
-	dequeued, err := queue.Dequeue(ctx)
+	dequeued, err := queue.Dequeue(ctx, testQueueTenant)
 	require.NoError(t, err)
 	require.Nil(t, dequeued, "completed tasks should not be returned")
 }
@@ -69,12 +70,10 @@ func TestExtractionQueue_MarkFailed(t *testing.T) {
 		AgentID:   "agent456",
 		Content:   "Test content",
 	}
-	require.NoError(t, queue.Enqueue(ctx, task))
+	require.NoError(t, queue.Enqueue(ctx, testQueueTenant, task))
 
 	testErr := "extraction failed: timeout"
-	require.NoError(t, queue.MarkFailed(ctx, task.ID, testErr))
-
-	// After failure, status should be pending (for retry) with incremented retry count
+	require.NoError(t, queue.MarkFailed(ctx, testQueueTenant, task.ID, testErr))
 }
 
 func TestExtractionQueue_DeleteOldCompleted(t *testing.T) {
@@ -87,11 +86,10 @@ func TestExtractionQueue_DeleteOldCompleted(t *testing.T) {
 		AgentID:   "agent456",
 		Content:   "Test content",
 	}
-	require.NoError(t, queue.Enqueue(ctx, task))
-	require.NoError(t, queue.MarkCompleted(ctx, task.ID))
+	require.NoError(t, queue.Enqueue(ctx, testQueueTenant, task))
+	require.NoError(t, queue.MarkCompleted(ctx, testQueueTenant, task.ID))
 
-	// Delete completed tasks older than 0 days (should delete immediately)
-	count, err := queue.DeleteOldCompleted(ctx, 0)
+	count, err := queue.DeleteOldCompleted(ctx, testQueueTenant, 0)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 }

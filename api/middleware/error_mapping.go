@@ -83,6 +83,7 @@ func MapErrorToStatus(err error) int {
 	// 409 — Conflict
 	case errors.Is(err, knowledgedomain.ErrWorkspaceConflict),
 		errors.Is(err, knowledgedomain.ErrWorkspaceLinked),
+		errors.Is(err, knowledgedomain.ErrDuplicateDocument),
 		errors.Is(err, agentapp.ErrNameConflict),
 		errors.Is(err, mcpdomain.ErrNameConflict),
 		errors.Is(err, skilldomain.ErrSkillNameConflict),
@@ -96,10 +97,6 @@ func MapErrorToStatus(err error) int {
 	// 429 — Too Many Requests
 	case errors.Is(err, skilldomain.ErrConcurrencyLimit):
 		return http.StatusTooManyRequests
-
-	// 401 — Unauthorized
-	case errors.Is(err, iamapp.ErrInviterMissing):
-		return http.StatusUnauthorized
 
 	// 403 — Forbidden
 	case errors.Is(err, iamapp.ErrForbiddenAdminOrOwner),

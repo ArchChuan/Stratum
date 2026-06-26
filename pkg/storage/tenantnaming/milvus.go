@@ -46,6 +46,9 @@ func TenantCollection(ctx context.Context, kind string) (string, error) {
 // WorkspaceCollection returns the Milvus collection name for a workspace,
 // scoped to the tenant in ctx. workspaceID must be the stable workspace ID
 // (not the mutable name) so renames do not change the collection name.
+//
+// Deprecated: prefer KnowledgeCollection + WorkspacePartition (one collection
+// per tenant, one partition per workspace).
 func WorkspaceCollection(ctx context.Context, workspaceID string) (string, error) {
 	tc, ok := pgcontext.FromContext(ctx)
 	if !ok {
@@ -55,4 +58,16 @@ func WorkspaceCollection(ctx context.Context, workspaceID string) (string, error
 		return "", fmt.Errorf("tenantnaming: tenant_id is empty")
 	}
 	return "tenant_" + sanitizeTenantID(tc.TenantID) + "_kb_" + sanitizeWorkspace(workspaceID), nil
+}
+
+// KnowledgeCollection returns the single per-tenant Milvus collection that
+// holds all knowledge-base vectors. Workspaces are isolated by partition.
+func KnowledgeCollection(ctx context.Context) (string, error) {
+	return TenantCollection(ctx, "kb")
+}
+
+// WorkspacePartition returns a Milvus-safe partition name for the given
+// workspace ID. Pure function — no context required.
+func WorkspacePartition(workspaceID string) string {
+	return sanitizeWorkspace(workspaceID)
 }

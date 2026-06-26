@@ -1,10 +1,6 @@
 package pipeline
 
-import (
-	"time"
-
-	"github.com/byteBuilderX/stratum/pkg/constants"
-)
+import "time"
 
 type Config struct {
 	Enabled               bool          `mapstructure:"enabled"`
@@ -19,21 +15,6 @@ type Config struct {
 	EnrichModel           string        `mapstructure:"enrich_model"`
 	SummaryModel          string        `mapstructure:"summary_model"`
 	SummaryTokenThreshold int           `mapstructure:"summary_token_threshold"`
-}
-
-func DefaultConfig() Config {
-	return Config{
-		Enabled:               false,
-		NatsURL:               "nats://localhost:4222",
-		PollInterval:          constants.MemoryOutboxPollInterval,
-		BatchSize:             constants.MemoryOutboxBatchSize,
-		EmbedWorkers:          constants.EmbedderWorkerCount,
-		EnrichWorkers:         constants.EnricherWorkerCount,
-		EmbedAckWait:          constants.EmbedderAckWait,
-		EnrichAckWait:         constants.EnricherAckWait,
-		MaxDeliver:            constants.EmbedderMaxDeliver,
-		EnrichModel:           "qwen-turbo",
-		SummaryModel:          "qwen-plus",
-		SummaryTokenThreshold: constants.EnricherSummaryTokenThreshold,
-	}
+	EnrichmentPrompt      string        `mapstructure:"enrichment_prompt"`
+	SummaryPrompt         string        `mapstructure:"summary_prompt"`
 }

@@ -12,6 +12,7 @@ import (
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	skillpkg "github.com/byteBuilderX/stratum/internal/skill/domain"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 // RAGHandler exposes /knowledge/* endpoints. All persistence and validation is
@@ -70,6 +71,11 @@ func (h *RAGHandler) UploadDocument(c *gin.Context) {
 		return
 	}
 
+	if req.File.Size > constants.MaxUploadFileSize {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("file size exceeds 100MB limit")))
+		return
+	}
+
 	h.logger.Info("uploading document",
 		zap.String("workspace", req.Workspace),
 		zap.String("filename", req.File.Filename))
@@ -86,7 +92,6 @@ func (h *RAGHandler) UploadDocument(c *gin.Context) {
 		"workspace":     result.Workspace,
 		"total_chunks":  result.TotalChunks,
 		"total_vectors": result.TotalVectors,
-		"total_nodes":   result.TotalNodes,
 		"duration":      result.Duration,
 		"errors":        result.Errors,
 	})
@@ -113,16 +118,18 @@ func (h *RAGHandler) Query(c *gin.Context) {
 		req.TopK = skillpkg.DefaultTopK
 	}
 
-	var embedModel string
+	var embedModel, workspaceID string
 	if h.wsService != nil {
-		if cfg, err := h.wsService.GetConfig(c.Request.Context(), tenantID, req.Workspace); err == nil {
-			embedModel = cfg.EmbeddingModel
+		if ws, err := h.wsService.GetWorkspace(c.Request.Context(), tenantID, req.Workspace); err == nil {
+			embedModel = ws.Config.EmbeddingModel
+			workspaceID = ws.ID
 		}
 	}
 
 	result, err := h.ragService.Query(c.Request.Context(), knowledge.RAGQueryRequest{
 		Question:       req.Question,
 		Workspace:      req.Workspace,
+		WorkspaceID:    workspaceID,
 		TenantID:       tenantID,
 		Mode:           req.Mode,
 		TopK:           req.TopK,
@@ -142,21 +149,11 @@ func (h *RAGHandler) Query(c *gin.Context) {
 			"score":       src.Score,
 		}
 	}
-	graphContext := make([]gin.H, len(result.GraphContext))
-	for i, e := range result.GraphContext {
-		graphContext[i] = gin.H{
-			"id":         e.ID,
-			"label":      e.Label,
-			"properties": e.Properties,
-		}
-	}
-
 	c.JSON(http.StatusOK, gin.H{
-		"answer":        result.Answer,
-		"sources":       sources,
-		"graph_context": graphContext,
-		"mode":          result.Mode,
-		"latency_ms":    result.Latency.Milliseconds(),
+		"answer":     result.Answer,
+		"sources":    sources,
+		"mode":       result.Mode,
+		"latency_ms": result.Latency.Milliseconds(),
 	})
 }
 

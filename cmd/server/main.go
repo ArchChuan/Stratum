@@ -17,16 +17,13 @@ import (
 
 	apihttp "github.com/byteBuilderX/stratum/api/http"
 	"github.com/byteBuilderX/stratum/api/wiring"
+	"github.com/byteBuilderX/stratum/config"
 	agentpersistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/internal/iam/infrastructure/hermes"
-	"github.com/byteBuilderX/stratum/internal/platform/config"
 	harnesspkg "github.com/byteBuilderX/stratum/internal/platform/harness"
 	"github.com/byteBuilderX/stratum/pkg/constants"
-	"github.com/byteBuilderX/stratum/pkg/migration"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
-
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 )
 
 func main() {
@@ -50,15 +47,13 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Public schema migration uses its own connection (golang-migrate);
-	// must run before BuildContainer opens the shared pool.
-	if err := migration.RunPublicSchema(cfg.PostgresURL, "pkg/migration/sql", logger); err != nil {
-		logger.Fatal("migration failed", zap.Error(err))
-	}
-
 	container, err := wiring.BuildContainer(ctx, cfg, logger)
 	if err != nil {
 		logger.Fatal("BuildContainer failed", zap.Error(err))
+	}
+
+	if err := tenantdb.ProvisionPublicSchema(ctx, container.DB(), logger); err != nil {
+		logger.Fatal("public schema provision failed", zap.Error(err))
 	}
 	defer func() {
 		shutdownCtx, c := context.WithTimeout(context.Background(), constants.HTTPShutdownTimeout)

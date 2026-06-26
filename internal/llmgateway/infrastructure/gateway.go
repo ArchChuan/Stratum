@@ -168,6 +168,14 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 		return nil, fmt.Errorf("provider not found: %s", provider)
 	}
 
+	if req.Model == "" {
+		if models := client.Models(); len(models) > 0 {
+			cp := *req
+			cp.Model = models[0]
+			req = &cp
+		}
+	}
+
 	traceID := reqctx.TraceIDFromContext(ctx)
 	tenantID := reqctx.TenantIDFromContext(ctx)
 	if raw, merr := json.Marshal(req.Messages); merr == nil {

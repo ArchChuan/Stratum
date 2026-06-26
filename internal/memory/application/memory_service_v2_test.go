@@ -64,9 +64,9 @@ func (m *MockFactRepo) CountByUser(ctx context.Context, tenantID, userID string)
 	return args.Int(0), args.Error(1)
 }
 
-func (m *MockFactRepo) DeleteOldSoftDeleted(ctx context.Context, tenantID string, retentionDays int) (int, error) {
-	args := m.Called(ctx, tenantID, retentionDays)
-	return args.Int(0), args.Error(1)
+func (m *MockFactRepo) Delete(ctx context.Context, tenantID, id string) error {
+	args := m.Called(ctx, tenantID, id)
+	return args.Error(0)
 }
 
 func (m *MockFactRepo) DeleteAllByUser(ctx context.Context, tenantID, userID string) ([]string, error) {
@@ -89,26 +89,26 @@ type MockEntityRepo struct {
 	mock.Mock
 }
 
-func (m *MockEntityRepo) Create(ctx context.Context, entity *domain.MemoryEntity) error {
-	args := m.Called(ctx, entity)
+func (m *MockEntityRepo) Create(ctx context.Context, tenantID string, entity *domain.MemoryEntity) error {
+	args := m.Called(ctx, tenantID, entity)
 	return args.Error(0)
 }
 
-func (m *MockEntityRepo) GetByID(ctx context.Context, id string) (*domain.MemoryEntity, error) {
-	args := m.Called(ctx, id)
+func (m *MockEntityRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.MemoryEntity, error) {
+	args := m.Called(ctx, tenantID, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.MemoryEntity), args.Error(1)
 }
 
-func (m *MockEntityRepo) Update(ctx context.Context, entity *domain.MemoryEntity) error {
-	args := m.Called(ctx, entity)
+func (m *MockEntityRepo) Update(ctx context.Context, tenantID string, entity *domain.MemoryEntity) error {
+	args := m.Called(ctx, tenantID, entity)
 	return args.Error(0)
 }
 
-func (m *MockEntityRepo) FindByNameAndType(ctx context.Context, userID, name, entityType string, threshold float64) (*domain.MemoryEntity, error) {
-	args := m.Called(ctx, userID, name, entityType, threshold)
+func (m *MockEntityRepo) FindByNameAndType(ctx context.Context, tenantID, userID, name, entityType string, threshold float64) (*domain.MemoryEntity, error) {
+	args := m.Called(ctx, tenantID, userID, name, entityType, threshold)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -123,40 +123,50 @@ func (m *MockEntityRepo) ListProfiles(ctx context.Context, filter domain.ScopeFi
 	return args.Get(0).([]*domain.MemoryEntity), args.Error(1)
 }
 
-func (m *MockEntityRepo) CountByUser(ctx context.Context, userID string) (int, error) {
-	args := m.Called(ctx, userID)
+func (m *MockEntityRepo) CountByUser(ctx context.Context, tenantID, userID string) (int, error) {
+	args := m.Called(ctx, tenantID, userID)
 	return args.Int(0), args.Error(1)
+}
+
+func (m *MockEntityRepo) DeleteAllByUser(ctx context.Context, tenantID, userID string) error {
+	args := m.Called(ctx, tenantID, userID)
+	return args.Error(0)
+}
+
+func (m *MockEntityRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
+	args := m.Called(ctx, tenantID, agentID)
+	return args.Error(0)
 }
 
 type MockExtractionQueue struct {
 	mock.Mock
 }
 
-func (m *MockExtractionQueue) Enqueue(ctx context.Context, task *port.ExtractionTask) error {
-	args := m.Called(ctx, task)
+func (m *MockExtractionQueue) Enqueue(ctx context.Context, tenantID string, task *port.ExtractionTask) error {
+	args := m.Called(ctx, tenantID, task)
 	return args.Error(0)
 }
 
-func (m *MockExtractionQueue) Dequeue(ctx context.Context) (*port.ExtractionTask, error) {
-	args := m.Called(ctx)
+func (m *MockExtractionQueue) Dequeue(ctx context.Context, tenantID string) (*port.ExtractionTask, error) {
+	args := m.Called(ctx, tenantID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*port.ExtractionTask), args.Error(1)
 }
 
-func (m *MockExtractionQueue) MarkCompleted(ctx context.Context, taskID int64) error {
-	args := m.Called(ctx, taskID)
+func (m *MockExtractionQueue) MarkCompleted(ctx context.Context, tenantID string, taskID int64) error {
+	args := m.Called(ctx, tenantID, taskID)
 	return args.Error(0)
 }
 
-func (m *MockExtractionQueue) MarkFailed(ctx context.Context, taskID int64, errMsg string) error {
-	args := m.Called(ctx, taskID, errMsg)
+func (m *MockExtractionQueue) MarkFailed(ctx context.Context, tenantID string, taskID int64, errMsg string) error {
+	args := m.Called(ctx, tenantID, taskID, errMsg)
 	return args.Error(0)
 }
 
-func (m *MockExtractionQueue) DeleteOldCompleted(ctx context.Context, retentionDays int) (int, error) {
-	args := m.Called(ctx, retentionDays)
+func (m *MockExtractionQueue) DeleteOldCompleted(ctx context.Context, tenantID string, retentionDays int) (int, error) {
+	args := m.Called(ctx, tenantID, retentionDays)
 	return args.Int(0), args.Error(1)
 }
 
@@ -179,6 +189,16 @@ func (m *MockVectorStore) Search(ctx context.Context, collectionName string, que
 
 func (m *MockVectorStore) Delete(ctx context.Context, collectionName string, ids []string) error {
 	args := m.Called(ctx, collectionName, ids)
+	return args.Error(0)
+}
+
+func (m *MockVectorStore) DeleteAllByUser(ctx context.Context, tenantID, userID string) error {
+	args := m.Called(ctx, tenantID, userID)
+	return args.Error(0)
+}
+
+func (m *MockVectorStore) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
+	args := m.Called(ctx, tenantID, agentID)
 	return args.Error(0)
 }
 
@@ -228,7 +248,7 @@ func TestNewMemoryService(t *testing.T) {
 	embedClient := new(MockEmbedClient)
 
 	// No Redis client for unit test — buffer will be nil but service should construct
-	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil)
+	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil, nil)
 
 	assert.NotNil(t, svc)
 	assert.Equal(t, factRepo, svc.factRepo)
@@ -237,69 +257,6 @@ func TestNewMemoryService(t *testing.T) {
 	assert.Equal(t, vectorStore, svc.vectorStore)
 	assert.Equal(t, llmExtract, svc.llmExtract)
 	assert.Equal(t, embedClient, svc.embedClient)
-}
-
-func TestMemoryService_ForgetMemory_Success(t *testing.T) {
-	ctx := context.Background()
-	factRepo := new(MockFactRepo)
-	entityRepo := new(MockEntityRepo)
-	queue := new(MockExtractionQueue)
-	vectorStore := new(MockVectorStore)
-	llmExtract := new(MockLLMExtractor)
-	embedClient := new(MockEmbedClient)
-
-	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil)
-
-	fact, _ := domain.NewFact("", "user1", "agent1", "user", "old fact", 0.5, []string{})
-
-	// Mock fact retrieval
-	factRepo.On("GetByID", ctx, "tenant1", fact.ID).Return(fact, nil)
-
-	// Mock update after soft delete
-	factRepo.On("Update", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryFact")).Return(nil)
-
-	// Mock Milvus delete (best-effort)
-	vectorStore.On("Delete", ctx, "memory_facts_tenant1", []string{fact.ID}).Return(nil)
-
-	req := &ForgetMemoryRequest{
-		TenantID: "tenant1",
-		UserID:   "user1",
-		FactID:   fact.ID,
-	}
-
-	err := svc.ForgetMemory(ctx, req)
-	assert.NoError(t, err)
-
-	factRepo.AssertExpectations(t)
-	vectorStore.AssertExpectations(t)
-}
-
-func TestMemoryService_ForgetMemory_ScopeMismatch(t *testing.T) {
-	ctx := context.Background()
-	factRepo := new(MockFactRepo)
-	entityRepo := new(MockEntityRepo)
-	queue := new(MockExtractionQueue)
-	vectorStore := new(MockVectorStore)
-	llmExtract := new(MockLLMExtractor)
-	embedClient := new(MockEmbedClient)
-
-	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil)
-
-	fact, _ := domain.NewFact("", "user1", "agent1", "user", "old fact", 0.5, []string{})
-
-	// Mock fact retrieval
-	factRepo.On("GetByID", ctx, "tenant1", fact.ID).Return(fact, nil)
-
-	req := &ForgetMemoryRequest{
-		TenantID: "tenant1",
-		UserID:   "user2", // different user
-		FactID:   fact.ID,
-	}
-
-	err := svc.ForgetMemory(ctx, req)
-	assert.ErrorIs(t, err, domain.ErrScopeMismatch)
-
-	factRepo.AssertExpectations(t)
 }
 
 func TestBufferMessageRequest_Fields(t *testing.T) {

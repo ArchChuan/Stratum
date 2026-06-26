@@ -1,0 +1,1 @@
+-- memory_facts is tenant-scoped; no rollback needed here.

@@ -20,8 +20,8 @@ import (
 	"strings"
 
 	"github.com/byteBuilderX/stratum/api"
+	"github.com/byteBuilderX/stratum/config"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
-	"github.com/byteBuilderX/stratum/internal/platform/config"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 

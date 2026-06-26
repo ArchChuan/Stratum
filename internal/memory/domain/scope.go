@@ -28,8 +28,8 @@ type ScopeFilter struct {
 }
 
 // BuildScopeFilter constructs a filter based on read_scope configuration
-// readScope: "user" includes both user-scoped and agent-scoped facts
-// readScope: "agent" includes only agent-scoped facts
+// readScope: "user" sees user-scoped and agent-scoped memories for the user
+// readScope: "agent" sees only this agent's private memories
 func BuildScopeFilter(tenantID, userID, agentID, readScope string) ScopeFilter {
 	filter := ScopeFilter{
 		TenantID: tenantID,

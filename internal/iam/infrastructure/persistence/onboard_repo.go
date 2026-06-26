@@ -264,33 +264,3 @@ func (r *OnboardRepo) IsMember(ctx context.Context, userID, tenantID string) (bo
 	}
 	return count > 0, nil
 }
-
-// JoinTenant accepts an invitation token and adds the user to the tenant.
-func (r *OnboardRepo) JoinTenant(ctx context.Context, in domain.JoinTenantInput) error {
-	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("onboard_repo: begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-
-	var tenantID, role string
-	if err = tx.QueryRow(ctx,
-		`UPDATE invitations SET accepted_at = NOW()
-		 WHERE token_hash = $1 AND accepted_at IS NULL AND expires_at > NOW()
-		 RETURNING tenant_id, role`,
-		in.InvitationToken,
-	).Scan(&tenantID, &role); err != nil {
-		return fmt.Errorf("onboard_repo: invalid or expired invitation token: %w", err)
-	}
-
-	if _, err = tx.Exec(ctx,
-		`INSERT INTO tenant_members (tenant_id, user_id, role)
-		 VALUES ($1, $2, $3)
-		 ON CONFLICT (tenant_id, user_id) DO NOTHING`,
-		tenantID, in.UserID, role,
-	); err != nil {
-		return fmt.Errorf("onboard_repo: insert tenant_member: %w", err)
-	}
-
-	return tx.Commit(ctx)
-}

@@ -67,7 +67,6 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 		AllowedSkills:         req.AllowedSkills,
 		MCPServerIDs:          req.MCPServerIDs,
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
-		MemoryEnabled:         req.MemoryEnabled,
 		MemoryScope:           req.MemoryScope,
 	})
 	if err != nil {
@@ -98,7 +97,6 @@ func (h *AgentHandler) UpdateAgent(c *gin.Context) {
 		AllowedSkills:         req.AllowedSkills,
 		MCPServerIDs:          req.MCPServerIDs,
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
-		MemoryEnabled:         req.MemoryEnabled,
 		MemoryScope:           req.MemoryScope,
 	})
 	if err != nil {

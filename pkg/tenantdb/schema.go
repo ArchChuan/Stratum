@@ -20,3 +20,6 @@ var EnsureDefaultTenant = postgres.EnsureDefaultTenant
 
 // ListTenantSchemas re-exports postgres.ListTenantSchemas.
 var ListTenantSchemas = postgres.ListTenantSchemas
+
+// ProvisionPublicSchema re-exports postgres.ProvisionPublicSchema.
+var ProvisionPublicSchema = postgres.ProvisionPublicSchema

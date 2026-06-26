@@ -64,10 +64,6 @@ jobs:
         env:
           PGPASSWORD: postgres
 
-      - name: Wait for Redis
-        run: |
-          timeout 30 bash -c 'until redis-cli -h localhost -p 6379 ping; do sleep 1; done'
-
       - name: Run E2E tests
         run: |
           go test -v -timeout 10m ./test/e2e/... \

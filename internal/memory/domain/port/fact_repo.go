@@ -15,7 +15,7 @@ type FactRepo interface {
 	SearchByContent(ctx context.Context, tenantID string, filter domain.ScopeFilter, query string, limit int) ([]*domain.MemoryFact, error)
 	FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*domain.MemoryFact, error)
 	CountByUser(ctx context.Context, tenantID, userID string) (int, error)
-	DeleteOldSoftDeleted(ctx context.Context, tenantID string, retentionDays int) (int, error)
+	Delete(ctx context.Context, tenantID, id string) error
 	DeleteAllByUser(ctx context.Context, tenantID, userID string) ([]string, error)
 	DeleteAllByAgent(ctx context.Context, tenantID, agentID string) ([]string, error)
 }

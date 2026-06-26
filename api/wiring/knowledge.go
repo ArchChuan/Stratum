@@ -8,9 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
-	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
-	neo4jadapter "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/neo4j"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/persistence"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
@@ -27,7 +25,6 @@ import (
 // as the typed alias used by knowledge/ingest.
 type Knowledge struct {
 	VectorStore       *vectorstore.VectorStore
-	GraphRAG          knowledgeport.GraphStore
 	Parser            *document.Parser
 	Chunker           *textchunk.Chunker
 	EmbedSvc          *embedding.EmbeddingService
@@ -40,42 +37,34 @@ type Knowledge struct {
 
 func (c *Container) buildKnowledge(ctx context.Context) error {
 	vs := c.Storage.Milvus
-	graphRAG := neo4jadapter.NewGraphAdapter(c.Config.Neo4jURI, c.Config.Neo4jUser, c.Config.Neo4jPassword, c.Logger)
-	if err := graphRAG.Connect(ctx); err != nil {
-		c.Logger.Warn("failed to connect to Neo4j", zap.Error(err))
-	}
-	c.shutdown = append(c.shutdown, func(_ context.Context) error { return graphRAG.Close() })
-
 	parser := document.NewParser(c.Logger)
 	chunker := textchunk.NewChunker(c.Logger)
 
 	var embedSvc *embedding.EmbeddingService
-
-	// Guard against typed-nil interface trap: a *EmbeddingService nil passed as
-	// knowledgeport.Embedder produces a non-nil interface, bypassing nil checks inside
-	// the services.
-	var embedIface knowledgeport.Embedder
+	var embedIface knowledge.EmbedClient
 	if embedSvc != nil {
 		embedIface = embedSvc
 	}
 
-	ingest := knowledge.NewKnowledgeIngest(parser, chunker, embedIface, vs, graphRAG, c.Logger)
-	rag := knowledge.NewRAGService(embedIface, vs, graphRAG, c.Logger)
+	ingest := knowledge.NewKnowledgeIngest(parser, chunker, embedIface, vs, c.Logger)
+	rag := knowledge.NewRAGService(embedIface, vs, c.Logger)
 
 	var pipelineResolver pipeline.EmbedServiceResolver
 	var knowledgeResolver knowledge.EmbedResolver
 	db := c.dbOrNil()
 	if db != nil {
+		chunkRepo := persistence.NewChunkRepo(db)
 		pipelineResolver = buildEmbedResolver(db, c.Platform.GatewayCache, c.Platform.AESKey, c.Logger)
 		knowledgeResolver = buildKnowledgeEmbedResolver(db, c.Platform.GatewayCache, c.Platform.AESKey, c.Logger)
 		ingest.SetEmbedResolver(knowledgeResolver)
+		ingest.SetChunkRepo(chunkRepo)
 		rag.SetEmbedResolver(knowledgeResolver)
 		rag.SetWorkspaceRepo(persistence.NewWorkspaceRepo(db))
+		rag.SetChunkRepo(chunkRepo)
 	}
 
 	c.Knowledge = &Knowledge{
 		VectorStore:       vs,
-		GraphRAG:          graphRAG,
 		Parser:            parser,
 		Chunker:           chunker,
 		EmbedSvc:          embedSvc,
@@ -87,6 +76,8 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	if db != nil {
 		repo := persistence.NewWorkspaceRepo(db)
 		c.Knowledge.WorkspaceService = knowledge.NewWorkspaceService(repo, ingest, c.Logger)
+		c.Knowledge.WorkspaceService.SetDocRepo(persistence.NewDocRepo(db))
+		c.Knowledge.WorkspaceService.SetVectorStore(vs)
 	}
 	return nil
 }

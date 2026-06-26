@@ -27,12 +27,6 @@ type CreateTenantResult struct {
 	UserUUID   string
 }
 
-// JoinTenantInput holds the fields needed to join an existing tenant via invitation.
-type JoinTenantInput struct {
-	UserID          string
-	InvitationToken string
-}
-
 // AutoJoinInput holds the fields for the AutoJoinDefaultTenant flow.
 type AutoJoinInput struct {
 	GitHubID         int64

@@ -30,7 +30,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 export const MCPServersPage = () => {
   const navigate = useNavigate();
-  const { servers, loading, detailServer, setDetailServer, fetchServers, handleDisconnect } =
+  const { servers, loading, detailServer, setDetailServer, fetchServers, handleDisconnect, handleReconnect, handleDelete } =
     useMCPServersPage();
 
   const columns = [
@@ -64,7 +64,7 @@ export const MCPServersPage = () => {
     },
     {
       title: '操作',
-      width: 160,
+      width: 260,
       render: (_: unknown, r: MCPServer) => (
         <Space size={4}>
           <Button
@@ -75,20 +75,41 @@ export const MCPServersPage = () => {
           >
             详情
           </Button>
-          <DangerPopconfirm
-            title="确认断开此服务器连接？"
-            okText="断开"
-            disabled={r.status !== 'connected'}
-            onConfirm={() => handleDisconnect(r.id)}
+          <Button
+            size="small"
+            type="link"
+            onClick={() => navigate(`/mcp/${r.id}/edit`)}
+            style={{ padding: '0 4px' }}
           >
+            编辑
+          </Button>
+          {r.status === 'connected' ? (
+            <DangerPopconfirm
+              title="确认断开此服务器连接？"
+              okText="断开"
+              onConfirm={() => handleDisconnect(r.id)}
+            >
+              <Button size="small" type="link" danger style={{ padding: '0 4px' }}>
+                断开
+              </Button>
+            </DangerPopconfirm>
+          ) : (
             <Button
               size="small"
               type="link"
-              danger
-              disabled={r.status !== 'connected'}
               style={{ padding: '0 4px' }}
+              onClick={() => handleReconnect(r.id)}
             >
-              断开
+              连接
+            </Button>
+          )}
+          <DangerPopconfirm
+            title="确认删除此服务器配置？关联的 Agent 将无法再使用此服务器。"
+            okText="删除"
+            onConfirm={() => handleDelete(r.id)}
+          >
+            <Button size="small" type="link" danger style={{ padding: '0 4px' }}>
+              删除
             </Button>
           </DangerPopconfirm>
         </Space>

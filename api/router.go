@@ -14,10 +14,10 @@ import (
 
 	apihttp "github.com/byteBuilderX/stratum/api/http"
 	"github.com/byteBuilderX/stratum/api/wiring"
+	"github.com/byteBuilderX/stratum/config"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
-	"github.com/byteBuilderX/stratum/internal/platform/config"
 )
 
 // SetupRouter is the legacy entrypoint. cmd/server/main.go will move

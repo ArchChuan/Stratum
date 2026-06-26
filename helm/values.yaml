@@ -54,14 +54,6 @@ config:
   natsUrl: "nats://nats:4222"
   milvusHost: "milvus"
   milvusPort: "19530"
-  neo4jUri: "bolt://neo4j:7687"
-
-# Database settings
-neo4j:
-  enabled: true
-  authEnabled: true
-  username: "neo4j"
-  password: "password"
 
 # Message queue settings
 nats:

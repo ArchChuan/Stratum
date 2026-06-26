@@ -10,10 +10,14 @@ import (
 type ServerManager interface {
 	Connect(ctx context.Context, cfg *domain.ServerConfig) error
 	Disconnect(ctx context.Context, serverID string) error
+	Reconnect(ctx context.Context, serverID string) error
+	UpdateServer(ctx context.Context, cfg *domain.ServerConfig) error
+	Delete(ctx context.Context, serverID string) error
+	GetServerConfig(ctx context.Context, serverID string) (*domain.ServerConfig, error)
 	ListTools(ctx context.Context, serverID string) ([]*domain.Tool, error)
 	ListResources(ctx context.Context, serverID string) ([]*domain.Resource, error)
-	GetServerInfo(serverID string) *domain.ServerInfo
-	GetAllServerInfo() []*domain.ServerInfo
+	GetServerInfo(ctx context.Context, serverID string) *domain.ServerInfo
+	GetAllServerInfo(ctx context.Context) []*domain.ServerInfo
 }
 
 // SkillRegistry is the consumer-side port for MCP skill registration and execution.

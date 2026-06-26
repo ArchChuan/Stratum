@@ -1,6 +1,24 @@
 -- Per-tenant schema DDL
 -- Execute after: SET search_path = tenant_{id}, public
 
+-- Drop obsolete tables (idempotent; runs on every startup via ProvisionAllTenantSchemas)
+ALTER TABLE IF EXISTS memory_entries DROP COLUMN IF EXISTS session_id;
+DROP TABLE IF EXISTS webhook_deliveries;
+DROP TABLE IF EXISTS webhooks;
+DROP TABLE IF EXISTS workflow_runs;
+DROP TABLE IF EXISTS workflows;
+DROP TABLE IF EXISTS model_quotas;
+DROP TABLE IF EXISTS model_usage;
+DROP TABLE IF EXISTS model_presets;
+DROP TABLE IF EXISTS scheduled_tasks;
+DROP TABLE IF EXISTS prompt_templates;
+DROP TABLE IF EXISTS exec_history;
+DROP TABLE IF EXISTS entity_relations;
+DROP TABLE IF EXISTS memory_token_budgets;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS entities;
+DROP TABLE IF EXISTS llm_api_keys;
+
 CREATE TABLE IF NOT EXISTS agents (
     id             TEXT PRIMARY KEY,
     name           TEXT NOT NULL UNIQUE,
@@ -44,18 +62,8 @@ CREATE TABLE IF NOT EXISTS agent_mcp_links (
     PRIMARY KEY (agent_id, server_id)
 );
 
-CREATE TABLE IF NOT EXISTS sessions (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
-    user_id      TEXT NOT NULL,
-    metadata     JSONB NOT NULL DEFAULT '{}',
-    started_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    ended_at     TIMESTAMPTZ
-);
-
 CREATE TABLE IF NOT EXISTS memory_entries (
     id           UUID PRIMARY KEY DEFAULT public.gen_uuid_v7(),
-    session_id   UUID REFERENCES sessions(id) ON DELETE CASCADE,
     user_id      TEXT,
     agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
     role         TEXT NOT NULL,
@@ -71,144 +79,13 @@ CREATE TABLE IF NOT EXISTS memory_entries (
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS user_id TEXT;
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL;
 
-CREATE TABLE IF NOT EXISTS entities (
-    id           UUID PRIMARY KEY DEFAULT public.gen_uuid_v7(),
-    name         TEXT NOT NULL,
-    type         TEXT NOT NULL,
-    properties   JSONB NOT NULL DEFAULT '{}',
-    confidence   FLOAT NOT NULL DEFAULT 0.5,
-    user_id      TEXT,
-    last_seen    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
--- idempotent backfill: existing tenants provisioned before user_id was added
-ALTER TABLE entities ADD COLUMN IF NOT EXISTS user_id TEXT;
-ALTER TABLE entities ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW();
-CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_name_type_user
-    ON entities (name, type, user_id);
-
-CREATE TABLE IF NOT EXISTS entity_relations (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    from_id      UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    to_id        UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    relation     TEXT NOT NULL,
-    properties   JSONB NOT NULL DEFAULT '{}',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS knowledge_docs (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID,
     title        TEXT NOT NULL,
-    content      TEXT NOT NULL,
     source       TEXT,
     metadata     JSONB NOT NULL DEFAULT '{}',
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS exec_history (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
-    session_id   UUID REFERENCES sessions(id) ON DELETE SET NULL,
-    skill_id     TEXT REFERENCES skills(id) ON DELETE SET NULL,
-    input        JSONB NOT NULL DEFAULT '{}',
-    output       JSONB NOT NULL DEFAULT '{}',
-    status       TEXT NOT NULL DEFAULT 'pending',
-    started_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    finished_at  TIMESTAMPTZ
-);
-
-CREATE TABLE IF NOT EXISTS llm_api_keys (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    provider     TEXT NOT NULL,
-    key_hint     TEXT NOT NULL,
-    encrypted    TEXT NOT NULL,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS model_presets (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name         TEXT NOT NULL,
-    provider     TEXT NOT NULL,
-    model_id     TEXT NOT NULL,
-    config       JSONB NOT NULL DEFAULT '{}',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS model_usage (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    model_preset_id UUID REFERENCES model_presets(id) ON DELETE SET NULL,
-    input_tokens    INT NOT NULL DEFAULT 0,
-    output_tokens   INT NOT NULL DEFAULT 0,
-    cost_usd        NUMERIC(12,6) NOT NULL DEFAULT 0,
-    recorded_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS model_quotas (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    model_preset_id UUID REFERENCES model_presets(id) ON DELETE CASCADE,
-    period          TEXT NOT NULL DEFAULT 'monthly',
-    max_tokens      BIGINT NOT NULL,
-    max_cost_usd    NUMERIC(12,2),
-    reset_at        TIMESTAMPTZ NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS prompt_templates (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name         TEXT NOT NULL,
-    template     TEXT NOT NULL,
-    variables    TEXT[] NOT NULL DEFAULT '{}',
-    metadata     JSONB NOT NULL DEFAULT '{}',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS workflows (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name         TEXT NOT NULL,
-    definition   JSONB NOT NULL DEFAULT '{}',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS workflow_runs (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    workflow_id  UUID NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
-    status       TEXT NOT NULL DEFAULT 'pending',
-    input        JSONB NOT NULL DEFAULT '{}',
-    output       JSONB NOT NULL DEFAULT '{}',
-    started_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    finished_at  TIMESTAMPTZ
-);
-
-CREATE TABLE IF NOT EXISTS scheduled_tasks (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name         TEXT NOT NULL,
-    cron_expr    TEXT NOT NULL,
-    agent_id     TEXT REFERENCES agents(id) ON DELETE CASCADE,
-    payload      JSONB NOT NULL DEFAULT '{}',
-    enabled      BOOLEAN NOT NULL DEFAULT TRUE,
-    last_run_at  TIMESTAMPTZ,
-    next_run_at  TIMESTAMPTZ,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS webhooks (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    url          TEXT NOT NULL,
-    events       TEXT[] NOT NULL DEFAULT '{}',
-    secret_hint  TEXT,
-    enabled      BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS webhook_deliveries (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    webhook_id   UUID NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
-    event_type   TEXT NOT NULL,
-    payload      JSONB NOT NULL DEFAULT '{}',
-    status_code  INT,
-    response     TEXT,
-    delivered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS rag_workspaces (
@@ -296,12 +173,7 @@ CREATE TABLE IF NOT EXISTS memory_summaries (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_memory_summaries_conv ON memory_summaries (conversation_id, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS memory_token_budgets (
-    conversation_id UUID PRIMARY KEY REFERENCES chat_conversations(id) ON DELETE CASCADE,
-    accumulated     INT NOT NULL DEFAULT 0,
-    last_reset_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'user';
 
 -- memory_entries extensions for pipeline
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES chat_conversations(id) ON DELETE SET NULL;
@@ -309,13 +181,9 @@ ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS keywords TEXT[] NOT NULL DEF
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS token_estimate INT NOT NULL DEFAULT 0;
 ALTER TABLE memory_entries DROP COLUMN IF EXISTS scope_layer;
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ;
+ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'user';
+UPDATE memory_entries SET scope = 'agent' WHERE agent_id IS NOT NULL AND scope = 'user';
 
--- entities extensions for pipeline
-ALTER TABLE entities ADD COLUMN IF NOT EXISTS agent_id TEXT;
-ALTER TABLE entities DROP COLUMN IF EXISTS scope_layer;
-ALTER TABLE entities ADD COLUMN IF NOT EXISTS occurrence_count INT NOT NULL DEFAULT 1;
-CREATE INDEX IF NOT EXISTS idx_entities_user ON entities (user_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_name_type ON entities (user_id, COALESCE(agent_id, ''), name, type);
 CREATE INDEX IF NOT EXISTS idx_memory_entries_user_id ON memory_entries (user_id);
 
 -- agents extensions
@@ -329,7 +197,6 @@ CREATE INDEX IF NOT EXISTS idx_chat_conversations_deleted ON chat_conversations 
 
 -- uuid v7 default backfill: switch existing tenant tables from gen_random_uuid() to public.gen_uuid_v7()
 ALTER TABLE memory_entries ALTER COLUMN id SET DEFAULT public.gen_uuid_v7();
-ALTER TABLE entities       ALTER COLUMN id SET DEFAULT public.gen_uuid_v7();
 ALTER TABLE chat_messages  ALTER COLUMN id SET DEFAULT public.gen_uuid_v7();
 
 CREATE INDEX IF NOT EXISTS idx_memory_entries_content_trgm ON memory_entries USING GIN (content gin_trgm_ops);
@@ -383,14 +250,14 @@ CREATE TABLE IF NOT EXISTS memory_facts (
     access_count    INT NOT NULL DEFAULT 0,
     last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     superseded_by   UUID REFERENCES memory_facts(id) ON DELETE SET NULL,
-    status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded', 'archived', 'deleted')),
+    status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded', 'archived')),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at      TIMESTAMPTZ
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_memory_facts_user_scope ON memory_facts (user_id, scope, status);
 CREATE INDEX IF NOT EXISTS idx_memory_facts_frecency ON memory_facts (frecency_score DESC) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_memory_facts_content_trgm ON memory_facts USING GIN (content gin_trgm_ops);
+ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES chat_conversations(id) ON DELETE SET NULL;
 -- Enforce only one active fact can supersede another (prevent supersede loops)
 CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_one_active_supersede
     ON memory_facts (superseded_by)
@@ -414,7 +281,12 @@ CREATE TABLE IF NOT EXISTS memory_entities (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_memory_entities_user_scope ON memory_entities (user_id, scope, status);
+ALTER TABLE memory_entities ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES chat_conversations(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_memory_entities_name_trgm ON memory_entities USING GIN (name gin_trgm_ops);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entities_name_type_scope
+    ON memory_entities (name, entity_type, user_id, COALESCE(agent_id, ''));
+-- backfill: entity_repo.go uses rebuild_after; older schema had last_profile_rebuild_at only
+ALTER TABLE memory_entities ADD COLUMN IF NOT EXISTS rebuild_after TIMESTAMPTZ;
 
 -- extraction_queue: async LLM extraction tasks
 CREATE TABLE IF NOT EXISTS memory_extraction_queue (
@@ -430,6 +302,8 @@ CREATE TABLE IF NOT EXISTS memory_extraction_queue (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_extraction_queue_status ON memory_extraction_queue (status, created_at);
+ALTER TABLE memory_extraction_queue ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES chat_conversations(id) ON DELETE SET NULL;
+ALTER TABLE memory_extraction_queue ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'user';
 
 -- agents extensions for memory v2 config
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_enabled BOOLEAN NOT NULL DEFAULT FALSE;
@@ -440,3 +314,22 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT '
 -- backfill agents created before max_iterations/max_context_tokens were wired in the form
 UPDATE agents SET max_iterations = 10 WHERE max_iterations = 0;
 UPDATE agents SET max_context_tokens = 8000 WHERE max_context_tokens = 0;
+
+-- dedup: content hash for knowledge_docs
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS content_hash TEXT;
+CREATE INDEX IF NOT EXISTS idx_knowledge_docs_ws_hash ON knowledge_docs (workspace_id, content_hash);
+
+-- knowledge_chunks: full-text search index for keyword/hybrid RAG
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+    id             TEXT PRIMARY KEY,
+    workspace_name TEXT NOT NULL,
+    doc_id         TEXT NOT NULL,
+    chunk_index    BIGINT NOT NULL,
+    content        TEXT NOT NULL,
+    tsv            tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED
+);
+CREATE INDEX IF NOT EXISTS idx_kc_tsv       ON knowledge_chunks USING GIN(tsv);
+CREATE INDEX IF NOT EXISTS idx_kc_workspace ON knowledge_chunks(workspace_name);
+
+-- drop obsolete content column from knowledge_docs (content stored in chunks)
+ALTER TABLE knowledge_docs DROP COLUMN IF EXISTS content;

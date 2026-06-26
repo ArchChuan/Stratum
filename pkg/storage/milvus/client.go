@@ -138,7 +138,7 @@ func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionNa
 				vs.dimCache.Store(collectionName, dim)
 				idxList, _ := vs.client.DescribeIndex(ctx, collectionName, "vector")
 				if len(idxList) == 0 {
-					flatIdx, ierr := entity.NewIndexFlat(entity.L2)
+					flatIdx, ierr := entity.NewIndexIvfFlat(entity.L2, 128)
 					if ierr == nil {
 						_ = vs.client.CreateIndex(ctx, collectionName, "vector", flatIdx, false)
 					}
@@ -211,19 +211,84 @@ func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionNa
 		vs.logger.Error("failed to create collection", zap.String("collection", collectionName), zap.Error(err))
 		return fmt.Errorf("failed to create collection %s: %w", collectionName, err)
 	}
-	idx, err := entity.NewIndexFlat(entity.L2)
+	idx, err := entity.NewIndexIvfFlat(entity.L2, 128)
 	if err != nil {
 		return fmt.Errorf("failed to build index param: %w", err)
 	}
 	if err := vs.client.CreateIndex(ctx, collectionName, "vector", idx, false); err != nil {
 		return fmt.Errorf("failed to create index on %s: %w", collectionName, err)
 	}
+	scIdx := entity.NewScalarIndexWithType(entity.Trie)
+	for _, f := range []string{"user_id", "agent_id", "scope"} {
+		if err := vs.client.CreateIndex(ctx, collectionName, f, scIdx, false); err != nil {
+			return fmt.Errorf("failed to create scalar index on %s.%s: %w", collectionName, f, err)
+		}
+	}
 	vs.dimCache.Store(collectionName, dim)
 	vs.logger.Info("collection created successfully", zap.String("collection", collectionName))
 	return nil
 }
 
-func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs []DocumentChunk) error {
+// EnsurePartition creates the partition if it does not already exist.
+func (vs *VectorStore) EnsurePartition(ctx context.Context, collectionName, partitionName string) error {
+	if err := vs.ensureConnected(ctx); err != nil {
+		return fmt.Errorf("milvus not available: %w", err)
+	}
+	ok, err := vs.client.HasPartition(ctx, collectionName, partitionName)
+	if err != nil {
+		return fmt.Errorf("failed to check partition: %w", err)
+	}
+	if ok {
+		return nil
+	}
+	return vs.client.CreatePartition(ctx, collectionName, partitionName)
+}
+
+// DropPartition drops a partition and all its vectors. No-op if it does not exist.
+func (vs *VectorStore) DropPartition(ctx context.Context, collectionName, partitionName string) error {
+	if err := vs.ensureConnected(ctx); err != nil {
+		return fmt.Errorf("milvus not available: %w", err)
+	}
+	ok, err := vs.client.HasPartition(ctx, collectionName, partitionName)
+	if err != nil {
+		return fmt.Errorf("failed to check partition: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+	return vs.client.DropPartition(ctx, collectionName, partitionName)
+}
+
+// CountVectors returns the total number of vectors in the given partition.
+func (vs *VectorStore) CountVectors(ctx context.Context, collectionName, partitionName string) (int64, error) {
+	if err := vs.ensureConnected(ctx); err != nil {
+		return 0, fmt.Errorf("milvus not available: %w", err)
+	}
+	if err := vs.client.LoadCollection(ctx, collectionName, false); err != nil {
+		if strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "not found") {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("failed to load collection: %w", err)
+	}
+	partitions := []string{}
+	if partitionName != "" {
+		partitions = []string{partitionName}
+	}
+	rows, err := vs.client.Query(ctx, collectionName, partitions, `id != ""`, []string{"id"})
+	if err != nil {
+		if strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "not found") {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("failed to query partition: %w", err)
+	}
+	col := rows.GetColumn("id")
+	if col == nil {
+		return 0, nil
+	}
+	return int64(col.Len()), nil
+}
+
+func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs []DocumentChunk, partitionName string) error {
 	if len(docs) == 0 {
 		return nil
 	}
@@ -266,7 +331,7 @@ func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs [
 	chunkIdxCol := entity.NewColumnInt64("chunk_index", chunkIndices)
 	vectorCol := entity.NewColumnFloatVector("vector", dim, vectors)
 
-	_, err := vs.client.Insert(ctx, collectionName, "", idCol, userIDCol, agentIDCol, scopeCol, contentCol, sourceCol, chunkIdxCol, vectorCol)
+	_, err := vs.client.Insert(ctx, collectionName, partitionName, idCol, userIDCol, agentIDCol, scopeCol, contentCol, sourceCol, chunkIdxCol, vectorCol)
 	if err != nil {
 		vs.logger.Error("failed to insert vectors", zap.Error(err))
 		return fmt.Errorf("failed to insert vectors: %w", err)
@@ -275,20 +340,22 @@ func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs [
 	return nil
 }
 
-func (vs *VectorStore) Search(ctx context.Context, collectionName string, queryVector []float32, topK int) ([]SearchResult, error) {
-	return vs.SearchWithFilter(ctx, collectionName, queryVector, topK, "")
+func (vs *VectorStore) Search(ctx context.Context, collectionName string, queryVector []float32, topK int, partitions ...string) ([]SearchResult, error) {
+	return vs.SearchWithFilter(ctx, collectionName, queryVector, topK, "", partitions...)
 }
 
 // SearchWithFilter performs vector search with an optional Milvus boolean expression filter.
-// Pass expression="" for unfiltered search. Example: `user_id == "abc"` for per-user isolation.
-func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName string, queryVector []float32, topK int, expression string) ([]SearchResult, error) {
+// Pass expression="" for unfiltered search. partitions scopes the search to specific partitions.
+func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName string, queryVector []float32, topK int, expression string, partitions ...string) ([]SearchResult, error) {
 	if err := vs.ensureConnected(ctx); err != nil {
 		return nil, fmt.Errorf("milvus not available: %w", err)
 	}
 	vs.logger.Debug("searching vectors", zap.String("collection", collectionName), zap.Int("topK", topK))
 
 	if err := vs.client.LoadCollection(ctx, collectionName, false); err != nil {
-		if strings.Contains(err.Error(), "index not found") {
+		if strings.Contains(err.Error(), "index not found") ||
+			strings.Contains(err.Error(), "not found") ||
+			strings.Contains(err.Error(), "does not exist") {
 			return []SearchResult{}, nil
 		}
 		vs.logger.Error("failed to load collection", zap.Error(err))
@@ -300,7 +367,7 @@ func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName stri
 	vectors[0] = entity.FloatVector(queryVector)
 
 	// Search parameters - L2 distance metric
-	sp, err := entity.NewIndexFlatSearchParam()
+	sp, err := entity.NewIndexIvfFlatSearchParam(10)
 	if err != nil {
 		vs.logger.Error("failed to create search params", zap.Error(err))
 		return nil, fmt.Errorf("failed to create search params: %w", err)
@@ -310,7 +377,7 @@ func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName stri
 	results, searchErr := vs.client.Search(
 		ctx,
 		collectionName,
-		[]string{}, // partition names
+		partitions,
 		expression,
 		[]string{"id", "content", "source_document", "chunk_index"}, // output fields
 		vectors,
@@ -441,6 +508,47 @@ func (vs *VectorStore) DeleteByDocumentIDs(ctx context.Context, collectionName s
 	return nil
 }
 
+// CountDocuments returns the number of distinct source documents in a collection.
+func (vs *VectorStore) CountDocuments(ctx context.Context, collectionName string) (int, error) {
+	if err := vs.ensureConnected(ctx); err != nil {
+		return 0, fmt.Errorf("milvus not available: %w", err)
+	}
+	if err := vs.client.LoadCollection(ctx, collectionName, false); err != nil {
+		if strings.Contains(err.Error(), "index not found") || strings.Contains(err.Error(), "does not exist") {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("failed to load collection: %w", err)
+	}
+	rows, err := vs.client.Query(ctx, collectionName, []string{}, `id != ""`, []string{"source_document"})
+	if err != nil {
+		return 0, fmt.Errorf("failed to query collection: %w", err)
+	}
+	col := rows.GetColumn("source_document")
+	if col == nil {
+		return 0, nil
+	}
+	seen := make(map[string]struct{}, col.Len())
+	for i := 0; i < col.Len(); i++ {
+		if v, err := col.GetAsString(i); err == nil {
+			seen[v] = struct{}{}
+		}
+	}
+	return len(seen), nil
+}
+
+func (vs *VectorStore) DeleteByFilter(ctx context.Context, collectionName, expr string) error {
+	if err := vs.ensureConnected(ctx); err != nil {
+		return fmt.Errorf("milvus not available: %w", err)
+	}
+	if err := vs.client.Delete(ctx, collectionName, "", expr); err != nil {
+		if strings.Contains(err.Error(), "not exist") || strings.Contains(err.Error(), "not found") {
+			return nil
+		}
+		return fmt.Errorf("delete by filter: %w", err)
+	}
+	return nil
+}
+
 func (vs *VectorStore) DeleteCollection(ctx context.Context, collectionName string) error {
 	if err := vs.ensureConnected(ctx); err != nil {
 		return fmt.Errorf("milvus not available: %w", err)
@@ -461,14 +569,16 @@ func (vs *VectorStore) DeleteCollection(ctx context.Context, collectionName stri
 
 // KeywordSearch performs TF-IDF based keyword search on the collection.
 // Fetches all documents and ranks them by relevance to query terms.
-func (vs *VectorStore) KeywordSearch(ctx context.Context, collectionName string, query string, topK int) ([]SearchResult, error) {
+func (vs *VectorStore) KeywordSearch(ctx context.Context, collectionName string, query string, topK int, partitions ...string) ([]SearchResult, error) {
 	if err := vs.ensureConnected(ctx); err != nil {
 		return nil, fmt.Errorf("milvus not available: %w", err)
 	}
 	vs.logger.Debug("keyword searching", zap.String("collection", collectionName), zap.String("query", query))
 
 	if err := vs.client.LoadCollection(ctx, collectionName, false); err != nil {
-		if strings.Contains(err.Error(), "index not found") {
+		if strings.Contains(err.Error(), "index not found") ||
+			strings.Contains(err.Error(), "not found") ||
+			strings.Contains(err.Error(), "does not exist") {
 			return []SearchResult{}, nil
 		}
 		return nil, fmt.Errorf("failed to load collection %s: %w", collectionName, err)

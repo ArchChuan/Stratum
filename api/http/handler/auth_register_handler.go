@@ -76,20 +76,6 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			globalRole = dbRole
 		}
 
-	case "join":
-		if req.InvitationToken == "" {
-			_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("invitation_token required for action=join")))
-			return
-		}
-		if err := h.deps.OnboardSvc.JoinTenant(ctx, application.JoinTenantInput{
-			UserID: ob.GitHubLogin, InvitationToken: req.InvitationToken,
-		}); err != nil {
-			_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("invalid invitation token")))
-			return
-		}
-		_ = c.Error(middleware.NewHTTPError(http.StatusNotImplemented, errors.New("join flow requires Plan 3 user DB")))
-		return
-
 	default:
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("action must be 'create' or 'join'")))
 		return

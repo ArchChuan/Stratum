@@ -28,6 +28,7 @@ export const workspaceStatsSchema = z
     stats: z
       .object({
         row_count: z.number().optional(),
+        doc_count: z.number().optional(),
       })
       .passthrough()
       .optional(),

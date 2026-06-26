@@ -26,13 +26,13 @@ func NewMCPHandler(svc *mcpapp.MCPService, logger *zap.Logger) *MCPHandler {
 
 // ListServers GET /mcp/servers
 func (h *MCPHandler) ListServers(c *gin.Context) {
-	servers := h.svc.ListServers()
+	servers := h.svc.ListServers(c.Request.Context())
 	c.JSON(http.StatusOK, gin.H{"servers": servers, "count": len(servers)})
 }
 
 // GetServer GET /mcp/servers/:id
 func (h *MCPHandler) GetServer(c *gin.Context) {
-	server, err := h.svc.GetServer(c.Param("id"))
+	server, err := h.svc.GetServer(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		c.Error(err) //nolint:errcheck
 		return
@@ -120,7 +120,7 @@ func (h *MCPHandler) RefreshSkills(c *gin.Context) {
 
 // GetServerStatus GET /mcp/status
 func (h *MCPHandler) GetServerStatus(c *gin.Context) {
-	c.JSON(http.StatusOK, h.svc.ServerStatus())
+	c.JSON(http.StatusOK, h.svc.ServerStatus(c.Request.Context()))
 }
 
 // RegisterRoutes 注册 MCP 路由。
@@ -133,12 +133,49 @@ func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, wr
 	v1.GET("/servers/:id/tools", h.ListTools)
 	v1.GET("/servers/:id/resources", h.ListResources)
 	v1.POST("/servers", append(writeMW, h.ConnectServer)...)
+	v1.PUT("/servers/:id", append(writeMW, h.UpdateServer)...)
+	v1.GET("/servers/:id/config", h.GetServerConfig)
 	v1.DELETE("/servers/:id", append(writeMW, h.DisconnectServer)...)
+	v1.DELETE("/servers/:id/config", append(writeMW, h.DeleteServerConfig)...)
+	v1.POST("/servers/:id/reconnect", append(writeMW, h.ReconnectServer)...)
 	v1.POST("/tools/:toolId/execute", append(writeMW, h.ExecuteTool)...)
 	v1.GET("/skills", h.ListSkills)
 	v1.GET("/skills/:id", h.GetSkill)
 	v1.POST("/skills/refresh", append(writeMW, h.RefreshSkills)...)
 	v1.GET("/status", h.GetServerStatus)
+}
+
+// GetServerConfig GET /mcp/servers/:id/config
+func (h *MCPHandler) GetServerConfig(c *gin.Context) {
+	cfg, err := h.svc.GetServerConfig(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, cfg)
+}
+
+// UpdateServer PUT /mcp/servers/:id
+func (h *MCPHandler) UpdateServer(c *gin.Context) {
+	if _, ok := tenantIDFromCtx(c); !ok {
+		respondMissingTenant(c)
+		return
+	}
+	var cfg mcpdomain.ServerConfig
+	if err := c.ShouldBindJSON(&cfg); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	cfg.ID = c.Param("id")
+	if err := h.svc.UpdateServer(c.Request.Context(), &cfg); err != nil {
+		h.logger.Error("failed to update MCP server",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.String("server_id", cfg.ID),
+			zap.Error(err))
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "updated", "server_id": cfg.ID})
 }
 
 // ConnectServer POST /mcp/servers
@@ -179,4 +216,40 @@ func (h *MCPHandler) DisconnectServer(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "disconnected"})
+}
+
+// DeleteServerConfig DELETE /mcp/servers/:id/config
+func (h *MCPHandler) DeleteServerConfig(c *gin.Context) {
+	if _, ok := tenantIDFromCtx(c); !ok {
+		respondMissingTenant(c)
+		return
+	}
+	serverID := c.Param("id")
+	if err := h.svc.DeleteServer(c.Request.Context(), serverID); err != nil {
+		h.logger.Error("failed to delete MCP server",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.String("server_id", serverID),
+			zap.Error(err))
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
+// ReconnectServer POST /mcp/servers/:id/reconnect
+func (h *MCPHandler) ReconnectServer(c *gin.Context) {
+	if _, ok := tenantIDFromCtx(c); !ok {
+		respondMissingTenant(c)
+		return
+	}
+	serverID := c.Param("id")
+	if err := h.svc.ReconnectServer(c.Request.Context(), serverID); err != nil {
+		h.logger.Error("failed to reconnect MCP server",
+			zap.String("trace_id", middleware.GetTraceID(c)),
+			zap.String("server_id", serverID),
+			zap.Error(err))
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "connected", "server_id": serverID})
 }

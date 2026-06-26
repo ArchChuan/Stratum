@@ -24,7 +24,7 @@ func TestExtractFacts_Success(t *testing.T) {
 	llmExtract := new(MockLLMExtractor)
 	embedClient := new(MockEmbedClient)
 
-	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil)
+	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil, nil)
 
 	// Mock LLM extraction
 	llmExtract.On("ExtractFacts", ctx, "user1", "agent1", mock.Anything).Return([]*port.ExtractedFact{
@@ -36,16 +36,16 @@ func TestExtractFacts_Success(t *testing.T) {
 	}, nil)
 
 	// Mock supersede candidates (none found)
-	factRepo.On("FindSupersedeCandidates", ctx, "user1", "agent1", mock.Anything, mock.Anything, mock.Anything).
+	factRepo.On("FindSupersedeCandidates", ctx, "tenant1", "user1", "agent1", mock.Anything, mock.Anything, mock.Anything).
 		Return([]*domain.MemoryFact{}, nil)
 
 	// Mock entity normalization (new entity)
-	entityRepo.On("FindByNameAndType", ctx, "user1", "Python", "", mock.Anything).
+	entityRepo.On("FindByNameAndType", ctx, "tenant1", "user1", "Python", "", mock.Anything).
 		Return(nil, domain.ErrEntityNotFound)
-	entityRepo.On("Create", ctx, mock.AnythingOfType("*domain.MemoryEntity")).Return(nil)
+	entityRepo.On("Create", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryEntity")).Return(nil)
 
 	// Mock fact insertion
-	factRepo.On("Create", ctx, mock.AnythingOfType("*domain.MemoryFact")).Return(nil)
+	factRepo.On("Create", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryFact")).Return(nil)
 
 	// Mock embedding
 	embedClient.On("Embed", ctx, "User prefers Python for backend work").
@@ -59,6 +59,7 @@ func TestExtractFacts_Success(t *testing.T) {
 		TenantID: "tenant1",
 		UserID:   "user1",
 		AgentID:  "agent1",
+		Scope:    "user",
 		Messages: []MessageDTO{
 			{Role: "user", Content: "I like Python"},
 		},
@@ -87,7 +88,7 @@ func TestExtractFacts_EntityUpdate(t *testing.T) {
 	llmExtract := new(MockLLMExtractor)
 	embedClient := new(MockEmbedClient)
 
-	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil)
+	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, llmExtract, embedClient, nil, nil)
 
 	// Mock LLM extraction
 	llmExtract.On("ExtractFacts", ctx, "user1", "agent1", mock.Anything).Return([]*port.ExtractedFact{
@@ -99,17 +100,17 @@ func TestExtractFacts_EntityUpdate(t *testing.T) {
 	}, nil)
 
 	// Mock supersede candidates (none)
-	factRepo.On("FindSupersedeCandidates", ctx, "user1", "agent1", mock.Anything, mock.Anything, mock.Anything).
+	factRepo.On("FindSupersedeCandidates", ctx, "tenant1", "user1", "agent1", mock.Anything, mock.Anything, mock.Anything).
 		Return([]*domain.MemoryFact{}, nil)
 
 	// Mock entity normalization (existing entity)
 	existingEntity, _ := domain.NewEntity("user1", "agent1", "user", "Go", "technology")
-	entityRepo.On("FindByNameAndType", ctx, "user1", "Go", "", mock.Anything).
+	entityRepo.On("FindByNameAndType", ctx, "tenant1", "user1", "Go", "", mock.Anything).
 		Return(existingEntity, nil)
-	entityRepo.On("Update", ctx, mock.AnythingOfType("*domain.MemoryEntity")).Return(nil)
+	entityRepo.On("Update", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryEntity")).Return(nil)
 
 	// Mock fact insertion
-	factRepo.On("Create", ctx, mock.AnythingOfType("*domain.MemoryFact")).Return(nil)
+	factRepo.On("Create", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryFact")).Return(nil)
 
 	// Mock embedding
 	embedClient.On("Embed", ctx, "User uses Go for microservices").
@@ -123,6 +124,7 @@ func TestExtractFacts_EntityUpdate(t *testing.T) {
 		TenantID: "tenant1",
 		UserID:   "user1",
 		AgentID:  "agent1",
+		Scope:    "user",
 		Messages: []MessageDTO{
 			{Role: "user", Content: "I use Go a lot"},
 		},
@@ -147,11 +149,11 @@ func TestNormalizeEntity_NewEntity(t *testing.T) {
 	}
 
 	// No existing entity
-	entityRepo.On("FindByNameAndType", ctx, "user1", "Python", "", mock.Anything).
+	entityRepo.On("FindByNameAndType", ctx, "tenant1", "user1", "Python", "", mock.Anything).
 		Return(nil, domain.ErrEntityNotFound)
-	entityRepo.On("Create", ctx, mock.AnythingOfType("*domain.MemoryEntity")).Return(nil)
+	entityRepo.On("Create", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryEntity")).Return(nil)
 
-	id, err := svc.normalizeEntity(ctx, "user1", "agent1", "Python")
+	id, err := svc.normalizeEntity(ctx, "tenant1", "user1", "agent1", "Python")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, id)
 
@@ -167,11 +169,11 @@ func TestNormalizeEntity_ExistingEntity(t *testing.T) {
 	}
 
 	existing, _ := domain.NewEntity("user1", "agent1", "user", "Python", "technology")
-	entityRepo.On("FindByNameAndType", ctx, "user1", "Python", "", mock.Anything).
+	entityRepo.On("FindByNameAndType", ctx, "tenant1", "user1", "Python", "", mock.Anything).
 		Return(existing, nil)
-	entityRepo.On("Update", ctx, mock.AnythingOfType("*domain.MemoryEntity")).Return(nil)
+	entityRepo.On("Update", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryEntity")).Return(nil)
 
-	id, err := svc.normalizeEntity(ctx, "user1", "agent1", "Python")
+	id, err := svc.normalizeEntity(ctx, "tenant1", "user1", "agent1", "Python")
 	assert.NoError(t, err)
 	assert.Equal(t, existing.ID, id)
 

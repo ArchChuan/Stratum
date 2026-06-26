@@ -44,7 +44,7 @@ const (
 	EnricherAckWait               = 60 * time.Second
 	EnricherMaxDeliver            = 5
 	EnricherWorkerCount           = 1
-	EnricherSummaryTokenThreshold = 4096
+	EnricherSummaryTokenThreshold = 1000
 	EnricherMaxInjectionTokens    = 500
 	EnricherTopEntities           = 10
 	EnricherSummaryMaxMessages    = 100 // max messages fetched per summary to avoid unbounded query
@@ -67,8 +67,20 @@ const (
 
 // Memory Buffer - controls fact extraction pipeline batching
 const (
-	MemoryBufferFlushSize     = 5 // facts to buffer before flush
+	MemoryBufferFlushSize     = 5 // flush after K messages
 	MemoryBufferFlushInterval = 2 * time.Minute
+	// MemoryBufferKeyTTL is a sliding safety TTL on the Redis list key.
+	// Prevents leaked keys when a conversation ends before K or T flush triggers
+	// (e.g. tab closed, server restart). Reset on every push so slow but active
+	// conversations are never evicted prematurely. 24 h matches industry-standard
+	// session-buffer lifetimes (LangChain ConversationBufferMemory, Mem0).
+	MemoryBufferKeyTTL = 24 * time.Hour
+
+	MemoryBufferSizeLimit     = 8 * 1024         // flush if accumulated bytes >= 8KB
+	MemoryBufferIdleTimeout   = 60 * time.Second // scanner: flush if no new message for 60s
+	MemoryBufferAgeTimeout    = 5 * time.Minute  // scanner: flush if oldest message > 5min
+	MemoryBufferScanInterval  = 30 * time.Second // how often BufferScanner polls Redis
+	MemoryTenantWatchInterval = 60 * time.Second // how often TenantWatcher polls tenant list
 )
 
 // Memory Recall - controls retrieval behavior
@@ -103,20 +115,22 @@ const (
 
 // Memory Supersede - supersede detection thresholds
 const (
-	MemorySupersedeCandidateMin = 0.6 // min similarity to consider supersede
-	MemorySupersedeCandidateMax = 3   // max candidates to check per fact
+	MemorySupersedeCandidateMin   = 0.6 // min similarity to consider supersede
+	MemorySupersedeCandidateMax   = 3   // max candidates to check per fact
+	MemorySupersedeLLMCallsPerRun = 20  // max LLM judgments per RunOnce pass
 )
 
 // Memory Workers - background processing intervals and batch sizes
 const (
-	MemoryExtractionBatchSize = 10                  // facts per extraction queue poll
-	MemorySupersedeBatchSize  = 20                  // facts per supersede judgment batch
-	MemoryEmbedInterval       = 10 * time.Second    // embed worker poll interval
-	MemoryEmbedBatchSize      = 50                  // facts per embed batch
-	MemoryProfileInterval     = 5 * time.Minute     // profile rebuild poll interval
-	MemoryProfileBatchSize    = 10                  // entities per profile rebuild batch
-	MemoryGCInterval          = 24 * time.Hour      // garbage collection interval
-	MemoryGCBatchSize         = 100                 // facts per GC batch
-	MemoryDeletedRetention    = 30 * 24 * time.Hour // purge deleted after 30 days
-	MemorySupersededRetention = 90 * 24 * time.Hour // purge superseded after 90 days
+	MemoryExtractionBatchSize  = 10                  // facts per extraction queue poll
+	MemorySupersedeBatchSize   = 20                  // facts per supersede judgment batch
+	MemoryEmbedInterval        = 10 * time.Second    // embed worker poll interval
+	MemoryEmbedBatchSize       = 50                  // facts per embed batch
+	MemoryProfileInterval      = 5 * time.Minute     // profile rebuild poll interval
+	MemoryProfileBatchSize     = 10                  // entities per profile rebuild batch
+	MemoryGCInterval           = 24 * time.Hour      // garbage collection interval
+	MemoryGCBatchSize          = 100                 // facts per GC batch
+	MemoryGCQueueRetentionDays = 7                   // days to keep completed queue tasks
+	MemoryDeletedRetention     = 30 * 24 * time.Hour // purge deleted after 30 days
+	MemorySupersededRetention  = 90 * 24 * time.Hour // purge superseded after 90 days
 )

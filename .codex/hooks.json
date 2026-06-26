@@ -54,6 +54,16 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /home/yang/go-projects/stratum/.codex/hooks/notify-stop.sh"
+          }
+        ]
+      }
     ]
   }
 }

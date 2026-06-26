@@ -75,16 +75,17 @@ type Agent interface {
 // BaseAgent provides common functionality for all agent implementations
 type BaseAgent struct {
 	*AgentConfig
-	Logger         *zap.Logger
-	metrics        observability.MetricsProvider
-	State          AgentState
-	Memory         []Message
-	mu             sync.Mutex
-	MemorySearcher port.MemorySearcher
-	CapGateway     port.CapabilityGateway
-	ChatStore      ChatStore
-	MemoryInjector port.MemoryInjector
-	RecallMemoryFn port.RecallMemoryFn
+	Logger             *zap.Logger
+	metrics            observability.MetricsProvider
+	State              AgentState
+	Memory             []Message
+	mu                 sync.Mutex
+	MemorySearcher     port.MemorySearcher
+	CapGateway         port.CapabilityGateway
+	ChatStore          ChatStore
+	MemoryInjector     port.MemoryInjector
+	RecallMemoryFn     port.RecallMemoryFn
+	GlobalSystemSuffix string
 }
 
 // NewBaseAgent creates a new base agent
@@ -197,6 +198,9 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	agentID := a.ID
 	agentType := a.Type
 	systemPrompt := a.SystemPrompt
+	if a.GlobalSystemSuffix != "" {
+		systemPrompt += "\n\n" + a.GlobalSystemSuffix
+	}
 	llmModel := a.LLMModel
 	capGW := a.CapGateway
 	chatStore := a.ChatStore
@@ -204,13 +208,12 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	workspaceNames := a.KnowledgeWorkspaceNames
 	workspaceDescs := a.KnowledgeWorkspaceDescriptions
 	maxContextTokens := a.MaxContextTokens
-	memoryEnabled := a.MemoryEnabled
 	memoryScope := a.MemoryScope
 	a.mu.Unlock()
 
 	// Inject memory context into system prompt
 	var memCtx string
-	if a.MemoryInjector != nil && cfg.ConversationID != "" && memoryEnabled {
+	if a.MemoryInjector != nil && cfg.ConversationID != "" {
 		ic := port.InjectionContext{
 			TenantID:       cfg.TenantID,
 			UserID:         cfg.UserID,
@@ -318,7 +321,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 				},
 			})
 		}
-		if a.MemoryInjector != nil && memoryEnabled {
+		if a.MemoryInjector != nil {
 			availableTools = append(availableTools, port.ToolDefinition{
 				Name:        "stratum_recall_memory",
 				Description: "Search long-term memory for relevant past interactions, entities, and context. Use when you need to recall information from previous conversations.",
@@ -351,7 +354,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			RAGSearchFn:    cfg.RAGSearchFn,
 			MaxLLMSteps:    cfg.MaxSteps,
 		}
-		if a.RecallMemoryFn != nil && memoryEnabled {
+		if a.RecallMemoryFn != nil {
 			fn := a.RecallMemoryFn
 			initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
 				return fn(ctx, cfg.TenantID, cfg.UserID, agentID, memoryScope, input)
@@ -416,7 +419,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			UserID:         cfg.UserID,
 			AgentID:        agentID,
 			MemoryScope:    memoryScope,
-			SkipOutbox:     !memoryEnabled,
+			SkipOutbox:     false,
 		}
 		if err := chatStore.AddMessage(saveCtx, cfg.TenantID, userMsg); err != nil {
 			a.Logger.Warn("agent: failed to save user message",
@@ -430,7 +433,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			UserID:         cfg.UserID,
 			AgentID:        agentID,
 			MemoryScope:    memoryScope,
-			SkipOutbox:     !memoryEnabled,
+			SkipOutbox:     false,
 		}
 		if err := chatStore.AddMessage(saveCtx, cfg.TenantID, agentMsg); err != nil {
 			a.Logger.Warn("agent: failed to save agent message",

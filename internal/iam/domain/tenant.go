@@ -11,18 +11,6 @@ type Member struct {
 	JoinedAt    time.Time
 }
 
-// Invitation represents a pending tenant invitation.
-type Invitation struct {
-	ID        string
-	TenantID  string
-	Email     string
-	Role      string
-	TokenHash string
-	ExpiresAt time.Time
-	CreatedAt time.Time
-	InvitedBy string
-}
-
 // UserTenantInfo describes one tenant a user belongs to.
 type UserTenantInfo struct {
 	TenantID  string

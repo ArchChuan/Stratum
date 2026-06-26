@@ -101,8 +101,8 @@ func TestClientManagerConnect(t *testing.T) {
 		t.Fatal("manager should not be nil")
 	}
 
-	if len(manager.GetAllClients()) != 0 {
-		t.Errorf("expected 0 clients, got %d", len(manager.GetAllClients()))
+	if len(manager.GetAllClients(context.Background())) != 0 {
+		t.Errorf("expected 0 clients, got %d", len(manager.GetAllClients(context.Background())))
 	}
 }
 
@@ -224,7 +224,7 @@ func TestClientManagerGetAllServerInfo(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	manager := NewClientManager(logger, nil, nil)
 
-	infos := manager.GetAllServerInfo()
+	infos := manager.GetAllServerInfo(context.Background())
 	if len(infos) != 0 {
 		t.Errorf("expected 0 servers, got %d", len(infos))
 	}

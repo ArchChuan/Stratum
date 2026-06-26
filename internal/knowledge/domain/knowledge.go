@@ -6,7 +6,7 @@ type KB struct {
 }
 
 type Document struct {
-	ID, KBID, Source string
+	ID, KBID, Source, ContentHash string
 }
 
 type Chunk struct {

@@ -3,7 +3,6 @@ package persistence
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -30,28 +29,27 @@ func (r *FactRepo) execTenant(ctx context.Context, tenantID string, fn func(cont
 func (r *FactRepo) Create(ctx context.Context, tenantID string, fact *domain.MemoryFact) error {
 	const query = `
 		INSERT INTO memory_facts (
-			id, user_id, agent_id, scope, content, importance,
+			id, user_id, agent_id, scope, conversation_id, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
-			created_at, updated_at, deleted_at, frecency_score
+			created_at, updated_at, frecency_score
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`
 
-	var agentID, supersededBy *string
+	var agentID, supersededBy, conversationID *string
 	if fact.AgentID != "" {
 		agentID = &fact.AgentID
+	}
+	if fact.ConversationID != "" {
+		conversationID = &fact.ConversationID
 	}
 	if fact.SupersededBy != "" {
 		supersededBy = &fact.SupersededBy
 	}
-	var deletedAt *time.Time
-	if !fact.DeletedAt.IsZero() {
-		deletedAt = &fact.DeletedAt
-	}
 
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, query,
-			fact.ID, fact.UserID, agentID, string(fact.Scope), fact.Content, fact.Importance,
+			fact.ID, fact.UserID, agentID, string(fact.Scope), conversationID, fact.Content, fact.Importance,
 			fact.Status, supersededBy, fact.AccessCount, fact.LastAccessAt,
-			fact.CreatedAt, fact.UpdatedAt, deletedAt, fact.Importance,
+			fact.CreatedAt, fact.UpdatedAt, fact.Importance,
 		)
 		return translatePgError(err, "create fact")
 	})
@@ -61,20 +59,19 @@ func (r *FactRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.Me
 	const query = `
 		SELECT id, user_id, agent_id, scope, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
-			created_at, updated_at, deleted_at
+			created_at, updated_at
 		FROM memory_facts WHERE id = $1`
 
 	var f *domain.MemoryFact
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var fact domain.MemoryFact
 		var agentID, supersededBy *string
-		var deletedAt *time.Time
 		var scope string
 
 		err := tx.QueryRow(ctx, query, id).Scan(
 			&fact.ID, &fact.UserID, &agentID, &scope, &fact.Content, &fact.Importance,
 			&fact.Status, &supersededBy, &fact.AccessCount, &fact.LastAccessAt,
-			&fact.CreatedAt, &fact.UpdatedAt, &deletedAt,
+			&fact.CreatedAt, &fact.UpdatedAt,
 		)
 		if err != nil {
 			if err == pgx.ErrNoRows {
@@ -89,9 +86,6 @@ func (r *FactRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.Me
 		if supersededBy != nil {
 			fact.SupersededBy = *supersededBy
 		}
-		if deletedAt != nil {
-			fact.DeletedAt = *deletedAt
-		}
 		f = &fact
 		return nil
 	})
@@ -102,22 +96,18 @@ func (r *FactRepo) Update(ctx context.Context, tenantID string, fact *domain.Mem
 	const query = `
 		UPDATE memory_facts SET
 			content = $2, importance = $3, status = $4, superseded_by = $5,
-			access_count = $6, last_accessed_at = $7, updated_at = $8, deleted_at = $9
+			access_count = $6, last_accessed_at = $7, updated_at = $8
 		WHERE id = $1`
 
 	var supersededBy *string
 	if fact.SupersededBy != "" {
 		supersededBy = &fact.SupersededBy
 	}
-	var deletedAt *time.Time
-	if !fact.DeletedAt.IsZero() {
-		deletedAt = &fact.DeletedAt
-	}
 
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, query,
 			fact.ID, fact.Content, fact.Importance, fact.Status, supersededBy,
-			fact.AccessCount, fact.LastAccessAt, fact.UpdatedAt, deletedAt,
+			fact.AccessCount, fact.LastAccessAt, fact.UpdatedAt,
 		)
 		if err != nil {
 			return translatePgError(err, "update fact")
@@ -133,7 +123,7 @@ func (r *FactRepo) ListActive(ctx context.Context, tenantID string, filter domai
 	const query = `
 		SELECT id, user_id, agent_id, scope, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
-			created_at, updated_at, deleted_at
+			created_at, updated_at
 		FROM memory_facts
 		WHERE user_id = $1 AND status = 'active'
 			AND (
@@ -160,7 +150,7 @@ func (r *FactRepo) SearchByContent(ctx context.Context, tenantID string, filter 
 	const sql = `
 		SELECT id, user_id, agent_id, scope, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
-			created_at, updated_at, deleted_at
+			created_at, updated_at
 		FROM memory_facts
 		WHERE user_id = $1 AND status = 'active' AND content ILIKE $2
 			AND (
@@ -188,7 +178,7 @@ func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID
 	const query = `
 		SELECT id, user_id, agent_id, scope, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
-			created_at, updated_at, deleted_at,
+			created_at, updated_at,
 			similarity(content, $2) as sim
 		FROM memory_facts
 		WHERE user_id = $1 AND status = 'active' AND similarity(content, $2) > $3
@@ -205,14 +195,13 @@ func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID
 		for rows.Next() {
 			var f domain.MemoryFact
 			var aid, supersededBy *string
-			var deletedAt *time.Time
 			var scope string
 			var sim float64
 
 			if err := rows.Scan(
 				&f.ID, &f.UserID, &aid, &scope, &f.Content, &f.Importance,
 				&f.Status, &supersededBy, &f.AccessCount, &f.LastAccessAt,
-				&f.CreatedAt, &f.UpdatedAt, &deletedAt, &sim,
+				&f.CreatedAt, &f.UpdatedAt, &sim,
 			); err != nil {
 				return fmt.Errorf("scan supersede candidate: %w", err)
 			}
@@ -222,9 +211,6 @@ func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID
 			}
 			if supersededBy != nil {
 				f.SupersededBy = *supersededBy
-			}
-			if deletedAt != nil {
-				f.DeletedAt = *deletedAt
 			}
 			facts = append(facts, &f)
 		}
@@ -246,29 +232,15 @@ func (r *FactRepo) CountByUser(ctx context.Context, tenantID, userID string) (in
 	return count, nil
 }
 
-func (r *FactRepo) DeleteOldSoftDeleted(ctx context.Context, tenantID string, retentionDays int) (int, error) {
-	const query = `
-		DELETE FROM memory_facts
-		WHERE status = 'deleted' AND deleted_at < NOW() - ($1 || ' days')::INTERVAL`
-
-	var n int
-	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, query, retentionDays)
-		if err != nil {
-			return fmt.Errorf("delete old soft-deleted facts: %w", err)
-		}
-		n = int(tag.RowsAffected())
-		return nil
+func (r *FactRepo) Delete(ctx context.Context, tenantID, id string) error {
+	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM memory_facts WHERE id = $1`, id)
+		return translatePgError(err, "delete fact")
 	})
-	return n, err
 }
 
 func (r *FactRepo) DeleteAllByUser(ctx context.Context, tenantID, userID string) ([]string, error) {
-	const query = `
-		UPDATE memory_facts
-		SET status = 'deleted', deleted_at = NOW(), updated_at = NOW()
-		WHERE user_id = $1 AND status = 'active'
-		RETURNING id`
+	const query = `DELETE FROM memory_facts WHERE user_id = $1 RETURNING id`
 
 	var factIDs []string
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
@@ -290,11 +262,7 @@ func (r *FactRepo) DeleteAllByUser(ctx context.Context, tenantID, userID string)
 }
 
 func (r *FactRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) ([]string, error) {
-	const query = `
-		UPDATE memory_facts
-		SET status = 'deleted', deleted_at = NOW(), updated_at = NOW()
-		WHERE agent_id = $1 AND status = 'active'
-		RETURNING id`
+	const query = `DELETE FROM memory_facts WHERE agent_id = $1 RETURNING id`
 
 	var factIDs []string
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
@@ -320,13 +288,12 @@ func scanFacts(rows pgx.Rows) ([]*domain.MemoryFact, error) {
 	for rows.Next() {
 		var f domain.MemoryFact
 		var agentID, supersededBy *string
-		var deletedAt *time.Time
 		var scope string
 
 		if err := rows.Scan(
 			&f.ID, &f.UserID, &agentID, &scope, &f.Content, &f.Importance,
 			&f.Status, &supersededBy, &f.AccessCount, &f.LastAccessAt,
-			&f.CreatedAt, &f.UpdatedAt, &deletedAt,
+			&f.CreatedAt, &f.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan fact: %w", err)
 		}
@@ -336,9 +303,6 @@ func scanFacts(rows pgx.Rows) ([]*domain.MemoryFact, error) {
 		}
 		if supersededBy != nil {
 			f.SupersededBy = *supersededBy
-		}
-		if deletedAt != nil {
-			f.DeletedAt = *deletedAt
 		}
 		facts = append(facts, &f)
 	}

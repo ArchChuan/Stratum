@@ -1,0 +1,2 @@
+-- memory_facts is tenant-scoped; schema changes live in pkg/storage/postgres/tenant_schema.sql.
+-- Hard-delete migration (no deleted_at, status without 'deleted') is already applied there.

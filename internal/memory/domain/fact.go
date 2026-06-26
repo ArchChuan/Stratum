@@ -8,25 +8,25 @@ import (
 
 // MemoryFact is the aggregate root for a memory fact
 type MemoryFact struct {
-	ID           string
-	TenantID     string
-	UserID       string
-	AgentID      string
-	Scope        Scope
-	Content      string
-	Importance   float64
-	EntityNames  []string
-	AccessCount  int
-	LastAccessAt time.Time
-	SupersededBy string
-	Status       string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	DeletedAt    time.Time
+	ID             string
+	TenantID       string
+	UserID         string
+	AgentID        string
+	ConversationID string
+	Scope          Scope
+	Content        string
+	Importance     float64
+	EntityNames    []string
+	AccessCount    int
+	LastAccessAt   time.Time
+	SupersededBy   string
+	Status         string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // NewFact creates a new memory fact with validation
-func NewFact(tenantID, userID, agentID string, scope string, content string, importance float64, entityNames []string) (*MemoryFact, error) {
+func NewFact(tenantID, userID, agentID, conversationID string, scope string, content string, importance float64, entityNames []string) (*MemoryFact, error) {
 	if userID == "" {
 		return nil, ErrUserIDMismatch
 	}
@@ -39,27 +39,27 @@ func NewFact(tenantID, userID, agentID string, scope string, content string, imp
 
 	now := time.Now()
 	return &MemoryFact{
-		ID:           uuid.NewString(),
-		TenantID:     tenantID,
-		UserID:       userID,
-		AgentID:      agentID,
-		Scope:        Scope(scope),
-		Content:      content,
-		Importance:   importance,
-		EntityNames:  entityNames,
-		AccessCount:  0,
-		LastAccessAt: now,
-		Status:       "active",
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:             uuid.NewString(),
+		TenantID:       tenantID,
+		UserID:         userID,
+		AgentID:        agentID,
+		ConversationID: conversationID,
+		Scope:          Scope(scope),
+		Content:        content,
+		Importance:     importance,
+		EntityNames:    entityNames,
+		AccessCount:    0,
+		LastAccessAt:   now,
+		Status:         "active",
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}, nil
 }
 
 var statusTransitions = map[string][]string{
-	"active":     {"deleted", "superseded", "archived"},
+	"active":     {"superseded", "archived"},
 	"superseded": {},
 	"archived":   {"active"},
-	"deleted":    {},
 }
 
 // CanTransitionTo checks if a status transition is valid
@@ -74,13 +74,6 @@ func (f *MemoryFact) CanTransitionTo(newStatus string) bool {
 		}
 	}
 	return false
-}
-
-// MarkDeleted soft-deletes the fact
-func (f *MemoryFact) MarkDeleted() {
-	f.Status = "deleted"
-	f.DeletedAt = time.Now()
-	f.UpdatedAt = f.DeletedAt
 }
 
 // MarkSuperseded marks the fact as superseded by a newer fact

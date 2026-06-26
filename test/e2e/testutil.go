@@ -38,6 +38,10 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	if err != nil {
 		t.Skipf("PostgreSQL unavailable: %v", err)
 	}
+	if pingErr := pool.Ping(ctx); pingErr != nil {
+		pool.Close()
+		t.Skipf("PostgreSQL unavailable: %v", pingErr)
+	}
 
 	// Step 2: Generate unique tenant ID for isolation
 	tenantID := fmt.Sprintf("test_%d", time.Now().UnixNano())
@@ -90,16 +94,18 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 		CREATE INDEX IF NOT EXISTS idx_memory_entities_user_scope ON memory_entities (user_id, scope, status);
 
 		CREATE TABLE IF NOT EXISTS memory_extraction_queue (
-		    id          BIGSERIAL PRIMARY KEY,
-		    message_id  TEXT NOT NULL,
-		    user_id     TEXT NOT NULL,
-		    agent_id    TEXT,
-		    content     TEXT NOT NULL,
-		    status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
-		    retry_count INT NOT NULL DEFAULT 0,
-		    error_msg   TEXT,
-		    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		    id              BIGSERIAL PRIMARY KEY,
+		    message_id      TEXT NOT NULL,
+		    user_id         TEXT NOT NULL,
+		    agent_id        TEXT,
+		    conversation_id UUID,
+		    scope           TEXT NOT NULL DEFAULT 'user',
+		    content         TEXT NOT NULL,
+		    status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+		    retry_count     INT NOT NULL DEFAULT 0,
+		    error_msg       TEXT,
+		    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 	`
 	_, err = pool.Exec(ctx, ddl)
@@ -158,6 +164,7 @@ func newMemoryService(pool *pgxpool.Pool, redis *redis.Client) (*application.Mem
 		&mockLLMExtractor{},
 		&mockEmbedClient{},
 		redis,
+		nil,
 	)
 
 	return service, factRepo, entityRepo, queue
@@ -255,6 +262,10 @@ func (m *mockVectorStore) Delete(ctx context.Context, collectionName string, ids
 	}
 	return nil
 }
+
+func (m *mockVectorStore) DeleteAllByUser(_ context.Context, _, _ string) error { return nil }
+
+func (m *mockVectorStore) DeleteAllByAgent(_ context.Context, _, _ string) error { return nil }
 
 func (m *mockVectorStore) CreateCollection(ctx context.Context, collectionName string, dimension int) error {
 	return nil // no-op for in-memory mock

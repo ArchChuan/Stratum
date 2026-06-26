@@ -39,9 +39,11 @@ func ErrorHandler(logger *zap.Logger) gin.HandlerFunc {
 		)
 
 		if !c.Writer.Written() {
-			c.JSON(status, gin.H{
-				"error": ginErr.Error(),
-			})
+			msg := ginErr.Error()
+			if status >= 500 {
+				msg = "internal server error"
+			}
+			c.JSON(status, gin.H{"error": msg})
 		}
 	}
 }
@@ -71,6 +73,16 @@ func CORSMiddleware(allowedOrigin string) gin.HandlerFunc {
 
 func TrustedProxies() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		c.Next()
+	}
+}
+
+// SecurityHeaders sets defensive HTTP response headers.
+func SecurityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		c.Next()
 	}
 }

@@ -18,6 +18,8 @@ type MemoryRepo interface {
 	Search(ctx context.Context, tenantID, userID, query string, limit int) ([]*domain.MemoryEntry, error)
 	Delete(ctx context.Context, tenantID, id string) error
 	ClearSession(ctx context.Context, tenantID, sessionID string) error
+	DeleteAllByUser(ctx context.Context, tenantID, userID string) error
+	DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error
 	Stats(ctx context.Context, tenantID string) (*domain.MemoryStats, error)
 	GetSummary(ctx context.Context, tenantID, sessionID string) (string, error)
 }

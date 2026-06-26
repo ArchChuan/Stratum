@@ -50,7 +50,7 @@ func (f *fakeAdminRepo) UpdatePatch(ctx context.Context, id string, patch iamdom
 	return f.updateFn(ctx, id, patch)
 }
 
-func (f *fakeAdminRepo) SoftDelete(ctx context.Context, id string) error {
+func (f *fakeAdminRepo) HardDelete(ctx context.Context, id string) error {
 	return f.deleteFn(ctx, id)
 }
 
@@ -140,7 +140,7 @@ func TestDeleteTenant_softDelete(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	if called != "tid1" {
-		t.Fatalf("expected SoftDelete to receive tid1, got %q", called)
+		t.Fatalf("expected HardDelete to receive tid1, got %q", called)
 	}
 }
 

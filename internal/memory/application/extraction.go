@@ -3,29 +3,52 @@ package application
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"go.uber.org/zap"
 )
 
 // ExtractFacts orchestrates fact extraction: LLM extraction → supersede check → entity normalization → persistence.
 func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsRequest) error {
-	// Concatenate messages for LLM extraction
+	s.logger.Debug("memory.extract_facts",
+		zap.String("tenant_id", req.TenantID),
+		zap.String("user_id", req.UserID),
+		zap.String("agent_id", req.AgentID),
+		zap.String("conversation_id", req.ConversationID),
+		zap.Int("message_count", len(req.Messages)),
+	)
+
 	var fullContent string
 	for _, msg := range req.Messages {
 		fullContent += msg.Role + ": " + msg.Content + "\n"
 	}
 
-	// Step 1: Call LLM to extract facts
-	extractedFacts, err := s.llmExtract.ExtractFacts(ctx, req.UserID, req.AgentID, fullContent)
+	extractor := s.llmExtract
+	if extractor == nil && s.llmExtractResolver != nil {
+		extractor = s.llmExtractResolver(ctx, req.TenantID)
+	}
+	if extractor == nil {
+		return fmt.Errorf("llm extractor not available for tenant %s", req.TenantID)
+	}
+	extractedFacts, err := extractor.ExtractFacts(ctx, req.UserID, req.AgentID, fullContent)
 	if err != nil {
+		s.logger.Error("memory.extract_facts: llm extraction failed",
+			zap.String("tenant_id", req.TenantID),
+			zap.String("user_id", req.UserID),
+			zap.Error(err),
+		)
 		return fmt.Errorf("llm extract: %w", err)
 	}
+	s.logger.Info("memory.extract_facts: llm extracted",
+		zap.String("tenant_id", req.TenantID),
+		zap.String("user_id", req.UserID),
+		zap.Int("fact_count", len(extractedFacts)),
+	)
 
-	// Step 2: Process each extracted fact
 	for _, extractedFact := range extractedFacts {
-		// Check supersede candidates (trigram similarity > 0.6)
 		candidates, err := s.factRepo.FindSupersedeCandidates(
 			ctx,
 			req.TenantID,
@@ -38,25 +61,22 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 		if err != nil {
 			return fmt.Errorf("find supersede candidates: %w", err)
 		}
-
 		// TODO: LLM supersede judgment (Task 3.5 - deferred)
-		// For now, skip supersede logic
 		_ = candidates
 
-		// Step 3: Normalize entities (upsert via fuzzy match)
 		for _, entityName := range extractedFact.Entities {
-			_, err := s.normalizeEntity(ctx, req.UserID, req.AgentID, entityName)
+			_, err := s.normalizeEntity(ctx, req.TenantID, req.UserID, req.AgentID, entityName)
 			if err != nil {
 				return fmt.Errorf("normalize entity %q: %w", entityName, err)
 			}
 		}
 
-		// Step 4: Create fact domain object
 		fact, err := domain.NewFact(
 			req.TenantID,
 			req.UserID,
 			req.AgentID,
-			string(domain.ScopeUser),
+			req.ConversationID,
+			req.Scope,
 			extractedFact.Content,
 			extractedFact.Importance,
 			extractedFact.Entities,
@@ -65,18 +85,28 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 			return fmt.Errorf("new fact: %w", err)
 		}
 
-		// Step 5: Insert fact to DB
 		if err := s.factRepo.Create(ctx, req.TenantID, fact); err != nil {
+			s.logger.Error("memory.extract_facts: persist fact failed",
+				zap.String("tenant_id", req.TenantID),
+				zap.String("fact_id", fact.ID),
+				zap.Error(err),
+			)
 			return fmt.Errorf("insert fact: %w", err)
 		}
 
-		// Step 6: Generate embedding and upsert to Milvus
-		vector, err := s.embedClient.Embed(ctx, fact.Content)
+		embedder := s.embedClient
+		if embedder == nil && s.embedClientResolver != nil {
+			embedder = s.embedClientResolver(ctx, req.TenantID)
+		}
+		if embedder == nil {
+			return fmt.Errorf("embed client not available for tenant %s", req.TenantID)
+		}
+		vector, err := embedder.Embed(ctx, fact.Content)
 		if err != nil {
 			return fmt.Errorf("embed text: %w", err)
 		}
 
-		collectionName := fmt.Sprintf("memory_facts_%s", req.TenantID)
+		collectionName := fmt.Sprintf("memory_facts_%s", strings.ReplaceAll(req.TenantID, "-", "_"))
 		doc := &port.VectorDoc{
 			ID:        fact.ID,
 			Embedding: vector,
@@ -93,34 +123,36 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 		}
 	}
 
+	s.logger.Info("memory.extract_facts: done",
+		zap.String("tenant_id", req.TenantID),
+		zap.String("user_id", req.UserID),
+		zap.Int("facts_stored", len(extractedFacts)),
+	)
 	return nil
 }
 
 // normalizeEntity finds or creates an entity, returning its ID.
 // Uses fuzzy matching (trigram similarity) to avoid duplicates.
-func (s *MemoryService) normalizeEntity(ctx context.Context, userID, agentID, name string) (string, error) {
-	// Fuzzy match existing entities (threshold 0.6)
-	existing, err := s.entityRepo.FindByNameAndType(ctx, userID, name, "", constants.MemorySupersedeCandidateMin)
+func (s *MemoryService) normalizeEntity(ctx context.Context, tenantID, userID, agentID, name string) (string, error) {
+	existing, err := s.entityRepo.FindByNameAndType(ctx, tenantID, userID, name, "", constants.MemorySupersedeCandidateMin)
 	if err != nil && err != domain.ErrEntityNotFound {
 		return "", fmt.Errorf("find entity: %w", err)
 	}
 
 	if existing != nil {
-		// Update fact count and last_seen_at
 		existing.IncrementFactCount()
-		if err := s.entityRepo.Update(ctx, existing); err != nil {
+		if err := s.entityRepo.Update(ctx, tenantID, existing); err != nil {
 			return "", fmt.Errorf("update entity: %w", err)
 		}
 		return existing.ID, nil
 	}
 
-	// Create new entity (type inferred as empty for now)
 	entity, err := domain.NewEntity(userID, agentID, string(domain.ScopeUser), name, "")
 	if err != nil {
 		return "", fmt.Errorf("new entity: %w", err)
 	}
 
-	if err := s.entityRepo.Create(ctx, entity); err != nil {
+	if err := s.entityRepo.Create(ctx, tenantID, entity); err != nil {
 		return "", fmt.Errorf("insert entity: %w", err)
 	}
 

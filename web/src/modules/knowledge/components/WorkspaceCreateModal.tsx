@@ -67,11 +67,11 @@ export const WorkspaceCreateModal = ({
       >
         <Select options={EMBEDDING_MODEL_OPTIONS} style={{ width: '100%' }} />
       </Form.Item>
-      <Form.Item label="查询模式" name="query_mode" initialValue="hybrid">
+      <Form.Item label="查询模式" name="query_mode" initialValue="vector">
         <Select>
-          <Option value="hybrid">混合（向量 + 图谱）</Option>
-          <Option value="vector">纯向量</Option>
-          <Option value="graph">纯图谱</Option>
+          <Option value="vector">向量检索</Option>
+          <Option value="keyword">关键词检索</Option>
+          <Option value="hybrid">混合检索（向量 + 关键词）</Option>
         </Select>
       </Form.Item>
       <Row gutter={12}>

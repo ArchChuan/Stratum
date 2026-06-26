@@ -489,186 +489,321 @@ stateDiagram-v2
 
 ---
 
-## 11. 异步记忆写入管道（详细）
+## 11. 用户记忆能力（业务流程 + 实现细节）
 
-ChatStore 落盘的 `chat_messages` 只是"短期记忆"（按 conversation_id 直读）。**长期记忆**走 outbox → JetStream → embedder → enricher 三段式异步管道，最终落到 Milvus 向量库 + PostgreSQL `memory_entries` + `entities` 表。
+Stratum 的"用户记忆"分为**短期**（按 `conversation_id` 直读 `chat_messages`）与**长期**（异步管道沉淀到 `memory_entries` / `memory_entities` / `memory_summaries` / Milvus 向量库）两层。  
+代码主路径在 `internal/memory/{application,infrastructure}` 和 `internal/agent/application/agent.go`，由 `api/wiring/memory.go` 按 Container 装配；写、读、召回、删除四条业务流彼此解耦但共用同一份数据。
 
-### 11.1 三段式管道总览
+### 11.1 数据归属与存储一览
+
+| 存储 | 表 / Collection | 写入方 | 读取方 | 备注 |
+|---|---|---|---|---|
+| PG · tenant schema | `chat_messages` | `ChatStore.AddMessage`（同事务） | `BaseAgent.Execute` 加载历史；前端 `/conversations/:id/messages` | 短期记忆唯一源 |
+| PG · tenant schema | `memory_outbox` | `ChatStore.AddMessage`（同事务） | `OutboxPoller` 出队 | 解耦"消息可见 ⟺ 事件可发" |
+| PG · tenant schema | `memory_entries` | `EnricherWorker.persistEnrichment` | `MemoryInjector.BuildContext`、`RecallHandler.textSearch` | 长期记忆富化结果（importance / keywords / token_estimate） |
+| PG · tenant schema | `memory_entities` | `EnricherWorker.persistEnrichment`（按 entity 循环 UPSERT） | `MemoryInjector.BuildContext` | 命名实体表，scope = user / agent |
+| PG · tenant schema | `memory_summaries` | `EnricherWorker.writeSummary`（条件触发） | `MemoryInjector.BuildContext` | 会话累计 token 超过阈值时滚动生成 |
+| PG · tenant schema | `memory_extraction_queue` | `MessageBuffer.flush` | （TODO，`BuildMemoryWorkers` 暂未上线 worker） | LLM 事实抽取队列 |
+| PG · tenant schema | `memory_facts` | `MemoryService.ExtractFacts` | `MemoryService.ForgetMemory` / `Clear*` | 事实抽取产物，soft-delete |
+| Milvus | `memory_<tenantID>`（短横线换下划线） | `EmbedderWorker` 通过 `MilvusVectorAdapter.Upsert` | `RecallHandler.tryVectorSearch` | 消息维度向量；scope/agent_id 走 metadata 过滤 |
+| Milvus | `memory_facts_<tenantID>` | `MemoryService.ExtractFacts` | `ForgetMemory` / `ClearUserMemories` 清理 | 事实维度向量 |
+
+> 命名规则：tenantID 含短横线时 Milvus collection 用下划线替换（见 `pkg/milvus/collections.go`、`api/wiring/memory.go: DeleteAllByUser`）。
+
+### 11.2 整体业务全景
 
 ```mermaid
 flowchart LR
-    subgraph Tx["事务边界 (BaseAgent.Execute)"]
-        Save[保存 chat_messages]
-        OB[INSERT memory_outbox<br/>同事务原子提交]
+    subgraph Write["写入路径"]
+        direction TB
+        H[BaseAgent.Execute]
+        H --> CS[ChatStore.AddMessage<br/>同事务双写 chat_messages + memory_outbox]
+        CS -.异步.-> OP[OutboxPoller<br/>NATS publish memory.raw.<tenantID>]
+        OP --> EM[EmbedderWorker<br/>Embed + Milvus.Upsert<br/>publish memory.enriched.<tenantID>]
+        EM --> EN[EnricherWorker<br/>LLM 富化 → memory_entries/entities<br/>条件触发 memory_summaries]
     end
 
-    subgraph Stage1["Stage 1: Outbox Poller (每 N 秒轮询全租户)"]
-        Pol[轮询每个 tenant_xxx schema<br/>FOR UPDATE SKIP LOCKED]
-        Pub1[NATS Publish<br/>memory.raw.<tenant_id>]
-        Del[DELETE FROM memory_outbox]
-        Pol --> Pub1 --> Del
+    subgraph Read["读取路径"]
+        direction TB
+        I[BaseAgent.Execute 启动时]
+        I --> Inj[MemoryInjector.BuildContext<br/>读 summaries + top entities]
+        Inj --> Sys[拼入 SystemPrompt 前缀<br/>--- Memory Context ---]
     end
 
-    subgraph Stage2["Stage 2: Embedder Worker (N 个并发)"]
-        Fetch1[JetStream Fetch 1 msg]
-        Resolve1[per-tenant EmbedClient resolver]
-        Embed[EmbedVector text → []float32]
-        Mil[Milvus.Upsert<br/>tenantID + userID + msgID + vector + metadata]
-        Pub2[NATS Publish<br/>memory.enriched.<tenant_id>]
-        Ack1[msg.Ack]
-        Fetch1 --> Resolve1 --> Embed --> Mil --> Pub2 --> Ack1
+    subgraph Recall["工具召回（ReAct 内）"]
+        direction TB
+        TC[stratum_recall_memory 工具]
+        TC --> RF[BaseAgent.RecallMemoryFn]
+        RF --> RH[RecallHandler.Handle<br/>1 vector search<br/>2 fallback ILIKE]
     end
 
-    subgraph Stage3["Stage 3: Enricher Worker (N 个并发)"]
-        Fetch2[JetStream Fetch 1 msg]
-        Resolve2[per-tenant LLMClient resolver]
-        Llm[LLM.Complete<br/>抽取实体/关键词/重要度<br/>Temperature=0.1]
-        Tx2[BEGIN tx · SET LOCAL search_path]
-        Up1[UPSERT memory_entries<br/>type=long_term + importance + keywords]
-        Up2[UPSERT entities<br/>GREATEST confidence 合并]
-        Commit[COMMIT]
-        Ack2[msg.Ack]
-        Fetch2 --> Resolve2 --> Llm --> Tx2 --> Up1 --> Up2 --> Commit --> Ack2
+    subgraph Clear["清理路径"]
+        direction TB
+        API[POST /memory/clear · DELETE 资源]
+        API --> MS[MemoryService.ClearUserMemories<br/>/ ClearAgentMemories / ForgetMemory]
     end
-
-    Save --> OB
-    OB -.每 N 秒.-> Pol
-    Pub1 -. JetStream MEMORY_RAW .-> Fetch1
-    Pub2 -. JetStream MEMORY_ENRICHED .-> Fetch2
 ```
 
-### 11.2 Outbox：原子写入 + 解耦发布
+四条路径在请求/事件层面解耦：写入与读取通过 PG + Milvus 持久化层联系；同步链路（agent 主流程）只触发"短期写"与"系统提示词注入"，长期富化全部走 NATS JetStream 异步。
+
+### 11.3 写入主路径：chat_messages 与 memory_outbox 同事务双写
+
+入口：`PgChatStore.AddMessage`（`internal/agent/infrastructure/persistence/chat_store.go`），由 `BaseAgent.Execute` 在 ReAct 收尾时调用两次（user、assistant 各一条）。
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Base as BaseAgent.Execute
-    participant CS as ChatStore (同事务)
-    participant OB as memory_outbox 表
-    participant Poll as OutboxPoller
-    participant JS as NATS JetStream
+    participant CS as PgChatStore.AddMessage
+    participant TX as PG TX (tenant schema)
+    participant OB as memory_outbox
 
-    Base->>CS: BEGIN TX
-    CS->>CS: INSERT chat_messages (user)
-    CS->>CS: INSERT chat_messages (assistant)
-    Note over CS,OB: 同一事务里写消息 + outbox<br/>保证"消息可见 ⟺ 事件可发"
-    CS->>OB: INSERT memory_outbox(payload=MemoryRawEvent)
-    Base->>CS: COMMIT
-
-    loop 每 PollInterval (默认 ~5s)
-        Poll->>Poll: ListTenantSchemas (全租户)
-        loop 每个 tenant_xxx
-            Poll->>OB: BEGIN TX · SET search_path · SELECT FOR UPDATE SKIP LOCKED LIMIT batch
-            Poll->>JS: Publish memory.raw.<tenant_id>
-            Poll->>OB: DELETE WHERE id = ANY(ids)
-            Poll->>OB: COMMIT
-        end
+    Base->>CS: AddMessage(user)
+    CS->>TX: BEGIN · SET LOCAL search_path = tenant_<id>, public
+    TX->>TX: UPDATE chat_conversations<br/>set updated_at, expires_at = NOW()+30d
+    TX->>TX: INSERT chat_messages RETURNING id, created_at
+    alt 过滤通过 memoryOutboxContent(role, content)
+        TX->>OB: INSERT memory_outbox(message_id, payload=JSON)
+        Note over OB: payload 字段：<br/>message_id, conversation_id, tenant_id,<br/>role, content, created_at, user_id,<br/>agent_id, scope
+    else 跳过原因
+        Note over CS: role 不在 user/assistant<br/>或 runes < MemoryOutboxMinRunes<br/>或 IsError / SkipOutbox
+        TX-->>TX: 只写 chat_messages
     end
+    TX->>TX: COMMIT
+    CS-->>Base: msg.ID, msg.CreatedAt
+    Base->>CS: AddMessage(assistant) （同上）
 ```
 
-**关键设计**
+**关键设计要点**
 
-| 设计点 | 含义 |
+| 设计点 | 含义 / 代码位置 |
 |---|---|
-| 同事务双写 | 业务表 + outbox 必须原子提交，否则消息可见但事件丢失（或反之） |
-| `FOR UPDATE SKIP LOCKED` | 多 poller 实例并存时不互相阻塞，"谁锁到谁负责" |
-| `SET LOCAL search_path` | 每个 tenant 独立 schema，poller 顺序轮询所有 schema |
-| 主题路由 `memory.raw.<tenant_id>` | JetStream 按 tenant 分流，下游可按租户做配额/限流 |
-| DELETE 在 publish 之后 | "至少一次"语义；publish 失败回滚事务保留行，下次再发 |
+| 同事务双写 | `chat_messages` 与 `memory_outbox` 在同一 `BEGIN…COMMIT` 内插入。chat_store.go 内的 `outboxQueued / outboxSkipReason` 双变量给后续日志使用。 |
+| Outbox 过滤 | `memoryOutboxContent` 只允许 `user` / `assistant`、`runes >= MemoryOutboxMinRunes`，并按 `MemoryOutboxMaxRunes` 截断；`SkipOutbox=true` 或 `IsError=true` 直接跳过。 |
+| Tenant 路由 | `execTenantID` 强制 `SET LOCAL search_path = "tenant_<id>", public`，并对 tenant_id 做字符白名单校验。 |
+| 用户/Agent 元信息 | `ChatMessage.UserID` / `AgentID` / `MemoryScope` 在 `BaseAgent.Execute` 写消息时一并传入，payload 直接随 outbox 落库，下游 worker 不再二次查询。 |
+| 失败回滚 | `tx.Rollback` 由 `execTenantID` 兜底，写失败时 `chat_messages` 与 `memory_outbox` 一起回滚——避免"消息可见但事件丢失"或"事件已发但消息丢失"。 |
 
-### 11.3 Embedder：向量化 + Milvus Upsert
+### 11.4 异步管道：Outbox → Embedder → Enricher
+
+管道生命周期由 `cmd/server` Harness 控制；构造在 `api/wiring/memory.go: buildMemory`，在 `MEMORY_PIPELINE_ENABLED=true` 且 NATS / Milvus 可达时启动。
+
+```mermaid
+flowchart LR
+    OB[(memory_outbox<br/>tenant_*)] -- ListTenantSchemas + FOR UPDATE SKIP LOCKED --> Poll[OutboxPoller<br/>Tick = MemoryOutboxPollInterval]
+    Poll -- Publish memory.raw.<tenantID><br/>+ DELETE id ANY ids --> RawSubj((memory.raw.&lt;tid&gt;))
+    RawSubj --> RawStream[(JetStream MEMORY_RAW)]
+    RawStream -- Fetch 1 / 5s --> Emb[EmbedderWorker × N<br/>EmbedderConsumerName]
+    Emb -- Upsert(tenantID,userID,msgID,vec,metadata) --> Milvus[(Milvus memory_&lt;tid&gt;)]
+    Emb -- Publish memory.enriched.<tenantID> --> EnrSubj((memory.enriched.&lt;tid&gt;))
+    EnrSubj --> EnrStream[(JetStream MEMORY_ENRICHED)]
+    EnrStream -- Fetch 1 / 5s --> Enr[EnricherWorker × N<br/>EnricherConsumerName]
+    Enr -- LLM.Complete(T=0.1) --> LLM[(per-tenant Gateway)]
+    Enr -- UPSERT --> Entries[(memory_entries)]
+    Enr -- UPSERT 循环 --> Entities[(memory_entities)]
+    Enr -. token 超阈值 .-> Summary[(memory_summaries)]
+```
+
+#### 11.4.1 OutboxPoller — 全租户轮询、SKIP LOCKED、至少一次
+
+`internal/memory/infrastructure/pipeline/outbox_poller.go`
+
+- 每 `MemoryOutboxPollInterval` 触发一次：`tenantdb.ListTenantSchemas` 拿全部 `tenant_xxx`，逐个调用 `pollTenant`。
+- 每个 tenant 单独事务：`SET LOCAL search_path`，`SELECT id, payload FROM memory_outbox ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED`。
+- 每条记录：`json.Unmarshal` → `MemoryRawEvent`，组装 subject `memory.raw.<tenantID>`，调用 `js.Publish`（带 `MemoryOutboxPublishTimeout` 超时）；publish 失败立刻 `return err`（事务回滚，下一轮重发，至少一次）。
+- 全部 publish 成功后 `DELETE FROM memory_outbox WHERE id = ANY($1)`，最后 `COMMIT`；Prometheus 计数 `outboxPublished{tenant_id, status}`。
+- 多实例并发：靠 `FOR UPDATE SKIP LOCKED`，互不阻塞——"谁锁到谁负责"。
+
+#### 11.4.2 EmbedderWorker — 向量化 + Milvus Upsert + 转发
+
+`internal/memory/infrastructure/pipeline/embedder.go`
 
 ```mermaid
 flowchart TB
-    Start([Fetch from MEMORY_RAW]) --> Unmar[UnmarshalRawEvent]
-    Unmar -- 解析失败 --> Ack0[Ack 丢弃 · log error]
+    Fetch([Fetch 1 msg from MEMORY_RAW]) --> Unmar[UnmarshalRawEvent]
+    Unmar -- 解析失败 --> AckErr[msg.Ack 丢弃 + 计数 error]
     Unmar -- ok --> Resolve{embedSvc nil?}
-    Resolve -- 否 --> Use[使用全局 embedSvc]
+    Resolve -- 否 --> UseGlobal[复用 embedSvc]
     Resolve -- 是 --> Per[embedResolver ctx, tenantID]
     Per --> Skip{nil?}
-    Skip -- 是 --> AckSkip[Ack 跳过 · log warn<br/>该租户未配 embedding]
-    Skip -- 否 --> Use
-    Use --> Embed[EmbedVector content]
-    Embed -- 失败 --> Nak1[Nak 重投递 · maxDeliver 后进 DLQ]
-    Embed -- ok --> Up[Milvus.Upsert<br/>tenantID/userID/msgID/vector + metadata]
-    Up -- 失败 --> Nak1
-    Up -- ok --> Pub[Publish memory.enriched.<tenant_id>]
-    Pub -- 失败 --> Nak1
-    Pub -- ok --> Ack1[msg.Ack · 计数 success]
+    Skip -- 是 --> AckSkip[msg.Ack 跳过 + log warn<br/>该 tenant 未配 embedding]
+    Skip -- 否 --> UseGlobal
+    UseGlobal --> Em[embedSvc.EmbedVector content]
+    Em -- err --> Nak1[msg.Nak · backoff Base→Max]
+    Em -- ok --> CheckV{vectorDB nil?}
+    CheckV -- 是 --> AckSkip2[Ack 跳过]
+    CheckV -- 否 --> Up[vectorDB.Upsert<br/>tenantID/userID/msgID/vec + metadata]
+    Up -- err --> Nak1
+    Up -- ok --> Marsh[Marshal MemoryEnrichedEvent VectorID=MessageID]
+    Marsh --> PubE[js.Publish memory.enriched.<tenantID>]
+    PubE -- err --> Nak1
+    PubE -- ok --> Ack[msg.Ack · 计数 success + 记录 latency]
 ```
 
-**Milvus 写入 metadata 字段**
+- Embedding client 优先用 wiring 注入的全局 `embedSvc`（当前 wiring 传 nil），否则用 `embedResolver(ctx, tenantID)` 解析的租户专属客户端；二者都拿不到时直接 Ack 跳过，避免无效重投。
+- Milvus collection 名按 tenant 取，写入 metadata：`conversation_id / user_id / agent_id / scope / role / content / created_at(RFC3339)`；向量 ID = `MessageID`，与 `chat_messages.id`、未来的 `memory_entries.id` 同源。
+- 失败统一 `msg.Nak`，由 JetStream 重投递；达到 `MaxDeliver` 后进 DLQ。`safeProcessMessage` 用 `defer recover` 把单条 panic 隔离在一条消息内。
+- Fetch 拉空 / 出错时按 `MemoryFetchBackoffBase → Max` 退避；`sleepCtx` 监听 `ctx.Done` 与 `stopCh`，保证关闭信号能立即生效。
 
-```text
-conversation_id · user_id · agent_id · role · content · created_at(RFC3339)
-```
+#### 11.4.3 EnricherWorker — LLM 富化 + 实体写入 + 摘要回滚
 
-向量 ID = `MessageID`（chat_message 主键）；后续 recall 时通过 ID 反查 `memory_entries` 拿到富化结果。
-
-### 11.4 Enricher：LLM 富化 + 关系图谱写入
+`internal/memory/infrastructure/pipeline/enricher.go`
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Worker as EnricherWorker
-    participant JS as JetStream
-    participant LLM as Per-Tenant LLM
-    participant DB as PostgreSQL (tenant schema)
+    participant W as EnricherWorker
+    participant JS as JetStream MEMORY_ENRICHED
+    participant LLM as per-tenant Gateway
+    participant DB as PG tenant schema
 
-    Worker->>JS: Fetch from MEMORY_ENRICHED
-    Worker->>Worker: UnmarshalEnrichedEvent
-
-    Worker->>LLM: Complete(prompt, T=0.1)
-    Note right of LLM: prompt 模板要求返回严格 JSON:<br/>{importance, keywords[], entities[], token_estimate}
-
-    LLM-->>Worker: JSON content
-    Worker->>Worker: json.Unmarshal → EnrichmentResult
-
-    alt 解析失败
-        Worker->>JS: msg.Nak (重试)
-    else 解析成功
-        Worker->>DB: BEGIN
-        Worker->>DB: SET LOCAL search_path = tenant_<id>
-        Worker->>DB: UPSERT memory_entries<br/>type=long_term · importance · keywords · token_estimate · enriched_at
-        loop 每个抽取出的 entity
-            Worker->>DB: UPSERT entities<br/>ON CONFLICT(name,type,user_id)<br/>confidence = GREATEST(old, new)
+    W->>JS: Fetch 1 msg
+    W->>W: UnmarshalEnrichedEvent
+    W->>LLM: Complete(model=EnrichModel,<br/>Temperature=0.1, timeout=MemoryEnrichLLMTimeout)
+    Note right of LLM: 返回 JSON：<br/>{importance, keywords[], entities[], token_estimate}
+    LLM-->>W: content (JSON)
+    alt JSON 解析或 LLM 失败
+        W->>JS: msg.Nak
+    else 成功
+        W->>DB: BEGIN · SET LOCAL search_path
+        W->>DB: INSERT memory_entries ON CONFLICT(id) DO UPDATE<br/>type=long_term, importance, keywords, token_estimate, enriched_at, conversation_id, created_at
+        loop 每个 entity
+            W->>DB: INSERT memory_entities ON CONFLICT(name, entity_type, user_id, COALESCE(agent_id,''))<br/>DO UPDATE last_seen_at = NOW()
         end
-        Worker->>DB: COMMIT
-        Worker->>JS: msg.Ack
+        W->>DB: COMMIT
+        W->>JS: msg.Ack
+
+        Note over W,DB: 摘要触发：必须在 Ack 之后 + 独立事务执行
+        W->>W: runSummaryAsyncSafe (defer recover)
+        W->>DB: 短 tx 读取 SUM(token_estimate) + 历史消息
+        alt 累计 ≥ SummaryTokenThreshold<br/>且近 1 分钟无新摘要
+            W->>LLM: Complete(SummaryModel, T=0.3, timeout=MemorySummaryLLMTimeout)
+            LLM-->>W: summary 文本
+            W->>DB: 独立 tx INSERT memory_summaries<br/>conversation_id, user_id, agent_id, scope, summary, covered_until, token_count
+        else 阈值未达 / 已有近期摘要
+            W-->>W: 直接返回 nil
+        end
     end
 ```
 
+**摘要旁路的关键修复**（来自 `enricher.go: maybeTriggerSummary` 注释）
+
+> 旧实现把 LLM Complete 塞进 `persistEnrichment` 的事务里，单条记录持锁 30s+，高 QPS 下 pgxpool 连接耗尽。现在拆成三段：短 tx 读阈值与历史 → 解锁后调 LLM → 另起 tx 写摘要；并且必须发生在 `msg.Ack` 之后，失败只 warn，绝不影响主富化结果。
+
 **重要不变量**
 
-- `memory_entries.id = chat_messages.id = vector_id`（Milvus），三库通过同一 UUID 串联
-- `entities` 唯一键 `(name, type, user_id)`：实体属于用户，不属于租户也不属于 conversation
-- 富化结果是**只读**事实：用户 UI 不直接展示 importance/keywords，只在 recall 时用做排序/过滤
-- LLM 解析失败会一直 Nak，达到 `maxDeliver` 后消息进死信队列；不会污染数据
+- `memory_entries.id = chat_messages.id = MemoryEnrichedEvent.MessageID = Milvus vector_id`，三库通过同一 UUID 串联。
+- `memory_entities` 唯一键 `(name, entity_type, user_id, COALESCE(agent_id, ''))`：scope=user 时 `agent_id` 为空，scope=agent 时按 agent 隔离。
+- LLM 不可控副作用全部隔离在富化阶段；ChatStore 与 Embedder 不会调用 LLM，主链路绝不被 LLM 延迟阻塞。
+- `safeProcessMessage` 与 `runSummaryAsyncSafe` 两道 `defer recover` 把"单条数据导致 worker 崩溃"的风险吃掉。
 
-### 11.5 召回：从 stratum_recall_memory 工具到 LLM
+### 11.5 备用写入通道：MessageBuffer + 事实抽取（演进中）
+
+`internal/memory/application/message_buffer.go` + `extraction.go`：与上面的"消息维度"管道并行，用于**事实级抽取**（更精细，但当前 worker 未在 `BuildMemoryWorkers` 中启用，处于演进状态）。
 
 ```mermaid
 flowchart LR
-    Tool[stratum_recall_memory<br/>query 参数] --> RecallFn[BaseAgent.RecallMemoryFn]
-    RecallFn --> Inj[MemoryInjector.Recall<br/>InjectionContext: tenant + user + agent + conv]
-    Inj --> Query[memory_repo.Search<br/>当前实现: 纯 SQL 搜索 memory_entries]
-    Query --> Format[拼装为 markdown 摘要文字]
-    Format --> Tooled[作为 role=tool 消息回填 ReActState.Messages]
-    Tooled --> NextLLM[下一轮 LLM 决定是否继续工具调用 / 直接答]
+    Call[MemoryService.BufferMessage] --> RPush[Redis RPUSH<br/>key memory:buffer:<tid>:<uid>:<aid>:<conv>]
+    RPush --> Cond{LLEN ≥ MemoryBufferFlushSize<br/>OR 最旧消息 age ≥ MemoryBufferFlushInterval?}
+    Cond -- 否 --> Wait[直接返回]
+    Cond -- 是 --> Flush[flush: LRANGE 0 -1 + Enqueue ExtractionTask + DEL key]
+    Flush --> Q[(PG memory_extraction_queue)]
+    Q -. TODO: ExtractionWorker .-> EF[MemoryService.ExtractFacts]
+    EF --> LLMx[LLMExtractor.ExtractFacts]
+    LLMx --> Norm[normalizeEntity<br/>trigram 模糊匹配 + IncrementFactCount]
+    Norm --> InsertF[FactRepo.Create memory_facts]
+    InsertF --> EmbedF[EmbedClient.Embed]
+    EmbedF --> MFV[(Milvus memory_facts_<tid>)]
 ```
 
-> 当前 `memory_repo.Search` 采用 PostgreSQL 全文/关键字检索（不是向量召回）；Milvus 向量库已写入但**召回路径暂未启用语义检索**，是已识别的演进点（参见观察 5279）。
+- **缓冲键**：`memory:buffer:<tenant>:<user>:<agent>:<conv>`，按会话维度合批，避免单条消息频繁触发 LLM。
+- **触发条件**：批数 ≥ `MemoryBufferFlushSize` 或最早消息超过 `MemoryBufferFlushInterval` 即 flush。flush 完成后立刻 `DEL` 整个 key。
+- **`ExtractFacts`**：拼接所有消息 → LLM 抽取事实数组 → 对每个事实：`FindSupersedeCandidates`（trigram 相似度，supersede 决策 TODO） → `normalizeEntity`（fuzzy match 升级旧实体 fact_count，否则新建） → `domain.NewFact` 校验后写 `memory_facts` → `EmbedClient.Embed` 后写 `memory_facts_<tenantID>`。
+- **现状**：`BuildMemoryWorkers` 仍是空切片（占位 TODO），表示 ExtractionWorker / SupersedeWorker / ProfileWorker / GCWorker 暂未在 Container 中拉起；这条通道目前由 API 直接调用 `BufferMessage` / `ExtractFacts` 触发，agent 主链路不依赖它。
 
-### 11.6 失败语义与背压
+### 11.6 读取路径 A：系统提示词注入
 
-| 失败位置 | 语义 | 防护 |
+`BaseAgent.Execute` 启动时通过 `MemoryInjector.BuildContext`（`internal/memory/infrastructure/pipeline/injector.go`）把"近期摘要 + 高频实体"注入 system prompt。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Base as BaseAgent.Execute
+    participant Inj as MemoryInjector.BuildContext
+    participant DB as PG tenant schema
+
+    Base->>Inj: ic InjectionContext<br/>(TenantID, UserID, AgentID, ConversationID, Query, Scope)
+    Inj->>DB: BEGIN · SET LOCAL search_path = tenant_<id>, public
+    Inj->>DB: SELECT summary FROM memory_summaries<br/>WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1
+    alt scope == "agent" && agentID 非空
+        Inj->>DB: SELECT name FROM memory_entities<br/>WHERE user_id=$1 AND agent_id=$2<br/>AND scope='agent' AND status='active'<br/>ORDER BY last_seen_at DESC LIMIT EnricherTopEntities
+    else
+        Inj->>DB: SELECT name FROM memory_entities<br/>WHERE user_id=$1 AND scope='user' AND status='active'<br/>ORDER BY last_seen_at DESC LIMIT EnricherTopEntities
+    end
+    Inj-->>Base: "[Memory Context]\nSummary: ...\nKey Entities: a, b, c\n"
+    Base->>Base: BuildContextMessages(systemPrompt, memCtx, history, input, ...)
+```
+
+- 全部走只读事务，失败只 `Warn` 不阻塞主链路（`agent.go: memory injection failed`）。
+- 摘要与实体都空时返回空串，避免在 prompt 上加噪声。
+- `Scope` 由 agent 配置中的 `MemoryScope` 决定（user 全局共享 / agent 按代理隔离），同一 UserID 不同 Agent 在 scope=user 下可共享实体，scope=agent 下完全独立。
+
+### 11.7 读取路径 B：stratum_recall_memory 工具召回
+
+ReAct 期间，LLM 可以选择调用 `stratum_recall_memory` 工具——agent.go 在 `MemoryInjector != nil` 时把它注册到 `availableTools`，handler 是 `RecallHandler.Handle`（`internal/memory/infrastructure/pipeline/recall_tool.go`），由 `api/wiring/memory.go` 暴露为 `RecallMemoryFn`。
+
+```mermaid
+flowchart LR
+    Tool[LLM 调用 stratum_recall_memory<br/>input: query + limit] --> Fn[BaseAgent.RecallMemoryFn<br/>注入 tenantID/userID/agentID/scope]
+    Fn --> H[RecallHandler.Handle]
+    H --> Try{embedSvc + vectorDB 可用?}
+    Try -- 否 --> Text[textSearch]
+    Try -- 是 --> Em[EmbedVector query]
+    Em -- err --> Text
+    Em -- ok --> Filter{构造 Milvus expr}
+    Filter --> Vec[vectorDB.SearchWithFilter<br/>collection=memory_<tid>,<br/>topK=MemoryLongTermTopK]
+    Vec -- 命中 --> JsonV[json.Marshal RecallEntry array]
+    Vec -- 空/err --> Text
+    Text --> SQL[BEGIN · SET search_path<br/>SELECT content, role, importance, created_at<br/>FROM memory_entries<br/>WHERE enriched_at IS NOT NULL<br/>AND content ILIKE %query%<br/>AND user_id = $<br/>AND (scope='user' OR scope='agent' + agent_id)]
+    SQL --> Order[ORDER BY importance DESC, created_at DESC LIMIT req.Limit]
+    Order --> JsonT[json.Marshal 或 "No relevant memories found."]
+    JsonV --> Out[作为 role=tool 消息回填 ReActState.Messages]
+    JsonT --> Out
+```
+
+- **向量优先 + 降级 ILIKE**：embedding / Milvus 可用时走语义召回；任何环节失败（embedding error / vector 空命中）平滑降级到全文 ILIKE。
+- **scope 过滤**：scope=agent 时叠加 `agent_id == "<id>"`；user_id 含引号或反斜杠时直接拒绝（防注入）。
+- **限流**：`limit` 默认 5，最大 20；vector 路径用 `constants.MemoryLongTermTopK`。
+- **可观测**：`memory.recall.vector` / `memory.recall` 两段 Debug 日志，带 trace_id、tenant_id、query、命中数。
+- 工具结果作为 `role=tool` 消息回填 `ReActState.Messages`，下一轮 LLM 决定继续调用工具还是直接产出答案。
+
+### 11.8 删除与清理路径
+
+| API / 触发 | 调用 | 影响范围 |
 |---|---|---|
-| outbox 同事务写入 | 业务事务回滚 → 事件不发布 | 业务表与 outbox 强一致 |
-| poller publish 失败 | 事务 rollback 保留 outbox 行 | 下次轮询重发 |
-| embedder Embed 失败 | Nak → 重新投递 | `maxDeliver` 上限后转 DLQ |
-| embedder Milvus 失败 | Nak | 同上；vectorDB 故障时 backlog 累积 |
-| enricher LLM 失败 | Nak | 同上；DLQ 由人工 / 巡检处理 |
-| 全管道关闭 | `Pipeline.Stop()` 取消 ctx + Wait wg | outbox 行保留，重启后续传 |
+| `MemoryService.ForgetMemory(factID)` | `FactRepo.Update(MarkDeleted)` + Milvus `memory_facts_<tid>` 删 ID（best-effort） | 单条事实 soft-delete；孤立向量由 GC worker 兜底 |
+| `MemoryService.ClearUserMemories` | `FactRepo.DeleteAllByUser` + Milvus `memory_<tid>` `DeleteByFilter("user_id == ..." )` + `MemoryRepo.DeleteAllByUser` + `EntityRepo.DeleteAllByUser` | 同租户内某 user 全量硬删（facts + entries + entities + 向量） |
+| `MemoryService.ClearAgentMemories` | `FactRepo.DeleteAllByAgent` 返回 IDs + Milvus `memory_facts_<tid>.Delete(IDs)` + `MemoryRepo.DeleteAllByAgent` | 单 agent 全量硬删；当前 entities 不按 agent 删（按 CLAUDE.md 历史记录是未完成项） |
+| DELETE conversation | `PgChatStore.DeleteConversation` | 删 `chat_messages` + `chat_conversations`；不级联清 long-term（依赖上面三个 API 主动调用） |
+
+> 多租户路由：所有删除调用都通过 `execTenant(ctx, tenantID, fn)` 或 `execTenantID` 切到 `tenant_<id>` schema；Milvus collection 名按 tenantID 拼接（短横线 → 下划线）；缺一个就会把删除请求打到 public schema，复现历史 SQLSTATE 42P01 bug。
+
+### 11.9 失败语义与背压（端到端）
+
+| 位置 | 失败语义 | 防护 / 兜底 |
+|---|---|---|
+| `ChatStore.AddMessage` 同事务双写 | 业务 tx 回滚 → 既不留消息也不留 outbox | 强一致；调用方只看到一个 error |
+| `OutboxPoller.pollTenant` publish 失败 | tx 回滚保留 outbox 行 | 下一轮重发；多实例并发用 `FOR UPDATE SKIP LOCKED` |
+| `OutboxPoller` json.Unmarshal 失败 | 仅日志 + 把 id 加入待删列表（脏数据自动出队） | 不会卡死队列；用 metrics 监控 |
+| `EmbedderWorker` Embedding 失败 | `msg.Nak` + backoff 重投 | 达到 `MaxDeliver` 进 DLQ |
+| `EmbedderWorker` Milvus 失败 | 同上 | vectorDB 故障时只影响向量化，PG 主链路不受影响 |
+| `EmbedderWorker` publish enriched 失败 | 同上 | "已 Upsert Milvus 但未发 enriched"会等下次重投；Upsert 幂等可重放 |
+| `EnricherWorker` LLM 失败 / JSON 解析失败 | `msg.Nak` 重试，超过 `MaxDeliver` 进 DLQ | 不污染数据库 |
+| `EnricherWorker` persistEnrichment 失败 | tx 回滚 + `msg.Nak` | 至少一次写；`ON CONFLICT DO UPDATE` 保证幂等 |
+| `EnricherWorker` 摘要触发失败 | `runSummaryAsyncSafe` 只 warn | 主富化已 Ack，绝不返工；摘要下次累计达阈值再尝试 |
+| `MemoryInjector.BuildContext` 失败 | agent.go 捕获并 `Warn`，memCtx 留空 | 主链路不阻塞 |
+| `RecallHandler.tryVectorSearch` 失败 | 自动降级到 `textSearch` | 始终返回结果（可能为空字符串） |
+| `Pipeline.Stop()` | 关闭独立 ctx + WaitGroup | outbox 残留行下次重启续传；JetStream 持久化保留未 Ack 消息 |
 
 ---
 

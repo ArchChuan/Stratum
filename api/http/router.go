@@ -3,8 +3,10 @@ package http
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/time/rate"
 
 	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -21,6 +23,7 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	// Middleware (order matches the legacy api.SetupRouter exactly).
 	r.Use(middleware.ErrorHandler(c.Logger))
 	r.Use(middleware.TraceMiddleware(c.Logger))
+	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.CORSMiddleware(c.Config.FrontendURL))
 	r.Use(middleware.MetricsMiddleware(c.Platform.Metrics))
 
@@ -58,12 +61,13 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		GlobalAdmin:       cfg.GlobalAdminGitHubLogin,
 		SecureCookies:     cfg.SecureCookies,
 	})
+	authLimiter := middleware.NewRateLimiterStore(rate.Every(90*time.Second), 10)
 	authRoutes := r.Group("/auth")
 	{
 		authRoutes.GET("/github", authHandler.GitHubLogin)
-		authRoutes.GET("/github/callback", authHandler.GitHubCallback)
-		authRoutes.POST("/register", authHandler.Register)
-		authRoutes.POST("/refresh", authHandler.Refresh)
+		authRoutes.GET("/github/callback", middleware.RateLimit(authLimiter), authHandler.GitHubCallback)
+		authRoutes.POST("/register", middleware.RateLimit(authLimiter), authHandler.Register)
+		authRoutes.POST("/refresh", middleware.RateLimit(authLimiter), authHandler.Refresh)
 		authRoutes.POST("/logout", authHandler.Logout)
 		authRoutes.GET("/me", authHandler.Me)
 		authRoutes.POST("/switch-tenant", authHandler.SwitchTenant)
@@ -89,7 +93,6 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	tenantGroup := r.Group("/tenant", jwtMW, middleware.InjectTenantContext(), middleware.RequireTenantRole("member"))
 	{
 		tenantGroup.GET("/members", tenantHandler.ListMembers)
-		tenantGroup.POST("/members/invite", tenantHandler.InviteMember)
 		tenantGroup.PATCH("/members/:user_id/role", tenantHandler.UpdateMemberRole)
 		tenantGroup.DELETE("/members/:user_id", tenantHandler.RemoveMember)
 		tenantGroup.GET("/settings", tenantHandler.GetSettings)

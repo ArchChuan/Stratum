@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"go.uber.org/zap"
 )
@@ -28,6 +27,7 @@ type Component interface {
 // Harness manages the application lifecycle and components
 type Harness struct {
 	components map[string]Component
+	order      []string // registration order, used for deterministic start/stop
 	logger     *zap.Logger
 	mu         sync.RWMutex
 	started    bool
@@ -56,11 +56,12 @@ func (h *Harness) Register(comp Component) error {
 	}
 
 	h.components[name] = comp
+	h.order = append(h.order, name)
 	h.logger.Info("Component registered", zap.String("component", name))
 	return nil
 }
 
-// Start initializes all registered components
+// Start initializes all registered components in registration order
 func (h *Harness) Start(ctx context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -71,13 +72,15 @@ func (h *Harness) Start(ctx context.Context) error {
 
 	h.logger.Info("Starting harness", zap.Int("components", len(h.components)))
 
-	for name, comp := range h.components {
+	var started []string
+	for _, name := range h.order {
+		comp := h.components[name]
 		if err := comp.Start(ctx); err != nil {
 			h.logger.Error("Failed to start component", zap.String("component", name), zap.Error(err))
-			// Stop any components that were already started
-			h.stopStartedComponents(ctx, name)
+			h.stopStartedComponents(ctx, started)
 			return fmt.Errorf("failed to start component %s: %w", name, err)
 		}
+		started = append(started, name)
 		h.logger.Info("Component started", zap.String("component", name))
 	}
 
@@ -86,7 +89,7 @@ func (h *Harness) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts down all components in reverse order
+// Stop gracefully shuts down all components in reverse registration order
 func (h *Harness) Stop(ctx context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -96,19 +99,7 @@ func (h *Harness) Stop(ctx context.Context) error {
 	}
 
 	h.logger.Info("Stopping harness")
-
-	// Stop components in reverse registration order
-	names := h.getRegistrationOrder()
-	for i := len(names) - 1; i >= 0; i-- {
-		name := names[i]
-		comp := h.components[name]
-		if err := comp.Stop(ctx); err != nil {
-			h.logger.Error("Failed to stop component", zap.String("component", name), zap.Error(err))
-		} else {
-			h.logger.Info("Component stopped", zap.String("component", name))
-		}
-	}
-
+	h.stopStartedComponents(ctx, h.order)
 	h.started = false
 	h.logger.Info("Harness stopped")
 	return nil
@@ -135,34 +126,21 @@ func (h *Harness) GetComponent(name string) (Component, bool) {
 	return comp, exists
 }
 
-// getRegistrationOrder returns component names in registration order
-func (h *Harness) getRegistrationOrder() []string {
-	order := make([]string, 0, len(h.components))
-	for name := range h.components {
-		order = append(order, name)
-	}
-	return order
-}
-
-// stopStartedComponents stops all components before the failed one
-func (h *Harness) stopStartedComponents(ctx context.Context, failedName string) {
-	for name, comp := range h.components {
-		if name == failedName {
-			break
-		}
-		if err := comp.Stop(ctx); err != nil {
-			h.logger.Error("Failed to stop component during rollback", zap.String("component", name), zap.Error(err))
+// stopStartedComponents stops the given components in reverse order.
+func (h *Harness) stopStartedComponents(ctx context.Context, started []string) {
+	for i := len(started) - 1; i >= 0; i-- {
+		name := started[i]
+		if err := h.components[name].Stop(ctx); err != nil {
+			h.logger.Error("Failed to stop component", zap.String("component", name), zap.Error(err))
+		} else {
+			h.logger.Info("Component stopped", zap.String("component", name))
 		}
 	}
 }
 
 // Run starts the harness and waits for context cancellation
 func (h *Harness) Run(ctx context.Context) error {
-	// Add startup timeout to prevent hanging during component initialization
-	startCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if err := h.Start(startCtx); err != nil {
+	if err := h.Start(ctx); err != nil {
 		return err
 	}
 	defer h.Stop(ctx) //nolint:errcheck

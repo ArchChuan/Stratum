@@ -119,6 +119,9 @@ func isSafeTenantIDChar(r rune) bool {
 //go:embed tenant_schema.sql
 var tenantSchemaDDL string
 
+//go:embed public_schema.sql
+var publicSchemaDDL string
+
 // ProvisionTenantSchema creates the schema for tenantID (if not exists) and
 // executes all per-tenant DDL within that schema. Safe to call multiple times.
 func ProvisionTenantSchema(ctx context.Context, pool *pgxpool.Pool, tenantID string) error {
@@ -137,7 +140,12 @@ func ProvisionTenantSchema(ctx context.Context, pool *pgxpool.Pool, tenantID str
 	if err != nil {
 		return fmt.Errorf("postgres: acquire conn: %w", err)
 	}
-	defer conn.Release()
+	defer func() {
+		// Reset search_path before returning to PgBouncer pool to avoid poisoning
+		// other callers that acquire this server connection in transaction pooling mode.
+		conn.Exec(ctx, `RESET search_path`) //nolint:errcheck
+		conn.Release()
+	}()
 
 	if _, err := conn.Exec(ctx, fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS "%s"`, schemaName)); err != nil {
 		return fmt.Errorf("postgres: create schema %s: %w", schemaName, err)
@@ -174,15 +182,30 @@ func stripSQLLineComments(stmt string) string {
 	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
+// splitStatements splits on `;` while respecting `$$` dollar-quote blocks
+// so that PL/pgSQL function bodies with internal semicolons are not torn apart.
 func splitStatements(sql string) []string {
-	parts := strings.Split(sql, ";")
-	result := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if s := strings.TrimSpace(p); s != "" {
-			result = append(result, s)
+	sql = stripSQLLineComments(sql)
+	var stmts []string
+	inDollarQuote := false
+	start := 0
+	for i := 0; i < len(sql); i++ {
+		if i+1 < len(sql) && sql[i] == '$' && sql[i+1] == '$' {
+			inDollarQuote = !inDollarQuote
+			i++
+			continue
+		}
+		if sql[i] == ';' && !inDollarQuote {
+			if s := strings.TrimSpace(sql[start:i]); s != "" {
+				stmts = append(stmts, s)
+			}
+			start = i + 1
 		}
 	}
-	return result
+	if s := strings.TrimSpace(sql[start:]); s != "" {
+		stmts = append(stmts, s)
+	}
+	return stmts
 }
 
 const defaultTenantName = "默认租户"
@@ -192,7 +215,7 @@ const defaultTenantSlug = "default"
 // Idempotent — checks the partial unique index (is_default = true) via SELECT first.
 func EnsureDefaultTenant(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) error {
 	var existing string
-	err := pool.QueryRow(ctx, `SELECT id FROM tenants WHERE is_default = true LIMIT 1`).Scan(&existing)
+	err := pool.QueryRow(ctx, `SELECT id FROM public.tenants WHERE is_default = true LIMIT 1`).Scan(&existing)
 	if err == nil {
 		logger.Info("default tenant already exists", zap.String("tenant_id", existing))
 		return nil
@@ -200,7 +223,7 @@ func EnsureDefaultTenant(ctx context.Context, pool *pgxpool.Pool, logger *zap.Lo
 
 	var id string
 	err = pool.QueryRow(ctx, `
-		INSERT INTO tenants (name, slug, plan, status, settings, is_default, created_at, updated_at)
+		INSERT INTO public.tenants (name, slug, plan, status, settings, is_default, created_at, updated_at)
 		VALUES ($1, $2, 'free', 'active', '{}'::jsonb, true, now(), now())
 		RETURNING id`,
 		defaultTenantName, defaultTenantSlug,
@@ -209,6 +232,22 @@ func EnsureDefaultTenant(ctx context.Context, pool *pgxpool.Pool, logger *zap.Lo
 		return fmt.Errorf("postgres: ensure default tenant: %w", err)
 	}
 	logger.Info("created default tenant", zap.String("tenant_id", id))
+	return nil
+}
+
+// ProvisionPublicSchema applies idempotent DDL for the public schema on every startup.
+// Equivalent to ProvisionTenantSchema but for the shared public schema.
+func ProvisionPublicSchema(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) error {
+	for i, stmt := range splitStatements(publicSchemaDDL) {
+		stmt = stripSQLLineComments(strings.TrimSpace(stmt))
+		if stmt == "" {
+			continue
+		}
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("postgres: public schema stmt %d: %w", i, err)
+		}
+	}
+	logger.Info("public schema provisioned")
 	return nil
 }
 

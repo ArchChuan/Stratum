@@ -2,11 +2,14 @@ package wiring
 
 import (
 	"context"
+	"time"
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	persistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
+	"github.com/google/uuid"
 )
 
 // Agent groups the agent persistence/registry services and execution
@@ -49,6 +52,9 @@ func (c *Container) buildAgent(_ context.Context) error {
 	if c.Memory != nil && c.Memory.Injector != nil {
 		registry.SetMemoryInjector(c.Memory.Injector)
 	}
+	if c.Config.GlobalAgentSystemPrompt != "" {
+		registry.SetGlobalSystemSuffix(c.Config.GlobalAgentSystemPrompt)
+	}
 	if c.Memory != nil && c.Memory.RecallFn != nil {
 		registry.SetRecallMemoryFn(c.Memory.RecallFn)
 	}
@@ -59,9 +65,11 @@ func (c *Container) buildAgent(_ context.Context) error {
 		a.ChatStore = persistence.NewPgChatStore(db, c.Logger)
 		a.SkillLookup = persistence.NewPgSkillLookup(db)
 		a.TenantSettings = persistence.NewPgTenantSettings(db)
+		var skillAdapter agentport.Adapter
 		if c.Skill != nil {
-			a.TenantResolver = newTenantCapabilityResolver(db, c.Platform.AESKey, c.Platform.GatewayCache, c.Skill.SkillAdapter, c.Logger)
+			skillAdapter = c.Skill.SkillAdapter
 		}
+		a.TenantResolver = newTenantCapabilityResolver(db, c.Platform.AESKey, c.Platform.GatewayCache, skillAdapter, c.Logger)
 	}
 
 	deps := agent.AgentServiceDeps{
@@ -84,6 +92,20 @@ func (c *Container) buildAgent(_ context.Context) error {
 	}
 	if c.Memory != nil && c.Memory.Service != nil {
 		deps.MemoryCleaner = c.Memory.Service
+		svc := c.Memory.Service
+		deps.MemoryBuffer = func(ctx context.Context, tenantID, userID, agentID, conversationID, scope, role, content string) error {
+			return svc.BufferMessage(ctx, &memapp.BufferMessageRequest{
+				TenantID:       tenantID,
+				UserID:         userID,
+				AgentID:        agentID,
+				ConversationID: conversationID,
+				Scope:          scope,
+				Role:           role,
+				Content:        content,
+				MessageID:      uuid.Must(uuid.NewV7()).String(),
+				CreatedAt:      time.Now(),
+			})
+		}
 	}
 	a.Service = agent.NewAgentService(deps)
 

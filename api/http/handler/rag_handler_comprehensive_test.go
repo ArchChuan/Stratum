@@ -39,10 +39,8 @@ func setupRAGRouter(handler *RAGHandler) *gin.Engine {
 func newTestRAGHandler(logger *zap.Logger) *RAGHandler {
 	embedSvc := embedding.NewEmbeddingService(llmgateway.NewQwenClient("", logger), logger)
 	vectorStore := vector.NewVectorStore("localhost", "19530", logger)
-	graphRAG := knowledge.NewMockGraphStore()
-	ragService := knowledge.NewRAGService(embedSvc, vectorStore, graphRAG, logger)
-	wsService := knowledge.NewWorkspaceService(nil, nil, logger)
-	return NewRAGHandler(ragService, wsService, logger)
+	ragService := knowledge.NewRAGService(embedSvc, vectorStore, logger)
+	return NewRAGHandler(ragService, nil, logger)
 }
 
 func TestRAGHandlerUploadDocument(t *testing.T) {

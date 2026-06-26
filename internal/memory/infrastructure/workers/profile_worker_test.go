@@ -15,22 +15,22 @@ import (
 
 type stubEntityRepo struct {
 	listProfilesFunc func(context.Context, domain.ScopeFilter, int) ([]*domain.MemoryEntity, error)
-	updateFunc       func(context.Context, *domain.MemoryEntity) error
+	updateFunc       func(context.Context, string, *domain.MemoryEntity) error
 }
 
-func (r *stubEntityRepo) Create(ctx context.Context, entity *domain.MemoryEntity) error {
+func (r *stubEntityRepo) Create(ctx context.Context, tenantID string, entity *domain.MemoryEntity) error {
 	return nil
 }
 
-func (r *stubEntityRepo) GetByID(ctx context.Context, id string) (*domain.MemoryEntity, error) {
+func (r *stubEntityRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.MemoryEntity, error) {
 	return nil, nil
 }
 
-func (r *stubEntityRepo) Update(ctx context.Context, entity *domain.MemoryEntity) error {
-	return r.updateFunc(ctx, entity)
+func (r *stubEntityRepo) Update(ctx context.Context, tenantID string, entity *domain.MemoryEntity) error {
+	return r.updateFunc(ctx, tenantID, entity)
 }
 
-func (r *stubEntityRepo) FindByNameAndType(ctx context.Context, userID, name, entityType string, threshold float64) (*domain.MemoryEntity, error) {
+func (r *stubEntityRepo) FindByNameAndType(ctx context.Context, tenantID, userID, name, entityType string, threshold float64) (*domain.MemoryEntity, error) {
 	return nil, domain.ErrEntityNotFound
 }
 
@@ -38,8 +38,16 @@ func (r *stubEntityRepo) ListProfiles(ctx context.Context, filter domain.ScopeFi
 	return r.listProfilesFunc(ctx, filter, limit)
 }
 
-func (r *stubEntityRepo) CountByUser(ctx context.Context, userID string) (int, error) {
+func (r *stubEntityRepo) CountByUser(ctx context.Context, tenantID, userID string) (int, error) {
 	return 0, nil
+}
+
+func (r *stubEntityRepo) DeleteAllByUser(ctx context.Context, tenantID, userID string) error {
+	return nil
+}
+
+func (r *stubEntityRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
+	return nil
 }
 
 type stubProfiler struct {
@@ -62,7 +70,7 @@ func TestProfileWorker_RebuildsProfiles(t *testing.T) {
 		listProfilesFunc: func(ctx context.Context, filter domain.ScopeFilter, limit int) ([]*domain.MemoryEntity, error) {
 			return []*domain.MemoryEntity{entity}, nil
 		},
-		updateFunc: func(ctx context.Context, e *domain.MemoryEntity) error {
+		updateFunc: func(ctx context.Context, tenantID string, e *domain.MemoryEntity) error {
 			updatedEntity = e
 			return nil
 		},
@@ -70,8 +78,8 @@ func TestProfileWorker_RebuildsProfiles(t *testing.T) {
 
 	factRepo := &stubFactRepo{
 		findCandidatesFunc: func(ctx context.Context, tenantID, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
-			fact1, _ := domain.NewFact("", "user1", "agent1", string(domain.ScopeUser), "Alice loves coffee", 0.8, nil)
-			fact2, _ := domain.NewFact("", "user1", "agent1", string(domain.ScopeUser), "Alice works at Acme", 0.7, nil)
+			fact1, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "Alice loves coffee", 0.8, nil)
+			fact2, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "Alice works at Acme", 0.7, nil)
 			return []*domain.MemoryFact{fact1, fact2}, nil
 		},
 	}
@@ -103,7 +111,7 @@ func TestProfileWorker_SkipsIfNotNeeded(t *testing.T) {
 		listProfilesFunc: func(ctx context.Context, filter domain.ScopeFilter, limit int) ([]*domain.MemoryEntity, error) {
 			return []*domain.MemoryEntity{entity}, nil
 		},
-		updateFunc: func(ctx context.Context, e *domain.MemoryEntity) error {
+		updateFunc: func(ctx context.Context, tenantID string, e *domain.MemoryEntity) error {
 			updated = true
 			return nil
 		},
@@ -123,7 +131,7 @@ func TestProfileWorker_HandlesProfilerError(t *testing.T) {
 		listProfilesFunc: func(ctx context.Context, filter domain.ScopeFilter, limit int) ([]*domain.MemoryEntity, error) {
 			return []*domain.MemoryEntity{entity}, nil
 		},
-		updateFunc: func(ctx context.Context, e *domain.MemoryEntity) error {
+		updateFunc: func(ctx context.Context, tenantID string, e *domain.MemoryEntity) error {
 			t.Fatal("should not call update on profiler error")
 			return nil
 		},
@@ -131,7 +139,7 @@ func TestProfileWorker_HandlesProfilerError(t *testing.T) {
 
 	factRepo := &stubFactRepo{
 		findCandidatesFunc: func(ctx context.Context, tenantID, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
-			fact, _ := domain.NewFact("", "user1", "agent1", string(domain.ScopeUser), "test", 0.5, nil)
+			fact, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "test", 0.5, nil)
 			return []*domain.MemoryFact{fact}, nil
 		},
 	}

@@ -37,15 +37,17 @@ type EntityExtraction struct {
 // extraction, persists enrichment results, and triggers conversation
 // summaries when the token budget is exceeded.
 type EnricherWorker struct {
-	consumer     jetstream.Consumer
-	pool         *pgxpool.Pool
-	llmResolver  LLMResolver
-	logger       *zap.Logger
-	model        string
-	summaryModel string
-	threshold    int
-	stopCh       chan struct{}
-	stopOnce     sync.Once
+	consumer       jetstream.Consumer
+	pool           *pgxpool.Pool
+	llmResolver    LLMResolver
+	logger         *zap.Logger
+	model          string
+	summaryModel   string
+	threshold      int
+	enrichmentTmpl string
+	summaryTmpl    string
+	stopCh         chan struct{}
+	stopOnce       sync.Once
 }
 
 // NewEnricherWorker creates an enricher configured from the pipeline Config.
@@ -68,13 +70,15 @@ func NewEnricherWorker(
 		threshold = constants.EnricherSummaryTokenThreshold
 	}
 	return &EnricherWorker{
-		consumer:     consumer,
-		pool:         pool,
-		logger:       logger,
-		model:        model,
-		summaryModel: summaryModel,
-		threshold:    threshold,
-		stopCh:       make(chan struct{}),
+		consumer:       consumer,
+		pool:           pool,
+		logger:         logger,
+		model:          model,
+		summaryModel:   summaryModel,
+		threshold:      threshold,
+		enrichmentTmpl: cfg.EnrichmentPrompt,
+		summaryTmpl:    cfg.SummaryPrompt,
+		stopCh:         make(chan struct{}),
 	}
 }
 
@@ -243,7 +247,7 @@ func (w *EnricherWorker) callEnrichLLM(ctx context.Context, tenantID, role, cont
 	if llm == nil {
 		return nil, fmt.Errorf("no llm client configured for tenant %s", tenantID)
 	}
-	prompt := formatEnrichmentPrompt(role, content)
+	prompt := formatEnrichmentPrompt(w.enrichmentTmpl, role, content)
 	req := &llmgateway.CompletionRequest{
 		Model: w.model,
 		Messages: []llmgateway.Message{
@@ -284,14 +288,14 @@ func (w *EnricherWorker) persistEnrichment(ctx context.Context, ev *MemoryEnrich
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO memory_entries (id, user_id, agent_id, role, content, type, importance, keywords, token_estimate, enriched_at, conversation_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, 'long_term', $6, $7, $8, NOW(), $9, $10)
+		INSERT INTO memory_entries (id, user_id, agent_id, scope, role, content, type, importance, keywords, token_estimate, enriched_at, conversation_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'long_term', $7, $8, $9, NOW(), $10, $11)
 		ON CONFLICT (id) DO UPDATE SET
 			importance = EXCLUDED.importance,
 			keywords = EXCLUDED.keywords,
 			token_estimate = EXCLUDED.token_estimate,
 			enriched_at = NOW()`,
-		ev.MessageID, ev.UserID, ev.AgentID, ev.Role, ev.Content,
+		ev.MessageID, ev.UserID, ev.AgentID, ev.Scope, ev.Role, ev.Content,
 		enrichment.Importance, keywords, enrichment.TokenEstimate,
 		ev.ConversationID, ev.CreatedAt)
 	if err != nil {
@@ -300,12 +304,11 @@ func (w *EnricherWorker) persistEnrichment(ctx context.Context, ev *MemoryEnrich
 
 	for _, entity := range enrichment.Entities {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO entities (name, type, confidence, user_id, last_seen)
-			VALUES ($1, $2, $3, $4, NOW())
-			ON CONFLICT (name, type, user_id) DO UPDATE SET
-				confidence = GREATEST(entities.confidence, EXCLUDED.confidence),
-				last_seen = NOW()`,
-			entity.Name, entity.Type, entity.Confidence, ev.UserID)
+			INSERT INTO memory_entities (name, entity_type, user_id, agent_id, scope, last_seen_at)
+			VALUES ($1, $2, $3, $4, $5, NOW())
+			ON CONFLICT (name, entity_type, user_id, COALESCE(agent_id, '')) DO UPDATE SET
+				last_seen_at = NOW()`,
+			entity.Name, entity.Type, ev.UserID, ev.AgentID, ev.Scope)
 		if err != nil {
 			return fmt.Errorf("upsert entity %s: %w", entity.Name, err)
 		}
@@ -327,19 +330,23 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 	}
 
 	schema := "tenant_" + ev.TenantID
-	accumulated, sb, err := w.fetchSummaryInputs(ctx, schema, ev.ConversationID)
+	accumulated, prevSummary, sb, err := w.fetchSummaryInputs(ctx, schema, ev.ConversationID)
 	if err != nil {
 		return err
 	}
 	if sb == nil {
-		return nil // 阈值未达 / 已有近期摘要
+		return nil
 	}
 
 	llm := w.llmFor(ctx, ev.TenantID)
 	if llm == nil {
 		return fmt.Errorf("no llm client configured for tenant %s", ev.TenantID)
 	}
-	prompt := formatSummaryPrompt(sb.String())
+	input := sb.String()
+	if prevSummary != "" {
+		input = "[Previous Summary]: " + prevSummary + "\n\n[New Messages]:\n" + input
+	}
+	prompt := formatSummaryPrompt(w.summaryTmpl, input)
 	req := &llmgateway.CompletionRequest{
 		Model: w.summaryModel,
 		Messages: []llmgateway.Message{
@@ -370,42 +377,47 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 
 // fetchSummaryInputs 在短事务里检查阈值并捞历史消息，立即释放事务后再去调 LLM。
 // 返回 (累计 token, 历史消息文本 builder, err)。当 builder 为 nil 时表示无需触发摘要。
-func (w *EnricherWorker) fetchSummaryInputs(ctx context.Context, schema, convID string) (int, *strings.Builder, error) {
+func (w *EnricherWorker) fetchSummaryInputs(ctx context.Context, schema, convID string) (int, string, *strings.Builder, error) {
 	tx, err := w.pool.Begin(ctx)
 	if err != nil {
-		return 0, nil, fmt.Errorf("begin tx: %w", err)
+		return 0, "", nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL search_path = %s, public", pgx.Identifier{schema}.Sanitize())); err != nil {
-		return 0, nil, fmt.Errorf("set schema: %w", err)
+		return 0, "", nil, fmt.Errorf("set schema: %w", err)
 	}
 
 	var accumulated int
-	if err := tx.QueryRow(ctx,
-		"SELECT COALESCE(SUM(token_estimate), 0) FROM memory_entries WHERE conversation_id = $1 AND enriched_at IS NOT NULL",
-		convID).Scan(&accumulated); err != nil {
-		return 0, nil, fmt.Errorf("check token budget: %w", err)
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(token_estimate), 0) FROM memory_entries
+		WHERE conversation_id = $1 AND enriched_at IS NOT NULL
+		AND created_at > COALESCE(
+			(SELECT covered_until FROM memory_summaries WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1),
+			'1970-01-01'
+		)`, convID).Scan(&accumulated); err != nil {
+		return 0, "", nil, fmt.Errorf("check token budget: %w", err)
 	}
 	if accumulated < w.threshold {
-		return accumulated, nil, nil
+		return accumulated, "", nil, nil
 	}
 
-	var existingCount int
-	if err := tx.QueryRow(ctx,
-		"SELECT COUNT(*) FROM memory_summaries WHERE conversation_id = $1 AND created_at > NOW() - INTERVAL '1 minute'",
-		convID).Scan(&existingCount); err != nil {
-		return 0, nil, fmt.Errorf("check existing summary: %w", err)
-	}
-	if existingCount > 0 {
-		return accumulated, nil, nil
-	}
+	var prevSummary string
+	_ = tx.QueryRow(ctx,
+		"SELECT summary FROM memory_summaries WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1",
+		convID).Scan(&prevSummary)
 
-	rows, err := tx.Query(ctx,
-		"SELECT role, content FROM memory_entries WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2",
+	rows, err := tx.Query(ctx, `
+		SELECT role, content FROM memory_entries
+		WHERE conversation_id = $1
+		AND created_at > COALESCE(
+			(SELECT covered_until FROM memory_summaries WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1),
+			'1970-01-01'
+		)
+		ORDER BY created_at ASC LIMIT $2`,
 		convID, constants.EnricherSummaryMaxMessages)
 	if err != nil {
-		return 0, nil, fmt.Errorf("fetch messages: %w", err)
+		return 0, "", nil, fmt.Errorf("fetch messages: %w", err)
 	}
 	defer rows.Close()
 
@@ -413,14 +425,14 @@ func (w *EnricherWorker) fetchSummaryInputs(ctx context.Context, schema, convID 
 	for rows.Next() {
 		var role, content string
 		if err := rows.Scan(&role, &content); err != nil {
-			return 0, nil, fmt.Errorf("scan message: %w", err)
+			return 0, "", nil, fmt.Errorf("scan message: %w", err)
 		}
 		fmt.Fprintf(&sb, "[%s]: %s\n", role, content)
 	}
 	if err := rows.Err(); err != nil {
-		return 0, nil, fmt.Errorf("rows err: %w", err)
+		return 0, "", nil, fmt.Errorf("rows err: %w", err)
 	}
-	return accumulated, &sb, nil
+	return accumulated, prevSummary, &sb, nil
 }
 
 func (w *EnricherWorker) writeSummary(ctx context.Context, schema string, ev *MemoryEnrichedEvent, summary string, tokens int) error {
@@ -433,9 +445,9 @@ func (w *EnricherWorker) writeSummary(ctx context.Context, schema string, ev *Me
 		return fmt.Errorf("set schema: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO memory_summaries (conversation_id, user_id, agent_id, summary, covered_until, token_count)
-		VALUES ($1, $2, $3, $4, NOW(), $5)`,
-		ev.ConversationID, ev.UserID, ev.AgentID, summary, tokens); err != nil {
+		INSERT INTO memory_summaries (conversation_id, user_id, agent_id, scope, summary, covered_until, token_count)
+		VALUES ($1, $2, $3, $4, $5, NOW(), $6)`,
+		ev.ConversationID, ev.UserID, ev.AgentID, ev.Scope, summary, tokens); err != nil {
 		return fmt.Errorf("insert summary: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

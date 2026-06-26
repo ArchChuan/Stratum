@@ -12,12 +12,12 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/config"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	llmapp "github.com/byteBuilderX/stratum/internal/llmgateway/application"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
-	"github.com/byteBuilderX/stratum/internal/platform/config"
 	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/executors/code"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/storage/milvus"

@@ -82,7 +82,7 @@ func BuildContextMessages(
 	// 5. Compose final system prompt
 	systemFull := systemPromptBase
 	if memoryCtx != "" {
-		systemFull = memoryCtx + "\n" + systemPromptBase
+		systemFull = systemPromptBase + "\n\n" + memoryCtx
 	}
 
 	msgs := make([]port.LLMMessage, 0, len(histMsgs)+2)

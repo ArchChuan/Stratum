@@ -23,7 +23,7 @@ func TestFactRepo_Insert(t *testing.T) {
 	_, repo := setupFactRepoTest(t)
 	ctx := context.Background()
 
-	fact, err := domain.NewFact(testFactTenant, "user123", "", "user", "User prefers dark mode", 0.8, []string{"UI", "preference"})
+	fact, err := domain.NewFact(testFactTenant, "user123", "", "", "user", "User prefers dark mode", 0.8, []string{"UI", "preference"})
 	require.NoError(t, err)
 
 	err = repo.Create(ctx, testFactTenant, fact)
@@ -40,7 +40,7 @@ func TestFactRepo_Update(t *testing.T) {
 	_, repo := setupFactRepoTest(t)
 	ctx := context.Background()
 
-	fact, _ := domain.NewFact(testFactTenant, "user123", "", "user", "Original content", 0.7, []string{})
+	fact, _ := domain.NewFact(testFactTenant, "user123", "", "", "user", "Original content", 0.7, []string{})
 	require.NoError(t, repo.Create(ctx, testFactTenant, fact))
 
 	fact.Content = "Updated content"
@@ -57,8 +57,8 @@ func TestFactRepo_ListActive(t *testing.T) {
 	_, repo := setupFactRepoTest(t)
 	ctx := context.Background()
 
-	f1, _ := domain.NewFact(testFactTenant, "user123", "agent1", "user", "Fact 1", 0.8, []string{})
-	f2, _ := domain.NewFact(testFactTenant, "user123", "agent1", "agent", "Fact 2", 0.7, []string{})
+	f1, _ := domain.NewFact(testFactTenant, "user123", "agent1", "", "user", "Fact 1", 0.8, []string{})
+	f2, _ := domain.NewFact(testFactTenant, "user123", "agent1", "", "agent", "Fact 2", 0.7, []string{})
 	require.NoError(t, repo.Create(ctx, testFactTenant, f1))
 	require.NoError(t, repo.Create(ctx, testFactTenant, f2))
 
@@ -72,7 +72,7 @@ func TestFactRepo_SearchByContent(t *testing.T) {
 	_, repo := setupFactRepoTest(t)
 	ctx := context.Background()
 
-	f1, _ := domain.NewFact(testFactTenant, "user123", "", "user", "User prefers dark mode", 0.8, []string{})
+	f1, _ := domain.NewFact(testFactTenant, "user123", "", "", "user", "User prefers dark mode", 0.8, []string{})
 	require.NoError(t, repo.Create(ctx, testFactTenant, f1))
 
 	filter := domain.BuildScopeFilter(testFactTenant, "user123", "", "user")
@@ -86,27 +86,12 @@ func TestFactRepo_CountByUser(t *testing.T) {
 	_, repo := setupFactRepoTest(t)
 	ctx := context.Background()
 
-	f1, _ := domain.NewFact(testFactTenant, "user123", "", "user", "Fact 1", 0.8, []string{})
-	f2, _ := domain.NewFact(testFactTenant, "user123", "", "user", "Fact 2", 0.7, []string{})
+	f1, _ := domain.NewFact(testFactTenant, "user123", "", "", "user", "Fact 1", 0.8, []string{})
+	f2, _ := domain.NewFact(testFactTenant, "user123", "", "", "user", "Fact 2", 0.7, []string{})
 	require.NoError(t, repo.Create(ctx, testFactTenant, f1))
 	require.NoError(t, repo.Create(ctx, testFactTenant, f2))
 
 	count, err := repo.CountByUser(ctx, testFactTenant, "user123")
 	require.NoError(t, err)
 	require.Equal(t, 2, count)
-}
-
-func TestFactRepo_DeleteOldSoftDeleted(t *testing.T) {
-	_, repo := setupFactRepoTest(t)
-	ctx := context.Background()
-
-	f1, _ := domain.NewFact(testFactTenant, "user123", "", "user", "Old deleted fact", 0.7, []string{})
-	require.NoError(t, repo.Create(ctx, testFactTenant, f1))
-
-	f1.MarkDeleted()
-	require.NoError(t, repo.Update(ctx, testFactTenant, f1))
-
-	count, err := repo.DeleteOldSoftDeleted(ctx, testFactTenant, 0)
-	require.NoError(t, err)
-	require.Equal(t, 1, count)
 }
