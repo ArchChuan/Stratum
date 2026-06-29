@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/application"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,7 +15,7 @@ func TestMemoryLifecycle(t *testing.T) {
 	env := SetupMemoryTestEnv(t)
 	ctx := context.Background()
 
-	conversationID := "test-conv-001"
+	conversationID := uuid.New().String()
 
 	// Step 1: Buffer 5 messages (triggers flush at K=5)
 	messages := []string{
@@ -31,7 +32,7 @@ func TestMemoryLifecycle(t *testing.T) {
 			UserID:         env.UserID,
 			AgentID:        env.AgentID,
 			ConversationID: conversationID,
-			MessageID:      "msg-" + string(rune('0'+i)),
+			MessageID:      uuid.New().String(),
 			Role:           "user",
 			Content:        content,
 			CreatedAt:      time.Now().Add(-time.Duration(i) * time.Minute),
