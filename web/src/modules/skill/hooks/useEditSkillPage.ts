@@ -50,6 +50,8 @@ export const useEditSkillPage = () => {
               ? JSON.stringify(cfg.headers, null, 2)
               : '';
           initialValues.bodyTemplate = cfg.body_template || '';
+        } else if (skill.type === 'prompt') {
+          initialValues.promptTemplate = cfg.prompt_template || '';
         }
         form.setFieldsValue(initialValues);
       } catch {

@@ -169,6 +169,8 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 			toolStart := time.Now()
 			var content string
 			switch tc.Name {
+			case "stratum_continue_reasoning":
+				content = "Continuing reasoning..."
 			case "stratum_search_knowledge":
 				if s.RAGSearchFn == nil {
 					content = "error: stratum_search_knowledge tool not configured"

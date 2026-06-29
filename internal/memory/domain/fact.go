@@ -6,6 +6,12 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	FactStatusActive     = "active"
+	FactStatusSuperseded = "superseded"
+	FactStatusArchived   = "archived"
+)
+
 // MemoryFact is the aggregate root for a memory fact
 type MemoryFact struct {
 	ID             string
@@ -50,16 +56,16 @@ func NewFact(tenantID, userID, agentID, conversationID string, scope string, con
 		EntityNames:    entityNames,
 		AccessCount:    0,
 		LastAccessAt:   now,
-		Status:         "active",
+		Status:         FactStatusActive,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}, nil
 }
 
 var statusTransitions = map[string][]string{
-	"active":     {"superseded", "archived"},
-	"superseded": {},
-	"archived":   {"active"},
+	FactStatusActive:     {FactStatusSuperseded, FactStatusArchived},
+	FactStatusSuperseded: {},
+	FactStatusArchived:   {FactStatusActive},
 }
 
 // CanTransitionTo checks if a status transition is valid
@@ -81,7 +87,7 @@ func (f *MemoryFact) MarkSuperseded(newFactID string) error {
 	if !f.CanTransitionTo("superseded") {
 		return ErrInvalidStatus
 	}
-	f.Status = "superseded"
+	f.Status = FactStatusSuperseded
 	f.SupersededBy = newFactID
 	f.UpdatedAt = time.Now()
 	return nil
@@ -92,7 +98,7 @@ func (f *MemoryFact) MarkArchived() error {
 	if !f.CanTransitionTo("archived") {
 		return ErrInvalidStatus
 	}
-	f.Status = "archived"
+	f.Status = FactStatusArchived
 	f.UpdatedAt = time.Now()
 	return nil
 }

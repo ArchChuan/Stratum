@@ -530,7 +530,7 @@ func (s *AgentService) buildExtraTools(ctx context.Context, tenantID string, mcp
 				description = d
 			}
 		}
-		toolName := fmt.Sprintf("tenant_%s_%s", tenantID, name)
+		toolName := fmt.Sprintf("skill_%s", skillID)
 		index[toolName] = skillID
 		tools = append(tools, port.ToolDefinition{
 			Name:        toolName,
@@ -569,14 +569,14 @@ func (s *AgentService) recordExecution(
 	}
 	switch {
 	case err != nil:
-		rec.Status = "error"
+		rec.Status = domain.ExecStatusError
 		rec.ErrorMessage = err.Error()
 	case result != nil:
-		rec.Status = "success"
+		rec.Status = domain.ExecStatusSuccess
 		rec.OutputPreview = truncateRunes(result.Output, previewMaxChars)
 		rec.TotalTokens = result.TokensUsed
 	default:
-		rec.Status = "success"
+		rec.Status = domain.ExecStatusSuccess
 	}
 	insertCtx := context.WithoutCancel(reqCtx)
 	go func() {

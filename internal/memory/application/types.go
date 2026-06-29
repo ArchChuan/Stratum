@@ -2,6 +2,8 @@
 package application
 
 import (
+	"context"
+
 	memdomain "github.com/byteBuilderX/stratum/internal/memory/domain"
 )
 
@@ -35,3 +37,8 @@ const (
 	EntityTypeMemory = memdomain.EntityTypeMemory
 	SummaryMemory    = memdomain.SummaryMemory
 )
+
+// WithTenantContext injects tenantID into ctx for MemoryManager methods.
+func WithTenantContext(ctx context.Context, tenantID string) context.Context {
+	return context.WithValue(ctx, tenantIDKey{}, tenantID)
+}

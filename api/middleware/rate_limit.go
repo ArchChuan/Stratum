@@ -70,3 +70,21 @@ func RateLimit(store *RateLimiterStore) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+const (
+	LLMExecRate  = rate.Limit(1.0 / 3.0) // 20 req/min per user
+	LLMExecBurst = 3
+)
+
+// RateLimitByKey limits requests using a caller-supplied key function.
+// Empty key rejects unauthenticated callers.
+func RateLimitByKey(store *RateLimiterStore, keyFn func(*gin.Context) string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		key := keyFn(c)
+		if key == "" || !store.get(key).Allow() {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
+			return
+		}
+		c.Next()
+	}
+}

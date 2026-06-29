@@ -12,6 +12,12 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	execStatusSuccess = "success"
+	execStatusTimeout = "timeout"
+	execStatusFailed  = "failed"
+)
+
 type traceIDKeyType struct{}
 
 var traceIDKey = traceIDKeyType{}
@@ -140,9 +146,9 @@ func (e *atomicEngine) execute(ctx context.Context, req SkillRequest) (SkillResp
 		if err == nil {
 			duration := time.Since(start)
 			e.cb.RecordSuccess(req.SkillID)
-			e.reportMetrics(req.SkillID, skillType, "success", duration)
+			e.reportMetrics(req.SkillID, skillType, execStatusSuccess, duration)
 			caller := req.Metadata["caller"]
-			e.auditor.log(traceID, req.SkillID, caller, "success", duration)
+			e.auditor.log(traceID, req.SkillID, caller, execStatusSuccess, duration)
 			return SkillResponse{
 				TraceID:  traceID,
 				SkillID:  req.SkillID,
@@ -156,8 +162,8 @@ func (e *atomicEngine) execute(ctx context.Context, req SkillRequest) (SkillResp
 		if errors.Is(err, context.DeadlineExceeded) {
 			e.cb.RecordFailure(req.SkillID)
 			duration := time.Since(start)
-			e.reportMetrics(req.SkillID, skillType, "timeout", duration)
-			e.auditor.log(traceID, req.SkillID, req.Metadata["caller"], "timeout", duration)
+			e.reportMetrics(req.SkillID, skillType, execStatusTimeout, duration)
+			e.auditor.log(traceID, req.SkillID, req.Metadata["caller"], execStatusTimeout, duration)
 			return SkillResponse{}, &SkillError{
 				Code:    ErrSkillTimeout,
 				Message: "skill execution timeout: " + req.SkillID,
@@ -172,8 +178,8 @@ func (e *atomicEngine) execute(ctx context.Context, req SkillRequest) (SkillResp
 	// 所有重试耗尽
 	e.cb.RecordFailure(req.SkillID)
 	duration := time.Since(start)
-	e.reportMetrics(req.SkillID, skillType, "failed", duration)
-	e.auditor.log(traceID, req.SkillID, req.Metadata["caller"], "failed", duration)
+	e.reportMetrics(req.SkillID, skillType, execStatusFailed, duration)
+	e.auditor.log(traceID, req.SkillID, req.Metadata["caller"], execStatusFailed, duration)
 	return SkillResponse{}, &SkillError{
 		Code:    ErrSkillExecFailed,
 		Message: "skill execution failed: " + req.SkillID,

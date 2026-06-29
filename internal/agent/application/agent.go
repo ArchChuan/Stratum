@@ -272,75 +272,9 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		}
 		initMessages := BuildContextMessages(systemPrompt, memCtx, history, input, maxTokens, cfg.HistoryWindow)
 
-		var availableTools []port.ToolDefinition
-		if len(workspaceNames) > 0 && cfg.RAGSearchFn != nil {
-			enumVals := make([]interface{}, len(workspaceNames))
-			for i, n := range workspaceNames {
-				enumVals[i] = n
-			}
-			availableTools = append(availableTools, port.ToolDefinition{
-				Name: "stratum_search_knowledge",
-				Description: func() string {
-					var b strings.Builder
-					b.WriteString("Search one or more knowledge bases for relevant information. Available workspaces:\n")
-					for i, n := range workspaceNames {
-						desc := ""
-						if i < len(workspaceDescs) {
-							desc = workspaceDescs[i]
-						}
-						if desc != "" {
-							b.WriteString("- " + n + ": " + desc + "\n")
-						} else {
-							b.WriteString("- " + n + "\n")
-						}
-					}
-					return strings.TrimRight(b.String(), "\n")
-				}(),
-				InputSchema: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"workspaces": map[string]interface{}{
-							"type":        "array",
-							"description": "Knowledge workspaces to search (one or more)",
-							"items": map[string]interface{}{
-								"type": "string",
-								"enum": enumVals,
-							},
-							"minItems": 1,
-						},
-						"query": map[string]interface{}{
-							"type":        "string",
-							"description": "Search query",
-						},
-						"top_k": map[string]interface{}{
-							"type":        "integer",
-							"description": "Number of results per workspace (1-20, default 5)",
-						},
-					},
-					"required": []string{"workspaces", "query"},
-				},
-			})
-		}
-		if a.MemoryInjector != nil {
-			availableTools = append(availableTools, port.ToolDefinition{
-				Name:        "stratum_recall_memory",
-				Description: "Search long-term memory for relevant past interactions, entities, and context. Use when you need to recall information from previous conversations.",
-				InputSchema: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"query": map[string]interface{}{
-							"type":        "string",
-							"description": "Search query to find relevant memories",
-						},
-						"limit": map[string]interface{}{
-							"type":        "integer",
-							"description": "Max results (1-20, default 5)",
-						},
-					},
-					"required": []string{"query"},
-				},
-			})
-		}
+		availableTools := buildBuiltinTools(workspaceNames, workspaceDescs,
+			len(workspaceNames) > 0 && cfg.RAGSearchFn != nil,
+			a.MemoryInjector != nil)
 		initState := agentgraph.ReActState{
 			TenantID:       cfg.TenantID,
 			TraceID:        cfg.TraceID,
@@ -447,9 +381,9 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	result.Steps = a.State.StepsTaken
 	a.mu.Unlock()
 
-	status := "success"
+	status := domain.ExecStatusSuccess
 	if execErr != nil {
-		status = "error"
+		status = domain.ExecStatusError
 	}
 	metrics.IncAgentExecution(agentID, string(agentType), status)
 	metrics.RecordAgentExecutionDuration(agentID, string(agentType), result.Duration.Seconds())
@@ -615,4 +549,70 @@ func mergeTools(builtins []port.ToolDefinition, extras []port.ToolDefinition, lo
 		out = append(out, t)
 	}
 	return out
+}
+
+// buildBuiltinTools constructs the agent's built-in tool definitions (knowledge search, memory recall).
+func buildBuiltinTools(workspaceNames, workspaceDescs []string, hasRAG, hasMemory bool) []port.ToolDefinition {
+	var tools []port.ToolDefinition
+	if hasRAG {
+		enumVals := make([]interface{}, len(workspaceNames))
+		for i, n := range workspaceNames {
+			enumVals[i] = n
+		}
+		var b strings.Builder
+		b.WriteString("Search one or more knowledge bases for relevant information. Available workspaces:\n")
+		for i, n := range workspaceNames {
+			desc := ""
+			if i < len(workspaceDescs) {
+				desc = workspaceDescs[i]
+			}
+			if desc != "" {
+				b.WriteString("- " + n + ": " + desc + "\n")
+			} else {
+				b.WriteString("- " + n + "\n")
+			}
+		}
+		tools = append(tools, port.ToolDefinition{
+			Name:        "stratum_search_knowledge",
+			Description: strings.TrimRight(b.String(), "\n"),
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"workspaces": map[string]interface{}{
+						"type":        "array",
+						"description": "Knowledge workspaces to search (one or more)",
+						"items":       map[string]interface{}{"type": "string", "enum": enumVals},
+						"minItems":    1,
+					},
+					"query": map[string]interface{}{"type": "string", "description": "Search query"},
+					"top_k": map[string]interface{}{"type": "integer", "description": "Number of results per workspace (1-20, default 5)"},
+				},
+				"required": []string{"workspaces", "query"},
+			},
+		})
+	}
+	if hasMemory {
+		tools = append(tools, port.ToolDefinition{
+			Name:        "stratum_recall_memory",
+			Description: "Search long-term memory for relevant past interactions, entities, and context. Use when you need to recall information from previous conversations.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{"type": "string", "description": "Search query to find relevant memories"},
+					"limit": map[string]interface{}{"type": "integer", "description": "Max results (1-20, default 5)"},
+				},
+				"required": []string{"query"},
+			},
+		})
+	}
+	tools = append(tools, port.ToolDefinition{
+		Name:        "stratum_continue_reasoning",
+		Description: "Request another reasoning turn to continue chain-of-thought before calling other tools or producing a final answer. Use when you need more reasoning steps.",
+		InputSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+			"required":   []string{},
+		},
+	})
+	return tools
 }

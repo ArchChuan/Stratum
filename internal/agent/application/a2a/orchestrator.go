@@ -21,6 +21,11 @@ const (
 	StrategyPipeline     CollaborationStrategy = "pipeline"
 	StrategyVoting       CollaborationStrategy = "voting"
 	StrategyAdaptive     CollaborationStrategy = "adaptive"
+
+	taskStatusPending   = "pending"
+	taskStatusCompleted = "completed"
+	taskStatusFailed    = "failed"
+	sessionStateActive  = "active"
 )
 
 // TaskStep represents a step in a collaboration workflow
@@ -140,7 +145,7 @@ func (o *Orchestrator) createSequentialSteps(participants []AgentIdentity) []*Ta
 			Dependencies: dependencies,
 			Input:        make(map[string]interface{}),
 			Output:       make(map[string]interface{}),
-			Status:       "pending",
+			Status:       taskStatusPending,
 		}
 	}
 	return steps
@@ -157,7 +162,7 @@ func (o *Orchestrator) createParallelSteps(participants []AgentIdentity) []*Task
 			Dependencies: []string{},
 			Input:        make(map[string]interface{}),
 			Output:       make(map[string]interface{}),
-			Status:       "pending",
+			Status:       taskStatusPending,
 		}
 	}
 	return steps
@@ -191,7 +196,7 @@ func (o *Orchestrator) createHierarchicalSteps(participants []AgentIdentity) []*
 			Dependencies: []string{steps[0].ID},
 			Input:        make(map[string]interface{}),
 			Output:       make(map[string]interface{}),
-			Status:       "pending",
+			Status:       taskStatusPending,
 		})
 	}
 
@@ -214,7 +219,7 @@ func (o *Orchestrator) createSwarmSteps(participants []AgentIdentity) []*TaskSte
 			Dependencies: []string{},
 			Input:        make(map[string]interface{}),
 			Output:       make(map[string]interface{}),
-			Status:       "pending",
+			Status:       taskStatusPending,
 		}
 	}
 	return steps
@@ -275,7 +280,7 @@ func (o *Orchestrator) MarkStepComplete(planID, stepID string, output map[string
 	for _, step := range plan.Steps {
 		if step.ID == stepID {
 			step.mu.Lock()
-			step.Status = "completed"
+			step.Status = taskStatusCompleted
 			step.Output = output
 			step.CompletedAt = time.Now()
 			step.mu.Unlock()
@@ -295,7 +300,7 @@ func (o *Orchestrator) Cleanup(maxAge time.Duration) {
 	for id, plan := range o.plans {
 		plan.mu.RLock()
 		old := now.Sub(plan.CreatedAt) > maxAge
-		completed := plan.Status == "completed" || plan.Status == "failed"
+		completed := plan.Status == taskStatusCompleted || plan.Status == taskStatusFailed
 		plan.mu.RUnlock()
 
 		if old && completed {

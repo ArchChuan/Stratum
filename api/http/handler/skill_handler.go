@@ -108,20 +108,21 @@ func (h *SkillHandler) RunSkill(c *gin.Context) {
 // inputFromCreateReq translates the HTTP DTO into the application input.
 func inputFromCreateReq(r dto.CreateSkillRequest) skillapp.SkillInput {
 	return skillapp.SkillInput{
-		Name:         r.Name,
-		Description:  r.Description,
-		Type:         r.Type,
-		Code:         r.Code,
-		Language:     r.Language,
-		SystemPrompt: r.SystemPrompt,
-		Model:        r.Model,
-		Temperature:  r.Temperature,
-		MaxTokens:    r.MaxTokens,
-		URL:          r.URL,
-		Method:       r.Method,
-		Headers:      r.Headers,
-		BodyTemplate: r.BodyTemplate,
-		TimeoutSec:   r.TimeoutSec,
+		Name:           r.Name,
+		Description:    r.Description,
+		Type:           r.Type,
+		Code:           r.Code,
+		Language:       r.Language,
+		SystemPrompt:   r.SystemPrompt,
+		Model:          r.Model,
+		Temperature:    r.Temperature,
+		MaxTokens:      r.MaxTokens,
+		URL:            r.URL,
+		Method:         r.Method,
+		Headers:        r.Headers,
+		BodyTemplate:   r.BodyTemplate,
+		TimeoutSec:     r.TimeoutSec,
+		PromptTemplate: r.PromptTemplate,
 	}
 }
 

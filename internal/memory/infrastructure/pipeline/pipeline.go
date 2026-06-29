@@ -133,6 +133,7 @@ func (p *Pipeline) Start(ctx context.Context) error {
 		p.cfg.MaxDeliver)
 	if err != nil {
 		cancel()
+		p.wg.Wait()
 		return fmt.Errorf("create embed consumer: %w", err)
 	}
 
@@ -159,6 +160,7 @@ func (p *Pipeline) Start(ctx context.Context) error {
 		p.cfg.MaxDeliver)
 	if err != nil {
 		cancel()
+		p.wg.Wait()
 		return fmt.Errorf("create enrich consumer: %w", err)
 	}
 

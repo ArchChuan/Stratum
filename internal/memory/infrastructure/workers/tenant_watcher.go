@@ -29,6 +29,7 @@ type TenantWatcher struct {
 	build    func(tenantID string) WorkerSet
 	running  map[string]tenantEntry
 	mu       sync.Mutex
+	wg       sync.WaitGroup
 	logger   *zap.Logger
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -104,7 +105,14 @@ func (w *TenantWatcher) reconcile(ctx context.Context) {
 		ws := w.build(tid)
 		w.running[tid] = tenantEntry{cancel: cancel, workers: ws}
 		for _, worker := range ws {
-			go worker.Start(workerCtx)
+			w.wg.Add(1)
+			go func(wk interface {
+				Start(context.Context)
+				Stop()
+			}) {
+				defer w.wg.Done()
+				wk.Start(workerCtx)
+			}(worker)
 		}
 		w.logger.Info("memory.tenant_watcher.tenant_added", zap.String("tenant_id", tid))
 	}
@@ -112,7 +120,6 @@ func (w *TenantWatcher) reconcile(ctx context.Context) {
 
 func (w *TenantWatcher) stopAll() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	for _, entry := range w.running {
 		entry.cancel()
 		for _, wk := range entry.workers {
@@ -120,6 +127,8 @@ func (w *TenantWatcher) stopAll() {
 		}
 	}
 	w.running = make(map[string]tenantEntry)
+	w.mu.Unlock()
+	w.wg.Wait()
 }
 
 func (w *TenantWatcher) Stop() {

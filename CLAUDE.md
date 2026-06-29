@@ -143,6 +143,10 @@ make fe-lint && make fe-build            # 前端 PR 前
   - `WithTimeout` 禁止循环外创建：每次迭代独立 `ctx, cancel := context.WithTimeout(...)`，否则串行共用同一 budget
   - 重连/替换有状态对象：`NewXxx()` 创建新实例 + `map[key] = fresh` 写回，禁止在快照副本上 `obj.Reconnect()` 不回写
   - N 个独立 IO/网络操作：`wg.Add(1) / go func()` 并发，禁止 `for` 串行阻塞（单个慢连接卡住全部）
+  - **共享指针 TOCTOU（反例：VectorStore.client 所有调用方，2026-06-27）**：`ensureConnected` 释放锁后到 `client.Method()` 之间存在窗口，`Close()` 可将指针置 nil → nil panic。修复：将"ensureConnected + 在读锁下捕获指针"封装为 `getClient(ctx)`，所有调用方用 `c := getClient(ctx)` 后操作 `c`，绝不直接访问 `vs.client`
+  - **goroutine 生命周期必须用 WaitGroup 跟踪（反例：TenantWatcher，2026-06-27）**：`Stop()` 调用 `cancel()` + `wk.Stop()` 后立即返回，worker goroutine 仍在运行，Harness Shutdown 序保证被破坏。修复：spawning 时 `wg.Add(1)`，goroutine 内 `defer wg.Done()`，`stopAll` 释放锁后调 `wg.Wait()`
+  - **带缓冲 channel + ctx 超时必须排水（反例：doConnect，2026-06-27）**：`ctx.Done()` 分支返回后后台 goroutine 若成功连接会写入 buffered channel，无人读取，gRPC client 永不 Close。修复：`go func() { if res := <-resultCh; res.err == nil { res.client.Close() } }()`
+  - **早期错误路径必须 drain WaitGroup（反例：Pipeline.Start，2026-06-27）**：cancel() 后直接 return error，已启动的 goroutine 未 drain；调用方无从 wait。修复：错误路径在 cancel() 后紧跟 `p.wg.Wait()`
 
 ### 前端规范
 

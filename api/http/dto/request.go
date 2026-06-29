@@ -3,7 +3,7 @@ package dto
 type CreateSkillRequest struct {
 	Name        string `json:"name" binding:"required"`
 	Description string `json:"description"`
-	Type        string `json:"type" binding:"required,oneof=code llm http"`
+	Type        string `json:"type" binding:"required,oneof=code llm http prompt"`
 	// code
 	Code     string `json:"code"`
 	Language string `json:"language" binding:"omitempty,oneof=python javascript"`
@@ -18,6 +18,8 @@ type CreateSkillRequest struct {
 	Headers      map[string]string `json:"headers"`
 	BodyTemplate string            `json:"bodyTemplate"`
 	TimeoutSec   int               `json:"timeoutSec"`
+	// prompt
+	PromptTemplate string `json:"promptTemplate"`
 }
 
 type SkillResponse struct {

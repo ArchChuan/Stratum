@@ -4,20 +4,21 @@ import "github.com/byteBuilderX/stratum/internal/skill/domain"
 
 // SkillInput is the normalized creation payload passed to SkillFactory.
 type SkillInput struct {
-	Type         string
-	Name         string
-	Description  string
-	Code         string
-	Language     string
-	SystemPrompt string
-	Model        string
-	Temperature  float32
-	MaxTokens    int
-	URL          string
-	Method       string
-	Headers      map[string]string
-	BodyTemplate string
-	TimeoutSec   int
+	Type           string
+	Name           string
+	Description    string
+	Code           string
+	Language       string
+	SystemPrompt   string
+	Model          string
+	Temperature    float32
+	MaxTokens      int
+	URL            string
+	Method         string
+	Headers        map[string]string
+	BodyTemplate   string
+	TimeoutSec     int
+	PromptTemplate string
 }
 
 // SkillFactory constructs executable skills from creation payloads.

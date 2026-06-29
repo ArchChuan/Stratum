@@ -82,6 +82,8 @@ func buildSkill(id, name, desc, skillType string, cfg map[string]any, logger *za
 		return code.NewCodeSkillWithExecutor(id, name, desc,
 			stringVal(cfg, "code"), stringVal(cfg, "language"), executor,
 		), nil
+	case "prompt":
+		return executors.NewPromptSkill(id, name, desc, stringVal(cfg, "prompt_template")), nil
 	default:
 		return nil, fmt.Errorf("unknown skill type: %s", skillType)
 	}

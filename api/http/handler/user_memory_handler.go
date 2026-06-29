@@ -16,30 +16,36 @@ type userMemorySvc interface {
 	ClearUserMemories(ctx context.Context, req *application.ClearUserMemoriesRequest) error
 }
 
-// UserMemoryHandler handles user-scoped memory operations.
+type memoryMgrSvc interface {
+	Add(ctx context.Context, entry *application.MemoryEntry) error
+	Get(ctx context.Context, id string) (*application.MemoryEntry, error)
+	Search(ctx context.Context, req *application.MemorySearchRequest) ([]*application.MemorySearchResult, error)
+	Delete(ctx context.Context, id string) error
+	Clear(ctx context.Context, sessionCtx *application.SessionContext) error
+	GetStats(ctx context.Context, sessionCtx *application.SessionContext) (*application.MemoryStats, error)
+	GetSummary(ctx context.Context, sessionCtx *application.SessionContext) (string, error)
+}
+
 type UserMemoryHandler struct {
 	svc userMemorySvc
+	mgr memoryMgrSvc
 }
 
-func NewUserMemoryHandler(svc userMemorySvc) *UserMemoryHandler {
-	return &UserMemoryHandler{svc: svc}
+func NewUserMemoryHandler(svc userMemorySvc, mgr memoryMgrSvc) *UserMemoryHandler {
+	return &UserMemoryHandler{svc: svc, mgr: mgr}
 }
 
-// ClearMemories soft-deletes all memories for the authenticated user.
-// DELETE /api/memory/clear
 func (h *UserMemoryHandler) ClearMemories(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
 		respondMissingTenant(c)
 		return
 	}
-
 	userID, ok := userIDFromCtx(c)
 	if !ok {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errInvalidInput))
 		return
 	}
-
 	if err := h.svc.ClearUserMemories(c.Request.Context(), &application.ClearUserMemoriesRequest{
 		TenantID: tenantID,
 		UserID:   userID,
@@ -47,6 +53,130 @@ func (h *UserMemoryHandler) ClearMemories(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	c.Status(http.StatusNoContent)
+}
 
+func (h *UserMemoryHandler) AddMemory(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	var entry application.MemoryEntry
+	if err := c.ShouldBindJSON(&entry); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	entry.TenantID = tenantID
+	ctx := application.WithTenantContext(c.Request.Context(), tenantID)
+	if err := h.mgr.Add(ctx, &entry); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusCreated, entry)
+}
+
+func (h *UserMemoryHandler) GetMemory(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	ctx := application.WithTenantContext(c.Request.Context(), tenantID)
+	entry, err := h.mgr.Get(ctx, c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, entry)
+}
+
+func (h *UserMemoryHandler) SearchMemory(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	userID, _ := userIDFromCtx(c)
+	var req application.MemorySearchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	if req.Context == nil {
+		req.Context = &application.SessionContext{}
+	}
+	req.Context.TenantID = tenantID
+	req.Context.UserID = userID
+	results, err := h.mgr.Search(c.Request.Context(), &req)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"results": results})
+}
+
+func (h *UserMemoryHandler) ListSessions(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"sessions": []any{}})
+}
+
+func (h *UserMemoryHandler) GetStats(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	stats, err := h.mgr.GetStats(c.Request.Context(), &application.SessionContext{TenantID: tenantID})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, stats)
+}
+
+func (h *UserMemoryHandler) GetSummary(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	summary, err := h.mgr.GetSummary(c.Request.Context(), &application.SessionContext{
+		TenantID:  tenantID,
+		SessionID: c.Param("session_id"),
+	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"summary": summary})
+}
+
+func (h *UserMemoryHandler) DeleteMemory(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	ctx := application.WithTenantContext(c.Request.Context(), tenantID)
+	if err := h.mgr.Delete(ctx, c.Param("id")); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (h *UserMemoryHandler) ClearSession(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	if err := h.mgr.Clear(c.Request.Context(), &application.SessionContext{
+		TenantID:  tenantID,
+		SessionID: c.Param("session_id"),
+	}); err != nil {
+		_ = c.Error(err)
+		return
+	}
 	c.Status(http.StatusNoContent)
 }

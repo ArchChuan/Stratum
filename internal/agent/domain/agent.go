@@ -81,6 +81,11 @@ type ChatMessage struct {
 	SkipOutbox     bool
 }
 
+const (
+	ExecStatusSuccess = "success"
+	ExecStatusError   = "error"
+)
+
 // ExecutionRecord is an agent execution history entry.
 type ExecutionRecord struct {
 	ID            string

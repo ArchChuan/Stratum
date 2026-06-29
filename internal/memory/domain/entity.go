@@ -7,6 +7,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const EntityStatusActive = "active"
+
 // MemoryEntity represents a recognized entity with a rolling profile summary.
 type MemoryEntity struct {
 	ID                    string
@@ -50,7 +52,7 @@ func NewEntity(userID, agentID, scope, name, entityType string) (*MemoryEntity, 
 		FactCountSinceRebuild: 0,
 		LastSeenAt:            now,
 		LastProfileRebuildAt:  time.Time{}, // zero means never rebuilt
-		Status:                "active",
+		Status:                EntityStatusActive,
 		CreatedAt:             now,
 		UpdatedAt:             now,
 	}, nil
