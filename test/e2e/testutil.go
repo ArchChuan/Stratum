@@ -87,6 +87,7 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 		    fact_count_since_rebuild INT NOT NULL DEFAULT 0,
 		    last_seen_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		    last_profile_rebuild_at TIMESTAMPTZ,
+		    rebuild_after           TIMESTAMPTZ,
 		    status                  TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'deleted')),
 		    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
