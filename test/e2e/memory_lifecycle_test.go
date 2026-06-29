@@ -48,6 +48,7 @@ func TestMemoryLifecycle(t *testing.T) {
 		TenantID: env.TenantID,
 		UserID:   env.UserID,
 		AgentID:  env.AgentID,
+		Scope:    "user",
 		Messages: []application.MessageDTO{
 			{Role: "user", Content: "I prefer dark mode for coding"},
 		},

@@ -25,6 +25,10 @@ func NewTestTenantPool(t *testing.T, tenantID string) *pgxpool.Pool {
 	if err != nil {
 		t.Skipf("skipping test: cannot connect to test database: %v", err)
 	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		t.Skipf("skipping test: cannot reach test database: %v", err)
+	}
 
 	// Provision tenant schema
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
