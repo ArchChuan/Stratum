@@ -172,7 +172,7 @@ func TestChatStore_AddMessage(t *testing.T) {
 		WithArgs("conv-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery("INSERT INTO chat_messages").
-		WithArgs("conv-1", "user", "hello", steps, false).
+		WithArgs("conv-1", "user", "hello", string(steps), false).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("msg-uuid", now))
 	mock.ExpectCommit()
 
@@ -204,7 +204,7 @@ func TestChatStore_AddMessage_nilStepsDefaultsToEmpty(t *testing.T) {
 		WithArgs("conv-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery("INSERT INTO chat_messages").
-		WithArgs("conv-1", "user", "hi", json.RawMessage("[]"), false).
+		WithArgs("conv-1", "user", "hi", "[]", false).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("msg-2", now))
 	mock.ExpectCommit()
 

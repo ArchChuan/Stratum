@@ -530,7 +530,7 @@ func (s *AgentService) buildExtraTools(ctx context.Context, tenantID string, mcp
 				description = d
 			}
 		}
-		toolName := fmt.Sprintf("skill_%s", skillID)
+		toolName := fmt.Sprintf("tenant_%s_%s", tenantID, name)
 		index[toolName] = skillID
 		tools = append(tools, port.ToolDefinition{
 			Name:        toolName,
