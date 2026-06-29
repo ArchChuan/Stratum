@@ -1,6 +1,7 @@
 import {
   CodeOutlined,
   GlobalOutlined,
+  MessageOutlined,
   RobotOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
@@ -48,6 +49,7 @@ const TYPE_OPTIONS: Array<{ value: SkillType; label: string; bg: string; color: 
   { value: 'code', label: '代码技能', bg: '#f6ffed', color: '#52c41a' },
   { value: 'llm', label: 'LLM 技能', bg: '#e6f4ff', color: '#1677ff' },
   { value: 'http', label: 'HTTP 技能', bg: '#fff7e6', color: '#fa8c16' },
+  { value: 'prompt', label: '提示词技能', bg: '#f9f0ff', color: '#722ed1' },
 ];
 
 export const SkillFormSections = ({
@@ -178,8 +180,7 @@ export const SkillFormSections = ({
         </div>
       )}
 
-      {skillType === 'http' && (
-        <div style={SECTION_BG}>
+      {skillType === 'http' && (        <div style={SECTION_BG}>
           <SectionHeader icon={<GlobalOutlined />} title="HTTP 配置" subtitle="调用外部 API 接口" />
           <Form.Item
             label="请求 URL"
@@ -237,6 +238,23 @@ export const SkillFormSections = ({
           </Form.Item>
         </div>
       )}
+
+      {skillType === 'prompt' && (
+        <div style={SECTION_BG}>
+          <SectionHeader icon={<MessageOutlined />} title="提示词模板" subtitle="agent 调用时注入的提示词，支持 Go text/template（{{.input}} 为用户输入）" />
+          <Form.Item
+            label="提示词模板"
+            name="promptTemplate"
+            rules={[{ required: true, message: '请输入提示词模板' }]}
+          >
+            <TextArea
+              rows={8}
+              placeholder={'你是一个专业的代码审查者。\n请按照以下标准审查代码：\n- 安全性\n- 可读性\n\n用户输入：{{.input}}'}
+              style={{ fontFamily: 'monospace', fontSize: 13 }}
+            />
+          </Form.Item>
+        </div>
+      )}
     </>
   );
 };
@@ -245,4 +263,5 @@ export const SKILL_TYPE_META: Record<SkillType, { label: string; color: string; 
   code: { label: '代码技能', color: '#52c41a', bg: '#f6ffed' },
   llm: { label: 'LLM 技能', color: '#1677ff', bg: '#e6f4ff' },
   http: { label: 'HTTP 技能', color: '#fa8c16', bg: '#fff7e6' },
+  prompt: { label: '提示词技能', color: '#722ed1', bg: '#f9f0ff' },
 };

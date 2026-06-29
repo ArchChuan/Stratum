@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const skillTypeSchema = z.enum(['code', 'llm', 'http']);
+export const skillTypeSchema = z.enum(['code', 'llm', 'http', 'prompt']);
 export type SkillType = z.infer<typeof skillTypeSchema>;
 
 export const skillConfigSchema = z
@@ -16,6 +16,7 @@ export const skillConfigSchema = z
     timeout_sec: z.number().optional(),
     headers: z.record(z.string()).optional(),
     body_template: z.string().optional(),
+    prompt_template: z.string().optional(),
   })
   .passthrough();
 export type SkillConfig = z.infer<typeof skillConfigSchema>;
@@ -49,4 +50,5 @@ export interface SkillFormValues {
   headersJson?: string;
   headers?: Record<string, string>;
   bodyTemplate?: string;
+  promptTemplate?: string;
 }

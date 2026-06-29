@@ -124,5 +124,5 @@ func (c *CompiledGraph[S]) Invoke(ctx context.Context, initial S, cfg RunConfig)
 			return state, fmt.Errorf("graph: no outgoing edge from node %q", current)
 		}
 	}
-	return state, nil
+	return state, fmt.Errorf("graph: max steps (%d) exceeded", maxSteps)
 }

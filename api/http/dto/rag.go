@@ -22,10 +22,10 @@ type UploadDocumentRequest struct {
 
 // QueryRequest is bound from POST /knowledge/query JSON body.
 type QueryRequest struct {
-	Question  string `json:"question" binding:"required"`
+	Question  string `json:"question" binding:"required,max=4096"`
 	Workspace string `json:"workspace" binding:"required"`
 	Mode      string `json:"mode" binding:"required,oneof=vector keyword hybrid"`
-	TopK      int    `json:"topK"`
+	TopK      int    `json:"topK" binding:"omitempty,min=1,max=20"`
 }
 
 // CreateWorkspaceRequest is bound from POST /knowledge/workspaces JSON body.

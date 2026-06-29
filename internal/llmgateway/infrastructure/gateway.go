@@ -20,6 +20,9 @@ type ModelProvider string
 const (
 	ProviderQwen  ModelProvider = "qwen"
 	ProviderZhipu ModelProvider = "zhipu"
+
+	llmStatusSuccess = "success"
+	llmStatusError   = "error"
 )
 
 // LLM IO 类型在 domain 层定义；infra 通过 alias 暴露给内部实现，
@@ -164,7 +167,7 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 
 	client, ok := g.clients[provider]
 	if !ok {
-		g.metrics.IncLLMRequest(req.Model, string(provider), "error")
+		g.metrics.IncLLMRequest(req.Model, string(provider), llmStatusError)
 		return nil, fmt.Errorf("provider not found: %s", provider)
 	}
 
@@ -202,9 +205,9 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 	resp, err := client.Complete(ctx, req)
 	elapsed := time.Since(start).Seconds()
 
-	status := "success"
+	status := llmStatusSuccess
 	if err != nil {
-		status = "error"
+		status = llmStatusError
 	}
 
 	g.metrics.IncLLMRequest(req.Model, string(provider), status)
@@ -259,7 +262,7 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 	provider := g.parseProvider(req.Model)
 	client, ok := g.clients[provider]
 	if !ok {
-		g.metrics.IncLLMRequest(req.Model, string(provider), "error")
+		g.metrics.IncLLMRequest(req.Model, string(provider), llmStatusError)
 		return nil, fmt.Errorf("llmgateway: no client for provider %q", provider)
 	}
 	if g.logger.Core().Enabled(zap.DebugLevel) {
@@ -302,9 +305,9 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 		}
 	}
 	elapsed := time.Since(start).Seconds()
-	status := "success"
+	status := llmStatusSuccess
 	if err != nil {
-		status = "error"
+		status = llmStatusError
 	}
 	g.metrics.IncLLMRequest(req.Model, string(provider), status)
 	g.metrics.RecordLLMRequestDuration(req.Model, string(provider), elapsed)

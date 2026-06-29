@@ -2,6 +2,7 @@
 package http
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/api/wiring"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 // NewRouter assembles the HTTP gin engine from an already-built Container.
@@ -19,6 +21,7 @@ import (
 func NewRouter(c *wiring.Container) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(middleware.BodyLimit(constants.MaxRequestBodyBytes))
 
 	// Middleware (order matches the legacy api.SetupRouter exactly).
 	r.Use(middleware.ErrorHandler(c.Logger))
@@ -149,8 +152,14 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.POST("", requireActive, agentHandler.CreateAgent)
 		agents.GET("/executions", agentHandler.ListExecutions)
 		agents.GET("/:id", agentHandler.GetAgent)
-		agents.POST("/:id/execute", requireActive, agentHandler.ExecuteAgent)
-		agents.POST("/:id/execute/stream", requireActive, agentHandler.ExecuteAgentStream)
+		execLimiter := middleware.NewRateLimiterStore(middleware.LLMExecRate, middleware.LLMExecBurst)
+		execRateLimit := middleware.RateLimitByKey(execLimiter, func(c *gin.Context) string {
+			tid, _ := c.Get("auth.tenant_id")
+			uid, _ := c.Get("auth.sub")
+			return fmt.Sprintf("%v:%v", tid, uid)
+		})
+		agents.POST("/:id/execute", requireActive, execRateLimit, agentHandler.ExecuteAgent)
+		agents.POST("/:id/execute/stream", requireActive, execRateLimit, agentHandler.ExecuteAgentStream)
 		agents.PUT("/:id", requireActive, agentHandler.UpdateAgent)
 		agents.DELETE("/:id", requireActive, agentHandler.DeleteAgent)
 		agents.POST("/:id/conversations", chatHandler.CreateConversation)
@@ -187,7 +196,7 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 		knowledgeGroup.POST("/workspaces", append(adminMW, requireActive, ragHandler.CreateWorkspace)...)
 		knowledgeGroup.PATCH("/workspaces/:name", append(adminMW, requireActive, ragHandler.UpdateWorkspace)...)
 		knowledgeGroup.DELETE("/workspaces/:name", append(adminMW, requireActive, ragHandler.DeleteWorkspace)...)
-		knowledgeGroup.POST("/ingest", append(adminMW, requireActive, ragHandler.UploadDocument)...)
+		knowledgeGroup.POST("/ingest", append(adminMW, requireActive, middleware.BodyLimit(constants.MaxUploadBytes), ragHandler.UploadDocument)...)
 	}
 }
 
@@ -211,10 +220,15 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 	jwtMW := middleware.JWTMiddleware(c.Platform.JWTService)
 	injectTenant := middleware.InjectTenantContext()
 
-	// User-scoped endpoints: authenticated users managing their own memories.
-	if c.Memory.Service != nil {
-		userHandler := handler.NewUserMemoryHandler(c.Memory.Service)
-		userGroup := r.Group("/api/memory", jwtMW, injectTenant, requireActive)
-		userGroup.DELETE("/clear", userHandler.ClearMemories)
-	}
+	userHandler := handler.NewUserMemoryHandler(c.Memory.Service, c.Memory.Manager)
+	g := r.Group("/memory", jwtMW, injectTenant, requireActive)
+	g.DELETE("/clear", userHandler.ClearMemories)
+	g.POST("", userHandler.AddMemory)
+	g.GET("/:id", userHandler.GetMemory)
+	g.POST("/search", userHandler.SearchMemory)
+	g.POST("/sessions", userHandler.ListSessions)
+	g.GET("/stats", userHandler.GetStats)
+	g.GET("/summary/:session_id", userHandler.GetSummary)
+	g.DELETE("/:id", userHandler.DeleteMemory)
+	g.DELETE("/session/:session_id", userHandler.ClearSession)
 }

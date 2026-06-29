@@ -72,9 +72,30 @@ func (vs *VectorStore) doConnect(ctx context.Context) error {
 		vs.logger.Info("connected to Milvus successfully")
 		return nil
 	case <-ctx.Done():
+		// drain buffered channel to close any gRPC client that connects after timeout
+		go func() {
+			if res := <-resultCh; res.err == nil {
+				_ = res.client.Close()
+			}
+		}()
 		vs.logger.Warn("Milvus connection timeout")
 		return fmt.Errorf("milvus connection timeout")
 	}
+}
+
+// getClient ensures a connection exists and returns the client under a read lock,
+// preventing a nil-pointer panic if Close() races with an in-flight call.
+func (vs *VectorStore) getClient(ctx context.Context) (client.Client, error) {
+	if err := vs.ensureConnected(ctx); err != nil {
+		return nil, fmt.Errorf("milvus not available: %w", err)
+	}
+	vs.mu.RLock()
+	c := vs.client
+	vs.mu.RUnlock()
+	if c == nil {
+		return nil, fmt.Errorf("milvus client closed")
+	}
+	return c, nil
 }
 
 func (vs *VectorStore) Connect(ctx context.Context) error {
@@ -104,19 +125,20 @@ func (vs *VectorStore) CreateCollection(ctx context.Context, collectionName stri
 // The schema includes a user_id field for per-user filtering.
 // dim is cached in dimCache so Insert can pick it up without a signature change.
 func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionName string, dim int) error {
-	if err := vs.ensureConnected(ctx); err != nil {
-		return fmt.Errorf("milvus not available: %w", err)
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return err
 	}
 	vs.logger.Info("creating collection", zap.String("collection", collectionName), zap.Int("dim", dim))
 
-	hasCollection, err := vs.client.HasCollection(ctx, collectionName)
+	hasCollection, err := c.HasCollection(ctx, collectionName)
 	if err != nil {
 		vs.logger.Error("failed to check collection", zap.Error(err))
 		return fmt.Errorf("failed to check collection %s: %w", collectionName, err)
 	}
 
 	if hasCollection {
-		existingDim, derr := vs.collectionDim(ctx, collectionName)
+		existingDim, derr := vs.collectionDim(ctx, c, collectionName)
 		if derr != nil {
 			vs.logger.Warn("failed to describe existing collection, will reuse",
 				zap.String("collection", collectionName), zap.Error(derr))
@@ -124,10 +146,10 @@ func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionNa
 			return nil
 		}
 		if existingDim == dim {
-			if !vs.collectionHasField(ctx, collectionName, "agent_id") {
+			if !vs.collectionHasField(ctx, c, collectionName, "agent_id") {
 				vs.logger.Warn("collection missing required field, recreating",
 					zap.String("collection", collectionName), zap.String("field", "agent_id"))
-				if derr := vs.client.DropCollection(ctx, collectionName); derr != nil {
+				if derr := c.DropCollection(ctx, collectionName); derr != nil {
 					return fmt.Errorf("failed to drop stale collection %s: %w", collectionName, derr)
 				}
 				vs.dimCache.Delete(collectionName)
@@ -136,11 +158,11 @@ func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionNa
 				vs.logger.Info("collection already exists",
 					zap.String("collection", collectionName), zap.Int("dim", dim))
 				vs.dimCache.Store(collectionName, dim)
-				idxList, _ := vs.client.DescribeIndex(ctx, collectionName, "vector")
+				idxList, _ := c.DescribeIndex(ctx, collectionName, "vector")
 				if len(idxList) == 0 {
 					flatIdx, ierr := entity.NewIndexIvfFlat(entity.L2, 128)
 					if ierr == nil {
-						_ = vs.client.CreateIndex(ctx, collectionName, "vector", flatIdx, false)
+						_ = c.CreateIndex(ctx, collectionName, "vector", flatIdx, false)
 					}
 				}
 				return nil
@@ -150,7 +172,7 @@ func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionNa
 				zap.String("collection", collectionName),
 				zap.Int("existing_dim", existingDim),
 				zap.Int("required_dim", dim))
-			if derr := vs.client.DropCollection(ctx, collectionName); derr != nil {
+			if derr := c.DropCollection(ctx, collectionName); derr != nil {
 				return fmt.Errorf("failed to drop stale collection %s: %w", collectionName, derr)
 			}
 			vs.dimCache.Delete(collectionName)
@@ -207,7 +229,7 @@ func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionNa
 		},
 	}
 
-	if err := vs.client.CreateCollection(ctx, schema, 2); err != nil {
+	if err := c.CreateCollection(ctx, schema, 2); err != nil {
 		vs.logger.Error("failed to create collection", zap.String("collection", collectionName), zap.Error(err))
 		return fmt.Errorf("failed to create collection %s: %w", collectionName, err)
 	}
@@ -215,56 +237,62 @@ func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionNa
 	if err != nil {
 		return fmt.Errorf("failed to build index param: %w", err)
 	}
-	if err := vs.client.CreateIndex(ctx, collectionName, "vector", idx, false); err != nil {
+	if err := c.CreateIndex(ctx, collectionName, "vector", idx, false); err != nil {
 		return fmt.Errorf("failed to create index on %s: %w", collectionName, err)
 	}
 	scIdx := entity.NewScalarIndexWithType(entity.Trie)
 	for _, f := range []string{"user_id", "agent_id", "scope"} {
-		if err := vs.client.CreateIndex(ctx, collectionName, f, scIdx, false); err != nil {
+		if err := c.CreateIndex(ctx, collectionName, f, scIdx, false); err != nil {
 			return fmt.Errorf("failed to create scalar index on %s.%s: %w", collectionName, f, err)
 		}
 	}
 	vs.dimCache.Store(collectionName, dim)
 	vs.logger.Info("collection created successfully", zap.String("collection", collectionName))
+	if err := c.LoadCollection(ctx, collectionName, false); err != nil {
+		return fmt.Errorf("failed to load collection %s: %w", collectionName, err)
+	}
 	return nil
 }
 
 // EnsurePartition creates the partition if it does not already exist.
 func (vs *VectorStore) EnsurePartition(ctx context.Context, collectionName, partitionName string) error {
-	if err := vs.ensureConnected(ctx); err != nil {
-		return fmt.Errorf("milvus not available: %w", err)
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return err
 	}
-	ok, err := vs.client.HasPartition(ctx, collectionName, partitionName)
+	ok, err := c.HasPartition(ctx, collectionName, partitionName)
 	if err != nil {
 		return fmt.Errorf("failed to check partition: %w", err)
 	}
 	if ok {
 		return nil
 	}
-	return vs.client.CreatePartition(ctx, collectionName, partitionName)
+	return c.CreatePartition(ctx, collectionName, partitionName)
 }
 
 // DropPartition drops a partition and all its vectors. No-op if it does not exist.
 func (vs *VectorStore) DropPartition(ctx context.Context, collectionName, partitionName string) error {
-	if err := vs.ensureConnected(ctx); err != nil {
-		return fmt.Errorf("milvus not available: %w", err)
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return err
 	}
-	ok, err := vs.client.HasPartition(ctx, collectionName, partitionName)
+	ok, err := c.HasPartition(ctx, collectionName, partitionName)
 	if err != nil {
 		return fmt.Errorf("failed to check partition: %w", err)
 	}
 	if !ok {
 		return nil
 	}
-	return vs.client.DropPartition(ctx, collectionName, partitionName)
+	return c.DropPartition(ctx, collectionName, partitionName)
 }
 
 // CountVectors returns the total number of vectors in the given partition.
 func (vs *VectorStore) CountVectors(ctx context.Context, collectionName, partitionName string) (int64, error) {
-	if err := vs.ensureConnected(ctx); err != nil {
-		return 0, fmt.Errorf("milvus not available: %w", err)
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return 0, err
 	}
-	if err := vs.client.LoadCollection(ctx, collectionName, false); err != nil {
+	if err := c.LoadCollection(ctx, collectionName, false); err != nil {
 		if strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "not found") {
 			return 0, nil
 		}
@@ -274,7 +302,7 @@ func (vs *VectorStore) CountVectors(ctx context.Context, collectionName, partiti
 	if partitionName != "" {
 		partitions = []string{partitionName}
 	}
-	rows, err := vs.client.Query(ctx, collectionName, partitions, `id != ""`, []string{"id"})
+	rows, err := c.Query(ctx, collectionName, partitions, `id != ""`, []string{"id"})
 	if err != nil {
 		if strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "not found") {
 			return 0, nil
@@ -292,8 +320,9 @@ func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs [
 	if len(docs) == 0 {
 		return nil
 	}
-	if err := vs.ensureConnected(ctx); err != nil {
-		return fmt.Errorf("milvus not available: %w", err)
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return err
 	}
 	vs.logger.Debug("inserting vectors", zap.String("collection", collectionName), zap.Int("count", len(docs)))
 
@@ -331,7 +360,7 @@ func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs [
 	chunkIdxCol := entity.NewColumnInt64("chunk_index", chunkIndices)
 	vectorCol := entity.NewColumnFloatVector("vector", dim, vectors)
 
-	_, err := vs.client.Insert(ctx, collectionName, partitionName, idCol, userIDCol, agentIDCol, scopeCol, contentCol, sourceCol, chunkIdxCol, vectorCol)
+	_, err = c.Insert(ctx, collectionName, partitionName, idCol, userIDCol, agentIDCol, scopeCol, contentCol, sourceCol, chunkIdxCol, vectorCol)
 	if err != nil {
 		vs.logger.Error("failed to insert vectors", zap.Error(err))
 		return fmt.Errorf("failed to insert vectors: %w", err)
@@ -347,12 +376,13 @@ func (vs *VectorStore) Search(ctx context.Context, collectionName string, queryV
 // SearchWithFilter performs vector search with an optional Milvus boolean expression filter.
 // Pass expression="" for unfiltered search. partitions scopes the search to specific partitions.
 func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName string, queryVector []float32, topK int, expression string, partitions ...string) ([]SearchResult, error) {
-	if err := vs.ensureConnected(ctx); err != nil {
-		return nil, fmt.Errorf("milvus not available: %w", err)
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return nil, err
 	}
 	vs.logger.Debug("searching vectors", zap.String("collection", collectionName), zap.Int("topK", topK))
 
-	if err := vs.client.LoadCollection(ctx, collectionName, false); err != nil {
+	if err := c.LoadCollection(ctx, collectionName, false); err != nil {
 		if strings.Contains(err.Error(), "index not found") ||
 			strings.Contains(err.Error(), "not found") ||
 			strings.Contains(err.Error(), "does not exist") {
@@ -374,7 +404,7 @@ func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName stri
 	}
 
 	// Execute search
-	results, searchErr := vs.client.Search(
+	results, searchErr := c.Search(
 		ctx,
 		collectionName,
 		partitions,
@@ -474,11 +504,12 @@ func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName stri
 }
 
 func (vs *VectorStore) Flush(ctx context.Context, collectionName string) error {
-	if err := vs.ensureConnected(ctx); err != nil {
-		return fmt.Errorf("milvus not available: %w", err)
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return err
 	}
 	vs.logger.Debug("flushing collection", zap.String("collection", collectionName))
-	if err := vs.client.Flush(ctx, collectionName, false); err != nil {
+	if err := c.Flush(ctx, collectionName, false); err != nil {
 		vs.logger.Error("failed to flush collection", zap.Error(err))
 		return fmt.Errorf("failed to flush collection %s: %w", collectionName, err)
 	}
@@ -491,8 +522,9 @@ func (vs *VectorStore) DeleteByDocumentIDs(ctx context.Context, collectionName s
 	if len(docIDs) == 0 {
 		return nil
 	}
-	if err := vs.ensureConnected(ctx); err != nil {
-		return fmt.Errorf("milvus not available: %w", err)
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return err
 	}
 	quoted := make([]string, len(docIDs))
 	for i, id := range docIDs {
@@ -502,7 +534,7 @@ func (vs *VectorStore) DeleteByDocumentIDs(ctx context.Context, collectionName s
 	vs.logger.Info("deleting vectors by document IDs",
 		zap.String("collection", collectionName),
 		zap.Int("doc_count", len(docIDs)))
-	if err := vs.client.Delete(ctx, collectionName, "", expr); err != nil {
+	if err := c.Delete(ctx, collectionName, "", expr); err != nil {
 		return fmt.Errorf("failed to delete vectors: %w", err)
 	}
 	return nil
@@ -510,16 +542,17 @@ func (vs *VectorStore) DeleteByDocumentIDs(ctx context.Context, collectionName s
 
 // CountDocuments returns the number of distinct source documents in a collection.
 func (vs *VectorStore) CountDocuments(ctx context.Context, collectionName string) (int, error) {
-	if err := vs.ensureConnected(ctx); err != nil {
-		return 0, fmt.Errorf("milvus not available: %w", err)
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return 0, err
 	}
-	if err := vs.client.LoadCollection(ctx, collectionName, false); err != nil {
+	if err := c.LoadCollection(ctx, collectionName, false); err != nil {
 		if strings.Contains(err.Error(), "index not found") || strings.Contains(err.Error(), "does not exist") {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("failed to load collection: %w", err)
 	}
-	rows, err := vs.client.Query(ctx, collectionName, []string{}, `id != ""`, []string{"source_document"})
+	rows, err := c.Query(ctx, collectionName, []string{}, `id != ""`, []string{"source_document"})
 	if err != nil {
 		return 0, fmt.Errorf("failed to query collection: %w", err)
 	}
@@ -537,10 +570,11 @@ func (vs *VectorStore) CountDocuments(ctx context.Context, collectionName string
 }
 
 func (vs *VectorStore) DeleteByFilter(ctx context.Context, collectionName, expr string) error {
-	if err := vs.ensureConnected(ctx); err != nil {
-		return fmt.Errorf("milvus not available: %w", err)
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return err
 	}
-	if err := vs.client.Delete(ctx, collectionName, "", expr); err != nil {
+	if err := c.Delete(ctx, collectionName, "", expr); err != nil {
 		if strings.Contains(err.Error(), "not exist") || strings.Contains(err.Error(), "not found") {
 			return nil
 		}
@@ -550,17 +584,18 @@ func (vs *VectorStore) DeleteByFilter(ctx context.Context, collectionName, expr 
 }
 
 func (vs *VectorStore) DeleteCollection(ctx context.Context, collectionName string) error {
-	if err := vs.ensureConnected(ctx); err != nil {
-		return fmt.Errorf("milvus not available: %w", err)
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return err
 	}
-	exists, err := vs.client.HasCollection(ctx, collectionName)
+	exists, err := c.HasCollection(ctx, collectionName)
 	if err != nil {
 		return fmt.Errorf("failed to check collection %s: %w", collectionName, err)
 	}
 	if !exists {
 		return nil
 	}
-	if err := vs.client.DropCollection(ctx, collectionName); err != nil {
+	if err := c.DropCollection(ctx, collectionName); err != nil {
 		return fmt.Errorf("failed to delete collection %s: %w", collectionName, err)
 	}
 	vs.logger.Info("collection deleted", zap.String("collection", collectionName))
@@ -570,12 +605,13 @@ func (vs *VectorStore) DeleteCollection(ctx context.Context, collectionName stri
 // KeywordSearch performs TF-IDF based keyword search on the collection.
 // Fetches all documents and ranks them by relevance to query terms.
 func (vs *VectorStore) KeywordSearch(ctx context.Context, collectionName string, query string, topK int, partitions ...string) ([]SearchResult, error) {
-	if err := vs.ensureConnected(ctx); err != nil {
-		return nil, fmt.Errorf("milvus not available: %w", err)
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return nil, err
 	}
 	vs.logger.Debug("keyword searching", zap.String("collection", collectionName), zap.String("query", query))
 
-	if err := vs.client.LoadCollection(ctx, collectionName, false); err != nil {
+	if err := c.LoadCollection(ctx, collectionName, false); err != nil {
 		if strings.Contains(err.Error(), "index not found") ||
 			strings.Contains(err.Error(), "not found") ||
 			strings.Contains(err.Error(), "does not exist") {
@@ -583,7 +619,7 @@ func (vs *VectorStore) KeywordSearch(ctx context.Context, collectionName string,
 		}
 		return nil, fmt.Errorf("failed to load collection %s: %w", collectionName, err)
 	}
-	rows, err := vs.client.Query(
+	rows, err := c.Query(
 		ctx,
 		collectionName,
 		[]string{},
@@ -822,8 +858,8 @@ func tokenize(text string) []string {
 
 // collectionDim reads the vector field dim from an existing collection's schema.
 // Returns an error if the collection has no float-vector field or the dim is unparseable.
-func (vs *VectorStore) collectionDim(ctx context.Context, collectionName string) (int, error) {
-	coll, err := vs.client.DescribeCollection(ctx, collectionName)
+func (vs *VectorStore) collectionDim(ctx context.Context, c client.Client, collectionName string) (int, error) {
+	coll, err := c.DescribeCollection(ctx, collectionName)
 	if err != nil {
 		return 0, fmt.Errorf("describe collection %s: %w", collectionName, err)
 	}
@@ -847,8 +883,8 @@ func (vs *VectorStore) collectionDim(ctx context.Context, collectionName string)
 	return 0, fmt.Errorf("collection %s has no float-vector field", collectionName)
 }
 
-func (vs *VectorStore) collectionHasField(ctx context.Context, collectionName, fieldName string) bool {
-	coll, err := vs.client.DescribeCollection(ctx, collectionName)
+func (vs *VectorStore) collectionHasField(ctx context.Context, c client.Client, collectionName, fieldName string) bool {
+	coll, err := c.DescribeCollection(ctx, collectionName)
 	if err != nil || coll == nil || coll.Schema == nil {
 		return false
 	}

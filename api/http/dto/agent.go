@@ -4,9 +4,9 @@ package dto
 
 // CreateAgentRequest represents the request to create a new agent
 type CreateAgentRequest struct {
-	Name          string   `json:"name" binding:"required"`
-	Description   string   `json:"description"`
-	SystemPrompt  string   `json:"system_prompt"`
+	Name          string   `json:"name" binding:"required,max=100"`
+	Description   string   `json:"description" binding:"omitempty,max=2000"`
+	SystemPrompt  string   `json:"system_prompt" binding:"omitempty,max=16384"`
 	LLMModel      string   `json:"llm_model" binding:"required"`
 	MaxIterations int      `json:"max_iterations" binding:"required,min=1,max=20"`
 	AllowedSkills []string `json:"allowed_skills"`

@@ -65,6 +65,11 @@ func MapErrorToStatus(err error) int {
 		return he.Status
 	}
 
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		return http.StatusRequestEntityTooLarge
+	}
+
 	switch {
 	// 404 — NotFound
 	case errors.Is(err, pgx.ErrNoRows),

@@ -131,14 +131,6 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		return
 	}
 	defer cancel()
-
-	go func() {
-		select {
-		case <-clientCtx.Done():
-			cancel()
-		case <-execCtx.Done():
-		}
-	}()
 	go func() {
 		ticker := time.NewTicker(constants.SSEHeartbeatInterval)
 		defer ticker.Stop()
@@ -152,6 +144,7 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 			case <-execCtx.Done():
 				return
 			case <-clientCtx.Done():
+				cancel()
 				return
 			}
 		}

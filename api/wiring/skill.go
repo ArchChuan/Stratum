@@ -49,6 +49,8 @@ func (f *wiringSkillFactory) Build(id string, in skilldomainport.SkillInput) (sk
 		return executors.NewLLMSkill(id, in.Name, in.Description, in.SystemPrompt, in.Model, in.Temperature, in.MaxTokens, nil, f.logger), nil
 	case "http":
 		return executors.NewHTTPSkill(id, in.Name, in.Description, in.URL, in.Method, in.Headers, in.BodyTemplate, in.TimeoutSec)
+	case "prompt":
+		return executors.NewPromptSkill(id, in.Name, in.Description, in.PromptTemplate), nil
 	default:
 		return nil, fmt.Errorf("%w: %s", skilldomain.ErrSkillUnsupportedType, in.Type)
 	}

@@ -482,7 +482,7 @@ func (c *A2AClient) registerDefaultHandlers() {
 		c.mu.Lock()
 		if session, ok := c.collaborations[collabID]; ok {
 			session.mu.Lock()
-			session.State = "active"
+			session.State = sessionStateActive
 			session.mu.Unlock()
 		}
 		c.mu.Unlock()
@@ -498,7 +498,7 @@ func (c *A2AClient) registerDefaultHandlers() {
 		c.mu.Lock()
 		if session, ok := c.collaborations[collabID]; ok {
 			session.mu.Lock()
-			session.State = "completed"
+			session.State = taskStatusCompleted
 			session.SharedData = msg.Payload["results"].(map[string]interface{})
 			session.mu.Unlock()
 		}

@@ -64,6 +64,11 @@ jobs:
         env:
           PGPASSWORD: postgres
 
+      - name: Enable pg_trgm extension
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d stratum_test -c \
+            "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+
       - name: Run E2E tests
         run: |
           go test -v -timeout 10m ./test/e2e/... \

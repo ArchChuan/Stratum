@@ -9,9 +9,10 @@ import (
 	"github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/persistence"
+	pgstorage "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
-	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // MemoryTestEnv holds resources for E2E memory tests.
@@ -47,69 +48,20 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	tenantID := fmt.Sprintf("test_%d", time.Now().UnixNano())
 	schemaName := fmt.Sprintf("tenant_%s", tenantID)
 
-	// Step 3: Create isolated tenant schema
-	_, err = pool.Exec(ctx, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", schemaName))
-	require.NoError(t, err, "create tenant schema")
+	// Step 3: Provision public schema (gen_uuid_v7, pg_trgm, public.tenants, ...).
+	// Idempotent — safe to call per-test; no-op if already applied to this DB.
+	if err := pgstorage.ProvisionPublicSchema(ctx, pool, zap.NewNop()); err != nil {
+		pool.Close()
+		t.Fatalf("provision public schema: %v", err)
+	}
 
-	_, err = pool.Exec(ctx, fmt.Sprintf("SET search_path = %s, public", schemaName))
-	require.NoError(t, err, "set search_path")
-
-	// Step 4: Apply tenant DDL (memory_facts, memory_entities, memory_extraction_queue)
-	ddl := `
-		CREATE TABLE IF NOT EXISTS memory_facts (
-		    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		    user_id         TEXT NOT NULL,
-		    agent_id        TEXT,
-		    scope           TEXT NOT NULL CHECK (scope IN ('user', 'agent')),
-		    content         TEXT NOT NULL,
-		    importance      FLOAT8 NOT NULL DEFAULT 0.5 CHECK (importance BETWEEN 0 AND 1),
-		    frecency_score  FLOAT8 NOT NULL DEFAULT 0,
-		    access_count    INT NOT NULL DEFAULT 0,
-		    last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		    superseded_by   UUID,
-		    status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded', 'archived', 'deleted')),
-		    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		    deleted_at      TIMESTAMPTZ
-		);
-		CREATE INDEX IF NOT EXISTS idx_memory_facts_user_scope ON memory_facts (user_id, scope, status);
-		CREATE INDEX IF NOT EXISTS idx_memory_facts_frecency ON memory_facts (frecency_score DESC) WHERE status = 'active';
-
-		CREATE TABLE IF NOT EXISTS memory_entities (
-		    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		    user_id                 TEXT NOT NULL,
-		    agent_id                TEXT,
-		    scope                   TEXT NOT NULL CHECK (scope IN ('user', 'agent')),
-		    name                    TEXT NOT NULL,
-		    entity_type             TEXT NOT NULL,
-		    profile                 TEXT NOT NULL DEFAULT '',
-		    fact_count              INT NOT NULL DEFAULT 0,
-		    fact_count_since_rebuild INT NOT NULL DEFAULT 0,
-		    last_seen_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		    last_profile_rebuild_at TIMESTAMPTZ,
-		    status                  TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'deleted')),
-		    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);
-		CREATE INDEX IF NOT EXISTS idx_memory_entities_user_scope ON memory_entities (user_id, scope, status);
-
-		CREATE TABLE IF NOT EXISTS memory_extraction_queue (
-		    id              BIGSERIAL PRIMARY KEY,
-		    message_id      TEXT NOT NULL,
-		    user_id         TEXT NOT NULL,
-		    agent_id        TEXT,
-		    conversation_id UUID,
-		    scope           TEXT NOT NULL DEFAULT 'user',
-		    content         TEXT NOT NULL,
-		    status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
-		    retry_count     INT NOT NULL DEFAULT 0,
-		    error_msg       TEXT,
-		    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);
-	`
-	_, err = pool.Exec(ctx, ddl)
-	require.NoError(t, err, "apply tenant DDL")
+	// Step 4: Provision the full tenant schema via the canonical DDL
+	// (pkg/storage/postgres/tenant_schema.sql is the single source of truth;
+	// production startup and tests apply the same file via this call).
+	if err := pgstorage.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		pool.Close()
+		t.Fatalf("provision tenant schema: %v", err)
+	}
 
 	// Step 5: Connect to Redis (skip if unavailable)
 	redisClient := redis.NewClient(&redis.Options{

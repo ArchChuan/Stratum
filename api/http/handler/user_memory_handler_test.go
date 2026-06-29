@@ -38,7 +38,7 @@ func setupUserMemoryRouter(svc *fakeUserMemorySvc, tenantID, userID string) *gin
 		c.Next()
 	}
 
-	h := NewUserMemoryHandler(svc)
+	h := NewUserMemoryHandler(svc, nil)
 	r.DELETE("/api/memory/clear", injectClaims, h.ClearMemories)
 	return r
 }
