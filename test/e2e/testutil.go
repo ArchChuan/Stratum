@@ -61,6 +61,7 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 		    user_id         TEXT NOT NULL,
 		    agent_id        TEXT,
 		    scope           TEXT NOT NULL CHECK (scope IN ('user', 'agent')),
+		    conversation_id UUID,
 		    content         TEXT NOT NULL,
 		    importance      FLOAT8 NOT NULL DEFAULT 0.5 CHECK (importance BETWEEN 0 AND 1),
 		    frecency_score  FLOAT8 NOT NULL DEFAULT 0,
