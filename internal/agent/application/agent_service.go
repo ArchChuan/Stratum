@@ -296,7 +296,9 @@ func (s *AgentService) ensureConversation(ctx context.Context, tenantID, agentID
 	if req.ConversationID != "" || s.deps.ChatStore == nil {
 		return
 	}
-	conv, err := s.deps.ChatStore.CreateConversation(ctx, tenantID, agentID, userID, "新会话")
+	createCtx, createCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+	conv, err := s.deps.ChatStore.CreateConversation(createCtx, tenantID, agentID, userID, "新会话")
+	createCancel()
 	if err != nil {
 		s.deps.Logger.Warn("agent: auto-create conversation failed", zap.Error(err))
 		return
@@ -448,10 +450,6 @@ func (s *AgentService) assembleOptions(
 	if req.MaxSteps > 0 {
 		options = append(options, WithMaxSteps(req.MaxSteps))
 	}
-	if req.Timeout > 0 {
-		options = append(options, WithTimeout(req.Timeout))
-	}
-
 	if s.deps.TenantResolver != nil {
 		if capGW, apiKeys, ok := s.deps.TenantResolver.Resolve(ctx, meta.TenantID); ok {
 			ctx = s.deps.TenantResolver.InjectCompleter(ctx, meta.TenantID)

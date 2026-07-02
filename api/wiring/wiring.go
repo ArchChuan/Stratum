@@ -126,7 +126,6 @@ func NewFromExisting(
 	gateway *llmgateway.Gateway,
 	db *pgxpool.Pool,
 	rdb *goredis.Client,
-	capGW port.CapabilityGateway,
 	skillAdapter port.Adapter,
 	memPipeline *mempipeline.Pipeline,
 ) (*Container, error) {

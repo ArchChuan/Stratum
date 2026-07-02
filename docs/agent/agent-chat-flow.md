@@ -491,7 +491,7 @@ stateDiagram-v2
 
 ## 11. 用户记忆能力（业务流程 + 实现细节）
 
-Stratum 的"用户记忆"分为**短期**（按 `conversation_id` 直读 `chat_messages`）与**长期**（异步管道沉淀到 `memory_entries` / `memory_entities` / `memory_summaries` / Milvus 向量库）两层。  
+Stratum 的"用户记忆"分为**短期**（按 `conversation_id` 直读 `chat_messages`）与**长期**（异步管道沉淀到 `memory_entries` / `memory_entities` / `memory_summaries` / Milvus 向量库）两层。
 代码主路径在 `internal/memory/{application,infrastructure}` 和 `internal/agent/application/agent.go`，由 `api/wiring/memory.go` 按 Container 装配；写、读、召回、删除四条业务流彼此解耦但共用同一份数据。
 
 ### 11.1 数据归属与存储一览
@@ -503,7 +503,7 @@ Stratum 的"用户记忆"分为**短期**（按 `conversation_id` 直读 `chat_m
 | PG · tenant schema | `memory_entries` | `EnricherWorker.persistEnrichment` | `MemoryInjector.BuildContext`、`RecallHandler.textSearch` | 长期记忆富化结果（importance / keywords / token_estimate） |
 | PG · tenant schema | `memory_entities` | `EnricherWorker.persistEnrichment`（按 entity 循环 UPSERT） | `MemoryInjector.BuildContext` | 命名实体表，scope = user / agent |
 | PG · tenant schema | `memory_summaries` | `EnricherWorker.writeSummary`（条件触发） | `MemoryInjector.BuildContext` | 会话累计 token 超过阈值时滚动生成 |
-| PG · tenant schema | `memory_extraction_queue` | `MessageBuffer.flush` | （TODO，`BuildMemoryWorkers` 暂未上线 worker） | LLM 事实抽取队列 |
+| PG · tenant schema | `memory_extraction_queue` | `MessageBuffer.flush` / `BufferScanner` | `ExtractionWorker`（via `TenantWatcher`） | LLM 事实抽取队列 |
 | PG · tenant schema | `memory_facts` | `MemoryService.ExtractFacts` | `MemoryService.ForgetMemory` / `Clear*` | 事实抽取产物，soft-delete |
 | Milvus | `memory_<tenantID>`（短横线换下划线） | `EmbedderWorker` 通过 `MilvusVectorAdapter.Upsert` | `RecallHandler.tryVectorSearch` | 消息维度向量；scope/agent_id 走 metadata 过滤 |
 | Milvus | `memory_facts_<tenantID>` | `MemoryService.ExtractFacts` | `ForgetMemory` / `ClearUserMemories` 清理 | 事实维度向量 |
@@ -564,7 +564,7 @@ sequenceDiagram
     TX->>TX: INSERT chat_messages RETURNING id, created_at
     alt 过滤通过 memoryOutboxContent(role, content)
         TX->>OB: INSERT memory_outbox(message_id, payload=JSON)
-        Note over OB: payload 字段：<br/>message_id, conversation_id, tenant_id,<br/>role, content, created_at, user_id,<br/>agent_id, scope
+        Note over OB: payload 字段：<br/>message_id, conversation_id, tenant_id,<br/>role, content, created_at, user_id,<br/>agent_id, scope, trace_id
     else 跳过原因
         Note over CS: role 不在 user/assistant<br/>或 runes < MemoryOutboxMinRunes<br/>或 IsError / SkipOutbox
         TX-->>TX: 只写 chat_messages
@@ -676,11 +676,11 @@ sequenceDiagram
         Note over W,DB: 摘要触发：必须在 Ack 之后 + 独立事务执行
         W->>W: runSummaryAsyncSafe (defer recover)
         W->>DB: 短 tx 读取 SUM(token_estimate) + 历史消息
-        alt 累计 ≥ SummaryTokenThreshold<br/>且近 1 分钟无新摘要
+        alt SUM(token_estimate) ≥ SummaryTokenThreshold
             W->>LLM: Complete(SummaryModel, T=0.3, timeout=MemorySummaryLLMTimeout)
             LLM-->>W: summary 文本
-            W->>DB: 独立 tx INSERT memory_summaries<br/>conversation_id, user_id, agent_id, scope, summary, covered_until, token_count
-        else 阈值未达 / 已有近期摘要
+            W->>DB: 独立 tx INSERT memory_summaries<br/>conversation_id, user_id, agent_id, scope, summary, covered_until=NOW(), token_count
+        else 累计 token 未达阈值
             W-->>W: 直接返回 nil
         end
     end
@@ -697,9 +697,9 @@ sequenceDiagram
 - LLM 不可控副作用全部隔离在富化阶段；ChatStore 与 Embedder 不会调用 LLM，主链路绝不被 LLM 延迟阻塞。
 - `safeProcessMessage` 与 `runSummaryAsyncSafe` 两道 `defer recover` 把"单条数据导致 worker 崩溃"的风险吃掉。
 
-### 11.5 备用写入通道：MessageBuffer + 事实抽取（演进中）
+### 11.5 事实级写入通道：MessageBuffer + TenantWatcher 工作集群
 
-`internal/memory/application/message_buffer.go` + `extraction.go`：与上面的"消息维度"管道并行，用于**事实级抽取**（更精细，但当前 worker 未在 `BuildMemoryWorkers` 中启用，处于演进状态）。
+`internal/memory/application/message_buffer.go` + `extraction.go`：与上面的"消息维度"管道并行，用于**事实级抽取**（更精细粒度）。`BuildMemoryWorkers`（`api/wiring/memory.go`）已上线以下 worker，由 Harness 统一 Start/Stop。
 
 ```mermaid
 flowchart LR
@@ -707,19 +707,35 @@ flowchart LR
     RPush --> Cond{LLEN ≥ MemoryBufferFlushSize<br/>OR 最旧消息 age ≥ MemoryBufferFlushInterval?}
     Cond -- 否 --> Wait[直接返回]
     Cond -- 是 --> Flush[flush: LRANGE 0 -1 + Enqueue ExtractionTask + DEL key]
+    BS[BufferScanner<br/>定期扫 Redis] --> Flush
     Flush --> Q[(PG memory_extraction_queue)]
-    Q -. TODO: ExtractionWorker .-> EF[MemoryService.ExtractFacts]
+    Q --> EW[ExtractionWorker<br/>per tenant via TenantWatcher]
+    EW --> EF[MemoryService.ExtractFacts]
     EF --> LLMx[LLMExtractor.ExtractFacts]
     LLMx --> Norm[normalizeEntity<br/>trigram 模糊匹配 + IncrementFactCount]
     Norm --> InsertF[FactRepo.Create memory_facts]
     InsertF --> EmbedF[EmbedClient.Embed]
     EmbedF --> MFV[(Milvus memory_facts_<tid>)]
+    Q --> GCW[GCWorker per tenant]
+    GCW --> GCR[FactRepo 清理过期 facts]
+    Q --> SW[SupersedeWorker per tenant<br/>需 LLM resolver]
+    SW --> SWL[LLMSuperseder.Supersede]
 ```
 
+**`BuildMemoryWorkers` 返回的 worker 列表**（`api/wiring/memory.go:178`）：
+
+| Worker | 路径 | 触发条件 |
+|--------|------|---------|
+| `TenantWatcher` | `internal/memory/infrastructure/workers/` | 60 s reconcile；新 tenant 自动拉起下面三类 worker |
+| └ `ExtractionWorker` | per tenant | 消费 `memory_extraction_queue`，调 `MemoryService.ExtractFacts` |
+| └ `GCWorker` | per tenant | 清理过期 `memory_facts`；通过 `.WithQueue(queue)` 感知队列 |
+| └ `SupersedeWorker` | per tenant（仅当 LLM resolver 可用） | `LLMSuperseder.Supersede` 判定事实是否被新事实取代 |
+| `BufferScanner` | `internal/memory/`（需 Redis） | 扫描 `memory:buffer:*` Redis 键，触发 flush → `ExtractionTask` 入队 |
+
 - **缓冲键**：`memory:buffer:<tenant>:<user>:<agent>:<conv>`，按会话维度合批，避免单条消息频繁触发 LLM。
-- **触发条件**：批数 ≥ `MemoryBufferFlushSize` 或最早消息超过 `MemoryBufferFlushInterval` 即 flush。flush 完成后立刻 `DEL` 整个 key。
-- **`ExtractFacts`**：拼接所有消息 → LLM 抽取事实数组 → 对每个事实：`FindSupersedeCandidates`（trigram 相似度，supersede 决策 TODO） → `normalizeEntity`（fuzzy match 升级旧实体 fact_count，否则新建） → `domain.NewFact` 校验后写 `memory_facts` → `EmbedClient.Embed` 后写 `memory_facts_<tenantID>`。
-- **现状**：`BuildMemoryWorkers` 仍是空切片（占位 TODO），表示 ExtractionWorker / SupersedeWorker / ProfileWorker / GCWorker 暂未在 Container 中拉起；这条通道目前由 API 直接调用 `BufferMessage` / `ExtractFacts` 触发，agent 主链路不依赖它。
+- **触发条件**：批数 ≥ `MemoryBufferFlushSize` 或最早消息超过 `MemoryBufferFlushInterval` 即 flush；flush 完成后立刻 `DEL` 整个 key。
+- **`ExtractFacts`**：拼接所有消息 → LLM 抽取事实数组 → 对每个事实：`FindSupersedeCandidates`（trigram 相似度） → `normalizeEntity`（fuzzy match 升级旧实体 fact_count，否则新建） → `domain.NewFact` 校验后写 `memory_facts` → `EmbedClient.Embed` 后写 `memory_facts_<tenantID>`。
+- **与 11.3~11.4 管道的关系**：两条通道完全并行，互不依赖；11.3 管道写 `memory_entries`（消息维度），本通道写 `memory_facts`（事实维度）。
 
 ### 11.6 读取路径 A：系统提示词注入
 

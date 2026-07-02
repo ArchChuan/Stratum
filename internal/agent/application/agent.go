@@ -222,8 +222,11 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			Query:          input,
 			Scope:          memoryScope,
 		}
-		if mctx, err := a.MemoryInjector.BuildContext(ctx, ic); err != nil {
-			a.Logger.Warn("memory injection failed", zap.Error(err))
+		memInjectCtx, memInjectCancel := context.WithTimeout(ctx, constants.AgentMemoryInjectTimeout)
+		mctx, memInjectErr := a.MemoryInjector.BuildContext(memInjectCtx, ic)
+		memInjectCancel()
+		if memInjectErr != nil {
+			a.Logger.Warn("memory injection failed", zap.Error(memInjectErr))
 		} else {
 			memCtx = mctx
 		}
@@ -245,10 +248,13 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	// Load short-term conversation history from ChatStore (single source of truth).
 	var history []*ChatMessage
 	if chatStore != nil && cfg.ConversationID != "" {
-		if msgs, err := chatStore.ListMessages(ctx, cfg.TenantID, cfg.ConversationID, cfg.UserID); err != nil {
+		histCtx, histCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+		msgs, histErr := chatStore.ListMessages(histCtx, cfg.TenantID, cfg.ConversationID, cfg.UserID)
+		histCancel()
+		if histErr != nil {
 			a.Logger.Warn("agent: failed to load conversation history",
 				zap.String("conversation_id", cfg.ConversationID),
-				zap.Error(err))
+				zap.Error(histErr))
 		} else {
 			history = msgs
 		}
@@ -345,7 +351,6 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 
 	// Persist user input and agent output to ChatStore (outside switch — all agent types benefit).
 	if chatStore != nil && cfg.ConversationID != "" && execErr == nil {
-		saveCtx := ctx
 		userMsg := &ChatMessage{
 			ConversationID: cfg.ConversationID,
 			Role:           "user",
@@ -355,10 +360,13 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			MemoryScope:    memoryScope,
 			SkipOutbox:     false,
 		}
-		if err := chatStore.AddMessage(saveCtx, cfg.TenantID, userMsg); err != nil {
+		saveCtx1, saveCancel1 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+		addUserErr := chatStore.AddMessage(saveCtx1, cfg.TenantID, userMsg)
+		saveCancel1()
+		if addUserErr != nil {
 			a.Logger.Warn("agent: failed to save user message",
 				zap.String("conversation_id", cfg.ConversationID),
-				zap.Error(err))
+				zap.Error(addUserErr))
 		}
 		agentMsg := &ChatMessage{
 			ConversationID: cfg.ConversationID,
@@ -369,10 +377,13 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			MemoryScope:    memoryScope,
 			SkipOutbox:     false,
 		}
-		if err := chatStore.AddMessage(saveCtx, cfg.TenantID, agentMsg); err != nil {
+		saveCtx2, saveCancel2 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+		addAgentErr := chatStore.AddMessage(saveCtx2, cfg.TenantID, agentMsg)
+		saveCancel2()
+		if addAgentErr != nil {
 			a.Logger.Warn("agent: failed to save agent message",
 				zap.String("conversation_id", cfg.ConversationID),
-				zap.Error(err))
+				zap.Error(addAgentErr))
 		}
 	}
 

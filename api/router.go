@@ -28,11 +28,10 @@ func SetupRouter(
 	gateway *llmgateway.Gateway,
 	db *pgxpool.Pool,
 	rdb *goredis.Client,
-	capGW port.CapabilityGateway,
 	skillAdapter port.Adapter,
 	memPipeline *mempipeline.Pipeline,
 ) *gin.Engine {
-	c, err := wiring.NewFromExisting(context.Background(), cfg, logger, gateway, db, rdb, capGW, skillAdapter, memPipeline)
+	c, err := wiring.NewFromExisting(context.Background(), cfg, logger, gateway, db, rdb, skillAdapter, memPipeline)
 	if err != nil {
 		logger.Error("wiring.NewFromExisting failed; returning empty router", zap.Error(err))
 		return gin.New()

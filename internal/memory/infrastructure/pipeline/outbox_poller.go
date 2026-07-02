@@ -142,6 +142,7 @@ func (p *OutboxPoller) pollTenant(ctx context.Context, schema string) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("rows iteration: %w", err)
 	}
+	outboxPending.Set(float64(len(ids)))
 	if len(ids) == 0 {
 		return tx.Commit(ctx)
 	}

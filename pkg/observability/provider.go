@@ -26,7 +26,7 @@ type MetricsProvider interface {
 	RecordLLMRequestDuration(model, provider string, duration float64)
 	IncLLMTokenUsage(model, tokenType string, count int64)
 	RecordLLMTokenHistogram(model, tokenType string, count float64)
-	// RecordLLMFirstTokenLatency is not in the interface until streaming completions are wired.
+	RecordLLMFirstTokenLatency(model, provider string, latency float64)
 
 	// Knowledge / Memory
 	IncKnowledgeQuery(queryType, status string)
@@ -55,6 +55,7 @@ func (NoopMetrics) IncLLMRequest(_, _, _ string)                        {}
 func (NoopMetrics) RecordLLMRequestDuration(_, _ string, _ float64)     {}
 func (NoopMetrics) IncLLMTokenUsage(_, _ string, _ int64)               {}
 func (NoopMetrics) RecordLLMTokenHistogram(_, _ string, _ float64)      {}
+func (NoopMetrics) RecordLLMFirstTokenLatency(_, _ string, _ float64)   {}
 func (NoopMetrics) IncKnowledgeQuery(_, _ string)                       {}
 func (NoopMetrics) RecordKnowledgeQueryDuration(_ string, _ float64)    {}
 func (NoopMetrics) RecordMemoryRetrievalDuration(_ string, _ float64)   {}
