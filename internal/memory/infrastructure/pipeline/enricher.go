@@ -202,6 +202,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 
 	enrichDuration.Observe(time.Since(start).Seconds())
 	enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "success"}).Inc()
+	entitiesExtracted.Add(float64(len(enrichment.Entities)))
 
 	if err := msg.Ack(); err != nil {
 		w.logger.Warn("memory.enrich.ack_failed",

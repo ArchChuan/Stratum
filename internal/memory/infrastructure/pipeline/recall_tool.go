@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -62,15 +63,23 @@ type RecallHandler struct {
 	embedSvc      EmbedClient
 	embedResolver EmbedServiceResolver
 	vectorDB      *vector.VectorStore
+	metrics       observability.MetricsProvider
 }
 
 // NewRecallHandler creates a RecallHandler backed by the given pool.
 func NewRecallHandler(pool *pgxpool.Pool, logger *zap.Logger, embedSvc EmbedClient, embedResolver EmbedServiceResolver, vectorDB *vector.VectorStore) *RecallHandler {
-	return &RecallHandler{pool: pool, logger: logger, embedSvc: embedSvc, embedResolver: embedResolver, vectorDB: vectorDB}
+	return &RecallHandler{pool: pool, logger: logger, embedSvc: embedSvc, embedResolver: embedResolver, vectorDB: vectorDB, metrics: observability.NoopMetrics{}}
+}
+
+// WithMetrics injects a MetricsProvider; returns the handler for chaining.
+func (h *RecallHandler) WithMetrics(m observability.MetricsProvider) *RecallHandler {
+	h.metrics = m
+	return h
 }
 
 // Handle executes the recall_memory tool invocation.
 func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID, scope string, input map[string]any) (string, error) {
+	start := time.Now()
 	raw, err := json.Marshal(input)
 	if err != nil {
 		return "", fmt.Errorf("marshal input: %w", err)
@@ -96,11 +105,20 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID, s
 			zap.String("tenant_id", tenantID),
 			zap.String("query", req.Query),
 			zap.Int("results", len(results)))
+		h.metrics.RecordMemoryRetrievalDuration("recall_vector", time.Since(start).Seconds())
+		h.metrics.IncKnowledgeQuery("recall", "success")
 		return string(out), nil
 	}
 
 	// Fallback: ILIKE text search
-	return h.textSearch(ctx, tenantID, userID, agentID, scope, req)
+	result, err := h.textSearch(ctx, tenantID, userID, agentID, scope, req)
+	h.metrics.RecordMemoryRetrievalDuration("recall_text", time.Since(start).Seconds())
+	if err != nil {
+		h.metrics.IncKnowledgeQuery("recall", "error")
+	} else {
+		h.metrics.IncKnowledgeQuery("recall", "success")
+	}
+	return result, err
 }
 
 func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, agentID, scope string, req RecallRequest) RecallResult {

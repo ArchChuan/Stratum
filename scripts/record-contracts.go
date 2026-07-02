@@ -61,7 +61,7 @@ func main() {
 	// db / rdb / capGW / skillAdapter / memPipeline left nil — auth routes still
 	// register because cfg.GitHubClientID + JWT key are set; tenant/admin groups
 	// gated on db!=nil are intentionally skipped (no DB available offline).
-	router := api.SetupRouter(cfg, logger, gateway, nil, nil, nil, nil, nil)
+	router := api.SetupRouter(cfg, logger, gateway, nil, nil, nil, nil)
 
 	routes := router.Routes()
 	for _, route := range routes {

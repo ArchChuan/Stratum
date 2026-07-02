@@ -2,19 +2,23 @@ package workers
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 var (
-	WorkerMessagesProcessed = promauto.NewCounterVec(
+	WorkerMessagesProcessed  *prometheus.CounterVec
+	WorkerProcessingDuration *prometheus.HistogramVec
+)
+
+// RegisterMetrics registers worker metrics with the given registerer.
+func RegisterMetrics(reg prometheus.Registerer) {
+	WorkerMessagesProcessed = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "memory_worker_messages_total",
 			Help: "Total messages processed by memory workers",
 		},
 		[]string{"worker", "tenant_id", "status"},
 	)
-
-	WorkerProcessingDuration = promauto.NewHistogramVec(
+	WorkerProcessingDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "memory_worker_processing_seconds",
 			Help:    "Time spent processing messages in memory workers",
@@ -22,4 +26,5 @@ var (
 		},
 		[]string{"worker", "tenant_id"},
 	)
-)
+	reg.MustRegister(WorkerMessagesProcessed, WorkerProcessingDuration)
+}

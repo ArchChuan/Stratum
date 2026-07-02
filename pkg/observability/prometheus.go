@@ -159,6 +159,10 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 	}
 }
 
+// Registerer returns the private prometheus.Registerer so callers (e.g. pipeline)
+// can register their own metrics against the same registry.
+func (m *PrometheusMetrics) Registerer() prometheus.Registerer { return m.reg }
+
 // GetHandler returns a Prometheus scrape handler scoped to this instance's registry.
 func (m *PrometheusMetrics) GetHandler() http.Handler {
 	return promhttp.HandlerFor(m.reg, promhttp.HandlerOpts{})

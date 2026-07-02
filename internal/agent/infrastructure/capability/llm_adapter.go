@@ -8,6 +8,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
 
@@ -35,9 +36,15 @@ func (a *LLMAdapter) Route(ctx context.Context, req port.CapabilityRequest) (por
 		err error
 	)
 	if req.TokenStream != nil {
+		// Streaming: outer execCtx (AgentExecTimeout) is the hard budget.
+		// A flat per-call cap would mis-kill slow-streaming models (e.g. glm-4-air).
 		raw, err = a.gw.CompleteStream(ctx, llmReq, req.TokenStream)
 	} else {
-		raw, err = a.gw.Complete(ctx, llmReq)
+		// Non-streaming: cap at LLMRequestTimeout so a stalled complete call
+		// doesn't silently exhaust the outer budget.
+		llmCtx, llmCancel := context.WithTimeout(ctx, constants.LLMRequestTimeout)
+		defer llmCancel()
+		raw, err = a.gw.Complete(llmCtx, llmReq)
 	}
 	if err != nil {
 		return port.CapabilityResponse{}, fmt.Errorf("llm_adapter: %w", err)

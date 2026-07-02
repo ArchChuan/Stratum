@@ -293,15 +293,23 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 	}
 	start := time.Now()
 	var (
-		resp *CompletionResponse
-		err  error
+		resp         *CompletionResponse
+		err          error
+		ttftRecorded bool
 	)
+	wrappedOnToken := func(t string) {
+		if !ttftRecorded {
+			ttftRecorded = true
+			g.metrics.RecordLLMFirstTokenLatency(req.Model, string(provider), time.Since(start).Seconds())
+		}
+		onToken(t)
+	}
 	if sc, ok := client.(StreamingLLMClient); ok {
-		resp, err = sc.CompleteStream(ctx, req, onToken)
+		resp, err = sc.CompleteStream(ctx, req, wrappedOnToken)
 	} else {
 		resp, err = client.Complete(ctx, req)
 		if err == nil && resp != nil {
-			onToken(resp.Content)
+			wrappedOnToken(resp.Content)
 		}
 	}
 	elapsed := time.Since(start).Seconds()

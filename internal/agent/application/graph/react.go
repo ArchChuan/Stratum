@@ -12,9 +12,8 @@ import (
 )
 
 const (
-	nodeLLM         = "llm"
-	nodeTool        = "tool"
-	reactLLMTimeout = 60 * time.Second
+	nodeLLM  = "llm"
+	nodeTool = "tool"
 )
 
 // ReActState is the mutable state threaded through the ReAct graph.
@@ -81,7 +80,6 @@ func makeLLMNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReAc
 				TraceID:     s.TraceID,
 				TenantID:    s.TenantID,
 				Type:        port.CapLLM,
-				Timeout:     reactLLMTimeout,
 				LLMAPIKeys:  s.LLMAPIKeys,
 				TokenStream: s.OnToken,
 				LLM: &port.LLMCapRequest{
@@ -192,7 +190,9 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 						}
 					}
 					var ragErr error
-					content, ragErr = s.RAGSearchFn(ctx, workspaces, query, topK)
+					ragCtx, ragCancel := context.WithTimeout(ctx, constants.AgentRAGSearchTimeout)
+					content, ragErr = s.RAGSearchFn(ragCtx, workspaces, query, topK)
+					ragCancel()
 					if ragErr != nil {
 						content = fmt.Sprintf("error: %v", ragErr)
 					}
@@ -210,7 +210,9 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					content = "error: stratum_recall_memory tool not configured"
 				} else {
 					var recallErr error
-					content, recallErr = s.RecallMemoryFn(ctx, tc.Arguments)
+					recallCtx, recallCancel := context.WithTimeout(ctx, constants.AgentMemoryRecallTimeout)
+					content, recallErr = s.RecallMemoryFn(recallCtx, tc.Arguments)
+					recallCancel()
 					if recallErr != nil {
 						content = fmt.Sprintf("error: %v", recallErr)
 					}

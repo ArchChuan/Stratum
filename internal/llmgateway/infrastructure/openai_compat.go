@@ -5,10 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
@@ -27,16 +30,27 @@ type ProviderConfig struct {
 // OpenAICompatClient implements LLMClient, StreamingLLMClient, and
 // EmbeddingClient for any provider that speaks the OpenAI-compatible protocol.
 type OpenAICompatClient struct {
-	cfg    ProviderConfig
-	http   *http.Client
-	logger *zap.Logger
+	cfg        ProviderConfig
+	http       *http.Client // non-streaming: flat Timeout guards stuck complete calls
+	streamHTTP *http.Client // streaming: transport-level timeouts only, no flat Timeout
+	logger     *zap.Logger
 }
 
 func NewOpenAICompatClient(cfg ProviderConfig, logger *zap.Logger) *OpenAICompatClient {
+	// Streaming client: transport timeouts protect dial/TLS/TTFT without
+	// imposing a flat wall-clock cap that would kill legitimately slow models.
+	streamTransport := &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       90 * time.Second,
+	}
 	return &OpenAICompatClient{
-		cfg:    cfg,
-		http:   &http.Client{Timeout: constants.LLMRequestTimeout},
-		logger: logger,
+		cfg:        cfg,
+		http:       &http.Client{Timeout: constants.LLMRequestTimeout},
+		streamHTTP: &http.Client{Transport: streamTransport},
+		logger:     logger,
 	}
 }
 
@@ -94,7 +108,22 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 		return nil, fmt.Errorf("%s: marshal stream request: %w", c.cfg.Name, err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
+	// Idle-token watchdog: cancel the request if no token arrives for LLMStreamIdleTimeout.
+	// Resets on every received token, so legitimately slow models are not penalised.
+	// Catches mid-stream network stalls that the outer execCtx would only detect after 90s.
+	idleCtx, idleCancel := context.WithCancelCause(ctx)
+	defer idleCancel(nil)
+	idleTimer := time.AfterFunc(constants.LLMStreamIdleTimeout, func() {
+		idleCancel(fmt.Errorf("stream idle: no token received for %s", constants.LLMStreamIdleTimeout))
+	})
+	defer idleTimer.Stop()
+
+	wrappedOnToken := func(token string) {
+		idleTimer.Reset(constants.LLMStreamIdleTimeout)
+		onToken(token)
+	}
+
+	httpReq, err := http.NewRequestWithContext(idleCtx, http.MethodPost, c.cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("%s: build stream request: %w", c.cfg.Name, err)
 	}
@@ -102,9 +131,11 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 	httpReq.Header.Set("Accept", "text/event-stream")
 
-	streamClient := &http.Client{}
-	resp, err := streamClient.Do(httpReq)
+	resp, err := c.streamHTTP.Do(httpReq)
 	if err != nil {
+		if cause := context.Cause(idleCtx); cause != nil && !errors.Is(cause, context.Canceled) {
+			return nil, fmt.Errorf("%s: %w", c.cfg.Name, cause)
+		}
 		return nil, fmt.Errorf("%s: do stream request: %w", c.cfg.Name, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
@@ -115,7 +146,7 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 	}
 
 	var result CompletionResponse
-	tcAcc := make(map[int]*streamToolCallDelta) // accumulates tool call deltas by index
+	tcAcc := make(map[int]*streamToolCallDelta)
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -141,7 +172,7 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 		if len(chunk.Choices) > 0 {
 			if t := chunk.Choices[0].Delta.Content; t != "" {
 				result.Content += t
-				onToken(t)
+				wrappedOnToken(t)
 			}
 			for _, d := range chunk.Choices[0].Delta.ToolCalls {
 				acc, ok := tcAcc[d.Index]
@@ -177,6 +208,9 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		if cause := context.Cause(idleCtx); cause != nil && !errors.Is(cause, context.Canceled) {
+			return nil, fmt.Errorf("%s: %w", c.cfg.Name, cause)
+		}
 		return nil, fmt.Errorf("%s: read stream: %w", c.cfg.Name, err)
 	}
 	return &result, nil

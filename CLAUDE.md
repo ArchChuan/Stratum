@@ -122,6 +122,8 @@ make fe-lint && make fe-build            # 前端 PR 前
 
 前端：`web/src/constants/index.js`，全大写下划线+单位后缀（`_MS`/`_SEC`/`_SIZE`）
 
+**超时分层**：agent 子操作使用 `pkg/constants/timeouts.go` 分级常量——DB读写 5s / 记忆注入 10s / RAG·Recall 15s / LLM 非流式 60s（flat cap）；LLM 流式**禁止** flat timeout，改用 transport `ResponseHeaderTimeout`(30s) + 空闲看门狗 `LLMStreamIdleTimeout`(30s/token 间隔)，outer `AgentExecTimeout`(90s) 兜底。
+
 ### 日志（Zap only，禁止 `fmt.Print`）
 
 初始化：`observability.NewLogger(env)`；事件命名：`layer.operation`（`llm.complete`、`react.llm`、`react.tool`）

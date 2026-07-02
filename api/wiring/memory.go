@@ -81,6 +81,9 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		mem.Injector = injectorAdapter{inj: inj}
 
 		recallHandler := pipeline.NewRecallHandler(db, c.Logger, nil, embedResolver, c.Storage.Milvus)
+		if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
+			recallHandler.WithMetrics(c.LLMGateway.Metrics)
+		}
 		mem.RecallFn = func(ctx context.Context, tenantID, userID, agentID, scope string, input map[string]any) (string, error) {
 			return recallHandler.Handle(ctx, tenantID, userID, agentID, scope, input)
 		}
@@ -133,6 +136,9 @@ func (c *Container) buildMemory(ctx context.Context) error {
 
 		vectorAdapter := pipeline.NewMilvusVectorAdapter(c.Storage.Milvus).WithDimResolver(dimResolver)
 		p := pipeline.New(pipelineCfg, db, nc, vectorAdapter, c.Logger)
+		if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
+			pipeline.RegisterMetrics(c.LLMGateway.Metrics.Registerer())
+		}
 		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 			p.SetEmbedResolver(c.Knowledge.EmbedResolver)
 		}
@@ -189,6 +195,10 @@ func BuildMemoryWorkers(c *Container) []interface {
 
 	factRepo := persistence.NewFactRepo(db)
 	queue := persistence.NewExtractionQueue(db)
+
+	if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
+		memworkers.RegisterMetrics(c.LLMGateway.Metrics.Registerer())
+	}
 
 	var llmRes *tenantCapabilityResolver
 	if c.Platform != nil && c.Platform.GatewayCache != nil {

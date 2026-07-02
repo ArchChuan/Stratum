@@ -42,7 +42,7 @@ func TestContracts(t *testing.T) {
 
 	logger, _ := observability.NewLogger("test")
 	gateway := llmgateway.NewGateway().WithLogger(logger)
-	router := api.SetupRouter(cfg, logger, gateway, nil, nil, nil, nil, nil)
+	router := api.SetupRouter(cfg, logger, gateway, nil, nil, nil, nil)
 
 	files, err := filepath.Glob("testdata/contracts/*.golden.json")
 	if err != nil {

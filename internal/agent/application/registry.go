@@ -15,7 +15,6 @@ import (
 type Registry struct {
 	repo               port.AgentRepo
 	logger             *zap.Logger
-	capGW              port.CapabilityGateway
 	memInjector        port.MemoryInjector
 	recallFn           port.RecallMemoryFn
 	globalSystemSuffix string
@@ -25,9 +24,6 @@ type Registry struct {
 func NewRegistry(repo port.AgentRepo, logger *zap.Logger) *Registry {
 	return &Registry{repo: repo, logger: logger}
 }
-
-// SetCapGateway injects a CapabilityGateway so agents created via Get/GetAll have it wired.
-func (r *Registry) SetCapGateway(gw port.CapabilityGateway) { r.capGW = gw }
 
 // SetMemoryInjector injects a MemoryInjector so agents created via Get/GetAll have it wired.
 func (r *Registry) SetMemoryInjector(inj port.MemoryInjector) { r.memInjector = inj }
@@ -40,9 +36,6 @@ func (r *Registry) SetGlobalSystemSuffix(s string) { r.globalSystemSuffix = s }
 
 func (r *Registry) hydrate(cfg *domain.AgentConfig) Agent {
 	a := NewBaseAgent(cfg, r.logger)
-	if r.capGW != nil {
-		a.SetCapGateway(r.capGW)
-	}
 	if r.memInjector != nil {
 		a.MemoryInjector = r.memInjector
 	}
