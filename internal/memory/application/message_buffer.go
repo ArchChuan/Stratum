@@ -10,6 +10,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/timeutil"
 )
 
 // MessageBuffer accumulates messages in Redis and flushes when K=5, size>=8KB, or T=2min.
@@ -42,7 +43,7 @@ func (b *MessageBuffer) BufferMessage(ctx context.Context, req *BufferMessageReq
 	b.redis.Expire(ctx, key, constants.MemoryBufferKeyTTL)
 
 	// Update meta: first_at (only if not set), last_at, scope, byte_size
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := timeutil.Now().Format(time.RFC3339)
 	b.redis.HSetNX(ctx, metaKey, "first_at", now)
 	newSize, _ := b.redis.HIncrBy(ctx, metaKey, "byte_size", int64(len(data))).Result()
 	b.redis.HSet(ctx, metaKey, "last_at", now, "scope", req.Scope)

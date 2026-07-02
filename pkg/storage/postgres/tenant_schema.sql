@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS skills (
     description  TEXT NOT NULL DEFAULT '',
     type         TEXT NOT NULL,
     config       JSONB NOT NULL DEFAULT '{}',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS mcp_configs (
@@ -315,6 +316,10 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT '
 UPDATE agents SET max_iterations = 10 WHERE max_iterations = 0;
 UPDATE agents SET max_context_tokens = 8000 WHERE max_context_tokens = 0;
 
+-- backfill timestamp columns added to existing tables
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
 -- dedup: content hash for knowledge_docs
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS content_hash TEXT;
 CREATE INDEX IF NOT EXISTS idx_knowledge_docs_ws_hash ON knowledge_docs (workspace_id, content_hash);
@@ -326,7 +331,8 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
     doc_id         TEXT NOT NULL,
     chunk_index    BIGINT NOT NULL,
     content        TEXT NOT NULL,
-    tsv            tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED
+    tsv            tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_kc_tsv       ON knowledge_chunks USING GIN(tsv);
 CREATE INDEX IF NOT EXISTS idx_kc_workspace ON knowledge_chunks(workspace_name);
