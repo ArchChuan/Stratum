@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/timeutil"
 )
 
 type scoredFact struct {
@@ -105,7 +105,7 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 
 		// Increment access count (best-effort, don't fail recall on update error)
 		fact.AccessCount++
-		fact.LastAccessAt = time.Now()
+		fact.LastAccessAt = timeutil.Now()
 		_ = s.factRepo.Update(ctx, req.TenantID, fact)
 
 		dtos = append(dtos, FactDTO{

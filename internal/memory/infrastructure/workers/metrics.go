@@ -9,6 +9,18 @@ var (
 	WorkerProcessingDuration *prometheus.HistogramVec
 )
 
+func incWorkerMessages(worker, tenant, status string) {
+	if WorkerMessagesProcessed != nil {
+		WorkerMessagesProcessed.WithLabelValues(worker, tenant, status).Inc()
+	}
+}
+
+func observeWorkerDuration(worker, tenant string, secs float64) {
+	if WorkerProcessingDuration != nil {
+		WorkerProcessingDuration.WithLabelValues(worker, tenant).Observe(secs)
+	}
+}
+
 // RegisterMetrics registers worker metrics with the given registerer.
 func RegisterMetrics(reg prometheus.Registerer) {
 	WorkerMessagesProcessed = prometheus.NewCounterVec(

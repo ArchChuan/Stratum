@@ -780,9 +780,9 @@ flowchart LR
     Filter --> Vec[vectorDB.SearchWithFilter<br/>collection=memory_<tid>,<br/>topK=MemoryLongTermTopK]
     Vec -- 命中 --> JsonV[json.Marshal RecallEntry array]
     Vec -- 空/err --> Text
-    Text --> SQL[BEGIN · SET search_path<br/>SELECT content, role, importance, created_at<br/>FROM memory_entries<br/>WHERE enriched_at IS NOT NULL<br/>AND content ILIKE %query%<br/>AND user_id = $<br/>AND (scope='user' OR scope='agent' + agent_id)]
+    Text --> SQL["BEGIN · SET search_path<br/>SELECT content, role, importance, created_at<br/>FROM memory_entries<br/>WHERE enriched_at IS NOT NULL<br/>AND content ILIKE %query%<br/>AND user_id = $n<br/>AND scope='user' OR scope='agent' AND agent_id=$n"]
     SQL --> Order[ORDER BY importance DESC, created_at DESC LIMIT req.Limit]
-    Order --> JsonT[json.Marshal 或 "No relevant memories found."]
+    Order --> JsonT["json.Marshal 或 'No relevant memories found.'"]
     JsonV --> Out[作为 role=tool 消息回填 ReActState.Messages]
     JsonT --> Out
 ```

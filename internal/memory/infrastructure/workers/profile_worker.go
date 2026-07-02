@@ -10,6 +10,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/timeutil"
 )
 
 // ProfileWorker periodically rebuilds entity profiles.
@@ -140,9 +141,9 @@ func (w *ProfileWorker) rebuildProfile(ctx context.Context, entity *domain.Memor
 
 	// Update entity
 	entity.Profile = profile
-	entity.LastProfileRebuildAt = time.Now()
+	entity.LastProfileRebuildAt = timeutil.Now()
 	entity.FactCountSinceRebuild = 0
-	entity.UpdatedAt = time.Now()
+	entity.UpdatedAt = timeutil.Now()
 
 	if err := w.entityRepo.Update(ctx, w.tenantID, entity); err != nil {
 		return err

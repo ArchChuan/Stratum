@@ -94,7 +94,7 @@ func (w *ExtractionWorker) processTask(ctx context.Context, task *port.Extractio
 				zap.Any("panic", r),
 				zap.Stack("stack"))
 			_ = w.queue.MarkFailed(ctx, task.TenantID, task.ID, fmt.Sprintf("panic: %v", r))
-			WorkerMessagesProcessed.WithLabelValues("extraction", task.UserID, "panic").Inc()
+			incWorkerMessages("extraction", task.UserID, "panic")
 		}
 	}()
 
@@ -118,7 +118,7 @@ func (w *ExtractionWorker) processTask(ctx context.Context, task *port.Extractio
 			zap.Int64("task_id", task.ID),
 			zap.Error(err))
 		_ = w.queue.MarkFailed(ctx, task.TenantID, task.ID, err.Error())
-		WorkerMessagesProcessed.WithLabelValues("extraction", task.UserID, "error").Inc()
+		incWorkerMessages("extraction", task.UserID, "error")
 		return
 	}
 
@@ -129,8 +129,8 @@ func (w *ExtractionWorker) processTask(ctx context.Context, task *port.Extractio
 		return
 	}
 
-	WorkerMessagesProcessed.WithLabelValues("extraction", task.UserID, "success").Inc()
-	WorkerProcessingDuration.WithLabelValues("extraction", task.UserID).Observe(time.Since(start).Seconds())
+	incWorkerMessages("extraction", task.UserID, "success")
+	observeWorkerDuration("extraction", task.UserID, time.Since(start).Seconds())
 	w.logger.Debug("memory.extraction_worker.task_completed",
 		zap.Int64("task_id", task.ID),
 		zap.Int64("latency_ms", time.Since(start).Milliseconds()))

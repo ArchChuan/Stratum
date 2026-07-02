@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/timeutil"
 	"github.com/google/uuid"
 )
 
@@ -39,7 +40,7 @@ func NewEntity(userID, agentID, scope, name, entityType string) (*MemoryEntity, 
 		return nil, ErrEmptyContent
 	}
 
-	now := time.Now()
+	now := timeutil.Now()
 	return &MemoryEntity{
 		ID:                    uuid.NewString(),
 		UserID:                userID,
@@ -62,8 +63,8 @@ func NewEntity(userID, agentID, scope, name, entityType string) (*MemoryEntity, 
 func (e *MemoryEntity) IncrementFactCount() {
 	e.FactCount++
 	e.FactCountSinceRebuild++
-	e.LastSeenAt = time.Now()
-	e.UpdatedAt = time.Now()
+	e.LastSeenAt = timeutil.Now()
+	e.UpdatedAt = timeutil.Now()
 }
 
 // ShouldRebuildProfile checks if profile rebuild should be triggered.
@@ -87,5 +88,5 @@ func (e *MemoryEntity) ShouldRebuildProfile() bool {
 // MarkDeleted soft-deletes the entity.
 func (e *MemoryEntity) MarkDeleted() {
 	e.Status = "deleted"
-	e.UpdatedAt = time.Now()
+	e.UpdatedAt = timeutil.Now()
 }
