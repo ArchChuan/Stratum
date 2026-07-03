@@ -5,6 +5,8 @@
 package httpclient
 
 import (
+	"math"
+	"math/rand"
 	"net/http"
 	"time"
 )
@@ -23,6 +25,8 @@ type config struct {
 	ssrfSafe         bool
 	disableRedirects bool
 	checkRedirect    func(*http.Request, []*http.Request) error
+	retryMax         int           // 0 = no retry
+	retryBase        time.Duration // base delay for backoff
 }
 
 // WithTimeout sets the http.Client.Timeout.
@@ -47,6 +51,57 @@ const (
 	defaultUserAgent = "stratum/1.0"
 )
 
+// retryRoundTripper wraps a Transport and retries on transient failures.
+type retryRoundTripper struct {
+	base      http.RoundTripper
+	max       int
+	baseDelay time.Duration
+}
+
+func (rt *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	var lastErr error
+	for attempt := range rt.max {
+		if attempt > 0 {
+			delay := min(
+				time.Duration(float64(rt.baseDelay)*math.Pow(2, float64(attempt-1))),
+				10*time.Second,
+			)
+			delay = delay/2 + time.Duration(rand.Int63n(int64(delay))) //nolint:gosec
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-time.After(delay):
+			}
+		}
+		resp, err := rt.base.RoundTrip(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if isRetryableStatus(resp.StatusCode) && attempt < rt.max-1 {
+			resp.Body.Close() //nolint:errcheck
+			lastErr = nil
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
+}
+
+func isRetryableStatus(code int) bool {
+	return code == http.StatusRequestTimeout ||
+		code == http.StatusTooManyRequests ||
+		code >= 500
+}
+
+// WithRetry enables retry on transient errors (5xx, 429, 408) with exponential backoff.
+func WithRetry(maxAttempts int) Option {
+	return func(c *config) {
+		c.retryMax = maxAttempts
+		c.retryBase = 100 * time.Millisecond
+	}
+}
+
 // New returns an HTTP client preconfigured with sensible timeouts and a
 // User-Agent. Use this for outbound calls to trusted endpoints.
 func New(opts ...Option) *http.Client {
@@ -69,7 +124,15 @@ func NewSSRFSafe(opts ...Option) *http.Client {
 }
 
 func buildClient(c *config) *http.Client {
-	cl := &http.Client{Timeout: c.timeout, Transport: newTransport(c)}
+	tr := newTransport(c)
+	if c.retryMax > 0 {
+		tr = &retryRoundTripper{
+			base:      tr,
+			max:       c.retryMax,
+			baseDelay: c.retryBase,
+		}
+	}
+	cl := &http.Client{Timeout: c.timeout, Transport: tr}
 	switch {
 	case c.checkRedirect != nil:
 		cl.CheckRedirect = c.checkRedirect

@@ -5,7 +5,6 @@ import {
   DashboardOutlined,
   RobotOutlined,
   CommentOutlined,
-  DatabaseOutlined,
   TeamOutlined,
   SettingOutlined,
   GlobalOutlined,

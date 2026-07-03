@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	goredis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
@@ -42,12 +41,12 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		entityRepo := persistence.NewEntityRepo(db)
 		queue := persistence.NewExtractionQueue(db)
 
-		var redisClient *goredis.Client
+		var messageBufferStore memport.MessageBufferStore
 		if c.Storage != nil && c.Storage.Redis != nil {
-			redisClient = c.Storage.Redis.Client()
+			messageBufferStore = persistence.NewRedisMessageBufferStore(c.Storage.Redis.Client())
 		}
 
-		mem.Service = memory.NewMemoryService(factRepo, entityRepo, queue, nil, nil, nil, redisClient, c.Logger)
+		mem.Service = memory.NewMemoryService(factRepo, entityRepo, queue, nil, nil, nil, messageBufferStore, c.Logger)
 		mem.Service.SetMemoryRepo(memRepo)
 
 		if c.Platform != nil && c.Platform.GatewayCache != nil {
@@ -227,7 +226,8 @@ func BuildMemoryWorkers(c *Container) []interface {
 	}{watcher}
 
 	if c.Storage != nil && c.Storage.Redis != nil {
-		result = append(result, memory.NewBufferScanner(c.Storage.Redis.Client(), queue, c.Logger))
+		store := persistence.NewRedisMessageBufferStore(c.Storage.Redis.Client())
+		result = append(result, memory.NewBufferScanner(store, queue, c.Logger))
 	}
 
 	return result

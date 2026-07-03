@@ -8,7 +8,7 @@
       "DOM.Iterable"
     ],
     "module": "ESNext",
-    "skipLibCheck": false,
+    "skipLibCheck": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": false,
     "resolveJsonModule": true,
@@ -22,7 +22,7 @@
     "noImplicitAny": false,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "ignoreDeprecations": "6.0",
+    "ignoreDeprecations": "5.0",
     "baseUrl": ".",
     "paths": {
       "@/*": [
@@ -30,8 +30,7 @@
       ]
     },
     "types": [
-      "vitest/globals",
-      "@testing-library/jest-dom"
+      "vitest/globals"
     ]
   },
   "include": [

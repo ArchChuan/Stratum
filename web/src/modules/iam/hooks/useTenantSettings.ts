@@ -45,8 +45,9 @@ export const useTenantSettings = () => {
       message.success('设置已保存');
       setTenantName(values.name);
       if (user) {
+        const currentTenantID = user.current_tenant?.id ?? user.tenant_id ?? '';
         login(
-          { ...user, current_tenant: { ...(user.current_tenant ?? {}), ...values } },
+          { ...user, current_tenant: { ...(user.current_tenant ?? {}), id: currentTenantID, ...values } },
           tokenRef.current ?? '',
         );
       }

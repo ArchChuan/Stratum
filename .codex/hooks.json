@@ -2,6 +2,36 @@
   "hooks": {
     "PreToolUse": [
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); if echo \"$cmd\" | grep -qE '^(rm -rf|sudo|su |chmod 777|chown|dd if=|mkfs|fdisk)'; then echo '{\"continue\": false, \"stopReason\": \"🚫 禁止命令: 该命令可能造成数据丢失或安全风险\"}'; else echo '{\"continue\": true}'; fi",
+            "statusMessage": "检查禁止命令"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "path=$(jq -r '.tool_input.file_path // .tool_response.filePath // \"\"'); if echo \"$path\" | grep -qE '^(/etc|/sys|/proc|/dev|/root|/var/log|/boot|/usr/bin|/usr/sbin)'; then echo '{\"continue\": false, \"stopReason\": \"🚫 危险目录: 禁止修改系统关键目录\"}'; else echo '{\"continue\": true}'; fi",
+            "statusMessage": "检查目录权限"
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "path=$(jq -r '.tool_input.file_path // \"\"'); if echo \"$path\" | grep -qE '(/root/.ssh|/root/.aws|/root/.kube|/etc/shadow|/etc/passwd|/.aws/credentials)'; then echo '{\"continue\": false, \"stopReason\": \"🚫 敏感文件: 禁止读取凭证或系统账户文件\"}'; else echo '{\"continue\": true}'; fi",
+            "statusMessage": "检查文件访问权限"
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit",
         "hooks": [
           {
@@ -16,7 +46,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash '\\\\wsl$\\Ubuntu\\home\\yang\\go-projects\\stratum\\.codex\\hooks\\check-migration-tenant-tables.sh'",
+            "command": "bash /home/yang/go-projects/stratum/.codex/hooks/check-migration-tenant-tables.sh",
             "timeout": 10,
             "statusMessage": "检查迁移文件 tenant 表违规"
           }
@@ -29,6 +59,43 @@
             "type": "command",
             "command": "/home/yang/.local/bin/headroom init hook ensure --profile init-stratum-8ec96697 --marker headroom-init-claude",
             "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath // \"\"'); if [[ \"$f\" == /home/yang/go-projects/stratum/* && \"$f\" == *.go ]]; then proj_root=\"/home/yang/go-projects/stratum\"; rel=$(dirname \"${f#$proj_root/}\"); cd \"$proj_root\" && go vet \"./$rel/...\" 2>&1 | head -20 || true; fi",
+            "statusMessage": "go vet 检查"
+          },
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath // \"\"'); if [[ -f \"$f\" && -x /usr/local/bin/shieldbot-mcp ]]; then /usr/local/bin/shieldbot-mcp \"$f\" 2>&1 | head -40 || true; fi",
+            "statusMessage": "运行 shieldbot-mcp 安全扫描"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); if echo \"$cmd\" | grep -qE '^make (install|typecheck|lint|test-local|test-full)'; then echo '✓ 命令执行成功'; fi",
+            "statusMessage": "验证项目命令"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); if echo \"$cmd\" | grep -qE '(--dry-run|--dry_run|-n|--no-op)'; then echo '✓ 数据操作 dry-run: 已启用安全模式'; fi",
+            "statusMessage": "检查安全模式"
           }
         ]
       }
@@ -55,15 +122,20 @@
         ]
       }
     ],
-    "Stop": [
+    "Notification": [
       {
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "bash /home/yang/go-projects/stratum/.codex/hooks/notify-stop.sh"
+            "command": "bash /home/yang/go-projects/stratum/.codex/hooks/notify-windows.sh 'Codex 需要确认' '{project} · {message}'",
+            "shell": "bash",
+            "timeout": 10,
+            "statusMessage": "发送权限确认通知"
           }
         ]
       }
-    ]
+    ],
+    "Stop": []
   }
 }

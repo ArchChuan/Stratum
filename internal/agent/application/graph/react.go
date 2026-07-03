@@ -6,9 +6,13 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
+
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
-	"go.uber.org/zap"
 )
 
 const (
@@ -73,6 +77,15 @@ func makeLLMNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReAc
 			})
 		}
 
+		tracer := otel.Tracer("stratum/agent")
+		ctx, llmSpan := tracer.Start(ctx, "react.llm",
+			oteltrace.WithAttributes(
+				attribute.String("llm.model", s.Model),
+				attribute.Int("react.step", s.Steps+1),
+			),
+		)
+		defer llmSpan.End()
+
 		// Always stream: tool-decision turns typically produce empty content so no tokens
 		// reach the client; final-answer turns stream the output to the frontend as required.
 		resp, err := RetryFn(ctx, DefaultRetry, func() (port.CapabilityResponse, error) {
@@ -91,6 +104,7 @@ func makeLLMNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReAc
 		})
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
+			llmSpan.RecordError(err)
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				logger.Info("react.llm",
 					zap.String("trace_id", s.TraceID),
@@ -116,6 +130,11 @@ func makeLLMNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReAc
 		}
 		s.Steps++
 		s.TotalTokens += resp.Usage.Total
+		llmSpan.SetAttributes(
+			attribute.Int("llm.prompt_tokens", resp.Usage.Prompt),
+			attribute.Int("llm.completion_tokens", resp.Usage.Completion),
+			attribute.Bool("llm.has_tool_calls", len(resp.ToolCalls) > 0),
+		)
 		logger.Info("react.llm",
 			zap.String("trace_id", s.TraceID),
 			zap.String("tenant_id", s.TenantID),
@@ -162,9 +181,16 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 		if len(s.Messages) == 0 {
 			return s, nil
 		}
+		tracer := otel.Tracer("stratum/agent")
 		last := s.Messages[len(s.Messages)-1]
 		for _, tc := range last.ToolCalls {
 			toolStart := time.Now()
+			_, toolSpan := tracer.Start(ctx, "react.tool",
+				oteltrace.WithAttributes(
+					attribute.String("tool.name", tc.Name),
+					attribute.Int("react.step", s.Steps),
+				),
+			)
 			var content string
 			switch tc.Name {
 			case "stratum_continue_reasoning":
@@ -292,6 +318,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 				Content:    content,
 				ToolCallID: tc.ID,
 			})
+			toolSpan.End()
 			s.AllToolCalls = append(s.AllToolCalls, tc)
 		}
 		return s, nil

@@ -8,14 +8,17 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
+
 	agentgraph "github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	memdomain "github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
-	"go.uber.org/zap"
 )
 
 // Domain type aliases — canonical definitions live in
@@ -80,7 +83,6 @@ type BaseAgent struct {
 	State              AgentState
 	Memory             []Message
 	mu                 sync.Mutex
-	MemorySearcher     port.MemorySearcher
 	CapGateway         port.CapabilityGateway
 	ChatStore          ChatStore
 	MemoryInjector     port.MemoryInjector
@@ -106,13 +108,6 @@ func (a *BaseAgent) WithMetrics(m observability.MetricsProvider) *BaseAgent {
 	defer a.mu.Unlock()
 	a.metrics = m
 	return a
-}
-
-// SetMemorySearcher injects a MemorySearcher for semantic memory retrieval.
-func (a *BaseAgent) SetMemorySearcher(ms port.MemorySearcher) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.MemorySearcher = ms
 }
 
 func (a *BaseAgent) SetCapGateway(gw port.CapabilityGateway) {
@@ -166,20 +161,6 @@ func (a *BaseAgent) AddToMemory(msg Message) {
 	}
 }
 
-// RetrieveMemory retrieves relevant memory entries for semantic context augmentation.
-func (a *BaseAgent) RetrieveMemory(ctx context.Context, query string, limit int) ([]*memdomain.MemorySearchResult, error) {
-	if a.MemorySearcher == nil {
-		return []*memdomain.MemorySearchResult{}, nil
-	}
-
-	searchReq := &memdomain.MemorySearchRequest{
-		Query: query,
-		Limit: limit,
-	}
-
-	return a.MemorySearcher.Search(ctx, searchReq)
-}
-
 // Execute implements the Agent interface - base implementation with ReAct pattern
 func (a *BaseAgent) Execute(ctx context.Context, input string, options ...ExecutionOption) (*AgentResult, error) {
 	startTime := time.Now()
@@ -211,6 +192,16 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	memoryScope := a.MemoryScope
 	a.mu.Unlock()
 
+	tracer := otel.Tracer("stratum/agent")
+	ctx, execSpan := tracer.Start(ctx, "agent.execute",
+		oteltrace.WithAttributes(
+			attribute.String("agent.id", agentID),
+			attribute.String("agent.type", string(agentType)),
+			attribute.String("conversation.id", cfg.ConversationID),
+		),
+	)
+	defer execSpan.End()
+
 	// Inject memory context into system prompt
 	var memCtx string
 	if a.MemoryInjector != nil && cfg.ConversationID != "" {
@@ -222,9 +213,11 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			Query:          input,
 			Scope:          memoryScope,
 		}
+		_, memSpan := tracer.Start(ctx, "agent.memory_inject")
 		memInjectCtx, memInjectCancel := context.WithTimeout(ctx, constants.AgentMemoryInjectTimeout)
 		mctx, memInjectErr := a.MemoryInjector.BuildContext(memInjectCtx, ic)
 		memInjectCancel()
+		memSpan.End()
 		if memInjectErr != nil {
 			a.Logger.Warn("memory injection failed", zap.Error(memInjectErr))
 		} else {
@@ -248,9 +241,11 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	// Load short-term conversation history from ChatStore (single source of truth).
 	var history []*ChatMessage
 	if chatStore != nil && cfg.ConversationID != "" {
+		_, histSpan := tracer.Start(ctx, "agent.history_load")
 		histCtx, histCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
 		msgs, histErr := chatStore.ListMessages(histCtx, cfg.TenantID, cfg.ConversationID, cfg.UserID)
 		histCancel()
+		histSpan.End()
 		if histErr != nil {
 			a.Logger.Warn("agent: failed to load conversation history",
 				zap.String("conversation_id", cfg.ConversationID),
@@ -304,7 +299,11 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		execCtx = reqctx.WithTraceID(execCtx, cfg.TraceID)
 		execCtx = reqctx.WithTenantID(execCtx, cfg.TenantID)
 		defer cancel()
+		_, reactSpan := tracer.Start(execCtx, "react.graph.invoke",
+			oteltrace.WithAttributes(attribute.Int("max_steps", cfg.MaxSteps)),
+		)
 		finalState, runErr := cg.Invoke(execCtx, initState, agentgraph.RunConfig{MaxSteps: cfg.MaxSteps})
+		reactSpan.End()
 		if runErr != nil {
 			execErr = fmt.Errorf("react: %w", runErr)
 			break
@@ -360,9 +359,11 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			MemoryScope:    memoryScope,
 			SkipOutbox:     false,
 		}
+		_, saveUserSpan := tracer.Start(ctx, "agent.chat_store.save_user")
 		saveCtx1, saveCancel1 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
 		addUserErr := chatStore.AddMessage(saveCtx1, cfg.TenantID, userMsg)
 		saveCancel1()
+		saveUserSpan.End()
 		if addUserErr != nil {
 			a.Logger.Warn("agent: failed to save user message",
 				zap.String("conversation_id", cfg.ConversationID),
@@ -377,9 +378,11 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			MemoryScope:    memoryScope,
 			SkipOutbox:     false,
 		}
+		_, saveAgentSpan := tracer.Start(ctx, "agent.chat_store.save_assistant")
 		saveCtx2, saveCancel2 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
 		addAgentErr := chatStore.AddMessage(saveCtx2, cfg.TenantID, agentMsg)
 		saveCancel2()
+		saveAgentSpan.End()
 		if addAgentErr != nil {
 			a.Logger.Warn("agent: failed to save agent message",
 				zap.String("conversation_id", cfg.ConversationID),

@@ -66,6 +66,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
   });
 
   const rafRef = useRef<number | null>(null);
+  const notify = useCallback(() => setTick((t) => t + 1), []);
 
   // Batch token updates via RAF to avoid one re-render per token.
   const scheduleNotify = useCallback(() => {
@@ -82,8 +83,6 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     };
   }, []);
-
-  const notify = useCallback(() => setTick((t) => t + 1), []);
 
   const startStream = useCallback((agentId: string, payload: ExecuteAgentPayload) => {
     const s = stateRef.current;
@@ -129,7 +128,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
       s.done = true;
       notify();
     }
-  }, []);
+  }, [notify]);
 
   const getStreamState = useCallback(
     (): StreamSnapshot => ({

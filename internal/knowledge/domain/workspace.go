@@ -18,7 +18,9 @@ var (
 const (
 	DefaultEmbeddingModel = "text-embedding-v3"
 	DefaultQueryMode      = "hybrid"
+	DefaultChunkSize      = 512
 	DefaultChunkOverlap   = 64
+	DefaultTopK           = 5
 )
 
 // AllowedEmbeddingModels enumerates models the system can serve embeddings for.

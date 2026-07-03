@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -46,6 +47,7 @@ func (p *JetStreamPublisher) Publish(ctx context.Context, subject string, data [
 			case <-time.After(delay):
 			}
 			delay = min(delay*2, max)
+			delay = delay/2 + time.Duration(rand.Int63n(int64(delay))) //nolint:gosec
 		}
 	}
 	return fmt.Errorf("nats: publish %q: %w", subject, lastErr)
