@@ -66,7 +66,7 @@ func (rt *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 				time.Duration(float64(rt.baseDelay)*math.Pow(2, float64(attempt-1))),
 				10*time.Second,
 			)
-			delay = delay/2 + time.Duration(rand.Int63n(int64(delay))) //nolint:gosec
+			delay = delay/2 + time.Duration(rand.Int63n(int64(delay))) //nolint:gosec // #nosec G404
 			select {
 			case <-req.Context().Done():
 				return nil, req.Context().Err()
@@ -79,7 +79,7 @@ func (rt *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 			continue
 		}
 		if isRetryableStatus(resp.StatusCode) && attempt < rt.max-1 {
-			resp.Body.Close() //nolint:errcheck
+			resp.Body.Close() //nolint:errcheck // #nosec G104
 			lastErr = nil
 			continue
 		}

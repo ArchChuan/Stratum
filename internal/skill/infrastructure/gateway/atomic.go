@@ -127,7 +127,7 @@ func (e *atomicEngine) execute(ctx context.Context, req SkillRequest) (SkillResp
 			if delay > maxRetryDelay {
 				delay = maxRetryDelay
 			}
-			delay = delay/2 + time.Duration(rand.Int63n(int64(delay))) //nolint:gosec
+			delay = delay/2 + time.Duration(rand.Int63n(int64(delay))) //nolint:gosec // #nosec G404
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
