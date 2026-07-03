@@ -104,7 +104,7 @@ func isRetryableHTTPStatus(statusCode int) bool {
 func calculateBackoffWithJitter(attempt int, baseDelay time.Duration) time.Duration {
 	delay := min(time.Duration(float64(baseDelay)*math.Pow(2, float64(attempt))), maxRetryDelay)
 	// Add jitter: ±50%
-	jitter := time.Duration(rand.Int63n(int64(delay))) //nolint:gosec
+	jitter := time.Duration(rand.Int63n(int64(delay))) //nolint:gosec // #nosec G404
 	return delay/2 + jitter
 }
 
@@ -208,7 +208,7 @@ func (c *OpenAICompatClient) Complete(ctx context.Context, req *CompletionReques
 		}
 
 		raw, err := io.ReadAll(resp.Body)
-		resp.Body.Close() //nolint:errcheck
+		resp.Body.Close() //nolint:errcheck // #nosec G104
 		if err != nil {
 			lastErr = fmt.Errorf("%s: read body: %w", c.cfg.Name, err)
 			continue
@@ -326,7 +326,7 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 
 		if resp.StatusCode != http.StatusOK {
 			raw, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			resp.Body.Close() // #nosec G104
 			// 429: respect Retry-After
 			if resp.StatusCode == http.StatusTooManyRequests {
 				if delay := parseRetryAfter(resp.Header.Get("Retry-After")); delay > 0 {
