@@ -176,7 +176,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "stratum.fullname" . }}-nats
+  name: {{ .Values.nats.host }}
   labels:
     {{- include "stratum.labels" . | nindent 4 }}
     app.kubernetes.io/component: nats
@@ -211,12 +211,12 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: {{ include "stratum.fullname" . }}-nats
+            claimName: {{ .Values.nats.host }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "stratum.fullname" . }}-nats
+  name: {{ .Values.nats.host }}
   labels:
     {{- include "stratum.labels" . | nindent 4 }}
     app.kubernetes.io/component: nats
@@ -449,6 +449,13 @@ spec:
               value: {{ printf "%s-etcd:2379" (include "stratum.fullname" .) | quote }}
             - name: MINIO_ADDRESS
               value: {{ printf "%s-minio:9000" (include "stratum.fullname" .) | quote }}
+            - name: MINIO_ACCESS_KEY_ID
+              value: {{ .Values.minio.rootUser | quote }}
+            - name: MINIO_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: MINIO_ROOT_PASSWORD
           ports:
             - name: grpc
               containerPort: 19530
