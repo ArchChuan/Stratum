@@ -39,15 +39,103 @@ spec:
               protocol: TCP
           env:
             - name: PORT
-              value: {{ .Values.config.port | quote }}
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: PORT
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: LOG_LEVEL
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: ENVIRONMENT
             - name: NATS_URL
-              value: {{ .Values.config.natsUrl | quote }}
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: NATS_URL
             - name: MILVUS_HOST
-              value: {{ .Values.config.milvusHost | quote }}
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: MILVUS_HOST
             - name: MILVUS_PORT
-              value: {{ .Values.config.milvusPort | quote }}
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: MILVUS_PORT
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: {{ .Values.observability.otelCollectorEndpoint | quote }}
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: OTEL_EXPORTER_OTLP_ENDPOINT
+            - name: OTEL_SERVICE_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: OTEL_SERVICE_NAME
+            - name: OTEL_EXPORTER_TYPE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: OTEL_EXPORTER_TYPE
+            - name: OTEL_SAMPLING_RATIO
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: OTEL_SAMPLING_RATIO
+            - name: POSTGRES_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: POSTGRES_HOST
+            - name: POSTGRES_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: POSTGRES_PORT
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: POSTGRES_USER
+            - name: REDIS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: REDIS_ADDR
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: POSTGRES_PASSWORD
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: OPENAI_API_KEY
+                  optional: true
+            - name: JWT_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: JWT_PRIVATE_KEY
+                  optional: true
+            - name: JWT_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: JWT_PUBLIC_KEY
+                  optional: true
           livenessProbe:
             httpGet:
               path: /health
@@ -60,6 +148,15 @@ spec:
               port: http
             initialDelaySeconds: {{ .Values.app.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.app.readinessProbe.periodSeconds }}
+          {{- if .Values.app.startupProbe.enabled }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: {{ .Values.app.startupProbe.failureThreshold }}
+            periodSeconds: {{ .Values.app.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.app.startupProbe.timeoutSeconds }}
+          {{- end }}
           resources:
             {{- toYaml .Values.app.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
