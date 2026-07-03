@@ -4,6 +4,25 @@ global:
   # imagePullSecrets:
   #   - name: regcred
 
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
 # Application settings
 app:
   replicaCount: 1
@@ -26,6 +45,11 @@ app:
   readinessProbe:
     initialDelaySeconds: 5
     periodSeconds: 5
+  startupProbe:
+    enabled: true
+    failureThreshold: 30
+    periodSeconds: 5
+    timeoutSeconds: 3
 
 # Frontend settings
 frontend:
@@ -47,13 +71,40 @@ frontend:
   # nginx 反代后端的地址（集群内 service 名）
   backendServiceName: stratum-ai
   backendServicePort: 80
+  proxy:
+    readTimeout: "60s"
+    sendTimeout: "60s"
 
 # Configuration settings
 config:
   port: "8080"
+  logLevel: "info"
+  environment: "demo"
   natsUrl: "nats://nats:4222"
   milvusHost: "milvus"
   milvusPort: "19530"
+  otelServiceName: "stratum-ai"
+  otelExporterType: "otlp"
+  otelSamplingRatio: "0.1"
+  postgresDsn: ""
+  redisAddr: ""
+
+secrets:
+  create: false
+  name: "stratum-secrets"
+  data: {}
+
+database:
+  external: false
+  host: "stratum-postgresql"
+  port: 5432
+  name: "stratum"
+  user: "stratum"
+
+redis:
+  external: false
+  host: "stratum-redis"
+  port: 6379
 
 # Message queue settings
 nats:
@@ -85,3 +136,20 @@ ingress:
         - path: /
           pathType: ImplementationSpecific
   tls: []
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+networkPolicy:
+  enabled: false
+
+serviceMonitor:
+  enabled: false

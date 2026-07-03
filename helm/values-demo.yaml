@@ -1,0 +1,110 @@
+global:
+  imagePullPolicy: IfNotPresent
+
+app:
+  replicaCount: 1
+  image:
+    repository: registry.cn-hangzhou.aliyuncs.com/stratum-demo/stratum-backend
+    tag: demo
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+frontend:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: registry.cn-hangzhou.aliyuncs.com/stratum-demo/stratum-frontend
+    tag: demo
+  service:
+    type: ClusterIP
+    port: 80
+  backendServiceName: stratum
+  backendServicePort: 80
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+config:
+  port: "8080"
+  logLevel: "info"
+  environment: "demo"
+  natsUrl: "nats://stratum-nats:4222"
+  milvusHost: "stratum-milvus"
+  milvusPort: "19530"
+  otelCollectorEndpoint: "http://stratum-otel-collector:4317"
+  otelServiceName: "stratum-ai"
+  otelExporterType: "otlp"
+  otelSamplingRatio: "0.1"
+
+secrets:
+  create: false
+  name: "stratum-secrets"
+
+database:
+  external: false
+  host: "stratum-postgresql"
+  port: 5432
+  name: "stratum"
+  user: "stratum"
+
+redis:
+  external: false
+  host: "stratum-redis"
+  port: 6379
+
+nats:
+  enabled: true
+
+milvus:
+  enabled: true
+
+observability:
+  enabled: false
+  otelCollectorEndpoint: "http://stratum-otel-collector:4317"
+
+persistence:
+  enabled: true
+  storageClass: "local-path"
+  size: 10Gi
+
+ingress:
+  enabled: true
+  className: "traefik"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    traefik.ingress.kubernetes.io/router.entrypoints: "websecure"
+    traefik.ingress.kubernetes.io/router.tls: "true"
+  hosts:
+    - host: demo.stratum.example
+      paths:
+        - path: /
+          pathType: Prefix
+          service: frontend
+  tls:
+    - secretName: stratum-demo-tls
+      hosts:
+        - demo.stratum.example
+
+autoscaling:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+
+serviceMonitor:
+  enabled: false
