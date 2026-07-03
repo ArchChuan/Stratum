@@ -49,15 +49,25 @@ Create the runtime secret in the target namespace:
 ```bash
 export POSTGRES_PASSWORD_VALUE="change-this-demo-postgres-password"
 export OPENAI_API_KEY_VALUE="change-this-demo-openai-api-key"
+export GITHUB_CLIENT_ID_VALUE="change-this-demo-github-client-id"
+export GITHUB_CLIENT_SECRET_VALUE="change-this-demo-github-client-secret"
+export JWT_PRIVATE_KEY_PEM_VALUE="$(cat /tmp/stratum-jwt-private-key.pem)"
+export MINIO_ROOT_PASSWORD_VALUE="change-this-demo-minio-root-password"
 kubectl create namespace stratum --dry-run=client -o yaml | kubectl apply -f -
 kubectl create secret generic stratum-secrets \
   -n stratum \
   --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD_VALUE}" \
   --from-literal=OPENAI_API_KEY="${OPENAI_API_KEY_VALUE}" \
+  --from-literal=GITHUB_CLIENT_ID="${GITHUB_CLIENT_ID_VALUE}" \
+  --from-literal=GITHUB_CLIENT_SECRET="${GITHUB_CLIENT_SECRET_VALUE}" \
+  --from-literal=JWT_PRIVATE_KEY_PEM="${JWT_PRIVATE_KEY_PEM_VALUE}" \
+  --from-literal=MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD_VALUE}" \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 Do not commit generated secret YAML.
+
+`OPENAI_API_KEY`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `JWT_PRIVATE_KEY_PEM` are optional for a static frontend smoke test, but login and authenticated demo flows require the GitHub OAuth and JWT values.
 
 ## Configure Values
 
@@ -73,8 +83,21 @@ Edit:
 - `app.image.tag`
 - `frontend.image.repository`
 - `frontend.image.tag`
+- `config.frontendUrl`
+- `config.githubCallbackUrl`
 - `ingress.hosts[0].host`
 - `ingress.tls[0].hosts[0]`
+
+## In-Cluster Dependencies
+
+The demo Helm values deploy these dependencies inside the same K3s namespace:
+
+- PostgreSQL as `stratum-postgresql`
+- Redis as `stratum-redis`
+- NATS JetStream as `stratum-nats`
+- etcd, MinIO, and Milvus standalone for vector search
+
+All dependency Services are `ClusterIP`. Do not expose them through the cloud security group or Ingress.
 
 ## Deploy
 
@@ -86,11 +109,30 @@ VALUES_FILE=/tmp/stratum-values-demo.yaml scripts/deploy-demo.sh
 
 ```bash
 kubectl get pods -n stratum
+kubectl get pvc -n stratum
 kubectl get ingress -n stratum
 kubectl get certificate -n stratum
 curl -I https://demo.stratum.example/
 curl -fsS https://demo.stratum.example/api/health
 ```
+
+## Backup And Restore Notes
+
+Before deleting the host or reinstalling K3s, create a database dump:
+
+```bash
+kubectl exec -n stratum deployment/stratum-postgresql -- \
+  pg_dump -U stratum stratum > /tmp/stratum-demo-postgres.sql
+```
+
+Restore into a fresh demo deployment with:
+
+```bash
+kubectl exec -i -n stratum deployment/stratum-postgresql -- \
+  psql -U stratum stratum < /tmp/stratum-demo-postgres.sql
+```
+
+Milvus, NATS, Redis, etcd, and MinIO use PVCs on the single host. For a demo, preserve the host disk or snapshot the cloud disk before destructive operations.
 
 ## Known Demo Limits
 
