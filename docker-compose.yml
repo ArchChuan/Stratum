@@ -64,11 +64,23 @@ services:
     profiles:
       - dev
 
+  # Loki - 日志聚合存储
+  loki:
+    image: grafana/loki:2.9.8
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/loki
+    networks:
+      - stratum
+
   # OpenTelemetry Collector - 收集、处理、导出 telemetry 数据
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.96.0
     volumes:
       - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     ports:
       - "4317:4317"  # OTLP gRPC receiver
@@ -326,3 +338,4 @@ volumes:
   milvus_data:
   postgres_data:
   redis_data:
+  loki_data:

@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/redis/go-redis/v9"
-
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/timeutil"
@@ -15,17 +13,17 @@ import (
 
 // MessageBuffer accumulates messages in Redis and flushes when K=5, size>=8KB, or T=2min.
 type MessageBuffer struct {
-	redis *redis.Client
+	store port.MessageBufferStore
 	queue port.ExtractionQueue
 }
 
-func NewMessageBuffer(redisClient *redis.Client, queue port.ExtractionQueue) *MessageBuffer {
-	return &MessageBuffer{redis: redisClient, queue: queue}
+func NewMessageBuffer(store port.MessageBufferStore, queue port.ExtractionQueue) *MessageBuffer {
+	return &MessageBuffer{store: store, queue: queue}
 }
 
 // BufferMessage accumulates a message in Redis; flushes if K>=5, size>=8KB, or oldest >2min.
 func (b *MessageBuffer) BufferMessage(ctx context.Context, req *BufferMessageRequest) error {
-	if b.redis == nil {
+	if b.store == nil {
 		return fmt.Errorf("redis client not configured")
 	}
 
@@ -37,20 +35,20 @@ func (b *MessageBuffer) BufferMessage(ctx context.Context, req *BufferMessageReq
 		return fmt.Errorf("marshal buffer message: %w", err)
 	}
 
-	if err := b.redis.RPush(ctx, key, data).Err(); err != nil {
+	if err := b.store.RPush(ctx, key, data); err != nil {
 		return fmt.Errorf("redis rpush: %w", err)
 	}
-	b.redis.Expire(ctx, key, constants.MemoryBufferKeyTTL)
+	_ = b.store.Expire(ctx, key, constants.MemoryBufferKeyTTL)
 
 	// Update meta: first_at (only if not set), last_at, scope, byte_size
 	now := timeutil.Now().Format(time.RFC3339)
-	b.redis.HSetNX(ctx, metaKey, "first_at", now)
-	newSize, _ := b.redis.HIncrBy(ctx, metaKey, "byte_size", int64(len(data))).Result()
-	b.redis.HSet(ctx, metaKey, "last_at", now, "scope", req.Scope)
-	b.redis.Expire(ctx, metaKey, constants.MemoryBufferKeyTTL)
+	_ = b.store.HSetNX(ctx, metaKey, "first_at", now)
+	newSize, _ := b.store.HIncrBy(ctx, metaKey, "byte_size", int64(len(data)))
+	_ = b.store.HSet(ctx, metaKey, "last_at", now, "scope", req.Scope)
+	_ = b.store.Expire(ctx, metaKey, constants.MemoryBufferKeyTTL)
 
 	// Flush condition: K>=5
-	count, err := b.redis.LLen(ctx, key).Result()
+	count, err := b.store.LLen(ctx, key)
 	if err != nil {
 		return fmt.Errorf("redis llen: %w", err)
 	}
@@ -64,12 +62,12 @@ func (b *MessageBuffer) BufferMessage(ctx context.Context, req *BufferMessageReq
 	}
 
 	// Flush condition: oldest message > 2min
-	oldest, err := b.redis.LIndex(ctx, key, 0).Result()
-	if err == redis.Nil {
-		return nil
-	}
+	oldest, ok, err := b.store.LIndex(ctx, key, 0)
 	if err != nil {
 		return fmt.Errorf("redis lindex: %w", err)
+	}
+	if !ok {
+		return nil
 	}
 	var oldestMsg BufferMessageRequest
 	if err := json.Unmarshal([]byte(oldest), &oldestMsg); err != nil {
@@ -83,7 +81,7 @@ func (b *MessageBuffer) BufferMessage(ctx context.Context, req *BufferMessageReq
 
 // flush reads all messages from Redis, enqueues extraction task, deletes list and meta.
 func (b *MessageBuffer) flush(ctx context.Context, key, tenantID, userID, agentID, conversationID, scope string) error {
-	messages, err := b.redis.LRange(ctx, key, 0, -1).Result()
+	messages, err := b.store.LRange(ctx, key, 0, -1)
 	if err != nil {
 		return fmt.Errorf("redis lrange: %w", err)
 	}
@@ -130,7 +128,7 @@ func (b *MessageBuffer) flush(ctx context.Context, key, tenantID, userID, agentI
 	}
 
 	metaKey := "memory:buffer:meta:" + key[len("memory:buffer:"):]
-	if err := b.redis.Del(ctx, key, metaKey).Err(); err != nil {
+	if err := b.store.Del(ctx, key, metaKey); err != nil {
 		return fmt.Errorf("redis del: %w", err)
 	}
 	return nil

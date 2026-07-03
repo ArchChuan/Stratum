@@ -29,7 +29,15 @@ export const OnboardingPage = () => {
     sessionStorage.removeItem('onboarding_token');
     sessionStorage.removeItem('github_login');
     sessionStorage.removeItem('avatar_url');
-    login({ tenant_id: tenantId, current_tenant: { id: tenantId, name: '' } }, accessToken);
+    login(
+      {
+        tenant_id: tenantId,
+        current_tenant: { id: tenantId, name: '' },
+        avatar_url: '',
+        github_login: '',
+      },
+      accessToken,
+    );
     try {
       const me = await authApi.me();
       login(

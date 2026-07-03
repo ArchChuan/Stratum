@@ -19,7 +19,6 @@ type userMemorySvc interface {
 type memoryMgrSvc interface {
 	Add(ctx context.Context, entry *application.MemoryEntry) error
 	Get(ctx context.Context, id string) (*application.MemoryEntry, error)
-	Search(ctx context.Context, req *application.MemorySearchRequest) ([]*application.MemorySearchResult, error)
 	Delete(ctx context.Context, id string) error
 	Clear(ctx context.Context, sessionCtx *application.SessionContext) error
 	GetStats(ctx context.Context, sessionCtx *application.SessionContext) (*application.MemoryStats, error)
@@ -89,31 +88,6 @@ func (h *UserMemoryHandler) GetMemory(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, entry)
-}
-
-func (h *UserMemoryHandler) SearchMemory(c *gin.Context) {
-	tenantID, ok := tenantIDFromCtx(c)
-	if !ok {
-		respondMissingTenant(c)
-		return
-	}
-	userID, _ := userIDFromCtx(c)
-	var req application.MemorySearchRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
-		return
-	}
-	if req.Context == nil {
-		req.Context = &application.SessionContext{}
-	}
-	req.Context.TenantID = tenantID
-	req.Context.UserID = userID
-	results, err := h.mgr.Search(c.Request.Context(), &req)
-	if err != nil {
-		_ = c.Error(err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"results": results})
 }
 
 func (h *UserMemoryHandler) ListSessions(c *gin.Context) {

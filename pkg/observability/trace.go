@@ -4,10 +4,19 @@ package observability
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"go.uber.org/zap"
 )
 
@@ -208,3 +217,48 @@ type noopSpan struct{}
 func (*noopSpan) End()                                 {}
 func (*noopSpan) SetAttribute(_ string, _ interface{}) {}
 func (*noopSpan) RecordError(_ error)                  {}
+
+// ---------------------------------------------------------------------------
+// OTel SDK provider — used when ExporterType == "otlp"
+// ---------------------------------------------------------------------------
+
+// InitOTelProvider creates an OTel TracerProvider that exports spans to the
+// OTLP gRPC endpoint in cfg.OTLPEndpoint, registers it as the global provider,
+// and returns a shutdown function the caller must invoke on exit.
+// The endpoint must be host:port without a scheme (e.g. "otel-collector:4317").
+func InitOTelProvider(ctx context.Context, cfg *TraceConfig) (func(context.Context) error, error) {
+	endpoint := strings.TrimPrefix(cfg.OTLPEndpoint, "http://")
+	endpoint = strings.TrimPrefix(endpoint, "https://")
+
+	exporter, err := otlptracegrpc.New(ctx,
+		otlptracegrpc.WithEndpoint(endpoint),
+		otlptracegrpc.WithInsecure(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("otlp exporter: %w", err)
+	}
+
+	res, err := resource.Merge(
+		resource.Default(),
+		resource.NewSchemaless(
+			semconv.ServiceName(cfg.ServiceName),
+			semconv.ServiceVersion(cfg.ServiceVersion),
+			attribute.String("environment", cfg.Environment),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("otel resource: %w", err)
+	}
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(res),
+		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(cfg.SamplingRatio)),
+	)
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+	return tp.Shutdown, nil
+}

@@ -11,7 +11,6 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
-	skillpkg "github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
@@ -96,7 +95,7 @@ func (s *WorkspaceService) SetVectorStore(vs collectionProvisioner) { s.vectorSt
 
 // CreateWorkspace builds the aggregate via the domain factory then persists it.
 func (s *WorkspaceService) CreateWorkspace(ctx context.Context, tenantID string, in CreateWorkspaceInput) (*domain.Workspace, error) {
-	ws, err := domain.NewWorkspace(in.Name, in.Description, in.Config, skillpkg.DefaultChunkSize, skillpkg.DefaultTopK)
+	ws, err := domain.NewWorkspace(in.Name, in.Description, in.Config, domain.DefaultChunkSize, domain.DefaultTopK)
 	if err != nil {
 		return nil, err
 	}

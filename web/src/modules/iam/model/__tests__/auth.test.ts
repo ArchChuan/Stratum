@@ -14,7 +14,7 @@ describe('iam model schemas', () => {
       expect(parsed.name).toBe('foo');
     });
     it('保留未声明字段（passthrough）', () => {
-      const parsed = tenantSummarySchema.parse({ name: 'x', extra: 1 }) as { extra: number };
+      const parsed = tenantSummarySchema.parse({ name: 'x', extra: 1 }) as unknown as { extra: number };
       expect(parsed.extra).toBe(1);
     });
     it('缺少 name 时报错', () => {

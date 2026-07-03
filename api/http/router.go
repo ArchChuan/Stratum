@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"golang.org/x/time/rate"
 
 	"github.com/byteBuilderX/stratum/api/http/handler"
@@ -25,6 +26,7 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 
 	// Middleware (order matches the legacy api.SetupRouter exactly).
 	r.Use(middleware.ErrorHandler(c.Logger))
+	r.Use(otelgin.Middleware("stratum-ai"))
 	r.Use(middleware.TraceMiddleware(c.Logger))
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.CORSMiddleware(c.Config.FrontendURL))
@@ -117,22 +119,27 @@ func registerHealth(r *gin.Engine, c *wiring.Container) {
 	r.GET("/models", modelHandler.ListModels)
 }
 
+func protectedTenantMiddleware(c *wiring.Container, extra ...gin.HandlerFunc) []gin.HandlerFunc {
+	if c.Platform == nil || c.Platform.JWTService == nil {
+		return []gin.HandlerFunc{func(ctx *gin.Context) {
+			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
+		}}
+	}
+	mw := []gin.HandlerFunc{middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext()}
+	return append(mw, extra...)
+}
+
 // registerSkills wires /skills/* under JWT + tenant context.
 func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
 	skillHandler := handler.NewSkillHandler(c.Skill.Service, c.Logger)
 
-	var mw []gin.HandlerFunc
-	if c.Platform.JWTService != nil {
-		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
-	}
-	skills := r.Group("/skills", mw...)
+	skills := r.Group("/skills", protectedTenantMiddleware(c)...)
 	{
 		skills.GET("", skillHandler.GetAllSkills)
 		skills.POST("", requireActive, skillHandler.CreateSkill)
 		skills.GET("/:id", skillHandler.GetSkill)
 		skills.PUT("/:id", requireActive, skillHandler.UpdateSkill)
 		skills.DELETE("/:id", requireActive, skillHandler.DeleteSkill)
-		skills.POST("/:id/run", requireActive, skillHandler.RunSkill)
 	}
 }
 
@@ -142,11 +149,7 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 	agentHandler := handler.NewAgentHandler(c.Agent.Service, c.Logger)
 	chatHandler := handler.NewChatHandler(c.Agent.ChatStore, c.Logger)
 
-	var mw []gin.HandlerFunc
-	if c.Platform.JWTService != nil {
-		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
-	}
-	agents := r.Group("/agents", mw...)
+	agents := r.Group("/agents", protectedTenantMiddleware(c)...)
 	{
 		agents.GET("", agentHandler.GetAllAgents)
 		agents.POST("", requireActive, agentHandler.CreateAgent)
@@ -165,7 +168,7 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.POST("/:id/conversations", chatHandler.CreateConversation)
 		agents.GET("/:id/conversations", chatHandler.ListConversations)
 	}
-	conversations := r.Group("/conversations", mw...)
+	conversations := r.Group("/conversations", protectedTenantMiddleware(c)...)
 	{
 		conversations.PATCH("/:convID", chatHandler.RenameConversation)
 		conversations.DELETE("/:convID", chatHandler.DeleteConversation)
@@ -179,20 +182,13 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
 	ragHandler := handler.NewRAGHandler(c.Knowledge.RAGService, c.Knowledge.WorkspaceService, c.Logger)
 
-	var mw []gin.HandlerFunc
-	if c.Platform.JWTService != nil {
-		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext(), middleware.RequireTenantRole("member"))
-	}
-	knowledgeGroup := r.Group("/knowledge", mw...)
+	knowledgeGroup := r.Group("/knowledge", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
 		knowledgeGroup.GET("/workspaces", ragHandler.ListWorkspaces)
 		knowledgeGroup.GET("/workspaces/:name/stats", ragHandler.GetWorkspaceStats)
 		knowledgeGroup.POST("/query", requireActive, ragHandler.Query)
 
-		var adminMW []gin.HandlerFunc
-		if c.Platform.JWTService != nil {
-			adminMW = append(adminMW, middleware.RequireTenantRole("admin"))
-		}
+		adminMW := []gin.HandlerFunc{middleware.RequireTenantRole("admin")}
 		knowledgeGroup.POST("/workspaces", append(adminMW, requireActive, ragHandler.CreateWorkspace)...)
 		knowledgeGroup.PATCH("/workspaces/:name", append(adminMW, requireActive, ragHandler.UpdateWorkspace)...)
 		knowledgeGroup.DELETE("/workspaces/:name", append(adminMW, requireActive, ragHandler.DeleteWorkspace)...)
@@ -205,11 +201,7 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 func registerMCP(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
 	mcpHandler := handler.NewMCPHandler(c.MCP.Service, c.Logger)
 
-	var mw []gin.HandlerFunc
-	if c.Platform.JWTService != nil {
-		mw = append(mw, middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext())
-	}
-	mcpHandler.RegisterRoutes(r, mw, requireActive)
+	mcpHandler.RegisterRoutes(r, protectedTenantMiddleware(c), requireActive)
 }
 
 func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
@@ -225,7 +217,6 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 	g.DELETE("/clear", userHandler.ClearMemories)
 	g.POST("", userHandler.AddMemory)
 	g.GET("/:id", userHandler.GetMemory)
-	g.POST("/search", userHandler.SearchMemory)
 	g.POST("/sessions", userHandler.ListSessions)
 	g.GET("/stats", userHandler.GetStats)
 	g.GET("/summary/:session_id", userHandler.GetSummary)

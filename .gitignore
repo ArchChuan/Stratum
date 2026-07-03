@@ -121,7 +121,15 @@ ENV/
 
 # Kubernetes secrets
 k8s/secrets/
+k8s/secret.yaml
 *.yaml.bak
+
+# Local generated tool/runtime artifacts
+.remember/
+.headroom/
+headroom_memory.db
+__debug_bin*
+cmd/server/__debug_bin*
 
 # Helm
 charts/*/Chart.lock
