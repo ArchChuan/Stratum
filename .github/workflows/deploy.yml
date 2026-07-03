@@ -164,10 +164,7 @@ jobs:
 
       - name: Run smoke tests
         run: |
-          # 等待服务就绪
           sleep 30
-
-          # 健康检查
           POD=$(kubectl get pod -n ${{ steps.env.outputs.namespace }} -l app=stratum-backend -o jsonpath='{.items[0].metadata.name}')
           kubectl exec -n ${{ steps.env.outputs.namespace }} $POD -- wget -q -O- http://localhost:8080/health || exit 1
 
