@@ -118,24 +118,52 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.name | quote }}
                   key: POSTGRES_PASSWORD
+            - name: POSTGRES_URL
+              value: {{ printf "postgres://%s:$(POSTGRES_PASSWORD)@%s:%v/%s?sslmode=disable" .Values.database.user .Values.database.host .Values.database.port .Values.database.name | quote }}
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: REDIS_URL
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.name | quote }}
                   key: OPENAI_API_KEY
                   optional: true
-            - name: JWT_PRIVATE_KEY
+            - name: JWT_PRIVATE_KEY_PEM
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.name | quote }}
-                  key: JWT_PRIVATE_KEY
+                  key: JWT_PRIVATE_KEY_PEM
                   optional: true
-            - name: JWT_PUBLIC_KEY
+            - name: GITHUB_CLIENT_ID
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.name | quote }}
-                  key: JWT_PUBLIC_KEY
+                  key: GITHUB_CLIENT_ID
                   optional: true
+            - name: GITHUB_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: GITHUB_CLIENT_SECRET
+                  optional: true
+            - name: FRONTEND_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: FRONTEND_URL
+            - name: GITHUB_CALLBACK_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: GITHUB_CALLBACK_URL
+            - name: SECURE_COOKIES
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: SECURE_COOKIES
           livenessProbe:
             httpGet:
               path: /health

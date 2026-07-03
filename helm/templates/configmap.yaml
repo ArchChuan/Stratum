@@ -20,3 +20,7 @@ data:
   POSTGRES_DB: {{ .Values.database.name | quote }}
   POSTGRES_USER: {{ .Values.database.user | quote }}
   REDIS_ADDR: {{ default (printf "%s:%v" .Values.redis.host .Values.redis.port) .Values.config.redisAddr | quote }}
+  REDIS_URL: {{ printf "redis://%s:%v" .Values.redis.host .Values.redis.port | quote }}
+  FRONTEND_URL: {{ .Values.config.frontendUrl | quote }}
+  GITHUB_CALLBACK_URL: {{ .Values.config.githubCallbackUrl | quote }}
+  SECURE_COOKIES: {{ .Values.config.secureCookies | quote }}

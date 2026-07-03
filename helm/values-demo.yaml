@@ -47,6 +47,9 @@ config:
   otelServiceName: "stratum-ai"
   otelExporterType: "otlp"
   otelSamplingRatio: "0.1"
+  frontendUrl: "https://demo.stratum.example"
+  githubCallbackUrl: "https://demo.stratum.example/auth/github/callback"
+  secureCookies: "true"
 
 secrets:
   create: false
@@ -58,17 +61,95 @@ database:
   port: 5432
   name: "stratum"
   user: "stratum"
+  image:
+    repository: postgres
+    tag: "16-alpine"
+  persistence:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
 
 redis:
   external: false
   host: "stratum-redis"
   port: 6379
+  image:
+    repository: redis
+    tag: "7-alpine"
+  persistence:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
 
 nats:
   enabled: true
+  host: "stratum-nats"
+  image:
+    repository: nats
+    tag: "2.10.25-alpine"
+  persistence:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
 
 milvus:
   enabled: true
+  image:
+    repository: milvusdb/milvus
+    tag: "v2.4.15"
+  persistence:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+
+etcd:
+  image:
+    repository: quay.io/coreos/etcd
+    tag: "v3.5.16"
+  persistence:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+minio:
+  image:
+    repository: minio/minio
+    tag: "latest"
+  rootUser: "minioadmin"
+  persistence:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
 
 observability:
   enabled: false
