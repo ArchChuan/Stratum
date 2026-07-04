@@ -1,5 +1,6 @@
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+
 import { DangerPopconfirm } from '../DangerPopconfirm';
 
 describe('DangerPopconfirm', () => {
@@ -13,9 +14,11 @@ describe('DangerPopconfirm', () => {
     const onConfirm = vi.fn();
     render(<DangerPopconfirm onConfirm={onConfirm} />);
     fireEvent.click(screen.getByRole('button'));
-    const okBtn = await screen.findByRole('button', { name: /删除/ });
+    const deleteButtons = await screen.findAllByRole('button', { name: /删\s*除/ });
+    const okBtn = deleteButtons[deleteButtons.length - 1];
+    if (!okBtn) throw new Error('确认按钮未渲染');
     fireEvent.click(okBtn);
-    expect(onConfirm).toHaveBeenCalled();
+    await waitFor(() => expect(onConfirm).toHaveBeenCalled());
   });
 
   it('renders custom children when provided', () => {

@@ -12,6 +12,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -89,7 +90,10 @@ func isJSONContent(contentType string) bool {
 func TraceMiddleware(logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		requestID := c.GetHeader(traceIDHeader)
-		if requestID == "" {
+		// Prefer OTel traceID (set by otelgin) for Jaeger ↔ log correlation.
+		if span := oteltrace.SpanFromContext(c.Request.Context()); span.SpanContext().IsValid() {
+			requestID = span.SpanContext().TraceID().String()
+		} else if requestID == "" {
 			requestID = uuid.Must(uuid.NewV7()).String()
 		}
 		c.Set(traceIDKey, requestID)

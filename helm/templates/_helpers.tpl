@@ -60,3 +60,93 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Expand the name of the chart.
+*/}}
+{{- define "stratum.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Create a default fully qualified app name.
+*/}}
+{{- define "stratum.fullname" -}}
+{{- if .Values.fullnameOverride }}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- $name := default .Chart.Name .Values.nameOverride }}
+{{- if contains $name .Release.Name }}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create chart name and version as used by the chart label.
+*/}}
+{{- define "stratum.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Common labels.
+*/}}
+{{- define "stratum.labels" -}}
+helm.sh/chart: {{ include "stratum.chart" . }}
+{{ include "stratum.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+Selector labels.
+*/}}
+{{- define "stratum.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "stratum.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+Create the name of the service account to use.
+*/}}
+{{- define "stratum.serviceAccountName" -}}
+{{- $defaultName := include "stratum.fullname" . -}}
+{{- with .Values.serviceAccount -}}
+{{- if .create -}}
+{{- default $defaultName .name }}
+{{- else -}}
+{{- default "default" .name }}
+{{- end -}}
+{{- else -}}
+default
+{{- end -}}
+{{- end }}
+
+{{/*
+Resolve ingress service names.
+*/}}
+{{- define "stratum.ingressServiceName" -}}
+{{- $root := .root -}}
+{{- if eq .service "backend" -}}
+{{ include "stratum.fullname" $root }}
+{{- else -}}
+{{ include "stratum.fullname" $root }}-frontend
+{{- end -}}
+{{- end }}
+
+{{/*
+Resolve ingress service ports.
+*/}}
+{{- define "stratum.ingressServicePort" -}}
+{{- $root := .root -}}
+{{- if eq .service "backend" -}}
+{{ $root.Values.app.service.port }}
+{{- else -}}
+{{ $root.Values.frontend.service.port }}
+{{- end -}}
+{{- end }}

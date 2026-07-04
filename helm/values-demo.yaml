@@ -1,0 +1,191 @@
+global:
+  imagePullPolicy: IfNotPresent
+
+app:
+  replicaCount: 1
+  image:
+    repository: registry.cn-hangzhou.aliyuncs.com/stratum-demo/stratum-backend
+    tag: demo
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+frontend:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: registry.cn-hangzhou.aliyuncs.com/stratum-demo/stratum-frontend
+    tag: demo
+  service:
+    type: ClusterIP
+    port: 80
+  backendServiceName: stratum
+  backendServicePort: 80
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+config:
+  port: "8080"
+  logLevel: "info"
+  environment: "demo"
+  natsUrl: "nats://stratum-nats:4222"
+  milvusHost: "stratum-milvus"
+  milvusPort: "19530"
+  otelCollectorEndpoint: "http://stratum-otel-collector:4317"
+  otelServiceName: "stratum-ai"
+  otelExporterType: "otlp"
+  otelSamplingRatio: "0.1"
+  frontendUrl: "https://demo.stratum.example"
+  githubCallbackUrl: "https://demo.stratum.example/auth/github/callback"
+  secureCookies: "true"
+
+secrets:
+  create: false
+  name: "stratum-secrets"
+
+database:
+  external: false
+  host: "stratum-postgresql"
+  port: 5432
+  name: "stratum"
+  user: "stratum"
+  image:
+    repository: postgres
+    tag: "16-alpine"
+  persistence:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+redis:
+  external: false
+  host: "stratum-redis"
+  port: 6379
+  image:
+    repository: redis
+    tag: "7-alpine"
+  persistence:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+
+nats:
+  enabled: true
+  host: "stratum-nats"
+  image:
+    repository: nats
+    tag: "2.10.25-alpine"
+  persistence:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+milvus:
+  enabled: true
+  image:
+    repository: milvusdb/milvus
+    tag: "v2.4.15"
+  persistence:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+
+etcd:
+  image:
+    repository: quay.io/coreos/etcd
+    tag: "v3.5.16"
+  persistence:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+minio:
+  image:
+    repository: minio/minio
+    tag: "latest"
+  rootUser: "minioadmin"
+  persistence:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+observability:
+  enabled: false
+  otelCollectorEndpoint: "http://stratum-otel-collector:4317"
+
+persistence:
+  enabled: true
+  storageClass: "local-path"
+  size: 10Gi
+
+ingress:
+  enabled: true
+  className: "traefik"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    traefik.ingress.kubernetes.io/router.entrypoints: "websecure"
+    traefik.ingress.kubernetes.io/router.tls: "true"
+  hosts:
+    - host: demo.stratum.example
+      paths:
+        - path: /
+          pathType: Prefix
+          service: frontend
+  tls:
+    - secretName: stratum-demo-tls
+      hosts:
+        - demo.stratum.example
+
+autoscaling:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+
+serviceMonitor:
+  enabled: false

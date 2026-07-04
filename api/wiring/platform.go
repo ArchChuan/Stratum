@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"os"
 	"strings"
 
 	"go.uber.org/zap"
@@ -42,6 +43,16 @@ func (c *Container) buildPlatform(_ context.Context) error {
 		AESKey:       pkgcrypto.DeriveAESKey(c.Config.JWTPrivateKeyPEM),
 		GatewayCache: llmgateway.NewTenantGatewayCache(),
 		Metrics:      c.LLMGateway.Metrics,
+	}
+
+	production := os.Getenv("APP_ENV") == "production"
+	if production {
+		if c.Config.GitHubClientID == "" || c.Config.GitHubClientSecret == "" {
+			return fmt.Errorf("production auth config: GitHub OAuth credentials are required")
+		}
+		if _, err := parseRSAPrivateKey(c.Config.JWTPrivateKeyPEM); err != nil {
+			return fmt.Errorf("production auth config: %w", err)
+		}
 	}
 
 	if c.Config.GitHubClientID != "" {

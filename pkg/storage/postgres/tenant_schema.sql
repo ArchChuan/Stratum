@@ -318,7 +318,6 @@ UPDATE agents SET max_context_tokens = 8000 WHERE max_context_tokens = 0;
 
 -- backfill timestamp columns added to existing tables
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
-ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 -- dedup: content hash for knowledge_docs
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS content_hash TEXT;

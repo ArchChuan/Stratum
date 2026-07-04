@@ -15,5 +15,8 @@ spec:
     - name: http
       port: {{ .Values.frontend.service.port }}
       targetPort: 80
+      {{- if and (eq .Values.frontend.service.type "NodePort") .Values.frontend.service.nodePort }}
+      nodePort: {{ .Values.frontend.service.nodePort }}
+      {{- end }}
   type: {{ .Values.frontend.service.type }}
 {{- end }}

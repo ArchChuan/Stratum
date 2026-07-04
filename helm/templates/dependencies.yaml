@@ -1,0 +1,488 @@
+{{- if not .Values.database.external }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "stratum.fullname" . }}-postgresql
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.database.persistence.size | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "stratum.fullname" . }}-postgresql
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "stratum.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgresql
+  template:
+    metadata:
+      labels:
+        {{- include "stratum.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: postgresql
+    spec:
+      containers:
+        - name: postgresql
+          image: "{{ .Values.database.image.repository }}:{{ .Values.database.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.database.user | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.database.name | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: POSTGRES_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            {{- toYaml .Values.database.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "stratum.fullname" . }}-postgresql
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.database.host }}
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "stratum.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+  ports:
+    - name: postgresql
+      port: {{ .Values.database.port }}
+      targetPort: postgresql
+{{- end }}
+
+{{- if not .Values.redis.external }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "stratum.fullname" . }}-redis
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.redis.persistence.size | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "stratum.fullname" . }}-redis
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "stratum.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        {{- include "stratum.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redis
+    spec:
+      containers:
+        - name: redis
+          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: redis
+              containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "stratum.fullname" . }}-redis
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.redis.host }}
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "stratum.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+  ports:
+    - name: redis
+      port: {{ .Values.redis.port }}
+      targetPort: redis
+{{- end }}
+
+{{- if .Values.nats.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.nats.host }}
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.nats.persistence.size | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.nats.host }}
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "stratum.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: nats
+  template:
+    metadata:
+      labels:
+        {{- include "stratum.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: nats
+    spec:
+      containers:
+        - name: nats
+          image: "{{ .Values.nats.image.repository }}:{{ .Values.nats.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args:
+            - "-js"
+            - "-sd"
+            - "/data"
+          ports:
+            - name: client
+              containerPort: 4222
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.nats.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.nats.host }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.nats.host }}
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "stratum.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+  ports:
+    - name: client
+      port: 4222
+      targetPort: client
+{{- end }}
+
+{{- if .Values.milvus.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "stratum.fullname" . }}-etcd
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.etcd.persistence.size | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "stratum.fullname" . }}-etcd
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "stratum.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: etcd
+  template:
+    metadata:
+      labels:
+        {{- include "stratum.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: etcd
+    spec:
+      containers:
+        - name: etcd
+          image: "{{ .Values.etcd.image.repository }}:{{ .Values.etcd.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - etcd
+          args:
+            - "-advertise-client-urls=http://127.0.0.1:2379"
+            - "-listen-client-urls=http://0.0.0.0:2379"
+            - "--data-dir=/etcd"
+          env:
+            - name: ETCD_AUTO_COMPACTION_MODE
+              value: "revision"
+            - name: ETCD_AUTO_COMPACTION_RETENTION
+              value: "1000"
+            - name: ETCD_QUOTA_BACKEND_BYTES
+              value: "4294967296"
+            - name: ETCD_SNAPSHOT_COUNT
+              value: "50000"
+          ports:
+            - name: client
+              containerPort: 2379
+          volumeMounts:
+            - name: data
+              mountPath: /etcd
+          resources:
+            {{- toYaml .Values.etcd.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "stratum.fullname" . }}-etcd
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "stratum.fullname" . }}-etcd
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "stratum.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+  ports:
+    - name: client
+      port: 2379
+      targetPort: client
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "stratum.fullname" . }}-minio
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.minio.persistence.size | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "stratum.fullname" . }}-minio
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "stratum.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: minio
+  template:
+    metadata:
+      labels:
+        {{- include "stratum.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      containers:
+        - name: minio
+          image: "{{ .Values.minio.image.repository }}:{{ .Values.minio.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - minio
+            - server
+            - /minio_data
+          env:
+            - name: MINIO_ROOT_USER
+              value: {{ .Values.minio.rootUser | quote }}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: MINIO_ROOT_PASSWORD
+          ports:
+            - name: api
+              containerPort: 9000
+          volumeMounts:
+            - name: data
+              mountPath: /minio_data
+          resources:
+            {{- toYaml .Values.minio.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "stratum.fullname" . }}-minio
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "stratum.fullname" . }}-minio
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "stratum.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: api
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "stratum.fullname" . }}-milvus
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: milvus
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.milvus.persistence.size | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "stratum.fullname" . }}-milvus
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: milvus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "stratum.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: milvus
+  template:
+    metadata:
+      labels:
+        {{- include "stratum.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: milvus
+    spec:
+      containers:
+        - name: milvus
+          image: "{{ .Values.milvus.image.repository }}:{{ .Values.milvus.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - milvus
+            - run
+            - standalone
+          env:
+            - name: ETCD_ENDPOINTS
+              value: {{ printf "%s-etcd:2379" (include "stratum.fullname" .) | quote }}
+            - name: MINIO_ADDRESS
+              value: {{ printf "%s-minio:9000" (include "stratum.fullname" .) | quote }}
+            - name: MINIO_ACCESS_KEY_ID
+              value: {{ .Values.minio.rootUser | quote }}
+            - name: MINIO_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: MINIO_ROOT_PASSWORD
+          ports:
+            - name: grpc
+              containerPort: 19530
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/milvus
+          resources:
+            {{- toYaml .Values.milvus.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "stratum.fullname" . }}-milvus
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.config.milvusHost }}
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: milvus
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "stratum.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: milvus
+  ports:
+    - name: grpc
+      port: {{ .Values.config.milvusPort }}
+      targetPort: grpc
+{{- end }}

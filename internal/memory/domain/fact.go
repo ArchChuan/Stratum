@@ -1,11 +1,6 @@
 package domain
 
-import (
-	"time"
-
-	"github.com/byteBuilderX/stratum/pkg/timeutil"
-	"github.com/google/uuid"
-)
+import "time"
 
 const (
 	FactStatusActive     = "active"
@@ -44,9 +39,9 @@ func NewFact(tenantID, userID, agentID, conversationID string, scope string, con
 		return nil, ErrEmptyContent
 	}
 
-	now := timeutil.Now()
+	now := now()
 	return &MemoryFact{
-		ID:             uuid.NewString(),
+		ID:             newID(),
 		TenantID:       tenantID,
 		UserID:         userID,
 		AgentID:        agentID,
@@ -90,7 +85,7 @@ func (f *MemoryFact) MarkSuperseded(newFactID string) error {
 	}
 	f.Status = FactStatusSuperseded
 	f.SupersededBy = newFactID
-	f.UpdatedAt = timeutil.Now()
+	f.UpdatedAt = now()
 	return nil
 }
 
@@ -100,6 +95,6 @@ func (f *MemoryFact) MarkArchived() error {
 		return ErrInvalidStatus
 	}
 	f.Status = FactStatusArchived
-	f.UpdatedAt = timeutil.Now()
+	f.UpdatedAt = now()
 	return nil
 }

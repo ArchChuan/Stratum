@@ -45,14 +45,3 @@ type ExecuteSkillResponse struct {
 	Result interface{} `json:"result"`
 	Error  string      `json:"error,omitempty"`
 }
-
-// RunSkillRequest is the request body for POST /skills/:id/run.
-type RunSkillRequest struct {
-	Input map[string]interface{} `json:"input"`
-}
-
-// RunSkillResponse is the response for POST /skills/:id/run.
-type RunSkillResponse struct {
-	Output interface{} `json:"output"`
-	Error  string      `json:"error,omitempty"`
-}

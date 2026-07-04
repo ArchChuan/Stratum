@@ -13,7 +13,7 @@ import {
 } from '../model/agent';
 
 import { AGENT_EXEC_TIMEOUT_MS, DEFAULT_PAGE_SIZE } from '@/constants';
-import api, { getTokenRef } from '@/services/client';
+import api, { streamApiEvents } from '@/services/client';
 
 export const agentApi = {
   list: async (): Promise<Agent[]> => {
@@ -61,73 +61,30 @@ export const executeAgentStream = (
   payload: ExecuteAgentPayload,
   { onToken, onDone, onError }: StreamCallbacks,
 ): AbortController => {
-  const ctrl = new AbortController();
-  const tokenRef = getTokenRef();
-  const token = (tokenRef as { current: string | null }).current;
-  const base = (import.meta.env.VITE_API_BASE_URL as string) || '';
+  let completed = false;
 
-  fetch(`${base}/agents/${id}/execute/stream`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    credentials: 'include',
-    body: JSON.stringify(payload),
-    signal: ctrl.signal,
-  })
-    .then((res) => {
-      if (!res.ok) {
-        return res
-          .json()
-          .then((d: { message?: string; error?: string }) => {
-            throw new Error(d.message || d.error || `HTTP ${res.status}`);
-          });
+  return streamApiEvents(`/agents/${id}/execute/stream`, payload, {
+    onEvent: (evt) => {
+      const event = evt as { error?: string; done?: boolean; token?: unknown };
+      if (event.error) {
+        completed = true;
+        onError(new Error(event.error));
+        return false;
       }
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error('No readable stream');
-      const decoder = new TextDecoder();
-      let buf = '';
-      let completed = false;
-
-      const pump = (): Promise<void> =>
-        reader.read().then(({ done, value }) => {
-          if (done) {
-            if (!completed) onError(new Error('Stream closed unexpectedly'));
-            return;
-          }
-          buf += decoder.decode(value, { stream: true });
-          const parts = buf.split('\n\n');
-          buf = parts.pop() ?? '';
-          for (const part of parts) {
-            const line = part.trim();
-            if (!line.startsWith('data:')) continue;
-            const json = line.slice(5).trim();
-            try {
-              const evt = JSON.parse(json);
-              if (evt.error) {
-                completed = true;
-                onError(new Error(evt.error));
-                return;
-              } else if (evt.done) {
-                completed = true;
-                onDone(evt);
-                return;
-              } else if (evt.token != null) {
-                onToken(String(evt.token));
-              }
-            } catch {
-              /* malformed chunk, skip */
-            }
-          }
-          return pump();
-        });
-
-      return pump();
-    })
-    .catch((err: Error) => {
-      if (err.name !== 'AbortError') onError(err);
-    });
-
-  return ctrl;
+      if (event.done) {
+        completed = true;
+        onDone(event);
+        return false;
+      }
+      if (event.token != null) onToken(String(event.token));
+      return true;
+    },
+    onClose: () => {
+      if (!completed) onError(new Error('Stream closed unexpectedly'));
+    },
+    onError: (err) => {
+      if (completed) return;
+      onError(err);
+    },
+  });
 };

@@ -1,0 +1,130 @@
+services:
+  backend:
+    image: ${REGISTRY}/stratum-backend:${IMAGE_TAG:-latest}
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      - NATS_URL=nats://nats:4222
+      - MILVUS_HOST=milvus
+      - MILVUS_PORT=19530
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=stratum-ai
+    networks:
+      - stratum
+    depends_on:
+      - postgres
+      - redis
+      - nats
+      - milvus
+    restart: unless-stopped
+
+  frontend:
+    image: ${REGISTRY}/stratum-frontend:${IMAGE_TAG:-latest}
+    ports:
+      - "80:80"
+    networks:
+      - stratum
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stratum}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-stratum}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - stratum
+    restart: unless-stopped
+
+  pgbouncer:
+    build:
+      context: .
+      dockerfile: docker/pgbouncer.Dockerfile
+    ports:
+      - "6432:6432"
+    volumes:
+      - ./config/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./config/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    networks:
+      - stratum
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - stratum
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.10.25-alpine
+    command: "-js"
+    ports:
+      - "4222:4222"
+    volumes:
+      - nats_data:/data
+    networks:
+      - stratum
+    restart: unless-stopped
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.16
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    networks:
+      - stratum
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-33-28Z
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/minio_data
+    command: minio server /minio_data
+    networks:
+      - stratum
+    restart: unless-stopped
+
+  milvus:
+    image: milvusdb/milvus:v2.4.15
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    volumes:
+      - milvus_data:/var/lib/milvus
+    networks:
+      - stratum
+    depends_on:
+      - etcd
+      - minio
+    restart: unless-stopped
+
+networks:
+  stratum:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  nats_data:
+  etcd_data:
+  minio_data:
+  milvus_data:

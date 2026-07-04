@@ -87,24 +87,6 @@ func (h *SkillHandler) DeleteSkill(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "skill deleted successfully"})
 }
 
-// RunSkill executes a code skill on demand. POST /skills/:id/run
-func (h *SkillHandler) RunSkill(c *gin.Context) {
-	var req dto.RunSkillRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
-		return
-	}
-	tid, _ := c.Get("tenant_id")
-	tenantID, _ := tid.(string)
-
-	out, err := h.svc.Run(c.Request.Context(), c.Param("id"), tenantID, req.Input)
-	if err != nil {
-		_ = c.Error(err)
-		return
-	}
-	c.JSON(http.StatusOK, dto.RunSkillResponse{Output: out})
-}
-
 // inputFromCreateReq translates the HTTP DTO into the application input.
 func inputFromCreateReq(r dto.CreateSkillRequest) skillapp.SkillInput {
 	return skillapp.SkillInput{

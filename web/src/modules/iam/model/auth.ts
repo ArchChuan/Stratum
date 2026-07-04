@@ -49,6 +49,7 @@ export const tenantSettingsSchema = z
     tenant_name: z.string().optional().default(''),
     embed_model: z.string().optional().nullable(),
     llm_api_keys: z.record(z.string()).optional(),
+    is_default: z.boolean().optional().default(false),
   })
   .passthrough();
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;

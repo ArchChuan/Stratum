@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "stratum.fullname" . }}-config
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+data:
+  PORT: {{ .Values.config.port | quote }}
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  ENVIRONMENT: {{ .Values.config.environment | quote }}
+  NATS_URL: {{ .Values.config.natsUrl | quote }}
+  MILVUS_HOST: {{ .Values.config.milvusHost | quote }}
+  MILVUS_PORT: {{ .Values.config.milvusPort | quote }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ default .Values.observability.otelCollectorEndpoint .Values.config.otelCollectorEndpoint | quote }}
+  OTEL_SERVICE_NAME: {{ .Values.config.otelServiceName | quote }}
+  OTEL_EXPORTER_TYPE: {{ .Values.config.otelExporterType | quote }}
+  OTEL_SAMPLING_RATIO: {{ .Values.config.otelSamplingRatio | quote }}
+  POSTGRES_HOST: {{ .Values.database.host | quote }}
+  POSTGRES_PORT: {{ .Values.database.port | quote }}
+  POSTGRES_DB: {{ .Values.database.name | quote }}
+  POSTGRES_USER: {{ .Values.database.user | quote }}
+  REDIS_ADDR: {{ default (printf "%s:%v" .Values.redis.host .Values.redis.port) .Values.config.redisAddr | quote }}
+  REDIS_URL: {{ printf "redis://%s:%v" .Values.redis.host .Values.redis.port | quote }}
+  FRONTEND_URL: {{ .Values.config.frontendUrl | quote }}
+  GITHUB_CALLBACK_URL: {{ .Values.config.githubCallbackUrl | quote }}
+  SECURE_COOKIES: {{ .Values.config.secureCookies | quote }}

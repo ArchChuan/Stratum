@@ -107,6 +107,7 @@ func newMemoryService(pool *pgxpool.Pool, redis *redis.Client) (*application.Mem
 	factRepo := persistence.NewFactRepo(pool)
 	entityRepo := persistence.NewEntityRepo(pool)
 	queue := persistence.NewExtractionQueue(pool)
+	messageBufferStore := persistence.NewRedisMessageBufferStore(redis)
 
 	service := application.NewMemoryService(
 		factRepo,
@@ -115,7 +116,7 @@ func newMemoryService(pool *pgxpool.Pool, redis *redis.Client) (*application.Mem
 		&mockVectorStore{},
 		&mockLLMExtractor{},
 		&mockEmbedClient{},
-		redis,
+		messageBufferStore,
 		nil,
 	)
 

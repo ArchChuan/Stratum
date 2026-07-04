@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
@@ -41,7 +40,7 @@ func NewMemoryService(
 	vectorStore port.VectorStore,
 	llmExtract port.LLMExtractor,
 	embedClient port.EmbedClient,
-	redisClient *redis.Client,
+	messageBufferStore port.MessageBufferStore,
 	logger *zap.Logger,
 ) *MemoryService {
 	if logger == nil {
@@ -54,7 +53,7 @@ func NewMemoryService(
 		vectorStore: vectorStore,
 		llmExtract:  llmExtract,
 		embedClient: embedClient,
-		buffer:      NewMessageBuffer(redisClient, queue),
+		buffer:      NewMessageBuffer(messageBufferStore, queue),
 		logger:      logger,
 	}
 }

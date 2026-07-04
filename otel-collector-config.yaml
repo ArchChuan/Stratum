@@ -7,6 +7,32 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
 
+  # 从 Docker 容器 stdout 采集结构化 JSON 日志
+  filelog:
+    include: [/var/lib/docker/containers/*/*.log]
+    include_file_name: false
+    include_file_path: true
+    operators:
+      # 1. 解析 Docker 日志包装层：{"log":"...","stream":"stdout","time":"..."}
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.time
+          layout_type: gotime
+          layout: '2006-01-02T15:04:05.999999999Z07:00'
+      # 2. 过滤只保留 stdout
+      - type: filter
+        expr: 'attributes["stream"] == "stderr"'
+      # 3. 解析 stratum 应用 JSON（NewLogger 生产模式输出）
+      - type: json_parser
+        parse_from: attributes.log
+        if: 'attributes["log"] != nil'
+        on_error: send
+      # 4. 将 msg 字段提升为日志 body
+      - type: move
+        from: attributes.msg
+        to: body
+        if: 'attributes["msg"] != nil'
+
   prometheus:
     config:
       scrape_configs:
@@ -60,6 +86,15 @@ processors:
         probabilistic:
           sampling_percentage: 10
 
+  # 只保留 app=stratum 的日志，过滤其他容器噪音
+  filter/stratum:
+    logs:
+      include:
+        match_type: strict
+        record_attributes:
+          - key: app
+            value: stratum
+
 exporters:
   otlp:
     endpoint: jaeger:4317
@@ -76,6 +111,15 @@ exporters:
     verbosity: normal
     sampling_initial: 5
     sampling_thereafter: 100
+
+  # 推送结构化日志到 Loki；level/service_name 作为低基数 label
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+    default_labels_enabled:
+      exporter: false
+      job: true
+      instance: false
+      level: true
 
 extensions:
   health_check:
@@ -106,6 +150,6 @@ service:
       exporters: [prometheus, logging]
 
     logs:
-      receivers: [otlp]
-      processors: [memory_limiter, batch]
-      exporters: [logging]
+      receivers: [otlp, filelog]
+      processors: [memory_limiter, filter/stratum, batch]
+      exporters: [loki, logging]

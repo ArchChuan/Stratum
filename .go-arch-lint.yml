@@ -1,10 +1,41 @@
 version: 3
 allow:
-  depOnAnyVendor: true
+  depOnAnyVendor: false
+  deepScan: false
+
+exclude:
+  - scripts
+  - test
+  - web/node_modules
+
+excludeFiles:
+  - "^.*_test\\.go$"
+
+vendors:
+  uuid: { in: github.com/google/uuid }
+  zap: { in: go.uber.org/zap }
+  otel:
+    in:
+      - go.opentelemetry.io/otel
+      - go.opentelemetry.io/otel/**
+  jwt: { in: github.com/golang-jwt/jwt/v5 }
 
 components:
+  pkg-constants:
+    in: pkg/constants/**
+  pkg-storage-postgres:
+    in: pkg/storage/postgres/**
+  pkg-storage-redis:
+    in: pkg/storage/redis/**
+  pkg-storage-milvus:
+    in: pkg/storage/milvus/**
+  pkg-messaging-nats:
+    in: pkg/messaging/nats/**
   pkg:
     in: pkg/**
+
+  config:
+    in: config/**
 
   api:
     in: api/**
@@ -12,7 +43,7 @@ components:
   cmd:
     in: cmd/**
 
-  # Domain layer (no infra deps allowed).
+  # Domain layer.
   domain-agent:     { in: internal/agent/domain/** }
   domain-memory:    { in: internal/memory/domain/** }
   domain-knowledge: { in: internal/knowledge/domain/** }
@@ -21,6 +52,8 @@ components:
   domain-iam:       { in: internal/iam/domain/** }
   domain-llm:       { in: internal/llmgateway/domain/** }
   domain-platform:  { in: internal/platform/domain/** }
+  platform-harness: { in: internal/platform/harness/** }
+  platform-runtime: { in: internal/platform/runtime/** }
 
   # Application layer.
   app-agent:     { in: internal/agent/application/** }
@@ -43,40 +76,175 @@ components:
   infra-platform:  { in: internal/platform/infrastructure/** }
 
 deps:
+  pkg-constants:
+    mayDependOn: [pkg-constants]
+
+  pkg-storage-postgres:
+    anyVendorDeps: true
+    mayDependOn: [pkg, pkg-constants, pkg-storage-postgres]
+  pkg-storage-redis:
+    anyVendorDeps: true
+    mayDependOn: [pkg, pkg-constants, pkg-storage-redis]
+  pkg-storage-milvus:
+    anyVendorDeps: true
+    mayDependOn: [pkg, pkg-constants, pkg-storage-milvus]
+  pkg-messaging-nats:
+    anyVendorDeps: true
+    mayDependOn: [pkg, pkg-constants, pkg-messaging-nats]
   pkg:
-    mayDependOn: [pkg]
-    cannotDependOn: [api, cmd, domain-agent, domain-memory, domain-knowledge, domain-skill, domain-mcp, domain-iam, domain-llm, domain-platform, app-agent, app-memory, app-knowledge, app-skill, app-mcp, app-iam, app-llm, app-platform, infra-agent, infra-memory, infra-knowledge, infra-skill, infra-mcp, infra-iam, infra-llm, infra-platform]
+    anyVendorDeps: true
+    mayDependOn: [pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
 
-  domain-agent:     { mayDependOn: [domain-agent] }
-  domain-memory:    { mayDependOn: [domain-memory] }
-  domain-knowledge: { mayDependOn: [domain-knowledge] }
-  domain-skill:     { mayDependOn: [domain-skill] }
-  domain-mcp:       { mayDependOn: [domain-mcp] }
-  domain-iam:       { mayDependOn: [domain-iam] }
-  domain-llm:       { mayDependOn: [domain-llm] }
-  domain-platform:  { mayDependOn: [domain-platform] }
+  config:
+    mayDependOn: [config, pkg-constants]
 
-  app-agent:     { mayDependOn: [domain-agent, pkg] }
-  app-memory:    { mayDependOn: [domain-memory, pkg] }
-  app-knowledge: { mayDependOn: [domain-knowledge, pkg] }
-  app-skill:     { mayDependOn: [domain-skill, pkg] }
-  app-mcp:       { mayDependOn: [domain-mcp, pkg] }
-  app-iam:       { mayDependOn: [domain-iam, pkg] }
-  app-llm:       { mayDependOn: [domain-llm, pkg] }
-  app-platform:  { mayDependOn: [domain-platform, pkg] }
+  domain-agent:     { mayDependOn: [domain-agent, pkg-constants] }
+  domain-memory:    { mayDependOn: [domain-memory, pkg-constants] }
+  domain-knowledge: { mayDependOn: [domain-knowledge, pkg-constants] }
+  domain-skill:     { mayDependOn: [domain-skill, pkg-constants] }
+  domain-mcp:       { mayDependOn: [domain-mcp, pkg-constants] }
+  domain-iam:       { mayDependOn: [domain-iam, pkg-constants] }
+  domain-llm:       { mayDependOn: [domain-llm, pkg-constants] }
+  domain-platform:  { mayDependOn: [domain-platform, pkg-constants] }
+  platform-harness:
+    mayDependOn: [platform-harness, domain-platform, pkg, pkg-constants]
+    canUse: [zap]
+  platform-runtime:
+    anyVendorDeps: true
+    mayDependOn:
+      - platform-runtime
+      - platform-harness
+      - api
+      - config
+      - pkg
+      - pkg-constants
+      - pkg-storage-postgres
+      - infra-agent
+      - infra-iam
+      - infra-memory
 
-  infra-agent:     { mayDependOn: [domain-agent, app-agent, pkg] }
-  infra-memory:    { mayDependOn: [domain-memory, app-memory, pkg] }
-  infra-knowledge: { mayDependOn: [domain-knowledge, app-knowledge, pkg] }
-  infra-skill:     { mayDependOn: [domain-skill, app-skill, pkg] }
-  infra-mcp:       { mayDependOn: [domain-mcp, app-mcp, pkg] }
-  infra-iam:       { mayDependOn: [domain-iam, app-iam, pkg] }
-  infra-llm:       { mayDependOn: [domain-llm, app-llm, pkg] }
-  infra-platform:  { mayDependOn: [domain-platform, app-platform, pkg] }
+  app-agent:
+    mayDependOn: [app-agent, domain-agent, domain-memory, pkg, pkg-constants]
+    canUse: [uuid, zap, otel]
+  app-memory:
+    mayDependOn: [app-memory, domain-memory, pkg, pkg-constants]
+    canUse: [zap]
+  app-knowledge:
+    mayDependOn: [app-knowledge, domain-knowledge, pkg, pkg-constants]
+    canUse: [uuid, zap]
+  app-skill:
+    mayDependOn: [app-skill, domain-skill, pkg, pkg-constants]
+    canUse: [uuid, zap]
+  app-mcp:
+    mayDependOn: [app-mcp, domain-mcp, pkg, pkg-constants]
+    canUse: [zap]
+  app-iam:
+    mayDependOn: [app-iam, domain-iam, pkg, pkg-constants]
+    canUse: [uuid, zap, jwt]
+  app-llm:
+    mayDependOn: [app-llm, domain-llm, pkg, pkg-constants]
+  app-platform:
+    mayDependOn: [app-platform, domain-platform, pkg, pkg-constants]
+
+  infra-agent:
+    anyVendorDeps: true
+    # capability adapters bridge agent ports to runtime providers.
+    mayDependOn: [infra-agent, domain-agent, domain-llm, app-agent, infra-skill, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+  infra-memory:
+    anyVendorDeps: true
+    # pipeline/workers call the LLM gateway through infrastructure adapters.
+    mayDependOn: [infra-memory, domain-memory, domain-llm, app-memory, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+  infra-knowledge:
+    anyVendorDeps: true
+    mayDependOn: [infra-knowledge, domain-knowledge, app-knowledge, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+  infra-skill:
+    anyVendorDeps: true
+    # LLM skill executor uses llmgateway request/response contracts.
+    mayDependOn: [infra-skill, domain-skill, domain-llm, app-skill, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+  infra-mcp:
+    anyVendorDeps: true
+    # port_adapters exposes MCP tools to the agent consumer port.
+    mayDependOn: [infra-mcp, domain-mcp, domain-agent, app-mcp, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+  infra-iam:
+    anyVendorDeps: true
+    mayDependOn: [infra-iam, domain-iam, app-iam, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+  infra-llm:
+    anyVendorDeps: true
+    mayDependOn: [infra-llm, domain-llm, app-llm, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+  infra-platform:
+    anyVendorDeps: true
+    mayDependOn: [infra-platform, domain-platform, app-platform, platform-harness, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
 
   api:
-    mayDependOn: [pkg, domain-agent, domain-memory, domain-knowledge, domain-skill, domain-mcp, domain-iam, domain-llm, domain-platform, app-agent, app-memory, app-knowledge, app-skill, app-mcp, app-iam, app-llm, app-platform, infra-agent, infra-memory, infra-knowledge, infra-skill, infra-mcp, infra-iam, infra-llm, infra-platform]
-    cannotDependOn: [cmd]
+    anyVendorDeps: true
+    mayDependOn:
+      - api
+      - config
+      - pkg
+      - pkg-constants
+      - pkg-storage-postgres
+      - pkg-storage-redis
+      - pkg-storage-milvus
+      - pkg-messaging-nats
+      - domain-agent
+      - domain-memory
+      - domain-knowledge
+      - domain-skill
+      - domain-mcp
+      - domain-iam
+      - domain-llm
+      - domain-platform
+      - app-agent
+      - app-memory
+      - app-knowledge
+      - app-skill
+      - app-mcp
+      - app-iam
+      - app-llm
+      - app-platform
+      - infra-agent
+      - infra-memory
+      - infra-knowledge
+      - infra-skill
+      - infra-mcp
+      - infra-iam
+      - infra-llm
+      - infra-platform
 
   cmd:
-    mayDependOn: [pkg, api, domain-agent, domain-memory, domain-knowledge, domain-skill, domain-mcp, domain-iam, domain-llm, domain-platform, app-agent, app-memory, app-knowledge, app-skill, app-mcp, app-iam, app-llm, app-platform, infra-agent, infra-memory, infra-knowledge, infra-skill, infra-mcp, infra-iam, infra-llm, infra-platform]
+    anyVendorDeps: true
+    mayDependOn:
+      - config
+      - platform-harness
+      - platform-runtime
+      - pkg
+      - pkg-constants
+      - pkg-storage-postgres
+      - pkg-storage-redis
+      - pkg-storage-milvus
+      - pkg-messaging-nats
+      - api
+      - domain-agent
+      - domain-memory
+      - domain-knowledge
+      - domain-skill
+      - domain-mcp
+      - domain-iam
+      - domain-llm
+      - domain-platform
+      - app-agent
+      - app-memory
+      - app-knowledge
+      - app-skill
+      - app-mcp
+      - app-iam
+      - app-llm
+      - app-platform
+      - infra-agent
+      - infra-memory
+      - infra-knowledge
+      - infra-skill
+      - infra-mcp
+      - infra-iam
+      - infra-llm
+      - infra-platform

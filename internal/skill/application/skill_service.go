@@ -145,52 +145,6 @@ func (s *SkillService) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// Run executes a code skill on demand. Non-code skills return ErrNotCodeSkill.
-func (s *SkillService) Run(ctx context.Context, id, tenantID string, input map[string]any) (any, error) {
-	typ, cfg, err := s.repo.GetTypeAndConfig(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if typ != "code" {
-		return nil, domain.ErrNotCodeSkill
-	}
-
-	codeIn := port.SkillInput{
-		Type:     "code",
-		Code:     stringCfgVal(cfg, "code"),
-		Language: stringCfgVal(cfg, "language"),
-	}
-	sk, err := s.buildSkill(id, codeIn)
-	if err != nil {
-		return nil, err
-	}
-	type codeExecutor interface {
-		Execute(ctx context.Context, input map[string]any) (map[string]any, error)
-	}
-	ex, ok := sk.(codeExecutor)
-	if !ok {
-		return nil, fmt.Errorf("skill %s does not support direct execution", id)
-	}
-
-	if input == nil {
-		input = make(map[string]any)
-	}
-	if tenantID != "" {
-		input["__tenant_id"] = tenantID
-	}
-
-	start := time.Now()
-	out, err := ex.Execute(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-	s.logger.Info("skill executed",
-		zap.String("id", id),
-		zap.Int64("latency_ms", time.Since(start).Milliseconds()),
-	)
-	return out, nil
-}
-
 // buildSkill delegates to the injected factory.
 func (s *SkillService) buildSkill(id string, in SkillInput) (domain.Skill, error) {
 	if s.factory == nil {
@@ -209,13 +163,6 @@ func skillConfig(sk domain.Skill) map[string]any {
 		return c.GetConfig()
 	}
 	return map[string]any{}
-}
-
-func stringCfgVal(m map[string]any, key string) string {
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
 }
 
 // MarshalConfig is a tiny helper for callers that want JSON of a config map.

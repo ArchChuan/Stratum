@@ -15,7 +15,10 @@ if ! echo "$FILE_PATH" | grep -qE 'internal/migration/sql/[0-9]+.*\.sql$'; then
 fi
 
 PROJ_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TENANT_SCHEMA="$PROJ_ROOT/pkg/tenantdb/tenant_schema.sql"
+TENANT_SCHEMA="$PROJ_ROOT/pkg/storage/postgres/tenant_schema.sql"
+if [[ ! -f "$TENANT_SCHEMA" ]]; then
+  TENANT_SCHEMA="$PROJ_ROOT/pkg/tenantdb/tenant_schema.sql"
+fi
 
 if [[ ! -f "$TENANT_SCHEMA" ]]; then
   echo '{"continue": true}'

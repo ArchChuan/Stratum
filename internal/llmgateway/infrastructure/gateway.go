@@ -9,10 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
+
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
-	"go.uber.org/zap"
 )
 
 type ModelProvider string
@@ -292,6 +296,15 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 		g.logger.Info("llm.request", fields...)
 	}
 	start := time.Now()
+	tracer := otel.Tracer("stratum/llmgateway")
+	ctx, llmGWSpan := tracer.Start(ctx, "llm.complete",
+		oteltrace.WithAttributes(
+			attribute.String("llm.model", req.Model),
+			attribute.String("llm.provider", string(provider)),
+			attribute.Bool("llm.stream", true),
+		),
+	)
+	defer llmGWSpan.End()
 	var (
 		resp         *CompletionResponse
 		err          error
@@ -320,6 +333,10 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 	g.metrics.IncLLMRequest(req.Model, string(provider), status)
 	g.metrics.RecordLLMRequestDuration(req.Model, string(provider), elapsed)
 	if err == nil && resp != nil {
+		llmGWSpan.SetAttributes(
+			attribute.Int("llm.prompt_tokens", resp.Usage.PromptTokens),
+			attribute.Int("llm.completion_tokens", resp.Usage.CompletionTokens),
+		)
 		if resp.Usage.PromptTokens > 0 {
 			g.metrics.IncLLMTokenUsage(req.Model, "prompt", int64(resp.Usage.PromptTokens))
 		}
@@ -346,6 +363,7 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 			}
 		}
 	} else if err != nil {
+		llmGWSpan.RecordError(err)
 		g.logger.Error("llm.complete",
 			zap.String("trace_id", streamTraceID),
 			zap.String("tenant_id", streamTenantID),

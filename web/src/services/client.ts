@@ -13,6 +13,7 @@ interface RetryableConfig extends InternalAxiosRequestConfig {
 
 type TokenRef = { current: string | null };
 type LogoutHandler = () => void;
+type StreamEventHandler = (event: unknown) => boolean | void;
 
 const api: AxiosInstance = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '',
@@ -172,6 +173,92 @@ export const setupApiInterceptors = (tokenRef: TokenRef, onLogout?: LogoutHandle
       return Promise.reject(error);
     },
   );
+};
+
+const parseStreamError = async (response: Response): Promise<Error> => {
+  try {
+    const data = (await response.json()) as { error?: string; message?: string };
+    return new Error(data.message || data.error || `HTTP ${response.status}`);
+  } catch {
+    return new Error(`HTTP ${response.status}`);
+  }
+};
+
+export const streamApiEvents = (
+  path: string,
+  payload: unknown,
+  {
+    onEvent,
+    onClose,
+    onError,
+  }: {
+    onEvent: StreamEventHandler;
+    onClose?: () => void;
+    onError: (err: Error) => void;
+  },
+): AbortController => {
+  const ctrl = new AbortController();
+
+  const run = async (): Promise<void> => {
+    if (!_authReady && !isPublicRequest(path)) {
+      try {
+        await waitWithTimeout(_authReadyPromise, AUTH_READY_TIMEOUT_MS);
+      } catch {
+        // fall through; backend 401 is handled as a normal stream error
+      }
+    }
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (_tokenRef.current) headers.Authorization = `Bearer ${_tokenRef.current}`;
+
+    const response = await fetch(`${api.defaults.baseURL || ''}${path}`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    });
+
+    if (!response.ok) throw await parseStreamError(response);
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No readable stream');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        onClose?.();
+        return;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() ?? '';
+
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith('data:')) continue;
+        let event: unknown;
+        try {
+          event = JSON.parse(line.slice(5).trim());
+        } catch {
+          // malformed chunk, skip
+          continue;
+        }
+        const shouldContinue = onEvent(event);
+        if (shouldContinue === false) return;
+      }
+    }
+  };
+
+  run().catch((err: Error) => {
+    if (err.name !== 'AbortError') onError(err);
+  });
+
+  return ctrl;
 };
 
 export default api;

@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
@@ -18,16 +17,16 @@ import (
 // It is tenant-agnostic: key names encode tenantID so new tenants are automatically covered.
 type BufferScanner struct {
 	buffer   *MessageBuffer
-	redis    *redis.Client
+	store    port.MessageBufferStore
 	logger   *zap.Logger
 	stopCh   chan struct{}
 	stopOnce sync.Once
 }
 
-func NewBufferScanner(r *redis.Client, q port.ExtractionQueue, logger *zap.Logger) *BufferScanner {
+func NewBufferScanner(store port.MessageBufferStore, q port.ExtractionQueue, logger *zap.Logger) *BufferScanner {
 	return &BufferScanner{
-		buffer: NewMessageBuffer(r, q),
-		redis:  r,
+		buffer: NewMessageBuffer(store, q),
+		store:  store,
 		logger: logger,
 		stopCh: make(chan struct{}),
 	}
@@ -72,7 +71,7 @@ func (s *BufferScanner) run(ctx context.Context) {
 func (s *BufferScanner) scan(ctx context.Context) {
 	var cursor uint64
 	for {
-		keys, next, err := s.redis.Scan(ctx, cursor, "memory:buffer:meta:*", 100).Result()
+		keys, next, err := s.store.Scan(ctx, cursor, "memory:buffer:meta:*", 100)
 		if err != nil {
 			s.logger.Warn("memory.buffer_scanner.scan_failed", zap.Error(err))
 			return
@@ -88,7 +87,7 @@ func (s *BufferScanner) scan(ctx context.Context) {
 }
 
 func (s *BufferScanner) checkAndFlush(ctx context.Context, metaKey string) {
-	fields, err := s.redis.HGetAll(ctx, metaKey).Result()
+	fields, err := s.store.HGetAll(ctx, metaKey)
 	if err != nil || len(fields) == 0 {
 		return
 	}
