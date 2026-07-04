@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY: registry.cn-hangzhou.aliyuncs.com
-  IMAGE_REPO: ${{ secrets.DOCKER_REGISTRY_URL }}
+  REGISTRY: ${{ secrets.DOCKER_REGISTRY_URL }}
+  IMAGE_REPO: ${{ secrets.DOCKER_REGISTRY_URL }}/stratum-demo
   IMAGE_NAME: stratum
 
 jobs:
