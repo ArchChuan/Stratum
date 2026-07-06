@@ -50,9 +50,9 @@ config:
   otelServiceName: "stratum-ai"
   otelExporterType: "otlp"
   otelSamplingRatio: "0.1"
-  frontendUrl: "https://demo.stratum.example"
-  githubCallbackUrl: "https://demo.stratum.example/auth/github/callback"
-  secureCookies: "true"
+  frontendUrl: "http://101.200.181.141"
+  githubCallbackUrl: "http://101.200.181.141/auth/github/callback"
+  secureCookies: "false"
 
 secrets:
   create: false
@@ -167,19 +167,14 @@ ingress:
   enabled: true
   className: "traefik"
   annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-    traefik.ingress.kubernetes.io/router.entrypoints: "websecure"
-    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.entrypoints: "web"
   hosts:
-    - host: demo.stratum.example
+    - host: ""
       paths:
         - path: /
           pathType: Prefix
           service: frontend
-  tls:
-    - secretName: stratum-demo-tls
-      hosts:
-        - demo.stratum.example
+  tls: []
 
 autoscaling:
   enabled: false
