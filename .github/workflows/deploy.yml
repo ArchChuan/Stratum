@@ -140,7 +140,9 @@ jobs:
         run: |
           helm upgrade --install stratum ./helm \
             -f helm/values-demo.yaml \
+            --set app.image.repository="${{ env.IMAGE_REPO }}/stratum-backend" \
             --set app.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
+            --set frontend.image.repository="${{ env.IMAGE_REPO }}/stratum-frontend" \
             --set frontend.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
             -n stratum --wait --timeout=10m
 
