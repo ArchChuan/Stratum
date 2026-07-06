@@ -11,6 +11,24 @@ const (
 
 	// CollectionPrefix is the unified prefix for all knowledge workspace collections.
 	CollectionPrefix = "kb"
+
+	// MaxChunksPerDocument caps chunk count per ingest job to bound memory
+	// and processing time. Documents above this threshold are rejected up-front.
+	MaxChunksPerDocument = 5000
+
+	// MaxConcurrentIngest caps the number of concurrently running ingest jobs
+	// across the process to protect embed backends and DB connection pool.
+	MaxConcurrentIngest = 3
+
+	// IngestQueueCapacity caps how many ingest jobs may be queued waiting for
+	// a concurrency slot before the API returns 429.
+	IngestQueueCapacity = 20
+
+	// IngestStatusProcessing/Completed/Failed are enum values for
+	// knowledge_docs.ingest_status.
+	IngestStatusProcessing = "processing"
+	IngestStatusCompleted  = "completed"
+	IngestStatusFailed     = "failed"
 )
 
 var milvusUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_]`)

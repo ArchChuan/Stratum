@@ -326,7 +326,7 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_docs_ws_hash ON knowledge_docs (workspa
 -- knowledge_chunks: full-text search index for keyword/hybrid RAG
 CREATE TABLE IF NOT EXISTS knowledge_chunks (
     id             TEXT PRIMARY KEY,
-    workspace_name TEXT NOT NULL,
+    workspace_id   UUID NOT NULL REFERENCES rag_workspaces(id) ON DELETE CASCADE,
     doc_id         TEXT NOT NULL,
     chunk_index    BIGINT NOT NULL,
     content        TEXT NOT NULL,
@@ -334,7 +334,42 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_kc_tsv       ON knowledge_chunks USING GIN(tsv);
-CREATE INDEX IF NOT EXISTS idx_kc_workspace ON knowledge_chunks(workspace_name);
+ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS workspace_id UUID;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'knowledge_chunks'
+          AND column_name = 'workspace_name'
+    ) THEN
+        UPDATE knowledge_chunks kc
+        SET workspace_id = rw.id
+        FROM rag_workspaces rw
+        WHERE kc.workspace_id IS NULL
+          AND kc.workspace_name = rw.name;
+    END IF;
+END $$;
+DELETE FROM knowledge_chunks WHERE workspace_id IS NULL;
+ALTER TABLE knowledge_chunks ALTER COLUMN workspace_id SET NOT NULL;
+ALTER TABLE knowledge_chunks DROP CONSTRAINT IF EXISTS knowledge_chunks_workspace_id_fkey;
+ALTER TABLE knowledge_chunks ADD CONSTRAINT knowledge_chunks_workspace_id_fkey
+    FOREIGN KEY (workspace_id) REFERENCES rag_workspaces(id) ON DELETE CASCADE;
+DROP INDEX IF EXISTS idx_kc_workspace;
+ALTER TABLE knowledge_chunks DROP COLUMN IF EXISTS workspace_name;
+CREATE INDEX IF NOT EXISTS idx_kc_workspace ON knowledge_chunks(workspace_id);
 
 -- drop obsolete content column from knowledge_docs (content stored in chunks)
 ALTER TABLE knowledge_docs DROP COLUMN IF EXISTS content;
+
+-- async ingest lifecycle: track status/progress of embedding jobs that run
+-- in a detached background goroutine after the API returns 202
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_status TEXT NOT NULL DEFAULT 'completed'
+    CHECK (ingest_status IN ('processing', 'completed', 'failed'));
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_error TEXT NOT NULL DEFAULT '';
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS processed_chunks INT NOT NULL DEFAULT 0;
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS total_chunks INT NOT NULL DEFAULT 0;
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_started_at TIMESTAMPTZ;
+ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_finished_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_knowledge_docs_ws_status ON knowledge_docs (workspace_id, ingest_status);

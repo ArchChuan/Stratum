@@ -54,14 +54,20 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	db := c.dbOrNil()
 	if db != nil {
 		chunkRepo := persistence.NewChunkRepo(db)
+		docRepo := persistence.NewDocRepo(db)
 		pipelineResolver = buildEmbedResolver(db, c.Platform.GatewayCache, c.Platform.AESKey, c.Logger)
 		knowledgeResolver = buildKnowledgeEmbedResolver(db, c.Platform.GatewayCache, c.Platform.AESKey, c.Logger)
 		ingest.SetEmbedResolver(knowledgeResolver)
 		ingest.SetChunkRepo(chunkRepo)
+		ingest.SetDocRepo(docRepo)
 		rag.SetEmbedResolver(knowledgeResolver)
 		rag.SetWorkspaceRepo(persistence.NewWorkspaceRepo(db))
 		rag.SetChunkRepo(chunkRepo)
 	}
+	if c.Platform != nil && c.Platform.Metrics != nil {
+		ingest.SetMetrics(c.Platform.Metrics)
+	}
+	c.shutdown = append(c.shutdown, ingest.Shutdown)
 
 	c.Knowledge = &Knowledge{
 		VectorStore:       vs,
@@ -80,6 +86,51 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		c.Knowledge.WorkspaceService.SetVectorStore(vs)
 	}
 	return nil
+}
+
+// RecoverStuckKnowledgeIngests transitions any doc rows left in
+// 'processing' longer than KnowledgeIngestStuckThreshold to 'failed'.
+// Called on startup (after wiring completes) so the UI stops polling
+// jobs abandoned by a crash. Iterates all tenants because a stuck row
+// belongs to a specific tenant schema. Errors on individual tenants are
+// logged and skipped: startup must not fail on partial recovery.
+func (c *Container) RecoverStuckKnowledgeIngests(ctx context.Context) {
+	if c.Knowledge == nil || c.Knowledge.Ingest == nil {
+		return
+	}
+	db := c.dbOrNil()
+	if db == nil {
+		return
+	}
+	rows, err := db.Query(ctx, "SELECT id FROM public.tenants WHERE deleted_at IS NULL")
+	if err != nil {
+		c.Logger.Warn("knowledge.recover_stuck.list_tenants_failed", zap.Error(err))
+		return
+	}
+	var tenantIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			c.Logger.Warn("knowledge.recover_stuck.scan_failed", zap.Error(err))
+			return
+		}
+		tenantIDs = append(tenantIDs, id)
+	}
+	rows.Close()
+	total := 0
+	for _, tid := range tenantIDs {
+		n, err := c.Knowledge.Ingest.RecoverStuckIngests(ctx, tid)
+		if err != nil {
+			c.Logger.Warn("knowledge.recover_stuck.tenant_failed",
+				zap.String("tenant_id", tid), zap.Error(err))
+			continue
+		}
+		total += n
+	}
+	if total > 0 {
+		c.Logger.Info("knowledge.recover_stuck.done", zap.Int("marked_failed", total))
+	}
 }
 
 // buildEmbedResolver creates a per-tenant EmbedServiceResolver that resolves

@@ -43,6 +43,9 @@ type PrometheusMetrics struct {
 	knowledgeQueriesTotal   *prometheus.CounterVec
 	knowledgeQueryDuration  *prometheus.HistogramVec
 	memoryRetrievalDuration *prometheus.HistogramVec
+	knowledgeIngestTotal    *prometheus.CounterVec
+	knowledgeIngestDuration prometheus.Histogram
+	knowledgeIngestInFlight prometheus.Gauge
 
 	// Hermes
 	hermesEventsTotal     *prometheus.CounterVec
@@ -144,6 +147,20 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 			prometheus.HistogramOpts{Name: "memory_retrieval_duration_seconds", Help: "Memory retrieval/storage duration", Buckets: prometheus.DefBuckets},
 			[]string{"operation"},
 		),
+		knowledgeIngestTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "knowledge_ingest_total", Help: "Total knowledge ingest jobs by terminal status"},
+			[]string{"status"},
+		),
+		knowledgeIngestDuration: factory.NewHistogram(
+			prometheus.HistogramOpts{
+				Name:    "knowledge_ingest_duration_seconds",
+				Help:    "Wall-clock duration of a knowledge ingest job (chunking + embed + persist)",
+				Buckets: []float64{1, 5, 15, 30, 60, 120, 300, 600},
+			},
+		),
+		knowledgeIngestInFlight: factory.NewGauge(
+			prometheus.GaugeOpts{Name: "knowledge_ingest_in_flight", Help: "In-flight knowledge ingest jobs"},
+		),
 
 		// Hermes
 		hermesEventsTotal: factory.NewCounterVec(
@@ -243,6 +260,17 @@ func (m *PrometheusMetrics) IncKnowledgeQuery(queryType, status string) {
 func (m *PrometheusMetrics) RecordKnowledgeQueryDuration(queryType string, duration float64) {
 	m.knowledgeQueryDuration.WithLabelValues(queryType).Observe(duration)
 }
+
+func (m *PrometheusMetrics) IncKnowledgeIngest(status string) {
+	m.knowledgeIngestTotal.WithLabelValues(status).Inc()
+}
+
+func (m *PrometheusMetrics) RecordKnowledgeIngestDuration(duration float64) {
+	m.knowledgeIngestDuration.Observe(duration)
+}
+
+func (m *PrometheusMetrics) IncKnowledgeIngestInFlight() { m.knowledgeIngestInFlight.Inc() }
+func (m *PrometheusMetrics) DecKnowledgeIngestInFlight() { m.knowledgeIngestInFlight.Dec() }
 
 func (m *PrometheusMetrics) RecordMemoryRetrievalDuration(operation string, duration float64) {
 	m.memoryRetrievalDuration.WithLabelValues(operation).Observe(duration)

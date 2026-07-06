@@ -1,6 +1,7 @@
 import { WorkspaceConfigForm } from '../components/WorkspaceConfigForm';
 import { WorkspaceDetailHeader } from '../components/WorkspaceDetailHeader';
 import { WorkspaceDetailSkeleton } from '../components/WorkspaceDetailSkeleton';
+import { WorkspaceDocumentsTable } from '../components/WorkspaceDocumentsTable';
 import { WorkspaceQueryPanel } from '../components/WorkspaceQueryPanel';
 import { WorkspaceStatsCard } from '../components/WorkspaceStatsCard';
 import { WorkspaceUploadZone } from '../components/WorkspaceUploadZone';
@@ -19,6 +20,8 @@ export const KnowledgeDetailPage = () => {
     queryForm,
     queryLoading,
     queryResult,
+    documents,
+    documentsLoading,
     handleConfigSave,
     handleDescriptionSave,
     handleNameSave,
@@ -47,6 +50,8 @@ export const KnowledgeDetailPage = () => {
       )}
 
       {isAdmin && <WorkspaceUploadZone loading={uploadLoading} onUpload={handleUpload} />}
+
+      <WorkspaceDocumentsTable documents={documents} loading={documentsLoading} />
 
       <WorkspaceQueryPanel
         form={queryForm}

@@ -3,10 +3,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { knowledgeApi } from '../api/knowledge.api';
-import type { QueryResult, WorkspaceStats } from '../model/knowledge';
+import type { KnowledgeDocument, QueryResult, WorkspaceStats } from '../model/knowledge';
 
 import { useAuth } from '@/modules/iam';
 import { extractErrorMessage } from '@/shared/lib';
+
+const DOC_POLL_INTERVAL_MS = 5000;
 
 interface ConfigValues {
   query_mode?: string;
@@ -35,6 +37,22 @@ export const useKnowledgeDetailPage = () => {
   const [queryForm] = Form.useForm<QueryValues>();
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null);
+  const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [documentsLoading, setDocumentsLoading] = useState(false);
+
+  const fetchDocuments = useCallback(async (): Promise<KnowledgeDocument[]> => {
+    setDocumentsLoading(true);
+    try {
+      const docs = await knowledgeApi.listDocuments(name);
+      setDocuments(docs);
+      return docs;
+    } catch (err) {
+      message.error(extractErrorMessage(err) || '获取文档列表失败');
+      return [];
+    } finally {
+      setDocumentsLoading(false);
+    }
+  }, [name]);
 
   const fetchStats = useCallback(async () => {
     setStatsLoading(true);
@@ -57,6 +75,38 @@ export const useKnowledgeDetailPage = () => {
   useEffect(() => {
     fetchStats();
   }, [fetchStats]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = async () => {
+      if (cancelled) return;
+      let docs: KnowledgeDocument[] = [];
+      try {
+        docs = await knowledgeApi.listDocuments(name);
+        if (cancelled) return;
+        setDocuments(docs);
+      } catch {
+        docs = [];
+      }
+      if (cancelled) return;
+      const hasProcessing = docs.some((d) => d.ingest_status === 'processing');
+      if (hasProcessing) {
+        timer = setTimeout(tick, DOC_POLL_INTERVAL_MS);
+      }
+    };
+
+    setDocumentsLoading(true);
+    tick().finally(() => {
+      if (!cancelled) setDocumentsLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [name]);
 
   const handleNameSave = useCallback(
     async (newName: string) => {
@@ -120,6 +170,10 @@ export const useKnowledgeDetailPage = () => {
       setUploadLoading(true);
       try {
         const res = await knowledgeApi.ingest(formData);
+        // 202 means ingest is now running in background; refresh docs so
+        // the new row appears in 'processing' state and the polling effect
+        // above takes over from here.
+        fetchDocuments();
         const data = res.data as { total_chunks?: number; errors?: string[] };
         const totalChunks = data?.total_chunks ?? 0;
         const errs = data?.errors ?? [];
@@ -139,7 +193,7 @@ export const useKnowledgeDetailPage = () => {
       }
       return false;
     },
-    [name, fetchStats],
+    [name, fetchStats, fetchDocuments],
   );
 
   const handleQuery = useCallback(
@@ -180,5 +234,8 @@ export const useKnowledgeDetailPage = () => {
     handleNameSave,
     handleUpload,
     handleQuery,
+    documents,
+    documentsLoading,
+    fetchDocuments,
   };
 };

@@ -100,7 +100,8 @@ func MapErrorToStatus(err error) int {
 		return http.StatusUnprocessableEntity
 
 	// 429 — Too Many Requests
-	case errors.Is(err, skilldomain.ErrConcurrencyLimit):
+	case errors.Is(err, skilldomain.ErrConcurrencyLimit),
+		errors.Is(err, knowledgedomain.ErrIngestQueueFull):
 		return http.StatusTooManyRequests
 
 	// 403 — Forbidden
@@ -121,6 +122,7 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, knowledgedomain.ErrEmbeddingModelImmutable),
 		errors.Is(err, knowledgedomain.ErrChunkSizeImmutable),
 		errors.Is(err, knowledgedomain.ErrChunkOverlapImmutable),
+		errors.Is(err, knowledgedomain.ErrChunkLimitExceeded),
 		errors.Is(err, skilldomain.ErrSkillTypeImmutable),
 		errors.Is(err, skilldomain.ErrNotCodeSkill),
 		errors.Is(err, skilldomain.ErrSkillUnsupportedType),

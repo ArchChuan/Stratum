@@ -36,14 +36,11 @@ func NewRAGSearchFn(rs *RAGService, tenantID string) func(
 			wg.Add(1)
 			go func(i int, ws string) {
 				defer wg.Done()
-				mode := "vector"
+				mode := "hybrid"
 				effectiveTopK := topK
 				embedModel := ""
 				if rs.wsRepo != nil {
-					if cfg, err := rs.wsRepo.GetConfigForUpload(ctx, tenantID, ws); err == nil {
-						if cfg.QueryMode != "" {
-							mode = cfg.QueryMode
-						}
+					if cfg, err := rs.wsRepo.GetConfigByID(ctx, tenantID, ws); err == nil {
 						if cfg.TopK > 0 {
 							effectiveTopK = cfg.TopK
 						}
@@ -51,7 +48,7 @@ func NewRAGSearchFn(rs *RAGService, tenantID string) func(
 					}
 				}
 				out, err := rs.Query(ctx, RAGQueryRequest{
-					Workspace:      ws,
+					WorkspaceID:    ws,
 					Question:       query,
 					TenantID:       tenantID,
 					Mode:           mode,
@@ -165,6 +162,17 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		req.TopK = 5
 	}
 
+	if req.WorkspaceID == "" && req.Workspace != "" && rs.wsRepo != nil {
+		ws, err := rs.wsRepo.GetByName(ctx, req.TenantID, req.Workspace)
+		if err != nil {
+			return nil, fmt.Errorf("resolve workspace: %w", err)
+		}
+		req.WorkspaceID = ws.ID
+		if req.EmbeddingModel == "" {
+			req.EmbeddingModel = ws.Config.EmbeddingModel
+		}
+	}
+
 	collectionName := constants.CollectionName(req.TenantID, req.WorkspaceID)
 
 	switch req.Mode {
@@ -189,7 +197,10 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		if rs.chunkRepo == nil {
 			return nil, fmt.Errorf("keyword search not available: chunk store not configured")
 		}
-		chunks, err := rs.chunkRepo.KeywordSearch(ctx, req.TenantID, req.Workspace, req.Question, req.TopK)
+		if req.WorkspaceID == "" {
+			return nil, fmt.Errorf("keyword search requires workspace ID")
+		}
+		chunks, err := rs.chunkRepo.KeywordSearch(ctx, req.TenantID, req.WorkspaceID, req.Question, req.TopK)
 		if err != nil {
 			rs.logger.Error("keyword query failed", zap.String("trace_id", sc.TraceID), zap.Error(err))
 			return nil, fmt.Errorf("keyword query failed: %w", err)
@@ -225,7 +236,11 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 			vCh <- vRes{r, e}
 		}()
 		go func() {
-			r, e := rs.chunkRepo.KeywordSearch(ctx, req.TenantID, req.Workspace, req.Question, req.TopK*2)
+			if req.WorkspaceID == "" {
+				kCh <- kRes{e: fmt.Errorf("keyword search requires workspace ID")}
+				return
+			}
+			r, e := rs.chunkRepo.KeywordSearch(ctx, req.TenantID, req.WorkspaceID, req.Question, req.TopK*2)
 			kCh <- kRes{r, e}
 		}()
 		vr := <-vCh

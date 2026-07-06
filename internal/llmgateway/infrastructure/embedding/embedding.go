@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
 
@@ -49,27 +50,32 @@ func (e *EmbeddingService) EmbedVector(ctx context.Context, text string) ([]floa
 	return resp.Embeddings[0], nil
 }
 
+// EmbedBatch splits texts into provider-safe batches and calls the embedding
+// API sequentially. Each batch is given its own context (derived from ctx) with
+// LLMRequestTimeout so a slow response only aborts that batch, not the whole
+// job; the outer ctx still propagates cancellation to the in-flight batch.
 func (e *EmbeddingService) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	const batchSize = 100
-	var allVectors [][]float32
+	batchSize := e.client.BatchSize()
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+	allVectors := make([][]float32, 0, len(texts))
 
 	for i := 0; i < len(texts); i += batchSize {
-		end := i + batchSize
-		if end > len(texts) {
-			end = len(texts)
-		}
+		end := min(i+batchSize, len(texts))
 
-		batch := texts[i:end]
-		resp, err := e.client.CreateEmbeddings(ctx, &llmgateway.EmbeddingRequest{
-			Input: batch,
+		batchCtx, cancel := context.WithTimeout(ctx, constants.LLMRequestTimeout)
+		resp, err := e.client.CreateEmbeddings(batchCtx, &llmgateway.EmbeddingRequest{
+			Input: texts[i:end],
 			Model: e.model,
 		})
+		cancel()
 		if err != nil {
 			e.logger.Error("failed to create batch embeddings",
 				zap.Int("batch_start", i),
 				zap.Int("batch_end", end),
 				zap.Error(err))
-			return nil, fmt.Errorf("failed to create batch embeddings: %w", err)
+			return nil, fmt.Errorf("batch %d-%d: %w", i, end, err)
 		}
 
 		allVectors = append(allVectors, resp.Embeddings...)

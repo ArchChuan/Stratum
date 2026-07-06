@@ -118,3 +118,63 @@ func TestChunkTextMultipleChunks(t *testing.T) {
 		}
 	}
 }
+
+func TestChunkByParagraphsIgnoresBlankParagraphs(t *testing.T) {
+	logger := zap.NewNop()
+	chunker := NewChunker(logger)
+
+	chunks := chunker.ChunkByParagraphs("\n\n  \n\t\n")
+
+	if len(chunks) != 0 {
+		t.Fatalf("expected blank paragraphs to produce no chunks, got %d", len(chunks))
+	}
+}
+
+func TestChunkByParagraphsSplitsWhenNextParagraphExceedsLimit(t *testing.T) {
+	logger := zap.NewNop()
+	chunker := NewChunker(logger)
+
+	first := strings.Repeat("a", 700)
+	second := strings.Repeat("b", 700)
+	chunks := chunker.ChunkByParagraphs(first + "\n" + second)
+
+	if len(chunks) != 2 {
+		t.Fatalf("expected two paragraph chunks, got %d", len(chunks))
+	}
+	if chunks[0].Content != first {
+		t.Fatalf("expected first chunk to contain first paragraph only, got length %d", len(chunks[0].Content))
+	}
+	if chunks[1].Content != second {
+		t.Fatalf("expected second chunk to contain second paragraph only, got length %d", len(chunks[1].Content))
+	}
+}
+
+func TestChunkBySemanticBreaksKeepsShortLeadingSectionWithRemainder(t *testing.T) {
+	logger := zap.NewNop()
+	chunker := NewChunker(logger)
+
+	text := "short\n\n" + strings.Repeat("long ", 30)
+	chunks := chunker.ChunkBySemanticBreaks(text)
+
+	if len(chunks) != 1 {
+		t.Fatalf("expected short leading section to stay with remainder, got %d chunks", len(chunks))
+	}
+	if chunks[0].Content != strings.TrimSpace(text) {
+		t.Fatalf("expected original text to be preserved, got %q", chunks[0].Content)
+	}
+}
+
+func TestSmartChunkFallsBackToSemanticBreaksForSingleSmallParagraph(t *testing.T) {
+	logger := zap.NewNop()
+	chunker := NewChunker(logger)
+
+	text := strings.Repeat("alpha ", 20) + "\n\n" + strings.Repeat("beta ", 30)
+	chunks := chunker.SmartChunk(text)
+
+	if len(chunks) != 2 {
+		t.Fatalf("expected semantic breaks to split single small paragraph input, got %d chunks", len(chunks))
+	}
+	if chunks[0].Index != 0 || chunks[1].Index != 1 {
+		t.Fatalf("expected sequential chunk indexes, got %d and %d", chunks[0].Index, chunks[1].Index)
+	}
+}

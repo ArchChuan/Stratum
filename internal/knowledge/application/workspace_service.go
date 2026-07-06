@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"mime/multipart"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -64,13 +65,14 @@ type WorkspaceStatsResult struct {
 }
 
 // IngestUploadResult mirrors the JSON shape returned by POST /knowledge/ingest.
+// Post-half-async: only DocumentID / Workspace / Status / TotalChunks are
+// meaningful at accept time; front-end polls docs list for terminal state.
 type IngestUploadResult struct {
-	DocumentID   string
-	Workspace    string
-	TotalChunks  int
-	TotalVectors int
-	Duration     string
-	Errors       []string
+	DocumentID  string
+	Workspace   string
+	Status      string
+	TotalChunks int
+	Errors      []string
 }
 
 // WorkspaceService orchestrates workspace CRUD + ingest validation.
@@ -236,25 +238,64 @@ func (s *WorkspaceService) IngestUpload(ctx context.Context, tenantID, workspace
 		DocumentData:   fileData,
 		FileName:       fileHeader.Filename,
 		DocumentID:     documentID,
+		ContentHash:    hash,
 	})
 	if err != nil {
 		return nil, err
 	}
-	if s.docRepo != nil {
-		if saveErr := s.docRepo.Save(ctx, tenantID, ws.ID, &domain.Document{
-			ID: documentID, KBID: ws.ID, Source: fileHeader.Filename, ContentHash: hash,
-		}); saveErr != nil {
-			s.logger.Warn("failed to save doc metadata", zap.Error(saveErr))
-		}
-	}
 	return &IngestUploadResult{
-		DocumentID:   result.DocumentID,
-		Workspace:    result.Workspace,
-		TotalChunks:  result.TotalChunks,
-		TotalVectors: result.TotalVectors,
-		Duration:     result.Duration.String(),
-		Errors:       result.Errors,
+		DocumentID:  result.DocumentID,
+		Workspace:   result.Workspace,
+		Status:      result.Status,
+		TotalChunks: result.TotalChunks,
+		Errors:      result.Errors,
 	}, nil
 }
 
-// (no compile-time aliasing required — errors are imported via `domain`.)
+// DocumentView is the projection returned by ListDocuments — omits raw
+// contents and exposes ingest lifecycle fields so the front-end can render
+// status badges + poll for terminal state.
+type DocumentView struct {
+	ID               string
+	Source           string
+	ContentHash      string
+	IngestStatus     string
+	IngestError      string
+	ProcessedChunks  int
+	TotalChunks      int
+	CreatedAt        time.Time
+	IngestStartedAt  *time.Time
+	IngestFinishedAt *time.Time
+}
+
+// ListDocuments returns the documents in a workspace with their ingest status.
+// Used by GET /knowledge/workspaces/:name/documents and polled by the UI.
+func (s *WorkspaceService) ListDocuments(ctx context.Context, tenantID, workspace string) ([]DocumentView, error) {
+	if s.docRepo == nil {
+		return []DocumentView{}, nil
+	}
+	ws, err := s.repo.GetByName(ctx, tenantID, workspace)
+	if err != nil {
+		return nil, err
+	}
+	docs, err := s.docRepo.List(ctx, tenantID, ws.ID)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]DocumentView, len(docs))
+	for i, d := range docs {
+		views[i] = DocumentView{
+			ID:               d.ID,
+			Source:           d.Source,
+			ContentHash:      d.ContentHash,
+			IngestStatus:     d.IngestStatus,
+			IngestError:      d.IngestError,
+			ProcessedChunks:  d.ProcessedChunks,
+			TotalChunks:      d.TotalChunks,
+			CreatedAt:        d.CreatedAt,
+			IngestStartedAt:  d.IngestStartedAt,
+			IngestFinishedAt: d.IngestFinishedAt,
+		}
+	}
+	return views, nil
+}

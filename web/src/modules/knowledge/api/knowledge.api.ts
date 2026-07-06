@@ -1,10 +1,12 @@
 import { z } from 'zod';
 
 import {
+  documentSchema,
   queryResultSchema,
   workspaceSchema,
   workspaceStatsSchema,
   type CreateWorkspaceInput,
+  type KnowledgeDocument,
   type QueryResult,
   type Workspace,
   type WorkspaceStats,
@@ -36,6 +38,10 @@ export const knowledgeApi = {
     api.post('/knowledge/ingest', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
+  listDocuments: async (name: string): Promise<KnowledgeDocument[]> => {
+    const res = await api.get(`/knowledge/workspaces/${name}/documents`);
+    return z.array(documentSchema).parse(res.data?.documents ?? []);
+  },
   query: async (data: QueryInput): Promise<QueryResult> => {
     const res = await api.post('/knowledge/query', data);
     return queryResultSchema.parse(res.data ?? {});

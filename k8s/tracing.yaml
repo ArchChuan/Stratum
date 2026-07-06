@@ -1,0 +1,249 @@
+---
+# Jaeger all-in-one (in-memory) — monitoring namespace
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: monitoring
+  labels:
+    app: jaeger
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+    spec:
+      containers:
+      - name: jaeger
+        image: jaegertracing/all-in-one:1.58
+        args:
+          - --query.base-path=/jaeger
+        env:
+        - name: SPAN_STORAGE_TYPE
+          value: memory
+        - name: COLLECTOR_OTLP_ENABLED
+          value: "true"
+        - name: MEMORY_MAX_TRACES
+          value: "50000"
+        ports:
+        - name: ui
+          containerPort: 16686
+        - name: otlp-grpc
+          containerPort: 4317
+        - name: otlp-http
+          containerPort: 4318
+        resources:
+          requests:
+            memory: 128Mi
+            cpu: 50m
+          limits:
+            memory: 512Mi
+            cpu: 500m
+        readinessProbe:
+          httpGet:
+            path: /jaeger/
+            port: 16686
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: monitoring
+  labels:
+    app: jaeger
+spec:
+  selector:
+    app: jaeger
+  ports:
+  - name: ui
+    port: 16686
+    targetPort: 16686
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+---
+# Traefik ingress for Jaeger UI at /jaeger
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jaeger
+  namespace: monitoring
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: "web"
+spec:
+  ingressClassName: traefik
+  rules:
+  - http:
+      paths:
+      - path: /jaeger
+        pathType: Prefix
+        backend:
+          service:
+            name: jaeger
+            port:
+              number: 16686
+---
+# OTEL Collector config — stratum namespace
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: stratum
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 256
+        spike_limit_mib: 64
+
+      resource:
+        attributes:
+          - key: environment
+            value: demo
+            action: upsert
+
+      tail_sampling:
+        decision_wait: 10s
+        policies:
+          # Core conversation chain — always sample
+          - name: chat-always
+            type: string_attribute
+            string_attribute:
+              key: http.route
+              values:
+                - /agents/:id/execute
+                - /agents/:id/execute/stream
+                - /conversations/:convID/messages
+              enabled_regex_matching: false
+          - name: error-policy
+            type: status_code
+            status_code:
+              status_codes: [ERROR]
+          - name: slow-policy
+            type: latency
+            latency:
+              threshold_ms: 1000
+          - name: default-policy
+            type: probabilistic
+            probabilistic:
+              sampling_percentage: 10
+
+      batch:
+        timeout: 1s
+        send_batch_size: 512
+
+    exporters:
+      otlp/jaeger:
+        endpoint: jaeger.monitoring.svc.cluster.local:4317
+        tls:
+          insecure: true
+      debug:
+        verbosity: basic
+        sampling_initial: 2
+        sampling_thereafter: 100
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, tail_sampling, batch]
+          exporters: [otlp/jaeger, debug]
+---
+# OTEL Collector Deployment — stratum namespace
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: stratum
+  labels:
+    app: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      containers:
+      - name: otel-collector
+        image: otel/opentelemetry-collector-contrib:0.102.0
+        args:
+          - --config=/conf/config.yaml
+        ports:
+        - name: otlp-grpc
+          containerPort: 4317
+        - name: otlp-http
+          containerPort: 4318
+        - name: health
+          containerPort: 13133
+        volumeMounts:
+        - name: config
+          mountPath: /conf
+        resources:
+          requests:
+            memory: 64Mi
+            cpu: 50m
+          limits:
+            memory: 256Mi
+            cpu: 200m
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: otel-collector-config
+---
+# Service named exactly as OTEL_EXPORTER_OTLP_ENDPOINT expects
+apiVersion: v1
+kind: Service
+metadata:
+  name: stratum-otel-collector
+  namespace: stratum
+  labels:
+    app: otel-collector
+spec:
+  selector:
+    app: otel-collector
+  ports:
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318

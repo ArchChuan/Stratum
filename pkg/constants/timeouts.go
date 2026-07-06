@@ -39,4 +39,14 @@ const (
 
 	// Gateway cache entry TTL
 	GatewayCacheTTL = 5 * time.Minute
+
+	// KnowledgeIngestTimeout caps the total wall time of a single document
+	// ingest job (chunking + all embed batches + persistence) running in a
+	// detached background goroutine after the handler has already returned.
+	// Independent of any client-side request timeout.
+	KnowledgeIngestTimeout = 10 * time.Minute
+
+	// KnowledgeIngestStuckThreshold is how long a doc may sit in
+	// ingest_status='processing' before startup recovery marks it failed.
+	KnowledgeIngestStuckThreshold = 15 * time.Minute
 )

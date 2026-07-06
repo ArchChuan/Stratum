@@ -43,6 +43,11 @@ func ErrorHandler(logger *zap.Logger) gin.HandlerFunc {
 			if status >= 500 {
 				msg = "internal server error"
 			}
+			// 429 clients back off; both back-pressure paths (skill
+			// concurrency, ingest queue) drain in seconds.
+			if status == 429 {
+				c.Writer.Header().Set("Retry-After", "30")
+			}
 			c.JSON(status, gin.H{"error": msg})
 		}
 	}
