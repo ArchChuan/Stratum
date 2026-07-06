@@ -87,6 +87,10 @@ jobs:
           docker tag nats:2.10.25-alpine ${{ env.IMAGE_REPO }}/nats:2.10.25-alpine
           docker push ${{ env.IMAGE_REPO }}/nats:2.10.25-alpine
 
+          docker pull quay.io/coreos/etcd:v3.5.16
+          docker tag quay.io/coreos/etcd:v3.5.16 ${{ env.IMAGE_REPO }}/etcd:v3.5.16
+          docker push ${{ env.IMAGE_REPO }}/etcd:v3.5.16
+
           docker pull minio/minio:latest
           docker tag minio/minio:latest ${{ env.IMAGE_REPO }}/minio:latest
           docker push ${{ env.IMAGE_REPO }}/minio:latest
@@ -166,9 +170,10 @@ jobs:
             --set app.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
             --set frontend.image.repository="${{ env.IMAGE_REPO }}/stratum-frontend" \
             --set frontend.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
-            --set postgresql.image.repository="${{ env.IMAGE_REPO }}/postgres" \
+            --set database.image.repository="${{ env.IMAGE_REPO }}/postgres" \
             --set redis.image.repository="${{ env.IMAGE_REPO }}/redis" \
             --set nats.image.repository="${{ env.IMAGE_REPO }}/nats" \
+            --set etcd.image.repository="${{ env.IMAGE_REPO }}/etcd" \
             --set minio.image.repository="${{ env.IMAGE_REPO }}/minio" \
             --set milvus.image.repository="${{ env.IMAGE_REPO }}/milvus" \
             -n stratum --wait --timeout=10m

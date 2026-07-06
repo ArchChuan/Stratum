@@ -36,6 +36,10 @@ spec:
         {{- include "stratum.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: postgresql
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: postgresql
           image: "{{ .Values.database.image.repository }}:{{ .Values.database.image.tag }}"
@@ -119,6 +123,10 @@ spec:
         {{- include "stratum.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: redis
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: redis
           image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
@@ -192,6 +200,10 @@ spec:
         {{- include "stratum.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: nats
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: nats
           image: "{{ .Values.nats.image.repository }}:{{ .Values.nats.image.tag }}"
@@ -269,6 +281,10 @@ spec:
         {{- include "stratum.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: etcd
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: etcd
           image: "{{ .Values.etcd.image.repository }}:{{ .Values.etcd.image.tag }}"
@@ -354,6 +370,10 @@ spec:
         {{- include "stratum.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: minio
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: minio
           image: "{{ .Values.minio.image.repository }}:{{ .Values.minio.image.tag }}"
@@ -436,6 +456,10 @@ spec:
         {{- include "stratum.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: milvus
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: milvus
           image: "{{ .Values.milvus.image.repository }}:{{ .Values.milvus.image.tag }}"
