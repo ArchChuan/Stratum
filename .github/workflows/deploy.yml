@@ -141,8 +141,8 @@ jobs:
       - name: Apply namespace and secrets
         env:
           MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD || secrets.POSTGRES_PASSWORD }}
-          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
         run: |
           kubectl create namespace stratum --dry-run=client -o yaml | kubectl apply -f -
           JWT_KEY=$(echo "${{ secrets.JWT_PRIVATE_KEY }}" | base64 -d)
