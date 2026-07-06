@@ -73,6 +73,28 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Mirror dependency images to Aliyun CR
+        run: |
+          docker pull postgres:16-alpine
+          docker tag postgres:16-alpine ${{ env.IMAGE_REPO }}/postgres:16-alpine
+          docker push ${{ env.IMAGE_REPO }}/postgres:16-alpine
+
+          docker pull redis:7-alpine
+          docker tag redis:7-alpine ${{ env.IMAGE_REPO }}/redis:7-alpine
+          docker push ${{ env.IMAGE_REPO }}/redis:7-alpine
+
+          docker pull nats:2.10.25-alpine
+          docker tag nats:2.10.25-alpine ${{ env.IMAGE_REPO }}/nats:2.10.25-alpine
+          docker push ${{ env.IMAGE_REPO }}/nats:2.10.25-alpine
+
+          docker pull minio/minio:latest
+          docker tag minio/minio:latest ${{ env.IMAGE_REPO }}/minio:latest
+          docker push ${{ env.IMAGE_REPO }}/minio:latest
+
+          docker pull milvusdb/milvus:v2.4.15
+          docker tag milvusdb/milvus:v2.4.15 ${{ env.IMAGE_REPO }}/milvus:v2.4.15
+          docker push ${{ env.IMAGE_REPO }}/milvus:v2.4.15
+
   deploy:
     name: Deploy to K3s
     runs-on: ubuntu-latest
@@ -144,6 +166,11 @@ jobs:
             --set app.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
             --set frontend.image.repository="${{ env.IMAGE_REPO }}/stratum-frontend" \
             --set frontend.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
+            --set postgresql.image.repository="${{ env.IMAGE_REPO }}/postgres" \
+            --set redis.image.repository="${{ env.IMAGE_REPO }}/redis" \
+            --set nats.image.repository="${{ env.IMAGE_REPO }}/nats" \
+            --set minio.image.repository="${{ env.IMAGE_REPO }}/minio" \
+            --set milvus.image.repository="${{ env.IMAGE_REPO }}/milvus" \
             -n stratum --wait --timeout=10m
 
       - name: Diagnose deployment
