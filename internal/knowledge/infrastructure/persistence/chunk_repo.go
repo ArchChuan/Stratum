@@ -18,7 +18,7 @@ func NewChunkRepo(db *pgxpool.Pool) *ChunkRepo {
 	return &ChunkRepo{db: db}
 }
 
-func (r *ChunkRepo) InsertBatch(ctx context.Context, tenantID, workspaceName string, chunks []domain.Chunk) error {
+func (r *ChunkRepo) InsertBatch(ctx context.Context, tenantID, workspaceID string, chunks []domain.Chunk) error {
 	if len(chunks) == 0 {
 		return nil
 	}
@@ -26,9 +26,9 @@ func (r *ChunkRepo) InsertBatch(ctx context.Context, tenantID, workspaceName str
 	batch := &pgx.Batch{}
 	for _, c := range chunks {
 		batch.Queue(
-			fmt.Sprintf(`INSERT INTO "%s".knowledge_chunks(id, workspace_name, doc_id, chunk_index, content)
+			fmt.Sprintf(`INSERT INTO "%s".knowledge_chunks(id, workspace_id, doc_id, chunk_index, content)
 				VALUES ($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING`, schema),
-			c.ID, workspaceName, c.DocID, c.Index, c.Text,
+			c.ID, workspaceID, c.DocID, c.Index, c.Text,
 		)
 	}
 	br := r.db.SendBatch(ctx, batch)
@@ -41,16 +41,16 @@ func (r *ChunkRepo) InsertBatch(ctx context.Context, tenantID, workspaceName str
 	return nil
 }
 
-func (r *ChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceName, query string, topK int) ([]domain.Chunk, error) {
+func (r *ChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceID, query string, topK int) ([]domain.Chunk, error) {
 	schema := schemaFor(tenantID)
 	rows, err := r.db.Query(ctx,
 		fmt.Sprintf(`SELECT id, doc_id, chunk_index, content
 			FROM "%s".knowledge_chunks
-			WHERE workspace_name = $1
+			WHERE workspace_id = $1
 			  AND tsv @@ plainto_tsquery('simple', $2)
 			ORDER BY ts_rank(tsv, plainto_tsquery('simple', $2)) DESC
 			LIMIT $3`, schema),
-		workspaceName, query, topK,
+		workspaceID, query, topK,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("chunk_repo: keyword search: %w", err)
@@ -68,11 +68,11 @@ func (r *ChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceName, 
 	return out, nil
 }
 
-func (r *ChunkRepo) DeleteByWorkspace(ctx context.Context, tenantID, workspaceName string) error {
+func (r *ChunkRepo) DeleteByWorkspace(ctx context.Context, tenantID, workspaceID string) error {
 	schema := schemaFor(tenantID)
 	_, err := r.db.Exec(ctx,
-		fmt.Sprintf(`DELETE FROM "%s".knowledge_chunks WHERE workspace_name = $1`, schema),
-		workspaceName,
+		fmt.Sprintf(`DELETE FROM "%s".knowledge_chunks WHERE workspace_id = $1`, schema),
+		workspaceID,
 	)
 	if err != nil {
 		return fmt.Errorf("chunk_repo: delete by workspace: %w", err)

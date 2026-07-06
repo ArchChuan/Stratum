@@ -198,3 +198,20 @@ func (r *WorkspaceRepo) GetConfigForUpload(ctx context.Context, tenantID, name s
 	}
 	return fromJSONB(jc), nil
 }
+
+// GetConfigByID returns just the config of a workspace resolved by UUID; ErrWorkspaceNotFound if absent.
+func (r *WorkspaceRepo) GetConfigByID(ctx context.Context, tenantID, id string) (domain.WorkspaceConfig, error) {
+	schema := schemaFor(tenantID)
+	var jc jsonbConfig
+	err := r.db.QueryRow(ctx,
+		fmt.Sprintf(`SELECT config FROM "%s".rag_workspaces WHERE id = $1::uuid`, schema),
+		id,
+	).Scan(&jc)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.WorkspaceConfig{}, domain.ErrWorkspaceNotFound
+		}
+		return domain.WorkspaceConfig{}, fmt.Errorf("workspace_repo: get config by id: %w", err)
+	}
+	return fromJSONB(jc), nil
+}

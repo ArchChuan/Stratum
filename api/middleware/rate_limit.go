@@ -74,6 +74,12 @@ func RateLimit(store *RateLimiterStore) gin.HandlerFunc {
 const (
 	LLMExecRate  = rate.Limit(1.0 / 3.0) // 20 req/min per user
 	LLMExecBurst = 3
+
+	// AuthRate/AuthBurst: per-IP bucket for auth endpoints.
+	// 2 req/s sustained, burst 30 — handles shared-IP demo traffic without
+	// blocking normal login/refresh flows.
+	AuthRate  = rate.Limit(2)
+	AuthBurst = 30
 )
 
 // RateLimitByKey limits requests using a caller-supplied key function.

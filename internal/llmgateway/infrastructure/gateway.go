@@ -102,6 +102,9 @@ type StreamingLLMClient interface {
 
 type EmbeddingClient interface {
 	CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error)
+	// BatchSize returns the maximum number of texts that can be embedded in a single request.
+	// Providers have different limits (Qwen: 10, OpenAI: 100+).
+	BatchSize() int
 }
 
 type Gateway struct {
@@ -387,6 +390,23 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (
 		}
 	}
 	return client.CreateEmbeddings(ctx, req)
+}
+
+// BatchSize returns the batch size limit for embedding requests.
+// It delegates to the default provider's client, or returns the most conservative
+// (smallest) limit among all registered providers.
+func (g *Gateway) BatchSize() int {
+	if client, ok := g.embeddingClients[g.defaultProvider]; ok {
+		return client.BatchSize()
+	}
+	// Fallback: return smallest batch size (most conservative)
+	minBatch := 100
+	for _, client := range g.embeddingClients {
+		if bs := client.BatchSize(); bs > 0 && bs < minBatch {
+			minBatch = bs
+		}
+	}
+	return minBatch
 }
 
 func (g *Gateway) Health(ctx context.Context) error {

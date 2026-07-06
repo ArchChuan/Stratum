@@ -4,11 +4,9 @@ package http
 import (
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
-	"golang.org/x/time/rate"
 
 	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -66,7 +64,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		GlobalAdmin:       cfg.GlobalAdminGitHubLogin,
 		SecureCookies:     cfg.SecureCookies,
 	})
-	authLimiter := middleware.NewRateLimiterStore(rate.Every(90*time.Second), 10)
+	authLimiter := middleware.NewRateLimiterStore(middleware.AuthRate, middleware.AuthBurst)
 	authRoutes := r.Group("/auth")
 	{
 		authRoutes.GET("/github", authHandler.GitHubLogin)
@@ -186,6 +184,7 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 	{
 		knowledgeGroup.GET("/workspaces", ragHandler.ListWorkspaces)
 		knowledgeGroup.GET("/workspaces/:name/stats", ragHandler.GetWorkspaceStats)
+		knowledgeGroup.GET("/workspaces/:name/documents", ragHandler.ListDocuments)
 		knowledgeGroup.POST("/query", requireActive, ragHandler.Query)
 
 		adminMW := []gin.HandlerFunc{middleware.RequireTenantRole("admin")}

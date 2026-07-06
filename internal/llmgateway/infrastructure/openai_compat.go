@@ -134,11 +134,12 @@ func parseRetryAfter(header string) time.Duration {
 // ProviderConfig holds the minimal configuration that differentiates one
 // OpenAI-compatible provider from another.
 type ProviderConfig struct {
-	Name        string
-	BaseURL     string
-	APIKey      string
-	HealthModel string
-	Models      []string
+	Name           string
+	BaseURL        string
+	APIKey         string
+	HealthModel    string
+	Models         []string
+	EmbedBatchSize int // max texts per embedding request; 0 = use default (100)
 }
 
 // OpenAICompatClient implements LLMClient, StreamingLLMClient, and
@@ -440,6 +441,13 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 	}
 	c.breaker.recordSuccess()
 	return &result, nil
+}
+
+func (c *OpenAICompatClient) BatchSize() int {
+	if c.cfg.EmbedBatchSize > 0 {
+		return c.cfg.EmbedBatchSize
+	}
+	return 100
 }
 
 func (c *OpenAICompatClient) CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -32,6 +33,17 @@ type RecallEntry struct {
 // RecallResult is a slice of recalled memory entries.
 type RecallResult []RecallEntry
 
+type recallCandidate struct {
+	ID    string
+	Entry RecallEntry
+}
+
+type scoredRecallCandidate struct {
+	candidate recallCandidate
+	score     float64
+	textHit   bool
+}
+
 // RecallToolDefinition returns the tool schema for recall_memory.
 func RecallToolDefinition() map[string]any {
 	return map[string]any{
@@ -55,8 +67,7 @@ func RecallToolDefinition() map[string]any {
 }
 
 // RecallHandler executes recall_memory queries against the memory_entries table.
-// When embedResolver and vectorDB are available, it uses vector search for semantic recall;
-// otherwise falls back to ILIKE text search.
+// It retrieves semantic and text candidates, then fuses them with RRF.
 type RecallHandler struct {
 	pool          *pgxpool.Pool
 	logger        *zap.Logger
@@ -96,32 +107,37 @@ func (h *RecallHandler) Handle(ctx context.Context, tenantID, userID, agentID, s
 		req.Limit = 5
 	}
 
-	// Try vector search first (semantic recall)
-	if results := h.tryVectorSearch(ctx, tenantID, userID, agentID, scope, req); len(results) > 0 {
-		sc, _ := observability.SpanFromContext(ctx)
-		out, _ := json.Marshal(results)
-		h.logger.Debug("memory.recall.vector",
-			zap.String("trace_id", sc.TraceID),
-			zap.String("tenant_id", tenantID),
-			zap.String("query", req.Query),
-			zap.Int("results", len(results)))
-		h.metrics.RecordMemoryRetrievalDuration("recall_vector", time.Since(start).Seconds())
-		h.metrics.IncKnowledgeQuery("recall", "success")
-		return string(out), nil
+	vectorCandidates := h.tryVectorSearch(ctx, tenantID, userID, agentID, scope, req)
+	textCandidates, err := h.textSearchCandidates(ctx, tenantID, userID, agentID, scope, req)
+	h.metrics.RecordMemoryRetrievalDuration("recall_hybrid", time.Since(start).Seconds())
+	if err != nil && len(vectorCandidates) == 0 {
+		h.metrics.IncKnowledgeQuery("recall", "error")
+		return "", err
+	}
+	if err != nil {
+		h.logger.Debug("memory.recall: text search failed, using vector candidates", zap.Error(err))
 	}
 
-	// Fallback: ILIKE text search
-	result, err := h.textSearch(ctx, tenantID, userID, agentID, scope, req)
-	h.metrics.RecordMemoryRetrievalDuration("recall_text", time.Since(start).Seconds())
-	if err != nil {
-		h.metrics.IncKnowledgeQuery("recall", "error")
-	} else {
+	results := fuseRecallCandidates(vectorCandidates, textCandidates, req.Limit)
+	if len(results) == 0 {
 		h.metrics.IncKnowledgeQuery("recall", "success")
+		return "No relevant memories found.", nil
 	}
-	return result, err
+
+	out, _ := json.Marshal(results)
+	sc, _ := observability.SpanFromContext(ctx)
+	h.logger.Debug("memory.recall.hybrid",
+		zap.String("trace_id", sc.TraceID),
+		zap.String("tenant_id", tenantID),
+		zap.String("query", req.Query),
+		zap.Int("vector_results", len(vectorCandidates)),
+		zap.Int("text_results", len(textCandidates)),
+		zap.Int("results", len(results)))
+	h.metrics.IncKnowledgeQuery("recall", "success")
+	return string(out), nil
 }
 
-func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, agentID, scope string, req RecallRequest) RecallResult {
+func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, agentID, scope string, req RecallRequest) []recallCandidate {
 	embedSvc := h.embedSvc
 	if embedSvc == nil && h.embedResolver != nil {
 		embedSvc = h.embedResolver(ctx, tenantID)
@@ -147,40 +163,45 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, a
 		expr = fmt.Sprintf(`user_id == "%s" && scope == "user"`, userID)
 	}
 
-	results, err := h.vectorDB.SearchWithFilter(ctx, collection, vec, constants.MemoryLongTermTopK, expr)
+	results, err := h.vectorDB.SearchWithFilter(ctx, collection, vec, req.Limit*2, expr)
 	if err != nil {
 		h.logger.Debug("memory.recall: vector search failed, falling back", zap.Error(err))
 		return nil
 	}
 
-	var entries RecallResult
+	var entries []recallCandidate
 	for _, r := range results {
 		if r.Content != "" {
-			entries = append(entries, RecallEntry{
-				Content: r.Content,
+			entries = append(entries, recallCandidate{
+				ID: r.ID,
+				Entry: RecallEntry{
+					Content: r.Content,
+				},
 			})
 		}
 	}
 	return entries
 }
 
-func (h *RecallHandler) textSearch(ctx context.Context, tenantID, userID, agentID, scope string, req RecallRequest) (string, error) {
+func (h *RecallHandler) textSearchCandidates(ctx context.Context, tenantID, userID, agentID, scope string, req RecallRequest) ([]recallCandidate, error) {
+	if h.pool == nil {
+		return nil, nil
+	}
 	schema := "tenant_" + tenantID
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
-		return "", fmt.Errorf("begin tx: %w", err)
+		return nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL search_path = %s, public", pgx.Identifier{schema}.Sanitize())); err != nil {
-		return "", fmt.Errorf("set schema: %w", err)
+		return nil, fmt.Errorf("set schema: %w", err)
 	}
 
-	baseQuery := `SELECT content, role, importance, created_at FROM memory_entries WHERE enriched_at IS NOT NULL`
+	baseQuery := `SELECT id, content, role, importance, created_at FROM memory_entries WHERE enriched_at IS NOT NULL`
 	args := []any{}
 	argIdx := 1
 
-	// Text search filter
 	baseQuery += fmt.Sprintf(" AND content ILIKE '%%' || $%d || '%%'", argIdx)
 	args = append(args, req.Query)
 	argIdx++
@@ -199,35 +220,83 @@ func (h *RecallHandler) textSearch(ctx context.Context, tenantID, userID, agentI
 
 	baseQuery += " ORDER BY importance DESC, created_at DESC"
 	baseQuery += fmt.Sprintf(" LIMIT $%d", argIdx)
-	args = append(args, req.Limit)
+	args = append(args, req.Limit*2)
 
 	rows, err := tx.Query(ctx, baseQuery, args...)
 	if err != nil {
-		return "", fmt.Errorf("query memories: %w", err)
+		return nil, fmt.Errorf("query memories: %w", err)
 	}
 	defer rows.Close()
 
-	var results RecallResult
+	var results []recallCandidate
 	for rows.Next() {
+		var id string
 		var e RecallEntry
 		var createdAt any
-		if err := rows.Scan(&e.Content, &e.Role, &e.Importance, &createdAt); err != nil {
+		if err := rows.Scan(&id, &e.Content, &e.Role, &e.Importance, &createdAt); err != nil {
 			continue
 		}
 		e.CreatedAt = fmt.Sprintf("%v", createdAt)
-		results = append(results, e)
+		results = append(results, recallCandidate{ID: id, Entry: e})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scan memories: %w", err)
+	}
+	return results, nil
+}
+
+func fuseRecallCandidates(vectorCandidates, textCandidates []recallCandidate, topK int) RecallResult {
+	if topK <= 0 {
+		topK = 5
+	}
+	byID := make(map[string]scoredRecallCandidate, len(vectorCandidates)+len(textCandidates))
+	k := float64(constants.MemoryRRFConstant)
+
+	for rank, candidate := range vectorCandidates {
+		if candidate.ID == "" {
+			candidate.ID = candidate.Entry.Content
+		}
+		current := byID[candidate.ID]
+		if current.candidate.ID == "" {
+			current.candidate = candidate
+		}
+		current.score += 1.0 / (k + float64(rank+1))
+		byID[candidate.ID] = current
 	}
 
-	if len(results) == 0 {
-		return "No relevant memories found.", nil
+	for rank, candidate := range textCandidates {
+		if candidate.ID == "" {
+			candidate.ID = candidate.Entry.Content
+		}
+		current := byID[candidate.ID]
+		if current.candidate.ID == "" || current.candidate.Entry.Role == "" {
+			current.candidate = candidate
+		}
+		current.score += 1.0 / (k + float64(rank+1))
+		current.textHit = true
+		byID[candidate.ID] = current
 	}
 
-	out, _ := json.Marshal(results)
-	sc, _ := observability.SpanFromContext(ctx)
-	h.logger.Debug("memory.recall",
-		zap.String("trace_id", sc.TraceID),
-		zap.String("tenant_id", tenantID),
-		zap.String("query", req.Query),
-		zap.Int("results", len(results)))
-	return string(out), nil
+	scored := make([]scoredRecallCandidate, 0, len(byID))
+	for _, candidate := range byID {
+		scored = append(scored, candidate)
+	}
+	sort.Slice(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		if scored[i].textHit != scored[j].textHit {
+			return scored[i].textHit
+		}
+		return scored[i].candidate.Entry.Importance > scored[j].candidate.Entry.Importance
+	})
+
+	if topK > len(scored) {
+		topK = len(scored)
+	}
+	out := make(RecallResult, 0, topK)
+	for i := 0; i < topK; i++ {
+		out = append(out, scored[i].candidate.Entry)
+	}
+	return out
 }

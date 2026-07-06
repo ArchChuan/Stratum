@@ -32,6 +32,10 @@ type MetricsProvider interface {
 	IncKnowledgeQuery(queryType, status string)
 	RecordKnowledgeQueryDuration(queryType string, duration float64)
 	RecordMemoryRetrievalDuration(operation string, duration float64)
+	IncKnowledgeIngest(status string)
+	RecordKnowledgeIngestDuration(duration float64)
+	IncKnowledgeIngestInFlight()
+	DecKnowledgeIngestInFlight()
 
 	// Hermes
 	IncHermesEvent(eventType string)
@@ -59,5 +63,9 @@ func (NoopMetrics) RecordLLMFirstTokenLatency(_, _ string, _ float64)   {}
 func (NoopMetrics) IncKnowledgeQuery(_, _ string)                       {}
 func (NoopMetrics) RecordKnowledgeQueryDuration(_ string, _ float64)    {}
 func (NoopMetrics) RecordMemoryRetrievalDuration(_ string, _ float64)   {}
+func (NoopMetrics) IncKnowledgeIngest(_ string)                         {}
+func (NoopMetrics) RecordKnowledgeIngestDuration(_ float64)             {}
+func (NoopMetrics) IncKnowledgeIngestInFlight()                         {}
+func (NoopMetrics) DecKnowledgeIngestInFlight()                         {}
 func (NoopMetrics) IncHermesEvent(_ string)                             {}
 func (NoopMetrics) IncHermesEventProcessed(_, _ string)                 {}

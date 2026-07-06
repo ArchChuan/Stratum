@@ -15,4 +15,5 @@ type WorkspaceRepo interface {
 	UpdateName(ctx context.Context, tenantID, oldName, newName string) error
 	Delete(ctx context.Context, tenantID, name string) error
 	GetConfigForUpload(ctx context.Context, tenantID, name string) (domain.WorkspaceConfig, error)
+	GetConfigByID(ctx context.Context, tenantID, id string) (domain.WorkspaceConfig, error)
 }

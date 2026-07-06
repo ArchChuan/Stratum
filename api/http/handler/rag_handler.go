@@ -86,14 +86,16 @@ func (h *RAGHandler) UploadDocument(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success":       true,
-		"document_id":   result.DocumentID,
-		"workspace":     result.Workspace,
-		"total_chunks":  result.TotalChunks,
-		"total_vectors": result.TotalVectors,
-		"duration":      result.Duration,
-		"errors":        result.Errors,
+	// 202 Accepted: doc row is persisted with status='processing'; the embed
+	// + vector persist runs in a detached goroutine (see knowledge.IngestDocument).
+	// Client polls the docs list to observe terminal status transitions.
+	c.JSON(http.StatusAccepted, gin.H{
+		"success":      true,
+		"document_id":  result.DocumentID,
+		"workspace":    result.Workspace,
+		"status":       result.Status,
+		"total_chunks": result.TotalChunks,
+		"errors":       result.Errors,
 	})
 }
 
@@ -293,4 +295,41 @@ func (h *RAGHandler) DeleteWorkspace(c *gin.Context) {
 
 	h.logger.Info("workspace deleted", zap.String("name", name), zap.String("tenant_id", tenantID))
 	c.JSON(http.StatusOK, gin.H{"success": true, "workspace": name})
+}
+
+// ListDocuments returns the documents in a workspace with their ingest
+// lifecycle fields. Front-end polls this endpoint every ~5s while a doc
+// is in 'processing' to render a status badge and show terminal state.
+func (h *RAGHandler) ListDocuments(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	name := c.Param("name")
+	if name == "" {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("workspace name required")))
+		return
+	}
+	docs, err := h.wsService.ListDocuments(c.Request.Context(), tenantID, name)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	items := make([]gin.H, len(docs))
+	for i, d := range docs {
+		items[i] = gin.H{
+			"id":                 d.ID,
+			"source":             d.Source,
+			"content_hash":       d.ContentHash,
+			"ingest_status":      d.IngestStatus,
+			"ingest_error":       d.IngestError,
+			"processed_chunks":   d.ProcessedChunks,
+			"total_chunks":       d.TotalChunks,
+			"created_at":         d.CreatedAt,
+			"ingest_started_at":  d.IngestStartedAt,
+			"ingest_finished_at": d.IngestFinishedAt,
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"workspace": name, "documents": items})
 }

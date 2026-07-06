@@ -53,5 +53,6 @@ func main() {
 	if err := platformruntime.BootstrapTenants(ctx, container, logger); err != nil {
 		logger.Fatal("tenant bootstrap failed", zap.Error(err))
 	}
+	container.RecoverStuckKnowledgeIngests(ctx)
 	platformruntime.Run(ctx, cfg, container, logger)
 }
