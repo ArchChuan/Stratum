@@ -1,6 +1,9 @@
 global:
   imagePullPolicy: IfNotPresent
 
+imagePullSecrets:
+  - name: aliyun-registry
+
 app:
   replicaCount: 1
   image:
