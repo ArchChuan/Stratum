@@ -88,6 +88,17 @@ jobs:
         with:
           version: 'v3.13.0'
 
+      - name: Setup SSH tunnel
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes \
+            -i ~/.ssh/deploy_key \
+            -fN -L 6443:127.0.0.1:6443 \
+            root@101.200.181.141
+          sleep 2
+
       - name: Configure kubeconfig
         run: |
           mkdir -p $HOME/.kube
