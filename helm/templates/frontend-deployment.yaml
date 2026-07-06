@@ -20,10 +20,16 @@ spec:
       maxUnavailable: 0
   template:
     metadata:
+      annotations:
+        checksum/frontend-config: {{ include (print $.Template.BasePath "/frontend-configmap.yaml") . | sha256sum }}
       labels:
         {{- include "stratum.selectorLabels" . | nindent 8 }}
         component: frontend
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: frontend
           securityContext:

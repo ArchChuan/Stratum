@@ -8,6 +8,7 @@ on:
 
 env:
   REGISTRY: ${{ secrets.DOCKER_REGISTRY_URL }}
+  IMAGE_REPO: ${{ secrets.DOCKER_REGISTRY_URL }}/stratum-demo
   IMAGE_NAME: stratum
 
 jobs:
@@ -31,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     outputs:
-      image-tag: ${{ steps.meta.outputs.version }}
+      image-tag: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -47,10 +48,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend
+          images: ${{ env.IMAGE_REPO }}/${{ env.IMAGE_NAME }}-backend
           tags: |
             type=ref,event=branch
             type=sha,prefix={{branch}}-
+            type=raw,value=${{ github.sha }}
 
       - name: Build and push backend
         uses: docker/build-push-action@v5
@@ -68,9 +70,35 @@ jobs:
           context: ./web
           file: ./web/Dockerfile
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:${{ steps.meta.outputs.version }}
+          tags: ${{ env.IMAGE_REPO }}/${{ env.IMAGE_NAME }}-frontend:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Mirror dependency images to Aliyun CR
+        run: |
+          docker pull postgres:16-alpine
+          docker tag postgres:16-alpine ${{ env.IMAGE_REPO }}/postgres:16-alpine
+          docker push ${{ env.IMAGE_REPO }}/postgres:16-alpine
+
+          docker pull redis:7-alpine
+          docker tag redis:7-alpine ${{ env.IMAGE_REPO }}/redis:7-alpine
+          docker push ${{ env.IMAGE_REPO }}/redis:7-alpine
+
+          docker pull nats:2.10.25-alpine
+          docker tag nats:2.10.25-alpine ${{ env.IMAGE_REPO }}/nats:2.10.25-alpine
+          docker push ${{ env.IMAGE_REPO }}/nats:2.10.25-alpine
+
+          docker pull quay.io/coreos/etcd:v3.5.16
+          docker tag quay.io/coreos/etcd:v3.5.16 ${{ env.IMAGE_REPO }}/etcd:v3.5.16
+          docker push ${{ env.IMAGE_REPO }}/etcd:v3.5.16
+
+          docker pull minio/minio:latest
+          docker tag minio/minio:latest ${{ env.IMAGE_REPO }}/minio:latest
+          docker push ${{ env.IMAGE_REPO }}/minio:latest
+
+          docker pull milvusdb/milvus:v2.4.15
+          docker tag milvusdb/milvus:v2.4.15 ${{ env.IMAGE_REPO }}/milvus:v2.4.15
+          docker push ${{ env.IMAGE_REPO }}/milvus:v2.4.15
 
   deploy:
     name: Deploy to K3s
@@ -87,33 +115,94 @@ jobs:
         with:
           version: 'v3.13.0'
 
+      - name: Setup SSH tunnel to K3s
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes \
+            -i ~/.ssh/deploy_key \
+            -fN -L 6443:127.0.0.1:6443 \
+            root@101.200.181.141
+          sleep 2
+
       - name: Configure kubeconfig
         run: |
           mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d | \
+            sed 's|https://127.0.0.1:6443|https://101.200.181.141:6443|g' | \
+            sed '/certificate-authority-data:/d' | \
+            sed 's|server: https://101.200.181.141:6443|server: https://101.200.181.141:6443\n    insecure-skip-tls-verify: true|g' \
+            > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
 
       - name: Verify cluster
         run: kubectl get nodes
 
       - name: Apply namespace and secrets
+        env:
+          MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD || secrets.POSTGRES_PASSWORD }}
+          GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
         run: |
           kubectl create namespace stratum --dry-run=client -o yaml | kubectl apply -f -
           JWT_KEY=$(echo "${{ secrets.JWT_PRIVATE_KEY }}" | base64 -d)
           kubectl create secret generic stratum-secrets \
             --from-literal=POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
+            --from-literal=MINIO_ROOT_PASSWORD="$MINIO_ROOT_PASSWORD" \
             --from-literal=JWT_PRIVATE_KEY_PEM="$JWT_KEY" \
+            --from-literal=GITHUB_CLIENT_ID="$GITHUB_CLIENT_ID" \
+            --from-literal=GITHUB_CLIENT_SECRET="$GITHUB_CLIENT_SECRET" \
+            -n stratum --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret docker-registry aliyun-registry \
+            --docker-server="${{ secrets.DOCKER_REGISTRY_URL }}" \
+            --docker-username="${{ secrets.DOCKER_USERNAME }}" \
+            --docker-password="${{ secrets.DOCKER_PASSWORD }}" \
             -n stratum --dry-run=client -o yaml | kubectl apply -f -
 
+      - name: Install metrics-server (K3s)
+        run: |
+          kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+          kubectl patch deployment metrics-server -n kube-system \
+            --type='json' \
+            -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]' \
+            || true
+
       - name: Helm deploy
+        id: helm-deploy
+        continue-on-error: true
         run: |
           helm upgrade --install stratum ./helm \
             -f helm/values-demo.yaml \
+            --set app.image.repository="${{ env.IMAGE_REPO }}/stratum-backend" \
             --set app.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
+            --set frontend.image.repository="${{ env.IMAGE_REPO }}/stratum-frontend" \
             --set frontend.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
+            --set database.image.repository="${{ env.IMAGE_REPO }}/postgres" \
+            --set redis.image.repository="${{ env.IMAGE_REPO }}/redis" \
+            --set nats.image.repository="${{ env.IMAGE_REPO }}/nats" \
+            --set etcd.image.repository="${{ env.IMAGE_REPO }}/etcd" \
+            --set minio.image.repository="${{ env.IMAGE_REPO }}/minio" \
+            --set milvus.image.repository="${{ env.IMAGE_REPO }}/milvus" \
             -n stratum --wait --timeout=10m
+
+      - name: Diagnose deployment
+        if: always()
+        run: |
+          echo "=== Pods ==="
+          kubectl get pods -n stratum -o wide
+          echo "=== Deployments ==="
+          kubectl get deployments -n stratum
+          echo "=== Events ==="
+          kubectl get events -n stratum --sort-by='.lastTimestamp' | tail -30
+          echo "=== Pod describe (if any failed) ==="
+          kubectl get pods -n stratum --field-selector=status.phase!=Running -o name | xargs -r kubectl describe -n stratum
+
+      - name: Fail if helm deploy failed
+        if: steps.helm-deploy.outcome == 'failure'
+        run: exit 1
 
       - name: Verify deployment
         run: |
-          kubectl rollout status deployment/stratum-backend -n stratum
+          kubectl rollout status deployment/stratum -n stratum
           kubectl get pods -n stratum
