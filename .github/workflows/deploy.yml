@@ -127,12 +127,30 @@ jobs:
             -n stratum --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Helm deploy
+        id: helm-deploy
+        continue-on-error: true
         run: |
           helm upgrade --install stratum ./helm \
             -f helm/values-demo.yaml \
             --set app.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
             --set frontend.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
             -n stratum --wait --timeout=10m
+
+      - name: Diagnose deployment
+        if: always()
+        run: |
+          echo "=== Pods ==="
+          kubectl get pods -n stratum -o wide
+          echo "=== Deployments ==="
+          kubectl get deployments -n stratum
+          echo "=== Events ==="
+          kubectl get events -n stratum --sort-by='.lastTimestamp' | tail -30
+          echo "=== Pod describe (if any failed) ==="
+          kubectl get pods -n stratum --field-selector=status.phase!=Running -o name | xargs -r kubectl describe -n stratum
+
+      - name: Fail if helm deploy failed
+        if: steps.helm-deploy.outcome == 'failure'
+        run: exit 1
 
       - name: Verify deployment
         run: |
