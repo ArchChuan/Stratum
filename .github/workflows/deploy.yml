@@ -139,11 +139,14 @@ jobs:
         run: kubectl get nodes
 
       - name: Apply namespace and secrets
+        env:
+          MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD || secrets.POSTGRES_PASSWORD }}
         run: |
           kubectl create namespace stratum --dry-run=client -o yaml | kubectl apply -f -
           JWT_KEY=$(echo "${{ secrets.JWT_PRIVATE_KEY }}" | base64 -d)
           kubectl create secret generic stratum-secrets \
             --from-literal=POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
+            --from-literal=MINIO_ROOT_PASSWORD="$MINIO_ROOT_PASSWORD" \
             --from-literal=JWT_PRIVATE_KEY_PEM="$JWT_KEY" \
             -n stratum --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret docker-registry aliyun-registry \
