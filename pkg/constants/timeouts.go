@@ -49,4 +49,9 @@ const (
 	// KnowledgeIngestStuckThreshold is how long a doc may sit in
 	// ingest_status='processing' before startup recovery marks it failed.
 	KnowledgeIngestStuckThreshold = 15 * time.Minute
+
+	// OAuthTokenExchangeTimeout caps GitHub OAuth code→token exchange.
+	// Industry standard 10s; GitHub API normally responds <1s, fast-fail
+	// on network issues so user sees error quickly and can retry.
+	OAuthTokenExchangeTimeout = 10 * time.Second
 )
