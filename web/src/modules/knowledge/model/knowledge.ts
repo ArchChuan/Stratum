@@ -36,6 +36,22 @@ export const workspaceStatsSchema = z
   .passthrough();
 export type WorkspaceStats = z.infer<typeof workspaceStatsSchema>;
 
+export const documentSchema = z
+  .object({
+    id: z.string().default(''),
+    source: z.string().default(''),
+    content_hash: z.string().default(''),
+    ingest_status: z.string().default('completed'),
+    ingest_error: z.string().default(''),
+    processed_chunks: z.number().default(0),
+    total_chunks: z.number().default(0),
+    created_at: z.string().nullable().optional(),
+    ingest_started_at: z.string().nullable().optional(),
+    ingest_finished_at: z.string().nullable().optional(),
+  })
+  .passthrough();
+export type KnowledgeDocument = z.infer<typeof documentSchema>;
+
 export const querySourceSchema = z
   .object({
     document_id: z.string().optional().default(''),
