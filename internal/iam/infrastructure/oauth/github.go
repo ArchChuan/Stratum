@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 // githubUserJSON is the internal decode type for the GitHub /user API.
@@ -43,7 +44,7 @@ func NewGitHubClient(clientID, clientSecret, tokenURL, userURL string) *GitHubCl
 		clientSecret: clientSecret,
 		tokenURL:     tokenURL,
 		userURL:      userURL,
-		httpClient:   &http.Client{},
+		httpClient:   &http.Client{Timeout: constants.OAuthTokenExchangeTimeout},
 	}
 }
 
