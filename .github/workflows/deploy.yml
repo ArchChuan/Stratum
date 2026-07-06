@@ -141,6 +141,8 @@ jobs:
       - name: Apply namespace and secrets
         env:
           MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD || secrets.POSTGRES_PASSWORD }}
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
         run: |
           kubectl create namespace stratum --dry-run=client -o yaml | kubectl apply -f -
           JWT_KEY=$(echo "${{ secrets.JWT_PRIVATE_KEY }}" | base64 -d)
@@ -148,6 +150,8 @@ jobs:
             --from-literal=POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
             --from-literal=MINIO_ROOT_PASSWORD="$MINIO_ROOT_PASSWORD" \
             --from-literal=JWT_PRIVATE_KEY_PEM="$JWT_KEY" \
+            --from-literal=GITHUB_CLIENT_ID="$GITHUB_CLIENT_ID" \
+            --from-literal=GITHUB_CLIENT_SECRET="$GITHUB_CLIENT_SECRET" \
             -n stratum --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret docker-registry aliyun-registry \
             --docker-server="${{ secrets.DOCKER_REGISTRY_URL }}" \
