@@ -77,9 +77,9 @@ func (c *Container) buildPlatform(_ context.Context) error {
 	return nil
 }
 
-// parseRSAPrivateKey decodes a PKCS#1 PEM-encoded RSA private key. The
-// `\n`-escaped form (common in env vars) is normalized first. Copied
-// verbatim from api/router.go to keep parity until that file is removed.
+// parseRSAPrivateKey decodes a PEM-encoded RSA private key. It accepts both
+// PKCS#1 ("RSA PRIVATE KEY") and PKCS#8 ("PRIVATE KEY") formats because
+// deployment secrets commonly use either OpenSSL output.
 func parseRSAPrivateKey(pemStr string) (*rsa.PrivateKey, error) {
 	if pemStr == "" {
 		return nil, fmt.Errorf("JWT_PRIVATE_KEY_PEM is empty")
@@ -89,9 +89,16 @@ func parseRSAPrivateKey(pemStr string) (*rsa.PrivateKey, error) {
 	if block == nil {
 		return nil, fmt.Errorf("failed to decode PEM block")
 	}
-	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("parse RSA key: %w", err)
+	}
+	key, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("parse RSA key: PKCS#8 key is %T, not *rsa.PrivateKey", parsed)
 	}
 	return key, nil
 }

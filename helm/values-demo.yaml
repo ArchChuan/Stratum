@@ -51,7 +51,7 @@ config:
   otelExporterType: "otlp"
   otelSamplingRatio: "0.1"
   frontendUrl: "http://101.200.181.141"
-  githubCallbackUrl: "http://101.200.181.141/auth/github/callback"
+  githubCallbackUrl: "http://101.200.181.141/api/auth/github/callback"
   secureCookies: "false"
 
 secrets:
