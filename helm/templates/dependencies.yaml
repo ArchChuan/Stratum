@@ -26,6 +26,8 @@ metadata:
     app.kubernetes.io/component: postgresql
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "stratum.selectorLabels" . | nindent 6 }}
@@ -113,6 +115,8 @@ metadata:
     app.kubernetes.io/component: redis
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "stratum.selectorLabels" . | nindent 6 }}
@@ -190,6 +194,8 @@ metadata:
     app.kubernetes.io/component: nats
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "stratum.selectorLabels" . | nindent 6 }}
@@ -271,6 +277,8 @@ metadata:
     app.kubernetes.io/component: etcd
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "stratum.selectorLabels" . | nindent 6 }}
@@ -360,6 +368,8 @@ metadata:
     app.kubernetes.io/component: minio
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "stratum.selectorLabels" . | nindent 6 }}
@@ -446,6 +456,8 @@ metadata:
     app.kubernetes.io/component: milvus
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "stratum.selectorLabels" . | nindent 6 }}
@@ -460,6 +472,31 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        - name: wait-etcd
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              host="{{ include "stratum.fullname" . }}-etcd"
+              until nc -z -w 2 "$host" 2379; do
+                echo "waiting for etcd $host:2379 ..."
+                sleep 2
+              done
+              echo "etcd is reachable"
+        - name: wait-minio
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              host="{{ include "stratum.fullname" . }}-minio"
+              until nc -z -w 2 "$host" 9000; do
+                echo "waiting for minio $host:9000 ..."
+                sleep 2
+              done
+              echo "minio is reachable"
       containers:
         - name: milvus
           image: "{{ .Values.milvus.image.repository }}:{{ .Values.milvus.image.tag }}"
