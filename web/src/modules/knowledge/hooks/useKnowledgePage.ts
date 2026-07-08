@@ -5,6 +5,11 @@ import { useNavigate } from 'react-router-dom';
 import { knowledgeApi } from '../api/knowledge.api';
 import type { CreateWorkspaceInput, Workspace } from '../model/knowledge';
 
+import {
+  KNOWLEDGE_DEFAULT_CHUNK_OVERLAP,
+  KNOWLEDGE_DEFAULT_CHUNK_SIZE,
+  KNOWLEDGE_DEFAULT_TOP_K,
+} from '@/constants';
 import { useAuth } from '@/modules/iam';
 import { extractErrorMessage } from '@/shared/lib';
 
@@ -12,6 +17,7 @@ interface CreateValues {
   name: string;
   description?: string;
   embedding_model: string;
+  chunking_strategy: string;
   chunk_size?: number;
   chunk_overlap?: number;
   query_mode?: string;
@@ -56,10 +62,11 @@ export const useKnowledgePage = () => {
           description: values.description || '',
           config: {
             embedding_model: values.embedding_model,
-            chunk_size: values.chunk_size || 512,
-            chunk_overlap: values.chunk_overlap || 64,
+            chunking_strategy: values.chunking_strategy || 'structure_recursive',
+            chunk_size: values.chunk_size || KNOWLEDGE_DEFAULT_CHUNK_SIZE,
+            chunk_overlap: values.chunk_overlap || KNOWLEDGE_DEFAULT_CHUNK_OVERLAP,
             query_mode: values.query_mode || 'hybrid',
-            top_k: values.top_k || 5,
+            top_k: values.top_k || KNOWLEDGE_DEFAULT_TOP_K,
           },
         };
         await knowledgeApi.create(payload);

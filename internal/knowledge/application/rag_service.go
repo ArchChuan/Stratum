@@ -137,10 +137,11 @@ type RAGQueryResult struct {
 }
 
 type Source struct {
-	DocumentID string
-	Content    string
-	ChunkIndex int64
-	Score      float32
+	DocumentID    string
+	Content       string
+	ParentContent string // non-empty when parent chunk was fetched (Parent-Child strategy)
+	ChunkIndex    int64
+	Score         float32
 }
 
 func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQueryResult, error) {
@@ -293,6 +294,34 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	}
 
 	result.Latency = time.Since(startTime)
+
+	// Expand parent context: for leaf chunks that have a parent, fetch the
+	// larger parent chunk and attach it so callers can present richer context.
+	if rs.chunkRepo != nil && req.WorkspaceID != "" && len(result.Sources) > 0 {
+		ids := make([]string, len(result.Sources))
+		for i, s := range result.Sources {
+			ids[i] = s.DocumentID
+		}
+		leafChunks, err := rs.chunkRepo.GetChunksByIDs(ctx, req.TenantID, req.WorkspaceID, ids)
+		if err == nil {
+			parentMap := make(map[string]string) // chunkID → parentID
+			for _, lc := range leafChunks {
+				if lc.ParentID != "" {
+					parentMap[lc.ID] = lc.ParentID
+				}
+			}
+			for i := range result.Sources {
+				pid, ok := parentMap[result.Sources[i].DocumentID]
+				if !ok {
+					continue
+				}
+				parent, perr := rs.chunkRepo.GetParentByID(ctx, req.TenantID, req.WorkspaceID, pid)
+				if perr == nil && parent != nil {
+					result.Sources[i].ParentContent = parent.Content
+				}
+			}
+		}
+	}
 
 	rs.logger.Info("RAG query completed",
 		zap.String("trace_id", sc.TraceID),

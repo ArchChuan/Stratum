@@ -97,6 +97,7 @@ type ExecutionRecord struct {
 	OutputPreview string
 	ErrorMessage  string
 	TotalTokens   int
+	CostUSD       float64
 	DurationMs    int
 	CreatedAt     time.Time
 }
@@ -141,6 +142,7 @@ type AgentResult struct {
 	ToolCalls  []ToolCall
 	Steps      int
 	TokensUsed int
+	CostUSD    float64
 	Duration   time.Duration
 	Error      error
 	Metadata   map[string]interface{}

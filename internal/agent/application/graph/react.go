@@ -35,6 +35,7 @@ type ReActState struct {
 	Output         string
 	Steps          int
 	TotalTokens    int
+	TotalCostUSD   float64
 	OnToken        func(string) // if non-nil, stream tokens from the final LLM response
 	RAGSearchFn    func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
 	RecallMemoryFn func(ctx context.Context, input map[string]any) (string, error)
@@ -43,10 +44,23 @@ type ReActState struct {
 	MaxLLMSteps int
 }
 
+// TokenRecorder 是 TokenLedger 的最小接口，供 graph 包使用，避免 import application 包循环。
+// Record 返回 (total tokens, cost USD)。
+type TokenRecorder interface {
+	Record(ctx context.Context, model string, usage port.TokenUsage) (int, float64)
+}
+
+// NoopTokenRecorder 满足 TokenRecorder 接口但不执行任何操作，供测试使用。
+type NoopTokenRecorder struct{}
+
+func (NoopTokenRecorder) Record(_ context.Context, _ string, usage port.TokenUsage) (int, float64) {
+	return usage.Total, 0
+}
+
 // BuildReActGraph constructs and compiles the ReAct agent graph.
-func BuildReActGraph(capGW port.CapabilityGateway, logger *zap.Logger) (*CompiledGraph[ReActState], error) {
+func BuildReActGraph(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap.Logger) (*CompiledGraph[ReActState], error) {
 	g := New[ReActState]()
-	g.AddNode(nodeLLM, makeLLMNode(capGW, logger))
+	g.AddNode(nodeLLM, makeLLMNode(capGW, ledger, logger))
 	g.AddNode(nodeTool, makeToolNode(capGW, logger))
 	g.AddConditionalEdge(nodeLLM, func(s ReActState) string {
 		if len(s.Messages) == 0 {
@@ -63,7 +77,7 @@ func BuildReActGraph(capGW port.CapabilityGateway, logger *zap.Logger) (*Compile
 	return g.Compile()
 }
 
-func makeLLMNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReActState] {
+func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap.Logger) NodeFunc[ReActState] {
 	return func(ctx context.Context, s ReActState) (ReActState, error) {
 		start := time.Now()
 
@@ -129,10 +143,10 @@ func makeLLMNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReAc
 			return s, fmt.Errorf("react llm node: %w", err)
 		}
 		s.Steps++
-		s.TotalTokens += resp.Usage.Total
+		total, cost := ledger.Record(ctx, s.Model, resp.Usage)
+		s.TotalTokens += total
+		s.TotalCostUSD += cost
 		llmSpan.SetAttributes(
-			attribute.Int("llm.prompt_tokens", resp.Usage.Prompt),
-			attribute.Int("llm.completion_tokens", resp.Usage.Completion),
 			attribute.Bool("llm.has_tool_calls", len(resp.ToolCalls) > 0),
 		)
 		logger.Info("react.llm",
@@ -141,9 +155,8 @@ func makeLLMNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReAc
 			zap.String("conversation_id", s.ConversationID),
 			zap.String("model", s.Model),
 			zap.Int("step", s.Steps),
-			zap.Int("prompt_tokens", resp.Usage.Prompt),
-			zap.Int("completion_tokens", resp.Usage.Completion),
 			zap.Int("total_tokens", s.TotalTokens),
+			zap.Float64("cost_usd", s.TotalCostUSD),
 			zap.Int64("latency_ms", latencyMs),
 			zap.Bool("has_tool_calls", len(resp.ToolCalls) > 0),
 		)

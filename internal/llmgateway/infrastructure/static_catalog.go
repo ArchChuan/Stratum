@@ -7,10 +7,15 @@ type StaticModelCatalog struct{}
 
 func (StaticModelCatalog) ListChatModels() []string {
 	return []string{
-		// Qwen
-		"qwen-max", "qwen-plus", "qwen-turbo", "qwen-long",
-		// Zhipu
-		"glm-4", "glm-4-flash", "glm-4-air", "glm-3-turbo",
+		// 通义千问 (Qwen)
+		"qwen-max", "qwen-max-latest",
+		"qwen-plus", "qwen-plus-latest",
+		"qwen-turbo", "qwen-turbo-latest",
+		"qwen-long",
+		// 智谱 AI (Zhipu / Z.ai)
+		"glm-5.2",
+		"glm-4.7-flashx", "glm-4.7-flash", "glm-4.5-flash",
+		"glm-4-plus", "glm-4", "glm-4-air", "glm-4-flash", "glm-4v",
 	}
 }
 

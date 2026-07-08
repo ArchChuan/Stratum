@@ -23,6 +23,7 @@ import (
 type ClientManager struct {
 	clients    map[string]MCPClient
 	configs    map[string]*MCPServerConfig
+	connecting map[string]struct{}
 	cache      *CapabilityCache
 	mu         sync.RWMutex
 	logger     *zap.Logger
@@ -31,6 +32,8 @@ type ClientManager struct {
 	stopOnce   sync.Once
 	wg         sync.WaitGroup
 	pool       *pgxpool.Pool
+
+	clientFactory func(*MCPServerConfig, *zap.Logger) MCPClient
 }
 
 // NewClientManager 创建新的客户端管理器
@@ -45,13 +48,15 @@ func NewClientManager(logger *zap.Logger, poolConfig *ConnectionPoolConfig, pool
 	}
 
 	return &ClientManager{
-		clients:    make(map[string]MCPClient),
-		configs:    make(map[string]*MCPServerConfig),
-		cache:      NewCapabilityCache(1000, 1*time.Hour),
-		logger:     logger.Named("mcp.client_manager"),
-		poolConfig: poolConfig,
-		stopCh:     make(chan struct{}),
-		pool:       pool,
+		clients:       make(map[string]MCPClient),
+		configs:       make(map[string]*MCPServerConfig),
+		connecting:    make(map[string]struct{}),
+		cache:         NewCapabilityCache(1000, 1*time.Hour),
+		logger:        logger.Named("mcp.client_manager"),
+		poolConfig:    poolConfig,
+		stopCh:        make(chan struct{}),
+		pool:          pool,
+		clientFactory: func(cfg *MCPServerConfig, logger *zap.Logger) MCPClient { return NewBaseClient(cfg, logger) },
 	}
 }
 
@@ -123,16 +128,27 @@ func (m *ClientManager) persistDisconnect(ctx context.Context, serverID string) 
 // Connect 连接到 MCP 服务器
 func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	key := tenantKey(tenantIDFromCtx(ctx), config.ID)
 	if _, exists := m.clients[key]; exists {
+		m.mu.Unlock()
 		return fmt.Errorf("client already connected: %s", config.ID)
 	}
+	if _, exists := m.connecting[key]; exists {
+		m.mu.Unlock()
+		return fmt.Errorf("client already connected: %s", config.ID)
+	}
+	m.connecting[key] = struct{}{}
+	m.mu.Unlock()
 
-	client := NewBaseClient(config, m.logger)
+	client := m.clientFactory(config, m.logger)
+	finish := func() {
+		m.mu.Lock()
+		delete(m.connecting, key)
+		m.mu.Unlock()
+	}
 
 	if err := client.Connect(ctx); err != nil {
+		finish()
 		return err
 	}
 
@@ -150,11 +166,22 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 
 	if err := m.persistConnect(ctx, config); err != nil {
 		m.cache.Delete(key)
+		_ = client.Disconnect(ctx)
+		finish()
 		return err
 	}
 
+	m.mu.Lock()
+	delete(m.connecting, key)
+	if _, exists := m.clients[key]; exists {
+		m.mu.Unlock()
+		m.cache.Delete(key)
+		_ = client.Disconnect(ctx)
+		return fmt.Errorf("client already connected: %s", config.ID)
+	}
 	m.clients[key] = client
 	m.configs[key] = config
+	m.mu.Unlock()
 
 	m.logger.Info("connected to MCP server",
 		zap.String("server_id", config.ID),
@@ -167,21 +194,21 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 // Disconnect 断开连接
 func (m *ClientManager) Disconnect(ctx context.Context, serverID string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	key := tenantKey(tenantIDFromCtx(ctx), serverID)
 	client, exists := m.clients[key]
 	if !exists {
+		m.mu.Unlock()
 		return fmt.Errorf("client not found: %s", serverID)
-	}
-
-	if err := client.Disconnect(ctx); err != nil {
-		return err
 	}
 
 	delete(m.clients, key)
 	delete(m.configs, key)
 	m.cache.Delete(key)
+	m.mu.Unlock()
+
+	if err := client.Disconnect(ctx); err != nil {
+		return err
+	}
 
 	m.persistDisconnect(ctx, serverID)
 
@@ -452,18 +479,19 @@ func (m *ClientManager) Stop(ctx context.Context) error {
 	m.wg.Wait()
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	clients := m.clients
+	m.clients = make(map[string]MCPClient)
+	m.configs = make(map[string]*MCPServerConfig)
+	m.connecting = make(map[string]struct{})
+	m.mu.Unlock()
 
-	for serverID, client := range m.clients {
+	for serverID, client := range clients {
 		if err := client.Disconnect(ctx); err != nil {
 			m.logger.Error("failed to disconnect",
 				zap.String("server_id", serverID),
 				zap.Error(err))
 		}
 	}
-
-	m.clients = make(map[string]MCPClient)
-	m.configs = make(map[string]*MCPServerConfig)
 
 	return nil
 }
@@ -539,13 +567,17 @@ func (m *ClientManager) GetAllServerInfo(ctx context.Context) []*MCPServerInfo {
 func (m *ClientManager) UpdateServer(ctx context.Context, cfg *MCPServerConfig) error {
 	key := tenantKey(tenantIDFromCtx(ctx), cfg.ID)
 	m.mu.Lock()
+	var old MCPClient
 	if client, exists := m.clients[key]; exists {
-		_ = client.Disconnect(ctx)
+		old = client
 		delete(m.clients, key)
 		delete(m.configs, key)
 		m.cache.Delete(key)
 	}
 	m.mu.Unlock()
+	if old != nil {
+		_ = old.Disconnect(ctx)
+	}
 	return m.Connect(ctx, cfg)
 }
 
@@ -563,13 +595,17 @@ func (m *ClientManager) Reconnect(ctx context.Context, serverID string) error {
 func (m *ClientManager) Delete(ctx context.Context, serverID string) error {
 	m.mu.Lock()
 	key := tenantKey(tenantIDFromCtx(ctx), serverID)
+	var old MCPClient
 	if client, exists := m.clients[key]; exists {
-		_ = client.Disconnect(ctx)
+		old = client
 		delete(m.clients, key)
 		delete(m.configs, key)
 		m.cache.Delete(key)
 	}
 	m.mu.Unlock()
+	if old != nil {
+		_ = old.Disconnect(ctx)
+	}
 
 	if m.pool == nil {
 		return nil

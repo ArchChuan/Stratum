@@ -80,6 +80,7 @@ type BaseAgent struct {
 	*AgentConfig
 	Logger             *zap.Logger
 	metrics            observability.MetricsProvider
+	Ledger             agentgraph.TokenRecorder
 	State              AgentState
 	Memory             []Message
 	mu                 sync.Mutex
@@ -96,6 +97,7 @@ func NewBaseAgent(config *AgentConfig, logger *zap.Logger) *BaseAgent {
 		AgentConfig: config,
 		Logger:      logger,
 		metrics:     observability.NoopMetrics{},
+		Ledger:      agentgraph.NoopTokenRecorder{},
 		State:       AgentState{},
 		Memory:      []Message{},
 		mu:          sync.Mutex{},
@@ -262,7 +264,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			execErr = fmt.Errorf("react: CapGateway not set")
 			break
 		}
-		cg, buildErr := agentgraph.BuildReActGraph(capGW, a.Logger)
+		cg, buildErr := agentgraph.BuildReActGraph(capGW, a.Ledger, a.Logger)
 		if buildErr != nil {
 			execErr = fmt.Errorf("react: build graph: %w", buildErr)
 			break
@@ -311,6 +313,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		result.Output = finalState.Output
 		result.Steps = finalState.Steps
 		result.TokensUsed = finalState.TotalTokens
+		result.CostUSD = finalState.TotalCostUSD
 		a.mu.Lock()
 		a.State.StepsTaken = finalState.Steps
 		a.mu.Unlock()

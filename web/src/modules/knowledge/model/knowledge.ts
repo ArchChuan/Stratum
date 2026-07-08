@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const workspaceConfigSchema = z
   .object({
     embedding_model: z.string().optional().default(''),
+    chunking_strategy: z.string().optional().default('structure_recursive'),
     chunk_size: z.number().optional(),
     chunk_overlap: z.number().optional(),
     query_mode: z.string().optional(),
@@ -74,6 +75,7 @@ export interface CreateWorkspaceInput {
   description: string;
   config: {
     embedding_model: string;
+    chunking_strategy: string;
     chunk_size: number;
     chunk_overlap: number;
     query_mode: string;

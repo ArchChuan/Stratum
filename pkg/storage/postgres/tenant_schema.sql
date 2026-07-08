@@ -373,3 +373,20 @@ ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS total_chunks INT NOT NULL DE
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_started_at TIMESTAMPTZ;
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS ingest_finished_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_knowledge_docs_ws_status ON knowledge_docs (workspace_id, ingest_status);
+
+-- Parent chunks: large context units for Parent-Child chunking strategies.
+-- Leaves reference these via knowledge_chunks.parent_id.
+CREATE TABLE IF NOT EXISTS knowledge_parent_chunks (
+    id           TEXT PRIMARY KEY,
+    workspace_id UUID NOT NULL REFERENCES rag_workspaces(id) ON DELETE CASCADE,
+    doc_id       TEXT NOT NULL,
+    chunk_index  BIGINT NOT NULL,
+    content      TEXT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_kpc_workspace ON knowledge_parent_chunks(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_kpc_doc       ON knowledge_parent_chunks(workspace_id, doc_id);
+
+-- Add parent_id to leaf chunks (NULL for strategies without Parent-Child).
+ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS parent_id TEXT
+    REFERENCES knowledge_parent_chunks(id) ON DELETE SET NULL;

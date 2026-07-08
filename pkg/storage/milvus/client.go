@@ -28,6 +28,7 @@ type VectorStore struct {
 	logger   *zap.Logger
 	dim      int
 	dimCache sync.Map // collectionName -> int
+	locks    sync.Map // collectionName -> *sync.Mutex
 }
 
 func NewVectorStore(host, port string, logger *zap.Logger) *VectorStore {
@@ -125,6 +126,22 @@ func (vs *VectorStore) CreateCollection(ctx context.Context, collectionName stri
 // The schema includes a user_id field for per-user filtering.
 // dim is cached in dimCache so Insert can pick it up without a signature change.
 func (vs *VectorStore) CreateCollectionWithDim(ctx context.Context, collectionName string, dim int) error {
+	var err error
+	vs.withCollectionLock(collectionName, func() {
+		err = vs.createCollectionWithDimLocked(ctx, collectionName, dim)
+	})
+	return err
+}
+
+func (vs *VectorStore) withCollectionLock(collectionName string, fn func()) {
+	mu, _ := vs.locks.LoadOrStore(collectionName, &sync.Mutex{})
+	lock := mu.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+	fn()
+}
+
+func (vs *VectorStore) createCollectionWithDimLocked(ctx context.Context, collectionName string, dim int) error {
 	c, err := vs.getClient(ctx)
 	if err != nil {
 		return err

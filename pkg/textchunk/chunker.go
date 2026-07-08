@@ -33,6 +33,7 @@ type TextChunk struct {
 	Content    string
 	Index      int
 	SourceText string
+	ParentID   string // references parent chunk ID when using Parent-Child strategy
 }
 
 func (c *Chunker) ChunkText(text string) []TextChunk {

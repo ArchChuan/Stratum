@@ -1,8 +1,12 @@
 package application
 
 import (
+	"context"
+	"sync"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
+	"github.com/byteBuilderX/stratum/pkg/textchunk"
 	"go.uber.org/zap"
 )
 
@@ -121,6 +125,167 @@ func TestRAGQueryResult(t *testing.T) {
 	if len(result.Sources) != 0 {
 		t.Errorf("expected 0 sources, got %d", len(result.Sources))
 	}
+}
+
+func TestIngestDocumentSemanticStrategyUsesWorkspaceEmbeddingModelForChunking(t *testing.T) {
+	logger := zap.NewNop()
+	parser := &mockParser{
+		out: "猫喜欢晒太阳。猫会追逐毛线。数据库索引提升查询速度。查询计划会影响性能。",
+	}
+	embedder := &recordingEmbedder{dim: 1536}
+	docRepo := newMockDocRepo()
+	ingest := NewKnowledgeIngest(parser, nil, nil, nil, logger)
+	ingest.SetDocRepo(docRepo)
+	ingest.SetEmbedResolver(func(_ context.Context, tenantID, model string) EmbedClient {
+		embedder.recordResolverCall(tenantID, model)
+		return embedder
+	})
+
+	_, err := ingest.IngestDocument(context.Background(), IngestDocumentRequest{
+		TenantID:         "tenant-a",
+		Workspace:        "workspace-a",
+		WorkspaceID:      "workspace-id-a",
+		EmbeddingModel:   "embedding-3",
+		ChunkingStrategy: domain.ChunkingStrategySemantic,
+		DocumentData:     []byte("ignored by mock parser"),
+		FileName:         "semantic.txt",
+		DocumentID:       "doc-semantic",
+		ContentHash:      "hash-semantic",
+	})
+	if err != nil {
+		t.Fatalf("expected semantic ingest to be accepted, got %v", err)
+	}
+
+	if got := embedder.vectorCalls(); got < 4 {
+		t.Fatalf("expected semantic chunking to embed sentences before queueing job, got %d vector calls", got)
+	}
+	tenantID, model := embedder.lastResolverCall()
+	if tenantID != "tenant-a" {
+		t.Fatalf("expected resolver to receive tenant tenant-a, got %q", tenantID)
+	}
+	if model != "embedding-3" {
+		t.Fatalf("expected semantic chunking to use workspace embedding model embedding-3, got %q", model)
+	}
+}
+
+func TestIngestDocumentUsesWorkspaceChunkSizeAndOverlap(t *testing.T) {
+	logger := zap.NewNop()
+	parser := &mockParser{out: "这是一段超过最小长度的知识库文档内容，用于验证分块参数会从知识库配置传入实际分块策略。" +
+		"如果仍然使用默认值，记录型策略会捕获到错误的分块大小和重叠长度。"}
+	strategy := &recordingChunkStrategy{}
+	ingest := NewKnowledgeIngest(parser, nil, nil, nil, logger)
+	ingest.strategies[domain.ChunkingStrategyRecursive] = strategy
+
+	_, err := ingest.IngestDocument(context.Background(), IngestDocumentRequest{
+		TenantID:         "tenant-a",
+		Workspace:        "workspace-a",
+		WorkspaceID:      "workspace-id-a",
+		EmbeddingModel:   domain.DefaultEmbeddingModel,
+		ChunkingStrategy: domain.ChunkingStrategyRecursive,
+		ChunkSize:        777,
+		ChunkOverlap:     123,
+		DocumentData:     []byte("ignored by mock parser"),
+		FileName:         "chunk-params.txt",
+		DocumentID:       "doc-chunk-params",
+		ContentHash:      "hash-chunk-params",
+	})
+	if err != nil {
+		t.Fatalf("expected ingest to be accepted, got %v", err)
+	}
+
+	maxRunes, overlapRunes := strategy.params()
+	if maxRunes != 777 {
+		t.Fatalf("expected strategy to receive chunk size 777, got %d", maxRunes)
+	}
+	if overlapRunes != 123 {
+		t.Fatalf("expected strategy to receive chunk overlap 123, got %d", overlapRunes)
+	}
+}
+
+type recordingChunkStrategy struct {
+	mu           sync.Mutex
+	maxRunes     int
+	overlapRunes int
+}
+
+func (s *recordingChunkStrategy) Name() string { return domain.ChunkingStrategyRecursive }
+
+func (s *recordingChunkStrategy) Chunk(_ context.Context, _ string, maxRunes, overlapRunes int, _ textchunk.Embedder) textchunk.ChunkResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maxRunes = maxRunes
+	s.overlapRunes = overlapRunes
+	return textchunk.ChunkResult{
+		Leaves: []textchunk.TextChunk{{
+			Content: "这是一段超过最小长度的分块结果，用于通过清洗过滤并触发后续异步导入流程。" +
+				"测试只关心分块参数是否传入策略，不依赖后台向量写入完成。",
+			Index: 0,
+		}},
+	}
+}
+
+func (s *recordingChunkStrategy) params() (int, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.maxRunes, s.overlapRunes
+}
+
+type recordingEmbedder struct {
+	mu sync.Mutex
+
+	dim          int
+	vectorCount  int
+	batchCount   int
+	lastTenantID string
+	lastModel    string
+}
+
+func (e *recordingEmbedder) recordResolverCall(tenantID, model string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.lastTenantID = tenantID
+	e.lastModel = model
+}
+
+func (e *recordingEmbedder) EmbedVector(_ context.Context, text string) ([]float32, error) {
+	e.mu.Lock()
+	e.vectorCount++
+	e.mu.Unlock()
+
+	switch {
+	case contains(text, "猫"):
+		return []float32{1, 0, 0}, nil
+	case contains(text, "数据库") || contains(text, "查询"):
+		return []float32{0, 1, 0}, nil
+	default:
+		return []float32{0, 0, 1}, nil
+	}
+}
+
+func (e *recordingEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+	e.mu.Lock()
+	e.batchCount++
+	e.mu.Unlock()
+
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = make([]float32, e.dim)
+	}
+	return out, nil
+}
+
+func (e *recordingEmbedder) GetVectorDimension() int { return e.dim }
+
+func (e *recordingEmbedder) vectorCalls() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.vectorCount
+}
+
+func (e *recordingEmbedder) lastResolverCall() (string, string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.lastTenantID, e.lastModel
 }
 
 func TestSourceStructure(t *testing.T) {

@@ -16,10 +16,12 @@ type ipLimiter struct {
 
 // RateLimiterStore holds per-IP token-bucket limiters.
 type RateLimiterStore struct {
-	mu       sync.Mutex
-	limiters map[string]*ipLimiter
-	r        rate.Limit
-	b        int
+	mu        sync.Mutex
+	limiters  map[string]*ipLimiter
+	r         rate.Limit
+	b         int
+	doneCh    chan struct{}
+	lastPrune time.Time
 }
 
 // NewRateLimiterStore creates a store with the given rate and burst.
@@ -29,34 +31,43 @@ func NewRateLimiterStore(r rate.Limit, b int) *RateLimiterStore {
 		limiters: make(map[string]*ipLimiter),
 		r:        r,
 		b:        b,
+		doneCh:   make(chan struct{}),
 	}
-	go s.cleanup()
+	close(s.doneCh)
 	return s
+}
+
+// Stop is retained for lifecycle symmetry. RateLimiterStore has no background
+// goroutine; the returned channel is already closed.
+func (s *RateLimiterStore) Stop() <-chan struct{} {
+	return s.doneCh
 }
 
 func (s *RateLimiterStore) get(ip string) *rate.Limiter {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
 	entry, ok := s.limiters[ip]
 	if !ok {
 		entry = &ipLimiter{limiter: rate.NewLimiter(s.r, s.b)}
 		s.limiters[ip] = entry
 	}
-	entry.lastSeen = time.Now()
+	entry.lastSeen = now
+	if s.lastPrune.IsZero() {
+		s.lastPrune = now
+	}
+	if now.Sub(s.lastPrune) >= 10*time.Minute {
+		s.pruneLocked(now)
+		s.lastPrune = now
+	}
 	return entry.limiter
 }
 
-func (s *RateLimiterStore) cleanup() {
-	ticker := time.NewTicker(10 * time.Minute)
-	defer ticker.Stop()
-	for range ticker.C {
-		s.mu.Lock()
-		for ip, entry := range s.limiters {
-			if time.Since(entry.lastSeen) > 30*time.Minute {
-				delete(s.limiters, ip)
-			}
+func (s *RateLimiterStore) pruneLocked(now time.Time) {
+	for ip, entry := range s.limiters {
+		if now.Sub(entry.lastSeen) > 30*time.Minute {
+			delete(s.limiters, ip)
 		}
-		s.mu.Unlock()
 	}
 }
 
