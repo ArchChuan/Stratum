@@ -14,7 +14,7 @@ Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go +
 - Agent 编排：ReAct StateGraph，工具调用 / SSE 流式 / 中断恢复 / 历史会话回填
 - Skill Gateway：code（goja JS 沙箱）· llm · http 三类执行器，命名 `tenant_{id}_{name}` 隔离
 - 记忆系统：PostgreSQL 持久化 + 三阶段 NATS 异步流水线（outbox → embedder → enricher）+ Token 预算/摘要压缩
-- GraphRAG：Milvus 向量 + Neo4j 图谱，支持 vector / keyword / graph / hybrid（RRF）四种检索模式
+- GraphRAG：Milvus 向量检索，支持 vector / keyword / hybrid（RRF）三种检索模式
 - MCP 协议：stdio / http / sse 三种 transport，AuthType none/bearer/api_key/oauth2，自动重试
 - 多租户 IAM：PostgreSQL schema 物理隔离 + GitHub OAuth + JWT RS256 + tenant 邀请/角色管理
 - LLM 网关：通义千问 / 智谱 AI 双 OpenAI-compat provider，TenantGatewayCache 按租户密钥缓存
@@ -34,9 +34,8 @@ Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go +
 | Web 框架 | Gin | v1.9 |
 | RDB driver | pgx | v5 |
 | Cache | go-redis | v9 |
-| 消息总线 | NATS JetStream | v1.31 |
+| 消息总线 | NATS JetStream | v1.51 |
 | 向量库 | Milvus SDK | v2.4.2 |
-| 图数据库 | Neo4j | v5 |
 | JWT | golang-jwt | v5（RS256） |
 | OAuth | GitHub OAuth | — |
 | Migration | golang-migrate | v4 |
@@ -45,7 +44,7 @@ Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go +
 | LLM Provider | Qwen（dashscope）· Zhipu | OpenAI-compat |
 | JS 沙箱 | goja | — |
 | 配置 | Viper | v1.18 |
-| 前端 | React 18 · Vite 4 · AntD 5.2 · React Router 6 · Axios · Moment | — |
+| 前端 | React 18 · Vite 4 · AntD 5.20 · React Router 6 · Axios · TanStack Query v5 · Zustand v5 · Zod · Recharts | — |
 
 ---
 
@@ -256,8 +255,7 @@ stratum/
 | PostgreSQL | 主存储（public + per-tenant schema） | 致命：所有写操作不可用 |
 | Redis | session / cache / rate-limit | 降级：部分缓存 miss，仍可运行 |
 | NATS JetStream | memory pipeline outbox 消费、领域事件 | 异步 enrich 停滞，主路径仍可用 |
-| Milvus | 向量检索（GraphRAG vector mode） | RAG vector/hybrid 不可用，graph/keyword 仍工作 |
-| Neo4j | 知识图谱 + GraphRAG full-text | RAG graph/hybrid 降级到 vector |
+| Milvus | 向量检索（GraphRAG vector mode） | RAG vector/hybrid 不可用，keyword 仍工作 |
 | LLM Provider（Qwen/Zhipu） | LLM 推理 + embedding | Agent 执行不可用 |
 | GitHub OAuth | 登录 | 新登录不可用，已登录 session 仍有效 |
 | MCP Servers | 外部工具（stdio/http/sse） | 该 server 工具调用失败，其他工具不影响 |
@@ -283,7 +281,7 @@ stratum/
 10. **Memory 范围**：用户级隔离（`(user_id, COALESCE(agent_id,''), name, type)` UNIQUE）；search 至少传 `tenant_id+user_id`；entries 默认 `type=short_term`，pipeline enricher 升级 `long_term`。
 11. **Memory pipeline**：写入 outbox（`message_id NOT NULL`）→ embedder 生成向量 → enricher 抽实体并 set `enriched_at`；token budget 累计到 `memory_token_budgets`，超阈值触发 summary 压缩存 `memory_summaries.covered_until`。
 12. **ReAct loop**：节点 `nodeLLM` ↔ `nodeTool` 条件边；LLM 每步 60s 超时 + `RetryFn(DefaultRetry)`；tool 30s 超时；`stratum_search_knowledge` topK clamp 到 `constants.MaxRAGTopK`；skill tool 名 `tenant_{id}_{name}`；`SkillToolIndex` 映射回 UUID。
-13. **GraphRAG mode**：`vector` embed→Milvus search · `keyword` Milvus KeywordSearch · `graph` Neo4j FullTextSearch（limit 20）· `hybrid` RRF（VectorStore.HybridSearch）；collection 命名 `tenantdb.WorkspaceCollection`，fallback `{workspace}_kb`。
+13. **GraphRAG mode**：`vector` embed→Milvus search · `keyword` Milvus KeywordSearch · `hybrid` RRF（VectorStore.HybridSearch）；collection 命名 `tenantdb.WorkspaceCollection`，fallback `{workspace}_kb`。
 14. **MCP retry**：`RetryConfig{Enabled, MaxRetries, InitialDelayMs, MaxDelayMs, BackoffFactor}` 指数退避；transport 中 stdio/http/sse 三选一互斥。
 15. **Chat**：`role` CHECK ∈ {user, agent}；`steps_json` 存储 ReAct 步骤；`is_error` 标记；conversation `expires_at` 默认 +30 天，`deleted_at` 软删。
 16. **Outbox 写入必须包含 `message_id`**（NOT NULL 无 DEFAULT），曾因漏列触发全量回滚。
@@ -340,7 +338,7 @@ stratum/
 
 **约定**：
 
-- `mock` 所有外部依赖（NATS / Milvus / Neo4j / LLM provider）
+- `mock` 所有外部依赖（NATS / Milvus / LLM provider）
 - `-race` 在完整 PR 跑：`go test -v -race -timeout 30s ./...`
 - 短测：`go test -short ./...` 排除集成 tag
 - AI 辅助测试必须给模板文件（如 `api/handler/tenant_handler_test.go`）
@@ -400,7 +398,7 @@ git clone https://github.com/byteBuilderX/stratum.git
 cd stratum
 cp .env.example .env  # 填入 GitHub OAuth、LLM Key、JWT keys
 
-# 2. 拉本地 infra（Postgres · Redis · NATS · Milvus · Neo4j）
+# 2. 拉本地 infra（Postgres · Redis · NATS · Milvus）
 make dev-up
 
 # 3. 运行 migration

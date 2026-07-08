@@ -11,8 +11,8 @@ registerHealth(r, c)
 registerSkills(r, c, requireActive)
 registerAgents(r, c, requireActive)
 registerKnowledge(r, c, requireActive)
-registerMemory(r, c, requireActive)
 registerMCP(r, c, requireActive)
+registerMemory(r, c, requireActive)
 ```
 
 ## Complete Route List
@@ -174,7 +174,7 @@ func NewAgentHandler(svc *application.AgentService, logger *zap.Logger) *AgentHa
 注册顺序（`NewRouter` 中）：
 
 ```
-ErrorHandler → TraceMiddleware → CORSMiddleware → MetricsMiddleware → Routes
+gin.Recovery → BodyLimit → ErrorHandler → otelgin.Middleware → TraceMiddleware → SecurityHeaders → CORSMiddleware → MetricsMiddleware → Routes
 ```
 
 | 文件 | 功能 |

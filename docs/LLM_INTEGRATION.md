@@ -1,307 +1,131 @@
 # LLM 集成指南
 
-Stratum 支持多种大模型调用方式，包括云端 API 和本地部署模型。
+## 架构概述
 
-## 支持的模型提供商
+LLM 访问通过 `internal/llmgateway/` bounded context 统一抽象。核心特点：
 
-### 1. OpenAI (GPT-4, GPT-3.5-turbo)
+- **租户级 API Key 管理**：每个租户独立配置自己的 LLM provider 和 API key，存储在 `tenants.settings` 的 `api_keys` 字段（加密存储），不通过全局环境变量注入。
+- **`LLMGateway` 接口**：屏蔽 OpenAI / Anthropic / Qwen / Zhipu / Ollama 差异，业务层只依赖 `port.LLMGateway`。
+- **`TenantGatewayCache`**：热路径复用已初始化的 gateway，避免每次请求重建 HTTP 客户端。
+- **`llmgateway.WithCompleter(ctx, completer)`**：通过 context 注入当前租户的 completer，无需在业务函数签名中传递。
 
-**配置环境变量**：
+---
+
+## Provider 支持
+
+| Provider | 类型 | 说明 |
+|---|---|---|
+| Qwen（阿里云）| OpenAI 兼容 | 国内首选，`qwen-turbo` 用于记忆提取 |
+| Zhipu（智谱）| 原生 | GLM 系列 |
+| OpenAI | 原生 | GPT-4 / GPT-3.5-turbo |
+| Anthropic | 原生 | Claude 系列 |
+| Ollama | 本地 | 私有化部署，`OLLAMA_ENDPOINT` 配置 |
+
+---
+
+## 租户 API Key 配置（运行时）
+
+API key 通过管理接口配置，不需要重启服务：
 
 ```bash
-export OPENAI_API_KEY=sk-your-api-key
-```
-
-**API 调用示例**：
-
-```bash
-curl -X POST http://localhost:8080/skills \
+# 为租户设置 LLM provider API key
+curl -X PUT http://localhost:8080/admin/tenants/{tenantID}/settings \
+  -H "Authorization: Bearer <admin_token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "GPT-4 Skill",
-    "description": "Call GPT-4 model",
-    "type": "llm"
-  }'
-
-# 获取 skill ID 后，执行 skill
-curl -X POST http://localhost:8080/skills/{skill_id}/execute \
-  -H "Content-Type: application/json" \
-  -d '{
-    "input": {
-      "model": "gpt-4",
-      "prompt": "What is the capital of France?",
-      "temperature": 0.7,
-      "max_tokens": 100
-    }
-  }'
-```
-
-**响应示例**：
-
-```json
-{
-  "result": {
-    "content": "The capital of France is Paris.",
-    "model": "gpt-4",
-    "usage": {
-      "prompt_tokens": 10,
-      "completion_tokens": 8,
-      "total_tokens": 18
-    }
-  }
-}
-```
-
-### 2. Anthropic (Claude-3-opus, Claude-3-sonnet)
-
-**配置环境变量**：
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-your-api-key
-```
-
-**API 调用示例**：
-
-```bash
-curl -X POST http://localhost:8080/skills/{skill_id}/execute \
-  -H "Content-Type: application/json" \
-  -d '{
-    "input": {
-      "model": "claude-3-opus",
-      "prompt": "Explain quantum computing in simple terms",
-      "temperature": 0.5,
-      "max_tokens": 200
-    }
+    "llm_provider": "qwen",
+    "llm_model": "qwen-turbo",
+    "llm_api_key": "<your-api-key>"
   }'
 ```
 
-### 3. Ollama (本地开源模型)
+key 在写入前由 platform 层加密，读取时自动解密后注入 gateway client。
 
-**安装 Ollama**：
+---
 
-```bash
-# macOS
-brew install ollama
+## 本地开发（env 覆盖）
 
-# Linux
-curl https://ollama.ai/install.sh | sh
+本地开发可在 `.env` 中为 `tenant_default` 预置 key，供开发期快速启动：
 
-# 启动 Ollama 服务
-ollama serve
-```
-
-**拉取模型**：
-
-```bash
-ollama pull llama2
-ollama pull mistral
-ollama pull neural-chat
-```
-
-**配置环境变量**：
-
-```bash
-export OLLAMA_ENDPOINT=http://localhost:11434
-```
-
-**API 调用示例**：
-
-```bash
-curl -X POST http://localhost:8080/skills/{skill_id}/execute \
-  -H "Content-Type: application/json" \
-  -d '{
-    "input": {
-      "model": "llama2",
-      "prompt": "Write a Python function to calculate factorial",
-      "temperature": 0.7
-    }
-  }'
-```
-
-## 混合方案配置
-
-同时支持多个模型提供商：
-
-```bash
-# .env 文件
-OPENAI_API_KEY=sk-your-openai-key
-ANTHROPIC_API_KEY=sk-ant-your-anthropic-key
+```env
+DEFAULT_LLM_PROVIDER=qwen
+DEFAULT_LLM_MODEL=qwen-turbo
+DEFAULT_LLM_API_KEY=sk-xxxxxxxx
 OLLAMA_ENDPOINT=http://localhost:11434
-DEFAULT_LLM_PROVIDER=openai
 ```
 
-**自动路由示例**：
+`.env.example` 中包含所有可用字段，不要提交真实 key。
 
-```bash
-# 使用 OpenAI
-curl -X POST http://localhost:8080/skills/{skill_id}/execute \
-  -d '{"input": {"model": "gpt-4", "prompt": "..."}}'
+---
 
-# 使用 Claude
-curl -X POST http://localhost:8080/skills/{skill_id}/execute \
-  -d '{"input": {"model": "claude-3-opus", "prompt": "..."}}'
+## 代码使用
 
-# 使用 Ollama
-curl -X POST http://localhost:8080/skills/{skill_id}/execute \
-  -d '{"input": {"model": "llama2", "prompt": "..."}}'
-```
+### Handler / Application 层
 
-## 代码集成示例
-
-### 创建 LLM Skill
+业务层通过 context 获取 completer，不直接操作 gateway 实例：
 
 ```go
-package main
-
-import (
- "stratum/internal/llmgateway"
- "stratum/internal/skill"
- "go.uber.org/zap"
-)
-
-func main() {
- logger, _ := zap.NewProduction()
-
- // 初始化 LLM Gateway
- cfg := llmgateway.LoadConfig()
- gateway := llmgateway.InitializeGateway(cfg, logger)
-
- // 创建 LLM Skill
- llmSkill := skill.NewLLMSkill(
-  "skill-1",
-  "GPT-4 Skill",
-  "Call GPT-4 model",
-  gateway,
-  logger,
- )
-
- // 执行 Skill
- result, err := llmSkill.Execute(map[string]interface{}{
-  "model":   "gpt-4",
-  "prompt":  "What is AI?",
-  "temperature": 0.7,
-  "max_tokens": 100,
- })
-
- if err != nil {
-  logger.Error("execution failed", zap.Error(err))
-  return
- }
-
- logger.Info("result", zap.Any("output", result))
+// application/agent_service.go
+func (s *AgentService) Execute(ctx context.Context, ...) {
+    completer := llmgateway.CompleterFromContext(ctx)
+    result, err := completer.Complete(ctx, messages, opts)
 }
 ```
 
-### 自定义 LLM 客户端
+### Gateway 初始化（Wiring）
+
+`api/wiring/llmgateway.go` 在 `BuildContainer` 时装配：
 
 ```go
-package llmgateway
-
-import (
- "context"
- "go.uber.org/zap"
-)
-
-type CustomClient struct {
- endpoint string
- logger   *zap.Logger
-}
-
-func NewCustomClient(endpoint string, logger *zap.Logger) *CustomClient {
- return &CustomClient{
-  endpoint: endpoint,
-  logger:   logger,
- }
-}
-
-func (c *CustomClient) Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error) {
- // 实现自定义逻辑
- return nil, nil
-}
-
-func (c *CustomClient) Health(ctx context.Context) error {
- // 实现健康检查
- return nil
-}
-
-// 注册到 Gateway
-gateway := NewGateway()
-customClient := NewCustomClient("http://custom-llm:8000", logger)
-gateway.RegisterClient("custom", customClient)
+gatewayCache := llmgateway.NewTenantGatewayCache(cfg, logger)
+container.GatewayCache = gatewayCache
 ```
 
-## 模型对比
+Auth middleware 在验证 JWT 后，从 `TenantGatewayCache` 取出对应租户的 gateway，
+并通过 `llmgateway.WithCompleter(ctx, completer)` 注入到 context。
 
-| 模型 | 提供商 | 优势 | 成本 | 延迟 |
-|------|--------|------|------|------|
-| GPT-4 | OpenAI | 最强能力 | 高 | 中 |
-| Claude-3-Opus | Anthropic | 长上下文 | 高 | 中 |
-| Llama2 | Meta (Ollama) | 开源免费 | 低 | 低 |
-| Mistral | Mistral (Ollama) | 快速推理 | 低 | 低 |
+---
 
-## 故障排除
+## 超时配置
 
-### OpenAI 连接失败
+| 场景 | 常量 | 值 |
+|---|---|---|
+| LLM 非流式请求 | `LLMRequestTimeout` | 60s |
+| LLM 流式（空闲看门狗） | `LLMStreamIdleTimeout` | 30s/token 间隔 |
+| 流式 response header | `ResponseHeaderTimeout` | 30s |
+| Agent 执行总超时 | `AgentExecTimeout` | 90s |
+
+流式请求**禁止**使用 flat deadline，改用 transport `ResponseHeaderTimeout` + 空闲看门狗组合。
+超时常量均定义在 `pkg/constants/timeouts.go`。
+
+---
+
+## Token 计费
+
+Agent 执行结束后，`agent.go` 将 `graph.TotalTokens` 映射到 `Result.TokensUsed`，
+由调用方（handler）写入 ledger 或日志，不在 gateway 层计费。
+
+---
+
+## 故障排查
+
+### LLM 请求失败
 
 ```bash
-# 检查 API Key
-echo $OPENAI_API_KEY
+# 查看 gateway 日志（事件：llm.complete）
+grep "llm.complete" stratum.log | tail -20
 
-# 测试连接
-curl https://api.openai.com/v1/models \
-  -H "Authorization: Bearer $OPENAI_API_KEY"
+# 检查 provider 配置
+curl http://localhost:8080/admin/tenants/{tenantID}/settings \
+  -H "Authorization: Bearer <admin_token>"
 ```
 
-### Ollama 连接失败
+### 流式响应截断
 
-```bash
-# 检查 Ollama 服务
-curl http://localhost:11434/api/tags
+检查 `LLMStreamIdleTimeout`（`pkg/constants/timeouts.go`）与 provider 的实际生成速度是否匹配；
+增大该值而不是调整 flat deadline。
 
-# 重启 Ollama
-ollama serve
-```
+### Memory 提取 JSON 截断
 
-### 模型不存在
-
-```bash
-# 列出可用模型
-ollama list
-
-# 拉取模型
-ollama pull llama2
-```
-
-## 性能优化
-
-### 1. 连接池
-
-Gateway 自动管理 HTTP 连接池，支持并发请求。
-
-### 2. 超时控制
-
-```go
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
-
-resp, err := gateway.Complete(ctx, req)
-```
-
-### 3. 缓存
-
-可在 Skill 层实现缓存：
-
-```go
-type CachedLLMSkill struct {
- *LLMSkill
- cache map[string]interface{}
-}
-```
-
-## 最佳实践
-
-1. **使用环境变量**：不要在代码中硬编码 API Key
-2. **错误处理**：总是检查 API 响应错误
-3. **超时设置**：为长时间运行的请求设置合理超时
-4. **日志记录**：记录所有 API 调用用于调试和监控
-5. **成本控制**：监控 token 使用量，设置速率限制
+memory 流水线的 LLM 提取使用 `MemoryExtractLLMMaxTokens = 4096`（`pkg/constants/memory.go`）；
+若仍截断，增大该常量并重新部署。LLMExtractor 内置 `recoverTruncatedArray` 降级兜底。

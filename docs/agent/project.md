@@ -52,9 +52,9 @@ grafana/                    - Grafana 数据源 + 仪表板配置
 
 | 依赖 | 版本 | 关键说明 |
 |------|------|---------|
-| Go | 1.22+ | 泛型，slog 兼容 |
+| Go | 1.25.0 | 泛型，slog 兼容 |
 | Gin | v1.9+ | 路由组 `r.Group`，middleware 在 router.go 注册 |
-| NATS | v1.31+ | JetStream 模式；memory pipeline 用 `nats.go/jetstream` 包直接操作 |
+| NATS | v1.51 | JetStream 模式；memory pipeline 用 `nats.go/jetstream` 包直接操作 |
 | Milvus SDK | v2.4.2 | `client.Search` 参数顺序见 `pkg/vector/vector_store.go` |
 | pgx | v5.x | pgxpool，事务内用 `SET LOCAL search_path` 切换租户 |
 | go-redis | v9.x | `redis.NewClient`，context-aware API |

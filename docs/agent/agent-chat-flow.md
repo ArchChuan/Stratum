@@ -402,7 +402,7 @@ flowchart LR
         OB[memory_outbox] --> Embedder
         Embedder --> Enricher
         Enricher --> Mil[(Milvus)]
-        Enricher --> Neo[(Neo4j)]
+        Enricher --> Milvus[(Milvus)]
     end
 
     subgraph Logs["Zap 结构化日志"]

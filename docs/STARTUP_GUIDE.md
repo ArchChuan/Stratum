@@ -4,7 +4,7 @@
 
 ✅ **已完成**：
 
-- 所有底层依赖已集成（NATS、Neo4j、Milvus、OpenTelemetry）
+- 所有底层依赖已集成（NATS、Milvus、OpenTelemetry）
 - API 层完整（Skill 创建、查询、执行）
 - Skill 执行引擎完整（支持 Code、LLM、Builtin 三种类型）
 - LLM Gateway 完整（支持 OpenAI、Anthropic、Ollama）
@@ -14,34 +14,28 @@
 
 ## 启动步骤
 
-### 方式 1：一键启动（推荐）
+### 方式 1：手动启动（推荐）
 
 ```bash
 cd /home/yang/go-projects/stratum
 
-# 启动所有服务
-./start.sh
-```
+# 1. 启动基础依赖（NATS、Milvus、PostgreSQL、Redis 等）
+make infra-up
 
-这会自动：
-
-1. 检查 Docker、Docker Compose、Go 环境
-2. 启动 NATS、Neo4j、Milvus、OpenTelemetry 容器
-3. 构建应用
-4. 启动应用服务
-
-### 方式 2：手动启动
-
-```bash
-cd /home/yang/go-projects/stratum
-
-# 1. 启动依赖服务
-make docker-up
-
-# 2. 等待服务启动
-sleep 10
+# 2. 等待服务就绪
+make infra-wait
 
 # 3. 运行应用
+make run
+```
+
+### 方式 2：含可观测性服务
+
+```bash
+# 启动基础依赖 + Prometheus / Grafana / Jaeger
+make dev-up
+
+# 运行应用
 make run
 ```
 
@@ -51,10 +45,10 @@ make run
 cd /home/yang/go-projects/stratum
 
 # 启动依赖
-make docker-up
+make infra-up
 
 # 后台运行应用
-nohup ./bin/server > app.log 2>&1 &
+nohup go run ./cmd/server > app.log 2>&1 &
 
 # 查看日志
 tail -f app.log
@@ -75,8 +69,11 @@ curl http://localhost:8080/health
 # NATS
 nc -z localhost 4222 && echo "✓ NATS OK" || echo "✗ NATS FAILED"
 
-# Neo4j
-nc -z localhost 7687 && echo "✓ Neo4j OK" || echo "✗ Neo4j FAILED"
+# PostgreSQL
+nc -z localhost 5432 && echo "✓ PostgreSQL OK" || echo "✗ PostgreSQL FAILED"
+
+# Redis
+nc -z localhost 6379 && echo "✓ Redis OK" || echo "✗ Redis FAILED"
 
 # Milvus
 nc -z localhost 19530 && echo "✓ Milvus OK" || echo "✗ Milvus FAILED"
@@ -88,7 +85,7 @@ nc -z localhost 4317 && echo "✓ OTEL OK" || echo "✗ OTEL FAILED"
 ### 3. 查看 Docker 容器
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 ## 测试 API
@@ -150,11 +147,11 @@ curl -X POST http://localhost:8080/skills/550e8400-e29b-41d4-a716-446655440000/e
 ## 停止服务
 
 ```bash
-# 一键停止
-./stop.sh
+# 停止基础依赖
+make infra-down
 
-# 或手动停止
-make docker-down
+# 或停止全部（含可观测性）
+make dev-down
 ```
 
 ## 查看日志
@@ -177,7 +174,6 @@ docker-compose logs -f
 
 # 特定容器
 docker-compose logs -f nats
-docker-compose logs -f neo4j
 docker-compose logs -f milvus
 ```
 
@@ -193,14 +189,14 @@ chmod +x start.sh stop.sh
 
 ```bash
 # 查看日志
-docker-compose logs
+docker compose logs
 
 # 重启容器
-docker-compose restart
+docker compose restart
 
 # 完全重建
-docker-compose down -v
-docker-compose up -d
+docker compose down -v
+make infra-up
 ```
 
 ### Q: 应用无法连接到依赖
@@ -219,7 +215,8 @@ docker inspect stratum-nats-1 | grep -A 5 NetworkSettings
 # 查看占用端口的进程
 lsof -i :8080
 lsof -i :4222
-lsof -i :7687
+lsof -i :5432
+lsof -i :6379
 lsof -i :19530
 
 # 杀死进程
