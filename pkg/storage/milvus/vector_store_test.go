@@ -1,7 +1,10 @@
 package milvus
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -37,6 +40,36 @@ func TestVectorStore_NewVectorStoreCustomPort(t *testing.T) {
 
 	if vs.port != "9999" {
 		t.Errorf("expected port 9999, got %s", vs.port)
+	}
+}
+
+func TestVectorStoreWithCollectionLockSerializesSameCollection(t *testing.T) {
+	vs := NewVectorStore("localhost", "19530", zap.NewNop())
+	var active int32
+	var maxActive int32
+	var wg sync.WaitGroup
+
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			vs.withCollectionLock("tenant_kb", func() {
+				now := atomic.AddInt32(&active, 1)
+				for {
+					max := atomic.LoadInt32(&maxActive)
+					if now <= max || atomic.CompareAndSwapInt32(&maxActive, max, now) {
+						break
+					}
+				}
+				time.Sleep(5 * time.Millisecond)
+				atomic.AddInt32(&active, -1)
+			})
+		}()
+	}
+
+	wg.Wait()
+	if maxActive != 1 {
+		t.Fatalf("expected same collection operations to be serialized, max active=%d", maxActive)
 	}
 }
 

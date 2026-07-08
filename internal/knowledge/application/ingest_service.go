@@ -26,6 +26,8 @@ type EmbedResolver func(ctx context.Context, tenantID, model string) EmbedClient
 type KnowledgeIngest struct {
 	parser        knowledgeport.DocumentParser
 	chunker       *textchunk.Chunker
+	cleaner       *textchunk.TextCleaner
+	strategies    map[string]textchunk.Strategy
 	embeddingSvc  knowledgeport.Embedder
 	embedResolver EmbedResolver
 	vectorStore   *vector.VectorStore
@@ -51,8 +53,14 @@ func NewKnowledgeIngest(
 	logger *zap.Logger,
 ) *KnowledgeIngest {
 	return &KnowledgeIngest{
-		parser:       parser,
-		chunker:      chunker,
+		parser:  parser,
+		chunker: chunker,
+		cleaner: textchunk.NewTextCleaner(),
+		strategies: map[string]textchunk.Strategy{
+			"recursive":           textchunk.NewRecursiveStrategy(),
+			"structure_recursive": textchunk.NewStructureRecursiveStrategy(),
+			"semantic":            textchunk.NewSemanticStrategy(),
+		},
 		embeddingSvc: embeddingSvc,
 		vectorStore:  vectorStore,
 		logger:       logger,
@@ -106,14 +114,17 @@ func (ki *KnowledgeIngest) RecoverStuckIngests(ctx context.Context, tenantID str
 }
 
 type IngestDocumentRequest struct {
-	TenantID       string
-	Workspace      string // display name (for logging)
-	WorkspaceID    string // stable ID used for Milvus collection naming
-	EmbeddingModel string
-	DocumentData   []byte
-	FileName       string
-	DocumentID     string
-	ContentHash    string
+	TenantID         string
+	Workspace        string // display name (for logging)
+	WorkspaceID      string // stable ID used for Milvus collection naming
+	EmbeddingModel   string
+	ChunkingStrategy string // from workspace config; defaults to structure_recursive
+	ChunkSize        int    // 0 → domain.DefaultChunkSize
+	ChunkOverlap     int    // 0 → domain.DefaultChunkOverlap
+	DocumentData     []byte
+	FileName         string
+	DocumentID       string
+	ContentHash      string
 }
 
 type IngestResult struct {
@@ -152,13 +163,43 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse document: %w", err)
 	}
+	content = ki.cleaner.Clean(content)
 
-	chunks := ki.chunker.SmartChunk(content)
-	if len(chunks) == 0 {
+	// Select chunking strategy from workspace config (defaults to structure_recursive).
+	strategyName := req.ChunkingStrategy
+	if strategyName == "" {
+		strategyName = domain.DefaultChunkingStrategy
+	}
+	strategy, ok := ki.strategies[strategyName]
+	if !ok {
+		return nil, fmt.Errorf("unknown chunking strategy: %s", strategyName)
+	}
+
+	var chunkEmbedder textchunk.Embedder
+	if strategyName == domain.ChunkingStrategySemantic {
+		chunkEmbedder = ki.resolveEmbedClient(ctx, req)
+	}
+
+	// Chunk using the selected strategy. Semantic chunking receives the
+	// workspace-configured embedding model through req.EmbeddingModel.
+	chunkSize := req.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = domain.DefaultChunkSize
+	}
+	chunkOverlap := req.ChunkOverlap
+	if chunkOverlap <= 0 {
+		chunkOverlap = domain.DefaultChunkOverlap
+	}
+	chunkResult := strategy.Chunk(ctx, content, chunkSize, chunkOverlap, chunkEmbedder)
+	if len(chunkResult.Leaves) == 0 {
 		return nil, fmt.Errorf("document produced zero chunks after parsing")
 	}
-	if len(chunks) > constants.MaxChunksPerDocument {
-		return nil, fmt.Errorf("%w: got %d, max %d", domain.ErrChunkLimitExceeded, len(chunks), constants.MaxChunksPerDocument)
+	if len(chunkResult.Leaves) > constants.MaxChunksPerDocument {
+		return nil, fmt.Errorf("%w: got %d, max %d", domain.ErrChunkLimitExceeded, len(chunkResult.Leaves), constants.MaxChunksPerDocument)
+	}
+	chunkResult.Leaves = ki.cleaner.FilterChunks(chunkResult.Leaves)
+	if len(chunkResult.Leaves) == 0 {
+		return nil, fmt.Errorf("document produced zero chunks after cleaning")
 	}
 
 	// Non-blocking queue admission. Full → 429.
@@ -177,7 +218,7 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 			Source:       req.FileName,
 			ContentHash:  req.ContentHash,
 			IngestStatus: constants.IngestStatusProcessing,
-			TotalChunks:  len(chunks),
+			TotalChunks:  len(chunkResult.Leaves),
 		}
 		if err := ki.docRepo.Save(ctx, req.TenantID, req.WorkspaceID, doc); err != nil {
 			<-ki.queueSem
@@ -186,13 +227,13 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 	}
 
 	ki.wg.Add(1)
-	go ki.runIngestJob(ctx, req, chunks)
+	go ki.runIngestJob(ctx, req, chunkResult)
 
 	return &IngestResult{
 		DocumentID:  req.DocumentID,
 		Workspace:   req.Workspace,
 		Status:      constants.IngestStatusProcessing,
-		TotalChunks: len(chunks),
+		TotalChunks: len(chunkResult.Leaves),
 		Errors:      []string{},
 	}, nil
 }
@@ -201,7 +242,7 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 // terminal state write). Runs in a detached goroutine spawned by
 // IngestDocument. Ctx is decoupled from the caller's request context so a
 // client disconnect never aborts the job.
-func (ki *KnowledgeIngest) runIngestJob(parentCtx context.Context, req IngestDocumentRequest, chunks []textchunk.TextChunk) {
+func (ki *KnowledgeIngest) runIngestJob(parentCtx context.Context, req IngestDocumentRequest, result textchunk.ChunkResult) {
 	defer ki.wg.Done()
 	defer func() { <-ki.queueSem }()
 
@@ -234,7 +275,7 @@ func (ki *KnowledgeIngest) runIngestJob(parentCtx context.Context, req IngestDoc
 		}
 	}()
 
-	err := ki.doEmbedAndPersist(bgCtx, req, chunks)
+	err := ki.doEmbedAndPersist(bgCtx, req, result)
 	duration := time.Since(startTime)
 	ki.metrics.RecordKnowledgeIngestDuration(duration.Seconds())
 
@@ -250,7 +291,7 @@ func (ki *KnowledgeIngest) runIngestJob(parentCtx context.Context, req IngestDoc
 	}
 
 	if ki.docRepo != nil {
-		if err := ki.docRepo.MarkIngestCompleted(bgCtx, req.TenantID, req.DocumentID, len(chunks)); err != nil {
+		if err := ki.docRepo.MarkIngestCompleted(bgCtx, req.TenantID, req.DocumentID, len(result.Leaves)); err != nil {
 			ki.logger.Warn("knowledge.ingest.mark_completed_failed",
 				zap.String("document_id", req.DocumentID),
 				zap.Error(err))
@@ -260,29 +301,23 @@ func (ki *KnowledgeIngest) runIngestJob(parentCtx context.Context, req IngestDoc
 	ki.logger.Info("knowledge.ingest.completed",
 		zap.String("trace_id", sc.TraceID),
 		zap.String("document_id", req.DocumentID),
-		zap.Int("total_chunks", len(chunks)),
+		zap.Int("total_chunks", len(result.Leaves)),
 		zap.Duration("duration", duration))
 }
 
 // doEmbedAndPersist executes the embed → vector insert → PG chunk write
 // pipeline. All I/O uses the detached bg context so a client abort cannot
 // tear it down. Errors bubble unchanged; caller writes terminal status.
-func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocumentRequest, chunks []textchunk.TextChunk) error {
+func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocumentRequest, result textchunk.ChunkResult) error {
 	sc, _ := observability.SpanFromContext(ctx)
 
-	var embedClient knowledgeport.Embedder
-	if ki.embedResolver != nil && req.TenantID != "" {
-		embedClient = ki.embedResolver(ctx, req.TenantID, req.EmbeddingModel)
-	}
-	if embedClient == nil {
-		embedClient = ki.embeddingSvc
-	}
+	embedClient := ki.resolveEmbedClient(ctx, req)
 	if embedClient == nil {
 		return fmt.Errorf("embedding service not configured: set an embedding model in workspace settings")
 	}
 
-	chunkTexts := make([]string, len(chunks))
-	for i, c := range chunks {
+	chunkTexts := make([]string, len(result.Leaves))
+	for i, c := range result.Leaves {
 		chunkTexts[i] = c.Content
 	}
 
@@ -290,15 +325,15 @@ func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocu
 	if err != nil {
 		return fmt.Errorf("failed to embed chunks: %w", err)
 	}
-	if len(embedVecs) != len(chunks) {
-		return fmt.Errorf("embedding count mismatch: got %d vectors for %d chunks", len(embedVecs), len(chunks))
+	if len(embedVecs) != len(result.Leaves) {
+		return fmt.Errorf("embedding count mismatch: got %d vectors for %d chunks", len(embedVecs), len(result.Leaves))
 	}
 
 	docChunks := make([]vector.DocumentChunk, len(embedVecs))
 	for i, vec := range embedVecs {
 		docChunks[i] = vector.DocumentChunk{
 			ID:             fmt.Sprintf("%s_chunk_%d", req.DocumentID, i),
-			Content:        chunks[i].Content,
+			Content:        result.Leaves[i].Content,
 			SourceDocument: req.DocumentID,
 			ChunkIndex:     int64(i),
 			Vector:         vec,
@@ -321,18 +356,52 @@ func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocu
 		zap.Int("count", len(docChunks)))
 
 	if ki.chunkRepo != nil && req.TenantID != "" {
+		// Persist parent chunks first (leaves reference them by ID).
+		if len(result.Parents) > 0 {
+			parents := make([]knowledgeport.ParentChunk, len(result.Parents))
+			for i, p := range result.Parents {
+				parents[i] = knowledgeport.ParentChunk{
+					ID:      fmt.Sprintf("%s_parent_%d", req.DocumentID, i),
+					DocID:   req.DocumentID,
+					Index:   int64(i),
+					Content: p.Content,
+				}
+			}
+			if err := ki.chunkRepo.InsertParentBatch(ctx, req.TenantID, req.WorkspaceID, parents); err != nil {
+				ki.logger.Warn("knowledge.ingest.parent_pg_failed",
+					zap.String("trace_id", sc.TraceID),
+					zap.Error(err))
+			}
+		}
+
 		pgChunks := make([]domain.Chunk, len(docChunks))
 		for i, dc := range docChunks {
-			pgChunks[i] = domain.Chunk{ID: dc.ID, DocID: dc.SourceDocument, Text: dc.Content, Index: dc.ChunkIndex}
+			parentID := ""
+			if i < len(result.Leaves) && result.Leaves[i].ParentID != "" {
+				parentID = fmt.Sprintf("%s_parent_%s", req.DocumentID, result.Leaves[i].ParentID)
+			}
+			pgChunks[i] = domain.Chunk{
+				ID:       dc.ID,
+				DocID:    dc.SourceDocument,
+				Text:     dc.Content,
+				Index:    dc.ChunkIndex,
+				ParentID: parentID,
+			}
 		}
 		if err := ki.chunkRepo.InsertBatch(ctx, req.TenantID, req.WorkspaceID, pgChunks); err != nil {
-			// Non-fatal: PG mirror is best-effort (Milvus is authoritative).
 			ki.logger.Warn("knowledge.ingest.chunk_pg_failed",
 				zap.String("trace_id", sc.TraceID),
 				zap.Error(err))
 		}
 	}
 	return nil
+}
+
+func (ki *KnowledgeIngest) resolveEmbedClient(ctx context.Context, req IngestDocumentRequest) knowledgeport.Embedder {
+	if ki.embedResolver != nil && req.TenantID != "" {
+		return ki.embedResolver(ctx, req.TenantID, req.EmbeddingModel)
+	}
+	return ki.embeddingSvc
 }
 
 // markFailed writes the terminal 'failed' state. Best-effort — logs on

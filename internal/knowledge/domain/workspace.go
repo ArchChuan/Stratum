@@ -8,20 +8,33 @@ import (
 // Sentinel errors raised by Workspace domain methods. Application-level
 // names mirror these so the HTTP error mapping table can route both layers.
 var (
-	ErrInvalidEmbeddingModel   = errors.New("unsupported embedding model")
-	ErrInvalidQueryMode        = errors.New("invalid query_mode")
-	ErrEmbeddingModelImmutable = errors.New("embedding_model is immutable after creation")
-	ErrChunkSizeImmutable      = errors.New("chunk_size is immutable after creation")
-	ErrChunkOverlapImmutable   = errors.New("chunk_overlap is immutable after creation")
+	ErrInvalidEmbeddingModel     = errors.New("unsupported embedding model")
+	ErrInvalidQueryMode          = errors.New("invalid query_mode")
+	ErrInvalidChunkingStrategy   = errors.New("invalid chunking_strategy")
+	ErrEmbeddingModelImmutable   = errors.New("embedding_model is immutable after creation")
+	ErrChunkSizeImmutable        = errors.New("chunk_size is immutable after creation")
+	ErrChunkOverlapImmutable     = errors.New("chunk_overlap is immutable after creation")
+	ErrChunkingStrategyImmutable = errors.New("chunking_strategy is immutable after creation")
 )
 
 const (
-	DefaultEmbeddingModel = "text-embedding-v3"
-	DefaultQueryMode      = "hybrid"
-	DefaultChunkSize      = 512
-	DefaultChunkOverlap   = 64
-	DefaultTopK           = 5
+	DefaultEmbeddingModel   = "text-embedding-v3"
+	DefaultQueryMode        = "hybrid"
+	DefaultChunkSize        = 512
+	DefaultChunkOverlap     = 64
+	DefaultTopK             = 5
+	DefaultChunkingStrategy = ChunkingStrategyStructureRecursive
+
+	ChunkingStrategyRecursive          = "recursive"
+	ChunkingStrategyStructureRecursive = "structure_recursive"
+	ChunkingStrategySemantic           = "semantic"
 )
+
+var AllowedChunkingStrategies = map[string]bool{
+	ChunkingStrategyRecursive:          true,
+	ChunkingStrategyStructureRecursive: true,
+	ChunkingStrategySemantic:           true,
+}
 
 // AllowedEmbeddingModels enumerates models the system can serve embeddings for.
 // Extend here when a new provider is wired up; service / handler must not redefine.
@@ -49,11 +62,12 @@ type Workspace struct {
 
 // WorkspaceConfig is the per-workspace RAG configuration persisted as JSONB.
 type WorkspaceConfig struct {
-	EmbeddingModel string
-	ChunkSize      int
-	ChunkOverlap   int
-	QueryMode      string
-	TopK           int
+	EmbeddingModel   string
+	ChunkSize        int
+	ChunkOverlap     int
+	QueryMode        string
+	TopK             int
+	ChunkingStrategy string
 }
 
 // NewWorkspace constructs a Workspace, applying defaults to cfg and validating it.
@@ -70,13 +84,16 @@ func NewWorkspace(name, description string, cfg WorkspaceConfig, defaultChunkSiz
 	}, nil
 }
 
-// Validate checks that EmbeddingModel and QueryMode fall within the allowed sets.
+// Validate checks that EmbeddingModel, QueryMode, and ChunkingStrategy fall within the allowed sets.
 func (c WorkspaceConfig) Validate() error {
 	if !AllowedEmbeddingModels[c.EmbeddingModel] {
 		return ErrInvalidEmbeddingModel
 	}
 	if !AllowedQueryModes[c.QueryMode] {
 		return ErrInvalidQueryMode
+	}
+	if !AllowedChunkingStrategies[c.ChunkingStrategy] {
+		return ErrInvalidChunkingStrategy
 	}
 	return nil
 }
@@ -97,6 +114,9 @@ func applyDefaults(c WorkspaceConfig, defaultChunkSize, defaultTopK int) Workspa
 	if c.TopK <= 0 {
 		c.TopK = defaultTopK
 	}
+	if c.ChunkingStrategy == "" {
+		c.ChunkingStrategy = DefaultChunkingStrategy
+	}
 	return c
 }
 
@@ -113,6 +133,9 @@ func (c WorkspaceConfig) MergeUpdate(partial WorkspaceConfig) (WorkspaceConfig, 
 	}
 	if partial.ChunkOverlap > 0 && partial.ChunkOverlap != c.ChunkOverlap {
 		return c, ErrChunkOverlapImmutable
+	}
+	if partial.ChunkingStrategy != "" && partial.ChunkingStrategy != c.ChunkingStrategy {
+		return c, ErrChunkingStrategyImmutable
 	}
 	if partial.QueryMode != "" {
 		if !AllowedQueryModes[partial.QueryMode] {

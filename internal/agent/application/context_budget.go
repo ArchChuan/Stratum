@@ -1,20 +1,32 @@
 package application
 
 import (
+	"unicode/utf8"
+
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/tokenutil"
 )
-
-func estimateTokens(s string) int {
-	return len([]rune(s)) / 3
-}
 
 func estimateMessagesTokens(msgs []port.LLMMessage) int {
 	total := 0
 	for _, m := range msgs {
-		total += estimateTokens(m.Content)
+		total += tokenutil.EstimateText(m.Role) + tokenutil.EstimateText(m.Content) + 4
 	}
 	return total
+}
+
+// truncateToTokenBudget 截断字符串使其估算 token 不超过 budget。
+// 使用 UTF-8 字节边界截断，避免切断多字节字符。
+func truncateToTokenBudget(s string, budget int) string {
+	maxBytes := budget * 3
+	if len(s) <= maxBytes {
+		return s
+	}
+	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
+		maxBytes--
+	}
+	return s[:maxBytes]
 }
 
 // BuildContextMessages assembles the message slice for an LLM call with token-aware trimming.
@@ -37,34 +49,26 @@ func BuildContextMessages(
 	budget := maxTokens
 
 	// 1. Reserve budget for current input (highest priority)
-	budget -= estimateTokens(currentInput)
+	budget -= tokenutil.EstimateText(currentInput)
 	if budget <= 0 {
 		return []port.LLMMessage{{Role: "user", Content: currentInput}}
 	}
 
 	// 2. System prompt — guarantee MinSystemPromptTokens, truncate if over budget
-	sysTokens := estimateTokens(systemPromptBase)
+	sysTokens := tokenutil.EstimateText(systemPromptBase)
 	sysReserve := max(sysTokens, constants.MinSystemPromptTokens)
 	sysReserve = min(sysReserve, budget)
 	if sysTokens > sysReserve {
-		runes := []rune(systemPromptBase)
-		maxRunes := sysReserve * 3
-		if maxRunes < len(runes) {
-			systemPromptBase = string(runes[:maxRunes])
-		}
+		systemPromptBase = truncateToTokenBudget(systemPromptBase, sysReserve)
 	}
 	budget -= sysReserve
 
 	// 3. Memory context — max 30% of remaining budget
 	if memoryCtx != "" {
 		memBudget := int(float64(budget) * constants.MemoryBudgetRatio)
-		memTokens := estimateTokens(memoryCtx)
+		memTokens := tokenutil.EstimateText(memoryCtx)
 		if memTokens > memBudget {
-			runes := []rune(memoryCtx)
-			maxRunes := memBudget * 3
-			if maxRunes < len(runes) {
-				memoryCtx = string(runes[:maxRunes])
-			}
+			memoryCtx = truncateToTokenBudget(memoryCtx, memBudget)
 			memTokens = memBudget
 		}
 		budget -= memTokens

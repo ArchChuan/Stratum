@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -97,22 +96,12 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	c.Header("X-Accel-Buffering", "no")
 	c.Header("Transfer-Encoding", "chunked")
 
-	flusher, hasFlusher := c.Writer.(http.Flusher)
-	writeEvent := func(data string) {
-		fmt.Fprintf(c.Writer, "data: %s\n\n", data) //nolint:errcheck
-		if hasFlusher {
-			flusher.Flush()
-		}
-	}
-	fmt.Fprint(c.Writer, ": heartbeat\n\n") //nolint:errcheck
-	if hasFlusher {
-		flusher.Flush()
-	}
+	writer := newSSEEventWriter(c.Writer)
 
 	clientCtx := c.Request.Context()
 	tokenCb := func(token string) {
 		payload, _ := json.Marshal(map[string]string{"token": token})
-		writeEvent(string(payload))
+		writer.EnqueueData(string(payload))
 	}
 
 	execCtx, cancel, run, err := h.svc.ExecuteStream(clientCtx, id, agent.ExecRequest{
@@ -131,16 +120,14 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		return
 	}
 	defer cancel()
+	writer.EnqueueComment("heartbeat")
 	go func() {
 		ticker := time.NewTicker(constants.SSEHeartbeatInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				fmt.Fprint(c.Writer, ": heartbeat\n\n") //nolint:errcheck
-				if hasFlusher {
-					flusher.Flush()
-				}
+				writer.EnqueueComment("heartbeat")
 			case <-execCtx.Done():
 				return
 			case <-clientCtx.Done():
@@ -150,24 +137,29 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		}
 	}()
 
-	result, _, runErr := run()
-	if runErr != nil {
-		if errors.Is(runErr, context.Canceled) && clientCtx.Err() != nil {
+	go func() {
+		defer writer.Close()
+		result, _, runErr := run()
+		if runErr != nil {
+			if errors.Is(runErr, context.Canceled) && clientCtx.Err() != nil {
+				return
+			}
+			h.logger.Error("agent stream execution failed", zap.String("agentId", id), zap.Error(runErr))
+			payload, _ := json.Marshal(map[string]interface{}{"error": runErr.Error()})
+			writer.EnqueueData(string(payload))
 			return
 		}
-		h.logger.Error("agent stream execution failed", zap.String("agentId", id), zap.Error(runErr))
-		payload, _ := json.Marshal(map[string]interface{}{"error": runErr.Error()})
-		writeEvent(string(payload))
-		return
-	}
-	donePayload, _ := json.Marshal(map[string]interface{}{
-		"done":       true,
-		"output":     result.Output,
-		"steps":      result.Steps,
-		"tokensUsed": result.TokensUsed,
-		"duration":   result.Duration.String(),
-	})
-	writeEvent(string(donePayload))
+		donePayload, _ := json.Marshal(map[string]interface{}{
+			"done":       true,
+			"output":     result.Output,
+			"steps":      result.Steps,
+			"tokensUsed": result.TokensUsed,
+			"duration":   result.Duration.String(),
+		})
+		writer.EnqueueData(string(donePayload))
+	}()
+
+	writer.WriteUntilClosed(0)
 }
 
 // intOption pulls a numeric option from req.Options. Returns 0 when

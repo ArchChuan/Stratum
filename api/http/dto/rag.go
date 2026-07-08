@@ -7,11 +7,12 @@ import (
 
 // WorkspaceConfig is the per-workspace RAG configuration carried over the wire.
 type WorkspaceConfig struct {
-	EmbeddingModel string `json:"embedding_model"`
-	ChunkSize      int    `json:"chunk_size"`
-	ChunkOverlap   int    `json:"chunk_overlap"`
-	QueryMode      string `json:"query_mode"`
-	TopK           int    `json:"top_k"`
+	EmbeddingModel   string `json:"embedding_model"`
+	ChunkingStrategy string `json:"chunking_strategy"`
+	ChunkSize        int    `json:"chunk_size"`
+	ChunkOverlap     int    `json:"chunk_overlap"`
+	QueryMode        string `json:"query_mode"`
+	TopK             int    `json:"top_k"`
 }
 
 // UploadDocumentRequest is bound from POST /knowledge/ingest multipart form.

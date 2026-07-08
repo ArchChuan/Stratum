@@ -231,14 +231,17 @@ func (s *WorkspaceService) IngestUpload(ctx context.Context, tenantID, workspace
 
 	documentID := uuid.Must(uuid.NewV7()).String()
 	result, err := s.ingestSvc.IngestDocument(ctx, IngestDocumentRequest{
-		TenantID:       tenantID,
-		Workspace:      workspace,
-		WorkspaceID:    ws.ID,
-		EmbeddingModel: ws.Config.EmbeddingModel,
-		DocumentData:   fileData,
-		FileName:       fileHeader.Filename,
-		DocumentID:     documentID,
-		ContentHash:    hash,
+		TenantID:         tenantID,
+		Workspace:        workspace,
+		WorkspaceID:      ws.ID,
+		EmbeddingModel:   ws.Config.EmbeddingModel,
+		ChunkingStrategy: ws.Config.ChunkingStrategy,
+		ChunkSize:        ws.Config.ChunkSize,
+		ChunkOverlap:     ws.Config.ChunkOverlap,
+		DocumentData:     fileData,
+		FileName:         fileHeader.Filename,
+		DocumentID:       documentID,
+		ContentHash:      hash,
 	})
 	if err != nil {
 		return nil, err

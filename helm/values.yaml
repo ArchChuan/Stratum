@@ -95,6 +95,8 @@ config:
 secrets:
   create: false
   name: "stratum-secrets"
+  # Used when create=true. Remote demo currently creates this Secret from CI/manual kubectl.
+  # GLOBAL_AGENT_SYSTEM_PROMPT: platform-level prompt appended to every agent system prompt.
   data: {}
 
 database:

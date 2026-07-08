@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
+	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"go.uber.org/zap"
 )
 
@@ -141,6 +142,18 @@ func (r *recordingChunkRepo) KeywordSearch(ctx context.Context, tenantID, worksp
 func (r *recordingChunkRepo) DeleteByWorkspace(ctx context.Context, tenantID, workspaceID string) error {
 	r.workspaceID = workspaceID
 	return nil
+}
+
+func (r *recordingChunkRepo) InsertParentBatch(_ context.Context, _, _ string, _ []port.ParentChunk) error {
+	return nil
+}
+
+func (r *recordingChunkRepo) GetParentByID(_ context.Context, _, _, _ string) (*port.ParentChunk, error) {
+	return nil, nil
+}
+
+func (r *recordingChunkRepo) GetChunksByIDs(_ context.Context, _, _ string, _ []string) ([]domain.Chunk, error) {
+	return nil, nil
 }
 
 type recordingWorkspaceRepo struct {

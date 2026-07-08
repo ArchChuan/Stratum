@@ -167,6 +167,12 @@ spec:
                 configMapKeyRef:
                   name: {{ include "stratum.fullname" . }}-config
                   key: SECURE_COOKIES
+            - name: GLOBAL_AGENT_SYSTEM_PROMPT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: GLOBAL_AGENT_SYSTEM_PROMPT
+                  optional: true
           livenessProbe:
             httpGet:
               path: /health

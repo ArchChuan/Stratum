@@ -8,6 +8,35 @@ import (
 	"go.uber.org/zap"
 )
 
+type blockingMCPClient struct {
+	connectStarted chan struct{}
+	releaseConnect chan struct{}
+}
+
+func (c *blockingMCPClient) Connect(ctx context.Context) error {
+	close(c.connectStarted)
+	select {
+	case <-c.releaseConnect:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *blockingMCPClient) Disconnect(context.Context) error { return nil }
+func (c *blockingMCPClient) IsConnected() bool                { return true }
+func (c *blockingMCPClient) IsHealthy() bool                  { return true }
+func (c *blockingMCPClient) CallTool(context.Context, string, interface{}) (interface{}, error) {
+	return nil, nil
+}
+func (c *blockingMCPClient) ListTools(context.Context) ([]*MCPTool, error) {
+	return nil, nil
+}
+func (c *blockingMCPClient) ListResources(context.Context) ([]*MCPResource, error) {
+	return nil, nil
+}
+func (c *blockingMCPClient) GetServerInfo() *MCPServerInfo { return &MCPServerInfo{} }
+
 // TestNewCapabilityCache 测试缓存创建
 func TestNewCapabilityCache(t *testing.T) {
 	cache := NewCapabilityCache(100, 1*time.Hour)
@@ -103,6 +132,48 @@ func TestClientManagerConnect(t *testing.T) {
 
 	if len(manager.GetAllClients(context.Background())) != 0 {
 		t.Errorf("expected 0 clients, got %d", len(manager.GetAllClients(context.Background())))
+	}
+}
+
+func TestClientManagerConnectDoesNotBlockReadersWhileDialing(t *testing.T) {
+	logger := zap.NewNop()
+	manager := NewClientManager(logger, nil, nil)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	manager.clientFactory = func(*MCPServerConfig, *zap.Logger) MCPClient {
+		return &blockingMCPClient{connectStarted: started, releaseConnect: release}
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- manager.Connect(context.Background(), &MCPServerConfig{
+			ID:        "slow-server",
+			Name:      "Slow Server",
+			Transport: "stdio",
+		})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("fake MCP client did not start connecting")
+	}
+
+	readDone := make(chan struct{})
+	go func() {
+		_ = manager.GetAllClients(context.Background())
+		close(readDone)
+	}()
+
+	select {
+	case <-readDone:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("GetAllClients blocked while Connect was waiting on external I/O")
+	}
+
+	close(release)
+	if err := <-errCh; err != nil {
+		t.Fatalf("connect returned error: %v", err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
+	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 )
 
 type ChunkRepo struct {
@@ -25,10 +26,14 @@ func (r *ChunkRepo) InsertBatch(ctx context.Context, tenantID, workspaceID strin
 	schema := schemaFor(tenantID)
 	batch := &pgx.Batch{}
 	for _, c := range chunks {
+		var parentID any = nil
+		if c.ParentID != "" {
+			parentID = c.ParentID
+		}
 		batch.Queue(
-			fmt.Sprintf(`INSERT INTO "%s".knowledge_chunks(id, workspace_id, doc_id, chunk_index, content)
-				VALUES ($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING`, schema),
-			c.ID, workspaceID, c.DocID, c.Index, c.Text,
+			fmt.Sprintf(`INSERT INTO "%s".knowledge_chunks(id, workspace_id, doc_id, chunk_index, content, parent_id)
+				VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO NOTHING`, schema),
+			c.ID, workspaceID, c.DocID, c.Index, c.Text, parentID,
 		)
 	}
 	br := r.db.SendBatch(ctx, batch)
@@ -39,6 +44,75 @@ func (r *ChunkRepo) InsertBatch(ctx context.Context, tenantID, workspaceID strin
 		}
 	}
 	return nil
+}
+
+func (r *ChunkRepo) InsertParentBatch(ctx context.Context, tenantID, workspaceID string, parents []port.ParentChunk) error {
+	if len(parents) == 0 {
+		return nil
+	}
+	schema := schemaFor(tenantID)
+	batch := &pgx.Batch{}
+	for _, p := range parents {
+		batch.Queue(
+			fmt.Sprintf(`INSERT INTO "%s".knowledge_parent_chunks(id, workspace_id, doc_id, chunk_index, content)
+				VALUES ($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING`, schema),
+			p.ID, workspaceID, p.DocID, p.Index, p.Content,
+		)
+	}
+	br := r.db.SendBatch(ctx, batch)
+	defer br.Close() //nolint:errcheck
+	for range parents {
+		if _, err := br.Exec(); err != nil {
+			return fmt.Errorf("chunk_repo: insert parent: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *ChunkRepo) GetParentByID(ctx context.Context, tenantID, workspaceID, parentID string) (*port.ParentChunk, error) {
+	schema := schemaFor(tenantID)
+	var p port.ParentChunk
+	err := r.db.QueryRow(ctx,
+		fmt.Sprintf(`SELECT id, workspace_id, doc_id, chunk_index, content
+			FROM "%s".knowledge_parent_chunks
+			WHERE id = $1 AND workspace_id = $2`, schema),
+		parentID, workspaceID,
+	).Scan(&p.ID, &p.WorkspaceID, &p.DocID, &p.Index, &p.Content)
+	if err != nil {
+		return nil, fmt.Errorf("chunk_repo: get parent: %w", err)
+	}
+	return &p, nil
+}
+
+func (r *ChunkRepo) GetChunksByIDs(ctx context.Context, tenantID, workspaceID string, ids []string) ([]domain.Chunk, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	schema := schemaFor(tenantID)
+	rows, err := r.db.Query(ctx,
+		fmt.Sprintf(`SELECT id, doc_id, chunk_index, content, parent_id
+			FROM "%s".knowledge_chunks
+			WHERE workspace_id = $1 AND id = ANY($2)`, schema),
+		workspaceID, ids,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("chunk_repo: get by ids: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.Chunk
+	for rows.Next() {
+		var c domain.Chunk
+		var parentID *string
+		if err := rows.Scan(&c.ID, &c.DocID, &c.Index, &c.Text, &parentID); err != nil {
+			return nil, fmt.Errorf("chunk_repo: scan: %w", err)
+		}
+		if parentID != nil {
+			c.ParentID = *parentID
+		}
+		out = append(out, c)
+	}
+	return out, nil
 }
 
 func (r *ChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceID, query string, topK int) ([]domain.Chunk, error) {

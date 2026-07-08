@@ -16,6 +16,7 @@ import (
 
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/tokenutil"
 )
 
 // EnrichmentResult holds the structured metadata extracted by the LLM.
@@ -268,6 +269,8 @@ func (w *EnricherWorker) callEnrichLLM(ctx context.Context, tenantID, role, cont
 	if err := json.Unmarshal([]byte(resp.Content), &result); err != nil {
 		return nil, fmt.Errorf("parse enrichment response: %w", err)
 	}
+	// token_estimate 由代码计算，不依赖 LLM 自填（不可靠）
+	result.TokenEstimate = tokenutil.EstimateText(content)
 	return &result, nil
 }
 

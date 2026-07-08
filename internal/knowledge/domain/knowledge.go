@@ -21,4 +21,5 @@ type Document struct {
 type Chunk struct {
 	ID, DocID, Text string
 	Index           int64
+	ParentID        string // set when using Parent-Child chunking strategy; references parent chunk ID
 }

@@ -41,21 +41,23 @@ func NewRAGHandler(
 
 func toDTOConfig(c domain.WorkspaceConfig) dto.WorkspaceConfig {
 	return dto.WorkspaceConfig{
-		EmbeddingModel: c.EmbeddingModel,
-		ChunkSize:      c.ChunkSize,
-		ChunkOverlap:   c.ChunkOverlap,
-		QueryMode:      c.QueryMode,
-		TopK:           c.TopK,
+		EmbeddingModel:   c.EmbeddingModel,
+		ChunkingStrategy: c.ChunkingStrategy,
+		ChunkSize:        c.ChunkSize,
+		ChunkOverlap:     c.ChunkOverlap,
+		QueryMode:        c.QueryMode,
+		TopK:             c.TopK,
 	}
 }
 
 func fromDTOConfig(c dto.WorkspaceConfig) domain.WorkspaceConfig {
 	return domain.WorkspaceConfig{
-		EmbeddingModel: c.EmbeddingModel,
-		ChunkSize:      c.ChunkSize,
-		ChunkOverlap:   c.ChunkOverlap,
-		QueryMode:      c.QueryMode,
-		TopK:           c.TopK,
+		EmbeddingModel:   c.EmbeddingModel,
+		ChunkingStrategy: c.ChunkingStrategy,
+		ChunkSize:        c.ChunkSize,
+		ChunkOverlap:     c.ChunkOverlap,
+		QueryMode:        c.QueryMode,
+		TopK:             c.TopK,
 	}
 }
 

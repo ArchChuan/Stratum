@@ -36,14 +36,14 @@ func (c *TenantGatewayCache) Get(tenantID string) (*Gateway, map[string]string, 
 		delete(c.entries, tenantID)
 		return nil, nil, false
 	}
-	return e.gateway, e.apiKeys, true
+	return e.gateway, cloneKeys(e.apiKeys), true
 }
 
 // Set stores a Gateway and its decrypted API keys with the given TTL.
 func (c *TenantGatewayCache) Set(tenantID string, gw *Gateway, keys map[string]string, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[tenantID] = &cacheEntry{gateway: gw, apiKeys: keys, expiresAt: time.Now().Add(ttl)}
+	c.entries[tenantID] = &cacheEntry{gateway: gw, apiKeys: cloneKeys(keys), expiresAt: time.Now().Add(ttl)}
 }
 
 // Invalidate removes the cached entry for tenantID immediately.
@@ -51,4 +51,15 @@ func (c *TenantGatewayCache) Invalidate(tenantID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.entries, tenantID)
+}
+
+func cloneKeys(keys map[string]string) map[string]string {
+	if keys == nil {
+		return nil
+	}
+	out := make(map[string]string, len(keys))
+	for k, v := range keys {
+		out[k] = v
+	}
+	return out
 }

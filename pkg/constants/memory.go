@@ -102,9 +102,10 @@ const (
 
 // Memory Extraction - LLM extraction limits
 const (
-	MemoryMaxFactsPerExtraction = 20  // max facts extracted per message
-	MemoryMinFactLength         = 10  // min chars for a valid fact
-	MemoryMaxFactLength         = 500 // max chars for a valid fact
+	MemoryMaxFactsPerExtraction = 20   // max facts extracted per message
+	MemoryMinFactLength         = 10   // min chars for a valid fact
+	MemoryMaxFactLength         = 500  // max chars for a valid fact
+	MemoryExtractLLMMaxTokens   = 4096 // JSON array of facts; 1024 truncates large conversations
 )
 
 // Memory Entity - entity profile rebuild triggers
