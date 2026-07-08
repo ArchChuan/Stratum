@@ -10,11 +10,11 @@
 ├─────────────────────────────────────────────────┤
 │  API Layer (Gin)                                │
 ├─────────────────────────────────────────────────┤
-│  Skill Executor | Hermes | LLM Gateway          │
+│  Agent / Skill / Memory / LLM Gateway           │
 ├─────────────────────────────────────────────────┤
-│  GraphRAG | VectorStore | Config                │
+│  RAG | VectorStore | Config                     │
 ├─────────────────────────────────────────────────┤
-│  NATS | Neo4j | Milvus | OpenTelemetry         │
+│  NATS | Milvus | PostgreSQL | Redis | OTEL      │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -24,29 +24,17 @@
 
 **用途**: 异步事件驱动通信
 
-**Docker 镜像**: `nats:latest`
+**Docker 镜像**: `nats:2.10.25-alpine`
 
 **端口**: 4222
 
-**集成代码** (`internal/hermes/client.go`):
+**集成代码** (`pkg/messaging/nats.go`, memory pipeline 用 JetStream `nats.go` 包):
 
 ```go
-client, err := hermes.NewClient("nats://localhost:4222", logger)
-defer client.Close()
-
-// 发布事件
-event := &hermes.Event{
-    Type:   "skill.executed",
-    Data:   result,
-    Source: "executor",
-}
-client.Publish(event)
-
-// 订阅事件
-client.Subscribe("skill.executed", func(event *hermes.Event) error {
-    // 处理事件
-    return nil
-})
+nc, err := nats.Connect("nats://localhost:4222")
+js, _ := nc.JetStream()
+// 发布到 JetStream subject
+js.Publish("memory.raw", data)
 ```
 
 **启动检查**:
@@ -59,59 +47,15 @@ nc -z localhost 4222
 docker logs stratum-nats-1
 ```
 
-### 2. Neo4j (图数据库)
-
-**用途**: 知识图谱存储和查询
-
-**Docker 镜像**: `neo4j:latest`
-
-**端口**: 7687 (Bolt), 7474 (HTTP)
-
-**默认凭证**: neo4j / password
-
-**集成代码** (`internal/knowledge/graphrag.go`):
-
-```go
-graphrag := knowledge.NewGraphRAG(
-    "bolt://localhost:7687",
-    "neo4j",
-    "password",
-    logger,
-)
-err := graphrag.Connect(ctx)
-defer graphrag.Close()
-
-// 创建节点
-graphrag.CreateNode(ctx, "Skill", map[string]interface{}{
-    "id":   "skill-1",
-    "name": "GPT-4",
-})
-
-// 查询
-result, err := graphrag.Query(ctx, "MATCH (n) RETURN n LIMIT 10")
-```
-
-**Web 界面**: <http://localhost:7474>
-
-**启动检查**:
-
-```bash
-# 检查连接
-nc -z localhost 7687
-
-# 查看日志
-docker logs stratum-neo4j-1
-```
-
 ### 3. Milvus (向量数据库)
 
 **用途**: 向量存储和相似度搜索
 
-**Docker 镜像**: `milvusdb/milvus:latest`
+**Docker 镜像**: `milvusdb/milvus:v2.4.15`
 
 **端口**: 19530
 
-**集成代码** (`pkg/mcp/vector_store.go`):
+**集成代码** (`pkg/vector/vector_store.go`):
 
 ```go
 vectorStore := mcp.NewVectorStore("localhost", "19530", logger)
@@ -226,7 +170,6 @@ curl http://localhost:8080/health
 nc -z localhost 4222 && echo "NATS OK" || echo "NATS FAILED"
 
 # Neo4j
-nc -z localhost 7687 && echo "Neo4j OK" || echo "Neo4j FAILED"
 
 # Milvus
 nc -z localhost 19530 && echo "Milvus OK" || echo "Milvus FAILED"
@@ -248,22 +191,6 @@ docker logs stratum-nats-1
 
 # 重启容器
 docker-compose restart nats
-```
-
-### Neo4j 连接失败
-
-```bash
-# 检查容器状态
-docker ps | grep neo4j
-
-# 查看日志
-docker logs stratum-neo4j-1
-
-# 重启容器
-docker-compose restart neo4j
-
-# 访问 Web 界面检查
-open http://localhost:7474
 ```
 
 ### Milvus 连接失败
@@ -306,10 +233,6 @@ PORT=8080
 # NATS
 NATS_URL=nats://localhost:4222
 
-# Neo4j
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=password
 
 # Milvus
 MILVUS_HOST=localhost
@@ -370,7 +293,6 @@ docker-compose logs -f
 
 # 特定容器
 docker-compose logs -f nats
-docker-compose logs -f neo4j
 docker-compose logs -f milvus
 ```
 

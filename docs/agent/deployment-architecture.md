@@ -1,6 +1,10 @@
 # Stratum Demo 部署架构说明
 
-本文记录当前 demo 环境的部署现状，并用教学方式解释一次浏览器请求如何穿过公网、Ingress、前端 Nginx、Go 后端和集群内依赖服务。
+本文记录当前 demo 环境的部署现状，并用教学方式解释一次浏览器请求如何穿过公网、Ingress、
+前端 Nginx、Go 后端和集群内依赖服务。
+
+最后人工确认时间：2026-07-07。远端确认方式为 SSH 到 `101.200.181.141` 后执行只读
+`kubectl` 查询。
 
 当前访问入口：
 
@@ -16,7 +20,13 @@ http://101.200.181.141/api/auth/github/callback
 
 ## 一句话架构
 
-Stratum demo 部署在一台阿里云 ECS 上，ECS 里运行单节点 K3s。公网 HTTP 流量先进 K3s 内置 Traefik，再进入前端 Nginx。前端 Nginx 同时负责两件事：返回 React 静态页面，以及把 `/api/*` 请求反向代理到 Go 后端。
+Stratum demo 部署在一台阿里云 ECS 上，ECS 里运行单节点 K3s。公网 HTTP 流量先进 K3s
+内置 Traefik，再进入前端 Nginx。前端 Nginx 同时负责两件事：返回 React 静态页面，
+以及把 `/api/*` 请求反向代理到 Go 后端。
+
+业务应用由 `stratum` Helm release 管理，位于 `stratum` namespace。监控栈由独立的
+`kps` release 管理，位于 `monitoring` namespace；它不是本仓库 `grafana/` 目录的
+docker-compose 配置。
 
 ```mermaid
 flowchart TB
@@ -39,11 +49,20 @@ flowchart TB
                 secrets["stratum-secrets<br/>DB/JWT/GitHub OAuth"]
                 config["stratum-config<br/>URL/CORS/Service config"]
             end
+
+            subgraph mon["namespace: monitoring"]
+                grafana["kps-grafana<br/>Grafana<br/>Ingress path: /grafana"]
+                prometheus["kps-kube-prometheus-stack-prometheus<br/>Prometheus"]
+                alertmanager["kps-kube-prometheus-stack-alertmanager<br/>Alertmanager datasource"]
+                jaeger["jaeger<br/>UI :16686<br/>OTLP :4317/:4318"]
+                kpscm["kps-* ConfigMaps<br/>datasources + dashboards"]
+            end
         end
     end
 
     browser -->|"HTTP :80"| traefik
     traefik -->|"Ingress path /"| frontend
+    traefik -->|"Ingress path /grafana"| grafana
     frontend -->|"React 静态资源"| browser
     frontend -->|"/api/* 反代并去掉 /api 前缀"| backend
 
@@ -55,15 +74,20 @@ flowchart TB
     backend --> milvus
     milvus --> minio
     milvus --> etcd
+    kpscm --> grafana
+    grafana --> prometheus
+    grafana --> alertmanager
 
     classDef edge fill:#fff7ed,stroke:#c05621,stroke-width:1px,color:#1c1917;
     classDef app fill:#f4f8f1,stroke:#758467,stroke-width:1px,color:#1c1917;
     classDef data fill:#f7f2f8,stroke:#7f5f88,stroke-width:1px,color:#1c1917;
     classDef cfg fill:#eef6ff,stroke:#4078a8,stroke-width:1px,color:#1c1917;
+    classDef obs fill:#f1f5f9,stroke:#475569,stroke-width:1px,color:#1c1917;
     class browser,traefik edge;
     class frontend,backend app;
     class postgres,redis,nats,milvus,minio,etcd data;
     class secrets,config cfg;
+    class grafana,prometheus,alertmanager,jaeger,kpscm obs;
 ```
 
 ## HTTP 请求链路
@@ -110,13 +134,28 @@ location /api/ {
 
 ## 当前 Helm Demo 配置
 
-当前环境使用 `helm/values-demo.yaml`，核心配置如下：
+业务应用当前由 `.github/workflows/deploy.yml` 执行以下命令部署：
+
+```bash
+helm upgrade --install stratum ./helm -f helm/values-demo.yaml ... -n stratum
+```
+
+核心配置如下：
 
 ```yaml
+frontend:
+  enabled: true
+  backendServiceName: stratum
+  backendServicePort: 80
+
 config:
   frontendUrl: "http://101.200.181.141"
   githubCallbackUrl: "http://101.200.181.141/api/auth/github/callback"
   secureCookies: "false"
+  natsUrl: "nats://stratum-nats:4222"
+  milvusHost: "stratum-milvus"
+  milvusPort: "19530"
+  otelCollectorEndpoint: "http://stratum-otel-collector:4317"
 
 ingress:
   enabled: true
@@ -134,11 +173,141 @@ ingress:
 
 这些值的含义：
 
+- `frontend.enabled=true` 表示公网入口先落到前端 Nginx，而不是直接落到 Go 后端。
+- `backendServiceName=stratum` 和 `backendServicePort=80` 是前端 Nginx `/api/` 反向代理的
+  目标。
 - `frontendUrl` 是后端登录成功后跳回前端的地址。
 - `githubCallbackUrl` 是后端传给 GitHub 的 OAuth callback 地址。当前必须带 `/api`，因为公网只有 `/api/*` 会被前端 Nginx 代理到后端。
 - `secureCookies: "false"` 是因为当前还是 HTTP 直连 IP。等接入 HTTPS 后要改回 `true`。
 - `host: ""` 表示 Ingress 不限制 Host，浏览器直接用 IP 访问也能命中规则。
 - `tls: []` 表示当前没有在 Ingress 层启用 HTTPS。
+- `observability.enabled=false`，所以 `stratum` release 当前不会创建 `stratum-otel-collector`。
+  配置中仍保留 `otelCollectorEndpoint`，但它指向的 Service 当前不存在。
+
+## 远端实际资源快照
+
+2026-07-07 在远端确认的核心资源如下。
+
+业务 namespace：
+
+```text
+namespace: stratum
+release:   stratum
+chart:     ./helm
+values:    helm/values-demo.yaml + CI --set image.repository/image.tag
+```
+
+业务组件由 chart 直接创建：
+
+```text
+stratum-frontend       React 静态资源 + Nginx /api 反代
+stratum                Go API 后端
+stratum-postgresql     PostgreSQL 16
+stratum-redis          Redis 7
+stratum-nats           NATS JetStream
+stratum-milvus         Milvus standalone
+stratum-minio          Milvus object storage
+stratum-etcd           Milvus metadata
+stratum-secrets        POSTGRES_PASSWORD / JWT_PRIVATE_KEY_PEM / GitHub OAuth
+aliyun-registry        镜像仓库 pull secret
+```
+
+监控 namespace：
+
+```text
+namespace: monitoring
+release:   kps
+chart:     kube-prometheus-stack 87.10.1 + grafana chart 12.7.2
+```
+
+远端实际运行的监控组件：
+
+```text
+kps-grafana
+kps-kube-prometheus-stack-operator
+kps-kube-prometheus-stack-prometheus
+kps-kube-state-metrics
+kps-prometheus-node-exporter
+jaeger
+```
+
+注意：`kps` 监控栈不是 `.github/workflows/deploy.yml` 里的 `stratum` Helm 部署创建的。
+它是远端集群里单独存在的 Helm release。
+
+## 远端 Grafana 配置来源
+
+远端 Grafana 访问入口：
+
+```text
+http://101.200.181.141/grafana
+```
+
+远端 Grafana 的真实配置来自 `monitoring` namespace 的 `kps` release，不来自仓库根目录
+`grafana/`：
+
+```text
+Deployment: kps-grafana
+Service:    kps-grafana
+Ingress:    kps-grafana, path /grafana
+Secret:     kps-grafana
+ConfigMap:  kps-grafana
+ConfigMap:  kps-grafana-config-dashboards
+ConfigMap:  kps-kube-prometheus-stack-grafana-datasource
+ConfigMap:  kps-kube-prometheus-stack-*
+```
+
+`kps-grafana` 主配置在 `ConfigMap monitoring/kps-grafana`：
+
+```ini
+[server]
+root_url = %(protocol)s://%(domain)s/grafana/
+serve_from_sub_path = true
+
+[auth.anonymous]
+enabled = true
+org_role = Viewer
+```
+
+Datasource 配置在 `ConfigMap monitoring/kps-kube-prometheus-stack-grafana-datasource`：
+
+```yaml
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    url: http://kps-kube-prometheus-stack-prometheus.monitoring:9090/
+    isDefault: true
+  - name: Alertmanager
+    type: alertmanager
+    uid: alertmanager
+    url: http://kps-kube-prometheus-stack-alertmanager.monitoring:9093/
+```
+
+Dashboard provider 配置在 `ConfigMap monitoring/kps-grafana-config-dashboards`，Grafana
+sidecar 会读取带 `grafana_dashboard=1` 标签的 ConfigMap：
+
+```yaml
+providers:
+  - name: sidecarProvider
+    type: file
+    options:
+      path: /tmp/dashboards
+```
+
+当前仓库根目录的 `grafana/` 只被本地 `docker-compose.yml` 挂载使用：
+
+```yaml
+- ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+- ./grafana/datasources:/etc/grafana/provisioning/datasources
+```
+
+所以：
+
+- 本地 `make obs-up` / `docker-compose up grafana` 使用仓库 `grafana/`。
+- 远端 `http://101.200.181.141/grafana` 使用 `monitoring/kps-*` ConfigMap。
+- 修改仓库 `grafana/datasources/*.yaml` 不会影响远端 Grafana。
+- 要改远端 Grafana，应改 `kps` Helm values 或带 `grafana_datasource=1` /
+  `grafana_dashboard=1` 标签的 Kubernetes ConfigMap。
 
 ## GitHub OAuth 登录链路
 
@@ -298,6 +467,14 @@ Location: https://github.com/login/oauth/authorize?...redirect_uri=http://101.20
 ssh root@101.200.181.141 'kubectl get pods -n stratum -o wide'
 ```
 
+查看远端监控栈：
+
+```bash
+ssh root@101.200.181.141 'kubectl get all -n monitoring'
+ssh root@101.200.181.141 'kubectl get ingress,svc,cm -n monitoring | grep -i grafana'
+ssh root@101.200.181.141 'kubectl get secret -n monitoring -l owner=helm'
+```
+
 确认后端 Pod 里的关键配置：
 
 ```bash
@@ -330,7 +507,12 @@ GET /auth/me
 - 当前是 HTTP 直连 IP，没有 HTTPS。
 - `secureCookies=false` 只适合当前 demo。接入 HTTPS 后应改为 `true`。
 - Ingress 当前不限制 Host，适合 IP demo；生产环境应配置正式域名。
-- Observability 当前关闭，但配置里仍保留 OTEL endpoint。未部署 collector 时可能看到 trace export 失败日志，不影响主链路。
+- `stratum` release 的 `observability.enabled=false`，不会创建 `stratum-otel-collector`。
+  远端虽然有独立 `monitoring` namespace 和 `kps`/`jaeger`，但业务后端当前配置的
+  `OTEL_EXPORTER_OTLP_ENDPOINT=http://stratum-otel-collector:4317` 指向不存在的 Service。
+  如果要让后端 trace 真正进入远端 Jaeger，应改为可达的 collector/Jaeger OTLP 地址，例如
+  `jaeger.monitoring.svc.cluster.local:4317` 或新增 collector 后指向 collector。
+- 远端 Grafana 是独立 `kps` 监控栈，不使用仓库根目录 `grafana/`。
 - 单节点 K3s 适合 demo，不是高可用生产架构。
 
 ## 后续接入域名和 HTTPS
@@ -364,3 +546,5 @@ curl -i https://<正式域名>/api/auth/github
 3. `/api/auth/github` 404：查后端是否注册 `/auth/github`，再查 `GITHUB_CLIENT_ID` 和 `JWT_PRIVATE_KEY_PEM`。
 4. GitHub 提示 redirect_uri 不匹配：查 GitHub OAuth App callback URL。
 5. CI 成功但代码没变：查 Pod 镜像 tag 是否是当前 commit SHA，而不是旧 branch tag。
+6. Grafana 看不到新配置：先确认你改的是远端 `monitoring/kps-*` ConfigMap，而不是本地
+   docker-compose 使用的仓库 `grafana/` 目录。

@@ -2,253 +2,231 @@
 
 ## 概述
 
-Stratum 的所有依赖服务都运行在 Docker 容器中，通过 Docker Volumes 实现数据持久化。
+Stratum 使用四种存储组件，均通过 Docker volume 持久化：
 
-## 持久化方案
+1. **PostgreSQL** — 主关系数据库（用户、租户、Agent、Knowledge 元数据）
+2. **NATS JetStream** — 异步消息队列（memory pipeline）
+3. **Milvus** — 向量存储（embedding + RAG 检索），依赖 etcd 和 MinIO
+4. **Redis** — 内存缓冲与缓存（memory buffer flush、TenantGatewayCache、rate limit）
 
-### 1. NATS (事件总线)
+---
 
-**持久化方式**: JetStream 持久化
+## 1. PostgreSQL（主数据库）
+
+### 数据卷挂载
+
+```yaml
+# docker-compose.yml
+volumes:
+  - postgres_data:/var/lib/postgresql/data
+```
+
+**特点**：
+
+- 多租户 schema 隔离：`public` 保存全局表（tenants、users），每个租户有独立 `tenant_<id>` schema
+- 迁移由 `pkg/migration/sql/` 下编号 SQL 文件管理，启动时自动应用（当前最高版本：018）
+- pgx v5 连接池，支持 `SET LOCAL search_path` 切换租户 schema
+
+### 备份
+
+```bash
+docker exec stratum-postgres-1 pg_dump -U stratum stratum > backup.sql
+```
+
+### 恢复
+
+```bash
+docker exec -i stratum-postgres-1 psql -U stratum stratum < backup.sql
+```
+
+---
+
+## 2. NATS JetStream（事件总线）
+
+### 数据卷挂载
 
 ```yaml
 volumes:
   - nats_data:/data
-command: -js -sd /data
 ```
 
-**特点**:
+**特点**：
 
-- 启用 JetStream 模式 (`-js`)
-- 指定存储目录 (`-sd /data`)
-- 事件消息持久化到磁盘
-- 容器重启后消息不丢失
+- 启用 JetStream 模式（`-js`），存储目录 `-sd /data`
+- 事件消息持久化到磁盘，容器重启后消息不丢失
+- 使用的 Stream：`MEMORY_RAW`（subject `memory.raw.>`）/ `MEMORY_ENRICHED`（`memory.enriched.>`）/ `MEMORY_DLQ`（死信，TTL 168h）
 
-**验证**:
+### 验证
 
 ```bash
-# 查看 NATS 数据
-docker exec stratum-nats-1 ls -la /data
-
-# 查看 JetStream 状态
 docker exec stratum-nats-1 nats stream list
 ```
 
-### 2. Neo4j (图数据库)
+### 备份 / 清理
 
-**持久化方式**: 数据卷挂载
+```bash
+# 备份
+docker run --rm -v stratum_nats_data:/data -v $(pwd):/backup \
+  alpine tar czf /backup/nats_backup.tar.gz -C /data .
+
+# 清理（开发环境重置）
+docker-compose down
+docker volume rm stratum_nats_data
+docker-compose up -d nats
+```
+
+---
+
+## 3. Milvus（向量存储）
+
+Milvus 依赖 etcd（元数据）和 MinIO（对象存储），三个组件均需持久化。
+
+### 数据卷挂载
+
+```yaml
+# Milvus 本体
+volumes:
+  - milvus_data:/var/lib/milvus
+
+# etcd
+volumes:
+  - etcd_data:/bitnami/etcd
+
+# MinIO
+volumes:
+  - minio_data:/minio_data
+```
+
+**Collection 命名规范**（`pkg/storage/tenantnaming/milvus.go`）：
+
+- 知识库：`kb_{tenant_id}_{workspace_id}`
+- 记忆：`tenant_{tenant_id}_memory`
+
+### 备份
+
+```bash
+# MinIO 数据（向量原始数据）
+docker run --rm -v stratum_minio_data:/data -v $(pwd):/backup \
+  alpine tar czf /backup/minio_backup.tar.gz -C /data .
+
+# etcd 元数据
+docker run --rm -v stratum_etcd_data:/data -v $(pwd):/backup \
+  alpine tar czf /backup/etcd_backup.tar.gz -C /data .
+```
+
+### 恢复
+
+```bash
+docker run --rm -v stratum_minio_data:/data -v $(pwd):/backup \
+  alpine tar xzf /backup/minio_backup.tar.gz -C /data
+
+docker run --rm -v stratum_etcd_data:/data -v $(pwd):/backup \
+  alpine tar xzf /backup/etcd_backup.tar.gz -C /data
+```
+
+### 故障排查
+
+```bash
+# 检查 etcd 和 MinIO 日志
+docker-compose logs etcd
+docker-compose logs minio
+
+# 重启顺序：etcd → minio → milvus
+docker-compose restart etcd minio
+docker-compose restart milvus
+```
+
+### 清理（开发环境重置）
+
+```bash
+docker-compose down
+docker volume rm stratum_milvus_data stratum_minio_data stratum_etcd_data
+docker-compose up -d etcd minio milvus
+```
+
+---
+
+## 4. Redis（缓存与缓冲）
+
+### 数据卷挂载
 
 ```yaml
 volumes:
-  - neo4j_data:/data
-  - neo4j_logs:/logs
+  - redis_data:/data
 ```
 
-**特点**:
+**用途**：
 
-- `/data` 存储数据库文件
-- `/logs` 存储日志文件
-- 支持事务日志恢复
-- 容器删除后数据保留
+- Memory buffer：消费 NATS 消息后按 `MemoryBufferFlushSize=5` 批量写入 PG
+- `TenantGatewayCache`：租户 LLM API key 缓存，带防御性拷贝
+- Rate limit 计数器
 
-**验证**:
+Redis 数据属于运行时缓存，丢失不影响业务正确性（重启后自动重建），**不需要备份**。
 
-```bash
-# 查看 Neo4j 数据
-docker exec stratum-neo4j-1 ls -la /data
+---
 
-# 查看数据库大小
-docker exec stratum-neo4j-1 du -sh /data
-```
-
-### 3. Milvus (向量数据库)
-
-**持久化方式**: etcd + MinIO
-
-```yaml
-milvus:
-  volumes:
-    - milvus_data:/var/lib/milvus
-  depends_on:
-    - etcd
-    - minio
-
-etcd:
-  volumes:
-    - etcd_data:/etcd
-
-minio:
-  volumes:
-    - minio_data:/minio_data
-```
-
-**特点**:
-
-- **etcd**: 存储元数据（集合定义、索引信息）
-- **MinIO**: 存储向量数据（S3 兼容对象存储）
-- **milvus_data**: 本地缓存
-
-**验证**:
-
-```bash
-# 查看 etcd 数据
-docker exec stratum-etcd-1 etcdctl get --prefix ""
-
-# 查看 MinIO 数据
-docker exec stratum-minio-1 ls -la /minio_data
-
-# 查看 Milvus 集合
-docker exec stratum-milvus-1 milvus-cli
-```
-
-### 4. OpenTelemetry Collector
-
-**持久化方式**: 配置文件挂载
-
-```yaml
-volumes:
-  - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
-```
-
-**特点**:
-
-- 配置文件持久化
-- 日志导出到文件系统
-- 支持多种导出器
-
-## 数据卷管理
-
-### 查看所有数据卷
+## 5. 完整数据卷清单
 
 ```bash
 docker volume ls | grep stratum
 ```
 
-### 查看数据卷详情
+| Volume | 对应服务 | 是否需要备份 |
+|---|---|---|
+| `stratum_postgres_data` | PostgreSQL | 是（业务数据） |
+| `stratum_nats_data` | NATS JetStream | 按需（未处理消息） |
+| `stratum_milvus_data` | Milvus | 随 MinIO |
+| `stratum_etcd_data` | etcd（Milvus 依赖） | 随 MinIO |
+| `stratum_minio_data` | MinIO（Milvus 后端） | 是（向量数据） |
+| `stratum_redis_data` | Redis | 否（运行时缓存） |
+
+---
+
+## 6. 数据卷位置（Linux/WSL）
 
 ```bash
-docker volume inspect stratum_neo4j_data
+docker volume inspect stratum_postgres_data
+# "Mountpoint": "/var/lib/docker/volumes/stratum_postgres_data/_data"
 ```
 
-### 备份数据
+---
+
+## 7. 故障恢复
+
+### PostgreSQL 无法启动
 
 ```bash
-# 备份 Neo4j 数据
-docker run --rm -v stratum_neo4j_data:/data -v $(pwd):/backup \
-  alpine tar czf /backup/neo4j_backup.tar.gz -C /data .
-
-# 备份 Milvus 数据
-docker run --rm -v stratum_minio_data:/data -v $(pwd):/backup \
-  alpine tar czf /backup/minio_backup.tar.gz -C /data .
-
-# 备份 etcd 数据
-docker run --rm -v stratum_etcd_data:/data -v $(pwd):/backup \
-  alpine tar czf /backup/etcd_backup.tar.gz -C /data .
+docker logs stratum-postgres-1
+docker-compose down
+docker volume rm stratum_postgres_data
+docker-compose up -d postgres
+# 注意：此操作会清除所有业务数据
 ```
 
-### 恢复数据
+### Milvus 连接失败
 
 ```bash
-# 恢复 Neo4j 数据
-docker run --rm -v stratum_neo4j_data:/data -v $(pwd):/backup \
-  alpine tar xzf /backup/neo4j_backup.tar.gz -C /data
-
-# 恢复 Milvus 数据
-docker run --rm -v stratum_minio_data:/data -v $(pwd):/backup \
-  alpine tar xzf /backup/minio_backup.tar.gz -C /data
-
-# 恢复 etcd 数据
-docker run --rm -v stratum_etcd_data:/data -v $(pwd):/backup \
-  alpine tar xzf /backup/etcd_backup.tar.gz -C /data
+# 确认 etcd 和 minio 已就绪
+docker-compose logs etcd
+docker-compose logs minio
+docker-compose restart etcd minio
+docker-compose restart milvus
 ```
 
-### 清理数据
+### NATS 数据损坏
 
 ```bash
-# 删除所有数据卷（谨慎操作！）
-docker-compose down -v
-
-# 删除特定数据卷
-docker volume rm stratum_neo4j_data
+docker-compose down
+docker volume rm stratum_nats_data
+docker-compose up -d nats
+# 注意：未消费消息将丢失
 ```
 
-## 数据卷位置
+---
 
-### Linux/WSL
+## 8. 性能调优
 
-```bash
-# 查看 Docker 数据卷根目录
-docker info | grep "Docker Root Dir"
-
-# 通常位置
-/var/lib/docker/volumes/stratum_*/_data
-```
-
-### macOS
-
-```bash
-# Docker Desktop 使用虚拟机
-# 数据卷位置在虚拟机内
-docker run --rm -it -v /var/lib/docker:/docker alpine ls -la /docker/volumes
-```
-
-### Windows (WSL2)
-
-```bash
-# 在 WSL2 中查看
-wsl -d docker-desktop
-ls -la /var/lib/docker/volumes
-```
-
-## 持久化验证
-
-### 启动服务
-
-```bash
-./start.sh
-```
-
-### 创建测试数据
-
-```bash
-# 创建 Neo4j 节点
-curl -X POST http://localhost:8080/skills \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Test Skill",
-    "description": "Test persistence",
-    "type": "code"
-  }'
-```
-
-### 停止容器
-
-```bash
-./stop.sh
-```
-
-### 重启服务
-
-```bash
-./start.sh
-```
-
-### 验证数据
-
-```bash
-# 数据应该仍然存在
-curl http://localhost:8080/health
-```
-
-## 性能优化
-
-### 1. 调整 Neo4j 内存
-
-```yaml
-environment:
-  NEO4J_dbms_memory_heap_max__size: 4G  # 根据系统调整
-```
-
-### 2. 调整 etcd 自动压缩
+### etcd 自动压缩
 
 ```yaml
 environment:
@@ -257,74 +235,10 @@ environment:
   ETCD_QUOTA_BACKEND_BYTES: 4294967296  # 4GB
 ```
 
-### 3. MinIO 性能调优
+### MinIO 存储策略
 
 ```yaml
 environment:
   MINIO_BROWSER: on
   MINIO_STORAGE_CLASS_STANDARD: EC:2
 ```
-
-## 故障恢复
-
-### NATS 数据损坏
-
-```bash
-# 清理 NATS 数据并重启
-docker-compose down
-docker volume rm stratum_nats_data
-docker-compose up -d nats
-```
-
-### Neo4j 无法启动
-
-```bash
-# 检查日志
-docker logs stratum-neo4j-1
-
-# 清理并重启
-docker-compose down
-docker volume rm stratum_neo4j_data
-docker-compose up -d neo4j
-```
-
-### Milvus 连接失败
-
-```bash
-# 检查 etcd 和 MinIO
-docker-compose logs etcd
-docker-compose logs minio
-
-# 重启依赖
-docker-compose restart etcd minio
-docker-compose restart milvus
-```
-
-## 监控数据卷使用
-
-```bash
-# 查看所有数据卷大小
-docker system df -v
-
-# 查看特定卷大小
-docker run --rm -v stratum_neo4j_data:/data alpine du -sh /data
-docker run --rm -v stratum_minio_data:/data alpine du -sh /data
-docker run --rm -v stratum_etcd_data:/data alpine du -sh /data
-```
-
-## 生产环境建议
-
-1. **定期备份**: 使用 cron 定期备份数据卷
-2. **监控磁盘**: 监控数据卷磁盘使用情况
-3. **日志轮转**: 配置 Neo4j 日志轮转
-4. **etcd 压缩**: 定期执行 etcd 自动压缩
-5. **MinIO 清理**: 定期清理过期对象
-6. **容器更新**: 更新镜像时保留数据卷
-
-## 相关文档
-
-- [Docker Volumes 官方文档](https://docs.docker.com/storage/volumes/)
-- [NATS JetStream 文档](https://docs.nats.io/nats-concepts/jetstream)
-- [Neo4j 数据持久化](https://neo4j.com/docs/operations-manual/current/backup-restore/)
-- [Milvus 存储配置](https://milvus.io/docs/deploy_s3.md)
-- [etcd 备份恢复](https://etcd.io/docs/v3.5/op-guide/recovery/)

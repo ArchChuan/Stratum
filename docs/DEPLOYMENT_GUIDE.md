@@ -8,7 +8,6 @@ stratum项目采用云原生架构，底层依赖服务包括：
 
 - **NATS** - 事件驱动消息队列系统
 - **Milvus** - 向量数据库，用于向量存储与检索
-- **Neo4j** - 图数据库，用于知识图谱存储
 - **ETCD** - 用于Milvus的分布式协调服务
 - **MinIO** - 对象存储服务，供Milvus使用
 - **OpenTelemetry Collector** - 用于收集日志、指标和追踪数据
@@ -17,7 +16,7 @@ stratum项目采用云原生架构，底层依赖服务包括：
 
 无论选择哪种部署方式，都需要满足以下基本要求：
 
-- Go 1.22+
+- Go 1.25.0+
 - Docker
 - Make
 - Git
@@ -95,7 +94,6 @@ stratum项目采用云原生架构，底层依赖服务包括：
 
    ```bash
    kubectl wait --for=condition=ready pod -l app=nats --timeout=120s
-   kubectl wait --for=condition=ready pod -l app=neo4j --timeout=120s
    kubectl wait --for=condition=ready pod -l app=milvus --timeout=120s
    ```
 
@@ -141,7 +139,6 @@ kubectl logs -f deployment/stratum
 
 # 查看依赖服务日志
 kubectl logs -f deployment/nats
-kubectl logs -f deployment/neo4j
 kubectl logs -f deployment/milvus
 ```
 
@@ -240,9 +237,6 @@ NATS_URL=nats://nats:4222
 MILVUS_HOST=milvus
 MILVUS_PORT=19530
 
-# Neo4j 配置
-NEO4J_URI=bolt://neo4j:7687
-NEO4J_USER=neo4j
 NEO4J_PASSWORD=password
 
 # OpenTelemetry 配置
@@ -261,7 +255,6 @@ DEFAULT_LLM_PROVIDER=openai
 
 - NATS: `nats:4222`
 - Milvus: `milvus:19530`
-- Neo4j: `neo4j:7687`
 - OpenTelemetry Collector: `otel-collector:4317`
 
 ## 故障排除
@@ -355,7 +348,6 @@ kubectl set image deployment/stratum stratum=stratum:new-version
 
 ```bash
 kubectl set image deployment/nats nats=nats:latest
-kubectl set image deployment/neo4j neo4j=neo4j:latest
 ```
 
 ### 回滚
