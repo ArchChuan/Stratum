@@ -33,6 +33,9 @@ type AgentConfig struct {
     KnowledgeWorkspaceNames        []string
     KnowledgeWorkspaceDescriptions []string
     MaxContextTokens               int
+    MemoryScope                    string
+    StuckThreshold                 int               // ReAct 卡死后触发 Plan-Execute 的 LLM-only 轮数阈值（PlanningAgent）
+    CheckpointEnabled              bool              // 开启断点持久化（PlanningAgent）
 }
 ```
 
@@ -79,12 +82,15 @@ ReAct 状态机位于 `internal/agent/application/graph/react.go`，`ReActState`
 
 ```go
 type ReActState struct {
-    TenantID       string
-    AvailableTools []port.ToolDefinition
-    SkillToolIndex map[string]string  // "tenant_{id}_{name}" → skillUUID
-    Messages       []port.LLMMessage
-    RAGSearchFn    func(...)
-    RecallMemoryFn func(...)
+    TenantID        string
+    AvailableTools  []port.ToolDefinition
+    SkillToolIndex  map[string]port.SkillToolRef  // toolName → {SkillID, VersionID}
+    Messages        []port.LLMMessage
+    RAGSearchFn     func(...)
+    RecallMemoryFn  func(...)
+    StuckThreshold  int
+    PlanTriggered   bool
+    CheckpointEnabled bool
     // ...
 }
 ```
@@ -95,8 +101,9 @@ type ReActState struct {
 |--------|---------|------|
 | `stratum_search_knowledge` | `AgentConfig.KnowledgeWorkspaceIDs` 非空 | RAG 知识库检索 |
 | `stratum_recall_memory` | `RecallMemoryFn` 已注入 | 长期记忆召回 |
+| `stratum_continue_reasoning` | 始终注入 | 占位工具，触发 PlanningAgent 继续推理循环 |
 
-外部 skill 工具名格式：`tenant_{tenantID}_{skill_name}`，default 分支通过 `SkillToolIndex` 反查 UUID 后路由至 `CapabilityGateway`。
+外部 skill 工具：`SkillToolIndex` 以 `toolName`（来自 `tool_contract.toolName`）为键，default 分支通过 `CapabilityGateway.Route` 以 `CapSkill` 类型路由，携带 `SkillID` 和 `VersionID`。旧版本回退路径使用 `tenant_{tenantID}_{skill_name}` 格式（`buildExtraTools` 无 `SkillToolResolver` 时触发）。
 
 ## CapabilityGateway 路由
 
