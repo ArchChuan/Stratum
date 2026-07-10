@@ -29,7 +29,7 @@ make dev-logs
 ## 🔄 完整 CI/CD 流程
 
 ```
-代码提交 
+代码提交
    ↓
 类型检查 (go vet)
    ↓
@@ -62,8 +62,8 @@ Lint (golangci-lint)
 ### Pod 无法启动
 
 ```bash
-kubectl describe pod POD_NAME -n clawhermes
-kubectl logs POD_NAME -n clawhermes --previous
+kubectl describe pod POD_NAME -n stratum
+kubectl logs POD_NAME -n stratum --previous
 ```
 
 ### 镜像问题
@@ -88,7 +88,7 @@ minikube start --cpus=8 --memory=16384
 make minikube-status
 
 # 查看 Pod
-kubectl get pods -n clawhermes -w
+kubectl get pods -n stratum -w
 
 # 查看资源
 make dev-metrics
@@ -104,7 +104,7 @@ make dev-events
 make local-rollback
 
 # 或指定版本
-bash scripts/deploy/rollback.sh clawhermes VERSION_NUM
+bash scripts/deploy/rollback.sh stratum VERSION_NUM
 ```
 
 ## 📝 完整工作流示例

@@ -71,7 +71,12 @@ registerMemory(r, c, requireActive)
 | GET | `/skills/:id` | GetSkill | — |
 | PUT | `/skills/:id` | UpdateSkill | requireActive |
 | DELETE | `/skills/:id` | DeleteSkill | requireActive |
-| POST | `/skills/:id/run` | RunSkill | requireActive |
+| POST | `/skills/:id/test` | ExecuteSkill（沙箱测试）| requireActive |
+| GET | `/skills/:id/workspace` | GetSkillWorkspace（版本草稿工作区）| — |
+| PATCH | `/skills/:id/draft/capability` | UpdateDraftCapability | requireActive |
+| PATCH | `/skills/:id/draft/contract` | UpdateDraftContract | requireActive |
+| PATCH | `/skills/:id/draft/implementation` | UpdateDraftImplementation | requireActive |
+| POST | `/skills/:id/publish` | PublishSkill（草稿→已发布版本）| requireActive |
 
 ### Agent（JWT + tenant context）
 
@@ -80,9 +85,11 @@ registerMemory(r, c, requireActive)
 | GET | `/agents` | GetAllAgents | — |
 | POST | `/agents` | CreateAgent | requireActive |
 | GET | `/agents/executions` | ListExecutions | — |
+| GET | `/agents/:traceID/tool-traces` | ListExecutionToolTraces | — |
+| GET | `/agents/:traceID/trace-events` | ListExecutionTraceEvents | — |
 | GET | `/agents/:id` | GetAgent | — |
-| POST | `/agents/:id/execute` | ExecuteAgent | requireActive |
-| POST | `/agents/:id/execute/stream` | ExecuteAgentStream（SSE）| requireActive |
+| POST | `/agents/:id/execute` | ExecuteAgent | requireActive + rate limit |
+| POST | `/agents/:id/execute/stream` | ExecuteAgentStream（SSE）| requireActive + rate limit |
 | PUT | `/agents/:id` | UpdateAgent | requireActive |
 | DELETE | `/agents/:id` | DeleteAgent | requireActive |
 | POST | `/agents/:id/conversations` | CreateConversation | — |
@@ -114,13 +121,10 @@ registerMemory(r, c, requireActive)
 | 方法 | 路径 | Handler | 额外权限 |
 |------|------|---------|---------|
 | POST | `/memory` | AddMemory | — |
-| POST | `/memory/sessions` | CreateSession | — |
 | GET | `/memory/:id` | GetMemory | — |
-| POST | `/memory/search` | SearchMemory | — |
-| DELETE | `/memory/:id` | DeleteMemory | requireActive |
-| DELETE | `/memory/session/:session_id` | DeleteSession | requireActive |
-| GET | `/memory/stats` | GetStats | — |
 | GET | `/memory/summary/:session_id` | GetSummary | — |
+| DELETE | `/memory/:id` | DeleteMemory | requireActive |
+| DELETE | `/memory/session/:session_id` | ClearSession | requireActive |
 
 ### MCP（JWT + tenant context，由 `MCPHandler.RegisterRoutes` 动态注册）
 
