@@ -28,5 +28,5 @@
 /internal/knowledge/            @byteBuilderX
 
 # 项目规范文档
-/CLAUDE.md                      @byteBuilderX
+/docs/engineering-standards.md @byteBuilderX
 /docs/agent/                    @byteBuilderX

@@ -852,7 +852,7 @@ linters-settings:
 
 ### 配置文件
 
-- `CLAUDE.md` — 项目规范总入口
+- `docs/engineering-standards.md` — 项目规范总入口
 - `.golangci.yml` — Linter 配置
 - `.go-arch-lint.yml` — 架构规则守护
 

@@ -1,9 +1,0 @@
-[shell_environment_policy]
-inherit = "core"
-
-[shell_environment_policy.set]
-GO_VERSION = "1.25"
-DOCKER_BUILDKIT = "1"
-COMPOSE_DOCKER_CLI_BUILD = "1"
-GOPROXY = "https://goproxy.cn,direct"
-ANTHROPIC_BASE_URL = "http://127.0.0.1:8787"
