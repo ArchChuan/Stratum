@@ -480,7 +480,7 @@ stateDiagram-v2
 
 ---
 
-## 元约束速查（来自 CLAUDE.md）
+## 元约束速查（来自工程规范）
 
 - AI 不做控制逻辑：ReAct 循环判定 / 工具路由 / 重试退避全部硬编码在 `react.go` + `RetryFn`
 - handler ≤15 行/方法：`ExecuteAgentStream` 实测 ~60 行（SSE 模板代码无可压缩，已是最简）
@@ -799,7 +799,7 @@ flowchart LR
 |---|---|---|
 | `MemoryService.ForgetMemory(factID)` | `FactRepo.Update(MarkDeleted)` + Milvus `memory_facts_<tid>` 删 ID（best-effort） | 单条事实 soft-delete；孤立向量由 GC worker 兜底 |
 | `MemoryService.ClearUserMemories` | `FactRepo.DeleteAllByUser` + Milvus `memory_<tid>` `DeleteByFilter("user_id == ..." )` + `MemoryRepo.DeleteAllByUser` + `EntityRepo.DeleteAllByUser` | 同租户内某 user 全量硬删（facts + entries + entities + 向量） |
-| `MemoryService.ClearAgentMemories` | `FactRepo.DeleteAllByAgent` 返回 IDs + Milvus `memory_facts_<tid>.Delete(IDs)` + `MemoryRepo.DeleteAllByAgent` | 单 agent 全量硬删；当前 entities 不按 agent 删（按 CLAUDE.md 历史记录是未完成项） |
+| `MemoryService.ClearAgentMemories` | `FactRepo.DeleteAllByAgent` 返回 IDs + Milvus `memory_facts_<tid>.Delete(IDs)` + `MemoryRepo.DeleteAllByAgent` | 单 agent 全量硬删；当前 entities 不按 agent 删（按工程规范历史记录是未完成项） |
 | DELETE conversation | `PgChatStore.DeleteConversation` | 删 `chat_messages` + `chat_conversations`；不级联清 long-term（依赖上面三个 API 主动调用） |
 
 > 多租户路由：所有删除调用都通过 `execTenant(ctx, tenantID, fn)` 或 `execTenantID` 切到 `tenant_<id>` schema；Milvus collection 名按 tenantID 拼接（短横线 → 下划线）；缺一个就会把删除请求打到 public schema，复现历史 SQLSTATE 42P01 bug。
@@ -1026,7 +1026,7 @@ sequenceDiagram
 - refresh token 走 **HttpOnly + Secure + SameSite cookie**，不暴露给 JS
 - token_store 存 hash 不存原值；轮换时旧值立即作废（refresh token rotation）
 - onboarding token 单次使用：建租户成功后即作废
-- 前端**禁止把 access JWT 写 localStorage**（CLAUDE.md 已有约束）；存内存 Context
+- 前端**禁止把 access JWT 写 localStorage**（工程规范已有约束）；存内存 Context
 
 ### 12.6 关键代码索引
 

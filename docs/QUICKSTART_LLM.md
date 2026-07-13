@@ -241,5 +241,5 @@ A: 支持。实现 `LLMClient` 接口，然后通过 `gateway.RegisterClient()` 
 ## 下一步
 
 - 查看 [LLM 集成指南](../docs/LLM_INTEGRATION.md) 了解更多细节
-- 查看 [CLAUDE.md](../CLAUDE.md) 了解项目架构
+- 查看 [工程规范](engineering-standards.md) 了解项目架构
 - 查看 [README.md](../README.md) 了解完整功能

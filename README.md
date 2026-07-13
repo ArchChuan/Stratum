@@ -170,7 +170,7 @@ stratum/
 └── openspec/                 OpenSpec 规范变更记录
 ```
 
-详细分层职责见 [`CLAUDE.md`](CLAUDE.md) 与 [`docs/agent/project.md`](docs/agent/project.md)。
+详细分层职责见 [`docs/engineering-standards.md`](docs/engineering-standards.md) 与 [`docs/agent/project.md`](docs/agent/project.md)。
 
 ## 开发命令
 
@@ -205,7 +205,7 @@ make help                     # 完整命令清单
 
 ### 架构与约定
 
-- [`CLAUDE.md`](CLAUDE.md) — 项目铁律：DDD 分层、命名、日志、安全
+- [`docs/engineering-standards.md`](docs/engineering-standards.md) — 项目铁律：DDD 分层、命名、日志、安全
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — 贡献流程、PR 规范
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — 本地开发指南
 - [`docs/agent/project.md`](docs/agent/project.md) — 项目事实参考（目录、依赖版本）
@@ -239,7 +239,7 @@ make help                     # 完整命令清单
 
 ## 贡献
 
-欢迎 Issue 与 PR。提交前请阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md) 与 [`CLAUDE.md`](CLAUDE.md)，确保：
+欢迎 Issue 与 PR。提交前请阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md) 与 [`docs/engineering-standards.md`](docs/engineering-standards.md)，确保：
 
 1. 通过 `make be-fmt be-lint be-test`
 2. 前端改动通过 `make fe-lint fe-build`
