@@ -64,8 +64,9 @@ type LLMCapRequest struct {
 }
 
 type SkillCapRequest struct {
-	SkillID string
-	Input   any
+	SkillID   string
+	VersionID string
+	Input     any
 }
 
 type CapabilityResponse struct {
@@ -79,9 +80,25 @@ type CapabilityResponse struct {
 }
 
 type ToolDefinition struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"input_schema"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description"`
+	InputSchema  map[string]any `json:"input_schema"`
+	ProviderType string         `json:"-"`
+	ProviderID   string         `json:"-"`
+	ServerID     string         `json:"-"`
+	CapabilityID string         `json:"-"`
+	NodeID       string         `json:"-"`
+	NodeType     string         `json:"-"`
+	Metadata     map[string]any `json:"-"`
+}
+
+type SkillToolRef struct {
+	SkillID   string
+	VersionID string
+}
+
+type SkillToolResolver interface {
+	ResolveTools(ctx context.Context, tenantID string, skillIDs []string) ([]ToolDefinition, map[string]SkillToolRef, error)
 }
 
 type ToolCall struct {

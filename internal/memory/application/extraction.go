@@ -61,8 +61,6 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 		if err != nil {
 			return fmt.Errorf("find supersede candidates: %w", err)
 		}
-		// TODO: LLM supersede judgment (Task 3.5 - deferred)
-		_ = candidates
 
 		for _, entityName := range extractedFact.Entities {
 			_, err := s.normalizeEntity(ctx, req.TenantID, req.UserID, req.AgentID, entityName)
@@ -92,6 +90,29 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 				zap.Error(err),
 			)
 			return fmt.Errorf("insert fact: %w", err)
+		}
+
+		// Inline supersede: high-similarity → direct; mid-range → LLM (max 3/fact).
+		llmCallsThisFact := 0
+		for _, candidate := range candidates {
+			if candidate.Fact.ID == fact.ID {
+				continue
+			}
+			if candidate.Similarity >= constants.MemoryInlineSupersedeFastThresh {
+				if merr := candidate.Fact.MarkSuperseded(fact.ID); merr == nil {
+					_ = s.factRepo.Update(ctx, req.TenantID, candidate.Fact)
+				}
+				continue
+			}
+			if s.judge != nil && llmCallsThisFact < constants.MemoryInlineSupersedeLLMPerFact {
+				judgment, jerr := s.judge.JudgeSupersede(ctx, candidate.Fact.Content, fact.Content)
+				llmCallsThisFact++
+				if jerr == nil && judgment.Supersedes {
+					if merr := candidate.Fact.MarkSuperseded(fact.ID); merr == nil {
+						_ = s.factRepo.Update(ctx, req.TenantID, candidate.Fact)
+					}
+				}
+			}
 		}
 
 		embedder := s.embedClient

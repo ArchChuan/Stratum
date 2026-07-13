@@ -20,10 +20,11 @@ import (
 
 // Skill groups the skill execution stack.
 type Skill struct {
-	CodeExecutor *code.CodeExecutor
-	Gateway      *skillgateway.DefaultGateway
-	SkillAdapter *capgateway.SkillAdapter
-	Service      *skillapp.SkillService
+	CodeExecutor   *code.CodeExecutor
+	Gateway        *skillgateway.DefaultGateway
+	SkillAdapter   *capgateway.SkillAdapter
+	Service        *skillapp.SkillService
+	VersionService *skillapp.VersionService
 }
 
 // wiringSkillFactory implements skilldomainport.SkillFactory in the composition root.
@@ -56,6 +57,50 @@ func (f *wiringSkillFactory) Build(id string, in skilldomainport.SkillInput) (sk
 	}
 }
 
+// skillGatewayAdapter bridges *skillgateway.DefaultGateway to the primitive
+// interface that capgateway.SkillAdapter requires, keeping
+// agent/infrastructure/capability free of skill/infrastructure imports.
+type skillGatewayAdapter struct {
+	gw *skillgateway.DefaultGateway
+}
+
+func (a *skillGatewayAdapter) Execute(ctx context.Context, traceID, skillID, versionID string, input any) (any, error) {
+	resp, err := a.gw.Execute(ctx, skillgateway.SkillRequest{
+		TraceID:   traceID,
+		SkillID:   skillID,
+		VersionID: versionID,
+		Input:     input,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Output, nil
+}
+
+type skillRunnerAdapter struct {
+	gw *skillgateway.DefaultGateway
+}
+
+func (a *skillRunnerAdapter) RunSkill(ctx context.Context, skillID string, input any, traceID string) (skillapp.SkillTestResult, error) {
+	resp, err := a.gw.Execute(ctx, skillgateway.SkillRequest{
+		TraceID: traceID,
+		SkillID: skillID,
+		Input:   input,
+		Metadata: map[string]string{
+			"caller": "skill_test",
+		},
+	})
+	if err != nil {
+		return skillapp.SkillTestResult{}, err
+	}
+	return skillapp.SkillTestResult{
+		TraceID:  resp.TraceID,
+		SkillID:  resp.SkillID,
+		Output:   resp.Output,
+		Duration: resp.Duration,
+	}, nil
+}
+
 func (c *Container) buildSkill(_ context.Context) error {
 	codeExec := code.NewCodeExecutor(code.DefaultCodeExecutorConfig())
 	analyzer := skillinfra.NewStaticAnalyzer()
@@ -71,19 +116,23 @@ func (c *Container) buildSkill(_ context.Context) error {
 		}
 	}
 
-	skillAdapter := capgateway.NewSkillAdapter(gw, c.Logger)
+	skillAdapter := capgateway.NewSkillAdapter(&skillGatewayAdapter{gw: gw}, c.Logger)
 
 	var svc *skillapp.SkillService
+	var versionSvc *skillapp.VersionService
 	if db != nil {
 		repo := skillpersist.NewPgSkillRepo(db)
-		svc = skillapp.NewSkillService(repo, factory, c.Logger)
+		svc = skillapp.NewSkillService(repo, factory, c.Logger, &skillRunnerAdapter{gw: gw})
+		versionRepo := skillpersist.NewPgSkillVersionRepo(db)
+		versionSvc = skillapp.NewVersionService(versionRepo, c.Logger)
 	}
 
 	c.Skill = &Skill{
-		CodeExecutor: codeExec,
-		Gateway:      gw,
-		SkillAdapter: skillAdapter,
-		Service:      svc,
+		CodeExecutor:   codeExec,
+		Gateway:        gw,
+		SkillAdapter:   skillAdapter,
+		Service:        svc,
+		VersionService: versionSvc,
 	}
 	return nil
 }

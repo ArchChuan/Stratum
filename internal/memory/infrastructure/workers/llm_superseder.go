@@ -18,7 +18,18 @@ func NewLLMSuperseder(client pipeline.LLMClient) *LLMSuperseder {
 }
 
 func (s *LLMSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact string) (*memport.SupersedeJudgment, error) {
-	prompt := fmt.Sprintf("Does this new fact supersede the old?\nOld: %s\nNew: %s\nReturn JSON only: {\"supersedes\":true,\"reason\":\"...\"}", oldFact, newFact)
+	prompt := fmt.Sprintf(`判断新事实是否应该取代旧事实。
+
+旧事实：%s
+新事实：%s
+
+判断标准：
+- 如果新事实是对旧事实的更新、纠正或推翻，则应取代（supersedes: true）
+- 如果两者描述不同方面或可以并存，则不取代（supersedes: false）
+- 如果新事实只是旧事实的子集或更模糊的表达，则不取代
+
+只输出 JSON，不加任何说明：
+{"supersedes": true/false, "reason": "简短说明"}`, oldFact, newFact)
 	resp, err := s.client.Complete(ctx, &llmgateway.CompletionRequest{
 		Messages:  []llmgateway.Message{{Role: "user", Content: prompt}},
 		MaxTokens: 256,

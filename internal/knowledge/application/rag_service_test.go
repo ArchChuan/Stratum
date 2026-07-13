@@ -122,6 +122,41 @@ func TestRAGQueryKeywordRequiresWorkspaceIDWhenNameCannotBeResolved(t *testing.T
 	}
 }
 
+func TestNewRAGSearchFnResolvesWorkspaceNameToID(t *testing.T) {
+	logger := zap.NewNop()
+	service := NewRAGService(nil, nil, logger)
+	chunks := &recordingChunkRepo{
+		chunks: []domain.Chunk{{ID: "c1", DocID: "d1", Text: "关于学习的段落", Index: 0}},
+	}
+	service.SetChunkRepo(chunks)
+	service.SetWorkspaceRepo(&recordingWorkspaceRepo{
+		workspace: &domain.Workspace{
+			ID:   "019047ac-0000-7000-9000-000000000099",
+			Name: "个人知识库",
+			Config: domain.WorkspaceConfig{
+				EmbeddingModel: "text-embedding-v3",
+				QueryMode:      "keyword",
+				TopK:           7,
+			},
+		},
+	})
+
+	fn := NewRAGSearchFn(service, "tenant-1")
+	content, err := fn(context.Background(), []string{"个人知识库"}, "学习", 3)
+	if err != nil {
+		t.Fatalf("expected search to succeed, got %v", err)
+	}
+	if !strings.Contains(content, "关于学习的段落") {
+		t.Fatalf("expected content to include chunk text, got %q", content)
+	}
+	if chunks.workspaceID != "019047ac-0000-7000-9000-000000000099" {
+		t.Fatalf("expected keyword search to receive resolved UUID, got %q", chunks.workspaceID)
+	}
+	if chunks.topK != 7 {
+		t.Fatalf("expected topK from workspace config (7), got %d", chunks.topK)
+	}
+}
+
 type recordingChunkRepo struct {
 	workspaceID string
 	topK        int

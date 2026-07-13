@@ -39,6 +39,29 @@ func TestAtomicExecute_TraceIDPropagation(t *testing.T) {
 	}
 }
 
+func TestAtomicExecute_UsesVersionProviderWhenVersionIDPresent(t *testing.T) {
+	p := newMockProvider("skill:test", "db", "version-output", nil)
+	ae := newTestEngine(p)
+
+	resp, err := ae.execute(context.Background(), SkillRequest{
+		SkillID:   "skill:test",
+		VersionID: "version-1",
+		Input:     map[string]any{"prompt": "hello"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Output != "version-output" {
+		t.Fatalf("expected version output, got %#v", resp.Output)
+	}
+	if p.versionCallCnt != 1 {
+		t.Fatalf("expected ExecuteVersion to be called once, got %d", p.versionCallCnt)
+	}
+	if p.versionID != "version-1" {
+		t.Fatalf("expected version-1, got %q", p.versionID)
+	}
+}
+
 func TestAtomicExecute_SkillNotFound(t *testing.T) {
 	p := newMockProvider("skill:test", "llm", nil, nil)
 	ae := newTestEngine(p)

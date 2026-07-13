@@ -109,6 +109,20 @@ func (b *MessageBuffer) flush(ctx context.Context, key, tenantID, userID, agentI
 		return nil
 	}
 
+	// Quality gate: skip extraction if non-tool content is below minimum threshold.
+	// Prevents low-value flushes where messages are all tool outputs or short acknowledgements.
+	contentRunes := 0
+	for _, m := range msgs {
+		if m.Role != "tool" {
+			contentRunes += len([]rune(m.Content))
+		}
+	}
+	if contentRunes < constants.MemoryBufferMinContentRunes {
+		metaKey := "memory:buffer:meta:" + key[len("memory:buffer:"):]
+		_ = b.store.Del(ctx, key, metaKey)
+		return nil
+	}
+
 	content, err := json.Marshal(msgs)
 	if err != nil {
 		return fmt.Errorf("marshal messages: %w", err)

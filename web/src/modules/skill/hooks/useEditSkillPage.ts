@@ -3,7 +3,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { skillApi } from '../api/skill.api';
-import type { SkillFormValues, SkillType } from '../model/skill';
+import {
+  buildCreateSkillPayload,
+  parseSkillTestInput,
+  type SkillFormValues,
+  type SkillTestResult,
+  type SkillType,
+} from '../model/skill';
 
 import { extractErrorMessage } from '@/shared/lib';
 
@@ -17,6 +23,9 @@ export const useEditSkillPage = () => {
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [skillType, setSkillType] = useState<SkillType | null>(null);
+  const [testInput, setTestInput] = useState('');
+  const [testLoading, setTestLoading] = useState(false);
+  const [testResult, setTestResult] = useState<SkillTestResult | null>(null);
   const navigate = useNavigate();
   const language = Form.useWatch('language', form);
 
@@ -84,15 +93,12 @@ export const useEditSkillPage = () => {
 
   const onFinish = useCallback(
     async (values: SkillFormValues) => {
-      const payload: SkillFormValues = { ...values };
-      if (payload.type === 'http' && payload.headersJson) {
-        try {
-          payload.headers = JSON.parse(payload.headersJson);
-        } catch {
-          message.error('请求头 JSON 格式有误');
-          return;
-        }
-        delete payload.headersJson;
+      let payload: SkillFormValues;
+      try {
+        payload = buildCreateSkillPayload(values);
+      } catch {
+        message.error('请求头 JSON 格式有误');
+        return;
       }
       setLoading(true);
       try {
@@ -108,6 +114,20 @@ export const useEditSkillPage = () => {
     [id, navigate],
   );
 
+  const onRunTest = useCallback(async () => {
+    setTestLoading(true);
+    setTestResult(null);
+    try {
+      const result = await skillApi.test(id, parseSkillTestInput(testInput));
+      setTestResult(result);
+      message.success('测试运行完成');
+    } catch (err) {
+      message.error(extractErrorMessage(err) || '测试运行失败');
+    } finally {
+      setTestLoading(false);
+    }
+  }, [id, testInput]);
+
   return {
     form,
     loading,
@@ -116,7 +136,12 @@ export const useEditSkillPage = () => {
     modelsLoading,
     skillType,
     language,
+    testInput,
+    testLoading,
+    testResult,
     navigate,
     onFinish,
+    setTestInput,
+    onRunTest,
   };
 };

@@ -50,7 +50,7 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		mem.Service.SetMemoryRepo(memRepo)
 
 		if c.Platform != nil && c.Platform.GatewayCache != nil {
-			llmRes := newTenantCapabilityResolver(db, c.Platform.AESKey, c.Platform.GatewayCache, nil, c.Logger).(*tenantCapabilityResolver)
+			llmRes := newTenantCapabilityResolver(db, c.Platform.AESKey, c.Platform.GatewayCache, c.LLMGateway.Gateway, nil, c.Logger).(*tenantCapabilityResolver)
 			mem.Service.SetLLMExtractResolver(func(ctx context.Context, tenantID string) memport.LLMExtractor {
 				llm := llmRes.ResolveLLM(ctx, tenantID)
 				if llm == nil {
@@ -142,7 +142,7 @@ func (c *Container) buildMemory(ctx context.Context) error {
 			p.SetEmbedResolver(c.Knowledge.EmbedResolver)
 		}
 		if c.Platform != nil && c.Platform.GatewayCache != nil {
-			llmRes := newTenantCapabilityResolver(db, c.Platform.AESKey, c.Platform.GatewayCache, nil, c.Logger).(*tenantCapabilityResolver)
+			llmRes := newTenantCapabilityResolver(db, c.Platform.AESKey, c.Platform.GatewayCache, c.LLMGateway.Gateway, nil, c.Logger).(*tenantCapabilityResolver)
 			p.SetLLMResolver(func(ctx context.Context, tenantID string) pipeline.LLMClient {
 				gw := llmRes.ResolveLLM(ctx, tenantID)
 				if gw == nil {
@@ -201,7 +201,7 @@ func BuildMemoryWorkers(c *Container) []interface {
 
 	var llmRes *tenantCapabilityResolver
 	if c.Platform != nil && c.Platform.GatewayCache != nil {
-		llmRes = newTenantCapabilityResolver(db, c.Platform.AESKey, c.Platform.GatewayCache, nil, c.Logger).(*tenantCapabilityResolver)
+		llmRes = newTenantCapabilityResolver(db, c.Platform.AESKey, c.Platform.GatewayCache, c.LLMGateway.Gateway, nil, c.Logger).(*tenantCapabilityResolver)
 	}
 
 	watcher := memworkers.NewTenantWatcher(db, func(tid string) memworkers.WorkerSet {

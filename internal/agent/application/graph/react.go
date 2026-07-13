@@ -11,6 +11,7 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
@@ -28,20 +29,32 @@ type ReActState struct {
 	LLMAPIKeys     map[string]string
 	Model          string
 	AvailableTools []port.ToolDefinition
-	// SkillToolIndex maps tenant-scoped tool names ("tenant_{id}_{name}") to their skill UUIDs.
-	SkillToolIndex map[string]string
-	Messages       []port.LLMMessage
-	AllToolCalls   []port.ToolCall
-	Output         string
-	Steps          int
-	TotalTokens    int
-	TotalCostUSD   float64
-	OnToken        func(string) // if non-nil, stream tokens from the final LLM response
-	RAGSearchFn    func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
-	RecallMemoryFn func(ctx context.Context, input map[string]any) (string, error)
+	// SkillToolIndex maps exposed tool names to skill/version refs.
+	SkillToolIndex   map[string]port.SkillToolRef
+	Messages         []port.LLMMessage
+	AllToolCalls     []port.ToolCall
+	ToolObservations []domain.ToolObservation
+	TraceEvents      []domain.AgentTraceEvent
+	Output           string
+	Steps            int
+	TotalTokens      int
+	TotalCostUSD     float64
+	OnToken          func(string) // if non-nil, stream tokens from the final LLM response
+	RAGSearchFn      func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	RecallMemoryFn   func(ctx context.Context, input map[string]any) (string, error)
 	// MaxLLMSteps caps LLM-node invocations; on the last allowed call tools are
 	// stripped and the model is asked to produce a final answer from collected context.
 	MaxLLMSteps int
+
+	// Lazy planning — non-zero StuckThreshold enables Reflect→Plan→Execute path.
+	StuckThreshold    int // 0 = disabled
+	PlanTriggered     bool
+	ReflectionSummary string
+	Plan              []domain.PlanStep
+	PlanTemplateID    string
+	CurrentStepIndex  int
+	StepResults       []domain.StepResult
+	CheckpointEnabled bool
 }
 
 // TokenRecorder 是 TokenLedger 的最小接口，供 graph 包使用，避免 import application 包循环。
@@ -99,6 +112,28 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 			),
 		)
 		defer llmSpan.End()
+		s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
+			TraceID:         s.TraceID,
+			ConversationID:  s.ConversationID,
+			RunType:         domain.RunTypeAgent,
+			ObservationType: domain.ObservationTypeLLM,
+			EventType:       domain.TraceEventLLMRequest,
+			StepIndex:       s.Steps + 1,
+			SpanName:        "react.llm",
+			Status:          domain.ToolTraceStatusSuccess,
+			ProviderType:    domain.ProviderTypeLLM,
+			ProviderID:      s.Model,
+			NodeID:          nodeLLM,
+			NodeType:        domain.ObservationTypeLLM,
+			Input: map[string]any{
+				"model":    s.Model,
+				"messages": messages,
+				"tools":    tools,
+			},
+			Model:     s.Model,
+			StartedAt: start,
+			EndedAt:   start,
+		})
 
 		// Always stream: tool-decision turns typically produce empty content so no tokens
 		// reach the client; final-answer turns stream the output to the frontend as required.
@@ -179,10 +214,58 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 				Role:    "assistant",
 				Content: resp.Content,
 			})
+			s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
+				TraceID:          s.TraceID,
+				ConversationID:   s.ConversationID,
+				RunType:          domain.RunTypeAgent,
+				ObservationType:  domain.ObservationTypeLLM,
+				EventType:        domain.TraceEventLLMResponse,
+				StepIndex:        s.Steps,
+				SpanName:         "react.llm",
+				Status:           domain.ToolTraceStatusSuccess,
+				Output:           map[string]any{"content": resp.Content},
+				Summary:          truncateRunes(resp.Content, 500),
+				Model:            s.Model,
+				ProviderType:     domain.ProviderTypeLLM,
+				ProviderID:       s.Model,
+				NodeID:           nodeLLM,
+				NodeType:         domain.ObservationTypeLLM,
+				PromptTokens:     resp.Usage.Prompt,
+				CompletionTokens: resp.Usage.Completion,
+				TotalTokens:      resp.Usage.Total,
+				CostUSD:          cost,
+				LatencyMs:        latencyMs,
+				StartedAt:        start,
+				EndedAt:          start.Add(time.Duration(latencyMs) * time.Millisecond),
+			})
 		} else {
 			s.Messages = append(s.Messages, port.LLMMessage{
 				Role:      "assistant",
 				ToolCalls: resp.ToolCalls,
+			})
+			s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
+				TraceID:          s.TraceID,
+				ConversationID:   s.ConversationID,
+				RunType:          domain.RunTypeAgent,
+				ObservationType:  domain.ObservationTypeLLM,
+				EventType:        domain.TraceEventLLMResponse,
+				StepIndex:        s.Steps,
+				SpanName:         "react.llm",
+				Status:           domain.ToolTraceStatusSuccess,
+				Output:           map[string]any{"tool_calls": resp.ToolCalls},
+				Summary:          fmt.Sprintf("model requested %d tool call(s)", len(resp.ToolCalls)),
+				Model:            s.Model,
+				ProviderType:     domain.ProviderTypeLLM,
+				ProviderID:       s.Model,
+				NodeID:           nodeLLM,
+				NodeType:         domain.ObservationTypeLLM,
+				PromptTokens:     resp.Usage.Prompt,
+				CompletionTokens: resp.Usage.Completion,
+				TotalTokens:      resp.Usage.Total,
+				CostUSD:          cost,
+				LatencyMs:        latencyMs,
+				StartedAt:        start,
+				EndedAt:          start.Add(time.Duration(latencyMs) * time.Millisecond),
 			})
 		}
 		return s, nil
@@ -205,6 +288,27 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 				),
 			)
 			var content string
+			provider := classifyToolProvider(tc.Name, s.AvailableTools, s.SkillToolIndex)
+			status := domain.ToolTraceStatusSuccess
+			errMsg := ""
+			s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
+				TraceID:         s.TraceID,
+				ConversationID:  s.ConversationID,
+				RunType:         domain.RunTypeAgent,
+				ObservationType: domain.ObservationTypeTool,
+				EventType:       domain.TraceEventToolStarted,
+				StepIndex:       s.Steps,
+				SpanName:        "react.tool",
+				Status:          status,
+				ProviderType:    provider.ProviderType,
+				ProviderID:      provider.ProviderID,
+				NodeID:          provider.NodeID,
+				NodeType:        provider.NodeType,
+				Input:           map[string]any{"tool_call_id": tc.ID, "tool_name": tc.Name, "arguments": tc.Arguments},
+				Summary:         fmt.Sprintf("calling tool %s", tc.Name),
+				StartedAt:       toolStart,
+				EndedAt:         toolStart,
+			})
 			switch tc.Name {
 			case "stratum_continue_reasoning":
 				content = "Continuing reasoning..."
@@ -234,6 +338,8 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					ragCancel()
 					if ragErr != nil {
 						content = fmt.Sprintf("error: %v", ragErr)
+						status = domain.ToolTraceStatusError
+						errMsg = ragErr.Error()
 					}
 				}
 				toolLatencyMs := time.Since(toolStart).Milliseconds()
@@ -254,6 +360,8 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					recallCancel()
 					if recallErr != nil {
 						content = fmt.Sprintf("error: %v", recallErr)
+						status = domain.ToolTraceStatusError
+						errMsg = recallErr.Error()
 					}
 				}
 				toolLatencyMs := time.Since(toolStart).Milliseconds()
@@ -265,9 +373,11 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					zap.Int64("latency_ms", toolLatencyMs),
 				)
 			default:
-				skillID, ok := s.SkillToolIndex[tc.Name]
-				if !ok {
+				skillRef, ok := s.SkillToolIndex[tc.Name]
+				if !ok && provider.ProviderType != domain.ProviderTypeMCP {
 					content = fmt.Sprintf("error: unknown tool %q", tc.Name)
+					status = domain.ToolTraceStatusError
+					errMsg = fmt.Sprintf("unknown tool %q", tc.Name)
 					logger.Error("react.tool.unknown",
 						zap.String("trace_id", s.TraceID),
 						zap.String("tool_name", tc.Name),
@@ -275,16 +385,27 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					)
 					break
 				}
+				skillID := skillRef.SkillID
+				versionID := skillRef.VersionID
+				if provider.ProviderType == domain.ProviderTypeMCP {
+					skillID = tc.Name
+				}
 				toolResp, err := capGW.Route(ctx, port.CapabilityRequest{
 					TraceID:  s.TraceID,
 					TenantID: s.TenantID,
 					Type:     port.CapSkill,
 					Timeout:  30 * time.Second,
-					Skill:    &port.SkillCapRequest{SkillID: skillID, Input: tc.Arguments},
+					Skill: &port.SkillCapRequest{
+						SkillID:   skillID,
+						VersionID: versionID,
+						Input:     tc.Arguments,
+					},
 				})
 				toolLatencyMs := time.Since(toolStart).Milliseconds()
 				switch {
 				case err != nil:
+					status = domain.ToolTraceStatusError
+					errMsg = err.Error()
 					logger.Error("react.tool",
 						zap.String("trace_id", s.TraceID),
 						zap.String("tenant_id", s.TenantID),
@@ -314,6 +435,59 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					content = toolResp.Content
 				}
 			}
+			toolLatencyMs := time.Since(toolStart).Milliseconds()
+			if errMsg != "" {
+				toolSpan.RecordError(fmt.Errorf("%s", errMsg))
+			}
+			summary := summarizeToolObservation(tc.Name, content, status, errMsg)
+			s.ToolObservations = append(s.ToolObservations, domain.ToolObservation{
+				TraceID:        s.TraceID,
+				ConversationID: s.ConversationID,
+				StepIndex:      s.Steps,
+				ToolCallID:     tc.ID,
+				ToolName:       tc.Name,
+				ToolType:       provider.ToolType,
+				ProviderType:   provider.ProviderType,
+				ProviderID:     provider.ProviderID,
+				ServerID:       provider.ServerID,
+				CapabilityID:   provider.CapabilityID,
+				Arguments:      tc.Arguments,
+				RawResult:      content,
+				RawText:        content,
+				Summary:        summary,
+				Status:         status,
+				ErrorMessage:   errMsg,
+				LatencyMs:      toolLatencyMs,
+				Metadata:       provider.Metadata,
+				StartedAt:      toolStart,
+				EndedAt:        toolStart.Add(time.Duration(toolLatencyMs) * time.Millisecond),
+			})
+			eventType := domain.TraceEventToolFinished
+			if status == domain.ToolTraceStatusError {
+				eventType = domain.TraceEventToolFailed
+			}
+			s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
+				TraceID:         s.TraceID,
+				ConversationID:  s.ConversationID,
+				RunType:         domain.RunTypeAgent,
+				ObservationType: domain.ObservationTypeTool,
+				EventType:       eventType,
+				StepIndex:       s.Steps,
+				SpanName:        "react.tool",
+				Status:          status,
+				ProviderType:    provider.ProviderType,
+				ProviderID:      provider.ProviderID,
+				NodeID:          provider.NodeID,
+				NodeType:        provider.NodeType,
+				Metadata:        provider.Metadata,
+				Output:          map[string]any{"tool_call_id": tc.ID, "tool_name": tc.Name, "summary": summary},
+				Summary:         summary,
+				ErrorMessage:    errMsg,
+				LatencyMs:       toolLatencyMs,
+				ToolTraceID:     tc.ID,
+				StartedAt:       toolStart,
+				EndedAt:         toolStart.Add(time.Duration(toolLatencyMs) * time.Millisecond),
+			})
 			if logger.Core().Enabled(zap.DebugLevel) {
 				preview := content
 				if len(preview) > 200 {
@@ -336,4 +510,88 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 		}
 		return s, nil
 	}
+}
+
+type toolProviderRef struct {
+	ToolType     string
+	ProviderType string
+	ProviderID   string
+	ServerID     string
+	CapabilityID string
+	NodeID       string
+	NodeType     string
+	Metadata     map[string]any
+}
+
+func classifyToolProvider(name string, tools []port.ToolDefinition, skillIndex map[string]port.SkillToolRef) toolProviderRef {
+	switch name {
+	case "stratum_continue_reasoning":
+		return toolProviderRef{ToolType: domain.ToolTypeReasoning, ProviderType: domain.ProviderTypeBuiltin, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
+	case "stratum_search_knowledge":
+		return toolProviderRef{ToolType: domain.ToolTypeBuiltinRAG, ProviderType: domain.ProviderTypeBuiltin, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
+	case "stratum_recall_memory":
+		return toolProviderRef{ToolType: domain.ToolTypeBuiltinMemory, ProviderType: domain.ProviderTypeBuiltin, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
+	default:
+		for _, td := range tools {
+			if td.Name != name {
+				continue
+			}
+			ref := toolProviderRef{
+				ToolType:     td.ProviderType,
+				ProviderType: td.ProviderType,
+				ProviderID:   td.ProviderID,
+				ServerID:     td.ServerID,
+				CapabilityID: td.CapabilityID,
+				NodeID:       td.NodeID,
+				NodeType:     td.NodeType,
+				Metadata:     td.Metadata,
+			}
+			if ref.ToolType == "" {
+				ref.ToolType = domain.ToolTypeInternal
+			}
+			if ref.ProviderType == "" {
+				ref.ProviderType = domain.ProviderTypeInternal
+			}
+			if ref.ProviderID == "" {
+				ref.ProviderID = name
+			}
+			if ref.CapabilityID == "" {
+				ref.CapabilityID = name
+			}
+			if ref.NodeID == "" {
+				ref.NodeID = name
+			}
+			if ref.NodeType == "" {
+				ref.NodeType = ref.ProviderType
+			}
+			return ref
+		}
+		if ref, ok := skillIndex[name]; ok {
+			return toolProviderRef{
+				ToolType:     domain.ToolTypeSkill,
+				ProviderType: domain.ProviderTypeSkill,
+				ProviderID:   ref.SkillID,
+				CapabilityID: ref.SkillID,
+				NodeID:       name,
+				NodeType:     domain.ObservationTypeSkill,
+				Metadata:     map[string]any{"version_id": ref.VersionID},
+			}
+		}
+		return toolProviderRef{ToolType: domain.ToolTypeInternal, ProviderType: domain.ProviderTypeInternal, ProviderID: name, CapabilityID: name, NodeID: name, NodeType: domain.ToolTypeInternal}
+	}
+}
+
+func summarizeToolObservation(name, content, status, errMsg string) string {
+	if status == domain.ToolTraceStatusError {
+		return truncateRunes(fmt.Sprintf("%s failed: %s", name, errMsg), 800)
+	}
+	return truncateRunes(fmt.Sprintf("%s returned: %s", name, content), 800)
+}
+
+func truncateRunes(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "...[truncated]"
 }

@@ -8,11 +8,13 @@ import (
 
 // mockProvider 用于测试的 mock SkillProvider
 type mockProvider struct {
-	skillID   string
-	skillType string
-	output    any
-	err       error
-	callCount int
+	skillID        string
+	skillType      string
+	output         any
+	err            error
+	callCount      int
+	versionID      string
+	versionCallCnt int
 }
 
 func newMockProvider(id, typ string, output any, err error) *mockProvider {
@@ -24,6 +26,12 @@ func (m *mockProvider) Has(id string) bool { return id == m.skillID }
 func (m *mockProvider) SkillType() string  { return m.skillType }
 func (m *mockProvider) Execute(_ context.Context, _ string, _ any) (any, error) {
 	m.callCount++
+	return m.output, m.err
+}
+
+func (m *mockProvider) ExecuteVersion(_ context.Context, versionID string, _ any) (any, error) {
+	m.versionID = versionID
+	m.versionCallCnt++
 	return m.output, m.err
 }
 

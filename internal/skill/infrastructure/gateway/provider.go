@@ -19,6 +19,10 @@ type SkillProvider interface {
 	SkillType() string
 }
 
+type VersionedSkillProvider interface {
+	ExecuteVersion(ctx context.Context, versionID string, input any) (any, error)
+}
+
 // ProviderRegistry 管理所有 SkillProvider，按 skill_id 路由
 type ProviderRegistry struct {
 	providers    map[string]SkillProvider // skill_id -> provider (缓存索引)

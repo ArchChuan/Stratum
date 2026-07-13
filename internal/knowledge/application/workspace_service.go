@@ -173,6 +173,14 @@ func (s *WorkspaceService) GetWorkspaceStats(ctx context.Context, tenantID, name
 		s.logger.Warn("failed to get milvus stats", zap.String("workspace", name), zap.Error(statsErr))
 		stats = map[string]any{"error": statsErr.Error()}
 	}
+	if s.docRepo != nil {
+		docCount, docErr := s.docRepo.CountByWorkspace(ctx, tenantID, ws.ID)
+		if docErr != nil {
+			s.logger.Warn("failed to get doc count", zap.String("workspace", name), zap.Error(docErr))
+		} else {
+			stats["doc_count"] = docCount
+		}
+	}
 	return &WorkspaceStatsResult{
 		Name:        name,
 		Description: ws.Description,

@@ -18,3 +18,12 @@ type (
 // ExecutionStore is an alias for port.ExecutionRepo. Canonical definition
 // lives in internal/agent/domain/port/repository.go.
 type ExecutionStore = port.ExecutionRepo
+
+// ToolTraceStore persists per-tool raw IO and summaries.
+type ToolTraceStore = port.ToolTraceRepo
+
+// TraceEventStore persists append-only agent trajectory events.
+type TraceEventStore = port.TraceEventRepo
+
+// CheckpointStore persists resumable execution checkpoints.
+type CheckpointStore = port.CheckpointRepo

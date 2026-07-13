@@ -51,10 +51,11 @@ React 18 · Vite 4 · Ant Design 5.2 · React Router 6 · Axios · Moment.js
 ### 多租户 DDL 放置规则（踩坑总结）
 
 - 编号迁移（`internal/migration/sql/NNN_*.sql`）只操作 public schema，**禁止**引用 tenant-only 表（`chat_conversations`、`memory_entries`、`entities`）
-- Tenant-only DDL 必须放 `pkg/tenantdb/tenant_schema.sql`，由 `ProvisionAllTenantSchemas` 幂等应用
+- Tenant-only DDL 必须放 `pkg/storage/postgres/tenant_schema.sql`，由 `ProvisionAllTenantSchemas` 幂等应用
 - 新增 tenant DDL 后同步检查 `internal/migration/sql/tenant_schema.sql` baseline 是否需更新
 - INSERT 必须与目标 DDL 逐列核对，尤其 NOT NULL 无 DEFAULT 列
 - `CREATE TABLE` 新增列后必须紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` backfill，否则已有租户旧表缺列（反例：entities.user_id 漏 backfill）
+- 所有数据 schema 变更必须兼容历史租户数据：新增表/索引用 `IF NOT EXISTS`，新增列用 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`；新增 `NOT NULL` 列必须带安全 `DEFAULT` 或先 nullable → 回填 → 加约束；任何依赖新列的 INDEX / CONSTRAINT / 查询必须排在 backfill 之后，并用 schema 顺序测试覆盖（反例：先建 `idx_agent_exec_trace` 再补 `trace_id` 导致旧租户启动失败）
 - dirty 状态修复：`force <version>` 标为 clean → `Up()` 从下一版本继续；勿手改 `schema_migrations`
 - 所有操作 tenant-scoped 表的 repository struct，每个方法必须通过 `execTenant(ctx, tenantID, fn)` 执行，禁止直接调 `r.pool.Exec/Query`（反例：EntityRepo 全量绕过 → SQLSTATE 42P01 relation does not exist）
 - port 接口中操作 tenant-scoped 表的方法签名必须含 `tenantID string`；缺失则调用层无法传入，tenant 路由永远无法实现
@@ -109,6 +110,10 @@ make be-lint                             # golangci-lint
 go vet && go test -short ./...           # 每次改动后快速验证
 make fe-lint && make fe-build            # 前端 PR 前
 ```
+
+### 端到端开发验证
+
+涉及任何功能开发、Bug 修复、前后端联调、数据库链路、Agent/Skill/MCP/Memory/Knowledge/IAM 能力改动时，必须使用项目 skill `stratum-e2e-development`。完成标准不是代码写完或单测通过，而是根据需求目标完成真实 API、前端操作、后端服务、测试数据库链路的端到端验证；验证不符合目标时继续定位和修改，直到闭环。不得打印 token、密钥或原始 API key；临时脚本和自启动进程必须在完成前清理或明确说明。
 
 ### 常量规范
 
@@ -166,6 +171,7 @@ make fe-lint && make fe-build            # 前端 PR 前
 | 冲突择一 | 选一种方案，删掉另一种，禁止混合妥协 |
 | 检查点 | 长操作每步记录：已完成 + 验证结果 + 剩余任务 |
 | 暴露错误 | 声明所有跳过/不确定/部分失败，不静默容错 |
+| 复用优先 | 新功能先搜同域已有实现（`codegraph_search`/`codegraph_explore`），能复用绝不重写；参数化或抽取公共函数扩展；必要时对已有代码做微小重构以承载新场景，禁止平行实现同一能力 |
 
 ### 产品规范（前端任务适用）
 

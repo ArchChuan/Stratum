@@ -70,7 +70,7 @@ func TestMessageBuffer_BufferMessageFlushesAtThresholdAndDeletesBuffer(t *testin
 			task.MessageID == "msg1" &&
 			len(messages) == constants.MemoryBufferFlushSize &&
 			messages[0]["role"] == "user" &&
-			messages[0]["content"] == "content 1"
+			messages[0]["content"] == "User preference content item number 1 in conversation"
 	})).Return(nil).Once()
 
 	buffer := NewMessageBuffer(store, queue)
@@ -83,7 +83,7 @@ func TestMessageBuffer_BufferMessageFlushesAtThresholdAndDeletesBuffer(t *testin
 			Scope:          "session",
 			MessageID:      fmt.Sprintf("msg%d", i),
 			Role:           "user",
-			Content:        fmt.Sprintf("content %d", i),
+			Content:        fmt.Sprintf("User preference content item number %d in conversation", i),
 			CreatedAt:      time.Now(),
 		}
 		require.NoError(t, buffer.BufferMessage(context.Background(), req))

@@ -64,9 +64,14 @@ func (a *mcpAgentToolAdapter) ToolsForServer(ctx context.Context, serverID strin
 	tools := make([]agentport.ToolDefinition, 0, len(skills))
 	for _, w := range skills {
 		tools = append(tools, agentport.ToolDefinition{
-			Name:        w.GetID(),
-			Description: w.Tool.Description,
-			InputSchema: w.Tool.InputSchema,
+			Name:         w.GetID(),
+			Description:  w.Tool.Description,
+			InputSchema:  w.Tool.InputSchema,
+			ProviderType: "mcp",
+			ProviderID:   serverID,
+			ServerID:     serverID,
+			CapabilityID: w.GetID(),
+			NodeType:     "mcp",
 		})
 	}
 	return tools

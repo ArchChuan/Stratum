@@ -60,6 +60,15 @@ func (m *mockMCPTools) ToolsForServer(ctx context.Context, serverID string) []po
 	return out
 }
 
+type fakeSkillToolResolver struct {
+	tools []port.ToolDefinition
+	index map[string]port.SkillToolRef
+}
+
+func (f *fakeSkillToolResolver) ResolveTools(_ context.Context, _ string, _ []string) ([]port.ToolDefinition, map[string]port.SkillToolRef, error) {
+	return f.tools, f.index, nil
+}
+
 type mockExecStore struct{ mock.Mock }
 
 func (m *mockExecStore) Insert(ctx context.Context, r application.ExecutionRecord) error {
@@ -120,6 +129,42 @@ func TestAgentService_Create_InheritsEmbedModel(t *testing.T) {
 	assert.NotEmpty(t, dto.ID)
 	repo.AssertExpectations(t)
 	ts.AssertExpectations(t)
+}
+
+func TestBuildExtraToolsUsesSkillToolResolverContracts(t *testing.T) {
+	resolver := &fakeSkillToolResolver{
+		tools: []port.ToolDefinition{{
+			Name:        "tenant_t1_classify_complaint",
+			Description: "判断客户投诉类型",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"complaintText": map[string]any{"type": "string"},
+				},
+				"required": []string{"complaintText"},
+			},
+		}},
+		index: map[string]port.SkillToolRef{
+			"tenant_t1_classify_complaint": {SkillID: "skill-1", VersionID: "version-1"},
+		},
+	}
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		SkillToolResolver: resolver,
+		Logger:            zap.NewNop(),
+	})
+
+	tools, index := svc.BuildExtraToolsForTest(context.Background(), "t1", nil, []string{"skill-1"})
+
+	if len(tools) != 1 {
+		t.Fatalf("expected one tool, got %d", len(tools))
+	}
+	props := tools[0].InputSchema["properties"].(map[string]any)
+	if _, ok := props["complaintText"]; !ok {
+		t.Fatalf("expected resolver schema, got %#v", tools[0].InputSchema)
+	}
+	if index["tenant_t1_classify_complaint"].VersionID != "version-1" {
+		t.Fatalf("expected version index, got %#v", index)
+	}
 }
 
 func TestAgentService_Create_KeepsExplicitEmbedModel(t *testing.T) {
@@ -294,7 +339,7 @@ func TestAgentService_RecordExecution_Success(t *testing.T) {
 	store := new(mockExecStore)
 	done := make(chan struct{})
 	store.On("Insert", mock.Anything, mock.MatchedBy(func(r application.ExecutionRecord) bool {
-		return r.AgentID == "a1" && r.Status == "success" && r.OutputPreview == "hello" && r.TotalTokens == 42
+		return r.ID == "exec-1" && r.AgentID == "a1" && r.Status == "success" && r.OutputPreview == "hello" && r.TotalTokens == 42
 	})).Return(nil).Run(func(_ mock.Arguments) { close(done) })
 
 	svc := application.NewAgentService(application.AgentServiceDeps{
@@ -303,7 +348,7 @@ func TestAgentService_RecordExecution_Success(t *testing.T) {
 		Logger:    zap.NewNop(),
 	})
 	res := &application.AgentResult{Output: "hello", TokensUsed: 42}
-	svc.RecordExecutionForTest(context.Background(), "a1", "u1", "Agent", "query", res, nil, 100)
+	svc.RecordExecutionForTest(context.Background(), "exec-1", "a1", "u1", "Agent", "query", res, nil, 100)
 
 	select {
 	case <-done:
@@ -317,7 +362,7 @@ func TestAgentService_RecordExecution_Error(t *testing.T) {
 	store := new(mockExecStore)
 	done := make(chan struct{})
 	store.On("Insert", mock.Anything, mock.MatchedBy(func(r application.ExecutionRecord) bool {
-		return r.Status == "error" && r.ErrorMessage == "boom"
+		return r.ID == "exec-2" && r.Status == "error" && r.ErrorMessage == "boom"
 	})).Return(nil).Run(func(_ mock.Arguments) { close(done) })
 
 	svc := application.NewAgentService(application.AgentServiceDeps{
@@ -325,7 +370,7 @@ func TestAgentService_RecordExecution_Error(t *testing.T) {
 		ExecStore: store,
 		Logger:    zap.NewNop(),
 	})
-	svc.RecordExecutionForTest(context.Background(), "a1", "u1", "Agent", "query", nil, errors.New("boom"), 50)
+	svc.RecordExecutionForTest(context.Background(), "exec-2", "a1", "u1", "Agent", "query", nil, errors.New("boom"), 50)
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -338,7 +383,7 @@ func TestAgentService_RecordExecution_NilStore_NoOp(t *testing.T) {
 		Registry: application.NewRegistry(new(mockAgentRepo), zap.NewNop()),
 		Logger:   zap.NewNop(),
 	})
-	svc.RecordExecutionForTest(context.Background(), "a1", "u1", "Agent", "q", nil, nil, 0)
+	svc.RecordExecutionForTest(context.Background(), "exec-3", "a1", "u1", "Agent", "q", nil, nil, 0)
 	// no panic, no goroutine — pass
 }
 
