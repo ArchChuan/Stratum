@@ -6,9 +6,11 @@ import (
 
 // ExtractedFact represents a fact extracted from conversation.
 type ExtractedFact struct {
-	Content    string
-	Importance float64
-	Entities   []string // entity names mentioned in this fact
+	Content    string   `json:"content"`
+	Importance float64  `json:"importance"`
+	Entities   []string `json:"entities"`
+	// FactType classifies the fact: preference|skill|event|state|relationship|other
+	FactType string `json:"fact_type"`
 }
 
 // LLMExtractor extracts structured facts from conversation messages.

@@ -129,13 +129,20 @@ func protectedTenantMiddleware(c *wiring.Container, extra ...gin.HandlerFunc) []
 
 // registerSkills wires /skills/* under JWT + tenant context.
 func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	skillHandler := handler.NewSkillHandler(c.Skill.Service, c.Logger)
+	skillHandler := handler.NewSkillHandler(c.Skill.Service, c.Logger, c.Skill.VersionService)
 
 	skills := r.Group("/skills", protectedTenantMiddleware(c)...)
 	{
 		skills.GET("", skillHandler.GetAllSkills)
 		skills.POST("", requireActive, skillHandler.CreateSkill)
+		skills.POST("/test-draft", requireActive, skillHandler.ExecuteDraftSkill)
+		skills.GET("/:id/workspace", skillHandler.GetSkillWorkspace)
 		skills.GET("/:id", skillHandler.GetSkill)
+		skills.PATCH("/:id/draft/capability", requireActive, skillHandler.UpdateDraftCapability)
+		skills.PATCH("/:id/draft/contract", requireActive, skillHandler.UpdateDraftContract)
+		skills.PATCH("/:id/draft/implementation", requireActive, skillHandler.UpdateDraftImplementation)
+		skills.POST("/:id/test", requireActive, skillHandler.ExecuteSkill)
+		skills.POST("/:id/publish", requireActive, skillHandler.PublishSkill)
 		skills.PUT("/:id", requireActive, skillHandler.UpdateSkill)
 		skills.DELETE("/:id", requireActive, skillHandler.DeleteSkill)
 	}
@@ -152,6 +159,8 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.GET("", agentHandler.GetAllAgents)
 		agents.POST("", requireActive, agentHandler.CreateAgent)
 		agents.GET("/executions", agentHandler.ListExecutions)
+		agents.GET("/executions/:traceID/tool-traces", agentHandler.ListExecutionToolTraces)
+		agents.GET("/executions/:traceID/trace-events", agentHandler.ListExecutionTraceEvents)
 		agents.GET("/:id", agentHandler.GetAgent)
 		execLimiter := middleware.NewRateLimiterStore(middleware.LLMExecRate, middleware.LLMExecBurst)
 		execRateLimit := middleware.RateLimitByKey(execLimiter, func(c *gin.Context) string {

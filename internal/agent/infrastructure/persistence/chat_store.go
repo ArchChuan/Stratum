@@ -293,6 +293,7 @@ func (s *PgChatStore) ListMessages(ctx context.Context, tenantID, convID, userID
 			 FROM chat_messages m
 			 JOIN chat_conversations c ON c.id = m.conversation_id
 			 WHERE m.conversation_id = $1 AND c.user_id = $2 AND c.deleted_at IS NULL
+			   AND m.role IN ('user', 'assistant')
 			 ORDER BY m.created_at ASC`,
 			convID, userID,
 		)

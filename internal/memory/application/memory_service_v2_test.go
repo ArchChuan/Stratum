@@ -51,12 +51,12 @@ func (m *MockFactRepo) SearchByContent(ctx context.Context, tenantID string, fil
 	return args.Get(0).([]*domain.MemoryFact), args.Error(1)
 }
 
-func (m *MockFactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*domain.MemoryFact, error) {
+func (m *MockFactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
 	args := m.Called(ctx, tenantID, userID, agentID, content, minSimilarity, maxCount)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*domain.MemoryFact), args.Error(1)
+	return args.Get(0).([]*port.SupersedeCandidate), args.Error(1)
 }
 
 func (m *MockFactRepo) CountByUser(ctx context.Context, tenantID, userID string) (int, error) {

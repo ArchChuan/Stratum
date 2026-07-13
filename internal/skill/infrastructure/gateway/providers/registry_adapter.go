@@ -57,6 +57,35 @@ func (a *DBSkillAdapter) Execute(ctx context.Context, skillID string, input any)
 	return executor.Execute(ctx, input)
 }
 
+func (a *DBSkillAdapter) ExecuteVersion(ctx context.Context, versionID string, input any) (any, error) {
+	var s domain.Skill
+	if err := tenantdb.ExecTenant(ctx, a.pool, func(ctx context.Context, tx pgx.Tx) error {
+		var id, name, desc string
+		var implJSON []byte
+		if err := tx.QueryRow(ctx,
+			`SELECT v.id, s.name, s.description, v.implementation
+			 FROM skill_versions v
+			 JOIN skills s ON s.id = v.skill_id
+			 WHERE v.id=$1 AND v.status IN ('draft', 'published')`,
+			versionID,
+		).Scan(&id, &name, &desc, &implJSON); err != nil {
+			return fmt.Errorf("skill version not found: %s", versionID)
+		}
+		var impl map[string]any
+		_ = json.Unmarshal(implJSON, &impl)
+		var err error
+		s, err = buildSkillFromImplementation(id, name, desc, impl, a.logger, a.executor)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	executor, ok := s.(domain.SkillExecutor)
+	if !ok {
+		return nil, fmt.Errorf("skill version %s does not implement SkillExecutor", versionID)
+	}
+	return executor.Execute(ctx, input)
+}
+
 func buildSkill(id, name, desc, skillType string, cfg map[string]any, logger *zap.Logger, executor *code.CodeExecutor) (domain.Skill, error) {
 	switch skillType {
 	case "http":
@@ -86,6 +115,52 @@ func buildSkill(id, name, desc, skillType string, cfg map[string]any, logger *za
 		return executors.NewPromptSkill(id, name, desc, stringVal(cfg, "prompt_template")), nil
 	default:
 		return nil, fmt.Errorf("unknown skill type: %s", skillType)
+	}
+}
+
+func buildSkillFromImplementation(id, name, desc string, impl map[string]any, logger *zap.Logger, executor *code.CodeExecutor) (domain.Skill, error) {
+	mode := stringVal(impl, "mode")
+	source := map[string]any{}
+	if raw, ok := impl["source"].(map[string]any); ok {
+		source = raw
+	}
+	runtime := map[string]any{}
+	if raw, ok := impl["runtime"].(map[string]any); ok {
+		runtime = raw
+	}
+	cfg := map[string]any{}
+	for key, value := range source {
+		cfg[key] = value
+	}
+	for key, value := range runtime {
+		cfg[key] = value
+	}
+	normalizeImplementationConfig(mode, cfg)
+	return buildSkill(id, name, desc, mode, cfg, logger, executor)
+}
+
+func normalizeImplementationConfig(mode string, cfg map[string]any) {
+	switch mode {
+	case "prompt":
+		copyKey(cfg, "promptTemplate", "prompt_template")
+	case "code":
+		copyKey(cfg, "code", "code")
+		copyKey(cfg, "language", "language")
+	case "http":
+		copyKey(cfg, "bodyTemplate", "body_template")
+		copyKey(cfg, "timeoutSec", "timeout_sec")
+	case "llm":
+		copyKey(cfg, "systemPrompt", "system_prompt")
+		copyKey(cfg, "maxTokens", "max_tokens")
+	}
+}
+
+func copyKey(cfg map[string]any, from, to string) {
+	if _, exists := cfg[to]; exists {
+		return
+	}
+	if value, ok := cfg[from]; ok {
+		cfg[to] = value
 	}
 }
 

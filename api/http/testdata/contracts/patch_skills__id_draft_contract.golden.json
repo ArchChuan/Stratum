@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "PATCH",
+    "path": "/skills/:id/draft/contract",
+    "body": {
+      "error": "missing bearer token"
+    },
+    "want_status": 401
+  }
+]

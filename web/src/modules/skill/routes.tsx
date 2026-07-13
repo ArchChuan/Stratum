@@ -2,6 +2,7 @@ import { Route } from 'react-router-dom';
 
 import { CreateSkillPage } from './pages/CreateSkillPage';
 import { EditSkillPage } from './pages/EditSkillPage';
+import { SkillWorkspacePage } from './pages/SkillWorkspacePage';
 import { SkillsListPage } from './pages/SkillsListPage';
 
 import { PrivateRoute } from '@/modules/iam';
@@ -22,6 +23,15 @@ export const skillRoutes = [
     element={
       <PrivateRoute>
         <CreateSkillPage />
+      </PrivateRoute>
+    }
+  />,
+  <Route
+    key="skills-workspace"
+    path="/skills/:id/workspace"
+    element={
+      <PrivateRoute>
+        <SkillWorkspacePage />
       </PrivateRoute>
     }
   />,

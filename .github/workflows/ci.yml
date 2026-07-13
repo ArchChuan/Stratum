@@ -11,6 +11,15 @@ env:
   GOPROXY: "https://goproxy.cn,direct"
 
 jobs:
+  guardrails:
+    name: Hook Guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run hook regression suite
+        run: bash .claude/hooks/run-tests.sh
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -60,7 +69,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [guardrails, lint, test]
     steps:
       - uses: actions/checkout@v4
 

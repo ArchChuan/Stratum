@@ -1,5 +1,5 @@
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import { Button, Form, Spin, Typography } from 'antd';
+import { Button, Form, Input, Spin, Typography } from 'antd';
 
 
 import { SKILL_TYPE_META, SkillFormSections } from '../components/SkillFormSections';
@@ -12,6 +12,7 @@ import {
 } from '@/constants';
 
 const { Title, Text } = Typography;
+const { TextArea } = Input;
 
 export const EditSkillPage = () => {
   const {
@@ -22,8 +23,13 @@ export const EditSkillPage = () => {
     modelsLoading,
     skillType,
     language,
+    testInput,
+    testLoading,
+    testResult,
     navigate,
     onFinish,
+    setTestInput,
+    onRunTest,
   } = useEditSkillPage();
 
   const selectedMeta = skillType ? SKILL_TYPE_META[skillType] : SKILL_TYPE_META.code;
@@ -77,6 +83,47 @@ export const EditSkillPage = () => {
             </Button>
           </div>
         </Form>
+
+        <div style={{ marginTop: 32, paddingTop: 24, borderTop: '1px solid #f0f0f0' }}>
+          <Title level={5} style={{ marginTop: 0 }}>
+            测试运行
+          </Title>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            输入一段文本或 JSON，直接验证这个技能的输出
+          </Text>
+          <TextArea
+            rows={5}
+            value={testInput}
+            onChange={(event) => setTestInput(event.target.value)}
+            placeholder='例如：{"text":"客户反馈快递三天没有更新"}'
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+            <Button type="primary" loading={testLoading} onClick={onRunTest}>
+              运行测试
+            </Button>
+          </div>
+          {testResult ? (
+            <div style={{ marginTop: 16 }}>
+              <Text type="secondary">
+                Trace：{testResult.traceID || '无'} · 耗时：{testResult.durationMs ?? 0} ms
+              </Text>
+              <pre
+                style={{
+                  marginTop: 8,
+                  padding: 12,
+                  background: '#f7f8fa',
+                  borderRadius: 6,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {typeof testResult.result === 'string'
+                  ? testResult.result
+                  : JSON.stringify(testResult.result, null, 2)}
+              </pre>
+            </div>
+          ) : null}
+        </div>
       </Spin>
     </div>
   );

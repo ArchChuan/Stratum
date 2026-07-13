@@ -16,12 +16,16 @@ type capGWSequence struct {
 	responses []port.CapabilityResponse
 	idx       int
 	// non-zero infinite means return this after the sequence is exhausted
-	infinite port.CapabilityResponse
-	toolResp port.CapabilityResponse
+	infinite  port.CapabilityResponse
+	toolResp  port.CapabilityResponse
+	skillReqs []port.SkillCapRequest
 }
 
 func (s *capGWSequence) Route(_ context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
 	if req.Type == port.CapSkill {
+		if req.Skill != nil {
+			s.skillReqs = append(s.skillReqs, *req.Skill)
+		}
 		return s.toolResp, nil
 	}
 	if s.idx < len(s.responses) {
@@ -79,8 +83,9 @@ func TestBuildReActGraph_ToolCall(t *testing.T) {
 	require.NoError(t, err)
 
 	state := graph.ReActState{
-		Model:    "qwen-turbo",
-		Messages: []port.LLMMessage{{Role: "user", Content: "calc 6*7"}},
+		Model:          "qwen-turbo",
+		Messages:       []port.LLMMessage{{Role: "user", Content: "calc 6*7"}},
+		SkillToolIndex: map[string]port.SkillToolRef{"calc": {SkillID: "skill-calc"}},
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
 	require.NoError(t, err)
@@ -88,6 +93,78 @@ func TestBuildReActGraph_ToolCall(t *testing.T) {
 	require.Equal(t, 2, out.Steps)
 	require.Len(t, out.AllToolCalls, 1)
 	require.Equal(t, "calc", out.AllToolCalls[0].Name)
+	require.Len(t, out.ToolObservations, 1)
+	require.Equal(t, "c1", out.ToolObservations[0].ToolCallID)
+	require.Equal(t, "calc", out.ToolObservations[0].ToolName)
+	require.Equal(t, "success", out.ToolObservations[0].Status)
+	require.Equal(t, "42", out.ToolObservations[0].RawText)
+	require.Equal(t, "skill", out.ToolObservations[0].ProviderType)
+	require.Equal(t, "skill-calc", out.ToolObservations[0].ProviderID)
+	require.Equal(t, "agent", out.TraceEvents[0].RunType)
+	require.NotEmpty(t, out.ToolObservations[0].Summary)
+	require.NotEmpty(t, out.TraceEvents)
+}
+
+func TestBuildReActGraph_MCPToolCallRecordsProviderMetadata(t *testing.T) {
+	stub := &capGWSequence{
+		responses: []port.CapabilityResponse{
+			{ToolCalls: []port.ToolCall{{ID: "mcp-call-1", Name: "mcp_search", Arguments: map[string]any{"query": "status"}}}},
+			{Content: "Done"},
+		},
+		toolResp: port.CapabilityResponse{Content: "mcp result"},
+	}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	state := graph.ReActState{
+		Model:    "qwen-turbo",
+		Messages: []port.LLMMessage{{Role: "user", Content: "use mcp"}},
+		AvailableTools: []port.ToolDefinition{{
+			Name:         "mcp_search",
+			Description:  "search through mcp",
+			InputSchema:  map[string]any{"type": "object"},
+			ProviderType: "mcp",
+			ProviderID:   "server-1",
+			ServerID:     "server-1",
+		}},
+	}
+	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
+	require.NoError(t, err)
+	require.Len(t, out.ToolObservations, 1)
+	require.Equal(t, "mcp", out.ToolObservations[0].ProviderType)
+	require.Equal(t, "server-1", out.ToolObservations[0].ProviderID)
+	require.Equal(t, "server-1", out.ToolObservations[0].ServerID)
+	require.Equal(t, "mcp", out.ToolObservations[0].ToolType)
+	require.NotEmpty(t, out.TraceEvents)
+	require.Equal(t, "mcp_search", out.TraceEvents[3].NodeID)
+	require.Equal(t, "mcp", out.TraceEvents[3].NodeType)
+	require.NotEmpty(t, stub.skillReqs)
+	require.Equal(t, "mcp_search", stub.skillReqs[0].SkillID)
+}
+
+func TestBuildReActGraph_ToolCallPassesSkillVersionID(t *testing.T) {
+	stub := &capGWSequence{
+		responses: []port.CapabilityResponse{
+			{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{"expr": "6*7"}}}},
+			{Content: "The answer is 42"},
+		},
+		toolResp: port.CapabilityResponse{Content: "42"},
+	}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	state := graph.ReActState{
+		Model:    "qwen-turbo",
+		Messages: []port.LLMMessage{{Role: "user", Content: "calc 6*7"}},
+		SkillToolIndex: map[string]port.SkillToolRef{
+			"calc": {SkillID: "skill-calc", VersionID: "version-1"},
+		},
+	}
+	_, err = cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
+	require.NoError(t, err)
+	require.Len(t, stub.skillReqs, 1)
+	require.Equal(t, "skill-calc", stub.skillReqs[0].SkillID)
+	require.Equal(t, "version-1", stub.skillReqs[0].VersionID)
 }
 
 func TestBuildReActGraph_MaxIterations(t *testing.T) {

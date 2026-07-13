@@ -10,11 +10,11 @@ import (
 )
 
 // BuildExtraToolsForTest exposes buildExtraTools to external test packages.
-func (s *AgentService) BuildExtraToolsForTest(ctx context.Context, tenantID string, mcpServerIDs, allowedSkills []string) ([]port.ToolDefinition, map[string]string) {
+func (s *AgentService) BuildExtraToolsForTest(ctx context.Context, tenantID string, mcpServerIDs, allowedSkills []string) ([]port.ToolDefinition, map[string]port.SkillToolRef) {
 	return s.buildExtraTools(ctx, tenantID, mcpServerIDs, allowedSkills)
 }
 
 // RecordExecutionForTest exposes recordExecution to external test packages.
-func (s *AgentService) RecordExecutionForTest(reqCtx context.Context, id, userID, agentName, query string, result *AgentResult, err error, durationMs int) {
-	s.recordExecution(reqCtx, id, userID, agentName, query, result, err, durationMs)
+func (s *AgentService) RecordExecutionForTest(reqCtx context.Context, executionID, id, userID, agentName, query string, result *AgentResult, err error, durationMs int) {
+	s.recordExecution(reqCtx, executionID, id, userID, agentName, query, result, err, durationMs)
 }

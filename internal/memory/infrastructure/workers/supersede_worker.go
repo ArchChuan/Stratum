@@ -103,12 +103,12 @@ outer:
 
 		for _, candidate := range candidates {
 			// Skip self
-			if candidate.ID == fact.ID {
+			if candidate.Fact.ID == fact.ID {
 				continue
 			}
 
 			// Skip already superseded
-			if candidate.Status == "superseded" {
+			if candidate.Fact.Status == "superseded" {
 				continue
 			}
 
@@ -116,34 +116,34 @@ outer:
 				break outer
 			}
 
-			judgment, err := w.judge.JudgeSupersede(ctx, candidate.Content, fact.Content)
+			judgment, err := w.judge.JudgeSupersede(ctx, candidate.Fact.Content, fact.Content)
 			llmCalls++
 			if err != nil {
 				w.logger.Warn("memory.supersede_worker.judge_failed",
-					zap.String("old_fact_id", candidate.ID),
+					zap.String("old_fact_id", candidate.Fact.ID),
 					zap.String("new_fact_id", fact.ID),
 					zap.Error(err))
 				continue
 			}
 
 			if judgment.Supersedes {
-				if err := candidate.MarkSuperseded(fact.ID); err != nil {
+				if err := candidate.Fact.MarkSuperseded(fact.ID); err != nil {
 					w.logger.Error("memory.supersede_worker.mark_failed",
-						zap.String("fact_id", candidate.ID),
+						zap.String("fact_id", candidate.Fact.ID),
 						zap.Error(err))
 					continue
 				}
 
-				if err := w.factRepo.Update(ctx, candidate.TenantID, candidate); err != nil {
+				if err := w.factRepo.Update(ctx, fact.TenantID, candidate.Fact); err != nil {
 					w.logger.Error("memory.supersede_worker.update_failed",
-						zap.String("fact_id", candidate.ID),
+						zap.String("fact_id", candidate.Fact.ID),
 						zap.Error(err))
 					continue
 				}
 
 				supersededCount++
 				w.logger.Info("memory.supersede_worker.superseded",
-					zap.String("old_fact_id", candidate.ID),
+					zap.String("old_fact_id", candidate.Fact.ID),
 					zap.String("new_fact_id", fact.ID),
 					zap.String("reason", judgment.Reason))
 			}

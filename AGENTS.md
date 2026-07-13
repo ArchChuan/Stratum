@@ -50,10 +50,11 @@ React 18 · Vite 4 · Ant Design 5.2 · React Router 6 · Axios · Moment.js
 ### 多租户 DDL 放置规则（踩坑总结）
 
 - 编号迁移（`internal/migration/sql/NNN_*.sql`）只操作 **public schema**，禁止引用 tenant-only 表（如 `chat_conversations`、`memory_entries`、`entities`）
-- 引用 tenant-only 表的 DDL 必须放 `pkg/tenantdb/tenant_schema.sql`，由 `ProvisionAllTenantSchemas` 幂等应用到每个租户 schema
+- 引用 tenant-only 表的 DDL 必须放 `pkg/storage/postgres/tenant_schema.sql`，由 `ProvisionAllTenantSchemas` 幂等应用到每个租户 schema
 - 新增 tenant DDL 后需同步检查 `internal/migration/sql/tenant_schema.sql`（migration baseline）是否也需更新
 - INSERT 语句必须与目标表 DDL 逐列核对，尤其 NOT NULL 无 DEFAULT 列（反例：outbox 漏 `message_id` 导致全量回滚）
 - 向 `tenant_schema.sql` 的 `CREATE TABLE` 新增列后，必须紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 做 backfill，否则已有租户的旧表不含该列，后续 INDEX / 查询会报 `column does not exist`（反例：entities.user_id 漏 backfill）
+- 所有数据 schema 变更必须兼容历史租户数据：新增表/索引用 `IF NOT EXISTS`，新增列用 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`；新增 `NOT NULL` 列必须带安全 `DEFAULT` 或先 nullable → 回填 → 加约束；任何依赖新列的 INDEX / CONSTRAINT / 查询必须排在 backfill 之后，并用 schema 顺序测试覆盖（反例：先建 `idx_agent_exec_trace` 再补 `trace_id` 导致旧租户启动失败）
 - `golang-migrate` dirty 状态修复：`force <version>` 将指定版本标记为 clean，再次 `Up()` 从下一版本继续；勿直接手改 `schema_migrations` 表
 
 ### 架构分层（DDD bounded context）
@@ -96,6 +97,10 @@ go vet && go test -short ./...           # 每次改动后
 go test -v -race -timeout 30s ./...      # PR 前完整跑
 npm run lint && npm run build            # 前端 PR 前
 ```
+
+### 端到端开发验证
+
+涉及任何功能开发、Bug 修复、前后端联调、数据库链路、Agent/Skill/MCP/Memory/Knowledge/IAM 能力改动时，必须使用项目 skill `stratum-e2e-development`。完成标准不是代码写完或单测通过，而是根据需求目标完成真实 API、前端操作、后端服务、测试数据库链路的端到端验证；验证不符合目标时继续定位和修改，直到闭环。不得打印 token、密钥或原始 API key；临时脚本和自启动进程必须在完成前清理或明确说明。
 
 ### 常量规范（A 类：业务/配置数字）
 

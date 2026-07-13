@@ -37,11 +37,11 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "SessionStart",
+        "matcher": "startup|resume",
         "hooks": [
           {
             "type": "command",
-            "command": "echo '✓ Stratum 项目规范已加载' && echo '📋 5条项目命令: make install | make typecheck | make lint | make test-local | make test-full' && echo '🚫 5条项目边界已启用' && echo '🔄 CI/CD: GitHub Actions configured' && echo '🛡️ Security: go vet enabled'",
+            "command": "echo '✓ Stratum 项目规范已加载 | 常用: make be-install · be-fmt · be-lint · be-test · infra-up | 护栏: PreToolUse deny(危险命令/敏感文件/prod.yaml/迁移越权) + PostToolUse(gofmt+vet)'",
             "statusMessage": "加载项目规范"
           }
         ]
@@ -53,51 +53,28 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cmd=$(jq -r '.tool_input.command'); if echo \"$cmd\" | grep -qE '^(rm -rf|sudo|chmod 777|chown|dd if=|mkfs|fdisk)'; then echo '{\"continue\": false, \"stopReason\": \"🚫 边界1-禁止命令: 该命令可能造成数据丢失或安全风险\"}'; else echo '{\"continue\": true}'; fi",
-            "if": "Bash(*)",
-            "statusMessage": "检查禁止命令"
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/guard-bash.sh",
+            "statusMessage": "拦截危险命令"
           }
         ]
       },
       {
-        "matcher": "Write|Edit",
+        "matcher": "Read|Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "path=$(jq -r '.tool_input.file_path // .tool_response.filePath'); if echo \"$path\" | grep -qE '^(/etc|/sys|/proc|/dev|/root|/var/log|/boot)'; then echo '{\"continue\": false, \"stopReason\": \"🚫 边界2-危险目录: 禁止修改系统关键目录\"}'; else echo '{\"continue\": true}'; fi",
-            "if": "Write|Edit",
-            "statusMessage": "检查目录权限"
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/guard-fs.sh",
+            "statusMessage": "文件系统访问保护"
           }
         ]
       },
       {
-        "matcher": "Read",
+        "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "path=$(jq -r '.tool_input.file_path'); if echo \"$path\" | grep -qE '(/root/.ssh|/root/.aws|/etc/shadow|/etc/passwd)'; then echo '{\"continue\": false, \"stopReason\": \"🚫 边界3-只读文件: 禁止读取敏感凭证文件\"}'; else echo '{\"continue\": true}'; fi",
-            "if": "Read",
-            "statusMessage": "检查文件访问权限"
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "path=$(jq -r '.tool_input.file_path'); if echo \"$path\" | grep -qE 'config/prod\\.yaml'; then echo '{\"continue\": false, \"stopReason\": \"🚫 边界5-生产配置: config/prod.yaml 禁止修改\"}'; else echo '{\"continue\": true}'; fi",
-            "statusMessage": "保护生产配置"
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash /home/yang/go-projects/stratum/.claude/hooks/check-migration-tenant-tables.sh",
-            "statusMessage": "检查迁移文件 tenant 表违规",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/check-migration-tenant-tables.sh",
+            "statusMessage": "迁移 tenant 表越权校验",
             "timeout": 10
           }
         ]
@@ -105,41 +82,19 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath'); if [[ \"$f\" == *.go ]]; then proj_root=\"/home/yang/go-projects/stratum\"; rel=$(dirname \"${f#$proj_root/}\"); cd \"$proj_root\" && go vet \"./$rel/...\" 2>&1 | head -20 || true; fi",
-            "statusMessage": "go vet 检查",
-            "async": true
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/go-quality.sh",
+            "statusMessage": "gofmt + go vet",
+            "timeout": 120
           },
           {
             "type": "command",
-            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath'); if [[ -f \"$f\" ]]; then /usr/local/bin/shieldbot-mcp \"$f\" 2>&1 | head -40 || true; fi",
-            "statusMessage": "运行 shieldbot-mcp 安全扫描",
-            "async": true
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cmd=$(jq -r '.tool_input.command'); if echo \"$cmd\" | grep -qE '^make (install|typecheck|lint|test-local|test-full)'; then echo '✓ 命令执行成功'; fi",
-            "statusMessage": "验证项目命令",
-            "async": true
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cmd=$(jq -r '.tool_input.command'); if echo \"$cmd\" | grep -qE '(--dry-run|--dry_run|-n|--no-op)'; then echo '✓ 边界4-数据dry-run: 已启用安全模式'; fi",
-            "statusMessage": "检查安全模式",
-            "async": true
+            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath // \"\"'); if [[ -f \"$f\" && -x /usr/local/bin/shieldbot-mcp ]]; then /usr/local/bin/shieldbot-mcp \"$f\" 2>&1 | head -40 || true; fi",
+            "statusMessage": "shieldbot 安全扫描",
+            "timeout": 30
           }
         ]
       }

@@ -3,7 +3,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { skillApi } from '../api/skill.api';
-import type { SkillFormValues } from '../model/skill';
+import {
+  buildCreateSkillDraftPayload,
+  type SkillFormValues,
+} from '../model/skill';
 
 import { extractErrorMessage } from '@/shared/lib';
 
@@ -37,21 +40,12 @@ export const useCreateSkillPage = () => {
 
   const onFinish = useCallback(
     async (values: SkillFormValues) => {
-      const payload: SkillFormValues = { ...values };
-      if (payload.type === 'http' && payload.headersJson) {
-        try {
-          payload.headers = JSON.parse(payload.headersJson);
-        } catch {
-          message.error('请求头 JSON 格式有误');
-          return;
-        }
-        delete payload.headersJson;
-      }
+      const payload = buildCreateSkillDraftPayload(values);
       setLoading(true);
       try {
-        await skillApi.create(payload);
-        message.success(`技能 "${payload.name}" 创建成功`);
-        navigate('/skills');
+        const workspace = await skillApi.createDraft(payload);
+        message.success(`技能 "${payload.name}" 草稿已创建`);
+        navigate(`/skills/${workspace.skill.id}/workspace`);
       } catch (err: unknown) {
         const status = (err as { response?: { status?: number } })?.response?.status;
         if (status === 400) {
@@ -75,5 +69,14 @@ export const useCreateSkillPage = () => {
     [navigate],
   );
 
-  return { form, loading, availableModels, modelsLoading, skillType, language, navigate, onFinish };
+  return {
+    form,
+    loading,
+    availableModels,
+    modelsLoading,
+    skillType,
+    language,
+    navigate,
+    onFinish,
+  };
 };

@@ -29,6 +29,19 @@ type SkillView struct {
 	CreatedAt   time.Time
 }
 
+// SkillTestResult is the application-layer result for a manual skill test run.
+type SkillTestResult struct {
+	TraceID  string
+	SkillID  string
+	Output   any
+	Duration time.Duration
+}
+
+// SkillRunner executes a stored skill through the runtime gateway.
+type SkillRunner interface {
+	RunSkill(ctx context.Context, skillID string, input any, traceID string) (SkillTestResult, error)
+}
+
 func viewFromRow(r port.SkillRow) SkillView {
 	return SkillView{
 		ID: r.ID, Name: r.Name, Description: r.Description,
@@ -40,6 +53,7 @@ func viewFromRow(r port.SkillRow) SkillView {
 type SkillService struct {
 	repo    port.SkillRepo
 	factory port.SkillFactory
+	runner  SkillRunner
 	logger  *zap.Logger
 }
 
@@ -48,10 +62,16 @@ func NewSkillService(
 	repo port.SkillRepo,
 	factory port.SkillFactory,
 	logger *zap.Logger,
+	runner ...SkillRunner,
 ) *SkillService {
+	var r SkillRunner
+	if len(runner) > 0 {
+		r = runner[0]
+	}
 	return &SkillService{
 		repo:    repo,
 		factory: factory,
+		runner:  r,
 		logger:  logger,
 	}
 }
@@ -143,6 +163,65 @@ func (s *SkillService) Delete(ctx context.Context, id string) error {
 	}
 	s.logger.Info("skill deleted", zap.String("id", id))
 	return nil
+}
+
+// RunSkillTest executes a persisted skill with caller-provided input.
+func (s *SkillService) RunSkillTest(ctx context.Context, skillID string, input any, traceID string) (SkillTestResult, error) {
+	if s.runner == nil {
+		return SkillTestResult{}, fmt.Errorf("skill runner not configured")
+	}
+	return s.runner.RunSkill(ctx, skillID, normalizeSkillTestInput(input), traceID)
+}
+
+// RunDraftSkill builds and executes a skill without persisting it.
+func (s *SkillService) RunDraftSkill(ctx context.Context, in SkillInput, input any, traceID string) (SkillTestResult, error) {
+	id := "draft-" + uuid.Must(uuid.NewV7()).String()
+	skill, err := s.buildSkill(id, in)
+	if err != nil {
+		return SkillTestResult{}, err
+	}
+	executor, ok := skill.(domain.SkillExecutor)
+	if !ok {
+		return SkillTestResult{}, fmt.Errorf("skill is not executable: %s", id)
+	}
+
+	start := time.Now()
+	output, err := executor.Execute(ctx, normalizeSkillTestInput(input))
+	if err != nil {
+		return SkillTestResult{}, err
+	}
+	return SkillTestResult{
+		TraceID:  traceID,
+		SkillID:  id,
+		Output:   output,
+		Duration: time.Since(start),
+	}, nil
+}
+
+func normalizeSkillTestInput(input any) any {
+	switch v := input.(type) {
+	case string:
+		return map[string]any{"prompt": v, "input": v}
+	case map[string]any:
+		if _, ok := v["prompt"]; ok {
+			if _, hasInput := v["input"]; !hasInput {
+				v["input"] = v["prompt"]
+			}
+			return v
+		}
+		if raw, ok := v["input"]; ok {
+			v["prompt"] = raw
+			return v
+		}
+		if raw, ok := v["text"]; ok {
+			v["prompt"] = raw
+			v["input"] = raw
+			return v
+		}
+		return v
+	default:
+		return input
+	}
 }
 
 // buildSkill delegates to the injected factory.

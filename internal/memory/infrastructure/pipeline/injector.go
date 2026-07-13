@@ -109,8 +109,32 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 		}
 		entityNames = append(entityNames, name)
 	}
+	rows.Close() // must close before issuing next query on same tx
 
-	if summary == "" && len(entityNames) == 0 {
+	// Fetch top long-term facts ordered by frecency score
+	inj.logger.Debug("buildcontext: querying facts", zap.String("user_id", ic.UserID), zap.String("agent_id", ic.AgentID), zap.String("tenant_id", ic.TenantID))
+	var factContents []string
+	factRows, err := tx.Query(ctx, `
+		SELECT content FROM memory_facts
+		WHERE user_id = $1 AND status = 'active'
+			AND (scope = 'user' OR (scope = 'agent' AND agent_id = $2))
+		ORDER BY frecency_score DESC
+		LIMIT $3`,
+		ic.UserID, ic.AgentID, constants.MemoryLongTermTopK)
+	if err == nil {
+		for factRows.Next() {
+			var content string
+			if err := factRows.Scan(&content); err == nil {
+				factContents = append(factContents, content)
+			}
+		}
+		factRows.Close()
+		inj.logger.Debug("buildcontext: facts loaded", zap.Int("count", len(factContents)))
+	} else {
+		inj.logger.Warn("buildcontext: facts query failed", zap.Error(err))
+	}
+
+	if summary == "" && len(entityNames) == 0 && len(factContents) == 0 {
 		return "", nil
 	}
 
@@ -125,6 +149,14 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 		sb.WriteString("Key Entities: ")
 		sb.WriteString(strings.Join(entityNames, ", "))
 		sb.WriteString("\n")
+	}
+	if len(factContents) > 0 {
+		sb.WriteString("Long-term facts:\n")
+		for _, f := range factContents {
+			sb.WriteString("- ")
+			sb.WriteString(f)
+			sb.WriteString("\n")
+		}
 	}
 
 	return sb.String(), nil

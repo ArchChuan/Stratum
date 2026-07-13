@@ -6,6 +6,12 @@ import (
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 )
 
+// SupersedeCandidate pairs a fact with its trigram similarity to a query string.
+type SupersedeCandidate struct {
+	Fact       *domain.MemoryFact
+	Similarity float64
+}
+
 // FactRepo manages memory facts persistence.
 type FactRepo interface {
 	Create(ctx context.Context, tenantID string, fact *domain.MemoryFact) error
@@ -13,7 +19,7 @@ type FactRepo interface {
 	Update(ctx context.Context, tenantID string, fact *domain.MemoryFact) error
 	ListActive(ctx context.Context, tenantID string, filter domain.ScopeFilter, limit int) ([]*domain.MemoryFact, error)
 	SearchByContent(ctx context.Context, tenantID string, filter domain.ScopeFilter, query string, limit int) ([]*domain.MemoryFact, error)
-	FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*domain.MemoryFact, error)
+	FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*SupersedeCandidate, error)
 	CountByUser(ctx context.Context, tenantID, userID string) (int, error)
 	Delete(ctx context.Context, tenantID, id string) error
 	DeleteAllByUser(ctx context.Context, tenantID, userID string) ([]string, error)

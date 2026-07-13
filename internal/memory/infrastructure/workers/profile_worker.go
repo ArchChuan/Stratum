@@ -130,7 +130,7 @@ func (w *ProfileWorker) rebuildProfile(ctx context.Context, entity *domain.Memor
 	// Extract fact contents
 	factContents := make([]string, len(facts))
 	for i, fact := range facts {
-		factContents[i] = fact.Content
+		factContents[i] = fact.Fact.Content
 	}
 
 	// Generate profile

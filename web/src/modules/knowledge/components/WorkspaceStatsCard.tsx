@@ -6,9 +6,10 @@ const { Text } = Typography;
 
 interface WorkspaceStatsCardProps {
   stats?: WorkspaceStats;
+  docCount?: number;
 }
 
-export const WorkspaceStatsCard = ({ stats }: WorkspaceStatsCardProps) => (
+export const WorkspaceStatsCard = ({ stats, docCount }: WorkspaceStatsCardProps) => (
   <Card
     style={{ borderRadius: 12, border: '1px solid #f0f0f0', marginBottom: 16 }}
     styles={{ body: { padding: '16px 24px' } }}
@@ -35,7 +36,7 @@ export const WorkspaceStatsCard = ({ stats }: WorkspaceStatsCardProps) => (
           文档数
         </Text>
         <div>
-          <Text strong>{stats?.stats?.doc_count ?? '—'}</Text>
+          <Text strong>{docCount ?? stats?.stats?.doc_count ?? '—'}</Text>
         </div>
       </div>
       <div>

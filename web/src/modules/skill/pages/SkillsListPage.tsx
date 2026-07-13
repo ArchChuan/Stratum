@@ -82,7 +82,7 @@ export const SkillsListPage = () => {
             <Col xs={24} sm={12} lg={8} xl={6} key={skill.id}>
               <SkillCard
                 skill={skill}
-                onEdit={(id) => navigate(`/skills/${id}/edit`)}
+                onEdit={(id) => navigate(`/skills/${id}/workspace`)}
                 onDelete={handleDelete}
               />
             </Col>

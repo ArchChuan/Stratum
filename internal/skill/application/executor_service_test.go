@@ -151,6 +151,34 @@ func TestLLMSkillExecute(t *testing.T) {
 	}
 }
 
+func TestRunDraftSkillExecutesPromptWithoutPersisting(t *testing.T) {
+	factory := &draftFactory{}
+	svc := application.NewSkillService(nil, factory, zap.NewNop())
+
+	result, err := svc.RunDraftSkill(context.Background(), application.SkillInput{
+		Name:           "投诉分类",
+		Type:           "prompt",
+		PromptTemplate: "收到：{{.input}}",
+	}, "客户反馈快递三天没有更新", "trace-draft")
+	if err != nil {
+		t.Fatalf("RunDraftSkill() error = %v", err)
+	}
+
+	output, ok := result.Output.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map output, got %#v", result.Output)
+	}
+	if output["content"] != "收到：客户反馈快递三天没有更新" {
+		t.Fatalf("expected rendered prompt content, got %#v", output["content"])
+	}
+	if result.TraceID != "trace-draft" {
+		t.Fatalf("expected trace id to be preserved, got %q", result.TraceID)
+	}
+	if factory.lastID == "" {
+		t.Fatal("expected draft skill to be built with generated id")
+	}
+}
+
 func TestBaseSkillGetters(t *testing.T) {
 	bs := &domain.BaseSkill{
 		ID:          "base-1",
@@ -192,4 +220,13 @@ type slowSkill struct {
 func (s *slowSkill) Execute(_ context.Context, input interface{}) (interface{}, error) {
 	time.Sleep(1 * time.Second)
 	return nil, nil
+}
+
+type draftFactory struct {
+	lastID string
+}
+
+func (f *draftFactory) Build(id string, in application.SkillInput) (domain.Skill, error) {
+	f.lastID = id
+	return executors.NewPromptSkill(id, in.Name, in.Description, in.PromptTemplate), nil
 }

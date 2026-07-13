@@ -28,9 +28,11 @@ type (
 	AgentType       = domain.AgentType
 	AgentCapability = domain.AgentCapability
 	AgentConfig     = domain.AgentConfig
+	AgentTraceEvent = domain.AgentTraceEvent
 	Message         = domain.Message
 	Thought         = domain.Thought
 	ToolCall        = domain.ToolCall
+	ToolObservation = domain.ToolObservation
 	AgentResult     = domain.AgentResult
 	AgentState      = domain.AgentState
 )
@@ -48,11 +50,12 @@ type ExecutionConfig struct {
 	TokenCallback  func(string)
 	TenantID       string
 	TraceID        string
+	ExecutionID    string
 	LLMAPIKeys     map[string]string
 	RAGSearchFn    func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
 	ExtraTools     []port.ToolDefinition
-	// SkillToolIndex maps tenant-scoped tool names to skill UUIDs for execution routing.
-	SkillToolIndex map[string]string
+	// SkillToolIndex maps tenant-scoped tool names to skill/version refs for execution routing.
+	SkillToolIndex map[string]port.SkillToolRef
 	ConversationID string
 	UserID         string
 	HistoryWindow  int
@@ -86,6 +89,9 @@ type BaseAgent struct {
 	mu                 sync.Mutex
 	CapGateway         port.CapabilityGateway
 	ChatStore          ChatStore
+	ToolTraceStore     ToolTraceStore
+	TraceEventStore    TraceEventStore
+	CheckpointStore    CheckpointStore
 	MemoryInjector     port.MemoryInjector
 	RecallMemoryFn     port.RecallMemoryFn
 	GlobalSystemSuffix string
@@ -128,6 +134,39 @@ func (a *BaseAgent) SetChatStore(cs ChatStore) {
 // WithChatStore sets the chat store for conversation history persistence.
 func (a *BaseAgent) WithChatStore(cs ChatStore) *BaseAgent {
 	a.SetChatStore(cs)
+	return a
+}
+
+func (a *BaseAgent) SetToolTraceStore(store ToolTraceStore) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.ToolTraceStore = store
+}
+
+func (a *BaseAgent) WithToolTraceStore(store ToolTraceStore) *BaseAgent {
+	a.SetToolTraceStore(store)
+	return a
+}
+
+func (a *BaseAgent) SetTraceEventStore(store TraceEventStore) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.TraceEventStore = store
+}
+
+func (a *BaseAgent) WithTraceEventStore(store TraceEventStore) *BaseAgent {
+	a.SetTraceEventStore(store)
+	return a
+}
+
+func (a *BaseAgent) SetCheckpointStore(store CheckpointStore) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.CheckpointStore = store
+}
+
+func (a *BaseAgent) WithCheckpointStore(store CheckpointStore) *BaseAgent {
+	a.SetCheckpointStore(store)
 	return a
 }
 
@@ -187,6 +226,8 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	llmModel := a.LLMModel
 	capGW := a.CapGateway
 	chatStore := a.ChatStore
+	toolTraceStore := a.ToolTraceStore
+	traceEventStore := a.TraceEventStore
 	metrics := a.metrics
 	workspaceNames := a.KnowledgeWorkspaceNames
 	workspaceDescs := a.KnowledgeWorkspaceDescriptions
@@ -314,6 +355,31 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		result.Steps = finalState.Steps
 		result.TokensUsed = finalState.TotalTokens
 		result.CostUSD = finalState.TotalCostUSD
+		result.ToolObservations = enrichToolObservations(finalState.ToolObservations, cfg.TraceID, cfg.ExecutionID, cfg.ConversationID, agentID, cfg.UserID)
+		result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, cfg.TraceID, cfg.ExecutionID, cfg.ConversationID, agentID, cfg.UserID)
+		finalAnswerAt := time.Now()
+		result.TraceEvents = append(result.TraceEvents, domain.AgentTraceEvent{
+			TraceID:         cfg.TraceID,
+			ExecutionID:     cfg.ExecutionID,
+			ConversationID:  cfg.ConversationID,
+			AgentID:         agentID,
+			UserID:          cfg.UserID,
+			RunType:         domain.RunTypeAgent,
+			ObservationType: domain.ObservationTypeAgent,
+			EventType:       domain.TraceEventFinalAnswer,
+			StepIndex:       finalState.Steps,
+			Status:          domain.ToolTraceStatusSuccess,
+			Output:          map[string]any{"content": finalState.Output},
+			Summary:         truncateRunes(finalState.Output, 500),
+			Model:           llmModel,
+			TotalTokens:     finalState.TotalTokens,
+			CostUSD:         finalState.TotalCostUSD,
+			ProviderType:    domain.ProviderTypeLLM,
+			ProviderID:      llmModel,
+			SequenceNo:      int64(len(result.TraceEvents) + 1),
+			StartedAt:       finalAnswerAt,
+			EndedAt:         finalAnswerAt,
+		})
 		a.mu.Lock()
 		a.State.StepsTaken = finalState.Steps
 		a.mu.Unlock()
@@ -342,13 +408,133 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			}
 		}
 
-	case PlanningAgent, ToolCallingAgent, RAGAgent, SwarmAgent:
+	case PlanningAgent:
+		if capGW == nil {
+			execErr = fmt.Errorf("planning: CapGateway not set")
+			break
+		}
+		stuckThreshold := a.StuckThreshold
+		if stuckThreshold <= 0 {
+			stuckThreshold = constants.DefaultStuckThreshold
+		}
+		var cpWriter agentgraph.PlanCheckpointWriter
+		if a.CheckpointStore != nil {
+			cpWriter = a.CheckpointStore
+		}
+		cg, buildErr := agentgraph.BuildPlanExecuteGraph(capGW, a.Ledger, cpWriter, nil, a.Logger)
+		if buildErr != nil {
+			execErr = fmt.Errorf("planning: build graph: %w", buildErr)
+			break
+		}
+		maxTokens := maxContextTokens
+		if maxTokens <= 0 {
+			maxTokens = constants.DefaultAgentContextTokens
+		}
+		initMessages := BuildContextMessages(systemPrompt, memCtx, history, input, maxTokens, cfg.HistoryWindow)
+		availableTools := buildBuiltinTools(workspaceNames, workspaceDescs,
+			len(workspaceNames) > 0 && cfg.RAGSearchFn != nil,
+			a.MemoryInjector != nil)
+		initState := agentgraph.ReActState{
+			TenantID:          cfg.TenantID,
+			TraceID:           cfg.TraceID,
+			ConversationID:    cfg.ConversationID,
+			LLMAPIKeys:        cfg.LLMAPIKeys,
+			Model:             llmModel,
+			Messages:          initMessages,
+			OnToken:           cfg.TokenCallback,
+			AvailableTools:    mergeTools(availableTools, cfg.ExtraTools, a.Logger),
+			SkillToolIndex:    cfg.SkillToolIndex,
+			RAGSearchFn:       cfg.RAGSearchFn,
+			MaxLLMSteps:       cfg.MaxSteps,
+			StuckThreshold:    stuckThreshold,
+			CheckpointEnabled: a.CheckpointEnabled,
+		}
+		if a.RecallMemoryFn != nil {
+			fn := a.RecallMemoryFn
+			initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
+				return fn(ctx, cfg.TenantID, cfg.UserID, agentID, memoryScope, input)
+			}
+		}
+		execCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+		execCtx = reqctx.WithTraceID(execCtx, cfg.TraceID)
+		execCtx = reqctx.WithTenantID(execCtx, cfg.TenantID)
+		defer cancel()
+		_, planSpan := tracer.Start(execCtx, "planning.graph.invoke",
+			oteltrace.WithAttributes(attribute.Int("stuck_threshold", stuckThreshold)),
+		)
+		finalState, runErr := cg.Invoke(execCtx, initState, agentgraph.RunConfig{MaxSteps: cfg.MaxSteps})
+		planSpan.End()
+		if runErr != nil {
+			execErr = fmt.Errorf("planning: %w", runErr)
+			break
+		}
+		result.Output = finalState.Output
+		result.Steps = finalState.Steps
+		result.TokensUsed = finalState.TotalTokens
+		result.CostUSD = finalState.TotalCostUSD
+		result.ToolObservations = enrichToolObservations(finalState.ToolObservations, cfg.TraceID, cfg.ExecutionID, cfg.ConversationID, agentID, cfg.UserID)
+		result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, cfg.TraceID, cfg.ExecutionID, cfg.ConversationID, agentID, cfg.UserID)
+		finalAnswerAt := time.Now()
+		result.TraceEvents = append(result.TraceEvents, domain.AgentTraceEvent{
+			TraceID:         cfg.TraceID,
+			ExecutionID:     cfg.ExecutionID,
+			ConversationID:  cfg.ConversationID,
+			AgentID:         agentID,
+			UserID:          cfg.UserID,
+			RunType:         domain.RunTypeAgent,
+			ObservationType: domain.ObservationTypeAgent,
+			EventType:       domain.TraceEventFinalAnswer,
+			StepIndex:       finalState.Steps,
+			Status:          domain.ToolTraceStatusSuccess,
+			Output:          map[string]any{"content": finalState.Output},
+			Summary:         truncateRunes(finalState.Output, 500),
+			Model:           llmModel,
+			TotalTokens:     finalState.TotalTokens,
+			CostUSD:         finalState.TotalCostUSD,
+			ProviderType:    domain.ProviderTypeLLM,
+			ProviderID:      llmModel,
+			SequenceNo:      int64(len(result.TraceEvents) + 1),
+			StartedAt:       finalAnswerAt,
+			EndedAt:         finalAnswerAt,
+		})
+		a.mu.Lock()
+		a.State.StepsTaken = finalState.Steps
+		a.mu.Unlock()
+		for _, tc := range finalState.AllToolCalls {
+			result.ToolCalls = append(result.ToolCalls, ToolCall{
+				ToolName: tc.Name,
+				Input:    tc.Arguments,
+			})
+		}
+
+	case ToolCallingAgent, RAGAgent, SwarmAgent:
 		result.Output = fmt.Sprintf("%s agent type not yet implemented", string(agentType))
 		execErr = fmt.Errorf("agent type %s not implemented", agentType)
 
 	default:
 		result.Output = "Unknown agent type"
 		execErr = fmt.Errorf("unknown agent type: %s", agentType)
+	}
+
+	if execErr == nil && result != nil {
+		if toolTraceStore != nil && len(result.ToolObservations) > 0 {
+			saveCtx, saveCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+			if err := toolTraceStore.InsertBatch(saveCtx, cfg.TenantID, result.ToolObservations); err != nil {
+				a.Logger.Warn("agent: failed to save tool traces",
+					zap.String("conversation_id", cfg.ConversationID),
+					zap.Error(err))
+			}
+			saveCancel()
+		}
+		if traceEventStore != nil && len(result.TraceEvents) > 0 {
+			saveCtx, saveCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+			if err := traceEventStore.InsertBatch(saveCtx, cfg.TenantID, result.TraceEvents); err != nil {
+				a.Logger.Warn("agent: failed to save trace events",
+					zap.String("conversation_id", cfg.ConversationID),
+					zap.Error(err))
+			}
+			saveCancel()
+		}
 	}
 
 	// Persist user input and agent output to ChatStore (outside switch — all agent types benefit).
@@ -391,6 +577,27 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 				zap.String("conversation_id", cfg.ConversationID),
 				zap.Error(addAgentErr))
 		}
+		if summary := buildToolObservationSummary(result.ToolObservations); summary != "" {
+			summaryMsg := &ChatMessage{
+				ConversationID: cfg.ConversationID,
+				Role:           "assistant",
+				Content:        summary,
+				UserID:         cfg.UserID,
+				AgentID:        agentID,
+				MemoryScope:    memoryScope,
+				SkipOutbox:     true,
+			}
+			_, saveSummarySpan := tracer.Start(ctx, "agent.chat_store.save_tool_summary")
+			saveCtx3, saveCancel3 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+			addSummaryErr := chatStore.AddMessage(saveCtx3, cfg.TenantID, summaryMsg)
+			saveCancel3()
+			saveSummarySpan.End()
+			if addSummaryErr != nil {
+				a.Logger.Warn("agent: failed to save tool summary message",
+					zap.String("conversation_id", cfg.ConversationID),
+					zap.Error(addSummaryErr))
+			}
+		}
 	}
 
 	result.Duration = time.Since(startTime)
@@ -407,6 +614,96 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	metrics.RecordAgentStepCount(agentID, string(agentType), result.Steps)
 
 	return result, execErr
+}
+
+func enrichToolObservations(in []domain.ToolObservation, traceID, executionID, conversationID, agentID, userID string) []domain.ToolObservation {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]domain.ToolObservation, len(in))
+	for i, obs := range in {
+		out[i] = obs
+		if out[i].TraceID == "" {
+			out[i].TraceID = traceID
+		}
+		if out[i].ExecutionID == "" {
+			out[i].ExecutionID = executionID
+		}
+		if out[i].ConversationID == "" {
+			out[i].ConversationID = conversationID
+		}
+		out[i].AgentID = agentID
+		out[i].UserID = userID
+		if out[i].Status == "" {
+			out[i].Status = domain.ToolTraceStatusSuccess
+		}
+		if out[i].ProviderType == "" {
+			out[i].ProviderType = domain.ProviderTypeInternal
+		}
+		if out[i].ProviderID == "" {
+			out[i].ProviderID = out[i].ToolName
+		}
+		if out[i].CapabilityID == "" {
+			out[i].CapabilityID = out[i].ToolName
+		}
+	}
+	return out
+}
+
+func enrichTraceEvents(in []domain.AgentTraceEvent, traceID, executionID, conversationID, agentID, userID string) []domain.AgentTraceEvent {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]domain.AgentTraceEvent, len(in))
+	for i, ev := range in {
+		out[i] = ev
+		if out[i].TraceID == "" {
+			out[i].TraceID = traceID
+		}
+		if out[i].ExecutionID == "" {
+			out[i].ExecutionID = executionID
+		}
+		if out[i].ConversationID == "" {
+			out[i].ConversationID = conversationID
+		}
+		out[i].AgentID = agentID
+		out[i].UserID = userID
+		if out[i].RunType == "" {
+			out[i].RunType = domain.RunTypeAgent
+		}
+		if out[i].ObservationType == "" {
+			out[i].ObservationType = domain.ObservationTypeCustom
+		}
+		if out[i].SequenceNo == 0 {
+			out[i].SequenceNo = int64(i + 1)
+		}
+		if out[i].StartedAt.IsZero() && !out[i].EndedAt.IsZero() {
+			out[i].StartedAt = out[i].EndedAt
+		}
+		if out[i].EndedAt.IsZero() && !out[i].StartedAt.IsZero() && out[i].LatencyMs > 0 {
+			out[i].EndedAt = out[i].StartedAt.Add(time.Duration(out[i].LatencyMs) * time.Millisecond)
+		}
+	}
+	return out
+}
+
+func buildToolObservationSummary(observations []domain.ToolObservation) string {
+	if len(observations) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("本轮工具观察摘要：")
+	for i, obs := range observations {
+		if obs.Summary == "" {
+			continue
+		}
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("%d. %s：%s", i+1, obs.ToolName, obs.Summary))
+	}
+	if b.Len() == len("本轮工具观察摘要：") {
+		return ""
+	}
+	return truncateRunes(b.String(), 3000)
 }
 
 // ExecutionOption configures agent execution behavior
@@ -469,6 +766,12 @@ func WithTraceID(id string) ExecutionOption {
 	}
 }
 
+func WithExecutionID(id string) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.ExecutionID = id
+	}
+}
+
 // WithLLMAPIKeys injects per-tenant decrypted LLM API keys into the execution.
 func WithLLMAPIKeys(keys map[string]string) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
@@ -490,8 +793,8 @@ func WithExtraTools(tools []port.ToolDefinition) ExecutionOption {
 	}
 }
 
-// WithSkillToolIndex sets the mapping from tenant-scoped tool names to skill UUIDs.
-func WithSkillToolIndex(index map[string]string) ExecutionOption {
+// WithSkillToolIndex sets the mapping from tenant-scoped tool names to skill/version refs.
+func WithSkillToolIndex(index map[string]port.SkillToolRef) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.SkillToolIndex = index
 	}
@@ -590,8 +893,12 @@ func buildBuiltinTools(workspaceNames, workspaceDescs []string, hasRAG, hasMemor
 			}
 		}
 		tools = append(tools, port.ToolDefinition{
-			Name:        "stratum_search_knowledge",
-			Description: strings.TrimRight(b.String(), "\n"),
+			Name:         "stratum_search_knowledge",
+			Description:  strings.TrimRight(b.String(), "\n"),
+			ProviderType: domain.ProviderTypeBuiltin,
+			ProviderID:   "stratum_search_knowledge",
+			CapabilityID: "stratum_search_knowledge",
+			NodeType:     domain.ObservationTypeRetriever,
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -610,8 +917,12 @@ func buildBuiltinTools(workspaceNames, workspaceDescs []string, hasRAG, hasMemor
 	}
 	if hasMemory {
 		tools = append(tools, port.ToolDefinition{
-			Name:        "stratum_recall_memory",
-			Description: "Search long-term memory for relevant past interactions, entities, and context. Use when you need to recall information from previous conversations.",
+			Name:         "stratum_recall_memory",
+			Description:  "Search long-term memory for relevant past interactions, entities, and context. Use when you need to recall information from previous conversations.",
+			ProviderType: domain.ProviderTypeBuiltin,
+			ProviderID:   "stratum_recall_memory",
+			CapabilityID: "stratum_recall_memory",
+			NodeType:     domain.ObservationTypeMemory,
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -623,8 +934,12 @@ func buildBuiltinTools(workspaceNames, workspaceDescs []string, hasRAG, hasMemor
 		})
 	}
 	tools = append(tools, port.ToolDefinition{
-		Name:        "stratum_continue_reasoning",
-		Description: "Request another reasoning turn to continue chain-of-thought before calling other tools or producing a final answer. Use when you need more reasoning steps.",
+		Name:         "stratum_continue_reasoning",
+		Description:  "Request another reasoning turn to continue chain-of-thought before calling other tools or producing a final answer. Use when you need more reasoning steps.",
+		ProviderType: domain.ProviderTypeBuiltin,
+		ProviderID:   "stratum_continue_reasoning",
+		CapabilityID: "stratum_continue_reasoning",
+		NodeType:     domain.ObservationTypeAgent,
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},

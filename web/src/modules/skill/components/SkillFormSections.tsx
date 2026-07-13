@@ -1,10 +1,4 @@
-import {
-  CodeOutlined,
-  GlobalOutlined,
-  MessageOutlined,
-  RobotOutlined,
-  ThunderboltOutlined,
-} from '@ant-design/icons';
+import { CodeOutlined, GlobalOutlined, MessageOutlined, RobotOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Collapse, Form, Input, InputNumber, Select, Typography } from 'antd';
 import type { FormInstance } from 'antd';
 
@@ -46,10 +40,10 @@ const SECTION_BG = {
 };
 
 const TYPE_OPTIONS: Array<{ value: SkillType; label: string; bg: string; color: string }> = [
-  { value: 'code', label: '代码技能', bg: '#f6ffed', color: '#52c41a' },
-  { value: 'llm', label: 'LLM 技能', bg: '#e6f4ff', color: '#1677ff' },
-  { value: 'http', label: 'HTTP 技能', bg: '#fff7e6', color: '#fa8c16' },
-  { value: 'prompt', label: '提示词技能', bg: '#f9f0ff', color: '#722ed1' },
+  { value: 'code', label: '代码', bg: '#f6ffed', color: '#52c41a' },
+  { value: 'llm', label: 'LLM', bg: '#e6f4ff', color: '#1677ff' },
+  { value: 'http', label: 'HTTP', bg: '#fff7e6', color: '#fa8c16' },
+  { value: 'prompt', label: '提示词', bg: '#f9f0ff', color: '#722ed1' },
 ];
 
 export const SkillFormSections = ({
@@ -59,6 +53,44 @@ export const SkillFormSections = ({
   modelsLoading,
   isEdit = false,
 }: SkillFormSectionsProps) => {
+  if (!isEdit) {
+    return (
+      <div style={SECTION_BG}>
+        <SectionHeader icon={<ThunderboltOutlined />} title="能力定义" />
+        <Form.Item
+          label="技能名称"
+          name="name"
+          rules={[{ required: true, message: '请输入技能名称' }]}
+        >
+          <Input placeholder="例如：投诉分类助手" />
+        </Form.Item>
+        <Form.Item
+          label="能力描述"
+          name="description"
+          rules={[{ required: true, message: '请输入能力描述' }]}
+          extra="描述这个 Skill 要完成的业务目标。平台会先生成一个可测试的草稿能力。"
+        >
+          <TextArea
+            rows={4}
+            placeholder="例如：将客户投诉文本分类为物流、质量、售后或价格问题，并输出分类理由和建议处理动作。"
+          />
+        </Form.Item>
+        <Form.Item label="期望输入" name="expectedInput">
+          <TextArea rows={2} placeholder="例如：客户投诉原文、订单号、用户等级" />
+        </Form.Item>
+        <Form.Item label="期望输出" name="expectedOutput">
+          <TextArea rows={2} placeholder="例如：分类、理由、建议动作，使用结构化中文输出" />
+        </Form.Item>
+        <Form.Item label="测试样例" name="sampleCases" style={{ marginBottom: 0 }}>
+          <TextArea
+            rows={4}
+            placeholder="例如：我的快递三天没有更新 -> 物流；收到的商品破损 -> 质量"
+          />
+        </Form.Item>
+      </div>
+    );
+  }
+
   return (
     <>
       <div style={SECTION_BG}>
@@ -74,12 +106,12 @@ export const SkillFormSections = ({
           <TextArea rows={2} placeholder="描述此技能的功能" />
         </Form.Item>
         <Form.Item
-          label="技能类型"
+          label="实现方式"
           name="type"
           rules={[{ required: true }]}
           style={{ marginBottom: 0 }}
         >
-          <Select disabled={isEdit} placeholder="选择技能类型">
+          <Select disabled={isEdit} placeholder="选择实现方式">
             {TYPE_OPTIONS.map((opt) => (
               <Option key={opt.value} value={opt.value}>
                 {opt.label}
@@ -260,8 +292,8 @@ export const SkillFormSections = ({
 };
 
 export const SKILL_TYPE_META: Record<SkillType, { label: string; color: string; bg: string }> = {
-  code: { label: '代码技能', color: '#52c41a', bg: '#f6ffed' },
-  llm: { label: 'LLM 技能', color: '#1677ff', bg: '#e6f4ff' },
-  http: { label: 'HTTP 技能', color: '#fa8c16', bg: '#fff7e6' },
-  prompt: { label: '提示词技能', color: '#722ed1', bg: '#f9f0ff' },
+  code: { label: '代码', color: '#52c41a', bg: '#f6ffed' },
+  llm: { label: 'LLM', color: '#1677ff', bg: '#e6f4ff' },
+  http: { label: 'HTTP', color: '#fa8c16', bg: '#fff7e6' },
+  prompt: { label: '提示词', color: '#722ed1', bg: '#f9f0ff' },
 };

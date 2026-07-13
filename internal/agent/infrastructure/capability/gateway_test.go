@@ -8,7 +8,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
-	skillgateway "github.com/byteBuilderX/stratum/internal/skill/infrastructure/gateway"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -36,7 +35,7 @@ func TestDefaultCapabilityGateway_RouteLLM(t *testing.T) {
 
 func TestDefaultCapabilityGateway_RouteSkill(t *testing.T) {
 	llmMock := &mockLLMGateway{}
-	skillMock := &mockSkillGateway{resp: skillgateway.SkillResponse{Output: "result"}}
+	skillMock := &mockSkillGateway{output: "result"}
 	gw := capgateway.NewDefaultCapabilityGateway(
 		capgateway.NewLLMAdapter(llmMock, zap.NewNop()),
 		capgateway.NewSkillAdapter(skillMock, zap.NewNop()),

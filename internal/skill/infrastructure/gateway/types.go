@@ -45,12 +45,13 @@ type RetryConfig struct {
 
 // SkillRequest 统一请求结构
 type SkillRequest struct {
-	TraceID  string        // 若为空则自动生成 UUID
-	SkillID  string        // 必填
-	Input    any           // skill 输入，由 provider 解析
-	Timeout  time.Duration // 0 表示使用默认值 30s
-	Retry    RetryConfig
-	Metadata map[string]string
+	TraceID   string        // 若为空则自动生成 UUID
+	SkillID   string        // 必填
+	VersionID string        // 可选；存在时执行冻结的 skill version
+	Input     any           // skill 输入，由 provider 解析
+	Timeout   time.Duration // 0 表示使用默认值 30s
+	Retry     RetryConfig
+	Metadata  map[string]string
 }
 
 // SkillResponse 统一响应结构
