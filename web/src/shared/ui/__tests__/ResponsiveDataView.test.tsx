@@ -192,7 +192,63 @@ describe('ResponsiveDataView', () => {
     fireEvent.click(screen.getByTitle('2'));
 
     expect(paginationOnChange).toHaveBeenCalledWith(2, 10);
-    expect(screen.getByTitle('1')).toHaveClass('ant-pagination-item-active');
+    expect(screen.getByTitle('2')).toHaveClass('ant-pagination-item-active');
+  });
+
+  it('slices local rows and changes the visible cards in client pagination mode', () => {
+    responsive.isMobile = true;
+    const localRows = Array.from({ length: 4 }, (_, index) => ({
+      id: `row-${index + 1}`,
+      name: `条目 ${index + 1}`,
+    }));
+
+    render(
+      <ResponsiveDataView
+        rows={localRows}
+        columns={columns}
+        rowKey="id"
+        pagination={{ pageSize: 2 }}
+        renderMobileItem={(row) => <article>{row.name}</article>}
+      />,
+    );
+
+    expect(screen.getByText('条目 1')).toBeInTheDocument();
+    expect(screen.getByText('条目 2')).toBeInTheDocument();
+    expect(screen.queryByText('条目 3')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('2'));
+
+    expect(screen.queryByText('条目 1')).not.toBeInTheDocument();
+    expect(screen.getByText('条目 3')).toBeInTheDocument();
+    expect(screen.getByText('条目 4')).toBeInTheDocument();
+  });
+
+  it('keeps supplied page rows unsliced in server mode and emits pagination callbacks', () => {
+    responsive.isMobile = true;
+    const onChange = vi.fn<NonNullable<TableProps<Row>['onChange']>>();
+
+    render(
+      <ResponsiveDataView
+        rows={rows}
+        columns={columns}
+        rowKey="id"
+        mobilePaginationMode="server"
+        pagination={{ current: 2, pageSize: 1, total: 4 }}
+        onChange={onChange}
+        renderMobileItem={(row) => <article>{row.name}</article>}
+      />,
+    );
+
+    expect(screen.getByText('第一项')).toBeInTheDocument();
+    expect(screen.getByText('第二项')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('3'));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ current: 3, pageSize: 1 }),
+      {},
+      {},
+      expect.objectContaining({ action: 'paginate', currentDataSource: rows }),
+    );
   });
 
   it('invokes both callback slots and strips functions from table pagination', () => {

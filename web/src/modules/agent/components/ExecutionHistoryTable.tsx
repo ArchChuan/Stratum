@@ -118,6 +118,7 @@ export const ExecutionHistoryTable = ({
       rowKey="id"
       loading={loading}
       emptyText="暂无执行记录"
+      mobilePaginationMode="server"
       pagination={{
         current: pagination.current,
         pageSize: pagination.pageSize,
