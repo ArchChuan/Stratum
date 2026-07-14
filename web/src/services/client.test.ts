@@ -1,8 +1,35 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import api, { getTokenRef, markAuthReady, setupApiInterceptors, streamApiEvents } from './client';
+import api, {
+  getTokenRef,
+  markAuthReady,
+  resetAuthReady,
+  setupApiInterceptors,
+  streamApiEvents,
+} from './client';
 
 describe('api client', () => {
+  it('does not wait for auth readiness before guest login', async () => {
+    resetAuthReady();
+    setupApiInterceptors({ current: null });
+    const requestInterceptors = api.interceptors.request as unknown as {
+      handlers: Array<{
+        fulfilled?: (config: { headers: Record<string, unknown>; url: string }) => Promise<unknown>;
+      }>;
+    };
+    const latestInterceptor = requestInterceptors.handlers[requestInterceptors.handlers.length - 1];
+    let settled = false;
+
+    void latestInterceptor?.fulfilled?.({ headers: {}, url: '/auth/guest' }).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(settled).toBe(true);
+    markAuthReady();
+  });
+
   it('does not read or write access tokens from localStorage', async () => {
     const getItem = vi.spyOn(Storage.prototype, 'getItem');
     const setItem = vi.spyOn(Storage.prototype, 'setItem');

@@ -5,11 +5,44 @@ import (
 	"net/http"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
+	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
+
+type guestLoginUserResponse struct {
+	Sub         string `json:"sub"`
+	TenantID    string `json:"tenant_id"`
+	Role        string `json:"role"`
+	GlobalRole  string `json:"global_role"`
+	SystemRole  string `json:"system_role"`
+	AvatarURL   string `json:"avatar_url"`
+	GitHubLogin string `json:"github_login"`
+}
+
+type guestLoginResponse struct {
+	AccessToken string                 `json:"access_token"`
+	TenantID    string                 `json:"tenant_id"`
+	User        guestLoginUserResponse `json:"user"`
+}
+
+func newGuestLoginResponse(guest *application.GuestAccount, accessToken string, systemRole domain.SystemRole) guestLoginResponse {
+	return guestLoginResponse{
+		AccessToken: accessToken,
+		TenantID:    guest.TenantID,
+		User: guestLoginUserResponse{
+			Sub:         guest.UserID,
+			TenantID:    guest.TenantID,
+			Role:        "member",
+			GlobalRole:  "",
+			SystemRole:  string(systemRole),
+			AvatarURL:   guest.AvatarURL,
+			GitHubLogin: guest.GitHubLogin,
+		},
+	}
+}
 
 // GuestLogin provisions a temporary guest account and issues a token pair.
 // The guest joins the default tenant as a member — same data visibility and
@@ -44,5 +77,5 @@ func (h *AuthHandler) GuestLogin(c *gin.Context) {
 	}
 	h.setRefreshCookie(c, rawRT)
 	h.deps.Logger.Info("guest account created", zap.String("user_id", guest.UserID), zap.String("tenant_id", guest.TenantID))
-	c.JSON(http.StatusCreated, gin.H{"access_token": accessJWT, "tenant_id": guest.TenantID})
+	c.JSON(http.StatusCreated, newGuestLoginResponse(guest, accessJWT, systemRole))
 }
