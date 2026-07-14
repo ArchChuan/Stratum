@@ -181,6 +181,38 @@ describe('ResponsiveDataView', () => {
     expect(screen.getByTitle('1')).toHaveClass('ant-pagination-item-active');
   });
 
+  it('invokes both callback slots and strips functions from table pagination', () => {
+    responsive.isMobile = true;
+    const sharedCallback = vi.fn();
+
+    render(
+      <ResponsiveDataView
+        rows={rows}
+        columns={columns}
+        rowKey="id"
+        pagination={{
+          current: 1,
+          pageSize: 10,
+          total: 30,
+          onChange: sharedCallback,
+          showTotal: () => '共 30 项',
+        }}
+        onChange={sharedCallback}
+        renderMobileItem={(row) => <article>{row.name}</article>}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle('2'));
+
+    expect(sharedCallback).toHaveBeenCalledTimes(2);
+    expect(sharedCallback.mock.calls[0]).toEqual([2, 10]);
+    const tablePagination = sharedCallback.mock.calls[1][0];
+    expect(tablePagination).toMatchObject({ current: 2, pageSize: 10, total: 30 });
+    expect(tablePagination).not.toHaveProperty('onChange');
+    expect(tablePagination).not.toHaveProperty('showTotal');
+    expect(Object.values(tablePagination)).not.toContainEqual(expect.any(Function));
+  });
+
   it('keeps pagination available on an empty mobile page when results exist', () => {
     responsive.isMobile = true;
     render(

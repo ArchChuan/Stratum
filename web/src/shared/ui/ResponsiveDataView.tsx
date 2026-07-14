@@ -8,6 +8,12 @@ import { ListSkeleton } from './ListSkeleton';
 
 import { useResponsive } from '@/shared/hooks';
 
+function omitFunctionValues<T extends object>(value: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => typeof entry !== 'function'),
+  ) as Partial<T>;
+}
+
 export interface ResponsiveDataViewProps<T extends object> {
   rows: T[];
   columns: ColumnsType<T>;
@@ -57,10 +63,10 @@ export function ResponsiveDataView<T extends object>({
 
     const paginationOnChange = resolvedPagination.onChange;
     paginationOnChange?.(current, pageSize);
-    if (!onChange || Object.is(paginationOnChange, onChange)) return;
+    if (!onChange) return;
 
     onChange(
-      { ...resolvedPagination, current, pageSize },
+      { ...omitFunctionValues(resolvedPagination), current, pageSize },
       {},
       {},
       { action: 'paginate', currentDataSource: rows },
