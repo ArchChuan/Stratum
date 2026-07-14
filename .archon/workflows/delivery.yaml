@@ -1,0 +1,30 @@
+name: team-delivery
+description: Run bounded Stratum repair, project E2E evidence collection, delivery summary, and final human acceptance.
+provider: codex
+interactive: true
+nodes:
+  - id: repair-and-e2e
+    loop:
+      prompt: |
+        Use the stratum-e2e-development skill and the approved acceptance contract.
+        Diagnose the current failure from evidence, add a regression test first, make the minimum scoped fix, and rerun `.archon/scripts/verify-e2e.sh`.
+        Previous attempt: $LOOP_PREV_OUTPUT
+        Signal <promise>VERIFIED</promise> only after the real local E2E runner succeeds.
+      until: VERIFIED
+      max_iterations: 3
+      fresh_context: true
+      until_bash: ".archon/scripts/verify-e2e.sh"
+  - id: summarize
+    command: summarize-delivery
+    provider: claude
+    model: large
+    context: fresh
+    depends_on: [repair-and-e2e]
+  - id: delivery-approval
+    approval:
+      message: "请检查 Stratum 的真实 E2E 证据、未验证项和交付报告后确认验收。"
+      capture_response: true
+      on_reject:
+        prompt: "Address the requested evidence or delivery-report gap: $REJECTION_REASON"
+        max_attempts: 3
+    depends_on: [summarize]
