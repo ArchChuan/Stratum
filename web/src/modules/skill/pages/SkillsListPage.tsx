@@ -8,11 +8,14 @@ import { Button, Card, Col, Empty, Input, Row, Skeleton, Space, Typography } fro
 import { SkillCard } from '../components/SkillCard';
 import { useSkillsListPage } from '../hooks/useSkillsListPage';
 
+import { useTenantRole } from '@/modules/iam';
+
 const { Title, Text } = Typography;
 
 export const SkillsListPage = () => {
   const { skills, loading, searchText, setSearchText, navigate, handleDelete } =
     useSkillsListPage();
+  const { isAdmin } = useTenantRole();
 
   return (
     <div>
@@ -42,9 +45,15 @@ export const SkillsListPage = () => {
             allowClear
             style={{ width: '100%', maxWidth: 220 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/skills/create')}>
-            创建技能
-          </Button>
+          {isAdmin && (
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => navigate('/skills/create')}
+            >
+              创建技能
+            </Button>
+          )}
         </Space>
       </div>
 
@@ -64,10 +73,12 @@ export const SkillsListPage = () => {
       ) : skills.length === 0 ? (
         <Empty
           image={<ThunderboltOutlined style={{ fontSize: 48, color: '#d9d9d9' }} />}
-          description={searchText ? '没有找到匹配的技能' : '还没有技能，点击右上角创建'}
+          description={
+            searchText ? '没有找到匹配的技能' : isAdmin ? '还没有技能，点击右上角创建' : '还没有技能'
+          }
           style={{ padding: '60px 0' }}
         >
-          {!searchText && (
+          {!searchText && isAdmin && (
             <Button
               type="primary"
               icon={<PlusOutlined />}
@@ -85,6 +96,7 @@ export const SkillsListPage = () => {
                 skill={skill}
                 onEdit={(id) => navigate(`/skills/${id}/workspace`)}
                 onDelete={handleDelete}
+                canManage={isAdmin}
               />
             </Col>
           ))}

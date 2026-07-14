@@ -15,6 +15,7 @@ import { useMCPServersPage } from '../hooks/useMCPServersPage';
 import type { MCPServer } from '../model/mcp';
 
 import { COMPACT_PAGE_SIZE } from '@/constants';
+import { useTenantRole } from '@/modules/iam';
 import { DangerPopconfirm, ResponsiveDataView } from '@/shared/ui';
 
 const { Title, Text } = Typography;
@@ -38,6 +39,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 export const MCPServersPage = () => {
   const navigate = useNavigate();
+  const { isAdmin } = useTenantRole();
   const { servers, loading, detailServer, setDetailServer, fetchServers, handleDisconnect, handleReconnect, handleDelete } =
     useMCPServersPage();
 
@@ -72,7 +74,7 @@ export const MCPServersPage = () => {
     },
     {
       title: '操作',
-      width: 260,
+      width: isAdmin ? 260 : 80,
       render: (_: unknown, r: MCPServer) => (
         <Space size={4}>
           <Button
@@ -83,43 +85,47 @@ export const MCPServersPage = () => {
           >
             详情
           </Button>
-          <Button
-            size="small"
-            type="link"
-            onClick={() => navigate(`/mcp/${r.id}/edit`)}
-            style={{ padding: '0 4px' }}
-          >
-            编辑
-          </Button>
-          {r.status === 'connected' ? (
-            <DangerPopconfirm
-              title="确认断开此服务器连接？"
-              okText="断开"
-              onConfirm={() => handleDisconnect(r.id)}
-            >
-              <Button size="small" type="link" danger style={{ padding: '0 4px' }}>
-                断开
+          {isAdmin && (
+            <>
+              <Button
+                size="small"
+                type="link"
+                onClick={() => navigate(`/mcp/${r.id}/edit`)}
+                style={{ padding: '0 4px' }}
+              >
+                编辑
               </Button>
-            </DangerPopconfirm>
-          ) : (
-            <Button
-              size="small"
-              type="link"
-              style={{ padding: '0 4px' }}
-              onClick={() => handleReconnect(r.id)}
-            >
-              连接
-            </Button>
+              {r.status === 'connected' ? (
+                <DangerPopconfirm
+                  title="确认断开此服务器连接？"
+                  okText="断开"
+                  onConfirm={() => handleDisconnect(r.id)}
+                >
+                  <Button size="small" type="link" danger style={{ padding: '0 4px' }}>
+                    断开
+                  </Button>
+                </DangerPopconfirm>
+              ) : (
+                <Button
+                  size="small"
+                  type="link"
+                  style={{ padding: '0 4px' }}
+                  onClick={() => handleReconnect(r.id)}
+                >
+                  连接
+                </Button>
+              )}
+              <DangerPopconfirm
+                title="确认删除此服务器配置？关联的 Agent 将无法再使用此服务器。"
+                okText="删除"
+                onConfirm={() => handleDelete(r.id)}
+              >
+                <Button size="small" type="link" danger style={{ padding: '0 4px' }}>
+                  删除
+                </Button>
+              </DangerPopconfirm>
+            </>
           )}
-          <DangerPopconfirm
-            title="确认删除此服务器配置？关联的 Agent 将无法再使用此服务器。"
-            okText="删除"
-            onConfirm={() => handleDelete(r.id)}
-          >
-            <Button size="small" type="link" danger style={{ padding: '0 4px' }}>
-              删除
-            </Button>
-          </DangerPopconfirm>
         </Space>
       ),
     },
@@ -147,9 +153,11 @@ export const MCPServersPage = () => {
           <Button icon={<ReloadOutlined />} onClick={fetchServers} loading={loading}>
             刷新
           </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/mcp/create')}>
-            添加服务器
-          </Button>
+          {isAdmin && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/mcp/create')}>
+              添加服务器
+            </Button>
+          )}
         </Space>
       </div>
 
@@ -191,35 +199,39 @@ export const MCPServersPage = () => {
                       aria-label="查看详情"
                       onClick={() => setDetailServer(server)}
                     />
-                    <Button
-                      size="small"
-                      icon={<EditOutlined />}
-                      aria-label="编辑服务器"
-                      onClick={() => navigate(`/mcp/${server.id}/edit`)}
-                    />
-                    {server.status === 'connected' ? (
-                      <DangerPopconfirm
-                        title="确认断开此服务器连接？"
-                        okText="断开"
-                        onConfirm={() => handleDisconnect(server.id)}
-                      >
-                        <Button size="small" danger icon={<DisconnectOutlined />} aria-label="断开连接" />
-                      </DangerPopconfirm>
-                    ) : (
-                      <Button
-                        size="small"
-                        icon={<LinkOutlined />}
-                        aria-label="连接服务器"
-                        onClick={() => handleReconnect(server.id)}
-                      />
+                    {isAdmin && (
+                      <>
+                        <Button
+                          size="small"
+                          icon={<EditOutlined />}
+                          aria-label="编辑服务器"
+                          onClick={() => navigate(`/mcp/${server.id}/edit`)}
+                        />
+                        {server.status === 'connected' ? (
+                          <DangerPopconfirm
+                            title="确认断开此服务器连接？"
+                            okText="断开"
+                            onConfirm={() => handleDisconnect(server.id)}
+                          >
+                            <Button size="small" danger icon={<DisconnectOutlined />} aria-label="断开连接" />
+                          </DangerPopconfirm>
+                        ) : (
+                          <Button
+                            size="small"
+                            icon={<LinkOutlined />}
+                            aria-label="连接服务器"
+                            onClick={() => handleReconnect(server.id)}
+                          />
+                        )}
+                        <DangerPopconfirm
+                          title="确认删除此服务器配置？关联的 Agent 将无法再使用此服务器。"
+                          okText="删除"
+                          onConfirm={() => handleDelete(server.id)}
+                        >
+                          <Button size="small" danger icon={<DeleteOutlined />} aria-label="删除服务器" />
+                        </DangerPopconfirm>
+                      </>
                     )}
-                    <DangerPopconfirm
-                      title="确认删除此服务器配置？关联的 Agent 将无法再使用此服务器。"
-                      okText="删除"
-                      onConfirm={() => handleDelete(server.id)}
-                    >
-                      <Button size="small" danger icon={<DeleteOutlined />} aria-label="删除服务器" />
-                    </DangerPopconfirm>
                   </Space>
                 </Flex>
               </div>

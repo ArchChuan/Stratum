@@ -27,9 +27,17 @@ interface AgentCardProps {
   onExecute: (a: Agent) => void;
   onEdit: (a: Agent) => void;
   onDelete: (id: string, name: string) => void;
+  /** 仅管理员可见编辑/删除，普通成员只能执行。 */
+  canManage?: boolean;
 }
 
-export const AgentCard = ({ agent, onExecute, onEdit, onDelete }: AgentCardProps) => (
+export const AgentCard = ({
+  agent,
+  onExecute,
+  onEdit,
+  onDelete,
+  canManage = false,
+}: AgentCardProps) => (
   <Card
     style={{
       borderRadius: 12,
@@ -116,34 +124,38 @@ export const AgentCard = ({ agent, onExecute, onEdit, onDelete }: AgentCardProps
             style={{ color: '#1677ff' }}
           />
         </Tooltip>
-        <Tooltip title="编辑">
-          <Button
-            aria-label="编辑 Agent"
-            className="responsive-touch-target"
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => onEdit(agent)}
-          />
-        </Tooltip>
-        <Tooltip title="删除">
-          <Popconfirm
-            title={`确定删除 "${agent.name}" 吗？`}
-            onConfirm={() => onDelete(agent.id, agent.name)}
-            okText="删除"
-            okType="danger"
-            cancelText="取消"
-          >
-            <Button
-              aria-label="删除 Agent"
-              className="responsive-touch-target"
-              type="text"
-              size="small"
-              danger
-              icon={<DeleteOutlined />}
-            />
-          </Popconfirm>
-        </Tooltip>
+        {canManage && (
+          <>
+            <Tooltip title="编辑">
+              <Button
+                aria-label="编辑 Agent"
+                className="responsive-touch-target"
+                type="text"
+                size="small"
+                icon={<EditOutlined />}
+                onClick={() => onEdit(agent)}
+              />
+            </Tooltip>
+            <Tooltip title="删除">
+              <Popconfirm
+                title={`确定删除 "${agent.name}" 吗？`}
+                onConfirm={() => onDelete(agent.id, agent.name)}
+                okText="删除"
+                okType="danger"
+                cancelText="取消"
+              >
+                <Button
+                  aria-label="删除 Agent"
+                  className="responsive-touch-target"
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                />
+              </Popconfirm>
+            </Tooltip>
+          </>
+        )}
       </Space>
     </div>
   </Card>

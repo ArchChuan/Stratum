@@ -7,6 +7,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { skillApi } from '../api/skill.api';
 import { parseSkillTestInput, type SkillFormValues, type SkillVersion, type SkillWorkspace } from '../model/skill';
 
+import { useTenantRole } from '@/modules/iam';
 import { extractErrorMessage } from '@/shared/lib';
 
 const { Title, Text, Paragraph } = Typography;
@@ -39,6 +40,7 @@ interface ImplementationFormValues {
 export const SkillWorkspacePage = () => {
   const { id = '' } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { isAdmin } = useTenantRole();
   const [workspace, setWorkspace] = useState<SkillWorkspace | null>(null);
   const [loading, setLoading] = useState(true);
   const [capabilityLoading, setCapabilityLoading] = useState(false);
@@ -212,11 +214,13 @@ export const SkillWorkspacePage = () => {
                 <Form.Item label="输出说明" name="outputSpec">
                   <TextArea rows={2} placeholder="由样例推断，可在这里补充结构说明" />
                 </Form.Item>
-                <ActionRow>
-                  <Button type="primary" htmlType="submit" loading={capabilityLoading}>
-                    保存能力
-                  </Button>
-                </ActionRow>
+                {isAdmin && (
+                  <ActionRow>
+                    <Button type="primary" htmlType="submit" loading={capabilityLoading}>
+                      保存能力
+                    </Button>
+                  </ActionRow>
+                )}
               </Form>
             ),
           },
@@ -243,11 +247,13 @@ export const SkillWorkspacePage = () => {
                 <Form.Item label="确认契约" name="confirmed" valuePropName="checked" extra="发布前必须确认，确认后 Agent 才能把它当成稳定工具协议。">
                   <Switch checkedChildren="已确认" unCheckedChildren="未确认" />
                 </Form.Item>
-                <ActionRow>
-                  <Button type="primary" htmlType="submit" loading={contractLoading}>
-                    保存契约
-                  </Button>
-                </ActionRow>
+                {isAdmin && (
+                  <ActionRow>
+                    <Button type="primary" htmlType="submit" loading={contractLoading}>
+                      保存契约
+                    </Button>
+                  </ActionRow>
+                )}
               </Form>
             ),
           },
@@ -278,11 +284,13 @@ export const SkillWorkspacePage = () => {
                 <Form.Item label="密钥引用" name="secretRefs" extra="一行一个引用名，只保存引用，不保存密钥值。">
                   <TextArea rows={3} />
                 </Form.Item>
-                <ActionRow>
-                  <Button type="primary" htmlType="submit" loading={implementationLoading}>
-                    保存实现
-                  </Button>
-                </ActionRow>
+                {isAdmin && (
+                  <ActionRow>
+                    <Button type="primary" htmlType="submit" loading={implementationLoading}>
+                      保存实现
+                    </Button>
+                  </ActionRow>
+                )}
               </Form>
             ),
           },
@@ -321,11 +329,13 @@ export const SkillWorkspacePage = () => {
                   <br />
                   工具名：{String(draft.toolContract.toolName || '')}
                 </Paragraph>
-                <ActionRow>
-                  <Button icon={<SendOutlined />} type="primary" loading={publishLoading} onClick={handlePublish}>
-                    发布当前草稿
-                  </Button>
-                </ActionRow>
+                {isAdmin && (
+                  <ActionRow>
+                    <Button icon={<SendOutlined />} type="primary" loading={publishLoading} onClick={handlePublish}>
+                      发布当前草稿
+                    </Button>
+                  </ActionRow>
+                )}
               </Space>
             ),
           },
