@@ -140,6 +140,7 @@ k8s/secret.yaml
 headroom_memory.db
 __debug_bin*
 cmd/server/__debug_bin*
+.tokensave
 
 # Helm
 charts/*/Chart.lock
