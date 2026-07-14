@@ -1,4 +1,6 @@
 /* eslint-disable import/no-restricted-paths -- Cross-module page layout contract required by the responsive plan. */
+import { readFileSync } from 'node:fs';
+
 import { render, screen } from '@testing-library/react';
 import { Form } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
@@ -20,6 +22,8 @@ import { SkillFormSections } from '@/modules/skill/components/SkillFormSections'
 vi.mock('@/modules/iam/components/AuthContext', () => ({
   useAuth: () => ({ login: vi.fn() }),
 }));
+
+const responsiveCss = readFileSync('src/index.css', 'utf8');
 
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
@@ -186,5 +190,12 @@ describe('responsive page contracts', () => {
 
     expect(document.querySelector('.mobile-overlay')).toBeInTheDocument();
     expect(document.querySelector('.ant-modal-body')).toHaveStyle({ overflowY: 'auto' });
+  });
+
+  it('constrains mobile overlay geometry and keeps the modal body scrollable', () => {
+    expect(responsiveCss).toMatch(/\.mobile-overlay\.ant-modal[\s\S]*top:\s*max\(12px, env\(safe-area-inset-top, 0px\)\)/);
+    expect(responsiveCss).toMatch(/\.mobile-overlay\.ant-modal[\s\S]*max-height:\s*calc\(100dvh[^;]+\)/);
+    expect(responsiveCss).toMatch(/\.mobile-overlay \.ant-modal-content[\s\S]*display:\s*flex[\s\S]*flex-direction:\s*column/);
+    expect(responsiveCss).toMatch(/\.mobile-overlay \.ant-modal-body[\s\S]*flex:\s*1[\s\S]*min-height:\s*0[\s\S]*overflow-y:\s*auto/);
   });
 });

@@ -245,13 +245,29 @@ button:focus-visible,
   .mobile-overlay .ant-modal {
     width: calc(100vw - 24px) !important;
     max-width: calc(100vw - 24px);
-    margin: 12px auto;
-    padding-bottom: env(safe-area-inset-bottom, 0);
+    top: max(12px, env(safe-area-inset-top, 0px));
+    max-height: calc(100vh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    margin: 0 auto;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   .mobile-overlay .ant-modal-content,
   .mobile-overlay .ant-drawer-content-wrapper {
     max-width: 100vw;
+  }
+
+  .mobile-overlay .ant-modal-content {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  }
+
+  .mobile-overlay .ant-modal-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   .mobile-overlay .ant-drawer-content-wrapper {
