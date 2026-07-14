@@ -13,7 +13,7 @@ import { authApi } from '../api/auth.api';
 import { tenantApi } from '../api/tenant.api';
 import type { TenantSummary, User } from '../model/auth';
 
-import api, { setupApiInterceptors, markAuthReady, resetAuthReady } from '@/services/client';
+import api, { setupApiInterceptors, markAuthReady } from '@/services/client';
 
 interface AuthContextValue {
   user: User | null;
@@ -80,7 +80,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setUser(null);
       updateToken(null);
       setTenants([]);
-      resetAuthReady();
+      markAuthReady();
     });
   }, []);
 
@@ -145,7 +145,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setUser(null);
     updateToken(null);
     setTenants([]);
-    resetAuthReady();
+    markAuthReady();
   };
 
   const switchTenant = async (tenantId: string) => {
