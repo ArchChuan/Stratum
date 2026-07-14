@@ -40,7 +40,7 @@ export function ResourceListPage<T>({
           marginBottom: 16,
         }}
       >
-        <div className="responsive-toolbar">
+        <div>
           <Title level={4} style={{ margin: 0 }}>
             {title}
           </Title>
@@ -50,7 +50,7 @@ export function ResourceListPage<T>({
             </Text>
           )}
         </div>
-        <div>
+        <div className="responsive-list-actions responsive-toolbar">
           {toolbarExtra}
           {onCreate && (
             <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>

@@ -56,7 +56,10 @@ describe('responsive page primitives', () => {
     );
 
     expect(container.querySelector('.responsive-page-header')).toBeInTheDocument();
-    expect(container.querySelector('.responsive-toolbar')).toBeInTheDocument();
+    const actions = container.querySelector('.responsive-list-actions.responsive-toolbar');
+    expect(actions).toBeInTheDocument();
+    expect(actions).toContainElement(screen.getByRole('button', { name: '筛选' }));
+    expect(actions).toContainElement(screen.getByRole('button', { name: /新建/ }));
     fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.click(screen.getByRole('button', { name: /新建/ }));
     expect(toolbarAction).toHaveBeenCalledTimes(1);
