@@ -182,6 +182,8 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 		s.TotalTokens += total
 		s.TotalCostUSD += cost
 		llmSpan.SetAttributes(
+			attribute.Int("llm.prompt_tokens", resp.Usage.Prompt),
+			attribute.Int("llm.completion_tokens", resp.Usage.Completion),
 			attribute.Bool("llm.has_tool_calls", len(resp.ToolCalls) > 0),
 		)
 		logger.Info("react.llm",
