@@ -54,7 +54,7 @@ export const LoginPage = () => {
     >
       <Card
         className="auth-card"
-        style={{ maxWidth: 380, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+        style={{ width: '100%', maxWidth: 380, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
       >
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
           <div>

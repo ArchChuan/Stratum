@@ -1,15 +1,20 @@
 /* eslint-disable import/no-restricted-paths -- Cross-module page layout contract required by the responsive plan. */
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { Form } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
+import { AgentCard } from '@/modules/agent/components/AgentCard';
 import { AgentsListFilters } from '@/modules/agent/components/AgentsListFilters';
 import { LoginPage } from '@/modules/iam/pages/auth/LoginPage';
 import { OnboardingPage } from '@/modules/iam/pages/auth/OnboardingPage';
+import { WorkspaceCard } from '@/modules/knowledge/components/WorkspaceCard';
 import { WorkspaceConfigForm } from '@/modules/knowledge/components/WorkspaceConfigForm';
+import { WorkspaceCreateModal } from '@/modules/knowledge/components/WorkspaceCreateModal';
 import { WorkspaceDetailHeader } from '@/modules/knowledge/components/WorkspaceDetailHeader';
+import { WorkspaceListGrid } from '@/modules/knowledge/components/WorkspaceListGrid';
 import { WorkspaceListHeader } from '@/modules/knowledge/components/WorkspaceListHeader';
+import { SkillCard } from '@/modules/skill/components/SkillCard';
 import { SkillFormSections } from '@/modules/skill/components/SkillFormSections';
 
 vi.mock('@/modules/iam/components/AuthContext', () => ({
@@ -97,10 +102,89 @@ describe('responsive page contracts', () => {
       <MemoryRouter><LoginPage /></MemoryRouter>,
     );
     expect(container.querySelector('.auth-page')).toBeInTheDocument();
-    expect(container.querySelector('.auth-card')).toBeInTheDocument();
+    const loginCard = container.querySelector<HTMLElement>('.auth-card');
+    expect(loginCard).toHaveStyle({ width: '100%', maxWidth: '380px' });
 
     rerender(<MemoryRouter><OnboardingPage /></MemoryRouter>);
     expect(container.querySelector('.auth-page')).toBeInTheDocument();
-    expect(container.querySelector('.auth-card')).toBeInTheDocument();
+    const onboardingCard = container.querySelector<HTMLElement>('.auth-card');
+    expect(onboardingCard).toHaveStyle({ width: '100%', maxWidth: '440px' });
+  });
+
+  it('marks card grids and icon actions for narrow touch screens', () => {
+    const { container } = render(
+      <>
+        <WorkspaceListGrid
+          workspaces={[{
+            name: 'docs',
+            description: '',
+            config: { embedding_model: '', chunking_strategy: 'structure_recursive' },
+          }]}
+          isAdmin
+          searchText=""
+          onOpen={vi.fn()}
+          onDelete={vi.fn()}
+          onCreate={vi.fn()}
+        />
+        <AgentCard
+          agent={{
+            id: 'agent-1',
+            name: 'Agent',
+            description: '',
+            type: 'react',
+            systemPrompt: '',
+            llmModel: '',
+            allowedSkills: [],
+            mcpServerIds: [],
+            knowledgeWorkspaceIds: [],
+            memoryScope: 'user',
+          }}
+          onExecute={vi.fn()}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+        />
+        <SkillCard
+          skill={{ id: 'skill-1', name: 'Skill', description: '', type: 'code' }}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+        />
+        <WorkspaceCard
+          ws={{
+            name: 'workspace',
+            description: '',
+            config: { embedding_model: '', chunking_strategy: 'structure_recursive' },
+          }}
+          isAdmin
+          onOpen={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      </>,
+    );
+
+    expect(container.querySelector('.responsive-card-grid')).toBeInTheDocument();
+    for (const name of ['执行 Agent', '编辑 Agent', '删除 Agent', '编辑技能', '删除技能', '查看知识库', '删除知识库']) {
+      for (const button of screen.getAllByRole('button', { name })) {
+        expect(button).toHaveClass('responsive-touch-target');
+      }
+    }
+  });
+
+  it('keeps the create-workspace modal within a phone viewport and scrolls its body', () => {
+    const Fixture = () => {
+      const [form] = Form.useForm();
+      return (
+        <WorkspaceCreateModal
+          open
+          loading={false}
+          form={form}
+          onClose={vi.fn()}
+          onSubmit={vi.fn()}
+        />
+      );
+    };
+    render(<Fixture />);
+
+    expect(document.querySelector('.mobile-overlay')).toBeInTheDocument();
+    expect(document.querySelector('.ant-modal-body')).toHaveStyle({ overflowY: 'auto' });
   });
 });

@@ -107,6 +107,8 @@ export const AgentCard = ({ agent, onExecute, onEdit, onDelete }: AgentCardProps
       <Space size={4}>
         <Tooltip title="执行">
           <Button
+            aria-label="执行 Agent"
+            className="responsive-touch-target"
             type="text"
             size="small"
             icon={<PlayCircleOutlined />}
@@ -116,6 +118,8 @@ export const AgentCard = ({ agent, onExecute, onEdit, onDelete }: AgentCardProps
         </Tooltip>
         <Tooltip title="编辑">
           <Button
+            aria-label="编辑 Agent"
+            className="responsive-touch-target"
             type="text"
             size="small"
             icon={<EditOutlined />}
@@ -130,7 +134,14 @@ export const AgentCard = ({ agent, onExecute, onEdit, onDelete }: AgentCardProps
             okType="danger"
             cancelText="取消"
           >
-            <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+            <Button
+              aria-label="删除 Agent"
+              className="responsive-touch-target"
+              type="text"
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+            />
           </Popconfirm>
         </Tooltip>
       </Space>

@@ -49,7 +49,7 @@ export const SkillsListPage = () => {
       </div>
 
       {loading ? (
-        <Row gutter={[16, 16]}>
+        <Row className="responsive-card-grid" gutter={[16, 16]}>
           {[1, 2, 3, 4].map((i) => (
             <Col xs={24} sm={12} lg={8} xl={6} key={i}>
               <Card
@@ -78,7 +78,7 @@ export const SkillsListPage = () => {
           )}
         </Empty>
       ) : (
-        <Row gutter={[16, 16]}>
+        <Row className="responsive-card-grid" gutter={[16, 16]}>
           {skills.map((skill) => (
             <Col xs={24} sm={12} lg={8} xl={6} key={skill.id}>
               <SkillCard

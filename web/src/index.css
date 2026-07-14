@@ -114,6 +114,7 @@ button:focus-visible,
   justify-content: center;
   padding: 12px;
   background: #f0f2f5;
+  box-sizing: border-box;
 }
 
 .auth-card {
@@ -177,6 +178,16 @@ button:focus-visible,
 
   .responsive-card-actions {
     flex-wrap: wrap;
+  }
+
+  .responsive-touch-target {
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .responsive-card-grid > .ant-col {
+    flex: 0 0 100%;
+    max-width: 100%;
   }
 
   .mobile-full-width {

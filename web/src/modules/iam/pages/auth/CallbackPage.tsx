@@ -65,7 +65,13 @@ export const CallbackPage = () => {
           justifyContent: 'center',
         }}
       >
-        <Alert className="auth-card long-text" type="error" message={error} description={<a href="/login">返回登录</a>} />
+        <Alert
+          className="auth-card long-text"
+          style={{ width: '100%', maxWidth: 440 }}
+          type="error"
+          message={error}
+          description={<a href="/login">返回登录</a>}
+        />
       </div>
     );
   }
