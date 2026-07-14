@@ -53,7 +53,11 @@ export function ResponsiveDataView<T extends object>({
   );
 
   const handlePageChange = (current: number, pageSize: number) => {
-    if (!onChange || resolvedPagination === false) return;
+    if (resolvedPagination === false) return;
+
+    const paginationOnChange = resolvedPagination.onChange;
+    paginationOnChange?.(current, pageSize);
+    if (!onChange || Object.is(paginationOnChange, onChange)) return;
 
     onChange(
       { ...resolvedPagination, current, pageSize },

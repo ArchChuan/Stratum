@@ -156,6 +156,31 @@ describe('ResponsiveDataView', () => {
     expect(extra.currentDataSource[0]).toBe(rows[0]);
   });
 
+  it('preserves the configured pagination onChange callback on mobile', () => {
+    responsive.isMobile = true;
+    const paginationOnChange = vi.fn();
+
+    render(
+      <ResponsiveDataView
+        rows={rows}
+        columns={columns}
+        rowKey="id"
+        pagination={{
+          current: 1,
+          pageSize: 10,
+          total: 30,
+          onChange: paginationOnChange,
+        }}
+        renderMobileItem={(row) => <article>{row.name}</article>}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle('2'));
+
+    expect(paginationOnChange).toHaveBeenCalledWith(2, 10);
+    expect(screen.getByTitle('1')).toHaveClass('ant-pagination-item-active');
+  });
+
   it('keeps pagination available on an empty mobile page when results exist', () => {
     responsive.isMobile = true;
     render(
