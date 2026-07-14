@@ -30,6 +30,12 @@ body {
   min-height: 100vh;
 }
 
+button:focus-visible,
+.ant-btn:focus-visible {
+  outline: 2px solid #0969da !important;
+  outline-offset: 2px;
+}
+
 /* Sider children container must fill height so inner flex layout works. */
 .ant-layout-sider-children {
   display: flex;

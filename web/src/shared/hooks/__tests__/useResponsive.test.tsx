@@ -80,4 +80,12 @@ describe('useResponsive', () => {
     unmount();
     expect([...controller.queries.values()].every((listeners) => listeners.size === 0)).toBe(true);
   });
+
+  it('returns safe defaults when matchMedia is unavailable', () => {
+    vi.stubGlobal('matchMedia', undefined);
+
+    const { result } = renderHook(() => useResponsive());
+
+    expect(result.current).toEqual({ isMobile: false, isCompact: false });
+  });
 });
