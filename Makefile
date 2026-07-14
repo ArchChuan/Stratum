@@ -7,7 +7,7 @@
 	docker-start \
 	k8s-deploy k8s-delete k8s-logs \
 	helm-install helm-upgrade helm-uninstall helm-diff helm-lint \
-	hooks-test ci-backend ci-frontend ci-docker \
+	migration-guardrails ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	dev-up dev-down \
 	run fe-dev help clean
@@ -162,12 +162,13 @@ helm-upgrade:
 helm-uninstall:
 	helm uninstall $(HELM_RELEASE) -n $(NAMESPACE)
 
-# ─── Hook 护栏回归（快速门禁，无需 infra）─────────────────────────────────
-hooks-test:
-	bash .claude/hooks/run-tests.sh
+# ─── Migration 护栏（快速门禁，无需 infra）────────────────────────────────
+migration-guardrails:
+	bash scripts/quality/check-migration-boundaries-test.sh
+	bash scripts/quality/check-migration-boundaries.sh
 
 # ─── CI 持续集成（构建+测试+推镜像）───────────────────────────────────────
-ci-backend: hooks-test be-install be-fmt be-lint
+ci-backend: migration-guardrails be-install be-fmt be-lint
 	$(MAKE) infra-up
 	$(MAKE) infra-wait
 	$(MAKE) be-test be-build

@@ -1,0 +1,11 @@
+assistants:
+  claude:
+    model: sonnet
+    claudeBinaryPath: /home/yang/.local/bin/claude
+    settingSources:
+      - project
+      - user
+  codex:
+    model: gpt-5.1-codex
+    modelReasoningEffort: high
+    codexBinaryPath: /usr/local/bin/codex

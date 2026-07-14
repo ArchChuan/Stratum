@@ -108,10 +108,20 @@ ENV/
 # Generated files
 *.pb.go
 
-# Claude Code specific
-.claude/settings.local.json
-!.claude/settings.json
-!.claude/PROJECT_RULES.md
+# Local AI assistants, code indexes, and developer automation
+/.agents/
+/.claude/
+/.codex/
+/.serena/
+/.tokensave/
+/.worktrees/
+/AGENTS.md
+/CLAUDE.md
+/scripts/agents.md
+/scripts/daily-agent-interview.sh
+/scripts/scan-risks-daily.sh
+/scripts/update-docs-daily.sh
+/test-results/
 
 # Pre-commit framework
 .pre-commit-framework/
@@ -170,8 +180,6 @@ coverage.txt
 
 # Goreleaser
 dist/
-
-.claude/worktrees/
 
 .rtk
 
