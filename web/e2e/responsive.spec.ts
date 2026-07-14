@@ -41,7 +41,7 @@ async function mockAuthenticatedApi(page: Page) {
       github_login: 'responsive-user',
     }),
   );
-  await page.route('**/tenant/settings', (route) =>
+  await page.route('**/api/v1/tenant/settings', (route) =>
     json(route, { tenant_id: 'tenant-1', tenant_name: '移动端验收租户', settings: {} }),
   );
   await page.route('**/tenant/list', (route) =>
@@ -103,6 +103,17 @@ async function expectWithinViewport(page: Page, selector: string) {
   expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height + 1);
 }
 
+async function expectWithinHorizontalViewport(page: Page, selector: string) {
+  const locator = page.locator(selector).filter({ visible: true }).first();
+  await expect(locator).toBeVisible();
+  const box = await locator.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(-1);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width + 1);
+}
+
 test('login remains usable without horizontal overflow', async ({ page }) => {
   await page.route('**/auth/refresh', (route) => json(route, { error: 'unauthorized' }, 401));
   await page.goto('/login');
@@ -149,6 +160,15 @@ test.describe('authenticated responsive workflows', () => {
 
     await expect(page.getByRole('dialog', { name: '新建知识库' })).toBeVisible();
     await expectWithinViewport(page, '.ant-modal');
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test('tenant settings embedding controls stay inside the viewport', async ({ page }) => {
+    await page.goto('/tenant/settings');
+
+    await expect(page.getByRole('heading', { name: '租户设置' })).toBeVisible();
+    await expectWithinHorizontalViewport(page, '.tenant-embedding-card');
+    await expectWithinHorizontalViewport(page, '.tenant-embedding-card .ant-select');
     await expectNoHorizontalOverflow(page);
   });
 

@@ -234,6 +234,11 @@ button:focus-visible,
     align-items: stretch;
   }
 
+  .tenant-embedding-controls > .ant-space-item:first-child {
+    width: 100%;
+    max-width: 300px;
+  }
+
   .responsive-toolbar .ant-input,
   .responsive-toolbar .ant-input-affix-wrapper,
   .responsive-toolbar .ant-picker,
