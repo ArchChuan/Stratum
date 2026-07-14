@@ -32,6 +32,7 @@ interface Props {
   onCreate: () => void;
   onRename: (convId: string, name: string) => Promise<void> | void;
   onDelete: (convId: string) => void;
+  fluid?: boolean;
 }
 
 export const ChatConversationSidebar = ({
@@ -45,6 +46,7 @@ export const ChatConversationSidebar = ({
   onCreate,
   onRename,
   onDelete,
+  fluid = false,
 }: Props) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
@@ -58,7 +60,8 @@ export const ChatConversationSidebar = ({
   return (
     <div
       style={{
-        width: 220,
+        width: fluid ? '100%' : 220,
+        height: '100%',
         background: '#fff',
         borderRight: '1px solid #f0f0f0',
         display: 'flex',
@@ -82,6 +85,7 @@ export const ChatConversationSidebar = ({
       <div style={{ padding: '0 12px 8px' }}>
         <Button
           icon={<PlusOutlined />}
+          aria-label="新建会话"
           size="small"
           block
           onClick={onCreate}
@@ -97,7 +101,10 @@ export const ChatConversationSidebar = ({
           conversations.map((c) => (
             <div
               key={c.id}
-              onClick={() => onSelectConv(c.id)}
+              onClick={(event) => {
+                if ((event.target as HTMLElement).closest('button, input')) return;
+                onSelectConv(c.id);
+              }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -162,6 +169,7 @@ export const ChatConversationSidebar = ({
                       type="text"
                       size="small"
                       icon={<EditOutlined style={{ fontSize: 11 }} />}
+                      aria-label="重命名"
                       onClick={(e) => {
                         e.stopPropagation();
                         setEditingId(c.id);
@@ -185,7 +193,7 @@ export const ChatConversationSidebar = ({
                       size="small"
                       danger
                       icon={<DeleteOutlined style={{ fontSize: 11 }} />}
-                      onClick={(e) => e.stopPropagation()}
+                      aria-label="删除"
                     />
                   </Popconfirm>
                 </Space>

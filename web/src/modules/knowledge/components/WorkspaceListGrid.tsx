@@ -38,7 +38,7 @@ export const WorkspaceListGrid = ({
   }
 
   return (
-    <Row gutter={[16, 16]}>
+    <Row className="responsive-card-grid" gutter={[16, 16]}>
       {workspaces.map((ws) => (
         <Col xs={24} sm={12} lg={8} key={ws.name}>
           <WorkspaceCard ws={ws} onDelete={onDelete} onOpen={onOpen} isAdmin={isAdmin} />

@@ -26,7 +26,7 @@ export const AgentsListGrid = ({
 }: AgentsListGridProps) => {
   if (loading) {
     return (
-      <Row gutter={[16, 16]}>
+      <Row className="responsive-card-grid" gutter={[16, 16]}>
         {[1, 2, 3, 4, 5, 6].map((i) => (
           <Col xs={24} sm={12} lg={8} xl={6} key={i}>
             <Card
@@ -58,7 +58,7 @@ export const AgentsListGrid = ({
   }
 
   return (
-    <Row gutter={[16, 16]}>
+    <Row className="responsive-card-grid" gutter={[16, 16]}>
       {agents.map((agent) => (
         <Col xs={24} sm={12} lg={8} xl={6} key={agent.id}>
           <AgentCard agent={agent} onExecute={onExecute} onDelete={onDelete} onEdit={onEdit} />

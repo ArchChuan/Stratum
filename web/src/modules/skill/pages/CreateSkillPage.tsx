@@ -15,8 +15,8 @@ export const CreateSkillPage = () => {
   } = useCreateSkillPage();
 
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+    <div className="responsive-form-page">
+      <div className="responsive-detail-header" style={{ marginBottom: 24 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/skills')} type="text">
           返回
         </Button>
@@ -80,7 +80,7 @@ export const CreateSkillPage = () => {
           <TextArea rows={3} placeholder="例如：物流问题，建议查询物流并安抚用户" />
         </Form.Item>
 
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <Button onClick={() => navigate('/skills')}>取消</Button>
           <Button
             type="primary"

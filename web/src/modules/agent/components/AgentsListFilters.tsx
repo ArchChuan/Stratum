@@ -12,14 +12,14 @@ export const AgentsListFilters = ({
   onSearchChange,
   onCreate,
 }: AgentsListFiltersProps) => (
-  <Space size={8}>
+  <Space className="responsive-toolbar" size={8}>
     <Input
       placeholder="搜索 Agent..."
       prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
       value={searchText}
       onChange={(e) => onSearchChange(e.target.value)}
       allowClear
-      style={{ width: 220 }}
+      style={{ width: '100%', maxWidth: 220 }}
     />
     <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
       创建 Agent

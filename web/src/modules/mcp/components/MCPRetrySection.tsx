@@ -40,7 +40,7 @@ export const MCPRetrySection = ({ retryEnabled }: Props) => (
           </Text>
         </div>
         <Row gutter={16}>
-          <Col span={6}>
+          <Col xs={24} sm={12} md={6}>
             <Form.Item
               label="最大重试次数"
               name="retry_max_retries"
@@ -49,7 +49,7 @@ export const MCPRetrySection = ({ retryEnabled }: Props) => (
               <InputNumber min={1} max={20} style={{ width: '100%' }} />
             </Form.Item>
           </Col>
-          <Col span={6}>
+          <Col xs={24} sm={12} md={6}>
             <Form.Item
               label="初始延迟（ms）"
               name="retry_initial_delay_ms"
@@ -58,7 +58,7 @@ export const MCPRetrySection = ({ retryEnabled }: Props) => (
               <InputNumber min={100} max={60000} step={100} style={{ width: '100%' }} />
             </Form.Item>
           </Col>
-          <Col span={6}>
+          <Col xs={24} sm={12} md={6}>
             <Form.Item
               label="最大延迟（ms）"
               name="retry_max_delay_ms"
@@ -67,7 +67,7 @@ export const MCPRetrySection = ({ retryEnabled }: Props) => (
               <InputNumber min={1000} max={300000} step={1000} style={{ width: '100%' }} />
             </Form.Item>
           </Col>
-          <Col span={6}>
+          <Col xs={24} sm={12} md={6}>
             <Form.Item
               label="退避系数"
               name="retry_backoff_factor"

@@ -48,7 +48,7 @@ export function FormPage<V>({
         >
           {children}
           <Form.Item style={{ marginBottom: 0, marginTop: 16 }}>
-            <Space>
+            <Space className="responsive-form-actions">
               <Button type="primary" htmlType="submit" loading={submitting}>
                 {submitLabel}
               </Button>

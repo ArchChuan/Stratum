@@ -29,6 +29,7 @@ export const MembersPage = () => {
   return (
     <div>
       <div
+        className="responsive-page-header"
         style={{
           display: 'flex',
           justifyContent: 'space-between',

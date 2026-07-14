@@ -35,10 +35,8 @@ export function ResourceListPage<T>({
   return (
     <div>
       <div
+        className="responsive-page-header"
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
           marginBottom: 16,
         }}
       >
@@ -52,7 +50,7 @@ export function ResourceListPage<T>({
             </Text>
           )}
         </div>
-        <div>
+        <div className="responsive-list-actions responsive-toolbar">
           {toolbarExtra}
           {onCreate && (
             <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>

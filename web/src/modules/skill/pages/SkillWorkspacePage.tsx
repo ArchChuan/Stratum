@@ -179,15 +179,15 @@ export const SkillWorkspacePage = () => {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+      <div className="responsive-detail-header" style={{ marginBottom: 20 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/skills')} type="text">
           返回
         </Button>
-        <div>
+        <div className="long-text">
           <Title level={4} style={{ margin: 0 }}>
             {skill.name}
           </Title>
-          <Text type="secondary">
+          <Text className="long-text" type="secondary">
             状态：{skill.status} · 草稿：{skill.draftVersionId || '无'} · 当前版本：{skill.activeVersionId || '未发布'}
           </Text>
         </div>
@@ -336,7 +336,7 @@ export const SkillWorkspacePage = () => {
 };
 
 const ActionRow = ({ children }: { children: ReactNode }) => (
-  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>{children}</div>
+  <div className="responsive-form-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>{children}</div>
 );
 
 const fillForms = (

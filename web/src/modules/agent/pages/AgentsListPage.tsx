@@ -41,6 +41,7 @@ export const AgentsListPage = () => {
   return (
     <div>
       <div
+        className="responsive-page-header"
         style={{
           display: 'flex',
           alignItems: 'center',

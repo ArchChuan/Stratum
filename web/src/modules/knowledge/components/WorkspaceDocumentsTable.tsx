@@ -1,7 +1,10 @@
-import { Badge, Card, Empty, Progress, Table, Tag, Tooltip, Typography } from 'antd';
+import { Badge, Card, Flex, Progress, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 
 import type { KnowledgeDocument } from '../model/knowledge';
+
+import { COMPACT_PAGE_SIZE } from '@/constants';
+import { ResponsiveDataView } from '@/shared/ui';
 
 const { Text } = Typography;
 
@@ -87,14 +90,30 @@ export const WorkspaceDocumentsTable = ({ documents, loading }: WorkspaceDocumen
     extra={<Badge count={documents.length} style={{ backgroundColor: '#d9d9d9', color: '#595959' }} />}
     style={{ borderRadius: 12, border: '1px solid #f0f0f0', marginBottom: 16 }}
   >
-    <Table<KnowledgeDocument>
+    <ResponsiveDataView<KnowledgeDocument>
       rowKey="id"
-      size="small"
       loading={loading}
-      dataSource={documents}
+      size="small"
+      rows={documents}
       columns={columns}
-      pagination={{ pageSize: 10, size: 'small' }}
-      locale={{ emptyText: <Empty description="暂无文档" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+      pagination={{ pageSize: COMPACT_PAGE_SIZE, size: 'small' }}
+      emptyText="暂无文档"
+      renderMobileItem={(document) => (
+        <div style={{ padding: 12, borderBottom: '1px solid #f0f0f0' }}>
+          <Flex justify="space-between" align="center" gap={8}>
+            <Text strong ellipsis>{document.source || '-'}</Text>
+            {renderStatus(document)}
+          </Flex>
+          <Flex justify="space-between" align="center" gap={8} style={{ marginTop: 10 }}>
+            <Text type="secondary">分块 {renderProgress(document)}</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {document.created_at
+                ? new Date(document.created_at).toLocaleString('zh-CN')
+                : '-'}
+            </Text>
+          </Flex>
+        </div>
+      )}
     />
   </Card>
 );

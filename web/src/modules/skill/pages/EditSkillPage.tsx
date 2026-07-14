@@ -35,8 +35,8 @@ export const EditSkillPage = () => {
   const selectedMeta = skillType ? SKILL_TYPE_META[skillType] : SKILL_TYPE_META.code;
 
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+    <div className="responsive-form-page">
+      <div className="responsive-detail-header" style={{ marginBottom: 24 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/skills')} type="text">
           返回
         </Button>
@@ -71,7 +71,7 @@ export const EditSkillPage = () => {
             isEdit
           />
 
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <Button onClick={() => navigate('/skills')}>取消</Button>
             <Button
               type="primary"
@@ -97,14 +97,14 @@ export const EditSkillPage = () => {
             onChange={(event) => setTestInput(event.target.value)}
             placeholder='例如：{"text":"客户反馈快递三天没有更新"}'
           />
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+          <div className="responsive-form-actions" style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
             <Button type="primary" loading={testLoading} onClick={onRunTest}>
               运行测试
             </Button>
           </div>
           {testResult ? (
             <div style={{ marginTop: 16 }}>
-              <Text type="secondary">
+              <Text className="long-text" type="secondary">
                 Trace：{testResult.traceID || '无'} · 耗时：{testResult.durationMs ?? 0} ms
               </Text>
               <pre
