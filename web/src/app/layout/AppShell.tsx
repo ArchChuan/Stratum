@@ -119,6 +119,10 @@ export const AppShell = ({ children }: AppShellProps) => {
       .catch(() => setConnected(false));
   }, []);
 
+  useEffect(() => {
+    if (!isMobile) setMobileNavOpen(false);
+  }, [isMobile]);
+
   const handleSwitchTenant = async (tenantId: string) => {
     if (tenantId === user?.tenant_id) return;
     setSwitchingTenant(true);
@@ -228,7 +232,7 @@ export const AppShell = ({ children }: AppShellProps) => {
             boxShadow: '0 1px 4px rgba(0,0,0,0.05)',
           }}
         >
-          <Space size={12}>
+          <Space size={12} style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
             {isMobile && (
               <Button
                 type="text"
@@ -268,10 +272,23 @@ export const AppShell = ({ children }: AppShellProps) => {
                       display: 'flex',
                       alignItems: 'center',
                       gap: 4,
+                      minWidth: 0,
+                      maxWidth: isMobile ? 'calc(100vw - 176px)' : undefined,
                     }}
                   >
-                    {currentTenantName}
-                    <span style={{ fontSize: 10 }}>▾</span>
+                    <span
+                      title={currentTenantName}
+                      aria-label={`当前租户：${currentTenantName}`}
+                      style={{
+                        maxWidth: isMobile ? 'calc(100vw - 176px)' : undefined,
+                        overflow: isMobile ? 'hidden' : undefined,
+                        textOverflow: isMobile ? 'ellipsis' : undefined,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {currentTenantName}
+                    </span>
+                    <span aria-hidden="true" style={{ fontSize: 10, flexShrink: 0 }}>▾</span>
                   </span>
                 </Dropdown>
               </>
@@ -296,7 +313,7 @@ export const AppShell = ({ children }: AppShellProps) => {
       <Drawer
         title="主导航"
         placement="left"
-        open={mobileNavOpen}
+        open={isMobile && mobileNavOpen}
         onClose={() => setMobileNavOpen(false)}
         width="min(84vw, 320px)"
         closeIcon={<CloseOutlined aria-label="关闭主导航" />}

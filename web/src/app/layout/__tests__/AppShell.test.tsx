@@ -5,6 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppShell } from '../AppShell';
 
 const responsive = vi.hoisted(() => ({ isMobile: false, isCompact: false }));
+const authState = vi.hoisted(() => ({ tenantName: '测试团队' }));
 
 vi.mock('@/shared/hooks', () => ({
   useResponsive: () => responsive,
@@ -14,7 +15,7 @@ vi.mock('@/modules/iam', () => ({
   authApi: { createUserTenant: vi.fn() },
   useAuth: () => ({
     user: { tenant_id: 'tenant-1', github_login: 'tester' },
-    tenants: [{ tenant_id: 'tenant-1', name: '测试团队' }],
+    tenants: [{ tenant_id: 'tenant-1', name: authState.tenantName }],
     switchTenant: vi.fn(),
   }),
 }));
@@ -50,6 +51,7 @@ describe('AppShell responsive navigation', () => {
   beforeEach(() => {
     responsive.isMobile = false;
     responsive.isCompact = false;
+    authState.tenantName = '测试团队';
   });
 
   it('shows a labelled navigation button and drawer instead of a fixed sider on mobile', async () => {
@@ -83,5 +85,39 @@ describe('AppShell responsive navigation', () => {
     await waitFor(() => expect(container.querySelector('.ant-layout-sider')).toBeInTheDocument());
     expect(screen.getByRole('navigation', { name: '主导航' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '打开主导航' })).toBeNull();
+  });
+
+  it('closes the mobile drawer when the viewport changes to desktop', async () => {
+    responsive.isMobile = true;
+    const view = renderShell();
+    fireEvent.click(screen.getByRole('button', { name: '打开主导航' }));
+    const drawer = await screen.findByRole('dialog', { name: '主导航' });
+
+    responsive.isMobile = false;
+    view.rerender(
+      <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+        <AppShell>
+          <CurrentPath />
+        </AppShell>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(drawer).not.toBeVisible());
+    expect(view.container.querySelector('.ant-layout-sider')).toBeInTheDocument();
+  });
+
+  it('constrains a long tenant name on mobile while exposing its full value', () => {
+    responsive.isMobile = true;
+    authState.tenantName = '很长的团队名称'.repeat(10).slice(0, 64);
+    renderShell();
+
+    const tenantName = screen.getByTitle(authState.tenantName);
+    expect(tenantName).toHaveAccessibleName(`当前租户：${authState.tenantName}`);
+    expect(tenantName).toHaveStyle({
+      maxWidth: 'calc(100vw - 176px)',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    });
   });
 });
