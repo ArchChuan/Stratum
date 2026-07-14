@@ -77,7 +77,7 @@ export const AgentCard = ({ agent, onExecute, onEdit, onDelete }: AgentCardProps
       </Tag>
     </div>
 
-    <Text strong style={{ fontSize: 15, marginBottom: 4, display: 'block' }}>
+    <Text className="long-text" strong style={{ fontSize: 15, marginBottom: 4, display: 'block' }}>
       {agent.name}
     </Text>
     <Paragraph
@@ -89,6 +89,7 @@ export const AgentCard = ({ agent, onExecute, onEdit, onDelete }: AgentCardProps
     </Paragraph>
 
     <div
+      className="responsive-card-actions"
       style={{
         display: 'flex',
         alignItems: 'center',

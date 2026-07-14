@@ -45,7 +45,7 @@ export const MCPAuthSection = ({ authType }: Props) => (
 
     {authType === 'api_key' && (
       <Row gutter={16}>
-        <Col span={8}>
+        <Col xs={24} md={8}>
           <Form.Item
             label="请求头名称"
             name="api_key_header"
@@ -56,7 +56,7 @@ export const MCPAuthSection = ({ authType }: Props) => (
             <Input placeholder="X-API-Key" />
           </Form.Item>
         </Col>
-        <Col span={16}>
+        <Col xs={24} md={16}>
           <Form.Item
             label="API Key 值"
             name="api_key_value"
@@ -79,12 +79,12 @@ export const MCPAuthSection = ({ authType }: Props) => (
           style={{ marginBottom: 16 }}
         />
         <Row gutter={16}>
-          <Col span={12}>
+          <Col xs={24} md={12}>
             <Form.Item label="Client ID" name="oauth2_client_id" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
           </Col>
-          <Col span={12}>
+          <Col xs={24} md={12}>
             <Form.Item
               label="Client Secret"
               name="oauth2_client_secret"
@@ -95,12 +95,12 @@ export const MCPAuthSection = ({ authType }: Props) => (
           </Col>
         </Row>
         <Row gutter={16}>
-          <Col span={16}>
+          <Col xs={24} md={16}>
             <Form.Item label="Token URL" name="oauth2_token_url" rules={[{ required: true }]}>
               <Input placeholder="https://auth.example.com/oauth2/token" />
             </Form.Item>
           </Col>
-          <Col span={8}>
+          <Col xs={24} md={8}>
             <Form.Item
               label="Scopes"
               name="oauth2_scopes"

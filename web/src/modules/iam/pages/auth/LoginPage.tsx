@@ -47,16 +47,14 @@ export const LoginPage = () => {
 
   return (
     <div
+      className="auth-page"
       style={{
         minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: '#f0f2f5',
       }}
     >
       <Card
-        style={{ width: 380, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+        className="auth-card"
+        style={{ maxWidth: 380, textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
       >
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
           <div>

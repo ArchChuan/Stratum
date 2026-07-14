@@ -8,6 +8,7 @@ interface WorkspaceUploadZoneProps {
 
 export const WorkspaceUploadZone = ({ loading, onUpload }: WorkspaceUploadZoneProps) => (
   <Card
+    className="responsive-detail-section"
     title="上传文档"
     style={{ borderRadius: 12, border: '1px solid #f0f0f0', marginBottom: 16 }}
   >

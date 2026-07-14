@@ -24,13 +24,13 @@ export const WorkspaceQueryPanel = ({
   result,
   onSubmit,
 }: WorkspaceQueryPanelProps) => (
-  <Card title="查询测试" style={{ borderRadius: 12, border: '1px solid #f0f0f0' }}>
+  <Card className="responsive-detail-section" title="查询测试" style={{ borderRadius: 12, border: '1px solid #f0f0f0' }}>
     <Form form={form} onFinish={onSubmit}>
       <Form.Item name="question" rules={[{ required: true, message: '请输入问题' }]}>
         <TextArea rows={3} placeholder="输入查询问题..." />
       </Form.Item>
       <Form.Item style={{ marginBottom: result ? 16 : 0 }}>
-        <Button type="primary" htmlType="submit" icon={<SendOutlined />} loading={loading}>
+        <Button className="mobile-full-width" type="primary" htmlType="submit" icon={<SendOutlined />} loading={loading}>
           查询
         </Button>
       </Form.Item>

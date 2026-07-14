@@ -30,6 +30,7 @@ export const AgentFormSections = ({
     </Form.Item>
 
     <div
+      className="responsive-form-section"
       style={{
         background: '#fff',
         borderRadius: 12,
@@ -52,6 +53,7 @@ export const AgentFormSections = ({
     </div>
 
     <div
+      className="responsive-form-section"
       style={{
         background: '#fff',
         borderRadius: 12,
@@ -81,6 +83,7 @@ export const AgentFormSections = ({
     </div>
 
     <div
+      className="responsive-form-section"
       style={{
         background: '#fff',
         borderRadius: 12,

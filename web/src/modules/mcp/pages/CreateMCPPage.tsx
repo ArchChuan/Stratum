@@ -29,8 +29,8 @@ export const CreateMCPPage = () => {
   const isHTTP = transport && transport !== 'stdio';
 
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+    <div className="responsive-form-page">
+      <div className="responsive-detail-header" style={{ marginBottom: 24 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/mcp')} type="text">
           返回
         </Button>
@@ -64,7 +64,7 @@ export const CreateMCPPage = () => {
         {isHTTP && <MCPAuthSection authType={authType} />}
         <MCPRetrySection retryEnabled={retryEnabled} />
 
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <Button onClick={() => navigate('/mcp')}>取消</Button>
           <Button type="primary" htmlType="submit" loading={submitting}>
             添加服务器

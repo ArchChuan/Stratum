@@ -52,7 +52,7 @@ export const SkillCard = ({ skill, onEdit, onDelete }: SkillCardProps) => {
         </div>
       </div>
 
-      <Text strong style={{ fontSize: 15, marginBottom: 4, display: 'block' }}>
+      <Text className="long-text" strong style={{ fontSize: 15, marginBottom: 4, display: 'block' }}>
         {skill.name}
       </Text>
       <Paragraph
@@ -64,6 +64,7 @@ export const SkillCard = ({ skill, onEdit, onDelete }: SkillCardProps) => {
       </Paragraph>
 
       <div
+        className="responsive-card-actions"
         style={{
           display: 'flex',
           alignItems: 'center',

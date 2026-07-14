@@ -17,6 +17,7 @@ export const SkillsListPage = () => {
   return (
     <div>
       <div
+        className="responsive-page-header"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -32,14 +33,14 @@ export const SkillsListPage = () => {
             技能通过 Agent 调用执行
           </Text>
         </div>
-        <Space size={8}>
+        <Space className="responsive-toolbar" size={8}>
           <Input
             placeholder="搜索技能..."
             prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             allowClear
-            style={{ width: 220 }}
+            style={{ width: '100%', maxWidth: 220 }}
           />
           <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/skills/create')}>
             创建技能

@@ -26,7 +26,7 @@ export const WorkspaceQueryResult = ({ result }: WorkspaceQueryResultProps) => (
       >
         回答
       </Text>
-      <Paragraph style={{ margin: 0, lineHeight: 1.7 }}>{result.answer}</Paragraph>
+      <Paragraph className="long-text" style={{ margin: 0, lineHeight: 1.7 }}>{result.answer}</Paragraph>
     </div>
     {result.sources && result.sources.length > 0 && (
       <div>
@@ -36,6 +36,7 @@ export const WorkspaceQueryResult = ({ result }: WorkspaceQueryResultProps) => (
         <Space direction="vertical" style={{ width: '100%' }} size={8}>
           {result.sources.map((s, i) => (
             <div
+              className="long-text"
               key={i}
               style={{
                 background: '#fafafa',

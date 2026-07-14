@@ -69,7 +69,7 @@ export const WorkspaceCard = ({ ws, onDelete, onOpen, isAdmin }: WorkspaceCardPr
       </Tag>
     </div>
 
-    <Text strong style={{ fontSize: 15, marginBottom: 4, display: 'block' }}>
+    <Text className="long-text" strong style={{ fontSize: 15, marginBottom: 4, display: 'block' }}>
       {ws.name}
     </Text>
     <Paragraph
@@ -81,6 +81,7 @@ export const WorkspaceCard = ({ ws, onDelete, onOpen, isAdmin }: WorkspaceCardPr
     </Paragraph>
 
     <div
+      className="responsive-card-actions"
       style={{
         display: 'flex',
         alignItems: 'center',

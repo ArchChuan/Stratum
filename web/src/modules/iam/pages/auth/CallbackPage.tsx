@@ -57,6 +57,7 @@ export const CallbackPage = () => {
   if (error) {
     return (
       <div
+        className="auth-page"
         style={{
           minHeight: '100vh',
           display: 'flex',
@@ -64,13 +65,14 @@ export const CallbackPage = () => {
           justifyContent: 'center',
         }}
       >
-        <Alert type="error" message={error} description={<a href="/login">返回登录</a>} />
+        <Alert className="auth-card long-text" type="error" message={error} description={<a href="/login">返回登录</a>} />
       </div>
     );
   }
 
   return (
     <div
+      className="auth-page"
       style={{
         minHeight: '100vh',
         display: 'flex',
