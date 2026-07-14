@@ -1,10 +1,11 @@
-import { Alert, Badge, Drawer, Descriptions, Table, Tabs, Tag, Typography } from 'antd';
+import { Alert, Badge, Drawer, Descriptions, Flex, Tabs, Tag, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 
 import { mcpApi } from '../api/mcp.api';
 import type { MCPResource, MCPServer, MCPTool } from '../model/mcp';
 
 import { extractErrorMessage } from '@/shared/lib';
+import { ResponsiveDataView } from '@/shared/ui';
 
 const { Text } = Typography;
 
@@ -75,14 +76,21 @@ export const ServerDetailDrawer = ({ server, onClose }: Props) => {
       children: toolsError ? (
         <Alert type="error" message={toolsError} />
       ) : (
-        <Table
-          size="small"
-          dataSource={tools}
+        <ResponsiveDataView
+          rows={tools}
           columns={toolCols}
           rowKey="name"
           loading={loadingTools}
-          locale={{ emptyText: '此服务器未暴露任何工具' }}
+          emptyText="此服务器未暴露任何工具"
           pagination={false}
+          renderMobileItem={(tool) => (
+            <div style={{ padding: '10px 0', borderBottom: '1px solid #f0f0f0' }}>
+              <Text strong>{tool.name}</Text>
+              <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
+                {tool.description || '暂无描述'}
+              </Text>
+            </div>
+          )}
         />
       ),
     },
@@ -92,14 +100,24 @@ export const ServerDetailDrawer = ({ server, onClose }: Props) => {
       children: resError ? (
         <Alert type="error" message={resError} />
       ) : (
-        <Table
-          size="small"
-          dataSource={resources}
+        <ResponsiveDataView
+          rows={resources}
           columns={resCols}
           rowKey="uri"
           loading={loadingRes}
-          locale={{ emptyText: '此服务器未暴露任何资源' }}
+          emptyText="此服务器未暴露任何资源"
           pagination={false}
+          renderMobileItem={(resource) => (
+            <div style={{ padding: '10px 0', borderBottom: '1px solid #f0f0f0' }}>
+              <Flex justify="space-between" align="center" gap={8}>
+                <Text strong ellipsis>{resource.name || resource.uri}</Text>
+                <Tag>{resource.mimeType || '未知类型'}</Tag>
+              </Flex>
+              <Text type="secondary" ellipsis style={{ display: 'block', marginTop: 4 }}>
+                {resource.uri}
+              </Text>
+            </div>
+          )}
         />
       ),
     },

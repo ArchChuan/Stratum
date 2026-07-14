@@ -1,6 +1,8 @@
-import { Card, Table, Tag, Typography } from 'antd';
+import { Card, Flex, Space, Tag, Typography } from 'antd';
 
 import type { DashboardExecution } from '../model/dashboard';
+
+import { ResponsiveDataView } from '@/shared/ui';
 
 const { Text } = Typography;
 
@@ -86,15 +88,40 @@ interface RecentExecutionsTableProps {
 
 export const RecentExecutionsTable = ({ data, loading }: RecentExecutionsTableProps) => (
   <Card style={{ borderRadius: 12, border: '1px solid #f0f0f0' }} styles={{ body: { padding: 0 } }}>
-    <Table
-      dataSource={data}
+    <ResponsiveDataView
+      rows={data}
       columns={columns}
       rowKey="id"
       loading={loading}
       pagination={false}
-      locale={{ emptyText: '暂无执行记录' }}
-      size="small"
-      style={{ borderRadius: 12, overflow: 'hidden' }}
+      emptyText="暂无执行记录"
+      renderMobileItem={(execution) => (
+        <div style={{ padding: 12, borderBottom: '1px solid #f0f0f0' }}>
+          <Flex justify="space-between" align="center" gap={8}>
+            <Text strong ellipsis>{execution.agent_name || '-'}</Text>
+            <Tag color={statusColors[execution.status] || 'default'}>
+              {statusLabels[execution.status] || execution.status}
+            </Tag>
+          </Flex>
+          <Text type="secondary" ellipsis style={{ display: 'block', marginTop: 8 }}>
+            {execution.input_preview || '-'}
+          </Text>
+          {execution.status === 'error' && (
+            <Text type="danger" ellipsis style={{ display: 'block', marginTop: 4 }}>
+              {execution.error_message || '执行失败'}
+            </Text>
+          )}
+          <Flex justify="space-between" align="center" gap={8} style={{ marginTop: 10 }}>
+            <Space size={12}>
+              <Text>{execution.total_tokens ? `${execution.total_tokens.toLocaleString()} Token` : '-'}</Text>
+              <Text>{formatDuration(execution.duration_ms)}</Text>
+            </Space>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {new Date(execution.created_at).toLocaleString('zh-CN')}
+            </Text>
+          </Flex>
+        </div>
+      )}
     />
   </Card>
 );

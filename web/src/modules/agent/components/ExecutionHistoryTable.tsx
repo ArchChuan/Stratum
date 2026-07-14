@@ -1,10 +1,11 @@
 import { CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
-import { Card, Table, Tag, Typography } from 'antd';
+import { Card, Flex, Space, Tag, Typography } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 
 import type { ExecutionRow } from '../model/execution';
 
 import { PAGE_SIZE_OPTIONS } from '@/constants';
+import { ResponsiveDataView } from '@/shared/ui';
 
 const { Text } = Typography;
 
@@ -111,12 +112,12 @@ export const ExecutionHistoryTable = ({
   onChange,
 }: ExecutionHistoryTableProps) => (
   <Card style={{ borderRadius: 12, border: '1px solid #f0f0f0' }} styles={{ body: { padding: 0 } }}>
-    <Table<ExecutionRow>
-      dataSource={executions}
+    <ResponsiveDataView<ExecutionRow>
+      rows={executions}
       columns={columns}
       rowKey="id"
       loading={loading}
-      locale={{ emptyText: '暂无执行记录' }}
+      emptyText="暂无执行记录"
       pagination={{
         current: pagination.current,
         pageSize: pagination.pageSize,
@@ -128,7 +129,35 @@ export const ExecutionHistoryTable = ({
         style: { padding: '12px 16px' },
       }}
       onChange={onChange}
-      style={{ borderRadius: 12, overflow: 'hidden' }}
+      renderMobileItem={(execution) => (
+        <div style={{ padding: 12, borderBottom: '1px solid #f0f0f0' }}>
+          <Flex justify="space-between" align="center" gap={8}>
+            <Text strong ellipsis>{execution.agent_name || '-'}</Text>
+            {execution.status === 'success' ? (
+              <Tag icon={<CheckCircleOutlined />} color="success">成功</Tag>
+            ) : (
+              <Tag icon={<CloseCircleOutlined />} color="error">失败</Tag>
+            )}
+          </Flex>
+          <Text ellipsis style={{ display: 'block', marginTop: 8 }}>
+            {execution.input_preview || '-'}
+          </Text>
+          {execution.status === 'error' && (
+            <Text type="danger" ellipsis style={{ display: 'block', marginTop: 4 }}>
+              {execution.error_message || '执行失败'}
+            </Text>
+          )}
+          <Flex justify="space-between" align="center" gap={8} style={{ marginTop: 10 }}>
+            <Space size={12}>
+              <Text>{execution.total_tokens ? `${execution.total_tokens.toLocaleString()} Token` : '-'}</Text>
+              <Text>{formatDuration(execution.duration_ms)}</Text>
+            </Space>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {execution.created_at ? new Date(execution.created_at).toLocaleString('zh-CN') : '-'}
+            </Text>
+          </Flex>
+        </div>
+      )}
     />
   </Card>
 );
