@@ -9,12 +9,22 @@ interface Props {
   sending: boolean;
   selectedConv: string | null;
   onSend: () => void;
+  isMobile?: boolean;
 }
 
-export const ChatComposer = ({ input, setInput, sending, selectedConv, onSend }: Props) => (
+export const ChatComposer = ({
+  input,
+  setInput,
+  sending,
+  selectedConv,
+  onSend,
+  isMobile = false,
+}: Props) => (
   <div
+    className="chat-composer"
     style={{
-      padding: '12px 24px 16px',
+      padding: isMobile ? '10px 12px' : '12px 24px 16px',
+      paddingBottom: isMobile ? 'max(12px, env(safe-area-inset-bottom, 0px))' : 16,
       background: '#fff',
       borderTop: '1px solid #f0f0f0',
       flexShrink: 0,
@@ -41,8 +51,9 @@ export const ChatComposer = ({ input, setInput, sending, selectedConv, onSend }:
         onClick={onSend}
         loading={sending}
         disabled={!selectedConv || !input.trim()}
+        aria-label="发送消息"
       >
-        发送
+        {isMobile ? null : '发送'}
       </Button>
     </div>
   </div>
