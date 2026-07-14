@@ -1,3 +1,0 @@
-Use the project skill `stratum-e2e-development`. Read the acceptance contract supplied through `STRATUM_E2E_ACCEPTANCE_FILE`. Select the smallest real-system path that proves the requested behavior: backend HTTP API, browser interaction, database state, or Agent/Skill/MCP/Memory/Knowledge/IAM execution chain.
-
-Start only necessary local services. Never print tokens, passwords, API keys, private keys, or raw credential values. Temporary scripts must use a `tmp-` prefix and be deleted. Stop processes you started. Record HTTP status, key response fields, persisted state, logs, and cleanup evidence. Unit tests alone never satisfy this procedure.
