@@ -151,6 +151,7 @@ describe('responsive page contracts', () => {
           onCreate={vi.fn()}
         />
         <AgentCard
+          canManage
           agent={{
             id: 'agent-1',
             name: 'Agent',
@@ -168,6 +169,7 @@ describe('responsive page contracts', () => {
           onDelete={vi.fn()}
         />
         <SkillCard
+          canManage
           skill={{ id: 'skill-1', name: 'Skill', description: '', type: 'code' }}
           onEdit={vi.fn()}
           onDelete={vi.fn()}

@@ -10,6 +10,27 @@
 
 ---
 
+## Task 0: Restore the frontend test baseline after RBAC changes
+
+**Files:**
+
+- Modify: `web/src/modules/mcp/pages/__tests__/MCPServersPage.test.tsx`
+- Modify: `web/src/shared/ui/__tests__/responsivePages.test.tsx`
+
+- [ ] **Step 1: Isolate the MCP page test from IAM route exports**
+
+Mock `@/modules/iam` so `useTenantRole` returns `{ isAdmin: true }`, keeping the existing action test explicitly in administrator context.
+
+- [ ] **Step 2: Give responsive card fixtures administrator permissions**
+
+Pass `canManage` to `AgentCard` and `SkillCard` so the test's edit/delete button assertions match its intended administrator scenario.
+
+- [ ] **Step 3: Re-run the two previously failing suites**
+
+Run: `npm test -- src/modules/mcp/pages/__tests__/MCPServersPage.test.tsx src/shared/ui/__tests__/responsivePages.test.tsx`
+
+Expected: both files pass without changing production RBAC behavior.
+
 ## Task 1: Reproduce the memory API path bug
 
 **Files:**

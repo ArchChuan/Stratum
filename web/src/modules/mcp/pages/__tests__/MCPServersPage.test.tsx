@@ -14,6 +14,7 @@ const page = vi.hoisted(() => ({
 const navigate = vi.hoisted(() => vi.fn());
 
 vi.mock('@/shared/hooks', () => ({ useResponsive: () => responsive }));
+vi.mock('@/modules/iam', () => ({ useTenantRole: () => ({ isAdmin: true }) }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
 vi.mock('../../hooks/useMCPServersPage', () => ({
   useMCPServersPage: () => ({
