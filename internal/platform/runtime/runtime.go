@@ -15,6 +15,7 @@ import (
 	apihttp "github.com/byteBuilderX/stratum/api/http"
 	"github.com/byteBuilderX/stratum/api/wiring"
 	"github.com/byteBuilderX/stratum/config"
+	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	harnesspkg "github.com/byteBuilderX/stratum/internal/platform/harness"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -63,6 +64,7 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 	registerMemoryPipeline(appHarness, c, logger)
 	registerMemoryWorkers(appHarness, c, logger)
 	registerChatCleanup(appHarness, c, logger)
+	registerGuestReaper(appHarness, c, logger)
 	registerHTTPServer(appHarness, cfg, c, logger)
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -161,6 +163,59 @@ func registerChatCleanup(appHarness *harnesspkg.Harness, c *wiring.Container, lo
 		}),
 		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
 	), logger)
+}
+
+// registerGuestReaper installs the background component that reaps expired
+// guest accounts: for each expired guest it deletes every non-default tenant
+// the guest owns, then hard-deletes the user (FK cascades clear membership +
+// refresh tokens). Removing a guest is thus equivalent to evicting the member
+// from the default tenant plus dropping tenants the guest created.
+func registerGuestReaper(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {
+	mustRegister(appHarness, harnesspkg.NewSimpleComponent("guest-reaper", logger,
+		harnesspkg.WithStartFunc(func(ctx context.Context) error {
+			if c.Platform == nil || c.Platform.OnboardSvc == nil || c.IAM == nil || c.IAM.AdminService == nil {
+				logger.Warn("guest-reaper: OnboardSvc or AdminService unavailable, skipping")
+				return nil
+			}
+			go runGuestReaper(ctx, c.Platform.OnboardSvc, c.IAM.AdminService, constants.GuestReaperInterval, logger)
+			return nil
+		}),
+		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
+	), logger)
+}
+
+func runGuestReaper(ctx context.Context, onboard *iamapp.OnboardService, admin *iamapp.AdminService, interval time.Duration, logger *zap.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			guestIDs, err := onboard.ListExpiredGuests(ctx, time.Now())
+			if err != nil {
+				logger.Warn("guest-reaper: list expired guests", zap.Error(err))
+				continue
+			}
+			for _, userID := range guestIDs {
+				tenantIDs, err := onboard.ListOwnedNonDefaultTenants(ctx, userID)
+				if err != nil {
+					logger.Warn("guest-reaper: list owned tenants", zap.String("user_id", userID), zap.Error(err))
+					continue
+				}
+				for _, tenantID := range tenantIDs {
+					if err := admin.DeleteTenant(ctx, tenantID); err != nil {
+						logger.Warn("guest-reaper: delete tenant", zap.String("tenant_id", tenantID), zap.Error(err))
+					}
+				}
+				if err := onboard.DeleteUser(ctx, userID); err != nil {
+					logger.Warn("guest-reaper: delete user", zap.String("user_id", userID), zap.Error(err))
+					continue
+				}
+				logger.Info("guest-reaper: reaped expired guest", zap.String("user_id", userID), zap.Int("tenants_deleted", len(tenantIDs)))
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func registerHTTPServer(appHarness *harnesspkg.Harness, cfg *config.Config, c *wiring.Container, logger *zap.Logger) {
