@@ -13,6 +13,7 @@ export interface ResponsiveDataViewProps<T extends object> {
   columns: ColumnsType<T>;
   rowKey: keyof T | ((row: T) => Key);
   loading?: boolean;
+  /** Pagination is opt-in; omitting this prop disables it on every viewport. */
   pagination?: TablePaginationConfig | false;
   onChange?: TableProps<T>['onChange'];
   emptyText?: string;
@@ -30,6 +31,7 @@ export function ResponsiveDataView<T extends object>({
   renderMobileItem,
 }: ResponsiveDataViewProps<T>) {
   const { isMobile } = useResponsive();
+  const resolvedPagination = pagination ?? false;
 
   if (!isMobile) {
     return (
@@ -38,7 +40,7 @@ export function ResponsiveDataView<T extends object>({
         dataSource={rows}
         rowKey={rowKey as TableProps<T>['rowKey']}
         loading={loading}
-        pagination={pagination}
+        pagination={resolvedPagination}
         onChange={onChange}
         locale={{ emptyText }}
       />
@@ -46,17 +48,15 @@ export function ResponsiveDataView<T extends object>({
   }
 
   if (loading) return <ListSkeleton count={3} />;
-  if (rows.length === 0) return <EmptyHint title={emptyText} />;
-
   const getRowKey = (row: T): Key => (
     typeof rowKey === 'function' ? rowKey(row) : row[rowKey] as Key
   );
 
   const handlePageChange = (current: number, pageSize: number) => {
-    if (!onChange || pagination === false) return;
+    if (!onChange || resolvedPagination === false) return;
 
     onChange(
-      { ...pagination, current, pageSize },
+      { ...resolvedPagination, current, pageSize },
       {},
       {},
       { action: 'paginate', currentDataSource: rows },
@@ -65,12 +65,14 @@ export function ResponsiveDataView<T extends object>({
 
   return (
     <div className="mobile-card-list">
-      {rows.map((row, index) => (
-        <div key={getRowKey(row)}>{renderMobileItem(row, index)}</div>
-      ))}
-      {pagination !== false && pagination && (
+      {rows.length === 0 ? (
+        <EmptyHint title={emptyText} />
+      ) : rows.map((row, index) => (
+          <div key={getRowKey(row)}>{renderMobileItem(row, index)}</div>
+        ))}
+      {resolvedPagination !== false && (
         <Pagination
-          {...pagination}
+          {...resolvedPagination}
           responsive
           showSizeChanger={false}
           size="small"

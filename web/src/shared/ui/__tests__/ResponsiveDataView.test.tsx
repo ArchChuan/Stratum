@@ -155,4 +155,49 @@ describe('ResponsiveDataView', () => {
     expect(extra).toMatchObject({ action: 'paginate', currentDataSource: rows });
     expect(extra.currentDataSource[0]).toBe(rows[0]);
   });
+
+  it('keeps pagination available on an empty mobile page when results exist', () => {
+    responsive.isMobile = true;
+    render(
+      <ResponsiveDataView
+        rows={[]}
+        columns={columns}
+        rowKey="id"
+        emptyText="当前页没有条目"
+        pagination={{ current: 3, pageSize: 10, total: 30 }}
+        renderMobileItem={(row) => <article>{row.name}</article>}
+      />,
+    );
+
+    expect(screen.getByText('当前页没有条目')).toBeInTheDocument();
+    expect(screen.getByTitle('2')).toBeInTheDocument();
+  });
+
+  it('does not paginate on desktop or mobile when pagination is omitted', () => {
+    const manyRows = Array.from({ length: 11 }, (_, index) => ({
+      id: `row-${index}`,
+      name: `条目 ${index}`,
+    }));
+    const view = render(
+      <ResponsiveDataView
+        rows={manyRows}
+        columns={columns}
+        rowKey="id"
+        renderMobileItem={(row) => <article>{row.name}</article>}
+      />,
+    );
+
+    expect(view.container.querySelector('.ant-pagination')).toBeNull();
+
+    responsive.isMobile = true;
+    view.rerender(
+      <ResponsiveDataView
+        rows={manyRows}
+        columns={columns}
+        rowKey="id"
+        renderMobileItem={(row) => <article>{row.name}</article>}
+      />,
+    );
+    expect(view.container.querySelector('.ant-pagination')).toBeNull();
+  });
 });
