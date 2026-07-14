@@ -8,5 +8,7 @@ export { ListSkeleton } from './ListSkeleton';
 export type { ListSkeletonProps } from './ListSkeleton';
 export { ResourceListPage } from './ResourceListPage';
 export type { ResourceListPageProps } from './ResourceListPage';
+export { ResponsiveDataView } from './ResponsiveDataView';
+export type { ResponsiveDataViewProps } from './ResponsiveDataView';
 export { SectionHeader } from './SectionHeader';
 export type { SectionHeaderProps } from './SectionHeader';

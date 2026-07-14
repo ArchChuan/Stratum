@@ -35,14 +35,12 @@ export function ResourceListPage<T>({
   return (
     <div>
       <div
+        className="responsive-page-header"
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
           marginBottom: 16,
         }}
       >
-        <div>
+        <div className="responsive-toolbar">
           <Title level={4} style={{ margin: 0 }}>
             {title}
           </Title>

@@ -69,6 +69,11 @@ button:focus-visible,
   min-width: 0;
 }
 
+.responsive-form-actions,
+.responsive-section-header {
+  max-width: 100%;
+}
+
 .mobile-only,
 .mobile-card-list {
   display: none;
@@ -124,6 +129,18 @@ button:focus-visible,
   .responsive-toolbar .ant-picker,
   .responsive-toolbar .ant-select {
     max-width: 100%;
+  }
+
+  .responsive-form-actions,
+  .responsive-form-actions .ant-space-item,
+  .responsive-form-actions .ant-btn {
+    width: 100%;
+  }
+
+  .responsive-form-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .responsive-toolbar .ant-input,
