@@ -70,6 +70,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		authRoutes.GET("/github", authHandler.GitHubLogin)
 		authRoutes.GET("/github/callback", middleware.RateLimit(authLimiter), authHandler.GitHubCallback)
 		authRoutes.POST("/register", middleware.RateLimit(authLimiter), authHandler.Register)
+		authRoutes.POST("/guest", middleware.RateLimit(authLimiter), authHandler.GuestLogin)
 		authRoutes.POST("/refresh", middleware.RateLimit(authLimiter), authHandler.Refresh)
 		authRoutes.POST("/logout", authHandler.Logout)
 		authRoutes.GET("/me", authHandler.Me)
