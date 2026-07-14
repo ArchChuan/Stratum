@@ -128,37 +128,46 @@ func protectedTenantMiddleware(c *wiring.Container, extra ...gin.HandlerFunc) []
 	return append(mw, extra...)
 }
 
-// registerSkills wires /skills/* under JWT + tenant context.
+// registerSkills wires /skills/* under JWT + tenant context. Read + test
+// (test / test-draft) stay open to members; authoring writes (create,
+// draft edits, publish, update, delete) require admin so members can only
+// view configs and run skills, not modify them.
 func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
 	skillHandler := handler.NewSkillHandler(c.Skill.Service, c.Logger, c.Skill.VersionService)
 
-	skills := r.Group("/skills", protectedTenantMiddleware(c)...)
+	skills := r.Group("/skills", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
 		skills.GET("", skillHandler.GetAllSkills)
-		skills.POST("", requireActive, skillHandler.CreateSkill)
 		skills.POST("/test-draft", requireActive, skillHandler.ExecuteDraftSkill)
 		skills.GET("/:id/workspace", skillHandler.GetSkillWorkspace)
 		skills.GET("/:id", skillHandler.GetSkill)
-		skills.PATCH("/:id/draft/capability", requireActive, skillHandler.UpdateDraftCapability)
-		skills.PATCH("/:id/draft/contract", requireActive, skillHandler.UpdateDraftContract)
-		skills.PATCH("/:id/draft/implementation", requireActive, skillHandler.UpdateDraftImplementation)
 		skills.POST("/:id/test", requireActive, skillHandler.ExecuteSkill)
-		skills.POST("/:id/publish", requireActive, skillHandler.PublishSkill)
-		skills.PUT("/:id", requireActive, skillHandler.UpdateSkill)
-		skills.DELETE("/:id", requireActive, skillHandler.DeleteSkill)
+
+		adminMW := []gin.HandlerFunc{middleware.RequireTenantRole("admin")}
+		skills.POST("", append(adminMW, requireActive, skillHandler.CreateSkill)...)
+		skills.PATCH("/:id/draft/capability", append(adminMW, requireActive, skillHandler.UpdateDraftCapability)...)
+		skills.PATCH("/:id/draft/contract", append(adminMW, requireActive, skillHandler.UpdateDraftContract)...)
+		skills.PATCH("/:id/draft/implementation", append(adminMW, requireActive, skillHandler.UpdateDraftImplementation)...)
+		skills.POST("/:id/publish", append(adminMW, requireActive, skillHandler.PublishSkill)...)
+		skills.PUT("/:id", append(adminMW, requireActive, skillHandler.UpdateSkill)...)
+		skills.DELETE("/:id", append(adminMW, requireActive, skillHandler.DeleteSkill)...)
 	}
 }
 
 // registerAgents wires /agents/* and /conversations/* under JWT + tenant
-// context. Agent + chat handlers share middleware.
+// context. Agent + chat handlers share middleware. Read + execute + chat
+// stay open to members; create/update/delete require admin so ordinary
+// tenant members can only use agents, not modify them.
 func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
 	agentHandler := handler.NewAgentHandler(c.Agent.Service, c.Logger)
 	chatHandler := handler.NewChatHandler(c.Agent.ChatStore, c.Logger)
 
-	agents := r.Group("/agents", protectedTenantMiddleware(c)...)
+	requireAdmin := middleware.RequireTenantRole("admin")
+
+	agents := r.Group("/agents", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
 		agents.GET("", agentHandler.GetAllAgents)
-		agents.POST("", requireActive, agentHandler.CreateAgent)
+		agents.POST("", requireAdmin, requireActive, agentHandler.CreateAgent)
 		agents.GET("/executions", agentHandler.ListExecutions)
 		agents.GET("/executions/:traceID/tool-traces", agentHandler.ListExecutionToolTraces)
 		agents.GET("/executions/:traceID/trace-events", agentHandler.ListExecutionTraceEvents)
@@ -171,8 +180,8 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		})
 		agents.POST("/:id/execute", requireActive, execRateLimit, agentHandler.ExecuteAgent)
 		agents.POST("/:id/execute/stream", requireActive, execRateLimit, agentHandler.ExecuteAgentStream)
-		agents.PUT("/:id", requireActive, agentHandler.UpdateAgent)
-		agents.DELETE("/:id", requireActive, agentHandler.DeleteAgent)
+		agents.PUT("/:id", requireAdmin, requireActive, agentHandler.UpdateAgent)
+		agents.DELETE("/:id", requireAdmin, requireActive, agentHandler.DeleteAgent)
 		agents.POST("/:id/conversations", chatHandler.CreateConversation)
 		agents.GET("/:id/conversations", chatHandler.ListConversations)
 	}
@@ -205,12 +214,18 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 	}
 }
 
-// registerMCP wires /mcp/* via the handler's RegisterRoutes. Write
-// routes require JWT + tenant context (same pattern as agents/skills).
+// registerMCP wires /mcp/* via the handler's RegisterRoutes.
+//   - base:  JWT + tenant context + member 底线（所有路由，含读取与工具执行）。
+//   - write: member 可执行的运行时操作追加 requireActive（工具执行）。
+//   - admin: 服务器管理类操作（连接/更新/断开/删除配置/重连/刷新技能）要求 admin+。
 func registerMCP(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
 	mcpHandler := handler.NewMCPHandler(c.MCP.Service, c.Logger)
 
-	mcpHandler.RegisterRoutes(r, protectedTenantMiddleware(c), requireActive)
+	base := protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))
+	writeMW := []gin.HandlerFunc{requireActive}
+	adminMW := []gin.HandlerFunc{middleware.RequireTenantRole("admin"), requireActive}
+
+	mcpHandler.RegisterRoutes(r, base, writeMW, adminMW)
 }
 
 func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {

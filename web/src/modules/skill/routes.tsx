@@ -21,7 +21,7 @@ export const skillRoutes = [
     key="skills-create"
     path="/skills/create"
     element={
-      <PrivateRoute>
+      <PrivateRoute requiredTenantRole="admin">
         <CreateSkillPage />
       </PrivateRoute>
     }
@@ -39,7 +39,7 @@ export const skillRoutes = [
     key="skills-edit"
     path="/skills/:id/edit"
     element={
-      <PrivateRoute>
+      <PrivateRoute requiredTenantRole="admin">
         <EditSkillPage />
       </PrivateRoute>
     }

@@ -124,24 +124,40 @@ func (h *MCPHandler) GetServerStatus(c *gin.Context) {
 }
 
 // RegisterRoutes 注册 MCP 路由。
-// mw       — JWT + InjectTenantContext，挂在所有 /mcp 路由上（读写均要租户上下文）。
-// writeMW  — 仅写操作再追加（如 RequireActiveTenant）。
-func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, writeMW ...gin.HandlerFunc) {
+// mw       — JWT + InjectTenantContext (+ member 底线)，挂在所有 /mcp 路由上（读写均要租户上下文）。
+// writeMW  — member 可执行的运行时操作再追加（如 RequireActiveTenant）：工具执行。
+// adminMW  — 管理类操作（连接/更新/断开/删除配置/重连/刷新技能）再追加，仅 admin+ 可用。
+//
+// 普通租户成员（member）只能读取配置与执行工具，不能新建/修改/删除 MCP 服务器，
+// 这些管理动作会改变整个租户共享的服务器状态，故收归 admin。
+func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, writeMW []gin.HandlerFunc, adminMW []gin.HandlerFunc) {
+	// clone 避免多次 append 复用底层数组造成中间件串味。
+	admin := func(handlers ...gin.HandlerFunc) []gin.HandlerFunc {
+		out := make([]gin.HandlerFunc, 0, len(adminMW)+len(handlers))
+		out = append(out, adminMW...)
+		return append(out, handlers...)
+	}
+	write := func(handlers ...gin.HandlerFunc) []gin.HandlerFunc {
+		out := make([]gin.HandlerFunc, 0, len(writeMW)+len(handlers))
+		out = append(out, writeMW...)
+		return append(out, handlers...)
+	}
+
 	v1 := router.Group("/mcp", mw...)
 	v1.GET("/servers", h.ListServers)
 	v1.GET("/servers/:id", h.GetServer)
 	v1.GET("/servers/:id/tools", h.ListTools)
 	v1.GET("/servers/:id/resources", h.ListResources)
-	v1.POST("/servers", append(writeMW, h.ConnectServer)...)
-	v1.PUT("/servers/:id", append(writeMW, h.UpdateServer)...)
+	v1.POST("/servers", admin(h.ConnectServer)...)
+	v1.PUT("/servers/:id", admin(h.UpdateServer)...)
 	v1.GET("/servers/:id/config", h.GetServerConfig)
-	v1.DELETE("/servers/:id", append(writeMW, h.DisconnectServer)...)
-	v1.DELETE("/servers/:id/config", append(writeMW, h.DeleteServerConfig)...)
-	v1.POST("/servers/:id/reconnect", append(writeMW, h.ReconnectServer)...)
-	v1.POST("/tools/:toolId/execute", append(writeMW, h.ExecuteTool)...)
+	v1.DELETE("/servers/:id", admin(h.DisconnectServer)...)
+	v1.DELETE("/servers/:id/config", admin(h.DeleteServerConfig)...)
+	v1.POST("/servers/:id/reconnect", admin(h.ReconnectServer)...)
+	v1.POST("/tools/:toolId/execute", write(h.ExecuteTool)...)
 	v1.GET("/skills", h.ListSkills)
 	v1.GET("/skills/:id", h.GetSkill)
-	v1.POST("/skills/refresh", append(writeMW, h.RefreshSkills)...)
+	v1.POST("/skills/refresh", admin(h.RefreshSkills)...)
 	v1.GET("/status", h.GetServerStatus)
 }
 

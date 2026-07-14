@@ -22,7 +22,7 @@ export const agentRoutes = [
     key="agents-create"
     path="/agents/create"
     element={
-      <PrivateRoute>
+      <PrivateRoute requiredTenantRole="admin">
         <CreateAgentPage />
       </PrivateRoute>
     }
@@ -31,7 +31,7 @@ export const agentRoutes = [
     key="agents-edit"
     path="/agents/:id/edit"
     element={
-      <PrivateRoute>
+      <PrivateRoute requiredTenantRole="admin">
         <EditAgentPage />
       </PrivateRoute>
     }
