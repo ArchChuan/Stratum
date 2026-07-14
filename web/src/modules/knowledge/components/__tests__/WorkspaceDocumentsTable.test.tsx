@@ -27,6 +27,7 @@ const documentRow = {
   ingest_error: '',
   processed_chunks: 3,
   total_chunks: 10,
+  created_at: '2026-07-13T01:02:00Z',
   ingest_started_at: '2026-07-14T02:03:00Z',
 };
 
@@ -41,7 +42,7 @@ describe('WorkspaceDocumentsTable', () => {
     expect(screen.getByText('产品手册.pdf')).toBeInTheDocument();
     expect(screen.getByText('处理中')).toBeInTheDocument();
     expect(screen.getByText('3/10')).toBeInTheDocument();
-    expect(screen.getByText(new Date(documentRow.ingest_started_at).toLocaleString('zh-CN'))).toBeInTheDocument();
+    expect(screen.getByText(new Date(documentRow.created_at).toLocaleString('zh-CN'))).toBeInTheDocument();
     expect(document.querySelector('.ant-table')).not.toBeInTheDocument();
   });
 

@@ -93,6 +93,7 @@ export const WorkspaceDocumentsTable = ({ documents, loading }: WorkspaceDocumen
     <ResponsiveDataView<KnowledgeDocument>
       rowKey="id"
       loading={loading}
+      size="small"
       rows={documents}
       columns={columns}
       pagination={{ pageSize: COMPACT_PAGE_SIZE, size: 'small' }}
@@ -106,8 +107,8 @@ export const WorkspaceDocumentsTable = ({ documents, loading }: WorkspaceDocumen
           <Flex justify="space-between" align="center" gap={8} style={{ marginTop: 10 }}>
             <Text type="secondary">分块 {renderProgress(document)}</Text>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {document.ingest_started_at
-                ? new Date(document.ingest_started_at).toLocaleString('zh-CN')
+              {document.created_at
+                ? new Date(document.created_at).toLocaleString('zh-CN')
                 : '-'}
             </Text>
           </Flex>

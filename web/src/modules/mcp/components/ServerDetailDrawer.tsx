@@ -78,6 +78,7 @@ export const ServerDetailDrawer = ({ server, onClose }: Props) => {
       ) : (
         <ResponsiveDataView
           rows={tools}
+          size="small"
           columns={toolCols}
           rowKey="name"
           loading={loadingTools}
@@ -102,6 +103,7 @@ export const ServerDetailDrawer = ({ server, onClose }: Props) => {
       ) : (
         <ResponsiveDataView
           rows={resources}
+          size="small"
           columns={resCols}
           rowKey="uri"
           loading={loadingRes}

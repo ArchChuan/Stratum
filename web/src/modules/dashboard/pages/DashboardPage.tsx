@@ -46,7 +46,7 @@ export const DashboardPage = () => {
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         {statCards.map((s) => (
-          <Col xs={12} sm={12} lg={8} xl={4} key={s.title}>
+          <Col xs={24} sm={12} md={8} xl={4} key={s.title} style={{ flex: '1 1 0' }}>
             <StatCard {...s} loading={loading} />
           </Col>
         ))}

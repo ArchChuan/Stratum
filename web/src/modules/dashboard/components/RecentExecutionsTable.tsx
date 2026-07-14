@@ -93,6 +93,7 @@ export const RecentExecutionsTable = ({ data, loading }: RecentExecutionsTablePr
       columns={columns}
       rowKey="id"
       loading={loading}
+      size="small"
       pagination={false}
       emptyText="暂无执行记录"
       renderMobileItem={(execution) => (

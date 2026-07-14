@@ -62,6 +62,20 @@ describe('ResponsiveDataView', () => {
     expect(container.querySelector('.mobile-card-list')).toBeNull();
   });
 
+  it('forwards the configured size to the desktop table', () => {
+    const { container } = render(
+      <ResponsiveDataView
+        rows={rows}
+        columns={columns}
+        rowKey="id"
+        size="small"
+        renderMobileItem={(row) => <article>{row.name}</article>}
+      />,
+    );
+
+    expect(container.querySelector('.ant-table')).toHaveClass('ant-table-small');
+  });
+
   it('renders mobile cards with the original row objects and action callbacks', () => {
     responsive.isMobile = true;
     const action = vi.fn();

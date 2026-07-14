@@ -19,6 +19,7 @@ export interface ResponsiveDataViewProps<T extends object> {
   columns: ColumnsType<T>;
   rowKey: keyof T | ((row: T) => Key);
   loading?: boolean;
+  size?: TableProps<T>['size'];
   /** Pagination is opt-in; omitting this prop disables it on every viewport. */
   pagination?: TablePaginationConfig | false;
   onChange?: TableProps<T>['onChange'];
@@ -31,6 +32,7 @@ export function ResponsiveDataView<T extends object>({
   columns,
   rowKey,
   loading = false,
+  size,
   pagination,
   onChange,
   emptyText = '暂无数据',
@@ -46,6 +48,7 @@ export function ResponsiveDataView<T extends object>({
         dataSource={rows}
         rowKey={rowKey as TableProps<T>['rowKey']}
         loading={loading}
+        size={size}
         pagination={resolvedPagination}
         onChange={onChange}
         locale={{ emptyText }}
