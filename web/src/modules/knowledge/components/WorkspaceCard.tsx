@@ -69,7 +69,7 @@ export const WorkspaceCard = ({ ws, onDelete, onOpen, isAdmin }: WorkspaceCardPr
       </Tag>
     </div>
 
-    <Text strong style={{ fontSize: 15, marginBottom: 4, display: 'block' }}>
+    <Text className="long-text" strong style={{ fontSize: 15, marginBottom: 4, display: 'block' }}>
       {ws.name}
     </Text>
     <Paragraph
@@ -81,6 +81,7 @@ export const WorkspaceCard = ({ ws, onDelete, onOpen, isAdmin }: WorkspaceCardPr
     </Paragraph>
 
     <div
+      className="responsive-card-actions"
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -96,6 +97,8 @@ export const WorkspaceCard = ({ ws, onDelete, onOpen, isAdmin }: WorkspaceCardPr
         <Space size={4}>
           <Tooltip title="查看详情">
             <Button
+              aria-label="查看知识库"
+              className="responsive-touch-target"
               type="text"
               size="small"
               icon={<ArrowRightOutlined />}
@@ -109,7 +112,14 @@ export const WorkspaceCard = ({ ws, onDelete, onOpen, isAdmin }: WorkspaceCardPr
                 okText="删除"
                 onConfirm={() => onDelete(ws.name)}
               >
-                <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+                <Button
+                  aria-label="删除知识库"
+                  className="responsive-touch-target"
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                />
               </DangerPopconfirm>
             </Tooltip>
           )}

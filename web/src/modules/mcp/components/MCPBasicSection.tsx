@@ -19,7 +19,7 @@ export const MCPBasicSection = () => (
   <div style={mcpSectionStyle}>
     <SectionHeader icon={<ApiOutlined />} title="基本信息" />
     <Row gutter={16}>
-      <Col span={14}>
+      <Col xs={24} md={14}>
         <Form.Item
           label="名称"
           name="name"
@@ -28,12 +28,12 @@ export const MCPBasicSection = () => (
           <Input placeholder="例如：filesystem-server" maxLength={64} />
         </Form.Item>
       </Col>
-      <Col span={5}>
+      <Col xs={24} md={5}>
         <Form.Item label="版本" name="version">
           <Input placeholder="1.0.0" maxLength={32} />
         </Form.Item>
       </Col>
-      <Col span={5}>
+      <Col xs={24} md={5}>
         <Form.Item label="超时（秒）" name="timeout_sec" rules={[{ required: true }]}>
           <InputNumber min={1} max={MCP_MAX_TIMEOUT_SEC} style={{ width: '100%' }} />
         </Form.Item>

@@ -55,7 +55,7 @@ export const SkillFormSections = ({
 }: SkillFormSectionsProps) => {
   if (!isEdit) {
     return (
-      <div style={SECTION_BG}>
+      <div className="responsive-form-section" style={SECTION_BG}>
         <SectionHeader icon={<ThunderboltOutlined />} title="能力定义" />
         <Form.Item
           label="技能名称"
@@ -93,7 +93,7 @@ export const SkillFormSections = ({
 
   return (
     <>
-      <div style={SECTION_BG}>
+      <div className="responsive-form-section" style={SECTION_BG}>
         <SectionHeader icon={<ThunderboltOutlined />} title="基本信息" />
         <Form.Item
           label="技能名称"
@@ -122,7 +122,7 @@ export const SkillFormSections = ({
       </div>
 
       {skillType === 'code' && (
-        <div style={SECTION_BG}>
+        <div className="responsive-form-section" style={SECTION_BG}>
           <SectionHeader icon={<CodeOutlined />} title="代码" subtitle="技能的具体执行逻辑" />
           <Form.Item label="编程语言" name="language" rules={[{ required: true }]}>
             <Select>
@@ -158,7 +158,7 @@ export const SkillFormSections = ({
       )}
 
       {skillType === 'llm' && (
-        <div style={SECTION_BG}>
+        <div className="responsive-form-section" style={SECTION_BG}>
           <SectionHeader icon={<RobotOutlined />} title="LLM 配置" subtitle="设置模型和提示词" />
           <Form.Item
             label="系统提示词"
@@ -193,7 +193,7 @@ export const SkillFormSections = ({
                   </Text>
                 ),
                 children: (
-                  <div style={{ display: 'flex', gap: 16 }}>
+                  <div className="responsive-form-grid">
                     <Form.Item label="Temperature" name="temperature" style={{ flex: 1 }}>
                       <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
                     </Form.Item>
@@ -212,7 +212,7 @@ export const SkillFormSections = ({
         </div>
       )}
 
-      {skillType === 'http' && (        <div style={SECTION_BG}>
+      {skillType === 'http' && (        <div className="responsive-form-section" style={SECTION_BG}>
           <SectionHeader icon={<GlobalOutlined />} title="HTTP 配置" subtitle="调用外部 API 接口" />
           <Form.Item
             label="请求 URL"
@@ -224,8 +224,8 @@ export const SkillFormSections = ({
           >
             <Input placeholder="https://api.example.com/endpoint" />
           </Form.Item>
-          <div style={{ display: 'flex', gap: 16 }}>
-            <Form.Item label="请求方法" name="method" style={{ width: 140 }}>
+          <div className="responsive-form-grid">
+            <Form.Item label="请求方法" name="method">
               <Select>
                 <Option value="GET">GET</Option>
                 <Option value="POST">POST</Option>
@@ -272,7 +272,7 @@ export const SkillFormSections = ({
       )}
 
       {skillType === 'prompt' && (
-        <div style={SECTION_BG}>
+        <div className="responsive-form-section" style={SECTION_BG}>
           <SectionHeader icon={<MessageOutlined />} title="提示词模板" subtitle="agent 调用时注入的提示词，支持 Go text/template（{{.input}} 为用户输入）" />
           <Form.Item
             label="提示词模板"

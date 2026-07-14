@@ -14,6 +14,7 @@ export const ExecutionHistoryPage = () => {
   return (
     <div>
       <div
+        className="responsive-page-header"
         style={{
           display: 'flex',
           alignItems: 'center',

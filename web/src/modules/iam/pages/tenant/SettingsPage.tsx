@@ -33,6 +33,7 @@ export const SettingsPage = () => {
 
   const handleDeleteTenant = () => {
     Modal.confirm({
+      className: 'mobile-overlay',
       title: '删除租户',
       content: `确定要删除租户「${tenantName || user?.current_tenant?.name || ''}」吗？此操作不可恢复，租户下的所有数据（成员、智能体、知识库、记忆）将被永久清除。`,
       okText: '确认删除',
@@ -54,7 +55,7 @@ export const SettingsPage = () => {
   };
 
   return (
-    <div style={{ maxWidth: 960 }}>
+    <div style={{ width: '100%', maxWidth: 960 }}>
       <div style={{ marginBottom: 24 }}>
         <Title level={4} style={{ margin: 0 }}>
           租户设置
