@@ -1,11 +1,18 @@
 import { message } from 'antd';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { tenantApi } from '../api/tenant.api';
 import type { Member } from '../model/auth';
 
+import { DEFAULT_PAGE_SIZE } from '@/constants';
 import { useAuth } from '@/modules/iam';
 import { extractErrorMessage } from '@/shared/lib';
+
+interface PaginationState {
+  current: number;
+  pageSize: number;
+  total: number;
+}
 
 export const useTenantMembers = () => {
   const { user } = useAuth();
@@ -13,24 +20,33 @@ export const useTenantMembers = () => {
   const [loading, setLoading] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteLoading, setInviteLoading] = useState(false);
+  const [pagination, setPagination] = useState<PaginationState>({
+    current: 1,
+    pageSize: DEFAULT_PAGE_SIZE,
+    total: 0,
+  });
 
   const isOwner = user?.role === 'owner';
   const canInvite = user?.role === 'owner' || user?.role === 'admin';
 
-  const fetchMembers = async () => {
+  const fetchPage = useCallback(async (page: number, pageSize: number) => {
     setLoading(true);
     try {
-      setMembers(await tenantApi.members());
+      const data = await tenantApi.members(page, pageSize);
+      setMembers(data.members);
+      setPagination({ current: data.page, pageSize: data.page_size, total: data.total });
+      return data;
     } catch {
       message.error('获取成员列表失败');
+      return undefined;
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchMembers();
-  }, []);
+    void fetchPage(1, DEFAULT_PAGE_SIZE);
+  }, [fetchPage]);
 
   const handleInvite = async (values: { email: string; role: 'admin' | 'member' }) => {
     setInviteLoading(true);
@@ -38,7 +54,7 @@ export const useTenantMembers = () => {
       await tenantApi.inviteMember(values);
       message.success('邀请已发送');
       setInviteOpen(false);
-      fetchMembers();
+      void fetchPage(1, pagination.pageSize);
     } catch (err: any) {
       if (err?.response?.status !== 403) message.error(extractErrorMessage(err, '邀请失败'));
     } finally {
@@ -50,7 +66,10 @@ export const useTenantMembers = () => {
     try {
       await tenantApi.removeMember(userId);
       message.success('成员已移除');
-      fetchMembers();
+      const data = await fetchPage(pagination.current, pagination.pageSize);
+      if (data && data.members.length === 0 && data.page > 1 && data.total > 0) {
+        await fetchPage(data.page - 1, data.page_size);
+      }
     } catch (err: any) {
       if (err?.response?.status !== 403) message.error(extractErrorMessage(err, '移除失败'));
     }
@@ -60,7 +79,7 @@ export const useTenantMembers = () => {
     try {
       await tenantApi.updateMemberRole(userId, role);
       message.success('角色已更新');
-      fetchMembers();
+      void fetchPage(pagination.current, pagination.pageSize);
     } catch (err: any) {
       if (err?.response?.status !== 403) message.error(extractErrorMessage(err, '更新角色失败'));
     }
@@ -70,6 +89,8 @@ export const useTenantMembers = () => {
     user,
     members,
     loading,
+    pagination,
+    fetchPage,
     inviteOpen,
     setInviteOpen,
     inviteLoading,

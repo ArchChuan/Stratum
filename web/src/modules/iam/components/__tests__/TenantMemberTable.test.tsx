@@ -34,6 +34,7 @@ describe('TenantMemberTable', () => {
 
   it('shows member details and authorized actions on mobile', async () => {
     const onRemove = vi.fn();
+    const onChange = vi.fn();
     render(
       <TenantMemberTable
         members={[member]}
@@ -41,8 +42,10 @@ describe('TenantMemberTable', () => {
         currentUserSub="owner-1"
         currentUserRole="owner"
         isOwner
+        pagination={{ current: 1, pageSize: 1, total: 2 }}
         onRemove={onRemove}
         onRoleChange={vi.fn()}
+        onChange={onChange}
       />,
     );
 
@@ -55,6 +58,13 @@ describe('TenantMemberTable', () => {
     const popover = confirmation.closest('.ant-popover');
     fireEvent.click(within(popover as HTMLElement).getByRole('button', { name: /移\s*除/ }));
     await waitFor(() => expect(onRemove).toHaveBeenCalledWith('user-2'));
+    fireEvent.click(document.querySelector<HTMLButtonElement>('.ant-pagination-next button')!);
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ current: 2, pageSize: 1, total: 2 }),
+      {},
+      {},
+      { action: 'paginate', currentDataSource: [member] },
+    );
     expect(document.querySelector('.ant-table')).not.toBeInTheDocument();
   });
 
@@ -65,8 +75,10 @@ describe('TenantMemberTable', () => {
         members={[member]}
         loading={false}
         isOwner={false}
+        pagination={{ current: 1, pageSize: 20, total: 1 }}
         onRemove={vi.fn()}
         onRoleChange={vi.fn()}
+        onChange={vi.fn()}
       />,
     );
 

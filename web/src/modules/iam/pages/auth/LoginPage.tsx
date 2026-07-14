@@ -23,18 +23,12 @@ export const LoginPage = () => {
   const handleGuestLogin = async () => {
     setGuestLoading(true);
     try {
-      const { access_token, tenant_id } = await authApi.guest();
-      const me = await authApi.me(access_token);
+      const { access_token, tenant_id, user } = await authApi.guest();
       login(
         {
-          sub: me.sub,
-          tenant_id: me.tenant_id || tenant_id,
-          role: me.role,
-          global_role: me.global_role,
-          system_role: me.system_role,
-          current_tenant: { id: me.tenant_id || tenant_id, name: '' },
-          avatar_url: me.avatar_url || '',
-          github_login: me.github_login || '',
+          ...user,
+          tenant_id: user.tenant_id || tenant_id,
+          current_tenant: { id: user.tenant_id || tenant_id, name: '' },
         },
         access_token,
       );

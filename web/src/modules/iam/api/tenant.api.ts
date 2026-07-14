@@ -5,7 +5,6 @@ import {
   tenantSettingsSchema,
   tenantSummarySchema,
   adminTenantSchema,
-  type Member,
   type TenantSettings,
   type TenantSummary,
   type AdminTenant,
@@ -15,6 +14,15 @@ import api from '@/services/client';
 
 const withBearer = (token?: string) =>
   token ? { headers: { Authorization: `Bearer ${token}` }, _retry: true } as any : undefined;
+
+const memberPageSchema = z.object({
+  members: z.array(memberSchema),
+  total: z.number(),
+  page: z.number(),
+  page_size: z.number(),
+});
+
+export type MemberPage = z.infer<typeof memberPageSchema>;
 
 export const tenantApi = {
   listMine: async (token?: string): Promise<TenantSummary[]> => {
@@ -35,9 +43,9 @@ export const tenantApi = {
   updateSettings: (patch: Record<string, unknown>) => api.patch('/tenant/settings', patch),
   setEmbedModel: (embedModel: string) =>
     api.patch('/tenant/embed-model', { embed_model: embedModel }),
-  members: async (): Promise<Member[]> => {
-    const res = await api.get('/tenant/members');
-    return z.array(memberSchema).parse(res.data?.members ?? res.data ?? []);
+  members: async (page: number, pageSize: number): Promise<MemberPage> => {
+    const res = await api.get('/tenant/members', { params: { page, page_size: pageSize } });
+    return memberPageSchema.parse(res.data);
   },
   inviteMember: (data: { email: string; role: string }) =>
     api.post('/tenant/members/invite', data),

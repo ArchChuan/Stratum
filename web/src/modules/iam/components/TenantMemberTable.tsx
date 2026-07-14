@@ -1,9 +1,10 @@
 import { DeleteOutlined, DownOutlined, MoreOutlined } from '@ant-design/icons';
 import { Avatar, Button, Card, Dropdown, Flex, Space, Tag, Typography } from 'antd';
+import type { TablePaginationConfig } from 'antd/es/table';
 
 import type { Member } from '../model/auth';
 
-import { DEFAULT_PAGE_SIZE } from '@/constants';
+import { PAGE_SIZE_OPTIONS } from '@/constants';
 import { DangerPopconfirm, ResponsiveDataView } from '@/shared/ui';
 
 const { Text } = Typography;
@@ -27,8 +28,10 @@ interface Props {
   currentUserSub?: string;
   currentUserRole?: string;
   isOwner: boolean;
+  pagination: { current: number; pageSize: number; total: number };
   onRemove: (userId: string) => void;
   onRoleChange: (userId: string, role: string) => void;
+  onChange: (pagination: TablePaginationConfig) => void;
 }
 
 export const TenantMemberTable = ({
@@ -37,8 +40,10 @@ export const TenantMemberTable = ({
   currentUserSub,
   currentUserRole,
   isOwner,
+  pagination,
   onRemove,
   onRoleChange,
+  onChange,
 }: Props) => {
   const renderActions = (record: Member, compact = false) => {
     const isSelf = record.user_id === currentUserSub;
@@ -133,7 +138,18 @@ export const TenantMemberTable = ({
         columns={columns}
         rowKey="user_id"
         loading={loading}
-        pagination={{ pageSize: DEFAULT_PAGE_SIZE, showTotal: (t) => `共 ${t} 位成员` }}
+        pagination={{
+          current: pagination.current,
+          pageSize: pagination.pageSize,
+          total: pagination.total,
+          showSizeChanger: true,
+          pageSizeOptions: PAGE_SIZE_OPTIONS,
+          showQuickJumper: true,
+          showTotal: (t) => `共 ${t} 位成员`,
+          style: { padding: '12px 16px' },
+        }}
+        mobilePaginationMode="server"
+        onChange={onChange}
         renderMobileItem={(member) => {
           const role = ROLE_TAG[member.role] || { color: 'default', label: member.role };
           return (
