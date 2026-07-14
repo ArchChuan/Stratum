@@ -17,6 +17,10 @@ export const authApi = {
   },
   refresh: () => api.post<RefreshResp>('/auth/refresh').then((r) => r.data),
   logout: () => api.post('/auth/logout'),
+  guest: () =>
+    api
+      .post<{ access_token: string; tenant_id: string }>('/auth/guest')
+      .then((r) => r.data),
   register: (payload: {
     onboarding_token: string;
     action: 'create' | 'join';

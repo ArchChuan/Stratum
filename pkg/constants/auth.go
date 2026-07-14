@@ -13,4 +13,12 @@ const (
 
 	// DefaultTenantID is the system tenant for global and system admins.
 	DefaultTenantID = "tenant_default"
+
+	// GuestAccountTTL is how long a temporary guest account stays valid before reaping.
+	GuestAccountTTL = 24 * time.Hour
+	// GuestReaperInterval is how often the background reaper scans for expired guests.
+	GuestReaperInterval = time.Hour
+	// GuestGitHubIDPrefix namespaces synthetic guest identities so they never
+	// collide with numeric GitHub IDs in the users.github_id UNIQUE column.
+	GuestGitHubIDPrefix = "guest:"
 )

@@ -532,7 +532,7 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
     doc_id         TEXT NOT NULL,
     chunk_index    BIGINT NOT NULL,
     content        TEXT NOT NULL,
-    tsv            tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
+    tsv            tsvector GENERATED ALWAYS AS (to_tsvector('public.chinese_zh', content)) STORED,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_kc_tsv       ON knowledge_chunks USING GIN(tsv);
@@ -592,3 +592,29 @@ CREATE INDEX IF NOT EXISTS idx_kpc_doc       ON knowledge_parent_chunks(workspac
 -- Add parent_id to leaf chunks (NULL for strategies without Parent-Child).
 ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS parent_id TEXT
     REFERENCES knowledge_parent_chunks(id) ON DELETE SET NULL;
+
+-- Migrate existing tenants whose knowledge_chunks.tsv column was created with the
+-- old 'simple' config (no CJK segmentation). A GENERATED column's expression cannot
+-- be ALTERed in place, so we drop the GIN index + column and recreate them against
+-- public.chinese_zh. Idempotent: once the expression references chinese_zh the guard
+-- skips the rebuild. New tenants create tsv correctly above, so this is a no-op for them.
+-- Ordering: must run AFTER knowledge_chunks exists (created above).
+DO $$
+DECLARE
+    gen_expr text;
+BEGIN
+    SELECT pg_get_expr(ad.adbin, ad.adrelid)
+      INTO gen_expr
+      FROM pg_attribute a
+      JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+     WHERE a.attrelid = 'knowledge_chunks'::regclass
+       AND a.attname = 'tsv';
+
+    IF gen_expr IS NOT NULL AND position('chinese_zh' IN gen_expr) = 0 THEN
+        DROP INDEX IF EXISTS idx_kc_tsv;
+        ALTER TABLE knowledge_chunks DROP COLUMN tsv;
+        ALTER TABLE knowledge_chunks ADD COLUMN tsv tsvector
+            GENERATED ALWAYS AS (to_tsvector('public.chinese_zh', content)) STORED;
+        CREATE INDEX idx_kc_tsv ON knowledge_chunks USING GIN(tsv);
+    END IF;
+END $$;

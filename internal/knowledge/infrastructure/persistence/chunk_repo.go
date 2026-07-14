@@ -118,11 +118,15 @@ func (r *ChunkRepo) GetChunksByIDs(ctx context.Context, tenantID, workspaceID st
 func (r *ChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceID, query string, topK int) ([]domain.Chunk, error) {
 	schema := schemaFor(tenantID)
 	rows, err := r.db.Query(ctx,
+		// Must use the same text-search config as the GENERATED tsv column
+		// (public.chinese_zh) or the GIN index on tsv is bypassed and the query
+		// vs document tokenizations disagree. chinese_zh is zhparser when the
+		// extension is installed, otherwise a copy of 'simple' (see public_schema.sql).
 		fmt.Sprintf(`SELECT id, doc_id, chunk_index, content
 			FROM "%s".knowledge_chunks
 			WHERE workspace_id = $1
-			  AND tsv @@ plainto_tsquery('simple', $2)
-			ORDER BY ts_rank(tsv, plainto_tsquery('simple', $2)) DESC
+			  AND tsv @@ plainto_tsquery('public.chinese_zh', $2)
+			ORDER BY ts_rank(tsv, plainto_tsquery('public.chinese_zh', $2)) DESC
 			LIMIT $3`, schema),
 		workspaceID, query, topK,
 	)
@@ -144,12 +148,21 @@ func (r *ChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceID, qu
 
 func (r *ChunkRepo) DeleteByWorkspace(ctx context.Context, tenantID, workspaceID string) error {
 	schema := schemaFor(tenantID)
-	_, err := r.db.Exec(ctx,
+	// Leaf chunks first: their parent_id FK is ON DELETE SET NULL, so deleting
+	// leaves does not cascade to parents. Both tables must be purged explicitly
+	// because DeleteWorkspaceData also serves the "clear data, keep workspace"
+	// path where the rag_workspaces row (and its ON DELETE CASCADE) is untouched.
+	if _, err := r.db.Exec(ctx,
 		fmt.Sprintf(`DELETE FROM "%s".knowledge_chunks WHERE workspace_id = $1`, schema),
 		workspaceID,
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("chunk_repo: delete by workspace: %w", err)
+	}
+	if _, err := r.db.Exec(ctx,
+		fmt.Sprintf(`DELETE FROM "%s".knowledge_parent_chunks WHERE workspace_id = $1`, schema),
+		workspaceID,
+	); err != nil {
+		return fmt.Errorf("chunk_repo: delete parents by workspace: %w", err)
 	}
 	return nil
 }
