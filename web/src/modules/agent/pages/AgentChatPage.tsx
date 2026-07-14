@@ -1,8 +1,13 @@
+import { Drawer } from 'antd';
+import { useEffect, useState } from 'react';
+
 import { ChatComposer } from '../components/ChatComposer';
 import { ChatConversationSidebar } from '../components/ChatConversationSidebar';
 import { ChatHeader } from '../components/ChatHeader';
 import { ChatMessageList } from '../components/ChatMessageList';
 import { useChatPage } from '../hooks/useChatPage';
+
+import { useResponsive } from '@/shared/hooks/useResponsive';
 
 export const AgentChatPage = () => {
   const { isMobile } = useResponsive();
@@ -106,7 +111,3 @@ export const AgentChatPage = () => {
     </div>
   );
 };
-import { Drawer } from 'antd';
-import { useEffect, useState } from 'react';
-
-import { useResponsive } from '@/shared/hooks/useResponsive';

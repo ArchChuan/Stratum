@@ -1,6 +1,5 @@
-import { createRef } from 'react';
-
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AgentChatPage } from '../AgentChatPage';
@@ -77,6 +76,15 @@ describe('AgentChatPage mobile layout', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '删除' })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: '删除' }));
     await screen.findByText('删除此会话？');
+    expect(screen.getByRole('dialog', { name: '会话列表' })).toBeInTheDocument();
+    const confirmDelete = await waitFor(() => {
+      const buttons = document.querySelectorAll<HTMLButtonElement>('.ant-popconfirm-buttons button');
+      const button = buttons.item(buttons.length - 1);
+      expect(button).not.toBeNull();
+      return button!;
+    });
+    fireEvent.click(confirmDelete);
+    expect(mocks.remove).toHaveBeenCalledWith('conv-1');
   });
 
   it('uses an accessible icon-only send button on phones', () => {
