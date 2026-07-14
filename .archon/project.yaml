@@ -1,0 +1,21 @@
+name: stratum
+max_concurrent_tasks: 3
+rules:
+  - AGENTS.md
+  - docs/agent/project.md
+  - docs/agent/api.md
+  - docs/agent/agent.md
+  - docs/agent/milvus.md
+  - docs/agent/nats.md
+  - docs/agent/observability.md
+  - openspec
+  - .agents/skills/stratum-e2e-development/SKILL.md
+required_skill: stratum-e2e-development
+protected_paths:
+  - config/prod.yaml
+  - .env
+  - .env.*
+verification:
+  short: ".archon/scripts/verify-short.sh"
+  full: ".archon/scripts/verify-full.sh"
+  e2e: ".archon/scripts/verify-e2e.sh"
