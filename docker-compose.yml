@@ -210,8 +210,13 @@ services:
       - minio
 
   # PostgreSQL - 关系型数据库（多租户元数据）
+  # 使用自建镜像内置 zhparser，支持 knowledge_chunks 中文全文分词；
+  # 缺失 zhparser 时 public_schema.sql 会优雅降级为 simple 解析器。
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: .
+      dockerfile: docker/postgres-zhparser.Dockerfile
+    image: stratum-postgres-zhparser:local
     environment:
       POSTGRES_USER: stratum
       POSTGRES_PASSWORD: stratum

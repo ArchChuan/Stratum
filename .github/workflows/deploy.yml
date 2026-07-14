@@ -95,7 +95,20 @@ jobs:
             docker tag  "$src" "$dst"
             docker push "$dst"
           }
-          mirror_if_missing postgres:16-alpine              ${{ env.IMAGE_REPO }}/postgres:16-alpine
+          # postgres carries zhparser (Chinese full-text search) — built from
+          # docker/postgres-zhparser.Dockerfile, NOT the vanilla mirror. WHY: the
+          # tenant/public schema DDL uses to_tsvector('public.chinese_zh', ...);
+          # without zhparser the config degrades to `simple` and CJK recall is ~0.
+          # Idempotent: skip build if this immutable tag already exists in CR.
+          # Bump the tag suffix (16-zhparser-vN) when the Dockerfile changes.
+          ZHPARSER_IMG="${{ env.IMAGE_REPO }}/postgres:16-zhparser"
+          if docker manifest inspect "$ZHPARSER_IMG" > /dev/null 2>&1; then
+            echo "skip: $ZHPARSER_IMG already in registry"
+          else
+            echo "building postgres+zhparser → $ZHPARSER_IMG"
+            docker build -f docker/postgres-zhparser.Dockerfile -t "$ZHPARSER_IMG" .
+            docker push "$ZHPARSER_IMG"
+          fi
           mirror_if_missing redis:7-alpine                  ${{ env.IMAGE_REPO }}/redis:7-alpine
           mirror_if_missing nats:2.10.25-alpine             ${{ env.IMAGE_REPO }}/nats:2.10.25-alpine
           mirror_if_missing quay.io/coreos/etcd:v3.5.16     ${{ env.IMAGE_REPO }}/etcd:v3.5.16
