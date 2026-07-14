@@ -61,6 +61,21 @@ React 18 · Vite 4 · Ant Design 5.2 · React Router 6 · Axios · Moment.js
 - 删除租户向量数据使用 Milvus filter delete，禁止通过 DropCollection 破坏共享 collection
 - 功能替代旧存储后必须同步删除旧表 DDL、Go 引用，并为历史租户提供幂等清理语句
 
+### 环境配置隔离：本地开发 vs 远程部署（关键原则）
+
+**本地开发环境与远程部署环境使用两套完全隔离的配置，改动必须同步到两处，否则「本地生效、生产不生效」。**
+
+| 环境 | 配置入口 | 交付方式 |
+|------|----------|----------|
+| 本地开发 | `docker-compose.yml` | `make infra-up` 直接起容器（含本地 `build:` 段） |
+| 远程部署（真生产链路） | `.github/workflows/deploy.yml` → 镜像推阿里云 CR → Helm (`helm/values-demo.yaml`) → K3s | CD 触发，`dependencies.yaml` 用 `image.repository:tag` 拉镜像 |
+
+- **`docker-compose.prod.yml` 不在 CD 链路中**（遗留/备用）；改它不影响远程部署。远程唯一权威是 `deploy.yml` + `helm/values-*.yaml`。
+- **基础设施层的任何改动都要双写**：自定义镜像、数据库扩展、环境变量、依赖版本、端口。docker-compose 只覆盖本地；远程必须在 `deploy.yml`（构建/镜像镜像）+ Helm values（引用 tag）同步落地。
+- **自定义依赖镜像**（如 postgres + zhparser）：本地在 `docker-compose.yml` 用 `build:` 段；远程必须由 `deploy.yml` `docker build -f <Dockerfile>` 构建并 `push` 到 CR（带 `docker manifest inspect` 幂等守卫），再让对应 `values-*.yaml` 的 `image.tag` 指向该 tag。二者 tag 必须保持一致。
+- **反例（踩坑）**：zhparser 中文分词只改了 `docker-compose*.yml`，CD 仍 mirror 纯净 `postgres:16-alpine` 到 CR，K3s 部署的 postgres 无 zhparser，`public.chinese_zh` 静默降级为 `simple` 拷贝，中文召回≈0——本地验证全绿、生产悄悄失效（2026-07-13）。
+- **外部托管依赖走降级路径**：`values-prod.yaml` 用外部阿里云 RDS，无法装自定义扩展；schema DDL 必须 graceful degradation（扩展缺失时退化且不崩），这类环境天然拿不到 zhparser 真分词，属预期限制。
+
 ### 架构分层（DDD bounded context）
 
 - 目录：`api/{http/{handler,dto,middleware},wiring}` · `internal/<ctx>/{domain/{,port/},application,infrastructure}` · `pkg/storage/{postgres,redis,milvus,tenantnaming}` · `pkg/{messaging/nats,httpclient,observability,crypto,constants,migration,textchunk}`
@@ -97,10 +112,13 @@ React 18 · Vite 4 · Ant Design 5.2 · React Router 6 · Axios · Moment.js
 ### 开发命令
 
 ```bash
+make zhparser-build-local                # 本地构建带 zhparser 的 postgres 镜像（infra-up 前跑一次；有宿主代理自动加速 PGDG 源）
 go vet && go test -short ./...           # 每次改动后
 go test -v -race -timeout 30s ./...      # PR 前完整跑
 npm run lint && npm run build            # 前端 PR 前
 ```
+
+**zhparser 本地构建代理**：`docker build` 的 `RUN` 不继承宿主 shell 代理，`apt.postgresql.org`（PGDG 源）在大陆会卡死。`make zhparser-build-local` 默认继承环境变量 `HTTP(S)_PROXY` 并经 build-arg 注入，无代理时自动省略。代理**仅本地加速、不写入镜像层、不进 CD**（GitHub runner 网络干净）——这是环境隔离原则的实例：本地构建手段与远程交付链彻底分离。远程由 `deploy.yml` 在干净网络下 build+push 同一 Dockerfile。
 
 ### 端到端开发验证
 

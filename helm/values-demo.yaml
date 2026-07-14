@@ -66,7 +66,11 @@ database:
   user: "stratum"
   image:
     repository: postgres
-    tag: "16-alpine"
+    # 16-zhparser: 带 zhparser（中文全文检索）的自建镜像，由 deploy.yml 从
+    # docker/postgres-zhparser.Dockerfile 构建并推送。CD 会把 repository 覆盖为
+    # <CR>/postgres，此 tag 选中 zhparser 构建；必须与 deploy.yml 产出的 tag 保持
+    # 一致。纯净 postgres:16-alpine 会使 chinese_zh 降级为 simple（中文召回≈0）。
+    tag: "16-zhparser"
   persistence:
     size: 10Gi
   resources:
