@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
@@ -22,6 +23,8 @@ import (
 type fakeTenantRepo struct {
 	count          int
 	members        []domain.Member
+	listLimit      int
+	listOffset     int
 	memberRoles    map[string]string
 	deleteErr      error
 	deleted        []string
@@ -33,7 +36,9 @@ func (f *fakeTenantRepo) CountMembers(_ context.Context, _ string) (int, error) 
 	return f.count, nil
 }
 
-func (f *fakeTenantRepo) ListMembers(_ context.Context, _ string, _, _ int) ([]domain.Member, error) {
+func (f *fakeTenantRepo) ListMembers(_ context.Context, _ string, limit, offset int) ([]domain.Member, error) {
+	f.listLimit = limit
+	f.listOffset = offset
 	return f.members, nil
 }
 
@@ -127,6 +132,31 @@ func TestListMembers_success(t *testing.T) {
 	members, _ := resp["members"].([]interface{})
 	if len(members) != 1 {
 		t.Fatalf("expected 1 member, got %d", len(members))
+	}
+}
+
+func TestListMembers_appliesPaginationQuery(t *testing.T) {
+	repo := &fakeTenantRepo{count: 25, members: []domain.Member{}}
+	h := newTenantHandler(repo)
+	r := setupTenantHandlerRouter(h)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/tenant/members?page=2&page_size=10", nil) //nolint:noctx
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if repo.listLimit != 10 || repo.listOffset != 10 {
+		t.Fatalf("expected limit=10 offset=10, got limit=%d offset=%d", repo.listLimit, repo.listOffset)
+	}
+
+	var resp dto.ListMembersResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Total != 25 || resp.Page != 2 || resp.PageSize != 10 {
+		t.Fatalf("unexpected pagination metadata: %+v", resp)
 	}
 }
 

@@ -5,6 +5,8 @@ import { TenantInviteModal } from '../../components/TenantInviteModal';
 import { TenantMemberTable } from '../../components/TenantMemberTable';
 import { useTenantMembers } from '../../hooks/useTenantMembers';
 
+import { DEFAULT_PAGE_SIZE } from '@/constants';
+
 const { Title, Text } = Typography;
 
 export const MembersPage = () => {
@@ -12,6 +14,8 @@ export const MembersPage = () => {
     user,
     members,
     loading,
+    pagination,
+    fetchPage,
     inviteOpen,
     setInviteOpen,
     inviteLoading,
@@ -53,8 +57,10 @@ export const MembersPage = () => {
         currentUserSub={user?.sub}
         currentUserRole={user?.role}
         isOwner={isOwner}
+        pagination={pagination}
         onRemove={handleRemove}
         onRoleChange={handleRoleChange}
+        onChange={(pag) => fetchPage(pag.current || 1, pag.pageSize || DEFAULT_PAGE_SIZE)}
       />
 
       <TenantInviteModal
