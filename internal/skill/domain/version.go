@@ -86,41 +86,41 @@ var toolNamePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,63}$`)
 
 func (c ToolContract) Validate() error {
 	if !toolNamePattern.MatchString(c.ToolName) {
-		return fmt.Errorf("invalid tool name: %s", c.ToolName)
+		return fmt.Errorf("invalid tool name: %s: %w", c.ToolName, ErrSkillNotPublishable)
 	}
 	if strings.TrimSpace(c.Description) == "" {
-		return fmt.Errorf("tool description required")
+		return fmt.Errorf("tool description required: %w", ErrSkillNotPublishable)
 	}
 	if !isObjectSchema(c.InputSchema) {
-		return fmt.Errorf("input schema must be object schema")
+		return fmt.Errorf("input schema must be object schema: %w", ErrSkillNotPublishable)
 	}
 	if !isObjectSchema(c.OutputSchema) {
-		return fmt.Errorf("output schema must be object schema")
+		return fmt.Errorf("output schema must be object schema: %w", ErrSkillNotPublishable)
 	}
 	if !c.Confirmed {
-		return fmt.Errorf("tool contract not confirmed")
+		return fmt.Errorf("tool contract not confirmed: %w", ErrSkillNotPublishable)
 	}
 	return nil
 }
 
 func (v SkillVersion) ValidatePublishable(enabledTestCount int) error {
 	if strings.TrimSpace(v.Capability.Goal) == "" {
-		return fmt.Errorf("capability goal required")
+		return fmt.Errorf("capability goal required: %w", ErrSkillNotPublishable)
 	}
 	if strings.TrimSpace(v.Capability.WhenToUse) == "" {
-		return fmt.Errorf("capability whenToUse required")
+		return fmt.Errorf("capability whenToUse required: %w", ErrSkillNotPublishable)
 	}
 	if len(v.Capability.Examples) == 0 && enabledTestCount == 0 {
-		return fmt.Errorf("at least one example or enabled test case required")
+		return fmt.Errorf("at least one example or enabled test case required: %w", ErrSkillNotPublishable)
 	}
 	if err := v.ToolContract.Validate(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(v.Implementation.Mode) == "" {
-		return fmt.Errorf("implementation mode required")
+		return fmt.Errorf("implementation mode required: %w", ErrSkillNotPublishable)
 	}
 	if v.Implementation.Source == nil {
-		return fmt.Errorf("implementation source required")
+		return fmt.Errorf("implementation source required: %w", ErrSkillNotPublishable)
 	}
 	return nil
 }

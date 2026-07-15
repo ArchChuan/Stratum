@@ -28,6 +28,7 @@ var (
 // collectionProvisioner is a minimal port for workspace vector collection lifecycle.
 type collectionProvisioner interface {
 	CreateCollectionWithDim(ctx context.Context, name string, dim int) error
+	DeleteByDocumentIDs(ctx context.Context, collection string, docIDs []string) error
 }
 
 // vectorDim returns the vector dimension for the given embedding model.
@@ -309,4 +310,43 @@ func (s *WorkspaceService) ListDocuments(ctx context.Context, tenantID, workspac
 		}
 	}
 	return views, nil
+}
+
+// DeleteDocument removes a single document from a workspace.
+// Returns ErrDocumentProcessing if the document is currently being ingested.
+// Vectors are deleted before the database record to avoid orphaned embeddings.
+func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspaceName, docID string) error {
+	ws, err := s.repo.GetByName(ctx, tenantID, workspaceName)
+	if err != nil {
+		return fmt.Errorf("get workspace: %w", err)
+	}
+
+	docs, err := s.docRepo.List(ctx, tenantID, ws.ID)
+	if err != nil {
+		return fmt.Errorf("list documents: %w", err)
+	}
+
+	var target *domain.Document
+	for _, d := range docs {
+		if d.ID == docID {
+			target = d
+			break
+		}
+	}
+	if target == nil {
+		return domain.ErrWorkspaceNotFound
+	}
+
+	if target.IngestStatus == "processing" {
+		return domain.ErrDocumentProcessing
+	}
+
+	if s.vectorStore != nil {
+		col := constants.CollectionName(tenantID, ws.ID)
+		if err := s.vectorStore.DeleteByDocumentIDs(ctx, col, []string{docID}); err != nil {
+			return fmt.Errorf("delete vectors: %w", err)
+		}
+	}
+
+	return s.docRepo.Delete(ctx, tenantID, ws.ID, docID)
 }
