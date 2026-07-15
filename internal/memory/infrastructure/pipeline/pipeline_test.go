@@ -22,6 +22,7 @@ func startJetStreamServer(t *testing.T) (*server.Server, *nats.Conn) {
 	opts := natsserver.DefaultTestOptions
 	opts.JetStream = true
 	opts.Port = -1
+	opts.StoreDir = t.TempDir()
 	s := natsserver.RunServer(&opts)
 	t.Cleanup(s.Shutdown)
 
@@ -94,4 +95,66 @@ func TestEventPublishConsume(t *testing.T) {
 	require.NotNil(t, received)
 	assert.Equal(t, ev.MessageID, received.MessageID)
 	assert.Equal(t, ev.Content, received.Content)
+}
+
+func TestInvalidRawEventMovesToDeadLetterStream(t *testing.T) {
+	_, nc := startJetStreamServer(t)
+	logger := zaptest.NewLogger(t)
+	jsm, err := NewJetStreamManager(nc, logger)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, jsm.EnsureStreams(ctx))
+	js := jsm.JS()
+
+	_, err = js.Publish(ctx, constants.MemoryRawSubject+".tenant-test", []byte(`{"broken":`))
+	require.NoError(t, err)
+	rawConsumer, err := jsm.CreateConsumer(
+		ctx,
+		constants.MemoryRawStream,
+		"test-dlq-embed",
+		constants.MemoryRawSubject+".>",
+		time.Second,
+		3,
+	)
+	require.NoError(t, err)
+
+	batch, err := rawConsumer.Fetch(1, jetstream.FetchMaxWait(time.Second))
+	require.NoError(t, err)
+	for msg := range batch.Messages() {
+		worker := &EmbedderWorker{js: js, logger: logger, ackWait: time.Second, maxDeliver: 3}
+		worker.processMessage(ctx, msg)
+	}
+
+	dlqConsumer, err := jsm.CreateConsumer(
+		ctx,
+		constants.MemoryDLQStream,
+		"test-dlq-reader",
+		constants.MemoryDLQSubject+".tenant-test",
+		time.Second,
+		1,
+	)
+	require.NoError(t, err)
+	dlqBatch, err := dlqConsumer.Fetch(1, jetstream.FetchMaxWait(time.Second))
+	require.NoError(t, err)
+
+	var got DeadLetterEvent
+	for msg := range dlqBatch.Messages() {
+		require.NoError(t, json.Unmarshal(msg.Data(), &got))
+		require.NoError(t, msg.Ack())
+	}
+	assert.Equal(t, "tenant-test", got.TenantID)
+	assert.Equal(t, "embed", got.Stage)
+	assert.Equal(t, "invalid_event", got.ErrorCode)
+	assert.Equal(t, constants.MemoryRawStream, got.OriginalStream)
+	assert.NotZero(t, got.StreamSequence)
+	assert.NotContains(t, string(mustJSON(t, got)), "broken")
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	require.NoError(t, err)
+	return data
 }

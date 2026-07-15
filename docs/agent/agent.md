@@ -170,3 +170,4 @@ type MemorySearcher interface {
 4. `Reset()` 清空内存和状态，谨慎使用
 5. 不要在 handler 中持有 Agent 实例；每次请求通过 `Registry.Get(ctx, id)` 获取
 6. Skill 工具注册后不可与内置工具（`stratum_*`）重名；`mergeTools` 会静默丢弃同名 extra 工具
+7. **远端服务报错排查**：涉及远端部署服务的 500/崩溃/异常，必须 SSH 进服务器查看实际运行日志（`journalctl -u <svc>` / `docker logs <container>`），不得凭本地代码静态分析推断根因；未拿到服务端日志前不得提出修复方案

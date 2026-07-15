@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WorkspaceDocumentsTable } from '../WorkspaceDocumentsTable';
@@ -51,5 +51,36 @@ describe('WorkspaceDocumentsTable', () => {
     render(<WorkspaceDocumentsTable documents={[documentRow]} loading={false} />);
 
     expect(document.querySelector('.ant-table')).toBeInTheDocument();
+  });
+
+  it('disables deletion while processing', () => {
+    render(
+      <WorkspaceDocumentsTable
+        documents={[documentRow]}
+        loading={false}
+        isAdmin
+        deletingDocumentID=""
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: '删除文档' })).toBeDisabled();
+  });
+
+  it('confirms deletion for a completed document', () => {
+    const onDelete = vi.fn();
+    render(
+      <WorkspaceDocumentsTable
+        documents={[{ ...documentRow, ingest_status: 'completed' }]}
+        loading={false}
+        isAdmin
+        deletingDocumentID=""
+        onDelete={onDelete}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '删除文档' }));
+    fireEvent.click(screen.getByRole('button', { name: /^删\s*除$/ }));
+    expect(onDelete).toHaveBeenCalledWith('doc-1');
   });
 });

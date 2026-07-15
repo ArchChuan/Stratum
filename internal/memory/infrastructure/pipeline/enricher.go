@@ -39,6 +39,7 @@ type EntityExtraction struct {
 // summaries when the token budget is exceeded.
 type EnricherWorker struct {
 	consumer       jetstream.Consumer
+	js             dlqPublisher
 	pool           *pgxpool.Pool
 	llmResolver    LLMResolver
 	logger         *zap.Logger
@@ -49,11 +50,14 @@ type EnricherWorker struct {
 	summaryTmpl    string
 	stopCh         chan struct{}
 	stopOnce       sync.Once
+	ackWait        time.Duration
+	maxDeliver     int
 }
 
 // NewEnricherWorker creates an enricher configured from the pipeline Config.
 func NewEnricherWorker(
 	consumer jetstream.Consumer,
+	js dlqPublisher,
 	pool *pgxpool.Pool,
 	logger *zap.Logger,
 	cfg Config,
@@ -72,6 +76,7 @@ func NewEnricherWorker(
 	}
 	return &EnricherWorker{
 		consumer:       consumer,
+		js:             js,
 		pool:           pool,
 		logger:         logger,
 		model:          model,
@@ -80,6 +85,8 @@ func NewEnricherWorker(
 		enrichmentTmpl: cfg.EnrichmentPrompt,
 		summaryTmpl:    cfg.SummaryPrompt,
 		stopCh:         make(chan struct{}),
+		ackWait:        cfg.EnrichAckWait,
+		maxDeliver:     cfg.MaxDeliver,
 	}
 }
 
@@ -165,12 +172,16 @@ func (w *EnricherWorker) safeProcessMessage(ctx context.Context, msg jetstream.M
 
 func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) {
 	start := time.Now()
+	stopHeartbeat := startProgressHeartbeat(msg, w.ackWait/2)
+	defer stopHeartbeat()
 
 	ev, err := UnmarshalEnrichedEvent(msg.Data())
 	if err != nil {
 		w.logger.Error("memory.enrich.unmarshal", zap.Error(err))
 		enrichTotal.With(prometheus.Labels{"tenant_id": "unknown", "status": "error"}).Inc()
-		_ = msg.Ack()
+		if dlqErr := deadLetter(ctx, w.js, msg, deadLetterDetails{Stage: "enrich", ErrorCode: "invalid_event"}); dlqErr != nil {
+			w.logger.Error("memory.enrich.dlq", zap.Error(dlqErr))
+		}
 		return
 	}
 
@@ -180,14 +191,27 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		zap.String("message_id", ev.MessageID),
 		zap.String("tenant_id", ev.TenantID))
 
-	enrichment, err := w.callEnrichLLM(ctx, ev.TenantID, ev.Role, ev.Content)
+	llm := w.llmFor(ctx, ev.TenantID)
+	if llm == nil {
+		if dlqErr := deadLetter(ctx, w.js, msg, deadLetterDetails{
+			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "llm_service_unavailable",
+		}); dlqErr != nil {
+			w.logger.Error("memory.enrich.dlq", zap.Error(dlqErr))
+		}
+		return
+	}
+	enrichment, err := w.callEnrichLLM(ctx, llm, ev.Role, ev.Content)
 	if err != nil {
 		w.logger.Error("memory.enrich.llm",
 			zap.String("trace_id", traceID),
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		_ = msg.Nak()
+		if retryErr := retryOrDeadLetter(ctx, w.js, msg, w.maxDeliver, deadLetterDetails{
+			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "llm_failed",
+		}); retryErr != nil {
+			w.logger.Error("memory.enrich.retry_or_dlq", zap.Error(retryErr))
+		}
 		return
 	}
 
@@ -197,7 +221,11 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		_ = msg.Nak()
+		if retryErr := retryOrDeadLetter(ctx, w.js, msg, w.maxDeliver, deadLetterDetails{
+			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "persist_failed",
+		}); retryErr != nil {
+			w.logger.Error("memory.enrich.retry_or_dlq", zap.Error(retryErr))
+		}
 		return
 	}
 
@@ -205,6 +233,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "success"}).Inc()
 	entitiesExtracted.Add(float64(len(enrichment.Entities)))
 
+	stopHeartbeat()
 	if err := msg.Ack(); err != nil {
 		w.logger.Warn("memory.enrich.ack_failed",
 			zap.String("trace_id", traceID),
@@ -244,11 +273,7 @@ func (w *EnricherWorker) runSummaryAsyncSafe(ctx context.Context, ev *MemoryEnri
 	}
 }
 
-func (w *EnricherWorker) callEnrichLLM(ctx context.Context, tenantID, role, content string) (*EnrichmentResult, error) {
-	llm := w.llmFor(ctx, tenantID)
-	if llm == nil {
-		return nil, fmt.Errorf("no llm client configured for tenant %s", tenantID)
-	}
+func (w *EnricherWorker) callEnrichLLM(ctx context.Context, llm LLMClient, role, content string) (*EnrichmentResult, error) {
 	prompt := formatEnrichmentPrompt(w.enrichmentTmpl, role, content)
 	req := &llmgateway.CompletionRequest{
 		Model: w.model,

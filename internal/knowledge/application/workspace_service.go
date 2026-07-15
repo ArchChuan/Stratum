@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"time"
@@ -28,7 +29,7 @@ var (
 // collectionProvisioner is a minimal port for workspace vector collection lifecycle.
 type collectionProvisioner interface {
 	CreateCollectionWithDim(ctx context.Context, name string, dim int) error
-	DeleteByDocumentIDs(ctx context.Context, collection string, docIDs []string) error
+	DeleteByDocumentIDs(ctx context.Context, collectionName string, docIDs []string) error
 }
 
 // vectorDim returns the vector dimension for the given embedding model.
@@ -312,41 +313,39 @@ func (s *WorkspaceService) ListDocuments(ctx context.Context, tenantID, workspac
 	return views, nil
 }
 
-// DeleteDocument removes a single document from a workspace.
-// Returns ErrDocumentProcessing if the document is currently being ingested.
-// Vectors are deleted before the database record to avoid orphaned embeddings.
-func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspaceName, docID string) error {
-	ws, err := s.repo.GetByName(ctx, tenantID, workspaceName)
-	if err != nil {
-		return fmt.Errorf("get workspace: %w", err)
+// DeleteDocument removes a terminal document from vector and relational storage.
+// Processing documents are rejected because their background ingest job may still write data.
+func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspace, documentID string) error {
+	if s.docRepo == nil || s.vectorStore == nil {
+		return errors.New("knowledge document storage is not configured")
 	}
-
+	ws, err := s.repo.GetByName(ctx, tenantID, workspace)
+	if err != nil {
+		return err
+	}
 	docs, err := s.docRepo.List(ctx, tenantID, ws.ID)
 	if err != nil {
-		return fmt.Errorf("list documents: %w", err)
+		return err
 	}
-
 	var target *domain.Document
-	for _, d := range docs {
-		if d.ID == docID {
-			target = d
+	for _, doc := range docs {
+		if doc.ID == documentID {
+			target = doc
 			break
 		}
 	}
 	if target == nil {
-		return domain.ErrWorkspaceNotFound
+		return domain.ErrDocumentNotFound
 	}
-
-	if target.IngestStatus == "processing" {
+	if target.IngestStatus == constants.IngestStatusProcessing {
 		return domain.ErrDocumentProcessing
 	}
-
-	if s.vectorStore != nil {
-		col := constants.CollectionName(tenantID, ws.ID)
-		if err := s.vectorStore.DeleteByDocumentIDs(ctx, col, []string{docID}); err != nil {
-			return fmt.Errorf("delete vectors: %w", err)
-		}
+	collection := constants.CollectionName(tenantID, ws.ID)
+	if err := s.vectorStore.DeleteByDocumentIDs(ctx, collection, []string{documentID}); err != nil {
+		return fmt.Errorf("delete document vectors: %w", err)
 	}
-
-	return s.docRepo.Delete(ctx, tenantID, ws.ID, docID)
+	if err := s.docRepo.Delete(ctx, tenantID, ws.ID, documentID); err != nil {
+		return fmt.Errorf("delete document records: %w", err)
+	}
+	return nil
 }
