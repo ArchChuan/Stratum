@@ -35,11 +35,36 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerAuth(r, c, requireActive)
 	registerHealth(r, c)
 	registerSkills(r, c, requireActive)
+	registerEvaluations(r, c, requireActive)
 	registerAgents(r, c, requireActive)
 	registerKnowledge(r, c, requireActive)
 	registerMCP(r, c, requireActive)
 	registerMemory(r, c, requireActive)
 	return r
+}
+
+func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Evaluation == nil || c.Evaluation.SuiteService == nil || c.Evaluation.JobService == nil {
+		return
+	}
+	h := handler.NewEvaluationHandler(
+		c.Evaluation.SuiteService, c.Evaluation.JobService, c.Evaluation.Service,
+		c.Evaluation.OptimizationService, c.Evaluation.ExperimentService,
+		c.Evaluation.FeedbackService, c.Logger,
+	)
+	requireAdmin := middleware.RequireTenantRole("admin")
+	evaluations := r.Group("/evaluations", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
+	{
+		evaluations.POST("/suites", requireAdmin, requireActive, h.CreateSuite)
+		evaluations.POST("/suites/:id/publish", requireAdmin, requireActive, h.PublishSuite)
+		evaluations.POST("/runs", requireAdmin, requireActive, h.EnqueueRun)
+		evaluations.GET("/runs/:id", requireAdmin, h.GetRun)
+		evaluations.GET("/jobs/:id", requireAdmin, h.GetJob)
+		evaluations.POST("/optimizations", requireAdmin, requireActive, h.GenerateOptimization)
+		evaluations.POST("/experiments", requireAdmin, requireActive, h.CreateExperiment)
+		evaluations.POST("/experiments/:id/evaluate", requireAdmin, requireActive, h.EvaluateExperiment)
+		evaluations.POST("/feedback", requireActive, h.RecordFeedback)
+	}
 }
 
 // registerAuth wires /auth, /admin/*, /tenant/* routes. JWT-gated groups

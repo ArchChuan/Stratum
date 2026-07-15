@@ -1,0 +1,112 @@
+package domain
+
+import "hash/fnv"
+
+type ExperimentStatus string
+
+const (
+	ExperimentRunning    ExperimentStatus = "running"
+	ExperimentCompleted  ExperimentStatus = "completed"
+	ExperimentRolledBack ExperimentStatus = "rolled_back"
+)
+
+type Decision string
+
+const (
+	DecisionHold     Decision = "hold"
+	DecisionPromote  Decision = "promote"
+	DecisionRollback Decision = "rollback"
+)
+
+type PromotionPolicy struct {
+	Stages                []int   `json:"stages"`
+	MinSamples            int     `json:"min_samples"`
+	MinObservationMinutes int     `json:"min_observation_minutes"`
+	MaxCostRegression     float64 `json:"max_cost_regression"`
+	MaxLatencyRegression  float64 `json:"max_latency_regression"`
+	MaxErrorRateIncrease  float64 `json:"max_error_rate_increase"`
+}
+
+func DefaultPromotionPolicy() PromotionPolicy {
+	return PromotionPolicy{
+		Stages:                []int{5, 20, 50, 100},
+		MinSamples:            100,
+		MinObservationMinutes: 60,
+		MaxCostRegression:     0.15,
+		MaxLatencyRegression:  0.20,
+		MaxErrorRateIncrease:  0.01,
+	}
+}
+
+type StageMetrics struct {
+	Samples              int     `json:"samples"`
+	ObservedMinutes      int     `json:"observed_minutes"`
+	QualityImprovement   float64 `json:"quality_improvement"`
+	QualitySignificant   bool    `json:"quality_significant"`
+	CostRegression       float64 `json:"cost_regression"`
+	P95LatencyRegression float64 `json:"p95_latency_regression"`
+	ErrorRateIncrease    float64 `json:"error_rate_increase"`
+	SecurityViolation    bool    `json:"security_violation"`
+}
+
+type Experiment struct {
+	ID               string           `json:"id"`
+	ResourceKind     ResourceKind     `json:"resource_kind"`
+	ResourceID       string           `json:"resource_id"`
+	StableRevisionID string           `json:"stable_revision_id"`
+	CanaryRevisionID string           `json:"canary_revision_id"`
+	SuiteRevisionID  string           `json:"suite_revision_id"`
+	Status           ExperimentStatus `json:"status"`
+	Stage            int              `json:"stage"`
+	Policy           PromotionPolicy  `json:"policy"`
+}
+
+type Deployment struct {
+	ResourceKind     ResourceKind `json:"resource_kind"`
+	ResourceID       string       `json:"resource_id"`
+	StableRevisionID string       `json:"stable_revision_id"`
+	CanaryRevisionID string       `json:"canary_revision_id,omitempty"`
+	CanaryPercent    int          `json:"canary_percent"`
+	ExperimentID     string       `json:"experiment_id,omitempty"`
+	PolicyVersion    int          `json:"policy_version"`
+}
+
+func AssignVariant(key string, canaryPercent int) bool {
+	if canaryPercent <= 0 {
+		return false
+	}
+	if canaryPercent >= 100 {
+		return true
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	return int(h.Sum32()%100) < canaryPercent
+}
+
+func (e Experiment) Decide(metrics StageMetrics, policy PromotionPolicy) (Experiment, Decision) {
+	if e.Status != ExperimentRunning {
+		return e, DecisionHold
+	}
+	if metrics.SecurityViolation ||
+		metrics.CostRegression > policy.MaxCostRegression ||
+		metrics.P95LatencyRegression > policy.MaxLatencyRegression ||
+		metrics.ErrorRateIncrease > policy.MaxErrorRateIncrease {
+		e.Status = ExperimentRolledBack
+		return e, DecisionRollback
+	}
+	if metrics.Samples < policy.MinSamples || metrics.ObservedMinutes < policy.MinObservationMinutes ||
+		!metrics.QualitySignificant || metrics.QualityImprovement <= 0 {
+		return e, DecisionHold
+	}
+	for i, stage := range policy.Stages {
+		if stage != e.Stage || i+1 >= len(policy.Stages) {
+			continue
+		}
+		e.Stage = policy.Stages[i+1]
+		if e.Stage == 100 {
+			e.Status = ExperimentCompleted
+		}
+		return e, DecisionPromote
+	}
+	return e, DecisionHold
+}

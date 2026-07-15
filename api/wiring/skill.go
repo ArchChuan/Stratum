@@ -20,11 +20,16 @@ import (
 
 // Skill groups the skill execution stack.
 type Skill struct {
-	CodeExecutor   *code.CodeExecutor
-	Gateway        *skillgateway.DefaultGateway
-	SkillAdapter   *capgateway.SkillAdapter
-	Service        *skillapp.SkillService
-	VersionService *skillapp.VersionService
+	CodeExecutor    *code.CodeExecutor
+	Gateway         *skillgateway.DefaultGateway
+	SkillAdapter    *capgateway.SkillAdapter
+	Service         *skillapp.SkillService
+	VersionService  *skillapp.VersionService
+	VersionExecutor skillVersionExecutor
+}
+
+type skillVersionExecutor interface {
+	ExecuteVersion(ctx context.Context, versionID string, input any) (any, error)
 }
 
 // wiringSkillFactory implements skilldomainport.SkillFactory in the composition root.
@@ -109,9 +114,12 @@ func (c *Container) buildSkill(_ context.Context) error {
 	gw := skillgateway.NewDefaultGateway(c.Platform.Metrics, c.Logger, nil)
 
 	db := c.dbOrNil()
+	var versionExecutor skillVersionExecutor
 	if db != nil {
 		// completer is nil; DBSkillAdapter resolves it from ctx via InjectCompleter.
-		if err := gw.RegisterProvider(providers.NewDBSkillAdapter(db, c.Logger, codeExec)); err != nil {
+		dbProvider := providers.NewDBSkillAdapter(db, c.Logger, codeExec)
+		versionExecutor = dbProvider
+		if err := gw.RegisterProvider(dbProvider); err != nil {
 			c.Logger.Warn("failed to register DB skill provider", zap.Error(err))
 		}
 	}
@@ -128,11 +136,12 @@ func (c *Container) buildSkill(_ context.Context) error {
 	}
 
 	c.Skill = &Skill{
-		CodeExecutor:   codeExec,
-		Gateway:        gw,
-		SkillAdapter:   skillAdapter,
-		Service:        svc,
-		VersionService: versionSvc,
+		CodeExecutor:    codeExec,
+		Gateway:         gw,
+		SkillAdapter:    skillAdapter,
+		Service:         svc,
+		VersionService:  versionSvc,
+		VersionExecutor: versionExecutor,
 	}
 	return nil
 }

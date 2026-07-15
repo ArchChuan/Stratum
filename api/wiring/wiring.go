@@ -19,6 +19,7 @@ import (
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/executors/code"
+	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/gateway/providers"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/storage/milvus"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -37,6 +38,7 @@ type Container struct {
 	Platform   *Platform
 	MCP        *MCP
 	Skill      *Skill
+	Evaluation *Evaluation
 	Knowledge  *Knowledge
 	Memory     *Memory
 	IAM        *IAM
@@ -71,6 +73,7 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 		{"memory", c.buildMemory},
 		{"iam", c.buildIAM},
 		{"agent", c.buildAgent},
+		{"evaluation", c.buildEvaluation},
 	}
 
 	for _, step := range steps {
@@ -180,6 +183,9 @@ func NewFromExisting(
 	c.Skill = &Skill{
 		CodeExecutor: code.NewCodeExecutor(code.DefaultCodeExecutorConfig()),
 	}
+	if db != nil {
+		c.Skill.VersionExecutor = providers.NewDBSkillAdapter(db, logger, c.Skill.CodeExecutor)
+	}
 	if sa, ok := skillAdapter.(*capgateway.SkillAdapter); ok {
 		c.Skill.SkillAdapter = sa
 	}
@@ -196,7 +202,6 @@ func NewFromExisting(
 			memPipeline.SetEmbedResolver(c.Knowledge.EmbedResolver)
 		}
 	}
-
 	if err := c.buildIAM(ctx); err != nil {
 		_ = c.Shutdown(ctx)
 		return nil, fmt.Errorf("wiring.iam: %w", err)
@@ -204,6 +209,10 @@ func NewFromExisting(
 	if err := c.buildAgent(ctx); err != nil {
 		_ = c.Shutdown(ctx)
 		return nil, fmt.Errorf("wiring.agent: %w", err)
+	}
+	if err := c.buildEvaluation(ctx); err != nil {
+		_ = c.Shutdown(ctx)
+		return nil, fmt.Errorf("wiring.evaluation: %w", err)
 	}
 	return c, nil
 }

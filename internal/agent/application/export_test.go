@@ -11,7 +11,7 @@ import (
 
 // BuildExtraToolsForTest exposes buildExtraTools to external test packages.
 func (s *AgentService) BuildExtraToolsForTest(ctx context.Context, tenantID string, mcpServerIDs, allowedSkills []string) ([]port.ToolDefinition, map[string]port.SkillToolRef) {
-	return s.buildExtraTools(ctx, tenantID, mcpServerIDs, allowedSkills)
+	return s.buildExtraTools(ctx, tenantID, "test-subject", mcpServerIDs, allowedSkills)
 }
 
 // RecordExecutionForTest exposes recordExecution to external test packages.
