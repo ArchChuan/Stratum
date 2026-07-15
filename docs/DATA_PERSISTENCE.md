@@ -7,7 +7,7 @@ Stratum 使用四种存储组件，均通过 Docker volume 持久化：
 1. **PostgreSQL** — 主关系数据库（用户、租户、Agent、Skill 版本、Knowledge 元数据、执行 trace/checkpoint）
 2. **NATS JetStream** — 异步消息队列（memory pipeline）
 3. **Milvus** — 向量存储（embedding + RAG 检索），依赖 etcd 和 MinIO
-4. **Redis** — 内存缓冲与缓存（memory buffer flush、TenantGatewayCache、rate limit）
+4. **Redis** — 运行时状态（memory fact-extraction buffer、refresh-token blacklist）
 
 ---
 
@@ -24,7 +24,7 @@ volumes:
 **特点**：
 
 - 多租户 schema 隔离：`public` 保存全局表（tenants、users），每个租户有独立 `tenant_<id>` schema
-- 迁移由 `internal/migration/sql/` 下编号 SQL 文件管理，启动时自动应用（当前最高版本：018）
+- 迁移由 `pkg/migration/sql/` 下编号 SQL 文件管理，启动时自动应用（当前最高版本：019）
 - 租户级表（skill_versions、agent_tool_traces、agent_trace_events、agent_execution_checkpoints、knowledge_parent_chunks 等）由 `pkg/storage/postgres/tenant_schema.sql` 定义，`ProvisionAllTenantSchemas` 在各 `tenant_<id>` schema 中创建
 - pgx v5 连接池，支持 `SET LOCAL search_path` 切换租户 schema
 
@@ -100,8 +100,10 @@ volumes:
 
 **Collection 命名规范**（`pkg/storage/tenantnaming/milvus.go`）：
 
-- 知识库：`kb_{tenant_id}_{workspace_id}`
-- 记忆：`tenant_{tenant_id}_memory`
+- 知识库：每租户单 collection `tenant_{tenant_id}_kb`，workspace 以 partition 隔离
+- 记忆消息：`memory_{tenant_id}`；事实向量：`memory_facts_{tenant_id}`
+
+tenant ID 中的连字符会替换为下划线；workspace partition 对不符合 Milvus 标识符规则的 ID 使用稳定哈希。
 
 ### 备份
 
@@ -159,10 +161,9 @@ volumes:
 **用途**：
 
 - Memory buffer：消费 NATS 消息后按 `MemoryBufferFlushSize=5` 批量写入 PG
-- `TenantGatewayCache`：租户 LLM API key 缓存，带防御性拷贝
-- Rate limit 计数器
+- refresh token 注销黑名单
 
-Redis 数据属于运行时缓存，丢失不影响业务正确性（重启后自动重建），**不需要备份**。
+`TenantGatewayCache` 是进程内 TTL cache，不存于 Redis。Redis volume 通常不作为业务主数据备份，但丢失会清空尚未 flush 的 memory buffer 和 refresh-token blacklist；重置前应评估在途数据与已注销 token 的安全窗口。
 
 ---
 

@@ -48,7 +48,6 @@ Create the runtime secret in the target namespace:
 
 ```bash
 export POSTGRES_PASSWORD_VALUE="change-this-demo-postgres-password"
-export OPENAI_API_KEY_VALUE="change-this-demo-openai-api-key"
 export GITHUB_CLIENT_ID_VALUE="change-this-demo-github-client-id"
 export GITHUB_CLIENT_SECRET_VALUE="change-this-demo-github-client-secret"
 export JWT_PRIVATE_KEY_PEM_VALUE="$(cat /tmp/stratum-jwt-private-key.pem)"
@@ -80,7 +79,6 @@ kubectl create namespace stratum --dry-run=client -o yaml | kubectl apply -f -
 kubectl create secret generic stratum-secrets \
   -n stratum \
   --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD_VALUE}" \
-  --from-literal=OPENAI_API_KEY="${OPENAI_API_KEY_VALUE}" \
   --from-literal=GITHUB_CLIENT_ID="${GITHUB_CLIENT_ID_VALUE}" \
   --from-literal=GITHUB_CLIENT_SECRET="${GITHUB_CLIENT_SECRET_VALUE}" \
   --from-literal=JWT_PRIVATE_KEY_PEM="${JWT_PRIVATE_KEY_PEM_VALUE}" \
@@ -91,7 +89,7 @@ kubectl create secret generic stratum-secrets \
 
 Do not commit generated secret YAML.
 
-`OPENAI_API_KEY`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `JWT_PRIVATE_KEY_PEM` are optional for a static frontend smoke test, but login and authenticated demo flows require the GitHub OAuth and JWT values.
+`GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `JWT_PRIVATE_KEY_PEM` are optional for a static frontend smoke test, but login and authenticated demo flows require the GitHub OAuth and JWT values. LLM API keys are configured per tenant after login; the Helm deployment still exposes an optional legacy `OPENAI_API_KEY` reference, but the current backend configuration does not read it.
 
 ## Configure Values
 

@@ -25,7 +25,7 @@ NATS JetStream 在 stratum 中**专用于 memory pipeline**，是记忆持久化
   MEMORY_ENRICHED stream       subject: memory.enriched.{tenantID}
         │
   [EnrichWorker × 1]           Consumer: enrich-worker，AckWait 60s，MaxDeliver 5
-        │                       摘要触发阈值：4096 tokens，最多取 100 条历史
+│                       摘要触发阈值：1000 tokens，最多取 100 条历史
         ▼
   Milvus (向量) + PG (摘要/实体)
 ```

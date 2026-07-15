@@ -1,5 +1,7 @@
 # Skill Capability Package Implementation Plan
 
+> **Historical implementation record (implemented).** Versioned Skill capability packages, draft/publish APIs, Agent tool contracts, and compatibility fallbacks are present in the current code. This file preserves the implementation sequence rather than defining the live contract.
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Evolve Skill from `type/config` runtime records into versioned capability packages that publish stable Agent Tool Contracts.

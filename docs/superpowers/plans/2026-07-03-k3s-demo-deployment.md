@@ -1,5 +1,7 @@
 # K3s Demo Deployment Implementation Plan
 
+> **Historical implementation record (implemented).** The current deployment contract lives in `helm/`, `.github/workflows/deploy.yml`, `scripts/bootstrap-k3s.sh`, `scripts/deploy-demo.sh`, and `docs/deployment/k3s-demo.md`. Unchecked boxes below preserve the original planning record and are not a current backlog.
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make Stratum deployable as a low-cost public demo on a single-node K3s host through Helm.

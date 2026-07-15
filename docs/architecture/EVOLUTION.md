@@ -37,8 +37,8 @@
 
 **技术约束**:
 
-- 编号迁移（`internal/migration/sql/NNN_*.sql`）只操作 `public` schema
-- 引用 tenant-only 表的 DDL 必须放 `pkg/tenantdb/tenant_schema.sql`
+- 编号迁移（`pkg/migration/sql/NNN_*.sql`）只操作 `public` schema
+- 引用 tenant-only 表的 DDL 必须放 `pkg/storage/postgres/tenant_schema.sql`
 - `golang-migrate` dirty 状态修复: `force <version>` 标记为 clean
 - 新增 tenant DDL 后必须在 `tenant_schema.sql` 中紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 做 backfill
 
@@ -50,7 +50,7 @@
 
 **核心决策**:
 
-- **租户级 API Key 存储**: `tenants.settings` JSONB 字段，结构 `{"api_keys": {"qwen": "sk-...", "zhipu": "..."}}`
+- **租户级 API Key 存储**: `tenants.settings` JSONB 字段，结构键为 `llm_api_keys`；值在写入时加密
 - **AES-256-GCM 加密**: 使用 `JWTPrivateKeyPEM` 作为唯一密钥源派生加密密钥
 - **5 分钟 TTL 缓存**: `TenantGatewayCache` 缓存解密后的 `*Gateway` 实例，避免每次请求解密
 - **动态 Gateway 解析**: Agent 执行时通过 `TenantResolver.InjectCompleter(ctx, tenantID)` 注入 per-tenant LLM 客户端
@@ -164,7 +164,7 @@ platform → (被所有 context 依赖，不依赖任何 context)
 **核心决策**:
 
 - **删除所有系统级 env key 读取**: `QWEN_API_KEY` / `ZHIPU_API_KEY` 全部移除
-- **API Key 唯一来源**: 租户配置 `tenants.settings.api_keys`，通过 `TenantGatewayCache` 解析
+- **API Key 唯一来源**: 租户配置 `tenants.settings.llm_api_keys`，通过 `TenantGatewayCache` 解析
 - **Context 注入模式**: `llmgateway.WithCompleter(ctx, completer)` 和 `CompleterFromContext(ctx)` 覆盖静态注入
 - **移除无意义 nil 参数**: `DBSkillAdapter` / `SkillService` 的 `completer` 参数删除，改为运行时 context 注入
 - **StaticModelCatalog**: 硬编码模型列表替代动态 gateway-based catalog（因全局 gateway 无 client）
@@ -326,20 +326,18 @@ func ExecTenant(ctx context.Context, pool *pgxpool.Pool, fn func(context.Context
 
 **DDL 规则**:
 
-- 编号迁移（`internal/migration/sql/NNN_*.sql`）只操作 `public` schema，**禁止引用 tenant-only 表**
+- 编号迁移（`pkg/migration/sql/NNN_*.sql`）只操作 `public` schema，**禁止引用 tenant-only 表**
 - Tenant DDL 放 `pkg/storage/postgres/tenant_schema.sql`，由 `ProvisionAllTenantSchemas` 幂等应用
 - 新增列后必须紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 做 backfill
 
 ### 3.3 Milvus Collection 命名
 
-**格式**: `tenant_<tenant_id>_<resource_type>`
+当前实现按数据域使用两套明确命名：
 
-示例:
+- Knowledge：每租户一个 `tenant_<tenant_id>_kb` collection，workspace 通过 partition 隔离（`pkg/storage/tenantnaming/milvus.go`）
+- Memory 消息向量：`memory_<tenant_id>`；事实向量：`memory_facts_<tenant_id>`（`internal/memory/`）
 
-- `tenant_b1e5077c-0ed3-4664-b0b6-2ee97cffd57a_memory`
-- `tenant_b1e5077c-0ed3-4664-b0b6-2ee97cffd57a_knowledge`
-
-**清理**: 租户删除时必须同步删除对应 collection
+tenant ID 中的短横线会替换为下划线。租户或用户数据删除时使用 filter / document ID 删除对应向量；不要把 `DropCollection` 当作常规数据删除操作。
 
 ---
 
@@ -499,7 +497,7 @@ func (h *AgentHandler) GetAgent(c *gin.Context) {
 
 **存储**:
 
-- 租户 API Key 存储在 `tenants.settings.api_keys` JSONB 字段
+- 租户 API Key 存储在 `tenants.settings.llm_api_keys` JSONB 字段
 - 使用 AES-256-GCM 加密，密钥从 `JWTPrivateKeyPEM` 派生
 - **绝对禁止**: 明文存储、存储在环境变量、提交到 git
 

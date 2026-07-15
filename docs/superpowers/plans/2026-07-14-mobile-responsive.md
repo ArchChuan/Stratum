@@ -1,5 +1,7 @@
 # Stratum Web Mobile Responsive Implementation Plan
 
+> **Historical implementation record (implemented).** The responsive layouts and regression coverage are now in `web/`. Unchecked boxes below are retained as planning history, not as evidence that the feature is missing.
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make every Stratum web route usable at common phone widths while preserving the current desktop application and business behavior.

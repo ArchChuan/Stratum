@@ -6,23 +6,23 @@
 
 ## WHAT — 技术栈与目录
 
-### 后端（Go 1.22+）
+### 后端（Go 1.25）
 
 | 层 | 路径 | 职责 |
 |----|------|------|
-| 入口 | `cmd/server/main.go` | 由 `api/wiring.BuildContainer` 构图，启停 Harness（≤30 行） |
+| 入口 | `cmd/server/main.go` | 由 `api/wiring.BuildContainer` 构图，启停 Harness |
 | 路由 | `api/http/router.go` | Gin 路由组，从 `Container` 装配 handler |
 | Handler | `api/http/handler/` | 每域一个文件，只做请求解析 + 响应组装 |
 | DTO | `api/http/dto/` | Request/Response 结构体，无业务逻辑 |
-| 中间件 | `api/http/middleware/` | ErrorHandler · MetricsMiddleware · Auth · Trace |
+| 中间件 | `api/middleware/` | ErrorHandler · MetricsMiddleware · Auth · Trace |
 | 业务 | `internal/<ctx>/{domain,application,infrastructure}` | 8 个 bounded context（见下方架构分层） |
 | 基础设施 | `pkg/{storage,messaging,httpclient,observability,...}` | 数据库/消息/HTTP/日志等无业务抽象 |
 
-关键依赖版本：Gin v1.9 · NATS JetStream v1.31 · Milvus SDK v2.4.2 · pgx v5 · go-redis v9 · JWT RS256（golang-jwt v5）· OTEL v1.21 · Viper v1.18
+关键依赖版本：Gin v1.9.1 · nats.go v1.51 · Milvus SDK v2.4.2 · pgx v5.7 · go-redis v9.7 · JWT RS256（golang-jwt v5.3）· OTEL v1.22
 
 ### 前端（`web/`）
 
-React 18 · Vite 4 · Ant Design 5.2 · React Router 6 · Axios · Moment.js
+React 18.3 · Vite 5.4 · Ant Design 5.20 · React Router 6.26 · Axios 1.7 · TanStack Query 5 · Zustand 5
 
 | 目录 | 职责 |
 |------|------|
@@ -44,15 +44,15 @@ React 18 · Vite 4 · Ant Design 5.2 · React Router 6 · Axios · Moment.js
 | NATS JetStream（非 Kafka） | 轻量、Go 原生、支持持久化 subject 格式 `domain.action` |
 | Milvus v2.4.2（非 pgvector） | GraphRAG 需要高维向量检索，pgvector 性能不达标 |
 | Harness 生命周期管理 | 组件顺序启动 → 逆序停止，避免依赖竞争 |
-| LLMGateway 统一抽象 | 屏蔽 OpenAI/Anthropic/Ollama 差异，切换不改业务代码 |
+| LLMGateway 统一抽象 | 屏蔽当前 Qwen/Zhipu OpenAI-compatible provider 差异，切换不改业务代码 |
 | No AI control logic | 路由/重试/状态机必须硬编码，AI 只做语言任务 |
 
 ### 多租户 DDL 放置规则（踩坑总结）
 
-- 编号迁移（`pkg/migration/sql/NNN_*.sql`）只操作 **public schema**，禁止引用 tenant-only 表（如 `chat_conversations`、`memory_entries`、`entities`）
+- 编号迁移（`pkg/migration/sql/NNN_*.sql`）只操作 **public schema**，禁止引用 tenant-only 表（如 `chat_conversations`、`memory_entries`、`memory_entities`）
 - 引用 tenant-only 表的 DDL 必须放 `pkg/storage/postgres/tenant_schema.sql`，由 `ProvisionAllTenantSchemas` 幂等应用到每个租户 schema
 - INSERT 语句必须与目标表 DDL 逐列核对，尤其 NOT NULL 无 DEFAULT 列（反例：outbox 漏 `message_id` 导致全量回滚）
-- 向 `tenant_schema.sql` 的 `CREATE TABLE` 新增列后，必须紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 做 backfill，否则已有租户的旧表不含该列，后续 INDEX / 查询会报 `column does not exist`（反例：entities.user_id 漏 backfill）
+- 向 `tenant_schema.sql` 的 `CREATE TABLE` 新增列后，必须紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 做 backfill，否则已有租户的旧表不含该列，后续 INDEX / 查询会报 `column does not exist`（历史反例：旧实体表 user_id 漏 backfill）
 - 所有数据 schema 变更必须兼容历史租户数据：新增表/索引用 `IF NOT EXISTS`，新增列用 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`；新增 `NOT NULL` 列必须带安全 `DEFAULT` 或先 nullable → 回填 → 加约束；任何依赖新列的 INDEX / CONSTRAINT / 查询必须排在 backfill 之后，并用 schema 顺序测试覆盖（反例：先建 `idx_agent_exec_trace` 再补 `trace_id` 导致旧租户启动失败）
 - `golang-migrate` dirty 状态修复：`force <version>` 将指定版本标记为 clean，再次 `Up()` 从下一版本继续；勿直接手改 `schema_migrations` 表
 - 操作 tenant-scoped 表的 repository 方法必须通过 `execTenant(ctx, tenantID, fn)` 执行，禁止直接调用连接池的 `Exec` / `Query`

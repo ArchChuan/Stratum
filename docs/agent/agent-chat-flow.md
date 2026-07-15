@@ -508,7 +508,7 @@ Stratum 的"用户记忆"分为**短期**（按 `conversation_id` 直读 `chat_m
 | Milvus | `memory_<tenantID>`（短横线换下划线） | `EmbedderWorker` 通过 `MilvusVectorAdapter.Upsert` | `RecallHandler.tryVectorSearch` | 消息维度向量；scope/agent_id 走 metadata 过滤 |
 | Milvus | `memory_facts_<tenantID>` | `MemoryService.ExtractFacts` | `ForgetMemory` / `ClearUserMemories` 清理 | 事实维度向量 |
 
-> 命名规则：tenantID 含短横线时 Milvus collection 用下划线替换（见 `pkg/milvus/collections.go`、`api/wiring/memory.go: DeleteAllByUser`）。
+> 命名规则：tenantID 含短横线时 Milvus collection 用下划线替换（见 `internal/memory/infrastructure/pipeline/vector_adapter.go`、`internal/memory/infrastructure/persistence/milvus_adapter.go` 与 `internal/memory/application/extraction.go`）。
 
 ### 11.2 整体业务全景
 

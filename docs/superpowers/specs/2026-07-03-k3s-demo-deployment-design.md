@@ -1,5 +1,7 @@
 # K3s Demo Deployment Design
 
+> **Historical design (implemented).** For current commands and limitations, use `docs/deployment/k3s-demo.md` and the live `helm/` chart.
+
 ## Goal
 
 Prepare Stratum for a low-cost public demo deployment on one cloud host using K3s and Helm.

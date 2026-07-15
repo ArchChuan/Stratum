@@ -1,7 +1,9 @@
 # Plan+Execute × ReAct 融合架构设计
 
+> **历史设计（核心能力已实现）。** 当前代码已包含 lazy planning、`StuckThreshold`、`CheckpointEnabled` 和 `stratum_continue_reasoning`；文档中 Phase 2/3 的未实现项仍是历史范围外设想。
+
 **日期**: 2026-07-09
-**状态**: 待实现
+**状态**: 核心能力已实现，后续 Phase 保留为历史设想
 **作者**: byteBuilderX
 
 ---

@@ -2,7 +2,7 @@
 
 ## 技术栈
 
-React 18 · Vite 4 · Ant Design 5.2 · React Router 6 · Axios · Moment.js
+React 18.3 · Vite 5.4 · Ant Design 5.20 · React Router 6.26 · Axios 1.7 · TanStack Query 5 · Zustand 5
 
 | 目录 | 职责 |
 |------|------|

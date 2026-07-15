@@ -1,5 +1,7 @@
 # Headroom Claude Health-Gated Launcher Design
 
+> **Historical local-tooling design (implemented).** This describes user-environment launcher behavior and does not define the Stratum application runtime.
+
 ## Problem
 
 The interactive Bash configuration currently defines `claude` as

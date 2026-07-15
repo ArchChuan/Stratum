@@ -1,5 +1,7 @@
 # Headroom Claude Health-Gated Launcher Implementation Plan
 
+> **Historical local-tooling record (implemented).** This plan describes user-environment tooling outside the Stratum runtime. It is retained for traceability and is not part of the repository application/deployment contract.
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the per-launch Headroom wrapper with a fail-closed launcher that starts Claude only after the persistent Headroom proxy is healthy.

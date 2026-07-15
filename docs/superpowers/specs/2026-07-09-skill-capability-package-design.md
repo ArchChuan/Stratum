@@ -1,5 +1,7 @@
 # Skill Capability Package Design
 
+> **Historical design (implemented).** The live model and API contract are defined by `internal/skill/`, `api/http/handler/skill_handler.go`, and the tenant schema. Migration phases below are retained for rationale.
+
 ## Decision
 
 Stratum Skill is a minimal capability package for Agents, not a `prompt/code/http/llm` runtime wrapper.

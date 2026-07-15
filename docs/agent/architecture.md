@@ -8,7 +8,7 @@
 api/{http/{handler,dto,middleware},wiring}
 internal/<ctx>/{domain/{,port/},application,infrastructure}
 pkg/storage/{postgres,redis,milvus,tenantnaming}
-pkg/{messaging/nats,httpclient,observability,crypto,constants,migration,textchunk}
+pkg/{httpclient,observability,crypto,constants,migration,textchunk,tenantdb,vector}
 ```
 
 - 8 个 bounded context：`agent · memory · knowledge · skill · mcp · iam · llmgateway · platform`
@@ -61,5 +61,5 @@ pkg/{messaging/nats,httpclient,observability,crypto,constants,migration,textchun
 | NATS JetStream（非 Kafka） | 轻量、Go 原生、支持持久化 subject 格式 `domain.action` |
 | Milvus v2.4.2（非 pgvector） | GraphRAG 需要高维向量检索，pgvector 性能不达标 |
 | Harness 生命周期管理 | 组件顺序启动 → 逆序停止，避免依赖竞争 |
-| LLMGateway 统一抽象 | 屏蔽 OpenAI/Anthropic/Ollama 差异，切换不改业务代码 |
+| LLMGateway 统一抽象 | 屏蔽当前 Qwen/Zhipu OpenAI-compatible provider 差异，切换不改业务代码 |
 | No AI control logic | 路由/重试/状态机必须硬编码，AI 只做语言任务 |
