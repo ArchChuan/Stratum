@@ -49,7 +49,8 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 	}
 	h := handler.NewEvaluationHandler(
 		c.Evaluation.SuiteService, c.Evaluation.JobService, c.Evaluation.Service,
-		c.Evaluation.OptimizationService, c.Evaluation.ExperimentService, c.Logger,
+		c.Evaluation.OptimizationService, c.Evaluation.ExperimentService,
+		c.Evaluation.FeedbackService, c.Logger,
 	)
 	requireAdmin := middleware.RequireTenantRole("admin")
 	evaluations := r.Group("/evaluations", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
@@ -62,6 +63,7 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		evaluations.POST("/optimizations", requireAdmin, requireActive, h.GenerateOptimization)
 		evaluations.POST("/experiments", requireAdmin, requireActive, h.CreateExperiment)
 		evaluations.POST("/experiments/:id/evaluate", requireAdmin, requireActive, h.EvaluateExperiment)
+		evaluations.POST("/feedback", requireActive, h.RecordFeedback)
 	}
 }
 

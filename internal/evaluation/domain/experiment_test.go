@@ -1,6 +1,34 @@
 package domain
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestExperimentJSONUsesAPISnakeCaseFields(t *testing.T) {
+	payload, err := json.Marshal(Experiment{
+		ID:     "experiment-1",
+		Status: ExperimentRunning,
+		Stage:  5,
+		Policy: DefaultPromotionPolicy(),
+	})
+	if err != nil {
+		t.Fatalf("marshal experiment: %v", err)
+	}
+
+	body := string(payload)
+	for _, field := range []string{`"id"`, `"status"`, `"stage"`, `"min_samples"`} {
+		if !strings.Contains(body, field) {
+			t.Fatalf("expected %s in API JSON: %s", field, body)
+		}
+	}
+	for _, field := range []string{`"ID"`, `"Status"`, `"Stage"`, `"MinSamples"`} {
+		if strings.Contains(body, field) {
+			t.Fatalf("unexpected Go field %s in API JSON: %s", field, body)
+		}
+	}
+}
 
 func TestAssignVariantIsStableAndRespectsBounds(t *testing.T) {
 	key := "tenant-1:conversation-9:skill-3"

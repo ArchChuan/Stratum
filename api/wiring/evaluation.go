@@ -24,6 +24,7 @@ type Evaluation struct {
 	Worker              *evalapp.Worker
 	OptimizationService *evalapp.OptimizationService
 	ExperimentService   *evalapp.ExperimentService
+	FeedbackService     *evalapp.FeedbackService
 }
 
 type skillCandidateManager struct {
@@ -161,6 +162,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	jobRepo := evalpersist.NewPgJobRepository(db)
 	optimizationRepo := evalpersist.NewPgOptimizationRepository(db)
 	experimentRepo := evalpersist.NewPgExperimentRepository(db)
+	feedbackRepo := evalpersist.NewPgFeedbackRepository(db)
 	adapter := skilladapter.New(c.Skill.VersionExecutor)
 	service := evalapp.NewService(adapter, runRepo, suiteRepo)
 	suiteService := evalapp.NewSuiteService(suiteRepo)
@@ -172,6 +174,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	optimizationService := evalapp.NewOptimizationService(manager, rewriter, optimizationRepo)
 	experimentService := evalapp.NewExperimentService(experimentRepo)
+	feedbackService := evalapp.NewFeedbackService(feedbackRepo, experimentService)
 	worker := evalapp.NewWorker(evaluationTenantLister{pool: db}, jobService, time.Second)
 	worker.Start(ctx)
 	c.shutdown = append(c.shutdown, func(context.Context) error {
@@ -182,6 +185,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		Service: service, SuiteService: suiteService, JobService: jobService, Worker: worker,
 		OptimizationService: optimizationService,
 		ExperimentService:   experimentService,
+		FeedbackService:     feedbackService,
 	}
 	if c.Agent != nil && c.Agent.Service != nil {
 		c.Agent.Service.SetSkillRevisionResolver(experimentSkillRevisionResolver{service: experimentService})

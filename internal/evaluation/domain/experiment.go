@@ -19,12 +19,12 @@ const (
 )
 
 type PromotionPolicy struct {
-	Stages                []int
-	MinSamples            int
-	MinObservationMinutes int
-	MaxCostRegression     float64
-	MaxLatencyRegression  float64
-	MaxErrorRateIncrease  float64
+	Stages                []int   `json:"stages"`
+	MinSamples            int     `json:"min_samples"`
+	MinObservationMinutes int     `json:"min_observation_minutes"`
+	MaxCostRegression     float64 `json:"max_cost_regression"`
+	MaxLatencyRegression  float64 `json:"max_latency_regression"`
+	MaxErrorRateIncrease  float64 `json:"max_error_rate_increase"`
 }
 
 func DefaultPromotionPolicy() PromotionPolicy {
@@ -39,26 +39,26 @@ func DefaultPromotionPolicy() PromotionPolicy {
 }
 
 type StageMetrics struct {
-	Samples              int
-	ObservedMinutes      int
-	QualityImprovement   float64
-	QualitySignificant   bool
-	CostRegression       float64
-	P95LatencyRegression float64
-	ErrorRateIncrease    float64
-	SecurityViolation    bool
+	Samples              int     `json:"samples"`
+	ObservedMinutes      int     `json:"observed_minutes"`
+	QualityImprovement   float64 `json:"quality_improvement"`
+	QualitySignificant   bool    `json:"quality_significant"`
+	CostRegression       float64 `json:"cost_regression"`
+	P95LatencyRegression float64 `json:"p95_latency_regression"`
+	ErrorRateIncrease    float64 `json:"error_rate_increase"`
+	SecurityViolation    bool    `json:"security_violation"`
 }
 
 type Experiment struct {
-	ID               string
-	ResourceKind     ResourceKind
-	ResourceID       string
-	StableRevisionID string
-	CanaryRevisionID string
-	SuiteRevisionID  string
-	Status           ExperimentStatus
-	Stage            int
-	Policy           PromotionPolicy
+	ID               string           `json:"id"`
+	ResourceKind     ResourceKind     `json:"resource_kind"`
+	ResourceID       string           `json:"resource_id"`
+	StableRevisionID string           `json:"stable_revision_id"`
+	CanaryRevisionID string           `json:"canary_revision_id"`
+	SuiteRevisionID  string           `json:"suite_revision_id"`
+	Status           ExperimentStatus `json:"status"`
+	Stage            int              `json:"stage"`
+	Policy           PromotionPolicy  `json:"policy"`
 }
 
 type Deployment struct {

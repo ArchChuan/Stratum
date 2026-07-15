@@ -187,9 +187,12 @@ func TestBuildExtraToolsUsesExperimentRevisionResolver(t *testing.T) {
 		SkillRevisionResolver: fakeSkillRevisionResolver{},
 		Logger:                zap.NewNop(),
 	})
-	_, index := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"skill-1"})
+	tools, index := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"skill-1"})
 	if index["classify"].VersionID != "candidate-1" {
 		t.Fatalf("expected canary candidate revision, got %#v", index["classify"])
+	}
+	if got := tools[0].Metadata["version_id"]; got != "candidate-1" {
+		t.Fatalf("expected tool trace metadata to use candidate revision, got %#v", got)
 	}
 }
 

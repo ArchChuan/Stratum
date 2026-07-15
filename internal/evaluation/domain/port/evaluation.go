@@ -66,3 +66,13 @@ type ExperimentRepository interface {
 	) error
 	ResolveDeployment(ctx context.Context, tenantID, resourceKind, resourceID string) (domain.Deployment, bool, error)
 }
+
+type FeedbackRepository interface {
+	Record(ctx context.Context, tenantID string, input domain.FeedbackRequest) (domain.EvaluationFeedback, error)
+	ActiveExperiment(ctx context.Context, tenantID, resourceKind, resourceID string) (domain.Experiment, bool, error)
+	Observations(
+		ctx context.Context,
+		tenantID string,
+		experiment domain.Experiment,
+	) (stable []domain.OnlineObservation, canary []domain.OnlineObservation, observedMinutes int, err error)
+}

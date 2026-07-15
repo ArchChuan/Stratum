@@ -596,6 +596,14 @@ func (s *AgentService) buildExtraTools(
 			for i := range resolvedTools {
 				ref, ok := resolvedIndex[resolvedTools[i].Name]
 				if ok {
+					if s.deps.SkillRevisionResolver != nil {
+						if revisionID, found, resolveErr := s.deps.SkillRevisionResolver.ResolveSkillRevision(
+							ctx, tenantID, ref.SkillID, subjectID,
+						); resolveErr == nil && found {
+							ref.VersionID = revisionID
+							resolvedIndex[resolvedTools[i].Name] = ref
+						}
+					}
 					resolvedTools[i].ProviderType = domain.ProviderTypeSkill
 					resolvedTools[i].ProviderID = ref.SkillID
 					resolvedTools[i].CapabilityID = ref.SkillID
@@ -605,13 +613,6 @@ func (s *AgentService) buildExtraTools(
 			}
 			tools = append(tools, resolvedTools...)
 			for name, ref := range resolvedIndex {
-				if s.deps.SkillRevisionResolver != nil {
-					if revisionID, found, resolveErr := s.deps.SkillRevisionResolver.ResolveSkillRevision(
-						ctx, tenantID, ref.SkillID, subjectID,
-					); resolveErr == nil && found {
-						ref.VersionID = revisionID
-					}
-				}
 				index[name] = ref
 			}
 			return tools, index

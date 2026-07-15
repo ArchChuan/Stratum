@@ -7,6 +7,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { skillApi } from '../api/skill.api';
 import { parseSkillTestInput, type SkillFormValues, type SkillVersion, type SkillWorkspace } from '../model/skill';
 
+import { SkillEvaluationPanel } from '@/modules/evaluation/components/SkillEvaluationPanel';
 import { useTenantRole } from '@/modules/iam';
 import { extractErrorMessage } from '@/shared/lib';
 
@@ -337,6 +338,17 @@ export const SkillWorkspacePage = () => {
                   </ActionRow>
                 )}
               </Space>
+            ),
+          },
+          {
+            key: 'evaluation',
+            label: '评测与优化',
+            children: (
+              <SkillEvaluationPanel
+                skillId={skill.id}
+                stableRevisionId={skill.activeVersionId || (draft.status === 'published' ? draft.id : '')}
+                isAdmin={isAdmin}
+              />
             ),
           },
         ]}

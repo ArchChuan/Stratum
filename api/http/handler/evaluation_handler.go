@@ -47,12 +47,21 @@ type evaluationExperimentService interface {
 	) (domain.Experiment, domain.Decision, error)
 }
 
+type evaluationFeedbackService interface {
+	Record(
+		ctx context.Context,
+		tenantID string,
+		input evalapp.RecordFeedbackInput,
+	) (evalapp.FeedbackResult, error)
+}
+
 type EvaluationHandler struct {
 	suites       evaluationSuiteService
 	jobs         evaluationJobService
 	runs         evaluationRunService
 	optimization evaluationOptimizationService
 	experiments  evaluationExperimentService
+	feedback     evaluationFeedbackService
 	logger       *zap.Logger
 }
 
@@ -62,10 +71,12 @@ func NewEvaluationHandler(
 	runs evaluationRunService,
 	optimization evaluationOptimizationService,
 	experiments evaluationExperimentService,
+	feedback evaluationFeedbackService,
 	logger *zap.Logger,
 ) *EvaluationHandler {
 	return &EvaluationHandler{
-		suites: suites, jobs: jobs, runs: runs, optimization: optimization, experiments: experiments, logger: logger,
+		suites: suites, jobs: jobs, runs: runs, optimization: optimization,
+		experiments: experiments, feedback: feedback, logger: logger,
 	}
 }
 
@@ -242,4 +253,27 @@ func (h *EvaluationHandler) EvaluateExperiment(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"experiment": experiment, "decision": decision})
+}
+
+func (h *EvaluationHandler) RecordFeedback(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	var req dto.RecordEvaluationFeedbackRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	result, err := h.feedback.Record(c.Request.Context(), tenantID, evalapp.RecordFeedbackInput{
+		TraceID: req.TraceID, ResourceKind: domain.ResourceKind(req.ResourceKind), ResourceID: req.ResourceID,
+		Score: req.Score, Outcome: req.Outcome, IdempotencyKey: req.IdempotencyKey,
+		SecurityViolation: req.SecurityViolation,
+	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusCreated, result)
 }

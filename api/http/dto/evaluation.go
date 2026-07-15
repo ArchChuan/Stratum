@@ -57,3 +57,13 @@ type EvaluateExperimentStageRequest struct {
 	ErrorRateIncrease    float64 `json:"error_rate_increase"`
 	SecurityViolation    bool    `json:"security_violation"`
 }
+
+type RecordEvaluationFeedbackRequest struct {
+	TraceID           string         `json:"trace_id" binding:"required"`
+	ResourceKind      string         `json:"resource_kind" binding:"required,oneof=skill"`
+	ResourceID        string         `json:"resource_id" binding:"required"`
+	Score             float64        `json:"score" binding:"min=0,max=1"`
+	Outcome           map[string]any `json:"outcome"`
+	IdempotencyKey    string         `json:"idempotency_key" binding:"required,max=255"`
+	SecurityViolation bool           `json:"security_violation"`
+}

@@ -259,10 +259,13 @@ CREATE TABLE IF NOT EXISTS evaluation_feedback (
     outcome         JSONB NOT NULL DEFAULT '{}',
     idempotency_key TEXT NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (idempotency_key)
+    UNIQUE (idempotency_key),
+    UNIQUE (trace_id, resource_id)
 );
 CREATE INDEX IF NOT EXISTS idx_evaluation_feedback_resource
     ON evaluation_feedback(resource_kind, resource_id, revision_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_evaluation_feedback_trace_resource
+    ON evaluation_feedback(trace_id, resource_id);
 
 CREATE TABLE IF NOT EXISTS evaluation_jobs (
     id              TEXT PRIMARY KEY,

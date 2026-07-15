@@ -17,7 +17,7 @@ import (
 func TestEvaluationHandlerEnqueueRunReturnsAcceptedJob(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	jobs := &fakeEvaluationJobs{}
-	h := NewEvaluationHandler(nil, jobs, nil, nil, nil, zap.NewNop())
+	h := NewEvaluationHandler(nil, jobs, nil, nil, nil, nil, zap.NewNop())
 	r := gin.New()
 	r.POST("/evaluations/runs", withTenant("tenant-1"), h.EnqueueRun)
 
@@ -40,7 +40,7 @@ func TestEvaluationHandlerEnqueueRunReturnsAcceptedJob(t *testing.T) {
 func TestEvaluationHandlerGenerateOptimizationReturnsCandidates(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	optimization := &fakeOptimizationService{}
-	h := NewEvaluationHandler(nil, &fakeEvaluationJobs{}, nil, optimization, nil, zap.NewNop())
+	h := NewEvaluationHandler(nil, &fakeEvaluationJobs{}, nil, optimization, nil, nil, zap.NewNop())
 	r := gin.New()
 	r.POST("/evaluations/optimizations", withTenant("tenant-1"), h.GenerateOptimization)
 	req := httptest.NewRequest(http.MethodPost, "/evaluations/optimizations", strings.NewReader(`{

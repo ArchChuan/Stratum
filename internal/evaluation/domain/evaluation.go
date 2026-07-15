@@ -162,6 +162,36 @@ type OptimizationCandidate struct {
 	CreatedAt          time.Time      `json:"created_at"`
 }
 
+type FeedbackRequest struct {
+	TraceID           string
+	ResourceKind      ResourceKind
+	ResourceID        string
+	Score             float64
+	Outcome           map[string]any
+	IdempotencyKey    string
+	SecurityViolation bool
+}
+
+type EvaluationFeedback struct {
+	ID             string         `json:"id"`
+	TraceID        string         `json:"trace_id"`
+	ResourceKind   ResourceKind   `json:"resource_kind"`
+	ResourceID     string         `json:"resource_id"`
+	RevisionID     string         `json:"revision_id"`
+	Score          float64        `json:"score"`
+	Outcome        map[string]any `json:"outcome,omitempty"`
+	IdempotencyKey string         `json:"idempotency_key"`
+	CreatedAt      time.Time      `json:"created_at"`
+}
+
+type OnlineObservation struct {
+	Score             float64
+	CostUSD           float64
+	LatencyMs         int64
+	Success           bool
+	SecurityViolation bool
+}
+
 func EvaluateAssertion(mode AssertionMode, actual, expected any) (AssertionResult, error) {
 	switch mode {
 	case AssertionExact:
