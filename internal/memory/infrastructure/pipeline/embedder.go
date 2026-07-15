@@ -130,7 +130,9 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	if err != nil {
 		w.logger.Error("memory.embed.unmarshal", zap.Error(err))
 		embedTotal.With(prometheus.Labels{"tenant_id": "unknown", "status": "error"}).Inc()
-		if dlqErr := deadLetter(ctx, w.js, msg, deadLetterDetails{Stage: "embed", ErrorCode: "invalid_event"}); dlqErr != nil {
+		if dlqErr := deadLetterWithHeartbeat(
+			ctx, w.js, msg, stopHeartbeat, deadLetterDetails{Stage: "embed", ErrorCode: "invalid_event"},
+		); dlqErr != nil {
 			w.logger.Error("memory.embed.dlq", zap.Error(dlqErr))
 		}
 		return
@@ -152,7 +154,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("trace_id", traceID),
 			zap.String("message_id", ev.MessageID),
 			zap.String("tenant_id", ev.TenantID))
-		if dlqErr := deadLetter(ctx, w.js, msg, deadLetterDetails{
+		if dlqErr := deadLetterWithHeartbeat(ctx, w.js, msg, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "embed_service_unavailable",
 		}); dlqErr != nil {
 			w.logger.Error("memory.embed.dlq", zap.Error(dlqErr))
@@ -168,7 +170,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("tenant_id", ev.TenantID),
 			zap.Error(err))
 		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetter(ctx, w.js, msg, w.maxDeliver, deadLetterDetails{
+		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "embedding_failed",
 		}); retryErr != nil {
 			w.logger.Error("memory.embed.retry_or_dlq", zap.Error(retryErr))
@@ -190,7 +192,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("trace_id", traceID),
 			zap.String("message_id", ev.MessageID),
 			zap.String("tenant_id", ev.TenantID))
-		if dlqErr := deadLetter(ctx, w.js, msg, deadLetterDetails{
+		if dlqErr := deadLetterWithHeartbeat(ctx, w.js, msg, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "vector_store_unavailable",
 		}); dlqErr != nil {
 			w.logger.Error("memory.embed.dlq", zap.Error(dlqErr))
@@ -203,7 +205,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetter(ctx, w.js, msg, w.maxDeliver, deadLetterDetails{
+		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "vector_upsert_failed",
 		}); retryErr != nil {
 			w.logger.Error("memory.embed.retry_or_dlq", zap.Error(retryErr))
@@ -219,7 +221,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	if err != nil {
 		w.logger.Error("memory.embed.marshal_enriched", zap.String("trace_id", traceID), zap.Error(err))
 		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetter(ctx, w.js, msg, w.maxDeliver, deadLetterDetails{
+		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "marshal_enriched_failed",
 		}); retryErr != nil {
 			w.logger.Error("memory.embed.retry_or_dlq", zap.Error(retryErr))
@@ -234,7 +236,7 @@ func (w *EmbedderWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		embedTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetter(ctx, w.js, msg, w.maxDeliver, deadLetterDetails{
+		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "embed", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "publish_enriched_failed",
 		}); retryErr != nil {
 			w.logger.Error("memory.embed.retry_or_dlq", zap.Error(retryErr))

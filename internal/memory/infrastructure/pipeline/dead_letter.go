@@ -38,7 +38,27 @@ type deadLetterDetails struct {
 }
 
 func deadLetter(ctx context.Context, pub dlqPublisher, msg jetstream.Msg, details deadLetterDetails) error {
-	meta, _ := msg.Metadata()
+	return deadLetterWithHeartbeat(ctx, pub, msg, func() {}, details)
+}
+
+func deadLetterWithHeartbeat(
+	ctx context.Context,
+	pub dlqPublisher,
+	msg jetstream.Msg,
+	stopHeartbeat func(),
+	details deadLetterDetails,
+) error {
+	meta, err := msg.Metadata()
+	if err != nil {
+		stopHeartbeat()
+		_ = msg.Nak()
+		return fmt.Errorf("read message metadata: %w", err)
+	}
+	if meta == nil {
+		stopHeartbeat()
+		_ = msg.Nak()
+		return fmt.Errorf("read message metadata: empty metadata")
+	}
 	if details.TenantID == "" {
 		details.TenantID = tenantFromMemorySubject(msg.Subject())
 	}
@@ -54,37 +74,68 @@ func deadLetter(ctx context.Context, pub dlqPublisher, msg jetstream.Msg, detail
 		OriginalSubj: msg.Subject(),
 		FailedAt:     time.Now().UTC(),
 	}
-	if meta != nil {
-		event.OriginalStream = meta.Stream
-		event.Consumer = meta.Consumer
-		event.StreamSequence = meta.Sequence.Stream
-		event.Deliveries = meta.NumDelivered
-	}
+	event.OriginalStream = meta.Stream
+	event.Consumer = meta.Consumer
+	event.StreamSequence = meta.Sequence.Stream
+	event.Deliveries = meta.NumDelivered
 
 	payload, err := json.Marshal(event)
 	if err != nil {
+		stopHeartbeat()
 		_ = msg.Nak()
 		return fmt.Errorf("marshal dead letter: %w", err)
 	}
 
 	publishCtx, cancel := context.WithTimeout(ctx, constants.MemoryOutboxPublishTimeout)
 	defer cancel()
-	dedupID := fmt.Sprintf("dlq:%s:%d:%s", event.OriginalStream, event.StreamSequence, event.ErrorCode)
+	dedupID := deadLetterDedupID(event)
 	if _, err := pub.Publish(
 		publishCtx,
 		fmt.Sprintf("%s.%s", constants.MemoryDLQSubject, details.TenantID),
 		payload,
 		jetstream.WithMsgID(dedupID),
 	); err != nil {
+		stopHeartbeat()
 		_ = msg.Nak()
 		return fmt.Errorf("publish dead letter: %w", err)
 	}
+	stopHeartbeat()
 	if err := msg.TermWithReason(details.ErrorCode); err != nil {
 		_ = msg.Nak()
 		return fmt.Errorf("terminate original message: %w", err)
 	}
 	dlqTotal.WithLabelValues(details.TenantID, details.Stage).Inc()
 	return nil
+}
+
+func deadLetterDedupID(event DeadLetterEvent) string {
+	return fmt.Sprintf("dlq:%s:%d", event.OriginalStream, event.StreamSequence)
+}
+
+func retryOrDeadLetterWithHeartbeat(
+	ctx context.Context,
+	pub dlqPublisher,
+	msg jetstream.Msg,
+	maxDeliver int,
+	stopHeartbeat func(),
+	details deadLetterDetails,
+) error {
+	meta, err := msg.Metadata()
+	if err != nil {
+		stopHeartbeat()
+		_ = msg.Nak()
+		return fmt.Errorf("read message metadata: %w", err)
+	}
+	if meta == nil {
+		stopHeartbeat()
+		_ = msg.Nak()
+		return fmt.Errorf("read message metadata: empty metadata")
+	}
+	if maxDeliver > 0 && meta.NumDelivered >= uint64(maxDeliver) {
+		return deadLetterWithHeartbeat(ctx, pub, msg, stopHeartbeat, details)
+	}
+	stopHeartbeat()
+	return msg.NakWithDelay(constants.MemoryFetchBackoffBase)
 }
 
 func retryOrDeadLetter(
@@ -94,11 +145,7 @@ func retryOrDeadLetter(
 	maxDeliver int,
 	details deadLetterDetails,
 ) error {
-	meta, err := msg.Metadata()
-	if err == nil && maxDeliver > 0 && meta.NumDelivered >= uint64(maxDeliver) {
-		return deadLetter(ctx, pub, msg, details)
-	}
-	return msg.NakWithDelay(constants.MemoryFetchBackoffBase)
+	return retryOrDeadLetterWithHeartbeat(ctx, pub, msg, maxDeliver, func() {}, details)
 }
 
 func startProgressHeartbeat(msg jetstream.Msg, interval time.Duration) func() {

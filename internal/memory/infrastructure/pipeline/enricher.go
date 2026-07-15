@@ -179,7 +179,9 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	if err != nil {
 		w.logger.Error("memory.enrich.unmarshal", zap.Error(err))
 		enrichTotal.With(prometheus.Labels{"tenant_id": "unknown", "status": "error"}).Inc()
-		if dlqErr := deadLetter(ctx, w.js, msg, deadLetterDetails{Stage: "enrich", ErrorCode: "invalid_event"}); dlqErr != nil {
+		if dlqErr := deadLetterWithHeartbeat(
+			ctx, w.js, msg, stopHeartbeat, deadLetterDetails{Stage: "enrich", ErrorCode: "invalid_event"},
+		); dlqErr != nil {
 			w.logger.Error("memory.enrich.dlq", zap.Error(dlqErr))
 		}
 		return
@@ -193,7 +195,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 
 	llm := w.llmFor(ctx, ev.TenantID)
 	if llm == nil {
-		if dlqErr := deadLetter(ctx, w.js, msg, deadLetterDetails{
+		if dlqErr := deadLetterWithHeartbeat(ctx, w.js, msg, stopHeartbeat, deadLetterDetails{
 			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "llm_service_unavailable",
 		}); dlqErr != nil {
 			w.logger.Error("memory.enrich.dlq", zap.Error(dlqErr))
@@ -207,7 +209,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetter(ctx, w.js, msg, w.maxDeliver, deadLetterDetails{
+		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "llm_failed",
 		}); retryErr != nil {
 			w.logger.Error("memory.enrich.retry_or_dlq", zap.Error(retryErr))
@@ -221,7 +223,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 			zap.String("message_id", ev.MessageID),
 			zap.Error(err))
 		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "error"}).Inc()
-		if retryErr := retryOrDeadLetter(ctx, w.js, msg, w.maxDeliver, deadLetterDetails{
+		if retryErr := retryOrDeadLetterWithHeartbeat(ctx, w.js, msg, w.maxDeliver, stopHeartbeat, deadLetterDetails{
 			Stage: "enrich", TenantID: ev.TenantID, MessageID: ev.MessageID, ErrorCode: "persist_failed",
 		}); retryErr != nil {
 			w.logger.Error("memory.enrich.retry_or_dlq", zap.Error(retryErr))

@@ -185,3 +185,37 @@ MaxDeliver 后原消息会发布至自定义 `memory.dlq.*`。
 ## 修复授权门禁
 
 审计到此停止。请明确选择发现编号或修复范围后再修改业务代码。
+
+## 修复记录
+
+### 2026-07-15：SG-003、SG-004、SG-005
+
+用户授权修复这三个 Memory JetStream 风险，并确认 DLQ 首版只保存脱敏元数据，不保存用户正文或原始错误
+文本；独立重放能力推迟到受控存储、权限和审计方案明确后实现。
+
+| Finding | 状态 | 实施结果 |
+|---------|------|----------|
+| SG-003 | 已完成失败隔离；受控重放待设计 | 永久错误和最后一次瞬态失败发布 DLQ，成功后 `TermWithReason`；发布失败 `Nak`；使用稳定 DLQ 消息 ID 去重 |
+| SG-004 | 已修复 | 损坏事件、缺少 embedding/LLM/vector 依赖不再 `Ack` 静默丢弃，改为脱敏 DLQ |
+| SG-005 | 已修复 | Embed/Enrich 处理期间按 `AckWait/2` 发送 `InProgress`，完成消息状态转换前停止续租 |
+
+DLQ 元数据包含 message ID、tenant ID、stage、原 Stream/Subject、序列号、投递次数、错误分类和 UTC 时间；
+不包含原始 payload。验证证据见本次提交的单元测试、嵌入式真实 JetStream 测试及最终 E2E 记录。
+
+**验证结果：**
+
+- `go test -race ./internal/memory/infrastructure/pipeline -count=1`：20 个测试通过。
+- `go vet`：通过。
+- `go test -short ./...`：711 个测试、78 个包通过。
+- 真实环境启动 PostgreSQL/PgBouncer、Redis、NATS、Milvus 和后端，`GET /health` 返回 200。
+- 向真实 `MEMORY_RAW` 发布一条带测试标记的损坏消息；运行中的 EmbedWorker 生成
+  `stage=embed`、`error_code=invalid_event`、`original_stream=MEMORY_RAW` 的 DLQ 元数据，Stream 序列号和
+  投递次数完整，测试标记未出现在 DLQ payload。
+- Prometheus 出现对应 `memory_dlq_total{stage="embed",tenant_id="..."} 1`。
+- 两轮代码审查发现并修复了 heartbeat/disposition 竞争、DLQ publish 期间租约空窗、去重 ID 包含可变错误
+  分类、Metadata 缺失导致去重碰撞和 nil dereference 五个问题；最终复审无剩余 actionable finding，随后重新
+  执行上述真实 E2E，未复用旧结果。
+- 临时 E2E 脚本已删除，后端及本次启动的依赖容器已停止。
+
+OTEL Collector 未在本次最小依赖集合中启动，后端出现 trace export unavailable 警告；不影响 NATS/DB/Milvus
+验证链路，也不是本次修改引入的问题。
