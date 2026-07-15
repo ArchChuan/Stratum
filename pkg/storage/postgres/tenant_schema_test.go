@@ -30,6 +30,37 @@ func TestTenantSchemaContainsVersionedSkillTables(t *testing.T) {
 	}
 }
 
+func TestTenantSchemaContainsEvaluationControlPlane(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+
+	required := []string{
+		"ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS parent_version_id TEXT",
+		"ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'",
+		"ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS content_hash TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS generation_metadata JSONB NOT NULL DEFAULT '{}'",
+		"CREATE TABLE IF NOT EXISTS eval_suites",
+		"CREATE TABLE IF NOT EXISTS eval_suite_revisions",
+		"CREATE TABLE IF NOT EXISTS eval_cases",
+		"CREATE TABLE IF NOT EXISTS eval_runs",
+		"CREATE TABLE IF NOT EXISTS eval_case_results",
+		"CREATE TABLE IF NOT EXISTS optimization_jobs",
+		"CREATE TABLE IF NOT EXISTS optimization_candidates",
+		"CREATE TABLE IF NOT EXISTS evaluation_experiments",
+		"CREATE TABLE IF NOT EXISTS evaluation_deployments",
+		"CREATE TABLE IF NOT EXISTS evaluation_feedback",
+		"CREATE TABLE IF NOT EXISTS evaluation_jobs",
+	}
+	for _, want := range required {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("tenant_schema.sql missing evaluation control-plane DDL %q", want)
+		}
+	}
+}
+
 func TestTenantSchemaBackfillsTraceIDBeforeTraceIndex(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {

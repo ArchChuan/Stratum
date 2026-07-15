@@ -26,22 +26,23 @@ const previewMaxChars = 50
 // Everything is an interface or value type — no concrete infrastructure
 // imports allowed.
 type AgentServiceDeps struct {
-	Registry          *Registry
-	TenantSettings    port.TenantSettings
-	SkillLookup       port.SkillLookup
-	SkillToolResolver port.SkillToolResolver
-	RAGSearch         port.RAGSearchProvider
-	TenantResolver    port.TenantCapabilityResolver
-	MCPTools          port.MCPToolProvider
-	ExecStore         ExecutionStore
-	ChatStore         ChatStore
-	ToolTraceStore    ToolTraceStore
-	TraceEventStore   TraceEventStore
-	CheckpointStore   CheckpointStore
-	MemoryCleaner     port.AgentMemoryCleaner
-	MemoryBuffer      port.BufferMemoryFn
-	Metrics           observability.MetricsProvider
-	Logger            *zap.Logger
+	Registry              *Registry
+	TenantSettings        port.TenantSettings
+	SkillLookup           port.SkillLookup
+	SkillToolResolver     port.SkillToolResolver
+	SkillRevisionResolver port.SkillRevisionResolver
+	RAGSearch             port.RAGSearchProvider
+	TenantResolver        port.TenantCapabilityResolver
+	MCPTools              port.MCPToolProvider
+	ExecStore             ExecutionStore
+	ChatStore             ChatStore
+	ToolTraceStore        ToolTraceStore
+	TraceEventStore       TraceEventStore
+	CheckpointStore       CheckpointStore
+	MemoryCleaner         port.AgentMemoryCleaner
+	MemoryBuffer          port.BufferMemoryFn
+	Metrics               observability.MetricsProvider
+	Logger                *zap.Logger
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields
@@ -57,6 +58,10 @@ func NewAgentService(deps AgentServiceDeps) *AgentService {
 		deps.Logger = zap.NewNop()
 	}
 	return &AgentService{deps: deps}
+}
+
+func (s *AgentService) SetSkillRevisionResolver(resolver port.SkillRevisionResolver) {
+	s.deps.SkillRevisionResolver = resolver
 }
 
 // CreateAgentInput is the create-agent payload application receives from
@@ -488,7 +493,13 @@ func (s *AgentService) assembleOptions(
 			WithHistoryWindow(constants.DefaultInitHistoryWindow),
 		)
 	}
-	extraTools, skillIndex := s.buildExtraTools(ctx, meta.TenantID, a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills)
+	subjectID := req.ConversationID
+	if subjectID == "" {
+		subjectID = meta.TraceID
+	}
+	extraTools, skillIndex := s.buildExtraTools(
+		ctx, meta.TenantID, subjectID, a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills,
+	)
 	options = append(options,
 		WithExtraTools(extraTools),
 		WithSkillToolIndex(skillIndex),
@@ -547,7 +558,11 @@ func (s *AgentService) attachTraceStores(a Agent) {
 // for the ReAct loop. Published skills use their tool contract names; legacy
 // skills fall back to tenant-scoped names. The returned index maps tool names
 // back to skill/version refs for execution routing.
-func (s *AgentService) buildExtraTools(ctx context.Context, tenantID string, mcpServerIDs, allowedSkills []string) ([]port.ToolDefinition, map[string]port.SkillToolRef) {
+func (s *AgentService) buildExtraTools(
+	ctx context.Context,
+	tenantID, subjectID string,
+	mcpServerIDs, allowedSkills []string,
+) ([]port.ToolDefinition, map[string]port.SkillToolRef) {
 	var tools []port.ToolDefinition
 	index := make(map[string]port.SkillToolRef, len(allowedSkills))
 
@@ -590,6 +605,13 @@ func (s *AgentService) buildExtraTools(ctx context.Context, tenantID string, mcp
 			}
 			tools = append(tools, resolvedTools...)
 			for name, ref := range resolvedIndex {
+				if s.deps.SkillRevisionResolver != nil {
+					if revisionID, found, resolveErr := s.deps.SkillRevisionResolver.ResolveSkillRevision(
+						ctx, tenantID, ref.SkillID, subjectID,
+					); resolveErr == nil && found {
+						ref.VersionID = revisionID
+					}
+				}
 				index[name] = ref
 			}
 			return tools, index

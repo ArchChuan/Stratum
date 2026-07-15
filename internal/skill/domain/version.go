@@ -1,6 +1,9 @@
 package domain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -10,6 +13,7 @@ type VersionStatus string
 
 const (
 	VersionStatusDraft      VersionStatus = "draft"
+	VersionStatusCandidate  VersionStatus = "candidate"
 	VersionStatusPublished  VersionStatus = "published"
 	VersionStatusDeprecated VersionStatus = "deprecated"
 )
@@ -45,15 +49,37 @@ type Implementation struct {
 }
 
 type SkillVersion struct {
-	ID             string
-	SkillID        string
-	VersionNo      int
-	Status         VersionStatus
-	Capability     Capability
-	ToolContract   ToolContract
-	Implementation Implementation
-	TestBaseline   map[string]any
-	PublishChecks  map[string]any
+	ID                 string
+	SkillID            string
+	ParentVersionID    string
+	VersionNo          int
+	Status             VersionStatus
+	Source             string
+	ContentHash        string
+	GenerationMetadata map[string]any
+	Capability         Capability
+	ToolContract       ToolContract
+	Implementation     Implementation
+	TestBaseline       map[string]any
+	PublishChecks      map[string]any
+}
+
+func (v SkillVersion) ComputeContentHash() (string, error) {
+	payload := struct {
+		Capability     Capability     `json:"capability"`
+		ToolContract   ToolContract   `json:"tool_contract"`
+		Implementation Implementation `json:"implementation"`
+	}{
+		Capability:     v.Capability,
+		ToolContract:   v.ToolContract,
+		Implementation: v.Implementation,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal skill version content: %w", err)
+	}
+	hash := sha256.Sum256(encoded)
+	return hex.EncodeToString(hash[:]), nil
 }
 
 var toolNamePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,63}$`)
