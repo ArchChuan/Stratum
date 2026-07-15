@@ -5,7 +5,13 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { skillApi } from '../api/skill.api';
-import { parseSkillTestInput, type SkillFormValues, type SkillVersion, type SkillWorkspace } from '../model/skill';
+import {
+  parseSkillTestInput,
+  type SkillFormValues,
+  type SkillTestResult,
+  type SkillVersion,
+  type SkillWorkspace,
+} from '../model/skill';
 
 import { SkillEvaluationPanel } from '@/modules/evaluation/components/SkillEvaluationPanel';
 import { useTenantRole } from '@/modules/iam';
@@ -50,7 +56,8 @@ export const SkillWorkspacePage = () => {
   const [testLoading, setTestLoading] = useState(false);
   const [publishLoading, setPublishLoading] = useState(false);
   const [testInput, setTestInput] = useState('{"input":"客户反馈快递三天没有更新"}');
-  const [testResult, setTestResult] = useState<unknown>(null);
+  const [testResult, setTestResult] = useState<SkillTestResult | null>(null);
+  const [testError, setTestError] = useState('');
   const [error, setError] = useState('');
   const [capabilityForm] = Form.useForm<CapabilityFormValues>();
   const [contractForm] = Form.useForm<ContractFormValues>();
@@ -144,15 +151,18 @@ export const SkillWorkspacePage = () => {
   const handleRunDraftTest = async () => {
     setTestLoading(true);
     setTestResult(null);
+    setTestError('');
     try {
       const result = await skillApi.testDraft({
         skill: buildLegacyDraftSkill(skill.name, draft),
         input: parseSkillTestInput(testInput),
       });
-      setTestResult(result.result ?? result);
+      setTestResult(result);
       message.success({ content: '草稿测试已完成', duration: 2 });
     } catch (err) {
-      message.error({ content: extractErrorMessage(err) || '草稿测试失败', duration: 0 });
+      const detail = extractErrorMessage(err) || '未知错误';
+      setTestError(detail);
+      message.error({ content: detail, duration: 0 });
     } finally {
       setTestLoading(false);
     }
@@ -307,10 +317,30 @@ export const SkillWorkspacePage = () => {
                     运行草稿测试
                   </Button>
                 </ActionRow>
-                {testResult !== null ? (
-                  <pre style={{ margin: 0, padding: 12, background: '#f6f8fa', overflow: 'auto' }}>
-                    {JSON.stringify(testResult, null, 2)}
-                  </pre>
+                {testError ? (
+                  <Alert type="error" showIcon message={`草稿测试失败：${testError}`} />
+                ) : null}
+                {testResult ? (
+                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                    <Alert type="success" showIcon message="执行结果" />
+                    <Text type="secondary">
+                      Trace：{testResult.traceID || '无'} · 耗时：{testResult.durationMs ?? 0} ms
+                    </Text>
+                    <pre
+                      style={{
+                        margin: 0,
+                        padding: 12,
+                        background: '#f6f8fa',
+                        overflow: 'auto',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {hasTestOutput(testResult.result)
+                        ? formatTestOutput(testResult.result)
+                        : '执行成功，但 Skill 未返回内容'}
+                    </pre>
+                  </Space>
                 ) : null}
               </Space>
             ),
@@ -391,6 +421,12 @@ const fillForms = (
 };
 
 const stringifyJson = (value: unknown) => JSON.stringify(value || {}, null, 2);
+
+const formatTestOutput = (value: unknown) =>
+  typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+
+const hasTestOutput = (value: unknown) =>
+  value !== null && value !== undefined && (typeof value !== 'string' || value.trim() !== '');
 
 const parseJsonObject = (raw: string | undefined, label: string): Record<string, unknown> => {
   try {
