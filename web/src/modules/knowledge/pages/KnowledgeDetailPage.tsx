@@ -22,11 +22,13 @@ export const KnowledgeDetailPage = () => {
     queryResult,
     documents,
     documentsLoading,
+    deletingDocumentID,
     handleConfigSave,
     handleDescriptionSave,
     handleNameSave,
     handleUpload,
     handleQuery,
+    handleDeleteDocument,
   } = useKnowledgeDetailPage();
 
   if (statsLoading && !stats) {
@@ -51,7 +53,13 @@ export const KnowledgeDetailPage = () => {
 
       {isAdmin && <WorkspaceUploadZone loading={uploadLoading} onUpload={handleUpload} />}
 
-      <WorkspaceDocumentsTable documents={documents} loading={documentsLoading} />
+      <WorkspaceDocumentsTable
+        documents={documents}
+        loading={documentsLoading}
+        isAdmin={isAdmin}
+        deletingDocumentID={deletingDocumentID}
+        onDelete={handleDeleteDocument}
+      />
 
       <WorkspaceQueryPanel
         form={queryForm}

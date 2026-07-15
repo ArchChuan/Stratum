@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"time"
@@ -28,6 +29,7 @@ var (
 // collectionProvisioner is a minimal port for workspace vector collection lifecycle.
 type collectionProvisioner interface {
 	CreateCollectionWithDim(ctx context.Context, name string, dim int) error
+	DeleteByDocumentIDs(ctx context.Context, collectionName string, docIDs []string) error
 }
 
 // vectorDim returns the vector dimension for the given embedding model.
@@ -309,4 +311,41 @@ func (s *WorkspaceService) ListDocuments(ctx context.Context, tenantID, workspac
 		}
 	}
 	return views, nil
+}
+
+// DeleteDocument removes a terminal document from vector and relational storage.
+// Processing documents are rejected because their background ingest job may still write data.
+func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspace, documentID string) error {
+	if s.docRepo == nil || s.vectorStore == nil {
+		return errors.New("knowledge document storage is not configured")
+	}
+	ws, err := s.repo.GetByName(ctx, tenantID, workspace)
+	if err != nil {
+		return err
+	}
+	docs, err := s.docRepo.List(ctx, tenantID, ws.ID)
+	if err != nil {
+		return err
+	}
+	var target *domain.Document
+	for _, doc := range docs {
+		if doc.ID == documentID {
+			target = doc
+			break
+		}
+	}
+	if target == nil {
+		return domain.ErrDocumentNotFound
+	}
+	if target.IngestStatus == constants.IngestStatusProcessing {
+		return domain.ErrDocumentProcessing
+	}
+	collection := constants.CollectionName(tenantID, ws.ID)
+	if err := s.vectorStore.DeleteByDocumentIDs(ctx, collection, []string{documentID}); err != nil {
+		return fmt.Errorf("delete document vectors: %w", err)
+	}
+	if err := s.docRepo.Delete(ctx, tenantID, ws.ID, documentID); err != nil {
+		return fmt.Errorf("delete document records: %w", err)
+	}
+	return nil
 }

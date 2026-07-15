@@ -235,6 +235,7 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 		knowledgeGroup.POST("/workspaces", append(adminMW, requireActive, ragHandler.CreateWorkspace)...)
 		knowledgeGroup.PATCH("/workspaces/:name", append(adminMW, requireActive, ragHandler.UpdateWorkspace)...)
 		knowledgeGroup.DELETE("/workspaces/:name", append(adminMW, requireActive, ragHandler.DeleteWorkspace)...)
+		knowledgeGroup.DELETE("/workspaces/:name/documents/:documentID", append(adminMW, requireActive, ragHandler.DeleteDocument)...)
 		knowledgeGroup.POST("/ingest", append(adminMW, requireActive, middleware.BodyLimit(constants.MaxUploadBytes), ragHandler.UploadDocument)...)
 	}
 }

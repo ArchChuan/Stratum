@@ -81,11 +81,32 @@ func (r *DocRepo) CountByWorkspace(ctx context.Context, tenantID, workspaceID st
 }
 
 func (r *DocRepo) Delete(ctx context.Context, tenantID, kbID, docID string) error {
-	_, err := r.db.Exec(ctx,
-		fmt.Sprintf(`DELETE FROM "%s".knowledge_docs WHERE workspace_id=$1 AND id=$2`, schemaFor(tenantID)),
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	schema := schemaFor(tenantID)
+	for _, table := range []string{"knowledge_chunks", "knowledge_parent_chunks"} {
+		if _, err := tx.Exec(ctx,
+			fmt.Sprintf(`DELETE FROM "%s".%s WHERE workspace_id=$1 AND doc_id=$2`, schema, table),
+			kbID, docID,
+		); err != nil {
+			return fmt.Errorf("delete %s: %w", table, err)
+		}
+	}
+	tag, err := tx.Exec(ctx,
+		fmt.Sprintf(`DELETE FROM "%s".knowledge_docs WHERE workspace_id=$1 AND id=$2`, schema),
 		kbID, docID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrDocumentNotFound
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *DocRepo) MarkIngestStarted(ctx context.Context, tenantID, docID string, totalChunks int) error {

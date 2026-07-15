@@ -39,6 +39,7 @@ export const useKnowledgeDetailPage = () => {
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [documentsLoading, setDocumentsLoading] = useState(false);
+  const [deletingDocumentID, setDeletingDocumentID] = useState('');
 
   const fetchDocuments = useCallback(async (): Promise<KnowledgeDocument[]> => {
     setDocumentsLoading(true);
@@ -217,6 +218,22 @@ export const useKnowledgeDetailPage = () => {
     [name, stats],
   );
 
+  const handleDeleteDocument = useCallback(
+    async (documentID: string) => {
+      setDeletingDocumentID(documentID);
+      try {
+        await knowledgeApi.deleteDocument(name, documentID);
+        message.success('文档已删除');
+        await Promise.all([fetchDocuments(), fetchStats()]);
+      } catch (err) {
+        message.error(extractErrorMessage(err) || '删除文档失败');
+      } finally {
+        setDeletingDocumentID('');
+      }
+    },
+    [name, fetchDocuments, fetchStats],
+  );
+
   return {
     name,
     navigate,
@@ -236,6 +253,8 @@ export const useKnowledgeDetailPage = () => {
     handleQuery,
     documents,
     documentsLoading,
+    deletingDocumentID,
+    handleDeleteDocument,
     fetchDocuments,
   };
 };

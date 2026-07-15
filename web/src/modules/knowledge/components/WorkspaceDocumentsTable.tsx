@@ -1,4 +1,5 @@
-import { Badge, Card, Flex, Progress, Tag, Tooltip, Typography } from 'antd';
+import { DeleteOutlined } from '@ant-design/icons';
+import { Badge, Button, Card, Flex, Popconfirm, Progress, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 
 import type { KnowledgeDocument } from '../model/knowledge';
@@ -11,6 +12,9 @@ const { Text } = Typography;
 interface WorkspaceDocumentsTableProps {
   documents: KnowledgeDocument[];
   loading: boolean;
+  isAdmin?: boolean;
+  deletingDocumentID?: string;
+  onDelete?: (documentID: string) => void;
 }
 
 const STATUS_META: Record<string, { color: string; label: string }> = {
@@ -54,7 +58,7 @@ const renderProgress = (doc: KnowledgeDocument) => {
   );
 };
 
-const columns: ColumnsType<KnowledgeDocument> = [
+const baseColumns: ColumnsType<KnowledgeDocument> = [
   {
     title: '文件名',
     dataIndex: 'source',
@@ -84,7 +88,59 @@ const columns: ColumnsType<KnowledgeDocument> = [
   },
 ];
 
-export const WorkspaceDocumentsTable = ({ documents, loading }: WorkspaceDocumentsTableProps) => (
+const deleteAction = (
+  document: KnowledgeDocument,
+  deletingDocumentID: string,
+  onDelete: (documentID: string) => void,
+) => {
+  const processing = document.ingest_status === 'processing';
+  const button = (
+    <Button
+      type="text"
+      danger
+      icon={<DeleteOutlined />}
+      aria-label="删除文档"
+      disabled={processing}
+      loading={deletingDocumentID === document.id}
+    />
+  );
+  if (processing) return <Tooltip title="处理中不可删除">{button}</Tooltip>;
+  return (
+    <Popconfirm
+      title={`确定删除文档“${document.source || document.id}”？`}
+      description="文档分块和检索向量也会一并删除。"
+      okText="删除"
+      cancelText="取消"
+      okButtonProps={{ danger: true }}
+      onConfirm={() => onDelete(document.id)}
+    >
+      {button}
+    </Popconfirm>
+  );
+};
+
+export const WorkspaceDocumentsTable = ({
+  documents,
+  loading,
+  isAdmin = false,
+  deletingDocumentID = '',
+  onDelete = () => undefined,
+}: WorkspaceDocumentsTableProps) => {
+  const columns = isAdmin
+    ? [
+        ...baseColumns,
+        {
+          title: '操作',
+          key: 'actions',
+          width: 72,
+          align: 'center' as const,
+          render: (_: unknown, document: KnowledgeDocument) =>
+            deleteAction(document, deletingDocumentID, onDelete),
+        },
+      ]
+    : baseColumns;
+
+  return (
   <Card
     title="文档"
     extra={<Badge count={documents.length} style={{ backgroundColor: '#d9d9d9', color: '#595959' }} />}
@@ -106,14 +162,18 @@ export const WorkspaceDocumentsTable = ({ documents, loading }: WorkspaceDocumen
           </Flex>
           <Flex justify="space-between" align="center" gap={8} style={{ marginTop: 10 }}>
             <Text type="secondary">分块 {renderProgress(document)}</Text>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {document.created_at
-                ? new Date(document.created_at).toLocaleString('zh-CN')
-                : '-'}
-            </Text>
+            <Flex align="center" gap={8}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {document.created_at
+                  ? new Date(document.created_at).toLocaleString('zh-CN')
+                  : '-'}
+              </Text>
+              {isAdmin && deleteAction(document, deletingDocumentID, onDelete)}
+            </Flex>
           </Flex>
         </div>
       )}
     />
   </Card>
-);
+  );
+};
