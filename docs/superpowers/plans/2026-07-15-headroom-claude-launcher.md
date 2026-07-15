@@ -17,11 +17,11 @@
 - Create: `/tmp/test-claude-headroom.sh`
 - Test: `/tmp/test-claude-headroom.sh`
 
-- [ ] **Step 1: Write the failing test harness**
+- [x] **Step 1: Write the failing test harness**
 
 Create a temporary Bash test that supplies fake `curl`, `systemctl`, `journalctl`, and Claude commands through environment overrides. Cover healthy startup, automatic recovery, fail-closed timeout, and exact argument forwarding. Each fake records invocations beneath a temporary directory and returns deterministic responses.
 
-- [ ] **Step 2: Run the harness before implementation**
+- [x] **Step 2: Run the harness before implementation**
 
 Run:
 
@@ -38,7 +38,7 @@ Expected: FAIL because `/home/yang/.local/bin/claude-headroom` does not exist.
 - Create: `/home/yang/.local/bin/claude-headroom`
 - Test: `/tmp/test-claude-headroom.sh`
 
-- [ ] **Step 1: Implement configuration and health checking**
+- [x] **Step 1: Implement configuration and health checking**
 
 The launcher must use these defaults while allowing test-only overrides:
 
@@ -54,15 +54,15 @@ CLAUDE_BIN="${CLAUDE_REAL_BIN:-$HOME/.local/bin/claude}"
 
 `health_ready` must call curl with a short timeout and parse JSON using Python 3. It succeeds only for `status == "healthy"` and `ready is True`.
 
-- [ ] **Step 2: Implement service recovery and bounded polling**
+- [x] **Step 2: Implement service recovery and bounded polling**
 
 If health initially fails, start an inactive user service or restart an active one. Poll once per second until the configured deadline. Reject non-numeric or non-positive wait values with exit code 2.
 
-- [ ] **Step 3: Implement fail-closed diagnostics**
+- [x] **Step 3: Implement fail-closed diagnostics**
 
 On timeout, print the health URL, service status, recent journal entries, and the manual recovery command. Exit non-zero without invoking Claude. Do not remove markers, manifests, settings, or sessions.
 
-- [ ] **Step 4: Implement transparent Claude execution**
+- [x] **Step 4: Implement transparent Claude execution**
 
 When ready, verify that the configured real Claude path is executable, then run:
 
@@ -70,7 +70,7 @@ When ready, verify that the configured real Claude path is executable, then run:
 exec "$CLAUDE_BIN" "$@"
 ```
 
-- [ ] **Step 5: Run the deterministic test harness**
+- [x] **Step 5: Run the deterministic test harness**
 
 Run:
 
@@ -87,7 +87,7 @@ Expected: all four cases PASS.
 - Modify: `/home/yang/.bashrc:136-142`
 - Test: interactive Bash command resolution
 
-- [ ] **Step 1: Replace the existing wrapper function**
+- [x] **Step 1: Replace the existing wrapper function**
 
 Replace the function that calls `headroom wrap claude --learn` with:
 
@@ -97,7 +97,7 @@ claude() {
 }
 ```
 
-- [ ] **Step 2: Validate Bash syntax and resolution**
+- [x] **Step 2: Validate Bash syntax and resolution**
 
 Run:
 
@@ -116,7 +116,7 @@ Expected: syntax check exits 0 and interactive Bash reports the new function bod
 - Verify: `/home/yang/.config/systemd/user/headroom-supervisor.service`
 - Verify: `/home/yang/.claude/settings.json`
 
-- [ ] **Step 1: Verify the healthy fast path**
+- [x] **Step 1: Verify the healthy fast path**
 
 Run:
 
@@ -126,15 +126,21 @@ timeout 45s bash -ic 'claude --version'
 
 Expected: exit 0, Claude Code version printed, and no `HEADROOM WRAP` banner.
 
-- [ ] **Step 2: Verify automatic recovery**
+- [x] **Step 2: Verify automatic recovery**
 
 Stop `headroom-supervisor.service`, confirm port 8787 is unavailable, then invoke `claude --version`. Expected: the launcher starts the service, waits for `ready=true`, and Claude exits 0.
 
-- [ ] **Step 3: Verify fail-closed behavior**
+The first real restart exposed a lingering Python child that kept systemd in
+`deactivating` beyond the launcher's deadline. A user-service drop-in now sets
+`KillMode=control-group`, `TimeoutStopSec=10s`, and `SendSIGKILL=yes`. The
+verified cold-recovery run stopped in 10 seconds and launched Claude 12 seconds
+after recovery began.
+
+- [x] **Step 3: Verify fail-closed behavior**
 
 Use the deterministic harness with an always-unhealthy fake endpoint and a two-second timeout. Expected: non-zero exit, diagnostics printed, and the fake Claude invocation log remains absent.
 
-- [ ] **Step 4: Verify routing and Headroom state**
+- [x] **Step 4: Verify routing and Headroom state**
 
 Run:
 
@@ -145,7 +151,7 @@ headroom doctor
 
 Expected: proxy reports `healthy` and `ready=true`; doctor reports zero failures and no stale wrap marker.
 
-- [ ] **Step 5: Remove temporary test artifacts**
+- [x] **Step 5: Remove temporary test artifacts**
 
 Remove `/tmp/test-claude-headroom.sh` and any test-created temporary directory after all verification evidence has been recorded.
 
@@ -155,11 +161,11 @@ Remove `/tmp/test-claude-headroom.sh` and any test-created temporary directory a
 
 - Modify: `docs/superpowers/plans/2026-07-15-headroom-claude-launcher.md`
 
-- [ ] **Step 1: Mark completed checkboxes**
+- [x] **Step 1: Mark completed checkboxes**
 
 Update every successfully executed checkbox from `[ ]` to `[x]`. If any step is skipped or partially fails, leave it unchecked and record the exact reason beneath that step.
 
-- [ ] **Step 2: Commit the implementation record**
+- [x] **Step 2: Commit the implementation record**
 
 Commit only this plan file; machine-local launcher and shell configuration remain outside the repository:
 
