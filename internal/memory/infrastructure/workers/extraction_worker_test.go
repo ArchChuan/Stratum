@@ -3,11 +3,13 @@ package workers_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
@@ -16,8 +18,8 @@ import (
 
 type stubExtractionQueue struct {
 	dequeueFunc       func(context.Context, string) (*port.ExtractionTask, error)
-	markCompletedFunc func(context.Context, string, int64) error
-	markFailedFunc    func(context.Context, string, int64, string) error
+	markCompletedFunc func(context.Context, string, int64, time.Time) error
+	markFailedFunc    func(context.Context, string, int64, time.Time, string) error
 }
 
 func (q *stubExtractionQueue) Enqueue(ctx context.Context, tenantID string, task *port.ExtractionTask) error {
@@ -28,12 +30,12 @@ func (q *stubExtractionQueue) Dequeue(ctx context.Context, tenantID string) (*po
 	return q.dequeueFunc(ctx, tenantID)
 }
 
-func (q *stubExtractionQueue) MarkCompleted(ctx context.Context, tenantID string, taskID int64) error {
-	return q.markCompletedFunc(ctx, tenantID, taskID)
+func (q *stubExtractionQueue) MarkCompleted(ctx context.Context, tenantID string, taskID int64, claimedAt time.Time) error {
+	return q.markCompletedFunc(ctx, tenantID, taskID, claimedAt)
 }
 
-func (q *stubExtractionQueue) MarkFailed(ctx context.Context, tenantID string, taskID int64, errMsg string) error {
-	return q.markFailedFunc(ctx, tenantID, taskID, errMsg)
+func (q *stubExtractionQueue) MarkFailed(ctx context.Context, tenantID string, taskID int64, claimedAt time.Time, errMsg string) error {
+	return q.markFailedFunc(ctx, tenantID, taskID, claimedAt, errMsg)
 }
 
 func (q *stubExtractionQueue) DeleteOldCompleted(ctx context.Context, tenantID string, retentionDays int) (int, error) {
@@ -69,7 +71,7 @@ func TestExtractionWorker_ProcessesTask(t *testing.T) {
 				Content:   "I like coffee",
 			}, nil
 		},
-		markCompletedFunc: func(ctx context.Context, tenantID string, taskID int64) error {
+		markCompletedFunc: func(ctx context.Context, tenantID string, taskID int64, claimedAt time.Time) error {
 			completedID = taskID
 			return nil
 		},
@@ -91,9 +93,11 @@ func TestExtractionWorker_ProcessesTask(t *testing.T) {
 }
 
 func TestExtractionWorker_HandlesExtractionError(t *testing.T) {
+	core, observed := observer.New(zap.DebugLevel)
+	logger := zap.New(core)
 	extractor := &stubFactExtractor{
 		extractFunc: func(ctx context.Context, req *application.ExtractFactsRequest) error {
-			return errors.New("llm timeout")
+			return errors.New("llm timeout: secret-token-123")
 		},
 	}
 
@@ -103,14 +107,14 @@ func TestExtractionWorker_HandlesExtractionError(t *testing.T) {
 		dequeueFunc: func(ctx context.Context, tenantID string) (*port.ExtractionTask, error) {
 			return &port.ExtractionTask{ID: 456, TenantID: "tenant1", Content: "test"}, nil
 		},
-		markFailedFunc: func(ctx context.Context, tenantID string, taskID int64, errMsg string) error {
+		markFailedFunc: func(ctx context.Context, tenantID string, taskID int64, claimedAt time.Time, errMsg string) error {
 			failedID = taskID
 			failReason = errMsg
 			return nil
 		},
 	}
 
-	worker := workers.NewExtractionWorker("tenant1", queue, extractor, zap.NewNop())
+	worker := workers.NewExtractionWorker("tenant1", queue, extractor, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -121,7 +125,10 @@ func TestExtractionWorker_HandlesExtractionError(t *testing.T) {
 	worker.Start(ctx)
 
 	require.Equal(t, int64(456), failedID, "should mark failed")
-	require.Contains(t, failReason, "llm timeout")
+	require.Equal(t, "extraction_failed", failReason)
+	for _, entry := range observed.All() {
+		require.NotContains(t, entry.Message+fmt.Sprint(entry.ContextMap()), "secret-token-123")
+	}
 }
 
 func TestExtractionWorker_GracefulShutdown(t *testing.T) {
