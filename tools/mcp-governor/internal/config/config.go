@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,8 +21,16 @@ type ServiceRule struct {
 }
 
 func Decode(r io.Reader) (Config, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return Config{}, fmt.Errorf("read config: %w", err)
+	}
+	if err := rejectDuplicateKeys(json.NewDecoder(bytes.NewReader(data)), "$"); err != nil {
+		return Config{}, fmt.Errorf("decode config: %w", err)
+	}
+
 	var cfg Config
-	decoder := json.NewDecoder(r)
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
@@ -38,6 +47,50 @@ func Decode(r io.Reader) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func rejectDuplicateKeys(decoder *json.Decoder, path string) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+
+	switch delim {
+	case '{':
+		keys := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return fmt.Errorf("object key at %s is not a string", path)
+			}
+			if _, exists := keys[key]; exists {
+				return fmt.Errorf("duplicate key %q at %s", key, path)
+			}
+			keys[key] = struct{}{}
+			if err := rejectDuplicateKeys(decoder, path+"."+key); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for index := 0; decoder.More(); index++ {
+			if err := rejectDuplicateKeys(decoder, fmt.Sprintf("%s[%d]", path, index)); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %q at %s", delim, path)
+	}
+
+	_, err = decoder.Token()
+	return err
 }
 
 func validate(cfg Config) error {

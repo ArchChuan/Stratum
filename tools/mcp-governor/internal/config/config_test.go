@@ -62,6 +62,25 @@ func TestDecodeRejectsUnknownField(t *testing.T) {
 	assertDecodeError(t, strings.Replace(validConfig, `"version": 1`, `"version": 1, "extra": true`, 1), "unknown field")
 }
 
+func TestDecodeRejectsDuplicateJSONKeys(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		key   string
+	}{
+		{"top-level version", strings.Replace(validConfig, `"version": 1`, `"version": 1, "version": 1`, 1), "version"},
+		{"top-level output path", strings.Replace(validConfig, `"output_path": "%h/out.json"`, `"output_path": "%h/out.json", "output_path": "%h/other.json"`, 1), "output_path"},
+		{"service name", strings.Replace(validConfig, `"name":"chroma"`, `"name":"chroma","name":"other"`, 1), "name"},
+		{"service fragments", strings.Replace(validConfig, `"all_args_contain":["chroma-mcp"]`, `"all_args_contain":["chroma-mcp"],"all_args_contain":["other"]`, 1), "all_args_contain"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertDecodeError(t, tt.input, "duplicate key")
+			assertDecodeError(t, tt.input, tt.key)
+		})
+	}
+}
+
 func TestDecodeRejectsTrailingJSON(t *testing.T) {
 	assertDecodeError(t, validConfig+` {}`, "trailing")
 }
