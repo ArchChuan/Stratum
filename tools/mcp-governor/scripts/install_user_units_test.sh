@@ -53,6 +53,13 @@ cmp "$script_dir/../config.example.json" "$config"
 test -f "$service"
 test -f "$timer"
 grep -Fq 'ExecStart=%h/.local/bin/mcp-governor snapshot --config %h/.config/mcp-governor/config.json' "$service"
+grep -Fq 'NoNewPrivileges=yes' "$service"
+grep -Fq 'RestrictAddressFamilies=AF_UNIX' "$service"
+grep -Fq 'LockPersonality=yes' "$service"
+if grep -Eq '^(PrivateTmp|ProtectSystem|ProtectHome|ReadWritePaths)=' "$service"; then
+  printf 'filesystem namespace directives prevent cross-process PSS collection\n' >&2
+  exit 1
+fi
 test "$(cat "$systemctl_log")" = $'--user daemon-reload\n--user enable --now mcp-governor-observe.timer'
 ! grep -Eq 'enable.*mcp-governor-observe\.service' "$systemctl_log"
 

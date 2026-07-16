@@ -7,9 +7,7 @@ Type=oneshot
 ExecStart=%h/.local/bin/mcp-governor snapshot --config %h/.config/mcp-governor/config.json
 UMask=0077
 NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=%h/.local/state/mcp-governor
+# User-service filesystem namespacing also creates a user namespace on WSL,
+# which prevents observation of same-user processes through smaps_rollup.
 RestrictAddressFamilies=AF_UNIX
 LockPersonality=yes

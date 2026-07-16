@@ -8,8 +8,9 @@ reconfigured.
 
 The user timer is installed and active. The invoking shell did not export the
 user bus variables, so installation was repeated with
-`XDG_RUNTIME_DIR=/run/user/1000` and the matching user D-Bus address. No
-privilege escalation was used.
+`XDG_RUNTIME_DIR=/run/user/1000` and the matching user D-Bus address. Commands
+below derive these values rather than assuming UID 1000. No privilege
+escalation was used.
 
 Installed paths:
 
@@ -24,8 +25,8 @@ Installed paths:
 
 `systemctl --user list-timers` listed `mcp-governor-observe.timer`, and an
 explicit service start completed successfully. The journal contained normal
-start/finish entries and no systemd sandbox failure. The service sandbox does,
-however, affect memory detail as described below.
+start/finish entries and no systemd sandbox failure. A post-baseline unit fix
+restored scheduled PSS/USS visibility as described below.
 
 ## Observation windows
 
@@ -81,15 +82,135 @@ not be used to set a limit. The active capture had 91 warnings, all general
 process-scan `smaps_rollup` permission denials; none concerned a classified
 service. There were no malformed or fatal warnings. The difference occurs
 because the direct CLI could inspect the classified descendants available to
-this session, whereas the hardened user service was denied those unrelated
-process trees. This is a measurement-access limitation, not a unit startup or
-sandbox setup failure.
+this session, whereas the original user service entered a different user
+namespace. This was the symptom that prompted the root-cause experiment below;
+it is preserved here as historical evidence and is fixed in the installed unit.
 
 At the active timestamp, the host had 15.3 GiB RAM, 2.14 GiB available, and
 only 8.6 MiB of 4.0 GiB swap free. Memory PSI was zero across 10/60/300-second
 averages; CPU `some` PSI was 1.16/1.09/1.03 percent, and I/O PSI was
 0.00/0.01/0.28 percent. Swap exhaustion and low available memory justify a
 longer observation even though immediate memory pressure was absent.
+
+## Scheduled-service correction
+
+Transient user services isolated the original unit properties one at a time.
+Each row used the same binary, configuration, host activity, and JSON
+aggregation. Values are bytes; classified warnings are warnings prefixed with
+a configured service identity.
+
+| Case | Chroma PSS | claude-mem PSS | Classified warnings | Total warnings |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline transient unit | 851865600 | 160344064 | 0 | 92 |
+| `NoNewPrivileges=yes` | 851865600 | not separately sampled | 0 | 92 |
+| `PrivateTmp=yes` | 0 | not separately sampled | 119 | 426 |
+| `ProtectSystem=strict` | 0 | not separately sampled | 119 | 426 |
+| `ProtectHome=read-only` | 0 | not separately sampled | 119 | 426 |
+| `ReadWritePaths=state-dir` | 0 | not separately sampled | 119 | 426 |
+| `RestrictAddressFamilies=AF_UNIX` | 851865600 | not separately sampled | 0 | 92 |
+| `LockPersonality=yes` | 851865600 | not separately sampled | 0 | 92 |
+| Retained three-directive combination | 851863552 | 160344064 | 0 | 92 |
+| Four filesystem directives together | 0 | 0 | 119 | 430 |
+| Original seven-directive combination | 0 | 0 | 119 | 430 |
+
+On systemd 255 in this WSL environment, the baseline transient service shared
+the host user namespace, while `PrivateTmp=yes` alone created both a new mount
+namespace and a new user namespace. UID/GID, capabilities, `NoNewPrivs`,
+seccomp state, and `/proc` mount options were otherwise equal. The other three
+filesystem directives independently produced the same PSS loss. With
+`kernel.yama.ptrace_scope=1`, cross-user-namespace `smaps_rollup` reads fail
+with `EACCES`. This common filesystem-namespace side effect, not
+`NoNewPrivileges`, was the confirmed root cause.
+
+The unit therefore retains `NoNewPrivileges=yes`,
+`RestrictAddressFamilies=AF_UNIX`, and `LockPersonality=yes`, and removes only
+the four directives proven to create the incompatible namespace. After
+reinstallation, an explicit scheduled-service capture began at
+`2026-07-16T21:08:30.283366602+08:00`, completed in 486 ms, and recorded
+`2026-07-16T21:08:30.756072158+08:00`.
+
+| Service | Processes | RSS MiB | PSS MiB | USS MiB | Orphans |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| chroma | 6 | 830.6 | 812.4 | 810.8 | 0 |
+| chrome-devtools | 16 | 404.8 | 299.3 | 297.3 | 0 |
+| claude-mem | 8 | 265.4 | 152.9 | 151.0 | 0 |
+| codegraph | 31 | 887.7 | 404.8 | 369.7 | 0 |
+| headroom | 14 | 597.7 | 472.1 | 459.6 | 0 |
+| obsidian | 14 | 1064.0 | 737.3 | 730.6 | 0 |
+| playwright | 30 | 925.7 | 662.3 | 657.3 | 0 |
+| **Classified total** | **119** | **4976.0** | **3541.2** | **3476.2** | **0** |
+
+The corrected scheduled snapshot had 92 general process-scan permission
+warnings and **zero classified-service warnings**. At
+`2026-07-16T21:08:30.797837287+08:00`, 2.34 GiB RAM was available and only
+1.8 MiB of 4 GiB swap was free. Memory PSI `some/full` was
+0.04/0.04, 0.03/0.03, and 0.04/0.03 percent over 10/60/300 seconds; CPU `some`
+was 2.74/1.01/0.92 percent, and I/O `some` was 0.04/0.03/0.07 percent.
+
+## Reproducing captures
+
+Set up the user-manager environment once in shells that do not inherit it:
+
+```sh
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+systemctl --user is-active mcp-governor-observe.timer
+```
+
+Capture a quiescent observational window without claiming machine idleness:
+
+```sh
+capture_dir=$(mktemp -d "$HOME/.local/state/mcp-governor/baseline.XXXXXX")
+chmod 0700 "$capture_dir"
+sleep 12
+window_start=$(date --iso-8601=ns)
+before=$(date +%s%N)
+systemctl --user start mcp-governor-observe.service
+after=$(date +%s%N)
+cp "$HOME/.local/state/mcp-governor/snapshot.json" "$capture_dir/quiescent.json"
+chmod 0600 "$capture_dir/quiescent.json"
+printf 'start=%s elapsed_ms=%s captured_at=%s\n' "$window_start" \
+  "$(( (after-before)/1000000 ))" \
+  "$(jq -r .captured_at "$capture_dir/quiescent.json")"
+```
+
+For an active/current-concurrency window, allow existing natural session load,
+perform only available read-only status operations, and capture without
+starting a browser or synthetic workload:
+
+```sh
+systemctl --user list-timers mcp-governor-observe.timer --no-pager >/dev/null
+window_start=$(date --iso-8601=ns)
+before=$(date +%s%N)
+systemctl --user start mcp-governor-observe.service
+after=$(date +%s%N)
+cp "$HOME/.local/state/mcp-governor/snapshot.json" "$capture_dir/active.json"
+chmod 0600 "$capture_dir/active.json"
+printf 'start=%s elapsed_ms=%s captured_at=%s\n' "$window_start" \
+  "$(( (after-before)/1000000 ))" \
+  "$(jq -r .captured_at "$capture_dir/active.json")"
+```
+
+Aggregate without printing command arguments or payloads:
+
+```sh
+jq '{services, total:{processes:(.services|map(.processes)|add),
+  rss_bytes:(.services|map(.rss_bytes)|add),
+  pss_bytes:(.services|map(.pss_bytes)|add),
+  uss_bytes:(.services|map(.uss_bytes)|add),
+  orphans:([.processes[]|select(.orphan)]|length),
+  warnings:(.warnings|length),
+  classified_warnings:([.warnings[]|select(startswith("service "))]|length)}}' \
+  "$capture_dir/active.json"
+jq '{permission_denied:([.warnings[]|select(test("permission denied"))]|length),
+  malformed_or_fatal:([.warnings[]|select(test("malformed|fatal|parse";"i"))]|length)}' \
+  "$capture_dir/active.json"
+free -b
+for resource in memory cpu io; do
+  printf '%s\n' "$resource"
+  sed -n '1,2p' "/proc/pressure/$resource"
+done
+```
 
 ## Ownership and reclaimability
 
@@ -109,7 +230,7 @@ are explicitly **not reclaimable** without registry-backed ownership.
 MemoryHigh, MemoryMax, and TasksMax values are deferred. A two-point sample,
 with only one authoritative PSS/USS point, cannot establish peaks, and no limit
 should be placed below observed active PSS plus a documented safety margin.
-Collect direct, ownership-aware samples at one-minute cadence for at least 24
+Collect scheduled, ownership-aware samples at one-minute cadence for at least 24
 hours, including normal peak activity, then derive MemoryHigh from a high
 percentile plus headroom and MemoryMax from the observed peak plus a larger
 recovery margin. Derive TasksMax from peak task count, not the current process
@@ -126,9 +247,8 @@ The first migration targets are:
 
 Keep both migrations observation-only until the 24-hour series validates
 ownership matching and supplies defensible limits. Separately, investigate a
-systemd-compatible way to collect PSS/USS under WSL without weakening process
-isolation broadly; until then, timer snapshots remain useful for counts and RSS
-trends but not memory-limit sizing.
+systemd unit scopes can restore filesystem isolation around owned target
+services independently of the observation process.
 
 ## Rollback
 
@@ -136,6 +256,8 @@ The active timer was not uninstalled during this baseline. To disable future
 observations and verify the result:
 
 ```sh
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 systemctl --user disable --now mcp-governor-observe.timer
 systemctl --user is-enabled mcp-governor-observe.timer
 systemctl --user is-active mcp-governor-observe.timer
@@ -144,6 +266,8 @@ systemctl --user is-active mcp-governor-observe.timer
 To uninstall executable and units while preserving configuration and state:
 
 ```sh
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 systemctl --user disable --now mcp-governor-observe.timer
 rm -f ~/.local/bin/mcp-governor
 rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/mcp-governor-observe.service"
