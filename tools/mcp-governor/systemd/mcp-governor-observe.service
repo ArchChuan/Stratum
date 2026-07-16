@@ -1,0 +1,15 @@
+[Unit]
+Description=Capture an observation-only MCP process resource snapshot
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/mcp-governor snapshot --config %h/.config/mcp-governor/config.json
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/mcp-governor
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes

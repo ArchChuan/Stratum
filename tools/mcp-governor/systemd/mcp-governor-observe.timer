@@ -1,0 +1,12 @@
+[Unit]
+Description=Capture MCP process resource snapshots every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+RandomizedDelaySec=10s
+Persistent=false
+Unit=mcp-governor-observe.service
+
+[Install]
+WantedBy=timers.target
