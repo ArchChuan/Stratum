@@ -16,9 +16,9 @@
 - `pkg/constants/` 禁止 import `internal/`（单向依赖）
 - 禁止在函数签名 / 结构体字面量中直接写魔法数字
 
-## 前端（JS/JSX）
+## 前端（TypeScript / TSX）
 
-所有行为常量集中在 `web/src/constants/index.js`，按前缀分组：
+所有行为常量集中在 `web/src/constants/index.ts`，按前缀分组：
 
 ```js
 // API / 网络
@@ -29,6 +29,8 @@ DEFAULT_PAGE_SIZE   COMPACT_PAGE_SIZE   PAGE_SIZE_OPTIONS
 MCP_DEFAULT_TIMEOUT_SEC   MCP_MAX_TIMEOUT_SEC
 // Skill
 SKILL_DEFAULT_TEMPERATURE   SKILL_DEFAULT_MAX_TOKENS   SKILL_DEFAULT_TIMEOUT_SEC
+// Evaluation
+EVALUATION_JOB_POLL_INTERVAL_MS   EVALUATION_JOB_MAX_WAIT_MS
 // Memory
 MEMORY_SEARCH_LIMIT
 ```

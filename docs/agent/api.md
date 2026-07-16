@@ -9,6 +9,7 @@
 registerAuth(r, c, requireActive)
 registerHealth(r, c)
 registerSkills(r, c, requireActive)
+registerEvaluations(r, c, requireActive)
 registerAgents(r, c, requireActive)
 registerKnowledge(r, c, requireActive)
 registerMCP(r, c, requireActive)
@@ -95,6 +96,20 @@ registerMemory(r, c, requireActive)
 | DELETE | `/agents/:id` | DeleteAgent | admin + requireActive |
 | POST | `/agents/:id/conversations` | CreateConversation | — |
 | GET | `/agents/:id/conversations` | ListConversations | — |
+
+### Evaluation（JWT + tenant context）
+
+| 方法 | 路径 | Handler | 额外权限 |
+|------|------|---------|---------|
+| POST | `/evaluations/suites` | CreateSuite | admin + requireActive |
+| POST | `/evaluations/suites/:id/publish` | PublishSuite | admin + requireActive |
+| POST | `/evaluations/runs` | EnqueueRun | admin + requireActive |
+| GET | `/evaluations/runs/:id` | GetRun | admin |
+| GET | `/evaluations/jobs/:id` | GetJob | admin |
+| POST | `/evaluations/optimizations` | GenerateOptimization | admin + requireActive |
+| POST | `/evaluations/experiments` | CreateExperiment | admin + requireActive |
+| POST | `/evaluations/experiments/:id/evaluate` | EvaluateExperiment | admin + requireActive |
+| POST | `/evaluations/feedback` | RecordFeedback | member + requireActive |
 
 ### Conversations（JWT + tenant context）
 

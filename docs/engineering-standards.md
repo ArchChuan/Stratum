@@ -15,7 +15,7 @@
 | Handler | `api/http/handler/` | 每域一个文件，只做请求解析 + 响应组装 |
 | DTO | `api/http/dto/` | Request/Response 结构体，无业务逻辑 |
 | 中间件 | `api/middleware/` | ErrorHandler · MetricsMiddleware · Auth · Trace |
-| 业务 | `internal/<ctx>/{domain,application,infrastructure}` | 8 个 bounded context（见下方架构分层） |
+| 业务 | `internal/<ctx>/{domain,application,infrastructure}` | 9 个 bounded context（见下方架构分层） |
 | 基础设施 | `pkg/{storage,messaging,httpclient,observability,...}` | 数据库/消息/HTTP/日志等无业务抽象 |
 
 关键依赖版本：Gin v1.9.1 · nats.go v1.51 · Milvus SDK v2.4.2 · pgx v5.7 · go-redis v9.7 · JWT RS256（golang-jwt v5.3）· OTEL v1.22
@@ -94,12 +94,12 @@ React 18.3 · Vite 5.4 · Ant Design 5.20 · React Router 6.26 · Axios 1.7 · T
 ### 架构分层（DDD bounded context）
 
 - 目录：`api/{http/{handler,dto,middleware},wiring}` · `internal/<ctx>/{domain/{,port/},application,infrastructure}` · `pkg/storage/{postgres,redis,milvus,tenantnaming}` · `pkg/{messaging/nats,httpclient,observability,crypto,constants,migration,textchunk}`
-- 8 个 bounded context：`agent · memory · knowledge · skill · mcp · iam · llmgateway · platform`；跨域路由层（如 `capgateway`）作为 ACL，必要时下沉进消费上下文
+- 9 个 bounded context：`agent · memory · knowledge · skill · mcp · iam · llmgateway · evaluation · platform`；跨域路由层（如 capability adapter）作为 ACL，必要时下沉进消费上下文
 - 依赖方向：`handler → application → domain/port`；`infrastructure` 实现 port，由 `api/wiring/Container` 集中装配；Shutdown 逆序释放
 - 跨 context 调用走「消费者侧」port（接口放消费方 `domain/port/`），禁止 import 兄弟上下文的 `application` / `infrastructure`
 - 单向底线：`pkg/` 不 import `internal/`；`domain/` 零第三方依赖（仅 stdlib + `pkg/constants`）；`application/` 不 import `pgx`/`redis`/`nats`/`gin`；`handler` 不 import `internal/*/infrastructure` 与 `pgx`/`redis`/`milvus`
 - 错误分层：domain 定义 `Err*` → infrastructure 翻译 → application 编排 → middleware 映射 HTTP；响应体 `{"error":"..."}` 冻结
-- API 向后兼容由 `api/http/contract_test.go` + `testdata/contracts/*.golden.json` 守护；CI 用 `go-arch-lint` + `depguard` 固化分层
+- API 向后兼容由 `api/http/contract_test.go` + `api/http/testdata/contracts/*.golden.json` 守护；CI 用 `go-arch-lint` + `depguard` 固化分层
 
 ### 各层职责速查
 
@@ -156,9 +156,9 @@ npm run lint && npm run build            # 前端 PR 前
 - 纯 UI 样式数字（spacing、border-radius 等）不在此范围
 - Agent 子操作超时使用 `pkg/constants/timeouts.go` 的分级常量；LLM 流式调用禁止 flat timeout，使用响应头超时、流空闲看门狗和外层执行超时组合控制
 
-**前端（JS/JSX）**
+**前端（TypeScript / TSX）**
 
-所有行为常量集中在 `web/src/constants/index.js`，按前缀分组：
+所有行为常量集中在 `web/src/constants/index.ts`，按前缀分组：
 
 ```js
 // API / 网络
@@ -233,7 +233,7 @@ MEMORY_SEARCH_LIMIT
 
 ### 前端规范
 
-- 所有 API 调用走 `services/api.js` 的 axios 实例，禁止裸 `fetch`
+- 普通 API 调用走 `web/src/services/client.ts` 的 axios 实例；SSE 统一走该文件的 `streamApiEvents`
 - 错误统一：`message.error(err.response?.data?.error || '操作失败')`
 - 禁止跨 `pages/` 目录导入；页面组件 ≤200 行，超出提取到 hooks/utils
 - `useEffect` 依赖必须完整；异步 effect 需要 `let cancelled = false` 清理

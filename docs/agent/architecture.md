@@ -11,8 +11,8 @@ pkg/storage/{postgres,redis,milvus,tenantnaming}
 pkg/{httpclient,observability,crypto,constants,migration,textchunk,tenantdb,vector}
 ```
 
-- 8 个 bounded context：`agent · memory · knowledge · skill · mcp · iam · llmgateway · platform`
-- 跨域路由层（如 `capgateway`）作为 ACL，必要时下沉进消费上下文
+- 9 个 bounded context：`agent · memory · knowledge · skill · mcp · iam · llmgateway · evaluation · platform`
+- 跨域 capability adapter 作为 ACL，必要时下沉进消费上下文
 
 ## 依赖方向
 
@@ -50,7 +50,7 @@ pkg/{httpclient,observability,crypto,constants,migration,textchunk,tenantdb,vect
 
 - domain 定义 `Err*` → infrastructure 翻译 → application 编排 → middleware 映射 HTTP
 - 响应体 `{"error":"..."}` 冻结
-- API 向后兼容由 `api/http/contract_test.go` + `testdata/contracts/*.golden.json` 守护
+- API 向后兼容由 `api/http/contract_test.go` + `api/http/testdata/contracts/*.golden.json` 守护
 
 ## 架构决策（WHY）
 
