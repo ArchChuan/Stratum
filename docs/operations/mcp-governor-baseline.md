@@ -277,8 +277,8 @@ The first migration targets are:
    any enforcement is enabled.
 
 Keep both migrations observation-only until the 24-hour series validates
-ownership matching and supplies defensible limits. Separately, investigate a
-systemd scopes can restore filesystem isolation around owned target
+ownership matching and supplies defensible limits. Separately, investigate
+whether systemd scopes can restore filesystem isolation around owned target
 services independently of the observation process.
 
 ## Rollback
