@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"go.uber.org/zap"
 )
@@ -222,6 +223,75 @@ type FactDTO struct {
 	EntityNames []string
 	AccessCount int
 	CreatedAt   time.Time
+}
+
+// UserMemory is the application-layer representation exposed to user-facing adapters.
+type UserMemory struct {
+	ID         string
+	Scope      string
+	Content    string
+	Importance float64
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// CreateUserMemoryRequest creates a user-owned fact. Tenant and user IDs must come from auth context.
+type CreateUserMemoryRequest struct {
+	TenantID   string
+	UserID     string
+	Content    string
+	Importance float64
+}
+
+// GetUserMemoryRequest reads a fact only when it belongs to the authenticated user.
+type GetUserMemoryRequest struct {
+	TenantID string
+	UserID   string
+	FactID   string
+}
+
+// CreateUserMemory persists a user-scoped canonical memory fact.
+func (s *MemoryService) CreateUserMemory(ctx context.Context, req *CreateUserMemoryRequest) (*UserMemory, error) {
+	fact, err := domain.NewFact(req.TenantID, req.UserID, "", "",
+		string(domain.ScopeUser), req.Content, req.Importance, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.factRepo.Create(ctx, req.TenantID, fact); err != nil {
+		return nil, fmt.Errorf("create user memory: %w", err)
+	}
+	return userMemoryFromFact(fact), nil
+}
+
+// GetUserMemory returns a canonical fact after enforcing user ownership.
+func (s *MemoryService) GetUserMemory(ctx context.Context, req *GetUserMemoryRequest) (*UserMemory, error) {
+	fact, err := s.factRepo.GetByID(ctx, req.TenantID, req.FactID)
+	if err != nil {
+		return nil, fmt.Errorf("get user memory: %w", err)
+	}
+	if fact.UserID != req.UserID || fact.Scope != domain.ScopeUser {
+		return nil, domain.ErrScopeMismatch
+	}
+	return userMemoryFromFact(fact), nil
+}
+
+// ForgetUserMemory deletes a canonical fact after enforcing user ownership.
+func (s *MemoryService) ForgetUserMemory(ctx context.Context, req *ForgetMemoryRequest) error {
+	fact, err := s.factRepo.GetByID(ctx, req.TenantID, req.FactID)
+	if err != nil {
+		return fmt.Errorf("get user memory for deletion: %w", err)
+	}
+	if fact.UserID != req.UserID || fact.Scope != domain.ScopeUser {
+		return domain.ErrScopeMismatch
+	}
+	return s.ForgetMemory(ctx, req)
+}
+
+func userMemoryFromFact(fact *domain.MemoryFact) *UserMemory {
+	return &UserMemory{
+		ID: fact.ID, Scope: string(fact.Scope), Content: fact.Content,
+		Importance: fact.Importance, CreatedAt: fact.CreatedAt, UpdatedAt: fact.UpdatedAt,
+	}
 }
 
 // ClearUserMemoriesRequest requests deletion of all facts for a user.

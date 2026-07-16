@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,9 @@ var errInvalidInput = errors.New("invalid user")
 
 type userMemorySvc interface {
 	ClearUserMemories(ctx context.Context, req *application.ClearUserMemoriesRequest) error
+	CreateUserMemory(ctx context.Context, req *application.CreateUserMemoryRequest) (*application.UserMemory, error)
+	GetUserMemory(ctx context.Context, req *application.GetUserMemoryRequest) (*application.UserMemory, error)
+	ForgetUserMemory(ctx context.Context, req *application.ForgetMemoryRequest) error
 }
 
 type memoryMgrSvc interface {
@@ -61,18 +65,24 @@ func (h *UserMemoryHandler) AddMemory(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	var entry application.MemoryEntry
-	if err := c.ShouldBindJSON(&entry); err != nil {
+	userID, ok := userIDFromCtx(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errInvalidInput))
+		return
+	}
+	var req dto.CreateMemoryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	entry.TenantID = tenantID
-	ctx := application.WithTenantContext(c.Request.Context(), tenantID)
-	if err := h.mgr.Add(ctx, &entry); err != nil {
+	memory, err := h.svc.CreateUserMemory(c.Request.Context(), &application.CreateUserMemoryRequest{
+		TenantID: tenantID, UserID: userID, Content: req.Content, Importance: req.Importance,
+	})
+	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusCreated, entry)
+	c.JSON(http.StatusCreated, memoryFactResponse(memory))
 }
 
 func (h *UserMemoryHandler) GetMemory(c *gin.Context) {
@@ -81,17 +91,23 @@ func (h *UserMemoryHandler) GetMemory(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	ctx := application.WithTenantContext(c.Request.Context(), tenantID)
-	entry, err := h.mgr.Get(ctx, c.Param("id"))
+	userID, ok := userIDFromCtx(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errInvalidInput))
+		return
+	}
+	memory, err := h.svc.GetUserMemory(c.Request.Context(), &application.GetUserMemoryRequest{
+		TenantID: tenantID, UserID: userID, FactID: c.Param("id"),
+	})
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, entry)
+	c.JSON(http.StatusOK, memoryFactResponse(memory))
 }
 
 func (h *UserMemoryHandler) ListSessions(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"sessions": []any{}})
+	c.JSON(http.StatusOK, dto.MemorySessionsResponse{Sessions: []string{}})
 }
 
 func (h *UserMemoryHandler) GetStats(c *gin.Context) {
@@ -105,7 +121,13 @@ func (h *UserMemoryHandler) GetStats(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, stats)
+	c.JSON(http.StatusOK, dto.MemoryStatsResponse{
+		TotalEntries: stats.TotalEntries, ShortTermCount: stats.ShortTermCount,
+		LongTermCount: stats.LongTermCount, EntityCount: stats.EntityCount,
+		SessionsCount: stats.SessionsCount, ActiveUsers: stats.ActiveUsers,
+		VectorCount: stats.VectorCount, LastAccessTime: stats.LastAccessTime,
+		StorageSizeBytes: stats.StorageSizeBytes,
+	})
 }
 
 func (h *UserMemoryHandler) GetSummary(c *gin.Context) {
@@ -122,7 +144,7 @@ func (h *UserMemoryHandler) GetSummary(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"summary": summary})
+	c.JSON(http.StatusOK, dto.MemorySummaryResponse{Summary: summary})
 }
 
 func (h *UserMemoryHandler) DeleteMemory(c *gin.Context) {
@@ -131,12 +153,25 @@ func (h *UserMemoryHandler) DeleteMemory(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	ctx := application.WithTenantContext(c.Request.Context(), tenantID)
-	if err := h.mgr.Delete(ctx, c.Param("id")); err != nil {
+	userID, ok := userIDFromCtx(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errInvalidInput))
+		return
+	}
+	if err := h.svc.ForgetUserMemory(c.Request.Context(), &application.ForgetMemoryRequest{
+		TenantID: tenantID, UserID: userID, FactID: c.Param("id"),
+	}); err != nil {
 		_ = c.Error(err)
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+func memoryFactResponse(memory *application.UserMemory) dto.MemoryFactResponse {
+	return dto.MemoryFactResponse{
+		ID: memory.ID, Scope: memory.Scope, Content: memory.Content,
+		Importance: memory.Importance, CreatedAt: memory.CreatedAt, UpdatedAt: memory.UpdatedAt,
+	}
 }
 
 func (h *UserMemoryHandler) ClearSession(c *gin.Context) {

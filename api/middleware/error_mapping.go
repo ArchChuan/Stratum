@@ -84,6 +84,8 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, memoryapp.ErrNotFound),
 		errors.Is(err, memorydomain.ErrEntryNotFound),
 		errors.Is(err, memorydomain.ErrSessionNotFound),
+		errors.Is(err, memorydomain.ErrFactNotFound),
+		errors.Is(err, memorydomain.ErrEntityNotFound),
 		errors.Is(err, skilldomain.ErrSkillNotFound),
 		errors.Is(err, mcpdomain.ErrServerNotFound),
 		errors.Is(err, evalapp.ErrSuiteNotFound),
@@ -103,6 +105,9 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, mcpdomain.ErrNameConflict),
 		errors.Is(err, skilldomain.ErrSkillNameConflict),
 		errors.Is(err, skilldomain.ErrSkillLinked):
+		return http.StatusConflict
+	case errors.Is(err, memorydomain.ErrFactQuotaExceeded),
+		errors.Is(err, memorydomain.ErrFactAlreadyDeleted):
 		return http.StatusConflict
 	case errors.Is(err, agentapp.ErrApprovalNotApproved),
 		errors.Is(err, agentdomain.ErrApprovalAlreadyDecided),
@@ -124,7 +129,9 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, iamapp.ErrForbiddenSelfModify),
 		errors.Is(err, iamapp.ErrForbiddenOwnerRole),
 		errors.Is(err, iamapp.ErrForbiddenRemoveOwner),
-		errors.Is(err, iamapp.ErrForbiddenAdminRemove):
+		errors.Is(err, iamapp.ErrForbiddenAdminRemove),
+		errors.Is(err, memorydomain.ErrAgentMemoryDisabled),
+		errors.Is(err, memorydomain.ErrScopeMismatch):
 		return http.StatusForbidden
 
 	// 400 — Validation / Bad Request
@@ -144,6 +151,10 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, skilldomain.ErrSkillNotPublishable),
 		errors.Is(err, evalapp.ErrSuiteNameRequired),
 		errors.Is(err, evalapp.ErrSuiteCasesRequired):
+		return http.StatusBadRequest
+	case errors.Is(err, memorydomain.ErrInvalidStatus),
+		errors.Is(err, memorydomain.ErrUserIDMismatch),
+		errors.Is(err, memorydomain.ErrEmptyContent):
 		return http.StatusBadRequest
 	}
 
