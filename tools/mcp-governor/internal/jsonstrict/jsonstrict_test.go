@@ -16,6 +16,7 @@ func TestValidateNoDuplicateKeys(t *testing.T) {
 		{"case-aliased root key", `{"items":[],"Items":[]}`, `duplicate key "Items" at $`},
 		{"duplicate nested key in array", `{"items":[{"id":1,"id":2}]}`, `duplicate key "id" at $.items[0]`},
 		{"case-aliased nested key", `{"items":[{"start_ticks":1,"START_TICKS":2}]}`, `duplicate key "START_TICKS" at $.items[0]`},
+		{"Unicode case-folded nested key", `{"items":[{"start_ticks":1,"ſtart_ticks":2}]}`, `duplicate key "ſtart_ticks" at $.items[0]`},
 		{"malformed JSON", `{"items":`, "EOF"},
 	}
 	for _, tt := range tests {

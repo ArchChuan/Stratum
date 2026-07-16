@@ -23,7 +23,7 @@ func validateValue(decoder *json.Decoder, path string) error {
 
 	switch delim {
 	case '{':
-		keys := make(map[string]struct{})
+		var keys []string
 		for decoder.More() {
 			keyToken, err := decoder.Token()
 			if err != nil {
@@ -33,11 +33,12 @@ func validateValue(decoder *json.Decoder, path string) error {
 			if !ok {
 				return fmt.Errorf("object key at %s is not a string", path)
 			}
-			canonicalKey := strings.ToLower(key)
-			if _, exists := keys[canonicalKey]; exists {
-				return fmt.Errorf("duplicate key %q at %s", key, path)
+			for _, seen := range keys {
+				if strings.EqualFold(seen, key) {
+					return fmt.Errorf("duplicate key %q at %s", key, path)
+				}
 			}
-			keys[canonicalKey] = struct{}{}
+			keys = append(keys, key)
 			if err := validateValue(decoder, path+"."+key); err != nil {
 				return err
 			}
