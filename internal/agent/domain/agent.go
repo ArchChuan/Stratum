@@ -45,7 +45,7 @@ type AgentConfig struct {
 	EmbedModel                     string
 	MaxIterations                  int
 	AllowedSkills                  []string
-	MCPServerIDs                   []string
+	MCPToolIDs                     []string
 	Capabilities                   []AgentCapability
 	KnowledgeWorkspaceIDs          []string
 	KnowledgeWorkspaceNames        []string
@@ -115,8 +115,9 @@ type ChatMessage struct {
 }
 
 const (
-	ExecStatusSuccess = "success"
-	ExecStatusError   = "error"
+	ExecStatusSuccess         = "success"
+	ExecStatusError           = "error"
+	ExecStatusWaitingApproval = "waiting_approval"
 )
 
 // ExecutionRecord is an agent execution history entry.

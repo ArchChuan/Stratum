@@ -8,3 +8,7 @@ import "context"
 type MCPToolProvider interface {
 	ToolsForServer(ctx context.Context, serverID string) []ToolDefinition
 }
+
+type MCPToolExecutor interface {
+	ExecuteMCPTool(ctx context.Context, serverID, toolName string, input map[string]any) (any, error)
+}

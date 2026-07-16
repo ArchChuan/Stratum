@@ -7,38 +7,21 @@ import (
 	mcpport "github.com/byteBuilderX/stratum/internal/mcp/domain/port"
 )
 
-// SkillRegistryAsPort wraps MCPSkillRegistry to satisfy port.SkillRegistry.
-func SkillRegistryAsPort(r *MCPSkillRegistry) mcpport.SkillRegistry {
-	return &skillRegistryPortAdapter{r: r}
+// ToolRegistryAsPort wraps MCPToolRegistry to satisfy port.ToolRegistry.
+func ToolRegistryAsPort(r *MCPToolRegistry) mcpport.ToolRegistry {
+	return &toolRegistryPortAdapter{r: r}
 }
 
-type skillRegistryPortAdapter struct {
-	r *MCPSkillRegistry
+type toolRegistryPortAdapter struct {
+	r *MCPToolRegistry
 }
 
-func (a *skillRegistryPortAdapter) RegisterServer(ctx context.Context, serverID string) error {
+func (a *toolRegistryPortAdapter) RegisterServer(ctx context.Context, serverID string) error {
 	return a.r.RegisterServer(ctx, serverID)
 }
-func (a *skillRegistryPortAdapter) ExecuteSkill(skillID string, input any) (any, error) {
-	return a.r.ExecuteSkill(skillID, input)
-}
-func (a *skillRegistryPortAdapter) GetSkill(id string) mcpport.SkillAccessor {
-	w := a.r.GetSkill(id)
-	if w == nil {
-		return nil
-	}
-	return w
-}
-func (a *skillRegistryPortAdapter) GetAllSkills() []mcpport.SkillAccessor {
-	raw := a.r.GetAllSkills()
-	out := make([]mcpport.SkillAccessor, len(raw))
-	for i, w := range raw {
-		out[i] = w
-	}
-	return out
-}
-func (a *skillRegistryPortAdapter) RefreshSkills(ctx context.Context) error {
-	return a.r.RefreshSkills(ctx)
+
+func (a *toolRegistryPortAdapter) UnregisterServer(serverID string) error {
+	return a.r.UnregisterServer(serverID)
 }
 
 // ServerManagerAsPort wraps ClientManager to satisfy port.ServerManager.
@@ -46,23 +29,23 @@ func ServerManagerAsPort(m *ClientManager) mcpport.ServerManager {
 	return m
 }
 
-// RegistryAsAgentToolProvider wraps MCPSkillRegistry to satisfy agentport.MCPToolProvider.
-func RegistryAsAgentToolProvider(r *MCPSkillRegistry) agentport.MCPToolProvider {
+// RegistryAsAgentToolProvider wraps MCPToolRegistry to satisfy agentport.MCPToolProvider.
+func RegistryAsAgentToolProvider(r *MCPToolRegistry) agentport.MCPToolProvider {
 	return &mcpAgentToolAdapter{r: r}
 }
 
 type mcpAgentToolAdapter struct {
-	r *MCPSkillRegistry
+	r *MCPToolRegistry
 }
 
 func (a *mcpAgentToolAdapter) ToolsForServer(ctx context.Context, serverID string) []agentport.ToolDefinition {
-	adapter := a.r.GetAdapterForServer(serverID)
+	adapter := a.r.GetCatalogForServer(serverID)
 	if adapter == nil {
 		return nil
 	}
-	skills := adapter.GetAllSkills()
-	tools := make([]agentport.ToolDefinition, 0, len(skills))
-	for _, w := range skills {
+	handles := adapter.GetAllTools()
+	tools := make([]agentport.ToolDefinition, 0, len(handles))
+	for _, w := range handles {
 		tools = append(tools, agentport.ToolDefinition{
 			Name:         w.GetID(),
 			Description:  w.Tool.Description,
@@ -70,7 +53,7 @@ func (a *mcpAgentToolAdapter) ToolsForServer(ctx context.Context, serverID strin
 			ProviderType: "mcp",
 			ProviderID:   serverID,
 			ServerID:     serverID,
-			CapabilityID: w.GetID(),
+			CapabilityID: w.Tool.Name,
 			NodeType:     "mcp",
 		})
 	}

@@ -5,7 +5,7 @@ import { AgentMemoryConfig } from './AgentMemoryConfig';
 
 import { CHAT_MODEL_OPTIONS } from '@/constants';
 import type { Workspace } from '@/modules/knowledge';
-import type { MCPServer } from '@/modules/mcp';
+import type { MCPToolOption } from '@/modules/mcp';
 import type { Skill } from '@/modules/skill';
 import { SectionHeader } from '@/shared/ui';
 
@@ -15,13 +15,13 @@ const { Option } = Select;
 
 interface AgentFormSectionsProps {
   skills: Skill[];
-  mcpServers: MCPServer[];
+  mcpTools: MCPToolOption[];
   workspaces: Workspace[];
 }
 
 export const AgentFormSections = ({
   skills,
-  mcpServers,
+  mcpTools,
   workspaces,
 }: AgentFormSectionsProps) => (
   <>
@@ -104,16 +104,13 @@ export const AgentFormSections = ({
         label="技能"
         name="allowedSkills"
         style={{ marginBottom: 16 }}
-        extra="代码执行、API 调用等工具型技能"
+        extra="激活后向 Agent 注入版本化指令，并按要求收窄 MCP、知识和记忆权限"
       >
         <Select mode="multiple" placeholder="选择 Agent 可调用的技能">
           {skills.map((s) => (
             <Option key={s.id} value={s.id}>
-              <Tag
-                style={{ margin: '0 6px 0 0', border: 'none', fontSize: 11 }}
-                color={s.type === 'code' ? 'green' : s.type === 'llm' ? 'orange' : 'default'}
-              >
-                {s.type}
+              <Tag style={{ margin: '0 6px 0 0', border: 'none', fontSize: 11 }} color={s.status === 'published' ? 'green' : 'default'}>
+                {s.status}
               </Tag>
               {s.name}
             </Option>
@@ -121,15 +118,15 @@ export const AgentFormSections = ({
         </Select>
       </Form.Item>
       <Form.Item
-        label="MCP 服务"
-        name="mcpServerIds"
+        label="MCP 工具"
+        name="mcpToolIds"
         style={{ marginBottom: 16 }}
         extra="符合 Model Context Protocol 协议的结构化工具"
       >
-        <Select mode="multiple" placeholder="选择 MCP 服务器">
-          {mcpServers.map((s) => (
-            <Option key={s.id} value={s.id}>
-              {s.name || s.id}
+        <Select mode="multiple" placeholder="选择允许调用的 MCP 工具">
+          {mcpTools.map((tool) => (
+            <Option key={tool.id} value={tool.id}>
+              {tool.label}
             </Option>
           ))}
         </Select>

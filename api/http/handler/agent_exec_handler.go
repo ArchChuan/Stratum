@@ -15,6 +15,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -47,6 +48,11 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 	})
 
 	if err != nil {
+		var approvalErr *agentport.ToolApprovalRequiredError
+		if errors.As(err, &approvalErr) {
+			c.JSON(http.StatusAccepted, gin.H{"status": "waiting_approval", "approvalId": approvalErr.ApprovalID, "toolCallId": approvalErr.ToolCallID, "serverId": approvalErr.ServerID, "toolName": approvalErr.ToolName, "riskLevel": approvalErr.RiskLevel})
+			return
+		}
 		if errors.Is(err, agent.ErrNotFound) {
 			_ = c.Error(err)
 			return
@@ -142,6 +148,12 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		result, _, runErr := run()
 		if runErr != nil {
 			if errors.Is(runErr, context.Canceled) && clientCtx.Err() != nil {
+				return
+			}
+			var approvalErr *agentport.ToolApprovalRequiredError
+			if errors.As(runErr, &approvalErr) {
+				payload, _ := json.Marshal(map[string]any{"status": "waiting_approval", "approvalId": approvalErr.ApprovalID, "toolCallId": approvalErr.ToolCallID, "serverId": approvalErr.ServerID, "toolName": approvalErr.ToolName, "riskLevel": approvalErr.RiskLevel})
+				writer.EnqueueEvent("approval_required", string(payload))
 				return
 			}
 			h.logger.Error("agent stream execution failed", zap.String("agentId", id), zap.Error(runErr))

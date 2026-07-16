@@ -522,17 +522,24 @@ func buildStepState(parent ReActState, step domain.PlanStep, stepIdx int, result
 	msgs = append(msgs, port.LLMMessage{Role: "user", Content: userContent})
 
 	return ReActState{
-		TenantID:       parent.TenantID,
-		TraceID:        parent.TraceID,
-		ConversationID: parent.ConversationID,
-		LLMAPIKeys:     parent.LLMAPIKeys,
-		Model:          parent.Model,
-		AvailableTools: parent.AvailableTools,
-		SkillToolIndex: parent.SkillToolIndex,
-		Messages:       msgs,
-		MaxLLMSteps:    constants.DefaultStepMaxLLMSteps,
-		RAGSearchFn:    parent.RAGSearchFn,
-		RecallMemoryFn: parent.RecallMemoryFn,
+		TenantID:                   parent.TenantID,
+		TraceID:                    parent.TraceID,
+		ConversationID:             parent.ConversationID,
+		LLMAPIKeys:                 parent.LLMAPIKeys,
+		Model:                      parent.Model,
+		AvailableTools:             parent.AvailableTools,
+		SkillCatalog:               parent.SkillCatalog,
+		ActiveSkill:                parent.ActiveSkill,
+		ToolCallFn:                 parent.ToolCallFn,
+		ApprovalRequestFn:          parent.ApprovalRequestFn,
+		ApprovedToolCallFn:         parent.ApprovedToolCallFn,
+		ExecutionID:                parent.ExecutionID,
+		AgentKnowledgeWorkspaceIDs: parent.AgentKnowledgeWorkspaceIDs,
+		AgentMemoryScope:           parent.AgentMemoryScope,
+		Messages:                   msgs,
+		MaxLLMSteps:                constants.DefaultStepMaxLLMSteps,
+		RAGSearchFn:                parent.RAGSearchFn,
+		RecallMemoryFn:             parent.RecallMemoryFn,
 		// No StuckThreshold — sub-steps use pure ReAct, no nested planning.
 	}
 }

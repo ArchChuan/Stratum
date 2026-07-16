@@ -14,12 +14,9 @@ import (
 
 	"github.com/byteBuilderX/stratum/config"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	llmapp "github.com/byteBuilderX/stratum/internal/llmgateway/application"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
-	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/executors/code"
-	"github.com/byteBuilderX/stratum/internal/skill/infrastructure/gateway/providers"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/storage/milvus"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -129,7 +126,7 @@ func NewFromExisting(
 	gateway *llmgateway.Gateway,
 	db *pgxpool.Pool,
 	rdb *goredis.Client,
-	skillAdapter port.Adapter,
+	_ port.Adapter,
 	memPipeline *mempipeline.Pipeline,
 ) (*Container, error) {
 	c := &Container{Config: cfg, Logger: logger}
@@ -173,21 +170,9 @@ func NewFromExisting(
 		}
 	}
 
-	// Skill: prefer caller-provided capGW/skillAdapter so wiring stays
-	// compatible with main.go's existing wiring path. The CodeExecutor
-	// is constructed locally to mirror buildSkill — handlers depend on
-	// it via Skill.CodeExecutor. The interface-typed skillAdapter is
-	// asserted to the concrete *capgateway.SkillAdapter that main.go is
-	// known to pass; assertion failure leaves the field nil (handlers
-	// that depend on it must nil-check, matching main.go's behavior).
-	c.Skill = &Skill{
-		CodeExecutor: code.NewCodeExecutor(code.DefaultCodeExecutorConfig()),
-	}
-	if db != nil {
-		c.Skill.VersionExecutor = providers.NewDBSkillAdapter(db, logger, c.Skill.CodeExecutor)
-	}
-	if sa, ok := skillAdapter.(*capgateway.SkillAdapter); ok {
-		c.Skill.SkillAdapter = sa
+	if err := c.buildSkill(ctx); err != nil {
+		_ = c.Shutdown(ctx)
+		return nil, fmt.Errorf("wiring.skill: %w", err)
 	}
 
 	// Memory: build injector + reuse caller's pipeline.

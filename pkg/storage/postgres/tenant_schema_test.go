@@ -6,7 +6,35 @@ import (
 	"testing"
 )
 
-func TestTenantSchemaContainsVersionedSkillTables(t *testing.T) {
+func TestTenantSchemaResetsLegacyExecutableSkillsBeforeCreatingInstructionSkills(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+
+	legacyReset := []string{
+		"column_name = 'implementation'",
+		"DROP TABLE IF EXISTS agent_skill_links",
+		"DROP TABLE IF EXISTS skill_eval_runs",
+		"DROP TABLE IF EXISTS skill_test_cases",
+		"DROP TABLE IF EXISTS skill_versions",
+		"DROP TABLE IF EXISTS skills",
+	}
+	for _, want := range legacyReset {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("tenant_schema.sql missing legacy Skill reset %q", want)
+		}
+	}
+
+	resetAt := strings.Index(sql, "column_name = 'implementation'")
+	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS skills")
+	if resetAt == -1 || createAt == -1 || resetAt > createAt {
+		t.Fatalf("legacy Skill reset must precede new Skill schema: reset=%d create=%d", resetAt, createAt)
+	}
+}
+
+func TestTenantSchemaContainsInstructionSkillTables(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -14,19 +42,85 @@ func TestTenantSchemaContainsVersionedSkillTables(t *testing.T) {
 	sql := string(data)
 
 	required := []string{
-		"ALTER TABLE skills ADD COLUMN IF NOT EXISTS active_version_id TEXT",
-		"ALTER TABLE skills ADD COLUMN IF NOT EXISTS draft_version_id TEXT",
-		"CREATE TABLE IF NOT EXISTS skill_versions",
-		"CREATE TABLE IF NOT EXISTS skill_test_cases",
-		"CREATE TABLE IF NOT EXISTS skill_eval_runs",
-		"skill_id        TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE",
-		"tool_contract   JSONB NOT NULL DEFAULT '{}'",
-		"implementation  JSONB NOT NULL DEFAULT '{}'",
+		"CREATE TABLE IF NOT EXISTS skills",
+		"active_revision_id TEXT",
+		"draft_revision_id  TEXT",
+		"CREATE TABLE IF NOT EXISTS skill_revisions",
+		"activation_contract JSONB NOT NULL DEFAULT '{}'",
+		"instructions        TEXT NOT NULL DEFAULT ''",
+		"requirements        JSONB NOT NULL DEFAULT '{}'",
+		"CREATE TABLE IF NOT EXISTS agent_skill_links",
+		"revision_id TEXT REFERENCES skill_revisions(id) ON DELETE SET NULL",
 	}
 	for _, want := range required {
 		if !strings.Contains(sql, want) {
-			t.Fatalf("tenant_schema.sql missing %q", want)
+			t.Fatalf("tenant_schema.sql missing instruction Skill DDL %q", want)
 		}
+	}
+
+	for _, forbidden := range []string{
+		"CREATE TABLE IF NOT EXISTS skill_versions",
+		"CREATE TABLE IF NOT EXISTS skill_test_cases",
+		"CREATE TABLE IF NOT EXISTS skill_eval_runs",
+		"tool_contract   JSONB",
+		"implementation  JSONB",
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("tenant_schema.sql still creates legacy executable Skill storage %q", forbidden)
+		}
+	}
+}
+
+func TestTenantSchemaPurgesSkillEvaluationDataButKeepsHistoricalAgentTraces(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+
+	for _, want := range []string{
+		"DELETE FROM evaluation_deployments WHERE resource_kind = 'skill'",
+		"DELETE FROM evaluation_experiments WHERE resource_kind = 'skill'",
+		"DELETE FROM optimization_jobs WHERE resource_kind = 'skill'",
+		"DELETE FROM eval_runs WHERE resource_kind = 'skill'",
+		"DELETE FROM evaluation_feedback WHERE resource_kind = 'skill'",
+		"DELETE FROM evaluation_jobs WHERE payload->>'resource_kind' = 'skill'",
+		"DELETE FROM eval_suite_revisions WHERE resource_kind = 'skill'",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("tenant_schema.sql missing Skill evaluation purge %q", want)
+		}
+	}
+
+	if strings.Contains(sql, "DELETE FROM agent_tool_traces WHERE provider_type = 'skill'") ||
+		strings.Contains(sql, "DELETE FROM agent_trace_events WHERE provider_type = 'skill'") {
+		t.Fatal("historical Agent Skill traces must be retained as immutable audit records")
+	}
+}
+
+func TestTenantSchemaContainsMCPToolPolicyAndEncryptedApprovals(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	for _, want := range []string{
+		"CREATE TABLE IF NOT EXISTS mcp_tool_policies",
+		"risk_level TEXT NOT NULL DEFAULT 'unclassified'",
+		"CHECK (risk_level IN ('read', 'write_reversible', 'destructive', 'unclassified'))",
+		"CREATE TABLE IF NOT EXISTS agent_tool_approvals",
+		"encrypted_payload TEXT NOT NULL",
+		"status TEXT NOT NULL DEFAULT 'pending'",
+		"'waiting_approval'",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("tenant schema missing %q", want)
+		}
+	}
+	approvalAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS agent_tool_approvals")
+	approvalEnd := strings.Index(sql[approvalAt:], ");")
+	if approvalAt >= 0 && approvalEnd >= 0 && strings.Contains(sql[approvalAt:approvalAt+approvalEnd], "arguments_json") {
+		t.Fatal("approval payload must not be stored as plaintext JSONB")
 	}
 }
 
@@ -38,10 +132,7 @@ func TestTenantSchemaContainsEvaluationControlPlane(t *testing.T) {
 	sql := string(data)
 
 	required := []string{
-		"ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS parent_version_id TEXT",
-		"ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'",
-		"ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS content_hash TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS generation_metadata JSONB NOT NULL DEFAULT '{}'",
+		"CREATE TABLE IF NOT EXISTS skill_revisions",
 		"CREATE TABLE IF NOT EXISTS eval_suites",
 		"CREATE TABLE IF NOT EXISTS eval_suite_revisions",
 		"CREATE TABLE IF NOT EXISTS eval_cases",

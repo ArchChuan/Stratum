@@ -18,6 +18,7 @@ DROP TABLE IF EXISTS memory_token_budgets;
 DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS entities;
 DROP TABLE IF EXISTS llm_api_keys;
+DROP TABLE IF EXISTS agent_mcp_links;
 
 CREATE TABLE IF NOT EXISTS agents (
     id             TEXT PRIMARY KEY,
@@ -38,78 +39,88 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL 
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS embed_model TEXT NOT NULL DEFAULT '';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'agent';
 
+-- Executable Skills were replaced by versioned instruction bundles. Detect
+-- the legacy shape instead of using a permanent DROP so repeated tenant
+-- provisioning never deletes data written to the new tables.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'skill_versions'
+          AND column_name = 'implementation'
+    ) THEN
+        IF to_regclass('evaluation_deployments') IS NOT NULL THEN
+            DELETE FROM evaluation_deployments WHERE resource_kind = 'skill';
+        END IF;
+        IF to_regclass('evaluation_experiments') IS NOT NULL THEN
+            DELETE FROM evaluation_experiments WHERE resource_kind = 'skill';
+        END IF;
+        IF to_regclass('optimization_jobs') IS NOT NULL THEN
+            DELETE FROM optimization_jobs WHERE resource_kind = 'skill';
+        END IF;
+        IF to_regclass('eval_runs') IS NOT NULL THEN
+            DELETE FROM eval_runs WHERE resource_kind = 'skill';
+        END IF;
+        IF to_regclass('evaluation_feedback') IS NOT NULL THEN
+            DELETE FROM evaluation_feedback WHERE resource_kind = 'skill';
+        END IF;
+        IF to_regclass('evaluation_jobs') IS NOT NULL THEN
+            DELETE FROM evaluation_jobs WHERE payload->>'resource_kind' = 'skill';
+        END IF;
+        IF to_regclass('eval_suite_revisions') IS NOT NULL THEN
+            DELETE FROM eval_suite_revisions WHERE resource_kind = 'skill';
+            DELETE FROM eval_suites s
+            WHERE NOT EXISTS (SELECT 1 FROM eval_suite_revisions r WHERE r.suite_id = s.id);
+        END IF;
+
+        DROP TABLE IF EXISTS agent_skill_links;
+        DROP TABLE IF EXISTS skill_eval_runs;
+        DROP TABLE IF EXISTS skill_test_cases;
+        DROP TABLE IF EXISTS skill_versions;
+        DROP TABLE IF EXISTS skills;
+    END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS skills (
-    id           TEXT PRIMARY KEY,
-    name         TEXT NOT NULL UNIQUE,
-    description  TEXT NOT NULL DEFAULT '',
-    type         TEXT NOT NULL,
-    config       JSONB NOT NULL DEFAULT '{}',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id                 TEXT PRIMARY KEY,
+    name               TEXT NOT NULL UNIQUE,
+    description        TEXT NOT NULL DEFAULT '',
+    status             TEXT NOT NULL DEFAULT 'draft',
+    active_revision_id TEXT,
+    draft_revision_id  TEXT,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-ALTER TABLE skills ADD COLUMN IF NOT EXISTS active_version_id TEXT;
-ALTER TABLE skills ADD COLUMN IF NOT EXISTS draft_version_id TEXT;
-
-CREATE TABLE IF NOT EXISTS skill_versions (
-    id              TEXT PRIMARY KEY,
-    skill_id        TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
-    parent_version_id TEXT REFERENCES skill_versions(id) ON DELETE SET NULL,
-    version_no      INT,
-    status          TEXT NOT NULL DEFAULT 'draft',
-    source          TEXT NOT NULL DEFAULT 'manual',
-    content_hash    TEXT NOT NULL DEFAULT '',
+CREATE TABLE IF NOT EXISTS skill_revisions (
+    id                  TEXT PRIMARY KEY,
+    skill_id            TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    parent_revision_id  TEXT REFERENCES skill_revisions(id) ON DELETE SET NULL,
+    revision_no         INT,
+    status              TEXT NOT NULL DEFAULT 'draft',
+    source              TEXT NOT NULL DEFAULT 'manual',
+    content_hash        TEXT NOT NULL DEFAULT '',
     generation_metadata JSONB NOT NULL DEFAULT '{}',
-    capability      JSONB NOT NULL DEFAULT '{}',
-    tool_contract   JSONB NOT NULL DEFAULT '{}',
-    implementation  JSONB NOT NULL DEFAULT '{}',
-    test_baseline   JSONB NOT NULL DEFAULT '{}',
-    publish_checks  JSONB NOT NULL DEFAULT '{}',
-    created_by      TEXT NOT NULL DEFAULT '',
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    published_at    TIMESTAMPTZ
+    capability          JSONB NOT NULL DEFAULT '{}',
+    activation_contract JSONB NOT NULL DEFAULT '{}',
+    instructions        TEXT NOT NULL DEFAULT '',
+    requirements        JSONB NOT NULL DEFAULT '{}',
+    publish_checks      JSONB NOT NULL DEFAULT '{}',
+    created_by          TEXT NOT NULL DEFAULT '',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at        TIMESTAMPTZ
 );
 
-ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS parent_version_id TEXT;
-ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
-ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS content_hash TEXT NOT NULL DEFAULT '';
-ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS generation_metadata JSONB NOT NULL DEFAULT '{}';
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_versions_one_draft
-    ON skill_versions(skill_id)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_revisions_one_draft
+    ON skill_revisions(skill_id)
     WHERE status = 'draft';
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_versions_published_version
-    ON skill_versions(skill_id, version_no)
-    WHERE version_no IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS skill_test_cases (
-    id              TEXT PRIMARY KEY,
-    skill_id        TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
-    name            TEXT NOT NULL DEFAULT '',
-    input           JSONB NOT NULL DEFAULT '{}',
-    expected_output JSONB NOT NULL DEFAULT '{}',
-    assertion_mode  TEXT NOT NULL DEFAULT 'contains',
-    enabled         BOOL NOT NULL DEFAULT true,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS skill_eval_runs (
-    id              TEXT PRIMARY KEY,
-    skill_id        TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
-    version_id      TEXT REFERENCES skill_versions(id) ON DELETE SET NULL,
-    test_case_id    TEXT REFERENCES skill_test_cases(id) ON DELETE SET NULL,
-    mode            TEXT NOT NULL,
-    input           JSONB NOT NULL DEFAULT '{}',
-    actual_output   JSONB NOT NULL DEFAULT '{}',
-    expected_output JSONB NOT NULL DEFAULT '{}',
-    passed          BOOL NOT NULL DEFAULT false,
-    trace           JSONB NOT NULL DEFAULT '{}',
-    duration_ms     INT NOT NULL DEFAULT 0,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_revisions_published_no
+    ON skill_revisions(skill_id, revision_no)
+    WHERE revision_no IS NOT NULL;
 
 -- Generic evaluation and optimization control plane. Resource payloads remain
 -- owned by their bounded context; these tables store immutable references and evidence.
@@ -301,10 +312,24 @@ CREATE TABLE IF NOT EXISTS mcp_configs (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS agent_mcp_links (
-    agent_id   TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    server_id  TEXT NOT NULL REFERENCES mcp_configs(id) ON DELETE CASCADE,
-    PRIMARY KEY (agent_id, server_id)
+CREATE TABLE IF NOT EXISTS agent_mcp_tool_links (
+    agent_id  TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    server_id TEXT NOT NULL REFERENCES mcp_configs(id) ON DELETE CASCADE,
+    tool_name TEXT NOT NULL,
+    PRIMARY KEY (agent_id, server_id, tool_name)
+);
+
+-- Tool risk is tenant-owned policy. MCP servers may describe tools but cannot
+-- assign themselves a trusted risk level.
+CREATE TABLE IF NOT EXISTS mcp_tool_policies (
+    server_id   TEXT NOT NULL REFERENCES mcp_configs(id) ON DELETE CASCADE,
+    tool_name   TEXT NOT NULL,
+    risk_level TEXT NOT NULL DEFAULT 'unclassified'
+        CHECK (risk_level IN ('read', 'write_reversible', 'destructive', 'unclassified')),
+    updated_by  TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (server_id, tool_name)
 );
 
 CREATE TABLE IF NOT EXISTS memory_entries (
@@ -374,8 +399,9 @@ CREATE TABLE IF NOT EXISTS agent_workspaces (
 );
 
 CREATE TABLE IF NOT EXISTS agent_skill_links (
-    agent_id  TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    skill_id  TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    agent_id   TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    skill_id   TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    revision_id TEXT REFERENCES skill_revisions(id) ON DELETE SET NULL,
     PRIMARY KEY (agent_id, skill_id)
 );
 
@@ -385,7 +411,7 @@ CREATE TABLE IF NOT EXISTS agent_executions (
     agent_id       TEXT        NOT NULL,
     agent_name     TEXT        NOT NULL DEFAULT '',
     user_id        TEXT        NOT NULL,
-    status         TEXT        NOT NULL CHECK (status IN ('success', 'error')),
+    status         TEXT        NOT NULL CHECK (status IN ('success', 'error', 'waiting_approval')),
     input_preview  TEXT        NOT NULL DEFAULT '',
     output_preview TEXT        NOT NULL DEFAULT '',
     error_message  TEXT        NOT NULL DEFAULT '',
@@ -394,6 +420,9 @@ CREATE TABLE IF NOT EXISTS agent_executions (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE agent_executions ADD COLUMN IF NOT EXISTS trace_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_executions DROP CONSTRAINT IF EXISTS agent_executions_status_check;
+ALTER TABLE agent_executions ADD CONSTRAINT agent_executions_status_check
+    CHECK (status IN ('success', 'error', 'waiting_approval'));
 CREATE INDEX IF NOT EXISTS idx_agent_exec_created
     ON agent_executions (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_exec_trace
@@ -489,7 +518,7 @@ CREATE TABLE IF NOT EXISTS agent_execution_checkpoints (
     pending_tool_calls_json   JSONB       NOT NULL DEFAULT '[]',
     completed_tool_calls_json JSONB       NOT NULL DEFAULT '[]',
     runtime_state_json        JSONB       NOT NULL DEFAULT '{}',
-    status                    TEXT        NOT NULL CHECK (status IN ('running', 'paused', 'completed', 'failed', 'expired')),
+    status                    TEXT        NOT NULL CHECK (status IN ('running', 'paused', 'waiting_approval', 'completed', 'failed', 'expired')),
     resume_reason             TEXT        NOT NULL DEFAULT '',
     created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -498,7 +527,36 @@ CREATE TABLE IF NOT EXISTS agent_execution_checkpoints (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_execution_checkpoints_execution
     ON agent_execution_checkpoints (execution_id);
 CREATE INDEX IF NOT EXISTS idx_agent_execution_checkpoints_status
-    ON agent_execution_checkpoints (status, expires_at);
+ON agent_execution_checkpoints (status, expires_at);
+
+ALTER TABLE agent_execution_checkpoints DROP CONSTRAINT IF EXISTS agent_execution_checkpoints_status_check;
+ALTER TABLE agent_execution_checkpoints ADD CONSTRAINT agent_execution_checkpoints_status_check
+    CHECK (status IN ('running', 'paused', 'waiting_approval', 'completed', 'failed', 'expired'));
+
+CREATE TABLE IF NOT EXISTS agent_tool_approvals (
+    id                UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    execution_id      TEXT        NOT NULL,
+    trace_id          TEXT        NOT NULL DEFAULT '',
+    agent_id          TEXT        NOT NULL DEFAULT '',
+    user_id           TEXT        NOT NULL DEFAULT '',
+    tool_call_id      TEXT        NOT NULL,
+    server_id         TEXT        NOT NULL,
+    tool_name         TEXT        NOT NULL,
+    risk_level        TEXT        NOT NULL
+        CHECK (risk_level IN ('destructive', 'unclassified')),
+    encrypted_payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed')),
+    decided_by        TEXT        NOT NULL DEFAULT '',
+    decision_reason   TEXT        NOT NULL DEFAULT '',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    decided_at        TIMESTAMPTZ,
+    executed_at       TIMESTAMPTZ,
+    expires_at        TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '30 minutes',
+    UNIQUE (execution_id, tool_call_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_tool_approvals_pending
+ON agent_tool_approvals (status, expires_at, created_at);
 
 -- =============================================================================
 -- Memory Pipeline tables (async outbox → embedder → enricher)
@@ -553,8 +611,8 @@ CREATE INDEX IF NOT EXISTS idx_memory_entries_content_trgm ON memory_entries USI
 
 -- cascade delete backfill: fix RESTRICT → CASCADE on relationship tables
 -- idempotent: DROP IF EXISTS then re-add with CASCADE
-ALTER TABLE agent_mcp_links DROP CONSTRAINT IF EXISTS agent_mcp_links_server_id_fkey;
-ALTER TABLE agent_mcp_links ADD CONSTRAINT agent_mcp_links_server_id_fkey
+ALTER TABLE agent_mcp_tool_links DROP CONSTRAINT IF EXISTS agent_mcp_tool_links_server_id_fkey;
+ALTER TABLE agent_mcp_tool_links ADD CONSTRAINT agent_mcp_tool_links_server_id_fkey
     FOREIGN KEY (server_id) REFERENCES mcp_configs(id) ON DELETE CASCADE;
 
 ALTER TABLE agent_skill_links DROP CONSTRAINT IF EXISTS agent_skill_links_skill_id_fkey;

@@ -60,10 +60,13 @@ func (m *mockMCPTools) ToolsForServer(ctx context.Context, serverID string) []po
 	return out
 }
 
-type fakeSkillToolResolver struct {
-	tools []port.ToolDefinition
-	index map[string]port.SkillToolRef
+type fakeMCPToolPolicyResolver struct{ levels map[string]port.ToolRiskLevel }
+
+func (f fakeMCPToolPolicyResolver) ResolveMCPToolRisk(_ context.Context, _, serverID, toolName string) (port.ToolRiskLevel, error) {
+	return f.levels[serverID+":"+toolName], nil
 }
+
+type fakeSkillActivationResolver struct{}
 
 type fakeSkillRevisionResolver struct{}
 
@@ -76,8 +79,12 @@ func (fakeSkillRevisionResolver) ResolveSkillRevision(
 	return "candidate-1", true, nil
 }
 
-func (f *fakeSkillToolResolver) ResolveTools(_ context.Context, _ string, _ []string) ([]port.ToolDefinition, map[string]port.SkillToolRef, error) {
-	return f.tools, f.index, nil
+func (fakeSkillActivationResolver) ResolveSkills(_ context.Context, _ string, refs []port.SkillRevisionRef) (map[string]port.SkillActivation, error) {
+	out := make(map[string]port.SkillActivation, len(refs))
+	for _, ref := range refs {
+		out[ref.SkillID] = port.SkillActivation{SkillID: ref.SkillID, RevisionID: ref.RevisionID, Instructions: "follow instructions"}
+	}
+	return out, nil
 }
 
 type mockExecStore struct{ mock.Mock }
@@ -142,58 +149,26 @@ func TestAgentService_Create_InheritsEmbedModel(t *testing.T) {
 	ts.AssertExpectations(t)
 }
 
-func TestBuildExtraToolsUsesSkillToolResolverContracts(t *testing.T) {
-	resolver := &fakeSkillToolResolver{
-		tools: []port.ToolDefinition{{
-			Name:        "tenant_t1_classify_complaint",
-			Description: "判断客户投诉类型",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"complaintText": map[string]any{"type": "string"},
-				},
-				"required": []string{"complaintText"},
-			},
-		}},
-		index: map[string]port.SkillToolRef{
-			"tenant_t1_classify_complaint": {SkillID: "skill-1", VersionID: "version-1"},
-		},
-	}
+func TestBuildExtraToolsBuildsInstructionSkillCatalogWithoutExecutableTool(t *testing.T) {
 	svc := application.NewAgentService(application.AgentServiceDeps{
-		SkillToolResolver: resolver,
-		Logger:            zap.NewNop(),
+		SkillActivationResolver: fakeSkillActivationResolver{},
+		Logger:                  zap.NewNop(),
 	})
 
-	tools, index := svc.BuildExtraToolsForTest(context.Background(), "t1", nil, []string{"skill-1"})
-
-	if len(tools) != 1 {
-		t.Fatalf("expected one tool, got %d", len(tools))
-	}
-	props := tools[0].InputSchema["properties"].(map[string]any)
-	if _, ok := props["complaintText"]; !ok {
-		t.Fatalf("expected resolver schema, got %#v", tools[0].InputSchema)
-	}
-	if index["tenant_t1_classify_complaint"].VersionID != "version-1" {
-		t.Fatalf("expected version index, got %#v", index)
-	}
+	tools, catalog := svc.BuildExtraToolsForTest(context.Background(), "t1", nil, []string{"skill-1"})
+	assert.Empty(t, tools)
+	assert.Equal(t, "skill-1", catalog["skill-1"].SkillID)
 }
 
 func TestBuildExtraToolsUsesExperimentRevisionResolver(t *testing.T) {
 	svc := application.NewAgentService(application.AgentServiceDeps{
-		SkillToolResolver: &fakeSkillToolResolver{
-			tools: []port.ToolDefinition{{Name: "classify"}},
-			index: map[string]port.SkillToolRef{"classify": {SkillID: "skill-1", VersionID: "version-1"}},
-		},
-		SkillRevisionResolver: fakeSkillRevisionResolver{},
-		Logger:                zap.NewNop(),
+		SkillActivationResolver: fakeSkillActivationResolver{},
+		SkillRevisionResolver:   fakeSkillRevisionResolver{},
+		Logger:                  zap.NewNop(),
 	})
-	tools, index := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"skill-1"})
-	if index["classify"].VersionID != "candidate-1" {
-		t.Fatalf("expected canary candidate revision, got %#v", index["classify"])
-	}
-	if got := tools[0].Metadata["version_id"]; got != "candidate-1" {
-		t.Fatalf("expected tool trace metadata to use candidate revision, got %#v", got)
-	}
+	tools, catalog := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"skill-1"})
+	assert.Empty(t, tools)
+	assert.Equal(t, "candidate-1", catalog["skill-1"].RevisionID)
 }
 
 func TestAgentService_Create_KeepsExplicitEmbedModel(t *testing.T) {
@@ -315,53 +290,31 @@ func TestAgentService_BuildExtraTools_MCPDelegates(t *testing.T) {
 		MCPTools: mcpProv,
 		Logger:   zap.NewNop(),
 	})
-	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", []string{"srv1"}, nil)
+	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", []string{"mcp:srv1:search"}, nil)
 	assert.Len(t, tools, 1)
 	assert.Equal(t, "mcp:srv1:search", tools[0].Name)
 	mcpProv.AssertExpectations(t)
 }
 
-func TestAgentService_BuildExtraTools_SkillFallback_NoLookup(t *testing.T) {
+func TestAgentService_BuildExtraToolsAppliesTenantOwnedRiskPolicy(t *testing.T) {
+	mcpProv := new(mockMCPTools)
+	mcpProv.On("ToolsForServer", mock.Anything, "orders").Return([]port.ToolDefinition{{Name: "mcp:orders:get", CapabilityID: "get"}, {Name: "mcp:orders:delete", CapabilityID: "delete"}})
 	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry: application.NewRegistry(new(mockAgentRepo), zap.NewNop()),
-		Logger:   zap.NewNop(),
+		MCPTools:      mcpProv,
+		MCPToolPolicy: fakeMCPToolPolicyResolver{levels: map[string]port.ToolRiskLevel{"orders:get": port.ToolRiskRead, "orders:delete": port.ToolRiskDestructive}},
+		Logger:        zap.NewNop(),
 	})
-	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"my-skill"})
-	assert.Len(t, tools, 1)
-	assert.Equal(t, "tenant_tenant-1_my-skill", tools[0].Name)
-	assert.Equal(t, "my-skill: my-skill", tools[0].Description)
-	assert.NotNil(t, tools[0].InputSchema)
+	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", []string{"mcp:orders:get", "mcp:orders:delete"}, nil)
+	assert.Equal(t, "read", tools[0].Metadata["risk_level"])
+	assert.Equal(t, "destructive", tools[1].Metadata["risk_level"])
 }
 
-func TestAgentService_BuildExtraTools_SkillLookupOverridesDescription(t *testing.T) {
-	skillLookup := new(mockSkillLookup)
-	skillLookup.On("LookupSkill", mock.Anything, "tenant-1", "skill-id").
-		Return("PrettyName", "tool description", nil)
-
-	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry:    application.NewRegistry(new(mockAgentRepo), zap.NewNop()),
-		SkillLookup: skillLookup,
-		Logger:      zap.NewNop(),
-	})
-	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"skill-id"})
-	assert.Len(t, tools, 1)
-	assert.Equal(t, "tenant_tenant-1_PrettyName", tools[0].Name)
-	assert.Equal(t, "PrettyName: tool description", tools[0].Description)
-}
-
-func TestAgentService_BuildExtraTools_SkillLookupErrorFallsBack(t *testing.T) {
-	skillLookup := new(mockSkillLookup)
-	skillLookup.On("LookupSkill", mock.Anything, "tenant-1", "skill-id").
-		Return("", "", errors.New("db down"))
-
-	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry:    application.NewRegistry(new(mockAgentRepo), zap.NewNop()),
-		SkillLookup: skillLookup,
-		Logger:      zap.NewNop(),
-	})
-	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"skill-id"})
-	assert.Len(t, tools, 1)
-	assert.Equal(t, "skill-id: skill-id", tools[0].Description)
+func TestAgentService_BuildExtraToolsDefaultsMissingRiskToUnclassified(t *testing.T) {
+	mcpProv := new(mockMCPTools)
+	mcpProv.On("ToolsForServer", mock.Anything, "orders").Return([]port.ToolDefinition{{Name: "mcp:orders:mystery", CapabilityID: "mystery"}})
+	svc := application.NewAgentService(application.AgentServiceDeps{MCPTools: mcpProv, Logger: zap.NewNop()})
+	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", []string{"mcp:orders:mystery"}, nil)
+	assert.Equal(t, "unclassified", tools[0].Metadata["risk_level"])
 }
 
 func TestAgentService_RecordExecution_Success(t *testing.T) {

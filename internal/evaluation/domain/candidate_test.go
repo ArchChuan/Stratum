@@ -27,7 +27,7 @@ func TestGenerateParameterPatchesRejectsProtectedFields(t *testing.T) {
 }
 
 func TestValidatePromptPatchAllowsOnlyPromptContent(t *testing.T) {
-	if err := ValidatePromptPatch(map[string]any{"promptTemplate": "改写：{{.input}}"}); err != nil {
+	if err := ValidatePromptPatch(map[string]any{"instructions": "先分析输入，再按规则输出。"}); err != nil {
 		t.Fatalf("valid prompt patch rejected: %v", err)
 	}
 	if err := ValidatePromptPatch(map[string]any{"permissions": map[string]any{"network": true}}); err == nil {

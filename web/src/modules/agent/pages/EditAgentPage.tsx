@@ -7,7 +7,7 @@ import { useEditAgentPage } from '../hooks/useEditAgentPage';
 const { Title, Text } = Typography;
 
 export const EditAgentPage = () => {
-  const { form, loading, pageLoading, skills, mcpServers, workspaces, navigate, onFinish } =
+  const { form, loading, pageLoading, skills, mcpTools, workspaces, navigate, onFinish } =
     useEditAgentPage();
 
   if (pageLoading) {
@@ -66,7 +66,7 @@ export const EditAgentPage = () => {
           memoryScope: 'user',
         }}
       >
-        <AgentFormSections skills={skills} mcpServers={mcpServers} workspaces={workspaces} />
+        <AgentFormSections skills={skills} mcpTools={mcpTools} workspaces={workspaces} />
 
         <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <Button onClick={() => navigate('/agents')}>取消</Button>

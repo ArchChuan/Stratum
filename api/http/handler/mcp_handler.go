@@ -3,12 +3,12 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -55,6 +55,37 @@ func (h *MCPHandler) ListTools(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"tools": tools, "count": len(tools)})
 }
 
+func (h *MCPHandler) ListToolPolicies(c *gin.Context) {
+	policies, err := h.svc.ListToolPolicies(c.Request.Context())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"policies": policies})
+}
+
+func (h *MCPHandler) SetToolPolicy(c *gin.Context) {
+	var req struct {
+		RiskLevel mcpdomain.ToolRiskLevel `json:"riskLevel"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	updatedBy := ""
+	if tc, ok := postgres.FromContext(c.Request.Context()); ok {
+		updatedBy = tc.UserID
+	}
+	err := h.svc.SetToolPolicy(c.Request.Context(), mcpdomain.ToolPolicy{
+		ServerID: c.Param("serverId"), ToolName: c.Param("toolName"), RiskLevel: req.RiskLevel, UpdatedBy: updatedBy,
+	})
+	if err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "updated"})
+}
+
 // ListResources GET /mcp/servers/:id/resources
 func (h *MCPHandler) ListResources(c *gin.Context) {
 	serverID := c.Param("id")
@@ -70,54 +101,6 @@ func (h *MCPHandler) ListResources(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"resources": resources, "count": len(resources)})
 }
 
-// ExecuteTool POST /mcp/tools/:toolId/execute
-func (h *MCPHandler) ExecuteTool(c *gin.Context) {
-	toolID := c.Param("toolId")
-	var input any
-	if err := c.BindJSON(&input); err != nil {
-		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("invalid input")))
-		return
-	}
-	result, err := h.svc.ExecuteTool(toolID, input)
-	if err != nil {
-		h.logger.Error("failed to execute tool",
-			zap.String("trace_id", middleware.GetTraceID(c)),
-			zap.String("tool_id", toolID),
-			zap.Error(err))
-		_ = c.Error(err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"result": result})
-}
-
-// ListSkills GET /mcp/skills
-func (h *MCPHandler) ListSkills(c *gin.Context) {
-	skills := h.svc.ListSkills()
-	c.JSON(http.StatusOK, gin.H{"skills": skills, "count": len(skills)})
-}
-
-// GetSkill GET /mcp/skills/:id
-func (h *MCPHandler) GetSkill(c *gin.Context) {
-	skill, err := h.svc.GetSkill(c.Param("id"))
-	if err != nil {
-		c.Error(err) //nolint:errcheck
-		return
-	}
-	c.JSON(http.StatusOK, skill)
-}
-
-// RefreshSkills POST /mcp/skills/refresh
-func (h *MCPHandler) RefreshSkills(c *gin.Context) {
-	if err := h.svc.RefreshSkills(c.Request.Context()); err != nil {
-		h.logger.Error("failed to refresh skills",
-			zap.String("trace_id", middleware.GetTraceID(c)),
-			zap.Error(err))
-		_ = c.Error(err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "skills refreshed successfully"})
-}
-
 // GetServerStatus GET /mcp/status
 func (h *MCPHandler) GetServerStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, h.svc.ServerStatus(c.Request.Context()))
@@ -130,16 +113,11 @@ func (h *MCPHandler) GetServerStatus(c *gin.Context) {
 //
 // 普通租户成员（member）只能读取配置与执行工具，不能新建/修改/删除 MCP 服务器，
 // 这些管理动作会改变整个租户共享的服务器状态，故收归 admin。
-func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, writeMW []gin.HandlerFunc, adminMW []gin.HandlerFunc) {
+func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, _ []gin.HandlerFunc, adminMW []gin.HandlerFunc) {
 	// clone 避免多次 append 复用底层数组造成中间件串味。
 	admin := func(handlers ...gin.HandlerFunc) []gin.HandlerFunc {
 		out := make([]gin.HandlerFunc, 0, len(adminMW)+len(handlers))
 		out = append(out, adminMW...)
-		return append(out, handlers...)
-	}
-	write := func(handlers ...gin.HandlerFunc) []gin.HandlerFunc {
-		out := make([]gin.HandlerFunc, 0, len(writeMW)+len(handlers))
-		out = append(out, writeMW...)
 		return append(out, handlers...)
 	}
 
@@ -147,6 +125,8 @@ func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, wr
 	v1.GET("/servers", h.ListServers)
 	v1.GET("/servers/:id", h.GetServer)
 	v1.GET("/servers/:id/tools", h.ListTools)
+	v1.GET("/tool-policies", h.ListToolPolicies)
+	v1.PUT("/tool-policies/:serverId/:toolName", admin(h.SetToolPolicy)...)
 	v1.GET("/servers/:id/resources", h.ListResources)
 	v1.POST("/servers", admin(h.ConnectServer)...)
 	v1.PUT("/servers/:id", admin(h.UpdateServer)...)
@@ -154,10 +134,6 @@ func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, wr
 	v1.DELETE("/servers/:id", admin(h.DisconnectServer)...)
 	v1.DELETE("/servers/:id/config", admin(h.DeleteServerConfig)...)
 	v1.POST("/servers/:id/reconnect", admin(h.ReconnectServer)...)
-	v1.POST("/tools/:toolId/execute", write(h.ExecuteTool)...)
-	v1.GET("/skills", h.ListSkills)
-	v1.GET("/skills/:id", h.GetSkill)
-	v1.POST("/skills/refresh", admin(h.RefreshSkills)...)
 	v1.GET("/status", h.GetServerStatus)
 }
 

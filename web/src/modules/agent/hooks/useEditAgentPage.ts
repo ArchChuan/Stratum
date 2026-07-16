@@ -8,7 +8,7 @@ import type { AgentFormValues } from '../model/agent';
 import { knowledgeApi } from '@/modules/knowledge';
 import type { Workspace } from '@/modules/knowledge';
 import { mcpApi } from '@/modules/mcp';
-import type { MCPServer } from '@/modules/mcp';
+import type { MCPToolOption } from '@/modules/mcp';
 import { skillApi } from '@/modules/skill';
 import type { Skill } from '@/modules/skill';
 import { extractErrorMessage } from '@/shared/lib';
@@ -19,7 +19,7 @@ export const useEditAgentPage = () => {
   const [loading, setLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
   const [skills, setSkills] = useState<Skill[]>([]);
-  const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
+  const [mcpTools, setMcpTools] = useState<MCPToolOption[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const navigate = useNavigate();
 
@@ -30,12 +30,12 @@ export const useEditAgentPage = () => {
         const [skillsRes, agentRes, mcpRes, workspacesRes] = await Promise.allSettled([
           skillApi.list(),
           agentApi.get(id),
-          mcpApi.list(),
+          mcpApi.toolOptions(),
           knowledgeApi.list(),
         ]);
         if (cancelled) return;
         if (skillsRes.status === 'fulfilled') setSkills(skillsRes.value);
-        if (mcpRes.status === 'fulfilled') setMcpServers(mcpRes.value);
+        if (mcpRes.status === 'fulfilled') setMcpTools(mcpRes.value);
         if (workspacesRes.status === 'fulfilled') setWorkspaces(workspacesRes.value);
 
         if (agentRes.status === 'fulfilled') {
@@ -49,7 +49,7 @@ export const useEditAgentPage = () => {
             maxIterations: a.maxIterations ?? 25,
             maxContextTokens: a.maxContextTokens ?? 8000,
             allowedSkills: a.allowedSkills || [],
-            mcpServerIds: a.mcpServerIds || [],
+            mcpToolIds: a.mcpToolIds || [],
             knowledgeWorkspaceIds: a.knowledgeWorkspaceIds || [],
             memoryScope: a.memoryScope || 'user',
           });
@@ -72,7 +72,7 @@ export const useEditAgentPage = () => {
       try {
         await agentApi.update(id, {
           ...values,
-          mcpServerIds: values.mcpServerIds || [],
+          mcpToolIds: values.mcpToolIds || [],
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],
         });
         message.success(`Agent "${values.name}" 保存成功`);
@@ -87,5 +87,5 @@ export const useEditAgentPage = () => {
     [id, navigate],
   );
 
-  return { id, form, loading, pageLoading, skills, mcpServers, workspaces, navigate, onFinish };
+  return { id, form, loading, pageLoading, skills, mcpTools, workspaces, navigate, onFinish };
 };

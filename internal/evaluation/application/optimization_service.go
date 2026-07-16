@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
@@ -49,14 +50,7 @@ func (s *OptimizationService) Generate(
 	if err := input.Baseline.Validate(); err != nil {
 		return domain.OptimizationJob{}, nil, err
 	}
-	parameterPatches, err := domain.GenerateParameterPatches(input.SearchSpace)
-	if err != nil {
-		return domain.OptimizationJob{}, nil, err
-	}
-	patches := make([]domain.CandidatePatch, 0, len(parameterPatches))
-	for _, patch := range parameterPatches {
-		patches = append(patches, domain.CandidatePatch{Source: "parameter_search", ParameterPatch: patch})
-	}
+	patches := make([]domain.CandidatePatch, 0, 3)
 	if s.rewriter != nil && len(input.FailureSummaries) > 0 {
 		snapshot, err := s.creator.LoadOptimizableSnapshot(ctx, tenantID, input.Baseline)
 		if err != nil {
@@ -76,6 +70,9 @@ func (s *OptimizationService) Generate(
 			rewrite.Source = "llm_rewrite"
 			patches = append(patches, rewrite)
 		}
+	}
+	if len(patches) == 0 {
+		return domain.OptimizationJob{}, nil, errors.New("instruction optimization requires failure summaries and a prompt rewriter")
 	}
 	now := time.Now().UTC()
 	job := domain.OptimizationJob{

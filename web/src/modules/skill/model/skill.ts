@@ -1,119 +1,50 @@
 import { z } from 'zod';
 
-export const skillTypeSchema = z.enum(['code', 'llm', 'http', 'prompt']);
-export type SkillType = z.infer<typeof skillTypeSchema>;
-
-export const skillConfigSchema = z
-  .object({
-    code: z.string().optional(),
-    language: z.string().optional(),
-    system_prompt: z.string().optional(),
-    model: z.string().optional(),
-    temperature: z.number().optional(),
-    max_tokens: z.number().optional(),
-    url: z.string().optional(),
-    method: z.string().optional(),
-    timeout_sec: z.number().optional(),
-    headers: z.record(z.string()).optional(),
-    body_template: z.string().optional(),
-    prompt_template: z.string().optional(),
-  })
-  .passthrough();
-export type SkillConfig = z.infer<typeof skillConfigSchema>;
-
-export const skillSchema = z
-  .object({
-    id: z.string(),
-    name: z.string(),
-    description: z.string().optional().default(''),
-    type: z.string(),
-    config: skillConfigSchema.optional(),
-    created_at: z.string().optional(),
-    updated_at: z.string().optional(),
-  })
-  .passthrough();
-export type Skill = z.infer<typeof skillSchema>;
-
 const jsonObjectSchema = z.record(z.unknown());
 
-export const skillProductSchema = z
-  .object({
-    id: z.string(),
-    name: z.string(),
-    description: z.string().optional().default(''),
-    status: z.string(),
-    activeVersionId: z.string().optional(),
-    draftVersionId: z.string().optional(),
-  })
-  .passthrough();
-export type SkillProduct = z.infer<typeof skillProductSchema>;
+export const skillSchema = z.object({
+  id: z.string(), name: z.string(), description: z.string().optional().default(''),
+  status: z.string().optional().default('draft'), activeRevisionId: z.string().optional(),
+  draftRevisionId: z.string().optional(), created_at: z.string().optional(), updated_at: z.string().optional(),
+}).passthrough();
+export type Skill = z.infer<typeof skillSchema>;
+export type SkillConfig = never;
+export type SkillType = never;
 
-export const skillVersionSchema = z
-  .object({
-    id: z.string(),
-    skillId: z.string(),
-    versionNo: z.number().optional(),
-    status: z.string(),
-    capability: jsonObjectSchema.default({}),
-    toolContract: jsonObjectSchema.default({}),
-    implementation: jsonObjectSchema.default({}),
-    testBaseline: jsonObjectSchema.optional(),
-    publishChecks: jsonObjectSchema.optional(),
-  })
-  .passthrough();
-export type SkillVersion = z.infer<typeof skillVersionSchema>;
+export const skillProductSchema = skillSchema;
+export type SkillProduct = Skill;
 
-export const skillWorkspaceSchema = z
-  .object({
-    skill: skillProductSchema,
-    draft: skillVersionSchema,
-  })
-  .passthrough();
+export const skillRequirementsSchema = z.object({
+  mcpToolIds: z.array(z.string()).default([]),
+  knowledgeWorkspaceIds: z.array(z.string()).default([]),
+  memoryScopes: z.array(z.string()).default([]),
+});
+export type SkillRequirements = z.infer<typeof skillRequirementsSchema>;
+
+export const skillRevisionSchema = z.object({
+  id: z.string(), skillId: z.string(), revisionNo: z.number().optional(), status: z.string(),
+  capability: jsonObjectSchema.default({}), activationContract: jsonObjectSchema.default({}),
+  instructions: z.string().default(''), requirements: skillRequirementsSchema.default({
+    mcpToolIds: [], knowledgeWorkspaceIds: [], memoryScopes: [],
+  }), publishChecks: jsonObjectSchema.optional(),
+}).passthrough();
+export type SkillRevision = z.infer<typeof skillRevisionSchema>;
+export type SkillVersion = SkillRevision;
+
+export const skillWorkspaceSchema = z.object({ skill: skillProductSchema, draft: skillRevisionSchema }).passthrough();
 export type SkillWorkspace = z.infer<typeof skillWorkspaceSchema>;
-
-export const skillTestResultSchema = z
-  .object({
-    result: z.unknown().optional(),
-    error: z.string().optional(),
-    traceID: z.string().optional(),
-    durationMs: z.number().optional(),
-  })
-  .passthrough();
-export type SkillTestResult = z.infer<typeof skillTestResultSchema>;
 
 export interface SkillFormValues {
   name: string;
-  description?: string;
-  goal?: string;
-  whenToUse?: string;
-  sampleInput?: string;
-  expectedInput?: string;
-  expectedOutput?: string;
-  sampleCases?: string;
-  type?: SkillType;
-  language?: string;
-  code?: string;
-  systemPrompt?: string;
-  model?: string;
-  temperature?: number;
-  maxTokens?: number;
-  url?: string;
-  method?: string;
-  timeoutSec?: number;
-  headersJson?: string;
-  headers?: Record<string, string>;
-  bodyTemplate?: string;
-  promptTemplate?: string;
+  goal: string;
+  whenToUse: string;
+  sampleInput: string;
+  expectedOutput: string;
+  instructions: string;
+  mcpToolIDs?: string;
+  knowledgeWorkspaceIDs?: string;
+  memoryScopes?: string[];
 }
-
-export const buildCreateSkillPayload = (values: SkillFormValues): SkillFormValues => {
-  const payload: SkillFormValues = { ...values };
-  if (payload.type === 'http' && payload.headersJson) {
-    payload.headers = JSON.parse(payload.headersJson);
-    delete payload.headersJson;
-  }
-  return payload;
-};
 
 export interface CreateSkillDraftPayload {
   name: string;
@@ -121,35 +52,17 @@ export interface CreateSkillDraftPayload {
   whenToUse: string;
   sampleInput: string;
   expectedOutput: string;
+  instructions: string;
+  requirements: SkillRequirements;
 }
+
+const lines = (value?: string) => (value || '').split('\n').map((item) => item.trim()).filter(Boolean);
 
 export const buildCreateSkillDraftPayload = (values: SkillFormValues): CreateSkillDraftPayload => ({
-  name: values.name,
-  goal: values.goal || '',
-  whenToUse: values.whenToUse || '',
-  sampleInput: values.sampleInput || '',
-  expectedOutput: values.expectedOutput || '',
+  name: values.name, goal: values.goal, whenToUse: values.whenToUse,
+  sampleInput: values.sampleInput, expectedOutput: values.expectedOutput, instructions: values.instructions,
+  requirements: {
+    mcpToolIds: lines(values.mcpToolIDs), knowledgeWorkspaceIds: lines(values.knowledgeWorkspaceIDs),
+    memoryScopes: values.memoryScopes || [],
+  },
 });
-
-export interface DraftSkillTestPayload {
-  skill: SkillFormValues;
-  input: unknown;
-}
-
-export const buildDraftSkillTestPayload = (
-  values: SkillFormValues,
-  rawInput: string,
-): DraftSkillTestPayload => ({
-  skill: buildCreateSkillPayload(values),
-  input: parseSkillTestInput(rawInput),
-});
-
-export const parseSkillTestInput = (raw: string): unknown => {
-  const trimmed = raw.trim();
-  if (!trimmed) return '';
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return raw;
-  }
-};

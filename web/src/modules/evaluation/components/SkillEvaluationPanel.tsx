@@ -84,7 +84,8 @@ export const SkillEvaluationPanel = ({ skillId, stableRevisionId, isAdmin }: Ski
     const result = await evaluationApi.generateOptimization({
       baseline: { kind: 'skill', resource_id: skillId, revision_id: stableRevisionId },
       suiteRevisionId: suiteRevision.id,
-      searchSpace: { temperature: [0.1] },
+		searchSpace: {},
+		failureSummaries: ['在保持现有通过用例的前提下，提高 instructions 的清晰度、约束性和稳定性。'],
     });
     const first = result.candidates[0]?.revision;
     if (!first) throw new Error('未生成候选版本');

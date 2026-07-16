@@ -54,7 +54,9 @@ func (s *PgExecutionStore) Insert(ctx context.Context, r domain.ExecutionRecord)
 				`INSERT INTO agent_executions
 				 (id, trace_id, agent_id, agent_name, user_id, status,
 				  input_preview, output_preview, error_message, total_tokens, duration_ms)
-				 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+				 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+				 ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, output_preview=EXCLUDED.output_preview,
+				 error_message=EXCLUDED.error_message,total_tokens=EXCLUDED.total_tokens,duration_ms=EXCLUDED.duration_ms`,
 				r.ID, r.TraceID, r.AgentID, r.AgentName, r.UserID, r.Status,
 				r.InputPreview, r.OutputPreview, r.ErrorMessage, r.TotalTokens, r.DurationMs,
 			)

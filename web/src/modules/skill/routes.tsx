@@ -1,7 +1,6 @@
 import { Route } from 'react-router-dom';
 
 import { CreateSkillPage } from './pages/CreateSkillPage';
-import { EditSkillPage } from './pages/EditSkillPage';
 import { SkillWorkspacePage } from './pages/SkillWorkspacePage';
 import { SkillsListPage } from './pages/SkillsListPage';
 
@@ -32,15 +31,6 @@ export const skillRoutes = [
     element={
       <PrivateRoute>
         <SkillWorkspacePage />
-      </PrivateRoute>
-    }
-  />,
-  <Route
-    key="skills-edit"
-    path="/skills/:id/edit"
-    element={
-      <PrivateRoute requiredTenantRole="admin">
-        <EditSkillPage />
       </PrivateRoute>
     }
   />,

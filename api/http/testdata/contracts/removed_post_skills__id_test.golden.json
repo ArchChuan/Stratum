@@ -1,0 +1,8 @@
+[
+  {
+    "name": "removed-direct-skill-test",
+    "method": "POST",
+    "path": "/skills/legacy-skill/test",
+    "want_status": 404
+  }
+]

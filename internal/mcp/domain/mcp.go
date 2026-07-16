@@ -90,11 +90,3 @@ type ServerInfo struct {
 	LastUpdated time.Time   `json:"last_updated"`
 	Error       string      `json:"error,omitempty"`
 }
-
-// SkillSummary is the read model for a registered MCP skill.
-type SkillSummary struct {
-	ID          string
-	Name        string
-	Description string
-	Type        string
-}

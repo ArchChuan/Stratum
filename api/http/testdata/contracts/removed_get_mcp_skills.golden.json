@@ -1,0 +1,8 @@
+[
+  {
+    "name": "removed-mcp-skill-compatibility",
+    "method": "GET",
+    "path": "/mcp/skills",
+    "want_status": 404
+  }
+]

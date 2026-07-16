@@ -35,9 +35,6 @@ type stuckThenPlan struct {
 }
 
 func (s *stuckThenPlan) Route(_ context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
-	if req.Type == port.CapSkill {
-		return port.CapabilityResponse{Content: "skill result"}, nil
-	}
 	s.llmCalls++
 	msg := ""
 	if req.LLM != nil && len(req.LLM.Messages) > 0 {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
+	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
@@ -79,17 +80,19 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, iamdomain.ErrMemberNotFound),
 		errors.Is(err, iamdomain.ErrTenantNotFound),
 		errors.Is(err, agentapp.ErrNotFound),
+		errors.Is(err, agentdomain.ErrApprovalNotFound),
 		errors.Is(err, memoryapp.ErrNotFound),
 		errors.Is(err, memorydomain.ErrEntryNotFound),
 		errors.Is(err, memorydomain.ErrSessionNotFound),
 		errors.Is(err, skilldomain.ErrSkillNotFound),
 		errors.Is(err, mcpdomain.ErrServerNotFound),
-		errors.Is(err, mcpdomain.ErrSkillNotFound),
 		errors.Is(err, evalapp.ErrSuiteNotFound),
 		errors.Is(err, evalapp.ErrJobNotFound),
 		errors.Is(err, evalapp.ErrRunNotFound),
 		errors.Is(err, evalapp.ErrExperimentNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, agentapp.ErrApprovalExpired):
+		return http.StatusGone
 
 	// 409 — Conflict
 	case errors.Is(err, knowledgedomain.ErrWorkspaceConflict),
@@ -100,6 +103,10 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, mcpdomain.ErrNameConflict),
 		errors.Is(err, skilldomain.ErrSkillNameConflict),
 		errors.Is(err, skilldomain.ErrSkillLinked):
+		return http.StatusConflict
+	case errors.Is(err, agentapp.ErrApprovalNotApproved),
+		errors.Is(err, agentdomain.ErrApprovalAlreadyDecided),
+		errors.Is(err, agentdomain.ErrApprovalAlreadyExecuted):
 		return http.StatusConflict
 
 	// 422 — Unprocessable Entity

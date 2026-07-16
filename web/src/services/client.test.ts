@@ -85,4 +85,33 @@ describe('api client', () => {
     );
     expect(onError).not.toHaveBeenCalled();
   });
+
+  it('parses data from named SSE events', async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          'event: approval_required\ndata: {"status":"waiting_approval","approvalId":"approval-1"}\n\n',
+        ));
+        controller.close();
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream)));
+    const onEvent = vi.fn().mockReturnValue(false);
+    const onClose = vi.fn();
+    const onError = vi.fn();
+
+    streamApiEvents('/agents/a1/execute/stream', { query: 'delete' }, {
+      onEvent,
+      onClose,
+      onError,
+    });
+
+    await vi.waitFor(() => expect(onEvent).toHaveBeenCalledWith({
+      status: 'waiting_approval',
+      approvalId: 'approval-1',
+    }));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
 });

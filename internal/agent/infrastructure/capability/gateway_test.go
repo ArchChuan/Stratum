@@ -14,10 +14,8 @@ import (
 
 func TestDefaultCapabilityGateway_RouteLLM(t *testing.T) {
 	llmMock := &mockLLMGateway{resp: &llmgateway.CompletionResponse{Content: "ok"}}
-	skillMock := &mockSkillGateway{}
 	gw := capgateway.NewDefaultCapabilityGateway(
 		capgateway.NewLLMAdapter(llmMock, zap.NewNop()),
-		capgateway.NewSkillAdapter(skillMock, zap.NewNop()),
 		zap.NewNop(),
 	)
 
@@ -33,28 +31,9 @@ func TestDefaultCapabilityGateway_RouteLLM(t *testing.T) {
 	require.Equal(t, "ok", resp.Content)
 }
 
-func TestDefaultCapabilityGateway_RouteSkill(t *testing.T) {
-	llmMock := &mockLLMGateway{}
-	skillMock := &mockSkillGateway{output: "result"}
-	gw := capgateway.NewDefaultCapabilityGateway(
-		capgateway.NewLLMAdapter(llmMock, zap.NewNop()),
-		capgateway.NewSkillAdapter(skillMock, zap.NewNop()),
-		zap.NewNop(),
-	)
-
-	req := port.CapabilityRequest{
-		Type:  port.CapSkill,
-		Skill: &port.SkillCapRequest{SkillID: "s1", Input: "data"},
-	}
-	resp, err := gw.Route(context.Background(), req)
-	require.NoError(t, err)
-	require.Equal(t, "result", resp.Output)
-}
-
 func TestDefaultCapabilityGateway_RouteValidationError(t *testing.T) {
 	gw := capgateway.NewDefaultCapabilityGateway(
 		capgateway.NewLLMAdapter(&mockLLMGateway{}, zap.NewNop()),
-		capgateway.NewSkillAdapter(&mockSkillGateway{}, zap.NewNop()),
 		zap.NewNop(),
 	)
 	req := port.CapabilityRequest{Type: port.CapLLM} // LLM == nil

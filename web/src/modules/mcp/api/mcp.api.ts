@@ -7,7 +7,10 @@ import {
   type MCPResource,
   type MCPServer,
   type MCPServerConfig,
-  type MCPTool,
+	type MCPTool,
+	type MCPToolOption,
+	type MCPToolPolicy,
+	type MCPToolRiskLevel,
 } from '../model/mcp';
 
 import api from '@/services/client';
@@ -30,8 +33,15 @@ export const mcpApi = {
     const res = await api.get(`/mcp/servers/${id}/tools`);
     return z.array(mcpToolSchema).parse(res.data?.tools ?? []);
   },
-  resources: async (id: string): Promise<MCPResource[]> => {
+	resources: async (id: string): Promise<MCPResource[]> => {
     const res = await api.get(`/mcp/servers/${id}/resources`);
     return z.array(mcpResourceSchema).parse(res.data?.resources ?? []);
-  },
+	},
+	toolOptions: async (): Promise<MCPToolOption[]> => {
+		const servers = await mcpApi.list();
+		const groups = await Promise.all(servers.map(async (server) => ({ server, tools: await mcpApi.tools(server.id).catch(() => []) })));
+		return groups.flatMap(({ server, tools }) => tools.map((tool) => ({ id: `mcp:${server.id}:${tool.name}`, label: `${server.name || server.id} / ${tool.name}`, serverId: server.id, toolName: tool.name })));
+	},
+	toolPolicies: async (): Promise<MCPToolPolicy[]> => (await api.get('/mcp/tool-policies')).data?.policies ?? [],
+	setToolPolicy: (serverId: string, toolName: string, riskLevel: MCPToolRiskLevel) => api.put(`/mcp/tool-policies/${encodeURIComponent(serverId)}/${encodeURIComponent(toolName)}`, { riskLevel }),
 };

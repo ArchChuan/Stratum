@@ -1,7 +1,7 @@
 // Package persistence — Postgres adapter for agent configuration. Implements
 // port.AgentRepo using per-tenant schema search_path.
 //
-// All cross-table relations (agent_skill_links, agent_mcp_links,
+// All cross-table relations (agent_skill_links, agent_mcp_tool_links,
 // agent_workspaces ⨯ rag_workspaces) are loaded inside a single
 // transaction so the returned AgentConfig is internally consistent.
 
@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
@@ -103,39 +104,48 @@ func loadSkillIDs(ctx context.Context, tx pgx.Tx, agentID string) ([]string, err
 	return ids, rows.Err()
 }
 
-func (r *PgAgentRepo) replaceMCPServers(ctx context.Context, tx pgx.Tx, agentID string, serverIDs []string) error {
-	if _, err := tx.Exec(ctx, `DELETE FROM agent_mcp_links WHERE agent_id = $1`, agentID); err != nil {
-		return fmt.Errorf("replace agent_mcp_links delete agent %s: %w", agentID, err)
+func (r *PgAgentRepo) replaceMCPTools(ctx context.Context, tx pgx.Tx, agentID string, toolIDs []string) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM agent_mcp_tool_links WHERE agent_id = $1`, agentID); err != nil {
+		return fmt.Errorf("replace agent_mcp_tool_links delete agent %s: %w", agentID, err)
 	}
-	for _, sid := range serverIDs {
-		if sid == "" {
-			continue
+	for _, toolID := range toolIDs {
+		serverID, toolName, ok := parseMCPToolID(toolID)
+		if !ok {
+			return fmt.Errorf("invalid MCP tool ID %q", toolID)
 		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO agent_mcp_links (agent_id, server_id) VALUES ($1, $2)`,
-			agentID, sid,
+			`INSERT INTO agent_mcp_tool_links (agent_id, server_id, tool_name) VALUES ($1, $2, $3)`,
+			agentID, serverID, toolName,
 		); err != nil {
-			return fmt.Errorf("replace agent_mcp_links insert agent %s server %s: %w", agentID, sid, err)
+			return fmt.Errorf("replace agent_mcp_tool_links insert agent %s tool %s: %w", agentID, toolID, err)
 		}
 	}
 	return nil
 }
 
-func loadMCPServerIDs(ctx context.Context, tx pgx.Tx, agentID string) ([]string, error) {
-	rows, err := tx.Query(ctx, `SELECT server_id FROM agent_mcp_links WHERE agent_id = $1`, agentID)
+func loadMCPToolIDs(ctx context.Context, tx pgx.Tx, agentID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `SELECT server_id, tool_name FROM agent_mcp_tool_links WHERE agent_id = $1`, agentID)
 	if err != nil {
 		return nil, fmt.Errorf("load mcp_configs agent %s: %w", agentID, err)
 	}
 	defer rows.Close()
 	var ids []string
 	for rows.Next() {
-		var sid string
-		if err := rows.Scan(&sid); err != nil {
+		var serverID, toolName string
+		if err := rows.Scan(&serverID, &toolName); err != nil {
 			return nil, err
 		}
-		ids = append(ids, sid)
+		ids = append(ids, "mcp:"+serverID+":"+toolName)
 	}
 	return ids, rows.Err()
+}
+
+func parseMCPToolID(id string) (string, string, bool) {
+	parts := strings.Split(id, ":")
+	if len(parts) != 3 || parts[0] != "mcp" || parts[1] == "" || parts[2] == "" {
+		return "", "", false
+	}
+	return parts[1], parts[2], true
 }
 
 func (r *PgAgentRepo) replaceKnowledgeWorkspaces(ctx context.Context, tx pgx.Tx, agentID string, workspaceIDs []string) error {
@@ -198,7 +208,7 @@ func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig) err
 		if err := r.replaceSkills(ctx, tx, cfg.ID, cfg.AllowedSkills); err != nil {
 			return err
 		}
-		if err := r.replaceMCPServers(ctx, tx, cfg.ID, cfg.MCPServerIDs); err != nil {
+		if err := r.replaceMCPTools(ctx, tx, cfg.ID, cfg.MCPToolIDs); err != nil {
 			return err
 		}
 		if err := r.replaceKnowledgeWorkspaces(ctx, tx, cfg.ID, cfg.KnowledgeWorkspaceIDs); err != nil {
@@ -225,11 +235,11 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 			return err
 		}
 		cfg.AllowedSkills = skillIDs
-		ids, err := loadMCPServerIDs(ctx, tx, id)
+		ids, err := loadMCPToolIDs(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		cfg.MCPServerIDs = ids
+		cfg.MCPToolIDs = ids
 		wsIDs, wsNames, wsDescs, err := loadKnowledgeWorkspaces(ctx, tx, id)
 		if err != nil {
 			return err
@@ -248,8 +258,8 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 	if cfg.AllowedSkills == nil {
 		cfg.AllowedSkills = []string{}
 	}
-	if cfg.MCPServerIDs == nil {
-		cfg.MCPServerIDs = []string{}
+	if cfg.MCPToolIDs == nil {
+		cfg.MCPToolIDs = []string{}
 	}
 	if cfg.KnowledgeWorkspaceIDs == nil {
 		cfg.KnowledgeWorkspaceIDs = []string{}
@@ -286,7 +296,7 @@ func (r *PgAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 		}
 		for _, cfg := range cfgs {
 			cfg.AllowedSkills = nonNil(skills[cfg.ID])
-			cfg.MCPServerIDs = nonNil(mcps[cfg.ID])
+			cfg.MCPToolIDs = nonNil(mcps[cfg.ID])
 			cfg.KnowledgeWorkspaceIDs = nonNil(wsIDs[cfg.ID])
 			cfg.KnowledgeWorkspaceNames = nonNil(wsNames[cfg.ID])
 			cfg.KnowledgeWorkspaceDescriptions = nonNil(wsDescs[cfg.ID])
@@ -341,18 +351,18 @@ func loadSkillsByAgents(ctx context.Context, tx pgx.Tx, agentIDs []string) (map[
 
 func loadMCPsByAgents(ctx context.Context, tx pgx.Tx, agentIDs []string) (map[string][]string, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT agent_id, server_id FROM agent_mcp_links WHERE agent_id = ANY($1)`, agentIDs)
+		`SELECT agent_id, server_id, tool_name FROM agent_mcp_tool_links WHERE agent_id = ANY($1)`, agentIDs)
 	if err != nil {
 		return nil, fmt.Errorf("load mcp_links: %w", err)
 	}
 	defer rows.Close()
 	out := make(map[string][]string, len(agentIDs))
 	for rows.Next() {
-		var aid, sid string
-		if err := rows.Scan(&aid, &sid); err != nil {
+		var aid, serverID, toolName string
+		if err := rows.Scan(&aid, &serverID, &toolName); err != nil {
 			return nil, err
 		}
-		out[aid] = append(out[aid], sid)
+		out[aid] = append(out[aid], "mcp:"+serverID+":"+toolName)
 	}
 	return out, rows.Err()
 }
@@ -426,7 +436,7 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig) error
 		if err := r.replaceSkills(ctx, tx, cfg.ID, cfg.AllowedSkills); err != nil {
 			return err
 		}
-		if err := r.replaceMCPServers(ctx, tx, cfg.ID, cfg.MCPServerIDs); err != nil {
+		if err := r.replaceMCPTools(ctx, tx, cfg.ID, cfg.MCPToolIDs); err != nil {
 			return err
 		}
 		if err := r.replaceKnowledgeWorkspaces(ctx, tx, cfg.ID, cfg.KnowledgeWorkspaceIDs); err != nil {

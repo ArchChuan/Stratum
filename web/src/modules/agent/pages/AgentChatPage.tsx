@@ -1,4 +1,4 @@
-import { Drawer } from 'antd';
+import { Alert, Button, Drawer, Space } from 'antd';
 import { useEffect, useState } from 'react';
 
 import { ChatComposer } from '../components/ChatComposer';
@@ -7,11 +7,13 @@ import { ChatHeader } from '../components/ChatHeader';
 import { ChatMessageList } from '../components/ChatMessageList';
 import { useChatPage } from '../hooks/useChatPage';
 
+import { useTenantRole } from '@/modules/iam';
 import { useResponsive } from '@/shared/hooks/useResponsive';
 
 export const AgentChatPage = () => {
   const { isMobile } = useResponsive();
-  const [conversationDrawerOpen, setConversationDrawerOpen] = useState(false);
+	const [conversationDrawerOpen, setConversationDrawerOpen] = useState(false);
+	const { isAdmin } = useTenantRole();
   const {
     agents,
     selectedAgent,
@@ -31,10 +33,14 @@ export const AgentChatPage = () => {
     handleSend,
     handleCreateConv,
     handleRenameConv,
-    handleDeleteConv,
-  } = useChatPage();
+		handleDeleteConv,
+		pendingApprovals,
+		handleApprove,
+		handleReject,
+	} = useChatPage();
 
-  const agentObj = agents.find((a) => a.id === selectedAgent);
+	const agentObj = agents.find((a) => a.id === selectedAgent);
+	const pendingApproval = pendingApprovals.find((item) => !item.agentId || item.agentId === selectedAgent);
   const sidebar = (
     <ChatConversationSidebar
       agents={agents}
@@ -88,7 +94,7 @@ export const AgentChatPage = () => {
           isMobile={isMobile}
           onOpenConversations={() => setConversationDrawerOpen(true)}
         />
-        <ChatMessageList
+		<ChatMessageList
           messages={messages}
           loadingMsgs={loadingMsgs}
           sending={sending}
@@ -98,7 +104,15 @@ export const AgentChatPage = () => {
           scrollContainerRef={scrollContainerRef}
           pinnedToBottomRef={pinnedToBottomRef}
           isMobile={isMobile}
-        />
+		/>
+		{pendingApproval && <Alert
+			type="warning" showIcon
+			message={`工具 ${pendingApproval.toolName} 需要审批`}
+			description={<Space direction={isMobile ? 'vertical' : 'horizontal'}>
+				<span>风险等级：{pendingApproval.riskLevel} · Server：{pendingApproval.serverId}</span>
+				{isAdmin && <><Button type="primary" danger onClick={() => handleApprove(pendingApproval.approvalId)}>批准并继续</Button><Button onClick={() => handleReject(pendingApproval.approvalId)}>拒绝</Button></>}
+			</Space>}
+		/>}
         <ChatComposer
           input={input}
           setInput={setInput}
