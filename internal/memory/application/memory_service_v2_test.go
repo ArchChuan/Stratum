@@ -52,6 +52,17 @@ func TestMemoryService_UserMemoryOwnership(t *testing.T) {
 	facts.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything, mock.Anything)
 }
 
+func TestMemoryService_UserEndpointRejectsAgentScopedFact(t *testing.T) {
+	ctx := context.Background()
+	facts := new(MockFactRepo)
+	svc := NewMemoryService(facts, nil, nil, nil, nil, nil, nil, nil)
+	fact := &domain.MemoryFact{ID: "fact-1", TenantID: "tenant-1", UserID: "user-1", AgentID: "agent-1", Scope: domain.ScopeAgent}
+
+	facts.On("GetByID", ctx, "tenant-1", "fact-1").Return(fact, nil).Once()
+	_, err := svc.GetUserMemory(ctx, &GetUserMemoryRequest{TenantID: "tenant-1", UserID: "user-1", FactID: "fact-1"})
+	assert.ErrorIs(t, err, domain.ErrScopeMismatch)
+}
+
 func TestMemoryService_GetUserMemoryPreservesNotFound(t *testing.T) {
 	ctx := context.Background()
 	facts := new(MockFactRepo)

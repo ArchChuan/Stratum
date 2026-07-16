@@ -71,7 +71,10 @@ func TestAddMemory_UsesAuthenticatedIdentityAndCanonicalDTO(t *testing.T) {
 		c.Set(middleware.ContextKeySub, "user-1")
 	}, h.AddMemory)
 
-	body, _ := json.Marshal(map[string]any{"content": "likes Go", "importance": 0.7, "tenant_id": "attacker", "user_id": "attacker"})
+	body, _ := json.Marshal(map[string]any{
+		"content": "likes Go", "importance": 0.7,
+		"tenant_id": "attacker", "user_id": "attacker", "agent_id": "foreign-agent",
+	})
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodPost, "/api/memory", bytes.NewReader(body)) //nolint:noctx
 	req.Header.Set("Content-Type", "application/json")
@@ -82,6 +85,9 @@ func TestAddMemory_UsesAuthenticatedIdentityAndCanonicalDTO(t *testing.T) {
 	}
 	if svc.createReq.TenantID != "tenant-1" || svc.createReq.UserID != "user-1" {
 		t.Fatalf("handler trusted body identity: %#v", svc.createReq)
+	}
+	if svc.createReq.AgentID != "" || svc.createReq.ConversationID != "" {
+		t.Fatalf("user endpoint accepted unverified ownership references: %#v", svc.createReq)
 	}
 	var got map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
