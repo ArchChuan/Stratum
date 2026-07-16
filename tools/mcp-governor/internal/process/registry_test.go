@@ -71,6 +71,10 @@ func TestDecodeRegistryRejectsDuplicateJSONKeys(t *testing.T) {
 		{"identity start ticks", strings.Replace(valid, `"identity":{"pid":10,"start_ticks":100`, `"identity":{"pid":10,"start_ticks":100,"start_ticks":101`, 1), "start_ticks"},
 		{"client PID", strings.Replace(valid, `"client":{"pid":20`, `"client":{"pid":20,"pid":21`, 1), "pid"},
 		{"client start ticks", strings.Replace(valid, `"client":{"pid":20,"start_ticks":200`, `"client":{"pid":20,"start_ticks":200,"start_ticks":201`, 1), "start_ticks"},
+		{"case-aliased top-level version", strings.Replace(valid, `"version":1`, `"version":1,"Version":1`, 1), "Version"},
+		{"case-aliased registration client", strings.Replace(valid, `"client":{"pid":20,"start_ticks":200}`, `"client":{"pid":20,"start_ticks":200},"Client":{"pid":30,"start_ticks":300}`, 1), "Client"},
+		{"case-aliased identity PID", strings.Replace(valid, `"identity":{"pid":10`, `"identity":{"pid":10,"PID":11`, 1), "PID"},
+		{"case-aliased client start ticks", strings.Replace(valid, `"client":{"pid":20,"start_ticks":200`, `"client":{"pid":20,"start_ticks":200,"START_TICKS":201`, 1), "START_TICKS"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

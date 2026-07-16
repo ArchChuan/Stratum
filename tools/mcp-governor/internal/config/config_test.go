@@ -72,6 +72,8 @@ func TestDecodeRejectsDuplicateJSONKeys(t *testing.T) {
 		{"top-level output path", strings.Replace(validConfig, `"output_path": "%h/out.json"`, `"output_path": "%h/out.json", "output_path": "%h/other.json"`, 1), "output_path"},
 		{"service name", strings.Replace(validConfig, `"name":"chroma"`, `"name":"chroma","name":"other"`, 1), "name"},
 		{"service fragments", strings.Replace(validConfig, `"all_args_contain":["chroma-mcp"]`, `"all_args_contain":["chroma-mcp"],"all_args_contain":["other"]`, 1), "all_args_contain"},
+		{"case-aliased version", strings.Replace(validConfig, `"version": 1`, `"version": 1, "Version": 1`, 1), "Version"},
+		{"case-aliased service name", strings.Replace(validConfig, `"name":"chroma"`, `"name":"chroma","Name":"other"`, 1), "Name"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

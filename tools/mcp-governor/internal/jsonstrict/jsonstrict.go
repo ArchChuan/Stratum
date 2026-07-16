@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 func ValidateNoDuplicateKeys(data []byte) error {
@@ -32,10 +33,11 @@ func validateValue(decoder *json.Decoder, path string) error {
 			if !ok {
 				return fmt.Errorf("object key at %s is not a string", path)
 			}
-			if _, exists := keys[key]; exists {
+			canonicalKey := strings.ToLower(key)
+			if _, exists := keys[canonicalKey]; exists {
 				return fmt.Errorf("duplicate key %q at %s", key, path)
 			}
-			keys[key] = struct{}{}
+			keys[canonicalKey] = struct{}{}
 			if err := validateValue(decoder, path+"."+key); err != nil {
 				return err
 			}
