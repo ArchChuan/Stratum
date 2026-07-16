@@ -63,11 +63,31 @@ func TestBuildSnapshotUsesExactIdentities(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshotRequiresRegistrationServiceToMatchClassification(t *testing.T) {
+	now := time.Date(2026, 7, 16, 1, 2, 3, 0, time.UTC)
+	identity := Identity{PID: 10, StartTicks: 100}
+	process := Process{Identity: identity, Service: "actual", PSSBytes: 42}
+	registration := Registration{
+		Identity: identity,
+		Client:   Identity{PID: 20, StartTicks: 200},
+		Service:  "different",
+	}
+
+	got := BuildSnapshot(now, []Process{process}, []Registration{registration}, map[Identity]bool{}, nil)
+
+	if got.Processes[0].Registered || got.Processes[0].Orphan {
+		t.Fatalf("wrong-service registration set ownership flags: %#v", got.Processes[0])
+	}
+	if len(got.Services) != 1 || got.Services[0].Service != "actual" || got.Services[0].PSSBytes != 42 {
+		t.Fatalf("memory was not aggregated under actual service: %#v", got.Services)
+	}
+}
+
 func TestBuildSnapshotHandlesDuplicatePIDsAndRegistrationsDeterministically(t *testing.T) {
 	now := time.Date(2026, 7, 16, 1, 2, 3, 0, time.UTC)
 	processes := []Process{{Identity: Identity{7, 70}, Service: "svc"}, {Identity: Identity{7, 71}, Service: "svc"}}
 	registrations := []Registration{
-		{Identity: Identity{7, 70}, Client: Identity{1, 1}, Service: "first", ConnectedAt: now},
+		{Identity: Identity{7, 70}, Client: Identity{1, 1}, Service: "svc", ConnectedAt: now},
 		{Identity: Identity{7, 70}, Client: Identity{2, 2}, Service: "second", ConnectedAt: now},
 	}
 	got := BuildSnapshot(now, processes, registrations, map[Identity]bool{{1, 1}: true}, nil)

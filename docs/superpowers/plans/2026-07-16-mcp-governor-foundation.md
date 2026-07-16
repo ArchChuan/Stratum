@@ -97,7 +97,7 @@ type Process struct {
  Identity
  PPID       int      `json:"ppid"`
  Command    string   `json:"command"`
- Args       []string `json:"args"`
+ Args       []string `json:"-"` // classification only; version 1 snapshots omit argv
  Service    string   `json:"service,omitempty"`
  RSSBytes   uint64   `json:"rss_bytes"`
  PSSBytes   uint64   `json:"pss_bytes"`

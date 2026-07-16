@@ -251,6 +251,117 @@ func TestRunUsesAllSuccessfulProcessesForLiveClientIdentity(t *testing.T) {
 	}
 }
 
+func TestRunResolvesRegisteredClientIdentityWhenFullScanFails(t *testing.T) {
+	root := t.TempDir()
+	writeProcessFixture(t, root, "42", []string{"chroma-mcp", "--client-type"})
+	writeProcessFixture(t, root, "90", []string{"unclassified-client"})
+	writeFile(t, filepath.Join(root, "90", "status"), []byte("malformed\n"), 0o600)
+	registryPath := filepath.Join(root, "registry.json")
+	writeRegistry(t, registryPath, []process.Registration{registration(
+		process.Identity{PID: 42, StartTicks: 123},
+		process.Identity{PID: 90, StartTicks: 123},
+	)})
+	configPath := writeConfig(t, root, registryPath, "ignored")
+	useDependencies(t, fixedTime, "/unused", nil)
+
+	got := runSnapshot(t, configPath, root)
+	if !got.Processes[0].Registered || got.Processes[0].Orphan {
+		t.Fatalf("registered child with identity-readable client: %+v", got.Processes[0])
+	}
+	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "process 90") {
+		t.Fatalf("full scan warning missing: %q", got.Warnings)
+	}
+}
+
+func TestRunConservativelyTreatsIndeterminateRegisteredClientAsLive(t *testing.T) {
+	root := t.TempDir()
+	writeProcessFixture(t, root, "42", []string{"chroma-mcp", "--client-type"})
+	writeProcessFixture(t, root, "90", []string{"unclassified-client", "--token=do-not-leak"})
+	writeFile(t, filepath.Join(root, "90", "stat"), []byte("malformed --token=do-not-leak"), 0o600)
+	registryPath := filepath.Join(root, "registry.json")
+	writeRegistry(t, registryPath, []process.Registration{registration(
+		process.Identity{PID: 42, StartTicks: 123},
+		process.Identity{PID: 90, StartTicks: 123},
+	)})
+	configPath := writeConfig(t, root, registryPath, "ignored")
+	useDependencies(t, fixedTime, "/unused", nil)
+
+	got := runSnapshot(t, configPath, root)
+	if !got.Processes[0].Registered || got.Processes[0].Orphan {
+		t.Fatalf("registered child with indeterminate client: %+v", got.Processes[0])
+	}
+	joined := strings.Join(got.Warnings, "\n")
+	if !strings.Contains(joined, "registered client process 90") || !strings.Contains(joined, "malformed") || strings.Contains(joined, "do-not-leak") {
+		t.Fatalf("unexpected privacy-safe warning: %q", got.Warnings)
+	}
+}
+
+func TestRunMarksRegisteredChildOrphanWhenClientDefinitelyMissing(t *testing.T) {
+	root := t.TempDir()
+	writeProcessFixture(t, root, "42", []string{"chroma-mcp", "--client-type"})
+	registryPath := filepath.Join(root, "registry.json")
+	writeRegistry(t, registryPath, []process.Registration{registration(
+		process.Identity{PID: 42, StartTicks: 123},
+		process.Identity{PID: 90, StartTicks: 123},
+	)})
+	configPath := writeConfig(t, root, registryPath, "ignored")
+	useDependencies(t, fixedTime, "/unused", nil)
+
+	got := runSnapshot(t, configPath, root)
+	if !got.Processes[0].Registered || !got.Processes[0].Orphan {
+		t.Fatalf("registered child with missing client: %+v", got.Processes[0])
+	}
+}
+
+func TestRunRejectsUnknownRegistryServiceWithoutReplacingSnapshot(t *testing.T) {
+	root := t.TempDir()
+	writeProcessFixture(t, root, "42", []string{"chroma-mcp", "--client-type"})
+	registryPath := filepath.Join(root, "registry.json")
+	reg := registration(process.Identity{PID: 42, StartTicks: 123}, process.Identity{PID: 90, StartTicks: 123})
+	reg.Service = "unknown"
+	writeRegistry(t, registryPath, []process.Registration{reg})
+	outputPath := filepath.Join(root, "snapshot.json")
+	writeFile(t, outputPath, []byte("previous snapshot"), 0o600)
+	configPath := writeConfig(t, root, registryPath, outputPath)
+	useDependencies(t, fixedTime, "/unused", nil)
+
+	var stderr bytes.Buffer
+	if code := run([]string{"snapshot", "--config", configPath, "--proc-root", root}, &bytes.Buffer{}, &stderr); code != 1 {
+		t.Fatalf("exit = %d, want 1; stderr=%q", code, stderr.String())
+	}
+	if got := string(mustReadFile(t, outputPath)); got != "previous snapshot" {
+		t.Fatalf("snapshot replaced on invalid registry: %q", got)
+	}
+	if !strings.Contains(stderr.String(), "unknown") {
+		t.Fatalf("missing registry service context: %q", stderr.String())
+	}
+}
+
+func TestRunSnapshotNeverPersistsArguments(t *testing.T) {
+	root := t.TempDir()
+	secret := "--client-type=super-secret-value"
+	writeProcessFixture(t, root, "42", []string{"chroma-mcp", secret, "--client-type"})
+	configPath := writeConfig(t, root, filepath.Join(root, "missing-registry"), "ignored")
+	useDependencies(t, fixedTime, "/unused", nil)
+
+	var stdout bytes.Buffer
+	if code := run([]string{"snapshot", "--config", configPath, "--proc-root", root, "--output", "-"}, &stdout, &bytes.Buffer{}); code != 0 {
+		t.Fatalf("run returned %d", code)
+	}
+	if strings.Contains(stdout.String(), secret) || strings.Contains(stdout.String(), `"args"`) {
+		t.Fatalf("snapshot leaked argv: %s", stdout.String())
+	}
+
+	outputPath := filepath.Join(root, "snapshot.json")
+	if code := run([]string{"snapshot", "--config", configPath, "--proc-root", root, "--output", outputPath}, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
+		t.Fatalf("atomic snapshot run returned %d", code)
+	}
+	persisted := string(mustReadFile(t, outputPath))
+	if strings.Contains(persisted, secret) || strings.Contains(persisted, `"args"`) {
+		t.Fatalf("atomic snapshot leaked argv: %s", persisted)
+	}
+}
+
 func TestWriteAtomicRenameFailurePreservesDestinationAndCleansTemp(t *testing.T) {
 	dir := t.TempDir()
 	destination := filepath.Join(dir, "snapshot.json")
@@ -311,11 +422,17 @@ type orderedScanner struct {
 }
 
 func (s *orderedScanner) ListPIDs() ([]int, error) { return s.pids, nil }
+func (s *orderedScanner) ReadIdentity(pid int) (process.Identity, error) {
+	return s.proc.ReadIdentity(pid)
+}
 func (s *orderedScanner) ReadProcess(pid int) (process.Process, []string, error) {
 	return s.proc.ReadProcess(pid)
 }
 
 func (f *fakeScanner) ListPIDs() ([]int, error) { return f.pids, nil }
+func (f *fakeScanner) ReadIdentity(pid int) (process.Identity, error) {
+	return f.proc.ReadIdentity(pid)
+}
 func (f *fakeScanner) ReadProcess(pid int) (process.Process, []string, error) {
 	if pid == 41 {
 		return process.Process{}, nil, &process.ProcessGoneError{PID: pid, Err: errors.New("gone")}
@@ -386,6 +503,19 @@ func mustReadFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func runSnapshot(t *testing.T, configPath, procRoot string) process.Snapshot {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"snapshot", "--config", configPath, "--proc-root", procRoot, "--output", "-"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("run returned %d: %s", code, stderr.String())
+	}
+	var got process.Snapshot
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	return got
 }
 
 func writeFile(t *testing.T, path string, data []byte, mode os.FileMode) {

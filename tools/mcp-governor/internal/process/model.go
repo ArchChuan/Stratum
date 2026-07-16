@@ -9,9 +9,10 @@ type Identity struct {
 
 type Process struct {
 	Identity
-	PPID       int      `json:"ppid"`
-	Command    string   `json:"command"`
-	Args       []string `json:"args"`
+	PPID    int    `json:"ppid"`
+	Command string `json:"command"`
+	// Args is retained in memory for classification but is never persisted.
+	Args       []string `json:"-"`
 	Service    string   `json:"service,omitempty"`
 	RSSBytes   uint64   `json:"rss_bytes"`
 	PSSBytes   uint64   `json:"pss_bytes"`

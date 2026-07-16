@@ -2,6 +2,7 @@ package process
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,5 +79,30 @@ func TestSnapshotJSONContract(t *testing.T) {
 	service := contract.Services[0]
 	if service.RSSBytes != 8192 || service.PSSBytes != 6144 || service.USSBytes != 5120 {
 		t.Errorf("service memory = rss %d, pss %d, uss %d; want rss 8192, pss 6144, uss 5120", service.RSSBytes, service.PSSBytes, service.USSBytes)
+	}
+}
+
+func TestSnapshotJSONNeverIncludesProcessArguments(t *testing.T) {
+	secret := "--token=super-secret-value"
+	snapshot := Snapshot{Processes: []Process{{
+		Identity: Identity{PID: 1, StartTicks: 2},
+		Args:     []string{"mcp-server", secret},
+	}}}
+
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), secret) {
+		t.Fatalf("snapshot leaked argv secret: %s", data)
+	}
+	var contract struct {
+		Processes []map[string]json.RawMessage `json:"processes"`
+	}
+	if err := json.Unmarshal(data, &contract); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := contract.Processes[0]["args"]; exists {
+		t.Fatalf("snapshot process contains args key: %s", data)
 	}
 }

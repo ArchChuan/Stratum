@@ -24,7 +24,7 @@ func BuildSnapshot(capturedAt time.Time, processes []Process, registrations []Re
 		process.Args = append([]string(nil), input.Args...)
 		process.Registered = false
 		process.Orphan = false
-		if registration, exists := registrationByIdentity[process.Identity]; exists {
+		if registration, exists := registrationByIdentity[process.Identity]; exists && registration.Service == process.Service {
 			process.Registered = true
 			process.Orphan = !live[registration.Client]
 		}

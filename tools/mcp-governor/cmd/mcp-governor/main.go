@@ -17,6 +17,7 @@ import (
 
 type scanner interface {
 	ListPIDs() ([]int, error)
+	ReadIdentity(int) (process.Identity, error)
 	ReadProcess(int) (process.Process, []string, error)
 }
 
@@ -135,6 +136,19 @@ func snapshot(opts options, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("build classifier: %w", err)
 	}
+	registrations, err := readRegistry(cfg.RegistryPath)
+	if err != nil {
+		return err
+	}
+	serviceNames := make(map[string]bool, len(cfg.Services))
+	for _, service := range cfg.Services {
+		serviceNames[service.Name] = true
+	}
+	for i, registration := range registrations {
+		if !serviceNames[registration.Service] {
+			return fmt.Errorf("registry registrations[%d] service %q is not configured", i, registration.Service)
+		}
+	}
 
 	proc := newScanner(opts.procRoot)
 	pids, err := proc.ListPIDs()
@@ -165,9 +179,27 @@ func snapshot(opts options, stdout io.Writer) error {
 		processes = append(processes, item)
 	}
 
-	registrations, err := readRegistry(cfg.RegistryPath)
-	if err != nil {
-		return err
+	checkedClients := make(map[process.Identity]bool, len(registrations))
+	for _, registration := range registrations {
+		client := registration.Client
+		if checkedClients[client] {
+			continue
+		}
+		checkedClients[client] = true
+		identity, err := proc.ReadIdentity(client.PID)
+		if err == nil {
+			live[identity] = true
+			continue
+		}
+		var gone *process.ProcessGoneError
+		if errors.As(err, &gone) || errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		live[client] = true
+		warnings = append(warnings, fmt.Sprintf(
+			"registered client process %d identity indeterminate (%s); treating expected identity as live",
+			client.PID, identityErrorCategory(err),
+		))
 	}
 	result := process.BuildSnapshot(currentTime(), processes, registrations, live, warnings)
 	data, err := json.MarshalIndent(result, "", "  ")
@@ -182,6 +214,16 @@ func snapshot(opts options, stdout io.Writer) error {
 		return nil
 	}
 	return writeAtomic(opts.outputPath, data)
+}
+
+func identityErrorCategory(err error) string {
+	if errors.Is(err, fs.ErrPermission) {
+		return "permission"
+	}
+	if strings.Contains(err.Error(), "parse stat") {
+		return "malformed"
+	}
+	return "unavailable"
 }
 
 func readRegistry(path string) ([]process.Registration, error) {

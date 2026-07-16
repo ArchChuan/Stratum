@@ -2,6 +2,8 @@
 
 MCP Governor observes local MCP processes and records memory snapshots. It is observation-only: it sends no signals, does not stop or restart processes, does not rewrite configuration, and exposes no network listener.
 
+Version 1 snapshots intentionally omit process argument vectors because they may contain credentials or other secrets. Arguments are used only in memory for service classification; the executable command name may be recorded.
+
 ## Build and run
 
 Build the standalone module from this directory:

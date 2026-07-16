@@ -194,7 +194,9 @@ printf 'start=%s elapsed_ms=%s captured_at=%s\n' "$window_start" \
   "$(jq -r .captured_at "$capture_dir/active.json")"
 ```
 
-Aggregate without printing command arguments or payloads:
+Version 1 snapshots intentionally omit process argument vectors, including from
+the retained raw samples; arguments exist only in scanner memory for service
+classification. Aggregate without printing command payloads:
 
 ```sh
 jq '(.processes | map({key:(.pid|tostring),value:true}) | from_entries) as $pids |
@@ -222,8 +224,9 @@ done
 For the recommended 24-hour evidence window, preserve 1,441 private samples
 separated by approximately one minute and emit only aggregate values. The
 collector rejects failed, malformed, or stale observations and verifies at
-least 24 hours of coverage from the first and last captured timestamps. It does
-not print process arguments:
+least 24 hours of coverage from the first and last captured timestamps. Because
+version 1 snapshots contain no `args` key, the private raw samples do not retain
+process arguments:
 
 ```sh
 set -euo pipefail
@@ -253,6 +256,7 @@ validate_snapshot() {
       all(.processes[];
         (.pid | positive_integer) and (.ppid | nonnegative_integer) and
         (.start_ticks | nonnegative_integer) and
+        (has("args") | not) and
         (.service | nonempty_string) and (.command | nonempty_string) and
         (.rss_bytes | nonnegative_integer) and
         (.pss_bytes | nonnegative_integer) and
