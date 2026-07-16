@@ -4,7 +4,7 @@
 
 Stratum 使用四种存储组件，均通过 Docker volume 持久化：
 
-1. **PostgreSQL** — 主关系数据库（用户、租户、Agent、Skill 版本、Knowledge 元数据、执行 trace/checkpoint）
+1. **PostgreSQL** — 主关系数据库（用户、租户、Agent、Skill 版本、Evaluation、Knowledge 元数据、执行 trace/checkpoint）
 2. **NATS JetStream** — 异步消息队列（memory pipeline）
 3. **Milvus** — 向量存储（embedding + RAG 检索），依赖 etcd 和 MinIO
 4. **Redis** — 运行时状态（memory fact-extraction buffer、refresh-token blacklist）
@@ -25,7 +25,7 @@ volumes:
 
 - 多租户 schema 隔离：`public` 保存全局表（tenants、users），每个租户有独立 `tenant_<id>` schema
 - 迁移由 `pkg/migration/sql/` 下编号 SQL 文件管理，启动时自动应用（当前最高版本：019）
-- 租户级表（skill_versions、agent_tool_traces、agent_trace_events、agent_execution_checkpoints、knowledge_parent_chunks 等）由 `pkg/storage/postgres/tenant_schema.sql` 定义，`ProvisionAllTenantSchemas` 在各 `tenant_<id>` schema 中创建
+- 租户级表（skill_versions、evaluation_jobs、eval_runs、evaluation_experiments、agent_tool_traces、agent_execution_checkpoints、knowledge_parent_chunks 等）由 `pkg/storage/postgres/tenant_schema.sql` 定义，`ProvisionAllTenantSchemas` 在各 `tenant_<id>` schema 中创建
 - pgx v5 连接池，支持 `SET LOCAL search_path` 切换租户 schema
 
 ### 备份

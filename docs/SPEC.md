@@ -1,18 +1,19 @@
 # SPEC: Stratum
 
-> Reverse-engineered specification — refreshed 2026-07-15 from the current worktree
+> Reverse-engineered specification — refreshed 2026-07-16 from the current worktree
 > Scope: backend, frontend, deployment assets, configuration, migrations, and tests — depth: deep
 
 ## 1. Overview
 
 ### 1.1 Purpose
 
-Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go + DDD 8 bounded context，前端 React 18 + AntD 5。把 Agent 编排（ReAct）、Skill 网关、记忆系统、GraphRAG、MCP 协议、多租户 IAM 串成统一的运行链路，目标是「让团队自托管 AI Agent 平台，不依赖 SaaS」。
+Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go + DDD 9 bounded context，前端 React 18 + AntD 5。把 Agent 编排（ReAct）、Skill 网关、评估优化、记忆系统、GraphRAG、MCP 协议、多租户 IAM 串成统一的运行链路，目标是「让团队自托管 AI Agent 平台，不依赖 SaaS」。
 
 ### 1.2 Key Capabilities
 
 - Agent 编排：ReAct StateGraph，工具调用 / SSE 流式 / 中断恢复 / 历史会话回填
 - Skill Gateway：code（goja JS 沙箱）· llm · http 三类执行器，命名 `tenant_{id}_{name}` 隔离
+- Evaluation：suite/revision、异步评估 job、优化候选、实验阶段与反馈闭环
 - 记忆系统：PostgreSQL 持久化 + 三阶段 NATS 异步流水线（outbox → embedder → enricher）+ Token 预算/摘要压缩
 - GraphRAG：Milvus 向量检索，支持 vector / keyword / hybrid（RRF）三种检索模式
 - MCP 协议：stdio / http / sse 三种 transport，AuthType none/bearer/api_key/oauth2，自动重试
@@ -22,7 +23,7 @@ Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go +
 
 ### 1.3 Architecture Style
 
-分层 DDD 单体（Modular Monolith）。`api/http` 接入层 → `api/wiring.Container` 组合根 → 8 个 `internal/<ctx>/{domain,application,infrastructure}` bounded context → `pkg/` 无业务基础设施。跨 context 仅经消费者侧 `domain/port/` 接口 + wiring 层 thin adapter，禁止 import 兄弟 context 的 `application` / `infrastructure`。
+分层 DDD 单体（Modular Monolith）。`api/http` 接入层 → `api/wiring.Container` 组合根 → 9 个 `internal/<ctx>/{domain,application,infrastructure}` bounded context → `pkg/` 无业务基础设施。跨 context 仅经消费者侧 `domain/port/` 接口 + wiring 层 thin adapter，禁止 import 兄弟 context 的 `application` / `infrastructure`。
 
 ---
 
@@ -43,7 +44,7 @@ Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go +
 | Tracing/Metrics | OpenTelemetry | v1.22 + Prometheus |
 | LLM Provider | Qwen（dashscope）· Zhipu | OpenAI-compat |
 | JS 沙箱 | goja | — |
-| 配置 | Viper | v1.18 |
+| 配置 | `config/config.go` 环境变量读取 | stdlib `os` |
 | 前端 | React 18.3 · Vite 5.4 · AntD 5.20 · React Router 6.26 · Axios 1.7 · TanStack Query v5 · Zustand v5 · Zod · Recharts | — |
 
 ---
@@ -59,11 +60,11 @@ stratum/
 │   │   ├── middleware/         JWT · Tenant · Trace · Prometheus · ErrorHandler · RequireRole
 │   │   └── router.go           Gin 路由组装配
 │   └── wiring/
-│       ├── container.go        BuildContainer（组合根）+ Shutdown 逆序释放
+│       ├── wiring.go           Container / BuildContainer（组合根）+ Shutdown 逆序释放
 │       ├── memory.go           memory pipeline 装配
 │       ├── tenant_resolver.go  TenantCapabilityResolver（per-tenant gateway 解析）
 │       └── *.go                每域一个 wiring 文件
-├── internal/                    8 bounded contexts
+├── internal/                    9 bounded contexts
 │   ├── agent/                  ReAct StateGraph · Registry · ExecutionStore · ChatStore · BaseAgent
 │   │   └── application/graph/  StateGraph[T]・nodeLLM・nodeTool・条件边
 │   ├── memory/                 MemoryManager · MemoryRepo port · pipeline（outbox→embedder→enricher）
@@ -72,7 +73,8 @@ stratum/
 │   ├── mcp/                    MCPService · ServerManager · SkillRegistry · 三种 transport
 │   ├── iam/                    TenantService · AdminService · OnboardService · JWTService
 │   ├── llmgateway/             Gateway · TenantGatewayCache · openai_compat client
-│   └── platform/               Viper config · Harness 生命周期
+│   ├── evaluation/             suite/run/job · optimization · experiment · feedback
+│   └── platform/               Harness 生命周期与 runtime 启动编排
 ├── pkg/                         无业务基础设施
 │   ├── storage/{postgres,redis,milvus,tenantnaming,tenantdb}
 │   ├── messaging/nats
@@ -116,6 +118,10 @@ stratum/
 | MCP | `mcp_configs` | id TEXT, transport, command/url, args/env/headers/auth_config/retry_config JSONB, timeout_sec DEFAULT 30 |
 | Skill | `skills` | id, name UNIQUE, legacy type/config，active_version_id / draft_version_id |
 | | `skill_versions` · `skill_test_cases` · `skill_eval_runs` | capability/tool contract/implementation 快照、测试基线与评估记录 |
+| Evaluation | `eval_suites` · `eval_suite_revisions` · `eval_cases` | 评估集、冻结修订和用例 |
+| | `eval_runs` · `eval_case_results` · `evaluation_jobs` | 异步运行、逐例结果与租约 job |
+| | `optimization_jobs` · `optimization_candidates` | 优化任务与候选版本 |
+| | `evaluation_experiments` · `evaluation_deployments` · `evaluation_feedback` | 实验阶段、部署决策与反馈 |
 | Memory | `memory_entries` | id UUID v7, conversation_id FK, user_id, agent_id FK, role, content, type DEFAULT short_term, importance FLOAT8, tags TEXT[], keywords TEXT[], token_estimate, expires_at, enriched_at; GIN trgm on content |
 | | `memory_outbox` | id BIGSERIAL, message_id NOT NULL, payload JSONB |
 | | `memory_summaries` | conversation_id FK, summary, covered_until, token_count |
@@ -148,7 +154,7 @@ stratum/
 
 - **agent_executions.status**: `success` ⊕ `error`（CHECK）
 - **chat_messages.role**: `user` ⊕ `assistant`（CHECK）
-- **chat_conversations**: live → soft-deleted（`deleted_at` 设值），TTL `expires_at`（默认 +30d）
+- **chat_conversations**: 用户删除与 Agent 清理走硬删除；`deleted_at` 兼容历史软删记录，清理任务同时回收过期和历史软删会话
 - **memory_entries.type**: `short_term` → `long_term`（pipeline enricher 提升）/ `entity` / `summary`
 - **tenant_members.role**: `owner` ↔ `admin` ↔ `member`（owner-only 改写，禁 self-modify，admin 不能 remove admin）
 - **users guest lifecycle**: `is_guest=true` 且 `expires_at` 到期后由回收流程清理
@@ -169,6 +175,7 @@ stratum/
 | Agent | `/agents` · `/agents/:id` · `/agents/:id/execute` · `/agents/:id/execute/stream` · `/agents/executions` · execution trace 子路由 | member 可读/执行，admin 写；执行需 active + rate limit |
 | Chat | `/agents/:id/conversations` · `/conversations/:convID` · `/conversations/:convID/messages` | JWT + tenant context |
 | Skill | `/skills` · `/skills/:id` · `/skills/:id/workspace` · draft capability/contract/implementation · publish · test/test-draft | member 可读/测试，admin 写；运行需 active |
+| Evaluation | `/evaluations/suites` · publish · runs/jobs · optimizations · experiments/evaluate · feedback | admin 创建/查询评估控制面；active member 可提交 feedback |
 | Knowledge | `/knowledge/workspaces` · workspace stats/documents · `/knowledge/ingest` · `/knowledge/query` | member 读/查，admin 管理/摄取 |
 | MCP | `/mcp/servers` · server tools/resources/config/reconnect · `/mcp/tools/:toolId/execute` · `/mcp/skills` · `/mcp/status` | member 读/执行，admin 管理 server；写操作需 active |
 | Memory | `/memory` · `/memory/:id` · `/memory/clear` · `/memory/sessions` · `/memory/session/:session_id` · `/memory/stats` · `/memory/summary/:session_id` | JWT + tenant context + active tenant |
@@ -196,7 +203,7 @@ stratum/
 
 ## 6. Configuration
 
-> Viper（`internal/platform/config`），yaml + ENV override（双下划线分隔）。生产配置 `config/prod.yaml` 禁修改。
+> `config/config.go` 直接读取环境变量并应用默认值；当前没有 Viper/yaml 配置装载链。生产配置 `config/prod.yaml` 仍禁止修改。
 
 | Key | 必需 | 默认 | 说明 |
 |-----|------|------|------|
@@ -252,7 +259,7 @@ stratum/
 12. **ReAct loop**：节点 `nodeLLM` ↔ `nodeTool` 条件边；内置 knowledge/memory/continue-reasoning 工具硬编码处理；published Skill 工具通过 `SkillToolIndex` 映射到 `{SkillID, VersionID}`，旧配置才回退 `tenant_{id}_{name}`。
 13. **GraphRAG mode**：`vector` embed→Milvus search · `keyword` Milvus KeywordSearch · `hybrid` RRF（VectorStore.HybridSearch）；collection 命名 `tenantdb.WorkspaceCollection`，fallback `{workspace}_kb`。
 14. **MCP retry**：`RetryConfig{Enabled, MaxRetries, InitialDelayMs, MaxDelayMs, BackoffFactor}` 指数退避；transport 中 stdio/http/sse 三选一互斥。
-15. **Chat**：`role` CHECK ∈ {user, assistant}；`steps_json` 存储 ReAct 步骤；`is_error` 标记；conversation `expires_at` 默认 +30 天，`deleted_at` 软删。
+15. **Chat**：`role` CHECK ∈ {user, assistant}；`steps_json` 存储 ReAct 步骤；`is_error` 标记；conversation `expires_at` 默认 +30 天；当前删除实现为硬删，`deleted_at` 仅兼容历史记录与清理。
 16. **Outbox 写入必须包含 `message_id`**（NOT NULL 无 DEFAULT），曾因漏列触发全量回滚。
 17. **错误分层**：`domain.Err*` → infrastructure 翻译 `pgconn.PgError` → application 编排 → middleware 中央表映射 HTTP 状态码；响应 `{"error":"..."}` 冻结。
 18. **生命周期**：`Harness` 顺序 Start，逆序 Stop；`Register` 在 Start 后锁定；组件实现 `Name/Start/Stop/HealthCheck`。

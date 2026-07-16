@@ -1,18 +1,19 @@
 # Stratum Demo 部署架构说明
 
-本文记录当前 demo 环境的部署现状，并用教学方式解释一次浏览器请求如何穿过公网、Ingress、
-前端 Nginx、Go 后端和集群内依赖服务。
+本文用教学方式解释一次浏览器请求如何穿过公网、Ingress、前端 Nginx、Go 后端和集群内依赖服务。
+其中远端资源、入口和监控栈内容是 2026-07-07 的运维快照，不应视为 2026-07-16 仍在线或配置未变；
+当前可复现的部署契约以 `helm/`、`.github/workflows/deploy.yml` 和 `docs/deployment/k3s-demo.md` 为准。
 
 最后人工确认时间：2026-07-07。远端确认方式为 SSH 到 `demo.stratum.example` 后执行只读
 `kubectl` 查询。
 
-当前访问入口：
+快照中的访问入口：
 
 ```text
 http://demo.stratum.example/
 ```
 
-当前 GitHub OAuth 回调地址：
+快照中的 GitHub OAuth 回调地址：
 
 ```text
 http://demo.stratum.example/api/auth/github/callback

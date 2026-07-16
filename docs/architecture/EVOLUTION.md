@@ -171,6 +171,10 @@ platform → (被所有 context 依赖，不依赖任何 context)
 
 **安全强化**: 全局禁止从环境变量读取 API Key，所有密钥必须来自租户配置
 
+### 阶段 6：通用 Evaluation 控制面（2026-07-16）
+
+当前源码已新增第 9 个 bounded context `evaluation`。它通过 `api/http/router.go` 暴露 suite 发布、异步 run/job、优化候选、实验阶段判断与 feedback 路由；tenant-scoped 数据表集中在 `pkg/storage/postgres/tenant_schema.sql`，前端入口位于 `web/src/modules/evaluation/`。
+
 ---
 
 ## 2. DDD 分层规范
@@ -453,7 +457,7 @@ func (s *AgentService) Execute(ctx, agentID, input) (*Result, error) {
 ### 5.4 Middleware 映射 HTTP 状态码
 
 ```go
-// api/middleware/error_handler.go
+// api/middleware/middleware.go + error_mapping.go
 func ErrorHandler(logger *zap.Logger) gin.HandlerFunc {
     return func(c *gin.Context) {
         c.Next()
@@ -656,7 +660,7 @@ func NewSafeDial() *net.Dialer {
 
 ### 8.1 常量管理
 
-**所有行为常量集中在 `web/src/constants/index.js`**:
+**所有行为常量集中在 `web/src/constants/index.ts`**:
 
 ```js
 // API / 网络
@@ -676,7 +680,7 @@ export const MCP_MAX_TIMEOUT_SEC = 300;
 
 ### 8.2 API 调用
 
-**统一走 `services/api.js` 的 axios 实例**:
+**普通请求统一走 `web/src/services/client.ts` 的 axios 实例，SSE 统一走该文件的 `streamApiEvents`**:
 
 ```js
 // ✓ 正确
@@ -776,7 +780,7 @@ func TestAgentService_Create(t *testing.T) {
 
 ### 9.3 契约测试
 
-**API 向后兼容守护**: `api/http/contract_test.go` + `testdata/contracts/*.golden.json`
+**API 向后兼容守护**: `api/http/contract_test.go` + `api/http/testdata/contracts/*.golden.json`
 
 **规则**:
 
@@ -859,19 +863,19 @@ linters-settings:
 - `pkg/storage/postgres/tenant.go` — 租户 schema 切换
 - `pkg/observability/trace.go` — Trace ID 生成与传播
 - `api/middleware/trace.go` — TraceMiddleware
-- `api/middleware/error_handler.go` — 错误映射 HTTP 状态码
+- `api/middleware/middleware.go` / `error_mapping.go` — 错误处理中间件与状态码映射
 
 ### Wiring 容器
 
-- `api/wiring/container.go` — 依赖注入根
+- `api/wiring/wiring.go` — Container、BuildContainer 与逆序 Shutdown
 - `api/wiring/<ctx>.go` — 各 context 的组装逻辑
 
 ### 测试
 
 - `api/http/contract_test.go` — API 契约测试
-- `testdata/contracts/*.golden.json` — 契约快照
+- `api/http/testdata/contracts/*.golden.json` — 契约快照
 
 ---
 
-**最后更新**: 2026-06-22
+**最后更新**: 2026-07-16
 **维护者**: 项目架构组

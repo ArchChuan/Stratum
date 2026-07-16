@@ -9,13 +9,13 @@ React 18.3 · Vite 5.4 · Ant Design 5.20 · React Router 6.26 · Axios 1.7 · T
 | `components/` | 共享 UI 组件 |
 | `hooks/` | 自定义 Hook（`use*` 命名） |
 | `pages/` | 路由页面组件（`*Page.jsx`，≤200 行） |
-| `services/` | API 调用层（唯一 axios 实例） |
+| `services/` | 共享 HTTP client 与流式请求工具 |
 | `utils/` | 纯函数工具 |
 | `contexts/` | React Context |
 
 ## 编码规则
 
-- 所有 API 调用走 `services/api.js` 的 axios 实例，禁止裸 `fetch`
+- 普通 API 调用走 `web/src/services/client.ts` 导出的 axios 实例；SSE 流式调用统一走同文件的 `streamApiEvents`
 - 错误统一：`message.error(err.response?.data?.error || '操作失败')`
 - 禁止跨 `pages/` 目录导入；页面组件 ≤200 行，超出提取到 hooks/utils
 - `useEffect` 依赖必须完整；异步 effect 需要 `let cancelled = false` 清理

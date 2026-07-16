@@ -22,12 +22,14 @@ internal/
                             - GraphRAG：WorkspaceService、RAGService、文档摄取
   llmgateway/{domain,application,infrastructure}
                             - LLM 统一网关（Qwen/Zhipu OpenAI-compatible）、ModelService
+  evaluation/{domain,application,infrastructure}
+                            - 通用评估控制面：suite/revision、异步 run/job、优化候选、实验与反馈
   mcp/{domain,application,infrastructure}
                             - MCP 服务器管理、ToolRegistry、工具级风险策略与审批执行
   memory/{domain,application,infrastructure}
                             - 记忆持久化 + JetStream 三阶段 pipeline
-  platform/{config,domain,harness}
-                            - Viper 配置、Harness 生命周期（顺序启动→逆序停止）
+  platform/{domain,harness,runtime}
+                            - Harness 生命周期与启动期运行时编排（顺序启动→逆序停止）
   skill/{domain,application,infrastructure}
                             - Skill instruction bundle CRUD、revision 发布与候选优化
 pkg/
@@ -82,7 +84,7 @@ grafana/                    - Grafana 数据源 + 仪表板配置
 - 单元测试 `*_test.go` 与源码同目录
 - 集成测试需 Docker 服务，标记 `//go:build integration`
 - 运行：`go vet && go test -short ./...`（单元），`go test -v -race -timeout 30s ./...`（完整）
-- API 契约测试：`api/http/contract_test.go` + `testdata/contracts/*.golden.json`
+- API 契约测试：`api/http/contract_test.go` + `api/http/testdata/contracts/*.golden.json`
 - 目标覆盖率 ≥ 80% 业务逻辑代码
 
 ## Build & Deploy
