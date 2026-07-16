@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "output_path": "%h/.local/state/mcp-governor/snapshot.json",
+  "registry_path": "%h/.local/state/mcp-governor/registry.json",
+  "services": [
+    { "name": "chroma", "all_args_contain": ["chroma-mcp", "--client-type"] },
+    { "name": "codegraph", "all_args_contain": ["/codegraph", "serve", "--mcp"] },
+    { "name": "obsidian", "all_args_contain": ["obsidian-mcp-server"] },
+    { "name": "claude-mem", "all_args_contain": ["claude-mem", "scripts/mcp-server.cjs"] },
+    { "name": "headroom", "all_args_contain": ["/headroom", "mcp", "serve"] },
+    { "name": "playwright", "all_args_contain": ["playwright-mcp"] },
+    { "name": "chrome-devtools", "all_args_contain": ["chrome-devtools-mcp", "--headless"] }
+  ]
+}
