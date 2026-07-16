@@ -86,9 +86,6 @@ func TestAddMemory_UsesAuthenticatedIdentityAndCanonicalDTO(t *testing.T) {
 	if svc.createReq.TenantID != "tenant-1" || svc.createReq.UserID != "user-1" {
 		t.Fatalf("handler trusted body identity: %#v", svc.createReq)
 	}
-	if svc.createReq.AgentID != "" || svc.createReq.ConversationID != "" {
-		t.Fatalf("user endpoint accepted unverified ownership references: %#v", svc.createReq)
-	}
 	var got map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)

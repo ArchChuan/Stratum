@@ -76,8 +76,7 @@ func (h *UserMemoryHandler) AddMemory(c *gin.Context) {
 		return
 	}
 	memory, err := h.svc.CreateUserMemory(c.Request.Context(), &application.CreateUserMemoryRequest{
-		TenantID: tenantID, UserID: userID, AgentID: req.AgentID, ConversationID: req.ConversationID,
-		Content: req.Content, Importance: req.Importance, EntityNames: req.EntityNames,
+		TenantID: tenantID, UserID: userID, Content: req.Content, Importance: req.Importance,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -108,7 +107,7 @@ func (h *UserMemoryHandler) GetMemory(c *gin.Context) {
 }
 
 func (h *UserMemoryHandler) ListSessions(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"sessions": []any{}})
+	c.JSON(http.StatusOK, dto.MemorySessionsResponse{Sessions: []string{}})
 }
 
 func (h *UserMemoryHandler) GetStats(c *gin.Context) {
@@ -145,7 +144,7 @@ func (h *UserMemoryHandler) GetSummary(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"summary": summary})
+	c.JSON(http.StatusOK, dto.MemorySummaryResponse{Summary: summary})
 }
 
 func (h *UserMemoryHandler) DeleteMemory(c *gin.Context) {
@@ -170,9 +169,8 @@ func (h *UserMemoryHandler) DeleteMemory(c *gin.Context) {
 
 func memoryFactResponse(memory *application.UserMemory) dto.MemoryFactResponse {
 	return dto.MemoryFactResponse{
-		ID: memory.ID, AgentID: memory.AgentID, ConversationID: memory.ConversationID,
-		Scope: memory.Scope, Content: memory.Content, Importance: memory.Importance,
-		EntityNames: memory.EntityNames, CreatedAt: memory.CreatedAt, UpdatedAt: memory.UpdatedAt,
+		ID: memory.ID, Scope: memory.Scope, Content: memory.Content,
+		Importance: memory.Importance, CreatedAt: memory.CreatedAt, UpdatedAt: memory.UpdatedAt,
 	}
 }
 

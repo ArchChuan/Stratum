@@ -7,24 +7,26 @@ import "time"
 // CreateMemoryRequest is the canonical request body for POST /memory.
 // Tenant and user identity are deliberately absent and come from auth context.
 type CreateMemoryRequest struct {
-	AgentID        string   `json:"agent_id"`
-	ConversationID string   `json:"conversation_id"`
-	Content        string   `json:"content" binding:"required"`
-	Importance     float64  `json:"importance"`
-	EntityNames    []string `json:"entity_names"`
+	Content    string  `json:"content" binding:"required"`
+	Importance float64 `json:"importance"`
 }
 
 // MemoryFactResponse is the canonical fact shape returned by /memory endpoints.
 type MemoryFactResponse struct {
-	ID             string    `json:"id"`
-	AgentID        string    `json:"agent_id,omitempty"`
-	ConversationID string    `json:"conversation_id,omitempty"`
-	Scope          string    `json:"scope"`
-	Content        string    `json:"content"`
-	Importance     float64   `json:"importance"`
-	EntityNames    []string  `json:"entity_names"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID         string    `json:"id"`
+	Scope      string    `json:"scope"`
+	Content    string    `json:"content"`
+	Importance float64   `json:"importance"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type MemorySessionsResponse struct {
+	Sessions []string `json:"sessions"`
+}
+
+type MemorySummaryResponse struct {
+	Summary string `json:"summary"`
 }
 
 // MemoryStatsResponse is the response for GET /memory/stats.

@@ -227,26 +227,20 @@ type FactDTO struct {
 
 // UserMemory is the application-layer representation exposed to user-facing adapters.
 type UserMemory struct {
-	ID             string
-	AgentID        string
-	ConversationID string
-	Scope          string
-	Content        string
-	Importance     float64
-	EntityNames    []string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID         string
+	Scope      string
+	Content    string
+	Importance float64
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // CreateUserMemoryRequest creates a user-owned fact. Tenant and user IDs must come from auth context.
 type CreateUserMemoryRequest struct {
-	TenantID       string
-	UserID         string
-	AgentID        string
-	ConversationID string
-	Content        string
-	Importance     float64
-	EntityNames    []string
+	TenantID   string
+	UserID     string
+	Content    string
+	Importance float64
 }
 
 // GetUserMemoryRequest reads a fact only when it belongs to the authenticated user.
@@ -258,8 +252,8 @@ type GetUserMemoryRequest struct {
 
 // CreateUserMemory persists a user-scoped canonical memory fact.
 func (s *MemoryService) CreateUserMemory(ctx context.Context, req *CreateUserMemoryRequest) (*UserMemory, error) {
-	fact, err := domain.NewFact(req.TenantID, req.UserID, req.AgentID, req.ConversationID,
-		string(domain.ScopeUser), req.Content, req.Importance, req.EntityNames)
+	fact, err := domain.NewFact(req.TenantID, req.UserID, "", "",
+		string(domain.ScopeUser), req.Content, req.Importance, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +269,7 @@ func (s *MemoryService) GetUserMemory(ctx context.Context, req *GetUserMemoryReq
 	if err != nil {
 		return nil, fmt.Errorf("get user memory: %w", err)
 	}
-	if fact.UserID != req.UserID {
+	if fact.UserID != req.UserID || fact.Scope != domain.ScopeUser {
 		return nil, domain.ErrScopeMismatch
 	}
 	return userMemoryFromFact(fact), nil
@@ -287,7 +281,7 @@ func (s *MemoryService) ForgetUserMemory(ctx context.Context, req *ForgetMemoryR
 	if err != nil {
 		return fmt.Errorf("get user memory for deletion: %w", err)
 	}
-	if fact.UserID != req.UserID {
+	if fact.UserID != req.UserID || fact.Scope != domain.ScopeUser {
 		return domain.ErrScopeMismatch
 	}
 	return s.ForgetMemory(ctx, req)
@@ -295,9 +289,8 @@ func (s *MemoryService) ForgetUserMemory(ctx context.Context, req *ForgetMemoryR
 
 func userMemoryFromFact(fact *domain.MemoryFact) *UserMemory {
 	return &UserMemory{
-		ID: fact.ID, AgentID: fact.AgentID, ConversationID: fact.ConversationID,
-		Scope: string(fact.Scope), Content: fact.Content, Importance: fact.Importance,
-		EntityNames: fact.EntityNames, CreatedAt: fact.CreatedAt, UpdatedAt: fact.UpdatedAt,
+		ID: fact.ID, Scope: string(fact.Scope), Content: fact.Content,
+		Importance: fact.Importance, CreatedAt: fact.CreatedAt, UpdatedAt: fact.UpdatedAt,
 	}
 }
 
