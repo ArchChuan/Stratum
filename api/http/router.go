@@ -257,11 +257,9 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		return
 	}
 
-	jwtMW := middleware.JWTMiddleware(c.Platform.JWTService)
-	injectTenant := middleware.InjectTenantContext()
-
 	userHandler := handler.NewUserMemoryHandler(c.Memory.Service, c.Memory.Manager)
-	g := r.Group("/memory", jwtMW, injectTenant, requireActive)
+	g := r.Group("/memory", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
+	g.Use(requireActive)
 	g.DELETE("/clear", userHandler.ClearMemories)
 	g.POST("", userHandler.AddMemory)
 	g.GET("/:id", userHandler.GetMemory)

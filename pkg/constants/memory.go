@@ -132,6 +132,7 @@ const (
 // Memory Workers - background processing intervals and batch sizes
 const (
 	MemoryExtractionBatchSize  = 10                  // facts per extraction queue poll
+	MemoryExtractionLease      = 5 * time.Minute     // reclaim processing tasks after worker loss
 	MemorySupersedeBatchSize   = 20                  // facts per supersede judgment batch
 	MemoryEmbedInterval        = 10 * time.Second    // embed worker poll interval
 	MemoryEmbedBatchSize       = 50                  // facts per embed batch

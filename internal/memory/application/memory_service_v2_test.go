@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,6 +12,66 @@ import (
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 )
+
+func TestMemoryService_CreateAndReadUserMemory(t *testing.T) {
+	ctx := context.Background()
+	facts := new(MockFactRepo)
+	svc := NewMemoryService(facts, nil, nil, nil, nil, nil, nil, nil)
+
+	facts.On("Create", ctx, "tenant-1", mock.MatchedBy(func(f *domain.MemoryFact) bool {
+		return f.TenantID == "tenant-1" && f.UserID == "user-1" && f.Scope == domain.ScopeUser &&
+			f.Content == "prefers concise answers" && f.Importance == 0.8
+	})).Return(nil).Once()
+
+	created, err := svc.CreateUserMemory(ctx, &CreateUserMemoryRequest{
+		TenantID: "tenant-1", UserID: "user-1", Content: "prefers concise answers", Importance: 0.8,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, "prefers concise answers", created.Content)
+	assert.Equal(t, "user", created.Scope)
+
+	fact := &domain.MemoryFact{ID: created.ID, TenantID: "tenant-1", UserID: "user-1", Scope: domain.ScopeUser, Content: created.Content}
+	facts.On("GetByID", ctx, "tenant-1", created.ID).Return(fact, nil).Once()
+	read, err := svc.GetUserMemory(ctx, &GetUserMemoryRequest{TenantID: "tenant-1", UserID: "user-1", FactID: created.ID})
+	assert.NoError(t, err)
+	assert.Equal(t, created.ID, read.ID)
+	facts.AssertExpectations(t)
+}
+
+func TestMemoryService_UserMemoryOwnership(t *testing.T) {
+	ctx := context.Background()
+	facts := new(MockFactRepo)
+	svc := NewMemoryService(facts, nil, nil, nil, nil, nil, nil, nil)
+	fact := &domain.MemoryFact{ID: "fact-1", TenantID: "tenant-1", UserID: "other-user", Scope: domain.ScopeUser}
+
+	facts.On("GetByID", ctx, "tenant-1", "fact-1").Return(fact, nil).Twice()
+	_, err := svc.GetUserMemory(ctx, &GetUserMemoryRequest{TenantID: "tenant-1", UserID: "user-1", FactID: "fact-1"})
+	assert.ErrorIs(t, err, domain.ErrScopeMismatch)
+	err = svc.ForgetUserMemory(ctx, &ForgetMemoryRequest{TenantID: "tenant-1", UserID: "user-1", FactID: "fact-1"})
+	assert.ErrorIs(t, err, domain.ErrScopeMismatch)
+	facts.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestMemoryService_UserEndpointRejectsAgentScopedFact(t *testing.T) {
+	ctx := context.Background()
+	facts := new(MockFactRepo)
+	svc := NewMemoryService(facts, nil, nil, nil, nil, nil, nil, nil)
+	fact := &domain.MemoryFact{ID: "fact-1", TenantID: "tenant-1", UserID: "user-1", AgentID: "agent-1", Scope: domain.ScopeAgent}
+
+	facts.On("GetByID", ctx, "tenant-1", "fact-1").Return(fact, nil).Once()
+	_, err := svc.GetUserMemory(ctx, &GetUserMemoryRequest{TenantID: "tenant-1", UserID: "user-1", FactID: "fact-1"})
+	assert.ErrorIs(t, err, domain.ErrScopeMismatch)
+}
+
+func TestMemoryService_GetUserMemoryPreservesNotFound(t *testing.T) {
+	ctx := context.Background()
+	facts := new(MockFactRepo)
+	svc := NewMemoryService(facts, nil, nil, nil, nil, nil, nil, nil)
+	facts.On("GetByID", ctx, "tenant-1", "missing").Return(nil, domain.ErrFactNotFound).Once()
+
+	_, err := svc.GetUserMemory(ctx, &GetUserMemoryRequest{TenantID: "tenant-1", UserID: "user-1", FactID: "missing"})
+	assert.True(t, errors.Is(err, domain.ErrFactNotFound))
+}
 
 // Mock implementations for testing
 type MockFactRepo struct {
@@ -155,13 +216,13 @@ func (m *MockExtractionQueue) Dequeue(ctx context.Context, tenantID string) (*po
 	return args.Get(0).(*port.ExtractionTask), args.Error(1)
 }
 
-func (m *MockExtractionQueue) MarkCompleted(ctx context.Context, tenantID string, taskID int64) error {
-	args := m.Called(ctx, tenantID, taskID)
+func (m *MockExtractionQueue) MarkCompleted(ctx context.Context, tenantID string, taskID int64, claimedAt time.Time) error {
+	args := m.Called(ctx, tenantID, taskID, claimedAt)
 	return args.Error(0)
 }
 
-func (m *MockExtractionQueue) MarkFailed(ctx context.Context, tenantID string, taskID int64, errMsg string) error {
-	args := m.Called(ctx, tenantID, taskID, errMsg)
+func (m *MockExtractionQueue) MarkFailed(ctx context.Context, tenantID string, taskID int64, claimedAt time.Time, errMsg string) error {
+	args := m.Called(ctx, tenantID, taskID, claimedAt, errMsg)
 	return args.Error(0)
 }
 
