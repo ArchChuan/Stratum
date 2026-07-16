@@ -18,7 +18,6 @@ import { WorkspaceDetailHeader } from '@/modules/knowledge/components/WorkspaceD
 import { WorkspaceListGrid } from '@/modules/knowledge/components/WorkspaceListGrid';
 import { WorkspaceListHeader } from '@/modules/knowledge/components/WorkspaceListHeader';
 import { SkillCard } from '@/modules/skill/components/SkillCard';
-import { SkillFormSections } from '@/modules/skill/components/SkillFormSections';
 
 vi.mock('@/modules/iam/components/AuthContext', () => ({
   useAuth: () => ({ login: vi.fn() }),
@@ -57,27 +56,6 @@ describe('responsive page contracts', () => {
     );
     expect(container.firstElementChild).toHaveClass('responsive-page-header');
     expect(container.querySelector('.responsive-toolbar')).toBeInTheDocument();
-  });
-
-  it('uses a responsive grid for paired skill form controls', () => {
-    const Fixture = () => {
-      const [form] = Form.useForm();
-      return (
-        <Form form={form}>
-          <SkillFormSections
-            form={form}
-            skillType="http"
-            availableModels={['test-model']}
-            modelsLoading={false}
-            isEdit
-          />
-        </Form>
-      );
-    };
-    const { container } = render(
-      <Fixture />,
-    );
-    expect(container.querySelector('.responsive-form-grid')).toBeInTheDocument();
   });
 
   it('marks knowledge detail content as fluid and long-text safe', () => {
@@ -160,7 +138,7 @@ describe('responsive page contracts', () => {
             systemPrompt: '',
             llmModel: '',
             allowedSkills: [],
-            mcpServerIds: [],
+            mcpToolIds: [],
             knowledgeWorkspaceIds: [],
             memoryScope: 'user',
           }}
@@ -170,7 +148,7 @@ describe('responsive page contracts', () => {
         />
         <SkillCard
           canManage
-          skill={{ id: 'skill-1', name: 'Skill', description: '', type: 'code' }}
+          skill={{ id: 'skill-1', name: 'Skill', description: '', status: 'published' }}
           onEdit={vi.fn()}
           onDelete={vi.fn()}
         />

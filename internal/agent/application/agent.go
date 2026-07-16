@@ -41,24 +41,27 @@ type (
 // in the application layer because it references port.ToolDefinition and
 // function types that depend on cross-context ports.
 type ExecutionConfig struct {
-	MaxSteps       int
-	Timeout        time.Duration
-	Temperature    float32
-	EnableTools    bool
-	AvailableTools []string
-	Stream         bool
-	TokenCallback  func(string)
-	TenantID       string
-	TraceID        string
-	ExecutionID    string
-	LLMAPIKeys     map[string]string
-	RAGSearchFn    func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
-	ExtraTools     []port.ToolDefinition
-	// SkillToolIndex maps tenant-scoped tool names to skill/version refs for execution routing.
-	SkillToolIndex map[string]port.SkillToolRef
-	ConversationID string
-	UserID         string
-	HistoryWindow  int
+	MaxSteps           int
+	Timeout            time.Duration
+	Temperature        float32
+	EnableTools        bool
+	AvailableTools     []string
+	Stream             bool
+	TokenCallback      func(string)
+	TenantID           string
+	TraceID            string
+	ExecutionID        string
+	LLMAPIKeys         map[string]string
+	RAGSearchFn        func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	ExtraTools         []port.ToolDefinition
+	SkillCatalog       map[string]port.SkillActivation
+	ToolCallFn         func(ctx context.Context, serverID, toolName string, input map[string]any) (any, error)
+	ApprovalRequestFn  port.ToolApprovalRequester
+	ApprovedToolCallFn port.ApprovedToolCallFn
+	ActiveSkill        *port.SkillActivation
+	ConversationID     string
+	UserID             string
+	HistoryWindow      int
 }
 
 const (
@@ -320,17 +323,24 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			len(workspaceNames) > 0 && cfg.RAGSearchFn != nil,
 			a.MemoryInjector != nil)
 		initState := agentgraph.ReActState{
-			TenantID:       cfg.TenantID,
-			TraceID:        cfg.TraceID,
-			ConversationID: cfg.ConversationID,
-			LLMAPIKeys:     cfg.LLMAPIKeys,
-			Model:          llmModel,
-			Messages:       initMessages,
-			OnToken:        cfg.TokenCallback,
-			AvailableTools: mergeTools(availableTools, cfg.ExtraTools, a.Logger),
-			SkillToolIndex: cfg.SkillToolIndex,
-			RAGSearchFn:    cfg.RAGSearchFn,
-			MaxLLMSteps:    cfg.MaxSteps,
+			TenantID:                   cfg.TenantID,
+			TraceID:                    cfg.TraceID,
+			ConversationID:             cfg.ConversationID,
+			LLMAPIKeys:                 cfg.LLMAPIKeys,
+			Model:                      llmModel,
+			Messages:                   initMessages,
+			OnToken:                    cfg.TokenCallback,
+			AvailableTools:             mergeTools(availableTools, cfg.ExtraTools, a.Logger),
+			SkillCatalog:               cfg.SkillCatalog,
+			ActiveSkill:                cfg.ActiveSkill,
+			ToolCallFn:                 cfg.ToolCallFn,
+			ApprovalRequestFn:          cfg.ApprovalRequestFn,
+			ApprovedToolCallFn:         cfg.ApprovedToolCallFn,
+			ExecutionID:                cfg.ExecutionID,
+			AgentKnowledgeWorkspaceIDs: workspaceNames,
+			AgentMemoryScope:           memoryScope,
+			RAGSearchFn:                cfg.RAGSearchFn,
+			MaxLLMSteps:                cfg.MaxSteps,
 		}
 		if a.RecallMemoryFn != nil {
 			fn := a.RecallMemoryFn
@@ -435,19 +445,26 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			len(workspaceNames) > 0 && cfg.RAGSearchFn != nil,
 			a.MemoryInjector != nil)
 		initState := agentgraph.ReActState{
-			TenantID:          cfg.TenantID,
-			TraceID:           cfg.TraceID,
-			ConversationID:    cfg.ConversationID,
-			LLMAPIKeys:        cfg.LLMAPIKeys,
-			Model:             llmModel,
-			Messages:          initMessages,
-			OnToken:           cfg.TokenCallback,
-			AvailableTools:    mergeTools(availableTools, cfg.ExtraTools, a.Logger),
-			SkillToolIndex:    cfg.SkillToolIndex,
-			RAGSearchFn:       cfg.RAGSearchFn,
-			MaxLLMSteps:       cfg.MaxSteps,
-			StuckThreshold:    stuckThreshold,
-			CheckpointEnabled: a.CheckpointEnabled,
+			TenantID:                   cfg.TenantID,
+			TraceID:                    cfg.TraceID,
+			ConversationID:             cfg.ConversationID,
+			LLMAPIKeys:                 cfg.LLMAPIKeys,
+			Model:                      llmModel,
+			Messages:                   initMessages,
+			OnToken:                    cfg.TokenCallback,
+			AvailableTools:             mergeTools(availableTools, cfg.ExtraTools, a.Logger),
+			SkillCatalog:               cfg.SkillCatalog,
+			ActiveSkill:                cfg.ActiveSkill,
+			ToolCallFn:                 cfg.ToolCallFn,
+			ApprovalRequestFn:          cfg.ApprovalRequestFn,
+			ApprovedToolCallFn:         cfg.ApprovedToolCallFn,
+			ExecutionID:                cfg.ExecutionID,
+			AgentKnowledgeWorkspaceIDs: workspaceNames,
+			AgentMemoryScope:           memoryScope,
+			RAGSearchFn:                cfg.RAGSearchFn,
+			MaxLLMSteps:                cfg.MaxSteps,
+			StuckThreshold:             stuckThreshold,
+			CheckpointEnabled:          a.CheckpointEnabled,
 		}
 		if a.RecallMemoryFn != nil {
 			fn := a.RecallMemoryFn
@@ -793,11 +810,29 @@ func WithExtraTools(tools []port.ToolDefinition) ExecutionOption {
 	}
 }
 
-// WithSkillToolIndex sets the mapping from tenant-scoped tool names to skill/version refs.
-func WithSkillToolIndex(index map[string]port.SkillToolRef) ExecutionOption {
+// WithSkillCatalog sets immutable instruction-bundle snapshots for this run.
+func WithSkillCatalog(catalog map[string]port.SkillActivation) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
-		cfg.SkillToolIndex = index
+		cfg.SkillCatalog = catalog
 	}
+}
+
+func WithActiveSkill(skill port.SkillActivation) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.ActiveSkill = &skill }
+}
+
+func WithToolCallFn(fn func(context.Context, string, string, map[string]any) (any, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.ToolCallFn = fn
+	}
+}
+
+func WithApprovalRequestFn(fn port.ToolApprovalRequester) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.ApprovalRequestFn = fn }
+}
+
+func WithApprovedToolCallFn(fn port.ApprovedToolCallFn) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.ApprovedToolCallFn = fn }
 }
 
 // WithConversationID sets the conversation ID for multi-turn history loading.

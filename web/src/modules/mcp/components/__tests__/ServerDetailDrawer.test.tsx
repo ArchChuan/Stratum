@@ -4,7 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServerDetailDrawer } from '../ServerDetailDrawer';
 
 const responsive = vi.hoisted(() => ({ isMobile: true }));
-const api = vi.hoisted(() => ({ tools: vi.fn(), resources: vi.fn() }));
+const api = vi.hoisted(() => ({ tools: vi.fn(), resources: vi.fn(), toolPolicies: vi.fn(), setToolPolicy: vi.fn() }));
 
 vi.mock('@/shared/hooks', () => ({ useResponsive: () => responsive }));
 vi.mock('../../api/mcp.api', () => ({ mcpApi: api }));
@@ -27,7 +27,8 @@ describe('ServerDetailDrawer responsive data', () => {
   beforeEach(() => {
     responsive.isMobile = true;
     api.tools.mockResolvedValue([{ name: 'search', description: '检索知识库' }]);
-    api.resources.mockResolvedValue([{ uri: 'kb://manual', name: '产品手册', mimeType: 'text/plain' }]);
+	api.resources.mockResolvedValue([{ uri: 'kb://manual', name: '产品手册', mimeType: 'text/plain' }]);
+	api.toolPolicies.mockResolvedValue([]);
   });
 
   it('renders tool and resource mobile cards', async () => {

@@ -2,7 +2,7 @@ import { message as msg } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { agentApi, conversationApi } from '../api/agent.api';
-import type { Agent, ChatMessage, Conversation } from '../model/agent';
+import type { Agent, ChatMessage, Conversation, ToolApproval } from '../model/agent';
 
 import { useChatStream } from './ChatStreamContext';
 
@@ -20,7 +20,8 @@ export const useChatPage = () => {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [loadingConvs, setLoadingConvs] = useState(false);
-  const [loadingMsgs, setLoadingMsgs] = useState(false);
+	const [loadingMsgs, setLoadingMsgs] = useState(false);
+	const [pendingApprovals, setPendingApprovals] = useState<ToolApproval[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pinnedToBottomRef = useRef(true); // auto-scroll only when user is at the bottom
@@ -35,11 +36,19 @@ export const useChatPage = () => {
     accumulatedContent,
     streamResult,
     streamError,
-    streamDone,
+		streamDone,
+		streamApproval,
     startStream,
     cancelStream,
     getStreamState,
-  } = useChatStream();
+	} = useChatStream();
+
+	useEffect(() => {
+		let cancelled=false;
+		agentApi.listToolApprovals().then((rows)=>{if(!cancelled)setPendingApprovals(rows)}).catch(()=>undefined);
+		return()=>{cancelled=true};
+	},[]);
+	useEffect(()=>{if(streamApproval)setPendingApprovals((rows)=>rows.some((r)=>r.approvalId===streamApproval.approvalId)?rows:[...rows,streamApproval])},[streamApproval]);
 
   const streamStateRef = useRef(getStreamState);
   streamStateRef.current = getStreamState;
@@ -282,7 +291,7 @@ export const useChatPage = () => {
     }
   }, []);
 
-  const handleDeleteConv = useCallback(
+	const handleDeleteConv = useCallback(
     async (convId: string) => {
       try {
         await conversationApi.delete(convId);
@@ -294,7 +303,21 @@ export const useChatPage = () => {
       }
     },
     [conversations, selectedConv],
-  );
+	);
+
+	const handleApprove = useCallback(async (approvalID:string) => {
+		try {
+			await agentApi.decideToolApproval(approvalID,'approved');
+			const res=await agentApi.resumeToolApproval(approvalID);
+			setPendingApprovals((rows)=>rows.filter((row)=>row.approvalId!==approvalID));
+			const output=String(res.data?.output||'操作已执行');
+			setMessages((rows)=>[...rows,{id:`approval-${Date.now()}`,role:'assistant',content:output,created_at:new Date().toISOString()} as ChatMessage]);
+		} catch { msg.error('批准或恢复执行失败'); }
+	},[]);
+	const handleReject = useCallback(async (approvalID:string) => {
+		try { await agentApi.decideToolApproval(approvalID,'rejected'); setPendingApprovals((rows)=>rows.filter((row)=>row.approvalId!==approvalID)); }
+		catch { msg.error('拒绝审批失败'); }
+	},[]);
 
   return {
     agents,
@@ -315,7 +338,10 @@ export const useChatPage = () => {
     handleSend,
     handleCreateConv,
     handleRenameConv,
-    handleDeleteConv,
+		handleDeleteConv,
+		pendingApprovals,
+		handleApprove,
+		handleReject,
     cancelStream,
   };
 };

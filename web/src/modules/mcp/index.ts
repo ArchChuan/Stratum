@@ -12,5 +12,8 @@ export type {
   MCPServer,
   MCPRetryConfig,
   MCPAuthConfig,
-  MCPServerConfig,
+	MCPServerConfig,
+	MCPToolOption,
+	MCPToolPolicy,
+	MCPToolRiskLevel,
 } from './model/mcp';

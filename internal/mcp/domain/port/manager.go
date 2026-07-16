@@ -20,19 +20,8 @@ type ServerManager interface {
 	GetAllServerInfo(ctx context.Context) []*domain.ServerInfo
 }
 
-// SkillRegistry is the consumer-side port for MCP skill registration and execution.
-type SkillRegistry interface {
+// ToolRegistry registers live MCP tools discovered from a server.
+type ToolRegistry interface {
 	RegisterServer(ctx context.Context, serverID string) error
-	ExecuteSkill(skillID string, input any) (any, error)
-	GetSkill(id string) SkillAccessor
-	GetAllSkills() []SkillAccessor
-	RefreshSkills(ctx context.Context) error
-}
-
-// SkillAccessor provides read-only access to a registered MCP skill.
-type SkillAccessor interface {
-	GetID() string
-	GetName() string
-	GetDescription() string
-	GetType() string
+	UnregisterServer(serverID string) error
 }

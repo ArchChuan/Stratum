@@ -23,13 +23,13 @@ internal/
   llmgateway/{domain,application,infrastructure}
                             - LLM 统一网关（Qwen/Zhipu OpenAI-compatible）、ModelService
   mcp/{domain,application,infrastructure}
-                            - MCP 服务器管理、SkillAdapter、MCPTools 接口
+                            - MCP 服务器管理、ToolRegistry、工具级风险策略与审批执行
   memory/{domain,application,infrastructure}
                             - 记忆持久化 + JetStream 三阶段 pipeline
   platform/{config,domain,harness}
                             - Viper 配置、Harness 生命周期（顺序启动→逆序停止）
   skill/{domain,application,infrastructure}
-                            - Skill CRUD + AtomicEngine + PipelineEngine + CircuitBreaker
+                            - Skill instruction bundle CRUD、revision 发布与候选优化
 pkg/
   constants/               - 跨包共享业务/配置常量（agent · auth · memory · pagination · timeouts）
   observability/           - Logger(Zap) · Tracer(OTEL) · PrometheusMetrics

@@ -16,8 +16,8 @@ func newTestMCPHandler(t *testing.T) *MCPHandler {
 	t.Helper()
 	logger := zap.NewNop()
 	manager := mcp.NewClientManager(logger, nil, nil)
-	registry := mcp.NewMCPSkillRegistry(manager, logger)
-	svc := mcpapp.NewMCPService(mcp.SkillRegistryAsPort(registry), mcp.ServerManagerAsPort(manager), logger)
+	registry := mcp.NewMCPToolRegistry(manager, logger)
+	svc := mcpapp.NewMCPService(mcp.ToolRegistryAsPort(registry), mcp.ServerManagerAsPort(manager), logger)
 	return NewMCPHandler(svc, logger)
 }
 

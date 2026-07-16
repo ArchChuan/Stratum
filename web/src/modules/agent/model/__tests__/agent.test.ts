@@ -18,11 +18,11 @@ describe('agentSchema', () => {
       maxIterations: 25,
       maxContextTokens: 8000,
       allowedSkills: ['s1'],
-      mcpServerIds: ['m1'],
+      mcpToolIds: ['m1'],
       knowledgeWorkspaceIds: ['k1'],
     });
     expect(parsed.allowedSkills).toEqual(['s1']);
-    expect(parsed.mcpServerIds).toEqual(['m1']);
+    expect(parsed.mcpToolIds).toEqual(['m1']);
     expect(parsed.knowledgeWorkspaceIds).toEqual(['k1']);
   });
 
@@ -30,18 +30,18 @@ describe('agentSchema', () => {
     const parsed = agentSchema.parse({
       ...baseAgent,
       allowedSkills: null,
-      mcpServerIds: null,
+      mcpToolIds: null,
       knowledgeWorkspaceIds: null,
     });
     expect(parsed.allowedSkills).toEqual([]);
-    expect(parsed.mcpServerIds).toEqual([]);
+    expect(parsed.mcpToolIds).toEqual([]);
     expect(parsed.knowledgeWorkspaceIds).toEqual([]);
   });
 
   it('数组字段缺失时兜底为空数组', () => {
     const parsed = agentSchema.parse(baseAgent);
     expect(parsed.allowedSkills).toEqual([]);
-    expect(parsed.mcpServerIds).toEqual([]);
+    expect(parsed.mcpToolIds).toEqual([]);
     expect(parsed.knowledgeWorkspaceIds).toEqual([]);
   });
 

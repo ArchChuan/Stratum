@@ -9,7 +9,7 @@ import {
 } from 'react';
 
 import { executeAgentStream } from '../api/agent.api';
-import type { AgentExecutionResult, ExecuteAgentPayload } from '../model/agent';
+import type { AgentExecutionResult, ExecuteAgentPayload, ToolApproval } from '../model/agent';
 
 interface StreamInternalState {
   conversationId: string | null;
@@ -18,7 +18,8 @@ interface StreamInternalState {
   content: string;
   done: boolean;
   result: AgentExecutionResult | null;
-  error: string | null;
+	error: string | null;
+	approval: ToolApproval | null;
   ctrl: AbortController | null;
 }
 
@@ -29,7 +30,8 @@ export interface StreamSnapshot {
   content: string;
   done: boolean;
   result: AgentExecutionResult | null;
-  error: string | null;
+	error: string | null;
+	approval: ToolApproval | null;
 }
 
 interface ChatStreamContextValue {
@@ -38,7 +40,8 @@ interface ChatStreamContextValue {
   accumulatedContent: string;
   streamResult: AgentExecutionResult | null;
   streamError: string | null;
-  streamDone: boolean;
+	streamDone: boolean;
+	streamApproval: ToolApproval | null;
   startStream: (agentId: string, payload: ExecuteAgentPayload) => void;
   cancelStream: () => void;
   getStreamState: () => StreamSnapshot;
@@ -61,7 +64,8 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
     content: '',
     done: false,
     result: null,
-    error: null,
+		error: null,
+		approval: null,
     ctrl: null,
   });
 
@@ -93,7 +97,8 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
     s.content = '';
     s.done = false;
     s.result = null;
-    s.error = null;
+		s.error = null;
+		s.approval = null;
     notify();
 
     const ctrl = executeAgentStream(agentId, payload, {
@@ -109,13 +114,17 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
         stateRef.current.ctrl = null;
         notify(); // immediate: stream is over
       },
-      onError: (err) => {
+		onError: (err) => {
         if (stateRef.current.ctrl !== ctrl) return;
         stateRef.current.done = true;
         stateRef.current.error = err.message || String(err);
         stateRef.current.ctrl = null;
         notify();
-      },
+		},
+		onApprovalRequired: (approval) => {
+			if (stateRef.current.ctrl !== ctrl) return;
+			stateRef.current.done = true; stateRef.current.approval = approval; stateRef.current.ctrl = null; notify();
+		},
     });
     s.ctrl = ctrl;
   }, [notify, scheduleNotify]);
@@ -138,7 +147,8 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
       content: stateRef.current.content,
       done: stateRef.current.done,
       result: stateRef.current.result,
-      error: stateRef.current.error,
+		error: stateRef.current.error,
+		approval: stateRef.current.approval,
     }),
     [],
   );
@@ -149,7 +159,8 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
     accumulatedContent: stateRef.current.content,
     streamResult: stateRef.current.result,
     streamError: stateRef.current.error,
-    streamDone: stateRef.current.done,
+	streamDone: stateRef.current.done,
+	streamApproval: stateRef.current.approval,
     startStream,
     cancelStream,
     getStreamState,

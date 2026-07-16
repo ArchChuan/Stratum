@@ -37,7 +37,7 @@ type EvaluationJobResponse struct {
 type GenerateOptimizationRequest struct {
 	Baseline         EvaluationResourceRef `json:"baseline" binding:"required"`
 	SuiteRevisionID  string                `json:"suite_revision_id" binding:"required"`
-	SearchSpace      map[string][]any      `json:"search_space" binding:"required,min=1"`
+	SearchSpace      map[string][]any      `json:"search_space"`
 	FailureSummaries []string              `json:"failure_summaries" binding:"max=50,dive,max=2048"`
 }
 

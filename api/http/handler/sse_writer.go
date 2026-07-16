@@ -9,7 +9,12 @@ import (
 
 type sseEvent struct {
 	comment string
+	name    string
 	data    string
+}
+
+func (w *sseEventWriter) EnqueueEvent(name, data string) bool {
+	return w.enqueue(sseEvent{name: name, data: data})
 }
 
 type sseEventWriter struct {
@@ -81,9 +86,12 @@ func (w *sseEventWriter) WriteUntilClosed(timeout time.Duration) {
 
 func (w *sseEventWriter) write(ev sseEvent) {
 	if ev.comment != "" {
-		fmt.Fprintf(w.w, ": %s\n\n", ev.comment) //nolint:errcheck
+		_, _ = fmt.Fprintf(w.w, ": %s\n\n", ev.comment)
 	} else {
-		fmt.Fprintf(w.w, "data: %s\n\n", ev.data) //nolint:errcheck
+		if ev.name != "" {
+			_, _ = fmt.Fprintf(w.w, "event: %s\n", ev.name)
+		}
+		_, _ = fmt.Fprintf(w.w, "data: %s\n\n", ev.data)
 	}
 	if w.flusher != nil {
 		w.flusher.Flush()

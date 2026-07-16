@@ -21,11 +21,11 @@ func TestMCPIntegration(t *testing.T) {
 	manager := NewClientManager(logger, nil, nil)
 
 	// 创建技能注册表
-	registry := NewMCPSkillRegistry(manager, logger)
+	registry := NewMCPToolRegistry(manager, logger)
 
 	// 验证初始状态
-	if len(registry.GetAllSkills()) != 0 {
-		t.Errorf("expected 0 skills initially, got %d", len(registry.GetAllSkills()))
+	if len(registry.GetAllTools()) != 0 {
+		t.Errorf("expected 0 skills initially, got %d", len(registry.GetAllTools()))
 	}
 
 	// 创建测试配置
@@ -94,11 +94,11 @@ func TestMCPIntegration(t *testing.T) {
 	}
 
 	// 测试技能适配器
-	adapter := NewMCPSkillAdapter("test-server", manager, logger)
+	adapter := NewMCPToolCatalog("test-server", manager, logger)
 
 	// 验证适配器初始状态
-	if len(adapter.GetAllSkills()) != 0 {
-		t.Errorf("expected 0 skills initially, got %d", len(adapter.GetAllSkills()))
+	if len(adapter.GetAllTools()) != 0 {
+		t.Errorf("expected 0 skills initially, got %d", len(adapter.GetAllTools()))
 	}
 
 	// 测试连接池配置
@@ -150,8 +150,8 @@ func TestMCPIntegration(t *testing.T) {
 	t.Log("MCP integration test passed")
 }
 
-// TestMCPSkillExecutionFlow 测试技能执行流程
-func TestMCPSkillExecutionFlow(t *testing.T) {
+// TestMCPToolExecutionFlow 测试技能执行流程
+func TestMCPToolExecutionFlow(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	defer func() { _ = logger.Sync() }()
 
@@ -170,7 +170,7 @@ func TestMCPSkillExecutionFlow(t *testing.T) {
 	}
 
 	// 创建技能包装器
-	wrapper := &MCPSkillWrapper{
+	wrapper := &MCPToolHandle{
 		ID:          "mcp:test:test_tool",
 		Name:        "test_tool",
 		Description: "Test Tool",
@@ -198,7 +198,7 @@ func TestMCPSkillExecutionFlow(t *testing.T) {
 		t.Errorf("expected description Test Tool, got %s", wrapper.GetDescription())
 	}
 
-	t.Log("MCP skill execution flow test passed")
+	t.Log("MCP tool execution flow test passed")
 }
 
 // TestMCPCacheExpiration 测试缓存过期机制

@@ -9,8 +9,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// MCPSkillWrapper 将 MCP 工具包装为 Skill
-type MCPSkillWrapper struct {
+// MCPToolHandle 将 MCP 工具包装为 Tool
+type MCPToolHandle struct {
 	ID          string
 	Name        string
 	Description string
@@ -22,27 +22,27 @@ type MCPSkillWrapper struct {
 }
 
 // GetID 获取 ID
-func (w *MCPSkillWrapper) GetID() string {
+func (w *MCPToolHandle) GetID() string {
 	return w.ID
 }
 
 // GetName 获取名称
-func (w *MCPSkillWrapper) GetName() string {
+func (w *MCPToolHandle) GetName() string {
 	return w.Name
 }
 
 // GetDescription 获取描述
-func (w *MCPSkillWrapper) GetDescription() string {
+func (w *MCPToolHandle) GetDescription() string {
 	return w.Description
 }
 
 // GetType 获取类型
-func (w *MCPSkillWrapper) GetType() string {
+func (w *MCPToolHandle) GetType() string {
 	return w.Type
 }
 
 // Execute 执行工具
-func (w *MCPSkillWrapper) Execute(ctx context.Context, input any) (any, error) {
+func (w *MCPToolHandle) Execute(ctx context.Context, input any) (any, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -58,28 +58,28 @@ func (w *MCPSkillWrapper) Execute(ctx context.Context, input any) (any, error) {
 	return result, nil
 }
 
-// MCPSkillAdapter 适配器，管理 MCP Skills
-type MCPSkillAdapter struct {
+// MCPToolCatalog 适配器，管理 MCP Tools
+type MCPToolCatalog struct {
 	serverID string
 	manager  *ClientManager
-	skills   map[string]*MCPSkillWrapper
+	tools    map[string]*MCPToolHandle
 	mu       sync.RWMutex
 	logger   *zap.Logger
 }
 
-// NewMCPSkillAdapter 创建新的适配器
-func NewMCPSkillAdapter(serverID string, manager *ClientManager, logger *zap.Logger) *MCPSkillAdapter {
-	return &MCPSkillAdapter{
+// NewMCPToolCatalog 创建新的适配器
+func NewMCPToolCatalog(serverID string, manager *ClientManager, logger *zap.Logger) *MCPToolCatalog {
+	return &MCPToolCatalog{
 		serverID: serverID,
 		manager:  manager,
-		skills:   make(map[string]*MCPSkillWrapper),
-		logger:   logger.Named("mcp.skill_adapter").With(zap.String("server_id", serverID)),
+		tools:    make(map[string]*MCPToolHandle),
+		logger:   logger.Named("mcp.tool_catalog").With(zap.String("server_id", serverID)),
 	}
 }
 
-// DiscoverSkills 发现并创建 Skills
-func (a *MCPSkillAdapter) DiscoverSkills(ctx context.Context) ([]*MCPSkillWrapper, error) {
-	tools, err := a.manager.ListTools(ctx, a.serverID)
+// DiscoverTools 发现并创建 Tools
+func (a *MCPToolCatalog) DiscoverTools(ctx context.Context) ([]*MCPToolHandle, error) {
+	discovered, err := a.manager.ListTools(ctx, a.serverID)
 	if err != nil {
 		return nil, err
 	}
@@ -87,12 +87,12 @@ func (a *MCPSkillAdapter) DiscoverSkills(ctx context.Context) ([]*MCPSkillWrappe
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	var skills []*MCPSkillWrapper
-	for _, tool := range tools {
-		skillID := fmt.Sprintf("mcp:%s:%s", a.serverID, tool.Name)
+	handles := make([]*MCPToolHandle, 0, len(discovered))
+	for _, tool := range discovered {
+		toolID := fmt.Sprintf("mcp:%s:%s", a.serverID, tool.Name)
 
-		wrapper := &MCPSkillWrapper{
-			ID:          skillID,
+		wrapper := &MCPToolHandle{
+			ID:          toolID,
 			Name:        tool.Name,
 			Description: tool.Description,
 			Type:        "mcp",
@@ -102,79 +102,79 @@ func (a *MCPSkillAdapter) DiscoverSkills(ctx context.Context) ([]*MCPSkillWrappe
 			logger:      a.logger,
 		}
 
-		a.skills[skillID] = wrapper
-		skills = append(skills, wrapper)
+		a.tools[toolID] = wrapper
+		handles = append(handles, wrapper)
 	}
 
-	a.logger.Info("discovered MCP skills", zap.Int("count", len(skills)))
-	return skills, nil
+	a.logger.Info("discovered MCP tools", zap.Int("count", len(handles)))
+	return handles, nil
 }
 
-// AddSkillForTest injects a wrapper directly into the adapter without MCP discovery.
+// AddToolForTest injects a wrapper directly into the adapter without MCP discovery.
 // Intended for unit tests only.
-func (a *MCPSkillAdapter) AddSkillForTest(w *MCPSkillWrapper) {
+func (a *MCPToolCatalog) AddToolForTest(w *MCPToolHandle) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.skills[w.ID] = w
+	a.tools[w.ID] = w
 }
 
-// GetSkill 获取 Skill
-func (a *MCPSkillAdapter) GetSkill(skillID string) *MCPSkillWrapper {
+// GetRegisteredTool 获取 Tool
+func (a *MCPToolCatalog) GetRegisteredTool(toolID string) *MCPToolHandle {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	if wrapper, exists := a.skills[skillID]; exists {
+	if wrapper, exists := a.tools[toolID]; exists {
 		return wrapper
 	}
 	return nil
 }
 
-// GetAllSkills 获取所有 Skills
-func (a *MCPSkillAdapter) GetAllSkills() []*MCPSkillWrapper {
+// GetAllTools 获取所有 Tools
+func (a *MCPToolCatalog) GetAllTools() []*MCPToolHandle {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	skills := make([]*MCPSkillWrapper, 0, len(a.skills))
-	for _, wrapper := range a.skills {
-		skills = append(skills, wrapper)
+	tools := make([]*MCPToolHandle, 0, len(a.tools))
+	for _, wrapper := range a.tools {
+		tools = append(tools, wrapper)
 	}
-	return skills
+	return tools
 }
 
-// MCPSkillRegistry 管理所有 MCP Skills
-type MCPSkillRegistry struct {
-	adapters map[string]*MCPSkillAdapter
+// MCPToolRegistry 管理所有 MCP Tools
+type MCPToolRegistry struct {
+	adapters map[string]*MCPToolCatalog
 	manager  *ClientManager
 	mu       sync.RWMutex
 	logger   *zap.Logger
 }
 
-// GetAdapterForServer returns the adapter for a specific server, or nil if not registered.
-func (r *MCPSkillRegistry) GetAdapterForServer(serverID string) *MCPSkillAdapter {
+// GetCatalogForServer returns the adapter for a specific server, or nil if not registered.
+func (r *MCPToolRegistry) GetCatalogForServer(serverID string) *MCPToolCatalog {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.adapters[serverID]
 }
 
-// RegisterAdapterForTest injects a pre-built adapter directly, bypassing DiscoverSkills.
+// RegisterCatalogForTest injects a pre-built adapter directly, bypassing DiscoverTools.
 // Intended for unit tests only.
-func (r *MCPSkillRegistry) RegisterAdapterForTest(serverID string, adapter *MCPSkillAdapter) {
+func (r *MCPToolRegistry) RegisterCatalogForTest(serverID string, adapter *MCPToolCatalog) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.adapters[serverID] = adapter
 }
 
-// NewMCPSkillRegistry 创建新的注册表
-func NewMCPSkillRegistry(manager *ClientManager, logger *zap.Logger) *MCPSkillRegistry {
-	return &MCPSkillRegistry{
-		adapters: make(map[string]*MCPSkillAdapter),
+// NewMCPToolRegistry 创建新的注册表
+func NewMCPToolRegistry(manager *ClientManager, logger *zap.Logger) *MCPToolRegistry {
+	return &MCPToolRegistry{
+		adapters: make(map[string]*MCPToolCatalog),
 		manager:  manager,
-		logger:   logger.Named("mcp.skill_registry"),
+		logger:   logger.Named("mcp.tool_registry"),
 	}
 }
 
 // RegisterServer 注册 MCP 服务器
-func (r *MCPSkillRegistry) RegisterServer(ctx context.Context, serverID string) error {
+func (r *MCPToolRegistry) RegisterServer(ctx context.Context, serverID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -182,10 +182,10 @@ func (r *MCPSkillRegistry) RegisterServer(ctx context.Context, serverID string) 
 		return fmt.Errorf("server already registered: %s", serverID)
 	}
 
-	adapter := NewMCPSkillAdapter(serverID, r.manager, r.logger)
+	adapter := NewMCPToolCatalog(serverID, r.manager, r.logger)
 
-	// 发现 Skills
-	_, err := adapter.DiscoverSkills(ctx)
+	// 发现 Tools
+	_, err := adapter.DiscoverTools(ctx)
 	if err != nil {
 		return err
 	}
@@ -197,12 +197,12 @@ func (r *MCPSkillRegistry) RegisterServer(ctx context.Context, serverID string) 
 }
 
 // UnregisterServer 注销 MCP 服务器
-func (r *MCPSkillRegistry) UnregisterServer(serverID string) error {
+func (r *MCPToolRegistry) UnregisterServer(serverID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if _, exists := r.adapters[serverID]; !exists {
-		return fmt.Errorf("server not found: %s", serverID)
+		return nil
 	}
 
 	delete(r.adapters, serverID)
@@ -211,53 +211,53 @@ func (r *MCPSkillRegistry) UnregisterServer(serverID string) error {
 	return nil
 }
 
-// GetSkill 获取 Skill
-func (r *MCPSkillRegistry) GetSkill(skillID string) *MCPSkillWrapper {
+// GetRegisteredTool 获取 Tool
+func (r *MCPToolRegistry) GetRegisteredTool(toolID string) *MCPToolHandle {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	for _, adapter := range r.adapters {
-		if s := adapter.GetSkill(skillID); s != nil {
+		if s := adapter.GetRegisteredTool(toolID); s != nil {
 			return s
 		}
 	}
 	return nil
 }
 
-// GetAllSkills 获取所有 Skills
-func (r *MCPSkillRegistry) GetAllSkills() []*MCPSkillWrapper {
+// GetAllTools 获取所有 Tools
+func (r *MCPToolRegistry) GetAllTools() []*MCPToolHandle {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var skills []*MCPSkillWrapper
+	var tools []*MCPToolHandle
 	for _, adapter := range r.adapters {
-		skills = append(skills, adapter.GetAllSkills()...)
+		tools = append(tools, adapter.GetAllTools()...)
 	}
-	return skills
+	return tools
 }
 
-// ExecuteSkill 执行 Skill
-func (r *MCPSkillRegistry) ExecuteSkill(skillID string, input any) (any, error) {
-	s := r.GetSkill(skillID)
+// ExecuteToolByID 执行 Tool
+func (r *MCPToolRegistry) ExecuteToolByID(toolID string, input any) (any, error) {
+	s := r.GetRegisteredTool(toolID)
 	if s == nil {
-		return nil, fmt.Errorf("skill not found: %s", skillID)
+		return nil, fmt.Errorf("skill not found: %s", toolID)
 	}
 	return s.Execute(context.Background(), input)
 }
 
-// RefreshSkills 刷新 Skills
-func (r *MCPSkillRegistry) RefreshSkills(ctx context.Context) error {
+// RefreshTools 刷新 Tools
+func (r *MCPToolRegistry) RefreshTools(ctx context.Context) error {
 	r.mu.RLock()
-	adapters := make(map[string]*MCPSkillAdapter)
+	adapters := make(map[string]*MCPToolCatalog)
 	for k, v := range r.adapters {
 		adapters[k] = v
 	}
 	r.mu.RUnlock()
 
 	for serverID, adapter := range adapters {
-		_, err := adapter.DiscoverSkills(ctx)
+		_, err := adapter.DiscoverTools(ctx)
 		if err != nil {
-			r.logger.Warn("failed to refresh skills",
+			r.logger.Warn("failed to refresh tools",
 				zap.String("server_id", serverID),
 				zap.Error(err))
 		}
@@ -267,11 +267,11 @@ func (r *MCPSkillRegistry) RefreshSkills(ctx context.Context) error {
 }
 
 // GetServerInfo 获取服务器信息
-func (r *MCPSkillRegistry) GetServerInfo(ctx context.Context, serverID string) any {
+func (r *MCPToolRegistry) GetServerInfo(ctx context.Context, serverID string) any {
 	return r.manager.GetServerInfo(ctx, serverID)
 }
 
 // GetAllServerInfo 获取所有服务器信息
-func (r *MCPSkillRegistry) GetAllServerInfo(ctx context.Context) []*MCPServerInfo {
+func (r *MCPToolRegistry) GetAllServerInfo(ctx context.Context) []*MCPServerInfo {
 	return r.manager.GetAllServerInfo(ctx)
 }

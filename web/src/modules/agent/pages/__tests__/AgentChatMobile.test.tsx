@@ -12,10 +12,16 @@ const mocks = vi.hoisted(() => ({
   rename: vi.fn(),
   remove: vi.fn(),
   send: vi.fn(),
+  approve: vi.fn(),
+  reject: vi.fn(),
 }));
 
 vi.mock('@/shared/hooks/useResponsive', () => ({
   useResponsive: () => ({ isMobile: mocks.isMobile, isCompact: mocks.isMobile }),
+}));
+
+vi.mock('@/modules/iam', () => ({
+  useTenantRole: () => ({ isAdmin: true }),
 }));
 
 vi.mock('../../hooks/useChatPage', () => ({
@@ -45,6 +51,9 @@ vi.mock('../../hooks/useChatPage', () => ({
     handleCreateConv: mocks.create,
     handleRenameConv: mocks.rename,
     handleDeleteConv: mocks.remove,
+    pendingApprovals: [],
+    handleApprove: mocks.approve,
+    handleReject: mocks.reject,
   }),
 }));
 

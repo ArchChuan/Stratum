@@ -1,0 +1,8 @@
+[
+  {
+    "name": "removed-direct-execution",
+    "method": "POST",
+    "path": "/mcp/tools/legacy-tool/execute",
+    "want_status": 404
+  }
+]

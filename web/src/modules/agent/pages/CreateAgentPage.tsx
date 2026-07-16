@@ -7,7 +7,7 @@ import { useCreateAgentPage } from '../hooks/useCreateAgentPage';
 const { Title, Text } = Typography;
 
 export const CreateAgentPage = () => {
-  const { form, loading, skills, mcpServers, workspaces, navigate, onFinish } =
+  const { form, loading, skills, mcpTools, workspaces, navigate, onFinish } =
     useCreateAgentPage();
 
   return (
@@ -38,7 +38,7 @@ export const CreateAgentPage = () => {
           memoryScope: 'user',
         }}
       >
-        <AgentFormSections skills={skills} mcpServers={mcpServers} workspaces={workspaces} />
+        <AgentFormSections skills={skills} mcpTools={mcpTools} workspaces={workspaces} />
 
         <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <Button onClick={() => navigate('/agents')}>取消</Button>

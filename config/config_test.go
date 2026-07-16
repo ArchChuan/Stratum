@@ -30,12 +30,16 @@ func TestLoadWithEnv(t *testing.T) {
 	_ = os.Setenv("MILVUS_HOST", "custom-milvus")
 	_ = os.Setenv("MILVUS_PORT", "19531")
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://custom:4317")
+	_ = os.Setenv("QWEN_BASE_URL", "http://qwen-compatible.test/v1")
+	_ = os.Setenv("ZHIPU_BASE_URL", "http://zhipu-compatible.test/v1")
 	defer func() {
 		_ = os.Unsetenv("PORT")
 		_ = os.Unsetenv("NATS_URL")
 		_ = os.Unsetenv("MILVUS_HOST")
 		_ = os.Unsetenv("MILVUS_PORT")
 		_ = os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+		_ = os.Unsetenv("QWEN_BASE_URL")
+		_ = os.Unsetenv("ZHIPU_BASE_URL")
 	}()
 
 	cfg, err := Load()
@@ -47,6 +51,12 @@ func TestLoadWithEnv(t *testing.T) {
 	}
 	if cfg.NatsURL != "nats://custom:4222" {
 		t.Errorf("expected NatsURL nats://custom:4222, got %s", cfg.NatsURL)
+	}
+	if cfg.QwenBaseURL != "http://qwen-compatible.test/v1" {
+		t.Errorf("expected custom Qwen base URL, got %s", cfg.QwenBaseURL)
+	}
+	if cfg.ZhipuBaseURL != "http://zhipu-compatible.test/v1" {
+		t.Errorf("expected custom Zhipu base URL, got %s", cfg.ZhipuBaseURL)
 	}
 }
 

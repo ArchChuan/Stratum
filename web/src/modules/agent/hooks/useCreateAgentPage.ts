@@ -9,7 +9,7 @@ import { CHAT_MODEL_OPTIONS } from '@/constants';
 import { knowledgeApi } from '@/modules/knowledge';
 import type { Workspace } from '@/modules/knowledge';
 import { mcpApi } from '@/modules/mcp';
-import type { MCPServer } from '@/modules/mcp';
+import type { MCPToolOption } from '@/modules/mcp';
 import { skillApi } from '@/modules/skill';
 import type { Skill } from '@/modules/skill';
 import { extractErrorMessage } from '@/shared/lib';
@@ -20,7 +20,7 @@ export const useCreateAgentPage = () => {
   const [form] = Form.useForm<AgentFormValues>();
   const [loading, setLoading] = useState(false);
   const [skills, setSkills] = useState<Skill[]>([]);
-  const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
+  const [mcpTools, setMcpTools] = useState<MCPToolOption[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const navigate = useNavigate();
 
@@ -29,12 +29,12 @@ export const useCreateAgentPage = () => {
     (async () => {
       const [skillsRes, mcpRes, workspacesRes] = await Promise.allSettled([
         skillApi.list(),
-        mcpApi.list(),
+        mcpApi.toolOptions(),
         knowledgeApi.list(),
       ]);
       if (cancelled) return;
       if (skillsRes.status === 'fulfilled') setSkills(skillsRes.value);
-      if (mcpRes.status === 'fulfilled') setMcpServers(mcpRes.value);
+      if (mcpRes.status === 'fulfilled') setMcpTools(mcpRes.value);
       if (workspacesRes.status === 'fulfilled') setWorkspaces(workspacesRes.value);
       form.setFieldValue('llmModel', DEFAULT_MODEL);
     })();
@@ -49,7 +49,7 @@ export const useCreateAgentPage = () => {
       try {
         await agentApi.create({
           ...values,
-          mcpServerIds: values.mcpServerIds || [],
+          mcpToolIds: values.mcpToolIds || [],
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],
         });
         message.success(`Agent "${values.name}" 创建成功`);
@@ -64,5 +64,5 @@ export const useCreateAgentPage = () => {
     [navigate],
   );
 
-  return { form, loading, skills, mcpServers, workspaces, navigate, onFinish };
+  return { form, loading, skills, mcpTools, workspaces, navigate, onFinish };
 };

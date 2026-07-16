@@ -7,35 +7,26 @@ import (
 )
 
 type SkillProductRow struct {
-	ID              string
-	Name            string
-	Description     string
-	Status          string
-	ActiveVersionID string
-	DraftVersionID  string
-}
-
-type SkillTestCaseRow struct {
-	ID             string
-	SkillID        string
-	Name           string
-	Input          any
-	ExpectedOutput any
-	AssertionMode  string
-	Enabled        bool
+	ID               string
+	Name             string
+	Description      string
+	Status           string
+	ActiveRevisionID string
+	DraftRevisionID  string
 }
 
 type VersionRepo interface {
-	InsertSkillWithDraft(ctx context.Context, skill SkillProductRow, draft domain.SkillVersion, firstCase SkillTestCaseRow) error
+	InsertSkillWithDraft(ctx context.Context, skill SkillProductRow, draft domain.SkillRevision) error
 	GetSkill(ctx context.Context, skillID string) (SkillProductRow, bool, error)
-	GetDraftVersion(ctx context.Context, skillID string) (domain.SkillVersion, bool, error)
-	GetActiveVersion(ctx context.Context, skillID string) (domain.SkillVersion, bool, error)
-	GetVersion(ctx context.Context, skillID, versionID string) (domain.SkillVersion, bool, error)
-	InsertCandidate(ctx context.Context, candidate domain.SkillVersion) error
-	UpdateDraftCapability(ctx context.Context, skillID string, capability domain.Capability, contentHash string) (domain.SkillVersion, error)
-	UpdateDraftContract(ctx context.Context, skillID string, contract domain.ToolContract, contentHash string) (domain.SkillVersion, error)
-	UpdateDraftImplementation(ctx context.Context, skillID string, implementation domain.Implementation, contentHash string) (domain.SkillVersion, error)
-	CountEnabledTestCases(ctx context.Context, skillID string) (int, error)
-	PublishDraft(ctx context.Context, skillID, draftVersionID string, nextVersionNo int, baseline map[string]any) (domain.SkillVersion, error)
-	NextVersionNo(ctx context.Context, skillID string) (int, error)
+	ListSkills(ctx context.Context) ([]SkillProductRow, error)
+	DeleteSkill(ctx context.Context, skillID string) error
+	GetDraftRevision(ctx context.Context, skillID string) (domain.SkillRevision, bool, error)
+	GetActiveRevision(ctx context.Context, skillID string) (domain.SkillRevision, bool, error)
+	GetRevision(ctx context.Context, skillID, revisionID string) (domain.SkillRevision, bool, error)
+	InsertCandidate(ctx context.Context, candidate domain.SkillRevision) error
+	UpdateDraftCapability(ctx context.Context, skillID string, capability domain.Capability, contentHash string) (domain.SkillRevision, error)
+	UpdateDraftActivation(ctx context.Context, skillID string, contract domain.ActivationContract, contentHash string) (domain.SkillRevision, error)
+	UpdateDraftInstructions(ctx context.Context, skillID, instructions string, requirements domain.Requirements, contentHash string) (domain.SkillRevision, error)
+	PublishDraft(ctx context.Context, skillID, draftRevisionID string, nextRevisionNo int, checks map[string]any) (domain.SkillRevision, error)
+	NextRevisionNo(ctx context.Context, skillID string) (int, error)
 }

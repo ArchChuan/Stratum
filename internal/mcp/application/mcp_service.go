@@ -10,14 +10,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// SkillSummary is the read model returned to HTTP for skill listings.
-type SkillSummary struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Type        string `json:"type"`
-}
-
 // ServerStatusBreakdown summarises connection state across all known servers.
 type ServerStatusBreakdown struct {
 	Total        int `json:"total"`
@@ -28,17 +20,51 @@ type ServerStatusBreakdown struct {
 
 // MCPService orchestrates MCP HTTP use-cases on top of port interfaces.
 type MCPService struct {
-	skillRegistry port.SkillRegistry
-	manager       port.ServerManager
-	logger        *zap.Logger
+	toolRegistry port.ToolRegistry
+	manager      port.ServerManager
+	toolPolicies port.ToolPolicyRepo
+	logger       *zap.Logger
+}
+
+func (s *MCPService) SetToolPolicyRepo(repo port.ToolPolicyRepo) { s.toolPolicies = repo }
+
+func (s *MCPService) GetToolRisk(ctx context.Context, serverID, toolName string) (domain.ToolRiskLevel, error) {
+	if s.toolPolicies == nil {
+		return domain.ToolRiskUnclassified, nil
+	}
+	policy, ok, err := s.toolPolicies.Get(ctx, serverID, toolName)
+	if err != nil || !ok {
+		return domain.ToolRiskUnclassified, err
+	}
+	return policy.RiskLevel, nil
+}
+
+func (s *MCPService) ListToolPolicies(ctx context.Context) ([]domain.ToolPolicy, error) {
+	if s.toolPolicies == nil {
+		return []domain.ToolPolicy{}, nil
+	}
+	return s.toolPolicies.List(ctx)
+}
+
+func (s *MCPService) SetToolPolicy(ctx context.Context, policy domain.ToolPolicy) error {
+	if err := policy.RiskLevel.Validate(); err != nil {
+		return err
+	}
+	if policy.ServerID == "" || policy.ToolName == "" {
+		return errors.New("serverId and toolName are required")
+	}
+	if s.toolPolicies == nil {
+		return errors.New("MCP tool policy repository not configured")
+	}
+	return s.toolPolicies.Upsert(ctx, policy)
 }
 
 // NewMCPService wires the dependencies. Both registry and manager are required.
-func NewMCPService(skillRegistry port.SkillRegistry, manager port.ServerManager, logger *zap.Logger) *MCPService {
+func NewMCPService(toolRegistry port.ToolRegistry, manager port.ServerManager, logger *zap.Logger) *MCPService {
 	return &MCPService{
-		skillRegistry: skillRegistry,
-		manager:       manager,
-		logger:        logger.Named("mcp.service"),
+		toolRegistry: toolRegistry,
+		manager:      manager,
+		logger:       logger.Named("mcp.service"),
 	}
 }
 
@@ -66,45 +92,6 @@ func (s *MCPService) ListResources(ctx context.Context, serverID string) ([]*dom
 	return s.manager.ListResources(ctx, serverID)
 }
 
-// ExecuteTool invokes the named tool against the registry and returns its result.
-func (s *MCPService) ExecuteTool(toolID string, input any) (any, error) {
-	return s.skillRegistry.ExecuteSkill(toolID, input)
-}
-
-// ListSkills returns summaries of every registered MCP skill.
-func (s *MCPService) ListSkills() []SkillSummary {
-	skills := s.skillRegistry.GetAllSkills()
-	out := make([]SkillSummary, 0, len(skills))
-	for _, skill := range skills {
-		out = append(out, SkillSummary{
-			ID:          skill.GetID(),
-			Name:        skill.GetName(),
-			Description: skill.GetDescription(),
-			Type:        skill.GetType(),
-		})
-	}
-	return out
-}
-
-// GetSkill returns a single skill summary, or domain.ErrSkillNotFound.
-func (s *MCPService) GetSkill(id string) (*SkillSummary, error) {
-	skill := s.skillRegistry.GetSkill(id)
-	if skill == nil {
-		return nil, domain.ErrSkillNotFound
-	}
-	return &SkillSummary{
-		ID:          skill.GetID(),
-		Name:        skill.GetName(),
-		Description: skill.GetDescription(),
-		Type:        skill.GetType(),
-	}, nil
-}
-
-// RefreshSkills repopulates the skill registry from connected servers.
-func (s *MCPService) RefreshSkills(ctx context.Context) error {
-	return s.skillRegistry.RefreshSkills(ctx)
-}
-
 // ServerStatus aggregates connection counts across all servers.
 func (s *MCPService) ServerStatus(ctx context.Context) ServerStatusBreakdown {
 	servers := s.manager.GetAllServerInfo(ctx)
@@ -122,7 +109,7 @@ func (s *MCPService) ServerStatus(ctx context.Context) ServerStatusBreakdown {
 	return out
 }
 
-// ConnectServer registers a new MCP server config and bootstraps its skills.
+// ConnectServer registers a new MCP server config and discovers its tools.
 // Returns domain.ErrNameConflict on duplicate name.
 func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig) error {
 	if err := s.manager.Connect(ctx, cfg); err != nil {
@@ -132,8 +119,8 @@ func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig
 		zap.String("server_id", cfg.ID),
 		zap.String("server_name", cfg.Name),
 	)
-	if err := s.skillRegistry.RegisterServer(ctx, cfg.ID); err != nil {
-		s.logger.Warn("failed to register MCP skills", zap.String("server_id", cfg.ID), zap.Error(err))
+	if err := s.toolRegistry.RegisterServer(ctx, cfg.ID); err != nil {
+		s.logger.Warn("failed to register MCP tools", zap.String("server_id", cfg.ID), zap.Error(err))
 	}
 	return nil
 }
@@ -141,6 +128,9 @@ func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig
 // DeleteServer permanently removes an MCP server config and cascades to agent relations.
 func (s *MCPService) DeleteServer(ctx context.Context, serverID string) error {
 	if err := s.manager.Delete(ctx, serverID); err != nil {
+		return err
+	}
+	if err := s.toolRegistry.UnregisterServer(serverID); err != nil {
 		return err
 	}
 	s.logger.Info("mcp.server_deleted", zap.String("server_id", serverID))
@@ -162,8 +152,8 @@ func (s *MCPService) ReconnectServer(ctx context.Context, serverID string) error
 		return err
 	}
 	s.logger.Info("mcp.server_reconnected", zap.String("server_id", serverID))
-	if err := s.skillRegistry.RegisterServer(ctx, serverID); err != nil {
-		s.logger.Warn("failed to register MCP skills after reconnect", zap.String("server_id", serverID), zap.Error(err))
+	if err := s.toolRegistry.RegisterServer(ctx, serverID); err != nil {
+		s.logger.Warn("failed to register MCP tools after reconnect", zap.String("server_id", serverID), zap.Error(err))
 	}
 	return nil
 }
@@ -174,8 +164,8 @@ func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig)
 		return err
 	}
 	s.logger.Info("mcp.server_updated", zap.String("server_id", cfg.ID))
-	if err := s.skillRegistry.RegisterServer(ctx, cfg.ID); err != nil {
-		s.logger.Warn("failed to re-register MCP skills", zap.String("server_id", cfg.ID), zap.Error(err))
+	if err := s.toolRegistry.RegisterServer(ctx, cfg.ID); err != nil {
+		s.logger.Warn("failed to re-register MCP tools", zap.String("server_id", cfg.ID), zap.Error(err))
 	}
 	return nil
 }

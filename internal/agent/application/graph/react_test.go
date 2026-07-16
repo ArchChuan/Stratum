@@ -2,6 +2,8 @@ package graph_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,22 +13,81 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestBuildReActGraph_DestructiveToolPausesBeforeExecution(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{{ToolCalls: []port.ToolCall{{
+		ID: "delete-1", Name: "delete_order", Arguments: map[string]any{"id": "o1"},
+	}}}}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+	executed := false
+	state := graph.ReActState{
+		TenantID: "tenant-1", TraceID: "trace-1", Model: "qwen-turbo",
+		Messages: []port.LLMMessage{{Role: "user", Content: "delete order"}},
+		AvailableTools: []port.ToolDefinition{{
+			Name: "delete_order", ProviderType: "mcp", ServerID: "orders", CapabilityID: "delete_order",
+			Metadata: map[string]any{"risk_level": "destructive"},
+		}},
+		ToolCallFn: func(context.Context, string, string, map[string]any) (any, error) {
+			executed = true
+			return nil, nil
+		},
+	}
+	_, err = cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 5})
+	var approvalErr *port.ToolApprovalRequiredError
+	require.True(t, errors.As(err, &approvalErr))
+	require.Equal(t, "delete_order", approvalErr.ToolName)
+	require.False(t, executed)
+}
+
+func TestBuildReActGraph_UnclassifiedToolAlsoRequiresApproval(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{{ToolCalls: []port.ToolCall{{ID: "call-1", Name: "unknown_risk"}}}}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		Model: "qwen-turbo", Messages: []port.LLMMessage{{Role: "user", Content: "run"}},
+		AvailableTools: []port.ToolDefinition{{Name: "unknown_risk", ProviderType: "mcp", ServerID: "server"}},
+		ToolCallFn:     func(context.Context, string, string, map[string]any) (any, error) { return "bad", nil },
+	}, graph.RunConfig{MaxSteps: 5})
+	var approvalErr *port.ToolApprovalRequiredError
+	require.True(t, errors.As(err, &approvalErr))
+}
+
+func TestBuildReActGraph_ApprovedDestructiveToolBypassesApprovalOnce(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{
+		{ToolCalls: []port.ToolCall{{ID: "new-call", Name: "delete_order", Arguments: map[string]any{"id": "o1"}}}},
+		{Content: "deleted"},
+	}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+	bypasses := 0
+	normal := false
+	out, err := cg.Invoke(context.Background(), graph.ReActState{
+		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "delete"}},
+		AvailableTools: []port.ToolDefinition{{Name: "delete_order", ProviderType: "mcp", ServerID: "orders", CapabilityID: "delete_order", Metadata: map[string]any{"risk_level": "destructive"}}},
+		ApprovedToolCallFn: func(_ context.Context, serverID, toolName string, args map[string]any) (any, bool, error) {
+			bypasses++
+			return "ok", true, nil
+		},
+		ToolCallFn: func(context.Context, string, string, map[string]any) (any, error) { normal = true; return nil, nil },
+	}, graph.RunConfig{MaxSteps: 5})
+	require.NoError(t, err)
+	require.Equal(t, "deleted", out.Output)
+	require.Equal(t, 1, bypasses)
+	require.False(t, normal)
+}
+
 // capGWSequence drives LLM responses in sequence; tool always returns fixed resp.
 type capGWSequence struct {
 	responses []port.CapabilityResponse
 	idx       int
 	// non-zero infinite means return this after the sequence is exhausted
-	infinite  port.CapabilityResponse
-	toolResp  port.CapabilityResponse
-	skillReqs []port.SkillCapRequest
+	infinite port.CapabilityResponse
+	llmReqs  []port.LLMCapRequest
 }
 
 func (s *capGWSequence) Route(_ context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
-	if req.Type == port.CapSkill {
-		if req.Skill != nil {
-			s.skillReqs = append(s.skillReqs, *req.Skill)
-		}
-		return s.toolResp, nil
+	if req.LLM != nil {
+		s.llmReqs = append(s.llmReqs, *req.LLM)
 	}
 	if s.idx < len(s.responses) {
 		r := s.responses[s.idx]
@@ -34,6 +95,76 @@ func (s *capGWSequence) Route(_ context.Context, req port.CapabilityRequest) (po
 		return r, nil
 	}
 	return s.infinite, nil
+}
+
+func TestBuildReActGraph_ActivatesSingleInstructionSkillAndNarrowsMCPTools(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{
+		{ToolCalls: []port.ToolCall{{ID: "activate-1", Name: "stratum_activate_skill", Arguments: map[string]any{"skill_id": "skill-a"}}}},
+		{ToolCalls: []port.ToolCall{{ID: "activate-2", Name: "stratum_activate_skill", Arguments: map[string]any{"skill_id": "skill-b"}}}},
+		{Content: "done"},
+	}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	state := graph.ReActState{
+		Model:    "qwen-turbo",
+		Messages: []port.LLMMessage{{Role: "user", Content: "complete task"}},
+		AvailableTools: []port.ToolDefinition{
+			{Name: "mcp:orders:get", ProviderType: "mcp"},
+			{Name: "mcp:orders:delete", ProviderType: "mcp"},
+			{Name: "stratum_recall_memory", ProviderType: "builtin"},
+		},
+		AgentMemoryScope: "user",
+		SkillCatalog: map[string]port.SkillActivation{
+			"skill-a": {SkillID: "skill-a", RevisionID: "revision-a", Instructions: "USE INSTRUCTION A", MCPToolIDs: []string{"mcp:orders:get"}, MemoryScopes: []string{"user"}},
+			"skill-b": {SkillID: "skill-b", RevisionID: "revision-b", Instructions: "USE INSTRUCTION B", MCPToolIDs: []string{"mcp:orders:delete"}, MemoryScopes: []string{"conversation"}},
+		},
+	}
+	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
+	require.NoError(t, err)
+	require.Equal(t, "skill-b", out.ActiveSkill.SkillID)
+	require.Len(t, stub.llmReqs, 3)
+
+	secondMessages, _ := json.Marshal(stub.llmReqs[1].Messages)
+	require.Contains(t, string(secondMessages), "USE INSTRUCTION A")
+	require.NotContains(t, string(secondMessages), "USE INSTRUCTION B")
+	require.Equal(t, []string{"stratum_activate_skill", "mcp:orders:get", "stratum_recall_memory"}, toolNames(stub.llmReqs[1].Tools))
+
+	thirdMessages, _ := json.Marshal(stub.llmReqs[2].Messages)
+	require.Contains(t, string(thirdMessages), "USE INSTRUCTION B")
+	require.NotContains(t, string(thirdMessages), "USE INSTRUCTION A")
+	require.Equal(t, []string{"stratum_activate_skill", "mcp:orders:delete"}, toolNames(stub.llmReqs[2].Tools))
+}
+
+func TestBuildReActGraph_ActiveSkillIntersectsKnowledgeWorkspaces(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{
+		{ToolCalls: []port.ToolCall{{ID: "a1", Name: "stratum_activate_skill", Arguments: map[string]any{"skill_id": "skill-a"}}}},
+		{ToolCalls: []port.ToolCall{{ID: "k1", Name: "stratum_search_knowledge", Arguments: map[string]any{"workspaces": []any{"kb-allowed", "kb-agent-only", "kb-skill-only"}, "query": "q"}}}},
+		{Content: "done"},
+	}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+	var searched []string
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "search"}},
+		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
+		AgentKnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-agent-only"},
+		SkillCatalog:               map[string]port.SkillActivation{"skill-a": {SkillID: "skill-a", KnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-skill-only"}}},
+		RAGSearchFn: func(_ context.Context, workspaces []string, _ string, _ int) (string, error) {
+			searched = workspaces
+			return "result", nil
+		},
+	}, graph.RunConfig{MaxSteps: 8})
+	require.NoError(t, err)
+	require.Equal(t, []string{"kb-allowed"}, searched)
+}
+
+func toolNames(tools []port.ToolDefinition) []string {
+	names := make([]string, len(tools))
+	for i := range tools {
+		names[i] = tools[i].Name
+	}
+	return names
 }
 
 type slowCapGW struct{ delay time.Duration }
@@ -77,7 +208,6 @@ func TestBuildReActGraph_ToolCall(t *testing.T) {
 			{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{"expr": "6*7"}}}},
 			{Content: "The answer is 42"},
 		},
-		toolResp: port.CapabilityResponse{Content: "42"},
 	}
 	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
 	require.NoError(t, err)
@@ -85,7 +215,12 @@ func TestBuildReActGraph_ToolCall(t *testing.T) {
 	state := graph.ReActState{
 		Model:          "qwen-turbo",
 		Messages:       []port.LLMMessage{{Role: "user", Content: "calc 6*7"}},
-		SkillToolIndex: map[string]port.SkillToolRef{"calc": {SkillID: "skill-calc"}},
+		AvailableTools: []port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ProviderID: "math", ServerID: "math", Metadata: map[string]any{"risk_level": "read"}}},
+		ToolCallFn: func(_ context.Context, serverID, toolName string, _ map[string]any) (any, error) {
+			require.Equal(t, "math", serverID)
+			require.Equal(t, "calc", toolName)
+			return "42", nil
+		},
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
 	require.NoError(t, err)
@@ -98,8 +233,8 @@ func TestBuildReActGraph_ToolCall(t *testing.T) {
 	require.Equal(t, "calc", out.ToolObservations[0].ToolName)
 	require.Equal(t, "success", out.ToolObservations[0].Status)
 	require.Equal(t, "42", out.ToolObservations[0].RawText)
-	require.Equal(t, "skill", out.ToolObservations[0].ProviderType)
-	require.Equal(t, "skill-calc", out.ToolObservations[0].ProviderID)
+	require.Equal(t, "mcp", out.ToolObservations[0].ProviderType)
+	require.Equal(t, "math", out.ToolObservations[0].ProviderID)
 	require.Equal(t, "agent", out.TraceEvents[0].RunType)
 	require.NotEmpty(t, out.ToolObservations[0].Summary)
 	require.NotEmpty(t, out.TraceEvents)
@@ -111,7 +246,6 @@ func TestBuildReActGraph_MCPToolCallRecordsProviderMetadata(t *testing.T) {
 			{ToolCalls: []port.ToolCall{{ID: "mcp-call-1", Name: "mcp_search", Arguments: map[string]any{"query": "status"}}}},
 			{Content: "Done"},
 		},
-		toolResp: port.CapabilityResponse{Content: "mcp result"},
 	}
 	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
 	require.NoError(t, err)
@@ -126,7 +260,14 @@ func TestBuildReActGraph_MCPToolCallRecordsProviderMetadata(t *testing.T) {
 			ProviderType: "mcp",
 			ProviderID:   "server-1",
 			ServerID:     "server-1",
+			Metadata:     map[string]any{"risk_level": "read"},
 		}},
+		ToolCallFn: func(_ context.Context, serverID, toolName string, input map[string]any) (any, error) {
+			require.Equal(t, "server-1", serverID)
+			require.Equal(t, "mcp_search", toolName)
+			require.Equal(t, "status", input["query"])
+			return "mcp result", nil
+		},
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
 	require.NoError(t, err)
@@ -138,33 +279,6 @@ func TestBuildReActGraph_MCPToolCallRecordsProviderMetadata(t *testing.T) {
 	require.NotEmpty(t, out.TraceEvents)
 	require.Equal(t, "mcp_search", out.TraceEvents[3].NodeID)
 	require.Equal(t, "mcp", out.TraceEvents[3].NodeType)
-	require.NotEmpty(t, stub.skillReqs)
-	require.Equal(t, "mcp_search", stub.skillReqs[0].SkillID)
-}
-
-func TestBuildReActGraph_ToolCallPassesSkillVersionID(t *testing.T) {
-	stub := &capGWSequence{
-		responses: []port.CapabilityResponse{
-			{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{"expr": "6*7"}}}},
-			{Content: "The answer is 42"},
-		},
-		toolResp: port.CapabilityResponse{Content: "42"},
-	}
-	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
-	require.NoError(t, err)
-
-	state := graph.ReActState{
-		Model:    "qwen-turbo",
-		Messages: []port.LLMMessage{{Role: "user", Content: "calc 6*7"}},
-		SkillToolIndex: map[string]port.SkillToolRef{
-			"calc": {SkillID: "skill-calc", VersionID: "version-1"},
-		},
-	}
-	_, err = cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
-	require.NoError(t, err)
-	require.Len(t, stub.skillReqs, 1)
-	require.Equal(t, "skill-calc", stub.skillReqs[0].SkillID)
-	require.Equal(t, "version-1", stub.skillReqs[0].VersionID)
 }
 
 func TestBuildReActGraph_MaxIterations(t *testing.T) {
@@ -173,14 +287,15 @@ func TestBuildReActGraph_MaxIterations(t *testing.T) {
 		infinite: port.CapabilityResponse{
 			ToolCalls: []port.ToolCall{{ID: "c1", Name: "noop", Arguments: map[string]any{}}},
 		},
-		toolResp: port.CapabilityResponse{Content: "ok"},
 	}
 	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
 	require.NoError(t, err)
 
 	state := graph.ReActState{
-		Model:    "qwen-turbo",
-		Messages: []port.LLMMessage{{Role: "user", Content: "loop"}},
+		Model:          "qwen-turbo",
+		Messages:       []port.LLMMessage{{Role: "user", Content: "loop"}},
+		AvailableTools: []port.ToolDefinition{{Name: "noop", ProviderType: "mcp", ServerID: "test", Metadata: map[string]any{"risk_level": "read"}}},
+		ToolCallFn:     func(context.Context, string, string, map[string]any) (any, error) { return "ok", nil },
 	}
 	_, err = cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 4})
 	require.ErrorContains(t, err, "max steps")
@@ -223,14 +338,15 @@ func TestBuildReActGraph_TokensAccumulatedOverMultipleSteps(t *testing.T) {
 			{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{}}}, Usage: port.TokenUsage{Total: 20}},
 			{Content: "done", Usage: port.TokenUsage{Total: 10}},
 		},
-		toolResp: port.CapabilityResponse{Content: "ok"},
 	}
 	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
 	require.NoError(t, err)
 
 	state := graph.ReActState{
-		Model:    "qwen-turbo",
-		Messages: []port.LLMMessage{{Role: "user", Content: "go"}},
+		Model:          "qwen-turbo",
+		Messages:       []port.LLMMessage{{Role: "user", Content: "go"}},
+		AvailableTools: []port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "test", Metadata: map[string]any{"risk_level": "read"}}},
+		ToolCallFn:     func(context.Context, string, string, map[string]any) (any, error) { return "ok", nil },
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
 	require.NoError(t, err)
