@@ -135,15 +135,6 @@ spec:
         - name: redis
           image: {{ include "stratum.image" .Values.redis.image | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
-          # 纯缓存用途：禁用 RDB/AOF 持久化。避免跨 Redis 版本的 dump 文件
-          # （如 7.4+ 写出的 RDB v12）残留在 PVC 上，导致回退镜像启动时
-          # "Can't handle RDB format version" 致命错误 → CrashLoop。
-          command: ["redis-server"]
-          args:
-            - "--save"
-            - ""
-            - "--appendonly"
-            - "no"
           ports:
             - name: redis
               containerPort: 6379
