@@ -122,7 +122,13 @@ func (h *UserMemoryHandler) GetStats(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, stats)
+	c.JSON(http.StatusOK, dto.MemoryStatsResponse{
+		TotalEntries: stats.TotalEntries, ShortTermCount: stats.ShortTermCount,
+		LongTermCount: stats.LongTermCount, EntityCount: stats.EntityCount,
+		SessionsCount: stats.SessionsCount, ActiveUsers: stats.ActiveUsers,
+		VectorCount: stats.VectorCount, LastAccessTime: stats.LastAccessTime,
+		StorageSizeBytes: stats.StorageSizeBytes,
+	})
 }
 
 func (h *UserMemoryHandler) GetSummary(c *gin.Context) {
