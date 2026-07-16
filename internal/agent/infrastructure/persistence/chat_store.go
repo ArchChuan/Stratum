@@ -239,8 +239,8 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 			return fmt.Errorf("marshal outbox payload: %w", err)
 		}
 		if _, err = tx.Exec(ctx,
-			`INSERT INTO memory_outbox (message_id, payload) VALUES ($1, $2)`,
-			msg.ID, string(outboxPayload)); err != nil {
+			`INSERT INTO memory_outbox (message_id, user_id, agent_id, payload) VALUES ($1, $2, $3, $4)`,
+			msg.ID, msg.UserID, msg.AgentID, string(outboxPayload)); err != nil {
 			return fmt.Errorf("insert memory_outbox: %w", err)
 		}
 		outboxQueued = true

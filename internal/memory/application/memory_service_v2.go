@@ -245,5 +245,15 @@ type ForgetMemoryRequest struct {
 
 // ForgetMemory deletes a single fact by ID.
 func (s *MemoryService) ForgetMemory(ctx context.Context, req *ForgetMemoryRequest) error {
-	return s.factRepo.Delete(ctx, req.TenantID, req.FactID)
+	if err := s.factRepo.Delete(ctx, req.TenantID, req.FactID); err != nil {
+		return err
+	}
+	if s.vectorStore == nil {
+		return nil
+	}
+	collectionName := fmt.Sprintf("memory_facts_%s", strings.ReplaceAll(req.TenantID, "-", "_"))
+	if err := s.vectorStore.Delete(ctx, collectionName, []string{req.FactID}); err != nil {
+		return fmt.Errorf("forget memory vector replica: %w", err)
+	}
+	return nil
 }

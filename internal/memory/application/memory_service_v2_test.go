@@ -302,3 +302,26 @@ func TestFactDTO_Fields(t *testing.T) {
 	assert.Equal(t, 5, dto.AccessCount)
 	assert.Equal(t, now, dto.CreatedAt)
 }
+
+func TestForgetMemoryDeletesFactVectorReplica(t *testing.T) {
+	ctx := context.Background()
+	factRepo := new(MockFactRepo)
+	entityRepo := new(MockEntityRepo)
+	queue := new(MockExtractionQueue)
+	vectorStore := new(MockVectorStore)
+	svc := NewMemoryService(factRepo, entityRepo, queue, vectorStore, nil, nil, nil, nil)
+	req := &ForgetMemoryRequest{
+		TenantID: "42c9b62d-4f66-4bc4-a1b8-eed81cdae7b1",
+		UserID:   "user-1",
+		FactID:   "fact-1",
+	}
+
+	factRepo.On("Delete", ctx, req.TenantID, req.FactID).Return(nil).Once()
+	vectorStore.On("Delete", ctx, "memory_facts_42c9b62d_4f66_4bc4_a1b8_eed81cdae7b1", []string{req.FactID}).Return(nil).Once()
+
+	err := svc.ForgetMemory(ctx, req)
+
+	assert.NoError(t, err)
+	factRepo.AssertExpectations(t)
+	vectorStore.AssertExpectations(t)
+}
