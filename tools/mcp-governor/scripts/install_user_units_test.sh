@@ -10,6 +10,10 @@ export HOME="$tmp_dir/home"
 export XDG_CONFIG_HOME="$tmp_dir/xdg-config"
 export XDG_STATE_HOME="$tmp_dir/xdg-state"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$tmp_dir/run-from"
+chmod 0711 "$XDG_CONFIG_HOME"
+mkdir -p "$HOME/.local/bin" "$HOME/.local/state/mcp-governor" "$XDG_CONFIG_HOME/systemd/user"
+chmod 0755 "$HOME/.local/bin" "$XDG_CONFIG_HOME/systemd" "$XDG_CONFIG_HOME/systemd/user"
+chmod 0750 "$HOME/.local/state/mcp-governor"
 
 fixture_binary="$tmp_dir/mcp-governor"
 printf '#!/bin/sh\nexit 0\n' >"$fixture_binary"
@@ -37,8 +41,14 @@ timer="$unit_dir/mcp-governor-observe.timer"
 
 test -x "$binary"
 test "$(stat -c %a "$binary")" = 755
+test "$(stat -c %a "$HOME/.local/bin")" = 755
+test "$(stat -c %a "$HOME/.local/state/mcp-governor")" = 750
+test "$(stat -c %a "$XDG_CONFIG_HOME")" = 711
+test "$(stat -c %a "$unit_dir")" = 755
 test -f "$config"
 test "$(stat -c %a "$config")" = 600
+test "$(stat -c %a "$HOME/.config")" = 755
+test "$(stat -c %a "$HOME/.config/mcp-governor")" = 700
 cmp "$script_dir/../config.example.json" "$config"
 test -f "$service"
 test -f "$timer"
@@ -53,5 +63,9 @@ chmod 0640 "$config"
 
 test "$(cat "$config")" = '{"custom":true}'
 test "$(stat -c %a "$config")" = 640
+test "$(stat -c %a "$HOME/.local/bin")" = 755
+test "$(stat -c %a "$HOME/.local/state/mcp-governor")" = 750
+test "$(stat -c %a "$XDG_CONFIG_HOME")" = 711
+test "$(stat -c %a "$unit_dir")" = 755
 test "$(cat "$systemctl_log")" = $'--user daemon-reload\n--user enable --now mcp-governor-observe.timer'
 test ! -e "$HOME/.config/systemd/user/mcp-governor-observe.service"

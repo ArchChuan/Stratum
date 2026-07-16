@@ -20,7 +20,7 @@ Omit `--output -` to write the configured snapshot file (by default, `~/.local/s
 
 ## Install the user timer
 
-The installer builds the binary, installs it as `~/.local/bin/mcp-governor` with mode `0755`, creates a private state directory, installs the example config as `~/.config/mcp-governor/config.json` with mode `0600` only when that file is absent, and enables the user timer. Existing config content and permissions are preserved.
+The installer builds the binary, installs it as `~/.local/bin/mcp-governor` with mode `0755`, creates governor-private config and state directories with mode `0700`, installs the example config as `~/.config/mcp-governor/config.json` with mode `0600` only when that file is absent, and enables the user timer. Existing directory modes and existing config content and permissions are preserved.
 
 ```sh
 ./scripts/install-user-units.sh

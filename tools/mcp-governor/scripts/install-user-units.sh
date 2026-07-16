@@ -10,7 +10,23 @@ state_dir="$HOME/.local/state/mcp-governor"
 config_dir="$HOME/.config/mcp-governor"
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
-install -d -m 0700 "$bin_dir" "$state_dir" "$config_dir" "$unit_dir"
+ensure_dir() {
+  local path=$1
+  local mode=$2
+  if [[ ! -d "$path" ]]; then
+    install -d -m "$mode" "$path"
+  fi
+}
+
+ensure_dir "$HOME/.local" 0755
+ensure_dir "$bin_dir" 0755
+ensure_dir "$HOME/.local/state" 0755
+ensure_dir "$state_dir" 0700
+ensure_dir "$HOME/.config" 0755
+ensure_dir "$config_dir" 0700
+ensure_dir "${XDG_CONFIG_HOME:-$HOME/.config}" 0755
+ensure_dir "${XDG_CONFIG_HOME:-$HOME/.config}/systemd" 0755
+ensure_dir "$unit_dir" 0755
 
 tmp_dir=$(mktemp -d)
 staged_binary="$bin_dir/.mcp-governor.new.$$"
