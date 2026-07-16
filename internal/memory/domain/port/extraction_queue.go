@@ -25,7 +25,7 @@ type ExtractionTask struct {
 type ExtractionQueue interface {
 	Enqueue(ctx context.Context, tenantID string, task *ExtractionTask) error
 	Dequeue(ctx context.Context, tenantID string) (*ExtractionTask, error)
-	MarkCompleted(ctx context.Context, tenantID string, taskID int64) error
-	MarkFailed(ctx context.Context, tenantID string, taskID int64, errMsg string) error
+	MarkCompleted(ctx context.Context, tenantID string, taskID int64, claimedAt time.Time) error
+	MarkFailed(ctx context.Context, tenantID string, taskID int64, claimedAt time.Time, errMsg string) error
 	DeleteOldCompleted(ctx context.Context, tenantID string, retentionDays int) (int, error)
 }
