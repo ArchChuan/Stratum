@@ -6,18 +6,19 @@ React 18.3 · Vite 5.4 · Ant Design 5.20 · React Router 6.26 · Axios 1.7 · T
 
 | 目录 | 职责 |
 |------|------|
-| `components/` | 共享 UI 组件 |
-| `hooks/` | 自定义 Hook（`use*` 命名） |
-| `pages/` | 路由页面组件（`*Page.jsx`，≤200 行） |
+| `app/` | 路由与应用级 layout |
+| `modules/<domain>/` | 按 Agent、Skill、Knowledge、Memory 等业务域组织页面、组件、hook、model 与 API |
 | `services/` | 共享 HTTP client 与流式请求工具 |
-| `utils/` | 纯函数工具 |
-| `contexts/` | React Context |
+| `shared/hooks/` | 跨域自定义 Hook（`use*` 命名） |
+| `shared/lib/` | 跨域纯函数与基础设施辅助 |
+| `shared/ui/` | 跨域 UI 组件 |
+| `constants/` | 前端共享行为常量 |
 
 ## 编码规则
 
 - 普通 API 调用走 `web/src/services/client.ts` 导出的 axios 实例；SSE 流式调用统一走同文件的 `streamApiEvents`
 - 错误统一：`message.error(err.response?.data?.error || '操作失败')`
-- 禁止跨 `pages/` 目录导入；页面组件 ≤200 行，超出提取到 hooks/utils
+- 业务域之间不直接导入对方页面；共享逻辑下沉到 `shared/`，域内页面过大时提取到同域 components/hooks
 - `useEffect` 依赖必须完整；异步 effect 需要 `let cancelled = false` 清理
 - 用 `message` / `Modal.confirm`，禁止 `alert()` / `confirm()`
 - 用户可见字符串全部中文；禁止 `console.log` 提交

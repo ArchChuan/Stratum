@@ -49,7 +49,7 @@ agent 子操作使用 `pkg/constants/timeouts.go` 分级常量：
 
 ## 接口新增方法后
 
-同步更新所有 mock/stub 实现者，否则整包编译失败（反例：DeleteAllByUser 漏改 MockEntityRepo）。定位：`grep -r "InterfaceName" --include="*_test.go"`。
+同步更新所有 mock/stub 实现者，否则整包编译失败（反例：DeleteAllByUser 漏改 MockEntityRepo）。定位：`rg "InterfaceName" -g '*_test.go'`。
 
 ## 测试
 

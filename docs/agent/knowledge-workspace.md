@@ -76,9 +76,9 @@ sequenceDiagram
 
 ---
 
-## 7. 数据库 Schema（per-tenant `"tenant_<id>"` schema）
+## 4. 数据库 Schema（per-tenant `"tenant_<id>"` schema）
 
-### 7.1 `rag_workspaces`
+### 4.1 `rag_workspaces`
 
 ```sql
 CREATE TABLE rag_workspaces (
@@ -91,9 +91,9 @@ CREATE TABLE rag_workspaces (
 );
 ```
 
-**注意**：`config` 列存储的 JSONB 结构为 `{embedding_model, chunk_size, chunk_overlap, query_mode, top_k}`。**`chunking_strategy` 目前未持久化到 JSONB**（`persistence.jsonbConfig` / `toJSONB` / `fromJSONB` 尚未包含该字段）——域层有该字段但读回时为空，回退到 `DefaultChunkingStrategy = "structure_recursive"`。
+`config` 列存储的 JSONB 结构为 `{embedding_model, chunk_size, chunk_overlap, query_mode, top_k, chunking_strategy}`；`workspace_repo.go` 的 `toJSONB` / `fromJSONB` 必须保持双向一致。
 
-### 7.2 `knowledge_docs`
+### 4.2 `knowledge_docs`
 
 ```sql
 CREATE TABLE knowledge_docs (
@@ -114,7 +114,7 @@ CREATE UNIQUE INDEX ON knowledge_docs(workspace_id, content_hash);
 
 `ingest_status` 三态：`processing` → `completed` | `failed`
 
-### 7.3 `knowledge_chunks`
+### 4.3 `knowledge_chunks`
 
 ```sql
 CREATE TABLE knowledge_chunks (
@@ -124,7 +124,7 @@ CREATE TABLE knowledge_chunks (
     chunk_index   BIGINT NOT NULL,
     content       TEXT NOT NULL,
     parent_id     VARCHAR(255),      -- 指向 knowledge_parent_chunks.id（Parent-Child 策略才有值）
-    tsv           TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED
+    tsv           TSVECTOR GENERATED ALWAYS AS (to_tsvector('public.chinese_zh', content)) STORED
 );
 CREATE INDEX ON knowledge_chunks USING GIN(tsv);
 CREATE INDEX ON knowledge_chunks(workspace_id);
@@ -132,7 +132,7 @@ CREATE INDEX ON knowledge_chunks(workspace_id);
 
 `parent_id` 格式：`<documentID>_parent_<i>`（`structure_recursive` 策略才填充）。
 
-### 7.4 `knowledge_parent_chunks`（新增）
+### 4.4 `knowledge_parent_chunks`
 
 ```sql
 CREATE TABLE knowledge_parent_chunks (
@@ -147,9 +147,9 @@ CREATE INDEX ON knowledge_parent_chunks(workspace_id);
 
 存储 `structure_recursive` 策略生成的父块（大上下文单元），仅用于 RAG 检索后的上下文扩展，不进 Milvus。
 
-### 7.5 Milvus Collection Schema
+### 4.5 Milvus Collection Schema
 
-Collection 名称：`CollectionName(tenantID, workspaceID)` → `knowledge_<tenantID>_<workspaceID>`
+Collection 名称：`CollectionName(tenantID, workspaceID)` → `kb_<workspaceID>`。`workspaceID` 是全局唯一 UUID，因此当前实现忽略 `tenantID`；非法字符会替换为下划线。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -166,9 +166,9 @@ Collection 名称：`CollectionName(tenantID, workspaceID)` → `knowledge_<tena
 
 ---
 
-## 8. 文档摄取状态跟踪
+## 5. 文档摄取状态跟踪
 
-### 8.1 DocRepo 接口（`port/doc_repo.go`）
+### 5.1 DocRepo 接口（`port/doc_repo.go`）
 
 ```go
 type DocRepo interface {
@@ -184,7 +184,7 @@ type DocRepo interface {
 }
 ```
 
-### 8.2 状态机
+### 5.2 状态机
 
 ```
 Save(status='processing')
@@ -198,7 +198,7 @@ Save(status='processing')
 
 `RecoverStuckIngests`：服务重启时调用，将超过阈值仍处于 `processing` 的文档置为 `failed`（errMsg = "ingest aborted by server restart"）。
 
-### 8.3 前端轮询模式
+### 5.3 前端轮询模式
 
 ```
 POST /knowledge/ingest         → status=processing (立即)
@@ -209,7 +209,7 @@ GET  /workspaces/:name/documents → 每次返回最新 ingest_status
 
 ---
 
-## 9. 错误映射（`middleware/error_mapping.go`）
+## 6. 错误映射（`middleware/error_mapping.go`）
 
 | Domain Sentinel | HTTP | 触发场景 |
 |----------------|------|---------|
@@ -228,9 +228,9 @@ GET  /workspaces/:name/documents → 每次返回最新 ingest_status
 
 ---
 
-## 10. 前端集成（`web/src/modules/knowledge/`）
+## 7. 前端集成（`web/src/modules/knowledge/`）
 
-### 10.1 数据模型（`model/knowledge.ts`）
+### 7.1 数据模型（`model/knowledge.ts`）
 
 ```typescript
 type WorkspaceConfig = {
@@ -256,14 +256,14 @@ type KnowledgeDocument = {
 };
 ```
 
-### 10.2 创建 Workspace（`components/WorkspaceCreateModal.tsx`）
+### 7.2 创建 Workspace（`components/WorkspaceCreateModal.tsx`）
 
 - `description` 必填（产品规范）
 - `name` 提交后只读（向量 collection 命名绑定）
 - `chunking_strategy` 选择器三选一，默认 `structure_recursive`
 - `embedding_model` 提交后灰显不可改
 
-### 10.3 文档状态展示规则
+### 7.3 文档状态展示规则
 
 | `ingest_status` | UI 呈现 |
 |----------------|---------|
@@ -273,21 +273,19 @@ type KnowledgeDocument = {
 
 ---
 
-## 11. 已知限制与注意事项
+## 8. 已知限制与注意事项
 
-1. **`ChunkingStrategy` 未持久化**：`workspace_repo.go` 的 `jsonbConfig` 未包含 `chunking_strategy` 字段，导致 workspace 从 DB 读取后该字段始终为空，实际 chunking 时回退到 `DefaultChunkingStrategy = "structure_recursive"`。若需策略差异化，需补全 `toJSONB` / `fromJSONB`。
+1. **上传入口的有效上限是 10 MB**：全局 `BodyLimit(MaxRequestBodyBytes)`（10 MB）先于 knowledge 路由的 `BodyLimit(MaxUploadBytes)`（50 MB）执行，handler 内的 `MaxUploadFileSize`（100 MB）也无法放宽全局限制。调用方应按 10 MB 处理，除非同时调整三层限制。
 
-2. **`DeleteByWorkspace` 未删 parent_chunks**：`ChunkRepo.DeleteByWorkspace` 只删 `knowledge_chunks`，`knowledge_parent_chunks` 未清理。删除 workspace 时 parent 数据残留，会逐步积累。
+2. **`graph` 仍是兼容别名**：领域白名单接受 `graph`，但 `RAGService.Query` 将它与 `vector` 走同一向量检索分支；当前没有独立图查询实现。
 
-3. **`chunking_strategy` 字段不在 `WorkspaceService.IngestUpload` 透传**：upload 请求的 `ChunkingStrategy` 字段来源于 `ws.Config.ChunkingStrategy`，但由于第1点，读回的 Config 该字段为空，最终固定用 `structure_recursive`。
-
-4. **关键词搜索全局语言 `simple`**：`plainto_tsquery('simple', ...)` 不支持中文分词，中文文档关键词检索召回率低，需替换为 `zhparser` 或借助 pgvector 全向量检索。
+3. **异步摄取不是跨进程任务队列**：任务运行在进程内 goroutine 中；重启后启动流程会把超过 `KnowledgeIngestStuckThreshold` 的 `processing` 文档标记为 `failed`，不会自动续跑。
 
 ---
 
-## 4. 领域模型与业务规则
+## 9. 领域模型与业务规则
 
-### 4.1 聚合与值对象（`internal/knowledge/domain/workspace.go`）
+### 9.1 聚合与值对象（`internal/knowledge/domain/workspace.go`）
 
 ```go
 type Workspace struct {
@@ -305,7 +303,7 @@ type WorkspaceConfig struct {
 }
 ```
 
-### 4.2 默认值 & 白名单
+### 9.2 默认值 & 白名单
 
 | 字段 | Default | Allowed |
 |------|---------|---------|
@@ -316,7 +314,7 @@ type WorkspaceConfig struct {
 | ChunkOverlap | `64` | 任意正整数 |
 | TopK | `5` | 任意正整数 |
 
-### 4.3 不变性规则（`MergeUpdate`）
+### 9.3 不变性规则（`MergeUpdate`）
 
 | 字段 | 可变 | 违反时 |
 |------|------|--------|
@@ -331,7 +329,7 @@ type WorkspaceConfig struct {
 
 **为什么 `EmbeddingModel` / `ChunkSize` / `ChunkOverlap` 不可变**：`EmbeddingModel` 决定 Milvus collection 维度（1024/2048/1536），改后已入库向量与新查询向量维度不匹配。`ChunkSize/ChunkOverlap` 改变后新旧 chunk 边界不一致，检索命中率崩塌。
 
-### 4.4 向量维度决议（`vectorDim`，`workspace_service.go`）
+### 9.4 向量维度决议（`vectorDim`，`workspace_service.go`）
 
 ```go
 func vectorDim(model string) int {
@@ -348,9 +346,9 @@ func vectorDim(model string) int {
 
 ---
 
-## 5. 文档摄取流水线（`POST /knowledge/ingest`）
+## 10. 文档摄取流水线（`POST /knowledge/ingest`）
 
-### 5.1 架构：同步接受 + 异步执行
+### 10.1 架构：同步接受 + 异步执行
 
 `IngestDocument` 立即返回 `Status='processing'`，后台 goroutine 完成 embed → vector → PG 写入。前端通过 `GET /workspaces/:name/documents` 轮询终态。
 
@@ -361,11 +359,11 @@ func vectorDim(model string) int {
 
 goroutine 通过 `context.WithoutCancel` 与请求 context 解耦，客户端断开不中断摄取。
 
-### 5.2 流程图
+### 10.2 流程图
 
 ```mermaid
 flowchart TD
-    A[multipart file] --> B{Size > MaxUploadFileSize<br/>100MB?}
+    A[multipart file] --> B{Global BodyLimit<br/>10 MB?}
     B -->|是| E1[400 file size exceeds]
     B -->|否| C[WorkspaceService.IngestUpload]
     C --> D[WorkspaceRepo.GetByName<br/>→ ws.ID, ws.Config]
@@ -400,7 +398,7 @@ flowchart TD
     end
 ```
 
-### 5.3 关键实现细节
+### 10.3 关键实现细节
 
 - **去重键**：`SHA256(fileBytes)` 落 `knowledge_docs.content_hash`；查表用 `(workspace_id, content_hash)` 组合索引。
 - **DocumentID**：uuid v7（含时间序），Milvus chunk ID = `<documentID>_chunk_<i>`，parent ID = `<documentID>_parent_<i>`。
@@ -408,7 +406,7 @@ flowchart TD
 - **PG chunks 落库容错**：`InsertBatch` / `InsertParentBatch` 失败仅 `logger.Warn`，不回滚——向量已入 Milvus，PG 关键词索引可后台补偿。
 - **EmbedResolver**：逐租户从 `public.tenants.settings.llm_api_keys` 解密密钥→构造 `llmgateway.Gateway`→缓存 `TenantGatewayCache`（TTL = `constants.GatewayCacheTTL`）。Workspace-level `EmbeddingModel` 覆盖 tenant 默认。
 
-### 5.4 三种 Chunking Strategy（`pkg/textchunk/`）
+### 10.4 三种 Chunking Strategy（`pkg/textchunk/`）
 
 所有策略实现 `Strategy` 接口：
 
@@ -436,14 +434,15 @@ type ChunkResult struct {
 
 ---
 
-## 6. 查询流水线（`POST /knowledge/query`）
+## 11. 查询流水线（`POST /knowledge/query`）
 
-### 6.1 三种模式
+### 11.1 查询模式
 
 ```mermaid
 flowchart LR
     Q[QueryRequest<br/>question, workspace, mode, topK] --> R{Mode}
     R -->|vector| V[queryVector<br/>Embed → Milvus.Search topK]
+    R -->|graph 兼容别名| V
     R -->|keyword| K[chunkRepo.KeywordSearch<br/>PG tsv @@ plainto_tsquery]
     R -->|hybrid| H1[并发]
     H1 --> V2[queryVector topK*2]
@@ -456,7 +455,7 @@ flowchart LR
     SORT --> RESP
 ```
 
-### 6.2 RRF 参数
+### 11.2 RRF 参数
 
 ```go
 const rrfK = 60.0
@@ -465,6 +464,6 @@ rrfScores[r.ID] += 1.0 / (rrfK + float64(rank+1))
 
 `rrfK=60`：RRF 原论文（Cormack 2009）经验值；向量与关键词各取 `topK*2` 留召回冗余，截断在融合后完成。
 
-### 6.3 Handler → Service 编排
+### 11.3 Handler → Service 编排
 
 `RAGHandler.Query` 先 `WorkspaceService.GetWorkspace` 拿 `ws.ID + ws.Config.EmbeddingModel`，再喂给 `RAGService.Query`；`collectionName = CollectionName(tenantID, ws.ID)` 决定查哪个 Milvus 集合。
