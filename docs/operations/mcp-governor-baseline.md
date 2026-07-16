@@ -96,8 +96,9 @@ longer observation even though immediate memory pressure was absent.
 
 Transient user services isolated the original unit properties one at a time.
 Each row used the same binary, configuration, host activity, and JSON
-aggregation. Values are bytes; classified warnings are warnings prefixed with
-a configured service identity.
+aggregation. Values are bytes. Classified warning counts parse the
+`process <pid>` identity from each warning and intersect it with the PIDs in
+`.processes`; non-process warnings are ignored.
 
 | Case | Chroma PSS | claude-mem PSS | Classified warnings | Total warnings |
 | --- | ---: | ---: | ---: | ---: |
@@ -141,7 +142,9 @@ reinstallation, an explicit scheduled-service capture began at
 | **Classified total** | **119** | **4976.0** | **3541.2** | **3476.2** | **0** |
 
 The corrected scheduled snapshot had 92 general process-scan permission
-warnings and **zero classified-service warnings**. At
+warnings and **zero PID-correlated classified-process warnings**. The corrected
+query was also run against the retained original seven-directive artifact and
+returned 119, then against the retained post-fix artifact and returned 0. At
 `2026-07-16T21:08:30.797837287+08:00`, 2.34 GiB RAM was available and only
 1.8 MiB of 4 GiB swap was free. Memory PSI `some/full` was
 0.04/0.04, 0.03/0.03, and 0.04/0.03 percent over 10/60/300 seconds; CPU `some`
@@ -194,13 +197,17 @@ printf 'start=%s elapsed_ms=%s captured_at=%s\n' "$window_start" \
 Aggregate without printing command arguments or payloads:
 
 ```sh
-jq '{services, total:{processes:(.services|map(.processes)|add),
+jq '(.processes | map({key:(.pid|tostring),value:true}) | from_entries) as $pids |
+  ([.warnings[] |
+    (try capture("(?:^|: )process (?<pid>[0-9]+)(?: |:)") catch null) |
+    select(. != null and $pids[.pid])] | length) as $classified_warnings |
+  {services, total:{processes:(.services|map(.processes)|add),
   rss_bytes:(.services|map(.rss_bytes)|add),
   pss_bytes:(.services|map(.pss_bytes)|add),
   uss_bytes:(.services|map(.uss_bytes)|add),
   orphans:([.processes[]|select(.orphan)]|length),
   warnings:(.warnings|length),
-  classified_warnings:([.warnings[]|select(startswith("service "))]|length)}}' \
+  classified_warnings:$classified_warnings}}' \
   "$capture_dir/active.json"
 jq '{permission_denied:([.warnings[]|select(test("permission denied"))]|length),
   malformed_or_fatal:([.warnings[]|select(test("malformed|fatal|parse";"i"))]|length)}' \
@@ -209,6 +216,30 @@ free -b
 for resource in memory cpu io; do
   printf '%s\n' "$resource"
   sed -n '1,2p' "/proc/pressure/$resource"
+done
+```
+
+For the recommended 24-hour evidence window, preserve private samples and emit
+only aggregate values. This deliberately runs one observation per minute and
+does not print process arguments:
+
+```sh
+evidence_dir=$(mktemp -d "$HOME/.local/state/mcp-governor/evidence.XXXXXX")
+chmod 0700 "$evidence_dir"
+for sample in $(seq -w 1 1440); do
+  systemctl --user start mcp-governor-observe.service
+  snapshot="$evidence_dir/$sample.json"
+  cp "$HOME/.local/state/mcp-governor/snapshot.json" "$snapshot"
+  chmod 0600 "$snapshot"
+  jq -r '(.processes | map({key:(.pid|tostring),value:true}) |
+      from_entries) as $pids |
+    ([.warnings[] |
+      (try capture("(?:^|: )process (?<pid>[0-9]+)(?: |:)") catch null) |
+      select(. != null and $pids[.pid])] | length) as $classified_warnings |
+    [.captured_at, (.services|map(.processes)|add),
+     (.services|map(.pss_bytes)|add), (.services|map(.uss_bytes)|add),
+     $classified_warnings] | @tsv' "$snapshot" >>"$evidence_dir/metrics.tsv"
+  sleep 60
 done
 ```
 
@@ -247,7 +278,7 @@ The first migration targets are:
 
 Keep both migrations observation-only until the 24-hour series validates
 ownership matching and supplies defensible limits. Separately, investigate a
-systemd unit scopes can restore filesystem isolation around owned target
+systemd scopes can restore filesystem isolation around owned target
 services independently of the observation process.
 
 ## Rollback
