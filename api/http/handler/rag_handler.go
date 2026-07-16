@@ -335,3 +335,25 @@ func (h *RAGHandler) ListDocuments(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"workspace": name, "documents": items})
 }
+
+func (h *RAGHandler) DeleteDocument(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	workspace, documentID := c.Param("name"), c.Param("documentID")
+	if workspace == "" || documentID == "" {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("workspace and document required")))
+		return
+	}
+	if err := h.wsService.DeleteDocument(c.Request.Context(), tenantID, workspace, documentID); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	h.logger.Info("knowledge document deleted",
+		zap.String("workspace", workspace),
+		zap.String("document_id", documentID),
+		zap.String("tenant_id", tenantID))
+	c.JSON(http.StatusOK, gin.H{"success": true, "document_id": documentID})
+}

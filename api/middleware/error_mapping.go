@@ -75,6 +75,7 @@ func MapErrorToStatus(err error) int {
 	// 404 — NotFound
 	case errors.Is(err, pgx.ErrNoRows),
 		errors.Is(err, knowledgedomain.ErrWorkspaceNotFound),
+		errors.Is(err, knowledgedomain.ErrDocumentNotFound),
 		errors.Is(err, iamdomain.ErrMemberNotFound),
 		errors.Is(err, iamdomain.ErrTenantNotFound),
 		errors.Is(err, agentapp.ErrNotFound),
@@ -94,6 +95,7 @@ func MapErrorToStatus(err error) int {
 	case errors.Is(err, knowledgedomain.ErrWorkspaceConflict),
 		errors.Is(err, knowledgedomain.ErrWorkspaceLinked),
 		errors.Is(err, knowledgedomain.ErrDuplicateDocument),
+		errors.Is(err, knowledgedomain.ErrDocumentProcessing),
 		errors.Is(err, agentapp.ErrNameConflict),
 		errors.Is(err, mcpdomain.ErrNameConflict),
 		errors.Is(err, skilldomain.ErrSkillNameConflict),
