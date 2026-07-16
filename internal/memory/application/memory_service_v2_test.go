@@ -155,13 +155,13 @@ func (m *MockExtractionQueue) Dequeue(ctx context.Context, tenantID string) (*po
 	return args.Get(0).(*port.ExtractionTask), args.Error(1)
 }
 
-func (m *MockExtractionQueue) MarkCompleted(ctx context.Context, tenantID string, taskID int64) error {
-	args := m.Called(ctx, tenantID, taskID)
+func (m *MockExtractionQueue) MarkCompleted(ctx context.Context, tenantID string, taskID int64, claimedAt time.Time) error {
+	args := m.Called(ctx, tenantID, taskID, claimedAt)
 	return args.Error(0)
 }
 
-func (m *MockExtractionQueue) MarkFailed(ctx context.Context, tenantID string, taskID int64, errMsg string) error {
-	args := m.Called(ctx, tenantID, taskID, errMsg)
+func (m *MockExtractionQueue) MarkFailed(ctx context.Context, tenantID string, taskID int64, claimedAt time.Time, errMsg string) error {
+	args := m.Called(ctx, tenantID, taskID, claimedAt, errMsg)
 	return args.Error(0)
 }
 
