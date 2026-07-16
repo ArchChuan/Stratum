@@ -24,6 +24,20 @@ import (
 
 const chatCleanupInterval = 24 * time.Hour
 
+type tenantBootstrapDeps struct {
+	withLock        func(context.Context, *pgxpool.Pool, func(context.Context) error) error
+	provisionPublic func(context.Context, *pgxpool.Pool, *zap.Logger) error
+	ensureDefault   func(context.Context, *pgxpool.Pool, *zap.Logger) error
+	provisionAll    func(context.Context, *pgxpool.Pool, *zap.Logger) error
+}
+
+var defaultTenantBootstrapDeps = tenantBootstrapDeps{
+	withLock:        tenantdb.WithSchemaProvisionLock,
+	provisionPublic: tenantdb.ProvisionPublicSchema,
+	ensureDefault:   tenantdb.EnsureDefaultTenant,
+	provisionAll:    tenantdb.ProvisionAllTenantSchemas,
+}
+
 func InitTracingFromEnv(logger *zap.Logger) func(context.Context) error {
 	ep := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	if ep == "" {
@@ -46,16 +60,27 @@ func InitTracingFromEnv(logger *zap.Logger) func(context.Context) error {
 }
 
 func BootstrapTenants(ctx context.Context, c *wiring.Container, logger *zap.Logger) error {
-	if err := tenantdb.ProvisionPublicSchema(ctx, c.DB(), logger); err != nil {
-		return fmt.Errorf("public schema provision: %w", err)
-	}
-	if err := tenantdb.EnsureDefaultTenant(ctx, c.DB(), logger); err != nil {
-		return fmt.Errorf("ensure default tenant: %w", err)
-	}
-	if err := tenantdb.ProvisionAllTenantSchemas(ctx, c.DB(), logger); err != nil {
-		logger.Warn("failed to provision tenant schemas", zap.Error(err))
-	}
-	return nil
+	return bootstrapTenantSchemas(ctx, c.DB(), logger, defaultTenantBootstrapDeps)
+}
+
+func bootstrapTenantSchemas(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	logger *zap.Logger,
+	deps tenantBootstrapDeps,
+) error {
+	return deps.withLock(ctx, pool, func(lockCtx context.Context) error {
+		if err := deps.provisionPublic(lockCtx, pool, logger); err != nil {
+			return fmt.Errorf("public schema provision: %w", err)
+		}
+		if err := deps.ensureDefault(lockCtx, pool, logger); err != nil {
+			return fmt.Errorf("ensure default tenant: %w", err)
+		}
+		if err := deps.provisionAll(lockCtx, pool, logger); err != nil {
+			logger.Warn("failed to provision tenant schemas", zap.Error(err))
+		}
+		return nil
+	})
 }
 
 func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *zap.Logger) {

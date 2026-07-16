@@ -44,7 +44,7 @@ spec:
       {{- end }}
       containers:
         - name: postgresql
-          image: "{{ .Values.database.image.repository }}:{{ .Values.database.image.tag }}"
+          image: {{ include "stratum.image" .Values.database.image | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: postgresql
@@ -133,7 +133,7 @@ spec:
       {{- end }}
       containers:
         - name: redis
-          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          image: {{ include "stratum.image" .Values.redis.image | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: redis
@@ -212,7 +212,7 @@ spec:
       {{- end }}
       containers:
         - name: nats
-          image: "{{ .Values.nats.image.repository }}:{{ .Values.nats.image.tag }}"
+          image: {{ include "stratum.image" .Values.nats.image | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           args:
             - "-js"
@@ -295,7 +295,7 @@ spec:
       {{- end }}
       containers:
         - name: etcd
-          image: "{{ .Values.etcd.image.repository }}:{{ .Values.etcd.image.tag }}"
+          image: {{ include "stratum.image" .Values.etcd.image | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           command:
             - etcd
@@ -386,7 +386,7 @@ spec:
       {{- end }}
       containers:
         - name: minio
-          image: "{{ .Values.minio.image.repository }}:{{ .Values.minio.image.tag }}"
+          image: {{ include "stratum.image" .Values.minio.image | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           command:
             - minio
@@ -499,7 +499,7 @@ spec:
               echo "minio is reachable"
       containers:
         - name: milvus
-          image: "{{ .Values.milvus.image.repository }}:{{ .Values.milvus.image.tag }}"
+          image: {{ include "stratum.image" .Values.milvus.image | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           command:
             - milvus

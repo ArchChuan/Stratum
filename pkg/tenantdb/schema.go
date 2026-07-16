@@ -23,3 +23,6 @@ var ListTenantSchemas = postgres.ListTenantSchemas
 
 // ProvisionPublicSchema re-exports postgres.ProvisionPublicSchema.
 var ProvisionPublicSchema = postgres.ProvisionPublicSchema
+
+// WithSchemaProvisionLock serializes startup schema provisioning across Pods.
+var WithSchemaProvisionLock = postgres.WithSchemaProvisionLock

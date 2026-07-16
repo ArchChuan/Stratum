@@ -9,6 +9,7 @@ app:
   image:
     repository: registry.cn-hangzhou.aliyuncs.com/stratum-demo/stratum-backend
     tag: demo
+    digest: ""
   service:
     type: ClusterIP
     port: 80
@@ -26,6 +27,7 @@ frontend:
   image:
     repository: registry.cn-hangzhou.aliyuncs.com/stratum-demo/stratum-frontend
     tag: demo
+    digest: ""
   service:
     type: ClusterIP
     port: 80
@@ -71,6 +73,7 @@ database:
     # <CR>/postgres，此 tag 选中 zhparser 构建；必须与 deploy.yml 产出的 tag 保持
     # 一致。纯净 postgres:16-alpine 会使 chinese_zh 降级为 simple（中文召回≈0）。
     tag: "16-zhparser"
+    digest: ""
   persistence:
     size: 10Gi
   resources:
@@ -88,6 +91,7 @@ redis:
   image:
     repository: redis
     tag: "7-alpine"
+    digest: ""
   persistence:
     size: 1Gi
   resources:
@@ -104,6 +108,7 @@ nats:
   image:
     repository: nats
     tag: "2.10.25-alpine"
+    digest: ""
   persistence:
     size: 1Gi
   resources:
@@ -119,6 +124,7 @@ milvus:
   image:
     repository: milvusdb/milvus
     tag: "v2.4.15"
+    digest: ""
   persistence:
     size: 10Gi
   resources:
@@ -133,6 +139,7 @@ etcd:
   image:
     repository: quay.io/coreos/etcd
     tag: "v3.5.16"
+    digest: ""
   persistence:
     size: 1Gi
   resources:
@@ -146,7 +153,8 @@ etcd:
 minio:
   image:
     repository: minio/minio
-    tag: "latest"
+    tag: "RELEASE.2025-04-22T22-12-26Z"
+    digest: ""
   rootUser: "minioadmin"
   persistence:
     size: 10Gi

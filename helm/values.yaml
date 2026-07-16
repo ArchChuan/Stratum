@@ -29,6 +29,7 @@ app:
   image:
     repository: stratum
     tag: latest
+    digest: ""
   service:
     type: ClusterIP
     port: 80
@@ -58,6 +59,7 @@ frontend:
   image:
     repository: stratum-frontend
     tag: latest
+    digest: ""
   service:
     type: ClusterIP
     port: 80
@@ -108,6 +110,7 @@ database:
   image:
     repository: postgres
     tag: "16-alpine"
+    digest: ""
   persistence:
     size: 10Gi
   resources:
@@ -125,6 +128,7 @@ redis:
   image:
     repository: redis
     tag: "7-alpine"
+    digest: ""
   persistence:
     size: 1Gi
   resources:
@@ -142,6 +146,7 @@ nats:
   image:
     repository: nats
     tag: "2.10.25-alpine"
+    digest: ""
   persistence:
     size: 1Gi
   resources:
@@ -158,6 +163,7 @@ milvus:
   image:
     repository: milvusdb/milvus
     tag: "v2.4.15"
+    digest: ""
   persistence:
     size: 10Gi
   resources:
@@ -172,6 +178,7 @@ etcd:
   image:
     repository: quay.io/coreos/etcd
     tag: "v3.5.16"
+    digest: ""
   persistence:
     size: 1Gi
   resources:
@@ -186,6 +193,7 @@ minio:
   image:
     repository: minio/minio
     tag: "latest"
+    digest: ""
   rootUser: "minioadmin"
   persistence:
     size: 10Gi

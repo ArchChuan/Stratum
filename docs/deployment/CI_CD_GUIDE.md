@@ -7,7 +7,6 @@
 | `.github/workflows/ci.yml` | `main` push / PR | 迁移边界护栏、golangci-lint、race 测试与覆盖率、构建、`go vet`、gosec |
 | `.github/workflows/deploy.yml` | `main` push、`v*` tag、手动 | 构建镜像、准备依赖镜像、Helm 部署 K3s、rollout 验证 |
 | `.github/workflows/memory-e2e.yml` | 以 workflow 定义为准 | Memory pipeline 专项端到端验证 |
-| `.github/workflows/mirror.yml` | 以 workflow 定义为准 | 仓库镜像/同步任务 |
 
 仓库当前没有 GitLab CI 配置，也没有 `.github/workflows/ci-cd.yml`。
 
@@ -37,14 +36,20 @@ make fe-build
 
 ```text
 GitHub Actions
-  → backend/frontend 镜像
-  → PostgreSQL+zhparser 与其他依赖镜像
+  → 并行测试并构建 backend/frontend SHA 镜像
+  → 进入 stratum-production 串行部署区
+  → 过期 main SHA 门禁
+  → 发布固定版本依赖镜像并解析全部镜像 digest
   → Kubernetes namespace / Secret / registry pull secret
-  → helm upgrade --install ./helm -f helm/values-demo.yaml
-  → rollout status + pod/event diagnostics
+  → 以 repository@digest 执行 Helm upgrade
+  → rollout status + Pod/event diagnostics
 ```
 
 本地 `docker-compose.yml` 不在该链路中。基础设施版本或自定义镜像变更时，必须同时核对 Compose、`deploy.yml` 和 Helm values。
+
+生产变更使用 GitHub Actions job-level concurrency 串行执行，且不会取消正在运行的 Helm
+操作。`main` push 在修改镜像仓库或集群前必须再次核对远端最新 SHA；已过期任务正常跳过。
+生产镜像由 registry digest 固定，禁止使用 `latest` 作为部署契约。
 
 ## 已知不一致
 
