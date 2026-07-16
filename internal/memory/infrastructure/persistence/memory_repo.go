@@ -15,9 +15,13 @@ import (
 
 var uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
+type tenantPool interface {
+	Begin(context.Context) (pgx.Tx, error)
+}
+
 // MemoryRepo persists memory entries to PostgreSQL using tenant schemas.
 type MemoryRepo struct {
-	pool *pgxpool.Pool
+	pool tenantPool
 }
 
 // NewMemoryRepo wires a MemoryRepo over a pgx pool. Pool may be nil; in that
@@ -153,16 +157,34 @@ func (r *MemoryRepo) ClearSession(ctx context.Context, tenantID, sessionID strin
 // DeleteAllByUser hard-deletes every memory entry belonging to userID within the tenant schema.
 func (r *MemoryRepo) DeleteAllByUser(ctx context.Context, tenantID, userID string) error {
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `DELETE FROM memory_entries WHERE user_id = $1`, userID)
-		return err
+		for _, query := range []string{
+			`DELETE FROM memory_outbox WHERE user_id = $1`,
+			`DELETE FROM memory_extraction_queue WHERE user_id = $1`,
+			`DELETE FROM memory_summaries WHERE user_id = $1`,
+			`DELETE FROM memory_entries WHERE user_id = $1`,
+		} {
+			if _, err := tx.Exec(ctx, query, userID); err != nil {
+				return fmt.Errorf("memory: delete user lifecycle data: %w", err)
+			}
+		}
+		return nil
 	})
 }
 
 // DeleteAllByAgent hard-deletes every memory entry belonging to agentID within the tenant schema.
 func (r *MemoryRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `DELETE FROM memory_entries WHERE agent_id = $1`, agentID)
-		return err
+		for _, query := range []string{
+			`DELETE FROM memory_outbox WHERE agent_id = $1`,
+			`DELETE FROM memory_extraction_queue WHERE agent_id = $1`,
+			`DELETE FROM memory_summaries WHERE agent_id = $1`,
+			`DELETE FROM memory_entries WHERE agent_id = $1`,
+		} {
+			if _, err := tx.Exec(ctx, query, agentID); err != nil {
+				return fmt.Errorf("memory: delete agent lifecycle data: %w", err)
+			}
+		}
+		return nil
 	})
 }
 
@@ -178,7 +200,7 @@ func (r *MemoryRepo) Stats(ctx context.Context, tenantID string) (*domain.Memory
 		_ = tx.QueryRow(ctx, "SELECT COUNT(*) FROM memory_entries").Scan(&stats.TotalEntries)
 		_ = tx.QueryRow(ctx, "SELECT COUNT(*) FROM memory_entries WHERE enriched_at IS NOT NULL").Scan(&stats.LongTermCount)
 		stats.ShortTermCount = stats.TotalEntries - stats.LongTermCount
-		_ = tx.QueryRow(ctx, "SELECT COUNT(*) FROM entities").Scan(&stats.EntityCount)
+		_ = tx.QueryRow(ctx, "SELECT COUNT(*) FROM memory_entities").Scan(&stats.EntityCount)
 		_ = tx.QueryRow(ctx, "SELECT COUNT(*) FROM chat_conversations").Scan(&stats.SessionsCount)
 		_ = tx.QueryRow(ctx, "SELECT COUNT(DISTINCT user_id) FROM memory_entries WHERE user_id IS NOT NULL").Scan(&stats.ActiveUsers)
 		stats.VectorCount = stats.LongTermCount

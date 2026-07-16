@@ -2,7 +2,6 @@
 -- Execute after: SET search_path = tenant_{id}, public
 
 -- Drop obsolete tables (idempotent; runs on every startup via ProvisionAllTenantSchemas)
-ALTER TABLE IF EXISTS memory_entries DROP COLUMN IF EXISTS session_id;
 DROP TABLE IF EXISTS webhook_deliveries;
 DROP TABLE IF EXISTS webhooks;
 DROP TABLE IF EXISTS workflow_runs;
@@ -335,6 +334,7 @@ CREATE TABLE IF NOT EXISTS mcp_tool_policies (
 CREATE TABLE IF NOT EXISTS memory_entries (
     id           UUID PRIMARY KEY DEFAULT public.gen_uuid_v7(),
     user_id      TEXT,
+    session_id   TEXT,
     agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
     role         TEXT NOT NULL,
     content      TEXT NOT NULL,
@@ -348,6 +348,7 @@ CREATE TABLE IF NOT EXISTS memory_entries (
 -- idempotent backfill: existing tenants provisioned before user_id/agent_id were added
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS user_id TEXT;
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL;
+ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS session_id TEXT;
 
 CREATE TABLE IF NOT EXISTS knowledge_docs (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -565,10 +566,20 @@ ON agent_tool_approvals (status, expires_at, created_at);
 CREATE TABLE IF NOT EXISTS memory_outbox (
     id          BIGSERIAL PRIMARY KEY,
     message_id  TEXT NOT NULL,
+    user_id     TEXT,
+    agent_id    TEXT,
     payload     JSONB NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_memory_outbox_created ON memory_outbox (created_at);
+ALTER TABLE memory_outbox ADD COLUMN IF NOT EXISTS user_id TEXT;
+ALTER TABLE memory_outbox ADD COLUMN IF NOT EXISTS agent_id TEXT;
+UPDATE memory_outbox
+SET user_id = COALESCE(user_id, payload->>'user_id'),
+    agent_id = COALESCE(agent_id, payload->>'agent_id')
+WHERE user_id IS NULL OR agent_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_memory_outbox_user_id ON memory_outbox (user_id);
+CREATE INDEX IF NOT EXISTS idx_memory_outbox_agent_id ON memory_outbox (agent_id);
 
 CREATE TABLE IF NOT EXISTS memory_summaries (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),

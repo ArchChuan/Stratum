@@ -6,6 +6,43 @@ import (
 	"testing"
 )
 
+func TestTenantSchemaPreservesMemoryEntrySessionRouting(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+
+	if strings.Contains(sql, "ALTER TABLE IF EXISTS memory_entries DROP COLUMN IF EXISTS session_id") {
+		t.Fatal("tenant reprovisioning must not drop memory_entries.session_id while the repository uses it")
+	}
+	if !strings.Contains(sql, "session_id   TEXT") {
+		t.Fatal("canonical memory_entries schema must include session_id")
+	}
+	if !strings.Contains(sql, "ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS session_id TEXT") {
+		t.Fatal("historical tenant schemas must backfill memory_entries.session_id")
+	}
+}
+
+func TestTenantSchemaSupportsOwnedMemoryLifecycleCleanup(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+
+	for _, want := range []string{
+		"ALTER TABLE memory_outbox ADD COLUMN IF NOT EXISTS user_id TEXT",
+		"ALTER TABLE memory_outbox ADD COLUMN IF NOT EXISTS agent_id TEXT",
+		"CREATE INDEX IF NOT EXISTS idx_memory_outbox_user_id",
+		"CREATE INDEX IF NOT EXISTS idx_memory_outbox_agent_id",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("tenant schema missing lifecycle ownership DDL %q", want)
+		}
+	}
+}
+
 func TestTenantSchemaResetsLegacyExecutableSkillsBeforeCreatingInstructionSkills(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
