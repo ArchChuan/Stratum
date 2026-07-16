@@ -21,7 +21,11 @@ func NewClassifier(rules []Rule) (*Classifier, error) {
 	}
 
 	names := make(map[string]struct{}, len(rules))
-	matchers := make(map[string]string, len(rules))
+	type canonicalMatcher struct {
+		name      string
+		fragments []string
+	}
+	matchers := make([]canonicalMatcher, 0, len(rules))
 	validated := make([]Rule, len(rules))
 	for i, rule := range rules {
 		context := fmt.Sprintf("rule[%d]", i)
@@ -48,11 +52,12 @@ func NewClassifier(rules []Rule) (*Classifier, error) {
 		}
 		canonical := slices.Clone(rule.AllArgsContain)
 		slices.Sort(canonical)
-		key := strings.Join(canonical, "\x00")
-		if existing, exists := matchers[key]; exists {
-			return nil, fmt.Errorf("%s has matcher identical to service %q", context, existing)
+		for _, existing := range matchers {
+			if slices.Equal(canonical, existing.fragments) {
+				return nil, fmt.Errorf("%s has matcher identical to service %q", context, existing.name)
+			}
 		}
-		matchers[key] = rule.Name
+		matchers = append(matchers, canonicalMatcher{name: rule.Name, fragments: canonical})
 		validated[i] = Rule{Name: rule.Name, AllArgsContain: slices.Clone(rule.AllArgsContain)}
 	}
 	return &Classifier{rules: validated}, nil

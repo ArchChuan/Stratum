@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -19,6 +21,40 @@ func TestDecodeValidConfig(t *testing.T) {
 	}
 	if cfg.Version != 1 || cfg.OutputPath != "%h/out.json" || len(cfg.Services) != 1 {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestExampleConfigContract(t *testing.T) {
+	file, err := os.Open("../../config.example.json")
+	if err != nil {
+		t.Fatalf("open example config: %v", err)
+	}
+	defer file.Close()
+
+	cfg, err := Decode(file)
+	if err != nil {
+		t.Fatalf("Decode example config: %v", err)
+	}
+	wantNames := []string{"chroma", "codegraph", "obsidian", "claude-mem", "headroom", "playwright", "chrome-devtools"}
+	if len(cfg.Services) != len(wantNames) {
+		t.Fatalf("service count = %d; want %d", len(cfg.Services), len(wantNames))
+	}
+
+	canonical := make([][]string, len(cfg.Services))
+	for i, service := range cfg.Services {
+		if service.Name != wantNames[i] {
+			t.Errorf("services[%d].name = %q; want %q", i, service.Name, wantNames[i])
+		}
+		if len(service.AllArgsContain) == 0 {
+			t.Fatalf("services[%d].all_args_contain is empty", i)
+		}
+		canonical[i] = slices.Clone(service.AllArgsContain)
+		slices.Sort(canonical[i])
+		for j := range i {
+			if slices.Equal(canonical[i], canonical[j]) {
+				t.Errorf("services %q and %q have identical matcher sets", cfg.Services[j].Name, service.Name)
+			}
+		}
 	}
 }
 

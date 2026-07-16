@@ -39,6 +39,26 @@ func TestClassifierUsesFirstConfiguredMatch(t *testing.T) {
 	}
 }
 
+func TestClassifierTreatsRegexMetacharactersLiterally(t *testing.T) {
+	c := mustClassifier(t, []Rule{{Name: "literal", AllArgsContain: []string{".*"}}})
+	if got := c.Classify(Process{Args: []string{"anything"}}); got != "" {
+		t.Fatalf("Classify = %q; regex metacharacters must not match as a pattern", got)
+	}
+	if got := c.Classify(Process{Args: []string{"prefix.*suffix"}}); got != "literal" {
+		t.Fatalf("Classify = %q; want literal", got)
+	}
+}
+
+func TestNewClassifierAcceptsDistinctMatchersContainingNUL(t *testing.T) {
+	_, err := NewClassifier([]Rule{
+		{Name: "first", AllArgsContain: []string{"a", "b\x00c"}},
+		{Name: "second", AllArgsContain: []string{"a\x00b", "c"}},
+	})
+	if err != nil {
+		t.Fatalf("NewClassifier rejected structurally distinct matchers: %v", err)
+	}
+}
+
 func TestNewClassifierRejectsInvalidRules(t *testing.T) {
 	tests := []struct {
 		name  string
