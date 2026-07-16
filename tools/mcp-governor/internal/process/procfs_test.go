@@ -168,6 +168,31 @@ func TestProcFSDetectsDisappearance(t *testing.T) {
 	}
 }
 
+func TestProcFSToleratesReparentingBetweenStatAndStatus(t *testing.T) {
+	fs := NewProcFS("testdata/proc")
+	fs.readFile = func(path string) ([]byte, error) {
+		data, err := os.ReadFile(path)
+		if filepath.Base(path) == "status" && err == nil {
+			return []byte(strings.Replace(string(data), "PPid:\t7", "PPid:\t8", 1)), nil
+		}
+		return data, err
+	}
+
+	process, warnings, err := fs.ReadProcess(42)
+	if err != nil {
+		t.Fatalf("ReadProcess: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %v; want none", warnings)
+	}
+	if process.PPID != 7 {
+		t.Errorf("PPID = %d; want stat PPID 7", process.PPID)
+	}
+	if process.RSSBytes != 1200*1024 || process.PSSBytes != 700*1024 || process.USSBytes != 400*1024 {
+		t.Errorf("memory = RSS %d PSS %d USS %d", process.RSSBytes, process.PSSBytes, process.USSBytes)
+	}
+}
+
 func copyFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

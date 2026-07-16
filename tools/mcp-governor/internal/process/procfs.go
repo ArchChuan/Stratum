@@ -87,19 +87,16 @@ func (p *ProcFS) ReadProcess(pid int) (Process, []string, error) {
 	if err != nil {
 		return Process{}, nil, err
 	}
-	ppid, rss, err := parseStatus(status)
+	_, rss, err := parseStatus(status)
 	if err != nil {
 		return Process{}, nil, fmt.Errorf("parse status for process %d: %w", pid, err)
-	}
-	if ppid != statPPID {
-		return Process{}, nil, fmt.Errorf("process %d PPID differs between stat (%d) and status (%d)", pid, statPPID, ppid)
 	}
 	cmdline, err := p.readCoreFile(pid, "cmdline")
 	if err != nil {
 		return Process{}, nil, err
 	}
 
-	result := Process{Identity: identity, PPID: ppid, Command: command, Args: parseCmdline(cmdline), RSSBytes: rss}
+	result := Process{Identity: identity, PPID: statPPID, Command: command, Args: parseCmdline(cmdline), RSSBytes: rss}
 	var warnings []string
 	rollup, err := p.readFile(p.path(pid, "smaps_rollup"))
 	if err != nil {
