@@ -1,0 +1,57 @@
+package process
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestDecodeRegistryValid(t *testing.T) {
+	registry, err := DecodeRegistry(strings.NewReader(`{
+		"version":1,
+		"registrations":[{
+			"identity":{"pid":10,"start_ticks":100},
+			"client":{"pid":20,"start_ticks":200},
+			"service":"obsidian",
+			"repository":"/repo",
+			"connected_at":"2026-07-16T01:02:03Z"
+		}]
+	}`))
+	if err != nil {
+		t.Fatalf("DecodeRegistry: %v", err)
+	}
+	if registry.Version != 1 || len(registry.Registrations) != 1 {
+		t.Fatalf("registry = %#v", registry)
+	}
+	registration := registry.Registrations[0]
+	if registration.Identity != (Identity{PID: 10, StartTicks: 100}) ||
+		registration.Client != (Identity{PID: 20, StartTicks: 200}) ||
+		registration.Service != "obsidian" || registration.Repository != "/repo" {
+		t.Errorf("registration = %#v", registration)
+	}
+}
+
+func TestDecodeRegistryRejectsInvalidInput(t *testing.T) {
+	valid := `{"version":1,"registrations":[{"identity":{"pid":10,"start_ticks":100},"client":{"pid":20,"start_ticks":200},"service":"obsidian","connected_at":"2026-07-16T01:02:03Z"}]}`
+	tests := map[string]string{
+		"malformed":            `{`,
+		"unknown top field":    `{"version":1,"registrations":[],"extra":true}`,
+		"unknown nested":       `{"version":1,"registrations":[{"identity":{"pid":10,"start_ticks":100,"extra":true},"client":{"pid":20,"start_ticks":200},"service":"obsidian","connected_at":"2026-07-16T01:02:03Z"}]}`,
+		"trailing JSON":        valid + `{}`,
+		"unsupported version":  `{"version":2,"registrations":[]}`,
+		"invalid child PID":    strings.Replace(valid, `"pid":10`, `"pid":0`, 1),
+		"invalid child start":  strings.Replace(valid, `"start_ticks":100`, `"start_ticks":0`, 1),
+		"invalid client PID":   strings.Replace(valid, `"pid":20`, `"pid":-1`, 1),
+		"invalid client start": strings.Replace(valid, `"start_ticks":200`, `"start_ticks":0`, 1),
+		"empty service":        strings.Replace(valid, `"service":"obsidian"`, `"service":""`, 1),
+		"blank service":        strings.Replace(valid, `"service":"obsidian"`, `"service":"  "`, 1),
+		"zero connected at":    strings.Replace(valid, `"2026-07-16T01:02:03Z"`, `"0001-01-01T00:00:00Z"`, 1),
+		"duplicate identity":   strings.Replace(valid, `}]}`, `},{"identity":{"pid":10,"start_ticks":100},"client":{"pid":30,"start_ticks":300},"service":"other","connected_at":"2026-07-16T01:02:04Z"}]}`, 1),
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := DecodeRegistry(strings.NewReader(input)); err == nil {
+				t.Fatal("DecodeRegistry succeeded; want error")
+			}
+		})
+	}
+}
