@@ -4,7 +4,7 @@
 
 ## public vs tenant DDL 放置
 
-- 编号迁移（`pkg/migration/sql/NNN_*.sql`）只操作 **public schema**，禁止引用 tenant-only 表（如 `chat_conversations`、`memory_entries`、`entities`）
+- 编号迁移（`pkg/migration/sql/NNN_*.sql`）只操作 **public schema**，禁止引用 tenant-only 表（如 `chat_conversations`、`memory_entries`、`memory_entities`）
 - 引用 tenant-only 表的 DDL 必须放 `pkg/storage/postgres/tenant_schema.sql`，由 `ProvisionAllTenantSchemas` 幂等应用到每个租户 schema
 - 新增 tenant DDL 后需同步检查 `pkg/migration/sql/tenant_schema.sql`（migration baseline）是否也需更新
 
@@ -12,7 +12,7 @@
 
 - 新增表/索引用 `IF NOT EXISTS`；新增列用 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
 - 新增 `NOT NULL` 列必须带安全 `DEFAULT`，或先 nullable → 回填 → 加约束
-- 向 `CREATE TABLE` 追加列后必须紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` backfill，否则已有租户旧表缺列，后续 INDEX/查询报 `column does not exist`（反例：entities.user_id 漏 backfill）
+- 向 `CREATE TABLE` 追加列后必须紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` backfill，否则已有租户旧表缺列，后续 INDEX/查询报 `column does not exist`（历史反例：旧实体表 user_id 漏 backfill）
 - 任何依赖新列的 INDEX / CONSTRAINT / 查询必须排在 backfill 之后，并用 schema 顺序测试覆盖（反例：先建 `idx_agent_exec_trace` 再补 `trace_id`，旧租户启动失败）
 - INSERT 必须与目标表 DDL 逐列核对，尤其 NOT NULL 无 DEFAULT 列（反例：outbox 漏 `message_id` 全量回滚）
 

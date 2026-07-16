@@ -14,6 +14,9 @@ var (
 	ErrNotCodeSkill         = errors.New("skill is not a code skill")
 	ErrSkillUnsupportedType = errors.New("unsupported skill type")
 	ErrSkillCodeAnalysis    = errors.New("code analysis failed")
+	// ErrSkillNotPublishable is returned when a draft fails publish validation.
+	// Callers wrap the detail: fmt.Errorf("reason: %w", ErrSkillNotPublishable).
+	ErrSkillNotPublishable = errors.New("skill not publishable")
 )
 
 // AnalysisError carries analyzer reasons for a static-analysis rejection.

@@ -134,6 +134,7 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, skilldomain.ErrNotCodeSkill),
 		errors.Is(err, skilldomain.ErrSkillUnsupportedType),
 		errors.Is(err, skilldomain.ErrSkillCodeAnalysis),
+		errors.Is(err, skilldomain.ErrSkillNotPublishable),
 		errors.Is(err, evalapp.ErrSuiteNameRequired),
 		errors.Is(err, evalapp.ErrSuiteCasesRequired):
 		return http.StatusBadRequest

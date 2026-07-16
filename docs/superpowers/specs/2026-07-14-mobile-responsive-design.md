@@ -1,5 +1,7 @@
 # Stratum Web Mobile Responsive Design
 
+> **Historical design (implemented).** Current behavior is represented by the responsive components, hooks, styles, and tests under `web/`.
+
 ## Goal
 
 Adapt every Stratum web page for common phone widths without changing routes, APIs, permissions, or desktop behavior. The mobile experience must support the complete product, including administrative pages, forms, data lists, and Agent chat.

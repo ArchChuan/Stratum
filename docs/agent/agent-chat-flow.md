@@ -27,7 +27,7 @@ flowchart LR
         Graph[ReAct StateGraph]
     end
 
-    subgraph Cap["能力层 capgateway"]
+    subgraph Cap["能力层 capability gateway"]
         Gw[CapabilityGateway.Route]
         LLM[LLM Provider<br/>Qwen / Zhipu / OpenAI compat]
         Skill[Skill Engine]
@@ -473,9 +473,9 @@ stateDiagram-v2
 | ReAct 图定义 | `internal/agent/application/graph/react.go` |
 | Graph Invoke 引擎 | `internal/agent/application/graph/graph.go` |
 | 上下文消息装配 | `internal/agent/application/agent.go:BuildContextMessages` |
-| ChatStore | `internal/agent/infrastructure/chatstore/` |
-| ExecutionStore | `internal/agent/infrastructure/execstore/` |
-| 容量网关路由 | `internal/agent/domain/port/capability.go` + `infrastructure/capgateway/` |
+| ChatStore | `internal/agent/infrastructure/persistence/chat_store.go` |
+| ExecutionStore | `internal/agent/infrastructure/persistence/execution_store.go` |
+| 能力网关路由 | `internal/agent/domain/port/capability.go` + `internal/agent/infrastructure/capability/` |
 | 记忆注入 | `internal/memory/...` (consumer-side port at `internal/agent/domain/port/memory.go`) |
 
 ---
@@ -484,7 +484,7 @@ stateDiagram-v2
 
 - AI 不做控制逻辑：ReAct 循环判定 / 工具路由 / 重试退避全部硬编码在 `react.go` + `RetryFn`
 - handler ≤15 行/方法：`ExecuteAgentStream` 实测 ~60 行（SSE 模板代码无可压缩，已是最简）
-- 跨 ctx 通过消费方 port：`port.CapabilityGateway` 定义在 agent 的 `domain/port/`，由 capgateway 实现
+- 跨 ctx 通过消费方 port：`port.CapabilityGateway` 定义在 agent 的 `domain/port/`，由 `infrastructure/capability` 实现
 - 多租户：`SET LOCAL search_path` 在 TenantMiddleware 注入；execCtx 通过 `context.WithoutCancel` 隔离，但 `tenantdb` 已在 ctx 中绑定
 
 ---
@@ -504,11 +504,11 @@ Stratum 的"用户记忆"分为**短期**（按 `conversation_id` 直读 `chat_m
 | PG · tenant schema | `memory_entities` | `EnricherWorker.persistEnrichment`（按 entity 循环 UPSERT） | `MemoryInjector.BuildContext` | 命名实体表，scope = user / agent |
 | PG · tenant schema | `memory_summaries` | `EnricherWorker.writeSummary`（条件触发） | `MemoryInjector.BuildContext` | 会话累计 token 超过阈值时滚动生成 |
 | PG · tenant schema | `memory_extraction_queue` | `MessageBuffer.flush` / `BufferScanner` | `ExtractionWorker`（via `TenantWatcher`） | LLM 事实抽取队列 |
-| PG · tenant schema | `memory_facts` | `MemoryService.ExtractFacts` | `MemoryService.ForgetMemory` / `Clear*` | 事实抽取产物，soft-delete |
+| PG · tenant schema | `memory_facts` | `MemoryService.ExtractFacts` | `MemoryService.ForgetMemory` / `Clear*` | 事实抽取产物，当前使用硬删除 |
 | Milvus | `memory_<tenantID>`（短横线换下划线） | `EmbedderWorker` 通过 `MilvusVectorAdapter.Upsert` | `RecallHandler.tryVectorSearch` | 消息维度向量；scope/agent_id 走 metadata 过滤 |
 | Milvus | `memory_facts_<tenantID>` | `MemoryService.ExtractFacts` | `ForgetMemory` / `ClearUserMemories` 清理 | 事实维度向量 |
 
-> 命名规则：tenantID 含短横线时 Milvus collection 用下划线替换（见 `pkg/milvus/collections.go`、`api/wiring/memory.go: DeleteAllByUser`）。
+> 命名规则：tenantID 含短横线时 Milvus collection 用下划线替换（见 `internal/memory/infrastructure/pipeline/vector_adapter.go`、`internal/memory/infrastructure/persistence/milvus_adapter.go` 与 `internal/memory/application/extraction.go`）。
 
 ### 11.2 整体业务全景
 
@@ -797,7 +797,7 @@ flowchart LR
 
 | API / 触发 | 调用 | 影响范围 |
 |---|---|---|
-| `MemoryService.ForgetMemory(factID)` | `FactRepo.Update(MarkDeleted)` + Milvus `memory_facts_<tid>` 删 ID（best-effort） | 单条事实 soft-delete；孤立向量由 GC worker 兜底 |
+| `MemoryService.ForgetMemory(factID)` | `FactRepo.Delete` + Milvus `memory_facts_<tid>` 删 ID（best-effort） | 单条事实硬删除；孤立向量由 GC worker 兜底 |
 | `MemoryService.ClearUserMemories` | `FactRepo.DeleteAllByUser` + Milvus `memory_<tid>` `DeleteByFilter("user_id == ..." )` + `MemoryRepo.DeleteAllByUser` + `EntityRepo.DeleteAllByUser` | 同租户内某 user 全量硬删（facts + entries + entities + 向量） |
 | `MemoryService.ClearAgentMemories` | `FactRepo.DeleteAllByAgent` 返回 IDs + Milvus `memory_facts_<tid>.Delete(IDs)` + `MemoryRepo.DeleteAllByAgent` | 单 agent 全量硬删；当前 entities 不按 agent 删（按工程规范历史记录是未完成项） |
 | DELETE conversation | `PgChatStore.DeleteConversation` | 删 `chat_messages` + `chat_conversations`；不级联清 long-term（依赖上面三个 API 主动调用） |

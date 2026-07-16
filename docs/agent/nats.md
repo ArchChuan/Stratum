@@ -25,12 +25,17 @@ NATS JetStream 在 stratum 中**专用于 memory pipeline**，是记忆持久化
   MEMORY_ENRICHED stream       subject: memory.enriched.{tenantID}
         │
   [EnrichWorker × 1]           Consumer: enrich-worker，AckWait 60s，MaxDeliver 5
-        │                       摘要触发阈值：4096 tokens，最多取 100 条历史
+│                       摘要触发阈值：1000 tokens，最多取 100 条历史
         ▼
   Milvus (向量) + PG (摘要/实体)
 ```
 
-失败消息最终路由至 `MEMORY_DLQ` stream（subject: `memory.dlq.{tenantID}`），保留 168h。
+永久失败以及达到 `MaxDeliver` 的瞬态失败最终路由至 `MEMORY_DLQ` stream
+（subject: `memory.dlq.{tenantID}`），保留 168h。
+
+DLQ 事件只保存 message ID、tenant ID、stage、原 Stream/Subject、序列号、投递次数、错误分类和失败时间，
+不保存用户正文或原始错误文本。DLQ publish 成功后才 `TermWithReason` 原消息；publish 失败则 `Nak`，避免
+错误地确认并丢失原消息。DLQ 当前用于告警和人工定位，不提供独立 payload 重放；受控重放需另行设计。
 
 ## JetStream Stream 配置
 
@@ -95,6 +100,7 @@ infrastructure 实现位于 `pipeline/outbox_poller.go`，使用 `js.Publish`。
 1. **不引入新的 NATS 用法**：business domain 不直接调用 `nats.Conn`，只通过 `EventPublisher` port
 2. **Worker 幂等**：消息可重复投递（MaxDeliver > 1），处理逻辑必须幂等
 3. **Handler 快速返回**：Worker 的消费 goroutine 内不做阻塞操作，重型任务已经是异步
-4. **DLQ 监控**：`dlqTotal` counter 异常增长说明 Embed 或 Enrich 持续失败，需告警
+4. **DLQ 监控**：`memory_dlq_total{tenant_id,stage}` 异常增长说明 Embed 或 Enrich 持续失败，需告警
 5. **Subject 不含空格**：命名遵循 `domain.stage.tenantID` 三段格式
 6. **Consumer 配置改动**：修改 AckWait/MaxDeliver 需同步更新 `pkg/constants/memory.go`
+7. **AckWait 续租**：Worker 处理及 DLQ publish 期间按 `AckWait/2` 发送 `InProgress`，在最终 `Ack/Term/Nak` 前停止续租

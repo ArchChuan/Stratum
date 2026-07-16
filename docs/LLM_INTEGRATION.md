@@ -1,131 +1,82 @@
 # LLM 集成指南
 
-## 架构概述
+## 当前架构
 
-LLM 访问通过 `internal/llmgateway/` bounded context 统一抽象。核心特点：
+LLM 访问由 `internal/llmgateway/` bounded context 统一处理：
 
-- **租户级 API Key 管理**：每个租户独立配置自己的 LLM provider 和 API key，存储在 `tenants.settings` 的 `api_keys` 字段（加密存储），不通过全局环境变量注入。
-- **`LLMGateway` 接口**：屏蔽 OpenAI / Anthropic / Qwen / Zhipu / Ollama 差异，业务层只依赖 `port.LLMGateway`。
-- **`TenantGatewayCache`**：热路径复用已初始化的 gateway，避免每次请求重建 HTTP 客户端。
-- **`llmgateway.WithCompleter(ctx, completer)`**：通过 context 注入当前租户的 completer，无需在业务函数签名中传递。
+- `Gateway` 根据模型名选择 provider，并统一非流式、流式和 embedding 调用。
+- `TenantGatewayCache` 缓存 tenant-scoped gateway 与 API key 快照。
+- `api/wiring/tenant_resolver.go` 从租户 settings 解析 provider 配置并装配 Agent 运行时能力。
+- `llmgateway.WithCompleter` / `CompleterFromContext` 用于把当前请求的 completer 传入需要 LLM 的应用流程。
 
----
+业务层不应直接创建 provider HTTP client，也不应从全局环境变量读取 provider API key。
 
-## Provider 支持
+## 已实现 Provider
 
-| Provider | 类型 | 说明 |
+| Provider | 实现 | 模型识别 |
 |---|---|---|
-| Qwen（阿里云）| OpenAI 兼容 | 国内首选，`qwen-turbo` 用于记忆提取 |
-| Zhipu（智谱）| 原生 | GLM 系列 |
-| OpenAI | 原生 | GPT-4 / GPT-3.5-turbo |
-| Anthropic | 原生 | Claude 系列 |
-| Ollama | 本地 | 私有化部署，`OLLAMA_ENDPOINT` 配置 |
+| Qwen | OpenAI-compatible client | `qwen-*`、`text-embedding-v3*` |
+| Zhipu | OpenAI-compatible client | `glm-*`、`embedding-*` |
 
----
+`internal/llmgateway/domain.ProviderKind` 中仍有 `openai`、`anthropic`、`ollama` 类型常量，但当前 `Gateway` 没有为它们注册运行时 client，不能据此宣称这些 provider 已可用。
 
-## 租户 API Key 配置（运行时）
+模型目录由 `internal/llmgateway/infrastructure/static_catalog.go` 提供；公开接口为：
 
-API key 通过管理接口配置，不需要重启服务：
-
-```bash
-# 为租户设置 LLM provider API key
-curl -X PUT http://localhost:8080/admin/tenants/{tenantID}/settings \
-  -H "Authorization: Bearer <admin_token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "llm_provider": "qwen",
-    "llm_model": "qwen-turbo",
-    "llm_api_key": "<your-api-key>"
-  }'
+```text
+GET /models
 ```
 
-key 在写入前由 platform 层加密，读取时自动解密后注入 gateway client。
+## 租户配置
 
----
+当前用户通过 tenant settings 配置 API key 和默认模型：
 
-## 本地开发（env 覆盖）
-
-本地开发可在 `.env` 中为 `tenant_default` 预置 key，供开发期快速启动：
-
-```env
-DEFAULT_LLM_PROVIDER=qwen
-DEFAULT_LLM_MODEL=qwen-turbo
-DEFAULT_LLM_API_KEY=sk-xxxxxxxx
-OLLAMA_ENDPOINT=http://localhost:11434
+```text
+GET   /tenant/settings
+PATCH /tenant/settings
+PATCH /tenant/embed-model
 ```
 
-`.env.example` 中包含所有可用字段，不要提交真实 key。
+这些路由需要 JWT 和 tenant context；写操作还要求 active tenant。具体字段以 `api/http/dto`、`TenantService` 和前端 tenant settings 表单为准。
 
----
+API key 存储在租户 settings 的 `llm_api_keys` 映射中，并通过平台加密组件处理。日志、错误响应和文档都不得输出原始 key。
 
-## 代码使用
+## Agent 调用链
 
-### Handler / Application 层
-
-业务层通过 context 获取 completer，不直接操作 gateway 实例：
-
-```go
-// application/agent_service.go
-func (s *AgentService) Execute(ctx context.Context, ...) {
-    completer := llmgateway.CompleterFromContext(ctx)
-    result, err := completer.Complete(ctx, messages, opts)
-}
+```text
+HTTP request
+  -> AgentService 解析 tenant capability
+  -> TenantGatewayCache / resolver
+  -> BaseAgent + ReAct graph
+  -> CapabilityGateway (CapLLM)
+  -> llmgateway.Gateway
+  -> Qwen or Zhipu OpenAI-compatible client
 ```
 
-### Gateway 初始化（Wiring）
+Agent 可使用普通执行或 SSE 流式执行：
 
-`api/wiring/llmgateway.go` 在 `BuildContainer` 时装配：
-
-```go
-gatewayCache := llmgateway.NewTenantGatewayCache(cfg, logger)
-container.GatewayCache = gatewayCache
+```text
+POST /agents/:id/execute
+POST /agents/:id/execute/stream
 ```
 
-Auth middleware 在验证 JWT 后，从 `TenantGatewayCache` 取出对应租户的 gateway，
-并通过 `llmgateway.WithCompleter(ctx, completer)` 注入到 context。
+两者都需要 member 权限、active tenant，并受 tenant/user 维度的 LLM 执行限流保护。
 
----
+## 超时与流式约束
 
-## 超时配置
+超时常量集中在 `pkg/constants/timeouts.go`。流式请求使用 response-header timeout 与 token idle watchdog，不使用覆盖整个生成过程的单一短 deadline。Agent 总执行时间由 `AgentExecTimeout` 限制。
 
-| 场景 | 常量 | 值 |
-|---|---|---|
-| LLM 非流式请求 | `LLMRequestTimeout` | 60s |
-| LLM 流式（空闲看门狗） | `LLMStreamIdleTimeout` | 30s/token 间隔 |
-| 流式 response header | `ResponseHeaderTimeout` | 30s |
-| Agent 执行总超时 | `AgentExecTimeout` | 90s |
+SSE handler 通过 token callback 持续写出 `data:` 帧；客户端断开会取消执行。具体时序见 [Agent 会话完整流程](agent/agent-chat-flow.md)。
 
-流式请求**禁止**使用 flat deadline，改用 transport `ResponseHeaderTimeout` + 空闲看门狗组合。
-超时常量均定义在 `pkg/constants/timeouts.go`。
+## Embedding
 
----
-
-## Token 计费
-
-Agent 执行结束后，`agent.go` 将 `graph.TotalTokens` 映射到 `Result.TokensUsed`，
-由调用方（handler）写入 ledger 或日志，不在 gateway 层计费。
-
----
+Knowledge 与 Memory 通过 embedding client 生成向量。租户可用 `PATCH /tenant/embed-model` 设置 embedding model；模型必须能被当前 Qwen/Zhipu provider 识别。向量维度必须与 Milvus collection schema 一致。
 
 ## 故障排查
 
-### LLM 请求失败
+- `GET /models`：确认服务公开的模型目录。
+- `GET /tenant/settings`：确认当前 tenant 已设置默认模型和对应 provider key；不要在终端录屏或日志中展示原始值。
+- 查看结构化 `llm.complete` 日志事件，只检查 provider、model、status、latency 和 token 统计。
+- 流式中断时检查 `LLMStreamIdleTimeout`、provider 首字节延迟和反向代理缓冲设置。
+- embedding 失败时同时核对模型归属、向量维度和 Milvus collection schema。
 
-```bash
-# 查看 gateway 日志（事件：llm.complete）
-grep "llm.complete" stratum.log | tail -20
-
-# 检查 provider 配置
-curl http://localhost:8080/admin/tenants/{tenantID}/settings \
-  -H "Authorization: Bearer <admin_token>"
-```
-
-### 流式响应截断
-
-检查 `LLMStreamIdleTimeout`（`pkg/constants/timeouts.go`）与 provider 的实际生成速度是否匹配；
-增大该值而不是调整 flat deadline。
-
-### Memory 提取 JSON 截断
-
-memory 流水线的 LLM 提取使用 `MemoryExtractLLMMaxTokens = 4096`（`pkg/constants/memory.go`）；
-若仍截断，增大该常量并重新部署。LLMExtractor 内置 `recoverTruncatedArray` 降级兜底。
+快速操作流程见 [QUICKSTART_LLM.md](QUICKSTART_LLM.md)。

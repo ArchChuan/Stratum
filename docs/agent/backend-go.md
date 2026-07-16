@@ -39,7 +39,7 @@ agent 子操作使用 `pkg/constants/timeouts.go` 分级常量：
 
 - AI 业务数据（facts / entries / conversations）**硬删**
 - audit log **软删**
-- 清除类操作逐一确认清除范围（反例：ClearUserMemories / ClearAgentMemories 需覆盖 memory_entries / entities / conversations，勿反复修补漏表）
+- 清除类操作逐一确认清除范围（Memory v2 需核对 `memory_entries` / `memory_facts` / `memory_entities` / Milvus；勿反复修补漏表）
 
 ## 新增 tenant-scoped 表 struct 三件套
 
@@ -55,4 +55,4 @@ agent 子操作使用 `pkg/constants/timeouts.go` 分级常量：
 
 - 覆盖率 ≥80%，表驱动测试，mock 所有外部依赖，完整套件开 `-race`
 - **代码是主，测试是从**：测试断言与产品需求不符 → 改测试；实现违背需求 → 改代码。禁止"测试不过就改代码凑绿"
-- AI 写测试必须提供模板文件（如 `api/handler/tenant_handler_test.go`），指定"按这个模式给 X 写完整测试"，不要自由发挥
+- AI 写测试必须提供模板文件（如 `api/http/handler/tenant_handler_test.go`），指定"按这个模式给 X 写完整测试"，不要自由发挥

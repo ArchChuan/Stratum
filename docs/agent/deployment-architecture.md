@@ -1,21 +1,22 @@
 # Stratum Demo 部署架构说明
 
-本文记录当前 demo 环境的部署现状，并用教学方式解释一次浏览器请求如何穿过公网、Ingress、
-前端 Nginx、Go 后端和集群内依赖服务。
+本文用教学方式解释一次浏览器请求如何穿过公网、Ingress、前端 Nginx、Go 后端和集群内依赖服务。
+其中远端资源、入口和监控栈内容是 2026-07-07 的运维快照，不应视为 2026-07-16 仍在线或配置未变；
+当前可复现的部署契约以 `helm/`、`.github/workflows/deploy.yml` 和 `docs/deployment/k3s-demo.md` 为准。
 
-最后人工确认时间：2026-07-07。远端确认方式为 SSH 到 `101.200.181.141` 后执行只读
+最后人工确认时间：2026-07-07。远端确认方式为 SSH 到 `demo.stratum.example` 后执行只读
 `kubectl` 查询。
 
-当前访问入口：
+快照中的访问入口：
 
 ```text
-http://101.200.181.141/
+http://demo.stratum.example/
 ```
 
-当前 GitHub OAuth 回调地址：
+快照中的 GitHub OAuth 回调地址：
 
 ```text
-http://101.200.181.141/api/auth/github/callback
+http://demo.stratum.example/api/auth/github/callback
 ```
 
 ## 一句话架构
@@ -30,9 +31,9 @@ docker-compose 配置。
 
 ```mermaid
 flowchart TB
-    browser["用户浏览器<br/>http://101.200.181.141/"]
+    browser["用户浏览器<br/>http://demo.stratum.example/"]
 
-    subgraph ecs["阿里云 ECS<br/>公网 IP: 101.200.181.141"]
+    subgraph ecs["阿里云 ECS<br/>公网 IP: demo.stratum.example"]
         subgraph k3s["K3s 单节点集群"]
             traefik["Traefik Ingress<br/>entrypoint: web :80<br/>Host: *"]
 
@@ -96,7 +97,7 @@ flowchart TB
 
 ```text
 浏览器
-  -> http://101.200.181.141/
+  -> http://demo.stratum.example/
   -> Traefik :80
   -> Ingress hostless rule
   -> stratum-frontend Service :80
@@ -107,7 +108,7 @@ flowchart TB
 
 ```text
 浏览器
-  -> http://101.200.181.141/api/health
+  -> http://demo.stratum.example/api/health
   -> Traefik :80
   -> stratum-frontend Nginx
   -> proxy_pass http://stratum:80/
@@ -149,8 +150,8 @@ frontend:
   backendServicePort: 80
 
 config:
-  frontendUrl: "http://101.200.181.141"
-  githubCallbackUrl: "http://101.200.181.141/api/auth/github/callback"
+  frontendUrl: "http://demo.stratum.example"
+  githubCallbackUrl: "http://demo.stratum.example/api/auth/github/callback"
   secureCookies: "false"
   natsUrl: "nats://stratum-nats:4222"
   milvusHost: "stratum-milvus"
@@ -239,7 +240,7 @@ jaeger
 远端 Grafana 访问入口：
 
 ```text
-http://101.200.181.141/grafana
+http://demo.stratum.example/grafana
 ```
 
 远端 Grafana 的真实配置来自 `monitoring` namespace 的 `kps` release，不来自仓库根目录
@@ -304,7 +305,7 @@ providers:
 所以：
 
 - 本地 `make obs-up` / `docker-compose up grafana` 使用仓库 `grafana/`。
-- 远端 `http://101.200.181.141/grafana` 使用 `monitoring/kps-*` ConfigMap。
+- 远端 `http://demo.stratum.example/grafana` 使用 `monitoring/kps-*` ConfigMap。
 - 修改仓库 `grafana/datasources/*.yaml` 不会影响远端 Grafana。
 - 要改远端 Grafana，应改 `kps` Helm values 或带 `grafana_datasource=1` /
   `grafana_dashboard=1` 标签的 Kubernetes ConfigMap。
@@ -315,11 +316,11 @@ providers:
 
 ```text
 浏览器
-  -> GET http://101.200.181.141/api/auth/github
+  -> GET http://demo.stratum.example/api/auth/github
   -> 前端 Nginx 转发到后端 /auth/github
   -> 后端生成 state cookie
   -> 302 跳转到 GitHub authorize URL
-  -> GitHub 回调 http://101.200.181.141/api/auth/github/callback
+  -> GitHub 回调 http://demo.stratum.example/api/auth/github/callback
   -> 前端 Nginx 转发到后端 /auth/github/callback
   -> 后端换取 GitHub access token
   -> 后端签发 Stratum 登录 token
@@ -330,10 +331,10 @@ GitHub OAuth App 必须配置：
 
 ```text
 Homepage URL:
-http://101.200.181.141/
+http://demo.stratum.example/
 
 Authorization callback URL:
-http://101.200.181.141/api/auth/github/callback
+http://demo.stratum.example/api/auth/github/callback
 ```
 
 如果 GitHub 页面提示：
@@ -381,7 +382,7 @@ kubectl create secret generic stratum-secrets \
 GITHUB_CLIENT_ID=SET
 GITHUB_CLIENT_SECRET=SET
 JWT_PRIVATE_KEY_PEM=SET
-GITHUB_CALLBACK_URL=http://101.200.181.141/api/auth/github/callback
+GITHUB_CALLBACK_URL=http://demo.stratum.example/api/auth/github/callback
 ```
 
 ## CI/CD 部署链路
@@ -440,45 +441,45 @@ JWT private key parse failed, auth routes disabled
 从本机验证公网入口：
 
 ```bash
-curl --noproxy '*' -I http://101.200.181.141/
+curl --noproxy '*' -I http://demo.stratum.example/
 ```
 
 验证 API 代理链路：
 
 ```bash
-curl --noproxy '*' -i http://101.200.181.141/api/health
+curl --noproxy '*' -i http://demo.stratum.example/api/health
 ```
 
 验证 GitHub OAuth 登录入口：
 
 ```bash
-curl --noproxy '*' -i http://101.200.181.141/api/auth/github
+curl --noproxy '*' -i http://demo.stratum.example/api/auth/github
 ```
 
 期望结果是 `302 Found`，并且 `Location` 指向 GitHub：
 
 ```text
-Location: https://github.com/login/oauth/authorize?...redirect_uri=http://101.200.181.141/api/auth/github/callback...
+Location: https://github.com/login/oauth/authorize?...redirect_uri=http://demo.stratum.example/api/auth/github/callback...
 ```
 
 查看集群状态：
 
 ```bash
-ssh root@101.200.181.141 'kubectl get pods -n stratum -o wide'
+ssh root@demo.stratum.example 'kubectl get pods -n stratum -o wide'
 ```
 
 查看远端监控栈：
 
 ```bash
-ssh root@101.200.181.141 'kubectl get all -n monitoring'
-ssh root@101.200.181.141 'kubectl get ingress,svc,cm -n monitoring | grep -i grafana'
-ssh root@101.200.181.141 'kubectl get secret -n monitoring -l owner=helm'
+ssh root@demo.stratum.example 'kubectl get all -n monitoring'
+ssh root@demo.stratum.example 'kubectl get ingress,svc,cm -n monitoring | grep -i grafana'
+ssh root@demo.stratum.example 'kubectl get secret -n monitoring -l owner=helm'
 ```
 
 确认后端 Pod 里的关键配置：
 
 ```bash
-ssh root@101.200.181.141 \
+ssh root@demo.stratum.example \
   'kubectl exec -n stratum deploy/stratum -- sh -c '"'"'
     echo GITHUB_CALLBACK_URL=$GITHUB_CALLBACK_URL
     for k in GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET JWT_PRIVATE_KEY_PEM; do
@@ -490,7 +491,7 @@ ssh root@101.200.181.141 \
 确认后端 auth route 已注册：
 
 ```bash
-ssh root@101.200.181.141 \
+ssh root@demo.stratum.example \
   'kubectl logs -n stratum deploy/stratum --tail=160 | grep -E "GET[[:space:]]+/auth|/auth/github"'
 ```
 
@@ -519,7 +520,7 @@ GET /auth/me
 
 有正式域名后，建议按这个顺序升级：
 
-1. DNS A 记录指向 `101.200.181.141`。
+1. DNS A 记录指向 `demo.stratum.example`。
 2. `ingress.hosts[0].host` 改成正式域名。
 3. 恢复 cert-manager issuer 注解。
 4. Ingress entrypoint 从 `web` 改为 `websecure`。

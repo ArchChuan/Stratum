@@ -3,7 +3,7 @@
 ## Directory Structure
 
 ```
-cmd/server/main.go          - 唯一入口：初始化 Harness，注册所有组件（≤30 行）
+cmd/server/main.go          - 唯一入口：初始化 Harness，注册所有组件
 api/
   http/
     router.go               - 路由注册（Gin），按域拆分为 registerXxx 私有函数
@@ -21,13 +21,15 @@ internal/
   knowledge/{domain,application,infrastructure}
                             - GraphRAG：WorkspaceService、RAGService、文档摄取
   llmgateway/{domain,application,infrastructure}
-                            - LLM 统一网关（OpenAI/Anthropic/Ollama）、ModelService
+                            - LLM 统一网关（Qwen/Zhipu OpenAI-compatible）、ModelService
+  evaluation/{domain,application,infrastructure}
+                            - 通用评估控制面：suite/revision、异步 run/job、优化候选、实验与反馈
   mcp/{domain,application,infrastructure}
                             - MCP 服务器管理、SkillAdapter、MCPTools 接口
   memory/{domain,application,infrastructure}
                             - 记忆持久化 + JetStream 三阶段 pipeline
-  platform/{config,domain,harness}
-                            - Viper 配置、Harness 生命周期（顺序启动→逆序停止）
+  platform/{domain,harness,runtime}
+                            - Harness 生命周期与启动期运行时编排（顺序启动→逆序停止）
   skill/{domain,application,infrastructure}
                             - Skill CRUD + AtomicEngine + PipelineEngine + CircuitBreaker
 pkg/
@@ -42,7 +44,7 @@ pkg/
   httpclient/              - 带重试/超时的 HTTP 客户端封装
   textchunk/               - 文本分块（Chunker）
   crypto/                  - AES 加密工具
-web/                        - React 18 + Vite 4 前端控制台（src/modules 按域组织）
+web/                        - React 18 + Vite 5 前端控制台（src/modules 按域组织）
 k8s/                        - Kubernetes manifests（含 monitoring · network-policy · ingress）
 helm/                       - Helm Chart（templates: deployment · service · frontend）
 grafana/                    - Grafana 数据源 + 仪表板配置
@@ -59,8 +61,8 @@ grafana/                    - Grafana 数据源 + 仪表板配置
 | pgx | v5.x | pgxpool，事务内用 `SET LOCAL search_path` 切换租户 |
 | go-redis | v9.x | `redis.NewClient`，context-aware API |
 | Zap | v1.26+ | 生产用 `NewProduction()`，开发用 `NewDevelopment()` |
-| OTEL | v1.21+ | TracerProvider 在 main 初始化，通过 context 传播 |
-| Viper | v1.18+ | 支持 `.env` + 环境变量，优先级：env > file > default |
+| OTEL | v1.22 | TracerProvider 在 main 初始化，通过 context 传播 |
+| 前端 | React 18.3 · Vite 5.4 · AntD 5.20 | 版本以 `web/package.json` 与 lockfile 为准 |
 | JWT | golang-jwt/jwt v5 | RS256 签名，Claims 含 tenant_id / role / global_role |
 
 ## Error Handling Patterns
@@ -82,13 +84,13 @@ grafana/                    - Grafana 数据源 + 仪表板配置
 - 单元测试 `*_test.go` 与源码同目录
 - 集成测试需 Docker 服务，标记 `//go:build integration`
 - 运行：`go vet && go test -short ./...`（单元），`go test -v -race -timeout 30s ./...`（完整）
-- API 契约测试：`api/http/contract_test.go` + `testdata/contracts/*.golden.json`
+- API 契约测试：`api/http/contract_test.go` + `api/http/testdata/contracts/*.golden.json`
 - 目标覆盖率 ≥ 80% 业务逻辑代码
 
 ## Build & Deploy
 
-- 编译产物：`bin/stratum`（`make build`）
-- Docker：`make docker-up` / `make docker-down`（启停 docker-compose 所有依赖服务）
+- 编译产物：`bin/server`（`make be-build`）
+- Docker 依赖：`make infra-up` / `make infra-down`；可观测性：`make obs-up` / `make obs-down`
 - 本地开发：`make run`（go run cmd/server/main.go）
 - K8s 部署：`helm install` 使用 `helm/` chart
 - 数据库迁移：启动时自动运行 `pkg/migration/sql/` 下的 SQL 文件

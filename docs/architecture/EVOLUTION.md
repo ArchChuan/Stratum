@@ -37,8 +37,8 @@
 
 **技术约束**:
 
-- 编号迁移（`internal/migration/sql/NNN_*.sql`）只操作 `public` schema
-- 引用 tenant-only 表的 DDL 必须放 `pkg/tenantdb/tenant_schema.sql`
+- 编号迁移（`pkg/migration/sql/NNN_*.sql`）只操作 `public` schema
+- 引用 tenant-only 表的 DDL 必须放 `pkg/storage/postgres/tenant_schema.sql`
 - `golang-migrate` dirty 状态修复: `force <version>` 标记为 clean
 - 新增 tenant DDL 后必须在 `tenant_schema.sql` 中紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 做 backfill
 
@@ -50,7 +50,7 @@
 
 **核心决策**:
 
-- **租户级 API Key 存储**: `tenants.settings` JSONB 字段，结构 `{"api_keys": {"qwen": "sk-...", "zhipu": "..."}}`
+- **租户级 API Key 存储**: `tenants.settings` JSONB 字段，结构键为 `llm_api_keys`；值在写入时加密
 - **AES-256-GCM 加密**: 使用 `JWTPrivateKeyPEM` 作为唯一密钥源派生加密密钥
 - **5 分钟 TTL 缓存**: `TenantGatewayCache` 缓存解密后的 `*Gateway` 实例，避免每次请求解密
 - **动态 Gateway 解析**: Agent 执行时通过 `TenantResolver.InjectCompleter(ctx, tenantID)` 注入 per-tenant LLM 客户端
@@ -164,12 +164,16 @@ platform → (被所有 context 依赖，不依赖任何 context)
 **核心决策**:
 
 - **删除所有系统级 env key 读取**: `QWEN_API_KEY` / `ZHIPU_API_KEY` 全部移除
-- **API Key 唯一来源**: 租户配置 `tenants.settings.api_keys`，通过 `TenantGatewayCache` 解析
+- **API Key 唯一来源**: 租户配置 `tenants.settings.llm_api_keys`，通过 `TenantGatewayCache` 解析
 - **Context 注入模式**: `llmgateway.WithCompleter(ctx, completer)` 和 `CompleterFromContext(ctx)` 覆盖静态注入
 - **移除无意义 nil 参数**: `DBSkillAdapter` / `SkillService` 的 `completer` 参数删除，改为运行时 context 注入
 - **StaticModelCatalog**: 硬编码模型列表替代动态 gateway-based catalog（因全局 gateway 无 client）
 
 **安全强化**: 全局禁止从环境变量读取 API Key，所有密钥必须来自租户配置
+
+### 阶段 6：通用 Evaluation 控制面（2026-07-16）
+
+当前源码已新增第 9 个 bounded context `evaluation`。它通过 `api/http/router.go` 暴露 suite 发布、异步 run/job、优化候选、实验阶段判断与 feedback 路由；tenant-scoped 数据表集中在 `pkg/storage/postgres/tenant_schema.sql`，前端入口位于 `web/src/modules/evaluation/`。
 
 ---
 
@@ -326,20 +330,18 @@ func ExecTenant(ctx context.Context, pool *pgxpool.Pool, fn func(context.Context
 
 **DDL 规则**:
 
-- 编号迁移（`internal/migration/sql/NNN_*.sql`）只操作 `public` schema，**禁止引用 tenant-only 表**
+- 编号迁移（`pkg/migration/sql/NNN_*.sql`）只操作 `public` schema，**禁止引用 tenant-only 表**
 - Tenant DDL 放 `pkg/storage/postgres/tenant_schema.sql`，由 `ProvisionAllTenantSchemas` 幂等应用
 - 新增列后必须紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 做 backfill
 
 ### 3.3 Milvus Collection 命名
 
-**格式**: `tenant_<tenant_id>_<resource_type>`
+当前实现按数据域使用两套明确命名：
 
-示例:
+- Knowledge：每租户一个 `tenant_<tenant_id>_kb` collection，workspace 通过 partition 隔离（`pkg/storage/tenantnaming/milvus.go`）
+- Memory 消息向量：`memory_<tenant_id>`；事实向量：`memory_facts_<tenant_id>`（`internal/memory/`）
 
-- `tenant_b1e5077c-0ed3-4664-b0b6-2ee97cffd57a_memory`
-- `tenant_b1e5077c-0ed3-4664-b0b6-2ee97cffd57a_knowledge`
-
-**清理**: 租户删除时必须同步删除对应 collection
+tenant ID 中的短横线会替换为下划线。租户或用户数据删除时使用 filter / document ID 删除对应向量；不要把 `DropCollection` 当作常规数据删除操作。
 
 ---
 
@@ -455,7 +457,7 @@ func (s *AgentService) Execute(ctx, agentID, input) (*Result, error) {
 ### 5.4 Middleware 映射 HTTP 状态码
 
 ```go
-// api/middleware/error_handler.go
+// api/middleware/middleware.go + error_mapping.go
 func ErrorHandler(logger *zap.Logger) gin.HandlerFunc {
     return func(c *gin.Context) {
         c.Next()
@@ -499,7 +501,7 @@ func (h *AgentHandler) GetAgent(c *gin.Context) {
 
 **存储**:
 
-- 租户 API Key 存储在 `tenants.settings.api_keys` JSONB 字段
+- 租户 API Key 存储在 `tenants.settings.llm_api_keys` JSONB 字段
 - 使用 AES-256-GCM 加密，密钥从 `JWTPrivateKeyPEM` 派生
 - **绝对禁止**: 明文存储、存储在环境变量、提交到 git
 
@@ -658,7 +660,7 @@ func NewSafeDial() *net.Dialer {
 
 ### 8.1 常量管理
 
-**所有行为常量集中在 `web/src/constants/index.js`**:
+**所有行为常量集中在 `web/src/constants/index.ts`**:
 
 ```js
 // API / 网络
@@ -678,7 +680,7 @@ export const MCP_MAX_TIMEOUT_SEC = 300;
 
 ### 8.2 API 调用
 
-**统一走 `services/api.js` 的 axios 实例**:
+**普通请求统一走 `web/src/services/client.ts` 的 axios 实例，SSE 统一走该文件的 `streamApiEvents`**:
 
 ```js
 // ✓ 正确
@@ -778,7 +780,7 @@ func TestAgentService_Create(t *testing.T) {
 
 ### 9.3 契约测试
 
-**API 向后兼容守护**: `api/http/contract_test.go` + `testdata/contracts/*.golden.json`
+**API 向后兼容守护**: `api/http/contract_test.go` + `api/http/testdata/contracts/*.golden.json`
 
 **规则**:
 
@@ -861,19 +863,19 @@ linters-settings:
 - `pkg/storage/postgres/tenant.go` — 租户 schema 切换
 - `pkg/observability/trace.go` — Trace ID 生成与传播
 - `api/middleware/trace.go` — TraceMiddleware
-- `api/middleware/error_handler.go` — 错误映射 HTTP 状态码
+- `api/middleware/middleware.go` / `error_mapping.go` — 错误处理中间件与状态码映射
 
 ### Wiring 容器
 
-- `api/wiring/container.go` — 依赖注入根
+- `api/wiring/wiring.go` — Container、BuildContainer 与逆序 Shutdown
 - `api/wiring/<ctx>.go` — 各 context 的组装逻辑
 
 ### 测试
 
 - `api/http/contract_test.go` — API 契约测试
-- `testdata/contracts/*.golden.json` — 契约快照
+- `api/http/testdata/contracts/*.golden.json` — 契约快照
 
 ---
 
-**最后更新**: 2026-06-22
+**最后更新**: 2026-07-16
 **维护者**: 项目架构组

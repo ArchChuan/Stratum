@@ -1,280 +1,115 @@
 # 完整启动指南
 
-## 项目现状
+## 当前运行组成
 
-✅ **已完成**：
+Stratum 本地开发由三部分组成：
 
-- 所有底层依赖已集成（NATS、Milvus、OpenTelemetry）
-- API 层完整（Skill 创建、查询、执行）
-- Skill 执行引擎完整（支持 Code、LLM、Builtin 三种类型）
-- LLM Gateway 完整（支持 OpenAI、Anthropic、Ollama）
-- 事件总线完整（NATS 发布/订阅）
-- 可观测完整（结构化日志、指标收集）
-- 项目编译成功 ✓
+- 基础设施：PostgreSQL、PgBouncer、Redis、NATS JetStream、Milvus、etcd、MinIO
+- 后端：Go/Gin 服务，默认监听 `8080`
+- 前端：React/Vite 开发服务器，默认监听 `3002`
+
+NATS 当前只承载 Memory pipeline。LLM 运行时 provider 为 Qwen 和 Zhipu，API key 与默认模型按租户配置；不要把真实 key 写入 `.env`、前端配置或文档。
+
+## 前置条件
+
+- Go 1.25（以 `go.mod` 为准）
+- Docker + Docker Compose
+- Node.js/npm（仅前端开发需要）
+- Make
 
 ## 启动步骤
 
-### 方式 1：手动启动（推荐）
-
 ```bash
 cd /home/yang/go-projects/stratum
 
-# 1. 启动基础依赖（NATS、Milvus、PostgreSQL、Redis 等）
-make infra-up
+# 首次运行或 PostgreSQL 镜像定义变化后构建中文分词镜像
+make zhparser-build-local
 
-# 2. 等待服务就绪
+# 启动并等待基础设施
+make infra-up
 make infra-wait
 
-# 3. 运行应用
+# 终端 1：后端
 make run
+
+# 终端 2：前端
+make fe-dev
 ```
 
-### 方式 2：含可观测性服务
+后端启动时自动应用 `pkg/migration/sql/` 的 public migrations，并为租户 provision `pkg/storage/postgres/tenant_schema.sql`。
+
+如需 Prometheus、Grafana、Jaeger 和 OTEL Collector：
 
 ```bash
-# 启动基础依赖 + Prometheus / Grafana / Jaeger
-make dev-up
-
-# 运行应用
-make run
+make obs-up
 ```
 
-### 方式 3：后台运行
+也可用 `make dev-up` 同时启动基础设施和可观测性服务，但 backend/frontend 仍需分别运行。
+
+## 验证
 
 ```bash
-cd /home/yang/go-projects/stratum
-
-# 启动依赖
-make infra-up
-
-# 后台运行应用
-nohup go run ./cmd/server > app.log 2>&1 &
-
-# 查看日志
-tail -f app.log
+make infra-status
+curl -fsS http://localhost:8080/health
+curl -fsS http://localhost:8080/models
 ```
 
-## 验证服务
+健康检查当前返回：
 
-### 1. 检查应用健康状态
-
-```bash
-curl http://localhost:8080/health
-# 响应: {"status":"ok"}
+```json
+{"service":"Stratum","status":"ok"}
 ```
 
-### 2. 检查依赖服务
+打开前端：<http://localhost:3002>。除 `/health`、`/metrics`、`/models` 外，业务 API 均需要相应的 JWT、tenant context 和角色权限；不要用无鉴权 curl 示例判断业务接口是否可用。
+
+## 常用检查
 
 ```bash
-# NATS
-nc -z localhost 4222 && echo "✓ NATS OK" || echo "✗ NATS FAILED"
+# 后端快速校验
+go vet ./...
+go test -short ./...
 
-# PostgreSQL
-nc -z localhost 5432 && echo "✓ PostgreSQL OK" || echo "✗ PostgreSQL FAILED"
+# 前端校验
+make fe-lint
+make fe-build
 
-# Redis
-nc -z localhost 6379 && echo "✓ Redis OK" || echo "✗ Redis FAILED"
-
-# Milvus
-nc -z localhost 19530 && echo "✓ Milvus OK" || echo "✗ Milvus FAILED"
-
-# OpenTelemetry
-nc -z localhost 4317 && echo "✓ OTEL OK" || echo "✗ OTEL FAILED"
-```
-
-### 3. 查看 Docker 容器
-
-```bash
-docker compose ps
-```
-
-## 测试 API
-
-### 创建 Skill
-
-```bash
-# 创建 LLM Skill
-curl -X POST http://localhost:8080/skills \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "GPT-4 Assistant",
-    "description": "Call GPT-4 for questions",
-    "type": "llm"
-  }'
-
-# 响应示例
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "name": "GPT-4 Assistant",
-  "description": "Call GPT-4 for questions",
-  "type": "llm",
-  "created_at": "2026-04-22T22:09:35Z"
-}
-```
-
-### 执行 Skill
-
-```bash
-# 需要先配置 OPENAI_API_KEY
-export OPENAI_API_KEY=sk-your-key
-
-# 执行 Skill
-curl -X POST http://localhost:8080/skills/550e8400-e29b-41d4-a716-446655440000/execute \
-  -H "Content-Type: application/json" \
-  -d '{
-    "input": {
-      "model": "gpt-4",
-      "prompt": "What is AI?",
-      "temperature": 0.7,
-      "max_tokens": 100
-    }
-  }'
-
-# 响应示例
-{
-  "result": {
-    "content": "AI (Artificial Intelligence) is...",
-    "model": "gpt-4",
-    "usage": {
-      "prompt_tokens": 5,
-      "completion_tokens": 20,
-      "total_tokens": 25
-    }
-  }
-}
+# 查看依赖日志
+docker compose logs --tail=100 postgres redis nats milvus
 ```
 
 ## 停止服务
 
 ```bash
-# 停止基础依赖
+make obs-down
 make infra-down
-
-# 或停止全部（含可观测性）
-make dev-down
 ```
 
-## 查看日志
-
-### 应用日志
-
-```bash
-# 实时日志
-tail -f app.log
-
-# 查看最后 100 行
-tail -100 app.log
-```
-
-### Docker 日志
-
-```bash
-# 所有容器
-docker-compose logs -f
-
-# 特定容器
-docker-compose logs -f nats
-docker-compose logs -f milvus
-```
+`docker compose down -v` 会删除本地持久卷，只能在明确接受数据丢失时使用。
 
 ## 常见问题
 
-### Q: 启动脚本权限不足
+### 基础设施未就绪
 
 ```bash
-chmod +x start.sh stop.sh
+make infra-status
+docker compose ps
+docker compose logs --tail=200 postgres redis nats milvus
 ```
 
-### Q: Docker 容器启动失败
+Milvus 依赖 etcd 和 MinIO；应先确认三者均健康。Memory pipeline 只有在 `MEMORY_PIPELINE_ENABLED=true` 时启动。
 
-```bash
-# 查看日志
-docker compose logs
+### 登录路由未注册
 
-# 重启容器
-docker compose restart
+Auth 路由只有在 `GITHUB_CLIENT_ID` 非空且 JWT 私钥可用时注册。检查本地配置是否提供开发环境所需的 OAuth/JWT 设置，但不要把私钥或凭证提交到仓库。
 
-# 完全重建
-docker compose down -v
-make infra-up
-```
+### 前端无法访问后端
 
-### Q: 应用无法连接到依赖
+确认后端在 `8080`、前端在 `3002`，并检查 `FRONTEND_URL` 与 Vite 代理配置。当前默认 `FRONTEND_URL` 为 `http://localhost:3002`。
 
-```bash
-# 检查网络
-docker network ls
+## 相关文档
 
-# 检查容器网络
-docker inspect stratum-nats-1 | grep -A 5 NetworkSettings
-```
-
-### Q: 端口被占用
-
-```bash
-# 查看占用端口的进程
-lsof -i :8080
-lsof -i :4222
-lsof -i :5432
-lsof -i :6379
-lsof -i :19530
-
-# 杀死进程
-kill -9 <PID>
-```
-
-## 下一步
-
-1. **配置 LLM API Key**
-
-   ```bash
-   export OPENAI_API_KEY=sk-your-key
-   # 或
-   export ANTHROPIC_API_KEY=sk-ant-your-key
-   ```
-
-2. **查看文档**
-   - [LLM 集成指南](docs/LLM_INTEGRATION.md)
-   - [快速开始](docs/QUICKSTART_LLM.md)
-   - [依赖集成指南](docs/DEPENDENCIES.md)
-   - [README.md](README.md)
-
-3. **开发新功能**
-   - 查看 [工程规范](engineering-standards.md) 了解项目架构
-   - 参考现有 Skill 实现添加新功能
-
-## 项目结构
-
-```
-stratum/
-├── cmd/server/              # 应用入口
-├── api/                     # HTTP API 层
-├── internal/                # 内部业务逻辑
-│   ├── config/              # 配置和服务初始化
-│   ├── hermes/              # NATS 事件总线
-│   ├── skill/               # Skill 定义与执行
-│   ├── orchestrator/        # Skill 编排与注册
-│   ├── llmgateway/          # LLM 网关
-│   └── knowledge/           # GraphRAG 知识管理
-├── pkg/                     # 公共库
-│   ├── mcp/                 # MCP 协议和向量存储
-│   └── observability/       # 日志、指标、链路追踪
-├── docs/                    # 文档
-├── docker-compose.yml       # 容器编排
-├── start.sh                 # 启动脚本
-├── stop.sh                  # 停止脚本
-└── Makefile                 # 构建脚本
-```
-
-## 性能指标
-
-- **编译时间**: ~5 秒
-- **启动时间**: ~10 秒（包括依赖启动）
-- **API 响应时间**: <100ms
-- **内存占用**: ~50MB (应用) + 依赖服务
-
-## 支持
-
-- 📖 查看 [README.md](README.md)
-- 📚 查看 [工程规范](engineering-standards.md)
-- 🐛 查看 [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)
+- [本地开发](local-dev.md)
+- [依赖集成](DEPENDENCIES.md)
+- [LLM 集成](LLM_INTEGRATION.md)
+- [快速开始：LLM](QUICKSTART_LLM.md)
+- [数据持久化](DATA_PERSISTENCE.md)

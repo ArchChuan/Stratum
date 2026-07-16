@@ -11,7 +11,9 @@ import (
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 )
 
-type deleteWorkspaceRepo struct{ workspace *domain.Workspace }
+type deleteWorkspaceRepo struct {
+	workspace *domain.Workspace
+}
 
 func (r *deleteWorkspaceRepo) Create(context.Context, string, *domain.Workspace) error { return nil }
 func (r *deleteWorkspaceRepo) List(context.Context, string) ([]*domain.Workspace, error) {
@@ -58,10 +60,14 @@ func (r *deleteDocRepo) RecoverStuckIngests(context.Context, string, time.Durati
 	return 0, nil
 }
 
-type deleteVectorStore struct{ deletedDocIDs []string }
+type deleteVectorStore struct {
+	deletedCollection string
+	deletedDocIDs     []string
+}
 
 func (s *deleteVectorStore) CreateCollectionWithDim(context.Context, string, int) error { return nil }
-func (s *deleteVectorStore) DeleteByDocumentIDs(_ context.Context, _ string, docIDs []string) error {
+func (s *deleteVectorStore) DeleteByDocumentIDs(_ context.Context, collection string, docIDs []string) error {
+	s.deletedCollection = collection
 	s.deletedDocIDs = append([]string(nil), docIDs...)
 	return nil
 }
@@ -74,6 +80,7 @@ func TestDeleteDocumentRejectsProcessingDocument(t *testing.T) {
 	service.SetVectorStore(vectors)
 
 	err := service.DeleteDocument(context.Background(), "tenant-1", "docs", "doc-1")
+
 	if !errors.Is(err, domain.ErrDocumentProcessing) {
 		t.Fatalf("expected ErrDocumentProcessing, got %v", err)
 	}
@@ -82,7 +89,7 @@ func TestDeleteDocumentRejectsProcessingDocument(t *testing.T) {
 	}
 }
 
-func TestDeleteDocumentCleansTerminalDocument(t *testing.T) {
+func TestDeleteDocumentCleansVectorsBeforeDocumentRecord(t *testing.T) {
 	for _, status := range []string{"completed", "failed"} {
 		t.Run(status, func(t *testing.T) {
 			docs := &deleteDocRepo{docs: []*domain.Document{{ID: "doc-1", IngestStatus: status}}}
@@ -90,14 +97,15 @@ func TestDeleteDocumentCleansTerminalDocument(t *testing.T) {
 			service := NewWorkspaceService(&deleteWorkspaceRepo{workspace: &domain.Workspace{ID: "ws-1", Name: "docs"}}, nil, zap.NewNop())
 			service.SetDocRepo(docs)
 			service.SetVectorStore(vectors)
+
 			if err := service.DeleteDocument(context.Background(), "tenant-1", "docs", "doc-1"); err != nil {
 				t.Fatalf("DeleteDocument() error = %v", err)
 			}
 			if len(vectors.deletedDocIDs) != 1 || vectors.deletedDocIDs[0] != "doc-1" {
-				t.Fatalf("deleted vector IDs = %v", vectors.deletedDocIDs)
+				t.Fatalf("deleted vector document IDs = %v", vectors.deletedDocIDs)
 			}
 			if len(docs.deletedIDs) != 1 || docs.deletedIDs[0] != "doc-1" {
-				t.Fatalf("deleted DB IDs = %v", docs.deletedIDs)
+				t.Fatalf("deleted database document IDs = %v", docs.deletedIDs)
 			}
 		})
 	}

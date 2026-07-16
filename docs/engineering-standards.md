@@ -6,23 +6,23 @@
 
 ## WHAT — 技术栈与目录
 
-### 后端（Go 1.22+）
+### 后端（Go 1.25）
 
 | 层 | 路径 | 职责 |
 |----|------|------|
-| 入口 | `cmd/server/main.go` | 由 `api/wiring.BuildContainer` 构图，启停 Harness（≤30 行） |
+| 入口 | `cmd/server/main.go` | 由 `api/wiring.BuildContainer` 构图，启停 Harness |
 | 路由 | `api/http/router.go` | Gin 路由组，从 `Container` 装配 handler |
 | Handler | `api/http/handler/` | 每域一个文件，只做请求解析 + 响应组装 |
 | DTO | `api/http/dto/` | Request/Response 结构体，无业务逻辑 |
-| 中间件 | `api/http/middleware/` | ErrorHandler · MetricsMiddleware · Auth · Trace |
-| 业务 | `internal/<ctx>/{domain,application,infrastructure}` | 8 个 bounded context（见下方架构分层） |
+| 中间件 | `api/middleware/` | ErrorHandler · MetricsMiddleware · Auth · Trace |
+| 业务 | `internal/<ctx>/{domain,application,infrastructure}` | 9 个 bounded context（见下方架构分层） |
 | 基础设施 | `pkg/{storage,messaging,httpclient,observability,...}` | 数据库/消息/HTTP/日志等无业务抽象 |
 
-关键依赖版本：Gin v1.9 · NATS JetStream v1.31 · Milvus SDK v2.4.2 · pgx v5 · go-redis v9 · JWT RS256（golang-jwt v5）· OTEL v1.21 · Viper v1.18
+关键依赖版本：Gin v1.9.1 · nats.go v1.51 · Milvus SDK v2.4.2 · pgx v5.7 · go-redis v9.7 · JWT RS256（golang-jwt v5.3）· OTEL v1.22
 
 ### 前端（`web/`）
 
-React 18 · Vite 4 · Ant Design 5.2 · React Router 6 · Axios · Moment.js
+React 18.3 · Vite 5.4 · Ant Design 5.20 · React Router 6.26 · Axios 1.7 · TanStack Query 5 · Zustand 5
 
 | 目录 | 职责 |
 |------|------|
@@ -44,15 +44,15 @@ React 18 · Vite 4 · Ant Design 5.2 · React Router 6 · Axios · Moment.js
 | NATS JetStream（非 Kafka） | 轻量、Go 原生、支持持久化 subject 格式 `domain.action` |
 | Milvus v2.4.2（非 pgvector） | GraphRAG 需要高维向量检索，pgvector 性能不达标 |
 | Harness 生命周期管理 | 组件顺序启动 → 逆序停止，避免依赖竞争 |
-| LLMGateway 统一抽象 | 屏蔽 OpenAI/Anthropic/Ollama 差异，切换不改业务代码 |
+| LLMGateway 统一抽象 | 屏蔽当前 Qwen/Zhipu OpenAI-compatible provider 差异，切换不改业务代码 |
 | No AI control logic | 路由/重试/状态机必须硬编码，AI 只做语言任务 |
 
 ### 多租户 DDL 放置规则（踩坑总结）
 
-- 编号迁移（`pkg/migration/sql/NNN_*.sql`）只操作 **public schema**，禁止引用 tenant-only 表（如 `chat_conversations`、`memory_entries`、`entities`）
+- 编号迁移（`pkg/migration/sql/NNN_*.sql`）只操作 **public schema**，禁止引用 tenant-only 表（如 `chat_conversations`、`memory_entries`、`memory_entities`）
 - 引用 tenant-only 表的 DDL 必须放 `pkg/storage/postgres/tenant_schema.sql`，由 `ProvisionAllTenantSchemas` 幂等应用到每个租户 schema
 - INSERT 语句必须与目标表 DDL 逐列核对，尤其 NOT NULL 无 DEFAULT 列（反例：outbox 漏 `message_id` 导致全量回滚）
-- 向 `tenant_schema.sql` 的 `CREATE TABLE` 新增列后，必须紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 做 backfill，否则已有租户的旧表不含该列，后续 INDEX / 查询会报 `column does not exist`（反例：entities.user_id 漏 backfill）
+- 向 `tenant_schema.sql` 的 `CREATE TABLE` 新增列后，必须紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 做 backfill，否则已有租户的旧表不含该列，后续 INDEX / 查询会报 `column does not exist`（历史反例：旧实体表 user_id 漏 backfill）
 - 所有数据 schema 变更必须兼容历史租户数据：新增表/索引用 `IF NOT EXISTS`，新增列用 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`；新增 `NOT NULL` 列必须带安全 `DEFAULT` 或先 nullable → 回填 → 加约束；任何依赖新列的 INDEX / CONSTRAINT / 查询必须排在 backfill 之后，并用 schema 顺序测试覆盖（反例：先建 `idx_agent_exec_trace` 再补 `trace_id` 导致旧租户启动失败）
 - `golang-migrate` dirty 状态修复：`force <version>` 将指定版本标记为 clean，再次 `Up()` 从下一版本继续；勿直接手改 `schema_migrations` 表
 - 操作 tenant-scoped 表的 repository 方法必须通过 `execTenant(ctx, tenantID, fn)` 执行，禁止直接调用连接池的 `Exec` / `Query`
@@ -94,12 +94,12 @@ React 18 · Vite 4 · Ant Design 5.2 · React Router 6 · Axios · Moment.js
 ### 架构分层（DDD bounded context）
 
 - 目录：`api/{http/{handler,dto,middleware},wiring}` · `internal/<ctx>/{domain/{,port/},application,infrastructure}` · `pkg/storage/{postgres,redis,milvus,tenantnaming}` · `pkg/{messaging/nats,httpclient,observability,crypto,constants,migration,textchunk}`
-- 8 个 bounded context：`agent · memory · knowledge · skill · mcp · iam · llmgateway · platform`；跨域路由层（如 `capgateway`）作为 ACL，必要时下沉进消费上下文
+- 9 个 bounded context：`agent · memory · knowledge · skill · mcp · iam · llmgateway · evaluation · platform`；跨域路由层（如 capability adapter）作为 ACL，必要时下沉进消费上下文
 - 依赖方向：`handler → application → domain/port`；`infrastructure` 实现 port，由 `api/wiring/Container` 集中装配；Shutdown 逆序释放
 - 跨 context 调用走「消费者侧」port（接口放消费方 `domain/port/`），禁止 import 兄弟上下文的 `application` / `infrastructure`
 - 单向底线：`pkg/` 不 import `internal/`；`domain/` 零第三方依赖（仅 stdlib + `pkg/constants`）；`application/` 不 import `pgx`/`redis`/`nats`/`gin`；`handler` 不 import `internal/*/infrastructure` 与 `pgx`/`redis`/`milvus`
 - 错误分层：domain 定义 `Err*` → infrastructure 翻译 → application 编排 → middleware 映射 HTTP；响应体 `{"error":"..."}` 冻结
-- API 向后兼容由 `api/http/contract_test.go` + `testdata/contracts/*.golden.json` 守护；CI 用 `go-arch-lint` + `depguard` 固化分层
+- API 向后兼容由 `api/http/contract_test.go` + `api/http/testdata/contracts/*.golden.json` 守护；CI 用 `go-arch-lint` + `depguard` 固化分层
 
 ### 各层职责速查
 
@@ -156,9 +156,9 @@ npm run lint && npm run build            # 前端 PR 前
 - 纯 UI 样式数字（spacing、border-radius 等）不在此范围
 - Agent 子操作超时使用 `pkg/constants/timeouts.go` 的分级常量；LLM 流式调用禁止 flat timeout，使用响应头超时、流空闲看门狗和外层执行超时组合控制
 
-**前端（JS/JSX）**
+**前端（TypeScript / TSX）**
 
-所有行为常量集中在 `web/src/constants/index.js`，按前缀分组：
+所有行为常量集中在 `web/src/constants/index.ts`，按前缀分组：
 
 ```js
 // API / 网络
@@ -233,7 +233,7 @@ MEMORY_SEARCH_LIMIT
 
 ### 前端规范
 
-- 所有 API 调用走 `services/api.js` 的 axios 实例，禁止裸 `fetch`
+- 普通 API 调用走 `web/src/services/client.ts` 的 axios 实例；SSE 统一走该文件的 `streamApiEvents`
 - 错误统一：`message.error(err.response?.data?.error || '操作失败')`
 - 禁止跨 `pages/` 目录导入；页面组件 ≤200 行，超出提取到 hooks/utils
 - `useEffect` 依赖必须完整；异步 effect 需要 `let cancelled = false` 清理

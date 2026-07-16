@@ -9,6 +9,7 @@
 registerAuth(r, c, requireActive)
 registerHealth(r, c)
 registerSkills(r, c, requireActive)
+registerEvaluations(r, c, requireActive)
 registerAgents(r, c, requireActive)
 registerKnowledge(r, c, requireActive)
 registerMCP(r, c, requireActive)
@@ -21,7 +22,7 @@ registerMemory(r, c, requireActive)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/health` | 服务健康检查，返回 `{"status":"ok"}` |
+| GET | `/health` | 服务健康检查，返回 `{"status":"ok","service":"Stratum"}` |
 | GET | `/metrics` | Prometheus scrape 端点 |
 | GET | `/models` | 列出所有可用 LLM 模型 |
 
@@ -32,6 +33,7 @@ registerMemory(r, c, requireActive)
 | GET | `/auth/github` | GitHubLogin |
 | GET | `/auth/github/callback` | GitHubCallback |
 | POST | `/auth/register` | Register（邮箱注册） |
+| POST | `/auth/guest` | GuestLogin（临时访客） |
 | POST | `/auth/refresh` | Refresh（刷新 JWT） |
 | POST | `/auth/logout` | Logout |
 | GET | `/auth/me` | Me（当前用户信息） |
@@ -53,7 +55,6 @@ registerMemory(r, c, requireActive)
 | 方法 | 路径 | Handler | 额外权限 |
 |------|------|---------|---------|
 | GET | `/tenant/members` | ListMembers | — |
-| POST | `/tenant/members/invite` | InviteMember | admin/owner |
 | PATCH | `/tenant/members/:user_id/role` | UpdateMemberRole | — |
 | DELETE | `/tenant/members/:user_id` | RemoveMember | — |
 | GET | `/tenant/settings` | GetSettings | — |
@@ -67,33 +68,48 @@ registerMemory(r, c, requireActive)
 | 方法 | 路径 | Handler | 额外权限 |
 |------|------|---------|---------|
 | GET | `/skills` | GetAllSkills | — |
-| POST | `/skills` | CreateSkill | requireActive |
+| POST | `/skills/test-draft` | ExecuteDraftSkill | requireActive |
+| POST | `/skills` | CreateSkill | admin + requireActive |
 | GET | `/skills/:id` | GetSkill | — |
-| PUT | `/skills/:id` | UpdateSkill | requireActive |
-| DELETE | `/skills/:id` | DeleteSkill | requireActive |
+| PUT | `/skills/:id` | UpdateSkill | admin + requireActive |
+| DELETE | `/skills/:id` | DeleteSkill | admin + requireActive |
 | POST | `/skills/:id/test` | ExecuteSkill（沙箱测试）| requireActive |
 | GET | `/skills/:id/workspace` | GetSkillWorkspace（版本草稿工作区）| — |
-| PATCH | `/skills/:id/draft/capability` | UpdateDraftCapability | requireActive |
-| PATCH | `/skills/:id/draft/contract` | UpdateDraftContract | requireActive |
-| PATCH | `/skills/:id/draft/implementation` | UpdateDraftImplementation | requireActive |
-| POST | `/skills/:id/publish` | PublishSkill（草稿→已发布版本）| requireActive |
+| PATCH | `/skills/:id/draft/capability` | UpdateDraftCapability | admin + requireActive |
+| PATCH | `/skills/:id/draft/contract` | UpdateDraftContract | admin + requireActive |
+| PATCH | `/skills/:id/draft/implementation` | UpdateDraftImplementation | admin + requireActive |
+| POST | `/skills/:id/publish` | PublishSkill（草稿→已发布版本）| admin + requireActive |
 
 ### Agent（JWT + tenant context）
 
 | 方法 | 路径 | Handler | 额外权限 |
 |------|------|---------|---------|
 | GET | `/agents` | GetAllAgents | — |
-| POST | `/agents` | CreateAgent | requireActive |
+| POST | `/agents` | CreateAgent | admin + requireActive |
 | GET | `/agents/executions` | ListExecutions | — |
-| GET | `/agents/:traceID/tool-traces` | ListExecutionToolTraces | — |
-| GET | `/agents/:traceID/trace-events` | ListExecutionTraceEvents | — |
+| GET | `/agents/executions/:traceID/tool-traces` | ListExecutionToolTraces | — |
+| GET | `/agents/executions/:traceID/trace-events` | ListExecutionTraceEvents | — |
 | GET | `/agents/:id` | GetAgent | — |
 | POST | `/agents/:id/execute` | ExecuteAgent | requireActive + rate limit |
 | POST | `/agents/:id/execute/stream` | ExecuteAgentStream（SSE）| requireActive + rate limit |
-| PUT | `/agents/:id` | UpdateAgent | requireActive |
-| DELETE | `/agents/:id` | DeleteAgent | requireActive |
+| PUT | `/agents/:id` | UpdateAgent | admin + requireActive |
+| DELETE | `/agents/:id` | DeleteAgent | admin + requireActive |
 | POST | `/agents/:id/conversations` | CreateConversation | — |
 | GET | `/agents/:id/conversations` | ListConversations | — |
+
+### Evaluation（JWT + tenant context）
+
+| 方法 | 路径 | Handler | 额外权限 |
+|------|------|---------|---------|
+| POST | `/evaluations/suites` | CreateSuite | admin + requireActive |
+| POST | `/evaluations/suites/:id/publish` | PublishSuite | admin + requireActive |
+| POST | `/evaluations/runs` | EnqueueRun | admin + requireActive |
+| GET | `/evaluations/runs/:id` | GetRun | admin |
+| GET | `/evaluations/jobs/:id` | GetJob | admin |
+| POST | `/evaluations/optimizations` | GenerateOptimization | admin + requireActive |
+| POST | `/evaluations/experiments` | CreateExperiment | admin + requireActive |
+| POST | `/evaluations/experiments/:id/evaluate` | EvaluateExperiment | admin + requireActive |
+| POST | `/evaluations/feedback` | RecordFeedback | member + requireActive |
 
 ### Conversations（JWT + tenant context）
 
@@ -110,25 +126,31 @@ registerMemory(r, c, requireActive)
 |------|------|---------|---------|
 | GET | `/knowledge/workspaces` | ListWorkspaces | — |
 | GET | `/knowledge/workspaces/:name/stats` | GetWorkspaceStats | — |
+| GET | `/knowledge/workspaces/:name/documents` | ListDocuments | — |
 | POST | `/knowledge/query` | Query | requireActive |
 | POST | `/knowledge/workspaces` | CreateWorkspace | admin + requireActive |
 | PATCH | `/knowledge/workspaces/:name` | UpdateWorkspace | admin + requireActive |
 | DELETE | `/knowledge/workspaces/:name` | DeleteWorkspace | admin + requireActive |
 | POST | `/knowledge/ingest` | UploadDocument | admin + requireActive |
 
-### Memory（JWT + tenant context）
+### Memory（JWT + tenant context + requireActive）
 
 | 方法 | 路径 | Handler | 额外权限 |
 |------|------|---------|---------|
+| DELETE | `/memory/clear` | ClearMemories | — |
 | POST | `/memory` | AddMemory | — |
 | GET | `/memory/:id` | GetMemory | — |
+| POST | `/memory/sessions` | ListSessions | — |
+| GET | `/memory/stats` | GetStats | — |
 | GET | `/memory/summary/:session_id` | GetSummary | — |
-| DELETE | `/memory/:id` | DeleteMemory | requireActive |
-| DELETE | `/memory/session/:session_id` | ClearSession | requireActive |
+| DELETE | `/memory/:id` | DeleteMemory | — |
+| DELETE | `/memory/session/:session_id` | ClearSession | — |
 
 ### MCP（JWT + tenant context，由 `MCPHandler.RegisterRoutes` 动态注册）
 
-MCP 路由在 `api/http/handler/mcp_handler.go` 中的 `RegisterRoutes` 方法定义，读路由无需额外权限，写路由需 requireActive。
+MCP 路由在 `api/http/handler/mcp_handler.go` 中的 `RegisterRoutes` 方法定义。所有路由至少需要 member；tool execute 追加 requireActive；server connect/update/disconnect/delete config/reconnect 与 skill refresh 需要 admin + requireActive。
+
+主要路径：`/mcp/servers`、`/mcp/servers/:id`、`/mcp/servers/:id/tools`、`/resources`、`/config`、`/reconnect`、`/mcp/tools/:toolId/execute`、`/mcp/skills`、`/mcp/skills/refresh`、`/mcp/status`。
 
 ## Handler Writing Standards
 

@@ -138,7 +138,9 @@ func (p *Pipeline) Start(ctx context.Context) error {
 	}
 
 	for i := 0; i < p.cfg.EmbedWorkers; i++ {
-		worker := NewEmbedderWorker(embedConsumer, js, nil, p.vectorDB, p.logger)
+		worker := NewEmbedderWorker(
+			embedConsumer, js, nil, p.vectorDB, p.logger, p.cfg.EmbedAckWait, p.cfg.MaxDeliver,
+		)
 		if p.embedResolver != nil {
 			worker.WithEmbedResolver(p.embedResolver)
 		}
@@ -165,7 +167,7 @@ func (p *Pipeline) Start(ctx context.Context) error {
 	}
 
 	for i := 0; i < p.cfg.EnrichWorkers; i++ {
-		worker := NewEnricherWorker(enrichConsumer, p.pool, p.logger, p.cfg)
+		worker := NewEnricherWorker(enrichConsumer, js, p.pool, p.logger, p.cfg)
 		if p.llmResolver != nil {
 			worker.WithLLMResolver(p.llmResolver)
 		}

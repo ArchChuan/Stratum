@@ -1,359 +1,111 @@
 # 部署指南
 
-本文档详细介绍了stratum项目的各种部署方式，包括本地开发环境、Kubernetes云原生环境和WSL环境。
-
-## 部署架构
-
-stratum项目采用云原生架构，底层依赖服务包括：
-
-- **NATS** - 事件驱动消息队列系统
-- **Milvus** - 向量数据库，用于向量存储与检索
-- **ETCD** - 用于Milvus的分布式协调服务
-- **MinIO** - 对象存储服务，供Milvus使用
-- **OpenTelemetry Collector** - 用于收集日志、指标和追踪数据
+Stratum 当前提供三种部署入口：本地 Docker Compose、原始 Kubernetes manifests，以及 Helm Chart。生产或公开 demo 优先使用 Helm；本地开发使用 Compose。
 
 ## 前置要求
 
-无论选择哪种部署方式，都需要满足以下基本要求：
+- Go 1.25（本地构建）
+- Docker + Docker Compose
+- Kubernetes 1.25+ 与 `kubectl`（Kubernetes 部署）
+- Helm 3（Helm 部署）
 
-- Go 1.25.0+
-- Docker
-- Make
-- Git
-
-根据部署方式的不同，还需要额外的工具：
-
-- Kubernetes (kubectl) - 用于云原生部署
-- Helm - 用于包管理
-- (可选) WSL 2 - 用于 Windows 环境
-
-## 部署方式
-
-### 1. 本地开发部署
-
-适用于开发和调试阶段。
-
-#### 步骤
-
-1. 克隆项目：
-
-   ```bash
-   git clone https://github.com/stratum/stratum.git
-   cd stratum
-   ```
-
-2. 配置环境变量：
-
-   ```bash
-   cp .env.example .env
-   # 根据实际环境编辑 .env 文件
-   ```
-
-3. 启动应用：
-
-   ```bash
-   ./start.sh
-   ```
-
-4. 验证服务：
-
-   ```bash
-   curl http://localhost:8080/health
-   # 响应: {"status":"ok"}
-   ```
-
-5. 停止服务：
-
-   ```bash
-   ./stop.sh
-   ```
-
-#### 说明
-
-本地开发部署模式只运行主应用，不包括任何底层依赖服务。在生产环境中使用时，需要单独部署所有依赖服务。
-
-### 2. Kubernetes 部署
-
-适用于生产环境的云原生部署。
-
-#### 步骤
-
-1. 构建 Docker 镜像：
-
-   ```bash
-   make docker-build
-   ```
-
-2. 部署依赖服务：
-
-   ```bash
-   kubectl apply -f k8s/dependencies.yaml
-   ```
-
-3. 等待依赖服务就绪：
-
-   ```bash
-   kubectl wait --for=condition=ready pod -l app=nats --timeout=120s
-   kubectl wait --for=condition=ready pod -l app=milvus --timeout=120s
-   ```
-
-4. 部署主应用：
-
-   ```bash
-   kubectl apply -f k8s/deployment.yaml
-   ```
-
-5. 验证部署：
-
-   ```bash
-   kubectl get pods
-   kubectl get services
-   ```
-
-6. 访问服务：
-
-   ```bash
-   # 端口转发到本地
-   kubectl port-forward svc/stratum-service 8080:80
-   ```
-
-7. 停止部署：
-
-   ```bash
-   make k8s-delete
-   ```
-
-#### 验证服务
-
-部署完成后，可以通过以下命令验证所有服务是否正常运行：
+## 本地开发
 
 ```bash
-# 检查Pod状态
-kubectl get pods
-
-# 检查服务状态
-kubectl get services
-
-# 查看应用日志
-kubectl logs -f deployment/stratum
-
-# 查看依赖服务日志
-kubectl logs -f deployment/nats
-kubectl logs -f deployment/milvus
+make zhparser-build-local
+make infra-up
+make infra-wait
+make run       # backend :8080
+make fe-dev    # frontend :3002，另开终端
 ```
 
-### 3. Helm 部署
-
-Helm 是 Kubernetes 的包管理工具，提供更便捷的部署方式。
-
-#### 步骤
-
-1. 构建 Docker 镜像：
-
-   ```bash
-   make docker-build
-   ```
-
-2. 安装 Helm Chart：
-
-   ```bash
-   make helm-install
-   ```
-
-3. 验证部署：
-
-   ```bash
-   helm status stratum-release
-   kubectl get pods
-   ```
-
-4. 卸载 Helm Release：
-
-   ```bash
-   make helm-uninstall
-   ```
-
-#### 自定义配置
-
-可以通过编辑 [helm/values.yaml](file:///home/yang/go-projects/stratum/helm/values.yaml) 文件来自定义部署配置：
-
-- 修改副本数量
-- 调整资源限制
-- 配置环境变量
-- 设置持久卷参数
-
-### 4. WSL 2 部署
-
-适用于在 Windows 环境中开发和部署。
-
-#### 前置条件
-
-- WSL 2 已安装并配置
-- Kubernetes 已在 WSL 或 Docker Desktop 中启用
-- 已安装 kubectl 和 Helm
-
-#### 步骤
-
-1. 确保 WSL 环境已准备好：
-
-   ```bash
-   kubectl cluster-info
-   helm version
-   ```
-
-2. 运行 WSL 部署脚本：
-
-   ```bash
-   ./wsl-start.sh
-   ```
-
-3. 验证部署：
-
-   ```bash
-   kubectl get pods
-   kubectl get services
-   ```
-
-4. 停止部署：
-
-   ```bash
-   ./wsl-stop.sh
-   ```
-
-## 环境配置
-
-### 配置文件
-
-项目使用 [.env](file:///home/yang/go-projects/stratum/.env.example) 文件进行环境配置，主要配置项包括：
-
-```env
-# 服务配置
-PORT=8080
-
-# NATS 配置
-NATS_URL=nats://nats:4222
-
-# Milvus 配置
-MILVUS_HOST=milvus
-MILVUS_PORT=19530
-
-NEO4J_PASSWORD=password
-
-# OpenTelemetry 配置
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-
-# LLM 配置
-OPENAI_API_KEY=sk-your-openai-key
-ANTHROPIC_API_KEY=sk-ant-your-anthropic-key
-OLLAMA_ENDPOINT=http://localhost:11434
-DEFAULT_LLM_PROVIDER=openai
-```
-
-### 服务发现
-
-在 Kubernetes 环境中，服务通过内部 DNS 名称进行发现：
-
-- NATS: `nats:4222`
-- Milvus: `milvus:19530`
-- OpenTelemetry Collector: `otel-collector:4317`
-
-## 故障排除
-
-### 通用问题
-
-1. **端口冲突**
-   - 检查 `.env` 文件中的端口配置
-   - 确保没有其他服务占用相同端口
-
-2. **依赖服务未就绪**
-   - 使用 `kubectl get pods` 检查依赖服务状态
-   - 使用 `kubectl logs <pod-name>` 查看详细日志
-
-3. **Docker 镜像构建失败**
-   - 确认 Docker 服务正在运行
-   - 检查 Go 依赖是否正确
-
-### Kubernetes 特有问题
-
-1. **Pod 无法启动**
-
-   ```bash
-   kubectl describe pod <pod-name>
-   kubectl logs <pod-name>
-   ```
-
-2. **服务不可达**
-   - 检查 Service 配置
-   - 验证网络策略是否允许流量
-
-3. **持久卷问题**
-   - 检查 PVC 状态
-   - 确认存储类配置正确
-
-### WSL 特有问题
-
-1. **Kubernetes 集群不可用**
-   - 检查 Docker Desktop Kubernetes 是否启用
-   - 确认 kubectl 配置正确
-
-2. **镜像无法加载**
-   - 对于 Kind 集群：使用 `kind load docker-image stratum:latest`
-   - 对于 Minikube：使用 `eval $(minikube docker-env)` 然后重新构建镜像
-
-## 监控和可观测性
-
-### 日志
-
-应用使用 Uber Zap 记录结构化日志，可以通过以下方式查看：
+可观测性服务单独启动：
 
 ```bash
-# Kubernetes 环境
-kubectl logs -f deployment/stratum
-
-# 本地环境
-./start.sh
+make obs-up
 ```
 
-### 指标
+详细流程见 [STARTUP_GUIDE.md](STARTUP_GUIDE.md) 和 [local-dev.md](local-dev.md)。
 
-通过 OpenTelemetry 收集指标数据，包括：
+## 原始 Kubernetes manifests
 
-- 请求延迟
-- 错误率
-- 吞吐量
-- 技能执行统计
-
-### 健康检查
-
-应用提供健康检查端点：
+`k8s/` 包含 namespace、依赖服务、backend/frontend、Ingress、监控和安全策略示例。部署前必须审查镜像、存储类、域名和 secret 引用：
 
 ```bash
-curl http://localhost:8080/health
+make k8s-deploy
+kubectl -n stratum get pods,svc,ingress
+make k8s-logs
 ```
 
-## 升级和维护
-
-### 应用升级
-
-对于 Kubernetes 部署，只需更新镜像标签并重新部署：
+删除：
 
 ```bash
-make docker-build
-kubectl set image deployment/stratum stratum=stratum:new-version
+make k8s-delete
 ```
 
-### 依赖服务升级
+原始 manifests 更适合作为显式配置参考；当前完整部署说明见 [k8s-deployment.md](k8s-deployment.md)。
 
-依赖服务独立于主应用升级，可以通过更新 Kubernetes 部署配置来升级：
+## Helm
+
+Chart 位于 `helm/`，主要 values 文件为：
+
+- `helm/values.yaml`：共享默认值
+- `helm/values-dev.yaml`：开发环境
+- `helm/values-demo.yaml` / `helm/values-demo-local.yaml`：demo
+- `helm/values-prod.yaml`：生产覆盖
+
+部署前渲染并检查：
 
 ```bash
-kubectl set image deployment/nats nats=nats:latest
+make helm-lint
+make helm-diff
 ```
 
-### 回滚
-
-如果升级出现问题，可以回滚到之前的版本：
+安装、升级和卸载：
 
 ```bash
-kubectl rollout undo deployment/stratum
+make helm-install
+make helm-upgrade
+make helm-uninstall
 ```
+
+Makefile 默认使用 `stratum` release 和 namespace；环境、镜像与 secret 配置以 Makefile 和 values 的当前定义为准。公开单机 demo 的完整操作见 [deployment/k3s-demo.md](deployment/k3s-demo.md)，Chart 字段说明见 [deployment/HELM_GUIDE.md](deployment/HELM_GUIDE.md)。
+
+## 配置与 Secrets
+
+Backend 的主要运行配置包括 PostgreSQL、Redis、NATS、Milvus、OTEL、OAuth/JWT、前端回调地址和 Memory pipeline 开关。准确字段与默认值以 `config/config.go`、Helm templates 和 `k8s/configmap.yaml` 为准。
+
+敏感值必须通过 Kubernetes Secret 或外部 secrets manager 注入。不要在 values、ConfigMap、文档或前端 `.env` 中放入真实 password、token、API key、JWT 私钥或私有 URL。仓库中的 `k8s/secret.example.yaml` 仅用于展示键名。
+
+LLM provider key 是 tenant-scoped 运行时设置，不是部署时共享的 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` 环境变量。当前运行时 provider 见 [LLM_INTEGRATION.md](LLM_INTEGRATION.md)。
+
+## 数据与迁移
+
+- public migrations：后端启动时从 `pkg/migration/sql/` 自动应用。
+- tenant schema：由 `pkg/storage/postgres/tenant_schema.sql` provision。
+- Milvus 依赖 etcd 与对象存储；生产部署需提供持久卷或外部服务。
+- 删除 Helm release 不等于安全删除外部数据库；升级前按运行环境执行 PostgreSQL、Milvus 和对象存储备份。
+
+详见 [DATA_PERSISTENCE.md](DATA_PERSISTENCE.md)。
+
+## 验证与回滚
+
+```bash
+kubectl -n stratum rollout status deployment/stratum
+kubectl -n stratum get pods,svc,ingress
+kubectl -n stratum port-forward svc/stratum 8080:8080
+curl -fsS http://localhost:8080/health
+```
+
+资源名称可能被 Helm fullname 覆盖；若命令中的名称不匹配，先用 `kubectl -n stratum get deploy,svc` 查询实际名称。
+
+回滚 Helm release：
+
+```bash
+helm -n stratum history stratum
+helm -n stratum rollback stratum <revision>
+```
+
+## 已知仓库差异
+
+`.github/workflows/deploy.yml` 当前仍使用 Go 1.22，而 `go.mod` 与主 CI 使用 Go 1.25。部署文档不把这项差异描述为已解决；修改 workflow 属于代码/CI 任务，不在本文档维护范围内。

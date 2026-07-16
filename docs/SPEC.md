@@ -1,18 +1,19 @@
 # SPEC: Stratum
 
-> Reverse-engineered specification — generated 2026-06-20 from branch `feat/ddd-refactor` (HEAD 14fb8b8)
-> Scope: backend (`api/`, `internal/`, `pkg/`, `cmd/`) — depth: deep
+> Reverse-engineered specification — refreshed 2026-07-16 from the current worktree
+> Scope: backend, frontend, deployment assets, configuration, migrations, and tests — depth: deep
 
 ## 1. Overview
 
 ### 1.1 Purpose
 
-Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go + DDD 8 bounded context，前端 React 18 + AntD 5。把 Agent 编排（ReAct）、Skill 网关、记忆系统、GraphRAG、MCP 协议、多租户 IAM 串成统一的运行链路，目标是「让团队自托管 AI Agent 平台，不依赖 SaaS」。
+Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go + DDD 9 bounded context，前端 React 18 + AntD 5。把 Agent 编排（ReAct）、Skill 网关、评估优化、记忆系统、GraphRAG、MCP 协议、多租户 IAM 串成统一的运行链路，目标是「让团队自托管 AI Agent 平台，不依赖 SaaS」。
 
 ### 1.2 Key Capabilities
 
 - Agent 编排：ReAct StateGraph，工具调用 / SSE 流式 / 中断恢复 / 历史会话回填
 - Skill Gateway：code（goja JS 沙箱）· llm · http 三类执行器，命名 `tenant_{id}_{name}` 隔离
+- Evaluation：suite/revision、异步评估 job、优化候选、实验阶段与反馈闭环
 - 记忆系统：PostgreSQL 持久化 + 三阶段 NATS 异步流水线（outbox → embedder → enricher）+ Token 预算/摘要压缩
 - GraphRAG：Milvus 向量检索，支持 vector / keyword / hybrid（RRF）三种检索模式
 - MCP 协议：stdio / http / sse 三种 transport，AuthType none/bearer/api_key/oauth2，自动重试
@@ -22,7 +23,7 @@ Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go +
 
 ### 1.3 Architecture Style
 
-分层 DDD 单体（Modular Monolith）。`api/http` 接入层 → `api/wiring.Container` 组合根 → 8 个 `internal/<ctx>/{domain,application,infrastructure}` bounded context → `pkg/` 无业务基础设施。跨 context 仅经消费者侧 `domain/port/` 接口 + wiring 层 thin adapter，禁止 import 兄弟 context 的 `application` / `infrastructure`。
+分层 DDD 单体（Modular Monolith）。`api/http` 接入层 → `api/wiring.Container` 组合根 → 9 个 `internal/<ctx>/{domain,application,infrastructure}` bounded context → `pkg/` 无业务基础设施。跨 context 仅经消费者侧 `domain/port/` 接口 + wiring 层 thin adapter，禁止 import 兄弟 context 的 `application` / `infrastructure`。
 
 ---
 
@@ -40,11 +41,11 @@ Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go +
 | OAuth | GitHub OAuth | — |
 | Migration | golang-migrate | v4 |
 | 日志 | Zap | — |
-| Tracing/Metrics | OpenTelemetry | v1.21 + Prometheus |
+| Tracing/Metrics | OpenTelemetry | v1.22 + Prometheus |
 | LLM Provider | Qwen（dashscope）· Zhipu | OpenAI-compat |
 | JS 沙箱 | goja | — |
-| 配置 | Viper | v1.18 |
-| 前端 | React 18 · Vite 4 · AntD 5.20 · React Router 6 · Axios · TanStack Query v5 · Zustand v5 · Zod · Recharts | — |
+| 配置 | `config/config.go` 环境变量读取 | stdlib `os` |
+| 前端 | React 18.3 · Vite 5.4 · AntD 5.20 · React Router 6.26 · Axios 1.7 · TanStack Query v5 · Zustand v5 · Zod · Recharts | — |
 
 ---
 
@@ -59,11 +60,11 @@ stratum/
 │   │   ├── middleware/         JWT · Tenant · Trace · Prometheus · ErrorHandler · RequireRole
 │   │   └── router.go           Gin 路由组装配
 │   └── wiring/
-│       ├── container.go        BuildContainer（组合根）+ Shutdown 逆序释放
+│       ├── wiring.go           Container / BuildContainer（组合根）+ Shutdown 逆序释放
 │       ├── memory.go           memory pipeline 装配
 │       ├── tenant_resolver.go  TenantCapabilityResolver（per-tenant gateway 解析）
 │       └── *.go                每域一个 wiring 文件
-├── internal/                    8 bounded contexts
+├── internal/                    9 bounded contexts
 │   ├── agent/                  ReAct StateGraph · Registry · ExecutionStore · ChatStore · BaseAgent
 │   │   └── application/graph/  StateGraph[T]・nodeLLM・nodeTool・条件边
 │   ├── memory/                 MemoryManager · MemoryRepo port · pipeline（outbox→embedder→enricher）
@@ -72,7 +73,8 @@ stratum/
 │   ├── mcp/                    MCPService · ServerManager · SkillRegistry · 三种 transport
 │   ├── iam/                    TenantService · AdminService · OnboardService · JWTService
 │   ├── llmgateway/             Gateway · TenantGatewayCache · openai_compat client
-│   └── platform/               Viper config · Harness 生命周期
+│   ├── evaluation/             suite/run/job · optimization · experiment · feedback
+│   └── platform/               Harness 生命周期与 runtime 启动编排
 ├── pkg/                         无业务基础设施
 │   ├── storage/{postgres,redis,milvus,tenantnaming,tenantdb}
 │   ├── messaging/nats
@@ -82,7 +84,7 @@ stratum/
 │   ├── migration               public schema 编号迁移
 │   ├── reqctx                  trace_id / tenant_id ctx propagation
 │   ├── httpclient · textchunk · ...
-├── cmd/server/main.go           ≤30 行，调用 wiring.BuildContainer 启动 Harness
+├── cmd/server/main.go           调用 wiring.BuildContainer 启动 Harness
 ├── web/                         React 前端（src/modules 按域）
 ├── docs/                        架构、部署、模块文档
 ├── helm/ k8s/ grafana/          部署与可观测性
@@ -97,15 +99,12 @@ stratum/
 
 | 表 | 关键字段 | 备注 |
 |----|---------|------|
-| `users` | id (UUID), github_id, github_login, avatar_url, global_role, created_at | OAuth 账号 |
+| `users` | id (UUID), github_id, github_login, avatar_url, global_role, is_guest, expires_at, created_at | OAuth 与临时访客账号 |
 | `tenants` | id, name, slug, plan(free\|pro\|enterprise), status, settings JSONB, is_default, deleted_at | settings 内置加密 `llm_api_keys` |
 | `tenant_members` | tenant_id, user_id, role(owner\|admin\|member), UNIQUE(tenant_id,user_id) | |
-| `invitations` | id, tenant_id, email, token_hash(sha256), invited_by, expires_at, accepted_at | TTL = `constants.InviteTokenTTL` |
 | `refresh_tokens` | id, user_id, token_hash(sha256), expires_at | |
-| `tenant_api_keys` | id, tenant_id, key_hash, name, scopes, expires_at | |
-| `audit_logs` | id, tenant_id, user_id, action, target, payload JSONB, created_at | |
-| `model_providers` | seeded: openai · anthropic · ollama | |
-| `models` | seeded: gpt-4o(-mini) · text-embedding-3-small · claude-{opus,sonnet,haiku}-4.x | |
+
+`invitations`、`tenant_api_keys`、`audit_logs`、`model_providers` 和 `models` 已由 migration 018 删除。当前公开模型目录来自 `internal/llmgateway/infrastructure/static_catalog.go`。
 
 ### 4.2 Tenant Schema（per-tenant，`SET LOCAL search_path = tenant_{id}, public`）
 
@@ -117,23 +116,27 @@ stratum/
 | | `agent_workspaces` | (agent_id, workspace_id) CASCADE |
 | | `agent_executions` | id UUID, status CHECK('success','error'), input/output_preview, total_tokens, duration_ms |
 | MCP | `mcp_configs` | id TEXT, transport, command/url, args/env/headers/auth_config/retry_config JSONB, timeout_sec DEFAULT 30 |
-| Skill | `skills` | id, name UNIQUE, type, config JSONB（type post-create immutable） |
+| Skill | `skills` | id, name UNIQUE, legacy type/config，active_version_id / draft_version_id |
+| | `skill_versions` · `skill_test_cases` · `skill_eval_runs` | capability/tool contract/implementation 快照、测试基线与评估记录 |
+| Evaluation | `eval_suites` · `eval_suite_revisions` · `eval_cases` | 评估集、冻结修订和用例 |
+| | `eval_runs` · `eval_case_results` · `evaluation_jobs` | 异步运行、逐例结果与租约 job |
+| | `optimization_jobs` · `optimization_candidates` | 优化任务与候选版本 |
+| | `evaluation_experiments` · `evaluation_deployments` · `evaluation_feedback` | 实验阶段、部署决策与反馈 |
 | Memory | `memory_entries` | id UUID v7, conversation_id FK, user_id, agent_id FK, role, content, type DEFAULT short_term, importance FLOAT8, tags TEXT[], keywords TEXT[], token_estimate, expires_at, enriched_at; GIN trgm on content |
-| | `entities` | id UUID v7, name, type, properties JSONB, confidence DEFAULT 0.5, user_id, agent_id, occurrence_count; UNIQUE(user_id, COALESCE(agent_id,''), name, type) |
-| | `entity_relations` | (from_id, to_id) CASCADE, relation, properties JSONB |
 | | `memory_outbox` | id BIGSERIAL, message_id NOT NULL, payload JSONB |
 | | `memory_summaries` | conversation_id FK, summary, covered_until, token_count |
-| | `memory_token_budgets` | conversation_id PK, accumulated, last_reset_at |
+| | `memory_facts` · `memory_entities` · `memory_extraction_queue` | Memory v2 事实、实体与提取队列 |
 | Chat | `chat_conversations` | id UUID, agent_id FK, user_id, name DEFAULT '新会话', expires_at DEFAULT now()+30d, deleted_at（软删） |
-| | `chat_messages` | id UUID v7, conversation_id FK CASCADE, role CHECK('user','agent'), content, steps_json JSONB, is_error |
+| | `chat_messages` | id UUID v7, conversation_id FK CASCADE, role CHECK('user','assistant'), content, steps_json JSONB, is_error |
 | Knowledge | `rag_workspaces` | id UUID, name UNIQUE, description, config JSONB |
 | | `knowledge_docs` | workspace_id FK CASCADE, title, content, source, metadata JSONB |
-| Sessions | `sessions` | id UUID, agent_id FK, user_id, started_at/ended_at |
-| Misc | `exec_history` · `llm_api_keys` · `model_presets` · `model_usage` · `model_quotas` · `prompt_templates` · `workflows` · `workflow_runs` · `scheduled_tasks` · `webhooks` · `webhook_deliveries` | 详见 `pkg/storage/postgres/tenant_schema.sql` |
+| Knowledge | `knowledge_chunks` · `knowledge_parent_chunks` | 文档分块、父块与全文检索字段 |
+
+`sessions`、`entities`、`entity_relations`、`memory_token_budgets`、`exec_history`、`llm_api_keys`、模型预设/配额、prompt/workflow/scheduled task/webhook 等旧表会在 tenant schema provisioning 时幂等删除。
 
 ### 4.3 Migration Timeline
 
-001 public baseline · 002 is_default_tenant · 003 global admin owner · 004/005 agent_executions add+move-to-tenant · 006 agent_skill_links · 007 name unique · 008 memory_pipeline · 009 agent_context_tokens · 010 soft_delete_conversations · 011 uuid_v7 func · 012 pgcrypto + recreate gen_uuid_v7 · 013 trgm index · 014 cascade-delete fixes
+001 public baseline · 002 is_default_tenant · 003 global admin owner · 004/005 agent_executions add+move-to-tenant · 006 agent_skill_links · 007 name unique · 008 memory_pipeline · 009 agent_context_tokens · 010 soft_delete_conversations · 011 uuid_v7 func · 012 pgcrypto · 013 trgm index · 014 cascade-delete fixes · 015 memory v2 marker · 016 agent memory enabled · 017 memory facts hard delete · 018 obsolete public tables cleanup · 019 guest accounts
 
 **多租户 DDL 规则**：编号迁移仅操作 public；引用 tenant-only 表的 DDL 必须放 `pkg/storage/postgres/tenant_schema.sql` 由 `ProvisionAllTenantSchemas` 幂等应用；新增列必须 `ALTER TABLE … ADD COLUMN IF NOT EXISTS` 做 backfill。
 
@@ -150,61 +153,38 @@ stratum/
 ### 4.5 State Transitions
 
 - **agent_executions.status**: `success` ⊕ `error`（CHECK）
-- **chat_messages.role**: `user` ⊕ `agent`（CHECK）
-- **chat_conversations**: live → soft-deleted（`deleted_at` 设值），TTL `expires_at`（默认 +30d）
+- **chat_messages.role**: `user` ⊕ `assistant`（CHECK）
+- **chat_conversations**: 用户删除与 Agent 清理走硬删除；`deleted_at` 兼容历史软删记录，清理任务同时回收过期和历史软删会话
 - **memory_entries.type**: `short_term` → `long_term`（pipeline enricher 提升）/ `entity` / `summary`
-- **invitations**: pending → accepted（设 `accepted_at`）/ expired（`expires_at` 到期）
 - **tenant_members.role**: `owner` ↔ `admin` ↔ `member`（owner-only 改写，禁 self-modify，admin 不能 remove admin）
+- **users guest lifecycle**: `is_guest=true` 且 `expires_at` 到期后由回收流程清理
 
 ---
 
 ## 5. API Surface
 
-### 5.1 HTTP（全部 `application/json` 除上传 multipart）
+### 5.1 HTTP（全部 `application/json`，文档上传除外）
 
-> Auth：JWT Bearer（middleware/jwt） · Tenant：`X-Tenant-ID` header（middleware/tenant 解析 + `inject_tenant` 设 `search_path`） · Role：部分接口 `RequireRole(owner/admin)`
+路由没有统一 `/api` 前缀。公开端点为 `GET /health`、`GET /metrics`、`GET /models`。Auth 路由只有在 GitHub client ID 和 JWT service 可用时注册。
 
-| 域 | Method | Path | 说明 |
-|----|--------|------|------|
-| Auth | GET | `/api/auth/github/login` | OAuth 跳转 |
-| | GET | `/api/auth/github/callback` | OAuth 回调，签发 access+refresh |
-| | POST | `/api/auth/refresh` | 刷新 access token |
-| | POST | `/api/auth/logout` | 撤销 refresh |
-| | GET | `/api/auth/me` | 当前用户 |
-| Onboard | POST | `/api/onboard/tenant` | 首次创建 tenant |
-| | POST | `/api/onboard/join` | 接受邀请加入 tenant |
-| Tenant | GET/POST/PATCH/DELETE | `/api/tenants` · `/api/tenants/:id` | 列表/创建/补丁/删除 |
-| | GET/POST/PATCH/DELETE | `/api/tenants/:id/members` · `/api/tenants/:id/members/:userId` | 成员管理（role rules 见 §8） |
-| | POST | `/api/tenants/:id/members/invite` | 邀请（返回 invitation_url） |
-| | GET/PUT | `/api/tenants/:id/settings` | settings + LLM API keys（屏蔽 6+8 bullets） |
-| | POST | `/api/tenants/:id/settings/embed-model` | set-once 写入 |
-| Admin | GET | `/api/admin/tenants` | 全局视图 |
-| | POST/DELETE | `/api/admin/users/:id/global-role` | 全局 admin/owner 管理 |
-| Agent | GET/POST/PATCH/DELETE | `/api/agents` · `/api/agents/:id` | CRUD |
-| | POST | `/api/agents/:id/execute` | 同步执行 |
-| | POST | `/api/agents/:id/execute-stream` | SSE 流式 |
-| | GET | `/api/agents/:id/executions` | 分页执行历史 |
-| Chat | GET/POST/PATCH/DELETE | `/api/agents/:id/conversations` · `/api/conversations/:cid` | 会话 CRUD（软删） |
-| | GET | `/api/conversations/:cid/messages` | 消息列表 |
-| Memory | POST | `/api/memory` | 添加 |
-| | GET | `/api/memory/:id` | 取单条 |
-| | DELETE | `/api/memory/:id` · `/api/memory/sessions/:sid` | 删/清空会话 |
-| | POST | `/api/memory/search` | 搜索（filters + min_score + limit） |
-| | GET | `/api/memory/stats` · `/api/memory/summary/:sid` | 统计 / 摘要 |
-| Knowledge | GET/POST/PATCH/DELETE | `/api/workspaces` · `/api/workspaces/:id` | Workspace CRUD（embedding_model/chunk_* 不可变） |
-| | POST | `/api/workspaces/:id/documents` | multipart 上传 |
-| | POST | `/api/workspaces/:id/query` | RAG 查询（mode∈{vector,graph,hybrid,keyword}） |
-| Skill | GET/POST/PATCH/DELETE | `/api/skills` · `/api/skills/:id` | type post-create immutable |
-| | POST | `/api/skills/:id/run` | 仅 type=code 可独立运行 |
-| MCP | GET/POST/DELETE | `/api/mcp/servers` · `/api/mcp/servers/:id` | Server 管理 |
-| | GET | `/api/mcp/servers/:id/tools` · `/resources` | 工具/资源目录 |
-| | POST | `/api/mcp/skills/refresh` | 重建 SkillRegistry |
-| | GET | `/api/mcp/status` | Server 连接概览（total/connected/disconnected/error） |
-| Health | GET | `/healthz` · `/readyz` · `/metrics` | 不走 auth |
+| 域 | 主要路径 | 权限摘要 |
+|----|----------|----------|
+| Auth | `/auth/github` · `/auth/github/callback` · `/auth/register` · `/auth/guest` · `/auth/refresh` · `/auth/logout` · `/auth/me` · `/auth/switch-tenant` · `/auth/create-tenant` | OAuth/register/guest 有限流；部分操作签发或刷新 JWT |
+| Admin | `/admin/tenants` · `/admin/tenants/:id` | global admin |
+| Tenant | `/tenant/list` · `/tenant/members` · `/tenant/members/:user_id/role` · `/tenant/settings` · `/tenant/embed-model` · `DELETE /tenant` | member 底线；设置写入需 active；删除 tenant 需 owner |
+| Agent | `/agents` · `/agents/:id` · `/agents/:id/execute` · `/agents/:id/execute/stream` · `/agents/executions` · execution trace 子路由 | member 可读/执行，admin 写；执行需 active + rate limit |
+| Chat | `/agents/:id/conversations` · `/conversations/:convID` · `/conversations/:convID/messages` | JWT + tenant context |
+| Skill | `/skills` · `/skills/:id` · `/skills/:id/workspace` · draft capability/contract/implementation · publish · test/test-draft | member 可读/测试，admin 写；运行需 active |
+| Evaluation | `/evaluations/suites` · publish · runs/jobs · optimizations · experiments/evaluate · feedback | admin 创建/查询评估控制面；active member 可提交 feedback |
+| Knowledge | `/knowledge/workspaces` · workspace stats/documents · `/knowledge/ingest` · `/knowledge/query` | member 读/查，admin 管理/摄取 |
+| MCP | `/mcp/servers` · server tools/resources/config/reconnect · `/mcp/tools/:toolId/execute` · `/mcp/skills` · `/mcp/status` | member 读/执行，admin 管理 server；写操作需 active |
+| Memory | `/memory` · `/memory/:id` · `/memory/clear` · `/memory/sessions` · `/memory/session/:session_id` · `/memory/stats` · `/memory/summary/:session_id` | JWT + tenant context + active tenant |
 
-### 5.2 SSE Stream（`/api/agents/:id/execute-stream`）
+完整方法与角色矩阵见 `docs/agent/api.md` 和 `api/http/router.go`。
 
-`event: token` `data: <chunk>` 每 LLM token 增量；`event: done` 结束；`event: error` 异常；客户端可中途断流，`context.WithoutCancel` 隔离 agent 执行不被 HTTP 取消打断。
+### 5.2 SSE Stream（`POST /agents/:id/execute/stream`）
+
+响应是 `text/event-stream`。handler 先写 heartbeat 注释帧，再用 `data: {"token":"..."}` 发送增量，最终发送含 `done=true`、output、steps 和 tokensUsed 的 JSON。客户端断开会取消执行；`context.WithoutCancel` 用于隔离内部 Stream/Memory 调用链的错误回流，而不是让已断开的执行无限后台运行。
 
 ### 5.3 Error Response
 
@@ -223,28 +203,25 @@ stratum/
 
 ## 6. Configuration
 
-> Viper（`internal/platform/config`），yaml + ENV override（双下划线分隔）。生产配置 `config/prod.yaml` 禁修改。
+> `config/config.go` 直接读取环境变量并应用默认值；当前没有 Viper/yaml 配置装载链。生产配置 `config/prod.yaml` 仍禁止修改。
 
 | Key | 必需 | 默认 | 说明 |
 |-----|------|------|------|
-| `SERVER_ADDR` | × | `:8080` | HTTP 监听 |
-| `SERVER_READ_TIMEOUT` / `WRITE_TIMEOUT` | × | 30s / 60s | |
-| `POSTGRES_DSN` | ✓ | — | `postgres://...` |
-| `REDIS_ADDR` / `PASSWORD` / `DB` | ✓ | — | |
-| `NATS_URL` | ✓ | `nats://localhost:4222` | JetStream |
-| `MILVUS_ADDR` | ✓ | `localhost:19530` | gRPC |
-| `NEO4J_URI` / `USER` / `PASSWORD` | ✓ | — | bolt://… |
-| `JWT_PRIVATE_KEY_PATH` / `PUBLIC_KEY_PATH` | ✓ | — | RS256 PEM |
-| `JWT_ACCESS_TTL` / `REFRESH_TTL` | × | 1h / 30d | |
-| `GITHUB_OAUTH_CLIENT_ID` / `SECRET` / `CALLBACK_URL` | ✓ | — | |
-| `FRONTEND_URL` | ✓ | — | invitation_url 拼接 |
-| `LLM_PROVIDER_DEFAULT` | × | `qwen` | qwen \| zhipu |
-| `QWEN_API_KEY` / `QWEN_BASE_URL` | per-tenant | dashscope endpoint | tenant settings 覆盖 |
-| `ZHIPU_API_KEY` / `ZHIPU_BASE_URL` | per-tenant | bigmodel endpoint | |
-| `CRYPTO_AES_KEY` | ✓ | — | 32-byte base64，加密 `tenant.settings.llm_api_keys` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | × | — | OTLP collector |
-| `LOG_LEVEL` / `LOG_ENV` | × | info / production | production→JSON，其他→console+color |
-| `GLOBAL_ADMIN_GITHUB_LOGIN` | × | — | OAuth 登录自动赋 global_role=admin |
+| `PORT` | × | `8080` | HTTP 监听端口 |
+| `POSTGRES_URL` | × | 本地 Compose DSN | PostgreSQL 连接串 |
+| `REDIS_URL` | × | `redis://localhost:6379` | Redis 连接串 |
+| `NATS_URL` | × | `nats://localhost:4222` | JetStream；Memory pipeline 复用 |
+| `MILVUS_HOST` / `MILVUS_PORT` | × | `localhost` / `19530` | Milvus gRPC |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | × | `http://localhost:4317` | OTLP collector |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | Auth 必需 | 空 | GitHub OAuth；client ID 为空时 auth routes 不注册 |
+| `JWT_PRIVATE_KEY_PEM` | Auth 必需 | 空 | RS256 PEM，同时作为 tenant LLM key 加密的密钥来源 |
+| `GITHUB_CALLBACK_URL` | × | `http://localhost:8080/auth/github/callback` | OAuth callback |
+| `FRONTEND_URL` | × | `http://localhost:3002` | CORS 与登录跳转 |
+| `GLOBAL_ADMIN_GITHUB_LOGIN` | × | `ArchChuan` | 全局管理员登录名 |
+| `SECURE_COOKIES` | × | false | 仅字符串 `true` 开启 |
+| `GLOBAL_AGENT_SYSTEM_PROMPT` | × | 空 | 全局 Agent system prompt |
+| `MEMORY_PIPELINE_ENABLED` | × | false | 启用异步记忆流水线 |
+| `MEMORY_ENRICH_MODEL` / `MEMORY_SUMMARY_MODEL` | × | `qwen-turbo` / `qwen-plus` | Memory pipeline 模型 |
 
 ---
 
@@ -267,23 +244,22 @@ stratum/
 
 1. **多租户隔离**：所有 tenant 资源走 `SET LOCAL search_path = tenant_{id}, public`；编号 migration 仅碰 public，per-tenant DDL 必须放 `tenant_schema.sql` 由 `ProvisionAllTenantSchemas` 幂等应用。
 2. **AI 不做控制逻辑**：路由 / 重试 / 状态机硬编码在 Go 层；LLM 仅做语言任务（生成、抽取）。
-3. **Agent 执行**：`context.WithTimeout(context.WithoutCancel(reqCtx), constants.AgentExecTimeout)` 让 SSE 中途断流不打断 agent；执行记录 fire-and-forget 写入。
-4. **Skill type 创建后不可变**；`code` 类型由 goja 沙箱执行，自动注入 `__tenant_id`，禁止裸 `eval`。
+3. **Agent 执行**：`ExecuteStream` 构造独立的限时 execution context；SSE handler 监听 client disconnect 并显式 cancel。执行记录写入 `agent_executions`。
+4. **Skill capability package**：draft 可编辑/测试；publish 冻结 capability、tool contract、implementation 和 test baseline；Agent 正常执行只解析 published contract。`code` implementation 由 goja 沙箱执行。
 5. **Workspace 不可变字段**：`embedding_model` / `chunk_size` / `chunk_overlap` 创建后只读（`MergeUpdate` 强制）。
 6. **Embed model**：tenant 级 set-once（`SetEmbedModel` 拒绝二次写入 → `ErrEmbedModelAlreadySet`）；agent 创建时未指定则继承 tenant default。
 7. **Tenant 角色规则**：
-   - `InviteMember` 需 owner 或 admin；token = sha256(rand 32 bytes)，TTL = `constants.InviteTokenTTL`
    - `UpdateMemberRole` 仅 owner，禁自我修改，目标必须非 owner
    - `RemoveMember` 仅 owner/admin，禁自删，禁删 owner，admin 不能删 admin
    - 默认 tenant `is_default=true` 不可删（`ErrDefaultTenantDelete`）
 8. **LLM API keys 加密**：AES-256-GCM 写入 `tenant.settings.llm_api_keys`；GET 返回 `mask = first6 + "••••••••"`；UPDATE 跳过 placeholder bullets，merge 已有 keys；写入后 `TenantGatewayCache.Invalidate(tenantID)`。
 9. **JWT**：RS256（拒绝非 RSA 签名方法）；claims `sub/tid/role/global_role/jti/ava/ghl`；refresh token sha256 入库。
-10. **Memory 范围**：用户级隔离（`(user_id, COALESCE(agent_id,''), name, type)` UNIQUE）；search 至少传 `tenant_id+user_id`；entries 默认 `type=short_term`，pipeline enricher 升级 `long_term`。
-11. **Memory pipeline**：写入 outbox（`message_id NOT NULL`）→ embedder 生成向量 → enricher 抽实体并 set `enriched_at`；token budget 累计到 `memory_token_budgets`，超阈值触发 summary 压缩存 `memory_summaries.covered_until`。
-12. **ReAct loop**：节点 `nodeLLM` ↔ `nodeTool` 条件边；LLM 每步 60s 超时 + `RetryFn(DefaultRetry)`；tool 30s 超时；`stratum_search_knowledge` topK clamp 到 `constants.MaxRAGTopK`；skill tool 名 `tenant_{id}_{name}`；`SkillToolIndex` 映射回 UUID。
+10. **Memory 范围**：entries/facts/entities 都按 tenant + user 隔离，并可进一步按 agent/scope 过滤；Memory v2 对 facts 使用硬删除语义。
+11. **Memory pipeline**：写入 outbox（`message_id NOT NULL`）→ embedder 生成向量 → enricher 写 `memory_facts` / `memory_entities` 并更新 entry；摘要写 `memory_summaries`。
+12. **ReAct loop**：节点 `nodeLLM` ↔ `nodeTool` 条件边；内置 knowledge/memory/continue-reasoning 工具硬编码处理；published Skill 工具通过 `SkillToolIndex` 映射到 `{SkillID, VersionID}`，旧配置才回退 `tenant_{id}_{name}`。
 13. **GraphRAG mode**：`vector` embed→Milvus search · `keyword` Milvus KeywordSearch · `hybrid` RRF（VectorStore.HybridSearch）；collection 命名 `tenantdb.WorkspaceCollection`，fallback `{workspace}_kb`。
 14. **MCP retry**：`RetryConfig{Enabled, MaxRetries, InitialDelayMs, MaxDelayMs, BackoffFactor}` 指数退避；transport 中 stdio/http/sse 三选一互斥。
-15. **Chat**：`role` CHECK ∈ {user, agent}；`steps_json` 存储 ReAct 步骤；`is_error` 标记；conversation `expires_at` 默认 +30 天，`deleted_at` 软删。
+15. **Chat**：`role` CHECK ∈ {user, assistant}；`steps_json` 存储 ReAct 步骤；`is_error` 标记；conversation `expires_at` 默认 +30 天；当前删除实现为硬删，`deleted_at` 仅兼容历史记录与清理。
 16. **Outbox 写入必须包含 `message_id`**（NOT NULL 无 DEFAULT），曾因漏列触发全量回滚。
 17. **错误分层**：`domain.Err*` → infrastructure 翻译 `pgconn.PgError` → application 编排 → middleware 中央表映射 HTTP 状态码；响应 `{"error":"..."}` 冻结。
 18. **生命周期**：`Harness` 顺序 Start，逆序 Stop；`Register` 在 Start 后锁定；组件实现 `Name/Start/Stop/HealthCheck`。
@@ -309,11 +285,11 @@ stratum/
 - **JWT**：RS256，公私钥分离，access 1h / refresh 30d；refresh token sha256 hash 入库
 - **OAuth**：GitHub，state CSRF 校验
 - **Schema 隔离**：`SET LOCAL search_path` 每请求重置，防跨租户读
-- **密钥管理**：Vault / AWS Secrets Manager（生产），禁入 git；`CRYPTO_AES_KEY` 加密 `tenant.settings.llm_api_keys`
+- **密钥管理**：Vault / AWS Secrets Manager（生产），禁入 git；当前 tenant LLM key 加密密钥从 JWT private key material 派生
 - **Token 存储**：前端 httpOnly cookie 或内存 Context，禁 localStorage
 - **输入校验**：DTO `binding` tag + service 层 domain 不变量自检
 - **Skill 沙箱**：goja JS 引擎，禁 `eval`，注入受限 globals
-- **审计**：`audit_logs` 记录关键写操作
+- **审计/追踪**：Agent 工具调用与执行事件写入 tenant-scoped `agent_tool_traces` / `agent_trace_events`
 
 ### 9.3 Error Handling
 
@@ -333,32 +309,30 @@ stratum/
 | 单元 | Go 内建 `testing` + 表驱动 | application/domain 层 100%，mock port 接口；目标覆盖率 ≥80% |
 | Repo 集成 | `pgxmock` / 真实 PG（`-tags=integration`） | infrastructure 层 SQL 翻译 |
 | HTTP 契约 | golden file（`api/http/testdata/contracts/*.golden.json`） | `contract_test.go` 守护 API 向后兼容 |
-| 前端 | Vitest（推断） | hooks / 组件单测 |
-| 端到端 | 缺 | 标记在 §11 Known Gaps |
+| 前端 | Vitest + Testing Library | hooks / 组件回归测试 |
+| 端到端 | Go e2e + Playwright | `test/e2e/` Memory 真实链路；`web/e2e/` 响应式用户流 |
 
 **约定**：
 
 - `mock` 所有外部依赖（NATS / Milvus / LLM provider）
 - `-race` 在完整 PR 跑：`go test -v -race -timeout 30s ./...`
 - 短测：`go test -short ./...` 排除集成 tag
-- AI 辅助测试必须给模板文件（如 `api/handler/tenant_handler_test.go`）
+- AI 辅助测试必须给模板文件（如 `api/http/handler/tenant_handler_test.go`）
 
 ---
 
 ## 11. Known Gaps & Assumptions
 
 - **Skill `llm` / `http` executor 未在本次扫描中读到完整实现**，仅确认 `code` 类型走 goja。
-- **前端测试覆盖未量化**（Vitest 框架推断自 Vite，`web/` 内未读 test 文件）。
+- **前端覆盖率未设置强制阈值**；当前已有 Vitest/Testing Library 与 Playwright 用例。
 - **MCP `oauth2` AuthType 实现深度未验证**（domain 字段已定义，token refresh 流程未细查）。
-- **没有发现 e2e / smoke 测试套件**（仅契约 golden + 单测）。
+- **e2e 覆盖尚非全域**：已有 Memory lifecycle 和前端响应式用户流，但 Agent/Skill/MCP/Knowledge/IAM 尚未都有独立的真实环境套件。
 - **`internal/agent/application/agent.go` 与 `registry.go` 内部细节未完整读**（BaseAgent.Execute 主体已通过 ReAct graph 间接确认）。
 - **OTEL trace 端到端串联**（HTTP→Agent→Skill→LLM）在 README 路线图标注为「待完成」。
 - **WASM Sandbox** 替代 goja 在 README 路线图标注为「待完成」。
-- **Workflow 引擎**（DAG + 长任务）路线图标注为待开发；表 `workflows` / `workflow_runs` 已建但消费侧逻辑未完整验证。
-- **`scheduled_tasks` 表存在但调度器实现未在主流程读到**。
+- **Workflow / scheduled task / webhook** 仍是路线图方向；对应旧 tenant tables 已由 provisioning 删除，当前没有可用运行时。
 - **多 LLM provider 扩展**（Anthropic / Ollama / 本地）路线图待办；当前仅 Qwen + Zhipu。
-- **审计日志写入点未穷举**（`audit_logs` 表存在，service 层调用密度未确认）。
-- **Webhook 投递 retry / dead letter** 流程未读到实现细节。
+- **通用业务审计日志** 尚无独立 `audit_logs` 表；当前可观察重点是 Agent execution/tool/trace 记录与结构化日志。
 - 假设：所有 `infrastructure/` 适配器都正确翻译 `pgconn.PgError → domain.Err*`（基于 error_mapping.go 反推，未逐文件核对）。
 
 ---
@@ -377,7 +351,7 @@ api/http/handler ─┐
 
 infrastructure（per-ctx）─→ implements domain/port
                           ├─→ pkg/storage/{postgres,redis,milvus}
-                          ├─→ pkg/messaging/nats
+                          ├─→ internal/memory/infrastructure/pipeline (NATS JetStream)
                           └─→ third-party drivers
 
 api/wiring ─→ application + infrastructure（组合根，唯一允许跨层装配的位置）
@@ -399,18 +373,16 @@ cd stratum
 cp .env.example .env  # 填入 GitHub OAuth、LLM Key、JWT keys
 
 # 2. 拉本地 infra（Postgres · Redis · NATS · Milvus）
-make dev-up
+make infra-up
+make infra-wait
 
-# 3. 运行 migration
-make migrate-up
-
-# 4. 启后端
+# 3. 启后端（启动时自动执行 public migration 与 tenant schema provisioning）
 make run        # :8080
 
-# 5. 启前端
-make fe-dev     # :3000
+# 4. 启前端
+make fe-dev     # :3002
 
-# 6. 完整 PR 校验
+# 5. 完整 PR 校验
 make be-fmt be-lint be-test
 make fe-lint fe-build
 ```
