@@ -1,0 +1,13 @@
+[Unit]
+Description=Capture an observation-only MCP process resource snapshot
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/mcp-governor snapshot --config %h/.config/mcp-governor/config.json
+UMask=0077
+NoNewPrivileges=yes
+# User-service filesystem namespacing also creates a user namespace on WSL,
+# which prevents observation of same-user processes through smaps_rollup.
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
