@@ -20,6 +20,8 @@ import type { User } from '@/modules/iam';
 type MenuItem = NonNullable<MenuProps['items']>[number];
 
 export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
+  const tenantRole = user?.role ?? user?.current_tenant?.role ?? 'member';
+  const canManageTenant = tenantRole === 'admin' || tenantRole === 'owner';
   const base: MenuItem[] = [
     { key: '/', icon: <DashboardOutlined />, label: <Link to="/">概览</Link> },
     { key: '/chat', icon: <CommentOutlined />, label: <Link to="/chat">Agent 对话</Link> },
@@ -29,11 +31,11 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       label: 'Agent',
       children: [
         { key: '/agents', icon: <RobotOutlined />, label: <Link to="/agents">Agent 列表</Link> },
-        {
+        canManageTenant ? {
           key: '/agents/create',
           icon: <PlusCircleOutlined />,
           label: <Link to="/agents/create">创建 Agent</Link>,
-        },
+        } : null,
         { key: '/history', icon: <HistoryOutlined />, label: <Link to="/history">执行历史</Link> },
       ],
     },
@@ -43,11 +45,11 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       label: '技能',
       children: [
         { key: '/skills', icon: <AppstoreOutlined />, label: <Link to="/skills">技能列表</Link> },
-        {
+        canManageTenant ? {
           key: '/skills/create',
           icon: <PlusCircleOutlined />,
           label: <Link to="/skills/create">创建技能</Link>,
-        },
+        } : null,
       ],
     },
     {
@@ -61,11 +63,11 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       label: 'MCP 服务器',
       children: [
         { key: '/mcp', icon: <ApiOutlined />, label: <Link to="/mcp">服务器列表</Link> },
-        {
+        canManageTenant ? {
           key: '/mcp/create',
           icon: <PlusCircleOutlined />,
           label: <Link to="/mcp/create">添加服务器</Link>,
-        },
+        } : null,
       ],
     },
   ];
