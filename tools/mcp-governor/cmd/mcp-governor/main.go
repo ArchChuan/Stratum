@@ -21,9 +21,13 @@ type scanner interface {
 }
 
 var (
-	currentTime = time.Now
-	userHomeDir = os.UserHomeDir
-	newScanner  = func(root string) scanner { return process.NewProcFS(root) }
+	currentTime    = time.Now
+	userHomeDir    = os.UserHomeDir
+	newScanner     = func(root string) scanner { return process.NewProcFS(root) }
+	createTempFile = os.CreateTemp
+	syncFile       = func(file *os.File) error { return file.Sync() }
+	renameFile     = os.Rename
+	syncDirectory  = syncDirectoryOS
 )
 
 type options struct {
@@ -89,11 +93,12 @@ func parseArgs(args []string) (options, error) {
 }
 
 func snapshot(opts options, stdout io.Writer) error {
-	home, err := userHomeDir()
+	resolvePath := newPathResolver()
+	var err error
+	opts.configPath, err = resolvePath(opts.configPath)
 	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
+		return err
 	}
-	opts.configPath = expandHome(opts.configPath, home)
 	file, err := os.Open(opts.configPath)
 	if err != nil {
 		return fmt.Errorf("open config: %w", err)
@@ -106,12 +111,20 @@ func snapshot(opts options, stdout io.Writer) error {
 	if closeErr != nil {
 		return fmt.Errorf("close config: %w", closeErr)
 	}
-	cfg.OutputPath = expandHome(cfg.OutputPath, home)
-	cfg.RegistryPath = expandHome(cfg.RegistryPath, home)
+	cfg.RegistryPath, err = resolvePath(cfg.RegistryPath)
+	if err != nil {
+		return err
+	}
 	if opts.outputSet {
-		opts.outputPath = expandHome(opts.outputPath, home)
+		opts.outputPath, err = resolvePath(opts.outputPath)
+		if err != nil {
+			return err
+		}
 	} else {
-		opts.outputPath = cfg.OutputPath
+		opts.outputPath, err = resolvePath(cfg.OutputPath)
+		if err != nil {
+			return err
+		}
 	}
 
 	rules := make([]process.Rule, len(cfg.Services))
@@ -190,11 +203,23 @@ func readRegistry(path string) ([]process.Registration, error) {
 	return registry.Registrations, nil
 }
 
-func expandHome(path, home string) string {
-	if strings.HasPrefix(path, "%h/") {
-		return filepath.Join(home, strings.TrimPrefix(path, "%h/"))
+func newPathResolver() func(string) (string, error) {
+	var home string
+	var resolved bool
+	return func(path string) (string, error) {
+		if !strings.HasPrefix(path, "%h/") {
+			return path, nil
+		}
+		if !resolved {
+			var err error
+			home, err = userHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("resolve home directory: %w", err)
+			}
+			resolved = true
+		}
+		return filepath.Join(home, strings.TrimPrefix(path, "%h/")), nil
 	}
-	return path
 }
 
 func writeAtomic(path string, data []byte) (resultErr error) {
@@ -202,7 +227,7 @@ func writeAtomic(path string, data []byte) (resultErr error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
-	temp, err := os.CreateTemp(dir, ".mcp-governor-*")
+	temp, err := createTempFile(dir, ".mcp-governor-*")
 	if err != nil {
 		return fmt.Errorf("create temporary snapshot: %w", err)
 	}
@@ -219,7 +244,7 @@ func writeAtomic(path string, data []byte) (resultErr error) {
 	if _, err := temp.Write(data); err != nil {
 		return fmt.Errorf("write temporary snapshot: %w", err)
 	}
-	if err := temp.Sync(); err != nil {
+	if err := syncFile(temp); err != nil {
 		return fmt.Errorf("sync temporary snapshot: %w", err)
 	}
 	if err := temp.Close(); err != nil {
@@ -228,9 +253,16 @@ func writeAtomic(path string, data []byte) (resultErr error) {
 	if err := os.Chmod(tempPath, 0o600); err != nil {
 		return fmt.Errorf("set snapshot permissions: %w", err)
 	}
-	if err := os.Rename(tempPath, path); err != nil {
+	if err := renameFile(tempPath, path); err != nil {
 		return fmt.Errorf("replace snapshot: %w", err)
 	}
+	if err := syncDirectory(dir); err != nil {
+		return err
+	}
+	return nil
+}
+
+func syncDirectoryOS(dir string) error {
 	directory, err := os.Open(dir)
 	if err != nil {
 		return fmt.Errorf("open output directory: %w", err)

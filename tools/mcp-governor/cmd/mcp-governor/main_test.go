@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,9 +164,155 @@ func TestRunExpandsHomeAndAtomicallyWritesPrivateFile(t *testing.T) {
 	}
 }
 
+func TestRunOnlyResolvesHomeForPlaceholderPaths(t *testing.T) {
+	root := t.TempDir()
+	writeProcessFixture(t, root, "42", []string{"chroma-mcp", "--client-type"})
+	configPath := writeConfig(t, root, filepath.Join(root, "registry.json"), "%h/unused-config-output.json")
+	oldHome := userHomeDir
+	userHomeDir = func() (string, error) { return "", errors.New("home unavailable") }
+	t.Cleanup(func() { userHomeDir = oldHome })
+
+	if code := run([]string{"snapshot", "--config", configPath, "--proc-root", root, "--output", "-"}, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
+		t.Fatalf("absolute paths unexpectedly required home: exit %d", code)
+	}
+	placeholderConfig := filepath.Join(root, "placeholder.json")
+	data := strings.ReplaceAll(string(mustReadFile(t, configPath)), filepath.Join(root, "registry.json"), "%h/registry.json")
+	writeFile(t, placeholderConfig, []byte(data), 0o600)
+	var stderr bytes.Buffer
+	if code := run([]string{"snapshot", "--config", placeholderConfig, "--proc-root", root, "--output", "-"}, &bytes.Buffer{}, &stderr); code != 1 || !strings.Contains(stderr.String(), "resolve home directory") {
+		t.Fatalf("placeholder exit=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestRunProducesIdenticalJSONForReversedInputs(t *testing.T) {
+	root := t.TempDir()
+	writeProcessFixture(t, root, "42", []string{"chroma-mcp", "--client-type"})
+	writeProcessFixture(t, root, "43", []string{"chroma-mcp", "--client-type"})
+	for _, pid := range []string{"42", "43"} {
+		if err := os.Remove(filepath.Join(root, pid, "smaps_rollup")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registryPath := filepath.Join(root, "registry.json")
+	configPath := writeConfig(t, root, registryPath, "ignored")
+	registrations := []process.Registration{
+		registration(process.Identity{PID: 42, StartTicks: 123}, process.Identity{PID: 100, StartTicks: 1}),
+		registration(process.Identity{PID: 43, StartTicks: 123}, process.Identity{PID: 101, StartTicks: 1}),
+	}
+	useDependencies(t, fixedTime, "/unused", nil)
+
+	runOrdered := func(pids []int, registrations []process.Registration) []byte {
+		writeRegistry(t, registryPath, registrations)
+		oldFactory := newScanner
+		newScanner = func(string) scanner { return &orderedScanner{pids: pids, proc: process.NewProcFS(root)} }
+		defer func() { newScanner = oldFactory }()
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{"snapshot", "--config", configPath, "--proc-root", root, "--output", "-"}, &stdout, &stderr); code != 0 {
+			t.Fatalf("run returned %d: %s", code, stderr.String())
+		}
+		return append([]byte(nil), stdout.Bytes()...)
+	}
+	forward := runOrdered([]int{42, 43}, registrations)
+	reverse := runOrdered([]int{43, 42}, []process.Registration{registrations[1], registrations[0]})
+	if !bytes.Equal(forward, reverse) {
+		t.Fatalf("JSON differs by input order:\n%s\n%s", forward, reverse)
+	}
+}
+
+func TestRunUsesAllSuccessfulProcessesForLiveClientIdentity(t *testing.T) {
+	root := t.TempDir()
+	writeProcessFixture(t, root, "42", []string{"chroma-mcp", "--client-type"})
+	writeProcessFixture(t, root, "90", []string{"unclassified-client"})
+	registryPath := filepath.Join(root, "registry.json")
+	configPath := writeConfig(t, root, registryPath, "ignored")
+	reg := registration(process.Identity{PID: 42, StartTicks: 123}, process.Identity{PID: 90, StartTicks: 123})
+	writeRegistry(t, registryPath, []process.Registration{reg})
+	useDependencies(t, fixedTime, "/unused", nil)
+
+	read := func() process.Process {
+		var stdout bytes.Buffer
+		if code := run([]string{"snapshot", "--config", configPath, "--proc-root", root, "--output", "-"}, &stdout, &bytes.Buffer{}); code != 0 {
+			t.Fatalf("run returned %d", code)
+		}
+		var snapshot process.Snapshot
+		if err := json.Unmarshal(stdout.Bytes(), &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		return snapshot.Processes[0]
+	}
+	child := read()
+	if !child.Registered || child.Orphan {
+		t.Fatalf("exact live client: %+v", child)
+	}
+	writeStatFixture(t, root, "90", 999)
+	child = read()
+	if !child.Registered || !child.Orphan {
+		t.Fatalf("reused client PID: %+v", child)
+	}
+}
+
+func TestWriteAtomicRenameFailurePreservesDestinationAndCleansTemp(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "snapshot.json")
+	writeFile(t, destination, []byte("old"), 0o600)
+	oldCreate, oldRename := createTempFile, renameFile
+	var tempDir string
+	createTempFile = func(dir, pattern string) (*os.File, error) {
+		tempDir = dir
+		return os.CreateTemp(dir, pattern)
+	}
+	renameFile = func(string, string) error { return errors.New("rename failed") }
+	t.Cleanup(func() { createTempFile, renameFile = oldCreate, oldRename })
+
+	if err := writeAtomic(destination, []byte("new")); err == nil {
+		t.Fatal("writeAtomic succeeded")
+	}
+	if tempDir != dir || string(mustReadFile(t, destination)) != "old" {
+		t.Fatalf("tempDir=%q destination=%q", tempDir, mustReadFile(t, destination))
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "snapshot.json" {
+		t.Fatalf("temporary file leaked: %+v", entries)
+	}
+}
+
+func TestWriteAtomicSyncsFileBeforeRenameAndDirectoryAfter(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "snapshot.json")
+	oldSyncFile, oldRename, oldSyncDir := syncFile, renameFile, syncDirectory
+	var operations []string
+	syncFile = func(file *os.File) error { operations = append(operations, "file-sync"); return file.Sync() }
+	renameFile = func(old, new string) error { operations = append(operations, "rename"); return os.Rename(old, new) }
+	syncDirectory = func(path string) error {
+		operations = append(operations, "directory-sync")
+		return syncDirectoryOS(path)
+	}
+	t.Cleanup(func() { syncFile, renameFile, syncDirectory = oldSyncFile, oldRename, oldSyncDir })
+
+	if err := writeAtomic(destination, []byte("snapshot")); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(operations, ","); got != "file-sync,rename,directory-sync" {
+		t.Fatalf("operation order = %q", got)
+	}
+}
+
 type fakeScanner struct {
 	pids []int
 	proc *process.ProcFS
+}
+
+type orderedScanner struct {
+	pids []int
+	proc *process.ProcFS
+}
+
+func (s *orderedScanner) ListPIDs() ([]int, error) { return s.pids, nil }
+func (s *orderedScanner) ReadProcess(pid int) (process.Process, []string, error) {
+	return s.proc.ReadProcess(pid)
 }
 
 func (f *fakeScanner) ListPIDs() ([]int, error) { return f.pids, nil }
@@ -207,10 +354,38 @@ func writeProcessFixture(t *testing.T, root, pid string, args []string) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(dir, "stat"), []byte(pid+" (node) S 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 123 0\n"), 0o600)
+	writeStatFixture(t, root, pid, 123)
 	writeFile(t, filepath.Join(dir, "status"), []byte("Name:\tnode\nPPid:\t1\nVmRSS:\t10 kB\n"), 0o600)
 	writeFile(t, filepath.Join(dir, "cmdline"), []byte(strings.Join(args, "\x00")+"\x00"), 0o600)
 	writeFile(t, filepath.Join(dir, "smaps_rollup"), []byte("Rss: 10 kB\nPss: 8 kB\nPrivate_Clean: 2 kB\nPrivate_Dirty: 3 kB\n"), 0o600)
+}
+
+func writeStatFixture(t *testing.T, root, pid string, startTicks uint64) {
+	t.Helper()
+	data := fmt.Sprintf("%s (node) S 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 %d 0\n", pid, startTicks)
+	writeFile(t, filepath.Join(root, pid, "stat"), []byte(data), 0o600)
+}
+
+func registration(identity, client process.Identity) process.Registration {
+	return process.Registration{Identity: identity, Client: client, Service: "chroma", ConnectedAt: fixedTime.Add(-time.Minute)}
+}
+
+func writeRegistry(t *testing.T, path string, registrations []process.Registration) {
+	t.Helper()
+	data, err := json.Marshal(process.Registry{Version: 1, Registrations: registrations})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, data, 0o600)
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func writeFile(t *testing.T, path string, data []byte, mode os.FileMode) {
