@@ -19,7 +19,7 @@ internal/
   iam/{domain,application,infrastructure}
                             - 多租户 IAM：Tenant / Admin / JWT / OAuth / OnBoard
   knowledge/{domain,application,infrastructure}
-                            - Knowledge RAG：WorkspaceService、RAGService、文档摄取
+                            - GraphRAG：WorkspaceService、RAGService、文档摄取
   llmgateway/{domain,application,infrastructure}
                             - LLM 统一网关（Qwen/Zhipu OpenAI-compatible）、ModelService
   evaluation/{domain,application,infrastructure}
@@ -39,7 +39,7 @@ pkg/
   storage/{milvus,postgres,redis}
                            - 各存储驱动封装（pgxpool · go-redis · Milvus SDK）
   tenantdb/                - 租户 context、schema 路由、ExecTenant 辅助函数
-  vector/                  - `pkg/storage/milvus` 的兼容 re-export；现有 Knowledge/Memory 仍有引用
+  vector/                  - `pkg/storage/milvus` 的兼容 re-export；新代码禁止继续引用
   migration/               - PostgreSQL public schema 迁移（golang-migrate）
   httpclient/              - 带重试/超时的 HTTP 客户端封装
   textchunk/               - 文本分块（Chunker）
@@ -57,7 +57,7 @@ grafana/                    - Grafana 数据源 + 仪表板配置
 | Go | 1.25.0 | 泛型，slog 兼容 |
 | Gin | v1.9+ | 路由组 `r.Group`，middleware 在 router.go 注册 |
 | NATS | v1.51 | JetStream 模式；memory pipeline 用 `nats.go/jetstream` 包直接操作 |
-| Milvus SDK | v2.4.2 | 主实现位于 `pkg/storage/milvus`；`pkg/vector` 提供兼容别名且仍有现有调用方 |
+| Milvus SDK | v2.4.2 | 主实现位于 `pkg/storage/milvus`；`pkg/vector` 仅兼容旧 import |
 | pgx | v5.x | pgxpool，事务内用 `SET LOCAL search_path` 切换租户 |
 | go-redis | v9.x | `redis.NewClient`，context-aware API |
 | Zap | v1.26+ | 生产用 `NewProduction()`，开发用 `NewDevelopment()` |

@@ -341,6 +341,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			AgentMemoryScope:           memoryScope,
 			RAGSearchFn:                cfg.RAGSearchFn,
 			MaxLLMSteps:                cfg.MaxSteps,
+			MaxContextTokens:           maxTokens,
 		}
 		if a.RecallMemoryFn != nil {
 			fn := a.RecallMemoryFn
@@ -463,6 +464,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			AgentMemoryScope:           memoryScope,
 			RAGSearchFn:                cfg.RAGSearchFn,
 			MaxLLMSteps:                cfg.MaxSteps,
+			MaxContextTokens:           maxTokens,
 			StuckThreshold:             stuckThreshold,
 			CheckpointEnabled:          a.CheckpointEnabled,
 		}

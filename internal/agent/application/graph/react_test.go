@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/tokenutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -37,6 +40,135 @@ func TestBuildReActGraph_DestructiveToolPausesBeforeExecution(t *testing.T) {
 	require.True(t, errors.As(err, &approvalErr))
 	require.Equal(t, "delete_order", approvalErr.ToolName)
 	require.False(t, executed)
+}
+
+func TestBuildReActGraph_FinalInstructionFitsContextBudget(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{{Content: "done"}}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	messages := []port.LLMMessage{
+		{Role: "system", Content: "system"},
+		{Role: "user", Content: "task"},
+	}
+	for i := 0; i < 8; i++ {
+		messages = append(messages, port.LLMMessage{Role: "assistant", Content: strings.Repeat("x", 700)})
+	}
+
+	const budget = 800
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		Model:            "qwen",
+		Messages:         messages,
+		MaxLLMSteps:      1,
+		MaxContextTokens: budget,
+	}, graph.RunConfig{MaxSteps: 2})
+	require.NoError(t, err)
+	require.Len(t, stub.llmReqs, 1)
+
+	reqMessages := stub.llmReqs[0].Messages
+	joined, err := json.Marshal(reqMessages)
+	require.NoError(t, err)
+	require.Contains(t, string(joined), "maximum reasoning steps")
+
+	estimate := make([]tokenutil.Message, len(reqMessages))
+	for i, message := range reqMessages {
+		estimate[i] = tokenutil.Message{Role: message.Role, Content: message.Content}
+	}
+	wantMax := int(float64(budget) * constants.LoopCompactionSafetyRatio)
+	require.LessOrEqual(t, tokenutil.EstimateMessages(estimate), wantMax)
+}
+
+func TestBuildReActGraph_FinalInstructionDoesNotReplaceCurrentTask(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{{Content: "done"}}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	messages := []port.LLMMessage{{Role: "system", Content: "system"}, {Role: "user", Content: "old request"}}
+	for i := 0; i < 8; i++ {
+		messages = append(messages, port.LLMMessage{Role: "assistant", Content: strings.Repeat("history", 120)})
+	}
+	messages = append(messages, port.LLMMessage{Role: "user", Content: "CURRENT TASK"})
+
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		Model: "qwen", Messages: messages, MaxLLMSteps: 1, MaxContextTokens: 800,
+	}, graph.RunConfig{MaxSteps: 2})
+	require.NoError(t, err)
+	reqMessages := stub.llmReqs[0].Messages
+	encoded, err := json.Marshal(reqMessages)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), "CURRENT TASK")
+	require.Contains(t, string(encoded), "maximum reasoning steps")
+	require.Contains(t, reqMessages[len(reqMessages)-1].Content, "maximum reasoning steps")
+}
+
+func TestBuildReActGraph_ReservesContextBudgetForToolSchemas(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{{Content: "done"}}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	messages := []port.LLMMessage{{Role: "system", Content: "system"}, {Role: "user", Content: "task"}}
+	for i := 0; i < 8; i++ {
+		messages = append(messages, port.LLMMessage{Role: "assistant", Content: strings.Repeat("x", 700)})
+	}
+	tools := []port.ToolDefinition{{
+		Name: "search", Description: strings.Repeat("tool description ", 30),
+		InputSchema: map[string]any{"type": "object", "properties": map[string]any{
+			"query": map[string]any{"type": "string", "description": strings.Repeat("query details ", 30)},
+		}},
+	}}
+
+	const budget = 1000
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		Model: "qwen", Messages: messages, AvailableTools: tools, MaxContextTokens: budget,
+	}, graph.RunConfig{MaxSteps: 2})
+	require.NoError(t, err)
+	require.Len(t, stub.llmReqs, 1)
+
+	req := stub.llmReqs[0]
+	estimate := make([]tokenutil.Message, len(req.Messages))
+	for i, message := range req.Messages {
+		estimate[i] = tokenutil.Message{Role: message.Role, Content: message.Content}
+	}
+	toolJSON, err := json.Marshal(req.Tools)
+	require.NoError(t, err)
+	total := tokenutil.EstimateMessages(estimate) + tokenutil.EstimateText(string(toolJSON))
+	require.LessOrEqual(t, total, int(float64(budget)*constants.LoopCompactionSafetyRatio))
+}
+
+func TestBuildReActGraph_DropsToolsThatConsumeMessageAllowance(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{{Content: "done"}}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	const budget = 800
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		Model: "qwen", MaxContextTokens: budget,
+		Messages: []port.LLMMessage{{Role: "system", Content: "system"}, {Role: "user", Content: "CURRENT TASK"}},
+		AvailableTools: []port.ToolDefinition{{
+			Name: "oversized", Description: strings.Repeat("schema", 1000),
+			InputSchema: map[string]any{"type": "object"},
+		}},
+	}, graph.RunConfig{MaxSteps: 2})
+	require.NoError(t, err)
+	require.Empty(t, stub.llmReqs[0].Tools)
+	require.Equal(t, "CURRENT TASK", stub.llmReqs[0].Messages[len(stub.llmReqs[0].Messages)-1].Content)
+}
+
+func TestBuildReActGraph_KeepsLargeToolWhenActualPromptStillFits(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{{Content: "done"}}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		Model: "qwen", MaxContextTokens: 1000,
+		Messages: []port.LLMMessage{{Role: "user", Content: "short task"}},
+		AvailableTools: []port.ToolDefinition{{
+			Name: "large_but_usable", Description: strings.Repeat("schema", 310),
+			InputSchema: map[string]any{"type": "object"},
+		}},
+	}, graph.RunConfig{MaxSteps: 2})
+	require.NoError(t, err)
+	require.Len(t, stub.llmReqs[0].Tools, 1)
 }
 
 func TestBuildReActGraph_UnclassifiedToolAlsoRequiresApproval(t *testing.T) {

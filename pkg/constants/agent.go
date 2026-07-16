@@ -16,4 +16,12 @@ const (
 	MaxPlanSteps = 10
 	// DefaultStepMaxLLMSteps is the LLM budget for each sub-step ReAct execution.
 	DefaultStepMaxLLMSteps = 3
+
+	// LoopCompactionRecentGroups is the number of most-recent message groups
+	// (a group = one assistant turn plus its paired tool results) kept verbatim
+	// during in-loop compaction. Older groups are summarized or dropped.
+	LoopCompactionRecentGroups = 3
+	// LoopCompactionSafetyRatio triggers compaction before the hard token ceiling,
+	// leaving margin for the EstimateText heuristic error (<20%).
+	LoopCompactionSafetyRatio = 0.8
 )

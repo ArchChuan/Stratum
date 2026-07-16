@@ -30,12 +30,15 @@ sequenceDiagram
         MCP-->>Loop: observation
     end
     Loop->>LLM: observations
+    opt loop context reaches 80% safety threshold
+        Loop->>Loop: keep anchors + recent tool groups; elide older groups atomically
+    end
     LLM-->>Loop: final answer tokens
     Loop->>DB: execution + tool traces + trace events
     API-->>UI: SSE done
 ```
 
-初始请求由 `BuildContextMessages` 按 `MaxContextTokens` 和历史窗口组装：当前输入优先，system prompt 保留预算，memory 最多使用剩余预算的 30%，历史消息超限时从最老消息开始删除。当前循环内没有额外的上下文压缩或摘要实现。
+上下文实际处理规则：初始请求按 `MaxContextTokens` 和历史窗口从最老消息开始截断；循环内请求达到预算的 80% 后，只压缩发送给 LLM 的消息副本，保留开头的 system/user 锚点与最近 3 个完整消息组。当前 wiring 没有注入 `HistoryCompactor`，因此较早轮次以“已省略 N 轮”标记替代；数据库会话历史和 trace 不被裁剪。
 
 ## Approval Run
 

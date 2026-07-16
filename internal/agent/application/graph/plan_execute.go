@@ -538,6 +538,8 @@ func buildStepState(parent ReActState, step domain.PlanStep, stepIdx int, result
 		AgentMemoryScope:           parent.AgentMemoryScope,
 		Messages:                   msgs,
 		MaxLLMSteps:                constants.DefaultStepMaxLLMSteps,
+		MaxContextTokens:           parent.MaxContextTokens,
+		HistoryCompactor:           parent.HistoryCompactor,
 		RAGSearchFn:                parent.RAGSearchFn,
 		RecallMemoryFn:             parent.RecallMemoryFn,
 		// No StuckThreshold — sub-steps use pure ReAct, no nested planning.
