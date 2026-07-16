@@ -219,18 +219,36 @@ for resource in memory cpu io; do
 done
 ```
 
-For the recommended 24-hour evidence window, preserve private samples and emit
-only aggregate values. This deliberately runs one observation per minute and
-does not print process arguments:
+For the recommended 24-hour evidence window, preserve 1,441 private samples
+separated by approximately one minute and emit only aggregate values. The
+collector rejects failed, malformed, or stale observations and verifies at
+least 24 hours of coverage from the first and last captured timestamps. It does
+not print process arguments:
 
 ```sh
+set -euo pipefail
+umask 077
 evidence_dir=$(mktemp -d "$HOME/.local/state/mcp-governor/evidence.XXXXXX")
 chmod 0700 "$evidence_dir"
-for sample in $(seq -w 1 1440); do
+source_snapshot="$HOME/.local/state/mcp-governor/snapshot.json"
+metrics="$evidence_dir/metrics.tsv"
+: >"$metrics"
+chmod 0600 "$metrics"
+previous_captured_at=$(jq -er '.captured_at // empty' "$source_snapshot" \
+  2>/dev/null || true)
+
+for sample_number in $(seq 1 1441); do
+  sample=$(printf '%04d' "$sample_number")
   systemctl --user start mcp-governor-observe.service
+  test -f "$source_snapshot"
+  captured_at=$(jq -er '
+    select(.version == 1 and .mode == "observe") |
+    .captured_at | select(type == "string" and length > 0)' "$source_snapshot")
+  test "$captured_at" != "$previous_captured_at"
+
   snapshot="$evidence_dir/$sample.json"
-  cp "$HOME/.local/state/mcp-governor/snapshot.json" "$snapshot"
-  chmod 0600 "$snapshot"
+  install -m 0600 "$source_snapshot" "$snapshot"
+  test "$(jq -er '.captured_at' "$snapshot")" = "$captured_at"
   jq -r '(.processes | map({key:(.pid|tostring),value:true}) |
       from_entries) as $pids |
     ([.warnings[] |
@@ -238,9 +256,42 @@ for sample in $(seq -w 1 1440); do
       select(. != null and $pids[.pid])] | length) as $classified_warnings |
     [.captured_at, (.services|map(.processes)|add),
      (.services|map(.pss_bytes)|add), (.services|map(.uss_bytes)|add),
-     $classified_warnings] | @tsv' "$snapshot" >>"$evidence_dir/metrics.tsv"
-  sleep 60
+     $classified_warnings] | @tsv' "$snapshot" >>"$metrics"
+  previous_captured_at=$captured_at
+  if test "$sample_number" -lt 1441; then sleep 60; fi
 done
+
+first_captured_at=$(awk 'NR == 1 {print $1}' "$metrics")
+last_captured_at=$(awk 'END {print $1}' "$metrics")
+coverage_seconds=$((
+  $(date -d "$last_captured_at" +%s) - $(date -d "$first_captured_at" +%s)
+))
+test "$coverage_seconds" -ge 86400
+printf 'samples=1441 coverage_seconds=%s first=%s last=%s\n' \
+  "$coverage_seconds" "$first_captured_at" "$last_captured_at"
+```
+
+The freshness guard can be reproduced without invoking the service or touching
+the live snapshot. This fixture deliberately reuses its previous timestamp; a
+successful check would be an error:
+
+```sh
+set -euo pipefail
+umask 077
+fixture=$(mktemp)
+trap 'rm -f "$fixture"' EXIT
+printf '%s\n' '{"version":1,"mode":"observe","captured_at":"2026-01-01T00:00:00Z"}' \
+  >"$fixture"
+chmod 0600 "$fixture"
+previous_captured_at=2026-01-01T00:00:00Z
+captured_at=$(jq -er '
+  select(.version == 1 and .mode == "observe") |
+  .captured_at | select(type == "string" and length > 0)' "$fixture")
+if test "$captured_at" != "$previous_captured_at"; then
+  printf 'ERROR: stale fixture was accepted\n' >&2
+  exit 1
+fi
+printf 'stale snapshot rejected\n'
 ```
 
 ## Ownership and reclaimability
@@ -258,9 +309,9 @@ are explicitly **not reclaimable** without registry-backed ownership.
 
 ## Preliminary recommendations
 
-MemoryHigh, MemoryMax, and TasksMax values are deferred. A two-point sample,
-with only one authoritative PSS/USS point, cannot establish peaks, and no limit
-should be placed below observed active PSS plus a documented safety margin.
+MemoryHigh, MemoryMax, and TasksMax values are deferred. Two authoritative
+PSS/USS points cannot establish peaks, and no limit should be placed below
+observed active PSS plus a documented safety margin.
 Collect scheduled, ownership-aware samples at one-minute cadence for at least 24
 hours, including normal peak activity, then derive MemoryHigh from a high
 percentile plus headroom and MemoryMax from the observed peak plus a larger
