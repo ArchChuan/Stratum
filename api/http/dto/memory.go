@@ -2,6 +2,31 @@
 
 package dto
 
+import "time"
+
+// CreateMemoryRequest is the canonical request body for POST /memory.
+// Tenant and user identity are deliberately absent and come from auth context.
+type CreateMemoryRequest struct {
+	AgentID        string   `json:"agent_id"`
+	ConversationID string   `json:"conversation_id"`
+	Content        string   `json:"content" binding:"required"`
+	Importance     float64  `json:"importance"`
+	EntityNames    []string `json:"entity_names"`
+}
+
+// MemoryFactResponse is the canonical fact shape returned by /memory endpoints.
+type MemoryFactResponse struct {
+	ID             string    `json:"id"`
+	AgentID        string    `json:"agent_id,omitempty"`
+	ConversationID string    `json:"conversation_id,omitempty"`
+	Scope          string    `json:"scope"`
+	Content        string    `json:"content"`
+	Importance     float64   `json:"importance"`
+	EntityNames    []string  `json:"entity_names"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
 // MemoryEntryResponse is the canonical entry shape returned by /memory endpoints.
 type MemoryEntryResponse struct {
 	ID         string                 `json:"id"`
