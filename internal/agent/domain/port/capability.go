@@ -24,8 +24,7 @@ type Adapter interface {
 type CapabilityType string
 
 const (
-	CapLLM   CapabilityType = "llm"
-	CapSkill CapabilityType = "skill"
+	CapLLM CapabilityType = "llm"
 )
 
 type CapabilityRequest struct {
@@ -33,7 +32,6 @@ type CapabilityRequest struct {
 	TenantID    string
 	Type        CapabilityType
 	LLM         *LLMCapRequest
-	Skill       *SkillCapRequest
 	Timeout     time.Duration
 	LLMAPIKeys  map[string]string
 	TokenStream func(string)
@@ -44,10 +42,6 @@ func (r CapabilityRequest) Validate() error {
 	case CapLLM:
 		if r.LLM == nil {
 			return fmt.Errorf("capability: LLM request required for type %q", CapLLM)
-		}
-	case CapSkill:
-		if r.Skill == nil {
-			return fmt.Errorf("capability: Skill request required for type %q", CapSkill)
 		}
 	default:
 		return fmt.Errorf("capability: unknown capability type %q", r.Type)
@@ -61,12 +55,6 @@ type LLMCapRequest struct {
 	Tools       []ToolDefinition
 	Temperature float32
 	MaxTokens   int
-}
-
-type SkillCapRequest struct {
-	SkillID   string
-	VersionID string
-	Input     any
 }
 
 type CapabilityResponse struct {
@@ -92,13 +80,30 @@ type ToolDefinition struct {
 	Metadata     map[string]any `json:"-"`
 }
 
-type SkillToolRef struct {
-	SkillID   string
-	VersionID string
+type SkillRevisionRef struct {
+	SkillID    string
+	RevisionID string
 }
 
-type SkillToolResolver interface {
-	ResolveTools(ctx context.Context, tenantID string, skillIDs []string) ([]ToolDefinition, map[string]SkillToolRef, error)
+// SkillActivation is an immutable instruction-bundle snapshot resolved for a
+// single Agent run. It contains no executable implementation.
+type SkillActivation struct {
+	SkillID               string
+	RevisionID            string
+	Name                  string
+	Description           string
+	Instructions          string
+	MCPToolIDs            []string
+	KnowledgeWorkspaceIDs []string
+	MemoryScopes          []string
+}
+
+type SkillActivationResolver interface {
+	ResolveSkills(
+		ctx context.Context,
+		tenantID string,
+		refs []SkillRevisionRef,
+	) (map[string]SkillActivation, error)
 }
 
 type SkillRevisionResolver interface {

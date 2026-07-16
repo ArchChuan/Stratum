@@ -1,173 +1,75 @@
 # Agent Development Rules
 
-## Agent Types
+## Capability Boundaries
 
-| 类型 | 常量 | 适用场景 |
-|------|------|---------|
-| ReAct | `domain.ReActAgent` | 观察-推理-行动循环（主要生产类型）|
-| CoT | `domain.CoTAgent` | 多步推理链 |
-| Planning | `domain.PlanningAgent` | 任务分解与规划 |
-| Tool Calling | `domain.ToolCallingAgent` | 结构化工具调用 |
-| RAG | `domain.RAGAgent` | 检索增强生成 |
-| Swarm | `domain.SwarmAgent` | 多智能体协同 |
+Agent Loop 是运行期唯一动态决策者。其他上下文职责固定：
 
-> `application` 包通过 `type AgentType = domain.AgentType` 以及同名常量保持向后兼容，两种引用方式均可。
+| 上下文 | 职责 | 禁止事项 |
+|---|---|---|
+| Agent | 推理、选择 Skill、调用工具、状态机、checkpoint | 不在 handler 中实现路由或重试 |
+| Skill | 版本化 instruction bundle：capability、activation contract、instructions、requirements | 不执行代码、HTTP、LLM 或 MCP |
+| MCP | 外部工具发现和副作用执行 | 不自报可信 risk level，不伪装成 Skill |
+| Knowledge | `stratum_search_knowledge` 内部检索能力 | 不执行外部副作用 |
+| Memory | 自动会话历史、注入、按需 recall | 不作为通用工具网关 |
 
-## AgentConfig 字段
+依赖方向：`Agent -> Skill snapshot / MCP port / Knowledge port / Memory port`。Skill 不依赖或调用 MCP；Skill requirements 只声明运行期所需的稳定 MCP tool IDs。
+
+## AgentConfig
+
+关键权限字段：
 
 ```go
-// 位于 internal/agent/domain/agent.go
 type AgentConfig struct {
-    ID                             string
-    Name                           string
-    Type                           AgentType
-    Description                    string
-    SystemPrompt                   string
-    LLMModel                       string            // e.g. "gpt-4o", "claude-3-5-sonnet"
-    EmbedModel                     string            // 租户级 embedding 模型
-    MaxIterations                  int               // 默认 10，防无限循环
-    AllowedSkills                  []string          // skill UUID 列表
-    MCPServerIDs                   []string          // MCP 服务器 ID 列表
-    Capabilities                   []AgentCapability
-    KnowledgeWorkspaceIDs          []string          // RAG workspace UUID 列表
-    KnowledgeWorkspaceNames        []string
-    KnowledgeWorkspaceDescriptions []string
-    MaxContextTokens               int
-    MemoryScope                    string
-    StuckThreshold                 int               // ReAct 卡死后触发 Plan-Execute 的 LLM-only 轮数阈值（PlanningAgent）
-    CheckpointEnabled              bool              // 开启断点持久化（PlanningAgent）
+    AllowedSkills         []string // 可激活 Skill ID
+    MCPToolIDs            []string // mcp:<server>:<tool> 精确 allowlist
+    KnowledgeWorkspaceIDs []string
+    MemoryScope           string
 }
 ```
 
-> `Persona` 字段已不存在于 AgentConfig — 角色设定通过 `SystemPrompt` 表达，不再作为独立字段。
+权限取交集：租户权限 ∩ 用户权限 ∩ Agent allowlist ∩ active Skill requirements。Agent 绑定具体 MCP tool，不绑定整个 server，避免 server 新增工具后自动扩权。
 
-## Creating and Registering an Agent
+## Skill Activation
 
-```go
-cfg := &domain.AgentConfig{
-    ID:            uuid.NewString(),
-    Name:          "My Agent",
-    Type:          domain.ReActAgent,
-    SystemPrompt:  "你是一个助手...",
-    LLMModel:      "gpt-4o",
-    MaxIterations: 10,
-    AllowedSkills: []string{"skill-uuid-1"},
-}
-// Registry 由 api/wiring/agent.go 在启动时构建并注入
-err := registry.Register(ctx, agent.NewBaseAgent(cfg, logger))
-```
+- Run 启动时解析允许的 published/candidate Skill revision，并固定 revision ID。
+- 模型通过内置 `stratum_activate_skill` 激活一个 instruction bundle。
+- 同一时刻只允许一个 active Skill；再次激活会替换前一个。
+- 激活后 system messages 注入该 revision instructions。
+- Skill 不生成可执行 ToolDefinition，也不经过 CapabilityGateway。
+- Agent 可以不激活 Skill，直接使用 Agent allowlist 中的 MCP 工具。
 
-> `Registry.Register` 需要 ctx 中携带 TenantContext（由 `middleware.InjectTenantContext()` 注入），写入对应租户 schema 的 `agents` 表。
+## Tool Execution
 
-## Execution Options
+`CapabilityGateway` 只负责 LLM completion。外部工具调用通过消费侧 `MCPToolExecutor`，最终到 `ClientManager.CallTool(serverID, rawToolName, args)`。
 
-```go
-result, err := a.Execute(ctx, "用户输入",
-    agent.WithMaxSteps(10),
-    agent.WithTimeout(30*time.Second),
-    agent.WithTemperature(0.7),
-    agent.WithStream(true),
-    agent.WithTokenCallback(func(token string) { /* 流式输出 */ }),
-    agent.WithExtraTools(toolDefs),          // 注入 skill/MCP 工具
-    agent.WithSkillToolIndex(skillIndex),    // toolName → skillUUID 映射
-    agent.WithHistoryWindow(20),             // 对话历史窗口（条数）
-)
-```
+暴露给模型的名称是 `mcp:<server>:<tool>`；发送给 MCP server 的 name 是原始 tool name。不得混用。
 
-`AgentResult` 字段：`Output` / `Thoughts` / `ToolCalls` / `Steps` / `TokensUsed` / `Duration` / `Error`
+内置工具：
 
-## ReAct Loop & Built-in Tools
+| 工具 | 权限 |
+|---|---|
+| `stratum_activate_skill` | 当前 Run 的 Skill catalog |
+| `stratum_search_knowledge` | Agent workspaces ∩ active Skill workspaces |
+| `stratum_recall_memory` | Agent memory scope ∩ active Skill memory scopes |
+| `stratum_continue_reasoning` | Agent Loop 内部控制 |
 
-ReAct 状态机位于 `internal/agent/application/graph/react.go`，`ReActState` 关键字段：
+## MCP Risk And Approval
 
-```go
-type ReActState struct {
-    TenantID        string
-    AvailableTools  []port.ToolDefinition
-    SkillToolIndex  map[string]port.SkillToolRef  // toolName → {SkillID, VersionID}
-    Messages        []port.LLMMessage
-    RAGSearchFn     func(...)
-    RecallMemoryFn  func(...)
-    StuckThreshold  int
-    PlanTriggered   bool
-    CheckpointEnabled bool
-    // ...
-}
-```
+租户管理员为每个 `(server_id, tool_name)` 设置风险：`read`、`write_reversible`、`destructive`、`unclassified`。未配置或读取失败必须视为 `unclassified`。MCP discovery payload 不能设置受信风险。
 
-内置工具（直接在 switch 分支处理，不经过 CapabilityGateway）：
-
-| 工具名 | 触发条件 | 功能 |
-|--------|---------|------|
-| `stratum_search_knowledge` | `AgentConfig.KnowledgeWorkspaceIDs` 非空 | RAG 知识库检索 |
-| `stratum_recall_memory` | `RecallMemoryFn` 已注入 | 长期记忆召回 |
-| `stratum_continue_reasoning` | 始终注入 | 占位工具，触发 PlanningAgent 继续推理循环 |
-
-外部 skill 工具：`SkillToolIndex` 以 `toolName`（来自 `tool_contract.toolName`）为键，default 分支通过 `CapabilityGateway.Route` 以 `CapSkill` 类型路由，携带 `SkillID` 和 `VersionID`。旧版本回退路径使用 `tenant_{tenantID}_{skill_name}` 格式（`buildExtraTools` 无 `SkillToolResolver` 时触发）。
-
-## CapabilityGateway 路由
-
-```
-CapabilityGateway.Route(req)
-  ├── req.Type == CapLLM  → LLMAdapter  → llmgateway.Gateway
-  └── req.Type == CapSkill → SkillAdapter → skillgateway.DefaultGateway
-                                              └── atomicEngine.execute
-                                                    └── DBSkillAdapter (SQL WHERE id=$1)
-```
-
-实现位于 `internal/agent/infrastructure/capability/`。
-
-## Memory Integration
-
-Memory 通过三个独立 port 注入 BaseAgent，由 `api/wiring/agent.go` 的 `buildAgent` 完成装配：
-
-```go
-// MemoryInjector: 注入对话历史摘要 + 实体 + 长期记忆到 system prompt
-type MemoryInjector interface {
-    BuildContext(ctx context.Context, ic InjectionContext) (string, error)
-}
-
-// RecallMemoryFn: recall_memory 工具的实现函数
-type RecallMemoryFn func(ctx context.Context, tenantID, userID, agentID string, input map[string]any) (string, error)
-
-// MemorySearcher: 语义记忆检索（供应用层直接调用）
-type MemorySearcher interface {
-    Search(ctx context.Context, req *memdomain.MemorySearchRequest) ([]*memdomain.MemorySearchResult, error)
-}
-```
-
-> 不再直接在 BaseAgent 上挂载 `MemoryManager`。三层记忆策略的选择（ConversationWindow / Summary / Buffer）由 memory 上下文的 `MemoryService` 处理，agent 侧只关心接口。
-
-## Skill Tool Naming Convention
-
-传给模型的工具名默认来自 `tool_contract.toolName`（skill 版本发布时定义的合约名）。
-
-- `buildExtraTools`（`internal/agent/application/agent_service.go`）在注入了 `SkillToolResolver` 且 `AllowedSkills` 非空时，调用 `ResolveTools` 获取每个 skill 已发布版本的 `ToolContract.ToolName` 作为 `ToolDefinition.Name`，同时产出 `SkillToolIndex`（toolName → {SkillID, VersionID}）
-- 无 `SkillToolResolver`（或旧配置）时回退到 `tenant_{tenantID}_{skill_name}` 格式
-- 执行阶段 `react.go` 从 `SkillToolIndex` 反查 `SkillToolRef`，携带 `SkillID` 和 `VersionID` 通过 `CapabilityGateway.Route`（`CapSkill`）路由到具体 skill 版本
-- MCP 工具名由 MCP 服务器自己定义，不应用此前缀
-
-## A2A Protocol
-
-多智能体协作实现于 `internal/agent/application/a2a/`：
-
-| 组件 | 文件 | 作用 |
-|------|------|------|
-| Protocol | `protocol.go` | 心跳、超时、重试、消息收发、指标统计 |
-| Client | `client.go` | Agent 注册、能力公告、发现/协商/协作发起 |
-| Discovery | `discovery.go` | Peer 注册表，能力匹配查询 |
-| Negotiation | `negotiation.go` | 协作条件协商 |
-| Orchestrator | `orchestrator.go` | 创建执行计划，分配步骤 |
-| Message | `message.go` | 消息格式，Inbox/Outbox 异步处理 |
-
-五种协作策略：`StrategySequential` / `StrategyParallel` / `StrategyHierarchical` / `StrategyPipeline` / `StrategySwarm`
+- `read` / `write_reversible`：直接执行。
+- `destructive` / `unclassified`：Run 进入 `waiting_approval`，工具不得执行。
+- 参数、query、固定 Skill revisions 使用 AES-256-GCM 存入 `agent_tool_approvals.encrypted_payload`。
+- checkpoint 只保存 approval ID，不保存原始参数。
+- 批准后使用同 execution ID 恢复；仅完全匹配 server/tool/arguments 的调用可 bypass 一次。
+- 执行前原子抢占 `approved -> executing`；失败回退 `approved`，成功转 `executed`，防止重复副作用。
 
 ## Rules
 
-1. Agent ID 全局唯一；重复注册同一 ID 会覆盖原记录（返回 `ErrNameConflict`）
-2. `Execute` 内部持有 `sync.Mutex`，同一 Agent 不支持并发执行
-3. `MaxIterations` 防无限循环，默认值在 `pkg/constants/agent.go`
-4. `Reset()` 清空内存和状态，谨慎使用
-5. 不要在 handler 中持有 Agent 实例；每次请求通过 `Registry.Get(ctx, id)` 获取
-6. Skill 工具注册后不可与内置工具（`stratum_*`）重名；`mergeTools` 会静默丢弃同名 extra 工具
-7. **远端服务报错排查**：涉及远端部署服务的 500/崩溃/异常，必须 SSH 进服务器查看实际运行日志（`journalctl -u <svc>` / `docker logs <container>`），不得凭本地代码静态分析推断根因；未拿到服务端日志前不得提出修复方案
+1. 路由、审批、重试、checkpoint 和权限交集必须硬编码，不交给模型决定。
+2. MCP 工具默认 `unclassified`，禁止 fail-open。
+3. Skill revision 在 Run 内不可漂移；审批恢复使用 payload 固定的 revision。
+4. Tool trace 和 Agent trace 是不可变历史；删除旧 Skill 存储时必须保留。
+5. `MaxIterations` 和 execution timeout 必须有限。
+6. 不记录 token、API key、password、审批明文 payload 或敏感原始响应。
+7. Agent/Skill/MCP/Knowledge/Memory 改动必须完成真实 API、数据库、Agent Loop 和浏览器 E2E。

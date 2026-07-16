@@ -9,349 +9,189 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestVersionServiceCreateSkillCreatesDraftVersionAndTestCase(t *testing.T) {
+func TestVersionServiceCreatesInstructionBundleDraft(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
-
+	requirements := domain.Requirements{MCPToolIDs: []string{"mcp:orders:get_order"}}
 	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
-		Name:           "投诉分类",
-		Goal:           "判断客户投诉类型",
-		WhenToUse:      "用户表达投诉时",
-		SampleInput:    "快递没更新",
-		ExpectedOutput: "物流问题",
-	})
-	if err != nil {
-		t.Fatalf("CreateSkillDraft() error = %v", err)
-	}
-	if view.Skill.Name != "投诉分类" {
-		t.Fatalf("expected skill name, got %q", view.Skill.Name)
-	}
-	if view.Draft.Capability.Goal != "判断客户投诉类型" {
-		t.Fatalf("expected capability goal, got %q", view.Draft.Capability.Goal)
-	}
-	if view.Draft.ToolContract.ToolName == "" {
-		t.Fatal("expected generated tool name")
-	}
-	if view.Draft.Source != "manual" || view.Draft.ContentHash == "" {
-		t.Fatalf("expected manual source and content hash, got source=%q hash=%q", view.Draft.Source, view.Draft.ContentHash)
-	}
-	if len(repo.testCases) != 1 {
-		t.Fatalf("expected first test case, got %d", len(repo.testCases))
-	}
-}
-
-func TestVersionServicePublishDraftRequiresPublishableVersion(t *testing.T) {
-	repo := newFakeVersionRepo()
-	svc := NewVersionService(repo, zap.NewNop())
-	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
-		Name:           "投诉分类",
-		Goal:           "判断客户投诉类型",
-		WhenToUse:      "用户表达投诉时",
-		SampleInput:    "快递没更新",
-		ExpectedOutput: "物流问题",
+		Name: "投诉分类", Goal: "判断客户投诉类型", WhenToUse: "用户表达投诉时",
+		SampleInput: "快递没更新", ExpectedOutput: "物流问题",
+		Instructions: "先判断投诉类别，需要订单信息时查询订单。", Requirements: requirements,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	draft := repo.versions[view.Draft.ID]
-	draft.ToolContract.Confirmed = false
-	repo.versions[view.Draft.ID] = draft
+	if view.Draft.ActivationContract.Name == "" || view.Draft.Instructions == "" {
+		t.Fatalf("expected activation and instructions, got %#v", view.Draft)
+	}
+	if len(view.Draft.Requirements.MCPToolIDs) != 1 || view.Draft.ContentHash == "" {
+		t.Fatalf("expected requirements and hash, got %#v", view.Draft)
+	}
+	if view.Skill.DraftRevisionID != view.Draft.ID {
+		t.Fatalf("draft revision link mismatch: %#v", view.Skill)
+	}
+}
 
+func TestVersionServicePublishRequiresConfirmedActivation(t *testing.T) {
+	repo := newFakeVersionRepo()
+	svc := NewVersionService(repo, zap.NewNop())
+	view := mustCreateDraft(t, svc)
 	if _, err := svc.PublishDraft(context.Background(), view.Skill.ID); err == nil {
-		t.Fatal("expected unconfirmed contract to block publish")
+		t.Fatal("expected unconfirmed activation contract to block publish")
 	}
-}
-
-func TestVersionServiceUpdateCapabilityUpdatesCurrentDraft(t *testing.T) {
-	repo := newFakeVersionRepo()
-	svc := NewVersionService(repo, zap.NewNop())
-	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
-		Name:           "投诉分类",
-		Goal:           "判断客户投诉类型",
-		WhenToUse:      "用户表达投诉时",
-		SampleInput:    "快递没更新",
-		ExpectedOutput: "物流问题",
+	_, err := svc.UpdateActivation(context.Background(), view.Skill.ID, UpdateActivationInput{
+		Name: "classify_complaint", Description: "判断投诉类型",
+		InputSchema: map[string]any{"type": "object"}, OutputSchema: map[string]any{"type": "object"}, Confirmed: true,
 	})
 	if err != nil {
-		t.Fatal(err)
-	}
-
-	updated, err := svc.UpdateCapability(context.Background(), view.Skill.ID, UpdateCapabilityInput{
-		Goal:       "识别投诉类别并给出动作",
-		WhenToUse:  "用户描述售后问题时",
-		InputSpec:  "投诉文本",
-		OutputSpec: "类别、理由、动作",
-	})
-	if err != nil {
-		t.Fatalf("UpdateCapability() error = %v", err)
-	}
-	if updated.Capability.Goal != "识别投诉类别并给出动作" {
-		t.Fatalf("expected updated goal, got %q", updated.Capability.Goal)
-	}
-	if updated.Capability.InputSpec != "投诉文本" {
-		t.Fatalf("expected input spec, got %q", updated.Capability.InputSpec)
-	}
-}
-
-func TestVersionServiceUpdateContractCanConfirmDraftForPublish(t *testing.T) {
-	repo := newFakeVersionRepo()
-	svc := NewVersionService(repo, zap.NewNop())
-	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
-		Name:           "complaint",
-		Goal:           "判断客户投诉类型",
-		WhenToUse:      "用户表达投诉时",
-		SampleInput:    "快递没更新",
-		ExpectedOutput: "物流问题",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = svc.UpdateContract(context.Background(), view.Skill.ID, UpdateContractInput{
-		ToolName:     "classify_complaint",
-		Description:  "判断客户投诉类型",
-		InputSchema:  map[string]any{"type": "object"},
-		OutputSchema: map[string]any{"type": "object"},
-		Confirmed:    true,
-	})
-	if err != nil {
-		t.Fatalf("UpdateContract() error = %v", err)
-	}
-	published, err := svc.PublishDraft(context.Background(), view.Skill.ID)
-	if err != nil {
-		t.Fatalf("PublishDraft() error = %v", err)
-	}
-	if published.Status != domain.VersionStatusPublished {
-		t.Fatalf("expected published status, got %q", published.Status)
-	}
-}
-
-func TestVersionServiceUpdateImplementationUpdatesCurrentDraft(t *testing.T) {
-	repo := newFakeVersionRepo()
-	svc := NewVersionService(repo, zap.NewNop())
-	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
-		Name:           "complaint",
-		Goal:           "判断客户投诉类型",
-		WhenToUse:      "用户表达投诉时",
-		SampleInput:    "快递没更新",
-		ExpectedOutput: "物流问题",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	originalHash := view.Draft.ContentHash
-
-	updated, err := svc.UpdateImplementation(context.Background(), view.Skill.ID, UpdateImplementationInput{
-		Mode:    "prompt",
-		Source:  map[string]any{"promptTemplate": "新的实现：{{.input}}"},
-		Runtime: map[string]any{"timeoutSec": 30},
-	})
-	if err != nil {
-		t.Fatalf("UpdateImplementation() error = %v", err)
-	}
-	if updated.Implementation.Source["promptTemplate"] != "新的实现：{{.input}}" {
-		t.Fatalf("expected implementation update, got %#v", updated.Implementation.Source)
-	}
-	if updated.ContentHash == "" || updated.ContentHash == originalHash {
-		t.Fatalf("expected refreshed content hash, original=%q updated=%q", originalHash, updated.ContentHash)
-	}
-}
-
-func TestVersionServiceGetWorkspaceFallsBackToActiveVersionAfterPublish(t *testing.T) {
-	repo := newFakeVersionRepo()
-	svc := NewVersionService(repo, zap.NewNop())
-	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
-		Name:           "complaint",
-		Goal:           "判断客户投诉类型",
-		WhenToUse:      "用户表达投诉时",
-		SampleInput:    "快递没更新",
-		ExpectedOutput: "物流问题",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.UpdateContract(context.Background(), view.Skill.ID, UpdateContractInput{
-		ToolName:     "classify_complaint",
-		Description:  "判断客户投诉类型",
-		InputSchema:  map[string]any{"type": "object"},
-		OutputSchema: map[string]any{"type": "object"},
-		Confirmed:    true,
-	}); err != nil {
 		t.Fatal(err)
 	}
 	published, err := svc.PublishDraft(context.Background(), view.Skill.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	workspace, err := svc.GetWorkspace(context.Background(), view.Skill.ID)
-	if err != nil {
-		t.Fatalf("GetWorkspace() after publish error = %v", err)
-	}
-	if workspace.Draft.ID != published.ID || workspace.Draft.Status != domain.VersionStatusPublished {
-		t.Fatalf("expected active version fallback, got %#v", workspace.Draft)
+	if published.Status != domain.VersionStatusPublished || published.RevisionNo != 1 {
+		t.Fatalf("unexpected published revision: %#v", published)
 	}
 }
 
-func TestVersionServiceCreatesImmutableCandidateFromBaseline(t *testing.T) {
+func TestVersionServiceUpdateInstructionBundleRefreshesHash(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
-	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
-		Name: "complaint", Goal: "分类", WhenToUse: "投诉时", SampleInput: "物流", ExpectedOutput: "物流",
+	view := mustCreateDraft(t, svc)
+	updated, err := svc.UpdateInstructionBundle(context.Background(), view.Skill.ID, UpdateInstructionBundleInput{
+		Instructions: "使用新的分类方法", Requirements: domain.Requirements{MemoryScopes: []string{"user"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseline := repo.versions[view.Draft.ID]
-	candidate, err := svc.CreateCandidate(context.Background(), view.Skill.ID, baseline.ID, CandidateInput{
-		Source: "parameter_search", ParameterPatch: map[string]any{"temperature": 0.2},
+	if updated.Instructions != "使用新的分类方法" || updated.ContentHash == view.Draft.ContentHash {
+		t.Fatalf("instruction update did not refresh revision: %#v", updated)
+	}
+}
+
+func TestVersionServiceCandidateCanOnlyRewriteInstructions(t *testing.T) {
+	repo := newFakeVersionRepo()
+	svc := NewVersionService(repo, zap.NewNop())
+	view := mustCreateDraft(t, svc)
+	candidate, err := svc.CreateCandidate(context.Background(), view.Skill.ID, view.Draft.ID, CandidateInput{
+		Source: "llm_rewrite", PromptPatch: map[string]any{"instructions": "优化后的方法"},
 	})
 	if err != nil {
-		t.Fatalf("CreateCandidate returned error: %v", err)
+		t.Fatal(err)
 	}
-	if candidate.Status != domain.VersionStatusCandidate || candidate.ParentVersionID != baseline.ID {
-		t.Fatalf("unexpected candidate lineage: %+v", candidate)
+	if candidate.ParentRevisionID != view.Draft.ID || candidate.Instructions != "优化后的方法" {
+		t.Fatalf("unexpected candidate: %#v", candidate)
 	}
-	if candidate.Implementation.Runtime["temperature"] != 0.2 || candidate.ContentHash == baseline.ContentHash {
-		t.Fatalf("candidate patch/hash not applied: %+v", candidate)
+	if _, err := svc.CreateCandidate(context.Background(), view.Skill.ID, view.Draft.ID, CandidateInput{
+		Source: "llm_rewrite", PromptPatch: map[string]any{"temperature": 0.2},
+	}); err == nil {
+		t.Fatal("runtime parameter optimization must be rejected")
 	}
-	if repo.versions[baseline.ID].Implementation.Runtime["temperature"] != nil {
-		t.Fatal("baseline was mutated")
+}
+
+func mustCreateDraft(t *testing.T, svc *VersionService) SkillWorkspaceView {
+	t.Helper()
+	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
+		Name: "complaint", Goal: "分类", WhenToUse: "收到投诉时",
+		SampleInput: "物流", ExpectedOutput: "物流", Instructions: "分类用户投诉",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	return view
 }
 
 type fakeVersionRepo struct {
 	skills    map[string]port.SkillProductRow
-	versions  map[string]domain.SkillVersion
-	testCases map[string]port.SkillTestCaseRow
+	revisions map[string]domain.SkillRevision
 }
 
 func newFakeVersionRepo() *fakeVersionRepo {
-	return &fakeVersionRepo{
-		skills:    map[string]port.SkillProductRow{},
-		versions:  map[string]domain.SkillVersion{},
-		testCases: map[string]port.SkillTestCaseRow{},
-	}
+	return &fakeVersionRepo{skills: map[string]port.SkillProductRow{}, revisions: map[string]domain.SkillRevision{}}
 }
 
-func (r *fakeVersionRepo) InsertSkillWithDraft(
-	_ context.Context,
-	skill port.SkillProductRow,
-	draft domain.SkillVersion,
-	firstCase port.SkillTestCaseRow,
-) error {
-	r.skills[skill.ID] = skill
-	r.versions[draft.ID] = draft
-	r.testCases[firstCase.ID] = firstCase
+func (r *fakeVersionRepo) InsertSkillWithDraft(_ context.Context, skill port.SkillProductRow, draft domain.SkillRevision) error {
+	r.skills[skill.ID], r.revisions[draft.ID] = skill, draft
 	return nil
 }
-
-func (r *fakeVersionRepo) GetSkill(_ context.Context, skillID string) (port.SkillProductRow, bool, error) {
-	skill, ok := r.skills[skillID]
-	return skill, ok, nil
+func (r *fakeVersionRepo) GetSkill(_ context.Context, id string) (port.SkillProductRow, bool, error) {
+	v, ok := r.skills[id]
+	return v, ok, nil
 }
-
-func (r *fakeVersionRepo) GetDraftVersion(_ context.Context, skillID string) (domain.SkillVersion, bool, error) {
-	for _, version := range r.versions {
-		if version.SkillID == skillID && version.Status == domain.VersionStatusDraft {
-			return version, true, nil
+func (r *fakeVersionRepo) ListSkills(_ context.Context) ([]port.SkillProductRow, error) {
+	result := make([]port.SkillProductRow, 0, len(r.skills))
+	for _, skill := range r.skills {
+		result = append(result, skill)
+	}
+	return result, nil
+}
+func (r *fakeVersionRepo) DeleteSkill(_ context.Context, id string) error {
+	delete(r.skills, id)
+	for revisionID, revision := range r.revisions {
+		if revision.SkillID == id {
+			delete(r.revisions, revisionID)
 		}
 	}
-	return domain.SkillVersion{}, false, nil
-}
-
-func (r *fakeVersionRepo) GetActiveVersion(_ context.Context, skillID string) (domain.SkillVersion, bool, error) {
-	skill, ok := r.skills[skillID]
-	if !ok || skill.ActiveVersionID == "" {
-		return domain.SkillVersion{}, false, nil
-	}
-	version, ok := r.versions[skill.ActiveVersionID]
-	return version, ok, nil
-}
-
-func (r *fakeVersionRepo) GetVersion(_ context.Context, skillID, versionID string) (domain.SkillVersion, bool, error) {
-	version, ok := r.versions[versionID]
-	return version, ok && version.SkillID == skillID, nil
-}
-
-func (r *fakeVersionRepo) InsertCandidate(_ context.Context, candidate domain.SkillVersion) error {
-	r.versions[candidate.ID] = candidate
 	return nil
 }
-
-func (r *fakeVersionRepo) UpdateDraftCapability(_ context.Context, skillID string, capability domain.Capability, contentHash string) (domain.SkillVersion, error) {
-	for id, version := range r.versions {
-		if version.SkillID == skillID && version.Status == domain.VersionStatusDraft {
-			version.Capability = capability
-			version.ContentHash = contentHash
-			r.versions[id] = version
-			return version, nil
+func (r *fakeVersionRepo) GetDraftRevision(_ context.Context, skillID string) (domain.SkillRevision, bool, error) {
+	for _, revision := range r.revisions {
+		if revision.SkillID == skillID && revision.Status == domain.VersionStatusDraft {
+			return revision, true, nil
 		}
 	}
-	return domain.SkillVersion{}, domain.ErrSkillNotFound
+	return domain.SkillRevision{}, false, nil
 }
-
-func (r *fakeVersionRepo) UpdateDraftContract(_ context.Context, skillID string, contract domain.ToolContract, contentHash string) (domain.SkillVersion, error) {
-	for id, version := range r.versions {
-		if version.SkillID == skillID && version.Status == domain.VersionStatusDraft {
-			version.ToolContract = contract
-			version.ContentHash = contentHash
-			r.versions[id] = version
-			return version, nil
-		}
-	}
-	return domain.SkillVersion{}, domain.ErrSkillNotFound
-}
-
-func (r *fakeVersionRepo) UpdateDraftImplementation(_ context.Context, skillID string, implementation domain.Implementation, contentHash string) (domain.SkillVersion, error) {
-	for id, version := range r.versions {
-		if version.SkillID == skillID && version.Status == domain.VersionStatusDraft {
-			version.Implementation = implementation
-			version.ContentHash = contentHash
-			r.versions[id] = version
-			return version, nil
-		}
-	}
-	return domain.SkillVersion{}, domain.ErrSkillNotFound
-}
-
-func (r *fakeVersionRepo) CountEnabledTestCases(_ context.Context, skillID string) (int, error) {
-	count := 0
-	for _, tc := range r.testCases {
-		if tc.SkillID == skillID && tc.Enabled {
-			count++
-		}
-	}
-	return count, nil
-}
-
-func (r *fakeVersionRepo) PublishDraft(
-	_ context.Context,
-	skillID string,
-	draftVersionID string,
-	nextVersionNo int,
-	baseline map[string]any,
-) (domain.SkillVersion, error) {
-	version := r.versions[draftVersionID]
-	version.Status = domain.VersionStatusPublished
-	version.VersionNo = nextVersionNo
-	version.TestBaseline = baseline
-	r.versions[draftVersionID] = version
-
+func (r *fakeVersionRepo) GetActiveRevision(_ context.Context, skillID string) (domain.SkillRevision, bool, error) {
 	skill := r.skills[skillID]
-	skill.ActiveVersionID = draftVersionID
-	skill.DraftVersionID = ""
-	skill.Status = "published"
-	r.skills[skillID] = skill
-	return version, nil
+	v, ok := r.revisions[skill.ActiveRevisionID]
+	return v, ok, nil
 }
-
-func (r *fakeVersionRepo) NextVersionNo(_ context.Context, skillID string) (int, error) {
+func (r *fakeVersionRepo) GetRevision(_ context.Context, skillID, revisionID string) (domain.SkillRevision, bool, error) {
+	v, ok := r.revisions[revisionID]
+	return v, ok && v.SkillID == skillID, nil
+}
+func (r *fakeVersionRepo) InsertCandidate(_ context.Context, candidate domain.SkillRevision) error {
+	r.revisions[candidate.ID] = candidate
+	return nil
+}
+func (r *fakeVersionRepo) updateDraft(skillID string, fn func(*domain.SkillRevision)) (domain.SkillRevision, error) {
+	for id, revision := range r.revisions {
+		if revision.SkillID == skillID && revision.Status == domain.VersionStatusDraft {
+			fn(&revision)
+			r.revisions[id] = revision
+			return revision, nil
+		}
+	}
+	return domain.SkillRevision{}, domain.ErrSkillNotFound
+}
+func (r *fakeVersionRepo) UpdateDraftCapability(_ context.Context, skillID string, value domain.Capability, hash string) (domain.SkillRevision, error) {
+	return r.updateDraft(skillID, func(v *domain.SkillRevision) { v.Capability, v.ContentHash = value, hash })
+}
+func (r *fakeVersionRepo) UpdateDraftActivation(_ context.Context, skillID string, value domain.ActivationContract, hash string) (domain.SkillRevision, error) {
+	return r.updateDraft(skillID, func(v *domain.SkillRevision) { v.ActivationContract, v.ContentHash = value, hash })
+}
+func (r *fakeVersionRepo) UpdateDraftInstructions(_ context.Context, skillID, instructions string, requirements domain.Requirements, hash string) (domain.SkillRevision, error) {
+	return r.updateDraft(skillID, func(v *domain.SkillRevision) {
+		v.Instructions, v.Requirements, v.ContentHash = instructions, requirements, hash
+	})
+}
+func (r *fakeVersionRepo) NextRevisionNo(_ context.Context, skillID string) (int, error) {
 	next := 1
-	for _, version := range r.versions {
-		if version.SkillID == skillID && version.VersionNo >= next {
-			next = version.VersionNo + 1
+	for _, revision := range r.revisions {
+		if revision.SkillID == skillID && revision.RevisionNo >= next {
+			next = revision.RevisionNo + 1
 		}
 	}
 	return next, nil
+}
+func (r *fakeVersionRepo) PublishDraft(_ context.Context, skillID, draftID string, next int, checks map[string]any) (domain.SkillRevision, error) {
+	revision := r.revisions[draftID]
+	revision.Status, revision.RevisionNo, revision.PublishChecks = domain.VersionStatusPublished, next, checks
+	r.revisions[draftID] = revision
+	skill := r.skills[skillID]
+	skill.Status, skill.ActiveRevisionID, skill.DraftRevisionID = "published", draftID, ""
+	r.skills[skillID] = skill
+	return revision, nil
 }

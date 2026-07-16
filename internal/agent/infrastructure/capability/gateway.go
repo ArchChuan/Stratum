@@ -12,12 +12,11 @@ import (
 
 type DefaultCapabilityGateway struct {
 	llm    port.Adapter
-	skill  port.Adapter
 	logger *zap.Logger
 }
 
-func NewDefaultCapabilityGateway(llm port.Adapter, skill port.Adapter, logger *zap.Logger) *DefaultCapabilityGateway {
-	return &DefaultCapabilityGateway{llm: llm, skill: skill, logger: logger}
+func NewDefaultCapabilityGateway(llm port.Adapter, logger *zap.Logger) *DefaultCapabilityGateway {
+	return &DefaultCapabilityGateway{llm: llm, logger: logger}
 }
 
 func (g *DefaultCapabilityGateway) Route(ctx context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
@@ -27,8 +26,6 @@ func (g *DefaultCapabilityGateway) Route(ctx context.Context, req port.Capabilit
 	switch req.Type {
 	case port.CapLLM:
 		return g.llm.Route(ctx, req)
-	case port.CapSkill:
-		return g.skill.Route(ctx, req)
 	default:
 		return port.CapabilityResponse{}, fmt.Errorf("capgateway: unknown type %q", req.Type)
 	}

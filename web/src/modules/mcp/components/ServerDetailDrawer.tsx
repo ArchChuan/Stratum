@@ -1,8 +1,8 @@
-import { Alert, Badge, Drawer, Descriptions, Flex, Tabs, Tag, Typography } from 'antd';
+import { Alert, Badge, Drawer, Descriptions, Flex, Select, Tabs, Tag, Typography, message } from 'antd';
 import { useEffect, useState } from 'react';
 
 import { mcpApi } from '../api/mcp.api';
-import type { MCPResource, MCPServer, MCPTool } from '../model/mcp';
+import type { MCPResource, MCPServer, MCPTool, MCPToolPolicy, MCPToolRiskLevel } from '../model/mcp';
 
 import { extractErrorMessage } from '@/shared/lib';
 import { ResponsiveDataView } from '@/shared/ui';
@@ -28,16 +28,18 @@ const STATUS_LABELS: Record<string, string> = {
 
 interface Props {
   server: MCPServer | null;
-  onClose: () => void;
+	onClose: () => void;
+	isAdmin?: boolean;
 }
 
-export const ServerDetailDrawer = ({ server, onClose }: Props) => {
+export const ServerDetailDrawer = ({ server, onClose, isAdmin = false }: Props) => {
   const [tools, setTools] = useState<MCPTool[]>([]);
   const [resources, setResources] = useState<MCPResource[]>([]);
   const [loadingTools, setLoadingTools] = useState(false);
   const [loadingRes, setLoadingRes] = useState(false);
   const [toolsError, setToolsError] = useState<string | null>(null);
-  const [resError, setResError] = useState<string | null>(null);
+	const [resError, setResError] = useState<string | null>(null);
+	const [policies, setPolicies] = useState<MCPToolPolicy[]>([]);
 
   useEffect(() => {
     if (!server) return;
@@ -46,7 +48,7 @@ export const ServerDetailDrawer = ({ server, onClose }: Props) => {
     setToolsError(null);
     setResError(null);
 
-    mcpApi
+	mcpApi
       .tools(server.id)
       .then(setTools)
       .catch((e) => setToolsError(extractErrorMessage(e) || '加载工具失败'))
@@ -56,12 +58,21 @@ export const ServerDetailDrawer = ({ server, onClose }: Props) => {
       .resources(server.id)
       .then(setResources)
       .catch((e) => setResError(extractErrorMessage(e) || '加载资源失败'))
-      .finally(() => setLoadingRes(false));
-  }, [server]);
+		.finally(() => setLoadingRes(false));
+	mcpApi.toolPolicies().then(setPolicies).catch(() => setPolicies([]));
+	}, [server]);
+
+	const riskFor = (toolName: string): MCPToolRiskLevel => policies.find((p) => p.serverId === server?.id && p.toolName === toolName)?.riskLevel || 'unclassified';
+	const changeRisk = async (toolName: string, riskLevel: MCPToolRiskLevel) => {
+		if (!server) return;
+		try { await mcpApi.setToolPolicy(server.id, toolName, riskLevel); setPolicies((rows) => [...rows.filter((p) => p.serverId !== server.id || p.toolName !== toolName), { serverId: server.id, toolName, riskLevel }]); message.success('工具风险策略已更新'); }
+		catch (err) { message.error(extractErrorMessage(err) || '更新风险策略失败'); }
+	};
 
   const toolCols = [
     { title: '名称', dataIndex: 'name', width: 200, render: (v: string) => <Text strong>{v}</Text> },
-    { title: '描述', dataIndex: 'description', ellipsis: true },
+		{ title: '描述', dataIndex: 'description', ellipsis: true },
+		{ title: '风险等级', dataIndex: 'name', width: 180, render: (name: string) => <Select aria-label={`${name} 风险等级`} disabled={!isAdmin} value={riskFor(name)} style={{ width: '100%' }} onChange={(value) => changeRisk(name, value)} options={RISK_OPTIONS} /> },
   ];
   const resCols = [
     { title: 'URI', dataIndex: 'uri', width: 200, ellipsis: true },
@@ -88,8 +99,9 @@ export const ServerDetailDrawer = ({ server, onClose }: Props) => {
             <div style={{ padding: '10px 0', borderBottom: '1px solid #f0f0f0' }}>
               <Text strong>{tool.name}</Text>
               <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
-                {tool.description || '暂无描述'}
-              </Text>
+				{tool.description || '暂无描述'}
+			</Text>
+			<Select aria-label={`${tool.name} 风险等级`} disabled={!isAdmin} value={riskFor(tool.name)} style={{ width: '100%', marginTop: 8 }} onChange={(value) => changeRisk(tool.name, value)} options={RISK_OPTIONS} />
             </div>
           )}
         />
@@ -157,3 +169,10 @@ export const ServerDetailDrawer = ({ server, onClose }: Props) => {
     </Drawer>
   );
 };
+
+const RISK_OPTIONS: Array<{ value: MCPToolRiskLevel; label: string }> = [
+	{ value: 'unclassified', label: '未分类（需审批）' },
+	{ value: 'read', label: '只读' },
+	{ value: 'write_reversible', label: '可逆写入' },
+	{ value: 'destructive', label: '破坏性（需审批）' },
+];

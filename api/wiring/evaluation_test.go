@@ -4,11 +4,11 @@ import "testing"
 
 func TestParsePromptRewritePatchesAcceptsFencedJSON(t *testing.T) {
 	patches, err := parsePromptRewritePatches("```json\n" +
-		`[{"prompt_patch":{"promptTemplate":"更准确：{{.input}}"},"rationale":"修复漏分类"}]` + "\n```")
+		`[{"prompt_patch":{"instructions":"更准确地分类输入"},"rationale":"修复漏分类"}]` + "\n```")
 	if err != nil {
 		t.Fatalf("parsePromptRewritePatches returned error: %v", err)
 	}
-	if len(patches) != 1 || patches[0].PromptPatch["promptTemplate"] == "" {
+	if len(patches) != 1 || patches[0].PromptPatch["instructions"] == "" {
 		t.Fatalf("unexpected patches: %#v", patches)
 	}
 }

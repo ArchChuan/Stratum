@@ -240,7 +240,7 @@ export const MCPServersPage = () => {
         />
       </Card>
 
-      <ServerDetailDrawer server={detailServer} onClose={() => setDetailServer(null)} />
+	<ServerDetailDrawer server={detailServer} onClose={() => setDetailServer(null)} isAdmin={isAdmin} />
     </div>
   );
 };

@@ -11,7 +11,7 @@ export const agentSchema = z
     maxIterations: z.number().optional(),
     maxContextTokens: z.number().optional(),
     allowedSkills: z.array(z.string()).nullish().transform((v) => v ?? []),
-    mcpServerIds: z.array(z.string()).nullish().transform((v) => v ?? []),
+    mcpToolIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     knowledgeWorkspaceIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     memoryScope: z.string().optional().default('user'),
     created_at: z.string().optional(),
@@ -29,7 +29,7 @@ export interface AgentFormValues {
   maxIterations: number;
   maxContextTokens: number;
   allowedSkills?: string[];
-  mcpServerIds?: string[];
+  mcpToolIds?: string[];
   knowledgeWorkspaceIds?: string[];
   memoryScope?: string;
 }
@@ -86,5 +86,16 @@ export interface AgentExecutionResult {
 export interface StreamCallbacks {
   onToken: (token: string) => void;
   onDone: (data: AgentExecutionResult) => void;
-  onError: (err: Error) => void;
+	onError: (err: Error) => void;
+	onApprovalRequired: (approval: ToolApproval) => void;
+}
+
+export interface ToolApproval {
+	approvalId: string;
+	agentId?: string;
+	toolName: string;
+	serverId: string;
+	riskLevel: string;
+	status: string;
+	expiresAt?: string;
 }

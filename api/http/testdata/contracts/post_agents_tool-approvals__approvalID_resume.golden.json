@@ -1,0 +1,8 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "POST",
+    "path": "/agents/tool-approvals/:approvalID/resume",
+    "want_status": 401
+  }
+]

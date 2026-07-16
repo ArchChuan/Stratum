@@ -25,13 +25,13 @@ internal/
   evaluation/{domain,application,infrastructure}
                             - 通用评估控制面：suite/revision、异步 run/job、优化候选、实验与反馈
   mcp/{domain,application,infrastructure}
-                            - MCP 服务器管理、SkillAdapter、MCPTools 接口
+                            - MCP 服务器管理、ToolRegistry、工具级风险策略与审批执行
   memory/{domain,application,infrastructure}
                             - 记忆持久化 + JetStream 三阶段 pipeline
   platform/{domain,harness,runtime}
                             - Harness 生命周期与启动期运行时编排（顺序启动→逆序停止）
   skill/{domain,application,infrastructure}
-                            - Skill CRUD + AtomicEngine + PipelineEngine + CircuitBreaker
+                            - Skill instruction bundle CRUD、revision 发布与候选优化
 pkg/
   constants/               - 跨包共享业务/配置常量（agent · auth · memory · pagination · timeouts）
   observability/           - Logger(Zap) · Tracer(OTEL) · PrometheusMetrics

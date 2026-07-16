@@ -7,13 +7,16 @@ import (
 	"strings"
 	"time"
 
+	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
+	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	evalpersist "github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/persistence"
-	"github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/skilladapter"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -50,9 +53,8 @@ func (m skillCandidateManager) LoadOptimizableSnapshot(
 		return nil, err
 	}
 	return map[string]any{
-		"mode":    version.Implementation.Mode,
-		"source":  version.Implementation.Source,
-		"runtime": version.Implementation.Runtime,
+		"instructions": version.Instructions,
+		"requirements": version.Requirements,
 	}, nil
 }
 
@@ -60,7 +62,7 @@ func (m skillCandidateManager) CreateCandidate(
 	ctx context.Context, _ string, baseline evaldomain.ResourceRef, patch evaldomain.CandidatePatch,
 ) (evaldomain.ResourceRef, error) {
 	version, err := m.versions.CreateCandidate(ctx, baseline.ResourceID, baseline.RevisionID, skillapp.CandidateInput{
-		Source: patch.Source, ParameterPatch: patch.ParameterPatch, PromptPatch: patch.PromptPatch,
+		Source: patch.Source, PromptPatch: patch.PromptPatch,
 		GenerationMetadata: map[string]any{"rationale": patch.Rationale},
 	})
 	if err != nil {
@@ -100,7 +102,7 @@ func (r gatewayPromptRewriter) Rewrite(
 			Messages: []agentport.LLMMessage{
 				{Role: "system", Content: "你是提示词优化器。只生成候选内容，不决定发布。仅输出 JSON 数组。"},
 				{Role: "user", Content: fmt.Sprintf(
-					"基线配置：%s\n失败摘要：%s\n输出最多3项，每项格式：{\"prompt_patch\":{\"promptTemplate\":\"...\"},\"rationale\":\"...\"}。不得修改权限、密钥或网络配置。",
+					"基线配置：%s\n失败摘要：%s\n输出最多3项，每项格式：{\"prompt_patch\":{\"instructions\":\"...\"},\"rationale\":\"...\"}。不得修改 requirements、权限、密钥或网络配置。",
 					string(snapshotJSON), string(failuresJSON),
 				)},
 			},
@@ -139,6 +141,48 @@ type evaluationTenantLister struct {
 	pool *pgxpool.Pool
 }
 
+type agentScenarioEvaluationAdapter struct {
+	db     *pgxpool.Pool
+	agents *agentapp.AgentService
+	skills agentport.SkillActivationResolver
+}
+
+func (a agentScenarioEvaluationAdapter) ExecuteRevision(ctx context.Context, tenantID string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase) (evalport.ExecutionResult, error) {
+	if ref.Kind != evaldomain.ResourceKindSkill {
+		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation: unsupported resource kind %q", ref.Kind)
+	}
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID, UserID: "evaluation-worker", Role: postgres.RoleTenantAdmin})
+	var agentID string
+	err := postgres.ExecTenant(ctx, a.db, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT agent_id FROM agent_skill_links WHERE skill_id=$1 ORDER BY agent_id LIMIT 1`, ref.ResourceID).Scan(&agentID)
+	})
+	if err != nil {
+		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation requires an Agent bound to Skill %s: %w", ref.ResourceID, err)
+	}
+	catalog, err := a.skills.ResolveSkills(ctx, tenantID, []agentport.SkillRevisionRef{{SkillID: ref.ResourceID, RevisionID: ref.RevisionID}})
+	if err != nil {
+		return evalport.ExecutionResult{}, err
+	}
+	activation, ok := catalog[ref.ResourceID]
+	if !ok {
+		return evalport.ExecutionResult{}, fmt.Errorf("Skill revision %s is not available", ref.RevisionID)
+	}
+	queryBytes, err := json.Marshal(testCase.Input)
+	if err != nil {
+		return evalport.ExecutionResult{}, err
+	}
+	query := string(queryBytes)
+	if text, ok := testCase.Input.(string); ok {
+		query = text
+	}
+	traceID := uuid.Must(uuid.NewV7()).String()
+	result, duration, err := a.agents.ExecuteSkillScenario(ctx, agentID, agentapp.ExecRequest{Query: query, UserID: "evaluation-worker"}, agentapp.ExecMeta{TenantID: tenantID, TraceID: traceID}, activation)
+	if err != nil {
+		return evalport.ExecutionResult{}, err
+	}
+	return evalport.ExecutionResult{Output: result.Output, TraceID: traceID, Tokens: result.TokensUsed, CostUSD: result.CostUSD, DurationMs: duration}, nil
+}
+
 func (l evaluationTenantLister) ListTenantIDs(ctx context.Context) ([]string, error) {
 	schemas, err := postgres.ListTenantSchemas(ctx, l.pool)
 	if err != nil {
@@ -153,7 +197,7 @@ func (l evaluationTenantLister) ListTenantIDs(ctx context.Context) ([]string, er
 
 func (c *Container) buildEvaluation(ctx context.Context) error {
 	db := c.dbOrNil()
-	if db == nil || c.Skill == nil || c.Skill.VersionExecutor == nil {
+	if db == nil || c.Skill == nil || c.Skill.VersionService == nil || c.Agent == nil || c.Agent.Service == nil {
 		c.Evaluation = &Evaluation{}
 		return nil
 	}
@@ -163,9 +207,10 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	optimizationRepo := evalpersist.NewPgOptimizationRepository(db)
 	experimentRepo := evalpersist.NewPgExperimentRepository(db)
 	feedbackRepo := evalpersist.NewPgFeedbackRepository(db)
-	adapter := skilladapter.New(c.Skill.VersionExecutor)
-	service := evalapp.NewService(adapter, runRepo, suiteRepo)
 	suiteService := evalapp.NewSuiteService(suiteRepo)
+	activationResolver := publishedSkillActivationResolver{db: db}
+	adapter := agentScenarioEvaluationAdapter{db: db, agents: c.Agent.Service, skills: activationResolver}
+	service := evalapp.NewService(adapter, runRepo, suiteRepo)
 	jobService := evalapp.NewJobService(jobRepo, service)
 	manager := skillCandidateManager{versions: c.Skill.VersionService}
 	var rewriter evalapp.PromptRewriter
@@ -177,12 +222,12 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	feedbackService := evalapp.NewFeedbackService(feedbackRepo, experimentService)
 	worker := evalapp.NewWorker(evaluationTenantLister{pool: db}, jobService, time.Second)
 	worker.Start(ctx)
-	c.shutdown = append(c.shutdown, func(context.Context) error {
-		worker.Stop()
-		return nil
-	})
+	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })
 	c.Evaluation = &Evaluation{
-		Service: service, SuiteService: suiteService, JobService: jobService, Worker: worker,
+		Service:             service,
+		SuiteService:        suiteService,
+		JobService:          jobService,
+		Worker:              worker,
 		OptimizationService: optimizationService,
 		ExperimentService:   experimentService,
 		FeedbackService:     feedbackService,

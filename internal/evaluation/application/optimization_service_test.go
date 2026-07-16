@@ -7,10 +7,10 @@ import (
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 )
 
-func TestOptimizationServiceCreatesParameterAndPromptCandidates(t *testing.T) {
+func TestOptimizationServiceCreatesOnlyInstructionCandidates(t *testing.T) {
 	creator := &fakeCandidateCreator{}
 	rewriter := fakePromptRewriter{patches: []domain.CandidatePatch{{
-		Source: "llm_rewrite", PromptPatch: map[string]any{"promptTemplate": "更准确：{{.input}}"}, Rationale: "修复漏分类",
+		Source: "llm_rewrite", PromptPatch: map[string]any{"instructions": "更准确地分类输入"}, Rationale: "修复漏分类",
 	}}}
 	repo := &fakeOptimizationRepo{}
 	svc := NewOptimizationService(creator, rewriter, repo)
@@ -18,19 +18,19 @@ func TestOptimizationServiceCreatesParameterAndPromptCandidates(t *testing.T) {
 	job, candidates, err := svc.Generate(context.Background(), "tenant-1", GenerateCandidatesInput{
 		Baseline:         domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-1"},
 		SuiteRevisionID:  "suite-revision-1",
-		SearchSpace:      map[string][]any{"temperature": {0.1, 0.2}},
+		SearchSpace:      map[string][]any{},
 		FailureSummaries: []string{"物流问题被分成其他"},
 	})
 	if err != nil {
 		t.Fatalf("Generate returned error: %v", err)
 	}
-	if job.ID == "" || len(candidates) != 3 {
+	if job.ID == "" || len(candidates) != 1 {
 		t.Fatalf("unexpected generation result: job=%+v candidates=%+v", job, candidates)
 	}
-	if candidates[0].Source != "parameter_search" || candidates[2].Source != "llm_rewrite" {
+	if candidates[0].Source != "llm_rewrite" {
 		t.Fatalf("unexpected candidate sources: %+v", candidates)
 	}
-	if len(repo.savedCandidates) != 3 || creator.calls != 3 {
+	if len(repo.savedCandidates) != 1 || creator.calls != 1 {
 		t.Fatalf("candidates not persisted/created: saved=%d calls=%d", len(repo.savedCandidates), creator.calls)
 	}
 }
@@ -40,7 +40,7 @@ type fakeCandidateCreator struct{ calls int }
 func (f *fakeCandidateCreator) LoadOptimizableSnapshot(
 	_ context.Context, _ string, _ domain.ResourceRef,
 ) (map[string]any, error) {
-	return map[string]any{"promptTemplate": "分类：{{.input}}"}, nil
+	return map[string]any{"instructions": "分类输入"}, nil
 }
 
 func (f *fakeCandidateCreator) CreateCandidate(

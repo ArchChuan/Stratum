@@ -177,8 +177,8 @@ func TestClientManagerConnectDoesNotBlockReadersWhileDialing(t *testing.T) {
 	}
 }
 
-// TestMCPSkillWrapper 测试 MCP Skill 包装器
-func TestMCPSkillWrapper(t *testing.T) {
+// TestMCPToolHandle 测试 MCP Skill 包装器
+func TestMCPToolHandle(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	manager := NewClientManager(logger, nil, nil)
 
@@ -187,7 +187,7 @@ func TestMCPSkillWrapper(t *testing.T) {
 		Description: "Test Tool",
 	}
 
-	wrapper := &MCPSkillWrapper{
+	wrapper := &MCPToolHandle{
 		ID:          "mcp:test:test_tool",
 		Name:        "test_tool",
 		Description: "Test Tool",
@@ -211,30 +211,43 @@ func TestMCPSkillWrapper(t *testing.T) {
 	}
 }
 
-// TestMCPSkillRegistry 测试 MCP Skill 注册表
-func TestMCPSkillRegistry(t *testing.T) {
+func TestAgentToolProviderKeepsStableExposedIDAndRawMCPToolName(t *testing.T) {
+	logger := zap.NewNop()
+	manager := NewClientManager(logger, nil, nil)
+	registry := NewMCPToolRegistry(manager, logger)
+	catalog := NewMCPToolCatalog("orders", manager, logger)
+	catalog.AddToolForTest(&MCPToolHandle{ID: "mcp:orders:get_order", Name: "get_order", Tool: &MCPTool{Name: "get_order", Description: "get"}, ServerID: "orders", Manager: manager, logger: logger})
+	registry.RegisterCatalogForTest("orders", catalog)
+	tools := RegistryAsAgentToolProvider(registry).ToolsForServer(context.Background(), "orders")
+	if len(tools) != 1 || tools[0].Name != "mcp:orders:get_order" || tools[0].CapabilityID != "get_order" {
+		t.Fatalf("unexpected tool definition: %#v", tools)
+	}
+}
+
+// TestMCPToolRegistry 测试 MCP Skill 注册表
+func TestMCPToolRegistry(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	manager := NewClientManager(logger, nil, nil)
-	registry := NewMCPSkillRegistry(manager, logger)
+	registry := NewMCPToolRegistry(manager, logger)
 
-	if len(registry.GetAllSkills()) != 0 {
-		t.Errorf("expected 0 skills, got %d", len(registry.GetAllSkills()))
+	if len(registry.GetAllTools()) != 0 {
+		t.Errorf("expected 0 skills, got %d", len(registry.GetAllTools()))
 	}
 
 	// 测试获取不存在的 Skill
-	skill := registry.GetSkill("nonexistent")
+	skill := registry.GetRegisteredTool("nonexistent")
 	if skill != nil {
 		t.Fatal("skill should be nil")
 	}
 }
 
-// TestMCPSkillRegistryExecute 测试执行不存在的 Skill
-func TestMCPSkillRegistryExecute(t *testing.T) {
+// TestMCPToolRegistryExecute 测试执行不存在的 Skill
+func TestMCPToolRegistryExecute(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	manager := NewClientManager(logger, nil, nil)
-	registry := NewMCPSkillRegistry(manager, logger)
+	registry := NewMCPToolRegistry(manager, logger)
 
-	_, err := registry.ExecuteSkill("nonexistent", nil)
+	_, err := registry.ExecuteToolByID("nonexistent", nil)
 	if err == nil {
 		t.Fatal("expected error for nonexistent skill")
 	}
@@ -338,13 +351,13 @@ func TestCacheClear(t *testing.T) {
 	}
 }
 
-// TestMCPSkillAdapterGetAllSkills 测试获取所有 Skills
-func TestMCPSkillAdapterGetAllSkills(t *testing.T) {
+// TestMCPToolCatalogGetAllTools 测试获取所有 Skills
+func TestMCPToolCatalogGetAllTools(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	manager := NewClientManager(logger, nil, nil)
-	adapter := NewMCPSkillAdapter("test", manager, logger)
+	adapter := NewMCPToolCatalog("test", manager, logger)
 
-	skills := adapter.GetAllSkills()
+	skills := adapter.GetAllTools()
 	if len(skills) != 0 {
 		t.Errorf("expected 0 skills, got %d", len(skills))
 	}
@@ -427,10 +440,10 @@ func TestStoreResourcesRespectsMaxSize(t *testing.T) {
 	}
 }
 
-// TestMCPSkillWrapperUsesStoredContext 验证 Execute 使用构造时注入的 context
-func TestMCPSkillWrapperUsesStoredContext(t *testing.T) {
+// TestMCPToolHandleUsesStoredContext 验证 Execute 使用构造时注入的 context
+func TestMCPToolHandleUsesStoredContext(t *testing.T) {
 	logger := zap.NewNop()
-	wrapper := &MCPSkillWrapper{
+	wrapper := &MCPToolHandle{
 		ID:       "mcp:test:tool",
 		Name:     "tool",
 		Type:     "mcp",

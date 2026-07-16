@@ -10,7 +10,7 @@ import (
 )
 
 // BuildExtraToolsForTest exposes buildExtraTools to external test packages.
-func (s *AgentService) BuildExtraToolsForTest(ctx context.Context, tenantID string, mcpServerIDs, allowedSkills []string) ([]port.ToolDefinition, map[string]port.SkillToolRef) {
+func (s *AgentService) BuildExtraToolsForTest(ctx context.Context, tenantID string, mcpServerIDs, allowedSkills []string) ([]port.ToolDefinition, map[string]port.SkillActivation) {
 	return s.buildExtraTools(ctx, tenantID, "test-subject", mcpServerIDs, allowedSkills)
 }
 

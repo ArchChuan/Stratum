@@ -23,25 +23,31 @@ const (
 
 // ReActState is the mutable state threaded through the ReAct graph.
 type ReActState struct {
-	TenantID       string
-	TraceID        string
-	ConversationID string
-	LLMAPIKeys     map[string]string
-	Model          string
-	AvailableTools []port.ToolDefinition
-	// SkillToolIndex maps exposed tool names to skill/version refs.
-	SkillToolIndex   map[string]port.SkillToolRef
-	Messages         []port.LLMMessage
-	AllToolCalls     []port.ToolCall
-	ToolObservations []domain.ToolObservation
-	TraceEvents      []domain.AgentTraceEvent
-	Output           string
-	Steps            int
-	TotalTokens      int
-	TotalCostUSD     float64
-	OnToken          func(string) // if non-nil, stream tokens from the final LLM response
-	RAGSearchFn      func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
-	RecallMemoryFn   func(ctx context.Context, input map[string]any) (string, error)
+	TenantID                   string
+	TraceID                    string
+	ConversationID             string
+	LLMAPIKeys                 map[string]string
+	Model                      string
+	AvailableTools             []port.ToolDefinition
+	SkillCatalog               map[string]port.SkillActivation
+	ActiveSkill                *port.SkillActivation
+	ToolCallFn                 func(ctx context.Context, serverID, toolName string, input map[string]any) (any, error)
+	ApprovalRequestFn          port.ToolApprovalRequester
+	ApprovedToolCallFn         port.ApprovedToolCallFn
+	ExecutionID                string
+	AgentKnowledgeWorkspaceIDs []string
+	AgentMemoryScope           string
+	Messages                   []port.LLMMessage
+	AllToolCalls               []port.ToolCall
+	ToolObservations           []domain.ToolObservation
+	TraceEvents                []domain.AgentTraceEvent
+	Output                     string
+	Steps                      int
+	TotalTokens                int
+	TotalCostUSD               float64
+	OnToken                    func(string) // if non-nil, stream tokens from the final LLM response
+	RAGSearchFn                func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	RecallMemoryFn             func(ctx context.Context, input map[string]any) (string, error)
 	// MaxLLMSteps caps LLM-node invocations; on the last allowed call tools are
 	// stripped and the model is asked to produce a final answer from collected context.
 	MaxLLMSteps int
@@ -94,8 +100,8 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 	return func(ctx context.Context, s ReActState) (ReActState, error) {
 		start := time.Now()
 
-		tools := s.AvailableTools
-		messages := s.Messages
+		tools := effectiveTools(s.AvailableTools, s.SkillCatalog, s.ActiveSkill, s.AgentKnowledgeWorkspaceIDs, s.AgentMemoryScope)
+		messages := messagesWithActiveSkill(s.Messages, s.ActiveSkill)
 		if s.MaxLLMSteps > 0 && s.Steps >= s.MaxLLMSteps-1 {
 			tools = nil
 			messages = append(messages, port.LLMMessage{
@@ -290,7 +296,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 				),
 			)
 			var content string
-			provider := classifyToolProvider(tc.Name, s.AvailableTools, s.SkillToolIndex)
+			provider := classifyToolProvider(tc.Name, s.AvailableTools)
 			status := domain.ToolTraceStatusSuccess
 			errMsg := ""
 			s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
@@ -314,6 +320,17 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 			switch tc.Name {
 			case "stratum_continue_reasoning":
 				content = "Continuing reasoning..."
+			case "stratum_activate_skill":
+				skillID, _ := tc.Arguments["skill_id"].(string)
+				activation, ok := s.SkillCatalog[skillID]
+				if !ok {
+					content = fmt.Sprintf("error: skill %q is not available in this run", skillID)
+					status = domain.ToolTraceStatusError
+					errMsg = content
+					break
+				}
+				s.ActiveSkill = &activation
+				content = fmt.Sprintf("activated skill %s revision %s", activation.SkillID, activation.RevisionID)
 			case "stratum_search_knowledge":
 				if s.RAGSearchFn == nil {
 					content = "error: stratum_search_knowledge tool not configured"
@@ -327,6 +344,13 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 						}
 					}
 					query, _ := tc.Arguments["query"].(string)
+					workspaces = allowedKnowledgeWorkspaces(workspaces, s.AgentKnowledgeWorkspaceIDs, s.ActiveSkill)
+					if len(workspaces) == 0 {
+						content = "error: no authorized knowledge workspace"
+						status = domain.ToolTraceStatusError
+						errMsg = content
+						break
+					}
 					topK := 5
 					if v, ok := tc.Arguments["top_k"].(float64); ok {
 						topK = int(v)
@@ -353,9 +377,14 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					zap.Int64("latency_ms", toolLatencyMs),
 				)
 			case "stratum_recall_memory":
-				if s.RecallMemoryFn == nil {
+				switch {
+				case s.ActiveSkill != nil && !containsString(s.ActiveSkill.MemoryScopes, s.AgentMemoryScope):
+					content = "error: active skill does not permit this memory scope"
+					status = domain.ToolTraceStatusError
+					errMsg = content
+				case s.RecallMemoryFn == nil:
 					content = "error: stratum_recall_memory tool not configured"
-				} else {
+				default:
 					var recallErr error
 					recallCtx, recallCancel := context.WithTimeout(ctx, constants.AgentMemoryRecallTimeout)
 					content, recallErr = s.RecallMemoryFn(recallCtx, tc.Arguments)
@@ -375,8 +404,8 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					zap.Int64("latency_ms", toolLatencyMs),
 				)
 			default:
-				skillRef, ok := s.SkillToolIndex[tc.Name]
-				if !ok && provider.ProviderType != domain.ProviderTypeMCP {
+				tool, ok := findTool(tc.Name, s.AvailableTools)
+				if !ok || provider.ProviderType != domain.ProviderTypeMCP {
 					content = fmt.Sprintf("error: unknown tool %q", tc.Name)
 					status = domain.ToolTraceStatusError
 					errMsg = fmt.Sprintf("unknown tool %q", tc.Name)
@@ -387,37 +416,54 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					)
 					break
 				}
-				skillID := skillRef.SkillID
-				versionID := skillRef.VersionID
-				if provider.ProviderType == domain.ProviderTypeMCP {
-					skillID = tc.Name
+				var toolOutput any
+				var callErr error
+				handled := false
+				if s.ApprovedToolCallFn != nil {
+					toolOutput, handled, callErr = s.ApprovedToolCallFn(ctx, tool.ServerID, tool.CapabilityID, tc.Arguments)
 				}
-				toolResp, err := capGW.Route(ctx, port.CapabilityRequest{
-					TraceID:  s.TraceID,
-					TenantID: s.TenantID,
-					Type:     port.CapSkill,
-					Timeout:  30 * time.Second,
-					Skill: &port.SkillCapRequest{
-						SkillID:   skillID,
-						VersionID: versionID,
-						Input:     tc.Arguments,
-					},
-				})
+				risk := port.ParseToolRiskLevel(tool.Metadata["risk_level"])
+				if !handled && risk.RequiresApproval() {
+					approvalID := ""
+					if s.ApprovalRequestFn != nil {
+						var approvalErr error
+						approvalID, approvalErr = s.ApprovalRequestFn(ctx, port.ToolApprovalRequest{
+							TenantID: s.TenantID, TraceID: s.TraceID, ExecutionID: s.ExecutionID,
+							ToolCallID: tc.ID, ServerID: tool.ServerID, ToolName: tool.CapabilityID,
+							RiskLevel: risk, Arguments: tc.Arguments,
+						})
+						if approvalErr != nil {
+							return s, fmt.Errorf("create tool approval: %w", approvalErr)
+						}
+					}
+					return s, &port.ToolApprovalRequiredError{ApprovalID: approvalID, ToolCallID: tc.ID, ServerID: tool.ServerID, ToolName: tool.CapabilityID, RiskLevel: risk}
+				}
+				if !handled && s.ToolCallFn == nil {
+					content = "error: MCP tool executor not configured"
+					status = domain.ToolTraceStatusError
+					errMsg = content
+					break
+				}
+				if !handled {
+					toolCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+					toolOutput, callErr = s.ToolCallFn(toolCtx, tool.ServerID, tool.CapabilityID, tc.Arguments)
+					cancel()
+				}
 				toolLatencyMs := time.Since(toolStart).Milliseconds()
 				switch {
-				case err != nil:
+				case callErr != nil:
 					status = domain.ToolTraceStatusError
-					errMsg = err.Error()
+					errMsg = callErr.Error()
 					logger.Error("react.tool",
 						zap.String("trace_id", s.TraceID),
 						zap.String("tenant_id", s.TenantID),
 						zap.String("conversation_id", s.ConversationID),
 						zap.String("tool_name", tc.Name),
 						zap.Int64("latency_ms", toolLatencyMs),
-						zap.Error(err),
+						zap.Error(callErr),
 					)
-					content = fmt.Sprintf("error: %v", err)
-				case toolResp.Output != nil:
+					content = fmt.Sprintf("error: %v", callErr)
+				case toolOutput != nil:
 					logger.Info("react.tool",
 						zap.String("trace_id", s.TraceID),
 						zap.String("tenant_id", s.TenantID),
@@ -425,7 +471,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 						zap.String("tool_name", tc.Name),
 						zap.Int64("latency_ms", toolLatencyMs),
 					)
-					content = fmt.Sprintf("%v", toolResp.Output)
+					content = fmt.Sprintf("%v", toolOutput)
 				default:
 					logger.Info("react.tool",
 						zap.String("trace_id", s.TraceID),
@@ -434,7 +480,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 						zap.String("tool_name", tc.Name),
 						zap.Int64("latency_ms", toolLatencyMs),
 					)
-					content = toolResp.Content
+					content = ""
 				}
 			}
 			toolLatencyMs := time.Since(toolStart).Milliseconds()
@@ -525,7 +571,7 @@ type toolProviderRef struct {
 	Metadata     map[string]any
 }
 
-func classifyToolProvider(name string, tools []port.ToolDefinition, skillIndex map[string]port.SkillToolRef) toolProviderRef {
+func classifyToolProvider(name string, tools []port.ToolDefinition) toolProviderRef {
 	switch name {
 	case "stratum_continue_reasoning":
 		return toolProviderRef{ToolType: domain.ToolTypeReasoning, ProviderType: domain.ProviderTypeBuiltin, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
@@ -533,6 +579,8 @@ func classifyToolProvider(name string, tools []port.ToolDefinition, skillIndex m
 		return toolProviderRef{ToolType: domain.ToolTypeBuiltinRAG, ProviderType: domain.ProviderTypeBuiltin, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	case "stratum_recall_memory":
 		return toolProviderRef{ToolType: domain.ToolTypeBuiltinMemory, ProviderType: domain.ProviderTypeBuiltin, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
+	case "stratum_activate_skill":
+		return toolProviderRef{ToolType: domain.ToolTypeSkill, ProviderType: domain.ProviderTypeSkill, ProviderID: name, CapabilityID: name, NodeID: name, NodeType: domain.ObservationTypeSkill}
 	default:
 		for _, td := range tools {
 			if td.Name != name {
@@ -568,19 +616,128 @@ func classifyToolProvider(name string, tools []port.ToolDefinition, skillIndex m
 			}
 			return ref
 		}
-		if ref, ok := skillIndex[name]; ok {
-			return toolProviderRef{
-				ToolType:     domain.ToolTypeSkill,
-				ProviderType: domain.ProviderTypeSkill,
-				ProviderID:   ref.SkillID,
-				CapabilityID: ref.SkillID,
-				NodeID:       name,
-				NodeType:     domain.ObservationTypeSkill,
-				Metadata:     map[string]any{"version_id": ref.VersionID},
-			}
-		}
 		return toolProviderRef{ToolType: domain.ToolTypeInternal, ProviderType: domain.ProviderTypeInternal, ProviderID: name, CapabilityID: name, NodeID: name, NodeType: domain.ToolTypeInternal}
 	}
+}
+
+func findTool(name string, tools []port.ToolDefinition) (port.ToolDefinition, bool) {
+	for _, tool := range tools {
+		if tool.Name == name {
+			if tool.CapabilityID == "" {
+				tool.CapabilityID = tool.Name
+			}
+			return tool, true
+		}
+	}
+	return port.ToolDefinition{}, false
+}
+
+func allowedKnowledgeWorkspaces(requested, agentAllowed []string, active *port.SkillActivation) []string {
+	agentSet := make(map[string]struct{}, len(agentAllowed))
+	for _, id := range agentAllowed {
+		agentSet[id] = struct{}{}
+	}
+	skillSet := map[string]struct{}{}
+	if active != nil {
+		for _, id := range active.KnowledgeWorkspaceIDs {
+			skillSet[id] = struct{}{}
+		}
+	}
+	if len(requested) == 0 {
+		requested = agentAllowed
+	}
+	out := make([]string, 0, len(requested))
+	seen := map[string]struct{}{}
+	for _, id := range requested {
+		if _, ok := agentSet[id]; !ok {
+			continue
+		}
+		if active != nil {
+			if _, ok := skillSet[id]; !ok {
+				continue
+			}
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func effectiveTools(
+	available []port.ToolDefinition,
+	catalog map[string]port.SkillActivation,
+	active *port.SkillActivation,
+	agentKnowledgeWorkspaceIDs []string,
+	agentMemoryScope string,
+) []port.ToolDefinition {
+	out := make([]port.ToolDefinition, 0, len(available)+1)
+	if len(catalog) > 0 {
+		ids := make([]any, 0, len(catalog))
+		for id := range catalog {
+			ids = append(ids, id)
+		}
+		out = append(out, port.ToolDefinition{
+			Name:         "stratum_activate_skill",
+			Description:  "Activate one versioned task method for the current run. Activating another skill replaces the current one.",
+			ProviderType: domain.ProviderTypeSkill,
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"skill_id": map[string]any{"type": "string", "enum": ids}},
+				"required":   []string{"skill_id"},
+			},
+		})
+	}
+	allowedMCP := map[string]struct{}{}
+	if active != nil {
+		for _, id := range active.MCPToolIDs {
+			allowedMCP[id] = struct{}{}
+		}
+	}
+	for _, tool := range available {
+		if active != nil && tool.Name == "stratum_recall_memory" && !containsString(active.MemoryScopes, agentMemoryScope) {
+			continue
+		}
+		if active != nil && tool.Name == "stratum_search_knowledge" && len(allowedKnowledgeWorkspaces(nil, agentKnowledgeWorkspaceIDs, active)) == 0 {
+			continue
+		}
+		if tool.ProviderType == domain.ProviderTypeMCP && active != nil {
+			if _, ok := allowedMCP[tool.Name]; !ok {
+				continue
+			}
+		}
+		out = append(out, tool)
+	}
+	return out
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func messagesWithActiveSkill(messages []port.LLMMessage, active *port.SkillActivation) []port.LLMMessage {
+	if active == nil || active.Instructions == "" {
+		return messages
+	}
+	instruction := port.LLMMessage{
+		Role:    "system",
+		Content: fmt.Sprintf("Active Skill %s (revision %s):\n%s", active.Name, active.RevisionID, active.Instructions),
+	}
+	out := make([]port.LLMMessage, 0, len(messages)+1)
+	if len(messages) > 0 && messages[0].Role == "system" {
+		out = append(out, messages[0], instruction)
+		out = append(out, messages[1:]...)
+		return out
+	}
+	out = append(out, instruction)
+	return append(out, messages...)
 }
 
 func summarizeToolObservation(name, content, status, errMsg string) string {

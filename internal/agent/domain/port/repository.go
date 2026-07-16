@@ -8,6 +8,7 @@ package port
 
 import (
 	"context"
+	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 )
@@ -46,6 +47,16 @@ type CheckpointRepo interface {
 	Upsert(ctx context.Context, tenantID string, checkpoint domain.AgentExecutionCheckpoint) error
 	GetLatest(ctx context.Context, tenantID, executionID string) (*domain.AgentExecutionCheckpoint, error)
 	MarkCompleted(ctx context.Context, tenantID, executionID string) error
+}
+
+type ToolApprovalRepo interface {
+	Create(ctx context.Context, tenantID string, approval domain.ToolApproval) (string, error)
+	Get(ctx context.Context, tenantID, approvalID string) (domain.ToolApproval, error)
+	Decide(ctx context.Context, tenantID, approvalID, decision, decidedBy, reason string, now time.Time) error
+	ClaimExecution(ctx context.Context, tenantID, approvalID string) error
+	ReleaseExecution(ctx context.Context, tenantID, approvalID string) error
+	MarkExecuted(ctx context.Context, tenantID, approvalID string) error
+	ListPending(ctx context.Context, tenantID string) ([]domain.ToolApproval, error)
 }
 
 // ChatRepo persists chat conversations and messages in the tenant schema.

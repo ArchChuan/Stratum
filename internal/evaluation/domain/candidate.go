@@ -13,7 +13,7 @@ var allowedParameterFields = map[string]struct{}{
 }
 
 var allowedPromptFields = map[string]struct{}{
-	"promptTemplate": {}, "systemPrompt": {},
+	"instructions": {},
 }
 
 func GenerateParameterPatches(searchSpace map[string][]any) ([]map[string]any, error) {

@@ -29,6 +29,8 @@ type Agent struct {
 	ToolTraceStore  agent.ToolTraceStore
 	TraceEventStore agent.TraceEventStore
 	CheckpointStore agent.CheckpointStore
+	ApprovalStore   agentport.ToolApprovalRepo
+	ApprovalService *agent.ToolApprovalService
 	TenantResolver  agentport.TenantCapabilityResolver
 	SkillLookup     agentport.SkillLookup
 	TenantSettings  agentport.TenantSettings
@@ -48,67 +50,66 @@ func (a ragSearchAdapter) SearchKnowledge(
 	return knowledge.NewRAGSearchFn(a.rag, tenantID)(ctx, workspaceIDs, query, topK)
 }
 
-type publishedSkillToolResolver struct {
+type publishedSkillActivationResolver struct {
 	db *pgxpool.Pool
 }
 
-func (r publishedSkillToolResolver) ResolveTools(
-	ctx context.Context,
-	_ string,
-	skillIDs []string,
-) ([]agentport.ToolDefinition, map[string]agentport.SkillToolRef, error) {
-	tools := make([]agentport.ToolDefinition, 0, len(skillIDs))
-	index := make(map[string]agentport.SkillToolRef, len(skillIDs))
-	if r.db == nil || len(skillIDs) == 0 {
-		return tools, index, nil
+func (r publishedSkillActivationResolver) ResolveSkills(
+	ctx context.Context, _ string, refs []agentport.SkillRevisionRef,
+) (map[string]agentport.SkillActivation, error) {
+	catalog := make(map[string]agentport.SkillActivation, len(refs))
+	if r.db == nil || len(refs) == 0 {
+		return catalog, nil
 	}
 	err := tenantdb.ExecTenant(ctx, r.db, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx,
-			`SELECT s.id, v.id, v.tool_contract
-			 FROM skills s
-			 JOIN skill_versions v ON v.id = s.active_version_id
-			 WHERE s.id = ANY($1) AND v.status = 'published'`,
-			skillIDs,
-		)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var skillID, versionID string
-			var raw []byte
-			if err := rows.Scan(&skillID, &versionID, &raw); err != nil {
-				return err
-			}
-			var contract struct {
-				ToolName        string         `json:"toolName"`
-				Description     string         `json:"description"`
-				InputSchema     map[string]any `json:"inputSchema"`
-				CallingGuidance string         `json:"callingGuidance"`
-			}
-			if err := json.Unmarshal(raw, &contract); err != nil {
-				return err
-			}
-			if contract.ToolName == "" {
+		for _, ref := range refs {
+			var skillID, revisionID, skillName, skillDescription, instructions string
+			var activationRaw, requirementsRaw []byte
+			err := tx.QueryRow(ctx,
+				`SELECT s.id, r.id, s.name, s.description, r.instructions,
+				        r.activation_contract, r.requirements
+				 FROM skills s JOIN skill_revisions r
+				   ON r.id=COALESCE(NULLIF($2, ''), s.active_revision_id)
+				 WHERE s.id=$1 AND r.status IN ('published', 'candidate')`,
+				ref.SkillID, ref.RevisionID,
+			).Scan(&skillID, &revisionID, &skillName, &skillDescription, &instructions, &activationRaw, &requirementsRaw)
+			if err == pgx.ErrNoRows {
 				continue
 			}
-			description := contract.Description
-			if contract.CallingGuidance != "" {
-				description = description + "\n调用指引：" + contract.CallingGuidance
+			if err != nil {
+				return err
 			}
-			if contract.InputSchema == nil {
-				contract.InputSchema = map[string]any{"type": "object"}
+			var activation struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
 			}
-			tools = append(tools, agentport.ToolDefinition{
-				Name:        contract.ToolName,
-				Description: description,
-				InputSchema: contract.InputSchema,
-			})
-			index[contract.ToolName] = agentport.SkillToolRef{SkillID: skillID, VersionID: versionID}
+			var requirements struct {
+				MCPToolIDs            []string `json:"mcpToolIds"`
+				KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
+				MemoryScopes          []string `json:"memoryScopes"`
+			}
+			if err := json.Unmarshal(activationRaw, &activation); err != nil {
+				return err
+			}
+			if err := json.Unmarshal(requirementsRaw, &requirements); err != nil {
+				return err
+			}
+			if activation.Name == "" {
+				activation.Name = skillName
+			}
+			if activation.Description == "" {
+				activation.Description = skillDescription
+			}
+			catalog[skillID] = agentport.SkillActivation{
+				SkillID: skillID, RevisionID: revisionID, Name: activation.Name,
+				Description: activation.Description, Instructions: instructions,
+				MCPToolIDs: requirements.MCPToolIDs, KnowledgeWorkspaceIDs: requirements.KnowledgeWorkspaceIDs,
+				MemoryScopes: requirements.MemoryScopes,
+			}
 		}
-		return rows.Err()
+		return nil
 	})
-	return tools, index, err
+	return catalog, err
 }
 
 func (c *Container) buildAgent(_ context.Context) error {
@@ -137,34 +138,38 @@ func (c *Container) buildAgent(_ context.Context) error {
 		a.ToolTraceStore = persistence.NewPgToolTraceStore(db)
 		a.TraceEventStore = persistence.NewPgTraceEventStore(db)
 		a.CheckpointStore = persistence.NewPgCheckpointStore(db)
+		a.ApprovalStore = persistence.NewPgToolApprovalStore(db)
+		a.ApprovalService = agent.NewToolApprovalService(a.ApprovalStore, a.CheckpointStore, c.Platform.AESKey)
 		a.SkillLookup = persistence.NewPgSkillLookup(db)
 		a.TenantSettings = persistence.NewPgTenantSettings(db)
-		var skillAdapter agentport.Adapter
-		if c.Skill != nil {
-			skillAdapter = c.Skill.SkillAdapter
-		}
 		var fallbackGateway *llmgateway.Gateway
 		if c.LLMGateway != nil {
 			fallbackGateway = c.LLMGateway.Gateway
 		}
-		a.TenantResolver = newTenantCapabilityResolver(db, c.Platform.AESKey, c.Platform.GatewayCache, fallbackGateway, skillAdapter, c.Logger)
+		a.TenantResolver = newTenantCapabilityResolver(
+			db, c.Platform.AESKey, c.Platform.GatewayCache, fallbackGateway, c.Logger,
+			c.Config.QwenBaseURL, c.Config.ZhipuBaseURL,
+		)
 	}
 
 	deps := agent.AgentServiceDeps{
-		Registry:          registry,
-		TenantSettings:    a.TenantSettings,
-		SkillLookup:       a.SkillLookup,
-		SkillToolResolver: publishedSkillToolResolver{db: db},
-		TenantResolver:    a.TenantResolver,
-		ExecStore:         a.ExecStore,
-		ChatStore:         a.ChatStore,
-		ToolTraceStore:    a.ToolTraceStore,
-		TraceEventStore:   a.TraceEventStore,
-		CheckpointStore:   a.CheckpointStore,
-		Logger:            c.Logger,
+		Registry:                registry,
+		TenantSettings:          a.TenantSettings,
+		SkillLookup:             a.SkillLookup,
+		SkillActivationResolver: publishedSkillActivationResolver{db: db},
+		TenantResolver:          a.TenantResolver,
+		ExecStore:               a.ExecStore,
+		ChatStore:               a.ChatStore,
+		ToolTraceStore:          a.ToolTraceStore,
+		TraceEventStore:         a.TraceEventStore,
+		CheckpointStore:         a.CheckpointStore,
+		ApprovalService:         a.ApprovalService,
+		Logger:                  c.Logger,
 	}
 	if c.MCP != nil {
 		deps.MCPTools = c.MCP.AgentToolProvider
+		deps.MCPToolExecutor = agentMCPExecutor{manager: c.MCP.Manager}
+		deps.MCPToolPolicy = agentMCPPolicyResolver{service: c.MCP.Service}
 	}
 	if c.Knowledge != nil && c.Knowledge.RAGService != nil {
 		deps.RAGSearch = ragSearchAdapter{rag: c.Knowledge.RAGService}

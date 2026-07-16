@@ -1,0 +1,8 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "GET",
+    "path": "/mcp/tool-policies",
+    "want_status": 401
+  }
+]

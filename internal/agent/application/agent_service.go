@@ -9,7 +9,10 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
+	"strings"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -26,23 +29,26 @@ const previewMaxChars = 50
 // Everything is an interface or value type — no concrete infrastructure
 // imports allowed.
 type AgentServiceDeps struct {
-	Registry              *Registry
-	TenantSettings        port.TenantSettings
-	SkillLookup           port.SkillLookup
-	SkillToolResolver     port.SkillToolResolver
-	SkillRevisionResolver port.SkillRevisionResolver
-	RAGSearch             port.RAGSearchProvider
-	TenantResolver        port.TenantCapabilityResolver
-	MCPTools              port.MCPToolProvider
-	ExecStore             ExecutionStore
-	ChatStore             ChatStore
-	ToolTraceStore        ToolTraceStore
-	TraceEventStore       TraceEventStore
-	CheckpointStore       CheckpointStore
-	MemoryCleaner         port.AgentMemoryCleaner
-	MemoryBuffer          port.BufferMemoryFn
-	Metrics               observability.MetricsProvider
-	Logger                *zap.Logger
+	Registry                *Registry
+	TenantSettings          port.TenantSettings
+	SkillLookup             port.SkillLookup
+	SkillActivationResolver port.SkillActivationResolver
+	SkillRevisionResolver   port.SkillRevisionResolver
+	RAGSearch               port.RAGSearchProvider
+	TenantResolver          port.TenantCapabilityResolver
+	MCPTools                port.MCPToolProvider
+	MCPToolExecutor         port.MCPToolExecutor
+	MCPToolPolicy           port.MCPToolPolicyResolver
+	ApprovalService         *ToolApprovalService
+	ExecStore               ExecutionStore
+	ChatStore               ChatStore
+	ToolTraceStore          ToolTraceStore
+	TraceEventStore         TraceEventStore
+	CheckpointStore         CheckpointStore
+	MemoryCleaner           port.AgentMemoryCleaner
+	MemoryBuffer            port.BufferMemoryFn
+	Metrics                 observability.MetricsProvider
+	Logger                  *zap.Logger
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields
@@ -77,7 +83,7 @@ type CreateAgentInput struct {
 	MaxIterations         int
 	MaxContextTokens      int
 	AllowedSkills         []string
-	MCPServerIDs          []string
+	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
 }
@@ -92,7 +98,7 @@ type UpdateAgentInput struct {
 	MaxIterations         int
 	MaxContextTokens      int
 	AllowedSkills         []string
-	MCPServerIDs          []string
+	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
 }
@@ -110,7 +116,7 @@ type AgentDTO struct {
 	MaxIterations         int
 	MaxContextTokens      int
 	AllowedSkills         []string
-	MCPServerIDs          []string
+	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	CreatedAt             string
 	MemoryScope           string
@@ -140,7 +146,7 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		MaxIterations:         in.MaxIterations,
 		MaxContextTokens:      in.MaxContextTokens,
 		AllowedSkills:         in.AllowedSkills,
-		MCPServerIDs:          in.MCPServerIDs,
+		MCPToolIDs:            in.MCPToolIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
 		MemoryScope:           in.MemoryScope,
 		Capabilities:          []domain.AgentCapability{},
@@ -198,7 +204,7 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		MaxIterations:         in.MaxIterations,
 		MaxContextTokens:      in.MaxContextTokens,
 		AllowedSkills:         skills,
-		MCPServerIDs:          in.MCPServerIDs,
+		MCPToolIDs:            in.MCPToolIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
 		MemoryScope:           in.MemoryScope,
 	}
@@ -257,7 +263,7 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		MaxIterations:         cfg.MaxIterations,
 		MaxContextTokens:      cfg.MaxContextTokens,
 		AllowedSkills:         cfg.AllowedSkills,
-		MCPServerIDs:          cfg.MCPServerIDs,
+		MCPToolIDs:            cfg.MCPToolIDs,
 		KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,
 		CreatedAt:             time.Now().Format(time.RFC3339),
 		MemoryScope:           cfg.MemoryScope,
@@ -322,8 +328,8 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		return nil, 0, ErrNotFound
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
-	_, options := s.assembleOptions(ctx, a, req, meta)
 	executionID := uuid.Must(uuid.NewV7()).String()
+	_, options := s.assembleOptions(ctx, a, req, meta, executionID)
 	options = append(options, WithExecutionID(executionID))
 
 	s.deps.Logger.Debug("agent.execute",
@@ -382,8 +388,8 @@ func (s *AgentService) ExecuteStream(
 		return nil, nil, nil, ErrNotFound
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
-	streamCtx, options := s.assembleOptions(ctx, a, req, meta)
 	executionID := uuid.Must(uuid.NewV7()).String()
+	streamCtx, options := s.assembleOptions(ctx, a, req, meta, executionID)
 	options = append(options, WithTokenCallback(tokenCb))
 	options = append(options, WithExecutionID(executionID))
 
@@ -455,11 +461,86 @@ func (s *AgentService) ListExecutions(ctx context.Context, page, pageSize int) (
 	return out, total, nil
 }
 
+func (s *AgentService) ListPendingApprovals(ctx context.Context, tenantID string) ([]domain.ToolApproval, error) {
+	if s.deps.ApprovalService == nil {
+		return []domain.ToolApproval{}, nil
+	}
+	return s.deps.ApprovalService.ListPending(ctx, tenantID)
+}
+
+func (s *AgentService) DecideToolApproval(ctx context.Context, tenantID, id, decision, actor, reason string) error {
+	if s.deps.ApprovalService == nil {
+		return errors.New("tool approval service not configured")
+	}
+	return s.deps.ApprovalService.Decide(ctx, tenantID, id, decision, actor, reason)
+}
+
+func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approvalID string) (*AgentResult, int, error) {
+	if s.deps.ApprovalService == nil || s.deps.MCPToolExecutor == nil {
+		return nil, 0, errors.New("tool approval runtime not configured")
+	}
+	payload, err := s.deps.ApprovalService.ApprovedPayload(ctx, tenantID, approvalID)
+	if err != nil {
+		return nil, 0, err
+	}
+	a, ok := s.deps.Registry.Get(ctx, payload.AgentID)
+	if !ok {
+		return nil, 0, ErrNotFound
+	}
+	req := ExecRequest{Query: payload.Query, ConversationID: payload.ConversationID, UserID: payload.UserID}
+	meta := ExecMeta{TenantID: tenantID, TraceID: payload.TraceID}
+	_, options := s.assembleOptions(ctx, a, req, meta, payload.ExecutionID)
+	if len(payload.PinnedSkillRevisions) > 0 && s.deps.SkillActivationResolver != nil {
+		refs := make([]port.SkillRevisionRef, 0, len(payload.PinnedSkillRevisions))
+		for skillID, revisionID := range payload.PinnedSkillRevisions {
+			refs = append(refs, port.SkillRevisionRef{SkillID: skillID, RevisionID: revisionID})
+		}
+		catalog, resolveErr := s.deps.SkillActivationResolver.ResolveSkills(ctx, tenantID, refs)
+		if resolveErr != nil {
+			return nil, 0, resolveErr
+		}
+		options = append(options, WithSkillCatalog(catalog))
+	}
+	used := false
+	options = append(options, WithExecutionID(payload.ExecutionID), WithApprovedToolCallFn(func(callCtx context.Context, serverID, toolName string, args map[string]any) (any, bool, error) {
+		if used || serverID != payload.ServerID || toolName != payload.ToolName || !reflect.DeepEqual(args, payload.Arguments) {
+			return nil, false, nil
+		}
+		used = true
+		output, executeErr := s.deps.ApprovalService.ExecuteApproved(callCtx, tenantID, approvalID, serverID, toolName, args, s.deps.MCPToolExecutor)
+		return output, true, executeErr
+	}))
+	start := time.Now()
+	result, runErr := a.Execute(context.WithoutCancel(ctx), payload.Query, options...)
+	runErr = approvedToolResumeError(used, runErr)
+	duration := int(time.Since(start).Milliseconds())
+	s.recordExecution(ctx, payload.ExecutionID, payload.AgentID, payload.UserID, a.GetConfig().Name, payload.Query, result, runErr, duration)
+	if runErr == nil && s.deps.CheckpointStore != nil {
+		_ = s.deps.CheckpointStore.MarkCompleted(ctx, tenantID, payload.ExecutionID)
+	}
+	return result, duration, runErr
+}
+
+func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, activation port.SkillActivation) (*AgentResult, int, error) {
+	a, ok := s.deps.Registry.Get(ctx, agentID)
+	if !ok {
+		return nil, 0, ErrNotFound
+	}
+	executionID := uuid.Must(uuid.NewV7()).String()
+	_, options := s.assembleOptions(ctx, a, req, meta, executionID)
+	options = append(options, WithExecutionID(executionID), WithSkillCatalog(map[string]port.SkillActivation{activation.SkillID: activation}), WithActiveSkill(activation))
+	start := time.Now()
+	result, err := a.Execute(context.WithoutCancel(ctx), req.Query, options...)
+	duration := int(time.Since(start).Milliseconds())
+	s.recordExecution(ctx, executionID, agentID, req.UserID, a.GetConfig().Name, req.Query, result, err, duration)
+	return result, duration, err
+}
+
 // assembleOptions builds the ExecutionOption slice and resolves the
 // per-tenant CapabilityGateway. When meta.Stream is true, the returned
 // ctx carries the per-tenant LLM completer for streaming inner calls.
 func (s *AgentService) assembleOptions(
-	ctx context.Context, a Agent, req ExecRequest, meta ExecMeta,
+	ctx context.Context, a Agent, req ExecRequest, meta ExecMeta, executionID string,
 ) (context.Context, []ExecutionOption) {
 	options := []ExecutionOption{WithMaxSteps(a.GetConfig().MaxIterations)}
 	if req.MaxSteps > 0 {
@@ -497,13 +578,32 @@ func (s *AgentService) assembleOptions(
 	if subjectID == "" {
 		subjectID = meta.TraceID
 	}
-	extraTools, skillIndex := s.buildExtraTools(
-		ctx, meta.TenantID, subjectID, a.GetConfig().MCPServerIDs, a.GetConfig().AllowedSkills,
+	extraTools, skillCatalog := s.buildExtraTools(
+		ctx, meta.TenantID, subjectID, a.GetConfig().MCPToolIDs, a.GetConfig().AllowedSkills,
 	)
 	options = append(options,
 		WithExtraTools(extraTools),
-		WithSkillToolIndex(skillIndex),
+		WithSkillCatalog(skillCatalog),
 	)
+	if s.deps.ApprovalService != nil {
+		approvalService := s.deps.ApprovalService
+		agentID, userID, conversationID, query := a.GetConfig().ID, req.UserID, req.ConversationID, req.Query
+		pinned := make(map[string]string, len(skillCatalog))
+		for skillID, activation := range skillCatalog {
+			pinned[skillID] = activation.RevisionID
+		}
+		options = append(options, WithApprovalRequestFn(func(actx context.Context, request port.ToolApprovalRequest) (string, error) {
+			return approvalService.Request(actx, ToolApprovalPayload{
+				TenantID: meta.TenantID, ExecutionID: executionID, TraceID: meta.TraceID, AgentID: agentID, UserID: userID, ConversationID: conversationID,
+				ToolCallID: request.ToolCallID, ServerID: request.ServerID, ToolName: request.ToolName, RiskLevel: request.RiskLevel,
+				Query: query, Arguments: request.Arguments, PinnedSkillRevisions: pinned,
+			})
+		}))
+	}
+	if s.deps.MCPToolExecutor != nil {
+		executor := s.deps.MCPToolExecutor
+		options = append(options, WithToolCallFn(executor.ExecuteMCPTool))
+	}
 	if s.deps.RAGSearch != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
 		tenantID := meta.TenantID
 		options = append(options, WithRAGSearchFn(func(rctx context.Context, workspaces []string, query string, topK int) (string, error) {
@@ -554,23 +654,35 @@ func (s *AgentService) attachTraceStores(a Agent) {
 	}
 }
 
-// buildExtraTools converts MCPServerIDs and AllowedSkills into ToolDefinitions
+// buildExtraTools converts MCPToolIDs and AllowedSkills into ToolDefinitions
 // for the ReAct loop. Published skills use their tool contract names; legacy
 // skills fall back to tenant-scoped names. The returned index maps tool names
 // back to skill/version refs for execution routing.
 func (s *AgentService) buildExtraTools(
 	ctx context.Context,
 	tenantID, subjectID string,
-	mcpServerIDs, allowedSkills []string,
-) ([]port.ToolDefinition, map[string]port.SkillToolRef) {
+	mcpToolIDs, allowedSkills []string,
+) ([]port.ToolDefinition, map[string]port.SkillActivation) {
 	var tools []port.ToolDefinition
-	index := make(map[string]port.SkillToolRef, len(allowedSkills))
+	refs := make([]port.SkillRevisionRef, 0, len(allowedSkills))
 
-	for _, serverID := range mcpServerIDs {
+	allowedTools := make(map[string]struct{}, len(mcpToolIDs))
+	servers := map[string]struct{}{}
+	for _, toolID := range mcpToolIDs {
+		parts := strings.Split(toolID, ":")
+		if len(parts) == 3 && parts[0] == "mcp" {
+			allowedTools[toolID] = struct{}{}
+			servers[parts[1]] = struct{}{}
+		}
+	}
+	for serverID := range servers {
 		if s.deps.MCPTools == nil {
 			continue
 		}
 		for _, tool := range s.deps.MCPTools.ToolsForServer(ctx, serverID) {
+			if _, ok := allowedTools[tool.Name]; !ok {
+				continue
+			}
 			if tool.ProviderType == "" {
 				tool.ProviderType = domain.ProviderTypeMCP
 			}
@@ -586,70 +698,37 @@ func (s *AgentService) buildExtraTools(
 			if tool.NodeType == "" {
 				tool.NodeType = domain.ObservationTypeMCP
 			}
+			if tool.Metadata == nil {
+				tool.Metadata = make(map[string]any)
+			}
+			risk := port.ToolRiskUnclassified
+			if s.deps.MCPToolPolicy != nil {
+				resolved, err := s.deps.MCPToolPolicy.ResolveMCPToolRisk(ctx, tenantID, serverID, tool.CapabilityID)
+				if err == nil && resolved != "" {
+					risk = resolved
+				}
+			}
+			tool.Metadata["risk_level"] = string(risk)
 			tools = append(tools, tool)
 		}
 	}
 
-	if s.deps.SkillToolResolver != nil && len(allowedSkills) > 0 {
-		resolvedTools, resolvedIndex, err := s.deps.SkillToolResolver.ResolveTools(ctx, tenantID, allowedSkills)
-		if err == nil {
-			for i := range resolvedTools {
-				ref, ok := resolvedIndex[resolvedTools[i].Name]
-				if ok {
-					if s.deps.SkillRevisionResolver != nil {
-						if revisionID, found, resolveErr := s.deps.SkillRevisionResolver.ResolveSkillRevision(
-							ctx, tenantID, ref.SkillID, subjectID,
-						); resolveErr == nil && found {
-							ref.VersionID = revisionID
-							resolvedIndex[resolvedTools[i].Name] = ref
-						}
-					}
-					resolvedTools[i].ProviderType = domain.ProviderTypeSkill
-					resolvedTools[i].ProviderID = ref.SkillID
-					resolvedTools[i].CapabilityID = ref.SkillID
-					resolvedTools[i].NodeType = domain.ObservationTypeSkill
-					resolvedTools[i].Metadata = map[string]any{"version_id": ref.VersionID}
-				}
-			}
-			tools = append(tools, resolvedTools...)
-			for name, ref := range resolvedIndex {
-				index[name] = ref
-			}
-			return tools, index
-		}
-	}
-
 	for _, skillID := range allowedSkills {
-		name := skillID
-		description := skillID
-		if s.deps.SkillLookup != nil && tenantID != "" {
-			if n, d, err := s.deps.SkillLookup.LookupSkill(ctx, tenantID, skillID); err == nil && n != "" {
-				name = n
-				description = d
+		ref := port.SkillRevisionRef{SkillID: skillID}
+		if s.deps.SkillRevisionResolver != nil {
+			if revisionID, found, err := s.deps.SkillRevisionResolver.ResolveSkillRevision(ctx, tenantID, skillID, subjectID); err == nil && found {
+				ref.RevisionID = revisionID
 			}
 		}
-		toolName := fmt.Sprintf("tenant_%s_%s", tenantID, name)
-		index[toolName] = port.SkillToolRef{SkillID: skillID}
-		tools = append(tools, port.ToolDefinition{
-			Name:         toolName,
-			Description:  name + ": " + description,
-			ProviderType: domain.ProviderTypeSkill,
-			ProviderID:   skillID,
-			CapabilityID: skillID,
-			NodeType:     domain.ObservationTypeSkill,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"prompt": map[string]any{
-						"type":        "string",
-						"description": "需要 skill 处理的文本输入",
-					},
-				},
-				"required": []string{"prompt"},
-			},
-		})
+		refs = append(refs, ref)
 	}
-	return tools, index
+	catalog := make(map[string]port.SkillActivation)
+	if s.deps.SkillActivationResolver != nil && len(refs) > 0 {
+		if resolved, err := s.deps.SkillActivationResolver.ResolveSkills(ctx, tenantID, refs); err == nil {
+			catalog = resolved
+		}
+	}
+	return tools, catalog
 }
 
 // recordExecution fire-and-forget inserts a per-tenant execution record.
@@ -672,6 +751,8 @@ func (s *AgentService) recordExecution(
 		DurationMs:   durationMs,
 	}
 	switch {
+	case isToolApprovalRequired(err):
+		rec.Status = domain.ExecStatusWaitingApproval
 	case err != nil:
 		rec.Status = domain.ExecStatusError
 		rec.ErrorMessage = err.Error()
@@ -688,6 +769,11 @@ func (s *AgentService) recordExecution(
 			s.deps.Logger.Warn("execution record insert failed", zap.Error(insertErr))
 		}
 	}()
+}
+
+func isToolApprovalRequired(err error) bool {
+	var approvalErr *port.ToolApprovalRequiredError
+	return errors.As(err, &approvalErr)
 }
 
 func (s *AgentService) ListToolTraces(ctx context.Context, tenantID, traceID string) ([]ToolObservation, error) {

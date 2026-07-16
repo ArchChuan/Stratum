@@ -240,11 +240,15 @@ export const streamApiEvents = (
       buffer = parts.pop() ?? '';
 
       for (const part of parts) {
-        const line = part.trim();
-        if (!line.startsWith('data:')) continue;
+        const data = part
+          .split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
+          .join('\n');
+        if (!data) continue;
         let event: unknown;
         try {
-          event = JSON.parse(line.slice(5).trim());
+          event = JSON.parse(data);
         } catch {
           // malformed chunk, skip
           continue;

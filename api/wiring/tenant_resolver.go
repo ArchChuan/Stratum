@@ -20,8 +20,9 @@ type tenantCapabilityResolver struct {
 	aesKey       [32]byte
 	cache        *llmgateway.TenantGatewayCache
 	fallback     *llmgateway.Gateway
-	skillAdapter agentport.Adapter
 	logger       *zap.Logger
+	qwenBaseURL  string
+	zhipuBaseURL string
 }
 
 func newTenantCapabilityResolver(
@@ -29,16 +30,17 @@ func newTenantCapabilityResolver(
 	aesKey [32]byte,
 	cache *llmgateway.TenantGatewayCache,
 	fallback *llmgateway.Gateway,
-	skillAdapter agentport.Adapter,
 	logger *zap.Logger,
+	qwenBaseURL, zhipuBaseURL string,
 ) agentport.TenantCapabilityResolver {
 	return &tenantCapabilityResolver{
 		db:           db,
 		aesKey:       aesKey,
 		cache:        cache,
 		fallback:     fallback,
-		skillAdapter: skillAdapter,
 		logger:       logger,
+		qwenBaseURL:  qwenBaseURL,
+		zhipuBaseURL: zhipuBaseURL,
 	}
 }
 
@@ -92,11 +94,17 @@ func (r *tenantCapabilityResolver) resolveGateway(ctx context.Context, tenantID 
 	gw := llmgateway.NewGateway().WithLogger(r.logger)
 	if qwenKey, ok := decrypted["qwen"]; ok {
 		qwenClient := llmgateway.NewQwenClient(qwenKey, r.logger)
+		if r.qwenBaseURL != "" {
+			qwenClient = llmgateway.NewQwenClientWithBase(qwenKey, r.qwenBaseURL, r.logger)
+		}
 		gw.RegisterClient(llmgateway.ProviderQwen, qwenClient)
 		gw.RegisterEmbeddingClient(llmgateway.ProviderQwen, qwenClient)
 	}
 	if zhipuKey, ok := decrypted["zhipu"]; ok {
 		zhipuClient := llmgateway.NewZhipuClient(zhipuKey, r.logger)
+		if r.zhipuBaseURL != "" {
+			zhipuClient = llmgateway.NewZhipuClientWithBase(zhipuKey, r.zhipuBaseURL, r.logger)
+		}
 		gw.RegisterClient(llmgateway.ProviderZhipu, zhipuClient)
 		gw.RegisterEmbeddingClient(llmgateway.ProviderZhipu, zhipuClient)
 	}
@@ -118,7 +126,7 @@ func (r *tenantCapabilityResolver) Resolve(ctx context.Context, tenantID string)
 		return nil, nil, false
 	}
 	llmAdapter := capgateway.NewLLMAdapter(gw, r.logger)
-	capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, r.skillAdapter, r.logger)
+	capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, r.logger)
 	return capGW, keys, true
 }
 

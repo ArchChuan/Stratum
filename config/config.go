@@ -23,6 +23,8 @@ type Config struct {
 	GitHubCallbackURL       string
 	SecureCookies           bool
 	GlobalAgentSystemPrompt string
+	QwenBaseURL             string
+	ZhipuBaseURL            string
 	MemoryPipeline          MemoryPipelineConfig
 }
 
@@ -61,6 +63,8 @@ func Load() (*Config, error) {
 		GitHubCallbackURL:       getEnv("GITHUB_CALLBACK_URL", "http://localhost:8080/auth/github/callback"),
 		SecureCookies:           getEnv("SECURE_COOKIES", "") == "true",
 		GlobalAgentSystemPrompt: getEnv("GLOBAL_AGENT_SYSTEM_PROMPT", ""),
+		QwenBaseURL:             getEnv("QWEN_BASE_URL", ""),
+		ZhipuBaseURL:            getEnv("ZHIPU_BASE_URL", ""),
 		MemoryPipeline: MemoryPipelineConfig{
 			Enabled:               getEnv("MEMORY_PIPELINE_ENABLED", "") == "true",
 			NatsURL:               natsURL,

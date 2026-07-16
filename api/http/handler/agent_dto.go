@@ -16,7 +16,7 @@ type CreateAgentRequest struct {
 	MaxIterations         int      `json:"maxIterations" binding:"required"`
 	MaxContextTokens      int      `json:"maxContextTokens"`
 	AllowedSkills         []string `json:"allowedSkills"`
-	MCPServerIDs          []string `json:"mcpServerIds"`
+	MCPToolIDs            []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope           string   `json:"memoryScope"`
 }
@@ -32,7 +32,7 @@ type UpdateAgentRequest struct {
 	MaxIterations         int      `json:"maxIterations"`
 	MaxContextTokens      int      `json:"maxContextTokens"`
 	AllowedSkills         []string `json:"allowedSkills"`
-	MCPServerIDs          []string `json:"mcpServerIds"`
+	MCPToolIDs            []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope           string   `json:"memoryScope"`
 }
@@ -48,7 +48,7 @@ type AgentResponse struct {
 	MaxIterations         int      `json:"maxIterations"`
 	MaxContextTokens      int      `json:"maxContextTokens"`
 	AllowedSkills         []string `json:"allowedSkills"`
-	MCPServerIDs          []string `json:"mcpServerIds"`
+	MCPToolIDs            []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 	CreatedAt             string   `json:"createdAt"`
 	MemoryScope           string   `json:"memoryScope"`
@@ -89,7 +89,7 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		MaxIterations:         d.MaxIterations,
 		MaxContextTokens:      d.MaxContextTokens,
 		AllowedSkills:         d.AllowedSkills,
-		MCPServerIDs:          d.MCPServerIDs,
+		MCPToolIDs:            d.MCPToolIDs,
 		KnowledgeWorkspaceIDs: d.KnowledgeWorkspaceIDs,
 		CreatedAt:             d.CreatedAt,
 		MemoryScope:           d.MemoryScope,

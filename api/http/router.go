@@ -153,28 +153,23 @@ func protectedTenantMiddleware(c *wiring.Container, extra ...gin.HandlerFunc) []
 	return append(mw, extra...)
 }
 
-// registerSkills wires /skills/* under JWT + tenant context. Read + test
-// (test / test-draft) stay open to members; authoring writes (create,
-// draft edits, publish, update, delete) require admin so members can only
-// view configs and run skills, not modify them.
+// registerSkills wires versioned instruction bundles. Skills are activated by
+// the Agent loop; they are never executed directly through an HTTP endpoint.
 func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
-	skillHandler := handler.NewSkillHandler(c.Skill.Service, c.Logger, c.Skill.VersionService)
+	skillHandler := handler.NewSkillHandler(c.Skill.VersionService, c.Logger)
 
 	skills := r.Group("/skills", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
 		skills.GET("", skillHandler.GetAllSkills)
-		skills.POST("/test-draft", requireActive, skillHandler.ExecuteDraftSkill)
 		skills.GET("/:id/workspace", skillHandler.GetSkillWorkspace)
 		skills.GET("/:id", skillHandler.GetSkill)
-		skills.POST("/:id/test", requireActive, skillHandler.ExecuteSkill)
 
 		adminMW := []gin.HandlerFunc{middleware.RequireTenantRole("admin")}
 		skills.POST("", append(adminMW, requireActive, skillHandler.CreateSkill)...)
 		skills.PATCH("/:id/draft/capability", append(adminMW, requireActive, skillHandler.UpdateDraftCapability)...)
-		skills.PATCH("/:id/draft/contract", append(adminMW, requireActive, skillHandler.UpdateDraftContract)...)
-		skills.PATCH("/:id/draft/implementation", append(adminMW, requireActive, skillHandler.UpdateDraftImplementation)...)
+		skills.PATCH("/:id/draft/activation", append(adminMW, requireActive, skillHandler.UpdateDraftActivation)...)
+		skills.PATCH("/:id/draft/instructions", append(adminMW, requireActive, skillHandler.UpdateDraftInstructionBundle)...)
 		skills.POST("/:id/publish", append(adminMW, requireActive, skillHandler.PublishSkill)...)
-		skills.PUT("/:id", append(adminMW, requireActive, skillHandler.UpdateSkill)...)
 		skills.DELETE("/:id", append(adminMW, requireActive, skillHandler.DeleteSkill)...)
 	}
 }
@@ -196,6 +191,9 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.GET("/executions", agentHandler.ListExecutions)
 		agents.GET("/executions/:traceID/tool-traces", agentHandler.ListExecutionToolTraces)
 		agents.GET("/executions/:traceID/trace-events", agentHandler.ListExecutionTraceEvents)
+		agents.GET("/tool-approvals", agentHandler.ListToolApprovals)
+		agents.POST("/tool-approvals/:approvalID/decision", requireAdmin, requireActive, agentHandler.DecideToolApproval)
+		agents.POST("/tool-approvals/:approvalID/resume", requireAdmin, requireActive, agentHandler.ResumeToolApproval)
 		agents.GET("/:id", agentHandler.GetAgent)
 		execLimiter := middleware.NewRateLimiterStore(middleware.LLMExecRate, middleware.LLMExecBurst)
 		execRateLimit := middleware.RateLimitByKey(execLimiter, func(c *gin.Context) string {

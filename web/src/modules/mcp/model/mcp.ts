@@ -7,6 +7,9 @@ export const mcpToolSchema = z
   })
   .passthrough();
 export type MCPTool = z.infer<typeof mcpToolSchema>;
+export interface MCPToolOption { id: string; label: string; serverId: string; toolName: string }
+export type MCPToolRiskLevel = 'read' | 'write_reversible' | 'destructive' | 'unclassified';
+export interface MCPToolPolicy { serverId: string; toolName: string; riskLevel: MCPToolRiskLevel }
 
 export const mcpResourceSchema = z
   .object({

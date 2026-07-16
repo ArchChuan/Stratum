@@ -30,7 +30,7 @@ func TestAgentRepo_Register(t *testing.T) {
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
-	pool.ExpectExec("DELETE FROM agent_mcp_links").
+	pool.ExpectExec("DELETE FROM agent_mcp_tool_links").
 		WithArgs("a1").
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	pool.ExpectExec("DELETE FROM agent_workspaces").
@@ -63,11 +63,11 @@ func TestAgentRepo_Register_WithMCP(t *testing.T) {
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
-	pool.ExpectExec("DELETE FROM agent_mcp_links").
+	pool.ExpectExec("DELETE FROM agent_mcp_tool_links").
 		WithArgs("a1").
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
-	pool.ExpectExec("INSERT INTO agent_mcp_links").
-		WithArgs("a1", "srv1").
+	pool.ExpectExec("INSERT INTO agent_mcp_tool_links").
+		WithArgs("a1", "srv1", "search").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("DELETE FROM agent_workspaces").
 		WithArgs("a1").
@@ -78,7 +78,7 @@ func TestAgentRepo_Register_WithMCP(t *testing.T) {
 	cfg := &domain.AgentConfig{
 		ID: "a1", Name: "Alpha", Type: domain.ReActAgent,
 		LLMModel: "gpt-4o", MaxIterations: 5,
-		MCPServerIDs: []string{"srv1"},
+		MCPToolIDs: []string{"mcp:srv1:search"},
 	}
 	if err := repo.Register(tenantCtx("t1"), cfg); err != nil {
 		t.Fatalf("Register with MCP: %v", err)
@@ -104,9 +104,9 @@ func TestAgentRepo_Get(t *testing.T) {
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").
 		WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
-	pool.ExpectQuery("SELECT server_id FROM agent_mcp_links").
+	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
 		WithArgs("a1").
-		WillReturnRows(pgxmock.NewRows([]string{"server_id"}))
+		WillReturnRows(pgxmock.NewRows([]string{"server_id", "tool_name"}))
 	pool.ExpectQuery("SELECT aw.workspace_id").
 		WithArgs("a1").
 		WillReturnRows(pgxmock.NewRows([]string{"workspace_id", "name", "description"}))
@@ -126,7 +126,7 @@ func TestAgentRepo_Get(t *testing.T) {
 	if got := cfg.AllowedSkills; len(got) != 0 {
 		t.Errorf("expected empty allowed_skills, got %v", got)
 	}
-	if got := cfg.MCPServerIDs; len(got) != 0 {
+	if got := cfg.MCPToolIDs; len(got) != 0 {
 		t.Errorf("expected empty mcp_server_ids, got %v", got)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
@@ -196,7 +196,7 @@ func TestAgentRepo_Update_Success(t *testing.T) {
 	pool.ExpectExec("DELETE FROM agent_skill_links").
 		WithArgs("a1").
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
-	pool.ExpectExec("DELETE FROM agent_mcp_links").
+	pool.ExpectExec("DELETE FROM agent_mcp_tool_links").
 		WithArgs("a1").
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	pool.ExpectExec("DELETE FROM agent_workspaces").

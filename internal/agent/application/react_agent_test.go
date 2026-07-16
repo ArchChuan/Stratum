@@ -72,16 +72,12 @@ type mockCapGW struct {
 	mu        sync.Mutex
 	responses []port.CapabilityResponse
 	idx       int
-	toolResp  port.CapabilityResponse
 	err       error
 }
 
 func (m *mockCapGW) Route(_ context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
 	if m.err != nil {
 		return port.CapabilityResponse{}, m.err
-	}
-	if req.Type == port.CapSkill {
-		return m.toolResp, nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -129,13 +125,14 @@ func TestBaseAgent_ReActExecute_WithToolCall(t *testing.T) {
 			{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{"expr": "6*7"}}}},
 			{Content: "The answer is 42"},
 		},
-		toolResp: port.CapabilityResponse{Content: "42"},
 	}
 	a.SetCapGateway(gw)
 
 	result, err := a.Execute(context.Background(), "calc 6*7",
 		agent.WithTenantID("t1"),
 		agent.WithMaxSteps(10),
+		agent.WithExtraTools([]port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "math", Metadata: map[string]any{"risk_level": "read"}}}),
+		agent.WithToolCallFn(func(context.Context, string, string, map[string]any) (any, error) { return "42", nil }),
 	)
 	require.NoError(t, err)
 	require.Equal(t, "The answer is 42", result.Output)
@@ -253,7 +250,6 @@ func TestExecute_PersistsToolTraceAndSummaryMessage(t *testing.T) {
 			{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{"expr": "6*7"}}}},
 			{Content: "The answer is 42", Usage: port.TokenUsage{Total: 10}},
 		},
-		toolResp: port.CapabilityResponse{Content: "42"},
 	}
 	a.SetCapGateway(gw)
 
@@ -278,7 +274,8 @@ func TestExecute_PersistsToolTraceAndSummaryMessage(t *testing.T) {
 		agent.WithConversationID("conv-xyz"),
 		agent.WithUserID("user-2"),
 		agent.WithMaxSteps(10),
-		agent.WithSkillToolIndex(map[string]port.SkillToolRef{"calc": {SkillID: "skill-calc"}}),
+		agent.WithExtraTools([]port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "math", Metadata: map[string]any{"risk_level": "read"}}}),
+		agent.WithToolCallFn(func(context.Context, string, string, map[string]any) (any, error) { return "42", nil }),
 	)
 	require.NoError(t, err)
 	require.Len(t, traceStore.traces, 1)

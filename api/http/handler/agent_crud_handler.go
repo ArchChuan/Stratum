@@ -65,7 +65,7 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 		MaxIterations:         req.MaxIterations,
 		MaxContextTokens:      req.MaxContextTokens,
 		AllowedSkills:         req.AllowedSkills,
-		MCPServerIDs:          req.MCPServerIDs,
+		MCPToolIDs:            req.MCPToolIDs,
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
 		MemoryScope:           req.MemoryScope,
 	})
@@ -95,7 +95,7 @@ func (h *AgentHandler) UpdateAgent(c *gin.Context) {
 		MaxIterations:         req.MaxIterations,
 		MaxContextTokens:      req.MaxContextTokens,
 		AllowedSkills:         req.AllowedSkills,
-		MCPServerIDs:          req.MCPServerIDs,
+		MCPToolIDs:            req.MCPToolIDs,
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
 		MemoryScope:           req.MemoryScope,
 	})
