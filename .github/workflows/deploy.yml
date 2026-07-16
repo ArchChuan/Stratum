@@ -82,55 +82,102 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Mirror dependency images to Aliyun CR
-        run: |
-          mirror_if_missing() {
-            local src="$1" dst="$2"
-            if docker manifest inspect "$dst" > /dev/null 2>&1; then
-              echo "skip: $dst already in registry"
-              return
-            fi
-            echo "mirroring $src → $dst"
-            docker pull "$src"
-            docker tag  "$src" "$dst"
-            docker push "$dst"
-          }
-          # postgres carries zhparser (Chinese full-text search) — built from
-          # docker/postgres-zhparser.Dockerfile, NOT the vanilla mirror. WHY: the
-          # tenant/public schema DDL uses to_tsvector('public.chinese_zh', ...);
-          # without zhparser the config degrades to `simple` and CJK recall is ~0.
-          # Idempotent: skip build if this immutable tag already exists in CR.
-          # Bump the tag suffix (16-zhparser-vN) when the Dockerfile changes.
-          ZHPARSER_IMG="${{ env.IMAGE_REPO }}/postgres:16-zhparser"
-          if docker manifest inspect "$ZHPARSER_IMG" > /dev/null 2>&1; then
-            echo "skip: $ZHPARSER_IMG already in registry"
-          else
-            echo "building postgres+zhparser → $ZHPARSER_IMG"
-            docker build -f docker/postgres-zhparser.Dockerfile -t "$ZHPARSER_IMG" .
-            docker push "$ZHPARSER_IMG"
-          fi
-          mirror_if_missing redis:7-alpine                  ${{ env.IMAGE_REPO }}/redis:7-alpine
-          mirror_if_missing nats:2.10.25-alpine             ${{ env.IMAGE_REPO }}/nats:2.10.25-alpine
-          mirror_if_missing quay.io/coreos/etcd:v3.5.16     ${{ env.IMAGE_REPO }}/etcd:v3.5.16
-          mirror_if_missing minio/minio:latest              ${{ env.IMAGE_REPO }}/minio:latest
-          mirror_if_missing milvusdb/milvus:v2.4.15         ${{ env.IMAGE_REPO }}/milvus:v2.4.15
-
   deploy:
     name: Deploy to K3s
     runs-on: ubuntu-latest
     needs: build-and-push
+    concurrency:
+      group: stratum-production
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify deployment candidate
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "${{ github.event_name }}" != "push" || "${{ github.ref }}" != "refs/heads/main" ]]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          current_sha=$(curl --fail-with-body --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/commits/main" | \
+            jq -er '.sha')
+          if [[ "$current_sha" != "${{ github.sha }}" ]]; then
+            echo "Skipping stale main deployment candidate ${{ github.sha }}; current main is $current_sha"
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "current=true" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.candidate.outputs.current == 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.candidate.outputs.current == 'true'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Publish dependency images and resolve digests
+        id: images
+        if: steps.candidate.outputs.current == 'true'
+        run: |
+          require_digest() {
+            local image="$1" output_name="$2" digest
+            digest=$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "invalid registry digest for $image" >&2
+              exit 1
+            fi
+            echo "$output_name=$digest" >> "$GITHUB_OUTPUT"
+          }
+
+          publish_image() {
+            local source="$1" destination="$2" output_name="$3"
+            docker pull "$source"
+            docker tag "$source" "$destination"
+            docker push "$destination"
+            require_digest "$destination" "$output_name"
+          }
+
+          postgres_image="${{ env.IMAGE_REPO }}/postgres:16-zhparser-v1"
+          docker build -f docker/postgres-zhparser.Dockerfile -t "$postgres_image" .
+          docker push "$postgres_image"
+          require_digest "$postgres_image" postgres
+
+          publish_image redis:7.2.10-alpine3.21 \
+            "${{ env.IMAGE_REPO }}/redis:7.2.10-alpine3.21" redis
+          publish_image nats:2.10.25-alpine \
+            "${{ env.IMAGE_REPO }}/nats:2.10.25-alpine" nats
+          publish_image quay.io/coreos/etcd:v3.5.16 \
+            "${{ env.IMAGE_REPO }}/etcd:v3.5.16" etcd
+          publish_image minio/minio:RELEASE.2025-04-22T22-12-26Z \
+            "${{ env.IMAGE_REPO }}/minio:RELEASE.2025-04-22T22-12-26Z" minio
+          publish_image milvusdb/milvus:v2.4.15 \
+            "${{ env.IMAGE_REPO }}/milvus:v2.4.15" milvus
+
+          require_digest "${{ env.IMAGE_REPO }}/stratum-backend:${{ needs.build-and-push.outputs.image-tag }}" backend
+          require_digest "${{ env.IMAGE_REPO }}/stratum-frontend:${{ needs.build-and-push.outputs.image-tag }}" frontend
+
       - uses: azure/setup-kubectl@v4
+        if: steps.candidate.outputs.current == 'true'
         with:
           version: 'v1.28.0'
 
       - uses: azure/setup-helm@v4
+        if: steps.candidate.outputs.current == 'true'
         with:
           version: 'v3.13.0'
 
       - name: Setup SSH tunnel to K3s
+        if: steps.candidate.outputs.current == 'true'
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_DEPLOY_KEY }}" > ~/.ssh/deploy_key
@@ -142,6 +189,7 @@ jobs:
           sleep 2
 
       - name: Configure kubeconfig
+        if: steps.candidate.outputs.current == 'true'
         run: |
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBE_CONFIG }}" | base64 -d | \
@@ -152,9 +200,11 @@ jobs:
           chmod 600 $HOME/.kube/config
 
       - name: Verify cluster
+        if: steps.candidate.outputs.current == 'true'
         run: kubectl get nodes
 
       - name: Apply namespace and secrets
+        if: steps.candidate.outputs.current == 'true'
         env:
           MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD || secrets.POSTGRES_PASSWORD }}
           GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
@@ -201,33 +251,44 @@ jobs:
             -n stratum --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Install metrics-server (K3s)
+        if: steps.candidate.outputs.current == 'true'
         run: |
-          kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-          kubectl patch deployment metrics-server -n kube-system \
-            --type='json' \
-            -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]' \
-            || true
+          kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml
+          args=$(kubectl get deployment metrics-server -n kube-system \
+            -o jsonpath='{.spec.template.spec.containers[0].args[*]}')
+          if [[ " $args " != *" --kubelet-insecure-tls "* ]]; then
+            kubectl patch deployment metrics-server -n kube-system \
+              --type='json' \
+              -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+          fi
 
       - name: Helm deploy
         id: helm-deploy
+        if: steps.candidate.outputs.current == 'true'
         continue-on-error: true
         run: |
           helm upgrade --install stratum ./helm \
             -f helm/values-demo.yaml \
             --set app.image.repository="${{ env.IMAGE_REPO }}/stratum-backend" \
-            --set app.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
+            --set-string app.image.digest="${{ steps.images.outputs.backend }}" \
             --set frontend.image.repository="${{ env.IMAGE_REPO }}/stratum-frontend" \
-            --set frontend.image.tag=${{ needs.build-and-push.outputs.image-tag }} \
+            --set-string frontend.image.digest="${{ steps.images.outputs.frontend }}" \
             --set database.image.repository="${{ env.IMAGE_REPO }}/postgres" \
+            --set-string database.image.digest="${{ steps.images.outputs.postgres }}" \
             --set redis.image.repository="${{ env.IMAGE_REPO }}/redis" \
+            --set-string redis.image.digest="${{ steps.images.outputs.redis }}" \
             --set nats.image.repository="${{ env.IMAGE_REPO }}/nats" \
+            --set-string nats.image.digest="${{ steps.images.outputs.nats }}" \
             --set etcd.image.repository="${{ env.IMAGE_REPO }}/etcd" \
+            --set-string etcd.image.digest="${{ steps.images.outputs.etcd }}" \
             --set minio.image.repository="${{ env.IMAGE_REPO }}/minio" \
+            --set-string minio.image.digest="${{ steps.images.outputs.minio }}" \
             --set milvus.image.repository="${{ env.IMAGE_REPO }}/milvus" \
+            --set-string milvus.image.digest="${{ steps.images.outputs.milvus }}" \
             -n stratum --wait --timeout=10m
 
       - name: Diagnose deployment
-        if: always()
+        if: always() && steps.candidate.outputs.current == 'true'
         run: |
           echo "=== Pods ==="
           kubectl get pods -n stratum -o wide
@@ -239,10 +300,11 @@ jobs:
           kubectl get pods -n stratum --field-selector=status.phase!=Running -o name | xargs -r kubectl describe -n stratum
 
       - name: Fail if helm deploy failed
-        if: steps.helm-deploy.outcome == 'failure'
+        if: steps.candidate.outputs.current == 'true' && steps.helm-deploy.outcome == 'failure'
         run: exit 1
 
       - name: Verify deployment
+        if: steps.candidate.outputs.current == 'true'
         run: |
           kubectl rollout status deployment/stratum -n stratum
           kubectl get pods -n stratum

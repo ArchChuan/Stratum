@@ -167,6 +167,10 @@ migration-guardrails:
 	bash scripts/quality/check-migration-boundaries-test.sh
 	bash scripts/quality/check-migration-boundaries.sh
 
+deployment-safety-test:
+	bash scripts/quality/check-deployment-safety-test.sh
+	bash scripts/quality/check-helm-image-rendering-test.sh
+
 # ─── CI 持续集成（构建+测试+推镜像）───────────────────────────────────────
 ci-backend: migration-guardrails be-install be-fmt be-lint
 	$(MAKE) infra-up

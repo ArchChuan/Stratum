@@ -3,13 +3,69 @@ package postgres
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
+
+const (
+	schemaProvisionLockKey       int64 = 0x5374726174756d
+	schemaProvisionLockSQL             = `SELECT pg_advisory_lock($1)`
+	schemaProvisionUnlockSQL           = `SELECT pg_advisory_unlock($1)`
+	schemaProvisionLockTimeout         = 2 * time.Minute
+	schemaProvisionUnlockTimeout       = 5 * time.Second
+)
+
+type schemaProvisionLockConn interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+// WithSchemaProvisionLock serializes the complete startup schema bootstrap
+// across application instances using one PostgreSQL session advisory lock.
+func WithSchemaProvisionLock(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	fn func(context.Context) error,
+) error {
+	if pool == nil {
+		return fmt.Errorf("postgres: schema provision lock: nil pool")
+	}
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres: acquire schema provision lock connection: %w", err)
+	}
+	defer conn.Release()
+
+	lockCtx, cancel := context.WithTimeout(ctx, schemaProvisionLockTimeout)
+	defer cancel()
+	return runWithSchemaProvisionLock(lockCtx, ctx, conn, fn)
+}
+
+func runWithSchemaProvisionLock(
+	lockCtx context.Context,
+	callbackCtx context.Context,
+	conn schemaProvisionLockConn,
+	fn func(context.Context) error,
+) (result error) {
+	if _, err := conn.Exec(lockCtx, schemaProvisionLockSQL, schemaProvisionLockKey); err != nil {
+		return fmt.Errorf("postgres: acquire schema provision lock: %w", err)
+	}
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), schemaProvisionUnlockTimeout)
+		defer cancel()
+		if _, err := conn.Exec(unlockCtx, schemaProvisionUnlockSQL, schemaProvisionLockKey); err != nil {
+			result = errors.Join(result, fmt.Errorf("postgres: release schema provision lock: %w", err))
+		}
+	}()
+
+	return fn(callbackCtx)
+}
 
 // ----------------------------------------------------------------------------
 // Tenant context

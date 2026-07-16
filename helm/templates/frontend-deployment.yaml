@@ -37,7 +37,7 @@ spec:
             capabilities:
               drop:
                 - ALL
-          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+          image: {{ include "stratum.image" .Values.frontend.image | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - containerPort: 80

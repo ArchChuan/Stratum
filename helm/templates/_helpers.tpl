@@ -127,6 +127,15 @@ default
 {{- end -}}
 {{- end }}
 
+{{/* Render an immutable digest when supplied, otherwise preserve tag-based workflows. */}}
+{{- define "stratum.image" -}}
+{{- if .digest -}}
+{{ printf "%s@%s" .repository .digest }}
+{{- else -}}
+{{ printf "%s:%s" .repository .tag }}
+{{- end -}}
+{{- end }}
+
 {{/*
 Resolve ingress service names.
 */}}
