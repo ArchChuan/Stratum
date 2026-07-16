@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -35,7 +36,15 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	ctx := context.Background()
 
 	// Step 1: Connect to PostgreSQL (skip if unavailable)
-	pool, err := pgxpool.New(ctx, "postgres://postgres:postgres@localhost:5432/stratum_test?sslmode=disable")
+	// DSN must match the real infra credentials (docker-compose: stratum/stratum).
+	// Direct-connect to Postgres 5432 (NOT pgbouncer 6432): schema/extension
+	// provisioning needs session-level privileges that transaction pooling breaks.
+	// Override via TEST_POSTGRES_URL to point at any real Postgres.
+	dsn := os.Getenv("TEST_POSTGRES_URL")
+	if dsn == "" {
+		dsn = "postgres://stratum:stratum@localhost:5432/stratum_test?sslmode=disable"
+	}
+	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Skipf("PostgreSQL unavailable: %v", err)
 	}
@@ -64,8 +73,12 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	}
 
 	// Step 5: Connect to Redis (skip if unavailable)
+	redisAddr := os.Getenv("TEST_REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
 	redisClient := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
+		Addr: redisAddr,
 		DB:   0,
 	})
 	if err := redisClient.Ping(ctx).Err(); err != nil {
