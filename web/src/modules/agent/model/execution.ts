@@ -1,5 +1,6 @@
 export interface ExecutionRow {
   id: string;
+  trace_id?: string;
   agent_name?: string;
   status?: string;
   input_preview?: string;

@@ -103,9 +103,11 @@ func (s *MemoryService) RecallMemory(ctx context.Context, req *RecallMemoryReque
 	for i := 0; i < topK; i++ {
 		fact := scored[i].fact
 
-		// Increment access count (best-effort, don't fail recall on update error)
+		// Increment access count and refresh frecency score (best-effort, don't fail recall on update error)
 		fact.AccessCount++
 		fact.LastAccessAt = timeutil.Now()
+		daysSince := timeutil.Now().Sub(fact.CreatedAt).Hours() / 24
+		fact.FrecencyScore = domain.CalculateFrecency(fact.Importance, daysSince, fact.AccessCount)
 		_ = s.factRepo.Update(ctx, req.TenantID, fact)
 
 		dtos = append(dtos, FactDTO{

@@ -151,7 +151,13 @@ func ProvisionTenantSchema(ctx context.Context, pool *pgxpool.Pool, tenantID str
 		return fmt.Errorf("postgres: create schema %s: %w", schemaName, err)
 	}
 
-	if _, err := conn.Exec(ctx, fmt.Sprintf(`SET search_path = "%s", public`, schemaName)); err != nil {
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres: begin tenant schema tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL search_path = "%s", public`, schemaName)); err != nil {
 		return fmt.Errorf("postgres: set search_path: %w", err)
 	}
 
@@ -160,12 +166,12 @@ func ProvisionTenantSchema(ctx context.Context, pool *pgxpool.Pool, tenantID str
 		if stmt == "" {
 			continue
 		}
-		if _, err := conn.Exec(ctx, stmt); err != nil {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("postgres: exec statement %d: %w", i, err)
 		}
 	}
 
-	return nil
+	return tx.Commit(ctx)
 }
 
 // stripSQLLineComments removes all `--` comment lines from a SQL statement block.

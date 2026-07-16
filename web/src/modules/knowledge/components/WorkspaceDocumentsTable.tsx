@@ -1,4 +1,4 @@
-import { Card, Empty, Progress, Table, Tag, Tooltip, Typography } from 'antd';
+import { Badge, Card, Empty, Progress, Table, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 
 import type { KnowledgeDocument } from '../model/knowledge';
@@ -53,7 +53,7 @@ const renderProgress = (doc: KnowledgeDocument) => {
 
 const columns: ColumnsType<KnowledgeDocument> = [
   {
-    title: '文档',
+    title: '文件名',
     dataIndex: 'source',
     key: 'source',
     ellipsis: true,
@@ -84,8 +84,8 @@ const columns: ColumnsType<KnowledgeDocument> = [
 export const WorkspaceDocumentsTable = ({ documents, loading }: WorkspaceDocumentsTableProps) => (
   <Card
     title="文档"
+    extra={<Badge count={documents.length} style={{ backgroundColor: '#d9d9d9', color: '#595959' }} />}
     style={{ borderRadius: 12, border: '1px solid #f0f0f0', marginBottom: 16 }}
-    styles={{ body: { padding: 0 } }}
   >
     <Table<KnowledgeDocument>
       rowKey="id"

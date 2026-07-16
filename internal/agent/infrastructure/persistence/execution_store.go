@@ -48,14 +48,26 @@ func (s *PgExecutionStore) execTenant(ctx context.Context, fn func(context.Conte
 // Insert writes an execution record into the tenant schema. Safe to call in a goroutine.
 func (s *PgExecutionStore) Insert(ctx context.Context, r domain.ExecutionRecord) error {
 	return s.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx,
-			`INSERT INTO agent_executions
-			 (agent_id, agent_name, user_id, status,
-			  input_preview, output_preview, error_message, total_tokens, duration_ms)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-			r.AgentID, r.AgentName, r.UserID, r.Status,
-			r.InputPreview, r.OutputPreview, r.ErrorMessage, r.TotalTokens, r.DurationMs,
-		)
+		var err error
+		if r.ID != "" {
+			_, err = tx.Exec(ctx,
+				`INSERT INTO agent_executions
+				 (id, trace_id, agent_id, agent_name, user_id, status,
+				  input_preview, output_preview, error_message, total_tokens, duration_ms)
+				 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+				r.ID, r.TraceID, r.AgentID, r.AgentName, r.UserID, r.Status,
+				r.InputPreview, r.OutputPreview, r.ErrorMessage, r.TotalTokens, r.DurationMs,
+			)
+		} else {
+			_, err = tx.Exec(ctx,
+				`INSERT INTO agent_executions
+				 (trace_id, agent_id, agent_name, user_id, status,
+				  input_preview, output_preview, error_message, total_tokens, duration_ms)
+				 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+				r.TraceID, r.AgentID, r.AgentName, r.UserID, r.Status,
+				r.InputPreview, r.OutputPreview, r.ErrorMessage, r.TotalTokens, r.DurationMs,
+			)
+		}
 		if err != nil {
 			return fmt.Errorf("insert: %w", err)
 		}
@@ -86,7 +98,7 @@ func (s *PgExecutionStore) List(ctx context.Context, opts domain.ListOptions) ([
 
 		rows, err := tx.Query(ctx,
 			`SELECT id, agent_id, agent_name, user_id, status,
-			        input_preview, output_preview, error_message, total_tokens, duration_ms, created_at
+			        trace_id, input_preview, output_preview, error_message, total_tokens, duration_ms, created_at
 			 FROM agent_executions
 			 WHERE created_at >= now() - INTERVAL '30 days'
 			 ORDER BY created_at DESC
@@ -102,7 +114,7 @@ func (s *PgExecutionStore) List(ctx context.Context, opts domain.ListOptions) ([
 			var r domain.ExecutionRecord
 			if err := rows.Scan(
 				&r.ID, &r.AgentID, &r.AgentName, &r.UserID, &r.Status,
-				&r.InputPreview, &r.OutputPreview, &r.ErrorMessage, &r.TotalTokens, &r.DurationMs, &r.CreatedAt,
+				&r.TraceID, &r.InputPreview, &r.OutputPreview, &r.ErrorMessage, &r.TotalTokens, &r.DurationMs, &r.CreatedAt,
 			); err != nil {
 				return fmt.Errorf("scan: %w", err)
 			}

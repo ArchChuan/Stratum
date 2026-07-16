@@ -81,6 +81,12 @@ const (
 	MemoryBufferAgeTimeout    = 5 * time.Minute  // scanner: flush if oldest message > 5min
 	MemoryBufferScanInterval  = 30 * time.Second // how often BufferScanner polls Redis
 	MemoryTenantWatchInterval = 60 * time.Second // how often TenantWatcher polls tenant list
+
+	// MemoryBufferMinContentRunes is the minimum rune count of non-tool messages required to
+	// trigger fact extraction. Flushes with less substantive content are discarded.
+	// 50: filters pure ack sessions ("OK"×5≈10 runes) while allowing short factual statements
+	// (e.g. "我喜欢Python"=8 chars passes when combined with other messages).
+	MemoryBufferMinContentRunes = 50
 )
 
 // Memory Recall - controls retrieval behavior
@@ -116,9 +122,11 @@ const (
 
 // Memory Supersede - supersede detection thresholds
 const (
-	MemorySupersedeCandidateMin   = 0.6 // min similarity to consider supersede
-	MemorySupersedeCandidateMax   = 3   // max candidates to check per fact
-	MemorySupersedeLLMCallsPerRun = 20  // max LLM judgments per RunOnce pass
+	MemorySupersedeCandidateMin     = 0.6  // min similarity to consider supersede
+	MemorySupersedeCandidateMax     = 3    // max candidates to check per fact
+	MemorySupersedeLLMCallsPerRun   = 20   // max LLM judgments per RunOnce pass
+	MemoryInlineSupersedeFastThresh = 0.85 // similarity above which supersede is decided inline without LLM
+	MemoryInlineSupersedeLLMPerFact = 3    // max inline LLM calls per extracted fact during extraction
 )
 
 // Memory Workers - background processing intervals and batch sizes

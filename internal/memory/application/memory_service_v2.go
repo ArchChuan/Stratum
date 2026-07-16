@@ -30,6 +30,7 @@ type MemoryService struct {
 
 	llmExtractResolver  LLMExtractorResolver
 	embedClientResolver EmbedClientResolver
+	judge               port.LLMSuperseder
 }
 
 // NewMemoryService constructs a new MemoryService with all dependencies.
@@ -69,6 +70,9 @@ func (s *MemoryService) SetLLMExtractResolver(r LLMExtractorResolver) { s.llmExt
 
 // SetEmbedClientResolver wires a per-tenant embed client resolver (used when embedClient is nil).
 func (s *MemoryService) SetEmbedClientResolver(r EmbedClientResolver) { s.embedClientResolver = r }
+
+// SetLLMSuperseder wires the LLM judge used for inline supersede decisions during extraction.
+func (s *MemoryService) SetLLMSuperseder(j port.LLMSuperseder) { s.judge = j }
 
 // BufferMessage accumulates messages in Redis; flushes at K=5 or T=2min.
 func (s *MemoryService) BufferMessage(ctx context.Context, req *BufferMessageRequest) error {

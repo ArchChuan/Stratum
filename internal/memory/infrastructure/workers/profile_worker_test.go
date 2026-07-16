@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
+	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 )
 
@@ -27,6 +28,9 @@ func (r *stubEntityRepo) GetByID(ctx context.Context, tenantID, id string) (*dom
 }
 
 func (r *stubEntityRepo) Update(ctx context.Context, tenantID string, entity *domain.MemoryEntity) error {
+	if r.updateFunc == nil {
+		return nil
+	}
 	return r.updateFunc(ctx, tenantID, entity)
 }
 
@@ -35,6 +39,9 @@ func (r *stubEntityRepo) FindByNameAndType(ctx context.Context, tenantID, userID
 }
 
 func (r *stubEntityRepo) ListProfiles(ctx context.Context, filter domain.ScopeFilter, limit int) ([]*domain.MemoryEntity, error) {
+	if r.listProfilesFunc == nil {
+		return nil, nil
+	}
 	return r.listProfilesFunc(ctx, filter, limit)
 }
 
@@ -55,13 +62,16 @@ type stubProfiler struct {
 }
 
 func (p *stubProfiler) GenerateProfile(ctx context.Context, entityName, entityType string, facts []string) (string, error) {
+	if p.generateFunc == nil {
+		return "", nil
+	}
 	return p.generateFunc(ctx, entityName, entityType, facts)
 }
 
 func TestProfileWorker_RebuildsProfiles(t *testing.T) {
 	entity, _ := domain.NewEntity("user1", "agent1", string(domain.ScopeUser), "Alice", "person")
 	entity.FactCount = 10
-	entity.FactCountSinceRebuild = 6 // Should trigger rebuild
+	entity.FactCountSinceRebuild = 6
 	entity.LastProfileRebuildAt = time.Now().Add(-8 * 24 * time.Hour)
 
 	var updatedEntity *domain.MemoryEntity
@@ -76,11 +86,15 @@ func TestProfileWorker_RebuildsProfiles(t *testing.T) {
 		},
 	}
 
+	fact1, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "Alice loves coffee", 0.8, nil)
+	fact2, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "Alice works at Acme", 0.7, nil)
+
 	factRepo := &stubFactRepo{
-		findCandidatesFunc: func(ctx context.Context, tenantID, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
-			fact1, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "Alice loves coffee", 0.8, nil)
-			fact2, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "Alice works at Acme", 0.7, nil)
-			return []*domain.MemoryFact{fact1, fact2}, nil
+		findCandidatesFunc: func(ctx context.Context, tenantID, userID, agentID, content string, minSim, maxCount float64) ([]*port.SupersedeCandidate, error) {
+			return []*port.SupersedeCandidate{
+				{Fact: fact1, Similarity: 0.8},
+				{Fact: fact2, Similarity: 0.7},
+			}, nil
 		},
 	}
 
@@ -102,7 +116,7 @@ func TestProfileWorker_RebuildsProfiles(t *testing.T) {
 
 func TestProfileWorker_SkipsIfNotNeeded(t *testing.T) {
 	entity, _ := domain.NewEntity("user1", "agent1", string(domain.ScopeUser), "Bob", "person")
-	entity.FactCountSinceRebuild = 2 // Below threshold
+	entity.FactCountSinceRebuild = 2
 	entity.LastProfileRebuildAt = time.Now().Add(-1 * 24 * time.Hour)
 
 	var updated bool
@@ -137,10 +151,10 @@ func TestProfileWorker_HandlesProfilerError(t *testing.T) {
 		},
 	}
 
+	fact, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "test", 0.5, nil)
 	factRepo := &stubFactRepo{
-		findCandidatesFunc: func(ctx context.Context, tenantID, userID, agentID, content string, minSim, maxCount float64) ([]*domain.MemoryFact, error) {
-			fact, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "test", 0.5, nil)
-			return []*domain.MemoryFact{fact}, nil
+		findCandidatesFunc: func(ctx context.Context, tenantID, userID, agentID, content string, minSim, maxCount float64) ([]*port.SupersedeCandidate, error) {
+			return []*port.SupersedeCandidate{{Fact: fact, Similarity: 0.7}}, nil
 		},
 	}
 
@@ -151,7 +165,6 @@ func TestProfileWorker_HandlesProfilerError(t *testing.T) {
 	}
 
 	worker := workers.NewProfileWorker("", entityRepo, factRepo, profiler, zap.NewNop())
-	// Should not panic
 	worker.RunOnce(context.Background())
 }
 

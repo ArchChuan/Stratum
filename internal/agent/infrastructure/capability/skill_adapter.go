@@ -6,32 +6,29 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	skillgateway "github.com/byteBuilderX/stratum/internal/skill/infrastructure/gateway"
 	"go.uber.org/zap"
 )
 
-// SkillExecutor is the minimal interface SkillAdapter needs from skillgateway.
-type SkillExecutor interface {
-	Execute(ctx context.Context, req skillgateway.SkillRequest) (skillgateway.SkillResponse, error)
+// skillGateway is the minimal interface SkillAdapter needs.
+// The concrete adapter wrapping skill/infrastructure/gateway is provided
+// by the wiring layer, keeping this package free of cross-context
+// infrastructure imports.
+type skillGateway interface {
+	Execute(ctx context.Context, traceID, skillID, versionID string, input any) (any, error)
 }
 
 type SkillAdapter struct {
-	gw     SkillExecutor
+	gw     skillGateway
 	logger *zap.Logger
 }
 
-func NewSkillAdapter(gw SkillExecutor, logger *zap.Logger) *SkillAdapter {
+func NewSkillAdapter(gw skillGateway, logger *zap.Logger) *SkillAdapter {
 	return &SkillAdapter{gw: gw, logger: logger}
 }
 
 func (a *SkillAdapter) Route(ctx context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
 	start := time.Now()
-	skillReq := skillgateway.SkillRequest{
-		TraceID: req.TraceID,
-		SkillID: req.Skill.SkillID,
-		Input:   req.Skill.Input,
-	}
-	skillResp, err := a.gw.Execute(ctx, skillReq)
+	output, err := a.gw.Execute(ctx, req.TraceID, req.Skill.SkillID, req.Skill.VersionID, req.Skill.Input)
 	if err != nil {
 		return port.CapabilityResponse{}, fmt.Errorf("skill_adapter: %w", err)
 	}
@@ -39,6 +36,6 @@ func (a *SkillAdapter) Route(ctx context.Context, req port.CapabilityRequest) (p
 		TraceID:  req.TraceID,
 		Type:     port.CapSkill,
 		Duration: time.Since(start),
-		Output:   skillResp.Output,
+		Output:   output,
 	}, nil
 }

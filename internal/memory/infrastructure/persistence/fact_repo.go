@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
+	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -49,7 +50,7 @@ func (r *FactRepo) Create(ctx context.Context, tenantID string, fact *domain.Mem
 		_, err := tx.Exec(ctx, query,
 			fact.ID, fact.UserID, agentID, string(fact.Scope), conversationID, fact.Content, fact.Importance,
 			fact.Status, supersededBy, fact.AccessCount, fact.LastAccessAt,
-			fact.CreatedAt, fact.UpdatedAt, fact.Importance,
+			fact.CreatedAt, fact.UpdatedAt, fact.FrecencyScore,
 		)
 		return translatePgError(err, "create fact")
 	})
@@ -59,7 +60,7 @@ func (r *FactRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.Me
 	const query = `
 		SELECT id, user_id, agent_id, scope, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
-			created_at, updated_at
+			created_at, updated_at, frecency_score
 		FROM memory_facts WHERE id = $1`
 
 	var f *domain.MemoryFact
@@ -71,7 +72,7 @@ func (r *FactRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.Me
 		err := tx.QueryRow(ctx, query, id).Scan(
 			&fact.ID, &fact.UserID, &agentID, &scope, &fact.Content, &fact.Importance,
 			&fact.Status, &supersededBy, &fact.AccessCount, &fact.LastAccessAt,
-			&fact.CreatedAt, &fact.UpdatedAt,
+			&fact.CreatedAt, &fact.UpdatedAt, &fact.FrecencyScore,
 		)
 		if err != nil {
 			if err == pgx.ErrNoRows {
@@ -96,7 +97,8 @@ func (r *FactRepo) Update(ctx context.Context, tenantID string, fact *domain.Mem
 	const query = `
 		UPDATE memory_facts SET
 			content = $2, importance = $3, status = $4, superseded_by = $5,
-			access_count = $6, last_accessed_at = $7, updated_at = $8
+			access_count = $6, last_accessed_at = $7, updated_at = $8,
+			frecency_score = $9
 		WHERE id = $1`
 
 	var supersededBy *string
@@ -107,7 +109,7 @@ func (r *FactRepo) Update(ctx context.Context, tenantID string, fact *domain.Mem
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, query,
 			fact.ID, fact.Content, fact.Importance, fact.Status, supersededBy,
-			fact.AccessCount, fact.LastAccessAt, fact.UpdatedAt,
+			fact.AccessCount, fact.LastAccessAt, fact.UpdatedAt, fact.FrecencyScore,
 		)
 		if err != nil {
 			return translatePgError(err, "update fact")
@@ -123,7 +125,7 @@ func (r *FactRepo) ListActive(ctx context.Context, tenantID string, filter domai
 	const query = `
 		SELECT id, user_id, agent_id, scope, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
-			created_at, updated_at
+			created_at, updated_at, frecency_score
 		FROM memory_facts
 		WHERE user_id = $1 AND status = 'active'
 			AND (
@@ -150,7 +152,7 @@ func (r *FactRepo) SearchByContent(ctx context.Context, tenantID string, filter 
 	const sql = `
 		SELECT id, user_id, agent_id, scope, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
-			created_at, updated_at
+			created_at, updated_at, frecency_score
 		FROM memory_facts
 		WHERE user_id = $1 AND status = 'active' AND content ILIKE $2
 			AND (
@@ -174,7 +176,7 @@ func (r *FactRepo) SearchByContent(ctx context.Context, tenantID string, filter 
 	return facts, err
 }
 
-func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*domain.MemoryFact, error) {
+func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
 	const query = `
 		SELECT id, user_id, agent_id, scope, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
@@ -184,7 +186,7 @@ func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID
 		WHERE user_id = $1 AND status = 'active' AND similarity(content, $2) > $3
 		ORDER BY sim DESC LIMIT $4`
 
-	var facts []*domain.MemoryFact
+	var candidates []*port.SupersedeCandidate
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, query, userID, content, minSimilarity, int(maxCount))
 		if err != nil {
@@ -212,11 +214,11 @@ func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID
 			if supersededBy != nil {
 				f.SupersededBy = *supersededBy
 			}
-			facts = append(facts, &f)
+			candidates = append(candidates, &port.SupersedeCandidate{Fact: &f, Similarity: sim})
 		}
 		return rows.Err()
 	})
-	return facts, err
+	return candidates, err
 }
 
 func (r *FactRepo) CountByUser(ctx context.Context, tenantID, userID string) (int, error) {
@@ -293,7 +295,7 @@ func scanFacts(rows pgx.Rows) ([]*domain.MemoryFact, error) {
 		if err := rows.Scan(
 			&f.ID, &f.UserID, &agentID, &scope, &f.Content, &f.Importance,
 			&f.Status, &supersededBy, &f.AccessCount, &f.LastAccessAt,
-			&f.CreatedAt, &f.UpdatedAt,
+			&f.CreatedAt, &f.UpdatedAt, &f.FrecencyScore,
 		); err != nil {
 			return nil, fmt.Errorf("scan fact: %w", err)
 		}

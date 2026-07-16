@@ -19,6 +19,7 @@ type tenantCapabilityResolver struct {
 	db           *pgxpool.Pool
 	aesKey       [32]byte
 	cache        *llmgateway.TenantGatewayCache
+	fallback     *llmgateway.Gateway
 	skillAdapter agentport.Adapter
 	logger       *zap.Logger
 }
@@ -27,6 +28,7 @@ func newTenantCapabilityResolver(
 	db *pgxpool.Pool,
 	aesKey [32]byte,
 	cache *llmgateway.TenantGatewayCache,
+	fallback *llmgateway.Gateway,
 	skillAdapter agentport.Adapter,
 	logger *zap.Logger,
 ) agentport.TenantCapabilityResolver {
@@ -34,6 +36,7 @@ func newTenantCapabilityResolver(
 		db:           db,
 		aesKey:       aesKey,
 		cache:        cache,
+		fallback:     fallback,
 		skillAdapter: skillAdapter,
 		logger:       logger,
 	}
@@ -41,7 +44,7 @@ func newTenantCapabilityResolver(
 
 func (r *tenantCapabilityResolver) resolveGateway(ctx context.Context, tenantID string) (*llmgateway.Gateway, map[string]string, bool) {
 	if r.db == nil || r.cache == nil {
-		return nil, nil, false
+		return r.fallback, nil, r.fallback != nil
 	}
 	if gw, keys, ok := r.cache.Get(tenantID); ok {
 		return gw, keys, true
@@ -54,17 +57,17 @@ func (r *tenantCapabilityResolver) resolveGateway(ctx context.Context, tenantID 
 	).Scan(&settingsJSON); err != nil {
 		r.logger.Warn("tenantCapabilityResolver: settings query failed",
 			zap.String("tenant_id", tenantID), zap.Error(err))
-		return nil, nil, false
+		return r.fallback, nil, r.fallback != nil
 	}
 
 	var settings map[string]any
 	if err := json.Unmarshal(settingsJSON, &settings); err != nil {
-		return nil, nil, false
+		return r.fallback, nil, r.fallback != nil
 	}
 
 	apiKeysRaw, ok := settings["llm_api_keys"].(map[string]any)
 	if !ok || len(apiKeysRaw) == 0 {
-		return nil, nil, false
+		return r.fallback, nil, r.fallback != nil
 	}
 
 	decrypted := make(map[string]string, len(apiKeysRaw))
@@ -83,7 +86,7 @@ func (r *tenantCapabilityResolver) resolveGateway(ctx context.Context, tenantID 
 	}
 
 	if len(decrypted) == 0 {
-		return nil, nil, false
+		return r.fallback, nil, r.fallback != nil
 	}
 
 	gw := llmgateway.NewGateway().WithLogger(r.logger)

@@ -33,6 +33,40 @@ func (m *mockChatStore) AddMessage(ctx context.Context, tenantID string, msg *ag
 	return nil
 }
 
+type mockToolTraceStore struct {
+	traces []agent.ToolObservation
+}
+
+func (m *mockToolTraceStore) InsertBatch(_ context.Context, _ string, traces []agent.ToolObservation) error {
+	m.traces = append(m.traces, traces...)
+	return nil
+}
+
+func (m *mockToolTraceStore) ListByTraceID(context.Context, string, string) ([]agent.ToolObservation, error) {
+	return nil, nil
+}
+
+func (m *mockToolTraceStore) ListByConversation(context.Context, string, string, int) ([]agent.ToolObservation, error) {
+	return nil, nil
+}
+
+type mockTraceEventStore struct {
+	events []agent.AgentTraceEvent
+}
+
+func (m *mockTraceEventStore) Insert(context.Context, string, agent.AgentTraceEvent) error {
+	return nil
+}
+
+func (m *mockTraceEventStore) InsertBatch(_ context.Context, _ string, events []agent.AgentTraceEvent) error {
+	m.events = append(m.events, events...)
+	return nil
+}
+
+func (m *mockTraceEventStore) ListByTraceID(context.Context, string, string) ([]agent.AgentTraceEvent, error) {
+	return nil, nil
+}
+
 // mockCapGW drives LLM responses in sequence; tools always succeed.
 type mockCapGW struct {
 	mu        sync.Mutex
@@ -140,6 +174,12 @@ func TestWithUserID_SetsField(t *testing.T) {
 	require.Equal(t, "user-456", cfg.UserID)
 }
 
+func TestWithExecutionID_SetsField(t *testing.T) {
+	cfg := &agent.ExecutionConfig{}
+	agent.WithExecutionID("exec-123")(cfg)
+	require.Equal(t, "exec-123", cfg.ExecutionID)
+}
+
 func TestWithHistoryWindow_SetsField(t *testing.T) {
 	cfg := &agent.ExecutionConfig{}
 	agent.WithHistoryWindow(10)(cfg)
@@ -204,6 +244,58 @@ func TestExecute_PersistsMessagesToChatStore(t *testing.T) {
 	require.Equal(t, "six", savedMsgs[1].Content)
 	require.Equal(t, "conv-xyz", savedMsgs[0].ConversationID)
 	require.Equal(t, "conv-xyz", savedMsgs[1].ConversationID)
+}
+
+func TestExecute_PersistsToolTraceAndSummaryMessage(t *testing.T) {
+	a := newReActAgent()
+	gw := &mockCapGW{
+		responses: []port.CapabilityResponse{
+			{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{"expr": "6*7"}}}},
+			{Content: "The answer is 42", Usage: port.TokenUsage{Total: 10}},
+		},
+		toolResp: port.CapabilityResponse{Content: "42"},
+	}
+	a.SetCapGateway(gw)
+
+	var savedMsgs []*agent.ChatMessage
+	cs := &mockChatStore{
+		addMsg: func(ctx context.Context, tenantID string, msg *agent.ChatMessage) error {
+			saved := *msg
+			savedMsgs = append(savedMsgs, &saved)
+			return nil
+		},
+	}
+	traceStore := &mockToolTraceStore{}
+	eventStore := &mockTraceEventStore{}
+	a.WithChatStore(cs)
+	a.WithToolTraceStore(traceStore)
+	a.WithTraceEventStore(eventStore)
+
+	_, err := a.Execute(context.Background(), "calc 6*7",
+		agent.WithTenantID("t1"),
+		agent.WithTraceID("trace-1"),
+		agent.WithExecutionID("exec-1"),
+		agent.WithConversationID("conv-xyz"),
+		agent.WithUserID("user-2"),
+		agent.WithMaxSteps(10),
+		agent.WithSkillToolIndex(map[string]port.SkillToolRef{"calc": {SkillID: "skill-calc"}}),
+	)
+	require.NoError(t, err)
+	require.Len(t, traceStore.traces, 1)
+	require.Equal(t, "c1", traceStore.traces[0].ToolCallID)
+	require.Equal(t, "exec-1", traceStore.traces[0].ExecutionID)
+	require.Equal(t, "calc", traceStore.traces[0].ToolName)
+	require.Equal(t, "42", traceStore.traces[0].RawText)
+	require.NotEmpty(t, eventStore.events)
+	for _, ev := range eventStore.events {
+		require.Equal(t, "exec-1", ev.ExecutionID)
+	}
+
+	require.Len(t, savedMsgs, 3)
+	require.Equal(t, "assistant", savedMsgs[2].Role)
+	require.Contains(t, savedMsgs[2].Content, "本轮工具观察摘要")
+	require.Contains(t, savedMsgs[2].Content, "calc")
+	require.True(t, savedMsgs[2].SkipOutbox)
 }
 
 func TestExecute_LoadsHistoryFromChatStore(t *testing.T) {

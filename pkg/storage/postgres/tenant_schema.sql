@@ -28,9 +28,15 @@ CREATE TABLE IF NOT EXISTS agents (
     llm_model      TEXT NOT NULL DEFAULT '',
     embed_model    TEXT NOT NULL DEFAULT '',
     max_iterations INT  NOT NULL DEFAULT 10,
+    max_context_tokens INTEGER NOT NULL DEFAULT 8000,
+    memory_scope   TEXT NOT NULL DEFAULT 'agent',
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 8000;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS embed_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'agent';
 
 CREATE TABLE IF NOT EXISTS skills (
     id           TEXT PRIMARY KEY,
@@ -40,6 +46,60 @@ CREATE TABLE IF NOT EXISTS skills (
     config       JSONB NOT NULL DEFAULT '{}',
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS active_version_id TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS draft_version_id TEXT;
+
+CREATE TABLE IF NOT EXISTS skill_versions (
+    id              TEXT PRIMARY KEY,
+    skill_id        TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    version_no      INT,
+    status          TEXT NOT NULL DEFAULT 'draft',
+    capability      JSONB NOT NULL DEFAULT '{}',
+    tool_contract   JSONB NOT NULL DEFAULT '{}',
+    implementation  JSONB NOT NULL DEFAULT '{}',
+    test_baseline   JSONB NOT NULL DEFAULT '{}',
+    publish_checks  JSONB NOT NULL DEFAULT '{}',
+    created_by      TEXT NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at    TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_versions_one_draft
+    ON skill_versions(skill_id)
+    WHERE status = 'draft';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_versions_published_version
+    ON skill_versions(skill_id, version_no)
+    WHERE version_no IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS skill_test_cases (
+    id              TEXT PRIMARY KEY,
+    skill_id        TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL DEFAULT '',
+    input           JSONB NOT NULL DEFAULT '{}',
+    expected_output JSONB NOT NULL DEFAULT '{}',
+    assertion_mode  TEXT NOT NULL DEFAULT 'contains',
+    enabled         BOOL NOT NULL DEFAULT true,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS skill_eval_runs (
+    id              TEXT PRIMARY KEY,
+    skill_id        TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    version_id      TEXT REFERENCES skill_versions(id) ON DELETE SET NULL,
+    test_case_id    TEXT REFERENCES skill_test_cases(id) ON DELETE SET NULL,
+    mode            TEXT NOT NULL,
+    input           JSONB NOT NULL DEFAULT '{}',
+    actual_output   JSONB NOT NULL DEFAULT '{}',
+    expected_output JSONB NOT NULL DEFAULT '{}',
+    passed          BOOL NOT NULL DEFAULT false,
+    trace           JSONB NOT NULL DEFAULT '{}',
+    duration_ms     INT NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS mcp_configs (
@@ -137,6 +197,7 @@ CREATE TABLE IF NOT EXISTS agent_skill_links (
 
 CREATE TABLE IF NOT EXISTS agent_executions (
     id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    trace_id       TEXT        NOT NULL DEFAULT '',
     agent_id       TEXT        NOT NULL,
     agent_name     TEXT        NOT NULL DEFAULT '',
     user_id        TEXT        NOT NULL,
@@ -148,8 +209,112 @@ CREATE TABLE IF NOT EXISTS agent_executions (
     duration_ms    INT         NOT NULL DEFAULT 0,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE agent_executions ADD COLUMN IF NOT EXISTS trace_id TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_agent_exec_created
     ON agent_executions (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_exec_trace
+    ON agent_executions (trace_id);
+
+CREATE TABLE IF NOT EXISTS agent_tool_traces (
+    id              UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    trace_id        TEXT        NOT NULL DEFAULT '',
+    execution_id    TEXT        NOT NULL DEFAULT '',
+    conversation_id UUID,
+    agent_id        TEXT        NOT NULL DEFAULT '',
+    user_id         TEXT        NOT NULL DEFAULT '',
+    step_index      INT         NOT NULL DEFAULT 0,
+    tool_call_id    TEXT        NOT NULL DEFAULT '',
+    tool_name       TEXT        NOT NULL DEFAULT '',
+    tool_type       TEXT        NOT NULL DEFAULT '',
+    provider_type   TEXT        NOT NULL DEFAULT '',
+    provider_id     TEXT        NOT NULL DEFAULT '',
+    server_id       TEXT        NOT NULL DEFAULT '',
+    capability_id   TEXT        NOT NULL DEFAULT '',
+    arguments_json  JSONB       NOT NULL DEFAULT '{}',
+    raw_result_json JSONB       NOT NULL DEFAULT 'null',
+    raw_result_text TEXT        NOT NULL DEFAULT '',
+    summary         TEXT        NOT NULL DEFAULT '',
+    status          TEXT        NOT NULL CHECK (status IN ('success', 'error')),
+    error_message   TEXT        NOT NULL DEFAULT '',
+    latency_ms      BIGINT      NOT NULL DEFAULT 0,
+    raw_truncated   BOOLEAN     NOT NULL DEFAULT FALSE,
+    metadata_json   JSONB       NOT NULL DEFAULT '{}',
+    started_at      TIMESTAMPTZ,
+    ended_at        TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_tool_traces_trace
+    ON agent_tool_traces (trace_id, step_index, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_agent_tool_traces_conv
+    ON agent_tool_traces (conversation_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_trace_events (
+    id                UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    trace_id          TEXT        NOT NULL DEFAULT '',
+    execution_id      TEXT        NOT NULL DEFAULT '',
+    conversation_id   UUID,
+    agent_id          TEXT        NOT NULL DEFAULT '',
+    user_id           TEXT        NOT NULL DEFAULT '',
+    run_type          TEXT        NOT NULL DEFAULT '',
+    observation_type  TEXT        NOT NULL DEFAULT '',
+    event_type        TEXT        NOT NULL DEFAULT '',
+    step_index        INT         NOT NULL DEFAULT 0,
+    span_name         TEXT        NOT NULL DEFAULT '',
+    parent_event_id   TEXT        NOT NULL DEFAULT '',
+    status            TEXT        NOT NULL DEFAULT '',
+    input_json        JSONB       NOT NULL DEFAULT 'null',
+    output_json       JSONB       NOT NULL DEFAULT 'null',
+    summary           TEXT        NOT NULL DEFAULT '',
+    error_message     TEXT        NOT NULL DEFAULT '',
+    model             TEXT        NOT NULL DEFAULT '',
+    prompt_tokens     INT         NOT NULL DEFAULT 0,
+    completion_tokens INT         NOT NULL DEFAULT 0,
+    total_tokens      INT         NOT NULL DEFAULT 0,
+    cost_usd          DOUBLE PRECISION NOT NULL DEFAULT 0,
+    latency_ms        BIGINT      NOT NULL DEFAULT 0,
+    tool_trace_id     TEXT        NOT NULL DEFAULT '',
+    provider_type     TEXT        NOT NULL DEFAULT '',
+    provider_id       TEXT        NOT NULL DEFAULT '',
+    node_id           TEXT        NOT NULL DEFAULT '',
+    node_type         TEXT        NOT NULL DEFAULT '',
+    workflow_id       TEXT        NOT NULL DEFAULT '',
+    workflow_version  TEXT        NOT NULL DEFAULT '',
+    sequence_no       BIGINT      NOT NULL DEFAULT 0,
+    metadata_json     JSONB       NOT NULL DEFAULT '{}',
+    otel_trace_id     TEXT        NOT NULL DEFAULT '',
+    otel_span_id      TEXT        NOT NULL DEFAULT '',
+    started_at        TIMESTAMPTZ,
+    ended_at          TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_trace_events_trace
+    ON agent_trace_events (trace_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_agent_trace_events_conv
+    ON agent_trace_events (conversation_id, created_at ASC);
+
+CREATE TABLE IF NOT EXISTS agent_execution_checkpoints (
+    id                        UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    execution_id              TEXT        NOT NULL,
+    trace_id                  TEXT        NOT NULL DEFAULT '',
+    conversation_id           UUID,
+    agent_id                  TEXT        NOT NULL DEFAULT '',
+    user_id                   TEXT        NOT NULL DEFAULT '',
+    current_node              TEXT        NOT NULL DEFAULT '',
+    step_index                INT         NOT NULL DEFAULT 0,
+    messages_snapshot_json    JSONB       NOT NULL DEFAULT '[]',
+    pending_tool_calls_json   JSONB       NOT NULL DEFAULT '[]',
+    completed_tool_calls_json JSONB       NOT NULL DEFAULT '[]',
+    runtime_state_json        JSONB       NOT NULL DEFAULT '{}',
+    status                    TEXT        NOT NULL CHECK (status IN ('running', 'paused', 'completed', 'failed', 'expired')),
+    resume_reason             TEXT        NOT NULL DEFAULT '',
+    created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at                TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '24 hours'
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_execution_checkpoints_execution
+    ON agent_execution_checkpoints (execution_id);
+CREATE INDEX IF NOT EXISTS idx_agent_execution_checkpoints_status
+    ON agent_execution_checkpoints (status, expires_at);
 
 -- =============================================================================
 -- Memory Pipeline tables (async outbox → embedder → enricher)
@@ -218,9 +383,18 @@ ALTER TABLE agent_workspaces ADD CONSTRAINT agent_workspaces_workspace_id_fkey
 
 -- knowledge_docs: add workspace FK (nullable, existing docs have no workspace)
 ALTER TABLE knowledge_docs ADD COLUMN IF NOT EXISTS workspace_id UUID;
-ALTER TABLE knowledge_docs DROP CONSTRAINT IF EXISTS knowledge_docs_workspace_id_fkey;
-ALTER TABLE knowledge_docs ADD CONSTRAINT knowledge_docs_workspace_id_fkey
-    FOREIGN KEY (workspace_id) REFERENCES rag_workspaces(id) ON DELETE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'knowledge_docs_workspace_id_fkey'
+          AND conrelid = 'knowledge_docs'::regclass
+    ) THEN
+        ALTER TABLE knowledge_docs ADD CONSTRAINT knowledge_docs_workspace_id_fkey
+            FOREIGN KEY (workspace_id) REFERENCES rag_workspaces(id) ON DELETE CASCADE;
+    END IF;
+END $$;
 
 -- mcp_configs: add auth, retry, headers, version columns (idempotent backfill)
 ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS version TEXT NOT NULL DEFAULT '';
@@ -234,6 +408,34 @@ ALTER TABLE chat_messages DROP CONSTRAINT IF EXISTS chat_messages_role_check;
 UPDATE chat_messages SET role = 'assistant' WHERE role = 'agent';
 ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_role_check
     CHECK (role IN ('user', 'assistant'));
+
+-- agent observability/audit table backfill for existing tenant schemas
+ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS execution_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS raw_truncated BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS provider_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS provider_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS server_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS capability_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS execution_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS tool_trace_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS run_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS observation_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS provider_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS provider_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS node_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS node_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS workflow_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS workflow_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS sequence_no BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS otel_trace_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS otel_span_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;
+ALTER TABLE agent_execution_checkpoints ADD COLUMN IF NOT EXISTS resume_reason TEXT NOT NULL DEFAULT '';
 
 -- =============================================================================
 -- Memory v2 Tables (fact-centric model)

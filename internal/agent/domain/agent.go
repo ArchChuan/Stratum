@@ -52,6 +52,39 @@ type AgentConfig struct {
 	KnowledgeWorkspaceDescriptions []string
 	MaxContextTokens               int
 	MemoryScope                    string
+	// StuckThreshold > 0 enables lazy planning: after this many LLM rounds with
+	// no final answer the agent transitions to Reflect→Plan→Execute.
+	// 0 disables the feature (pure ReAct).
+	StuckThreshold    int
+	CheckpointEnabled bool
+}
+
+// PlanStep is a single goal inside an agent execution plan.
+type PlanStep struct {
+	Goal      string   `json:"goal"`
+	HintTools []string `json:"hint_tools,omitempty"`
+	// DependsOn lists the zero-based indices of steps that must complete before
+	// this step starts. Empty means the step can run in the first wave (parallel).
+	DependsOn []int `json:"depends_on,omitempty"`
+}
+
+// StepResult captures the outcome of executing one PlanStep.
+type StepResult struct {
+	StepIndex int    `json:"step_index"`
+	Goal      string `json:"goal"`
+	Summary   string `json:"summary"`
+	Success   bool   `json:"success"`
+	Error     string `json:"error,omitempty"`
+}
+
+// PlanRuntimeState is serialised into AgentExecutionCheckpoint.RuntimeStateJSON.
+type PlanRuntimeState struct {
+	Phase             string       `json:"phase"`
+	ReflectionSummary string       `json:"reflection_summary"`
+	Plan              []PlanStep   `json:"plan"`
+	PlanTemplateID    string       `json:"plan_template_id,omitempty"`
+	CurrentStepIndex  int          `json:"current_step_index"`
+	StepResults       []StepResult `json:"step_results"`
 }
 
 // ChatConversation is a named conversation thread between a user and an agent.
@@ -89,6 +122,7 @@ const (
 // ExecutionRecord is an agent execution history entry.
 type ExecutionRecord struct {
 	ID            string
+	TraceID       string
 	AgentID       string
 	AgentName     string
 	UserID        string
@@ -133,19 +167,164 @@ type ToolCall struct {
 	Duration time.Duration
 }
 
+const (
+	ToolTraceStatusSuccess = "success"
+	ToolTraceStatusError   = "error"
+
+	ToolTypeReasoning     = "reasoning"
+	ToolTypeBuiltinRAG    = "builtin_rag"
+	ToolTypeBuiltinMemory = "builtin_memory"
+	ToolTypeSkill         = "skill"
+	ToolTypeMCP           = "mcp"
+	ToolTypeInternal      = "internal"
+
+	RunTypeAgent         = "agent"
+	RunTypeWorkflow      = "workflow"
+	RunTypeSkillTest     = "skill_test"
+	RunTypeScheduledTask = "scheduled_task"
+
+	ObservationTypeAgent      = "agent"
+	ObservationTypeLLM        = "llm"
+	ObservationTypeTool       = "tool"
+	ObservationTypeMCP        = "mcp"
+	ObservationTypeSkill      = "skill"
+	ObservationTypeRetriever  = "retriever"
+	ObservationTypeMemory     = "memory"
+	ObservationTypeWorkflow   = "workflow"
+	ObservationTypeCheckpoint = "checkpoint"
+	ObservationTypeCustom     = "custom"
+
+	ProviderTypeSkill    = "skill"
+	ProviderTypeMCP      = "mcp"
+	ProviderTypeLLM      = "llm"
+	ProviderTypeBuiltin  = "builtin"
+	ProviderTypeInternal = "internal"
+	ProviderTypeHTTP     = "http"
+	ProviderTypeBrowser  = "browser"
+	ProviderTypeShell    = "shell"
+
+	TraceEventAgentStarted  = "agent.execution_started"
+	TraceEventLLMRequest    = "llm.request"
+	TraceEventLLMResponse   = "llm.response"
+	TraceEventToolStarted   = "tool.call_started"
+	TraceEventToolFinished  = "tool.call_finished"
+	TraceEventToolFailed    = "tool.call_failed"
+	TraceEventFinalAnswer   = "agent.final_answer"
+	TraceEventAgentFinished = "agent.execution_finished"
+	TraceEventAgentFailed   = "agent.execution_failed"
+)
+
+// ToolObservation captures a single tool invocation for audit/debug storage
+// and for producing a compact context summary for the next conversation turn.
+type ToolObservation struct {
+	ID             string         `json:"id"`
+	TraceID        string         `json:"trace_id"`
+	ExecutionID    string         `json:"execution_id"`
+	ConversationID string         `json:"conversation_id"`
+	AgentID        string         `json:"agent_id"`
+	UserID         string         `json:"user_id"`
+	StepIndex      int            `json:"step_index"`
+	ToolCallID     string         `json:"tool_call_id"`
+	ToolName       string         `json:"tool_name"`
+	ToolType       string         `json:"tool_type"`
+	ProviderType   string         `json:"provider_type"`
+	ProviderID     string         `json:"provider_id"`
+	ServerID       string         `json:"server_id"`
+	CapabilityID   string         `json:"capability_id"`
+	Arguments      map[string]any `json:"arguments"`
+	RawResult      any            `json:"raw_result"`
+	RawText        string         `json:"raw_text"`
+	Summary        string         `json:"summary"`
+	Status         string         `json:"status"`
+	ErrorMessage   string         `json:"error_message"`
+	LatencyMs      int64          `json:"latency_ms"`
+	RawTruncated   bool           `json:"raw_truncated"`
+	Metadata       map[string]any `json:"metadata"`
+	StartedAt      time.Time      `json:"started_at"`
+	EndedAt        time.Time      `json:"ended_at"`
+	CreatedAt      time.Time      `json:"created_at"`
+}
+
+// AgentTraceEvent is an append-only execution trajectory event. Large tool raw
+// IO is linked through ToolTraceID instead of duplicated here.
+type AgentTraceEvent struct {
+	ID               string    `json:"id"`
+	TraceID          string    `json:"trace_id"`
+	ExecutionID      string    `json:"execution_id"`
+	ConversationID   string    `json:"conversation_id"`
+	AgentID          string    `json:"agent_id"`
+	UserID           string    `json:"user_id"`
+	RunType          string    `json:"run_type"`
+	ObservationType  string    `json:"observation_type"`
+	EventType        string    `json:"event_type"`
+	StepIndex        int       `json:"step_index"`
+	SpanName         string    `json:"span_name"`
+	ParentEventID    string    `json:"parent_event_id"`
+	Status           string    `json:"status"`
+	Input            any       `json:"input"`
+	Output           any       `json:"output"`
+	Summary          string    `json:"summary"`
+	ErrorMessage     string    `json:"error_message"`
+	Model            string    `json:"model"`
+	PromptTokens     int       `json:"prompt_tokens"`
+	CompletionTokens int       `json:"completion_tokens"`
+	TotalTokens      int       `json:"total_tokens"`
+	CostUSD          float64   `json:"cost_usd"`
+	LatencyMs        int64     `json:"latency_ms"`
+	ToolTraceID      string    `json:"tool_trace_id"`
+	ProviderType     string    `json:"provider_type"`
+	ProviderID       string    `json:"provider_id"`
+	NodeID           string    `json:"node_id"`
+	NodeType         string    `json:"node_type"`
+	WorkflowID       string    `json:"workflow_id"`
+	WorkflowVersion  string    `json:"workflow_version"`
+	SequenceNo       int64     `json:"sequence_no"`
+	Metadata         any       `json:"metadata"`
+	OTelTraceID      string    `json:"otel_trace_id"`
+	OTelSpanID       string    `json:"otel_span_id"`
+	StartedAt        time.Time `json:"started_at"`
+	EndedAt          time.Time `json:"ended_at"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+// AgentExecutionCheckpoint is the resumable runtime snapshot for a long-running
+// agent execution. It is not used as audit history; trace events remain
+// append-only history.
+type AgentExecutionCheckpoint struct {
+	ID                     string          `json:"id"`
+	ExecutionID            string          `json:"execution_id"`
+	TraceID                string          `json:"trace_id"`
+	ConversationID         string          `json:"conversation_id"`
+	AgentID                string          `json:"agent_id"`
+	UserID                 string          `json:"user_id"`
+	CurrentNode            string          `json:"current_node"`
+	StepIndex              int             `json:"step_index"`
+	MessagesSnapshotJSON   json.RawMessage `json:"messages_snapshot_json"`
+	PendingToolCallsJSON   json.RawMessage `json:"pending_tool_calls_json"`
+	CompletedToolCallsJSON json.RawMessage `json:"completed_tool_calls_json"`
+	RuntimeStateJSON       json.RawMessage `json:"runtime_state_json"`
+	Status                 string          `json:"status"`
+	ResumeReason           string          `json:"resume_reason"`
+	CreatedAt              time.Time       `json:"created_at"`
+	UpdatedAt              time.Time       `json:"updated_at"`
+	ExpiresAt              time.Time       `json:"expires_at"`
+}
+
 // AgentResult holds the output of a completed agent execution.
 type AgentResult struct {
-	AgentID    string
-	Input      string
-	Output     string
-	Thoughts   []Thought
-	ToolCalls  []ToolCall
-	Steps      int
-	TokensUsed int
-	CostUSD    float64
-	Duration   time.Duration
-	Error      error
-	Metadata   map[string]interface{}
+	AgentID          string
+	Input            string
+	Output           string
+	Thoughts         []Thought
+	ToolCalls        []ToolCall
+	ToolObservations []ToolObservation
+	TraceEvents      []AgentTraceEvent
+	Steps            int
+	TokensUsed       int
+	CostUSD          float64
+	Duration         time.Duration
+	Error            error
+	Metadata         map[string]interface{}
 }
 
 // AgentState tracks mutable execution progress during a single run.

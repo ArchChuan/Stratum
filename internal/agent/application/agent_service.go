@@ -26,18 +26,22 @@ const previewMaxChars = 50
 // Everything is an interface or value type — no concrete infrastructure
 // imports allowed.
 type AgentServiceDeps struct {
-	Registry       *Registry
-	TenantSettings port.TenantSettings
-	SkillLookup    port.SkillLookup
-	RAGSearch      port.RAGSearchProvider
-	TenantResolver port.TenantCapabilityResolver
-	MCPTools       port.MCPToolProvider
-	ExecStore      ExecutionStore
-	ChatStore      ChatStore
-	MemoryCleaner  port.AgentMemoryCleaner
-	MemoryBuffer   port.BufferMemoryFn
-	Metrics        observability.MetricsProvider
-	Logger         *zap.Logger
+	Registry          *Registry
+	TenantSettings    port.TenantSettings
+	SkillLookup       port.SkillLookup
+	SkillToolResolver port.SkillToolResolver
+	RAGSearch         port.RAGSearchProvider
+	TenantResolver    port.TenantCapabilityResolver
+	MCPTools          port.MCPToolProvider
+	ExecStore         ExecutionStore
+	ChatStore         ChatStore
+	ToolTraceStore    ToolTraceStore
+	TraceEventStore   TraceEventStore
+	CheckpointStore   CheckpointStore
+	MemoryCleaner     port.AgentMemoryCleaner
+	MemoryBuffer      port.BufferMemoryFn
+	Metrics           observability.MetricsProvider
+	Logger            *zap.Logger
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields
@@ -276,6 +280,7 @@ type ExecMeta struct {
 // ExecutionRowDTO is the wire shape emitted by ListExecutions.
 type ExecutionRowDTO struct {
 	ID            string
+	TraceID       string
 	AgentID       string
 	AgentName     string
 	UserID        string
@@ -313,6 +318,8 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
 	_, options := s.assembleOptions(ctx, a, req, meta)
+	executionID := uuid.Must(uuid.NewV7()).String()
+	options = append(options, WithExecutionID(executionID))
 
 	s.deps.Logger.Debug("agent.execute",
 		zap.String("agent_id", agentID),
@@ -348,7 +355,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		)
 	}
 
-	s.recordExecution(ctx, agentID, req.UserID, a.GetConfig().Name, req.Query, result, err, durationMs)
+	s.recordExecution(ctx, executionID, agentID, req.UserID, a.GetConfig().Name, req.Query, result, err, durationMs)
 	if err == nil && result != nil && s.deps.MemoryBuffer != nil {
 		scope := a.GetConfig().MemoryScope
 		_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "user", req.Query)
@@ -371,7 +378,9 @@ func (s *AgentService) ExecuteStream(
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
 	streamCtx, options := s.assembleOptions(ctx, a, req, meta)
+	executionID := uuid.Must(uuid.NewV7()).String()
 	options = append(options, WithTokenCallback(tokenCb))
+	options = append(options, WithExecutionID(executionID))
 
 	execCtx, cancel = context.WithTimeout(context.WithoutCancel(streamCtx), constants.AgentExecTimeout)
 	run = func() (*AgentResult, int, error) {
@@ -401,7 +410,7 @@ func (s *AgentService) ExecuteStream(
 				zap.Int("duration_ms", durationMs),
 			)
 		}
-		s.recordExecution(ctx, agentID, req.UserID, a.GetConfig().Name, req.Query, res, runErr, durationMs)
+		s.recordExecution(ctx, executionID, agentID, req.UserID, a.GetConfig().Name, req.Query, res, runErr, durationMs)
 		if runErr == nil && res != nil && s.deps.MemoryBuffer != nil {
 			scope := a.GetConfig().MemoryScope
 			_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "user", req.Query)
@@ -425,6 +434,7 @@ func (s *AgentService) ListExecutions(ctx context.Context, page, pageSize int) (
 	for _, r := range records {
 		out = append(out, ExecutionRowDTO{
 			ID:            r.ID,
+			TraceID:       r.TraceID,
 			AgentID:       r.AgentID,
 			AgentName:     r.AgentName,
 			UserID:        r.UserID,
@@ -465,6 +475,7 @@ func (s *AgentService) assembleOptions(
 		}
 	}
 	s.attachChatStore(a)
+	s.attachTraceStores(a)
 
 	options = append(options,
 		WithTenantID(meta.TenantID),
@@ -505,18 +516,84 @@ func (s *AgentService) attachChatStore(a Agent) {
 	}
 }
 
+func (s *AgentService) attachTraceStores(a Agent) {
+	if s.deps.ToolTraceStore != nil {
+		type toolTraceStoreSetter interface {
+			SetToolTraceStore(ToolTraceStore)
+		}
+		if setter, ok := a.(toolTraceStoreSetter); ok {
+			setter.SetToolTraceStore(s.deps.ToolTraceStore)
+		}
+	}
+	if s.deps.TraceEventStore != nil {
+		type traceEventStoreSetter interface {
+			SetTraceEventStore(TraceEventStore)
+		}
+		if setter, ok := a.(traceEventStoreSetter); ok {
+			setter.SetTraceEventStore(s.deps.TraceEventStore)
+		}
+	}
+	if s.deps.CheckpointStore != nil {
+		type checkpointStoreSetter interface {
+			SetCheckpointStore(CheckpointStore)
+		}
+		if setter, ok := a.(checkpointStoreSetter); ok {
+			setter.SetCheckpointStore(s.deps.CheckpointStore)
+		}
+	}
+}
+
 // buildExtraTools converts MCPServerIDs and AllowedSkills into ToolDefinitions
-// for the ReAct loop. Skill tool names are formatted as "tenant_{tenantID}_{skill_name}".
-// The returned index maps those tool names back to skill UUIDs for execution routing.
-func (s *AgentService) buildExtraTools(ctx context.Context, tenantID string, mcpServerIDs, allowedSkills []string) ([]port.ToolDefinition, map[string]string) {
+// for the ReAct loop. Published skills use their tool contract names; legacy
+// skills fall back to tenant-scoped names. The returned index maps tool names
+// back to skill/version refs for execution routing.
+func (s *AgentService) buildExtraTools(ctx context.Context, tenantID string, mcpServerIDs, allowedSkills []string) ([]port.ToolDefinition, map[string]port.SkillToolRef) {
 	var tools []port.ToolDefinition
-	index := make(map[string]string, len(allowedSkills))
+	index := make(map[string]port.SkillToolRef, len(allowedSkills))
 
 	for _, serverID := range mcpServerIDs {
 		if s.deps.MCPTools == nil {
 			continue
 		}
-		tools = append(tools, s.deps.MCPTools.ToolsForServer(ctx, serverID)...)
+		for _, tool := range s.deps.MCPTools.ToolsForServer(ctx, serverID) {
+			if tool.ProviderType == "" {
+				tool.ProviderType = domain.ProviderTypeMCP
+			}
+			if tool.ProviderID == "" {
+				tool.ProviderID = serverID
+			}
+			if tool.ServerID == "" {
+				tool.ServerID = serverID
+			}
+			if tool.CapabilityID == "" {
+				tool.CapabilityID = tool.Name
+			}
+			if tool.NodeType == "" {
+				tool.NodeType = domain.ObservationTypeMCP
+			}
+			tools = append(tools, tool)
+		}
+	}
+
+	if s.deps.SkillToolResolver != nil && len(allowedSkills) > 0 {
+		resolvedTools, resolvedIndex, err := s.deps.SkillToolResolver.ResolveTools(ctx, tenantID, allowedSkills)
+		if err == nil {
+			for i := range resolvedTools {
+				ref, ok := resolvedIndex[resolvedTools[i].Name]
+				if ok {
+					resolvedTools[i].ProviderType = domain.ProviderTypeSkill
+					resolvedTools[i].ProviderID = ref.SkillID
+					resolvedTools[i].CapabilityID = ref.SkillID
+					resolvedTools[i].NodeType = domain.ObservationTypeSkill
+					resolvedTools[i].Metadata = map[string]any{"version_id": ref.VersionID}
+				}
+			}
+			tools = append(tools, resolvedTools...)
+			for name, ref := range resolvedIndex {
+				index[name] = ref
+			}
+			return tools, index
+		}
 	}
 
 	for _, skillID := range allowedSkills {
@@ -529,10 +606,14 @@ func (s *AgentService) buildExtraTools(ctx context.Context, tenantID string, mcp
 			}
 		}
 		toolName := fmt.Sprintf("tenant_%s_%s", tenantID, name)
-		index[toolName] = skillID
+		index[toolName] = port.SkillToolRef{SkillID: skillID}
 		tools = append(tools, port.ToolDefinition{
-			Name:        toolName,
-			Description: name + ": " + description,
+			Name:         toolName,
+			Description:  name + ": " + description,
+			ProviderType: domain.ProviderTypeSkill,
+			ProviderID:   skillID,
+			CapabilityID: skillID,
+			NodeType:     domain.ObservationTypeSkill,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -552,14 +633,16 @@ func (s *AgentService) buildExtraTools(ctx context.Context, tenantID string, mcp
 // The insert reuses reqCtx — which carries the tenant — but detaches its
 // cancel signal so the goroutine survives the HTTP response lifecycle.
 func (s *AgentService) recordExecution(
-	reqCtx context.Context, id, userID, agentName, query string,
+	reqCtx context.Context, executionID, id, userID, agentName, query string,
 	result *AgentResult, err error, durationMs int,
 ) {
 	if s.deps.ExecStore == nil {
 		return
 	}
 	rec := domain.ExecutionRecord{
+		ID:           executionID,
 		AgentID:      id,
+		TraceID:      traceIDFromContext(reqCtx),
 		UserID:       userID,
 		AgentName:    agentName,
 		InputPreview: truncateRunes(query, previewMaxChars),
@@ -582,6 +665,27 @@ func (s *AgentService) recordExecution(
 			s.deps.Logger.Warn("execution record insert failed", zap.Error(insertErr))
 		}
 	}()
+}
+
+func (s *AgentService) ListToolTraces(ctx context.Context, tenantID, traceID string) ([]ToolObservation, error) {
+	if s.deps.ToolTraceStore == nil {
+		return []ToolObservation{}, nil
+	}
+	return s.deps.ToolTraceStore.ListByTraceID(ctx, tenantID, traceID)
+}
+
+func (s *AgentService) ListTraceEvents(ctx context.Context, tenantID, traceID string) ([]AgentTraceEvent, error) {
+	if s.deps.TraceEventStore == nil {
+		return []AgentTraceEvent{}, nil
+	}
+	return s.deps.TraceEventStore.ListByTraceID(ctx, tenantID, traceID)
+}
+
+func traceIDFromContext(ctx context.Context) string {
+	if sc, ok := observability.SpanFromContext(ctx); ok {
+		return sc.TraceID
+	}
+	return ""
 }
 
 // truncateRunes returns s truncated to maxRunes runes (not bytes).

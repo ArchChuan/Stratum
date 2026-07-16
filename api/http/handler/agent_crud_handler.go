@@ -123,6 +123,7 @@ func (h *AgentHandler) DeleteAgent(c *gin.Context) {
 // are frozen by the contract test; do not rename.
 type executionRow struct {
 	ID            string `json:"id"`
+	TraceID       string `json:"trace_id"`
 	AgentID       string `json:"agent_id"`
 	AgentName     string `json:"agent_name"`
 	UserID        string `json:"user_id"`
@@ -152,6 +153,7 @@ func (h *AgentHandler) ListExecutions(c *gin.Context) {
 	for _, r := range rows {
 		out = append(out, executionRow{
 			ID:            r.ID,
+			TraceID:       r.TraceID,
 			AgentID:       r.AgentID,
 			AgentName:     r.AgentName,
 			UserID:        r.UserID,
@@ -165,4 +167,34 @@ func (h *AgentHandler) ListExecutions(c *gin.Context) {
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"executions": out, "total": total})
+}
+
+func (h *AgentHandler) ListExecutionToolTraces(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	traceID := c.Param("traceID")
+	rows, err := h.svc.ListToolTraces(c.Request.Context(), tenantID, traceID)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"tool_traces": rows})
+}
+
+func (h *AgentHandler) ListExecutionTraceEvents(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	traceID := c.Param("traceID")
+	rows, err := h.svc.ListTraceEvents(c.Request.Context(), tenantID, traceID)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"trace_events": rows})
 }

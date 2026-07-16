@@ -20,6 +20,7 @@ type MemoryFact struct {
 	Importance     float64
 	EntityNames    []string
 	AccessCount    int
+	FrecencyScore  float64
 	LastAccessAt   time.Time
 	SupersededBy   string
 	Status         string

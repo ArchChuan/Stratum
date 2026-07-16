@@ -54,4 +54,15 @@ const (
 	// Industry standard 10s; GitHub API normally responds <1s, fast-fail
 	// on network issues so user sees error quickly and can retry.
 	OAuthTokenExchangeTimeout = 10 * time.Second
+
+	// PlanCheckpointTTL is the Redis/DB TTL for plan execution checkpoints.
+	// 24h covers typical human-in-loop review + overnight processing windows.
+	PlanCheckpointTTL = 24 * time.Hour
+
+	// AgentReflectTimeout caps the single LLM call inside nodeReflect.
+	AgentReflectTimeout = 30 * time.Second
+	// AgentPlanTimeout caps the single LLM call inside nodePlan.
+	AgentPlanTimeout = 30 * time.Second
+	// AgentSynthesizeTimeout caps the optional LLM aggregation inside nodeSynthesize.
+	AgentSynthesizeTimeout = 30 * time.Second
 )

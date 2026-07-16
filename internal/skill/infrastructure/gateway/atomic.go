@@ -142,7 +142,7 @@ func (e *atomicEngine) execute(ctx context.Context, req SkillRequest) (SkillResp
 		}
 
 		execCtx, cancel := context.WithTimeout(ctx, timeout)
-		output, err := provider.Execute(execCtx, req.SkillID, req.Input)
+		output, err := executeProvider(execCtx, provider, req)
 		cancel()
 
 		if err == nil {
@@ -188,6 +188,15 @@ func (e *atomicEngine) execute(ctx context.Context, req SkillRequest) (SkillResp
 		TraceID: traceID,
 		Cause:   lastErr,
 	}
+}
+
+func executeProvider(ctx context.Context, provider SkillProvider, req SkillRequest) (any, error) {
+	if req.VersionID != "" {
+		if versioned, ok := provider.(VersionedSkillProvider); ok {
+			return versioned.ExecuteVersion(ctx, req.VersionID, req.Input)
+		}
+	}
+	return provider.Execute(ctx, req.SkillID, req.Input)
 }
 
 func (e *atomicEngine) reportMetrics(skillID, skillType, status string, duration time.Duration) {

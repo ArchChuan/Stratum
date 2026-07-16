@@ -15,8 +15,6 @@ import (
 	apihttp "github.com/byteBuilderX/stratum/api/http"
 	"github.com/byteBuilderX/stratum/api/wiring"
 	"github.com/byteBuilderX/stratum/config"
-	agentpersistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
-	"github.com/byteBuilderX/stratum/internal/iam/infrastructure/hermes"
 	harnesspkg "github.com/byteBuilderX/stratum/internal/platform/harness"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -90,30 +88,11 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 }
 
 func registerHermes(appHarness *harnesspkg.Harness, cfg *config.Config, logger *zap.Logger) {
-	var hermesClient *hermes.Client
+	start, stop, healthCheck := wiring.BuildHermesFuncs(cfg, logger)
 	mustRegister(appHarness, harnesspkg.NewSimpleComponent("hermes", logger,
-		harnesspkg.WithStartFunc(func(_ context.Context) error {
-			c, err := hermes.NewClient(cfg.NatsURL, logger)
-			if err != nil {
-				logger.Warn("Failed to connect to NATS", zap.Error(err))
-				return nil
-			}
-			hermesClient = c
-			logger.Info("Connected to NATS", zap.String("url", cfg.NatsURL))
-			return nil
-		}),
-		harnesspkg.WithStopFunc(func(_ context.Context) error {
-			if hermesClient != nil {
-				hermesClient.Close()
-			}
-			return nil
-		}),
-		harnesspkg.WithHealthCheckFunc(func(_ context.Context) error {
-			if cfg.NatsURL == "" {
-				return fmt.Errorf("NATS URL not configured")
-			}
-			return nil
-		}),
+		harnesspkg.WithStartFunc(start),
+		harnesspkg.WithStopFunc(stop),
+		harnesspkg.WithHealthCheckFunc(healthCheck),
 	), logger)
 }
 
@@ -163,15 +142,21 @@ func registerMemoryWorkers(appHarness *harnesspkg.Harness, c *wiring.Container, 
 	), logger)
 }
 
+// chatCleaner is a local duck-typed seam so platform/runtime avoids
+// importing agent/infrastructure directly.
+type chatCleaner interface {
+	CleanupExpired(ctx context.Context, tenantID string) error
+}
+
 func registerChatCleanup(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {
 	mustRegister(appHarness, harnesspkg.NewSimpleComponent("chat-cleanup", logger,
 		harnesspkg.WithStartFunc(func(ctx context.Context) error {
 			db := c.DB()
-			if db == nil {
-				logger.Warn("chat-cleanup: no DB available, skipping")
+			if db == nil || c.Agent == nil || c.Agent.ChatStore == nil {
+				logger.Warn("chat-cleanup: no DB or ChatStore available, skipping")
 				return nil
 			}
-			go runChatCleanup(ctx, db, chatCleanupInterval, logger)
+			go runChatCleanup(ctx, db, c.Agent.ChatStore, chatCleanupInterval, logger)
 			return nil
 		}),
 		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
@@ -215,8 +200,7 @@ func mustRegister(h *harnesspkg.Harness, c harnesspkg.Component, logger *zap.Log
 	}
 }
 
-func runChatCleanup(ctx context.Context, db *pgxpool.Pool, interval time.Duration, logger *zap.Logger) {
-	chatStore := agentpersistence.NewPgChatStore(db, logger)
+func runChatCleanup(ctx context.Context, db *pgxpool.Pool, store chatCleaner, interval time.Duration, logger *zap.Logger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -236,7 +220,7 @@ func runChatCleanup(ctx context.Context, db *pgxpool.Pool, interval time.Duratio
 			}
 			rows.Close()
 			for _, tenantID := range tenantIDs {
-				if err := chatStore.CleanupExpired(ctx, tenantID); err != nil {
+				if err := store.CleanupExpired(ctx, tenantID); err != nil {
 					logger.Warn("chat-cleanup: cleanup tenant", zap.String("tenant_id", tenantID), zap.Error(err))
 				}
 			}

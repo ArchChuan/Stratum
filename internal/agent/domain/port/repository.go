@@ -27,6 +27,27 @@ type ExecutionRepo interface {
 	List(ctx context.Context, opts domain.ListOptions) ([]domain.ExecutionRecord, int64, error)
 }
 
+// ToolTraceRepo persists raw tool IO and compact summaries for audit/debug.
+type ToolTraceRepo interface {
+	InsertBatch(ctx context.Context, tenantID string, traces []domain.ToolObservation) error
+	ListByTraceID(ctx context.Context, tenantID, traceID string) ([]domain.ToolObservation, error)
+	ListByConversation(ctx context.Context, tenantID, conversationID string, limit int) ([]domain.ToolObservation, error)
+}
+
+// TraceEventRepo persists append-only agent trajectory events.
+type TraceEventRepo interface {
+	Insert(ctx context.Context, tenantID string, event domain.AgentTraceEvent) error
+	InsertBatch(ctx context.Context, tenantID string, events []domain.AgentTraceEvent) error
+	ListByTraceID(ctx context.Context, tenantID, traceID string) ([]domain.AgentTraceEvent, error)
+}
+
+// CheckpointRepo persists resumable runtime snapshots for long-running agents.
+type CheckpointRepo interface {
+	Upsert(ctx context.Context, tenantID string, checkpoint domain.AgentExecutionCheckpoint) error
+	GetLatest(ctx context.Context, tenantID, executionID string) (*domain.AgentExecutionCheckpoint, error)
+	MarkCompleted(ctx context.Context, tenantID, executionID string) error
+}
+
 // ChatRepo persists chat conversations and messages in the tenant schema.
 type ChatRepo interface {
 	CreateConversation(ctx context.Context, tenantID, agentID, userID, name string) (*domain.ChatConversation, error)

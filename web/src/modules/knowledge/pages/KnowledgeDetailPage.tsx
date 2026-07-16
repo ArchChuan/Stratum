@@ -43,7 +43,7 @@ export const KnowledgeDetailPage = () => {
         onNameSave={isAdmin ? handleNameSave : undefined}
       />
 
-      <WorkspaceStatsCard stats={stats ?? undefined} />
+      <WorkspaceStatsCard stats={stats ?? undefined} docCount={documents.length || undefined} />
 
       {isAdmin && (
         <WorkspaceConfigForm form={configForm} loading={configLoading} onSubmit={handleConfigSave} />

@@ -37,7 +37,7 @@ func TestExtractFacts_Success(t *testing.T) {
 
 	// Mock supersede candidates (none found)
 	factRepo.On("FindSupersedeCandidates", ctx, "tenant1", "user1", "agent1", mock.Anything, mock.Anything, mock.Anything).
-		Return([]*domain.MemoryFact{}, nil)
+		Return([]*port.SupersedeCandidate{}, nil)
 
 	// Mock entity normalization (new entity)
 	entityRepo.On("FindByNameAndType", ctx, "tenant1", "user1", "Python", "", mock.Anything).
@@ -101,7 +101,7 @@ func TestExtractFacts_EntityUpdate(t *testing.T) {
 
 	// Mock supersede candidates (none)
 	factRepo.On("FindSupersedeCandidates", ctx, "tenant1", "user1", "agent1", mock.Anything, mock.Anything, mock.Anything).
-		Return([]*domain.MemoryFact{}, nil)
+		Return([]*port.SupersedeCandidate{}, nil)
 
 	// Mock entity normalization (existing entity)
 	existingEntity, _ := domain.NewEntity("user1", "agent1", "user", "Go", "technology")

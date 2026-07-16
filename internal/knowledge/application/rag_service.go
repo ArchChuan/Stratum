@@ -36,19 +36,28 @@ func NewRAGSearchFn(rs *RAGService, tenantID string) func(
 			wg.Add(1)
 			go func(i int, ws string) {
 				defer wg.Done()
-				mode := "hybrid"
+				mode := domain.DefaultQueryMode
 				effectiveTopK := topK
 				embedModel := ""
+				workspaceID := ""
 				if rs.wsRepo != nil {
-					if cfg, err := rs.wsRepo.GetConfigByID(ctx, tenantID, ws); err == nil {
-						if cfg.TopK > 0 {
-							effectiveTopK = cfg.TopK
+					if w, err := rs.wsRepo.GetByName(ctx, tenantID, ws); err == nil && w != nil {
+						workspaceID = w.ID
+						if w.Config.TopK > 0 {
+							effectiveTopK = w.Config.TopK
 						}
-						embedModel = cfg.EmbeddingModel
+						embedModel = w.Config.EmbeddingModel
+						if w.Config.QueryMode != "" {
+							mode = w.Config.QueryMode
+						}
+					} else if err != nil {
+						results[i] = wsResult{err: fmt.Errorf("resolve workspace %q: %w", ws, err)}
+						return
 					}
 				}
 				out, err := rs.Query(ctx, RAGQueryRequest{
-					WorkspaceID:    ws,
+					WorkspaceID:    workspaceID,
+					Workspace:      ws,
 					Question:       query,
 					TenantID:       tenantID,
 					Mode:           mode,
