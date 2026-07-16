@@ -166,7 +166,7 @@ platform → (被所有 context 依赖，不依赖任何 context)
 - **删除所有系统级 env key 读取**: `QWEN_API_KEY` / `ZHIPU_API_KEY` 全部移除
 - **API Key 唯一来源**: 租户配置 `tenants.settings.llm_api_keys`，通过 `TenantGatewayCache` 解析
 - **Context 注入模式**: `llmgateway.WithCompleter(ctx, completer)` 和 `CompleterFromContext(ctx)` 覆盖静态注入
-- **移除无意义 nil 参数**: `DBSkillAdapter` / `SkillService` 的 `completer` 参数删除，改为运行时 context 注入
+- **当时的清理**: `DBSkillAdapter` / `SkillService` 的 `completer` 参数曾改为运行时 context 注入；这两个旧 Skill 类型现已随 instruction capability 重构移除
 - **StaticModelCatalog**: 硬编码模型列表替代动态 gateway-based catalog（因全局 gateway 无 client）
 
 **安全强化**: 全局禁止从环境变量读取 API Key，所有密钥必须来自租户配置
@@ -545,7 +545,7 @@ _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL search_path = %s, public",
 
 ### 6.3 SSRF 防护
 
-**HTTP Skill 执行**:
+**历史 HTTP Skill 执行决策（当前直接执行器已移除）**:
 
 - 禁止访问内网 IP（`10.*.*.*`, `172.16.*.*`, `192.168.*.*`, `127.0.0.1`）
 - 禁止访问元数据服务（`169.254.169.254`）
@@ -647,7 +647,7 @@ func NewSafeDial() *net.Dialer {
 - `llm_request_duration_seconds{provider,model}` — LLM 延迟
 - `llm_tokens_total{provider,model,type="prompt|completion"}` — Token 用量
 - `memory_pipeline_total{stage="embed|enrich",status}` — Memory pipeline 计数
-- `skill_executions_total{type="http|llm|code",status}` — Skill 执行计数
+- `skill_executions_total{type="http|llm|code",status}` — 旧 Skill 执行计数器仍在 metrics registry 中注册，当前 instruction Skill 路径没有递增调用点
 
 **高基数标签截断**:
 

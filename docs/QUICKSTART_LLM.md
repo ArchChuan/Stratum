@@ -43,12 +43,12 @@ POST /agents/:id/execute/stream
 
 ## 4. 使用 Skill 能力
 
-当前 Skill 是版本化 capability package，不再通过旧的 `/skills/:id/execute` 路由执行 `type: llm` Skill。
+当前 Skill 是版本化 instruction capability package，不提供直接执行或草稿测试 HTTP 路由。
 
-- 草稿测试：`POST /skills/test-draft`
-- 已保存 Skill 测试：`POST /skills/:id/test`
+- 查看工作区：`GET /skills/:id/workspace`
+- 更新草稿：`PATCH /skills/:id/draft/capability`、`PATCH /skills/:id/draft/activation`、`PATCH /skills/:id/draft/instructions`
 - 发布：`POST /skills/:id/publish`
-- Agent 通过 `AllowedSkills` 引用已发布版本的 tool contract
+- Agent 通过 `AllowedSkills` 激活已发布的 instruction bundle，并按 activation 约束 MCP 工具与知识工作区
 
 ## 5. 超时与观测
 

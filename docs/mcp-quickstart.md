@@ -23,16 +23,11 @@ GET /mcp/servers/:id/tools
 GET /mcp/servers/:id/resources
 ```
 
-## 4. 执行工具
+## 4. 配置并执行工具
 
-```text
-POST /mcp/tools/:toolId/execute
-Content-Type: application/json
+输入 schema 以 `/mcp/servers/:id/tools` 返回的 `inputSchema` 为准。平台不提供通用 HTTP 工具执行路由；工具由 Agent ReAct 运行时通过内部 `MCPToolExecutor` 调用。
 
-{ ...tool input... }
-```
-
-租户必须处于 active 状态。输入 schema 以 `/mcp/servers/:id/tools` 返回的 `inputSchema` 为准。
+管理员可用 `PUT /mcp/tool-policies/:serverId/:toolName` 设置工具风险级别。危险或未分类工具会暂停执行并进入 `/agents/tool-approvals`，管理员决策后再恢复对应 Agent 执行。
 
 ## 5. 供 Agent 使用
 

@@ -8,7 +8,7 @@ MCP 是独立 bounded context：
 api/http/handler/mcp_handler.go
   → internal/mcp/application/MCPService
   → internal/mcp/domain/port
-  → internal/mcp/infrastructure/{ClientManager,BaseClient,MCPSkillRegistry}
+  → internal/mcp/infrastructure/{ClientManager,BaseClient,MCPToolRegistry}
   → tenant schema mcp_servers
 ```
 
@@ -30,7 +30,7 @@ api/http/handler/mcp_handler.go
 
 ## HTTP API
 
-所有 `/mcp` 路由都需要 JWT 与 tenant context。普通 `member` 可读取配置和执行工具；服务器管理和 skill 刷新需要 `admin` 或更高角色。
+所有 `/mcp` 路由都需要 JWT 与 tenant context。普通 `member` 可读取服务器、能力和工具风险策略；服务器管理及工具风险策略写入需要 active tenant 的 `admin` 或更高角色。当前没有通用 HTTP 工具执行路由。
 
 | 方法 | 路径 | 用途 | 最低角色 |
 |------|------|------|----------|
@@ -44,15 +44,13 @@ api/http/handler/mcp_handler.go
 | POST | `/mcp/servers/:id/reconnect` | 重连 | admin |
 | GET | `/mcp/servers/:id/tools` | 列出工具 | member |
 | GET | `/mcp/servers/:id/resources` | 列出资源 | member |
-| POST | `/mcp/tools/:toolId/execute` | 执行工具 | active member |
-| GET | `/mcp/skills` | 列出 MCP skill 投影 | member |
-| GET | `/mcp/skills/:id` | 查看 MCP skill | member |
-| POST | `/mcp/skills/refresh` | 重建 skill registry | admin |
+| GET | `/mcp/tool-policies` | 列出工具风险策略 | member |
+| PUT | `/mcp/tool-policies/:serverId/:toolName` | 设置工具风险级别 | active admin |
 | GET | `/mcp/status` | 连接状态汇总 | member |
 
 ## Agent 集成
 
-`api/wiring/agent.go` 把 MCP tool provider 注入 `AgentService`。Agent 配置中的 `MCPServerIDs` 限定可用服务器；执行时 `buildExtraTools` 合并 MCP 工具与已允许的平台 Skill，同名内置 `stratum_*` 工具不会被覆盖。
+`api/wiring/agent.go` 把 MCP tool provider、executor 和 policy resolver 注入 `AgentService`。Agent 配置中的 `MCPServerIDs` 限定可用服务器；执行时 ReAct 图合并 MCP 工具与当前 Skill activation，且不会让外部工具覆盖同名内置 `stratum_*` 工具。危险或未分类工具先生成 approval，管理员通过 `/agents/tool-approvals/...` 决策并恢复执行；真正的 MCP 调用经内部 `MCPToolExecutor` 完成。
 
 ## 验证
 

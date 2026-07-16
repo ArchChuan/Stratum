@@ -1,26 +1,26 @@
 # Stratum Go 包代码架构图
 
-本目录记录 `internal/...` 与 `pkg/...` 的 Go 包架构图。现有 63 份包图仍对应其源码；仓库新增的 evaluation context 5 个包尚未生成独立图，不能再把本目录视为完整清单。
+本目录记录 `internal/...` 与 `pkg/...` 的 Go 包架构图。当前源码有 62 个含 Go 文件的包：58 个有现行包图，4 个 evaluation 包尚未生成独立图。另有 5 个旧 Skill package 页面保留为已移除路径索引，不计入当前包数。
 
 - 生成范围：`internal/...`、`pkg/...`
-- 当前 Go 包总数：68（63 份现有图 + 5 个尚未补图的 evaluation 包）
+- 当前 Go 包总数：62（58 份现行包图 + 4 个尚未补图的 evaluation 包）
 - 不包含：`api/`、`cmd/`、`config/`、前端及工作树副本
-- 清单：[package-manifest.txt](package-manifest.txt)
+- 历史生成清单：[package-manifest.txt](package-manifest.txt)（仍记录生成时的 63 个路径，不是当前完整清单）
 
 ## internal/evaluation（待补独立包图）
 
 - `internal/evaluation/domain` / `domain/port`：评估 suite、run、job、优化候选、实验、反馈及仓储契约。
 - `internal/evaluation/application`：suite 发布、异步 job worker、评估执行、优化、实验阶段判定与反馈编排。
-- `internal/evaluation/infrastructure/persistence` / `skilladapter`：tenant PostgreSQL 持久化与 Skill 执行适配。
+- `internal/evaluation/infrastructure/persistence`：tenant PostgreSQL 持久化。
 
 ## internal/agent
 
 - [`internal/agent/application`](internal-agent-application.md) — 该包编排 Agent 的注册、配置 CRUD、同步/流式执行、上下文预算、会话与执行追踪持久化，并把领域端口、执行图和可观测能力组合为应用用例。
 - [`internal/agent/application/a2a`](internal-agent-application-a2a.md) — 该包提供内存态的 Agent-to-Agent 协作协议，包括消息传输、能力发现、任务协商、协作会话和多种执行计划编排策略。
-- [`internal/agent/application/graph`](internal-agent-application-graph.md) — 该包实现通用状态图运行器，以及 Agent 的 ReAct 和 Plan-Execute 两套确定性执行图、节点重试与 checkpoint 写入逻辑。
+- [`internal/agent/application/graph`](internal-agent-application-graph.md) — 该包实现通用状态图运行器，以及 Agent 的 ReAct 和 Plan-Execute 两套确定性执行图、循环上下文压缩、节点重试与 checkpoint 写入逻辑。
 - [`internal/agent/domain`](internal-agent-domain.md) — 该包定义 Agent bounded context 的核心领域模型、执行状态、计划步骤、工具观察、追踪事件、checkpoint 与领域错误。
-- [`internal/agent/domain/port`](internal-agent-domain-port.md) — 该包声明 Agent 上下文的消费者侧出向契约，覆盖能力路由、LLM/技能/工具、知识与 RAG、记忆、租户解析和各类仓储。
-- [`internal/agent/infrastructure/capability`](internal-agent-infrastructure-capability.md) — 该包实现 Agent capability 端口的路由网关，并分别适配 LLM gateway 与技能执行网关。
+- [`internal/agent/domain/port`](internal-agent-domain-port.md) — 该包声明 Agent 上下文的消费者侧出向契约，覆盖能力路由、LLM/技能/工具、历史压缩、知识与 RAG、记忆、租户解析和各类仓储。
+- [`internal/agent/infrastructure/capability`](internal-agent-infrastructure-capability.md) — 该包实现 Agent capability 端口的 LLM 路由网关、LLM adapter 与可选历史摘要器。
 - [`internal/agent/infrastructure/persistence`](internal-agent-infrastructure-persistence.md) — 该包提供 Agent 配置、聊天、执行、checkpoint、工具追踪、追踪事件、技能查找和租户设置的 PostgreSQL 实现，并统一租户 schema 执行与敏感数据脱敏。
 
 ## internal/iam
@@ -72,15 +72,11 @@
 
 ## internal/skill
 
-- [`internal/skill/application`](internal-skill-application.md) — 编排 Skill 的 CRUD、草稿/版本发布及执行用例，只依赖领域模型与消费者侧 port。
-- [`internal/skill/domain`](internal-skill-domain.md) — 定义 Skill 聚合、可执行契约、版本能力/工具契约/实现配置、发布校验与领域错误。
-- [`internal/skill/domain/port`](internal-skill-domain-port.md) — 定义 Skill 应用层所需的持久化、构造、分析、HTTP、LLM、MCP 与执行器出向契约及传输结构。
-- [`internal/skill/infrastructure`](internal-skill-infrastructure.md) — 实现代码静态安全分析与全局/租户并发信号量，为代码执行器提供基础设施能力。
-- [`internal/skill/infrastructure/executors`](internal-skill-infrastructure-executors.md) — 实现 HTTP、LLM 与提示词三类可执行 Skill；HTTP 路径使用 SSRF 安全客户端，LLM 路径调用统一网关契约。
-- [`internal/skill/infrastructure/executors/code`](internal-skill-infrastructure-executors-code.md) — 实现 Python 子进程与 goja JavaScript VM 的受限代码执行，并将执行器封装为 CodeSkill。
-- [`internal/skill/infrastructure/gateway`](internal-skill-infrastructure-gateway.md) — 提供统一 Skill 调用网关、Provider 注册路由、超时重试、熔断、审计指标以及顺序/条件/并行 Pipeline 编排。
-- [`internal/skill/infrastructure/gateway/providers`](internal-skill-infrastructure-gateway-providers.md) — 把代码、LLM、MCP 与数据库动态 Skill 适配为 gateway.SkillProvider，并支持按冻结版本构建执行器。
-- [`internal/skill/infrastructure/persistence`](internal-skill-infrastructure-persistence.md) — 使用 PostgreSQL 租户事务实现 SkillRepo 与 VersionRepo，负责 JSONB 编解码、领域错误翻译和草稿发布事务。
+- [`internal/skill/application`](internal-skill-application.md) — 编排版本化 instruction Skill 的草稿、工作区、候选、发布与删除用例。
+- [`internal/skill/domain`](internal-skill-domain.md) — 定义 capability、activation contract、instructions、requirements、发布校验与内容哈希。
+- [`internal/skill/domain/port`](internal-skill-domain-port.md) — 定义版本仓储与 MCP 调用的最小消费者侧契约。
+- [`internal/skill/infrastructure/persistence`](internal-skill-infrastructure-persistence.md) — 使用 PostgreSQL tenant 事务实现版本仓储和发布事务。
+- 已移除路径索引：[`infrastructure`](internal-skill-infrastructure.md) · [`executors`](internal-skill-infrastructure-executors.md) · [`executors/code`](internal-skill-infrastructure-executors-code.md) · [`gateway`](internal-skill-infrastructure-gateway.md) · [`gateway/providers`](internal-skill-infrastructure-gateway-providers.md)
 
 ## pkg
 
