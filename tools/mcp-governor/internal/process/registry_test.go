@@ -55,3 +55,32 @@ func TestDecodeRegistryRejectsInvalidInput(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeRegistryRejectsDuplicateJSONKeys(t *testing.T) {
+	valid := `{"version":1,"registrations":[{"identity":{"pid":10,"start_ticks":100},"client":{"pid":20,"start_ticks":200},"service":"obsidian","connected_at":"2026-07-16T01:02:03Z"}]}`
+	tests := []struct {
+		name  string
+		input string
+		key   string
+	}{
+		{"top-level version", strings.Replace(valid, `"version":1`, `"version":1,"version":1`, 1), "version"},
+		{"top-level registrations", strings.Replace(valid, `"registrations":`, `"registrations":[],"registrations":`, 1), "registrations"},
+		{"registration client", strings.Replace(valid, `"client":{"pid":20,"start_ticks":200}`, `"client":{"pid":20,"start_ticks":200},"client":{"pid":30,"start_ticks":300}`, 1), "client"},
+		{"registration service", strings.Replace(valid, `"service":"obsidian"`, `"service":"obsidian","service":"other"`, 1), "service"},
+		{"identity PID", strings.Replace(valid, `"identity":{"pid":10`, `"identity":{"pid":10,"pid":11`, 1), "pid"},
+		{"identity start ticks", strings.Replace(valid, `"identity":{"pid":10,"start_ticks":100`, `"identity":{"pid":10,"start_ticks":100,"start_ticks":101`, 1), "start_ticks"},
+		{"client PID", strings.Replace(valid, `"client":{"pid":20`, `"client":{"pid":20,"pid":21`, 1), "pid"},
+		{"client start ticks", strings.Replace(valid, `"client":{"pid":20,"start_ticks":200`, `"client":{"pid":20,"start_ticks":200,"start_ticks":201`, 1), "start_ticks"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := DecodeRegistry(strings.NewReader(tt.input))
+			if err == nil {
+				t.Fatal("DecodeRegistry succeeded; want error")
+			}
+			if !strings.Contains(err.Error(), "duplicate key") || !strings.Contains(err.Error(), tt.key) {
+				t.Fatalf("error %q does not identify duplicate key %q", err, tt.key)
+			}
+		})
+	}
+}

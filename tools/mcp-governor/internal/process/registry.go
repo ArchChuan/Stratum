@@ -1,12 +1,15 @@
 package process
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"time"
+
+	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/jsonstrict"
 )
 
 const RegistryVersion = 1
@@ -25,7 +28,15 @@ type Registry struct {
 }
 
 func DecodeRegistry(reader io.Reader) (Registry, error) {
-	decoder := json.NewDecoder(reader)
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return Registry{}, fmt.Errorf("read registry: %w", err)
+	}
+	if err := jsonstrict.ValidateNoDuplicateKeys(data); err != nil {
+		return Registry{}, fmt.Errorf("decode registry: %w", err)
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 
 	var registry Registry
