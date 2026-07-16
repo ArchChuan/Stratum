@@ -27,6 +27,7 @@ export const TenantEmbeddingCard = ({
   const [selected, setSelected] = useState('');
   return (
     <div
+      className="tenant-embedding-card"
       style={{
         background: '#fff',
         borderRadius: 12,
@@ -63,9 +64,9 @@ export const TenantEmbeddingCard = ({
                 设置后不可更改
               </Text>
             </Text>
-            <Space wrap>
+            <Space className="tenant-embedding-controls" style={{ width: '100%' }} wrap>
               <Select
-                style={{ width: 300 }}
+                style={{ width: '100%', maxWidth: 300 }}
                 placeholder="选择嵌入模型"
                 value={selected || undefined}
                 onChange={setSelected}

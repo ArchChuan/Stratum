@@ -13,6 +13,8 @@ interface AgentsListGridProps {
   onEdit: (a: Agent) => void;
   onDelete: (id: string, name: string) => void;
   onCreate: () => void;
+  /** 仅管理员可见创建/编辑/删除入口。 */
+  canManage?: boolean;
 }
 
 export const AgentsListGrid = ({
@@ -23,10 +25,11 @@ export const AgentsListGrid = ({
   onEdit,
   onDelete,
   onCreate,
+  canManage = false,
 }: AgentsListGridProps) => {
   if (loading) {
     return (
-      <Row gutter={[16, 16]}>
+      <Row className="responsive-card-grid" gutter={[16, 16]}>
         {[1, 2, 3, 4, 5, 6].map((i) => (
           <Col xs={24} sm={12} lg={8} xl={6} key={i}>
             <Card
@@ -45,10 +48,16 @@ export const AgentsListGrid = ({
     return (
       <Empty
         image={<RobotOutlined style={{ fontSize: 48, color: '#d9d9d9' }} />}
-        description={searchText ? '没有找到匹配的 Agent' : '还没有 Agent，点击右上角创建'}
+        description={
+          searchText
+            ? '没有找到匹配的 Agent'
+            : canManage
+              ? '还没有 Agent，点击右上角创建'
+              : '还没有 Agent'
+        }
         style={{ padding: '60px 0' }}
       >
-        {!searchText && (
+        {!searchText && canManage && (
           <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
             创建第一个 Agent
           </Button>
@@ -58,10 +67,16 @@ export const AgentsListGrid = ({
   }
 
   return (
-    <Row gutter={[16, 16]}>
+    <Row className="responsive-card-grid" gutter={[16, 16]}>
       {agents.map((agent) => (
         <Col xs={24} sm={12} lg={8} xl={6} key={agent.id}>
-          <AgentCard agent={agent} onExecute={onExecute} onDelete={onDelete} onEdit={onEdit} />
+          <AgentCard
+            agent={agent}
+            onExecute={onExecute}
+            onDelete={onDelete}
+            onEdit={onEdit}
+            canManage={canManage}
+          />
         </Col>
       ))}
     </Row>

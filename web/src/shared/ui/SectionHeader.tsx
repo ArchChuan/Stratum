@@ -11,7 +11,10 @@ export interface SectionHeaderProps {
 }
 
 export const SectionHeader = ({ icon, title, subtitle }: SectionHeaderProps) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+  <div
+    className="responsive-section-header"
+    style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, minWidth: 0 }}
+  >
     <div
       style={{
         width: 32,
@@ -25,7 +28,7 @@ export const SectionHeader = ({ icon, title, subtitle }: SectionHeaderProps) => 
     >
       {cloneElement(icon, { style: { color: '#2f54eb', fontSize: 16 } })}
     </div>
-    <div>
+    <div style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
       <Text strong style={{ fontSize: 14, display: 'block' }}>
         {title}
       </Text>

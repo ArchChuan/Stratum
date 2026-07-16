@@ -6,6 +6,8 @@ import { AgentsListFilters } from '../components/AgentsListFilters';
 import { AgentsListGrid } from '../components/AgentsListGrid';
 import { useAgentsListPage } from '../hooks/useAgentsListPage';
 
+import { useTenantRole } from '@/modules/iam';
+
 const { Title } = Typography;
 
 export const AgentsListPage = () => {
@@ -31,6 +33,7 @@ export const AgentsListPage = () => {
     handleTaskSubmit,
     handleDeleteAgent,
   } = useAgentsListPage();
+  const { isAdmin } = useTenantRole();
 
   const closeResult = () => {
     setShowResultModal(false);
@@ -41,6 +44,7 @@ export const AgentsListPage = () => {
   return (
     <div>
       <div
+        className="responsive-page-header"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -55,6 +59,7 @@ export const AgentsListPage = () => {
           searchText={searchText}
           onSearchChange={setSearchText}
           onCreate={() => navigate('/agents/create')}
+          canManage={isAdmin}
         />
       </div>
 
@@ -71,6 +76,7 @@ export const AgentsListPage = () => {
         onEdit={(a) => navigate(`/agents/${a.id}/edit`)}
         onDelete={handleDeleteAgent}
         onCreate={() => navigate('/agents/create')}
+        canManage={isAdmin}
       />
 
       <AgentTaskModal

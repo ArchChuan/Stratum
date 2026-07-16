@@ -26,31 +26,34 @@ func NewWorkspaceRepo(db *pgxpool.Pool) *WorkspaceRepo {
 
 // jsonbConfig matches the JSONB shape stored in rag_workspaces.config.
 type jsonbConfig struct {
-	EmbeddingModel string `json:"embedding_model"`
-	ChunkSize      int    `json:"chunk_size"`
-	ChunkOverlap   int    `json:"chunk_overlap"`
-	QueryMode      string `json:"query_mode"`
-	TopK           int    `json:"top_k"`
+	EmbeddingModel   string `json:"embedding_model"`
+	ChunkSize        int    `json:"chunk_size"`
+	ChunkOverlap     int    `json:"chunk_overlap"`
+	QueryMode        string `json:"query_mode"`
+	TopK             int    `json:"top_k"`
+	ChunkingStrategy string `json:"chunking_strategy"`
 }
 
 func toJSONB(c domain.WorkspaceConfig) string {
 	b, _ := json.Marshal(jsonbConfig{
-		EmbeddingModel: c.EmbeddingModel,
-		ChunkSize:      c.ChunkSize,
-		ChunkOverlap:   c.ChunkOverlap,
-		QueryMode:      c.QueryMode,
-		TopK:           c.TopK,
+		EmbeddingModel:   c.EmbeddingModel,
+		ChunkSize:        c.ChunkSize,
+		ChunkOverlap:     c.ChunkOverlap,
+		QueryMode:        c.QueryMode,
+		TopK:             c.TopK,
+		ChunkingStrategy: c.ChunkingStrategy,
 	})
 	return string(b)
 }
 
 func fromJSONB(c jsonbConfig) domain.WorkspaceConfig {
 	return domain.WorkspaceConfig{
-		EmbeddingModel: c.EmbeddingModel,
-		ChunkSize:      c.ChunkSize,
-		ChunkOverlap:   c.ChunkOverlap,
-		QueryMode:      c.QueryMode,
-		TopK:           c.TopK,
+		EmbeddingModel:   c.EmbeddingModel,
+		ChunkSize:        c.ChunkSize,
+		ChunkOverlap:     c.ChunkOverlap,
+		QueryMode:        c.QueryMode,
+		TopK:             c.TopK,
+		ChunkingStrategy: c.ChunkingStrategy,
 	}
 }
 

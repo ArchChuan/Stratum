@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
+	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
 	knowledgedomain "github.com/byteBuilderX/stratum/internal/knowledge/domain"
@@ -74,6 +75,7 @@ func MapErrorToStatus(err error) int {
 	// 404 — NotFound
 	case errors.Is(err, pgx.ErrNoRows),
 		errors.Is(err, knowledgedomain.ErrWorkspaceNotFound),
+		errors.Is(err, knowledgedomain.ErrDocumentNotFound),
 		errors.Is(err, iamdomain.ErrMemberNotFound),
 		errors.Is(err, iamdomain.ErrTenantNotFound),
 		errors.Is(err, agentapp.ErrNotFound),
@@ -82,13 +84,18 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, memorydomain.ErrSessionNotFound),
 		errors.Is(err, skilldomain.ErrSkillNotFound),
 		errors.Is(err, mcpdomain.ErrServerNotFound),
-		errors.Is(err, mcpdomain.ErrSkillNotFound):
+		errors.Is(err, mcpdomain.ErrSkillNotFound),
+		errors.Is(err, evalapp.ErrSuiteNotFound),
+		errors.Is(err, evalapp.ErrJobNotFound),
+		errors.Is(err, evalapp.ErrRunNotFound),
+		errors.Is(err, evalapp.ErrExperimentNotFound):
 		return http.StatusNotFound
 
 	// 409 — Conflict
 	case errors.Is(err, knowledgedomain.ErrWorkspaceConflict),
 		errors.Is(err, knowledgedomain.ErrWorkspaceLinked),
 		errors.Is(err, knowledgedomain.ErrDuplicateDocument),
+		errors.Is(err, knowledgedomain.ErrDocumentProcessing),
 		errors.Is(err, agentapp.ErrNameConflict),
 		errors.Is(err, mcpdomain.ErrNameConflict),
 		errors.Is(err, skilldomain.ErrSkillNameConflict),
@@ -126,7 +133,9 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, skilldomain.ErrSkillTypeImmutable),
 		errors.Is(err, skilldomain.ErrNotCodeSkill),
 		errors.Is(err, skilldomain.ErrSkillUnsupportedType),
-		errors.Is(err, skilldomain.ErrSkillCodeAnalysis):
+		errors.Is(err, skilldomain.ErrSkillCodeAnalysis),
+		errors.Is(err, evalapp.ErrSuiteNameRequired),
+		errors.Is(err, evalapp.ErrSuiteCasesRequired):
 		return http.StatusBadRequest
 	}
 

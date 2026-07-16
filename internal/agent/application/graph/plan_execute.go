@@ -434,10 +434,12 @@ func makeMemoryStoreNode(
 		if !allSuccess {
 			return s, nil
 		}
-		// Fire-and-forget; don't block the response path.
-		asyncCtx := context.WithoutCancel(ctx)
+		// Fire-and-forget; don't block the response path. Detach from the
+		// request's cancellation but keep its trace values (WithoutCancel),
+		// then bound the store with its own timeout.
+		detached := context.WithoutCancel(ctx)
 		go func() {
-			storeCtx, cancel := context.WithTimeout(asyncCtx, constants.AgentDBQueryTimeout)
+			storeCtx, cancel := context.WithTimeout(detached, constants.AgentDBQueryTimeout)
 			defer cancel()
 			storeTemplateFn(storeCtx, s.TenantID, s.TraceID, s.Plan)
 			logger.Info("react.memory_store",

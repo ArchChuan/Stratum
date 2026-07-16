@@ -138,7 +138,9 @@ const mdComponents = {
 };
 
 export const ChatMarkdown = ({ content }: { content: string }) => (
-  <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-    {content}
-  </ReactMarkdown>
+  <div className="chat-markdown" style={{ overflowWrap: 'anywhere', minWidth: 0 }}>
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+      {content}
+    </ReactMarkdown>
+  </div>
 );

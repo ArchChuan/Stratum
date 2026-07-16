@@ -37,6 +37,7 @@ const PUBLIC_PATH_PREFIXES = [
   '/auth/refresh',
   '/auth/logout',
   '/auth/github',
+  '/auth/guest',
   '/auth/register',
   '/auth/callback',
   '/health',

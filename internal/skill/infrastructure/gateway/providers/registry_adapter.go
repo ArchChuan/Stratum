@@ -66,7 +66,7 @@ func (a *DBSkillAdapter) ExecuteVersion(ctx context.Context, versionID string, i
 			`SELECT v.id, s.name, s.description, v.implementation
 			 FROM skill_versions v
 			 JOIN skills s ON s.id = v.skill_id
-			 WHERE v.id=$1 AND v.status IN ('draft', 'published')`,
+			 WHERE v.id=$1 AND v.status IN ('draft', 'candidate', 'published')`,
 			versionID,
 		).Scan(&id, &name, &desc, &implJSON); err != nil {
 			return fmt.Errorf("skill version not found: %s", versionID)

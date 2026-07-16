@@ -42,6 +42,8 @@ export const knowledgeApi = {
     const res = await api.get(`/knowledge/workspaces/${name}/documents`);
     return z.array(documentSchema).parse(res.data?.documents ?? []);
   },
+  deleteDocument: (name: string, documentID: string) =>
+    api.delete(`/knowledge/workspaces/${encodeURIComponent(name)}/documents/${encodeURIComponent(documentID)}`),
   query: async (data: QueryInput): Promise<QueryResult> => {
     const res = await api.post('/knowledge/query', data);
     return queryResultSchema.parse(res.data ?? {});

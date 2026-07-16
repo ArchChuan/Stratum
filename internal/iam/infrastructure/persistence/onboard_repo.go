@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -263,4 +264,101 @@ func (r *OnboardRepo) IsMember(ctx context.Context, userID, tenantID string) (bo
 		return false, fmt.Errorf("onboard_repo: is member: %w", err)
 	}
 	return count > 0, nil
+}
+
+// CreateGuestInDefaultTenant inserts a synthetic guest user and joins the default
+// tenant as a member in one tx. Mirrors AutoJoinDefaultTenant but flags is_guest
+// and stamps expires_at; caller supplies the pre-namespaced github_id.
+func (r *OnboardRepo) CreateGuestInDefaultTenant(ctx context.Context, githubID, githubLogin, avatarURL string, expiresAt time.Time) (string, string, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return "", "", fmt.Errorf("onboard_repo: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var uid string
+	err = tx.QueryRow(ctx,
+		`INSERT INTO users (github_id, github_login, avatar_url, is_guest, expires_at, last_login_at)
+		 VALUES ($1, $2, $3, true, $4, now())
+		 RETURNING id`,
+		githubID, githubLogin, avatarURL, expiresAt,
+	).Scan(&uid)
+	if err != nil {
+		return "", "", fmt.Errorf("onboard_repo: insert guest user: %w", err)
+	}
+
+	var tid string
+	if err = tx.QueryRow(ctx,
+		`SELECT id FROM tenants WHERE is_default = true LIMIT 1`,
+	).Scan(&tid); err != nil {
+		return "", "", fmt.Errorf("onboard_repo: find default tenant: %w", err)
+	}
+
+	if _, err = tx.Exec(ctx,
+		`INSERT INTO tenant_members (tenant_id, user_id, role)
+		 VALUES ($1, $2, 'member')
+		 ON CONFLICT (tenant_id, user_id) DO NOTHING`,
+		tid, uid,
+	); err != nil {
+		return "", "", fmt.Errorf("onboard_repo: join default tenant: %w", err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return "", "", fmt.Errorf("onboard_repo: commit: %w", err)
+	}
+	return uid, tid, nil
+}
+
+// ListExpiredGuests returns UUIDs of guest users whose expires_at is in the past.
+func (r *OnboardRepo) ListExpiredGuests(ctx context.Context, now time.Time) ([]string, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT id FROM users WHERE is_guest = true AND expires_at IS NOT NULL AND expires_at <= $1`,
+		now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("onboard_repo: list expired guests: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("onboard_repo: scan guest id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ListOwnedNonDefaultTenants returns tenant IDs the user owns that are not the default tenant.
+func (r *OnboardRepo) ListOwnedNonDefaultTenants(ctx context.Context, userID string) ([]string, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT t.id FROM tenants t
+		 JOIN tenant_members tm ON tm.tenant_id = t.id
+		 WHERE tm.user_id = $1 AND tm.role = 'owner' AND t.is_default = false AND t.deleted_at IS NULL`,
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("onboard_repo: list owned tenants: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("onboard_repo: scan tenant id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// DeleteUser hard-deletes the user row; FK cascades remove tenant_members and refresh_tokens.
+func (r *OnboardRepo) DeleteUser(ctx context.Context, userID string) error {
+	if _, err := r.db.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID); err != nil {
+		return fmt.Errorf("onboard_repo: delete user: %w", err)
+	}
+	return nil
 }

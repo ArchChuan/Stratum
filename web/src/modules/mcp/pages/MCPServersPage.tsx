@@ -1,5 +1,13 @@
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Badge, Button, Card, Space, Table, Tag, Typography } from 'antd';
+import {
+  DeleteOutlined,
+  DisconnectOutlined,
+  EditOutlined,
+  EyeOutlined,
+  LinkOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
+import { Badge, Button, Card, Flex, Space, Tag, Typography } from 'antd';
 import { useNavigate } from 'react-router-dom';
 
 import { ServerDetailDrawer } from '../components/ServerDetailDrawer';
@@ -7,7 +15,8 @@ import { useMCPServersPage } from '../hooks/useMCPServersPage';
 import type { MCPServer } from '../model/mcp';
 
 import { COMPACT_PAGE_SIZE } from '@/constants';
-import { DangerPopconfirm } from '@/shared/ui';
+import { useTenantRole } from '@/modules/iam';
+import { DangerPopconfirm, ResponsiveDataView } from '@/shared/ui';
 
 const { Title, Text } = Typography;
 
@@ -30,6 +39,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 export const MCPServersPage = () => {
   const navigate = useNavigate();
+  const { isAdmin } = useTenantRole();
   const { servers, loading, detailServer, setDetailServer, fetchServers, handleDisconnect, handleReconnect, handleDelete } =
     useMCPServersPage();
 
@@ -64,7 +74,7 @@ export const MCPServersPage = () => {
     },
     {
       title: '操作',
-      width: 260,
+      width: isAdmin ? 260 : 80,
       render: (_: unknown, r: MCPServer) => (
         <Space size={4}>
           <Button
@@ -75,43 +85,47 @@ export const MCPServersPage = () => {
           >
             详情
           </Button>
-          <Button
-            size="small"
-            type="link"
-            onClick={() => navigate(`/mcp/${r.id}/edit`)}
-            style={{ padding: '0 4px' }}
-          >
-            编辑
-          </Button>
-          {r.status === 'connected' ? (
-            <DangerPopconfirm
-              title="确认断开此服务器连接？"
-              okText="断开"
-              onConfirm={() => handleDisconnect(r.id)}
-            >
-              <Button size="small" type="link" danger style={{ padding: '0 4px' }}>
-                断开
+          {isAdmin && (
+            <>
+              <Button
+                size="small"
+                type="link"
+                onClick={() => navigate(`/mcp/${r.id}/edit`)}
+                style={{ padding: '0 4px' }}
+              >
+                编辑
               </Button>
-            </DangerPopconfirm>
-          ) : (
-            <Button
-              size="small"
-              type="link"
-              style={{ padding: '0 4px' }}
-              onClick={() => handleReconnect(r.id)}
-            >
-              连接
-            </Button>
+              {r.status === 'connected' ? (
+                <DangerPopconfirm
+                  title="确认断开此服务器连接？"
+                  okText="断开"
+                  onConfirm={() => handleDisconnect(r.id)}
+                >
+                  <Button size="small" type="link" danger style={{ padding: '0 4px' }}>
+                    断开
+                  </Button>
+                </DangerPopconfirm>
+              ) : (
+                <Button
+                  size="small"
+                  type="link"
+                  style={{ padding: '0 4px' }}
+                  onClick={() => handleReconnect(r.id)}
+                >
+                  连接
+                </Button>
+              )}
+              <DangerPopconfirm
+                title="确认删除此服务器配置？关联的 Agent 将无法再使用此服务器。"
+                okText="删除"
+                onConfirm={() => handleDelete(r.id)}
+              >
+                <Button size="small" type="link" danger style={{ padding: '0 4px' }}>
+                  删除
+                </Button>
+              </DangerPopconfirm>
+            </>
           )}
-          <DangerPopconfirm
-            title="确认删除此服务器配置？关联的 Agent 将无法再使用此服务器。"
-            okText="删除"
-            onConfirm={() => handleDelete(r.id)}
-          >
-            <Button size="small" type="link" danger style={{ padding: '0 4px' }}>
-              删除
-            </Button>
-          </DangerPopconfirm>
         </Space>
       ),
     },
@@ -139,25 +153,90 @@ export const MCPServersPage = () => {
           <Button icon={<ReloadOutlined />} onClick={fetchServers} loading={loading}>
             刷新
           </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/mcp/create')}>
-            添加服务器
-          </Button>
+          {isAdmin && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/mcp/create')}>
+              添加服务器
+            </Button>
+          )}
         </Space>
       </div>
 
       <Card style={{ borderRadius: 12, border: '1px solid #f0f0f0' }} styles={{ body: { padding: 0 } }}>
-        <Table
-          dataSource={servers}
+        <ResponsiveDataView
+          rows={servers}
           columns={columns}
           rowKey="id"
           loading={loading}
-          locale={{ emptyText: '暂无已连接的 MCP 服务器' }}
+          emptyText="暂无已连接的 MCP 服务器"
           pagination={{
             pageSize: COMPACT_PAGE_SIZE,
             showTotal: (t) => `共 ${t} 台`,
             style: { padding: '12px 16px' },
           }}
-          style={{ borderRadius: 12, overflow: 'hidden' }}
+          renderMobileItem={(server) => {
+            const endpoint = (server as MCPServer & { url?: string; command?: string }).url
+              || (server as MCPServer & { command?: string }).command
+              || '-';
+            return (
+              <div style={{ padding: 12, borderBottom: '1px solid #f0f0f0' }}>
+                <Flex justify="space-between" align="center" gap={8}>
+                  <Text strong ellipsis>{server.name}</Text>
+                  <Badge
+                    status={STATUS_MAP[server.status] || 'default'}
+                    text={STATUS_LABELS[server.status] || server.status}
+                  />
+                </Flex>
+                <Space size={8} style={{ marginTop: 8, maxWidth: '100%' }}>
+                  <Tag color={TRANSPORT_COLORS[server.transport]}>{server.transport}</Tag>
+                  <Text type="secondary" ellipsis>{endpoint}</Text>
+                </Space>
+                <Flex justify="space-between" align="center" gap={8} style={{ marginTop: 10 }}>
+                  <Text type="secondary">{server.tools?.length ?? '-'} 个工具</Text>
+                  <Space size={4}>
+                    <Button
+                      size="small"
+                      icon={<EyeOutlined />}
+                      aria-label="查看详情"
+                      onClick={() => setDetailServer(server)}
+                    />
+                    {isAdmin && (
+                      <>
+                        <Button
+                          size="small"
+                          icon={<EditOutlined />}
+                          aria-label="编辑服务器"
+                          onClick={() => navigate(`/mcp/${server.id}/edit`)}
+                        />
+                        {server.status === 'connected' ? (
+                          <DangerPopconfirm
+                            title="确认断开此服务器连接？"
+                            okText="断开"
+                            onConfirm={() => handleDisconnect(server.id)}
+                          >
+                            <Button size="small" danger icon={<DisconnectOutlined />} aria-label="断开连接" />
+                          </DangerPopconfirm>
+                        ) : (
+                          <Button
+                            size="small"
+                            icon={<LinkOutlined />}
+                            aria-label="连接服务器"
+                            onClick={() => handleReconnect(server.id)}
+                          />
+                        )}
+                        <DangerPopconfirm
+                          title="确认删除此服务器配置？关联的 Agent 将无法再使用此服务器。"
+                          okText="删除"
+                          onConfirm={() => handleDelete(server.id)}
+                        >
+                          <Button size="small" danger icon={<DeleteOutlined />} aria-label="删除服务器" />
+                        </DangerPopconfirm>
+                      </>
+                    )}
+                  </Space>
+                </Flex>
+              </div>
+            );
+          }}
         />
       </Card>
 

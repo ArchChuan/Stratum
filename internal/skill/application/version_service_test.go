@@ -32,6 +32,9 @@ func TestVersionServiceCreateSkillCreatesDraftVersionAndTestCase(t *testing.T) {
 	if view.Draft.ToolContract.ToolName == "" {
 		t.Fatal("expected generated tool name")
 	}
+	if view.Draft.Source != "manual" || view.Draft.ContentHash == "" {
+		t.Fatalf("expected manual source and content hash, got source=%q hash=%q", view.Draft.Source, view.Draft.ContentHash)
+	}
 	if len(repo.testCases) != 1 {
 		t.Fatalf("expected first test case, got %d", len(repo.testCases))
 	}
@@ -136,6 +139,7 @@ func TestVersionServiceUpdateImplementationUpdatesCurrentDraft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	originalHash := view.Draft.ContentHash
 
 	updated, err := svc.UpdateImplementation(context.Background(), view.Skill.ID, UpdateImplementationInput{
 		Mode:    "prompt",
@@ -147,6 +151,9 @@ func TestVersionServiceUpdateImplementationUpdatesCurrentDraft(t *testing.T) {
 	}
 	if updated.Implementation.Source["promptTemplate"] != "新的实现：{{.input}}" {
 		t.Fatalf("expected implementation update, got %#v", updated.Implementation.Source)
+	}
+	if updated.ContentHash == "" || updated.ContentHash == originalHash {
+		t.Fatalf("expected refreshed content hash, original=%q updated=%q", originalHash, updated.ContentHash)
 	}
 }
 
@@ -183,6 +190,33 @@ func TestVersionServiceGetWorkspaceFallsBackToActiveVersionAfterPublish(t *testi
 	}
 	if workspace.Draft.ID != published.ID || workspace.Draft.Status != domain.VersionStatusPublished {
 		t.Fatalf("expected active version fallback, got %#v", workspace.Draft)
+	}
+}
+
+func TestVersionServiceCreatesImmutableCandidateFromBaseline(t *testing.T) {
+	repo := newFakeVersionRepo()
+	svc := NewVersionService(repo, zap.NewNop())
+	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{
+		Name: "complaint", Goal: "分类", WhenToUse: "投诉时", SampleInput: "物流", ExpectedOutput: "物流",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := repo.versions[view.Draft.ID]
+	candidate, err := svc.CreateCandidate(context.Background(), view.Skill.ID, baseline.ID, CandidateInput{
+		Source: "parameter_search", ParameterPatch: map[string]any{"temperature": 0.2},
+	})
+	if err != nil {
+		t.Fatalf("CreateCandidate returned error: %v", err)
+	}
+	if candidate.Status != domain.VersionStatusCandidate || candidate.ParentVersionID != baseline.ID {
+		t.Fatalf("unexpected candidate lineage: %+v", candidate)
+	}
+	if candidate.Implementation.Runtime["temperature"] != 0.2 || candidate.ContentHash == baseline.ContentHash {
+		t.Fatalf("candidate patch/hash not applied: %+v", candidate)
+	}
+	if repo.versions[baseline.ID].Implementation.Runtime["temperature"] != nil {
+		t.Fatal("baseline was mutated")
 	}
 }
 
@@ -235,10 +269,21 @@ func (r *fakeVersionRepo) GetActiveVersion(_ context.Context, skillID string) (d
 	return version, ok, nil
 }
 
-func (r *fakeVersionRepo) UpdateDraftCapability(_ context.Context, skillID string, capability domain.Capability) (domain.SkillVersion, error) {
+func (r *fakeVersionRepo) GetVersion(_ context.Context, skillID, versionID string) (domain.SkillVersion, bool, error) {
+	version, ok := r.versions[versionID]
+	return version, ok && version.SkillID == skillID, nil
+}
+
+func (r *fakeVersionRepo) InsertCandidate(_ context.Context, candidate domain.SkillVersion) error {
+	r.versions[candidate.ID] = candidate
+	return nil
+}
+
+func (r *fakeVersionRepo) UpdateDraftCapability(_ context.Context, skillID string, capability domain.Capability, contentHash string) (domain.SkillVersion, error) {
 	for id, version := range r.versions {
 		if version.SkillID == skillID && version.Status == domain.VersionStatusDraft {
 			version.Capability = capability
+			version.ContentHash = contentHash
 			r.versions[id] = version
 			return version, nil
 		}
@@ -246,10 +291,11 @@ func (r *fakeVersionRepo) UpdateDraftCapability(_ context.Context, skillID strin
 	return domain.SkillVersion{}, domain.ErrSkillNotFound
 }
 
-func (r *fakeVersionRepo) UpdateDraftContract(_ context.Context, skillID string, contract domain.ToolContract) (domain.SkillVersion, error) {
+func (r *fakeVersionRepo) UpdateDraftContract(_ context.Context, skillID string, contract domain.ToolContract, contentHash string) (domain.SkillVersion, error) {
 	for id, version := range r.versions {
 		if version.SkillID == skillID && version.Status == domain.VersionStatusDraft {
 			version.ToolContract = contract
+			version.ContentHash = contentHash
 			r.versions[id] = version
 			return version, nil
 		}
@@ -257,10 +303,11 @@ func (r *fakeVersionRepo) UpdateDraftContract(_ context.Context, skillID string,
 	return domain.SkillVersion{}, domain.ErrSkillNotFound
 }
 
-func (r *fakeVersionRepo) UpdateDraftImplementation(_ context.Context, skillID string, implementation domain.Implementation) (domain.SkillVersion, error) {
+func (r *fakeVersionRepo) UpdateDraftImplementation(_ context.Context, skillID string, implementation domain.Implementation, contentHash string) (domain.SkillVersion, error) {
 	for id, version := range r.versions {
 		if version.SkillID == skillID && version.Status == domain.VersionStatusDraft {
 			version.Implementation = implementation
+			version.ContentHash = contentHash
 			r.versions[id] = version
 			return version, nil
 		}

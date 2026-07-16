@@ -240,7 +240,7 @@ kill -9 <PID>
    - [README.md](README.md)
 
 3. **开发新功能**
-   - 查看 [CLAUDE.md](CLAUDE.md) 了解项目架构
+   - 查看 [工程规范](engineering-standards.md) 了解项目架构
    - 参考现有 Skill 实现添加新功能
 
 ## 项目结构
@@ -276,5 +276,5 @@ stratum/
 ## 支持
 
 - 📖 查看 [README.md](README.md)
-- 📚 查看 [CLAUDE.md](CLAUDE.md)
+- 📚 查看 [工程规范](engineering-standards.md)
 - 🐛 查看 [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)

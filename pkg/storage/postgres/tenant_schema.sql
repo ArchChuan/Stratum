@@ -54,8 +54,12 @@ ALTER TABLE skills ADD COLUMN IF NOT EXISTS draft_version_id TEXT;
 CREATE TABLE IF NOT EXISTS skill_versions (
     id              TEXT PRIMARY KEY,
     skill_id        TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    parent_version_id TEXT REFERENCES skill_versions(id) ON DELETE SET NULL,
     version_no      INT,
     status          TEXT NOT NULL DEFAULT 'draft',
+    source          TEXT NOT NULL DEFAULT 'manual',
+    content_hash    TEXT NOT NULL DEFAULT '',
+    generation_metadata JSONB NOT NULL DEFAULT '{}',
     capability      JSONB NOT NULL DEFAULT '{}',
     tool_contract   JSONB NOT NULL DEFAULT '{}',
     implementation  JSONB NOT NULL DEFAULT '{}',
@@ -66,6 +70,11 @@ CREATE TABLE IF NOT EXISTS skill_versions (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     published_at    TIMESTAMPTZ
 );
+
+ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS parent_version_id TEXT;
+ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS content_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS generation_metadata JSONB NOT NULL DEFAULT '{}';
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_versions_one_draft
     ON skill_versions(skill_id)
@@ -101,6 +110,181 @@ CREATE TABLE IF NOT EXISTS skill_eval_runs (
     duration_ms     INT NOT NULL DEFAULT 0,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Generic evaluation and optimization control plane. Resource payloads remain
+-- owned by their bounded context; these tables store immutable references and evidence.
+CREATE TABLE IF NOT EXISTS eval_suites (
+    id                 TEXT PRIMARY KEY,
+    name               TEXT NOT NULL UNIQUE,
+    description        TEXT NOT NULL DEFAULT '',
+    active_revision_id TEXT,
+    draft_revision_id  TEXT,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS eval_suite_revisions (
+    id            TEXT PRIMARY KEY,
+    suite_id      TEXT NOT NULL REFERENCES eval_suites(id) ON DELETE CASCADE,
+    parent_id     TEXT REFERENCES eval_suite_revisions(id) ON DELETE SET NULL,
+    version_no    INT,
+    status        TEXT NOT NULL DEFAULT 'draft',
+    resource_kind TEXT NOT NULL,
+    created_by    TEXT NOT NULL DEFAULT '',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at  TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_eval_suite_revision_no
+    ON eval_suite_revisions(suite_id, version_no) WHERE version_no IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS eval_cases (
+    id                TEXT PRIMARY KEY,
+    suite_revision_id TEXT NOT NULL REFERENCES eval_suite_revisions(id) ON DELETE CASCADE,
+    name              TEXT NOT NULL DEFAULT '',
+    input             JSONB NOT NULL DEFAULT '{}',
+    expected_output   JSONB NOT NULL DEFAULT '{}',
+    assertion_mode    TEXT NOT NULL DEFAULT 'contains',
+    evaluator_config  JSONB NOT NULL DEFAULT '{}',
+    tags              TEXT[] NOT NULL DEFAULT '{}',
+    critical          BOOL NOT NULL DEFAULT false,
+    enabled           BOOL NOT NULL DEFAULT true,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_eval_cases_revision ON eval_cases(suite_revision_id);
+
+CREATE TABLE IF NOT EXISTS eval_runs (
+    id                TEXT PRIMARY KEY,
+    resource_kind     TEXT NOT NULL,
+    resource_id       TEXT NOT NULL,
+    revision_id       TEXT NOT NULL,
+    suite_revision_id TEXT NOT NULL REFERENCES eval_suite_revisions(id) ON DELETE RESTRICT,
+    status            TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+    passed            BOOL NOT NULL DEFAULT false,
+    total_cases       INT NOT NULL DEFAULT 0,
+    passed_cases      INT NOT NULL DEFAULT 0,
+    metrics           JSONB NOT NULL DEFAULT '{}',
+    error_message     TEXT NOT NULL DEFAULT '',
+    idempotency_key   TEXT NOT NULL DEFAULT '',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at        TIMESTAMPTZ,
+    completed_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_eval_runs_resource
+    ON eval_runs(resource_kind, resource_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_eval_runs_idempotency
+    ON eval_runs(idempotency_key) WHERE idempotency_key <> '';
+
+CREATE TABLE IF NOT EXISTS eval_case_results (
+    id              TEXT PRIMARY KEY,
+    run_id          TEXT NOT NULL REFERENCES eval_runs(id) ON DELETE CASCADE,
+    case_id         TEXT REFERENCES eval_cases(id) ON DELETE SET NULL,
+    passed          BOOL NOT NULL DEFAULT false,
+    actual_output   JSONB NOT NULL DEFAULT 'null',
+    message         TEXT NOT NULL DEFAULT '',
+    error_message   TEXT NOT NULL DEFAULT '',
+    trace_id        TEXT NOT NULL DEFAULT '',
+    tokens          INT NOT NULL DEFAULT 0,
+    cost_usd        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    duration_ms     INT NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_eval_case_results_run ON eval_case_results(run_id);
+
+CREATE TABLE IF NOT EXISTS optimization_jobs (
+    id                    TEXT PRIMARY KEY,
+    resource_kind         TEXT NOT NULL,
+    resource_id           TEXT NOT NULL,
+    baseline_revision_id  TEXT NOT NULL,
+    suite_revision_id     TEXT NOT NULL REFERENCES eval_suite_revisions(id) ON DELETE RESTRICT,
+    status                TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+    search_space          JSONB NOT NULL DEFAULT '{}',
+    rewrite_config        JSONB NOT NULL DEFAULT '{}',
+    error_message         TEXT NOT NULL DEFAULT '',
+    created_by            TEXT NOT NULL DEFAULT '',
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at          TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS optimization_candidates (
+    id                    TEXT PRIMARY KEY,
+    optimization_job_id   TEXT NOT NULL REFERENCES optimization_jobs(id) ON DELETE CASCADE,
+    revision_id           TEXT NOT NULL,
+    parent_revision_id    TEXT NOT NULL,
+    source                TEXT NOT NULL,
+    rationale             TEXT NOT NULL DEFAULT '',
+    generation_metadata   JSONB NOT NULL DEFAULT '{}',
+    eval_run_id           TEXT REFERENCES eval_runs(id) ON DELETE SET NULL,
+    rank                  INT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_experiments (
+    id                    TEXT PRIMARY KEY,
+    resource_kind         TEXT NOT NULL,
+    resource_id           TEXT NOT NULL,
+    stable_revision_id    TEXT NOT NULL,
+    canary_revision_id    TEXT NOT NULL,
+    suite_revision_id     TEXT NOT NULL REFERENCES eval_suite_revisions(id) ON DELETE RESTRICT,
+    status                TEXT NOT NULL,
+    stage_percent         INT NOT NULL DEFAULT 5,
+    policy                JSONB NOT NULL DEFAULT '{}',
+    decision_snapshot     JSONB NOT NULL DEFAULT '{}',
+    created_by            TEXT NOT NULL DEFAULT '',
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at          TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_evaluation_experiments_resource
+    ON evaluation_experiments(resource_kind, resource_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS evaluation_deployments (
+    resource_kind      TEXT NOT NULL,
+    resource_id        TEXT NOT NULL,
+    stable_revision_id TEXT NOT NULL,
+    canary_revision_id TEXT,
+    canary_percent     INT NOT NULL DEFAULT 0 CHECK (canary_percent BETWEEN 0 AND 100),
+    experiment_id      TEXT REFERENCES evaluation_experiments(id) ON DELETE SET NULL,
+    policy_version     INT NOT NULL DEFAULT 1,
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (resource_kind, resource_id)
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_feedback (
+    id              TEXT PRIMARY KEY,
+    trace_id        TEXT NOT NULL,
+    resource_kind   TEXT NOT NULL,
+    resource_id     TEXT NOT NULL,
+    revision_id     TEXT NOT NULL,
+    score           DOUBLE PRECISION,
+    outcome         JSONB NOT NULL DEFAULT '{}',
+    idempotency_key TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (idempotency_key),
+    UNIQUE (trace_id, resource_id)
+);
+CREATE INDEX IF NOT EXISTS idx_evaluation_feedback_resource
+    ON evaluation_feedback(resource_kind, resource_id, revision_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_evaluation_feedback_trace_resource
+    ON evaluation_feedback(trace_id, resource_id);
+
+CREATE TABLE IF NOT EXISTS evaluation_jobs (
+    id              TEXT PRIMARY KEY,
+    job_type        TEXT NOT NULL,
+    payload         JSONB NOT NULL DEFAULT '{}',
+    status          TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+    attempts        INT NOT NULL DEFAULT 0,
+    lease_owner     TEXT NOT NULL DEFAULT '',
+    lease_until     TIMESTAMPTZ,
+    error_message   TEXT NOT NULL DEFAULT '',
+    result_id       TEXT NOT NULL DEFAULT '',
+    idempotency_key TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (idempotency_key)
+);
+ALTER TABLE evaluation_jobs ADD COLUMN IF NOT EXISTS result_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_evaluation_jobs_claim
+    ON evaluation_jobs(status, lease_until, created_at);
 
 CREATE TABLE IF NOT EXISTS mcp_configs (
     id            TEXT PRIMARY KEY,
@@ -532,7 +716,7 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
     doc_id         TEXT NOT NULL,
     chunk_index    BIGINT NOT NULL,
     content        TEXT NOT NULL,
-    tsv            tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
+    tsv            tsvector GENERATED ALWAYS AS (to_tsvector('public.chinese_zh', content)) STORED,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_kc_tsv       ON knowledge_chunks USING GIN(tsv);
@@ -592,3 +776,29 @@ CREATE INDEX IF NOT EXISTS idx_kpc_doc       ON knowledge_parent_chunks(workspac
 -- Add parent_id to leaf chunks (NULL for strategies without Parent-Child).
 ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS parent_id TEXT
     REFERENCES knowledge_parent_chunks(id) ON DELETE SET NULL;
+
+-- Migrate existing tenants whose knowledge_chunks.tsv column was created with the
+-- old 'simple' config (no CJK segmentation). A GENERATED column's expression cannot
+-- be ALTERed in place, so we drop the GIN index + column and recreate them against
+-- public.chinese_zh. Idempotent: once the expression references chinese_zh the guard
+-- skips the rebuild. New tenants create tsv correctly above, so this is a no-op for them.
+-- Ordering: must run AFTER knowledge_chunks exists (created above).
+DO $$
+DECLARE
+    gen_expr text;
+BEGIN
+    SELECT pg_get_expr(ad.adbin, ad.adrelid)
+      INTO gen_expr
+      FROM pg_attribute a
+      JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+     WHERE a.attrelid = 'knowledge_chunks'::regclass
+       AND a.attname = 'tsv';
+
+    IF gen_expr IS NOT NULL AND position('chinese_zh' IN gen_expr) = 0 THEN
+        DROP INDEX IF EXISTS idx_kc_tsv;
+        ALTER TABLE knowledge_chunks DROP COLUMN tsv;
+        ALTER TABLE knowledge_chunks ADD COLUMN tsv tsvector
+            GENERATED ALWAYS AS (to_tsvector('public.chinese_zh', content)) STORED;
+        CREATE INDEX idx_kc_tsv ON knowledge_chunks USING GIN(tsv);
+    END IF;
+END $$;

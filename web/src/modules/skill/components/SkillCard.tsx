@@ -11,9 +11,11 @@ interface SkillCardProps {
   skill: Skill;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
+  /** 仅管理员可删除；普通成员进入工作区仅为查看配置。 */
+  canManage?: boolean;
 }
 
-export const SkillCard = ({ skill, onEdit, onDelete }: SkillCardProps) => {
+export const SkillCard = ({ skill, onEdit, onDelete, canManage = false }: SkillCardProps) => {
   return (
     <Card
       style={{
@@ -52,7 +54,7 @@ export const SkillCard = ({ skill, onEdit, onDelete }: SkillCardProps) => {
         </div>
       </div>
 
-      <Text strong style={{ fontSize: 15, marginBottom: 4, display: 'block' }}>
+      <Text className="long-text" strong style={{ fontSize: 15, marginBottom: 4, display: 'block' }}>
         {skill.name}
       </Text>
       <Paragraph
@@ -64,6 +66,7 @@ export const SkillCard = ({ skill, onEdit, onDelete }: SkillCardProps) => {
       </Paragraph>
 
       <div
+        className="responsive-card-actions"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -76,21 +79,32 @@ export const SkillCard = ({ skill, onEdit, onDelete }: SkillCardProps) => {
           {skill.created_at ? new Date(skill.created_at).toLocaleDateString('zh-CN') : '-'}
         </Text>
         <Space size={0}>
-          <Tooltip title="编辑技能">
+          <Tooltip title={canManage ? '编辑技能' : '查看技能'}>
             <Button
+              aria-label="编辑技能"
+              className="responsive-touch-target"
               type="text"
               size="small"
               icon={<EditOutlined />}
               onClick={() => onEdit(skill.id)}
             />
           </Tooltip>
-          <DangerPopconfirm
-            title={`确定删除技能 "${skill.name}" 吗？`}
-            okText="删除"
-            onConfirm={() => onDelete(skill.id)}
-          >
-            <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-          </DangerPopconfirm>
+          {canManage && (
+            <DangerPopconfirm
+              title={`确定删除技能 "${skill.name}" 吗？`}
+              okText="删除"
+              onConfirm={() => onDelete(skill.id)}
+            >
+              <Button
+                aria-label="删除技能"
+                className="responsive-touch-target"
+                type="text"
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+              />
+            </DangerPopconfirm>
+          )}
         </Space>
       </div>
     </Card>

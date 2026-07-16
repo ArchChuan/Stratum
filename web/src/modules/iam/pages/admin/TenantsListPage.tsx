@@ -1,4 +1,4 @@
-import { Table, Button, Tag, Typography, message, Card, Space } from 'antd';
+import { Button, Tag, Typography, message, Card, Flex, Space } from 'antd';
 import { useEffect, useState } from 'react';
 
 import { tenantApi } from '../../api/tenant.api';
@@ -7,7 +7,7 @@ import type { AdminTenant } from '../../model/auth';
 
 import { DEFAULT_PAGE_SIZE } from '@/constants';
 import { extractErrorMessage } from '@/shared/lib';
-import { DangerPopconfirm } from '@/shared/ui';
+import { DangerPopconfirm, ResponsiveDataView } from '@/shared/ui';
 
 const { Title, Text } = Typography;
 
@@ -136,13 +136,60 @@ export const TenantsListPage = () => {
         </Text>
       </div>
       <Card style={{ borderRadius: 12, border: '1px solid #f0f0f0' }} styles={{ body: { padding: 0 } }}>
-        <Table
-          dataSource={tenants}
+        <ResponsiveDataView
+          rows={tenants}
           columns={columns}
           rowKey="id"
           loading={loading}
           pagination={{ pageSize: DEFAULT_PAGE_SIZE, showTotal: (t) => `共 ${t} 个租户` }}
-          style={{ borderRadius: 12, overflow: 'hidden' }}
+          renderMobileItem={(tenant) => {
+            const id = String(tenant.id);
+            const isActive = tenant.status === 'active';
+            return (
+              <div style={{ padding: 12, borderBottom: '1px solid #f0f0f0' }}>
+                <Flex justify="space-between" align="center" gap={8}>
+                  <div style={{ minWidth: 0 }}>
+                    <Text strong ellipsis style={{ display: 'block' }}>{tenant.name}</Text>
+                    <Text type="secondary" copyable style={{ fontSize: 12 }}>{id}</Text>
+                  </div>
+                  <Tag color={isActive ? 'green' : 'red'}>{isActive ? '启用' : '禁用'}</Tag>
+                </Flex>
+                <Flex justify="space-between" align="center" gap={8} style={{ marginTop: 10 }}>
+                  <Space size={12}>
+                    <Text type="secondary">{tenant.member_count ?? '-'} 位成员</Text>
+                    <Text type="secondary">
+                      {tenant.created_at ? new Date(tenant.created_at).toLocaleDateString('zh-CN') : '-'}
+                    </Text>
+                  </Space>
+                  <Space size={4}>
+                    <DangerPopconfirm
+                      title={`确认${isActive ? '禁用' : '启用'}该租户？`}
+                      okText={isActive ? '禁用' : '启用'}
+                      onConfirm={() => handleToggle(id, tenant.status)}
+                    >
+                      <Button size="small" danger={isActive}>{isActive ? '禁用' : '启用'}</Button>
+                    </DangerPopconfirm>
+                    <DangerPopconfirm
+                      title={`确认删除租户「${tenant.name}」？此操作不可恢复，所有数据将被永久清除。`}
+                      okText="确认删除"
+                      onConfirm={() => handleDelete(id)}
+                      disabled={tenant.is_default}
+                    >
+                      <Button
+                        size="small"
+                        danger
+                        loading={deleteLoadingId === id}
+                        disabled={tenant.is_default}
+                        aria-label="删除租户"
+                      >
+                        删除
+                      </Button>
+                    </DangerPopconfirm>
+                  </Space>
+                </Flex>
+              </div>
+            );
+          }}
         />
       </Card>
     </div>
@@ -150,4 +197,3 @@ export const TenantsListPage = () => {
 };
 
 export default TenantsListPage;
-

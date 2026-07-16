@@ -5,8 +5,16 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { skillApi } from '../api/skill.api';
-import { parseSkillTestInput, type SkillFormValues, type SkillVersion, type SkillWorkspace } from '../model/skill';
+import {
+  parseSkillTestInput,
+  type SkillFormValues,
+  type SkillTestResult,
+  type SkillVersion,
+  type SkillWorkspace,
+} from '../model/skill';
 
+import { SkillEvaluationPanel } from '@/modules/evaluation/components/SkillEvaluationPanel';
+import { useTenantRole } from '@/modules/iam';
 import { extractErrorMessage } from '@/shared/lib';
 
 const { Title, Text, Paragraph } = Typography;
@@ -39,6 +47,7 @@ interface ImplementationFormValues {
 export const SkillWorkspacePage = () => {
   const { id = '' } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { isAdmin } = useTenantRole();
   const [workspace, setWorkspace] = useState<SkillWorkspace | null>(null);
   const [loading, setLoading] = useState(true);
   const [capabilityLoading, setCapabilityLoading] = useState(false);
@@ -47,7 +56,8 @@ export const SkillWorkspacePage = () => {
   const [testLoading, setTestLoading] = useState(false);
   const [publishLoading, setPublishLoading] = useState(false);
   const [testInput, setTestInput] = useState('{"input":"客户反馈快递三天没有更新"}');
-  const [testResult, setTestResult] = useState<unknown>(null);
+  const [testResult, setTestResult] = useState<SkillTestResult | null>(null);
+  const [testError, setTestError] = useState('');
   const [error, setError] = useState('');
   const [capabilityForm] = Form.useForm<CapabilityFormValues>();
   const [contractForm] = Form.useForm<ContractFormValues>();
@@ -141,15 +151,18 @@ export const SkillWorkspacePage = () => {
   const handleRunDraftTest = async () => {
     setTestLoading(true);
     setTestResult(null);
+    setTestError('');
     try {
       const result = await skillApi.testDraft({
         skill: buildLegacyDraftSkill(skill.name, draft),
         input: parseSkillTestInput(testInput),
       });
-      setTestResult(result.result ?? result);
+      setTestResult(result);
       message.success({ content: '草稿测试已完成', duration: 2 });
     } catch (err) {
-      message.error({ content: extractErrorMessage(err) || '草稿测试失败', duration: 0 });
+      const detail = extractErrorMessage(err) || '未知错误';
+      setTestError(detail);
+      message.error({ content: detail, duration: 0 });
     } finally {
       setTestLoading(false);
     }
@@ -179,15 +192,15 @@ export const SkillWorkspacePage = () => {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+      <div className="responsive-detail-header" style={{ marginBottom: 20 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/skills')} type="text">
           返回
         </Button>
-        <div>
+        <div className="long-text">
           <Title level={4} style={{ margin: 0 }}>
             {skill.name}
           </Title>
-          <Text type="secondary">
+          <Text className="long-text" type="secondary">
             状态：{skill.status} · 草稿：{skill.draftVersionId || '无'} · 当前版本：{skill.activeVersionId || '未发布'}
           </Text>
         </div>
@@ -212,11 +225,13 @@ export const SkillWorkspacePage = () => {
                 <Form.Item label="输出说明" name="outputSpec">
                   <TextArea rows={2} placeholder="由样例推断，可在这里补充结构说明" />
                 </Form.Item>
-                <ActionRow>
-                  <Button type="primary" htmlType="submit" loading={capabilityLoading}>
-                    保存能力
-                  </Button>
-                </ActionRow>
+                {isAdmin && (
+                  <ActionRow>
+                    <Button type="primary" htmlType="submit" loading={capabilityLoading}>
+                      保存能力
+                    </Button>
+                  </ActionRow>
+                )}
               </Form>
             ),
           },
@@ -243,11 +258,13 @@ export const SkillWorkspacePage = () => {
                 <Form.Item label="确认契约" name="confirmed" valuePropName="checked" extra="发布前必须确认，确认后 Agent 才能把它当成稳定工具协议。">
                   <Switch checkedChildren="已确认" unCheckedChildren="未确认" />
                 </Form.Item>
-                <ActionRow>
-                  <Button type="primary" htmlType="submit" loading={contractLoading}>
-                    保存契约
-                  </Button>
-                </ActionRow>
+                {isAdmin && (
+                  <ActionRow>
+                    <Button type="primary" htmlType="submit" loading={contractLoading}>
+                      保存契约
+                    </Button>
+                  </ActionRow>
+                )}
               </Form>
             ),
           },
@@ -278,11 +295,13 @@ export const SkillWorkspacePage = () => {
                 <Form.Item label="密钥引用" name="secretRefs" extra="一行一个引用名，只保存引用，不保存密钥值。">
                   <TextArea rows={3} />
                 </Form.Item>
-                <ActionRow>
-                  <Button type="primary" htmlType="submit" loading={implementationLoading}>
-                    保存实现
-                  </Button>
-                </ActionRow>
+                {isAdmin && (
+                  <ActionRow>
+                    <Button type="primary" htmlType="submit" loading={implementationLoading}>
+                      保存实现
+                    </Button>
+                  </ActionRow>
+                )}
               </Form>
             ),
           },
@@ -298,10 +317,30 @@ export const SkillWorkspacePage = () => {
                     运行草稿测试
                   </Button>
                 </ActionRow>
-                {testResult !== null ? (
-                  <pre style={{ margin: 0, padding: 12, background: '#f6f8fa', overflow: 'auto' }}>
-                    {JSON.stringify(testResult, null, 2)}
-                  </pre>
+                {testError ? (
+                  <Alert type="error" showIcon message={`草稿测试失败：${testError}`} />
+                ) : null}
+                {testResult ? (
+                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                    <Alert type="success" showIcon message="执行结果" />
+                    <Text type="secondary">
+                      Trace：{testResult.traceID || '无'} · 耗时：{testResult.durationMs ?? 0} ms
+                    </Text>
+                    <pre
+                      style={{
+                        margin: 0,
+                        padding: 12,
+                        background: '#f6f8fa',
+                        overflow: 'auto',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {hasTestOutput(testResult.result)
+                        ? formatTestOutput(testResult.result)
+                        : '执行成功，但 Skill 未返回内容'}
+                    </pre>
+                  </Space>
                 ) : null}
               </Space>
             ),
@@ -321,12 +360,25 @@ export const SkillWorkspacePage = () => {
                   <br />
                   工具名：{String(draft.toolContract.toolName || '')}
                 </Paragraph>
-                <ActionRow>
-                  <Button icon={<SendOutlined />} type="primary" loading={publishLoading} onClick={handlePublish}>
-                    发布当前草稿
-                  </Button>
-                </ActionRow>
+                {isAdmin && (
+                  <ActionRow>
+                    <Button icon={<SendOutlined />} type="primary" loading={publishLoading} onClick={handlePublish}>
+                      发布当前草稿
+                    </Button>
+                  </ActionRow>
+                )}
               </Space>
+            ),
+          },
+          {
+            key: 'evaluation',
+            label: '评测与优化',
+            children: (
+              <SkillEvaluationPanel
+                skillId={skill.id}
+                stableRevisionId={skill.activeVersionId || (draft.status === 'published' ? draft.id : '')}
+                isAdmin={isAdmin}
+              />
             ),
           },
         ]}
@@ -336,7 +388,7 @@ export const SkillWorkspacePage = () => {
 };
 
 const ActionRow = ({ children }: { children: ReactNode }) => (
-  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>{children}</div>
+  <div className="responsive-form-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>{children}</div>
 );
 
 const fillForms = (
@@ -369,6 +421,12 @@ const fillForms = (
 };
 
 const stringifyJson = (value: unknown) => JSON.stringify(value || {}, null, 2);
+
+const formatTestOutput = (value: unknown) =>
+  typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+
+const hasTestOutput = (value: unknown) =>
+  value !== null && value !== undefined && (typeof value !== 'string' || value.trim() !== '');
 
 const parseJsonObject = (raw: string | undefined, label: string): Record<string, unknown> => {
   try {

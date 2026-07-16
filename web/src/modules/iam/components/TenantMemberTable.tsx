@@ -1,10 +1,11 @@
-import { DownOutlined } from '@ant-design/icons';
-import { Avatar, Button, Card, Dropdown, Space, Table, Tag, Typography } from 'antd';
+import { DeleteOutlined, DownOutlined, MoreOutlined } from '@ant-design/icons';
+import { Avatar, Button, Card, Dropdown, Flex, Space, Tag, Typography } from 'antd';
+import type { TablePaginationConfig } from 'antd/es/table';
 
 import type { Member } from '../model/auth';
 
-import { DEFAULT_PAGE_SIZE } from '@/constants';
-import { DangerPopconfirm } from '@/shared/ui';
+import { PAGE_SIZE_OPTIONS } from '@/constants';
+import { DangerPopconfirm, ResponsiveDataView } from '@/shared/ui';
 
 const { Text } = Typography;
 
@@ -27,8 +28,10 @@ interface Props {
   currentUserSub?: string;
   currentUserRole?: string;
   isOwner: boolean;
+  pagination: { current: number; pageSize: number; total: number };
   onRemove: (userId: string) => void;
   onRoleChange: (userId: string, role: string) => void;
+  onChange: (pagination: TablePaginationConfig) => void;
 }
 
 export const TenantMemberTable = ({
@@ -37,9 +40,58 @@ export const TenantMemberTable = ({
   currentUserSub,
   currentUserRole,
   isOwner,
+  pagination,
   onRemove,
   onRoleChange,
+  onChange,
 }: Props) => {
+  const renderActions = (record: Member, compact = false) => {
+    const isSelf = record.user_id === currentUserSub;
+    if (isSelf) return <Tag style={{ borderRadius: 6 }}>（您）</Tag>;
+    if (record.role === 'owner') return null;
+
+    const canRemove = isOwner || (currentUserRole === 'admin' && record.role === 'member');
+    const menuItems = isOwner ? buildRoleMenuItems(record) : [];
+
+    return (
+      <Space>
+        {isOwner && menuItems.length > 0 && (
+          <Dropdown
+            menu={{
+              items: menuItems,
+              onClick: ({ key }) => onRoleChange(record.user_id, key),
+            }}
+            trigger={['click']}
+          >
+            <Button
+              size="small"
+              aria-label="变更角色"
+              icon={compact ? <MoreOutlined /> : undefined}
+            >
+              {compact ? null : <>变更角色 <DownOutlined /></>}
+            </Button>
+          </Dropdown>
+        )}
+        {canRemove && (
+          <DangerPopconfirm
+            title="确认移除该成员？"
+            okText="移除"
+            onConfirm={() => onRemove(record.user_id)}
+          >
+            <Button
+              danger
+              size="small"
+              aria-label="移除"
+              icon={compact ? <DeleteOutlined /> : undefined}
+            >
+              {compact ? null : '移除'}
+            </Button>
+          </DangerPopconfirm>
+        )}
+      </Space>
+    );
+  };
+
   const columns = [
     {
       title: '用户',
@@ -75,55 +127,51 @@ export const TenantMemberTable = ({
     {
       title: '操作',
       key: 'action',
-      render: (_: unknown, record: Member) => {
-        const isSelf = record.user_id === currentUserSub;
-        if (isSelf) return <Tag style={{ borderRadius: 6 }}>（您）</Tag>;
-        if (record.role === 'owner') return null;
-
-        const canRemove = isOwner || (currentUserRole === 'admin' && record.role === 'member');
-        const menuItems = isOwner ? buildRoleMenuItems(record) : [];
-
-        return (
-          <Space>
-            {isOwner && menuItems.length > 0 && (
-              <Dropdown
-                menu={{
-                  items: menuItems,
-                  onClick: ({ key }) => onRoleChange(record.user_id, key),
-                }}
-                trigger={['click']}
-              >
-                <Button size="small">
-                  变更角色 <DownOutlined />
-                </Button>
-              </Dropdown>
-            )}
-            {canRemove && (
-              <DangerPopconfirm
-                title="确认移除该成员？"
-                okText="移除"
-                onConfirm={() => onRemove(record.user_id)}
-              >
-                <Button danger size="small">
-                  移除
-                </Button>
-              </DangerPopconfirm>
-            )}
-          </Space>
-        );
-      },
+      render: (_: unknown, record: Member) => renderActions(record),
     },
   ];
 
   return (
     <Card style={{ borderRadius: 12, border: '1px solid #f0f0f0' }} styles={{ body: { padding: 0 } }}>
-      <Table
-        dataSource={members}
+      <ResponsiveDataView
+        rows={members}
         columns={columns}
         rowKey="user_id"
         loading={loading}
-        pagination={{ pageSize: DEFAULT_PAGE_SIZE, showTotal: (t) => `共 ${t} 位成员` }}
-        style={{ borderRadius: 12, overflow: 'hidden' }}
+        pagination={{
+          current: pagination.current,
+          pageSize: pagination.pageSize,
+          total: pagination.total,
+          showSizeChanger: true,
+          pageSizeOptions: PAGE_SIZE_OPTIONS,
+          showQuickJumper: true,
+          showTotal: (t) => `共 ${t} 位成员`,
+          style: { padding: '12px 16px' },
+        }}
+        mobilePaginationMode="server"
+        onChange={onChange}
+        renderMobileItem={(member) => {
+          const role = ROLE_TAG[member.role] || { color: 'default', label: member.role };
+          return (
+            <div style={{ padding: 12, borderBottom: '1px solid #f0f0f0' }}>
+              <Flex justify="space-between" align="center" gap={8}>
+                <Space>
+                  <Avatar src={member.avatar_url} size={32}>
+                    {member.github_login?.[0]?.toUpperCase()}
+                  </Avatar>
+                  <Text strong>{member.github_login}</Text>
+                </Space>
+                <Tag color={role.color}>{role.label}</Tag>
+              </Flex>
+              <Flex justify="space-between" align="center" gap={8} style={{ marginTop: 10 }}>
+                <Text type="secondary">
+                  {member.joined_at ? new Date(member.joined_at).toLocaleDateString('zh-CN') : '-'}
+                </Text>
+                {renderActions(member, true)}
+              </Flex>
+            </div>
+          );
+        }}
       />
     </Card>
   );

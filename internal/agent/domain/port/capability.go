@@ -101,6 +101,13 @@ type SkillToolResolver interface {
 	ResolveTools(ctx context.Context, tenantID string, skillIDs []string) ([]ToolDefinition, map[string]SkillToolRef, error)
 }
 
+type SkillRevisionResolver interface {
+	ResolveSkillRevision(
+		ctx context.Context,
+		tenantID, skillID, subjectID string,
+	) (revisionID string, found bool, err error)
+}
+
 type ToolCall struct {
 	ID        string         `json:"id"`
 	Name      string         `json:"name"`

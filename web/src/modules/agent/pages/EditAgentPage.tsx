@@ -12,7 +12,7 @@ export const EditAgentPage = () => {
 
   if (pageLoading) {
     return (
-      <div style={{ maxWidth: 720, margin: '0 auto' }}>
+      <div className="responsive-form-page">
         <Skeleton active paragraph={{ rows: 1 }} style={{ marginBottom: 24 }} />
         <div
           style={{
@@ -40,8 +40,8 @@ export const EditAgentPage = () => {
   }
 
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+    <div className="responsive-form-page">
+      <div className="responsive-detail-header" style={{ marginBottom: 24 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/agents')} type="text">
           返回
         </Button>
@@ -68,7 +68,7 @@ export const EditAgentPage = () => {
       >
         <AgentFormSections skills={skills} mcpServers={mcpServers} workspaces={workspaces} />
 
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <Button onClick={() => navigate('/agents')}>取消</Button>
           <Button type="primary" htmlType="submit" loading={loading}>
             保存修改

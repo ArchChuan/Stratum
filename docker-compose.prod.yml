@@ -30,7 +30,10 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: .
+      dockerfile: docker/postgres-zhparser.Dockerfile
+    image: stratum-postgres-zhparser:local
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-stratum}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}

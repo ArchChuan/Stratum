@@ -56,3 +56,30 @@ func TestSkillVersionPublishableRequiresCapabilityContractImplementationAndTests
 		t.Fatalf("ValidatePublishable() error = %v", err)
 	}
 }
+
+func TestSkillVersionContentHashTracksOptimizableContent(t *testing.T) {
+	version := SkillVersion{
+		Capability: Capability{Goal: "分类", WhenToUse: "收到投诉时"},
+		ToolContract: ToolContract{
+			ToolName: "classify", Description: "分类", InputSchema: map[string]any{"type": "object"},
+			OutputSchema: map[string]any{"type": "object"}, Confirmed: true,
+		},
+		Implementation: Implementation{Mode: "prompt", Source: map[string]any{"promptTemplate": "分类：{{.input}}"}},
+	}
+	first, err := version.ComputeContentHash()
+	if err != nil {
+		t.Fatalf("ComputeContentHash returned error: %v", err)
+	}
+	second, err := version.ComputeContentHash()
+	if err != nil || second != first {
+		t.Fatalf("hash must be stable: first=%q second=%q err=%v", first, second, err)
+	}
+	version.Implementation.Source["promptTemplate"] = "新的分类：{{.input}}"
+	changed, err := version.ComputeContentHash()
+	if err != nil {
+		t.Fatalf("ComputeContentHash changed returned error: %v", err)
+	}
+	if changed == first {
+		t.Fatal("hash must change when implementation changes")
+	}
+}

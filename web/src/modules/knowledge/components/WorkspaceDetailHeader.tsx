@@ -12,13 +12,14 @@ interface WorkspaceDetailHeaderProps {
 }
 
 export const WorkspaceDetailHeader = ({ name, description, onBack, onDescriptionSave, onNameSave }: WorkspaceDetailHeaderProps) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+  <div className="responsive-detail-header" style={{ marginBottom: 20 }}>
     <Button icon={<ArrowLeftOutlined />} onClick={onBack} type="text">
       返回
     </Button>
-    <div>
+    <div className="long-text">
       <Title
         level={4}
+        className="long-text"
         style={{ margin: 0 }}
         editable={onNameSave ? { onChange: onNameSave, tooltip: '编辑名称' } : false}
       >
@@ -26,6 +27,7 @@ export const WorkspaceDetailHeader = ({ name, description, onBack, onDescription
       </Title>
       <Text
         type="secondary"
+        className="long-text"
         style={{ fontSize: 13 }}
         editable={onDescriptionSave ? { onChange: onDescriptionSave, tooltip: '编辑描述' } : false}
       >

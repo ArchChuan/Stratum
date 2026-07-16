@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -52,6 +54,13 @@ type UpdateImplementationInput struct {
 	SecretRefs  []string
 }
 
+type CandidateInput struct {
+	Source             string
+	ParameterPatch     map[string]any
+	PromptPatch        map[string]any
+	GenerationMetadata map[string]any
+}
+
 type VersionService struct {
 	repo   port.VersionRepo
 	logger *zap.Logger
@@ -66,9 +75,11 @@ func (s *VersionService) CreateSkillDraft(ctx context.Context, in CreateSkillDra
 	draftID := uuid.Must(uuid.NewV7()).String()
 	toolName := generatedToolName(in.Name)
 	draft := domain.SkillVersion{
-		ID:      draftID,
-		SkillID: skillID,
-		Status:  domain.VersionStatusDraft,
+		ID:                 draftID,
+		SkillID:            skillID,
+		Status:             domain.VersionStatusDraft,
+		Source:             "manual",
+		GenerationMetadata: map[string]any{},
 		Capability: domain.Capability{
 			Goal:      in.Goal,
 			WhenToUse: in.WhenToUse,
@@ -88,6 +99,11 @@ func (s *VersionService) CreateSkillDraft(ctx context.Context, in CreateSkillDra
 			},
 		},
 	}
+	contentHash, err := draft.ComputeContentHash()
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	draft.ContentHash = contentHash
 	skill := port.SkillProductRow{
 		ID:             skillID,
 		Name:           in.Name,
@@ -158,6 +174,84 @@ func (s *VersionService) GetWorkspace(ctx context.Context, skillID string) (Skil
 	return SkillWorkspaceView{Skill: skill, Draft: active}, nil
 }
 
+func (s *VersionService) GetVersion(ctx context.Context, skillID, versionID string) (domain.SkillVersion, error) {
+	version, ok, err := s.repo.GetVersion(ctx, skillID, versionID)
+	if err != nil {
+		return domain.SkillVersion{}, err
+	}
+	if !ok {
+		return domain.SkillVersion{}, domain.ErrSkillNotFound
+	}
+	return version, nil
+}
+
+func (s *VersionService) CreateCandidate(
+	ctx context.Context,
+	skillID, baselineVersionID string,
+	in CandidateInput,
+) (domain.SkillVersion, error) {
+	baseline, ok, err := s.repo.GetVersion(ctx, skillID, baselineVersionID)
+	if err != nil {
+		return domain.SkillVersion{}, err
+	}
+	if !ok {
+		return domain.SkillVersion{}, domain.ErrSkillNotFound
+	}
+	if in.Source != "parameter_search" && in.Source != "llm_rewrite" {
+		return domain.SkillVersion{}, fmt.Errorf("unsupported candidate source: %s", in.Source)
+	}
+	candidate := baseline
+	candidate.ID = uuid.Must(uuid.NewV7()).String()
+	candidate.ParentVersionID = baseline.ID
+	candidate.VersionNo = 0
+	candidate.Status = domain.VersionStatusCandidate
+	candidate.Source = in.Source
+	candidate.GenerationMetadata = cloneMap(in.GenerationMetadata)
+	candidate.Implementation.Source = cloneMap(baseline.Implementation.Source)
+	candidate.Implementation.Runtime = cloneMap(baseline.Implementation.Runtime)
+	for key, value := range in.ParameterPatch {
+		switch key {
+		case "model", "temperature", "maxTokens":
+			candidate.Implementation.Runtime[key] = value
+		default:
+			return domain.SkillVersion{}, fmt.Errorf("parameter field is not optimizable: %s", key)
+		}
+	}
+	for key, value := range in.PromptPatch {
+		if key != "promptTemplate" && key != "systemPrompt" {
+			return domain.SkillVersion{}, fmt.Errorf("prompt field is not optimizable: %s", key)
+		}
+		text, ok := value.(string)
+		if !ok || strings.TrimSpace(text) == "" {
+			return domain.SkillVersion{}, fmt.Errorf("prompt field %s must be a non-empty string", key)
+		}
+		candidate.Implementation.Source[key] = text
+	}
+	candidate.ContentHash, err = candidate.ComputeContentHash()
+	if err != nil {
+		return domain.SkillVersion{}, err
+	}
+	if err := s.repo.InsertCandidate(ctx, candidate); err != nil {
+		return domain.SkillVersion{}, err
+	}
+	return candidate, nil
+}
+
+func cloneMap(input map[string]any) map[string]any {
+	if input == nil {
+		return map[string]any{}
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		return map[string]any{}
+	}
+	var output map[string]any
+	if err := json.Unmarshal(data, &output); err != nil {
+		return map[string]any{}
+	}
+	return output
+}
+
 func (s *VersionService) UpdateCapability(ctx context.Context, skillID string, in UpdateCapabilityInput) (domain.SkillVersion, error) {
 	draft, ok, err := s.repo.GetDraftVersion(ctx, skillID)
 	if err != nil {
@@ -170,10 +264,21 @@ func (s *VersionService) UpdateCapability(ctx context.Context, skillID string, i
 	draft.Capability.WhenToUse = in.WhenToUse
 	draft.Capability.InputSpec = in.InputSpec
 	draft.Capability.OutputSpec = in.OutputSpec
-	return s.repo.UpdateDraftCapability(ctx, skillID, draft.Capability)
+	contentHash, err := draft.ComputeContentHash()
+	if err != nil {
+		return domain.SkillVersion{}, err
+	}
+	return s.repo.UpdateDraftCapability(ctx, skillID, draft.Capability, contentHash)
 }
 
 func (s *VersionService) UpdateContract(ctx context.Context, skillID string, in UpdateContractInput) (domain.SkillVersion, error) {
+	draft, ok, err := s.repo.GetDraftVersion(ctx, skillID)
+	if err != nil {
+		return domain.SkillVersion{}, err
+	}
+	if !ok {
+		return domain.SkillVersion{}, domain.ErrSkillNotFound
+	}
 	contract := domain.ToolContract{
 		ToolName:        in.ToolName,
 		Description:     in.Description,
@@ -188,10 +293,22 @@ func (s *VersionService) UpdateContract(ctx context.Context, skillID string, in 
 	if contract.OutputSchema == nil {
 		contract.OutputSchema = map[string]any{"type": "object"}
 	}
-	return s.repo.UpdateDraftContract(ctx, skillID, contract)
+	draft.ToolContract = contract
+	contentHash, err := draft.ComputeContentHash()
+	if err != nil {
+		return domain.SkillVersion{}, err
+	}
+	return s.repo.UpdateDraftContract(ctx, skillID, contract, contentHash)
 }
 
 func (s *VersionService) UpdateImplementation(ctx context.Context, skillID string, in UpdateImplementationInput) (domain.SkillVersion, error) {
+	draft, ok, err := s.repo.GetDraftVersion(ctx, skillID)
+	if err != nil {
+		return domain.SkillVersion{}, err
+	}
+	if !ok {
+		return domain.SkillVersion{}, domain.ErrSkillNotFound
+	}
 	impl := domain.Implementation{
 		Mode:        in.Mode,
 		Source:      in.Source,
@@ -202,7 +319,12 @@ func (s *VersionService) UpdateImplementation(ctx context.Context, skillID strin
 	if impl.Source == nil {
 		impl.Source = map[string]any{}
 	}
-	return s.repo.UpdateDraftImplementation(ctx, skillID, impl)
+	draft.Implementation = impl
+	contentHash, err := draft.ComputeContentHash()
+	if err != nil {
+		return domain.SkillVersion{}, err
+	}
+	return s.repo.UpdateDraftImplementation(ctx, skillID, impl, contentHash)
 }
 
 var nonToolName = regexp.MustCompile(`[^a-zA-Z0-9_]+`)

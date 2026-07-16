@@ -65,6 +65,17 @@ type fakeSkillToolResolver struct {
 	index map[string]port.SkillToolRef
 }
 
+type fakeSkillRevisionResolver struct{}
+
+func (fakeSkillRevisionResolver) ResolveSkillRevision(
+	_ context.Context, _, _, subjectID string,
+) (string, bool, error) {
+	if subjectID != "test-subject" {
+		return "", false, nil
+	}
+	return "candidate-1", true, nil
+}
+
 func (f *fakeSkillToolResolver) ResolveTools(_ context.Context, _ string, _ []string) ([]port.ToolDefinition, map[string]port.SkillToolRef, error) {
 	return f.tools, f.index, nil
 }
@@ -164,6 +175,24 @@ func TestBuildExtraToolsUsesSkillToolResolverContracts(t *testing.T) {
 	}
 	if index["tenant_t1_classify_complaint"].VersionID != "version-1" {
 		t.Fatalf("expected version index, got %#v", index)
+	}
+}
+
+func TestBuildExtraToolsUsesExperimentRevisionResolver(t *testing.T) {
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		SkillToolResolver: &fakeSkillToolResolver{
+			tools: []port.ToolDefinition{{Name: "classify"}},
+			index: map[string]port.SkillToolRef{"classify": {SkillID: "skill-1", VersionID: "version-1"}},
+		},
+		SkillRevisionResolver: fakeSkillRevisionResolver{},
+		Logger:                zap.NewNop(),
+	})
+	tools, index := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"skill-1"})
+	if index["classify"].VersionID != "candidate-1" {
+		t.Fatalf("expected canary candidate revision, got %#v", index["classify"])
+	}
+	if got := tools[0].Metadata["version_id"]; got != "candidate-1" {
+		t.Fatalf("expected tool trace metadata to use candidate revision, got %#v", got)
 	}
 }
 

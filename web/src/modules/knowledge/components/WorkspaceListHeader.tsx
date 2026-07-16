@@ -17,6 +17,7 @@ export const WorkspaceListHeader = ({
   onCreate,
 }: WorkspaceListHeaderProps) => (
   <div
+    className="responsive-page-header"
     style={{
       display: 'flex',
       alignItems: 'center',
@@ -32,14 +33,14 @@ export const WorkspaceListHeader = ({
         管理向量知识空间
       </Text>
     </div>
-    <Space size={8}>
+    <Space className="responsive-toolbar" size={8}>
       <Input
         placeholder="搜索知识库..."
         prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
         value={searchText}
         onChange={(e) => onSearchChange(e.target.value)}
         allowClear
-        style={{ width: 200 }}
+        style={{ width: '100%', maxWidth: 200 }}
       />
       {isAdmin && (
         <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>

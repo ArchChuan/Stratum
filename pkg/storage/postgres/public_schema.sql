@@ -2,6 +2,39 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+-- Chinese-aware full-text search configuration for knowledge_chunks.tsv.
+-- Graceful degradation: when the zhparser extension is present (custom image,
+-- see docker/postgres-zhparser.Dockerfile) chinese_zh segments CJK text; when
+-- absent (stock alpine/CI postgres) it is created as a copy of 'simple' so all
+-- tenant DDL that references public.chinese_zh provisions identically. The name
+-- is stable across environments; only segmentation quality differs.
+DO $$
+BEGIN
+    -- CREATE EXTENSION errors hard when the .so/.control files are missing;
+    -- swallow that so environments without zhparser still boot.
+    BEGIN
+        CREATE EXTENSION IF NOT EXISTS zhparser;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'zhparser unavailable; public.chinese_zh falls back to simple';
+    END;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_ts_config c
+        JOIN pg_namespace n ON n.oid = c.cfgnamespace
+        WHERE c.cfgname = 'chinese_zh' AND n.nspname = 'public'
+    ) THEN
+        IF EXISTS (SELECT 1 FROM pg_ts_parser WHERE prsname = 'zhparser') THEN
+            CREATE TEXT SEARCH CONFIGURATION public.chinese_zh (PARSER = zhparser);
+            -- Map meaningful zhparser token classes (noun/verb/adj/idiom/...) through
+            -- the simple dictionary (lowercase + dedup); drop punctuation-only classes.
+            ALTER TEXT SEARCH CONFIGURATION public.chinese_zh
+                ADD MAPPING FOR n,v,a,i,e,l,j,t,f,s WITH simple;
+        ELSE
+            CREATE TEXT SEARCH CONFIGURATION public.chinese_zh (COPY = pg_catalog.simple);
+        END IF;
+    END IF;
+END $$;
+
 CREATE OR REPLACE FUNCTION public.gen_uuid_v7() RETURNS uuid AS $$
 DECLARE
     v_time BIGINT := (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT;
@@ -73,12 +106,15 @@ CREATE TABLE IF NOT EXISTS public.refresh_tokens (
 
 -- Backfill columns for databases that predate consolidated DDL
 ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS is_default BOOL NOT NULL DEFAULT false;
+ALTER TABLE public.users   ADD COLUMN IF NOT EXISTS is_guest   BOOL NOT NULL DEFAULT false;
+ALTER TABLE public.users   ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 
 -- Indexes
 CREATE INDEX        IF NOT EXISTS idx_tenant_members_user    ON public.tenant_members(user_id);
 CREATE INDEX        IF NOT EXISTS idx_tenant_members_tenant  ON public.tenant_members(tenant_id);
 CREATE INDEX        IF NOT EXISTS idx_refresh_tokens_user    ON public.refresh_tokens(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_is_default     ON public.tenants(is_default) WHERE is_default = true;
+CREATE INDEX        IF NOT EXISTS idx_users_guest_expires     ON public.users(expires_at)   WHERE is_guest = true;
 
 -- Drop deprecated tables
 DROP TABLE IF EXISTS public.agent_executions;

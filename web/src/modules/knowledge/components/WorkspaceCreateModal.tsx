@@ -42,6 +42,7 @@ export function WorkspaceCreateModal({
 }: WorkspaceCreateModalProps) {
   return (
     <Modal
+      className="mobile-overlay"
       title="新建知识库"
       open={open}
       onCancel={() => {
@@ -51,6 +52,7 @@ export function WorkspaceCreateModal({
       footer={null}
       destroyOnHidden
       width={480}
+      styles={{ body: { maxHeight: 'min(70vh, 680px)', overflowY: 'auto' } }}
     >
       <Form form={form} layout="vertical" onFinish={onSubmit}>
         <Form.Item

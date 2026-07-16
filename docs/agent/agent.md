@@ -140,10 +140,11 @@ type MemorySearcher interface {
 
 ## Skill Tool Naming Convention
 
-传给模型的工具名格式：`tenant_{tenantID}_{skill_name}`
+传给模型的工具名默认来自 `tool_contract.toolName`（skill 版本发布时定义的合约名）。
 
-- `buildExtraTools` 构建 `ToolDefinition.Name` 为此格式，同时产出 `SkillToolIndex` map
-- 执行阶段 `react.go` 从 `SkillToolIndex` 反查 skillUUID，再通过 `CapabilityGateway` 路由
+- `buildExtraTools`（`internal/agent/application/agent_service.go`）在注入了 `SkillToolResolver` 且 `AllowedSkills` 非空时，调用 `ResolveTools` 获取每个 skill 已发布版本的 `ToolContract.ToolName` 作为 `ToolDefinition.Name`，同时产出 `SkillToolIndex`（toolName → {SkillID, VersionID}）
+- 无 `SkillToolResolver`（或旧配置）时回退到 `tenant_{tenantID}_{skill_name}` 格式
+- 执行阶段 `react.go` 从 `SkillToolIndex` 反查 `SkillToolRef`，携带 `SkillID` 和 `VersionID` 通过 `CapabilityGateway.Route`（`CapSkill`）路由到具体 skill 版本
 - MCP 工具名由 MCP 服务器自己定义，不应用此前缀
 
 ## A2A Protocol

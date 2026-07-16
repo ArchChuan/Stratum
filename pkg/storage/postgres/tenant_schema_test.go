@@ -30,6 +30,37 @@ func TestTenantSchemaContainsVersionedSkillTables(t *testing.T) {
 	}
 }
 
+func TestTenantSchemaContainsEvaluationControlPlane(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+
+	required := []string{
+		"ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS parent_version_id TEXT",
+		"ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'",
+		"ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS content_hash TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS generation_metadata JSONB NOT NULL DEFAULT '{}'",
+		"CREATE TABLE IF NOT EXISTS eval_suites",
+		"CREATE TABLE IF NOT EXISTS eval_suite_revisions",
+		"CREATE TABLE IF NOT EXISTS eval_cases",
+		"CREATE TABLE IF NOT EXISTS eval_runs",
+		"CREATE TABLE IF NOT EXISTS eval_case_results",
+		"CREATE TABLE IF NOT EXISTS optimization_jobs",
+		"CREATE TABLE IF NOT EXISTS optimization_candidates",
+		"CREATE TABLE IF NOT EXISTS evaluation_experiments",
+		"CREATE TABLE IF NOT EXISTS evaluation_deployments",
+		"CREATE TABLE IF NOT EXISTS evaluation_feedback",
+		"CREATE TABLE IF NOT EXISTS evaluation_jobs",
+	}
+	for _, want := range required {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("tenant_schema.sql missing evaluation control-plane DDL %q", want)
+		}
+	}
+}
+
 func TestTenantSchemaBackfillsTraceIDBeforeTraceIndex(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
@@ -75,5 +106,51 @@ func TestTenantSchemaBackfillsGenericTraceObservationColumns(t *testing.T) {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("tenant_schema.sql missing generic trace backfill %q", want)
 		}
+	}
+}
+
+// knowledge_chunks.tsv must segment Chinese via public.chinese_zh, not the
+// default 'simple' parser which cannot tokenize CJK text (near-zero recall).
+func TestTenantSchemaChunksUseChineseTSVConfig(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+
+	if !strings.Contains(sql,
+		"GENERATED ALWAYS AS (to_tsvector('public.chinese_zh', content)) STORED") {
+		t.Fatal("knowledge_chunks.tsv must be generated from to_tsvector('public.chinese_zh', content)")
+	}
+	if strings.Contains(sql, "to_tsvector('simple'") {
+		t.Fatal("tenant_schema.sql must not create tsv columns with the 'simple' config")
+	}
+}
+
+// A GENERATED column's expression cannot be ALTERed in place, so historical
+// tenants whose tsv was built with 'simple' need a drop+recreate migration.
+// That DO block must run AFTER knowledge_chunks is created, and its guard must
+// key off the chinese_zh reference so the rebuild is idempotent.
+func TestTenantSchemaMigratesLegacyTSVAfterTableCreate(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+
+	createChunksAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS knowledge_chunks")
+	migrateGuardAt := strings.Index(sql, "position('chinese_zh' IN gen_expr) = 0")
+	if createChunksAt == -1 {
+		t.Fatal("tenant_schema.sql must create knowledge_chunks")
+	}
+	if migrateGuardAt == -1 {
+		t.Fatal("tenant_schema.sql must migrate legacy tsv columns guarded by a chinese_zh check")
+	}
+	if migrateGuardAt < createChunksAt {
+		t.Fatalf("legacy tsv migration must run after knowledge_chunks is created: create=%d migrate=%d",
+			createChunksAt, migrateGuardAt)
+	}
+	if !strings.Contains(sql, "CREATE INDEX idx_kc_tsv ON knowledge_chunks USING GIN(tsv)") {
+		t.Fatal("legacy tsv migration must rebuild the idx_kc_tsv GIN index")
 	}
 }
