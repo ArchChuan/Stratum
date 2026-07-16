@@ -228,6 +228,49 @@ not print process arguments:
 ```sh
 set -euo pipefail
 umask 077
+
+validate_snapshot() {
+  local file=$1
+  if ! validated_captured_at=$(jq -er '
+    def nonempty_string: type == "string" and length > 0;
+    def nonnegative_number: type == "number" and . >= 0;
+    def nonnegative_integer: nonnegative_number and . == floor;
+    def positive_integer: nonnegative_integer and . > 0;
+    select(try (
+      .version == 1 and .mode == "observe" and
+      (.captured_at | nonempty_string) and
+      (.processes | type == "array") and
+      (.services | type == "array" and length > 0) and
+      (.warnings | type == "array" and all(.[]; type == "string")) and
+      all(.services[];
+        (.service | nonempty_string) and
+        (.processes | nonnegative_integer) and
+        (.rss_bytes | nonnegative_number) and
+        (.pss_bytes | nonnegative_number) and
+        (.uss_bytes | nonnegative_number) and
+        (.orphans | nonnegative_integer) and .orphans <= .processes) and
+      all(.processes[];
+        (.pid | positive_integer) and (.ppid | nonnegative_integer) and
+        (.start_ticks | nonnegative_integer) and
+        (.service | nonempty_string) and (.command | nonempty_string) and
+        (.rss_bytes | nonnegative_number) and
+        (.pss_bytes | nonnegative_number) and
+        (.uss_bytes | nonnegative_number) and
+        (.registered | type == "boolean") and (.orphan | type == "boolean"))
+    ) catch false) | .captured_at' "$file"); then
+    return 1
+  fi
+  if ! validated_epoch=$(date -d "$validated_captured_at" +%s); then
+    return 1
+  fi
+}
+
+validate_fresh_snapshot() {
+  local file=$1 previous=$2
+  validate_snapshot "$file" || return 1
+  test "$validated_captured_at" != "$previous"
+}
+
 evidence_dir=$(mktemp -d "$HOME/.local/state/mcp-governor/evidence.XXXXXX")
 chmod 0700 "$evidence_dir"
 source_snapshot="$HOME/.local/state/mcp-governor/snapshot.json"
@@ -241,14 +284,15 @@ for sample_number in $(seq 1 1441); do
   sample=$(printf '%04d' "$sample_number")
   systemctl --user start mcp-governor-observe.service
   test -f "$source_snapshot"
-  captured_at=$(jq -er '
-    select(.version == 1 and .mode == "observe") |
-    .captured_at | select(type == "string" and length > 0)' "$source_snapshot")
-  test "$captured_at" != "$previous_captured_at"
+  validate_fresh_snapshot "$source_snapshot" "$previous_captured_at"
+  captured_at=$validated_captured_at
+  captured_epoch=$validated_epoch
 
   snapshot="$evidence_dir/$sample.json"
   install -m 0600 "$source_snapshot" "$snapshot"
-  test "$(jq -er '.captured_at' "$snapshot")" = "$captured_at"
+  validate_snapshot "$snapshot"
+  test "$validated_captured_at" = "$captured_at"
+  test "$validated_epoch" = "$captured_epoch"
   jq -r '(.processes | map({key:(.pid|tostring),value:true}) |
       from_entries) as $pids |
     ([.warnings[] |
@@ -271,27 +315,46 @@ printf 'samples=1441 coverage_seconds=%s first=%s last=%s\n' \
   "$coverage_seconds" "$first_captured_at" "$last_captured_at"
 ```
 
-The freshness guard can be reproduced without invoking the service or touching
-the live snapshot. This fixture deliberately reuses its previous timestamp; a
-successful check would be an error:
+The schema and freshness guards can be reproduced without invoking the service
+or touching the live snapshot. Run this after defining the two validation
+functions above. It accepts the valid fixture, rejects a reused timestamp, and
+rejects missing PSS, null USS, string metrics, negative counts, and an invalid
+timestamp:
 
 ```sh
 set -euo pipefail
 umask 077
-fixture=$(mktemp)
-trap 'rm -f "$fixture"' EXIT
-printf '%s\n' '{"version":1,"mode":"observe","captured_at":"2026-01-01T00:00:00Z"}' \
-  >"$fixture"
-chmod 0600 "$fixture"
-previous_captured_at=2026-01-01T00:00:00Z
-captured_at=$(jq -er '
-  select(.version == 1 and .mode == "observe") |
-  .captured_at | select(type == "string" and length > 0)' "$fixture")
-if test "$captured_at" != "$previous_captured_at"; then
-  printf 'ERROR: stale fixture was accepted\n' >&2
-  exit 1
-fi
-printf 'stale snapshot rejected\n'
+fixture_dir=$(mktemp -d)
+trap 'rm -rf "$fixture_dir"' EXIT
+chmod 0700 "$fixture_dir"
+jq -n '{version:1, mode:"observe", captured_at:"2026-01-01T00:01:00Z",
+  services:[{service:"fixture",processes:1,rss_bytes:3,pss_bytes:2,
+    uss_bytes:1,orphans:0}],
+  processes:[{pid:1,ppid:0,start_ticks:1,service:"fixture",command:"fixture",
+    rss_bytes:3,pss_bytes:2,uss_bytes:1,registered:false,orphan:false}],
+  warnings:[]}' >"$fixture_dir/valid.json"
+chmod 0600 "$fixture_dir/valid.json"
+jq 'del(.services[0].pss_bytes)' "$fixture_dir/valid.json" \
+  >"$fixture_dir/missing-pss.json"
+jq '.services[0].uss_bytes=null' "$fixture_dir/valid.json" \
+  >"$fixture_dir/null-uss.json"
+jq '.services[0].rss_bytes="3"' "$fixture_dir/valid.json" \
+  >"$fixture_dir/string-metric.json"
+jq '.services[0].processes=-1' "$fixture_dir/valid.json" \
+  >"$fixture_dir/negative-count.json"
+jq '.captured_at="not-a-timestamp"' "$fixture_dir/valid.json" \
+  >"$fixture_dir/invalid-timestamp.json"
+chmod 0600 "$fixture_dir"/*.json
+
+validate_fresh_snapshot "$fixture_dir/valid.json" 2026-01-01T00:00:00Z
+if validate_fresh_snapshot "$fixture_dir/valid.json" "$validated_captured_at";
+then printf 'ERROR: stale fixture accepted\n' >&2; exit 1; fi
+for fixture in missing-pss null-uss string-metric negative-count invalid-timestamp;
+do
+  if validate_snapshot "$fixture_dir/$fixture.json" >/dev/null 2>&1;
+  then printf 'ERROR: %s accepted\n' "$fixture" >&2; exit 1; fi
+done
+printf 'valid=accepted stale=rejected malformed=5/5-rejected\n'
 ```
 
 ## Ownership and reclaimability
