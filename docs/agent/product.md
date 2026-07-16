@@ -25,8 +25,8 @@
 
 - **知识库**：`description` 必填（直接影响 AI 检索判断）；`name` 创建后不可改（向量 collection 绑定）
 - **Agent**：max_iterations slider 1-20；知识库绑定展示各自 description
-- **技能**：temperature 用 Slider + 标签；支持独立「测试运行」不经过 Agent
-- **记忆**：用户侧只读（content + 时间 + importance）；管理侧额外展示 scope + agent_id
+- **技能**：以版本化 instruction bundle 编辑 capability、activation、instructions 与 requirements；发布后由 Agent 激活，不提供独立执行入口
+- **记忆**：当前用户入口提供清空本人记忆；后端同时提供添加、查询、删除、会话清理与统计 API
 
 ## 交互三态
 

@@ -69,7 +69,7 @@ Subject 拼接方式：`fmt.Sprintf("%s.%s", constants.MemoryRawSubject, tenantI
 URL 格式：nats://host:4222          默认：nats://localhost:4222
 ```
 
-连接在 `internal/memory/infrastructure/pipeline/pipeline.go` 中初始化（`nats.Connect`），传入 `JetStreamManager`，再分发给各 Worker。连接失败 Warn 不阻断启动。
+连接由 `api/wiring/storage.go` 通过 `pkg/messaging/nats.Connect` 初始化，并把 `nats.Conn` / legacy `JetStreamContext` 放入共享 `Storage`。Memory wiring 再从同一连接创建 `nats.go/jetstream` 实例供 pipeline 和 worker 使用。连接失败 Warn，不阻断启动；此时 memory pipeline 不装配。
 
 ## EventPublisher Port
 

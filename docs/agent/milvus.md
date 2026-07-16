@@ -6,17 +6,19 @@
 
 核心封装：
 
-- `pkg/vector/vector_store.go` — 通用 `VectorStore` struct（知识库 workspace 使用）
+- `pkg/storage/milvus/client.go` — `VectorStore` 主实现（Knowledge 与 Memory 共用）
+- `pkg/vector/` — 旧 import path 的兼容 re-export；Knowledge/Memory 的部分现有代码仍通过该路径引用
 - `internal/memory/infrastructure/pipeline/vector_adapter.go` — Memory pipeline 专用适配器，封装 tenant-scoped collection 命名与批量写入
 
 ## VectorStore API
 
 ```go
-vs := vector.NewVectorStore(host, port, logger, dim)
+vs := milvus.NewVectorStore(host, port, logger)
 vs.Connect(ctx)                           // 带 net.Dialer 2s 端口预检 + gRPC 连接
-vs.CreateCollection(ctx, name, dim)       // 创建集合（含 primary key schema）
-vs.Insert(ctx, name, ids, vectors, meta)  // 插入后自动 Flush
-vs.Search(ctx, name, vector, topK)        // 语义相似度搜索
+vs.CreateCollectionWithDim(ctx, name, dim)// 创建集合（含 primary key schema）
+vs.Insert(ctx, name, docs, partition)     // 批量插入 DocumentChunk
+vs.Flush(ctx, name)                       // 需要持久化可见性时显式 Flush
+vs.Search(ctx, name, vector, topK)        // 可选 variadic partitions
 vs.DeleteCollection(ctx, name)            // 删除集合
 ```
 
@@ -43,19 +45,17 @@ client.Search(
 ## Collection 操作规范
 
 - 搜索前必须调用 `LoadCollection`
-- 插入后调用 `Flush` 确保持久化（`VectorStore.Insert` 内部已处理）
+- 插入与 `Flush` 是两个 API；需要立即持久化/可见性的调用链必须显式调用 `Flush`
 - 创建 Collection 时必须指定含主键字段的 schema
 
 ## Connection 处理
 
-`pkg/vector/vector_store.go` 使用 `net.Dialer` 预检端口可达性（2s 超时），防止 SDK 无限阻塞。连接在独立 goroutine 中执行，通过 channel + `ctx.Done()` 实现超时控制。
+`pkg/storage/milvus/client.go` 使用 `net.Dialer` 预检端口可达性（2s 超时），防止 SDK 无限阻塞。连接在独立 goroutine 中执行，通过 channel + `ctx.Done()` 实现超时控制；`ensureConnected` 负责惰性重连并用锁保护 client 生命周期。
 
-`router.go` 中连接使用 3s 整体超时：
+连接由 `api/wiring/storage.go` 在容器构建阶段发起，沿用 `BuildContainer` 的启动 context；`VectorStore` 自身的 TCP 预检超时为 2 秒：
 
 ```go
-ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-defer cancel()
-vectorStore.Connect(ctx)  // 失败仅 Warn，不阻塞启动
+vectorStore.Connect(ctx)  // 失败记录 Warn；后续调用仍会尝试 ensureConnected
 ```
 
 ## Common Errors

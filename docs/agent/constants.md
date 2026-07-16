@@ -16,6 +16,15 @@
 - `pkg/constants/` 禁止 import `internal/`（单向依赖）
 - 禁止在函数签名 / 结构体字面量中直接写魔法数字
 
+Agent 上下文相关常量位于 `pkg/constants/agent.go`：
+
+| 常量 | 当前值 | 用途 |
+|------|--------|------|
+| `DefaultAgentContextTokens` | 8000 | Agent 未设置 `MaxContextTokens` 时的上下文预算 |
+| `DefaultInitHistoryWindow` | 20 | `BuildInitMessages` 的兜底历史窗口 |
+| `DefaultContextHistoryWindow` | 50 | `BuildContextMessages` 的直接调用兜底窗口 |
+| `MemoryBudgetRatio` | 0.3 | memory context 最多占剩余预算的比例 |
+
 ## 前端（TypeScript / TSX）
 
 所有行为常量集中在 `web/src/constants/index.ts`，按前缀分组：

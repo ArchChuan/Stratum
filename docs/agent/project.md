@@ -3,7 +3,7 @@
 ## Directory Structure
 
 ```
-cmd/server/main.go          - 唯一入口：初始化 Harness，注册所有组件
+cmd/server/main.go          - 唯一入口：加载配置，BuildContainer，租户 bootstrap，启动 HTTP runtime
 api/
   http/
     router.go               - 路由注册（Gin），按域拆分为 registerXxx 私有函数
@@ -19,7 +19,7 @@ internal/
   iam/{domain,application,infrastructure}
                             - 多租户 IAM：Tenant / Admin / JWT / OAuth / OnBoard
   knowledge/{domain,application,infrastructure}
-                            - GraphRAG：WorkspaceService、RAGService、文档摄取
+                            - Knowledge RAG：WorkspaceService、RAGService、文档摄取
   llmgateway/{domain,application,infrastructure}
                             - LLM 统一网关（Qwen/Zhipu OpenAI-compatible）、ModelService
   evaluation/{domain,application,infrastructure}
@@ -29,7 +29,7 @@ internal/
   memory/{domain,application,infrastructure}
                             - 记忆持久化 + JetStream 三阶段 pipeline
   platform/{domain,harness,runtime}
-                            - Harness 生命周期与启动期运行时编排（顺序启动→逆序停止）
+                            - 平台生命周期辅助与 HTTP/租户启动期编排
   skill/{domain,application,infrastructure}
                             - Skill instruction bundle CRUD、revision 发布与候选优化
 pkg/
@@ -39,7 +39,7 @@ pkg/
   storage/{milvus,postgres,redis}
                            - 各存储驱动封装（pgxpool · go-redis · Milvus SDK）
   tenantdb/                - 租户 context、schema 路由、ExecTenant 辅助函数
-  vector/                  - VectorStore（Milvus SDK v2.4.2），pkg/storage/milvus 升级中
+  vector/                  - `pkg/storage/milvus` 的兼容 re-export；现有 Knowledge/Memory 仍有引用
   migration/               - PostgreSQL public schema 迁移（golang-migrate）
   httpclient/              - 带重试/超时的 HTTP 客户端封装
   textchunk/               - 文本分块（Chunker）
@@ -57,7 +57,7 @@ grafana/                    - Grafana 数据源 + 仪表板配置
 | Go | 1.25.0 | 泛型，slog 兼容 |
 | Gin | v1.9+ | 路由组 `r.Group`，middleware 在 router.go 注册 |
 | NATS | v1.51 | JetStream 模式；memory pipeline 用 `nats.go/jetstream` 包直接操作 |
-| Milvus SDK | v2.4.2 | `client.Search` 参数顺序见 `pkg/vector/vector_store.go` |
+| Milvus SDK | v2.4.2 | 主实现位于 `pkg/storage/milvus`；`pkg/vector` 提供兼容别名且仍有现有调用方 |
 | pgx | v5.x | pgxpool，事务内用 `SET LOCAL search_path` 切换租户 |
 | go-redis | v9.x | `redis.NewClient`，context-aware API |
 | Zap | v1.26+ | 生产用 `NewProduction()`，开发用 `NewDevelopment()` |
@@ -69,14 +69,14 @@ grafana/                    - Grafana 数据源 + 仪表板配置
 
 1. **API 层**：`c.Error(err)` 交给 `ErrorHandler` middleware 统一映射；domain sentinel（`ErrNotFound`、`ErrNameConflict`）→ 对应 HTTP 状态码
 2. **internal 层**：返回 `error`，用 `fmt.Errorf("op: %w", err)` 包装，不吞错误
-3. **外部连接**：`platform.harness` 中连接失败 Warn 而不阻塞启动；Milvus/NATS 连接有超时
+3. **外部连接**：`api/wiring` 负责构造依赖；可降级组件记录 Warn，必要组件构造失败则 `BuildContainer` 返回错误并逆序清理
 4. **Context**：所有跨组件调用传递 `context.Context`，支持超时与取消
 
 ## Concurrency Safety Rules
 
 - Registry/Manager 类型用 `sync.RWMutex`（读多写少）
 - 单个 Agent 执行用 `sync.Mutex`（不支持同一 Agent 并发执行）
-- CircuitBreaker 每个 skill 独立 `sync.Mutex`
+- LLM provider 的 CircuitBreaker 各自维护状态锁；Skill 当前不是可直接执行的 gateway
 - Goroutine 间通信用 channel，不共享内存
 
 ## Testing Conventions

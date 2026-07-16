@@ -6,7 +6,7 @@
 
 - 编号迁移（`pkg/migration/sql/NNN_*.sql`）只操作 **public schema**，禁止引用 tenant-only 表（如 `chat_conversations`、`memory_entries`、`memory_entities`）
 - 引用 tenant-only 表的 DDL 必须放 `pkg/storage/postgres/tenant_schema.sql`，由 `ProvisionAllTenantSchemas` 幂等应用到每个租户 schema
-- 新增 tenant DDL 后需同步检查 `pkg/migration/sql/tenant_schema.sql`（migration baseline）是否也需更新
+- tenant schema 的唯一基线是 `pkg/storage/postgres/tenant_schema.sql`；不要在 `pkg/migration/sql/` 复制一份 tenant DDL
 
 ## 历史租户兼容（幂等 DDL）
 
@@ -36,7 +36,7 @@
 
 ## 向量数据删除
 
-删除 tenant 向量：调用 `MilvusClient.Delete` + filter（**不是** `DropCollection`）；collection 命名模式见 `pkg/milvus/collections.go`。
+删除单个 tenant/文档的向量数据：调用 `pkg/storage/milvus.VectorStore` 的 `DeleteByFilter` / `DeleteByDocumentIDs`，不要误删共享 collection。Knowledge workspace 使用独立 collection 时，删除整个 workspace 才调用 `DeleteCollection`；命名规则分别见 `pkg/storage/tenantnaming/milvus.go` 与 `pkg/constants/knowledge.go`。
 
 ## 废弃表清理
 
@@ -45,4 +45,4 @@
 1. 删除旧表 DDL（`tenant_schema.sql`）+ 所有 Go 引用
 2. 在租户 schema 定义中追加 `DROP` 语句清理存量租户
 
-判断标准：`grep -r "table_name" --include="*.go"` 零引用即可删除（反例：sessions/exec_history/workflows/webhooks 等 13 张表零引用却残存数月）。
+判断标准：`rg "table_name" -g '*.go'` 零引用后，再核对 SQL、测试和运行期动态表名，确认无消费者才可删除。

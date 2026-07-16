@@ -53,6 +53,12 @@ type AgentConfig struct {
 | `stratum_recall_memory` | Agent memory scope ∩ active Skill memory scopes |
 | `stratum_continue_reasoning` | Agent Loop 内部控制 |
 
+## Context Budget
+
+`AgentConfig.MaxContextTokens` 控制 Agent 初始 LLM 消息的上下文预算；未配置时使用 `constants.DefaultAgentContextTokens`（8000）。`BuildContextMessages` 的组装优先级为当前输入 > system prompt 保底 > memory（剩余预算最多 30%）> 会话历史。历史先按窗口截取，再从最老消息开始删除以满足预算。
+
+该预算只在进入 ReAct/Planning graph 前应用。当前代码没有循环内 compaction、历史摘要或 tool call/tool result 分组裁剪；不要在文档或调用方中假设这些能力已经存在。
+
 ## MCP Risk And Approval
 
 租户管理员为每个 `(server_id, tool_name)` 设置风险：`read`、`write_reversible`、`destructive`、`unclassified`。未配置或读取失败必须视为 `unclassified`。MCP discovery payload 不能设置受信风险。

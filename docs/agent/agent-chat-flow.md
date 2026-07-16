@@ -35,6 +35,8 @@ sequenceDiagram
     API-->>UI: SSE done
 ```
 
+初始请求由 `BuildContextMessages` 按 `MaxContextTokens` 和历史窗口组装：当前输入优先，system prompt 保留预算，memory 最多使用剩余预算的 30%，历史消息超限时从最老消息开始删除。当前循环内没有额外的上下文压缩或摘要实现。
+
 ## Approval Run
 
 ```mermaid
