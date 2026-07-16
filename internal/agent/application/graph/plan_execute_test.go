@@ -242,3 +242,22 @@ func TestPlanExecute_T3_ContextIsolation(t *testing.T) {
 	// Sub-step must not inherit StuckThreshold (no nested planning).
 	assert.Equal(t, 0, stepState.StuckThreshold)
 }
+
+type historyCompactorStub struct{}
+
+func (*historyCompactorStub) CompactHistory(context.Context, []port.LLMMessage) (string, error) {
+	return "summary", nil
+}
+
+func TestPlanExecute_T3_SubstepInheritsContextCompaction(t *testing.T) {
+	compactor := &historyCompactorStub{}
+	parent := graph.ReActState{
+		MaxContextTokens: 4096,
+		HistoryCompactor: compactor,
+	}
+
+	stepState := graph.ExportBuildStepState(parent, domain.PlanStep{Goal: "analyse"}, 0, nil)
+
+	assert.Equal(t, parent.MaxContextTokens, stepState.MaxContextTokens)
+	assert.Same(t, compactor, stepState.HistoryCompactor)
+}

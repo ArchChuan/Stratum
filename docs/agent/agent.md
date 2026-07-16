@@ -53,11 +53,14 @@ type AgentConfig struct {
 | `stratum_recall_memory` | Agent memory scope ∩ active Skill memory scopes |
 | `stratum_continue_reasoning` | Agent Loop 内部控制 |
 
-## Context Budget
+## Context Budget And Compaction
 
-`AgentConfig.MaxContextTokens` 控制 Agent 初始 LLM 消息的上下文预算；未配置时使用 `constants.DefaultAgentContextTokens`（8000）。`BuildContextMessages` 的组装优先级为当前输入 > system prompt 保底 > memory（剩余预算最多 30%）> 会话历史。历史先按窗口截取，再从最老消息开始删除以满足预算。
+`AgentConfig.MaxContextTokens` 控制 Agent 每次 LLM 请求的上下文上限；未配置时使用 `constants.DefaultAgentContextTokens`（8000）。当前运行行为分两层：
 
-该预算只在进入 ReAct/Planning graph 前应用。当前代码没有循环内 compaction、历史摘要或 tool call/tool result 分组裁剪；不要在文档或调用方中假设这些能力已经存在。
+1. 初始上下文由 `BuildContextMessages` 组装，优先级为当前输入 > system prompt 保底 > memory（剩余预算最多 30%）> 会话历史。历史先按窗口截取，再从最老消息开始丢弃以满足预算。
+2. ReAct 循环（包括 Planning 子步骤的 ReAct）每次调用 LLM 前对消息副本估算 token；达到 `MaxContextTokens * LoopCompactionSafetyRatio`（当前 80%）后，保留 system/user 锚点和最近 3 个完整消息组，较老中间组整体淘汰并插入省略标记。assistant tool call 与对应 tool result 必须作为原子组保留或删除，禁止产生孤立消息。Reflect、Plan、Synthesize 的结构化单次请求不在本次循环压缩范围内。
+
+`HistoryCompactor` port 和 `LLMHistoryCompactor` 基础实现已经存在，但当前 wiring 未向 `BaseAgent` 或 `ReActState` 注入 compactor，因此生产路径不会调用 LLM 生成摘要。压缩失败或未注入时必须降级为硬截断/计数标记，不能阻断 Agent Loop；trace 与持久化会话历史保持完整，压缩只影响当次 LLM 请求副本。
 
 ## MCP Risk And Approval
 
@@ -77,5 +80,6 @@ type AgentConfig struct {
 3. Skill revision 在 Run 内不可漂移；审批恢复使用 payload 固定的 revision。
 4. Tool trace 和 Agent trace 是不可变历史；删除旧 Skill 存储时必须保留。
 5. `MaxIterations` 和 execution timeout 必须有限。
-6. 不记录 token、API key、password、审批明文 payload 或敏感原始响应。
-7. Agent/Skill/MCP/Knowledge/Memory 改动必须完成真实 API、数据库、Agent Loop 和浏览器 E2E。
+6. 上下文裁剪必须保持 tool call/tool result 配对，并保留 system/user 锚点；不得直接修改持久化历史或 trace。
+7. 不记录 token、API key、password、审批明文 payload 或敏感原始响应。
+8. Agent/Skill/MCP/Knowledge/Memory 改动必须完成真实 API、数据库、Agent Loop 和浏览器 E2E。

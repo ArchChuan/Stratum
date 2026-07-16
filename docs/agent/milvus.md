@@ -7,7 +7,7 @@
 核心封装：
 
 - `pkg/storage/milvus/client.go` — `VectorStore` 主实现（Knowledge 与 Memory 共用）
-- `pkg/vector/` — 旧 import path 的兼容 re-export；Knowledge/Memory 的部分现有代码仍通过该路径引用
+- `pkg/vector/` — 旧 import path 的兼容 re-export；新代码应直接 import `pkg/storage/milvus`
 - `internal/memory/infrastructure/pipeline/vector_adapter.go` — Memory pipeline 专用适配器，封装 tenant-scoped collection 命名与批量写入
 
 ## VectorStore API

@@ -4,7 +4,9 @@
 
 ### Initialization
 
-`cmd/server/main.go` 调用 `internal/platform/runtime.InitTracingFromEnv`。仅当 `OTEL_EXPORTER_OTLP_ENDPOINT` 非空时初始化 OTLP TracerProvider；`OTEL_SERVICE_NAME` 可覆盖默认 service name。初始化失败只记录 Warn，并关闭 tracing。
+`cmd/server/main.go` 调用 `internal/platform/runtime.InitTracingFromEnv`。
+仅当 `OTEL_EXPORTER_OTLP_ENDPOINT` 非空时初始化 OTLP TracerProvider；
+`OTEL_SERVICE_NAME` 可覆盖默认 service name。初始化失败只记录 Warn，并关闭 tracing。
 
 ```go
 shutdown := platformruntime.InitTracingFromEnv(logger)
@@ -29,7 +31,7 @@ span.SetStatus(codes.Error, err.Error())
 
 - 每个 Handler 方法通过 `middleware/trace.go` (`TraceMiddleware`) 自动获得 Span
 - internal 层关键操作手动创建子 Span
-- Span 命名格式：`{component}.{operation}`，例如 `agent.execute`、`agent.memory_inject`
+- Span 命名格式：`{component}.{operation}`，例如 `agent.execute`、`memory.search`、`skill.execute`
 
 ## Metrics (Prometheus)
 
@@ -43,15 +45,13 @@ http_request_duration_seconds{method, path}
 http_requests_in_flight
 ```
 
-**Skill**（`pkg/observability/prometheus.go`）
+**Skill**（collector 已注册，当前生产路径尚未接入记录调用）
 
 ```
 skill_executions_total{skill_id, skill_type, status}
 skill_execution_duration_seconds{skill_id}
 skill_circuit_breaker_state{skill_id}           // 0=closed 1=open 2=half_open
 ```
-
-以上 Skill 指标已在 provider 中注册，但当前 Skill 是 instruction bundle，运行路径没有调用对应记录方法，因此默认不会产生样本。不要据此假设存在 Skill 执行 gateway 或 Skill circuit breaker。
 
 **Agent**（`pkg/observability/prometheus.go`）
 
@@ -81,14 +81,6 @@ knowledge_ingest_duration_seconds
 knowledge_ingest_in_flight
 ```
 
-**Memory recall / Hermes**（`pkg/observability/prometheus.go`）
-
-```
-memory_retrieval_duration_seconds{operation}
-hermes_events_total{event_type}
-hermes_events_processed_total{event_type, status}
-```
-
 **Memory Pipeline**（`internal/memory/infrastructure/pipeline/metrics.go`）
 
 ```
@@ -102,6 +94,14 @@ memory_summary_triggered_total                  // Counter: 触发摘要次数
 memory_dlq_total{tenant_id, stage}              // Counter: 进入 DLQ 次数
 memory_entities_extracted_total                 // Counter: 实体抽取总数
 ```
+
+### Circuit Breaker 状态说明
+
+`skill_circuit_breaker_state` 取值：
+
+- `0` = Closed（正常放行）
+- `1` = Open（熔断，全部拒绝）
+- `2` = HalfOpen（探测恢复中，只放一个请求）
 
 ### Adding New Metrics
 

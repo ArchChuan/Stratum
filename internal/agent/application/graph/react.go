@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/tokenutil"
 )
 
 const (
@@ -51,6 +53,13 @@ type ReActState struct {
 	// MaxLLMSteps caps LLM-node invocations; on the last allowed call tools are
 	// stripped and the model is asked to produce a final answer from collected context.
 	MaxLLMSteps int
+	// MaxContextTokens bounds each ReAct LLM request. When the
+	// accumulated Messages exceed it, older tool-call/tool-result groups are compacted
+	// (summarized or dropped) before dispatch. Zero disables in-loop compaction.
+	MaxContextTokens int
+	// HistoryCompactor optionally summarizes evicted groups into a breadcrumb; nil
+	// degrades to plain drop-with-marker. Never fails the loop.
+	HistoryCompactor port.HistoryCompactor
 
 	// Lazy planning — non-zero StuckThreshold enables Reflect→Plan→Execute path.
 	StuckThreshold    int // 0 = disabled
@@ -102,13 +111,23 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 
 		tools := effectiveTools(s.AvailableTools, s.SkillCatalog, s.ActiveSkill, s.AgentKnowledgeWorkspaceIDs, s.AgentMemoryScope)
 		messages := messagesWithActiveSkill(s.Messages, s.ActiveSkill)
+		protectedUsers := 1
 		if s.MaxLLMSteps > 0 && s.Steps >= s.MaxLLMSteps-1 {
 			tools = nil
+			protectedUsers = 2
 			messages = append(messages, port.LLMMessage{
 				Role:    "user",
 				Content: "You have reached the maximum reasoning steps. Based on your analysis and tool results so far, provide your final answer now. Do not call any tools.",
 			})
 		}
+		// In-loop compaction: bound the complete request, including any final-step
+		// instruction, without mutating s.Messages (trace/history stay complete).
+		tools = fitToolsToContextBudget(tools, messages, s.MaxContextTokens, protectedUsers)
+		toolTokens := 0
+		if encodedTools, err := json.Marshal(tools); err == nil {
+			toolTokens = tokenutil.EstimateText(string(encodedTools))
+		}
+		messages = compactLoopMessagesWithProtectedUsers(ctx, messages, s.MaxContextTokens, toolTokens, constants.LoopCompactionRecentGroups, protectedUsers, s.HistoryCompactor)
 
 		tracer := otel.Tracer("stratum/agent")
 		ctx, llmSpan := tracer.Start(ctx, "react.llm",
@@ -278,6 +297,34 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 		}
 		return s, nil
 	}
+}
+
+func fitToolsToContextBudget(tools []port.ToolDefinition, messages []port.LLMMessage, budget, protectedUsers int) []port.ToolDefinition {
+	if budget <= 0 || len(tools) == 0 {
+		return tools
+	}
+	threshold := int(float64(budget) * constants.LoopCompactionSafetyRatio)
+	groups := groupMessages(messages)
+	protectedMessages := flatten(groups[:anchorCount(groups)])
+	usersKept := 0
+	for i := len(groups) - 1; i >= 0 && usersKept < protectedUsers; i-- {
+		if groups[i].role0 == "user" {
+			protectedMessages = append(protectedMessages, groups[i].msgs...)
+			usersKept++
+		}
+	}
+	toolAllowance := max(threshold-tokenutil.EstimateMessages(toEstimate(protectedMessages)), 0)
+	fitted := make([]port.ToolDefinition, 0, len(tools))
+	for _, tool := range tools {
+		candidate := make([]port.ToolDefinition, len(fitted), len(fitted)+1)
+		copy(candidate, fitted)
+		candidate = append(candidate, tool)
+		encoded, err := json.Marshal(candidate)
+		if err == nil && tokenutil.EstimateText(string(encoded)) <= toolAllowance {
+			fitted = candidate
+		}
+	}
+	return fitted
 }
 
 func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReActState] {

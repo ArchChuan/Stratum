@@ -21,9 +21,11 @@ Agent 上下文相关常量位于 `pkg/constants/agent.go`：
 | 常量 | 当前值 | 用途 |
 |------|--------|------|
 | `DefaultAgentContextTokens` | 8000 | Agent 未设置 `MaxContextTokens` 时的上下文预算 |
-| `DefaultInitHistoryWindow` | 20 | `BuildInitMessages` 的兜底历史窗口 |
+| `DefaultInitHistoryWindow` | 20 | AgentService 执行时加载的初始历史窗口 |
 | `DefaultContextHistoryWindow` | 50 | `BuildContextMessages` 的直接调用兜底窗口 |
 | `MemoryBudgetRatio` | 0.3 | memory context 最多占剩余预算的比例 |
+| `LoopCompactionRecentGroups` | 3 | 循环压缩时优先保留的最近完整消息组数 |
+| `LoopCompactionSafetyRatio` | 0.8 | 触发循环内压缩的预算安全阈值 |
 
 ## 前端（TypeScript / TSX）
 
