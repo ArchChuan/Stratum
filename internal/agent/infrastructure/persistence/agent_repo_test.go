@@ -7,6 +7,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
+	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v2"
 )
 
@@ -236,6 +237,60 @@ func TestAgentRepo_Update_NotFound(t *testing.T) {
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("expected domain.ErrNotFound, got: %v", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestAgentRepo_FindAgentBySkill_Found(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectQuery("SELECT agent_id FROM agent_skill_links WHERE skill_id").
+		WithArgs("sk1").
+		WillReturnRows(pgxmock.NewRows([]string{"agent_id"}).AddRow("a1"))
+	pool.ExpectCommit()
+
+	repo := &PgAgentRepo{pool: pool}
+	agentID, found, err := repo.FindAgentBySkill(tenantCtx("t1"), "sk1")
+	if err != nil {
+		t.Fatalf("FindAgentBySkill: %v", err)
+	}
+	if !found || agentID != "a1" {
+		t.Fatalf("want (a1,true), got (%q,%v)", agentID, found)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestAgentRepo_FindAgentBySkill_NotFound(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectQuery("SELECT agent_id FROM agent_skill_links WHERE skill_id").
+		WithArgs("sk-none").
+		WillReturnError(pgx.ErrNoRows)
+	pool.ExpectRollback()
+
+	repo := &PgAgentRepo{pool: pool}
+	agentID, found, err := repo.FindAgentBySkill(tenantCtx("t1"), "sk-none")
+	if err != nil {
+		t.Fatalf("FindAgentBySkill unexpected err: %v", err)
+	}
+	if found || agentID != "" {
+		t.Fatalf("want (\"\",false), got (%q,%v)", agentID, found)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)

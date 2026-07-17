@@ -445,3 +445,25 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig) error
 		return nil
 	})
 }
+
+// FindAgentBySkill returns the id of an agent bound to skillID via
+// agent_skill_links, or found=false when no agent references the skill.
+// Ordering by agent_id makes the pick deterministic when several agents share
+// the skill. This owns the agent_skill_links read that the evaluation
+// composition root previously issued as raw SQL from api/wiring.
+func (r *PgAgentRepo) FindAgentBySkill(ctx context.Context, skillID string) (string, bool, error) {
+	var agentID string
+	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT agent_id FROM agent_skill_links WHERE skill_id = $1 ORDER BY agent_id LIMIT 1`,
+			skillID,
+		).Scan(&agentID)
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return agentID, true, nil
+}

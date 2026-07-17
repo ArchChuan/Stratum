@@ -26,6 +26,9 @@ jobs:
       - name: Test arch guard checker
         run: bash scripts/quality/arch-guard-test.sh
 
+      - name: Enforce wiring raw-SQL guard
+        run: bash scripts/quality/arch-guard.sh api/wiring/*.go
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

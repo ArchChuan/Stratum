@@ -22,6 +22,15 @@ type AgentRepo interface {
 	Update(ctx context.Context, cfg *domain.AgentConfig) error
 }
 
+// AgentSkillBinding resolves which agent is wired to a given skill through the
+// agent_skill_links relation. It is a focused read port (interface
+// segregation) so a consumer needing only the skill→agent lookup — e.g. the
+// evaluation composition root running a skill scenario through its owning
+// agent — does not have to depend on the full AgentRepo surface.
+type AgentSkillBinding interface {
+	FindAgentBySkill(ctx context.Context, skillID string) (agentID string, found bool, err error)
+}
+
 // ExecutionRepo persists agent execution history in the tenant schema.
 type ExecutionRepo interface {
 	Insert(ctx context.Context, r domain.ExecutionRecord) error
