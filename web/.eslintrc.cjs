@@ -159,7 +159,40 @@ module.exports = {
       },
     ],
     'no-console': ['error', { allow: ['warn', 'error'] }],
+    // 禁用原生 alert/confirm/prompt —— 用 Modal.confirm / message
+    'no-alert': 'error',
+    // 禁裸 fetch —— 统一走 services 层 axios 实例
+    'no-restricted-globals': [
+      'error',
+      { name: 'fetch', message: '禁止裸 fetch；统一走 services/client 的 axios 实例（SSE 流式例外见 overrides）' },
+    ],
+    // Token 禁存 localStorage —— 用 httpOnly cookie 或内存 Context
+    'no-restricted-properties': [
+      'error',
+      {
+        object: 'localStorage',
+        property: 'setItem',
+        message: 'Token 禁止存 localStorage；用 httpOnly cookie 或内存 Context',
+      },
+      {
+        object: 'localStorage',
+        property: 'getItem',
+        message: 'Token 禁止存 localStorage；用 httpOnly cookie 或内存 Context',
+      },
+    ],
   },
+  overrides: [
+    {
+      // SSE 流式必须用原生 fetch（axios 不支持 ReadableStream）；仅此文件放行
+      files: ['src/services/client.ts'],
+      rules: { 'no-restricted-globals': 'off' },
+    },
+    {
+      // 测试文件断言"不使用 localStorage"，需引用 localStorage API
+      files: ['**/*.test.ts', '**/*.test.tsx'],
+      rules: { 'no-restricted-properties': 'off' },
+    },
+  ],
   ignorePatterns: [
     'dist',
     'node_modules',

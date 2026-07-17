@@ -20,9 +20,16 @@ linters:
     # style / quality
     - revive
     - gocritic
+    - forbidigo
     # architecture
     - depguard
   settings:
+    forbidigo:
+      # 日志红线：禁止 fmt.Print* 直写 stdout，必须走 observability.Logger（Zap）。
+      # cmd/ 启动横幅与 _test.go 由 exclusions 放行。
+      forbid:
+        - pattern: '^fmt\.Print(f|ln)?$'
+          msg: "禁止 fmt.Print*；使用 observability.NewLogger(env) 的 Zap logger"
     depguard:
       rules:
         application-no-infra:
@@ -127,6 +134,12 @@ linters:
           - gocritic
           - noctx
           - depguard
+          - forbidigo
+
+      # cmd/ 入口：logger 初始化前的启动横幅直写 stdout，放行
+      - path: 'cmd/'
+        linters:
+          - forbidigo
 
       # defer Close/Sync is idiomatic Go — error not actionable at call site
       - text: 'Error return value of `.*\.(Close|Sync|Stop)` is not checked'
