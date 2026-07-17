@@ -56,4 +56,9 @@ func TestHistorySegmentValidation(t *testing.T) {
 	if err := valid.Validate(); err == nil {
 		t.Fatal("missing idempotency key must be rejected")
 	}
+	valid.AggregationKey = "key"
+	valid.SourceIDs = []string{"m1", ""}
+	if err := valid.Validate(); err == nil {
+		t.Fatal("blank source ID must be rejected")
+	}
 }

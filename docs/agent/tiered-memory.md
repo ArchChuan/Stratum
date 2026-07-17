@@ -51,7 +51,7 @@ source references and expiry metadata are not injected.
 `memory_summaries` keeps legacy conversation summary rows compatible and adds
 nullable History metadata. History rows carry user/agent scope, one of
 `recent_months`, `earlier_context`, or `long_term_background`, period bounds,
-only the first/last source IDs, importance, confidence, status, timestamps, and
+first/last boundaries plus exact source IDs, importance, confidence, status, timestamps, and
 a deterministic aggregation key. They do not copy raw source messages or secret
 payloads. The partial unique aggregation-key index makes concurrent or retried
 batches idempotent while leaving legacy summary rows unaffected.
@@ -64,7 +64,7 @@ or write error leaves the source window eligible for a later pass; maintenance
 and fact archival still run independently, and no failure enters the chat path.
 
 Recent segments older than 90 days promote to earlier context; earlier segments
-older than 365 days promote to long-term background. Recent and earlier tiers are capped at 12 active segments per user/agent scope.
+older than 365 days promote to long-term background. Recent and earlier tiers are capped at 12 active segments per conversation/user/agent scope.
 The repository returns one bounded overflow group with full summaries; the worker
 calls the tenant compressor outside a database transaction. It then atomically
 inserts or confirms an idempotent next-tier replacement whose key is derived from

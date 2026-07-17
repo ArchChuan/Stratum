@@ -17,10 +17,11 @@ const historyBatchQuery = `
 		SELECT e.conversation_id, e.user_id, COALESCE(e.agent_id, '') AS agent_id, e.scope
 		FROM memory_entries e
 		WHERE e.enriched_at IS NOT NULL AND e.conversation_id IS NOT NULL
-		  AND e.created_at > COALESCE((SELECT MAX(s.period_end) FROM memory_summaries s
+		  AND NOT EXISTS (SELECT 1 FROM memory_summaries s
 			WHERE s.user_id=e.user_id AND s.agent_id=COALESCE(e.agent_id, '') AND s.scope=e.scope
-			  AND s.conversation_id=e.conversation_id
-			  AND s.status='active' AND s.aggregation_key IS NOT NULL), '1970-01-01')
+			  AND s.conversation_id=e.conversation_id AND s.status='active'
+			  AND ((s.source_ids IS NULL AND e.created_at >= s.period_start AND e.created_at <= s.period_end)
+			    OR (s.source_ids IS NOT NULL AND e.id = ANY(s.source_ids))))
 		GROUP BY e.conversation_id, e.user_id, COALESCE(e.agent_id, ''), e.scope
 		HAVING COUNT(*) >= $1
 		ORDER BY MIN(e.created_at) ASC LIMIT 1
@@ -29,16 +30,17 @@ const historyBatchQuery = `
 	       e.id::text, e.content, e.created_at
 	FROM memory_entries e JOIN eligible x ON x.conversation_id=e.conversation_id
 	 AND x.user_id=e.user_id AND x.agent_id=COALESCE(e.agent_id, '') AND x.scope=e.scope
-	WHERE e.created_at > COALESCE((SELECT MAX(s.period_end) FROM memory_summaries s
+	WHERE e.enriched_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM memory_summaries s
 		WHERE s.user_id=e.user_id AND s.agent_id=COALESCE(e.agent_id, '') AND s.scope=e.scope
-			  AND s.conversation_id=e.conversation_id
-		  AND s.status='active' AND s.aggregation_key IS NOT NULL), '1970-01-01')
-	ORDER BY created_at ASC LIMIT $2`
+			  AND s.conversation_id=e.conversation_id AND s.status='active'
+			  AND ((s.source_ids IS NULL AND e.created_at >= s.period_start AND e.created_at <= s.period_end)
+			    OR (s.source_ids IS NOT NULL AND e.id = ANY(s.source_ids))))
+	ORDER BY e.created_at ASC, e.id ASC LIMIT $2`
 
 const historyUpsertQuery = `
 	INSERT INTO memory_summaries (conversation_id,user_id,agent_id,scope,summary,covered_until,token_count,
-		tier,period_start,period_end,source_start,source_end,aggregation_key,importance,confidence,status,updated_at)
-	VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())
+		tier,period_start,period_end,source_start,source_end,aggregation_key,importance,confidence,status,source_ids,updated_at)
+	VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::text[]::uuid[],NOW())
 	ON CONFLICT (aggregation_key) WHERE aggregation_key IS NOT NULL DO NOTHING`
 
 const historyPromotionQuery = `UPDATE memory_summaries SET tier=$3, updated_at=NOW()
@@ -47,29 +49,30 @@ const historyPromotionQuery = `UPDATE memory_summaries SET tier=$3, updated_at=N
 const historyOverflowQuery = `
 	WITH ranked AS (
 		SELECT *, row_number() OVER (
-			PARTITION BY user_id,agent_id,scope,tier
+			PARTITION BY conversation_id,user_id,agent_id,scope,tier
 			ORDER BY importance DESC,confidence DESC,period_end DESC
 		) rn, CASE tier WHEN 'recent_months' THEN $1 WHEN 'earlier_context' THEN $2 END max_segments
 		FROM memory_summaries
 		WHERE tier IN ('recent_months','earlier_context') AND status='active' AND aggregation_key IS NOT NULL
+		  AND source_ids IS NOT NULL
 	), groups AS (
-		SELECT user_id,agent_id,scope,tier,MIN(period_start) oldest
+		SELECT conversation_id,user_id,agent_id,scope,tier,MIN(period_start) oldest
 		FROM ranked WHERE rn > max_segments
-		GROUP BY user_id,agent_id,scope,tier
+		GROUP BY conversation_id,user_id,agent_id,scope,tier
 	), chosen AS (
-		SELECT user_id,agent_id,scope,tier FROM groups ORDER BY oldest LIMIT 1
+		SELECT conversation_id,user_id,agent_id,scope,tier FROM groups ORDER BY oldest LIMIT 1
 	)
 	SELECT r.id::text,r.conversation_id::text,r.user_id,r.agent_id,r.scope,r.tier,r.summary,
-		r.period_start,r.period_end,r.source_start,r.source_end,r.importance,r.confidence
-	FROM ranked r JOIN chosen g USING (user_id,agent_id,scope,tier)
+		r.period_start,r.period_end,r.source_start,r.source_end,r.source_ids,r.importance,r.confidence
+	FROM ranked r JOIN chosen g USING (conversation_id,user_id,agent_id,scope,tier)
 	WHERE r.rn > r.max_segments
 	ORDER BY r.period_start,r.id LIMIT $3`
 
 const historyReplacementQuery = `
 	WITH inserted AS (
 		INSERT INTO memory_summaries (conversation_id,user_id,agent_id,scope,summary,covered_until,token_count,
-			tier,period_start,period_end,source_start,source_end,aggregation_key,importance,confidence,status,updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())
+			tier,period_start,period_end,source_start,source_end,aggregation_key,importance,confidence,status,source_ids,updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::text[]::uuid[],NOW())
 		ON CONFLICT (aggregation_key) WHERE aggregation_key IS NOT NULL DO NOTHING
 		RETURNING aggregation_key
 	), present AS (
@@ -78,7 +81,7 @@ const historyReplacementQuery = `
 		SELECT aggregation_key FROM memory_summaries WHERE aggregation_key=$12 AND status='active'
 	)
 	UPDATE memory_summaries SET status='archived',updated_at=NOW()
-	WHERE status='active' AND id::text = ANY($16::text[])
+	WHERE status='active' AND id::text = ANY($17::text[])
 	  AND EXISTS (SELECT 1 FROM present)`
 
 const archiveColdFactsQuery = `UPDATE memory_facts SET status='archived', updated_at=NOW()
@@ -130,7 +133,7 @@ func (r *HistoryRepo) Upsert(ctx context.Context, tenantID string, h *domain.His
 		return err
 	}
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, historyUpsertQuery, h.ConversationID, h.UserID, h.AgentID, string(h.Scope), h.Summary, h.PeriodEnd, h.Tier, h.PeriodStart, h.PeriodEnd, h.SourceStart, h.SourceEnd, h.AggregationKey, h.Importance, h.Confidence, h.Status)
+		_, err := tx.Exec(ctx, historyUpsertQuery, h.ConversationID, h.UserID, h.AgentID, string(h.Scope), h.Summary, h.PeriodEnd, h.Tier, h.PeriodStart, h.PeriodEnd, h.SourceStart, h.SourceEnd, h.AggregationKey, h.Importance, h.Confidence, h.Status, h.SourceIDs)
 		return err
 	})
 }
@@ -147,12 +150,12 @@ func (r *HistoryRepo) NextOverflow(ctx context.Context, tenantID string, recentM
 			var h domain.HistorySegment
 			var scope string
 			if err := rows.Scan(&h.ID, &h.ConversationID, &h.UserID, &h.AgentID, &scope, &h.Tier, &h.Summary,
-				&h.PeriodStart, &h.PeriodEnd, &h.SourceStart, &h.SourceEnd, &h.Importance, &h.Confidence); err != nil {
+				&h.PeriodStart, &h.PeriodEnd, &h.SourceStart, &h.SourceEnd, &h.SourceIDs, &h.Importance, &h.Confidence); err != nil {
 				return err
 			}
 			h.Scope = domain.Scope(scope)
 			if group == nil {
-				group = &domain.HistoryOverflowGroup{UserID: h.UserID, AgentID: h.AgentID, Scope: h.Scope, Tier: h.Tier}
+				group = &domain.HistoryOverflowGroup{ConversationID: h.ConversationID, UserID: h.UserID, AgentID: h.AgentID, Scope: h.Scope, Tier: h.Tier}
 			}
 			group.Sources = append(group.Sources, h)
 		}
@@ -171,7 +174,7 @@ func (r *HistoryRepo) ReplaceOverflow(ctx context.Context, tenantID string, h *d
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, historyReplacementQuery, h.ConversationID, h.UserID, h.AgentID, string(h.Scope), h.Summary,
 			h.PeriodEnd, h.Tier, h.PeriodStart, h.PeriodEnd, h.SourceStart, h.SourceEnd, h.AggregationKey,
-			h.Importance, h.Confidence, h.Status, sourceIDs)
+			h.Importance, h.Confidence, h.Status, h.SourceIDs, sourceIDs)
 		return err
 	})
 }

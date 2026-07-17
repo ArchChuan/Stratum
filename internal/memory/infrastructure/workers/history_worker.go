@@ -98,7 +98,11 @@ func (w *HistoryWorker) aggregateNext(ctx context.Context) bool {
 		return false
 	}
 	first, last := batch.Entries[0], batch.Entries[len(batch.Entries)-1]
-	h := &domain.HistorySegment{TenantID: w.tenantID, ConversationID: batch.ConversationID, UserID: batch.UserID, AgentID: batch.AgentID, Scope: batch.Scope, Tier: domain.HistoryTierRecent, Summary: strings.TrimSpace(summary), SourceStart: first.ID, SourceEnd: last.ID, PeriodStart: first.CreatedAt, PeriodEnd: last.CreatedAt, Importance: .5, Confidence: .5, Status: domain.HistoryStatusActive}
+	sourceIDs := make([]string, 0, len(batch.Entries))
+	for _, entry := range batch.Entries {
+		sourceIDs = append(sourceIDs, entry.ID)
+	}
+	h := &domain.HistorySegment{TenantID: w.tenantID, ConversationID: batch.ConversationID, UserID: batch.UserID, AgentID: batch.AgentID, Scope: batch.Scope, Tier: domain.HistoryTierRecent, Summary: strings.TrimSpace(summary), SourceStart: first.ID, SourceEnd: last.ID, SourceIDs: sourceIDs, PeriodStart: first.CreatedAt, PeriodEnd: last.CreatedAt, Importance: .5, Confidence: .5, Status: domain.HistoryStatusActive}
 	h.AggregationKey = domain.HistoryAggregationKey(h.UserID, h.AgentID, string(h.Scope), h.Tier, h.PeriodStart, h.PeriodEnd, h.SourceStart, h.SourceEnd)
 	if err := w.repo.Upsert(ctx, w.tenantID, h); err != nil {
 		w.logger.Warn("memory.history.upsert_failed", zap.Error(err))
@@ -118,12 +122,38 @@ func (w *HistoryWorker) compressNext(ctx context.Context) {
 	}
 	items := make([]string, 0, len(group.Sources))
 	sourceIDs := make([]string, 0, len(group.Sources))
+	underlyingIDs := make([]string, 0)
+	seenUnderlyingIDs := make(map[string]struct{})
 	importance, confidence := 0.0, 0.0
+	periodStart, periodEnd := group.Sources[0].PeriodStart, group.Sources[0].PeriodEnd
+	sourceStart, sourceEnd := group.Sources[0].SourceStart, group.Sources[0].SourceEnd
 	for _, source := range group.Sources {
+		if len(source.SourceIDs) == 0 {
+			w.logger.Warn("memory.history.missing_source_ids",
+				zap.String("history_id", source.ID),
+			)
+			return
+		}
 		items = append(items, source.Summary)
 		sourceIDs = append(sourceIDs, source.ID)
 		importance += source.Importance
 		confidence += source.Confidence
+		for _, id := range source.SourceIDs {
+			if id == "" {
+				continue
+			}
+			if _, exists := seenUnderlyingIDs[id]; exists {
+				continue
+			}
+			seenUnderlyingIDs[id] = struct{}{}
+			underlyingIDs = append(underlyingIDs, id)
+		}
+		if source.PeriodStart.Before(periodStart) || (source.PeriodStart.Equal(periodStart) && source.SourceStart < sourceStart) {
+			periodStart, sourceStart = source.PeriodStart, source.SourceStart
+		}
+		if source.PeriodEnd.After(periodEnd) || (source.PeriodEnd.Equal(periodEnd) && source.SourceEnd > sourceEnd) {
+			periodEnd, sourceEnd = source.PeriodEnd, source.SourceEnd
+		}
 	}
 	callCtx, cancel := context.WithTimeout(ctx, constants.HistoryOperationTimeout)
 	summary, compressErr := w.compressor.CompressHistory(callCtx, items)
@@ -132,11 +162,11 @@ func (w *HistoryWorker) compressNext(ctx context.Context) {
 		w.logger.Warn("memory.history.compress_failed", zap.Error(compressErr))
 		return
 	}
-	first, last := group.Sources[0], group.Sources[len(group.Sources)-1]
 	replacement := &domain.HistorySegment{
-		TenantID: w.tenantID, ConversationID: first.ConversationID, UserID: group.UserID, AgentID: group.AgentID,
+		TenantID: w.tenantID, ConversationID: group.ConversationID, UserID: group.UserID, AgentID: group.AgentID,
 		Scope: group.Scope, Tier: domain.NextHistoryTier(group.Tier), Summary: strings.TrimSpace(summary),
-		SourceStart: first.SourceStart, SourceEnd: last.SourceEnd, PeriodStart: first.PeriodStart, PeriodEnd: last.PeriodEnd,
+		SourceStart: sourceStart, SourceEnd: sourceEnd, PeriodStart: periodStart, PeriodEnd: periodEnd,
+		SourceIDs:  underlyingIDs,
 		Importance: importance / float64(len(group.Sources)), Confidence: confidence / float64(len(group.Sources)), Status: domain.HistoryStatusActive,
 	}
 	replacement.AggregationKey = domain.HistoryCompressionKey(replacement.UserID, replacement.AgentID, string(replacement.Scope), replacement.Tier, sourceIDs)

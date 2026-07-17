@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -20,15 +21,22 @@ type memoryFactSourceDocument struct {
 	Source         string  `json:"source"`
 }
 
-// MilvusPortAdapter adapts *storagemilvus.VectorStore to memport.VectorStore.
-type MilvusPortAdapter struct{ vs *storagemilvus.VectorStore }
+type milvusStore interface {
+	CreateCollectionWithDim(context.Context, string, int) error
+	Insert(context.Context, string, []storagemilvus.DocumentChunk, string) error
+	DeleteByPrimaryIDs(context.Context, string, []string) error
+	DeleteByFilter(context.Context, string, string) error
+}
 
-func NewMilvusPortAdapter(vs *storagemilvus.VectorStore) *MilvusPortAdapter {
+// MilvusPortAdapter adapts *storagemilvus.VectorStore to memport.VectorStore.
+type MilvusPortAdapter struct{ vs milvusStore }
+
+func NewMilvusPortAdapter(vs milvusStore) *MilvusPortAdapter {
 	return &MilvusPortAdapter{vs: vs}
 }
 
 func (a *MilvusPortAdapter) Delete(ctx context.Context, collectionName string, ids []string) error {
-	return a.vs.DeleteByDocumentIDs(ctx, collectionName, ids)
+	return a.vs.DeleteByPrimaryIDs(ctx, collectionName, ids)
 }
 
 func (a *MilvusPortAdapter) CreateCollection(ctx context.Context, collectionName string, dim int) error {
@@ -154,11 +162,21 @@ func (a *MilvusPortAdapter) Search(_ context.Context, _ string, _ []float32, _ i
 }
 
 func (a *MilvusPortAdapter) DeleteAllByUser(ctx context.Context, tenantID, userID string) error {
-	collectionName := "memory_" + strings.ReplaceAll(tenantID, "-", "_")
-	return a.vs.DeleteByFilter(ctx, collectionName, fmt.Sprintf(`user_id == "%s"`, userID))
+	return a.deleteBothMemoryCollections(ctx, tenantID, "user_id", userID)
 }
 
 func (a *MilvusPortAdapter) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
-	collectionName := "memory_" + strings.ReplaceAll(tenantID, "-", "_")
-	return a.vs.DeleteByFilter(ctx, collectionName, fmt.Sprintf(`agent_id == "%s"`, agentID))
+	return a.deleteBothMemoryCollections(ctx, tenantID, "agent_id", agentID)
+}
+
+func (a *MilvusPortAdapter) deleteBothMemoryCollections(ctx context.Context, tenantID, field, value string) error {
+	normalized := strings.ReplaceAll(tenantID, "-", "_")
+	expr := fmt.Sprintf("%s == %q", field, value)
+	var errs []error
+	for _, collection := range []string{"memory_facts_" + normalized, "memory_" + normalized} {
+		if err := a.vs.DeleteByFilter(ctx, collection, expr); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", collection, err))
+		}
+	}
+	return errors.Join(errs...)
 }

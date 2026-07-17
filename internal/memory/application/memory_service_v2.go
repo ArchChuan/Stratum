@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -92,29 +93,30 @@ func (s *MemoryService) ClearUserMemories(ctx context.Context, req *ClearUserMem
 		zap.String("tenant_id", req.TenantID),
 		zap.String("user_id", req.UserID),
 	)
-	_, err := s.factRepo.DeleteAllByUser(ctx, req.TenantID, req.UserID)
-	if err != nil {
-		return fmt.Errorf("clear user memories: %w", err)
+	var cleanupErrs []error
+	if _, err := s.factRepo.DeleteAllByUser(ctx, req.TenantID, req.UserID); err != nil {
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("clear user facts: %w", err))
 	}
 
 	if s.vectorStore != nil {
 		if err := s.vectorStore.DeleteAllByUser(ctx, req.TenantID, req.UserID); err != nil {
-			s.logger.Warn("memory.clear_user: vector delete partial failure",
-				zap.String("tenant_id", req.TenantID),
-				zap.String("user_id", req.UserID),
-				zap.Error(err),
-			)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("clear user vectors: %w", err))
 		}
 	}
 
 	if s.memoryRepo != nil {
 		if err := s.memoryRepo.DeleteAllByUser(ctx, req.TenantID, req.UserID); err != nil {
-			return fmt.Errorf("clear memory entries: %w", err)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("clear user memory entries: %w", err))
 		}
 	}
 
-	if err := s.entityRepo.DeleteAllByUser(ctx, req.TenantID, req.UserID); err != nil {
-		return fmt.Errorf("clear entities: %w", err)
+	if s.entityRepo != nil {
+		if err := s.entityRepo.DeleteAllByUser(ctx, req.TenantID, req.UserID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("clear user entities: %w", err))
+		}
+	}
+	if err := errors.Join(cleanupErrs...); err != nil {
+		return err
 	}
 
 	s.logger.Info("memory.clear_user: done",
@@ -130,37 +132,27 @@ func (s *MemoryService) ClearAgentMemories(ctx context.Context, tenantID, agentI
 		zap.String("tenant_id", tenantID),
 		zap.String("agent_id", agentID),
 	)
-	factIDs, err := s.factRepo.DeleteAllByAgent(ctx, tenantID, agentID)
-	if err != nil {
-		return fmt.Errorf("clear agent memories: %w", err)
+	var cleanupErrs []error
+	if _, err := s.factRepo.DeleteAllByAgent(ctx, tenantID, agentID); err != nil {
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("clear agent facts: %w", err))
 	}
-	if len(factIDs) > 0 && s.vectorStore != nil {
-		collectionName := fmt.Sprintf("memory_facts_%s", strings.ReplaceAll(tenantID, "-", "_"))
-		if err := s.vectorStore.Delete(ctx, collectionName, factIDs); err != nil {
-			s.logger.Warn("memory.clear_agent: vector delete partial failure",
-				zap.String("tenant_id", tenantID),
-				zap.String("agent_id", agentID),
-				zap.Int("fact_count", len(factIDs)),
-				zap.Error(err),
-			)
+	if s.vectorStore != nil {
+		if err := s.vectorStore.DeleteAllByAgent(ctx, tenantID, agentID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("clear agent vectors: %w", err))
 		}
 	}
 	if s.memoryRepo != nil {
 		if err := s.memoryRepo.DeleteAllByAgent(ctx, tenantID, agentID); err != nil {
-			return fmt.Errorf("clear agent memory entries: %w", err)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("clear agent memory entries: %w", err))
 		}
 	}
-	if s.vectorStore != nil {
-		if err := s.vectorStore.DeleteAllByAgent(ctx, tenantID, agentID); err != nil {
-			s.logger.Warn("memory.clear_agent: memory vector delete partial failure",
-				zap.String("tenant_id", tenantID),
-				zap.String("agent_id", agentID),
-				zap.Error(err),
-			)
+	if s.entityRepo != nil {
+		if err := s.entityRepo.DeleteAllByAgent(ctx, tenantID, agentID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("clear agent entities: %w", err))
 		}
 	}
-	if err := s.entityRepo.DeleteAllByAgent(ctx, tenantID, agentID); err != nil {
-		return fmt.Errorf("clear agent entities: %w", err)
+	if err := errors.Join(cleanupErrs...); err != nil {
+		return err
 	}
 	s.logger.Info("memory.clear_agent: done",
 		zap.String("tenant_id", tenantID),
@@ -315,15 +307,14 @@ type ForgetMemoryRequest struct {
 
 // ForgetMemory deletes a single fact by ID.
 func (s *MemoryService) ForgetMemory(ctx context.Context, req *ForgetMemoryRequest) error {
+	if s.vectorStore != nil {
+		collectionName := fmt.Sprintf("memory_facts_%s", strings.ReplaceAll(req.TenantID, "-", "_"))
+		if err := s.vectorStore.Delete(ctx, collectionName, []string{req.FactID}); err != nil {
+			return fmt.Errorf("forget memory vector replica: %w", err)
+		}
+	}
 	if err := s.factRepo.Delete(ctx, req.TenantID, req.FactID); err != nil {
 		return err
-	}
-	if s.vectorStore == nil {
-		return nil
-	}
-	collectionName := fmt.Sprintf("memory_facts_%s", strings.ReplaceAll(req.TenantID, "-", "_"))
-	if err := s.vectorStore.Delete(ctx, collectionName, []string{req.FactID}); err != nil {
-		return fmt.Errorf("forget memory vector replica: %w", err)
 	}
 	return nil
 }

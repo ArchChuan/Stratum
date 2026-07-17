@@ -6,17 +6,50 @@ import (
 )
 
 func TestHistoryQueriesEnforceThresholdIdempotencyAndTenantScope(t *testing.T) {
-	if got := strings.Count(historyBatchQuery, "s.conversation_id=e.conversation_id"); got != 2 {
-		t.Fatalf("both History watermarks must be conversation-scoped, got %d", got)
-	}
-	for _, want := range []string{"HAVING COUNT(*) >= $1", "ORDER BY created_at ASC", "LIMIT $2"} {
+	for _, want := range []string{
+		"HAVING COUNT(*) >= $1",
+		"NOT EXISTS",
+		"e.id = ANY(s.source_ids)",
+		"s.conversation_id=e.conversation_id",
+		"s.user_id=e.user_id",
+		"s.agent_id=COALESCE(e.agent_id, '')",
+		"s.scope=e.scope",
+		"s.status='active'",
+		"ORDER BY e.created_at ASC, e.id ASC",
+		"LIMIT $2",
+	} {
 		if !strings.Contains(historyBatchQuery, want) {
 			t.Fatalf("batch query missing %q", want)
 		}
 	}
-	for _, want := range []string{"ON CONFLICT (aggregation_key)", "DO NOTHING"} {
+	if strings.Contains(historyBatchQuery, "MAX(s.period_end)") || strings.Contains(historyBatchQuery, "e.created_at > COALESCE") {
+		t.Fatal("batch query must not use a timestamp watermark")
+	}
+	for _, want := range []string{"source_ids", "ON CONFLICT (aggregation_key)", "DO NOTHING"} {
 		if !strings.Contains(historyUpsertQuery, want) {
 			t.Fatalf("upsert query missing %q", want)
+		}
+	}
+}
+
+func TestHistoryBatchQueryExcludesLegacyPeriodsAndExactModernSources(t *testing.T) {
+	for _, want := range []string{
+		"s.source_ids IS NULL",
+		"e.created_at >= s.period_start",
+		"e.created_at <= s.period_end",
+		"s.source_ids IS NOT NULL",
+		"e.id = ANY(s.source_ids)",
+	} {
+		if got := strings.Count(historyBatchQuery, want); got != 2 {
+			t.Fatalf("batch query must contain %q in eligibility and selection branches, got %d", want, got)
+		}
+	}
+}
+
+func TestHistoryInsertQueriesCastSourceIDsToUUIDArray(t *testing.T) {
+	for name, query := range map[string]string{"upsert": historyUpsertQuery, "replacement": historyReplacementQuery} {
+		if !strings.Contains(query, "$16::text[]::uuid[]") {
+			t.Fatalf("%s query must explicitly cast source IDs to uuid[]", name)
 		}
 	}
 }
@@ -36,7 +69,10 @@ func TestHistoryLifecycleQueriesPromoteAndProtectFacts(t *testing.T) {
 
 func TestHistoryOverflowQueryReturnsOneBoundedTenantLocalGroupWithoutTruncation(t *testing.T) {
 	for _, want := range []string{
-		"PARTITION BY user_id,agent_id,scope,tier",
+		"PARTITION BY conversation_id,user_id,agent_id,scope,tier",
+		"GROUP BY conversation_id,user_id,agent_id,scope,tier",
+		"SELECT conversation_id,user_id,agent_id,scope,tier FROM groups",
+		"USING (conversation_id,user_id,agent_id,scope,tier)",
 		"rn > max_segments",
 		"LIMIT $3",
 		"id::text",
@@ -45,10 +81,14 @@ func TestHistoryOverflowQueryReturnsOneBoundedTenantLocalGroupWithoutTruncation(
 		"period_end",
 		"source_start",
 		"source_end",
+		"source_ids",
 	} {
 		if !strings.Contains(historyOverflowQuery, want) {
 			t.Fatalf("overflow query missing %q", want)
 		}
+	}
+	if strings.Contains(historyOverflowQuery, "PARTITION BY user_id,agent_id,scope,tier") {
+		t.Fatal("overflow ranking must not combine conversations")
 	}
 	for _, forbidden := range []string{"LEFT(", "string_agg(summary"} {
 		if strings.Contains(historyOverflowQuery, forbidden) {
@@ -57,15 +97,22 @@ func TestHistoryOverflowQueryReturnsOneBoundedTenantLocalGroupWithoutTruncation(
 	}
 }
 
+func TestHistoryOverflowQueryExcludesRowsWithoutExactSourceIDs(t *testing.T) {
+	if !strings.Contains(historyOverflowQuery, "source_ids IS NOT NULL") {
+		t.Fatal("overflow ranking must exclude legacy rows without exact source IDs")
+	}
+}
+
 func TestHistoryReplacementQueryArchivesExactSourcesOnlyAfterReplacementExists(t *testing.T) {
 	for _, want := range []string{
 		"ON CONFLICT (aggregation_key)",
 		"WHERE aggregation_key IS NOT NULL",
 		"status='archived'",
-		"id::text = ANY($16::text[])",
+		"id::text = ANY($17::text[])",
 		"SELECT aggregation_key FROM inserted",
 		"SELECT aggregation_key FROM memory_summaries WHERE aggregation_key=$12 AND status='active'",
 		"EXISTS (SELECT 1 FROM present)",
+		"source_ids",
 	} {
 		if !strings.Contains(historyReplacementQuery, want) {
 			t.Fatalf("replacement query missing %q", want)

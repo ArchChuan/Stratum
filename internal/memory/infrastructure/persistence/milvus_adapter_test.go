@@ -1,12 +1,88 @@
 package persistence
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
+	storagemilvus "github.com/byteBuilderX/stratum/pkg/storage/milvus"
 )
+
+type fakeMilvusStore struct {
+	primaryCollection string
+	primaryIDs        []string
+	filterCalls       []string
+	filterErrors      []error
+}
+
+func (f *fakeMilvusStore) CreateCollectionWithDim(context.Context, string, int) error { return nil }
+func (f *fakeMilvusStore) Insert(context.Context, string, []storagemilvus.DocumentChunk, string) error {
+	return nil
+}
+
+func (f *fakeMilvusStore) DeleteByPrimaryIDs(_ context.Context, collection string, ids []string) error {
+	f.primaryCollection, f.primaryIDs = collection, ids
+	return nil
+}
+
+func (f *fakeMilvusStore) DeleteByFilter(_ context.Context, collection, expr string) error {
+	f.filterCalls = append(f.filterCalls, collection+":"+expr)
+	if len(f.filterErrors) == 0 {
+		return nil
+	}
+	err := f.filterErrors[0]
+	f.filterErrors = f.filterErrors[1:]
+	return err
+}
+
+func TestMilvusPortAdapterDeleteUsesPrimaryIDs(t *testing.T) {
+	store := &fakeMilvusStore{}
+	adapter := NewMilvusPortAdapter(store)
+	ids := []string{"fact-1", "fact-2"}
+
+	if err := adapter.Delete(context.Background(), "memory_facts_tenant_1", ids); err != nil {
+		t.Fatal(err)
+	}
+	if store.primaryCollection != "memory_facts_tenant_1" || strings.Join(store.primaryIDs, ",") != "fact-1,fact-2" {
+		t.Fatalf("primary delete = %q %v", store.primaryCollection, store.primaryIDs)
+	}
+}
+
+func TestMilvusPortAdapterDeleteAllByUserCleansBothCollectionsAndAggregatesErrors(t *testing.T) {
+	errFacts, errLegacy := errors.New("facts failed"), errors.New("legacy failed")
+	store := &fakeMilvusStore{filterErrors: []error{errFacts, errLegacy}}
+	adapter := NewMilvusPortAdapter(store)
+
+	err := adapter.DeleteAllByUser(context.Background(), "tenant-1", `user-"1`)
+	if !errors.Is(err, errFacts) || !errors.Is(err, errLegacy) {
+		t.Fatalf("error = %v, want both collection errors", err)
+	}
+	want := []string{
+		`memory_facts_tenant_1:user_id == "user-\"1"`,
+		`memory_tenant_1:user_id == "user-\"1"`,
+	}
+	if strings.Join(store.filterCalls, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("filter calls = %v, want %v", store.filterCalls, want)
+	}
+}
+
+func TestMilvusPortAdapterDeleteAllByAgentCleansBothCollections(t *testing.T) {
+	store := &fakeMilvusStore{}
+	adapter := NewMilvusPortAdapter(store)
+	if err := adapter.DeleteAllByAgent(context.Background(), "tenant-1", "agent-1"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`memory_facts_tenant_1:agent_id == "agent-1"`,
+		`memory_tenant_1:agent_id == "agent-1"`,
+	}
+	if strings.Join(store.filterCalls, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("filter calls = %v, want %v", store.filterCalls, want)
+	}
+}
 
 func TestMemoryFactDocumentChunkPreservesWhitelistedMetadata(t *testing.T) {
 	doc := &memport.VectorDoc{

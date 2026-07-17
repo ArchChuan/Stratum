@@ -595,6 +595,7 @@ CREATE TABLE IF NOT EXISTS memory_summaries (
     period_end TIMESTAMPTZ,
     source_start TEXT NOT NULL DEFAULT '',
     source_end TEXT NOT NULL DEFAULT '',
+    source_ids UUID[],
     aggregation_key TEXT,
     importance FLOAT8 NOT NULL DEFAULT 0.5,
     confidence FLOAT8 NOT NULL DEFAULT 0.5,
@@ -608,6 +609,7 @@ ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS period_start TIMESTAMPTZ;
 ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS period_end TIMESTAMPTZ;
 ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS source_start TEXT NOT NULL DEFAULT '';
 ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS source_end TEXT NOT NULL DEFAULT '';
+ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS source_ids UUID[];
 ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS aggregation_key TEXT;
 ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS importance FLOAT8 NOT NULL DEFAULT 0.5;
 ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS confidence FLOAT8 NOT NULL DEFAULT 0.5;

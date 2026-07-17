@@ -74,6 +74,109 @@ func TestMemoryService_GetUserMemoryPreservesNotFound(t *testing.T) {
 	assert.True(t, errors.Is(err, domain.ErrFactNotFound))
 }
 
+func TestMemoryServiceClearUserMemoriesReturnsVectorCleanupError(t *testing.T) {
+	ctx := context.Background()
+	facts, vectors := new(MockFactRepo), new(MockVectorStore)
+	svc := NewMemoryService(facts, nil, nil, vectors, nil, nil, nil, nil)
+	wantErr := errors.New("milvus unavailable")
+	facts.On("DeleteAllByUser", ctx, "tenant-1", "user-1").Return([]string{"fact-1"}, nil).Once()
+	vectors.On("DeleteAllByUser", ctx, "tenant-1", "user-1").Return(wantErr).Once()
+
+	err := svc.ClearUserMemories(ctx, &ClearUserMemoriesRequest{TenantID: "tenant-1", UserID: "user-1"})
+	assert.ErrorIs(t, err, wantErr)
+}
+
+func TestMemoryServiceClearAgentMemoriesUsesBulkVectorCleanupAndReturnsItsError(t *testing.T) {
+	ctx := context.Background()
+	facts, vectors := new(MockFactRepo), new(MockVectorStore)
+	svc := NewMemoryService(facts, nil, nil, vectors, nil, nil, nil, nil)
+	wantErr := errors.New("milvus unavailable")
+	facts.On("DeleteAllByAgent", ctx, "tenant-1", "agent-1").Return([]string{"fact-1"}, nil).Once()
+	vectors.On("DeleteAllByAgent", ctx, "tenant-1", "agent-1").Return(wantErr).Once()
+
+	err := svc.ClearAgentMemories(ctx, "tenant-1", "agent-1")
+	assert.ErrorIs(t, err, wantErr)
+	vectors.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestMemoryServiceClearUserMemoriesAttemptsEveryStageAndJoinsErrors(t *testing.T) {
+	ctx := context.Background()
+	facts, vectors, memories, entities := new(MockFactRepo), new(MockVectorStore), new(cleanupMemoryRepo), new(MockEntityRepo)
+	svc := NewMemoryService(facts, entities, nil, vectors, nil, nil, nil, nil)
+	svc.SetMemoryRepo(memories)
+	factErr := errors.New("facts failed")
+	vectorErr := errors.New("vectors failed")
+	memoryErr := errors.New("entries failed")
+	entityErr := errors.New("entities failed")
+	facts.On("DeleteAllByUser", ctx, "tenant-1", "user-1").Return(nil, factErr).Once()
+	vectors.On("DeleteAllByUser", ctx, "tenant-1", "user-1").Return(vectorErr).Once()
+	memories.On("DeleteAllByUser", ctx, "tenant-1", "user-1").Return(memoryErr).Once()
+	entities.On("DeleteAllByUser", ctx, "tenant-1", "user-1").Return(entityErr).Once()
+
+	err := svc.ClearUserMemories(ctx, &ClearUserMemoriesRequest{TenantID: "tenant-1", UserID: "user-1"})
+	for _, want := range []error{factErr, vectorErr, memoryErr, entityErr} {
+		assert.ErrorIs(t, err, want)
+	}
+	for _, operation := range []string{"clear user facts", "clear user vectors", "clear user memory entries", "clear user entities"} {
+		assert.ErrorContains(t, err, operation)
+	}
+	facts.AssertExpectations(t)
+	vectors.AssertExpectations(t)
+	memories.AssertExpectations(t)
+	entities.AssertExpectations(t)
+}
+
+func TestMemoryServiceClearAgentMemoriesAttemptsEveryStageAndJoinsErrors(t *testing.T) {
+	ctx := context.Background()
+	facts, vectors, memories, entities := new(MockFactRepo), new(MockVectorStore), new(cleanupMemoryRepo), new(MockEntityRepo)
+	svc := NewMemoryService(facts, entities, nil, vectors, nil, nil, nil, nil)
+	svc.SetMemoryRepo(memories)
+	factErr := errors.New("facts failed")
+	vectorErr := errors.New("vectors failed")
+	memoryErr := errors.New("entries failed")
+	entityErr := errors.New("entities failed")
+	facts.On("DeleteAllByAgent", ctx, "tenant-1", "agent-1").Return(nil, factErr).Once()
+	vectors.On("DeleteAllByAgent", ctx, "tenant-1", "agent-1").Return(vectorErr).Once()
+	memories.On("DeleteAllByAgent", ctx, "tenant-1", "agent-1").Return(memoryErr).Once()
+	entities.On("DeleteAllByAgent", ctx, "tenant-1", "agent-1").Return(entityErr).Once()
+
+	err := svc.ClearAgentMemories(ctx, "tenant-1", "agent-1")
+	for _, want := range []error{factErr, vectorErr, memoryErr, entityErr} {
+		assert.ErrorIs(t, err, want)
+	}
+	for _, operation := range []string{"clear agent facts", "clear agent vectors", "clear agent memory entries", "clear agent entities"} {
+		assert.ErrorContains(t, err, operation)
+	}
+	facts.AssertExpectations(t)
+	vectors.AssertExpectations(t)
+	memories.AssertExpectations(t)
+	entities.AssertExpectations(t)
+}
+
+type cleanupMemoryRepo struct{ mock.Mock }
+
+func (m *cleanupMemoryRepo) Add(context.Context, *domain.MemoryEntry) error { return nil }
+func (m *cleanupMemoryRepo) Get(context.Context, string, string) (*domain.MemoryEntry, error) {
+	return nil, nil
+}
+func (m *cleanupMemoryRepo) Search(context.Context, string, string, string, int) ([]*domain.MemoryEntry, error) {
+	return nil, nil
+}
+func (m *cleanupMemoryRepo) Delete(context.Context, string, string) error       { return nil }
+func (m *cleanupMemoryRepo) ClearSession(context.Context, string, string) error { return nil }
+func (m *cleanupMemoryRepo) DeleteAllByUser(ctx context.Context, tenantID, userID string) error {
+	return m.Called(ctx, tenantID, userID).Error(0)
+}
+func (m *cleanupMemoryRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
+	return m.Called(ctx, tenantID, agentID).Error(0)
+}
+func (m *cleanupMemoryRepo) Stats(context.Context, string) (*domain.MemoryStats, error) {
+	return nil, nil
+}
+func (m *cleanupMemoryRepo) GetSummary(context.Context, string, string) (string, error) {
+	return "", nil
+}
+
 // Mock implementations for testing
 type MockFactRepo struct {
 	mock.Mock
@@ -386,4 +489,51 @@ func TestForgetMemoryDeletesFactVectorReplica(t *testing.T) {
 	assert.NoError(t, err)
 	factRepo.AssertExpectations(t)
 	vectorStore.AssertExpectations(t)
+}
+
+func TestForgetUserMemoryVectorFailurePreservesFactForOwnershipRetry(t *testing.T) {
+	ctx := context.Background()
+	factRepo := new(MockFactRepo)
+	vectorStore := new(MockVectorStore)
+	svc := NewMemoryService(factRepo, nil, nil, vectorStore, nil, nil, nil, nil)
+	req := &ForgetMemoryRequest{TenantID: "tenant-1", UserID: "user-1", FactID: "fact-1"}
+	wantErr := errors.New("milvus unavailable")
+	factRepo.On("GetByID", ctx, req.TenantID, req.FactID).Return(&domain.MemoryFact{
+		ID: req.FactID, UserID: req.UserID, Scope: domain.ScopeUser,
+	}, nil).Once()
+	vectorStore.On("Delete", ctx, "memory_facts_tenant_1", []string{req.FactID}).Return(wantErr).Once()
+
+	err := svc.ForgetUserMemory(ctx, req)
+
+	assert.ErrorIs(t, err, wantErr)
+	assert.ErrorContains(t, err, "forget memory vector replica")
+	factRepo.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestForgetMemoryFactFailureAfterVectorSuccessRemainsRetryable(t *testing.T) {
+	ctx := context.Background()
+	factRepo := new(MockFactRepo)
+	vectorStore := new(MockVectorStore)
+	svc := NewMemoryService(factRepo, nil, nil, vectorStore, nil, nil, nil, nil)
+	req := &ForgetMemoryRequest{TenantID: "tenant-1", FactID: "fact-1"}
+	wantErr := errors.New("postgres unavailable")
+	vectorStore.On("Delete", ctx, "memory_facts_tenant_1", []string{req.FactID}).Return(nil).Twice()
+	factRepo.On("Delete", ctx, req.TenantID, req.FactID).Return(wantErr).Once()
+	factRepo.On("Delete", ctx, req.TenantID, req.FactID).Return(nil).Once()
+
+	assert.ErrorIs(t, svc.ForgetMemory(ctx, req), wantErr)
+	assert.NoError(t, svc.ForgetMemory(ctx, req))
+	factRepo.AssertExpectations(t)
+	vectorStore.AssertExpectations(t)
+}
+
+func TestForgetMemoryWithoutVectorStoreDeletesFact(t *testing.T) {
+	ctx := context.Background()
+	factRepo := new(MockFactRepo)
+	svc := NewMemoryService(factRepo, nil, nil, nil, nil, nil, nil, nil)
+	req := &ForgetMemoryRequest{TenantID: "tenant-1", FactID: "fact-1"}
+	factRepo.On("Delete", ctx, req.TenantID, req.FactID).Return(nil).Once()
+
+	assert.NoError(t, svc.ForgetMemory(ctx, req))
+	factRepo.AssertExpectations(t)
 }

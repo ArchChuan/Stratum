@@ -27,6 +27,7 @@ type HistorySegment struct {
 	AggregationKey, Status                        string
 	PeriodStart, PeriodEnd, CreatedAt, UpdatedAt  time.Time
 	Importance, Confidence                        float64
+	SourceIDs                                     []string
 }
 
 type HistorySource struct {
@@ -42,9 +43,9 @@ type HistoryBatch struct {
 
 // HistoryOverflowGroup contains one tenant-local identity/tier group selected for compression.
 type HistoryOverflowGroup struct {
-	UserID, AgentID, Tier string
-	Scope                 Scope
-	Sources               []HistorySegment
+	ConversationID, UserID, AgentID, Tier string
+	Scope                                 Scope
+	Sources                               []HistorySegment
 }
 
 func (h HistorySegment) Validate() error {
@@ -56,6 +57,11 @@ func (h HistorySegment) Validate() error {
 		math.IsNaN(h.Importance) || h.Importance < 0 || h.Importance > 1 ||
 		math.IsNaN(h.Confidence) || h.Confidence < 0 || h.Confidence > 1 {
 		return ErrInvalidHistorySegment
+	}
+	for _, id := range h.SourceIDs {
+		if id == "" {
+			return ErrInvalidHistorySegment
+		}
 	}
 	return nil
 }
