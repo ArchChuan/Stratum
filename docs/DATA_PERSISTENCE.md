@@ -25,7 +25,7 @@ volumes:
 
 - 多租户 schema 隔离：`public` 保存全局表（tenants、users），每个租户有独立 `tenant_<id>` schema
 - 迁移由 `pkg/migration/sql/` 下编号 SQL 文件管理，启动时自动应用（当前最高版本：019）
-- 租户级表（skill_versions、evaluation_jobs、eval_runs、evaluation_experiments、agent_tool_traces、agent_execution_checkpoints、knowledge_parent_chunks 等）由 `pkg/storage/postgres/tenant_schema.sql` 定义，`ProvisionAllTenantSchemas` 在各 `tenant_<id>` schema 中创建
+- 租户级表（skill_revisions、evaluation_jobs、eval_runs、evaluation_experiments、agent_tool_traces、agent_execution_checkpoints、knowledge_parent_chunks 等）由 `pkg/storage/postgres/tenant_schema.sql` 定义，`ProvisionAllTenantSchemas` 在各 `tenant_<id>` schema 中创建
 - pgx v5 连接池，支持 `SET LOCAL search_path` 切换租户 schema
 
 ### 备份

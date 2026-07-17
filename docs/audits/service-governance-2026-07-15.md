@@ -4,6 +4,10 @@
 **模式：** 全项目首轮静态审计
 **审计阶段：** 只读；未修改业务代码、测试、配置或运行状态
 
+> **2026-07-17 状态说明：** 本文保留 2026-07-15 当日审计证据。随后 capability-boundary 重构删除了
+> `internal/skill/infrastructure/gateway` 与 code/llm/http executor，因此 SG-006 已随被审计调用链移除，
+> 不再是当前生产路径发现；下文涉及 Skill Gateway 的执行摘要、覆盖矩阵和正向措施均为原审计时点记录。
+
 ## 执行摘要
 
 本轮确认 7 个 High 风险，未发现有充分静态证据的 Critical 风险。最需要优先处理的故障放大路径是：
@@ -124,6 +128,9 @@ MaxDeliver 后原消息会发布至自定义 `memory.dlq.*`。
 
 ### SG-006 Skill Gateway 对所有非超时错误统一重试
 
+**当前状态（2026-07-17）：已退役。** 被审计的 Skill Gateway 与 provider 执行器已从当前源码删除；
+现行 Skill 是由 Agent Loop 激活的版本化 instruction bundle，当前没有该重试调用链。
+
 - **Severity:** High
 - **Confidence:** Probable
 - **Evidence:** [atomic.go](/home/yang/go-projects/stratum/internal/skill/infrastructure/gateway/atomic.go:99)、[atomic.go](/home/yang/go-projects/stratum/internal/skill/infrastructure/gateway/atomic.go:144)、[gateway.go](/home/yang/go-projects/stratum/internal/skill/infrastructure/gateway/gateway.go:46)
@@ -159,11 +166,11 @@ MaxDeliver 后原消息会发布至自定义 `memory.dlq.*`。
 ## 已有正确治理措施
 
 - Knowledge ingest 同时限制接受队列和并发 worker，满载返回 429，并跟踪 WaitGroup 完成关闭。
-- Skill code executor 有全局与租户级 semaphore，超限立即失败而不是无界排队。
+- 原审计时点的 Skill code executor 有全局与租户级 semaphore；该 executor 当前已移除。
 - Memory worker 的 Fetch 错误使用有上限的指数退避，避免 NATS 抖动时 CPU 自旋。
 - Outbox publish 有 3 秒事务内超时；失败回滚保留 outbox，避免长期持锁和消息丢失。
 - LLM 非流式、流式 TTFT、token idle 和 Agent 总执行时间采用分层 timeout；流式建立后不盲目重试。
-- LLM provider 和 Skill Gateway 均实现互斥保护的 HalfOpen 单探测熔断状态。
+- 原审计时点的 LLM provider 和 Skill Gateway 均实现互斥保护的 HalfOpen 单探测熔断状态；当前仅前者仍存在。
 - PostgreSQL 和 Redis 连接失败会阻止服务构建，避免关键依赖缺失时启动成假健康实例。
 
 ## 建议修复顺序
@@ -171,7 +178,7 @@ MaxDeliver 后原消息会发布至自定义 `memory.dlq.*`。
 1. **先修 SG-003、SG-004、SG-005：** 共同定义 JetStream 失败分类、Ack 预算和 DLQ 闭环，避免分别修补产生冲突。
 2. **并行修 SG-001：** 明确核心 readiness 与可选能力 degraded 状态，随后补故障环境 E2E。
 3. **修 SG-002：** 先确定全局配额语义和 Redis 故障策略，再实现分布式限流。
-4. **修 SG-006：** 建立硬编码错误分类与幂等契约，禁止让 AI 或错误字符串决定重试。
+4. **SG-006 无需单独修复：** capability-boundary 重构已删除该执行路径；若未来重新引入可执行 provider，必须重新审计错误分类与幂等契约。
 5. **修 SG-007：** 变更局部、风险明确，可独立快速完成并补脱敏测试。
 
 ## 未覆盖与运行验证建议

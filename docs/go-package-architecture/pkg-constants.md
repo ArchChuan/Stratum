@@ -7,7 +7,7 @@
 ```mermaid
 flowchart LR
   pkg["constants 包<br/>pkg/constants"]
-  api["核心类型 / 接口 / 函数<br/>CollectionName；DefaultTenantID；AgentExecTimeout；Memory* 常量；分页与上传限制"]
+  api["核心类型 / 接口 / 函数<br/>CollectionName；DefaultTenantID；AgentExecTimeout；LoopCompaction*；Memory* 常量；分页与上传限制"]
   subgraph source[非测试源码]
     f0["agent.go"]
     f1["api.go"]

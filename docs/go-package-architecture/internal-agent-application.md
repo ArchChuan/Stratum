@@ -9,7 +9,7 @@ flowchart LR
   svc["agent_service.go<br/>AgentService / AgentServiceDeps<br/>Create · Update · Execute · ExecuteStream"]
   runtime["agent.go<br/>Agent 接口 · BaseAgent<br/>ExecutionConfig · Execute"]
   registry["registry.go<br/>Registry<br/>hydrate · Register · Get · Update"]
-  budget["context_budget.go<br/>BuildContextMessages"]
+  budget["context_budget.go<br/>BuildContextMessages<br/>历史窗口与初始预算裁剪"]
   ledger["token_ledger.go<br/>TokenLedger · UsageSummary"]
   stores["chat_store.go · execution_store.go<br/>ChatStore / ExecutionStore / ToolTraceStore<br/>TraceEventStore / CheckpointStore 别名"]
   graphPkg["internal/agent/application/graph"]
@@ -17,7 +17,7 @@ flowchart LR
   ports["internal/agent/domain/port"]
   pkg["pkg/constants · observability · reqctx · tokenutil"]
   ext["OpenTelemetry · zap · google/uuid"]
-  tests["测试<br/>export_test.go · agent_service_test.go · react_agent_test.go"]
+  tests["测试<br/>context_budget_compaction_test.go · export_test.go<br/>agent_service_test.go · react_agent_test.go"]
   svc --> registry
   svc --> runtime
   runtime --> graphPkg
@@ -38,4 +38,4 @@ flowchart LR
 
 ## 说明
 
-`AgentService` 是面向调用方的用例门面，`Registry` 从 `AgentRepo` 装载并水合 `BaseAgent`。`BaseAgent.Execute` 组装 graph 包的 ReAct/Plan-Execute 图，并通过 capability、memory、chat、trace 等消费者侧端口访问外部能力；上下文裁剪与 token 记账分别由独立文件承担。
+`AgentService` 是面向调用方的用例门面，`Registry` 从 `AgentRepo` 装载并水合 `BaseAgent`。`BaseAgent.Execute` 组装 graph 包的 ReAct/Plan-Execute 图，并通过 capability、memory、chat、trace 等消费者侧端口访问外部能力；初始上下文裁剪、循环内压缩与 token 记账分别由 application/graph 的独立文件承担。

@@ -1,36 +1,20 @@
 # internal/skill/application
 
-编排 Skill 的 CRUD、草稿/版本发布及执行用例，只依赖领域模型与消费者侧 port。
+该包编排版本化 instruction Skill 的草稿、工作区、候选版本、发布与删除用例。
 
-- 完整导入路径：`github.com/byteBuilderX/stratum/internal/skill/application`
+完整导入路径：`github.com/byteBuilderX/stratum/internal/skill/application`
 
 ```mermaid
 flowchart LR
-  pkg["application 包<br/>internal/skill/application"]
-  api["核心类型 / 接口 / 函数<br/>SkillService；VersionService；Executor；SkillRunner；SkillRegistry；Create/Update/Delete；RunSkillTest/RunDraftSkill；PublishDraft"]
-  subgraph source[非测试源码]
-    f0["executor_service.go"]
-    f1["skill_service.go"]
-    f2["version_service.go"]
-  end
-  f0 -->|声明或实现| api
-  f1 -->|声明或实现| api
-  f2 -->|声明或实现| api
-  api -->|组成包能力| pkg
-  subgraph projectdeps[直接项目依赖]
-    pd0["internal/skill/domain"]
-    pd1["internal/skill/domain/port"]
-  end
-  pkg -->|直接 import| pd0
-  pkg -->|直接 import| pd1
-  subgraph external[关键外部依赖]
-    ex0["github.com/google/uuid"]
-    ex1["go.uber.org/zap"]
-  end
-  pkg -->|直接 import| ex0
-  pkg -->|直接 import| ex1
-  tests["测试汇总<br/>version_service_test.go, executor_service_test.go"]
-  tests -.->|验证| api
+  svc["version_service.go<br/>VersionService<br/>draft · workspace · candidate · publish"]
+  domain["internal/skill/domain<br/>SkillRevision · Capability · ActivationContract · Requirements"]
+  ports["internal/skill/domain/port<br/>VersionRepo"]
+  ext["google/uuid · zap"]
+  tests["测试<br/>version_service_test.go"]
+  svc --> domain
+  svc --> ports
+  svc --> ext
+  tests -.覆盖草稿、发布、instruction 更新与候选限制.-> svc
 ```
 
-图中每个源码节点均对应 `go list -json` 返回的非测试 Go 文件；核心节点概括这些文件共同暴露或实现的主要架构表面。 项目内箭头仅表示当前包的直接 import，包含：`internal/skill/domain`、`internal/skill/domain/port`。 关键外部依赖为：`github.com/google/uuid`、`go.uber.org/zap`。 测试文件合并为一个节点：`version_service_test.go`、`executor_service_test.go`。
+`VersionService` 创建 UUID v7 skill/revision，计算内容哈希，并只允许候选版本改写 `instructions`。发布前由领域模型校验 capability、已确认 activation contract、instructions 与依赖要求；该包不再包含旧的直接执行用例。

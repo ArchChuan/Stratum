@@ -1,22 +1,22 @@
 # SPEC: Stratum
 
-> Reverse-engineered specification — refreshed 2026-07-16 from the current worktree
+> Reverse-engineered specification — refreshed 2026-07-17 from the current worktree
 > Scope: backend, frontend, deployment assets, configuration, migrations, and tests — depth: deep
 
 ## 1. Overview
 
 ### 1.1 Purpose
 
-Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go + DDD 9 bounded context，前端 React 18 + AntD 5。把 Agent 编排（ReAct）、Skill 网关、评估优化、记忆系统、GraphRAG、MCP 协议、多租户 IAM 串成统一的运行链路，目标是「让团队自托管 AI Agent 平台，不依赖 SaaS」。
+Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go + DDD 9 bounded context，前端 React 18 + AntD 5。把 Agent 编排（ReAct）、instruction Skill、评估优化、记忆系统、GraphRAG、MCP 协议、多租户 IAM 串成统一的运行链路，目标是「让团队自托管 AI Agent 平台，不依赖 SaaS」。
 
 ### 1.2 Key Capabilities
 
 - Agent 编排：ReAct StateGraph，工具调用 / SSE 流式 / 中断恢复 / 历史会话回填
-- Skill Gateway：code（goja JS 沙箱）· llm · http 三类执行器，命名 `tenant_{id}_{name}` 隔离
+- Skill capability：版本化 capability/activation/instructions/requirements，发布后由 Agent Loop 激活并约束 MCP、知识和记忆能力
 - Evaluation：suite/revision、异步评估 job、优化候选、实验阶段与反馈闭环
 - 记忆系统：PostgreSQL 持久化 + 三阶段 NATS 异步流水线（outbox → embedder → enricher）+ Token 预算/摘要压缩
 - GraphRAG：Milvus 向量检索，支持 vector / keyword / hybrid（RRF）三种检索模式
-- MCP 协议：stdio / http / sse 三种 transport，AuthType none/bearer/api_key/oauth2，自动重试
+- MCP 协议：stdio / http / streamable-http transport，AuthType none/bearer/api_key/oauth2，工具风险策略与 Agent approval/resume
 - 多租户 IAM：PostgreSQL schema 物理隔离 + GitHub OAuth + JWT RS256 + tenant 邀请/角色管理
 - LLM 网关：通义千问 / 智谱 AI 双 OpenAI-compat provider，TenantGatewayCache 按租户密钥缓存
 - 可观测性：Zap 结构化日志 + OpenTelemetry tracing + Prometheus 指标 + Harness 生命周期
@@ -43,7 +43,6 @@ Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go +
 | 日志 | Zap | — |
 | Tracing/Metrics | OpenTelemetry | v1.22 + Prometheus |
 | LLM Provider | Qwen（dashscope）· Zhipu | OpenAI-compat |
-| JS 沙箱 | goja | — |
 | 配置 | `config/config.go` 环境变量读取 | stdlib `os` |
 | 前端 | React 18.3 · Vite 5.4 · AntD 5.20 · React Router 6.26 · Axios 1.7 · TanStack Query v5 · Zustand v5 · Zod · Recharts | — |
 
@@ -69,8 +68,8 @@ stratum/
 │   │   └── application/graph/  StateGraph[T]・nodeLLM・nodeTool・条件边
 │   ├── memory/                 MemoryManager · MemoryRepo port · pipeline（outbox→embedder→enricher）
 │   ├── knowledge/              Workspace 聚合 · RAGService · IngestService · GraphRAG client
-│   ├── skill/                  SkillService · code/llm/http executor · CircuitBreaker
-│   ├── mcp/                    MCPService · ServerManager · SkillRegistry · 三种 transport
+│   ├── skill/                  VersionService · SkillRevision · VersionRepo
+│   ├── mcp/                    MCPService · ServerManager · MCPToolRegistry · tool policy
 │   ├── iam/                    TenantService · AdminService · OnboardService · JWTService
 │   ├── llmgateway/             Gateway · TenantGatewayCache · openai_compat client
 │   ├── evaluation/             suite/run/job · optimization · experiment · feedback
@@ -116,8 +115,8 @@ stratum/
 | | `agent_workspaces` | (agent_id, workspace_id) CASCADE |
 | | `agent_executions` | id UUID, status CHECK('success','error'), input/output_preview, total_tokens, duration_ms |
 | MCP | `mcp_configs` | id TEXT, transport, command/url, args/env/headers/auth_config/retry_config JSONB, timeout_sec DEFAULT 30 |
-| Skill | `skills` | id, name UNIQUE, legacy type/config，active_version_id / draft_version_id |
-| | `skill_versions` · `skill_test_cases` · `skill_eval_runs` | capability/tool contract/implementation 快照、测试基线与评估记录 |
+| Skill | `skills` | id, name UNIQUE, description, status, active_revision_id / draft_revision_id |
+| | `skill_revisions` | parent/revision/status/source、content_hash、capability、activation_contract、instructions、requirements、publish_checks |
 | Evaluation | `eval_suites` · `eval_suite_revisions` · `eval_cases` | 评估集、冻结修订和用例 |
 | | `eval_runs` · `eval_case_results` · `evaluation_jobs` | 异步运行、逐例结果与租约 job |
 | | `optimization_jobs` · `optimization_candidates` | 优化任务与候选版本 |
@@ -145,8 +144,8 @@ stratum/
 - **agent**：`AgentConfig`（聚合根）· `ChatConversation` · `ChatMessage` · `ExecutionRecord` · `Message/Thought/ToolCall/AgentResult/AgentState`（hoisted to domain）
 - **memory**：`MemoryEntry`（id, type∈{short_term,long_term,entity,summary}, role, content, importance, vector []float32, tags, expires_at）· `Entity` · `SessionContext{TenantID,UserID,SessionID,AgentID}` · `MemoryFilter`（composable）
 - **knowledge**：`Workspace` 聚合 · `WorkspaceConfig{EmbeddingModel,ChunkSize,ChunkOverlap,QueryMode,TopK}` · `MergeUpdate` 强制不可变
-- **skill**：`Skill` interface · `BaseSkill` · `SkillExecutor.Execute(ctx, input) → (any, error)`
-- **mcp**：`Server` · `Tool{Name,Description,InputSchema}` · `AuthConfig`（含 OAuth2 字段）· `RetryConfig`
+- **skill**：`SkillRevision` · `Capability` · `ActivationContract` · `Requirements` · `VersionRepo`
+- **mcp**：`Server` · `Tool{Name,Description,InputSchema}` · `ToolPolicy` · `AuthConfig`（含 OAuth2 字段）· `RetryConfig`
 - **iam**：`Tenant`（IsDefault, MemberCount）· `Member` · `Invitation`（TokenHash, ExpiresAt）· `UserTenantInfo` · `StoredSession`
 - **llmgateway**：`CompletionRequest/Response` · `Message` · `Tool/ToolCall` · `TokenUsage` · `EmbeddingRequest/Response` · `LLMCompleter` port
 
@@ -174,10 +173,10 @@ stratum/
 | Tenant | `/tenant/list` · `/tenant/members` · `/tenant/members/:user_id/role` · `/tenant/settings` · `/tenant/embed-model` · `DELETE /tenant` | member 底线；设置写入需 active；删除 tenant 需 owner |
 | Agent | `/agents` · `/agents/:id` · `/agents/:id/execute` · `/agents/:id/execute/stream` · `/agents/executions` · execution trace 子路由 | member 可读/执行，admin 写；执行需 active + rate limit |
 | Chat | `/agents/:id/conversations` · `/conversations/:convID` · `/conversations/:convID/messages` | JWT + tenant context |
-| Skill | `/skills` · `/skills/:id` · `/skills/:id/workspace` · draft capability/contract/implementation · publish · test/test-draft | member 可读/测试，admin 写；运行需 active |
+| Skill | `/skills` · `/skills/:id` · `/skills/:id/workspace` · draft capability/activation/instructions · publish | member 可读，active admin 写；无直接执行/测试路由 |
 | Evaluation | `/evaluations/suites` · publish · runs/jobs · optimizations · experiments/evaluate · feedback | admin 创建/查询评估控制面；active member 可提交 feedback |
 | Knowledge | `/knowledge/workspaces` · workspace stats/documents · `/knowledge/ingest` · `/knowledge/query` | member 读/查，admin 管理/摄取 |
-| MCP | `/mcp/servers` · server tools/resources/config/reconnect · `/mcp/tools/:toolId/execute` · `/mcp/skills` · `/mcp/status` | member 读/执行，admin 管理 server；写操作需 active |
+| MCP | `/mcp/servers` · server tools/resources/config/reconnect · `/mcp/tool-policies` · `/mcp/status` | member 读取，admin 管理 server/policy；写操作需 active；工具仅由 Agent 内部执行 |
 | Memory | `/memory` · `/memory/:id` · `/memory/clear` · `/memory/sessions` · `/memory/session/:session_id` · `/memory/stats` · `/memory/summary/:session_id` | JWT + tenant context + active tenant |
 
 完整方法与角色矩阵见 `docs/agent/api.md` 和 `api/http/router.go`。
@@ -195,8 +194,7 @@ stratum/
 - 404 NotFound 系列（pgx.ErrNoRows · ErrWorkspace/Member/Tenant/Entry/Session/Skill NotFound · ErrServerNotFound）
 - 409 Conflict（Workspace · Agent · MCP · Skill name/Linked）
 - 422 `agentapp.ErrInvalidSkill`
-- 429 `skilldomain.ErrConcurrencyLimit`
-- 400 InvalidSettings · ImmutableXxx · UnsupportedType · CodeAnalysis
+- 400 InvalidSettings · ImmutableXxx · SkillNotPublishable
 - default 500；`HTTPError` wrapper 支持显式 status override
 
 ---
@@ -245,7 +243,7 @@ stratum/
 1. **多租户隔离**：所有 tenant 资源走 `SET LOCAL search_path = tenant_{id}, public`；编号 migration 仅碰 public，per-tenant DDL 必须放 `tenant_schema.sql` 由 `ProvisionAllTenantSchemas` 幂等应用。
 2. **AI 不做控制逻辑**：路由 / 重试 / 状态机硬编码在 Go 层；LLM 仅做语言任务（生成、抽取）。
 3. **Agent 执行**：`ExecuteStream` 构造独立的限时 execution context；SSE handler 监听 client disconnect 并显式 cancel。执行记录写入 `agent_executions`。
-4. **Skill capability package**：draft 可编辑/测试；publish 冻结 capability、tool contract、implementation 和 test baseline；Agent 正常执行只解析 published contract。`code` implementation 由 goja 沙箱执行。
+4. **Skill instruction capability package**：draft 可编辑 capability、activation 和 instruction bundle；publish 冻结版本；Agent 正常执行只激活 published instruction bundle。当前没有直接执行或草稿测试 HTTP 路由。
 5. **Workspace 不可变字段**：`embedding_model` / `chunk_size` / `chunk_overlap` 创建后只读（`MergeUpdate` 强制）。
 6. **Embed model**：tenant 级 set-once（`SetEmbedModel` 拒绝二次写入 → `ErrEmbedModelAlreadySet`）；agent 创建时未指定则继承 tenant default。
 7. **Tenant 角色规则**：
@@ -256,9 +254,9 @@ stratum/
 9. **JWT**：RS256（拒绝非 RSA 签名方法）；claims `sub/tid/role/global_role/jti/ava/ghl`；refresh token sha256 入库。
 10. **Memory 范围**：entries/facts/entities 都按 tenant + user 隔离，并可进一步按 agent/scope 过滤；Memory v2 对 facts 使用硬删除语义。
 11. **Memory pipeline**：写入 outbox（`message_id NOT NULL`）→ embedder 生成向量 → enricher 写 `memory_facts` / `memory_entities` 并更新 entry；摘要写 `memory_summaries`。
-12. **ReAct loop**：节点 `nodeLLM` ↔ `nodeTool` 条件边；内置 knowledge/memory/continue-reasoning 工具硬编码处理；published Skill 工具通过 `SkillToolIndex` 映射到 `{SkillID, VersionID}`，旧配置才回退 `tenant_{id}_{name}`。
+12. **ReAct loop**：节点 `nodeLLM` ↔ `nodeTool` 条件边；内置 knowledge/memory/continue-reasoning 工具硬编码处理；published Skill revision 作为 instruction activation 注入 system context，并将工具/知识范围收窄到 requirements 与 Agent 配置的交集。循环消息达到预算安全阈值时按完整 tool-call/tool-result 组压缩副本。
 13. **GraphRAG mode**：`vector` embed→Milvus search · `keyword` Milvus KeywordSearch · `hybrid` RRF（VectorStore.HybridSearch）；collection 命名 `tenantdb.WorkspaceCollection`，fallback `{workspace}_kb`。
-14. **MCP retry**：`RetryConfig{Enabled, MaxRetries, InitialDelayMs, MaxDelayMs, BackoffFactor}` 指数退避；transport 中 stdio/http/sse 三选一互斥。
+14. **MCP transport/policy**：`RetryConfig{Enabled, MaxRetries, InitialDelayMs, MaxDelayMs, BackoffFactor}` 描述重连退避；transport 支持 stdio/http/streamable-http。危险或未分类工具需 approval，HTTP 不提供通用工具执行端点。
 15. **Chat**：`role` CHECK ∈ {user, assistant}；`steps_json` 存储 ReAct 步骤；`is_error` 标记；conversation `expires_at` 默认 +30 天；当前删除实现为硬删，`deleted_at` 仅兼容历史记录与清理。
 16. **Outbox 写入必须包含 `message_id`**（NOT NULL 无 DEFAULT），曾因漏列触发全量回滚。
 17. **错误分层**：`domain.Err*` → infrastructure 翻译 `pgconn.PgError` → application 编排 → middleware 中央表映射 HTTP 状态码；响应 `{"error":"..."}` 冻结。
@@ -288,15 +286,15 @@ stratum/
 - **密钥管理**：Vault / AWS Secrets Manager（生产），禁入 git；当前 tenant LLM key 加密密钥从 JWT private key material 派生
 - **Token 存储**：前端 httpOnly cookie 或内存 Context，禁 localStorage
 - **输入校验**：DTO `binding` tag + service 层 domain 不变量自检
-- **Skill 沙箱**：goja JS 引擎，禁 `eval`，注入受限 globals
+- **Skill 发布**：activation name、object schema、instructions 与 requirements 在领域层校验；发布 revision 以内容哈希冻结
 - **审计/追踪**：Agent 工具调用与执行事件写入 tenant-scoped `agent_tool_traces` / `agent_trace_events`
 
 ### 9.3 Error Handling
 
 - 错误传播：`fmt.Errorf("operation: %w", err)` 逐层包裹
 - 中央映射：`api/middleware/error_mapping.go` 单点维护 sentinel→HTTP 状态码
-- 重试：`RetryFn(DefaultRetry)` 指数退避（base 100ms，上限 10s），用于 LLM 调用与 MCP transport
-- 熔断：Skill 层 `CircuitBreaker`；外部依赖失败不击穿主流程
+- 重试：Agent graph 的 `RetryFn` 与 MCP 配置重连退避均受次数和 context 约束
+- 降级：循环历史摘要器未注入或失败时使用省略标记并继续主流程
 - 异步：execution record fire-and-forget；memory pipeline outbox 解耦写入失败
 - 软容错：MemoryManager nil repo nil-safe；MCP 单 server 失败不影响整体
 
@@ -323,13 +321,12 @@ stratum/
 
 ## 11. Known Gaps & Assumptions
 
-- **Skill `llm` / `http` executor 未在本次扫描中读到完整实现**，仅确认 `code` 类型走 goja。
+- **Skill 直接执行器已移除**：当前只有 instruction revision 激活路径；历史计划中的 code/llm/http executor 和 Skill Gateway 不属于现行实现。
 - **前端覆盖率未设置强制阈值**；当前已有 Vitest/Testing Library 与 Playwright 用例。
 - **MCP `oauth2` AuthType 实现深度未验证**（domain 字段已定义，token refresh 流程未细查）。
 - **e2e 覆盖尚非全域**：已有 Memory lifecycle 和前端响应式用户流，但 Agent/Skill/MCP/Knowledge/IAM 尚未都有独立的真实环境套件。
 - **`internal/agent/application/agent.go` 与 `registry.go` 内部细节未完整读**（BaseAgent.Execute 主体已通过 ReAct graph 间接确认）。
 - **OTEL trace 端到端串联**（HTTP→Agent→Skill→LLM）在 README 路线图标注为「待完成」。
-- **WASM Sandbox** 替代 goja 在 README 路线图标注为「待完成」。
 - **Workflow / scheduled task / webhook** 仍是路线图方向；对应旧 tenant tables 已由 provisioning 删除，当前没有可用运行时。
 - **多 LLM provider 扩展**（Anthropic / Ollama / 本地）路线图待办；当前仅 Qwen + Zhipu。
 - **通用业务审计日志** 尚无独立 `audit_logs` 表；当前可观察重点是 Agent execution/tool/trace 记录与结构化日志。

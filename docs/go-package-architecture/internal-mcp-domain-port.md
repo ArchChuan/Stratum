@@ -1,6 +1,6 @@
 # internal/mcp/domain/port
 
-该包声明 MCP 客户端管理、服务器管理/持久化和技能访问/注册契约。
+该包声明 MCP 客户端管理、服务器管理/持久化和工具风险策略契约。
 
 完整导入路径：`github.com/byteBuilderX/stratum/internal/mcp/domain/port`
 
@@ -8,8 +8,8 @@
 flowchart LR
   client["client.go<br/>ClientManager"]
   manager["manager.go<br/>ServerManager"]
-  repo["server_repo.go<br/>ServerRepo / SkillAccessor / SkillRegistry"]
-  domain["internal/mcp/domain<br/>Server、Tool、Resource、SkillSummary"]
+  repo["server_repo.go · tool_policy_repo.go<br/>ServerRepo / ToolPolicyRepo"]
+  domain["internal/mcp/domain<br/>Server、Tool、Resource、ToolPolicy"]
   client --> domain
   manager --> domain
   repo --> domain
