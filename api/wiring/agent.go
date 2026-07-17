@@ -2,7 +2,6 @@ package wiring
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
@@ -11,10 +10,8 @@ import (
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
-	"github.com/byteBuilderX/stratum/pkg/tenantdb"
+	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Agent groups the agent persistence/registry services and execution
@@ -50,66 +47,52 @@ func (a ragSearchAdapter) SearchKnowledge(
 	return knowledge.NewRAGSearchFn(a.rag, tenantID)(ctx, workspaceIDs, query, topK)
 }
 
+// skillVersionService returns the wired skill VersionService, or nil when the
+// skill context was built without a database. The resolver treats a nil
+// service as an empty catalog, so agent construction never panics on it.
+func skillVersionService(c *Container) *skillapp.VersionService {
+	if c.Skill == nil {
+		return nil
+	}
+	return c.Skill.VersionService
+}
+
+// publishedSkillActivationResolver adapts skill/application's context-neutral
+// VersionService.ResolveActivation onto agentport.SkillActivationResolver.
+// The activation query (active-revision fallback, published/candidate status
+// filter, contract name/description fallback) lives in the skill context; the
+// composition root only maps the returned view onto the agent port's shape.
 type publishedSkillActivationResolver struct {
-	db *pgxpool.Pool
+	versions *skillapp.VersionService
 }
 
 func (r publishedSkillActivationResolver) ResolveSkills(
 	ctx context.Context, _ string, refs []agentport.SkillRevisionRef,
 ) (map[string]agentport.SkillActivation, error) {
 	catalog := make(map[string]agentport.SkillActivation, len(refs))
-	if r.db == nil || len(refs) == 0 {
+	if r.versions == nil || len(refs) == 0 {
 		return catalog, nil
 	}
-	err := tenantdb.ExecTenant(ctx, r.db, func(ctx context.Context, tx pgx.Tx) error {
-		for _, ref := range refs {
-			var skillID, revisionID, skillName, skillDescription, instructions string
-			var activationRaw, requirementsRaw []byte
-			err := tx.QueryRow(ctx,
-				`SELECT s.id, r.id, s.name, s.description, r.instructions,
-				        r.activation_contract, r.requirements
-				 FROM skills s JOIN skill_revisions r
-				   ON r.id=COALESCE(NULLIF($2, ''), s.active_revision_id)
-				 WHERE s.id=$1 AND r.status IN ('published', 'candidate')`,
-				ref.SkillID, ref.RevisionID,
-			).Scan(&skillID, &revisionID, &skillName, &skillDescription, &instructions, &activationRaw, &requirementsRaw)
-			if err == pgx.ErrNoRows {
-				continue
-			}
-			if err != nil {
-				return err
-			}
-			var activation struct {
-				Name        string `json:"name"`
-				Description string `json:"description"`
-			}
-			var requirements struct {
-				MCPToolIDs            []string `json:"mcpToolIds"`
-				KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
-				MemoryScopes          []string `json:"memoryScopes"`
-			}
-			if err := json.Unmarshal(activationRaw, &activation); err != nil {
-				return err
-			}
-			if err := json.Unmarshal(requirementsRaw, &requirements); err != nil {
-				return err
-			}
-			if activation.Name == "" {
-				activation.Name = skillName
-			}
-			if activation.Description == "" {
-				activation.Description = skillDescription
-			}
-			catalog[skillID] = agentport.SkillActivation{
-				SkillID: skillID, RevisionID: revisionID, Name: activation.Name,
-				Description: activation.Description, Instructions: instructions,
-				MCPToolIDs: requirements.MCPToolIDs, KnowledgeWorkspaceIDs: requirements.KnowledgeWorkspaceIDs,
-				MemoryScopes: requirements.MemoryScopes,
-			}
+	for _, ref := range refs {
+		view, found, err := r.versions.ResolveActivation(ctx, ref.SkillID, ref.RevisionID)
+		if err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	return catalog, err
+		if !found {
+			continue
+		}
+		catalog[view.SkillID] = agentport.SkillActivation{
+			SkillID:               view.SkillID,
+			RevisionID:            view.RevisionID,
+			Name:                  view.Name,
+			Description:           view.Description,
+			Instructions:          view.Instructions,
+			MCPToolIDs:            view.MCPToolIDs,
+			KnowledgeWorkspaceIDs: view.KnowledgeWorkspaceIDs,
+			MemoryScopes:          view.MemoryScopes,
+		}
+	}
+	return catalog, nil
 }
 
 func (c *Container) buildAgent(_ context.Context) error {
@@ -156,7 +139,7 @@ func (c *Container) buildAgent(_ context.Context) error {
 		Registry:                registry,
 		TenantSettings:          a.TenantSettings,
 		SkillLookup:             a.SkillLookup,
-		SkillActivationResolver: publishedSkillActivationResolver{db: db},
+		SkillActivationResolver: publishedSkillActivationResolver{versions: skillVersionService(c)},
 		TenantResolver:          a.TenantResolver,
 		ExecStore:               a.ExecStore,
 		ChatStore:               a.ChatStore,

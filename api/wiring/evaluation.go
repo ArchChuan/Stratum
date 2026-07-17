@@ -9,6 +9,7 @@ import (
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	agentpersist "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
@@ -16,7 +17,6 @@ import (
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -142,22 +142,25 @@ type evaluationTenantLister struct {
 }
 
 type agentScenarioEvaluationAdapter struct {
-	db     *pgxpool.Pool
-	agents *agentapp.AgentService
-	skills agentport.SkillActivationResolver
+	agents   *agentapp.AgentService
+	skills   agentport.SkillActivationResolver
+	bindings agentport.AgentSkillBinding
 }
 
 func (a agentScenarioEvaluationAdapter) ExecuteRevision(ctx context.Context, tenantID string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase) (evalport.ExecutionResult, error) {
 	if ref.Kind != evaldomain.ResourceKindSkill {
 		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation: unsupported resource kind %q", ref.Kind)
 	}
+	// Inject tenant context so the agent-context binding port (whose execTenant
+	// reads it) routes to the right schema; the raw agent_skill_links read now
+	// lives behind agentport.AgentSkillBinding, not here.
 	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID, UserID: "evaluation-worker", Role: postgres.RoleTenantAdmin})
-	var agentID string
-	err := postgres.ExecTenant(ctx, a.db, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT agent_id FROM agent_skill_links WHERE skill_id=$1 ORDER BY agent_id LIMIT 1`, ref.ResourceID).Scan(&agentID)
-	})
+	agentID, found, err := a.bindings.FindAgentBySkill(ctx, ref.ResourceID)
 	if err != nil {
-		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation requires an Agent bound to Skill %s: %w", ref.ResourceID, err)
+		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation: resolve agent for Skill %s: %w", ref.ResourceID, err)
+	}
+	if !found {
+		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation requires an Agent bound to Skill %s", ref.ResourceID)
 	}
 	catalog, err := a.skills.ResolveSkills(ctx, tenantID, []agentport.SkillRevisionRef{{SkillID: ref.ResourceID, RevisionID: ref.RevisionID}})
 	if err != nil {
@@ -208,8 +211,12 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	experimentRepo := evalpersist.NewPgExperimentRepository(db)
 	feedbackRepo := evalpersist.NewPgFeedbackRepository(db)
 	suiteService := evalapp.NewSuiteService(suiteRepo)
-	activationResolver := publishedSkillActivationResolver{db: db}
-	adapter := agentScenarioEvaluationAdapter{db: db, agents: c.Agent.Service, skills: activationResolver}
+	activationResolver := publishedSkillActivationResolver{versions: c.Skill.VersionService}
+	adapter := agentScenarioEvaluationAdapter{
+		agents:   c.Agent.Service,
+		skills:   activationResolver,
+		bindings: agentpersist.NewPgAgentRepo(db),
+	}
 	service := evalapp.NewService(adapter, runRepo, suiteRepo)
 	jobService := evalapp.NewJobService(jobRepo, service)
 	manager := skillCandidateManager{versions: c.Skill.VersionService}
