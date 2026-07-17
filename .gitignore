@@ -187,3 +187,11 @@ dist/
 .rtk
 
 *.log
+
+# AI tooling artifacts
+CLAUDE.md
+AGENTS.md
+.claude/
+.agents/
+.codex/
+.serena/
