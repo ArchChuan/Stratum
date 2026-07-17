@@ -134,6 +134,34 @@ repos:
         types: [go]
         pass_filenames: false
 
+      # Commit message format: [type](scope): description (Conventional Commits)
+      # 需一次性启用：pre-commit install --hook-type commit-msg
+      - id: commit-msg-format
+        name: commit message format
+        language: system
+        stages: [commit-msg]
+        entry: bash
+        args:
+          - -c
+          - |
+            msg_file="$1"
+            header=$(head -n1 "$msg_file")
+            # 放行 merge / revert / fixup / squash 自动生成的提交
+            case "$header" in
+              Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;
+            esac
+            types='feat|fix|refactor|perf|test|docs|chore|ci|build|style|revert'
+            if echo "$header" | grep -qE "^($types)(\([a-z0-9/_-]+\))?!?: .+"; then
+              exit 0
+            fi
+            echo "❌ 提交信息不符合规范：$header"
+            echo "   要求：<type>(<scope>): <description>"
+            echo "   type ∈ {$types}"
+            echo "   示例：feat(memory): add tiered recall"
+            exit 1
+          - --
+        pass_filenames: true
+
 ci:
   autofix_commit_msg: |
     [pre-commit.ci] auto fixes from pre-commit.com hooks
