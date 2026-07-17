@@ -210,6 +210,9 @@ func makePlanNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *za
 		if len(steps) > constants.MaxPlanSteps {
 			steps = steps[:constants.MaxPlanSteps]
 		}
+		if _, err := buildWaves(steps); err != nil {
+			return s, fmt.Errorf("plan node: invalid plan: %w", err)
+		}
 		s.Plan = steps
 		logger.Info("react.plan",
 			zap.String("trace_id", s.TraceID),
@@ -220,7 +223,7 @@ func makePlanNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *za
 }
 
 // makeCheckpointNode persists PlanRuntimeState and optionally signals the
-// frontend via SSE. It is non-blocking: execution continues immediately.
+// frontend via SSE. Persistence failure stops execution before the event is emitted.
 func makeCheckpointNode(w PlanCheckpointWriter, phase string, logger *zap.Logger) NodeFunc[ReActState] {
 	return func(ctx context.Context, s ReActState) (ReActState, error) {
 		if w == nil {
@@ -240,15 +243,17 @@ func makeCheckpointNode(w PlanCheckpointWriter, phase string, logger *zap.Logger
 			return s, nil
 		}
 		cp := domain.AgentExecutionCheckpoint{
+			ExecutionID:      s.ExecutionID,
 			TraceID:          s.TraceID,
+			ConversationID:   s.ConversationID,
 			RuntimeStateJSON: stateJSON,
-			Status:           "active",
+			Status:           "running",
 			ExpiresAt:        time.Now().Add(constants.PlanCheckpointTTL),
 		}
 		cpCtx, cancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
 		defer cancel()
 		if err := w.Upsert(cpCtx, s.TenantID, cp); err != nil {
-			logger.Warn("react.checkpoint.upsert", zap.String("trace_id", s.TraceID), zap.Error(err))
+			return s, fmt.Errorf("checkpoint upsert: %w", err)
 		}
 		// Notify frontend if SSE stream is active.
 		if s.OnToken != nil && s.CheckpointEnabled {
@@ -279,7 +284,10 @@ func makeStepOrchestratorNode(
 			return s, fmt.Errorf("step_orchestrator: build sub-graph: %w", err)
 		}
 
-		waves := buildWaves(s.Plan)
+		waves, err := buildWaves(s.Plan)
+		if err != nil {
+			return s, fmt.Errorf("step_orchestrator: invalid plan: %w", err)
+		}
 		results := make([]domain.StepResult, len(s.Plan))
 
 		for _, wave := range waves {
@@ -340,7 +348,9 @@ func makeStepOrchestratorNode(
 			// Write checkpoint after each wave.
 			if w != nil {
 				s.StepResults = filterCompleted(results)
-				_ = writeStepCheckpoint(ctx, w, s, planPhaseStepDone)
+				if err := writeStepCheckpoint(ctx, w, s, planPhaseStepDone); err != nil {
+					return s, fmt.Errorf("step checkpoint: %w", err)
+				}
 			}
 		}
 
@@ -456,7 +466,22 @@ func makeMemoryStoreNode(
 // buildWaves groups plan step indices into DAG execution waves.
 // Wave 0 contains all steps with no dependencies; each subsequent wave
 // contains steps whose dependencies are all satisfied by prior waves.
-func buildWaves(plan []domain.PlanStep) [][]int {
+func buildWaves(plan []domain.PlanStep) ([][]int, error) {
+	for idx, step := range plan {
+		seen := make(map[int]struct{}, len(step.DependsOn))
+		for _, dep := range step.DependsOn {
+			if dep < 0 || dep >= len(plan) {
+				return nil, fmt.Errorf("step %d dependency %d out of range", idx, dep)
+			}
+			if dep == idx {
+				return nil, fmt.Errorf("step %d depends on itself", idx)
+			}
+			if _, ok := seen[dep]; ok {
+				return nil, fmt.Errorf("step %d repeats dependency %d", idx, dep)
+			}
+			seen[dep] = struct{}{}
+		}
+	}
 	completed := make(map[int]bool)
 	remaining := make([]int, len(plan))
 	for i := range plan {
@@ -475,9 +500,7 @@ func buildWaves(plan []domain.PlanStep) [][]int {
 			}
 		}
 		if len(wave) == 0 {
-			// Cycle or unresolvable deps — add all remaining to break deadlock.
-			wave = next
-			next = nil
+			return nil, fmt.Errorf("cyclic or unresolvable dependencies among steps %v", remaining)
 		}
 		for _, idx := range wave {
 			completed[idx] = true
@@ -485,7 +508,7 @@ func buildWaves(plan []domain.PlanStep) [][]int {
 		waves = append(waves, wave)
 		remaining = next
 	}
-	return waves
+	return waves, nil
 }
 
 func allDepsResolved(deps []int, completed map[int]bool) bool {
@@ -610,9 +633,11 @@ func writeStepCheckpoint(ctx context.Context, w PlanCheckpointWriter, s ReActSta
 		return err
 	}
 	cp := domain.AgentExecutionCheckpoint{
+		ExecutionID:      s.ExecutionID,
 		TraceID:          s.TraceID,
+		ConversationID:   s.ConversationID,
 		RuntimeStateJSON: b,
-		Status:           "active",
+		Status:           "running",
 		ExpiresAt:        time.Now().Add(constants.PlanCheckpointTTL),
 	}
 	cpCtx, cancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)

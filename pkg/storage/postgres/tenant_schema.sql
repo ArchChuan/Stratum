@@ -4,8 +4,6 @@
 -- Drop obsolete tables (idempotent; runs on every startup via ProvisionAllTenantSchemas)
 DROP TABLE IF EXISTS webhook_deliveries;
 DROP TABLE IF EXISTS webhooks;
-DROP TABLE IF EXISTS workflow_runs;
-DROP TABLE IF EXISTS workflows;
 DROP TABLE IF EXISTS model_quotas;
 DROP TABLE IF EXISTS model_usage;
 DROP TABLE IF EXISTS model_presets;
@@ -449,7 +447,8 @@ CREATE TABLE IF NOT EXISTS agent_tool_traces (
     raw_result_text TEXT        NOT NULL DEFAULT '',
     summary         TEXT        NOT NULL DEFAULT '',
     status          TEXT        NOT NULL CHECK (status IN ('success', 'error')),
-    error_message   TEXT        NOT NULL DEFAULT '',
+	error_message   TEXT        NOT NULL DEFAULT '',
+	error_code      TEXT        NOT NULL DEFAULT '',
     latency_ms      BIGINT      NOT NULL DEFAULT 0,
     raw_truncated   BOOLEAN     NOT NULL DEFAULT FALSE,
     metadata_json   JSONB       NOT NULL DEFAULT '{}',
@@ -558,6 +557,220 @@ CREATE TABLE IF NOT EXISTS agent_tool_approvals (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_tool_approvals_pending
 ON agent_tool_approvals (status, expires_at, created_at);
+
+-- =============================================================================
+-- Static Workflow Engine Stage 1A
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS workflow_definitions (
+    id              UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    name            TEXT        NOT NULL,
+    description     TEXT        NOT NULL DEFAULT '',
+    draft_revision  BIGINT      NOT NULL DEFAULT 1,
+    draft_spec_json JSONB       NOT NULL DEFAULT '{}',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (name)
+);
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS draft_revision BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS draft_spec_json JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+CREATE TABLE IF NOT EXISTS workflow_versions (
+    id              UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    definition_id   UUID        NOT NULL REFERENCES workflow_definitions(id) ON DELETE RESTRICT,
+    version_no      BIGINT      NOT NULL,
+    name            TEXT        NOT NULL,
+    description     TEXT        NOT NULL DEFAULT '',
+    spec_json       JSONB       NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (definition_id, version_no)
+);
+ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS definition_id UUID;
+ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS version_no BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS spec_json JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+CREATE INDEX IF NOT EXISTS idx_workflow_versions_definition
+    ON workflow_versions (definition_id, version_no DESC);
+
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    id               UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    definition_id    UUID        NOT NULL REFERENCES workflow_definitions(id) ON DELETE RESTRICT,
+    version_id       UUID        NOT NULL REFERENCES workflow_versions(id) ON DELETE RESTRICT,
+    version_no       BIGINT      NOT NULL,
+    status           TEXT        NOT NULL CHECK (status IN ('queued', 'running', 'pause_requested', 'paused', 'cancel_requested', 'canceled', 'manual_intervention', 'completed', 'failed')),
+	generation       BIGINT      NOT NULL DEFAULT 1,
+	scheduler_owner TEXT        NOT NULL DEFAULT '',
+	lease_expires_at TIMESTAMPTZ,
+	pause_reason     TEXT        NOT NULL DEFAULT '',
+	cancel_reason    TEXT        NOT NULL DEFAULT '',
+	manual_reason    TEXT        NOT NULL DEFAULT '',
+	next_event_sequence BIGINT   NOT NULL DEFAULT 1,
+    snapshot_json    JSONB       NOT NULL,
+    input_json       JSONB       NOT NULL DEFAULT '{}',
+    output_text      TEXT        NOT NULL DEFAULT '',
+    error_message    TEXT        NOT NULL DEFAULT '',
+    idempotency_key  TEXT        NOT NULL,
+    request_hash     TEXT        NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at       TIMESTAMPTZ,
+    finished_at      TIMESTAMPTZ
+);
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS definition_id UUID;
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS version_id UUID;
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS version_no BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'queued';
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS scheduler_owner TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS pause_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS cancel_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS manual_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS next_event_sequence BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS snapshot_json JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS input_json JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS output_text TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS error_message TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS idempotency_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS request_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+ALTER TABLE workflow_runs DROP CONSTRAINT IF EXISTS workflow_runs_status_check;
+ALTER TABLE workflow_runs ADD CONSTRAINT workflow_runs_status_check
+    CHECK (status IN ('queued', 'running', 'pause_requested', 'paused', 'cancel_requested', 'canceled', 'manual_intervention', 'completed', 'failed'));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_runs_idempotency
+    ON workflow_runs (idempotency_key) WHERE idempotency_key <> '';
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_status
+    ON workflow_runs (status, lease_expires_at, created_at ASC);
+
+CREATE TABLE IF NOT EXISTS workflow_node_attempts (
+    id              UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    run_id          UUID        NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    node_id         TEXT        NOT NULL,
+    attempt_no      INT         NOT NULL DEFAULT 1,
+    status          TEXT        NOT NULL CHECK (status IN ('pending', 'ready', 'claimed', 'running', 'succeeded', 'failed', 'retry_wait', 'skipped', 'paused', 'canceled', 'manual_intervention')),
+	run_generation  BIGINT      NOT NULL DEFAULT 1,
+	lease_owner     TEXT        NOT NULL DEFAULT '',
+	lease_expires_at TIMESTAMPTZ,
+	fence_token     BIGINT      NOT NULL DEFAULT 0,
+	retry_at        TIMESTAMPTZ,
+	effect_class    TEXT        NOT NULL DEFAULT 'pure',
+	selected_edges_json JSONB  NOT NULL DEFAULT '[]',
+    input_text      TEXT        NOT NULL DEFAULT '',
+    output_summary  TEXT        NOT NULL DEFAULT '',
+    error_message   TEXT        NOT NULL DEFAULT '',
+    error_code      TEXT        NOT NULL DEFAULT '',
+    trace_id        TEXT        NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at      TIMESTAMPTZ,
+    finished_at     TIMESTAMPTZ,
+    UNIQUE (run_id, node_id, attempt_no)
+);
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS attempt_no INT NOT NULL DEFAULT 1;
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS run_generation BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS lease_owner TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS fence_token BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS retry_at TIMESTAMPTZ;
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS effect_class TEXT NOT NULL DEFAULT 'pure';
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS selected_edges_json JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS input_text TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS output_summary TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS error_message TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS error_code TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS trace_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+ALTER TABLE workflow_node_attempts DROP CONSTRAINT IF EXISTS workflow_node_attempts_status_check;
+ALTER TABLE workflow_node_attempts ADD CONSTRAINT workflow_node_attempts_status_check
+    CHECK (status IN ('pending', 'ready', 'claimed', 'running', 'succeeded', 'failed', 'retry_wait', 'skipped', 'paused', 'canceled', 'manual_intervention'));
+CREATE INDEX IF NOT EXISTS idx_workflow_node_attempts_run
+    ON workflow_node_attempts (run_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_workflow_node_attempts_claim
+    ON workflow_node_attempts (status, retry_at, lease_expires_at);
+
+CREATE TABLE IF NOT EXISTS workflow_events (
+    id          UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    run_id      UUID        NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    sequence_no BIGINT      NOT NULL,
+    event_type  TEXT        NOT NULL,
+    node_id     TEXT        NOT NULL DEFAULT '',
+    attempt_no  INT         NOT NULL DEFAULT 0,
+    status      TEXT        NOT NULL DEFAULT '',
+    actor_type  TEXT        NOT NULL DEFAULT 'system',
+    actor_id    TEXT        NOT NULL DEFAULT '',
+    summary     TEXT        NOT NULL DEFAULT '',
+    payload_json JSONB      NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (run_id, sequence_no)
+);
+ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS sequence_no BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS event_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS node_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS attempt_no INT NOT NULL DEFAULT 0;
+ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS actor_type TEXT NOT NULL DEFAULT 'system';
+ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS actor_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS payload_json JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+CREATE INDEX IF NOT EXISTS idx_workflow_events_cursor ON workflow_events (run_id, sequence_no);
+
+CREATE TABLE IF NOT EXISTS workflow_approvals (
+    id UUID PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    run_id UUID NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL,
+    attempt_id UUID NOT NULL REFERENCES workflow_node_attempts(id) ON DELETE CASCADE,
+    run_generation BIGINT NOT NULL,
+    reason TEXT NOT NULL,
+    risk TEXT NOT NULL DEFAULT '',
+    request_summary TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+    decision_actor TEXT NOT NULL DEFAULT '',
+    decision_comment TEXT NOT NULL DEFAULT '',
+    decided_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (run_id, node_id, attempt_id)
+);
+ALTER TABLE workflow_approvals ADD COLUMN IF NOT EXISTS run_generation BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE workflow_approvals ADD COLUMN IF NOT EXISTS request_summary TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_approvals ADD COLUMN IF NOT EXISTS decision_actor TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_approvals ADD COLUMN IF NOT EXISTS decision_comment TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_approvals ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_workflow_approvals_pending ON workflow_approvals (status, created_at) WHERE status='pending';
+
+CREATE TABLE IF NOT EXISTS workflow_effect_intents (
+    id UUID PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    run_id UUID NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL,
+    attempt_id UUID NOT NULL REFERENCES workflow_node_attempts(id) ON DELETE CASCADE,
+    run_generation BIGINT NOT NULL,
+    effect_class TEXT NOT NULL CHECK (effect_class IN ('pure','idempotent','non_idempotent')),
+    idempotency_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'prepared' CHECK (status IN ('prepared','started','succeeded','failed','unknown')),
+    reason TEXT NOT NULL DEFAULT '',
+    output_summary TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (run_id, node_id, attempt_id),
+    UNIQUE (idempotency_key)
+);
+ALTER TABLE workflow_effect_intents ADD COLUMN IF NOT EXISTS run_generation BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE workflow_effect_intents ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_effect_intents ADD COLUMN IF NOT EXISTS output_summary TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_effect_intents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+CREATE INDEX IF NOT EXISTS idx_workflow_effect_intents_unknown ON workflow_effect_intents (status, updated_at) WHERE status='unknown';
 
 -- =============================================================================
 -- Memory Pipeline tables (async outbox → embedder → enricher)

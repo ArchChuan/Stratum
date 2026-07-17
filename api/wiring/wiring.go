@@ -40,6 +40,7 @@ type Container struct {
 	Memory     *Memory
 	IAM        *IAM
 	Agent      *Agent
+	Workflow   *Workflow
 
 	shutdown []func(context.Context) error
 }
@@ -70,6 +71,7 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 		{"memory", c.buildMemory},
 		{"iam", c.buildIAM},
 		{"agent", c.buildAgent},
+		{"workflow", c.buildWorkflow},
 		{"evaluation", c.buildEvaluation},
 	}
 

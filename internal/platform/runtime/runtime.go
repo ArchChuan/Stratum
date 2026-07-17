@@ -90,6 +90,7 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 	registerMemoryWorkers(appHarness, c, logger)
 	registerChatCleanup(appHarness, c, logger)
 	registerGuestReaper(appHarness, c, logger)
+	registerWorkflowWorker(appHarness, c, logger)
 	registerHTTPServer(appHarness, cfg, c, logger)
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -112,6 +113,17 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 		logger.Info("Context cancelled")
 	}
 	logger.Info("Application shutting down")
+}
+
+func registerWorkflowWorker(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {
+	if c.Workflow == nil || c.Workflow.Worker == nil {
+		return
+	}
+	mustRegister(appHarness, harnesspkg.NewSimpleComponent("workflow-worker", logger,
+		harnesspkg.WithStartFunc(func(ctx context.Context) error { go c.Workflow.Worker.Run(ctx, 250*time.Millisecond); return nil }),
+		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
+		harnesspkg.WithHealthCheckFunc(func(context.Context) error { return nil }),
+	), logger)
 }
 
 func registerHermes(appHarness *harnesspkg.Harness, cfg *config.Config, logger *zap.Logger) {
