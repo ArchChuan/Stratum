@@ -27,6 +27,13 @@ repos:
         pass_filenames: false
         types: [go]
 
+      # 架构守卫：api/wiring 层禁散写裸 SQL（单一真相源脚本，Claude/Codex/CI 共用）
+      - id: arch-guard
+        name: arch-guard (wiring no raw SQL)
+        language: system
+        entry: bash scripts/quality/arch-guard.sh
+        files: '^api/wiring/.*\.go$'
+
       # YAML validation (skip helm templates, k8s, and node_modules)
       - id: check-yaml
         name: check yaml

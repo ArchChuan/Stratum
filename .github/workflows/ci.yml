@@ -23,6 +23,9 @@ jobs:
       - name: Check migration boundaries
         run: bash scripts/quality/check-migration-boundaries.sh
 
+      - name: Test arch guard checker
+        run: bash scripts/quality/arch-guard-test.sh
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

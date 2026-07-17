@@ -167,12 +167,19 @@ migration-guardrails:
 	bash scripts/quality/check-migration-boundaries-test.sh
 	bash scripts/quality/check-migration-boundaries.sh
 
+# ─── 架构护栏：验证 api/wiring 裸 SQL 守卫脚本逻辑（增量门禁在 pre-commit）───
+# 注：不对现有 api/wiring/*.go 做全量硬扫描——仓库尚存 2 处历史违规
+# （evaluation.go / agent.go），须先下沉到 infrastructure 后再开全量门禁。
+# pre-commit 的 files 过滤只拦改动到的 wiring 文件，增量收敛存量违规。
+arch-guardrails:
+	bash scripts/quality/arch-guard-test.sh
+
 deployment-safety-test:
 	bash scripts/quality/check-deployment-safety-test.sh
 	bash scripts/quality/check-helm-image-rendering-test.sh
 
 # ─── CI 持续集成（构建+测试+推镜像）───────────────────────────────────────
-ci-backend: migration-guardrails be-install be-fmt be-lint
+ci-backend: migration-guardrails arch-guardrails be-install be-fmt be-lint
 	$(MAKE) infra-up
 	$(MAKE) infra-wait
 	$(MAKE) be-test be-build
