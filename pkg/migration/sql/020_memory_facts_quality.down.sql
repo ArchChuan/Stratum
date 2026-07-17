@@ -1,0 +1,2 @@
+-- Structured memory facts are managed by pkg/storage/postgres/tenant_schema.sql.
+-- Rollback is intentionally a no-op to preserve tenant memory data.

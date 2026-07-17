@@ -73,15 +73,20 @@ func (c *Container) buildMemory(ctx context.Context) error {
 			})
 		}
 	}
-	if db != nil && c.Storage != nil && c.Storage.Milvus != nil {
-		inj := pipeline.NewMemoryInjector(db, c.Logger, nil, c.Storage.Milvus)
-		var embedResolver pipeline.EmbedServiceResolver
+	if db != nil {
+		vectorStore := c.Storage.Milvus
+		inj := pipeline.NewMemoryInjector(db, c.Logger, nil, vectorStore)
 		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 			inj.SetEmbedResolver(c.Knowledge.EmbedResolver)
-			embedResolver = c.Knowledge.EmbedResolver
 		}
 		mem.Injector = injectorAdapter{inj: inj}
+	}
 
+	if db != nil && c.Storage != nil && c.Storage.Milvus != nil {
+		var embedResolver pipeline.EmbedServiceResolver
+		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
+			embedResolver = c.Knowledge.EmbedResolver
+		}
 		recallHandler := pipeline.NewRecallHandler(db, c.Logger, nil, embedResolver, c.Storage.Milvus)
 		if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
 			recallHandler.WithMetrics(c.LLMGateway.Metrics)
@@ -199,6 +204,7 @@ func BuildMemoryWorkers(c *Container) []interface {
 	}
 
 	factRepo := persistence.NewFactRepo(db)
+	historyRepo := persistence.NewHistoryRepo(db)
 	queue := persistence.NewExtractionQueue(db)
 
 	if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
@@ -218,14 +224,20 @@ func BuildMemoryWorkers(c *Container) []interface {
 			memworkers.NewExtractionWorker(tid, queue, c.Memory.Service, c.Logger),
 			memworkers.NewGCWorker(tid, factRepo, c.Logger).WithQueue(queue),
 		}
+		var historySummarizer memworkers.HistorySummarizer
+		var historyCompressor memworkers.HistoryCompressor
 		if llmRes != nil {
 			resolveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			llm := llmRes.ResolveLLM(resolveCtx, tid)
 			cancel()
 			if llm != nil {
 				ws = append(ws, memworkers.NewSupersedeWorker(tid, factRepo, memworkers.NewLLMSuperseder(llm), c.Logger))
+				historyProcessor := memworkers.NewLLMHistorySummarizer(llm)
+				historySummarizer = historyProcessor
+				historyCompressor = historyProcessor
 			}
 		}
+		ws = append(ws, memworkers.NewHistoryWorker(tid, historyRepo, historySummarizer, historyCompressor, c.Logger))
 		return ws
 	}, c.Logger)
 

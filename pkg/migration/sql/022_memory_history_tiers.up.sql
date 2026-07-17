@@ -1,0 +1,2 @@
+-- Tiered History is tenant-scoped. Canonical idempotent DDL and legacy-tenant
+-- backfill live in pkg/storage/postgres/tenant_schema.sql; this is a marker only.

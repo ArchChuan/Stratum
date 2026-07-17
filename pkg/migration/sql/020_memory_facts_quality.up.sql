@@ -1,0 +1,3 @@
+-- Structured memory facts are tenant-scoped. Canonical, idempotent DDL and
+-- legacy-tenant backfill live in pkg/storage/postgres/tenant_schema.sql.
+-- This public migration is intentionally a schema-version marker only.

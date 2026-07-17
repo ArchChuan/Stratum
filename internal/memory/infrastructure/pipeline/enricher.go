@@ -15,16 +15,22 @@ import (
 	"go.uber.org/zap"
 
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	"github.com/byteBuilderX/stratum/internal/memory/domain"
+	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
+	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/tokenutil"
 )
 
 // EnrichmentResult holds the structured metadata extracted by the LLM.
 type EnrichmentResult struct {
-	Entities      []EntityExtraction `json:"entities"`
-	Importance    float64            `json:"importance"`
-	TokenEstimate int                `json:"token_estimate"`
-	Keywords      []string           `json:"keywords"`
+	Entities        []EntityExtraction `json:"entities"`
+	Importance      float64            `json:"importance"`
+	TokenEstimate   int                `json:"token_estimate"`
+	Keywords        []string           `json:"keywords"`
+	WorkContext     []string           `json:"work_context"`
+	PersonalContext []string           `json:"personal_context"`
+	TopOfMind       []string           `json:"top_of_mind"`
 }
 
 // EntityExtraction represents a single entity found in a message.
@@ -52,6 +58,7 @@ type EnricherWorker struct {
 	stopOnce       sync.Once
 	ackWait        time.Duration
 	maxDeliver     int
+	snapshotRepo   port.ActiveSnapshotRepo
 }
 
 // NewEnricherWorker creates an enricher configured from the pipeline Config.
@@ -87,6 +94,7 @@ func NewEnricherWorker(
 		stopCh:         make(chan struct{}),
 		ackWait:        cfg.EnrichAckWait,
 		maxDeliver:     cfg.MaxDeliver,
+		snapshotRepo:   persistence.NewActiveSnapshotRepo(pool),
 	}
 }
 
@@ -230,6 +238,7 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 		}
 		return
 	}
+	_ = w.refreshActiveSnapshot(ctx, ev, enrichment)
 
 	enrichDuration.Observe(time.Since(start).Seconds())
 	enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "success"}).Inc()
@@ -255,6 +264,29 @@ func (w *EnricherWorker) processMessage(ctx context.Context, msg jetstream.Msg) 
 	// 一个慢富化能把整个 pgxpool 连接池耗尽，连带主流程 DB 调用全部超时。
 	// 这里独立 ctx + 独立 tx + 独立 panic recover，失败只 warn 不影响主流程。
 	w.runSummaryAsyncSafe(ctx, ev)
+}
+
+func (w *EnricherWorker) refreshActiveSnapshot(ctx context.Context, ev *MemoryEnrichedEvent, enrichment *EnrichmentResult) error {
+	if w.snapshotRepo == nil || (len(enrichment.WorkContext) == 0 && len(enrichment.PersonalContext) == 0 && len(enrichment.TopOfMind) == 0) {
+		return nil
+	}
+	eventTime := ev.CreatedAt.UTC()
+	if eventTime.IsZero() {
+		w.logger.Warn("memory.enrich.active_snapshot_zero_event_time",
+			zap.String("tenant_id", ev.TenantID), zap.String("message_id", ev.MessageID))
+		return nil
+	}
+	snapshot := &domain.ActiveSnapshot{
+		TenantID: ev.TenantID, UserID: ev.UserID, AgentID: ev.AgentID,
+		WorkContext: enrichment.WorkContext, PersonalContext: enrichment.PersonalContext, TopOfMind: enrichment.TopOfMind,
+		Source:    domain.SnapshotSource{Type: "message", Reference: ev.MessageID},
+		ExpiresAt: eventTime.Add(constants.ActiveSnapshotTTL), UpdatedAt: eventTime, Status: domain.SnapshotStatusActive,
+	}
+	if err := w.snapshotRepo.Upsert(ctx, snapshot); err != nil {
+		w.logger.Warn("memory.enrich.active_snapshot_failed", zap.String("tenant_id", ev.TenantID), zap.Error(err))
+		enrichTotal.With(prometheus.Labels{"tenant_id": ev.TenantID, "status": "snapshot_error"}).Inc()
+	}
+	return nil
 }
 
 func (w *EnricherWorker) runSummaryAsyncSafe(ctx context.Context, ev *MemoryEnrichedEvent) {

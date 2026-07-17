@@ -11,6 +11,10 @@ type ExtractedFact struct {
 	Entities   []string `json:"entities"`
 	// FactType classifies the fact: preference|skill|event|state|relationship|other
 	FactType string `json:"fact_type"`
+	// Confidence is the LLM-reported confidence in [0,1].
+	// Pointer to distinguish omitted (nil → default to Importance) from explicit 0.0
+	// (filtered by low-confidence gate in Phase 0).
+	Confidence *float64 `json:"confidence,omitempty"`
 }
 
 // LLMExtractor extracts structured facts from conversation messages.

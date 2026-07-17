@@ -23,7 +23,7 @@ func TestFactRepo_Insert(t *testing.T) {
 	_, repo := setupFactRepoTest(t)
 	ctx := context.Background()
 
-	fact, err := domain.NewFact(testFactTenant, "user123", "", "", "user", "User prefers dark mode", 0.8, []string{"UI", "preference"})
+	fact, err := domain.NewFactWithMeta(testFactTenant, "user123", "", "11111111-1111-1111-1111-111111111111", "user", "User prefers dark mode", 0.8, 0.9, "preference", domain.FactSourceExplicitUser, []string{"UI", "preference"})
 	require.NoError(t, err)
 
 	err = repo.Create(ctx, testFactTenant, fact)
@@ -34,6 +34,10 @@ func TestFactRepo_Insert(t *testing.T) {
 	require.Equal(t, fact.Content, retrieved.Content)
 	require.Equal(t, fact.Importance, retrieved.Importance)
 	require.Equal(t, fact.UserID, retrieved.UserID)
+	require.Equal(t, fact.ConversationID, retrieved.ConversationID)
+	require.Equal(t, fact.Category, retrieved.Category)
+	require.Equal(t, fact.Confidence, retrieved.Confidence)
+	require.Equal(t, fact.Source, retrieved.Source)
 }
 
 func TestFactRepo_Update(t *testing.T) {

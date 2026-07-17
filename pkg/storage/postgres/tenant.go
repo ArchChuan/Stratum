@@ -330,15 +330,29 @@ func ProvisionAllTenantSchemas(ctx context.Context, pool *pgxpool.Pool, logger *
 		}
 		ids = append(ids, id)
 	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("postgres: tenant rows iteration: %w", err)
+	}
 
-	for _, id := range ids {
+	return provisionTenantSchemaIDs(ctx, ids, func(ctx context.Context, id string) error {
 		if err := ProvisionTenantSchema(ctx, pool, id); err != nil {
 			logger.Warn("failed to provision tenant schema", zap.String("tenant_id", id), zap.Error(err))
+			return err
 		} else {
 			logger.Info("provisioned tenant schema", zap.String("tenant_id", id))
 		}
+		return nil
+	})
+}
+
+func provisionTenantSchemaIDs(ctx context.Context, ids []string, provision func(context.Context, string) error) error {
+	var errs []error
+	for _, id := range ids {
+		if err := provision(ctx, id); err != nil {
+			errs = append(errs, fmt.Errorf("tenant %s: %w", id, err))
+		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // ListTenantSchemas returns schema names ("tenant_<id>") for all active tenants.

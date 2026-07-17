@@ -77,7 +77,7 @@ func bootstrapTenantSchemas(
 			return fmt.Errorf("ensure default tenant: %w", err)
 		}
 		if err := deps.provisionAll(lockCtx, pool, logger); err != nil {
-			logger.Warn("failed to provision tenant schemas", zap.Error(err))
+			return fmt.Errorf("provision tenant schemas: %w", err)
 		}
 		return nil
 	})

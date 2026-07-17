@@ -589,10 +589,63 @@ CREATE TABLE IF NOT EXISTS memory_summaries (
     summary         TEXT NOT NULL,
     covered_until   TIMESTAMPTZ NOT NULL,
     token_count     INT NOT NULL DEFAULT 0,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    tier TEXT NOT NULL DEFAULT 'recent_months',
+    period_start TIMESTAMPTZ,
+    period_end TIMESTAMPTZ,
+    source_start TEXT NOT NULL DEFAULT '',
+    source_end TEXT NOT NULL DEFAULT '',
+    aggregation_key TEXT,
+    importance FLOAT8 NOT NULL DEFAULT 0.5,
+    confidence FLOAT8 NOT NULL DEFAULT 0.5,
+    status TEXT NOT NULL DEFAULT 'active',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_memory_summaries_conv ON memory_summaries (conversation_id, created_at DESC);
 ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'user';
+ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS tier TEXT NOT NULL DEFAULT 'recent_months';
+ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS period_start TIMESTAMPTZ;
+ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS period_end TIMESTAMPTZ;
+ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS source_start TEXT NOT NULL DEFAULT '';
+ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS source_end TEXT NOT NULL DEFAULT '';
+ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS aggregation_key TEXT;
+ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS importance FLOAT8 NOT NULL DEFAULT 0.5;
+ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS confidence FLOAT8 NOT NULL DEFAULT 0.5;
+ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_summaries_aggregation_key
+    ON memory_summaries (aggregation_key) WHERE aggregation_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_memory_summaries_history_scope
+    ON memory_summaries (user_id, agent_id, scope, tier, status, period_end DESC);
+
+-- Phase 1 active short-term memory: one bounded overwrite snapshot per user/agent scope.
+CREATE TABLE IF NOT EXISTS memory_active_snapshots (
+    id               UUID PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    user_id          TEXT NOT NULL,
+    agent_id         TEXT NOT NULL,
+    work_context     TEXT[] NOT NULL DEFAULT '{}',
+    personal_context TEXT[] NOT NULL DEFAULT '{}',
+    top_of_mind      TEXT[] NOT NULL DEFAULT '{}',
+    source           JSONB NOT NULL DEFAULT '{}',
+    expires_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    version          BIGINT NOT NULL DEFAULT 1,
+    status           TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+    UNIQUE (user_id, agent_id)
+);
+ALTER TABLE memory_active_snapshots ADD COLUMN IF NOT EXISTS work_context TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE memory_active_snapshots ADD COLUMN IF NOT EXISTS personal_context TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE memory_active_snapshots ADD COLUMN IF NOT EXISTS top_of_mind TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE memory_active_snapshots ADD COLUMN IF NOT EXISTS source JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE memory_active_snapshots ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE memory_active_snapshots ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE memory_active_snapshots ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE memory_active_snapshots ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_active_snapshots_scope
+    ON memory_active_snapshots (user_id, agent_id);
+CREATE INDEX IF NOT EXISTS idx_memory_active_snapshots_scope_expiry
+    ON memory_active_snapshots (user_id, agent_id, expires_at DESC)
+    WHERE status = 'active';
 
 -- memory_entries extensions for pipeline
 ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES chat_conversations(id) ON DELETE SET NULL;
@@ -702,6 +755,9 @@ CREATE TABLE IF NOT EXISTS memory_facts (
     scope           TEXT NOT NULL CHECK (scope IN ('user', 'agent')),
     content         TEXT NOT NULL,
     importance      FLOAT8 NOT NULL DEFAULT 0.5 CHECK (importance BETWEEN 0 AND 1),
+    category        TEXT NOT NULL DEFAULT 'other' CHECK (category IN ('preference', 'skill', 'event', 'state', 'relationship', 'other')),
+    confidence      FLOAT8 NOT NULL DEFAULT 0.5 CHECK (confidence BETWEEN 0 AND 1),
+    source          TEXT NOT NULL DEFAULT 'llm_extraction' CHECK (source IN ('llm_extraction', 'explicit_user', 'manual_api')),
     frecency_score  FLOAT8 NOT NULL DEFAULT 0,
     access_count    INT NOT NULL DEFAULT 0,
     last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -714,6 +770,14 @@ CREATE INDEX IF NOT EXISTS idx_memory_facts_user_scope ON memory_facts (user_id,
 CREATE INDEX IF NOT EXISTS idx_memory_facts_frecency ON memory_facts (frecency_score DESC) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_memory_facts_content_trgm ON memory_facts USING GIN (content gin_trgm_ops);
 ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES chat_conversations(id) ON DELETE SET NULL;
+-- Phase 0 structured facts: category / confidence / source provenance.
+-- ADD COLUMN ... DEFAULT idempotently backfills existing rows on legacy tenants.
+ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'other'
+    CHECK (category IN ('preference', 'skill', 'event', 'state', 'relationship', 'other'));
+ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS confidence FLOAT8 NOT NULL DEFAULT 0.5
+	CHECK (confidence BETWEEN 0 AND 1);
+ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'llm_extraction'
+    CHECK (source IN ('llm_extraction', 'explicit_user', 'manual_api'));
 -- Enforce only one active fact can supersede another (prevent supersede loops)
 CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_one_active_supersede
     ON memory_facts (superseded_by)

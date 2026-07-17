@@ -252,8 +252,8 @@ type GetUserMemoryRequest struct {
 
 // CreateUserMemory persists a user-scoped canonical memory fact.
 func (s *MemoryService) CreateUserMemory(ctx context.Context, req *CreateUserMemoryRequest) (*UserMemory, error) {
-	fact, err := domain.NewFact(req.TenantID, req.UserID, "", "",
-		string(domain.ScopeUser), req.Content, req.Importance, nil)
+	fact, err := domain.NewFactWithMeta(req.TenantID, req.UserID, "", "",
+		string(domain.ScopeUser), req.Content, req.Importance, 1.0, "other", domain.FactSourceExplicitUser, nil)
 	if err != nil {
 		return nil, err
 	}

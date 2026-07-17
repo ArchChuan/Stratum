@@ -13,6 +13,18 @@ const (
 	MemoryOutboxMaxRunes = 2000
 )
 
+// Active short-term snapshot - Phase 1 bounded overwrite memory.
+const (
+	ActiveSnapshotTTL               = 24 * time.Hour
+	ActiveSnapshotSectionMaxItems   = 8
+	ActiveSnapshotItemMaxRunes      = 240
+	ActiveSnapshotTotalMaxRunes     = 1200
+	ActiveSnapshotSourceRefMaxRunes = 128
+	ActiveSnapshotInjectionBudget   = 600
+	MemoryInjectionCharBudget       = 1800
+	ActiveSnapshotReadTimeout       = 500 * time.Millisecond
+)
+
 const (
 	MemoryOutboxPollInterval = 1 * time.Second
 	MemoryOutboxBatchSize    = 50
@@ -101,6 +113,25 @@ const (
 	MemorySoftDeleteRetention = 30 * 24 * time.Hour // 30 days
 )
 
+// Dynamic long-term History policy. Values are centralized so workers,
+// persistence, and injection cannot silently diverge.
+const (
+	HistoryAggregationMinEntries = 5
+	HistoryAggregationBatchSize  = 50
+	HistoryRecentMaxSegments     = 12
+	HistoryEarlierMaxSegments    = 12
+	HistoryRecentPromotionAge    = 90 * 24 * time.Hour
+	HistoryEarlierPromotionAge   = 365 * 24 * time.Hour
+	HistoryWorkerInterval        = 6 * time.Hour
+	HistoryOperationTimeout      = 30 * time.Second
+	HistoryReadTimeout           = 500 * time.Millisecond
+	HistoryInjectionTopN         = 3
+	HistoryInjectionCharBudget   = 500
+	HistoryArchiveInactiveAge    = 180 * 24 * time.Hour
+	HistoryProtectedImportance   = 0.8
+	HistoryProtectedConfidence   = 0.8
+)
+
 // Memory Quota - per-user limits
 const (
 	MemoryFactQuotaPerUser = 5000 // max facts per user
@@ -127,6 +158,22 @@ const (
 	MemorySupersedeLLMCallsPerRun   = 20   // max LLM judgments per RunOnce pass
 	MemoryInlineSupersedeFastThresh = 0.85 // similarity above which supersede is decided inline without LLM
 	MemoryInlineSupersedeLLMPerFact = 3    // max inline LLM calls per extracted fact during extraction
+)
+
+// Facts quality filter — Phase 0 hardening
+const (
+	// FactConfidenceMin 写入前低置信过滤阈值；低于此值的事实在持久化前被丢弃
+	FactConfidenceMin = 0.3
+	// FactInjectionConfidenceMin 注入器读取阈值；只注入 confidence >= 此值的 active 事实
+	FactInjectionConfidenceMin = 0.4
+	// FactPerRoundPersistLimit 单轮抽取最多持久化的事实数；超出部分按质量排序后截断
+	FactPerRoundPersistLimit = 10
+	// FactInjectionTopN 注入器每次取的最大事实数
+	FactInjectionTopN = 8
+	// FactInjectionCharBudget 注入器事实段的最大字符数；超出时截断
+	FactInjectionCharBudget = 1200
+	// FactInjectionTimeout 注入器读取超时；超时降级为空而不是错误
+	FactInjectionTimeout = 3 * time.Second
 )
 
 // Memory Workers - background processing intervals and batch sizes

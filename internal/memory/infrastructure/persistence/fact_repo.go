@@ -32,8 +32,9 @@ func (r *FactRepo) Create(ctx context.Context, tenantID string, fact *domain.Mem
 		INSERT INTO memory_facts (
 			id, user_id, agent_id, scope, conversation_id, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
-			created_at, updated_at, frecency_score
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`
+			created_at, updated_at, frecency_score,
+			category, confidence, source
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`
 
 	var agentID, supersededBy, conversationID *string
 	if fact.AgentID != "" {
@@ -51,6 +52,7 @@ func (r *FactRepo) Create(ctx context.Context, tenantID string, fact *domain.Mem
 			fact.ID, fact.UserID, agentID, string(fact.Scope), conversationID, fact.Content, fact.Importance,
 			fact.Status, supersededBy, fact.AccessCount, fact.LastAccessAt,
 			fact.CreatedAt, fact.UpdatedAt, fact.FrecencyScore,
+			fact.Category, fact.Confidence, fact.Source,
 		)
 		return translatePgError(err, "create fact")
 	})
@@ -58,21 +60,23 @@ func (r *FactRepo) Create(ctx context.Context, tenantID string, fact *domain.Mem
 
 func (r *FactRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.MemoryFact, error) {
 	const query = `
-		SELECT id, user_id, agent_id, scope, content, importance,
+		SELECT id, user_id, agent_id, scope, conversation_id, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
-			created_at, updated_at, frecency_score
+			created_at, updated_at, frecency_score,
+			category, confidence, source
 		FROM memory_facts WHERE id = $1`
 
 	var f *domain.MemoryFact
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var fact domain.MemoryFact
-		var agentID, supersededBy *string
+		var agentID, conversationID, supersededBy *string
 		var scope string
 
 		err := tx.QueryRow(ctx, query, id).Scan(
-			&fact.ID, &fact.UserID, &agentID, &scope, &fact.Content, &fact.Importance,
+			&fact.ID, &fact.UserID, &agentID, &scope, &conversationID, &fact.Content, &fact.Importance,
 			&fact.Status, &supersededBy, &fact.AccessCount, &fact.LastAccessAt,
 			&fact.CreatedAt, &fact.UpdatedAt, &fact.FrecencyScore,
+			&fact.Category, &fact.Confidence, &fact.Source,
 		)
 		if err != nil {
 			if err == pgx.ErrNoRows {
@@ -83,6 +87,9 @@ func (r *FactRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.Me
 		fact.Scope = domain.Scope(scope)
 		if agentID != nil {
 			fact.AgentID = *agentID
+		}
+		if conversationID != nil {
+			fact.ConversationID = *conversationID
 		}
 		if supersededBy != nil {
 			fact.SupersededBy = *supersededBy
@@ -123,9 +130,10 @@ func (r *FactRepo) Update(ctx context.Context, tenantID string, fact *domain.Mem
 
 func (r *FactRepo) ListActive(ctx context.Context, tenantID string, filter domain.ScopeFilter, limit int) ([]*domain.MemoryFact, error) {
 	const query = `
-		SELECT id, user_id, agent_id, scope, content, importance,
+		SELECT id, user_id, agent_id, scope, conversation_id, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
-			created_at, updated_at, frecency_score
+			created_at, updated_at, frecency_score,
+			category, confidence, source
 		FROM memory_facts
 		WHERE user_id = $1 AND status = 'active'
 			AND (
@@ -150,9 +158,10 @@ func (r *FactRepo) ListActive(ctx context.Context, tenantID string, filter domai
 
 func (r *FactRepo) SearchByContent(ctx context.Context, tenantID string, filter domain.ScopeFilter, query string, limit int) ([]*domain.MemoryFact, error) {
 	const sql = `
-		SELECT id, user_id, agent_id, scope, content, importance,
+		SELECT id, user_id, agent_id, scope, conversation_id, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
-			created_at, updated_at, frecency_score
+			created_at, updated_at, frecency_score,
+			category, confidence, source
 		FROM memory_facts
 		WHERE user_id = $1 AND status = 'active' AND content ILIKE $2
 			AND (
@@ -289,19 +298,23 @@ func scanFacts(rows pgx.Rows) ([]*domain.MemoryFact, error) {
 	var facts []*domain.MemoryFact
 	for rows.Next() {
 		var f domain.MemoryFact
-		var agentID, supersededBy *string
+		var agentID, conversationID, supersededBy *string
 		var scope string
 
 		if err := rows.Scan(
-			&f.ID, &f.UserID, &agentID, &scope, &f.Content, &f.Importance,
+			&f.ID, &f.UserID, &agentID, &scope, &conversationID, &f.Content, &f.Importance,
 			&f.Status, &supersededBy, &f.AccessCount, &f.LastAccessAt,
 			&f.CreatedAt, &f.UpdatedAt, &f.FrecencyScore,
+			&f.Category, &f.Confidence, &f.Source,
 		); err != nil {
 			return nil, fmt.Errorf("scan fact: %w", err)
 		}
 		f.Scope = domain.Scope(scope)
 		if agentID != nil {
 			f.AgentID = *agentID
+		}
+		if conversationID != nil {
+			f.ConversationID = *conversationID
 		}
 		if supersededBy != nil {
 			f.SupersededBy = *supersededBy

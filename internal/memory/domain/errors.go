@@ -37,4 +37,13 @@ var (
 
 	// ErrEmptyContent is returned when fact content is empty.
 	ErrEmptyContent = errors.New("memory fact content cannot be empty")
+
+	// ErrInvalidCategory is returned when a fact category is not in the allowlist (Phase 0).
+	ErrInvalidCategory = errors.New("memory fact category not in allowlist")
+
+	// ErrConfidenceOutOfRange is returned when confidence is outside [0, 1] (Phase 0).
+	ErrConfidenceOutOfRange = errors.New("memory fact confidence must be in [0, 1]")
+
+	// ErrInvalidSource is returned when fact provenance is not recognized.
+	ErrInvalidSource = errors.New("memory fact source not in allowlist")
 )
