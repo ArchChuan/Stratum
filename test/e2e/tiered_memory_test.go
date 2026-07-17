@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -96,6 +97,7 @@ func TestHistoryRepositoryE2E(t *testing.T) {
 		SourceStart: "msg-1", SourceEnd: "msg-4", PeriodStart: now.Add(-100 * 24 * time.Hour),
 		PeriodEnd: now.Add(-99 * 24 * time.Hour), Importance: 0.8, Confidence: 0.9, Status: domain.HistoryStatusActive,
 	}
+	segment.SourceIDs = []string{uuid.NewString(), uuid.NewString()}
 	segment.AggregationKey = domain.HistoryAggregationKey(segment.UserID, segment.AgentID, string(segment.Scope), segment.Tier, segment.PeriodStart, segment.PeriodEnd, segment.SourceStart, segment.SourceEnd)
 	require.NoError(t, seedHistoryConversation(ctx, env, env.TenantID, segment.ConversationID))
 
@@ -139,6 +141,104 @@ func TestHistoryRepositoryE2E(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, active, 1)
 	require.Equal(t, segment.Summary, active[0].Summary)
+}
+
+func TestHistoryRepositoryNextBatchTracksExactSourceIDsAtWatermark(t *testing.T) {
+	env := SetupMemoryTestEnv(t)
+	ctx := context.Background()
+	conversationID := uuid.NewString()
+	watermark := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Hour)
+
+	require.NoError(t, seedHistoryConversation(ctx, env, env.TenantID, conversationID))
+
+	initialIDs := deterministicUUIDs("history-watermark-initial", 60)
+	require.NoError(t, seedEnrichedHistoryEntries(ctx, env, conversationID, initialIDs, watermark))
+
+	first, err := env.HistoryRepo.NextBatch(ctx, env.TenantID, 10, 50)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	require.Len(t, first.Entries, 50)
+	requireHistorySourceIDs(t, initialIDs[:50], first.Entries)
+	require.NoError(t, env.HistoryRepo.Upsert(ctx, env.TenantID, historySegmentForBatch(first, "first tied batch")))
+
+	second, err := env.HistoryRepo.NextBatch(ctx, env.TenantID, 10, 50)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	require.Len(t, second.Entries, 10)
+	requireHistorySourceIDs(t, initialIDs[50:], second.Entries)
+	require.NoError(t, env.HistoryRepo.Upsert(ctx, env.TenantID, historySegmentForBatch(second, "second tied batch")))
+
+	lateIDs := deterministicUUIDs("history-watermark-late", 10)
+	require.NoError(t, seedEnrichedHistoryEntries(ctx, env, conversationID, lateIDs, watermark.Add(-time.Hour)))
+
+	late, err := env.HistoryRepo.NextBatch(ctx, env.TenantID, 10, 50)
+	require.NoError(t, err)
+	require.NotNil(t, late)
+	require.Len(t, late.Entries, 10)
+	requireHistorySourceIDs(t, lateIDs, late.Entries)
+}
+
+func deterministicUUIDs(namespace string, count int) []string {
+	ids := make([]string, count)
+	for i := range ids {
+		ids[i] = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("%s-%03d", namespace, i))).String()
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func seedEnrichedHistoryEntries(ctx context.Context, env *MemoryTestEnv, conversationID string, ids []string, createdAt time.Time) error {
+	return withTenantTx(ctx, env, env.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		for i, id := range ids {
+			if _, err := tx.Exec(ctx, `INSERT INTO memory_entries
+				(id, user_id, agent_id, scope, role, content, type, enriched_at, conversation_id, created_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+				id, env.UserID, env.AgentID, string(domain.ScopeAgent), "user", fmt.Sprintf("history entry %d", i),
+				"long_term", createdAt, conversationID, createdAt); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func historySegmentForBatch(batch *domain.HistoryBatch, summary string) *domain.HistorySegment {
+	first := batch.Entries[0]
+	last := batch.Entries[len(batch.Entries)-1]
+	sourceIDs := make([]string, len(batch.Entries))
+	for i, entry := range batch.Entries {
+		sourceIDs[i] = entry.ID
+	}
+	segment := &domain.HistorySegment{
+		ConversationID: batch.ConversationID,
+		UserID:         batch.UserID,
+		AgentID:        batch.AgentID,
+		Scope:          batch.Scope,
+		Tier:           domain.HistoryTierRecent,
+		Summary:        summary,
+		SourceStart:    first.ID,
+		SourceEnd:      last.ID,
+		SourceIDs:      sourceIDs,
+		PeriodStart:    first.CreatedAt,
+		PeriodEnd:      last.CreatedAt,
+		Importance:     0.5,
+		Confidence:     0.5,
+		Status:         domain.HistoryStatusActive,
+	}
+	segment.AggregationKey = domain.HistoryAggregationKey(segment.UserID, segment.AgentID, string(segment.Scope), segment.Tier, segment.PeriodStart, segment.PeriodEnd, segment.SourceStart, segment.SourceEnd)
+	return segment
+}
+
+func requireHistorySourceIDs(t *testing.T, expected []string, entries []domain.HistorySource) {
+	t.Helper()
+	actual := make([]string, len(entries))
+	for i, entry := range entries {
+		actual[i] = entry.ID
+	}
+	sort.Strings(actual)
+	want := append([]string(nil), expected...)
+	sort.Strings(want)
+	require.Equal(t, want, actual)
 }
 
 func withTenantTx(ctx context.Context, env *MemoryTestEnv, tenantID string, fn func(context.Context, pgx.Tx) error) error {

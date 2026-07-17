@@ -114,12 +114,30 @@ func TestTenantSchemaEvolvesMemorySummariesForTieredHistory(t *testing.T) {
 		"confidence FLOAT8 NOT NULL DEFAULT 0.5",
 		"status TEXT NOT NULL DEFAULT 'active'",
 		"updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+		"source_ids UUID[]",
+		"ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS source_ids UUID[]",
 		"ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS tier",
 		"CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_summaries_aggregation_key",
 		"idx_memory_summaries_history_scope",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("tenant schema missing History DDL %q", want)
+		}
+	}
+}
+
+func TestHistorySourceIDsMigrationMarkerIsPairedAndTenantOnly(t *testing.T) {
+	for _, path := range []string{
+		"../../migration/sql/023_memory_history_source_ids.up.sql",
+		"../../migration/sql/023_memory_history_source_ids.down.sql",
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read marker %s: %v", path, err)
+		}
+		text := string(data)
+		if !strings.Contains(text, "tenant_schema.sql") || strings.Contains(strings.ToUpper(text), "ALTER TABLE") || strings.Contains(strings.ToUpper(text), "CREATE TABLE") {
+			t.Fatalf("marker %s must be marker-only tenant DDL guidance", path)
 		}
 	}
 }

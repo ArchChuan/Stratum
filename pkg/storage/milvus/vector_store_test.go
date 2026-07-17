@@ -1,6 +1,7 @@
 package milvus
 
 import (
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -8,6 +9,20 @@ import (
 
 	"go.uber.org/zap"
 )
+
+func TestPrimaryIDDeleteExpressionUsesIDFieldAndEscapesValues(t *testing.T) {
+	expr := primaryIDDeleteExpression([]string{`fact-1`, `fact-"2\\`})
+	want := `id in ["fact-1","fact-\"2\\\\"]`
+	if expr != want {
+		t.Fatalf("expression = %q, want %q", expr, want)
+	}
+}
+
+func TestPrimaryIDDeleteExpressionEmptyIsNoOp(t *testing.T) {
+	if got := primaryIDDeleteExpression(nil); !reflect.DeepEqual(got, "") {
+		t.Fatalf("expression = %q, want empty", got)
+	}
+}
 
 func TestVectorStore_NewVectorStore(t *testing.T) {
 	logger := zap.NewNop()

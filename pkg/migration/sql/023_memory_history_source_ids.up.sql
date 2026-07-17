@@ -1,0 +1,1 @@
+-- History source ID provenance is tenant-scoped and managed by pkg/storage/postgres/tenant_schema.sql.

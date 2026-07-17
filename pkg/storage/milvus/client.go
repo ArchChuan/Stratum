@@ -557,6 +557,36 @@ func (vs *VectorStore) DeleteByDocumentIDs(ctx context.Context, collectionName s
 	return nil
 }
 
+// DeleteByPrimaryIDs removes vectors by the collection's primary id field.
+func (vs *VectorStore) DeleteByPrimaryIDs(ctx context.Context, collectionName string, ids []string) error {
+	expr := primaryIDDeleteExpression(ids)
+	if expr == "" {
+		return nil
+	}
+	c, err := vs.getClient(ctx)
+	if err != nil {
+		return err
+	}
+	if err := c.Delete(ctx, collectionName, "", expr); err != nil {
+		if strings.Contains(err.Error(), "not exist") || strings.Contains(err.Error(), "not found") {
+			return nil
+		}
+		return fmt.Errorf("delete by primary IDs: %w", err)
+	}
+	return nil
+}
+
+func primaryIDDeleteExpression(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	quoted := make([]string, len(ids))
+	for i, id := range ids {
+		quoted[i] = fmt.Sprintf("%q", id)
+	}
+	return fmt.Sprintf("id in [%s]", strings.Join(quoted, ","))
+}
+
 // CountDocuments returns the number of distinct source documents in a collection.
 func (vs *VectorStore) CountDocuments(ctx context.Context, collectionName string) (int, error) {
 	c, err := vs.getClient(ctx)
