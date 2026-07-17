@@ -4,9 +4,11 @@
 
 **Goal:** Force agent-created worktrees and branches to start from the freshly fetched `origin/main` commit.
 
-**Architecture:** A repository script is the sole supported creation entry point and performs fetch plus worktree creation.
-Claude Code and Codex retain separate PreToolUse scripts but enforce the same deny/allow contract, with tests in each
-native hook suite and an integration test against a temporary bare remote.
+**Architecture:** A tracked repository script is the sole supported creation entry point and performs fetch plus
+worktree creation. Because this repository ignores local agent configuration, Claude Code uses a user-level hook that
+calls a primary-workspace script, while Codex extends its existing trusted user-level main-branch guard. Each enforces
+the same deny/allow contract and has local tests. A tracked integration test verifies the repository script against a
+temporary bare remote.
 
 **Tech Stack:** Bash, Git worktrees, jq-based Claude/Codex hooks
 
@@ -16,10 +18,10 @@ native hook suite and an integration test against a temporary bare remote.
 
 **Files:**
 
-- Modify: `.claude/hooks/run-tests.sh`
-- Modify: `.codex/hooks/run-tests.sh`
-- Create: `.claude/hooks/worktree-guard.sh`
-- Create: `.codex/hooks/worktree-guard.sh`
+- Modify locally: `/home/yang/go-projects/stratum/.claude/hooks/run-tests.sh`
+- Modify locally: `/home/yang/go-projects/stratum/.codex/hooks/run-tests.sh`
+- Create locally: `/home/yang/go-projects/stratum/.claude/hooks/worktree-guard.sh`
+- Modify locally: `/home/yang/.codex/hooks/main-branch-guard.sh`
 
 - [ ] Add test cases that deny `git worktree add -b`, `git checkout -b`, `git switch -c`, and `git branch feat/x`, allow
   `bash scripts/new-worktree.sh ../stratum-x feat/x`, and allow `git status`.
@@ -27,7 +29,8 @@ native hook suite and an integration test against a temporary bare remote.
   `worktree-guard.sh` does not exist.
 - [ ] Implement protocol-specific guards that parse Bash commands, recognize the approved script entry point, and deny
   raw branch creation with a message naming `scripts/new-worktree.sh`.
-- [ ] Register each guard as a `PreToolUse:Bash` command in `.claude/settings.local.json` and `.codex/hooks.json`.
+- [ ] Register the Claude guard in `/home/yang/.claude/settings.json`; keep the existing Codex Hook definition unchanged
+  so its persisted trust remains valid.
 - [ ] Re-run both hook suites and verify all cases pass.
 
 ## Task 2: Implement fresh-main worktree creation
@@ -48,14 +51,15 @@ native hook suite and an integration test against a temporary bare remote.
 
 **Files:**
 
-- Modify: `AGENTS.md`
-- Modify: `.claude/hooks/README.md`
-- Modify: `.codex/hooks/README.md`
+- Modify locally: `/home/yang/go-projects/stratum/AGENTS.md`
+- Modify locally: `/home/yang/go-projects/stratum/.claude/hooks/README.md`
+- Modify locally: `/home/yang/go-projects/stratum/.codex/hooks/README.md`
 
 - [ ] Replace the raw worktree command in `AGENTS.md` with
   `bash scripts/new-worktree.sh ../stratum-<feature> feat/<feature>` and state that it fetches `origin/main` first.
 - [ ] Add `worktree-guard.sh` responsibilities and the approved entry point to both hook READMEs.
 - [ ] Run `bash .claude/hooks/run-tests.sh`, `bash .codex/hooks/run-tests.sh`, and
   `bash scripts/test-new-worktree.sh`; verify zero failures.
-- [ ] Run `git diff --check` and inspect `git diff --stat` to confirm only planned files changed.
+- [ ] Run `git diff --check` and inspect `git diff --stat` to confirm only planned tracked files changed; separately
+  validate the local ignored JSON and Hook suites.
 - [ ] Commit the implementation as `chore(git): enforce fresh-main worktree creation`.
