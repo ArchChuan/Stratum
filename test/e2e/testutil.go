@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/persistence"
 	pgstorage "github.com/byteBuilderX/stratum/pkg/storage/postgres"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -18,15 +18,18 @@ import (
 
 // MemoryTestEnv holds resources for E2E memory tests.
 type MemoryTestEnv struct {
-	PGPool        *pgxpool.Pool
-	Redis         *redis.Client
-	MemoryService *application.MemoryService
-	FactRepo      port.FactRepo
-	EntityRepo    port.EntityRepo
-	Queue         port.ExtractionQueue
-	TenantID      string
-	UserID        string
-	AgentID       string
+	PGPool         *pgxpool.Pool
+	Redis          *redis.Client
+	MemoryService  *application.MemoryService
+	FactRepo       port.FactRepo
+	EntityRepo     port.EntityRepo
+	Queue          port.ExtractionQueue
+	SnapshotRepo   *persistence.ActiveSnapshotRepo
+	HistoryRepo    *persistence.HistoryRepo
+	TenantID       string
+	SecondTenantID string
+	UserID         string
+	AgentID        string
 }
 
 // SetupMemoryTestEnv creates isolated tenant schema + mocked dependencies.
@@ -54,8 +57,10 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	}
 
 	// Step 2: Generate unique tenant ID for isolation
-	tenantID := fmt.Sprintf("test_%d", time.Now().UnixNano())
+	tenantID := uuid.NewString()
+	secondTenantID := uuid.NewString()
 	schemaName := fmt.Sprintf("tenant_%s", tenantID)
+	secondSchemaName := fmt.Sprintf("tenant_%s", secondTenantID)
 
 	// Step 3: Provision public schema (gen_uuid_v7, pg_trgm, public.tenants, ...).
 	// Idempotent — safe to call per-test; no-op if already applied to this DB.
@@ -70,6 +75,10 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	if err := pgstorage.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 		pool.Close()
 		t.Fatalf("provision tenant schema: %v", err)
+	}
+	if err := pgstorage.ProvisionTenantSchema(ctx, pool, secondTenantID); err != nil {
+		pool.Close()
+		t.Fatalf("provision second tenant schema: %v", err)
 	}
 
 	// Step 5: Connect to Redis (skip if unavailable)
@@ -90,22 +99,26 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	memoryService, factRepo, entityRepo, queue := newMemoryService(pool, redisClient)
 
 	env := &MemoryTestEnv{
-		PGPool:        pool,
-		Redis:         redisClient,
-		MemoryService: memoryService,
-		FactRepo:      factRepo,
-		EntityRepo:    entityRepo,
-		Queue:         queue,
-		TenantID:      tenantID,
-		UserID:        "test-user-001",
-		AgentID:       "test-agent-001",
+		PGPool:         pool,
+		Redis:          redisClient,
+		MemoryService:  memoryService,
+		FactRepo:       factRepo,
+		EntityRepo:     entityRepo,
+		Queue:          queue,
+		SnapshotRepo:   persistence.NewActiveSnapshotRepo(pool),
+		HistoryRepo:    persistence.NewHistoryRepo(pool),
+		TenantID:       tenantID,
+		SecondTenantID: secondTenantID,
+		UserID:         "test-user-001",
+		AgentID:        "test-agent-001",
 	}
 
 	// Step 7: Register cleanup
 	t.Cleanup(func() {
 		ctx := context.Background()
 		// Drop schema CASCADE removes all tables
-		_, _ = pool.Exec(ctx, fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName))
+		_, _ = pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "%s" CASCADE`, schemaName))
+		_, _ = pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "%s" CASCADE`, secondSchemaName))
 		// Clear Redis buffer keys
 		_ = redisClient.FlushDB(ctx).Err()
 		pool.Close()

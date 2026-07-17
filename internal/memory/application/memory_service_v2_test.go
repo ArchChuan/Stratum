@@ -20,7 +20,8 @@ func TestMemoryService_CreateAndReadUserMemory(t *testing.T) {
 
 	facts.On("Create", ctx, "tenant-1", mock.MatchedBy(func(f *domain.MemoryFact) bool {
 		return f.TenantID == "tenant-1" && f.UserID == "user-1" && f.Scope == domain.ScopeUser &&
-			f.Content == "prefers concise answers" && f.Importance == 0.8
+			f.Content == "prefers concise answers" && f.Importance == 0.8 &&
+			f.Category == "other" && f.Confidence == 1.0 && f.Source == domain.FactSourceExplicitUser
 	})).Return(nil).Once()
 
 	created, err := svc.CreateUserMemory(ctx, &CreateUserMemoryRequest{

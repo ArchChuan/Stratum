@@ -161,6 +161,7 @@ func (r *MemoryRepo) DeleteAllByUser(ctx context.Context, tenantID, userID strin
 			`DELETE FROM memory_outbox WHERE user_id = $1`,
 			`DELETE FROM memory_extraction_queue WHERE user_id = $1`,
 			`DELETE FROM memory_summaries WHERE user_id = $1`,
+			`DELETE FROM memory_active_snapshots WHERE user_id = $1`,
 			`DELETE FROM memory_entries WHERE user_id = $1`,
 		} {
 			if _, err := tx.Exec(ctx, query, userID); err != nil {
@@ -178,6 +179,7 @@ func (r *MemoryRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID str
 			`DELETE FROM memory_outbox WHERE agent_id = $1`,
 			`DELETE FROM memory_extraction_queue WHERE agent_id = $1`,
 			`DELETE FROM memory_summaries WHERE agent_id = $1`,
+			`DELETE FROM memory_active_snapshots WHERE agent_id = $1`,
 			`DELETE FROM memory_entries WHERE agent_id = $1`,
 		} {
 			if _, err := tx.Exec(ctx, query, agentID); err != nil {

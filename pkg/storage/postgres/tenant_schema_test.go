@@ -6,6 +6,140 @@ import (
 	"testing"
 )
 
+func TestTenantSchemaBackfillsStructuredMemoryFacts(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS memory_facts")
+	for _, want := range []string{
+		"category        TEXT NOT NULL DEFAULT 'other'",
+		"confidence      FLOAT8 NOT NULL DEFAULT 0.5",
+		"source          TEXT NOT NULL DEFAULT 'llm_extraction'",
+		"ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS category",
+		"ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS confidence",
+		"ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS source",
+	} {
+		at := strings.Index(sql, want)
+		if at == -1 {
+			t.Fatalf("tenant_schema.sql missing structured fact DDL %q", want)
+		}
+		if strings.HasPrefix(want, "ALTER TABLE") && at < createAt {
+			t.Fatalf("structured fact backfill must follow table creation: %q", want)
+		}
+	}
+}
+
+func TestStructuredMemoryFactsMigrationMarkerIsPaired(t *testing.T) {
+	for _, path := range []string{
+		"../../migration/sql/020_memory_facts_quality.up.sql",
+		"../../migration/sql/020_memory_facts_quality.down.sql",
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read marker %s: %v", path, err)
+		}
+		if !strings.Contains(string(data), "tenant_schema.sql") {
+			t.Fatalf("marker %s must identify tenant_schema.sql as canonical DDL", path)
+		}
+	}
+}
+
+func TestTenantSchemaContainsIdempotentActiveSnapshotDDL(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS memory_active_snapshots")
+	if createAt == -1 {
+		t.Fatal("tenant schema missing active snapshot table")
+	}
+	for _, want := range []string{
+		"work_context     TEXT[] NOT NULL DEFAULT '{}'",
+		"personal_context TEXT[] NOT NULL DEFAULT '{}'",
+		"top_of_mind      TEXT[] NOT NULL DEFAULT '{}'",
+		"source           JSONB NOT NULL DEFAULT '{}'",
+		"expires_at       TIMESTAMPTZ NOT NULL",
+		"version          BIGINT NOT NULL DEFAULT 1",
+		"status           TEXT NOT NULL DEFAULT 'active'",
+		"UNIQUE (user_id, agent_id)",
+		"ALTER TABLE memory_active_snapshots ADD COLUMN IF NOT EXISTS work_context",
+		"CREATE INDEX IF NOT EXISTS idx_memory_active_snapshots_scope_expiry",
+	} {
+		at := strings.Index(sql, want)
+		if at == -1 {
+			t.Fatalf("tenant schema missing active snapshot DDL %q", want)
+		}
+		if strings.HasPrefix(want, "ALTER TABLE") && at < createAt {
+			t.Fatalf("active snapshot backfill must follow table creation: %q", want)
+		}
+	}
+}
+
+func TestActiveSnapshotMigrationMarkerIsPairedAndTenantOnly(t *testing.T) {
+	for _, path := range []string{
+		"../../migration/sql/021_memory_active_snapshots.up.sql",
+		"../../migration/sql/021_memory_active_snapshots.down.sql",
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read marker %s: %v", path, err)
+		}
+		text := string(data)
+		if !strings.Contains(text, "tenant_schema.sql") {
+			t.Fatalf("marker %s must identify tenant_schema.sql as canonical DDL", path)
+		}
+		if strings.Contains(strings.ToUpper(text), "CREATE TABLE") {
+			t.Fatalf("marker %s must not duplicate tenant DDL", path)
+		}
+	}
+}
+
+func TestTenantSchemaEvolvesMemorySummariesForTieredHistory(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	for _, want := range []string{
+		"tier TEXT NOT NULL DEFAULT 'recent_months'",
+		"period_start TIMESTAMPTZ",
+		"period_end TIMESTAMPTZ",
+		"source_start TEXT NOT NULL DEFAULT ''",
+		"source_end TEXT NOT NULL DEFAULT ''",
+		"aggregation_key TEXT",
+		"importance FLOAT8 NOT NULL DEFAULT 0.5",
+		"confidence FLOAT8 NOT NULL DEFAULT 0.5",
+		"status TEXT NOT NULL DEFAULT 'active'",
+		"updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+		"ALTER TABLE memory_summaries ADD COLUMN IF NOT EXISTS tier",
+		"CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_summaries_aggregation_key",
+		"idx_memory_summaries_history_scope",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("tenant schema missing History DDL %q", want)
+		}
+	}
+}
+
+func TestHistoryMigrationMarkerIsPairedAndTenantOnly(t *testing.T) {
+	for _, path := range []string{
+		"../../migration/sql/022_memory_history_tiers.up.sql",
+		"../../migration/sql/022_memory_history_tiers.down.sql",
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read marker %s: %v", path, err)
+		}
+		text := string(data)
+		if !strings.Contains(text, "tenant_schema.sql") || strings.Contains(strings.ToUpper(text), "CREATE TABLE") {
+			t.Fatalf("marker %s must be tenant-only comment marker", path)
+		}
+	}
+}
+
 func TestTenantSchemaPreservesMemoryEntrySessionRouting(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {

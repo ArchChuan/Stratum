@@ -37,7 +37,7 @@ fact_type 分类：
 - other：不属于以上分类的陈述性事实
 
 只输出 JSON 数组，不加任何说明或 markdown 标记：
-[{"content":"...","importance":0.0-1.0,"fact_type":"...","entities":["实体名"]}]`, userID, agentID, constants.MemoryMaxFactsPerExtraction)
+[{"content":"...","importance":0.0-1.0,"fact_type":"...","confidence":0.0-1.0,"entities":["实体名"]}]`, userID, agentID, constants.MemoryMaxFactsPerExtraction)
 	resp, err := e.client.Complete(ctx, &llmgateway.CompletionRequest{
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: system},

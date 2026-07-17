@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
@@ -11,7 +12,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// ExtractFacts orchestrates fact extraction: LLM extraction → supersede check → entity normalization → persistence.
+// effectiveConfidence returns the extraction confidence used for quality sorting and filtering.
+// If ef.Confidence is explicitly set (non-nil), that value is used.
+// If omitted (nil), the Importance field serves as a proxy (same semantics as before Phase 0).
+func effectiveConfidence(ef *port.ExtractedFact) float64 {
+	if ef.Confidence != nil {
+		return *ef.Confidence
+	}
+	return ef.Importance
+}
+
+// ExtractFacts orchestrates fact extraction: LLM extraction → low-confidence gate
+// → quality sort → per-round cap → supersede check → entity normalization → persistence.
 func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsRequest) error {
 	s.logger.Debug("memory.extract_facts",
 		zap.String("tenant_id", req.TenantID),
@@ -48,6 +60,38 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 		zap.Int("fact_count", len(extractedFacts)),
 	)
 
+	// Phase 0: 低置信门控 — 丢弃 effectiveConfidence < FactConfidenceMin 的事实
+	filtered := extractedFacts[:0]
+	for _, ef := range extractedFacts {
+		ec := effectiveConfidence(ef)
+		if ec < constants.FactConfidenceMin {
+			s.logger.Debug("memory.extract_facts: dropped low-confidence fact",
+				zap.String("content_prefix", truncateStr(ef.Content, 40)),
+				zap.Float64("effective_confidence", ec),
+				zap.Float64("threshold", constants.FactConfidenceMin),
+			)
+			continue
+		}
+		filtered = append(filtered, ef)
+	}
+	extractedFacts = filtered
+
+	// Phase 0: 质量排序 (effectiveConfidence DESC, Importance DESC) 后截断至 FactPerRoundPersistLimit
+	if len(extractedFacts) > constants.FactPerRoundPersistLimit {
+		sort.SliceStable(extractedFacts, func(i, j int) bool {
+			ci := effectiveConfidence(extractedFacts[i])
+			cj := effectiveConfidence(extractedFacts[j])
+			if ci != cj {
+				return ci > cj
+			}
+			return extractedFacts[i].Importance > extractedFacts[j].Importance
+		})
+		extractedFacts = extractedFacts[:constants.FactPerRoundPersistLimit]
+		s.logger.Debug("memory.extract_facts: capped per-round persist limit",
+			zap.Int("limit", constants.FactPerRoundPersistLimit),
+		)
+	}
+
 	for _, extractedFact := range extractedFacts {
 		candidates, err := s.factRepo.FindSupersedeCandidates(
 			ctx,
@@ -69,7 +113,10 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 			}
 		}
 
-		fact, err := domain.NewFact(
+		// Phase 0: 构造带 category/confidence/source 的事实
+		category := domain.FactTypeToCategory(extractedFact.FactType)
+		confidence := effectiveConfidence(extractedFact)
+		fact, err := domain.NewFactWithMeta(
 			req.TenantID,
 			req.UserID,
 			req.AgentID,
@@ -77,6 +124,9 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 			req.Scope,
 			extractedFact.Content,
 			extractedFact.Importance,
+			confidence,
+			category,
+			domain.FactSourceLLMExtraction,
 			extractedFact.Entities,
 		)
 		if err != nil {
@@ -128,14 +178,20 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 		}
 
 		collectionName := fmt.Sprintf("memory_facts_%s", strings.ReplaceAll(req.TenantID, "-", "_"))
+		// Phase 0: vector metadata 包含 category/confidence/source，不含敏感原文以外的新增字段
 		doc := &port.VectorDoc{
 			ID:        fact.ID,
 			Embedding: vector,
 			Metadata: map[string]interface{}{
-				"user_id":    fact.UserID,
-				"agent_id":   fact.AgentID,
-				"content":    fact.Content,
-				"importance": fact.Importance,
+				"user_id":         fact.UserID,
+				"agent_id":        fact.AgentID,
+				"conversation_id": fact.ConversationID,
+				"scope":           string(fact.Scope),
+				"content":         fact.Content,
+				"importance":      fact.Importance,
+				"category":        fact.Category,
+				"confidence":      fact.Confidence,
+				"source":          fact.Source,
 			},
 		}
 
@@ -178,4 +234,13 @@ func (s *MemoryService) normalizeEntity(ctx context.Context, tenantID, userID, a
 	}
 
 	return entity.ID, nil
+}
+
+// truncateStr returns the first n runes of s (used in log messages to avoid bloat).
+func truncateStr(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n]) + "…"
 }
