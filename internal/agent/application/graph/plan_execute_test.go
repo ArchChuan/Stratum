@@ -3,6 +3,7 @@ package graph_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -13,6 +14,31 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+type checkpointWriterStub struct {
+	cp    domain.AgentExecutionCheckpoint
+	err   error
+	calls int
+}
+
+func (s *checkpointWriterStub) Upsert(_ context.Context, _ string, cp domain.AgentExecutionCheckpoint) error {
+	s.calls++
+	s.cp = cp
+	return s.err
+}
+
+func TestPlanExecute_InvalidGeneratedPlanFailsBeforeCheckpoint(t *testing.T) {
+	writer := &checkpointWriterStub{}
+	stub := &stuckThenPlan{stuckRounds: 1, plan: []domain.PlanStep{{Goal: "A", DependsOn: []int{1}}}}
+	cg, err := graph.BuildPlanExecuteGraph(stub, graph.NoopTokenRecorder{}, writer, nil, zap.NewNop())
+	require.NoError(t, err)
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		TenantID: "tenant-1", ExecutionID: "exec-1", Model: "model",
+		Messages: []port.LLMMessage{{Role: "user", Content: "task"}}, StuckThreshold: 1, MaxLLMSteps: 6,
+	}, graph.RunConfig{MaxSteps: 20})
+	require.ErrorContains(t, err, "invalid plan")
+	require.Zero(t, writer.calls)
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -151,31 +177,34 @@ func TestPlanExecute_T1_DisabledThreshold(t *testing.T) {
 // ─── T2: Wave scheduling ──────────────────────────────────────────────────────
 
 func TestPlanExecute_T2_WaveSingleStep(t *testing.T) {
-	waves := graph.ExportBuildWaves([]domain.PlanStep{
+	waves, err := graph.ExportBuildWaves([]domain.PlanStep{
 		{Goal: "only step"},
 	})
+	require.NoError(t, err)
 	require.Len(t, waves, 1)
 	assert.Equal(t, []int{0}, waves[0])
 }
 
 func TestPlanExecute_T2_Wave3Independent(t *testing.T) {
 	// All steps independent → single wave with all 3.
-	waves := graph.ExportBuildWaves([]domain.PlanStep{
+	waves, err := graph.ExportBuildWaves([]domain.PlanStep{
 		{Goal: "A"},
 		{Goal: "B"},
 		{Goal: "C"},
 	})
+	require.NoError(t, err)
 	require.Len(t, waves, 1)
 	assert.Len(t, waves[0], 3)
 }
 
 func TestPlanExecute_T2_WaveChain(t *testing.T) {
 	// A → B → C: 3 waves.
-	waves := graph.ExportBuildWaves([]domain.PlanStep{
+	waves, err := graph.ExportBuildWaves([]domain.PlanStep{
 		{Goal: "A"},
 		{Goal: "B", DependsOn: []int{0}},
 		{Goal: "C", DependsOn: []int{1}},
 	})
+	require.NoError(t, err)
 	require.Len(t, waves, 3)
 	assert.Equal(t, []int{0}, waves[0])
 	assert.Equal(t, []int{1}, waves[1])
@@ -184,14 +213,34 @@ func TestPlanExecute_T2_WaveChain(t *testing.T) {
 
 func TestPlanExecute_T2_WaveDiamond(t *testing.T) {
 	// A, B independent → C depends on both: 2 waves.
-	waves := graph.ExportBuildWaves([]domain.PlanStep{
+	waves, err := graph.ExportBuildWaves([]domain.PlanStep{
 		{Goal: "A"},
 		{Goal: "B"},
 		{Goal: "C", DependsOn: []int{0, 1}},
 	})
+	require.NoError(t, err)
 	require.Len(t, waves, 2)
 	assert.Len(t, waves[0], 2) // A and B
 	assert.Equal(t, []int{2}, waves[1])
+}
+
+func TestPlanExecute_T2_RejectsInvalidDependencies(t *testing.T) {
+	tests := []struct {
+		name string
+		plan []domain.PlanStep
+	}{
+		{name: "cycle", plan: []domain.PlanStep{{Goal: "A", DependsOn: []int{1}}, {Goal: "B", DependsOn: []int{0}}}},
+		{name: "self dependency", plan: []domain.PlanStep{{Goal: "A", DependsOn: []int{0}}}},
+		{name: "negative dependency", plan: []domain.PlanStep{{Goal: "A", DependsOn: []int{-1}}}},
+		{name: "out of range dependency", plan: []domain.PlanStep{{Goal: "A", DependsOn: []int{1}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			waves, err := graph.ExportBuildWaves(tt.plan)
+			require.Error(t, err)
+			require.Nil(t, waves)
+		})
+	}
 }
 
 // ─── T3: Context isolation ────────────────────────────────────────────────────
@@ -260,4 +309,54 @@ func TestPlanExecute_T3_SubstepInheritsContextCompaction(t *testing.T) {
 
 	assert.Equal(t, parent.MaxContextTokens, stepState.MaxContextTokens)
 	assert.Same(t, compactor, stepState.HistoryCompactor)
+}
+
+func TestPlanExecute_CheckpointUsesExecutionIdentityAndRunningStatus(t *testing.T) {
+	writer := &checkpointWriterStub{}
+	stub := &stuckThenPlan{
+		stuckRounds: 1,
+		plan:        []domain.PlanStep{{Goal: "finish"}},
+		stepAnswers: []string{"done"},
+	}
+	cg, err := graph.BuildPlanExecuteGraph(stub, graph.NoopTokenRecorder{}, writer, nil, zap.NewNop())
+	require.NoError(t, err)
+
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		TenantID:       "tenant-1",
+		TraceID:        "trace-1",
+		ExecutionID:    "exec-1",
+		Model:          "model",
+		Messages:       []port.LLMMessage{{Role: "user", Content: "task"}},
+		StuckThreshold: 1,
+		MaxLLMSteps:    6,
+	}, graph.RunConfig{MaxSteps: 20})
+	require.NoError(t, err)
+	require.Equal(t, "exec-1", writer.cp.ExecutionID)
+	require.Equal(t, "running", writer.cp.Status)
+}
+
+func TestPlanExecute_CheckpointFailureStopsGraphAndDoesNotEmitEvent(t *testing.T) {
+	writer := &checkpointWriterStub{err: errors.New("database unavailable")}
+	stub := &stuckThenPlan{
+		stuckRounds: 1,
+		plan:        []domain.PlanStep{{Goal: "finish"}},
+		stepAnswers: []string{"done"},
+	}
+	var streamed []string
+	cg, err := graph.BuildPlanExecuteGraph(stub, graph.NoopTokenRecorder{}, writer, nil, zap.NewNop())
+	require.NoError(t, err)
+
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		TenantID:          "tenant-1",
+		TraceID:           "trace-1",
+		ExecutionID:       "exec-1",
+		Model:             "model",
+		Messages:          []port.LLMMessage{{Role: "user", Content: "task"}},
+		StuckThreshold:    1,
+		MaxLLMSteps:       6,
+		CheckpointEnabled: true,
+		OnToken:           func(token string) { streamed = append(streamed, token) },
+	}, graph.RunConfig{MaxSteps: 20})
+	require.ErrorContains(t, err, "checkpoint")
+	require.Empty(t, streamed)
 }

@@ -14,6 +14,7 @@ import (
 	memoryapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	memorydomain "github.com/byteBuilderX/stratum/internal/memory/domain"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
+	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -91,7 +92,8 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, evalapp.ErrSuiteNotFound),
 		errors.Is(err, evalapp.ErrJobNotFound),
 		errors.Is(err, evalapp.ErrRunNotFound),
-		errors.Is(err, evalapp.ErrExperimentNotFound):
+		errors.Is(err, evalapp.ErrExperimentNotFound),
+		errors.Is(err, workflowdomain.ErrNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, agentapp.ErrApprovalExpired):
 		return http.StatusGone
@@ -111,7 +113,14 @@ func MapErrorToStatus(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, agentapp.ErrApprovalNotApproved),
 		errors.Is(err, agentdomain.ErrApprovalAlreadyDecided),
-		errors.Is(err, agentdomain.ErrApprovalAlreadyExecuted):
+		errors.Is(err, agentdomain.ErrApprovalAlreadyExecuted),
+		errors.Is(err, workflowdomain.ErrRevisionConflict),
+		errors.Is(err, workflowdomain.ErrIdempotencyConflict),
+		errors.Is(err, workflowdomain.ErrInvalidTransition),
+		errors.Is(err, workflowdomain.ErrGenerationConflict),
+		errors.Is(err, workflowdomain.ErrFenceConflict),
+		errors.Is(err, workflowdomain.ErrDecisionConflict),
+		errors.Is(err, workflowdomain.ErrApprovalRequired):
 		return http.StatusConflict
 
 	// 422 — Unprocessable Entity
@@ -154,7 +163,8 @@ func MapErrorToStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, memorydomain.ErrInvalidStatus),
 		errors.Is(err, memorydomain.ErrUserIDMismatch),
-		errors.Is(err, memorydomain.ErrEmptyContent):
+		errors.Is(err, memorydomain.ErrEmptyContent),
+		errors.Is(err, workflowdomain.ErrInvalidSpec):
 		return http.StatusBadRequest
 	}
 

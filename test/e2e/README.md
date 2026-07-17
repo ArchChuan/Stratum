@@ -159,6 +159,27 @@ redis-cli LRANGE "memory:buffer:test_tenant:user001:agent001:conv001" 0 -1
 3. **Sequential only**: Tests must run serially (shared PostgreSQL/Redis)
 4. **No GC worker**: Garbage collection tested separately in unit tests
 
+## Workflow E2E
+
+`workflow_lifecycle_test.go` exercises the Workflow subsystem through its HTTP handlers with a real PostgreSQL database and real worker lifecycle. It covers:
+
+1. Create and revision-CAS update of a draft
+2. Validation and immutable publish
+3. Run creation and idempotent replay
+4. Durable Approval pause and decision
+5. Rebuilding the worker/service to simulate process restart
+6. Diamond fan-out/fan-in completion without replaying the approved checkpoint
+7. Monotonic persisted events and SSE `Last-Event-ID` resume
+8. Idempotency conflict for a reused key with a different request
+
+Run it with an ephemeral local PostgreSQL container:
+
+```bash
+bash scripts/test-workflow-e2e.sh
+```
+
+The script uses a random localhost port and always removes its temporary container. The same test runs in the `Workflow E2E` job in `.github/workflows/ci.yml`; unlike the older memory tests, it fails rather than skips when PostgreSQL is unavailable.
+
 ## Related Documentation
 
 - Memory v2 SPEC: `docs/memory/memory-v2-spec.md`

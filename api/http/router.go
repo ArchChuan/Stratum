@@ -37,10 +37,40 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerSkills(r, c, requireActive)
 	registerEvaluations(r, c, requireActive)
 	registerAgents(r, c, requireActive)
+	registerWorkflows(r, c, requireActive)
 	registerKnowledge(r, c, requireActive)
 	registerMCP(r, c, requireActive)
 	registerMemory(r, c, requireActive)
 	return r
+}
+
+func registerWorkflows(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Workflow == nil || c.Workflow.DefinitionService == nil || c.Workflow.RunService == nil {
+		return
+	}
+	h := handler.NewWorkflowHandlerWithControl(c.Workflow.DefinitionService, c.Workflow.RunService, c.Workflow.ControlService)
+	member := protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))
+	admin := middleware.RequireTenantRole("admin")
+	definitions := r.Group("/workflows", member...)
+	definitions.GET("/:id", h.GetDefinition)
+	definitions.GET("/:id/versions/:versionID", h.GetVersion)
+	definitions.POST("", admin, requireActive, h.CreateDefinition)
+	definitions.PUT("/:id/draft", admin, requireActive, h.UpdateDefinition)
+	definitions.POST("/:id/validate", admin, requireActive, h.ValidateDefinition)
+	definitions.POST("/:id/publish", admin, requireActive, h.PublishDefinition)
+	startRuns := r.Group("/workflow-runs", member...)
+	startRuns.POST("", requireActive, h.StartRun)
+	runs := r.Group("/workflow-runs", append(member, admin)...)
+	runs.GET("/:id", h.GetRun)
+	runs.GET("/:id/events", h.GetEvents)
+	runs.GET("/:id/events/stream", h.StreamEvents)
+	runs.POST("/:id/cancel", requireActive, h.CancelRun)
+	runs.POST("/:id/pause", requireActive, h.PauseRun)
+	runs.POST("/:id/resume", requireActive, h.ResumeRun)
+	runs.POST("/:id/manual-interventions/:effectID/resolve", requireActive, h.ResolveManual)
+	approvals := r.Group("/workflow-approvals", member...)
+	approvals.GET("", admin, h.ListApprovals)
+	approvals.POST("/:id/decision", admin, requireActive, h.DecideApproval)
 }
 
 func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {

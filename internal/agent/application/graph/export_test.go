@@ -8,7 +8,7 @@ import (
 )
 
 // ExportBuildWaves exposes buildWaves for white-box wave-scheduling tests.
-func ExportBuildWaves(plan []domain.PlanStep) [][]int {
+func ExportBuildWaves(plan []domain.PlanStep) ([][]int, error) {
 	return buildWaves(plan)
 }
 

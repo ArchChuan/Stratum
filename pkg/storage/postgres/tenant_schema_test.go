@@ -389,6 +389,66 @@ func TestTenantSchemaBackfillsGenericTraceObservationColumns(t *testing.T) {
 	}
 }
 
+func TestTenantSchemaContainsWorkflowStage1ATablesAndBackfills(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	required := []string{
+		"CREATE TABLE IF NOT EXISTS workflow_definitions",
+		"CREATE TABLE IF NOT EXISTS workflow_versions",
+		"CREATE TABLE IF NOT EXISTS workflow_runs",
+		"CREATE TABLE IF NOT EXISTS workflow_node_attempts",
+		"ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS draft_revision",
+		"ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS request_hash",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_runs_idempotency",
+		"CHECK (status IN ('queued', 'running', 'pause_requested', 'paused', 'cancel_requested', 'canceled', 'manual_intervention', 'completed', 'failed'))",
+		"ALTER TABLE workflow_runs ADD CONSTRAINT workflow_runs_status_check",
+		"ALTER TABLE workflow_node_attempts ADD CONSTRAINT workflow_node_attempts_status_check",
+	}
+	for _, want := range required {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("tenant_schema.sql missing workflow Stage 1A DDL %q", want)
+		}
+	}
+}
+
+func TestTenantSchemaContainsWorkflowDurableRuntime(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	for _, fragment := range []string{
+		"generation", "scheduler_owner", "lease_expires_at", "pause_reason",
+		"run_generation", "lease_owner", "fence_token", "retry_at", "effect_class",
+		"CREATE TABLE IF NOT EXISTS workflow_events", "UNIQUE (run_id, sequence_no)",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Fatalf("tenant schema missing durable workflow fragment %q", fragment)
+		}
+	}
+}
+
+func TestTenantSchemaContainsWorkflowStage1BEventAndAttemptBackfills(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	for _, fragment := range []string{
+		"ALTER TABLE workflow_node_attempts ADD COLUMN IF NOT EXISTS error_code",
+		"ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS sequence_no",
+		"ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS payload_json",
+		"CREATE INDEX IF NOT EXISTS idx_workflow_events_cursor",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Fatalf("tenant schema missing workflow Stage 1B backfill %q", fragment)
+		}
+	}
+}
+
 // knowledge_chunks.tsv must segment Chinese via public.chinese_zh, not the
 // default 'simple' parser which cannot tokenize CJK text (near-zero recall).
 func TestTenantSchemaChunksUseChineseTSVConfig(t *testing.T) {

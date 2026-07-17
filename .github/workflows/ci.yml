@@ -75,10 +75,39 @@ jobs:
           path: coverage.out
           retention-days: 7
 
+  workflow-e2e:
+    name: Workflow E2E
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: workflow_e2e_ci_only
+          POSTGRES_DB: stratum_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stratum_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      STRATUM_TEST_POSTGRES_URL: postgres://postgres:workflow_e2e_ci_only@127.0.0.1:5432/stratum_e2e?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run Workflow HTTP/PostgreSQL/worker E2E
+        run: go test -tags=integration ./test/e2e -run TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E -count=1 -v
+
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [guardrails, lint, test]
+    needs: [guardrails, lint, test, workflow-e2e]
     steps:
       - uses: actions/checkout@v4
 

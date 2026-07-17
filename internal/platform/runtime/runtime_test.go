@@ -5,10 +5,37 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/byteBuilderX/stratum/api/wiring"
+	harnesspkg "github.com/byteBuilderX/stratum/internal/platform/harness"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+type workflowWorkerFake struct{ started chan struct{} }
+
+func (f *workflowWorkerFake) Run(ctx context.Context, _ time.Duration) {
+	close(f.started)
+	<-ctx.Done()
+}
+
+func TestWorkflowWorkerIsRegisteredAsIndependentRuntimeComponent(t *testing.T) {
+	worker := &workflowWorkerFake{started: make(chan struct{})}
+	container := &wiring.Container{Workflow: &wiring.Workflow{Worker: worker}}
+	harness := harnesspkg.New(zap.NewNop())
+	registerWorkflowWorker(harness, container, zap.NewNop())
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, harness.Start(ctx))
+	select {
+	case <-worker.started:
+	case <-time.After(time.Second):
+		t.Fatal("workflow worker did not start")
+	}
+	cancel()
+	require.NoError(t, harness.Stop(context.Background()))
+}
 
 func TestBootstrapTenantSchemasUsesOneProvisionLock(t *testing.T) {
 	var calls []string
