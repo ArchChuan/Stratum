@@ -154,13 +154,15 @@ func buildEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatewayCache, 
 		}
 		embedModel, _ := settings["embed_model"].(string)
 
-		if gw, _, ok := cache.Get(tenantID); ok && gw.HasEmbeddingClient() {
+		gw, _, cacheHit, generation := cache.GetWithGeneration(tenantID)
+		if cacheHit && gw.HasEmbeddingClient() {
 			m := embedModel
 			if m == "" {
 				m = gw.DefaultEmbeddingModel()
 			}
 			return embedding.NewEmbeddingServiceWithModel(gw, m, logger)
 		}
+		defer cache.ReleaseLoad(tenantID, generation)
 
 		apiKeysRaw, ok := settings["llm_api_keys"].(map[string]interface{})
 		if !ok || len(apiKeysRaw) == 0 {
@@ -183,7 +185,7 @@ func buildEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatewayCache, 
 			return nil
 		}
 
-		gw := llmgateway.NewGateway().WithLogger(logger)
+		gw = llmgateway.NewGateway().WithLogger(logger)
 		if qwenKey, ok := decrypted["qwen"]; ok {
 			qwenClient := llmgateway.NewQwenClient(qwenKey, logger)
 			gw.RegisterClient(llmgateway.ProviderQwen, qwenClient)
@@ -204,7 +206,9 @@ func buildEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatewayCache, 
 		if !gw.HasEmbeddingClient() {
 			return nil
 		}
-		cache.Set(tenantID, gw, decrypted, constants.GatewayCacheTTL)
+		if !cache.SetIfGeneration(tenantID, gw, decrypted, constants.GatewayCacheTTL, generation) {
+			return nil
+		}
 		m := embedModel
 		if m == "" {
 			m = gw.DefaultEmbeddingModel()
@@ -221,13 +225,15 @@ func buildEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatewayCache, 
 func buildKnowledgeEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatewayCache, aesKey [32]byte, logger *zap.Logger) knowledge.EmbedResolver {
 	return func(ctx context.Context, tenantID, model string) knowledge.EmbedClient {
 		// Try gateway cache first.
-		if gw, _, ok := cache.Get(tenantID); ok && gw.HasEmbeddingClient() {
+		gw, _, cacheHit, generation := cache.GetWithGeneration(tenantID)
+		if cacheHit && gw.HasEmbeddingClient() {
 			m := model
 			if m == "" {
 				m = gw.DefaultEmbeddingModel()
 			}
 			return embedding.NewEmbeddingServiceWithModel(gw, m, logger)
 		}
+		defer cache.ReleaseLoad(tenantID, generation)
 
 		// Fall back to tenant DB settings to build gateway.
 		var settingsJSON []byte
@@ -263,7 +269,7 @@ func buildKnowledgeEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatew
 			return nil
 		}
 
-		gw := llmgateway.NewGateway().WithLogger(logger)
+		gw = llmgateway.NewGateway().WithLogger(logger)
 		if qwenKey, ok := decrypted["qwen"]; ok {
 			qwenClient := llmgateway.NewQwenClient(qwenKey, logger)
 			gw.RegisterClient(llmgateway.ProviderQwen, qwenClient)
@@ -281,7 +287,9 @@ func buildKnowledgeEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatew
 			}
 		}
 
-		cache.Set(tenantID, gw, decrypted, constants.GatewayCacheTTL)
+		if !cache.SetIfGeneration(tenantID, gw, decrypted, constants.GatewayCacheTTL, generation) {
+			return nil
+		}
 		m := model
 		if m == "" {
 			m = gw.DefaultEmbeddingModel()

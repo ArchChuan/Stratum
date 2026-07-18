@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
@@ -161,6 +162,36 @@ func TestSupersedeWorker_HandlesJudgeError(t *testing.T) {
 
 	worker := workers.NewSupersedeWorker("", repo, superseder, zap.NewNop())
 	worker.RunOnce(context.Background())
+}
+
+func TestSupersedeWorkerRecoversWhenResolvingClientBecomesAvailable(t *testing.T) {
+	oldFact, _ := domain.NewFact("", "user1", "agent1", "", string(domain.ScopeUser), "I like tea", 0.7, nil)
+	updates := 0
+	repo := &stubFactRepo{
+		findCandidatesFunc: func(context.Context, string, string, string, string, float64, float64) ([]*port.SupersedeCandidate, error) {
+			return []*port.SupersedeCandidate{{Fact: oldFact, Similarity: 0.75}}, nil
+		},
+		updateFunc: func(context.Context, string, *domain.MemoryFact) error {
+			updates++
+			return nil
+		},
+	}
+	available := false
+	resolver := func(context.Context, string) (workers.TenantLLMClient, error) {
+		if !available {
+			return nil, errors.New("temporarily unavailable")
+		}
+		return completionClientFunc(func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+			return &llmdomain.CompletionResponse{Content: `{"supersedes":true,"reason":"updated"}`}, nil
+		}), nil
+	}
+	worker := workers.NewSupersedeWorker("tenant-1", repo, workers.NewResolvingLLMSuperseder("tenant-1", resolver), zap.NewNop())
+
+	worker.RunOnce(context.Background())
+	require.Zero(t, updates)
+	available = true
+	worker.RunOnce(context.Background())
+	require.Equal(t, 1, updates)
 }
 
 func TestSupersedeWorker_GracefulShutdown(t *testing.T) {
