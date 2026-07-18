@@ -15,7 +15,7 @@
 | Handler | `api/http/handler/` | 每域一个文件，只做请求解析 + 响应组装 |
 | DTO | `api/http/dto/` | Request/Response 结构体，无业务逻辑 |
 | 中间件 | `api/middleware/` | ErrorHandler · MetricsMiddleware · Auth · Trace |
-| 业务 | `internal/<ctx>/{domain,application,infrastructure}` | 9 个 bounded context（见下方架构分层） |
+| 业务 | `internal/<ctx>/{domain,application,infrastructure}` | 10 个 bounded context（见下方架构分层） |
 | 基础设施 | `pkg/{storage,messaging,httpclient,observability,...}` | 数据库/消息/HTTP/日志等无业务抽象 |
 
 关键依赖版本：Gin v1.9.1 · nats.go v1.51 · Milvus SDK v2.4.2 · pgx v5.9.2 · go-redis v9.7.3 · JWT RS256（golang-jwt v5.3.1）· OTEL v1.40
@@ -94,7 +94,7 @@ React 18.3 · Vite 5.4 · Ant Design 5.20 · React Router 6.26 · Axios 1.7 · T
 ### 架构分层（DDD bounded context）
 
 - 目录：`api/{http/{handler,dto,middleware},wiring}` · `internal/<ctx>/{domain/{,port/},application,infrastructure}` · `pkg/storage/{postgres,redis,milvus,tenantnaming}` · `pkg/{messaging/nats,httpclient,observability,crypto,constants,migration,textchunk}`
-- 9 个 bounded context：`agent · memory · knowledge · skill · mcp · iam · llmgateway · evaluation · platform`；跨域路由层（如 capability adapter）作为 ACL，必要时下沉进消费上下文
+- 10 个 bounded context：`agent · memory · knowledge · skill · mcp · iam · llmgateway · evaluation · workflow · platform`；跨域路由层（如 capability adapter）作为 ACL，必要时下沉进消费上下文
 - 依赖方向：`handler → application → domain/port`；`infrastructure` 实现 port，由 `api/wiring/Container` 集中装配；Shutdown 逆序释放
 - 跨 context 调用走「消费者侧」port（接口放消费方 `domain/port/`），禁止 import 兄弟上下文的 `application` / `infrastructure`
 - 单向底线：`pkg/` 不 import `internal/`；`domain/` 零第三方依赖（仅 stdlib + `pkg/constants`）；`application/` 不 import `pgx`/`redis`/`nats`/`gin`；`handler` 不 import `internal/*/infrastructure` 与 `pgx`/`redis`/`milvus`

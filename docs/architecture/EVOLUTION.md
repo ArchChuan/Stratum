@@ -173,7 +173,7 @@ platform → (被所有 context 依赖，不依赖任何 context)
 
 ### 阶段 6：通用 Evaluation 控制面（2026-07-16）
 
-当前源码已新增第 9 个 bounded context `evaluation`。它通过 `api/http/router.go` 暴露 suite 发布、异步 run/job、优化候选、实验阶段判断与 feedback 路由；tenant-scoped 数据表集中在 `pkg/storage/postgres/tenant_schema.sql`，前端入口位于 `web/src/modules/evaluation/`。
+该阶段新增了第 9 个 bounded context `evaluation`。它通过 `api/http/router.go` 暴露 suite 发布、异步 run/job、优化候选、实验阶段判断与 feedback 路由；tenant-scoped 数据表集中在 `pkg/storage/postgres/tenant_schema.sql`，前端入口位于 `web/src/modules/evaluation/`。当前源码随后又新增 `workflow`，bounded context 总数为 10。
 
 ---
 

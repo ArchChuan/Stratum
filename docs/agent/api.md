@@ -111,6 +111,27 @@ registerMemory(r, c, requireActive)
 | POST | `/evaluations/experiments/:id/evaluate` | EvaluateExperiment | admin + requireActive |
 | POST | `/evaluations/feedback` | RecordFeedback | member + requireActive |
 
+## Workflow（JWT + tenant member；定义写入与运行控制额外 admin）
+
+| Method | Path | Handler | Extra role/state |
+|---|---|---|---|
+| GET | `/workflows/:id` | GetDefinition | member |
+| GET | `/workflows/:id/versions/:versionID` | GetVersion | member |
+| POST | `/workflows` | CreateDefinition | admin + requireActive |
+| PUT | `/workflows/:id/draft` | UpdateDefinition | admin + requireActive |
+| POST | `/workflows/:id/validate` | ValidateDefinition | admin + requireActive |
+| POST | `/workflows/:id/publish` | PublishDefinition | admin + requireActive |
+| POST | `/workflow-runs` | StartRun | member + requireActive |
+| GET | `/workflow-runs/:id` | GetRun | admin |
+| GET | `/workflow-runs/:id/events` | GetEvents | admin |
+| GET | `/workflow-runs/:id/events/stream` | StreamEvents | admin |
+| POST | `/workflow-runs/:id/cancel` | CancelRun | admin + requireActive |
+| POST | `/workflow-runs/:id/pause` | PauseRun | admin + requireActive |
+| POST | `/workflow-runs/:id/resume` | ResumeRun | admin + requireActive |
+| POST | `/workflow-runs/:id/manual-interventions/:effectID/resolve` | ResolveManual | admin + requireActive |
+| GET | `/workflow-approvals` | ListApprovals | admin |
+| POST | `/workflow-approvals/:id/decision` | DecideApproval | admin + requireActive |
+
 ### Conversations（JWT + tenant context）
 
 | 方法 | 路径 | Handler |

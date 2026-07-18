@@ -1,9 +1,9 @@
 # Stratum Go 包代码架构图
 
-本目录记录 `internal/...` 与 `pkg/...` 的 Go 包架构图。当前源码有 62 个含 Go 文件的包：58 个有现行包图，4 个 evaluation 包尚未生成独立图。另有 5 个旧 Skill package 页面保留为已移除路径索引，不计入当前包数。
+本目录记录 `internal/...` 与 `pkg/...` 的 Go 包架构图。当前源码有 67 个含 Go 文件的包：58 个有现行包图，4 个 evaluation 包和 5 个 workflow 包尚未生成独立图。另有 5 个旧 Skill package 页面保留为已移除路径索引，不计入当前包数。
 
 - 生成范围：`internal/...`、`pkg/...`
-- 当前 Go 包总数：62（58 份现行包图 + 4 个尚未补图的 evaluation 包）
+- 当前 Go 包总数：67（58 份现行包图 + 4 个 evaluation 包 + 5 个 workflow 包尚未补图）
 - 不包含：`api/`、`cmd/`、`config/`、前端及工作树副本
 - 历史生成清单：[package-manifest.txt](package-manifest.txt)（仍记录生成时的 63 个路径，不是当前完整清单）
 
@@ -12,6 +12,13 @@
 - `internal/evaluation/domain` / `domain/port`：评估 suite、run、job、优化候选、实验、反馈及仓储契约。
 - `internal/evaluation/application`：suite 发布、异步 job worker、评估执行、优化、实验阶段判定与反馈编排。
 - `internal/evaluation/infrastructure/persistence`：tenant PostgreSQL 持久化。
+
+## internal/workflow（待补独立包图）
+
+- `internal/workflow/domain` / `domain/port`：持久化 DAG 定义、版本、运行、节点尝试、事件、审批、外部副作用意图及仓储契约。
+- `internal/workflow/application`：定义发布、异步调度、租约与 fencing、暂停/恢复/取消、人工介入和审批编排。
+- `internal/workflow/infrastructure/executor`：确定性节点执行器注册表。
+- `internal/workflow/infrastructure/persistence`：tenant PostgreSQL 持久化。
 
 ## internal/agent
 
