@@ -210,7 +210,10 @@ func (m *mockVectorStore) Upsert(ctx context.Context, collectionName string, doc
 	return nil
 }
 
-func (m *mockVectorStore) Search(ctx context.Context, collectionName string, queryVector []float32, topK int, filter map[string]interface{}) ([]*port.VectorDoc, error) {
+func (m *mockVectorStore) Search(ctx context.Context, collectionName string, queryVector []float32, topK int, filter port.VectorSearchFilter) ([]*port.VectorDoc, error) {
+	if err := filter.Validate(); err != nil {
+		return nil, err
+	}
 	if m.docs == nil {
 		return nil, nil
 	}
@@ -219,16 +222,26 @@ func (m *mockVectorStore) Search(ctx context.Context, collectionName string, que
 	for key, doc := range m.docs {
 		if len(key) > len(collectionName) && key[:len(collectionName)] == collectionName {
 			// Simple filter match (user_id)
-			if filter != nil {
-				if userID, ok := filter["user_id"].(string); ok {
-					if docUserID, exists := doc.Metadata["user_id"].(string); exists && docUserID != userID {
-						continue
-					}
+			if docUserID, exists := doc.Metadata["user_id"].(string); exists && docUserID != filter.UserID {
+				continue
+			}
+			scope, _ := doc.Metadata["scope"].(string)
+			switch scope {
+			case "user":
+				if !filter.IncludeUserScope {
+					continue
 				}
+			case "agent":
+				docAgentID, _ := doc.Metadata["agent_id"].(string)
+				if !filter.IncludeAgentScope || docAgentID != filter.AgentID {
+					continue
+				}
+			default:
+				continue
 			}
 			// Return with fixed similarity score
 			docCopy := *doc
-			docCopy.Similarity = 0.95
+			docCopy.Distance = 0.05
 			hits = append(hits, &docCopy)
 		}
 	}
