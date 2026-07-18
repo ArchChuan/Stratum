@@ -31,7 +31,7 @@ span.SetStatus(codes.Error, err.Error())
 
 - 每个 Handler 方法通过 `middleware/trace.go` (`TraceMiddleware`) 自动获得 Span
 - internal 层关键操作手动创建子 Span
-- Span 命名格式：`{component}.{operation}`，例如 `agent.execute`、`memory.search`、`skill.execute`
+- Span 命名格式：`{component}.{operation}`，例如 `agent.execute`、`memory.search`。Skill 当前不直接执行，不应使用 `skill.execute` 暗示存在独立执行路径。
 
 ## Metrics (Prometheus)
 
