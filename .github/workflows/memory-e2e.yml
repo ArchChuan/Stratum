@@ -83,6 +83,10 @@ jobs:
           PGDATABASE: stratum_test
           # Redis connection
           REDIS_ADDR: localhost:6379
+          # Force real execution: infra must be reachable or the job fails.
+          # Without this, wrong/missing credentials make every test t.Skip and
+          # the pipeline reports green while nothing actually ran (false-pass).
+          REQUIRE_MEMORY_E2E: "1"
 
       - name: Cleanup test schemas
         if: always()

@@ -142,6 +142,12 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 			return fmt.Errorf("insert fact: %w", err)
 		}
 
+		// Resolve the supersede judge: singleton if set, else per-tenant resolver.
+		judge := s.judge
+		if judge == nil && s.judgeResolver != nil {
+			judge = s.judgeResolver(ctx, req.TenantID)
+		}
+
 		// Inline supersede: high-similarity → direct; mid-range → LLM (max 3/fact).
 		llmCallsThisFact := 0
 		for _, candidate := range candidates {
@@ -154,8 +160,8 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 				}
 				continue
 			}
-			if s.judge != nil && llmCallsThisFact < constants.MemoryInlineSupersedeLLMPerFact {
-				judgment, jerr := s.judge.JudgeSupersede(ctx, candidate.Fact.Content, fact.Content)
+			if judge != nil && llmCallsThisFact < constants.MemoryInlineSupersedeLLMPerFact {
+				judgment, jerr := judge.JudgeSupersede(ctx, candidate.Fact.Content, fact.Content)
 				llmCallsThisFact++
 				if jerr == nil && judgment.Supersedes {
 					if merr := candidate.Fact.MarkSuperseded(fact.ID); merr == nil {

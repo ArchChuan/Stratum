@@ -66,6 +66,14 @@ func RecallToolDefinition() map[string]any {
 	}
 }
 
+// vectorSearcher is the minimal slice of *vector.VectorStore that recall needs.
+// Narrowing to this interface (rather than the concrete store) lets the
+// dual-collection fusion in tryVectorSearch be unit-tested with a fake, without
+// standing up Milvus. *vector.VectorStore satisfies it via SearchWithFilter.
+type vectorSearcher interface {
+	SearchWithFilter(ctx context.Context, collectionName string, queryVector []float32, topK int, expression string, partitions ...string) ([]vector.SearchResult, error)
+}
+
 // RecallHandler executes recall_memory queries against the memory_entries table.
 // It retrieves semantic and text candidates, then fuses them with RRF.
 type RecallHandler struct {
@@ -73,13 +81,20 @@ type RecallHandler struct {
 	logger        *zap.Logger
 	embedSvc      EmbedClient
 	embedResolver EmbedServiceResolver
-	vectorDB      *vector.VectorStore
+	vectorDB      vectorSearcher
 	metrics       observability.MetricsProvider
 }
 
 // NewRecallHandler creates a RecallHandler backed by the given pool.
 func NewRecallHandler(pool *pgxpool.Pool, logger *zap.Logger, embedSvc EmbedClient, embedResolver EmbedServiceResolver, vectorDB *vector.VectorStore) *RecallHandler {
-	return &RecallHandler{pool: pool, logger: logger, embedSvc: embedSvc, embedResolver: embedResolver, vectorDB: vectorDB, metrics: observability.NoopMetrics{}}
+	h := &RecallHandler{pool: pool, logger: logger, embedSvc: embedSvc, embedResolver: embedResolver, metrics: observability.NoopMetrics{}}
+	// Guard against the typed-nil trap: a nil *vector.VectorStore stored in an
+	// interface field is NOT == nil, so tryVectorSearch's nil check would pass
+	// and then panic. Only assign when the concrete pointer is non-nil.
+	if vectorDB != nil {
+		h.vectorDB = vectorDB
+	}
+	return h
 }
 
 // WithMetrics injects a MetricsProvider; returns the handler for chaining.
@@ -152,7 +167,6 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, a
 		return nil
 	}
 
-	collection := memoryCollectionName(tenantID)
 	if strings.ContainsAny(userID, `"'\`) {
 		return nil
 	}
@@ -163,14 +177,27 @@ func (h *RecallHandler) tryVectorSearch(ctx context.Context, tenantID, userID, a
 		expr = fmt.Sprintf(`user_id == "%s" && scope == "user"`, userID)
 	}
 
-	results, err := h.vectorDB.SearchWithFilter(ctx, collection, vec, req.Limit*2, expr)
-	if err != nil {
-		h.logger.Debug("memory.recall: vector search failed, falling back", zap.Error(err))
-		return nil
+	// Query both the raw-turn collection (Pipeline A: enrich→embed) and the
+	// extracted-facts collection (Pipeline B: extract→embed). They share the
+	// same Milvus schema and scope fields; fusing them here is the only place
+	// distilled fact vectors become reachable by semantic recall.
+	var merged []vector.SearchResult
+	for _, collection := range []string{memoryCollectionName(tenantID), memoryFactsCollectionName(tenantID)} {
+		results, err := h.vectorDB.SearchWithFilter(ctx, collection, vec, req.Limit*2, expr)
+		if err != nil {
+			h.logger.Debug("memory.recall: vector search failed for collection, skipping",
+				zap.String("collection", collection), zap.Error(err))
+			continue
+		}
+		merged = append(merged, results...)
 	}
 
+	// Sort by ascending L2 distance (smaller = more similar) so downstream RRF
+	// ranks the closest match across both collections first.
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Score < merged[j].Score })
+
 	var entries []recallCandidate
-	for _, r := range results {
+	for _, r := range merged {
 		if r.Content != "" {
 			entries = append(entries, recallCandidate{
 				ID: r.ID,

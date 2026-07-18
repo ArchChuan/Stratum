@@ -61,6 +61,16 @@ func (c *Container) buildMemory(ctx context.Context) error {
 				}
 				return pipeline.NewLLMExtractor(llm)
 			})
+			// Per-tenant inline supersede judge (nil-safe): mirrors the extractor
+			// resolver so ExtractFacts' mid-similarity LLM branch is live in prod,
+			// not just the standalone SupersedeWorker.
+			mem.Service.SetLLMSupersederResolver(func(ctx context.Context, tenantID string) memport.LLMSuperseder {
+				llm := llmRes.ResolveLLM(ctx, tenantID)
+				if llm == nil {
+					return nil
+				}
+				return memworkers.NewLLMSuperseder(llm)
+			})
 		}
 		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 			embedRes := c.Knowledge.EmbedResolver
@@ -204,6 +214,7 @@ func BuildMemoryWorkers(c *Container) []interface {
 	}
 
 	factRepo := persistence.NewFactRepo(db)
+	entityRepo := persistence.NewEntityRepo(db)
 	historyRepo := persistence.NewHistoryRepo(db)
 	queue := persistence.NewExtractionQueue(db)
 
@@ -232,6 +243,7 @@ func BuildMemoryWorkers(c *Container) []interface {
 			cancel()
 			if llm != nil {
 				ws = append(ws, memworkers.NewSupersedeWorker(tid, factRepo, memworkers.NewLLMSuperseder(llm), c.Logger))
+				ws = append(ws, memworkers.NewProfileWorker(tid, entityRepo, factRepo, memworkers.NewLLMEntityProfiler(llm), c.Logger))
 				historyProcessor := memworkers.NewLLMHistorySummarizer(llm)
 				historySummarizer = historyProcessor
 				historyCompressor = historyProcessor

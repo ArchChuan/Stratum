@@ -14,6 +14,14 @@ func memoryCollectionName(tenantID string) string {
 	return "memory_" + strings.ReplaceAll(tenantID, "-", "_")
 }
 
+// memoryFactsCollectionName builds the collection name for LLM-extracted facts.
+// Must mirror extraction.go's write-side naming ("memory_facts_<tenant>"); the
+// two collections are maintained together (see MilvusPortAdapter delete paths),
+// and recall must query both to surface distilled facts alongside raw turns.
+func memoryFactsCollectionName(tenantID string) string {
+	return "memory_facts_" + strings.ReplaceAll(tenantID, "-", "_")
+}
+
 // DimResolver resolves the vector dimension for a tenant's memory collection.
 type DimResolver func(ctx context.Context, tenantID string) int
 

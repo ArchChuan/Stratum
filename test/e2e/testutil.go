@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/memory/application"
@@ -15,6 +16,69 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
+
+// requireE2E reports whether the memory E2E suite MUST run for real. When
+// REQUIRE_MEMORY_E2E is truthy, missing/unreachable infra becomes a hard
+// failure instead of a silent skip. This closes the false-pass hole where wrong
+// credentials made every test t.Skip while the CI pipeline still went green —
+// the memory system looked "E2E-verified" but nothing ever executed.
+func requireE2E() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("REQUIRE_MEMORY_E2E"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// skipOrFail skips when infra is optional (local dev), or fails hard when
+// REQUIRE_MEMORY_E2E demands the suite actually run (CI).
+func skipOrFail(t *testing.T, format string, args ...any) {
+	t.Helper()
+	if requireE2E() {
+		t.Fatalf(format, args...)
+	}
+	t.Skipf(format, args...)
+}
+
+// resolvePostgresDSN picks the Postgres connection string in priority order:
+//  1. TEST_POSTGRES_URL — explicit full override.
+//  2. Standard libpq PG* vars (PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE) —
+//     what GitHub Actions service containers export. Built into a keyword DSN so
+//     the suite never silently depends on those vars matching a hardcoded default.
+//  3. Local docker-compose default (stratum/stratum).
+func resolvePostgresDSN() string {
+	if dsn := os.Getenv("TEST_POSTGRES_URL"); dsn != "" {
+		return dsn
+	}
+	if host := os.Getenv("PGHOST"); host != "" {
+		envOr := func(key, def string) string {
+			if v := os.Getenv(key); v != "" {
+				return v
+			}
+			return def
+		}
+		return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+			host,
+			envOr("PGPORT", "5432"),
+			envOr("PGUSER", "postgres"),
+			os.Getenv("PGPASSWORD"),
+			envOr("PGDATABASE", "stratum_test"),
+			envOr("PGSSLMODE", "disable"),
+		)
+	}
+	return "postgres://stratum:stratum@localhost:5432/stratum_test?sslmode=disable"
+}
+
+// resolveRedisAddr honors TEST_REDIS_ADDR, then REDIS_ADDR (CI), then local default.
+func resolveRedisAddr() string {
+	if addr := os.Getenv("TEST_REDIS_ADDR"); addr != "" {
+		return addr
+	}
+	if addr := os.Getenv("REDIS_ADDR"); addr != "" {
+		return addr
+	}
+	return "localhost:6379"
+}
 
 // MemoryTestEnv holds resources for E2E memory tests.
 type MemoryTestEnv struct {
@@ -38,22 +102,20 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 
 	ctx := context.Background()
 
-	// Step 1: Connect to PostgreSQL (skip if unavailable)
-	// DSN must match the real infra credentials (docker-compose: stratum/stratum).
+	// Step 1: Connect to PostgreSQL.
 	// Direct-connect to Postgres 5432 (NOT pgbouncer 6432): schema/extension
 	// provisioning needs session-level privileges that transaction pooling breaks.
-	// Override via TEST_POSTGRES_URL to point at any real Postgres.
-	dsn := os.Getenv("TEST_POSTGRES_URL")
-	if dsn == "" {
-		dsn = "postgres://stratum:stratum@localhost:5432/stratum_test?sslmode=disable"
-	}
+	// DSN resolution honors TEST_POSTGRES_URL, then CI's PG* vars, then the local
+	// docker-compose default — see resolvePostgresDSN. When REQUIRE_MEMORY_E2E is
+	// set, an unreachable DB fails hard instead of silently skipping.
+	dsn := resolvePostgresDSN()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		t.Skipf("PostgreSQL unavailable: %v", err)
+		skipOrFail(t, "PostgreSQL unavailable: %v", err)
 	}
 	if pingErr := pool.Ping(ctx); pingErr != nil {
 		pool.Close()
-		t.Skipf("PostgreSQL unavailable: %v", pingErr)
+		skipOrFail(t, "PostgreSQL unavailable: %v", pingErr)
 	}
 
 	// Step 2: Generate unique tenant ID for isolation
@@ -81,18 +143,15 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 		t.Fatalf("provision second tenant schema: %v", err)
 	}
 
-	// Step 5: Connect to Redis (skip if unavailable)
-	redisAddr := os.Getenv("TEST_REDIS_ADDR")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379"
-	}
+	// Step 5: Connect to Redis. Honors TEST_REDIS_ADDR, then REDIS_ADDR (CI).
+	redisAddr := resolveRedisAddr()
 	redisClient := redis.NewClient(&redis.Options{
 		Addr: redisAddr,
 		DB:   0,
 	})
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		pool.Close()
-		t.Skipf("Redis unavailable: %v", err)
+		skipOrFail(t, "Redis unavailable: %v", err)
 	}
 
 	// Step 6: Build MemoryService with mocked LLM/Vector/Embed

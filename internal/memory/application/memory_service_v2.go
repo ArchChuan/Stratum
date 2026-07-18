@@ -18,6 +18,9 @@ type LLMExtractorResolver func(ctx context.Context, tenantID string) port.LLMExt
 // EmbedClientResolver resolves a per-tenant EmbedClient at call time.
 type EmbedClientResolver func(ctx context.Context, tenantID string) port.EmbedClient
 
+// LLMSupersederResolver resolves a per-tenant LLM supersede judge at call time.
+type LLMSupersederResolver func(ctx context.Context, tenantID string) port.LLMSuperseder
+
 // MemoryService orchestrates fact extraction, retrieval, entity management, context building.
 type MemoryService struct {
 	factRepo    port.FactRepo
@@ -33,6 +36,7 @@ type MemoryService struct {
 	llmExtractResolver  LLMExtractorResolver
 	embedClientResolver EmbedClientResolver
 	judge               port.LLMSuperseder
+	judgeResolver       LLMSupersederResolver
 }
 
 // NewMemoryService constructs a new MemoryService with all dependencies.
@@ -73,8 +77,13 @@ func (s *MemoryService) SetLLMExtractResolver(r LLMExtractorResolver) { s.llmExt
 // SetEmbedClientResolver wires a per-tenant embed client resolver (used when embedClient is nil).
 func (s *MemoryService) SetEmbedClientResolver(r EmbedClientResolver) { s.embedClientResolver = r }
 
-// SetLLMSuperseder wires the LLM judge used for inline supersede decisions during extraction.
+// SetLLMSuperseder wires a singleton LLM judge for inline supersede decisions during extraction.
 func (s *MemoryService) SetLLMSuperseder(j port.LLMSuperseder) { s.judge = j }
+
+// SetLLMSupersederResolver wires a per-tenant LLM judge resolver (used when judge is nil).
+// Preferred over SetLLMSuperseder in multi-tenant wiring: the LLM gateway is resolved
+// per tenant, so a singleton judge would apply one tenant's model to another's facts.
+func (s *MemoryService) SetLLMSupersederResolver(r LLMSupersederResolver) { s.judgeResolver = r }
 
 // BufferMessage accumulates messages in Redis; flushes at K=5 or T=2min.
 func (s *MemoryService) BufferMessage(ctx context.Context, req *BufferMessageRequest) error {

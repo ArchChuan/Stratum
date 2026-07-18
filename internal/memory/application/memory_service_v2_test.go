@@ -250,6 +250,11 @@ func (m *MockFactRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID s
 	return args.Get(0).([]string), args.Error(1)
 }
 
+func (m *MockFactRepo) PurgeSuperseded(ctx context.Context, tenantID string, olderThan time.Time, limit int) (int, error) {
+	args := m.Called(ctx, tenantID, olderThan, limit)
+	return args.Int(0), args.Error(1)
+}
+
 type MockEntityRepo struct {
 	mock.Mock
 }
