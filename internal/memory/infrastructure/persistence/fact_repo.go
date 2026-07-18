@@ -185,19 +185,27 @@ func (r *FactRepo) SearchByContent(ctx context.Context, tenantID string, filter 
 	return facts, err
 }
 
-func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
-	const query = `
+func supersedeScopeClause(filter domain.ScopeFilter) string {
+	if filter.IncludeAgentScope && !filter.IncludeUserScope {
+		return "scope = 'agent' AND agent_id = $3"
+	}
+	return "scope = 'user'"
+}
+
+func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID string, filter domain.ScopeFilter, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
+	query := `
 		SELECT id, user_id, agent_id, scope, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
 			created_at, updated_at,
 			similarity(content, $2) as sim
 		FROM memory_facts
-		WHERE user_id = $1 AND status = 'active' AND similarity(content, $2) > $3
-		ORDER BY sim DESC LIMIT $4`
+		WHERE user_id = $1 AND status = 'active' AND similarity(content, $2) > $4
+		  AND ` + supersedeScopeClause(filter) + `
+		ORDER BY sim DESC LIMIT $5`
 
 	var candidates []*port.SupersedeCandidate
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, query, userID, content, minSimilarity, int(maxCount))
+		rows, err := tx.Query(ctx, query, filter.UserID, content, filter.AgentID, minSimilarity, int(maxCount))
 		if err != nil {
 			return fmt.Errorf("find supersede candidates: %w", err)
 		}
@@ -273,7 +281,7 @@ func (r *FactRepo) DeleteAllByUser(ctx context.Context, tenantID, userID string)
 }
 
 func (r *FactRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) ([]string, error) {
-	const query = `DELETE FROM memory_facts WHERE agent_id = $1 RETURNING id`
+	const query = `DELETE FROM memory_facts WHERE agent_id = $1 AND scope = 'agent' RETURNING id`
 
 	var factIDs []string
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {

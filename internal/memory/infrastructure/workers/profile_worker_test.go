@@ -34,7 +34,7 @@ func (r *stubEntityRepo) Update(ctx context.Context, tenantID string, entity *do
 	return r.updateFunc(ctx, tenantID, entity)
 }
 
-func (r *stubEntityRepo) FindByNameAndType(ctx context.Context, tenantID, userID, name, entityType string, threshold float64) (*domain.MemoryEntity, error) {
+func (r *stubEntityRepo) FindByNameAndType(ctx context.Context, tenantID string, filter domain.ScopeFilter, name, entityType string, threshold float64) (*domain.MemoryEntity, error) {
 	return nil, domain.ErrEntityNotFound
 }
 

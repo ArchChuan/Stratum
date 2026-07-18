@@ -42,7 +42,7 @@ func TestEntityRepo_FindByNameAndType(t *testing.T) {
 	entity, _ := domain.NewEntity("user123", "", "user", "TypeScript", "technology")
 	require.NoError(t, repo.Create(ctx, testTenantID, entity))
 
-	found, err := repo.FindByNameAndType(ctx, testTenantID, "user123", "TypeScript", "technology", 0.8)
+	found, err := repo.FindByNameAndType(ctx, testTenantID, domain.ScopeFilter{UserID: "user123", IncludeUserScope: true}, "TypeScript", "technology", 0.8)
 	require.NoError(t, err)
 	require.Equal(t, entity.ID, found.ID)
 }
@@ -54,7 +54,7 @@ func TestEntityRepo_FindByNameAndType_FuzzyMatch(t *testing.T) {
 	entity, _ := domain.NewEntity("user123", "", "user", "PostgreSQL", "technology")
 	require.NoError(t, repo.Create(ctx, testTenantID, entity))
 
-	found, err := repo.FindByNameAndType(ctx, testTenantID, "user123", "Postgres", "technology", 0.5)
+	found, err := repo.FindByNameAndType(ctx, testTenantID, domain.ScopeFilter{UserID: "user123", IncludeUserScope: true}, "Postgres", "technology", 0.5)
 	require.NoError(t, err)
 	require.Equal(t, entity.ID, found.ID)
 }

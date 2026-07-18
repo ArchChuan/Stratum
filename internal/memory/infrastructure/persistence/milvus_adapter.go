@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	storagemilvus "github.com/byteBuilderX/stratum/pkg/storage/milvus"
 )
@@ -166,7 +167,15 @@ func (a *MilvusPortAdapter) DeleteAllByUser(ctx context.Context, tenantID, userI
 }
 
 func (a *MilvusPortAdapter) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
-	return a.deleteBothMemoryCollections(ctx, tenantID, "agent_id", agentID)
+	normalized := strings.ReplaceAll(tenantID, "-", "_")
+	expr := fmt.Sprintf("agent_id == %q and scope == %q", agentID, string(domain.ScopeAgent))
+	var errs []error
+	for _, collection := range []string{"memory_facts_" + normalized, "memory_" + normalized} {
+		if err := a.vs.DeleteByFilter(ctx, collection, expr); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", collection, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (a *MilvusPortAdapter) deleteBothMemoryCollections(ctx context.Context, tenantID, field, value string) error {

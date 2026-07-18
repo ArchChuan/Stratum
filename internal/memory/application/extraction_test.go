@@ -36,11 +36,13 @@ func TestExtractFacts_Success(t *testing.T) {
 	}, nil)
 
 	// Mock supersede candidates (none found)
-	factRepo.On("FindSupersedeCandidates", ctx, "tenant1", "user1", "agent1", mock.Anything, mock.Anything, mock.Anything).
+	factRepo.On("FindSupersedeCandidates", ctx, "tenant1", mock.MatchedBy(func(f domain.ScopeFilter) bool {
+		return f.UserID == "user1" && f.IncludeUserScope && !f.IncludeAgentScope
+	}), mock.Anything, mock.Anything, mock.Anything).
 		Return([]*port.SupersedeCandidate{}, nil)
 
 	// Mock entity normalization (new entity)
-	entityRepo.On("FindByNameAndType", ctx, "tenant1", "user1", "Python", "", mock.Anything).
+	entityRepo.On("FindByNameAndType", ctx, "tenant1", mock.Anything, "Python", "", mock.Anything).
 		Return(nil, domain.ErrEntityNotFound)
 	entityRepo.On("Create", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryEntity")).Return(nil)
 
@@ -100,12 +102,12 @@ func TestExtractFacts_EntityUpdate(t *testing.T) {
 	}, nil)
 
 	// Mock supersede candidates (none)
-	factRepo.On("FindSupersedeCandidates", ctx, "tenant1", "user1", "agent1", mock.Anything, mock.Anything, mock.Anything).
+	factRepo.On("FindSupersedeCandidates", ctx, "tenant1", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return([]*port.SupersedeCandidate{}, nil)
 
 	// Mock entity normalization (existing entity)
 	existingEntity, _ := domain.NewEntity("user1", "agent1", "user", "Go", "technology")
-	entityRepo.On("FindByNameAndType", ctx, "tenant1", "user1", "Go", "", mock.Anything).
+	entityRepo.On("FindByNameAndType", ctx, "tenant1", mock.Anything, "Go", "", mock.Anything).
 		Return(existingEntity, nil)
 	entityRepo.On("Update", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryEntity")).Return(nil)
 
@@ -149,14 +151,32 @@ func TestNormalizeEntity_NewEntity(t *testing.T) {
 	}
 
 	// No existing entity
-	entityRepo.On("FindByNameAndType", ctx, "tenant1", "user1", "Python", "", mock.Anything).
+	entityRepo.On("FindByNameAndType", ctx, "tenant1", mock.Anything, "Python", "", mock.Anything).
 		Return(nil, domain.ErrEntityNotFound)
 	entityRepo.On("Create", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryEntity")).Return(nil)
 
-	id, err := svc.normalizeEntity(ctx, "tenant1", "user1", "agent1", "Python")
+	id, err := svc.normalizeEntity(ctx, "tenant1", "user1", "agent1", "user", "Python")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, id)
 
+	entityRepo.AssertExpectations(t)
+}
+
+func TestNormalizeEntity_NewAgentEntityPreservesPrivateScope(t *testing.T) {
+	ctx := context.Background()
+	entityRepo := new(MockEntityRepo)
+	svc := &MemoryService{entityRepo: entityRepo}
+	filter := mock.MatchedBy(func(f domain.ScopeFilter) bool {
+		return f.UserID == "user1" && f.AgentID == "agent1" && f.IncludeAgentScope && !f.IncludeUserScope
+	})
+	entityRepo.On("FindByNameAndType", ctx, "tenant1", filter, "Python", "", mock.Anything).
+		Return(nil, domain.ErrEntityNotFound)
+	entityRepo.On("Create", ctx, "tenant1", mock.MatchedBy(func(e *domain.MemoryEntity) bool {
+		return e.Scope == domain.ScopeAgent && e.AgentID == "agent1"
+	})).Return(nil)
+
+	_, err := svc.normalizeEntity(ctx, "tenant1", "user1", "agent1", "agent", "Python")
+	assert.NoError(t, err)
 	entityRepo.AssertExpectations(t)
 }
 
@@ -169,11 +189,11 @@ func TestNormalizeEntity_ExistingEntity(t *testing.T) {
 	}
 
 	existing, _ := domain.NewEntity("user1", "agent1", "user", "Python", "technology")
-	entityRepo.On("FindByNameAndType", ctx, "tenant1", "user1", "Python", "", mock.Anything).
+	entityRepo.On("FindByNameAndType", ctx, "tenant1", mock.Anything, "Python", "", mock.Anything).
 		Return(existing, nil)
 	entityRepo.On("Update", ctx, "tenant1", mock.AnythingOfType("*domain.MemoryEntity")).Return(nil)
 
-	id, err := svc.normalizeEntity(ctx, "tenant1", "user1", "agent1", "Python")
+	id, err := svc.normalizeEntity(ctx, "tenant1", "user1", "agent1", "user", "Python")
 	assert.NoError(t, err)
 	assert.Equal(t, existing.ID, id)
 

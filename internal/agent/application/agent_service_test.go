@@ -89,6 +89,32 @@ func (fakeSkillActivationResolver) ResolveSkills(_ context.Context, _ string, re
 
 type mockExecStore struct{ mock.Mock }
 
+type stubMemoryCleaner struct{ err error }
+
+func (s stubMemoryCleaner) ClearAgentMemories(context.Context, string, string) error { return s.err }
+
+type stubChatRepo struct{ err error }
+
+func (s stubChatRepo) CreateConversation(context.Context, string, string, string, string) (*domain.ChatConversation, error) {
+	return nil, nil
+}
+func (s stubChatRepo) GetConversation(context.Context, string, string) (*domain.ChatConversation, error) {
+	return nil, nil
+}
+func (s stubChatRepo) ListConversations(context.Context, string, string, string) ([]*domain.ChatConversation, error) {
+	return nil, nil
+}
+func (s stubChatRepo) RenameConversation(context.Context, string, string, string, string) error {
+	return nil
+}
+func (s stubChatRepo) DeleteConversation(context.Context, string, string, string) error { return nil }
+func (s stubChatRepo) AddMessage(context.Context, string, *domain.ChatMessage) error    { return nil }
+func (s stubChatRepo) ListMessages(context.Context, string, string, string) ([]*domain.ChatMessage, error) {
+	return nil, nil
+}
+func (s stubChatRepo) CleanupExpired(context.Context, string) error        { return nil }
+func (s stubChatRepo) DeleteByAgent(context.Context, string, string) error { return s.err }
+
 func (m *mockExecStore) Insert(ctx context.Context, r application.ExecutionRecord) error {
 	return m.Called(ctx, r).Error(0)
 }
@@ -266,6 +292,31 @@ func TestAgentService_Delete(t *testing.T) {
 	err := svc.Delete(context.Background(), "tenant-1", "agent-1")
 	assert.NoError(t, err)
 	repo.AssertExpectations(t)
+}
+
+func TestAgentService_DeleteReturnsCleanupErrorBeforeRemovingRegistry(t *testing.T) {
+	repo := new(mockAgentRepo)
+	wantErr := errors.New("memory cleanup failed")
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		Registry:      application.NewRegistry(repo, zap.NewNop()),
+		MemoryCleaner: stubMemoryCleaner{err: wantErr}, Logger: zap.NewNop(),
+	})
+
+	err := svc.Delete(context.Background(), "tenant-1", "agent-1")
+	assert.ErrorIs(t, err, wantErr)
+	repo.AssertNotCalled(t, "Remove", mock.Anything, mock.Anything)
+}
+
+func TestAgentService_DeleteReturnsChatCleanupErrorBeforeRemovingRegistry(t *testing.T) {
+	repo := new(mockAgentRepo)
+	wantErr := errors.New("chat cleanup failed")
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		Registry: application.NewRegistry(repo, zap.NewNop()), ChatStore: stubChatRepo{err: wantErr}, Logger: zap.NewNop(),
+	})
+
+	err := svc.Delete(context.Background(), "tenant-1", "agent-1")
+	assert.ErrorIs(t, err, wantErr)
+	repo.AssertNotCalled(t, "Remove", mock.Anything, mock.Anything)
 }
 
 // ---------- Task 3: execute/extra-tools/record-execution ----------

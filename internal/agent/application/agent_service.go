@@ -217,14 +217,18 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 
 // Delete removes an agent and cascades deletion to conversations and memories.
 func (s *AgentService) Delete(ctx context.Context, tenantID, id string) error {
-	if err := s.deps.Registry.Remove(ctx, id); err != nil {
-		return err
-	}
 	if s.deps.MemoryCleaner != nil {
-		_ = s.deps.MemoryCleaner.ClearAgentMemories(ctx, tenantID, id)
+		if err := s.deps.MemoryCleaner.ClearAgentMemories(ctx, tenantID, id); err != nil {
+			return fmt.Errorf("clear agent memories: %w", err)
+		}
 	}
 	if s.deps.ChatStore != nil {
-		_ = s.deps.ChatStore.DeleteByAgent(ctx, tenantID, id)
+		if err := s.deps.ChatStore.DeleteByAgent(ctx, tenantID, id); err != nil {
+			return fmt.Errorf("delete agent chats: %w", err)
+		}
+	}
+	if err := s.deps.Registry.Remove(ctx, id); err != nil {
+		return err
 	}
 	s.deps.Logger.Info("agent deleted", zap.String("id", id))
 	return nil

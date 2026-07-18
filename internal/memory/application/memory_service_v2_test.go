@@ -216,8 +216,8 @@ func (m *MockFactRepo) SearchByContent(ctx context.Context, tenantID string, fil
 	return args.Get(0).([]*domain.MemoryFact), args.Error(1)
 }
 
-func (m *MockFactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
-	args := m.Called(ctx, tenantID, userID, agentID, content, minSimilarity, maxCount)
+func (m *MockFactRepo) FindSupersedeCandidates(ctx context.Context, tenantID string, filter domain.ScopeFilter, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
+	args := m.Called(ctx, tenantID, filter, content, minSimilarity, maxCount)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -272,8 +272,8 @@ func (m *MockEntityRepo) Update(ctx context.Context, tenantID string, entity *do
 	return args.Error(0)
 }
 
-func (m *MockEntityRepo) FindByNameAndType(ctx context.Context, tenantID, userID, name, entityType string, threshold float64) (*domain.MemoryEntity, error) {
-	args := m.Called(ctx, tenantID, userID, name, entityType, threshold)
+func (m *MockEntityRepo) FindByNameAndType(ctx context.Context, tenantID string, filter domain.ScopeFilter, name, entityType string, threshold float64) (*domain.MemoryEntity, error) {
+	args := m.Called(ctx, tenantID, filter, name, entityType, threshold)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

@@ -76,8 +76,8 @@ func TestMilvusPortAdapterDeleteAllByAgentCleansBothCollections(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		`memory_facts_tenant_1:agent_id == "agent-1"`,
-		`memory_tenant_1:agent_id == "agent-1"`,
+		`memory_facts_tenant_1:agent_id == "agent-1" and scope == "agent"`,
+		`memory_tenant_1:agent_id == "agent-1" and scope == "agent"`,
 	}
 	if strings.Join(store.filterCalls, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("filter calls = %v, want %v", store.filterCalls, want)

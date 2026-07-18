@@ -46,11 +46,11 @@ func (r *stubFactRepo) SearchByContent(ctx context.Context, tenantID string, fil
 	return nil, nil
 }
 
-func (r *stubFactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
+func (r *stubFactRepo) FindSupersedeCandidates(ctx context.Context, tenantID string, filter domain.ScopeFilter, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
 	if r.findCandidatesFunc == nil {
 		return nil, nil
 	}
-	return r.findCandidatesFunc(ctx, tenantID, userID, agentID, content, minSimilarity, maxCount)
+	return r.findCandidatesFunc(ctx, tenantID, filter.UserID, filter.AgentID, content, minSimilarity, maxCount)
 }
 
 func (r *stubFactRepo) CountByUser(ctx context.Context, tenantID, userID string) (int, error) {
