@@ -12,6 +12,8 @@ on:
       - 'pkg/storage/postgres/**'
       - 'pkg/storage/milvus/**'
       - 'test/e2e/**'
+      - 'test/integration/**'
+      - 'docker-compose.milvus-test.yml'
       - 'go.mod'
       - 'go.sum'
   push:
@@ -25,6 +27,8 @@ on:
       - 'pkg/storage/postgres/**'
       - 'pkg/storage/milvus/**'
       - 'test/e2e/**'
+      - 'test/integration/**'
+      - 'docker-compose.milvus-test.yml'
 
 env:
   GO_VERSION: "1.25"
@@ -81,6 +85,18 @@ jobs:
           PGPASSWORD=postgres psql -h localhost -U postgres -d stratum_test -c \
             "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
 
+      - name: Start Milvus 2.4.15 and preflight TCP
+        run: |
+          docker compose -f docker-compose.milvus-test.yml up -d
+          timeout 120 bash -c 'until (echo > /dev/tcp/127.0.0.1/19530) >/dev/null 2>&1; do sleep 2; done'
+
+      - name: Run fail-closed Milvus readiness and integration tests
+        run: go test -tags=integration ./test/integration -count=1 -v -timeout 5m
+        env:
+          TEST_MILVUS_HOST: localhost
+          TEST_MILVUS_PORT: "19530"
+          REQUIRE_MILVUS_E2E: "1"
+
       - name: Run E2E tests
         run: |
           go test -v -timeout 10m ./test/e2e/... \
@@ -99,6 +115,10 @@ jobs:
              FROM pg_namespace
              WHERE nspname LIKE 'tenant_test_%'" \
             | grep DROP | PGPASSWORD=postgres psql -h localhost -U postgres -d stratum_test || true
+
+      - name: Stop Milvus test stack
+        if: always()
+        run: docker compose -f docker-compose.milvus-test.yml down -v
 
       - name: Upload test logs
         if: failure()

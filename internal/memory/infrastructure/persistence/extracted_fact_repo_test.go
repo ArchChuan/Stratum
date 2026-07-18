@@ -42,7 +42,7 @@ func (s *failOnceVectorStore) Upsert(_ context.Context, _ string, docs []*port.V
 	}
 	return nil
 }
-func (*failOnceVectorStore) Search(context.Context, string, []float32, int, map[string]interface{}) ([]*port.VectorDoc, error) {
+func (*failOnceVectorStore) Search(context.Context, string, []float32, int, port.VectorSearchFilter) ([]*port.VectorDoc, error) {
 	return nil, nil
 }
 func (*failOnceVectorStore) Delete(context.Context, string, []string) error { return nil }

@@ -352,7 +352,7 @@ func (m *MockVectorStore) Upsert(ctx context.Context, collectionName string, doc
 	return args.Error(0)
 }
 
-func (m *MockVectorStore) Search(ctx context.Context, collectionName string, queryVector []float32, topK int, filter map[string]interface{}) ([]*port.VectorDoc, error) {
+func (m *MockVectorStore) Search(ctx context.Context, collectionName string, queryVector []float32, topK int, filter port.VectorSearchFilter) ([]*port.VectorDoc, error) {
 	args := m.Called(ctx, collectionName, queryVector, topK, filter)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
