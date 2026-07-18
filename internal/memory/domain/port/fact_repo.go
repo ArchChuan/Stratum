@@ -12,6 +12,19 @@ type SupersedeCandidate struct {
 	Similarity float64
 }
 
+// ExtractedFactWrite carries stable extraction provenance into atomic persistence.
+type ExtractedFactWrite struct {
+	Fact        *domain.MemoryFact
+	Identity    domain.FactSourceIdentity
+	PayloadHash string
+	EntityNames []string
+}
+
+// ExtractedFactWriter atomically persists one replay-safe fact and its entity mutations.
+type ExtractedFactWriter interface {
+	CreateExtracted(ctx context.Context, tenantID string, write *ExtractedFactWrite) (fact *domain.MemoryFact, created bool, err error)
+}
+
 // FactRepo manages memory facts persistence.
 type FactRepo interface {
 	Create(ctx context.Context, tenantID string, fact *domain.MemoryFact) error

@@ -8,6 +8,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 )
 
 // NewTestTenantPool creates a test database pool with a provisioned tenant schema
@@ -28,6 +29,10 @@ func NewTestTenantPool(t *testing.T, tenantID string) *pgxpool.Pool {
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		t.Skipf("skipping test: cannot reach test database: %v", err)
+	}
+	if err := postgres.ProvisionPublicSchema(ctx, pool, zap.NewNop()); err != nil {
+		pool.Close()
+		t.Fatalf("failed to provision public schema: %v", err)
 	}
 
 	// Provision tenant schema
