@@ -60,6 +60,16 @@ func (c *Container) buildMemory(ctx context.Context) error {
 				}
 				return pipeline.NewLLMExtractor(llm)
 			})
+			// Per-tenant inline supersede judge (nil-safe): mirrors the extractor
+			// resolver so ExtractFacts' mid-similarity LLM branch is live in prod,
+			// not just the standalone SupersedeWorker.
+			mem.Service.SetLLMSupersederResolver(func(ctx context.Context, tenantID string) memport.LLMSuperseder {
+				llm := llmRes.ResolveLLM(ctx, tenantID)
+				if llm == nil {
+					return nil
+				}
+				return memworkers.NewLLMSuperseder(llm)
+			})
 		}
 		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 			embedRes := c.Knowledge.EmbedResolver
@@ -203,6 +213,7 @@ func BuildMemoryWorkers(c *Container) []interface {
 	}
 
 	factRepo := persistence.NewFactRepo(db)
+	entityRepo := persistence.NewEntityRepo(db)
 	historyRepo := persistence.NewHistoryRepo(db)
 	queue := persistence.NewExtractionQueue(db)
 
@@ -229,7 +240,7 @@ func BuildMemoryWorkers(c *Container) []interface {
 				return llmRes.ResolveWorkerLLM(ctx, tenantID)
 			}
 		}
-		return appendTenantLLMWorkers(ws, tid, factRepo, historyRepo, workerLLMResolver, c.Logger)
+		return appendTenantLLMWorkers(ws, tid, entityRepo, factRepo, historyRepo, workerLLMResolver, c.Logger)
 	}, c.Logger)
 
 	result := []interface {
@@ -248,6 +259,7 @@ func BuildMemoryWorkers(c *Container) []interface {
 func appendTenantLLMWorkers(
 	workerSet memworkers.WorkerSet,
 	tenantID string,
+	entityRepo memport.EntityRepo,
 	factRepo memport.FactRepo,
 	historyRepo memport.HistoryRepo,
 	resolver memworkers.TenantLLMResolver,
@@ -260,6 +272,13 @@ func appendTenantLLMWorkers(
 			tenantID,
 			factRepo,
 			memworkers.NewResolvingLLMSuperseder(tenantID, resolver),
+			logger,
+		))
+		workerSet = append(workerSet, memworkers.NewProfileWorker(
+			tenantID,
+			entityRepo,
+			factRepo,
+			memworkers.NewResolvingLLMEntityProfiler(tenantID, resolver),
 			logger,
 		))
 		historyProcessor := memworkers.NewResolvingLLMHistorySummarizer(tenantID, resolver)

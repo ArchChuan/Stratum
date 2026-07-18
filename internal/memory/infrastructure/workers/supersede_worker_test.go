@@ -18,6 +18,7 @@ import (
 type stubFactRepo struct {
 	findCandidatesFunc func(context.Context, string, string, string, string, float64, float64) ([]*port.SupersedeCandidate, error)
 	updateFunc         func(context.Context, string, *domain.MemoryFact) error
+	purgeFunc          func(context.Context, string, time.Time, int) (int, error)
 }
 
 func (r *stubFactRepo) Create(ctx context.Context, tenantID string, fact *domain.MemoryFact) error {
@@ -68,6 +69,13 @@ func (r *stubFactRepo) DeleteAllByUser(ctx context.Context, tenantID, userID str
 
 func (r *stubFactRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) ([]string, error) {
 	return nil, nil
+}
+
+func (r *stubFactRepo) PurgeSuperseded(ctx context.Context, tenantID string, olderThan time.Time, limit int) (int, error) {
+	if r.purgeFunc != nil {
+		return r.purgeFunc(ctx, tenantID, olderThan, limit)
+	}
+	return 0, nil
 }
 
 type stubSuperseder struct {

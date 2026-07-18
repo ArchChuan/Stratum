@@ -2,6 +2,7 @@ package port
 
 import (
 	"context"
+	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 )
@@ -37,4 +38,10 @@ type FactRepo interface {
 	Delete(ctx context.Context, tenantID, id string) error
 	DeleteAllByUser(ctx context.Context, tenantID, userID string) ([]string, error)
 	DeleteAllByAgent(ctx context.Context, tenantID, agentID string) ([]string, error)
+	// PurgeSuperseded hard-deletes superseded facts whose updated_at is older
+	// than olderThan, capped at limit rows per call. It targets only
+	// status='superseded' (facts replaced by newer ones — true dead weight);
+	// archived facts are durable long-term memory and are never purged here.
+	// Returns the number of rows deleted.
+	PurgeSuperseded(ctx context.Context, tenantID string, olderThan time.Time, limit int) (int, error)
 }

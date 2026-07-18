@@ -9,6 +9,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/timeutil"
 )
 
 // GCWorker periodically purges old deleted and superseded facts.
@@ -79,6 +80,41 @@ func (w *GCWorker) RunOnce(ctx context.Context) {
 			w.logger.Info("memory.gc_worker.deleted_old_completed",
 				zap.String("tenant_id", w.tenantID), zap.Int("count", n))
 		}
+	}
+
+	w.purgeSupersededFacts(ctx)
+}
+
+// purgeSupersededFacts hard-deletes superseded facts older than the retention
+// window in bounded batches. Superseded facts have been replaced by newer ones,
+// so they are pure dead weight once past retention; archived facts are durable
+// long-term memory and are deliberately never purged here. Batching caps the
+// blast radius of any single pass and lets ticker cadence drain a large backlog
+// over time rather than issuing one unbounded DELETE.
+func (w *GCWorker) purgeSupersededFacts(ctx context.Context) {
+	if w.factRepo == nil {
+		return
+	}
+	cutoff := timeutil.Now().Add(-constants.MemorySupersededRetention)
+	total := 0
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		n, err := w.factRepo.PurgeSuperseded(ctx, w.tenantID, cutoff, constants.MemoryGCBatchSize)
+		if err != nil {
+			w.logger.Error("memory.gc_worker.purge_superseded_failed",
+				zap.String("tenant_id", w.tenantID), zap.Error(err))
+			return
+		}
+		total += n
+		if n < constants.MemoryGCBatchSize {
+			break
+		}
+	}
+	if total > 0 {
+		w.logger.Info("memory.gc_worker.purged_superseded_facts",
+			zap.String("tenant_id", w.tenantID), zap.Int("count", total))
 	}
 }
 

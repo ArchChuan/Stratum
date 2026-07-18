@@ -43,18 +43,21 @@ func TestBuildTenantLLMWorkersUsesDynamicProcessorsWithoutEagerResolve(t *testin
 		return completionClientForWiringTest{}, nil
 	}
 
-	workerSet := appendTenantLLMWorkers(nil, "tenant-1", nil, nil, resolver, zap.NewNop())
+	workerSet := appendTenantLLMWorkers(nil, "tenant-1", nil, nil, nil, resolver, zap.NewNop())
 	if resolved != 0 {
 		t.Fatalf("tenant LLM resolved during worker construction: %d calls", resolved)
 	}
-	if len(workerSet) != 2 {
-		t.Fatalf("dynamic worker count = %d, want supersede and history", len(workerSet))
+	if len(workerSet) != 3 {
+		t.Fatalf("dynamic worker count = %d, want supersede, profile and history", len(workerSet))
 	}
 	if _, ok := workerSet[0].(*memworkers.SupersedeWorker); !ok {
 		t.Fatalf("first dynamic worker = %T, want *SupersedeWorker", workerSet[0])
 	}
-	if _, ok := workerSet[1].(*memworkers.HistoryWorker); !ok {
-		t.Fatalf("second dynamic worker = %T, want *HistoryWorker", workerSet[1])
+	if _, ok := workerSet[1].(*memworkers.ProfileWorker); !ok {
+		t.Fatalf("second dynamic worker = %T, want *ProfileWorker", workerSet[1])
+	}
+	if _, ok := workerSet[2].(*memworkers.HistoryWorker); !ok {
+		t.Fatalf("third dynamic worker = %T, want *HistoryWorker", workerSet[2])
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
@@ -479,6 +480,36 @@ func (r *FactRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID strin
 		return rows.Err()
 	})
 	return factIDs, err
+}
+
+// PurgeSuperseded hard-deletes at most `limit` superseded facts whose updated_at
+// predates `olderThan`. The cutoff is bound as a timestamp parameter (not via
+// make_interval) to avoid the pgx int→interval OID encoding failure. Only
+// status='superseded' rows are eligible — archived facts are long-term memory
+// and must survive GC. Uses a bounded ctid subquery so a single pass never
+// deletes an unbounded number of rows.
+func (r *FactRepo) PurgeSuperseded(ctx context.Context, tenantID string, olderThan time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	const query = `
+		DELETE FROM memory_facts
+		WHERE ctid IN (
+			SELECT ctid FROM memory_facts
+			WHERE status = 'superseded' AND updated_at < $1
+			LIMIT $2
+		)`
+
+	var n int
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, query, olderThan, limit)
+		if err != nil {
+			return translatePgError(err, "purge superseded facts")
+		}
+		n = int(tag.RowsAffected())
+		return nil
+	})
+	return n, err
 }
 
 func scanFacts(rows pgx.Rows) ([]*domain.MemoryFact, error) {

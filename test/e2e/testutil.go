@@ -16,6 +16,46 @@ import (
 	"go.uber.org/zap"
 )
 
+// resolvePostgresDSN picks the Postgres connection string in priority order:
+//  1. TEST_POSTGRES_URL — explicit full override.
+//  2. Standard libpq PG* vars (PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE) —
+//     what GitHub Actions service containers export. Built into a keyword DSN so
+//     the suite never silently depends on those vars matching a hardcoded default.
+//  3. Local docker-compose default (stratum/stratum).
+func resolvePostgresDSN() string {
+	if dsn := os.Getenv("TEST_POSTGRES_URL"); dsn != "" {
+		return dsn
+	}
+	if host := os.Getenv("PGHOST"); host != "" {
+		envOr := func(key, def string) string {
+			if v := os.Getenv(key); v != "" {
+				return v
+			}
+			return def
+		}
+		return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+			host,
+			envOr("PGPORT", "5432"),
+			envOr("PGUSER", "postgres"),
+			os.Getenv("PGPASSWORD"),
+			envOr("PGDATABASE", "stratum_test"),
+			envOr("PGSSLMODE", "disable"),
+		)
+	}
+	return "postgres://stratum:stratum@localhost:5432/stratum_test?sslmode=disable"
+}
+
+// resolveRedisAddr honors TEST_REDIS_ADDR, then REDIS_ADDR (CI), then local default.
+func resolveRedisAddr() string {
+	if addr := os.Getenv("TEST_REDIS_ADDR"); addr != "" {
+		return addr
+	}
+	if addr := os.Getenv("REDIS_ADDR"); addr != "" {
+		return addr
+	}
+	return "localhost:6379"
+}
+
 // MemoryTestEnv holds resources for E2E memory tests.
 type MemoryTestEnv struct {
 	PGPool         *pgxpool.Pool
@@ -46,15 +86,13 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 
 	ctx := context.Background()
 
-	// Step 1: Connect to PostgreSQL (skip if unavailable)
-	// DSN must match the real infra credentials (docker-compose: stratum/stratum).
+	// Step 1: Connect to PostgreSQL.
 	// Direct-connect to Postgres 5432 (NOT pgbouncer 6432): schema/extension
 	// provisioning needs session-level privileges that transaction pooling breaks.
-	// Override via TEST_POSTGRES_URL to point at any real Postgres.
-	dsn := os.Getenv("TEST_POSTGRES_URL")
-	if dsn == "" {
-		dsn = "postgres://stratum:stratum@localhost:5432/stratum_test?sslmode=disable"
-	}
+	// DSN resolution honors TEST_POSTGRES_URL, then CI's PG* vars, then the local
+	// docker-compose default — see resolvePostgresDSN. When REQUIRE_MEMORY_E2E is
+	// set, an unreachable DB fails hard instead of silently skipping.
+	dsn := resolvePostgresDSN()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		handleMemoryDependencyFailure(t, "PostgreSQL", err)
@@ -89,11 +127,8 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 		t.Fatalf("provision second tenant schema: %v", err)
 	}
 
-	// Step 5: Connect to Redis (skip if unavailable)
-	redisAddr := os.Getenv("TEST_REDIS_ADDR")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379"
-	}
+	// Step 5: Connect to Redis. Honors TEST_REDIS_ADDR, then REDIS_ADDR (CI).
+	redisAddr := resolveRedisAddr()
 	redisClient := redis.NewClient(&redis.Options{
 		Addr: redisAddr,
 		DB:   0,
