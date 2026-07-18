@@ -192,20 +192,31 @@ func supersedeScopeClause(filter domain.ScopeFilter) string {
 	return "scope = 'user'"
 }
 
-func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID string, filter domain.ScopeFilter, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
+func supersedeQuery(filter domain.ScopeFilter, content string, minSimilarity, maxCount float64) (string, []any) {
+	thresholdParam, limitParam := "$3", "$4"
+	args := []any{filter.UserID, content, minSimilarity, int(maxCount)}
+	if filter.IncludeAgentScope && !filter.IncludeUserScope {
+		thresholdParam, limitParam = "$4", "$5"
+		args = []any{filter.UserID, content, filter.AgentID, minSimilarity, int(maxCount)}
+	}
 	query := `
 		SELECT id, user_id, agent_id, scope, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
 			created_at, updated_at,
 			similarity(content, $2) as sim
 		FROM memory_facts
-		WHERE user_id = $1 AND status = 'active' AND similarity(content, $2) > $4
+		WHERE user_id = $1 AND status = 'active' AND similarity(content, $2) > ` + thresholdParam + `
 		  AND ` + supersedeScopeClause(filter) + `
-		ORDER BY sim DESC LIMIT $5`
+		ORDER BY sim DESC LIMIT ` + limitParam
+	return query, args
+}
+
+func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID string, filter domain.ScopeFilter, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
+	query, args := supersedeQuery(filter, content, minSimilarity, maxCount)
 
 	var candidates []*port.SupersedeCandidate
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, query, filter.UserID, content, filter.AgentID, minSimilarity, int(maxCount))
+		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("find supersede candidates: %w", err)
 		}
