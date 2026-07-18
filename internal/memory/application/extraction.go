@@ -93,11 +93,16 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 	}
 
 	for _, extractedFact := range extractedFacts {
+		writeFilter := domain.ScopeFilter{TenantID: req.TenantID, UserID: req.UserID, AgentID: req.AgentID}
+		if req.Scope == string(domain.ScopeAgent) {
+			writeFilter.IncludeAgentScope = true
+		} else {
+			writeFilter.IncludeUserScope = true
+		}
 		candidates, err := s.factRepo.FindSupersedeCandidates(
 			ctx,
 			req.TenantID,
-			req.UserID,
-			req.AgentID,
+			writeFilter,
 			extractedFact.Content,
 			constants.MemorySupersedeCandidateMin,
 			float64(constants.MemorySupersedeCandidateMax),
@@ -107,7 +112,7 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 		}
 
 		for _, entityName := range extractedFact.Entities {
-			_, err := s.normalizeEntity(ctx, req.TenantID, req.UserID, req.AgentID, entityName)
+			_, err := s.normalizeEntity(ctx, req.TenantID, req.UserID, req.AgentID, req.Scope, entityName)
 			if err != nil {
 				return fmt.Errorf("normalize entity %q: %w", entityName, err)
 			}
@@ -210,8 +215,14 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 
 // normalizeEntity finds or creates an entity, returning its ID.
 // Uses fuzzy matching (trigram similarity) to avoid duplicates.
-func (s *MemoryService) normalizeEntity(ctx context.Context, tenantID, userID, agentID, name string) (string, error) {
-	existing, err := s.entityRepo.FindByNameAndType(ctx, tenantID, userID, name, "", constants.MemorySupersedeCandidateMin)
+func (s *MemoryService) normalizeEntity(ctx context.Context, tenantID, userID, agentID, scope, name string) (string, error) {
+	filter := domain.ScopeFilter{TenantID: tenantID, UserID: userID, AgentID: agentID}
+	if scope == string(domain.ScopeAgent) {
+		filter.IncludeAgentScope = true
+	} else {
+		filter.IncludeUserScope = true
+	}
+	existing, err := s.entityRepo.FindByNameAndType(ctx, tenantID, filter, name, "", constants.MemorySupersedeCandidateMin)
 	if err != nil && err != domain.ErrEntityNotFound {
 		return "", fmt.Errorf("find entity: %w", err)
 	}
@@ -224,7 +235,7 @@ func (s *MemoryService) normalizeEntity(ctx context.Context, tenantID, userID, a
 		return existing.ID, nil
 	}
 
-	entity, err := domain.NewEntity(userID, agentID, string(domain.ScopeUser), name, "")
+	entity, err := domain.NewEntity(userID, agentID, scope, name, "")
 	if err != nil {
 		return "", fmt.Errorf("new entity: %w", err)
 	}

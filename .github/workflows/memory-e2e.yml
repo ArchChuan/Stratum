@@ -5,6 +5,12 @@ on:
     branches: [main]
     paths:
       - 'internal/memory/**'
+      - 'internal/agent/application/**'
+      - 'internal/agent/domain/port/**'
+      - 'internal/agent/infrastructure/persistence/**'
+      - 'api/wiring/**'
+      - 'pkg/storage/postgres/**'
+      - 'pkg/storage/milvus/**'
       - 'test/e2e/**'
       - 'go.mod'
       - 'go.sum'
@@ -12,6 +18,12 @@ on:
     branches: [main]
     paths:
       - 'internal/memory/**'
+      - 'internal/agent/application/**'
+      - 'internal/agent/domain/port/**'
+      - 'internal/agent/infrastructure/persistence/**'
+      - 'api/wiring/**'
+      - 'pkg/storage/postgres/**'
+      - 'pkg/storage/milvus/**'
       - 'test/e2e/**'
 
 env:
@@ -75,14 +87,9 @@ jobs:
             -count=1 \
             -p=1
         env:
-          # PostgreSQL connection
-          PGHOST: localhost
-          PGPORT: 5432
-          PGUSER: postgres
-          PGPASSWORD: postgres
-          PGDATABASE: stratum_test
-          # Redis connection
-          REDIS_ADDR: localhost:6379
+          TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/stratum_test?sslmode=disable
+          TEST_REDIS_ADDR: localhost:6379
+          REQUIRE_MEMORY_E2E: "1"
 
       - name: Cleanup test schemas
         if: always()

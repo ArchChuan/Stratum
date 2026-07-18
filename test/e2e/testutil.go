@@ -32,6 +32,14 @@ type MemoryTestEnv struct {
 	AgentID        string
 }
 
+func handleMemoryDependencyFailure(t *testing.T, dependency string, err error) {
+	t.Helper()
+	if os.Getenv("REQUIRE_MEMORY_E2E") == "1" {
+		t.Fatalf("%s unavailable while REQUIRE_MEMORY_E2E=1: %v", dependency, err)
+	}
+	t.Skipf("%s unavailable: %v", dependency, err)
+}
+
 // SetupMemoryTestEnv creates isolated tenant schema + mocked dependencies.
 func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	t.Helper()
@@ -49,11 +57,11 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	}
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		t.Skipf("PostgreSQL unavailable: %v", err)
+		handleMemoryDependencyFailure(t, "PostgreSQL", err)
 	}
 	if pingErr := pool.Ping(ctx); pingErr != nil {
 		pool.Close()
-		t.Skipf("PostgreSQL unavailable: %v", pingErr)
+		handleMemoryDependencyFailure(t, "PostgreSQL", pingErr)
 	}
 
 	// Step 2: Generate unique tenant ID for isolation
@@ -92,7 +100,7 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	})
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		pool.Close()
-		t.Skipf("Redis unavailable: %v", err)
+		handleMemoryDependencyFailure(t, "Redis", err)
 	}
 
 	// Step 6: Build MemoryService with mocked LLM/Vector/Embed

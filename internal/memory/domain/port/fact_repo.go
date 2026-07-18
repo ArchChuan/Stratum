@@ -19,7 +19,7 @@ type FactRepo interface {
 	Update(ctx context.Context, tenantID string, fact *domain.MemoryFact) error
 	ListActive(ctx context.Context, tenantID string, filter domain.ScopeFilter, limit int) ([]*domain.MemoryFact, error)
 	SearchByContent(ctx context.Context, tenantID string, filter domain.ScopeFilter, query string, limit int) ([]*domain.MemoryFact, error)
-	FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*SupersedeCandidate, error)
+	FindSupersedeCandidates(ctx context.Context, tenantID string, filter domain.ScopeFilter, content string, minSimilarity, maxCount float64) ([]*SupersedeCandidate, error)
 	CountByUser(ctx context.Context, tenantID, userID string) (int, error)
 	Delete(ctx context.Context, tenantID, id string) error
 	DeleteAllByUser(ctx context.Context, tenantID, userID string) ([]string, error)

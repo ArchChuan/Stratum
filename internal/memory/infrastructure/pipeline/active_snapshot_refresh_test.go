@@ -13,8 +13,10 @@ import (
 const snapshotTestTenant = "42c9b62d-4f66-4bc4-a1b8-eed81cdae7b1"
 
 type stubActiveSnapshotRepo struct {
-	got *domain.ActiveSnapshot
-	err error
+	got      *domain.ActiveSnapshot
+	snapshot *domain.ActiveSnapshot
+	err      error
+	getCalls int
 }
 
 func (r *stubActiveSnapshotRepo) Upsert(_ context.Context, snapshot *domain.ActiveSnapshot) error {
@@ -22,7 +24,8 @@ func (r *stubActiveSnapshotRepo) Upsert(_ context.Context, snapshot *domain.Acti
 	return r.err
 }
 func (r *stubActiveSnapshotRepo) Get(context.Context, string, string, string) (*domain.ActiveSnapshot, error) {
-	return nil, r.err
+	r.getCalls++
+	return r.snapshot, r.err
 }
 func (r *stubActiveSnapshotRepo) Delete(context.Context, string, string, string) error { return r.err }
 
