@@ -187,12 +187,14 @@ type BufferMessageRequest struct {
 
 // ExtractFactsRequest represents a batch of messages for fact extraction.
 type ExtractFactsRequest struct {
-	TenantID       string
-	UserID         string
-	AgentID        string
-	ConversationID string
-	Scope          string
-	Messages       []MessageDTO
+	TenantID        string
+	UserID          string
+	AgentID         string
+	ConversationID  string
+	Scope           string
+	SourceMessageID string
+	SourceTaskID    int64
+	Messages        []MessageDTO
 }
 
 // MessageDTO represents a single message in extraction batch.

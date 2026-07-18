@@ -112,8 +112,7 @@ func (w *ProfileWorker) rebuildProfile(ctx context.Context, entity *domain.Memor
 	facts, err := w.factRepo.FindSupersedeCandidates(
 		ctx,
 		w.tenantID,
-		entity.UserID,
-		entity.AgentID,
+		domain.ScopeFilter{UserID: entity.UserID, AgentID: entity.AgentID, IncludeUserScope: entity.Scope == domain.ScopeUser, IncludeAgentScope: entity.Scope == domain.ScopeAgent},
 		entity.Name,
 		0.5,
 		50,

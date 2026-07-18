@@ -37,10 +37,10 @@ func TestExtractFacts_LowConfidenceFilter(t *testing.T) {
 	}, nil)
 
 	// 只有高置信度的事实有 supersede/entity/create/embed 调用
-	factRepo.On("FindSupersedeCandidates", ctx, "t1", "user1", "agent1",
+	factRepo.On("FindSupersedeCandidates", ctx, "t1", mock.Anything,
 		"High confidence fact", mock.Anything, mock.Anything).
 		Return([]*port.SupersedeCandidate{}, nil)
-	entityRepo.On("FindByNameAndType", ctx, "t1", "user1", mock.Anything, "", mock.Anything).
+	entityRepo.On("FindByNameAndType", ctx, "t1", mock.Anything, mock.Anything, "", mock.Anything).
 		Return(nil, domain.ErrEntityNotFound).Maybe()
 	entityRepo.On("Create", ctx, "t1", mock.Anything).Return(nil).Maybe()
 
@@ -127,7 +127,7 @@ func TestExtractFacts_QualitySort_PerRoundLimit(t *testing.T) {
 	llmExtract.On("ExtractFacts", ctx, "user1", "agent1", mock.Anything).Return(facts, nil)
 
 	// 为所有事实设置 mock（只有前 limit 个会被实际调用）
-	factRepo.On("FindSupersedeCandidates", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	factRepo.On("FindSupersedeCandidates", mock.Anything, mock.Anything, mock.Anything,
 		mock.Anything, mock.Anything, mock.Anything).
 		Return([]*port.SupersedeCandidate{}, nil)
 	factRepo.On("Create", mock.Anything, mock.Anything, mock.Anything).Return(nil)

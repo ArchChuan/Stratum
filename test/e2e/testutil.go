@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/memory/application"
@@ -16,29 +15,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
-
-// requireE2E reports whether the memory E2E suite MUST run for real. When
-// REQUIRE_MEMORY_E2E is truthy, missing/unreachable infra becomes a hard
-// failure instead of a silent skip. This closes the false-pass hole where wrong
-// credentials made every test t.Skip while the CI pipeline still went green —
-// the memory system looked "E2E-verified" but nothing ever executed.
-func requireE2E() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("REQUIRE_MEMORY_E2E"))) {
-	case "1", "true", "yes", "on":
-		return true
-	}
-	return false
-}
-
-// skipOrFail skips when infra is optional (local dev), or fails hard when
-// REQUIRE_MEMORY_E2E demands the suite actually run (CI).
-func skipOrFail(t *testing.T, format string, args ...any) {
-	t.Helper()
-	if requireE2E() {
-		t.Fatalf(format, args...)
-	}
-	t.Skipf(format, args...)
-}
 
 // resolvePostgresDSN picks the Postgres connection string in priority order:
 //  1. TEST_POSTGRES_URL — explicit full override.
@@ -96,6 +72,14 @@ type MemoryTestEnv struct {
 	AgentID        string
 }
 
+func handleMemoryDependencyFailure(t *testing.T, dependency string, err error) {
+	t.Helper()
+	if os.Getenv("REQUIRE_MEMORY_E2E") == "1" {
+		t.Fatalf("%s unavailable while REQUIRE_MEMORY_E2E=1: %v", dependency, err)
+	}
+	t.Skipf("%s unavailable: %v", dependency, err)
+}
+
 // SetupMemoryTestEnv creates isolated tenant schema + mocked dependencies.
 func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	t.Helper()
@@ -111,11 +95,11 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	dsn := resolvePostgresDSN()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		skipOrFail(t, "PostgreSQL unavailable: %v", err)
+		handleMemoryDependencyFailure(t, "PostgreSQL", err)
 	}
 	if pingErr := pool.Ping(ctx); pingErr != nil {
 		pool.Close()
-		skipOrFail(t, "PostgreSQL unavailable: %v", pingErr)
+		handleMemoryDependencyFailure(t, "PostgreSQL", pingErr)
 	}
 
 	// Step 2: Generate unique tenant ID for isolation
@@ -151,7 +135,7 @@ func SetupMemoryTestEnv(t *testing.T) *MemoryTestEnv {
 	})
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		pool.Close()
-		skipOrFail(t, "Redis unavailable: %v", err)
+		handleMemoryDependencyFailure(t, "Redis", err)
 	}
 
 	// Step 6: Build MemoryService with mocked LLM/Vector/Embed
@@ -261,7 +245,10 @@ func (m *mockVectorStore) Upsert(ctx context.Context, collectionName string, doc
 	return nil
 }
 
-func (m *mockVectorStore) Search(ctx context.Context, collectionName string, queryVector []float32, topK int, filter map[string]interface{}) ([]*port.VectorDoc, error) {
+func (m *mockVectorStore) Search(ctx context.Context, collectionName string, queryVector []float32, topK int, filter port.VectorSearchFilter) ([]*port.VectorDoc, error) {
+	if err := filter.Validate(); err != nil {
+		return nil, err
+	}
 	if m.docs == nil {
 		return nil, nil
 	}
@@ -270,16 +257,26 @@ func (m *mockVectorStore) Search(ctx context.Context, collectionName string, que
 	for key, doc := range m.docs {
 		if len(key) > len(collectionName) && key[:len(collectionName)] == collectionName {
 			// Simple filter match (user_id)
-			if filter != nil {
-				if userID, ok := filter["user_id"].(string); ok {
-					if docUserID, exists := doc.Metadata["user_id"].(string); exists && docUserID != userID {
-						continue
-					}
+			if docUserID, exists := doc.Metadata["user_id"].(string); exists && docUserID != filter.UserID {
+				continue
+			}
+			scope, _ := doc.Metadata["scope"].(string)
+			switch scope {
+			case "user":
+				if !filter.IncludeUserScope {
+					continue
 				}
+			case "agent":
+				docAgentID, _ := doc.Metadata["agent_id"].(string)
+				if !filter.IncludeAgentScope || docAgentID != filter.AgentID {
+					continue
+				}
+			default:
+				continue
 			}
 			// Return with fixed similarity score
 			docCopy := *doc
-			docCopy.Similarity = 0.95
+			docCopy.Distance = 0.05
 			hits = append(hits, &docCopy)
 		}
 	}

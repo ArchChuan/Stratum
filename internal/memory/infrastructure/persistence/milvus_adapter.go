@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
+	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	storagemilvus "github.com/byteBuilderX/stratum/pkg/storage/milvus"
 )
@@ -26,6 +28,7 @@ type milvusStore interface {
 	Insert(context.Context, string, []storagemilvus.DocumentChunk, string) error
 	DeleteByPrimaryIDs(context.Context, string, []string) error
 	DeleteByFilter(context.Context, string, string) error
+	SearchWithFilter(context.Context, string, []float32, int, string, ...string) ([]storagemilvus.SearchResult, error)
 }
 
 // MilvusPortAdapter adapts *storagemilvus.VectorStore to memport.VectorStore.
@@ -157,8 +160,38 @@ func requiredMilvusMetadataFloat64(metadata map[string]interface{}, key string) 
 	return result, nil
 }
 
-func (a *MilvusPortAdapter) Search(_ context.Context, _ string, _ []float32, _ int, _ map[string]interface{}) ([]*memport.VectorDoc, error) {
-	return nil, nil
+func (a *MilvusPortAdapter) Search(ctx context.Context, collectionName string, queryVector []float32, topK int, filter memport.VectorSearchFilter) ([]*memport.VectorDoc, error) {
+	if err := filter.Validate(); err != nil {
+		return nil, err
+	}
+	expr := fmt.Sprintf("user_id == %s", strconv.Quote(filter.UserID))
+	switch {
+	case filter.IncludeUserScope && filter.IncludeAgentScope:
+		expr += fmt.Sprintf(" && (scope == \"user\" || (scope == \"agent\" && agent_id == %s))", strconv.Quote(filter.AgentID))
+	case filter.IncludeUserScope:
+		expr += " && scope == \"user\""
+	case filter.IncludeAgentScope:
+		expr += fmt.Sprintf(" && scope == \"agent\" && agent_id == %s", strconv.Quote(filter.AgentID))
+	}
+	results, err := a.vs.SearchWithFilter(ctx, collectionName, queryVector, topK, expr)
+	if err != nil {
+		var unavailable *storagemilvus.UnavailableError
+		if errors.As(err, &unavailable) {
+			return nil, &memport.VectorStoreUnavailableError{Err: err}
+		}
+		return nil, err
+	}
+	docs := make([]*memport.VectorDoc, 0, len(results))
+	for _, result := range results {
+		docs = append(docs, &memport.VectorDoc{
+			ID: result.ID,
+			Metadata: map[string]interface{}{
+				"content": result.Content, "source_document": result.SourceDocument, "chunk_index": result.ChunkIndex,
+			},
+			Distance: float64(result.Score),
+		})
+	}
+	return docs, nil
 }
 
 func (a *MilvusPortAdapter) DeleteAllByUser(ctx context.Context, tenantID, userID string) error {
@@ -166,7 +199,15 @@ func (a *MilvusPortAdapter) DeleteAllByUser(ctx context.Context, tenantID, userI
 }
 
 func (a *MilvusPortAdapter) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
-	return a.deleteBothMemoryCollections(ctx, tenantID, "agent_id", agentID)
+	normalized := strings.ReplaceAll(tenantID, "-", "_")
+	expr := fmt.Sprintf("agent_id == %q and scope == %q", agentID, string(domain.ScopeAgent))
+	var errs []error
+	for _, collection := range []string{"memory_facts_" + normalized, "memory_" + normalized} {
+		if err := a.vs.DeleteByFilter(ctx, collection, expr); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", collection, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (a *MilvusPortAdapter) deleteBothMemoryCollections(ctx context.Context, tenantID, field, value string) error {

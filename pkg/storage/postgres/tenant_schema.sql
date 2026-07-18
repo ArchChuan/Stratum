@@ -973,13 +973,23 @@ CREATE TABLE IF NOT EXISTS memory_facts (
     category        TEXT NOT NULL DEFAULT 'other' CHECK (category IN ('preference', 'skill', 'event', 'state', 'relationship', 'other')),
     confidence      FLOAT8 NOT NULL DEFAULT 0.5 CHECK (confidence BETWEEN 0 AND 1),
     source          TEXT NOT NULL DEFAULT 'llm_extraction' CHECK (source IN ('llm_extraction', 'explicit_user', 'manual_api')),
+	 source_message_id TEXT,
+	 source_task_id    BIGINT,
+	 source_ordinal    INT,
+	 source_payload_hash TEXT,
     frecency_score  FLOAT8 NOT NULL DEFAULT 0,
     access_count    INT NOT NULL DEFAULT 0,
     last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     superseded_by   UUID REFERENCES memory_facts(id) ON DELETE SET NULL,
     status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded', 'archived')),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	CONSTRAINT memory_facts_source_identity_complete CHECK (
+		(source_message_id IS NULL AND source_task_id IS NULL AND source_ordinal IS NULL AND source_payload_hash IS NULL)
+		OR (source_message_id IS NOT NULL AND source_message_id <> '' AND source_ordinal >= 0
+			AND source_payload_hash IS NOT NULL AND source_payload_hash <> ''
+			AND (scope = 'user' OR (scope = 'agent' AND agent_id IS NOT NULL AND agent_id <> '')))
+	)
 );
 CREATE INDEX IF NOT EXISTS idx_memory_facts_user_scope ON memory_facts (user_id, scope, status);
 CREATE INDEX IF NOT EXISTS idx_memory_facts_frecency ON memory_facts (frecency_score DESC) WHERE status = 'active';
@@ -993,6 +1003,26 @@ ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS confidence FLOAT8 NOT NULL DEF
 	CHECK (confidence BETWEEN 0 AND 1);
 ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'llm_extraction'
     CHECK (source IN ('llm_extraction', 'explicit_user', 'manual_api'));
+ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS source_message_id TEXT;
+ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS source_task_id BIGINT;
+ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS source_ordinal INT;
+ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS source_payload_hash TEXT;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'memory_facts_source_identity_complete' AND conrelid = 'memory_facts'::regclass) THEN
+        ALTER TABLE memory_facts ADD CONSTRAINT memory_facts_source_identity_complete CHECK (
+            (source_message_id IS NULL AND source_task_id IS NULL AND source_ordinal IS NULL AND source_payload_hash IS NULL)
+            OR (source_message_id IS NOT NULL AND source_message_id <> '' AND source_ordinal >= 0
+                AND source_payload_hash IS NOT NULL AND source_payload_hash <> ''
+                AND (scope = 'user' OR (scope = 'agent' AND agent_id IS NOT NULL AND agent_id <> '')))
+        );
+    END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_facts_source_user
+    ON memory_facts (user_id, source_message_id, source_ordinal)
+    WHERE source_message_id IS NOT NULL AND scope = 'user';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_facts_source_agent
+    ON memory_facts (user_id, agent_id, source_message_id, source_ordinal)
+    WHERE source_message_id IS NOT NULL AND scope = 'agent';
 -- Enforce only one active fact can supersede another (prevent supersede loops)
 CREATE UNIQUE INDEX IF NOT EXISTS memory_facts_one_active_supersede
     ON memory_facts (superseded_by)

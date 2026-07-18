@@ -23,7 +23,10 @@ type EmbedServiceResolver func(ctx context.Context, tenantID string) EmbedClient
 // MemoryInjector fetches memory context (summaries, entities, long-term vectors)
 // and formats it for injection into the agent's system prompt.
 type MemoryInjector struct {
-	pool          *pgxpool.Pool
+	pool       *pgxpool.Pool
+	txBeginner interface {
+		Begin(context.Context) (pgx.Tx, error)
+	}
 	logger        *zap.Logger
 	embedSvc      EmbedClient
 	embedResolver EmbedServiceResolver
@@ -35,7 +38,7 @@ type MemoryInjector struct {
 // embedSvc and vectorDB are optional; if nil, long-term vector retrieval is skipped
 // unless embedResolver is set (see SetEmbedResolver).
 func NewMemoryInjector(pool *pgxpool.Pool, logger *zap.Logger, embedSvc EmbedClient, vectorDB *vector.VectorStore) *MemoryInjector {
-	return &MemoryInjector{pool: pool, logger: logger, embedSvc: embedSvc, vectorDB: vectorDB, snapshotRepo: persistence.NewActiveSnapshotRepo(pool)}
+	return &MemoryInjector{pool: pool, txBeginner: pool, logger: logger, embedSvc: embedSvc, vectorDB: vectorDB, snapshotRepo: persistence.NewActiveSnapshotRepo(pool)}
 }
 
 // SetEmbedResolver sets a per-tenant embedding resolver used when the global embedSvc is nil.
@@ -62,13 +65,14 @@ type InjectionContext struct {
 // returning a formatted string suitable for prepending to the system prompt.
 // Returns ("", nil) when no memory context is available.
 func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext) (string, error) {
-	snapshot := inj.loadActiveSnapshot(ctx, ic)
-	if inj.pool == nil {
+	scopeFilter := domain.BuildScopeFilter(ic.TenantID, ic.UserID, ic.AgentID, ic.Scope)
+	snapshot := inj.loadActiveSnapshot(ctx, ic, scopeFilter)
+	if inj.txBeginner == nil {
 		return renderMemoryContext(snapshot, "", nil, nil, nil, constants.MemoryInjectionCharBudget), nil
 	}
 	schema := "tenant_" + ic.TenantID
 
-	tx, err := inj.pool.Begin(ctx)
+	tx, err := inj.txBeginner.Begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("begin tx: %w", err)
 	}
@@ -80,30 +84,22 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 
 	// Fetch latest summary for this conversation
 	var summary string
-	err = tx.QueryRow(ctx,
-		"SELECT summary FROM memory_summaries WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1",
-		ic.ConversationID).Scan(&summary)
+	err = tx.QueryRow(ctx, `SELECT summary FROM memory_summaries
+		WHERE conversation_id = $1 AND ((scope = 'user' AND $2 = true) OR (scope = 'agent' AND agent_id = $3 AND $4 = true))
+		ORDER BY created_at DESC LIMIT 1`, ic.ConversationID, scopeFilter.IncludeUserScope, ic.AgentID, scopeFilter.IncludeAgentScope).Scan(&summary)
 	if err != nil && err != pgx.ErrNoRows {
 		return "", fmt.Errorf("fetch summary: %w", err)
 	}
 
-	// Fetch top entities filtered by scope
-	var rows pgx.Rows
-	if ic.Scope == "agent" && ic.AgentID != "" {
-		rows, err = tx.Query(ctx, `
-			SELECT name FROM memory_entities
-			WHERE user_id = $1 AND agent_id = $2 AND scope = 'agent' AND status = 'active'
-			ORDER BY last_seen_at DESC
-			LIMIT $3`,
-			ic.UserID, ic.AgentID, constants.EnricherTopEntities)
-	} else {
-		rows, err = tx.Query(ctx, `
-			SELECT name FROM memory_entities
-			WHERE user_id = $1 AND scope = 'user' AND status = 'active'
-			ORDER BY last_seen_at DESC
-			LIMIT $2`,
-			ic.UserID, constants.EnricherTopEntities)
-	}
+	// Fetch top entities filtered by the same read-scope contract as other layers.
+	rows, err := tx.Query(ctx, `
+		SELECT name FROM memory_entities
+		WHERE user_id = $1 AND status = 'active'
+		  AND ((scope = 'user' AND $2 = true)
+		    OR (scope = 'agent' AND agent_id = $3 AND $4 = true))
+		ORDER BY last_seen_at DESC
+		LIMIT $5`,
+		ic.UserID, scopeFilter.IncludeUserScope, ic.AgentID, scopeFilter.IncludeAgentScope, constants.EnricherTopEntities)
 	if err != nil {
 		return "", fmt.Errorf("fetch entities: %w", err)
 	}
@@ -125,7 +121,8 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 	factCtx, cancelFacts := context.WithTimeout(ctx, constants.FactInjectionTimeout)
 	defer cancelFacts()
 	factRows, err := tx.Query(factCtx, factInjectionQuery(),
-		ic.UserID, ic.AgentID, ic.Query, constants.FactInjectionConfidenceMin, constants.FactInjectionTopN)
+		ic.UserID, ic.AgentID, ic.Query, constants.FactInjectionConfidenceMin, constants.FactInjectionTopN,
+		scopeFilter.IncludeUserScope, scopeFilter.IncludeAgentScope)
 	if err == nil {
 		for factRows.Next() {
 			var fact factRow
@@ -141,7 +138,8 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 
 	var history []historyRow
 	historyCtx, cancelHistory := context.WithTimeout(ctx, constants.HistoryReadTimeout)
-	historyRows, historyErr := tx.Query(historyCtx, historyInjectionQuery(), ic.UserID, ic.AgentID, ic.Query, constants.HistoryInjectionTopN)
+	historyRows, historyErr := tx.Query(historyCtx, historyInjectionQuery(), ic.UserID, ic.AgentID, ic.Query, constants.HistoryInjectionTopN,
+		scopeFilter.IncludeUserScope, scopeFilter.IncludeAgentScope)
 	if historyErr == nil {
 		for historyRows.Next() {
 			var row historyRow
@@ -161,8 +159,8 @@ func (inj *MemoryInjector) BuildContext(ctx context.Context, ic InjectionContext
 	return renderMemoryContext(snapshot, summary, entityNames, facts, history, constants.MemoryInjectionCharBudget), nil
 }
 
-func (inj *MemoryInjector) loadActiveSnapshot(ctx context.Context, ic InjectionContext) *domain.ActiveSnapshot {
-	if inj.snapshotRepo == nil || ic.TenantID == "" || ic.UserID == "" || ic.AgentID == "" {
+func (inj *MemoryInjector) loadActiveSnapshot(ctx context.Context, ic InjectionContext, filter domain.ScopeFilter) *domain.ActiveSnapshot {
+	if inj.snapshotRepo == nil || !filter.IncludeAgentScope || ic.TenantID == "" || ic.UserID == "" || ic.AgentID == "" {
 		return nil
 	}
 	readCtx, cancel := context.WithTimeout(ctx, constants.ActiveSnapshotReadTimeout)
@@ -256,7 +254,7 @@ func historyInjectionQuery() string {
 	return `
 	SELECT summary, tier FROM memory_summaries
 	WHERE user_id = $1 AND status = 'active' AND aggregation_key IS NOT NULL
-	  AND (scope = 'user' OR (scope = 'agent' AND agent_id = $2))
+	  AND ((scope = 'user' AND $5 = true) OR (scope = 'agent' AND agent_id = $2 AND $6 = true))
 	ORDER BY similarity(summary, $3) DESC, importance DESC, confidence DESC, period_end DESC
 	LIMIT $4`
 }
@@ -284,7 +282,7 @@ func factInjectionQuery() string {
 	return `
 		SELECT content, category FROM memory_facts
 		WHERE user_id = $1 AND status = 'active'
-			AND (scope = 'user' OR (scope = 'agent' AND agent_id = $2))
+			AND ((scope = 'user' AND $6 = true) OR (scope = 'agent' AND agent_id = $2 AND $7 = true))
 			AND confidence >= $4
 		ORDER BY similarity(content, $3) DESC, frecency_score DESC, confidence DESC, importance DESC
 		LIMIT $5`

@@ -187,6 +187,14 @@ func (m *MockFactRepo) Create(ctx context.Context, tenantID string, fact *domain
 	return args.Error(0)
 }
 
+func (m *MockFactRepo) CreateExtracted(ctx context.Context, tenantID string, write *port.ExtractedFactWrite) (*domain.MemoryFact, bool, error) {
+	args := m.Called(ctx, tenantID, write)
+	if args.Get(0) == nil {
+		return nil, args.Bool(1), args.Error(2)
+	}
+	return args.Get(0).(*domain.MemoryFact), args.Bool(1), args.Error(2)
+}
+
 func (m *MockFactRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.MemoryFact, error) {
 	args := m.Called(ctx, tenantID, id)
 	if args.Get(0) == nil {
@@ -216,8 +224,8 @@ func (m *MockFactRepo) SearchByContent(ctx context.Context, tenantID string, fil
 	return args.Get(0).([]*domain.MemoryFact), args.Error(1)
 }
 
-func (m *MockFactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
-	args := m.Called(ctx, tenantID, userID, agentID, content, minSimilarity, maxCount)
+func (m *MockFactRepo) FindSupersedeCandidates(ctx context.Context, tenantID string, filter domain.ScopeFilter, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
+	args := m.Called(ctx, tenantID, filter, content, minSimilarity, maxCount)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -277,8 +285,8 @@ func (m *MockEntityRepo) Update(ctx context.Context, tenantID string, entity *do
 	return args.Error(0)
 }
 
-func (m *MockEntityRepo) FindByNameAndType(ctx context.Context, tenantID, userID, name, entityType string, threshold float64) (*domain.MemoryEntity, error) {
-	args := m.Called(ctx, tenantID, userID, name, entityType, threshold)
+func (m *MockEntityRepo) FindByNameAndType(ctx context.Context, tenantID string, filter domain.ScopeFilter, name, entityType string, threshold float64) (*domain.MemoryEntity, error) {
+	args := m.Called(ctx, tenantID, filter, name, entityType, threshold)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -349,7 +357,7 @@ func (m *MockVectorStore) Upsert(ctx context.Context, collectionName string, doc
 	return args.Error(0)
 }
 
-func (m *MockVectorStore) Search(ctx context.Context, collectionName string, queryVector []float32, topK int, filter map[string]interface{}) ([]*port.VectorDoc, error) {
+func (m *MockVectorStore) Search(ctx context.Context, collectionName string, queryVector []float32, topK int, filter port.VectorSearchFilter) ([]*port.VectorDoc, error) {
 	args := m.Called(ctx, collectionName, queryVector, topK, filter)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

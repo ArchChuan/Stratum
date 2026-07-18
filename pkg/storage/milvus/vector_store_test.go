@@ -1,6 +1,8 @@
 package milvus
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -8,7 +10,54 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+func TestClassifyAvailabilityError(t *testing.T) {
+	tests := []struct {
+		name         string
+		err          error
+		availability bool
+	}{
+		{name: "grpc unavailable", err: status.Error(codes.Unavailable, "down"), availability: true},
+		{name: "grpc deadline", err: status.Error(codes.DeadlineExceeded, "slow"), availability: true},
+		{name: "proxy startup", err: status.Error(codes.Unknown, "service unavailable: internal: Milvus Proxy is not ready yet"), availability: true},
+		{name: "resource group startup", err: status.Error(codes.Unknown, "failed to spawn replica for collection: resource group node not enough[currentNodeNum=0][expectedNodeNum=1]"), availability: true},
+		{name: "query node startup", err: status.Error(codes.Unknown, "no available query node"), availability: true},
+		{name: "context deadline", err: context.DeadlineExceeded, availability: true},
+		{name: "caller canceled", err: context.Canceled},
+		{name: "invalid dimension", err: status.Error(codes.InvalidArgument, "dimension mismatch")},
+		{name: "unknown dimension", err: status.Error(codes.Unknown, "dimension mismatch")},
+		{name: "unknown schema", err: status.Error(codes.Unknown, "schema mismatch: field agent_id missing")},
+		{name: "unknown expression", err: status.Error(codes.Unknown, "failed to parse filter expression")},
+		{name: "schema", err: errors.New("schema mismatch")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := classifyAvailabilityError("search", tt.err)
+			var unavailable *UnavailableError
+			if got := errors.As(err, &unavailable); got != tt.availability {
+				t.Fatalf("availability = %v, want %v (error %v)", got, tt.availability, err)
+			}
+			if !errors.Is(err, tt.err) {
+				t.Fatalf("classified error does not wrap source: %v", err)
+			}
+		})
+	}
+}
+
+func TestConnectionFailuresAreUnavailableExceptCallerCancellation(t *testing.T) {
+	want := errors.New("tcp refused")
+	err := newUnavailableError("connect", want)
+	var unavailable *UnavailableError
+	if !errors.As(err, &unavailable) || !errors.Is(err, want) {
+		t.Fatalf("error = %v, want typed unavailable wrapping source", err)
+	}
+	if err := newUnavailableError("connect", context.Canceled); !errors.Is(err, context.Canceled) || errors.As(err, &unavailable) {
+		t.Fatalf("caller cancellation classified unavailable: %v", err)
+	}
+}
 
 func TestPrimaryIDDeleteExpressionUsesIDFieldAndEscapesValues(t *testing.T) {
 	expr := primaryIDDeleteExpression([]string{`fact-1`, `fact-"2\\`})

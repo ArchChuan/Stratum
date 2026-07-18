@@ -18,7 +18,7 @@ type EntityRepo interface {
 	Update(ctx context.Context, tenantID string, entity *domain.MemoryEntity) error
 
 	// FindByNameAndType finds an entity by fuzzy name match within a scope.
-	FindByNameAndType(ctx context.Context, tenantID, userID, name, entityType string, threshold float64) (*domain.MemoryEntity, error)
+	FindByNameAndType(ctx context.Context, tenantID string, filter domain.ScopeFilter, name, entityType string, threshold float64) (*domain.MemoryEntity, error)
 
 	// ListProfiles returns entities with profiles for context injection.
 	ListProfiles(ctx context.Context, filter domain.ScopeFilter, limit int) ([]*domain.MemoryEntity, error)

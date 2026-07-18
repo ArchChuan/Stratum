@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
@@ -60,9 +59,10 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 		zap.Int("fact_count", len(extractedFacts)),
 	)
 
-	// Phase 0: 低置信门控 — 丢弃 effectiveConfidence < FactConfidenceMin 的事实
-	filtered := extractedFacts[:0]
-	for _, ef := range extractedFacts {
+	// Assign ordinals before quality gates so retries keep the LLM output identity.
+	indexedFacts := indexedExtractedFacts(extractedFacts)
+	for _, item := range indexedFacts {
+		ef := item.Fact
 		ec := effectiveConfidence(ef)
 		if ec < constants.FactConfidenceMin {
 			s.logger.Debug("memory.extract_facts: dropped low-confidence fact",
@@ -70,47 +70,42 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 				zap.Float64("effective_confidence", ec),
 				zap.Float64("threshold", constants.FactConfidenceMin),
 			)
-			continue
 		}
-		filtered = append(filtered, ef)
 	}
-	extractedFacts = filtered
-
-	// Phase 0: 质量排序 (effectiveConfidence DESC, Importance DESC) 后截断至 FactPerRoundPersistLimit
-	if len(extractedFacts) > constants.FactPerRoundPersistLimit {
-		sort.SliceStable(extractedFacts, func(i, j int) bool {
-			ci := effectiveConfidence(extractedFacts[i])
-			cj := effectiveConfidence(extractedFacts[j])
-			if ci != cj {
-				return ci > cj
-			}
-			return extractedFacts[i].Importance > extractedFacts[j].Importance
-		})
-		extractedFacts = extractedFacts[:constants.FactPerRoundPersistLimit]
+	beforeLimit := len(indexedFacts)
+	indexedFacts = qualityFilterAndSortExtractedFacts(indexedFacts, constants.FactPerRoundPersistLimit)
+	if beforeLimit > constants.FactPerRoundPersistLimit && len(indexedFacts) == constants.FactPerRoundPersistLimit {
 		s.logger.Debug("memory.extract_facts: capped per-round persist limit",
 			zap.Int("limit", constants.FactPerRoundPersistLimit),
 		)
 	}
 
-	for _, extractedFact := range extractedFacts {
+	for _, indexedFact := range indexedFacts {
+		extractedFact := indexedFact.Fact
+		var canonical *canonicalExtractedFact
+		if req.SourceMessageID != "" || req.SourceTaskID != 0 {
+			canonical, err = canonicalizeExtractedFact(req, extractedFact, indexedFact.OriginalOrdinal)
+			if err != nil {
+				return fmt.Errorf("canonicalize extracted fact: %w", err)
+			}
+			extractedFact.Entities = canonical.Entities
+		}
+		writeFilter := domain.ScopeFilter{TenantID: req.TenantID, UserID: req.UserID, AgentID: req.AgentID}
+		if req.Scope == string(domain.ScopeAgent) {
+			writeFilter.IncludeAgentScope = true
+		} else {
+			writeFilter.IncludeUserScope = true
+		}
 		candidates, err := s.factRepo.FindSupersedeCandidates(
 			ctx,
 			req.TenantID,
-			req.UserID,
-			req.AgentID,
+			writeFilter,
 			extractedFact.Content,
 			constants.MemorySupersedeCandidateMin,
 			float64(constants.MemorySupersedeCandidateMax),
 		)
 		if err != nil {
 			return fmt.Errorf("find supersede candidates: %w", err)
-		}
-
-		for _, entityName := range extractedFact.Entities {
-			_, err := s.normalizeEntity(ctx, req.TenantID, req.UserID, req.AgentID, entityName)
-			if err != nil {
-				return fmt.Errorf("normalize entity %q: %w", entityName, err)
-			}
 		}
 
 		// Phase 0: 构造带 category/confidence/source 的事实
@@ -132,11 +127,29 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 		if err != nil {
 			return fmt.Errorf("new fact: %w", err)
 		}
+		attemptedFactID := fact.ID
 
-		if err := s.factRepo.Create(ctx, req.TenantID, fact); err != nil {
+		created := true
+		if canonical != nil {
+			writer, ok := s.factRepo.(port.ExtractedFactWriter)
+			if !ok {
+				return fmt.Errorf("atomic extracted fact writer not available: %w", domain.ErrInvalidFactSourceIdentity)
+			}
+			fact, created, err = writer.CreateExtracted(ctx, req.TenantID, &port.ExtractedFactWrite{
+				Fact: fact, Identity: canonical.Identity, PayloadHash: canonical.PayloadHash, EntityNames: canonical.Entities,
+			})
+		} else {
+			for _, entityName := range extractedFact.Entities {
+				if _, normalizeErr := s.normalizeEntity(ctx, req.TenantID, req.UserID, req.AgentID, req.Scope, entityName); normalizeErr != nil {
+					return fmt.Errorf("normalize entity %q: %w", entityName, normalizeErr)
+				}
+			}
+			err = s.factRepo.Create(ctx, req.TenantID, fact)
+		}
+		if err != nil {
 			s.logger.Error("memory.extract_facts: persist fact failed",
 				zap.String("tenant_id", req.TenantID),
-				zap.String("fact_id", fact.ID),
+				zap.String("fact_id", attemptedFactID),
 				zap.Error(err),
 			)
 			return fmt.Errorf("insert fact: %w", err)
@@ -151,6 +164,9 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 		// Inline supersede: high-similarity → direct; mid-range → LLM (max 3/fact).
 		llmCallsThisFact := 0
 		for _, candidate := range candidates {
+			if !created {
+				break
+			}
 			if candidate.Fact.ID == fact.ID {
 				continue
 			}
@@ -209,15 +225,21 @@ func (s *MemoryService) ExtractFacts(ctx context.Context, req *ExtractFactsReque
 	s.logger.Info("memory.extract_facts: done",
 		zap.String("tenant_id", req.TenantID),
 		zap.String("user_id", req.UserID),
-		zap.Int("facts_stored", len(extractedFacts)),
+		zap.Int("facts_stored", len(indexedFacts)),
 	)
 	return nil
 }
 
 // normalizeEntity finds or creates an entity, returning its ID.
 // Uses fuzzy matching (trigram similarity) to avoid duplicates.
-func (s *MemoryService) normalizeEntity(ctx context.Context, tenantID, userID, agentID, name string) (string, error) {
-	existing, err := s.entityRepo.FindByNameAndType(ctx, tenantID, userID, name, "", constants.MemorySupersedeCandidateMin)
+func (s *MemoryService) normalizeEntity(ctx context.Context, tenantID, userID, agentID, scope, name string) (string, error) {
+	filter := domain.ScopeFilter{TenantID: tenantID, UserID: userID, AgentID: agentID}
+	if scope == string(domain.ScopeAgent) {
+		filter.IncludeAgentScope = true
+	} else {
+		filter.IncludeUserScope = true
+	}
+	existing, err := s.entityRepo.FindByNameAndType(ctx, tenantID, filter, name, "", constants.MemorySupersedeCandidateMin)
 	if err != nil && err != domain.ErrEntityNotFound {
 		return "", fmt.Errorf("find entity: %w", err)
 	}
@@ -230,7 +252,7 @@ func (s *MemoryService) normalizeEntity(ctx context.Context, tenantID, userID, a
 		return existing.ID, nil
 	}
 
-	entity, err := domain.NewEntity(userID, agentID, string(domain.ScopeUser), name, "")
+	entity, err := domain.NewEntity(userID, agentID, scope, name, "")
 	if err != nil {
 		return "", fmt.Errorf("new entity: %w", err)
 	}

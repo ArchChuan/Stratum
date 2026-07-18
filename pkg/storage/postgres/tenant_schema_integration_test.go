@@ -83,3 +83,57 @@ func TestProvisionTenantSchema_ReplacesLegacySkillsOnceAndRetainsAgentTraces(t *
 		t.Fatalf("second provision deleted new Skill revision")
 	}
 }
+
+func TestProvisionTenantSchemaAddsFactSourceIdentityWithoutBackfillingLegacyFacts(t *testing.T) {
+	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
+	if url == "" {
+		t.Skip("STRATUM_TEST_POSTGRES_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := postgres.ProvisionPublicSchema(ctx, pool, zap.NewNop()); err != nil {
+		t.Fatal(err)
+	}
+	tenantID := fmt.Sprintf("tmp_fact_source_%d", time.Now().UnixNano())
+	schema := `tenant_` + tenantID
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`) })
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO "`+schema+`".memory_facts (user_id,scope,content) VALUES ('legacy-user','user','legacy fact')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		DROP INDEX "`+schema+`".uq_memory_facts_source_user;
+		DROP INDEX "`+schema+`".uq_memory_facts_source_agent;
+		ALTER TABLE "`+schema+`".memory_facts DROP CONSTRAINT memory_facts_source_identity_complete;
+		ALTER TABLE "`+schema+`".memory_facts DROP COLUMN source_message_id, DROP COLUMN source_task_id,
+			DROP COLUMN source_ordinal, DROP COLUMN source_payload_hash`); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+
+	var columns, indexes, legacyNulls int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema=$1 AND table_name='memory_facts'
+		AND column_name IN ('source_message_id','source_task_id','source_ordinal','source_payload_hash')`, schema).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_indexes WHERE schemaname=$1
+		AND indexname IN ('uq_memory_facts_source_user','uq_memory_facts_source_agent')`, schema).Scan(&indexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM "`+schema+`".memory_facts WHERE content='legacy fact'
+		AND source_message_id IS NULL AND source_task_id IS NULL AND source_ordinal IS NULL AND source_payload_hash IS NULL`).Scan(&legacyNulls); err != nil {
+		t.Fatal(err)
+	}
+	if columns != 4 || indexes != 2 || legacyNulls != 1 {
+		t.Fatalf("columns=%d indexes=%d legacy_null_rows=%d", columns, indexes, legacyNulls)
+	}
+}

@@ -1,0 +1,2 @@
+-- Intentional no-op: retain source identity columns, indexes, and provenance across application rollback.
+-- Canonical tenant DDL remains pkg/storage/postgres/tenant_schema.sql.

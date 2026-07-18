@@ -16,6 +16,16 @@ type fakeMilvusStore struct {
 	primaryIDs        []string
 	filterCalls       []string
 	filterErrors      []error
+	searchExpression  string
+	searchResults     []storagemilvus.SearchResult
+	searchErr         error
+	searchCalls       int
+}
+
+func (f *fakeMilvusStore) SearchWithFilter(_ context.Context, _ string, _ []float32, _ int, expression string, _ ...string) ([]storagemilvus.SearchResult, error) {
+	f.searchCalls++
+	f.searchExpression = expression
+	return f.searchResults, f.searchErr
 }
 
 func (f *fakeMilvusStore) CreateCollectionWithDim(context.Context, string, int) error { return nil }
@@ -76,8 +86,8 @@ func TestMilvusPortAdapterDeleteAllByAgentCleansBothCollections(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		`memory_facts_tenant_1:agent_id == "agent-1"`,
-		`memory_tenant_1:agent_id == "agent-1"`,
+		`memory_facts_tenant_1:agent_id == "agent-1" and scope == "agent"`,
+		`memory_tenant_1:agent_id == "agent-1" and scope == "agent"`,
 	}
 	if strings.Join(store.filterCalls, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("filter calls = %v, want %v", store.filterCalls, want)
@@ -158,6 +168,97 @@ func TestMemoryFactDocumentChunkRejectsOversizedSourceDocument(t *testing.T) {
 	_, err := memoryFactDocumentChunk(doc)
 	if err == nil || !strings.Contains(err.Error(), "source_document") || !strings.Contains(err.Error(), "255") {
 		t.Fatalf("error = %v, want clear source_document length error", err)
+	}
+}
+
+func TestMilvusPortAdapterSearchBuildsScopeSafeExpressions(t *testing.T) {
+	tests := []struct {
+		name   string
+		filter memport.VectorSearchFilter
+		want   string
+	}{
+		{
+			name: "user and current agent",
+			filter: memport.VectorSearchFilter{UserID: "user-1", AgentID: "agent-1",
+				IncludeUserScope: true, IncludeAgentScope: true},
+			want: `user_id == "user-1" && (scope == "user" || (scope == "agent" && agent_id == "agent-1"))`,
+		},
+		{
+			name:   "user only",
+			filter: memport.VectorSearchFilter{UserID: "user-1", IncludeUserScope: true},
+			want:   `user_id == "user-1" && scope == "user"`,
+		},
+		{
+			name: "escaped values",
+			filter: memport.VectorSearchFilter{UserID: `user-"\\`, AgentID: `agent-"\\`,
+				IncludeUserScope: true, IncludeAgentScope: true},
+			want: `user_id == "user-\"\\\\" && (scope == "user" || (scope == "agent" && agent_id == "agent-\"\\\\"))`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeMilvusStore{}
+			_, err := NewMilvusPortAdapter(store).Search(context.Background(), "memory_facts_tenant", []float32{1}, 5, tt.filter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if store.searchExpression != tt.want {
+				t.Fatalf("expression = %q, want %q", store.searchExpression, tt.want)
+			}
+		})
+	}
+}
+
+func TestMilvusPortAdapterSearchRejectsInvalidFiltersWithoutCallingStore(t *testing.T) {
+	tests := []memport.VectorSearchFilter{
+		{IncludeUserScope: true},
+		{UserID: "user-1", IncludeAgentScope: true},
+		{UserID: "user-1"},
+	}
+	for _, filter := range tests {
+		store := &fakeMilvusStore{}
+		_, err := NewMilvusPortAdapter(store).Search(context.Background(), "memory_facts_tenant", []float32{1}, 5, filter)
+		if !errors.Is(err, memport.ErrInvalidVectorSearchFilter) {
+			t.Fatalf("error = %v, want invalid filter", err)
+		}
+		if store.searchCalls != 0 {
+			t.Fatalf("search calls = %d, want 0", store.searchCalls)
+		}
+	}
+}
+
+func TestMilvusPortAdapterSearchMapsResultsAndPropagatesErrors(t *testing.T) {
+	filter := memport.VectorSearchFilter{UserID: "user-1", IncludeUserScope: true}
+	store := &fakeMilvusStore{searchResults: []storagemilvus.SearchResult{{
+		ID: "fact-1", Content: "content", SourceDocument: "source", ChunkIndex: 3, Score: 0.25,
+	}}}
+	docs, err := NewMilvusPortAdapter(store).Search(context.Background(), "memory_facts_tenant", []float32{1}, 5, filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 1 || docs[0].ID != "fact-1" || docs[0].Metadata["content"] != "content" ||
+		docs[0].Metadata["source_document"] != "source" || docs[0].Metadata["chunk_index"] != int64(3) ||
+		docs[0].Distance != 0.25 || docs[0].Similarity != 0 {
+		t.Fatalf("mapped docs = %#v", docs)
+	}
+
+	wantErr := errors.New("schema mismatch")
+	store = &fakeMilvusStore{searchErr: wantErr}
+	_, err = NewMilvusPortAdapter(store).Search(context.Background(), "memory_facts_tenant", []float32{1}, 5, filter)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestMilvusPortAdapterSearchMapsTypedUnavailableError(t *testing.T) {
+	source := errors.New("grpc unavailable")
+	store := &fakeMilvusStore{searchErr: &storagemilvus.UnavailableError{Op: "search", Err: source}}
+	filter := memport.VectorSearchFilter{UserID: "user-1", IncludeUserScope: true}
+
+	_, err := NewMilvusPortAdapter(store).Search(context.Background(), "memory_facts_tenant", []float32{1}, 5, filter)
+	var unavailable *memport.VectorStoreUnavailableError
+	if !errors.As(err, &unavailable) || !errors.Is(err, source) {
+		t.Fatalf("error = %v, want port unavailable wrapping source", err)
 	}
 }
 

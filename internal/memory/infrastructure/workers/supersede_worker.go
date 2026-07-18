@@ -88,8 +88,7 @@ outer:
 		candidates, err := w.factRepo.FindSupersedeCandidates(
 			ctx,
 			fact.TenantID,
-			fact.UserID,
-			fact.AgentID,
+			domain.ScopeFilter{UserID: fact.UserID, AgentID: fact.AgentID, IncludeUserScope: fact.Scope == domain.ScopeUser, IncludeAgentScope: fact.Scope == domain.ScopeAgent},
 			fact.Content,
 			constants.MemorySupersedeCandidateMin,
 			float64(constants.MemorySupersedeCandidateMax),

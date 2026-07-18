@@ -118,8 +118,15 @@ func (r *EntityRepo) Update(ctx context.Context, tenantID string, entity *domain
 }
 
 // FindByNameAndType finds an entity by fuzzy name match within a scope using trigram similarity.
-func (r *EntityRepo) FindByNameAndType(ctx context.Context, tenantID, userID, name, entityType string, threshold float64) (*domain.MemoryEntity, error) {
-	const query = `
+func entityScopeClause(filter domain.ScopeFilter) string {
+	if filter.IncludeAgentScope && !filter.IncludeUserScope {
+		return "scope = 'agent' AND agent_id = $5"
+	}
+	return "scope = 'user'"
+}
+
+func (r *EntityRepo) FindByNameAndType(ctx context.Context, tenantID string, filter domain.ScopeFilter, name, entityType string, threshold float64) (*domain.MemoryEntity, error) {
+	query := `
 		SELECT id, user_id, agent_id, scope, name, entity_type, profile,
 			fact_count, last_seen_at, rebuild_after, status,
 			created_at, updated_at,
@@ -129,6 +136,7 @@ func (r *EntityRepo) FindByNameAndType(ctx context.Context, tenantID, userID, na
 			AND entity_type = $3
 			AND status = 'active'
 			AND similarity(name, $2) > $4
+			AND ` + entityScopeClause(filter) + `
 		ORDER BY sim DESC
 		LIMIT 1`
 
@@ -139,7 +147,11 @@ func (r *EntityRepo) FindByNameAndType(ctx context.Context, tenantID, userID, na
 		var rebuildAfter *time.Time
 		var scope string
 		var sim float64
-		if err := tx.QueryRow(ctx, query, userID, name, entityType, threshold).Scan(
+		args := []any{filter.UserID, name, entityType, threshold}
+		if filter.IncludeAgentScope && !filter.IncludeUserScope {
+			args = append(args, filter.AgentID)
+		}
+		if err := tx.QueryRow(ctx, query, args...).Scan(
 			&e.ID, &e.UserID, &agentID, &scope, &e.Name, &e.EntityType, &e.Profile,
 			&e.FactCount, &e.LastSeenAt, &rebuildAfter, &e.Status,
 			&e.CreatedAt, &e.UpdatedAt, &sim,
@@ -233,7 +245,7 @@ func (r *EntityRepo) DeleteAllByUser(ctx context.Context, tenantID, userID strin
 // DeleteAllByAgent hard-deletes every memory_entities row owned by agentID within the tenant schema.
 func (r *EntityRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `DELETE FROM memory_entities WHERE agent_id = $1`, agentID)
+		_, err := tx.Exec(ctx, `DELETE FROM memory_entities WHERE agent_id = $1 AND scope = 'agent'`, agentID)
 		if err != nil {
 			return fmt.Errorf("delete entities by agent: %w", err)
 		}

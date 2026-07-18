@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -71,6 +72,89 @@ func TestRecallMemory_HybridRetrieval(t *testing.T) {
 	embedClient.AssertExpectations(t)
 	vectorStore.AssertExpectations(t)
 	factRepo.AssertExpectations(t)
+}
+
+func TestRecallMemoryUsesScopeSafeVectorFilter(t *testing.T) {
+	ctx := context.Background()
+	facts := new(MockFactRepo)
+	vectors := new(MockVectorStore)
+	embed := new(MockEmbedClient)
+	svc := NewMemoryService(facts, nil, nil, vectors, nil, embed, nil, nil)
+
+	embed.On("Embed", ctx, "query").Return([]float32{1}, nil).Once()
+	vectors.On("Search", ctx, "memory_facts_tenant_1", mock.Anything, 10,
+		port.VectorSearchFilter{UserID: "user-1", AgentID: "agent-1", IncludeUserScope: true, IncludeAgentScope: true}).
+		Return([]*port.VectorDoc{}, nil).Once()
+	facts.On("SearchByContent", ctx, "tenant-1", mock.MatchedBy(func(filter domain.ScopeFilter) bool {
+		return filter.UserID == "user-1" && filter.AgentID == "agent-1" && filter.IncludeUserScope && filter.IncludeAgentScope
+	}), "query", 10).Return([]*domain.MemoryFact{}, nil).Once()
+
+	_, err := svc.RecallMemory(ctx, &RecallMemoryRequest{TenantID: "tenant-1", UserID: "user-1", AgentID: "agent-1", Query: "query", TopK: 5})
+	assert.NoError(t, err)
+	embed.AssertExpectations(t)
+	vectors.AssertExpectations(t)
+	facts.AssertExpectations(t)
+}
+
+func TestRecallMemoryFallsBackOnlyForVectorStoreUnavailable(t *testing.T) {
+	ctx := context.Background()
+	for _, tt := range []struct {
+		name        string
+		vectorErr   error
+		wantErr     bool
+		wantTrigram bool
+	}{
+		{name: "unavailable", vectorErr: &port.VectorStoreUnavailableError{Err: errors.New("grpc unavailable")}, wantTrigram: true},
+		{name: "schema error", vectorErr: errors.New("schema mismatch"), wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			facts := new(MockFactRepo)
+			vectors := new(MockVectorStore)
+			embed := new(MockEmbedClient)
+			svc := NewMemoryService(facts, nil, nil, vectors, nil, embed, nil, nil)
+			embed.On("Embed", ctx, "query").Return([]float32{1}, nil).Once()
+			vectors.On("Search", ctx, "memory_facts_tenant", mock.Anything, 10, mock.Anything).
+				Return([]*port.VectorDoc(nil), tt.vectorErr).Once()
+			if tt.wantTrigram {
+				facts.On("SearchByContent", ctx, "tenant", mock.AnythingOfType("domain.ScopeFilter"), "query", 10).
+					Return([]*domain.MemoryFact{}, nil).Once()
+			}
+			_, err := svc.RecallMemory(ctx, &RecallMemoryRequest{TenantID: "tenant", UserID: "user", Query: "query", TopK: 5})
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+			facts.AssertExpectations(t)
+		})
+	}
+}
+
+func TestRecallMemoryRejectsInvalidRequestsBeforeDependencies(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *RecallMemoryRequest
+	}{
+		{name: "nil request"},
+		{name: "empty tenant", req: &RecallMemoryRequest{UserID: "user", Query: "query", TopK: 1}},
+		{name: "empty user", req: &RecallMemoryRequest{TenantID: "tenant", Query: "query", TopK: 1}},
+		{name: "empty query", req: &RecallMemoryRequest{TenantID: "tenant", UserID: "user", Query: "  ", TopK: 1}},
+		{name: "zero top k", req: &RecallMemoryRequest{TenantID: "tenant", UserID: "user", Query: "query"}},
+		{name: "negative top k", req: &RecallMemoryRequest{TenantID: "tenant", UserID: "user", Query: "query", TopK: -1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			facts := new(MockFactRepo)
+			vectors := new(MockVectorStore)
+			embed := new(MockEmbedClient)
+			svc := NewMemoryService(facts, nil, nil, vectors, nil, embed, nil, nil)
+			_, err := svc.RecallMemory(context.Background(), tt.req)
+			assert.ErrorIs(t, err, ErrInvalidRecallMemoryRequest)
+			facts.AssertNotCalled(t, "SearchByContent", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			vectors.AssertNotCalled(t, "Search", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			embed.AssertNotCalled(t, "Embed", mock.Anything, mock.Anything)
+		})
+	}
 }
 
 func TestRecallMemory_EmptyResults(t *testing.T) {

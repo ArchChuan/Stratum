@@ -175,10 +175,12 @@ func (r *MemoryRepo) DeleteAllByUser(ctx context.Context, tenantID, userID strin
 // DeleteAllByAgent hard-deletes every memory entry belonging to agentID within the tenant schema.
 func (r *MemoryRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) error {
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// outbox, snapshots, and legacy entries are agent/conversation lifecycle data.
+		// Summaries also contain shared canonical history, so provenance agent_id alone is not ownership.
 		for _, query := range []string{
 			`DELETE FROM memory_outbox WHERE agent_id = $1`,
 			`DELETE FROM memory_extraction_queue WHERE agent_id = $1`,
-			`DELETE FROM memory_summaries WHERE agent_id = $1`,
+			`DELETE FROM memory_summaries WHERE agent_id = $1 AND scope = 'agent'`,
 			`DELETE FROM memory_active_snapshots WHERE agent_id = $1`,
 			`DELETE FROM memory_entries WHERE agent_id = $1`,
 		} {

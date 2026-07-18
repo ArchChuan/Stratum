@@ -2,11 +2,13 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -15,6 +17,172 @@ import (
 
 type FactRepo struct {
 	pool *pgxpool.Pool
+}
+
+// CreateExtracted atomically inserts one source-identified fact and applies its entity mutations.
+// A replay with the same payload returns the persisted fact; a changed payload fails closed.
+func (r *FactRepo) CreateExtracted(ctx context.Context, tenantID string, write *port.ExtractedFactWrite) (*domain.MemoryFact, bool, error) {
+	if err := validateExtractedFactWrite(tenantID, write); err != nil {
+		return nil, false, err
+	}
+	var result *domain.MemoryFact
+	var created bool
+	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		fact := write.Fact
+		var agentID, conversationID *string
+		if fact.AgentID != "" {
+			agentID = &fact.AgentID
+		}
+		if fact.ConversationID != "" {
+			conversationID = &fact.ConversationID
+		}
+		var insertedID string
+		err := tx.QueryRow(ctx, `
+			INSERT INTO memory_facts (
+				id,user_id,agent_id,scope,conversation_id,content,importance,status,
+				access_count,last_accessed_at,created_at,updated_at,frecency_score,
+				category,confidence,source,source_message_id,source_task_id,source_ordinal,source_payload_hash
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+			ON CONFLICT DO NOTHING RETURNING id::text`,
+			fact.ID, fact.UserID, agentID, string(fact.Scope), conversationID, fact.Content, fact.Importance, fact.Status,
+			fact.AccessCount, fact.LastAccessAt, fact.CreatedAt, fact.UpdatedAt, fact.FrecencyScore,
+			fact.Category, fact.Confidence, fact.Source, write.Identity.MessageID, nullableTaskID(write.Identity.TaskID),
+			write.Identity.Ordinal, write.PayloadHash).Scan(&insertedID)
+		switch {
+		case err == nil:
+			created = true
+			fact.SourceIdentity = &domain.FactSourceIdentity{MessageID: write.Identity.MessageID, TaskID: write.Identity.TaskID, Ordinal: write.Identity.Ordinal}
+			fact.SourcePayloadHash = write.PayloadHash
+			entityIDs, entityErr := mutateExtractedFactEntities(ctx, tx, fact, write.EntityNames)
+			if entityErr != nil {
+				return entityErr
+			}
+			fact.EntityNames = append([]string(nil), write.EntityNames...)
+			fact.EntityIDs = entityIDs
+			result = fact
+			return nil
+		case !errors.Is(err, pgx.ErrNoRows):
+			return fmt.Errorf("insert extracted fact: %w", err)
+		}
+
+		existing, existingHash, readErr := getExtractedFactByIdentity(ctx, tx, fact, write.Identity)
+		if readErr != nil {
+			return readErr
+		}
+		if existingHash != write.PayloadHash {
+			return domain.ErrFactSourceConflict
+		}
+		existing.EntityNames = append([]string(nil), write.EntityNames...)
+		result = existing
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return result, created, nil
+}
+
+func validateExtractedFactWrite(tenantID string, write *port.ExtractedFactWrite) error {
+	if tenantID == "" || write == nil || write.Fact == nil || write.Fact.TenantID != tenantID || write.Fact.UserID == "" ||
+		write.Identity.MessageID == "" || write.Identity.Ordinal < 0 || write.PayloadHash == "" {
+		return domain.ErrInvalidFactSourceIdentity
+	}
+	switch write.Fact.Scope {
+	case domain.ScopeUser:
+		// Agent provenance is allowed on a user-owned fact but is not part of its ownership key.
+	case domain.ScopeAgent:
+		if write.Fact.AgentID == "" {
+			return domain.ErrInvalidFactSourceIdentity
+		}
+	default:
+		return domain.ErrInvalidFactSourceIdentity
+	}
+	return nil
+}
+
+func nullableTaskID(id int64) any {
+	if id == 0 {
+		return nil
+	}
+	return id
+}
+
+func getExtractedFactByIdentity(ctx context.Context, tx pgx.Tx, keyFact *domain.MemoryFact, identity domain.FactSourceIdentity) (*domain.MemoryFact, string, error) {
+	query := `SELECT id::text,user_id,COALESCE(agent_id,''),scope,COALESCE(conversation_id::text,''),content,importance,
+		status,COALESCE(superseded_by::text,''),access_count,last_accessed_at,created_at,updated_at,frecency_score,
+		category,confidence,source,source_message_id,COALESCE(source_task_id,0),source_ordinal,source_payload_hash
+		FROM memory_facts WHERE user_id=$1 AND source_message_id=$2 AND source_ordinal=$3 AND scope=$4`
+	args := []any{keyFact.UserID, identity.MessageID, identity.Ordinal, string(keyFact.Scope)}
+	if keyFact.Scope == domain.ScopeAgent {
+		query += ` AND agent_id=$5`
+		args = append(args, keyFact.AgentID)
+	}
+	query += ` FOR UPDATE`
+	var fact domain.MemoryFact
+	var scope, hash string
+	var sourceTaskID int64
+	if err := tx.QueryRow(ctx, query, args...).Scan(
+		&fact.ID, &fact.UserID, &fact.AgentID, &scope, &fact.ConversationID, &fact.Content, &fact.Importance,
+		&fact.Status, &fact.SupersededBy, &fact.AccessCount, &fact.LastAccessAt, &fact.CreatedAt, &fact.UpdatedAt, &fact.FrecencyScore,
+		&fact.Category, &fact.Confidence, &fact.Source, &identity.MessageID, &sourceTaskID, &identity.Ordinal, &hash,
+	); err != nil {
+		return nil, "", fmt.Errorf("read extracted fact conflict: %w", err)
+	}
+	fact.TenantID = keyFact.TenantID
+	fact.Scope = domain.Scope(scope)
+	fact.SourceIdentity = &domain.FactSourceIdentity{MessageID: identity.MessageID, TaskID: sourceTaskID, Ordinal: identity.Ordinal}
+	fact.SourcePayloadHash = hash
+	return &fact, hash, nil
+}
+
+func mutateExtractedFactEntities(ctx context.Context, tx pgx.Tx, fact *domain.MemoryFact, names []string) ([]string, error) {
+	ids := make([]string, 0, len(names))
+	for _, name := range names {
+		id, err := findExtractedFactEntityID(ctx, tx, fact, name)
+		if err == nil {
+			if err := tx.QueryRow(ctx, `UPDATE memory_entities SET fact_count=fact_count+1,
+				fact_count_since_rebuild=fact_count_since_rebuild+1,last_seen_at=NOW(),updated_at=NOW()
+				WHERE id=$1 RETURNING id::text`, id).Scan(&id); err != nil {
+				return nil, fmt.Errorf("increment extracted fact entity: %w", err)
+			}
+			ids = append(ids, id)
+			continue
+		}
+		if !errors.Is(err, domain.ErrEntityNotFound) {
+			return nil, err
+		}
+		var agentID *string
+		if fact.AgentID != "" {
+			agentID = &fact.AgentID
+		}
+		if err := tx.QueryRow(ctx, `INSERT INTO memory_entities
+			(user_id,agent_id,scope,name,entity_type,fact_count,fact_count_since_rebuild,last_seen_at)
+			VALUES ($1,$2,$3,$4,'',1,1,NOW()) RETURNING id::text`,
+			fact.UserID, agentID, string(fact.Scope), name).Scan(&id); err != nil {
+			return nil, fmt.Errorf("create extracted fact entity %q: %w", name, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func findExtractedFactEntityID(ctx context.Context, tx pgx.Tx, fact *domain.MemoryFact, name string) (string, error) {
+	query := `SELECT id::text FROM memory_entities WHERE user_id=$1 AND entity_type='' AND status='active'
+		AND similarity(name,$2)>$3 AND scope=$4`
+	args := []any{fact.UserID, name, constants.MemorySupersedeCandidateMin, string(fact.Scope)}
+	if fact.Scope == domain.ScopeAgent {
+		query += ` AND agent_id=$5`
+		args = append(args, fact.AgentID)
+	}
+	query += ` ORDER BY similarity(name,$2) DESC LIMIT 1`
+	var id string
+	if err := tx.QueryRow(ctx, query, args...).Scan(&id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", domain.ErrEntityNotFound
+		}
+		return "", fmt.Errorf("find extracted fact entity: %w", err)
+	}
+	return id, nil
 }
 
 func NewFactRepo(pool *pgxpool.Pool) *FactRepo {
@@ -186,19 +354,38 @@ func (r *FactRepo) SearchByContent(ctx context.Context, tenantID string, filter 
 	return facts, err
 }
 
-func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID, userID, agentID, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
-	const query = `
+func supersedeScopeClause(filter domain.ScopeFilter) string {
+	if filter.IncludeAgentScope && !filter.IncludeUserScope {
+		return "scope = 'agent' AND agent_id = $3"
+	}
+	return "scope = 'user'"
+}
+
+func supersedeQuery(filter domain.ScopeFilter, content string, minSimilarity, maxCount float64) (string, []any) {
+	thresholdParam, limitParam := "$3", "$4"
+	args := []any{filter.UserID, content, minSimilarity, int(maxCount)}
+	if filter.IncludeAgentScope && !filter.IncludeUserScope {
+		thresholdParam, limitParam = "$4", "$5"
+		args = []any{filter.UserID, content, filter.AgentID, minSimilarity, int(maxCount)}
+	}
+	query := `
 		SELECT id, user_id, agent_id, scope, content, importance,
 			status, superseded_by, access_count, last_accessed_at,
 			created_at, updated_at,
 			similarity(content, $2) as sim
 		FROM memory_facts
-		WHERE user_id = $1 AND status = 'active' AND similarity(content, $2) > $3
-		ORDER BY sim DESC LIMIT $4`
+		WHERE user_id = $1 AND status = 'active' AND similarity(content, $2) > ` + thresholdParam + `
+		  AND ` + supersedeScopeClause(filter) + `
+		ORDER BY sim DESC LIMIT ` + limitParam
+	return query, args
+}
+
+func (r *FactRepo) FindSupersedeCandidates(ctx context.Context, tenantID string, filter domain.ScopeFilter, content string, minSimilarity, maxCount float64) ([]*port.SupersedeCandidate, error) {
+	query, args := supersedeQuery(filter, content, minSimilarity, maxCount)
 
 	var candidates []*port.SupersedeCandidate
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, query, userID, content, minSimilarity, int(maxCount))
+		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("find supersede candidates: %w", err)
 		}
@@ -274,7 +461,7 @@ func (r *FactRepo) DeleteAllByUser(ctx context.Context, tenantID, userID string)
 }
 
 func (r *FactRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID string) ([]string, error) {
-	const query = `DELETE FROM memory_facts WHERE agent_id = $1 RETURNING id`
+	const query = `DELETE FROM memory_facts WHERE agent_id = $1 AND scope = 'agent' RETURNING id`
 
 	var factIDs []string
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {

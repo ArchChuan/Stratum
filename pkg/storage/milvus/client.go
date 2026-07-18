@@ -48,7 +48,7 @@ func (vs *VectorStore) doConnect(ctx context.Context) error {
 	conn, err := dialer.DialContext(ctx, "tcp", milvusAddr)
 	if err != nil {
 		vs.logger.Warn("Milvus port not reachable", zap.Error(err))
-		return fmt.Errorf("milvus port not reachable: %w", err)
+		return newUnavailableError("connect", fmt.Errorf("milvus port not reachable: %w", err))
 	}
 	conn.Close() //nolint:errcheck,gosec
 
@@ -67,7 +67,7 @@ func (vs *VectorStore) doConnect(ctx context.Context) error {
 	case res := <-resultCh:
 		if res.err != nil {
 			vs.logger.Error("failed to connect to Milvus", zap.Error(res.err))
-			return fmt.Errorf("failed to connect to Milvus: %w", res.err)
+			return newUnavailableError("connect", fmt.Errorf("failed to connect to Milvus: %w", res.err))
 		}
 		vs.client = res.client
 		vs.logger.Info("connected to Milvus successfully")
@@ -80,7 +80,7 @@ func (vs *VectorStore) doConnect(ctx context.Context) error {
 			}
 		}()
 		vs.logger.Warn("Milvus connection timeout")
-		return fmt.Errorf("milvus connection timeout")
+		return newUnavailableError("connect", ctx.Err())
 	}
 }
 
@@ -94,7 +94,7 @@ func (vs *VectorStore) getClient(ctx context.Context) (client.Client, error) {
 	c := vs.client
 	vs.mu.RUnlock()
 	if c == nil {
-		return nil, fmt.Errorf("milvus client closed")
+		return nil, newUnavailableError("client", fmt.Errorf("milvus client closed"))
 	}
 	return c, nil
 }
@@ -151,7 +151,7 @@ func (vs *VectorStore) createCollectionWithDimLocked(ctx context.Context, collec
 	hasCollection, err := c.HasCollection(ctx, collectionName)
 	if err != nil {
 		vs.logger.Error("failed to check collection", zap.Error(err))
-		return fmt.Errorf("failed to check collection %s: %w", collectionName, err)
+		return classifyAvailabilityError("check collection", fmt.Errorf("failed to check collection %s: %w", collectionName, err))
 	}
 
 	if hasCollection {
@@ -167,7 +167,7 @@ func (vs *VectorStore) createCollectionWithDimLocked(ctx context.Context, collec
 				vs.logger.Warn("collection missing required field, recreating",
 					zap.String("collection", collectionName), zap.String("field", "agent_id"))
 				if derr := c.DropCollection(ctx, collectionName); derr != nil {
-					return fmt.Errorf("failed to drop stale collection %s: %w", collectionName, derr)
+					return classifyAvailabilityError("drop stale collection", fmt.Errorf("failed to drop stale collection %s: %w", collectionName, derr))
 				}
 				vs.dimCache.Delete(collectionName)
 				// fall through to recreate
@@ -190,7 +190,7 @@ func (vs *VectorStore) createCollectionWithDimLocked(ctx context.Context, collec
 				zap.Int("existing_dim", existingDim),
 				zap.Int("required_dim", dim))
 			if derr := c.DropCollection(ctx, collectionName); derr != nil {
-				return fmt.Errorf("failed to drop stale collection %s: %w", collectionName, derr)
+				return classifyAvailabilityError("drop stale collection", fmt.Errorf("failed to drop stale collection %s: %w", collectionName, derr))
 			}
 			vs.dimCache.Delete(collectionName)
 		}
@@ -248,25 +248,25 @@ func (vs *VectorStore) createCollectionWithDimLocked(ctx context.Context, collec
 
 	if err := c.CreateCollection(ctx, schema, 2); err != nil {
 		vs.logger.Error("failed to create collection", zap.String("collection", collectionName), zap.Error(err))
-		return fmt.Errorf("failed to create collection %s: %w", collectionName, err)
+		return classifyAvailabilityError("create collection", fmt.Errorf("failed to create collection %s: %w", collectionName, err))
 	}
 	idx, err := entity.NewIndexIvfFlat(entity.L2, 128)
 	if err != nil {
 		return fmt.Errorf("failed to build index param: %w", err)
 	}
 	if err := c.CreateIndex(ctx, collectionName, "vector", idx, false); err != nil {
-		return fmt.Errorf("failed to create index on %s: %w", collectionName, err)
+		return classifyAvailabilityError("create vector index", fmt.Errorf("failed to create index on %s: %w", collectionName, err))
 	}
 	scIdx := entity.NewScalarIndexWithType(entity.Trie)
 	for _, f := range []string{"user_id", "agent_id", "scope"} {
 		if err := c.CreateIndex(ctx, collectionName, f, scIdx, false); err != nil {
-			return fmt.Errorf("failed to create scalar index on %s.%s: %w", collectionName, f, err)
+			return classifyAvailabilityError("create scalar index", fmt.Errorf("failed to create scalar index on %s.%s: %w", collectionName, f, err))
 		}
 	}
 	vs.dimCache.Store(collectionName, dim)
 	vs.logger.Info("collection created successfully", zap.String("collection", collectionName))
 	if err := c.LoadCollection(ctx, collectionName, false); err != nil {
-		return fmt.Errorf("failed to load collection %s: %w", collectionName, err)
+		return classifyAvailabilityError("load collection", fmt.Errorf("failed to load collection %s: %w", collectionName, err))
 	}
 	return nil
 }
@@ -380,7 +380,7 @@ func (vs *VectorStore) Insert(ctx context.Context, collectionName string, docs [
 	_, err = c.Insert(ctx, collectionName, partitionName, idCol, userIDCol, agentIDCol, scopeCol, contentCol, sourceCol, chunkIdxCol, vectorCol)
 	if err != nil {
 		vs.logger.Error("failed to insert vectors", zap.Error(err))
-		return fmt.Errorf("failed to insert vectors: %w", err)
+		return classifyAvailabilityError("insert vectors", fmt.Errorf("failed to insert vectors: %w", err))
 	}
 	vs.logger.Info("vectors inserted successfully", zap.Int("count", len(docs)))
 	return nil
@@ -406,7 +406,7 @@ func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName stri
 			return []SearchResult{}, nil
 		}
 		vs.logger.Error("failed to load collection", zap.Error(err))
-		return nil, fmt.Errorf("failed to load collection %s: %w", collectionName, err)
+		return nil, classifyAvailabilityError("load collection", fmt.Errorf("failed to load collection %s: %w", collectionName, err))
 	}
 
 	// Create search vector
@@ -440,7 +440,7 @@ func (vs *VectorStore) SearchWithFilter(ctx context.Context, collectionName stri
 			return nil, nil
 		}
 		vs.logger.Error("failed to search vectors", zap.Error(searchErr))
-		return nil, fmt.Errorf("failed to search vectors: %w", searchErr)
+		return nil, classifyAvailabilityError("search", fmt.Errorf("failed to search vectors: %w", searchErr))
 	}
 
 	// Process results - returns []client.SearchResult
@@ -528,7 +528,7 @@ func (vs *VectorStore) Flush(ctx context.Context, collectionName string) error {
 	vs.logger.Debug("flushing collection", zap.String("collection", collectionName))
 	if err := c.Flush(ctx, collectionName, false); err != nil {
 		vs.logger.Error("failed to flush collection", zap.Error(err))
-		return fmt.Errorf("failed to flush collection %s: %w", collectionName, err)
+		return classifyAvailabilityError("flush collection", fmt.Errorf("failed to flush collection %s: %w", collectionName, err))
 	}
 	return nil
 }

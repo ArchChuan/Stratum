@@ -89,7 +89,49 @@ func TestExtractionWorker_ProcessesTask(t *testing.T) {
 
 	require.NotNil(t, extracted, "should call ExtractFacts")
 	require.Equal(t, "user1", extracted.UserID)
+	require.Equal(t, "msg1", extracted.SourceMessageID)
+	require.Equal(t, int64(123), extracted.SourceTaskID)
 	require.Equal(t, int64(123), completedID, "should mark completed")
+}
+
+func TestExtractionWorker_MarkCompletedFailureReplaysSameSourceIdentity(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	claimedAt := time.Now().UTC()
+	task := &port.ExtractionTask{ID: 123, TenantID: "tenant1", UserID: "user1", MessageID: "msg1", Content: "fact", UpdatedAt: claimedAt}
+	var requests []*application.ExtractFactsRequest
+	extractor := &stubFactExtractor{extractFunc: func(_ context.Context, req *application.ExtractFactsRequest) error {
+		copy := *req
+		requests = append(requests, &copy)
+		return nil
+	}}
+	dequeues := 0
+	completions := 0
+	queue := &stubExtractionQueue{
+		dequeueFunc: func(context.Context, string) (*port.ExtractionTask, error) {
+			dequeues++
+			if dequeues <= 2 {
+				copy := *task
+				return &copy, nil
+			}
+			cancel()
+			return nil, nil
+		},
+		markCompletedFunc: func(context.Context, string, int64, time.Time) error {
+			completions++
+			if completions == 1 {
+				return errors.New("commit status unavailable")
+			}
+			return nil
+		},
+	}
+
+	workers.NewExtractionWorker("tenant1", queue, extractor, zap.NewNop()).Start(ctx)
+	require.Len(t, requests, 2)
+	require.Equal(t, "msg1", requests[0].SourceMessageID)
+	require.Equal(t, requests[0].SourceMessageID, requests[1].SourceMessageID)
+	require.Equal(t, int64(123), requests[0].SourceTaskID)
+	require.Equal(t, requests[0].SourceTaskID, requests[1].SourceTaskID)
 }
 
 func TestExtractionWorker_HandlesExtractionError(t *testing.T) {
