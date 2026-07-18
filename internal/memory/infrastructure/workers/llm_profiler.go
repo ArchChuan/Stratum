@@ -15,13 +15,24 @@ import (
 // profile paragraph — the top tier of long-term consolidation, turning
 // low-value fragments into a compact, high-value memory the injector can surface
 // cheaply.
-type LLMEntityProfiler struct{ client pipeline.LLMClient }
+type LLMEntityProfiler struct {
+	client   pipeline.LLMClient
+	tenantID string
+	resolver TenantLLMResolver
+}
 
 // Compile-time assertion that LLMEntityProfiler satisfies the port.
 var _ memport.EntityProfiler = (*LLMEntityProfiler)(nil)
 
 func NewLLMEntityProfiler(client pipeline.LLMClient) *LLMEntityProfiler {
 	return &LLMEntityProfiler{client: client}
+}
+
+// NewResolvingLLMEntityProfiler resolves the tenant's LLM client on every
+// profile generation so that live tenant settings changes take effect without a
+// worker restart — mirrors NewResolvingLLMSuperseder.
+func NewResolvingLLMEntityProfiler(tenantID string, resolver TenantLLMResolver) *LLMEntityProfiler {
+	return &LLMEntityProfiler{tenantID: tenantID, resolver: resolver}
 }
 
 // GenerateProfile builds a concise natural-language profile of the entity from
@@ -49,7 +60,19 @@ func (p *LLMEntityProfiler) GenerateProfile(ctx context.Context, entityName, ent
 - 只依据给定事实，不臆测、不编造
 - 直接输出画像正文，不加任何前缀、标题或解释`, entityName, entityType, b.String())
 
-	resp, err := p.client.Complete(ctx, &llmgateway.CompletionRequest{
+	client := p.client
+	if p.resolver != nil {
+		resolved, err := resolveTenantLLM(ctx, p.tenantID, p.resolver)
+		if err != nil {
+			return "", err
+		}
+		client = resolved
+	}
+	if client == nil {
+		return "", fmt.Errorf("llm generate profile: client unavailable")
+	}
+
+	resp, err := client.Complete(ctx, &llmgateway.CompletionRequest{
 		Messages:  []llmgateway.Message{{Role: "user", Content: prompt}},
 		MaxTokens: 512,
 	})

@@ -2,7 +2,6 @@ package wiring
 
 import (
 	"context"
-	"time"
 
 	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
@@ -235,22 +234,13 @@ func BuildMemoryWorkers(c *Container) []interface {
 			memworkers.NewExtractionWorker(tid, queue, c.Memory.Service, c.Logger),
 			memworkers.NewGCWorker(tid, factRepo, c.Logger).WithQueue(queue),
 		}
-		var historySummarizer memworkers.HistorySummarizer
-		var historyCompressor memworkers.HistoryCompressor
+		var workerLLMResolver memworkers.TenantLLMResolver
 		if llmRes != nil {
-			resolveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			llm := llmRes.ResolveLLM(resolveCtx, tid)
-			cancel()
-			if llm != nil {
-				ws = append(ws, memworkers.NewSupersedeWorker(tid, factRepo, memworkers.NewLLMSuperseder(llm), c.Logger))
-				ws = append(ws, memworkers.NewProfileWorker(tid, entityRepo, factRepo, memworkers.NewLLMEntityProfiler(llm), c.Logger))
-				historyProcessor := memworkers.NewLLMHistorySummarizer(llm)
-				historySummarizer = historyProcessor
-				historyCompressor = historyProcessor
+			workerLLMResolver = func(ctx context.Context, tenantID string) (memworkers.TenantLLMClient, error) {
+				return llmRes.ResolveWorkerLLM(ctx, tenantID)
 			}
 		}
-		ws = append(ws, memworkers.NewHistoryWorker(tid, historyRepo, historySummarizer, historyCompressor, c.Logger))
-		return ws
+		return appendTenantLLMWorkers(ws, tid, entityRepo, factRepo, historyRepo, workerLLMResolver, c.Logger)
 	}, c.Logger)
 
 	result := []interface {
@@ -264,4 +254,36 @@ func BuildMemoryWorkers(c *Container) []interface {
 	}
 
 	return result
+}
+
+func appendTenantLLMWorkers(
+	workerSet memworkers.WorkerSet,
+	tenantID string,
+	entityRepo memport.EntityRepo,
+	factRepo memport.FactRepo,
+	historyRepo memport.HistoryRepo,
+	resolver memworkers.TenantLLMResolver,
+	logger *zap.Logger,
+) memworkers.WorkerSet {
+	var summarizer memworkers.HistorySummarizer
+	var compressor memworkers.HistoryCompressor
+	if resolver != nil {
+		workerSet = append(workerSet, memworkers.NewSupersedeWorker(
+			tenantID,
+			factRepo,
+			memworkers.NewResolvingLLMSuperseder(tenantID, resolver),
+			logger,
+		))
+		workerSet = append(workerSet, memworkers.NewProfileWorker(
+			tenantID,
+			entityRepo,
+			factRepo,
+			memworkers.NewResolvingLLMEntityProfiler(tenantID, resolver),
+			logger,
+		))
+		historyProcessor := memworkers.NewResolvingLLMHistorySummarizer(tenantID, resolver)
+		summarizer = historyProcessor
+		compressor = historyProcessor
+	}
+	return append(workerSet, memworkers.NewHistoryWorker(tenantID, historyRepo, summarizer, compressor, logger))
 }
