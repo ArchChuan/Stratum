@@ -135,7 +135,7 @@ stratum/
 
 ### 4.3 Migration Timeline
 
-001 public baseline · 002 is_default_tenant · 003 global admin owner · 004/005 agent_executions add+move-to-tenant · 006 agent_skill_links · 007 name unique · 008 memory_pipeline · 009 agent_context_tokens · 010 soft_delete_conversations · 011 uuid_v7 func · 012 pgcrypto · 013 trgm index · 014 cascade-delete fixes · 015 memory v2 marker · 016 agent memory enabled · 017 memory facts hard delete · 018 obsolete public tables cleanup · 019 guest accounts
+001 public baseline · 002 is_default_tenant · 003 global admin owner · 004/005 agent_executions add+move-to-tenant · 006 agent_skill_links · 007 name unique · 008 memory_pipeline · 009 agent_context_tokens · 010 soft_delete_conversations · 011 uuid_v7 func · 012 pgcrypto · 013 trgm index · 014 cascade-delete fixes · 015 memory v2 marker · 016 agent memory enabled · 017 memory facts hard delete · 018 obsolete public tables cleanup · 019 guest accounts · 020 memory fact quality · 021 active snapshots · 022 history tiers · 023 history source IDs
 
 **多租户 DDL 规则**：编号迁移仅操作 public；引用 tenant-only 表的 DDL 必须放 `pkg/storage/postgres/tenant_schema.sql` 由 `ProvisionAllTenantSchemas` 幂等应用；新增列必须 `ALTER TABLE … ADD COLUMN IF NOT EXISTS` 做 backfill。
 
@@ -228,7 +228,7 @@ stratum/
 | 服务 | 用途 | 失败影响 |
 |------|------|---------|
 | PostgreSQL | 主存储（public + per-tenant schema） | 致命：所有写操作不可用 |
-| Redis | session / cache / rate-limit | 降级：部分缓存 miss，仍可运行 |
+| Redis | memory extraction buffer、refresh-token blacklist、分布式限流 | 缓冲/限流/注销状态受影响；不能笼统视为仅 cache miss |
 | NATS JetStream | memory pipeline outbox 消费、领域事件 | 异步 enrich 停滞，主路径仍可用 |
 | Milvus | 向量检索（GraphRAG vector mode） | RAG vector/hybrid 不可用，keyword 仍工作 |
 | LLM Provider（Qwen/Zhipu） | LLM 推理 + embedding | Agent 执行不可用 |

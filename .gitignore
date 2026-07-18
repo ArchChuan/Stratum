@@ -195,3 +195,5 @@ AGENTS.md
 .agents/
 .codex/
 .serena/
+# Added by code-review-graph
+.code-review-graph/

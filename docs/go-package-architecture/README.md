@@ -57,12 +57,12 @@
 
 ## internal/memory
 
-- [`internal/memory/application`](internal-memory-application.md) — 该包编排记忆写入、缓冲与扫描、LLM 事实抽取、实体归一化、混合召回、遗忘和按用户/Agent 清理等应用用例。
-- [`internal/memory/domain`](internal-memory-domain.md) — 该包承载记忆领域实体、事实状态机、作用域规则、frecency 算法、通用记忆模型、ID/时间生成和领域错误。
-- [`internal/memory/domain/port`](internal-memory-domain-port.md) — 该包定义 memory 上下文的出向端口，包括事实/实体/通用记忆仓储、消息缓冲、抽取队列、LLM、embedding、向量索引和事件发布。
-- [`internal/memory/infrastructure/persistence`](internal-memory-infrastructure-persistence.md) — 该包实现 memory 的 PostgreSQL/Redis/Milvus 持久化适配器，覆盖实体、事实、通用记忆、抽取队列、消息缓冲与向量数据清理。
+- [`internal/memory/application`](internal-memory-application.md) — 该包编排记忆写入、缓冲与扫描、LLM 事实抽取、实体归一化、混合召回、遗忘和按用户/Agent 清理，并协调 active snapshot 与 History 生命周期清理。
+- [`internal/memory/domain`](internal-memory-domain.md) — 该包承载记忆领域实体、事实状态机、active snapshot、History 分层、作用域规则、frecency 算法、ID/时间生成和领域错误。
+- [`internal/memory/domain/port`](internal-memory-domain-port.md) — 该包定义 memory 上下文的出向端口，包括事实/实体/通用记忆、active snapshot、History 仓储、消息缓冲、抽取队列、LLM、embedding、向量索引和事件发布。
+- [`internal/memory/infrastructure/persistence`](internal-memory-infrastructure-persistence.md) — 该包实现 memory 的 PostgreSQL/Redis/Milvus 持久化适配器，覆盖实体、事实、active snapshot、History、通用记忆、抽取队列、消息缓冲与向量数据清理。
 - [`internal/memory/infrastructure/pipeline`](internal-memory-infrastructure-pipeline.md) — 该包构建基于 JetStream 和 PostgreSQL outbox 的异步记忆处理流水线，并提供富化、embedding、注入、召回及 LLM/向量适配能力。
-- [`internal/memory/infrastructure/workers`](internal-memory-infrastructure-workers.md) — 该包提供按租户运行的后台记忆作业，包括事实抽取、过期清理、事实 supersede 判定、实体画像重建，以及租户发现与 worker 生命周期管理。
+- [`internal/memory/infrastructure/workers`](internal-memory-infrastructure-workers.md) — 该包提供按租户运行的后台记忆作业，包括事实抽取、过期清理、事实 supersede、实体画像、History 聚合/晋级，以及租户发现与 worker 生命周期管理。
 
 ## internal/platform
 
@@ -72,7 +72,7 @@
 
 ## internal/skill
 
-- [`internal/skill/application`](internal-skill-application.md) — 编排版本化 instruction Skill 的草稿、工作区、候选、发布与删除用例。
+- [`internal/skill/application`](internal-skill-application.md) — 编排版本化 instruction Skill 的草稿、工作区、候选、发布与删除用例，并解析 Agent 运行期固定的已发布 revision 激活快照。
 - [`internal/skill/domain`](internal-skill-domain.md) — 定义 capability、activation contract、instructions、requirements、发布校验与内容哈希。
 - [`internal/skill/domain/port`](internal-skill-domain-port.md) — 定义版本仓储与 MCP 调用的最小消费者侧契约。
 - [`internal/skill/infrastructure/persistence`](internal-skill-infrastructure-persistence.md) — 使用 PostgreSQL tenant 事务实现版本仓储和发布事务。

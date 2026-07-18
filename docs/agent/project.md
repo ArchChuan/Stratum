@@ -54,14 +54,14 @@ grafana/                    - Grafana 数据源 + 仪表板配置
 
 | 依赖 | 版本 | 关键说明 |
 |------|------|---------|
-| Go | 1.25.0 | 泛型，slog 兼容 |
+| Go | 1.25.12 | 以 `go.mod` toolchain directive 为准 |
 | Gin | v1.9+ | 路由组 `r.Group`，middleware 在 router.go 注册 |
 | NATS | v1.51 | JetStream 模式；memory pipeline 用 `nats.go/jetstream` 包直接操作 |
 | Milvus SDK | v2.4.2 | 主实现位于 `pkg/storage/milvus`；`pkg/vector` 仅兼容旧 import |
-| pgx | v5.x | pgxpool，事务内用 `SET LOCAL search_path` 切换租户 |
+| pgx | v5.9.2 | pgxpool，事务内用 `SET LOCAL search_path` 切换租户 |
 | go-redis | v9.x | `redis.NewClient`，context-aware API |
 | Zap | v1.26+ | 生产用 `NewProduction()`，开发用 `NewDevelopment()` |
-| OTEL | v1.22 | TracerProvider 在 main 初始化，通过 context 传播 |
+| OTEL | v1.40 | TracerProvider 由 platform runtime 初始化，通过 context 传播 |
 | 前端 | React 18.3 · Vite 5.4 · AntD 5.20 | 版本以 `web/package.json` 与 lockfile 为准 |
 | JWT | golang-jwt/jwt v5 | RS256 签名，Claims 含 tenant_id / role / global_role |
 
