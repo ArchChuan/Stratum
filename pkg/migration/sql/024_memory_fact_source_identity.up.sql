@@ -1,0 +1,2 @@
+-- Fact source identity is tenant-scoped and managed by pkg/storage/postgres/tenant_schema.sql.
+-- ProvisionAllTenantSchemas applies the forward-compatible nullable columns and partial indexes.

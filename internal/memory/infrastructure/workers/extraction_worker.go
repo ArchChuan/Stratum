@@ -105,12 +105,14 @@ func (w *ExtractionWorker) processTask(ctx context.Context, task *port.Extractio
 	}
 
 	req := &application.ExtractFactsRequest{
-		TenantID:       task.TenantID,
-		UserID:         task.UserID,
-		AgentID:        task.AgentID,
-		ConversationID: task.ConversationID,
-		Scope:          task.Scope,
-		Messages:       msgs,
+		TenantID:        task.TenantID,
+		UserID:          task.UserID,
+		AgentID:         task.AgentID,
+		ConversationID:  task.ConversationID,
+		Scope:           task.Scope,
+		SourceMessageID: task.MessageID,
+		SourceTaskID:    task.ID,
+		Messages:        msgs,
 	}
 
 	err := w.service.ExtractFacts(ctx, req)

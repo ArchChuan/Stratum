@@ -187,6 +187,14 @@ func (m *MockFactRepo) Create(ctx context.Context, tenantID string, fact *domain
 	return args.Error(0)
 }
 
+func (m *MockFactRepo) CreateExtracted(ctx context.Context, tenantID string, write *port.ExtractedFactWrite) (*domain.MemoryFact, bool, error) {
+	args := m.Called(ctx, tenantID, write)
+	if args.Get(0) == nil {
+		return nil, args.Bool(1), args.Error(2)
+	}
+	return args.Get(0).(*domain.MemoryFact), args.Bool(1), args.Error(2)
+}
+
 func (m *MockFactRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.MemoryFact, error) {
 	args := m.Called(ctx, tenantID, id)
 	if args.Get(0) == nil {

@@ -46,4 +46,10 @@ var (
 
 	// ErrInvalidSource is returned when fact provenance is not recognized.
 	ErrInvalidSource = errors.New("memory fact source not in allowlist")
+
+	// ErrInvalidFactSourceIdentity is returned when replay-safe extraction provenance is incomplete.
+	ErrInvalidFactSourceIdentity = errors.New("invalid memory fact source identity")
+
+	// ErrFactSourceConflict is returned when one source identity is reused for a different payload.
+	ErrFactSourceConflict = errors.New("memory fact source identity payload conflict")
 )

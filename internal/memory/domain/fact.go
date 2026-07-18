@@ -69,14 +69,25 @@ type MemoryFact struct {
 	Confidence float64 // [0,1] 置信度
 	Source     string  // 来源: llm_extraction|explicit_user|manual_api
 	// ─────────────────
-	EntityNames   []string
-	AccessCount   int
-	FrecencyScore float64
-	LastAccessAt  time.Time
-	SupersededBy  string
-	Status        string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	EntityNames       []string
+	EntityIDs         []string
+	SourceIdentity    *FactSourceIdentity
+	SourcePayloadHash string
+	AccessCount       int
+	FrecencyScore     float64
+	LastAccessAt      time.Time
+	SupersededBy      string
+	Status            string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+// FactSourceIdentity identifies one LLM fact within a stable source message.
+// PayloadHash is checked separately from the ownership key by persistence.
+type FactSourceIdentity struct {
+	MessageID string
+	TaskID    int64
+	Ordinal   int
 }
 
 // NewFact creates a new memory fact with validation.
