@@ -10,14 +10,34 @@ import (
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 )
 
-// LLMSuperseder adapts pipeline.LLMClient to memport.LLMSuperseder.
-type LLMSuperseder struct{ client pipeline.LLMClient }
+// LLMSuperseder adapts an LLM client or tenant resolver to memport.LLMSuperseder.
+type LLMSuperseder struct {
+	client   pipeline.LLMClient
+	tenantID string
+	resolver TenantLLMResolver
+}
 
 func NewLLMSuperseder(client pipeline.LLMClient) *LLMSuperseder {
 	return &LLMSuperseder{client: client}
 }
 
+// NewResolvingLLMSuperseder resolves the tenant client for every judgment.
+func NewResolvingLLMSuperseder(tenantID string, resolver TenantLLMResolver) *LLMSuperseder {
+	return &LLMSuperseder{tenantID: tenantID, resolver: resolver}
+}
+
 func (s *LLMSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact string) (*memport.SupersedeJudgment, error) {
+	client := s.client
+	if s.resolver != nil {
+		resolved, err := resolveTenantLLM(ctx, s.tenantID, s.resolver)
+		if err != nil {
+			return nil, err
+		}
+		client = resolved
+	}
+	if client == nil {
+		return nil, fmt.Errorf("llm supersede: client unavailable")
+	}
 	prompt := fmt.Sprintf(`判断新事实是否应该取代旧事实。
 
 旧事实：%s
@@ -30,7 +50,7 @@ func (s *LLMSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact str
 
 只输出 JSON，不加任何说明：
 {"supersedes": true/false, "reason": "简短说明"}`, oldFact, newFact)
-	resp, err := s.client.Complete(ctx, &llmgateway.CompletionRequest{
+	resp, err := client.Complete(ctx, &llmgateway.CompletionRequest{
 		Messages:  []llmgateway.Message{{Role: "user", Content: prompt}},
 		MaxTokens: 256,
 	})
