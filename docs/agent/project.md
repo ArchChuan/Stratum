@@ -24,6 +24,8 @@ internal/
                             - LLM 统一网关（Qwen/Zhipu OpenAI-compatible）、ModelService
   evaluation/{domain,application,infrastructure}
                             - 通用评估控制面：suite/revision、异步 run/job、优化候选、实验与反馈
+  workflow/{domain,application,infrastructure}
+                            - 持久化静态 DAG：版本发布、异步运行、审批与人工介入
   mcp/{domain,application,infrastructure}
                             - MCP 服务器管理、ToolRegistry、工具级风险策略与审批执行
   memory/{domain,application,infrastructure}

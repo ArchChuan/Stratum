@@ -7,7 +7,7 @@
 
 ### 1.1 Purpose
 
-Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go + DDD 9 bounded context，前端 React 18 + AntD 5。把 Agent 编排（ReAct）、instruction Skill、评估优化、记忆系统、GraphRAG、MCP 协议、多租户 IAM 串成统一的运行链路，目标是「让团队自托管 AI Agent 平台，不依赖 SaaS」。
+Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go + DDD 10 bounded context，前端 React 18 + AntD 5。把 Agent 编排（ReAct）、持久化 Workflow、instruction Skill、评估优化、记忆系统、GraphRAG、MCP 协议、多租户 IAM 串成统一的运行链路，目标是「让团队自托管 AI Agent 平台，不依赖 SaaS」。
 
 ### 1.2 Key Capabilities
 
@@ -23,7 +23,7 @@ Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go +
 
 ### 1.3 Architecture Style
 
-分层 DDD 单体（Modular Monolith）。`api/http` 接入层 → `api/wiring.Container` 组合根 → 9 个 `internal/<ctx>/{domain,application,infrastructure}` bounded context → `pkg/` 无业务基础设施。跨 context 仅经消费者侧 `domain/port/` 接口 + wiring 层 thin adapter，禁止 import 兄弟 context 的 `application` / `infrastructure`。
+分层 DDD 单体（Modular Monolith）。`api/http` 接入层 → `api/wiring.Container` 组合根 → 10 个 `internal/<ctx>/{domain,application,infrastructure}` bounded context → `pkg/` 无业务基础设施。跨 context 仅经消费者侧 `domain/port/` 接口 + wiring 层 thin adapter，禁止 import 兄弟 context 的 `application` / `infrastructure`。
 
 ---
 
@@ -63,7 +63,7 @@ stratum/
 │       ├── memory.go           memory pipeline 装配
 │       ├── tenant_resolver.go  TenantCapabilityResolver（per-tenant gateway 解析）
 │       └── *.go                每域一个 wiring 文件
-├── internal/                    9 bounded contexts
+├── internal/                    10 bounded contexts
 │   ├── agent/                  ReAct StateGraph · Registry · ExecutionStore · ChatStore · BaseAgent
 │   │   └── application/graph/  StateGraph[T]・nodeLLM・nodeTool・条件边
 │   ├── memory/                 MemoryManager · MemoryRepo port · pipeline（outbox→embedder→enricher）
@@ -73,6 +73,7 @@ stratum/
 │   ├── iam/                    TenantService · AdminService · OnboardService · JWTService
 │   ├── llmgateway/             Gateway · TenantGatewayCache · openai_compat client
 │   ├── evaluation/             suite/run/job · optimization · experiment · feedback
+│   ├── workflow/               versioned static DAG · durable run · approval/manual control
 │   └── platform/               Harness 生命周期与 runtime 启动编排
 ├── pkg/                         无业务基础设施
 │   ├── storage/{postgres,redis,milvus,tenantnaming,tenantdb}
@@ -121,6 +122,9 @@ stratum/
 | | `eval_runs` · `eval_case_results` · `evaluation_jobs` | 异步运行、逐例结果与租约 job |
 | | `optimization_jobs` · `optimization_candidates` | 优化任务与候选版本 |
 | | `evaluation_experiments` · `evaluation_deployments` · `evaluation_feedback` | 实验阶段、部署决策与反馈 |
+| Workflow | `workflow_definitions` · `workflow_versions` · `workflow_runs` | 草稿定义、不可变发布版本、幂等运行与租约状态 |
+| | `workflow_node_attempts` · `workflow_events` | fenced 节点尝试与有序事件流 |
+| | `workflow_approvals` · `workflow_effect_intents` | 审批决策与外部副作用意图 |
 | Memory | `memory_entries` | id UUID v7, conversation_id FK, user_id, agent_id FK, role, content, type DEFAULT short_term, importance FLOAT8, tags TEXT[], keywords TEXT[], token_estimate, expires_at, enriched_at; GIN trgm on content |
 | | `memory_outbox` | id BIGSERIAL, message_id NOT NULL, payload JSONB |
 | | `memory_summaries` | conversation_id FK, summary, covered_until, token_count |
@@ -175,6 +179,7 @@ stratum/
 | Chat | `/agents/:id/conversations` · `/conversations/:convID` · `/conversations/:convID/messages` | JWT + tenant context |
 | Skill | `/skills` · `/skills/:id` · `/skills/:id/workspace` · draft capability/activation/instructions · publish | member 可读，active admin 写；无直接执行/测试路由 |
 | Evaluation | `/evaluations/suites` · publish · runs/jobs · optimizations · experiments/evaluate · feedback | admin 创建/查询评估控制面；active member 可提交 feedback |
+| Workflow | `/workflows` · definition/version publish · `/workflow-runs` · events/stream · pause/resume/cancel/manual resolve · `/workflow-approvals` | member 可读定义并启动运行；admin 管理定义、运行控制与审批；写操作需 active |
 | Knowledge | `/knowledge/workspaces` · workspace stats/documents · `/knowledge/ingest` · `/knowledge/query` | member 读/查，admin 管理/摄取 |
 | MCP | `/mcp/servers` · server tools/resources/config/reconnect · `/mcp/tool-policies` · `/mcp/status` | member 读取，admin 管理 server/policy；写操作需 active；工具仅由 Agent 内部执行 |
 | Memory | `/memory` · `/memory/:id` · `/memory/clear` · `/memory/sessions` · `/memory/session/:session_id` · `/memory/stats` · `/memory/summary/:session_id` | JWT + tenant context + active tenant |

@@ -11,7 +11,7 @@ pkg/storage/{postgres,redis,milvus,tenantnaming}
 pkg/{httpclient,observability,crypto,constants,migration,textchunk,tenantdb,vector}
 ```
 
-- 9 个 bounded context：`agent · memory · knowledge · skill · mcp · iam · llmgateway · evaluation · platform`
+- 10 个 bounded context：`agent · memory · knowledge · skill · mcp · iam · llmgateway · evaluation · workflow · platform`
 - 跨域 capability adapter 作为 ACL，必要时下沉进消费上下文
 
 ## 依赖方向
