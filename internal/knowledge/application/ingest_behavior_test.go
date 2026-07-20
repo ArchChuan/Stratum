@@ -12,6 +12,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/textchunk"
 	"github.com/byteBuilderX/stratum/pkg/vector"
 )
@@ -242,5 +243,31 @@ func TestMarkFailedDetachesFromCanceledJobContext(t *testing.T) {
 	ki.markFailed(ctx, req("doc"), context.DeadlineExceeded)
 	if repo.markFailedCtxErr != nil {
 		t.Fatalf("terminal state write received canceled context: %v", repo.markFailedCtxErr)
+	}
+}
+
+type ingestStatusMetrics struct {
+	observability.NoopMetrics
+	statuses []string
+}
+
+func (m *ingestStatusMetrics) IncKnowledgeIngest(status string) {
+	m.statuses = append(m.statuses, status)
+}
+
+func TestRecordIngestCompletionFailureDoesNotEmitCompleted(t *testing.T) {
+	repo := newMockDocRepo()
+	repo.markCompletedErr = errors.New("completion state unavailable")
+	metrics := &ingestStatusMetrics{}
+	ki := &KnowledgeIngest{docRepo: repo, metrics: metrics, logger: zap.NewNop()}
+
+	if ki.recordIngestCompletion(context.Background(), req("doc"), 3) {
+		t.Fatal("completion state failure was reported as completed")
+	}
+	if len(metrics.statuses) != 1 || metrics.statuses[0] != constants.IngestStatusFailed {
+		t.Fatalf("ingest metrics=%v, want only failed", metrics.statuses)
+	}
+	if repo.markFailedCount() != 1 {
+		t.Fatalf("MarkIngestFailed calls=%d, want 1", repo.markFailedCount())
 	}
 }

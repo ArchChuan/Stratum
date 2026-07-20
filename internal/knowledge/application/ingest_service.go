@@ -278,19 +278,29 @@ func (ki *KnowledgeIngest) runIngestJob(parentCtx context.Context, req IngestDoc
 		return
 	}
 
-	if ki.docRepo != nil {
-		if err := ki.docRepo.MarkIngestCompleted(bgCtx, req.TenantID, req.DocumentID, len(result.Leaves)); err != nil {
-			ki.logger.Warn("knowledge.ingest.mark_completed_failed",
-				zap.String("document_id", req.DocumentID),
-				zap.Error(err))
-		}
+	if !ki.recordIngestCompletion(bgCtx, req, len(result.Leaves)) {
+		return
 	}
-	ki.metrics.IncKnowledgeIngest(constants.IngestStatusCompleted)
 	ki.logger.Info("knowledge.ingest.completed",
 		zap.String("trace_id", sc.TraceID),
 		zap.String("document_id", req.DocumentID),
 		zap.Int("total_chunks", len(result.Leaves)),
 		zap.Duration("duration", duration))
+}
+
+func (ki *KnowledgeIngest) recordIngestCompletion(ctx context.Context, req IngestDocumentRequest, processed int) bool {
+	if ki.docRepo != nil {
+		if err := ki.docRepo.MarkIngestCompleted(ctx, req.TenantID, req.DocumentID, processed); err != nil {
+			ki.logger.Warn("knowledge.ingest.mark_completed_failed",
+				zap.String("document_id", req.DocumentID),
+				zap.Error(err))
+			ki.metrics.IncKnowledgeIngest(constants.IngestStatusFailed)
+			ki.markFailed(ctx, req, fmt.Errorf("persist completed ingest state: %w", err))
+			return false
+		}
+	}
+	ki.metrics.IncKnowledgeIngest(constants.IngestStatusCompleted)
+	return true
 }
 
 // doEmbedAndPersist executes the embed → vector insert → PG chunk write
