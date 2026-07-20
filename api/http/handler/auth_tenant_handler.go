@@ -110,10 +110,10 @@ func (h *AuthHandler) CreateUserTenant(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("failed to create tenant")))
 		return
 	}
-	if h.deps.SchemaProvisioner != nil {
-		if pErr := h.deps.SchemaProvisioner.ProvisionSchema(ctx, tenantID); pErr != nil {
-			h.deps.Logger.Error("provision tenant schema", zap.String("tenant_id", tenantID), zap.Error(pErr))
-		}
+	if err := completeTenantProvision(ctx, h.deps.SchemaProvisioner, tenantID); err != nil {
+		h.deps.Logger.Error("provision tenant schema", zap.String("tenant_id", tenantID), zap.Error(err))
+		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("tenant provisioning failed")))
+		return
 	}
 
 	globalRole, _ := h.deps.OnboardSvc.GetGlobalRole(ctx, claims.Sub)

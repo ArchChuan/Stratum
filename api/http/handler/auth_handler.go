@@ -92,3 +92,18 @@ func randomState() (string, error) {
 	}
 	return base64.URLEncoding.EncodeToString(b), nil
 }
+
+func completeTenantProvision(ctx context.Context, provisioner iamport.TenantSchemaProvisioner, tenantID string) error {
+	if provisioner == nil {
+		return fmt.Errorf("tenant schema provisioner unavailable")
+	}
+	if err := provisioner.ProvisionSchema(ctx, tenantID); err != nil {
+		_ = provisioner.MarkProvisioningFailed(context.WithoutCancel(ctx), tenantID)
+		return fmt.Errorf("provision tenant schema: %w", err)
+	}
+	if err := provisioner.ActivateTenant(ctx, tenantID); err != nil {
+		_ = provisioner.MarkProvisioningFailed(context.WithoutCancel(ctx), tenantID)
+		return fmt.Errorf("activate provisioned tenant: %w", err)
+	}
+	return nil
+}

@@ -57,7 +57,7 @@ func (r *OnboardRepo) CreateTenant(ctx context.Context, in domain.CreateTenantIn
 	}
 
 	if _, err = tx.Exec(ctx,
-		`INSERT INTO tenants (id, name, slug, github_org_name) VALUES ($1, $2, $3, $4)`,
+		`INSERT INTO tenants (id, name, slug, github_org_name, status) VALUES ($1, $2, $3, $4, 'provisioning')`,
 		tenantID, in.Name, slug, in.GitHubOrg,
 	); err != nil {
 		return nil, fmt.Errorf("onboard_repo: insert tenant: %w", err)
@@ -92,7 +92,7 @@ func (r *OnboardRepo) CreateTenantForUser(ctx context.Context, userID, name stri
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	if _, err = tx.Exec(ctx,
-		`INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)`,
+		`INSERT INTO tenants (id, name, slug, status) VALUES ($1, $2, $3, 'provisioning')`,
 		tenantID, name, tenantID[:8],
 	); err != nil {
 		return "", fmt.Errorf("onboard_repo: insert tenant: %w", err)
