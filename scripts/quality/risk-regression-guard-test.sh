@@ -102,4 +102,17 @@ assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'actions/setup-node@' 'CI Node setup for full risk guard'
 assert_file_contains "${ROOT}/Makefile" '^risk-guardrails:' 'Makefile risk guard target'
 
+explanation="$(/bin/bash "${CHECKER}" --explain)"
+for principle in 'fail closed' 'bearer credential' 'tenant-scoped' \
+  '破坏性' '持久化失败' '关闭旧资源' '真实链路验证'; do
+  if ! grep -q "${principle}" <<< "${explanation}"; then
+    echo "risk guard explanation missing principle: ${principle}" >&2
+    exit 1
+  fi
+done
+if ! grep -q 'make risk-guardrails' <<< "${explanation}"; then
+  echo 'risk guard explanation does not expose make risk-guardrails' >&2
+  exit 1
+fi
+
 echo 'risk regression guard tests passed'
