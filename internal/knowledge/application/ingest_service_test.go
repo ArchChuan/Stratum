@@ -6,7 +6,8 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
-	"github.com/byteBuilderX/stratum/pkg/textchunk"
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
+	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	"go.uber.org/zap"
 )
 
@@ -134,7 +135,7 @@ func TestIngestDocumentSemanticStrategyUsesWorkspaceEmbeddingModelForChunking(t 
 	}
 	embedder := &recordingEmbedder{dim: 1536}
 	docRepo := newMockDocRepo()
-	ingest := NewKnowledgeIngest(parser, nil, nil, nil, logger)
+	ingest := NewKnowledgeIngest(parser, document.NewChunkingService(), nil, nil, logger)
 	ingest.SetDocRepo(docRepo)
 	ingest.SetEmbedResolver(func(_ context.Context, tenantID, model string) EmbedClient {
 		embedder.recordResolverCall(tenantID, model)
@@ -172,9 +173,8 @@ func TestIngestDocumentUsesWorkspaceChunkSizeAndOverlap(t *testing.T) {
 	logger := zap.NewNop()
 	parser := &mockParser{out: "这是一段超过最小长度的知识库文档内容，用于验证分块参数会从知识库配置传入实际分块策略。" +
 		"如果仍然使用默认值，记录型策略会捕获到错误的分块大小和重叠长度。"}
-	strategy := &recordingChunkStrategy{}
-	ingest := NewKnowledgeIngest(parser, nil, nil, nil, logger)
-	ingest.strategies[domain.ChunkingStrategyRecursive] = strategy
+	strategy := &recordingChunkingService{}
+	ingest := NewKnowledgeIngest(parser, strategy, nil, nil, logger)
 
 	_, err := ingest.IngestDocument(context.Background(), IngestDocumentRequest{
 		TenantID:         "tenant-a",
@@ -202,29 +202,37 @@ func TestIngestDocumentUsesWorkspaceChunkSizeAndOverlap(t *testing.T) {
 	}
 }
 
-type recordingChunkStrategy struct {
+type recordingChunkingService struct {
 	mu           sync.Mutex
 	maxRunes     int
 	overlapRunes int
 }
 
-func (s *recordingChunkStrategy) Name() string { return domain.ChunkingStrategyRecursive }
+func (s *recordingChunkingService) Clean(text string) string { return text }
 
-func (s *recordingChunkStrategy) Chunk(_ context.Context, _ string, maxRunes, overlapRunes int, _ textchunk.Embedder) textchunk.ChunkResult {
+func (s *recordingChunkingService) Chunk(
+	_ context.Context,
+	_, _ string,
+	maxRunes, overlapRunes int,
+	_ knowledgeport.Embedder,
+) (knowledgeport.ChunkResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.maxRunes = maxRunes
 	s.overlapRunes = overlapRunes
-	return textchunk.ChunkResult{
-		Leaves: []textchunk.TextChunk{{
+	return knowledgeport.ChunkResult{
+		Leaves: []knowledgeport.TextChunk{{
 			Content: "这是一段超过最小长度的分块结果，用于通过清洗过滤并触发后续异步导入流程。" +
 				"测试只关心分块参数是否传入策略，不依赖后台向量写入完成。",
-			Index: 0,
 		}},
-	}
+	}, nil
 }
 
-func (s *recordingChunkStrategy) params() (int, int) {
+func (s *recordingChunkingService) Filter(chunks []knowledgeport.TextChunk) []knowledgeport.TextChunk {
+	return chunks
+}
+
+func (s *recordingChunkingService) params() (int, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.maxRunes, s.overlapRunes

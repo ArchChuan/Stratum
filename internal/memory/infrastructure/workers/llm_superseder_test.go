@@ -7,28 +7,44 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llminfra "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
-type completionClientFunc func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error)
+type completionClientFunc func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error)
 
-func (f completionClientFunc) Complete(ctx context.Context, req *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+func (f completionClientFunc) Complete(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
 	return f(ctx, req)
+}
+
+type testGatewayAdapter struct{ gateway *llminfra.Gateway }
+
+func (a testGatewayAdapter) Complete(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	messages := make([]llminfra.Message, len(req.Messages))
+	for i, message := range req.Messages {
+		messages[i] = llminfra.Message{Role: message.Role, Content: message.Content}
+	}
+	response, err := a.gateway.Complete(ctx, &llminfra.CompletionRequest{
+		Model: req.Model, Messages: messages, Temperature: float32(req.Temperature), MaxTokens: req.MaxTokens,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &memport.CompletionResponse{Content: response.Content}, nil
 }
 
 func TestResolvingLLMSupersederUsesCurrentTenantClientOnEveryCall(t *testing.T) {
 	var resolved, calledA, calledB int
-	clientA := completionClientFunc(func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+	clientA := completionClientFunc(func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
 		calledA++
-		return &llmdomain.CompletionResponse{Content: `{"supersedes":false,"reason":"a"}`}, nil
+		return &memport.CompletionResponse{Content: `{"supersedes":false,"reason":"a"}`}, nil
 	})
-	clientB := completionClientFunc(func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+	clientB := completionClientFunc(func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
 		calledB++
-		return &llmdomain.CompletionResponse{Content: `{"supersedes":true,"reason":"b"}`}, nil
+		return &memport.CompletionResponse{Content: `{"supersedes":true,"reason":"b"}`}, nil
 	})
 	resolver := func(context.Context, string) (workers.TenantLLMClient, error) {
 		resolved++
@@ -74,9 +90,9 @@ func TestResolvingLLMSupersederRoutesThroughNewProviderGateway(t *testing.T) {
 	judge := workers.NewResolvingLLMSuperseder("tenant-1", func(context.Context, string) (workers.TenantLLMClient, error) {
 		resolved++
 		if resolved == 1 {
-			return qwenGateway, nil
+			return testGatewayAdapter{gateway: qwenGateway}, nil
 		}
-		return zhipuGateway, nil
+		return testGatewayAdapter{gateway: zhipuGateway}, nil
 	})
 
 	first, err := judge.JudgeSupersede(context.Background(), "old", "new")
@@ -92,9 +108,9 @@ func TestResolvingLLMSupersederRoutesThroughNewProviderGateway(t *testing.T) {
 func TestResolvingLLMSupersederDoesNotReuseClientAfterResolverFailure(t *testing.T) {
 	available := true
 	calls := 0
-	client := completionClientFunc(func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+	client := completionClientFunc(func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
 		calls++
-		return &llmdomain.CompletionResponse{Content: `{"supersedes":false,"reason":"ok"}`}, nil
+		return &memport.CompletionResponse{Content: `{"supersedes":false,"reason":"ok"}`}, nil
 	})
 	resolver := func(context.Context, string) (workers.TenantLLMClient, error) {
 		if !available {

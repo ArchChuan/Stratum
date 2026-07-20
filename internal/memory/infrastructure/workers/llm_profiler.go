@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 )
@@ -72,8 +71,8 @@ func (p *LLMEntityProfiler) GenerateProfile(ctx context.Context, entityName, ent
 		return "", fmt.Errorf("llm generate profile: client unavailable")
 	}
 
-	resp, err := client.Complete(ctx, &llmgateway.CompletionRequest{
-		Messages:  []llmgateway.Message{{Role: "user", Content: prompt}},
+	resp, err := client.Complete(ctx, &memport.CompletionRequest{
+		Messages:  []memport.CompletionMessage{{Role: "user", Content: prompt}},
 		MaxTokens: 512,
 	})
 	if err != nil {

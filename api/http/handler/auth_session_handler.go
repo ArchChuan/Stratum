@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
-	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
+	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -65,7 +65,7 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		}
 	}
 
-	claims := application.TokenClaims{
+	claims := iamport.TokenClaims{
 		Sub: storedClaims.UserID, TenantID: storedClaims.TenantID, Role: tenantRole, JTI: newRawRT[:8],
 		GlobalRole: globalRole,
 		SystemRole: domain.DeriveSystemRole([]domain.TenantMembership{{TenantID: storedClaims.TenantID, Role: tenantRole}}),
@@ -109,7 +109,7 @@ func (h *AuthHandler) Me(c *gin.Context) {
 	}
 
 	claims, err := h.deps.JWTService.Verify(tokenStr)
-	if err != nil {
+	if err != nil || claims == nil {
 		h.deps.Logger.Debug("auth/me verify", zap.Error(err))
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("invalid token")))
 		return

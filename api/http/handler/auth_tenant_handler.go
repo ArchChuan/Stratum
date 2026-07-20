@@ -16,14 +16,17 @@ import (
 // POST /auth/switch-tenant
 func (h *AuthHandler) SwitchTenant(c *gin.Context) {
 	ctx := c.Request.Context()
-
 	authHeader := c.GetHeader("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("missing Authorization header")))
 		return
 	}
+	if h.deps.JWTService == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("JWT service not initialized")))
+		return
+	}
 	claims, err := h.deps.JWTService.Verify(strings.TrimPrefix(authHeader, "Bearer "))
-	if err != nil {
+	if err != nil || claims == nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("invalid token")))
 		return
 	}
@@ -78,14 +81,17 @@ func (h *AuthHandler) SwitchTenant(c *gin.Context) {
 // POST /auth/create-tenant
 func (h *AuthHandler) CreateUserTenant(c *gin.Context) {
 	ctx := c.Request.Context()
-
 	authHeader := c.GetHeader("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("missing Authorization header")))
 		return
 	}
+	if h.deps.JWTService == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("JWT service not initialized")))
+		return
+	}
 	claims, err := h.deps.JWTService.Verify(strings.TrimPrefix(authHeader, "Bearer "))
-	if err != nil {
+	if err != nil || claims == nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("invalid token")))
 		return
 	}

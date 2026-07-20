@@ -13,8 +13,6 @@ import (
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
-	pgcontext "github.com/byteBuilderX/stratum/pkg/storage/postgres"
-	"github.com/byteBuilderX/stratum/pkg/vector"
 	"go.uber.org/zap"
 )
 
@@ -98,13 +96,13 @@ type RAGService struct {
 	embedResolver EmbedResolver
 	wsRepo        knowledgeport.WorkspaceRepo
 	chunkRepo     knowledgeport.ChunkRepo
-	vectorStore   *vector.VectorStore
+	vectorStore   knowledgeport.VectorStore
 	logger        *zap.Logger
 }
 
 func NewRAGService(
 	embeddingSvc knowledgeport.Embedder,
-	vectorStore *vector.VectorStore,
+	vectorStore knowledgeport.VectorStore,
 	logger *zap.Logger,
 ) *RAGService {
 	return &RAGService{
@@ -140,7 +138,7 @@ type RAGQueryRequest struct {
 type RAGQueryResult struct {
 	Answer        string
 	Sources       []Source
-	VectorResults []vector.SearchResult
+	VectorResults []knowledgeport.VectorSearchResult
 	Mode          string
 	Latency       time.Duration
 }
@@ -232,7 +230,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 			return nil, fmt.Errorf("hybrid search not available: chunk store not configured")
 		}
 		type vRes struct {
-			r []vector.SearchResult
+			r []knowledgeport.VectorSearchResult
 			e error
 		}
 		type kRes struct {
@@ -340,7 +338,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	return result, nil
 }
 
-func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int, embedder knowledgeport.Embedder) ([]vector.SearchResult, error) {
+func (rs *RAGService) queryVector(ctx context.Context, question string, collection string, topK int, embedder knowledgeport.Embedder) ([]knowledgeport.VectorSearchResult, error) {
 	rs.logger.Debug("querying vector store")
 
 	if embedder == nil {
@@ -364,10 +362,9 @@ func (rs *RAGService) queryVector(ctx context.Context, question string, collecti
 	return results, nil
 }
 
-func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, question string, workspace string, topK int) ([]string, error) {
-	tenantID := ""
-	if tc, ok := pgcontext.FromContext(ctx); ok {
-		tenantID = tc.TenantID
+func (rs *RAGService) RetrieveRelevantChunks(ctx context.Context, tenantID, question, workspace string, topK int) ([]string, error) {
+	if tenantID == "" {
+		return nil, fmt.Errorf("knowledge: tenant_id is empty")
 	}
 	collectionName := constants.CollectionName(tenantID, workspace)
 

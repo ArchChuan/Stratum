@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,20 +30,7 @@ func (s *PgExecutionStore) execTenant(ctx context.Context, fn func(context.Conte
 	if !ok || tc.TenantID == "" {
 		return fmt.Errorf("execution_store: missing tenant context")
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("execution_store: begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	schema := "tenant_" + tc.TenantID
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL search_path = "%s", public`, schema)); err != nil {
-		return fmt.Errorf("execution_store: set search_path: %w", err)
-	}
-	if err := fn(ctx, tx); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return pgstore.Wrap(s.pool).ExecTenant(ctx, tc.TenantID, fn)
 }
 
 // Insert writes an execution record into the tenant schema. Safe to call in a goroutine.

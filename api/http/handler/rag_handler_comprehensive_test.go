@@ -12,11 +12,12 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	knowledgevector "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/vectorstore"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
+	storagemilvus "github.com/byteBuilderX/stratum/pkg/storage/milvus"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
-	"github.com/byteBuilderX/stratum/pkg/vector"
 )
 
 func setupRAGRouter(handler *RAGHandler) *gin.Engine {
@@ -38,8 +39,8 @@ func setupRAGRouter(handler *RAGHandler) *gin.Engine {
 // constructed with nil deps — never reached on these inputs).
 func newTestRAGHandler(logger *zap.Logger) *RAGHandler {
 	embedSvc := embedding.NewEmbeddingService(llmgateway.NewQwenClient("", logger), logger)
-	vectorStore := vector.NewVectorStore("localhost", "19530", logger)
-	ragService := knowledge.NewRAGService(embedSvc, vectorStore, logger)
+	vectorStore := storagemilvus.NewVectorStore("localhost", "19530", logger)
+	ragService := knowledge.NewRAGService(embedSvc, knowledgevector.New(vectorStore), logger)
 	return NewRAGHandler(ragService, nil, logger)
 }
 

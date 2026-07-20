@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 )
@@ -50,8 +49,8 @@ func (s *LLMSuperseder) JudgeSupersede(ctx context.Context, oldFact, newFact str
 
 只输出 JSON，不加任何说明：
 {"supersedes": true/false, "reason": "简短说明"}`, oldFact, newFact)
-	resp, err := client.Complete(ctx, &llmgateway.CompletionRequest{
-		Messages:  []llmgateway.Message{{Role: "user", Content: prompt}},
+	resp, err := client.Complete(ctx, &memport.CompletionRequest{
+		Messages:  []memport.CompletionMessage{{Role: "user", Content: prompt}},
 		MaxTokens: 256,
 	})
 	if err != nil {

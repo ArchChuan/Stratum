@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
+	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -217,18 +218,7 @@ func (r *EntityRepo) CountByUser(ctx context.Context, tenantID, userID string) (
 }
 
 func (r *EntityRepo) execTenant(ctx context.Context, tenantID string, fn func(context.Context, pgx.Tx) error) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL search_path = "tenant_%s", public`, tenantID)); err != nil {
-		return err
-	}
-	if err := fn(ctx, tx); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return pgstore.Wrap(r.pool).ExecTenant(ctx, tenantID, fn)
 }
 
 // DeleteAllByUser hard-deletes every memory_entities row owned by userID within the tenant schema.

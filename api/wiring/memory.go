@@ -2,11 +2,13 @@ package wiring
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	memory "github.com/byteBuilderX/stratum/internal/memory/application"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/persistence"
@@ -26,6 +28,35 @@ type Memory struct {
 	Injector port.MemoryInjector
 	Pipeline *pipeline.Pipeline
 	RecallFn port.RecallMemoryFn
+}
+
+type memoryGatewayCompleter interface {
+	Complete(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error)
+}
+
+type memoryLLMAdapter struct{ client memoryGatewayCompleter }
+
+func (a memoryLLMAdapter) Complete(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	if a.client == nil {
+		return nil, fmt.Errorf("memory llm adapter: client is nil")
+	}
+	if req == nil {
+		return nil, fmt.Errorf("memory llm adapter: request is nil")
+	}
+	messages := make([]llmdomain.Message, len(req.Messages))
+	for i, message := range req.Messages {
+		messages[i] = llmdomain.Message{Role: message.Role, Content: message.Content}
+	}
+	response, err := a.client.Complete(ctx, &llmdomain.CompletionRequest{
+		Model: req.Model, Messages: messages, Temperature: float32(req.Temperature), MaxTokens: req.MaxTokens,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if response == nil {
+		return nil, fmt.Errorf("memory llm adapter: provider returned nil response")
+	}
+	return &memport.CompletionResponse{Content: response.Content, CompletionTokens: response.Usage.CompletionTokens}, nil
 }
 
 func (c *Container) buildMemory(ctx context.Context) error {
@@ -58,7 +89,7 @@ func (c *Container) buildMemory(ctx context.Context) error {
 				if llm == nil {
 					return nil
 				}
-				return pipeline.NewLLMExtractor(llm)
+				return pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm})
 			})
 			// Per-tenant inline supersede judge (nil-safe): mirrors the extractor
 			// resolver so ExtractFacts' mid-similarity LLM branch is live in prod,
@@ -68,7 +99,7 @@ func (c *Container) buildMemory(ctx context.Context) error {
 				if llm == nil {
 					return nil
 				}
-				return memworkers.NewLLMSuperseder(llm)
+				return memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm})
 			})
 		}
 		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
@@ -168,7 +199,7 @@ func (c *Container) buildMemory(ctx context.Context) error {
 				if gw == nil {
 					return nil
 				}
-				return gw
+				return memoryLLMAdapter{client: gw}
 			})
 		}
 		// Pipeline lifecycle (Start/Stop) is owned by the cmd/server Harness
@@ -237,7 +268,11 @@ func BuildMemoryWorkers(c *Container) []interface {
 		var workerLLMResolver memworkers.TenantLLMResolver
 		if llmRes != nil {
 			workerLLMResolver = func(ctx context.Context, tenantID string) (memworkers.TenantLLMClient, error) {
-				return llmRes.ResolveWorkerLLM(ctx, tenantID)
+				llm, err := llmRes.ResolveWorkerLLM(ctx, tenantID)
+				if err != nil || llm == nil {
+					return nil, err
+				}
+				return memoryLLMAdapter{client: llm}, nil
 			}
 		}
 		return appendTenantLLMWorkers(ws, tid, entityRepo, factRepo, historyRepo, workerLLMResolver, c.Logger)

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	memworkers "github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -63,6 +64,21 @@ func TestBuildTenantLLMWorkersUsesDynamicProcessorsWithoutEagerResolve(t *testin
 
 type completionClientForWiringTest struct{}
 
-func (completionClientForWiringTest) Complete(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
-	return &llmdomain.CompletionResponse{}, nil
+func (completionClientForWiringTest) Complete(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	return &memport.CompletionResponse{}, nil
+}
+
+type nilCompletionClientForWiringTest struct{}
+
+func (nilCompletionClientForWiringTest) Complete(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+	return nil, nil
+}
+
+func TestMemoryLLMAdapterRejectsNilProviderResponse(t *testing.T) {
+	_, err := (memoryLLMAdapter{client: nilCompletionClientForWiringTest{}}).Complete(
+		context.Background(), &memport.CompletionRequest{},
+	)
+	if err == nil {
+		t.Fatal("expected nil provider response to fail closed")
+	}
 }

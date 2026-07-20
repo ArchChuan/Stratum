@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 )
 
 type extractorLLMStub struct {
@@ -13,9 +13,9 @@ type extractorLLMStub struct {
 	prompt  string
 }
 
-func (s *extractorLLMStub) Complete(_ context.Context, req *llmgateway.CompletionRequest) (*llmgateway.CompletionResponse, error) {
+func (s *extractorLLMStub) Complete(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
 	s.prompt = req.Messages[0].Content
-	return &llmgateway.CompletionResponse{Content: s.content}, nil
+	return &memport.CompletionResponse{Content: s.content}, nil
 }
 
 func TestLLMExtractorDecodesFactTypeAndExplicitZeroConfidence(t *testing.T) {

@@ -190,8 +190,11 @@ func NewFactRepo(pool *pgxpool.Pool) *FactRepo {
 }
 
 func (r *FactRepo) execTenant(ctx context.Context, tenantID string, fn func(context.Context, pgx.Tx) error) error {
-	if r.pool == nil || tenantID == "" {
-		return nil
+	if r.pool == nil {
+		return fmt.Errorf("memory: fact persistence pool is nil")
+	}
+	if tenantID == "" {
+		return fmt.Errorf("memory: tenant_id is empty")
 	}
 	return pgstore.Wrap(r.pool).ExecTenant(ctx, tenantID, fn)
 }

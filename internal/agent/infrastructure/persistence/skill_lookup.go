@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -19,12 +20,10 @@ func NewPgSkillLookup(db *pgxpool.Pool) *PgSkillLookup {
 }
 
 func (s *PgSkillLookup) LookupSkill(ctx context.Context, tenantID, skillID string) (string, string, error) {
-	schema := fmt.Sprintf(`"tenant_%s"`, tenantID)
 	var name, description string
-	err := s.db.QueryRow(ctx,
-		fmt.Sprintf(`SELECT name, description FROM %s.skills WHERE id=$1`, schema),
-		skillID,
-	).Scan(&name, &description)
+	err := pgstore.Wrap(s.db).ExecTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT name, description FROM skills WHERE id=$1`, skillID).Scan(&name, &description)
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", "", nil

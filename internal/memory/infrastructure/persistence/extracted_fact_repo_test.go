@@ -169,9 +169,9 @@ func TestExtractFactsVectorFailureRetryUsesCommittedCanonicalFact(t *testing.T) 
 	entityRepo := persistence.NewEntityRepo(pool)
 	vectors := &failOnceVectorStore{}
 	service := application.NewMemoryService(factRepo, entityRepo, nil, vectors, deterministicExtractor{}, deterministicEmbedder{}, nil, nil)
-	req := &application.ExtractFactsRequest{
+	req := &port.ExtractFactsRequest{
 		TenantID: "test_fact_vector_retry", UserID: "user-1", AgentID: "agent-1", Scope: "user",
-		SourceMessageID: "message-1", SourceTaskID: 42, Messages: []application.MessageDTO{{Role: "user", Content: "I use Go"}},
+		SourceMessageID: "message-1", SourceTaskID: 42, Messages: []port.MessageDTO{{Role: "user", Content: "I use Go"}},
 	}
 
 	require.ErrorContains(t, service.ExtractFacts(context.Background(), req), "upsert vector")

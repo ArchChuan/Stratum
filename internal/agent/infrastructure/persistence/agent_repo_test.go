@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -14,6 +15,23 @@ import (
 func tenantCtx(tenantID string) context.Context {
 	tc := &tenantdb.TenantContext{TenantID: tenantID, UserID: "u1", Role: tenantdb.RoleTenantAdmin}
 	return tenantdb.WithTenant(context.Background(), tc)
+}
+
+func TestAgentRepoRejectsInvalidTenantBeforeBeginningTransaction(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	repo := &PgAgentRepo{pool: pool}
+	err = repo.Register(tenantCtx(`bad"tenant`), &domain.AgentConfig{ID: "a1"})
+	if err == nil || !strings.Contains(err.Error(), "postgres: invalid tenant_id") {
+		t.Fatalf("expected shared tenant validation error, got %v", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestAgentRepo_Register(t *testing.T) {

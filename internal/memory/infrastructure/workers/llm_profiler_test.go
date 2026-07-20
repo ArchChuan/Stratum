@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 )
 
@@ -18,7 +18,7 @@ type fakeLLMClient struct {
 	lastMaxToks int
 }
 
-func (f *fakeLLMClient) Complete(_ context.Context, req *llmgateway.CompletionRequest) (*llmgateway.CompletionResponse, error) {
+func (f *fakeLLMClient) Complete(_ context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
 	if len(req.Messages) > 0 {
 		f.lastPrompt = req.Messages[0].Content
 	}
@@ -26,7 +26,7 @@ func (f *fakeLLMClient) Complete(_ context.Context, req *llmgateway.CompletionRe
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &llmgateway.CompletionResponse{Content: f.resp}, nil
+	return &memport.CompletionResponse{Content: f.resp}, nil
 }
 
 func TestLLMEntityProfiler_EmptyFactsSkips(t *testing.T) {

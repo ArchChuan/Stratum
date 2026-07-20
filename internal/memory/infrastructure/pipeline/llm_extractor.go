@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
@@ -38,8 +37,8 @@ fact_type 分类：
 
 只输出 JSON 数组，不加任何说明或 markdown 标记：
 [{"content":"...","importance":0.0-1.0,"fact_type":"...","confidence":0.0-1.0,"entities":["实体名"]}]`, userID, agentID, constants.MemoryMaxFactsPerExtraction)
-	resp, err := e.client.Complete(ctx, &llmgateway.CompletionRequest{
-		Messages: []llmgateway.Message{
+	resp, err := e.client.Complete(ctx, &memport.CompletionRequest{
+		Messages: []memport.CompletionMessage{
 			{Role: "system", Content: system},
 			{Role: "user", Content: message},
 		},

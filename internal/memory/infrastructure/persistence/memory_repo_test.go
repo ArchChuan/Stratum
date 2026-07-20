@@ -3,12 +3,67 @@ package persistence
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/internal/memory/domain"
+	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v2"
 )
 
 const lifecycleTestTenant = "42c9b62d-4f66-4bc4-a1b8-eed81cdae7b1"
+
+func TestMemoryRepoAddRejectsEmptyTenant(t *testing.T) {
+	repo := NewMemoryRepo(nil)
+
+	err := repo.Add(context.Background(), &domain.MemoryEntry{ID: "entry-1"})
+	if err == nil {
+		t.Fatal("expected empty tenant to fail")
+	}
+}
+
+func TestMemoryRepoAddRejectsNilPool(t *testing.T) {
+	repo := NewMemoryRepo(nil)
+
+	err := repo.Add(context.Background(), &domain.MemoryEntry{ID: "entry-1", TenantID: lifecycleTestTenant})
+	if err == nil {
+		t.Fatal("expected nil persistence pool to fail")
+	}
+}
+
+func TestMemoryRepoAddUsesSharedTenantValidation(t *testing.T) {
+	repo := &MemoryRepo{pool: rejectingTenantPool{}}
+
+	err := repo.Add(context.Background(), &domain.MemoryEntry{ID: "entry-1", TenantID: `bad"tenant`})
+	if err == nil || !strings.HasPrefix(err.Error(), "postgres: invalid tenant_id") {
+		t.Fatalf("expected shared tenant validation error, got %v", err)
+	}
+}
+
+func TestMemoryRepoReadsRejectNilPool(t *testing.T) {
+	repo := NewMemoryRepo(nil)
+
+	if _, err := repo.Get(context.Background(), lifecycleTestTenant, "entry-1"); err == nil || !strings.Contains(err.Error(), "pool is nil") {
+		t.Fatalf("Get must fail closed, got %v", err)
+	}
+	if _, err := repo.Search(context.Background(), lifecycleTestTenant, "user-1", "query", 10); err == nil || !strings.Contains(err.Error(), "pool is nil") {
+		t.Fatalf("Search must fail closed, got %v", err)
+	}
+}
+
+func TestMemoryRepoStatsRejectsEmptyTenant(t *testing.T) {
+	repo := &MemoryRepo{pool: rejectingTenantPool{}}
+
+	if _, err := repo.Stats(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "tenant_id is empty") {
+		t.Fatalf("Stats must fail closed, got %v", err)
+	}
+}
+
+type rejectingTenantPool struct{}
+
+func (rejectingTenantPool) Begin(context.Context) (pgx.Tx, error) {
+	return nil, errors.New("transaction should not begin")
+}
 
 func TestMemoryRepoDeleteAllByUserCleansOwnedLifecycleRowsAtomically(t *testing.T) {
 	pool, err := pgxmock.NewPool()

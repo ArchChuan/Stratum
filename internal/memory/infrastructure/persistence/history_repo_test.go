@@ -69,6 +69,8 @@ func TestHistoryLifecycleQueriesPromoteAndProtectFacts(t *testing.T) {
 
 func TestHistoryOverflowQueryReturnsOneBoundedTenantLocalGroupWithoutTruncation(t *testing.T) {
 	for _, want := range []string{
+		"$1::bigint",
+		"$2::bigint",
 		"PARTITION BY conversation_id,user_id,agent_id,scope,tier",
 		"GROUP BY conversation_id,user_id,agent_id,scope,tier",
 		"SELECT conversation_id,user_id,agent_id,scope,tier FROM groups",

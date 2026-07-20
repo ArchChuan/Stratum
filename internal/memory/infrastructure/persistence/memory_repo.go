@@ -5,15 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
+	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
-
-var uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type tenantPool interface {
 	Begin(context.Context) (pgx.Tx, error)
@@ -24,41 +22,22 @@ type MemoryRepo struct {
 	pool tenantPool
 }
 
-// NewMemoryRepo wires a MemoryRepo over a pgx pool. Pool may be nil; in that
-// case all methods return nil / empty results so the application layer
-// degrades gracefully when persistence is disabled.
+// NewMemoryRepo wires a MemoryRepo over a pgx pool. Disabled persistence must
+// be represented by an explicit noop implementation at wiring time.
 func NewMemoryRepo(pool *pgxpool.Pool) *MemoryRepo {
+	if pool == nil {
+		return &MemoryRepo{}
+	}
 	return &MemoryRepo{pool: pool}
 }
 
 // execTenant runs fn in a transaction with search_path set to the tenant
-// schema. Returns nil silently when pool / tenantID is empty.
+// schema. Missing configuration or tenant identity fails closed.
 func (r *MemoryRepo) execTenant(ctx context.Context, tenantID string, fn func(ctx context.Context, tx pgx.Tx) error) error {
-	if r.pool == nil || tenantID == "" {
-		return nil
+	if r.pool == nil {
+		return fmt.Errorf("memory: persistence pool is nil")
 	}
-	if !uuidRE.MatchString(tenantID) {
-		return fmt.Errorf("memory: invalid tenant_id format")
-	}
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("memory: begin tx: %w", err)
-	}
-	defer func() {
-		if p := recover(); p != nil {
-			_ = tx.Rollback(ctx)
-			panic(p)
-		}
-	}()
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL search_path = "tenant_%s", public`, tenantID)); err != nil {
-		_ = tx.Rollback(ctx)
-		return fmt.Errorf("memory: set search_path: %w", err)
-	}
-	if err := fn(ctx, tx); err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	return tx.Commit(ctx)
+	return pgstore.ExecTenantWith(ctx, r.pool, tenantID, fn)
 }
 
 // Add persists a memory entry. ON CONFLICT DO NOTHING — caller may treat
@@ -79,9 +58,6 @@ func (r *MemoryRepo) Add(ctx context.Context, entry *domain.MemoryEntry) error {
 // Get fetches a memory entry by id within tenant schema.
 // Returns domain.ErrEntryNotFound when no row matches.
 func (r *MemoryRepo) Get(ctx context.Context, tenantID, id string) (*domain.MemoryEntry, error) {
-	if r.pool == nil {
-		return nil, domain.ErrEntryNotFound
-	}
 	var entry *domain.MemoryEntry
 	if err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		row := tx.QueryRow(ctx,
@@ -105,9 +81,6 @@ func (r *MemoryRepo) Get(ctx context.Context, tenantID, id string) (*domain.Memo
 
 // Search returns up to limit entries scoped by userID (empty = all users in tenant).
 func (r *MemoryRepo) Search(ctx context.Context, tenantID, userID, query string, limit int) ([]*domain.MemoryEntry, error) {
-	if r.pool == nil {
-		return nil, nil
-	}
 	if limit <= 0 {
 		limit = 20
 	}
@@ -197,22 +170,28 @@ func (r *MemoryRepo) DeleteAllByAgent(ctx context.Context, tenantID, agentID str
 // receives a zero-value MemoryStats.
 func (r *MemoryRepo) Stats(ctx context.Context, tenantID string) (*domain.MemoryStats, error) {
 	stats := &domain.MemoryStats{}
-	if r.pool == nil || tenantID == "" {
-		return stats, nil
-	}
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_ = tx.QueryRow(ctx, "SELECT COUNT(*) FROM memory_entries").Scan(&stats.TotalEntries)
-		_ = tx.QueryRow(ctx, "SELECT COUNT(*) FROM memory_entries WHERE enriched_at IS NOT NULL").Scan(&stats.LongTermCount)
+		if err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM memory_entries").Scan(&stats.TotalEntries); err != nil {
+			return fmt.Errorf("memory stats total entries: %w", err)
+		}
+		if err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM memory_entries WHERE enriched_at IS NOT NULL").Scan(&stats.LongTermCount); err != nil {
+			return fmt.Errorf("memory stats long-term entries: %w", err)
+		}
 		stats.ShortTermCount = stats.TotalEntries - stats.LongTermCount
-		_ = tx.QueryRow(ctx, "SELECT COUNT(*) FROM memory_entities").Scan(&stats.EntityCount)
-		_ = tx.QueryRow(ctx, "SELECT COUNT(*) FROM chat_conversations").Scan(&stats.SessionsCount)
-		_ = tx.QueryRow(ctx, "SELECT COUNT(DISTINCT user_id) FROM memory_entries WHERE user_id IS NOT NULL").Scan(&stats.ActiveUsers)
+		if err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM memory_entities").Scan(&stats.EntityCount); err != nil {
+			return fmt.Errorf("memory stats entities: %w", err)
+		}
+		if err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM chat_conversations").Scan(&stats.SessionsCount); err != nil {
+			return fmt.Errorf("memory stats sessions: %w", err)
+		}
+		if err := tx.QueryRow(ctx, "SELECT COUNT(DISTINCT user_id) FROM memory_entries WHERE user_id IS NOT NULL").Scan(&stats.ActiveUsers); err != nil {
+			return fmt.Errorf("memory stats active users: %w", err)
+		}
 		stats.VectorCount = stats.LongTermCount
-		_ = tx.QueryRow(ctx, "SELECT COALESCE(MAX(created_at), '1970-01-01') FROM memory_entries").Scan(&stats.LastAccessTime)
-		return nil
+		return tx.QueryRow(ctx, "SELECT COALESCE(MAX(created_at), '1970-01-01') FROM memory_entries").Scan(&stats.LastAccessTime)
 	})
 	if err != nil {
-		return &domain.MemoryStats{}, nil
+		return nil, err
 	}
 	return stats, nil
 }

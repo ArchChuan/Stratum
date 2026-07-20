@@ -8,28 +8,22 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
-
-// FactExtractor defines the minimal interface for fact extraction.
-type FactExtractor interface {
-	ExtractFacts(ctx context.Context, req *application.ExtractFactsRequest) error
-}
 
 // ExtractionWorker polls the extraction queue for a single tenant and processes tasks.
 type ExtractionWorker struct {
 	tenantID string
 	queue    port.ExtractionQueue
-	service  FactExtractor
+	service  port.FactExtractionService
 	logger   *zap.Logger
 	stopCh   chan struct{}
 	stopOnce sync.Once
 }
 
 // NewExtractionWorker creates an extraction worker for a specific tenant.
-func NewExtractionWorker(tenantID string, queue port.ExtractionQueue, service FactExtractor, logger *zap.Logger) *ExtractionWorker {
+func NewExtractionWorker(tenantID string, queue port.ExtractionQueue, service port.FactExtractionService, logger *zap.Logger) *ExtractionWorker {
 	return &ExtractionWorker{
 		tenantID: tenantID,
 		queue:    queue,
@@ -99,12 +93,12 @@ func (w *ExtractionWorker) processTask(ctx context.Context, task *port.Extractio
 		}
 	}()
 
-	var msgs []application.MessageDTO
+	var msgs []port.MessageDTO
 	if err := json.Unmarshal([]byte(task.Content), &msgs); err != nil {
-		msgs = []application.MessageDTO{{Role: "user", Content: task.Content}}
+		msgs = []port.MessageDTO{{Role: "user", Content: task.Content}}
 	}
 
-	req := &application.ExtractFactsRequest{
+	req := &port.ExtractFactsRequest{
 		TenantID:        task.TenantID,
 		UserID:          task.UserID,
 		AgentID:         task.AgentID,

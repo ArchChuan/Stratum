@@ -2,22 +2,27 @@ package port
 
 import "context"
 
-type Document struct {
-	ID     string
-	Vector []float32
-	Meta   map[string]any
+type VectorDocument struct {
+	ID             string
+	Content        string
+	SourceDocument string
+	ChunkIndex     int64
+	Vector         []float32
 }
 
-type Hit struct {
-	ID    string
-	Score float32
-	Meta  map[string]any
+type VectorSearchResult struct {
+	ID             string
+	Content        string
+	SourceDocument string
+	ChunkIndex     int64
+	Score          float32
 }
 
-type VectorIndex interface {
-	EnsureCollection(ctx context.Context, name string, dim int) error
-	Drop(ctx context.Context, name string) error
-	Upsert(ctx context.Context, collection string, docs []Document) error
-	Search(ctx context.Context, collection string, query []float32, topK int) ([]Hit, error)
-	Delete(ctx context.Context, collection string, ids []string) error
+type VectorStore interface {
+	CreateCollectionWithDim(ctx context.Context, collectionName string, dimension int) error
+	Insert(ctx context.Context, collectionName string, docs []VectorDocument) error
+	Search(ctx context.Context, collectionName string, queryVector []float32, topK int) ([]VectorSearchResult, error)
+	Flush(ctx context.Context, collectionName string) error
+	DeleteCollection(ctx context.Context, collectionName string) error
+	CountVectors(ctx context.Context, collectionName string) (int64, error)
 }

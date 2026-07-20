@@ -51,7 +51,7 @@ const historyOverflowQuery = `
 		SELECT *, row_number() OVER (
 			PARTITION BY conversation_id,user_id,agent_id,scope,tier
 			ORDER BY importance DESC,confidence DESC,period_end DESC
-		) rn, CASE tier WHEN 'recent_months' THEN $1 WHEN 'earlier_context' THEN $2 END max_segments
+		) rn, CASE tier WHEN 'recent_months' THEN $1::bigint WHEN 'earlier_context' THEN $2::bigint END max_segments
 		FROM memory_summaries
 		WHERE tier IN ('recent_months','earlier_context') AND status='active' AND aggregation_key IS NOT NULL
 		  AND source_ids IS NOT NULL

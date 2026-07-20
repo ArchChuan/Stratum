@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/byteBuilderX/stratum/pkg/vector"
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 )
 
 func TestMockVectorStoreInterface(t *testing.T) {
@@ -17,7 +17,7 @@ func TestMockVectorStoreInterface(t *testing.T) {
 	if err := mockVectorStore.CreateCollection(ctx, "test-collection"); err != nil {
 		t.Errorf("expected no error from CreateCollection, got %v", err)
 	}
-	chunks := []vector.DocumentChunk{{ID: "chunk-1", Content: "content", SourceDocument: "doc-1", ChunkIndex: 0, Vector: make([]float32, 1536)}}
+	chunks := []knowledgeport.VectorDocument{{ID: "chunk-1", Content: "content", SourceDocument: "doc-1", ChunkIndex: 0, Vector: make([]float32, 1536)}}
 	if err := mockVectorStore.Insert(ctx, "test-collection", chunks); err != nil {
 		t.Errorf("expected no error from Insert, got %v", err)
 	}
@@ -41,7 +41,7 @@ func TestMockVectorStoreInterface(t *testing.T) {
 
 func TestMockVectorStoreSetters(t *testing.T) {
 	mockVectorStore := NewMockVectorStore()
-	testResults := []interface{}{"result1", "result2"}
+	testResults := []knowledgeport.VectorSearchResult{{ID: "result1"}, {ID: "result2"}}
 	mockVectorStore.SetSearchResults(testResults)
 	ctx := context.Background()
 	results, err := mockVectorStore.Search(ctx, "test", make([]float32, 1536), 5)

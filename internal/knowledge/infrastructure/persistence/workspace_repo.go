@@ -57,19 +57,15 @@ func fromJSONB(c jsonbConfig) domain.WorkspaceConfig {
 	}
 }
 
-func schemaFor(tenantID string) string {
-	return "tenant_" + tenantID
-}
-
 // Create inserts a workspace, returning ErrWorkspaceConflict on unique violation.
 func (r *WorkspaceRepo) Create(ctx context.Context, tenantID string, ws *domain.Workspace) error {
-	schema := schemaFor(tenantID)
 	var id string
-	err := r.db.QueryRow(ctx,
-		fmt.Sprintf(`INSERT INTO "%s".rag_workspaces (name, description, config)
-                     VALUES ($1, $2, $3) RETURNING id`, schema),
-		ws.Name, ws.Description, toJSONB(ws.Config),
-	).Scan(&id)
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `INSERT INTO rag_workspaces (name, description, config)
+                     VALUES ($1, $2, $3) RETURNING id`,
+			ws.Name, ws.Description, toJSONB(ws.Config),
+		).Scan(&id)
+	})
 	if err != nil {
 		if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") {
 			return domain.ErrWorkspaceConflict
@@ -82,16 +78,15 @@ func (r *WorkspaceRepo) Create(ctx context.Context, tenantID string, ws *domain.
 
 // GetByName returns a workspace by name; ErrWorkspaceNotFound if absent.
 func (r *WorkspaceRepo) GetByName(ctx context.Context, tenantID, name string) (*domain.Workspace, error) {
-	schema := schemaFor(tenantID)
 	var (
 		ws domain.Workspace
 		jc jsonbConfig
 	)
-	err := r.db.QueryRow(ctx,
-		fmt.Sprintf(`SELECT id, name, COALESCE(description,''), config, created_at, updated_at
-                     FROM "%s".rag_workspaces WHERE name = $1`, schema),
-		name,
-	).Scan(&ws.ID, &ws.Name, &ws.Description, &jc, &ws.CreatedAt, &ws.UpdatedAt)
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT id, name, COALESCE(description,''), config, created_at, updated_at
+                     FROM rag_workspaces WHERE name = $1`, name,
+		).Scan(&ws.ID, &ws.Name, &ws.Description, &jc, &ws.CreatedAt, &ws.UpdatedAt)
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrWorkspaceNotFound
@@ -104,42 +99,41 @@ func (r *WorkspaceRepo) GetByName(ctx context.Context, tenantID, name string) (*
 
 // List returns workspaces ordered by created_at DESC.
 func (r *WorkspaceRepo) List(ctx context.Context, tenantID string) ([]*domain.Workspace, error) {
-	schema := schemaFor(tenantID)
-	rows, err := r.db.Query(ctx,
-		fmt.Sprintf(`SELECT id, name, COALESCE(description,''), config, created_at, updated_at
-                     FROM "%s".rag_workspaces ORDER BY created_at DESC`, schema),
-	)
+	var out []*domain.Workspace
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id, name, COALESCE(description,''), config, created_at, updated_at
+                     FROM rag_workspaces ORDER BY created_at DESC`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ws domain.Workspace
+			var jc jsonbConfig
+			if err := rows.Scan(&ws.ID, &ws.Name, &ws.Description, &jc, &ws.CreatedAt, &ws.UpdatedAt); err != nil {
+				return fmt.Errorf("workspace_repo: scan list row: %w", err)
+			}
+			ws.Config = fromJSONB(jc)
+			out = append(out, &ws)
+		}
+		return rows.Err()
+	})
 	if err != nil {
 		return nil, fmt.Errorf("workspace_repo: list: %w", err)
-	}
-	defer rows.Close()
-
-	var out []*domain.Workspace
-	for rows.Next() {
-		var (
-			ws domain.Workspace
-			jc jsonbConfig
-		)
-		if err := rows.Scan(&ws.ID, &ws.Name, &ws.Description, &jc, &ws.CreatedAt, &ws.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("workspace_repo: scan list row: %w", err)
-		}
-		ws.Config = fromJSONB(jc)
-		out = append(out, &ws)
 	}
 	return out, nil
 }
 
 // UpdateDescriptionAndConfig overwrites description (when non-nil) and config.
 func (r *WorkspaceRepo) UpdateDescriptionAndConfig(ctx context.Context, tenantID, name string, description *string, cfg domain.WorkspaceConfig) error {
-	schema := schemaFor(tenantID)
-	_, err := r.db.Exec(ctx,
-		fmt.Sprintf(`UPDATE "%s".rag_workspaces
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE rag_workspaces
                      SET description = COALESCE($1, description),
                          config = $2,
                          updated_at = NOW()
-                     WHERE name = $3`, schema),
-		description, toJSONB(cfg), name,
-	)
+			WHERE name = $3`, description, toJSONB(cfg), name)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("workspace_repo: update: %w", err)
 	}
@@ -148,11 +142,12 @@ func (r *WorkspaceRepo) UpdateDescriptionAndConfig(ctx context.Context, tenantID
 
 // UpdateName renames a workspace; ErrWorkspaceNotFound on 0 rows, ErrWorkspaceConflict on duplicate.
 func (r *WorkspaceRepo) UpdateName(ctx context.Context, tenantID, oldName, newName string) error {
-	schema := schemaFor(tenantID)
-	tag, err := r.db.Exec(ctx,
-		fmt.Sprintf(`UPDATE "%s".rag_workspaces SET name = $1, updated_at = NOW() WHERE name = $2`, schema),
-		newName, oldName,
-	)
+	var tag pgconn.CommandTag
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		tag, err = tx.Exec(ctx, `UPDATE rag_workspaces SET name = $1, updated_at = NOW() WHERE name = $2`, newName, oldName)
+		return err
+	})
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -167,11 +162,12 @@ func (r *WorkspaceRepo) UpdateName(ctx context.Context, tenantID, oldName, newNa
 }
 
 func (r *WorkspaceRepo) Delete(ctx context.Context, tenantID, name string) error {
-	schema := schemaFor(tenantID)
-	tag, err := r.db.Exec(ctx,
-		fmt.Sprintf(`DELETE FROM "%s".rag_workspaces WHERE name = $1`, schema),
-		name,
-	)
+	var tag pgconn.CommandTag
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		tag, err = tx.Exec(ctx, `DELETE FROM rag_workspaces WHERE name = $1`, name)
+		return err
+	})
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
@@ -187,12 +183,10 @@ func (r *WorkspaceRepo) Delete(ctx context.Context, tenantID, name string) error
 
 // GetConfigForUpload returns just the config of a workspace; ErrWorkspaceNotFound if absent.
 func (r *WorkspaceRepo) GetConfigForUpload(ctx context.Context, tenantID, name string) (domain.WorkspaceConfig, error) {
-	schema := schemaFor(tenantID)
 	var jc jsonbConfig
-	err := r.db.QueryRow(ctx,
-		fmt.Sprintf(`SELECT config FROM "%s".rag_workspaces WHERE name = $1`, schema),
-		name,
-	).Scan(&jc)
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT config FROM rag_workspaces WHERE name = $1`, name).Scan(&jc)
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.WorkspaceConfig{}, domain.ErrWorkspaceNotFound
@@ -204,12 +198,10 @@ func (r *WorkspaceRepo) GetConfigForUpload(ctx context.Context, tenantID, name s
 
 // GetConfigByID returns just the config of a workspace resolved by UUID; ErrWorkspaceNotFound if absent.
 func (r *WorkspaceRepo) GetConfigByID(ctx context.Context, tenantID, id string) (domain.WorkspaceConfig, error) {
-	schema := schemaFor(tenantID)
 	var jc jsonbConfig
-	err := r.db.QueryRow(ctx,
-		fmt.Sprintf(`SELECT config FROM "%s".rag_workspaces WHERE id = $1::uuid`, schema),
-		id,
-	).Scan(&jc)
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT config FROM rag_workspaces WHERE id = $1::uuid`, id).Scan(&jc)
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.WorkspaceConfig{}, domain.ErrWorkspaceNotFound
