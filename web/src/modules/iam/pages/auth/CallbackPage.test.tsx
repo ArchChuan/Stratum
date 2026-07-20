@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { authApi } from '../../api/auth.api';
+
 import { CallbackPage } from './CallbackPage';
 
 const login = vi.fn();
