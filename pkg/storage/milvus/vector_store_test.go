@@ -107,6 +107,24 @@ func TestVectorStore_NewVectorStoreCustomPort(t *testing.T) {
 	}
 }
 
+func TestCollectionCompatibilityRejectsDestructiveRecreation(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		existingDim int
+		requiredDim int
+		hasAgentID  bool
+	}{
+		{name: "dimension mismatch", existingDim: 1536, requiredDim: 1024, hasAgentID: true},
+		{name: "missing field", existingDim: 1536, requiredDim: 1536, hasAgentID: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateCollectionCompatibility(tc.existingDim, tc.requiredDim, tc.hasAgentID); err == nil {
+				t.Fatal("incompatible collection was accepted for request-time recreation")
+			}
+		})
+	}
+}
+
 func TestVectorStoreWithCollectionLockSerializesSameCollection(t *testing.T) {
 	vs := NewVectorStore("localhost", "19530", zap.NewNop())
 	var active int32

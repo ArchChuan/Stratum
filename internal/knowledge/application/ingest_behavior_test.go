@@ -12,6 +12,8 @@ import (
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/textchunk"
+	"github.com/byteBuilderX/stratum/pkg/vector"
 )
 
 // buildIngest wires KnowledgeIngest with test doubles. vectorStore is left
@@ -202,5 +204,43 @@ func TestRecoverStuckIngests_NoRepoIsNoop(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("expected 0 recovered without repo, got %d", n)
+	}
+}
+
+func TestPersistChunksPropagatesParentAndLeafFailures(t *testing.T) {
+	result := textchunk.ChunkResult{
+		Parents: []textchunk.TextChunk{{Content: "parent"}},
+		Leaves:  []textchunk.TextChunk{{Content: "leaf"}},
+	}
+	docChunks := []vector.DocumentChunk{{
+		ID: "doc_chunk_0", Content: "leaf", SourceDocument: "doc", ChunkIndex: 0,
+	}}
+
+	for _, tc := range []struct {
+		name string
+		repo *recordingChunkRepo
+	}{
+		{name: "parent", repo: &recordingChunkRepo{parentErr: errors.New("parent failed")}},
+		{name: "leaf", repo: &recordingChunkRepo{insertErr: errors.New("leaf failed")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ki := &KnowledgeIngest{chunkRepo: tc.repo, logger: zap.NewNop()}
+			err := ki.persistChunks(context.Background(), req("doc"), result, docChunks)
+			if err == nil || !strings.Contains(err.Error(), "failed") {
+				t.Fatalf("persistence failure did not propagate: %v", err)
+			}
+		})
+	}
+}
+
+func TestMarkFailedDetachesFromCanceledJobContext(t *testing.T) {
+	repo := newMockDocRepo()
+	ki := &KnowledgeIngest{docRepo: repo, logger: zap.NewNop()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ki.markFailed(ctx, req("doc"), context.DeadlineExceeded)
+	if repo.markFailedCtxErr != nil {
+		t.Fatalf("terminal state write received canceled context: %v", repo.markFailedCtxErr)
 	}
 }

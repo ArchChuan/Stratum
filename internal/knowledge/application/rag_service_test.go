@@ -187,11 +187,13 @@ type recordingChunkRepo struct {
 	workspaceID string
 	topK        int
 	chunks      []domain.Chunk
+	insertErr   error
+	parentErr   error
 }
 
 func (r *recordingChunkRepo) InsertBatch(ctx context.Context, tenantID, workspaceID string, chunks []domain.Chunk) error {
 	r.workspaceID = workspaceID
-	return nil
+	return r.insertErr
 }
 
 func (r *recordingChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceID, query string, topK int) ([]domain.Chunk, error) {
@@ -206,7 +208,7 @@ func (r *recordingChunkRepo) DeleteByWorkspace(ctx context.Context, tenantID, wo
 }
 
 func (r *recordingChunkRepo) InsertParentBatch(_ context.Context, _, _ string, _ []port.ParentChunk) error {
-	return nil
+	return r.parentErr
 }
 
 func (r *recordingChunkRepo) GetParentByID(_ context.Context, _, _, _ string) (*port.ParentChunk, error) {

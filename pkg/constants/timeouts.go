@@ -45,6 +45,8 @@ const (
 	// detached background goroutine after the handler has already returned.
 	// Independent of any client-side request timeout.
 	KnowledgeIngestTimeout = 10 * time.Minute
+	// KnowledgeIngestStatusWriteTimeout bounds detached terminal-state cleanup.
+	KnowledgeIngestStatusWriteTimeout = 5 * time.Second
 
 	// KnowledgeIngestStuckThreshold is how long a doc may sit in
 	// ingest_status='processing' before startup recovery marks it failed.

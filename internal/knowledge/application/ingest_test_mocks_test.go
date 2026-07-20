@@ -68,6 +68,7 @@ type mockDocRepo struct {
 	markCompletedErr error
 	markFailed       []struct{ ID, Err string }
 	markFailedErr    error
+	markFailedCtxErr error
 
 	existsHash    map[string]bool
 	existsHashErr error
@@ -142,9 +143,10 @@ func (m *mockDocRepo) MarkIngestCompleted(_ context.Context, _, docID string, pr
 	return nil
 }
 
-func (m *mockDocRepo) MarkIngestFailed(_ context.Context, _, docID, errMsg string) error {
+func (m *mockDocRepo) MarkIngestFailed(ctx context.Context, _, docID, errMsg string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.markFailedCtxErr = ctx.Err()
 	if m.markFailedErr != nil {
 		return m.markFailedErr
 	}
