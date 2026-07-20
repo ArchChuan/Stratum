@@ -1,6 +1,8 @@
 package http
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/wiring"
 	"github.com/byteBuilderX/stratum/config"
+	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
@@ -50,5 +53,24 @@ func TestProtectedRoutesRejectRequestsWhenJWTServiceMissing(t *testing.T) {
 				t.Fatalf("expected 401 for %s %s, got %d: %s", tc.method, tc.path, w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestBaseAuthRoutesRegisterWithoutGitHubOAuth(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics := observability.NewPrometheusMetrics(zap.NewNop())
+	router := NewRouter(&wiring.Container{
+		Config: &config.Config{FrontendURL: "http://localhost:3002"}, Logger: zap.NewNop(),
+		Platform:   &wiring.Platform{JWTService: application.NewJWTService(key), Metrics: metrics},
+		LLMGateway: &wiring.LLMGateway{}, Skill: &wiring.Skill{}, Agent: &wiring.Agent{},
+		Knowledge: &wiring.Knowledge{}, MCP: &wiring.MCP{},
+	})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)) //nolint:noctx
+	if w.Code == http.StatusNotFound {
+		t.Fatal("refresh route was removed because GitHub OAuth is not configured")
 	}
 }

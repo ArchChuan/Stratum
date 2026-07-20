@@ -229,7 +229,7 @@ func (h *TenantHandler) DeleteSelf(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	roleStr, _ := c.Get("tenant_role")
+	roleStr, _ := c.Get(middleware.ContextKeyRole)
 	if roleStr != "owner" {
 		_ = c.Error(middleware.NewHTTPError(http.StatusForbidden, application.ErrForbiddenOwner))
 		return

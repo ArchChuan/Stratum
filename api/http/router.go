@@ -103,7 +103,7 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 // non-nil).
 func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
 	cfg := c.Config
-	if cfg.GitHubClientID == "" || c.Platform.JWTService == nil {
+	if c.Platform.JWTService == nil {
 		return
 	}
 	jwtSvc := c.Platform.JWTService
@@ -123,8 +123,10 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	authLimiter := middleware.NewRateLimiterStore(middleware.AuthRate, middleware.AuthBurst)
 	authRoutes := r.Group("/auth")
 	{
-		authRoutes.GET("/github", authHandler.GitHubLogin)
-		authRoutes.GET("/github/callback", middleware.RateLimit(authLimiter), authHandler.GitHubCallback)
+		if cfg.GitHubClientID != "" && c.Platform.GitHubClient != nil {
+			authRoutes.GET("/github", authHandler.GitHubLogin)
+			authRoutes.GET("/github/callback", middleware.RateLimit(authLimiter), authHandler.GitHubCallback)
+		}
 		authRoutes.POST("/register", middleware.RateLimit(authLimiter), authHandler.Register)
 		authRoutes.POST("/guest", middleware.RateLimit(authLimiter), authHandler.GuestLogin)
 		authRoutes.POST("/refresh", middleware.RateLimit(authLimiter), authHandler.Refresh)

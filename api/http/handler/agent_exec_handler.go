@@ -58,9 +58,7 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 			return
 		}
 		h.logger.Error("agent execution failed", zap.String("agentId", id), zap.Error(err))
-		c.JSON(http.StatusOK, AgentExecutionResult{
-			AgentID: id, Input: req.Query, Output: "", Steps: 0, Duration: "0s", Error: err.Error(),
-		})
+		respondAgentExecutionError(c, err)
 		return
 	}
 	thoughtsJSON, _ := json.Marshal(result.Thoughts)
@@ -79,6 +77,10 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 			"toolCallsJSON": string(toolCallsJSON),
 		},
 	})
+}
+
+func respondAgentExecutionError(c *gin.Context, err error) {
+	_ = c.Error(err)
 }
 
 // ExecuteAgentStream runs an agent and streams tokens via SSE.
