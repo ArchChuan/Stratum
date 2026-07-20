@@ -247,6 +247,9 @@ func (r *OnboardRepo) GetTenantRole(ctx context.Context, userID, tenantID string
 		`SELECT COALESCE(role, 'member') FROM tenant_members WHERE user_id = $1 AND tenant_id = $2`,
 		userID, tenantID,
 	).Scan(&role); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", domain.ErrMemberNotFound
+		}
 		return "member", fmt.Errorf("onboard_repo: get tenant role: %w", err)
 	}
 	return role, nil

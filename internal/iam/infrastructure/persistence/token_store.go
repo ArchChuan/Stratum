@@ -9,6 +9,8 @@ import (
 	"time"
 
 	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
@@ -18,8 +20,14 @@ const blacklistKeyPrefix = "rt:blacklist:"
 // TokenStore persists refresh tokens in PostgreSQL and caches revocations in Redis.
 // The DB stores SHA256(rawToken) — the raw token is only ever in the HTTP cookie.
 type TokenStore struct {
-	db  *pgxpool.Pool
+	db  tokenStoreDB
 	rdb *redis.Client
+}
+
+type tokenStoreDB interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // NewTokenStore creates a TokenStore.
@@ -54,11 +62,16 @@ func (s *TokenStore) Create(ctx context.Context, userID, tenantID, rawToken stri
 // Rotate revokes the old token, adds it to the Redis blacklist, and creates a new one.
 func (s *TokenStore) Rotate(ctx context.Context, oldRaw, newRaw string, ttl time.Duration) error {
 	oldHash := hashToken(oldRaw)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("token_store: rotate begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	var userID string
 	var tenantID *string
 	var expiresAt time.Time
-	err := s.db.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		`UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL
 		 RETURNING user_id, tenant_id, expires_at`,
 		oldHash,
@@ -67,16 +80,26 @@ func (s *TokenStore) Rotate(ctx context.Context, oldRaw, newRaw string, ttl time
 		return fmt.Errorf("token_store: rotate revoke old: %w", err)
 	}
 
-	remaining := time.Until(expiresAt)
-	if remaining > 0 {
-		s.rdb.Set(ctx, blacklistKeyPrefix+oldHash, "1", remaining)
-	}
-
-	tid := ""
+	var tid interface{}
 	if tenantID != nil {
 		tid = *tenantID
 	}
-	return s.Create(ctx, userID, tid, newRaw, ttl)
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO refresh_tokens (token_hash, user_id, tenant_id, expires_at)
+		 VALUES ($1, $2, $3, $4)`,
+		hashToken(newRaw), userID, tid, time.Now().UTC().Add(ttl),
+	); err != nil {
+		return fmt.Errorf("token_store: rotate create replacement: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("token_store: rotate commit: %w", err)
+	}
+
+	remaining := time.Until(expiresAt)
+	if remaining > 0 && s.rdb != nil {
+		_ = s.rdb.Set(ctx, blacklistKeyPrefix+oldHash, "1", remaining).Err()
+	}
+	return nil
 }
 
 // Revoke marks a token as revoked in DB and adds it to the Redis blacklist.
@@ -94,8 +117,8 @@ func (s *TokenStore) Revoke(ctx context.Context, rawToken string) error {
 	}
 
 	remaining := time.Until(expiresAt)
-	if remaining > 0 {
-		s.rdb.Set(ctx, blacklistKeyPrefix+hash, "1", remaining)
+	if remaining > 0 && s.rdb != nil {
+		_ = s.rdb.Set(ctx, blacklistKeyPrefix+hash, "1", remaining).Err()
 	}
 	return nil
 }

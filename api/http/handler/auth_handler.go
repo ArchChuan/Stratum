@@ -19,12 +19,18 @@ import (
 
 const refreshTokenCookie = "refresh_token"
 
+type membershipReader interface {
+	GetTenantRole(ctx context.Context, userID, tenantID string) (string, error)
+	GetGlobalRole(ctx context.Context, userID string) (string, error)
+}
+
 // AuthHandlerDeps groups all dependencies for AuthHandler.
 type AuthHandlerDeps struct {
 	GitHubClient      iamport.GitHubOAuthClient
 	JWTService        iamport.TokenService
 	TokenStore        iamport.RefreshTokenStore
 	OnboardSvc        *application.OnboardService
+	MembershipReader  membershipReader
 	Logger            *zap.Logger
 	SchemaProvisioner iamport.TenantSchemaProvisioner
 	CallbackURL       string
@@ -40,6 +46,9 @@ type AuthHandler struct {
 
 // NewAuthHandler creates a new AuthHandler.
 func NewAuthHandler(deps AuthHandlerDeps) *AuthHandler {
+	if deps.MembershipReader == nil && deps.OnboardSvc != nil {
+		deps.MembershipReader = deps.OnboardSvc
+	}
 	return &AuthHandler{deps: deps}
 }
 
