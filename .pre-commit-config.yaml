@@ -34,6 +34,15 @@ repos:
         entry: bash scripts/quality/arch-guard.sh
         files: '^api/wiring/.*\.go$'
 
+      # 本次风险清扫的单一快速入口：按改动路径运行确定性回归保护
+      - id: risk-regression-guard
+        name: risk regression guard
+        language: system
+        entry: bash scripts/quality/risk-regression-guard.sh
+        pass_filenames: true
+        require_serial: true
+        files: '^(api/|cmd/|internal/|pkg/|web/|helm/|k8s/|\.github/workflows/)'
+
       # YAML validation (skip helm templates, k8s, and node_modules)
       - id: check-yaml
         name: check yaml

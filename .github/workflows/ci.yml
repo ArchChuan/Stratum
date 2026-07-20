@@ -19,17 +19,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Test migration boundary checker
-        run: bash scripts/quality/check-migration-boundaries-test.sh
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
-      - name: Check migration boundaries
-        run: bash scripts/quality/check-migration-boundaries.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
-      - name: Test arch guard checker
-        run: bash scripts/quality/arch-guard-test.sh
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
 
-      - name: Enforce wiring raw-SQL guard
-        run: bash scripts/quality/arch-guard.sh api/wiring/*.go
+      - name: Test risk regression guard
+        run: bash scripts/quality/risk-regression-guard-test.sh
+
+      - name: Enforce risk regression guard
+        run: bash scripts/quality/risk-regression-guard.sh --all
 
   lint:
     name: Lint
