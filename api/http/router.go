@@ -109,16 +109,17 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	jwtSvc := c.Platform.JWTService
 
 	authHandler := handler.NewAuthHandler(handler.AuthHandlerDeps{
-		GitHubClient:      c.Platform.GitHubClient,
-		SchemaProvisioner: c.Platform.SchemaProvisioner,
-		JWTService:        jwtSvc,
-		TokenStore:        c.Platform.TokenStore,
-		OnboardSvc:        c.Platform.OnboardSvc,
-		Logger:            c.Logger,
-		CallbackURL:       cfg.GitHubCallbackURL,
-		FrontendURL:       cfg.FrontendURL,
-		GlobalAdmin:       cfg.GlobalAdminGitHubLogin,
-		SecureCookies:     cfg.SecureCookies,
+		GitHubClient:       c.Platform.GitHubClient,
+		SchemaProvisioner:  c.Platform.SchemaProvisioner,
+		JWTService:         jwtSvc,
+		TokenStore:         c.Platform.TokenStore,
+		OAuthExchangeStore: c.Platform.OAuthExchangeStore,
+		OnboardSvc:         c.Platform.OnboardSvc,
+		Logger:             c.Logger,
+		CallbackURL:        cfg.GitHubCallbackURL,
+		FrontendURL:        cfg.FrontendURL,
+		GlobalAdmin:        cfg.GlobalAdminGitHubLogin,
+		SecureCookies:      cfg.SecureCookies,
 	})
 	authLimiter := middleware.NewRateLimiterStore(middleware.AuthRate, middleware.AuthBurst)
 	authRoutes := r.Group("/auth")
@@ -128,6 +129,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 			authRoutes.GET("/github/callback", middleware.RateLimit(authLimiter), authHandler.GitHubCallback)
 		}
 		authRoutes.POST("/register", middleware.RateLimit(authLimiter), authHandler.Register)
+		authRoutes.POST("/oauth/exchange", middleware.RateLimit(authLimiter), authHandler.OAuthExchange)
 		authRoutes.POST("/guest", middleware.RateLimit(authLimiter), authHandler.GuestLogin)
 		authRoutes.POST("/refresh", middleware.RateLimit(authLimiter), authHandler.Refresh)
 		authRoutes.POST("/logout", authHandler.Logout)

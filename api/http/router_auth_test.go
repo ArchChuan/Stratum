@@ -73,4 +73,9 @@ func TestBaseAuthRoutesRegisterWithoutGitHubOAuth(t *testing.T) {
 	if w.Code == http.StatusNotFound {
 		t.Fatal("refresh route was removed because GitHub OAuth is not configured")
 	}
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/auth/oauth/exchange", nil)) //nolint:noctx
+	if w.Code == http.StatusNotFound {
+		t.Fatal("oauth exchange route was not registered with base auth routes")
+	}
 }

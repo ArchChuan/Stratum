@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -114,9 +116,18 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 			_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("token issuance failed")))
 			return
 		}
+		exchangeCode, err := h.createOAuthExchange(ctx, &iamport.OAuthExchange{
+			Kind:        iamport.OAuthExchangeLogin,
+			AccessToken: accessJWT,
+		})
+		if err != nil {
+			h.deps.Logger.Error("create oauth exchange", zap.Error(err))
+			_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("oauth exchange unavailable")))
+			return
+		}
 		h.setRefreshCookie(c, rawRT)
 		h.deps.Logger.Info("returning user login", zap.String("user_id", userID), zap.String("tenant_id", targetTenantID))
-		c.Redirect(http.StatusFound, frontendURL+"/auth/callback?access_token="+accessJWT)
+		h.redirectWithOAuthCode(c, frontendURL, exchangeCode)
 		return
 	}
 
@@ -143,9 +154,18 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 			_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("token issuance failed")))
 			return
 		}
+		exchangeCode, err := h.createOAuthExchange(ctx, &iamport.OAuthExchange{
+			Kind:        iamport.OAuthExchangeLogin,
+			AccessToken: accessJWT,
+		})
+		if err != nil {
+			h.deps.Logger.Error("create oauth exchange", zap.Error(err))
+			_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("oauth exchange unavailable")))
+			return
+		}
 		h.setRefreshCookie(c, rawRT)
 		h.deps.Logger.Info("new user auto-joined default tenant", zap.String("user_id", userID), zap.String("tenant_id", targetTenantID))
-		c.Redirect(http.StatusFound, frontendURL+"/auth/callback?access_token="+accessJWT)
+		h.redirectWithOAuthCode(c, frontendURL, exchangeCode)
 		return
 	}
 	h.deps.Logger.Warn("auto-join default tenant failed, falling back to onboarding", zap.Error(err))
@@ -162,7 +182,35 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 		return
 	}
 
-	redirectURL := fmt.Sprintf("%s/auth/callback?onboarding_token=%s&github_login=%s&avatar_url=%s",
-		frontendURL, obToken, ghUser.Login, ghUser.AvatarURL)
-	c.Redirect(http.StatusFound, redirectURL)
+	exchangeCode, err := h.createOAuthExchange(ctx, &iamport.OAuthExchange{
+		Kind:            iamport.OAuthExchangeOnboarding,
+		OnboardingToken: obToken,
+		GitHubLogin:     ghUser.Login,
+		AvatarURL:       ghUser.AvatarURL,
+	})
+	if err != nil {
+		h.deps.Logger.Error("create onboarding oauth exchange", zap.Error(err))
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("oauth exchange unavailable")))
+		return
+	}
+	h.redirectWithOAuthCode(c, frontendURL, exchangeCode)
+}
+
+func (h *AuthHandler) createOAuthExchange(ctx context.Context, exchange *iamport.OAuthExchange) (string, error) {
+	if h.deps.OAuthExchangeStore == nil {
+		return "", errors.New("oauth exchange store unavailable")
+	}
+	return h.deps.OAuthExchangeStore.Create(ctx, exchange, constants.OAuthExchangeTTL)
+}
+
+func (h *AuthHandler) redirectWithOAuthCode(c *gin.Context, frontendURL, code string) {
+	callback, err := url.Parse(frontendURL + "/auth/callback")
+	if err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("invalid frontend url")))
+		return
+	}
+	query := callback.Query()
+	query.Set("code", code)
+	callback.RawQuery = query.Encode()
+	c.Redirect(http.StatusFound, callback.String())
 }

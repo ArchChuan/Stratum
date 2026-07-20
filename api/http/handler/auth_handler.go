@@ -26,17 +26,18 @@ type membershipReader interface {
 
 // AuthHandlerDeps groups all dependencies for AuthHandler.
 type AuthHandlerDeps struct {
-	GitHubClient      iamport.GitHubOAuthClient
-	JWTService        iamport.TokenService
-	TokenStore        iamport.RefreshTokenStore
-	OnboardSvc        *application.OnboardService
-	MembershipReader  membershipReader
-	Logger            *zap.Logger
-	SchemaProvisioner iamport.TenantSchemaProvisioner
-	CallbackURL       string
-	FrontendURL       string
-	GlobalAdmin       string
-	SecureCookies     bool
+	GitHubClient       iamport.GitHubOAuthClient
+	JWTService         iamport.TokenService
+	TokenStore         iamport.RefreshTokenStore
+	OnboardSvc         *application.OnboardService
+	MembershipReader   membershipReader
+	OAuthExchangeStore iamport.OAuthExchangeStore
+	Logger             *zap.Logger
+	SchemaProvisioner  iamport.TenantSchemaProvisioner
+	CallbackURL        string
+	FrontendURL        string
+	GlobalAdmin        string
+	SecureCookies      bool
 }
 
 // AuthHandler implements the /auth/* HTTP routes.
