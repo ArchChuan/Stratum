@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"golang.org/x/time/rate"
 
 	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -121,7 +122,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		GlobalAdmin:        cfg.GlobalAdminGitHubLogin,
 		SecureCookies:      cfg.SecureCookies,
 	})
-	authLimiter := middleware.NewRateLimiterStore(middleware.AuthRate, middleware.AuthBurst)
+	authLimiter := newRateLimiterStore(c, middleware.AuthRate, middleware.AuthBurst)
 	authRoutes := r.Group("/auth")
 	{
 		if cfg.GitHubClientID != "" && c.Platform.GitHubClient != nil {
@@ -252,7 +253,7 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.POST("/tool-approvals/:approvalID/decision", requireAdmin, requireActive, agentHandler.DecideToolApproval)
 		agents.POST("/tool-approvals/:approvalID/resume", requireAdmin, requireActive, agentHandler.ResumeToolApproval)
 		agents.GET("/:id", agentHandler.GetAgent)
-		execLimiter := middleware.NewRateLimiterStore(middleware.LLMExecRate, middleware.LLMExecBurst)
+		execLimiter := newRateLimiterStore(c, middleware.LLMExecRate, middleware.LLMExecBurst)
 		execRateLimit := middleware.RateLimitByKey(execLimiter, func(c *gin.Context) string {
 			tid, _ := c.Get("auth.tenant_id")
 			uid, _ := c.Get("auth.sub")
@@ -272,6 +273,13 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		conversations.GET("/:convID/messages", chatHandler.ListMessages)
 		conversations.POST("/:convID/messages", chatHandler.AddMessage)
 	}
+}
+
+func newRateLimiterStore(c *wiring.Container, limit rate.Limit, burst int) *middleware.RateLimiterStore {
+	if c.Storage != nil && c.Storage.Redis != nil {
+		return middleware.NewRedisRateLimiterStore(c.Storage.Redis.Client(), limit, burst)
+	}
+	return middleware.NewRateLimiterStore(limit, burst)
 }
 
 // registerKnowledge wires /knowledge/* under JWT + tenant context with
