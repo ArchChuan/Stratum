@@ -36,6 +36,8 @@ database:
   port: 5432
   name: "stratum"
   user: "stratum"
+  sslMode: "verify-full"
+  sslRootCert: "/etc/ssl/certs/ca-certificates.crt"
   # password 从 K8s Secret 注入
 
 # Redis settings - 使用托管 Redis

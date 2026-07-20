@@ -4,6 +4,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKFLOW="${ROOT}/.github/workflows/deploy.yml"
+CI_WORKFLOW="${ROOT}/.github/workflows/ci.yml"
+HELM_DEPLOYMENT="${ROOT}/helm/templates/deployment.yaml"
+PROD_VALUES="${ROOT}/helm/values-prod.yaml"
+DEMO_VALUES="${ROOT}/helm/values-demo.yaml"
+DEMO_LOCAL_VALUES="${ROOT}/helm/values-demo-local.yaml"
 
 require() {
     local pattern="$1" description="$2"
@@ -38,6 +43,35 @@ require 'metrics-server/releases/download/v[0-9]+\.[0-9]+\.[0-9]+/components\.ya
 reject 'minio/minio:latest|/minio:latest' 'mutable MinIO latest tag'
 reject 'metrics-server/releases/latest' 'mutable metrics-server latest manifest'
 reject '\|\|[[:space:]]*true' 'suppressed deployment errors'
+reject 'StrictHostKeyChecking=no' 'disabled SSH host verification'
+reject 'insecure-skip-tls-verify|certificate-authority-data:/d' 'disabled Kubernetes API verification'
+
+if grep -Eq 'gosec@latest|gosec .*\|\|[[:space:]]*true' "${CI_WORKFLOW}"; then
+    echo 'deployment safety contract violated: security scanner is unpinned or non-blocking' >&2
+    exit 1
+fi
+if ! grep -Eq '::error::Coverage .*below' "${CI_WORKFLOW}" || ! grep -Eq '^[[:space:]]*exit 1' "${CI_WORKFLOW}"; then
+    echo 'deployment safety contract missing: enforced coverage floor' >&2
+    exit 1
+fi
+if grep -Eq 'sslmode=disable' "${HELM_DEPLOYMENT}" "${PROD_VALUES}"; then
+    echo 'deployment safety contract violated: production PostgreSQL TLS disabled' >&2
+    exit 1
+fi
+if ! grep -Eq 'checksum/secret:' "${HELM_DEPLOYMENT}"; then
+    echo 'deployment safety contract missing: Secret rollout checksum' >&2
+    exit 1
+fi
+if ! grep -Eq 'secrets\.externalChecksum=' "${WORKFLOW}" ||
+    ! grep -Eq 'kubectl get secret .*sha256sum' "${WORKFLOW}"; then
+    echo 'deployment safety contract missing: external Secret rollout checksum' >&2
+    exit 1
+fi
+if grep -Eh 'frontendUrl:[[:space:]]*"http://|githubCallbackUrl:[[:space:]]*"http://' \
+    "${DEMO_VALUES}" "${DEMO_LOCAL_VALUES}" | grep -Ev '"http://localhost([:/"]|$)' >/dev/null; then
+    echo 'deployment safety contract violated: remote demo authentication uses HTTP' >&2
+    exit 1
+fi
 
 if [[ -e "${ROOT}/.github/workflows/mirror.yml" ]]; then
     echo 'deployment safety contract violated: Gitee mirror workflow still exists' >&2

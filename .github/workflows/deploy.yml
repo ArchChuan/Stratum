@@ -181,22 +181,20 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/deploy_key
-          ssh -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes \
+          chmod 600 ~/.ssh/known_hosts
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o ExitOnForwardFailure=yes \
             -i ~/.ssh/deploy_key \
             -fN -L 6443:127.0.0.1:6443 \
-            root@101.200.181.141
+            root@${{ secrets.SSH_DEPLOY_HOST }}
           sleep 2
 
       - name: Configure kubeconfig
         if: steps.candidate.outputs.current == 'true'
         run: |
           mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d | \
-            sed 's|https://127.0.0.1:6443|https://101.200.181.141:6443|g' | \
-            sed '/certificate-authority-data:/d' | \
-            sed 's|server: https://101.200.181.141:6443|server: https://101.200.181.141:6443\n    insecure-skip-tls-verify: true|g' \
-            > $HOME/.kube/config
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
 
       - name: Verify cluster
@@ -267,6 +265,7 @@ jobs:
         if: steps.candidate.outputs.current == 'true'
         continue-on-error: true
         run: |
+          EXTERNAL_SECRET_CHECKSUM="$(kubectl get secret stratum-secrets -n stratum -o json | jq -cS '{data:.data,type:.type}' | sha256sum | awk '{print $1}')"
           helm upgrade --install stratum ./helm \
             -f helm/values-demo.yaml \
             --set app.image.repository="${{ env.IMAGE_REPO }}/stratum-backend" \
@@ -285,6 +284,7 @@ jobs:
             --set-string minio.image.digest="${{ steps.images.outputs.minio }}" \
             --set milvus.image.repository="${{ env.IMAGE_REPO }}/milvus" \
             --set-string milvus.image.digest="${{ steps.images.outputs.milvus }}" \
+            --set-string secrets.externalChecksum="${EXTERNAL_SECRET_CHECKSUM}" \
             -n stratum --wait --timeout=10m
 
       - name: Diagnose deployment

@@ -97,6 +97,8 @@ config:
 secrets:
   create: false
   name: "stratum-secrets"
+  # External Secret rotations must update this value or trigger an explicit rollout.
+  externalChecksum: "manual-rollout-required"
   # Used when create=true. Remote demo currently creates this Secret from CI/manual kubectl.
   # GLOBAL_AGENT_SYSTEM_PROMPT: platform-level prompt appended to every agent system prompt.
   data: {}
@@ -107,6 +109,8 @@ database:
   port: 5432
   name: "stratum"
   user: "stratum"
+  sslMode: "disable"
+  sslRootCert: "/etc/ssl/certs/ca-certificates.crt"
   image:
     repository: postgres
     tag: "16-alpine"
