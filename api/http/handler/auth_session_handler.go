@@ -40,6 +40,19 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("invalid refresh token")))
 		return
 	}
+	if h.deps.MembershipReader == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("membership service unavailable")))
+		return
+	}
+	tenantRole, err := h.deps.MembershipReader.GetTenantRole(ctx, storedClaims.UserID, storedClaims.TenantID)
+	if errors.Is(err, domain.ErrMemberNotFound) {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("tenant membership no longer active")))
+		return
+	}
+	if err != nil || tenantRole == "" {
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("membership verification failed")))
+		return
+	}
 
 	newRawRT, err := randomState()
 	if err != nil {
@@ -52,16 +65,9 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 	}
 
 	globalRole := ""
-	if h.deps.OnboardSvc != nil {
-		if dbRole, rErr := h.deps.OnboardSvc.GetGlobalRole(ctx, storedClaims.UserID); rErr == nil {
+	if h.deps.MembershipReader != nil {
+		if dbRole, rErr := h.deps.MembershipReader.GetGlobalRole(ctx, storedClaims.UserID); rErr == nil {
 			globalRole = dbRole
-		}
-	}
-
-	tenantRole := "member"
-	if h.deps.OnboardSvc != nil {
-		if r, rErr := h.deps.OnboardSvc.GetTenantRole(ctx, storedClaims.UserID, storedClaims.TenantID); rErr == nil {
-			tenantRole = r
 		}
 	}
 

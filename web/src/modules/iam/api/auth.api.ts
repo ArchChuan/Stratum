@@ -6,6 +6,14 @@ type RefreshResp = { access_token: string };
 type SwitchTenantResp = { access_token: string; tenant_id: string };
 type CreateTenantResp = { tenant_id: string };
 type GuestLoginResp = { access_token: string; tenant_id: string; user: User };
+type OAuthExchangeResp =
+  | { kind: 'login'; access_token: string }
+  | {
+    kind: 'onboarding';
+    onboarding_token: string;
+    github_login: string;
+    avatar_url: string;
+  };
 
 const withBearer = (token?: string) =>
   token ? { headers: { Authorization: `Bearer ${token}` }, _retry: true } as any : undefined;
@@ -17,6 +25,8 @@ export const authApi = {
     return userSchema.parse(res.data);
   },
   refresh: () => api.post<RefreshResp>('/auth/refresh').then((r) => r.data),
+  exchangeOAuth: (code: string) =>
+    api.post<OAuthExchangeResp>('/auth/oauth/exchange', { code }).then((r) => r.data),
   logout: () => api.post('/auth/logout'),
   guest: () =>
     api

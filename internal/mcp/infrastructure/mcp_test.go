@@ -2,16 +2,58 @@ package infrastructure
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
 )
 
+func TestHTTPClientErrorDoesNotExposeResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("mcp-sensitive-sentinel"))
+	}))
+	defer server.Close()
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "server-1", Name: "test", Transport: "http", URL: server.URL, Timeout: time.Second,
+	}, zap.NewNop())
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, err := client.ListTools(context.Background())
+	if err == nil {
+		t.Fatal("expected downstream HTTP error")
+	}
+	if strings.Contains(err.Error(), "mcp-sensitive-sentinel") {
+		t.Fatalf("downstream response body leaked through error: %v", err)
+	}
+}
+
 type blockingMCPClient struct {
 	connectStarted chan struct{}
 	releaseConnect chan struct{}
 }
+
+type reconnectMCPClient struct {
+	healthy         bool
+	disconnectCalls int
+}
+
+func (c *reconnectMCPClient) Connect(context.Context) error    { c.healthy = true; return nil }
+func (c *reconnectMCPClient) Disconnect(context.Context) error { c.disconnectCalls++; return nil }
+func (c *reconnectMCPClient) IsConnected() bool                { return true }
+func (c *reconnectMCPClient) IsHealthy() bool                  { return c.healthy }
+func (c *reconnectMCPClient) CallTool(context.Context, string, interface{}) (interface{}, error) {
+	return nil, nil
+}
+func (c *reconnectMCPClient) ListTools(context.Context) ([]*MCPTool, error) { return nil, nil }
+func (c *reconnectMCPClient) ListResources(context.Context) ([]*MCPResource, error) {
+	return nil, nil
+}
+func (c *reconnectMCPClient) GetServerInfo() *MCPServerInfo { return &MCPServerInfo{} }
 
 func (c *blockingMCPClient) Connect(ctx context.Context) error {
 	close(c.connectStarted)
@@ -174,6 +216,28 @@ func TestClientManagerConnectDoesNotBlockReadersWhileDialing(t *testing.T) {
 	close(release)
 	if err := <-errCh; err != nil {
 		t.Fatalf("connect returned error: %v", err)
+	}
+}
+
+func TestClientManagerHealthReconnectClosesDisplacedClient(t *testing.T) {
+	manager := NewClientManager(zap.NewNop(), nil, nil)
+	key := tenantKey("", "server-1")
+	old := &reconnectMCPClient{healthy: false}
+	manager.clients[key] = old
+	manager.configs[key] = &MCPServerConfig{ID: "server-1", Name: "test", Transport: "http"}
+	var fresh *reconnectMCPClient
+	manager.clientFactory = func(*MCPServerConfig, *zap.Logger) MCPClient {
+		fresh = &reconnectMCPClient{}
+		return fresh
+	}
+
+	manager.performHealthCheck()
+
+	if old.disconnectCalls != 1 {
+		t.Fatalf("displaced client close calls=%d", old.disconnectCalls)
+	}
+	if got := manager.clients[key]; got != fresh {
+		t.Fatalf("fresh client not installed: %#v", got)
 	}
 }
 

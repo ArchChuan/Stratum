@@ -2,11 +2,13 @@
 package http
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"golang.org/x/time/rate"
 
 	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -102,29 +104,33 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 // non-nil).
 func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
 	cfg := c.Config
-	if cfg.GitHubClientID == "" || c.Platform.JWTService == nil {
+	if c.Platform.JWTService == nil {
 		return
 	}
 	jwtSvc := c.Platform.JWTService
 
 	authHandler := handler.NewAuthHandler(handler.AuthHandlerDeps{
-		GitHubClient:      c.Platform.GitHubClient,
-		SchemaProvisioner: c.Platform.SchemaProvisioner,
-		JWTService:        jwtSvc,
-		TokenStore:        c.Platform.TokenStore,
-		OnboardSvc:        c.Platform.OnboardSvc,
-		Logger:            c.Logger,
-		CallbackURL:       cfg.GitHubCallbackURL,
-		FrontendURL:       cfg.FrontendURL,
-		GlobalAdmin:       cfg.GlobalAdminGitHubLogin,
-		SecureCookies:     cfg.SecureCookies,
+		GitHubClient:       c.Platform.GitHubClient,
+		SchemaProvisioner:  c.Platform.SchemaProvisioner,
+		JWTService:         jwtSvc,
+		TokenStore:         c.Platform.TokenStore,
+		OAuthExchangeStore: c.Platform.OAuthExchangeStore,
+		OnboardSvc:         c.Platform.OnboardSvc,
+		Logger:             c.Logger,
+		CallbackURL:        cfg.GitHubCallbackURL,
+		FrontendURL:        cfg.FrontendURL,
+		GlobalAdmin:        cfg.GlobalAdminGitHubLogin,
+		SecureCookies:      cfg.SecureCookies,
 	})
-	authLimiter := middleware.NewRateLimiterStore(middleware.AuthRate, middleware.AuthBurst)
+	authLimiter := newRateLimiterStore(c, middleware.AuthRate, middleware.AuthBurst)
 	authRoutes := r.Group("/auth")
 	{
-		authRoutes.GET("/github", authHandler.GitHubLogin)
-		authRoutes.GET("/github/callback", middleware.RateLimit(authLimiter), authHandler.GitHubCallback)
+		if cfg.GitHubClientID != "" && c.Platform.GitHubClient != nil {
+			authRoutes.GET("/github", authHandler.GitHubLogin)
+			authRoutes.GET("/github/callback", middleware.RateLimit(authLimiter), authHandler.GitHubCallback)
+		}
 		authRoutes.POST("/register", middleware.RateLimit(authLimiter), authHandler.Register)
+		authRoutes.POST("/oauth/exchange", middleware.RateLimit(authLimiter), authHandler.OAuthExchange)
 		authRoutes.POST("/guest", middleware.RateLimit(authLimiter), authHandler.GuestLogin)
 		authRoutes.POST("/refresh", middleware.RateLimit(authLimiter), authHandler.Refresh)
 		authRoutes.POST("/logout", authHandler.Logout)
@@ -166,11 +172,33 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 // registerHealth wires /metrics, /health, /models — all unauthenticated.
 func registerHealth(r *gin.Engine, c *wiring.Container) {
 	r.GET("/metrics", gin.WrapH(c.Platform.Metrics.GetHandler()))
+	r.GET("/livez", func(ctx *gin.Context) {
+		ctx.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+	r.GET("/readyz", readinessHandler(c.ReadinessCheck))
 	r.GET("/health", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{"status": "ok", "service": "Stratum"})
 	})
 	modelHandler := handler.NewModelHandler(c.LLMGateway.ModelService)
 	r.GET("/models", modelHandler.ListModels)
+}
+
+func readinessHandler(check func(context.Context) map[string]error) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if check == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), constants.RouterHealthTimeout)
+		defer cancel()
+		for _, err := range check(ctx) {
+			if err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready"})
+				return
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	}
 }
 
 func protectedTenantMiddleware(c *wiring.Container, extra ...gin.HandlerFunc) []gin.HandlerFunc {
@@ -225,7 +253,7 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.POST("/tool-approvals/:approvalID/decision", requireAdmin, requireActive, agentHandler.DecideToolApproval)
 		agents.POST("/tool-approvals/:approvalID/resume", requireAdmin, requireActive, agentHandler.ResumeToolApproval)
 		agents.GET("/:id", agentHandler.GetAgent)
-		execLimiter := middleware.NewRateLimiterStore(middleware.LLMExecRate, middleware.LLMExecBurst)
+		execLimiter := newRateLimiterStore(c, middleware.LLMExecRate, middleware.LLMExecBurst)
 		execRateLimit := middleware.RateLimitByKey(execLimiter, func(c *gin.Context) string {
 			tid, _ := c.Get("auth.tenant_id")
 			uid, _ := c.Get("auth.sub")
@@ -245,6 +273,13 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		conversations.GET("/:convID/messages", chatHandler.ListMessages)
 		conversations.POST("/:convID/messages", chatHandler.AddMessage)
 	}
+}
+
+func newRateLimiterStore(c *wiring.Container, limit rate.Limit, burst int) *middleware.RateLimiterStore {
+	if c.Storage != nil && c.Storage.Redis != nil {
+		return middleware.NewRedisRateLimiterStore(c.Storage.Redis.Client(), limit, burst)
+	}
+	return middleware.NewRateLimiterStore(limit, burst)
 }
 
 // registerKnowledge wires /knowledge/* under JWT + tenant context with

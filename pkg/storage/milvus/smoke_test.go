@@ -85,3 +85,41 @@ func TestMilvusSmoke_Roundtrip(t *testing.T) {
 		t.Fatalf("unexpected result content: %q", results[0].Content)
 	}
 }
+
+func TestMilvusSmoke_IncompatibleCollectionIsPreserved(t *testing.T) {
+	addr := os.Getenv("TEST_MILVUS_ADDR")
+	if addr == "" {
+		t.Skip("TEST_MILVUS_ADDR not set; skipping Milvus connectivity smoke test")
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	vs := NewVectorStore(host, port, zap.NewNop())
+	if err := vs.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer vs.Close()
+
+	collection := "smoke_incompatible_" + time.Now().Format("150405")
+	if err := vs.CreateCollectionWithDim(ctx, collection, 8); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = vs.DeleteCollection(ctx, collection) }()
+	if err := vs.CreateCollectionWithDim(ctx, collection, 16); err == nil || !strings.Contains(err.Error(), "explicit reindex") {
+		t.Fatalf("dimension mismatch error=%v, want explicit reindex", err)
+	}
+	client, err := vs.getClient(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exists, err := client.HasCollection(ctx, collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("incompatible collection was dropped")
+	}
+}

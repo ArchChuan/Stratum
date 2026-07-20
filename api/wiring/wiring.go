@@ -30,17 +30,18 @@ type Container struct {
 	Config *config.Config
 	Logger *zap.Logger
 
-	Storage    *Storage
-	LLMGateway *LLMGateway
-	Platform   *Platform
-	MCP        *MCP
-	Skill      *Skill
-	Evaluation *Evaluation
-	Knowledge  *Knowledge
-	Memory     *Memory
-	IAM        *IAM
-	Agent      *Agent
-	Workflow   *Workflow
+	Storage        *Storage
+	LLMGateway     *LLMGateway
+	Platform       *Platform
+	MCP            *MCP
+	Skill          *Skill
+	Evaluation     *Evaluation
+	Knowledge      *Knowledge
+	Memory         *Memory
+	IAM            *IAM
+	Agent          *Agent
+	Workflow       *Workflow
+	ReadinessCheck func(context.Context) map[string]error
 
 	shutdown []func(context.Context) error
 }

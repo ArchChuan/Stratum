@@ -18,18 +18,28 @@ export const CallbackPage = () => {
 
     (async () => {
       try {
-        const onboardingToken = searchParams.get('onboarding_token');
-        if (onboardingToken) {
-          sessionStorage.setItem('onboarding_token', onboardingToken);
-          sessionStorage.setItem('github_login', searchParams.get('github_login') || '');
-          sessionStorage.setItem('avatar_url', searchParams.get('avatar_url') || '');
-          navigate('/onboarding', { replace: true });
+        const code = searchParams.get('code');
+        if (!code) {
+          setError('登录回调参数缺失，请重新登录');
+          return;
+        }
+        navigate('/auth/callback', { replace: true });
+        const exchange = await authApi.exchangeOAuth(code);
+
+        if (exchange.kind === 'onboarding') {
+          navigate('/onboarding', {
+            replace: true,
+            state: {
+              onboardingToken: exchange.onboarding_token,
+              githubLogin: exchange.github_login,
+              avatarURL: exchange.avatar_url,
+            },
+          });
           return;
         }
 
-        const accessToken = searchParams.get('access_token');
-        if (accessToken) {
-          const me = await authApi.me(accessToken);
+        if (exchange.kind === 'login') {
+          const me = await authApi.me(exchange.access_token);
           login(
             {
               sub: me.sub,
@@ -41,13 +51,11 @@ export const CallbackPage = () => {
               avatar_url: me.avatar_url || '',
               github_login: me.github_login || '',
             },
-            accessToken,
+            exchange.access_token,
           );
           navigate('/', { replace: true });
           return;
         }
-
-        setError('登录回调参数缺失，请重新登录');
       } catch (err: any) {
         setError(err?.response?.data?.message || '登录失败，请重试');
       }

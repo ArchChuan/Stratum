@@ -1,6 +1,6 @@
 import { Tabs, Form, Input, Button, Card, Typography, message, Space } from 'antd';
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import { authApi } from '../../api/auth.api';
 import { useAuth } from '../../components/AuthContext';
@@ -11,12 +11,19 @@ const { Title, Text } = Typography;
 
 export const OnboardingPage = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { login } = useAuth();
   const [createLoading, setCreateLoading] = useState(false);
   const [joinLoading, setJoinLoading] = useState(false);
 
+  const onboardingState = location.state as {
+    onboardingToken?: string;
+    githubLogin?: string;
+    avatarURL?: string;
+  } | null;
+
   const getOnboardingToken = (): string | null => {
-    const token = sessionStorage.getItem('onboarding_token');
+    const token = onboardingState?.onboardingToken;
     if (!token) {
       message.error('登录已过期，请重新登录');
       navigate('/login', { replace: true });
@@ -26,15 +33,12 @@ export const OnboardingPage = () => {
   };
 
   const finishLogin = async (accessToken: string, tenantId: string) => {
-    sessionStorage.removeItem('onboarding_token');
-    sessionStorage.removeItem('github_login');
-    sessionStorage.removeItem('avatar_url');
     login(
       {
         tenant_id: tenantId,
         current_tenant: { id: tenantId, name: '' },
-        avatar_url: '',
-        github_login: '',
+        avatar_url: onboardingState?.avatarURL || '',
+        github_login: onboardingState?.githubLogin || '',
       },
       accessToken,
     );

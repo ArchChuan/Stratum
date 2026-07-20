@@ -313,11 +313,15 @@ func (m *ClientManager) StartHealthCheck(interval time.Duration) {
 
 // performHealthCheck 执行健康检查
 func (m *ClientManager) performHealthCheck() {
+	type reconnectCandidate struct {
+		config *MCPServerConfig
+		client MCPClient
+	}
 	m.mu.RLock()
-	unhealthy := make(map[string]*MCPServerConfig)
+	unhealthy := make(map[string]reconnectCandidate)
 	for k, v := range m.clients {
 		if !v.IsHealthy() {
-			unhealthy[k] = m.configs[k]
+			unhealthy[k] = reconnectCandidate{config: m.configs[k], client: v}
 		}
 	}
 	m.mu.RUnlock()
@@ -328,11 +332,11 @@ func (m *ClientManager) performHealthCheck() {
 
 	sem := make(chan struct{}, m.poolConfig.MaxConnections)
 	var wg sync.WaitGroup
-	for key, cfg := range unhealthy {
-		if cfg == nil {
+	for key, candidate := range unhealthy {
+		if candidate.config == nil {
 			continue
 		}
-		key, cfg := key, cfg
+		key, candidate := key, candidate
 		sem <- struct{}{}
 		wg.Add(1)
 		go func() {
@@ -346,14 +350,24 @@ func (m *ClientManager) performHealthCheck() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			m.logger.Warn("client unhealthy, attempting reconnect", zap.String("key", key))
-			fresh := NewBaseClient(cfg, m.logger)
+			fresh := m.clientFactory(candidate.config, m.logger)
 			if err := fresh.Connect(ctx); err != nil {
 				m.logger.Error("reconnect failed", zap.String("key", key), zap.Error(err))
 				return
 			}
 			m.mu.Lock()
-			defer m.mu.Unlock()
-			m.clients[key] = fresh
+			current := m.clients[key]
+			if current == candidate.client {
+				m.clients[key] = fresh
+			}
+			m.mu.Unlock()
+			if current != candidate.client {
+				_ = fresh.Disconnect(ctx)
+				return
+			}
+			if err := candidate.client.Disconnect(ctx); err != nil {
+				m.logger.Warn("displaced client disconnect failed", zap.String("key", key), zap.Error(err))
+			}
 		}()
 	}
 	wg.Wait()

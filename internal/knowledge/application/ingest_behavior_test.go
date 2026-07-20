@@ -10,8 +10,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
 // buildIngest wires KnowledgeIngest with test doubles. vectorStore is left
@@ -202,5 +204,69 @@ func TestRecoverStuckIngests_NoRepoIsNoop(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("expected 0 recovered without repo, got %d", n)
+	}
+}
+
+func TestPersistChunksPropagatesParentAndLeafFailures(t *testing.T) {
+	result := knowledgeport.ChunkResult{
+		Parents: []knowledgeport.TextChunk{{Content: "parent"}},
+		Leaves:  []knowledgeport.TextChunk{{Content: "leaf"}},
+	}
+	docChunks := []knowledgeport.VectorDocument{{
+		ID: "doc_chunk_0", Content: "leaf", SourceDocument: "doc", ChunkIndex: 0,
+	}}
+
+	for _, tc := range []struct {
+		name string
+		repo *recordingChunkRepo
+	}{
+		{name: "parent", repo: &recordingChunkRepo{parentErr: errors.New("parent failed")}},
+		{name: "leaf", repo: &recordingChunkRepo{insertErr: errors.New("leaf failed")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ki := &KnowledgeIngest{chunkRepo: tc.repo, logger: zap.NewNop()}
+			err := ki.persistChunks(context.Background(), req("doc"), result, docChunks)
+			if err == nil || !strings.Contains(err.Error(), "failed") {
+				t.Fatalf("persistence failure did not propagate: %v", err)
+			}
+		})
+	}
+}
+
+func TestMarkFailedDetachesFromCanceledJobContext(t *testing.T) {
+	repo := newMockDocRepo()
+	ki := &KnowledgeIngest{docRepo: repo, logger: zap.NewNop()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ki.markFailed(ctx, req("doc"), context.DeadlineExceeded)
+	if repo.markFailedCtxErr != nil {
+		t.Fatalf("terminal state write received canceled context: %v", repo.markFailedCtxErr)
+	}
+}
+
+type ingestStatusMetrics struct {
+	observability.NoopMetrics
+	statuses []string
+}
+
+func (m *ingestStatusMetrics) IncKnowledgeIngest(status string) {
+	m.statuses = append(m.statuses, status)
+}
+
+func TestRecordIngestCompletionFailureDoesNotEmitCompleted(t *testing.T) {
+	repo := newMockDocRepo()
+	repo.markCompletedErr = errors.New("completion state unavailable")
+	metrics := &ingestStatusMetrics{}
+	ki := &KnowledgeIngest{docRepo: repo, metrics: metrics, logger: zap.NewNop()}
+
+	if ki.recordIngestCompletion(context.Background(), req("doc"), 3) {
+		t.Fatal("completion state failure was reported as completed")
+	}
+	if len(metrics.statuses) != 1 || metrics.statuses[0] != constants.IngestStatusFailed {
+		t.Fatalf("ingest metrics=%v, want only failed", metrics.statuses)
+	}
+	if repo.markFailedCount() != 1 {
+		t.Fatalf("MarkIngestFailed calls=%d, want 1", repo.markFailedCount())
 	}
 }

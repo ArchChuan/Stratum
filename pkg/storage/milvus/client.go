@@ -162,37 +162,22 @@ func (vs *VectorStore) createCollectionWithDimLocked(ctx context.Context, collec
 			vs.dimCache.Store(collectionName, dim)
 			return nil
 		}
+		hasAgentID := vs.collectionHasField(ctx, c, collectionName, "agent_id")
+		if err := validateCollectionCompatibility(existingDim, dim, hasAgentID); err != nil {
+			return fmt.Errorf("collection %s requires explicit reindex: %w", collectionName, err)
+		}
 		if existingDim == dim {
-			if !vs.collectionHasField(ctx, c, collectionName, "agent_id") {
-				vs.logger.Warn("collection missing required field, recreating",
-					zap.String("collection", collectionName), zap.String("field", "agent_id"))
-				if derr := c.DropCollection(ctx, collectionName); derr != nil {
-					return classifyAvailabilityError("drop stale collection", fmt.Errorf("failed to drop stale collection %s: %w", collectionName, derr))
+			vs.logger.Info("collection already exists",
+				zap.String("collection", collectionName), zap.Int("dim", dim))
+			vs.dimCache.Store(collectionName, dim)
+			idxList, _ := c.DescribeIndex(ctx, collectionName, "vector")
+			if len(idxList) == 0 {
+				flatIdx, ierr := entity.NewIndexIvfFlat(entity.L2, 128)
+				if ierr == nil {
+					_ = c.CreateIndex(ctx, collectionName, "vector", flatIdx, false)
 				}
-				vs.dimCache.Delete(collectionName)
-				// fall through to recreate
-			} else {
-				vs.logger.Info("collection already exists",
-					zap.String("collection", collectionName), zap.Int("dim", dim))
-				vs.dimCache.Store(collectionName, dim)
-				idxList, _ := c.DescribeIndex(ctx, collectionName, "vector")
-				if len(idxList) == 0 {
-					flatIdx, ierr := entity.NewIndexIvfFlat(entity.L2, 128)
-					if ierr == nil {
-						_ = c.CreateIndex(ctx, collectionName, "vector", flatIdx, false)
-					}
-				}
-				return nil
 			}
-		} else {
-			vs.logger.Warn("collection dim mismatch, recreating",
-				zap.String("collection", collectionName),
-				zap.Int("existing_dim", existingDim),
-				zap.Int("required_dim", dim))
-			if derr := c.DropCollection(ctx, collectionName); derr != nil {
-				return classifyAvailabilityError("drop stale collection", fmt.Errorf("failed to drop stale collection %s: %w", collectionName, derr))
-			}
-			vs.dimCache.Delete(collectionName)
+			return nil
 		}
 	}
 
@@ -267,6 +252,16 @@ func (vs *VectorStore) createCollectionWithDimLocked(ctx context.Context, collec
 	vs.logger.Info("collection created successfully", zap.String("collection", collectionName))
 	if err := c.LoadCollection(ctx, collectionName, false); err != nil {
 		return classifyAvailabilityError("load collection", fmt.Errorf("failed to load collection %s: %w", collectionName, err))
+	}
+	return nil
+}
+
+func validateCollectionCompatibility(existingDim, requiredDim int, hasAgentID bool) error {
+	if existingDim != requiredDim {
+		return fmt.Errorf("vector dimension mismatch: existing=%d required=%d", existingDim, requiredDim)
+	}
+	if !hasAgentID {
+		return fmt.Errorf("required field agent_id is missing")
 	}
 	return nil
 }

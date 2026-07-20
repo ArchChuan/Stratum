@@ -65,10 +65,10 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		}
 		tenantID = result.TenantID
 		userID = result.UserUUID
-		if h.deps.SchemaProvisioner != nil {
-			if pErr := h.deps.SchemaProvisioner.ProvisionSchema(ctx, tenantID); pErr != nil {
-				h.deps.Logger.Error("provision tenant schema", zap.String("tenant_id", tenantID), zap.Error(pErr))
-			}
+		if err := completeTenantProvision(ctx, h.deps.SchemaProvisioner, tenantID); err != nil {
+			h.deps.Logger.Error("provision tenant schema", zap.String("tenant_id", tenantID), zap.Error(err))
+			_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("tenant provisioning failed")))
+			return
 		}
 		if globalRole == "global_admin" {
 			_ = h.deps.OnboardSvc.SetGlobalRole(ctx, userID, "global_admin")

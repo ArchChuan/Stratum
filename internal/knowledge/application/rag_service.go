@@ -156,7 +156,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	sc, _ := observability.SpanFromContext(ctx)
 	rs.logger.Info("executing RAG query",
 		zap.String("trace_id", sc.TraceID),
-		zap.String("question", req.Question),
+		zap.Int("question_length", len([]rune(req.Question))),
 		zap.String("mode", req.Mode))
 
 	result := &RAGQueryResult{

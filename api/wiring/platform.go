@@ -30,14 +30,15 @@ import (
 // nil if GitHub OAuth is not configured or the PEM cannot be parsed),
 // matching the degrade-rather-than-panic behavior in api/router.go.
 type Platform struct {
-	JWTService        iamport.TokenService
-	GitHubClient      *iamoauth.GitHubClient
-	TokenStore        *iampersistence.TokenStore
-	OnboardSvc        *application.OnboardService
-	SchemaProvisioner *iampersistence.AdminTenantRepo
-	GatewayCache      *llmgateway.TenantGatewayCache
-	AESKey            [32]byte
-	Metrics           *observability.PrometheusMetrics
+	JWTService         iamport.TokenService
+	GitHubClient       *iamoauth.GitHubClient
+	TokenStore         *iampersistence.TokenStore
+	OAuthExchangeStore *iampersistence.OAuthExchangeStore
+	OnboardSvc         *application.OnboardService
+	SchemaProvisioner  *iampersistence.AdminTenantRepo
+	GatewayCache       *llmgateway.TenantGatewayCache
+	AESKey             [32]byte
+	Metrics            *observability.PrometheusMetrics
 }
 
 func (c *Container) buildPlatform(_ context.Context) error {
@@ -70,6 +71,7 @@ func (c *Container) buildPlatform(_ context.Context) error {
 					p.TokenStore = iampersistence.NewTokenStore(db, c.Storage.Redis.Client())
 				}
 				p.OnboardSvc = application.NewOnboardService(iampersistence.NewOnboardRepo(db))
+				p.OAuthExchangeStore = iampersistence.NewOAuthExchangeStore(db, p.AESKey)
 				p.SchemaProvisioner = iampersistence.NewAdminTenantRepo(db)
 			}
 		}

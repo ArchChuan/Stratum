@@ -278,19 +278,29 @@ func (ki *KnowledgeIngest) runIngestJob(parentCtx context.Context, req IngestDoc
 		return
 	}
 
-	if ki.docRepo != nil {
-		if err := ki.docRepo.MarkIngestCompleted(bgCtx, req.TenantID, req.DocumentID, len(result.Leaves)); err != nil {
-			ki.logger.Warn("knowledge.ingest.mark_completed_failed",
-				zap.String("document_id", req.DocumentID),
-				zap.Error(err))
-		}
+	if !ki.recordIngestCompletion(bgCtx, req, len(result.Leaves)) {
+		return
 	}
-	ki.metrics.IncKnowledgeIngest(constants.IngestStatusCompleted)
 	ki.logger.Info("knowledge.ingest.completed",
 		zap.String("trace_id", sc.TraceID),
 		zap.String("document_id", req.DocumentID),
 		zap.Int("total_chunks", len(result.Leaves)),
 		zap.Duration("duration", duration))
+}
+
+func (ki *KnowledgeIngest) recordIngestCompletion(ctx context.Context, req IngestDocumentRequest, processed int) bool {
+	if ki.docRepo != nil {
+		if err := ki.docRepo.MarkIngestCompleted(ctx, req.TenantID, req.DocumentID, processed); err != nil {
+			ki.logger.Warn("knowledge.ingest.mark_completed_failed",
+				zap.String("document_id", req.DocumentID),
+				zap.Error(err))
+			ki.metrics.IncKnowledgeIngest(constants.IngestStatusFailed)
+			ki.markFailed(ctx, req, fmt.Errorf("persist completed ingest state: %w", err))
+			return false
+		}
+	}
+	ki.metrics.IncKnowledgeIngest(constants.IngestStatusCompleted)
+	return true
 }
 
 // doEmbedAndPersist executes the embed → vector insert → PG chunk write
@@ -343,44 +353,44 @@ func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocu
 		zap.String("collection", collectionName),
 		zap.Int("count", len(docChunks)))
 
-	if ki.chunkRepo != nil && req.TenantID != "" {
-		// Persist parent chunks first (leaves reference them by ID).
-		if len(result.Parents) > 0 {
-			parents := make([]knowledgeport.ParentChunk, len(result.Parents))
-			for i, p := range result.Parents {
-				parents[i] = knowledgeport.ParentChunk{
-					ID:      fmt.Sprintf("%s_parent_%d", req.DocumentID, i),
-					DocID:   req.DocumentID,
-					Index:   int64(i),
-					Content: p.Content,
-				}
-			}
-			if err := ki.chunkRepo.InsertParentBatch(ctx, req.TenantID, req.WorkspaceID, parents); err != nil {
-				ki.logger.Warn("knowledge.ingest.parent_pg_failed",
-					zap.String("trace_id", sc.TraceID),
-					zap.Error(err))
-			}
-		}
+	return ki.persistChunks(ctx, req, result, docChunks)
+}
 
-		pgChunks := make([]domain.Chunk, len(docChunks))
-		for i, dc := range docChunks {
-			parentID := ""
-			if i < len(result.Leaves) && result.Leaves[i].ParentID != "" {
-				parentID = fmt.Sprintf("%s_parent_%s", req.DocumentID, result.Leaves[i].ParentID)
-			}
-			pgChunks[i] = domain.Chunk{
-				ID:       dc.ID,
-				DocID:    dc.SourceDocument,
-				Text:     dc.Content,
-				Index:    dc.ChunkIndex,
-				ParentID: parentID,
+func (ki *KnowledgeIngest) persistChunks(
+	ctx context.Context,
+	req IngestDocumentRequest,
+	result knowledgeport.ChunkResult,
+	docChunks []knowledgeport.VectorDocument,
+) error {
+	if ki.chunkRepo == nil || req.TenantID == "" {
+		return nil
+	}
+	if len(result.Parents) > 0 {
+		parents := make([]knowledgeport.ParentChunk, len(result.Parents))
+		for i, parent := range result.Parents {
+			parents[i] = knowledgeport.ParentChunk{
+				ID: fmt.Sprintf("%s_parent_%d", req.DocumentID, i), DocID: req.DocumentID,
+				Index: int64(i), Content: parent.Content,
 			}
 		}
-		if err := ki.chunkRepo.InsertBatch(ctx, req.TenantID, req.WorkspaceID, pgChunks); err != nil {
-			ki.logger.Warn("knowledge.ingest.chunk_pg_failed",
-				zap.String("trace_id", sc.TraceID),
-				zap.Error(err))
+		if err := ki.chunkRepo.InsertParentBatch(ctx, req.TenantID, req.WorkspaceID, parents); err != nil {
+			return fmt.Errorf("persist parent chunks: %w", err)
 		}
+	}
+
+	pgChunks := make([]domain.Chunk, len(docChunks))
+	for i, chunk := range docChunks {
+		parentID := ""
+		if i < len(result.Leaves) && result.Leaves[i].ParentID != "" {
+			parentID = fmt.Sprintf("%s_parent_%s", req.DocumentID, result.Leaves[i].ParentID)
+		}
+		pgChunks[i] = domain.Chunk{
+			ID: chunk.ID, DocID: chunk.SourceDocument, Text: chunk.Content,
+			Index: chunk.ChunkIndex, ParentID: parentID,
+		}
+	}
+	if err := ki.chunkRepo.InsertBatch(ctx, req.TenantID, req.WorkspaceID, pgChunks); err != nil {
+		return fmt.Errorf("persist leaf chunks: %w", err)
 	}
 	return nil
 }
@@ -398,11 +408,13 @@ func (ki *KnowledgeIngest) markFailed(ctx context.Context, req IngestDocumentReq
 	if ki.docRepo == nil {
 		return
 	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), constants.KnowledgeIngestStatusWriteTimeout)
+	defer cancel()
 	msg := cause.Error()
 	if len(msg) > 512 {
 		msg = msg[:512]
 	}
-	if err := ki.docRepo.MarkIngestFailed(ctx, req.TenantID, req.DocumentID, msg); err != nil {
+	if err := ki.docRepo.MarkIngestFailed(cleanupCtx, req.TenantID, req.DocumentID, msg); err != nil {
 		ki.logger.Warn("knowledge.ingest.mark_failed_write_failed",
 			zap.String("document_id", req.DocumentID),
 			zap.Error(err))

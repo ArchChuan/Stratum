@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -27,6 +28,7 @@ type OutboxPoller struct {
 	batch    int
 	stopCh   chan struct{}
 	stopOnce sync.Once
+	begin    func(context.Context) (pgx.Tx, error)
 }
 
 // NewOutboxPoller creates an OutboxPoller with the given configuration.
@@ -46,6 +48,7 @@ func NewOutboxPoller(pool *pgxpool.Pool, js jetstream.JetStream, logger *zap.Log
 		interval: interval,
 		batch:    batch,
 		stopCh:   make(chan struct{}),
+		begin:    pool.Begin,
 	}
 }
 
@@ -91,7 +94,7 @@ func (p *OutboxPoller) poll(ctx context.Context) error {
 }
 
 func (p *OutboxPoller) pollTenant(ctx context.Context, schema string) error {
-	tx, err := p.pool.Begin(ctx)
+	tx, err := p.begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
@@ -110,6 +113,11 @@ func (p *OutboxPoller) pollTenant(ctx context.Context, schema string) error {
 	defer rows.Close()
 
 	var ids []int64
+	type poisonRow struct {
+		id   int64
+		hash string
+	}
+	var poisonRows []poisonRow
 	for rows.Next() {
 		var id int64
 		var payload json.RawMessage
@@ -120,6 +128,8 @@ func (p *OutboxPoller) pollTenant(ctx context.Context, schema string) error {
 		var ev MemoryRawEvent
 		if err := json.Unmarshal(payload, &ev); err != nil {
 			p.logger.Warn("memory.outbox.unmarshal", zap.Int64("id", id), zap.Error(err))
+			hash := fmt.Sprintf("%x", sha256.Sum256(payload))
+			poisonRows = append(poisonRows, poisonRow{id: id, hash: hash})
 			ids = append(ids, id)
 			continue
 		}
@@ -141,6 +151,16 @@ func (p *OutboxPoller) pollTenant(ctx context.Context, schema string) error {
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("rows iteration: %w", err)
+	}
+	rows.Close()
+	for _, poison := range poisonRows {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO memory_outbox_quarantine (outbox_id, payload_hash, error_class)
+			 VALUES ($1, $2, $3) ON CONFLICT (outbox_id) DO NOTHING`,
+			poison.id, poison.hash, "invalid_json",
+		); err != nil {
+			return fmt.Errorf("quarantine malformed outbox id=%d: %w", poison.id, err)
+		}
 	}
 	outboxPending.Set(float64(len(ids)))
 	if len(ids) == 0 {

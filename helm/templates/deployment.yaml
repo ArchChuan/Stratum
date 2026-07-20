@@ -16,6 +16,11 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.secrets.create }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- else }}
+        checksum/secret-external: {{ .Values.secrets.externalChecksum | quote }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -122,7 +127,7 @@ spec:
                   name: {{ .Values.secrets.name | quote }}
                   key: POSTGRES_PASSWORD
             - name: POSTGRES_URL
-              value: {{ printf "postgres://%s:$(POSTGRES_PASSWORD)@%s:%v/%s?sslmode=disable" .Values.database.user .Values.database.host .Values.database.port .Values.database.name | quote }}
+              value: {{ printf "postgres://%s:$(POSTGRES_PASSWORD)@%s:%v/%s?sslmode=%s&sslrootcert=%s" .Values.database.user .Values.database.host .Values.database.port .Values.database.name .Values.database.sslMode .Values.database.sslRootCert | quote }}
             - name: REDIS_URL
               valueFrom:
                 configMapKeyRef:
@@ -175,20 +180,20 @@ spec:
                   optional: true
           livenessProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: http
             initialDelaySeconds: {{ .Values.app.livenessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.app.livenessProbe.periodSeconds }}
           readinessProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: http
             initialDelaySeconds: {{ .Values.app.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.app.readinessProbe.periodSeconds }}
           {{- if .Values.app.startupProbe.enabled }}
           startupProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: http
             failureThreshold: {{ .Values.app.startupProbe.failureThreshold }}
             periodSeconds: {{ .Values.app.startupProbe.periodSeconds }}

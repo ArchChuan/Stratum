@@ -104,6 +104,13 @@ CREATE TABLE IF NOT EXISTS public.refresh_tokens (
   revoked_at   TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS public.oauth_exchange_codes (
+  code_hash          TEXT        PRIMARY KEY,
+  payload_ciphertext TEXT        NOT NULL,
+  expires_at         TIMESTAMPTZ NOT NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Backfill columns for databases that predate consolidated DDL
 ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS is_default BOOL NOT NULL DEFAULT false;
 ALTER TABLE public.users   ADD COLUMN IF NOT EXISTS is_guest   BOOL NOT NULL DEFAULT false;
@@ -113,6 +120,7 @@ ALTER TABLE public.users   ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 CREATE INDEX        IF NOT EXISTS idx_tenant_members_user    ON public.tenant_members(user_id);
 CREATE INDEX        IF NOT EXISTS idx_tenant_members_tenant  ON public.tenant_members(tenant_id);
 CREATE INDEX        IF NOT EXISTS idx_refresh_tokens_user    ON public.refresh_tokens(user_id);
+CREATE INDEX        IF NOT EXISTS idx_oauth_exchange_expires ON public.oauth_exchange_codes(expires_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_is_default     ON public.tenants(is_default) WHERE is_default = true;
 CREATE INDEX        IF NOT EXISTS idx_users_guest_expires     ON public.users(expires_at)   WHERE is_guest = true;
 

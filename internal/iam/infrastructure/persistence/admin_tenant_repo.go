@@ -146,3 +146,13 @@ func (r *AdminTenantRepo) ProvisionSchema(ctx context.Context, tenantID string) 
 	}
 	return tenantdb.ProvisionTenantSchema(ctx, r.pool, tenantID)
 }
+
+func (r *AdminTenantRepo) ActivateTenant(ctx context.Context, tenantID string) error {
+	_, err := r.pool.Exec(ctx, "UPDATE public.tenants SET status='active', updated_at=NOW() WHERE id=$1", tenantID)
+	return err
+}
+
+func (r *AdminTenantRepo) MarkProvisioningFailed(ctx context.Context, tenantID string) error {
+	_, err := r.pool.Exec(ctx, "UPDATE public.tenants SET status='provision_failed', updated_at=NOW() WHERE id=$1", tenantID)
+	return err
+}

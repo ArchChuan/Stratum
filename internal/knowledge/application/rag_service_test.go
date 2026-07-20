@@ -8,6 +8,8 @@ import (
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestNewKnowledgeIngest(t *testing.T) {
@@ -50,6 +52,30 @@ func TestRAGQueryKeywordUsesWorkspaceID(t *testing.T) {
 
 	if chunks.workspaceID != "019047ac-0000-7000-9000-000000000001" {
 		t.Fatalf("expected keyword search to use workspace ID, got %q", chunks.workspaceID)
+	}
+}
+
+func TestRAGQueryDoesNotLogQuestionContent(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	service := NewRAGService(nil, nil, zap.New(core))
+	service.SetChunkRepo(&recordingChunkRepo{})
+
+	_, err := service.Query(context.Background(), RAGQueryRequest{
+		TenantID: "tenant-1", WorkspaceID: "workspace-1",
+		Question: "rag-sensitive-sentinel", Mode: "keyword", TopK: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range logs.All() {
+		if strings.Contains(entry.Message, "rag-sensitive-sentinel") {
+			t.Fatalf("question reached log message: %q", entry.Message)
+		}
+		for _, value := range entry.ContextMap() {
+			if text, ok := value.(string); ok && strings.Contains(text, "rag-sensitive-sentinel") {
+				t.Fatalf("question reached structured log: %#v", entry.ContextMap())
+			}
+		}
 	}
 }
 
@@ -161,11 +187,13 @@ type recordingChunkRepo struct {
 	workspaceID string
 	topK        int
 	chunks      []domain.Chunk
+	insertErr   error
+	parentErr   error
 }
 
 func (r *recordingChunkRepo) InsertBatch(ctx context.Context, tenantID, workspaceID string, chunks []domain.Chunk) error {
 	r.workspaceID = workspaceID
-	return nil
+	return r.insertErr
 }
 
 func (r *recordingChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceID, query string, topK int) ([]domain.Chunk, error) {
@@ -180,7 +208,7 @@ func (r *recordingChunkRepo) DeleteByWorkspace(ctx context.Context, tenantID, wo
 }
 
 func (r *recordingChunkRepo) InsertParentBatch(_ context.Context, _, _ string, _ []port.ParentChunk) error {
-	return nil
+	return r.parentErr
 }
 
 func (r *recordingChunkRepo) GetParentByID(_ context.Context, _, _, _ string) (*port.ParentChunk, error) {

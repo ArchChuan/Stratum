@@ -195,3 +195,18 @@ func TestRemoveMember_notFound(t *testing.T) {
 		t.Fatalf("expected 404, got %d", w.Code)
 	}
 }
+
+func TestDeleteSelfReadsJWTContextRole(t *testing.T) {
+	h := newTenantHandler(&fakeTenantRepo{})
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.DELETE("/tenant", injectTenant("tenant-abc"), func(c *gin.Context) {
+		c.Set(middleware.ContextKeyRole, "owner")
+		c.Next()
+	}, h.DeleteSelf)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/tenant", nil)) //nolint:noctx
+	if w.Code == http.StatusForbidden {
+		t.Fatalf("owner role from JWT context was ignored: %s", w.Body.String())
+	}
+}

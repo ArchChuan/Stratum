@@ -784,6 +784,13 @@ CREATE TABLE IF NOT EXISTS memory_outbox (
     payload     JSONB NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS memory_outbox_quarantine (
+    outbox_id       BIGINT      PRIMARY KEY,
+    payload_hash    TEXT        NOT NULL,
+    error_class     TEXT        NOT NULL,
+    quarantined_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 CREATE INDEX IF NOT EXISTS idx_memory_outbox_created ON memory_outbox (created_at);
 ALTER TABLE memory_outbox ADD COLUMN IF NOT EXISTS user_id TEXT;
 ALTER TABLE memory_outbox ADD COLUMN IF NOT EXISTS agent_id TEXT;
@@ -1099,6 +1106,15 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_kc_tsv       ON knowledge_chunks USING GIN(tsv);
 ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS workspace_id UUID;
+CREATE TABLE IF NOT EXISTS knowledge_chunks_quarantine (
+    id              TEXT PRIMARY KEY,
+    workspace_name  TEXT,
+    doc_id          TEXT NOT NULL,
+    chunk_index     BIGINT NOT NULL,
+    content         TEXT NOT NULL,
+    reason          TEXT NOT NULL,
+    quarantined_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 DO $$
 BEGIN
     IF EXISTS (
@@ -1113,15 +1129,25 @@ BEGIN
         FROM rag_workspaces rw
         WHERE kc.workspace_id IS NULL
           AND kc.workspace_name = rw.name;
+
+        INSERT INTO knowledge_chunks_quarantine
+            (id, workspace_name, doc_id, chunk_index, content, reason)
+        SELECT id, workspace_name, doc_id, chunk_index, content, 'workspace_unmapped'
+        FROM knowledge_chunks
+        WHERE workspace_id IS NULL
+        ON CONFLICT (id) DO UPDATE SET
+            workspace_name = EXCLUDED.workspace_name,
+            doc_id = EXCLUDED.doc_id,
+            chunk_index = EXCLUDED.chunk_index,
+            content = EXCLUDED.content,
+            reason = EXCLUDED.reason,
+            quarantined_at = NOW();
     END IF;
 END $$;
-DELETE FROM knowledge_chunks WHERE workspace_id IS NULL;
-ALTER TABLE knowledge_chunks ALTER COLUMN workspace_id SET NOT NULL;
 ALTER TABLE knowledge_chunks DROP CONSTRAINT IF EXISTS knowledge_chunks_workspace_id_fkey;
 ALTER TABLE knowledge_chunks ADD CONSTRAINT knowledge_chunks_workspace_id_fkey
     FOREIGN KEY (workspace_id) REFERENCES rag_workspaces(id) ON DELETE CASCADE;
 DROP INDEX IF EXISTS idx_kc_workspace;
-ALTER TABLE knowledge_chunks DROP COLUMN IF EXISTS workspace_name;
 CREATE INDEX IF NOT EXISTS idx_kc_workspace ON knowledge_chunks(workspace_id);
 
 -- drop obsolete content column from knowledge_docs (content stored in chunks)

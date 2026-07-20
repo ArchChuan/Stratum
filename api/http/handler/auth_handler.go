@@ -19,18 +19,25 @@ import (
 
 const refreshTokenCookie = "refresh_token"
 
+type membershipReader interface {
+	GetTenantRole(ctx context.Context, userID, tenantID string) (string, error)
+	GetGlobalRole(ctx context.Context, userID string) (string, error)
+}
+
 // AuthHandlerDeps groups all dependencies for AuthHandler.
 type AuthHandlerDeps struct {
-	GitHubClient      iamport.GitHubOAuthClient
-	JWTService        iamport.TokenService
-	TokenStore        iamport.RefreshTokenStore
-	OnboardSvc        *application.OnboardService
-	Logger            *zap.Logger
-	SchemaProvisioner iamport.TenantSchemaProvisioner
-	CallbackURL       string
-	FrontendURL       string
-	GlobalAdmin       string
-	SecureCookies     bool
+	GitHubClient       iamport.GitHubOAuthClient
+	JWTService         iamport.TokenService
+	TokenStore         iamport.RefreshTokenStore
+	OnboardSvc         *application.OnboardService
+	MembershipReader   membershipReader
+	OAuthExchangeStore iamport.OAuthExchangeStore
+	Logger             *zap.Logger
+	SchemaProvisioner  iamport.TenantSchemaProvisioner
+	CallbackURL        string
+	FrontendURL        string
+	GlobalAdmin        string
+	SecureCookies      bool
 }
 
 // AuthHandler implements the /auth/* HTTP routes.
@@ -40,6 +47,9 @@ type AuthHandler struct {
 
 // NewAuthHandler creates a new AuthHandler.
 func NewAuthHandler(deps AuthHandlerDeps) *AuthHandler {
+	if deps.MembershipReader == nil && deps.OnboardSvc != nil {
+		deps.MembershipReader = deps.OnboardSvc
+	}
 	return &AuthHandler{deps: deps}
 }
 
@@ -82,4 +92,19 @@ func randomState() (string, error) {
 		return "", err
 	}
 	return base64.URLEncoding.EncodeToString(b), nil
+}
+
+func completeTenantProvision(ctx context.Context, provisioner iamport.TenantSchemaProvisioner, tenantID string) error {
+	if provisioner == nil {
+		return fmt.Errorf("tenant schema provisioner unavailable")
+	}
+	if err := provisioner.ProvisionSchema(ctx, tenantID); err != nil {
+		_ = provisioner.MarkProvisioningFailed(context.WithoutCancel(ctx), tenantID)
+		return fmt.Errorf("provision tenant schema: %w", err)
+	}
+	if err := provisioner.ActivateTenant(ctx, tenantID); err != nil {
+		_ = provisioner.MarkProvisioningFailed(context.WithoutCancel(ctx), tenantID)
+		return fmt.Errorf("activate provisioned tenant: %w", err)
+	}
+	return nil
 }
