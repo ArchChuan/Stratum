@@ -175,20 +175,20 @@ spec:
                   optional: true
           livenessProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: http
             initialDelaySeconds: {{ .Values.app.livenessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.app.livenessProbe.periodSeconds }}
           readinessProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: http
             initialDelaySeconds: {{ .Values.app.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.app.readinessProbe.periodSeconds }}
           {{- if .Values.app.startupProbe.enabled }}
           startupProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: http
             failureThreshold: {{ .Values.app.startupProbe.failureThreshold }}
             periodSeconds: {{ .Values.app.startupProbe.periodSeconds }}

@@ -2,6 +2,7 @@
 package http
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -166,11 +167,33 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 // registerHealth wires /metrics, /health, /models — all unauthenticated.
 func registerHealth(r *gin.Engine, c *wiring.Container) {
 	r.GET("/metrics", gin.WrapH(c.Platform.Metrics.GetHandler()))
+	r.GET("/livez", func(ctx *gin.Context) {
+		ctx.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+	r.GET("/readyz", readinessHandler(c.ReadinessCheck))
 	r.GET("/health", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{"status": "ok", "service": "Stratum"})
 	})
 	modelHandler := handler.NewModelHandler(c.LLMGateway.ModelService)
 	r.GET("/models", modelHandler.ListModels)
+}
+
+func readinessHandler(check func(context.Context) map[string]error) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if check == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), constants.RouterHealthTimeout)
+		defer cancel()
+		for _, err := range check(ctx) {
+			if err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready"})
+				return
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	}
 }
 
 func protectedTenantMiddleware(c *wiring.Container, extra ...gin.HandlerFunc) []gin.HandlerFunc {

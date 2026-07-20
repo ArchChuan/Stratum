@@ -14,6 +14,21 @@ import (
 	"go.uber.org/zap"
 )
 
+type readinessPingerFake struct{ err error }
+
+func (f readinessPingerFake) Ping(context.Context) error { return f.err }
+
+func TestWithPostgresReadinessIncludesDatabaseFailure(t *testing.T) {
+	check := withPostgresReadiness(
+		func(context.Context) map[string]error { return map[string]error{"worker": nil} },
+		readinessPingerFake{err: errors.New("postgres down")},
+	)
+	results := check(context.Background())
+	if results["postgres"] == nil {
+		t.Fatalf("postgres failure missing from readiness: %#v", results)
+	}
+}
+
 type workflowWorkerFake struct{ started chan struct{} }
 
 func (f *workflowWorkerFake) Run(ctx context.Context, _ time.Duration) {

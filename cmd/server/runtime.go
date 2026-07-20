@@ -22,6 +22,25 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 )
 
+type readinessPinger interface {
+	Ping(context.Context) error
+}
+
+func withPostgresReadiness(
+	base func(context.Context) map[string]error,
+	db readinessPinger,
+) func(context.Context) map[string]error {
+	return func(ctx context.Context) map[string]error {
+		results := base(ctx)
+		if db == nil {
+			results["postgres"] = fmt.Errorf("postgres not configured")
+		} else {
+			results["postgres"] = db.Ping(ctx)
+		}
+		return results
+	}
+}
+
 const chatCleanupInterval = 24 * time.Hour
 
 type tenantBootstrapDeps struct {
@@ -91,6 +110,11 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 	registerChatCleanup(appHarness, c, logger)
 	registerGuestReaper(appHarness, c, logger)
 	registerWorkflowWorker(appHarness, c, logger)
+	var postgres readinessPinger
+	if c.DB() != nil {
+		postgres = c.DB()
+	}
+	c.ReadinessCheck = withPostgresReadiness(appHarness.HealthCheck, postgres)
 	registerHTTPServer(appHarness, cfg, c, logger)
 
 	ctx, cancel := context.WithCancel(ctx)
