@@ -784,6 +784,13 @@ CREATE TABLE IF NOT EXISTS memory_outbox (
     payload     JSONB NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS memory_outbox_quarantine (
+    outbox_id       BIGINT      PRIMARY KEY,
+    payload_hash    TEXT        NOT NULL,
+    error_class     TEXT        NOT NULL,
+    quarantined_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 CREATE INDEX IF NOT EXISTS idx_memory_outbox_created ON memory_outbox (created_at);
 ALTER TABLE memory_outbox ADD COLUMN IF NOT EXISTS user_id TEXT;
 ALTER TABLE memory_outbox ADD COLUMN IF NOT EXISTS agent_id TEXT;
