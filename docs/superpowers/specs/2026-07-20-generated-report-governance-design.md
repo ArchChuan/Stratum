@@ -1,99 +1,99 @@
-# Generated Report Governance Design
+# 自动报告治理设计
 
-## Goal
+## 目标
 
-Consolidate confirmed automated-report risks into one tracked register, remove resolved risk prose from retained local reports, and prevent unattended report generators from repeatedly presenting closed or advisory-only items as current defects.
+将自动检查确认的风险集中到一个受版本控制的台账中；保留本地历史报告文件，但移除其中已解决的风险正文；同时约束无人值守的报告生成器，避免反复把已关闭问题或建议类内容当成当前缺陷。
 
-## Scope
+## 范围
 
-- Include automated `tmp/*/reports/*.md` output that reports repository defects, dependency/security findings, migration failures, architecture violations, or change-summary risks.
-- Exclude `agent-interview`, `interview-200`, and other knowledge/interview/advice reports.
-- Preserve every local report file and its source metadata. Remove only resolved risk/finding/recommendation prose.
-- Keep one tracked report as the current source of truth for open findings, closed finding summaries, verification evidence, source coverage, and governance mappings.
+- 纳入 `tmp/*/reports/*.md` 中报告代码缺陷、依赖或安全问题、迁移失败、架构违规和变更风险的自动输出。
+- 排除 `agent-interview`、`interview-200` 及其他知识、访谈和建议类报告。
+- 保留每个本地报告文件及其来源元数据，只移除已解决的风险、缺陷和建议正文。
+- 只保留一个受版本控制的统一报告，用于记录当前开放项、已关闭项摘要、验证证据、来源覆盖和治理规则映射。
 
-## Source Of Truth
+## 唯一事实源
 
-`docs/audits/service-governance-2026-07-20-generated-reports.md` remains the canonical register. It will be reduced from a duplicated long-form finding report to five sections:
+`docs/audits/service-governance-2026-07-20-generated-reports.md` 继续作为规范风险台账。现有重复的长篇缺陷说明将压缩为五部分：
 
-1. scope and source inventory;
-2. current open risks and evidence gaps;
-3. concise AR-001 through AR-024 closure index;
-4. durable rule and enforcement mapping;
-5. verification and provenance.
+1. 范围与来源清单；
+2. 当前开放风险和证据缺口；
+3. AR-001 至 AR-024 的精简关闭索引；
+4. 长期规则与自动化约束映射；
+5. 验证结果与来源追溯。
 
-The register retains enough evidence to identify the affected chain, repair, and regression protection without copying the original reports' full prose.
+统一台账必须保留足够的信息，以识别受影响链路、修复方式和回归保护，但不再复制原报告的完整风险正文。
 
-## Historical Report Rewrite
+## 历史报告处理
 
-For each included local Markdown report:
+对范围内的每个本地 Markdown 报告：
 
-- retain title, generation time, generator/mode, scan baseline, and non-risk execution results;
-- remove resolved finding descriptions, impact text, and recommendations;
-- add a short migration notice naming the canonical register and the review date;
-- retain genuinely open evidence gaps only when they are also present in the canonical register;
-- update generated `latest.md` copies consistently;
-- do not modify machine-readable evidence files or excluded knowledge reports.
+- 保留标题、生成时间、生成器或执行模式、扫描基线和非风险类执行结果；
+- 删除已解决缺陷的说明、影响和修复建议；
+- 增加简短迁移说明，标明规范台账和复核日期；
+- 只有同时登记在规范台账中的真实开放证据缺口才能继续保留；
+- 同步处理生成器维护的 `latest.md`；
+- 不修改机读证据文件，也不修改被排除的知识类报告。
 
-Because `tmp/` is ignored, this cleanup is a local operational change. The durable behavior belongs in tracked governance rules and generator contracts.
+由于 `tmp/` 已被 Git 忽略，这部分清理属于本地运行环境操作。长期有效的治理行为必须落在受版本控制的规则和生成器契约中。
 
-## Agent Instructions
+## Agent 入口规则
 
-Add the same compact automated-report governance rule to `AGENTS.md` and `CLAUDE.md`:
+在 `AGENTS.md` 和 `CLAUDE.md` 中加入内容一致、篇幅简短的自动报告治理规则：
 
-- generated reports are candidate evidence, not repository facts;
-- revalidate each finding against current code, tests, and runtime evidence;
-- exclude knowledge/interview/advice output from defect backlogs;
-- deduplicate against the canonical register;
-- do not reopen closed findings without current reproducible evidence;
-- move enforceable lessons into tests, linters, hooks, or CI rather than expanding prompt-only rules.
+- 自动报告只是候选证据，不是仓库事实；
+- 每个 finding 必须按当前代码、测试和运行证据重新验证；
+- 知识、访谈和建议类输出不得进入缺陷待办；
+- 新 finding 必须先与规范台账去重；
+- 没有当前可复现证据时，不得重新打开已关闭 finding；
+- 能机器约束的经验应进入测试、linter、hook 或 CI，不应只扩充提示词规则。
 
-The entry documents point to the canonical register and do not duplicate all 24 findings.
+入口文档只指向规范台账，不复制全部 24 个 finding。
 
-## Harness Integration
+## 生成 Harness 集成
 
-The local unattended generators in `tmp/cron/` will receive a shared output contract:
+本地 `tmp/cron/` 中的无人值守生成器采用同一套输出契约：
 
-- read the canonical register before reporting;
-- classify output as `new`, `reopened`, `still-open`, or `no-current-finding`;
-- require current file/call-path and reproduction evidence for defect classifications;
-- suppress closed findings unless the present code demonstrates recurrence;
-- keep advisory observations out of the confirmed-risk section;
-- emit a canonical finding key to support cross-run deduplication.
+- 生成报告前读取规范台账；
+- finding 只能归类为 `new`、`reopened`、`still-open` 或 `no-current-finding`；
+- 缺陷分类必须提供当前文件或调用链以及复现证据；
+- 已关闭 finding 默认不再输出，除非当前代码能够证明问题复发；
+- 泛化建议不得进入“确认风险”部分；
+- 输出规范 finding key，支持跨运行去重。
 
-A tracked quality script and test will encode this contract. The local cron scripts consume or mirror the tracked contract, while Git hooks and CI validate only tracked files. They must not depend on developer-local `tmp` state.
+新增受版本控制的质量脚本和测试来表达这份契约。本地 cron 脚本消费或同步该契约；Git hook 和 CI 只校验受版本控制的文件，不依赖开发机本地的 `tmp` 状态。
 
-## Enforcement Placement
+## 约束落点
 
-| Lesson | Durable location |
+| 经验 | 长期约束位置 |
 |---|---|
-| DDD and wiring boundaries | `arch-guard`, depguard, architecture tests |
-| Tenant DDL and historical-schema safety | migration boundary scripts and schema-order tests |
-| Auth/API compatibility | handler/router contract and integration tests |
-| Secret and dependency findings | tracked scanners and blocking CI jobs |
-| Real dependency behavior | targeted integration/E2E tests |
-| Report deduplication and status | canonical register plus generator contract |
-| Human context and rationale | concise `AGENTS.md` and `CLAUDE.md` rule |
+| DDD 与 wiring 边界 | `arch-guard`、depguard、架构测试 |
+| Tenant DDL 与历史 schema 安全 | 迁移边界脚本、schema 顺序测试 |
+| 认证和 API 兼容性 | Handler、路由契约测试与集成测试 |
+| 密钥与依赖风险 | 受版本控制的扫描器和阻断式 CI |
+| 真实依赖行为 | 有针对性的集成测试和端到端测试 |
+| 报告去重和状态管理 | 规范台账与生成器契约 |
+| 人工判断所需背景和原因 | 精简的 `AGENTS.md`、`CLAUDE.md` 规则 |
 
-No pre-commit hook scans `tmp`: local reports are ignored, can be absent, and must not make commits machine-dependent.
+pre-commit 不扫描 `tmp`。本地报告可能不存在且已被 Git 忽略，不能让它们造成不同开发机提交结果不一致。
 
-## Failure Handling
+## 失败处理
 
-- A generator that cannot inspect the canonical register marks its report incomplete instead of claiming no findings.
-- A finding without current evidence remains advisory/provisional and cannot be promoted to the canonical open-risk list.
-- Conflicting evidence is recorded in the canonical register; generators do not silently choose one conclusion.
-- Historical cleanup never removes timestamps, generator identity, baselines, or machine-readable evidence pointers.
+- 生成器无法读取规范台账时，必须把报告标记为不完整，不能声称“未发现问题”。
+- 没有当前证据的 finding 只能保持建议或待验证状态，不能进入规范台账的开放风险列表。
+- 证据相互冲突时，在规范台账中显式记录冲突；生成器不得静默选择一方。
+- 清理历史报告时，不得删除时间戳、生成器身份、扫描基线和机读证据指针。
 
-## Verification
+## 验证
 
-- A report-governance test proves closed findings are suppressed, reopened findings require current evidence, and excluded report classes are unchanged.
-- Static checks confirm `AGENTS.md` and `CLAUDE.md` contain the same governance contract and point to the canonical register.
-- A local audit confirms included historical Markdown files retain metadata but no longer duplicate resolved risk prose.
-- Existing architecture, migration, deployment, secret-scan, Markdown, and full relevant test suites continue to pass.
+- 报告治理测试证明：已关闭 finding 会被抑制；重新打开 finding 必须提供当前证据；被排除的报告类别保持不变。
+- 静态检查证明 `AGENTS.md` 与 `CLAUDE.md` 包含一致的治理契约，并指向同一个规范台账。
+- 本地审计证明范围内的历史 Markdown 报告保留元数据，但不再重复已解决的风险正文。
+- 现有架构、迁移、部署、密钥扫描、Markdown 和相关完整测试继续通过。
 
-## Non-Goals
+## 非目标
 
-- Deleting report files or machine-readable scan artifacts.
-- Editing knowledge/interview/advice reports.
-- Treating AI-generated summaries as authoritative without code review.
-- Adding a Git hook whose result depends on ignored local files.
-- Rewriting unrelated agent instructions or report scheduling.
+- 删除报告文件或机读扫描证据。
+- 修改知识、访谈和建议类报告。
+- 未经代码复核就把 AI 摘要视为权威事实。
+- 增加依赖本地忽略文件的 Git hook。
+- 改写无关的 Agent 规则或报告调度策略。
