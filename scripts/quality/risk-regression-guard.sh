@@ -143,7 +143,7 @@ for label in "${labels[@]}"; do
       ;;
     frontend-auth)
       run_check "${label}" /bin/bash -c \
-        'npm --prefix web run typecheck && stratum-verify frontend-test'
+        'npm --prefix web run typecheck && if command -v stratum-verify >/dev/null 2>&1; then stratum-verify frontend-test; else npm --prefix web test -- --run --maxWorkers=2; fi'
       ;;
     frontend-supply-chain)
       run_check "${label}" npm --prefix web audit --audit-level=high

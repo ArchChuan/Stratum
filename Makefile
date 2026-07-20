@@ -178,6 +178,11 @@ deployment-safety-test:
 	bash scripts/quality/check-deployment-safety-test.sh
 	bash scripts/quality/check-helm-image-rendering-test.sh
 
+# ─── 风险回归护栏：本地与 CI 复用同一路由和确定性检查 ─────────────────────
+risk-guardrails:
+	bash scripts/quality/risk-regression-guard-test.sh
+	bash scripts/quality/risk-regression-guard.sh --all
+
 # ─── CI 持续集成（构建+测试+推镜像）───────────────────────────────────────
 ci-backend: migration-guardrails arch-guardrails be-install be-fmt be-lint
 	$(MAKE) infra-up

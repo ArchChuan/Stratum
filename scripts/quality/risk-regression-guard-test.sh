@@ -36,6 +36,14 @@ assert_label_once() {
   fi
 }
 
+assert_file_contains() {
+  local file="$1" pattern="$2" description="$3"
+  if ! grep -Eq "${pattern}" "${file}"; then
+    echo "missing ${description} in ${file}" >&2
+    exit 1
+  fi
+}
+
 unrelated_log="$(run_guard unrelated docs/readme.md)"
 if [[ -s "${unrelated_log}" ]]; then
   echo 'unrelated files triggered risk guard commands' >&2
@@ -79,5 +87,19 @@ if [[ "${status}" -ne 42 ]]; then
   echo "risk guard returned ${status}, want propagated status 42" >&2
   exit 1
 fi
+
+assert_file_contains "${ROOT}/.pre-commit-config.yaml" \
+  'id:[[:space:]]*risk-regression-guard' 'pre-commit risk guard hook'
+assert_file_contains "${ROOT}/.pre-commit-config.yaml" \
+  'entry:[[:space:]]*bash scripts/quality/risk-regression-guard\.sh' 'pre-commit risk guard entry'
+assert_file_contains "${ROOT}/.pre-commit-config.yaml" \
+  'require_serial:[[:space:]]*true' 'serialized pre-commit risk guard'
+assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
+  'risk-regression-guard-test\.sh' 'CI risk guard self-test'
+assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
+  'risk-regression-guard\.sh --all' 'CI full risk guard'
+assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
+  'actions/setup-node@' 'CI Node setup for full risk guard'
+assert_file_contains "${ROOT}/Makefile" '^risk-guardrails:' 'Makefile risk guard target'
 
 echo 'risk regression guard tests passed'
