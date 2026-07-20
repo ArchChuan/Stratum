@@ -50,8 +50,15 @@ if grep -Eq 'gosec@latest|gosec .*\|\|[[:space:]]*true' "${CI_WORKFLOW}"; then
     echo 'deployment safety contract violated: security scanner is unpinned or non-blocking' >&2
     exit 1
 fi
-if ! grep -Eq '::error::Coverage .*below' "${CI_WORKFLOW}" || ! grep -Eq '^[[:space:]]*exit 1' "${CI_WORKFLOW}"; then
-    echo 'deployment safety contract missing: enforced coverage floor' >&2
+if ! grep -Eq 'gosec@v2\.25\.0' "${CI_WORKFLOW}"; then
+    echo 'deployment safety contract violated: gosec version is not compatible with the CI Go toolchain' >&2
+    exit 1
+fi
+if ! grep -Eq 'COVERAGE_TARGET:[[:space:]]*"80"' "${CI_WORKFLOW}" ||
+    ! grep -Eq 'COVERAGE_BASELINE:[[:space:]]*"38\.0"' "${CI_WORKFLOW}" ||
+    ! grep -Eq '::error::Coverage .*below enforced baseline' "${CI_WORKFLOW}" ||
+    ! grep -Eq '^[[:space:]]*exit 1' "${CI_WORKFLOW}"; then
+    echo 'deployment safety contract missing: enforced coverage baseline and explicit target' >&2
     exit 1
 fi
 if grep -Eq 'sslmode=disable' "${HELM_DEPLOYMENT}" "${PROD_VALUES}"; then
