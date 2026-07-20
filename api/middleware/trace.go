@@ -51,7 +51,6 @@ func TraceMiddleware(logger *zap.Logger) gin.HandlerFunc {
 			zap.String("trace_id", requestID),
 			zap.String("method", c.Request.Method),
 			zap.String("path", c.Request.URL.Path),
-			zap.String("query", c.Request.URL.RawQuery),
 			zap.Int("status", status),
 			zap.Int64("latency_ms", latencyMs),
 			zap.Int("resp_bytes", c.Writer.Size()),

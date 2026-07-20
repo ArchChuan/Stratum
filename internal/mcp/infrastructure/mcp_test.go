@@ -2,11 +2,35 @@ package infrastructure
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
 )
+
+func TestHTTPClientErrorDoesNotExposeResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("mcp-sensitive-sentinel"))
+	}))
+	defer server.Close()
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "server-1", Name: "test", Transport: "http", URL: server.URL, Timeout: time.Second,
+	}, zap.NewNop())
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, err := client.ListTools(context.Background())
+	if err == nil {
+		t.Fatal("expected downstream HTTP error")
+	}
+	if strings.Contains(err.Error(), "mcp-sensitive-sentinel") {
+		t.Fatalf("downstream response body leaked through error: %v", err)
+	}
+}
 
 type blockingMCPClient struct {
 	connectStarted chan struct{}
