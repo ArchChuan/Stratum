@@ -11,8 +11,6 @@ import (
 	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
-	"github.com/byteBuilderX/stratum/pkg/textchunk"
-	"github.com/byteBuilderX/stratum/pkg/vector"
 	"go.uber.org/zap"
 )
 
@@ -25,12 +23,10 @@ type EmbedResolver func(ctx context.Context, tenantID, model string) EmbedClient
 
 type KnowledgeIngest struct {
 	parser        knowledgeport.DocumentParser
-	chunker       *textchunk.Chunker
-	cleaner       *textchunk.TextCleaner
-	strategies    map[string]textchunk.Strategy
+	chunking      knowledgeport.ChunkingService
 	embeddingSvc  knowledgeport.Embedder
 	embedResolver EmbedResolver
-	vectorStore   *vector.VectorStore
+	vectorStore   knowledgeport.VectorStore
 	chunkRepo     knowledgeport.ChunkRepo
 	docRepo       knowledgeport.DocRepo
 	metrics       observability.MetricsProvider
@@ -47,20 +43,14 @@ type KnowledgeIngest struct {
 
 func NewKnowledgeIngest(
 	parser knowledgeport.DocumentParser,
-	chunker *textchunk.Chunker,
+	chunking knowledgeport.ChunkingService,
 	embeddingSvc knowledgeport.Embedder,
-	vectorStore *vector.VectorStore,
+	vectorStore knowledgeport.VectorStore,
 	logger *zap.Logger,
 ) *KnowledgeIngest {
 	return &KnowledgeIngest{
-		parser:  parser,
-		chunker: chunker,
-		cleaner: textchunk.NewTextCleaner(),
-		strategies: map[string]textchunk.Strategy{
-			"recursive":           textchunk.NewRecursiveStrategy(),
-			"structure_recursive": textchunk.NewStructureRecursiveStrategy(),
-			"semantic":            textchunk.NewSemanticStrategy(),
-		},
+		parser:       parser,
+		chunking:     chunking,
 		embeddingSvc: embeddingSvc,
 		vectorStore:  vectorStore,
 		logger:       logger,
@@ -163,19 +153,14 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse document: %w", err)
 	}
-	content = ki.cleaner.Clean(content)
+	content = ki.chunking.Clean(content)
 
 	// Select chunking strategy from workspace config (defaults to structure_recursive).
 	strategyName := req.ChunkingStrategy
 	if strategyName == "" {
 		strategyName = domain.DefaultChunkingStrategy
 	}
-	strategy, ok := ki.strategies[strategyName]
-	if !ok {
-		return nil, fmt.Errorf("unknown chunking strategy: %s", strategyName)
-	}
-
-	var chunkEmbedder textchunk.Embedder
+	var chunkEmbedder knowledgeport.Embedder
 	if strategyName == domain.ChunkingStrategySemantic {
 		chunkEmbedder = ki.resolveEmbedClient(ctx, req)
 	}
@@ -190,14 +175,17 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 	if chunkOverlap <= 0 {
 		chunkOverlap = domain.DefaultChunkOverlap
 	}
-	chunkResult := strategy.Chunk(ctx, content, chunkSize, chunkOverlap, chunkEmbedder)
+	chunkResult, err := ki.chunking.Chunk(ctx, content, strategyName, chunkSize, chunkOverlap, chunkEmbedder)
+	if err != nil {
+		return nil, err
+	}
 	if len(chunkResult.Leaves) == 0 {
 		return nil, fmt.Errorf("document produced zero chunks after parsing")
 	}
 	if len(chunkResult.Leaves) > constants.MaxChunksPerDocument {
 		return nil, fmt.Errorf("%w: got %d, max %d", domain.ErrChunkLimitExceeded, len(chunkResult.Leaves), constants.MaxChunksPerDocument)
 	}
-	chunkResult.Leaves = ki.cleaner.FilterChunks(chunkResult.Leaves)
+	chunkResult.Leaves = ki.chunking.Filter(chunkResult.Leaves)
 	if len(chunkResult.Leaves) == 0 {
 		return nil, fmt.Errorf("document produced zero chunks after cleaning")
 	}
@@ -242,7 +230,7 @@ func (ki *KnowledgeIngest) IngestDocument(ctx context.Context, req IngestDocumen
 // terminal state write). Runs in a detached goroutine spawned by
 // IngestDocument. Ctx is decoupled from the caller's request context so a
 // client disconnect never aborts the job.
-func (ki *KnowledgeIngest) runIngestJob(parentCtx context.Context, req IngestDocumentRequest, result textchunk.ChunkResult) {
+func (ki *KnowledgeIngest) runIngestJob(parentCtx context.Context, req IngestDocumentRequest, result knowledgeport.ChunkResult) {
 	defer ki.wg.Done()
 	defer func() { <-ki.queueSem }()
 
@@ -308,7 +296,7 @@ func (ki *KnowledgeIngest) runIngestJob(parentCtx context.Context, req IngestDoc
 // doEmbedAndPersist executes the embed → vector insert → PG chunk write
 // pipeline. All I/O uses the detached bg context so a client abort cannot
 // tear it down. Errors bubble unchanged; caller writes terminal status.
-func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocumentRequest, result textchunk.ChunkResult) error {
+func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocumentRequest, result knowledgeport.ChunkResult) error {
 	sc, _ := observability.SpanFromContext(ctx)
 
 	embedClient := ki.resolveEmbedClient(ctx, req)
@@ -329,9 +317,9 @@ func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocu
 		return fmt.Errorf("embedding count mismatch: got %d vectors for %d chunks", len(embedVecs), len(result.Leaves))
 	}
 
-	docChunks := make([]vector.DocumentChunk, len(embedVecs))
+	docChunks := make([]knowledgeport.VectorDocument, len(embedVecs))
 	for i, vec := range embedVecs {
-		docChunks[i] = vector.DocumentChunk{
+		docChunks[i] = knowledgeport.VectorDocument{
 			ID:             fmt.Sprintf("%s_chunk_%d", req.DocumentID, i),
 			Content:        result.Leaves[i].Content,
 			SourceDocument: req.DocumentID,
@@ -344,7 +332,7 @@ func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocu
 	if err := ki.vectorStore.CreateCollectionWithDim(ctx, collectionName, vectorDim(req.EmbeddingModel)); err != nil {
 		return fmt.Errorf("failed to ensure vector collection: %w", err)
 	}
-	if err := ki.vectorStore.Insert(ctx, collectionName, docChunks, ""); err != nil {
+	if err := ki.vectorStore.Insert(ctx, collectionName, docChunks); err != nil {
 		return fmt.Errorf("failed to insert vectors: %w", err)
 	}
 	if err := ki.vectorStore.Flush(ctx, collectionName); err != nil {
@@ -476,7 +464,7 @@ func (ki *KnowledgeIngest) IngestBatch(ctx context.Context, requests []IngestDoc
 // GetWorkspaceStats returns vector counts for a workspace collection.
 func (ki *KnowledgeIngest) GetWorkspaceStats(ctx context.Context, tenantID, workspaceID string) (map[string]interface{}, error) {
 	col := constants.CollectionName(tenantID, workspaceID)
-	vectorCount, err := ki.vectorStore.CountVectors(ctx, col, "")
+	vectorCount, err := ki.vectorStore.CountVectors(ctx, col)
 	if err != nil {
 		return nil, err
 	}

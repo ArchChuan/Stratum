@@ -26,6 +26,10 @@ type schemaProvisionLockConn interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
+type tenantTxBeginner interface {
+	Begin(context.Context) (pgx.Tx, error)
+}
+
 // WithSchemaProvisionLock serializes the complete startup schema bootstrap
 // across application instances using one PostgreSQL session advisory lock.
 func WithSchemaProvisionLock(
@@ -129,7 +133,16 @@ func (p *Pool) ExecTenant(ctx context.Context, tenantID string, fn func(ctx cont
 	return execTenantOnPool(ctx, p.Pool, tenantID, fn)
 }
 
-func execTenantOnPool(ctx context.Context, pool *pgxpool.Pool, tenantID string, fn func(ctx context.Context, tx pgx.Tx) error) error {
+// ExecTenantWith applies the shared tenant validation and transaction policy to
+// any pgx-compatible transaction beginner, including test doubles.
+func ExecTenantWith(ctx context.Context, pool tenantTxBeginner, tenantID string, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	if tenantID == "" {
+		return fmt.Errorf("postgres: tenant_id is empty")
+	}
+	return execTenantOnPool(ctx, pool, tenantID, fn)
+}
+
+func execTenantOnPool(ctx context.Context, pool tenantTxBeginner, tenantID string, fn func(ctx context.Context, tx pgx.Tx) error) error {
 	for _, r := range tenantID {
 		if !isSafeTenantIDChar(r) {
 			return fmt.Errorf("postgres: invalid tenant_id %q", tenantID)

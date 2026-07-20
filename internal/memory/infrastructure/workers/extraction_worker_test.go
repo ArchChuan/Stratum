@@ -11,7 +11,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
-	"github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 )
@@ -43,17 +42,17 @@ func (q *stubExtractionQueue) DeleteOldCompleted(ctx context.Context, tenantID s
 }
 
 type stubFactExtractor struct {
-	extractFunc func(context.Context, *application.ExtractFactsRequest) error
+	extractFunc func(context.Context, *port.ExtractFactsRequest) error
 }
 
-func (e *stubFactExtractor) ExtractFacts(ctx context.Context, req *application.ExtractFactsRequest) error {
+func (e *stubFactExtractor) ExtractFacts(ctx context.Context, req *port.ExtractFactsRequest) error {
 	return e.extractFunc(ctx, req)
 }
 
 func TestExtractionWorker_ProcessesTask(t *testing.T) {
-	var extracted *application.ExtractFactsRequest
+	var extracted *port.ExtractFactsRequest
 	extractor := &stubFactExtractor{
-		extractFunc: func(ctx context.Context, req *application.ExtractFactsRequest) error {
+		extractFunc: func(ctx context.Context, req *port.ExtractFactsRequest) error {
 			extracted = req
 			return nil
 		},
@@ -99,8 +98,8 @@ func TestExtractionWorker_MarkCompletedFailureReplaysSameSourceIdentity(t *testi
 	defer cancel()
 	claimedAt := time.Now().UTC()
 	task := &port.ExtractionTask{ID: 123, TenantID: "tenant1", UserID: "user1", MessageID: "msg1", Content: "fact", UpdatedAt: claimedAt}
-	var requests []*application.ExtractFactsRequest
-	extractor := &stubFactExtractor{extractFunc: func(_ context.Context, req *application.ExtractFactsRequest) error {
+	var requests []*port.ExtractFactsRequest
+	extractor := &stubFactExtractor{extractFunc: func(_ context.Context, req *port.ExtractFactsRequest) error {
 		copy := *req
 		requests = append(requests, &copy)
 		return nil
@@ -138,7 +137,7 @@ func TestExtractionWorker_HandlesExtractionError(t *testing.T) {
 	core, observed := observer.New(zap.DebugLevel)
 	logger := zap.New(core)
 	extractor := &stubFactExtractor{
-		extractFunc: func(ctx context.Context, req *application.ExtractFactsRequest) error {
+		extractFunc: func(ctx context.Context, req *port.ExtractFactsRequest) error {
 			return errors.New("llm timeout: secret-token-123")
 		},
 	}

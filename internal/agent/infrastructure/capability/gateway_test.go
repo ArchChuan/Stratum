@@ -2,20 +2,27 @@ package capgateway_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
+type adapterFunc func(context.Context, port.CapabilityRequest) (port.CapabilityResponse, error)
+
+func (f adapterFunc) Route(ctx context.Context, req port.CapabilityRequest) (port.CapabilityResponse, error) {
+	return f(ctx, req)
+}
+
 func TestDefaultCapabilityGateway_RouteLLM(t *testing.T) {
-	llmMock := &mockLLMGateway{resp: &llmgateway.CompletionResponse{Content: "ok"}}
 	gw := capgateway.NewDefaultCapabilityGateway(
-		capgateway.NewLLMAdapter(llmMock, zap.NewNop()),
+		adapterFunc(func(context.Context, port.CapabilityRequest) (port.CapabilityResponse, error) {
+			return port.CapabilityResponse{Content: "ok"}, nil
+		}),
 		zap.NewNop(),
 	)
 
@@ -33,7 +40,9 @@ func TestDefaultCapabilityGateway_RouteLLM(t *testing.T) {
 
 func TestDefaultCapabilityGateway_RouteValidationError(t *testing.T) {
 	gw := capgateway.NewDefaultCapabilityGateway(
-		capgateway.NewLLMAdapter(&mockLLMGateway{}, zap.NewNop()),
+		adapterFunc(func(context.Context, port.CapabilityRequest) (port.CapabilityResponse, error) {
+			return port.CapabilityResponse{}, errors.New("must not route invalid request")
+		}),
 		zap.NewNop(),
 	)
 	req := port.CapabilityRequest{Type: port.CapLLM} // LLM == nil

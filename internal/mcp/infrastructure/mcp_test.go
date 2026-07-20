@@ -211,19 +211,6 @@ func TestMCPToolHandle(t *testing.T) {
 	}
 }
 
-func TestAgentToolProviderKeepsStableExposedIDAndRawMCPToolName(t *testing.T) {
-	logger := zap.NewNop()
-	manager := NewClientManager(logger, nil, nil)
-	registry := NewMCPToolRegistry(manager, logger)
-	catalog := NewMCPToolCatalog("orders", manager, logger)
-	catalog.AddToolForTest(&MCPToolHandle{ID: "mcp:orders:get_order", Name: "get_order", Tool: &MCPTool{Name: "get_order", Description: "get"}, ServerID: "orders", Manager: manager, logger: logger})
-	registry.RegisterCatalogForTest("orders", catalog)
-	tools := RegistryAsAgentToolProvider(registry).ToolsForServer(context.Background(), "orders")
-	if len(tools) != 1 || tools[0].Name != "mcp:orders:get_order" || tools[0].CapabilityID != "get_order" {
-		t.Fatalf("unexpected tool definition: %#v", tools)
-	}
-}
-
 // TestMCPToolRegistry 测试 MCP Skill 注册表
 func TestMCPToolRegistry(t *testing.T) {
 	logger, _ := zap.NewDevelopment()

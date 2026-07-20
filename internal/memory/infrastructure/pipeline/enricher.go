@@ -14,7 +14,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain"
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/persistence"
@@ -309,9 +308,9 @@ func (w *EnricherWorker) runSummaryAsyncSafe(ctx context.Context, ev *MemoryEnri
 
 func (w *EnricherWorker) callEnrichLLM(ctx context.Context, llm LLMClient, role, content string) (*EnrichmentResult, error) {
 	prompt := formatEnrichmentPrompt(w.enrichmentTmpl, role, content)
-	req := &llmgateway.CompletionRequest{
+	req := &port.CompletionRequest{
 		Model: w.model,
-		Messages: []llmgateway.Message{
+		Messages: []port.CompletionMessage{
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.1,
@@ -410,9 +409,9 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 		input = "[Previous Summary]: " + prevSummary + "\n\n[New Messages]:\n" + input
 	}
 	prompt := formatSummaryPrompt(w.summaryTmpl, input)
-	req := &llmgateway.CompletionRequest{
+	req := &port.CompletionRequest{
 		Model: w.summaryModel,
-		Messages: []llmgateway.Message{
+		Messages: []port.CompletionMessage{
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.3,
@@ -425,7 +424,7 @@ func (w *EnricherWorker) maybeTriggerSummary(ctx context.Context, ev *MemoryEnri
 	}
 	summary := strings.TrimSpace(resp.Content)
 
-	if err := w.writeSummary(ctx, schema, ev, summary, resp.Usage.CompletionTokens); err != nil {
+	if err := w.writeSummary(ctx, schema, ev, summary, resp.CompletionTokens); err != nil {
 		return err
 	}
 

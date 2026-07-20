@@ -10,8 +10,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
+	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	"github.com/byteBuilderX/stratum/pkg/constants"
-	"github.com/byteBuilderX/stratum/pkg/textchunk"
 )
 
 // buildIngest wires KnowledgeIngest with test doubles. vectorStore is left
@@ -20,7 +20,7 @@ import (
 func buildIngest(t *testing.T, parser *mockParser, embed *mockEmbedder, docRepo *mockDocRepo) *KnowledgeIngest {
 	t.Helper()
 	logger := zap.NewNop()
-	ki := NewKnowledgeIngest(parser, textchunk.NewChunker(logger), embed, nil, logger)
+	ki := NewKnowledgeIngest(parser, document.NewChunkingService(), embed, nil, logger)
 	ki.SetDocRepo(docRepo)
 	return ki
 }

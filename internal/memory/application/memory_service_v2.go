@@ -185,23 +185,8 @@ type BufferMessageRequest struct {
 	CreatedAt      time.Time
 }
 
-// ExtractFactsRequest represents a batch of messages for fact extraction.
-type ExtractFactsRequest struct {
-	TenantID        string
-	UserID          string
-	AgentID         string
-	ConversationID  string
-	Scope           string
-	SourceMessageID string
-	SourceTaskID    int64
-	Messages        []MessageDTO
-}
-
-// MessageDTO represents a single message in extraction batch.
-type MessageDTO struct {
-	Role    string
-	Content string
-}
+type ExtractFactsRequest = port.ExtractFactsRequest
+type MessageDTO = port.MessageDTO
 
 // RecallMemoryRequest represents a memory retrieval request.
 type RecallMemoryRequest struct {

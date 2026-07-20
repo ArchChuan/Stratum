@@ -10,7 +10,6 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/wiring"
 	"github.com/byteBuilderX/stratum/config"
-	platformruntime "github.com/byteBuilderX/stratum/internal/platform/runtime"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )
@@ -29,7 +28,7 @@ func main() {
 	}
 	defer logger.Sync() //nolint:errcheck
 
-	if shutdown := platformruntime.InitTracingFromEnv(logger); shutdown != nil {
+	if shutdown := InitTracingFromEnv(logger); shutdown != nil {
 		defer func() {
 			ctx, cancel := context.WithTimeout(context.Background(), constants.HTTPShutdownTimeout)
 			defer cancel()
@@ -50,9 +49,9 @@ func main() {
 		}
 	}()
 
-	if err := platformruntime.BootstrapTenants(ctx, container, logger); err != nil {
+	if err := BootstrapTenants(ctx, container, logger); err != nil {
 		logger.Fatal("tenant bootstrap failed", zap.Error(err))
 	}
 	container.RecoverStuckKnowledgeIngests(ctx)
-	platformruntime.Run(ctx, cfg, container, logger)
+	Run(ctx, cfg, container, logger)
 }

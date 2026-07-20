@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
@@ -189,8 +188,8 @@ func TestSupersedeWorkerRecoversWhenResolvingClientBecomesAvailable(t *testing.T
 		if !available {
 			return nil, errors.New("temporarily unavailable")
 		}
-		return completionClientFunc(func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
-			return &llmdomain.CompletionResponse{Content: `{"supersedes":true,"reason":"updated"}`}, nil
+		return completionClientFunc(func(context.Context, *port.CompletionRequest) (*port.CompletionResponse, error) {
+			return &port.CompletionResponse{Content: `{"supersedes":true,"reason":"updated"}`}, nil
 		}), nil
 	}
 	worker := workers.NewSupersedeWorker("tenant-1", repo, workers.NewResolvingLLMSuperseder("tenant-1", resolver), zap.NewNop())

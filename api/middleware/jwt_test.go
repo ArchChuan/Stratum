@@ -9,15 +9,16 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
-	"github.com/byteBuilderX/stratum/internal/iam/application"
+	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
+	iamtoken "github.com/byteBuilderX/stratum/internal/iam/infrastructure/token"
 	"github.com/gin-gonic/gin"
 )
 
 func TestJWTMiddleware_ValidToken(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	svc := application.NewJWTService(key)
+	svc := iamtoken.NewJWTService(key)
 
-	claims := application.TokenClaims{Sub: "u1", TenantID: "t1", Role: "admin", JTI: "j1"}
+	claims := iamport.TokenClaims{Sub: "u1", TenantID: "t1", Role: "admin", JTI: "j1"}
 	token, _ := svc.Sign(claims, 15*time.Minute)
 
 	gin.SetMode(gin.TestMode)
@@ -41,7 +42,7 @@ func TestJWTMiddleware_ValidToken(t *testing.T) {
 
 func TestJWTMiddleware_MissingToken(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	svc := application.NewJWTService(key)
+	svc := iamtoken.NewJWTService(key)
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

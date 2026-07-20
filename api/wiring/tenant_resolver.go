@@ -186,7 +186,7 @@ func (r *tenantCapabilityResolver) Resolve(ctx context.Context, tenantID string)
 	if !ok {
 		return nil, nil, false
 	}
-	llmAdapter := capgateway.NewLLMAdapter(gw, r.logger)
+	llmAdapter := newAgentLLMAdapter(gw)
 	capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, r.logger)
 	return capGW, keys, true
 }

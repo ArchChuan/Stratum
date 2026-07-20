@@ -53,7 +53,6 @@ components:
   domain-llm:       { in: internal/llmgateway/domain/** }
   domain-platform:  { in: internal/platform/domain/** }
   platform-harness: { in: internal/platform/harness/** }
-  platform-runtime: { in: internal/platform/runtime/** }
 
   # Application layer.
   app-agent:     { in: internal/agent/application/** }
@@ -109,20 +108,6 @@ deps:
   platform-harness:
     mayDependOn: [platform-harness, domain-platform, pkg, pkg-constants]
     canUse: [zap]
-  platform-runtime:
-    anyVendorDeps: true
-    mayDependOn:
-      - platform-runtime
-      - platform-harness
-      - api
-      - config
-      - pkg
-      - pkg-constants
-      - pkg-storage-postgres
-      - infra-agent
-      - infra-iam
-      - infra-memory
-
   app-agent:
     mayDependOn: [app-agent, domain-agent, domain-memory, pkg, pkg-constants]
     canUse: [uuid, zap, otel]
@@ -148,32 +133,28 @@ deps:
 
   infra-agent:
     anyVendorDeps: true
-    # capability adapters bridge agent ports to runtime providers.
-    mayDependOn: [infra-agent, domain-agent, domain-llm, app-agent, infra-skill, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+    mayDependOn: [infra-agent, domain-agent, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
   infra-memory:
     anyVendorDeps: true
-    # pipeline/workers call the LLM gateway through infrastructure adapters.
-    mayDependOn: [infra-memory, domain-memory, domain-llm, app-memory, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+    mayDependOn: [infra-memory, domain-memory, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
   infra-knowledge:
     anyVendorDeps: true
-    mayDependOn: [infra-knowledge, domain-knowledge, app-knowledge, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+    mayDependOn: [infra-knowledge, domain-knowledge, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
   infra-skill:
     anyVendorDeps: true
-    # LLM skill executor uses llmgateway request/response contracts.
-    mayDependOn: [infra-skill, domain-skill, domain-llm, app-skill, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+    mayDependOn: [infra-skill, domain-skill, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
   infra-mcp:
     anyVendorDeps: true
-    # port_adapters exposes MCP tools to the agent consumer port.
-    mayDependOn: [infra-mcp, domain-mcp, domain-agent, app-mcp, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+    mayDependOn: [infra-mcp, domain-mcp, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
   infra-iam:
     anyVendorDeps: true
-    mayDependOn: [infra-iam, domain-iam, app-iam, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+    mayDependOn: [infra-iam, domain-iam, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
   infra-llm:
     anyVendorDeps: true
-    mayDependOn: [infra-llm, domain-llm, app-llm, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+    mayDependOn: [infra-llm, domain-llm, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
   infra-platform:
     anyVendorDeps: true
-    mayDependOn: [infra-platform, domain-platform, app-platform, platform-harness, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
+    mayDependOn: [infra-platform, domain-platform, platform-harness, pkg, pkg-constants, pkg-storage-postgres, pkg-storage-redis, pkg-storage-milvus, pkg-messaging-nats]
 
   api:
     anyVendorDeps: true
@@ -216,7 +197,6 @@ deps:
     mayDependOn:
       - config
       - platform-harness
-      - platform-runtime
       - pkg
       - pkg-constants
       - pkg-storage-postgres

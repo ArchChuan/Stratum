@@ -29,6 +29,30 @@ func (e agentMCPExecutor) ExecuteMCPTool(ctx context.Context, serverID, toolName
 
 type agentMCPPolicyResolver struct{ service *mcpapp.MCPService }
 
+type mcpAgentToolAdapter struct{ registry *mcp.MCPToolRegistry }
+
+func (a mcpAgentToolAdapter) ToolsForServer(_ context.Context, serverID string) []agentport.ToolDefinition {
+	catalog := a.registry.GetCatalogForServer(serverID)
+	if catalog == nil {
+		return nil
+	}
+	handles := catalog.GetAllTools()
+	tools := make([]agentport.ToolDefinition, 0, len(handles))
+	for _, handle := range handles {
+		tools = append(tools, agentport.ToolDefinition{
+			Name:         handle.GetID(),
+			Description:  handle.Tool.Description,
+			InputSchema:  handle.Tool.InputSchema,
+			ProviderType: "mcp",
+			ProviderID:   serverID,
+			ServerID:     serverID,
+			CapabilityID: handle.Tool.Name,
+			NodeType:     "mcp",
+		})
+	}
+	return tools
+}
+
 func (r agentMCPPolicyResolver) ResolveMCPToolRisk(ctx context.Context, _, serverID, toolName string) (agentport.ToolRiskLevel, error) {
 	level, err := r.service.GetToolRisk(ctx, serverID, toolName)
 	return agentport.ToolRiskLevel(level), err
@@ -60,7 +84,7 @@ func (c *Container) buildMCP(ctx context.Context) error {
 		Manager:           manager,
 		Registry:          registry,
 		Service:           svc,
-		AgentToolProvider: mcp.RegistryAsAgentToolProvider(registry),
+		AgentToolProvider: mcpAgentToolAdapter{registry: registry},
 	}
 	return nil
 }

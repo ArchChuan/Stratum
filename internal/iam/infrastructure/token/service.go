@@ -1,5 +1,5 @@
-// Package application provides IAM application services (JWT, middleware, onboarding).
-package application
+// Package token implements IAM token ports.
+package token
 
 import (
 	"crypto/rsa"
@@ -7,28 +7,11 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
+	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// TokenClaims is the payload for access JWTs.
-type TokenClaims struct {
-	Sub         string
-	TenantID    string
-	Role        string
-	GlobalRole  string
-	SystemRole  domain.SystemRole
-	JTI         string
-	AvatarURL   string
-	GitHubLogin string
-}
-
-// OnboardingClaims is the payload for short-lived onboarding JWTs (no tenant yet).
-type OnboardingClaims struct {
-	GitHubID    int64
-	GitHubLogin string
-	AvatarURL   string
-}
-
+// jwtAccessClaims is the serialized payload for access JWTs.
 type jwtAccessClaims struct {
 	TenantID    string            `json:"tid,omitempty"`
 	Role        string            `json:"role,omitempty"`
@@ -58,7 +41,7 @@ func NewJWTService(key *rsa.PrivateKey) *JWTService {
 }
 
 // Sign creates a signed RS256 access JWT with the given claims and TTL.
-func (s *JWTService) Sign(c TokenClaims, ttl time.Duration) (string, error) {
+func (s *JWTService) Sign(c iamport.TokenClaims, ttl time.Duration) (string, error) {
 	now := time.Now().UTC()
 	claims := jwtAccessClaims{
 		TenantID:    c.TenantID,
@@ -83,7 +66,7 @@ func (s *JWTService) Sign(c TokenClaims, ttl time.Duration) (string, error) {
 }
 
 // Verify parses and validates an access JWT, returning its claims.
-func (s *JWTService) Verify(tokenStr string) (*TokenClaims, error) {
+func (s *JWTService) Verify(tokenStr string) (*iamport.TokenClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &jwtAccessClaims{}, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
 			return nil, fmt.Errorf("jwt: unexpected signing method: %v", t.Header["alg"])
@@ -97,7 +80,7 @@ func (s *JWTService) Verify(tokenStr string) (*TokenClaims, error) {
 	if !ok || !token.Valid {
 		return nil, fmt.Errorf("jwt: invalid claims")
 	}
-	return &TokenClaims{
+	return &iamport.TokenClaims{
 		Sub:         c.Subject,
 		TenantID:    c.TenantID,
 		Role:        c.Role,
@@ -110,7 +93,7 @@ func (s *JWTService) Verify(tokenStr string) (*TokenClaims, error) {
 }
 
 // SignOnboarding creates a short-lived onboarding JWT (no tenant).
-func (s *JWTService) SignOnboarding(ob OnboardingClaims, ttl time.Duration) (string, error) {
+func (s *JWTService) SignOnboarding(ob iamport.OnboardingClaims, ttl time.Duration) (string, error) {
 	now := time.Now().UTC()
 	claims := jwtOnboardingClaims{
 		GitHubID:    ob.GitHubID,
@@ -130,7 +113,7 @@ func (s *JWTService) SignOnboarding(ob OnboardingClaims, ttl time.Duration) (str
 }
 
 // VerifyOnboarding parses and validates an onboarding JWT.
-func (s *JWTService) VerifyOnboarding(tokenStr string) (*OnboardingClaims, error) {
+func (s *JWTService) VerifyOnboarding(tokenStr string) (*iamport.OnboardingClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &jwtOnboardingClaims{}, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
 			return nil, fmt.Errorf("jwt: unexpected signing method: %v", t.Header["alg"])
@@ -144,7 +127,7 @@ func (s *JWTService) VerifyOnboarding(tokenStr string) (*OnboardingClaims, error
 	if !ok || !token.Valid {
 		return nil, fmt.Errorf("jwt: invalid onboarding claims")
 	}
-	return &OnboardingClaims{
+	return &iamport.OnboardingClaims{
 		GitHubID:    c.GitHubID,
 		GitHubLogin: c.GitHubLogin,
 		AvatarURL:   c.AvatarURL,

@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -43,26 +44,7 @@ func (r *PgAgentRepo) execTenant(ctx context.Context, fn func(ctx context.Contex
 	if !ok || tc.TenantID == "" {
 		return fmt.Errorf("agent_repo: missing tenant context")
 	}
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("agent_repo: begin tx: %w", err)
-	}
-	defer func() {
-		if p := recover(); p != nil {
-			_ = tx.Rollback(ctx)
-			panic(p)
-		}
-	}()
-	schema := "tenant_" + tc.TenantID
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL search_path = "%s", public`, schema)); err != nil {
-		_ = tx.Rollback(ctx)
-		return fmt.Errorf("agent_repo: set search_path: %w", err)
-	}
-	if err := fn(ctx, tx); err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	return tx.Commit(ctx)
+	return pgstore.ExecTenantWith(ctx, r.pool, tc.TenantID, fn)
 }
 
 func (r *PgAgentRepo) replaceSkills(ctx context.Context, tx pgx.Tx, agentID string, skillIDs []string) error {

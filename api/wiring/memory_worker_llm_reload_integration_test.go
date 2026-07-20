@@ -81,7 +81,11 @@ func TestMemoryWorkerReloadsTenantCredentialThroughSettingsPath(t *testing.T) {
 	service := iamapp.NewTenantService(iampersistence.NewTenantRepo(pool), zap.NewNop(), aesKey, cache)
 	resolver := newTenantCapabilityResolver(pool, aesKey, cache, nil, zap.NewNop(), server.URL, "").(*tenantCapabilityResolver)
 	processor := memworkers.NewResolvingLLMHistorySummarizer(tenantID, func(ctx context.Context, tenantID string) (memworkers.TenantLLMClient, error) {
-		return resolver.ResolveWorkerLLM(ctx, tenantID)
+		client, err := resolver.ResolveWorkerLLM(ctx, tenantID)
+		if err != nil || client == nil {
+			return nil, err
+		}
+		return memoryLLMAdapter{client: client}, nil
 	})
 
 	_, err = processor.SummarizeHistory(ctx, []string{"before configuration"})

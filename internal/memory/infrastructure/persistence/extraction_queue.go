@@ -12,6 +12,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	pgstore "github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
 
 // ExtractionQueue implements domain/port.ExtractionQueue using PostgreSQL with FOR UPDATE SKIP LOCKED.
@@ -24,18 +25,9 @@ func NewExtractionQueue(pool *pgxpool.Pool) *ExtractionQueue {
 }
 
 func (q *ExtractionQueue) execTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {
-	tx, err := q.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL search_path = "tenant_%s", public`, tenantID)); err != nil {
-		return fmt.Errorf("set search_path: %w", err)
-	}
-	if err := fn(tx); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return pgstore.Wrap(q.pool).ExecTenant(ctx, tenantID, func(_ context.Context, tx pgx.Tx) error {
+		return fn(tx)
+	})
 }
 
 func (q *ExtractionQueue) Enqueue(ctx context.Context, tenantID string, task *port.ExtractionTask) error {

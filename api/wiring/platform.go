@@ -12,8 +12,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/iam/application"
+	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	iamoauth "github.com/byteBuilderX/stratum/internal/iam/infrastructure/oauth"
 	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
+	iamtoken "github.com/byteBuilderX/stratum/internal/iam/infrastructure/token"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -28,7 +30,7 @@ import (
 // nil if GitHub OAuth is not configured or the PEM cannot be parsed),
 // matching the degrade-rather-than-panic behavior in api/router.go.
 type Platform struct {
-	JWTService        *application.JWTService
+	JWTService        iamport.TokenService
 	GitHubClient      *iamoauth.GitHubClient
 	TokenStore        *iampersistence.TokenStore
 	OnboardSvc        *application.OnboardService
@@ -60,7 +62,7 @@ func (c *Container) buildPlatform(_ context.Context) error {
 		if err != nil {
 			c.Logger.Warn("JWT private key parse failed, auth routes disabled", zap.Error(err))
 		} else {
-			p.JWTService = application.NewJWTService(key)
+			p.JWTService = iamtoken.NewJWTService(key)
 			p.GitHubClient = iamoauth.NewGitHubClient(c.Config.GitHubClientID, c.Config.GitHubClientSecret, "", "")
 			if c.Storage != nil && c.Storage.PG != nil {
 				db := c.Storage.PG.DB()

@@ -10,6 +10,7 @@ import (
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/persistence"
+	knowledgevector "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/vectorstore"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
@@ -37,8 +38,10 @@ type Knowledge struct {
 
 func (c *Container) buildKnowledge(ctx context.Context) error {
 	vs := c.Storage.Milvus
+	vectorAdapter := knowledgevector.New(vs)
 	parser := document.NewParser(c.Logger)
 	chunker := textchunk.NewChunker(c.Logger)
+	chunking := document.NewChunkingService()
 
 	var embedSvc *embedding.EmbeddingService
 	var embedIface knowledge.EmbedClient
@@ -46,8 +49,8 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		embedIface = embedSvc
 	}
 
-	ingest := knowledge.NewKnowledgeIngest(parser, chunker, embedIface, vs, c.Logger)
-	rag := knowledge.NewRAGService(embedIface, vs, c.Logger)
+	ingest := knowledge.NewKnowledgeIngest(parser, chunking, embedIface, vectorAdapter, c.Logger)
+	rag := knowledge.NewRAGService(embedIface, vectorAdapter, c.Logger)
 
 	var pipelineResolver pipeline.EmbedServiceResolver
 	var knowledgeResolver knowledge.EmbedResolver

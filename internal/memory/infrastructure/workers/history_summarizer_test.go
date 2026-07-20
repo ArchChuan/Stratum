@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 	"github.com/stretchr/testify/require"
 )
@@ -18,8 +18,8 @@ func TestResolvingHistoryProcessorResolvesForSummarizeAndCompress(t *testing.T) 
 		if resolved == 2 {
 			label = "summary-b"
 		}
-		return completionClientFunc(func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
-			return &llmdomain.CompletionResponse{Content: label}, nil
+		return completionClientFunc(func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+			return &memport.CompletionResponse{Content: label}, nil
 		}), nil
 	}
 	processor := workers.NewResolvingLLMHistorySummarizer("tenant-1", resolver)
@@ -40,9 +40,9 @@ func TestResolvingHistoryProcessorRecoversWithoutReusingOldClient(t *testing.T) 
 		if !available {
 			return nil, errors.New("temporarily unavailable")
 		}
-		return completionClientFunc(func(context.Context, *llmdomain.CompletionRequest) (*llmdomain.CompletionResponse, error) {
+		return completionClientFunc(func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
 			calls++
-			return &llmdomain.CompletionResponse{Content: "recovered"}, nil
+			return &memport.CompletionResponse{Content: "recovered"}, nil
 		}), nil
 	}
 	processor := workers.NewResolvingLLMHistorySummarizer("tenant-1", resolver)

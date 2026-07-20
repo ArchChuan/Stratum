@@ -1,4 +1,4 @@
-package runtime
+package main
 
 import (
 	"context"
@@ -55,7 +55,7 @@ func InitTracingFromEnv(logger *zap.Logger) func(context.Context) error {
 		logger.Warn("OTel init failed, tracing disabled", zap.Error(err))
 		return nil
 	}
-	logger.Info("OTel tracing enabled", zap.String("endpoint", ep))
+	logger.Info("OTel tracing enabled")
 	return shutdown
 }
 

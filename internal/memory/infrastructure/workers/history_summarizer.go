@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 )
 
 type historyLLM = TenantLLMClient
@@ -44,7 +44,7 @@ func (s *LLMHistorySummarizer) SummarizeHistory(ctx context.Context, items []str
 		return "", fmt.Errorf("history llm unavailable")
 	}
 	prompt := "Summarize this bounded period of user history. Preserve decisions, goals, preferences, and durable context; omit secrets and raw payloads.\n\n" + strings.Join(items, "\n")
-	resp, err := client.Complete(ctx, &llmgateway.CompletionRequest{Messages: []llmgateway.Message{{Role: "user", Content: prompt}}, Temperature: .2})
+	resp, err := client.Complete(ctx, &memport.CompletionRequest{Messages: []memport.CompletionMessage{{Role: "user", Content: prompt}}, Temperature: .2})
 	if err != nil {
 		return "", err
 	}

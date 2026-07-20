@@ -22,7 +22,7 @@ const refreshTokenCookie = "refresh_token"
 // AuthHandlerDeps groups all dependencies for AuthHandler.
 type AuthHandlerDeps struct {
 	GitHubClient      iamport.GitHubOAuthClient
-	JWTService        *application.JWTService
+	JWTService        iamport.TokenService
 	TokenStore        iamport.RefreshTokenStore
 	OnboardSvc        *application.OnboardService
 	Logger            *zap.Logger
@@ -52,7 +52,7 @@ func (h *AuthHandler) issueTokenPair(ctx context.Context, userID, tenantID, role
 	if err = h.deps.TokenStore.Create(ctx, userID, tenantID, rawRT, constants.RefreshTokenTTL); err != nil {
 		return "", "", fmt.Errorf("store refresh token: %w", err)
 	}
-	claims := application.TokenClaims{
+	claims := iamport.TokenClaims{
 		Sub: userID, TenantID: tenantID, Role: role, GlobalRole: globalRole, SystemRole: systemRole, JTI: jti,
 		AvatarURL: avatarURL, GitHubLogin: githubLogin,
 	}

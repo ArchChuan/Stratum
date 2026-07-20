@@ -4,13 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 )
 
 // TenantLLMClient is the minimal completion capability used by memory workers.
-type TenantLLMClient interface {
-	Complete(context.Context, *llmgateway.CompletionRequest) (*llmgateway.CompletionResponse, error)
-}
+type TenantLLMClient = memport.Completer
 
 // TenantLLMResolver resolves the current client for a tenant at operation time.
 type TenantLLMResolver func(context.Context, string) (TenantLLMClient, error)

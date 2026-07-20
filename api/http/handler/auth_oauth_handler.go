@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
-	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
+	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -150,7 +150,7 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 	}
 	h.deps.Logger.Warn("auto-join default tenant failed, falling back to onboarding", zap.Error(err))
 
-	ob := application.OnboardingClaims{
+	ob := iamport.OnboardingClaims{
 		GitHubID:    ghUser.ID,
 		GitHubLogin: ghUser.Login,
 		AvatarURL:   ghUser.AvatarURL,

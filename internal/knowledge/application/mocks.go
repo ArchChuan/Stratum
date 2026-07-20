@@ -4,17 +4,17 @@ package application
 import (
 	"context"
 
-	"github.com/byteBuilderX/stratum/pkg/vector"
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 )
 
 type MockVectorStore struct {
-	searchResults []interface{}
+	searchResults []knowledgeport.VectorSearchResult
 	searchErr     error
 }
 
 func NewMockVectorStore() *MockVectorStore {
 	return &MockVectorStore{
-		searchResults: []interface{}{},
+		searchResults: []knowledgeport.VectorSearchResult{},
 	}
 }
 
@@ -26,11 +26,15 @@ func (m *MockVectorStore) CreateCollection(ctx context.Context, name string) err
 	return nil
 }
 
-func (m *MockVectorStore) Insert(ctx context.Context, collection string, chunks []vector.DocumentChunk) error {
+func (m *MockVectorStore) CreateCollectionWithDim(ctx context.Context, name string, dimension int) error {
 	return nil
 }
 
-func (m *MockVectorStore) Search(ctx context.Context, collection string, vector []float32, topK int) ([]interface{}, error) {
+func (m *MockVectorStore) Insert(ctx context.Context, collection string, chunks []knowledgeport.VectorDocument) error {
+	return nil
+}
+
+func (m *MockVectorStore) Search(ctx context.Context, collection string, vector []float32, topK int) ([]knowledgeport.VectorSearchResult, error) {
 	if m.searchErr != nil {
 		return nil, m.searchErr
 	}
@@ -45,11 +49,19 @@ func (m *MockVectorStore) Flush(ctx context.Context, collection string) error {
 	return nil
 }
 
+func (m *MockVectorStore) DeleteCollection(ctx context.Context, collection string) error {
+	return nil
+}
+
+func (m *MockVectorStore) CountVectors(ctx context.Context, collection string) (int64, error) {
+	return 0, nil
+}
+
 func (m *MockVectorStore) Close() error {
 	return nil
 }
 
-func (m *MockVectorStore) SetSearchResults(results []interface{}) {
+func (m *MockVectorStore) SetSearchResults(results []knowledgeport.VectorSearchResult) {
 	m.searchResults = results
 }
 

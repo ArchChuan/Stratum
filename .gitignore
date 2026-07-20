@@ -26,6 +26,8 @@ dist/
 build/
 main
 server
+!cmd/server/
+!cmd/server/*.go
 
 # Environment variables
 .env
