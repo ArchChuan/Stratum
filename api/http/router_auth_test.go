@@ -12,7 +12,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/wiring"
 	"github.com/byteBuilderX/stratum/config"
-	"github.com/byteBuilderX/stratum/internal/iam/application"
+	iamtoken "github.com/byteBuilderX/stratum/internal/iam/infrastructure/token"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
@@ -64,7 +64,7 @@ func TestBaseAuthRoutesRegisterWithoutGitHubOAuth(t *testing.T) {
 	metrics := observability.NewPrometheusMetrics(zap.NewNop())
 	router := NewRouter(&wiring.Container{
 		Config: &config.Config{FrontendURL: "http://localhost:3002"}, Logger: zap.NewNop(),
-		Platform:   &wiring.Platform{JWTService: application.NewJWTService(key), Metrics: metrics},
+		Platform:   &wiring.Platform{JWTService: iamtoken.NewJWTService(key), Metrics: metrics},
 		LLMGateway: &wiring.LLMGateway{}, Skill: &wiring.Skill{}, Agent: &wiring.Agent{},
 		Knowledge: &wiring.Knowledge{}, MCP: &wiring.MCP{},
 	})

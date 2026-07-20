@@ -359,8 +359,8 @@ func (ki *KnowledgeIngest) doEmbedAndPersist(ctx context.Context, req IngestDocu
 func (ki *KnowledgeIngest) persistChunks(
 	ctx context.Context,
 	req IngestDocumentRequest,
-	result textchunk.ChunkResult,
-	docChunks []vector.DocumentChunk,
+	result knowledgeport.ChunkResult,
+	docChunks []knowledgeport.VectorDocument,
 ) error {
 	if ki.chunkRepo == nil || req.TenantID == "" {
 		return nil

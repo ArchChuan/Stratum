@@ -20,6 +20,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
+	iamtoken "github.com/byteBuilderX/stratum/internal/iam/infrastructure/token"
 	"github.com/gin-gonic/gin"
 )
 
@@ -179,7 +180,7 @@ func TestAuthHandler_GitHubCallback_RedirectsReturningUserWithCodeOnly(t *testin
 	store := &oauthExchangeStoreFake{createCode: "one-time-code"}
 	h := handler.NewAuthHandler(handler.AuthHandlerDeps{
 		GitHubClient:       githubOAuthFake{},
-		JWTService:         application.NewJWTService(key),
+		JWTService:         iamtoken.NewJWTService(key),
 		TokenStore:         &refreshTokenStoreFake{},
 		OnboardSvc:         application.NewOnboardService(onboardRepoFake{exists: true, tenants: []domain.TenantInfo{{TenantID: "tenant-1", Role: "member"}}}),
 		OAuthExchangeStore: store,
@@ -207,7 +208,7 @@ func TestAuthHandler_GitHubCallback_RedirectsOnboardingWithCodeOnly(t *testing.T
 	store := &oauthExchangeStoreFake{createCode: "onboarding-code"}
 	h := handler.NewAuthHandler(handler.AuthHandlerDeps{
 		GitHubClient:       githubOAuthFake{},
-		JWTService:         application.NewJWTService(key),
+		JWTService:         iamtoken.NewJWTService(key),
 		TokenStore:         &refreshTokenStoreFake{},
 		OnboardSvc:         application.NewOnboardService(onboardRepoFake{autoJoinErr: errors.New("no default tenant")}),
 		OAuthExchangeStore: store,
@@ -317,7 +318,7 @@ func TestAuthHandler_Refresh_MembershipLookupFailureDoesNotRotate(t *testing.T) 
 		UserID: "user-1", TenantID: "tenant-1",
 	}}
 	h := handler.NewAuthHandler(handler.AuthHandlerDeps{
-		JWTService:       application.NewJWTService(key),
+		JWTService:       iamtoken.NewJWTService(key),
 		TokenStore:       store,
 		MembershipReader: membershipReaderFake{roleErr: errors.New("membership unavailable")},
 		Logger:           zap.NewNop(),
@@ -345,7 +346,7 @@ func TestAuthHandler_Refresh_RemovedMemberReturnsUnauthorized(t *testing.T) {
 		UserID: "user-1", TenantID: "tenant-1",
 	}}
 	h := handler.NewAuthHandler(handler.AuthHandlerDeps{
-		JWTService:       application.NewJWTService(key),
+		JWTService:       iamtoken.NewJWTService(key),
 		TokenStore:       store,
 		MembershipReader: membershipReaderFake{roleErr: domain.ErrMemberNotFound},
 		Logger:           zap.NewNop(),

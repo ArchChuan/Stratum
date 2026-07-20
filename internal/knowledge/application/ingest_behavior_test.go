@@ -10,11 +10,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
+	knowledgeport "github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
-	"github.com/byteBuilderX/stratum/pkg/textchunk"
-	"github.com/byteBuilderX/stratum/pkg/vector"
 )
 
 // buildIngest wires KnowledgeIngest with test doubles. vectorStore is left
@@ -209,11 +208,11 @@ func TestRecoverStuckIngests_NoRepoIsNoop(t *testing.T) {
 }
 
 func TestPersistChunksPropagatesParentAndLeafFailures(t *testing.T) {
-	result := textchunk.ChunkResult{
-		Parents: []textchunk.TextChunk{{Content: "parent"}},
-		Leaves:  []textchunk.TextChunk{{Content: "leaf"}},
+	result := knowledgeport.ChunkResult{
+		Parents: []knowledgeport.TextChunk{{Content: "parent"}},
+		Leaves:  []knowledgeport.TextChunk{{Content: "leaf"}},
 	}
-	docChunks := []vector.DocumentChunk{{
+	docChunks := []knowledgeport.VectorDocument{{
 		ID: "doc_chunk_0", Content: "leaf", SourceDocument: "doc", ChunkIndex: 0,
 	}}
 
