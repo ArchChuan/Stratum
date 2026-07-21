@@ -237,6 +237,11 @@ jobs:
           REMOTE
           echo "=== Traefik service ==="
           kubectl get service traefik -n kube-system -o wide
+          kubectl get service traefik -n kube-system -o json | jq -r \
+            '.spec.ports[] | "service port name=\(.name) port=\(.port) targetPort=\(.targetPort)"'
+          echo "=== Traefik entrypoint arguments ==="
+          kubectl get deployment traefik -n kube-system -o json | jq -r \
+            '.spec.template.spec.containers[].args[] | select(startswith("--entryPoints."))'
           echo "=== Traefik ServiceLB pods ==="
           kubectl get pods -n kube-system \
             -l svccontroller.k3s.cattle.io/svcname=traefik -o wide
