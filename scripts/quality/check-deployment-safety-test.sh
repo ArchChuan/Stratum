@@ -125,6 +125,10 @@ require 'kubectl get endpoints stratum stratum-frontend -n stratum' 'service end
 require 'ss -H -ltnp.*sport = :80.*sport = :443.*sport = :6879' \
     'host HTTP edge listener diagnostics'
 require 'http://127\.0\.0\.1/api/health' 'host-local Traefik health diagnostic'
+require '--header[[:space:]]+"Host:[[:space:]]*\$PUBLIC_AUTHORITY"[[:space:]]+http://127\.0\.0\.1/api/health' \
+    'host-local port 80 public Host diagnostic'
+require '--header[[:space:]]+"Host:[[:space:]]*\$PUBLIC_AUTHORITY"[[:space:]]+http://127\.0\.0\.1:6879/api/health' \
+    'host-local port 6879 public Host diagnostic'
 require 'kubectl get service traefik -n kube-system -o wide' 'Traefik service exposure diagnostics'
 require 'svccontroller\.k3s\.cattle\.io/svcname=traefik' 'Traefik ServiceLB diagnostics'
 require 'kubectl port-forward service/stratum-frontend 18080:80' 'internal frontend verification tunnel'
