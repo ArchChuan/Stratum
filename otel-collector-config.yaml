@@ -71,6 +71,25 @@ processors:
 
   tail_sampling:
     policies:
+      - name: evaluation-always
+        type: string_attribute
+        string_attribute:
+          key: stratum.evaluation
+          values: ["true"]
+
+      - name: experiment-always
+        type: string_attribute
+        string_attribute:
+          key: stratum.experiment.id
+          values: [".+"]
+          enabled_regex_matching: true
+
+      - name: security-always
+        type: string_attribute
+        string_attribute:
+          key: stratum.security_violation
+          values: ["true"]
+
       - name: error-policy
         type: status_code
         status_code:
@@ -100,6 +119,13 @@ exporters:
     endpoint: jaeger:4317
     tls:
       insecure: true
+
+  otlphttp/opik:
+    endpoint: ${env:OPIK_OTLP_ENDPOINT}
+    headers:
+      projectName: ${env:OPIK_PROJECT}
+      Comet-Workspace: ${env:OPIK_WORKSPACE}
+      Authorization: ${env:OPIK_API_KEY}
 
   prometheus:
     endpoint: 0.0.0.0:8889
@@ -142,7 +168,7 @@ service:
     traces:
       receivers: [otlp, zipkin]
       processors: [memory_limiter, resource, attributes, tail_sampling, batch]
-      exporters: [otlp, logging]
+      exporters: [otlp, otlphttp/opik, logging]
 
     metrics:
       receivers: [otlp, prometheus]

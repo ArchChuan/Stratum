@@ -11,6 +11,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
@@ -367,6 +368,7 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 		}
 	} else if err != nil {
 		llmGWSpan.RecordError(err)
+		llmGWSpan.SetStatus(codes.Error, "llm provider call failed")
 		g.logger.Error("llm.complete",
 			zap.String("trace_id", streamTraceID),
 			zap.String("tenant_id", streamTenantID),

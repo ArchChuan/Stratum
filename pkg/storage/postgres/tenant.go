@@ -9,29 +9,23 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
 
 const (
-	schemaProvisionLockKey       int64 = 0x5374726174756d
-	schemaProvisionLockSQL             = `SELECT pg_advisory_lock($1)`
-	schemaProvisionUnlockSQL           = `SELECT pg_advisory_unlock($1)`
-	schemaProvisionLockTimeout         = 2 * time.Minute
-	schemaProvisionUnlockTimeout       = 5 * time.Second
+	schemaProvisionLockKey         int64 = 0x5374726174756d
+	schemaProvisionLockSQL               = `SELECT pg_advisory_xact_lock($1)`
+	schemaProvisionLockTimeout           = 2 * time.Minute
+	schemaProvisionRollbackTimeout       = 5 * time.Second
 )
-
-type schemaProvisionLockConn interface {
-	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
-}
 
 type tenantTxBeginner interface {
 	Begin(context.Context) (pgx.Tx, error)
 }
 
 // WithSchemaProvisionLock serializes the complete startup schema bootstrap
-// across application instances using one PostgreSQL session advisory lock.
+// across application instances using one PostgreSQL transaction advisory lock.
 func WithSchemaProvisionLock(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -40,35 +34,47 @@ func WithSchemaProvisionLock(
 	if pool == nil {
 		return fmt.Errorf("postgres: schema provision lock: nil pool")
 	}
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("postgres: acquire schema provision lock connection: %w", err)
-	}
-	defer conn.Release()
-
 	lockCtx, cancel := context.WithTimeout(ctx, schemaProvisionLockTimeout)
 	defer cancel()
-	return runWithSchemaProvisionLock(lockCtx, ctx, conn, fn)
+	return runWithSchemaProvisionLock(lockCtx, ctx, pool, fn)
 }
 
 func runWithSchemaProvisionLock(
 	lockCtx context.Context,
 	callbackCtx context.Context,
-	conn schemaProvisionLockConn,
+	pool tenantTxBeginner,
 	fn func(context.Context) error,
-) (result error) {
-	if _, err := conn.Exec(lockCtx, schemaProvisionLockSQL, schemaProvisionLockKey); err != nil {
-		return fmt.Errorf("postgres: acquire schema provision lock: %w", err)
+) error {
+	tx, err := pool.Begin(lockCtx)
+	if err != nil {
+		return fmt.Errorf("postgres: begin schema provision lock transaction: %w", err)
 	}
 	defer func() {
-		unlockCtx, cancel := context.WithTimeout(context.Background(), schemaProvisionUnlockTimeout)
-		defer cancel()
-		if _, err := conn.Exec(unlockCtx, schemaProvisionUnlockSQL, schemaProvisionLockKey); err != nil {
-			result = errors.Join(result, fmt.Errorf("postgres: release schema provision lock: %w", err))
+		if recovered := recover(); recovered != nil {
+			_ = rollbackSchemaProvisionLock(tx, nil)
+			panic(recovered)
 		}
 	}()
 
-	return fn(callbackCtx)
+	if _, err := tx.Exec(lockCtx, schemaProvisionLockSQL, schemaProvisionLockKey); err != nil {
+		return rollbackSchemaProvisionLock(tx, fmt.Errorf("postgres: acquire schema provision lock: %w", err))
+	}
+	if err := fn(callbackCtx); err != nil {
+		return rollbackSchemaProvisionLock(tx, err)
+	}
+	if err := tx.Commit(callbackCtx); err != nil {
+		return rollbackSchemaProvisionLock(tx, fmt.Errorf("postgres: commit schema provision lock transaction: %w", err))
+	}
+	return nil
+}
+
+func rollbackSchemaProvisionLock(tx pgx.Tx, result error) error {
+	rollbackCtx, cancel := context.WithTimeout(context.Background(), schemaProvisionRollbackTimeout)
+	defer cancel()
+	if err := tx.Rollback(rollbackCtx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		return errors.Join(result, fmt.Errorf("postgres: rollback schema provision lock transaction: %w", err))
+	}
+	return result
 }
 
 // ----------------------------------------------------------------------------

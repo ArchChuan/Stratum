@@ -137,16 +137,17 @@ the callback error. Add a runtime test proving `BootstrapTenants` invokes the lo
 
 - [ ] **Step 2: Run focused tests and verify RED**
 
-Run: `go test ./pkg/storage/postgres ./internal/platform/runtime -run 'SchemaProvisionLock|BootstrapTenants' -count=1`
+Run: `go test ./pkg/storage/postgres ./cmd/server -run 'SchemaProvisionLock|BootstrapTenantSchemas' -count=1`
 
 Expected: FAIL because the lock boundary does not exist.
 
-- [ ] **Step 3: Implement the bounded session advisory lock**
+- [ ] **Step 3: Implement the bounded transaction advisory lock**
 
-Add `WithSchemaProvisionLock(ctx, pool, fn)`. Acquire one pool connection, execute
-`SELECT pg_advisory_lock($1)` with a fixed Stratum lock key, defer
-`SELECT pg_advisory_unlock($1)` on a short background timeout, join unlock errors, and release the
-connection. Re-export it from `pkg/tenantdb`.
+Add `WithSchemaProvisionLock(ctx, pool, fn)`. Begin an explicit transaction and execute
+`SELECT pg_advisory_xact_lock($1)` with a fixed Stratum lock key. Commit after the callback;
+callback, lock, or commit failures roll back on a short background timeout. This supersedes the
+original session-lock implementation, which can leak locks through PgBouncer transaction pooling.
+Re-export it from `pkg/tenantdb`.
 
 - [ ] **Step 4: Wrap the complete bootstrap**
 
@@ -157,10 +158,10 @@ existing warning behavior for individual tenant provisioning while failing publi
 - [ ] **Step 5: Verify GREEN and race behavior**
 
 Run:
-`go test ./pkg/storage/postgres ./internal/platform/runtime -run 'SchemaProvisionLock|BootstrapTenants' -count=1`
+`go test ./pkg/storage/postgres ./cmd/server -run 'SchemaProvisionLock|BootstrapTenantSchemas' -count=1`
 
 Then run:
-`go test -race ./pkg/storage/postgres ./internal/platform/runtime -count=1`
+`go test -race ./pkg/storage/postgres ./cmd/server -count=1`
 
 Expected: PASS.
 

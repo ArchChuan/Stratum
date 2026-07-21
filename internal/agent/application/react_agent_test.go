@@ -2,6 +2,7 @@ package application_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -9,6 +10,10 @@ import (
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
 )
 
@@ -33,38 +38,12 @@ func (m *mockChatStore) AddMessage(ctx context.Context, tenantID string, msg *ag
 	return nil
 }
 
-type mockToolTraceStore struct {
-	traces []agent.ToolObservation
-}
+type failingPayloadStore struct{}
 
-func (m *mockToolTraceStore) InsertBatch(_ context.Context, _ string, traces []agent.ToolObservation) error {
-	m.traces = append(m.traces, traces...)
-	return nil
-}
-
-func (m *mockToolTraceStore) ListByTraceID(context.Context, string, string) ([]agent.ToolObservation, error) {
-	return nil, nil
-}
-
-func (m *mockToolTraceStore) ListByConversation(context.Context, string, string, int) ([]agent.ToolObservation, error) {
-	return nil, nil
-}
-
-type mockTraceEventStore struct {
-	events []agent.AgentTraceEvent
-}
-
-func (m *mockTraceEventStore) Insert(context.Context, string, agent.AgentTraceEvent) error {
-	return nil
-}
-
-func (m *mockTraceEventStore) InsertBatch(_ context.Context, _ string, events []agent.AgentTraceEvent) error {
-	m.events = append(m.events, events...)
-	return nil
-}
-
-func (m *mockTraceEventStore) ListByTraceID(context.Context, string, string) ([]agent.AgentTraceEvent, error) {
-	return nil, nil
+func (failingPayloadStore) Put(
+	context.Context, port.TracePayload,
+) (port.TracePayloadRef, error) {
+	return port.TracePayloadRef{}, errors.New("minio unavailable")
 }
 
 // mockCapGW drives LLM responses in sequence; tools always succeed.
@@ -141,6 +120,155 @@ func TestBaseAgent_ReActExecute_WithToolCall(t *testing.T) {
 	require.Equal(t, "calc", result.ToolCalls[0].ToolName)
 }
 
+func TestBaseAgentPayloadStoreFailureDoesNotFailExecution(t *testing.T) {
+	t.Setenv("OTEL_CAPTURE_CONTENT", "true")
+	a := newReActAgent()
+	a.SetCapGateway(&mockCapGW{responses: []port.CapabilityResponse{{Content: "answer"}}})
+	result, err := a.Execute(context.Background(), "question",
+		agent.WithTenantID("tenant-1"),
+		agent.WithTraceID("trace-1"),
+		agent.WithTracePayloadStore(failingPayloadStore{}),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "answer", result.Output)
+}
+
+func TestBaseAgentOTelHierarchyFollowsReActGraphContext(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	a := newReActAgent()
+	a.SetCapGateway(&mockCapGW{responses: []port.CapabilityResponse{
+		{ToolCalls: []port.ToolCall{{ID: "c1", Name: "calc", Arguments: map[string]any{"expr": "6*7"}}}, Usage: port.TokenUsage{Prompt: 11, Completion: 3, Total: 14}},
+		{Content: "The answer is 42", Usage: port.TokenUsage{Prompt: 17, Completion: 5, Total: 22}},
+	}})
+	_, err := a.Execute(context.Background(), "calc 6*7",
+		agent.WithTenantID("tenant-1"),
+		agent.WithExtraTools([]port.ToolDefinition{{
+			Name: "calc", ProviderType: "mcp", ProviderID: "math", ServerID: "math", CapabilityID: "calculate",
+			Metadata: map[string]any{"risk_level": "read", "version_id": "tool-revision-1"},
+		}}),
+		agent.WithToolCallFn(func(context.Context, string, string, map[string]any) (any, error) { return "42", nil }),
+	)
+	require.NoError(t, err)
+
+	spans := recorder.Ended()
+	byName := make(map[string][]sdktrace.ReadOnlySpan)
+	for _, span := range spans {
+		byName[span.Name()] = append(byName[span.Name()], span)
+	}
+	require.Len(t, byName["agent.execute"], 1)
+	require.Len(t, byName["react.graph.invoke"], 1)
+	require.Len(t, byName["react.llm"], 2)
+	require.Len(t, byName["react.tool"], 1)
+
+	rootID := byName["agent.execute"][0].SpanContext().SpanID()
+	graph := byName["react.graph.invoke"][0]
+	require.Equal(t, rootID, graph.Parent().SpanID())
+	for _, name := range []string{"react.llm", "react.tool"} {
+		for _, span := range byName[name] {
+			require.Equal(t, graph.SpanContext().SpanID(), span.Parent().SpanID(), name)
+		}
+	}
+	firstLLM := spanAttributes(byName["react.llm"][0])
+	require.Equal(t, "qwen-turbo", firstLLM["gen_ai.request.model"])
+	require.Equal(t, int64(11), firstLLM["gen_ai.usage.input_tokens"])
+	require.Equal(t, int64(3), firstLLM["gen_ai.usage.output_tokens"])
+	require.NotEmpty(t, firstLLM["stratum.input.sha256"])
+	require.NotEmpty(t, firstLLM["stratum.output.sha256"])
+	toolAttrs := spanAttributes(byName["react.tool"][0])
+	require.Equal(t, "c1", toolAttrs["gen_ai.tool.call.id"])
+	require.Equal(t, "calc", toolAttrs["gen_ai.tool.name"])
+	require.Equal(t, "mcp", toolAttrs["stratum.provider.type"])
+	require.Equal(t, "math", toolAttrs["stratum.server.id"])
+	require.Equal(t, "calculate", toolAttrs["stratum.capability.id"])
+	require.Equal(t, "tool-revision-1", toolAttrs["stratum.resource.revision_id"])
+	require.Equal(t, "tenant-1", toolAttrs["opik.metadata.stratum.tenant_id"])
+	require.Equal(t, "mcp", toolAttrs["opik.metadata.stratum.provider_type"])
+	require.Equal(t, "tool-revision-1", toolAttrs["opik.metadata.stratum.resource_revision_id"])
+	require.NotEmpty(t, toolAttrs["stratum.arguments.sha256"])
+	require.NotEmpty(t, toolAttrs["stratum.result.sha256"])
+}
+
+func TestBaseAgentRootSpanCarriesEvaluationEvidence(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	a := newReActAgent()
+	a.SetCapGateway(&mockCapGW{responses: []port.CapabilityResponse{{Content: "42"}}})
+	_, err := a.Execute(context.Background(), "what is 6x7?",
+		agent.WithTenantID("tenant-1"),
+		agent.WithUserID("user-1"),
+		agent.WithTraceID("business-trace-1"),
+		agent.WithExecutionID("execution-1"),
+		agent.WithConversationID("conversation-1"),
+		agent.WithEvolutionTraceMetadata(agent.EvolutionTraceMetadata{
+			Evaluation:   true,
+			ExperimentID: "experiment-1",
+			Variant:      "canary",
+			ExperimentAssignments: map[string]agent.ExperimentAssignment{
+				"skill:skill-1": {ExperimentID: "experiment-1", Variant: "canary"},
+			},
+			ResourceManifest: map[string]string{
+				"agent:agent-001": "agent-revision-1",
+				"skill:skill-1":   "skill-revision-2",
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	var root sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		if span.Name() == "agent.execute" {
+			root = span
+			break
+		}
+	}
+	require.NotNil(t, root)
+	attrs := spanAttributes(root)
+	require.Equal(t, "tenant-1", attrs["stratum.tenant.id"])
+	require.Equal(t, "user-1", attrs["stratum.user.id"])
+	require.Equal(t, "business-trace-1", attrs["stratum.trace.id"])
+	require.Equal(t, "execution-1", attrs["stratum.execution.id"])
+	require.Equal(t, "conversation-1", attrs["stratum.conversation.id"])
+	require.Equal(t, "tenant-1", attrs["opik.metadata.stratum.tenant_id"])
+	require.Equal(t, "business-trace-1", attrs["opik.metadata.stratum.trace_id"])
+	require.Equal(t, "execution-1", attrs["opik.metadata.stratum.execution_id"])
+	require.Equal(t, "true", attrs["stratum.evaluation"])
+	require.Equal(t, "experiment-1", attrs["stratum.experiment.id"])
+	require.Equal(t, "canary", attrs["stratum.experiment.variant"])
+	var assignments map[string]agent.ExperimentAssignment
+	require.NoError(t, json.Unmarshal([]byte(attrs["stratum.experiment.assignments"].(string)), &assignments))
+	require.Equal(t, "experiment-1", assignments["skill:skill-1"].ExperimentID)
+	require.Equal(t, "success", attrs["opik.metadata.stratum.status"])
+	require.Equal(t, int64(0), attrs["opik.metadata.stratum.total_tokens"])
+	require.Contains(t, attrs, "opik.metadata.stratum.duration_ms")
+	require.Contains(t, attrs, "opik.metadata.stratum.cost_usd")
+	var manifest map[string]string
+	require.NoError(t, json.Unmarshal([]byte(attrs["stratum.resource.manifest"].(string)), &manifest))
+	require.Equal(t, "skill-revision-2", manifest["skill:skill-1"])
+}
+
+func spanAttributes(span sdktrace.ReadOnlySpan) map[string]any {
+	out := make(map[string]any)
+	for _, attr := range span.Attributes() {
+		out[string(attr.Key)] = attr.Value.AsInterface()
+	}
+	return out
+}
+
 func TestBaseAgent_ReActExecute_CapGWNil(t *testing.T) {
 	a := newReActAgent()
 	// no SetCapGateway call → CapGateway is nil
@@ -157,6 +285,30 @@ func TestBaseAgent_ReActExecute_LLMError(t *testing.T) {
 
 	_, err := a.Execute(context.Background(), "hello")
 	require.Error(t, err)
+}
+
+func TestBaseAgentOTelMarksLLMFailureAsError(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	a := newReActAgent()
+	a.SetCapGateway(&mockCapGW{err: errors.New("llm unavailable")})
+	_, err := a.Execute(context.Background(), "hello", agent.WithTenantID("tenant-1"))
+	require.Error(t, err)
+
+	for _, span := range recorder.Ended() {
+		if span.Name() == "react.llm" {
+			require.Equal(t, codes.Error, span.Status().Code)
+			return
+		}
+	}
+	t.Fatal("react.llm span not found")
 }
 
 func TestWithConversationID_SetsField(t *testing.T) {
@@ -243,7 +395,7 @@ func TestExecute_PersistsMessagesToChatStore(t *testing.T) {
 	require.Equal(t, "conv-xyz", savedMsgs[1].ConversationID)
 }
 
-func TestExecute_PersistsToolTraceAndSummaryMessage(t *testing.T) {
+func TestExecute_ReturnsToolTraceAndPersistsSummaryMessage(t *testing.T) {
 	a := newReActAgent()
 	gw := &mockCapGW{
 		responses: []port.CapabilityResponse{
@@ -261,13 +413,9 @@ func TestExecute_PersistsToolTraceAndSummaryMessage(t *testing.T) {
 			return nil
 		},
 	}
-	traceStore := &mockToolTraceStore{}
-	eventStore := &mockTraceEventStore{}
 	a.WithChatStore(cs)
-	a.WithToolTraceStore(traceStore)
-	a.WithTraceEventStore(eventStore)
 
-	_, err := a.Execute(context.Background(), "calc 6*7",
+	result, err := a.Execute(context.Background(), "calc 6*7",
 		agent.WithTenantID("t1"),
 		agent.WithTraceID("trace-1"),
 		agent.WithExecutionID("exec-1"),
@@ -278,13 +426,13 @@ func TestExecute_PersistsToolTraceAndSummaryMessage(t *testing.T) {
 		agent.WithToolCallFn(func(context.Context, string, string, map[string]any) (any, error) { return "42", nil }),
 	)
 	require.NoError(t, err)
-	require.Len(t, traceStore.traces, 1)
-	require.Equal(t, "c1", traceStore.traces[0].ToolCallID)
-	require.Equal(t, "exec-1", traceStore.traces[0].ExecutionID)
-	require.Equal(t, "calc", traceStore.traces[0].ToolName)
-	require.Equal(t, "42", traceStore.traces[0].RawText)
-	require.NotEmpty(t, eventStore.events)
-	for _, ev := range eventStore.events {
+	require.Len(t, result.ToolObservations, 1)
+	require.Equal(t, "c1", result.ToolObservations[0].ToolCallID)
+	require.Equal(t, "exec-1", result.ToolObservations[0].ExecutionID)
+	require.Equal(t, "calc", result.ToolObservations[0].ToolName)
+	require.Equal(t, "42", result.ToolObservations[0].RawText)
+	require.NotEmpty(t, result.TraceEvents)
+	for _, ev := range result.TraceEvents {
 		require.Equal(t, "exec-1", ev.ExecutionID)
 	}
 

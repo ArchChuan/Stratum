@@ -135,6 +135,30 @@ npm run lint && npm run build            # 前端 PR 前
 
 **zhparser 本地构建代理**：`docker build` 的 `RUN` 不继承宿主 shell 代理，`apt.postgresql.org`（PGDG 源）在大陆会卡死。`make zhparser-build-local` 默认继承环境变量 `HTTP(S)_PROXY` 并经 build-arg 注入，无代理时自动省略。代理**仅本地加速、不写入镜像层、不进 CD**（GitHub runner 网络干净）——这是环境隔离原则的实例：本地构建手段与远程交付链彻底分离。远程由 `deploy.yml` 在干净网络下 build+push 同一 Dockerfile。
 
+**WSL 网络故障临时代理**：依赖下载或镜像拉取先走正常网络；仅在出现连接超时、TLS handshake timeout、
+connection reset 或 registry 不可达后，才允许临时使用 Windows 上的代理。Windows IP 每次从 WSL 默认路由
+动态发现，端口固定为 `10090`。使用前必须在 3 秒内验证端口可达；网关为空或检查失败时应停止并暴露
+错误，不得假定代理已生效。
+
+```bash
+WINDOWS_HOST="$(ip route show default | awk '{print $3; exit}')"
+test -n "$WINDOWS_HOST"
+WINDOWS_PROXY="http://${WINDOWS_HOST}:10090"
+timeout 3 bash -c "</dev/tcp/${WINDOWS_HOST}/10090"
+
+HTTP_PROXY="$WINDOWS_PROXY" \
+HTTPS_PROXY="$WINDOWS_PROXY" \
+NO_PROXY="localhost,127.0.0.1,::1,host.docker.internal,.svc,.cluster.local" \
+docker compose pull
+```
+
+代理变量只作用于紧随其后的单条命令；特定工具只识别小写变量时，可在同一命令上同时传入
+`http_proxy`、`https_proxy` 和 `no_proxy`。禁止将该代理写入 `.env`、Shell profile、Docker daemon、
+Dockerfile、镜像层、CI、Kubernetes、Helm 或生产配置，也不得输出代理凭据或敏感请求内容。
+
+Shell 级变量可能不会影响由 Docker daemon 发起的 registry 请求。如果临时代理后拉取仍失败，应明确报告
+daemon 未继承代理；未经用户单独确认，不得修改持久 Docker daemon 配置。
+
 ### 端到端开发验证
 
 涉及任何功能开发、Bug 修复、前后端联调、数据库链路、Agent/Skill/MCP/Memory/Knowledge/IAM 能力改动时，完成标准不是代码写完或单测通过，而是根据需求目标完成真实 API、前端操作、后端服务、测试数据库链路的端到端验证；验证不符合目标时继续定位和修改，直到闭环。不得打印 token、密钥或原始 API key；临时脚本和自启动进程必须在完成前清理或明确说明。

@@ -69,4 +69,17 @@ func TestWithSchemaProvisionLockSerializesConnections(t *testing.T) {
 	if err := <-secondDone; err != nil {
 		t.Fatalf("second lock: %v", err)
 	}
+
+	var retainedLocks int
+	if err := firstPool.QueryRow(ctx, `SELECT count(*) FROM pg_locks
+		WHERE locktype = 'advisory'
+		  AND classid = (($1::bigint >> 32) & 4294967295)::oid
+		  AND objid = ($1::bigint & 4294967295)::oid
+		  AND objsubid = 1
+		  AND granted`, schemaProvisionLockKey).Scan(&retainedLocks); err != nil {
+		t.Fatalf("query retained advisory locks: %v", err)
+	}
+	if retainedLocks != 0 {
+		t.Fatalf("schema provision left %d advisory lock(s) behind", retainedLocks)
+	}
 }

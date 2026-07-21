@@ -84,3 +84,30 @@ func TestMemoryPipelineDefaults(t *testing.T) {
 		t.Errorf("expected pipeline NatsURL nats://localhost:4222, got %s", cfg.MemoryPipeline.NatsURL)
 	}
 }
+
+func TestLoadOpikAndTracePayloadConfig(t *testing.T) {
+	t.Setenv("OPIK_URL", "http://opik.test/api")
+	t.Setenv("OPIK_PROJECT", "stratum-test")
+	t.Setenv("OPIK_WORKSPACE", "workspace-test")
+	t.Setenv("OPIK_API_KEY", "not-a-real-key")
+	t.Setenv("TRACE_PAYLOAD_ENABLED", "true")
+	t.Setenv("TRACE_PAYLOAD_ENDPOINT", "minio.test:9000")
+	t.Setenv("TRACE_PAYLOAD_ACCESS_KEY", "access-test")
+	t.Setenv("TRACE_PAYLOAD_SECRET_KEY", "secret-test")
+	t.Setenv("TRACE_PAYLOAD_BUCKET", "stratum-evidence-test")
+	t.Setenv("TRACE_PAYLOAD_USE_TLS", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.Opik.URL != "http://opik.test/api" || cfg.Opik.Project != "stratum-test" || cfg.Opik.Workspace != "workspace-test" {
+		t.Fatalf("unexpected Opik config: %#v", cfg.Opik)
+	}
+	if cfg.Opik.APIKey != "not-a-real-key" {
+		t.Fatal("Opik API key not loaded")
+	}
+	if !cfg.TracePayload.Enabled || !cfg.TracePayload.UseTLS || cfg.TracePayload.Bucket != "stratum-evidence-test" {
+		t.Fatalf("unexpected trace payload config: %#v", cfg.TracePayload)
+	}
+}

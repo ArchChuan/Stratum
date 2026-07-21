@@ -15,6 +15,13 @@ data:
   OTEL_SERVICE_NAME: {{ .Values.config.otelServiceName | quote }}
   OTEL_EXPORTER_TYPE: {{ .Values.config.otelExporterType | quote }}
   OTEL_SAMPLING_RATIO: {{ .Values.config.otelSamplingRatio | quote }}
+  OPIK_URL: {{ .Values.config.opikUrl | quote }}
+  OPIK_PROJECT: {{ .Values.config.opikProject | quote }}
+  OPIK_WORKSPACE: {{ .Values.config.opikWorkspace | quote }}
+  TRACE_PAYLOAD_ENABLED: {{ .Values.config.tracePayloadEnabled | quote }}
+  TRACE_PAYLOAD_ENDPOINT: {{ .Values.config.tracePayloadEndpoint | quote }}
+  TRACE_PAYLOAD_BUCKET: {{ .Values.config.tracePayloadBucket | quote }}
+  TRACE_PAYLOAD_USE_TLS: {{ .Values.config.tracePayloadUseTls | quote }}
   POSTGRES_HOST: {{ .Values.database.host | quote }}
   POSTGRES_PORT: {{ .Values.database.port | quote }}
   POSTGRES_DB: {{ .Values.database.name | quote }}

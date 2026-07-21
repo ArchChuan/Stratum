@@ -3,7 +3,6 @@ package persistence
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
@@ -29,16 +28,6 @@ func (r *PgFeedbackRepository) Record(
 ) (domain.EvaluationFeedback, error) {
 	var feedback domain.EvaluationFeedback
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var revisionID string
-		if err := tx.QueryRow(ctx,
-			`SELECT metadata_json->>'version_id'
-			 FROM agent_tool_traces
-			 WHERE trace_id=$1 AND provider_type='skill' AND provider_id=$2
-			       AND COALESCE(metadata_json->>'version_id','') <> ''
-			 ORDER BY created_at DESC LIMIT 1`, input.TraceID, input.ResourceID,
-		).Scan(&revisionID); err != nil {
-			return fmt.Errorf("feedback repository: trace revision not found: %w", err)
-		}
 		outcome := make(map[string]any, len(input.Outcome)+1)
 		for key, value := range input.Outcome {
 			outcome[key] = value
@@ -60,7 +49,7 @@ func (r *PgFeedbackRepository) Record(
 			 ON CONFLICT (trace_id, resource_id) DO UPDATE SET
 			 score=EXCLUDED.score, outcome=EXCLUDED.outcome, idempotency_key=EXCLUDED.idempotency_key
 			 RETURNING id, trace_id, resource_kind, resource_id, revision_id, score, outcome, idempotency_key, created_at`,
-			feedback.ID, input.TraceID, string(input.ResourceKind), input.ResourceID, revisionID,
+			feedback.ID, input.TraceID, string(input.ResourceKind), input.ResourceID, input.RevisionID,
 			input.Score, string(outcomeJSON), input.IdempotencyKey,
 		).Scan(&feedback.ID, &feedback.TraceID, &kind, &feedback.ResourceID, &feedback.RevisionID,
 			&feedback.Score, &storedOutcome, &feedback.IdempotencyKey, &feedback.CreatedAt)
@@ -100,12 +89,12 @@ func (r *PgFeedbackRepository) ActiveExperiment(
 	return NewPgExperimentRepository(r.pool).Get(ctx, tenantID, experimentID)
 }
 
-func (r *PgFeedbackRepository) Observations(
+func (r *PgFeedbackRepository) StageFeedback(
 	ctx context.Context,
 	tenantID string,
 	experiment domain.Experiment,
-) ([]domain.OnlineObservation, []domain.OnlineObservation, int, error) {
-	var stable, canary []domain.OnlineObservation
+) ([]domain.EvaluationFeedback, int, error) {
+	var feedback []domain.EvaluationFeedback
 	observedMinutes := 0
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var stageStartedAt time.Time
@@ -114,55 +103,43 @@ func (r *PgFeedbackRepository) Observations(
 		}
 		observedMinutes = int(time.Since(stageStartedAt).Minutes())
 		var err error
-		stable, err = loadObservations(ctx, tx, experiment.ResourceID, experiment.StableRevisionID, stageStartedAt)
-		if err != nil {
-			return err
-		}
-		canary, err = loadObservations(ctx, tx, experiment.ResourceID, experiment.CanaryRevisionID, stageStartedAt)
+		feedback, err = loadStageFeedback(ctx, tx, experiment.ResourceID, stageStartedAt)
 		return err
 	})
-	return stable, canary, observedMinutes, err
+	return feedback, observedMinutes, err
 }
 
-func loadObservations(
+func loadStageFeedback(
 	ctx context.Context,
 	tx pgx.Tx,
-	resourceID, revisionID string,
+	resourceID string,
 	stageStartedAt time.Time,
-) ([]domain.OnlineObservation, error) {
+) ([]domain.EvaluationFeedback, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT f.score,
-		        COALESCE((SELECT SUM(e.cost_usd) FROM agent_trace_events e WHERE e.trace_id=f.trace_id), 0),
-		        t.latency_ms, t.status,
-		        COALESCE((f.outcome->>'security_violation')::boolean, false)
-		 FROM evaluation_feedback f
-		 JOIN LATERAL (
-		   SELECT latency_ms, status
-		   FROM agent_tool_traces
-		   WHERE trace_id=f.trace_id AND provider_type='skill' AND provider_id=f.resource_id
-		         AND metadata_json->>'version_id'=f.revision_id
-		   ORDER BY created_at DESC LIMIT 1
-		 ) t ON true
-		 WHERE f.resource_id=$1 AND f.revision_id=$2 AND f.created_at >= $3
-		 ORDER BY f.created_at`, resourceID, revisionID, stageStartedAt)
+		`SELECT id, trace_id, resource_kind, resource_id, revision_id, score, outcome, idempotency_key, created_at
+		 FROM evaluation_feedback
+		 WHERE resource_id=$1 AND created_at >= $2
+		 ORDER BY created_at`, resourceID, stageStartedAt)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var observations []domain.OnlineObservation
+	var feedback []domain.EvaluationFeedback
 	for rows.Next() {
-		var observation domain.OnlineObservation
-		var status string
-		if err := rows.Scan(
-			&observation.Score, &observation.CostUSD, &observation.LatencyMs, &status,
-			&observation.SecurityViolation,
-		); err != nil {
+		var row domain.EvaluationFeedback
+		var resourceKind string
+		var outcome []byte
+		if err := rows.Scan(&row.ID, &row.TraceID, &resourceKind, &row.ResourceID, &row.RevisionID,
+			&row.Score, &outcome, &row.IdempotencyKey, &row.CreatedAt); err != nil {
 			return nil, err
 		}
-		observation.Success = status == "success"
-		observations = append(observations, observation)
+		row.ResourceKind = domain.ResourceKind(resourceKind)
+		if err := json.Unmarshal(outcome, &row.Outcome); err != nil {
+			return nil, err
+		}
+		feedback = append(feedback, row)
 	}
-	return observations, rows.Err()
+	return feedback, rows.Err()
 }
 
 func (r *PgFeedbackRepository) execTenant(

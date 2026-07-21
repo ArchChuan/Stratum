@@ -105,8 +105,61 @@ spec:
                 configMapKeyRef:
                   name: stratum-config
                   key: OTEL_SAMPLING_RATIO
+            - name: OPIK_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: stratum-config
+                  key: OPIK_URL
+            - name: OPIK_PROJECT
+              valueFrom:
+                configMapKeyRef:
+                  name: stratum-config
+                  key: OPIK_PROJECT
+            - name: OPIK_WORKSPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: stratum-config
+                  key: OPIK_WORKSPACE
+            - name: TRACE_PAYLOAD_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: stratum-config
+                  key: TRACE_PAYLOAD_ENABLED
+            - name: TRACE_PAYLOAD_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: stratum-config
+                  key: TRACE_PAYLOAD_ENDPOINT
+            - name: TRACE_PAYLOAD_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: stratum-config
+                  key: TRACE_PAYLOAD_BUCKET
+            - name: TRACE_PAYLOAD_USE_TLS
+              valueFrom:
+                configMapKeyRef:
+                  name: stratum-config
+                  key: TRACE_PAYLOAD_USE_TLS
 
             # 从 Secret 读取敏感配置
+            - name: OPIK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: stratum-secrets
+                  key: OPIK_API_KEY
+                  optional: true
+            - name: TRACE_PAYLOAD_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: stratum-secrets
+                  key: TRACE_PAYLOAD_ACCESS_KEY
+                  optional: true
+            - name: TRACE_PAYLOAD_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: stratum-secrets
+                  key: TRACE_PAYLOAD_SECRET_KEY
+                  optional: true
             - name: NEO4J_PASSWORD
               valueFrom:
                 secretKeyRef:

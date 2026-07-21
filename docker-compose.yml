@@ -16,6 +16,16 @@ services:
       - MILVUS_PORT=19530
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=stratum-ai
+      - OPIK_URL=${OPIK_URL:-http://host.docker.internal:5173/api}
+      - OPIK_PROJECT=${OPIK_PROJECT:-stratum}
+      - OPIK_WORKSPACE=${OPIK_WORKSPACE:-default}
+      - OPIK_API_KEY=${OPIK_API_KEY:-}
+      - TRACE_PAYLOAD_ENABLED=${TRACE_PAYLOAD_ENABLED:-false}
+      - TRACE_PAYLOAD_ENDPOINT=${TRACE_PAYLOAD_ENDPOINT:-minio:9000}
+      - TRACE_PAYLOAD_ACCESS_KEY=${TRACE_PAYLOAD_ACCESS_KEY:-minioadmin}
+      - TRACE_PAYLOAD_SECRET_KEY=${TRACE_PAYLOAD_SECRET_KEY:-minioadmin}
+      - TRACE_PAYLOAD_BUCKET=${TRACE_PAYLOAD_BUCKET:-stratum-trace-evidence}
+      - TRACE_PAYLOAD_USE_TLS=${TRACE_PAYLOAD_USE_TLS:-false}
     networks:
       - stratum
     depends_on:
@@ -82,6 +92,11 @@ services:
       - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      OPIK_OTLP_ENDPOINT: ${OPIK_OTLP_ENDPOINT:-http://host.docker.internal:5173/api/v1/private/otel}
+      OPIK_PROJECT: ${OPIK_PROJECT:-stratum}
+      OPIK_WORKSPACE: ${OPIK_WORKSPACE:-default}
+      OPIK_API_KEY: ${OPIK_API_KEY:-}
     ports:
       - "4317:4317"  # OTLP gRPC receiver
       - "4318:4318"  # OTLP HTTP receiver

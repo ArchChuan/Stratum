@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
@@ -41,6 +42,36 @@ func TestExperimentServiceAppliesRollbackDecision(t *testing.T) {
 	}
 	if decision != domain.DecisionRollback || experiment.Status != domain.ExperimentRolledBack || repo.deployment.CanaryPercent != 0 {
 		t.Fatalf("rollback not applied: decision=%s experiment=%+v deployment=%+v", decision, experiment, repo.deployment)
+	}
+}
+
+func TestExperimentServiceResolveAssignmentIncludesVariantEvidence(t *testing.T) {
+	repo := &fakeExperimentRepo{deployment: domain.Deployment{
+		ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		StableRevisionID: "stable-1", CanaryRevisionID: "canary-1",
+		CanaryPercent: 50, ExperimentID: "experiment-1",
+	}}
+	svc := NewExperimentService(repo)
+	canarySubject := ""
+	for i := 0; i < 1000; i++ {
+		candidate := fmt.Sprintf("subject-%d", i)
+		if domain.AssignVariant(candidate+":skill-1", 50) {
+			canarySubject = candidate
+			break
+		}
+	}
+	if canarySubject == "" {
+		t.Fatal("failed to find deterministic canary subject")
+	}
+
+	assignment, found, err := svc.ResolveAssignment(
+		context.Background(), "tenant-1", domain.ResourceKindSkill, "skill-1", canarySubject,
+	)
+	if err != nil || !found {
+		t.Fatalf("ResolveAssignment failed: found=%v err=%v", found, err)
+	}
+	if assignment.RevisionID != "canary-1" || assignment.ExperimentID != "experiment-1" || assignment.Variant != "canary" {
+		t.Fatalf("unexpected assignment: %+v", assignment)
 	}
 }
 

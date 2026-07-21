@@ -123,6 +123,22 @@ data:
       tail_sampling:
         decision_wait: 10s
         policies:
+          - name: evaluation-always
+            type: string_attribute
+            string_attribute:
+              key: stratum.evaluation
+              values: ["true"]
+          - name: experiment-always
+            type: string_attribute
+            string_attribute:
+              key: stratum.experiment.id
+              values: [".+"]
+              enabled_regex_matching: true
+          - name: security-always
+            type: string_attribute
+            string_attribute:
+              key: stratum.security_violation
+              values: ["true"]
           # Core conversation chain — always sample
           - name: chat-always
             type: string_attribute
@@ -155,6 +171,12 @@ data:
         endpoint: jaeger.monitoring.svc.cluster.local:4317
         tls:
           insecure: true
+      otlphttp/opik:
+        endpoint: ${env:OPIK_OTLP_ENDPOINT}
+        headers:
+          projectName: ${env:OPIK_PROJECT}
+          Comet-Workspace: ${env:OPIK_WORKSPACE}
+          Authorization: ${env:OPIK_API_KEY}
       debug:
         verbosity: basic
         sampling_initial: 2
@@ -170,7 +192,7 @@ data:
         traces:
           receivers: [otlp]
           processors: [memory_limiter, resource, tail_sampling, batch]
-          exporters: [otlp/jaeger, debug]
+          exporters: [otlp/jaeger, otlphttp/opik, debug]
 ---
 # OTEL Collector Deployment — stratum namespace
 apiVersion: apps/v1
@@ -195,6 +217,28 @@ spec:
         image: otel/opentelemetry-collector-contrib:0.102.0
         args:
           - --config=/conf/config.yaml
+        env:
+        - name: OPIK_OTLP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: stratum-config
+              key: OPIK_OTLP_ENDPOINT
+        - name: OPIK_PROJECT
+          valueFrom:
+            configMapKeyRef:
+              name: stratum-config
+              key: OPIK_PROJECT
+        - name: OPIK_WORKSPACE
+          valueFrom:
+            configMapKeyRef:
+              name: stratum-config
+              key: OPIK_WORKSPACE
+        - name: OPIK_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: stratum-secrets
+              key: OPIK_API_KEY
+              optional: true
         ports:
         - name: otlp-grpc
           containerPort: 4317

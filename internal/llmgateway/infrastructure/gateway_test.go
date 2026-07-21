@@ -3,14 +3,27 @@ package infrastructure
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
 )
+
+type failingLLMClient struct{ err error }
+
+func (c failingLLMClient) Complete(context.Context, *CompletionRequest) (*CompletionResponse, error) {
+	return nil, c.err
+}
+func (c failingLLMClient) Health(context.Context) error { return c.err }
+func (failingLLMClient) Models() []string               { return []string{"qwen-turbo"} }
 
 func TestNewGateway(t *testing.T) {
 	gateway := NewGateway()
@@ -100,6 +113,30 @@ func TestCompletionResponseHasToolCallsField(t *testing.T) {
 	b, err := json.Marshal(resp)
 	require.NoError(t, err)
 	require.Contains(t, string(b), `"tool_calls"`)
+}
+
+func TestGatewayOTelMarksFailureAsError(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	gateway := NewGateway().WithLogger(zap.NewNop())
+	gateway.RegisterClient(ProviderQwen, failingLLMClient{err: errors.New("provider unavailable")})
+	_, err := gateway.CompleteStream(context.Background(), &CompletionRequest{Model: "qwen-turbo"}, func(string) {})
+	require.Error(t, err)
+
+	for _, span := range recorder.Ended() {
+		if span.Name() == "llm.complete" {
+			require.Equal(t, codes.Error, span.Status().Code)
+			return
+		}
+	}
+	t.Fatal("llm.complete span not found")
 }
 
 func TestQwenComplete_ToolCalls(t *testing.T) {

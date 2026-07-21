@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -72,11 +71,13 @@ type fakeSkillRevisionResolver struct{}
 
 func (fakeSkillRevisionResolver) ResolveSkillRevision(
 	_ context.Context, _, _, subjectID string,
-) (string, bool, error) {
+) (port.SkillRevisionAssignment, bool, error) {
 	if subjectID != "test-subject" {
-		return "", false, nil
+		return port.SkillRevisionAssignment{}, false, nil
 	}
-	return "candidate-1", true, nil
+	return port.SkillRevisionAssignment{
+		RevisionID: "candidate-1", ExperimentID: "experiment-1", Variant: "canary",
+	}, true, nil
 }
 
 func (fakeSkillActivationResolver) ResolveSkills(_ context.Context, _ string, refs []port.SkillRevisionRef) (map[string]port.SkillActivation, error) {
@@ -86,8 +87,6 @@ func (fakeSkillActivationResolver) ResolveSkills(_ context.Context, _ string, re
 	}
 	return out, nil
 }
-
-type mockExecStore struct{ mock.Mock }
 
 type stubMemoryCleaner struct{ err error }
 
@@ -115,23 +114,12 @@ func (s stubChatRepo) ListMessages(context.Context, string, string, string) ([]*
 func (s stubChatRepo) CleanupExpired(context.Context, string) error        { return nil }
 func (s stubChatRepo) DeleteByAgent(context.Context, string, string) error { return s.err }
 
-func (m *mockExecStore) Insert(ctx context.Context, r application.ExecutionRecord) error {
-	return m.Called(ctx, r).Error(0)
-}
-
-func (m *mockExecStore) List(ctx context.Context, opts application.ListOptions) ([]application.ExecutionRecord, int64, error) {
-	args := m.Called(ctx, opts)
-	rows, _ := args.Get(0).([]application.ExecutionRecord)
-	return rows, args.Get(1).(int64), args.Error(2)
-}
-
 // satisfy interfaces at compile time
 var (
-	_ port.AgentRepo             = (*mockAgentRepo)(nil)
-	_ port.TenantSettings        = (*mockTenantSettings)(nil)
-	_ port.SkillLookup           = (*mockSkillLookup)(nil)
-	_ port.MCPToolProvider       = (*mockMCPTools)(nil)
-	_ application.ExecutionStore = (*mockExecStore)(nil)
+	_ port.AgentRepo       = (*mockAgentRepo)(nil)
+	_ port.TenantSettings  = (*mockTenantSettings)(nil)
+	_ port.SkillLookup     = (*mockSkillLookup)(nil)
+	_ port.MCPToolProvider = (*mockMCPTools)(nil)
 )
 
 // ---------- helpers ----------
@@ -195,6 +183,8 @@ func TestBuildExtraToolsUsesExperimentRevisionResolver(t *testing.T) {
 	tools, catalog := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, []string{"skill-1"})
 	assert.Empty(t, tools)
 	assert.Equal(t, "candidate-1", catalog["skill-1"].RevisionID)
+	assert.Equal(t, "experiment-1", catalog["skill-1"].ExperimentID)
+	assert.Equal(t, "canary", catalog["skill-1"].Variant)
 }
 
 func TestAgentService_Create_KeepsExplicitEmbedModel(t *testing.T) {
@@ -366,90 +356,6 @@ func TestAgentService_BuildExtraToolsDefaultsMissingRiskToUnclassified(t *testin
 	svc := application.NewAgentService(application.AgentServiceDeps{MCPTools: mcpProv, Logger: zap.NewNop()})
 	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", []string{"mcp:orders:mystery"}, nil)
 	assert.Equal(t, "unclassified", tools[0].Metadata["risk_level"])
-}
-
-func TestAgentService_RecordExecution_Success(t *testing.T) {
-	store := new(mockExecStore)
-	done := make(chan struct{})
-	store.On("Insert", mock.Anything, mock.MatchedBy(func(r application.ExecutionRecord) bool {
-		return r.ID == "exec-1" && r.AgentID == "a1" && r.Status == "success" && r.OutputPreview == "hello" && r.TotalTokens == 42
-	})).Return(nil).Run(func(_ mock.Arguments) { close(done) })
-
-	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry:  application.NewRegistry(new(mockAgentRepo), zap.NewNop()),
-		ExecStore: store,
-		Logger:    zap.NewNop(),
-	})
-	res := &application.AgentResult{Output: "hello", TokensUsed: 42}
-	svc.RecordExecutionForTest(context.Background(), "exec-1", "a1", "u1", "Agent", "query", res, nil, 100)
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Insert not called within 2s")
-	}
-	store.AssertExpectations(t)
-}
-
-func TestAgentService_RecordExecution_Error(t *testing.T) {
-	store := new(mockExecStore)
-	done := make(chan struct{})
-	store.On("Insert", mock.Anything, mock.MatchedBy(func(r application.ExecutionRecord) bool {
-		return r.ID == "exec-2" && r.Status == "error" && r.ErrorMessage == "boom"
-	})).Return(nil).Run(func(_ mock.Arguments) { close(done) })
-
-	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry:  application.NewRegistry(new(mockAgentRepo), zap.NewNop()),
-		ExecStore: store,
-		Logger:    zap.NewNop(),
-	})
-	svc.RecordExecutionForTest(context.Background(), "exec-2", "a1", "u1", "Agent", "query", nil, errors.New("boom"), 50)
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Insert not called within 2s")
-	}
-}
-
-func TestAgentService_RecordExecution_NilStore_NoOp(t *testing.T) {
-	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry: application.NewRegistry(new(mockAgentRepo), zap.NewNop()),
-		Logger:   zap.NewNop(),
-	})
-	svc.RecordExecutionForTest(context.Background(), "exec-3", "a1", "u1", "Agent", "q", nil, nil, 0)
-	// no panic, no goroutine — pass
-}
-
-func TestAgentService_ListExecutions_NilStore_ReturnsEmpty(t *testing.T) {
-	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry: application.NewRegistry(new(mockAgentRepo), zap.NewNop()),
-		Logger:   zap.NewNop(),
-	})
-	rows, total, err := svc.ListExecutions(context.Background(), 1, 20)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(0), total)
-	assert.Empty(t, rows)
-}
-
-func TestAgentService_ListExecutions_Maps(t *testing.T) {
-	store := new(mockExecStore)
-	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
-	store.On("List", mock.Anything, application.ListOptions{Page: 1, PageSize: 20}).
-		Return([]application.ExecutionRecord{
-			{ID: "r1", AgentID: "a1", Status: "success", CreatedAt: now},
-		}, int64(1), nil)
-
-	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry:  application.NewRegistry(new(mockAgentRepo), zap.NewNop()),
-		ExecStore: store,
-		Logger:    zap.NewNop(),
-	})
-	rows, total, err := svc.ListExecutions(context.Background(), 1, 20)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(1), total)
-	assert.Len(t, rows, 1)
-	assert.Equal(t, "r1", rows[0].ID)
-	assert.Equal(t, now.Format(time.RFC3339), rows[0].CreatedAt)
 }
 
 func TestAgentService_Execute_NotFound(t *testing.T) {
