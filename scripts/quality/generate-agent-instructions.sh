@@ -51,7 +51,7 @@ render() {
     printf '%s\n' '<!-- generated; do not edit directly -->'
     printf '<!-- source: docs/agent/instructions.md + %s -->\n\n' "${relative_prefix}"
     cat "${prefix}"
-    printf '\n\n---\n\n'
+    printf '\n---\n\n'
     cat "${COMMON}"
   } >"${output}"
 }

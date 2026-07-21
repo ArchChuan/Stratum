@@ -77,6 +77,8 @@ assert_contains "${agents_content}" 'codex-only'
 assert_not_contains "${agents_content}" 'claude-only'
 assert_contains "${claude_content}" 'claude-only'
 assert_not_contains "${claude_content}" 'codex-only'
+assert_not_contains "${agents_content}" $'codex-only\n\n\n---'
+assert_not_contains "${claude_content}" $'claude-only\n\n\n---'
 
 agents_mtime="$(stat -c %Y "${FIXTURE}/AGENTS.md")"
 claude_mtime="$(stat -c %Y "${FIXTURE}/CLAUDE.md")"
