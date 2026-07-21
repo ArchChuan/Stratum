@@ -141,6 +141,15 @@ require_file "${POSTGRES_DOCKERFILE}" 'curl .*--max-time[[:space:]]+[0-9]+' 'SCW
 require_file "${POSTGRES_DOCKERFILE}" 'curl .*--retry[[:space:]]+[1-9][0-9]*' 'SCWS download finite retries'
 require_file "${POSTGRES_DOCKERFILE}" 'curl .*--retry-all-errors' 'SCWS download retry classification'
 
+for values_file in "${DEMO_VALUES}" "${DEMO_LOCAL_VALUES}"; do
+    for key in opikUrl opikProject opikWorkspace tracePayloadEnabled tracePayloadEndpoint tracePayloadBucket tracePayloadUseTls; do
+        if ! grep -Eq "^[[:space:]]+${key}:" "${values_file}"; then
+            echo "deployment safety contract missing: ${key} in ${values_file}" >&2
+            exit 1
+        fi
+    done
+done
+
 if [[ -e "${ROOT}/.github/workflows/mirror.yml" ]]; then
     echo 'deployment safety contract violated: Gitee mirror workflow still exists' >&2
     exit 1

@@ -5,6 +5,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECKER="${SCRIPT_DIR}/arch-guard.sh"
 
+if ! grep -q 'no-agent-observation-table-runtime-test.sh' "${CHECKER}"; then
+	echo "arch-guard must include the Agent observation runtime dependency guard" >&2
+	exit 1
+fi
+
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 

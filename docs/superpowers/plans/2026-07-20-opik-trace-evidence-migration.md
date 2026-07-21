@@ -8,6 +8,18 @@
 
 **Tech Stack:** Go 1.25, OpenTelemetry 1.40, OTel Collector Contrib 0.96/0.102, Opik REST/OTLP HTTP, MinIO Go SDK, PostgreSQL, Gin.
 
+## Execution Status (2026-07-21)
+
+- Tasks 1-8 are implemented and covered by focused Go, schema, Collector configuration, deployment-safety, and
+  architecture-guard tests. Historical RED-phase command output is not available for every original checklist item, so
+  the detailed TDD checkboxes remain unchanged rather than claiming evidence that cannot be reproduced.
+- Runtime Go code has zero references to `agent_executions`, `agent_tool_traces`, or `agent_trace_events`; tenant DDL
+  retains those tables as read-only historical compatibility until the parity gate passes.
+- Task 9 is not complete. The real Opik integration test is opt-in and no reproducible full-stack E2E evidence has yet
+  been recorded.
+- Task 10 has only partial evidence: focused tests and repository Go tests pass, while real parity, fresh full
+  verification, cleanup, and the final table decision remain pending.
+
 ---
 
 ## Task 1: Configuration And Evidence Errors

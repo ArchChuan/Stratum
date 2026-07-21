@@ -341,20 +341,18 @@ func TestTenantSchemaContainsEvaluationControlPlane(t *testing.T) {
 	}
 }
 
-func TestTenantSchemaPermanentlyDropsAgentObservationTables(t *testing.T) {
+func TestTenantSchemaRetainsAgentObservationTablesUntilParityGate(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sql := string(data)
 	for _, table := range []string{"agent_executions", "agent_tool_traces", "agent_trace_events"} {
-		if !strings.Contains(sql, "DROP TABLE IF EXISTS "+table+";") {
-			t.Fatalf("tenant_schema.sql must permanently drop %s", table)
+		if strings.Contains(sql, "DROP TABLE IF EXISTS "+table+";") {
+			t.Fatalf("tenant_schema.sql must retain %s until the real parity gate passes", table)
 		}
-		for _, forbidden := range []string{"CREATE TABLE IF NOT EXISTS " + table, "ALTER TABLE " + table} {
-			if strings.Contains(sql, forbidden) {
-				t.Fatalf("tenant_schema.sql still provisions removed table %s through %q", table, forbidden)
-			}
+		if !strings.Contains(sql, "CREATE TABLE IF NOT EXISTS "+table) {
+			t.Fatalf("tenant_schema.sql must preserve historical table %s", table)
 		}
 	}
 }

@@ -17,6 +17,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+/bin/bash "${SCRIPT_DIR}/no-agent-observation-table-runtime-test.sh"
+
 RC=0
 REPORT=""
 

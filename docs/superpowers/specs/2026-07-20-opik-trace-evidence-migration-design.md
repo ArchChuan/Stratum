@@ -180,12 +180,13 @@ Collector processor. Multi-replica deployment therefore needs trace-ID-aware loa
 
 ## Migration
 
-### Final Data Disposition Decision
+### Data Disposition Decision Pending
 
-On 2026-07-20 the historical rows in `agent_executions`, `agent_tool_traces`, and `agent_trace_events` were explicitly
-approved for permanent deletion without archive or migration into Opik. Real Collector-to-Opik parity, tenant
-isolation, failure/security retention, metric mapping, and feedback rollback gates passed before deletion. Canonical
-tenant provisioning now drops the tables idempotently; immutable public migration history remains unchanged.
+The historical rows in `agent_executions`, `agent_tool_traces`, and `agent_trace_events` remain in tenant schemas as
+read-only compatibility data. Runtime Agent and Evaluation paths no longer depend on them, but physical deletion is not
+approved until reproducible Collector-to-Opik parity, tenant isolation, failure/security retention, metric mapping,
+feedback rollback, and dependency-outage evidence has been recorded. Any later removal must use a separate idempotent
+tenant migration after that gate passes; immutable public migration history remains unchanged.
 
 ### Phase 1: Runtime Cutover
 
