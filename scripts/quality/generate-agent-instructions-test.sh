@@ -49,6 +49,17 @@ EOF
 [[ -f "${GENERATOR}" ]] || fail "generator not implemented: ${GENERATOR}"
 
 new_fixture default
+
+for invalid_args in 'invalid' '--check extra'; do
+  read -r -a args <<<"${invalid_args}"
+  set +e
+  invalid_output="$(cd "${FIXTURE}" && /bin/bash scripts/quality/generate-agent-instructions.sh "${args[@]}" 2>&1)"
+  invalid_status=$?
+  set -e
+  [[ "${invalid_status}" -eq 2 ]] || fail "invalid arguments exited ${invalid_status}, expected 2: ${invalid_args}"
+  assert_contains "${invalid_output}" 'usage: generate-agent-instructions.sh [--check]'
+done
+
 (
   cd "${FIXTURE}"
   /bin/bash scripts/quality/generate-agent-instructions.sh

@@ -15,10 +15,13 @@ usage() {
   echo 'usage: generate-agent-instructions.sh [--check]' >&2
 }
 
-if (( $# > 1 )) || (( $# == 1 )) && [[ "$1" != "--check" ]]; then
-  usage
-  exit 2
-fi
+case "$#:${1:-}" in
+  0:|1:--check) ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
 
 for input in "${COMMON}" "${PREFIXES[@]}"; do
   if [[ ! -r "${input}" ]]; then
