@@ -9,6 +9,7 @@ HELM_DEPLOYMENT="${ROOT}/helm/templates/deployment.yaml"
 PROD_VALUES="${ROOT}/helm/values-prod.yaml"
 DEMO_VALUES="${ROOT}/helm/values-demo.yaml"
 DEMO_LOCAL_VALUES="${ROOT}/helm/values-demo-local.yaml"
+REMOTE_HTTP_VALUES="${ROOT}/helm/values-demo-remote-http.yaml"
 
 require() {
     local pattern="$1" description="$2"
@@ -21,6 +22,22 @@ require() {
 reject() {
     local pattern="$1" description="$2"
     if grep -Eq -- "${pattern}" "${WORKFLOW}"; then
+        echo "deployment safety contract violated: ${description}" >&2
+        exit 1
+    fi
+}
+
+require_file() {
+    local file="$1" pattern="$2" description="$3"
+    if ! grep -Eq -- "${pattern}" "${file}"; then
+        echo "deployment safety contract missing: ${description}" >&2
+        exit 1
+    fi
+}
+
+reject_file() {
+    local file="$1" pattern="$2" description="$3"
+    if grep -Eq -- "${pattern}" "${file}"; then
         echo "deployment safety contract violated: ${description}" >&2
         exit 1
     fi
@@ -74,11 +91,34 @@ if ! grep -Eq 'secrets\.externalChecksum=' "${WORKFLOW}" ||
     echo 'deployment safety contract missing: external Secret rollout checksum' >&2
     exit 1
 fi
-if grep -Eh 'frontendUrl:[[:space:]]*"http://|githubCallbackUrl:[[:space:]]*"http://' \
-    "${DEMO_VALUES}" "${DEMO_LOCAL_VALUES}" | grep -Ev '"http://localhost([:/"]|$)' >/dev/null; then
-    echo 'deployment safety contract violated: remote demo authentication uses HTTP' >&2
-    exit 1
-fi
+require_file "${DEMO_VALUES}" 'frontendUrl:[[:space:]]*"https://' 'HTTPS demo frontend URL'
+require_file "${DEMO_VALUES}" 'githubCallbackUrl:[[:space:]]*"https://' 'HTTPS demo OAuth callback URL'
+require_file "${DEMO_VALUES}" 'secureCookies:[[:space:]]*"true"' 'HTTPS demo secure cookies'
+require_file "${DEMO_VALUES}" 'router\.entrypoints:[[:space:]]*"websecure"' 'HTTPS demo secure entrypoint'
+require_file "${DEMO_VALUES}" '^[[:space:]]+tls:' 'HTTPS demo TLS configuration'
+
+require_file "${DEMO_LOCAL_VALUES}" 'frontendUrl:[[:space:]]*"http://localhost([:/"]|$)' \
+    'localhost-only demo frontend URL'
+require_file "${DEMO_LOCAL_VALUES}" 'githubCallbackUrl:[[:space:]]*"http://localhost([:/"]|$)' \
+    'localhost-only demo OAuth callback URL'
+reject_file "${DEMO_LOCAL_VALUES}" 'http://([0-9]{1,3}\.){3}[0-9]{1,3}' \
+    'local demo contains a remote IP URL'
+
+require_file "${REMOTE_HTTP_VALUES}" 'secureCookies:[[:space:]]*"false"' \
+    'remote HTTP profile disables secure cookies'
+require_file "${REMOTE_HTTP_VALUES}" 'router\.entrypoints:[[:space:]]*"web"' \
+    'remote HTTP profile uses the Traefik web entrypoint'
+require_file "${REMOTE_HTTP_VALUES}" 'host:[[:space:]]*""' 'remote HTTP profile uses a hostless Ingress'
+require_file "${REMOTE_HTTP_VALUES}" 'tls:[[:space:]]*\[\]' 'remote HTTP profile disables TLS'
+reject_file "${REMOTE_HTTP_VALUES}" 'frontendUrl:|githubCallbackUrl:|http://([0-9]{1,3}\.){3}[0-9]{1,3}' \
+    'remote HTTP profile hard-codes its public address'
+
+require 'validate-remote-http-base-url\.sh[[:space:]]+"\$PUBLIC_BASE_URL"' \
+    'PUBLIC_BASE_URL validation before deployment'
+require '-f[[:space:]]+helm/values-demo-remote-http\.yaml' 'remote HTTP Helm overlay deployment'
+require '--set-string[[:space:]]+config\.frontendUrl="\$PUBLIC_BASE_URL"' 'public frontend URL injection'
+require '--set-string[[:space:]]+config\.githubCallbackUrl="\$PUBLIC_BASE_URL/api/auth/github/callback"' \
+    'public OAuth callback URL injection'
 
 if [[ -e "${ROOT}/.github/workflows/mirror.yml" ]]; then
     echo 'deployment safety contract violated: Gitee mirror workflow still exists' >&2

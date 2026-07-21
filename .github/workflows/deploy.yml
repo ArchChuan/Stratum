@@ -86,6 +86,9 @@ jobs:
     name: Deploy to K3s
     runs-on: ubuntu-latest
     needs: build-and-push
+    environment: production
+    env:
+      PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
     concurrency:
       group: stratum-production
       cancel-in-progress: false
@@ -114,6 +117,10 @@ jobs:
             exit 0
           fi
           echo "current=true" >> "$GITHUB_OUTPUT"
+
+      - name: Validate remote HTTP configuration
+        if: steps.candidate.outputs.current == 'true'
+        run: bash scripts/quality/validate-remote-http-base-url.sh "$PUBLIC_BASE_URL"
 
       - uses: docker/setup-buildx-action@v3
         if: steps.candidate.outputs.current == 'true'
@@ -268,6 +275,7 @@ jobs:
           EXTERNAL_SECRET_CHECKSUM="$(kubectl get secret stratum-secrets -n stratum -o json | jq -cS '{data:.data,type:.type}' | sha256sum | awk '{print $1}')"
           helm upgrade --install stratum ./helm \
             -f helm/values-demo.yaml \
+            -f helm/values-demo-remote-http.yaml \
             --set app.image.repository="${{ env.IMAGE_REPO }}/stratum-backend" \
             --set-string app.image.digest="${{ steps.images.outputs.backend }}" \
             --set frontend.image.repository="${{ env.IMAGE_REPO }}/stratum-frontend" \
@@ -285,6 +293,9 @@ jobs:
             --set milvus.image.repository="${{ env.IMAGE_REPO }}/milvus" \
             --set-string milvus.image.digest="${{ steps.images.outputs.milvus }}" \
             --set-string secrets.externalChecksum="${EXTERNAL_SECRET_CHECKSUM}" \
+            --set-string config.frontendUrl="$PUBLIC_BASE_URL" \
+            --set-string config.githubCallbackUrl="$PUBLIC_BASE_URL/api/auth/github/callback" \
+            --set-string config.secureCookies="false" \
             -n stratum --wait --timeout=10m
 
       - name: Diagnose deployment
@@ -308,3 +319,5 @@ jobs:
         run: |
           kubectl rollout status deployment/stratum -n stratum
           kubectl get pods -n stratum
+          curl --fail --silent --show-error --max-time 15 \
+            "$PUBLIC_BASE_URL/api/health" >/dev/null
