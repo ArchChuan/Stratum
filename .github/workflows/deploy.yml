@@ -208,6 +208,27 @@ jobs:
         if: steps.candidate.outputs.current == 'true'
         run: kubectl get nodes
 
+      - name: Diagnose ingress edge
+        if: steps.candidate.outputs.current == 'true'
+        run: |
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -i ~/.ssh/deploy_key root@${{ secrets.SSH_DEPLOY_HOST }} '
+              echo "=== Host edge listeners ==="
+              ss -H -ltnp "( sport = :80 or sport = :443 or sport = :6879 )"
+              echo "=== Host-local HTTP health ==="
+              if host_status=$(curl --silent --output /dev/null --max-time 5 \
+                --write-out "%{http_code}" http://127.0.0.1/api/health); then
+                echo "host-local health status=$host_status"
+              else
+                echo "host-local health request failed before receiving an HTTP response"
+              fi
+            '
+          echo "=== Traefik service ==="
+          kubectl get service traefik -n kube-system -o wide
+          echo "=== Traefik ServiceLB pods ==="
+          kubectl get pods -n kube-system \
+            -l svccontroller.k3s.cattle.io/svcname=traefik -o wide
+
       - name: Apply namespace and secrets
         if: steps.candidate.outputs.current == 'true'
         env:
