@@ -117,10 +117,6 @@ ENV/
 /.serena/
 /.tokensave/
 /.worktrees/
-# Entry loaders (thin, local-only). Substance lives in docs/agent/*.md (tracked).
-# No leading slash → also ignores nested web/CLAUDE.md, pkg/**/CLAUDE.md, etc.
-AGENTS.md
-CLAUDE.md
 /scripts/agents.md
 /scripts/daily-agent-interview.sh
 /scripts/scan-risks-daily.sh
@@ -191,8 +187,6 @@ dist/
 *.log
 
 # AI tooling artifacts
-CLAUDE.md
-AGENTS.md
 .claude/
 .agents/
 .codex/
