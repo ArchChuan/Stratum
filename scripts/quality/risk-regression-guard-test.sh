@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CHECKER="${ROOT}/scripts/quality/risk-regression-guard.sh"
 EXECUTOR="${ROOT}/scripts/quality/testdata/fake-risk-guard-executor.sh"
+AGENT_INSTRUCTIONS="${ROOT}/docs/agent/instructions.md"
+AGENT_INSTRUCTIONS_GENERATOR="${ROOT}/scripts/quality/generate-agent-instructions.sh"
 TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf "${TEST_ROOT}"' EXIT
 
@@ -101,6 +103,19 @@ assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
 assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'actions/setup-node@' 'CI Node setup for full risk guard'
 assert_file_contains "${ROOT}/Makefile" '^risk-guardrails:' 'Makefile risk guard target'
+
+grep -Fxq '## Risk regression harness' "${AGENT_INSTRUCTIONS}" || {
+  echo "missing exact risk regression harness heading in ${AGENT_INSTRUCTIONS}" >&2
+  exit 1
+}
+for principle in 'fail closed' 'bearer credential' 'tenant-scoped' \
+  '破坏性' '持久化失败' '关闭旧资源' '真实链路验证'; do
+  if ! grep -Fq "${principle}" "${AGENT_INSTRUCTIONS}"; then
+    echo "agent instructions missing principle: ${principle}" >&2
+    exit 1
+  fi
+done
+/bin/bash "${AGENT_INSTRUCTIONS_GENERATOR}" --check
 
 explanation="$(/bin/bash "${CHECKER}" --explain)"
 for principle in 'fail closed' 'bearer credential' 'tenant-scoped' \

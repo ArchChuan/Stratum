@@ -206,4 +206,11 @@ if ignore_output="$(git -C "${ROOT}" check-ignore --no-index -v CLAUDE.md 2>&1)"
   fail "CLAUDE.md is ignored: ${ignore_output}"
 fi
 
+grep -qx 'agent-instructions:' "${ROOT}/Makefile" || fail 'Makefile is missing exact agent-instructions target'
+grep -qx 'agent-instructions-check:' "${ROOT}/Makefile" || fail 'Makefile is missing exact agent-instructions-check target'
+grep -Eq '^[[:space:]]*-[[:space:]]+id:[[:space:]]+agent-instructions-check$' \
+  "${ROOT}/.pre-commit-config.yaml" || fail 'pre-commit is missing agent-instructions-check hook'
+grep -q 'make agent-instructions-check' "${ROOT}/.github/workflows/ci.yml" || \
+  fail 'CI is missing make agent-instructions-check'
+
 echo 'agent instruction generator tests passed'

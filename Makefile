@@ -9,6 +9,7 @@
 	helm-install helm-upgrade helm-uninstall helm-diff helm-lint \
 	migration-guardrails ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
+	agent-instructions agent-instructions-check \
 	dev-up dev-down \
 	run fe-dev help clean
 
@@ -177,6 +178,14 @@ arch-guardrails:
 deployment-safety-test:
 	bash scripts/quality/check-deployment-safety-test.sh
 	bash scripts/quality/check-helm-image-rendering-test.sh
+
+# ─── Agent 指令：生成入口与一致性门禁 ────────────────────────────────────
+agent-instructions:
+	/bin/bash scripts/quality/generate-agent-instructions.sh
+
+agent-instructions-check:
+	/bin/bash scripts/quality/generate-agent-instructions-test.sh
+	/bin/bash scripts/quality/generate-agent-instructions.sh --check
 
 # ─── 风险回归护栏：本地与 CI 复用同一路由和确定性检查 ─────────────────────
 risk-guardrails:
