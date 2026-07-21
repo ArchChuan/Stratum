@@ -10,6 +10,7 @@ PROD_VALUES="${ROOT}/helm/values-prod.yaml"
 DEMO_VALUES="${ROOT}/helm/values-demo.yaml"
 DEMO_LOCAL_VALUES="${ROOT}/helm/values-demo-local.yaml"
 REMOTE_HTTP_VALUES="${ROOT}/helm/values-demo-remote-http.yaml"
+POSTGRES_DOCKERFILE="${ROOT}/docker/postgres-zhparser.Dockerfile"
 
 require() {
     local pattern="$1" description="$2"
@@ -123,6 +124,11 @@ require 'kubectl get ingress -n stratum -o wide' 'deployed Ingress diagnostics'
 require 'kubectl get endpoints stratum stratum-frontend -n stratum' 'service endpoint diagnostics'
 require 'kubectl port-forward service/stratum-frontend 18080:80' 'internal frontend verification tunnel'
 require 'http://127\.0\.0\.1:18080/api/health' 'internal frontend health verification'
+require_file "${POSTGRES_DOCKERFILE}" 'curl .*--connect-timeout[[:space:]]+[0-9]+' \
+    'SCWS download connection timeout'
+require_file "${POSTGRES_DOCKERFILE}" 'curl .*--max-time[[:space:]]+[0-9]+' 'SCWS download total timeout'
+require_file "${POSTGRES_DOCKERFILE}" 'curl .*--retry[[:space:]]+[1-9][0-9]*' 'SCWS download finite retries'
+require_file "${POSTGRES_DOCKERFILE}" 'curl .*--retry-all-errors' 'SCWS download retry classification'
 
 if [[ -e "${ROOT}/.github/workflows/mirror.yml" ]]; then
     echo 'deployment safety contract violated: Gitee mirror workflow still exists' >&2
