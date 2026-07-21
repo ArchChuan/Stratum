@@ -20,14 +20,18 @@
   successful execution, Tool span, retained LLM failure, canary assignment and security violation; Opik REST reads,
   feedback attribution, rollback and cross-tenant rejection passed. A real MinIO encrypted round trip also passed.
 - Real Stratum HTTP checks returned `200` for execution listing, `404` for cross-tenant trace/tool access and `503`
-  while Opik was stopped. The attempted "Agent succeeds while Opik is down" check was inconclusive because the test
-  tenant had no registered qwen provider and failed before evidence export. A real MinIO-down Agent execution remains
-  unverified for the same reason; failure isolation is covered by focused application tests only.
+  while Opik was stopped. Using the existing `qwen` provider configured for tenant `杨河川的租户`, a real Agent
+  execution also returned `200` with `steps=1`, `tokens=858`, and no execution error while Opik was unavailable.
+  With payload capture enabled, the same real Agent execution remained successful after the isolated MinIO instance
+  was stopped. The payload-storage-failure Span attribute and absence of raw content remain covered by focused
+  application tests; this MinIO-down run did not query that attribute from Opik because Opik was intentionally
+  unavailable in the same failure-isolation environment.
 - Task 10 Go verification is complete: architecture guard and `stratum-verify go-full` passed. `make risk-guardrails`
   passed architecture, migration, deployment, auth, knowledge, memory, MCP and runtime-governance, then stopped at the
   pre-existing frontend toolchain state (`vitest/globals` types missing and TypeScript 6 `baseUrl` deprecation).
-- Physical deletion is not approved. Runtime dependencies are removed and historical tables remain read-only; create
-  a separate data-disposition migration only after the two real dependency-failure Agent scenarios pass.
+- Both real dependency-failure Agent scenarios now pass, so the historical tables can be classified as runtime-obsolete.
+  Physical deletion is still not approved: retain them as read-only historical storage until retention, export/archive,
+  rollback-window, and operator-approval requirements are agreed in a separate data-disposition migration.
 
 ---
 
