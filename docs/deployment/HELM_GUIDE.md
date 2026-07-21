@@ -8,6 +8,7 @@ helm/
 ├── values.yaml
 ├── values-dev.yaml
 ├── values-demo-local.yaml
+├── values-demo-remote-http.yaml
 ├── values-demo.yaml
 ├── values-prod.yaml
 └── templates/
@@ -29,6 +30,9 @@ Chart 当前通过 `templates/dependencies.yaml` 直接渲染 PostgreSQL、Redis
 ```bash
 helm lint ./helm -f helm/values.yaml
 helm template stratum ./helm -f helm/values-demo.yaml >/dev/null
+helm lint ./helm \
+  -f helm/values-demo.yaml \
+  -f helm/values-demo-remote-http.yaml
 ```
 
 Makefile 入口：
@@ -63,8 +67,20 @@ helm uninstall stratum -n stratum
 | `values.yaml` | Chart 基线与 Makefile 默认值 |
 | `values-dev.yaml` | 开发环境覆盖 |
 | `values-demo-local.yaml` | 本地 demo 覆盖 |
-| `values-demo.yaml` | 远程单机 K3s demo，当前 `deploy.yml` 使用 |
+| `values-demo.yaml` | 远程单机 K3s demo 的 HTTPS 基线 |
+| `values-demo-remote-http.yaml` | 当前无域名环境的受约束 HTTP 覆盖 |
 | `values-prod.yaml` | 生产导向覆盖，包括外部依赖选项 |
+
+当前 `deploy.yml` 按顺序加载 `values-demo.yaml` 和
+`values-demo-remote-http.yaml`。公网链路为 `:6879 -> 主机 :80 -> Traefik
+web`，Kubernetes Service 仍使用 80，后端进程仍使用 8080。公网地址由
+GitHub Production Environment 的 `PUBLIC_BASE_URL=http://<public-ip>:6879`
+注入，禁止将真实 IP 写入 values 文件。
+
+HTTP profile 会关闭 secure cookie，因为浏览器不会通过 HTTP 回传带
+`Secure` 标记的 cookie。该环境没有传输加密；申请域名和证书后，应停止
+加载 HTTP overlay，使用 `values-demo.yaml` 的 TLS/`websecure` 配置并恢复
+secure cookie。
 
 不要在 values 文件中提交真实密码、token、API key、JWT 私钥或 OAuth secret。生产应由外部 Secret manager 或部署流水线注入。
 

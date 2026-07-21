@@ -1,0 +1,15 @@
+config:
+  secureCookies: "false"
+
+ingress:
+  enabled: true
+  className: "traefik"
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: "web"
+  hosts:
+    - host: ""
+      paths:
+        - path: /
+          pathType: Prefix
+          service: frontend
+  tls: []
