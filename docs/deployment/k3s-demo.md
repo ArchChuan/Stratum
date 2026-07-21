@@ -1,8 +1,8 @@
 # K3s Demo Deployment
 
 This guide deploys Stratum as a public HTTP demo on one cloud host without a
-domain name. The public port is 6879 and the network edge forwards it to the
-host's HTTP port 80.
+domain name. K3s Traefik exposes the public port 6879 through its `web2`
+entrypoint while retaining the standard `web` entrypoint on port 80.
 
 ## Host Baseline
 
@@ -31,11 +31,15 @@ http://<public-ip>:6879
 ```
 
 The deployment rejects DNS names, other ports, paths, credentials, and a
-trailing slash. The network forwarding rule remains outside Kubernetes:
+trailing slash. The observed production path is:
 
 ```text
-public <public-ip>:6879 -> host port 80 -> K3s Traefik web entrypoint
+public <public-ip>:6879 -> K3s ServiceLB 6879 -> Traefik web2 -> hostless Ingress
 ```
+
+The remote HTTP Ingress also remains attached to `web` so host-local port 80
+continues to work. Do not assume that public 6879 is translated to host port 80;
+verify the ServiceLB port and entrypoint mapping on the target cluster.
 
 Configure the GitHub OAuth App callback URL to exactly:
 

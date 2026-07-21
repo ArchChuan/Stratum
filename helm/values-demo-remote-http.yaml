@@ -5,7 +5,7 @@ ingress:
   enabled: true
   className: "traefik"
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: "web"
+    traefik.ingress.kubernetes.io/router.entrypoints: "web,web2"
   hosts:
     - host: ""
       paths:

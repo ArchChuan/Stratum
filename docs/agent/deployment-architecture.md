@@ -35,7 +35,7 @@ flowchart TB
 
     subgraph ecs["阿里云 ECS<br/>公网 IP: demo.stratum.example"]
         subgraph k3s["K3s 单节点集群"]
-            traefik["Traefik Ingress<br/>entrypoint: web :80<br/>Host: *"]
+            traefik["Traefik Ingress<br/>entrypoints: web :80 / web2 :6879<br/>Host: *"]
 
             subgraph ns["namespace: stratum"]
                 frontend["stratum-frontend<br/>Nginx + React 静态资源<br/>Service: ClusterIP :80"]
@@ -61,7 +61,7 @@ flowchart TB
         end
     end
 
-    browser -->|"HTTP :80"| traefik
+    browser -->|"HTTP :6879"| traefik
     traefik -->|"Ingress path /"| frontend
     traefik -->|"Ingress path /grafana"| grafana
     frontend -->|"React 静态资源"| browser
@@ -162,7 +162,7 @@ ingress:
   enabled: true
   className: "traefik"
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: "web"
+    traefik.ingress.kubernetes.io/router.entrypoints: "web,web2"
   hosts:
     - host: ""
       paths:

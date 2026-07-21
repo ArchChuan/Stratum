@@ -107,8 +107,8 @@ reject_file "${DEMO_LOCAL_VALUES}" 'http://([0-9]{1,3}\.){3}[0-9]{1,3}' \
 
 require_file "${REMOTE_HTTP_VALUES}" 'secureCookies:[[:space:]]*"false"' \
     'remote HTTP profile disables secure cookies'
-require_file "${REMOTE_HTTP_VALUES}" 'router\.entrypoints:[[:space:]]*"web"' \
-    'remote HTTP profile uses the Traefik web entrypoint'
+require_file "${REMOTE_HTTP_VALUES}" 'router\.entrypoints:[[:space:]]*"web,web2"' \
+    'remote HTTP profile uses the Traefik web and public web2 entrypoints'
 require_file "${REMOTE_HTTP_VALUES}" 'host:[[:space:]]*""' 'remote HTTP profile uses a hostless Ingress'
 require_file "${REMOTE_HTTP_VALUES}" 'tls:[[:space:]]*\[\]' 'remote HTTP profile disables TLS'
 reject_file "${REMOTE_HTTP_VALUES}" 'frontendUrl:|githubCallbackUrl:|http://([0-9]{1,3}\.){3}[0-9]{1,3}' \
