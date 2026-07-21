@@ -12,7 +12,7 @@
 2. `obsidian` MCP 中相关的已验证/evergreen 技术观点、案例、踩坑和变更记录；
 3. 官方文档、标准、原始论文或上游源码中的当前外部证据。
 
-仓库事实以代码、测试和运行结果为准。Obsidian 是只读长期知识输入，`provisional` 内容只能作为未核验线索；搜索摘要不能作为关键证据。来源冲突时记录版本、范围和反例，不得静默选择。知识写回是独立蒸馏任务。完整协议：`/mnt/c/Users/yangh/Documents/Obsidian Vault/99-系统/知识输入与证据检索协议.md`。
+仓库事实以代码、测试和运行结果为准。Obsidian 是只读长期知识输入，`provisional` 内容只能作为未核验线索；搜索摘要不能作为关键证据。来源冲突时记录版本、范围和反例，不得静默选择。知识写回是独立蒸馏任务。完整协议必须通过已配置的 `obsidian` MCP 读取 vault-relative 资源 `99-系统/知识输入与证据检索协议.md`。
 
 ## Technology and directory map
 
