@@ -97,8 +97,8 @@ validate_ci_integration() {
     in_guardrails && /^    steps:$/ { steps++; in_steps = 1; next }
     in_steps && /^    [^ ]/ && !/^    steps:$/ { in_steps = 0 }
     in_steps && /^      - uses: actions\/checkout@v4$/ { checkout = NR }
-    in_steps && /^      - uses: actions\/setup-go@/ { setup_go = NR }
-    in_steps && /^      - uses: actions\/setup-node@/ { setup_node = NR }
+    in_steps && !setup_go && /^      - uses: actions\/setup-go@/ { setup_go = NR }
+    in_steps && !setup_node && /^      - uses: actions\/setup-node@/ { setup_node = NR }
     in_steps && /^      - name: Verify generated agent instructions$/ {
       targets++
       target_line = NR
@@ -365,6 +365,23 @@ jobs:
 EOF
 if validate_ci_integration "${wrong_parent_ci}" >/dev/null 2>&1; then
   fail 'CI validation accepted a complete step under another job'
+fi
+
+late_instruction_ci="${TEST_ROOT}/late-instruction-ci.yml"
+cat >"${late_instruction_ci}" <<'EOF'
+jobs:
+  guardrails:
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+      - uses: actions/setup-node@v4
+      - name: Verify generated agent instructions
+        run: make agent-instructions-check
+      - uses: actions/setup-go@v5
+      - uses: actions/setup-node@v4
+EOF
+if validate_ci_integration "${late_instruction_ci}" >/dev/null 2>&1; then
+  fail 'CI validation accepted instruction check after the first dependency setup'
 fi
 
 echo 'agent instruction generator tests passed'
