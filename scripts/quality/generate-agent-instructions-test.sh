@@ -24,20 +24,6 @@ assert_not_contains() {
   [[ "${haystack}" != *"${needle}"* ]] || fail "expected output not to contain: ${needle}"
 }
 
-extract_unique_block() {
-  local file="$1" start_pattern="$2" end_pattern="$3" description="$4" count
-  count="$(grep -Ec "${start_pattern}" "${file}" || true)"
-  if [[ "${count}" -ne 1 ]]; then
-    echo "expected exactly one ${description} in ${file}, found ${count}" >&2
-    return 1
-  fi
-  awk -v start="${start_pattern}" -v end="${end_pattern}" '
-    $0 ~ start { printing = 1 }
-    printing && $0 !~ start && $0 ~ end { exit }
-    printing { print }
-  ' "${file}"
-}
-
 assert_block_field() {
   local block="$1" key="$2" pattern="$3" description="$4" count
   count="$(grep -Ec "^[[:space:]]*${key}:" <<<"${block}" || true)"
@@ -49,25 +35,44 @@ assert_block_field() {
 
 validate_precommit_integration() {
   local file="$1" block files_regex required_path
-  block="$(extract_unique_block "${file}" \
-    '^[[:space:]]*-[[:space:]]+id:[[:space:]]+agent-instructions-check[[:space:]]*$' \
-    '^[[:space:]]*-[[:space:]]+id:' 'agent-instructions-check hook')" || return 1
+  block="$(awk '
+    /^repos:$/ { repos++; in_repos = 1; next }
+    /^[^ #]/ && !/^repos:$/ { in_repos = 0; in_local = 0; in_hooks = 0 }
+    in_repos && /^  - repo: local$/ { local_repos++; in_local = 1; in_hooks = 0; next }
+    in_repos && /^  - repo:/ && !/^  - repo: local$/ { in_local = 0; in_hooks = 0 }
+    in_local && /^    hooks:$/ { hooks++; in_hooks = 1; next }
+    in_hooks && /^    [^ ]/ && !/^    hooks:$/ { in_hooks = 0 }
+    in_hooks && /^      - id: agent-instructions-check$/ {
+      targets++
+      if (targets == 1) printing = 1
+    }
+    printing && !/^      - id: agent-instructions-check$/ && /^      - id:/ { printing = 0 }
+    printing && /^[^ ]|^  [^ ]|^    [^ ]/ { printing = 0 }
+    printing { block = block $0 ORS }
+    END {
+      if (repos != 1 || local_repos != 1 || hooks != 1 || targets != 1) {
+        print "invalid repos/local/hooks hierarchy or target hook count" > "/dev/stderr"
+        exit 1
+      }
+      printf "%s", block
+    }
+  ' "${file}")" || return 1
   assert_block_field "${block}" name \
-    '^[[:space:]]*name:[[:space:]]+agent instructions are generated and current$' 'exact hook name' || return 1
-  assert_block_field "${block}" language '^[[:space:]]*language:[[:space:]]+system$' \
+    '^        name: agent instructions are generated and current$' 'exact hook name' || return 1
+  assert_block_field "${block}" language '^        language: system$' \
     'system hook language' || return 1
   assert_block_field "${block}" entry \
-    '^[[:space:]]*entry:[[:space:]]+/bin/bash scripts/quality/generate-agent-instructions\.sh --check$' \
+    '^        entry: /bin/bash scripts/quality/generate-agent-instructions\.sh --check$' \
     'exact check-only hook entry' || return 1
-  assert_block_field "${block}" pass_filenames '^[[:space:]]*pass_filenames:[[:space:]]+false$' \
+  assert_block_field "${block}" pass_filenames '^        pass_filenames: false$' \
     'disabled filename passing' || return 1
-  assert_block_field "${block}" require_serial '^[[:space:]]*require_serial:[[:space:]]+true$' \
+  assert_block_field "${block}" require_serial '^        require_serial: true$' \
     'serialized hook' || return 1
-  [[ "$(grep -Ec '^[[:space:]]*files:' <<<"${block}" || true)" -eq 1 ]] || {
+  [[ "$(grep -Ec '^        files:' <<<"${block}" || true)" -eq 1 ]] || {
     echo 'expected exactly one files regex in bounded pre-commit hook' >&2
     return 1
   }
-  files_regex="$(sed -nE "s/^[[:space:]]*files:[[:space:]]*'([^']+)'[[:space:]]*$/\1/p" <<<"${block}")"
+  files_regex="$(sed -nE "s/^        files: '([^']+)'$/\1/p" <<<"${block}")"
   [[ -n "${files_regex}" ]] || {
     echo 'missing single-quoted files regex in bounded pre-commit hook' >&2
     return 1
@@ -83,23 +88,39 @@ validate_precommit_integration() {
 }
 
 validate_ci_integration() {
-  local file="$1" block checkout_line step_line setup_go_line setup_node_line
-  block="$(extract_unique_block "${file}" \
-    '^[[:space:]]*-[[:space:]]+name:[[:space:]]+Verify generated agent instructions[[:space:]]*$' \
-    '^[[:space:]]*-[[:space:]]+(name|uses):' 'generated instruction CI step')" || return 1
-  assert_block_field "${block}" run '^[[:space:]]*run:[[:space:]]+make agent-instructions-check$' \
+  local file="$1" block
+  block="$(awk '
+    /^jobs:$/ { jobs++; in_jobs = 1; next }
+    /^[^ #]/ && !/^jobs:$/ { in_jobs = 0; in_guardrails = 0; in_steps = 0 }
+    in_jobs && /^  guardrails:$/ { guardrails++; in_guardrails = 1; in_steps = 0; next }
+    in_jobs && /^  [^ ]/ && !/^  guardrails:$/ { in_guardrails = 0; in_steps = 0 }
+    in_guardrails && /^    steps:$/ { steps++; in_steps = 1; next }
+    in_steps && /^    [^ ]/ && !/^    steps:$/ { in_steps = 0 }
+    in_steps && /^      - uses: actions\/checkout@v4$/ { checkout = NR }
+    in_steps && /^      - uses: actions\/setup-go@/ { setup_go = NR }
+    in_steps && /^      - uses: actions\/setup-node@/ { setup_node = NR }
+    in_steps && /^      - name: Verify generated agent instructions$/ {
+      targets++
+      target_line = NR
+      if (targets == 1) printing = 1
+    }
+    printing && !/^      - name: Verify generated agent instructions$/ && /^      - (name|uses):/ {
+      printing = 0
+    }
+    printing && /^[^ ]|^  [^ ]|^    [^ ]/ { printing = 0 }
+    printing { block = block $0 ORS }
+    END {
+      if (jobs != 1 || guardrails != 1 || steps != 1 || targets != 1 ||
+          !checkout || !setup_go || !setup_node || target_line <= checkout ||
+          target_line >= setup_go || target_line >= setup_node) {
+        print "invalid jobs/guardrails/steps hierarchy or step ordering" > "/dev/stderr"
+        exit 1
+      }
+      printf "%s", block
+    }
+  ' "${file}")" || return 1
+  assert_block_field "${block}" run '^        run: make agent-instructions-check$' \
     'exact CI check command' || return 1
-  checkout_line="$(grep -nE '^[[:space:]]*-[[:space:]]+uses:[[:space:]]+actions/checkout@' "${file}" | head -1 | cut -d: -f1)"
-  step_line="$(grep -nE \
-    '^[[:space:]]*-[[:space:]]+name:[[:space:]]+Verify generated agent instructions[[:space:]]*$' \
-    "${file}" | cut -d: -f1)"
-  setup_go_line="$(grep -nE '^[[:space:]]*-[[:space:]]+uses:[[:space:]]+actions/setup-go@' "${file}" | head -1 | cut -d: -f1)"
-  setup_node_line="$(grep -nE '^[[:space:]]*-[[:space:]]+uses:[[:space:]]+actions/setup-node@' "${file}" | head -1 | cut -d: -f1)"
-  if [[ -z "${checkout_line}" || -z "${setup_go_line}" || -z "${setup_node_line}" ]] ||
-    (( step_line <= checkout_line || step_line >= setup_go_line || step_line >= setup_node_line )); then
-    echo 'generated instruction CI step must be after checkout and before Go/Node setup' >&2
-    return 1
-  fi
 }
 
 new_fixture() {
@@ -299,6 +320,25 @@ if validate_precommit_integration "${bad_precommit}" >/dev/null 2>&1; then
   fail 'bounded pre-commit validation accepted a correct entry only in a comment'
 fi
 
+wrong_parent_precommit="${TEST_ROOT}/wrong-parent-pre-commit.yaml"
+cat >"${wrong_parent_precommit}" <<'EOF'
+repos:
+  - repo: local
+    hooks:
+      - id: unrelated
+outside_repos:
+      - id: agent-instructions-check
+        name: agent instructions are generated and current
+        language: system
+        entry: /bin/bash scripts/quality/generate-agent-instructions.sh --check
+        pass_filenames: false
+        require_serial: true
+        files: '^(AGENTS\.md|CLAUDE\.md|docs/agent/instructions\.md|docs/agent/templates/(agents-prefix|claude-prefix)\.md|scripts/quality/generate-agent-instructions(-test)?\.sh)$'
+EOF
+if validate_precommit_integration "${wrong_parent_precommit}" >/dev/null 2>&1; then
+  fail 'pre-commit validation accepted a complete hook outside repos[].hooks'
+fi
+
 bad_ci="${TEST_ROOT}/bad-ci.yml"
 awk '
   /name: Verify generated agent instructions/ { in_step = 1 }
@@ -308,6 +348,23 @@ awk '
 ' "${ROOT}/.github/workflows/ci.yml" >"${bad_ci}"
 if validate_ci_integration "${bad_ci}" >/dev/null 2>&1; then
   fail 'bounded CI validation accepted a correct command only outside its step'
+fi
+
+wrong_parent_ci="${TEST_ROOT}/wrong-parent-ci.yml"
+cat >"${wrong_parent_ci}" <<'EOF'
+jobs:
+  guardrails:
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+      - uses: actions/setup-node@v4
+  lint:
+    steps:
+      - name: Verify generated agent instructions
+        run: make agent-instructions-check
+EOF
+if validate_ci_integration "${wrong_parent_ci}" >/dev/null 2>&1; then
+  fail 'CI validation accepted a complete step under another job'
 fi
 
 echo 'agent instruction generator tests passed'
