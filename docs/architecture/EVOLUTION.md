@@ -72,6 +72,10 @@
 **核心决策**:
 
 - **Bounded Context 划分**: 8 个域 — `agent`, `memory`, `knowledge`, `skill`, `mcp`, `iam`, `llmgateway`, `platform`
+
+> 该条记录的是早期阶段。当前实现已增加 `workflow` 与 `evaluation`，共 10 个 bounded context；
+> 当前目录和依赖关系见 [项目事实](../agent/project.md) 与 [架构规则](../agent/architecture.md)。
+
 - **三层架构强制**:
   - `domain/` — 纯业务逻辑，零第三方依赖（仅 stdlib + `pkg/constants`）
   - `application/` — 用例编排，只依赖 `domain` + `domain/port`

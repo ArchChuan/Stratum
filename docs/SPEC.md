@@ -1,6 +1,6 @@
 # SPEC: Stratum
 
-> Reverse-engineered specification — refreshed 2026-07-17 from the current worktree
+> Reverse-engineered specification — refreshed 2026-07-21 from revision `37d8f05`
 > Scope: backend, frontend, deployment assets, configuration, migrations, and tests — depth: deep
 
 ## 1. Overview
@@ -31,7 +31,7 @@ Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go +
 
 | 层级 | 选型 | 版本 |
 |------|------|------|
-| 后端语言 | Go | 1.25 |
+| 后端语言 | Go | 1.25.12 |
 | Web 框架 | Gin | v1.9 |
 | RDB driver | pgx | v5 |
 | Cache | go-redis | v9 |
@@ -41,10 +41,10 @@ Stratum 是一套面向私有化部署的企业级 AI 应用底座。后端 Go +
 | OAuth | GitHub OAuth | — |
 | Migration | golang-migrate | v4 |
 | 日志 | Zap | — |
-| Tracing/Metrics | OpenTelemetry | v1.22 + Prometheus |
+| Tracing/Metrics | OpenTelemetry | v1.40 + Prometheus |
 | LLM Provider | Qwen（dashscope）· Zhipu | OpenAI-compat |
 | 配置 | `config/config.go` 环境变量读取 | stdlib `os` |
-| 前端 | React 18.3 · Vite 5.4 · AntD 5.20 · React Router 6.26 · Axios 1.7 · TanStack Query v5 · Zustand v5 · Zod · Recharts | — |
+| 前端 | React 18.3 · Vite 6.4 · AntD 5.20 · React Router 6.26 · Axios 1.18 · TanStack Query v5 · Zustand v5 · Zod · Recharts | — |
 
 ---
 

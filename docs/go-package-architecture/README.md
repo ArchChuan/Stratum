@@ -1,24 +1,26 @@
 # Stratum Go 包代码架构图
 
-本目录记录 `internal/...` 与 `pkg/...` 的 Go 包架构图。当前源码有 67 个含 Go 文件的包：58 个有现行包图，4 个 evaluation 包和 5 个 workflow 包尚未生成独立图。另有 5 个旧 Skill package 页面保留为已移除路径索引，不计入当前包数。
+本目录记录 `internal/...` 与 `pkg/...` 的 Go 包架构图，事实基线为 `37d8f05`。当前源码有 67 个含 Go 文件的包；旧 Skill package 页面仅作为已移除路径索引，不计入当前包数。
 
 - 生成范围：`internal/...`、`pkg/...`
-- 当前 Go 包总数：67（58 份现行包图 + 4 个 evaluation 包 + 5 个 workflow 包尚未补图）
+- 当前 Go 包总数：67
 - 不包含：`api/`、`cmd/`、`config/`、前端及工作树副本
 - 历史生成清单：[package-manifest.txt](package-manifest.txt)（仍记录生成时的 63 个路径，不是当前完整清单）
 
-## internal/evaluation（待补独立包图）
+## internal/evaluation
 
-- `internal/evaluation/domain` / `domain/port`：评估 suite、run、job、优化候选、实验、反馈及仓储契约。
-- `internal/evaluation/application`：suite 发布、异步 job worker、评估执行、优化、实验阶段判定与反馈编排。
-- `internal/evaluation/infrastructure/persistence`：tenant PostgreSQL 持久化。
+- [`internal/evaluation/application`](internal-evaluation-application.md) — 评估用例、异步 job、优化、实验和反馈编排。
+- [`internal/evaluation/domain`](internal-evaluation-domain.md) — suite、run、候选、实验和统计领域模型。
+- [`internal/evaluation/domain/port`](internal-evaluation-domain-port.md) — 评估仓储和执行依赖契约。
+- [`internal/evaluation/infrastructure/persistence`](internal-evaluation-infrastructure-persistence.md) — tenant PostgreSQL 持久化。
 
-## internal/workflow（待补独立包图）
+## internal/workflow
 
-- `internal/workflow/domain` / `domain/port`：持久化 DAG 定义、版本、运行、节点尝试、事件、审批、外部副作用意图及仓储契约。
-- `internal/workflow/application`：定义发布、异步调度、租约与 fencing、暂停/恢复/取消、人工介入和审批编排。
-- `internal/workflow/infrastructure/executor`：确定性节点执行器注册表。
-- `internal/workflow/infrastructure/persistence`：tenant PostgreSQL 持久化。
+- [`internal/workflow/application`](internal-workflow-application.md) — 定义发布、调度、租约、控制和审批编排。
+- [`internal/workflow/domain`](internal-workflow-domain.md) — DAG 定义、版本、运行、事件、审批和副作用意图。
+- [`internal/workflow/domain/port`](internal-workflow-domain-port.md) — Workflow 仓储契约。
+- [`internal/workflow/infrastructure/executor`](internal-workflow-infrastructure-executor.md) — 确定性节点执行器注册表。
+- [`internal/workflow/infrastructure/persistence`](internal-workflow-infrastructure-persistence.md) — tenant PostgreSQL 持久化。
 
 ## internal/agent
 
@@ -38,6 +40,7 @@
 - [`internal/iam/infrastructure/hermes`](internal-iam-infrastructure-hermes.md) — 该包封装 Hermes 的 NATS 事件客户端，提供连接、JSON 事件发布、按事件类型订阅分发和关闭能力。
 - [`internal/iam/infrastructure/oauth`](internal-iam-infrastructure-oauth.md) — 该包实现 GitHub OAuth 端口，负责授权码换取访问令牌并读取 GitHub 用户资料。
 - [`internal/iam/infrastructure/persistence`](internal-iam-infrastructure-persistence.md) — 该包以 PostgreSQL（以及令牌撤销所需的 Redis）实现 IAM 租户、入驻、成员设置、Schema 清理和刷新令牌存储。
+- [`internal/iam/infrastructure/token`](internal-iam-infrastructure-token.md) — 实现 RS256 access token 签发、校验和 claims 转换。
 
 ## internal/knowledge
 
@@ -46,6 +49,7 @@
 - [`internal/knowledge/domain/port`](internal-knowledge-domain-port.md) — 该包声明知识上下文对文档解析、切块、嵌入、向量索引和工作区/文档/分块仓储的出向契约。
 - [`internal/knowledge/infrastructure/document`](internal-knowledge-infrastructure-document.md) — 该包实现文档解析能力，按文件扩展名或 MIME 提示从 PDF、DOCX、Markdown 或纯文本中提取统一文本。
 - [`internal/knowledge/infrastructure/persistence`](internal-knowledge-infrastructure-persistence.md) — 该包用 PostgreSQL 实现知识工作区、文档与分块仓储，并协调删除租户对应的 Milvus 集合。
+- [`internal/knowledge/infrastructure/vectorstore`](internal-knowledge-infrastructure-vectorstore.md) — 将通用向量索引适配为知识上下文的 VectorStore 端口。
 
 ## internal/llmgateway
 
@@ -75,7 +79,6 @@
 
 - [`internal/platform/domain`](internal-platform-domain.md) — 平台领域层的最小环境模型，定义应用运行环境枚举，避免平台基础设施直接使用裸字符串。
 - [`internal/platform/harness`](internal-platform-harness.md) — 提供组件生命周期编排、函数式组件适配和线程安全依赖容器；Harness 按注册顺序启动并按逆序停止组件。
-- [`internal/platform/runtime`](internal-platform-runtime.md) — 承接应用启动期的运行时编排：初始化追踪、引导租户 schema、注册后台组件与 HTTP 服务，并响应进程退出信号。
 
 ## internal/skill
 
