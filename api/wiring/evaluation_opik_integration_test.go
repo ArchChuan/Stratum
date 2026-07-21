@@ -20,8 +20,12 @@ func TestRealOpikEvidenceDrivesFeedbackRollback(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	opikURL := os.Getenv("TEST_OPIK_URL")
+	if opikURL == "" {
+		opikURL = "http://127.0.0.1:5173/api"
+	}
 	provider := opik.NewClient(opik.Config{
-		BaseURL: "http://127.0.0.1:5173/api", Project: "Default Project", Timeout: 3 * time.Second,
+		BaseURL: opikURL, Project: "Default Project", Timeout: 3 * time.Second,
 	})
 	executions, _, err := provider.ListExecutions(ctx, "tenant-e2e", agentdomain.ListOptions{Page: 1, PageSize: 100})
 	if err != nil {

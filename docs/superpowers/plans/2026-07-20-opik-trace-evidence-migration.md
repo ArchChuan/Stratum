@@ -15,10 +15,19 @@
   the detailed TDD checkboxes remain unchanged rather than claiming evidence that cannot be reproduced.
 - Runtime Go code has zero references to `agent_executions`, `agent_tool_traces`, or `agent_trace_events`; tenant DDL
   retains those tables as read-only historical compatibility until the parity gate passes.
-- Task 9 is not complete. The real Opik integration test is opt-in and no reproducible full-stack E2E evidence has yet
-  been recorded.
-- Task 10 has only partial evidence: focused tests and repository Go tests pass, while real parity, fresh full
-  verification, cleanup, and the final table decision remain pending.
+- Task 9 now has reproducible isolated evidence with Opik 2.1.32, Collector 0.139.0, MinIO and PostgreSQL. The Opik
+  migrations completed at 95/95 MySQL changesets and 135/135 ClickHouse changesets. Real OTLP ingestion covered a
+  successful execution, Tool span, retained LLM failure, canary assignment and security violation; Opik REST reads,
+  feedback attribution, rollback and cross-tenant rejection passed. A real MinIO encrypted round trip also passed.
+- Real Stratum HTTP checks returned `200` for execution listing, `404` for cross-tenant trace/tool access and `503`
+  while Opik was stopped. The attempted "Agent succeeds while Opik is down" check was inconclusive because the test
+  tenant had no registered qwen provider and failed before evidence export. A real MinIO-down Agent execution remains
+  unverified for the same reason; failure isolation is covered by focused application tests only.
+- Task 10 Go verification is complete: architecture guard and `stratum-verify go-full` passed. `make risk-guardrails`
+  passed architecture, migration, deployment, auth, knowledge, memory, MCP and runtime-governance, then stopped at the
+  pre-existing frontend toolchain state (`vitest/globals` types missing and TypeScript 6 `baseUrl` deprecation).
+- Physical deletion is not approved. Runtime dependencies are removed and historical tables remain read-only; create
+  a separate data-disposition migration only after the two real dependency-failure Agent scenarios pass.
 
 ---
 

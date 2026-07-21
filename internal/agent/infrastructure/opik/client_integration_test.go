@@ -25,8 +25,16 @@ func TestRealOpikCollectorEvidenceParity(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
+	otlpEndpoint := os.Getenv("TEST_OTLP_GRPC_ENDPOINT")
+	if otlpEndpoint == "" {
+		otlpEndpoint = "127.0.0.1:4317"
+	}
+	opikURL := os.Getenv("TEST_OPIK_URL")
+	if opikURL == "" {
+		opikURL = "http://127.0.0.1:5173/api"
+	}
 	exporter, err := otlptracegrpc.New(ctx,
-		otlptracegrpc.WithEndpoint("127.0.0.1:4317"),
+		otlptracegrpc.WithEndpoint(otlpEndpoint),
 		otlptracegrpc.WithInsecure(),
 	)
 	if err != nil {
@@ -111,7 +119,7 @@ func TestRealOpikCollectorEvidenceParity(t *testing.T) {
 	}
 
 	client := NewClient(Config{
-		BaseURL: "http://127.0.0.1:5173/api", Project: "Default Project", Timeout: 3 * time.Second,
+		BaseURL: opikURL, Project: "Default Project", Timeout: 3 * time.Second,
 	})
 	var evidenceErr error
 	var evidenceTotalTokens int
