@@ -1,13 +1,18 @@
 # Stratum Demo 部署架构说明
 
 本文用教学方式解释一次浏览器请求如何穿过公网、Ingress、前端 Nginx、Go 后端和集群内依赖服务。
-其中远端资源、入口和监控栈内容是 2026-07-07 的运维快照，不应视为 2026-07-16 仍在线或配置未变；
+其中域名入口和监控栈内容是 2026-07-07 的历史运维快照，不应视为当前仍在线或配置未变；
 当前可复现的部署契约以 `helm/`、`.github/workflows/deploy.yml` 和 `docs/deployment/k3s-demo.md` 为准。
+
+当前远程 HTTP profile 的公网入口是 <http://101.200.181.141:6879>，健康检查是
+<http://101.200.181.141:6879/api/health>。它不使用域名或 HTTPS。公网 `6879` 由 K3s
+ServiceLB 暴露给 Traefik `web2`，随后请求进入 frontend Service `:80`；内部 `:80`
+不能当作当前公网 URL。
 
 最后人工确认时间：2026-07-07。远端确认方式为 SSH 到 `demo.stratum.example` 后执行只读
 `kubectl` 查询。
 
-快照中的访问入口：
+历史快照中的访问入口：
 
 ```text
 http://demo.stratum.example/

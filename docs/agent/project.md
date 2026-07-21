@@ -46,7 +46,7 @@ pkg/
   httpclient/              - 带重试/超时的 HTTP 客户端封装
   textchunk/               - 文本分块（Chunker）
   crypto/                  - AES 加密工具
-web/                        - React 18 + Vite 5 前端控制台（src/modules 按域组织）
+web/                        - React 18 + Vite 6 前端控制台（src/modules 按域组织）
 k8s/                        - Kubernetes manifests（含 monitoring · network-policy · ingress）
 helm/                       - Helm Chart（templates: deployment · service · frontend）
 grafana/                    - Grafana 数据源 + 仪表板配置
@@ -64,7 +64,7 @@ grafana/                    - Grafana 数据源 + 仪表板配置
 | go-redis | v9.x | `redis.NewClient`，context-aware API |
 | Zap | v1.26+ | 生产用 `NewProduction()`，开发用 `NewDevelopment()` |
 | OTEL | v1.40 | TracerProvider 由 platform runtime 初始化，通过 context 传播 |
-| 前端 | React 18.3 · Vite 5.4 · AntD 5.20 | 版本以 `web/package.json` 与 lockfile 为准 |
+| 前端 | React 18.3 · Vite 6.4 · AntD 5.20 | 版本以 `web/package.json` 与 lockfile 为准 |
 | JWT | golang-jwt/jwt v5 | RS256 签名，Claims 含 tenant_id / role / global_role |
 
 ## Error Handling Patterns
