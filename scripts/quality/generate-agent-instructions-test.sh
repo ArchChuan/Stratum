@@ -127,6 +127,58 @@ fi
 [[ "$(<"${FIXTURE}/AGENTS.md")" == 'old-agents' ]] || fail 'failed generation changed AGENTS.md'
 [[ "$(<"${FIXTURE}/CLAUDE.md")" == 'old-claude' ]] || fail 'failed generation changed CLAUDE.md'
 
+new_fixture comparison-error
+printf '%s\n' 'old-agents' >"${FIXTURE}/AGENTS.md"
+printf '%s\n' 'old-claude' >"${FIXTURE}/CLAUDE.md"
+cat >"${FIXTURE}/cmp-error" <<'EOF'
+#!/usr/bin/env bash
+exit 2
+EOF
+chmod +x "${FIXTURE}/cmp-error"
+if comparison_output="$(
+  cd "${FIXTURE}" &&
+    AGENT_INSTRUCTIONS_CMP_BIN="${FIXTURE}/cmp-error" /bin/bash scripts/quality/generate-agent-instructions.sh 2>&1
+)"; then
+  fail 'generation succeeded after comparison failed'
+fi
+assert_contains "${comparison_output}" 'comparison failed for AGENTS.md'
+assert_not_contains "${comparison_output}" 'stale generated entry'
+[[ "$(<"${FIXTURE}/AGENTS.md")" == 'old-agents' ]] || fail 'comparison failure changed AGENTS.md'
+[[ "$(<"${FIXTURE}/CLAUDE.md")" == 'old-claude' ]] || fail 'comparison failure changed CLAUDE.md'
+
+new_fixture rollback
+printf '%s\n' 'old-agents' >"${FIXTURE}/AGENTS.md"
+printf '%s\n' 'old-claude' >"${FIXTURE}/CLAUDE.md"
+cat >"${FIXTURE}/move-with-second-failure" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+count=0
+[[ ! -f "${MOVE_COUNT_FILE}" ]] || count="$(<"${MOVE_COUNT_FILE}")"
+count=$((count + 1))
+printf '%s\n' "${count}" >"${MOVE_COUNT_FILE}"
+if (( count == 2 )); then
+  exit 1
+fi
+exec /bin/mv "$@"
+EOF
+chmod +x "${FIXTURE}/move-with-second-failure"
+if rollback_output="$(
+  cd "${FIXTURE}" &&
+    MOVE_COUNT_FILE="${FIXTURE}/move-count" \
+      AGENT_INSTRUCTIONS_MOVE_BIN="${FIXTURE}/move-with-second-failure" \
+      /bin/bash scripts/quality/generate-agent-instructions.sh 2>&1
+)"; then
+  fail 'generation succeeded after second install failed'
+fi
+assert_contains "${rollback_output}" 'failed to install CLAUDE.md'
+assert_not_contains "${rollback_output}" 'rollback was incomplete'
+[[ "$(<"${FIXTURE}/AGENTS.md")" == 'old-agents' ]] || fail 'rollback did not restore AGENTS.md'
+[[ "$(<"${FIXTURE}/CLAUDE.md")" == 'old-claude' ]] || fail 'failed install changed CLAUDE.md'
+[[ "$(<"${FIXTURE}/move-count")" == '3' ]] || fail 'rollback did not use the expected move sequence'
+if find "${FIXTURE}" -maxdepth 1 -name '.*.install.*' -print -quit | grep -q .; then
+  fail 'failed install left a temporary install file'
+fi
+
 (
   cd "${ROOT}"
   /bin/bash "${GENERATOR}" --check

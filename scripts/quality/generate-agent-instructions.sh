@@ -10,6 +10,8 @@ PREFIXES=(
 )
 TARGETS=("${ROOT}/AGENTS.md" "${ROOT}/CLAUDE.md")
 NAMES=("AGENTS.md" "CLAUDE.md")
+CMP_BIN="${AGENT_INSTRUCTIONS_CMP_BIN:-cmp}"
+MOVE_BIN="${AGENT_INSTRUCTIONS_MOVE_BIN:-mv}"
 
 usage() {
   echo 'usage: generate-agent-instructions.sh [--check]' >&2
@@ -63,8 +65,18 @@ for index in "${!TARGETS[@]}"; do
     echo "agent instructions: failed to render ${NAMES[index]}" >&2
     exit 1
   }
-  if [[ ! -f "${TARGETS[index]}" ]] || ! cmp -s "${RENDERED[index]}" "${TARGETS[index]}"; then
+  if [[ ! -f "${TARGETS[index]}" ]]; then
     CHANGED[index]=1
+  elif "${CMP_BIN}" -s "${RENDERED[index]}" "${TARGETS[index]}"; then
+    CHANGED[index]=0
+  else
+    compare_status=$?
+    if (( compare_status == 1 )); then
+      CHANGED[index]=1
+    else
+      echo "agent instructions: comparison failed for ${NAMES[index]} (status ${compare_status})" >&2
+      exit 1
+    fi
   fi
 done
 
@@ -109,7 +121,7 @@ rollback() {
     if (( EXISTED[index] )); then
       rollback_temp="${ROOT}/.${NAMES[index]}.rollback.$$"
       if ! cp -p "${BACKUPS[index]}" "${rollback_temp}" ||
-        ! mv -f "${rollback_temp}" "${TARGETS[index]}"; then
+        ! "${MOVE_BIN}" -f "${rollback_temp}" "${TARGETS[index]}"; then
         rm -f "${rollback_temp}"
         echo "agent instructions: rollback failed for ${NAMES[index]}" >&2
         failed=1
@@ -126,7 +138,7 @@ for index in "${!TARGETS[@]}"; do
   (( CHANGED[index] )) || continue
   INSTALL_TEMP="${ROOT}/.${NAMES[index]}.install.$$"
   if ! cp "${RENDERED[index]}" "${INSTALL_TEMP}" ||
-    ! mv -f "${INSTALL_TEMP}" "${TARGETS[index]}"; then
+    ! "${MOVE_BIN}" -f "${INSTALL_TEMP}" "${TARGETS[index]}"; then
     rm -f "${INSTALL_TEMP}"
     INSTALL_TEMP=''
     echo "agent instructions: failed to install ${NAMES[index]}" >&2
