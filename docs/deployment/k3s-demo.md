@@ -1,6 +1,8 @@
 # K3s Demo Deployment
 
-This guide deploys Stratum as a public HTTPS demo on one cloud host.
+This guide deploys Stratum as a public HTTP demo on one cloud host without a
+domain name. The public port is 6879 and the network edge forwards it to the
+host's HTTP port 80.
 
 ## Host Baseline
 
@@ -15,18 +17,34 @@ Recommended:
 Open only these public inbound ports:
 
 - TCP 22 for SSH from your operator IP
-- TCP 80 for ACME HTTP-01
-- TCP 443 for HTTPS
+- TCP 6879 for the public HTTP demo
 
-## DNS
+Do not expose the backend, PostgreSQL, Redis, NATS, Milvus, etcd, or MinIO
+ports publicly.
 
-Create an A record:
+## Public URL
+
+Create the GitHub Production Environment variable `PUBLIC_BASE_URL`:
 
 ```text
-demo.stratum.example -> 203.0.113.10
+http://<public-ip>:6879
 ```
 
-Use the real domain before requesting a Let's Encrypt certificate.
+The deployment rejects DNS names, other ports, paths, credentials, and a
+trailing slash. The network forwarding rule remains outside Kubernetes:
+
+```text
+public <public-ip>:6879 -> host port 80 -> K3s Traefik web entrypoint
+```
+
+Configure the GitHub OAuth App callback URL to exactly:
+
+```text
+http://<public-ip>:6879/api/auth/github/callback
+```
+
+Without that external OAuth setting, the frontend and health endpoint can
+work while login still fails.
 
 ## Bootstrap
 
@@ -36,11 +54,8 @@ Run on the host:
 sudo scripts/bootstrap-k3s.sh
 ```
 
-Edit the `letsencrypt-prod` ClusterIssuer email after bootstrap:
-
-```bash
-kubectl edit clusterissuer letsencrypt-prod
-```
+The bootstrap script also installs cert-manager for the future HTTPS profile.
+The current remote HTTP overlay does not request or use a certificate.
 
 ## Secrets
 
@@ -93,22 +108,19 @@ Do not commit generated secret YAML.
 
 ## Configure Values
 
-Copy the demo values file and set image repositories, tags, and domain:
+The CD workflow renders the HTTPS demo base plus the remote HTTP overlay:
 
 ```bash
-cp helm/values-demo.yaml /tmp/stratum-values-demo.yaml
+helm template stratum ./helm \
+  -f helm/values-demo.yaml \
+  -f helm/values-demo-remote-http.yaml \
+  --set-string config.frontendUrl=http://203.0.113.10:6879 \
+  --set-string config.githubCallbackUrl=http://203.0.113.10:6879/api/auth/github/callback
 ```
 
-Edit:
-
-- `app.image.repository`
-- `app.image.tag`
-- `frontend.image.repository`
-- `frontend.image.tag`
-- `config.frontendUrl`
-- `config.githubCallbackUrl`
-- `ingress.hosts[0].host`
-- `ingress.tls[0].hosts[0]`
+Do not add the real public IP to either values file. The workflow validates and
+injects `PUBLIC_BASE_URL`; image repositories and immutable digests are also
+injected by the workflow.
 
 ## In-Cluster Dependencies
 
@@ -124,8 +136,18 @@ All dependency Services are `ClusterIP`. Do not expose them through the cloud se
 ## Deploy
 
 ```bash
-VALUES_FILE=/tmp/stratum-values-demo.yaml scripts/deploy-demo.sh
+helm upgrade --install stratum ./helm \
+  -f helm/values-demo.yaml \
+  -f helm/values-demo-remote-http.yaml \
+  --set-string config.frontendUrl="$PUBLIC_BASE_URL" \
+  --set-string config.githubCallbackUrl="$PUBLIC_BASE_URL/api/auth/github/callback" \
+  --set-string config.secureCookies=false \
+  -n stratum --wait --timeout=10m
 ```
+
+Normal production deployment runs through `.github/workflows/deploy.yml` so
+image digests, secret checksums, rollout gates, and public verification are not
+skipped. The manual command is for rendering and operator diagnosis.
 
 ## Verify
 
@@ -133,10 +155,13 @@ VALUES_FILE=/tmp/stratum-values-demo.yaml scripts/deploy-demo.sh
 kubectl get pods -n stratum
 kubectl get pvc -n stratum
 kubectl get ingress -n stratum
-kubectl get certificate -n stratum
-curl -I https://demo.stratum.example/
-curl -fsS https://demo.stratum.example/api/health
+curl --fail --silent --show-error --max-time 15 -I "$PUBLIC_BASE_URL/"
+curl --fail --silent --show-error --max-time 15 \
+  "$PUBLIC_BASE_URL/api/health" >/dev/null
 ```
+
+Complete verification includes a browser GitHub login and callback. Do not log
+authorization codes, tokens, cookies, PII, or upstream response bodies.
 
 ## Backup And Restore Notes
 
@@ -163,3 +188,12 @@ Milvus, NATS, Redis, etcd, and MinIO use PVCs on the single host. For a demo, pr
 - Milvus may require lowering memory pressure or moving to a larger host.
 - HPA and PDB are disabled by default because there is only one node.
 - NetworkPolicy is disabled by default until the selected CNI behavior is verified.
+- HTTP does not encrypt browser traffic or session material in transit. This is
+  an accepted constraint for the current host, not a replacement for HTTPS.
+
+## Migrate To HTTPS
+
+After assigning a domain and certificate, stop applying
+`values-demo-remote-http.yaml`, set the HTTPS public URLs in the deployment
+environment, and use the existing `values-demo.yaml` TLS configuration. Secure
+cookies must be restored to `true`; do not disable the deployment safety checks.

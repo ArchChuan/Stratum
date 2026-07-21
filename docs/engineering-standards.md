@@ -68,7 +68,7 @@ React 18.3 · Vite 5.4 · Ant Design 5.20 · React Router 6.26 · Axios 1.7 · T
 | 环境 | 配置入口 | 交付方式 |
 |------|----------|----------|
 | 本地开发 | `docker-compose.yml` | `make infra-up` 直接起容器（含本地 `build:` 段） |
-| 远程部署（真生产链路） | `.github/workflows/deploy.yml` → 镜像推阿里云 CR → Helm (`helm/values-demo.yaml`) → K3s | CD 触发，`dependencies.yaml` 用 `image.repository:tag` 拉镜像 |
+| 远程部署（真生产链路） | `.github/workflows/deploy.yml` → 镜像推阿里云 CR → Helm (`values-demo.yaml` + `values-demo-remote-http.yaml`) → K3s | CD 触发；公网 `:6879` 转发到主机 `:80` |
 
 - **`docker-compose.prod.yml` 不在 CD 链路中**（遗留/备用）；改它不影响远程部署。远程唯一权威是 `deploy.yml` + `helm/values-*.yaml`。
 - **基础设施层的任何改动都要双写**：自定义镜像、数据库扩展、环境变量、依赖版本、端口。docker-compose 只覆盖本地；远程必须在 `deploy.yml`（构建/镜像镜像）+ Helm values（引用 tag）同步落地。
@@ -83,7 +83,7 @@ React 18.3 · Vite 5.4 · Ant Design 5.20 · React Router 6.26 · Axios 1.7 · T
 | 环境 | 配置入口 | 交付方式 |
 |------|----------|----------|
 | 本地开发 | `docker-compose.yml` | `make infra-up` 直接起容器（含本地 `build:` 段） |
-| 远程部署（真生产链路） | `.github/workflows/deploy.yml` → 镜像推阿里云 CR → Helm (`helm/values-demo.yaml`) → K3s | CD 触发，`dependencies.yaml` 用 `image.repository:tag` 拉镜像 |
+| 远程部署（真生产链路） | `.github/workflows/deploy.yml` → 镜像推阿里云 CR → Helm (`values-demo.yaml` + `values-demo-remote-http.yaml`) → K3s | CD 触发；公网 `:6879` 转发到主机 `:80` |
 
 - **`docker-compose.prod.yml` 不在 CD 链路中**（遗留/备用）；改它不影响远程部署。远程唯一权威是 `deploy.yml` + `helm/values-*.yaml`。
 - **基础设施层的任何改动都要双写**：自定义镜像、数据库扩展、环境变量、依赖版本、端口。docker-compose 只覆盖本地；远程必须在 `deploy.yml`（构建/镜像镜像）+ Helm values（引用 tag）同步落地。
