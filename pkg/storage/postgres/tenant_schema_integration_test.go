@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestProvisionTenantSchema_ReplacesLegacySkillsAndRetainsAgentObservationTables(t *testing.T) {
+func TestProvisionTenantSchema_ReplacesLegacySkillsAndDropsAgentObservationTables(t *testing.T) {
 	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
 	if url == "" {
 		t.Skip("STRATUM_TEST_POSTGRES_URL is not set")
@@ -65,7 +65,7 @@ func TestProvisionTenantSchema_ReplacesLegacySkillsAndRetainsAgentObservationTab
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 		t.Fatal(err)
 	}
-	var legacyVersions, revisions, observationTables, observationRows int
+	var legacyVersions, revisions, observationTables int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema=$1 AND table_name='skill_versions'`, schema).Scan(&legacyVersions); err != nil {
 		t.Fatal(err)
 	}
@@ -76,15 +76,9 @@ func TestProvisionTenantSchema_ReplacesLegacySkillsAndRetainsAgentObservationTab
 		AND table_name IN ('agent_executions','agent_tool_traces','agent_trace_events')`, schema).Scan(&observationTables); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT
-		(SELECT count(*) FROM "`+schema+`".agent_executions) +
-		(SELECT count(*) FROM "`+schema+`".agent_tool_traces) +
-		(SELECT count(*) FROM "`+schema+`".agent_trace_events)`).Scan(&observationRows); err != nil {
-		t.Fatal(err)
-	}
-	if legacyVersions != 0 || revisions != 1 || observationTables != 3 || observationRows != 3 {
-		t.Fatalf("legacy=%d revisions=%d observation_tables=%d observation_rows=%d",
-			legacyVersions, revisions, observationTables, observationRows)
+	if legacyVersions != 0 || revisions != 1 || observationTables != 0 {
+		t.Fatalf("legacy=%d revisions=%d observation_tables=%d",
+			legacyVersions, revisions, observationTables)
 	}
 
 	if _, err := pool.Exec(ctx, `INSERT INTO "`+schema+`".skills (id,name) VALUES ('new-skill','new'); INSERT INTO "`+schema+`".skill_revisions (id,skill_id,instructions) VALUES ('new-revision','new-skill','instructions')`); err != nil {
@@ -93,12 +87,19 @@ func TestProvisionTenantSchema_ReplacesLegacySkillsAndRetainsAgentObservationTab
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 		t.Fatal(err)
 	}
-	var newRows int
+	var newRows, observationTablesAfterSecondProvision int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM "`+schema+`".skill_revisions WHERE id='new-revision'`).Scan(&newRows); err != nil {
 		t.Fatal(err)
 	}
 	if newRows != 1 {
 		t.Fatalf("second provision deleted new Skill revision")
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema=$1
+		AND table_name IN ('agent_executions','agent_tool_traces','agent_trace_events')`, schema).Scan(&observationTablesAfterSecondProvision); err != nil {
+		t.Fatal(err)
+	}
+	if observationTablesAfterSecondProvision != 0 {
+		t.Fatalf("second provision recreated %d obsolete observation tables", observationTablesAfterSecondProvision)
 	}
 }
 

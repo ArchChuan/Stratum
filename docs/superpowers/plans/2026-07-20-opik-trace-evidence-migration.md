@@ -14,7 +14,7 @@
   architecture-guard tests. Historical RED-phase command output is not available for every original checklist item, so
   the detailed TDD checkboxes remain unchanged rather than claiming evidence that cannot be reproduced.
 - Runtime Go code has zero references to `agent_executions`, `agent_tool_traces`, or `agent_trace_events`; tenant DDL
-  retains those tables as read-only historical compatibility until the parity gate passes.
+  now drops those runtime-obsolete historical tables idempotently after the parity gate passed.
 - Task 9 now has reproducible isolated evidence with Opik 2.1.32, Collector 0.139.0, MinIO and PostgreSQL. The Opik
   migrations completed at 95/95 MySQL changesets and 135/135 ClickHouse changesets. Real OTLP ingestion covered a
   successful execution, Tool span, retained LLM failure, canary assignment and security violation; Opik REST reads,
@@ -29,9 +29,9 @@
 - Task 10 Go verification is complete: architecture guard and `stratum-verify go-full` passed. `make risk-guardrails`
   passed architecture, migration, deployment, auth, knowledge, memory, MCP and runtime-governance, then stopped at the
   pre-existing frontend toolchain state (`vitest/globals` types missing and TypeScript 6 `baseUrl` deprecation).
-- Both real dependency-failure Agent scenarios now pass, so the historical tables can be classified as runtime-obsolete.
-  Physical deletion is still not approved: retain them as read-only historical storage until retention, export/archive,
-  rollback-window, and operator-approval requirements are agreed in a separate data-disposition migration.
+- Both real dependency-failure Agent scenarios pass. Physical deletion was explicitly approved on 2026-07-21 and is
+  implemented in canonical tenant DDL so existing tenants drop the tables on provisioning and new tenants never create
+  them.
 
 ---
 
@@ -408,6 +408,5 @@ Run: `git diff --check`, inspect `git status --short`, source guard output, runn
 
 - [ ] **Step 4: Record the physical table decision**
 
-If real E2E and runtime source guard pass, report that the tables are no longer runtime dependencies but remain as
-read-only historical storage. Physical `DROP TABLE` requires the separately approved data disposition/migration phase;
-otherwise report the exact parity gap and keep the tables.
+The real E2E and runtime source guard passed. Record that the tables are no longer runtime dependencies and were
+physically removed after explicit operator approval.

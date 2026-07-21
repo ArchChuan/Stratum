@@ -114,7 +114,7 @@ stratum/
 | | `agent_mcp_links` | (agent_id, server_id) CASCADE 双删 |
 | | `agent_skill_links` | (agent_id, skill_id) CASCADE |
 | | `agent_workspaces` | (agent_id, workspace_id) CASCADE |
-| | `agent_executions` | id UUID, status CHECK('success','error'), input/output_preview, total_tokens, duration_ms |
+| | Agent execution evidence | Opik trace/span evidence; PostgreSQL historical observation tables have been removed |
 | MCP | `mcp_configs` | id TEXT, transport, command/url, args/env/headers/auth_config/retry_config JSONB, timeout_sec DEFAULT 30 |
 | Skill | `skills` | id, name UNIQUE, description, status, active_revision_id / draft_revision_id |
 | | `skill_revisions` | parent/revision/status/source、content_hash、capability、activation_contract、instructions、requirements、publish_checks |
@@ -155,7 +155,7 @@ stratum/
 
 ### 4.5 State Transitions
 
-- **agent_executions.status**: `success` ⊕ `error`（CHECK）
+- **Agent execution status**: sourced from Opik trace/span evidence rather than a tenant PostgreSQL observation table
 - **chat_messages.role**: `user` ⊕ `assistant`（CHECK）
 - **chat_conversations**: 用户删除与 Agent 清理走硬删除；`deleted_at` 兼容历史软删记录，清理任务同时回收过期和历史软删会话
 - **memory_entries.type**: `short_term` → `long_term`（pipeline enricher 提升）/ `entity` / `summary`
@@ -247,7 +247,7 @@ stratum/
 
 1. **多租户隔离**：所有 tenant 资源走 `SET LOCAL search_path = tenant_{id}, public`；编号 migration 仅碰 public，per-tenant DDL 必须放 `tenant_schema.sql` 由 `ProvisionAllTenantSchemas` 幂等应用。
 2. **AI 不做控制逻辑**：路由 / 重试 / 状态机硬编码在 Go 层；LLM 仅做语言任务（生成、抽取）。
-3. **Agent 执行**：`ExecuteStream` 构造独立的限时 execution context；SSE handler 监听 client disconnect 并显式 cancel。执行记录写入 `agent_executions`。
+3. **Agent 执行**：`ExecuteStream` 构造独立的限时 execution context；SSE handler 监听 client disconnect 并显式 cancel。执行证据通过 OTel Collector 写入 Opik。
 4. **Skill instruction capability package**：draft 可编辑 capability、activation 和 instruction bundle；publish 冻结版本；Agent 正常执行只激活 published instruction bundle。当前没有直接执行或草稿测试 HTTP 路由。
 5. **Workspace 不可变字段**：`embedding_model` / `chunk_size` / `chunk_overlap` 创建后只读（`MergeUpdate` 强制）。
 6. **Embed model**：tenant 级 set-once（`SetEmbedModel` 拒绝二次写入 → `ErrEmbedModelAlreadySet`）；agent 创建时未指定则继承 tenant default。
@@ -292,7 +292,7 @@ stratum/
 - **Token 存储**：前端 httpOnly cookie 或内存 Context，禁 localStorage
 - **输入校验**：DTO `binding` tag + service 层 domain 不变量自检
 - **Skill 发布**：activation name、object schema、instructions 与 requirements 在领域层校验；发布 revision 以内容哈希冻结
-- **审计/追踪**：Agent 工具调用与执行事件写入 tenant-scoped `agent_tool_traces` / `agent_trace_events`
+- **审计/追踪**：Agent 工具调用与执行事件通过 OTel span 写入 Opik；tenant-scoped 历史观测表已删除
 
 ### 9.3 Error Handling
 

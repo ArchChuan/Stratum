@@ -16,6 +16,9 @@ DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS entities;
 DROP TABLE IF EXISTS llm_api_keys;
 DROP TABLE IF EXISTS agent_mcp_links;
+DROP TABLE IF EXISTS agent_trace_events;
+DROP TABLE IF EXISTS agent_tool_traces;
+DROP TABLE IF EXISTS agent_executions;
 CREATE TABLE IF NOT EXISTS agents (
     id             TEXT PRIMARY KEY,
     name           TEXT NOT NULL UNIQUE,
@@ -402,61 +405,6 @@ CREATE TABLE IF NOT EXISTS agent_skill_links (
     revision_id TEXT REFERENCES skill_revisions(id) ON DELETE SET NULL,
     PRIMARY KEY (agent_id, skill_id)
 );
-
-CREATE TABLE IF NOT EXISTS agent_executions (
-    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    trace_id       TEXT        NOT NULL DEFAULT '',
-    agent_id       TEXT        NOT NULL,
-    agent_name     TEXT        NOT NULL DEFAULT '',
-    user_id        TEXT        NOT NULL,
-    status         TEXT        NOT NULL CHECK (status IN ('success', 'error', 'waiting_approval')),
-    input_preview  TEXT        NOT NULL DEFAULT '',
-    output_preview TEXT        NOT NULL DEFAULT '',
-    error_message  TEXT        NOT NULL DEFAULT '',
-    total_tokens   INT         NOT NULL DEFAULT 0,
-    duration_ms    INT         NOT NULL DEFAULT 0,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-ALTER TABLE agent_executions ADD COLUMN IF NOT EXISTS trace_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_executions DROP CONSTRAINT IF EXISTS agent_executions_status_check;
-ALTER TABLE agent_executions ADD CONSTRAINT agent_executions_status_check
-    CHECK (status IN ('success', 'error', 'waiting_approval'));
-CREATE INDEX IF NOT EXISTS idx_agent_exec_created ON agent_executions (created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_exec_trace ON agent_executions (trace_id);
-
-CREATE TABLE IF NOT EXISTS agent_tool_traces (
-    id UUID PRIMARY KEY DEFAULT public.gen_uuid_v7(), trace_id TEXT NOT NULL DEFAULT '',
-    execution_id TEXT NOT NULL DEFAULT '', conversation_id UUID, agent_id TEXT NOT NULL DEFAULT '',
-    user_id TEXT NOT NULL DEFAULT '', step_index INT NOT NULL DEFAULT 0, tool_call_id TEXT NOT NULL DEFAULT '',
-    tool_name TEXT NOT NULL DEFAULT '', tool_type TEXT NOT NULL DEFAULT '', provider_type TEXT NOT NULL DEFAULT '',
-    provider_id TEXT NOT NULL DEFAULT '', server_id TEXT NOT NULL DEFAULT '', capability_id TEXT NOT NULL DEFAULT '',
-    arguments_json JSONB NOT NULL DEFAULT '{}', raw_result_json JSONB NOT NULL DEFAULT 'null',
-    raw_result_text TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL CHECK (status IN ('success', 'error')), error_message TEXT NOT NULL DEFAULT '',
-    error_code TEXT NOT NULL DEFAULT '', latency_ms BIGINT NOT NULL DEFAULT 0,
-    raw_truncated BOOLEAN NOT NULL DEFAULT FALSE, metadata_json JSONB NOT NULL DEFAULT '{}',
-    started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_agent_tool_traces_trace ON agent_tool_traces (trace_id, step_index, created_at ASC);
-CREATE INDEX IF NOT EXISTS idx_agent_tool_traces_conv ON agent_tool_traces (conversation_id, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS agent_trace_events (
-    id UUID PRIMARY KEY DEFAULT public.gen_uuid_v7(), trace_id TEXT NOT NULL DEFAULT '',
-    execution_id TEXT NOT NULL DEFAULT '', conversation_id UUID, agent_id TEXT NOT NULL DEFAULT '',
-    user_id TEXT NOT NULL DEFAULT '', run_type TEXT NOT NULL DEFAULT '', observation_type TEXT NOT NULL DEFAULT '',
-    event_type TEXT NOT NULL DEFAULT '', step_index INT NOT NULL DEFAULT 0, span_name TEXT NOT NULL DEFAULT '',
-    parent_event_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', input_json JSONB NOT NULL DEFAULT 'null',
-    output_json JSONB NOT NULL DEFAULT 'null', summary TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '',
-    model TEXT NOT NULL DEFAULT '', prompt_tokens INT NOT NULL DEFAULT 0, completion_tokens INT NOT NULL DEFAULT 0,
-    total_tokens INT NOT NULL DEFAULT 0, cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-    latency_ms BIGINT NOT NULL DEFAULT 0, tool_trace_id TEXT NOT NULL DEFAULT '', provider_type TEXT NOT NULL DEFAULT '',
-    provider_id TEXT NOT NULL DEFAULT '', node_id TEXT NOT NULL DEFAULT '', node_type TEXT NOT NULL DEFAULT '',
-    workflow_id TEXT NOT NULL DEFAULT '', workflow_version TEXT NOT NULL DEFAULT '', sequence_no BIGINT NOT NULL DEFAULT 0,
-    metadata_json JSONB NOT NULL DEFAULT '{}', otel_trace_id TEXT NOT NULL DEFAULT '', otel_span_id TEXT NOT NULL DEFAULT '',
-    started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_agent_trace_events_trace ON agent_trace_events (trace_id, created_at ASC);
-CREATE INDEX IF NOT EXISTS idx_agent_trace_events_conv ON agent_trace_events (conversation_id, created_at ASC);
 
 CREATE TABLE IF NOT EXISTS agent_execution_checkpoints (
     id                        UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
@@ -890,32 +838,6 @@ UPDATE chat_messages SET role = 'assistant' WHERE role = 'agent';
 ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_role_check
     CHECK (role IN ('user', 'assistant'));
 
--- Historical Agent observation tables stay read-only until the real Opik parity gate passes.
-ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS execution_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS raw_truncated BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS provider_type TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS provider_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS server_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS capability_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}';
-ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
-ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS execution_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS tool_trace_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS run_type TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS observation_type TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS provider_type TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS provider_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS node_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS node_type TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS workflow_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS workflow_version TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS sequence_no BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}';
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS otel_trace_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS otel_span_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
-ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;
 ALTER TABLE agent_execution_checkpoints ADD COLUMN IF NOT EXISTS resume_reason TEXT NOT NULL DEFAULT '';
 
 -- =============================================================================
