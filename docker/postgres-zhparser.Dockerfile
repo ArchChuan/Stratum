@@ -29,7 +29,8 @@ RUN set -eux; \
     \
     # --- build SCWS ---------------------------------------------------------
     cd /tmp; \
-    curl -fsSL "http://www.xunsearch.com/scws/down/scws-${SCWS_VERSION}.tar.bz2" -o scws.tar.bz2; \
+    curl -fsSL --connect-timeout 10 --max-time 120 --retry 4 --retry-delay 2 --retry-all-errors \
+        "http://www.xunsearch.com/scws/down/scws-${SCWS_VERSION}.tar.bz2" -o scws.tar.bz2; \
     tar xjf scws.tar.bz2; \
     cd "scws-${SCWS_VERSION}"; \
     ./configure --prefix=/usr/local; \
