@@ -44,7 +44,7 @@ Claude Code hooks under `.claude/hooks/` provide mechanical enforcement; this fi
 
 ## Multi-tenant DDL and repository rules
 
-- 编号迁移 `pkg/migration/sql/NNN_*.sql` 只操作 public schema，禁止引用 tenant-only 表。Tenant-only DDL 放在 `pkg/storage/postgres/tenant_schema.sql`，由租户 provision 流程幂等应用；新增后同步检查 `pkg/migration/sql/tenant_schema.sql` baseline。
+- 编号迁移 `pkg/migration/sql/NNN_*.sql` 只操作 public schema，禁止引用 tenant-only 表。Tenant-only DDL 的唯一基线是 `pkg/storage/postgres/tenant_schema.sql`，由租户 provision 流程幂等应用；禁止在 `pkg/migration/sql/` 复制 tenant DDL。
 - 新表和索引用 `IF NOT EXISTS`；新列必须紧跟 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 以升级历史租户。新增 `NOT NULL` 列须有安全默认值，或按 nullable → 回填 → 约束迁移。依赖新列的索引、约束和查询必须排在 backfill 后，并覆盖历史 schema 顺序测试。
 - INSERT 与目标 DDL 必须逐列核对，尤其是无 DEFAULT 的 NOT NULL 列。数据库写入必须验证事务回滚和失败传播。`golang-migrate force <version>` 只用于把版本标为 clean，再由 `Up()` 继续；禁止手改 `schema_migrations`。
 - 所有访问 tenant-scoped 表的 repository 方法必须通过 `execTenant(ctx, tenantID, fn)`，禁止直接调用 `r.pool.Exec/Query`；对应 port 方法必须显式包含 `tenantID string`。
