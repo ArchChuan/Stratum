@@ -94,7 +94,7 @@ CI 全绿后合并，再用 `git worktree remove ../stratum-<feature>` 清理。
 
 - 所有普通 API 调用走 `web/src/services/client.ts` 的唯一 Axios 实例；流式请求也复用其 base URL、认证状态和统一错误约定，禁止新增平行客户端。
 - 行为常量集中在 `web/src/constants/`，使用全大写下划线和 `_MS`、`_SEC`、`_SIZE` 等单位后缀；页面不得硬编码网络、分页、MCP、Skill 或 Memory 行为数字。
-- 错误统一显示 `message.error(err.response?.data?.error || '操作失败')`；使用 `message` 和 `Modal.confirm`，禁止 `alert()`、`confirm()` 和提交 `console.log`。
+- 错误通知统一为 `message.error({ content: err.response?.data?.error || '操作失败', duration: 0 })`；成功通知使用 `message.success({ content: '操作成功', duration: 2 })` 或等价的 `duration <= 2` 形式。使用 `message` 和 `Modal.confirm`，禁止 `alert()`、`confirm()` 和提交 `console.log`。
 - 页面不得跨 `pages/` 导入；组件超过 200 行应提取 hook、component 或纯函数。`useEffect` 依赖完整，异步 effect 使用 cancelled 标志清理。
 - 用户可见字符串使用中文。Bearer token 不得存入 localStorage/Web Storage；使用 HttpOnly cookie 或内存 Context。
 
@@ -127,7 +127,7 @@ CI 全绿后合并，再用 `git worktree remove ../stratum-<feature>` 清理。
 - AI 执行中展示流式输出和工具调用步骤；执行后用折叠面板展示工具名、耗时和摘要；失败定位到具体步骤。
 - 管理员负责配置，终端用户负责对话；管理操作二次确认，终端用户界面不暴露配置入口。
 - 知识库 `description` 必填，`name` 创建后不可改；Agent `max_iterations` 为 1–20 slider，绑定知识库时展示 description；Skill temperature 用带标签 Slider，并支持不经过 Agent 的独立测试运行；Memory 用户侧只读 content、时间、importance，管理侧增加 scope、agent_id。
-- 交互三态：进行中使用 loading/Skeleton；成功 `message.success` ≤2s；失败 `message.error` 不自动消失。所有列表都有 Empty 和引导操作；无数据提示“X 还是空的”，搜索无结果提示“没有找到…”。
+- 交互三态：进行中使用 loading/Skeleton；成功通知最多显示 2 秒，失败通知不自动消失，调用形式遵循上述 Frontend conventions。所有列表都有 Empty 和引导操作；无数据提示“X 还是空的”，搜索无结果提示“没有找到…”。
 - 删除、停用、清空使用 `Modal.confirm` 并描述后果；必填通过 `rules`，说明用 `extra`，补充信息用 `tooltip`，避免重复。
 - 命名：Modal 状态用 `createOpen/editOpen`，loading 用 `createLoading/deleteLoading`，service 用动词+实体名如 `createWorkspace`，Hook 返回值直接解构而不加 `state` 前缀。
 
