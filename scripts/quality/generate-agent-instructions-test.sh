@@ -129,6 +129,18 @@ fi
 [[ "$(<"${FIXTURE}/AGENTS.md")" == 'old-agents' ]] || fail 'failed generation changed AGENTS.md'
 [[ "$(<"${FIXTURE}/CLAUDE.md")" == 'old-claude' ]] || fail 'failed generation changed CLAUDE.md'
 
+new_fixture extra-prefix-blank-line
+printf '%s\n' 'old-agents' >"${FIXTURE}/AGENTS.md"
+printf '%s\n' 'old-claude' >"${FIXTURE}/CLAUDE.md"
+printf '\n' >>"${FIXTURE}/docs/agent/templates/agents-prefix.md"
+if extra_blank_output="$(cd "${FIXTURE}" && /bin/bash scripts/quality/generate-agent-instructions.sh 2>&1)"; then
+  fail 'generation succeeded with an extra trailing prefix blank line'
+fi
+assert_contains "${extra_blank_output}" \
+  'agent instructions: prefix must not end with a blank line: docs/agent/templates/agents-prefix.md'
+[[ "$(<"${FIXTURE}/AGENTS.md")" == 'old-agents' ]] || fail 'invalid prefix changed AGENTS.md'
+[[ "$(<"${FIXTURE}/CLAUDE.md")" == 'old-claude' ]] || fail 'invalid prefix changed CLAUDE.md'
+
 new_fixture comparison-error
 printf '%s\n' 'old-agents' >"${FIXTURE}/AGENTS.md"
 printf '%s\n' 'old-claude' >"${FIXTURE}/CLAUDE.md"

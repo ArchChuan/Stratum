@@ -32,6 +32,14 @@ for input in "${COMMON}" "${PREFIXES[@]}"; do
   fi
 done
 
+for prefix in "${PREFIXES[@]}"; do
+  trailing_bytes="$(tail -c 2 "${prefix}" | od -An -t x1 | tr -d '[:space:]')"
+  if [[ "${trailing_bytes}" == '0a0a' ]]; then
+    echo "agent instructions: prefix must not end with a blank line: ${prefix#"${ROOT}/"}" >&2
+    exit 1
+  fi
+done
+
 TEMP_DIR="$(mktemp -d "${ROOT}/.agent-instructions.XXXXXX")"
 INSTALL_TEMP=''
 
