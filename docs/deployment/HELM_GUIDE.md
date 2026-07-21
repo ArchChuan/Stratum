@@ -93,6 +93,9 @@ secure cookie。
 ## 健康与容量
 
 - backend 健康检查：`/health`
+- frontend 对外健康检查：`/api/health`（代理到 backend）；CD 会先经
+  `stratum-frontend` Service 的 port-forward 验证集群内链路，再验证
+  `$PUBLIC_BASE_URL/api/health` 返回 HTTP 200
 - HPA：`templates/hpa.yaml`，由 values 开关控制
 - PDB：`templates/pdb.yaml`，由 values 开关控制
 - NetworkPolicy：`templates/networkpolicy.yaml`

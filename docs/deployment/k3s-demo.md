@@ -154,11 +154,19 @@ skipped. The manual command is for rendering and operator diagnosis.
 ```bash
 kubectl get pods -n stratum
 kubectl get pvc -n stratum
-kubectl get ingress -n stratum
+kubectl get ingress -n stratum -o wide
+kubectl get endpoints stratum stratum-frontend -n stratum
+kubectl port-forward service/stratum-frontend 18080:80 -n stratum
+curl --fail --silent --show-error --max-time 15 \
+  http://127.0.0.1:18080/api/health >/dev/null
 curl --fail --silent --show-error --max-time 15 -I "$PUBLIC_BASE_URL/"
 curl --fail --silent --show-error --max-time 15 \
   "$PUBLIC_BASE_URL/api/health" >/dev/null
 ```
+
+Run the port-forward in a separate terminal. The internal check isolates the
+frontend Service and its backend proxy from the public forwarding and Ingress
+path; the public check must independently return HTTP 200.
 
 Complete verification includes a browser GitHub login and callback. Do not log
 authorization codes, tokens, cookies, PII, or upstream response bodies.

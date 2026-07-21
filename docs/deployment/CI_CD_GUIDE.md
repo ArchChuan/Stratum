@@ -42,7 +42,8 @@ GitHub Actions
   → 发布固定版本依赖镜像并解析全部镜像 digest
   → Kubernetes namespace / Secret / registry pull secret
   → 以 repository@digest 执行 Helm upgrade
-  → rollout status + Pod/event diagnostics
+  → rollout status + Pod/Ingress/Service endpoint diagnostics
+  → frontend Service 内部 /api/health + 公网 /api/health 双重验证
 ```
 
 本地 `docker-compose.yml` 不在该链路中。基础设施版本或自定义镜像变更时，必须同时核对 Compose、`deploy.yml` 和 Helm values。
@@ -50,6 +51,11 @@ GitHub Actions
 生产变更使用 GitHub Actions job-level concurrency 串行执行，且不会取消正在运行的 Helm
 操作。`main` push 在修改镜像仓库或集群前必须再次核对远端最新 SHA；已过期任务正常跳过。
 生产镜像由 registry digest 固定，禁止使用 `latest` 作为部署契约。
+
+部署后的健康检查先将 `stratum-frontend` Service 的 80 端口转发到 runner 的
+`127.0.0.1:18080`，验证 frontend 对 `/api/health` 的集群内代理；随后请求
+`$PUBLIC_BASE_URL/api/health` 并要求 HTTP 200。前者失败指向 Pod/Service/代理链路，后者失败
+则应结合 workflow 输出的 Ingress 与 Service endpoints 排查公网转发或 Ingress。
 
 ## 已知不一致
 

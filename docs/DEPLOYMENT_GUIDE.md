@@ -51,7 +51,8 @@ Chart 位于 `helm/`，主要 values 文件为：
 
 - `helm/values.yaml`：共享默认值
 - `helm/values-dev.yaml`：开发环境
-- `helm/values-demo.yaml` / `helm/values-demo-local.yaml`：demo
+- `helm/values-demo.yaml` / `helm/values-demo-local.yaml`：HTTPS 与本地 demo
+- `helm/values-demo-remote-http.yaml`：无域名远程 HTTP demo 的受约束覆盖层
 - `helm/values-prod.yaml`：生产覆盖
 
 部署前渲染并检查：
@@ -93,9 +94,14 @@ LLM provider key 是 tenant-scoped 运行时设置，不是部署时共享的 `O
 ```bash
 kubectl -n stratum rollout status deployment/stratum
 kubectl -n stratum get pods,svc,ingress
-kubectl -n stratum port-forward svc/stratum 8080:8080
-curl -fsS http://localhost:8080/health
+kubectl -n stratum port-forward svc/stratum-frontend 18080:80
+curl -fsS http://127.0.0.1:18080/api/health
 ```
+
+远程 HTTP profile 还必须从集群外验证
+`$PUBLIC_BASE_URL/api/health` 返回 HTTP 200。当前 CD workflow 先通过 frontend
+Service 的 port-forward 验证集群内的 `/api/health` 代理链路，再检查公网入口；失败诊断会列出
+Ingress 和 backend/frontend Service endpoints，以区分集群内路由与公网转发故障。
 
 资源名称可能被 Helm fullname 覆盖；若命令中的名称不匹配，先用 `kubectl -n stratum get deploy,svc` 查询实际名称。
 
