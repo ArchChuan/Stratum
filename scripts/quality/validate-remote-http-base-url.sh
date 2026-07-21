@@ -20,6 +20,14 @@ for octet in "${octets[@]}"; do
 done
 
 first="${octets[0]}"
+second="${octets[1]}"
 if ((10#${first} == 0 || 10#${first} == 127 || 10#${first} >= 224)); then
+    invalid
+fi
+if ((10#${first} == 10 ||
+    (10#${first} == 100 && 10#${second} >= 64 && 10#${second} <= 127) ||
+    (10#${first} == 169 && 10#${second} == 254) ||
+    (10#${first} == 172 && 10#${second} >= 16 && 10#${second} <= 31) ||
+    (10#${first} == 192 && 10#${second} == 168))); then
     invalid
 fi
