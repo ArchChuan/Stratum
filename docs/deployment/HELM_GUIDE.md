@@ -72,8 +72,9 @@ helm uninstall stratum -n stratum
 | `values-prod.yaml` | 生产导向覆盖，包括外部依赖选项 |
 
 当前 `deploy.yml` 按顺序加载 `values-demo.yaml` 和
-`values-demo-remote-http.yaml`。公网链路为 `:6879 -> 主机 :80 -> Traefik
-web`，Kubernetes Service 仍使用 80，后端进程仍使用 8080。公网地址由
+`values-demo-remote-http.yaml`。公网链路为 `:6879 -> K3s ServiceLB :6879 ->
+Traefik web2`；Ingress 同时绑定 `web,web2`，前端 Kubernetes Service 仍使用
+80，后端进程仍使用 8080。公网地址由
 GitHub Production Environment 的 `PUBLIC_BASE_URL=http://<public-ip>:6879`
 注入，禁止将真实 IP 写入 values 文件。
 

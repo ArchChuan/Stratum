@@ -61,7 +61,7 @@ grep -Fq 'SECURE_COOKIES: "false"' "${REMOTE_HTTP_RENDER}"
 
 awk '/^kind: Ingress$/{found=1} found{print} found && /^---$/{exit}' \
     "${REMOTE_HTTP_RENDER}" >"${REMOTE_HTTP_INGRESS}"
-grep -Eq 'traefik\.ingress\.kubernetes\.io/router\.entrypoints:[[:space:]]*"?web"?$' \
+grep -Eq 'traefik\.ingress\.kubernetes\.io/router\.entrypoints:[[:space:]]*"?web,web2"?$' \
     "${REMOTE_HTTP_INGRESS}"
 if grep -Eq '^[[:space:]]+(host|tls):' "${REMOTE_HTTP_INGRESS}"; then
     echo 'remote HTTP Ingress unexpectedly contains a host or TLS section' >&2
