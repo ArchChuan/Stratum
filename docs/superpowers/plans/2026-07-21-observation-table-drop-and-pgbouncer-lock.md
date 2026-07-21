@@ -37,10 +37,12 @@
 - Modify: `pkg/storage/postgres/tenant_lock_integration_test.go`
 - Modify: `docs/superpowers/specs/2026-07-16-pipeline-concurrency-safety-design.md`
 
-- [ ] Write unit tests requiring begin, `pg_advisory_xact_lock`, commit on success, and rollback on every failure path.
-- [ ] Run focused lock tests and confirm failure against the session-lock implementation.
-- [ ] Replace explicit session unlock with an explicit transaction and transaction-level lock.
-- [ ] Run focused unit and real PostgreSQL serialization tests.
-- [ ] Verify PostgreSQL has no retained session advisory lock after the callback completes.
-- [ ] Run architecture, migration, risk, and repository Go verification.
-- [ ] Commit only Task 2 files with `fix(storage): make schema lock safe for pgbouncer`.
+- [x] Write unit tests requiring begin, `pg_advisory_xact_lock`, commit on success, and rollback on every failure path.
+- [x] Run focused lock tests and confirm failure against the session-lock implementation.
+- [x] Replace explicit session unlock with an explicit transaction and transaction-level lock.
+- [x] Run focused unit and real PostgreSQL serialization tests.
+- [x] Verify PostgreSQL has no retained session advisory lock after the callback completes.
+- [x] Run architecture, migration, risk, and repository Go verification. `stratum-verify go-full`, focused race tests,
+  architecture, and migration checks passed; `make risk-guardrails` reached the pre-existing frontend TypeScript
+  environment failure (`vitest/globals` missing and TypeScript 6 `baseUrl` deprecation).
+- [x] Commit only Task 2 files with `fix(storage): make schema lock safe for pgbouncer`.

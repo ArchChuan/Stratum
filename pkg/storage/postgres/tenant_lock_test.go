@@ -3,74 +3,221 @@ package postgres
 import (
 	"context"
 	"errors"
-	"reflect"
+	"regexp"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/pashagolub/pgxmock/v2"
 )
 
-type recordingSchemaLockConn struct {
-	calls     []string
-	unlockErr error
-}
-
-func (c *recordingSchemaLockConn) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
-	switch sql {
-	case schemaProvisionLockSQL:
-		c.calls = append(c.calls, "lock")
-		return pgconn.CommandTag{}, nil
-	case schemaProvisionUnlockSQL:
-		c.calls = append(c.calls, "unlock")
-		return pgconn.CommandTag{}, c.unlockErr
-	default:
-		return pgconn.CommandTag{}, errors.New("unexpected SQL")
+func TestRunWithSchemaProvisionLockCommitsTransactionScopedLock(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
 	}
-}
+	defer pool.Close()
 
-func TestRunWithSchemaProvisionLockOrdersLockCallbackAndUnlock(t *testing.T) {
-	conn := &recordingSchemaLockConn{}
-	err := runWithSchemaProvisionLock(context.Background(), context.Background(), conn, func(context.Context) error {
-		conn.calls = append(conn.calls, "callback")
+	pool.ExpectBegin()
+	pool.ExpectExec(regexp.QuoteMeta(schemaProvisionLockSQL)).
+		WithArgs(schemaProvisionLockKey).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	pool.ExpectCommit()
+
+	callbackCalled := false
+	err = runWithSchemaProvisionLock(context.Background(), context.Background(), pool, func(context.Context) error {
+		callbackCalled = true
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("runWithSchemaProvisionLock: %v", err)
 	}
-	want := []string{"lock", "callback", "unlock"}
-	if !reflect.DeepEqual(conn.calls, want) {
-		t.Fatalf("calls = %v, want %v", conn.calls, want)
+	if !callbackCalled {
+		t.Fatal("schema callback was not called")
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestRunWithSchemaProvisionLockPreservesCallbackAndUnlockErrors(t *testing.T) {
-	callbackErr := errors.New("provision failed")
-	unlockErr := errors.New("unlock failed")
-	conn := &recordingSchemaLockConn{unlockErr: unlockErr}
+func TestRunWithSchemaProvisionLockRollsBackCallbackFailure(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
 
-	err := runWithSchemaProvisionLock(context.Background(), context.Background(), conn, func(context.Context) error {
+	callbackErr := errors.New("provision failed")
+	pool.ExpectBegin()
+	pool.ExpectExec(regexp.QuoteMeta(schemaProvisionLockSQL)).
+		WithArgs(schemaProvisionLockKey).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	pool.ExpectRollback()
+
+	err = runWithSchemaProvisionLock(context.Background(), context.Background(), pool, func(context.Context) error {
 		return callbackErr
 	})
 	if !errors.Is(err, callbackErr) {
 		t.Fatalf("error %v does not preserve callback error", err)
 	}
-	if !errors.Is(err, unlockErr) {
-		t.Fatalf("error %v does not include unlock error", err)
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunWithSchemaProvisionLockRollsBackCallbackPanic(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec(regexp.QuoteMeta(schemaProvisionLockSQL)).
+		WithArgs(schemaProvisionLockKey).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	pool.ExpectRollback()
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != "callback panic" {
+				t.Fatalf("recovered = %v, want callback panic", recovered)
+			}
+		}()
+		_ = runWithSchemaProvisionLock(context.Background(), context.Background(), pool, func(context.Context) error {
+			panic("callback panic")
+		})
+	}()
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunWithSchemaProvisionLockRollsBackLockFailure(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	lockErr := errors.New("lock failed")
+	pool.ExpectBegin()
+	pool.ExpectExec(regexp.QuoteMeta(schemaProvisionLockSQL)).
+		WithArgs(schemaProvisionLockKey).
+		WillReturnError(lockErr)
+	pool.ExpectRollback()
+
+	err = runWithSchemaProvisionLock(context.Background(), context.Background(), pool, func(context.Context) error {
+		t.Fatal("callback must not run when lock acquisition fails")
+		return nil
+	})
+	if !errors.Is(err, lockErr) {
+		t.Fatalf("error %v does not preserve lock error", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunWithSchemaProvisionLockReturnsBeginFailure(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	beginErr := errors.New("begin failed")
+	pool.ExpectBegin().WillReturnError(beginErr)
+
+	err = runWithSchemaProvisionLock(context.Background(), context.Background(), pool, func(context.Context) error {
+		t.Fatal("callback must not run when transaction begin fails")
+		return nil
+	})
+	if !errors.Is(err, beginErr) {
+		t.Fatalf("error %v does not preserve begin error", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunWithSchemaProvisionLockPreservesCallbackAndRollbackFailures(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	callbackErr := errors.New("provision failed")
+	rollbackErr := errors.New("rollback failed")
+	pool.ExpectBegin()
+	pool.ExpectExec(regexp.QuoteMeta(schemaProvisionLockSQL)).
+		WithArgs(schemaProvisionLockKey).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	pool.ExpectRollback().WillReturnError(rollbackErr)
+
+	err = runWithSchemaProvisionLock(context.Background(), context.Background(), pool, func(context.Context) error {
+		return callbackErr
+	})
+	if !errors.Is(err, callbackErr) {
+		t.Fatalf("error %v does not preserve callback error", err)
+	}
+	if !errors.Is(err, rollbackErr) {
+		t.Fatalf("error %v does not preserve rollback error", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunWithSchemaProvisionLockReturnsCommitFailure(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	commitErr := errors.New("commit failed")
+	pool.ExpectBegin()
+	pool.ExpectExec(regexp.QuoteMeta(schemaProvisionLockSQL)).
+		WithArgs(schemaProvisionLockKey).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	pool.ExpectCommit().WillReturnError(commitErr)
+	pool.ExpectRollback()
+
+	err = runWithSchemaProvisionLock(context.Background(), context.Background(), pool, func(context.Context) error {
+		return nil
+	})
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("error %v does not preserve commit error", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
 func TestRunWithSchemaProvisionLockUsesParentContextForCallback(t *testing.T) {
-	lockCtx, cancel := context.WithCancel(context.Background())
-	cancel()
-	conn := &recordingSchemaLockConn{}
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec(regexp.QuoteMeta(schemaProvisionLockSQL)).
+		WithArgs(schemaProvisionLockKey).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	pool.ExpectCommit()
 	callbackCtx := context.Background()
 
-	err := runWithSchemaProvisionLock(lockCtx, callbackCtx, conn, func(ctx context.Context) error {
-		if ctx.Err() != nil {
-			t.Fatalf("callback context is canceled: %v", ctx.Err())
+	err = runWithSchemaProvisionLock(context.Background(), callbackCtx, pool, func(ctx context.Context) error {
+		if ctx != callbackCtx {
+			t.Fatal("callback did not receive the parent context")
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("runWithSchemaProvisionLock: %v", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

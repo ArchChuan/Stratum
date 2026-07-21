@@ -62,15 +62,16 @@ serialized job.
 
 ### Database schema advisory lock
 
-`BootstrapTenants` acquires one dedicated PostgreSQL pool connection and obtains a fixed,
-application-specific session advisory lock before public schema provisioning, default-tenant
+`BootstrapTenants` opens an explicit PostgreSQL transaction and obtains a fixed,
+application-specific transaction advisory lock before public schema provisioning, default-tenant
 creation, and all tenant schema provisioning. All application instances use the same lock key.
 
 Lock acquisition has a bounded timeout derived from a child context. Timeout or database errors
-fail bootstrap rather than allowing unlocked DDL. Unlock runs in a defer on the same connection;
-releasing the connection also guarantees PostgreSQL releases a session lock if explicit unlock
-fails. Tenant creation outside startup continues to use its existing per-tenant provisioning path,
-whose transaction and idempotent DDL remain unchanged.
+fail bootstrap rather than allowing unlocked DDL. The explicit transaction keeps PgBouncer
+transaction pooling pinned to one PostgreSQL backend while the callback runs. Commit releases the
+lock automatically; callback, lock, or commit failures roll back with a bounded background context.
+Tenant creation outside startup continues to use its existing per-tenant provisioning path, whose
+transaction and idempotent DDL remain unchanged.
 
 ### Shared Kubernetes bootstrap
 
