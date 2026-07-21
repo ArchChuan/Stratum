@@ -130,6 +130,8 @@ require '--header[[:space:]]+"Host:[[:space:]]*\$PUBLIC_AUTHORITY"[[:space:]]+ht
 require '--header[[:space:]]+"Host:[[:space:]]*\$PUBLIC_AUTHORITY"[[:space:]]+http://127\.0\.0\.1:6879/api/health' \
     'host-local port 6879 public Host diagnostic'
 require 'kubectl get service traefik -n kube-system -o wide' 'Traefik service exposure diagnostics'
+require 'kubectl get service traefik -n kube-system -o json' 'Traefik service port mapping diagnostics'
+require 'kubectl get deployment traefik -n kube-system -o json' 'Traefik entrypoint argument diagnostics'
 require 'svccontroller\.k3s\.cattle\.io/svcname=traefik' 'Traefik ServiceLB diagnostics'
 require 'kubectl port-forward service/stratum-frontend 18080:80' 'internal frontend verification tunnel'
 require 'http://127\.0\.0\.1:18080/api/health' 'internal frontend health verification'
