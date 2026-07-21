@@ -46,6 +46,8 @@ claude-only
 EOF
 }
 
+[[ -f "${GENERATOR}" ]] || fail "generator not implemented: ${GENERATOR}"
+
 new_fixture default
 (
   cd "${FIXTURE}"
@@ -120,11 +122,11 @@ fi
 ) || fail 'repository generated instructions are not current'
 git -C "${ROOT}" ls-files --error-unmatch AGENTS.md >/dev/null || fail 'AGENTS.md is not tracked'
 git -C "${ROOT}" ls-files --error-unmatch CLAUDE.md >/dev/null || fail 'CLAUDE.md is not tracked'
-if git -C "${ROOT}" check-ignore -q AGENTS.md; then
-  fail 'AGENTS.md is ignored'
+if ignore_output="$(git -C "${ROOT}" check-ignore --no-index -v AGENTS.md 2>&1)"; then
+  fail "AGENTS.md is ignored: ${ignore_output}"
 fi
-if git -C "${ROOT}" check-ignore -q CLAUDE.md; then
-  fail 'CLAUDE.md is ignored'
+if ignore_output="$(git -C "${ROOT}" check-ignore --no-index -v CLAUDE.md 2>&1)"; then
+  fail "CLAUDE.md is ignored: ${ignore_output}"
 fi
 
 echo 'agent instruction generator tests passed'
