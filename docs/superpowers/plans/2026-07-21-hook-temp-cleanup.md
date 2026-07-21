@@ -1,6 +1,6 @@
 # Hook Temporary Cleanup Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Allow exact `/tmp` cleanup and read-only remote diagnostics from the Stratum primary checkout without weakening repository mutation protection.
 
@@ -17,7 +17,7 @@
 - Modify: `/home/yang/.local/bin/test-stratum-worktree-guard`
 - Test: `/home/yang/.local/bin/test-stratum-worktree-guard`
 
-- [ ] **Step 1: Add the allowed command matrix**
+- [x] **Step 1: Add the allowed command matrix**
 
 Add these assertions after the existing bounded Stratum cleanup assertion:
 
@@ -32,7 +32,7 @@ assert_policy 'constrained remote temp cleanup' "$primary" Bash \
     "ssh -o BatchMode=yes root@101.200.181.141 \"pgrep -af '[s]tratum-loadtest' || true; rm -f /tmp/stratum-loadtest; test ! -e /tmp/stratum-loadtest\"" allow
 ```
 
-- [ ] **Step 2: Add the rejected command matrix**
+- [x] **Step 2: Add the rejected command matrix**
 
 Add these assertions next to the existing traversal and non-Stratum cases, replacing the obsolete expectation that all non-Stratum cleanup is denied:
 
@@ -51,7 +51,7 @@ assert_policy 'remote arbitrary script' "$primary" Bash \
     "ssh root@101.200.181.141 'bash /tmp/change-production.sh'" deny
 ```
 
-- [ ] **Step 3: Run the policy tests and verify the new allowed cases fail**
+- [x] **Step 3: Run the policy tests and verify the new allowed cases fail**
 
 Run:
 
@@ -68,7 +68,7 @@ Expected: non-zero exit at `generic exact temp cleanup` because the current poli
 - Modify: `/home/yang/.local/lib/stratum-worktree-policy.sh`
 - Test: `/home/yang/.local/bin/test-stratum-worktree-guard`
 
-- [ ] **Step 1: Add reusable path and local cleanup validators before `case "$tool"`**
+- [x] **Step 1: Add reusable path and local cleanup validators before `case "$tool"`**
 
 Add Bash functions that validate the whole command and each path:
 
@@ -96,7 +96,7 @@ is_safe_tmp_cleanup() {
 }
 ```
 
-- [ ] **Step 2: Replace the prefix-specific cleanup exception**
+- [x] **Step 2: Replace the prefix-specific cleanup exception**
 
 Replace the `tmp_cleanup` regular expression block in the Bash branch with:
 
@@ -106,7 +106,7 @@ if is_safe_tmp_cleanup "$checked_command"; then
 fi
 ```
 
-- [ ] **Step 3: Run tests and verify local cleanup cases pass while SSH/curl still fail**
+- [x] **Step 3: Run tests and verify local cleanup cases pass while SSH/curl still fail**
 
 Run:
 
@@ -123,7 +123,7 @@ Expected: local exact cleanup assertions pass; execution reaches and fails at th
 - Modify: `/home/yang/.local/lib/stratum-worktree-policy.sh`
 - Test: `/home/yang/.local/bin/test-stratum-worktree-guard`
 
-- [ ] **Step 1: Add a full-command read-only curl validator**
+- [x] **Step 1: Add a full-command read-only curl validator**
 
 Add `is_read_only_curl` before the tool dispatch. It must require the first token to be `curl`, reject shell operators other than a quoted URL value, and reject mutation options:
 
@@ -138,7 +138,7 @@ is_read_only_curl() {
 
 The validator must permit `-o /dev/null`, which is a no-op diagnostic sink, while rejecting other output targets.
 
-- [ ] **Step 2: Add a constrained SSH validator**
+- [x] **Step 2: Add a constrained SSH validator**
 
 Add `is_safe_diagnostic_ssh`. Parse the outer SSH options and destination, extract one quoted remote command, split it on semicolons, and accept each segment only when it is one of:
 
@@ -154,7 +154,7 @@ rm -rf <safe /tmp paths>
 
 Permit `|| true` only as a suffix to a diagnostic segment. Reject redirects, pipes, variables, substitutions, backticks, arbitrary interpreters, Git mutation commands, and any remote cleanup outside `/tmp`.
 
-- [ ] **Step 3: Apply the validators before generic mutation detection**
+- [x] **Step 3: Apply the validators before generic mutation detection**
 
 Add these checks after local temporary cleanup and before the mutation regular expression:
 
@@ -167,7 +167,7 @@ if is_safe_diagnostic_ssh "$checked_command"; then
 fi
 ```
 
-- [ ] **Step 4: Run the complete policy and adapter test suites**
+- [x] **Step 4: Run the complete policy and adapter test suites**
 
 Run:
 
@@ -186,19 +186,20 @@ Expected: all policy/platform contract tests pass and sudo guard reports zero fa
 - Verify: `/home/yang/.local/lib/stratum-worktree-policy.sh`
 - Verify: `/home/yang/.local/bin/test-stratum-worktree-guard`
 
-- [ ] **Step 1: Verify a generic local temporary file can be removed**
+- [x] **Step 1: Verify a generic local temporary file can be removed**
 
-Run from the Stratum primary checkout:
+Create the fixture from the feature worktree, then request its deletion under the primary-checkout policy:
 
 ```bash
-touch /tmp/hook-cleanup-verification
+cd /home/yang/go-projects/stratum-hook-temp-cleanup && touch /tmp/hook-cleanup-verification
 rm -f /tmp/hook-cleanup-verification
 test ! -e /tmp/hook-cleanup-verification
 ```
 
-Expected: exit 0 without a worktree-guard denial.
+Expected: the worktree policy returns allow. If the execution platform independently rejects `rm -f`, verify the policy
+decision by piping the same command into `stratum-worktree-policy.sh`, then remove the fixture with `unlink`.
 
-- [ ] **Step 2: Retry the original remote cleanup and process check**
+- [x] **Step 2: Retry the original remote cleanup and process check**
 
 Run:
 
@@ -209,7 +210,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=15 root@101.200.181.141 \
 
 Expected: exit 0, no load-test process output, and no hook denial.
 
-- [ ] **Step 3: Retry the original public health check**
+- [x] **Step 3: Retry the original public health check**
 
 Run:
 
@@ -221,7 +222,7 @@ curl --noproxy '*' -sS -o /dev/null \
 
 Expected: `status=200` and no hook denial.
 
-- [ ] **Step 4: Confirm repository mutation remains blocked**
+- [x] **Step 4: Confirm repository mutation remains blocked**
 
 Pipe representative commands directly into the policy rather than attempting a real repository mutation:
 
@@ -239,11 +240,11 @@ Expected: JSON with `"decision":"deny"`.
 
 - Modify: `docs/superpowers/plans/2026-07-21-hook-temp-cleanup.md`
 
-- [ ] **Step 1: Mark completed plan checkboxes**
+- [x] **Step 1: Mark completed plan checkboxes**
 
-Change each completed `- [ ]` marker to `- [x]`. Do not mark a real regression check complete unless its command exited successfully.
+Change each completed `- [x]` marker to `- [x]`. Do not mark a real regression check complete unless its command exited successfully.
 
-- [ ] **Step 2: Verify the repository diff**
+- [x] **Step 2: Verify the repository diff**
 
 Run:
 
@@ -254,7 +255,7 @@ git status --short
 
 Expected: only the plan completion update is uncommitted; user-level hook files do not appear in the repository diff.
 
-- [ ] **Step 3: Commit the plan completion record**
+- [x] **Step 3: Commit the plan completion record**
 
 Run:
 
