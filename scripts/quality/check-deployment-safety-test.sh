@@ -122,6 +122,11 @@ require '--set-string[[:space:]]+config\.githubCallbackUrl="\$PUBLIC_BASE_URL/ap
     'public OAuth callback URL injection'
 require 'kubectl get ingress -n stratum -o wide' 'deployed Ingress diagnostics'
 require 'kubectl get endpoints stratum stratum-frontend -n stratum' 'service endpoint diagnostics'
+require 'ss -H -ltnp.*sport = :80.*sport = :443.*sport = :6879' \
+    'host HTTP edge listener diagnostics'
+require 'http://127\.0\.0\.1/api/health' 'host-local Traefik health diagnostic'
+require 'kubectl get service traefik -n kube-system -o wide' 'Traefik service exposure diagnostics'
+require 'svccontroller\.k3s\.cattle\.io/svcname=traefik' 'Traefik ServiceLB diagnostics'
 require 'kubectl port-forward service/stratum-frontend 18080:80' 'internal frontend verification tunnel'
 require 'http://127\.0\.0\.1:18080/api/health' 'internal frontend health verification'
 require_file "${POSTGRES_DOCKERFILE}" 'curl .*--connect-timeout[[:space:]]+[0-9]+' \
