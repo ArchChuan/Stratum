@@ -67,7 +67,9 @@ helm upgrade --install stratum ./helm \
 3. 构建 PostgreSQL + zhparser，并镜像化其他依赖。
 4. 通过 GitHub Secrets 配置集群访问和 Kubernetes Secrets。
 5. 执行 `helm upgrade --install` 部署到 K3s。
-6. 输出 Pod / Deployment / Event 诊断并检查 rollout。
+6. 输出 Pod / Deployment / Ingress / Service endpoint / Event 诊断并检查 rollout。
+7. 先通过 `stratum-frontend` Service port-forward 验证集群内
+   `/api/health`，再要求 `$PUBLIC_BASE_URL/api/health` 从公网返回 HTTP 200。
 
 注意：主 CI 与 `go.mod` 使用 Go 1.25；当前 `deploy.yml` 的测试/构建 job 仍显式指定 Go 1.22。这是仓库当前存在的工具链不一致，升级依赖后应优先检查该 workflow。
 
