@@ -305,6 +305,10 @@ jobs:
           kubectl get pods -n stratum -o wide
           echo "=== Deployments ==="
           kubectl get deployments -n stratum
+          echo "=== Ingress ==="
+          kubectl get ingress -n stratum -o wide
+          echo "=== Service endpoints ==="
+          kubectl get endpoints stratum stratum-frontend -n stratum
           echo "=== Events ==="
           kubectl get events -n stratum --sort-by='.lastTimestamp' | tail -30
           echo "=== Pod describe (if any failed) ==="
@@ -319,5 +323,42 @@ jobs:
         run: |
           kubectl rollout status deployment/stratum -n stratum
           kubectl get pods -n stratum
-          curl --fail --silent --show-error --max-time 15 \
-            "$PUBLIC_BASE_URL/api/health" >/dev/null
+
+          kubectl port-forward service/stratum-frontend 18080:80 -n stratum \
+            >/tmp/stratum-frontend-port-forward.log 2>&1 &
+          port_forward_pid=$!
+          cleanup_port_forward() {
+            if kill "$port_forward_pid" >/dev/null 2>&1; then
+              wait "$port_forward_pid" >/dev/null 2>&1 || :
+            fi
+          }
+          trap cleanup_port_forward EXIT
+
+          internal_ready=false
+          for _ in $(seq 1 15); do
+            if curl --silent --output /dev/null --max-time 2 \
+              http://127.0.0.1:18080/api/health; then
+              internal_ready=true
+              break
+            fi
+            if ! kill -0 "$port_forward_pid" >/dev/null 2>&1; then
+              echo "internal frontend port-forward stopped unexpectedly" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          if [[ "$internal_ready" != "true" ]]; then
+            echo "internal frontend health endpoint did not become ready" >&2
+            exit 1
+          fi
+          echo "internal frontend health status=200"
+
+          if ! public_status=$(curl --silent --output /dev/null --max-time 15 \
+            --write-out '%{http_code}' "$PUBLIC_BASE_URL/api/health"); then
+            echo "public health request failed before receiving an HTTP response" >&2
+            exit 1
+          fi
+          echo "public health status=$public_status"
+          if [[ "$public_status" != "200" ]]; then
+            exit 1
+          fi

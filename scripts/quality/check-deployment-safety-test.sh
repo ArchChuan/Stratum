@@ -119,6 +119,10 @@ require '-f[[:space:]]+helm/values-demo-remote-http\.yaml' 'remote HTTP Helm ove
 require '--set-string[[:space:]]+config\.frontendUrl="\$PUBLIC_BASE_URL"' 'public frontend URL injection'
 require '--set-string[[:space:]]+config\.githubCallbackUrl="\$PUBLIC_BASE_URL/api/auth/github/callback"' \
     'public OAuth callback URL injection'
+require 'kubectl get ingress -n stratum -o wide' 'deployed Ingress diagnostics'
+require 'kubectl get endpoints stratum stratum-frontend -n stratum' 'service endpoint diagnostics'
+require 'kubectl port-forward service/stratum-frontend 18080:80' 'internal frontend verification tunnel'
+require 'http://127\.0\.0\.1:18080/api/health' 'internal frontend health verification'
 
 if [[ -e "${ROOT}/.github/workflows/mirror.yml" ]]; then
     echo 'deployment safety contract violated: Gitee mirror workflow still exists' >&2
