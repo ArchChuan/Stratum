@@ -104,14 +104,21 @@ assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'actions/setup-node@' 'CI Node setup for full risk guard'
 assert_file_contains "${ROOT}/Makefile" '^risk-guardrails:' 'Makefile risk guard target'
 
-grep -Fxq '## Risk regression harness' "${AGENT_INSTRUCTIONS}" || {
-  echo "missing exact risk regression harness heading in ${AGENT_INSTRUCTIONS}" >&2
+heading_count="$(grep -Fxc '## Risk regression harness' "${AGENT_INSTRUCTIONS}" || true)"
+if [[ "${heading_count}" -ne 1 ]]; then
+  echo "expected exactly one risk regression harness heading, found ${heading_count}" >&2
   exit 1
-}
+fi
+risk_harness_section="${TEST_ROOT}/risk-regression-harness.md"
+awk '
+  /^## Risk regression harness$/ { printing = 1 }
+  printing && !/^## Risk regression harness$/ && /^## / { exit }
+  printing { print }
+' "${AGENT_INSTRUCTIONS}" >"${risk_harness_section}"
 for principle in 'fail closed' 'bearer credential' 'tenant-scoped' \
-  '破坏性' '持久化失败' '关闭旧资源' '真实链路验证'; do
-  if ! grep -Fq "${principle}" "${AGENT_INSTRUCTIONS}"; then
-    echo "agent instructions missing principle: ${principle}" >&2
+  '破坏性' '持久化失败' '关闭旧资源' '真实链路验证' 'make risk-guardrails'; do
+  if ! grep -Fq "${principle}" "${risk_harness_section}"; then
+    echo "risk regression harness section missing principle: ${principle}" >&2
     exit 1
   fi
 done

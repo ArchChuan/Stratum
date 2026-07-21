@@ -24,6 +24,84 @@ assert_not_contains() {
   [[ "${haystack}" != *"${needle}"* ]] || fail "expected output not to contain: ${needle}"
 }
 
+extract_unique_block() {
+  local file="$1" start_pattern="$2" end_pattern="$3" description="$4" count
+  count="$(grep -Ec "${start_pattern}" "${file}" || true)"
+  if [[ "${count}" -ne 1 ]]; then
+    echo "expected exactly one ${description} in ${file}, found ${count}" >&2
+    return 1
+  fi
+  awk -v start="${start_pattern}" -v end="${end_pattern}" '
+    $0 ~ start { printing = 1 }
+    printing && $0 !~ start && $0 ~ end { exit }
+    printing { print }
+  ' "${file}"
+}
+
+assert_block_field() {
+  local block="$1" key="$2" pattern="$3" description="$4" count
+  count="$(grep -Ec "^[[:space:]]*${key}:" <<<"${block}" || true)"
+  if [[ "${count}" -ne 1 ]] || ! grep -Eq "${pattern}" <<<"${block}"; then
+    echo "expected exactly one ${description} in bounded YAML block" >&2
+    return 1
+  fi
+}
+
+validate_precommit_integration() {
+  local file="$1" block files_regex required_path
+  block="$(extract_unique_block "${file}" \
+    '^[[:space:]]*-[[:space:]]+id:[[:space:]]+agent-instructions-check[[:space:]]*$' \
+    '^[[:space:]]*-[[:space:]]+id:' 'agent-instructions-check hook')" || return 1
+  assert_block_field "${block}" name \
+    '^[[:space:]]*name:[[:space:]]+agent instructions are generated and current$' 'exact hook name' || return 1
+  assert_block_field "${block}" language '^[[:space:]]*language:[[:space:]]+system$' \
+    'system hook language' || return 1
+  assert_block_field "${block}" entry \
+    '^[[:space:]]*entry:[[:space:]]+/bin/bash scripts/quality/generate-agent-instructions\.sh --check$' \
+    'exact check-only hook entry' || return 1
+  assert_block_field "${block}" pass_filenames '^[[:space:]]*pass_filenames:[[:space:]]+false$' \
+    'disabled filename passing' || return 1
+  assert_block_field "${block}" require_serial '^[[:space:]]*require_serial:[[:space:]]+true$' \
+    'serialized hook' || return 1
+  [[ "$(grep -Ec '^[[:space:]]*files:' <<<"${block}" || true)" -eq 1 ]] || {
+    echo 'expected exactly one files regex in bounded pre-commit hook' >&2
+    return 1
+  }
+  files_regex="$(sed -nE "s/^[[:space:]]*files:[[:space:]]*'([^']+)'[[:space:]]*$/\1/p" <<<"${block}")"
+  [[ -n "${files_regex}" ]] || {
+    echo 'missing single-quoted files regex in bounded pre-commit hook' >&2
+    return 1
+  }
+  for required_path in AGENTS.md CLAUDE.md docs/agent/instructions.md \
+    docs/agent/templates/agents-prefix.md docs/agent/templates/claude-prefix.md \
+    scripts/quality/generate-agent-instructions.sh scripts/quality/generate-agent-instructions-test.sh; do
+    if [[ ! "${required_path}" =~ ${files_regex} ]]; then
+      echo "pre-commit files regex does not cover ${required_path}" >&2
+      return 1
+    fi
+  done
+}
+
+validate_ci_integration() {
+  local file="$1" block checkout_line step_line setup_go_line setup_node_line
+  block="$(extract_unique_block "${file}" \
+    '^[[:space:]]*-[[:space:]]+name:[[:space:]]+Verify generated agent instructions[[:space:]]*$' \
+    '^[[:space:]]*-[[:space:]]+(name|uses):' 'generated instruction CI step')" || return 1
+  assert_block_field "${block}" run '^[[:space:]]*run:[[:space:]]+make agent-instructions-check$' \
+    'exact CI check command' || return 1
+  checkout_line="$(grep -nE '^[[:space:]]*-[[:space:]]+uses:[[:space:]]+actions/checkout@' "${file}" | head -1 | cut -d: -f1)"
+  step_line="$(grep -nE \
+    '^[[:space:]]*-[[:space:]]+name:[[:space:]]+Verify generated agent instructions[[:space:]]*$' \
+    "${file}" | cut -d: -f1)"
+  setup_go_line="$(grep -nE '^[[:space:]]*-[[:space:]]+uses:[[:space:]]+actions/setup-go@' "${file}" | head -1 | cut -d: -f1)"
+  setup_node_line="$(grep -nE '^[[:space:]]*-[[:space:]]+uses:[[:space:]]+actions/setup-node@' "${file}" | head -1 | cut -d: -f1)"
+  if [[ -z "${checkout_line}" || -z "${setup_go_line}" || -z "${setup_node_line}" ]] ||
+    (( step_line <= checkout_line || step_line >= setup_go_line || step_line >= setup_node_line )); then
+    echo 'generated instruction CI step must be after checkout and before Go/Node setup' >&2
+    return 1
+  fi
+}
+
 new_fixture() {
   local name="$1"
   FIXTURE="${TEST_ROOT}/${name}"
@@ -206,11 +284,30 @@ if ignore_output="$(git -C "${ROOT}" check-ignore --no-index -v CLAUDE.md 2>&1)"
   fail "CLAUDE.md is ignored: ${ignore_output}"
 fi
 
-grep -qx 'agent-instructions:' "${ROOT}/Makefile" || fail 'Makefile is missing exact agent-instructions target'
-grep -qx 'agent-instructions-check:' "${ROOT}/Makefile" || fail 'Makefile is missing exact agent-instructions-check target'
-grep -Eq '^[[:space:]]*-[[:space:]]+id:[[:space:]]+agent-instructions-check$' \
-  "${ROOT}/.pre-commit-config.yaml" || fail 'pre-commit is missing agent-instructions-check hook'
-grep -q 'make agent-instructions-check' "${ROOT}/.github/workflows/ci.yml" || \
-  fail 'CI is missing make agent-instructions-check'
+[[ "$(grep -c '^agent-instructions:$' "${ROOT}/Makefile" || true)" -eq 1 ]] || \
+  fail 'Makefile must contain exactly one agent-instructions target'
+[[ "$(grep -c '^agent-instructions-check:$' "${ROOT}/Makefile" || true)" -eq 1 ]] || \
+  fail 'Makefile must contain exactly one agent-instructions-check target'
+validate_precommit_integration "${ROOT}/.pre-commit-config.yaml" || fail 'invalid pre-commit integration'
+validate_ci_integration "${ROOT}/.github/workflows/ci.yml" || fail 'invalid CI integration'
+
+bad_precommit="${TEST_ROOT}/bad-pre-commit.yaml"
+sed 's#entry: /bin/bash scripts/quality/generate-agent-instructions.sh --check#entry: /bin/bash wrong.sh --check#' \
+  "${ROOT}/.pre-commit-config.yaml" >"${bad_precommit}"
+printf '%s\n' '# entry: /bin/bash scripts/quality/generate-agent-instructions.sh --check' >>"${bad_precommit}"
+if validate_precommit_integration "${bad_precommit}" >/dev/null 2>&1; then
+  fail 'bounded pre-commit validation accepted a correct entry only in a comment'
+fi
+
+bad_ci="${TEST_ROOT}/bad-ci.yml"
+awk '
+  /name: Verify generated agent instructions/ { in_step = 1 }
+  in_step && /run: make agent-instructions-check/ { sub(/make agent-instructions-check/, "echo skipped") }
+  { print }
+  END { print "      # run: make agent-instructions-check" }
+' "${ROOT}/.github/workflows/ci.yml" >"${bad_ci}"
+if validate_ci_integration "${bad_ci}" >/dev/null 2>&1; then
+  fail 'bounded CI validation accepted a correct command only outside its step'
+fi
 
 echo 'agent instruction generator tests passed'
