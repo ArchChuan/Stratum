@@ -211,18 +211,30 @@ jobs:
       - name: Diagnose ingress edge
         if: steps.candidate.outputs.current == 'true'
         run: |
+          PUBLIC_AUTHORITY="${PUBLIC_BASE_URL#http://}"
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
-            -i ~/.ssh/deploy_key root@${{ secrets.SSH_DEPLOY_HOST }} '
-              echo "=== Host edge listeners ==="
-              ss -H -ltnp "( sport = :80 or sport = :443 or sport = :6879 )"
-              echo "=== Host-local HTTP health ==="
-              if host_status=$(curl --silent --output /dev/null --max-time 5 \
-                --write-out "%{http_code}" http://127.0.0.1/api/health); then
-                echo "host-local health status=$host_status"
-              else
-                echo "host-local health request failed before receiving an HTTP response"
-              fi
-            '
+            -i ~/.ssh/deploy_key root@${{ secrets.SSH_DEPLOY_HOST }} \
+            bash -s -- "$PUBLIC_AUTHORITY" <<'REMOTE'
+          PUBLIC_AUTHORITY="$1"
+          echo "=== Host edge listeners ==="
+          ss -H -ltnp "( sport = :80 or sport = :443 or sport = :6879 )"
+          echo "=== Host-local HTTP health ==="
+          probe_status() {
+            local label="$1"
+            shift
+            if status=$(curl --silent --output /dev/null --max-time 5 \
+              --write-out "%{http_code}" "$@"); then
+              echo "$label status=$status"
+            else
+              echo "$label request failed before receiving an HTTP response"
+            fi
+          }
+          probe_status "host-local default Host" http://127.0.0.1/api/health
+          probe_status "host-local port 80 public Host" \
+            --header "Host: $PUBLIC_AUTHORITY" http://127.0.0.1/api/health
+          probe_status "host-local port 6879 public Host" \
+            --header "Host: $PUBLIC_AUTHORITY" http://127.0.0.1:6879/api/health
+          REMOTE
           echo "=== Traefik service ==="
           kubectl get service traefik -n kube-system -o wide
           echo "=== Traefik ServiceLB pods ==="
