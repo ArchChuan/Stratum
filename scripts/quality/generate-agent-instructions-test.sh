@@ -29,7 +29,7 @@ new_fixture() {
   FIXTURE="${TEST_ROOT}/${name}"
   mkdir -p "${FIXTURE}/docs/agent/templates" "${FIXTURE}/scripts/quality"
   cp "${GENERATOR}" "${FIXTURE}/scripts/quality/generate-agent-instructions.sh"
-  cat >"${FIXTURE}/docs/agent/templates/common.md" <<'EOF'
+  cat >"${FIXTURE}/docs/agent/instructions.md" <<'EOF'
 # Agent instructions
 
 shared-rule
@@ -82,7 +82,7 @@ sleep 1
   /bin/bash scripts/quality/generate-agent-instructions.sh --check
 ) || fail '--check failed for current generated files'
 
-echo 'changed-shared-rule' >>"${FIXTURE}/docs/agent/templates/common.md"
+echo 'changed-shared-rule' >>"${FIXTURE}/docs/agent/instructions.md"
 if check_output="$(cd "${FIXTURE}" && /bin/bash scripts/quality/generate-agent-instructions.sh --check 2>&1)"; then
   fail '--check succeeded after common instructions changed'
 fi
