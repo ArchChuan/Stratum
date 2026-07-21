@@ -341,50 +341,20 @@ func TestTenantSchemaContainsEvaluationControlPlane(t *testing.T) {
 	}
 }
 
-func TestTenantSchemaBackfillsTraceIDBeforeTraceIndex(t *testing.T) {
+func TestTenantSchemaPermanentlyDropsAgentObservationTables(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sql := string(data)
-
-	addTraceIDAt := strings.Index(sql, "ALTER TABLE agent_executions ADD COLUMN IF NOT EXISTS trace_id")
-	createTraceIndexAt := strings.Index(sql, "CREATE INDEX IF NOT EXISTS idx_agent_exec_trace")
-	if addTraceIDAt == -1 {
-		t.Fatal("tenant_schema.sql must backfill agent_executions.trace_id for existing tenant tables")
-	}
-	if createTraceIndexAt == -1 {
-		t.Fatal("tenant_schema.sql must create idx_agent_exec_trace")
-	}
-	if addTraceIDAt > createTraceIndexAt {
-		t.Fatalf("agent_executions.trace_id backfill must run before idx_agent_exec_trace: add=%d index=%d",
-			addTraceIDAt, createTraceIndexAt)
-	}
-}
-
-func TestTenantSchemaBackfillsGenericTraceObservationColumns(t *testing.T) {
-	data, err := os.ReadFile("tenant_schema.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sql := string(data)
-
-	required := []string{
-		"ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS provider_type TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS provider_id TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS server_id TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS capability_id TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE agent_tool_traces ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'",
-		"ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS run_type TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS observation_type TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS provider_type TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS provider_id TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS sequence_no BIGINT NOT NULL DEFAULT 0",
-		"ALTER TABLE agent_trace_events ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'",
-	}
-	for _, want := range required {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("tenant_schema.sql missing generic trace backfill %q", want)
+	for _, table := range []string{"agent_executions", "agent_tool_traces", "agent_trace_events"} {
+		if !strings.Contains(sql, "DROP TABLE IF EXISTS "+table+";") {
+			t.Fatalf("tenant_schema.sql must permanently drop %s", table)
+		}
+		for _, forbidden := range []string{"CREATE TABLE IF NOT EXISTS " + table, "ALTER TABLE " + table} {
+			if strings.Contains(sql, forbidden) {
+				t.Fatalf("tenant_schema.sql still provisions removed table %s through %q", table, forbidden)
+			}
 		}
 	}
 }

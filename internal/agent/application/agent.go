@@ -3,6 +3,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -59,9 +60,27 @@ type ExecutionConfig struct {
 	ApprovalRequestFn  port.ToolApprovalRequester
 	ApprovedToolCallFn port.ApprovedToolCallFn
 	ActiveSkill        *port.SkillActivation
+	TracePayloadStore  port.TracePayloadStore
 	ConversationID     string
 	UserID             string
 	HistoryWindow      int
+	EvolutionTrace     EvolutionTraceMetadata
+}
+
+// EvolutionTraceMetadata attributes an execution to evaluation and rollout evidence.
+type EvolutionTraceMetadata struct {
+	Evaluation            bool
+	SecurityViolation     bool
+	ExperimentID          string
+	Variant               string
+	ResourceManifest      map[string]string
+	ExperimentAssignments map[string]ExperimentAssignment
+}
+
+// ExperimentAssignment identifies the rollout selected for one versioned resource.
+type ExperimentAssignment struct {
+	ExperimentID string `json:"experiment_id"`
+	Variant      string `json:"variant"`
 }
 
 const (
@@ -92,8 +111,6 @@ type BaseAgent struct {
 	mu                 sync.Mutex
 	CapGateway         port.CapabilityGateway
 	ChatStore          ChatStore
-	ToolTraceStore     ToolTraceStore
-	TraceEventStore    TraceEventStore
 	CheckpointStore    CheckpointStore
 	MemoryInjector     port.MemoryInjector
 	RecallMemoryFn     port.RecallMemoryFn
@@ -137,28 +154,6 @@ func (a *BaseAgent) SetChatStore(cs ChatStore) {
 // WithChatStore sets the chat store for conversation history persistence.
 func (a *BaseAgent) WithChatStore(cs ChatStore) *BaseAgent {
 	a.SetChatStore(cs)
-	return a
-}
-
-func (a *BaseAgent) SetToolTraceStore(store ToolTraceStore) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.ToolTraceStore = store
-}
-
-func (a *BaseAgent) WithToolTraceStore(store ToolTraceStore) *BaseAgent {
-	a.SetToolTraceStore(store)
-	return a
-}
-
-func (a *BaseAgent) SetTraceEventStore(store TraceEventStore) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.TraceEventStore = store
-}
-
-func (a *BaseAgent) WithTraceEventStore(store TraceEventStore) *BaseAgent {
-	a.SetTraceEventStore(store)
 	return a
 }
 
@@ -221,6 +216,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		cfg.Timeout = 120 * time.Second
 	}
 	agentID := a.ID
+	agentName := a.Name
 	agentType := a.Type
 	systemPrompt := a.SystemPrompt
 	if a.GlobalSystemSuffix != "" {
@@ -229,8 +225,6 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	llmModel := a.LLMModel
 	capGW := a.CapGateway
 	chatStore := a.ChatStore
-	toolTraceStore := a.ToolTraceStore
-	traceEventStore := a.TraceEventStore
 	metrics := a.metrics
 	workspaceNames := a.KnowledgeWorkspaceNames
 	workspaceDescs := a.KnowledgeWorkspaceDescriptions
@@ -240,11 +234,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 
 	tracer := otel.Tracer("stratum/agent")
 	ctx, execSpan := tracer.Start(ctx, "agent.execute",
-		oteltrace.WithAttributes(
-			attribute.String("agent.id", agentID),
-			attribute.String("agent.type", string(agentType)),
-			attribute.String("conversation.id", cfg.ConversationID),
-		),
+		oteltrace.WithAttributes(agentExecutionAttributes(agentID, agentName, agentType, *cfg)...),
 	)
 	defer execSpan.End()
 
@@ -259,8 +249,8 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			Query:          input,
 			Scope:          memoryScope,
 		}
-		_, memSpan := tracer.Start(ctx, "agent.memory_inject")
-		memInjectCtx, memInjectCancel := context.WithTimeout(ctx, constants.AgentMemoryInjectTimeout)
+		memSpanCtx, memSpan := tracer.Start(ctx, "agent.memory_inject")
+		memInjectCtx, memInjectCancel := context.WithTimeout(memSpanCtx, constants.AgentMemoryInjectTimeout)
 		mctx, memInjectErr := a.MemoryInjector.BuildContext(memInjectCtx, ic)
 		memInjectCancel()
 		memSpan.End()
@@ -287,8 +277,8 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	// Load short-term conversation history from ChatStore (single source of truth).
 	var history []*ChatMessage
 	if chatStore != nil && cfg.ConversationID != "" {
-		_, histSpan := tracer.Start(ctx, "agent.history_load")
-		histCtx, histCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+		histSpanCtx, histSpan := tracer.Start(ctx, "agent.history_load")
+		histCtx, histCancel := context.WithTimeout(histSpanCtx, constants.AgentDBQueryTimeout)
 		msgs, histErr := chatStore.ListMessages(histCtx, cfg.TenantID, cfg.ConversationID, cfg.UserID)
 		histCancel()
 		histSpan.End()
@@ -333,6 +323,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			AvailableTools:             mergeTools(availableTools, cfg.ExtraTools, a.Logger),
 			SkillCatalog:               cfg.SkillCatalog,
 			ActiveSkill:                cfg.ActiveSkill,
+			TracePayloadStore:          cfg.TracePayloadStore,
 			ToolCallFn:                 cfg.ToolCallFn,
 			ApprovalRequestFn:          cfg.ApprovalRequestFn,
 			ApprovedToolCallFn:         cfg.ApprovedToolCallFn,
@@ -353,10 +344,10 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		execCtx = reqctx.WithTraceID(execCtx, cfg.TraceID)
 		execCtx = reqctx.WithTenantID(execCtx, cfg.TenantID)
 		defer cancel()
-		_, reactSpan := tracer.Start(execCtx, "react.graph.invoke",
+		graphCtx, reactSpan := tracer.Start(execCtx, "react.graph.invoke",
 			oteltrace.WithAttributes(attribute.Int("max_steps", cfg.MaxSteps)),
 		)
-		finalState, runErr := cg.Invoke(execCtx, initState, agentgraph.RunConfig{MaxSteps: cfg.MaxSteps})
+		finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig{MaxSteps: cfg.MaxSteps})
 		reactSpan.End()
 		if runErr != nil {
 			execErr = fmt.Errorf("react: %w", runErr)
@@ -456,6 +447,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			AvailableTools:             mergeTools(availableTools, cfg.ExtraTools, a.Logger),
 			SkillCatalog:               cfg.SkillCatalog,
 			ActiveSkill:                cfg.ActiveSkill,
+			TracePayloadStore:          cfg.TracePayloadStore,
 			ToolCallFn:                 cfg.ToolCallFn,
 			ApprovalRequestFn:          cfg.ApprovalRequestFn,
 			ApprovedToolCallFn:         cfg.ApprovedToolCallFn,
@@ -478,10 +470,10 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		execCtx = reqctx.WithTraceID(execCtx, cfg.TraceID)
 		execCtx = reqctx.WithTenantID(execCtx, cfg.TenantID)
 		defer cancel()
-		_, planSpan := tracer.Start(execCtx, "planning.graph.invoke",
+		graphCtx, planSpan := tracer.Start(execCtx, "planning.graph.invoke",
 			oteltrace.WithAttributes(attribute.Int("stuck_threshold", stuckThreshold)),
 		)
-		finalState, runErr := cg.Invoke(execCtx, initState, agentgraph.RunConfig{MaxSteps: cfg.MaxSteps})
+		finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig{MaxSteps: cfg.MaxSteps})
 		planSpan.End()
 		if runErr != nil {
 			execErr = fmt.Errorf("planning: %w", runErr)
@@ -533,27 +525,6 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	default:
 		result.Output = "Unknown agent type"
 		execErr = fmt.Errorf("unknown agent type: %s", agentType)
-	}
-
-	if execErr == nil && result != nil {
-		if toolTraceStore != nil && len(result.ToolObservations) > 0 {
-			saveCtx, saveCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
-			if err := toolTraceStore.InsertBatch(saveCtx, cfg.TenantID, result.ToolObservations); err != nil {
-				a.Logger.Warn("agent: failed to save tool traces",
-					zap.String("conversation_id", cfg.ConversationID),
-					zap.Error(err))
-			}
-			saveCancel()
-		}
-		if traceEventStore != nil && len(result.TraceEvents) > 0 {
-			saveCtx, saveCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
-			if err := traceEventStore.InsertBatch(saveCtx, cfg.TenantID, result.TraceEvents); err != nil {
-				a.Logger.Warn("agent: failed to save trace events",
-					zap.String("conversation_id", cfg.ConversationID),
-					zap.Error(err))
-			}
-			saveCancel()
-		}
 	}
 
 	// Persist user input and agent output to ChatStore (outside switch — all agent types benefit).
@@ -628,6 +599,12 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	if execErr != nil {
 		status = domain.ExecStatusError
 	}
+	execSpan.SetAttributes(
+		attribute.String("opik.metadata.stratum.status", status),
+		attribute.Int64("opik.metadata.stratum.duration_ms", result.Duration.Milliseconds()),
+		attribute.Int64("opik.metadata.stratum.total_tokens", int64(result.TokensUsed)),
+		attribute.Float64("opik.metadata.stratum.cost_usd", result.CostUSD),
+	)
 	metrics.IncAgentExecution(agentID, string(agentType), status)
 	metrics.RecordAgentExecutionDuration(agentID, string(agentType), result.Duration.Seconds())
 	metrics.RecordAgentStepCount(agentID, string(agentType), result.Steps)
@@ -857,6 +834,61 @@ func WithHistoryWindow(n int) ExecutionOption {
 		if n > 0 {
 			cfg.HistoryWindow = n
 		}
+	}
+}
+
+func WithTracePayloadStore(store port.TracePayloadStore) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.TracePayloadStore = store
+	}
+}
+
+// WithEvolutionTraceMetadata attaches evaluation and rollout evidence to the root Agent span.
+func WithEvolutionTraceMetadata(metadata EvolutionTraceMetadata) ExecutionOption {
+	return func(cfg *ExecutionConfig) {
+		cfg.EvolutionTrace = metadata
+	}
+}
+
+func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cfg ExecutionConfig) []attribute.KeyValue {
+	resourceManifest := cfg.EvolutionTrace.ResourceManifest
+	if resourceManifest == nil {
+		resourceManifest = map[string]string{}
+	}
+	experimentAssignments := cfg.EvolutionTrace.ExperimentAssignments
+	if experimentAssignments == nil {
+		experimentAssignments = map[string]ExperimentAssignment{}
+	}
+	manifest, _ := json.Marshal(resourceManifest)
+	assignments, _ := json.Marshal(experimentAssignments)
+	return []attribute.KeyValue{
+		attribute.String("agent.id", agentID),
+		attribute.String("agent.type", string(agentType)),
+		attribute.String("conversation.id", cfg.ConversationID),
+		attribute.String("stratum.tenant.id", cfg.TenantID),
+		attribute.String("stratum.user.id", cfg.UserID),
+		attribute.String("stratum.trace.id", cfg.TraceID),
+		attribute.String("stratum.execution.id", cfg.ExecutionID),
+		attribute.String("stratum.conversation.id", cfg.ConversationID),
+		attribute.String("stratum.evaluation", fmt.Sprintf("%t", cfg.EvolutionTrace.Evaluation)),
+		attribute.String("stratum.security_violation", fmt.Sprintf("%t", cfg.EvolutionTrace.SecurityViolation)),
+		attribute.String("stratum.experiment.id", cfg.EvolutionTrace.ExperimentID),
+		attribute.String("stratum.experiment.variant", cfg.EvolutionTrace.Variant),
+		attribute.String("stratum.experiment.assignments", string(assignments)),
+		attribute.String("stratum.resource.manifest", string(manifest)),
+		attribute.String("opik.metadata.stratum.tenant_id", cfg.TenantID),
+		attribute.String("opik.metadata.stratum.user_id", cfg.UserID),
+		attribute.String("opik.metadata.stratum.trace_id", cfg.TraceID),
+		attribute.String("opik.metadata.stratum.execution_id", cfg.ExecutionID),
+		attribute.String("opik.metadata.stratum.conversation_id", cfg.ConversationID),
+		attribute.String("opik.metadata.stratum.agent_id", agentID),
+		attribute.String("opik.metadata.stratum.agent_name", agentName),
+		attribute.String("opik.metadata.stratum.evaluation", fmt.Sprintf("%t", cfg.EvolutionTrace.Evaluation)),
+		attribute.String("opik.metadata.stratum.security_violation", fmt.Sprintf("%t", cfg.EvolutionTrace.SecurityViolation)),
+		attribute.String("opik.metadata.stratum.experiment_id", cfg.EvolutionTrace.ExperimentID),
+		attribute.String("opik.metadata.stratum.experiment_variant", cfg.EvolutionTrace.Variant),
+		attribute.String("opik.metadata.stratum.experiment_assignments", string(assignments)),
+		attribute.String("opik.metadata.stratum.resource_manifest", string(manifest)),
 	}
 }
 

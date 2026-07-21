@@ -166,6 +166,9 @@ type FeedbackRequest struct {
 	TraceID           string
 	ResourceKind      ResourceKind
 	ResourceID        string
+	RevisionID        string
+	ExperimentID      string
+	Variant           string
 	Score             float64
 	Outcome           map[string]any
 	IdempotencyKey    string

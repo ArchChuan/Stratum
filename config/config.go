@@ -25,7 +25,26 @@ type Config struct {
 	GlobalAgentSystemPrompt string
 	QwenBaseURL             string
 	ZhipuBaseURL            string
+	Opik                    OpikConfig
+	TracePayload            TracePayloadConfig
 	MemoryPipeline          MemoryPipelineConfig
+}
+
+type OpikConfig struct {
+	URL       string
+	Project   string
+	Workspace string
+	APIKey    string
+	Timeout   time.Duration
+}
+
+type TracePayloadConfig struct {
+	Enabled   bool
+	Endpoint  string
+	AccessKey string
+	SecretKey string
+	Bucket    string
+	UseTLS    bool
 }
 
 type MemoryPipelineConfig struct {
@@ -65,6 +84,21 @@ func Load() (*Config, error) {
 		GlobalAgentSystemPrompt: getEnv("GLOBAL_AGENT_SYSTEM_PROMPT", ""),
 		QwenBaseURL:             getEnv("QWEN_BASE_URL", ""),
 		ZhipuBaseURL:            getEnv("ZHIPU_BASE_URL", ""),
+		Opik: OpikConfig{
+			URL:       getEnv("OPIK_URL", ""),
+			Project:   getEnv("OPIK_PROJECT", "stratum"),
+			Workspace: getEnv("OPIK_WORKSPACE", "default"),
+			APIKey:    getEnv("OPIK_API_KEY", ""),
+			Timeout:   constants.DefaultOpikTimeout,
+		},
+		TracePayload: TracePayloadConfig{
+			Enabled:   getEnv("TRACE_PAYLOAD_ENABLED", "") == "true",
+			Endpoint:  getEnv("TRACE_PAYLOAD_ENDPOINT", ""),
+			AccessKey: getEnv("TRACE_PAYLOAD_ACCESS_KEY", ""),
+			SecretKey: getEnv("TRACE_PAYLOAD_SECRET_KEY", ""),
+			Bucket:    getEnv("TRACE_PAYLOAD_BUCKET", constants.DefaultTracePayloadBucket),
+			UseTLS:    getEnv("TRACE_PAYLOAD_USE_TLS", "") == "true",
+		},
 		MemoryPipeline: MemoryPipelineConfig{
 			Enabled:               getEnv("MEMORY_PIPELINE_ENABLED", "") == "true",
 			NatsURL:               natsURL,

@@ -33,6 +33,30 @@ span.SetStatus(codes.Error, err.Error())
 - internal 层关键操作手动创建子 Span
 - Span 命名格式：`{component}.{operation}`，例如 `agent.execute`、`memory.search`。Skill 当前不直接执行，不应使用 `skill.execute` 暗示存在独立执行路径。
 
+### Agent Evidence Backend
+
+Agent 执行观测以 Opik 为权威证据源：
+
+```text
+Agent OTel spans -> OTel Collector tail sampling -> Opik OTLP/HTTP
+Agent payloads   -> AES-256-GCM -> dedicated MinIO bucket
+```
+
+- Collector 到 Opik 必须使用 OTLP/HTTP；Opik 当前不接收 OTLP/gRPC。
+- Stratum 查询字段同时写标准属性和 `opik.metadata.stratum.*`，后者用于 Opik REST 过滤。
+- `agent_executions`、`agent_tool_traces`、`agent_trace_events` 已从 canonical tenant DDL 永久移除；tenant
+  provisioning 会幂等删除历史表。`pkg/migration/sql/004_*`、`005_*` 仅作为不可变 public migration 历史保留。
+- `GET /agents/executions`、`tool-traces`、`trace-events` 均通过 `TraceEvidenceProvider` 查询 Opik。
+- Opik 不可用不阻断 Agent 执行，但证据查询和依赖证据校验的 feedback 返回 `503`。
+- 评测、实验、失败和运行时已知的安全事件 Trace 由 Collector 100% 保留；普通 Trace 按配置采样。
+
+大型或敏感 Payload 不进入 Span 或 PostgreSQL。启用 `TRACE_PAYLOAD_ENABLED=true` 与
+`OTEL_CAPTURE_CONTENT=true` 后，Payload 先递归脱敏，再使用平台 AES key 加密并写入独立 MinIO bucket；
+Span 只保存 `payload_ref`、SHA-256、明文大小和存储状态。MinIO 写入失败不阻断 Agent 执行。
+
+PostgreSQL 继续保存 feedback、experiment、deployment、optimization、job、checkpoint 和 approval 等需要事务
+一致性的控制面状态。
+
 ## Metrics (Prometheus)
 
 ### 内置指标

@@ -137,14 +137,15 @@ type executionRow struct {
 }
 
 func (h *AgentHandler) ListExecutions(c *gin.Context) {
-	if _, ok := tenantIDFromCtx(c); !ok {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
 		respondMissingTenant(c)
 		return
 	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 
-	rows, total, err := h.svc.ListExecutions(c.Request.Context(), page, pageSize)
+	rows, total, err := h.svc.ListExecutions(c.Request.Context(), tenantID, page, pageSize)
 	if err != nil {
 		_ = c.Error(err)
 		return

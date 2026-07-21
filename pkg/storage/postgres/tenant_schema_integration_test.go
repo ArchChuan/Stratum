@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestProvisionTenantSchema_ReplacesLegacySkillsOnceAndRetainsAgentTraces(t *testing.T) {
+func TestProvisionTenantSchema_ReplacesLegacySkillsAndDropsAgentObservationTables(t *testing.T) {
 	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
 	if url == "" {
 		t.Skip("STRATUM_TEST_POSTGRES_URL is not set")
@@ -45,9 +45,13 @@ func TestProvisionTenantSchema_ReplacesLegacySkillsOnceAndRetainsAgentTraces(t *
 		 conversation_id UUID, step_index INT NOT NULL DEFAULT 0, provider_type TEXT NOT NULL DEFAULT '',
 		 raw_result_text TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+		CREATE TABLE agent_executions (id UUID PRIMARY KEY DEFAULT public.gen_uuid_v7());
+		CREATE TABLE agent_trace_events (id UUID PRIMARY KEY DEFAULT public.gen_uuid_v7());
 		INSERT INTO skills VALUES ('legacy-skill', 'legacy');
 		INSERT INTO skill_versions VALUES ('legacy-version', 'legacy-skill', '{"mode":"code"}');
-		INSERT INTO agent_tool_traces (provider_type, raw_result_text) VALUES ('skill', 'historical');`
+		INSERT INTO agent_tool_traces (provider_type, raw_result_text) VALUES ('skill', 'historical');
+		INSERT INTO agent_executions DEFAULT VALUES;
+		INSERT INTO agent_trace_events DEFAULT VALUES;`
 	if _, err := pool.Exec(ctx, legacy); err != nil {
 		t.Fatal(err)
 	}
@@ -55,18 +59,19 @@ func TestProvisionTenantSchema_ReplacesLegacySkillsOnceAndRetainsAgentTraces(t *
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 		t.Fatal(err)
 	}
-	var legacyVersions, revisions, traces int
+	var legacyVersions, revisions, observationTables int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema=$1 AND table_name='skill_versions'`, schema).Scan(&legacyVersions); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema=$1 AND table_name='skill_revisions'`, schema).Scan(&revisions); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM "`+schema+`".agent_tool_traces WHERE provider_type='skill'`).Scan(&traces); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema=$1
+		AND table_name IN ('agent_executions','agent_tool_traces','agent_trace_events')`, schema).Scan(&observationTables); err != nil {
 		t.Fatal(err)
 	}
-	if legacyVersions != 0 || revisions != 1 || traces != 1 {
-		t.Fatalf("legacy=%d revisions=%d traces=%d", legacyVersions, revisions, traces)
+	if legacyVersions != 0 || revisions != 1 || observationTables != 0 {
+		t.Fatalf("legacy=%d revisions=%d observation_tables=%d", legacyVersions, revisions, observationTables)
 	}
 
 	if _, err := pool.Exec(ctx, `INSERT INTO "`+schema+`".skills (id,name) VALUES ('new-skill','new'); INSERT INTO "`+schema+`".skill_revisions (id,skill_id,instructions) VALUES ('new-revision','new-skill','instructions')`); err != nil {

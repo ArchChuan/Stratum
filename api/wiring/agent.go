@@ -6,12 +6,17 @@ import (
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	agentobjects "github.com/byteBuilderX/stratum/internal/agent/infrastructure/objectstore"
+	agentopik "github.com/byteBuilderX/stratum/internal/agent/infrastructure/opik"
 	persistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	"github.com/google/uuid"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
+	"go.uber.org/zap"
 )
 
 // Agent groups the agent persistence/registry services and execution
@@ -19,18 +24,17 @@ import (
 // so agents resolved from DB inherit those capabilities at construction
 // time. Service is the orchestration façade handlers consume.
 type Agent struct {
-	Registry        *agent.Registry
-	Service         *agent.AgentService
-	ExecStore       agent.ExecutionStore
-	ChatStore       agent.ChatStore
-	ToolTraceStore  agent.ToolTraceStore
-	TraceEventStore agent.TraceEventStore
-	CheckpointStore agent.CheckpointStore
-	ApprovalStore   agentport.ToolApprovalRepo
-	ApprovalService *agent.ToolApprovalService
-	TenantResolver  agentport.TenantCapabilityResolver
-	SkillLookup     agentport.SkillLookup
-	TenantSettings  agentport.TenantSettings
+	Registry          *agent.Registry
+	Service           *agent.AgentService
+	ChatStore         agent.ChatStore
+	EvidenceProvider  agentport.TraceEvidenceProvider
+	TracePayloadStore agentport.TracePayloadStore
+	CheckpointStore   agent.CheckpointStore
+	ApprovalStore     agentport.ToolApprovalRepo
+	ApprovalService   *agent.ToolApprovalService
+	TenantResolver    agentport.TenantCapabilityResolver
+	SkillLookup       agentport.SkillLookup
+	TenantSettings    agentport.TenantSettings
 }
 
 // ragSearchAdapter wraps *knowledge.RAGService to satisfy
@@ -95,7 +99,7 @@ func (r publishedSkillActivationResolver) ResolveSkills(
 	return catalog, nil
 }
 
-func (c *Container) buildAgent(_ context.Context) error {
+func (c *Container) buildAgent(ctx context.Context) error {
 	db := c.dbOrNil()
 
 	var registry *agent.Registry
@@ -114,12 +118,34 @@ func (c *Container) buildAgent(_ context.Context) error {
 		registry.SetRecallMemoryFn(c.Memory.RecallFn)
 	}
 
-	a := &Agent{Registry: registry}
+	evidenceProvider := agentopik.NewClient(agentopik.Config{
+		BaseURL: c.Config.Opik.URL, Project: c.Config.Opik.Project, Workspace: c.Config.Opik.Workspace,
+		APIKey: c.Config.Opik.APIKey, Timeout: c.Config.Opik.Timeout,
+	})
+	a := &Agent{Registry: registry, EvidenceProvider: evidenceProvider}
+	if c.Config.TracePayload.Enabled {
+		client, err := minio.New(c.Config.TracePayload.Endpoint, &minio.Options{
+			Creds: credentials.NewStaticV4(
+				c.Config.TracePayload.AccessKey, c.Config.TracePayload.SecretKey, "",
+			),
+			Secure: c.Config.TracePayload.UseTLS,
+		})
+		if err != nil {
+			c.Logger.Warn("trace payload client initialization failed", zap.Error(err))
+		} else {
+			store := agentobjects.NewStore(
+				client, c.Config.TracePayload.Bucket, c.Platform.AESKey,
+			)
+			bucketCtx, cancel := context.WithTimeout(ctx, c.Config.Opik.Timeout)
+			if err := store.EnsureBucket(bucketCtx); err != nil {
+				c.Logger.Warn("trace payload bucket unavailable", zap.Error(err))
+			}
+			cancel()
+			a.TracePayloadStore = store
+		}
+	}
 	if db != nil {
-		a.ExecStore = persistence.NewPgExecutionStore(db)
 		a.ChatStore = persistence.NewPgChatStore(db, c.Logger)
-		a.ToolTraceStore = persistence.NewPgToolTraceStore(db)
-		a.TraceEventStore = persistence.NewPgTraceEventStore(db)
 		a.CheckpointStore = persistence.NewPgCheckpointStore(db)
 		a.ApprovalStore = persistence.NewPgToolApprovalStore(db)
 		a.ApprovalService = agent.NewToolApprovalService(a.ApprovalStore, a.CheckpointStore, c.Platform.AESKey)
@@ -141,10 +167,9 @@ func (c *Container) buildAgent(_ context.Context) error {
 		SkillLookup:             a.SkillLookup,
 		SkillActivationResolver: publishedSkillActivationResolver{versions: skillVersionService(c)},
 		TenantResolver:          a.TenantResolver,
-		ExecStore:               a.ExecStore,
 		ChatStore:               a.ChatStore,
-		ToolTraceStore:          a.ToolTraceStore,
-		TraceEventStore:         a.TraceEventStore,
+		EvidenceProvider:        a.EvidenceProvider,
+		TracePayloadStore:       a.TracePayloadStore,
 		CheckpointStore:         a.CheckpointStore,
 		ApprovalService:         a.ApprovalService,
 		Logger:                  c.Logger,

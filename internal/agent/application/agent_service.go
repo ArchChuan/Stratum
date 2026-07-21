@@ -23,8 +23,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const previewMaxChars = 50
-
 // AgentServiceDeps groups the consumer-side dependencies of AgentService.
 // Everything is an interface or value type — no concrete infrastructure
 // imports allowed.
@@ -40,10 +38,9 @@ type AgentServiceDeps struct {
 	MCPToolExecutor         port.MCPToolExecutor
 	MCPToolPolicy           port.MCPToolPolicyResolver
 	ApprovalService         *ToolApprovalService
-	ExecStore               ExecutionStore
 	ChatStore               ChatStore
-	ToolTraceStore          ToolTraceStore
-	TraceEventStore         TraceEventStore
+	EvidenceProvider        port.TraceEvidenceProvider
+	TracePayloadStore       port.TracePayloadStore
 	CheckpointStore         CheckpointStore
 	MemoryCleaner           port.AgentMemoryCleaner
 	MemoryBuffer            port.BufferMemoryFn
@@ -287,9 +284,10 @@ type ExecRequest struct {
 // ExecMeta carries per-call routing metadata sourced from middleware
 // (tenant, trace) — never inferred from request body.
 type ExecMeta struct {
-	TenantID string
-	TraceID  string
-	Stream   bool
+	TenantID       string
+	TraceID        string
+	Stream         bool
+	EvolutionTrace EvolutionTraceMetadata
 }
 
 // ExecutionRowDTO is the wire shape emitted by ListExecutions.
@@ -370,7 +368,6 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		)
 	}
 
-	s.recordExecution(ctx, executionID, agentID, req.UserID, a.GetConfig().Name, req.Query, result, err, durationMs)
 	if err == nil && result != nil && s.deps.MemoryBuffer != nil {
 		scope := a.GetConfig().MemoryScope
 		_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "user", req.Query)
@@ -425,7 +422,6 @@ func (s *AgentService) ExecuteStream(
 				zap.Int("duration_ms", durationMs),
 			)
 		}
-		s.recordExecution(ctx, executionID, agentID, req.UserID, a.GetConfig().Name, req.Query, res, runErr, durationMs)
 		if runErr == nil && res != nil && s.deps.MemoryBuffer != nil {
 			scope := a.GetConfig().MemoryScope
 			_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "user", req.Query)
@@ -437,11 +433,15 @@ func (s *AgentService) ExecuteStream(
 }
 
 // ListExecutions paginates the per-tenant execution history.
-func (s *AgentService) ListExecutions(ctx context.Context, page, pageSize int) ([]ExecutionRowDTO, int64, error) {
-	if s.deps.ExecStore == nil {
-		return []ExecutionRowDTO{}, 0, nil
+func (s *AgentService) ListExecutions(
+	ctx context.Context, tenantID string, page, pageSize int,
+) ([]ExecutionRowDTO, int64, error) {
+	if s.deps.EvidenceProvider == nil {
+		return nil, 0, domain.ErrEvidenceUnavailable
 	}
-	records, total, err := s.deps.ExecStore.List(ctx, ListOptions{Page: page, PageSize: pageSize})
+	records, total, err := s.deps.EvidenceProvider.ListExecutions(
+		ctx, tenantID, ListOptions{Page: page, PageSize: pageSize},
+	)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -518,7 +518,6 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approva
 	result, runErr := a.Execute(context.WithoutCancel(ctx), payload.Query, options...)
 	runErr = approvedToolResumeError(used, runErr)
 	duration := int(time.Since(start).Milliseconds())
-	s.recordExecution(ctx, payload.ExecutionID, payload.AgentID, payload.UserID, a.GetConfig().Name, payload.Query, result, runErr, duration)
 	if runErr == nil && s.deps.CheckpointStore != nil {
 		_ = s.deps.CheckpointStore.MarkCompleted(ctx, tenantID, payload.ExecutionID)
 	}
@@ -536,7 +535,6 @@ func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string,
 	start := time.Now()
 	result, err := a.Execute(context.WithoutCancel(ctx), req.Query, options...)
 	duration := int(time.Since(start).Milliseconds())
-	s.recordExecution(ctx, executionID, agentID, req.UserID, a.GetConfig().Name, req.Query, result, err, duration)
 	return result, duration, err
 }
 
@@ -565,12 +563,14 @@ func (s *AgentService) assembleOptions(
 		}
 	}
 	s.attachChatStore(a)
-	s.attachTraceStores(a)
+	s.attachCheckpointStore(a)
 
 	options = append(options,
 		WithTenantID(meta.TenantID),
 		WithTraceID(meta.TraceID),
+		WithExecutionID(executionID),
 		WithUserID(req.UserID),
+		WithTracePayloadStore(s.deps.TracePayloadStore),
 	)
 	if req.ConversationID != "" {
 		options = append(options,
@@ -585,9 +585,34 @@ func (s *AgentService) assembleOptions(
 	extraTools, skillCatalog := s.buildExtraTools(
 		ctx, meta.TenantID, subjectID, a.GetConfig().MCPToolIDs, a.GetConfig().AllowedSkills,
 	)
+	evolutionTrace := meta.EvolutionTrace
+	if evolutionTrace.ResourceManifest == nil {
+		evolutionTrace.ResourceManifest = make(map[string]string)
+	}
+	if evolutionTrace.ExperimentAssignments == nil {
+		evolutionTrace.ExperimentAssignments = make(map[string]ExperimentAssignment)
+	}
+	for _, skillID := range a.GetConfig().AllowedSkills {
+		activation, ok := skillCatalog[skillID]
+		if !ok {
+			continue
+		}
+		evolutionTrace.ResourceManifest["skill:"+skillID] = activation.RevisionID
+		if activation.ExperimentID == "" {
+			continue
+		}
+		evolutionTrace.ExperimentAssignments["skill:"+skillID] = ExperimentAssignment{
+			ExperimentID: activation.ExperimentID,
+			Variant:      activation.Variant,
+		}
+		if evolutionTrace.ExperimentID == "" {
+			evolutionTrace.ExperimentID, evolutionTrace.Variant = activation.ExperimentID, activation.Variant
+		}
+	}
 	options = append(options,
 		WithExtraTools(extraTools),
 		WithSkillCatalog(skillCatalog),
+		WithEvolutionTraceMetadata(evolutionTrace),
 	)
 	if s.deps.ApprovalService != nil {
 		approvalService := s.deps.ApprovalService
@@ -631,23 +656,7 @@ func (s *AgentService) attachChatStore(a Agent) {
 	}
 }
 
-func (s *AgentService) attachTraceStores(a Agent) {
-	if s.deps.ToolTraceStore != nil {
-		type toolTraceStoreSetter interface {
-			SetToolTraceStore(ToolTraceStore)
-		}
-		if setter, ok := a.(toolTraceStoreSetter); ok {
-			setter.SetToolTraceStore(s.deps.ToolTraceStore)
-		}
-	}
-	if s.deps.TraceEventStore != nil {
-		type traceEventStoreSetter interface {
-			SetTraceEventStore(TraceEventStore)
-		}
-		if setter, ok := a.(traceEventStoreSetter); ok {
-			setter.SetTraceEventStore(s.deps.TraceEventStore)
-		}
-	}
+func (s *AgentService) attachCheckpointStore(a Agent) {
 	if s.deps.CheckpointStore != nil {
 		type checkpointStoreSetter interface {
 			SetCheckpointStore(CheckpointStore)
@@ -717,14 +726,20 @@ func (s *AgentService) buildExtraTools(
 		}
 	}
 
+	assignments := make(map[string]port.SkillRevisionAssignment)
 	for _, skillID := range allowedSkills {
 		ref := port.SkillRevisionRef{SkillID: skillID}
+		var assignment port.SkillRevisionAssignment
 		if s.deps.SkillRevisionResolver != nil {
-			if revisionID, found, err := s.deps.SkillRevisionResolver.ResolveSkillRevision(ctx, tenantID, skillID, subjectID); err == nil && found {
-				ref.RevisionID = revisionID
+			if resolved, found, err := s.deps.SkillRevisionResolver.ResolveSkillRevision(ctx, tenantID, skillID, subjectID); err == nil && found {
+				assignment = resolved
+				ref.RevisionID = resolved.RevisionID
 			}
 		}
 		refs = append(refs, ref)
+		if assignment.RevisionID != "" {
+			assignments[skillID] = assignment
+		}
 	}
 	catalog := make(map[string]port.SkillActivation)
 	if s.deps.SkillActivationResolver != nil && len(refs) > 0 {
@@ -732,73 +747,29 @@ func (s *AgentService) buildExtraTools(
 			catalog = resolved
 		}
 	}
+	for skillID, assignment := range assignments {
+		activation := catalog[skillID]
+		activation.SkillID = skillID
+		activation.RevisionID = assignment.RevisionID
+		activation.ExperimentID = assignment.ExperimentID
+		activation.Variant = assignment.Variant
+		catalog[skillID] = activation
+	}
 	return tools, catalog
 }
 
-// recordExecution fire-and-forget inserts a per-tenant execution record.
-// The insert reuses reqCtx — which carries the tenant — but detaches its
-// cancel signal so the goroutine survives the HTTP response lifecycle.
-func (s *AgentService) recordExecution(
-	reqCtx context.Context, executionID, id, userID, agentName, query string,
-	result *AgentResult, err error, durationMs int,
-) {
-	if s.deps.ExecStore == nil {
-		return
-	}
-	rec := domain.ExecutionRecord{
-		ID:           executionID,
-		AgentID:      id,
-		TraceID:      traceIDFromContext(reqCtx),
-		UserID:       userID,
-		AgentName:    agentName,
-		InputPreview: truncateRunes(query, previewMaxChars),
-		DurationMs:   durationMs,
-	}
-	switch {
-	case isToolApprovalRequired(err):
-		rec.Status = domain.ExecStatusWaitingApproval
-	case err != nil:
-		rec.Status = domain.ExecStatusError
-		rec.ErrorMessage = err.Error()
-	case result != nil:
-		rec.Status = domain.ExecStatusSuccess
-		rec.OutputPreview = truncateRunes(result.Output, previewMaxChars)
-		rec.TotalTokens = result.TokensUsed
-	default:
-		rec.Status = domain.ExecStatusSuccess
-	}
-	insertCtx := context.WithoutCancel(reqCtx)
-	go func() {
-		if insertErr := s.deps.ExecStore.Insert(insertCtx, rec); insertErr != nil {
-			s.deps.Logger.Warn("execution record insert failed", zap.Error(insertErr))
-		}
-	}()
-}
-
-func isToolApprovalRequired(err error) bool {
-	var approvalErr *port.ToolApprovalRequiredError
-	return errors.As(err, &approvalErr)
-}
-
 func (s *AgentService) ListToolTraces(ctx context.Context, tenantID, traceID string) ([]ToolObservation, error) {
-	if s.deps.ToolTraceStore == nil {
-		return []ToolObservation{}, nil
+	if s.deps.EvidenceProvider == nil {
+		return nil, domain.ErrEvidenceUnavailable
 	}
-	return s.deps.ToolTraceStore.ListByTraceID(ctx, tenantID, traceID)
+	return s.deps.EvidenceProvider.ToolObservations(ctx, tenantID, traceID)
 }
 
 func (s *AgentService) ListTraceEvents(ctx context.Context, tenantID, traceID string) ([]AgentTraceEvent, error) {
-	if s.deps.TraceEventStore == nil {
-		return []AgentTraceEvent{}, nil
+	if s.deps.EvidenceProvider == nil {
+		return nil, domain.ErrEvidenceUnavailable
 	}
-	return s.deps.TraceEventStore.ListByTraceID(ctx, tenantID, traceID)
-}
-
-func traceIDFromContext(ctx context.Context) string {
-	if sc, ok := observability.SpanFromContext(ctx); ok {
-		return sc.TraceID
-	}
-	return ""
+	return s.deps.EvidenceProvider.TraceEvents(ctx, tenantID, traceID)
 }
 
 // truncateRunes returns s truncated to maxRunes runes (not bytes).

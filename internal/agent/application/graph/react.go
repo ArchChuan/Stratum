@@ -9,12 +9,14 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tokenutil"
 )
 
@@ -33,6 +35,7 @@ type ReActState struct {
 	AvailableTools             []port.ToolDefinition
 	SkillCatalog               map[string]port.SkillActivation
 	ActiveSkill                *port.SkillActivation
+	TracePayloadStore          port.TracePayloadStore
 	ToolCallFn                 func(ctx context.Context, serverID, toolName string, input map[string]any) (any, error)
 	ApprovalRequestFn          port.ToolApprovalRequester
 	ApprovedToolCallFn         port.ApprovedToolCallFn
@@ -130,11 +133,26 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 		messages = compactLoopMessagesWithProtectedUsers(ctx, messages, s.MaxContextTokens, toolTokens, constants.LoopCompactionRecentGroups, protectedUsers, s.HistoryCompactor)
 
 		tracer := otel.Tracer("stratum/agent")
+		inputPayload := observability.SafeTracePayload(map[string]any{"messages": messages, "tools": tools}, constants.AgentToolTraceMaxRawJSONBytes)
+		llmAttributes := []attribute.KeyValue{
+			attribute.String("llm.model", s.Model),
+			attribute.String("gen_ai.request.model", s.Model),
+			attribute.Int("react.step", s.Steps+1),
+			attribute.Int("stratum.llm.step", s.Steps+1),
+			attribute.String("stratum.input.sha256", inputPayload.SHA256),
+			attribute.Bool("stratum.input.truncated", inputPayload.Truncated),
+			attribute.String("opik.metadata.stratum.tenant_id", s.TenantID),
+			attribute.String("opik.metadata.stratum.trace_id", s.TraceID),
+			attribute.String("opik.metadata.stratum.provider_type", domain.ProviderTypeLLM),
+			attribute.String("opik.metadata.stratum.provider_id", s.Model),
+			attribute.String("opik.metadata.stratum.status", domain.ToolTraceStatusSuccess),
+		}
+		llmAttributes = append(llmAttributes, tracePayloadAttributes(
+			ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "llm-input",
+			map[string]any{"messages": messages, "tools": tools},
+		)...)
 		ctx, llmSpan := tracer.Start(ctx, "react.llm",
-			oteltrace.WithAttributes(
-				attribute.String("llm.model", s.Model),
-				attribute.Int("react.step", s.Steps+1),
-			),
+			oteltrace.WithAttributes(llmAttributes...),
 		)
 		defer llmSpan.End()
 		s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
@@ -178,7 +196,9 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 		})
 		latencyMs := time.Since(start).Milliseconds()
 		if err != nil {
+			llmSpan.SetAttributes(attribute.String("opik.metadata.stratum.status", domain.ToolTraceStatusError))
 			llmSpan.RecordError(err)
+			llmSpan.SetStatus(codes.Error, "llm call failed")
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				logger.Info("react.llm",
 					zap.String("trace_id", s.TraceID),
@@ -209,8 +229,24 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 		llmSpan.SetAttributes(
 			attribute.Int("llm.prompt_tokens", resp.Usage.Prompt),
 			attribute.Int("llm.completion_tokens", resp.Usage.Completion),
+			attribute.Int("gen_ai.usage.input_tokens", resp.Usage.Prompt),
+			attribute.Int("gen_ai.usage.output_tokens", resp.Usage.Completion),
+			attribute.Float64("stratum.cost_usd", cost),
 			attribute.Bool("llm.has_tool_calls", len(resp.ToolCalls) > 0),
+			attribute.Int64("opik.metadata.stratum.latency_ms", latencyMs),
+			attribute.Int64("opik.metadata.stratum.total_tokens", int64(resp.Usage.Total)),
+			attribute.Float64("opik.metadata.stratum.cost_usd", cost),
 		)
+		outputPayload := observability.SafeTracePayload(map[string]any{"content": resp.Content, "tool_calls": resp.ToolCalls}, constants.AgentToolTraceMaxRawJSONBytes)
+		outputAttributes := []attribute.KeyValue{
+			attribute.String("stratum.output.sha256", outputPayload.SHA256),
+			attribute.Bool("stratum.output.truncated", outputPayload.Truncated),
+		}
+		outputAttributes = append(outputAttributes, tracePayloadAttributes(
+			ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "llm-output",
+			map[string]any{"content": resp.Content, "tool_calls": resp.ToolCalls},
+		)...)
+		llmSpan.SetAttributes(outputAttributes...)
 		logger.Info("react.llm",
 			zap.String("trace_id", s.TraceID),
 			zap.String("tenant_id", s.TenantID),
@@ -336,14 +372,37 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 		last := s.Messages[len(s.Messages)-1]
 		for _, tc := range last.ToolCalls {
 			toolStart := time.Now()
-			_, toolSpan := tracer.Start(ctx, "react.tool",
-				oteltrace.WithAttributes(
-					attribute.String("tool.name", tc.Name),
-					attribute.Int("react.step", s.Steps),
-				),
+			provider := classifyToolProvider(tc.Name, s.AvailableTools)
+			argumentsPayload := observability.SafeTracePayload(tc.Arguments, constants.AgentToolTraceMaxRawJSONBytes)
+			toolAttributes := []attribute.KeyValue{
+				attribute.String("tool.name", tc.Name),
+				attribute.String("gen_ai.tool.name", tc.Name),
+				attribute.String("gen_ai.tool.call.id", tc.ID),
+				attribute.Int("react.step", s.Steps),
+				attribute.String("stratum.provider.type", provider.ProviderType),
+				attribute.String("stratum.provider.id", provider.ProviderID),
+				attribute.String("stratum.server.id", provider.ServerID),
+				attribute.String("stratum.capability.id", provider.CapabilityID),
+				attribute.String("stratum.resource.revision_id", metadataString(provider.Metadata, "version_id")),
+				attribute.String("stratum.arguments.sha256", argumentsPayload.SHA256),
+				attribute.Bool("stratum.arguments.truncated", argumentsPayload.Truncated),
+				attribute.String("opik.metadata.stratum.tenant_id", s.TenantID),
+				attribute.String("opik.metadata.stratum.trace_id", s.TraceID),
+				attribute.String("opik.metadata.stratum.tool_call_id", tc.ID),
+				attribute.String("opik.metadata.stratum.tool_name", tc.Name),
+				attribute.String("opik.metadata.stratum.provider_type", provider.ProviderType),
+				attribute.String("opik.metadata.stratum.provider_id", provider.ProviderID),
+				attribute.String("opik.metadata.stratum.server_id", provider.ServerID),
+				attribute.String("opik.metadata.stratum.capability_id", provider.CapabilityID),
+				attribute.String("opik.metadata.stratum.resource_revision_id", metadataString(provider.Metadata, "version_id")),
+			}
+			toolAttributes = append(toolAttributes, tracePayloadAttributes(
+				ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-arguments", tc.Arguments,
+			)...)
+			toolCtx, toolSpan := tracer.Start(ctx, "react.tool",
+				oteltrace.WithAttributes(toolAttributes...),
 			)
 			var content string
-			provider := classifyToolProvider(tc.Name, s.AvailableTools)
 			status := domain.ToolTraceStatusSuccess
 			errMsg := ""
 			s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
@@ -406,7 +465,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 						}
 					}
 					var ragErr error
-					ragCtx, ragCancel := context.WithTimeout(ctx, constants.AgentRAGSearchTimeout)
+					ragCtx, ragCancel := context.WithTimeout(toolCtx, constants.AgentRAGSearchTimeout)
 					content, ragErr = s.RAGSearchFn(ragCtx, workspaces, query, topK)
 					ragCancel()
 					if ragErr != nil {
@@ -433,7 +492,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					content = "error: stratum_recall_memory tool not configured"
 				default:
 					var recallErr error
-					recallCtx, recallCancel := context.WithTimeout(ctx, constants.AgentMemoryRecallTimeout)
+					recallCtx, recallCancel := context.WithTimeout(toolCtx, constants.AgentMemoryRecallTimeout)
 					content, recallErr = s.RecallMemoryFn(recallCtx, tc.Arguments)
 					recallCancel()
 					if recallErr != nil {
@@ -467,14 +526,14 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 				var callErr error
 				handled := false
 				if s.ApprovedToolCallFn != nil {
-					toolOutput, handled, callErr = s.ApprovedToolCallFn(ctx, tool.ServerID, tool.CapabilityID, tc.Arguments)
+					toolOutput, handled, callErr = s.ApprovedToolCallFn(toolCtx, tool.ServerID, tool.CapabilityID, tc.Arguments)
 				}
 				risk := port.ParseToolRiskLevel(tool.Metadata["risk_level"])
 				if !handled && risk.RequiresApproval() {
 					approvalID := ""
 					if s.ApprovalRequestFn != nil {
 						var approvalErr error
-						approvalID, approvalErr = s.ApprovalRequestFn(ctx, port.ToolApprovalRequest{
+						approvalID, approvalErr = s.ApprovalRequestFn(toolCtx, port.ToolApprovalRequest{
 							TenantID: s.TenantID, TraceID: s.TraceID, ExecutionID: s.ExecutionID,
 							ToolCallID: tc.ID, ServerID: tool.ServerID, ToolName: tool.CapabilityID,
 							RiskLevel: risk, Arguments: tc.Arguments,
@@ -492,8 +551,8 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					break
 				}
 				if !handled {
-					toolCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-					toolOutput, callErr = s.ToolCallFn(toolCtx, tool.ServerID, tool.CapabilityID, tc.Arguments)
+					callCtx, cancel := context.WithTimeout(toolCtx, 30*time.Second)
+					toolOutput, callErr = s.ToolCallFn(callCtx, tool.ServerID, tool.CapabilityID, tc.Arguments)
 					cancel()
 				}
 				toolLatencyMs := time.Since(toolStart).Milliseconds()
@@ -533,7 +592,20 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 			toolLatencyMs := time.Since(toolStart).Milliseconds()
 			if errMsg != "" {
 				toolSpan.RecordError(fmt.Errorf("%s", errMsg))
+				toolSpan.SetStatus(codes.Error, "tool call failed")
 			}
+			resultPayload := observability.SafeTracePayload(content, constants.AgentToolTraceMaxRawTextBytes)
+			resultAttributes := []attribute.KeyValue{
+				attribute.String("stratum.result.sha256", resultPayload.SHA256),
+				attribute.Bool("stratum.result.truncated", resultPayload.Truncated),
+				attribute.Int64("stratum.latency_ms", toolLatencyMs),
+				attribute.Int64("opik.metadata.stratum.latency_ms", toolLatencyMs),
+				attribute.String("opik.metadata.stratum.status", status),
+			}
+			resultAttributes = append(resultAttributes, tracePayloadAttributes(
+				toolCtx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-result", content,
+			)...)
+			toolSpan.SetAttributes(resultAttributes...)
 			summary := summarizeToolObservation(tc.Name, content, status, errMsg)
 			s.ToolObservations = append(s.ToolObservations, domain.ToolObservation{
 				TraceID:        s.TraceID,
@@ -605,6 +677,36 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 		}
 		return s, nil
 	}
+}
+
+func tracePayloadAttributes(
+	ctx context.Context,
+	store port.TracePayloadStore,
+	tenantID, traceID, kind string,
+	value any,
+) []attribute.KeyValue {
+	if !observability.TraceContentCaptureEnabled() || store == nil {
+		return nil
+	}
+	ref, err := store.Put(ctx, port.TracePayload{
+		TenantID: tenantID, TraceID: traceID, Kind: kind, Value: value,
+	})
+	if err != nil {
+		return []attribute.KeyValue{
+			attribute.String("opik.metadata.stratum.payload_storage_status", "error"),
+		}
+	}
+	return []attribute.KeyValue{
+		attribute.String("opik.metadata.stratum.payload_storage_status", "stored"),
+		attribute.String("opik.metadata.stratum.payload_ref", ref.Reference),
+		attribute.String("opik.metadata.stratum.payload_sha256", ref.SHA256),
+		attribute.Int64("opik.metadata.stratum.payload_size_bytes", ref.SizeBytes),
+	}
+}
+
+func metadataString(metadata map[string]any, key string) string {
+	value, _ := metadata[key].(string)
+	return value
 }
 
 type toolProviderRef struct {

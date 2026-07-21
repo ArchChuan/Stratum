@@ -96,6 +96,14 @@ type SkillActivation struct {
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScopes          []string
+	ExperimentID          string
+	Variant               string
+}
+
+type SkillRevisionAssignment struct {
+	RevisionID   string
+	ExperimentID string
+	Variant      string
 }
 
 type SkillActivationResolver interface {
@@ -110,7 +118,7 @@ type SkillRevisionResolver interface {
 	ResolveSkillRevision(
 		ctx context.Context,
 		tenantID, skillID, subjectID string,
-	) (revisionID string, found bool, err error)
+	) (assignment SkillRevisionAssignment, found bool, err error)
 }
 
 type ToolCall struct {

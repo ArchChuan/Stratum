@@ -2,9 +2,11 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
+	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 )
 
 func TestFeedbackServiceAutomaticallyEvaluatesReadyExperiment(t *testing.T) {
@@ -24,7 +26,7 @@ func TestFeedbackServiceAutomaticallyEvaluatesReadyExperiment(t *testing.T) {
 		stable: stable, canary: canary, observedMinutes: policy.MinObservationMinutes,
 	}
 	experiments := NewExperimentService(&feedbackExperimentRepo{experiment: repo.experiment})
-	svc := NewFeedbackService(repo, experiments)
+	svc := NewFeedbackService(repo, experiments, feedbackEvidence("trace-1", repo, "version-1", "stable"))
 
 	result, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
 		TraceID: "trace-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
@@ -56,7 +58,7 @@ func TestFeedbackServiceRollsBackForEarlierStageSecurityViolation(t *testing.T) 
 		stable: stable, canary: canary, observedMinutes: policy.MinObservationMinutes,
 	}
 	experiments := NewExperimentService(&feedbackExperimentRepo{experiment: repo.experiment})
-	svc := NewFeedbackService(repo, experiments)
+	svc := NewFeedbackService(repo, experiments, feedbackEvidence("trace-last", repo, "candidate-1", "canary"))
 
 	result, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
 		TraceID: "trace-last", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
@@ -70,24 +72,121 @@ func TestFeedbackServiceRollsBackForEarlierStageSecurityViolation(t *testing.T) 
 	}
 }
 
+func TestFeedbackServiceValidatesAndPersistsObservedRevision(t *testing.T) {
+	repo := &fakeFeedbackRepo{}
+	evidence := &fakeTraceEvidenceReader{traces: map[string]port.ObservedTrace{
+		"trace-1": {
+			TraceID: "trace-1",
+			Assignments: map[string]port.ObservedResourceAssignment{
+				"skill:skill-1": {RevisionID: "revision-1", ExperimentID: "experiment-1", Variant: "canary"},
+			},
+		},
+	}}
+	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}), evidence)
+
+	_, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		TraceID: "trace-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		Score: 0.9, IdempotencyKey: "feedback-1",
+	})
+	if err != nil {
+		t.Fatalf("Record() error: %v", err)
+	}
+	if repo.recorded.RevisionID != "revision-1" {
+		t.Fatalf("persisted revision = %q", repo.recorded.RevisionID)
+	}
+}
+
 type fakeFeedbackRepo struct {
 	experiment      domain.Experiment
 	stable, canary  []domain.OnlineObservation
 	observedMinutes int
+	recorded        RecordFeedbackInput
 }
 
 func (f *fakeFeedbackRepo) Record(_ context.Context, _ string, input RecordFeedbackInput) (domain.EvaluationFeedback, error) {
+	f.recorded = input
 	return domain.EvaluationFeedback{ID: "feedback-1", TraceID: input.TraceID, ResourceID: input.ResourceID, Score: input.Score}, nil
+}
+
+type fakeTraceEvidenceReader struct {
+	traces map[string]port.ObservedTrace
+}
+
+func feedbackEvidence(
+	traceID string, repo *fakeFeedbackRepo, revisionID, variant string,
+) *fakeTraceEvidenceReader {
+	traces := map[string]port.ObservedTrace{
+		traceID: {
+			TraceID: traceID,
+			Assignments: map[string]port.ObservedResourceAssignment{
+				"skill:" + repo.experiment.ResourceID: {
+					RevisionID: revisionID, ExperimentID: repo.experiment.ID, Variant: variant,
+				},
+			},
+		},
+	}
+	for i, observation := range repo.stable {
+		id := fmt.Sprintf("stable-%d", i)
+		traces[id] = observedTrace(id, repo.experiment, repo.experiment.StableRevisionID, "stable", observation)
+	}
+	for i, observation := range repo.canary {
+		id := fmt.Sprintf("canary-%d", i)
+		traces[id] = observedTrace(id, repo.experiment, repo.experiment.CanaryRevisionID, "canary", observation)
+	}
+	return &fakeTraceEvidenceReader{traces: traces}
+}
+
+func observedTrace(
+	traceID string, experiment domain.Experiment, revisionID, variant string, observation domain.OnlineObservation,
+) port.ObservedTrace {
+	return port.ObservedTrace{
+		TraceID: traceID, CostUSD: observation.CostUSD, LatencyMs: observation.LatencyMs,
+		Success: observation.Success, SecurityViolation: observation.SecurityViolation,
+		Assignments: map[string]port.ObservedResourceAssignment{
+			"skill:" + experiment.ResourceID: {
+				RevisionID: revisionID, ExperimentID: experiment.ID, Variant: variant,
+			},
+		},
+	}
+}
+
+func (f *fakeTraceEvidenceReader) Resolve(
+	_ context.Context, _ string, traceID string,
+) (port.ObservedTrace, error) {
+	return f.traces[traceID], nil
+}
+
+func (f *fakeTraceEvidenceReader) ResolveBatch(
+	_ context.Context, _ string, _ []string,
+) (map[string]port.ObservedTrace, error) {
+	return f.traces, nil
 }
 
 func (f *fakeFeedbackRepo) ActiveExperiment(_ context.Context, _ string, _, _ string) (domain.Experiment, bool, error) {
 	return f.experiment, true, nil
 }
 
-func (f *fakeFeedbackRepo) Observations(
-	_ context.Context, _ string, _ domain.Experiment,
-) ([]domain.OnlineObservation, []domain.OnlineObservation, int, error) {
-	return f.stable, f.canary, f.observedMinutes, nil
+func (f *fakeFeedbackRepo) StageFeedback(
+	_ context.Context, _ string, experiment domain.Experiment,
+) ([]domain.EvaluationFeedback, int, error) {
+	rows := make([]domain.EvaluationFeedback, 0, len(f.stable)+len(f.canary))
+	for i, observation := range f.stable {
+		rows = append(rows, domain.EvaluationFeedback{
+			TraceID: fmt.Sprintf("stable-%d", i), ResourceID: experiment.ResourceID,
+			RevisionID: experiment.StableRevisionID, Score: observation.Score,
+		})
+	}
+	for i, observation := range f.canary {
+		outcome := map[string]any{}
+		if observation.SecurityViolation {
+			outcome["security_violation"] = true
+		}
+		rows = append(rows, domain.EvaluationFeedback{
+			TraceID: fmt.Sprintf("canary-%d", i), ResourceID: experiment.ResourceID,
+			RevisionID: experiment.CanaryRevisionID, Score: observation.Score, Outcome: outcome,
+		})
+	}
+	return rows, f.observedMinutes, nil
 }
 
 type feedbackExperimentRepo struct{ experiment domain.Experiment }

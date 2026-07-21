@@ -70,9 +70,29 @@ type ExperimentRepository interface {
 type FeedbackRepository interface {
 	Record(ctx context.Context, tenantID string, input domain.FeedbackRequest) (domain.EvaluationFeedback, error)
 	ActiveExperiment(ctx context.Context, tenantID, resourceKind, resourceID string) (domain.Experiment, bool, error)
-	Observations(
+	StageFeedback(
 		ctx context.Context,
 		tenantID string,
 		experiment domain.Experiment,
-	) (stable []domain.OnlineObservation, canary []domain.OnlineObservation, observedMinutes int, err error)
+	) (feedback []domain.EvaluationFeedback, observedMinutes int, err error)
+}
+
+type ObservedResourceAssignment struct {
+	RevisionID   string
+	ExperimentID string
+	Variant      string
+}
+
+type ObservedTrace struct {
+	TraceID           string
+	CostUSD           float64
+	LatencyMs         int64
+	Success           bool
+	SecurityViolation bool
+	Assignments       map[string]ObservedResourceAssignment
+}
+
+type TraceEvidenceReader interface {
+	Resolve(context.Context, string, string) (ObservedTrace, error)
+	ResolveBatch(context.Context, string, []string) (map[string]ObservedTrace, error)
 }

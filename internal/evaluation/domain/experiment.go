@@ -71,6 +71,12 @@ type Deployment struct {
 	PolicyVersion    int          `json:"policy_version"`
 }
 
+type RevisionAssignment struct {
+	RevisionID   string `json:"revision_id"`
+	ExperimentID string `json:"experiment_id,omitempty"`
+	Variant      string `json:"variant"`
+}
+
 func AssignVariant(key string, canaryPercent int) bool {
 	if canaryPercent <= 0 {
 		return false

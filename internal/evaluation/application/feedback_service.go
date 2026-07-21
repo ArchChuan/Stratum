@@ -21,10 +21,13 @@ type FeedbackResult struct {
 type FeedbackService struct {
 	repo        port.FeedbackRepository
 	experiments *ExperimentService
+	evidence    port.TraceEvidenceReader
 }
 
-func NewFeedbackService(repo port.FeedbackRepository, experiments *ExperimentService) *FeedbackService {
-	return &FeedbackService{repo: repo, experiments: experiments}
+func NewFeedbackService(
+	repo port.FeedbackRepository, experiments *ExperimentService, evidence port.TraceEvidenceReader,
+) *FeedbackService {
+	return &FeedbackService{repo: repo, experiments: experiments, evidence: evidence}
 }
 
 func (s *FeedbackService) Record(
@@ -38,6 +41,20 @@ func (s *FeedbackService) Record(
 	if input.Score < 0 || input.Score > 1 {
 		return FeedbackResult{}, errors.New("feedback score must be between 0 and 1")
 	}
+	if s.evidence == nil {
+		return FeedbackResult{}, errors.New("trace evidence unavailable")
+	}
+	observed, err := s.evidence.Resolve(ctx, tenantID, input.TraceID)
+	if err != nil {
+		return FeedbackResult{}, err
+	}
+	assignment, ok := observed.Assignments[string(input.ResourceKind)+":"+input.ResourceID]
+	if !ok || assignment.RevisionID == "" {
+		return FeedbackResult{}, errors.New("trace resource assignment not found")
+	}
+	input.RevisionID = assignment.RevisionID
+	input.ExperimentID = assignment.ExperimentID
+	input.Variant = assignment.Variant
 	feedback, err := s.repo.Record(ctx, tenantID, input)
 	if err != nil {
 		return FeedbackResult{}, err
@@ -47,7 +64,11 @@ func (s *FeedbackService) Record(
 	if err != nil || !ok {
 		return result, err
 	}
-	stable, canary, observedMinutes, err := s.repo.Observations(ctx, tenantID, experiment)
+	feedbackRows, observedMinutes, err := s.repo.StageFeedback(ctx, tenantID, experiment)
+	if err != nil {
+		return FeedbackResult{}, err
+	}
+	stable, canary, err := s.observations(ctx, tenantID, experiment, feedbackRows)
 	if err != nil {
 		return FeedbackResult{}, err
 	}
@@ -79,6 +100,50 @@ func (s *FeedbackService) Record(
 	result.Experiment = &next
 	result.Decision = decision
 	return result, nil
+}
+
+func (s *FeedbackService) observations(
+	ctx context.Context,
+	tenantID string,
+	experiment domain.Experiment,
+	feedbackRows []domain.EvaluationFeedback,
+) ([]domain.OnlineObservation, []domain.OnlineObservation, error) {
+	traceIDs := make([]string, 0, len(feedbackRows))
+	for _, feedback := range feedbackRows {
+		traceIDs = append(traceIDs, feedback.TraceID)
+	}
+	traces, err := s.evidence.ResolveBatch(ctx, tenantID, traceIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	var stable, canary []domain.OnlineObservation
+	resourceKey := string(experiment.ResourceKind) + ":" + experiment.ResourceID
+	for _, feedback := range feedbackRows {
+		trace, ok := traces[feedback.TraceID]
+		if !ok {
+			return nil, nil, errors.New("trace evidence unavailable")
+		}
+		assignment, ok := trace.Assignments[resourceKey]
+		if !ok || assignment.RevisionID != feedback.RevisionID {
+			return nil, nil, errors.New("trace evidence assignment mismatch")
+		}
+		observation := domain.OnlineObservation{
+			Score: feedback.Score, CostUSD: trace.CostUSD, LatencyMs: trace.LatencyMs,
+			Success: trace.Success, SecurityViolation: trace.SecurityViolation || feedbackSecurityViolation(feedback),
+		}
+		switch feedback.RevisionID {
+		case experiment.StableRevisionID:
+			stable = append(stable, observation)
+		case experiment.CanaryRevisionID:
+			canary = append(canary, observation)
+		}
+	}
+	return stable, canary, nil
+}
+
+func feedbackSecurityViolation(feedback domain.EvaluationFeedback) bool {
+	value, _ := feedback.Outcome["security_violation"].(bool)
+	return value
 }
 
 func hasSecurityViolation(observations []domain.OnlineObservation) bool {

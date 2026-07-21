@@ -8,6 +8,7 @@ import (
 	"time"
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
+	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	agentpersist "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
@@ -41,8 +42,11 @@ type experimentSkillRevisionResolver struct {
 func (r experimentSkillRevisionResolver) ResolveSkillRevision(
 	ctx context.Context,
 	tenantID, skillID, subjectID string,
-) (string, bool, error) {
-	return r.service.ResolveRevision(ctx, tenantID, evaldomain.ResourceKindSkill, skillID, subjectID)
+) (agentport.SkillRevisionAssignment, bool, error) {
+	assignment, found, err := r.service.ResolveAssignment(ctx, tenantID, evaldomain.ResourceKindSkill, skillID, subjectID)
+	return agentport.SkillRevisionAssignment{
+		RevisionID: assignment.RevisionID, ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
+	}, found, err
 }
 
 func (m skillCandidateManager) LoadOptimizableSnapshot(
@@ -179,7 +183,22 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(ctx context.Context, ten
 		query = text
 	}
 	traceID := uuid.Must(uuid.NewV7()).String()
-	result, duration, err := a.agents.ExecuteSkillScenario(ctx, agentID, agentapp.ExecRequest{Query: query, UserID: "evaluation-worker"}, agentapp.ExecMeta{TenantID: tenantID, TraceID: traceID}, activation)
+	result, duration, err := a.agents.ExecuteSkillScenario(
+		ctx,
+		agentID,
+		agentapp.ExecRequest{Query: query, UserID: "evaluation-worker"},
+		agentapp.ExecMeta{
+			TenantID: tenantID,
+			TraceID:  traceID,
+			EvolutionTrace: agentapp.EvolutionTraceMetadata{
+				Evaluation: true,
+				ResourceManifest: map[string]string{
+					"skill:" + ref.ResourceID: ref.RevisionID,
+				},
+			},
+		},
+		activation,
+	)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
@@ -196,6 +215,48 @@ func (l evaluationTenantLister) ListTenantIDs(ctx context.Context) ([]string, er
 		ids = append(ids, strings.TrimPrefix(schema, "tenant_"))
 	}
 	return ids, nil
+}
+
+type evaluationTraceEvidenceAdapter struct {
+	provider agentport.TraceEvidenceProvider
+}
+
+func (a evaluationTraceEvidenceAdapter) Resolve(
+	ctx context.Context, tenantID, traceID string,
+) (evalport.ObservedTrace, error) {
+	evidence, err := a.provider.Resolve(ctx, tenantID, traceID)
+	if err != nil {
+		return evalport.ObservedTrace{}, err
+	}
+	return mapEvaluationEvidence(evidence), nil
+}
+
+func (a evaluationTraceEvidenceAdapter) ResolveBatch(
+	ctx context.Context, tenantID string, traceIDs []string,
+) (map[string]evalport.ObservedTrace, error) {
+	evidence, err := a.provider.ResolveBatch(ctx, tenantID, traceIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]evalport.ObservedTrace, len(evidence))
+	for traceID, trace := range evidence {
+		out[traceID] = mapEvaluationEvidence(trace)
+	}
+	return out, nil
+}
+
+func mapEvaluationEvidence(evidence agentdomain.TraceEvidence) evalport.ObservedTrace {
+	assignments := make(map[string]evalport.ObservedResourceAssignment, len(evidence.ResourceAssignments))
+	for resource, assignment := range evidence.ResourceAssignments {
+		assignments[resource] = evalport.ObservedResourceAssignment{
+			RevisionID: assignment.RevisionID, ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
+		}
+	}
+	return evalport.ObservedTrace{
+		TraceID: evidence.TraceID, CostUSD: evidence.CostUSD, LatencyMs: evidence.LatencyMs,
+		Success: evidence.Status == agentdomain.ExecStatusSuccess, SecurityViolation: evidence.SecurityViolation,
+		Assignments: assignments,
+	}
 }
 
 func (c *Container) buildEvaluation(ctx context.Context) error {
@@ -226,7 +287,9 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	optimizationService := evalapp.NewOptimizationService(manager, rewriter, optimizationRepo)
 	experimentService := evalapp.NewExperimentService(experimentRepo)
-	feedbackService := evalapp.NewFeedbackService(feedbackRepo, experimentService)
+	feedbackService := evalapp.NewFeedbackService(
+		feedbackRepo, experimentService, evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider},
+	)
 	worker := evalapp.NewWorker(evaluationTenantLister{pool: db}, jobService, time.Second)
 	worker.Start(ctx)
 	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })

@@ -86,12 +86,26 @@ func (s *ExperimentService) ResolveRevision(
 	resourceKind domain.ResourceKind,
 	resourceID, subjectID string,
 ) (string, bool, error) {
+	assignment, ok, err := s.ResolveAssignment(ctx, tenantID, resourceKind, resourceID, subjectID)
+	return assignment.RevisionID, ok, err
+}
+
+func (s *ExperimentService) ResolveAssignment(
+	ctx context.Context,
+	tenantID string,
+	resourceKind domain.ResourceKind,
+	resourceID, subjectID string,
+) (domain.RevisionAssignment, bool, error) {
 	deployment, ok, err := s.repo.ResolveDeployment(ctx, tenantID, string(resourceKind), resourceID)
 	if err != nil || !ok {
-		return "", ok, err
+		return domain.RevisionAssignment{}, ok, err
 	}
 	if deployment.CanaryRevisionID != "" && domain.AssignVariant(subjectID+":"+resourceID, deployment.CanaryPercent) {
-		return deployment.CanaryRevisionID, true, nil
+		return domain.RevisionAssignment{
+			RevisionID: deployment.CanaryRevisionID, ExperimentID: deployment.ExperimentID, Variant: "canary",
+		}, true, nil
 	}
-	return deployment.StableRevisionID, true, nil
+	return domain.RevisionAssignment{
+		RevisionID: deployment.StableRevisionID, ExperimentID: deployment.ExperimentID, Variant: "stable",
+	}, true, nil
 }

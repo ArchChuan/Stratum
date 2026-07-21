@@ -74,8 +74,13 @@ func MapErrorToStatus(err error) int {
 	}
 
 	switch {
+	case errors.Is(err, agentdomain.ErrEvidenceUnavailable):
+		return http.StatusServiceUnavailable
+	case errors.Is(err, agentdomain.ErrEvidenceInvalid):
+		return http.StatusBadGateway
 	// 404 — NotFound
 	case errors.Is(err, pgx.ErrNoRows),
+		errors.Is(err, agentdomain.ErrEvidenceNotFound),
 		errors.Is(err, knowledgedomain.ErrWorkspaceNotFound),
 		errors.Is(err, knowledgedomain.ErrDocumentNotFound),
 		errors.Is(err, iamdomain.ErrMemberNotFound),
