@@ -190,6 +190,7 @@ export const resourceSummarySchema = z.object({
   latest_run_status: z.string().optional(), resource_kind: resourceKindSchema,
   safe_summary: safeSummarySchema.default({}), created_at: z.string(),
 }).strict();
+export type ResourceSummary = z.infer<typeof resourceSummarySchema>;
 export const resourcePageSchema = page(resourceSummarySchema);
 export type ResourcePage = z.infer<typeof resourcePageSchema>;
 
@@ -204,6 +205,7 @@ export const runSummarySchema = z.object({
   resource_kind: resourceKindSchema, passed: z.boolean(), total_cases: z.number(), passed_cases: z.number(),
   created_at: z.string(),
 }).strict();
+export type RunSummary = z.infer<typeof runSummarySchema>;
 export const runPageSchema = page(runSummarySchema);
 export type RunPage = z.infer<typeof runPageSchema>;
 
@@ -212,6 +214,7 @@ export const candidateSummarySchema = z.object({
   source: z.string(), status: z.string(), resource_kind: resourceKindSchema, rank: z.number().optional(),
   state_version: z.number().int().positive(), safe_diff: candidateSafeDiffSchema, created_at: z.string(),
 }).strict();
+export type CandidateSummary = z.infer<typeof candidateSummarySchema>;
 export const candidatePageSchema = page(candidateSummarySchema);
 export type CandidatePage = z.infer<typeof candidatePageSchema>;
 
@@ -224,6 +227,7 @@ export const experimentSummarySchema = z.object({
     error_rate: experimentGateSchema, security: experimentGateSchema,
   }).strict().optional(), created_at: z.string(),
 }).strict();
+export type ExperimentSummary = z.infer<typeof experimentSummarySchema>;
 export const experimentPageSchema = page(experimentSummarySchema);
 export type ExperimentPage = z.infer<typeof experimentPageSchema>;
 
@@ -231,6 +235,7 @@ export const timelineEventSchema = z.object({
   id: z.string(), kind: z.string(), status: z.string(), summary: z.string(), resource_id: z.string(),
   resource_kind: resourceKindSchema, created_at: z.string(),
 }).strict();
+export type TimelineEvent = z.infer<typeof timelineEventSchema>;
 export const timelinePageSchema = page(timelineEventSchema);
 export type TimelinePage = z.infer<typeof timelinePageSchema>;
 
