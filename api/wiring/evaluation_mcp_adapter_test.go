@@ -65,7 +65,8 @@ func TestMCPEvaluationAdapterBaselineReplayIsStableAndCleansDuplicateRuntime(t *
 	firstKey := revisions.input.IdempotencyKey
 	second, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "server-1")
 	if err != nil || first != second || revisions.input.IdempotencyKey != firstKey || store.putCalls != 2 ||
-		len(store.deleted) != 1 {
+		len(store.deleted) != 1 || store.deleted[0] != store.putRefs[1].URI ||
+		store.deleted[0] == store.putRefs[0].URI {
 		t.Fatalf("first=%+v second=%+v key=%q puts=%d deleted=%v err=%v",
 			first, second, revisions.input.IdempotencyKey, store.putCalls, store.deleted, err)
 	}
@@ -264,6 +265,7 @@ type fakeMCPRuntimeStore struct {
 	putCalls  int
 	putErr    error
 	deleted   []string
+	putRefs   []pkgobjectstore.Reference
 }
 
 func (s *fakeMCPRuntimeStore) Put(_ context.Context, payload pkgobjectstore.Payload) (pkgobjectstore.Reference, error) {
@@ -277,7 +279,9 @@ func (s *fakeMCPRuntimeStore) Put(_ context.Context, payload pkgobjectstore.Payl
 	}
 	uri := fmt.Sprintf("object://runtime/%s/%d", payload.TenantID, s.putCalls)
 	s.values[uri] = payload.Value
-	return pkgobjectstore.Reference{URI: uri, SHA256: "runtime-hash"}, nil
+	ref := pkgobjectstore.Reference{URI: uri, SHA256: "runtime-hash"}
+	s.putRefs = append(s.putRefs, ref)
+	return ref, nil
 }
 func (s *fakeMCPRuntimeStore) Get(_ context.Context, ref pkgobjectstore.Reference) ([]byte, error) {
 	value, ok := s.values[ref.URI]
