@@ -1,11 +1,14 @@
 [
   {
-    "name": "default-unauth",
+    "name": "authenticated-conflict",
     "method": "POST",
-    "path": "/evaluations/candidates/:id/reject",
+    "path": "/evaluations/candidates/candidate-1/reject",
     "body": {
-      "error": "missing bearer token"
+      "reason": "reviewed",
+      "idempotency_key": "contract-request",
+      "expected_state_version": 1
     },
-    "want_status": 401
+    "want_status": 409,
+    "want_body": {"error":"candidate command idempotency conflict"}
   }
 ]

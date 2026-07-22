@@ -37,6 +37,15 @@ func (c CandidateCommand) Validate() error {
 	return nil
 }
 
+func (c CandidateCommand) Fingerprint() string {
+	value := fmt.Sprintf(
+		"reject\x00%s\x00%s\x00%s\x00%d",
+		c.ActorType, c.ActorID, c.Reason, c.ExpectedStateVersion,
+	)
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
 type ExperimentCommandAction string
 
 const (

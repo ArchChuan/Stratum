@@ -220,6 +220,7 @@ CREATE TABLE IF NOT EXISTS optimization_candidates (
     rejection_reason      TEXT NOT NULL DEFAULT '',
     rejected_by           TEXT NOT NULL DEFAULT '',
     rejection_key         TEXT,
+    rejection_fingerprint TEXT NOT NULL DEFAULT '',
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'proposed';
@@ -227,6 +228,7 @@ ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS state_version BIGIN
 ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS rejection_reason TEXT NOT NULL DEFAULT '';
 ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS rejected_by TEXT NOT NULL DEFAULT '';
 ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS rejection_key TEXT;
+ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS rejection_fingerprint TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_optimization_candidates_job_created
     ON optimization_candidates(optimization_job_id, created_at DESC, id DESC);
 

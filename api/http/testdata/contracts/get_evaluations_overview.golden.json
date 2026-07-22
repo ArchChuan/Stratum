@@ -1,11 +1,9 @@
 [
   {
-    "name": "default-unauth",
+    "name": "authenticated-success",
     "method": "GET",
     "path": "/evaluations/overview",
-    "body": {
-      "error": "missing bearer token"
-    },
-    "want_status": 401
+    "want_status": 200,
+    "want_body": {"resources":0,"suites":0,"runs":0,"candidates":0,"experiments":0}
   }
 ]
