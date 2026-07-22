@@ -154,6 +154,12 @@ var sensitiveSafeSummaryKeys = map[string]struct{}{
 
 var summaryToken = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
 var changeTypes = map[string]struct{}{"added": {}, "removed": {}, "modified": {}, "enabled": {}, "disabled": {}}
+var sensitiveSafeSummaryAssignment = regexp.MustCompile(
+	`(?i)(^|[\s;,])(?:api[_-]?key|access[_-]?token|client[_-]?secret)\s*[:=]\s*\S`,
+)
+var sensitiveSafeSummaryAuthorization = regexp.MustCompile(
+	`(?i)(^|[\s;,])authorization\s*[:=]\s*(?:bearer|basic)\b`,
+)
 
 func validateSafeSummary(summary map[string]any) error {
 	if len(summary) > 64 {
@@ -215,11 +221,8 @@ func validateSafeSummaryValue(value any, depth int) error {
 		if len(typed) > 2048 {
 			return errors.New("string too long")
 		}
-		lower := strings.ToLower(typed)
-		for _, marker := range []string{"client_secret=", "api_key=", "access_token=", "authorization:"} {
-			if strings.Contains(lower, marker) {
-				return errors.New("sensitive value")
-			}
+		if IsSensitiveSafeSummaryValue(typed) {
+			return errors.New("sensitive value")
 		}
 		return nil
 	case []string:
@@ -275,6 +278,10 @@ func IsSensitiveSafeSummaryKey(key string) bool {
 	return sensitive
 }
 
+func IsSensitiveSafeSummaryValue(value string) bool {
+	return sensitiveSafeSummaryAssignment.MatchString(value) || sensitiveSafeSummaryAuthorization.MatchString(value)
+}
+
 func NormalizeSafeSummaryKey(key string) string {
 	key = strings.ReplaceAll(key, "-", "_")
 	var normalized strings.Builder
@@ -324,7 +331,7 @@ func sanitizeSafeSummaryValue(value any, depth int) (any, bool) {
 	case nil, bool, float64, int, int32, int64:
 		return typed, true
 	case string:
-		return typed, len(typed) <= 2048
+		return typed, len(typed) <= 2048 && !IsSensitiveSafeSummaryValue(typed)
 	case []any:
 		if len(typed) > 64 {
 			return nil, false

@@ -94,4 +94,22 @@ describe('useEvaluationCenter', () => {
     expect(result.current.overview?.resources).toBe(3);
     expect(api.listResources).toHaveBeenLastCalledWith({ resource_id: 'resource-b' });
   });
+
+  it('skips post-command refresh after unmount', async () => {
+    auth.role = 'admin';
+    const command = deferred<any>();
+    api.rejectCandidate.mockReturnValue(command.promise);
+    const { result, unmount } = renderHook(() => useEvaluationCenter());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const queryCalls = [api.getOverview, api.listResources, api.listSuites, api.listRuns,
+      api.listCandidates, api.listExperiments].map((mock) => mock.mock.calls.length);
+    const pending = result.current.rejectCandidate('candidate-1', {
+      reason: '拒绝', idempotency_key: 'request-1', expected_state_version: 1,
+    });
+    unmount();
+    await act(async () => command.resolve({ id: 'candidate-1' }));
+    await pending;
+    expect([api.getOverview, api.listResources, api.listSuites, api.listRuns,
+      api.listCandidates, api.listExperiments].map((mock) => mock.mock.calls.length)).toEqual(queryCalls);
+  });
 });

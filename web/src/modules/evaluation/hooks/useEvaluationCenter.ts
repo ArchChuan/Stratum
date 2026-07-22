@@ -46,6 +46,7 @@ export const useEvaluationCenter = (filters: EvaluationCenterFilters = {}) => {
   filtersRef.current = stableFilters;
 
   const load = useCallback(async () => {
+    if (!mountedRef.current) return;
     const generation = requestGenerationRef.current + 1;
     requestGenerationRef.current = generation;
     const requestFilters = filtersRef.current;

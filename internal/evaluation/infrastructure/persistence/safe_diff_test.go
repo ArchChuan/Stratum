@@ -58,3 +58,11 @@ func TestParseSanitizedSafeSummaryFallsBackForMalformedJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSanitizedSafeSummaryDropsSensitiveValues(t *testing.T) {
+	summary := parseSanitizedSafeSummary([]byte(`{"label":"safe","note":"Authorization: Bearer secret",` +
+		`"nested":{"description":"client_secret = secret"},"count":"token_count=10"}`))
+	if summary["label"] != "safe" || summary["count"] != "token_count=10" || len(summary) != 2 {
+		t.Fatalf("sanitized historical summary = %#v", summary)
+	}
+}

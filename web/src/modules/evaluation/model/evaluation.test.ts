@@ -147,4 +147,17 @@ describe('evaluation model', () => {
       safe_diff: safeDiff, created_at: '2026-01-01T00:00:00Z',
     })).toThrow();
   });
+
+  it.each([
+    'api_key=secret', 'API_KEY = secret', 'access_token: secret', 'client_secret = secret',
+    'Authorization: Bearer secret', 'authorization = basic abc123',
+  ])('rejects sensitive summary value marker %s', (value) => {
+    expect(() => safeSummarySchema.parse({ note: value })).toThrow();
+  });
+
+  it.each(['token_count=10', 'API key rotation policy', 'authorization guide'])(
+    'allows safe summary wording %s', (value) => {
+      expect(safeSummarySchema.parse({ note: value })).toEqual({ note: value });
+    },
+  );
 });

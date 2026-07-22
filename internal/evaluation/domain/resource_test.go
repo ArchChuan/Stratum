@@ -174,6 +174,26 @@ func TestSanitizeSafeSummaryOmitsUnsafeAndMalformedBranches(t *testing.T) {
 	}
 }
 
+func TestSensitiveSafeSummaryValueMarkers(t *testing.T) {
+	unsafe := []string{
+		"api_key=secret", "API_KEY = secret", "access_token: secret", "client_secret = secret",
+		"Authorization: Bearer secret", "authorization = basic abc123",
+	}
+	for _, value := range unsafe {
+		if !IsSensitiveSafeSummaryValue(value) {
+			t.Errorf("unsafe value %q was not classified", value)
+		}
+		if result := SanitizeSafeSummary(map[string]any{"note": value}); len(result) != 0 {
+			t.Errorf("unsafe value survived sanitization: %#v", result)
+		}
+	}
+	for _, value := range []string{"token_count=10", "API key rotation policy", "authorization guide"} {
+		if IsSensitiveSafeSummaryValue(value) {
+			t.Errorf("safe value %q was classified", value)
+		}
+	}
+}
+
 func TestResourceRevisionRejectsFreeTextSummaryEvenWhenSecretIsOnlyInValue(t *testing.T) {
 	revision := validResourceRevision()
 	revision.SafeSummary = map[string]any{"description": "client_secret=synthetic-value"}

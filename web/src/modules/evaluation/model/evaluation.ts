@@ -107,11 +107,18 @@ const normalizedKey = (key: string) => key
   .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
   .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
   .toLowerCase();
+const sensitiveSummaryAssignment = /(^|[\s;,])(?:api[_-]?key|access[_-]?token|client[_-]?secret)\s*[:=]\s*\S/i;
+const sensitiveSummaryAuthorization = /(^|[\s;,])authorization\s*[:=]\s*(?:bearer|basic)\b/i;
+const isSensitiveSummaryValue = (value: string) => sensitiveSummaryAssignment.test(value)
+  || sensitiveSummaryAuthorization.test(value);
 const validateSafeJSON = (value: unknown, path: string[], depth = 0): string | null => {
   if (depth > 6) return `${path.join('.')} exceeds safe summary depth`;
   if (value === null || typeof value === 'boolean') return null;
   if (typeof value === 'number') return Number.isFinite(value) ? null : `${path.join('.')} is not finite`;
-  if (typeof value === 'string') return value.length <= 2048 ? null : `${path.join('.')} is too long`;
+  if (typeof value === 'string') {
+    if (value.length > 2048) return `${path.join('.')} is too long`;
+    return isSensitiveSummaryValue(value) ? `${path.join('.')} contains a sensitive value` : null;
+  }
   if (Array.isArray(value)) {
     if (value.length > 64) return `${path.join('.')} has too many items`;
     for (let index = 0; index < value.length; index += 1) {
