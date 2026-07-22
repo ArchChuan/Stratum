@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
+	genericstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 )
 
 type ExecutionResult struct {
@@ -52,6 +53,25 @@ type OptimizationRepository interface {
 		job domain.OptimizationJob,
 		candidates []domain.OptimizationCandidate,
 	) error
+}
+
+type CreateRevisionInput struct {
+	ResourceKind                                            domain.ResourceKind
+	ResourceID, ParentRevisionID, CreatedBy, IdempotencyKey string
+	Source                                                  domain.RevisionSource
+	Payload                                                 any
+	SafeSummary                                             map[string]any
+}
+
+type RevisionRepository interface {
+	Create(context.Context, string, domain.ResourceRevision, string) (domain.ResourceRevision, bool, error)
+	Get(context.Context, string, domain.ResourceRef) (domain.ResourceRevision, bool, error)
+}
+
+type RevisionObjectStore interface {
+	Put(context.Context, genericstore.Payload) (genericstore.Reference, error)
+	Get(context.Context, genericstore.Reference) ([]byte, error)
+	Delete(context.Context, genericstore.Reference) error
 }
 
 type ExperimentRepository interface {
