@@ -50,6 +50,15 @@ type Store struct {
 	generic *genericstore.EncryptedStore
 }
 
+// GenericStore exposes the same encrypted backing store for evaluation-owned
+// revision payloads without exposing the MinIO client or encryption key.
+func (s *Store) GenericStore() genericstore.Store {
+	if s == nil {
+		return nil
+	}
+	return s.generic
+}
+
 func NewStore(client objectPutter, bucket string, key [32]byte) *Store {
 	s := &Store{client: client, bucket: bucket, key: key}
 	if full, ok := client.(interface {

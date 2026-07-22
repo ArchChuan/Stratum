@@ -243,6 +243,29 @@ func TestAgentService_Get_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, application.ErrNotFound)
 }
 
+func TestAgentService_SnapshotRevisionCapturesAuthorizedBindings(t *testing.T) {
+	svc, repo, _ := newTestService(t)
+	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{
+		ID: "agent-1", Type: domain.ReActAgent, SystemPrompt: "be precise", LLMModel: "qwen-plus",
+		MaxIterations: 8, MaxContextTokens: 4096,
+		AllowedSkills: []string{"skill-1"}, MCPToolIDs: []string{"mcp:server:tool"},
+		KnowledgeWorkspaceIDs: []string{"workspace-1"},
+	}, true, nil)
+
+	revision, err := svc.SnapshotRevision(context.Background(), "tenant-1", "agent-1")
+	assert.NoError(t, err)
+	assert.Len(t, revision.Bindings, 3)
+	assert.Equal(t, 4096, revision.ModelParameters.MaxContextTokens)
+	firstHash, err := revision.ContentHash()
+	assert.NoError(t, err)
+	secondHash, err := revision.ContentHash()
+	assert.NoError(t, err)
+	assert.Equal(t, firstHash, secondHash)
+
+	_, err = svc.SnapshotRevision(context.Background(), "", "agent-1")
+	assert.ErrorContains(t, err, "tenant id required")
+}
+
 func TestAgentService_List(t *testing.T) {
 	svc, repo, _ := newTestService(t)
 	repo.On("GetAll", mock.Anything).Return([]*domain.AgentConfig{

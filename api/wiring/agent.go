@@ -15,6 +15,7 @@ import (
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
+	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -26,17 +27,18 @@ import (
 // so agents resolved from DB inherit those capabilities at construction
 // time. Service is the orchestration façade handlers consume.
 type Agent struct {
-	Registry          *agent.Registry
-	Service           *agent.AgentService
-	ChatStore         agent.ChatStore
-	EvidenceProvider  agentport.TraceEvidenceProvider
-	TracePayloadStore agentport.TracePayloadStore
-	CheckpointStore   agent.CheckpointStore
-	ApprovalStore     agentport.ToolApprovalRepo
-	ApprovalService   *agent.ToolApprovalService
-	TenantResolver    agentport.TenantCapabilityResolver
-	SkillLookup       agentport.SkillLookup
-	TenantSettings    agentport.TenantSettings
+	Registry            *agent.Registry
+	Service             *agent.AgentService
+	ChatStore           agent.ChatStore
+	EvidenceProvider    agentport.TraceEvidenceProvider
+	TracePayloadStore   agentport.TracePayloadStore
+	RevisionObjectStore pkgobjectstore.Store
+	CheckpointStore     agent.CheckpointStore
+	ApprovalStore       agentport.ToolApprovalRepo
+	ApprovalService     *agent.ToolApprovalService
+	TenantResolver      agentport.TenantCapabilityResolver
+	SkillLookup         agentport.SkillLookup
+	TenantSettings      agentport.TenantSettings
 }
 
 // ragSearchAdapter wraps *knowledge.RAGService to satisfy
@@ -178,6 +180,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			}
 			cancel()
 			a.TracePayloadStore = store
+			a.RevisionObjectStore = store.GenericStore()
 		}
 	}
 	if db != nil {

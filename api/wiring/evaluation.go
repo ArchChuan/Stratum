@@ -33,6 +33,80 @@ type Evaluation struct {
 	CandidateService    *evalapp.CandidateCommandService
 }
 
+type evaluationResourceRouter struct {
+	adapters map[evaldomain.ResourceKind]evalport.ResourceAdapter
+}
+
+func (r evaluationResourceRouter) adapter(kind evaldomain.ResourceKind) (evalport.ResourceAdapter, error) {
+	adapter := r.adapters[kind]
+	if adapter == nil {
+		return nil, fmt.Errorf("evaluation resource adapter unavailable for %q", kind)
+	}
+	return adapter, nil
+}
+
+func (r evaluationResourceRouter) ExecuteRevision(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
+) (evalport.ExecutionResult, error) {
+	adapter, err := r.adapter(ref.Kind)
+	if err != nil {
+		return evalport.ExecutionResult{}, err
+	}
+	return adapter.ExecuteRevision(ctx, tenantID, ref, testCase)
+}
+
+func (r evaluationResourceRouter) ResolveRevision(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (evaldomain.ResourceRevision, error) {
+	adapter, err := r.adapter(ref.Kind)
+	if err != nil {
+		return evaldomain.ResourceRevision{}, err
+	}
+	return adapter.ResolveRevision(ctx, tenantID, ref)
+}
+
+func (r evaluationResourceRouter) SafeSummary(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (map[string]any, error) {
+	adapter, err := r.adapter(ref.Kind)
+	if err != nil {
+		return nil, err
+	}
+	return adapter.SafeSummary(ctx, tenantID, ref)
+}
+
+type evaluationCandidateRouter struct {
+	creators map[evaldomain.ResourceKind]evalport.CandidateCreator
+}
+
+func (r evaluationCandidateRouter) creator(kind evaldomain.ResourceKind) (evalport.CandidateCreator, error) {
+	creator := r.creators[kind]
+	if creator == nil {
+		return nil, fmt.Errorf("evaluation candidate creator unavailable for %q", kind)
+	}
+	return creator, nil
+}
+
+func (r evaluationCandidateRouter) LoadOptimizableSnapshot(
+	ctx context.Context, tenantID string, baseline evaldomain.ResourceRef,
+) (map[string]any, error) {
+	creator, err := r.creator(baseline.Kind)
+	if err != nil {
+		return nil, err
+	}
+	return creator.LoadOptimizableSnapshot(ctx, tenantID, baseline)
+}
+
+func (r evaluationCandidateRouter) CreateCandidate(
+	ctx context.Context, tenantID string, baseline evaldomain.ResourceRef, patch evaldomain.CandidatePatch,
+) (evaldomain.ResourceRef, error) {
+	creator, err := r.creator(baseline.Kind)
+	if err != nil {
+		return evaldomain.ResourceRef{}, err
+	}
+	return creator.CreateCandidate(ctx, tenantID, baseline, patch)
+}
+
 type skillCandidateManager struct {
 	versions *skillapp.VersionService
 }
@@ -351,19 +425,38 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	suiteService := evalapp.NewSuiteService(suiteRepo)
 	activationResolver := publishedSkillActivationResolver{versions: c.Skill.VersionService}
 	manager := skillCandidateManager{versions: c.Skill.VersionService}
-	adapter := agentScenarioEvaluationAdapter{
+	skillAdapter := agentScenarioEvaluationAdapter{
 		agents:    c.Agent.Service,
 		skills:    activationResolver,
 		bindings:  agentpersist.NewPgAgentRepo(db),
 		resources: manager,
 	}
-	service := evalapp.NewService(adapter, runRepo, suiteRepo)
+	resourceAdapters := map[evaldomain.ResourceKind]evalport.ResourceAdapter{
+		evaldomain.ResourceKindSkill: skillAdapter,
+	}
+	candidateCreators := map[evaldomain.ResourceKind]evalport.CandidateCreator{
+		evaldomain.ResourceKindSkill: manager,
+	}
+	if c.Agent != nil && c.Agent.RevisionObjectStore != nil {
+		revisionService := evalapp.NewRevisionService(
+			evalpersist.RevisionObjectStoreAdapter{Store: c.Agent.RevisionObjectStore},
+			evalpersist.NewPgRevisionRepository(db),
+		)
+		agentAdapter := agentEvaluationAdapter{
+			revisions: revisionService, agents: c.Agent.Service, actorID: "evaluation-worker",
+		}
+		resourceAdapters[evaldomain.ResourceKindAgent] = agentAdapter
+		candidateCreators[evaldomain.ResourceKindAgent] = agentAdapter
+	}
+	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, suiteRepo)
 	jobService := evalapp.NewJobService(jobRepo, service)
 	var rewriter evalapp.PromptRewriter
 	if c.Agent != nil && c.Agent.TenantResolver != nil {
 		rewriter = gatewayPromptRewriter{resolver: c.Agent.TenantResolver}
 	}
-	optimizationService := evalapp.NewOptimizationService(manager, rewriter, optimizationRepo)
+	optimizationService := evalapp.NewOptimizationService(
+		evaluationCandidateRouter{creators: candidateCreators}, rewriter, optimizationRepo,
+	)
 	experimentService := evalapp.NewExperimentService(experimentRepo)
 	feedbackService := evalapp.NewFeedbackService(
 		feedbackRepo, experimentService, evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider},
