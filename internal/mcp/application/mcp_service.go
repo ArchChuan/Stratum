@@ -160,7 +160,12 @@ func (s *MCPService) ReconnectServer(ctx context.Context, serverID string) error
 
 // UpdateServer disconnects and reconnects an existing MCP server with new config.
 func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig) error {
-	if err := s.manager.UpdateServer(ctx, cfg); err != nil {
+	stored, err := s.manager.GetServerConfig(ctx, cfg.ID)
+	if err != nil {
+		return err
+	}
+	merged := mergeProtectedConfig(stored, cfg)
+	if err := s.manager.UpdateServer(ctx, merged); err != nil {
 		return err
 	}
 	s.logger.Info("mcp.server_updated", zap.String("server_id", cfg.ID))
@@ -168,6 +173,71 @@ func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig)
 		s.logger.Warn("failed to re-register MCP tools", zap.String("server_id", cfg.ID), zap.Error(err))
 	}
 	return nil
+}
+
+func mergeProtectedConfig(stored, incoming *domain.ServerConfig) *domain.ServerConfig {
+	merged := cloneServerConfig(incoming)
+	if stored == nil {
+		return merged
+	}
+	if stored.Transport == incoming.Transport && incoming.Transport == "stdio" {
+		mergeSensitiveValues(merged.Env, stored.Env)
+	}
+	if stored.Transport == incoming.Transport && incoming.Transport != "stdio" {
+		mergeSensitiveValues(merged.Headers, stored.Headers)
+	}
+	if stored.Auth == nil || merged.Auth == nil || stored.Auth.Type != merged.Auth.Type {
+		return merged
+	}
+	switch merged.Auth.Type {
+	case domain.AuthTypeBearer:
+		if merged.Auth.Token == "" {
+			merged.Auth.Token = stored.Auth.Token
+		}
+	case domain.AuthTypeAPIKey:
+		if merged.Auth.APIKeyValue == "" {
+			merged.Auth.APIKeyValue = stored.Auth.APIKeyValue
+		}
+	case domain.AuthTypeOAuth2:
+		if merged.Auth.OAuth2ClientSecret == "" {
+			merged.Auth.OAuth2ClientSecret = stored.Auth.OAuth2ClientSecret
+		}
+	}
+	return merged
+}
+
+func cloneServerConfig(cfg *domain.ServerConfig) *domain.ServerConfig {
+	cloned := *cfg
+	cloned.Args = append([]string(nil), cfg.Args...)
+	cloned.Capabilities = append([]string(nil), cfg.Capabilities...)
+	cloned.Env = cloneStringMap(cfg.Env)
+	cloned.Headers = cloneStringMap(cfg.Headers)
+	if cfg.Auth != nil {
+		auth := *cfg.Auth
+		auth.OAuth2Scopes = append([]string(nil), cfg.Auth.OAuth2Scopes...)
+		cloned.Auth = &auth
+	}
+	if cfg.Retry != nil {
+		retry := *cfg.Retry
+		cloned.Retry = &retry
+	}
+	return &cloned
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func mergeSensitiveValues(target, stored map[string]string) {
+	for key, value := range stored {
+		if _, supplied := target[key]; !supplied && domain.IsSensitiveConfigKey(key) {
+			target[key] = value
+		}
+	}
 }
 
 // GetServerConfig returns the full configuration for serverID.

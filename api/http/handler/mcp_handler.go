@@ -5,6 +5,7 @@ package handler
 import (
 	"net/http"
 
+	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
@@ -111,8 +112,8 @@ func (h *MCPHandler) GetServerStatus(c *gin.Context) {
 // writeMW  — member 可执行的运行时操作再追加（如 RequireActiveTenant）：工具执行。
 // adminMW  — 管理类操作（连接/更新/断开/删除配置/重连/刷新技能）再追加，仅 admin+ 可用。
 //
-// 普通租户成员（member）只能读取配置与执行工具，不能新建/修改/删除 MCP 服务器，
-// 这些管理动作会改变整个租户共享的服务器状态，故收归 admin。
+// 普通租户成员（member）只能读取非敏感服务器信息与执行工具。完整配置的脱敏视图仍只供管理员编辑使用，
+// 连接、配置读取、更新、断开、删除和重连等管理动作均收归 admin。
 func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, _ []gin.HandlerFunc, adminMW []gin.HandlerFunc) {
 	// clone 避免多次 append 复用底层数组造成中间件串味。
 	admin := func(handlers ...gin.HandlerFunc) []gin.HandlerFunc {
@@ -130,7 +131,7 @@ func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, _ 
 	v1.GET("/servers/:id/resources", h.ListResources)
 	v1.POST("/servers", admin(h.ConnectServer)...)
 	v1.PUT("/servers/:id", admin(h.UpdateServer)...)
-	v1.GET("/servers/:id/config", h.GetServerConfig)
+	v1.GET("/servers/:id/config", admin(h.GetServerConfig)...)
 	v1.DELETE("/servers/:id", admin(h.DisconnectServer)...)
 	v1.DELETE("/servers/:id/config", admin(h.DeleteServerConfig)...)
 	v1.POST("/servers/:id/reconnect", admin(h.ReconnectServer)...)
@@ -144,7 +145,7 @@ func (h *MCPHandler) GetServerConfig(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, cfg)
+	c.JSON(http.StatusOK, dto.NewMCPServerConfigResponse(cfg))
 }
 
 // UpdateServer PUT /mcp/servers/:id

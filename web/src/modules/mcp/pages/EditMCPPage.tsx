@@ -47,7 +47,13 @@ export const EditMCPPage = () => {
       >
         <MCPBasicSection />
         <MCPTransportSection transport={transport} />
-        {isHTTP && <MCPAuthSection authType={authType} />}
+        {isHTTP && (
+          <MCPAuthSection
+            authType={authType}
+            editing
+            credentialConfigured={initialValues?.credential_configured ?? false}
+          />
+        )}
         <MCPRetrySection retryEnabled={retryEnabled} />
 
         <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

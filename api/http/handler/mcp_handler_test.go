@@ -86,3 +86,41 @@ func TestMCPHandlerGetServerStatus(t *testing.T) {
 		t.Errorf("expected status 200, got %d", w.Code)
 	}
 }
+
+func TestMCPConfigRouteRequiresTenantAdmin(t *testing.T) {
+	t.Parallel()
+
+	h := newTestMCPHandler(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("auth.role", c.GetHeader("X-Test-Role"))
+		c.Next()
+	})
+	router.Use(middleware.ErrorHandler(zap.NewNop()))
+	h.RegisterRoutes(router, nil, nil, []gin.HandlerFunc{middleware.RequireTenantRole("admin")})
+
+	tests := []struct {
+		name       string
+		role       string
+		wantStatus int
+	}{
+		{name: "member forbidden", role: "member", wantStatus: http.StatusForbidden},
+		{name: "admin reaches handler", role: "admin", wantStatus: http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/mcp/servers/missing/config", nil)
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+			req.Header.Set("X-Test-Role", tt.role)
+			router.ServeHTTP(recorder, req)
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("status=%d, want %d; body=%s", recorder.Code, tt.wantStatus, recorder.Body.String())
+			}
+		})
+	}
+}
