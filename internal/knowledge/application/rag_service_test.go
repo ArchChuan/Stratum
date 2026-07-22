@@ -2,11 +2,13 @@ package application
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -52,6 +54,92 @@ func TestRAGQueryKeywordUsesWorkspaceID(t *testing.T) {
 
 	if chunks.workspaceID != "019047ac-0000-7000-9000-000000000001" {
 		t.Fatalf("expected keyword search to use workspace ID, got %q", chunks.workspaceID)
+	}
+}
+
+func TestRAGQueryPreservesDocumentIdentityAcrossRetrievalModes(t *testing.T) {
+	for _, mode := range []string{"vector", "keyword", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			vectors := NewMockVectorStore()
+			vectors.SetSearchResults([]port.VectorSearchResult{{
+				ID: "chunk-vector", SourceDocument: "doc-vector", Content: "vector content", Score: 0.95,
+			}})
+			service := NewRAGService(&mockEmbedder{dim: 3}, vectors, zap.NewNop())
+			service.SetChunkRepo(&recordingChunkRepo{chunks: []domain.Chunk{{
+				ID: "chunk-keyword", DocID: "doc-keyword", Text: "keyword content",
+			}}})
+			expectedIDs := []string{"doc-vector"}
+			if mode == "keyword" {
+				expectedIDs = []string{"doc-keyword"}
+			} else if mode == "hybrid" {
+				expectedIDs = []string{"doc-vector", "doc-keyword"}
+			}
+			result, err := NewRetrievalEvaluator(service).EvaluateRetrieval(
+				reqctx.WithTenantID(context.Background(), "tenant-1"), RetrievalSnapshot{
+					WorkspaceID: "workspace-1", WorkspaceName: "support", EmbeddingModel: "embedding-3",
+					QueryMode: mode, TopK: 5, Reranking: RerankingNone, QueryRewrite: QueryRewriteNone,
+				}, RetrievalCase{Query: "query", RelevantDocumentIDs: expectedIDs,
+					CitationDocumentIDs: expectedIDs})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.Relevant || !result.CitationCorrect {
+				t.Fatalf("document-level evaluation failed: %+v", result)
+			}
+			got := make(map[string]bool, len(result.RetrievedDocumentIDs))
+			for _, id := range result.RetrievedDocumentIDs {
+				got[id] = true
+			}
+			for _, expectedID := range expectedIDs {
+				if !got[expectedID] {
+					t.Fatalf("document identity %q lost: %+v", expectedID, result)
+				}
+			}
+		})
+	}
+}
+
+func TestRAGQuerySanitizesDependencyErrorsAndLogs(t *testing.T) {
+	sensitive := errors.New("POST https://user:password@example.test/search?api_key=secret-token " +
+		"response body private document")
+	for _, mode := range []string{"vector", "keyword", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			core, logs := observer.New(zapcore.DebugLevel)
+			vectors := NewMockVectorStore()
+			vectors.SetSearchError(sensitive)
+			service := NewRAGService(&mockEmbedder{dim: 3}, vectors, zap.New(core))
+			chunks := &recordingChunkRepo{searchErr: sensitive}
+			service.SetChunkRepo(chunks)
+			if mode == "vector" {
+				chunks.searchErr = nil
+			}
+			_, err := service.Query(context.Background(), RAGQueryRequest{
+				TenantID: "tenant-1", WorkspaceID: "workspace-1", Question: "query", Mode: mode, TopK: 5,
+			})
+			if !errors.Is(err, ErrRAGDependency) || errors.Is(err, sensitive) {
+				t.Fatalf("dependency classification/cause exposure mismatch: %v", err)
+			}
+			assertSensitiveTextAbsent(t, err.Error(), logs.All())
+		})
+	}
+}
+
+func assertSensitiveTextAbsent(t *testing.T, errorMessage string, entries []observer.LoggedEntry) {
+	t.Helper()
+	for _, leaked := range []string{"example.test", "password", "api_key", "secret-token", "private document", "response body"} {
+		if strings.Contains(errorMessage, leaked) {
+			t.Fatalf("error leaked %q: %s", leaked, errorMessage)
+		}
+		for _, entry := range entries {
+			if strings.Contains(entry.Message, leaked) {
+				t.Fatalf("log message leaked %q: %s", leaked, entry.Message)
+			}
+			for _, value := range entry.ContextMap() {
+				if text, ok := value.(string); ok && strings.Contains(text, leaked) {
+					t.Fatalf("structured log leaked %q: %#v", leaked, entry.ContextMap())
+				}
+			}
+		}
 	}
 }
 
@@ -189,6 +277,7 @@ type recordingChunkRepo struct {
 	chunks      []domain.Chunk
 	insertErr   error
 	parentErr   error
+	searchErr   error
 }
 
 func (r *recordingChunkRepo) InsertBatch(ctx context.Context, tenantID, workspaceID string, chunks []domain.Chunk) error {
@@ -199,7 +288,7 @@ func (r *recordingChunkRepo) InsertBatch(ctx context.Context, tenantID, workspac
 func (r *recordingChunkRepo) KeywordSearch(ctx context.Context, tenantID, workspaceID, query string, topK int) ([]domain.Chunk, error) {
 	r.workspaceID = workspaceID
 	r.topK = topK
-	return r.chunks, nil
+	return r.chunks, r.searchErr
 }
 
 func (r *recordingChunkRepo) DeleteByWorkspace(ctx context.Context, tenantID, workspaceID string) error {

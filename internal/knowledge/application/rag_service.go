@@ -3,6 +3,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"go.uber.org/zap"
 )
+
+var ErrRAGDependency = errors.New("knowledge retrieval dependency unavailable")
 
 // NewRAGSearchFn returns a knowledge search function suitable for the agent's
 // WithRAGSearchFn hook. It fans out across workspaces concurrently and
@@ -49,7 +52,7 @@ func NewRAGSearchFn(rs *RAGService, tenantID string) func(
 							mode = w.Config.QueryMode
 						}
 					} else if err != nil {
-						results[i] = wsResult{err: fmt.Errorf("resolve workspace %q: %w", ws, err)}
+						results[i] = wsResult{err: ErrRAGDependency}
 						return
 					}
 				}
@@ -145,6 +148,7 @@ type RAGQueryResult struct {
 
 type Source struct {
 	DocumentID    string
+	ChunkID       string
 	Content       string
 	ParentContent string // non-empty when parent chunk was fetched (Parent-Child strategy)
 	ChunkIndex    int64
@@ -173,7 +177,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	if req.WorkspaceID == "" && req.Workspace != "" && rs.wsRepo != nil {
 		ws, err := rs.wsRepo.GetByName(ctx, req.TenantID, req.Workspace)
 		if err != nil {
-			return nil, fmt.Errorf("resolve workspace: %w", err)
+			return nil, ErrRAGDependency
 		}
 		req.WorkspaceID = ws.ID
 		if req.EmbeddingModel == "" {
@@ -187,14 +191,16 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	case "vector":
 		vectorResults, err := rs.queryVector(ctx, req.Question, collectionName, req.TopK, rs.resolveEmbedder(ctx, req))
 		if err != nil {
-			rs.logger.Error("vector query failed", zap.String("trace_id", sc.TraceID), zap.Error(err))
-			return nil, fmt.Errorf("vector query failed: %w", err)
+			rs.logger.Error("knowledge.retrieval.dependency_failed", zap.String("trace_id", sc.TraceID),
+				zap.String("operation", "vector_search"), zap.String("error_category", "dependency_unavailable"))
+			return nil, ErrRAGDependency
 		}
 		result.VectorResults = vectorResults
 
 		for _, vr := range vectorResults {
 			result.Sources = append(result.Sources, Source{
-				DocumentID: vr.ID,
+				DocumentID: vr.SourceDocument,
+				ChunkID:    vr.ID,
 				Content:    vr.Content,
 				ChunkIndex: vr.ChunkIndex,
 				Score:      vr.Score,
@@ -210,12 +216,14 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		}
 		chunks, err := rs.chunkRepo.KeywordSearch(ctx, req.TenantID, req.WorkspaceID, req.Question, req.TopK)
 		if err != nil {
-			rs.logger.Error("keyword query failed", zap.String("trace_id", sc.TraceID), zap.Error(err))
-			return nil, fmt.Errorf("keyword query failed: %w", err)
+			rs.logger.Error("knowledge.retrieval.dependency_failed", zap.String("trace_id", sc.TraceID),
+				zap.String("operation", "keyword_search"), zap.String("error_category", "dependency_unavailable"))
+			return nil, ErrRAGDependency
 		}
 		for _, c := range chunks {
 			result.Sources = append(result.Sources, Source{
-				DocumentID: c.ID,
+				DocumentID: c.DocID,
+				ChunkID:    c.ID,
 				Content:    c.Text,
 				ChunkIndex: c.Index,
 			})
@@ -254,12 +262,16 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		vr := <-vCh
 		kr := <-kCh
 		if vr.e != nil {
-			rs.logger.Error("hybrid vector search failed", zap.String("trace_id", sc.TraceID), zap.Error(vr.e))
-			return nil, fmt.Errorf("vector search failed: %w", vr.e)
+			rs.logger.Error("knowledge.retrieval.dependency_failed", zap.String("trace_id", sc.TraceID),
+				zap.String("operation", "hybrid_vector_search"),
+				zap.String("error_category", "dependency_unavailable"))
+			return nil, ErrRAGDependency
 		}
 		if kr.e != nil {
-			rs.logger.Error("hybrid keyword search failed", zap.String("trace_id", sc.TraceID), zap.Error(kr.e))
-			return nil, fmt.Errorf("keyword search failed: %w", kr.e)
+			rs.logger.Error("knowledge.retrieval.dependency_failed", zap.String("trace_id", sc.TraceID),
+				zap.String("operation", "hybrid_keyword_search"),
+				zap.String("error_category", "dependency_unavailable"))
+			return nil, ErrRAGDependency
 		}
 		const rrfK = 60.0
 		rrfScores := make(map[string]float64)
@@ -271,11 +283,12 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 		}
 		srcMap := make(map[string]Source)
 		for _, r := range vr.r {
-			srcMap[r.ID] = Source{DocumentID: r.ID, Content: r.Content, ChunkIndex: r.ChunkIndex}
+			srcMap[r.ID] = Source{DocumentID: r.SourceDocument, ChunkID: r.ID,
+				Content: r.Content, ChunkIndex: r.ChunkIndex}
 		}
 		for _, c := range kr.r {
 			if _, ok := srcMap[c.ID]; !ok {
-				srcMap[c.ID] = Source{DocumentID: c.ID, Content: c.Text, ChunkIndex: c.Index}
+				srcMap[c.ID] = Source{DocumentID: c.DocID, ChunkID: c.ID, Content: c.Text, ChunkIndex: c.Index}
 			}
 		}
 		type scoredSrc struct {
@@ -307,7 +320,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	if rs.chunkRepo != nil && req.WorkspaceID != "" && len(result.Sources) > 0 {
 		ids := make([]string, len(result.Sources))
 		for i, s := range result.Sources {
-			ids[i] = s.DocumentID
+			ids[i] = s.ChunkID
 		}
 		leafChunks, err := rs.chunkRepo.GetChunksByIDs(ctx, req.TenantID, req.WorkspaceID, ids)
 		if err == nil {
@@ -318,7 +331,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 				}
 			}
 			for i := range result.Sources {
-				pid, ok := parentMap[result.Sources[i].DocumentID]
+				pid, ok := parentMap[result.Sources[i].ChunkID]
 				if !ok {
 					continue
 				}
@@ -347,7 +360,7 @@ func (rs *RAGService) queryVector(ctx context.Context, question string, collecti
 
 	queryVector, err := embedder.EmbedVector(ctx, question)
 	if err != nil {
-		return nil, fmt.Errorf("failed to embed query: %w", err)
+		return nil, ErrRAGDependency
 	}
 
 	results, err := rs.vectorStore.Search(ctx, collection, queryVector, topK)
@@ -356,7 +369,7 @@ func (rs *RAGService) queryVector(ctx context.Context, question string, collecti
 			rs.logger.Warn("vector collection not found, skipping", zap.String("collection", collection))
 			return nil, nil
 		}
-		return nil, err
+		return nil, ErrRAGDependency
 	}
 
 	return results, nil

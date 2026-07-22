@@ -60,8 +60,8 @@ func TestEvaluateRetrievalCoversNoAnswerAndDependencyFailure(t *testing.T) {
 		context.Background(), RetrievalSnapshot{WorkspaceID: "workspace-1", WorkspaceName: "support",
 			EmbeddingModel: "embedding-3", QueryMode: "vector", TopK: 5, Reranking: "none", QueryRewrite: "none"},
 		RetrievalCase{Query: "query"})
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("dependency failure must propagate, got %v", err)
+	if !errors.Is(err, ErrRetrievalDependency) || errors.Is(err, wantErr) {
+		t.Fatalf("dependency failure must be safely classified, got %v", err)
 	}
 }
 
@@ -73,8 +73,8 @@ func TestEvaluateRetrievalSanitizesSensitiveDependencyFailure(t *testing.T) {
 			WorkspaceID: "workspace-1", WorkspaceName: "support", EmbeddingModel: "embedding-3",
 			QueryMode: "vector", TopK: 5, Reranking: "none", QueryRewrite: "none",
 		}, RetrievalCase{Query: "query"})
-	if !errors.Is(err, ErrRetrievalDependency) || !errors.Is(err, sensitive) {
-		t.Fatalf("dependency error lost classification/cause: %v", err)
+	if !errors.Is(err, ErrRetrievalDependency) || errors.Is(err, sensitive) {
+		t.Fatalf("dependency error classification/cause exposure mismatch: %v", err)
 	}
 	message := err.Error()
 	for _, leaked := range []string{"example.test", "password", "api_key", "secret-token", "private document", "response body"} {
