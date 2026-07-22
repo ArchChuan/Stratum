@@ -140,6 +140,12 @@ var sensitiveSafeSummaryKeys = map[string]struct{}{
 	"secret":        {},
 	"access_token":  {},
 	"refresh_token": {},
+	"client_secret": {}, "private_key": {}, "credential": {}, "credentials": {},
+	"cookie": {}, "session": {}, "key": {}, "cert": {}, "connection_string": {},
+}
+
+var allowedSafeSummaryKeys = map[string]struct{}{
+	"changed_fields": {}, "label": {}, "name": {}, "description": {}, "summary": {}, "reason": {}, "diff": {},
 }
 
 func sensitiveSummaryKey(value any) (string, bool) {
@@ -166,6 +172,9 @@ func sensitiveSummaryReflect(value reflect.Value) (string, bool) {
 				key := keyValue.String()
 				normalized := strings.ReplaceAll(strings.ToLower(key), "-", "_")
 				if _, sensitive := sensitiveSafeSummaryKeys[normalized]; sensitive {
+					return key, true
+				}
+				if _, allowed := allowedSafeSummaryKeys[normalized]; !allowed {
 					return key, true
 				}
 			}

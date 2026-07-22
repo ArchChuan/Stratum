@@ -13,11 +13,12 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
-	genericstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/google/uuid"
 )
 
 const revisionCleanupTimeout = 5 * time.Second
+
+var ErrCommitUnknown = port.ErrRevisionCommitUnknown
 
 type CreateRevisionInput = port.CreateRevisionInput
 
@@ -62,7 +63,7 @@ func (s *RevisionService) Create(
 		return domain.ResourceRevision{}, false, fmt.Errorf("revision service: validate revision: %w", err)
 	}
 
-	ref, err := s.store.Put(ctx, genericstore.Payload{
+	ref, err := s.store.Put(ctx, port.RevisionPayload{
 		TenantID:  tenantID,
 		Namespace: "evaluation-revisions",
 		ID:        revision.ID,
@@ -82,15 +83,16 @@ func (s *RevisionService) Create(
 
 	stored, created, err := s.repository.Create(ctx, tenantID, revision, input.IdempotencyKey)
 	if err != nil {
+		if errors.Is(err, port.ErrRevisionCommitUnknown) {
+			return domain.ResourceRevision{}, false, fmt.Errorf("revision service: create metadata: %w", err)
+		}
 		return domain.ResourceRevision{}, false, s.cleanupError(
 			ref,
 			fmt.Errorf("revision service: create metadata: %w", err),
 		)
 	}
 	if !created {
-		if cleanupErr := s.deleteUploaded(ref); cleanupErr != nil {
-			return domain.ResourceRevision{}, false, fmt.Errorf("revision service: clean duplicate payload: %w", cleanupErr)
-		}
+		_ = s.deleteUploaded(ref)
 	}
 	return stored, created, nil
 }
@@ -100,6 +102,9 @@ func (s *RevisionService) Get(
 	tenantID string,
 	ref domain.ResourceRef,
 ) (domain.ResourceRevision, []byte, bool, error) {
+	if s == nil || s.store == nil || s.repository == nil {
+		return domain.ResourceRevision{}, nil, false, fmt.Errorf("revision service: dependencies unavailable")
+	}
 	if strings.TrimSpace(tenantID) == "" {
 		return domain.ResourceRevision{}, nil, false, fmt.Errorf("revision service: tenant id required")
 	}
@@ -110,7 +115,7 @@ func (s *RevisionService) Get(
 	if err != nil || !found {
 		return revision, nil, found, err
 	}
-	payload, err := s.store.Get(ctx, genericstore.Reference{URI: revision.PayloadRef, SHA256: revision.PayloadHash})
+	payload, err := s.store.Get(ctx, port.RevisionPayloadRef{URI: revision.PayloadRef, SHA256: revision.PayloadHash})
 	if err != nil {
 		return domain.ResourceRevision{}, nil, false, fmt.Errorf("revision service: load payload: %w", err)
 	}
@@ -133,7 +138,7 @@ func (s *RevisionService) validateCreate(ctx context.Context, tenantID string, i
 	if strings.TrimSpace(input.IdempotencyKey) == "" {
 		return fmt.Errorf("revision service: idempotency key required")
 	}
-	if input.Payload == nil || (reflect.ValueOf(input.Payload).Kind() == reflect.Pointer && reflect.ValueOf(input.Payload).IsNil()) {
+	if input.Payload == nil || isNilPayload(input.Payload) {
 		return fmt.Errorf("revision service: payload required")
 	}
 	probe := domain.ResourceRevision{
@@ -160,15 +165,25 @@ func (s *RevisionService) validateCreate(ctx context.Context, tenantID string, i
 	return nil
 }
 
-func (s *RevisionService) cleanupError(ref genericstore.Reference, cause error) error {
+func (s *RevisionService) cleanupError(ref port.RevisionPayloadRef, cause error) error {
 	if cleanupErr := s.deleteUploaded(ref); cleanupErr != nil {
 		return errors.Join(cause, fmt.Errorf("revision service: cleanup payload: %w", cleanupErr))
 	}
 	return cause
 }
 
-func (s *RevisionService) deleteUploaded(ref genericstore.Reference) error {
+func (s *RevisionService) deleteUploaded(ref port.RevisionPayloadRef) error {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), revisionCleanupTimeout)
 	defer cancel()
 	return s.store.Delete(cleanupCtx, ref)
+}
+
+func isNilPayload(payload any) bool {
+	v := reflect.ValueOf(payload)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
 }

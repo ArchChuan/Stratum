@@ -4,6 +4,7 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -49,6 +50,11 @@ func TestPgRevisionRepositoryCreateDuplicateGetAndTenantIsolation(t *testing.T) 
 	existing, created, err := repo.Create(ctx, tenantID, duplicate, "request-1")
 	if err != nil || created || existing.ID != revision.ID {
 		t.Fatalf("unexpected duplicate result: revision=%+v created=%v err=%v", existing, created, err)
+	}
+	conflict := integrationRevision("revision-conflict")
+	conflict.ResourceID = "other-resource"
+	if _, _, err := repo.Create(ctx, tenantID, conflict, "request-1"); !errors.Is(err, ErrRevisionIdempotencyConflict) {
+		t.Fatalf("expected idempotency fingerprint conflict, got %v", err)
 	}
 
 	ref := domain.ResourceRef{Kind: revision.ResourceKind, ResourceID: revision.ResourceID, RevisionID: revision.ID}

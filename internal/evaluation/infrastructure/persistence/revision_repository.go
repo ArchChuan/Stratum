@@ -3,14 +3,34 @@ package persistence
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
+	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var ErrRevisionIdempotencyConflict = errors.New("revision idempotency key conflict")
+var ErrRevisionCommitUnknown = port.ErrRevisionCommitUnknown
+
+type RevisionObjectStoreAdapter struct{ Store objectstore.Store }
+
+func (a RevisionObjectStoreAdapter) Put(ctx context.Context, p port.RevisionPayload) (port.RevisionPayloadRef, error) {
+	r, err := a.Store.Put(ctx, objectstore.Payload{TenantID: p.TenantID, Namespace: p.Namespace, ID: p.ID, Value: p.Value})
+	return port.RevisionPayloadRef{URI: r.URI, SHA256: r.SHA256, SizeBytes: r.SizeBytes}, err
+}
+func (a RevisionObjectStoreAdapter) Get(ctx context.Context, r port.RevisionPayloadRef) ([]byte, error) {
+	return a.Store.Get(ctx, objectstore.Reference{URI: r.URI, SHA256: r.SHA256, SizeBytes: r.SizeBytes})
+}
+func (a RevisionObjectStoreAdapter) Delete(ctx context.Context, r port.RevisionPayloadRef) error {
+	return a.Store.Delete(ctx, objectstore.Reference{URI: r.URI, SHA256: r.SHA256, SizeBytes: r.SizeBytes})
+}
 
 type PgRevisionRepository struct {
 	pool *pgxpool.Pool
@@ -61,9 +81,17 @@ func (r *PgRevisionRepository) Create(
 		if err != nil {
 			return fmt.Errorf("revision repository: load idempotent revision: %w", err)
 		}
+		if stored.ResourceKind != revision.ResourceKind || stored.ResourceID != revision.ResourceID ||
+			stored.ParentRevisionID != revision.ParentRevisionID || stored.Source != revision.Source ||
+			stored.ContentHash != revision.ContentHash || stored.CreatedBy != revision.CreatedBy {
+			return fmt.Errorf("%w: %s", ErrRevisionIdempotencyConflict, idempotencyKey)
+		}
 		return nil
 	})
 	if err != nil {
+		if strings.Contains(err.Error(), "commit transaction") {
+			return domain.ResourceRevision{}, false, errors.Join(ErrRevisionCommitUnknown, err)
+		}
 		return domain.ResourceRevision{}, false, err
 	}
 	return stored, created, nil

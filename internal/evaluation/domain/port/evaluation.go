@@ -2,11 +2,13 @@ package port
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
-	genericstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 )
+
+var ErrRevisionCommitUnknown = errors.New("revision metadata commit outcome unknown")
 
 type ExecutionResult struct {
 	Output     any
@@ -69,9 +71,19 @@ type RevisionRepository interface {
 }
 
 type RevisionObjectStore interface {
-	Put(context.Context, genericstore.Payload) (genericstore.Reference, error)
-	Get(context.Context, genericstore.Reference) ([]byte, error)
-	Delete(context.Context, genericstore.Reference) error
+	Put(context.Context, RevisionPayload) (RevisionPayloadRef, error)
+	Get(context.Context, RevisionPayloadRef) ([]byte, error)
+	Delete(context.Context, RevisionPayloadRef) error
+}
+
+type RevisionPayload struct {
+	TenantID, Namespace, ID string
+	Value                   any
+}
+
+type RevisionPayloadRef struct {
+	URI, SHA256 string
+	SizeBytes   int64
 }
 
 type ExperimentRepository interface {

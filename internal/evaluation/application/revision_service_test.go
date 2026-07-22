@@ -9,11 +9,11 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
-	"github.com/byteBuilderX/stratum/pkg/storage/objectstore"
+	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 )
 
 func TestRevisionServiceCreatesEncryptedRevisionMetadata(t *testing.T) {
-	store := &fakeRevisionObjectStore{ref: objectstore.Reference{URI: "object://revisions/payload.enc", SHA256: "payload-hash"}}
+	store := &fakeRevisionObjectStore{ref: port.RevisionPayloadRef{URI: "object://revisions/payload.enc", SHA256: "payload-hash"}}
 	repo := &fakeRevisionRepository{}
 	service := NewRevisionService(store, repo)
 
@@ -56,7 +56,7 @@ func TestRevisionServiceCleansObjectAfterRepositoryFailure(t *testing.T) {
 	repositoryErr := errors.New("insert failed")
 	cleanupErr := errors.New("cleanup failed")
 	store := &fakeRevisionObjectStore{
-		ref:       objectstore.Reference{URI: "object://revisions/payload.enc", SHA256: "payload-hash"},
+		ref:       port.RevisionPayloadRef{URI: "object://revisions/payload.enc", SHA256: "payload-hash"},
 		deleteErr: cleanupErr,
 	}
 	repo := &fakeRevisionRepository{createErr: repositoryErr}
@@ -71,10 +71,20 @@ func TestRevisionServiceCleansObjectAfterRepositoryFailure(t *testing.T) {
 	}
 }
 
+func TestRevisionServiceDoesNotDeleteOnUnknownCommitOutcome(t *testing.T) {
+	store := &fakeRevisionObjectStore{ref: port.RevisionPayloadRef{URI: "object://revisions/payload.enc", SHA256: "payload-hash"}}
+	repo := &fakeRevisionRepository{createErr: ErrCommitUnknown}
+	service := NewRevisionService(store, repo)
+	_, _, err := service.Create(context.Background(), "tenant-1", validCreateRevisionInput())
+	if !errors.Is(err, ErrCommitUnknown) || store.deleteCalls != 0 {
+		t.Fatalf("unknown commit must preserve payload: err=%v deletes=%d", err, store.deleteCalls)
+	}
+}
+
 func TestRevisionServiceDuplicateIdempotencyReturnsExisting(t *testing.T) {
 	existing := validRevision()
 	existing.ID = "revision-existing"
-	store := &fakeRevisionObjectStore{ref: objectstore.Reference{URI: "object://revisions/new.enc", SHA256: "new-hash"}}
+	store := &fakeRevisionObjectStore{ref: port.RevisionPayloadRef{URI: "object://revisions/new.enc", SHA256: "new-hash"}}
 	repo := &fakeRevisionRepository{createResult: existing, created: false}
 	service := NewRevisionService(store, repo)
 
@@ -87,6 +97,16 @@ func TestRevisionServiceDuplicateIdempotencyReturnsExisting(t *testing.T) {
 	}
 	if store.deleteCalls != 1 {
 		t.Fatalf("duplicate upload was not cleaned up: calls=%d", store.deleteCalls)
+	}
+}
+
+func TestRevisionServiceDuplicateCleanupFailureStillReturnsExisting(t *testing.T) {
+	existing := validRevision()
+	store := &fakeRevisionObjectStore{ref: port.RevisionPayloadRef{URI: "object://revisions/new.enc", SHA256: "new-hash"}, deleteErr: errors.New("delete failed")}
+	repo := &fakeRevisionRepository{createResult: existing, created: false}
+	revision, created, err := NewRevisionService(store, repo).Create(context.Background(), "tenant-1", validCreateRevisionInput())
+	if err != nil || created || revision.ID != existing.ID {
+		t.Fatalf("duplicate must remain successful despite cleanup error: revision=%+v created=%v err=%v", revision, created, err)
 	}
 }
 
@@ -153,26 +173,26 @@ func validRevision() domain.ResourceRevision {
 }
 
 type fakeRevisionObjectStore struct {
-	ref         objectstore.Reference
+	ref         port.RevisionPayloadRef
 	putErr      error
 	deleteErr   error
-	payload     objectstore.Payload
-	deletedRef  objectstore.Reference
+	payload     port.RevisionPayload
+	deletedRef  port.RevisionPayloadRef
 	putCalls    int
 	deleteCalls int
 }
 
-func (f *fakeRevisionObjectStore) Put(_ context.Context, payload objectstore.Payload) (objectstore.Reference, error) {
+func (f *fakeRevisionObjectStore) Put(_ context.Context, payload port.RevisionPayload) (port.RevisionPayloadRef, error) {
 	f.putCalls++
 	f.payload = payload
 	return f.ref, f.putErr
 }
 
-func (f *fakeRevisionObjectStore) Get(context.Context, objectstore.Reference) ([]byte, error) {
+func (f *fakeRevisionObjectStore) Get(context.Context, port.RevisionPayloadRef) ([]byte, error) {
 	return nil, nil
 }
 
-func (f *fakeRevisionObjectStore) Delete(_ context.Context, ref objectstore.Reference) error {
+func (f *fakeRevisionObjectStore) Delete(_ context.Context, ref port.RevisionPayloadRef) error {
 	f.deleteCalls++
 	f.deletedRef = ref
 	return f.deleteErr
