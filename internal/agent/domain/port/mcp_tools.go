@@ -13,7 +13,28 @@ type MCPToolProvider interface {
 }
 
 type MCPToolExecutor interface {
-	ExecuteMCPTool(ctx context.Context, serverID, toolName string, input map[string]any) (any, error)
+	ExecuteMCPTool(ctx context.Context, serverID, toolName string, input map[string]any) (MCPToolResult, error)
+}
+
+type MCPContent struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	Data any    `json:"data,omitempty"`
+}
+
+type MCPToolResult struct {
+	Content           []MCPContent   `json:"content,omitempty"`
+	StructuredContent map[string]any `json:"structuredContent,omitempty"`
+	IsError           bool           `json:"isError,omitempty"`
+}
+
+type GuardedToolResult struct {
+	ModelContent string
+	Summary      string
+	SHA256       string
+	Untrusted    bool
+	Truncated    bool
+	IsError      bool
 }
 
 type ToolExecutionOutcome string

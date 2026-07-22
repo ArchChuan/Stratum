@@ -557,7 +557,14 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 						zap.String("tool_name", tc.Name),
 						zap.Int64("latency_ms", toolLatencyMs),
 					)
-					content = fmt.Sprintf("%v", toolOutput)
+					guarded, ok := toolOutput.(port.GuardedToolResult)
+					if !ok {
+						status = domain.ToolTraceStatusError
+						errMsg = "tool result was not validated"
+						content = "error: tool result validation failed"
+						break
+					}
+					content = guarded.ModelContent
 				default:
 					logger.Info("react.tool",
 						zap.String("trace_id", s.TraceID),

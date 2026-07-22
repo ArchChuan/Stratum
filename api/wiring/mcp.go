@@ -2,6 +2,7 @@ package wiring
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -28,28 +29,51 @@ type mcpClientResolver interface {
 
 type agentMCPExecutor struct{ clients mcpClientResolver }
 
-func (e agentMCPExecutor) ExecuteMCPTool(ctx context.Context, serverID, toolName string, input map[string]any) (any, error) {
+func (e agentMCPExecutor) ExecuteMCPTool(
+	ctx context.Context, serverID, toolName string, input map[string]any,
+) (agentport.MCPToolResult, error) {
 	if e.clients == nil {
-		return nil, &agentport.MCPToolExecutionError{
+		return agentport.MCPToolResult{}, &agentport.MCPToolExecutionError{
 			Outcome: agentport.ToolExecutionOutcomeNotSent,
 			Err:     fmt.Errorf("MCP client resolver unavailable"),
 		}
 	}
 	client := e.clients.GetClient(ctx, serverID)
 	if client == nil {
-		return nil, &agentport.MCPToolExecutionError{
+		return agentport.MCPToolResult{}, &agentport.MCPToolExecutionError{
 			Outcome: agentport.ToolExecutionOutcomeNotSent,
 			Err:     fmt.Errorf("MCP client not found: %s", serverID),
 		}
 	}
 	output, err := client.CallTool(ctx, toolName, input)
 	if err != nil {
-		return nil, &agentport.MCPToolExecutionError{
+		return agentport.MCPToolResult{}, &agentport.MCPToolExecutionError{
 			Outcome: agentport.ToolExecutionOutcomeUnknown,
 			Err:     err,
 		}
 	}
-	return output, nil
+	return normalizeMCPToolResult(output)
+}
+
+func normalizeMCPToolResult(output any) (agentport.MCPToolResult, error) {
+	if result, ok := output.(agentport.MCPToolResult); ok {
+		return result, nil
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return agentport.MCPToolResult{}, fmt.Errorf("decode MCP tool result: unsupported result")
+	}
+	var result agentport.MCPToolResult
+	if err := json.Unmarshal(raw, &result); err == nil &&
+		(len(result.Content) > 0 || result.StructuredContent != nil || result.IsError) {
+		return result, nil
+	}
+	if object, ok := output.(map[string]any); ok {
+		return agentport.MCPToolResult{StructuredContent: object}, nil
+	}
+	return agentport.MCPToolResult{
+		Content: []agentport.MCPContent{{Type: "text", Text: fmt.Sprint(output)}},
+	}, nil
 }
 
 type agentMCPPolicyResolver struct{ service *mcpapp.MCPService }
@@ -68,6 +92,7 @@ func (a mcpAgentToolAdapter) ToolsForServer(_ context.Context, serverID string) 
 			Name:         handle.GetID(),
 			Description:  handle.Tool.Description,
 			InputSchema:  handle.Tool.InputSchema,
+			OutputSchema: handle.Tool.OutputSchema,
 			ProviderType: "mcp",
 			ProviderID:   serverID,
 			ServerID:     serverID,

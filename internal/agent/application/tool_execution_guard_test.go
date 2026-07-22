@@ -16,9 +16,9 @@ type countingMCPExecutor struct {
 
 func (e *countingMCPExecutor) ExecuteMCPTool(
 	context.Context, string, string, map[string]any,
-) (any, error) {
+) (port.MCPToolResult, error) {
 	e.calls++
-	return "executed", nil
+	return port.MCPToolResult{Content: []port.MCPContent{{Type: "text", Text: "executed"}}}, nil
 }
 
 func TestToolExecutionGuardRejectsForgedToolBeforeExecutor(t *testing.T) {
@@ -57,7 +57,9 @@ func TestToolExecutionGuardExecutesAuthorizedReadTool(t *testing.T) {
 	output, err := guard.Execute(context.Background(), authorizedToolExecutionRequest())
 
 	require.NoError(t, err)
-	require.Equal(t, "executed", output)
+	guarded, ok := output.(port.GuardedToolResult)
+	require.True(t, ok)
+	require.Contains(t, guarded.ModelContent, "executed")
 	require.Equal(t, 1, executor.calls)
 }
 
@@ -95,9 +97,9 @@ func TestToolExecutionGuardReauthorizesApprovedCall(t *testing.T) {
 			err: errors.New("membership lookup failed"),
 		}),
 		Executor: executor,
-		ExecuteApproved: func(context.Context, ToolExecutionRequest) (any, error) {
+		ExecuteApproved: func(context.Context, ToolExecutionRequest) (port.MCPToolResult, error) {
 			approvedCalls++
-			return "approved", nil
+			return port.MCPToolResult{}, nil
 		},
 	})
 	req := authorizedToolExecutionRequest()

@@ -511,7 +511,7 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approva
 	guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
 		Authorizer: s.deps.ToolAuthorizer,
 		Executor:   s.deps.MCPToolExecutor,
-		ExecuteApproved: func(callCtx context.Context, request ToolExecutionRequest) (any, error) {
+		ExecuteApproved: func(callCtx context.Context, request ToolExecutionRequest) (port.MCPToolResult, error) {
 			used = true
 			return s.deps.ApprovalService.ExecuteApproved(
 				callCtx, tenantID, approvalID, request.Tool.ServerID,

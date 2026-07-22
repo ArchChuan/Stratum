@@ -114,7 +114,9 @@ func TestBaseAgent_ReActExecute_WithToolCall(t *testing.T) {
 		agent.WithTenantID("t1"),
 		agent.WithMaxSteps(10),
 		agent.WithExtraTools([]port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "math", Metadata: map[string]any{"risk_level": "read"}}}),
-		agent.WithToolExecutionFn(func(context.Context, port.ToolExecutionRequest) (any, error) { return "42", nil }),
+		agent.WithToolExecutionFn(func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return port.GuardedToolResult{ModelContent: "42"}, nil
+		}),
 	)
 	require.NoError(t, err)
 	require.Equal(t, "The answer is 42", result.Output)
@@ -157,7 +159,9 @@ func TestBaseAgentOTelHierarchyFollowsReActGraphContext(t *testing.T) {
 			Name: "calc", ProviderType: "mcp", ProviderID: "math", ServerID: "math", CapabilityID: "calculate",
 			Metadata: map[string]any{"risk_level": "read", "version_id": "tool-revision-1"},
 		}}),
-		agent.WithToolExecutionFn(func(context.Context, port.ToolExecutionRequest) (any, error) { return "42", nil }),
+		agent.WithToolExecutionFn(func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return port.GuardedToolResult{ModelContent: "42"}, nil
+		}),
 	)
 	require.NoError(t, err)
 
@@ -426,7 +430,9 @@ func TestExecute_ReturnsToolTraceAndPersistsSummaryMessage(t *testing.T) {
 		agent.WithUserID("user-2"),
 		agent.WithMaxSteps(10),
 		agent.WithExtraTools([]port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "math", Metadata: map[string]any{"risk_level": "read"}}}),
-		agent.WithToolExecutionFn(func(context.Context, port.ToolExecutionRequest) (any, error) { return "42", nil }),
+		agent.WithToolExecutionFn(func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return port.GuardedToolResult{ModelContent: "42"}, nil
+		}),
 	)
 	require.NoError(t, err)
 	require.Len(t, result.ToolObservations, 1)

@@ -141,8 +141,8 @@ type failingMCPExecutor struct {
 	err error
 }
 
-func (e failingMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (any, error) {
-	return nil, e.err
+func (e failingMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (port.MCPToolResult, error) {
+	return port.MCPToolResult{}, e.err
 }
 
 func TestToolApprovalExecutionClassifiesUnknownOutcome(t *testing.T) {

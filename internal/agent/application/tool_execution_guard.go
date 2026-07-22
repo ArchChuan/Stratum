@@ -19,13 +19,14 @@ var (
 
 type ToolExecutionRequest = port.ToolExecutionRequest
 
-type ApprovedToolExecutor func(context.Context, ToolExecutionRequest) (any, error)
+type ApprovedToolExecutor func(context.Context, ToolExecutionRequest) (port.MCPToolResult, error)
 
 type ToolExecutionGuardDeps struct {
 	Authorizer      *ToolAuthorizer
 	Executor        port.MCPToolExecutor
 	RequestApproval port.ToolApprovalRequester
 	ExecuteApproved ApprovedToolExecutor
+	ResultGuard     *ToolResultGuard
 }
 
 type ToolExecutionGuard struct {
@@ -33,6 +34,9 @@ type ToolExecutionGuard struct {
 }
 
 func NewToolExecutionGuard(deps ToolExecutionGuardDeps) *ToolExecutionGuard {
+	if deps.ResultGuard == nil {
+		deps.ResultGuard = NewToolResultGuard()
+	}
 	return &ToolExecutionGuard{deps: deps}
 }
 
@@ -61,7 +65,11 @@ func (g *ToolExecutionGuard) Execute(ctx context.Context, req ToolExecutionReque
 		if g.deps.ExecuteApproved == nil {
 			return nil, fmt.Errorf("execute approved tool: runtime unavailable")
 		}
-		return g.deps.ExecuteApproved(ctx, req)
+		result, err := g.deps.ExecuteApproved(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return g.deps.ResultGuard.Validate(result, req.Tool.OutputSchema)
 	}
 	if decision.Effect == domain.ToolAuthorizationRequireApproval {
 		approvalID := ""
@@ -84,7 +92,11 @@ func (g *ToolExecutionGuard) Execute(ctx context.Context, req ToolExecutionReque
 	if g.deps.Executor == nil {
 		return nil, fmt.Errorf("MCP tool executor not configured")
 	}
-	return g.deps.Executor.ExecuteMCPTool(ctx, req.Tool.ServerID, req.Tool.CapabilityID, req.Arguments)
+	result, err := g.deps.Executor.ExecuteMCPTool(ctx, req.Tool.ServerID, req.Tool.CapabilityID, req.Arguments)
+	if err != nil {
+		return nil, err
+	}
+	return g.deps.ResultGuard.Validate(result, req.Tool.OutputSchema)
 }
 
 func validateToolArguments(schema, arguments map[string]any) error {

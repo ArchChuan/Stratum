@@ -22,22 +22,22 @@ import (
 
 type countingMCPExecutor struct{ calls int }
 
-func (e *countingMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (any, error) {
+func (e *countingMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (port.MCPToolResult, error) {
 	e.calls++
-	return "deleted", nil
+	return port.MCPToolResult{}, nil
 }
 
 type atomicCountingMCPExecutor struct{ calls atomic.Int32 }
 
-func (e *atomicCountingMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (any, error) {
+func (e *atomicCountingMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (port.MCPToolResult, error) {
 	e.calls.Add(1)
-	return "deleted", nil
+	return port.MCPToolResult{}, nil
 }
 
 type unknownOutcomeMCPExecutor struct{ err error }
 
-func (e unknownOutcomeMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (any, error) {
-	return nil, &port.MCPToolExecutionError{Outcome: port.ToolExecutionOutcomeUnknown, Err: e.err}
+func (e unknownOutcomeMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (port.MCPToolResult, error) {
+	return port.MCPToolResult{}, &port.MCPToolExecutionError{Outcome: port.ToolExecutionOutcomeUnknown, Err: e.err}
 }
 
 func TestToolApprovalEncryptedDecisionAndExactlyOnceExecution(t *testing.T) {

@@ -168,16 +168,16 @@ func (s *ToolApprovalService) MarkExecuted(ctx context.Context, tenantID, id str
 	return s.repo.MarkExecuted(ctx, tenantID, id)
 }
 
-func (s *ToolApprovalService) ExecuteApproved(ctx context.Context, tenantID, id, serverID, toolName string, args map[string]any, executor port.MCPToolExecutor) (any, error) {
+func (s *ToolApprovalService) ExecuteApproved(ctx context.Context, tenantID, id, serverID, toolName string, args map[string]any, executor port.MCPToolExecutor) (port.MCPToolResult, error) {
 	payload, err := s.ApprovedPayload(ctx, tenantID, id)
 	if err != nil {
-		return nil, err
+		return port.MCPToolResult{}, err
 	}
 	if payload.ServerID != serverID || payload.ToolName != toolName || !reflect.DeepEqual(payload.Arguments, args) {
-		return nil, errors.New("approved tool call does not match pinned request")
+		return port.MCPToolResult{}, errors.New("approved tool call does not match pinned request")
 	}
 	if err := s.repo.ClaimExecution(ctx, tenantID, id); err != nil {
-		return nil, fmt.Errorf("claim tool approval execution: %w", err)
+		return port.MCPToolResult{}, fmt.Errorf("claim tool approval execution: %w", err)
 	}
 	output, err := executor.ExecuteMCPTool(ctx, serverID, toolName, args)
 	if err != nil {
@@ -186,17 +186,17 @@ func (s *ToolApprovalService) ExecuteApproved(ctx context.Context, tenantID, id,
 			(executionErr.Outcome == port.ToolExecutionOutcomeNotSent ||
 				executionErr.Outcome == port.ToolExecutionOutcomeDefiniteFailure) {
 			if releaseErr := s.repo.ReleaseExecution(ctx, tenantID, id); releaseErr != nil {
-				return nil, errors.Join(err, fmt.Errorf("release tool approval execution: %w", releaseErr))
+				return port.MCPToolResult{}, errors.Join(err, fmt.Errorf("release tool approval execution: %w", releaseErr))
 			}
-			return nil, err
+			return port.MCPToolResult{}, err
 		}
 		if unknownErr := s.repo.MarkOutcomeUnknown(ctx, tenantID, id); unknownErr != nil {
-			return nil, errors.Join(err, fmt.Errorf("mark tool approval outcome unknown: %w", unknownErr))
+			return port.MCPToolResult{}, errors.Join(err, fmt.Errorf("mark tool approval outcome unknown: %w", unknownErr))
 		}
-		return nil, err
+		return port.MCPToolResult{}, err
 	}
 	if err := s.repo.MarkExecuted(ctx, tenantID, id); err != nil {
-		return nil, fmt.Errorf("mark tool approval executed: %w", err)
+		return port.MCPToolResult{}, fmt.Errorf("mark tool approval executed: %w", err)
 	}
 	return output, nil
 }

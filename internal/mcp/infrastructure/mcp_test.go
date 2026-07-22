@@ -2,12 +2,14 @@ package infrastructure
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -30,6 +32,29 @@ func TestHTTPClientErrorDoesNotExposeResponseBody(t *testing.T) {
 	if strings.Contains(err.Error(), "mcp-sensitive-sentinel") {
 		t.Fatalf("downstream response body leaked through error: %v", err)
 	}
+}
+
+func TestHTTPClientRejectsJSONRPCProtocolErrorWithoutLeakingMessage(t *testing.T) {
+	const sentinel = "mcp-private-protocol-error"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), `"method":"initialize"`) {
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"` + sentinel + `"}}`))
+	}))
+	defer server.Close()
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "server-1", Name: "test", Transport: "http", URL: server.URL, Timeout: time.Second,
+	}, zap.NewNop())
+	require.NoError(t, client.Connect(context.Background()))
+
+	_, err := client.CallTool(context.Background(), "failing_tool", map[string]any{})
+
+	require.ErrorContains(t, err, "MCP protocol error")
+	require.NotContains(t, err.Error(), sentinel)
 }
 
 type blockingMCPClient struct {

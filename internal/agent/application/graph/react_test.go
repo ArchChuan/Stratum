@@ -224,7 +224,7 @@ func TestBuildReActGraph_ApprovedDestructiveToolUsesExecutionGuardOnce(t *testin
 		AvailableTools: []port.ToolDefinition{{Name: "delete_order", ProviderType: "mcp", ServerID: "orders", CapabilityID: "delete_order", Metadata: map[string]any{"risk_level": "destructive"}}},
 		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) {
 			guardCalls++
-			return "ok", nil
+			return guardedToolOutput("ok"), nil
 		},
 	}, graph.RunConfig{MaxSteps: 5})
 	require.NoError(t, err)
@@ -375,7 +375,7 @@ func TestBuildReActGraph_ToolCall(t *testing.T) {
 		ToolExecutionFn: func(_ context.Context, request port.ToolExecutionRequest) (any, error) {
 			require.Equal(t, "math", request.Tool.ServerID)
 			require.Equal(t, "calc", request.Tool.CapabilityID)
-			return "42", nil
+			return guardedToolOutput("42"), nil
 		},
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
@@ -422,7 +422,7 @@ func TestBuildReActGraph_MCPToolCallRecordsProviderMetadata(t *testing.T) {
 			require.Equal(t, "server-1", request.Tool.ServerID)
 			require.Equal(t, "mcp_search", request.Tool.CapabilityID)
 			require.Equal(t, "status", request.Arguments["query"])
-			return "mcp result", nil
+			return guardedToolOutput("mcp result"), nil
 		},
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
@@ -448,10 +448,12 @@ func TestBuildReActGraph_MaxIterations(t *testing.T) {
 	require.NoError(t, err)
 
 	state := graph.ReActState{
-		Model:           "qwen-turbo",
-		Messages:        []port.LLMMessage{{Role: "user", Content: "loop"}},
-		AvailableTools:  []port.ToolDefinition{{Name: "noop", ProviderType: "mcp", ServerID: "test", Metadata: map[string]any{"risk_level": "read"}}},
-		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) { return "ok", nil },
+		Model:          "qwen-turbo",
+		Messages:       []port.LLMMessage{{Role: "user", Content: "loop"}},
+		AvailableTools: []port.ToolDefinition{{Name: "noop", ProviderType: "mcp", ServerID: "test", Metadata: map[string]any{"risk_level": "read"}}},
+		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return guardedToolOutput("ok"), nil
+		},
 	}
 	_, err = cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 4})
 	require.ErrorContains(t, err, "max steps")
@@ -499,10 +501,12 @@ func TestBuildReActGraph_TokensAccumulatedOverMultipleSteps(t *testing.T) {
 	require.NoError(t, err)
 
 	state := graph.ReActState{
-		Model:           "qwen-turbo",
-		Messages:        []port.LLMMessage{{Role: "user", Content: "go"}},
-		AvailableTools:  []port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "test", Metadata: map[string]any{"risk_level": "read"}}},
-		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) { return "ok", nil },
+		Model:          "qwen-turbo",
+		Messages:       []port.LLMMessage{{Role: "user", Content: "go"}},
+		AvailableTools: []port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "test", Metadata: map[string]any{"risk_level": "read"}}},
+		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return guardedToolOutput("ok"), nil
+		},
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
 	require.NoError(t, err)
@@ -522,4 +526,8 @@ func TestBuildReActGraph_ContextTimeout(t *testing.T) {
 	}
 	_, err = cg.Invoke(ctx, state, graph.RunConfig{MaxSteps: 5})
 	require.Error(t, err)
+}
+
+func guardedToolOutput(content string) port.GuardedToolResult {
+	return port.GuardedToolResult{ModelContent: content, Summary: content, Untrusted: true}
 }
