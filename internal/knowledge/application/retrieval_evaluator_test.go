@@ -65,6 +65,25 @@ func TestEvaluateRetrievalCoversNoAnswerAndDependencyFailure(t *testing.T) {
 	}
 }
 
+func TestEvaluateRetrievalSanitizesSensitiveDependencyFailure(t *testing.T) {
+	sensitive := errors.New("POST https://user:password@example.test/search?api_key=secret-token: " +
+		"response body contains private document content")
+	_, err := NewRetrievalEvaluator(&fakeEvaluationRetriever{err: sensitive}).EvaluateRetrieval(
+		reqctx.WithTenantID(context.Background(), "tenant-1"), RetrievalSnapshot{
+			WorkspaceID: "workspace-1", WorkspaceName: "support", EmbeddingModel: "embedding-3",
+			QueryMode: "vector", TopK: 5, Reranking: "none", QueryRewrite: "none",
+		}, RetrievalCase{Query: "query"})
+	if !errors.Is(err, ErrRetrievalDependency) || !errors.Is(err, sensitive) {
+		t.Fatalf("dependency error lost classification/cause: %v", err)
+	}
+	message := err.Error()
+	for _, leaked := range []string{"example.test", "password", "api_key", "secret-token", "private document", "response body"} {
+		if strings.Contains(message, leaked) {
+			t.Fatalf("dependency error leaked %q: %s", leaked, message)
+		}
+	}
+}
+
 func TestRetrievalSnapshotValidationRejectsUnsupportedRuntime(t *testing.T) {
 	base := RetrievalSnapshot{WorkspaceID: "workspace-1", WorkspaceName: "support", EmbeddingModel: "embedding-3",
 		QueryMode: domain.DefaultQueryMode, TopK: 5, Reranking: "none", QueryRewrite: "none"}

@@ -37,6 +37,7 @@ type knowledgeSnapshotSource interface {
 }
 
 type knowledgeRetrievalSnapshot struct {
+	TenantID          string  `json:"tenant_id"`
 	WorkspaceID       string  `json:"workspace_id"`
 	WorkspaceName     string  `json:"workspace_name"`
 	DocumentSetHash   string  `json:"document_set_hash"`
@@ -56,8 +57,9 @@ func (s knowledgeRetrievalSnapshot) evaluationSnapshot() knowledgeapp.RetrievalS
 }
 
 func (s knowledgeRetrievalSnapshot) validate() error {
-	if strings.TrimSpace(s.DocumentSetHash) == "" || strings.TrimSpace(s.RerankingIdentity) == "" {
-		return errors.New("evaluation Knowledge adapter: document and reranking identities required")
+	if strings.TrimSpace(s.TenantID) == "" || strings.TrimSpace(s.DocumentSetHash) == "" ||
+		strings.TrimSpace(s.RerankingIdentity) == "" {
+		return errors.New("evaluation Knowledge adapter: tenant, document, and reranking identities required")
 	}
 	return s.evaluationSnapshot().Validate()
 }
@@ -94,7 +96,7 @@ func (a knowledgeEvaluationAdapter) CreatePublishedBaseline(
 	if err != nil {
 		return evaldomain.ResourceRef{}, err
 	}
-	snapshot := knowledgeRetrievalSnapshot{WorkspaceID: workspace.ID, WorkspaceName: workspace.Name,
+	snapshot := knowledgeRetrievalSnapshot{TenantID: tenantID, WorkspaceID: workspace.ID, WorkspaceName: workspace.Name,
 		DocumentSetHash: documentSetHash, EmbeddingIdentity: workspace.Config.EmbeddingModel,
 		RerankingIdentity: knowledgeRerankingIdentity, QueryMode: workspace.Config.QueryMode,
 		TopK: workspace.Config.TopK, ScoreThreshold: knowledgeDefaultScoreThreshold,
@@ -264,6 +266,9 @@ func (a knowledgeEvaluationAdapter) loadPublished(
 			fmt.Errorf("evaluation Knowledge adapter: decode revision: %w", err)
 	}
 	if snapshot.WorkspaceName != ref.ResourceID {
+		return evaldomain.ResourceRevision{}, knowledgeRetrievalSnapshot{}, evalport.ErrCenterResourceNotFound
+	}
+	if snapshot.TenantID != tenantID {
 		return evaldomain.ResourceRevision{}, knowledgeRetrievalSnapshot{}, evalport.ErrCenterResourceNotFound
 	}
 	if err := snapshot.validate(); err != nil {

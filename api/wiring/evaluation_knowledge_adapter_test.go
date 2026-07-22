@@ -42,7 +42,7 @@ func TestKnowledgeEvaluationAdapterCreatesPublishedImmutableBaseline(t *testing.
 }
 
 func TestKnowledgeEvaluationAdapterCandidateIsBoundedIdempotentAndExact(t *testing.T) {
-	snapshot := knowledgeRetrievalSnapshot{WorkspaceID: "workspace-id", WorkspaceName: "support",
+	snapshot := knowledgeRetrievalSnapshot{TenantID: "tenant-1", WorkspaceID: "workspace-id", WorkspaceName: "support",
 		DocumentSetHash: "documents", EmbeddingIdentity: "embedding-3", QueryMode: "hybrid", TopK: 5,
 		ScoreThreshold: 0.2, RerankingIdentity: knowledgeRerankingIdentity, Reranking: "none", QueryRewrite: "none"}
 	revisions := publishedKnowledgeRevisions(t, snapshot)
@@ -80,7 +80,7 @@ func TestKnowledgeEvaluationAdapterRequiresPublishedTenantRevisionAndSafeOutput(
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := knowledgeRetrievalSnapshot{WorkspaceID: "workspace-id", WorkspaceName: "support",
+	snapshot := knowledgeRetrievalSnapshot{TenantID: "tenant-1", WorkspaceID: "workspace-id", WorkspaceName: "support",
 		DocumentSetHash: documentSetHash, EmbeddingIdentity: "embedding-3", QueryMode: "vector", TopK: 5,
 		RerankingIdentity: knowledgeRerankingIdentity, Reranking: "none", QueryRewrite: "none"}
 	retriever := &fakeKnowledgeRetriever{result: &knowledgeapp.RAGQueryResult{Sources: []knowledgeapp.Source{
@@ -109,6 +109,37 @@ func TestKnowledgeEvaluationAdapterRequiresPublishedTenantRevisionAndSafeOutput(
 	if _, err := (knowledgeEvaluationAdapter{revisions: &fakeKnowledgeRevisionService{found: false}}).ResolveRevision(
 		context.Background(), "other-tenant", knowledgeRef("published-1")); !errors.Is(err, evalport.ErrCenterResourceNotFound) {
 		t.Fatalf("expected tenant-safe not found, got %v", err)
+	}
+}
+
+func TestKnowledgeEvaluationAdapterRejectsReassociatedCrossTenantPayload(t *testing.T) {
+	snapshot := knowledgeRetrievalSnapshot{TenantID: "tenant-1", WorkspaceID: "workspace-id",
+		WorkspaceName: "support", DocumentSetHash: "documents", EmbeddingIdentity: "embedding-3",
+		RerankingIdentity: knowledgeRerankingIdentity, QueryMode: "vector", TopK: 5,
+		Reranking: "none", QueryRewrite: "none"}
+	revisions := publishedKnowledgeRevisions(t, snapshot)
+	adapter := knowledgeEvaluationAdapter{revisions: revisions}
+
+	_, err := adapter.ResolveRevision(context.Background(), "tenant-2", knowledgeRef("published-1"))
+	if !errors.Is(err, evalport.ErrCenterResourceNotFound) {
+		t.Fatalf("reassociated payload must be tenant-safe not found, got %v", err)
+	}
+	if strings.Contains(err.Error(), "tenant-1") {
+		t.Fatalf("ownership rejection leaked source tenant: %v", err)
+	}
+}
+
+func TestKnowledgeEvaluationAdapterCandidatePreservesTenantOwnership(t *testing.T) {
+	snapshot := knowledgeRetrievalSnapshot{TenantID: "tenant-1", WorkspaceID: "workspace-id",
+		WorkspaceName: "support", DocumentSetHash: "documents", EmbeddingIdentity: "embedding-3",
+		RerankingIdentity: knowledgeRerankingIdentity, QueryMode: "vector", TopK: 5,
+		Reranking: "none", QueryRewrite: "none"}
+	revisions := publishedKnowledgeRevisions(t, snapshot)
+	adapter := knowledgeEvaluationAdapter{revisions: revisions}
+	_, err := adapter.CreateCandidate(context.Background(), "tenant-1", knowledgeRef("published-1"),
+		evaldomain.CandidatePatch{ParameterPatch: map[string]any{"tenant_id": "tenant-2"}})
+	if err == nil {
+		t.Fatal("candidate changed immutable tenant ownership")
 	}
 }
 

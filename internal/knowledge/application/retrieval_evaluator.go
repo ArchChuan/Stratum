@@ -10,6 +10,20 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
+var ErrRetrievalDependency = errors.New("knowledge retrieval dependency unavailable")
+
+type retrievalDependencyError struct {
+	cause error
+}
+
+func (e retrievalDependencyError) Error() string { return ErrRetrievalDependency.Error() }
+
+func (e retrievalDependencyError) Unwrap() error { return e.cause }
+
+func (e retrievalDependencyError) Is(target error) bool {
+	return target == ErrRetrievalDependency || errors.Is(e.cause, target)
+}
+
 const (
 	MinimumEvaluationTopK = 1
 	MaximumEvaluationTopK = 100
@@ -101,7 +115,7 @@ func (e *RetrievalEvaluator) EvaluateRetrieval(
 		EmbeddingModel: snapshot.EmbeddingModel,
 	})
 	if err != nil {
-		return RetrievalEvaluation{}, fmt.Errorf("knowledge retrieval evaluator: retrieve: %w", err)
+		return RetrievalEvaluation{}, retrievalDependencyError{cause: err}
 	}
 	if result == nil {
 		return RetrievalEvaluation{}, errors.New("knowledge retrieval evaluator: empty retrieval result")
