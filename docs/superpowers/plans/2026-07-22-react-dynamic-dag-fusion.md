@@ -276,21 +276,21 @@ git commit -m "[refactor](agent): unify execution on ReAct"
 - Modify: `web/src/modules/agent/pages/CreateAgentPage.tsx`
 - Modify: `web/src/modules/agent/hooks/useEditAgentPage.ts`
 
-- [ ] **Step 1: Add failing compatibility tests**
+- [x] **Step 1: Add failing compatibility tests**
 
 Assert request `type` is accepted but ignored, responses always return `react`, and rows containing every historical type map to identical application configuration. In Vitest, assert create/update payloads contain no `type` while response parsing tolerates it.
 
-- [ ] **Step 2: Verify the tests fail**
+- [x] **Step 2: Verify the tests fail**
 
 Run: `go test ./api/http ./internal/agent/infrastructure/persistence -run 'Agent.*Type|HistoricalType'`
 Run: `cd web && npm test -- --run src/modules/agent/model/__tests__/agent.test.ts`
 Expected: at least one assertion fails because type still drives application/form state.
 
-- [ ] **Step 3: Implement compatibility-only mapping**
+- [x] **Step 3: Implement compatibility-only mapping**
 
 Keep JSON request/response fields required by frozen contracts, discard request values at the handler boundary, return literal `react`, and stop surfacing repository `type` as an application choice. Remove hidden/default frontend form `type` while leaving tolerant response schema parsing.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `go test ./api/http ./internal/agent/infrastructure/persistence -run 'Agent.*Type|HistoricalType|Contract'`
 Run: `cd web && npm test -- --run src/modules/agent/model/__tests__/agent.test.ts`
