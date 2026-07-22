@@ -22,7 +22,7 @@ func TestBuildReActGraph_DestructiveToolPausesBeforeExecution(t *testing.T) {
 	}}}}}
 	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
 	require.NoError(t, err)
-	executed := false
+	guardCalled := false
 	state := graph.ReActState{
 		TenantID: "tenant-1", TraceID: "trace-1", Model: "qwen-turbo",
 		Messages: []port.LLMMessage{{Role: "user", Content: "delete order"}},
@@ -30,16 +30,41 @@ func TestBuildReActGraph_DestructiveToolPausesBeforeExecution(t *testing.T) {
 			Name: "delete_order", ProviderType: "mcp", ServerID: "orders", CapabilityID: "delete_order",
 			Metadata: map[string]any{"risk_level": "destructive"},
 		}},
-		ToolCallFn: func(context.Context, string, string, map[string]any) (any, error) {
-			executed = true
-			return nil, nil
+		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) {
+			guardCalled = true
+			return nil, &port.ToolApprovalRequiredError{ToolName: "delete_order"}
 		},
 	}
 	_, err = cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 5})
 	var approvalErr *port.ToolApprovalRequiredError
 	require.True(t, errors.As(err, &approvalErr))
 	require.Equal(t, "delete_order", approvalErr.ToolName)
-	require.False(t, executed)
+	require.True(t, guardCalled)
+}
+
+func TestBuildReActGraph_ForgedToolCallUsesExecutionGuard(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{{ToolCalls: []port.ToolCall{{
+		ID: "forged-1", Name: "mcp:orders:delete", Arguments: map[string]any{"id": "order-1"},
+	}}}}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+	guardCalls := 0
+
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		TenantID: "tenant-1", Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "run"}},
+		AvailableTools: []port.ToolDefinition{{
+			Name: "mcp:orders:delete", ProviderType: "mcp", ServerID: "orders", CapabilityID: "delete",
+		}},
+		ToolExecutionFn: func(_ context.Context, request port.ToolExecutionRequest) (any, error) {
+			guardCalls++
+			require.Equal(t, "forged-1", request.ToolCallID)
+			return nil, &port.ToolApprovalRequiredError{ApprovalID: "approval-1"}
+		},
+	}, graph.RunConfig{MaxSteps: 5})
+
+	var approvalErr *port.ToolApprovalRequiredError
+	require.ErrorAs(t, err, &approvalErr)
+	require.Equal(t, 1, guardCalls)
 }
 
 func TestBuildReActGraph_FinalInstructionFitsContextBudget(t *testing.T) {
@@ -178,34 +203,33 @@ func TestBuildReActGraph_UnclassifiedToolAlsoRequiresApproval(t *testing.T) {
 	_, err = cg.Invoke(context.Background(), graph.ReActState{
 		Model: "qwen-turbo", Messages: []port.LLMMessage{{Role: "user", Content: "run"}},
 		AvailableTools: []port.ToolDefinition{{Name: "unknown_risk", ProviderType: "mcp", ServerID: "server"}},
-		ToolCallFn:     func(context.Context, string, string, map[string]any) (any, error) { return "bad", nil },
+		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return nil, &port.ToolApprovalRequiredError{}
+		},
 	}, graph.RunConfig{MaxSteps: 5})
 	var approvalErr *port.ToolApprovalRequiredError
 	require.True(t, errors.As(err, &approvalErr))
 }
 
-func TestBuildReActGraph_ApprovedDestructiveToolBypassesApprovalOnce(t *testing.T) {
+func TestBuildReActGraph_ApprovedDestructiveToolUsesExecutionGuardOnce(t *testing.T) {
 	stub := &capGWSequence{responses: []port.CapabilityResponse{
 		{ToolCalls: []port.ToolCall{{ID: "new-call", Name: "delete_order", Arguments: map[string]any{"id": "o1"}}}},
 		{Content: "deleted"},
 	}}
 	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
 	require.NoError(t, err)
-	bypasses := 0
-	normal := false
+	guardCalls := 0
 	out, err := cg.Invoke(context.Background(), graph.ReActState{
 		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "delete"}},
 		AvailableTools: []port.ToolDefinition{{Name: "delete_order", ProviderType: "mcp", ServerID: "orders", CapabilityID: "delete_order", Metadata: map[string]any{"risk_level": "destructive"}}},
-		ApprovedToolCallFn: func(_ context.Context, serverID, toolName string, args map[string]any) (any, bool, error) {
-			bypasses++
-			return "ok", true, nil
+		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) {
+			guardCalls++
+			return guardedToolOutput("ok"), nil
 		},
-		ToolCallFn: func(context.Context, string, string, map[string]any) (any, error) { normal = true; return nil, nil },
 	}, graph.RunConfig{MaxSteps: 5})
 	require.NoError(t, err)
 	require.Equal(t, "deleted", out.Output)
-	require.Equal(t, 1, bypasses)
-	require.False(t, normal)
+	require.Equal(t, 1, guardCalls)
 }
 
 // capGWSequence drives LLM responses in sequence; tool always returns fixed resp.
@@ -348,10 +372,10 @@ func TestBuildReActGraph_ToolCall(t *testing.T) {
 		Model:          "qwen-turbo",
 		Messages:       []port.LLMMessage{{Role: "user", Content: "calc 6*7"}},
 		AvailableTools: []port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ProviderID: "math", ServerID: "math", Metadata: map[string]any{"risk_level": "read"}}},
-		ToolCallFn: func(_ context.Context, serverID, toolName string, _ map[string]any) (any, error) {
-			require.Equal(t, "math", serverID)
-			require.Equal(t, "calc", toolName)
-			return "42", nil
+		ToolExecutionFn: func(_ context.Context, request port.ToolExecutionRequest) (any, error) {
+			require.Equal(t, "math", request.Tool.ServerID)
+			require.Equal(t, "calc", request.Tool.CapabilityID)
+			return guardedToolOutput("42"), nil
 		},
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
@@ -394,11 +418,11 @@ func TestBuildReActGraph_MCPToolCallRecordsProviderMetadata(t *testing.T) {
 			ServerID:     "server-1",
 			Metadata:     map[string]any{"risk_level": "read"},
 		}},
-		ToolCallFn: func(_ context.Context, serverID, toolName string, input map[string]any) (any, error) {
-			require.Equal(t, "server-1", serverID)
-			require.Equal(t, "mcp_search", toolName)
-			require.Equal(t, "status", input["query"])
-			return "mcp result", nil
+		ToolExecutionFn: func(_ context.Context, request port.ToolExecutionRequest) (any, error) {
+			require.Equal(t, "server-1", request.Tool.ServerID)
+			require.Equal(t, "mcp_search", request.Tool.CapabilityID)
+			require.Equal(t, "status", request.Arguments["query"])
+			return guardedToolOutput("mcp result"), nil
 		},
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
@@ -427,7 +451,9 @@ func TestBuildReActGraph_MaxIterations(t *testing.T) {
 		Model:          "qwen-turbo",
 		Messages:       []port.LLMMessage{{Role: "user", Content: "loop"}},
 		AvailableTools: []port.ToolDefinition{{Name: "noop", ProviderType: "mcp", ServerID: "test", Metadata: map[string]any{"risk_level": "read"}}},
-		ToolCallFn:     func(context.Context, string, string, map[string]any) (any, error) { return "ok", nil },
+		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return guardedToolOutput("ok"), nil
+		},
 	}
 	_, err = cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 4})
 	require.ErrorContains(t, err, "max steps")
@@ -478,7 +504,9 @@ func TestBuildReActGraph_TokensAccumulatedOverMultipleSteps(t *testing.T) {
 		Model:          "qwen-turbo",
 		Messages:       []port.LLMMessage{{Role: "user", Content: "go"}},
 		AvailableTools: []port.ToolDefinition{{Name: "calc", ProviderType: "mcp", ServerID: "test", Metadata: map[string]any{"risk_level": "read"}}},
-		ToolCallFn:     func(context.Context, string, string, map[string]any) (any, error) { return "ok", nil },
+		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return guardedToolOutput("ok"), nil
+		},
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
 	require.NoError(t, err)
@@ -498,4 +526,8 @@ func TestBuildReActGraph_ContextTimeout(t *testing.T) {
 	}
 	_, err = cg.Invoke(ctx, state, graph.RunConfig{MaxSteps: 5})
 	require.Error(t, err)
+}
+
+func guardedToolOutput(content string) port.GuardedToolResult {
+	return port.GuardedToolResult{ModelContent: content, Summary: content, Untrusted: true}
 }

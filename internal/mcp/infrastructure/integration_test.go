@@ -5,12 +5,52 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/mcp/infrastructure/testserver"
 	"go.uber.org/zap"
 )
+
+func TestBaseClientAgainstDeterministicFakeServer(t *testing.T) {
+	server := testserver.New(t)
+	server.SetTools([]testserver.Tool{{
+		Name: "read_order", InputSchema: map[string]any{"type": "object"},
+		OutputSchema: map[string]any{"type": "object"},
+	}})
+	server.SetBehavior("read_order", testserver.Behavior{Result: map[string]any{
+		"structuredContent": map[string]any{"id": "order-1"},
+	}})
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "fake", Name: "fake", Transport: "streamable-http", URL: server.URL(), Timeout: time.Second,
+	}, zap.NewNop())
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	tools, err := client.ListTools(context.Background())
+	if err != nil || len(tools) != 1 || tools[0].Name != "read_order" {
+		t.Fatalf("tools=%#v err=%v", tools, err)
+	}
+	result, err := client.CallTool(context.Background(), "read_order", map[string]any{"id": "order-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(result)
+	if !strings.Contains(string(encoded), "structuredContent") || server.Attempts("read_order") != 1 {
+		t.Fatalf("result=%s attempts=%d", encoded, server.Attempts("read_order"))
+	}
+
+	server.SetBehavior("read_order", testserver.Behavior{ProtocolError: true})
+	if _, err := client.CallTool(context.Background(), "read_order", map[string]any{}); err == nil {
+		t.Fatal("protocol error unexpectedly succeeded")
+	}
+	server.SetBehavior("read_order", testserver.Behavior{Disconnect: true})
+	if _, err := client.CallTool(context.Background(), "read_order", map[string]any{}); err == nil {
+		t.Fatal("disconnect unexpectedly succeeded")
+	}
+}
 
 // TestMCPIntegration 测试 MCP 系统的端到端集成
 func TestMCPIntegration(t *testing.T) {

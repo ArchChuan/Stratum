@@ -1,6 +1,6 @@
 # Agent Chat Flow
 
-> 当前事实基线：`2c93938`（2026-07-21）。路由入口见 `api/http/router.go`，执行与审批编排见
+> 当前事实基线：2026-07-22 工具权限 Harness 实现。路由入口见 `api/http/router.go`，执行与审批编排见
 > `internal/agent/application/agent_service.go`，ReAct 工具循环见
 > `internal/agent/application/graph/react.go`。
 
@@ -59,6 +59,7 @@ stateDiagram-v2
     pending --> approved: admin approves
     approved --> executing: atomic execution claim
     executing --> approved: MCP call failed, retry allowed
+    executing --> unknown_outcome: request may have reached MCP
     executing --> executed: MCP call succeeded once
     executed --> completed: Agent execution resumes with the same ID
 ```
@@ -73,6 +74,9 @@ stateDiagram-v2
    server、tool 和 arguments 绕过审批一次。
 6. 执行前以原子更新把审批从 `approved` claim 为 `executing`；MCP 失败回到 `approved`，成功转为
    `executed`，防止并发重复执行。
+7. 只有能够证明请求未发送或确定失败时才能回到 `approved`；发送后的超时、取消、断连和半响应进入
+   `unknown_outcome`，不能由用户重试。
+8. 工具执行前重新授权，执行结果经过确定性的 Result Guard 后才进入下一轮 LLM 上下文。
 
 ## Effective Permissions
 

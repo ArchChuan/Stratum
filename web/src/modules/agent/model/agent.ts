@@ -96,6 +96,13 @@ export interface ToolApproval {
 	toolName: string;
 	serverId: string;
 	riskLevel: string;
-	status: string;
+	status: 'pending' | 'approved' | 'rejected' | 'expired' | 'unknown_outcome' | 'authorization_denied' | string;
 	expiresAt?: string;
+}
+
+export interface ToolApprovalResumeResult {
+  status: 'completed';
+  output: string;
+  steps: number;
+  tokensUsed: number;
 }

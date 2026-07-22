@@ -71,6 +71,7 @@ type ToolDefinition struct {
 	Name         string         `json:"name"`
 	Description  string         `json:"description"`
 	InputSchema  map[string]any `json:"input_schema"`
+	OutputSchema map[string]any `json:"output_schema,omitempty"`
 	ProviderType string         `json:"-"`
 	ProviderID   string         `json:"-"`
 	ServerID     string         `json:"-"`

@@ -44,6 +44,7 @@ type ToolApprovalRepo interface {
 	Decide(ctx context.Context, tenantID, approvalID, decision, decidedBy, reason string, now time.Time) error
 	ClaimExecution(ctx context.Context, tenantID, approvalID string) error
 	ReleaseExecution(ctx context.Context, tenantID, approvalID string) error
+	MarkOutcomeUnknown(ctx context.Context, tenantID, approvalID string) error
 	MarkExecuted(ctx context.Context, tenantID, approvalID string) error
 	ListPending(ctx context.Context, tenantID string) ([]domain.ToolApproval, error)
 }

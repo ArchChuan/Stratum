@@ -11,6 +11,7 @@ import {
   type ExecuteAgentPayload,
 	type StreamCallbacks,
 	type ToolApproval,
+	type ToolApprovalResumeResult,
 } from '../model/agent';
 
 import { AGENT_EXEC_TIMEOUT_MS, DEFAULT_PAGE_SIZE } from '@/constants';
@@ -44,7 +45,10 @@ export const agentApi = {
 		}));
 	},
 	decideToolApproval: (id: string, decision: 'approved' | 'rejected', reason = '') => api.post(`/agents/tool-approvals/${id}/decision`, { decision, reason }),
-	resumeToolApproval: (id: string) => api.post(`/agents/tool-approvals/${id}/resume`),
+	resumeToolApproval: async (id: string): Promise<ToolApprovalResumeResult> => {
+		const res = await api.post(`/agents/tool-approvals/${id}/resume`);
+		return res.data as ToolApprovalResumeResult;
+	},
 };
 
 export const conversationApi = {

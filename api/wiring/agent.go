@@ -2,6 +2,7 @@ package wiring
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
@@ -46,6 +47,33 @@ type ragSearchAdapter struct {
 	rag *knowledge.RAGService
 }
 
+type tenantMemberRoleService interface {
+	GetMemberRole(ctx context.Context, tenantID, userID string) (string, error)
+}
+
+type agentToolUserScopeResolver struct {
+	members tenantMemberRoleService
+}
+
+func (r agentToolUserScopeResolver) ResolveToolUserScope(
+	ctx context.Context,
+	tenantID, userID, _, _ string,
+) (agentport.ToolUserScope, error) {
+	if r.members == nil {
+		return agentport.ToolUserScope{}, fmt.Errorf("resolve agent tool user scope: tenant membership service unavailable")
+	}
+	role, err := r.members.GetMemberRole(ctx, tenantID, userID)
+	if err != nil {
+		return agentport.ToolUserScope{}, fmt.Errorf("resolve agent tool user scope: %w", err)
+	}
+	switch role {
+	case "member", "admin", "owner":
+		return agentport.ToolUserScope{UserActive: true, AllowsTool: true}, nil
+	default:
+		return agentport.ToolUserScope{}, fmt.Errorf("resolve agent tool user scope: unsupported tenant role")
+	}
+}
+
 func (a ragSearchAdapter) SearchKnowledge(
 	ctx context.Context, tenantID string, workspaceIDs []string, query string, topK int,
 ) (string, error) {
@@ -60,6 +88,13 @@ func skillVersionService(c *Container) *skillapp.VersionService {
 		return nil
 	}
 	return c.Skill.VersionService
+}
+
+func tenantMemberService(c *Container) tenantMemberRoleService {
+	if c.IAM == nil {
+		return nil
+	}
+	return c.IAM.TenantService
 }
 
 // publishedSkillActivationResolver adapts skill/application's context-neutral
@@ -176,11 +211,14 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		TracePayloadStore: a.TracePayloadStore,
 		CheckpointStore:   a.CheckpointStore,
 		ApprovalService:   a.ApprovalService,
-		Logger:            c.Logger,
+		ToolAuthorizer: agent.NewToolAuthorizer(agentToolUserScopeResolver{
+			members: tenantMemberService(c),
+		}),
+		Logger: c.Logger,
 	}
 	if c.MCP != nil {
 		deps.MCPTools = c.MCP.AgentToolProvider
-		deps.MCPToolExecutor = agentMCPExecutor{manager: c.MCP.Manager}
+		deps.MCPToolExecutor = agentMCPExecutor{clients: c.MCP.Manager}
 		deps.MCPToolPolicy = agentMCPPolicyResolver{service: c.MCP.Service}
 	}
 	if c.Knowledge != nil && c.Knowledge.RAGService != nil {

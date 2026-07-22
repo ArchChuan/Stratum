@@ -10,9 +10,10 @@ type Server struct {
 
 // Tool describes an MCP tool descriptor.
 type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description"`
+	InputSchema  map[string]interface{} `json:"inputSchema"`
+	OutputSchema map[string]interface{} `json:"outputSchema,omitempty"`
 }
 
 // AuthType identifies the authentication scheme used for streamable-http transport.

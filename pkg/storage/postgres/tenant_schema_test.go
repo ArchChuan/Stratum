@@ -299,6 +299,11 @@ func TestTenantSchemaContainsMCPToolPolicyAndEncryptedApprovals(t *testing.T) {
 		"CHECK (risk_level IN ('read', 'write_reversible', 'destructive', 'unclassified'))",
 		"CREATE TABLE IF NOT EXISTS agent_tool_approvals",
 		"encrypted_payload TEXT NOT NULL",
+		"arguments_digest  TEXT        NOT NULL DEFAULT ''",
+		"ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS decision_id",
+		"ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS arguments_digest",
+		"ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS skill_revisions_digest",
+		"ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS policy_version",
 		"status TEXT NOT NULL DEFAULT 'pending'",
 		"'waiting_approval'",
 	} {
@@ -310,6 +315,23 @@ func TestTenantSchemaContainsMCPToolPolicyAndEncryptedApprovals(t *testing.T) {
 	approvalEnd := strings.Index(sql[approvalAt:], ");")
 	if approvalAt >= 0 && approvalEnd >= 0 && strings.Contains(sql[approvalAt:approvalAt+approvalEnd], "arguments_json") {
 		t.Fatal("approval payload must not be stored as plaintext JSONB")
+	}
+}
+
+func TestTenantSchemaUpgradesToolApprovalStatusForUnknownOutcome(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	drop := "ALTER TABLE agent_tool_approvals DROP CONSTRAINT IF EXISTS agent_tool_approvals_status_check"
+	add := "CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed', 'unknown_outcome'))"
+	dropAt, addAt := strings.Index(sql, drop), strings.LastIndex(sql, add)
+	if dropAt == -1 || addAt == -1 {
+		t.Fatalf("tenant schema must rebuild approval status constraint for unknown outcomes")
+	}
+	if dropAt > addAt {
+		t.Fatalf("approval status constraint must be dropped before it is rebuilt")
 	}
 }
 

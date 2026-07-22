@@ -326,14 +326,23 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 }
 
 func (c *BaseClient) sendRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {
+	var resp *MCPResponse
+	var err error
 	switch c.config.Transport {
 	case "stdio":
-		return c.sendStdioRequest(ctx, req)
+		resp, err = c.sendStdioRequest(ctx, req)
 	case "http", "streamable-http":
-		return c.sendHTTPRequest(ctx, req)
+		resp, err = c.sendHTTPRequest(ctx, req)
 	default:
 		return nil, fmt.Errorf("unsupported transport: %s", c.config.Transport)
 	}
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Error) > 0 && string(resp.Error) != "null" {
+		return nil, fmt.Errorf("MCP protocol error")
+	}
+	return resp, nil
 }
 
 func (c *BaseClient) sendStdioRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {

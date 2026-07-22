@@ -2,6 +2,7 @@
 package infrastructure
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
@@ -82,10 +83,10 @@ type MCPRequest struct {
 
 // MCPResponse 定义 MCP 响应
 type MCPResponse struct {
-	JSONRPC string      `json:"jsonrpc,omitempty"`
-	ID      int         `json:"id,omitempty"`
-	Result  interface{} `json:"result"`
-	Error   string      `json:"error,omitempty"`
+	JSONRPC string          `json:"jsonrpc,omitempty"`
+	ID      int             `json:"id,omitempty"`
+	Result  interface{}     `json:"result"`
+	Error   json.RawMessage `json:"error,omitempty"`
 }
 
 // ConnectionPoolConfig 定义连接池配置

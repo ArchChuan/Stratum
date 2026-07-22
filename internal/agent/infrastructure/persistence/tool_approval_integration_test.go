@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,9 +22,22 @@ import (
 
 type countingMCPExecutor struct{ calls int }
 
-func (e *countingMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (any, error) {
+func (e *countingMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (port.MCPToolResult, error) {
 	e.calls++
-	return "deleted", nil
+	return port.MCPToolResult{}, nil
+}
+
+type atomicCountingMCPExecutor struct{ calls atomic.Int32 }
+
+func (e *atomicCountingMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (port.MCPToolResult, error) {
+	e.calls.Add(1)
+	return port.MCPToolResult{}, nil
+}
+
+type unknownOutcomeMCPExecutor struct{ err error }
+
+func (e unknownOutcomeMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (port.MCPToolResult, error) {
+	return port.MCPToolResult{}, &port.MCPToolExecutionError{Outcome: port.ToolExecutionOutcomeUnknown, Err: e.err}
 }
 
 func TestToolApprovalEncryptedDecisionAndExactlyOnceExecution(t *testing.T) {
@@ -77,5 +92,72 @@ func TestToolApprovalEncryptedDecisionAndExactlyOnceExecution(t *testing.T) {
 	}
 	if executor.calls != 1 {
 		t.Fatalf("executor calls=%d", executor.calls)
+	}
+
+	concurrentPayload := payload
+	concurrentPayload.ExecutionID = "exec-concurrent"
+	concurrentPayload.ToolCallID = "call-concurrent"
+	concurrentID, err := svc.Request(ctx, concurrentPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Decide(ctx, tenantID, concurrentID, "approved", "admin", ""); err != nil {
+		t.Fatal(err)
+	}
+	concurrentExecutor := &atomicCountingMCPExecutor{}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, callErr := svc.ExecuteApproved(
+				ctx, tenantID, concurrentID, "orders", "delete", concurrentPayload.Arguments, concurrentExecutor,
+			)
+			errs <- callErr
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	successes := 0
+	for callErr := range errs {
+		if callErr == nil {
+			successes++
+		}
+	}
+	if successes != 1 || concurrentExecutor.calls.Load() != 1 {
+		t.Fatalf("concurrent execution successes=%d executor_calls=%d", successes, concurrentExecutor.calls.Load())
+	}
+
+	unknownPayload := payload
+	unknownPayload.ExecutionID = "exec-unknown"
+	unknownPayload.ToolCallID = "call-unknown"
+	unknownID, err := svc.Request(ctx, unknownPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Decide(ctx, tenantID, unknownID, "approved", "admin", ""); err != nil {
+		t.Fatal(err)
+	}
+	dispatchErr := fmt.Errorf("response timeout")
+	if _, err := svc.ExecuteApproved(
+		ctx, tenantID, unknownID, "orders", "delete", unknownPayload.Arguments,
+		unknownOutcomeMCPExecutor{err: dispatchErr},
+	); err == nil {
+		t.Fatal("unknown outcome execution unexpectedly succeeded")
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT status FROM "`+schema+`".agent_tool_approvals WHERE id=$1`, unknownID,
+	).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "unknown_outcome" {
+		t.Fatalf("unknown outcome status=%q", status)
+	}
+	if err := approvals.ClaimExecution(ctx, tenantID, unknownID); err == nil {
+		t.Fatal("unknown outcome approval was claimable")
 	}
 }

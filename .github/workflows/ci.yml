@@ -16,6 +16,21 @@ jobs:
   guardrails:
     name: Migration Guardrails
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: tool_permission_ci_only
+          POSTGRES_DB: stratum_tool_permission
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stratum_tool_permission"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      STRATUM_TEST_POSTGRES_URL: postgres://postgres:tool_permission_ci_only@127.0.0.1:5432/stratum_tool_permission?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 
@@ -39,6 +54,9 @@ jobs:
 
       - name: Test risk regression guard
         run: bash scripts/quality/risk-regression-guard-test.sh
+
+      - name: Test Agent tool permission harness
+        run: make tool-permission-test
 
       - name: Enforce risk regression guard
         run: bash scripts/quality/risk-regression-guard.sh --all
@@ -122,10 +140,34 @@ jobs:
       - name: Run Workflow HTTP/PostgreSQL/worker E2E
         run: go test -tags=integration ./test/e2e -run TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E -count=1 -v
 
+  tool-permission-browser:
+    name: Agent Tool Permission Browser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Agent tool permission browser harness
+        working-directory: web
+        run: npx playwright test e2e/agent-tool-permission.spec.ts --project=mobile-320 --project=desktop-1440
+
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [guardrails, lint, test, workflow-e2e]
+    needs: [guardrails, lint, test, workflow-e2e, tool-permission-browser]
     steps:
       - uses: actions/checkout@v4
 

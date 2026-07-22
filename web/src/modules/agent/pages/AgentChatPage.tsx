@@ -1,4 +1,4 @@
-import { Alert, Button, Drawer, Space } from 'antd';
+import { Alert, Button, Drawer, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 
 import { ChatComposer } from '../components/ChatComposer';
@@ -12,8 +12,8 @@ import { useResponsive } from '@/shared/hooks/useResponsive';
 
 export const AgentChatPage = () => {
   const { isMobile } = useResponsive();
-	const [conversationDrawerOpen, setConversationDrawerOpen] = useState(false);
-	const { isAdmin } = useTenantRole();
+  const [conversationDrawerOpen, setConversationDrawerOpen] = useState(false);
+  const { isAdmin } = useTenantRole();
   const {
     agents,
     selectedAgent,
@@ -33,14 +33,17 @@ export const AgentChatPage = () => {
     handleSend,
     handleCreateConv,
     handleRenameConv,
-		handleDeleteConv,
-		pendingApprovals,
-		handleApprove,
-		handleReject,
-	} = useChatPage();
+    handleDeleteConv,
+    pendingApprovals,
+    approvalActionId,
+    handleApprove,
+    handleReject,
+  } = useChatPage();
 
-	const agentObj = agents.find((a) => a.id === selectedAgent);
-	const pendingApproval = pendingApprovals.find((item) => !item.agentId || item.agentId === selectedAgent);
+  const agentObj = agents.find((a) => a.id === selectedAgent);
+  const pendingApproval = pendingApprovals.find(
+    (item) => !item.agentId || item.agentId === selectedAgent,
+  );
   const sidebar = (
     <ChatConversationSidebar
       agents={agents}
@@ -94,7 +97,7 @@ export const AgentChatPage = () => {
           isMobile={isMobile}
           onOpenConversations={() => setConversationDrawerOpen(true)}
         />
-		<ChatMessageList
+        <ChatMessageList
           messages={messages}
           loadingMsgs={loadingMsgs}
           sending={sending}
@@ -104,15 +107,17 @@ export const AgentChatPage = () => {
           scrollContainerRef={scrollContainerRef}
           pinnedToBottomRef={pinnedToBottomRef}
           isMobile={isMobile}
-		/>
-		{pendingApproval && <Alert
-			type="warning" showIcon
-			message={`工具 ${pendingApproval.toolName} 需要审批`}
-			description={<Space direction={isMobile ? 'vertical' : 'horizontal'}>
-				<span>风险等级：{pendingApproval.riskLevel} · Server：{pendingApproval.serverId}</span>
-				{isAdmin && <><Button type="primary" danger onClick={() => handleApprove(pendingApproval.approvalId)}>批准并继续</Button><Button onClick={() => handleReject(pendingApproval.approvalId)}>拒绝</Button></>}
-			</Space>}
-		/>}
+        />
+        {pendingApproval && (
+          <ApprovalGate
+            approval={pendingApproval}
+            isAdmin={isAdmin}
+            isMobile={isMobile}
+            loading={approvalActionId === pendingApproval.approvalId}
+            onApprove={handleApprove}
+            onReject={handleReject}
+          />
+        )}
         <ChatComposer
           input={input}
           setInput={setInput}
@@ -123,5 +128,64 @@ export const AgentChatPage = () => {
         />
       </div>
     </div>
+  );
+};
+
+type ApprovalGateProps = {
+  approval: ReturnType<typeof useChatPage>['pendingApprovals'][number];
+  isAdmin: boolean;
+  isMobile: boolean;
+  loading: boolean;
+  onApprove: (approvalId: string) => void;
+  onReject: (approvalId: string) => void;
+};
+
+const ApprovalGate = ({ approval, isAdmin, isMobile, loading, onApprove, onReject }: ApprovalGateProps) => {
+  const expired = approval.status === 'expired' ||
+    (!!approval.expiresAt && new Date(approval.expiresAt).getTime() <= Date.now());
+  const unknown = approval.status === 'unknown_outcome';
+  const blocked = approval.status === 'authorization_denied';
+  const terminal = expired || unknown || blocked;
+  const message = unknown
+    ? '工具执行结果未知，需要人工对账'
+    : expired
+      ? '工具审批已过期'
+      : blocked
+        ? '权限已变更，工具执行已阻止'
+        : `工具 ${approval.toolName} 等待审批`;
+
+  return (
+    <Alert
+      type={terminal ? 'error' : 'warning'}
+      showIcon
+      message={message}
+      description={(
+        <Space direction={isMobile ? 'vertical' : 'horizontal'} wrap>
+          <Typography.Text>
+            风险等级：{approval.riskLevel} · Server：{approval.serverId}
+          </Typography.Text>
+          {!terminal && !isAdmin && <Typography.Text type="secondary">需要租户管理员处理</Typography.Text>}
+          {!terminal && isAdmin && (
+            <Space>
+              <Button
+                type="primary"
+                danger
+                loading={loading}
+                onClick={() => onApprove(approval.approvalId)}
+              >
+                批准并继续
+              </Button>
+              <Button
+                aria-label="拒绝"
+                disabled={loading}
+                onClick={() => onReject(approval.approvalId)}
+              >
+                拒绝
+              </Button>
+            </Space>
+          )}
+        </Space>
+      )}
+    />
   );
 };

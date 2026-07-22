@@ -19,10 +19,13 @@ func (s *PgToolApprovalStore) Create(ctx context.Context, tenantID string, a dom
 	var id string
 	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `INSERT INTO agent_tool_approvals
-		 (execution_id,trace_id,agent_id,user_id,tool_call_id,server_id,tool_name,risk_level,encrypted_payload,status,expires_at)
-		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10)
+		 (decision_id,execution_id,trace_id,agent_id,user_id,tool_call_id,server_id,tool_name,risk_level,
+		  arguments_digest,skill_revisions_digest,policy_version,encrypted_payload,status,expires_at)
+		 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14)
 		 ON CONFLICT(execution_id,tool_call_id) DO UPDATE SET execution_id=EXCLUDED.execution_id
-		 RETURNING id`, a.ExecutionID, a.TraceID, a.AgentID, a.UserID, a.ToolCallID, a.ServerID, a.ToolName, a.RiskLevel, a.EncryptedPayload, a.ExpiresAt).Scan(&id)
+		 RETURNING id`, a.DecisionID, a.ExecutionID, a.TraceID, a.AgentID, a.UserID, a.ToolCallID, a.ServerID,
+			a.ToolName, a.RiskLevel, a.ArgumentsDigest, a.SkillRevisionsDigest, a.PolicyVersion,
+			a.EncryptedPayload, a.ExpiresAt).Scan(&id)
 	})
 	if err != nil {
 		return "", fmt.Errorf("tool approval create: %w", err)
@@ -33,7 +36,13 @@ func (s *PgToolApprovalStore) Create(ctx context.Context, tenantID string, a dom
 func (s *PgToolApprovalStore) Get(ctx context.Context, tenantID, id string) (domain.ToolApproval, error) {
 	var a domain.ToolApproval
 	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT id,execution_id,trace_id,agent_id,user_id,tool_call_id,server_id,tool_name,risk_level,encrypted_payload,status,decided_by,decision_reason,created_at,decided_at,executed_at,expires_at FROM agent_tool_approvals WHERE id=$1`, id).Scan(&a.ID, &a.ExecutionID, &a.TraceID, &a.AgentID, &a.UserID, &a.ToolCallID, &a.ServerID, &a.ToolName, &a.RiskLevel, &a.EncryptedPayload, &a.Status, &a.DecidedBy, &a.DecisionReason, &a.CreatedAt, &a.DecidedAt, &a.ExecutedAt, &a.ExpiresAt)
+		return tx.QueryRow(ctx, `SELECT id,decision_id,execution_id,trace_id,agent_id,user_id,tool_call_id,server_id,tool_name,
+		 risk_level,arguments_digest,skill_revisions_digest,policy_version,encrypted_payload,status,decided_by,decision_reason,
+		 created_at,decided_at,executed_at,expires_at FROM agent_tool_approvals WHERE id=$1`, id).Scan(
+			&a.ID, &a.DecisionID, &a.ExecutionID, &a.TraceID, &a.AgentID, &a.UserID, &a.ToolCallID, &a.ServerID,
+			&a.ToolName, &a.RiskLevel, &a.ArgumentsDigest, &a.SkillRevisionsDigest, &a.PolicyVersion,
+			&a.EncryptedPayload, &a.Status, &a.DecidedBy, &a.DecisionReason, &a.CreatedAt, &a.DecidedAt, &a.ExecutedAt,
+			&a.ExpiresAt)
 	})
 	if err == pgx.ErrNoRows {
 		return domain.ToolApproval{}, domain.ErrApprovalNotFound
@@ -81,8 +90,27 @@ func (s *PgToolApprovalStore) ClaimExecution(ctx context.Context, tenantID, id s
 }
 func (s *PgToolApprovalStore) ReleaseExecution(ctx context.Context, tenantID, id string) error {
 	return execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE agent_tool_approvals SET status='approved' WHERE id=$1 AND status='executing'`, id)
-		return err
+		tag, err := tx.Exec(ctx, `UPDATE agent_tool_approvals SET status='approved' WHERE id=$1 AND status='executing'`, id)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return domain.ErrApprovalAlreadyExecuted
+		}
+		return nil
+	})
+}
+
+func (s *PgToolApprovalStore) MarkOutcomeUnknown(ctx context.Context, tenantID, id string) error {
+	return execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE agent_tool_approvals SET status='unknown_outcome' WHERE id=$1 AND status='executing'`, id)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return domain.ErrApprovalAlreadyExecuted
+		}
+		return nil
 	})
 }
 

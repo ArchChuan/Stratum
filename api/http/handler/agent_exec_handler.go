@@ -154,8 +154,7 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 			}
 			var approvalErr *agentport.ToolApprovalRequiredError
 			if errors.As(runErr, &approvalErr) {
-				payload, _ := json.Marshal(map[string]any{"status": "waiting_approval", "approvalId": approvalErr.ApprovalID, "toolCallId": approvalErr.ToolCallID, "serverId": approvalErr.ServerID, "toolName": approvalErr.ToolName, "riskLevel": approvalErr.RiskLevel})
-				writer.EnqueueEvent("approval_required", string(payload))
+				writer.EnqueueEvent("approval_required", string(approvalRequiredSSEPayload(approvalErr)))
 				return
 			}
 			h.logger.Error("agent stream execution failed", zap.String("agentId", id), zap.Error(runErr))
@@ -174,6 +173,15 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	}()
 
 	writer.WriteUntilClosed(0)
+}
+
+func approvalRequiredSSEPayload(approval *agentport.ToolApprovalRequiredError) []byte {
+	payload, _ := json.Marshal(map[string]any{
+		"status": "waiting_approval", "approvalId": approval.ApprovalID,
+		"toolCallId": approval.ToolCallID, "serverId": approval.ServerID,
+		"toolName": approval.ToolName, "riskLevel": approval.RiskLevel,
+	})
+	return payload
 }
 
 // intOption pulls a numeric option from req.Options. Returns 0 when

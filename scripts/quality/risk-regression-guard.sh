@@ -16,6 +16,7 @@ labels=(
   runtime-governance
   frontend-auth
   frontend-supply-chain
+  tool-permissions
 )
 declare -A selected=()
 
@@ -76,6 +77,11 @@ select_for_path() {
   case "${path}" in
     web/package.json|web/package-lock.json)
       selected[frontend-supply-chain]=1
+      ;;
+  esac
+  case "${path}" in
+    internal/agent/*|internal/mcp/*|internal/skill/*|internal/iam/*|api/http/*|api/wiring/agent.go|web/src/modules/agent/*)
+      selected[tool-permissions]=1
       ;;
   esac
 }
@@ -168,6 +174,9 @@ for label in "${labels[@]}"; do
       ;;
     frontend-supply-chain)
       run_check "${label}" npm --prefix web audit --audit-level=high
+      ;;
+    tool-permissions)
+      run_check "${label}" make tool-permission-test
       ;;
   esac
 done

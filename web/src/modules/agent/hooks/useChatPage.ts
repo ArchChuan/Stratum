@@ -6,6 +6,8 @@ import type { Agent, ChatMessage, Conversation, ToolApproval } from '../model/ag
 
 import { useChatStream } from './ChatStreamContext';
 
+import { extractErrorMessage } from '@/shared/lib/errorMessage';
+
 const SS_AGENT = 'chat:lastAgentId';
 const ssConv = (aid: string) => `chat:lastConvId:${aid}`;
 
@@ -22,6 +24,7 @@ export const useChatPage = () => {
   const [loadingConvs, setLoadingConvs] = useState(false);
 	const [loadingMsgs, setLoadingMsgs] = useState(false);
 	const [pendingApprovals, setPendingApprovals] = useState<ToolApproval[]>([]);
+	const [approvalActionId, setApprovalActionId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pinnedToBottomRef = useRef(true); // auto-scroll only when user is at the bottom
@@ -209,11 +212,18 @@ export const useChatPage = () => {
       setMessages((prev) =>
         prev.map((m) => (m.id === msgId ? { ...m, role: 'error', content: streamError } : m)),
       );
+    } else if (streamApproval) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId ? { ...m, content: '工具调用等待审批' } : m,
+        ),
+      );
     }
   }, [
     streamDone,
     streamResult,
     streamError,
+    streamApproval,
     streamConversationId,
     selectedConv,
     accumulatedContent,
@@ -305,19 +315,55 @@ export const useChatPage = () => {
     [conversations, selectedConv],
 	);
 
-	const handleApprove = useCallback(async (approvalID:string) => {
+	const handleApprove = useCallback(async (approvalID: string) => {
+		setApprovalActionId(approvalID);
 		try {
-			await agentApi.decideToolApproval(approvalID,'approved');
-			const res=await agentApi.resumeToolApproval(approvalID);
-			setPendingApprovals((rows)=>rows.filter((row)=>row.approvalId!==approvalID));
-			const output=String(res.data?.output||'操作已执行');
-			setMessages((rows)=>[...rows,{id:`approval-${Date.now()}`,role:'assistant',content:output,created_at:new Date().toISOString()} as ChatMessage]);
-		} catch { msg.error('批准或恢复执行失败'); }
-	},[]);
-	const handleReject = useCallback(async (approvalID:string) => {
-		try { await agentApi.decideToolApproval(approvalID,'rejected'); setPendingApprovals((rows)=>rows.filter((row)=>row.approvalId!==approvalID)); }
-		catch { msg.error('拒绝审批失败'); }
-	},[]);
+			await agentApi.decideToolApproval(approvalID, 'approved');
+			const result = await agentApi.resumeToolApproval(approvalID);
+			setPendingApprovals((rows) => rows.filter((row) => row.approvalId !== approvalID));
+			setMessages((rows) => [
+				...rows,
+				{
+					id: `approval-${Date.now()}`,
+					role: 'assistant',
+					content: result.output || '工具执行完成',
+					created_at: new Date().toISOString(),
+				} as ChatMessage,
+			]);
+			msg.success({ content: '工具执行完成', duration: 2 });
+		} catch (err) {
+			const detail = extractErrorMessage(err, '批准或恢复执行失败');
+			const normalized = detail.toLowerCase();
+			const status = normalized.includes('outcome is unknown')
+				? 'unknown_outcome'
+				: normalized.includes('expired')
+					? 'expired'
+					: normalized.includes('authorization') || normalized.includes('permission')
+						? 'authorization_denied'
+						: 'approved';
+			setPendingApprovals((rows) => rows.map((row) => (
+				row.approvalId === approvalID ? { ...row, status } : row
+			)));
+			msg.error({
+				content: status === 'unknown_outcome' ? '工具执行结果未知，需要人工对账' : detail,
+				duration: 0,
+			});
+		} finally {
+			setApprovalActionId(null);
+		}
+	}, []);
+	const handleReject = useCallback(async (approvalID: string) => {
+		setApprovalActionId(approvalID);
+		try {
+			await agentApi.decideToolApproval(approvalID, 'rejected');
+			setPendingApprovals((rows) => rows.filter((row) => row.approvalId !== approvalID));
+			msg.success({ content: '已拒绝工具执行', duration: 2 });
+		} catch (err) {
+			msg.error({ content: extractErrorMessage(err, '拒绝审批失败'), duration: 0 });
+		} finally {
+			setApprovalActionId(null);
+		}
+	}, []);
 
   return {
     agents,
@@ -340,6 +386,7 @@ export const useChatPage = () => {
     handleRenameConv,
 		handleDeleteConv,
 		pendingApprovals,
+		approvalActionId,
 		handleApprove,
 		handleReject,
     cancelStream,

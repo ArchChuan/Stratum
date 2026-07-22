@@ -436,6 +436,7 @@ ALTER TABLE agent_execution_checkpoints ADD CONSTRAINT agent_execution_checkpoin
 
 CREATE TABLE IF NOT EXISTS agent_tool_approvals (
     id                UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    decision_id       TEXT        NOT NULL DEFAULT '',
     execution_id      TEXT        NOT NULL,
     trace_id          TEXT        NOT NULL DEFAULT '',
     agent_id          TEXT        NOT NULL DEFAULT '',
@@ -445,9 +446,12 @@ CREATE TABLE IF NOT EXISTS agent_tool_approvals (
     tool_name         TEXT        NOT NULL,
     risk_level        TEXT        NOT NULL
         CHECK (risk_level IN ('destructive', 'unclassified')),
+    arguments_digest  TEXT        NOT NULL DEFAULT '',
+    skill_revisions_digest TEXT    NOT NULL DEFAULT '',
+    policy_version    TEXT        NOT NULL DEFAULT '',
     encrypted_payload TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed')),
+        CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed', 'unknown_outcome')),
     decided_by        TEXT        NOT NULL DEFAULT '',
     decision_reason   TEXT        NOT NULL DEFAULT '',
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -456,6 +460,13 @@ CREATE TABLE IF NOT EXISTS agent_tool_approvals (
     expires_at        TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '30 minutes',
     UNIQUE (execution_id, tool_call_id)
 );
+ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS decision_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS arguments_digest TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS skill_revisions_digest TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS policy_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_approvals DROP CONSTRAINT IF EXISTS agent_tool_approvals_status_check;
+ALTER TABLE agent_tool_approvals ADD CONSTRAINT agent_tool_approvals_status_check
+    CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed', 'unknown_outcome'));
 CREATE INDEX IF NOT EXISTS idx_agent_tool_approvals_pending
 ON agent_tool_approvals (status, expires_at, created_at);
 
