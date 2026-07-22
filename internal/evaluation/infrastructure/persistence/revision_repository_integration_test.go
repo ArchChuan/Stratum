@@ -18,7 +18,10 @@ import (
 func TestPgRevisionRepositoryCreateDuplicateGetAndTenantIsolation(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
-		t.Skip("TEST_DATABASE_URL not set; PostgreSQL revision repository integration test requires a real tenant database")
+		databaseURL = os.Getenv("STRATUM_TEST_POSTGRES_URL")
+	}
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL/STRATUM_TEST_POSTGRES_URL not set; PostgreSQL revision repository integration test requires a real tenant database")
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, databaseURL)

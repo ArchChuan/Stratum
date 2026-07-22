@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+const maxAgentContextTokens = 1_000_000
+
 type AgentBindingKind string
 
 const (
@@ -150,15 +152,11 @@ func (r AgentRevision) ApplyCandidate(patch AgentCandidatePatch) (AgentRevision,
 }
 
 func (r AgentRevision) SafeSummary() map[string]any {
-	enabled := map[string]int{"skill": 0, "mcp": 0, "knowledge": 0}
-	for _, binding := range r.Bindings {
-		if binding.Enabled {
-			enabled[string(binding.Kind)]++
-		}
-	}
 	return map[string]any{
-		"model": r.Model, "max_iterations": r.MaxIterations, "enabled_bindings": enabled,
-		"prompt_present": strings.TrimSpace(r.SystemPrompt) != "",
+		"resource_name":  r.AgentID,
+		"version_label":  "baseline",
+		"changed_fields": []string{},
+		"change_types":   []string{},
 	}
 }
 
@@ -189,8 +187,8 @@ func bindingKey(kind AgentBindingKind, id string) string {
 }
 
 func validateModelParameters(params ModelParameters) error {
-	if params.MaxContextTokens < 0 {
-		return errors.New("agent revision: token limits cannot be negative")
+	if params.MaxContextTokens < 0 || params.MaxContextTokens > maxAgentContextTokens {
+		return fmt.Errorf("agent revision: max context tokens must be between 0 and %d", maxAgentContextTokens)
 	}
 	return nil
 }

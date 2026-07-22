@@ -247,8 +247,14 @@ func (s *AgentService) ExecuteRevision(
 	_, options := s.assembleOptions(ctx, a, req, meta, executionID)
 	options = append(options, WithExecutionID(executionID))
 	start := time.Now()
-	result, err := a.Execute(context.WithoutCancel(ctx), req.Query, options...)
+	execCtx, cancel := revisionExecutionContext(ctx)
+	defer cancel()
+	result, err := a.Execute(execCtx, req.Query, options...)
 	return result, int(time.Since(start).Milliseconds()), err
+}
+
+func revisionExecutionContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), constants.AgentExecTimeout)
 }
 
 func (s *AgentService) buildRevisionAgent(revision domain.AgentRevision) (*BaseAgent, error) {

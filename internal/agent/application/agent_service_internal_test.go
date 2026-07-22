@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
 
@@ -15,6 +17,19 @@ func TestParseAgentTypeWireIsCompatibilityOnly(t *testing.T) {
 		if got := parseAgentTypeWire(value); got != domain.ReActAgent {
 			t.Fatalf("parseAgentTypeWire(%q) = %q, want react", value, got)
 		}
+	}
+}
+
+func TestRevisionExecutionContextUsesAgentBudget(t *testing.T) {
+	ctx, cancel := revisionExecutionContext(context.Background())
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("revision execution has no deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > constants.AgentExecTimeout {
+		t.Fatalf("revision execution budget = %v", remaining)
 	}
 }
 

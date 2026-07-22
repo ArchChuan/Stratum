@@ -159,6 +159,10 @@ func (a agentEvaluationAdapter) ExecuteRevision(
 	if a.agents == nil {
 		return evalport.ExecutionResult{}, errors.New("evaluation Agent adapter: executor unavailable")
 	}
+	ctx, err := evaluationAgentContext(ctx, tenantID)
+	if err != nil {
+		return evalport.ExecutionResult{}, err
+	}
 	revision, snapshot, found, err := a.get(ctx, tenantID, ref)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
@@ -329,14 +333,34 @@ func agentCandidateIdempotencyKey(tenantID string, baseline evaldomain.ResourceR
 }
 
 func agentCandidateSafeSummary(baseline, candidate agentdomain.AgentRevision) map[string]any {
-	summary := candidate.SafeSummary()
-	summary["changed"] = map[string]bool{
-		"prompt":         baseline.SystemPrompt != candidate.SystemPrompt,
-		"model":          baseline.Model != candidate.Model || baseline.ModelParameters != candidate.ModelParameters,
-		"max_iterations": baseline.MaxIterations != candidate.MaxIterations,
-		"bindings":       !bindingsEqual(baseline.Bindings, candidate.Bindings),
+	changed := make([]string, 0, 4)
+	types := make([]string, 0, 4)
+	appendChange := func(field, changeType string, condition bool) {
+		if condition {
+			changed = append(changed, field)
+			types = append(types, changeType)
+		}
 	}
-	return summary
+	appendChange("system_prompt", "modified", baseline.SystemPrompt != candidate.SystemPrompt)
+	appendChange("model", "modified", baseline.Model != candidate.Model)
+	appendChange("model_parameters", "modified", baseline.ModelParameters != candidate.ModelParameters)
+	appendChange("max_iterations", "modified", baseline.MaxIterations != candidate.MaxIterations)
+	appendChange("bindings", "modified", !bindingsEqual(baseline.Bindings, candidate.Bindings))
+	return map[string]any{
+		"resource_name":  candidate.AgentID,
+		"version_label":  "candidate",
+		"changed_fields": changed,
+		"change_types":   types,
+	}
+}
+
+func evaluationAgentContext(ctx context.Context, tenantID string) (context.Context, error) {
+	if strings.TrimSpace(tenantID) == "" {
+		return nil, errors.New("evaluation Agent adapter: tenant ID required")
+	}
+	return postgres.WithTenant(ctx, &postgres.TenantContext{
+		TenantID: tenantID, UserID: "evaluation-worker", Role: postgres.RoleTenantAdmin,
+	}), nil
 }
 
 func bindingsEqual(left, right []agentdomain.AgentBinding) bool {

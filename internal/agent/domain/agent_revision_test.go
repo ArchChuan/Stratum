@@ -71,3 +71,11 @@ func TestAgentRevisionValidateRequiresExplicitAgentType(t *testing.T) {
 		t.Fatal("expected missing agent type to be rejected")
 	}
 }
+
+func TestAgentRevisionRejectsUnboundedContextTokens(t *testing.T) {
+	revision := AgentRevision{AgentID: "agent-1", Type: ReActAgent, SystemPrompt: "baseline",
+		Model: "qwen-plus", MaxIterations: 5, ModelParameters: ModelParameters{MaxContextTokens: 1_000_001}}
+	if err := revision.Validate(); err == nil {
+		t.Fatal("expected excessive context token limit to be rejected")
+	}
+}
