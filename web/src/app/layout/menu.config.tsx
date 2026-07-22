@@ -1,7 +1,6 @@
 import {
   AppstoreOutlined,
   PlusCircleOutlined,
-  HistoryOutlined,
   DashboardOutlined,
   RobotOutlined,
   CommentOutlined,
@@ -36,7 +35,6 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
           icon: <PlusCircleOutlined />,
           label: <Link to="/agents/create">创建 Agent</Link>,
         } : null,
-        { key: '/history', icon: <HistoryOutlined />, label: <Link to="/history">执行历史</Link> },
       ],
     },
     {
@@ -117,7 +115,7 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
 };
 
 export const resolveOpenKeys = (pathname: string): string[] => {
-  if (['/agents', '/history'].some((p) => pathname.startsWith(p))) return ['agent-group'];
+  if (pathname.startsWith('/agents')) return ['agent-group'];
   if (pathname.startsWith('/skills')) return ['skill-group'];
   if (pathname.startsWith('/mcp')) return ['mcp-group'];
   if (pathname.startsWith('/tenant')) return ['tenant-group'];
