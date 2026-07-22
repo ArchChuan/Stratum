@@ -266,6 +266,45 @@ func TestAgentService_SnapshotRevisionCapturesAuthorizedBindings(t *testing.T) {
 	assert.ErrorContains(t, err, "tenant id required")
 }
 
+func TestAgentService_SnapshotRevisionPreservesExecutionParity(t *testing.T) {
+	repo := new(mockAgentRepo)
+	registry := application.NewRegistry(repo, zap.NewNop())
+	registry.SetGlobalSystemSuffix("platform rules")
+	registry.SetMemoryInjector(stubMemoryInjector{})
+	registry.SetRecallMemoryFn(func(context.Context, string, string, string, string, map[string]any) (string, error) {
+		return "", nil
+	})
+	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{
+		ID: "agent-1", Type: domain.ReActAgent, SystemPrompt: "prompt", LLMModel: "model", MaxIterations: 4,
+		StuckThreshold: 2, KnowledgeWorkspaceIDs: []string{"workspace-1"},
+		KnowledgeWorkspaceNames: []string{"Workspace"}, KnowledgeWorkspaceDescriptions: []string{"Description"},
+	}, true, nil)
+	svc := application.NewAgentService(application.AgentServiceDeps{Registry: registry, Logger: zap.NewNop()})
+
+	revision, err := svc.SnapshotRevision(context.Background(), "tenant-1", "agent-1")
+	assert.NoError(t, err)
+	assert.Equal(t, "platform rules", revision.GlobalSystemSuffix)
+	assert.Equal(t, 2, revision.StuckThreshold)
+	assert.Equal(t, []string{"Workspace"}, revision.KnowledgeWorkspaceNames)
+	assert.True(t, revision.MemoryInjectorRequired)
+	assert.True(t, revision.RecallMemoryRequired)
+}
+
+func TestAgentService_ExecuteRevisionFailsClosedWhenMemoryHookIsUnavailable(t *testing.T) {
+	svc := application.NewAgentService(application.AgentServiceDeps{Logger: zap.NewNop()})
+	revision := domain.AgentRevision{AgentID: "agent-1", Type: domain.ReActAgent,
+		SystemPrompt: "prompt", Model: "model", MaxIterations: 4, MemoryInjectorRequired: true}
+	_, _, err := svc.ExecuteRevision(context.Background(), revision, application.ExecRequest{Query: "hello"},
+		application.ExecMeta{TenantID: "tenant-1"})
+	assert.ErrorContains(t, err, "requires memory injector")
+}
+
+type stubMemoryInjector struct{}
+
+func (stubMemoryInjector) BuildContext(context.Context, port.InjectionContext) (string, error) {
+	return "", nil
+}
+
 func TestAgentService_List(t *testing.T) {
 	svc, repo, _ := newTestService(t)
 	repo.On("GetAll", mock.Anything).Return([]*domain.AgentConfig{

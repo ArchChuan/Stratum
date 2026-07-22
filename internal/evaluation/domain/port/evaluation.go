@@ -95,6 +95,11 @@ type CreateRevisionInput struct {
 type RevisionRepository interface {
 	Create(context.Context, string, domain.ResourceRevision, string) (domain.ResourceRevision, bool, error)
 	Get(context.Context, string, domain.ResourceRef) (domain.ResourceRevision, bool, error)
+	Publish(context.Context, string, domain.ResourceRef) (domain.ResourceRevision, error)
+}
+
+type AgentRevisionProvider interface {
+	CreatePublishedBaseline(context.Context, string, string) (domain.ResourceRef, error)
 }
 
 type RevisionObjectStore interface {

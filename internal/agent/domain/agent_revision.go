@@ -19,9 +19,7 @@ const (
 )
 
 type ModelParameters struct {
-	Temperature      float64 `json:"temperature,omitempty"`
-	MaxTokens        int     `json:"max_tokens,omitempty"`
-	MaxContextTokens int     `json:"max_context_tokens,omitempty"`
+	MaxContextTokens int `json:"max_context_tokens,omitempty"`
 }
 
 type AgentBinding struct {
@@ -31,16 +29,22 @@ type AgentBinding struct {
 }
 
 type AgentRevision struct {
-	AgentID           string          `json:"agent_id"`
-	Type              AgentType       `json:"type"`
-	SystemPrompt      string          `json:"system_prompt"`
-	Model             string          `json:"model"`
-	EmbedModel        string          `json:"embed_model,omitempty"`
-	ModelParameters   ModelParameters `json:"model_parameters,omitempty"`
-	MaxIterations     int             `json:"max_iterations"`
-	Bindings          []AgentBinding  `json:"bindings"`
-	MemoryScope       string          `json:"memory_scope,omitempty"`
-	CheckpointEnabled bool            `json:"checkpoint_enabled,omitempty"`
+	AgentID                        string          `json:"agent_id"`
+	Type                           AgentType       `json:"type"`
+	SystemPrompt                   string          `json:"system_prompt"`
+	Model                          string          `json:"model"`
+	EmbedModel                     string          `json:"embed_model,omitempty"`
+	ModelParameters                ModelParameters `json:"model_parameters,omitempty"`
+	MaxIterations                  int             `json:"max_iterations"`
+	Bindings                       []AgentBinding  `json:"bindings"`
+	MemoryScope                    string          `json:"memory_scope,omitempty"`
+	CheckpointEnabled              bool            `json:"checkpoint_enabled,omitempty"`
+	StuckThreshold                 int             `json:"stuck_threshold,omitempty"`
+	GlobalSystemSuffix             string          `json:"global_system_suffix,omitempty"`
+	KnowledgeWorkspaceNames        []string        `json:"knowledge_workspace_names,omitempty"`
+	KnowledgeWorkspaceDescriptions []string        `json:"knowledge_workspace_descriptions,omitempty"`
+	MemoryInjectorRequired         bool            `json:"memory_injector_required,omitempty"`
+	RecallMemoryRequired           bool            `json:"recall_memory_required,omitempty"`
 }
 
 type AgentCandidatePatch struct {
@@ -185,10 +189,7 @@ func bindingKey(kind AgentBindingKind, id string) string {
 }
 
 func validateModelParameters(params ModelParameters) error {
-	if params.Temperature < 0 || params.Temperature > 2 {
-		return errors.New("agent revision: temperature must be between 0 and 2")
-	}
-	if params.MaxTokens < 0 || params.MaxContextTokens < 0 {
+	if params.MaxContextTokens < 0 {
 		return errors.New("agent revision: token limits cannot be negative")
 	}
 	return nil

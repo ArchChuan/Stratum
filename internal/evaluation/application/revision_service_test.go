@@ -145,6 +145,20 @@ func TestRevisionServiceRejectsSensitiveSafeSummaryBeforeUpload(t *testing.T) {
 	}
 }
 
+func TestRevisionServicePublishesDraftRevision(t *testing.T) {
+	revision := validRevision()
+	repo := &fakeRevisionRepository{publishResult: revision}
+	repo.publishResult.Status = domain.RevisionStatusPublished
+	service := NewRevisionService(&fakeRevisionObjectStore{}, repo)
+
+	published, err := service.Publish(context.Background(), "tenant-1", domain.ResourceRef{
+		Kind: revision.ResourceKind, ResourceID: revision.ResourceID, RevisionID: revision.ID,
+	})
+	if err != nil || published.Status != domain.RevisionStatusPublished || repo.publishCalls != 1 {
+		t.Fatalf("unexpected publish result: revision=%+v calls=%d err=%v", published, repo.publishCalls, err)
+	}
+}
+
 func validCreateRevisionInput() CreateRevisionInput {
 	return CreateRevisionInput{
 		ResourceKind:   domain.ResourceKindSkill,
@@ -199,12 +213,22 @@ func (f *fakeRevisionObjectStore) Delete(_ context.Context, ref port.RevisionPay
 }
 
 type fakeRevisionRepository struct {
-	createResult domain.ResourceRevision
-	created      bool
-	createErr    error
-	getResult    domain.ResourceRevision
-	getFound     bool
-	createCalls  int
+	createResult  domain.ResourceRevision
+	created       bool
+	createErr     error
+	getResult     domain.ResourceRevision
+	getFound      bool
+	createCalls   int
+	publishResult domain.ResourceRevision
+	publishErr    error
+	publishCalls  int
+}
+
+func (f *fakeRevisionRepository) Publish(
+	_ context.Context, _ string, _ domain.ResourceRef,
+) (domain.ResourceRevision, error) {
+	f.publishCalls++
+	return f.publishResult, f.publishErr
 }
 
 func (f *fakeRevisionRepository) Create(

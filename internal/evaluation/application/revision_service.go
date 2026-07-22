@@ -122,6 +122,25 @@ func (s *RevisionService) Get(
 	return revision, payload, true, nil
 }
 
+func (s *RevisionService) Publish(
+	ctx context.Context, tenantID string, ref domain.ResourceRef,
+) (domain.ResourceRevision, error) {
+	if s == nil || s.repository == nil {
+		return domain.ResourceRevision{}, fmt.Errorf("revision service: dependencies unavailable")
+	}
+	if strings.TrimSpace(tenantID) == "" {
+		return domain.ResourceRevision{}, fmt.Errorf("revision service: tenant id required")
+	}
+	if err := ref.Validate(); err != nil {
+		return domain.ResourceRevision{}, fmt.Errorf("revision service: validate publish reference: %w", err)
+	}
+	revision, err := s.repository.Publish(ctx, tenantID, ref)
+	if err != nil {
+		return domain.ResourceRevision{}, fmt.Errorf("revision service: publish: %w", err)
+	}
+	return revision, nil
+}
+
 func (s *RevisionService) validateCreate(ctx context.Context, tenantID string, input CreateRevisionInput) error {
 	if s == nil || s.store == nil || s.repository == nil {
 		return fmt.Errorf("revision service: dependencies unavailable")

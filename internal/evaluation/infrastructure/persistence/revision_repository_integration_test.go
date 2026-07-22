@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
+	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -69,6 +70,17 @@ func TestPgRevisionRepositoryCreateDuplicateGetAndTenantIsolation(t *testing.T) 
 	}
 	if _, found, err := repo.Get(ctx, otherTenantID, ref); err != nil || found {
 		t.Fatalf("cross-tenant lookup leaked revision: found=%v err=%v", found, err)
+	}
+	published, err := repo.Publish(ctx, tenantID, ref)
+	if err != nil || published.Status != domain.RevisionStatusPublished {
+		t.Fatalf("unexpected publish result: revision=%+v err=%v", published, err)
+	}
+	replayed, err := repo.Publish(ctx, tenantID, ref)
+	if err != nil || replayed.Status != domain.RevisionStatusPublished {
+		t.Fatalf("publish replay must be idempotent: revision=%+v err=%v", replayed, err)
+	}
+	if _, err := repo.Publish(ctx, otherTenantID, ref); !errors.Is(err, port.ErrCenterResourceNotFound) {
+		t.Fatalf("cross-tenant publish must be not found, got %v", err)
 	}
 
 	invalid := integrationRevision("revision-invalid-parent")

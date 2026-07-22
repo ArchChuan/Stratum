@@ -20,9 +20,11 @@ import (
 type agentRevisionService interface {
 	Get(context.Context, string, evaldomain.ResourceRef) (evaldomain.ResourceRevision, []byte, bool, error)
 	Create(context.Context, string, evalport.CreateRevisionInput) (evaldomain.ResourceRevision, bool, error)
+	Publish(context.Context, string, evaldomain.ResourceRef) (evaldomain.ResourceRevision, error)
 }
 
 type agentRevisionExecutor interface {
+	SnapshotRevision(context.Context, string, string) (agentdomain.AgentRevision, error)
 	ExecuteRevision(context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta) (*agentapp.AgentResult, int, error)
 }
 
@@ -30,6 +32,45 @@ type agentEvaluationAdapter struct {
 	revisions agentRevisionService
 	agents    agentRevisionExecutor
 	actorID   string
+}
+
+func (a agentEvaluationAdapter) CreatePublishedBaseline(
+	ctx context.Context, tenantID, agentID string,
+) (evaldomain.ResourceRef, error) {
+	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(agentID) == "" {
+		return evaldomain.ResourceRef{}, errors.New("evaluation Agent adapter: tenant and agent IDs required")
+	}
+	if a.agents == nil {
+		return evaldomain.ResourceRef{}, errors.New("evaluation Agent adapter: Agent service unavailable")
+	}
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{
+		TenantID: tenantID, UserID: "evaluation-worker", Role: postgres.RoleTenantAdmin,
+	})
+	snapshot, err := a.agents.SnapshotRevision(ctx, tenantID, agentID)
+	if err != nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Agent adapter: snapshot baseline: %w", err)
+	}
+	contentHash, err := snapshot.ContentHash()
+	if err != nil {
+		return evaldomain.ResourceRef{}, err
+	}
+	actorID := strings.TrimSpace(a.actorID)
+	if actorID == "" {
+		actorID = "evaluation-worker"
+	}
+	created, _, err := a.revisions.Create(ctx, tenantID, evalport.CreateRevisionInput{
+		ResourceKind: evaldomain.ResourceKindAgent, ResourceID: agentID,
+		CreatedBy: actorID, IdempotencyKey: "agent-baseline-" + contentHash,
+		Source: evaldomain.RevisionSourceManual, Payload: snapshot, SafeSummary: snapshot.SafeSummary(),
+	})
+	if err != nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Agent adapter: create baseline: %w", err)
+	}
+	ref := evaldomain.ResourceRef{Kind: evaldomain.ResourceKindAgent, ResourceID: agentID, RevisionID: created.ID}
+	if _, err := a.revisions.Publish(ctx, tenantID, ref); err != nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Agent adapter: publish baseline: %w", err)
+	}
+	return ref, nil
 }
 
 func (a agentEvaluationAdapter) LoadOptimizableSnapshot(
@@ -96,6 +137,9 @@ func (a agentEvaluationAdapter) ResolveRevision(
 	if !found {
 		return evaldomain.ResourceRevision{}, evalport.ErrCenterResourceNotFound
 	}
+	if revision.Status != evaldomain.RevisionStatusPublished {
+		return evaldomain.ResourceRevision{}, evaldomain.ErrRevisionNotPublished
+	}
 	return revision, nil
 }
 
@@ -115,12 +159,15 @@ func (a agentEvaluationAdapter) ExecuteRevision(
 	if a.agents == nil {
 		return evalport.ExecutionResult{}, errors.New("evaluation Agent adapter: executor unavailable")
 	}
-	_, snapshot, found, err := a.get(ctx, tenantID, ref)
+	revision, snapshot, found, err := a.get(ctx, tenantID, ref)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
 	if !found {
 		return evalport.ExecutionResult{}, evalport.ErrCenterResourceNotFound
+	}
+	if revision.Status != evaldomain.RevisionStatusPublished {
+		return evalport.ExecutionResult{}, evaldomain.ErrRevisionNotPublished
 	}
 	query, err := evaluationCaseQuery(testCase.Input)
 	if err != nil {
@@ -150,8 +197,11 @@ func (a agentEvaluationAdapter) loadPublished(
 	if err != nil {
 		return evaldomain.ResourceRevision{}, agentdomain.AgentRevision{}, err
 	}
-	if !found || revision.Status != evaldomain.RevisionStatusPublished {
+	if !found {
 		return evaldomain.ResourceRevision{}, agentdomain.AgentRevision{}, evalport.ErrCenterResourceNotFound
+	}
+	if revision.Status != evaldomain.RevisionStatusPublished {
+		return evaldomain.ResourceRevision{}, agentdomain.AgentRevision{}, evaldomain.ErrRevisionNotPublished
 	}
 	return revision, snapshot, nil
 }
@@ -215,18 +265,12 @@ func parseAgentCandidatePatch(
 			if strings.TrimSpace(result.Model) == "" {
 				return result, errors.New("evaluation Agent adapter: model must be non-empty")
 			}
-		case "temperature":
-			parsed, ok := number(value)
-			if !ok {
-				return result, errors.New("evaluation Agent adapter: temperature must be numeric")
-			}
-			params.Temperature, parametersChanged = parsed, true
-		case "maxTokens":
+		case "max_context_tokens":
 			parsed, ok := integer(value)
 			if !ok {
-				return result, errors.New("evaluation Agent adapter: maxTokens must be an integer")
+				return result, errors.New("evaluation Agent adapter: max_context_tokens must be an integer")
 			}
-			params.MaxTokens, parametersChanged = parsed, true
+			params.MaxContextTokens, parametersChanged = parsed, true
 		case "max_iterations":
 			parsed, ok := integer(value)
 			if !ok {
@@ -278,17 +322,6 @@ func integer(value any) (int, bool) {
 	}
 }
 
-func number(value any) (float64, bool) {
-	switch typed := value.(type) {
-	case float64:
-		return typed, true
-	case int:
-		return float64(typed), true
-	default:
-		return 0, false
-	}
-}
-
 func agentCandidateIdempotencyKey(tenantID string, baseline evaldomain.ResourceRef, contentHash string) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{tenantID, string(baseline.Kind), baseline.ResourceID,
 		baseline.RevisionID, contentHash}, "\x00")))
@@ -329,3 +362,4 @@ func evaluationCaseQuery(input any) (string, error) {
 
 var _ evalport.ResourceAdapter = agentEvaluationAdapter{}
 var _ evalport.CandidateCreator = agentEvaluationAdapter{}
+var _ evalport.AgentRevisionProvider = agentEvaluationAdapter{}

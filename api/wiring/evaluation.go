@@ -31,6 +31,7 @@ type Evaluation struct {
 	FeedbackService     *evalapp.FeedbackService
 	QueryService        *evalapp.QueryService
 	CandidateService    *evalapp.CandidateCommandService
+	AgentProvider       evalport.AgentRevisionProvider
 }
 
 type evaluationResourceRouter struct {
@@ -437,6 +438,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	candidateCreators := map[evaldomain.ResourceKind]evalport.CandidateCreator{
 		evaldomain.ResourceKindSkill: manager,
 	}
+	var agentProvider evalport.AgentRevisionProvider
 	if c.Agent != nil && c.Agent.RevisionObjectStore != nil {
 		revisionService := evalapp.NewRevisionService(
 			evalpersist.RevisionObjectStoreAdapter{Store: c.Agent.RevisionObjectStore},
@@ -447,6 +449,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		}
 		resourceAdapters[evaldomain.ResourceKindAgent] = agentAdapter
 		candidateCreators[evaldomain.ResourceKindAgent] = agentAdapter
+		agentProvider = agentAdapter
 	}
 	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, suiteRepo)
 	jobService := evalapp.NewJobService(jobRepo, service)
@@ -474,6 +477,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		FeedbackService:     feedbackService,
 		QueryService:        evalapp.NewQueryService(queryRepo),
 		CandidateService:    evalapp.NewCandidateCommandService(candidateRepo),
+		AgentProvider:       agentProvider,
 	}
 	if c.Agent != nil && c.Agent.Service != nil {
 		c.Agent.Service.SetSkillRevisionResolver(experimentSkillRevisionResolver{service: experimentService})

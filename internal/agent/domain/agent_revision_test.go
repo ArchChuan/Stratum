@@ -5,7 +5,7 @@ import "testing"
 func TestAgentRevisionContentHashIsDeterministicAcrossBindingOrder(t *testing.T) {
 	left := AgentRevision{
 		AgentID: "agent-1", Type: ReActAgent, SystemPrompt: "be precise", Model: "qwen-plus", MaxIterations: 8,
-		ModelParameters: ModelParameters{Temperature: 0.2, MaxTokens: 2048},
+		ModelParameters: ModelParameters{MaxContextTokens: 2048},
 		Bindings: []AgentBinding{
 			{Kind: AgentBindingSkill, ID: "skill-b", Enabled: true},
 			{Kind: AgentBindingMCP, ID: "mcp:server:tool", Enabled: false},

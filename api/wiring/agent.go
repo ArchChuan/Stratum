@@ -219,6 +219,10 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		}),
 		Logger: c.Logger,
 	}
+	if c.Memory != nil {
+		deps.MemoryInjector = c.Memory.Injector
+		deps.RecallMemory = c.Memory.RecallFn
+	}
 	if c.MCP != nil {
 		deps.MCPTools = c.MCP.AgentToolProvider
 		deps.MCPToolExecutor = agentMCPExecutor{clients: c.MCP.Manager}

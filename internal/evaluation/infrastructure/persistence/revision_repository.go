@@ -133,6 +133,48 @@ func (r *PgRevisionRepository) Get(
 	return revision, found, err
 }
 
+func (r *PgRevisionRepository) Publish(
+	ctx context.Context, tenantID string, ref domain.ResourceRef,
+) (domain.ResourceRevision, error) {
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID})
+	var published domain.ResourceRevision
+	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		published, err = scanRevision(tx.QueryRow(ctx,
+			`UPDATE resource_revisions SET status='published'
+			 WHERE id=$1 AND resource_kind=$2 AND resource_id=$3 AND status='draft'
+			 RETURNING id, resource_kind, resource_id, COALESCE(parent_revision_id, ''), source, status,
+			           content_hash, payload_hash, payload_ref, safe_summary, created_by, created_at`,
+			ref.RevisionID, string(ref.Kind), ref.ResourceID))
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("revision repository: publish revision: %w", err)
+		}
+		existing, loadErr := scanRevision(tx.QueryRow(ctx,
+			`SELECT id, resource_kind, resource_id, COALESCE(parent_revision_id, ''), source, status,
+			        content_hash, payload_hash, payload_ref, safe_summary, created_by, created_at
+			 FROM resource_revisions WHERE id=$1 AND resource_kind=$2 AND resource_id=$3`,
+			ref.RevisionID, string(ref.Kind), ref.ResourceID))
+		if errors.Is(loadErr, pgx.ErrNoRows) {
+			return port.ErrCenterResourceNotFound
+		}
+		if loadErr != nil {
+			return fmt.Errorf("revision repository: load publish state: %w", loadErr)
+		}
+		if existing.Status != domain.RevisionStatusPublished {
+			return domain.ErrRevisionNotPublished
+		}
+		published = existing
+		return nil
+	})
+	if err != nil {
+		return domain.ResourceRevision{}, mapRevisionRepositoryError(err)
+	}
+	return published, nil
+}
+
 type revisionRow interface {
 	Scan(...any) error
 }

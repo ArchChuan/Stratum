@@ -46,6 +46,8 @@ type AgentServiceDeps struct {
 	CheckpointStore         CheckpointStore
 	MemoryCleaner           port.AgentMemoryCleaner
 	MemoryBuffer            port.BufferMemoryFn
+	MemoryInjector          port.MemoryInjector
+	RecallMemory            port.RecallMemoryFn
 	Metrics                 observability.MetricsProvider
 	Logger                  *zap.Logger
 }
@@ -186,10 +188,18 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 	revision := domain.AgentRevision{
 		AgentID: cfg.ID, Type: cfg.Type, SystemPrompt: cfg.SystemPrompt, Model: cfg.LLMModel,
 		EmbedModel: cfg.EmbedModel, MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
-		CheckpointEnabled: cfg.CheckpointEnabled,
-		ModelParameters:   domain.ModelParameters{MaxContextTokens: cfg.MaxContextTokens},
+		CheckpointEnabled:              cfg.CheckpointEnabled,
+		StuckThreshold:                 cfg.StuckThreshold,
+		KnowledgeWorkspaceNames:        append([]string(nil), cfg.KnowledgeWorkspaceNames...),
+		KnowledgeWorkspaceDescriptions: append([]string(nil), cfg.KnowledgeWorkspaceDescriptions...),
+		ModelParameters:                domain.ModelParameters{MaxContextTokens: cfg.MaxContextTokens},
 		Bindings: make([]domain.AgentBinding, 0,
 			len(cfg.AllowedSkills)+len(cfg.MCPToolIDs)+len(cfg.KnowledgeWorkspaceIDs)),
+	}
+	if base, ok := a.(*BaseAgent); ok {
+		revision.GlobalSystemSuffix = base.GlobalSystemSuffix
+		revision.MemoryInjectorRequired = base.MemoryInjector != nil
+		revision.RecallMemoryRequired = base.RecallMemoryFn != nil
 	}
 	for _, id := range cfg.AllowedSkills {
 		revision.Bindings = append(revision.Bindings,
@@ -220,8 +230,17 @@ func (s *AgentService) ExecuteRevision(
 	if err := revision.Validate(); err != nil {
 		return nil, 0, fmt.Errorf("agent service: validate revision: %w", err)
 	}
+	if revision.MemoryInjectorRequired && s.deps.MemoryInjector == nil {
+		return nil, 0, fmt.Errorf("agent service: revision requires memory injector")
+	}
+	if revision.RecallMemoryRequired && s.deps.RecallMemory == nil {
+		return nil, 0, fmt.Errorf("agent service: revision requires recall memory")
+	}
 	cfg := revisionConfig(revision)
 	a := NewBaseAgent(cfg, s.deps.Logger)
+	a.GlobalSystemSuffix = revision.GlobalSystemSuffix
+	a.MemoryInjector = s.deps.MemoryInjector
+	a.RecallMemoryFn = s.deps.RecallMemory
 	if s.deps.Metrics != nil {
 		a = a.WithMetrics(s.deps.Metrics)
 	}
@@ -238,7 +257,10 @@ func revisionConfig(revision domain.AgentRevision) *domain.AgentConfig {
 		ID: revision.AgentID, Type: revision.Type, SystemPrompt: revision.SystemPrompt,
 		LLMModel: revision.Model, EmbedModel: revision.EmbedModel, MaxIterations: revision.MaxIterations,
 		MaxContextTokens: revision.ModelParameters.MaxContextTokens, MemoryScope: revision.MemoryScope,
-		CheckpointEnabled: revision.CheckpointEnabled,
+		CheckpointEnabled:              revision.CheckpointEnabled,
+		StuckThreshold:                 revision.StuckThreshold,
+		KnowledgeWorkspaceNames:        append([]string(nil), revision.KnowledgeWorkspaceNames...),
+		KnowledgeWorkspaceDescriptions: append([]string(nil), revision.KnowledgeWorkspaceDescriptions...),
 	}
 	for _, binding := range revision.Bindings {
 		if !binding.Enabled {

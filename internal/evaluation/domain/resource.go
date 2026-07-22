@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+var ErrRevisionNotPublished = errors.New("resource revision is not published")
+
 type ResourceKind string
 
 const (
