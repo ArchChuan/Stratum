@@ -245,14 +245,14 @@ Expected: FAIL because `BaseAgent.Execute` still switches on type.
 
 Remove `AgentType`, architecture constants, `StuckThreshold`, old `PlanStep`/`StepResult`/`PlanRuntimeState`, the Planning alias, and the `switch agentType` branch. Always build the unified ReAct graph, wire checkpoint/runtime dependencies into `ReActState`, and retain the persisted database type only inside repository compatibility mapping.
 
-- [ ] **Step 4: Delete the fallback graph**
+- [x] **Step 4: Delete the fallback graph**
 
 Delete `BuildPlanExecuteGraph` and migrate its still-valid checkpoint integration case to explicit plan commands. Confirm no production references remain:
 
 Run: `rg -n 'PlanningAgent|BuildPlanExecuteGraph|StuckThreshold|PlanTriggered' --glob '!docs/**'`
 Expected: no matches.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run: `go test ./internal/agent/...`
 Expected: PASS.

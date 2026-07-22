@@ -8,10 +8,24 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"go.uber.org/zap"
 )
 
 const planCheckpointVersion = 1
+
+// PlanCheckpointWriter is the narrow persistence boundary used by ReAct plan actions.
+// BuildPlanExecuteGraph remains as a source-compatibility wrapper during migration.
+type PlanCheckpointWriter interface {
+	Upsert(ctx context.Context, tenantID string, cp domain.AgentExecutionCheckpoint) error
+}
+
+// BuildPlanExecuteGraph is retained only for callers compiled against the
+// removed lazy-planning API; all execution now uses the unified ReAct graph.
+func BuildPlanExecuteGraph(capGW port.CapabilityGateway, ledger TokenRecorder, _ PlanCheckpointWriter, _ func(context.Context, string, string, []domain.PlanStep), logger *zap.Logger) (*CompiledGraph[ReActState], error) {
+	return BuildReActGraph(capGW, ledger, logger)
+}
 
 var ErrUnsupportedPlanCheckpoint = errors.New("unsupported plan checkpoint version")
 
