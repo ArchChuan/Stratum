@@ -117,6 +117,7 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, memorydomain.ErrFactAlreadyDeleted):
 		return http.StatusConflict
 	case errors.Is(err, agentapp.ErrApprovalNotApproved),
+		errors.Is(err, agentapp.ErrApprovalOutcomeUnknown),
 		errors.Is(err, agentdomain.ErrApprovalAlreadyDecided),
 		errors.Is(err, agentdomain.ErrApprovalAlreadyExecuted),
 		errors.Is(err, workflowdomain.ErrRevisionConflict),

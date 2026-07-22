@@ -17,6 +17,7 @@ import (
 var (
 	ErrApprovalExpired         = errors.New("tool approval expired")
 	ErrApprovalNotApproved     = errors.New("tool approval is not approved")
+	ErrApprovalOutcomeUnknown  = errors.New("tool approval outcome is unknown")
 	ErrApprovedToolNotReplayed = errors.New("approved tool call was not replayed")
 	ErrApprovalBindingMismatch = errors.New("tool approval binding mismatch")
 )
@@ -119,7 +120,10 @@ func (s *ToolApprovalService) ApprovedPayload(ctx context.Context, tenantID, app
 	if !row.ExpiresAt.After(s.now()) {
 		return ToolApprovalPayload{}, ErrApprovalExpired
 	}
-	if row.Status != "approved" {
+	if row.Status == string(domain.ToolApprovalOutcomeUnknown) {
+		return ToolApprovalPayload{}, ErrApprovalOutcomeUnknown
+	}
+	if row.Status != string(domain.ToolApprovalApproved) {
 		return ToolApprovalPayload{}, ErrApprovalNotApproved
 	}
 	plain, err := pkgcrypto.Decrypt(s.key, row.EncryptedPayload)

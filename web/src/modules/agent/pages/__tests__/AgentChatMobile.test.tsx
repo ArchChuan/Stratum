@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createRef } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentChatPage } from '../AgentChatPage';
 
@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   send: vi.fn(),
   approve: vi.fn(),
   reject: vi.fn(),
+	isAdmin: true,
+	pendingApprovals: [] as Array<Record<string, string>>,
+	approvalActionId: null as string | null,
 }));
 
 vi.mock('@/shared/hooks/useResponsive', () => ({
@@ -21,7 +24,7 @@ vi.mock('@/shared/hooks/useResponsive', () => ({
 }));
 
 vi.mock('@/modules/iam', () => ({
-  useTenantRole: () => ({ isAdmin: true }),
+  useTenantRole: () => ({ isAdmin: mocks.isAdmin }),
 }));
 
 vi.mock('../../hooks/useChatPage', () => ({
@@ -51,13 +54,20 @@ vi.mock('../../hooks/useChatPage', () => ({
     handleCreateConv: mocks.create,
     handleRenameConv: mocks.rename,
     handleDeleteConv: mocks.remove,
-    pendingApprovals: [],
+	pendingApprovals: mocks.pendingApprovals,
+	approvalActionId: mocks.approvalActionId,
     handleApprove: mocks.approve,
     handleReject: mocks.reject,
   }),
 }));
 
 describe('AgentChatPage mobile layout', () => {
+	beforeEach(() => {
+		mocks.isAdmin = true;
+		mocks.pendingApprovals = [];
+		mocks.approvalActionId = null;
+	});
+
   it('opens the conversation drawer and closes it after selecting a conversation', async () => {
     render(<AgentChatPage />);
     expect(screen.queryByText('新建会话')).not.toBeInTheDocument();
@@ -133,4 +143,29 @@ describe('AgentChatPage mobile layout', () => {
       paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
     });
   });
+
+	it('shows approval commands only to tenant administrators', () => {
+		mocks.pendingApprovals = [{
+			approvalId: 'approval-1', agentId: 'agent-1', toolName: 'delete',
+			serverId: 'orders', riskLevel: 'destructive', status: 'pending',
+		}];
+		const view = render(<AgentChatPage />);
+		expect(screen.getByRole('button', { name: '批准并继续' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: '拒绝' })).toBeInTheDocument();
+
+		mocks.isAdmin = false;
+		view.rerender(<AgentChatPage />);
+		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
+		expect(screen.getByText('需要租户管理员处理')).toBeInTheDocument();
+	});
+
+	it('renders unknown outcomes as non-retryable reconciliation work', () => {
+		mocks.pendingApprovals = [{
+			approvalId: 'approval-1', agentId: 'agent-1', toolName: 'delete',
+			serverId: 'orders', riskLevel: 'destructive', status: 'unknown_outcome',
+		}];
+		render(<AgentChatPage />);
+		expect(screen.getByText('工具执行结果未知，需要人工对账')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
+	});
 });

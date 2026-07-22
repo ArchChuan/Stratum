@@ -137,6 +137,16 @@ func TestToolApprovalServiceRejectsExpiredApproval(t *testing.T) {
 	require.ErrorIs(t, err, ErrApprovalExpired)
 }
 
+func TestToolApprovalServiceReportsUnknownOutcomeDistinctly(t *testing.T) {
+	repo := &approvalRepoFake{row: domain.ToolApproval{
+		ID: "approval-1", Status: string(domain.ToolApprovalOutcomeUnknown), ExpiresAt: time.Now().Add(time.Minute),
+	}}
+	_, err := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("key")).ApprovedPayload(
+		context.Background(), "tenant-1", "approval-1",
+	)
+	require.ErrorIs(t, err, ErrApprovalOutcomeUnknown)
+}
+
 type failingMCPExecutor struct {
 	err error
 }
