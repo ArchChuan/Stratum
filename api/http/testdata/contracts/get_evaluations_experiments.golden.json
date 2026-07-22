@@ -4,6 +4,6 @@
     "method": "GET",
     "path": "/evaluations/experiments",
     "want_status": 200,
-    "want_body": {"items":[]}
+    "want_body": {"items":[{"id":"experiment-contract","resource_id":"agent-contract","stable_revision_id":"stable-contract","canary_revision_id":"canary-contract","status":"running","recommendation":"promote","resource_kind":"agent","stage_percent":100,"safety_stopped":false,"state_version":2,"promotion_evidence":{"eligible":true,"gates":{"quality":"passed","cost":"passed","latency":"passed","error_rate":"passed","security":"passed"},"blockers":[]},"created_at":"0001-01-01T00:00:00Z"}]}
   }
 ]

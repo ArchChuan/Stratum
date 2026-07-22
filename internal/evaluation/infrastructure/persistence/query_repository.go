@@ -221,7 +221,7 @@ func (r *PgCenterQueryRepository) ListExperiments(ctx context.Context, tenantID 
 		return page, e
 	}
 	e = r.tenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, e := tx.Query(ctx, `SELECT id,resource_kind,resource_id,stable_revision_id,canary_revision_id,status,stage_percent,recommendation,safety_stopped,state_version,created_at FROM evaluation_experiments WHERE ($1='' OR resource_kind=$1) AND ($2='' OR resource_id=$2) AND ($3='' OR status=$3) AND ($4::timestamptz IS NULL OR (created_at,id)<($4,$5)) ORDER BY created_at DESC,id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
+		rows, e := tx.Query(ctx, `SELECT id,resource_kind,resource_id,stable_revision_id,canary_revision_id,status,stage_percent,recommendation,safety_stopped,state_version,policy,decision_snapshot,created_at FROM evaluation_experiments WHERE ($1='' OR resource_kind=$1) AND ($2='' OR resource_id=$2) AND ($3='' OR status=$3) AND ($4::timestamptz IS NULL OR (created_at,id)<($4,$5)) ORDER BY created_at DESC,id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
 		if e != nil {
 			return e
 		}
@@ -229,11 +229,25 @@ func (r *PgCenterQueryRepository) ListExperiments(ctx context.Context, tenantID 
 		for rows.Next() {
 			var x domain.ExperimentSummary
 			var kind string
+			var policyJSON, snapshotJSON []byte
 			if e = rows.Scan(&x.ID, &kind, &x.ResourceID, &x.StableRevisionID, &x.CanaryRevisionID, &x.Status,
-				&x.StagePercent, &x.Recommendation, &x.SafetyStopped, &x.StateVersion, &x.CreatedAt); e != nil {
+				&x.StagePercent, &x.Recommendation, &x.SafetyStopped, &x.StateVersion, &policyJSON, &snapshotJSON,
+				&x.CreatedAt); e != nil {
 				return e
 			}
 			x.ResourceKind = domain.ResourceKind(kind)
+			var policy domain.PromotionPolicy
+			if e = json.Unmarshal(policyJSON, &policy); e != nil {
+				return fmt.Errorf("decode experiment policy: %w", e)
+			}
+			var snapshot struct {
+				Metrics *domain.StageMetrics `json:"metrics"`
+			}
+			if e = json.Unmarshal(snapshotJSON, &snapshot); e != nil {
+				return fmt.Errorf("decode experiment evidence: %w", e)
+			}
+			x.PromotionEvidence = domain.BuildPromotionEvidence(policy, snapshot.Metrics,
+				domain.Decision(x.Recommendation), x.SafetyStopped)
 			page.Items = append(page.Items, x)
 		}
 		return rows.Err()

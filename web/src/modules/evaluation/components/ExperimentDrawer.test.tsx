@@ -11,16 +11,24 @@ const base = {
   safety_stopped: false, state_version: 2, created_at: '2026-07-23T00:00:00Z',
   gates: { quality: 'passed' as const, cost: 'passed' as const, latency: 'passed' as const,
     error_rate: 'passed' as const, security: 'passed' as const },
+  promotion_evidence: { eligible: true, gates: { quality: 'passed' as const, cost: 'passed' as const,
+    latency: 'passed' as const, error_rate: 'passed' as const, security: 'passed' as const }, blockers: [] },
 };
+
+const blocked = (code: 'insufficient_samples' | 'insufficient_duration' | 'evidence_unavailable'
+  | 'guardrail_violation' | 'safety_stop' | 'recommendation_hold', message: string) => ({
+  ...base, promotion_evidence: { ...base.promotion_evidence, eligible: false,
+    blockers: [{ code, category: code, message }] },
+});
 
 describe('promotionBlockReason', () => {
   it.each([
-    [{ ...base, gates: { ...base.gates, quality: 'pending' as const } }, '样本量不足'],
-    [{ ...base, gates: { ...base.gates, latency: 'pending' as const } }, '观测时长不足'],
-    [{ ...base, gates: { ...base.gates, security: 'not_applicable' as const } }, '证据依赖暂不可用'],
-    [{ ...base, gates: { ...base.gates, cost: 'failed' as const } }, '成本门禁违反'],
-    [{ ...base, safety_stopped: true }, '安全停止已触发'],
-    [{ ...base, recommendation: 'hold' }, '系统建议继续观察'],
+    [blocked('insufficient_samples', '样本量不足'), '样本量不足'],
+    [blocked('insufficient_duration', '观测时长不足'), '观测时长不足'],
+    [blocked('evidence_unavailable', '证据依赖暂不可用'), '证据依赖暂不可用'],
+    [blocked('guardrail_violation', '成本门禁违反'), '成本门禁违反'],
+    [blocked('safety_stop', '安全停止已触发'), '安全停止已触发'],
+    [blocked('recommendation_hold', '系统建议继续观察'), '系统建议继续观察'],
   ])('distinguishes promotion blocker %#', (experiment, reason) => {
     expect(promotionBlockReason(experiment)).toContain(reason);
   });

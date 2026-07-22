@@ -36,7 +36,7 @@ export const ExperimentDrawer = ({ experiment, open, onClose, canManage, onPause
         <Descriptions.Item label="候选版本">{experiment.canary_revision_id}</Descriptions.Item>
       </Descriptions>
       <Typography.Title level={5}>已配置门禁</Typography.Title>
-      <Flex gap={8} wrap>{Object.entries(experiment.gates || {}).map(([key, value]) =>
+      <Flex gap={8} wrap>{Object.entries(experiment.promotion_evidence.gates).map(([key, value]) =>
         <span key={key}>{gateLabels[key]} <StatusTag value={value} /></span>)}</Flex>
       <Typography.Title level={5}>系统建议</Typography.Title>
       <Alert type={block ? 'warning' : 'info'} showIcon message={experiment.recommendation || '继续收集观测证据'}

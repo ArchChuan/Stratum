@@ -219,13 +219,20 @@ export const candidatePageSchema = page(candidateSummarySchema);
 export type CandidatePage = z.infer<typeof candidatePageSchema>;
 
 export const experimentGateSchema = z.enum(['passed', 'failed', 'pending', 'not_applicable']);
+const promotionEvidenceSchema = z.object({
+  eligible: z.boolean(),
+  gates: z.object({ quality: experimentGateSchema, cost: experimentGateSchema, latency: experimentGateSchema,
+    error_rate: experimentGateSchema, security: experimentGateSchema }).strict(),
+  blockers: z.array(z.object({ code: z.enum(['insufficient_samples', 'insufficient_duration', 'evidence_unavailable',
+    'guardrail_violation', 'safety_stop', 'recommendation_hold']), category: z.string(), message: z.string() }).strict()),
+}).strict();
 export const experimentSummarySchema = z.object({
   id: z.string(), resource_id: z.string(), stable_revision_id: z.string(), canary_revision_id: z.string(),
   status: z.string(), recommendation: z.string(), resource_kind: resourceKindSchema, stage_percent: z.number(),
   safety_stopped: z.boolean(), state_version: z.number().int().positive(), gates: z.object({
     quality: experimentGateSchema, cost: experimentGateSchema, latency: experimentGateSchema,
     error_rate: experimentGateSchema, security: experimentGateSchema,
-  }).strict().optional(), created_at: z.string(),
+  }).strict().optional(), promotion_evidence: promotionEvidenceSchema, created_at: z.string(),
 }).strict();
 export type ExperimentSummary = z.infer<typeof experimentSummarySchema>;
 export const experimentPageSchema = page(experimentSummarySchema);

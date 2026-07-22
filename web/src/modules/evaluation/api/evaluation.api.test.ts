@@ -40,6 +40,16 @@ describe('evaluation center api', () => {
     });
   });
 
+  it('parses serialized promotion evidence from the experiment center endpoint', async () => {
+    client.get.mockResolvedValue({ data: { items: [{ id: 'experiment-1', resource_id: 'agent-1',
+      stable_revision_id: 'stable-1', canary_revision_id: 'canary-1', status: 'running', recommendation: 'promote',
+      resource_kind: 'agent', stage_percent: 100, safety_stopped: false, state_version: 2,
+      promotion_evidence: { eligible: true, gates: { quality: 'passed', cost: 'passed', latency: 'passed',
+        error_rate: 'passed', security: 'passed' }, blockers: [] }, created_at: '2026-07-23T00:00:00Z' }] } });
+    const page = await evaluationApi.listExperiments();
+    expect(page.items[0].promotion_evidence.eligible).toBe(true);
+  });
+
   it.each([
     ['rejectCandidate', '/evaluations/candidates/candidate-1/reject'],
     ['pauseExperiment', '/evaluations/experiments/candidate-1/pause'],

@@ -15,7 +15,12 @@ const center = vi.hoisted(() => ({
     { id: 'r4', resource_id: 'knowledge-1', resource_kind: 'knowledge', status: 'active', stable_revision_id: 'knowledge-v1',
       safe_summary: { name: '产品知识库' }, created_at: '2026-07-23T00:00:00Z' },
   ] },
-  suites: { items: [] }, runs: { items: [] }, candidates: { items: [] }, experiments: { items: [] },
+  suites: { items: [] }, runs: { items: [] }, candidates: { items: [] }, experiments: { items: [{
+    id: 'experiment-1', resource_id: 'agent-1', stable_revision_id: 'stable-1', canary_revision_id: 'canary-1',
+    status: 'running', recommendation: 'promote', resource_kind: 'agent', stage_percent: 100, safety_stopped: false,
+    state_version: 2, promotion_evidence: { eligible: true, gates: { quality: 'passed', cost: 'passed',
+      latency: 'passed', error_rate: 'passed', security: 'passed' }, blockers: [] }, created_at: '2026-07-23T00:00:00Z',
+  }] },
   loading: false, error: '', canManageEvaluation: true, reload: vi.fn(), rejectCandidate: vi.fn(),
   pauseExperiment: vi.fn(), promoteExperiment: vi.fn(), rollbackExperiment: vi.fn(), createEvaluation: vi.fn(),
 }));
@@ -58,5 +63,12 @@ describe('EvaluationCenterPage', () => {
       resource: expect.objectContaining({ kind: 'agent', resource_id: 'agent-1', revision_id: 'agent-v1' }),
       name: '客服基线评测',
     })));
+  });
+
+  it('enables promotion from the real eligible experiment summary shape', () => {
+    render(<EvaluationCenterPage />);
+    fireEvent.click(screen.getByRole('tab', { name: '金丝雀实验 1' }));
+    fireEvent.click(screen.getByRole('button', { name: '详情' }));
+    expect(screen.getByRole('button', { name: /晋\s*级/ })).toBeEnabled();
   });
 });

@@ -40,6 +40,26 @@ func TestFeedbackServiceAutomaticallyEvaluatesReadyExperiment(t *testing.T) {
 	}
 }
 
+func TestFeedbackServicePersistsInsufficientSampleEvidence(t *testing.T) {
+	policy := domain.DefaultPromotionPolicy()
+	repo := &fakeFeedbackRepo{experiment: domain.Experiment{
+		ID: "experiment-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		StableRevisionID: "stable-1", CanaryRevisionID: "canary-1", Status: domain.ExperimentRunning,
+		Stage: 5, Policy: policy, StateVersion: 1,
+	}, stable: []domain.OnlineObservation{{Score: .5}}, canary: []domain.OnlineObservation{{Score: .6}}}
+	experimentRepo := &feedbackExperimentRepo{experiment: repo.experiment}
+	svc := NewFeedbackService(repo, NewExperimentService(experimentRepo),
+		feedbackEvidence("trace-low", repo, "canary-1", "canary"))
+	result, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		TraceID: "trace-low", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		Score: .6, IdempotencyKey: "feedback-low",
+	})
+	if err != nil || result.Experiment == nil || experimentRepo.decisionCount != 1 {
+		t.Fatalf("insufficient evidence was not persisted: result=%+v decisions=%d err=%v",
+			result, experimentRepo.decisionCount, err)
+	}
+}
+
 func TestFeedbackServiceRollsBackForEarlierStageSecurityViolation(t *testing.T) {
 	policy := domain.DefaultPromotionPolicy()
 	stable := make([]domain.OnlineObservation, policy.MinSamples)
@@ -234,6 +254,9 @@ func (f *fakeTraceEvidenceReader) ResolveBatch(
 }
 
 func (f *fakeFeedbackRepo) ActiveExperiment(_ context.Context, _ string, _, _ string) (domain.Experiment, bool, error) {
+	if f.experiment.ID == "" {
+		return domain.Experiment{}, false, nil
+	}
 	return f.experiment, true, nil
 }
 

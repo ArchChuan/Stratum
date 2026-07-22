@@ -89,7 +89,17 @@ func (s *FeedbackService) Record(
 		policy = domain.DefaultPromotionPolicy()
 	}
 	if len(stable) < policy.MinSamples || len(canary) < policy.MinSamples {
-		result.Experiment = &experiment
+		partialSamples := len(stable)
+		if len(canary) < partialSamples {
+			partialSamples = len(canary)
+		}
+		next, decision, evaluateErr := s.experiments.EvaluateStageIdempotent(ctx, tenantID, experiment.ID,
+			EvaluateStageInput{Metrics: domain.StageMetrics{Samples: partialSamples, ObservedMinutes: observedMinutes},
+				IdempotencyKey: evaluationIdempotencyKey(input.IdempotencyKey, experiment.ID)})
+		if evaluateErr != nil {
+			return FeedbackResult{}, evaluateErr
+		}
+		result.Experiment, result.Decision = &next, decision
 		return result, nil
 	}
 	stableScores, canaryScores := scores(stable), scores(canary)

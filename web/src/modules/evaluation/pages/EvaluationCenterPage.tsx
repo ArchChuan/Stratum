@@ -2,7 +2,6 @@ import { PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, Drawer, Empty, Flex, Select, Skeleton, Space, Table, Tabs, Typography, message } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 
-import { evaluationApi } from '../api/evaluation.api';
 import { CandidateDrawer } from '../components/CandidateDrawer';
 import { CreateEvaluationModal } from '../components/CreateEvaluationModal';
 import { EvaluationOverview } from '../components/EvaluationOverview';
@@ -12,7 +11,8 @@ import { RunDrawer } from '../components/RunDrawer';
 import { TimelineDrawer } from '../components/TimelineDrawer';
 import { StatusTag, displayLabel, drawerWidth } from '../components/evaluationView';
 import { useEvaluationCenter } from '../hooks/useEvaluationCenter';
-import type { CandidateSummary, ExperimentSummary, ResourceKind, ResourceSummary, RunSummary, TimelineEvent } from '../model/evaluation';
+import { useEvaluationTimeline } from '../hooks/useEvaluationTimeline';
+import type { CandidateSummary, ExperimentSummary, ResourceKind, RunSummary } from '../model/evaluation';
 
 import { useResponsive } from '@/shared/hooks';
 
@@ -30,9 +30,7 @@ export const EvaluationCenterPage = () => {
   const [runId, setRunId] = useState('');
   const [candidateId, setCandidateId] = useState('');
   const [experimentId, setExperimentId] = useState('');
-  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
-  const [timelineOpen, setTimelineOpen] = useState(false);
-  const [timelineLoading, setTimelineLoading] = useState(false);
+  const timeline = useEvaluationTimeline();
   const [createOpen, setCreateOpen] = useState(false);
   const resource = useMemo(() => center.resources.items.find((item) => item.id === resourceId) || null,
     [center.resources.items, resourceId]);
@@ -41,12 +39,6 @@ export const EvaluationCenterPage = () => {
   const experiment = center.experiments.items.find((item) => item.id === experimentId) || null;
 
   useEffect(() => { if (resourceId && !resource) setResourceId(''); }, [resource, resourceId]);
-  const openTimeline = async (value: ResourceSummary) => {
-    setTimelineOpen(true); setTimelineLoading(true);
-    try { setTimeline((await evaluationApi.getTimeline(value.resource_kind, value.resource_id)).items); }
-    catch { message.error({ content: '加载资源时间线失败', duration: 0 }); }
-    finally { setTimelineLoading(false); }
-  };
   const decide = async (action: () => Promise<unknown>, success: string) => {
     try { await action(); message.success({ content: success, duration: 2 }); }
     catch (error) { message.error({ content: error instanceof Error ? error.message : '操作失败', duration: 0 }); }
@@ -83,7 +75,7 @@ export const EvaluationCenterPage = () => {
         <Typography.Paragraph>稳定版本：{resource.stable_revision_id || '尚未建立'}</Typography.Paragraph>
         <StatusTag value={resource.status} /><Typography.Title level={5}>系统建议</Typography.Title>
         <Alert type="info" message="结合运行、候选与实验记录审阅此资源，不展示原始提示词或载荷。" />
-        <Button style={{ marginTop: 16 }} onClick={() => void openTimeline(resource)}>查看时间线</Button></>}
+        <Button style={{ marginTop: 16 }} onClick={() => void timeline.openTimeline(resource)}>查看时间线</Button></>}
     </Drawer>
     <RunDrawer run={run} open={!!run} onClose={() => setRunId('')} isMobile={isMobile} />
     <CandidateDrawer candidate={candidate} open={!!candidate} onClose={() => setCandidateId('')}
@@ -94,9 +86,11 @@ export const EvaluationCenterPage = () => {
       onPause={(value) => void decide(() => center.pauseExperiment(value.id, command(value.state_version, '管理员暂停实验')), '实验已暂停')}
       onPromote={(value) => void decide(() => center.promoteExperiment(value.id, command(value.state_version, '管理员晋级实验')), '实验已晋级')}
       onRollback={(value) => void decide(() => center.rollbackExperiment(value.id, command(value.state_version, '管理员回滚实验')), '实验已回滚')} />
-    <TimelineDrawer events={timeline} open={timelineOpen} loading={timelineLoading} isMobile={isMobile}
-      onClose={() => setTimelineOpen(false)} />
-    <CreateEvaluationModal open={createOpen} resources={center.resources.items} onClose={() => setCreateOpen(false)}
+    <TimelineDrawer events={timeline.events} open={timeline.open} loading={timeline.loading} error={timeline.error}
+      isMobile={isMobile} onClose={timeline.closeTimeline} />
+    <CreateEvaluationModal open={createOpen} resources={center.resources.items} onClose={() => {
+      center.resetCreateEvaluation(); setCreateOpen(false);
+    }}
       onSubmit={async (values, value) => {
         try {
           await center.createEvaluation({ resource: { kind: value.resource_kind, resource_id: value.resource_id,

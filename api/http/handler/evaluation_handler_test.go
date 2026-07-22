@@ -130,6 +130,19 @@ func TestEvaluationHandlerListResourcesPropagatesFilters(t *testing.T) {
 	}
 }
 
+func TestEvaluationHandlerListExperimentsSerializesSafePromotionEvidence(t *testing.T) {
+	queries := &fakeEvaluationQueries{}
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, queries, nil, zap.NewNop())
+	r := gin.New()
+	r.GET("/evaluations/experiments", withTenant("tenant-1"), h.ListExperiments)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/evaluations/experiments", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"eligible":true`) ||
+		strings.Contains(rec.Body.String(), "decision_snapshot") || strings.Contains(rec.Body.String(), `"metrics"`) {
+		t.Fatalf("unsafe or incomplete experiment response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestEvaluationHandlerRejectCandidateDerivesActor(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	candidates := &fakeCandidateCommands{}
@@ -251,7 +264,11 @@ func (f *fakeEvaluationQueries) ListCandidates(context.Context, string, port.Cen
 	}}}}, nil
 }
 func (f *fakeEvaluationQueries) ListExperiments(context.Context, string, port.CenterFilter) (domain.ExperimentPage, error) {
-	return domain.ExperimentPage{}, nil
+	return domain.ExperimentPage{Items: []domain.ExperimentSummary{{ID: "experiment-1", PromotionEvidence: domain.PromotionEvidence{
+		Eligible: true, Gates: domain.PromotionGates{Quality: domain.GatePassed, Cost: domain.GatePassed,
+			Latency: domain.GatePassed, ErrorRate: domain.GatePassed, Security: domain.GatePassed},
+		Blockers: []domain.PromotionBlocker{},
+	}}}}, nil
 }
 func (f *fakeEvaluationQueries) Timeline(context.Context, string, port.CenterFilter) (domain.TimelinePage, error) {
 	return domain.TimelinePage{}, nil

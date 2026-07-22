@@ -94,17 +94,18 @@ type CandidateSafeDiff struct {
 	ParentMissing bool                       `json:"parent_missing"`
 }
 type ExperimentSummary struct {
-	ID               string       `json:"id"`
-	ResourceID       string       `json:"resource_id"`
-	StableRevisionID string       `json:"stable_revision_id"`
-	CanaryRevisionID string       `json:"canary_revision_id"`
-	Status           string       `json:"status"`
-	Recommendation   string       `json:"recommendation"`
-	ResourceKind     ResourceKind `json:"resource_kind"`
-	StagePercent     int          `json:"stage_percent"`
-	SafetyStopped    bool         `json:"safety_stopped"`
-	StateVersion     int64        `json:"state_version"`
-	CreatedAt        time.Time    `json:"created_at"`
+	ID                string            `json:"id"`
+	ResourceID        string            `json:"resource_id"`
+	StableRevisionID  string            `json:"stable_revision_id"`
+	CanaryRevisionID  string            `json:"canary_revision_id"`
+	Status            string            `json:"status"`
+	Recommendation    string            `json:"recommendation"`
+	ResourceKind      ResourceKind      `json:"resource_kind"`
+	StagePercent      int               `json:"stage_percent"`
+	SafetyStopped     bool              `json:"safety_stopped"`
+	StateVersion      int64             `json:"state_version"`
+	PromotionEvidence PromotionEvidence `json:"promotion_evidence"`
+	CreatedAt         time.Time         `json:"created_at"`
 }
 
 type TimelineEvent struct {

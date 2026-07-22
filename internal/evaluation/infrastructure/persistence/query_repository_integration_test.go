@@ -180,6 +180,15 @@ func assertCenterLists(t *testing.T, ctx context.Context, repo *PgCenterQueryRep
 		!runsNext.Items[0].CreatedAt.Before(runs.Items[0].CreatedAt) {
 		t.Fatalf("run second page=%+v err=%v", runsNext, err)
 	}
+	evidenceExperiments, err := repo.ListExperiments(ctx, tenantID, port.CenterFilter{ResourceKind: "skill", Limit: 20})
+	if err != nil || len(evidenceExperiments.Items) == 0 {
+		t.Fatalf("experiments=%+v err=%v", evidenceExperiments, err)
+	}
+	for _, experiment := range evidenceExperiments.Items {
+		if experiment.ResourceID == "shared" && experiment.PromotionEvidence.Gates.Quality == "" {
+			t.Fatalf("experiment promotion evidence missing: %+v", experiment)
+		}
+	}
 
 	candidates, err := repo.ListCandidates(ctx, tenantID, port.CenterFilter{
 		ResourceKind: "skill", ResourceID: "shared", Status: "succeeded", Limit: 1,

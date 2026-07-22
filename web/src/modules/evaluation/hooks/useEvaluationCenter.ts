@@ -7,6 +7,7 @@ import type {
   EvaluationCenterFilters,
   EvaluationCommand,
   EvaluationCase,
+  EvaluationJob,
   ExperimentPage,
   ResourcePage,
   RunPage,
@@ -45,6 +46,10 @@ export const useEvaluationCenter = (filters: EvaluationCenterFilters = {}) => {
   const filtersRef = useRef(stableFilters);
   const requestGenerationRef = useRef(0);
   const mountedRef = useRef(true);
+  const createWorkflowRef = useRef<{
+    fingerprint: string; suiteID?: string; publishedRevisionID?: string; idempotencyKey: string;
+    inFlight?: Promise<EvaluationJob>;
+  }>();
   filtersRef.current = stableFilters;
 
   const load = useCallback(async () => {
@@ -86,16 +91,41 @@ export const useEvaluationCenter = (filters: EvaluationCenterFilters = {}) => {
     return result;
   }, [canManageEvaluation, load]);
 
+  const resetCreateEvaluation = useCallback(() => { createWorkflowRef.current = undefined; }, []);
+  const createEvaluation = useCallback((data: {
+    resource: ResourceRef; name: string; description?: string; cases: EvaluationCase[];
+  }) => {
+    if (!canManageEvaluation) return Promise.reject(new Error(MANAGEMENT_ERROR));
+    const fingerprint = JSON.stringify(data);
+    let workflow = createWorkflowRef.current;
+    if (!workflow || workflow.fingerprint !== fingerprint) {
+      workflow = { fingerprint, idempotencyKey: crypto.randomUUID() };
+      createWorkflowRef.current = workflow;
+    }
+    if (workflow.inFlight) return workflow.inFlight;
+    const current = workflow;
+    current.inFlight = (async () => {
+      if (!current.suiteID) {
+        const created = await evaluationApi.createSuite({ name: data.name, description: data.description,
+          resourceKind: data.resource.kind, cases: data.cases });
+        current.suiteID = created.suite.id;
+      }
+      if (!current.publishedRevisionID) {
+        const published = await evaluationApi.publishSuite(current.suiteID);
+        current.publishedRevisionID = published.id;
+      }
+      const job = await evaluationApi.enqueueRun(data.resource, current.publishedRevisionID, current.idempotencyKey);
+      await load();
+      if (createWorkflowRef.current === current) resetCreateEvaluation();
+      return job;
+    })().finally(() => { current.inFlight = undefined; });
+    return current.inFlight;
+  }, [canManageEvaluation, load, resetCreateEvaluation]);
+
   return {
     overview, resources, suites, runs, candidates, experiments, loading, error, canManageEvaluation,
     reload: () => load(),
-    createEvaluation: (data: { resource: ResourceRef; name: string; description?: string; cases: EvaluationCase[] }) =>
-      managedCommand(async () => {
-        const created = await evaluationApi.createSuite({ name: data.name, description: data.description,
-          resourceKind: data.resource.kind, cases: data.cases });
-        const published = await evaluationApi.publishSuite(created.suite.id);
-        return evaluationApi.enqueueRun(data.resource, published.id, crypto.randomUUID());
-      }),
+    createEvaluation, resetCreateEvaluation,
     rejectCandidate: (id: string, command: EvaluationCommand) => managedCommand(() => evaluationApi.rejectCandidate(id, command)),
     pauseExperiment: (id: string, command: EvaluationCommand) => managedCommand(() => evaluationApi.pauseExperiment(id, command)),
     promoteExperiment: (id: string, command: EvaluationCommand) => managedCommand(() => evaluationApi.promoteExperiment(id, command)),

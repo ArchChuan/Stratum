@@ -143,7 +143,15 @@ func (contractQueryRepo) ListCandidates(context.Context, string, port.CenterFilt
 	return domain.CandidatePage{Items: []domain.CandidateSummary{}}, nil
 }
 func (contractQueryRepo) ListExperiments(context.Context, string, port.CenterFilter) (domain.ExperimentPage, error) {
-	return domain.ExperimentPage{Items: []domain.ExperimentSummary{}}, nil
+	return domain.ExperimentPage{Items: []domain.ExperimentSummary{{
+		ID: "experiment-contract", ResourceID: "agent-contract", StableRevisionID: "stable-contract",
+		CanaryRevisionID: "canary-contract", Status: "running", Recommendation: "promote",
+		ResourceKind: domain.ResourceKindAgent, StagePercent: 100, StateVersion: 2,
+		PromotionEvidence: domain.PromotionEvidence{Eligible: true, Gates: domain.PromotionGates{
+			Quality: domain.GatePassed, Cost: domain.GatePassed, Latency: domain.GatePassed,
+			ErrorRate: domain.GatePassed, Security: domain.GatePassed,
+		}, Blockers: []domain.PromotionBlocker{}},
+	}}}, nil
 }
 func (contractQueryRepo) Timeline(context.Context, string, port.CenterFilter) (domain.TimelinePage, error) {
 	return domain.TimelinePage{Items: []domain.TimelineEvent{}}, nil

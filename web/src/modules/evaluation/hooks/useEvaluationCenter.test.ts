@@ -81,6 +81,53 @@ describe('useEvaluationCenter', () => {
     expect(job).toEqual({ job_id: 'job-1', status: 'queued' });
   });
 
+  it('resumes at publish after publish failure without recreating the suite', async () => {
+    auth.role = 'admin';
+    api.createSuite.mockResolvedValue({ suite: { id: 'suite-1' } });
+    api.publishSuite.mockRejectedValueOnce(new Error('发布失败')).mockResolvedValue({ id: 'published-1' });
+    api.enqueueRun.mockResolvedValue({ job_id: 'job-1', status: 'queued' });
+    const { result } = renderHook(() => useEvaluationCenter());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const data = evaluationInput();
+    await act(async () => { await result.current.createEvaluation(data).catch(() => undefined); });
+    await act(async () => { await result.current.createEvaluation(data); });
+    expect(api.createSuite).toHaveBeenCalledTimes(1);
+    expect(api.publishSuite).toHaveBeenCalledTimes(2);
+    expect(api.enqueueRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumes enqueue with the same idempotency key after enqueue failure', async () => {
+    auth.role = 'admin';
+    api.createSuite.mockResolvedValue({ suite: { id: 'suite-1' } });
+    api.publishSuite.mockResolvedValue({ id: 'published-1' });
+    api.enqueueRun.mockRejectedValueOnce(new Error('入队失败')).mockResolvedValue({ job_id: 'job-1', status: 'queued' });
+    const { result } = renderHook(() => useEvaluationCenter());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const data = evaluationInput();
+    await act(async () => { await result.current.createEvaluation(data).catch(() => undefined); });
+    await act(async () => { await result.current.createEvaluation(data); });
+    expect(api.createSuite).toHaveBeenCalledTimes(1);
+    expect(api.publishSuite).toHaveBeenCalledTimes(1);
+    expect(api.enqueueRun).toHaveBeenCalledTimes(2);
+    expect(api.enqueueRun.mock.calls[0][2]).toBe(api.enqueueRun.mock.calls[1][2]);
+  });
+
+  it('coalesces double submit into one create workflow', async () => {
+    auth.role = 'admin';
+    const create = deferred<any>();
+    api.createSuite.mockReturnValue(create.promise);
+    const { result } = renderHook(() => useEvaluationCenter());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let first!: Promise<unknown>; let second!: Promise<unknown>;
+    act(() => { first = result.current.createEvaluation(evaluationInput());
+      second = result.current.createEvaluation(evaluationInput()); });
+    expect(api.createSuite).toHaveBeenCalledTimes(1);
+    create.resolve({ suite: { id: 'suite-1' } });
+    api.publishSuite.mockResolvedValue({ id: 'published-1' });
+    api.enqueueRun.mockResolvedValue({ job_id: 'job-1', status: 'queued' });
+    await act(async () => { await Promise.all([first, second]); });
+  });
+
   it('ignores a stale filter load that resolves after the latest load', async () => {
     const oldOverview = deferred<any>();
     api.getOverview.mockReturnValueOnce(oldOverview.promise).mockResolvedValueOnce({
@@ -132,4 +179,10 @@ describe('useEvaluationCenter', () => {
     expect([api.getOverview, api.listResources, api.listSuites, api.listRuns,
       api.listCandidates, api.listExperiments].map((mock) => mock.mock.calls.length)).toEqual(queryCalls);
   });
+});
+
+const evaluationInput = () => ({
+  resource: { kind: 'skill' as const, resource_id: 'skill-1', revision_id: 'revision-1' }, name: '基线评测',
+  description: '发布前基线', cases: [{ name: '问候', input: '你好', expected_output: '您好',
+    assertion_mode: 'contains' as const, enabled: true }],
 });

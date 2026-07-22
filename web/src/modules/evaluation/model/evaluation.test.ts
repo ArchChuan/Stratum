@@ -66,6 +66,9 @@ describe('evaluation model', () => {
       status: 'active', recommendation: 'hold', resource_kind: 'agent', stage_percent: 5, safety_stopped: false,
       state_version: 2,
       gates: { quality: 'passed', cost: 'pending', latency: 'passed', error_rate: 'passed', security: 'passed' },
+      promotion_evidence: { eligible: false,
+        gates: { quality: 'passed', cost: 'pending', latency: 'passed', error_rate: 'passed', security: 'passed' },
+        blockers: [{ code: 'insufficient_samples', category: 'sample', message: '样本量不足' }] },
       created_at: '2026-01-01T00:00:00Z',
     }] });
     const timeline = timelinePageSchema.parse({ items: [{

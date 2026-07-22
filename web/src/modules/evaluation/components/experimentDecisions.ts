@@ -5,6 +5,8 @@ const gateLabels: Record<string, string> = {
 };
 
 export const promotionBlockReason = (experiment: ExperimentSummary): string => {
+  if (experiment.promotion_evidence.blockers.length > 0) return experiment.promotion_evidence.blockers[0].message;
+  if (experiment.promotion_evidence.eligible) return '';
   if (experiment.safety_stopped) return '安全停止已触发，必须先回滚并复核证据';
   if (!experiment.gates) return '门禁证据缺失，无法晋级';
   const unavailable = Object.entries(experiment.gates).find(([, value]) => value === 'not_applicable');
