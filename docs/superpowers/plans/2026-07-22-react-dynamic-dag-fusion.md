@@ -161,20 +161,20 @@ git commit -m "[feat](agent): persist versioned plan checkpoints"
 - Modify: `internal/agent/application/graph/react.go`
 - Modify: `internal/agent/application/graph/react_tools.go`
 
-- [ ] **Step 1: Write failing tool-definition and dispatch tests**
+- [x] **Step 1: Write failing tool-definition and dispatch tests**
 
 Assert that `stratum_create_plan`, `stratum_revise_plan`, `stratum_continue_plan`, and `stratum_cancel_plan` are always available, cannot be shadowed by external tools, reject malformed/stale commands as corrective tool observations without mutation, and create plans without any stuck counter.
 
-- [ ] **Step 2: Verify the tests fail**
+- [x] **Step 2: Verify the tests fail**
 
 Run: `go test ./internal/agent/application/graph -run 'PlanTool|ExplicitPlan'`
 Expected: FAIL because built-in plan tools are unavailable.
 
-- [ ] **Step 3: Implement definitions and deterministic dispatch**
+- [x] **Step 3: Implement definitions and deterministic dispatch**
 
 Append reserved JSON-schema tool definitions in `effectiveTools`; route reserved names before provider classification in `makeToolNode`. Decode arguments with `json.Marshal`/`json.Unmarshal`, call the domain command validator, persist accepted changes, and append a structured tool result containing plan ID, revision, statuses, and correction details.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `go test ./internal/agent/application/graph -run 'PlanTool|ExplicitPlan'`
 Expected: PASS.
