@@ -17,7 +17,7 @@
 - Create: `pkg/dag/dag.go`
 - Create: `pkg/dag/dag_test.go`
 
-- [ ] **Step 1: Write failing validation and ready-set tests**
+- [x] **Step 1: Write failing validation and ready-set tests**
 
 Define table tests for duplicate/missing node IDs, missing dependency targets, self-dependencies, cycles, deterministic fan-out/fan-in ordering, failed-dependency blocking, and completed-node exclusion. Use this public contract:
 
@@ -37,16 +37,16 @@ func Validate(nodes []Node) error
 func Ready(snapshot Snapshot) (ready, blocked []string, complete bool, err error)
 ```
 
-- [ ] **Step 2: Verify the tests fail**
+- [x] **Step 2: Verify the tests fail**
 
 Run: `go test ./pkg/dag`
 Expected: FAIL because package functions do not exist.
 
-- [ ] **Step 3: Implement deterministic validation and scheduling**
+- [x] **Step 3: Implement deterministic validation and scheduling**
 
 Implement Kahn cycle detection, sorted dependency copies, sorted output IDs, and fail-closed unknown statuses. A pending node is ready only when all dependencies succeeded; it is blocked when any dependency is failed, blocked, or cancelled. `complete` is true only when every node is terminal.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `go test ./pkg/dag`
 Expected: PASS.
