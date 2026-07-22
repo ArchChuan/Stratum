@@ -508,13 +508,31 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approva
 		options = append(options, WithSkillCatalog(catalog))
 	}
 	used := false
-	options = append(options, WithExecutionID(payload.ExecutionID), WithApprovedToolCallFn(func(callCtx context.Context, serverID, toolName string, args map[string]any) (any, bool, error) {
-		if used || serverID != payload.ServerID || toolName != payload.ToolName || !reflect.DeepEqual(args, payload.Arguments) {
-			return nil, false, nil
+	guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
+		Authorizer: s.deps.ToolAuthorizer,
+		Executor:   s.deps.MCPToolExecutor,
+		ExecuteApproved: func(callCtx context.Context, request ToolExecutionRequest) (any, error) {
+			used = true
+			return s.deps.ApprovalService.ExecuteApproved(
+				callCtx, tenantID, approvalID, request.Tool.ServerID,
+				request.Tool.CapabilityID, request.Arguments, s.deps.MCPToolExecutor,
+			)
+		},
+	})
+	options = append(options, WithExecutionID(payload.ExecutionID), WithToolExecutionFn(func(
+		callCtx context.Context, request port.ToolExecutionRequest,
+	) (any, error) {
+		request.TenantID = tenantID
+		request.UserID = payload.UserID
+		request.AgentID = payload.AgentID
+		request.TraceID = payload.TraceID
+		request.ExecutionID = payload.ExecutionID
+		request.AgentToolIDs = a.GetConfig().MCPToolIDs
+		if !used && request.Tool.ServerID == payload.ServerID &&
+			request.Tool.CapabilityID == payload.ToolName && reflect.DeepEqual(request.Arguments, payload.Arguments) {
+			request.ApprovalID = approvalID
 		}
-		used = true
-		output, executeErr := s.deps.ApprovalService.ExecuteApproved(callCtx, tenantID, approvalID, serverID, toolName, args, s.deps.MCPToolExecutor)
-		return output, true, executeErr
+		return guard.Execute(callCtx, request)
 	}))
 	start := time.Now()
 	result, runErr := a.Execute(context.WithoutCancel(ctx), payload.Query, options...)
@@ -626,24 +644,39 @@ func (s *AgentService) assembleOptions(
 		WithSkillCatalog(skillCatalog),
 		WithEvolutionTraceMetadata(evolutionTrace),
 	)
-	if s.deps.ApprovalService != nil {
-		approvalService := s.deps.ApprovalService
+	if s.deps.ToolAuthorizer != nil {
 		agentID, userID, conversationID, query := a.GetConfig().ID, req.UserID, req.ConversationID, req.Query
 		pinned := make(map[string]string, len(skillCatalog))
 		for skillID, activation := range skillCatalog {
 			pinned[skillID] = activation.RevisionID
 		}
-		options = append(options, WithApprovalRequestFn(func(actx context.Context, request port.ToolApprovalRequest) (string, error) {
-			return approvalService.Request(actx, ToolApprovalPayload{
-				TenantID: meta.TenantID, ExecutionID: executionID, TraceID: meta.TraceID, AgentID: agentID, UserID: userID, ConversationID: conversationID,
-				ToolCallID: request.ToolCallID, ServerID: request.ServerID, ToolName: request.ToolName, RiskLevel: request.RiskLevel,
-				Query: query, Arguments: request.Arguments, PinnedSkillRevisions: pinned,
-			})
+		var requestApproval port.ToolApprovalRequester
+		if s.deps.ApprovalService != nil {
+			approvalService := s.deps.ApprovalService
+			requestApproval = func(actx context.Context, request port.ToolApprovalRequest) (string, error) {
+				return approvalService.Request(actx, ToolApprovalPayload{
+					TenantID: meta.TenantID, ExecutionID: executionID, TraceID: meta.TraceID,
+					AgentID: agentID, UserID: userID, ConversationID: conversationID,
+					ToolCallID: request.ToolCallID, ServerID: request.ServerID,
+					ToolName: request.ToolName, RiskLevel: request.RiskLevel,
+					Query: query, Arguments: request.Arguments, PinnedSkillRevisions: pinned,
+				})
+			}
+		}
+		guard := NewToolExecutionGuard(ToolExecutionGuardDeps{
+			Authorizer: s.deps.ToolAuthorizer, Executor: s.deps.MCPToolExecutor, RequestApproval: requestApproval,
+		})
+		options = append(options, WithToolExecutionFn(func(
+			callCtx context.Context, request port.ToolExecutionRequest,
+		) (any, error) {
+			request.TenantID = meta.TenantID
+			request.UserID = userID
+			request.AgentID = agentID
+			request.TraceID = meta.TraceID
+			request.ExecutionID = executionID
+			request.AgentToolIDs = a.GetConfig().MCPToolIDs
+			return guard.Execute(callCtx, request)
 		}))
-	}
-	if s.deps.MCPToolExecutor != nil {
-		executor := s.deps.MCPToolExecutor
-		options = append(options, WithToolCallFn(executor.ExecuteMCPTool))
 	}
 	if s.deps.RAGSearch != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
 		tenantID := meta.TenantID
@@ -727,13 +760,16 @@ func (s *AgentService) buildExtraTools(
 				tool.Metadata = make(map[string]any)
 			}
 			risk := port.ToolRiskUnclassified
+			policyResolved := false
 			if s.deps.MCPToolPolicy != nil {
 				resolved, err := s.deps.MCPToolPolicy.ResolveMCPToolRisk(ctx, tenantID, serverID, tool.CapabilityID)
 				if err == nil && resolved != "" {
 					risk = resolved
+					policyResolved = true
 				}
 			}
 			tool.Metadata["risk_level"] = string(risk)
+			tool.Metadata["policy_resolved"] = policyResolved
 			tools = append(tools, tool)
 		}
 	}

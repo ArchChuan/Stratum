@@ -42,29 +42,27 @@ type (
 // in the application layer because it references port.ToolDefinition and
 // function types that depend on cross-context ports.
 type ExecutionConfig struct {
-	MaxSteps           int
-	Timeout            time.Duration
-	Temperature        float32
-	EnableTools        bool
-	AvailableTools     []string
-	Stream             bool
-	TokenCallback      func(string)
-	TenantID           string
-	TraceID            string
-	ExecutionID        string
-	LLMAPIKeys         map[string]string
-	RAGSearchFn        func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
-	ExtraTools         []port.ToolDefinition
-	SkillCatalog       map[string]port.SkillActivation
-	ToolCallFn         func(ctx context.Context, serverID, toolName string, input map[string]any) (any, error)
-	ApprovalRequestFn  port.ToolApprovalRequester
-	ApprovedToolCallFn port.ApprovedToolCallFn
-	ActiveSkill        *port.SkillActivation
-	TracePayloadStore  port.TracePayloadStore
-	ConversationID     string
-	UserID             string
-	HistoryWindow      int
-	EvolutionTrace     EvolutionTraceMetadata
+	MaxSteps          int
+	Timeout           time.Duration
+	Temperature       float32
+	EnableTools       bool
+	AvailableTools    []string
+	Stream            bool
+	TokenCallback     func(string)
+	TenantID          string
+	TraceID           string
+	ExecutionID       string
+	LLMAPIKeys        map[string]string
+	RAGSearchFn       func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	ExtraTools        []port.ToolDefinition
+	SkillCatalog      map[string]port.SkillActivation
+	ToolExecutionFn   port.ToolExecutionFn
+	ActiveSkill       *port.SkillActivation
+	TracePayloadStore port.TracePayloadStore
+	ConversationID    string
+	UserID            string
+	HistoryWindow     int
+	EvolutionTrace    EvolutionTraceMetadata
 }
 
 // EvolutionTraceMetadata attributes an execution to evaluation and rollout evidence.
@@ -334,9 +332,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			SkillCatalog:               cfg.SkillCatalog,
 			ActiveSkill:                cfg.ActiveSkill,
 			TracePayloadStore:          cfg.TracePayloadStore,
-			ToolCallFn:                 cfg.ToolCallFn,
-			ApprovalRequestFn:          cfg.ApprovalRequestFn,
-			ApprovedToolCallFn:         cfg.ApprovedToolCallFn,
+			ToolExecutionFn:            cfg.ToolExecutionFn,
 			ExecutionID:                cfg.ExecutionID,
 			AgentKnowledgeWorkspaceIDs: workspaceNames,
 			AgentMemoryScope:           memoryScope,
@@ -461,9 +457,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			SkillCatalog:               cfg.SkillCatalog,
 			ActiveSkill:                cfg.ActiveSkill,
 			TracePayloadStore:          cfg.TracePayloadStore,
-			ToolCallFn:                 cfg.ToolCallFn,
-			ApprovalRequestFn:          cfg.ApprovalRequestFn,
-			ApprovedToolCallFn:         cfg.ApprovedToolCallFn,
+			ToolExecutionFn:            cfg.ToolExecutionFn,
 			ExecutionID:                cfg.ExecutionID,
 			AgentKnowledgeWorkspaceIDs: workspaceNames,
 			AgentMemoryScope:           memoryScope,
@@ -814,18 +808,10 @@ func WithActiveSkill(skill port.SkillActivation) ExecutionOption {
 	return func(cfg *ExecutionConfig) { cfg.ActiveSkill = &skill }
 }
 
-func WithToolCallFn(fn func(context.Context, string, string, map[string]any) (any, error)) ExecutionOption {
+func WithToolExecutionFn(fn port.ToolExecutionFn) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
-		cfg.ToolCallFn = fn
+		cfg.ToolExecutionFn = fn
 	}
-}
-
-func WithApprovalRequestFn(fn port.ToolApprovalRequester) ExecutionOption {
-	return func(cfg *ExecutionConfig) { cfg.ApprovalRequestFn = fn }
-}
-
-func WithApprovedToolCallFn(fn port.ApprovedToolCallFn) ExecutionOption {
-	return func(cfg *ExecutionConfig) { cfg.ApprovedToolCallFn = fn }
 }
 
 // WithConversationID sets the conversation ID for multi-turn history loading.

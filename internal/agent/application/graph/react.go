@@ -36,9 +36,7 @@ type ReActState struct {
 	SkillCatalog               map[string]port.SkillActivation
 	ActiveSkill                *port.SkillActivation
 	TracePayloadStore          port.TracePayloadStore
-	ToolCallFn                 func(ctx context.Context, serverID, toolName string, input map[string]any) (any, error)
-	ApprovalRequestFn          port.ToolApprovalRequester
-	ApprovedToolCallFn         port.ApprovedToolCallFn
+	ToolExecutionFn            port.ToolExecutionFn
 	ExecutionID                string
 	AgentKnowledgeWorkspaceIDs []string
 	AgentMemoryScope           string
@@ -522,38 +520,20 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					)
 					break
 				}
-				var toolOutput any
-				var callErr error
-				handled := false
-				if s.ApprovedToolCallFn != nil {
-					toolOutput, handled, callErr = s.ApprovedToolCallFn(toolCtx, tool.ServerID, tool.CapabilityID, tc.Arguments)
-				}
-				risk := port.ParseToolRiskLevel(tool.Metadata["risk_level"])
-				if !handled && risk.RequiresApproval() {
-					approvalID := ""
-					if s.ApprovalRequestFn != nil {
-						var approvalErr error
-						approvalID, approvalErr = s.ApprovalRequestFn(toolCtx, port.ToolApprovalRequest{
-							TenantID: s.TenantID, TraceID: s.TraceID, ExecutionID: s.ExecutionID,
-							ToolCallID: tc.ID, ServerID: tool.ServerID, ToolName: tool.CapabilityID,
-							RiskLevel: risk, Arguments: tc.Arguments,
-						})
-						if approvalErr != nil {
-							return s, fmt.Errorf("create tool approval: %w", approvalErr)
-						}
-					}
-					return s, &port.ToolApprovalRequiredError{ApprovalID: approvalID, ToolCallID: tc.ID, ServerID: tool.ServerID, ToolName: tool.CapabilityID, RiskLevel: risk}
-				}
-				if !handled && s.ToolCallFn == nil {
+				if s.ToolExecutionFn == nil {
 					content = "error: MCP tool executor not configured"
 					status = domain.ToolTraceStatusError
 					errMsg = content
 					break
 				}
-				if !handled {
-					callCtx, cancel := context.WithTimeout(toolCtx, 30*time.Second)
-					toolOutput, callErr = s.ToolCallFn(callCtx, tool.ServerID, tool.CapabilityID, tc.Arguments)
-					cancel()
+				callCtx, cancel := context.WithTimeout(toolCtx, constants.AgentMCPToolCallTimeout)
+				toolOutput, callErr := s.ToolExecutionFn(callCtx, port.ToolExecutionRequest{
+					ToolCallID: tc.ID, Tool: tool, Arguments: tc.Arguments, ActiveSkill: s.ActiveSkill,
+				})
+				cancel()
+				var approvalRequired *port.ToolApprovalRequiredError
+				if errors.As(callErr, &approvalRequired) {
+					return s, callErr
 				}
 				toolLatencyMs := time.Since(toolStart).Milliseconds()
 				switch {

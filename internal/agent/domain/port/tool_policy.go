@@ -34,7 +34,6 @@ type ToolApprovalRequest struct {
 }
 
 type ToolApprovalRequester func(context.Context, ToolApprovalRequest) (string, error)
-type ApprovedToolCallFn func(context.Context, string, string, map[string]any) (output any, handled bool, err error)
 
 type ToolApprovalRequiredError struct {
 	ApprovalID, ToolCallID, ServerID, ToolName string

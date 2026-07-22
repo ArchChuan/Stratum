@@ -66,5 +66,6 @@ const (
 	// AgentPlanTimeout caps the single LLM call inside nodePlan.
 	AgentPlanTimeout = 30 * time.Second
 	// AgentSynthesizeTimeout caps the optional LLM aggregation inside nodeSynthesize.
-	AgentSynthesizeTimeout = 30 * time.Second
+	AgentSynthesizeTimeout  = 30 * time.Second
+	AgentMCPToolCallTimeout = 30 * time.Second
 )
