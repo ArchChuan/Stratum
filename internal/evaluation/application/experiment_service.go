@@ -129,6 +129,9 @@ func (s *ExperimentService) EvaluateStageIdempotent(
 	if !ok {
 		return domain.Experiment{}, domain.DecisionHold, ErrExperimentNotFound
 	}
+	if experiment.Status != domain.ExperimentRunning {
+		return domain.Experiment{}, domain.DecisionHold, domain.ErrExperimentCommandNotAllowed
+	}
 	policy := experiment.Policy
 	if len(policy.Stages) == 0 {
 		policy = domain.DefaultPromotionPolicy()

@@ -147,6 +147,9 @@ func (r *PgExperimentRepository) SaveDecision(
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
+		if current.Status != domain.ExperimentRunning || experiment.Status != domain.ExperimentRunning {
+			return domain.ErrExperimentCommandNotAllowed
+		}
 		result, err := tx.Exec(ctx,
 			`UPDATE evaluation_experiments
 			 SET status=$2, stage_percent=$3, decision_snapshot=$4, recommendation=$5,
@@ -204,14 +207,21 @@ func (r *PgExperimentRepository) ApplyCommand(
 		if !found {
 			return pgx.ErrNoRows
 		}
-		var priorFingerprint string
-		err = tx.QueryRow(ctx, `SELECT COALESCE(metrics->>'fingerprint','') FROM experiment_decisions
-			WHERE experiment_id=$1 AND idempotency_key=$2`, experimentID, command.IdempotencyKey).Scan(&priorFingerprint)
+		var priorMetadata []byte
+		err = tx.QueryRow(ctx, `SELECT metrics FROM experiment_decisions
+			WHERE experiment_id=$1 AND idempotency_key=$2`, experimentID, command.IdempotencyKey).Scan(&priorMetadata)
 		if err == nil {
-			if priorFingerprint != fingerprint {
+			var prior struct {
+				Fingerprint string            `json:"fingerprint"`
+				Result      domain.Experiment `json:"result"`
+			}
+			if err := json.Unmarshal(priorMetadata, &prior); err != nil {
+				return err
+			}
+			if prior.Fingerprint != fingerprint {
 				return domain.ErrExperimentCommandConflict
 			}
-			updated = current
+			updated = prior.Result
 			return nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
@@ -264,7 +274,11 @@ func (r *PgExperimentRepository) ApplyCommand(
 		if deploymentResult.RowsAffected() != 1 {
 			return domain.ErrExperimentStateConflict
 		}
-		metadata, err := json.Marshal(map[string]string{"fingerprint": fingerprint})
+		resultSnapshot := current
+		resultSnapshot.Status = newStatus
+		resultSnapshot.StateVersion = newVersion
+		resultSnapshot.Recommendation = domain.DecisionHold
+		metadata, err := json.Marshal(map[string]any{"fingerprint": fingerprint, "result": resultSnapshot})
 		if err != nil {
 			return err
 		}
@@ -277,10 +291,7 @@ func (r *PgExperimentRepository) ApplyCommand(
 		if err != nil {
 			return err
 		}
-		current.Status = newStatus
-		current.StateVersion = newVersion
-		current.Recommendation = domain.DecisionHold
-		updated = current
+		updated = resultSnapshot
 		return nil
 	})
 	return updated, err

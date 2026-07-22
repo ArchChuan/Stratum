@@ -68,7 +68,7 @@ func (s *FeedbackService) Record(
 	if observed.SecurityViolation || input.SecurityViolation || feedbackSecurityViolation(feedback) {
 		next, decision, err := s.experiments.EvaluateStageIdempotent(ctx, tenantID, experiment.ID, EvaluateStageInput{
 			Metrics:        domain.StageMetrics{SecurityViolation: true},
-			IdempotencyKey: evaluationIdempotencyKey(input.IdempotencyKey, experiment.ID, experiment.Stage),
+			IdempotencyKey: evaluationIdempotencyKey(input.IdempotencyKey, experiment.ID),
 		})
 		if err != nil {
 			return FeedbackResult{}, err
@@ -106,7 +106,7 @@ func (s *FeedbackService) Record(
 		SecurityViolation:    hasSecurityViolation(stable) || hasSecurityViolation(canary),
 	}
 	next, decision, err := s.experiments.EvaluateStageIdempotent(ctx, tenantID, experiment.ID, EvaluateStageInput{
-		Metrics: metrics, IdempotencyKey: evaluationIdempotencyKey(input.IdempotencyKey, experiment.ID, experiment.Stage),
+		Metrics: metrics, IdempotencyKey: evaluationIdempotencyKey(input.IdempotencyKey, experiment.ID),
 	})
 	if err != nil {
 		return FeedbackResult{}, err
@@ -116,8 +116,8 @@ func (s *FeedbackService) Record(
 	return result, nil
 }
 
-func evaluationIdempotencyKey(feedbackKey, experimentID string, stage int) string {
-	return fmt.Sprintf("feedback:%s:%s:%d", feedbackKey, experimentID, stage)
+func evaluationIdempotencyKey(feedbackKey, experimentID string) string {
+	return fmt.Sprintf("feedback:%s:%s", feedbackKey, experimentID)
 }
 
 func (s *FeedbackService) observations(

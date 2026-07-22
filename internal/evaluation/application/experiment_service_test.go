@@ -33,6 +33,19 @@ func TestExperimentServiceEvaluationIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestExperimentServiceRejectsPausedEvaluationWithoutSaving(t *testing.T) {
+	repo := &fakeExperimentRepo{experiment: domain.Experiment{
+		ID: "experiment-1", Status: domain.ExperimentPaused, Stage: 50, StateVersion: 4,
+	}}
+	svc := NewExperimentService(repo)
+	_, _, err := svc.EvaluateStageIdempotent(context.Background(), "tenant-1", "experiment-1", EvaluateStageInput{
+		Metrics: domain.StageMetrics{SecurityViolation: true}, IdempotencyKey: "evaluation-paused",
+	})
+	if !errors.Is(err, domain.ErrExperimentCommandNotAllowed) || repo.saveDecisionCalls != 0 {
+		t.Fatalf("paused evaluation err=%v save calls=%d", err, repo.saveDecisionCalls)
+	}
+}
+
 func TestExperimentServiceCreatesFivePercentCanaryDeployment(t *testing.T) {
 	repo := &fakeExperimentRepo{}
 	svc := NewExperimentService(repo)
@@ -185,11 +198,12 @@ func TestExperimentServiceResolveAssignmentIncludesVariantEvidence(t *testing.T)
 }
 
 type fakeExperimentRepo struct {
-	experiment       domain.Experiment
-	deployment       domain.Deployment
-	commandAction    domain.ExperimentCommandAction
-	commandActorType domain.ActorType
-	decisions        map[string]fakeEvaluationDecision
+	experiment        domain.Experiment
+	deployment        domain.Deployment
+	commandAction     domain.ExperimentCommandAction
+	commandActorType  domain.ActorType
+	decisions         map[string]fakeEvaluationDecision
+	saveDecisionCalls int
 }
 
 type fakeEvaluationDecision struct {
@@ -237,6 +251,7 @@ func (f *fakeExperimentRepo) SaveDecision(
 	_ context.Context, _ string, experiment domain.Experiment, decision domain.Decision, _ domain.StageMetrics,
 	idempotencyKey, fingerprint string,
 ) (domain.Experiment, domain.Decision, error) {
+	f.saveDecisionCalls++
 	if previous, ok := f.decisions[idempotencyKey]; ok {
 		if previous.fingerprint != fingerprint {
 			return domain.Experiment{}, domain.DecisionHold, domain.ErrExperimentCommandConflict

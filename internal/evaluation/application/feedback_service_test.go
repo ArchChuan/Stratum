@@ -96,6 +96,51 @@ func TestFeedbackServiceSafetyStopsOnFirstSecurityViolation(t *testing.T) {
 		!result.Experiment.SafetyStopped || experimentRepo.experiment.Stage != 0 {
 		t.Fatalf("first security violation did not safety stop: result=%+v stored=%+v", result, experimentRepo.experiment)
 	}
+	retry, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		TraceID: "trace-security", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		Score: 0.1, IdempotencyKey: "feedback-security",
+	})
+	if err != nil || retry.Experiment == nil || retry.Experiment.StateVersion != result.Experiment.StateVersion ||
+		experimentRepo.decisionCount != 1 {
+		t.Fatalf("security retry result=%+v decisions=%d err=%v", retry, experimentRepo.decisionCount, err)
+	}
+}
+
+func TestEvaluationIdempotencyKeyDoesNotDependOnMutableStage(t *testing.T) {
+	first := evaluationIdempotencyKey("feedback-1", "experiment-1")
+	retry := evaluationIdempotencyKey("feedback-1", "experiment-1")
+	if first != retry {
+		t.Fatalf("immutable feedback identity produced different keys: %q %q", first, retry)
+	}
+}
+
+func TestFeedbackRetryReplaysStageAdvanceOnce(t *testing.T) {
+	policy := domain.DefaultPromotionPolicy()
+	stable := make([]domain.OnlineObservation, policy.MinSamples)
+	canary := make([]domain.OnlineObservation, policy.MinSamples)
+	for i := range stable {
+		stable[i] = domain.OnlineObservation{Score: 0.2, CostUSD: 1, LatencyMs: 100, Success: true}
+		canary[i] = domain.OnlineObservation{Score: 0.9, CostUSD: 1, LatencyMs: 100, Success: true}
+	}
+	repo := &fakeFeedbackRepo{experiment: domain.Experiment{
+		ID: "experiment-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		StableRevisionID: "stable-1", CanaryRevisionID: "canary-1", Status: domain.ExperimentRunning,
+		Stage: 5, Policy: policy, StateVersion: 1,
+	}, stable: stable, canary: canary, observedMinutes: policy.MinObservationMinutes}
+	experimentRepo := &feedbackExperimentRepo{experiment: repo.experiment}
+	svc := NewFeedbackService(repo, NewExperimentService(experimentRepo), feedbackEvidence("trace-1", repo, "canary-1", "canary"))
+	input := RecordFeedbackInput{TraceID: "trace-1", ResourceKind: domain.ResourceKindSkill,
+		ResourceID: "skill-1", Score: 0.9, IdempotencyKey: "feedback-1"}
+	first, err := svc.Record(context.Background(), "tenant-1", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.Record(context.Background(), "tenant-1", input)
+	if err != nil || first.Experiment == nil || second.Experiment == nil ||
+		first.Experiment.Stage != 20 || second.Experiment.Stage != 20 || experimentRepo.decisionCount != 1 {
+		t.Fatalf("feedback retry first=%+v second=%+v decisions=%d err=%v",
+			first.Experiment, second.Experiment, experimentRepo.decisionCount, err)
+	}
 }
 
 func TestFeedbackServiceValidatesAndPersistsObservedRevision(t *testing.T) {
@@ -215,7 +260,11 @@ func (f *fakeFeedbackRepo) StageFeedback(
 	return rows, f.observedMinutes, nil
 }
 
-type feedbackExperimentRepo struct{ experiment domain.Experiment }
+type feedbackExperimentRepo struct {
+	experiment    domain.Experiment
+	decisions     map[string]fakeEvaluationDecision
+	decisionCount int
+}
 
 func (f *feedbackExperimentRepo) Create(context.Context, string, domain.Experiment, domain.Deployment) error {
 	return nil
@@ -224,9 +273,21 @@ func (f *feedbackExperimentRepo) Get(context.Context, string, string) (domain.Ex
 	return f.experiment, true, nil
 }
 func (f *feedbackExperimentRepo) SaveDecision(
-	_ context.Context, _ string, experiment domain.Experiment, decision domain.Decision, _ domain.StageMetrics, _, _ string,
+	_ context.Context, _ string, experiment domain.Experiment, decision domain.Decision, _ domain.StageMetrics,
+	idempotencyKey, fingerprint string,
 ) (domain.Experiment, domain.Decision, error) {
+	if previous, ok := f.decisions[idempotencyKey]; ok {
+		if previous.fingerprint != fingerprint {
+			return domain.Experiment{}, domain.DecisionHold, domain.ErrExperimentCommandConflict
+		}
+		return previous.experiment, previous.decision, nil
+	}
+	if f.decisions == nil {
+		f.decisions = make(map[string]fakeEvaluationDecision)
+	}
 	f.experiment = experiment
+	f.decisions[idempotencyKey] = fakeEvaluationDecision{experiment: experiment, decision: decision, fingerprint: fingerprint}
+	f.decisionCount++
 	return experiment, decision, nil
 }
 func (f *feedbackExperimentRepo) ApplyCommand(

@@ -95,10 +95,40 @@ func TestPgExperimentRepositoryHumanGates(t *testing.T) {
 			commandFor("promote-paused", retry.StateVersion)); !errors.Is(err, domain.ErrExperimentCommandNotAllowed) {
 			t.Fatalf("paused promotion error=%v", err)
 		}
+		pausedEvaluation := retry
+		pausedEvaluation.StateVersion++
+		securityMetrics := domain.StageMetrics{SecurityViolation: true}
+		if _, _, err := repo.SaveDecision(ctx, tenantID, pausedEvaluation, domain.DecisionRollback,
+			securityMetrics, "paused-evaluation", domain.MetricsFingerprint(securityMetrics)); !errors.Is(err, domain.ErrExperimentCommandNotAllowed) {
+			t.Fatalf("paused evaluation error=%v", err)
+		}
+		var pausedVersion int64
+		var pausedPercent, pausedAudits int
+		if err := pool.QueryRow(ctx, "SELECT state_version FROM "+schema+".evaluation_experiments WHERE id=$1",
+			experiment.ID).Scan(&pausedVersion); err != nil {
+			t.Fatal(err)
+		}
+		if err := pool.QueryRow(ctx, "SELECT canary_percent FROM "+schema+".evaluation_deployments WHERE experiment_id=$1",
+			experiment.ID).Scan(&pausedPercent); err != nil {
+			t.Fatal(err)
+		}
+		if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM "+schema+".experiment_decisions WHERE experiment_id=$1",
+			experiment.ID).Scan(&pausedAudits); err != nil {
+			t.Fatal(err)
+		}
+		if pausedVersion != retry.StateVersion || pausedPercent != 0 || pausedAudits != 1 {
+			t.Fatalf("paused evaluation mutated state: version=%d percent=%d audits=%d",
+				pausedVersion, pausedPercent, pausedAudits)
+		}
 		rolledBack, err := repo.ApplyCommand(ctx, tenantID, experiment.ID, domain.CommandRollback,
 			commandFor("rollback-paused", retry.StateVersion))
 		if err != nil || rolledBack.Status != domain.ExperimentRolledBack {
 			t.Fatalf("paused rollback experiment=%+v err=%v", rolledBack, err)
+		}
+		replayedPause, err := repo.ApplyCommand(ctx, tenantID, experiment.ID, domain.CommandPause,
+			commandFor(winningKey, experiment.StateVersion))
+		if err != nil || replayedPause.Status != domain.ExperimentPaused || replayedPause.StateVersion != retry.StateVersion {
+			t.Fatalf("pause replay returned later state: replay=%+v err=%v", replayedPause, err)
 		}
 		var percent int
 		if err := pool.QueryRow(ctx, `SELECT canary_percent FROM `+schema+`.evaluation_deployments
