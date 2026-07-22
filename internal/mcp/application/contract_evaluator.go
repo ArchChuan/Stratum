@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
+
+const contractRetryBackoff = 25 * time.Millisecond
 
 type ContractErrorCategory string
 
@@ -48,7 +51,8 @@ func EvaluateContract(
 		return ContractResult{DurationMs: int(time.Since(started).Milliseconds()), ErrorCategory: category},
 			fmt.Errorf("MCP contract evaluation failed: %s", category)
 	}
-	if !slices.Contains(snapshot.EnabledTools, testCase.ToolName) {
+	testCase.ToolName = strings.TrimSpace(testCase.ToolName)
+	if testCase.ToolName == "" || !slices.Contains(snapshot.EnabledTools, testCase.ToolName) {
 		return fail(ContractErrorUnavailableTool)
 	}
 	if snapshot.ExpectedSchemaHash != "" && snapshot.ExpectedSchemaHash != snapshot.DiscoveredSchemaHash {
@@ -57,13 +61,13 @@ func EvaluateContract(
 	if invoke == nil {
 		return fail(ContractErrorUnavailableTool)
 	}
+	budgetCtx, cancelBudget := context.WithTimeout(ctx, snapshot.Timeout)
+	defer cancelBudget()
 	var output any
 	for attempt := 0; attempt <= snapshot.MaxRetries; attempt++ {
-		callCtx, cancel := context.WithTimeout(ctx, snapshot.Timeout)
 		var err error
-		output, err = invoke(callCtx, testCase.ToolName, testCase.Arguments)
-		deadlineReached := errors.Is(callCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded)
-		cancel()
+		output, err = invoke(budgetCtx, testCase.ToolName, testCase.Arguments)
+		deadlineReached := errors.Is(budgetCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded)
 		if err == nil {
 			if _, marshalErr := json.Marshal(output); marshalErr != nil {
 				return fail(ContractErrorMalformedOutput)
@@ -76,6 +80,13 @@ func EvaluateContract(
 		}
 		if !deadlineReached && attempt == snapshot.MaxRetries {
 			return fail(ContractErrorRetryExhausted)
+		}
+		timer := time.NewTimer(contractRetryBackoff)
+		select {
+		case <-budgetCtx.Done():
+			timer.Stop()
+			return fail(ContractErrorTimeout)
+		case <-timer.C:
 		}
 	}
 	return fail(ContractErrorRetryExhausted)

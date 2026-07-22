@@ -325,7 +325,7 @@ func TestHealthCheckDoesNotBlockConcurrentReads(t *testing.T) {
 	cfg := &MCPServerConfig{
 		ID:        "test-hc-concurrent",
 		Transport: "http",
-		URL:       srv.URL,
+		URL:       srv.URL + "/rpc",
 		Timeout:   5 * time.Second,
 	}
 	client := NewBaseClient(cfg, logger)

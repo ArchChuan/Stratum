@@ -3,7 +3,6 @@ package wiring
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -457,14 +456,14 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	var agentProvider evalport.AgentRevisionProvider
 	var mcpProvider evalport.ResourceRevisionProvider
-	if c.RevisionObjectStore == nil {
-		return errors.New("evaluation revision object store unavailable")
+	var sharedRevisionService *evalapp.RevisionService
+	if c.RevisionObjectStore != nil {
+		sharedRevisionService = evalapp.NewRevisionService(
+			evalpersist.RevisionObjectStoreAdapter{Store: c.RevisionObjectStore},
+			evalpersist.NewPgRevisionRepository(db),
+		)
 	}
-	sharedRevisionService := evalapp.NewRevisionService(
-		evalpersist.RevisionObjectStoreAdapter{Store: c.RevisionObjectStore},
-		evalpersist.NewPgRevisionRepository(db),
-	)
-	if c.Agent != nil {
+	if c.Agent != nil && sharedRevisionService != nil {
 		agentAdapter := agentEvaluationAdapter{
 			revisions: sharedRevisionService, agents: c.Agent.Service, actorID: "evaluation-worker",
 		}
@@ -472,7 +471,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		candidateCreators[evaldomain.ResourceKindAgent] = agentAdapter
 		agentProvider = agentAdapter
 	}
-	if c.MCP != nil && c.MCP.Manager != nil {
+	if c.MCP != nil && c.MCP.Manager != nil && sharedRevisionService != nil {
 		mcpAdapter := mcpEvaluationAdapter{
 			runtime: c.MCP.Manager, revisions: sharedRevisionService,
 			runtimeStore: c.RevisionObjectStore, actorID: "evaluation-worker",
@@ -497,6 +496,12 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	worker := evalapp.NewWorker(evaluationTenantLister{pool: db}, jobService, time.Second)
 	worker.Start(ctx)
 	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })
+	var baselineService *evalapp.BaselineService
+	if sharedRevisionService != nil {
+		baselineService = evalapp.NewBaselineService(evaluationBaselineRouter{providers: map[evaldomain.ResourceKind]evalport.ResourceRevisionProvider{
+			evaldomain.ResourceKindAgent: agentProvider, evaldomain.ResourceKindMCP: mcpProvider,
+		}})
+	}
 	c.Evaluation = &Evaluation{
 		Service:             service,
 		SuiteService:        suiteService,
@@ -509,9 +514,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		CandidateService:    evalapp.NewCandidateCommandService(candidateRepo),
 		AgentProvider:       agentProvider,
 		MCPProvider:         mcpProvider,
-		BaselineService: evalapp.NewBaselineService(evaluationBaselineRouter{providers: map[evaldomain.ResourceKind]evalport.ResourceRevisionProvider{
-			evaldomain.ResourceKindAgent: agentProvider, evaldomain.ResourceKindMCP: mcpProvider,
-		}}),
+		BaselineService:     baselineService,
 	}
 	if c.Agent != nil && c.Agent.Service != nil {
 		c.Agent.Service.SetSkillRevisionResolver(experimentSkillRevisionResolver{service: experimentService})

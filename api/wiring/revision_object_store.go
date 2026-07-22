@@ -35,7 +35,8 @@ func (c *Container) buildRevisionObjectStore(ctx context.Context) error {
 	if c.RevisionObjectStore != nil {
 		return nil
 	}
-	if !c.Config.TracePayload.Enabled {
+	if c.Config.TracePayload.Endpoint == "" || c.Config.TracePayload.AccessKey == "" ||
+		c.Config.TracePayload.SecretKey == "" || c.Config.TracePayload.Bucket == "" {
 		return nil
 	}
 	client, err := minio.New(c.Config.TracePayload.Endpoint, &minio.Options{

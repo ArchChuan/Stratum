@@ -156,12 +156,16 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 
 	tools, err := client.ListTools(ctx)
 	if err != nil {
-		m.logger.Warn("failed to list tools", zap.String("server_id", config.ID), zap.Error(err))
+		_ = disconnectMCPClient(client)
+		finish()
+		return fmt.Errorf("discover MCP tools: %w", err)
 	}
 
 	resources, err := client.ListResources(ctx)
 	if err != nil {
-		m.logger.Warn("failed to list resources", zap.String("server_id", config.ID), zap.Error(err))
+		_ = disconnectMCPClient(client)
+		finish()
+		return fmt.Errorf("discover MCP resources: %w", err)
 	}
 
 	m.cache.Store(key, tools, resources)
@@ -191,6 +195,12 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 		zap.Int("resources", len(resources)))
 
 	return nil
+}
+
+func disconnectMCPClient(client MCPClient) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), revisionClientCleanupTimeout)
+	defer cancel()
+	return client.Disconnect(cleanupCtx)
 }
 
 // Disconnect 断开连接

@@ -83,3 +83,26 @@ func TestEvaluateContractClassifiesTimeoutAndMalformedOutput(t *testing.T) {
 		}
 	})
 }
+
+func TestEvaluateContractUsesOneTotalRetryBudget(t *testing.T) {
+	started := time.Now()
+	calls := 0
+	result, err := EvaluateContract(context.Background(), ContractSnapshot{
+		EnabledTools: []string{"tool"}, Timeout: 45 * time.Millisecond, MaxRetries: 5,
+	}, ContractCase{ToolName: " tool ", Arguments: map[string]any{}},
+		func(ctx context.Context, tool string, _ map[string]any) (any, error) {
+			calls++
+			if tool != "tool" {
+				t.Fatalf("tool was not canonicalized: %q", tool)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(30 * time.Millisecond):
+				return nil, errors.New("temporary")
+			}
+		})
+	if err == nil || result.ErrorCategory != ContractErrorTimeout || time.Since(started) > 100*time.Millisecond || calls > 2 {
+		t.Fatalf("result=%+v calls=%d elapsed=%s err=%v", result, calls, time.Since(started), err)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/config"
 	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 )
 
@@ -20,6 +21,16 @@ func TestNewFromExistingCompositionBuildsRevisionStoreBeforeMCP(t *testing.T) {
 	}
 	if container.RevisionObjectStore != store {
 		t.Fatal("existing revision object store was replaced")
+	}
+}
+
+func TestRevisionObjectStoreDefaultTraceDisabledDoesNotBlockComposition(t *testing.T) {
+	container := &Container{Config: &config.Config{}}
+	if err := container.buildRevisionObjectStore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if container.RevisionObjectStore != nil {
+		t.Fatal("default configuration unexpectedly enabled revision object storage")
 	}
 }
 

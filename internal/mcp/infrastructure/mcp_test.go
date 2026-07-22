@@ -2,19 +2,30 @@ package infrastructure
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestHTTPClientErrorDoesNotExposeResponseBody(t *testing.T) {
+	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("Mcp-Session-Id", "session-1")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte("mcp-sensitive-sentinel"))
 	}))
@@ -393,11 +404,74 @@ func TestClientManagerCallToolWithConfigClosesIsolatedClient(t *testing.T) {
 	}
 }
 
+func TestBaseClientHTTPInitializeRejectsNon2xxWithoutLeakingQuery(t *testing.T) {
+	secretQuery := "credential=synthetic-sensitive-value"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "raw upstream body", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "server-1", Name: "test", Transport: "http", URL: server.URL + "?" + secretQuery, Timeout: time.Second,
+	}, zap.NewNop())
+	err := client.Connect(context.Background())
+	if err == nil || strings.Contains(err.Error(), secretQuery) || strings.Contains(client.GetServerInfo().Error, secretQuery) ||
+		client.GetServerInfo().Error != "connect_failed" {
+		t.Fatalf("err=%v server_info=%+v", err, client.GetServerInfo())
+	}
+}
+
+func TestBaseClientHTTPInitializeTimeoutAndLogsExcludeQuery(t *testing.T) {
+	core, observed := observer.New(zap.DebugLevel)
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "server-1", Transport: "http", URL: server.URL + "?credential=synthetic-sensitive-value",
+		Timeout: 10 * time.Millisecond,
+	}, zap.New(core))
+	if err := client.Connect(context.Background()); err == nil {
+		t.Fatal("expected initialize timeout")
+	}
+	for _, entry := range observed.All() {
+		if strings.Contains(entry.Message+fmt.Sprint(entry.ContextMap()), "synthetic-sensitive-value") {
+			t.Fatalf("secret query leaked in logs: %+v", entry)
+		}
+	}
+}
+
+func TestBaseClientDisconnectKillsAndWaitsForStdioChild(t *testing.T) {
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "server-1", Transport: "stdio", Command: "sh", Args: []string{"-c", "sleep 30"},
+	}, zap.NewNop())
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	process := client.cmd.Process
+	if err := client.Disconnect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Signal(syscall.Signal(0)); err == nil {
+		t.Fatal("stdio child still alive after disconnect")
+	}
+}
+
+func TestClientManagerConnectFailsClosedWhenDiscoveryFails(t *testing.T) {
+	manager := NewClientManager(zap.NewNop(), nil, nil)
+	client := &revisionClientFake{listToolsErr: errors.New("discovery failed")}
+	manager.clientFactory = func(*MCPServerConfig, *zap.Logger) MCPClient { return client }
+	err := manager.Connect(context.Background(), &MCPServerConfig{ID: "server-1"})
+	if err == nil || client.disconnectCalls != 1 || manager.GetClient(context.Background(), "server-1") != nil {
+		t.Fatalf("client=%+v err=%v", client, err)
+	}
+}
+
 type revisionClientFake struct {
 	config          *MCPServerConfig
 	result          any
 	connectCalls    int
 	disconnectCalls int
+	listToolsErr    error
 }
 
 func (c *revisionClientFake) Connect(context.Context) error    { c.connectCalls++; return nil }
@@ -407,7 +481,9 @@ func (*revisionClientFake) IsHealthy() bool                    { return true }
 func (c *revisionClientFake) CallTool(context.Context, string, interface{}) (interface{}, error) {
 	return c.result, nil
 }
-func (*revisionClientFake) ListTools(context.Context) ([]*MCPTool, error)         { return nil, nil }
+func (c *revisionClientFake) ListTools(context.Context) ([]*MCPTool, error) {
+	return nil, c.listToolsErr
+}
 func (*revisionClientFake) ListResources(context.Context) ([]*MCPResource, error) { return nil, nil }
 func (*revisionClientFake) GetServerInfo() *MCPServerInfo                         { return nil }
 

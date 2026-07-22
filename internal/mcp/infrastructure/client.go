@@ -87,8 +87,8 @@ func (c *BaseClient) doConnect(ctx context.Context) error {
 
 	if err != nil {
 		c.serverInfo.Status = "error"
-		c.serverInfo.Error = err.Error()
-		c.logger.Error("failed to connect", zap.Error(err))
+		c.serverInfo.Error = "connect_failed"
+		c.logger.Error("failed to connect", zap.String("error_category", "connect_failed"))
 		return err
 	}
 
@@ -338,15 +338,19 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to connect to HTTP server: %w", err)
+		return errors.New("MCP HTTP initialize transport failed")
 	}
 	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("MCP HTTP initialize failed with status %d", resp.StatusCode)
+	}
 
 	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
 		c.sessionID = sid
 	}
 
-	c.logger.Info("HTTP connection established", zap.String("url", c.config.URL), zap.String("session_id", c.sessionID))
+	c.logger.Info("HTTP connection established", zap.String("transport", c.config.Transport),
+		zap.String("server_id", c.config.ID), zap.String("session_id", c.sessionID))
 	return nil
 }
 

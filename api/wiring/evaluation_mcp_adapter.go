@@ -471,7 +471,7 @@ func parseMCPContractCase(testCase evaldomain.EvalCase) (mcpapp.ContractCase, er
 	if !ok {
 		return mcpapp.ContractCase{}, errors.New("evaluation MCP adapter: case arguments must be an object")
 	}
-	return mcpapp.ContractCase{ToolName: tool, Arguments: arguments}, nil
+	return mcpapp.ContractCase{ToolName: strings.TrimSpace(tool), Arguments: arguments}, nil
 }
 
 func evaluationMCPContext(ctx context.Context, tenantID string) (context.Context, error) {
