@@ -379,6 +379,38 @@ func TestBaseClientGetServerInfo(t *testing.T) {
 	}
 }
 
+func TestClientManagerCallToolWithConfigClosesIsolatedClient(t *testing.T) {
+	manager := NewClientManager(zap.NewNop(), nil, nil)
+	client := &revisionClientFake{result: map[string]any{"ok": true}}
+	manager.clientFactory = func(config *MCPServerConfig, _ *zap.Logger) MCPClient {
+		client.config = config
+		return client
+	}
+	config := &MCPServerConfig{ID: "revision-server", URL: "https://original.example/mcp"}
+	result, err := manager.CallToolWithConfig(context.Background(), config, "lookup", map[string]any{"id": "1"})
+	if err != nil || client.connectCalls != 1 || client.disconnectCalls != 1 || client.config != config {
+		t.Fatalf("result=%+v client=%+v err=%v", result, client, err)
+	}
+}
+
+type revisionClientFake struct {
+	config          *MCPServerConfig
+	result          any
+	connectCalls    int
+	disconnectCalls int
+}
+
+func (c *revisionClientFake) Connect(context.Context) error    { c.connectCalls++; return nil }
+func (c *revisionClientFake) Disconnect(context.Context) error { c.disconnectCalls++; return nil }
+func (*revisionClientFake) IsConnected() bool                  { return true }
+func (*revisionClientFake) IsHealthy() bool                    { return true }
+func (c *revisionClientFake) CallTool(context.Context, string, interface{}) (interface{}, error) {
+	return c.result, nil
+}
+func (*revisionClientFake) ListTools(context.Context) ([]*MCPTool, error)         { return nil, nil }
+func (*revisionClientFake) ListResources(context.Context) ([]*MCPResource, error) { return nil, nil }
+func (*revisionClientFake) GetServerInfo() *MCPServerInfo                         { return nil }
+
 // TestClientManagerGetAllServerInfo 测试获取所有服务器信息
 func TestClientManagerGetAllServerInfo(t *testing.T) {
 	logger, _ := zap.NewDevelopment()

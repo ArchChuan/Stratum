@@ -3,6 +3,7 @@ package wiring
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -33,6 +34,7 @@ type Evaluation struct {
 	CandidateService    *evalapp.CandidateCommandService
 	AgentProvider       evalport.AgentRevisionProvider
 	MCPProvider         evalport.ResourceRevisionProvider
+	BaselineService     *evalapp.BaselineService
 }
 
 type evaluationResourceRouter struct {
@@ -79,6 +81,20 @@ func (r evaluationResourceRouter) SafeSummary(
 
 type evaluationCandidateRouter struct {
 	creators map[evaldomain.ResourceKind]evalport.CandidateCreator
+}
+
+type evaluationBaselineRouter struct {
+	providers map[evaldomain.ResourceKind]evalport.ResourceRevisionProvider
+}
+
+func (r evaluationBaselineRouter) CreatePublishedBaseline(
+	ctx context.Context, tenantID string, kind evaldomain.ResourceKind, resourceID string,
+) (evaldomain.ResourceRef, error) {
+	provider := r.providers[kind]
+	if provider == nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation baseline provider unavailable for %q", kind)
+	}
+	return provider.CreatePublishedBaseline(ctx, tenantID, resourceID)
 }
 
 func (r evaluationCandidateRouter) creator(kind evaldomain.ResourceKind) (evalport.CandidateCreator, error) {
@@ -441,12 +457,14 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	var agentProvider evalport.AgentRevisionProvider
 	var mcpProvider evalport.ResourceRevisionProvider
-	var sharedRevisionService *evalapp.RevisionService
-	if c.Agent != nil && c.Agent.RevisionObjectStore != nil {
-		sharedRevisionService = evalapp.NewRevisionService(
-			evalpersist.RevisionObjectStoreAdapter{Store: c.Agent.RevisionObjectStore},
-			evalpersist.NewPgRevisionRepository(db),
-		)
+	if c.RevisionObjectStore == nil {
+		return errors.New("evaluation revision object store unavailable")
+	}
+	sharedRevisionService := evalapp.NewRevisionService(
+		evalpersist.RevisionObjectStoreAdapter{Store: c.RevisionObjectStore},
+		evalpersist.NewPgRevisionRepository(db),
+	)
+	if c.Agent != nil {
 		agentAdapter := agentEvaluationAdapter{
 			revisions: sharedRevisionService, agents: c.Agent.Service, actorID: "evaluation-worker",
 		}
@@ -454,9 +472,10 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		candidateCreators[evaldomain.ResourceKindAgent] = agentAdapter
 		agentProvider = agentAdapter
 	}
-	if c.MCP != nil && c.MCP.Manager != nil && sharedRevisionService != nil {
+	if c.MCP != nil && c.MCP.Manager != nil {
 		mcpAdapter := mcpEvaluationAdapter{
-			runtime: c.MCP.Manager, revisions: sharedRevisionService, actorID: "evaluation-worker",
+			runtime: c.MCP.Manager, revisions: sharedRevisionService,
+			runtimeStore: c.RevisionObjectStore, actorID: "evaluation-worker",
 		}
 		resourceAdapters[evaldomain.ResourceKindMCP] = mcpAdapter
 		candidateCreators[evaldomain.ResourceKindMCP] = mcpAdapter
@@ -490,6 +509,9 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		CandidateService:    evalapp.NewCandidateCommandService(candidateRepo),
 		AgentProvider:       agentProvider,
 		MCPProvider:         mcpProvider,
+		BaselineService: evalapp.NewBaselineService(evaluationBaselineRouter{providers: map[evaldomain.ResourceKind]evalport.ResourceRevisionProvider{
+			evaldomain.ResourceKindAgent: agentProvider, evaldomain.ResourceKindMCP: mcpProvider,
+		}}),
 	}
 	if c.Agent != nil && c.Agent.Service != nil {
 		c.Agent.Service.SetSkillRevisionResolver(experimentSkillRevisionResolver{service: experimentService})

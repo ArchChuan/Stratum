@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -118,17 +119,41 @@ func (c *BaseClient) ensureConnected(ctx context.Context) error {
 func (c *BaseClient) Disconnect(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	if !c.connected {
-		return nil
-	}
-
 	c.connected = false
 	c.healthy = false
 	c.serverInfo.Status = "disconnected"
+	var result error
+	if c.stdin != nil {
+		if err := c.stdin.Close(); err != nil {
+			result = errors.Join(result, fmt.Errorf("close MCP stdin: %w", err))
+		}
+		c.stdin = nil
+	}
+	if c.stdout != nil {
+		if err := c.stdout.Close(); err != nil {
+			result = errors.Join(result, fmt.Errorf("close MCP stdout: %w", err))
+		}
+		c.stdout = nil
+	}
+	if c.cmd != nil && c.cmd.Process != nil {
+		command := c.cmd
+		if err := command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			result = errors.Join(result, fmt.Errorf("stop MCP process: %w", err))
+		}
+		if err := command.Wait(); err != nil {
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				result = errors.Join(result, fmt.Errorf("wait MCP process: %w", err))
+			}
+		}
+		c.cmd = nil
+	}
+	if c.httpClient != nil {
+		c.httpClient.CloseIdleConnections()
+		c.httpClient = nil
+	}
 	c.logger.Info("disconnected from MCP server")
-
-	return nil
+	return result
 }
 
 // IsConnected 检查是否已连接

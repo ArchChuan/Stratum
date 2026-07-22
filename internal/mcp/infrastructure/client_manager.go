@@ -19,6 +19,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const revisionClientCleanupTimeout = 5 * time.Second
+
 // ClientManager 管理多个 MCP 客户端
 type ClientManager struct {
 	clients    map[string]MCPClient
@@ -247,6 +249,57 @@ func (m *ClientManager) CallTool(ctx context.Context, serverID, toolName string,
 	}
 
 	return client.CallTool(ctx, toolName, input)
+}
+
+// CallToolWithConfig uses an isolated client built from an immutable revision
+// config. It never registers or persists the client in the mutable manager.
+func (m *ClientManager) CallToolWithConfig(
+	ctx context.Context, config *MCPServerConfig, toolName string, input any,
+) (result any, resultErr error) {
+	return m.withRevisionClient(ctx, config, func(client MCPClient) (any, error) {
+		return client.CallTool(ctx, toolName, input)
+	})
+}
+
+// ListToolsWithConfig discovers the contract through the same immutable
+// revision config used for execution.
+func (m *ClientManager) ListToolsWithConfig(
+	ctx context.Context, config *MCPServerConfig,
+) (tools []*MCPTool, resultErr error) {
+	result, err := m.withRevisionClient(ctx, config, func(client MCPClient) (any, error) {
+		return client.ListTools(ctx)
+	})
+	if err != nil {
+		return nil, err
+	}
+	tools, ok := result.([]*MCPTool)
+	if !ok {
+		return nil, errors.New("MCP revision client: invalid tool response")
+	}
+	return tools, nil
+}
+
+func (m *ClientManager) withRevisionClient(
+	ctx context.Context, config *MCPServerConfig, operation func(MCPClient) (any, error),
+) (result any, resultErr error) {
+	if m == nil || m.clientFactory == nil || config == nil || strings.TrimSpace(config.ID) == "" {
+		return nil, errors.New("MCP revision client: configuration unavailable")
+	}
+	client := m.clientFactory(config, m.logger)
+	if client == nil {
+		return nil, errors.New("MCP revision client: construction failed")
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), revisionClientCleanupTimeout)
+		defer cancel()
+		if err := client.Disconnect(cleanupCtx); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("MCP revision client: disconnect: %w", err))
+		}
+	}()
+	if err := client.Connect(ctx); err != nil {
+		return nil, fmt.Errorf("MCP revision client: connect: %w", err)
+	}
+	return operation(client)
 }
 
 // ListTools 列出工具

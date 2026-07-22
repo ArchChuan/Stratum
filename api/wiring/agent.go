@@ -17,9 +17,6 @@ import (
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/google/uuid"
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
-	"go.uber.org/zap"
 )
 
 // Agent groups the agent persistence/registry services and execution
@@ -162,26 +159,11 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	})
 	a := &Agent{Registry: registry, EvidenceProvider: evidenceProvider}
 	if c.Config.TracePayload.Enabled {
-		client, err := minio.New(c.Config.TracePayload.Endpoint, &minio.Options{
-			Creds: credentials.NewStaticV4(
-				c.Config.TracePayload.AccessKey, c.Config.TracePayload.SecretKey, "",
-			),
-			Secure: c.Config.TracePayload.UseTLS,
-		})
-		if err != nil {
-			c.Logger.Warn("trace payload client initialization failed", zap.Error(err))
-		} else {
-			store := agentobjects.NewStore(
-				client, c.Config.TracePayload.Bucket, c.Platform.AESKey,
-			)
-			bucketCtx, cancel := context.WithTimeout(ctx, c.Config.Opik.Timeout)
-			if err := store.EnsureBucket(bucketCtx); err != nil {
-				c.Logger.Warn("trace payload bucket unavailable", zap.Error(err))
-			}
-			cancel()
-			a.TracePayloadStore = store
-			a.RevisionObjectStore = store.GenericStore()
-		}
+		store := agentobjects.NewStore(
+			c.revisionObjectClient, c.Config.TracePayload.Bucket, c.Platform.AESKey,
+		)
+		a.TracePayloadStore = store
+		a.RevisionObjectStore = c.RevisionObjectStore
 	}
 	if db != nil {
 		a.ChatStore = persistence.NewPgChatStore(db, c.Logger)

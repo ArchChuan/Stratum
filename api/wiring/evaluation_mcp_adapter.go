@@ -15,6 +15,7 @@ import (
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
 
@@ -22,6 +23,7 @@ const (
 	mcpMinimumEvaluationTimeout = 100 * time.Millisecond
 	mcpMaximumEvaluationTimeout = 2 * time.Minute
 	mcpMaximumEvaluationRetries = 5
+	mcpRuntimeCleanupTimeout    = 5 * time.Second
 )
 
 type mcpRevisionService interface {
@@ -33,23 +35,25 @@ type mcpRevisionService interface {
 type mcpRevisionRuntime interface {
 	GetServerConfig(context.Context, string) (*mcpdomain.ServerConfig, error)
 	ListTools(context.Context, string) ([]*mcpdomain.Tool, error)
-	CallTool(context.Context, string, string, any) (any, error)
+	ListToolsWithConfig(context.Context, *mcpdomain.ServerConfig) ([]*mcpdomain.Tool, error)
+	CallToolWithConfig(context.Context, *mcpdomain.ServerConfig, string, any) (any, error)
 }
 
 type mcpRevisionSnapshot struct {
-	ServerID       string   `json:"server_id"`
-	Name           string   `json:"name"`
-	RuntimeRef     string   `json:"runtime_ref"`
-	EnabledTools   []string `json:"enabled_tools"`
-	TimeoutMS      int64    `json:"timeout_ms"`
-	MaxRetries     int      `json:"max_retries"`
-	ToolSchemaHash string   `json:"tool_schema_hash"`
+	ServerID       string                   `json:"server_id"`
+	Name           string                   `json:"name"`
+	RuntimeRef     pkgobjectstore.Reference `json:"runtime_ref"`
+	EnabledTools   []string                 `json:"enabled_tools"`
+	TimeoutMS      int64                    `json:"timeout_ms"`
+	MaxRetries     int                      `json:"max_retries"`
+	ToolSchemaHash string                   `json:"tool_schema_hash"`
 }
 
 type mcpEvaluationAdapter struct {
-	runtime   mcpRevisionRuntime
-	revisions mcpRevisionService
-	actorID   string
+	runtime      mcpRevisionRuntime
+	revisions    mcpRevisionService
+	runtimeStore pkgobjectstore.Store
+	actorID      string
 }
 
 func (a mcpEvaluationAdapter) CreatePublishedBaseline(
@@ -59,20 +63,27 @@ func (a mcpEvaluationAdapter) CreatePublishedBaseline(
 	if err != nil {
 		return evaldomain.ResourceRef{}, err
 	}
-	if strings.TrimSpace(serverID) == "" || a.runtime == nil || a.revisions == nil {
+	if strings.TrimSpace(serverID) == "" || a.runtime == nil || a.revisions == nil || a.runtimeStore == nil {
 		return evaldomain.ResourceRef{}, errors.New("evaluation MCP adapter: baseline dependencies required")
 	}
 	config, err := a.runtime.GetServerConfig(ctx, serverID)
 	if err != nil {
 		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation MCP adapter: load server: %w", err)
 	}
-	tools, err := a.runtime.ListTools(ctx, serverID)
+	tools, err := a.runtime.ListToolsWithConfig(ctx, config)
 	if err != nil {
 		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation MCP adapter: discover tools: %w", err)
 	}
-	snapshot, err := newMCPRevisionSnapshot(tenantID, config, tools)
+	runtimeRef, err := a.runtimeStore.Put(ctx, pkgobjectstore.Payload{
+		TenantID: tenantID, Namespace: "evaluation-mcp-runtime", ID: serverID,
+		Value: mcpRuntimeConfigEnvelope{TenantID: tenantID, Config: config},
+	})
 	if err != nil {
-		return evaldomain.ResourceRef{}, err
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation MCP adapter: store runtime config: %w", err)
+	}
+	snapshot, err := newMCPRevisionSnapshot(config, tools, runtimeRef)
+	if err != nil {
+		return evaldomain.ResourceRef{}, errors.Join(err, a.deleteRuntimeConfig(runtimeRef))
 	}
 	contentHash, err := canonicalHash(snapshot)
 	if err != nil {
@@ -88,7 +99,9 @@ func (a mcpEvaluationAdapter) CreatePublishedBaseline(
 		Payload: snapshot, SafeSummary: map[string]any{"resource_name": snapshot.Name},
 	})
 	if err != nil {
-		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation MCP adapter: create baseline: %w", err)
+		return evaldomain.ResourceRef{}, errors.Join(
+			fmt.Errorf("evaluation MCP adapter: create baseline: %w", err), a.deleteRuntimeConfig(runtimeRef),
+		)
 	}
 	ref := evaldomain.ResourceRef{Kind: evaldomain.ResourceKindMCP, ResourceID: serverID, RevisionID: created.ID}
 	if _, err := a.revisions.Publish(ctx, tenantID, ref); err != nil {
@@ -177,7 +190,11 @@ func (a mcpEvaluationAdapter) ExecuteRevision(
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	tools, err := a.runtime.ListTools(ctx, snapshot.ServerID)
+	config, err := a.loadRuntimeConfig(ctx, tenantID, snapshot)
+	if err != nil {
+		return evalport.ExecutionResult{}, err
+	}
+	tools, err := a.runtime.ListToolsWithConfig(ctx, config)
 	if err != nil {
 		return evalport.ExecutionResult{}, errors.New("evaluation MCP adapter: tool discovery failed")
 	}
@@ -194,7 +211,7 @@ func (a mcpEvaluationAdapter) ExecuteRevision(
 		MaxRetries: snapshot.MaxRetries, ExpectedSchemaHash: snapshot.ToolSchemaHash,
 		DiscoveredSchemaHash: discoveredHash,
 	}, contractCase, func(callCtx context.Context, tool string, arguments map[string]any) (any, error) {
-		return a.runtime.CallTool(callCtx, snapshot.ServerID, tool, arguments)
+		return a.runtime.CallToolWithConfig(callCtx, config, tool, arguments)
 	})
 	return evalport.ExecutionResult{Output: result.Output, DurationMs: result.DurationMs}, err
 }
@@ -231,7 +248,8 @@ func (a mcpEvaluationAdapter) loadPublished(
 		return evaldomain.ResourceRevision{}, mcpRevisionSnapshot{},
 			fmt.Errorf("evaluation MCP adapter: decode revision: %w", err)
 	}
-	if snapshot.ServerID != ref.ResourceID || strings.TrimSpace(snapshot.RuntimeRef) == "" {
+	if snapshot.ServerID != ref.ResourceID || strings.TrimSpace(snapshot.RuntimeRef.URI) == "" ||
+		strings.TrimSpace(snapshot.RuntimeRef.SHA256) == "" {
 		return evaldomain.ResourceRevision{}, mcpRevisionSnapshot{}, evalport.ErrCenterResourceNotFound
 	}
 	if err := validateMCPRuntimeBounds(snapshot.TimeoutMS, snapshot.MaxRetries); err != nil {
@@ -240,8 +258,42 @@ func (a mcpEvaluationAdapter) loadPublished(
 	return revision, snapshot, nil
 }
 
+type mcpRuntimeConfigEnvelope struct {
+	TenantID string                  `json:"tenant_id"`
+	Config   *mcpdomain.ServerConfig `json:"config"`
+}
+
+func (a mcpEvaluationAdapter) loadRuntimeConfig(
+	ctx context.Context, tenantID string, snapshot mcpRevisionSnapshot,
+) (*mcpdomain.ServerConfig, error) {
+	if a.runtimeStore == nil {
+		return nil, errors.New("evaluation MCP adapter: runtime store unavailable")
+	}
+	payload, err := a.runtimeStore.Get(ctx, snapshot.RuntimeRef)
+	if err != nil {
+		return nil, errors.New("evaluation MCP adapter: runtime config unavailable")
+	}
+	var envelope mcpRuntimeConfigEnvelope
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return nil, errors.New("evaluation MCP adapter: runtime config invalid")
+	}
+	if envelope.TenantID != tenantID || envelope.Config == nil || envelope.Config.ID != snapshot.ServerID {
+		return nil, evalport.ErrCenterResourceNotFound
+	}
+	return envelope.Config, nil
+}
+
+func (a mcpEvaluationAdapter) deleteRuntimeConfig(ref pkgobjectstore.Reference) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), mcpRuntimeCleanupTimeout)
+	defer cancel()
+	if err := a.runtimeStore.Delete(cleanupCtx, ref); err != nil {
+		return fmt.Errorf("evaluation MCP adapter: cleanup runtime config: %w", err)
+	}
+	return nil
+}
+
 func newMCPRevisionSnapshot(
-	tenantID string, config *mcpdomain.ServerConfig, tools []*mcpdomain.Tool,
+	config *mcpdomain.ServerConfig, tools []*mcpdomain.Tool, runtimeRef pkgobjectstore.Reference,
 ) (mcpRevisionSnapshot, error) {
 	if config == nil || strings.TrimSpace(config.ID) == "" || strings.TrimSpace(config.Name) == "" {
 		return mcpRevisionSnapshot{}, errors.New("evaluation MCP adapter: invalid server config")
@@ -266,9 +318,8 @@ func newMCPRevisionSnapshot(
 		enabled = append(enabled, tool.Name)
 	}
 	sort.Strings(enabled)
-	runtimeHash := sha256.Sum256([]byte(tenantID + "\x00" + config.ID))
 	return mcpRevisionSnapshot{ServerID: config.ID, Name: config.Name,
-		RuntimeRef: "mcp-runtime:" + hex.EncodeToString(runtimeHash[:]), EnabledTools: enabled,
+		RuntimeRef: runtimeRef, EnabledTools: enabled,
 		TimeoutMS: timeoutMS, MaxRetries: maxRetries, ToolSchemaHash: schemaHash}, nil
 }
 

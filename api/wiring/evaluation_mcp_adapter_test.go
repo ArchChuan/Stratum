@@ -3,6 +3,7 @@ package wiring
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
 
@@ -21,7 +23,9 @@ func TestMCPEvaluationAdapterCreatesPublishedSafeBaseline(t *testing.T) {
 		Auth: &mcpdomain.AuthConfig{Type: mcpdomain.AuthTypeBearer, Token: "top-secret"}, Timeout: 4 * time.Second,
 		Retry: &mcpdomain.RetryConfig{Enabled: true, MaxRetries: 2},
 	}, tools: []*mcpdomain.Tool{{Name: "lookup", InputSchema: map[string]any{"type": "object"}}}}
-	adapter := mcpEvaluationAdapter{runtime: runtime, revisions: revisions, actorID: "evaluation-worker"}
+	runtimeStore := &fakeMCPRuntimeStore{}
+	adapter := mcpEvaluationAdapter{runtime: runtime, revisions: revisions, runtimeStore: runtimeStore,
+		actorID: "evaluation-worker"}
 
 	ref, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "server-1")
 	if err != nil || ref.Kind != evaldomain.ResourceKindMCP || revisions.publishCalls != 1 {
@@ -33,6 +37,10 @@ func TestMCPEvaluationAdapterCreatesPublishedSafeBaseline(t *testing.T) {
 			t.Fatalf("private snapshot leaked %q: %s", secret, payload)
 		}
 	}
+	storedConfig := runtimeStore.lastValue.(mcpRuntimeConfigEnvelope).Config
+	if storedConfig.URL != "https://secret.example/mcp" || storedConfig.Auth.Token != "top-secret" {
+		t.Fatal("runtime config was not delegated to encrypted object storage")
+	}
 	summary, _ := json.Marshal(revisions.input.SafeSummary)
 	if strings.Contains(string(summary), "runtime_ref") || strings.Contains(string(summary), "schema") {
 		t.Fatalf("unsafe summary keys: %s", summary)
@@ -43,7 +51,8 @@ func TestMCPEvaluationAdapterCreatesPublishedSafeBaseline(t *testing.T) {
 }
 
 func TestMCPEvaluationAdapterCandidateIsExactBoundedAndIdempotent(t *testing.T) {
-	snapshot := mcpRevisionSnapshot{ServerID: "server-1", Name: "orders", RuntimeRef: "server-1",
+	snapshot := mcpRevisionSnapshot{ServerID: "server-1", Name: "orders",
+		RuntimeRef:   pkgobjectstore.Reference{URI: "object://runtime/one", SHA256: "hash"},
 		EnabledTools: []string{"lookup", "health"}, TimeoutMS: 4000, MaxRetries: 1, ToolSchemaHash: "schema-hash"}
 	revisions := publishedMCPRevisions(t, snapshot)
 	adapter := mcpEvaluationAdapter{revisions: revisions, actorID: "evaluation-worker"}
@@ -72,11 +81,15 @@ func TestMCPEvaluationAdapterCandidateIsExactBoundedAndIdempotent(t *testing.T) 
 }
 
 func TestMCPEvaluationAdapterDetectsSchemaDriftBeforeInvocation(t *testing.T) {
-	snapshot := mcpRevisionSnapshot{ServerID: "server-1", Name: "orders", RuntimeRef: "server-1",
+	snapshot := mcpRevisionSnapshot{ServerID: "server-1", Name: "orders",
+		RuntimeRef:   pkgobjectstore.Reference{URI: "object://runtime/one", SHA256: "hash"},
 		EnabledTools: []string{"lookup"}, TimeoutMS: 1000, ToolSchemaHash: "old"}
 	revisions := publishedMCPRevisions(t, snapshot)
 	runtime := &fakeMCPRuntime{tools: []*mcpdomain.Tool{{Name: "lookup", InputSchema: map[string]any{"type": "string"}}}}
-	adapter := mcpEvaluationAdapter{revisions: revisions, runtime: runtime}
+	adapter := mcpEvaluationAdapter{revisions: revisions, runtime: runtime, runtimeStore: &fakeMCPRuntimeStore{
+		values: map[string]any{"object://runtime/one": mcpRuntimeConfigEnvelope{TenantID: "tenant-1",
+			Config: &mcpdomain.ServerConfig{ID: "server-1", Timeout: time.Second}}},
+	}}
 	_, err := adapter.ExecuteRevision(context.Background(), "tenant-1", mcpRef("published-1"), evaldomain.EvalCase{
 		Input: map[string]any{"tool": "lookup", "arguments": map[string]any{"id": "1"}},
 	})
@@ -91,10 +104,18 @@ func TestMCPEvaluationAdapterInvokesExistingToolWithTenantContext(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := mcpRevisionSnapshot{ServerID: "server-1", Name: "orders", RuntimeRef: "opaque",
+	ref := pkgobjectstore.Reference{URI: "object://runtime/original", SHA256: "runtime-hash"}
+	snapshot := mcpRevisionSnapshot{ServerID: "server-1", Name: "orders", RuntimeRef: ref,
 		EnabledTools: []string{"lookup"}, TimeoutMS: 1000, ToolSchemaHash: hash}
-	runtime := &fakeMCPRuntime{tools: tools, callResult: map[string]any{"private": "not persisted"}}
-	adapter := mcpEvaluationAdapter{revisions: publishedMCPRevisions(t, snapshot), runtime: runtime}
+	runtime := &fakeMCPRuntime{config: &mcpdomain.ServerConfig{
+		ID: "server-1", URL: "https://updated.example/mcp", Timeout: time.Second,
+	}, tools: tools, callResult: map[string]any{"private": "not persisted"}}
+	store := &fakeMCPRuntimeStore{values: map[string]any{ref.URI: mcpRuntimeConfigEnvelope{
+		TenantID: "tenant-1", Config: &mcpdomain.ServerConfig{
+			ID: "server-1", Name: "orders", URL: "https://original.example/mcp", Timeout: time.Second,
+		},
+	}}}
+	adapter := mcpEvaluationAdapter{revisions: publishedMCPRevisions(t, snapshot), runtime: runtime, runtimeStore: store}
 	result, err := adapter.ExecuteRevision(context.Background(), "tenant-1", mcpRef("published-1"), evaldomain.EvalCase{
 		Input: map[string]any{"tool": "lookup", "arguments": map[string]any{"id": "1"}},
 	})
@@ -106,6 +127,27 @@ func TestMCPEvaluationAdapterInvokesExistingToolWithTenantContext(t *testing.T) 
 	if strings.Contains(string(encoded), "not persisted") {
 		t.Fatalf("raw provider output escaped: %s", encoded)
 	}
+	if runtime.callConfig.URL != "https://original.example/mcp" {
+		t.Fatalf("revision used mutable config: %+v", runtime.callConfig)
+	}
+}
+
+func TestMCPEvaluationAdapterRejectsCrossTenantRuntimeReference(t *testing.T) {
+	ref := pkgobjectstore.Reference{URI: "object://runtime/tenant-1", SHA256: "hash"}
+	snapshot := mcpRevisionSnapshot{ServerID: "server-1", Name: "orders", RuntimeRef: ref,
+		EnabledTools: []string{"lookup"}, TimeoutMS: 1000, ToolSchemaHash: "hash"}
+	store := &fakeMCPRuntimeStore{values: map[string]any{
+		ref.URI: mcpRuntimeConfigEnvelope{TenantID: "tenant-1",
+			Config: &mcpdomain.ServerConfig{ID: "server-1", Timeout: time.Second}},
+	}}
+	adapter := mcpEvaluationAdapter{revisions: publishedMCPRevisions(t, snapshot), runtime: &fakeMCPRuntime{},
+		runtimeStore: store}
+	_, err := adapter.ExecuteRevision(context.Background(), "tenant-2", mcpRef("published-1"), evaldomain.EvalCase{
+		Input: map[string]any{"tool": "lookup", "arguments": map[string]any{}},
+	})
+	if err == nil {
+		t.Fatal("expected cross-tenant runtime reference rejection")
+	}
 }
 
 func TestMCPEvaluationAdapterSummariesPassRealRevisionValidation(t *testing.T) {
@@ -113,7 +155,7 @@ func TestMCPEvaluationAdapterSummariesPassRealRevisionValidation(t *testing.T) {
 	runtime := &fakeMCPRuntime{config: &mcpdomain.ServerConfig{
 		ID: "server-1", Name: "orders", Timeout: time.Second,
 	}, tools: []*mcpdomain.Tool{{Name: "lookup", InputSchema: map[string]any{"type": "object"}}}}
-	adapter := mcpEvaluationAdapter{runtime: runtime, revisions: revisions}
+	adapter := mcpEvaluationAdapter{runtime: runtime, revisions: revisions, runtimeStore: &fakeMCPRuntimeStore{}}
 	baseline, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "server-1")
 	if err != nil {
 		t.Fatalf("baseline rejected by real RevisionService: %v", err)
@@ -134,6 +176,7 @@ type fakeMCPRuntime struct {
 	callCount     int
 	callTool      string
 	callArguments map[string]any
+	callConfig    *mcpdomain.ServerConfig
 }
 
 func (f *fakeMCPRuntime) GetServerConfig(ctx context.Context, _ string) (*mcpdomain.ServerConfig, error) {
@@ -151,8 +194,14 @@ func (f *fakeMCPRuntime) ListTools(ctx context.Context, _ string) ([]*mcpdomain.
 	}
 	return f.tools, nil
 }
-func (f *fakeMCPRuntime) CallTool(ctx context.Context, _ string, tool string, input any) (any, error) {
+func (f *fakeMCPRuntime) ListToolsWithConfig(context.Context, *mcpdomain.ServerConfig) ([]*mcpdomain.Tool, error) {
+	return f.tools, nil
+}
+func (f *fakeMCPRuntime) CallToolWithConfig(
+	ctx context.Context, config *mcpdomain.ServerConfig, tool string, input any,
+) (any, error) {
 	f.callCount++
+	f.callConfig = config
 	f.callTool = tool
 	f.callArguments, _ = input.(map[string]any)
 	if tc, ok := postgres.FromContext(ctx); ok {
@@ -160,6 +209,29 @@ func (f *fakeMCPRuntime) CallTool(ctx context.Context, _ string, tool string, in
 	}
 	return f.callResult, f.callErr
 }
+
+type fakeMCPRuntimeStore struct {
+	values    map[string]any
+	lastValue any
+}
+
+func (s *fakeMCPRuntimeStore) Put(_ context.Context, payload pkgobjectstore.Payload) (pkgobjectstore.Reference, error) {
+	s.lastValue = payload.Value
+	if s.values == nil {
+		s.values = map[string]any{}
+	}
+	uri := "object://runtime/" + payload.TenantID
+	s.values[uri] = payload.Value
+	return pkgobjectstore.Reference{URI: uri, SHA256: "runtime-hash"}, nil
+}
+func (s *fakeMCPRuntimeStore) Get(_ context.Context, ref pkgobjectstore.Reference) ([]byte, error) {
+	value, ok := s.values[ref.URI]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	return json.Marshal(value)
+}
+func (*fakeMCPRuntimeStore) Delete(context.Context, pkgobjectstore.Reference) error { return nil }
 
 type fakeMCPRevisionService struct {
 	revision     evaldomain.ResourceRevision

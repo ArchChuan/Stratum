@@ -10,8 +10,11 @@ import (
 
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
+	mcpport "github.com/byteBuilderX/stratum/internal/mcp/domain/port"
 	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
 )
+
+var _ mcpport.RevisionClientManager = (*mcp.ClientManager)(nil)
 
 // MCP holds the Model-Context-Protocol client manager and tool
 // registry exposed to agents. The manager owns long-lived
