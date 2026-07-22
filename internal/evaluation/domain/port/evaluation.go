@@ -9,6 +9,22 @@ import (
 )
 
 var ErrRevisionCommitUnknown = errors.New("revision metadata commit outcome unknown")
+var ErrCenterResourceNotFound = errors.New("evaluation center resource not found")
+
+type CenterFilter struct {
+	ResourceKind, ResourceID, Status, Cursor string
+	Limit                                    int
+}
+
+type CenterQueryRepository interface {
+	Overview(context.Context, string) (domain.CenterOverview, error)
+	ListResources(context.Context, string, CenterFilter) (domain.ResourcePage, error)
+	ListSuites(context.Context, string, CenterFilter) (domain.SuitePage, error)
+	ListRuns(context.Context, string, CenterFilter) (domain.RunPage, error)
+	ListCandidates(context.Context, string, CenterFilter) (domain.CandidatePage, error)
+	ListExperiments(context.Context, string, CenterFilter) (domain.ExperimentPage, error)
+	Timeline(context.Context, string, CenterFilter) (domain.TimelinePage, error)
+}
 
 type ExecutionResult struct {
 	Output     any
