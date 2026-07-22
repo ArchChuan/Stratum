@@ -10,9 +10,11 @@ const { Option } = Select;
 
 interface Props {
   authType?: string;
+  editing?: boolean;
+  credentialConfigured?: boolean;
 }
 
-export const MCPAuthSection = ({ authType }: Props) => (
+export const MCPAuthSection = ({ authType, editing = false, credentialConfigured = false }: Props) => (
   <div style={mcpSectionStyle}>
     <SectionHeader
       icon={<SafetyOutlined />}
@@ -36,7 +38,8 @@ export const MCPAuthSection = ({ authType }: Props) => (
       <Form.Item
         label="Bearer Token"
         name="bearer_token"
-        rules={[{ required: true, message: '请输入 token' }]}
+        rules={[{ required: !editing || !credentialConfigured, message: '请输入 token' }]}
+        extra={editing && credentialConfigured ? '已配置，留空则保留原凭据' : undefined}
         style={{ marginBottom: 0 }}
       >
         <Input.Password placeholder="输入 Bearer Token" />
@@ -60,7 +63,8 @@ export const MCPAuthSection = ({ authType }: Props) => (
           <Form.Item
             label="API Key 值"
             name="api_key_value"
-            rules={[{ required: true, message: '请输入 API Key' }]}
+            rules={[{ required: !editing || !credentialConfigured, message: '请输入 API Key' }]}
+            extra={editing && credentialConfigured ? '已配置，留空则保留原凭据' : undefined}
             style={{ marginBottom: 0 }}
           >
             <Input.Password placeholder="sk-..." />
@@ -88,7 +92,8 @@ export const MCPAuthSection = ({ authType }: Props) => (
             <Form.Item
               label="Client Secret"
               name="oauth2_client_secret"
-              rules={[{ required: true }]}
+              rules={[{ required: !editing || !credentialConfigured }]}
+              extra={editing && credentialConfigured ? '已配置，留空则保留原凭据' : undefined}
             >
               <Input.Password />
             </Form.Item>

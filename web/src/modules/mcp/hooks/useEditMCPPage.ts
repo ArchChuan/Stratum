@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { mcpApi } from '../api/mcp.api';
-import type { MCPServerConfig } from '../model/mcp';
+import type { MCPServerConfig, MCPServerConfigResponse } from '../model/mcp';
 
 import {
   MCP_DEFAULT_TIMEOUT_SEC,
@@ -36,7 +36,7 @@ const parseKV = (str?: string): Record<string, string> => {
 
 const parseArgs = (str?: string): string[] => (str || '').split(/\s+/).filter(Boolean);
 
-export const configToFormValues = (cfg: MCPServerConfig) => ({
+export const configToFormValues = (cfg: MCPServerConfigResponse) => ({
   name: cfg.name,
   version: cfg.version,
   transport: cfg.transport,
@@ -51,13 +51,14 @@ export const configToFormValues = (cfg: MCPServerConfig) => ({
         .join('\n')
     : '',
   auth_type: cfg.auth?.type ?? 'none',
-  bearer_token: cfg.auth?.token,
   api_key_header: cfg.auth?.api_key_header,
-  api_key_value: cfg.auth?.api_key_value,
   oauth2_client_id: cfg.auth?.oauth2_client_id,
-  oauth2_client_secret: cfg.auth?.oauth2_client_secret,
   oauth2_token_url: cfg.auth?.oauth2_token_url,
   oauth2_scopes: cfg.auth?.oauth2_scopes?.join(', '),
+  bearer_token: undefined,
+  api_key_value: undefined,
+  oauth2_client_secret: undefined,
+  credential_configured: cfg.auth?.credential_configured ?? false,
   retry_enabled: cfg.retry?.enabled ?? false,
   retry_max_retries: cfg.retry?.max_retries ?? MCP_RETRY_MAX_RETRIES,
   retry_initial_delay_ms: cfg.retry?.initial_delay_ms ?? MCP_RETRY_INITIAL_DELAY_MS,
@@ -65,7 +66,7 @@ export const configToFormValues = (cfg: MCPServerConfig) => ({
   retry_backoff_factor: cfg.retry?.backoff_factor ?? MCP_RETRY_BACKOFF_FACTOR,
 });
 
-interface FormValues {
+export interface FormValues {
   name: string;
   version?: string;
   transport: string;
@@ -89,6 +90,52 @@ interface FormValues {
   retry_max_delay_ms?: number;
   retry_backoff_factor?: number;
 }
+
+export const buildMCPUpdateConfig = (id: string, values: FormValues): MCPServerConfig => {
+  const cfg: MCPServerConfig = {
+    id,
+    name: values.name,
+    version: values.version || '',
+    transport: values.transport,
+    timeout: (values.timeout_sec || MCP_DEFAULT_TIMEOUT_SEC) * 1e9,
+  };
+
+  if (values.transport === 'stdio') {
+    cfg.command = values.command || '';
+    cfg.args = parseArgs(values.args);
+    cfg.env = parseEnv(values.env);
+  } else {
+    cfg.url = values.url || '';
+    cfg.headers = parseKV(values.headers);
+    const authType = values.auth_type || 'none';
+    if (authType !== 'none') {
+      cfg.auth = { type: authType };
+      if (authType === 'bearer' && values.bearer_token) {
+        cfg.auth.token = values.bearer_token;
+      } else if (authType === 'api_key') {
+        cfg.auth.api_key_header = values.api_key_header || 'X-API-Key';
+        if (values.api_key_value) cfg.auth.api_key_value = values.api_key_value;
+      } else if (authType === 'oauth2') {
+        cfg.auth.oauth2_client_id = values.oauth2_client_id || '';
+        if (values.oauth2_client_secret) cfg.auth.oauth2_client_secret = values.oauth2_client_secret;
+        cfg.auth.oauth2_token_url = values.oauth2_token_url || '';
+        cfg.auth.oauth2_scopes = (values.oauth2_scopes || '').split(/[,\s]+/).filter(Boolean);
+      }
+    }
+  }
+
+  if (values.retry_enabled) {
+    cfg.retry = {
+      enabled: true,
+      max_retries: values.retry_max_retries ?? MCP_RETRY_MAX_RETRIES,
+      initial_delay_ms: values.retry_initial_delay_ms ?? MCP_RETRY_INITIAL_DELAY_MS,
+      max_delay_ms: values.retry_max_delay_ms ?? MCP_RETRY_MAX_DELAY_MS,
+      backoff_factor: values.retry_backoff_factor ?? MCP_RETRY_BACKOFF_FACTOR,
+    };
+  }
+
+  return cfg;
+};
 
 export const useEditMCPPage = (id: string) => {
   const [loading, setLoading] = useState(true);
@@ -114,49 +161,7 @@ export const useEditMCPPage = (id: string) => {
   const handleFinish = async (values: FormValues) => {
     setSubmitting(true);
     try {
-      const cfg: MCPServerConfig = {
-        id,
-        name: values.name,
-        version: values.version || '',
-        transport: values.transport,
-        timeout: (values.timeout_sec || MCP_DEFAULT_TIMEOUT_SEC) * 1e9,
-      };
-
-      if (values.transport === 'stdio') {
-        cfg.command = values.command || '';
-        cfg.args = parseArgs(values.args);
-        cfg.env = parseEnv(values.env);
-      } else {
-        cfg.url = values.url || '';
-        cfg.headers = parseKV(values.headers);
-        const authType = values.auth_type || 'none';
-        if (authType !== 'none') {
-          cfg.auth = { type: authType };
-          if (authType === 'bearer') {
-            cfg.auth.token = values.bearer_token || '';
-          } else if (authType === 'api_key') {
-            cfg.auth.api_key_header = values.api_key_header || 'X-API-Key';
-            cfg.auth.api_key_value = values.api_key_value || '';
-          } else if (authType === 'oauth2') {
-            cfg.auth.oauth2_client_id = values.oauth2_client_id || '';
-            cfg.auth.oauth2_client_secret = values.oauth2_client_secret || '';
-            cfg.auth.oauth2_token_url = values.oauth2_token_url || '';
-            cfg.auth.oauth2_scopes = (values.oauth2_scopes || '').split(/[,\s]+/).filter(Boolean);
-          }
-        }
-      }
-
-      if (values.retry_enabled) {
-        cfg.retry = {
-          enabled: true,
-          max_retries: values.retry_max_retries ?? MCP_RETRY_MAX_RETRIES,
-          initial_delay_ms: values.retry_initial_delay_ms ?? MCP_RETRY_INITIAL_DELAY_MS,
-          max_delay_ms: values.retry_max_delay_ms ?? MCP_RETRY_MAX_DELAY_MS,
-          backoff_factor: values.retry_backoff_factor ?? MCP_RETRY_BACKOFF_FACTOR,
-        };
-      }
-
-      await mcpApi.update(id, cfg);
+      await mcpApi.update(id, buildMCPUpdateConfig(id, values));
       message.success('MCP 服务器配置已更新并重新连接');
       navigate('/mcp');
     } catch (err) {

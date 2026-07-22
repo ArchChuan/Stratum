@@ -5,8 +5,9 @@ import {
   mcpServerSchema,
   mcpToolSchema,
   type MCPResource,
-  type MCPServer,
-  type MCPServerConfig,
+	type MCPServer,
+	type MCPServerConfig,
+	type MCPServerConfigResponse,
 	type MCPTool,
 	type MCPToolOption,
 	type MCPToolPolicy,
@@ -22,9 +23,9 @@ export const mcpApi = {
   },
   connect: (cfg: MCPServerConfig) => api.post('/mcp/servers', cfg),
   update: (id: string, cfg: MCPServerConfig) => api.put(`/mcp/servers/${id}`, cfg),
-  getConfig: async (id: string): Promise<MCPServerConfig> => {
+  getConfig: async (id: string): Promise<MCPServerConfigResponse> => {
     const res = await api.get(`/mcp/servers/${id}/config`);
-    return res.data as MCPServerConfig;
+    return res.data as MCPServerConfigResponse;
   },
   disconnect: (id: string) => api.delete(`/mcp/servers/${id}`),
   delete: (id: string) => api.delete(`/mcp/servers/${id}/config`),

@@ -51,6 +51,15 @@ export interface MCPAuthConfig {
   oauth2_scopes?: string[];
 }
 
+export interface MCPAuthConfigResponse {
+  type: string;
+  api_key_header?: string;
+  oauth2_client_id?: string;
+  oauth2_token_url?: string;
+  oauth2_scopes?: string[];
+  credential_configured: boolean;
+}
+
 export interface MCPServerConfig {
   id: string;
   name: string;
@@ -64,4 +73,8 @@ export interface MCPServerConfig {
   headers?: Record<string, string>;
   auth?: MCPAuthConfig;
   retry?: MCPRetryConfig;
+}
+
+export interface MCPServerConfigResponse extends Omit<MCPServerConfig, 'auth'> {
+  auth?: MCPAuthConfigResponse;
 }
