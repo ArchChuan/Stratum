@@ -125,4 +125,26 @@ describe('evaluation model', () => {
       recommendation: 'hold', safety_stopped: false,
     }).state_version).toBe(3);
   });
+
+  it.each(['system_prompt', 'systemPrompt', 'developer-prompt', 'API_TOKEN', 'bearerToken', 'retrieved_chunks']) (
+    'rejects unsafe alias %s while allowing safe metadata names', (key) => {
+      expect(() => safeSummarySchema.parse({ nested: { [key]: 'raw' } })).toThrow();
+      expect(safeSummarySchema.parse({ promptVersion: 'v2', token_count: 12, prompt_hash: 'sha256',
+        model_token_limit: 8192 })).toBeTruthy();
+    },
+  );
+
+  it.each([
+    { changed_fields: Array.from({ length: 33 }, (_, index) => `field_${index}`), changes: {}, parent_missing: false },
+    { changed_fields: ['label', 'label'], changes: { label: { before: 'a', after: 'b' } }, parent_missing: false },
+    { changed_fields: ['label'], changes: { other: { before: 'a', after: 'b' } }, parent_missing: false },
+    { changed_fields: ['raw_payload'], changes: { raw_payload: { before: 'a', after: 'b' } }, parent_missing: false },
+    { changed_fields: ['system_prompt'], changes: { system_prompt: { before: 'a', after: 'b' } }, parent_missing: false },
+  ])('rejects invalid candidate safe diff contracts', (safeDiff) => {
+    expect(() => candidateCommandResponseSchema.parse({
+      id: 'candidate-1', resource_id: 'skill-1', revision_id: 'revision-2', parent_revision_id: 'revision-1',
+      source: 'optimization', status: 'rejected', resource_kind: 'skill', state_version: 2,
+      safe_diff: safeDiff, created_at: '2026-01-01T00:00:00Z',
+    })).toThrow();
+  });
 });

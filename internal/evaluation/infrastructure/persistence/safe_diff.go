@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"encoding/json"
 	"reflect"
 	"sort"
 
@@ -45,54 +46,13 @@ func buildCandidateSafeDiff(parent, candidate map[string]any, parentExists bool)
 }
 
 func sanitizeCenterSummary(summary map[string]any) map[string]any {
-	return sanitizeCenterSummaryMap(summary, 0)
+	return domain.SanitizeSafeSummary(summary)
 }
 
-func sanitizeCenterSummaryMap(summary map[string]any, depth int) map[string]any {
-	result := make(map[string]any, len(summary))
-	for key, value := range summary {
-		if domain.IsSensitiveSafeSummaryKey(key) {
-			continue
-		}
-		if sanitized, ok := sanitizeCenterSummaryValue(value, depth); ok {
-			result[key] = sanitized
-		}
+func parseSanitizedSafeSummary(raw []byte) map[string]any {
+	var summary map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &summary) != nil || summary == nil {
+		return map[string]any{}
 	}
-	return result
-}
-
-func sanitizeCenterSummaryValue(value any, depth int) (any, bool) {
-	if depth > 6 {
-		return nil, false
-	}
-	switch typed := value.(type) {
-	case nil, bool, float64, int, int32, int64:
-		return typed, true
-	case string:
-		return typed, len(typed) <= 2048
-	case []any:
-		if len(typed) > 64 {
-			return nil, false
-		}
-		result := make([]any, 0, len(typed))
-		for _, item := range typed {
-			sanitized, ok := sanitizeCenterSummaryValue(item, depth+1)
-			if !ok {
-				return nil, false
-			}
-			result = append(result, sanitized)
-		}
-		return result, true
-	case map[string]any:
-		if len(typed) > 64 {
-			return nil, false
-		}
-		result := sanitizeCenterSummaryMap(typed, depth+1)
-		if len(typed) > 0 && len(result) == 0 {
-			return nil, false
-		}
-		return result, true
-	default:
-		return nil, false
-	}
+	return domain.SanitizeSafeSummary(summary)
 }

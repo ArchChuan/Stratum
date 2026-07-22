@@ -46,3 +46,15 @@ func TestBuildCandidateSafeDiffDropsCanonicalSensitiveKeysRecursively(t *testing
 		t.Fatalf("sensitive fields leaked into diff: %#v", diff)
 	}
 }
+
+func TestParseSanitizedSafeSummaryFallsBackForMalformedJSON(t *testing.T) {
+	for _, raw := range [][]byte{[]byte(`{"label":"safe","system_prompt":"raw","nested":{"api_token":"secret"}}`), []byte(`not-json`)} {
+		summary := parseSanitizedSafeSummary(raw)
+		if string(raw) == "not-json" && len(summary) != 0 {
+			t.Fatalf("malformed fallback = %#v", summary)
+		}
+		if _, exists := summary["system_prompt"]; exists {
+			t.Fatalf("unsafe summary leaked = %#v", summary)
+		}
+	}
+}

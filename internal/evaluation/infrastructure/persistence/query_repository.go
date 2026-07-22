@@ -101,9 +101,7 @@ func (r *PgCenterQueryRepository) ListResources(ctx context.Context, tenantID st
 				return err
 			}
 			item.ResourceKind = domain.ResourceKind(kind)
-			if err := json.Unmarshal(safe, &item.SafeSummary); err != nil {
-				return err
-			}
+			item.SafeSummary = parseSanitizedSafeSummary(safe)
 			page.Items = append(page.Items, item)
 		}
 		return rows.Err()
@@ -195,14 +193,15 @@ func (r *PgCenterQueryRepository) ListCandidates(ctx context.Context, tenantID s
 		for rows.Next() {
 			var x domain.CandidateSummary
 			var kind string
-			var parent, candidate map[string]any
+			var parent, candidate []byte
 			var parentExists bool
 			if e = rows.Scan(&x.ID, &kind, &x.ResourceID, &x.RevisionID, &x.ParentRevisionID, &x.Source, &x.Status,
 				&x.Rank, &x.StateVersion, &parent, &parentExists, &candidate, &x.CreatedAt); e != nil {
 				return e
 			}
 			x.ResourceKind = domain.ResourceKind(kind)
-			x.SafeDiff = buildCandidateSafeDiff(parent, candidate, parentExists)
+			x.SafeDiff = buildCandidateSafeDiff(parseSanitizedSafeSummary(parent),
+				parseSanitizedSafeSummary(candidate), parentExists)
 			page.Items = append(page.Items, x)
 		}
 		return rows.Err()
@@ -262,12 +261,12 @@ func (r *PgCenterQueryRepository) Timeline(ctx context.Context, tenantID string,
 			return port.ErrCenterResourceNotFound
 		}
 		rows, e := tx.Query(ctx, `WITH events AS (
-		SELECT id,'revision' kind,status,safe_summary::text summary,resource_kind,resource_id,created_at FROM resource_revisions WHERE resource_kind=$1 AND resource_id=$2
-		UNION ALL SELECT id,'run',status,CASE WHEN passed THEN 'passed' ELSE 'not passed' END,resource_kind,resource_id,created_at FROM eval_runs WHERE resource_kind=$1 AND resource_id=$2
-		UNION ALL SELECT c.id,'candidate',c.status,c.source,j.resource_kind,j.resource_id,c.created_at FROM optimization_candidates c JOIN optimization_jobs j ON j.id=c.optimization_job_id WHERE j.resource_kind=$1 AND j.resource_id=$2
-		UNION ALL SELECT id,'experiment',status,recommendation,resource_kind,resource_id,created_at FROM evaluation_experiments WHERE resource_kind=$1 AND resource_id=$2
-		UNION ALL SELECT d.id,'decision',d.new_status,d.action,e.resource_kind,e.resource_id,d.created_at FROM experiment_decisions d JOIN evaluation_experiments e ON e.id=d.experiment_id WHERE e.resource_kind=$1 AND e.resource_id=$2)
-		SELECT id,kind,status,summary,resource_kind,resource_id,created_at FROM events
+		SELECT id,'revision' kind,status,'' summary,safe_summary,resource_kind,resource_id,created_at FROM resource_revisions WHERE resource_kind=$1 AND resource_id=$2
+		UNION ALL SELECT id,'run',status,CASE WHEN passed THEN 'passed' ELSE 'not passed' END,NULL::jsonb,resource_kind,resource_id,created_at FROM eval_runs WHERE resource_kind=$1 AND resource_id=$2
+		UNION ALL SELECT c.id,'candidate',c.status,c.source,NULL::jsonb,j.resource_kind,j.resource_id,c.created_at FROM optimization_candidates c JOIN optimization_jobs j ON j.id=c.optimization_job_id WHERE j.resource_kind=$1 AND j.resource_id=$2
+		UNION ALL SELECT id,'experiment',status,recommendation,NULL::jsonb,resource_kind,resource_id,created_at FROM evaluation_experiments WHERE resource_kind=$1 AND resource_id=$2
+		UNION ALL SELECT d.id,'decision',d.new_status,d.action,NULL::jsonb,e.resource_kind,e.resource_id,d.created_at FROM experiment_decisions d JOIN evaluation_experiments e ON e.id=d.experiment_id WHERE e.resource_kind=$1 AND e.resource_id=$2)
+		SELECT id,kind,status,summary,safe_summary,resource_kind,resource_id,created_at FROM events
 		WHERE ($3='' OR status=$3) AND ($4::timestamptz IS NULL OR (created_at,id,kind)<($4,$5,$6))
 		ORDER BY created_at DESC,id DESC,kind DESC LIMIT $7`,
 			filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, ckind, filter.Limit+1)
@@ -278,8 +277,17 @@ func (r *PgCenterQueryRepository) Timeline(ctx context.Context, tenantID string,
 		for rows.Next() {
 			var x domain.TimelineEvent
 			var kind string
-			if e = rows.Scan(&x.ID, &x.Kind, &x.Status, &x.Summary, &kind, &x.ResourceID, &x.CreatedAt); e != nil {
+			var safe []byte
+			if e = rows.Scan(&x.ID, &x.Kind, &x.Status, &x.Summary, &safe, &kind, &x.ResourceID, &x.CreatedAt); e != nil {
 				return e
+			}
+			if x.Kind == "revision" {
+				sanitized, marshalErr := json.Marshal(parseSanitizedSafeSummary(safe))
+				if marshalErr != nil {
+					x.Summary = "{}"
+				} else {
+					x.Summary = string(sanitized)
+				}
 			}
 			x.ResourceKind = domain.ResourceKind(kind)
 			page.Items = append(page.Items, x)

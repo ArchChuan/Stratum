@@ -147,7 +147,9 @@ var sensitiveSafeSummaryKeys = map[string]struct{}{
 	"payload": {}, "raw_payload": {}, "prompt": {}, "raw_prompt": {}, "retrieved_content": {},
 	"document_content": {}, "arguments": {}, "tool_arguments": {}, "raw_response": {},
 	"tool_raw_response": {}, "encrypted_payload_ref": {}, "payload_ref": {}, "payload_hash": {},
-	"content_hash": {},
+	"content_hash":  {},
+	"system_prompt": {}, "developer_prompt": {}, "api_token": {}, "bearer_token": {},
+	"retrieved_chunks": {},
 }
 
 var summaryToken = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
@@ -292,4 +294,57 @@ func NormalizeSafeSummaryKey(key string) string {
 		normalized.WriteByte(current)
 	}
 	return strings.ToLower(normalized.String())
+}
+
+func SanitizeSafeSummary(summary map[string]any) map[string]any {
+	return sanitizeSafeSummaryMap(summary, 0)
+}
+
+func sanitizeSafeSummaryMap(summary map[string]any, depth int) map[string]any {
+	if depth > 6 || len(summary) > 64 {
+		return map[string]any{}
+	}
+	result := make(map[string]any, len(summary))
+	for key, value := range summary {
+		if len(key) > 64 || IsSensitiveSafeSummaryKey(key) {
+			continue
+		}
+		if sanitized, ok := sanitizeSafeSummaryValue(value, depth); ok {
+			result[key] = sanitized
+		}
+	}
+	return result
+}
+
+func sanitizeSafeSummaryValue(value any, depth int) (any, bool) {
+	if depth > 6 {
+		return nil, false
+	}
+	switch typed := value.(type) {
+	case nil, bool, float64, int, int32, int64:
+		return typed, true
+	case string:
+		return typed, len(typed) <= 2048
+	case []any:
+		if len(typed) > 64 {
+			return nil, false
+		}
+		result := make([]any, 0, len(typed))
+		for _, item := range typed {
+			sanitized, ok := sanitizeSafeSummaryValue(item, depth+1)
+			if !ok {
+				return nil, false
+			}
+			result = append(result, sanitized)
+		}
+		return result, true
+	case map[string]any:
+		result := sanitizeSafeSummaryMap(typed, depth+1)
+		if len(typed) > 0 && len(result) == 0 {
+			return nil, false
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }

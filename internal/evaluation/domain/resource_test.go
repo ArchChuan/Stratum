@@ -146,6 +146,34 @@ func TestSensitiveSafeSummaryKeyNormalizationVariants(t *testing.T) {
 	}
 }
 
+func TestSensitiveSafeSummaryAliasesAndSafeMetadata(t *testing.T) {
+	for _, key := range []string{"system_prompt", "systemPrompt", "developer-prompt", "API_TOKEN", "bearerToken",
+		"retrieved_chunks", "rawResponse", "toolArguments", "documentContent"} {
+		if !IsSensitiveSafeSummaryKey(key) {
+			t.Errorf("unsafe alias %q was not classified", key)
+		}
+	}
+	for _, key := range []string{"prompt_version", "promptVersion", "token_count", "prompt_hash", "model_token_limit"} {
+		if IsSensitiveSafeSummaryKey(key) {
+			t.Errorf("safe metadata %q was classified as sensitive", key)
+		}
+	}
+}
+
+func TestSanitizeSafeSummaryOmitsUnsafeAndMalformedBranches(t *testing.T) {
+	deep := map[string]any{"safe": "value"}
+	for range 8 {
+		deep = map[string]any{"nested": deep}
+	}
+	result := SanitizeSafeSummary(map[string]any{
+		"label": "safe", "systemPrompt": "raw", "auth": map[string]any{"credentials": "secret"},
+		"deep": deep, "prompt_version": "v2",
+	})
+	if result["label"] != "safe" || result["prompt_version"] != "v2" || len(result) != 2 {
+		t.Fatalf("sanitized summary = %#v", result)
+	}
+}
+
 func TestResourceRevisionRejectsFreeTextSummaryEvenWhenSecretIsOnlyInValue(t *testing.T) {
 	revision := validResourceRevision()
 	revision.SafeSummary = map[string]any{"description": "client_secret=synthetic-value"}

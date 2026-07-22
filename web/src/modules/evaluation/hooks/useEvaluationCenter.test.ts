@@ -13,6 +13,11 @@ vi.mock('@/modules/iam', () => ({ useAuth: () => ({ user: { role: auth.role } })
 vi.mock('../api/evaluation.api', () => ({ evaluationApi: api }));
 
 const emptyPage = { items: [] };
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+};
 describe('useEvaluationCenter', () => {
   beforeEach(() => {
     auth.role = 'member';
@@ -54,5 +59,39 @@ describe('useEvaluationCenter', () => {
       reason: '拒绝', idempotency_key: 'request-1', expected_state_version: 1,
     })).rejects.toThrow('仅租户管理员可执行评测命令');
     expect(api.rejectCandidate).not.toHaveBeenCalled();
+  });
+
+  it('ignores a stale filter load that resolves after the latest load', async () => {
+    const oldOverview = deferred<any>();
+    api.getOverview.mockReturnValueOnce(oldOverview.promise).mockResolvedValueOnce({
+      resources: 2, suites: 0, runs: 0, candidates: 0, experiments: 0,
+    });
+    const { result, rerender } = renderHook(({ id }) => useEvaluationCenter({ resource_id: id }), {
+      initialProps: { id: 'resource-a' },
+    });
+    rerender({ id: 'resource-b' });
+    await waitFor(() => expect(result.current.overview?.resources).toBe(2));
+    await act(async () => oldOverview.resolve({ resources: 1, suites: 0, runs: 0, candidates: 0, experiments: 0 }));
+    expect(result.current.overview?.resources).toBe(2);
+  });
+
+  it('keeps the newest command refresh over an overlapping reload and current filters', async () => {
+    auth.role = 'admin';
+    const { result, rerender } = renderHook(({ id }) => useEvaluationCenter({ resource_id: id }), {
+      initialProps: { id: 'resource-a' },
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const stale = deferred<any>();
+    api.getOverview.mockReturnValueOnce(stale.promise).mockResolvedValue({
+      resources: 3, suites: 0, runs: 0, candidates: 0, experiments: 0,
+    });
+    await act(async () => { void result.current.reload(); rerender({ id: 'resource-b' }); });
+    api.rejectCandidate.mockResolvedValue({ id: 'candidate-1' });
+    await act(async () => { await result.current.rejectCandidate('candidate-1', {
+      reason: '拒绝', idempotency_key: 'request-1', expected_state_version: 1,
+    }); });
+    await act(async () => stale.resolve({ resources: 1, suites: 0, runs: 0, candidates: 0, experiments: 0 }));
+    expect(result.current.overview?.resources).toBe(3);
+    expect(api.listResources).toHaveBeenLastCalledWith({ resource_id: 'resource-b' });
   });
 });

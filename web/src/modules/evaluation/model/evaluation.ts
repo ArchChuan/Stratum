@@ -99,6 +99,7 @@ const SENSITIVE_SUMMARY_KEYS = new Set([
   'raw_response', 'tool_raw_response', 'encrypted_payload_ref', 'payload_ref', 'payload_hash', 'content_hash',
   'authorization', 'password', 'secret', 'private_key', 'client_secret', 'cookie', 'session', 'key', 'cert',
   'connection_string',
+  'system_prompt', 'developer_prompt', 'api_token', 'bearer_token', 'retrieved_chunks',
 ]);
 
 const normalizedKey = (key: string) => key
@@ -147,10 +148,25 @@ const safeDiffValueSchema = z.unknown().superRefine((value, ctx) => {
 }).transform((value) => value as JSONValue | undefined);
 
 export const candidateSafeDiffSchema = z.object({
-  changed_fields: z.array(z.string()),
-  changes: z.record(z.object({ before: safeDiffValueSchema.optional(), after: safeDiffValueSchema.optional() }).strict()),
+  changed_fields: z.array(z.string().min(1).max(64)).max(32),
+  changes: z.record(z.string().min(1).max(64),
+    z.object({ before: safeDiffValueSchema.optional(), after: safeDiffValueSchema.optional() }).strict()),
   parent_missing: z.boolean(),
-}).strict();
+}).strict().superRefine((diff, ctx) => {
+  const fields = diff.changed_fields;
+  const keys = Object.keys(diff.changes);
+  if (new Set(fields).size !== fields.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'changed_fields must be unique' });
+  }
+  if (keys.length > 32 || [...fields].sort().join('\0') !== [...keys].sort().join('\0')) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'changed_fields must match changes' });
+  }
+  for (const key of keys) {
+    if (SENSITIVE_SUMMARY_KEYS.has(normalizedKey(key))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `unsafe diff field: ${key}` });
+    }
+  }
+});
 
 const page = <T extends z.ZodTypeAny>(item: T) => z.object({
   items: z.array(item),

@@ -139,7 +139,8 @@ func assertSafeCenterJSON(t *testing.T, value any) {
 	t.Helper()
 	b, _ := json.Marshal(value)
 	serialized := strings.ToLower(string(b))
-	for _, forbidden := range []string{"object://secret", "payload_ref", "payload_hash", "content_hash", "actual_output", "feedback", "decision_snapshot", "metrics"} {
+	for _, forbidden := range []string{"object://secret", "payload_ref", "payload_hash", "content_hash", "actual_output",
+		"feedback", "decision_snapshot", "metrics", "credentials", "system_prompt", "retrieved_chunks"} {
 		if strings.Contains(serialized, forbidden) {
 			t.Errorf("safe response contains %q: %s", forbidden, serialized)
 		}
@@ -232,7 +233,7 @@ func seedCenterQuery(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sche
 		{`UPDATE ` + schema + `.eval_suites SET active_revision_id='suite-rev' WHERE id='suite'`, nil},
 		{`INSERT INTO ` + schema + `.eval_suites(id,name,description,active_revision_id,created_at) VALUES('suite-new','suite-` + label + `-new','safe','suite-rev-new',$1)`, []any{now.Add(time.Second)}},
 		{`INSERT INTO ` + schema + `.eval_suite_revisions(id,suite_id,version_no,status,resource_kind,created_at) VALUES('suite-rev-new','suite-new',1,'published','skill',$1)`, []any{now.Add(time.Second)}},
-		{`INSERT INTO ` + schema + `.resource_revisions(id,resource_kind,resource_id,source,status,content_hash,payload_hash,payload_ref,safe_summary,created_at) VALUES('rev-old','skill','shared','manual','published','secret-content','secret-hash','object://secret','{"label":"` + label + `-old"}',$1),('rev-new','skill','shared','manual','published','secret-content','secret-hash','object://secret','{"label":"` + label + `-new"}',$2)`, []any{now.Add(-time.Minute), now}},
+		{`INSERT INTO ` + schema + `.resource_revisions(id,resource_kind,resource_id,source,status,content_hash,payload_hash,payload_ref,safe_summary,created_at) VALUES('rev-old','skill','shared','manual','published','secret-content','secret-hash','object://secret','{"label":"` + label + `-old"}',$1),('rev-new','skill','shared','manual','published','secret-content','secret-hash','object://secret','{"label":"` + label + `-new","auth":{"credentials":"secret"},"system_prompt":"raw","retrieved_chunks":["raw"]}',$2)`, []any{now.Add(-time.Minute), now}},
 		{`INSERT INTO ` + schema + `.resource_revisions(id,resource_kind,resource_id,source,status,content_hash,payload_hash,payload_ref,safe_summary,created_at) VALUES('rev-other-old','skill','other','manual','published','secret-content','secret-hash','object://secret','{"label":"` + label + `-other-old"}',$1),('rev-other-draft','skill','other','manual','draft','secret-content','secret-hash','object://secret','{"label":"` + label + `-other-draft"}',$2)`, []any{now.Add(-2 * time.Minute), now.Add(time.Second)}},
 		{`INSERT INTO ` + schema + `.resource_revisions(id,resource_kind,resource_id,source,status,content_hash,payload_hash,payload_ref,safe_summary,created_at) VALUES('rev-third','skill','third','manual','published','secret-content','secret-hash','object://secret','{"label":"` + label + `-third"}',$1)`, []any{now.Add(-3 * time.Minute)}},
 		{`INSERT INTO ` + schema + `.eval_runs(id,resource_kind,resource_id,revision_id,suite_revision_id,status,passed,total_cases,passed_cases,metrics,created_at) VALUES('collision','skill','shared','rev-new','suite-rev','succeeded',$1,1,1,'{"secret":"metric"}',$2)`, []any{label == "one", now.Add(5 * time.Second)}},

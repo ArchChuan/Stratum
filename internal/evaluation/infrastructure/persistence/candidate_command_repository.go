@@ -26,7 +26,7 @@ func (r *PgCandidateCommandRepository) Reject(
 	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
 		var key, fingerprint string
 		var version int64
-		var parent, candidate map[string]any
+		var parent, candidate []byte
 		var parentExists bool
 		err := tx.QueryRow(ctx, `SELECT c.id,j.resource_kind,j.resource_id,c.revision_id,c.parent_revision_id,
 			c.source,c.status,c.rank,c.created_at,COALESCE(c.rejection_key,''),
@@ -48,7 +48,8 @@ func (r *PgCandidateCommandRepository) Reject(
 		if err != nil {
 			return fmt.Errorf("candidate command repository: get candidate: %w", err)
 		}
-		result.SafeDiff = buildCandidateSafeDiff(parent, candidate, parentExists)
+		result.SafeDiff = buildCandidateSafeDiff(parseSanitizedSafeSummary(parent),
+			parseSanitizedSafeSummary(candidate), parentExists)
 		if result.Status == "rejected" {
 			result.StateVersion = version
 			if key == command.IdempotencyKey && fingerprint == command.Fingerprint() {
