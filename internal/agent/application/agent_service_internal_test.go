@@ -221,3 +221,48 @@ func TestAgentServiceListsExecutionsFromEvidenceProviderWithExplicitTenant(t *te
 		t.Fatalf("rows=%#v total=%d tenant=%q", rows, total, evidence.tenantID)
 	}
 }
+
+type internalMemoryInjector struct{}
+
+func (internalMemoryInjector) BuildContext(context.Context, port.InjectionContext) (string, error) {
+	return "", nil
+}
+
+func TestRevisionAgentOnlyInstallsSnapshotRequiredHooks(t *testing.T) {
+	recall := port.RecallMemoryFn(func(context.Context, string, string, string, string, map[string]any) (string, error) {
+		return "", nil
+	})
+	svc := NewAgentService(AgentServiceDeps{MemoryInjector: internalMemoryInjector{}, RecallMemory: recall})
+	revision := domain.AgentRevision{AgentID: "agent-1", Type: domain.ReActAgent,
+		SystemPrompt: "prompt", Model: "model", MaxIterations: 4}
+
+	agent, err := svc.buildRevisionAgent(revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.MemoryInjector != nil || agent.RecallMemoryFn != nil {
+		t.Fatal("hooks not required by snapshot must remain disabled")
+	}
+
+	revision.MemoryInjectorRequired, revision.RecallMemoryRequired = true, true
+	agent, err = svc.buildRevisionAgent(revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.MemoryInjector == nil || agent.RecallMemoryFn == nil {
+		t.Fatal("required snapshot hooks were not restored")
+	}
+}
+
+func TestRevisionConfigFiltersKnowledgeMetadataWithDisabledBinding(t *testing.T) {
+	revision := domain.AgentRevision{Bindings: []domain.AgentBinding{
+		{Kind: domain.AgentBindingKnowledge, ID: "workspace-1", Name: "One", Description: "first", Enabled: true},
+		{Kind: domain.AgentBindingKnowledge, ID: "workspace-2", Name: "Two", Description: "second", Enabled: false},
+	}}
+	cfg := revisionConfig(revision)
+	if len(cfg.KnowledgeWorkspaceIDs) != 1 || cfg.KnowledgeWorkspaceIDs[0] != "workspace-1" ||
+		len(cfg.KnowledgeWorkspaceNames) != 1 || cfg.KnowledgeWorkspaceNames[0] != "One" ||
+		len(cfg.KnowledgeWorkspaceDescriptions) != 1 || cfg.KnowledgeWorkspaceDescriptions[0] != "first" {
+		t.Fatalf("disabled knowledge metadata leaked into config: %#v", cfg)
+	}
+}

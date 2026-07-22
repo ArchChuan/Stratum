@@ -188,11 +188,9 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 	revision := domain.AgentRevision{
 		AgentID: cfg.ID, Type: cfg.Type, SystemPrompt: cfg.SystemPrompt, Model: cfg.LLMModel,
 		EmbedModel: cfg.EmbedModel, MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
-		CheckpointEnabled:              cfg.CheckpointEnabled,
-		StuckThreshold:                 cfg.StuckThreshold,
-		KnowledgeWorkspaceNames:        append([]string(nil), cfg.KnowledgeWorkspaceNames...),
-		KnowledgeWorkspaceDescriptions: append([]string(nil), cfg.KnowledgeWorkspaceDescriptions...),
-		ModelParameters:                domain.ModelParameters{MaxContextTokens: cfg.MaxContextTokens},
+		CheckpointEnabled: cfg.CheckpointEnabled,
+		StuckThreshold:    cfg.StuckThreshold,
+		ModelParameters:   domain.ModelParameters{MaxContextTokens: cfg.MaxContextTokens},
 		Bindings: make([]domain.AgentBinding, 0,
 			len(cfg.AllowedSkills)+len(cfg.MCPToolIDs)+len(cfg.KnowledgeWorkspaceIDs)),
 	}
@@ -209,9 +207,17 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 		revision.Bindings = append(revision.Bindings,
 			domain.AgentBinding{Kind: domain.AgentBindingMCP, ID: id, Enabled: true})
 	}
-	for _, id := range cfg.KnowledgeWorkspaceIDs {
+	for i, id := range cfg.KnowledgeWorkspaceIDs {
+		var name, description string
+		if i < len(cfg.KnowledgeWorkspaceNames) {
+			name = cfg.KnowledgeWorkspaceNames[i]
+		}
+		if i < len(cfg.KnowledgeWorkspaceDescriptions) {
+			description = cfg.KnowledgeWorkspaceDescriptions[i]
+		}
 		revision.Bindings = append(revision.Bindings,
-			domain.AgentBinding{Kind: domain.AgentBindingKnowledge, ID: id, Enabled: true})
+			domain.AgentBinding{Kind: domain.AgentBindingKnowledge, ID: id,
+				Name: name, Description: description, Enabled: true})
 	}
 	if _, err := revision.ContentHash(); err != nil {
 		return domain.AgentRevision{}, fmt.Errorf("agent service: snapshot revision: %w", err)
@@ -230,17 +236,10 @@ func (s *AgentService) ExecuteRevision(
 	if err := revision.Validate(); err != nil {
 		return nil, 0, fmt.Errorf("agent service: validate revision: %w", err)
 	}
-	if revision.MemoryInjectorRequired && s.deps.MemoryInjector == nil {
-		return nil, 0, fmt.Errorf("agent service: revision requires memory injector")
+	a, err := s.buildRevisionAgent(revision)
+	if err != nil {
+		return nil, 0, err
 	}
-	if revision.RecallMemoryRequired && s.deps.RecallMemory == nil {
-		return nil, 0, fmt.Errorf("agent service: revision requires recall memory")
-	}
-	cfg := revisionConfig(revision)
-	a := NewBaseAgent(cfg, s.deps.Logger)
-	a.GlobalSystemSuffix = revision.GlobalSystemSuffix
-	a.MemoryInjector = s.deps.MemoryInjector
-	a.RecallMemoryFn = s.deps.RecallMemory
 	if s.deps.Metrics != nil {
 		a = a.WithMetrics(s.deps.Metrics)
 	}
@@ -252,15 +251,31 @@ func (s *AgentService) ExecuteRevision(
 	return result, int(time.Since(start).Milliseconds()), err
 }
 
+func (s *AgentService) buildRevisionAgent(revision domain.AgentRevision) (*BaseAgent, error) {
+	if revision.MemoryInjectorRequired && s.deps.MemoryInjector == nil {
+		return nil, fmt.Errorf("agent service: revision requires memory injector")
+	}
+	if revision.RecallMemoryRequired && s.deps.RecallMemory == nil {
+		return nil, fmt.Errorf("agent service: revision requires recall memory")
+	}
+	a := NewBaseAgent(revisionConfig(revision), s.deps.Logger)
+	a.GlobalSystemSuffix = revision.GlobalSystemSuffix
+	if revision.MemoryInjectorRequired {
+		a.MemoryInjector = s.deps.MemoryInjector
+	}
+	if revision.RecallMemoryRequired {
+		a.RecallMemoryFn = s.deps.RecallMemory
+	}
+	return a, nil
+}
+
 func revisionConfig(revision domain.AgentRevision) *domain.AgentConfig {
 	cfg := &domain.AgentConfig{
 		ID: revision.AgentID, Type: revision.Type, SystemPrompt: revision.SystemPrompt,
 		LLMModel: revision.Model, EmbedModel: revision.EmbedModel, MaxIterations: revision.MaxIterations,
 		MaxContextTokens: revision.ModelParameters.MaxContextTokens, MemoryScope: revision.MemoryScope,
-		CheckpointEnabled:              revision.CheckpointEnabled,
-		StuckThreshold:                 revision.StuckThreshold,
-		KnowledgeWorkspaceNames:        append([]string(nil), revision.KnowledgeWorkspaceNames...),
-		KnowledgeWorkspaceDescriptions: append([]string(nil), revision.KnowledgeWorkspaceDescriptions...),
+		CheckpointEnabled: revision.CheckpointEnabled,
+		StuckThreshold:    revision.StuckThreshold,
 	}
 	for _, binding := range revision.Bindings {
 		if !binding.Enabled {
@@ -273,6 +288,8 @@ func revisionConfig(revision domain.AgentRevision) *domain.AgentConfig {
 			cfg.MCPToolIDs = append(cfg.MCPToolIDs, binding.ID)
 		case domain.AgentBindingKnowledge:
 			cfg.KnowledgeWorkspaceIDs = append(cfg.KnowledgeWorkspaceIDs, binding.ID)
+			cfg.KnowledgeWorkspaceNames = append(cfg.KnowledgeWorkspaceNames, binding.Name)
+			cfg.KnowledgeWorkspaceDescriptions = append(cfg.KnowledgeWorkspaceDescriptions, binding.Description)
 		}
 	}
 	return cfg

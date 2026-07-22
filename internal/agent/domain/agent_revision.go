@@ -23,28 +23,28 @@ type ModelParameters struct {
 }
 
 type AgentBinding struct {
-	Kind    AgentBindingKind `json:"kind"`
-	ID      string           `json:"id"`
-	Enabled bool             `json:"enabled"`
+	Kind        AgentBindingKind `json:"kind"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name,omitempty"`
+	Description string           `json:"description,omitempty"`
+	Enabled     bool             `json:"enabled"`
 }
 
 type AgentRevision struct {
-	AgentID                        string          `json:"agent_id"`
-	Type                           AgentType       `json:"type"`
-	SystemPrompt                   string          `json:"system_prompt"`
-	Model                          string          `json:"model"`
-	EmbedModel                     string          `json:"embed_model,omitempty"`
-	ModelParameters                ModelParameters `json:"model_parameters,omitempty"`
-	MaxIterations                  int             `json:"max_iterations"`
-	Bindings                       []AgentBinding  `json:"bindings"`
-	MemoryScope                    string          `json:"memory_scope,omitempty"`
-	CheckpointEnabled              bool            `json:"checkpoint_enabled,omitempty"`
-	StuckThreshold                 int             `json:"stuck_threshold,omitempty"`
-	GlobalSystemSuffix             string          `json:"global_system_suffix,omitempty"`
-	KnowledgeWorkspaceNames        []string        `json:"knowledge_workspace_names,omitempty"`
-	KnowledgeWorkspaceDescriptions []string        `json:"knowledge_workspace_descriptions,omitempty"`
-	MemoryInjectorRequired         bool            `json:"memory_injector_required,omitempty"`
-	RecallMemoryRequired           bool            `json:"recall_memory_required,omitempty"`
+	AgentID                string          `json:"agent_id"`
+	Type                   AgentType       `json:"type"`
+	SystemPrompt           string          `json:"system_prompt"`
+	Model                  string          `json:"model"`
+	EmbedModel             string          `json:"embed_model,omitempty"`
+	ModelParameters        ModelParameters `json:"model_parameters,omitempty"`
+	MaxIterations          int             `json:"max_iterations"`
+	Bindings               []AgentBinding  `json:"bindings"`
+	MemoryScope            string          `json:"memory_scope,omitempty"`
+	CheckpointEnabled      bool            `json:"checkpoint_enabled,omitempty"`
+	StuckThreshold         int             `json:"stuck_threshold,omitempty"`
+	GlobalSystemSuffix     string          `json:"global_system_suffix,omitempty"`
+	MemoryInjectorRequired bool            `json:"memory_injector_required,omitempty"`
+	RecallMemoryRequired   bool            `json:"recall_memory_required,omitempty"`
 }
 
 type AgentCandidatePatch struct {

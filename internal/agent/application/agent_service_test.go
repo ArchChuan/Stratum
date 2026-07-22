@@ -285,7 +285,14 @@ func TestAgentService_SnapshotRevisionPreservesExecutionParity(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "platform rules", revision.GlobalSystemSuffix)
 	assert.Equal(t, 2, revision.StuckThreshold)
-	assert.Equal(t, []string{"Workspace"}, revision.KnowledgeWorkspaceNames)
+	var knowledge domain.AgentBinding
+	for _, binding := range revision.Bindings {
+		if binding.Kind == domain.AgentBindingKnowledge {
+			knowledge = binding
+		}
+	}
+	assert.Equal(t, "Workspace", knowledge.Name)
+	assert.Equal(t, "Description", knowledge.Description)
 	assert.True(t, revision.MemoryInjectorRequired)
 	assert.True(t, revision.RecallMemoryRequired)
 }
