@@ -178,6 +178,8 @@ func TestSensitiveSafeSummaryValueMarkers(t *testing.T) {
 	unsafe := []string{
 		"api_key=secret", "API_KEY = secret", "access_token: secret", "client_secret = secret",
 		"Authorization: Bearer secret", "authorization = basic abc123",
+		"https://example.test?api_key=secret", "note(api_key=secret)", `{"api_key":"secret"}`,
+		"prefix?ACCESS_TOKEN=secret", `{"Authorization":"Bearer secret"}`,
 	}
 	for _, value := range unsafe {
 		if !IsSensitiveSafeSummaryValue(value) {
@@ -187,7 +189,8 @@ func TestSensitiveSafeSummaryValueMarkers(t *testing.T) {
 			t.Errorf("unsafe value survived sanitization: %#v", result)
 		}
 	}
-	for _, value := range []string{"token_count=10", "API key rotation policy", "authorization guide"} {
+	for _, value := range []string{"token_count=10", "API key rotation policy", "authorization guide",
+		"my_api_key_count=10", "my-api_key=metadata", "api_key_rotation_policy", "prompt_version=v2"} {
 		if IsSensitiveSafeSummaryValue(value) {
 			t.Errorf("safe value %q was classified", value)
 		}

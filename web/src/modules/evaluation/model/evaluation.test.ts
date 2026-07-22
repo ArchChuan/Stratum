@@ -151,11 +151,14 @@ describe('evaluation model', () => {
   it.each([
     'api_key=secret', 'API_KEY = secret', 'access_token: secret', 'client_secret = secret',
     'Authorization: Bearer secret', 'authorization = basic abc123',
+    'https://example.test?api_key=secret', 'note(api_key=secret)', '{"api_key":"secret"}',
+    'prefix?ACCESS_TOKEN=secret', '{"Authorization":"Bearer secret"}',
   ])('rejects sensitive summary value marker %s', (value) => {
     expect(() => safeSummarySchema.parse({ note: value })).toThrow();
   });
 
-  it.each(['token_count=10', 'API key rotation policy', 'authorization guide'])(
+  it.each(['token_count=10', 'API key rotation policy', 'authorization guide', 'my_api_key_count=10',
+    'my-api_key=metadata', 'api_key_rotation_policy', 'prompt_version=v2'])(
     'allows safe summary wording %s', (value) => {
       expect(safeSummarySchema.parse({ note: value })).toEqual({ note: value });
     },

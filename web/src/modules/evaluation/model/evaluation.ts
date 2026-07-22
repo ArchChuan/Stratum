@@ -107,8 +107,8 @@ const normalizedKey = (key: string) => key
   .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
   .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
   .toLowerCase();
-const sensitiveSummaryAssignment = /(^|[\s;,])(?:api[_-]?key|access[_-]?token|client[_-]?secret)\s*[:=]\s*\S/i;
-const sensitiveSummaryAuthorization = /(^|[\s;,])authorization\s*[:=]\s*(?:bearer|basic)\b/i;
+const sensitiveSummaryAssignment = /(^|[^A-Za-z0-9_-])["']?(?:api[_-]?key|access[_-]?token|client[_-]?secret)["']?\s*[:=]\s*["']?\S/i;
+const sensitiveSummaryAuthorization = /(^|[^A-Za-z0-9_-])["']?authorization["']?\s*[:=]\s*["']?(?:bearer|basic)\b/i;
 const isSensitiveSummaryValue = (value: string) => sensitiveSummaryAssignment.test(value)
   || sensitiveSummaryAuthorization.test(value);
 const validateSafeJSON = (value: unknown, path: string[], depth = 0): string | null => {

@@ -155,10 +155,10 @@ var sensitiveSafeSummaryKeys = map[string]struct{}{
 var summaryToken = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
 var changeTypes = map[string]struct{}{"added": {}, "removed": {}, "modified": {}, "enabled": {}, "disabled": {}}
 var sensitiveSafeSummaryAssignment = regexp.MustCompile(
-	`(?i)(^|[\s;,])(?:api[_-]?key|access[_-]?token|client[_-]?secret)\s*[:=]\s*\S`,
+	`(?i)(^|[^A-Za-z0-9_-])["']?(?:api[_-]?key|access[_-]?token|client[_-]?secret)["']?\s*[:=]\s*["']?\S`,
 )
 var sensitiveSafeSummaryAuthorization = regexp.MustCompile(
-	`(?i)(^|[\s;,])authorization\s*[:=]\s*(?:bearer|basic)\b`,
+	`(?i)(^|[^A-Za-z0-9_-])["']?authorization["']?\s*[:=]\s*["']?(?:bearer|basic)\b`,
 )
 
 func validateSafeSummary(summary map[string]any) error {
