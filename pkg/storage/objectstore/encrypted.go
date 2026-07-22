@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
@@ -44,7 +45,7 @@ type EncryptedStore struct {
 }
 
 func New(client client, bucket string, key [32]byte) *EncryptedStore {
-	return &EncryptedStore{client: client, bucket: bucket, key: key, maxBytes: 16 << 20}
+	return &EncryptedStore{client: client, bucket: bucket, key: key, maxBytes: constants.MaxEncryptedObjectBytes}
 }
 func NewEncryptedStore(client client, bucket string, key [32]byte) *EncryptedStore {
 	return New(client, bucket, key)
@@ -117,10 +118,16 @@ func (s *EncryptedStore) parse(raw string) (string, string, error) {
 		return "", "", fmt.Errorf("object store unavailable")
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "object" || u.Host != s.bucket || u.Path == "" || strings.Contains(u.Path, "//") {
+	if err != nil || u.Scheme != "object" || u.Host != s.bucket || u.Path == "" || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" || !strings.HasPrefix(u.Path, "/") || strings.HasSuffix(u.Path, "/") || strings.Contains(u.Path, "//") {
 		return "", "", fmt.Errorf("invalid object reference")
 	}
-	return u.Host, strings.TrimPrefix(u.Path, "/"), nil
+	key := strings.TrimPrefix(u.Path, "/")
+	for _, segment := range strings.Split(key, "/") {
+		if segment == "." || segment == ".." || segment == "" {
+			return "", "", fmt.Errorf("invalid object reference")
+		}
+	}
+	return u.Host, key, nil
 }
 func safe(v string) string {
 	v = strings.TrimSpace(v)

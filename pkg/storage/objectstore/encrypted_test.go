@@ -89,7 +89,7 @@ func TestEncryptedStorePutGetDeleteAndIntegrity(t *testing.T) {
 
 func TestEncryptedStoreRejectsInvalidAndOversized(t *testing.T) {
 	s := New(&memoryClient{}, "bucket", [32]byte{1})
-	for _, uri := range []string{"", "http://bucket/x", "object://other/x", "object://bucket/", "object://bucket/a//b"} {
+	for _, uri := range []string{"", "http://bucket/x", "object://other/x", "object://bucket/", "object://bucket/a/", "object://bucket/a//b", "object://bucket/a/./b", "object://bucket/a/../b", "object://bucket/a?x=1", "object://bucket/a#frag", "object://bucket/a%2Fb", "object://bucket/a%2e%2e/b"} {
 		if _, err := s.Get(context.Background(), Reference{URI: uri}); err == nil {
 			t.Errorf("accepted invalid URI %q", uri)
 		}
