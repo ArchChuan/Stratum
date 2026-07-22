@@ -26,7 +26,7 @@ func normalizeCenterFilter(filter port.CenterFilter) (port.CenterFilter, error) 
 	if filter.ResourceKind != "" && domain.ResourceKind(filter.ResourceKind).Validate() != nil {
 		return filter, domain.ErrInvalidCenterQuery
 	}
-	allowedStatus := map[string]bool{"": true, "draft": true, "published": true, "queued": true, "running": true, "succeeded": true, "failed": true, "cancelled": true, "active": true, "paused": true, "completed": true, "stopped": true, "rolled_back": true}
+	allowedStatus := map[string]bool{"": true, "draft": true, "published": true, "queued": true, "running": true, "succeeded": true, "failed": true, "cancelled": true, "active": true, "paused": true, "completed": true, "stopped": true, "rolled_back": true, "proposed": true, "rejected": true}
 	if !allowedStatus[filter.Status] || filter.Limit < 0 {
 		return filter, domain.ErrInvalidCenterQuery
 	}

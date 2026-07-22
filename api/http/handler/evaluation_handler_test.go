@@ -2,13 +2,16 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
+	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -17,7 +20,7 @@ import (
 func TestEvaluationHandlerEnqueueRunReturnsAcceptedJob(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	jobs := &fakeEvaluationJobs{}
-	h := NewEvaluationHandler(nil, jobs, nil, nil, nil, nil, zap.NewNop())
+	h := NewEvaluationHandler(nil, jobs, nil, nil, nil, nil, nil, nil, zap.NewNop())
 	r := gin.New()
 	r.POST("/evaluations/runs", withTenant("tenant-1"), h.EnqueueRun)
 
@@ -40,7 +43,7 @@ func TestEvaluationHandlerEnqueueRunReturnsAcceptedJob(t *testing.T) {
 func TestEvaluationHandlerGenerateOptimizationReturnsCandidates(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	optimization := &fakeOptimizationService{}
-	h := NewEvaluationHandler(nil, &fakeEvaluationJobs{}, nil, optimization, nil, nil, zap.NewNop())
+	h := NewEvaluationHandler(nil, &fakeEvaluationJobs{}, nil, optimization, nil, nil, nil, nil, zap.NewNop())
 	r := gin.New()
 	r.POST("/evaluations/optimizations", withTenant("tenant-1"), h.GenerateOptimization)
 	req := httptest.NewRequest(http.MethodPost, "/evaluations/optimizations", strings.NewReader(`{
@@ -53,6 +56,131 @@ func TestEvaluationHandlerGenerateOptimizationReturnsCandidates(t *testing.T) {
 	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"revision_id":"candidate-1"`) {
 		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+func TestEvaluationHandlerListResourcesPropagatesFilters(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	queries := &fakeEvaluationQueries{}
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, queries, nil, zap.NewNop())
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.GET("/evaluations/resources", withTenant("tenant-1"), h.ListResources)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/evaluations/resources?resource_kind=skill&resource_id=skill-1&status=published&cursor=cursor-1&limit=7", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if queries.tenantID != "tenant-1" || queries.filter != (port.CenterFilter{
+		ResourceKind: "skill", ResourceID: "skill-1", Status: "published", Cursor: "cursor-1", Limit: 7,
+	}) {
+		t.Fatalf("query not propagated: tenant=%q filter=%+v", queries.tenantID, queries.filter)
+	}
+	var page domain.ResourcePage
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil || len(page.Items) != 1 {
+		t.Fatalf("typed page response=%s err=%v", rec.Body.String(), err)
+	}
+}
+
+func TestEvaluationHandlerRejectCandidateDerivesActor(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	candidates := &fakeCandidateCommands{}
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, nil, candidates, zap.NewNop())
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/evaluations/candidates/:id/reject", withTenantAndUser("tenant-1", "user-1"), h.RejectCandidate)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/evaluations/candidates/candidate-1/reject", strings.NewReader(
+		`{"reason":"unsafe","idempotency_key":"request-1","expected_state_version":1,"actor_id":"attacker"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if candidates.tenantID != "tenant-1" || candidates.candidateID != "candidate-1" ||
+		candidates.input.ActorID != "user-1" || candidates.input.Reason != "unsafe" ||
+		candidates.input.IdempotencyKey != "request-1" || candidates.input.ExpectedStateVersion != 1 {
+		t.Fatalf("command not propagated safely: %+v", candidates)
+	}
+}
+
+func TestEvaluationHandlerExperimentCommandValidationUsesFrozenEnvelope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewEvaluationHandler(nil, nil, nil, nil, &fakeExperimentCommands{}, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/evaluations/experiments/:id/pause", withTenantAndUser("tenant-1", "user-1"), h.PauseExperiment)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/evaluations/experiments/experiment-1/pause", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.HasPrefix(rec.Body.String(), `{"error":`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func withTenantAndUser(tenantID, userID string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), tenantID))
+		c.Set(middleware.ContextKeySub, userID)
+		c.Next()
+	}
+}
+
+type fakeEvaluationQueries struct {
+	tenantID string
+	filter   port.CenterFilter
+}
+
+func (f *fakeEvaluationQueries) Overview(context.Context, string) (domain.CenterOverview, error) {
+	return domain.CenterOverview{}, nil
+}
+func (f *fakeEvaluationQueries) ListResources(_ context.Context, tenantID string, filter port.CenterFilter) (domain.ResourcePage, error) {
+	f.tenantID, f.filter = tenantID, filter
+	return domain.ResourcePage{Items: []domain.ResourceSummary{{ID: "revision-1"}}}, nil
+}
+func (f *fakeEvaluationQueries) ListSuites(context.Context, string, port.CenterFilter) (domain.SuitePage, error) {
+	return domain.SuitePage{}, nil
+}
+func (f *fakeEvaluationQueries) ListRuns(context.Context, string, port.CenterFilter) (domain.RunPage, error) {
+	return domain.RunPage{}, nil
+}
+func (f *fakeEvaluationQueries) ListCandidates(context.Context, string, port.CenterFilter) (domain.CandidatePage, error) {
+	return domain.CandidatePage{}, nil
+}
+func (f *fakeEvaluationQueries) ListExperiments(context.Context, string, port.CenterFilter) (domain.ExperimentPage, error) {
+	return domain.ExperimentPage{}, nil
+}
+func (f *fakeEvaluationQueries) Timeline(context.Context, string, port.CenterFilter) (domain.TimelinePage, error) {
+	return domain.TimelinePage{}, nil
+}
+
+type fakeCandidateCommands struct {
+	tenantID, candidateID string
+	input                 application.CandidateCommandInput
+}
+
+func (f *fakeCandidateCommands) Reject(_ context.Context, tenantID, candidateID string, input application.CandidateCommandInput) (domain.CandidateSummary, error) {
+	f.tenantID, f.candidateID, f.input = tenantID, candidateID, input
+	return domain.CandidateSummary{ID: candidateID, Status: "rejected"}, nil
+}
+
+type fakeExperimentCommands struct{}
+
+func (*fakeExperimentCommands) Create(context.Context, string, application.CreateExperimentInput) (domain.Experiment, domain.Deployment, error) {
+	return domain.Experiment{}, domain.Deployment{}, nil
+}
+func (*fakeExperimentCommands) EvaluateStageIdempotent(context.Context, string, string, application.EvaluateStageInput) (domain.Experiment, domain.Decision, error) {
+	return domain.Experiment{}, domain.DecisionHold, nil
+}
+func (*fakeExperimentCommands) Pause(context.Context, string, string, application.ExperimentCommandInput) (domain.Experiment, error) {
+	return domain.Experiment{}, nil
+}
+func (*fakeExperimentCommands) Promote(context.Context, string, string, application.ExperimentCommandInput) (domain.Experiment, error) {
+	return domain.Experiment{}, nil
+}
+func (*fakeExperimentCommands) Rollback(context.Context, string, string, application.ExperimentCommandInput) (domain.Experiment, error) {
+	return domain.Experiment{}, nil
 }
 
 func withTenant(tenantID string) gin.HandlerFunc {

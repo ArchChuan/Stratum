@@ -29,6 +29,8 @@ type Evaluation struct {
 	OptimizationService *evalapp.OptimizationService
 	ExperimentService   *evalapp.ExperimentService
 	FeedbackService     *evalapp.FeedbackService
+	QueryService        *evalapp.QueryService
+	CandidateService    *evalapp.CandidateCommandService
 }
 
 type skillCandidateManager struct {
@@ -271,6 +273,8 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	optimizationRepo := evalpersist.NewPgOptimizationRepository(db)
 	experimentRepo := evalpersist.NewPgExperimentRepository(db)
 	feedbackRepo := evalpersist.NewPgFeedbackRepository(db)
+	queryRepo := evalpersist.NewPgCenterQueryRepository(db)
+	candidateRepo := evalpersist.NewPgCandidateCommandRepository(db)
 	suiteService := evalapp.NewSuiteService(suiteRepo)
 	activationResolver := publishedSkillActivationResolver{versions: c.Skill.VersionService}
 	adapter := agentScenarioEvaluationAdapter{
@@ -301,6 +305,8 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		OptimizationService: optimizationService,
 		ExperimentService:   experimentService,
 		FeedbackService:     feedbackService,
+		QueryService:        evalapp.NewQueryService(queryRepo),
+		CandidateService:    evalapp.NewCandidateCommandService(candidateRepo),
 	}
 	if c.Agent != nil && c.Agent.Service != nil {
 		c.Agent.Service.SetSkillRevisionResolver(experimentSkillRevisionResolver{service: experimentService})

@@ -48,6 +48,7 @@ type CreateEvaluationExperimentRequest struct {
 }
 
 type EvaluateExperimentStageRequest struct {
+	IdempotencyKey       string  `json:"idempotency_key" binding:"omitempty,max=255"`
 	Samples              int     `json:"samples" binding:"min=0"`
 	ObservedMinutes      int     `json:"observed_minutes" binding:"min=0"`
 	QualityImprovement   float64 `json:"quality_improvement"`
@@ -56,6 +57,20 @@ type EvaluateExperimentStageRequest struct {
 	P95LatencyRegression float64 `json:"p95_latency_regression"`
 	ErrorRateIncrease    float64 `json:"error_rate_increase"`
 	SecurityViolation    bool    `json:"security_violation"`
+}
+
+type EvaluationCenterQuery struct {
+	ResourceKind string `form:"resource_kind" binding:"omitempty,oneof=skill agent mcp knowledge"`
+	ResourceID   string `form:"resource_id"`
+	Status       string `form:"status"`
+	Cursor       string `form:"cursor"`
+	Limit        int    `form:"limit" binding:"omitempty,min=1,max=100"`
+}
+
+type EvaluationCommandRequest struct {
+	Reason               string `json:"reason" binding:"required,max=2048"`
+	IdempotencyKey       string `json:"idempotency_key" binding:"required,max=255"`
+	ExpectedStateVersion int64  `json:"expected_state_version" binding:"required,min=1"`
 }
 
 type RecordEvaluationFeedbackRequest struct {

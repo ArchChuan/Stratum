@@ -7,6 +7,7 @@ import (
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
+	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
 	knowledgedomain "github.com/byteBuilderX/stratum/internal/knowledge/domain"
@@ -98,6 +99,8 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, evalapp.ErrJobNotFound),
 		errors.Is(err, evalapp.ErrRunNotFound),
 		errors.Is(err, evalapp.ErrExperimentNotFound),
+		errors.Is(err, evaldomain.ErrCenterResourceNotFound),
+		errors.Is(err, evaldomain.ErrCandidateNotFound),
 		errors.Is(err, workflowdomain.ErrNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, agentapp.ErrApprovalExpired):
@@ -127,6 +130,14 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, workflowdomain.ErrFenceConflict),
 		errors.Is(err, workflowdomain.ErrDecisionConflict),
 		errors.Is(err, workflowdomain.ErrApprovalRequired):
+		return http.StatusConflict
+	case errors.Is(err, evaldomain.ErrExperimentStateConflict),
+		errors.Is(err, evaldomain.ErrExperimentCommandConflict),
+		errors.Is(err, evaldomain.ErrExperimentDeploymentConflict),
+		errors.Is(err, evaldomain.ErrExperimentCommandNotAllowed),
+		errors.Is(err, evaldomain.ErrCandidateStateConflict),
+		errors.Is(err, evaldomain.ErrCandidateCommandConflict),
+		errors.Is(err, evaldomain.ErrCandidateCommandNotAllowed):
 		return http.StatusConflict
 
 	// 422 — Unprocessable Entity
@@ -167,6 +178,9 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, skilldomain.ErrSkillNotPublishable),
 		errors.Is(err, evalapp.ErrSuiteNameRequired),
 		errors.Is(err, evalapp.ErrSuiteCasesRequired):
+		return http.StatusBadRequest
+	case errors.Is(err, evaldomain.ErrInvalidCenterQuery),
+		errors.Is(err, evaldomain.ErrInvalidCandidateCommand):
 		return http.StatusBadRequest
 	case errors.Is(err, memorydomain.ErrInvalidStatus),
 		errors.Is(err, memorydomain.ErrUserIDMismatch),

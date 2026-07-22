@@ -215,8 +215,18 @@ CREATE TABLE IF NOT EXISTS optimization_candidates (
     generation_metadata   JSONB NOT NULL DEFAULT '{}',
     eval_run_id           TEXT REFERENCES eval_runs(id) ON DELETE SET NULL,
     rank                  INT,
+    status                TEXT NOT NULL DEFAULT 'proposed',
+    state_version         BIGINT NOT NULL DEFAULT 1,
+    rejection_reason      TEXT NOT NULL DEFAULT '',
+    rejected_by           TEXT NOT NULL DEFAULT '',
+    rejection_key         TEXT,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'proposed';
+ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS state_version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS rejection_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS rejected_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS rejection_key TEXT;
 CREATE INDEX IF NOT EXISTS idx_optimization_candidates_job_created
     ON optimization_candidates(optimization_job_id, created_at DESC, id DESC);
 

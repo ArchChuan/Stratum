@@ -73,6 +73,10 @@ type OptimizationRepository interface {
 	) error
 }
 
+type CandidateCommandRepository interface {
+	Reject(context.Context, string, string, domain.CandidateCommand) (domain.CandidateSummary, error)
+}
+
 type CreateRevisionInput struct {
 	ResourceKind                                            domain.ResourceKind
 	ResourceID, ParentRevisionID, CreatedBy, IdempotencyKey string
