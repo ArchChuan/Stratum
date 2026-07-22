@@ -218,7 +218,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	}
 	if c.MCP != nil {
 		deps.MCPTools = c.MCP.AgentToolProvider
-		deps.MCPToolExecutor = agentMCPExecutor{manager: c.MCP.Manager}
+		deps.MCPToolExecutor = agentMCPExecutor{clients: c.MCP.Manager}
 		deps.MCPToolPolicy = agentMCPPolicyResolver{service: c.MCP.Service}
 	}
 	if c.Knowledge != nil && c.Knowledge.RAGService != nil {

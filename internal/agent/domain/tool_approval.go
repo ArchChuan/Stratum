@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -10,6 +11,34 @@ var (
 	ErrApprovalAlreadyDecided  = errors.New("tool approval already decided")
 	ErrApprovalAlreadyExecuted = errors.New("tool approval already executed")
 )
+
+type ToolApprovalStatus string
+
+const (
+	ToolApprovalPending        ToolApprovalStatus = "pending"
+	ToolApprovalApproved       ToolApprovalStatus = "approved"
+	ToolApprovalRejected       ToolApprovalStatus = "rejected"
+	ToolApprovalExpired        ToolApprovalStatus = "expired"
+	ToolApprovalExecuting      ToolApprovalStatus = "executing"
+	ToolApprovalExecuted       ToolApprovalStatus = "executed"
+	ToolApprovalOutcomeUnknown ToolApprovalStatus = "unknown_outcome"
+)
+
+func ValidateToolApprovalTransition(from, to ToolApprovalStatus) error {
+	allowed := false
+	switch from {
+	case ToolApprovalPending:
+		allowed = to == ToolApprovalApproved || to == ToolApprovalRejected || to == ToolApprovalExpired
+	case ToolApprovalApproved:
+		allowed = to == ToolApprovalExecuting
+	case ToolApprovalExecuting:
+		allowed = to == ToolApprovalExecuted || to == ToolApprovalApproved || to == ToolApprovalOutcomeUnknown
+	}
+	if !allowed {
+		return fmt.Errorf("invalid tool approval transition: %s -> %s", from, to)
+	}
+	return nil
+}
 
 type ToolApproval struct {
 	ID                   string     `json:"id"`

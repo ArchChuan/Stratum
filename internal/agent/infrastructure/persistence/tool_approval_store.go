@@ -90,8 +90,27 @@ func (s *PgToolApprovalStore) ClaimExecution(ctx context.Context, tenantID, id s
 }
 func (s *PgToolApprovalStore) ReleaseExecution(ctx context.Context, tenantID, id string) error {
 	return execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE agent_tool_approvals SET status='approved' WHERE id=$1 AND status='executing'`, id)
-		return err
+		tag, err := tx.Exec(ctx, `UPDATE agent_tool_approvals SET status='approved' WHERE id=$1 AND status='executing'`, id)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return domain.ErrApprovalAlreadyExecuted
+		}
+		return nil
+	})
+}
+
+func (s *PgToolApprovalStore) MarkOutcomeUnknown(ctx context.Context, tenantID, id string) error {
+	return execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE agent_tool_approvals SET status='unknown_outcome' WHERE id=$1 AND status='executing'`, id)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return domain.ErrApprovalAlreadyExecuted
+		}
+		return nil
 	})
 }
 

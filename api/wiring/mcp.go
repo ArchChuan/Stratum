@@ -2,6 +2,7 @@ package wiring
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -21,10 +22,34 @@ type MCP struct {
 	AgentToolProvider agentport.MCPToolProvider
 }
 
-type agentMCPExecutor struct{ manager *mcp.ClientManager }
+type mcpClientResolver interface {
+	GetClient(ctx context.Context, serverID string) mcp.MCPClient
+}
+
+type agentMCPExecutor struct{ clients mcpClientResolver }
 
 func (e agentMCPExecutor) ExecuteMCPTool(ctx context.Context, serverID, toolName string, input map[string]any) (any, error) {
-	return e.manager.CallTool(ctx, serverID, toolName, input)
+	if e.clients == nil {
+		return nil, &agentport.MCPToolExecutionError{
+			Outcome: agentport.ToolExecutionOutcomeNotSent,
+			Err:     fmt.Errorf("MCP client resolver unavailable"),
+		}
+	}
+	client := e.clients.GetClient(ctx, serverID)
+	if client == nil {
+		return nil, &agentport.MCPToolExecutionError{
+			Outcome: agentport.ToolExecutionOutcomeNotSent,
+			Err:     fmt.Errorf("MCP client not found: %s", serverID),
+		}
+	}
+	output, err := client.CallTool(ctx, toolName, input)
+	if err != nil {
+		return nil, &agentport.MCPToolExecutionError{
+			Outcome: agentport.ToolExecutionOutcomeUnknown,
+			Err:     err,
+		}
+	}
+	return output, nil
 }
 
 type agentMCPPolicyResolver struct{ service *mcpapp.MCPService }

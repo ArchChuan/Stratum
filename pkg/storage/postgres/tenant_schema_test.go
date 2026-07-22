@@ -318,6 +318,23 @@ func TestTenantSchemaContainsMCPToolPolicyAndEncryptedApprovals(t *testing.T) {
 	}
 }
 
+func TestTenantSchemaUpgradesToolApprovalStatusForUnknownOutcome(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	drop := "ALTER TABLE agent_tool_approvals DROP CONSTRAINT IF EXISTS agent_tool_approvals_status_check"
+	add := "CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'executing', 'executed', 'unknown_outcome'))"
+	dropAt, addAt := strings.Index(sql, drop), strings.LastIndex(sql, add)
+	if dropAt == -1 || addAt == -1 {
+		t.Fatalf("tenant schema must rebuild approval status constraint for unknown outcomes")
+	}
+	if dropAt > addAt {
+		t.Fatalf("approval status constraint must be dropped before it is rebuilt")
+	}
+}
+
 func TestTenantSchemaContainsEvaluationControlPlane(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {

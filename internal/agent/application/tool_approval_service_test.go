@@ -15,6 +15,7 @@ import (
 type approvalRepoFake struct {
 	row                              domain.ToolApproval
 	createErr, decideErr, executeErr error
+	released, outcomeUnknown         int
 }
 
 func (f *approvalRepoFake) Create(_ context.Context, _ string, row domain.ToolApproval) (string, error) {
@@ -30,9 +31,16 @@ func (f *approvalRepoFake) Get(_ context.Context, _, _ string) (domain.ToolAppro
 func (f *approvalRepoFake) Decide(_ context.Context, _, _, _, _, _ string, _ time.Time) error {
 	return f.decideErr
 }
-func (f *approvalRepoFake) MarkExecuted(_ context.Context, _, _ string) error     { return f.executeErr }
-func (f *approvalRepoFake) ClaimExecution(_ context.Context, _, _ string) error   { return f.executeErr }
-func (f *approvalRepoFake) ReleaseExecution(_ context.Context, _, _ string) error { return nil }
+func (f *approvalRepoFake) MarkExecuted(_ context.Context, _, _ string) error   { return f.executeErr }
+func (f *approvalRepoFake) ClaimExecution(_ context.Context, _, _ string) error { return f.executeErr }
+func (f *approvalRepoFake) ReleaseExecution(_ context.Context, _, _ string) error {
+	f.released++
+	return nil
+}
+func (f *approvalRepoFake) MarkOutcomeUnknown(_ context.Context, _, _ string) error {
+	f.outcomeUnknown++
+	return nil
+}
 func (f *approvalRepoFake) ListPending(_ context.Context, _ string) ([]domain.ToolApproval, error) {
 	return []domain.ToolApproval{f.row}, nil
 }
@@ -126,6 +134,59 @@ func TestToolApprovalServiceRejectsExpiredApproval(t *testing.T) {
 	repo := &approvalRepoFake{row: domain.ToolApproval{ID: "approval-1", Status: "approved", ExpiresAt: time.Now().Add(-time.Minute)}}
 	_, err := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("key")).ApprovedPayload(context.Background(), "tenant-1", "approval-1")
 	require.ErrorIs(t, err, ErrApprovalExpired)
+}
+
+type failingMCPExecutor struct {
+	err error
+}
+
+func (e failingMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (any, error) {
+	return nil, e.err
+}
+
+func TestToolApprovalExecutionClassifiesUnknownOutcome(t *testing.T) {
+	repo, svc, payload := approvedToolApprovalFixture(t)
+	execErr := errors.New("response timed out after request dispatch")
+
+	_, err := svc.ExecuteApproved(
+		context.Background(), "tenant-1", "approval-1", "orders", "delete", payload.Arguments,
+		failingMCPExecutor{err: &port.MCPToolExecutionError{Outcome: port.ToolExecutionOutcomeUnknown, Err: execErr}},
+	)
+
+	require.ErrorIs(t, err, execErr)
+	require.Equal(t, 1, repo.outcomeUnknown)
+	require.Zero(t, repo.released)
+}
+
+func TestToolApprovalExecutionReleasesOnlyDefinitePreExecutionFailure(t *testing.T) {
+	repo, svc, payload := approvedToolApprovalFixture(t)
+	execErr := errors.New("client not found")
+
+	_, err := svc.ExecuteApproved(
+		context.Background(), "tenant-1", "approval-1", "orders", "delete", payload.Arguments,
+		failingMCPExecutor{err: &port.MCPToolExecutionError{Outcome: port.ToolExecutionOutcomeNotSent, Err: execErr}},
+	)
+
+	require.ErrorIs(t, err, execErr)
+	require.Equal(t, 1, repo.released)
+	require.Zero(t, repo.outcomeUnknown)
+}
+
+func approvedToolApprovalFixture(t *testing.T) (*approvalRepoFake, *ToolApprovalService, ToolApprovalPayload) {
+	t.Helper()
+	repo := &approvalRepoFake{}
+	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test-key"))
+	payload := ToolApprovalPayload{
+		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", AgentID: "agent-1", UserID: "user-1",
+		ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
+		Arguments: map[string]any{"id": "order-1"},
+	}
+	_, err := svc.Request(context.Background(), payload)
+	require.NoError(t, err)
+	repo.row.ID = "approval-1"
+	repo.row.Status = "approved"
+	repo.row.ExpiresAt = time.Now().Add(time.Minute)
+	return repo, svc, payload
 }
 
 func TestApprovedToolResumeErrorRequiresPinnedCallToBeConsumed(t *testing.T) {

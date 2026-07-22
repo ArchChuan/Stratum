@@ -178,7 +178,18 @@ func (s *ToolApprovalService) ExecuteApproved(ctx context.Context, tenantID, id,
 	}
 	output, err := executor.ExecuteMCPTool(ctx, serverID, toolName, args)
 	if err != nil {
-		_ = s.repo.ReleaseExecution(ctx, tenantID, id)
+		var executionErr *port.MCPToolExecutionError
+		if errors.As(err, &executionErr) &&
+			(executionErr.Outcome == port.ToolExecutionOutcomeNotSent ||
+				executionErr.Outcome == port.ToolExecutionOutcomeDefiniteFailure) {
+			if releaseErr := s.repo.ReleaseExecution(ctx, tenantID, id); releaseErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("release tool approval execution: %w", releaseErr))
+			}
+			return nil, err
+		}
+		if unknownErr := s.repo.MarkOutcomeUnknown(ctx, tenantID, id); unknownErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("mark tool approval outcome unknown: %w", unknownErr))
+		}
 		return nil, err
 	}
 	if err := s.repo.MarkExecuted(ctx, tenantID, id); err != nil {
