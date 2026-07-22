@@ -34,6 +34,7 @@ type AgentServiceDeps struct {
 	SkillRevisionResolver   port.SkillRevisionResolver
 	RAGSearch               port.RAGSearchProvider
 	TenantResolver          port.TenantCapabilityResolver
+	HistoryCompactorFactory func(port.CapabilityGateway, string, *zap.Logger) port.HistoryCompactor
 	MCPTools                port.MCPToolProvider
 	MCPToolExecutor         port.MCPToolExecutor
 	MCPToolPolicy           port.MCPToolPolicyResolver
@@ -556,6 +557,16 @@ func (s *AgentService) assembleOptions(
 			}
 			if setter, ok := a.(capGWSetter); ok {
 				setter.SetCapGateway(capGW)
+			}
+			if s.deps.HistoryCompactorFactory != nil {
+				if compactor := s.deps.HistoryCompactorFactory(capGW, a.GetConfig().LLMModel, s.deps.Logger); compactor != nil {
+					type historyCompactorSetter interface {
+						SetHistoryCompactor(port.HistoryCompactor)
+					}
+					if setter, ok := a.(historyCompactorSetter); ok {
+						setter.SetHistoryCompactor(compactor)
+					}
+				}
 			}
 			if len(apiKeys) > 0 {
 				options = append(options, WithLLMAPIKeys(apiKeys))

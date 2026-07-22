@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -50,6 +51,7 @@ func (failingPayloadStore) Put(
 type mockCapGW struct {
 	mu        sync.Mutex
 	responses []port.CapabilityResponse
+	requests  []port.CapabilityRequest
 	idx       int
 	err       error
 }
@@ -60,6 +62,7 @@ func (m *mockCapGW) Route(_ context.Context, req port.CapabilityRequest) (port.C
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.requests = append(m.requests, req)
 	if m.idx < len(m.responses) {
 		r := m.responses[m.idx]
 		m.idx++
@@ -470,6 +473,36 @@ func TestExecute_LoadsHistoryFromChatStore(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "I remember you asked before", result.Output)
+}
+
+func TestExecute_CompactsOverflowingInitialHistory(t *testing.T) {
+	a := newReActAgent()
+	gw := &mockCapGW{responses: []port.CapabilityResponse{{Content: "done"}}}
+	compactor := &fakeCompactor{summary: "compacted earlier discussion"}
+	a.SetCapGateway(gw)
+	a.SetHistoryCompactor(compactor)
+
+	history := makeHistory(12)
+	a.WithChatStore(&mockChatStore{
+		listMsgs: func(context.Context, string, string, string) ([]*agent.ChatMessage, error) {
+			return history, nil
+		},
+	})
+
+	_, err := a.Execute(
+		context.Background(),
+		"continue",
+		agent.WithTenantID("t1"),
+		agent.WithConversationID("conv-abc"),
+		agent.WithUserID("user-1"),
+		agent.WithHistoryWindow(4),
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, compactor.callCount)
+	require.Equal(t, 8, compactor.gotMsgs)
+	require.Len(t, gw.requests, 1)
+	require.NotNil(t, gw.requests[0].LLM)
+	require.True(t, strings.Contains(gw.requests[0].LLM.Messages[0].Content, compactor.summary))
 }
 
 func TestBuildInitMessages_EmptyHistory(t *testing.T) {

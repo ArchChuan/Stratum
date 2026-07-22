@@ -113,6 +113,7 @@ type BaseAgent struct {
 	ChatStore          ChatStore
 	CheckpointStore    CheckpointStore
 	MemoryInjector     port.MemoryInjector
+	HistoryCompactor   port.HistoryCompactor
 	RecallMemoryFn     port.RecallMemoryFn
 	GlobalSystemSuffix string
 }
@@ -142,6 +143,12 @@ func (a *BaseAgent) SetCapGateway(gw port.CapabilityGateway) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.CapGateway = gw
+}
+
+func (a *BaseAgent) SetHistoryCompactor(compactor port.HistoryCompactor) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.HistoryCompactor = compactor
 }
 
 // SetChatStore sets the chat store for conversation history persistence (void, for interface assertion).
@@ -224,6 +231,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	}
 	llmModel := a.LLMModel
 	capGW := a.CapGateway
+	historyCompactor := a.HistoryCompactor
 	chatStore := a.ChatStore
 	metrics := a.metrics
 	workspaceNames := a.KnowledgeWorkspaceNames
@@ -307,7 +315,9 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		if maxTokens <= 0 {
 			maxTokens = constants.DefaultAgentContextTokens
 		}
-		initMessages := BuildContextMessages(systemPrompt, memCtx, history, input, maxTokens, cfg.HistoryWindow)
+		initMessages := BuildContextMessagesWithCompaction(
+			ctx, systemPrompt, memCtx, history, input, maxTokens, cfg.HistoryWindow, historyCompactor,
+		)
 
 		availableTools := buildBuiltinTools(workspaceNames, workspaceDescs,
 			len(workspaceNames) > 0 && cfg.RAGSearchFn != nil,
@@ -333,6 +343,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			RAGSearchFn:                cfg.RAGSearchFn,
 			MaxLLMSteps:                cfg.MaxSteps,
 			MaxContextTokens:           maxTokens,
+			HistoryCompactor:           historyCompactor,
 		}
 		if a.RecallMemoryFn != nil {
 			fn := a.RecallMemoryFn
@@ -432,7 +443,9 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		if maxTokens <= 0 {
 			maxTokens = constants.DefaultAgentContextTokens
 		}
-		initMessages := BuildContextMessages(systemPrompt, memCtx, history, input, maxTokens, cfg.HistoryWindow)
+		initMessages := BuildContextMessagesWithCompaction(
+			ctx, systemPrompt, memCtx, history, input, maxTokens, cfg.HistoryWindow, historyCompactor,
+		)
 		availableTools := buildBuiltinTools(workspaceNames, workspaceDescs,
 			len(workspaceNames) > 0 && cfg.RAGSearchFn != nil,
 			a.MemoryInjector != nil)
@@ -459,6 +472,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			MaxContextTokens:           maxTokens,
 			StuckThreshold:             stuckThreshold,
 			CheckpointEnabled:          a.CheckpointEnabled,
+			HistoryCompactor:           historyCompactor,
 		}
 		if a.RecallMemoryFn != nil {
 			fn := a.RecallMemoryFn
