@@ -44,7 +44,14 @@ func (s *RevisionService) Create(
 	if err != nil {
 		return domain.ResourceRevision{}, false, fmt.Errorf("revision service: marshal payload: %w", err)
 	}
-	contentHash := sha256.Sum256(canonical)
+	fingerprintCanonical := canonical
+	if input.FingerprintPayload != nil && !isNilPayload(input.FingerprintPayload) {
+		fingerprintCanonical, err = json.Marshal(input.FingerprintPayload)
+		if err != nil {
+			return domain.ResourceRevision{}, false, fmt.Errorf("revision service: marshal fingerprint payload: %w", err)
+		}
+	}
+	contentHash := sha256.Sum256(fingerprintCanonical)
 	revision := domain.ResourceRevision{
 		ID:               uuid.Must(uuid.NewV7()).String(),
 		ResourceKind:     input.ResourceKind,

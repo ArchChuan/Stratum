@@ -87,6 +87,7 @@ type CandidateCommandRepository interface {
 type CreateRevisionInput struct {
 	ResourceKind                                            domain.ResourceKind
 	ResourceID, ParentRevisionID, CreatedBy, IdempotencyKey string
+	FingerprintPayload                                      any
 	Source                                                  domain.RevisionSource
 	Payload                                                 any
 	SafeSummary                                             map[string]any

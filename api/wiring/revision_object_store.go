@@ -32,6 +32,9 @@ func (c revisionMinIOClient) RemoveObject(
 }
 
 func (c *Container) buildRevisionObjectStore(ctx context.Context) error {
+	if c.RevisionObjectStore != nil {
+		return nil
+	}
 	if !c.Config.TracePayload.Enabled {
 		return nil
 	}

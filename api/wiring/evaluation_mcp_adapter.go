@@ -74,6 +74,10 @@ func (a mcpEvaluationAdapter) CreatePublishedBaseline(
 	if err != nil {
 		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation MCP adapter: discover tools: %w", err)
 	}
+	fingerprintPayload, contentFingerprint, err := mcpBaselineFingerprint(config, tools)
+	if err != nil {
+		return evaldomain.ResourceRef{}, err
+	}
 	runtimeRef, err := a.runtimeStore.Put(ctx, pkgobjectstore.Payload{
 		TenantID: tenantID, Namespace: "evaluation-mcp-runtime", ID: serverID,
 		Value: mcpRuntimeConfigEnvelope{TenantID: tenantID, Config: config},
@@ -85,17 +89,14 @@ func (a mcpEvaluationAdapter) CreatePublishedBaseline(
 	if err != nil {
 		return evaldomain.ResourceRef{}, errors.Join(err, a.deleteRuntimeConfig(runtimeRef))
 	}
-	contentHash, err := canonicalHash(snapshot)
-	if err != nil {
-		return evaldomain.ResourceRef{}, err
-	}
 	actorID := strings.TrimSpace(a.actorID)
 	if actorID == "" {
 		actorID = "evaluation-worker"
 	}
-	created, _, err := a.revisions.Create(ctx, tenantID, evalport.CreateRevisionInput{
+	created, wasCreated, err := a.revisions.Create(ctx, tenantID, evalport.CreateRevisionInput{
 		ResourceKind: evaldomain.ResourceKindMCP, ResourceID: serverID, CreatedBy: actorID,
-		IdempotencyKey: "mcp-baseline-" + contentHash, Source: evaldomain.RevisionSourceManual,
+		IdempotencyKey:     "mcp-baseline-" + stableTenantFingerprint(tenantID, contentFingerprint),
+		FingerprintPayload: fingerprintPayload, Source: evaldomain.RevisionSourceManual,
 		Payload: snapshot, SafeSummary: map[string]any{"resource_name": snapshot.Name},
 	})
 	if err != nil {
@@ -103,9 +104,20 @@ func (a mcpEvaluationAdapter) CreatePublishedBaseline(
 			fmt.Errorf("evaluation MCP adapter: create baseline: %w", err), a.deleteRuntimeConfig(runtimeRef),
 		)
 	}
+	if !wasCreated {
+		if err := a.deleteRuntimeConfig(runtimeRef); err != nil {
+			return evaldomain.ResourceRef{}, err
+		}
+	}
 	ref := evaldomain.ResourceRef{Kind: evaldomain.ResourceKindMCP, ResourceID: serverID, RevisionID: created.ID}
 	if _, err := a.revisions.Publish(ctx, tenantID, ref); err != nil {
-		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation MCP adapter: publish baseline: %w", err)
+		cleanupErr := error(nil)
+		if wasCreated {
+			cleanupErr = a.deleteRuntimeConfig(runtimeRef)
+		}
+		return evaldomain.ResourceRef{}, errors.Join(
+			fmt.Errorf("evaluation MCP adapter: publish baseline: %w", err), cleanupErr,
+		)
 	}
 	return ref, nil
 }
@@ -343,6 +355,31 @@ func canonicalHash(value any) (string, error) {
 	}
 	hash := sha256.Sum256(encoded)
 	return hex.EncodeToString(hash[:]), nil
+}
+
+type mcpBaselineFingerprintPayload struct {
+	Config         *mcpdomain.ServerConfig `json:"config"`
+	ToolSchemaHash string                  `json:"tool_schema_hash"`
+}
+
+func mcpBaselineFingerprint(
+	config *mcpdomain.ServerConfig, tools []*mcpdomain.Tool,
+) (mcpBaselineFingerprintPayload, string, error) {
+	if config == nil {
+		return mcpBaselineFingerprintPayload{}, "", errors.New("evaluation MCP adapter: runtime config required")
+	}
+	toolHash, err := mcpToolSchemaHash(tools)
+	if err != nil {
+		return mcpBaselineFingerprintPayload{}, "", err
+	}
+	payload := mcpBaselineFingerprintPayload{Config: config, ToolSchemaHash: toolHash}
+	hash, err := canonicalHash(payload)
+	return payload, hash, err
+}
+
+func stableTenantFingerprint(tenantID, contentFingerprint string) string {
+	hash := sha256.Sum256([]byte(tenantID + "\x00" + contentFingerprint))
+	return hex.EncodeToString(hash[:])
 }
 
 func applyMCPCandidatePatch(snapshot *mcpRevisionSnapshot, patch evaldomain.CandidatePatch) ([]string, error) {

@@ -167,11 +167,7 @@ func NewFromExisting(
 	}
 
 	// Run the derived sub-builders that don't need Skill or Memory yet.
-	for _, step := range []buildStep{
-		{"platform", c.buildPlatform},
-		{"mcp", c.buildMCP},
-		{"knowledge", c.buildKnowledge},
-	} {
+	for _, step := range c.newFromExistingInitialSteps() {
 		if err := step.fn(ctx); err != nil {
 			_ = c.Shutdown(ctx)
 			return nil, fmt.Errorf("wiring.%s: %w", step.name, err)
@@ -208,4 +204,13 @@ func NewFromExisting(
 		return nil, fmt.Errorf("wiring.evaluation: %w", err)
 	}
 	return c, nil
+}
+
+func (c *Container) newFromExistingInitialSteps() []buildStep {
+	return []buildStep{
+		{"platform", c.buildPlatform},
+		{"revision-object-store", c.buildRevisionObjectStore},
+		{"mcp", c.buildMCP},
+		{"knowledge", c.buildKnowledge},
+	}
 }

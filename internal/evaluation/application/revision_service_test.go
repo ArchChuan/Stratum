@@ -159,6 +159,28 @@ func TestRevisionServicePublishesDraftRevision(t *testing.T) {
 	}
 }
 
+func TestRevisionServiceFingerprintPayloadRejectsMeaningfulChanges(t *testing.T) {
+	store := &fakeRevisionObjectStore{ref: port.RevisionPayloadRef{URI: "object://revision", SHA256: "hash"}}
+	repo := &fakeRevisionRepository{created: true}
+	service := NewRevisionService(store, repo)
+	input := validCreateRevisionInput()
+	input.Payload = map[string]any{"runtime_ref": "random-one"}
+	input.FingerprintPayload = map[string]any{"url": "https://one.example"}
+	first, _, err := service.Create(context.Background(), "tenant-1", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Payload = map[string]any{"runtime_ref": "random-two"}
+	input.FingerprintPayload = map[string]any{"url": "https://two.example"}
+	second, _, err := service.Create(context.Background(), "tenant-1", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ContentHash == second.ContentHash {
+		t.Fatal("same idempotency key accepted a changed logical payload fingerprint")
+	}
+}
+
 func validCreateRevisionInput() CreateRevisionInput {
 	return CreateRevisionInput{
 		ResourceKind:   domain.ResourceKindSkill,

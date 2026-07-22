@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,53 @@ func TestMCPEvaluationAdapterCreatesPublishedSafeBaseline(t *testing.T) {
 	}
 	if runtime.tenantID != "tenant-1" {
 		t.Fatalf("tenant context not propagated: %q", runtime.tenantID)
+	}
+}
+
+func TestMCPEvaluationAdapterBaselineReplayIsStableAndCleansDuplicateRuntime(t *testing.T) {
+	revisions := &fakeMCPRevisionService{}
+	store := &fakeMCPRuntimeStore{}
+	runtime := &fakeMCPRuntime{config: &mcpdomain.ServerConfig{
+		ID: "server-1", Name: "orders", Transport: "http", URL: "https://one.example", Timeout: time.Second,
+	}, tools: []*mcpdomain.Tool{{Name: "lookup", InputSchema: map[string]any{"type": "object"}}}}
+	adapter := mcpEvaluationAdapter{runtime: runtime, revisions: revisions, runtimeStore: store}
+	first, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "server-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstKey := revisions.input.IdempotencyKey
+	second, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "server-1")
+	if err != nil || first != second || revisions.input.IdempotencyKey != firstKey || store.putCalls != 2 ||
+		len(store.deleted) != 1 {
+		t.Fatalf("first=%+v second=%+v key=%q puts=%d deleted=%v err=%v",
+			first, second, revisions.input.IdempotencyKey, store.putCalls, store.deleted, err)
+	}
+}
+
+func TestMCPEvaluationAdapterBaselineFailureCleansRuntimeObject(t *testing.T) {
+	runtime := &fakeMCPRuntime{config: &mcpdomain.ServerConfig{
+		ID: "server-1", Name: "orders", Timeout: time.Second,
+	}, tools: []*mcpdomain.Tool{{Name: "lookup"}}}
+	for _, tc := range []struct {
+		name        string
+		revisions   *fakeMCPRevisionService
+		storePutErr error
+		wantDeletes int
+	}{
+		{name: "upload", revisions: &fakeMCPRevisionService{}, storePutErr: errors.New("upload failed")},
+		{name: "create", revisions: &fakeMCPRevisionService{createErr: errors.New("create failed")}, wantDeletes: 1},
+		{name: "publish", revisions: &fakeMCPRevisionService{publishErr: errors.New("publish failed")}, wantDeletes: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeMCPRuntimeStore{putErr: tc.storePutErr}
+			adapter := mcpEvaluationAdapter{runtime: runtime, revisions: tc.revisions, runtimeStore: store}
+			if _, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "server-1"); err == nil {
+				t.Fatal("expected baseline failure")
+			}
+			if len(store.deleted) != tc.wantDeletes {
+				t.Fatalf("deleted=%v want=%d", store.deleted, tc.wantDeletes)
+			}
+		})
 	}
 }
 
@@ -213,14 +261,21 @@ func (f *fakeMCPRuntime) CallToolWithConfig(
 type fakeMCPRuntimeStore struct {
 	values    map[string]any
 	lastValue any
+	putCalls  int
+	putErr    error
+	deleted   []string
 }
 
 func (s *fakeMCPRuntimeStore) Put(_ context.Context, payload pkgobjectstore.Payload) (pkgobjectstore.Reference, error) {
+	s.putCalls++
+	if s.putErr != nil {
+		return pkgobjectstore.Reference{}, s.putErr
+	}
 	s.lastValue = payload.Value
 	if s.values == nil {
 		s.values = map[string]any{}
 	}
-	uri := "object://runtime/" + payload.TenantID
+	uri := fmt.Sprintf("object://runtime/%s/%d", payload.TenantID, s.putCalls)
 	s.values[uri] = payload.Value
 	return pkgobjectstore.Reference{URI: uri, SHA256: "runtime-hash"}, nil
 }
@@ -231,7 +286,11 @@ func (s *fakeMCPRuntimeStore) Get(_ context.Context, ref pkgobjectstore.Referenc
 	}
 	return json.Marshal(value)
 }
-func (*fakeMCPRuntimeStore) Delete(context.Context, pkgobjectstore.Reference) error { return nil }
+func (s *fakeMCPRuntimeStore) Delete(_ context.Context, ref pkgobjectstore.Reference) error {
+	s.deleted = append(s.deleted, ref.URI)
+	delete(s.values, ref.URI)
+	return nil
+}
 
 type fakeMCPRevisionService struct {
 	revision     evaldomain.ResourceRevision
@@ -240,6 +299,9 @@ type fakeMCPRevisionService struct {
 	input        evalport.CreateRevisionInput
 	createErr    error
 	publishCalls int
+	publishErr   error
+	keys         map[string]evaldomain.ResourceRevision
+	fingerprints map[string]string
 }
 
 func (f *fakeMCPRevisionService) Get(context.Context, string, evaldomain.ResourceRef) (evaldomain.ResourceRevision, []byte, bool, error) {
@@ -250,13 +312,27 @@ func (f *fakeMCPRevisionService) Create(_ context.Context, _ string, input evalp
 	if f.createErr != nil {
 		return evaldomain.ResourceRevision{}, false, f.createErr
 	}
+	fingerprint, _ := canonicalHash(input.FingerprintPayload)
+	if f.keys == nil {
+		f.keys, f.fingerprints = map[string]evaldomain.ResourceRevision{}, map[string]string{}
+	}
+	if existing, ok := f.keys[input.IdempotencyKey]; ok {
+		if f.fingerprints[input.IdempotencyKey] != fingerprint {
+			return evaldomain.ResourceRevision{}, false, errors.New("idempotency conflict")
+		}
+		return existing, false, nil
+	}
 	if f.revision.ID == "" {
 		f.revision = evaldomain.ResourceRevision{ID: "created-1", ResourceKind: input.ResourceKind, ResourceID: input.ResourceID, Status: evaldomain.RevisionStatusDraft}
 	}
+	f.keys[input.IdempotencyKey], f.fingerprints[input.IdempotencyKey] = f.revision, fingerprint
 	return f.revision, true, nil
 }
 func (f *fakeMCPRevisionService) Publish(_ context.Context, _ string, ref evaldomain.ResourceRef) (evaldomain.ResourceRevision, error) {
 	f.publishCalls++
+	if f.publishErr != nil {
+		return evaldomain.ResourceRevision{}, f.publishErr
+	}
 	f.revision.ID, f.revision.Status = ref.RevisionID, evaldomain.RevisionStatusPublished
 	return f.revision, nil
 }
