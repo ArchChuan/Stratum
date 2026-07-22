@@ -110,6 +110,7 @@ type PlanLimits struct {
 	MaxNodes           int
 	MaxRevisions       int64
 	MaxAttemptsPerNode int
+	MaxConcurrentNodes int
 }
 
 // ApplyPlanCommand validates and applies a model-proposed plan command to a

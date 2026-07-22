@@ -192,24 +192,24 @@ git commit -m "[feat](agent): expose explicit plan actions in ReAct"
 - Create: `internal/agent/application/graph/plan_runtime_test.go`
 - Modify: `internal/agent/application/graph/react.go`
 
-- [ ] **Step 1: Write failing runtime tests**
+- [x] **Step 1: Write failing runtime tests**
 
 Test fan-out bounded concurrency, fan-in, dependency-summary-only context, inherited tenant/trace/execution/conversation identity, disabled nested plan tools, panic recovery, cancellation waiting for all workers, failure accounting, and `failed_pending_confirmation` never being replayed.
 
-- [ ] **Step 2: Verify the tests fail**
+- [x] **Step 2: Verify the tests fail**
 
 Run: `go test -race ./internal/agent/application/graph -run 'PlanRuntime|PlanCancellation|PlanContext'`
 Expected: FAIL because no unified node runtime exists.
 
-- [ ] **Step 3: Implement the runtime**
+- [x] **Step 3: Implement the runtime**
 
 Create a semaphore-bounded errgroup-style runner using `context.WithCancel`, `sync.WaitGroup`, and result channels sized to the ready set. Each node builds a fresh `ReActState` with parent system/capability context, node goal, dependency summaries, remaining budgets, and identities; omit unrelated messages and remove plan tools. Recover panics per worker, persist each transition before exposing it, cancel on checkpoint failure, then wait for every worker.
 
-- [ ] **Step 4: Return a structured parent observation**
+- [x] **Step 4: Return a structured parent observation**
 
 After a wave, append one tool observation with sorted `completed`, `failed`, `blocked`, and `pending` node summaries plus remaining budgets. The parent LLM then chooses answer, revision, continuation, or cancellation.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run: `go test -race ./internal/agent/application/graph -run 'PlanRuntime|PlanCancellation|PlanContext'`
 Expected: PASS with maximum observed concurrency at or below the named limit.
