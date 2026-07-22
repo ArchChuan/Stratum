@@ -129,20 +129,20 @@ git commit -m "[feat](agent): add revisioned plan state machine"
 - Modify: `internal/agent/domain/port/repository.go`
 - Modify: `internal/agent/infrastructure/persistence/checkpoint_store_test.go`
 
-- [ ] **Step 1: Write failing codec and persistence tests**
+- [x] **Step 1: Write failing codec and persistence tests**
 
 Test versioned JSON round-trip preserving revision and attempt IDs, unsupported-version rejection, tenant/execution identity propagation, and a store error preventing a successful command observation. Use `planCheckpointVersion = 1` and store the envelope in `AgentExecutionCheckpoint.RuntimeStateJSON`.
 
-- [ ] **Step 2: Verify the tests fail**
+- [x] **Step 2: Verify the tests fail**
 
 Run: `go test ./internal/agent/application/graph ./internal/agent/infrastructure/persistence -run 'PlanCheckpoint|CheckpointStore'`
 Expected: FAIL for missing codec/runtime behavior.
 
-- [ ] **Step 3: Implement the checkpoint boundary**
+- [x] **Step 3: Implement the checkpoint boundary**
 
 Add `PlanCheckpointWriter` and codec helpers in `plan_checkpoint.go`; include plan, global budgets, and active attempt identities. Always call `Upsert(ctx, tenantID, checkpoint)` before returning a successful mutation or transition observation, wrapping errors with `plan checkpoint: %w`.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `go test ./internal/agent/application/graph ./internal/agent/infrastructure/persistence -run 'PlanCheckpoint|CheckpointStore'`
 Expected: PASS.
