@@ -440,6 +440,37 @@ func TestBaseClientHTTPInitializeTimeoutAndLogsExcludeQuery(t *testing.T) {
 	}
 }
 
+func TestBaseClientCallToolTransportFailureDoesNotLeakURLOrSession(t *testing.T) {
+	core, observed := observer.New(zap.DebugLevel)
+	secretQuery := "credential=synthetic-query-secret"
+	secretSession := "synthetic-session-secret"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Mcp-Session-Id", secretSession)
+		w.WriteHeader(http.StatusOK)
+	}))
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "server-1", Transport: "http", URL: server.URL + "?" + secretQuery, Timeout: time.Second,
+	}, zap.New(core))
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	server.Close()
+	_, err := client.CallTool(context.Background(), " lookup ", map[string]any{})
+	if err == nil || strings.Contains(err.Error(), secretQuery) || strings.Contains(err.Error(), server.URL) {
+		t.Fatalf("unsafe transport error: %v", err)
+	}
+	if strings.Contains(client.GetServerInfo().Error, secretQuery) || strings.Contains(client.GetServerInfo().Error, server.URL) {
+		t.Fatalf("unsafe server info: %+v", client.GetServerInfo())
+	}
+	for _, entry := range observed.All() {
+		logged := entry.Message + fmt.Sprint(entry.ContextMap())
+		if strings.Contains(logged, secretQuery) || strings.Contains(logged, server.URL) ||
+			strings.Contains(logged, secretSession) {
+			t.Fatalf("HTTP secret leaked in logs: %s", logged)
+		}
+	}
+}
+
 func TestBaseClientDisconnectKillsAndWaitsForStdioChild(t *testing.T) {
 	client := NewBaseClient(&MCPServerConfig{
 		ID: "server-1", Transport: "stdio", Command: "sh", Args: []string{"-c", "sleep 30"},
@@ -466,15 +497,50 @@ func TestClientManagerConnectFailsClosedWhenDiscoveryFails(t *testing.T) {
 	}
 }
 
+func TestClientManagerConnectFailureAlwaysDisconnects(t *testing.T) {
+	manager := NewClientManager(zap.NewNop(), nil, nil)
+	client := &revisionClientFake{connectErr: errors.New("initialize failed")}
+	manager.clientFactory = func(*MCPServerConfig, *zap.Logger) MCPClient { return client }
+	if err := manager.Connect(context.Background(), &MCPServerConfig{ID: "server-1"}); err == nil {
+		t.Fatal("expected connect failure")
+	}
+	if client.disconnectCalls != 1 || manager.GetClient(context.Background(), "server-1") != nil {
+		t.Fatalf("partial connection not cleaned up: %+v", client)
+	}
+}
+
+func TestClientManagerHTTPInitializeFailureClosesPartialClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	manager := NewClientManager(zap.NewNop(), nil, nil)
+	var client *BaseClient
+	manager.clientFactory = func(config *MCPServerConfig, logger *zap.Logger) MCPClient {
+		client = NewBaseClient(config, logger)
+		return client
+	}
+	err := manager.Connect(context.Background(), &MCPServerConfig{
+		ID: "server-1", Transport: "http", URL: server.URL, Timeout: time.Second,
+	})
+	if err == nil || client == nil || client.httpClient != nil || manager.GetClient(context.Background(), "server-1") != nil {
+		t.Fatalf("partial HTTP client not cleaned up: client=%+v err=%v", client, err)
+	}
+}
+
 type revisionClientFake struct {
 	config          *MCPServerConfig
 	result          any
 	connectCalls    int
 	disconnectCalls int
 	listToolsErr    error
+	connectErr      error
 }
 
-func (c *revisionClientFake) Connect(context.Context) error    { c.connectCalls++; return nil }
+func (c *revisionClientFake) Connect(context.Context) error {
+	c.connectCalls++
+	return c.connectErr
+}
 func (c *revisionClientFake) Disconnect(context.Context) error { c.disconnectCalls++; return nil }
 func (*revisionClientFake) IsConnected() bool                  { return true }
 func (*revisionClientFake) IsHealthy() bool                    { return true }

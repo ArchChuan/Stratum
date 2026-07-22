@@ -150,7 +150,11 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 	}
 
 	if err := client.Connect(ctx); err != nil {
+		cleanupErr := disconnectMCPClient(client)
 		finish()
+		if cleanupErr != nil {
+			return errors.Join(err, fmt.Errorf("cleanup failed MCP connection: %w", cleanupErr))
+		}
 		return err
 	}
 
