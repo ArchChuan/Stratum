@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -53,14 +52,71 @@ func TestToolApprovalServiceEncryptsPayloadAndCreatesSafeCheckpoint(t *testing.T
 	require.Equal(t, "waiting_approval", checkpoints.row.Status)
 	require.JSONEq(t, `{"approval_id":"approval-1"}`, string(checkpoints.row.RuntimeStateJSON))
 	require.NotContains(t, string(checkpoints.row.PendingToolCallsJSON), "do-not-store-plain")
+	require.NotEmpty(t, repo.row.DecisionID)
+	require.Contains(t, repo.row.ArgumentsDigest, "tool-arguments:v1:sha256:")
+	require.Contains(t, repo.row.SkillRevisionsDigest, "skill-revisions:v1:sha256:")
+}
+
+func TestToolApprovalServiceRejectsTamperedBinding(t *testing.T) {
+	key := crypto.DeriveAESKey("test-key")
+	repo := &approvalRepoFake{}
+	svc := NewToolApprovalService(repo, nil, key)
+	payload := ToolApprovalPayload{
+		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", AgentID: "agent-1", UserID: "user-1",
+		ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
+		Arguments: map[string]any{"order_id": "order-1"}, PinnedSkillRevisions: map[string]string{"skill-1": "revision-1"},
+		PolicyVersion: "policy-1",
+	}
+	if _, err := svc.Request(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	repo.row.ID = "approval-1"
+	repo.row.Status = "approved"
+	repo.row.ExpiresAt = time.Now().Add(time.Minute)
+
+	tests := []struct {
+		name   string
+		mutate func(*domain.ToolApproval)
+	}{
+		{name: "decision", mutate: func(row *domain.ToolApproval) { row.DecisionID = "other" }},
+		{name: "execution", mutate: func(row *domain.ToolApproval) { row.ExecutionID = "other" }},
+		{name: "agent", mutate: func(row *domain.ToolApproval) { row.AgentID = "other" }},
+		{name: "user", mutate: func(row *domain.ToolApproval) { row.UserID = "other" }},
+		{name: "tool call", mutate: func(row *domain.ToolApproval) { row.ToolCallID = "other" }},
+		{name: "server", mutate: func(row *domain.ToolApproval) { row.ServerID = "other" }},
+		{name: "tool", mutate: func(row *domain.ToolApproval) { row.ToolName = "other" }},
+		{name: "arguments", mutate: func(row *domain.ToolApproval) { row.ArgumentsDigest = "other" }},
+		{name: "skill revisions", mutate: func(row *domain.ToolApproval) { row.SkillRevisionsDigest = "other" }},
+		{name: "policy", mutate: func(row *domain.ToolApproval) { row.PolicyVersion = "other" }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := repo.row
+			t.Cleanup(func() { repo.row = original })
+			tt.mutate(&repo.row)
+
+			_, err := svc.ApprovedPayload(context.Background(), "tenant-1", "approval-1")
+			require.ErrorIs(t, err, ErrApprovalBindingMismatch)
+		})
+	}
 }
 
 func TestToolApprovalServiceDecryptsApprovedPayload(t *testing.T) {
 	key := crypto.DeriveAESKey("test-key")
-	raw, _ := json.Marshal(ToolApprovalPayload{Query: "resume", Arguments: map[string]any{"id": "o1"}})
-	encrypted, _ := crypto.Encrypt(key, string(raw))
-	repo := &approvalRepoFake{row: domain.ToolApproval{ID: "approval-1", Status: "approved", EncryptedPayload: encrypted, ExpiresAt: time.Now().Add(time.Minute)}}
-	payload, err := NewToolApprovalService(repo, nil, key).ApprovedPayload(context.Background(), "tenant-1", "approval-1")
+	repo := &approvalRepoFake{}
+	svc := NewToolApprovalService(repo, nil, key)
+	_, err := svc.Request(context.Background(), ToolApprovalPayload{
+		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", AgentID: "agent-1", UserID: "user-1",
+		ToolCallID: "call-1", ServerID: "orders", ToolName: "get", RiskLevel: port.ToolRiskUnclassified,
+		Query: "resume", Arguments: map[string]any{"id": "o1"},
+	})
+	require.NoError(t, err)
+	repo.row.ID = "approval-1"
+	repo.row.Status = "approved"
+	repo.row.ExpiresAt = time.Now().Add(time.Minute)
+
+	payload, err := svc.ApprovedPayload(context.Background(), "tenant-1", "approval-1")
 	require.NoError(t, err)
 	require.Equal(t, "resume", payload.Query)
 	require.Equal(t, "o1", payload.Arguments["id"])

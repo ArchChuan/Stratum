@@ -299,6 +299,11 @@ func TestTenantSchemaContainsMCPToolPolicyAndEncryptedApprovals(t *testing.T) {
 		"CHECK (risk_level IN ('read', 'write_reversible', 'destructive', 'unclassified'))",
 		"CREATE TABLE IF NOT EXISTS agent_tool_approvals",
 		"encrypted_payload TEXT NOT NULL",
+		"arguments_digest  TEXT        NOT NULL DEFAULT ''",
+		"ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS decision_id",
+		"ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS arguments_digest",
+		"ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS skill_revisions_digest",
+		"ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS policy_version",
 		"status TEXT NOT NULL DEFAULT 'pending'",
 		"'waiting_approval'",
 	} {

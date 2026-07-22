@@ -11,12 +11,14 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
+	"github.com/google/uuid"
 )
 
 var (
 	ErrApprovalExpired         = errors.New("tool approval expired")
 	ErrApprovalNotApproved     = errors.New("tool approval is not approved")
 	ErrApprovedToolNotReplayed = errors.New("approved tool call was not replayed")
+	ErrApprovalBindingMismatch = errors.New("tool approval binding mismatch")
 )
 
 func approvedToolResumeError(consumed bool, runErr error) error {
@@ -31,6 +33,7 @@ func approvedToolResumeError(consumed bool, runErr error) error {
 
 type ToolApprovalPayload struct {
 	TenantID             string             `json:"tenant_id"`
+	DecisionID           string             `json:"decision_id"`
 	ExecutionID          string             `json:"execution_id"`
 	TraceID              string             `json:"trace_id"`
 	AgentID              string             `json:"agent_id"`
@@ -43,6 +46,9 @@ type ToolApprovalPayload struct {
 	Query                string             `json:"query"`
 	Arguments            map[string]any     `json:"arguments"`
 	PinnedSkillRevisions map[string]string  `json:"pinned_skill_revisions,omitempty"`
+	PolicyVersion        string             `json:"policy_version"`
+	ArgumentsDigest      string             `json:"arguments_digest"`
+	SkillRevisionsDigest string             `json:"skill_revisions_digest"`
 }
 
 type ToolApprovalService struct {
@@ -57,6 +63,18 @@ func NewToolApprovalService(repo port.ToolApprovalRepo, checkpoints port.Checkpo
 }
 
 func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalPayload) (string, error) {
+	if payload.DecisionID == "" {
+		payload.DecisionID = uuid.NewString()
+	}
+	var err error
+	payload.ArgumentsDigest, err = CanonicalToolArgumentsDigest(payload.Arguments)
+	if err != nil {
+		return "", fmt.Errorf("digest tool approval arguments: %w", err)
+	}
+	payload.SkillRevisionsDigest, err = canonicalSkillRevisionsDigest(payload.PinnedSkillRevisions)
+	if err != nil {
+		return "", fmt.Errorf("digest tool approval skill revisions: %w", err)
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("marshal approval payload: %w", err)
@@ -67,8 +85,11 @@ func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalP
 	}
 	expires := s.now().Add(30 * time.Minute)
 	id, err := s.repo.Create(ctx, payload.TenantID, domain.ToolApproval{
+		DecisionID:  payload.DecisionID,
 		ExecutionID: payload.ExecutionID, TraceID: payload.TraceID, AgentID: payload.AgentID, UserID: payload.UserID,
 		ToolCallID: payload.ToolCallID, ServerID: payload.ServerID, ToolName: payload.ToolName, RiskLevel: string(payload.RiskLevel),
+		ArgumentsDigest: payload.ArgumentsDigest, SkillRevisionsDigest: payload.SkillRevisionsDigest,
+		PolicyVersion:    payload.PolicyVersion,
 		EncryptedPayload: encrypted, Status: "pending", ExpiresAt: expires,
 	})
 	if err != nil {
@@ -106,7 +127,31 @@ func (s *ToolApprovalService) ApprovedPayload(ctx context.Context, tenantID, app
 	if err := json.Unmarshal([]byte(plain), &payload); err != nil {
 		return ToolApprovalPayload{}, fmt.Errorf("decode approval payload: %w", err)
 	}
+	if !toolApprovalBindingMatches(tenantID, row, payload) {
+		return ToolApprovalPayload{}, ErrApprovalBindingMismatch
+	}
 	return payload, nil
+}
+
+func toolApprovalBindingMatches(tenantID string, row domain.ToolApproval, payload ToolApprovalPayload) bool {
+	argumentsDigest, argumentsErr := CanonicalToolArgumentsDigest(payload.Arguments)
+	skillDigest, skillErr := canonicalSkillRevisionsDigest(payload.PinnedSkillRevisions)
+	return argumentsErr == nil && skillErr == nil &&
+		payload.TenantID == tenantID &&
+		row.DecisionID == payload.DecisionID &&
+		row.ExecutionID == payload.ExecutionID &&
+		row.TraceID == payload.TraceID &&
+		row.AgentID == payload.AgentID &&
+		row.UserID == payload.UserID &&
+		row.ToolCallID == payload.ToolCallID &&
+		row.ServerID == payload.ServerID &&
+		row.ToolName == payload.ToolName &&
+		row.RiskLevel == string(payload.RiskLevel) &&
+		row.ArgumentsDigest == payload.ArgumentsDigest &&
+		row.ArgumentsDigest == argumentsDigest &&
+		row.SkillRevisionsDigest == payload.SkillRevisionsDigest &&
+		row.SkillRevisionsDigest == skillDigest &&
+		row.PolicyVersion == payload.PolicyVersion
 }
 
 func (s *ToolApprovalService) Decide(ctx context.Context, tenantID, id, decision, actor, reason string) error {
