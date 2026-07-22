@@ -10,6 +10,14 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestParseAgentTypeWireIsCompatibilityOnly(t *testing.T) {
+	for _, value := range []string{"react", "planning", "cot", "tool_calling", "rag", "swarm", "legacy"} {
+		if got := parseAgentTypeWire(value); got != domain.ReActAgent {
+			t.Fatalf("parseAgentTypeWire(%q) = %q, want react", value, got)
+		}
+	}
+}
+
 type optionCaptureAgent struct {
 	config    *AgentConfig
 	gateway   port.CapabilityGateway

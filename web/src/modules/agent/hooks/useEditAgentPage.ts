@@ -43,7 +43,6 @@ export const useEditAgentPage = () => {
           form.setFieldsValue({
             name: a.name,
             description: a.description,
-            type: a.type || 'react',
             systemPrompt: a.systemPrompt,
             llmModel: a.llmModel,
             maxIterations: a.maxIterations ?? 25,

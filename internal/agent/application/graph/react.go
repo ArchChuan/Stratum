@@ -63,14 +63,21 @@ type ReActState struct {
 	HistoryCompactor port.HistoryCompactor
 
 	// Lazy planning — non-zero StuckThreshold enables Reflect→Plan→Execute path.
-	StuckThreshold    int // 0 = disabled
-	PlanTriggered     bool
-	ReflectionSummary string
-	Plan              []domain.PlanStep
-	PlanTemplateID    string
-	CurrentStepIndex  int
-	StepResults       []domain.StepResult
-	CheckpointEnabled bool
+	StuckThreshold         int // 0 = disabled
+	PlanTriggered          bool
+	ReflectionSummary      string
+	Plan                   []domain.PlanStep
+	PlanTemplateID         string
+	CurrentStepIndex       int
+	StepResults            []domain.StepResult
+	CheckpointEnabled      bool
+	ActivePlan             *domain.Plan
+	PlanCheckpointWriter   PlanCheckpointWriter
+	PlanCheckpointIdentity PlanCheckpointIdentity
+	PlanIDSource           func() string
+	PlanLimits             domain.PlanLimits
+	PlanToolsDisabled      bool
+	PlanNodeExecutor       PlanNodeExecutor
 }
 
 // TokenRecorder 是 TokenLedger 的最小接口，供 graph 包使用，避免 import application 包循环。
@@ -111,6 +118,9 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 		start := time.Now()
 
 		tools := effectiveTools(s.AvailableTools, s.SkillCatalog, s.ActiveSkill, s.AgentKnowledgeWorkspaceIDs, s.AgentMemoryScope)
+		if s.PlanToolsDisabled {
+			tools = withoutPlanTools(tools)
+		}
 		messages := messagesWithActiveSkill(s.Messages, s.ActiveSkill)
 		protectedUsers := 1
 		if s.MaxLLMSteps > 0 && s.Steps >= s.MaxLLMSteps-1 {
@@ -422,6 +432,13 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 				EndedAt:         toolStart,
 			})
 			switch tc.Name {
+			case "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan":
+				var planErr error
+				content, planErr = ExecutePlanTool(toolCtx, &s, tc)
+				if planErr != nil {
+					status = domain.ToolTraceStatusError
+					errMsg = planErr.Error()
+				}
 			case "stratum_continue_reasoning":
 				content = "Continuing reasoning..."
 			case "stratum_activate_skill":
@@ -717,6 +734,8 @@ func classifyToolProvider(name string, tools []port.ToolDefinition) toolProvider
 		return toolProviderRef{ToolType: domain.ToolTypeBuiltinMemory, ProviderType: domain.ProviderTypeBuiltin, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	case "stratum_activate_skill":
 		return toolProviderRef{ToolType: domain.ToolTypeSkill, ProviderType: domain.ProviderTypeSkill, ProviderID: name, CapabilityID: name, NodeID: name, NodeType: domain.ObservationTypeSkill}
+	case "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan":
+		return toolProviderRef{ToolType: domain.ToolTypeInternal, ProviderType: domain.ProviderTypeInternal, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	default:
 		for _, td := range tools {
 			if td.Name != name {
@@ -809,7 +828,8 @@ func effectiveTools(
 	agentKnowledgeWorkspaceIDs []string,
 	agentMemoryScope string,
 ) []port.ToolDefinition {
-	out := make([]port.ToolDefinition, 0, len(available)+1)
+	out := make([]port.ToolDefinition, 0, len(available)+5)
+	out = append(out, PlanToolDefinitions()...)
 	if len(catalog) > 0 {
 		ids := make([]any, 0, len(catalog))
 		for id := range catalog {
@@ -833,6 +853,9 @@ func effectiveTools(
 		}
 	}
 	for _, tool := range available {
+		if isReservedPlanTool(tool.Name) {
+			continue
+		}
 		if active != nil && tool.Name == "stratum_recall_memory" && !containsString(active.MemoryScopes, agentMemoryScope) {
 			continue
 		}
@@ -847,6 +870,25 @@ func effectiveTools(
 		out = append(out, tool)
 	}
 	return out
+}
+
+func isReservedPlanTool(name string) bool {
+	switch name {
+	case "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan":
+		return true
+	default:
+		return false
+	}
+}
+
+func withoutPlanTools(tools []port.ToolDefinition) []port.ToolDefinition {
+	filtered := make([]port.ToolDefinition, 0, len(tools))
+	for _, tool := range tools {
+		if !isReservedPlanTool(tool.Name) {
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
 }
 
 func containsString(values []string, target string) bool {

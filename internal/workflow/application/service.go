@@ -15,6 +15,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/dag"
 )
 
 type CreateDefinitionCommand struct {
@@ -794,6 +795,9 @@ func nextAttemptNo(attempts []domain.NodeAttempt, nodeID string) int {
 }
 
 func readySet(spec domain.Spec, states map[string]domain.NodeAttempt) (ready, skipped []domain.Node, complete bool, err error) {
+	if !hasConditionalRouting(spec) {
+		return readySetFromKernel(spec, states, time.Now())
+	}
 	incoming := make(map[string][]domain.Edge, len(spec.Nodes))
 	byID := make(map[string]domain.Node, len(spec.Nodes))
 	for _, node := range spec.Nodes {
@@ -864,6 +868,58 @@ func readySet(spec domain.Spec, states map[string]domain.NodeAttempt) (ready, sk
 	sort.Slice(ready, func(i, j int) bool { return ready[i].ID < ready[j].ID })
 	sort.Slice(skipped, func(i, j int) bool { return skipped[i].ID < skipped[j].ID })
 	return ready, skipped, terminal == len(spec.Nodes), nil
+}
+
+func hasConditionalRouting(spec domain.Spec) bool {
+	for _, node := range spec.Nodes {
+		if node.Type == domain.NodeTypeCondition {
+			return true
+		}
+	}
+	return false
+}
+
+func readySetFromKernel(
+	spec domain.Spec,
+	states map[string]domain.NodeAttempt,
+	now time.Time,
+) (ready, skipped []domain.Node, complete bool, err error) {
+	dependencies := make(map[string][]string, len(spec.Nodes))
+	for _, edge := range spec.Edges {
+		dependencies[edge.To] = append(dependencies[edge.To], edge.From)
+	}
+	nodes := make([]dag.Node, 0, len(spec.Nodes))
+	byID := make(map[string]domain.Node, len(spec.Nodes))
+	statuses := make(map[string]dag.Status, len(states))
+	for _, node := range spec.Nodes {
+		nodes = append(nodes, dag.Node{ID: node.ID, DependsOn: dependencies[node.ID]})
+		byID[node.ID] = node
+		state, exists := states[node.ID]
+		if !exists {
+			continue
+		}
+		switch state.Status {
+		case domain.AttemptStatusSucceeded, domain.AttemptStatusSkipped:
+			statuses[node.ID] = dag.StatusSucceeded
+		case domain.AttemptStatusFailed:
+			return nil, nil, false, fmt.Errorf("node %s failed", node.ID)
+		case domain.AttemptStatusRetryWait:
+			if state.RetryAt != nil && state.RetryAt.After(now) {
+				statuses[node.ID] = dag.StatusRunning
+			}
+		default:
+			statuses[node.ID] = dag.StatusRunning
+		}
+	}
+	readyIDs, _, complete, err := dag.Ready(dag.Snapshot{Nodes: nodes, Statuses: statuses})
+	if err != nil {
+		return nil, nil, false, err
+	}
+	ready = make([]domain.Node, 0, len(readyIDs))
+	for _, id := range readyIDs {
+		ready = append(ready, byID[id])
+	}
+	return ready, nil, complete, nil
 }
 
 func conditionEdgeSelected(spec domain.Spec, sourceID string, edge domain.Edge, value bool) bool {

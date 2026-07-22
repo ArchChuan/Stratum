@@ -236,29 +236,15 @@ func (s *AgentService) Delete(ctx context.Context, tenantID, id string) error {
 // parseAgentTypeWire maps the wire-format agent type to the domain enum,
 // defaulting to ReActAgent.
 func parseAgentTypeWire(t string) domain.AgentType {
-	switch t {
-	case "react":
-		return domain.ReActAgent
-	case "cot":
-		return domain.CoTAgent
-	case "planning":
-		return domain.PlanningAgent
-	case "tool_calling":
-		return domain.ToolCallingAgent
-	case "rag":
-		return domain.RAGAgent
-	case "swarm":
-		return domain.SwarmAgent
-	default:
-		return domain.ReActAgent
-	}
+	_ = t
+	return domain.ReActAgent
 }
 
 func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 	return AgentDTO{
 		ID:                    cfg.ID,
 		Name:                  cfg.Name,
-		Type:                  string(cfg.Type),
+		Type:                  string(domain.ReActAgent),
 		Description:           cfg.Description,
 		SystemPrompt:          cfg.SystemPrompt,
 		LLMModel:              cfg.LLMModel,

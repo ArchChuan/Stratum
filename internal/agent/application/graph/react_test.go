@@ -175,11 +175,11 @@ func TestBuildReActGraph_DropsToolsThatConsumeMessageAllowance(t *testing.T) {
 		}},
 	}, graph.RunConfig{MaxSteps: 2})
 	require.NoError(t, err)
-	require.Empty(t, stub.llmReqs[0].Tools)
+	require.NotContains(t, toolNames(stub.llmReqs[0].Tools), "oversized")
 	require.Equal(t, "CURRENT TASK", stub.llmReqs[0].Messages[len(stub.llmReqs[0].Messages)-1].Content)
 }
 
-func TestBuildReActGraph_KeepsLargeToolWhenActualPromptStillFits(t *testing.T) {
+func TestBuildReActGraph_ReservedPlanToolsConsumeContextBeforeOptionalTools(t *testing.T) {
 	stub := &capGWSequence{responses: []port.CapabilityResponse{{Content: "done"}}}
 	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
 	require.NoError(t, err)
@@ -193,7 +193,7 @@ func TestBuildReActGraph_KeepsLargeToolWhenActualPromptStillFits(t *testing.T) {
 		}},
 	}, graph.RunConfig{MaxSteps: 2})
 	require.NoError(t, err)
-	require.Len(t, stub.llmReqs[0].Tools, 1)
+	require.NotContains(t, toolNames(stub.llmReqs[0].Tools), "large_but_usable")
 }
 
 func TestBuildReActGraph_UnclassifiedToolAlsoRequiresApproval(t *testing.T) {
@@ -284,12 +284,12 @@ func TestBuildReActGraph_ActivatesSingleInstructionSkillAndNarrowsMCPTools(t *te
 	secondMessages, _ := json.Marshal(stub.llmReqs[1].Messages)
 	require.Contains(t, string(secondMessages), "USE INSTRUCTION A")
 	require.NotContains(t, string(secondMessages), "USE INSTRUCTION B")
-	require.Equal(t, []string{"stratum_activate_skill", "mcp:orders:get", "stratum_recall_memory"}, toolNames(stub.llmReqs[1].Tools))
+	require.Equal(t, []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "stratum_activate_skill", "mcp:orders:get", "stratum_recall_memory"}, toolNames(stub.llmReqs[1].Tools))
 
 	thirdMessages, _ := json.Marshal(stub.llmReqs[2].Messages)
 	require.Contains(t, string(thirdMessages), "USE INSTRUCTION B")
 	require.NotContains(t, string(thirdMessages), "USE INSTRUCTION A")
-	require.Equal(t, []string{"stratum_activate_skill", "mcp:orders:delete"}, toolNames(stub.llmReqs[2].Tools))
+	require.Equal(t, []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "stratum_activate_skill", "mcp:orders:delete"}, toolNames(stub.llmReqs[2].Tools))
 }
 
 func TestBuildReActGraph_ActiveSkillIntersectsKnowledgeWorkspaces(t *testing.T) {

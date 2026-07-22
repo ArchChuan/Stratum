@@ -1,9 +1,10 @@
 package application
 
 import (
-	"sort"
+	"slices"
 
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
+	"github.com/byteBuilderX/stratum/pkg/dag"
 )
 
 // ReadySet deterministically computes executable and unreachable nodes from
@@ -16,10 +17,8 @@ func ReadySet(spec domain.Spec, attempts []domain.NodeAttempt) ([]domain.Node, [
 		}
 	}
 	incoming := make(map[string][]domain.Edge)
-	outgoing := make(map[string][]domain.Edge)
 	for _, edge := range spec.Edges {
 		incoming[edge.To] = append(incoming[edge.To], edge)
-		outgoing[edge.From] = append(outgoing[edge.From], edge)
 	}
 	selected := func(edge domain.Edge) (resolved, chosen bool) {
 		parent, ok := latest[edge.From]
@@ -64,40 +63,62 @@ func ReadySet(spec domain.Spec, attempts []domain.NodeAttempt) ([]domain.Node, [
 		}
 	}
 
-	ready := make([]domain.Node, 0)
+	kernelNodes := make([]dag.Node, 0, len(spec.Nodes)-len(skippedSet))
+	statuses := make(map[string]dag.Status, len(latest))
+	byID := make(map[string]domain.Node, len(spec.Nodes))
 	for _, node := range spec.Nodes {
-		if _, exists := latest[node.ID]; exists || skippedSet[node.ID] {
+		byID[node.ID] = node
+		if skippedSet[node.ID] {
 			continue
 		}
-		edges := incoming[node.ID]
-		if len(edges) == 0 {
-			ready = append(ready, node)
-			continue
-		}
-		allSucceeded, chosenCount := true, 0
-		for _, edge := range edges {
+		kernelNode := dag.Node{ID: node.ID}
+		for _, edge := range incoming[node.ID] {
 			resolved, chosen := selected(edge)
-			if !resolved {
-				allSucceeded = false
+			if skippedSet[edge.From] {
 				continue
 			}
-			if chosen {
-				chosenCount++
-				if latest[edge.From].Status != domain.AttemptStatusSucceeded {
-					allSucceeded = false
-				}
+			if !resolved || chosen {
+				kernelNode.DependsOn = append(kernelNode.DependsOn, edge.From)
 			}
 		}
-		if allSucceeded && chosenCount > 0 {
+		kernelNodes = append(kernelNodes, kernelNode)
+		if attempt, exists := latest[node.ID]; exists {
+			statuses[node.ID] = schedulerStatus(attempt.Status)
+		}
+	}
+	readyIDs, _, _, err := dag.Ready(dag.Snapshot{Nodes: kernelNodes, Statuses: statuses})
+	if err != nil {
+		return nil, sortedKeys(skippedSet)
+	}
+	ready := make([]domain.Node, 0, len(readyIDs))
+	for _, id := range readyIDs {
+		if node, exists := byID[id]; exists {
 			ready = append(ready, node)
 		}
 	}
-	sort.Slice(ready, func(i, j int) bool { return ready[i].ID < ready[j].ID })
-	skipped := make([]string, 0, len(skippedSet))
-	for id := range skippedSet {
-		skipped = append(skipped, id)
+	return ready, sortedKeys(skippedSet)
+}
+
+func schedulerStatus(status domain.AttemptStatus) dag.Status {
+	switch status {
+	case domain.AttemptStatusSucceeded:
+		return dag.StatusSucceeded
+	case domain.AttemptStatusFailed, domain.AttemptStatusManualIntervention:
+		return dag.StatusFailed
+	case domain.AttemptStatusCanceled:
+		return dag.StatusCancelled
+	case domain.AttemptStatusSkipped:
+		return dag.StatusSucceeded
+	default:
+		return dag.StatusRunning
 	}
-	sort.Strings(skipped)
-	_ = outgoing
-	return ready, skipped
+}
+
+func sortedKeys(values map[string]bool) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
 }

@@ -254,7 +254,7 @@ func TestAgentService_List(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, list, 2)
 	assert.Equal(t, "A", list[0].Name)
-	assert.Equal(t, "cot", list[1].Type)
+	assert.Equal(t, "react", list[1].Type)
 }
 
 func TestAgentService_Update_PreservesEmbedModel(t *testing.T) {
