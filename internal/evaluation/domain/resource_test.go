@@ -113,6 +113,16 @@ func TestResourceRevisionAllowsBenignSafeSummaryValues(t *testing.T) {
 	}
 }
 
+func TestResourceRevisionRejectsSensitiveKeysInTypedNestedMaps(t *testing.T) {
+	revision := validResourceRevision()
+	revision.SafeSummary = map[string]any{
+		"nested": map[string]string{"token": "redacted"},
+	}
+	if err := revision.Validate(); err == nil {
+		t.Fatal("expected sensitive key in typed nested map to be rejected")
+	}
+}
+
 func validResourceRevision() ResourceRevision {
 	return ResourceRevision{
 		ID:           "revision-1",

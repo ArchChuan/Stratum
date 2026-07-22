@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -142,20 +143,39 @@ var sensitiveSafeSummaryKeys = map[string]struct{}{
 }
 
 func sensitiveSummaryKey(value any) (string, bool) {
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, nested := range typed {
-			normalized := strings.ReplaceAll(strings.ToLower(key), "-", "_")
-			if _, sensitive := sensitiveSafeSummaryKeys[normalized]; sensitive {
-				return key, true
+	return sensitiveSummaryReflect(reflect.ValueOf(value))
+}
+
+func sensitiveSummaryReflect(value reflect.Value) (string, bool) {
+	for value.IsValid() && (value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer) {
+		if value.IsNil() {
+			return "", false
+		}
+		value = value.Elem()
+	}
+	if !value.IsValid() {
+		return "", false
+	}
+
+	switch value.Kind() {
+	case reflect.Map:
+		iterator := value.MapRange()
+		for iterator.Next() {
+			keyValue := iterator.Key()
+			if keyValue.Kind() == reflect.String {
+				key := keyValue.String()
+				normalized := strings.ReplaceAll(strings.ToLower(key), "-", "_")
+				if _, sensitive := sensitiveSafeSummaryKeys[normalized]; sensitive {
+					return key, true
+				}
 			}
-			if key, sensitive := sensitiveSummaryKey(nested); sensitive {
+			if key, sensitive := sensitiveSummaryReflect(iterator.Value()); sensitive {
 				return key, true
 			}
 		}
-	case []any:
-		for _, nested := range typed {
-			if key, sensitive := sensitiveSummaryKey(nested); sensitive {
+	case reflect.Slice, reflect.Array:
+		for index := range value.Len() {
+			if key, sensitive := sensitiveSummaryReflect(value.Index(index)); sensitive {
 				return key, true
 			}
 		}
