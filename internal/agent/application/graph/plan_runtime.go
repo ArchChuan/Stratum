@@ -37,6 +37,12 @@ func ExecuteReadyPlanNodes(ctx context.Context, state *ReActState, execute PlanN
 	if len(ready) == 0 {
 		return planObservation("stratum_continue_plan", plan), nil
 	}
+	if state.PlanLimits.MaxRevisions > 0 && plan.Revision+int64(len(ready)) > state.PlanLimits.MaxRevisions {
+		return "", fmt.Errorf("%w: ready wave requires %d revisions", domain.ErrPlanBudgetExceeded, len(ready))
+	}
+	if state.PlanIDSource == nil {
+		return "", fmt.Errorf("plan runtime: ID source is required")
+	}
 	limit := state.PlanLimits.MaxConcurrentNodes
 	if limit <= 0 || limit > len(ready) {
 		limit = len(ready)
@@ -103,10 +109,10 @@ func ExecuteReadyPlanNodes(ctx context.Context, state *ReActState, execute PlanN
 			if item.err != nil {
 				errText = item.err.Error()
 			}
-			node.Attempts = append(node.Attempts, domain.PlanAttempt{Number: len(node.Attempts) + 1, Error: errText})
+			node.Attempts = append(node.Attempts, domain.PlanAttempt{ID: state.PlanIDSource(), Number: len(node.Attempts) + 1, Error: errText})
 		} else {
 			node.Status = domain.PlanNodeStatusSucceeded
-			node.Attempts = append(node.Attempts, domain.PlanAttempt{Number: len(node.Attempts) + 1, Summary: item.result.Summary})
+			node.Attempts = append(node.Attempts, domain.PlanAttempt{ID: state.PlanIDSource(), Number: len(node.Attempts) + 1, Summary: item.result.Summary})
 		}
 		plan.Revision++
 		identity := state.PlanCheckpointIdentity

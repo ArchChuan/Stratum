@@ -42,6 +42,22 @@ func TestExecuteReadyPlanNodesBoundsConcurrencyAndReturnsObservation(t *testing.
 	require.Equal(t, domain.PlanNodeStatusSucceeded, state.ActivePlan.Nodes[0].Status)
 	require.Equal(t, domain.PlanNodeStatusSucceeded, state.ActivePlan.Nodes[1].Status)
 	require.Equal(t, domain.PlanNodeStatusPending, state.ActivePlan.Nodes[2].Status)
+	require.NotEmpty(t, state.ActivePlan.Nodes[0].Attempts[0].ID)
+	require.NotEmpty(t, state.ActivePlan.Nodes[1].Attempts[0].ID)
+}
+
+func TestExecuteReadyPlanNodesRejectsWaveBeyondRevisionBudget(t *testing.T) {
+	state := runtimeStateWithPlan([]domain.PlanNode{{ID: "a", Goal: "a", Status: domain.PlanNodeStatusPending}})
+	state.PlanLimits.MaxRevisions = state.ActivePlan.Revision
+	called := false
+
+	_, err := graph.ExecuteReadyPlanNodes(context.Background(), &state, func(context.Context, graph.ReActState, domain.PlanNode, map[string]string) (graph.PlanNodeExecutionResult, error) {
+		called = true
+		return graph.PlanNodeExecutionResult{Summary: "done"}, nil
+	})
+
+	require.ErrorIs(t, err, domain.ErrPlanBudgetExceeded)
+	require.False(t, called)
 }
 
 func TestExecuteReadyPlanNodesRecoversPanicAndWaitsForWorkers(t *testing.T) {
