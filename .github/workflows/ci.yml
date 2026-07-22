@@ -19,6 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify generated agent instructions
+        run: make agent-instructions-check
+
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}

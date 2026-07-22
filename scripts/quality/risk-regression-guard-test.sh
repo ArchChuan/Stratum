@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CHECKER="${ROOT}/scripts/quality/risk-regression-guard.sh"
 EXECUTOR="${ROOT}/scripts/quality/testdata/fake-risk-guard-executor.sh"
+AGENT_INSTRUCTIONS="${ROOT}/docs/agent/instructions.md"
+AGENT_INSTRUCTIONS_GENERATOR="${ROOT}/scripts/quality/generate-agent-instructions.sh"
 TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf "${TEST_ROOT}"' EXIT
 
@@ -42,6 +44,68 @@ assert_file_contains() {
     echo "missing ${description} in ${file}" >&2
     exit 1
   fi
+}
+
+strip_markdown_html_comments() {
+  local input="$1" output="$2"
+  awk '
+    {
+      rest = $0
+      visible = ""
+      while (length(rest) > 0) {
+        if (in_comment) {
+          comment_end = index(rest, "-->")
+          if (comment_end == 0) {
+            rest = ""
+            break
+          }
+          rest = substr(rest, comment_end + 3)
+          in_comment = 0
+          continue
+        }
+        comment_start = index(rest, "<!--")
+        if (comment_start == 0) {
+          visible = visible rest
+          rest = ""
+          break
+        }
+        visible = visible substr(rest, 1, comment_start - 1)
+        rest = substr(rest, comment_start + 4)
+        in_comment = 1
+      }
+      print visible
+    }
+    END {
+      if (in_comment) {
+        print "unterminated Markdown HTML comment" > "/dev/stderr"
+        exit 1
+      }
+    }
+  ' "${input}" >"${output}"
+}
+
+validate_risk_harness_section() {
+  local file="$1" fixture_name="$2" heading_count section visible principle
+  heading_count="$(grep -Fxc '## Risk regression harness' "${file}" || true)"
+  if [[ "${heading_count}" -ne 1 ]]; then
+    echo "expected exactly one risk regression harness heading, found ${heading_count}" >&2
+    return 1
+  fi
+  section="${TEST_ROOT}/${fixture_name}-risk-section.md"
+  visible="${TEST_ROOT}/${fixture_name}-risk-visible.md"
+  awk '
+    /^## Risk regression harness$/ { printing = 1 }
+    printing && !/^## Risk regression harness$/ && /^## / { exit }
+    printing { print }
+  ' "${file}" >"${section}"
+  strip_markdown_html_comments "${section}" "${visible}" || return 1
+  for principle in 'fail closed' 'bearer credential' 'tenant-scoped' \
+    '破坏性' '持久化失败' '关闭旧资源' '真实链路验证' 'make risk-guardrails'; do
+    if ! grep -Fq "${principle}" "${visible}"; then
+      echo "risk regression harness section missing principle: ${principle}" >&2
+      return 1
+    fi
+  done
 }
 
 unrelated_log="$(run_guard unrelated docs/readme.md)"
@@ -101,6 +165,56 @@ assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
 assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'actions/setup-node@' 'CI Node setup for full risk guard'
 assert_file_contains "${ROOT}/Makefile" '^risk-guardrails:' 'Makefile risk guard target'
+
+validate_risk_harness_section "${AGENT_INSTRUCTIONS}" canonical
+
+risk_duplicate="${TEST_ROOT}/risk-duplicate.md"
+cat >"${risk_duplicate}" <<'EOF'
+## Risk regression harness
+fail closed bearer credential tenant-scoped 破坏性 持久化失败 关闭旧资源 真实链路验证 make risk-guardrails
+## Risk regression harness
+duplicate
+EOF
+if validate_risk_harness_section "${risk_duplicate}" duplicate >/dev/null 2>&1; then
+  echo 'risk harness validation accepted duplicate headings' >&2
+  exit 1
+fi
+
+risk_outside="${TEST_ROOT}/risk-outside.md"
+cat >"${risk_outside}" <<'EOF'
+## Risk regression harness
+fail closed bearer credential tenant-scoped 破坏性 持久化失败 关闭旧资源 make risk-guardrails
+## Other section
+真实链路验证
+EOF
+if validate_risk_harness_section "${risk_outside}" outside >/dev/null 2>&1; then
+  echo 'risk harness validation accepted a phrase outside its section' >&2
+  exit 1
+fi
+
+risk_commented="${TEST_ROOT}/risk-commented.md"
+cat >"${risk_commented}" <<'EOF'
+## Risk regression harness
+fail closed tenant-scoped 破坏性 持久化失败 关闭旧资源 真实链路验证 make risk-guardrails
+<!-- bearer credential
+hidden continuation -->
+EOF
+if validate_risk_harness_section "${risk_commented}" commented >/dev/null 2>&1; then
+  echo 'risk harness validation accepted a phrase inside an HTML comment' >&2
+  exit 1
+fi
+
+risk_unterminated="${TEST_ROOT}/risk-unterminated.md"
+cat >"${risk_unterminated}" <<'EOF'
+## Risk regression harness
+fail closed bearer credential tenant-scoped 破坏性 持久化失败 关闭旧资源 真实链路验证 make risk-guardrails
+<!-- unfinished
+EOF
+if validate_risk_harness_section "${risk_unterminated}" unterminated >/dev/null 2>&1; then
+  echo 'risk harness validation accepted an unterminated HTML comment' >&2
+  exit 1
+fi
+/bin/bash "${AGENT_INSTRUCTIONS_GENERATOR}" --check
 
 explanation="$(/bin/bash "${CHECKER}" --explain)"
 for principle in 'fail closed' 'bearer credential' 'tenant-scoped' \

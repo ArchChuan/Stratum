@@ -43,6 +43,14 @@ repos:
         require_serial: true
         files: '^(api/|cmd/|internal/|pkg/|web/|helm/|k8s/|\.github/workflows/)'
 
+      - id: agent-instructions-check
+        name: agent instructions are generated and current
+        language: system
+        entry: /bin/bash scripts/quality/generate-agent-instructions.sh --check
+        pass_filenames: false
+        require_serial: true
+        files: '^(AGENTS\.md|CLAUDE\.md|docs/agent/instructions\.md|docs/agent/templates/(agents-prefix|claude-prefix)\.md|scripts/quality/generate-agent-instructions(-test)?\.sh)$'
+
       # YAML validation (skip helm templates, k8s, and node_modules)
       - id: check-yaml
         name: check yaml
