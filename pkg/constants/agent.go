@@ -17,6 +17,11 @@ const (
 	// DefaultStepMaxLLMSteps is the LLM budget for each sub-step ReAct execution.
 	DefaultStepMaxLLMSteps = 3
 
+	DefaultPlanMaxNodes           = 10
+	DefaultPlanMaxRevisions       = 20
+	DefaultPlanMaxAttemptsPerNode = 3
+	DefaultPlanMaxConcurrentNodes = 4
+
 	// LoopCompactionRecentGroups is the number of most-recent message groups
 	// (a group = one assistant turn plus its paired tool results) kept verbatim
 	// during in-loop compaction. Older groups are summarized or dropped.

@@ -96,20 +96,20 @@ git commit -m "[refactor](workflow): consume shared DAG kernel"
 - Create: `internal/agent/domain/plan_test.go`
 - Modify: `pkg/constants/agent.go`
 
-- [ ] **Step 1: Write failing state-machine tests**
+- [x] **Step 1: Write failing state-machine tests**
 
 Cover creation, stale `expected_revision`, add/update/remove/dependency revisions, cycle rejection without mutation, lifecycle transitions, terminal-node immutability, node/revision/attempt budgets, and uncertain side-effect retry prohibition. Define `Plan`, `PlanNode`, `PlanAttempt`, `PlanStatus`, `PlanCommand`, `RevisionOperation`, and `ApplyPlanCommand` in the domain package.
 
-- [ ] **Step 2: Verify the tests fail**
+- [x] **Step 2: Verify the tests fail**
 
 Run: `go test ./internal/agent/domain -run Plan`
 Expected: FAIL because plan domain types are absent.
 
-- [ ] **Step 3: Implement immutable command application**
+- [x] **Step 3: Implement immutable command application**
 
 Clone state before validation, compare `ExpectedRevision`, delegate dependency/cycle checks to `pkg/dag`, generate runtime node IDs, and increment revision exactly once for each accepted mutation. Add named limits for nodes, revisions, attempts, concurrent nodes, and checkpoint TTL in `pkg/constants/agent.go`.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `go test ./internal/agent/domain -run Plan`
 Expected: PASS.
