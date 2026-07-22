@@ -45,6 +45,8 @@ Do not start provider plans until this plan's ports, API contracts, and migratio
 
 ### Task 1: Freeze Four-Kind Domain Contracts
 
+**Status: complete. Evidence:** focused evaluation/domain, DTO, HTTP, wiring, objectstore, and postgres tests passed on 2026-07-22 (`go test ... -count=1`).
+
 **Files:**
 
 - Create: `internal/evaluation/domain/resource.go`
@@ -133,6 +135,8 @@ git commit -m "feat(evaluation): define shared resource revisions"
 
 ### Task 2: Extract a Generic Encrypted Object Store
 
+**Status: complete. Evidence:** focused suite passed, including `pkg/storage/objectstore` and Agent objectstore packages; MinIO integration remains environment-gated as documented.
+
 **Files:**
 
 - Create: `pkg/storage/objectstore/encrypted.go`
@@ -200,6 +204,8 @@ git commit -m "refactor(storage): share encrypted object payloads"
 
 ### Task 3: Add History-Compatible Revision and Decision DDL
 
+**Status: complete. Evidence:** `pkg/storage/postgres` tests passed; `/bin/bash scripts/quality/check-migration-boundaries.sh` reported `migration boundaries passed`.
+
 **Files:**
 
 - Modify: `pkg/storage/postgres/tenant_schema.sql`
@@ -250,6 +256,8 @@ git commit -m "feat(evaluation): persist resource revisions and decisions"
 ```
 
 ### Task 4: Persist Atomic Encrypted Revisions
+
+**Status: complete. Evidence:** evaluation application and persistence tests passed; tracked-worktree secret scan completed with `leaks=0`.
 
 **Files:**
 
