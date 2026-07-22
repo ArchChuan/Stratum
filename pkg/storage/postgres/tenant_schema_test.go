@@ -260,14 +260,14 @@ func TestTenantSchemaContainsInstructionSkillTables(t *testing.T) {
 	}
 }
 
-func TestTenantSchemaPurgesSkillEvaluationDataButKeepsHistoricalAgentTraces(t *testing.T) {
+func TestTenantSchemaUpgradePreservesSkillEvaluationDataAndHistoricalAgentTraces(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sql := string(data)
 
-	for _, want := range []string{
+	for _, forbidden := range []string{
 		"DELETE FROM evaluation_deployments WHERE resource_kind = 'skill'",
 		"DELETE FROM evaluation_experiments WHERE resource_kind = 'skill'",
 		"DELETE FROM optimization_jobs WHERE resource_kind = 'skill'",
@@ -276,14 +276,85 @@ func TestTenantSchemaPurgesSkillEvaluationDataButKeepsHistoricalAgentTraces(t *t
 		"DELETE FROM evaluation_jobs WHERE payload->>'resource_kind' = 'skill'",
 		"DELETE FROM eval_suite_revisions WHERE resource_kind = 'skill'",
 	} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("tenant_schema.sql missing Skill evaluation purge %q", want)
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("tenant reprovisioning must preserve Skill evaluation data: %q", forbidden)
 		}
 	}
 
 	if strings.Contains(sql, "DELETE FROM agent_tool_traces WHERE provider_type = 'skill'") ||
 		strings.Contains(sql, "DELETE FROM agent_trace_events WHERE provider_type = 'skill'") {
 		t.Fatal("historical Agent Skill traces must be retained as immutable audit records")
+	}
+}
+
+func TestTenantSchemaContainsResourceRevisionAndDecisionDDL(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+
+	for _, want := range []string{
+		"CREATE TABLE IF NOT EXISTS resource_revisions",
+		"UNIQUE (resource_kind, resource_id, id)",
+		"CHECK (resource_kind IN ('skill', 'agent', 'mcp', 'knowledge'))",
+		"CHECK (source IN ('manual', 'optimization', 'rollback'))",
+		"CHECK (status IN ('draft', 'published'))",
+		"content_hash",
+		"payload_hash",
+		"payload_ref",
+		"safe_summary",
+		"idempotency_key",
+		"CREATE TABLE IF NOT EXISTS experiment_decisions",
+		"experiment_id",
+		"actor_type",
+		"actor_id",
+		"prior_status",
+		"new_status",
+		"metrics",
+		"reason",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("tenant_schema.sql missing revision/decision DDL %q", want)
+		}
+	}
+}
+
+func TestTenantSchemaUpgradeBackfillsExperimentStateBeforeDependentDDL(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+
+	backfills := []string{
+		"ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS state_version BIGINT NOT NULL DEFAULT 1",
+		"ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS recommendation TEXT NOT NULL DEFAULT 'hold'",
+		"ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS safety_stopped BOOL NOT NULL DEFAULT false",
+	}
+	lastBackfill := -1
+	for _, statement := range backfills {
+		at := strings.Index(sql, statement)
+		if at == -1 {
+			t.Fatalf("tenant_schema.sql missing experiment backfill %q", statement)
+		}
+		if at < lastBackfill {
+			t.Fatalf("experiment backfills are out of order: %q", statement)
+		}
+		lastBackfill = at
+	}
+
+	for _, dependent := range []string{
+		"CREATE INDEX IF NOT EXISTS idx_evaluation_experiments_resource",
+		"CREATE TABLE IF NOT EXISTS experiment_decisions",
+	} {
+		at := strings.Index(sql, dependent)
+		if at == -1 {
+			t.Fatalf("tenant_schema.sql missing dependent DDL %q", dependent)
+		}
+		if at < lastBackfill {
+			t.Fatalf("dependent DDL %q must follow experiment backfills", dependent)
+		}
 	}
 }
 

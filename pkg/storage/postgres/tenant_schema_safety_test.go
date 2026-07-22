@@ -19,3 +19,39 @@ func TestTenantSchemaQuarantinesUnmappedKnowledgeChunksWithoutDeletingThem(t *te
 		t.Fatal("tenant startup DDL does not preserve unmapped chunks in quarantine")
 	}
 }
+
+func TestTenantSchemaRevisionAndDecisionSafetyAvoidsPlaintextPayloads(t *testing.T) {
+	ddl, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(ddl)
+
+	for _, table := range []string{"resource_revisions", "experiment_decisions"} {
+		start := strings.Index(text, "CREATE TABLE IF NOT EXISTS "+table)
+		if start == -1 {
+			t.Fatalf("tenant schema missing %s", table)
+		}
+		end := strings.Index(text[start:], ");")
+		if end == -1 {
+			t.Fatalf("tenant schema has unterminated %s DDL", table)
+		}
+		body := strings.ToLower(text[start : start+end])
+		if strings.Contains(body, "payload jsonb") || strings.Contains(body, "payload_json jsonb") {
+			t.Fatalf("%s must not store plaintext payload JSONB", table)
+		}
+	}
+
+	for _, table := range []string{
+		"eval_suites",
+		"eval_suite_revisions",
+		"eval_runs",
+		"evaluation_experiments",
+		"evaluation_deployments",
+		"evaluation_feedback",
+	} {
+		if strings.Contains(text, "DROP TABLE IF EXISTS "+table) {
+			t.Fatalf("tenant upgrade must not drop existing Skill evaluation table %s", table)
+		}
+	}
+}
