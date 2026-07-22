@@ -176,7 +176,7 @@ test('unknown outcome returned by resume becomes reconciliation work', async ({ 
   await openChat(page);
   await page.getByRole('button', { name: '批准并继续' }).click();
 
-  await expect(page.getByText('工具执行结果未知，需要人工对账')).toBeVisible();
+  await expect(page.locator('.ant-alert-message').getByText('工具执行结果未知，需要人工对账')).toBeVisible();
   await expect(page.getByRole('button', { name: '批准并继续' })).toHaveCount(0);
   expect(calls.decisions).toBe(1);
   expect(calls.resumes).toBe(1);
