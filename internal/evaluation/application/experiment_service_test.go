@@ -2,11 +2,36 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 )
+
+func TestExperimentServiceEvaluationIsIdempotent(t *testing.T) {
+	policy := domain.DefaultPromotionPolicy()
+	repo := &fakeExperimentRepo{experiment: domain.Experiment{
+		ID: "experiment-1", Status: domain.ExperimentRunning, Stage: 5, Policy: policy, StateVersion: 1,
+	}}
+	svc := NewExperimentService(repo)
+	input := EvaluateStageInput{Metrics: domain.StageMetrics{
+		Samples: policy.MinSamples, ObservedMinutes: policy.MinObservationMinutes,
+		QualityImprovement: 0.1, QualitySignificant: true,
+	}, IdempotencyKey: "evaluation-1"}
+	first, firstDecision, err := svc.EvaluateStageIdempotent(context.Background(), "tenant-1", "experiment-1", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, secondDecision, err := svc.EvaluateStageIdempotent(context.Background(), "tenant-1", "experiment-1", input)
+	if err != nil || second.StateVersion != first.StateVersion || second.Stage != first.Stage || secondDecision != firstDecision {
+		t.Fatalf("retry first=%+v/%s second=%+v/%s err=%v", first, firstDecision, second, secondDecision, err)
+	}
+	input.Metrics.CostRegression = 0.01
+	if _, _, err := svc.EvaluateStageIdempotent(context.Background(), "tenant-1", "experiment-1", input); !errors.Is(err, domain.ErrExperimentCommandConflict) {
+		t.Fatalf("changed metrics error=%v", err)
+	}
+}
 
 func TestExperimentServiceCreatesFivePercentCanaryDeployment(t *testing.T) {
 	repo := &fakeExperimentRepo{}
@@ -33,10 +58,10 @@ func TestExperimentServiceSafetyStopsWithoutRollingBackStable(t *testing.T) {
 	svc := NewExperimentService(repo)
 	policy := domain.DefaultPromotionPolicy()
 
-	experiment, decision, err := svc.EvaluateStage(context.Background(), "tenant-1", "experiment-1", domain.StageMetrics{
+	experiment, decision, err := svc.EvaluateStageIdempotent(context.Background(), "tenant-1", "experiment-1", EvaluateStageInput{Metrics: domain.StageMetrics{
 		Samples: policy.MinSamples, ObservedMinutes: policy.MinObservationMinutes,
 		QualityImprovement: 0.1, QualitySignificant: true, ErrorRateIncrease: 0.02,
-	})
+	}, IdempotencyKey: "evaluation-1"})
 	if err != nil {
 		t.Fatalf("EvaluateStage returned error: %v", err)
 	}
@@ -55,14 +80,15 @@ func TestExperimentServiceRecommendationDoesNotPromoteStable(t *testing.T) {
 	}, deployment: domain.Deployment{StableRevisionID: "stable-1", CanaryRevisionID: "canary-1", CanaryPercent: 50}}
 	svc := NewExperimentService(repo)
 
-	experiment, recommendation, err := svc.EvaluateStage(context.Background(), "tenant-1", "experiment-1", domain.StageMetrics{
+	experiment, recommendation, err := svc.EvaluateStageIdempotent(context.Background(), "tenant-1", "experiment-1", EvaluateStageInput{Metrics: domain.StageMetrics{
 		Samples: policy.MinSamples, ObservedMinutes: policy.MinObservationMinutes,
 		QualityImprovement: 0.1, QualitySignificant: true,
-	})
+	}, IdempotencyKey: "evaluation-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recommendation != domain.DecisionPromote || experiment.Status != domain.ExperimentRunning ||
+	if recommendation != domain.DecisionAdvance || experiment.Recommendation != domain.DecisionAdvance ||
+		experiment.Status != domain.ExperimentRunning ||
 		repo.deployment.StableRevisionID != "stable-1" {
 		t.Fatalf("evaluation mutated stable deployment: experiment=%+v deployment=%+v", experiment, repo.deployment)
 	}
@@ -102,15 +128,30 @@ func TestExperimentServiceHumanCommands(t *testing.T) {
 			case domain.CommandRollback:
 				got, err = svc.Rollback(context.Background(), "tenant-1", "experiment-1", validCommand(3))
 			}
-			if err != nil || got.Status != tc.status || repo.commandAction != tc.action {
+			if err != nil || got.Status != tc.status || repo.commandAction != tc.action ||
+				repo.commandActorType != domain.ActorTypeAdmin {
 				t.Fatalf("command failed: got=%+v action=%s err=%v", got, repo.commandAction, err)
 			}
 		})
 	}
 }
 
-func validCommand(version int64) domain.ExperimentCommand {
-	return domain.ExperimentCommand{ActorID: "admin-1", ActorType: domain.ActorTypeAdmin, Reason: "reviewed", IdempotencyKey: "command-1", ExpectedStateVersion: version}
+func TestExperimentServiceAllowsPausedRollbackButRejectsPausedPromote(t *testing.T) {
+	repo := &fakeExperimentRepo{experiment: domain.Experiment{
+		ID: "experiment-1", Status: domain.ExperimentPaused, Recommendation: domain.DecisionPromote, StateVersion: 3,
+	}}
+	svc := NewExperimentService(repo)
+	if _, err := svc.Promote(context.Background(), "tenant-1", "experiment-1", validCommand(3)); err == nil {
+		t.Fatal("paused promotion must fail")
+	}
+	got, err := svc.Rollback(context.Background(), "tenant-1", "experiment-1", validCommand(3))
+	if err != nil || got.Status != domain.ExperimentRolledBack {
+		t.Fatalf("paused rollback got=%+v err=%v", got, err)
+	}
+}
+
+func validCommand(version int64) ExperimentCommandInput {
+	return ExperimentCommandInput{ActorID: "admin-1", Reason: "reviewed", IdempotencyKey: "command-1", ExpectedStateVersion: version}
 }
 
 func TestExperimentServiceResolveAssignmentIncludesVariantEvidence(t *testing.T) {
@@ -144,9 +185,17 @@ func TestExperimentServiceResolveAssignmentIncludesVariantEvidence(t *testing.T)
 }
 
 type fakeExperimentRepo struct {
-	experiment    domain.Experiment
-	deployment    domain.Deployment
-	commandAction domain.ExperimentCommandAction
+	experiment       domain.Experiment
+	deployment       domain.Deployment
+	commandAction    domain.ExperimentCommandAction
+	commandActorType domain.ActorType
+	decisions        map[string]fakeEvaluationDecision
+}
+
+type fakeEvaluationDecision struct {
+	experiment  domain.Experiment
+	decision    domain.Decision
+	fingerprint string
 }
 
 func (f *fakeExperimentRepo) ApplyCommand(
@@ -155,11 +204,12 @@ func (f *fakeExperimentRepo) ApplyCommand(
 	if f.experiment.ID != experimentID || f.experiment.StateVersion != command.ExpectedStateVersion {
 		return domain.Experiment{}, domain.ErrExperimentStateConflict
 	}
-	if f.experiment.Status != domain.ExperimentRunning ||
+	if !domain.CanApplyExperimentCommand(f.experiment.Status, action) ||
 		(action == domain.CommandPromote && (f.experiment.Recommendation != domain.DecisionPromote || f.experiment.SafetyStopped)) {
 		return domain.Experiment{}, domain.ErrExperimentCommandNotAllowed
 	}
 	f.commandAction = action
+	f.commandActorType = command.ActorType
 	f.experiment.StateVersion++
 	switch action {
 	case domain.CommandPause:
@@ -184,8 +234,18 @@ func (f *fakeExperimentRepo) Get(_ context.Context, _ string, _ string) (domain.
 }
 
 func (f *fakeExperimentRepo) SaveDecision(
-	_ context.Context, _ string, experiment domain.Experiment, _ domain.Decision, _ domain.StageMetrics,
-) error {
+	_ context.Context, _ string, experiment domain.Experiment, decision domain.Decision, _ domain.StageMetrics,
+	idempotencyKey, fingerprint string,
+) (domain.Experiment, domain.Decision, error) {
+	if previous, ok := f.decisions[idempotencyKey]; ok {
+		if previous.fingerprint != fingerprint {
+			return domain.Experiment{}, domain.DecisionHold, domain.ErrExperimentCommandConflict
+		}
+		return previous.experiment, previous.decision, nil
+	}
+	if f.decisions == nil {
+		f.decisions = make(map[string]fakeEvaluationDecision)
+	}
 	f.experiment = experiment
 	f.deployment.CanaryPercent = experiment.Stage
 	if experiment.Status == domain.ExperimentRolledBack {
@@ -196,7 +256,10 @@ func (f *fakeExperimentRepo) SaveDecision(
 		f.deployment.CanaryRevisionID = ""
 		f.deployment.CanaryPercent = 0
 	}
-	return nil
+	f.decisions[idempotencyKey] = fakeEvaluationDecision{
+		experiment: experiment, decision: decision, fingerprint: fingerprint,
+	}
+	return experiment, decision, nil
 }
 
 func (f *fakeExperimentRepo) ResolveDeployment(_ context.Context, _ string, _, _ string) (domain.Deployment, bool, error) {

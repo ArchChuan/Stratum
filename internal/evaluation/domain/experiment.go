@@ -15,6 +15,7 @@ type Decision string
 
 const (
 	DecisionHold     Decision = "hold"
+	DecisionAdvance  Decision = "advance"
 	DecisionPromote  Decision = "promote"
 	DecisionRollback Decision = "rollback"
 )
@@ -117,12 +118,27 @@ func (e Experiment) Decide(metrics StageMetrics, policy PromotionPolicy) (Experi
 		return e, DecisionHold
 	}
 	for i, stage := range policy.Stages {
-		if stage != e.Stage || i+1 >= len(policy.Stages) {
+		if stage != e.Stage {
 			continue
 		}
+		if i+1 >= len(policy.Stages) {
+			e.Recommendation = DecisionPromote
+			return e, DecisionPromote
+		}
 		e.Stage = policy.Stages[i+1]
-		e.Recommendation = DecisionPromote
-		return e, DecisionPromote
+		e.Recommendation = DecisionAdvance
+		return e, DecisionAdvance
 	}
 	return e, DecisionHold
+}
+
+func CanApplyExperimentCommand(status ExperimentStatus, action ExperimentCommandAction) bool {
+	switch status {
+	case ExperimentRunning:
+		return action == CommandPause || action == CommandPromote || action == CommandRollback
+	case ExperimentPaused:
+		return action == CommandRollback
+	default:
+		return false
+	}
 }

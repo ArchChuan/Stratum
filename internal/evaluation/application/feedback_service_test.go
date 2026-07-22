@@ -72,6 +72,32 @@ func TestFeedbackServiceRollsBackForEarlierStageSecurityViolation(t *testing.T) 
 	}
 }
 
+func TestFeedbackServiceSafetyStopsOnFirstSecurityViolation(t *testing.T) {
+	policy := domain.DefaultPromotionPolicy()
+	repo := &fakeFeedbackRepo{experiment: domain.Experiment{
+		ID: "experiment-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		StableRevisionID: "stable-1", CanaryRevisionID: "canary-1", Status: domain.ExperimentRunning,
+		Stage: 5, Policy: policy, StateVersion: 1,
+	}}
+	experimentRepo := &feedbackExperimentRepo{experiment: repo.experiment}
+	evidence := feedbackEvidence("trace-security", repo, "canary-1", "canary")
+	evidence.traces["trace-security"] = observedTrace("trace-security", repo.experiment, "canary-1", "canary",
+		domain.OnlineObservation{SecurityViolation: true})
+	svc := NewFeedbackService(repo, NewExperimentService(experimentRepo), evidence)
+
+	result, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		TraceID: "trace-security", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		Score: 0.1, IdempotencyKey: "feedback-security",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Decision != domain.DecisionRollback || result.Experiment == nil ||
+		!result.Experiment.SafetyStopped || experimentRepo.experiment.Stage != 0 {
+		t.Fatalf("first security violation did not safety stop: result=%+v stored=%+v", result, experimentRepo.experiment)
+	}
+}
+
 func TestFeedbackServiceValidatesAndPersistsObservedRevision(t *testing.T) {
 	repo := &fakeFeedbackRepo{}
 	evidence := &fakeTraceEvidenceReader{traces: map[string]port.ObservedTrace{
@@ -197,9 +223,11 @@ func (f *feedbackExperimentRepo) Create(context.Context, string, domain.Experime
 func (f *feedbackExperimentRepo) Get(context.Context, string, string) (domain.Experiment, bool, error) {
 	return f.experiment, true, nil
 }
-func (f *feedbackExperimentRepo) SaveDecision(_ context.Context, _ string, experiment domain.Experiment, _ domain.Decision, _ domain.StageMetrics) error {
+func (f *feedbackExperimentRepo) SaveDecision(
+	_ context.Context, _ string, experiment domain.Experiment, decision domain.Decision, _ domain.StageMetrics, _, _ string,
+) (domain.Experiment, domain.Decision, error) {
 	f.experiment = experiment
-	return nil
+	return experiment, decision, nil
 }
 func (f *feedbackExperimentRepo) ApplyCommand(
 	context.Context, string, string, domain.ExperimentCommandAction, domain.ExperimentCommand,

@@ -3,15 +3,17 @@ package domain
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 )
 
 var (
-	ErrExperimentStateConflict     = errors.New("experiment state version conflict")
-	ErrExperimentCommandConflict   = errors.New("experiment command idempotency conflict")
-	ErrExperimentCommandNotAllowed = errors.New("experiment command not allowed")
+	ErrExperimentStateConflict      = errors.New("experiment state version conflict")
+	ErrExperimentCommandConflict    = errors.New("experiment command idempotency conflict")
+	ErrExperimentCommandNotAllowed  = errors.New("experiment command not allowed")
+	ErrExperimentDeploymentConflict = errors.New("resource already has an active experiment deployment")
 )
 
 type ExperimentCommandAction string
@@ -35,6 +37,12 @@ type ExperimentCommand struct {
 	Reason               string    `json:"reason"`
 	IdempotencyKey       string    `json:"idempotency_key"`
 	ExpectedStateVersion int64     `json:"expected_state_version"`
+}
+
+func MetricsFingerprint(metrics StageMetrics) string {
+	payload, _ := json.Marshal(metrics)
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }
 
 func (c ExperimentCommand) Validate() error {

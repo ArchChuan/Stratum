@@ -91,9 +91,14 @@ func TestPgExperimentRepositoryHumanGates(t *testing.T) {
 		if _, err := repo.ApplyCommand(ctx, tenantID, experiment.ID, domain.CommandPause, conflictingRetry); !errors.Is(err, domain.ErrExperimentCommandConflict) {
 			t.Fatalf("changed idempotent command error=%v", err)
 		}
-		if _, err := repo.ApplyCommand(ctx, tenantID, experiment.ID, domain.CommandRollback,
-			commandFor("after-terminal", retry.StateVersion)); !errors.Is(err, domain.ErrExperimentCommandNotAllowed) {
-			t.Fatalf("terminal command error=%v", err)
+		if _, err := repo.ApplyCommand(ctx, tenantID, experiment.ID, domain.CommandPromote,
+			commandFor("promote-paused", retry.StateVersion)); !errors.Is(err, domain.ErrExperimentCommandNotAllowed) {
+			t.Fatalf("paused promotion error=%v", err)
+		}
+		rolledBack, err := repo.ApplyCommand(ctx, tenantID, experiment.ID, domain.CommandRollback,
+			commandFor("rollback-paused", retry.StateVersion))
+		if err != nil || rolledBack.Status != domain.ExperimentRolledBack {
+			t.Fatalf("paused rollback experiment=%+v err=%v", rolledBack, err)
 		}
 		var percent int
 		if err := pool.QueryRow(ctx, `SELECT canary_percent FROM `+schema+`.evaluation_deployments
@@ -104,6 +109,15 @@ func TestPgExperimentRepositoryHumanGates(t *testing.T) {
 
 	t.Run("promote rollback safety stop and tenant isolation", func(t *testing.T) {
 		promote := createCommandExperiment(t, ctx, repo, tenantID, "promote", domain.DecisionPromote)
+		duplicate := promote
+		duplicate.ID = "experiment-promote-duplicate"
+		if err := repo.Create(ctx, tenantID, duplicate, domain.Deployment{
+			ResourceKind: duplicate.ResourceKind, ResourceID: duplicate.ResourceID,
+			StableRevisionID: duplicate.StableRevisionID, CanaryRevisionID: duplicate.CanaryRevisionID,
+			CanaryPercent: duplicate.Stage, ExperimentID: duplicate.ID,
+		}); !errors.Is(err, domain.ErrExperimentDeploymentConflict) {
+			t.Fatalf("active deployment conflict error=%v", err)
+		}
 		if _, err := repo.ApplyCommand(ctx, tenantID, promote.ID, domain.CommandPromote,
 			commandFor("promote-1", promote.StateVersion)); err != nil {
 			t.Fatal(err)
@@ -121,8 +135,23 @@ func TestPgExperimentRepositoryHumanGates(t *testing.T) {
 		policy := safety.Policy
 		next, recommendation := safety.Decide(domain.StageMetrics{SecurityViolation: true}, policy)
 		next.StateVersion = safety.StateVersion + 1
-		if err := repo.SaveDecision(ctx, tenantID, next, recommendation, domain.StageMetrics{SecurityViolation: true}); err != nil {
+		stored, storedDecision, err := repo.SaveDecision(ctx, tenantID, next, recommendation,
+			domain.StageMetrics{SecurityViolation: true}, "safety-evaluation", domain.MetricsFingerprint(
+				domain.StageMetrics{SecurityViolation: true},
+			))
+		if err != nil {
 			t.Fatal(err)
+		}
+		retryStored, retryDecision, err := repo.SaveDecision(ctx, tenantID, next, recommendation,
+			domain.StageMetrics{SecurityViolation: true}, "safety-evaluation", domain.MetricsFingerprint(
+				domain.StageMetrics{SecurityViolation: true},
+			))
+		if err != nil || retryStored.StateVersion != stored.StateVersion || retryDecision != storedDecision {
+			t.Fatalf("evaluation retry stored=%+v decision=%s err=%v", retryStored, retryDecision, err)
+		}
+		if _, _, err := repo.SaveDecision(ctx, tenantID, next, recommendation,
+			domain.StageMetrics{SecurityViolation: true}, "safety-evaluation", "different"); !errors.Is(err, domain.ErrExperimentCommandConflict) {
+			t.Fatalf("evaluation fingerprint conflict error=%v", err)
 		}
 		assertDeployment(t, ctx, pool, tenantID, safety.ResourceID, safety.StableRevisionID, safety.CanaryRevisionID, 0)
 		schema := `"tenant_` + tenantID + `"`
@@ -135,6 +164,22 @@ func TestPgExperimentRepositoryHumanGates(t *testing.T) {
 		if _, err := repo.ApplyCommand(ctx, otherTenantID, promote.ID, domain.CommandRollback,
 			commandFor("isolated", promote.StateVersion)); err == nil {
 			t.Fatal("command crossed tenant boundary")
+		}
+	})
+
+	t.Run("missing owned deployment rolls back command", func(t *testing.T) {
+		experiment := createCommandExperiment(t, ctx, repo, tenantID, "missing-deployment", domain.DecisionPromote)
+		schema := `"tenant_` + tenantID + `"`
+		if _, err := pool.Exec(ctx, `DELETE FROM `+schema+`.evaluation_deployments WHERE experiment_id=$1`, experiment.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.ApplyCommand(ctx, tenantID, experiment.ID, domain.CommandPromote,
+			commandFor("missing-deployment", experiment.StateVersion)); !errors.Is(err, domain.ErrExperimentStateConflict) {
+			t.Fatalf("missing deployment error=%v", err)
+		}
+		stored, found, err := repo.Get(ctx, tenantID, experiment.ID)
+		if err != nil || !found || stored.Status != domain.ExperimentRunning || stored.StateVersion != experiment.StateVersion {
+			t.Fatalf("command transaction did not roll back: stored=%+v found=%v err=%v", stored, found, err)
 		}
 	})
 }

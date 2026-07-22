@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 
@@ -64,6 +65,17 @@ func (s *FeedbackService) Record(
 	if err != nil || !ok {
 		return result, err
 	}
+	if observed.SecurityViolation || input.SecurityViolation || feedbackSecurityViolation(feedback) {
+		next, decision, err := s.experiments.EvaluateStageIdempotent(ctx, tenantID, experiment.ID, EvaluateStageInput{
+			Metrics:        domain.StageMetrics{SecurityViolation: true},
+			IdempotencyKey: evaluationIdempotencyKey(input.IdempotencyKey, experiment.ID, experiment.Stage),
+		})
+		if err != nil {
+			return FeedbackResult{}, err
+		}
+		result.Experiment, result.Decision = &next, decision
+		return result, nil
+	}
 	feedbackRows, observedMinutes, err := s.repo.StageFeedback(ctx, tenantID, experiment)
 	if err != nil {
 		return FeedbackResult{}, err
@@ -93,13 +105,19 @@ func (s *FeedbackService) Record(
 		ErrorRateIncrease:    errorRate(canary) - errorRate(stable),
 		SecurityViolation:    hasSecurityViolation(stable) || hasSecurityViolation(canary),
 	}
-	next, decision, err := s.experiments.EvaluateStage(ctx, tenantID, experiment.ID, metrics)
+	next, decision, err := s.experiments.EvaluateStageIdempotent(ctx, tenantID, experiment.ID, EvaluateStageInput{
+		Metrics: metrics, IdempotencyKey: evaluationIdempotencyKey(input.IdempotencyKey, experiment.ID, experiment.Stage),
+	})
 	if err != nil {
 		return FeedbackResult{}, err
 	}
 	result.Experiment = &next
 	result.Decision = decision
 	return result, nil
+}
+
+func evaluationIdempotencyKey(feedbackKey, experimentID string, stage int) string {
+	return fmt.Sprintf("feedback:%s:%s:%d", feedbackKey, experimentID, stage)
 }
 
 func (s *FeedbackService) observations(

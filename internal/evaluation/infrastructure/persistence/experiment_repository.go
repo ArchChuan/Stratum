@@ -11,6 +11,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -45,7 +46,7 @@ func (r *PgExperimentRepository) Create(
 		); err != nil {
 			return fmt.Errorf("experiment repository: insert experiment: %w", err)
 		}
-		_, err := tx.Exec(ctx,
+		result, err := tx.Exec(ctx,
 			`INSERT INTO evaluation_deployments
 			 (resource_kind, resource_id, stable_revision_id, canary_revision_id,
 			  canary_percent, experiment_id, policy_version)
@@ -56,11 +57,18 @@ func (r *PgExperimentRepository) Create(
 			 canary_percent=EXCLUDED.canary_percent,
 			 experiment_id=EXCLUDED.experiment_id,
 			 policy_version=evaluation_deployments.policy_version+1,
-			 updated_at=NOW()`,
+			 updated_at=NOW()
+			 WHERE evaluation_deployments.experiment_id IS NULL`,
 			string(deployment.ResourceKind), deployment.ResourceID, deployment.StableRevisionID,
 			deployment.CanaryRevisionID, deployment.CanaryPercent, deployment.ExperimentID, deployment.PolicyVersion,
 		)
-		return err
+		if err != nil {
+			return err
+		}
+		if result.RowsAffected() != 1 {
+			return domain.ErrExperimentDeploymentConflict
+		}
+		return nil
 	})
 }
 
@@ -100,15 +108,43 @@ func (r *PgExperimentRepository) SaveDecision(
 	experiment domain.Experiment,
 	decision domain.Decision,
 	metrics domain.StageMetrics,
-) error {
-	snapshotJSON, err := json.Marshal(map[string]any{"decision": decision, "metrics": metrics})
+	idempotencyKey, fingerprint string,
+) (domain.Experiment, domain.Decision, error) {
+	snapshotJSON, err := json.Marshal(map[string]any{
+		"decision": decision, "metrics": metrics, "fingerprint": fingerprint, "result": experiment,
+	})
 	if err != nil {
-		return err
+		return domain.Experiment{}, domain.DecisionHold, err
 	}
-	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var priorStatus string
-		if err := tx.QueryRow(ctx, `SELECT status FROM evaluation_experiments WHERE id=$1 FOR UPDATE`, experiment.ID).
-			Scan(&priorStatus); err != nil {
+	var stored domain.Experiment
+	storedDecision := domain.DecisionHold
+	err = r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		current, found, err := getExperimentTx(ctx, tx, experiment.ID, true)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return pgx.ErrNoRows
+		}
+		var priorSnapshot []byte
+		err = tx.QueryRow(ctx, `SELECT metrics FROM experiment_decisions
+			WHERE experiment_id=$1 AND idempotency_key=$2`, experiment.ID, idempotencyKey).Scan(&priorSnapshot)
+		if err == nil {
+			var prior struct {
+				Fingerprint string            `json:"fingerprint"`
+				Decision    domain.Decision   `json:"decision"`
+				Result      domain.Experiment `json:"result"`
+			}
+			if err := json.Unmarshal(priorSnapshot, &prior); err != nil {
+				return err
+			}
+			if prior.Fingerprint != fingerprint {
+				return domain.ErrExperimentCommandConflict
+			}
+			stored, storedDecision = prior.Result, prior.Decision
+			return nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
 		result, err := tx.Exec(ctx,
@@ -124,14 +160,15 @@ func (r *PgExperimentRepository) SaveDecision(
 		if result.RowsAffected() != 1 {
 			return domain.ErrExperimentStateConflict
 		}
-		if experiment.Status == domain.ExperimentRunning {
-			_, err = tx.Exec(ctx,
-				`UPDATE evaluation_deployments SET canary_percent=$3, updated_at=NOW()
+		deploymentResult, err := tx.Exec(ctx,
+			`UPDATE evaluation_deployments SET canary_percent=$3, updated_at=NOW()
 				 WHERE resource_kind=$1 AND resource_id=$2 AND experiment_id=$4`,
-				string(experiment.ResourceKind), experiment.ResourceID, experiment.Stage, experiment.ID)
-		}
+			string(experiment.ResourceKind), experiment.ResourceID, experiment.Stage, experiment.ID)
 		if err != nil {
 			return err
+		}
+		if deploymentResult.RowsAffected() != 1 {
+			return domain.ErrExperimentStateConflict
 		}
 		action := "recommend"
 		if experiment.SafetyStopped {
@@ -141,10 +178,14 @@ func (r *PgExperimentRepository) SaveDecision(
 			(id, experiment_id, action, actor_type, actor_id, prior_status, new_status,
 			 recommendation, metrics, reason, idempotency_key)
 			VALUES ($1,$2,$3,'system','evaluation-service',$4,$5,$6,$7,$8,$9)`,
-			uuid.Must(uuid.NewV7()).String(), experiment.ID, action, priorStatus, string(experiment.Status),
-			string(decision), string(snapshotJSON), "automated stage evaluation", uuid.NewString())
+			uuid.Must(uuid.NewV7()).String(), experiment.ID, action, string(current.Status), string(experiment.Status),
+			string(decision), string(snapshotJSON), "automated stage evaluation", idempotencyKey)
+		if err == nil {
+			stored, storedDecision = experiment, decision
+		}
 		return err
 	})
+	return stored, storedDecision, err
 }
 
 func (r *PgExperimentRepository) ApplyCommand(
@@ -179,7 +220,7 @@ func (r *PgExperimentRepository) ApplyCommand(
 		if current.StateVersion != command.ExpectedStateVersion {
 			return domain.ErrExperimentStateConflict
 		}
-		if current.Status != domain.ExperimentRunning ||
+		if !domain.CanApplyExperimentCommand(current.Status, action) ||
 			(action == domain.CommandPromote && (current.Recommendation != domain.DecisionPromote || current.SafetyStopped)) {
 			return domain.ErrExperimentCommandNotAllowed
 		}
@@ -202,22 +243,26 @@ func (r *PgExperimentRepository) ApplyCommand(
 		if err != nil {
 			return err
 		}
+		var deploymentResult pgconn.CommandTag
 		switch action {
 		case domain.CommandPause:
-			_, err = tx.Exec(ctx, `UPDATE evaluation_deployments SET canary_percent=0, updated_at=NOW()
+			deploymentResult, err = tx.Exec(ctx, `UPDATE evaluation_deployments SET canary_percent=0, updated_at=NOW()
 				WHERE experiment_id=$1`, experimentID)
 		case domain.CommandPromote:
-			_, err = tx.Exec(ctx, `UPDATE evaluation_deployments
+			deploymentResult, err = tx.Exec(ctx, `UPDATE evaluation_deployments
 				SET stable_revision_id=$2, canary_revision_id=NULL, canary_percent=0, experiment_id=NULL,
 				policy_version=policy_version+1, updated_at=NOW() WHERE experiment_id=$1`,
 				experimentID, current.CanaryRevisionID)
 		case domain.CommandRollback:
-			_, err = tx.Exec(ctx, `UPDATE evaluation_deployments
+			deploymentResult, err = tx.Exec(ctx, `UPDATE evaluation_deployments
 				SET canary_revision_id=NULL, canary_percent=0, experiment_id=NULL, updated_at=NOW()
 				WHERE experiment_id=$1`, experimentID)
 		}
 		if err != nil {
 			return err
+		}
+		if deploymentResult.RowsAffected() != 1 {
+			return domain.ErrExperimentStateConflict
 		}
 		metadata, err := json.Marshal(map[string]string{"fingerprint": fingerprint})
 		if err != nil {

@@ -95,7 +95,8 @@ type ExperimentRepository interface {
 		experiment domain.Experiment,
 		decision domain.Decision,
 		metrics domain.StageMetrics,
-	) error
+		idempotencyKey, fingerprint string,
+	) (domain.Experiment, domain.Decision, error)
 	ApplyCommand(ctx context.Context, tenantID, experimentID string, action domain.ExperimentCommandAction,
 		command domain.ExperimentCommand) (domain.Experiment, error)
 	ResolveDeployment(ctx context.Context, tenantID, resourceKind, resourceID string) (domain.Deployment, bool, error)

@@ -92,13 +92,36 @@ func TestExperimentAdvancesThroughConfiguredStages(t *testing.T) {
 	wantStages := []int{20, 50, 100}
 	for _, want := range wantStages {
 		next, decision := exp.Decide(metrics, policy)
-		if decision != DecisionPromote || next.Stage != want {
-			t.Fatalf("expected promotion to %d, got decision=%s stage=%d", want, decision, next.Stage)
+		if decision != DecisionAdvance || next.Stage != want || next.Recommendation == DecisionPromote {
+			t.Fatalf("expected advance to %d, got decision=%s experiment=%+v", want, decision, next)
 		}
 		exp = next
 	}
-	if exp.Status != ExperimentRunning || exp.Recommendation != DecisionPromote {
-		t.Fatalf("recommendations must not complete experiments: %+v", exp)
+	next, decision := exp.Decide(metrics, policy)
+	if decision != DecisionPromote || next.Status != ExperimentRunning || next.Recommendation != DecisionPromote {
+		t.Fatalf("final stage should recommend promotion: decision=%s experiment=%+v", decision, next)
+	}
+}
+
+func TestExperimentCommandTransitionTable(t *testing.T) {
+	tests := []struct {
+		status  ExperimentStatus
+		action  ExperimentCommandAction
+		allowed bool
+	}{
+		{ExperimentRunning, CommandPause, true},
+		{ExperimentRunning, CommandRollback, true},
+		{ExperimentRunning, CommandPromote, true},
+		{ExperimentPaused, CommandRollback, true},
+		{ExperimentPaused, CommandPause, false},
+		{ExperimentPaused, CommandPromote, false},
+		{ExperimentCompleted, CommandRollback, false},
+		{ExperimentRolledBack, CommandRollback, false},
+	}
+	for _, tt := range tests {
+		if got := CanApplyExperimentCommand(tt.status, tt.action); got != tt.allowed {
+			t.Errorf("status=%s action=%s allowed=%v want=%v", tt.status, tt.action, got, tt.allowed)
+		}
 	}
 }
 

@@ -17,6 +17,18 @@ type CreateExperimentInput struct {
 	SuiteRevisionID string
 }
 
+type ExperimentCommandInput struct {
+	ActorID              string
+	Reason               string
+	IdempotencyKey       string
+	ExpectedStateVersion int64
+}
+
+type EvaluateStageInput struct {
+	Metrics        domain.StageMetrics
+	IdempotencyKey string
+}
+
 type ExperimentService struct {
 	repo port.ExperimentRepository
 }
@@ -59,19 +71,19 @@ func (s *ExperimentService) Create(
 }
 
 func (s *ExperimentService) Pause(
-	ctx context.Context, tenantID, experimentID string, command domain.ExperimentCommand,
+	ctx context.Context, tenantID, experimentID string, command ExperimentCommandInput,
 ) (domain.Experiment, error) {
 	return s.applyCommand(ctx, tenantID, experimentID, domain.CommandPause, command)
 }
 
 func (s *ExperimentService) Promote(
-	ctx context.Context, tenantID, experimentID string, command domain.ExperimentCommand,
+	ctx context.Context, tenantID, experimentID string, command ExperimentCommandInput,
 ) (domain.Experiment, error) {
 	return s.applyCommand(ctx, tenantID, experimentID, domain.CommandPromote, command)
 }
 
 func (s *ExperimentService) Rollback(
-	ctx context.Context, tenantID, experimentID string, command domain.ExperimentCommand,
+	ctx context.Context, tenantID, experimentID string, command ExperimentCommandInput,
 ) (domain.Experiment, error) {
 	return s.applyCommand(ctx, tenantID, experimentID, domain.CommandRollback, command)
 }
@@ -80,8 +92,12 @@ func (s *ExperimentService) applyCommand(
 	ctx context.Context,
 	tenantID, experimentID string,
 	action domain.ExperimentCommandAction,
-	command domain.ExperimentCommand,
+	input ExperimentCommandInput,
 ) (domain.Experiment, error) {
+	command := domain.ExperimentCommand{
+		ActorID: input.ActorID, ActorType: domain.ActorTypeAdmin, Reason: input.Reason,
+		IdempotencyKey: input.IdempotencyKey, ExpectedStateVersion: input.ExpectedStateVersion,
+	}
 	if err := command.Validate(); err != nil {
 		return domain.Experiment{}, err
 	}
@@ -93,6 +109,19 @@ func (s *ExperimentService) EvaluateStage(
 	tenantID, experimentID string,
 	metrics domain.StageMetrics,
 ) (domain.Experiment, domain.Decision, error) {
+	return s.EvaluateStageIdempotent(ctx, tenantID, experimentID, EvaluateStageInput{
+		Metrics: metrics, IdempotencyKey: uuid.NewString(),
+	})
+}
+
+func (s *ExperimentService) EvaluateStageIdempotent(
+	ctx context.Context,
+	tenantID, experimentID string,
+	input EvaluateStageInput,
+) (domain.Experiment, domain.Decision, error) {
+	if input.IdempotencyKey == "" {
+		return domain.Experiment{}, domain.DecisionHold, errors.New("evaluation idempotency key is required")
+	}
 	experiment, ok, err := s.repo.Get(ctx, tenantID, experimentID)
 	if err != nil {
 		return domain.Experiment{}, domain.DecisionHold, err
@@ -104,12 +133,15 @@ func (s *ExperimentService) EvaluateStage(
 	if len(policy.Stages) == 0 {
 		policy = domain.DefaultPromotionPolicy()
 	}
-	next, decision := experiment.Decide(metrics, policy)
+	next, decision := experiment.Decide(input.Metrics, policy)
 	next.StateVersion = experiment.StateVersion + 1
-	if err := s.repo.SaveDecision(ctx, tenantID, next, decision, metrics); err != nil {
+	stored, storedDecision, err := s.repo.SaveDecision(
+		ctx, tenantID, next, decision, input.Metrics, input.IdempotencyKey, domain.MetricsFingerprint(input.Metrics),
+	)
+	if err != nil {
 		return domain.Experiment{}, domain.DecisionHold, err
 	}
-	return next, decision, nil
+	return stored, storedDecision, nil
 }
 
 func (s *ExperimentService) ResolveRevision(
