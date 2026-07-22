@@ -96,6 +96,8 @@ type ExperimentRepository interface {
 		decision domain.Decision,
 		metrics domain.StageMetrics,
 	) error
+	ApplyCommand(ctx context.Context, tenantID, experimentID string, action domain.ExperimentCommandAction,
+		command domain.ExperimentCommand) (domain.Experiment, error)
 	ResolveDeployment(ctx context.Context, tenantID, resourceKind, resourceID string) (domain.Deployment, bool, error)
 }
 

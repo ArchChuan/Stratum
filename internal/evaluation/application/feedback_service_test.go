@@ -201,6 +201,11 @@ func (f *feedbackExperimentRepo) SaveDecision(_ context.Context, _ string, exper
 	f.experiment = experiment
 	return nil
 }
+func (f *feedbackExperimentRepo) ApplyCommand(
+	context.Context, string, string, domain.ExperimentCommandAction, domain.ExperimentCommand,
+) (domain.Experiment, error) {
+	return domain.Experiment{}, domain.ErrExperimentCommandNotAllowed
+}
 func (f *feedbackExperimentRepo) ResolveDeployment(context.Context, string, string, string) (domain.Deployment, bool, error) {
 	return domain.Deployment{}, false, nil
 }

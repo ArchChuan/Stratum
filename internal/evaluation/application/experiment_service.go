@@ -45,6 +45,7 @@ func (s *ExperimentService) Create(
 		ID: uuid.Must(uuid.NewV7()).String(), ResourceKind: input.Stable.Kind, ResourceID: input.Stable.ResourceID,
 		StableRevisionID: input.Stable.RevisionID, CanaryRevisionID: input.Canary.RevisionID,
 		SuiteRevisionID: input.SuiteRevisionID, Status: domain.ExperimentRunning, Stage: policy.Stages[0], Policy: policy,
+		StateVersion: 1, Recommendation: domain.DecisionHold,
 	}
 	deployment := domain.Deployment{
 		ResourceKind: input.Stable.Kind, ResourceID: input.Stable.ResourceID,
@@ -55,6 +56,36 @@ func (s *ExperimentService) Create(
 		return domain.Experiment{}, domain.Deployment{}, err
 	}
 	return experiment, deployment, nil
+}
+
+func (s *ExperimentService) Pause(
+	ctx context.Context, tenantID, experimentID string, command domain.ExperimentCommand,
+) (domain.Experiment, error) {
+	return s.applyCommand(ctx, tenantID, experimentID, domain.CommandPause, command)
+}
+
+func (s *ExperimentService) Promote(
+	ctx context.Context, tenantID, experimentID string, command domain.ExperimentCommand,
+) (domain.Experiment, error) {
+	return s.applyCommand(ctx, tenantID, experimentID, domain.CommandPromote, command)
+}
+
+func (s *ExperimentService) Rollback(
+	ctx context.Context, tenantID, experimentID string, command domain.ExperimentCommand,
+) (domain.Experiment, error) {
+	return s.applyCommand(ctx, tenantID, experimentID, domain.CommandRollback, command)
+}
+
+func (s *ExperimentService) applyCommand(
+	ctx context.Context,
+	tenantID, experimentID string,
+	action domain.ExperimentCommandAction,
+	command domain.ExperimentCommand,
+) (domain.Experiment, error) {
+	if err := command.Validate(); err != nil {
+		return domain.Experiment{}, err
+	}
+	return s.repo.ApplyCommand(ctx, tenantID, experimentID, action, command)
 }
 
 func (s *ExperimentService) EvaluateStage(
@@ -74,6 +105,7 @@ func (s *ExperimentService) EvaluateStage(
 		policy = domain.DefaultPromotionPolicy()
 	}
 	next, decision := experiment.Decide(metrics, policy)
+	next.StateVersion = experiment.StateVersion + 1
 	if err := s.repo.SaveDecision(ctx, tenantID, next, decision, metrics); err != nil {
 		return domain.Experiment{}, domain.DecisionHold, err
 	}

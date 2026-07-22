@@ -25,11 +25,11 @@ func TestExperimentServiceCreatesFivePercentCanaryDeployment(t *testing.T) {
 	}
 }
 
-func TestExperimentServiceAppliesRollbackDecision(t *testing.T) {
+func TestExperimentServiceSafetyStopsWithoutRollingBackStable(t *testing.T) {
 	repo := &fakeExperimentRepo{experiment: domain.Experiment{
 		ID: "experiment-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
 		StableRevisionID: "version-1", CanaryRevisionID: "candidate-1", Status: domain.ExperimentRunning, Stage: 20,
-	}}
+	}, deployment: domain.Deployment{StableRevisionID: "version-1", CanaryRevisionID: "candidate-1", CanaryPercent: 20}}
 	svc := NewExperimentService(repo)
 	policy := domain.DefaultPromotionPolicy()
 
@@ -40,9 +40,77 @@ func TestExperimentServiceAppliesRollbackDecision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateStage returned error: %v", err)
 	}
-	if decision != domain.DecisionRollback || experiment.Status != domain.ExperimentRolledBack || repo.deployment.CanaryPercent != 0 {
-		t.Fatalf("rollback not applied: decision=%s experiment=%+v deployment=%+v", decision, experiment, repo.deployment)
+	if decision != domain.DecisionRollback || experiment.Status != domain.ExperimentRunning ||
+		!experiment.SafetyStopped || repo.deployment.CanaryPercent != 0 || repo.deployment.StableRevisionID != "version-1" {
+		t.Fatalf("safety stop not applied: decision=%s experiment=%+v deployment=%+v", decision, experiment, repo.deployment)
 	}
+}
+
+func TestExperimentServiceRecommendationDoesNotPromoteStable(t *testing.T) {
+	policy := domain.DefaultPromotionPolicy()
+	repo := &fakeExperimentRepo{experiment: domain.Experiment{
+		ID: "experiment-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		StableRevisionID: "stable-1", CanaryRevisionID: "canary-1", Status: domain.ExperimentRunning,
+		Stage: 50, Policy: policy, StateVersion: 1,
+	}, deployment: domain.Deployment{StableRevisionID: "stable-1", CanaryRevisionID: "canary-1", CanaryPercent: 50}}
+	svc := NewExperimentService(repo)
+
+	experiment, recommendation, err := svc.EvaluateStage(context.Background(), "tenant-1", "experiment-1", domain.StageMetrics{
+		Samples: policy.MinSamples, ObservedMinutes: policy.MinObservationMinutes,
+		QualityImprovement: 0.1, QualitySignificant: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recommendation != domain.DecisionPromote || experiment.Status != domain.ExperimentRunning ||
+		repo.deployment.StableRevisionID != "stable-1" {
+		t.Fatalf("evaluation mutated stable deployment: experiment=%+v deployment=%+v", experiment, repo.deployment)
+	}
+}
+
+func TestExperimentServicePromoteRequiresPersistedRecommendation(t *testing.T) {
+	repo := &fakeExperimentRepo{experiment: domain.Experiment{ID: "experiment-1", Status: domain.ExperimentRunning, StateVersion: 2}}
+	svc := NewExperimentService(repo)
+	_, err := svc.Promote(context.Background(), "tenant-1", "experiment-1", validCommand(2))
+	if err == nil {
+		t.Fatal("expected promotion without persisted recommendation to fail")
+	}
+}
+
+func TestExperimentServiceHumanCommands(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		action domain.ExperimentCommandAction
+		status domain.ExperimentStatus
+	}{
+		{"pause", domain.CommandPause, domain.ExperimentPaused},
+		{"promote", domain.CommandPromote, domain.ExperimentCompleted},
+		{"rollback", domain.CommandRollback, domain.ExperimentRolledBack},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &fakeExperimentRepo{experiment: domain.Experiment{
+				ID: "experiment-1", Status: domain.ExperimentRunning, Recommendation: domain.DecisionPromote, StateVersion: 3,
+			}}
+			svc := NewExperimentService(repo)
+			var got domain.Experiment
+			var err error
+			switch tc.action {
+			case domain.CommandPause:
+				got, err = svc.Pause(context.Background(), "tenant-1", "experiment-1", validCommand(3))
+			case domain.CommandPromote:
+				got, err = svc.Promote(context.Background(), "tenant-1", "experiment-1", validCommand(3))
+			case domain.CommandRollback:
+				got, err = svc.Rollback(context.Background(), "tenant-1", "experiment-1", validCommand(3))
+			}
+			if err != nil || got.Status != tc.status || repo.commandAction != tc.action {
+				t.Fatalf("command failed: got=%+v action=%s err=%v", got, repo.commandAction, err)
+			}
+		})
+	}
+}
+
+func validCommand(version int64) domain.ExperimentCommand {
+	return domain.ExperimentCommand{ActorID: "admin-1", ActorType: domain.ActorTypeAdmin, Reason: "reviewed", IdempotencyKey: "command-1", ExpectedStateVersion: version}
 }
 
 func TestExperimentServiceResolveAssignmentIncludesVariantEvidence(t *testing.T) {
@@ -76,8 +144,32 @@ func TestExperimentServiceResolveAssignmentIncludesVariantEvidence(t *testing.T)
 }
 
 type fakeExperimentRepo struct {
-	experiment domain.Experiment
-	deployment domain.Deployment
+	experiment    domain.Experiment
+	deployment    domain.Deployment
+	commandAction domain.ExperimentCommandAction
+}
+
+func (f *fakeExperimentRepo) ApplyCommand(
+	_ context.Context, _ string, experimentID string, action domain.ExperimentCommandAction, command domain.ExperimentCommand,
+) (domain.Experiment, error) {
+	if f.experiment.ID != experimentID || f.experiment.StateVersion != command.ExpectedStateVersion {
+		return domain.Experiment{}, domain.ErrExperimentStateConflict
+	}
+	if f.experiment.Status != domain.ExperimentRunning ||
+		(action == domain.CommandPromote && (f.experiment.Recommendation != domain.DecisionPromote || f.experiment.SafetyStopped)) {
+		return domain.Experiment{}, domain.ErrExperimentCommandNotAllowed
+	}
+	f.commandAction = action
+	f.experiment.StateVersion++
+	switch action {
+	case domain.CommandPause:
+		f.experiment.Status = domain.ExperimentPaused
+	case domain.CommandPromote:
+		f.experiment.Status = domain.ExperimentCompleted
+	case domain.CommandRollback:
+		f.experiment.Status = domain.ExperimentRolledBack
+	}
+	return f.experiment, nil
 }
 
 func (f *fakeExperimentRepo) Create(
