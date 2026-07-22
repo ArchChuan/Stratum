@@ -97,10 +97,15 @@ const SENSITIVE_SUMMARY_KEYS = new Set([
   'payload', 'raw_payload', 'prompt', 'raw_prompt', 'credentials', 'credential', 'api_key', 'apikey', 'token',
   'access_token', 'refresh_token', 'retrieved_content', 'document_content', 'arguments', 'tool_arguments',
   'raw_response', 'tool_raw_response', 'encrypted_payload_ref', 'payload_ref', 'payload_hash', 'content_hash',
-  'authorization', 'password', 'secret', 'private_key', 'client_secret',
+  'authorization', 'password', 'secret', 'private_key', 'client_secret', 'cookie', 'session', 'key', 'cert',
+  'connection_string',
 ]);
 
-const normalizedKey = (key: string) => key.toLowerCase().replace(/-/g, '_');
+const normalizedKey = (key: string) => key
+  .replace(/-/g, '_')
+  .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+  .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+  .toLowerCase();
 const validateSafeJSON = (value: unknown, path: string[], depth = 0): string | null => {
   if (depth > 6) return `${path.join('.')} exceeds safe summary depth`;
   if (value === null || typeof value === 'boolean') return null;

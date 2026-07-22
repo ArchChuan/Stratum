@@ -158,8 +158,8 @@ func validateSafeSummary(summary map[string]any) error {
 		return errors.New("safe summary has too many fields")
 	}
 	for key, value := range summary {
-		normalized := normalizeSafeSummaryKey(key)
-		if _, sensitive := sensitiveSafeSummaryKeys[normalized]; sensitive {
+		normalized := NormalizeSafeSummaryKey(key)
+		if IsSensitiveSafeSummaryKey(normalized) {
 			return fmt.Errorf("safe summary contains sensitive key: %s", key)
 		}
 		switch normalized {
@@ -258,7 +258,7 @@ func validateSafeSummaryMap(value map[string]any, depth int) error {
 		return errors.New("too many fields")
 	}
 	for key, nested := range value {
-		if _, sensitive := sensitiveSafeSummaryKeys[normalizeSafeSummaryKey(key)]; sensitive {
+		if IsSensitiveSafeSummaryKey(key) {
 			return fmt.Errorf("sensitive key: %s", key)
 		}
 		if err := validateSafeSummaryValue(nested, depth); err != nil {
@@ -268,6 +268,28 @@ func validateSafeSummaryMap(value map[string]any, depth int) error {
 	return nil
 }
 
-func normalizeSafeSummaryKey(key string) string {
-	return strings.ReplaceAll(strings.ToLower(key), "-", "_")
+func IsSensitiveSafeSummaryKey(key string) bool {
+	_, sensitive := sensitiveSafeSummaryKeys[NormalizeSafeSummaryKey(key)]
+	return sensitive
+}
+
+func NormalizeSafeSummaryKey(key string) string {
+	key = strings.ReplaceAll(key, "-", "_")
+	var normalized strings.Builder
+	for index := 0; index < len(key); index++ {
+		current := key[index]
+		if current >= 'A' && current <= 'Z' {
+			previousLowerOrDigit := index > 0 && ((key[index-1] >= 'a' && key[index-1] <= 'z') ||
+				(key[index-1] >= '0' && key[index-1] <= '9'))
+			nextLower := index+1 < len(key) && key[index+1] >= 'a' && key[index+1] <= 'z'
+			previousUpper := index > 0 && key[index-1] >= 'A' && key[index-1] <= 'Z'
+			if normalized.Len() > 0 && (previousLowerOrDigit || (previousUpper && nextLower)) {
+				normalized.WriteByte('_')
+			}
+			normalized.WriteByte(current + ('a' - 'A'))
+			continue
+		}
+		normalized.WriteByte(current)
+	}
+	return strings.ToLower(normalized.String())
 }

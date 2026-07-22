@@ -101,6 +101,11 @@ describe('evaluation model', () => {
     { tool: { arguments: { query: 'private' } } },
     { tool_raw_response: 'private' },
     { encrypted_payload_ref: 'object://secret' },
+    { auth: { cookie: 'session=secret' } },
+    { auth: { Session: 'secret' } },
+    { database: { connectionString: 'postgres://secret' } },
+    { tls: { CERT: 'secret' } },
+    { tls: { KEY: 'secret' } },
   ])('rejects recursively sensitive or raw summary keys', (summary) => {
     expect(() => safeSummarySchema.parse(summary)).toThrow();
   });

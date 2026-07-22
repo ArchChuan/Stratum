@@ -3,21 +3,11 @@ package persistence
 import (
 	"reflect"
 	"sort"
-	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 )
 
 const maxSafeDiffFields = 32
-
-var unsafeCenterSummaryKeys = map[string]struct{}{
-	"payload": {}, "raw_payload": {}, "prompt": {}, "raw_prompt": {}, "credentials": {}, "credential": {},
-	"api_key": {}, "apikey": {}, "token": {}, "access_token": {}, "refresh_token": {},
-	"retrieved_content": {}, "document_content": {}, "arguments": {}, "tool_arguments": {},
-	"raw_response": {}, "tool_raw_response": {}, "encrypted_payload_ref": {}, "payload_ref": {},
-	"payload_hash": {}, "content_hash": {}, "authorization": {}, "password": {}, "secret": {},
-	"private_key": {}, "client_secret": {},
-}
 
 func buildCandidateSafeDiff(parent, candidate map[string]any, parentExists bool) domain.CandidateSafeDiff {
 	parent = sanitizeCenterSummary(parent)
@@ -61,7 +51,7 @@ func sanitizeCenterSummary(summary map[string]any) map[string]any {
 func sanitizeCenterSummaryMap(summary map[string]any, depth int) map[string]any {
 	result := make(map[string]any, len(summary))
 	for key, value := range summary {
-		if _, unsafe := unsafeCenterSummaryKeys[normalizeCenterSummaryKey(key)]; unsafe {
+		if domain.IsSensitiveSafeSummaryKey(key) {
 			continue
 		}
 		if sanitized, ok := sanitizeCenterSummaryValue(value, depth); ok {
@@ -105,8 +95,4 @@ func sanitizeCenterSummaryValue(value any, depth int) (any, bool) {
 	default:
 		return nil, false
 	}
-}
-
-func normalizeCenterSummaryKey(key string) string {
-	return strings.ReplaceAll(strings.ToLower(key), "-", "_")
 }

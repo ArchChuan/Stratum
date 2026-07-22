@@ -137,6 +137,15 @@ func TestResourceRevisionRejectsSensitiveKeysInTypedNestedMaps(t *testing.T) {
 	}
 }
 
+func TestSensitiveSafeSummaryKeyNormalizationVariants(t *testing.T) {
+	for _, key := range []string{"cookie", "Session", "connection_string", "connection-string", "connectionString",
+		"CERT", "privateKey", "apiKey", "refreshToken"} {
+		if !IsSensitiveSafeSummaryKey(key) {
+			t.Errorf("key %q was not classified as sensitive", key)
+		}
+	}
+}
+
 func TestResourceRevisionRejectsFreeTextSummaryEvenWhenSecretIsOnlyInValue(t *testing.T) {
 	revision := validResourceRevision()
 	revision.SafeSummary = map[string]any{"description": "client_secret=synthetic-value"}

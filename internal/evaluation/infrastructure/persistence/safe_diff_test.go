@@ -33,3 +33,16 @@ func TestBuildCandidateSafeDiffMissingParentAndSensitiveKeys(t *testing.T) {
 		t.Fatal("sensitive payload returned")
 	}
 }
+
+func TestBuildCandidateSafeDiffDropsCanonicalSensitiveKeysRecursively(t *testing.T) {
+	diff := buildCandidateSafeDiff(nil, map[string]any{
+		"label":    "safe",
+		"auth":     map[string]any{"cookie": "secret"},
+		"Session":  "secret",
+		"database": map[string]any{"connectionString": "secret"},
+		"tls":      map[string]any{"CERT": "secret", "private-key": "secret"},
+	}, false)
+	if !reflect.DeepEqual(diff.ChangedFields, []string{"label"}) {
+		t.Fatalf("sensitive fields leaked into diff: %#v", diff)
+	}
+}
