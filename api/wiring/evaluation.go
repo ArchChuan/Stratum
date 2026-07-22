@@ -15,6 +15,7 @@ import (
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	evalpersist "github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/persistence"
+	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
@@ -33,6 +34,7 @@ type Evaluation struct {
 	CandidateService    *evalapp.CandidateCommandService
 	AgentProvider       evalport.AgentRevisionProvider
 	MCPProvider         evalport.ResourceRevisionProvider
+	KnowledgeProvider   evalport.ResourceRevisionProvider
 	BaselineService     *evalapp.BaselineService
 }
 
@@ -456,6 +458,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	var agentProvider evalport.AgentRevisionProvider
 	var mcpProvider evalport.ResourceRevisionProvider
+	var knowledgeProvider evalport.ResourceRevisionProvider
 	var sharedRevisionService *evalapp.RevisionService
 	if c.RevisionObjectStore != nil {
 		sharedRevisionService = evalapp.NewRevisionService(
@@ -480,6 +483,16 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		candidateCreators[evaldomain.ResourceKindMCP] = mcpAdapter
 		mcpProvider = mcpAdapter
 	}
+	if c.Knowledge != nil && c.Knowledge.WorkspaceService != nil && c.Knowledge.RAGService != nil &&
+		sharedRevisionService != nil {
+		knowledgeAdapter := knowledgeEvaluationAdapter{
+			revisions: sharedRevisionService, source: c.Knowledge.WorkspaceService,
+			evaluator: knowledgeapp.NewRetrievalEvaluator(c.Knowledge.RAGService), actorID: "evaluation-worker",
+		}
+		resourceAdapters[evaldomain.ResourceKindKnowledge] = knowledgeAdapter
+		candidateCreators[evaldomain.ResourceKindKnowledge] = knowledgeAdapter
+		knowledgeProvider = knowledgeAdapter
+	}
 	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, suiteRepo)
 	jobService := evalapp.NewJobService(jobRepo, service)
 	var rewriter evalapp.PromptRewriter
@@ -500,6 +513,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	if sharedRevisionService != nil {
 		baselineService = evalapp.NewBaselineService(evaluationBaselineRouter{providers: map[evaldomain.ResourceKind]evalport.ResourceRevisionProvider{
 			evaldomain.ResourceKindAgent: agentProvider, evaldomain.ResourceKindMCP: mcpProvider,
+			evaldomain.ResourceKindKnowledge: knowledgeProvider,
 		}})
 	}
 	c.Evaluation = &Evaluation{
@@ -514,6 +528,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		CandidateService:    evalapp.NewCandidateCommandService(candidateRepo),
 		AgentProvider:       agentProvider,
 		MCPProvider:         mcpProvider,
+		KnowledgeProvider:   knowledgeProvider,
 		BaselineService:     baselineService,
 	}
 	if c.Agent != nil && c.Agent.Service != nil {
