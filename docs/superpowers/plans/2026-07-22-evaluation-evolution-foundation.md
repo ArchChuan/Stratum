@@ -408,9 +408,16 @@ type CenterQueryRepository interface {
 
 - [ ] **Step 2: Verify query tests fail**
 
-Run: `go test ./internal/evaluation/application ./internal/evaluation/infrastructure/persistence -run 'Center|Timeline|List.*Evaluation' -count=1`
+Run unit tests:
 
-Expected: FAIL because query types and repository are absent.
+`go test ./internal/evaluation/application ./internal/evaluation/infrastructure/persistence -run 'Center|Timeline|List.*Evaluation' -count=1`
+
+Run PostgreSQL integration tests:
+
+`go test -tags=integration ./internal/evaluation/infrastructure/persistence -run 'Center|Timeline|List.*Evaluation' -count=1`
+
+Expected: FAIL because query types and repository are absent. Once the integration test compiles, it must explicitly skip when
+`TEST_DATABASE_URL` is absent.
 
 - [ ] **Step 3: Implement bounded keyset queries**
 
@@ -418,9 +425,16 @@ Clamp limits to `1..100`, default `20`. Encode cursors from `(created_at,id)` ra
 
 - [ ] **Step 4: Run query and isolation tests**
 
-Run: `go test ./internal/evaluation/application ./internal/evaluation/infrastructure/persistence -run 'Center|Timeline|List.*Evaluation' -count=1`
+Run unit tests:
 
-Expected: PASS; real database tests may skip only with the established missing-DSN reason.
+`go test ./internal/evaluation/application ./internal/evaluation/infrastructure/persistence -run 'Center|Timeline|List.*Evaluation' -count=1`
+
+Run PostgreSQL integration tests:
+
+`go test -tags=integration ./internal/evaluation/infrastructure/persistence -run 'Center|Timeline|List.*Evaluation' -count=1`
+
+Expected: PASS. When `TEST_DATABASE_URL` is absent, the integration test must explicitly skip with its documented missing-DSN
+reason; the unit command still runs normally.
 
 - [ ] **Step 5: Commit center queries**
 
