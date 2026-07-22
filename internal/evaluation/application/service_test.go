@@ -107,6 +107,14 @@ type fakeAdapter struct {
 	tenantID string
 }
 
+func (f *fakeAdapter) ResolveRevision(_ context.Context, _ string, ref domain.ResourceRef) (domain.ResourceRevision, error) {
+	return domain.ResourceRevision{ID: ref.RevisionID, ResourceKind: ref.Kind, ResourceID: ref.ResourceID}, nil
+}
+
+func (f *fakeAdapter) SafeSummary(context.Context, string, domain.ResourceRef) (map[string]any, error) {
+	return map[string]any{}, nil
+}
+
 func (f *fakeAdapter) ExecuteRevision(_ context.Context, tenantID string, _ domain.ResourceRef, c domain.EvalCase) (ExecutionResult, error) {
 	f.tenantID = tenantID
 	if c.ID == f.errCase {

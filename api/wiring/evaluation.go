@@ -52,21 +52,31 @@ func (r experimentSkillRevisionResolver) ResolveSkillRevision(
 }
 
 func (m skillCandidateManager) LoadOptimizableSnapshot(
-	ctx context.Context, _ string, baseline evaldomain.ResourceRef,
+	ctx context.Context, tenantID string, baseline evaldomain.ResourceRef,
 ) (map[string]any, error) {
-	version, err := m.versions.GetVersion(ctx, baseline.ResourceID, baseline.RevisionID)
+	ctx, err := evaluationSkillContext(ctx, tenantID, baseline)
+	if err != nil {
+		return nil, err
+	}
+	version, err := m.versions.ResolvePublishedRevision(ctx, baseline.ResourceID, baseline.RevisionID)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
 		"instructions": version.Instructions,
-		"requirements": version.Requirements,
 	}, nil
 }
 
 func (m skillCandidateManager) CreateCandidate(
-	ctx context.Context, _ string, baseline evaldomain.ResourceRef, patch evaldomain.CandidatePatch,
+	ctx context.Context, tenantID string, baseline evaldomain.ResourceRef, patch evaldomain.CandidatePatch,
 ) (evaldomain.ResourceRef, error) {
+	ctx, err := evaluationSkillContext(ctx, tenantID, baseline)
+	if err != nil {
+		return evaldomain.ResourceRef{}, err
+	}
+	if _, err := m.versions.ResolvePublishedRevision(ctx, baseline.ResourceID, baseline.RevisionID); err != nil {
+		return evaldomain.ResourceRef{}, err
+	}
 	version, err := m.versions.CreateCandidate(ctx, baseline.ResourceID, baseline.RevisionID, skillapp.CandidateInput{
 		Source: patch.Source, PromptPatch: patch.PromptPatch,
 		GenerationMetadata: map[string]any{"rationale": patch.Rationale},
@@ -77,6 +87,56 @@ func (m skillCandidateManager) CreateCandidate(
 	return evaldomain.ResourceRef{
 		Kind: baseline.Kind, ResourceID: baseline.ResourceID, RevisionID: version.ID,
 	}, nil
+}
+
+func (m skillCandidateManager) ResolveRevision(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (evaldomain.ResourceRevision, error) {
+	ctx, err := evaluationSkillContext(ctx, tenantID, ref)
+	if err != nil {
+		return evaldomain.ResourceRevision{}, err
+	}
+	version, err := m.versions.ResolvePublishedRevision(ctx, ref.ResourceID, ref.RevisionID)
+	if err != nil {
+		return evaldomain.ResourceRevision{}, err
+	}
+	summary, err := m.versions.PublishedRevisionSafeSummary(ctx, ref.ResourceID, ref.RevisionID)
+	if err != nil {
+		return evaldomain.ResourceRevision{}, err
+	}
+	return evaldomain.ResourceRevision{
+		ID: version.ID, ResourceKind: evaldomain.ResourceKindSkill, ResourceID: version.SkillID,
+		Source: evaldomain.RevisionSourceManual, Status: evaldomain.RevisionStatusPublished,
+		ContentHash: version.ContentHash, PayloadRef: "skill://" + version.ID, PayloadHash: version.ContentHash,
+		SafeSummary: summary,
+	}, nil
+}
+
+func (m skillCandidateManager) SafeSummary(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (map[string]any, error) {
+	ctx, err := evaluationSkillContext(ctx, tenantID, ref)
+	if err != nil {
+		return nil, err
+	}
+	return m.versions.PublishedRevisionSafeSummary(ctx, ref.ResourceID, ref.RevisionID)
+}
+
+func evaluationSkillContext(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (context.Context, error) {
+	if strings.TrimSpace(tenantID) == "" {
+		return nil, fmt.Errorf("evaluation Skill adapter: tenant ID required")
+	}
+	if ref.Kind != evaldomain.ResourceKindSkill {
+		return nil, fmt.Errorf("evaluation Skill adapter: unsupported resource kind %q", ref.Kind)
+	}
+	if err := ref.Validate(); err != nil {
+		return nil, fmt.Errorf("evaluation Skill adapter: %w", err)
+	}
+	return postgres.WithTenant(ctx, &postgres.TenantContext{
+		TenantID: tenantID, UserID: "evaluation-worker", Role: postgres.RoleTenantAdmin,
+	}), nil
 }
 
 type gatewayPromptRewriter struct {
@@ -148,9 +208,22 @@ type evaluationTenantLister struct {
 }
 
 type agentScenarioEvaluationAdapter struct {
-	agents   *agentapp.AgentService
-	skills   agentport.SkillActivationResolver
-	bindings agentport.AgentSkillBinding
+	agents    *agentapp.AgentService
+	skills    agentport.SkillActivationResolver
+	bindings  agentport.AgentSkillBinding
+	resources skillCandidateManager
+}
+
+func (a agentScenarioEvaluationAdapter) ResolveRevision(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (evaldomain.ResourceRevision, error) {
+	return a.resources.ResolveRevision(ctx, tenantID, ref)
+}
+
+func (a agentScenarioEvaluationAdapter) SafeSummary(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (map[string]any, error) {
+	return a.resources.SafeSummary(ctx, tenantID, ref)
 }
 
 func (a agentScenarioEvaluationAdapter) ExecuteRevision(ctx context.Context, tenantID string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase) (evalport.ExecutionResult, error) {
@@ -277,14 +350,15 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	candidateRepo := evalpersist.NewPgCandidateCommandRepository(db)
 	suiteService := evalapp.NewSuiteService(suiteRepo)
 	activationResolver := publishedSkillActivationResolver{versions: c.Skill.VersionService}
+	manager := skillCandidateManager{versions: c.Skill.VersionService}
 	adapter := agentScenarioEvaluationAdapter{
-		agents:   c.Agent.Service,
-		skills:   activationResolver,
-		bindings: agentpersist.NewPgAgentRepo(db),
+		agents:    c.Agent.Service,
+		skills:    activationResolver,
+		bindings:  agentpersist.NewPgAgentRepo(db),
+		resources: manager,
 	}
 	service := evalapp.NewService(adapter, runRepo, suiteRepo)
 	jobService := evalapp.NewJobService(jobRepo, service)
-	manager := skillCandidateManager{versions: c.Skill.VersionService}
 	var rewriter evalapp.PromptRewriter
 	if c.Agent != nil && c.Agent.TenantResolver != nil {
 		rewriter = gatewayPromptRewriter{resolver: c.Agent.TenantResolver}

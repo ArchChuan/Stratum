@@ -176,6 +176,32 @@ func (s *VersionService) GetVersion(ctx context.Context, skillID, revisionID str
 	return revision, nil
 }
 
+func (s *VersionService) ResolvePublishedRevision(
+	ctx context.Context, skillID, revisionID string,
+) (domain.SkillRevision, error) {
+	revision, err := s.GetVersion(ctx, skillID, revisionID)
+	if err != nil {
+		return domain.SkillRevision{}, err
+	}
+	if revision.Status != domain.VersionStatusPublished {
+		return domain.SkillRevision{}, fmt.Errorf("skill revision is not published: %s", revisionID)
+	}
+	return revision, nil
+}
+
+func (s *VersionService) PublishedRevisionSafeSummary(
+	ctx context.Context, skillID, revisionID string,
+) (map[string]any, error) {
+	revision, err := s.ResolvePublishedRevision(ctx, skillID, revisionID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"version_label":  fmt.Sprintf("revision-%d", revision.RevisionNo),
+		"changed_fields": []string{"instructions"},
+	}, nil
+}
+
 func (s *VersionService) CreateCandidate(
 	ctx context.Context, skillID, baselineRevisionID string, in CandidateInput,
 ) (domain.SkillRevision, error) {

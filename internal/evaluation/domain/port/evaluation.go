@@ -36,6 +36,8 @@ type ExecutionResult struct {
 
 type ResourceAdapter interface {
 	ExecuteRevision(ctx context.Context, tenantID string, ref domain.ResourceRef, testCase domain.EvalCase) (ExecutionResult, error)
+	ResolveRevision(context.Context, string, domain.ResourceRef) (domain.ResourceRevision, error)
+	SafeSummary(context.Context, string, domain.ResourceRef) (map[string]any, error)
 }
 
 type RunRepository interface {
