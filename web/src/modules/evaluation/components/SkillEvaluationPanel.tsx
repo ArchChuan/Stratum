@@ -88,6 +88,7 @@ export const SkillEvaluationPanel = ({ skillId, stableRevisionId, isAdmin }: Ski
       suiteRevisionId: suiteRevision.id,
       searchSpace: {},
       failureSummaries: ['在保持现有通过用例的前提下，提高 instructions 的清晰度、约束性和稳定性。'],
+      idempotencyKey: crypto.randomUUID(),
     });
     const first = result.candidates[0]?.revision;
     if (!first) throw new Error('未生成候选版本');

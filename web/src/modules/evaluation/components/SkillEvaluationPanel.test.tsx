@@ -129,4 +129,42 @@ describe('SkillEvaluationPanel', () => {
     expect(await screen.findByText(/experiment-1/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '打开评测与进化中心' })).toBeInTheDocument();
   });
+
+  it('每次生成候选版本都发送新的幂等键', async () => {
+    createSuite.mockResolvedValue({
+      suite: { id: 'suite-1', name: '回归评测' },
+      revision: { id: 'draft-1', suite_id: 'suite-1', status: 'draft', resource_kind: 'skill', cases: [] },
+    });
+    publishSuite.mockResolvedValue({
+      id: 'revision-1', suite_id: 'suite-1', status: 'published', resource_kind: 'skill', cases: [],
+    });
+    enqueueRun.mockResolvedValue({ job_id: 'job-stable', status: 'queued' });
+    getJob.mockResolvedValue({ job_id: 'job-stable', status: 'succeeded', result_id: 'run-stable' });
+    getRun.mockResolvedValue({ id: 'run-stable', passed: true, total_cases: 1, passed_cases: 1, results: [] });
+    generateOptimization.mockResolvedValue({
+      job: { id: 'optimization-1', status: 'succeeded' },
+      candidates: [{
+        id: 'candidate-1', optimization_job_id: 'optimization-1', parent_revision_id: 'stable-1',
+        source: 'llm_rewrite', revision: { kind: 'skill', resource_id: 'skill-1', revision_id: 'canary-1' },
+      }],
+    });
+
+    render(<SkillEvaluationPanel skillId="skill-1" stableRevisionId="stable-1" isAdmin />);
+    fireEvent.click(screen.getByRole('button', { name: '创建并发布评测集' }));
+    fireEvent.click(await screen.findByRole('button', { name: '运行基线评测' }));
+    const generateButton = await screen.findByRole('button', { name: '生成候选版本' });
+
+    fireEvent.click(generateButton);
+    await waitFor(() => expect(generateOptimization).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(generateButton).toBeEnabled());
+    fireEvent.click(generateButton);
+    await waitFor(() => expect(generateOptimization).toHaveBeenCalledTimes(2));
+
+    const firstKey = generateOptimization.mock.calls[0][0].idempotencyKey;
+    const secondKey = generateOptimization.mock.calls[1][0].idempotencyKey;
+    expect(firstKey).toEqual(expect.any(String));
+    expect(firstKey).not.toBe('');
+    expect(secondKey).toEqual(expect.any(String));
+    expect(secondKey).not.toBe(firstKey);
+  });
 });

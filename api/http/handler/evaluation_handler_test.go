@@ -62,6 +62,27 @@ func TestEvaluationHandlerGenerateOptimizationReturnsCandidates(t *testing.T) {
 	}
 }
 
+func TestEvaluationHandlerGenerateOptimizationAcceptsLegacyRequestWithoutIdempotencyKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	optimization := &fakeOptimizationService{}
+	h := NewEvaluationHandler(nil, &fakeEvaluationJobs{}, nil, optimization, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.POST("/evaluations/optimizations", withTenant("tenant-1"), h.GenerateOptimization)
+	req := httptest.NewRequest(http.MethodPost, "/evaluations/optimizations", strings.NewReader(`{
+		"baseline":{"kind":"skill","resource_id":"skill-1","revision_id":"version-1"},
+		"suite_revision_id":"suite-revision-1","search_space":{}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if optimization.input.IdempotencyKey != "" {
+		t.Fatalf("legacy request should preserve empty key for application fallback: %+v", optimization.input)
+	}
+}
+
 func TestEvaluationHandlerGenerateOptimizationUsesHeaderAndMapsConflict(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	optimization := &fakeOptimizationService{err: domain.ErrOptimizationIdempotencyConflict}

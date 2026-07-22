@@ -71,7 +71,7 @@ Reuse the existing `skillCandidateManager.LoadOptimizableSnapshot/CreateCandidat
 
 - [ ] **Step 4: Migrate the Skill panel to a center link**
 
-Keep existing create/run behavior compatible, replace optimization/experiment duplication with a compact status summary and a `打开评测与进化中心` link carrying `kind=skill` and `resource_id`. Preserve admin gating and published-revision warning. Add tests for member read access, admin command visibility, and link query parameters.
+Keep existing create/run behavior compatible and add a `打开评测与进化中心` link carrying `kind=skill` and `resource_id`. Because the `/evaluations` route is delivered by Task 5, Task 1 temporarily retains the existing candidate generation, candidate run, and experiment controls so the link does not replace the only working workflow with a dead end. Preserve admin gating and published-revision warning. Add tests for member read access, admin command visibility, and link query parameters.
 
 - [ ] **Step 5: Run tests and commit**
 
@@ -249,7 +249,7 @@ Extend existing Zod models and `evaluationApi` methods for overview, resources, 
 
 - [ ] **Step 4: Register route and menu**
 
-Add `/evaluations` to private routes and `评测与进化` to the tenant navigation. Keep the entry visible to tenant members for read access; hide new-evaluation and decision commands for non-admins. Update open-key resolution and route tests.
+Add `/evaluations` to private routes and `评测与进化` to the tenant navigation. Keep the entry visible to tenant members for read access; hide new-evaluation and decision commands for non-admins. Update open-key resolution and route tests. Once this route and the center workflow are complete, remove the temporary candidate generation, run, and experiment orchestration from `SkillEvaluationPanel`; the center must become the single entry point for those commands rather than leaving duplicate workflows in both surfaces.
 
 - [ ] **Step 5: Run frontend tests and commit**
 
