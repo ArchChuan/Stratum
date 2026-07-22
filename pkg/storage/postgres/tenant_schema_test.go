@@ -439,6 +439,26 @@ func TestTenantSchemaContainsEvaluationControlPlane(t *testing.T) {
 	}
 }
 
+func TestTenantSchemaIndexesEvaluationCenterCandidateQueriesAfterTables(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	for table, index := range map[string]string{
+		"CREATE TABLE IF NOT EXISTS optimization_jobs":       "CREATE INDEX IF NOT EXISTS idx_optimization_jobs_center_query",
+		"CREATE TABLE IF NOT EXISTS optimization_candidates": "CREATE INDEX IF NOT EXISTS idx_optimization_candidates_job_created",
+	} {
+		tableAt, indexAt := strings.Index(sql, table), strings.Index(sql, index)
+		if indexAt == -1 {
+			t.Fatalf("tenant_schema.sql missing evaluation center index %q", index)
+		}
+		if tableAt == -1 || indexAt < tableAt {
+			t.Fatalf("evaluation center index %q must follow %q", index, table)
+		}
+	}
+}
+
 func TestTenantSchemaDropsObsoleteAgentObservationTables(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {

@@ -202,6 +202,8 @@ CREATE TABLE IF NOT EXISTS optimization_jobs (
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at          TIMESTAMPTZ
 );
+CREATE INDEX IF NOT EXISTS idx_optimization_jobs_center_query
+    ON optimization_jobs(resource_kind, resource_id, status, created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS optimization_candidates (
     id                    TEXT PRIMARY KEY,
@@ -215,6 +217,8 @@ CREATE TABLE IF NOT EXISTS optimization_candidates (
     rank                  INT,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_optimization_candidates_job_created
+    ON optimization_candidates(optimization_job_id, created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS evaluation_experiments (
     id                    TEXT PRIMARY KEY,
