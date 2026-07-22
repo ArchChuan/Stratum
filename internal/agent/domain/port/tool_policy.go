@@ -3,15 +3,17 @@ package port
 import (
 	"context"
 	"fmt"
+
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 )
 
-type ToolRiskLevel string
+type ToolRiskLevel = domain.ToolRiskLevel
 
 const (
-	ToolRiskRead            ToolRiskLevel = "read"
-	ToolRiskWriteReversible ToolRiskLevel = "write_reversible"
-	ToolRiskDestructive     ToolRiskLevel = "destructive"
-	ToolRiskUnclassified    ToolRiskLevel = "unclassified"
+	ToolRiskRead            = domain.ToolRiskRead
+	ToolRiskWriteReversible = domain.ToolRiskWriteReversible
+	ToolRiskDestructive     = domain.ToolRiskDestructive
+	ToolRiskUnclassified    = domain.ToolRiskUnclassified
 )
 
 func ParseToolRiskLevel(value any) ToolRiskLevel {
@@ -22,10 +24,6 @@ func ParseToolRiskLevel(value any) ToolRiskLevel {
 	default:
 		return ToolRiskUnclassified
 	}
-}
-
-func (r ToolRiskLevel) RequiresApproval() bool {
-	return r == ToolRiskDestructive || r == ToolRiskUnclassified
 }
 
 type ToolApprovalRequest struct {
