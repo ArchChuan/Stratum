@@ -93,7 +93,7 @@ func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalP
 		EncryptedPayload: encrypted, Status: "pending", ExpiresAt: expires,
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("create tool approval: %w", err)
 	}
 	if s.checkpoints != nil {
 		runtime, _ := json.Marshal(map[string]string{"approval_id": id})
@@ -104,8 +104,11 @@ func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalP
 			CurrentNode:    "tool_approval", PendingToolCallsJSON: pending, RuntimeStateJSON: runtime,
 			Status: "waiting_approval", ResumeReason: "destructive_tool_approval", ExpiresAt: expires,
 		})
+		if err != nil {
+			return "", fmt.Errorf("persist tool approval checkpoint: %w", err)
+		}
 	}
-	return id, err
+	return id, nil
 }
 
 func (s *ToolApprovalService) ApprovedPayload(ctx context.Context, tenantID, approvalID string) (ToolApprovalPayload, error) {
@@ -174,7 +177,7 @@ func (s *ToolApprovalService) ExecuteApproved(ctx context.Context, tenantID, id,
 		return nil, errors.New("approved tool call does not match pinned request")
 	}
 	if err := s.repo.ClaimExecution(ctx, tenantID, id); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("claim tool approval execution: %w", err)
 	}
 	output, err := executor.ExecuteMCPTool(ctx, serverID, toolName, args)
 	if err != nil {
@@ -193,7 +196,7 @@ func (s *ToolApprovalService) ExecuteApproved(ctx context.Context, tenantID, id,
 		return nil, err
 	}
 	if err := s.repo.MarkExecuted(ctx, tenantID, id); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mark tool approval executed: %w", err)
 	}
 	return output, nil
 }

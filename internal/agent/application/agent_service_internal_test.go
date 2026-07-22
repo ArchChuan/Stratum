@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -13,6 +14,30 @@ type optionCaptureAgent struct {
 	config    *AgentConfig
 	gateway   port.CapabilityGateway
 	compactor port.HistoryCompactor
+}
+
+type completionFailureCheckpoint struct {
+	err error
+}
+
+func (f completionFailureCheckpoint) Upsert(context.Context, string, domain.AgentExecutionCheckpoint) error {
+	return nil
+}
+func (f completionFailureCheckpoint) GetLatest(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
+	return nil, errors.New("unused")
+}
+func (f completionFailureCheckpoint) MarkCompleted(context.Context, string, string) error {
+	return f.err
+}
+
+func TestCompleteApprovalResumePropagatesCheckpointPersistenceFailure(t *testing.T) {
+	persistErr := errors.New("checkpoint unavailable")
+	err := completeApprovalResume(
+		context.Background(), completionFailureCheckpoint{err: persistErr}, "tenant-1", "execution-1", nil,
+	)
+	if !errors.Is(err, persistErr) {
+		t.Fatalf("completeApprovalResume() error = %v, want %v", err, persistErr)
+	}
 }
 
 type tenantResolverFake struct{ gateway port.CapabilityGateway }

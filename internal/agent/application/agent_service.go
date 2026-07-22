@@ -538,10 +538,23 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approva
 	result, runErr := a.Execute(context.WithoutCancel(ctx), payload.Query, options...)
 	runErr = approvedToolResumeError(used, runErr)
 	duration := int(time.Since(start).Milliseconds())
-	if runErr == nil && s.deps.CheckpointStore != nil {
-		_ = s.deps.CheckpointStore.MarkCompleted(ctx, tenantID, payload.ExecutionID)
-	}
+	runErr = completeApprovalResume(ctx, s.deps.CheckpointStore, tenantID, payload.ExecutionID, runErr)
 	return result, duration, runErr
+}
+
+func completeApprovalResume(
+	ctx context.Context,
+	checkpoints CheckpointStore,
+	tenantID, executionID string,
+	runErr error,
+) error {
+	if runErr != nil || checkpoints == nil {
+		return runErr
+	}
+	if err := checkpoints.MarkCompleted(ctx, tenantID, executionID); err != nil {
+		return fmt.Errorf("complete approved tool checkpoint: %w", err)
+	}
+	return nil
 }
 
 func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, activation port.SkillActivation) (*AgentResult, int, error) {

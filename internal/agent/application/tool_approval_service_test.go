@@ -13,9 +13,10 @@ import (
 )
 
 type approvalRepoFake struct {
-	row                              domain.ToolApproval
-	createErr, decideErr, executeErr error
-	released, outcomeUnknown         int
+	row                                                 domain.ToolApproval
+	createErr, decideErr, claimErr, markErr, releaseErr error
+	unknownErr                                          error
+	released, outcomeUnknown                            int
 }
 
 func (f *approvalRepoFake) Create(_ context.Context, _ string, row domain.ToolApproval) (string, error) {
@@ -31,15 +32,15 @@ func (f *approvalRepoFake) Get(_ context.Context, _, _ string) (domain.ToolAppro
 func (f *approvalRepoFake) Decide(_ context.Context, _, _, _, _, _ string, _ time.Time) error {
 	return f.decideErr
 }
-func (f *approvalRepoFake) MarkExecuted(_ context.Context, _, _ string) error   { return f.executeErr }
-func (f *approvalRepoFake) ClaimExecution(_ context.Context, _, _ string) error { return f.executeErr }
+func (f *approvalRepoFake) MarkExecuted(_ context.Context, _, _ string) error   { return f.markErr }
+func (f *approvalRepoFake) ClaimExecution(_ context.Context, _, _ string) error { return f.claimErr }
 func (f *approvalRepoFake) ReleaseExecution(_ context.Context, _, _ string) error {
 	f.released++
-	return nil
+	return f.releaseErr
 }
 func (f *approvalRepoFake) MarkOutcomeUnknown(_ context.Context, _, _ string) error {
 	f.outcomeUnknown++
-	return nil
+	return f.unknownErr
 }
 func (f *approvalRepoFake) ListPending(_ context.Context, _ string) ([]domain.ToolApproval, error) {
 	return []domain.ToolApproval{f.row}, nil
@@ -172,6 +173,63 @@ func TestToolApprovalExecutionReleasesOnlyDefinitePreExecutionFailure(t *testing
 	require.Zero(t, repo.outcomeUnknown)
 }
 
+func TestToolApprovalPersistenceFailuresPropagate(t *testing.T) {
+	t.Run("approval create", func(t *testing.T) {
+		persistErr := errors.New("approval create failed")
+		repo := &approvalRepoFake{createErr: persistErr}
+		_, err := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("key")).Request(
+			context.Background(), ToolApprovalPayload{TenantID: "tenant-1", Arguments: map[string]any{}},
+		)
+		require.ErrorIs(t, err, persistErr)
+	})
+
+	t.Run("checkpoint upsert", func(t *testing.T) {
+		persistErr := errors.New("checkpoint upsert failed")
+		checkpoints := &checkpointFake{err: persistErr}
+		_, err := NewToolApprovalService(&approvalRepoFake{}, checkpoints, crypto.DeriveAESKey("key")).Request(
+			context.Background(), ToolApprovalPayload{
+				TenantID: "tenant-1", ExecutionID: "exec-1", Arguments: map[string]any{},
+			},
+		)
+		require.ErrorIs(t, err, persistErr)
+	})
+
+	t.Run("execution claim before side effect", func(t *testing.T) {
+		persistErr := errors.New("claim failed")
+		repo, svc, payload := approvedToolApprovalFixture(t)
+		repo.claimErr = persistErr
+		executor := &countingMCPExecutor{}
+		_, err := svc.ExecuteApproved(
+			context.Background(), "tenant-1", "approval-1", "orders", "delete", payload.Arguments, executor,
+		)
+		require.ErrorIs(t, err, persistErr)
+		require.Zero(t, executor.calls)
+	})
+
+	t.Run("executed status after side effect", func(t *testing.T) {
+		persistErr := errors.New("mark executed failed")
+		repo, svc, payload := approvedToolApprovalFixture(t)
+		repo.markErr = persistErr
+		executor := &countingMCPExecutor{}
+		_, err := svc.ExecuteApproved(
+			context.Background(), "tenant-1", "approval-1", "orders", "delete", payload.Arguments, executor,
+		)
+		require.ErrorIs(t, err, persistErr)
+		require.Equal(t, 1, executor.calls)
+	})
+
+	t.Run("unknown outcome status", func(t *testing.T) {
+		persistErr := errors.New("mark unknown failed")
+		repo, svc, payload := approvedToolApprovalFixture(t)
+		repo.unknownErr = persistErr
+		_, err := svc.ExecuteApproved(
+			context.Background(), "tenant-1", "approval-1", "orders", "delete", payload.Arguments,
+			failingMCPExecutor{err: errors.New("untyped transport error")},
+		)
+		require.ErrorIs(t, err, persistErr)
+	})
+}
+
 func approvedToolApprovalFixture(t *testing.T) (*approvalRepoFake, *ToolApprovalService, ToolApprovalPayload) {
 	t.Helper()
 	repo := &approvalRepoFake{}
@@ -199,11 +257,12 @@ func TestApprovedToolResumeErrorRequiresPinnedCallToBeConsumed(t *testing.T) {
 
 type checkpointFake struct {
 	row domain.AgentExecutionCheckpoint
+	err error
 }
 
 func (f *checkpointFake) Upsert(_ context.Context, _ string, row domain.AgentExecutionCheckpoint) error {
 	f.row = row
-	return nil
+	return f.err
 }
 func (f *checkpointFake) GetLatest(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
 	return nil, errors.New("unused")

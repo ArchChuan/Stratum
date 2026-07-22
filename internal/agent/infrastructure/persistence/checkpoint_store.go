@@ -98,7 +98,7 @@ func (s *PgCheckpointStore) GetLatest(
 
 func (s *PgCheckpointStore) MarkCompleted(ctx context.Context, tenantID, executionID string) error {
 	return execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx,
+		tag, err := tx.Exec(ctx,
 			`UPDATE agent_execution_checkpoints
 			    SET status = 'completed', updated_at = NOW()
 			  WHERE execution_id = $1`,
@@ -106,6 +106,9 @@ func (s *PgCheckpointStore) MarkCompleted(ctx context.Context, tenantID, executi
 		)
 		if err != nil {
 			return fmt.Errorf("checkpoint_store: mark completed: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return fmt.Errorf("checkpoint_store: mark completed: execution not found")
 		}
 		return nil
 	})
