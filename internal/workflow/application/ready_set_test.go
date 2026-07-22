@@ -51,6 +51,37 @@ func TestReadySetSkipsUnselectedConditionBranchAndPropagates(t *testing.T) {
 	require.ElementsMatch(t, []string{"yes", "yes_child"}, skipped)
 }
 
+func TestReadySetReturnsStableOrderForUnorderedDefinition(t *testing.T) {
+	spec := domain.Spec{
+		Nodes: []domain.Node{
+			{ID: "zulu", Type: domain.NodeTypeAgent, AgentID: "z"},
+			{ID: "alpha", Type: domain.NodeTypeAgent, AgentID: "a"},
+			{ID: "middle", Type: domain.NodeTypeAgent, AgentID: "m"},
+		},
+	}
+
+	ready, skipped := application.ReadySet(spec, nil)
+	require.Equal(t, []string{"alpha", "middle", "zulu"}, nodeIDs(ready))
+	require.Empty(t, skipped)
+}
+
+func TestReadySetDoesNotReleaseChildAfterParentFailure(t *testing.T) {
+	spec := domain.Spec{
+		Nodes: []domain.Node{
+			{ID: "parent", Type: domain.NodeTypeAgent, AgentID: "a"},
+			{ID: "child", Type: domain.NodeTypeAgent, AgentID: "b"},
+		},
+		Edges: []domain.Edge{{From: "parent", To: "child"}},
+	}
+
+	ready, skipped := application.ReadySet(spec, []domain.NodeAttempt{{
+		NodeID: "parent",
+		Status: domain.AttemptStatusFailed,
+	}})
+	require.Empty(t, ready)
+	require.Empty(t, skipped)
+}
+
 func nodeIDs(nodes []domain.Node) []string {
 	ids := make([]string, 0, len(nodes))
 	for _, node := range nodes {

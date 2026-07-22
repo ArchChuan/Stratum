@@ -65,20 +65,20 @@ git commit -m "[feat](dag): add deterministic scheduling kernel"
 - Modify: `internal/workflow/application/service.go`
 - Test: `internal/workflow/application/dag_scheduler_test.go`
 
-- [ ] **Step 1: Add characterization tests**
+- [x] **Step 1: Add characterization tests**
 
 Add cases covering retry-wait, condition-edge selection, skipped branch propagation, failed upstream behavior, and stable ordering. Preserve the existing `ReadySet(spec, attempts)` and private `readySet` outputs.
 
-- [ ] **Step 2: Verify characterization tests pass before refactoring**
+- [x] **Step 2: Verify characterization tests pass before refactoring**
 
 Run: `go test ./internal/workflow/application -run 'ReadySet|DAGScheduler'`
 Expected: PASS.
 
-- [ ] **Step 3: Adapt Workflow to `pkg/dag`**
+- [x] **Step 3: Adapt Workflow to `pkg/dag`**
 
 Map Workflow nodes and latest attempts to `dag.Node`/`dag.Status`; retain condition-edge resolution, retry timing, and branch skipping in Workflow-specific adapter code. Delete duplicated generic cycle/dependency readiness logic only after output parity is established.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `go test ./internal/workflow/application -run 'ReadySet|DAGScheduler'`
 Expected: PASS with unchanged Workflow behavior.
