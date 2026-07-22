@@ -38,6 +38,7 @@ type AgentServiceDeps struct {
 	MCPTools                port.MCPToolProvider
 	MCPToolExecutor         port.MCPToolExecutor
 	MCPToolPolicy           port.MCPToolPolicyResolver
+	ToolAuthorizer          *ToolAuthorizer
 	ApprovalService         *ToolApprovalService
 	ChatStore               ChatStore
 	EvidenceProvider        port.TraceEvidenceProvider
