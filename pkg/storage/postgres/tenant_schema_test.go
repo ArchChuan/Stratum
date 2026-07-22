@@ -363,6 +363,25 @@ func TestTenantSchemaUpgradeBackfillsExperimentStateBeforeDependentDDL(t *testin
 	}
 }
 
+func TestTenantSchemaUpgradeBackfillsOptimizationIdempotencyBeforeUniqueIndex(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	keyBackfill := strings.Index(sql,
+		"ALTER TABLE optimization_jobs ADD COLUMN IF NOT EXISTS idempotency_key TEXT NOT NULL DEFAULT ''")
+	fingerprintBackfill := strings.Index(sql,
+		"ALTER TABLE optimization_jobs ADD COLUMN IF NOT EXISTS request_fingerprint TEXT NOT NULL DEFAULT ''")
+	index := strings.Index(sql, "CREATE UNIQUE INDEX IF NOT EXISTS idx_optimization_jobs_idempotency")
+	if keyBackfill == -1 || fingerprintBackfill == -1 || index == -1 {
+		t.Fatal("tenant_schema.sql missing optimization idempotency upgrade DDL")
+	}
+	if index < keyBackfill || index < fingerprintBackfill {
+		t.Fatal("optimization idempotency index must follow historical column backfills")
+	}
+}
+
 func TestTenantSchemaContainsMCPToolPolicyAndEncryptedApprovals(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {

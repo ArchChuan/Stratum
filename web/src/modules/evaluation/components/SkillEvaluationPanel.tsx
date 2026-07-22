@@ -1,10 +1,10 @@
 import { ArrowRightOutlined } from '@ant-design/icons';
-import { Alert, Button, Input, Space, Typography, message } from 'antd';
+import { Alert, Button, Input, Modal, Space, Typography, message } from 'antd';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { evaluationApi } from '../api/evaluation.api';
-import type { EvaluationRun, ResourceRef, SuiteRevision } from '../model/evaluation';
+import type { EvaluationRun, ExperimentResponse, ResourceRef, SuiteRevision } from '../model/evaluation';
 
 import { EVALUATION_JOB_MAX_WAIT_MS, EVALUATION_JOB_POLL_INTERVAL_MS } from '@/constants';
 import { extractErrorMessage } from '@/shared/lib';
@@ -23,6 +23,9 @@ export const SkillEvaluationPanel = ({ skillId, stableRevisionId, isAdmin }: Ski
   const [expectedOutput, setExpectedOutput] = useState('E2E_PASS');
   const [suiteRevision, setSuiteRevision] = useState<SuiteRevision | null>(null);
   const [stableRun, setStableRun] = useState<EvaluationRun | null>(null);
+  const [candidate, setCandidate] = useState<ResourceRef | null>(null);
+  const [candidateRun, setCandidateRun] = useState<EvaluationRun | null>(null);
+  const [experiment, setExperiment] = useState<ExperimentResponse | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState('');
 
@@ -78,6 +81,44 @@ export const SkillEvaluationPanel = ({ skillId, stableRevisionId, isAdmin }: Ski
     setStableRun(await runEvaluation(stableRevisionId));
   });
 
+  const generateCandidate = () => perform('candidate', async () => {
+    if (!suiteRevision) throw new Error('请先创建评测集');
+    const result = await evaluationApi.generateOptimization({
+      baseline: { kind: 'skill', resource_id: skillId, revision_id: stableRevisionId },
+      suiteRevisionId: suiteRevision.id,
+      searchSpace: {},
+      failureSummaries: ['在保持现有通过用例的前提下，提高 instructions 的清晰度、约束性和稳定性。'],
+    });
+    const first = result.candidates[0]?.revision;
+    if (!first) throw new Error('未生成候选版本');
+    setCandidate(first);
+  });
+
+  const runCandidate = () => perform('candidate-run', async () => {
+    if (!candidate) throw new Error('请先生成候选版本');
+    setCandidateRun(await runEvaluation(candidate.revision_id));
+  });
+
+  const createExperiment = () => perform('experiment', async () => {
+    if (!suiteRevision || !candidate) throw new Error('请先完成候选评测');
+    const result = await evaluationApi.createExperiment(
+      { kind: 'skill', resource_id: skillId, revision_id: stableRevisionId },
+      candidate,
+      suiteRevision.id,
+    );
+    setExperiment(result);
+  });
+
+  const confirmExperiment = () => {
+    Modal.confirm({
+      title: '确认创建灰度实验？',
+      content: '候选版本将接收 5% 的真实流量，并由质量、成本、延迟和错误率护栏自动决策。',
+      okText: '确认创建',
+      cancelText: '取消',
+      onOk: createExperiment,
+    });
+  };
+
   if (!stableRevisionId) {
     return <Alert type="warning" showIcon message="请先发布 Skill，再进行评测与优化。" />;
   }
@@ -104,9 +145,28 @@ export const SkillEvaluationPanel = ({ skillId, stableRevisionId, isAdmin }: Ski
       {suiteRevision && isAdmin && (
         <Space wrap>
           <Button loading={actionLoading === 'stable'} onClick={runStable}>运行基线评测</Button>
+          {stableRun?.passed && (
+            <Button loading={actionLoading === 'candidate'} onClick={generateCandidate}>生成候选版本</Button>
+          )}
+          {candidate && (
+            <Button loading={actionLoading === 'candidate-run'} onClick={runCandidate}>运行候选评测</Button>
+          )}
+          {candidateRun?.passed && (
+            <Button danger loading={actionLoading === 'experiment'} onClick={confirmExperiment}>创建 5% 灰度实验</Button>
+          )}
         </Space>
       )}
       {stableRun && <RunStatus label="基线评测" run={stableRun} />}
+      {candidate && <Paragraph>候选 revision：{candidate.revision_id}</Paragraph>}
+      {candidateRun && <RunStatus label="候选评测" run={candidateRun} />}
+      {experiment && (
+        <Alert
+          type="success"
+          showIcon
+          message={`实验 ${experiment.experiment.id}`}
+          description={`状态：${experiment.experiment.status}，灰度：${experiment.deployment.canary_percent}%`}
+        />
+      )}
     </Space>
   );
 };

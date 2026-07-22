@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -212,6 +213,7 @@ func (h *EvaluationHandler) GenerateOptimization(c *gin.Context) {
 		return
 	}
 	job, candidates, err := h.optimization.Generate(c.Request.Context(), tenantID, evalapp.GenerateCandidatesInput{
+		IdempotencyKey: firstNonEmpty(req.IdempotencyKey, c.GetHeader("Idempotency-Key")),
 		Baseline: domain.ResourceRef{
 			Kind: domain.ResourceKind(req.Baseline.Kind), ResourceID: req.Baseline.ResourceID,
 			RevisionID: req.Baseline.RevisionID,
@@ -224,6 +226,15 @@ func (h *EvaluationHandler) GenerateOptimization(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"job": job, "candidates": candidates})
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (h *EvaluationHandler) CreateExperiment(c *gin.Context) {

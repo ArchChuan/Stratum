@@ -87,7 +87,7 @@ describe('SkillEvaluationPanel', () => {
     expect(await screen.findByText(/revision-1/)).toBeInTheDocument();
   });
 
-  it('完成基线评测并将优化和实验交给评测中心', async () => {
+  it('保留完整候选与灰度流程并同时提供评测中心入口', async () => {
     createSuite.mockResolvedValue({
       suite: { id: 'suite-1', name: '回归评测' },
       revision: { id: 'draft-1', suite_id: 'suite-1', status: 'draft', resource_kind: 'skill', cases: [] },
@@ -95,15 +95,38 @@ describe('SkillEvaluationPanel', () => {
     publishSuite.mockResolvedValue({
       id: 'revision-1', suite_id: 'suite-1', status: 'published', resource_kind: 'skill', cases: [],
     });
-    enqueueRun.mockResolvedValueOnce({ job_id: 'job-stable', status: 'queued' });
-    getJob.mockResolvedValueOnce({ job_id: 'job-stable', status: 'succeeded', result_id: 'run-stable' });
-    getRun.mockResolvedValueOnce({ id: 'run-stable', passed: true, total_cases: 1, passed_cases: 1, results: [] });
+    enqueueRun
+      .mockResolvedValueOnce({ job_id: 'job-stable', status: 'queued' })
+      .mockResolvedValueOnce({ job_id: 'job-canary', status: 'queued' });
+    getJob
+      .mockResolvedValueOnce({ job_id: 'job-stable', status: 'succeeded', result_id: 'run-stable' })
+      .mockResolvedValueOnce({ job_id: 'job-canary', status: 'succeeded', result_id: 'run-canary' });
+    getRun
+      .mockResolvedValueOnce({ id: 'run-stable', passed: true, total_cases: 1, passed_cases: 1, results: [] })
+      .mockResolvedValueOnce({ id: 'run-canary', passed: true, total_cases: 1, passed_cases: 1, results: [] });
+    generateOptimization.mockResolvedValue({
+      job: { id: 'optimization-1', status: 'succeeded' },
+      candidates: [{
+        id: 'candidate-1', optimization_job_id: 'optimization-1', parent_revision_id: 'stable-1',
+        source: 'llm_rewrite', revision: { kind: 'skill', resource_id: 'skill-1', revision_id: 'canary-1' },
+      }],
+    });
+    createExperiment.mockResolvedValue({
+      experiment: { id: 'experiment-1', status: 'running', stage: 5 },
+      deployment: { stable_revision_id: 'stable-1', canary_revision_id: 'canary-1', canary_percent: 5 },
+    });
 
     render(<SkillEvaluationPanel skillId="skill-1" stableRevisionId="stable-1" isAdmin />);
     fireEvent.click(screen.getByRole('button', { name: '创建并发布评测集' }));
     fireEvent.click(await screen.findByRole('button', { name: '运行基线评测' }));
     expect(await screen.findByText('基线评测：通过（1/1）')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '生成候选版本' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '生成候选版本' }));
+    fireEvent.click(await screen.findByRole('button', { name: '运行候选评测' }));
+    expect(await screen.findByText('候选评测：通过（1/1）')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '创建 5% 灰度实验' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认创建' }));
+    await waitFor(() => expect(createExperiment).toHaveBeenCalled());
+    expect(await screen.findByText(/experiment-1/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '打开评测与进化中心' })).toBeInTheDocument();
   });
 });

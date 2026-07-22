@@ -48,13 +48,40 @@ func TestEvaluationHandlerGenerateOptimizationReturnsCandidates(t *testing.T) {
 	r.POST("/evaluations/optimizations", withTenant("tenant-1"), h.GenerateOptimization)
 	req := httptest.NewRequest(http.MethodPost, "/evaluations/optimizations", strings.NewReader(`{
 		"baseline":{"kind":"skill","resource_id":"skill-1","revision_id":"version-1"},
-		"suite_revision_id":"suite-revision-1","search_space":{"temperature":[0.1,0.2]}
+		"suite_revision_id":"suite-revision-1","search_space":{"temperature":[0.1,0.2]},
+		"idempotency_key":"request-1"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"revision_id":"candidate-1"`) {
 		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if optimization.input.IdempotencyKey != "request-1" {
+		t.Fatalf("idempotency key not propagated: %+v", optimization.input)
+	}
+}
+
+func TestEvaluationHandlerGenerateOptimizationUsesHeaderAndMapsConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	optimization := &fakeOptimizationService{err: domain.ErrOptimizationIdempotencyConflict}
+	h := NewEvaluationHandler(nil, &fakeEvaluationJobs{}, nil, optimization, nil, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/evaluations/optimizations", withTenant("tenant-1"), h.GenerateOptimization)
+	req := httptest.NewRequest(http.MethodPost, "/evaluations/optimizations", strings.NewReader(`{
+		"baseline":{"kind":"skill","resource_id":"skill-1","revision_id":"version-1"},
+		"suite_revision_id":"suite-revision-1"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "header-key")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || rec.Body.String() != `{"error":"optimization idempotency conflict"}` {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if optimization.input.IdempotencyKey != "header-key" {
+		t.Fatalf("header key not propagated: %+v", optimization.input)
 	}
 }
 
@@ -239,11 +266,18 @@ func (f *fakeEvaluationJobs) Get(_ context.Context, _ string, _ string) (domain.
 	return domain.EvaluationJob{ID: "job-1", Status: domain.JobQueued}, nil
 }
 
-type fakeOptimizationService struct{}
+type fakeOptimizationService struct {
+	input application.GenerateCandidatesInput
+	err   error
+}
 
 func (f *fakeOptimizationService) Generate(
 	_ context.Context, _ string, input application.GenerateCandidatesInput,
 ) (domain.OptimizationJob, []domain.OptimizationCandidate, error) {
+	f.input = input
+	if f.err != nil {
+		return domain.OptimizationJob{}, nil, f.err
+	}
 	job := domain.OptimizationJob{ID: "optimization-1", Baseline: input.Baseline, Status: domain.JobSucceeded}
 	return job, []domain.OptimizationCandidate{{
 		ID: "candidate-record-1", OptimizationJobID: job.ID,

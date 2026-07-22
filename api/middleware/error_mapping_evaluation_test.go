@@ -20,6 +20,7 @@ func TestMapEvaluationEvolutionErrors(t *testing.T) {
 		{domain.ErrExperimentCommandConflict, http.StatusConflict},
 		{domain.ErrExperimentDeploymentConflict, http.StatusConflict},
 		{domain.ErrCandidateStateConflict, http.StatusConflict},
+		{domain.ErrOptimizationIdempotencyConflict, http.StatusConflict},
 	}
 	for _, tc := range tests {
 		if got := MapErrorToStatus(tc.err); got != tc.want {

@@ -67,12 +67,17 @@ type CandidateCreator interface {
 }
 
 type OptimizationRepository interface {
+	WithinTransaction(context.Context, string, func(context.Context) error) error
+	GetByIdempotencyKey(context.Context, string, string) (
+		domain.OptimizationJob, []domain.OptimizationCandidate, string, bool, error,
+	)
 	SaveJobWithCandidates(
 		ctx context.Context,
 		tenantID string,
 		job domain.OptimizationJob,
 		candidates []domain.OptimizationCandidate,
-	) error
+		idempotencyKey, requestFingerprint string,
+	) (bool, error)
 }
 
 type CandidateCommandRepository interface {

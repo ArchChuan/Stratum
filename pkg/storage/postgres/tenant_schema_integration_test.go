@@ -137,7 +137,6 @@ func TestProvisionTenantSchemaBackfillsWorkflowProductColumns(t *testing.T) {
 	if err := postgres.ProvisionPublicSchema(ctx, pool, zap.NewNop()); err != nil {
 		t.Fatal(err)
 	}
-
 	tenantID := fmt.Sprintf("tmp_workflow_product_%d", time.Now().UnixNano())
 	schema := `tenant_` + tenantID
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`) })
@@ -165,6 +164,72 @@ func TestProvisionTenantSchemaBackfillsWorkflowProductColumns(t *testing.T) {
 	}
 	if columns != 3 || indexes != 1 {
 		t.Fatalf("workflow product backfill incomplete: columns=%d indexes=%d", columns, indexes)
+	}
+}
+
+func TestProvisionTenantSchemaUpgradesOptimizationIdempotencyWithoutDataLoss(t *testing.T) {
+	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
+	if url == "" {
+		t.Skip("STRATUM_TEST_POSTGRES_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := postgres.ProvisionPublicSchema(ctx, pool, zap.NewNop()); err != nil {
+		t.Fatal(err)
+	}
+	tenantID := fmt.Sprintf("tmp_optimization_upgrade_%d", time.Now().UnixNano())
+	schema := "tenant_" + tenantID
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`) })
+	legacy := `CREATE SCHEMA "` + schema + `"; SET search_path = "` + schema + `", public;
+		CREATE TABLE eval_suites (
+		 id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL DEFAULT '',
+		 active_revision_id TEXT, draft_revision_id TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE TABLE eval_suite_revisions (
+		 id TEXT PRIMARY KEY, suite_id TEXT NOT NULL REFERENCES eval_suites(id), parent_id TEXT,
+		 version_no INT, status TEXT NOT NULL DEFAULT 'draft', resource_kind TEXT NOT NULL,
+		 created_by TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), published_at TIMESTAMPTZ
+		);
+		CREATE TABLE optimization_jobs (
+		 id TEXT PRIMARY KEY, resource_kind TEXT NOT NULL, resource_id TEXT NOT NULL,
+		 baseline_revision_id TEXT NOT NULL, suite_revision_id TEXT NOT NULL REFERENCES eval_suite_revisions(id),
+		 status TEXT NOT NULL, search_space JSONB NOT NULL DEFAULT '{}', rewrite_config JSONB NOT NULL DEFAULT '{}',
+		 error_message TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '',
+		 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), completed_at TIMESTAMPTZ
+		);
+		INSERT INTO eval_suites(id,name) VALUES ('suite','legacy');
+		INSERT INTO eval_suite_revisions(id,suite_id,resource_kind) VALUES ('revision','suite','skill');
+		INSERT INTO optimization_jobs(id,resource_kind,resource_id,baseline_revision_id,suite_revision_id,status)
+		 VALUES ('legacy-job','skill','skill-1','revision-1','revision','succeeded');`
+	if _, err := pool.Exec(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var rows, columns, indexes int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM "`+schema+`".optimization_jobs WHERE id='legacy-job'`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns
+		WHERE table_schema=$1 AND table_name='optimization_jobs'
+		AND column_name IN ('idempotency_key','request_fingerprint')`, schema).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_indexes WHERE schemaname=$1
+		AND indexname='idx_optimization_jobs_idempotency'`, schema).Scan(&indexes); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 || columns != 2 || indexes != 1 {
+		t.Fatalf("rows=%d columns=%d indexes=%d", rows, columns, indexes)
 	}
 }
 

@@ -119,6 +119,8 @@ func MapErrorToStatus(err error) int {
 	case errors.Is(err, memorydomain.ErrFactQuotaExceeded),
 		errors.Is(err, memorydomain.ErrFactAlreadyDeleted):
 		return http.StatusConflict
+	case errors.Is(err, evaldomain.ErrOptimizationIdempotencyConflict):
+		return http.StatusConflict
 	case errors.Is(err, agentapp.ErrApprovalNotApproved),
 		errors.Is(err, agentapp.ErrApprovalOutcomeUnknown),
 		errors.Is(err, agentdomain.ErrApprovalAlreadyDecided),

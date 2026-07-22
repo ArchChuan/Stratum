@@ -10,15 +10,16 @@ import (
 )
 
 var (
-	ErrExperimentStateConflict      = errors.New("experiment state version conflict")
-	ErrExperimentCommandConflict    = errors.New("experiment command idempotency conflict")
-	ErrExperimentCommandNotAllowed  = errors.New("experiment command not allowed")
-	ErrExperimentDeploymentConflict = errors.New("resource already has an active experiment deployment")
-	ErrCandidateNotFound            = errors.New("evaluation candidate not found")
-	ErrCandidateStateConflict       = errors.New("candidate state version conflict")
-	ErrCandidateCommandConflict     = errors.New("candidate command idempotency conflict")
-	ErrCandidateCommandNotAllowed   = errors.New("candidate command not allowed")
-	ErrInvalidCandidateCommand      = errors.New("invalid candidate command")
+	ErrExperimentStateConflict         = errors.New("experiment state version conflict")
+	ErrExperimentCommandConflict       = errors.New("experiment command idempotency conflict")
+	ErrExperimentCommandNotAllowed     = errors.New("experiment command not allowed")
+	ErrExperimentDeploymentConflict    = errors.New("resource already has an active experiment deployment")
+	ErrCandidateNotFound               = errors.New("evaluation candidate not found")
+	ErrCandidateStateConflict          = errors.New("candidate state version conflict")
+	ErrCandidateCommandConflict        = errors.New("candidate command idempotency conflict")
+	ErrCandidateCommandNotAllowed      = errors.New("candidate command not allowed")
+	ErrInvalidCandidateCommand         = errors.New("invalid candidate command")
+	ErrOptimizationIdempotencyConflict = errors.New("optimization idempotency conflict")
 )
 
 type CandidateCommand struct {

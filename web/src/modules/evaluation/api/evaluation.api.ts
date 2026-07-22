@@ -46,12 +46,14 @@ export const evaluationApi = {
     suiteRevisionId: string;
     searchSpace: Record<string, unknown[]>;
     failureSummaries?: string[];
+    idempotencyKey?: string;
   }) => {
     const response = await api.post('/evaluations/optimizations', {
       baseline: data.baseline,
       suite_revision_id: data.suiteRevisionId,
       search_space: data.searchSpace,
       failure_summaries: data.failureSummaries || [],
+      idempotency_key: data.idempotencyKey,
     });
     return optimizationResponseSchema.parse(response.data);
   },

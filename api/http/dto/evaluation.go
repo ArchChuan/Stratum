@@ -35,6 +35,7 @@ type EvaluationJobResponse struct {
 }
 
 type GenerateOptimizationRequest struct {
+	IdempotencyKey   string                `json:"idempotency_key" binding:"omitempty,max=255"`
 	Baseline         EvaluationResourceRef `json:"baseline" binding:"required"`
 	SuiteRevisionID  string                `json:"suite_revision_id" binding:"required"`
 	SearchSpace      map[string][]any      `json:"search_space"`

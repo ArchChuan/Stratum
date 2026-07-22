@@ -6,6 +6,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5"
+	"github.com/pashagolub/pgxmock/v2"
 )
 
 // TestPoolImplementsInterfaces is a compile-time check that *Pool satisfies
@@ -48,6 +49,35 @@ func TestExecTenant_InvalidTenantID(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid tenant_id")
+	}
+}
+
+func TestExecTenantReusesMatchingTransactionFromCallback(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	pool.ExpectBegin()
+	pool.ExpectExec(`SET LOCAL search_path`).WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectCommit()
+	ctx := postgres.WithTenant(context.Background(), &postgres.TenantContext{TenantID: "tenant-1"})
+	var outerTx, innerTx pgx.Tx
+	err = postgres.ExecTenantWith(ctx, pool, "tenant-1", func(txCtx context.Context, tx pgx.Tx) error {
+		outerTx = tx
+		return postgres.ExecTenant(txCtx, nil, func(_ context.Context, tx pgx.Tx) error {
+			innerTx = tx
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outerTx != innerTx {
+		t.Fatal("nested tenant repository did not reuse transaction")
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

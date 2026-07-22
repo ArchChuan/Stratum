@@ -101,6 +101,12 @@ type TenantContext struct {
 }
 
 type ctxKey struct{}
+type tenantTxKey struct{}
+
+type tenantTxContext struct {
+	tenantID string
+	tx       pgx.Tx
+}
 
 // WithTenant returns a new context with tc embedded.
 func WithTenant(ctx context.Context, tc *TenantContext) context.Context {
@@ -127,6 +133,12 @@ func ExecTenant(ctx context.Context, pool *pgxpool.Pool, fn func(ctx context.Con
 	}
 	if tc.TenantID == "" {
 		return fmt.Errorf("postgres: tenant_id is empty (global_admin cannot use ExecTenant)")
+	}
+	if current, ok := ctx.Value(tenantTxKey{}).(tenantTxContext); ok {
+		if current.tenantID != tc.TenantID {
+			return fmt.Errorf("postgres: tenant transaction context mismatch")
+		}
+		return fn(ctx, current.tx)
 	}
 	return execTenantOnPool(ctx, pool, tc.TenantID, fn)
 }
@@ -174,7 +186,8 @@ func execTenantOnPool(ctx context.Context, pool tenantTxBeginner, tenantID strin
 		return fmt.Errorf("postgres: set search_path: %w", err)
 	}
 
-	if err := fn(ctx, tx); err != nil {
+	txCtx := context.WithValue(ctx, tenantTxKey{}, tenantTxContext{tenantID: tenantID, tx: tx})
+	if err := fn(txCtx, tx); err != nil {
 		_ = tx.Rollback(ctx)
 		return err
 	}

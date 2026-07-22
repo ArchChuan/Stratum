@@ -199,9 +199,15 @@ CREATE TABLE IF NOT EXISTS optimization_jobs (
     rewrite_config        JSONB NOT NULL DEFAULT '{}',
     error_message         TEXT NOT NULL DEFAULT '',
     created_by            TEXT NOT NULL DEFAULT '',
+    idempotency_key       TEXT NOT NULL DEFAULT '',
+    request_fingerprint   TEXT NOT NULL DEFAULT '',
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at          TIMESTAMPTZ
 );
+ALTER TABLE optimization_jobs ADD COLUMN IF NOT EXISTS idempotency_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE optimization_jobs ADD COLUMN IF NOT EXISTS request_fingerprint TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_optimization_jobs_idempotency
+    ON optimization_jobs(idempotency_key) WHERE idempotency_key <> '';
 CREATE INDEX IF NOT EXISTS idx_optimization_jobs_center_query
     ON optimization_jobs(resource_kind, resource_id, status, created_at DESC, id DESC);
 
