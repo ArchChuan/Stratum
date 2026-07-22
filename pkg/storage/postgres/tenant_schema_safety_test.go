@@ -43,6 +43,11 @@ func TestTenantSchemaRevisionAndDecisionSafetyAvoidsPlaintextPayloads(t *testing
 	}
 
 	for _, table := range []string{
+		"skills",
+		"skill_versions",
+		"skill_test_cases",
+		"skill_eval_runs",
+		"agent_skill_links",
 		"eval_suites",
 		"eval_suite_revisions",
 		"eval_runs",

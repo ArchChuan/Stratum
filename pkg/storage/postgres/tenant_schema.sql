@@ -38,26 +38,6 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL 
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS embed_model TEXT NOT NULL DEFAULT '';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'agent';
 
--- Executable Skills were replaced by versioned instruction bundles. Detect
--- the legacy shape instead of using a permanent DROP so repeated tenant
--- provisioning never deletes data written to the new tables.
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = current_schema()
-          AND table_name = 'skill_versions'
-          AND column_name = 'implementation'
-    ) THEN
-        DROP TABLE IF EXISTS agent_skill_links;
-        DROP TABLE IF EXISTS skill_eval_runs;
-        DROP TABLE IF EXISTS skill_test_cases;
-        DROP TABLE IF EXISTS skill_versions;
-        DROP TABLE IF EXISTS skills;
-    END IF;
-END $$;
-
 CREATE TABLE IF NOT EXISTS skills (
     id                 TEXT PRIMARY KEY,
     name               TEXT NOT NULL UNIQUE,
@@ -68,6 +48,12 @@ CREATE TABLE IF NOT EXISTS skills (
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS active_revision_id TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS draft_revision_id TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 CREATE TABLE IF NOT EXISTS skill_revisions (
     id                  TEXT PRIMARY KEY,
@@ -431,6 +417,8 @@ CREATE TABLE IF NOT EXISTS agent_skill_links (
     revision_id TEXT REFERENCES skill_revisions(id) ON DELETE SET NULL,
     PRIMARY KEY (agent_id, skill_id)
 );
+ALTER TABLE agent_skill_links ADD COLUMN IF NOT EXISTS revision_id TEXT
+    REFERENCES skill_revisions(id) ON DELETE SET NULL;
 
 CREATE TABLE IF NOT EXISTS agent_execution_checkpoints (
     id                        UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),

@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestProvisionTenantSchema_ReplacesLegacySkillsAndDropsAgentObservationTables(t *testing.T) {
+func TestProvisionTenantSchemaPreservesLegacySkillsAndDropsAgentObservationTables(t *testing.T) {
 	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
 	if url == "" {
 		t.Skip("STRATUM_TEST_POSTGRES_URL is not set")
@@ -55,6 +55,9 @@ func TestProvisionTenantSchema_ReplacesLegacySkillsAndDropsAgentObservationTable
 		);
 		INSERT INTO skills VALUES ('legacy-skill', 'legacy');
 		INSERT INTO skill_versions VALUES ('legacy-version', 'legacy-skill', '{"mode":"code"}');
+		INSERT INTO agent_skill_links VALUES ('legacy-agent', 'legacy-skill');
+		INSERT INTO skill_test_cases VALUES ('legacy-case');
+		INSERT INTO skill_eval_runs VALUES ('legacy-run');
 		INSERT INTO agent_tool_traces (provider_type, raw_result_text) VALUES ('skill', 'historical');
 		INSERT INTO agent_executions DEFAULT VALUES;
 		INSERT INTO agent_trace_events DEFAULT VALUES;`
@@ -65,8 +68,13 @@ func TestProvisionTenantSchema_ReplacesLegacySkillsAndDropsAgentObservationTable
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 		t.Fatal(err)
 	}
-	var legacyVersions, revisions, observationTables int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema=$1 AND table_name='skill_versions'`, schema).Scan(&legacyVersions); err != nil {
+	var legacyRows, revisions, observationTables int
+	if err := pool.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM "`+schema+`".skills WHERE id='legacy-skill') +
+		(SELECT count(*) FROM "`+schema+`".skill_versions WHERE id='legacy-version') +
+		(SELECT count(*) FROM "`+schema+`".agent_skill_links WHERE agent_id='legacy-agent' AND skill_id='legacy-skill') +
+		(SELECT count(*) FROM "`+schema+`".skill_test_cases WHERE id='legacy-case') +
+		(SELECT count(*) FROM "`+schema+`".skill_eval_runs WHERE id='legacy-run')`).Scan(&legacyRows); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema=$1 AND table_name='skill_revisions'`, schema).Scan(&revisions); err != nil {
@@ -76,9 +84,9 @@ func TestProvisionTenantSchema_ReplacesLegacySkillsAndDropsAgentObservationTable
 		AND table_name IN ('agent_executions','agent_tool_traces','agent_trace_events')`, schema).Scan(&observationTables); err != nil {
 		t.Fatal(err)
 	}
-	if legacyVersions != 0 || revisions != 1 || observationTables != 0 {
-		t.Fatalf("legacy=%d revisions=%d observation_tables=%d",
-			legacyVersions, revisions, observationTables)
+	if legacyRows != 5 || revisions != 1 || observationTables != 0 {
+		t.Fatalf("legacy_rows=%d revisions=%d observation_tables=%d",
+			legacyRows, revisions, observationTables)
 	}
 
 	if _, err := pool.Exec(ctx, `INSERT INTO "`+schema+`".skills (id,name) VALUES ('new-skill','new'); INSERT INTO "`+schema+`".skill_revisions (id,skill_id,instructions) VALUES ('new-revision','new-skill','instructions')`); err != nil {
@@ -87,12 +95,23 @@ func TestProvisionTenantSchema_ReplacesLegacySkillsAndDropsAgentObservationTable
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 		t.Fatal(err)
 	}
-	var newRows, observationTablesAfterSecondProvision int
+	var newRows, legacyRowsAfterSecondProvision, observationTablesAfterSecondProvision int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM "`+schema+`".skill_revisions WHERE id='new-revision'`).Scan(&newRows); err != nil {
 		t.Fatal(err)
 	}
 	if newRows != 1 {
 		t.Fatalf("second provision deleted new Skill revision")
+	}
+	if err := pool.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM "`+schema+`".skills WHERE id='legacy-skill') +
+		(SELECT count(*) FROM "`+schema+`".skill_versions WHERE id='legacy-version') +
+		(SELECT count(*) FROM "`+schema+`".agent_skill_links WHERE agent_id='legacy-agent' AND skill_id='legacy-skill') +
+		(SELECT count(*) FROM "`+schema+`".skill_test_cases WHERE id='legacy-case') +
+		(SELECT count(*) FROM "`+schema+`".skill_eval_runs WHERE id='legacy-run')`).Scan(&legacyRowsAfterSecondProvision); err != nil {
+		t.Fatal(err)
+	}
+	if legacyRowsAfterSecondProvision != 5 {
+		t.Fatalf("second provision deleted legacy Skill history: rows=%d", legacyRowsAfterSecondProvision)
 	}
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema=$1
 		AND table_name IN ('agent_executions','agent_tool_traces','agent_trace_events')`, schema).Scan(&observationTablesAfterSecondProvision); err != nil {

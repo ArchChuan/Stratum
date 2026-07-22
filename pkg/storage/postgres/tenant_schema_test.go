@@ -195,31 +195,36 @@ func TestTenantSchemaSupportsOwnedMemoryLifecycleCleanup(t *testing.T) {
 	}
 }
 
-func TestTenantSchemaResetsLegacyExecutableSkillsBeforeCreatingInstructionSkills(t *testing.T) {
+func TestTenantSchemaUpgradePreservesLegacySkillHistory(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sql := string(data)
 
-	legacyReset := []string{
-		"column_name = 'implementation'",
+	for _, forbidden := range []string{
 		"DROP TABLE IF EXISTS agent_skill_links",
 		"DROP TABLE IF EXISTS skill_eval_runs",
 		"DROP TABLE IF EXISTS skill_test_cases",
 		"DROP TABLE IF EXISTS skill_versions",
 		"DROP TABLE IF EXISTS skills",
-	}
-	for _, want := range legacyReset {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("tenant_schema.sql missing legacy Skill reset %q", want)
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("tenant provisioning must preserve legacy Skill history: %q", forbidden)
 		}
 	}
 
-	resetAt := strings.Index(sql, "column_name = 'implementation'")
-	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS skills")
-	if resetAt == -1 || createAt == -1 || resetAt > createAt {
-		t.Fatalf("legacy Skill reset must precede new Skill schema: reset=%d create=%d", resetAt, createAt)
+	for _, backfill := range []string{
+		"ALTER TABLE skills ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE skills ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft'",
+		"ALTER TABLE skills ADD COLUMN IF NOT EXISTS active_revision_id TEXT",
+		"ALTER TABLE skills ADD COLUMN IF NOT EXISTS draft_revision_id TEXT",
+		"ALTER TABLE skills ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+		"ALTER TABLE agent_skill_links ADD COLUMN IF NOT EXISTS revision_id TEXT",
+	} {
+		if !strings.Contains(sql, backfill) {
+			t.Fatalf("tenant_schema.sql missing additive legacy Skill upgrade %q", backfill)
+		}
 	}
 }
 
