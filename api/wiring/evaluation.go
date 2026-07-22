@@ -32,6 +32,7 @@ type Evaluation struct {
 	QueryService        *evalapp.QueryService
 	CandidateService    *evalapp.CandidateCommandService
 	AgentProvider       evalport.AgentRevisionProvider
+	MCPProvider         evalport.ResourceRevisionProvider
 }
 
 type evaluationResourceRouter struct {
@@ -439,17 +440,27 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		evaldomain.ResourceKindSkill: manager,
 	}
 	var agentProvider evalport.AgentRevisionProvider
+	var mcpProvider evalport.ResourceRevisionProvider
+	var sharedRevisionService *evalapp.RevisionService
 	if c.Agent != nil && c.Agent.RevisionObjectStore != nil {
-		revisionService := evalapp.NewRevisionService(
+		sharedRevisionService = evalapp.NewRevisionService(
 			evalpersist.RevisionObjectStoreAdapter{Store: c.Agent.RevisionObjectStore},
 			evalpersist.NewPgRevisionRepository(db),
 		)
 		agentAdapter := agentEvaluationAdapter{
-			revisions: revisionService, agents: c.Agent.Service, actorID: "evaluation-worker",
+			revisions: sharedRevisionService, agents: c.Agent.Service, actorID: "evaluation-worker",
 		}
 		resourceAdapters[evaldomain.ResourceKindAgent] = agentAdapter
 		candidateCreators[evaldomain.ResourceKindAgent] = agentAdapter
 		agentProvider = agentAdapter
+	}
+	if c.MCP != nil && c.MCP.Manager != nil && sharedRevisionService != nil {
+		mcpAdapter := mcpEvaluationAdapter{
+			runtime: c.MCP.Manager, revisions: sharedRevisionService, actorID: "evaluation-worker",
+		}
+		resourceAdapters[evaldomain.ResourceKindMCP] = mcpAdapter
+		candidateCreators[evaldomain.ResourceKindMCP] = mcpAdapter
+		mcpProvider = mcpAdapter
 	}
 	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, suiteRepo)
 	jobService := evalapp.NewJobService(jobRepo, service)
@@ -478,6 +489,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		QueryService:        evalapp.NewQueryService(queryRepo),
 		CandidateService:    evalapp.NewCandidateCommandService(candidateRepo),
 		AgentProvider:       agentProvider,
+		MCPProvider:         mcpProvider,
 	}
 	if c.Agent != nil && c.Agent.Service != nil {
 		c.Agent.Service.SetSkillRevisionResolver(experimentSkillRevisionResolver{service: experimentService})

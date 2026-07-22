@@ -98,9 +98,11 @@ type RevisionRepository interface {
 	Publish(context.Context, string, domain.ResourceRef) (domain.ResourceRevision, error)
 }
 
-type AgentRevisionProvider interface {
+type ResourceRevisionProvider interface {
 	CreatePublishedBaseline(context.Context, string, string) (domain.ResourceRef, error)
 }
+
+type AgentRevisionProvider = ResourceRevisionProvider
 
 type RevisionObjectStore interface {
 	Put(context.Context, RevisionPayload) (RevisionPayloadRef, error)
