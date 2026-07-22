@@ -34,7 +34,7 @@ The primary checkout remains read-only. The policy blocks commands with concrete
 - dependency installation or update commands;
 - interpreters or shells that contain inline code, script files, or other content whose effects cannot be established safely.
 
-The policy no longer treats the bare presence of `bash`, `sh`, `python`, `node`, or `make` as sufficient proof of mutation. Known read-only invocations and repository diagnostics are allowed through explicit, test-backed classification. Unknown scripts remain denied because their effects cannot be determined in a pre-tool hook.
+The policy no longer treats every interpreter query as a mutation. Known read-only syntax and version checks are allowed through explicit, test-backed classification. Unknown scripts and build-tool invocations remain denied because their effects cannot be determined in a pre-tool hook; in particular, `make --dry-run` may still execute parse-time shell expressions or `+` recipes.
 
 Existing narrow exceptions remain: the required worktree creation helper, risk guard explanation, fast-forward-only main update, bounded temporary cleanup, read-only curl, and constrained SSH diagnostics.
 

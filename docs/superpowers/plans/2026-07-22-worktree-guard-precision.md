@@ -4,7 +4,7 @@
 
 **Goal:** Reduce false-positive primary-checkout mutation blocks, reliably allow explicit linked-worktree targets, track nested governance files, and restore a passing guard test suite.
 
-**Architecture:** Keep `/home/yang/.local/lib/stratum-worktree-policy.sh` as the runtime policy source and `/home/yang/.local/bin/test-stratum-worktree-guard` as its executable contract. Target resolution validates linked worktrees by Git common directory; command classification distinguishes concrete mutation signals from known read-only interpreter and build-tool invocations.
+**Architecture:** Keep `/home/yang/.local/lib/stratum-worktree-policy.sh` as the runtime policy source and `/home/yang/.local/bin/test-stratum-worktree-guard` as its executable contract. Target resolution validates linked worktrees by Git common directory; command classification distinguishes concrete mutation signals from exact read-only interpreter queries.
 
 **Tech Stack:** Bash, jq, Git worktrees, shell regression tests
 
@@ -29,7 +29,7 @@
 
 - [ ] Add cases proving that an explicit linked-worktree `workdir`, absolute edit path, single and compound `git -C`, and validated `STRATUM_WORKTREE_ROOT` are allowed from a primary-cwd payload.
 - [ ] Add cases proving that mixed Git roots, false declarations, unknown scripts, inline interpreter code, and concrete redirections remain denied.
-- [ ] Add representative read-only cases for `bash -n`, `python --version`, `node --version`, and `make --dry-run`.
+- [ ] Add representative read-only cases for `bash -n`, `python --version`, and `node --version`, plus a denial case for `make --dry-run` because it may execute parse-time shell expressions.
 - [ ] Run the test and verify the read-only cases fail with the primary-checkout mutation reason.
 
 ## Task 3: Refine Command Classification
