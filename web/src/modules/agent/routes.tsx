@@ -4,7 +4,6 @@ import { AgentChatPage } from './pages/AgentChatPage';
 import { AgentsListPage } from './pages/AgentsListPage';
 import { CreateAgentPage } from './pages/CreateAgentPage';
 import { EditAgentPage } from './pages/EditAgentPage';
-import { ExecutionHistoryPage } from './pages/ExecutionHistoryPage';
 
 import { PrivateRoute } from '@/modules/iam';
 
@@ -42,15 +41,6 @@ export const agentRoutes = [
     element={
       <PrivateRoute>
         <AgentChatPage />
-      </PrivateRoute>
-    }
-  />,
-  <Route
-    key="agents-history"
-    path="/history"
-    element={
-      <PrivateRoute>
-        <ExecutionHistoryPage />
       </PrivateRoute>
     }
   />,

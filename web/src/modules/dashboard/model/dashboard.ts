@@ -2,7 +2,6 @@ export interface DashboardCounts {
   skills: number;
   agents: number;
   mcpServers: number;
-  executions: number;
   knowledge: number;
 }
 
