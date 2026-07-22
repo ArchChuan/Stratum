@@ -138,7 +138,6 @@ git commit -m "feat(evaluation): add Agent revisions and bounded candidates"
 
 **Files:**
 
-- Create: `internal/mcp/domain/mcp_revision.go`
 - Create: `internal/mcp/domain/mcp_revision_test.go`
 - Create: `internal/mcp/application/contract_evaluator.go`
 - Create: `internal/mcp/application/contract_evaluator_test.go`
@@ -171,7 +170,7 @@ Run: `go test ./internal/mcp/... ./api/wiring -run 'Revision|Contract|SchemaDrif
 Expected: PASS.
 
 ```bash
-git add internal/mcp api/wiring/evaluation_mcp_adapter.go pkg/storage/postgres
+git add internal/mcp api/wiring/evaluation_mcp_adapter.go api/wiring/evaluation.go internal/evaluation/domain/port/evaluation.go
 git commit -m "feat(evaluation): evaluate MCP contracts safely"
 ```
 
@@ -179,7 +178,6 @@ git commit -m "feat(evaluation): evaluate MCP contracts safely"
 
 **Files:**
 
-- Create: `internal/knowledge/domain/knowledge_revision.go`
 - Create: `internal/knowledge/domain/knowledge_revision_test.go`
 - Create: `internal/knowledge/application/retrieval_evaluator.go`
 - Create: `internal/knowledge/application/retrieval_evaluator_test.go`
@@ -212,7 +210,7 @@ Run: `go test ./internal/knowledge/... ./api/wiring -run 'Revision|Retrieval|Cit
 Expected: PASS.
 
 ```bash
-git add internal/knowledge api/wiring/evaluation_knowledge_adapter.go pkg/storage/postgres
+git add internal/knowledge api/wiring/evaluation_knowledge_adapter.go api/wiring/evaluation.go internal/evaluation/domain/port/evaluation.go
 git commit -m "feat(evaluation): add Knowledge retrieval evaluator"
 ```
 
