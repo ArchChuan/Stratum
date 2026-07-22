@@ -41,6 +41,7 @@ func (r *PgCandidateCommandRepository) Reject(
 			return fmt.Errorf("candidate command repository: get candidate: %w", err)
 		}
 		if result.Status == "rejected" {
+			result.StateVersion = version
 			if key == command.IdempotencyKey && fingerprint == command.Fingerprint() {
 				return nil
 			}
@@ -57,6 +58,7 @@ func (r *PgCandidateCommandRepository) Reject(
 			candidateID, command.Reason, command.ActorID, command.IdempotencyKey, command.Fingerprint())
 		if err == nil {
 			result.Status = "rejected"
+			result.StateVersion = version + 1
 		}
 		return err
 	})

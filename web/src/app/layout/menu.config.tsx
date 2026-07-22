@@ -10,6 +10,7 @@ import {
   ApiOutlined,
   BookOutlined,
   ThunderboltOutlined,
+  ExperimentOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Link } from 'react-router-dom';
@@ -48,6 +49,14 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
           icon: <PlusCircleOutlined />,
           label: <Link to="/skills/create">创建技能</Link>,
         } : null,
+      ],
+    },
+    {
+      key: 'evaluation-group',
+      icon: <ExperimentOutlined />,
+      label: '评测',
+      children: [
+        { key: '/evaluations', icon: <ExperimentOutlined />, label: <Link to="/evaluations">评测与进化</Link> },
       ],
     },
     {
@@ -118,6 +127,7 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (pathname.startsWith('/agents')) return ['agent-group'];
   if (pathname.startsWith('/skills')) return ['skill-group'];
   if (pathname.startsWith('/mcp')) return ['mcp-group'];
+  if (pathname.startsWith('/evaluations')) return ['evaluation-group'];
   if (pathname.startsWith('/tenant')) return ['tenant-group'];
   if (pathname.startsWith('/admin')) return ['admin-group'];
   return [];

@@ -70,15 +70,17 @@ type RunSummary struct {
 	CreatedAt    time.Time    `json:"created_at"`
 }
 type CandidateSummary struct {
-	ID               string       `json:"id"`
-	ResourceID       string       `json:"resource_id"`
-	RevisionID       string       `json:"revision_id"`
-	ParentRevisionID string       `json:"parent_revision_id"`
-	Source           string       `json:"source"`
-	Status           string       `json:"status"`
-	ResourceKind     ResourceKind `json:"resource_kind"`
-	Rank             *int         `json:"rank,omitempty"`
-	CreatedAt        time.Time    `json:"created_at"`
+	ID               string         `json:"id"`
+	ResourceID       string         `json:"resource_id"`
+	RevisionID       string         `json:"revision_id"`
+	ParentRevisionID string         `json:"parent_revision_id"`
+	Source           string         `json:"source"`
+	Status           string         `json:"status"`
+	ResourceKind     ResourceKind   `json:"resource_kind"`
+	Rank             *int           `json:"rank,omitempty"`
+	StateVersion     int64          `json:"state_version"`
+	SafeDiff         map[string]any `json:"safe_diff"`
+	CreatedAt        time.Time      `json:"created_at"`
 }
 type ExperimentSummary struct {
 	ID               string       `json:"id"`
@@ -90,6 +92,7 @@ type ExperimentSummary struct {
 	ResourceKind     ResourceKind `json:"resource_kind"`
 	StagePercent     int          `json:"stage_percent"`
 	SafetyStopped    bool         `json:"safety_stopped"`
+	StateVersion     int64        `json:"state_version"`
 	CreatedAt        time.Time    `json:"created_at"`
 }
 
