@@ -106,7 +106,10 @@ func TestResourceRevisionRejectsSensitiveSafeSummaryKeys(t *testing.T) {
 func TestResourceRevisionAllowsBenignSafeSummaryValues(t *testing.T) {
 	revision := validResourceRevision()
 	revision.SafeSummary = map[string]any{
-		"description": "rotate the access_token and password documentation",
+		"resource_name":  "classifier",
+		"changed_fields": []string{"instructions", "temperature"},
+		"change_types":   []string{"modified"},
+		"version_label":  "candidate-2",
 	}
 	if err := revision.Validate(); err != nil {
 		t.Fatalf("benign value rejected: %v", err)
@@ -123,6 +126,14 @@ func TestResourceRevisionRejectsSensitiveKeysInTypedNestedMaps(t *testing.T) {
 	}
 }
 
+func TestResourceRevisionRejectsFreeTextSummaryEvenWhenSecretIsOnlyInValue(t *testing.T) {
+	revision := validResourceRevision()
+	revision.SafeSummary = map[string]any{"description": "client_secret=synthetic-value"}
+	if err := revision.Validate(); err == nil {
+		t.Fatal("expected free-text safe summary field to be rejected")
+	}
+}
+
 func validResourceRevision() ResourceRevision {
 	return ResourceRevision{
 		ID:           "revision-1",
@@ -133,7 +144,7 @@ func validResourceRevision() ResourceRevision {
 		ContentHash:  "content-hash",
 		PayloadRef:   "payloads/revision-1",
 		PayloadHash:  "payload-hash",
-		SafeSummary:  map[string]any{"name": "classifier"},
+		SafeSummary:  map[string]any{"resource_name": "classifier"},
 		CreatedBy:    "user-1",
 		CreatedAt:    time.Now(),
 	}

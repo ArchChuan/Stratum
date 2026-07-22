@@ -1,11 +1,11 @@
 package persistence
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
@@ -81,20 +81,29 @@ func (r *PgRevisionRepository) Create(
 		if err != nil {
 			return fmt.Errorf("revision repository: load idempotent revision: %w", err)
 		}
+		storedSummaryJSON, err := json.Marshal(stored.SafeSummary)
+		if err != nil {
+			return fmt.Errorf("revision repository: marshal stored safe summary: %w", err)
+		}
 		if stored.ResourceKind != revision.ResourceKind || stored.ResourceID != revision.ResourceID ||
 			stored.ParentRevisionID != revision.ParentRevisionID || stored.Source != revision.Source ||
-			stored.ContentHash != revision.ContentHash || stored.CreatedBy != revision.CreatedBy {
+			stored.ContentHash != revision.ContentHash || stored.CreatedBy != revision.CreatedBy ||
+			!bytes.Equal(storedSummaryJSON, summaryJSON) {
 			return fmt.Errorf("%w: %s", ErrRevisionIdempotencyConflict, idempotencyKey)
 		}
 		return nil
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "commit transaction") {
-			return domain.ResourceRevision{}, false, errors.Join(ErrRevisionCommitUnknown, err)
-		}
-		return domain.ResourceRevision{}, false, err
+		return domain.ResourceRevision{}, false, mapRevisionRepositoryError(err)
 	}
 	return stored, created, nil
+}
+
+func mapRevisionRepositoryError(err error) error {
+	if errors.Is(err, postgres.ErrCommitOutcomeUnknown) {
+		return errors.Join(ErrRevisionCommitUnknown, err)
+	}
+	return err
 }
 
 func (r *PgRevisionRepository) Get(

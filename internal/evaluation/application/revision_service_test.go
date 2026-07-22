@@ -134,7 +134,7 @@ func TestRevisionServiceRejectsSensitiveSafeSummaryBeforeUpload(t *testing.T) {
 	repo := &fakeRevisionRepository{}
 	service := NewRevisionService(store, repo)
 	input := validCreateRevisionInput()
-	input.SafeSummary = map[string]any{"nested": map[string]any{"api_key": "synthetic-value"}}
+	input.SafeSummary = map[string]any{"client_secret": "synthetic-value"}
 
 	_, _, err := service.Create(context.Background(), "tenant-1", input)
 	if err == nil || !strings.Contains(err.Error(), "sensitive key") {
@@ -153,7 +153,7 @@ func validCreateRevisionInput() CreateRevisionInput {
 		IdempotencyKey: "request-1",
 		Source:         domain.RevisionSourceManual,
 		Payload:        map[string]any{"temperature": 0.2, "instructions": "classify"},
-		SafeSummary:    map[string]any{"changed_fields": []any{"instructions"}},
+		SafeSummary:    map[string]any{"changed_fields": []string{"instructions"}},
 	}
 }
 

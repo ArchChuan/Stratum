@@ -24,6 +24,8 @@ type tenantTxBeginner interface {
 	Begin(context.Context) (pgx.Tx, error)
 }
 
+var ErrCommitOutcomeUnknown = errors.New("postgres: transaction commit outcome unknown")
+
 // WithSchemaProvisionLock serializes the complete startup schema bootstrap
 // across application instances using one PostgreSQL transaction advisory lock.
 func WithSchemaProvisionLock(
@@ -177,7 +179,13 @@ func execTenantOnPool(ctx context.Context, pool tenantTxBeginner, tenantID strin
 		return err
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		if errors.Is(err, pgx.ErrTxCommitRollback) {
+			return fmt.Errorf("postgres: commit transaction: %w", err)
+		}
+		return errors.Join(ErrCommitOutcomeUnknown, fmt.Errorf("postgres: commit transaction: %w", err))
+	}
+	return nil
 }
 
 // isSafeTenantIDChar returns true for characters safe in a PostgreSQL identifier.

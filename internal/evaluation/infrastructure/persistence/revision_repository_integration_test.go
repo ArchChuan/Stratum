@@ -56,10 +56,15 @@ func TestPgRevisionRepositoryCreateDuplicateGetAndTenantIsolation(t *testing.T) 
 	if _, _, err := repo.Create(ctx, tenantID, conflict, "request-1"); !errors.Is(err, ErrRevisionIdempotencyConflict) {
 		t.Fatalf("expected idempotency fingerprint conflict, got %v", err)
 	}
+	summaryConflict := integrationRevision("revision-summary-conflict")
+	summaryConflict.SafeSummary = map[string]any{"resource_name": "different"}
+	if _, _, err := repo.Create(ctx, tenantID, summaryConflict, "request-1"); !errors.Is(err, ErrRevisionIdempotencyConflict) {
+		t.Fatalf("expected summary fingerprint conflict, got %v", err)
+	}
 
 	ref := domain.ResourceRef{Kind: revision.ResourceKind, ResourceID: revision.ResourceID, RevisionID: revision.ID}
 	got, found, err := repo.Get(ctx, tenantID, ref)
-	if err != nil || !found || got.PayloadRef != revision.PayloadRef || got.SafeSummary["label"] != "baseline" {
+	if err != nil || !found || got.PayloadRef != revision.PayloadRef || got.SafeSummary["resource_name"] != "baseline" {
 		t.Fatalf("unexpected get result: revision=%+v found=%v err=%v", got, found, err)
 	}
 	if _, found, err := repo.Get(ctx, otherTenantID, ref); err != nil || found {
@@ -87,7 +92,7 @@ func integrationRevision(id string) domain.ResourceRevision {
 		ContentHash:  "content-hash",
 		PayloadRef:   "object://revisions/payload.enc",
 		PayloadHash:  "payload-hash",
-		SafeSummary:  map[string]any{"label": "baseline"},
+		SafeSummary:  map[string]any{"resource_name": "baseline"},
 		CreatedBy:    "user-1",
 	}
 }

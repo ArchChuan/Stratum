@@ -3,7 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
-	"reflect"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -125,8 +125,8 @@ func (r ResourceRevision) Validate() error {
 	if strings.TrimSpace(r.PayloadHash) == "" {
 		return errors.New("payload hash required")
 	}
-	if key, ok := sensitiveSummaryKey(r.SafeSummary); ok {
-		return fmt.Errorf("safe summary contains sensitive key: %s", key)
+	if err := validateSafeSummary(r.SafeSummary); err != nil {
+		return err
 	}
 	return nil
 }
@@ -144,50 +144,52 @@ var sensitiveSafeSummaryKeys = map[string]struct{}{
 	"cookie": {}, "session": {}, "key": {}, "cert": {}, "connection_string": {},
 }
 
-var allowedSafeSummaryKeys = map[string]struct{}{
-	"changed_fields": {}, "label": {}, "name": {}, "description": {}, "summary": {}, "reason": {}, "diff": {},
-}
+var summaryToken = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
+var changeTypes = map[string]struct{}{"added": {}, "removed": {}, "modified": {}, "enabled": {}, "disabled": {}}
 
-func sensitiveSummaryKey(value any) (string, bool) {
-	return sensitiveSummaryReflect(reflect.ValueOf(value))
-}
-
-func sensitiveSummaryReflect(value reflect.Value) (string, bool) {
-	for value.IsValid() && (value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer) {
-		if value.IsNil() {
-			return "", false
+func validateSafeSummary(summary map[string]any) error {
+	if len(summary) > 4 {
+		return errors.New("safe summary has too many fields")
+	}
+	for key, value := range summary {
+		normalized := strings.ReplaceAll(strings.ToLower(key), "-", "_")
+		if _, sensitive := sensitiveSafeSummaryKeys[normalized]; sensitive {
+			return fmt.Errorf("safe summary contains sensitive key: %s", key)
 		}
-		value = value.Elem()
-	}
-	if !value.IsValid() {
-		return "", false
-	}
-
-	switch value.Kind() {
-	case reflect.Map:
-		iterator := value.MapRange()
-		for iterator.Next() {
-			keyValue := iterator.Key()
-			if keyValue.Kind() == reflect.String {
-				key := keyValue.String()
-				normalized := strings.ReplaceAll(strings.ToLower(key), "-", "_")
-				if _, sensitive := sensitiveSafeSummaryKeys[normalized]; sensitive {
-					return key, true
+		switch normalized {
+		case "resource_name":
+			text, ok := value.(string)
+			if !ok || len(text) == 0 || len(text) > 100 {
+				return fmt.Errorf("safe summary resource_name invalid")
+			}
+		case "version_label":
+			text, ok := value.(string)
+			if !ok || !summaryToken.MatchString(text) {
+				return fmt.Errorf("safe summary version_label invalid")
+			}
+		case "changed_fields":
+			values, ok := value.([]string)
+			if !ok || len(values) > 32 {
+				return fmt.Errorf("safe summary changed_fields invalid")
+			}
+			for _, item := range values {
+				if !summaryToken.MatchString(item) {
+					return fmt.Errorf("safe summary changed_fields invalid")
 				}
-				if _, allowed := allowedSafeSummaryKeys[normalized]; !allowed {
-					return key, true
+			}
+		case "change_types":
+			values, ok := value.([]string)
+			if !ok || len(values) > 32 {
+				return fmt.Errorf("safe summary change_types invalid")
+			}
+			for _, item := range values {
+				if _, ok := changeTypes[item]; !ok {
+					return fmt.Errorf("safe summary change_types invalid")
 				}
 			}
-			if key, sensitive := sensitiveSummaryReflect(iterator.Value()); sensitive {
-				return key, true
-			}
-		}
-	case reflect.Slice, reflect.Array:
-		for index := range value.Len() {
-			if key, sensitive := sensitiveSummaryReflect(value.Index(index)); sensitive {
-				return key, true
-			}
+		default:
+			return fmt.Errorf("safe summary field not allowed: %s", key)
 		}
 	}
-	return "", false
+	return nil
 }
