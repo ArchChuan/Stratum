@@ -6,6 +6,7 @@ import (
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	agentobjects "github.com/byteBuilderX/stratum/internal/agent/infrastructure/objectstore"
 	agentopik "github.com/byteBuilderX/stratum/internal/agent/infrastructure/opik"
 	persistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
@@ -167,12 +168,15 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		SkillLookup:             a.SkillLookup,
 		SkillActivationResolver: publishedSkillActivationResolver{versions: skillVersionService(c)},
 		TenantResolver:          a.TenantResolver,
-		ChatStore:               a.ChatStore,
-		EvidenceProvider:        a.EvidenceProvider,
-		TracePayloadStore:       a.TracePayloadStore,
-		CheckpointStore:         a.CheckpointStore,
-		ApprovalService:         a.ApprovalService,
-		Logger:                  c.Logger,
+		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger) agentport.HistoryCompactor {
+			return capgateway.NewLLMHistoryCompactor(gw, model, logger)
+		},
+		ChatStore:         a.ChatStore,
+		EvidenceProvider:  a.EvidenceProvider,
+		TracePayloadStore: a.TracePayloadStore,
+		CheckpointStore:   a.CheckpointStore,
+		ApprovalService:   a.ApprovalService,
+		Logger:            c.Logger,
 	}
 	if c.MCP != nil {
 		deps.MCPTools = c.MCP.AgentToolProvider

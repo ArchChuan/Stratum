@@ -6,10 +6,33 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"go.uber.org/zap"
 )
 
 type optionCaptureAgent struct {
-	config *AgentConfig
+	config    *AgentConfig
+	gateway   port.CapabilityGateway
+	compactor port.HistoryCompactor
+}
+
+type tenantResolverFake struct{ gateway port.CapabilityGateway }
+
+func (f tenantResolverFake) Resolve(context.Context, string) (port.CapabilityGateway, map[string]string, bool) {
+	return f.gateway, nil, true
+}
+
+func (tenantResolverFake) InjectCompleter(ctx context.Context, _ string) context.Context { return ctx }
+
+type capabilityGatewayFake struct{}
+
+func (capabilityGatewayFake) Route(context.Context, port.CapabilityRequest) (port.CapabilityResponse, error) {
+	return port.CapabilityResponse{}, nil
+}
+
+type historyCompactorFake struct{}
+
+func (historyCompactorFake) CompactHistory(context.Context, []port.LLMMessage) (string, error) {
+	return "summary", nil
 }
 
 type evidenceProviderFake struct {
@@ -45,7 +68,11 @@ func (f *evidenceProviderFake) ResolveBatch(
 	return map[string]domain.TraceEvidence{}, nil
 }
 
-func (a *optionCaptureAgent) GetConfig() *AgentConfig { return a.config }
+func (a *optionCaptureAgent) GetConfig() *AgentConfig                      { return a.config }
+func (a *optionCaptureAgent) SetCapGateway(gateway port.CapabilityGateway) { a.gateway = gateway }
+func (a *optionCaptureAgent) SetHistoryCompactor(compactor port.HistoryCompactor) {
+	a.compactor = compactor
+}
 func (a *optionCaptureAgent) Execute(_ context.Context, _ string, options ...ExecutionOption) (*AgentResult, error) {
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
@@ -64,6 +91,37 @@ func TestAssembleOptionsIncludesExecutionID(t *testing.T) {
 	cfg.ApplyOptions(options)
 	if cfg.ExecutionID != "execution-1" {
 		t.Fatalf("execution ID not propagated: %q", cfg.ExecutionID)
+	}
+}
+
+func TestAssembleOptionsBuildsHistoryCompactorFromTenantGateway(t *testing.T) {
+	gateway := capabilityGatewayFake{}
+	compactor := historyCompactorFake{}
+	var factoryModel string
+	svc := NewAgentService(AgentServiceDeps{
+		TenantResolver: tenantResolverFake{gateway: gateway},
+		HistoryCompactorFactory: func(got port.CapabilityGateway, model string, _ *zap.Logger) port.HistoryCompactor {
+			if got != gateway {
+				t.Fatalf("factory gateway = %#v, want tenant gateway", got)
+			}
+			factoryModel = model
+			return compactor
+		},
+	})
+	a := &optionCaptureAgent{config: &domain.AgentConfig{ID: "agent-1", LLMModel: "qwen-plus", MaxIterations: 3}}
+
+	svc.assembleOptions(
+		context.Background(), a, ExecRequest{}, ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1",
+	)
+
+	if a.gateway != gateway {
+		t.Fatal("tenant gateway was not attached")
+	}
+	if a.compactor != compactor {
+		t.Fatal("history compactor was not attached")
+	}
+	if factoryModel != "qwen-plus" {
+		t.Fatalf("factory model = %q", factoryModel)
 	}
 }
 
