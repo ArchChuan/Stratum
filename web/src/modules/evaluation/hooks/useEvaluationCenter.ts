@@ -6,10 +6,12 @@ import type {
   CenterOverview,
   EvaluationCenterFilters,
   EvaluationCommand,
+  EvaluationCase,
   ExperimentPage,
   ResourcePage,
   RunPage,
   SuitePage,
+  ResourceRef,
 } from '../model/evaluation';
 
 import { useAuth } from '@/modules/iam';
@@ -87,6 +89,13 @@ export const useEvaluationCenter = (filters: EvaluationCenterFilters = {}) => {
   return {
     overview, resources, suites, runs, candidates, experiments, loading, error, canManageEvaluation,
     reload: () => load(),
+    createEvaluation: (data: { resource: ResourceRef; name: string; description?: string; cases: EvaluationCase[] }) =>
+      managedCommand(async () => {
+        const created = await evaluationApi.createSuite({ name: data.name, description: data.description,
+          resourceKind: data.resource.kind, cases: data.cases });
+        const published = await evaluationApi.publishSuite(created.suite.id);
+        return evaluationApi.enqueueRun(data.resource, published.id, crypto.randomUUID());
+      }),
     rejectCandidate: (id: string, command: EvaluationCommand) => managedCommand(() => evaluationApi.rejectCandidate(id, command)),
     pauseExperiment: (id: string, command: EvaluationCommand) => managedCommand(() => evaluationApi.pauseExperiment(id, command)),
     promoteExperiment: (id: string, command: EvaluationCommand) => managedCommand(() => evaluationApi.promoteExperiment(id, command)),

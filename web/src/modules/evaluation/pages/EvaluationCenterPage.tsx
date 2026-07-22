@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { evaluationApi } from '../api/evaluation.api';
 import { CandidateDrawer } from '../components/CandidateDrawer';
+import { CreateEvaluationModal } from '../components/CreateEvaluationModal';
 import { EvaluationOverview } from '../components/EvaluationOverview';
 import { ExperimentDrawer } from '../components/ExperimentDrawer';
 import { ResourceTable } from '../components/ResourceTable';
@@ -32,6 +33,7 @@ export const EvaluationCenterPage = () => {
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [timelineLoading, setTimelineLoading] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const resource = useMemo(() => center.resources.items.find((item) => item.id === resourceId) || null,
     [center.resources.items, resourceId]);
   const run = center.runs.items.find((item) => item.id === runId) || null;
@@ -61,7 +63,7 @@ export const EvaluationCenterPage = () => {
         <Select aria-label="资源状态" allowClear placeholder="资源状态" style={{ width: 132 }} options={statusOptions}
           value={status} onChange={setStatus} />
         {center.canManageEvaluation && <Button type="primary" icon={<PlusOutlined />}
-          onClick={() => message.info('请从目标资源详情中创建评测')}>新建评测</Button>}
+          onClick={() => setCreateOpen(true)}>新建评测</Button>}
       </Space>
     </Flex>
     <EvaluationOverview overview={center.overview} />
@@ -94,6 +96,19 @@ export const EvaluationCenterPage = () => {
       onRollback={(value) => void decide(() => center.rollbackExperiment(value.id, command(value.state_version, '管理员回滚实验')), '实验已回滚')} />
     <TimelineDrawer events={timeline} open={timelineOpen} loading={timelineLoading} isMobile={isMobile}
       onClose={() => setTimelineOpen(false)} />
+    <CreateEvaluationModal open={createOpen} resources={center.resources.items} onClose={() => setCreateOpen(false)}
+      onSubmit={async (values, value) => {
+        try {
+          await center.createEvaluation({ resource: { kind: value.resource_kind, resource_id: value.resource_id,
+            revision_id: value.stable_revision_id || '' }, name: values.name, description: values.description,
+          cases: [{ name: values.case_name, input: values.input, expected_output: values.expected_output,
+            assertion_mode: 'contains', enabled: true }] });
+          message.success({ content: '评测已创建并进入运行队列', duration: 2 });
+        } catch (error) {
+          message.error({ content: error instanceof Error ? error.message : '创建评测失败', duration: 0 });
+          throw error;
+        }
+      }} />
   </div>;
 };
 

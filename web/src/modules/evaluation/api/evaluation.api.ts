@@ -59,8 +59,9 @@ export const evaluationApi = {
     const response = await api.get(path, filters ? { params: filters } : undefined);
     return timelinePageSchema.parse(response.data);
   },
-  createSuite: async (data: { name: string; description?: string; cases: EvaluationCase[] }) => {
-    const response = await api.post('/evaluations/suites', { ...data, resource_kind: 'skill' });
+  createSuite: async (data: { name: string; description?: string; resourceKind: ResourceKind; cases: EvaluationCase[] }) => {
+    const { resourceKind, ...body } = data;
+    const response = await api.post('/evaluations/suites', { ...body, resource_kind: resourceKind });
     return createSuiteResponseSchema.parse(response.data);
   },
   publishSuite: async (suiteId: string) => {

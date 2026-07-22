@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { Modal } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CandidateDrawer } from './CandidateDrawer';
@@ -16,5 +17,14 @@ describe('CandidateDrawer', () => {
     expect(screen.getByText('temperature')).toBeInTheDocument();
     expect(screen.getByText('0.2')).toBeInTheDocument();
     expect(document.querySelector('.ant-drawer-content-wrapper')).toHaveStyle({ width: '100%' });
+  });
+
+  it('shows reject only for proposed candidates and confirms its consequence', () => {
+    const confirm = vi.spyOn(Modal, 'confirm').mockImplementation(() => ({ destroy: vi.fn(), update: vi.fn() } as never));
+    const { rerender } = render(<CandidateDrawer candidate={candidate} open onClose={vi.fn()} canManage onReject={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '拒绝候选' }));
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: '确认拒绝此候选版本？', content: expect.stringContaining('不会进入金丝雀实验') }));
+    rerender(<CandidateDrawer candidate={{ ...candidate, status: 'rejected' }} open onClose={vi.fn()} canManage onReject={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: '拒绝候选' })).not.toBeInTheDocument();
   });
 });

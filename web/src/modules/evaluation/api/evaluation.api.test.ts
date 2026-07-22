@@ -30,6 +30,16 @@ describe('evaluation center api', () => {
     });
   });
 
+  it('creates provider-neutral suites with the selected resource kind', async () => {
+    client.post.mockResolvedValue({ data: { suite: { id: 'suite-1', name: 'Agent 基线' }, revision: {
+      id: 'revision-1', suite_id: 'suite-1', status: 'draft', resource_kind: 'agent', cases: [],
+    } } });
+    await evaluationApi.createSuite({ name: 'Agent 基线', resourceKind: 'agent', cases: [] });
+    expect(client.post).toHaveBeenCalledWith('/evaluations/suites', {
+      name: 'Agent 基线', resource_kind: 'agent', cases: [],
+    });
+  });
+
   it.each([
     ['rejectCandidate', '/evaluations/candidates/candidate-1/reject'],
     ['pauseExperiment', '/evaluations/experiments/candidate-1/pause'],

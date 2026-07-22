@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   getOverview: vi.fn(), listResources: vi.fn(), listSuites: vi.fn(), listRuns: vi.fn(),
   listCandidates: vi.fn(), listExperiments: vi.fn(), getTimeline: vi.fn(), rejectCandidate: vi.fn(),
   pauseExperiment: vi.fn(), promoteExperiment: vi.fn(), rollbackExperiment: vi.fn(),
+  createSuite: vi.fn(), publishSuite: vi.fn(), enqueueRun: vi.fn(),
 }));
 vi.mock('@/modules/iam', () => ({ useAuth: () => ({ user: { role: auth.role } }) }));
 vi.mock('../api/evaluation.api', () => ({ evaluationApi: api }));
@@ -59,6 +60,25 @@ describe('useEvaluationCenter', () => {
       reason: '拒绝', idempotency_key: 'request-1', expected_state_version: 1,
     })).rejects.toThrow('仅租户管理员可执行评测命令');
     expect(api.rejectCandidate).not.toHaveBeenCalled();
+  });
+
+  it('creates a suite and enqueues its baseline run before refreshing', async () => {
+    auth.role = 'admin';
+    api.createSuite.mockResolvedValue({ suite: { id: 'suite-1' }, revision: { id: 'draft-revision-1' } });
+    api.publishSuite.mockResolvedValue({ id: 'suite-revision-1' });
+    api.enqueueRun.mockResolvedValue({ job_id: 'job-1', status: 'queued' });
+    const { result } = renderHook(() => useEvaluationCenter());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const job = await act(async () => result.current.createEvaluation({
+      resource: { kind: 'skill', resource_id: 'skill-1', revision_id: 'revision-1' }, name: '基线评测',
+      description: '发布前基线', cases: [{ name: '问候', input: '你好', expected_output: '您好',
+        assertion_mode: 'contains', enabled: true }],
+    }));
+    expect(api.createSuite).toHaveBeenCalledWith(expect.objectContaining({ name: '基线评测', resourceKind: 'skill' }));
+    expect(api.publishSuite).toHaveBeenCalledWith('suite-1');
+    expect(api.enqueueRun).toHaveBeenCalledWith(expect.objectContaining({ resource_id: 'skill-1' }),
+      'suite-revision-1', expect.any(String));
+    expect(job).toEqual({ job_id: 'job-1', status: 'queued' });
   });
 
   it('ignores a stale filter load that resolves after the latest load', async () => {
