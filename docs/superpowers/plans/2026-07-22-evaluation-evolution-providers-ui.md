@@ -6,19 +6,17 @@
 
 **Architecture:** `internal/evaluation` remains the consumer-side orchestration context. Each provider defines or implements the minimum consumer-side port through a thin `api/wiring` adapter; immutable revisions are resolved before execution and no provider reads mutable configuration after assignment. The frontend uses one typed evaluation model/API/hooks and a dense responsive center, while the existing Skill panel becomes a compact entry backed by the same endpoints.
 
-**Tech Stack:** Go 1.25, Gin, pgx/PostgreSQL tenant schemas, existing Opik/OTel and encrypted MinIO adapters, React 18, TypeScript, Ant Design 5, React Router 6, Axios client, Zod, Vitest.
+**Tech Stack:** Go `1.25.12` from `go.mod`; React `18.3`, Ant Design `5.20`, Vite `6.4`, TypeScript, React Router `6.26`, Axios, Zod, and Vitest from `web/package.json`; Gin, pgx/PostgreSQL tenant schemas, existing Opik/OTel and encrypted MinIO adapters.
 
 ---
 
 ## File Map
 
-- `internal/evaluation/domain/port/evaluable_resource.go`: shared provider contract for immutable revision resolution, evaluation execution, bounded candidate creation, and safe summaries.
+- `internal/evaluation/domain/port/evaluation.go`: existing shared `ResourceAdapter.ExecuteRevision`, `CandidateCreator.LoadOptimizableSnapshot/CreateCandidate`, `RevisionRepository`, and query contracts; extend only here when a provider capability is missing.
 - `internal/skill/application/version_service.go`: preserve existing Skill revision semantics while exposing the shared adapter contract.
-- `internal/agent/domain/port/evaluable_resource.go`: Agent consumer-side revision/evaluation contract.
-- `internal/mcp/domain/port/evaluable_resource.go`: MCP contract and tool-schema drift input.
-- `internal/knowledge/domain/port/evaluable_resource.go`: Knowledge retrieval-evidence contract.
+- `api/wiring/evaluation.go`: existing Skill adapter (`skillCandidateManager`) and registration; add thin Agent/MCP/Knowledge adapters here. Provider `domain/port` packages must not declare evaluation consumer-side interfaces.
 - `api/wiring/evaluation.go`: thin adapters and resolver registration; no SQL or provider orchestration.
-- `pkg/storage/postgres/tenant_schema.sql`: provider revision columns only where tenant DDL requires them; no history-table deletion.
+- `pkg/storage/postgres/tenant_schema.sql`: shared `resource_revisions` storage owned by evaluation; provider tables are not duplicated and no history table is deleted.
 - `web/src/modules/evaluation/model/evaluation.ts`: four-kind schemas, safe summaries, pages, timeline, gates, and decisions.
 - `web/src/modules/evaluation/api/evaluation.api.ts`: all center reads and commands through `web/src/services/client.ts`.
 - `web/src/modules/evaluation/hooks/useEvaluationCenter.ts`: cancellation-safe query/action orchestration.
@@ -41,10 +39,9 @@
 
 **Files:**
 
-- Modify: `internal/evaluation/domain/port/evaluable_resource.go`
+- Modify: `internal/evaluation/domain/port/evaluation.go` (reuse existing `ResourceAdapter` and `CandidateCreator`; add only missing shared methods and update mocks)
 - Modify: `internal/skill/application/version_service.go`
-- Create: `api/wiring/evaluation_skill_adapter.go`
-- Modify: `api/wiring/evaluation.go`
+- Modify: `api/wiring/evaluation.go` (reuse existing `skillCandidateManager`; do not register a second Skill adapter)
 - Test: `internal/skill/application/version_service_test.go`
 - Test: `api/wiring/evaluation_skill_adapter_test.go`
 - Modify: `web/src/modules/evaluation/components/SkillEvaluationPanel.tsx`
@@ -63,7 +60,7 @@ Expected: FAIL because the shared adapter methods and wiring registration do not
 
 - [ ] **Step 3: Implement the Skill adapter and wiring**
 
-Implement `ResolveRevision`, `Evaluate`, `CreateCandidate`, and `SafeSummary` using existing VersionService methods. Validate `ResourceKindSkill`, require the tenant ID on every call, and reject candidate patches containing permissions, secret, destination, or requirements changes. Register the adapter in `api/wiring/evaluation.go` through the consumer-side interface only.
+Reuse the existing `skillCandidateManager.LoadOptimizableSnapshot/CreateCandidate` implementation and the existing `ResourceAdapter.ExecuteRevision` registration. If safe summary or revision resolution is missing, first extend `internal/evaluation/domain/port/evaluation.go`, then update every mock found by `rg -n 'type .*ResourceAdapter|type .*CandidateCreator|ExecuteRevision\\('`. Validate `ResourceKindSkill`, require tenant ID on every call, and reject candidate patches containing permissions, secret, destination, or requirements changes. Do not create a provider-side evaluation port.
 
 - [ ] **Step 4: Migrate the Skill panel to a center link**
 
@@ -86,16 +83,12 @@ git commit -m "feat(evaluation): connect Skill to shared center"
 
 **Files:**
 
-- Create: `internal/agent/domain/agent_revision.go`
+- Create: `internal/agent/domain/agent_revision.go` (snapshot value object only)
 - Create: `internal/agent/domain/agent_revision_test.go`
-- Modify: `internal/agent/domain/port/repository.go`
-- Create: `internal/agent/application/revision_service.go`
-- Create: `internal/agent/application/revision_service_test.go`
-- Create: `internal/agent/infrastructure/persistence/agent_revision_repository.go`
+- Modify: `internal/agent/application/agent_service.go` (snapshot/execute calls used by wiring)
 - Create: `api/wiring/evaluation_agent_adapter.go`
 - Modify: `api/wiring/evaluation.go`
-- Modify: `pkg/storage/postgres/tenant_schema.sql`
-- Test: `pkg/storage/postgres/tenant_schema_test.go`
+- Modify: `internal/evaluation/domain/port/evaluation.go` only if a shared adapter method is missing; update all generated/manual mocks
 
 - [ ] **Step 1: Add failing domain and service tests**
 
@@ -107,9 +100,9 @@ Run: `go test ./internal/agent/domain ./internal/agent/application ./internal/ag
 
 Expected: FAIL because Agent revision types, repository methods, and migration columns are absent.
 
-- [ ] **Step 3: Implement immutable Agent snapshots**
+- [ ] **Step 3: Implement immutable Agent snapshots through evaluation ownership**
 
-Snapshot only existing authorized bindings and safe execution parameters. Persist encrypted payload references through the shared object store, store hash/summary in PostgreSQL, and expose a repository port with explicit `tenantID`. Use row locks and idempotency keys for publish/candidate operations.
+Snapshot only existing authorized bindings and safe execution parameters. Call the existing evaluation `RevisionRepository`/`RevisionObjectStore` from the evaluation application service; do not add an Agent revision repository or Agent-owned table. The Agent adapter only loads a snapshot and executes it. Use row locks and idempotency keys already provided by evaluation persistence.
 
 - [ ] **Step 4: Implement the evaluation adapter**
 
@@ -132,13 +125,11 @@ git commit -m "feat(evaluation): add Agent revisions and bounded candidates"
 
 - Create: `internal/mcp/domain/mcp_revision.go`
 - Create: `internal/mcp/domain/mcp_revision_test.go`
-- Create: `internal/mcp/application/revision_service.go`
 - Create: `internal/mcp/application/contract_evaluator.go`
 - Create: `internal/mcp/application/contract_evaluator_test.go`
-- Create: `internal/mcp/infrastructure/persistence/mcp_revision_repository.go`
 - Create: `api/wiring/evaluation_mcp_adapter.go`
 - Modify: `api/wiring/evaluation.go`
-- Modify: `pkg/storage/postgres/tenant_schema.sql`
+- Modify: `internal/evaluation/domain/port/evaluation.go` only if `ExecuteRevision`/candidate contracts need a shared extension
 
 - [ ] **Step 1: Write failing MCP tests**
 
@@ -150,13 +141,13 @@ Run: `go test ./internal/mcp/... -run 'Revision|Contract|SchemaDrift' -count=1`
 
 Expected: FAIL because revision/evaluator ports do not exist.
 
-- [ ] **Step 3: Implement revision persistence and contract evaluator**
+- [ ] **Step 3: Implement contract evaluator against evaluation-owned revisions**
 
-Use the existing MCP client/server repository ports. Contract evaluation must record safe status, latency, and error category; it must not log/render upstream bodies. Candidate patches may change only existing tool enablement, timeout within configured bounds, and finite retry policy.
+Use the existing MCP client/server repository ports. The evaluation application creates immutable revision metadata and encrypted payloads through its existing `RevisionRepository` and `RevisionObjectStore`; MCP contributes only snapshot loading and execution through the wiring adapter. Contract evaluation must record safe status, latency, and error category; it must not log/render upstream bodies. Candidate patches may change only existing tool enablement, timeout within configured bounds, and finite retry policy.
 
-- [ ] **Step 4: Wire the adapter and migration checks**
+- [ ] **Step 4: Wire the adapter and reuse shared migration checks**
 
-Register a thin adapter in `api/wiring/evaluation.go`, add tenant-scoped DDL/backfill in canonical order, and add tests proving old tenant schemas provision twice without losing MCP rows.
+Register a thin adapter in `api/wiring/evaluation.go`; do not add MCP revision tables or DDL. Extend the existing evaluation tenant-schema tests only when a shared column is required, proving old tenant schemas provision twice without losing MCP rows.
 
 - [ ] **Step 5: Run and commit**
 
@@ -175,13 +166,11 @@ git commit -m "feat(evaluation): evaluate MCP contracts safely"
 
 - Create: `internal/knowledge/domain/knowledge_revision.go`
 - Create: `internal/knowledge/domain/knowledge_revision_test.go`
-- Create: `internal/knowledge/application/revision_service.go`
 - Create: `internal/knowledge/application/retrieval_evaluator.go`
 - Create: `internal/knowledge/application/retrieval_evaluator_test.go`
-- Create: `internal/knowledge/infrastructure/persistence/knowledge_revision_repository.go`
 - Create: `api/wiring/evaluation_knowledge_adapter.go`
 - Modify: `api/wiring/evaluation.go`
-- Modify: `pkg/storage/postgres/tenant_schema.sql`
+- Modify: `internal/evaluation/domain/port/evaluation.go` only if a shared adapter method is missing
 
 - [ ] **Step 1: Write failing retrieval tests**
 
@@ -193,13 +182,13 @@ Run: `go test ./internal/knowledge/... -run 'Revision|Retrieval|Citation|NoAnswe
 
 Expected: FAIL because the revision and evaluator contracts are absent.
 
-- [ ] **Step 3: Implement revision and evaluator**
+- [ ] **Step 3: Implement evaluator against evaluation-owned revisions**
 
-Use existing Knowledge/RAG ports and Milvus search path. Candidate generation may alter top-K, threshold, reranking, and query-rewrite settings only; it cannot add/delete/rewrite documents or change tenant ownership. Dependency failures produce failed samples and preserve stable serving.
+Use existing Knowledge/RAG ports and Milvus search path. Evaluation owns immutable revision metadata and encrypted payload persistence; Knowledge contributes snapshot loading and execution only. Candidate generation may alter top-K, threshold, reranking, and query-rewrite settings only; it cannot add/delete/rewrite documents or change tenant ownership. Dependency failures produce failed samples and preserve stable serving.
 
-- [ ] **Step 4: Wire and test tenant migration order**
+- [ ] **Step 4: Wire and reuse evaluation migration-order tests**
 
-Register the adapter, add only required tenant columns with `ADD COLUMN IF NOT EXISTS` before indexes, and test historical tenant provisioning and cross-tenant lookup behavior.
+Register the adapter and extend only the shared evaluation migration tests when required; do not add a Knowledge revision table. Test historical tenant provisioning and cross-tenant lookup behavior.
 
 - [ ] **Step 5: Run and commit**
 
@@ -214,11 +203,13 @@ git commit -m "feat(evaluation): add Knowledge retrieval evaluator"
 
 ### Task 5: Unified Frontend Center Model, API, Hooks, Routes, and Permissions
 
+This task extends the existing `api/http/dto/evaluation.go`, `api/http/handler/evaluation_handler.go`, `api/http/router.go`, `api/http/testdata/contracts`, `internal/evaluation/application/query_service.go`, and `api/wiring/evaluation.go`. It must not recreate routes or handlers already delivered by the foundation.
+
 **Files:**
 
 - Modify: `web/src/modules/evaluation/model/evaluation.ts`
 - Modify: `web/src/modules/evaluation/model/evaluation.test.ts`
-- Modify: `web/src/modules/evaluation/api/evaluation.api.ts`
+- Modify: `web/src/modules/evaluation/api/evaluation.api.ts` (extend existing create/run/optimization/experiment/feedback client)
 - Create: `web/src/modules/evaluation/api/evaluation.api.test.ts`
 - Create: `web/src/modules/evaluation/hooks/useEvaluationCenter.ts`
 - Create: `web/src/modules/evaluation/hooks/useEvaluationCenter.test.ts`
@@ -237,9 +228,9 @@ Run: `npm --prefix web run test -- --run src/modules/evaluation/model/evaluation
 
 Expected: FAIL because the unified schemas, API methods, route, and menu entry are absent.
 
-- [ ] **Step 3: Implement model/API/hooks**
+- [ ] **Step 3: Extend the existing model/API/hooks**
 
-Define typed methods for overview, resources, suites, runs, candidates, experiments, timeline, reject, pause, promote, and rollback. Use `client.ts` only, cancellation flags in every async effect, and error extraction that preserves the Chinese frozen error message. Expose `canManageEvaluation` from authenticated tenant role; never infer admin from resource payloads.
+Extend existing Zod models and `evaluationApi` methods for overview, resources, suites, runs, candidates, experiments, timeline, reject, pause, promote, and rollback. In parallel extend existing DTO/handler/router/contract tests for four `ResourceKind` values and query filters; call the existing `QueryService` methods rather than introducing another query service. Use `client.ts` only, cancellation flags in every async effect, and error extraction that preserves the Chinese frozen error message. Expose `canManageEvaluation` from authenticated tenant role; never infer admin from resource payloads.
 
 - [ ] **Step 4: Register route and menu**
 
@@ -255,6 +246,8 @@ Expected: PASS with no `localStorage` token access and no raw `fetch` usage.
 git add web/src/modules/evaluation web/src/app/router.tsx web/src/app/layout
 git commit -m "feat(web): add evaluation center client model"
 ```
+
+The HTTP extension is complete only when `go test ./api/http -run 'Evaluation|Contract|RBAC' -count=1` passes and the existing create-suite, enqueue-run, optimization, experiment, and feedback contract fixtures remain unchanged except for the four-kind enum expansion.
 
 ### Task 6: Evaluation Center Page, Drawers, and Responsive UX
 
@@ -311,11 +304,13 @@ git commit -m "feat(web): deliver evaluation and evolution center"
 
 - [ ] **Step 1: Define isolated services and redaction checks**
 
-Use `stratum-e2e-development` to start isolated Opik, OTEL Collector, MinIO, and PostgreSQL services with `TEST_DATABASE_URL`, tenant seed data, and the configured test LLM provider from the tenant named `杨河川的租户`. The fixture must redact API keys and fail if logs or responses contain bearer credentials, raw payloads, or upstream bodies.
+Use `stratum-e2e-development` to start isolated Opik, OTEL Collector, MinIO, and PostgreSQL services with `TEST_DATABASE_URL`. Generate a unique fixture tenant and inject the test LLM provider/API key through an environment variable or secret file; never look up or hard-code a production tenant name. The fixture must redact credentials and fail if logs or responses contain bearer credentials, raw payloads, or upstream bodies.
 
 - [ ] **Step 2: Add real API/browser scenarios**
 
-Cover successful Skill/Agent/MCP/Knowledge runs, tool invocation, LLM failure, evaluation failure, canary safety stop, encrypted payload round trip, feedback attribution, promotion and rollback, cross-tenant not-found, Opik/MinIO/provider outage behavior, and member/admin permission differences. Assert stable serving continues when evidence dependencies fail.
+Cover this lifecycle matrix for each of Skill, Agent, MCP, and Knowledge: `published baseline -> baseline run -> bounded candidate -> candidate run -> canary -> feedback attribution -> promote or rollback`.
+
+For every resource assert successful execution, cross-tenant not-found, member read/admin command separation, encrypted payload round trip without plaintext response, and an audit decision. Add shared scenarios for tool invocation, LLM failure, evaluation failure, hard security stop, Opik outage, MinIO outage, provider/dependency outage, duplicate idempotency command, and stable serving continuation. Assert recommendation is visible but never invokes promotion automatically.
 
 - [ ] **Step 3: Run targeted E2E and quality guards**
 
@@ -340,4 +335,6 @@ git commit -m "test(evaluation): verify four-resource evolution center end to en
 - [ ] Frontend has Chinese responsive dense tables/drawers, <=5 columns, <=200-line components, and Skill compact entry.
 - [ ] Tenant DDL uses history-compatible ordering and never drops legacy tables.
 - [ ] Real Opik/Collector/MinIO/PostgreSQL/API/browser scenarios cover success, failure, security, attribution, rollback, and isolation.
-- [ ] Search confirms no incomplete markers or exposed secret fields by scanning the plan for placeholder markers and credential-like names; the scan returns no implementation instruction containing either.
+- [ ] Run `rg -n 'revision_repository|Drop(Table|Collection)' internal api web e2e scripts`; expected: no newly introduced provider-owned revision stores or destructive cleanup. Run `rg -n 'TODO|TBD' internal api web e2e scripts`; expected: no implementation placeholders in changed source.
+- [ ] Run `rg -n 'api_key|access_token|credential|secret|raw payload' docs/superpowers/plans/2026-07-22-evaluation-evolution-providers-ui.md`; expected: matches only security requirements in this plan, never literal values or source snippets.
+- [ ] Run `rg -n 'go test ./api/http|npm --prefix web run test|make risk-guardrails|evaluation-evolution.sh' docs/superpowers/plans/2026-07-22-evaluation-evolution-providers-ui.md`; expected: every implementation task has an executable verification command.
