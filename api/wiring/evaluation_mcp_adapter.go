@@ -111,13 +111,7 @@ func (a mcpEvaluationAdapter) CreatePublishedBaseline(
 	}
 	ref := evaldomain.ResourceRef{Kind: evaldomain.ResourceKindMCP, ResourceID: serverID, RevisionID: created.ID}
 	if _, err := a.revisions.Publish(ctx, tenantID, ref); err != nil {
-		cleanupErr := error(nil)
-		if wasCreated {
-			cleanupErr = a.deleteRuntimeConfig(runtimeRef)
-		}
-		return evaldomain.ResourceRef{}, errors.Join(
-			fmt.Errorf("evaluation MCP adapter: publish baseline: %w", err), cleanupErr,
-		)
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation MCP adapter: publish baseline: %w", err)
 	}
 	return ref, nil
 }

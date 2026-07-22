@@ -84,7 +84,7 @@ func TestMCPEvaluationAdapterBaselineFailureCleansRuntimeObject(t *testing.T) {
 	}{
 		{name: "upload", revisions: &fakeMCPRevisionService{}, storePutErr: errors.New("upload failed")},
 		{name: "create", revisions: &fakeMCPRevisionService{createErr: errors.New("create failed")}, wantDeletes: 1},
-		{name: "publish", revisions: &fakeMCPRevisionService{publishErr: errors.New("publish failed")}, wantDeletes: 1},
+		{name: "publish", revisions: &fakeMCPRevisionService{publishErr: errors.New("publish failed")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &fakeMCPRuntimeStore{putErr: tc.storePutErr}
@@ -96,6 +96,38 @@ func TestMCPEvaluationAdapterBaselineFailureCleansRuntimeObject(t *testing.T) {
 				t.Fatalf("deleted=%v want=%d", store.deleted, tc.wantDeletes)
 			}
 		})
+	}
+}
+
+func TestMCPEvaluationAdapterPublishRetryPreservesWinnerRuntime(t *testing.T) {
+	tools := []*mcpdomain.Tool{{Name: "lookup", InputSchema: map[string]any{"type": "object"}}}
+	runtime := &fakeMCPRuntime{config: &mcpdomain.ServerConfig{
+		ID: "server-1", Name: "orders", URL: "https://original.example/mcp", Timeout: time.Second,
+	}, tools: tools, callResult: map[string]any{"ok": true}}
+	revisions := &fakeMCPRevisionService{publishErr: errors.New("temporary publish failure")}
+	store := &fakeMCPRuntimeStore{}
+	adapter := mcpEvaluationAdapter{runtime: runtime, revisions: revisions, runtimeStore: store}
+
+	if _, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "server-1"); err == nil {
+		t.Fatal("expected first publish failure")
+	}
+	if len(store.deleted) != 0 {
+		t.Fatalf("winner runtime deleted after publish failure: %v", store.deleted)
+	}
+	ref, err := adapter.CreatePublishedBaseline(context.Background(), "tenant-1", "server-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.deleted) != 1 || store.deleted[0] != store.putRefs[1].URI ||
+		store.deleted[0] == store.putRefs[0].URI {
+		t.Fatalf("retry cleanup did not preserve winner: puts=%v deleted=%v", store.putRefs, store.deleted)
+	}
+	runtime.config.URL = "https://updated.example/mcp"
+	_, err = adapter.ExecuteRevision(context.Background(), "tenant-1", ref, evaldomain.EvalCase{
+		Input: map[string]any{"tool": "lookup", "arguments": map[string]any{"id": "1"}},
+	})
+	if err != nil || runtime.callConfig.URL != "https://original.example/mcp" {
+		t.Fatalf("execution config=%+v err=%v", runtime.callConfig, err)
 	}
 }
 
@@ -278,7 +310,11 @@ func (s *fakeMCPRuntimeStore) Put(_ context.Context, payload pkgobjectstore.Payl
 		s.values = map[string]any{}
 	}
 	uri := fmt.Sprintf("object://runtime/%s/%d", payload.TenantID, s.putCalls)
-	s.values[uri] = payload.Value
+	encoded, err := json.Marshal(payload.Value)
+	if err != nil {
+		return pkgobjectstore.Reference{}, err
+	}
+	s.values[uri] = json.RawMessage(encoded)
 	ref := pkgobjectstore.Reference{URI: uri, SHA256: "runtime-hash"}
 	s.putRefs = append(s.putRefs, ref)
 	return ref, nil
@@ -287,6 +323,9 @@ func (s *fakeMCPRuntimeStore) Get(_ context.Context, ref pkgobjectstore.Referenc
 	value, ok := s.values[ref.URI]
 	if !ok {
 		return nil, errors.New("not found")
+	}
+	if raw, ok := value.(json.RawMessage); ok {
+		return append([]byte(nil), raw...), nil
 	}
 	return json.Marshal(value)
 }
@@ -329,13 +368,17 @@ func (f *fakeMCPRevisionService) Create(_ context.Context, _ string, input evalp
 	if f.revision.ID == "" {
 		f.revision = evaldomain.ResourceRevision{ID: "created-1", ResourceKind: input.ResourceKind, ResourceID: input.ResourceID, Status: evaldomain.RevisionStatusDraft}
 	}
+	f.payload, _ = json.Marshal(input.Payload)
+	f.found = true
 	f.keys[input.IdempotencyKey], f.fingerprints[input.IdempotencyKey] = f.revision, fingerprint
 	return f.revision, true, nil
 }
 func (f *fakeMCPRevisionService) Publish(_ context.Context, _ string, ref evaldomain.ResourceRef) (evaldomain.ResourceRevision, error) {
 	f.publishCalls++
 	if f.publishErr != nil {
-		return evaldomain.ResourceRevision{}, f.publishErr
+		err := f.publishErr
+		f.publishErr = nil
+		return evaldomain.ResourceRevision{}, err
 	}
 	f.revision.ID, f.revision.Status = ref.RevisionID, evaldomain.RevisionStatusPublished
 	return f.revision, nil
