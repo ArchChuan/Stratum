@@ -144,17 +144,21 @@ var sensitiveSafeSummaryKeys = map[string]struct{}{
 	"refresh_token": {},
 	"client_secret": {}, "private_key": {}, "credential": {}, "credentials": {},
 	"cookie": {}, "session": {}, "key": {}, "cert": {}, "connection_string": {},
+	"payload": {}, "raw_payload": {}, "prompt": {}, "raw_prompt": {}, "retrieved_content": {},
+	"document_content": {}, "arguments": {}, "tool_arguments": {}, "raw_response": {},
+	"tool_raw_response": {}, "encrypted_payload_ref": {}, "payload_ref": {}, "payload_hash": {},
+	"content_hash": {},
 }
 
 var summaryToken = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
 var changeTypes = map[string]struct{}{"added": {}, "removed": {}, "modified": {}, "enabled": {}, "disabled": {}}
 
 func validateSafeSummary(summary map[string]any) error {
-	if len(summary) > 4 {
+	if len(summary) > 64 {
 		return errors.New("safe summary has too many fields")
 	}
 	for key, value := range summary {
-		normalized := strings.ReplaceAll(strings.ToLower(key), "-", "_")
+		normalized := normalizeSafeSummaryKey(key)
 		if _, sensitive := sensitiveSafeSummaryKeys[normalized]; sensitive {
 			return fmt.Errorf("safe summary contains sensitive key: %s", key)
 		}
@@ -190,8 +194,80 @@ func validateSafeSummary(summary map[string]any) error {
 				}
 			}
 		default:
-			return fmt.Errorf("safe summary field not allowed: %s", key)
+			if err := validateSafeSummaryValue(value, 0); err != nil {
+				return fmt.Errorf("safe summary field %s invalid: %w", key, err)
+			}
 		}
 	}
 	return nil
+}
+
+func validateSafeSummaryValue(value any, depth int) error {
+	if depth > 6 {
+		return errors.New("maximum depth exceeded")
+	}
+	switch typed := value.(type) {
+	case nil, bool, float64, int, int32, int64:
+		return nil
+	case string:
+		if len(typed) > 2048 {
+			return errors.New("string too long")
+		}
+		lower := strings.ToLower(typed)
+		for _, marker := range []string{"client_secret=", "api_key=", "access_token=", "authorization:"} {
+			if strings.Contains(lower, marker) {
+				return errors.New("sensitive value")
+			}
+		}
+		return nil
+	case []string:
+		if len(typed) > 64 {
+			return errors.New("too many items")
+		}
+		for _, item := range typed {
+			if err := validateSafeSummaryValue(item, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	case []any:
+		if len(typed) > 64 {
+			return errors.New("too many items")
+		}
+		for _, item := range typed {
+			if err := validateSafeSummaryValue(item, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	case map[string]string:
+		converted := make(map[string]any, len(typed))
+		for key, item := range typed {
+			converted[key] = item
+		}
+		return validateSafeSummaryMap(converted, depth+1)
+	case map[string]any:
+		return validateSafeSummaryMap(typed, depth+1)
+	default:
+		return errors.New("value is not JSON-safe")
+	}
+}
+
+func validateSafeSummaryMap(value map[string]any, depth int) error {
+	if len(value) > 64 {
+		return errors.New("too many fields")
+	}
+	for key, nested := range value {
+		if _, sensitive := sensitiveSafeSummaryKeys[normalizeSafeSummaryKey(key)]; sensitive {
+			return fmt.Errorf("sensitive key: %s", key)
+		}
+		if err := validateSafeSummaryValue(nested, depth); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeSafeSummaryKey(key string) string {
+	return strings.ReplaceAll(strings.ToLower(key), "-", "_")
 }

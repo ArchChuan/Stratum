@@ -91,11 +91,60 @@ export type ExperimentResponse = z.infer<typeof experimentResponseSchema>;
 
 export const errorResponseSchema = z.object({ error: z.string() }).strict();
 
-const safeSummarySchema = z.object({
-  resource_name: z.string().optional(),
-  version_label: z.string().optional(),
-  changed_fields: z.array(z.string()).optional(),
-  change_type: z.string().optional(),
+type JSONValue = string | number | boolean | null | JSONValue[] | { [key: string]: JSONValue };
+
+const SENSITIVE_SUMMARY_KEYS = new Set([
+  'payload', 'raw_payload', 'prompt', 'raw_prompt', 'credentials', 'credential', 'api_key', 'apikey', 'token',
+  'access_token', 'refresh_token', 'retrieved_content', 'document_content', 'arguments', 'tool_arguments',
+  'raw_response', 'tool_raw_response', 'encrypted_payload_ref', 'payload_ref', 'payload_hash', 'content_hash',
+  'authorization', 'password', 'secret', 'private_key', 'client_secret',
+]);
+
+const normalizedKey = (key: string) => key.toLowerCase().replace(/-/g, '_');
+const validateSafeJSON = (value: unknown, path: string[], depth = 0): string | null => {
+  if (depth > 6) return `${path.join('.')} exceeds safe summary depth`;
+  if (value === null || typeof value === 'boolean') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? null : `${path.join('.')} is not finite`;
+  if (typeof value === 'string') return value.length <= 2048 ? null : `${path.join('.')} is too long`;
+  if (Array.isArray(value)) {
+    if (value.length > 64) return `${path.join('.')} has too many items`;
+    for (let index = 0; index < value.length; index += 1) {
+      const error = validateSafeJSON(value[index], [...path, String(index)], depth + 1);
+      if (error) return error;
+    }
+    return null;
+  }
+  if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) {
+    return `${path.join('.')} is not JSON-safe`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > 64) return `${path.join('.')} has too many fields`;
+  for (const [key, nested] of entries) {
+    if (SENSITIVE_SUMMARY_KEYS.has(normalizedKey(key))) return `${[...path, key].join('.')} is sensitive`;
+    const error = validateSafeJSON(nested, [...path, key], depth + 1);
+    if (error) return error;
+  }
+  return null;
+};
+
+export const safeSummarySchema = z.unknown().superRefine((value, ctx) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'safe summary must be an object' });
+    return;
+  }
+  const error = validateSafeJSON(value, ['safe_summary']);
+  if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, message: error });
+}).transform((value) => value as Record<string, JSONValue>);
+
+const safeDiffValueSchema = z.unknown().superRefine((value, ctx) => {
+  const error = validateSafeJSON(value, ['safe_diff']);
+  if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, message: error });
+}).transform((value) => value as JSONValue | undefined);
+
+export const candidateSafeDiffSchema = z.object({
+  changed_fields: z.array(z.string()),
+  changes: z.record(z.object({ before: safeDiffValueSchema.optional(), after: safeDiffValueSchema.optional() }).strict()),
+  parent_missing: z.boolean(),
 }).strict();
 
 const page = <T extends z.ZodTypeAny>(item: T) => z.object({
@@ -133,7 +182,7 @@ export type RunPage = z.infer<typeof runPageSchema>;
 export const candidateSummarySchema = z.object({
   id: z.string(), resource_id: z.string(), revision_id: z.string(), parent_revision_id: z.string(),
   source: z.string(), status: z.string(), resource_kind: resourceKindSchema, rank: z.number().optional(),
-  state_version: z.number().int().positive(), safe_diff: safeSummarySchema.default({}), created_at: z.string(),
+  state_version: z.number().int().positive(), safe_diff: candidateSafeDiffSchema, created_at: z.string(),
 }).strict();
 export const candidatePageSchema = page(candidateSummarySchema);
 export type CandidatePage = z.infer<typeof candidatePageSchema>;
@@ -161,6 +210,19 @@ export const evaluationCommandSchema = z.object({
   reason: z.string(), idempotency_key: z.string(), expected_state_version: z.number().int().positive(),
 }).strict();
 export type EvaluationCommand = z.infer<typeof evaluationCommandSchema>;
+
+export const candidateCommandResponseSchema = candidateSummarySchema;
+
+const promotionPolicySchema = z.object({
+  stages: z.array(z.number()), min_samples: z.number(), min_observation_minutes: z.number(),
+  max_cost_regression: z.number(), max_latency_regression: z.number(), max_error_rate_increase: z.number(),
+}).strict();
+export const experimentCommandResponseSchema = z.object({
+  id: z.string(), resource_kind: resourceKindSchema, resource_id: z.string(), stable_revision_id: z.string(),
+  canary_revision_id: z.string(), suite_revision_id: z.string(), status: z.string(), stage: z.number(),
+  policy: promotionPolicySchema, state_version: z.number().int().positive(), recommendation: z.string(),
+  safety_stopped: z.boolean(),
+}).strict();
 
 export interface EvaluationCenterFilters {
   resource_kind?: ResourceKind;

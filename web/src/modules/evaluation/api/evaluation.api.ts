@@ -23,6 +23,8 @@ import {
   type EvaluationCenterFilters,
   type EvaluationCommand,
   type ResourceKind,
+  candidateCommandResponseSchema,
+  experimentCommandResponseSchema,
 } from '../model/evaluation';
 
 import api from '@/services/client';
@@ -125,21 +127,21 @@ export const evaluationApi = {
   rejectCandidate: async (candidateId: string, command: EvaluationCommand) => {
     const response = await api.post(`/evaluations/candidates/${encodeURIComponent(candidateId)}/reject`,
       evaluationCommandSchema.parse(command));
-    return response.data;
+    return candidateCommandResponseSchema.parse(response.data);
   },
   pauseExperiment: async (experimentId: string, command: EvaluationCommand) => {
     const response = await api.post(`/evaluations/experiments/${encodeURIComponent(experimentId)}/pause`,
       evaluationCommandSchema.parse(command));
-    return response.data;
+    return experimentCommandResponseSchema.parse(response.data);
   },
   promoteExperiment: async (experimentId: string, command: EvaluationCommand) => {
     const response = await api.post(`/evaluations/experiments/${encodeURIComponent(experimentId)}/promote`,
       evaluationCommandSchema.parse(command));
-    return response.data;
+    return experimentCommandResponseSchema.parse(response.data);
   },
   rollbackExperiment: async (experimentId: string, command: EvaluationCommand) => {
     const response = await api.post(`/evaluations/experiments/${encodeURIComponent(experimentId)}/rollback`,
       evaluationCommandSchema.parse(command));
-    return response.data;
+    return experimentCommandResponseSchema.parse(response.data);
   },
 };

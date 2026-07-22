@@ -187,7 +187,7 @@ func (r *PgCenterQueryRepository) ListCandidates(ctx context.Context, tenantID s
 		return page, e
 	}
 	e = r.tenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, e := tx.Query(ctx, `SELECT c.id,j.resource_kind,j.resource_id,c.revision_id,c.parent_revision_id,c.source,c.status,c.rank,c.state_version,COALESCE(r.safe_summary,'{}'::jsonb),c.created_at FROM optimization_candidates c JOIN optimization_jobs j ON j.id=c.optimization_job_id LEFT JOIN resource_revisions r ON r.resource_kind=j.resource_kind AND r.resource_id=j.resource_id AND r.id=c.revision_id WHERE ($1='' OR j.resource_kind=$1) AND ($2='' OR j.resource_id=$2) AND ($3='' OR c.status=$3 OR j.status=$3) AND ($4::timestamptz IS NULL OR (c.created_at,c.id)<($4,$5)) ORDER BY c.created_at DESC,c.id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
+		rows, e := tx.Query(ctx, `SELECT c.id,j.resource_kind,j.resource_id,c.revision_id,c.parent_revision_id,c.source,c.status,c.rank,c.state_version,COALESCE(parent.safe_summary,'{}'::jsonb),parent.id IS NOT NULL,COALESCE(candidate.safe_summary,'{}'::jsonb),c.created_at FROM optimization_candidates c JOIN optimization_jobs j ON j.id=c.optimization_job_id LEFT JOIN resource_revisions parent ON parent.resource_kind=j.resource_kind AND parent.resource_id=j.resource_id AND parent.id=c.parent_revision_id LEFT JOIN resource_revisions candidate ON candidate.resource_kind=j.resource_kind AND candidate.resource_id=j.resource_id AND candidate.id=c.revision_id WHERE ($1='' OR j.resource_kind=$1) AND ($2='' OR j.resource_id=$2) AND ($3='' OR c.status=$3 OR j.status=$3) AND ($4::timestamptz IS NULL OR (c.created_at,c.id)<($4,$5)) ORDER BY c.created_at DESC,c.id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
 		if e != nil {
 			return e
 		}
@@ -195,11 +195,14 @@ func (r *PgCenterQueryRepository) ListCandidates(ctx context.Context, tenantID s
 		for rows.Next() {
 			var x domain.CandidateSummary
 			var kind string
+			var parent, candidate map[string]any
+			var parentExists bool
 			if e = rows.Scan(&x.ID, &kind, &x.ResourceID, &x.RevisionID, &x.ParentRevisionID, &x.Source, &x.Status,
-				&x.Rank, &x.StateVersion, &x.SafeDiff, &x.CreatedAt); e != nil {
+				&x.Rank, &x.StateVersion, &parent, &parentExists, &candidate, &x.CreatedAt); e != nil {
 				return e
 			}
 			x.ResourceKind = domain.ResourceKind(kind)
+			x.SafeDiff = buildCandidateSafeDiff(parent, candidate, parentExists)
 			page.Items = append(page.Items, x)
 		}
 		return rows.Err()

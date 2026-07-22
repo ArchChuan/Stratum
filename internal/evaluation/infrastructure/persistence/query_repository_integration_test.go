@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -183,7 +184,10 @@ func assertCenterLists(t *testing.T, ctx context.Context, repo *PgCenterQueryRep
 		ResourceKind: "skill", ResourceID: "shared", Status: "succeeded", Limit: 1,
 	})
 	if err != nil || len(candidates.Items) != 1 || candidates.NextCursor == "" ||
-		candidates.Items[0].Source != "rewrite-"+label {
+		candidates.Items[0].Source != "rewrite-"+label ||
+		!reflect.DeepEqual(candidates.Items[0].SafeDiff.ChangedFields, []string{"label"}) ||
+		candidates.Items[0].SafeDiff.Changes["label"].Before != label+"-old" ||
+		candidates.Items[0].SafeDiff.Changes["label"].After != label+"-new" {
 		t.Fatalf("candidate first page=%+v err=%v", candidates, err)
 	}
 	candidatesNext, err := repo.ListCandidates(ctx, tenantID, port.CenterFilter{

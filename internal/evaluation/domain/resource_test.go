@@ -116,6 +116,17 @@ func TestResourceRevisionAllowsBenignSafeSummaryValues(t *testing.T) {
 	}
 }
 
+func TestResourceRevisionAllowsAdapterDefinedJSONSafeSummary(t *testing.T) {
+	revision := validResourceRevision()
+	revision.SafeSummary = map[string]any{
+		"label":        "客服技能",
+		"capabilities": map[string]any{"tools": float64(3), "streaming": true},
+	}
+	if err := revision.Validate(); err != nil {
+		t.Fatalf("adapter-defined safe summary rejected: %v", err)
+	}
+}
+
 func TestResourceRevisionRejectsSensitiveKeysInTypedNestedMaps(t *testing.T) {
 	revision := validResourceRevision()
 	revision.SafeSummary = map[string]any{

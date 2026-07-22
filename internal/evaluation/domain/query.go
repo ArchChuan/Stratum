@@ -70,17 +70,28 @@ type RunSummary struct {
 	CreatedAt    time.Time    `json:"created_at"`
 }
 type CandidateSummary struct {
-	ID               string         `json:"id"`
-	ResourceID       string         `json:"resource_id"`
-	RevisionID       string         `json:"revision_id"`
-	ParentRevisionID string         `json:"parent_revision_id"`
-	Source           string         `json:"source"`
-	Status           string         `json:"status"`
-	ResourceKind     ResourceKind   `json:"resource_kind"`
-	Rank             *int           `json:"rank,omitempty"`
-	StateVersion     int64          `json:"state_version"`
-	SafeDiff         map[string]any `json:"safe_diff"`
-	CreatedAt        time.Time      `json:"created_at"`
+	ID               string            `json:"id"`
+	ResourceID       string            `json:"resource_id"`
+	RevisionID       string            `json:"revision_id"`
+	ParentRevisionID string            `json:"parent_revision_id"`
+	Source           string            `json:"source"`
+	Status           string            `json:"status"`
+	ResourceKind     ResourceKind      `json:"resource_kind"`
+	Rank             *int              `json:"rank,omitempty"`
+	StateVersion     int64             `json:"state_version"`
+	SafeDiff         CandidateSafeDiff `json:"safe_diff"`
+	CreatedAt        time.Time         `json:"created_at"`
+}
+
+type SafeFieldChange struct {
+	Before any `json:"before"`
+	After  any `json:"after"`
+}
+
+type CandidateSafeDiff struct {
+	ChangedFields []string                   `json:"changed_fields"`
+	Changes       map[string]SafeFieldChange `json:"changes"`
+	ParentMissing bool                       `json:"parent_missing"`
 }
 type ExperimentSummary struct {
 	ID               string       `json:"id"`

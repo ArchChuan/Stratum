@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -46,7 +47,7 @@ func TestPgCandidateCommandRepositoryReplayAndIsolation(t *testing.T) {
 		t.Fatalf("first=%+v err=%v", first, err)
 	}
 	replay, err := repo.Reject(ctx, tenantID, "candidate-1", command)
-	if err != nil || replay != first {
+	if err != nil || !reflect.DeepEqual(replay, first) {
 		t.Fatalf("replay=%+v first=%+v err=%v", replay, first, err)
 	}
 	changed := command

@@ -26,13 +26,21 @@ func (r *PgCandidateCommandRepository) Reject(
 	err := tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
 		var key, fingerprint string
 		var version int64
+		var parent, candidate map[string]any
+		var parentExists bool
 		err := tx.QueryRow(ctx, `SELECT c.id,j.resource_kind,j.resource_id,c.revision_id,c.parent_revision_id,
 			c.source,c.status,c.rank,c.created_at,COALESCE(c.rejection_key,''),
-			COALESCE(c.rejection_fingerprint,''),c.state_version
+			COALESCE(c.rejection_fingerprint,''),c.state_version,COALESCE(parent.safe_summary,'{}'::jsonb),
+			parent.id IS NOT NULL,COALESCE(candidate.safe_summary,'{}'::jsonb)
 			FROM optimization_candidates c JOIN optimization_jobs j ON j.id=c.optimization_job_id
+			LEFT JOIN resource_revisions parent ON parent.resource_kind=j.resource_kind AND
+				parent.resource_id=j.resource_id AND parent.id=c.parent_revision_id
+			LEFT JOIN resource_revisions candidate ON candidate.resource_kind=j.resource_kind AND
+				candidate.resource_id=j.resource_id AND candidate.id=c.revision_id
 			WHERE c.id=$1 FOR UPDATE`, candidateID).Scan(
 			&result.ID, &result.ResourceKind, &result.ResourceID, &result.RevisionID, &result.ParentRevisionID,
 			&result.Source, &result.Status, &result.Rank, &result.CreatedAt, &key, &fingerprint, &version,
+			&parent, &parentExists, &candidate,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.ErrCandidateNotFound
@@ -40,6 +48,7 @@ func (r *PgCandidateCommandRepository) Reject(
 		if err != nil {
 			return fmt.Errorf("candidate command repository: get candidate: %w", err)
 		}
+		result.SafeDiff = buildCandidateSafeDiff(parent, candidate, parentExists)
 		if result.Status == "rejected" {
 			result.StateVersion = version
 			if key == command.IdempotencyKey && fingerprint == command.Fingerprint() {

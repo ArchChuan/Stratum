@@ -56,9 +56,21 @@ func TestQueryServiceTimelineRequiresResourceAndHidesNotFound(t *testing.T) {
 	}
 }
 
+func TestQueryServicePreservesCandidateSafeDiff(t *testing.T) {
+	repo := &queryRepoStub{candidates: domain.CandidatePage{Items: []domain.CandidateSummary{{
+		ID: "candidate-1", SafeDiff: domain.CandidateSafeDiff{ChangedFields: []string{"label"},
+			Changes: map[string]domain.SafeFieldChange{"label": {Before: "old", After: "new"}}},
+	}}}}
+	page, err := NewQueryService(repo).ListCandidates(context.Background(), "tenant-1", port.CenterFilter{})
+	if err != nil || page.Items[0].SafeDiff.Changes["label"].After != "new" {
+		t.Fatalf("candidate page=%+v err=%v", page, err)
+	}
+}
+
 type queryRepoStub struct {
-	filter port.CenterFilter
-	err    error
+	filter     port.CenterFilter
+	err        error
+	candidates domain.CandidatePage
 }
 
 func (r *queryRepoStub) Overview(context.Context, string) (domain.CenterOverview, error) {
@@ -75,7 +87,7 @@ func (r *queryRepoStub) ListRuns(context.Context, string, port.CenterFilter) (do
 	return domain.RunPage{}, r.err
 }
 func (r *queryRepoStub) ListCandidates(context.Context, string, port.CenterFilter) (domain.CandidatePage, error) {
-	return domain.CandidatePage{}, r.err
+	return r.candidates, r.err
 }
 func (r *queryRepoStub) ListExperiments(context.Context, string, port.CenterFilter) (domain.ExperimentPage, error) {
 	return domain.ExperimentPage{}, r.err

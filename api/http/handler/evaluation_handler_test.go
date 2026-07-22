@@ -202,6 +202,19 @@ func TestEvaluationHandlerListSuitesPropagatesResourceID(t *testing.T) {
 	}
 }
 
+func TestEvaluationHandlerCandidateResponseContainsOnlySafeDiff(t *testing.T) {
+	queries := &fakeEvaluationQueries{}
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, queries, nil, zap.NewNop())
+	r := gin.New()
+	r.GET("/evaluations/candidates", withTenant("tenant-1"), h.ListCandidates)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/evaluations/candidates", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"before":"old","after":"new"`) ||
+		strings.Contains(rec.Body.String(), "raw_payload") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func withTenantAndUser(tenantID, userID string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), tenantID))
@@ -231,7 +244,11 @@ func (f *fakeEvaluationQueries) ListRuns(context.Context, string, port.CenterFil
 	return domain.RunPage{}, nil
 }
 func (f *fakeEvaluationQueries) ListCandidates(context.Context, string, port.CenterFilter) (domain.CandidatePage, error) {
-	return domain.CandidatePage{}, nil
+	return domain.CandidatePage{Items: []domain.CandidateSummary{{ID: "candidate-1", SafeDiff: domain.CandidateSafeDiff{
+		ChangedFields: []string{"label"}, Changes: map[string]domain.SafeFieldChange{
+			"label": {Before: "old", After: "new"},
+		},
+	}}}}, nil
 }
 func (f *fakeEvaluationQueries) ListExperiments(context.Context, string, port.CenterFilter) (domain.ExperimentPage, error) {
 	return domain.ExperimentPage{}, nil
