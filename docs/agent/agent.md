@@ -66,12 +66,21 @@ type AgentConfig struct {
 
 租户管理员为每个 `(server_id, tool_name)` 设置风险：`read`、`write_reversible`、`destructive`、`unclassified`。未配置或读取失败必须视为 `unclassified`。MCP discovery payload 不能设置受信风险。
 
-- `read` / `write_reversible`：直接执行。
+- `read` / `write_reversible`：通过 Execution Guard 复核后直接执行。
 - `destructive` / `unclassified`：Run 进入 `waiting_approval`，工具不得执行。
 - 参数、query、固定 Skill revisions 使用 AES-256-GCM 存入 `agent_tool_approvals.encrypted_payload`。
 - checkpoint 只保存 approval ID，不保存原始参数。
-- 批准后使用同 execution ID 恢复；仅完全匹配 server/tool/arguments 的调用可 bypass 一次。
+- 批准后使用同 execution ID 恢复；审批只解除风险门槛，不能补授 tenant、user、Agent 或 Skill 缺失的权限。
+- resume 在执行前重新解析用户状态、Agent allowlist、固定 Skill revisions 和 policy version；仅完整绑定匹配时可执行一次。
 - 执行前原子抢占 `approved -> executing`；失败回退 `approved`，成功转 `executed`，防止重复副作用。
+- 请求发送后发生 timeout、cancel 或连接中断时进入 `unknown_outcome`，禁止自动重放，必须人工对账或补偿。
+
+所有 MCP 调用都必须经过 `ToolExecutionGuard`；Tool Catalog 过滤只是最小暴露，不是授权执行点。MCP 返回值在进入
+下一轮 LLM 上下文前必须经过 `ToolResultGuard`：拒绝协议/Schema 错误，脱敏、限长并标记为
+`<untrusted_tool_result>`。MCP annotations 和外部文本均不可信。
+
+阻断式回归入口是 `make tool-permission-test`。它覆盖纯授权性质、审批状态机、Execution/Result Guard、fake MCP、
+Agent Loop/SSE、PostgreSQL tenant 隔离和审批 UI；CI 必须设置 `STRATUM_TEST_POSTGRES_URL`，缺失时直接失败。
 
 ## Rules
 

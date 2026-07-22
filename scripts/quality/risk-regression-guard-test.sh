@@ -131,12 +131,33 @@ for label in architecture migration deployment auth-http knowledge memory mcp \
   assert_label "${routes_log}" "${label}"
 done
 
+tool_permissions_log="$(run_guard tool-permissions \
+  internal/agent/application/tool_execution_guard.go \
+  internal/mcp/infrastructure/client_manager.go \
+  internal/skill/domain/skill.go \
+  internal/iam/application/user_service.go \
+  api/http/handler/agent_approval_handler.go \
+  web/src/modules/agent/pages/AgentChatPage.tsx)"
+assert_label_once "${tool_permissions_log}" tool-permissions
+
 dedupe_log="$(run_guard dedupe api/http/router.go api/http/handler/auth_handler.go)"
 assert_label_once "${dedupe_log}" auth-http
 
+tool_permissions_failure_log="${TEST_ROOT}/tool-permissions-failure.log"
+: > "${tool_permissions_failure_log}"
+set +e
+RISK_GUARD_COMMAND_LOG="${tool_permissions_failure_log}" RISK_GUARD_EXECUTOR="${EXECUTOR}" \
+  RISK_GUARD_FAIL_LABEL=tool-permissions /bin/bash "${CHECKER}" internal/agent/domain/tool_authorization.go
+tool_permissions_status=$?
+set -e
+if [[ "${tool_permissions_status}" -ne 42 ]]; then
+  echo "tool permission guard returned ${tool_permissions_status}, want propagated status 42" >&2
+  exit 1
+fi
+
 all_log="$(run_guard all --all)"
 for label in architecture migration deployment auth-http knowledge memory mcp \
-  runtime-governance frontend-auth frontend-supply-chain; do
+  runtime-governance frontend-auth frontend-supply-chain tool-permissions; do
   assert_label_once "${all_log}" "${label}"
 done
 
@@ -165,6 +186,15 @@ assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
 assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'actions/setup-node@' 'CI Node setup for full risk guard'
 assert_file_contains "${ROOT}/Makefile" '^risk-guardrails:' 'Makefile risk guard target'
+assert_file_contains "${ROOT}/Makefile" '^tool-permission-test:' 'Makefile tool permission test target'
+assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
+  'STRATUM_TEST_POSTGRES_URL:' 'CI tool permission PostgreSQL URL'
+assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
+  'make tool-permission-test' 'CI tool permission test invocation'
+assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
+  'agent-tool-permission\.spec\.ts' 'CI tool permission browser harness'
+assert_file_contains "${ROOT}/scripts/quality/tool-permission-test.sh" \
+  'FakeServer' 'deterministic fake MCP test selection'
 
 validate_risk_harness_section "${AGENT_INSTRUCTIONS}" canonical
 

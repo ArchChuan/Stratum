@@ -10,6 +10,7 @@
 	migration-guardrails ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	agent-instructions agent-instructions-check \
+	tool-permission-test \
 	dev-up dev-down \
 	run fe-dev help clean
 
@@ -191,6 +192,9 @@ agent-instructions-check:
 risk-guardrails:
 	bash scripts/quality/risk-regression-guard-test.sh
 	bash scripts/quality/risk-regression-guard.sh --all
+
+tool-permission-test:
+	bash scripts/quality/tool-permission-test.sh
 
 # ─── CI 持续集成（构建+测试+推镜像）───────────────────────────────────────
 ci-backend: migration-guardrails arch-guardrails be-install be-fmt be-lint
