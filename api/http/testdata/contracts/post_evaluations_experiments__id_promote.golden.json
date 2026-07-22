@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "POST",
+    "path": "/evaluations/experiments/:id/promote",
+    "body": {
+      "error": "missing bearer token"
+    },
+    "want_status": 401
+  }
+]

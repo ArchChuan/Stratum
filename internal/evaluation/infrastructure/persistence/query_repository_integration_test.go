@@ -151,6 +151,12 @@ func assertCenterLists(t *testing.T, ctx context.Context, repo *PgCenterQueryRep
 	if err != nil || len(suites.Items) != 1 || suites.NextCursor == "" || suites.Items[0].Name != "suite-"+label+"-new" {
 		t.Fatalf("suite first page=%+v err=%v", suites, err)
 	}
+	filteredSuites, err := repo.ListSuites(ctx, tenantID, port.CenterFilter{
+		ResourceKind: "skill", ResourceID: "shared", Status: "published", Limit: 10,
+	})
+	if err != nil || len(filteredSuites.Items) != 1 || filteredSuites.Items[0].ID != "suite" {
+		t.Fatalf("suite resource filter=%+v err=%v", filteredSuites, err)
+	}
 	suitesNext, err := repo.ListSuites(ctx, tenantID, port.CenterFilter{
 		ResourceKind: "skill", Status: "published", Limit: 1, Cursor: suites.NextCursor,
 	})

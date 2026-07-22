@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "POST",
+    "path": "/evaluations/candidates/:id/reject",
+    "body": {
+      "error": "missing bearer token"
+    },
+    "want_status": 401
+  }
+]

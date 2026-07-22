@@ -119,6 +119,41 @@ func TestEvaluationHandlerExperimentCommandValidationUsesFrozenEnvelope(t *testi
 	}
 }
 
+func TestEvaluationHandlerEvaluateExperimentLegacyBodyUsesStableIdempotencyKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	experiments := &fakeExperimentCommands{}
+	h := NewEvaluationHandler(nil, nil, nil, nil, experiments, nil, nil, nil, zap.NewNop())
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/evaluations/experiments/:id/evaluate", withTenant("tenant-1"), h.EvaluateExperiment)
+	body := `{"samples":10,"quality_improvement":0.2}`
+	for range 2 {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/evaluations/experiments/experiment-1/evaluate", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("legacy request status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	if len(experiments.evaluateKeys) != 2 || experiments.evaluateKeys[0] == "" ||
+		experiments.evaluateKeys[0] != experiments.evaluateKeys[1] {
+		t.Fatalf("unstable legacy idempotency keys: %v", experiments.evaluateKeys)
+	}
+}
+
+func TestEvaluationHandlerListSuitesPropagatesResourceID(t *testing.T) {
+	queries := &fakeEvaluationQueries{}
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, queries, nil, zap.NewNop())
+	r := gin.New()
+	r.GET("/evaluations/suites", withTenant("tenant-1"), h.ListSuites)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/evaluations/suites?resource_id=skill-1", nil))
+	if rec.Code != http.StatusOK || queries.filter.ResourceID != "skill-1" {
+		t.Fatalf("status=%d filter=%+v body=%s", rec.Code, queries.filter, rec.Body.String())
+	}
+}
+
 func withTenantAndUser(tenantID, userID string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), tenantID))
@@ -139,7 +174,9 @@ func (f *fakeEvaluationQueries) ListResources(_ context.Context, tenantID string
 	f.tenantID, f.filter = tenantID, filter
 	return domain.ResourcePage{Items: []domain.ResourceSummary{{ID: "revision-1"}}}, nil
 }
-func (f *fakeEvaluationQueries) ListSuites(context.Context, string, port.CenterFilter) (domain.SuitePage, error) {
+
+func (f *fakeEvaluationQueries) ListSuites(_ context.Context, tenantID string, filter port.CenterFilter) (domain.SuitePage, error) {
+	f.tenantID, f.filter = tenantID, filter
 	return domain.SuitePage{}, nil
 }
 func (f *fakeEvaluationQueries) ListRuns(context.Context, string, port.CenterFilter) (domain.RunPage, error) {
@@ -165,12 +202,13 @@ func (f *fakeCandidateCommands) Reject(_ context.Context, tenantID, candidateID 
 	return domain.CandidateSummary{ID: candidateID, Status: "rejected"}, nil
 }
 
-type fakeExperimentCommands struct{}
+type fakeExperimentCommands struct{ evaluateKeys []string }
 
 func (*fakeExperimentCommands) Create(context.Context, string, application.CreateExperimentInput) (domain.Experiment, domain.Deployment, error) {
 	return domain.Experiment{}, domain.Deployment{}, nil
 }
-func (*fakeExperimentCommands) EvaluateStageIdempotent(context.Context, string, string, application.EvaluateStageInput) (domain.Experiment, domain.Decision, error) {
+func (f *fakeExperimentCommands) EvaluateStageIdempotent(_ context.Context, _, _ string, input application.EvaluateStageInput) (domain.Experiment, domain.Decision, error) {
+	f.evaluateKeys = append(f.evaluateKeys, input.IdempotencyKey)
 	return domain.Experiment{}, domain.DecisionHold, nil
 }
 func (*fakeExperimentCommands) Pause(context.Context, string, string, application.ExperimentCommandInput) (domain.Experiment, error) {

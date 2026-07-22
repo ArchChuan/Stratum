@@ -127,7 +127,7 @@ func (r *PgCenterQueryRepository) ListSuites(ctx context.Context, tenantID strin
 		return page, e
 	}
 	e = r.tenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, e := tx.Query(ctx, `SELECT s.id,s.name,s.description,COALESCE(sr.status,''),s.created_at FROM eval_suites s LEFT JOIN eval_suite_revisions sr ON sr.id=COALESCE(s.active_revision_id,s.draft_revision_id) WHERE ($1='' OR sr.resource_kind=$1) AND ($2='' OR sr.status=$2) AND ($3::timestamptz IS NULL OR (s.created_at,s.id)<($3,$4)) ORDER BY s.created_at DESC,s.id DESC LIMIT $5`, filter.ResourceKind, filter.Status, ct, cid, filter.Limit+1)
+		rows, e := tx.Query(ctx, `SELECT s.id,s.name,s.description,COALESCE(sr.status,''),s.created_at FROM eval_suites s LEFT JOIN eval_suite_revisions sr ON sr.id=COALESCE(s.active_revision_id,s.draft_revision_id) WHERE ($1='' OR sr.resource_kind=$1) AND ($2='' OR EXISTS (SELECT 1 FROM eval_runs r WHERE r.suite_revision_id=sr.id AND r.resource_id=$2)) AND ($3='' OR sr.status=$3) AND ($4::timestamptz IS NULL OR (s.created_at,s.id)<($4,$5)) ORDER BY s.created_at DESC,s.id DESC LIMIT $6`, filter.ResourceKind, filter.ResourceID, filter.Status, ct, cid, filter.Limit+1)
 		if e != nil {
 			return e
 		}

@@ -30,9 +30,12 @@ func TestEvaluationEvolutionRoutesRBAC(t *testing.T) {
 	}
 	tokens := iamtoken.NewJWTService(key)
 	queryRepo := &evaluationQueryRepoFake{}
+	experimentRepo := &evaluationExperimentRepoFake{}
+	candidateRepo := &evaluationCandidateRepoFake{}
 	c := &wiring.Container{Logger: zap.NewNop(), Platform: &wiring.Platform{JWTService: tokens}, Evaluation: &wiring.Evaluation{
 		SuiteService: application.NewSuiteService(nil), JobService: application.NewJobService(nil, nil),
-		QueryService: application.NewQueryService(queryRepo),
+		QueryService: application.NewQueryService(queryRepo), ExperimentService: application.NewExperimentService(experimentRepo),
+		CandidateService: application.NewCandidateCommandService(candidateRepo),
 	}}
 	r := gin.New()
 	r.Use(middleware.ErrorHandler(zap.NewNop()))
@@ -66,12 +69,73 @@ func TestEvaluationEvolutionRoutesRBAC(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("inactive admin status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	commandBody := `{"reason":"reviewed","idempotency_key":"request-1","expected_state_version":1}`
+	for _, path := range []string{"/evaluations/candidates/candidate-1/reject",
+		"/evaluations/experiments/experiment-1/pause", "/evaluations/experiments/experiment-1/promote",
+		"/evaluations/experiments/experiment-1/rollback"} {
+		rec = performEvaluationRequest(r, http.MethodPost, path, admin, "", strings.NewReader(commandBody))
+		if rec.Code != http.StatusOK {
+			t.Errorf("admin POST %s: status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+	if candidateRepo.actorID != "user-1" || len(experimentRepo.actors) != 3 {
+		t.Fatalf("authenticated actors not propagated: candidate=%q experiments=%v", candidateRepo.actorID, experimentRepo.actors)
+	}
 
 	other := signEvaluationToken(t, tokens, "tenant-2", "member")
 	rec = performEvaluationRequest(r, http.MethodGet, "/evaluations/resources/skill/skill-1/timeline", other, "", nil)
 	if rec.Code != http.StatusNotFound || !strings.HasPrefix(rec.Body.String(), `{"error":`) {
 		t.Fatalf("cross tenant status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	otherAdmin := signEvaluationToken(t, tokens, "tenant-2", "admin")
+	rec = performEvaluationRequest(r, http.MethodPost, "/evaluations/experiments/missing/pause", otherAdmin, "",
+		strings.NewReader(commandBody))
+	if rec.Code != http.StatusNotFound || !strings.HasPrefix(rec.Body.String(), `{"error":`) {
+		t.Fatalf("cross tenant command status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = performEvaluationRequest(r, http.MethodPost, "/evaluations/experiments/conflict/pause", admin, "",
+		strings.NewReader(commandBody))
+	if rec.Code != http.StatusConflict || !strings.HasPrefix(rec.Body.String(), `{"error":`) {
+		t.Fatalf("conflict status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+type evaluationCandidateRepoFake struct{ actorID string }
+
+func (r *evaluationCandidateRepoFake) Reject(_ context.Context, tenantID, candidateID string,
+	command domain.CandidateCommand) (domain.CandidateSummary, error) {
+	if tenantID != "tenant-1" {
+		return domain.CandidateSummary{}, domain.ErrCandidateNotFound
+	}
+	r.actorID = command.ActorID
+	return domain.CandidateSummary{ID: candidateID, Status: "rejected"}, nil
+}
+
+type evaluationExperimentRepoFake struct{ actors []string }
+
+func (*evaluationExperimentRepoFake) Create(context.Context, string, domain.Experiment, domain.Deployment) error {
+	return nil
+}
+func (*evaluationExperimentRepoFake) Get(context.Context, string, string) (domain.Experiment, bool, error) {
+	return domain.Experiment{}, false, nil
+}
+func (*evaluationExperimentRepoFake) SaveDecision(context.Context, string, domain.Experiment, domain.Decision,
+	domain.StageMetrics, string, string) (domain.Experiment, domain.Decision, error) {
+	return domain.Experiment{}, domain.DecisionHold, nil
+}
+func (r *evaluationExperimentRepoFake) ApplyCommand(_ context.Context, tenantID, experimentID string,
+	_ domain.ExperimentCommandAction, command domain.ExperimentCommand) (domain.Experiment, error) {
+	if tenantID != "tenant-1" || experimentID == "missing" {
+		return domain.Experiment{}, application.ErrExperimentNotFound
+	}
+	if experimentID == "conflict" {
+		return domain.Experiment{}, domain.ErrExperimentStateConflict
+	}
+	r.actors = append(r.actors, command.ActorID)
+	return domain.Experiment{ID: experimentID}, nil
+}
+func (*evaluationExperimentRepoFake) ResolveDeployment(context.Context, string, string, string) (domain.Deployment, bool, error) {
+	return domain.Deployment{}, false, nil
 }
 
 func signEvaluationToken(t *testing.T, svc iamport.TokenService, tenantID, role string) string {

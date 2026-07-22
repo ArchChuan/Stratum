@@ -12,10 +12,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/api"
+	apihttp "github.com/byteBuilderX/stratum/api/http"
+	"github.com/byteBuilderX/stratum/api/wiring"
 	"github.com/byteBuilderX/stratum/config"
+	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
+	iamtoken "github.com/byteBuilderX/stratum/internal/iam/infrastructure/token"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )
@@ -41,8 +46,22 @@ func TestContracts(t *testing.T) {
 	cfg.JWTPrivateKeyPEM = mustGeneratePEM(t)
 
 	logger, _ := observability.NewLogger("test")
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics := observability.NewPrometheusMetrics(logger)
 	gateway := llmgateway.NewGateway().WithLogger(logger)
 	router := api.SetupRouter(cfg, logger, gateway, nil, nil, nil, nil)
+	evaluationRouter := apihttp.NewRouter(&wiring.Container{
+		Config: cfg, Logger: logger, Platform: &wiring.Platform{JWTService: iamtoken.NewJWTService(key), Metrics: metrics},
+		LLMGateway: &wiring.LLMGateway{}, Skill: &wiring.Skill{}, Agent: &wiring.Agent{}, Workflow: &wiring.Workflow{},
+		Knowledge: &wiring.Knowledge{}, MCP: &wiring.MCP{}, Memory: &wiring.Memory{},
+		Evaluation: &wiring.Evaluation{
+			SuiteService: evalapp.NewSuiteService(nil), JobService: evalapp.NewJobService(nil, nil),
+			QueryService: evalapp.NewQueryService(nil),
+		},
+	})
 
 	files, err := filepath.Glob("testdata/contracts/*.golden.json")
 	if err != nil {
@@ -67,7 +86,11 @@ func TestContracts(t *testing.T) {
 					req.Header.Set(k, v)
 				}
 				rec := httptest.NewRecorder()
-				router.ServeHTTP(rec, req)
+				if strings.HasPrefix(c.Path, "/evaluations/") {
+					evaluationRouter.ServeHTTP(rec, req)
+				} else {
+					router.ServeHTTP(rec, req)
+				}
 				if rec.Code != c.WantStatus {
 					t.Errorf("%s %s: got status %d, want %d", c.Method, c.Path, rec.Code, c.WantStatus)
 				}

@@ -266,8 +266,13 @@ func (h *EvaluationHandler) EvaluateExperiment(c *gin.Context) {
 		idempotencyKey = c.GetHeader("Idempotency-Key")
 	}
 	if idempotencyKey == "" {
-		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("idempotency key is required")))
-		return
+		metrics := domain.StageMetrics{
+			Samples: req.Samples, ObservedMinutes: req.ObservedMinutes,
+			QualityImprovement: req.QualityImprovement, QualitySignificant: req.QualitySignificant,
+			CostRegression: req.CostRegression, P95LatencyRegression: req.P95LatencyRegression,
+			ErrorRateIncrease: req.ErrorRateIncrease, SecurityViolation: req.SecurityViolation,
+		}
+		idempotencyKey = "legacy-evaluate-" + domain.MetricsFingerprint(metrics)
 	}
 	experiment, decision, err := h.experiments.EvaluateStageIdempotent(c.Request.Context(), tenantID, c.Param("id"), evalapp.EvaluateStageInput{Metrics: domain.StageMetrics{
 		Samples: req.Samples, ObservedMinutes: req.ObservedMinutes,
