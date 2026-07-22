@@ -91,6 +91,9 @@ func ExecutePlanTool(ctx context.Context, state *ReActState, call port.ToolCall)
 	}
 	state.ActivePlan = next
 	state.PlanCheckpointIdentity = identity
+	if call.Name == "stratum_continue_plan" && state.PlanNodeExecutor != nil {
+		return ExecuteReadyPlanNodes(ctx, state, state.PlanNodeExecutor)
+	}
 	return planObservation(call.Name, next), nil
 }
 

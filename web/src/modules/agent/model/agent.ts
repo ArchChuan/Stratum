@@ -23,7 +23,6 @@ export type Agent = z.infer<typeof agentSchema>;
 export interface AgentFormValues {
   name: string;
   description?: string;
-  type?: string;
   systemPrompt?: string;
   llmModel: string;
   maxIterations: number;

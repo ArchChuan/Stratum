@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -222,7 +223,8 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	}
 	agentID := a.ID
 	agentName := a.Name
-	agentType := a.Type
+	// Architecture is unified: historical persisted type values are compatibility data only.
+	agentType := domain.ReActAgent
 	systemPrompt := a.SystemPrompt
 	if a.GlobalSystemSuffix != "" {
 		systemPrompt += "\n\n" + a.GlobalSystemSuffix
@@ -340,6 +342,37 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			MaxLLMSteps:                cfg.MaxSteps,
 			MaxContextTokens:           maxTokens,
 			HistoryCompactor:           historyCompactor,
+			PlanCheckpointWriter:       a.CheckpointStore,
+			PlanCheckpointIdentity: agentgraph.PlanCheckpointIdentity{
+				ExecutionID: cfg.ExecutionID, TraceID: cfg.TraceID, ConversationID: cfg.ConversationID, AgentID: agentID, UserID: cfg.UserID,
+			},
+			PlanIDSource: uuid.NewString,
+			PlanLimits: domain.PlanLimits{
+				MaxNodes: constants.DefaultPlanMaxNodes, MaxRevisions: constants.DefaultPlanMaxRevisions,
+				MaxAttemptsPerNode: constants.DefaultPlanMaxAttemptsPerNode, MaxConcurrentNodes: constants.DefaultPlanMaxConcurrentNodes,
+			},
+		}
+		initState.PlanNodeExecutor = func(nodeCtx context.Context, parent agentgraph.ReActState, node domain.PlanNode, summaries map[string]string) (agentgraph.PlanNodeExecutionResult, error) {
+			nodeGraph, graphErr := agentgraph.BuildReActGraph(capGW, a.Ledger, a.Logger)
+			if graphErr != nil {
+				return agentgraph.PlanNodeExecutionResult{}, graphErr
+			}
+			systemMessage := port.LLMMessage{Role: "system", Content: systemPrompt}
+			goal := node.Goal
+			if len(summaries) > 0 {
+				encoded, _ := json.Marshal(summaries)
+				goal += "\nDependency summaries: " + string(encoded)
+			}
+			child := parent
+			child.Messages = []port.LLMMessage{systemMessage, {Role: "user", Content: goal}}
+			child.ActivePlan = nil
+			child.PlanToolsDisabled = true
+			child.MaxLLMSteps = constants.DefaultStepMaxLLMSteps
+			final, invokeErr := nodeGraph.Invoke(nodeCtx, child, agentgraph.RunConfig{MaxSteps: constants.DefaultStepMaxLLMSteps})
+			if invokeErr != nil {
+				return agentgraph.PlanNodeExecutionResult{}, invokeErr
+			}
+			return agentgraph.PlanNodeExecutionResult{Summary: final.Output}, nil
 		}
 		if a.RecallMemoryFn != nil {
 			fn := a.RecallMemoryFn

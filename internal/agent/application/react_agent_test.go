@@ -100,6 +100,19 @@ func TestBaseAgent_ReActExecute_DirectAnswer(t *testing.T) {
 	require.Equal(t, 20, result.TokensUsed)
 }
 
+func TestBaseAgent_HistoricalTypeValuesUseUnifiedReActPath(t *testing.T) {
+	for _, historicalType := range []agent.AgentType{"react", "planning", "cot", "tool_calling", "rag", "swarm"} {
+		t.Run(string(historicalType), func(t *testing.T) {
+			a := newReActAgent()
+			a.GetConfig().Type = historicalType
+			a.SetCapGateway(&mockCapGW{responses: []port.CapabilityResponse{{Content: "unified"}}})
+			result, err := a.Execute(context.Background(), "answer", agent.WithTenantID("t1"))
+			require.NoError(t, err)
+			require.Equal(t, "unified", result.Output)
+		})
+	}
+}
+
 func TestBaseAgent_ReActExecute_WithToolCall(t *testing.T) {
 	a := newReActAgent()
 	gw := &mockCapGW{

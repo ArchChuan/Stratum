@@ -232,11 +232,11 @@ git commit -m "[feat](agent): execute DAG nodes through ReAct kernel"
 - Modify: `internal/agent/application/graph/plan_checkpoint_integration_test.go`
 - Modify: `internal/agent/domain/agent.go`
 
-- [ ] **Step 1: Write failing unified-path tests**
+- [x] **Step 1: Write failing unified-path tests**
 
 Create agents with historical values `react`, `planning`, `cot`, `tool_calling`, `rag`, and `swarm`; assert all call `BuildReActGraph` behavior and simple answers expose no plan calls. Assert checkpoint failures from a plan still propagate from `Execute`.
 
-- [ ] **Step 2: Verify the new tests fail**
+- [x] **Step 2: Verify the new tests fail**
 
 Run: `go test ./internal/agent/application/... -run 'Unified|HistoricalType|SimpleAnswer'`
 Expected: FAIL because `BaseAgent.Execute` still switches on type.

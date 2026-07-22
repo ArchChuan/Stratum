@@ -31,7 +31,6 @@ export const CreateAgentPage = () => {
         layout="vertical"
         onFinish={onFinish}
         initialValues={{
-          type: 'react',
           maxIterations: 25,
           maxContextTokens: 8000,
           allowedSkills: [],

@@ -77,6 +77,7 @@ type ReActState struct {
 	PlanIDSource           func() string
 	PlanLimits             domain.PlanLimits
 	PlanToolsDisabled      bool
+	PlanNodeExecutor       PlanNodeExecutor
 }
 
 // TokenRecorder 是 TokenLedger 的最小接口，供 graph 包使用，避免 import application 包循环。
