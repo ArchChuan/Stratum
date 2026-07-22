@@ -1,7 +1,7 @@
 package dto
 
 type EvaluationResourceRef struct {
-	Kind       string `json:"kind" binding:"required,oneof=skill"`
+	Kind       string `json:"kind" binding:"required,oneof=skill agent mcp knowledge"`
 	ResourceID string `json:"resource_id" binding:"required"`
 	RevisionID string `json:"revision_id" binding:"required"`
 }
@@ -17,7 +17,7 @@ type EvaluationCaseRequest struct {
 type CreateEvaluationSuiteRequest struct {
 	Name         string                  `json:"name" binding:"required,max=255"`
 	Description  string                  `json:"description" binding:"max=2048"`
-	ResourceKind string                  `json:"resource_kind" binding:"required,oneof=skill"`
+	ResourceKind string                  `json:"resource_kind" binding:"required,oneof=skill agent mcp knowledge"`
 	Cases        []EvaluationCaseRequest `json:"cases" binding:"required,min=1,dive"`
 }
 
@@ -60,7 +60,7 @@ type EvaluateExperimentStageRequest struct {
 
 type RecordEvaluationFeedbackRequest struct {
 	TraceID           string         `json:"trace_id" binding:"required"`
-	ResourceKind      string         `json:"resource_kind" binding:"required,oneof=skill"`
+	ResourceKind      string         `json:"resource_kind" binding:"required,oneof=skill agent mcp knowledge"`
 	ResourceID        string         `json:"resource_id" binding:"required"`
 	Score             float64        `json:"score" binding:"min=0,max=1"`
 	Outcome           map[string]any `json:"outcome"`

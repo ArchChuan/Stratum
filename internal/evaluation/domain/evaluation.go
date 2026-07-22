@@ -10,29 +10,6 @@ import (
 	"time"
 )
 
-type ResourceKind string
-
-const ResourceKindSkill ResourceKind = "skill"
-
-type ResourceRef struct {
-	Kind       ResourceKind `json:"kind"`
-	ResourceID string       `json:"resource_id"`
-	RevisionID string       `json:"revision_id"`
-}
-
-func (r ResourceRef) Validate() error {
-	if r.Kind == "" {
-		return errors.New("resource kind required")
-	}
-	if strings.TrimSpace(r.ResourceID) == "" {
-		return errors.New("resource id required")
-	}
-	if strings.TrimSpace(r.RevisionID) == "" {
-		return errors.New("revision id required")
-	}
-	return nil
-}
-
 type AssertionMode string
 
 const (
