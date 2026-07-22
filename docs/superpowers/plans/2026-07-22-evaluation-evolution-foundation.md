@@ -45,7 +45,7 @@ Do not start provider plans until this plan's ports, API contracts, and migratio
 
 ### Task 1: Freeze Four-Kind Domain Contracts
 
-**Status: complete. Evidence:** focused evaluation/domain, DTO, HTTP, wiring, objectstore, and postgres tests passed on 2026-07-22 (`go test ... -count=1`).
+**Status: complete. Evidence:** implementation is present in HEAD and the focused evaluation/domain, DTO, HTTP, wiring, objectstore, and postgres suite passed on 2026-07-22.
 
 **Files:**
 
@@ -135,7 +135,7 @@ git commit -m "feat(evaluation): define shared resource revisions"
 
 ### Task 2: Extract a Generic Encrypted Object Store
 
-**Status: complete. Evidence:** focused suite passed, including `pkg/storage/objectstore` and Agent objectstore packages; MinIO integration remains environment-gated as documented.
+**Status: complete. Evidence:** generic and Agent objectstore unit suites passed; the documented real-MinIO integration remains environment-gated when its endpoint is absent.
 
 **Files:**
 
@@ -204,7 +204,7 @@ git commit -m "refactor(storage): share encrypted object payloads"
 
 ### Task 3: Add History-Compatible Revision and Decision DDL
 
-**Status: complete. Evidence:** `pkg/storage/postgres` tests passed; `/bin/bash scripts/quality/check-migration-boundaries.sh` reported `migration boundaries passed`.
+**Status: complete. Evidence:** `pkg/storage/postgres` tests passed and `/bin/bash scripts/quality/check-migration-boundaries.sh` reported `migration boundaries passed`.
 
 **Files:**
 
@@ -514,12 +514,14 @@ git commit -m "feat(api): expose evaluation evolution center"
 
 ### Task 8: Foundation Verification and Plan Checkpoint
 
+**Verification evidence (2026-07-22):** Focused Go suite, `go vet`, short tests, and full `go test -race -timeout 30s ./...` passed. `make risk-guardrails` passed using `STRATUM_WORKTREE_ROOT` with the worktree's `web/node_modules` symlinked to the primary checkout: 34 files, 102 frontend tests, and 0 supply-chain vulnerabilities. Migration boundaries, `git diff --check`, and tracked-worktree secret scan passed (0 leaks). `govulncheck` remains a separate blocker on `GO-2026-5970` (`golang.org/x/text@v0.37.0`, fixed in v0.39.0). Existing frontend direct test/typecheck blockers are recorded separately: Vitest `--minWorkers` incompatibility, missing `vitest/globals`, and TS6 `baseUrl` deprecation.
+
 **Files:**
 
 - Modify: `docs/superpowers/plans/2026-07-22-evaluation-evolution-foundation.md` (checkbox status only)
 - Create: `docs/superpowers/plans/2026-07-22-evaluation-evolution-skill.md` after the foundation contracts pass
 
-- [ ] **Step 1: Run focused correctness suites**
+- [x] **Step 1: Run focused correctness suites**
 
 Run:
 
@@ -529,7 +531,7 @@ go test ./internal/evaluation/... ./pkg/storage/objectstore ./pkg/storage/postgr
 
 Expected: PASS, with only documented external-service skips.
 
-- [ ] **Step 2: Run repository risk and architecture guards**
+- [x] **Step 2: Run repository risk and architecture guards**
 
 Run:
 
@@ -540,7 +542,7 @@ make risk-guardrails
 
 Expected: PASS. The explanation must identify tenant DDL, logs/errors, external dependency, and deployment/supply-chain checks touched by this change.
 
-- [ ] **Step 3: Run full Go verification**
+- [x] **Step 3: Run full Go verification**
 
 Run:
 
@@ -552,7 +554,7 @@ go test -race -timeout 30s ./...
 
 Expected: PASS. If the full race suite exceeds the repository's established timeout for an integration package, record the exact package and rerun that package with its repository-approved timeout; do not omit it silently.
 
-- [ ] **Step 4: Inspect secrets, schema order, and worktree boundary**
+- [x] **Step 4: Inspect secrets, schema order, and worktree boundary**
 
 Run:
 
@@ -564,7 +566,7 @@ git status --short
 
 Expected: no whitespace errors, no public migration referencing tenant tables, and no untracked temporary scripts or runtime payloads.
 
-- [ ] **Step 5: Commit only the completed plan status**
+- [x] **Step 5: Commit only the completed plan status**
 
 ```bash
 git add docs/superpowers/plans/2026-07-22-evaluation-evolution-foundation.md
