@@ -108,3 +108,48 @@ func TestSearchReturnsNotFoundWithoutFabricatedCitation(t *testing.T) {
 		t.Fatalf("Search() citations = %#v, want none", citations)
 	}
 }
+
+func TestSearchDoesNotMatchASCIIQueryInsideLargerToken(t *testing.T) {
+	citations, err := Search(context.Background(), "cat")
+	if !errors.Is(err, domain.ErrOfficialEvidenceNotFound) {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(citations) != 0 {
+		t.Fatalf("Search() citations = %#v, want none", citations)
+	}
+}
+
+func TestSearchRejectsLowInformationSingleASCIICharacter(t *testing.T) {
+	citations, err := Search(context.Background(), "x")
+	if !errors.Is(err, domain.ErrInvalidOfficialEvidenceQuery) {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(citations) != 0 {
+		t.Fatalf("Search() citations = %#v, want none", citations)
+	}
+}
+
+func TestSearchRequiresMeaningfulMultiTokenCoverage(t *testing.T) {
+	citations, err := Search(context.Background(), "MCP accidentalnonexistenttoken")
+	if !errors.Is(err, domain.ErrOfficialEvidenceNotFound) {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(citations) != 0 {
+		t.Fatalf("Search() citations = %#v, want none", citations)
+	}
+}
+
+func TestSearchMeaningfulCoveragePreservesChineseAndASCIIMatches(t *testing.T) {
+	queries := []string{"知识库摄取", "MCP transport"}
+	for _, query := range queries {
+		t.Run(query, func(t *testing.T) {
+			citations, err := Search(context.Background(), query)
+			if err != nil {
+				t.Fatalf("Search() error = %v", err)
+			}
+			if len(citations) == 0 {
+				t.Fatal("Search() returned no citations")
+			}
+		})
+	}
+}

@@ -65,8 +65,8 @@ func Search(ctx context.Context, query string) ([]domain.Citation, error) {
 
 	matches := make([]scoredEntry, 0, len(entries))
 	for _, entry := range entries {
-		score := score(entry, tokens)
-		if score > 0 {
+		score, coverage := score(entry, tokens)
+		if score > 0 && coverage >= minimumCoverage(len(tokens)) {
 			matches = append(matches, scoredEntry{entry: entry, score: score})
 		}
 	}
@@ -106,25 +106,45 @@ func Search(ctx context.Context, query string) ([]domain.Citation, error) {
 	return citations, nil
 }
 
-func score(entry catalogEntry, tokens []string) int {
-	title := strings.ToLower(entry.Title)
-	section := strings.ToLower(entry.Section)
-	body := strings.ToLower(entry.Body)
+func score(entry catalogEntry, tokens []string) (int, int) {
+	title := tokenSet(entry.Title)
+	section := tokenSet(entry.Section)
+	body := tokenSet(entry.Body)
 	total := 0
+	coverage := 0
 	for _, token := range tokens {
 		weight := 0
-		if strings.Contains(body, token) {
+		if _, ok := body[token]; ok {
 			weight = bodyWeight
 		}
-		if strings.Contains(section, token) {
+		if _, ok := section[token]; ok {
 			weight = sectionWeight
 		}
-		if strings.Contains(title, token) {
+		if _, ok := title[token]; ok {
 			weight = titleWeight
+		}
+		if weight > 0 {
+			coverage++
 		}
 		total += weight
 	}
-	return total
+	return total, coverage
+}
+
+func minimumCoverage(tokenCount int) int {
+	if tokenCount <= 1 {
+		return tokenCount
+	}
+	return (tokenCount*2 + 2) / 3
+}
+
+func tokenSet(input string) map[string]struct{} {
+	tokens := tokenize(input)
+	set := make(map[string]struct{}, len(tokens))
+	for _, token := range tokens {
+		set[token] = struct{}{}
+	}
+	return set
 }
 
 func tokenize(input string) []string {
@@ -137,7 +157,9 @@ func tokenize(input string) []string {
 		if ascii.Len() == 0 {
 			return
 		}
-		appendToken(&tokens, seen, ascii.String())
+		if ascii.Len() > 1 {
+			appendToken(&tokens, seen, ascii.String())
+		}
 		ascii.Reset()
 	}
 	flushChinese := func() {
@@ -190,7 +212,7 @@ func excerpt(body string, tokens []string) string {
 	lower := strings.ToLower(normalized)
 	matchByte := -1
 	for _, token := range tokens {
-		if idx := strings.Index(lower, token); idx >= 0 && (matchByte < 0 || idx < matchByte) {
+		if idx := exactTokenIndex(lower, token); idx >= 0 && (matchByte < 0 || idx < matchByte) {
 			matchByte = idx
 		}
 	}
@@ -208,4 +230,39 @@ func excerpt(body string, tokens []string) string {
 		start = end - MaxExcerptRunes
 	}
 	return strings.TrimSpace(string(runes[start:end]))
+}
+
+func exactTokenIndex(input, token string) int {
+	if !isASCIIString(token) {
+		return strings.Index(input, token)
+	}
+	searchFrom := 0
+	for searchFrom < len(input) {
+		relative := strings.Index(input[searchFrom:], token)
+		if relative < 0 {
+			return -1
+		}
+		index := searchFrom + relative
+		end := index + len(token)
+		leftBoundary := index == 0 || !isASCIIWordByte(input[index-1])
+		rightBoundary := end == len(input) || !isASCIIWordByte(input[end])
+		if leftBoundary && rightBoundary {
+			return index
+		}
+		searchFrom = index + 1
+	}
+	return -1
+}
+
+func isASCIIString(input string) bool {
+	for _, r := range input {
+		if r > unicode.MaxASCII {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIIWordByte(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= '0' && value <= '9'
 }
