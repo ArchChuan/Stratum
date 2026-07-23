@@ -42,6 +42,7 @@ type ReActState struct {
 	DiagnosticFn               func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
 	GovernedAssistant          bool
 	AssistantToolArtifacts     []domain.SystemAssistantToolArtifact
+	InternalToolResultGuardFn  func(any) (port.GuardedToolResult, error)
 	ExecutionID                string
 	AgentKnowledgeWorkspaceIDs []string
 	AgentMemoryScope           string
@@ -456,7 +457,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					status, errMsg, content = domain.ToolTraceStatusError, safeAssistantToolError(callErr), "error: "+safeAssistantToolError(callErr)
 					break
 				}
-				content, callErr = marshalUntrustedAssistantEvidence(map[string]any{"citations": citations})
+				content, callErr = guardInternalAssistantEvidence(s.InternalToolResultGuardFn, map[string]any{"citations": citations})
 				if callErr != nil {
 					status, errMsg, content = domain.ToolTraceStatusError, callErr.Error(), "error: tool result exceeded safe bounds"
 					break
@@ -481,7 +482,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					status, errMsg, content = domain.ToolTraceStatusError, safeAssistantToolError(callErr), "error: "+safeAssistantToolError(callErr)
 					break
 				}
-				content, callErr = marshalUntrustedAssistantEvidence(map[string]any{"evidence": evidence})
+				content, callErr = guardInternalAssistantEvidence(s.InternalToolResultGuardFn, map[string]any{"evidence": evidence})
 				if callErr != nil {
 					status, errMsg, content = domain.ToolTraceStatusError, callErr.Error(), "error: tool result exceeded safe bounds"
 					break
@@ -649,6 +650,11 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					)
 					content = ""
 				}
+			}
+			if status == domain.ToolTraceStatusError && (tc.Name == "stratum_search_official_docs" || tc.Name == "stratum_diagnose_tenant") {
+				s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
+					Tool: tc.Name, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "error", ErrorCode: assistantToolErrorCode(errMsg),
+				})
 			}
 			toolLatencyMs := time.Since(toolStart).Milliseconds()
 			if errMsg != "" {
@@ -975,13 +981,15 @@ func parseDiagnosticToolArguments(args map[string]any) ([]domain.DiagnosticArea,
 	return areas, nil
 }
 
-func marshalUntrustedAssistantEvidence(value any) (string, error) {
-	safe := observability.SafeTracePayload(value, constants.SystemAssistantToolMaxJSONBytes)
-	content := "<untrusted_tool_result>\n" + safe.Preview
-	if safe.Truncated {
-		content += "\n[TRUNCATED]"
+func guardInternalAssistantEvidence(fn func(any) (port.GuardedToolResult, error), value any) (string, error) {
+	if fn == nil {
+		return "", errors.New("internal tool result guard unavailable")
 	}
-	return content + "\n</untrusted_tool_result>", nil
+	guarded, err := fn(value)
+	if err != nil {
+		return "", err
+	}
+	return guarded.ModelContent, nil
 }
 
 func safeAssistantToolError(err error) string {
@@ -996,6 +1004,23 @@ func safeAssistantToolError(err error) string {
 		return "diagnostic forbidden"
 	default:
 		return "evidence unavailable"
+	}
+}
+
+func assistantToolErrorCode(message string) string {
+	switch message {
+	case "tool timeout":
+		return "timeout"
+	case "tool cancelled":
+		return "cancelled"
+	case "official evidence not found":
+		return "not_found"
+	case "diagnostic forbidden":
+		return "forbidden"
+	case "invalid official docs arguments", "invalid diagnostic arguments":
+		return "invalid_arguments"
+	default:
+		return "unavailable"
 	}
 }
 

@@ -76,10 +76,22 @@ type EvidenceGap struct {
 }
 
 type DiagnosticEvidence struct {
-	Scope       DiagnosticScope  `json:"scope"`
-	Facts       []DiagnosticFact `json:"facts"`
-	Gaps        []EvidenceGap    `json:"gaps"`
-	CollectedAt time.Time        `json:"collectedAt"`
+	Scope       DiagnosticScope        `json:"scope"`
+	Facts       []DiagnosticFact       `json:"facts"`
+	Gaps        []EvidenceGap          `json:"gaps"`
+	AreaResults []DiagnosticAreaResult `json:"areaResults"`
+	CollectedAt time.Time              `json:"collectedAt"`
+}
+
+type DiagnosticAreaResult struct {
+	Area       DiagnosticArea `json:"area"`
+	Outcome    string         `json:"outcome"`
+	DurationMs int64          `json:"durationMs"`
+}
+
+type DiagnosticAuthorization struct {
+	Request   DiagnosticRequest
+	RoleClass string
 }
 
 // SystemAssistantToolArtifact is typed evidence captured directly from a
@@ -90,6 +102,7 @@ type SystemAssistantToolArtifact struct {
 	Evidence  *DiagnosticEvidence `json:"evidence,omitempty"`
 	LatencyMs int64               `json:"latencyMs"`
 	Outcome   string              `json:"outcome"`
+	ErrorCode string              `json:"errorCode,omitempty"`
 }
 
 type TenantModelDiagnosticStatus struct {

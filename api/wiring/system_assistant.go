@@ -48,12 +48,30 @@ func newSystemAssistantDiagnosticAdapter(
 func (a *systemAssistantDiagnosticAdapter) Collect(
 	ctx context.Context, request domain.DiagnosticRequest,
 ) (domain.DiagnosticEvidence, error) {
+	authorization, err := a.Authorize(ctx, request)
+	if err != nil {
+		return domain.DiagnosticEvidence{}, err
+	}
+	return a.CollectAuthorized(ctx, authorization.Request)
+}
+
+func (a *systemAssistantDiagnosticAdapter) Authorize(ctx context.Context, request domain.DiagnosticRequest) (domain.DiagnosticAuthorization, error) {
 	roleCtx, roleCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
 	req, err := agentapp.AuthorizeDiagnosticRequest(roleCtx, a.roles, request)
 	roleCancel()
 	if err != nil {
-		return domain.DiagnosticEvidence{}, err
+		return domain.DiagnosticAuthorization{}, err
 	}
+	roleClass := "member"
+	if req.Scope == domain.DiagnosticScopeTenant {
+		roleClass = "admin"
+	}
+	return domain.DiagnosticAuthorization{Request: req, RoleClass: roleClass}, nil
+}
+
+func (a *systemAssistantDiagnosticAdapter) CollectAuthorized(
+	ctx context.Context, req domain.DiagnosticRequest,
+) (domain.DiagnosticEvidence, error) {
 	evidence := domain.DiagnosticEvidence{Scope: req.Scope, CollectedAt: time.Now().UTC()}
 	var mu sync.Mutex
 	group, groupCtx := errgroup.WithContext(ctx)
@@ -61,12 +79,14 @@ func (a *systemAssistantDiagnosticAdapter) Collect(
 	for _, area := range req.Areas {
 		area := area
 		group.Go(func() error {
+			started := time.Now()
 			a.mu.RLock()
 			collector := a.collectors[area]
 			a.mu.RUnlock()
 			if collector == nil {
 				mu.Lock()
 				evidence.Gaps = append(evidence.Gaps, domain.EvidenceGap{Area: area, Code: domain.DiagnosticGapUnavailable})
+				evidence.AreaResults = append(evidence.AreaResults, domain.DiagnosticAreaResult{Area: area, Outcome: "gap", DurationMs: time.Since(started).Milliseconds()})
 				mu.Unlock()
 				return nil
 			}
@@ -77,10 +97,16 @@ func (a *systemAssistantDiagnosticAdapter) Collect(
 			defer mu.Unlock()
 			if collectErr != nil {
 				evidence.Gaps = append(evidence.Gaps, domain.EvidenceGap{Area: area, Code: diagnosticSafeGapCode(collectErr)})
+				evidence.AreaResults = append(evidence.AreaResults, domain.DiagnosticAreaResult{Area: area, Outcome: "gap", DurationMs: time.Since(started).Milliseconds()})
 				return nil
 			}
 			evidence.Facts = append(evidence.Facts, filterDiagnosticFacts(req, facts)...)
 			evidence.Gaps = append(evidence.Gaps, gaps...)
+			outcome := "success"
+			if len(gaps) > 0 {
+				outcome = "gap"
+			}
+			evidence.AreaResults = append(evidence.AreaResults, domain.DiagnosticAreaResult{Area: area, Outcome: outcome, DurationMs: time.Since(started).Milliseconds()})
 			return nil
 		})
 	}
@@ -92,6 +118,7 @@ func (a *systemAssistantDiagnosticAdapter) Collect(
 		return evidence.Facts[i].Area < evidence.Facts[j].Area
 	})
 	sort.SliceStable(evidence.Gaps, func(i, j int) bool { return evidence.Gaps[i].Area < evidence.Gaps[j].Area })
+	sort.SliceStable(evidence.AreaResults, func(i, j int) bool { return evidence.AreaResults[i].Area < evidence.AreaResults[j].Area })
 	return evidence, nil
 }
 

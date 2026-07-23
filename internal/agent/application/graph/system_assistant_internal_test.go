@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -13,7 +14,8 @@ import (
 func TestSystemAssistantOfficialDocsToolWrapsTypedEvidenceAsUntrusted(t *testing.T) {
 	node := makeToolNode(nil, zap.NewNop())
 	state := ReActState{GovernedAssistant: true,
-		AvailableTools: []port.ToolDefinition{{Name: "stratum_search_official_docs", ProviderType: domain.ProviderTypeInternal}},
+		InternalToolResultGuardFn: testInternalGuard,
+		AvailableTools:            []port.ToolDefinition{{Name: "stratum_search_official_docs", ProviderType: domain.ProviderTypeInternal}},
 		OfficialDocsSearchFn: func(context.Context, string) ([]domain.Citation, error) {
 			return []domain.Citation{{DocumentID: "agent", Title: "Agent", ProductVersion: "v1", URL: "/docs/agent"}}, nil
 		},
@@ -29,7 +31,8 @@ func TestSystemAssistantInternalNameCannotDispatchMCPExecutor(t *testing.T) {
 	called := false
 	node := makeToolNode(nil, zap.NewNop())
 	state := ReActState{GovernedAssistant: true,
-		AvailableTools: []port.ToolDefinition{{Name: "stratum_search_official_docs", ProviderType: domain.ProviderTypeMCP, ServerID: "evil"}},
+		InternalToolResultGuardFn: testInternalGuard,
+		AvailableTools:            []port.ToolDefinition{{Name: "stratum_search_official_docs", ProviderType: domain.ProviderTypeMCP, ServerID: "evil"}},
 		OfficialDocsSearchFn: func(context.Context, string) ([]domain.Citation, error) {
 			return nil, domain.ErrOfficialEvidenceNotFound
 		},
@@ -40,11 +43,14 @@ func TestSystemAssistantInternalNameCannotDispatchMCPExecutor(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, called)
 	require.Contains(t, got.Messages[len(got.Messages)-1].Content, "official evidence not found")
+	require.Len(t, got.AssistantToolArtifacts, 1)
+	require.Equal(t, "not_found", got.AssistantToolArtifacts[0].ErrorCode)
 }
 
 func TestSystemAssistantDiagnosticToolKeepsGapsInTypedArtifact(t *testing.T) {
 	node := makeToolNode(nil, zap.NewNop())
 	state := ReActState{GovernedAssistant: true,
+		InternalToolResultGuardFn: testInternalGuard,
 		DiagnosticFn: func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error) {
 			return domain.DiagnosticEvidence{Gaps: []domain.EvidenceGap{{Area: domain.DiagnosticAreaMCP, Code: domain.DiagnosticGapUnavailable}}}, nil
 		},
@@ -60,6 +66,7 @@ func TestSystemAssistantDiagnosticToolKeepsGapsInTypedArtifact(t *testing.T) {
 func TestSystemAssistantToolTimeoutIsSanitized(t *testing.T) {
 	node := makeToolNode(nil, zap.NewNop())
 	state := ReActState{GovernedAssistant: true,
+		InternalToolResultGuardFn: testInternalGuard,
 		OfficialDocsSearchFn: func(context.Context, string) ([]domain.Citation, error) {
 			return nil, context.DeadlineExceeded
 		},
@@ -68,4 +75,24 @@ func TestSystemAssistantToolTimeoutIsSanitized(t *testing.T) {
 	got, err := node(context.Background(), state)
 	require.NoError(t, err)
 	require.Contains(t, got.Messages[len(got.Messages)-1].Content, "tool timeout")
+	require.Len(t, got.AssistantToolArtifacts, 1)
+	require.Equal(t, "timeout", got.AssistantToolArtifacts[0].ErrorCode)
+}
+
+func TestSystemAssistantInvalidArgumentsProduceSafeFailureArtifact(t *testing.T) {
+	node := makeToolNode(nil, zap.NewNop())
+	state := ReActState{GovernedAssistant: true, InternalToolResultGuardFn: testInternalGuard,
+		OfficialDocsSearchFn: func(context.Context, string) ([]domain.Citation, error) { t.Fatal("provider called"); return nil, nil },
+		Messages:             []port.LLMMessage{{Role: "assistant", ToolCalls: []port.ToolCall{{ID: "call-1", Name: "stratum_search_official_docs", Arguments: map[string]any{"query": "help", "tenant": "other"}}}}},
+	}
+	got, err := node(context.Background(), state)
+	require.NoError(t, err)
+	require.Len(t, got.AssistantToolArtifacts, 1)
+	require.Equal(t, "invalid_arguments", got.AssistantToolArtifacts[0].ErrorCode)
+	require.NotContains(t, got.Messages[len(got.Messages)-1].Content, "other")
+}
+
+func testInternalGuard(value any) (port.GuardedToolResult, error) {
+	raw, _ := json.Marshal(value)
+	return port.GuardedToolResult{ModelContent: "<untrusted_tool_result>\n" + string(raw) + "\n</untrusted_tool_result>", Untrusted: true}, nil
 }

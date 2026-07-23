@@ -52,7 +52,6 @@ type AgentServiceDeps struct {
 	Metrics                 observability.MetricsProvider
 	OfficialDocsSearch      func(context.Context, string) ([]domain.Citation, error)
 	DiagnosticProvider      port.DiagnosticEvidenceProvider
-	TenantRoleResolver      port.TenantRoleResolver
 	Logger                  *zap.Logger
 }
 
@@ -483,6 +482,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 	executionID := uuid.Must(uuid.NewV7()).String()
 	_, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
 	if err != nil {
+		s.recordSystemAssistantRequest(a, "unknown", "error")
 		return nil, 0, fmt.Errorf("execute agent: assemble options: %w", err)
 	}
 	options = append(options, WithExecutionID(executionID))
@@ -507,6 +507,8 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		outcome := "success"
 		if err != nil {
 			outcome = "error"
+		} else if hasFailedAssistantArtifact(result) {
+			outcome = "evidence_error"
 		}
 		s.deps.Metrics.IncSystemAssistantRequest(assistantCfg.SystemAssistantRoleClass,
 			assistantCfg.EvolutionTrace.ResourceManifest["system-assistant-profile"], outcome)
@@ -531,7 +533,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		)
 	}
 
-	if err == nil && result != nil && s.deps.MemoryBuffer != nil {
+	if err == nil && result != nil && s.deps.MemoryBuffer != nil && !assistantCfg.SystemAssistantMode {
 		scope := a.GetConfig().MemoryScope
 		_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "user", req.Query)
 		_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "assistant", result.Output)
@@ -558,6 +560,7 @@ func (s *AgentService) ExecuteStream(
 	executionID := uuid.Must(uuid.NewV7()).String()
 	streamCtx, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
 	if err != nil {
+		s.recordSystemAssistantRequest(a, "unknown", "error")
 		return nil, nil, nil, fmt.Errorf("execute stream: assemble options: %w", err)
 	}
 	assistantCfg := &ExecutionConfig{}
@@ -596,6 +599,8 @@ func (s *AgentService) ExecuteStream(
 			outcome := "success"
 			if runErr != nil {
 				outcome = "error"
+			} else if hasFailedAssistantArtifact(res) {
+				outcome = "evidence_error"
 			}
 			s.deps.Metrics.IncSystemAssistantRequest(assistantCfg.SystemAssistantRoleClass,
 				assistantCfg.EvolutionTrace.ResourceManifest["system-assistant-profile"], outcome)
@@ -616,7 +621,7 @@ func (s *AgentService) ExecuteStream(
 				zap.Int("duration_ms", durationMs),
 			)
 		}
-		if runErr == nil && res != nil && s.deps.MemoryBuffer != nil {
+		if runErr == nil && res != nil && s.deps.MemoryBuffer != nil && !assistantCfg.SystemAssistantMode {
 			scope := a.GetConfig().MemoryScope
 			_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "user", req.Query)
 			_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "assistant", res.Output)
@@ -624,6 +629,47 @@ func (s *AgentService) ExecuteStream(
 		return res, durationMs, runErr
 	}
 	return execCtx, cancel, run, nil
+}
+
+func (s *AgentService) recordSystemAssistantRequest(a Agent, roleClass, outcome string) {
+	if a == nil || a.GetConfig().SystemKey != domain.SystemAssistantKey || s.deps.Metrics == nil {
+		return
+	}
+	version := domain.CurrentSystemAssistantProfileVersion
+	if s.deps.Registry != nil {
+		if resolved, err := s.deps.Registry.systemAssistantProfileVersion(); err == nil {
+			version = resolved
+		}
+	}
+	s.deps.Metrics.IncSystemAssistantRequest(roleClass, version, outcome)
+}
+
+func hasFailedAssistantArtifact(result *AgentResult) bool {
+	if result == nil {
+		return false
+	}
+	for _, artifact := range result.AssistantToolArtifacts {
+		if artifact.Outcome != "success" {
+			return true
+		}
+	}
+	return false
+}
+
+func boundedAssistantRoleClass(role string) string {
+	if role == "admin" || role == "member" {
+		return role
+	}
+	return "unknown"
+}
+
+func boundedAssistantOutcome(outcome string) string {
+	switch outcome {
+	case "success", "gap", "error", "evidence_error", "matched":
+		return outcome
+	default:
+		return "unknown"
+	}
 }
 
 // ListExecutions paginates the per-tenant execution history.
@@ -881,17 +927,18 @@ func (s *AgentService) assembleOptions(
 	)
 	if isSystemAssistant {
 		profileVersion := evolutionTrace.ResourceManifest["system-assistant-profile"]
-		roleClass := "member"
-		if s.deps.TenantRoleResolver != nil {
-			role, roleErr := s.deps.TenantRoleResolver.ResolveTenantRole(ctx, meta.TenantID, req.UserID)
-			if roleErr != nil {
-				return ctx, nil, domain.ErrDiagnosticForbidden
+		roleClass := "unknown"
+		var authorization domain.DiagnosticAuthorization
+		if s.deps.DiagnosticProvider != nil {
+			var authorizeErr error
+			authorization, authorizeErr = s.deps.DiagnosticProvider.Authorize(ctx, domain.DiagnosticRequest{
+				TenantID: meta.TenantID, UserID: req.UserID,
+				Areas: []domain.DiagnosticArea{domain.DiagnosticAreaAgent, domain.DiagnosticAreaSkill, domain.DiagnosticAreaMCP, domain.DiagnosticAreaKnowledge, domain.DiagnosticAreaModel},
+			})
+			if authorizeErr != nil {
+				return ctx, nil, authorizeErr
 			}
-			if role == "admin" || role == "owner" {
-				roleClass = "admin"
-			} else if role != "member" {
-				return ctx, nil, domain.ErrDiagnosticForbidden
-			}
+			roleClass = boundedAssistantRoleClass(authorization.RoleClass)
 		}
 		if s.deps.OfficialDocsSearch != nil {
 			search := s.deps.OfficialDocsSearch
@@ -908,29 +955,29 @@ func (s *AgentService) assembleOptions(
 			}))
 		}
 		if s.deps.DiagnosticProvider != nil {
-			if s.deps.TenantRoleResolver == nil {
-				return ctx, nil, domain.ErrDiagnosticForbidden
-			}
-			provider, tenantID, userID := s.deps.DiagnosticProvider, meta.TenantID, req.UserID
+			provider, authorized := s.deps.DiagnosticProvider, authorization.Request
 			options = append(options, WithDiagnosticFn(func(callCtx context.Context, areas []domain.DiagnosticArea) (domain.DiagnosticEvidence, error) {
-				started := time.Now()
-				evidence, diagnosticErr := provider.Collect(callCtx, domain.DiagnosticRequest{TenantID: tenantID, UserID: userID, Areas: areas})
+				request := authorized
+				request.Areas = append([]domain.DiagnosticArea(nil), areas...)
+				evidence, diagnosticErr := provider.CollectAuthorized(callCtx, request)
 				if s.deps.Metrics != nil {
-					outcome := "success"
-					if diagnosticErr != nil {
-						outcome = "error"
-					} else if len(evidence.Gaps) > 0 {
-						outcome = "gap"
-					}
-					for _, area := range areas {
-						s.deps.Metrics.RecordSystemAssistantDiagnosticArea(roleClass, string(area), outcome, time.Since(started).Seconds())
+					for _, result := range evidence.AreaResults {
+						s.deps.Metrics.RecordSystemAssistantDiagnosticArea(roleClass, string(result.Area), boundedAssistantOutcome(result.Outcome), float64(result.DurationMs)/1000)
 					}
 					s.deps.Metrics.RecordSystemAssistantEvidenceGaps(roleClass, profileVersion, len(evidence.Gaps))
 				}
 				return evidence, diagnosticErr
 			}))
 		}
-		options = append(options, WithSystemAssistantMode(), withSystemAssistantRoleClass(roleClass))
+		guard := NewToolResultGuard()
+		options = append(options, WithSystemAssistantMode(), withSystemAssistantRoleClass(roleClass),
+			withInternalToolResultGuard(func(value any) (port.GuardedToolResult, error) {
+				structured, ok := value.(map[string]any)
+				if !ok {
+					return port.GuardedToolResult{}, ErrMCPToolResultSchema
+				}
+				return guard.Validate(port.MCPToolResult{StructuredContent: structured}, nil)
+			}))
 		return ctx, options, nil
 	}
 	if s.deps.ToolAuthorizer != nil {

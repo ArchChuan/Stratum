@@ -14,7 +14,8 @@ type SystemAssistantProfileSource interface {
 }
 
 type DiagnosticEvidenceProvider interface {
-	Collect(context.Context, domain.DiagnosticRequest) (domain.DiagnosticEvidence, error)
+	Authorize(context.Context, domain.DiagnosticRequest) (domain.DiagnosticAuthorization, error)
+	CollectAuthorized(context.Context, domain.DiagnosticRequest) (domain.DiagnosticEvidence, error)
 }
 
 type TenantRoleResolver interface {

@@ -209,6 +209,30 @@ func TestSystemAssistantDiagnosticUsesSafeAreaGaps(t *testing.T) {
 		require.Equal(t, domain.DiagnosticGapUnavailable, gap.Code)
 		require.NotContains(t, gap.Code, "raw")
 	}
+	require.Len(t, got.AreaResults, 2)
+	for _, result := range got.AreaResults {
+		require.Equal(t, "gap", result.Outcome)
+	}
+}
+
+func TestSystemAssistantDiagnosticRecordsIndependentAreaOutcomes(t *testing.T) {
+	adapter := newSystemAssistantDiagnosticAdapter(diagnosticRoleStub{role: "admin"}, map[domain.DiagnosticArea]diagnosticAreaCollector{
+		domain.DiagnosticAreaAgent: func(context.Context, domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
+			time.Sleep(time.Millisecond)
+			return []domain.DiagnosticFact{{Area: domain.DiagnosticAreaAgent, ObjectID: "ok"}}, nil, nil
+		},
+		domain.DiagnosticAreaMCP: func(context.Context, domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
+			time.Sleep(5 * time.Millisecond)
+			return nil, []domain.EvidenceGap{{Area: domain.DiagnosticAreaMCP, Code: domain.DiagnosticGapUnavailable}}, nil
+		},
+	})
+	got, err := adapter.Collect(context.Background(), domain.DiagnosticRequest{TenantID: "tenant-1", UserID: "admin-1", Areas: []domain.DiagnosticArea{domain.DiagnosticAreaAgent, domain.DiagnosticAreaMCP}})
+	require.NoError(t, err)
+	require.Equal(t, domain.DiagnosticAreaAgent, got.AreaResults[0].Area)
+	require.Equal(t, "success", got.AreaResults[0].Outcome)
+	require.Equal(t, domain.DiagnosticAreaMCP, got.AreaResults[1].Area)
+	require.Equal(t, "gap", got.AreaResults[1].Outcome)
+	require.Less(t, got.AreaResults[0].DurationMs, got.AreaResults[1].DurationMs)
 }
 
 func TestSystemAssistantDiagnosticBoundsConcurrencyAndWaits(t *testing.T) {

@@ -43,31 +43,32 @@ type (
 // in the application layer because it references port.ToolDefinition and
 // function types that depend on cross-context ports.
 type ExecutionConfig struct {
-	MaxSteps                 int
-	Timeout                  time.Duration
-	Temperature              float32
-	EnableTools              bool
-	AvailableTools           []string
-	Stream                   bool
-	TokenCallback            func(string)
-	TenantID                 string
-	TraceID                  string
-	ExecutionID              string
-	LLMAPIKeys               map[string]string
-	RAGSearchFn              func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
-	ExtraTools               []port.ToolDefinition
-	SkillCatalog             map[string]port.SkillActivation
-	ToolExecutionFn          port.ToolExecutionFn
-	ActiveSkill              *port.SkillActivation
-	TracePayloadStore        port.TracePayloadStore
-	ConversationID           string
-	UserID                   string
-	HistoryWindow            int
-	EvolutionTrace           EvolutionTraceMetadata
-	OfficialDocsSearchFn     func(context.Context, string) ([]domain.Citation, error)
-	DiagnosticFn             func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
-	SystemAssistantMode      bool
-	SystemAssistantRoleClass string
+	MaxSteps                  int
+	Timeout                   time.Duration
+	Temperature               float32
+	EnableTools               bool
+	AvailableTools            []string
+	Stream                    bool
+	TokenCallback             func(string)
+	TenantID                  string
+	TraceID                   string
+	ExecutionID               string
+	LLMAPIKeys                map[string]string
+	RAGSearchFn               func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	ExtraTools                []port.ToolDefinition
+	SkillCatalog              map[string]port.SkillActivation
+	ToolExecutionFn           port.ToolExecutionFn
+	ActiveSkill               *port.SkillActivation
+	TracePayloadStore         port.TracePayloadStore
+	ConversationID            string
+	UserID                    string
+	HistoryWindow             int
+	EvolutionTrace            EvolutionTraceMetadata
+	OfficialDocsSearchFn      func(context.Context, string) ([]domain.Citation, error)
+	DiagnosticFn              func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
+	SystemAssistantMode       bool
+	SystemAssistantRoleClass  string
+	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)
 }
 
 // EvolutionTraceMetadata attributes an execution to evaluation and rollout evidence.
@@ -252,7 +253,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 
 	// Inject memory context into system prompt
 	var memCtx string
-	if a.MemoryInjector != nil && cfg.ConversationID != "" {
+	if !cfg.SystemAssistantMode && a.MemoryInjector != nil && cfg.ConversationID != "" {
 		ic := port.InjectionContext{
 			TenantID:       cfg.TenantID,
 			UserID:         cfg.UserID,
@@ -277,8 +278,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		zap.String("agent_id", agentID),
 		zap.String("trace_id", cfg.TraceID),
 		zap.String("conversation_id", cfg.ConversationID),
-		zap.String("type", string(agentType)),
-		zap.String("input", input))
+		zap.String("type", string(agentType)))
 
 	result := &AgentResult{
 		AgentID:  agentID,
@@ -344,6 +344,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			OfficialDocsSearchFn:       cfg.OfficialDocsSearchFn,
 			DiagnosticFn:               cfg.DiagnosticFn,
 			GovernedAssistant:          cfg.SystemAssistantMode,
+			InternalToolResultGuardFn:  cfg.InternalToolResultGuardFn,
 			ExecutionID:                cfg.ExecutionID,
 			AgentKnowledgeWorkspaceIDs: workspaceNames,
 			AgentMemoryScope:           memoryScope,
@@ -383,7 +384,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			}
 			return agentgraph.PlanNodeExecutionResult{Summary: final.Output}, nil
 		}
-		if a.RecallMemoryFn != nil {
+		if !cfg.SystemAssistantMode && a.RecallMemoryFn != nil {
 			fn := a.RecallMemoryFn
 			initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
 				return fn(ctx, cfg.TenantID, cfg.UserID, agentID, memoryScope, input)
@@ -907,6 +908,10 @@ func WithSystemAssistantMode() ExecutionOption {
 
 func withSystemAssistantRoleClass(roleClass string) ExecutionOption {
 	return func(cfg *ExecutionConfig) { cfg.SystemAssistantRoleClass = roleClass }
+}
+
+func withInternalToolResultGuard(fn func(any) (port.GuardedToolResult, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.InternalToolResultGuardFn = fn }
 }
 
 func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cfg ExecutionConfig) []attribute.KeyValue {

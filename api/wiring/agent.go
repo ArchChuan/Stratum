@@ -242,7 +242,6 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	)
 	deps.OfficialDocsSearch = officialdocs.Search
 	deps.DiagnosticProvider = a.DiagnosticProvider
-	deps.TenantRoleResolver = tenantRoleAdapter{service: tenantMemberService(c)}
 	a.Service = agent.NewAgentService(deps)
 
 	c.Agent = a
