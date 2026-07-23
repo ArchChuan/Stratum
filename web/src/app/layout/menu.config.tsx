@@ -12,6 +12,7 @@ import {
   ThunderboltOutlined,
   ExperimentOutlined,
   BranchesOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Link } from 'react-router-dom';
@@ -32,6 +33,7 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       label: '流程',
       children: [
         { key: '/workflows', icon: <BranchesOutlined />, label: <Link to="/workflows">工作流</Link> },
+        { key: '/workflow-runs', icon: <HistoryOutlined />, label: <Link to="/workflow-runs">运行中心</Link> },
         canManageTenant ? {
           key: '/workflows/new', icon: <PlusCircleOutlined />, label: <Link to="/workflows/new">新建工作流</Link>,
         } : null,

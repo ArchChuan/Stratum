@@ -65,6 +65,9 @@
 .workflow-execution-page { margin: 0 auto; max-width: 760px; }
 .workflow-execution-header { align-items: flex-start; display: grid; gap: 12px; grid-template-columns: auto auto 1fr; margin-bottom: 20px; }
 .workflow-execution-header h3, .workflow-execution-header p { margin: 0; }
+.workflow-runs-header { align-items: flex-start; display: flex; gap: 14px; margin-bottom: 18px; }
+.workflow-runs-header h3, .workflow-runs-header p { margin: 0; }
+.workflow-run-filters { margin-bottom: 16px; }
 
 @media (max-width: 767px) {
   .workflow-catalog-header { align-items: stretch; flex-direction: column; }
