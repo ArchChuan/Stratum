@@ -288,7 +288,8 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 	chat := agentpersist.NewPgChatStore(pool, zap.NewNop())
 	registry := agentapp.NewRegistry(repo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop())
 	service := agentapp.NewAgentService(agentapp.AgentServiceDeps{
-		Registry: registry, TenantResolver: deterministicTenantResolver{gateway: gateway}, ChatStore: chat,
+		Registry: registry, TenantResolver: deterministicTenantResolver{gateway: gateway},
+		TenantModelValidator: deterministicModelValidator{}, ChatStore: chat,
 		OfficialDocsSearch: officialdocs.Search, DiagnosticProvider: deterministicDiagnostics{}, Logger: zap.NewNop(),
 	})
 	conversation, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, userID, "确定性 Agent Loop")
