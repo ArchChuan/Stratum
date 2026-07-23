@@ -2,9 +2,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { WorkflowCatalogPage } from './WorkflowCatalogPage';
-
 import { workflowApi } from '../api/workflow.api';
+
+import { WorkflowCatalogPage } from './WorkflowCatalogPage';
 
 const role = vi.hoisted(() => ({ isAdmin: false }));
 const navigate = vi.hoisted(() => vi.fn());

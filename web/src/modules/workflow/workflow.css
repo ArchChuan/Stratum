@@ -34,6 +34,20 @@
 .workflow-card-spine { background: var(--workflow-track); inset: 0 auto 0 0; position: absolute; width: 4px; }
 .workflow-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 
+.workflow-editor-workspace { display: grid; grid-template-columns: 180px minmax(0, 1fr); min-height: 640px; }
+.workflow-node-palette { background: #fff; border: 1px solid #e7e9f2; border-radius: 12px 0 0 12px; padding: 18px; }
+.workflow-node-palette-list { display: grid; gap: 10px; margin-top: 16px; }
+.workflow-node-palette-list .ant-btn { justify-content: flex-start; width: 100%; }
+.workflow-canvas { background: #f7f8fc; border: 1px solid #e7e9f2; border-left: 0; border-radius: 0 12px 12px 0; min-height: 640px; position: relative; }
+.workflow-fit-view { position: absolute; right: 16px; top: 16px; z-index: 5; }
+.workflow-node-card { align-items: center; background: #fff; border: 1px solid #dfe3ee; border-radius: 12px; box-shadow: 0 8px 24px rgb(30 42 70 / 8%); display: flex; gap: 12px; height: 88px; padding: 14px 18px; width: 224px; }
+.workflow-node-card.is-selected { border-color: var(--workflow-track); box-shadow: 0 0 0 3px rgb(91 91 214 / 14%); }
+.workflow-node-card small { color: var(--workflow-muted); display: block; margin-top: 3px; }
+.workflow-node-icon { align-items: center; background: #ececff; border-radius: 10px; color: var(--workflow-track); display: inline-flex; flex: 0 0 auto; height: 38px; justify-content: center; width: 38px; }
+.workflow-node-icon.type-condition { background: #fff5db; color: #a86500; }
+.workflow-node-icon.type-approval { background: #fff0f0; color: #c0394b; }
+.workflow-node-size-contract { display: none; }
+
 @media (max-width: 767px) {
   .workflow-catalog-header { align-items: stretch; flex-direction: column; }
   .workflow-catalog-actions { display: grid; grid-template-columns: 1fr; }
