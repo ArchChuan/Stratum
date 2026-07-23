@@ -130,7 +130,7 @@ func (c *Client) ListExecutions(
 	if opts.PageSize < 1 {
 		opts.PageSize = 20
 	}
-	filters := traceFilters(tenantID, "")
+	filters := traceFiltersWithUser(tenantID, "", opts.UserID)
 	var page tracePage
 	if err := c.get(ctx, "/v1/private/traces", url.Values{
 		"project_name": {c.config.Project}, "page": {strconv.Itoa(opts.Page)}, "size": {strconv.Itoa(opts.PageSize)},
@@ -172,12 +172,21 @@ func (c *Client) resolveTrace(ctx context.Context, tenantID, traceID string) (op
 }
 
 func traceFilters(tenantID, traceID string) string {
+	return traceFiltersWithUser(tenantID, traceID, "")
+}
+
+func traceFiltersWithUser(tenantID, traceID, userID string) string {
 	filters := []map[string]string{{
 		"field": "metadata", "operator": "=", "key": metadataJSONPath("tenant_id"), "value": tenantID,
 	}}
 	if traceID != "" {
 		filters = append(filters, map[string]string{
 			"field": "metadata", "operator": "=", "key": metadataJSONPath("trace_id"), "value": traceID,
+		})
+	}
+	if userID != "" {
+		filters = append(filters, map[string]string{
+			"field": "metadata", "operator": "=", "key": metadataJSONPath("user_id"), "value": userID,
 		})
 	}
 	encoded, _ := json.Marshal(filters)

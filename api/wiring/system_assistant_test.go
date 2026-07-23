@@ -3,6 +3,7 @@ package wiring
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +17,47 @@ import (
 type diagnosticRoleStub struct {
 	role string
 	err  error
+}
+
+type diagnosticTraceProviderStub struct {
+	opts     domain.ListOptions
+	tenantID string
+}
+
+func (s *diagnosticTraceProviderStub) ListExecutions(_ context.Context, tenantID string, opts domain.ListOptions) ([]domain.ExecutionRecord, int64, error) {
+	s.tenantID, s.opts = tenantID, opts
+	if opts.UserID == "user-1" {
+		return []domain.ExecutionRecord{{ID: "mine", UserID: "user-1"}}, 1, nil
+	}
+	rows := make([]domain.ExecutionRecord, 20)
+	for i := range rows {
+		rows[i] = domain.ExecutionRecord{ID: "other", UserID: "user-2"}
+	}
+	return rows, 20, nil
+}
+func (*diagnosticTraceProviderStub) ToolObservations(context.Context, string, string) ([]domain.ToolObservation, error) {
+	return nil, nil
+}
+func (*diagnosticTraceProviderStub) TraceEvents(context.Context, string, string) ([]domain.AgentTraceEvent, error) {
+	return nil, nil
+}
+func (*diagnosticTraceProviderStub) Resolve(context.Context, string, string) (domain.TraceEvidence, error) {
+	return domain.TraceEvidence{}, nil
+}
+func (*diagnosticTraceProviderStub) ResolveBatch(context.Context, string, []string) (map[string]domain.TraceEvidence, error) {
+	return nil, nil
+}
+
+func TestAgentDiagnosticCollectorFiltersUpstreamBeforeLimit(t *testing.T) {
+	provider := &diagnosticTraceProviderStub{}
+	facts, _, err := agentDiagnosticCollector(provider)(context.Background(), domain.DiagnosticRequest{
+		TenantID: "tenant-1", UserID: "user-1", Scope: domain.DiagnosticScopeSelf,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "tenant-1", provider.tenantID)
+	require.Equal(t, "user-1", provider.opts.UserID)
+	require.Len(t, facts, 1)
+	require.Equal(t, "mine", facts[0].ObjectID)
 }
 
 func (s diagnosticRoleStub) ResolveTenantRole(context.Context, string, string) (string, error) {
@@ -88,6 +130,18 @@ func TestSkillDiagnosticCollectorKeepsSkillFactsWhenEvaluationUnavailable(t *tes
 	require.NotEmpty(t, facts)
 	require.Equal(t, []domain.EvidenceGap{{Area: domain.DiagnosticAreaSkill, Code: domain.DiagnosticGapUnavailable}}, gaps)
 	require.NotContains(t, gaps[0].Code, "raw evaluation")
+}
+
+func TestSkillDiagnosticCollectorMemberReceivesOnlyPublicStatusProjection(t *testing.T) {
+	skills := &diagnosticSkillServiceStub{products: []skillapp.SkillProduct{{ID: "skill-public", Name: "secret-name", Description: "secret-description", Status: "published", ActiveRevisionID: "rev-1"}}}
+	facts, _, err := skillDiagnosticCollector(skills, &diagnosticSkillEvaluationStub{})(context.Background(), domain.DiagnosticRequest{
+		TenantID: "tenant-1", UserID: "member-1", Scope: domain.DiagnosticScopeSelf,
+	})
+	require.NoError(t, err)
+	raw := fmt.Sprintf("%v", facts)
+	require.Contains(t, raw, "skill_status=published")
+	require.NotContains(t, raw, "secret-name")
+	require.NotContains(t, raw, "secret-description")
 }
 
 func diagnosticStatements(facts []domain.DiagnosticFact) []string {
@@ -179,4 +233,22 @@ func TestSystemAssistantDiagnosticBoundsConcurrencyAndWaits(t *testing.T) {
 	require.LessOrEqual(t, maximum.Load(), int32(diagnosticCollectorConcurrency))
 	require.Equal(t, int32(len(areas)), finished.Load())
 	close(release)
+}
+
+func TestSystemAssistantDiagnosticDispatchesDuplicateAreaOnce(t *testing.T) {
+	var calls atomic.Int32
+	adapter := newSystemAssistantDiagnosticAdapter(diagnosticRoleStub{role: "owner"}, map[domain.DiagnosticArea]diagnosticAreaCollector{
+		domain.DiagnosticAreaAgent: func(context.Context, domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
+			calls.Add(1)
+			return []domain.DiagnosticFact{{Area: domain.DiagnosticAreaAgent, ObjectID: "one"}}, nil, nil
+		},
+	})
+	areas := make([]domain.DiagnosticArea, 100)
+	for i := range areas {
+		areas[i] = domain.DiagnosticAreaAgent
+	}
+	got, err := adapter.Collect(context.Background(), domain.DiagnosticRequest{TenantID: "tenant-1", UserID: "owner", Areas: areas})
+	require.NoError(t, err)
+	require.Equal(t, int32(1), calls.Load())
+	require.Len(t, got.Facts, 1)
 }

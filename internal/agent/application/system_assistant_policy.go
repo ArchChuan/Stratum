@@ -21,6 +21,7 @@ func AuthorizeDiagnosticRequest(
 			return domain.DiagnosticRequest{}, domain.ErrDiagnosticForbidden
 		}
 	}
+	req.Areas = canonicalDiagnosticAreas(req.Areas)
 	role, err := resolver.ResolveTenantRole(ctx, req.TenantID, req.UserID)
 	if err != nil {
 		return domain.DiagnosticRequest{}, domain.ErrDiagnosticForbidden
@@ -36,4 +37,17 @@ func AuthorizeDiagnosticRequest(
 		return domain.DiagnosticRequest{}, domain.ErrDiagnosticForbidden
 	}
 	return req, nil
+}
+
+func canonicalDiagnosticAreas(areas []domain.DiagnosticArea) []domain.DiagnosticArea {
+	seen := make(map[domain.DiagnosticArea]struct{}, len(areas))
+	out := make([]domain.DiagnosticArea, 0, len(areas))
+	for _, area := range areas {
+		if _, ok := seen[area]; ok {
+			continue
+		}
+		seen[area] = struct{}{}
+		out = append(out, area)
+	}
+	return out
 }

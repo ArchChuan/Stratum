@@ -20,3 +20,7 @@ type DiagnosticEvidenceProvider interface {
 type TenantRoleResolver interface {
 	ResolveTenantRole(context.Context, string, string) (string, error)
 }
+
+type TenantModelDiagnosticProvider interface {
+	DiagnosticModelStatus(context.Context, string) (domain.TenantModelDiagnosticStatus, error)
+}

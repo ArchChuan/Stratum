@@ -63,3 +63,16 @@ func TestDiagnosticScopePolicyFailsClosed(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrDiagnosticForbidden)
 	require.NotContains(t, err.Error(), "raw IAM failure")
 }
+
+func TestDiagnosticAreasAreCanonicallyDeduplicated(t *testing.T) {
+	areas := make([]domain.DiagnosticArea, 0, 101)
+	for i := 0; i < 100; i++ {
+		areas = append(areas, domain.DiagnosticAreaAgent)
+	}
+	areas = append(areas, domain.DiagnosticAreaModel)
+	got, err := AuthorizeDiagnosticRequest(context.Background(), diagnosticRoleResolverStub{role: "owner"}, domain.DiagnosticRequest{
+		TenantID: "tenant-1", UserID: "owner-1", Areas: areas,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []domain.DiagnosticArea{domain.DiagnosticAreaAgent, domain.DiagnosticAreaModel}, got.Areas)
+}

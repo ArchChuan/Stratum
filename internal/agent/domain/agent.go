@@ -143,6 +143,7 @@ type ExecutionRecord struct {
 type ListOptions struct {
 	Page     int
 	PageSize int
+	UserID   string
 }
 
 // Message represents a single message in an agent's in-memory conversation history.

@@ -117,3 +117,33 @@ func TestTenantCapabilityResolverRejectsUnsupportedProvider(t *testing.T) {
 	require.Nil(t, client)
 	require.ErrorContains(t, err, "no supported provider configured")
 }
+
+func TestTenantCapabilityResolverDiagnosticModelStatus(t *testing.T) {
+	aesKey := pkgcrypto.DeriveAESKey("diagnostic-model-key")
+	encrypted, err := pkgcrypto.Encrypt(aesKey, "provider-key")
+	require.NoError(t, err)
+	tests := []struct {
+		name       string
+		settings   map[string]any
+		configured bool
+		wantErr    bool
+	}{
+		{name: "not configured", settings: map[string]any{}, configured: false},
+		{name: "configured", settings: map[string]any{"llm_api_keys": map[string]any{"qwen": encrypted}}, configured: true},
+		{name: "decrypt failure", settings: map[string]any{"llm_api_keys": map[string]any{"qwen": "not-ciphertext"}}, wantErr: true},
+		{name: "unsupported", settings: map[string]any{"llm_api_keys": map[string]any{"other": encrypted}}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, marshalErr := json.Marshal(tt.settings)
+			require.NoError(t, marshalErr)
+			resolver := &tenantCapabilityResolver{db: tenantSettingsQueryFunc(func(_ context.Context, _ string, args ...any) pgx.Row {
+				require.Equal(t, "tenant-1", args[0])
+				return tenantSettingsRow{settings: raw}
+			}), aesKey: aesKey, logger: zap.NewNop()}
+			status, diagnosticErr := resolver.DiagnosticModelStatus(context.Background(), "tenant-1")
+			require.Equal(t, tt.wantErr, diagnosticErr != nil)
+			require.Equal(t, tt.configured, status.Configured)
+		})
+	}
+}

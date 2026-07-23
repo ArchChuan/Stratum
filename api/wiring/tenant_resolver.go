@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
@@ -29,6 +30,40 @@ type tenantCapabilityResolver struct {
 	logger       *zap.Logger
 	qwenBaseURL  string
 	zhipuBaseURL string
+}
+
+func (r *tenantCapabilityResolver) DiagnosticModelStatus(
+	ctx context.Context, tenantID string,
+) (status agentdomain.TenantModelDiagnosticStatus, err error) {
+	if r.db == nil {
+		return status, fmt.Errorf("tenant model diagnostics: settings unavailable")
+	}
+	var settingsJSON []byte
+	if err := r.db.QueryRow(ctx,
+		"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL", tenantID,
+	).Scan(&settingsJSON); err != nil {
+		return status, fmt.Errorf("tenant model diagnostics: settings read failed")
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(settingsJSON, &settings); err != nil {
+		return status, fmt.Errorf("tenant model diagnostics: settings invalid")
+	}
+	apiKeys, ok := settings["llm_api_keys"].(map[string]any)
+	if !ok || len(apiKeys) == 0 {
+		return status, nil
+	}
+	for _, provider := range []string{"qwen", "zhipu"} {
+		encrypted, ok := apiKeys[provider].(string)
+		if !ok || encrypted == "" {
+			continue
+		}
+		if _, err := pkgcrypto.Decrypt(r.aesKey, encrypted); err != nil {
+			return status, fmt.Errorf("tenant model diagnostics: credentials invalid")
+		}
+		status.Configured = true
+		return status, nil
+	}
+	return status, fmt.Errorf("tenant model diagnostics: provider unsupported")
 }
 
 func newTenantCapabilityResolver(

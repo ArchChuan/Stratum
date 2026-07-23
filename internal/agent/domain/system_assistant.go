@@ -82,6 +82,10 @@ type DiagnosticEvidence struct {
 	CollectedAt time.Time        `json:"collectedAt"`
 }
 
+type TenantModelDiagnosticStatus struct {
+	Configured bool
+}
+
 func (a DiagnosticArea) Valid() bool {
 	switch a {
 	case DiagnosticAreaAgent, DiagnosticAreaSkill, DiagnosticAreaMCP, DiagnosticAreaKnowledge, DiagnosticAreaModel:

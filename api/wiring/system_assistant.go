@@ -143,7 +143,9 @@ func systemAssistantDiagnosticCollectors(c *Container, a *Agent) map[domain.Diag
 		collectors[domain.DiagnosticAreaKnowledge] = knowledgeDiagnosticCollector(c.Knowledge.WorkspaceService)
 	}
 	if a != nil && a.TenantResolver != nil {
-		collectors[domain.DiagnosticAreaModel] = modelDiagnosticCollector(a.TenantResolver)
+		if diagnostics, ok := a.TenantResolver.(agentport.TenantModelDiagnosticProvider); ok {
+			collectors[domain.DiagnosticAreaModel] = modelDiagnosticCollector(diagnostics)
+		}
 	}
 	return collectors
 }
@@ -158,7 +160,11 @@ func diagnosticTenantContext(ctx context.Context, req domain.DiagnosticRequest) 
 
 func agentDiagnosticCollector(provider agentport.TraceEvidenceProvider) diagnosticAreaCollector {
 	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
-		records, _, err := provider.ListExecutions(ctx, req.TenantID, domain.ListOptions{Page: 1, PageSize: 20})
+		opts := domain.ListOptions{Page: 1, PageSize: 20}
+		if req.Scope == domain.DiagnosticScopeSelf {
+			opts.UserID = req.UserID
+		}
+		records, _, err := provider.ListExecutions(ctx, req.TenantID, opts)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -187,9 +193,6 @@ type skillEvaluationReader interface {
 
 func skillDiagnosticCollector(service skillDiagnosticService, evaluations skillEvaluationReader) diagnosticAreaCollector {
 	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
-		if req.Scope == domain.DiagnosticScopeSelf {
-			return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
-		}
 		items, err := service.ListSkills(diagnosticTenantContext(ctx, req))
 		if err != nil {
 			return nil, nil, err
@@ -231,9 +234,6 @@ func skillDiagnosticCollector(service skillDiagnosticService, evaluations skillE
 
 func mcpDiagnosticCollector(service *mcpapp.MCPService) diagnosticAreaCollector {
 	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
-		if req.Scope == domain.DiagnosticScopeSelf {
-			return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
-		}
 		ctx = diagnosticTenantContext(ctx, req)
 		servers := service.ListServers(ctx)
 		status := service.ServerStatus(ctx)
@@ -247,8 +247,11 @@ func mcpDiagnosticCollector(service *mcpapp.MCPService) diagnosticAreaCollector 
 			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaMCP, ObjectID: server.ID,
 				Statement: "server_status=" + server.Status, Source: "mcp_server", ObservedAt: server.LastUpdated})
 		}
-		facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaMCP,
-			Statement: "tool_policy_count=" + strconv.Itoa(len(policies)), Source: "mcp_tool_policy", ObservedAt: observedAt})
+		for _, policy := range policies {
+			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaMCP,
+				ObjectID: policy.ServerID + ":" + policy.ToolName, Statement: "tool_policy=" + string(policy.RiskLevel),
+				Source: "mcp_tool_policy", ObservedAt: observedAt})
+		}
 		return facts, nil, nil
 	}
 }
@@ -260,9 +263,6 @@ func diagnosticMCPStatus(status mcpapp.ServerStatusBreakdown) string {
 
 func knowledgeDiagnosticCollector(service *knowledgeapp.WorkspaceService) diagnosticAreaCollector {
 	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
-		if req.Scope == domain.DiagnosticScopeSelf {
-			return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
-		}
 		ctx = diagnosticTenantContext(ctx, req)
 		workspaces, err := service.ListWorkspaces(ctx, req.TenantID)
 		if err != nil {
@@ -297,15 +297,15 @@ func knowledgeIngestSummary(documents []knowledgeapp.DocumentView) string {
 		",completed=" + strconv.Itoa(completed) + ",failed=" + strconv.Itoa(failed)
 }
 
-func modelDiagnosticCollector(resolver agentport.TenantCapabilityResolver) diagnosticAreaCollector {
+func modelDiagnosticCollector(provider agentport.TenantModelDiagnosticProvider) diagnosticAreaCollector {
 	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
-		_, keys, ok := resolver.Resolve(ctx, req.TenantID)
-		statement := "model_available=false"
-		if ok && len(keys) > 0 {
-			statement = "model_available=true"
+		status, err := provider.DiagnosticModelStatus(ctx, req.TenantID)
+		if err != nil {
+			return nil, nil, err
 		}
-		if req.Scope == domain.DiagnosticScopeSelf && !ok {
-			statement = "model_available=false;action=contact_admin"
+		statement := "model_configured=false"
+		if status.Configured {
+			statement = "model_configured=true"
 		}
 		return []domain.DiagnosticFact{{Area: domain.DiagnosticAreaModel, Statement: statement,
 			Source: "tenant_model_configuration", ObservedAt: time.Now().UTC()}}, nil, nil
