@@ -114,6 +114,7 @@ type ChatMessage struct {
 	AgentID        string
 	MemoryScope    string
 	SkipOutbox     bool
+	Artifacts      []ExecutionArtifact
 }
 
 const (
@@ -330,6 +331,7 @@ type AgentResult struct {
 	Error                  error
 	Metadata               map[string]interface{}
 	AssistantToolArtifacts []SystemAssistantToolArtifact
+	Artifacts              []ExecutionArtifact
 }
 
 // AgentState tracks mutable execution progress during a single run.

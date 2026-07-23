@@ -15,6 +15,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/gin-gonic/gin"
@@ -61,22 +62,7 @@ func (h *AgentHandler) ExecuteAgent(c *gin.Context) {
 		respondAgentExecutionError(c, err)
 		return
 	}
-	thoughtsJSON, _ := json.Marshal(result.Thoughts)
-	toolCallsJSON, _ := json.Marshal(result.ToolCalls)
-	c.JSON(http.StatusOK, AgentExecutionResult{
-		AgentID:    id,
-		Input:      req.Query,
-		Output:     result.Output,
-		Steps:      result.Steps,
-		TokensUsed: result.TokensUsed,
-		Duration:   result.Duration.String(),
-		Thoughts:   result.Thoughts,
-		ToolCalls:  result.ToolCalls,
-		Metadata: map[string]interface{}{
-			"thoughtsJSON":  string(thoughtsJSON),
-			"toolCallsJSON": string(toolCallsJSON),
-		},
-	})
+	c.JSON(http.StatusOK, agentExecutionResultDTO(result))
 }
 
 func respondAgentExecutionError(c *gin.Context, err error) {
@@ -162,17 +148,36 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 			writer.EnqueueData(string(payload))
 			return
 		}
-		donePayload, _ := json.Marshal(map[string]interface{}{
-			"done":       true,
-			"output":     result.Output,
-			"steps":      result.Steps,
-			"tokensUsed": result.TokensUsed,
-			"duration":   result.Duration.String(),
-		})
+		donePayload := agentExecutionDonePayload(result)
 		writer.EnqueueData(string(donePayload))
 	}()
 
 	writer.WriteUntilClosed(0)
+}
+
+func agentExecutionResultDTO(result *agent.AgentResult) AgentExecutionResult {
+	thoughtsJSON, _ := json.Marshal(result.Thoughts)
+	toolCallsJSON, _ := json.Marshal(result.ToolCalls)
+	artifacts := result.Artifacts
+	if artifacts == nil {
+		artifacts = []domain.ExecutionArtifact{}
+	}
+	return AgentExecutionResult{AgentID: result.AgentID, Input: result.Input, Output: result.Output, Steps: result.Steps,
+		TokensUsed: result.TokensUsed, Duration: result.Duration.String(), Thoughts: result.Thoughts, ToolCalls: result.ToolCalls,
+		Artifacts: artifacts, Metadata: map[string]interface{}{"thoughtsJSON": string(thoughtsJSON), "toolCallsJSON": string(toolCallsJSON)}}
+}
+
+func agentExecutionDonePayload(result *agent.AgentResult) []byte {
+	dto := agentExecutionResultDTO(result)
+	payload, _ := json.Marshal(struct {
+		Done       bool                       `json:"done"`
+		Output     string                     `json:"output"`
+		Steps      int                        `json:"steps"`
+		TokensUsed int                        `json:"tokensUsed"`
+		Duration   string                     `json:"duration"`
+		Artifacts  []domain.ExecutionArtifact `json:"artifacts"`
+	}{true, dto.Output, dto.Steps, dto.TokensUsed, dto.Duration, dto.Artifacts})
+	return payload
 }
 
 func approvalRequiredSSEPayload(approval *agentport.ToolApprovalRequiredError) []byte {

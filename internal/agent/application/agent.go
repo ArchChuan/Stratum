@@ -578,6 +578,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		result.Output = "Unknown agent type"
 		execErr = fmt.Errorf("unknown agent type: %s", agentType)
 	}
+	result.Artifacts = buildExecutionArtifacts(result.AssistantToolArtifacts, cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"])
 
 	// Persist user input and agent output to ChatStore (outside switch — all agent types benefit).
 	if chatStore != nil && cfg.ConversationID != "" && execErr == nil {
@@ -608,6 +609,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			AgentID:        agentID,
 			MemoryScope:    memoryScope,
 			SkipOutbox:     false,
+			Artifacts:      result.Artifacts,
 		}
 		_, saveAgentSpan := tracer.Start(ctx, "agent.chat_store.save_assistant")
 		saveCtx2, saveCancel2 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
@@ -1080,4 +1082,26 @@ func buildBuiltinTools(workspaceNames, workspaceDescs []string, hasRAG, hasMemor
 		},
 	})
 	return tools
+}
+
+func buildExecutionArtifacts(toolArtifacts []domain.SystemAssistantToolArtifact, profileVersion string) []domain.ExecutionArtifact {
+	if len(toolArtifacts) == 0 {
+		return []domain.ExecutionArtifact{}
+	}
+	citations := make([]domain.Citation, 0)
+	hasDiagnostic := false
+	for _, artifact := range toolArtifacts {
+		citations = append(citations, artifact.Citations...)
+		if artifact.Evidence != nil || artifact.Tool == "stratum_diagnose_tenant" {
+			hasDiagnostic = true
+		}
+	}
+	out := make([]domain.ExecutionArtifact, 0, 2)
+	if len(citations) > 0 {
+		out = append(out, domain.ExecutionArtifact{Type: "citations", ProfileVersion: profileVersion, Citations: citations})
+	}
+	if hasDiagnostic {
+		out = append(out, domain.ExecutionArtifact{Type: "diagnostic_report", ProfileVersion: profileVersion, DiagnosticReport: domain.BuildDiagnosticReport(toolArtifacts)})
+	}
+	return out
 }

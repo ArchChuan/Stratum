@@ -106,6 +106,35 @@ type SystemAssistantToolArtifact struct {
 	ErrorCode string              `json:"errorCode,omitempty"`
 }
 
+type DiagnosticReport struct {
+	Facts              []DiagnosticFact       `json:"facts"`
+	Inferences         []string               `json:"inferences"`
+	EvidenceGaps       []EvidenceGap          `json:"evidenceGaps"`
+	RecommendedActions []string               `json:"recommendedActions"`
+	Citations          []Citation             `json:"citations"`
+	Steps              []DiagnosticAreaResult `json:"steps"`
+}
+
+type ExecutionArtifact struct {
+	Type             string            `json:"type"`
+	ProfileVersion   string            `json:"profileVersion,omitempty"`
+	Citations        []Citation        `json:"citations,omitempty"`
+	DiagnosticReport *DiagnosticReport `json:"diagnosticReport,omitempty"`
+}
+
+func BuildDiagnosticReport(toolArtifacts []SystemAssistantToolArtifact) *DiagnosticReport {
+	r := &DiagnosticReport{Facts: []DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []EvidenceGap{}, RecommendedActions: []string{}, Citations: []Citation{}, Steps: []DiagnosticAreaResult{}}
+	for _, a := range toolArtifacts {
+		r.Citations = append(r.Citations, a.Citations...)
+		if a.Evidence != nil {
+			r.Facts = append(r.Facts, a.Evidence.Facts...)
+			r.EvidenceGaps = append(r.EvidenceGaps, a.Evidence.Gaps...)
+			r.Steps = append(r.Steps, a.Evidence.AreaResults...)
+		}
+	}
+	return r
+}
+
 type TenantModelDiagnosticStatus struct {
 	Configured bool
 }

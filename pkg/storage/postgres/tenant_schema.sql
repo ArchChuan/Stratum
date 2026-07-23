@@ -450,6 +450,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     is_error        BOOLEAN     NOT NULL DEFAULT FALSE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE chat_messages
+    ADD COLUMN IF NOT EXISTS artifacts_json JSONB NOT NULL DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS idx_chat_msg_conv
     ON chat_messages (conversation_id, created_at ASC);
 

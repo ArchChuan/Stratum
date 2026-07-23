@@ -673,3 +673,19 @@ func TestTenantSchemaMigratesLegacyTSVAfterTableCreate(t *testing.T) {
 		t.Fatal("legacy tsv migration must rebuild the idx_kc_tsv GIN index")
 	}
 }
+
+func TestTenantSchemaBackfillsChatMessageArtifactsAfterTableCreate(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS chat_messages")
+	backfillAt := strings.Index(sql, "ALTER TABLE chat_messages\n    ADD COLUMN IF NOT EXISTS artifacts_json JSONB NOT NULL DEFAULT '[]'")
+	if createAt == -1 || backfillAt == -1 {
+		t.Fatal("tenant schema must create chat_messages and backfill artifacts_json")
+	}
+	if backfillAt < createAt {
+		t.Fatal("artifacts_json backfill must follow chat_messages creation for historical tenants")
+	}
+}

@@ -4,7 +4,10 @@
 // api/http/contract_test.go + testdata/contracts/*.golden.json.
 package handler
 
-import agent "github.com/byteBuilderX/stratum/internal/agent/application"
+import (
+	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
+)
 
 type CreateAgentRequest struct {
 	Name                  string   `json:"name" binding:"required"`
@@ -63,16 +66,17 @@ type ExecuteAgentRequest struct {
 }
 
 type AgentExecutionResult struct {
-	AgentID    string                 `json:"agentId"`
-	Input      string                 `json:"input"`
-	Output     string                 `json:"output"`
-	Steps      int                    `json:"steps"`
-	TokensUsed int                    `json:"tokensUsed"`
-	Duration   string                 `json:"duration"`
-	Thoughts   []agent.Thought        `json:"thoughts"`
-	ToolCalls  []agent.ToolCall       `json:"toolCalls"`
-	Metadata   map[string]interface{} `json:"metadata"`
-	Error      string                 `json:"error,omitempty"`
+	AgentID    string                     `json:"agentId"`
+	Input      string                     `json:"input"`
+	Output     string                     `json:"output"`
+	Steps      int                        `json:"steps"`
+	TokensUsed int                        `json:"tokensUsed"`
+	Duration   string                     `json:"duration"`
+	Thoughts   []agent.Thought            `json:"thoughts"`
+	ToolCalls  []agent.ToolCall           `json:"toolCalls"`
+	Metadata   map[string]interface{}     `json:"metadata"`
+	Error      string                     `json:"error,omitempty"`
+	Artifacts  []domain.ExecutionArtifact `json:"artifacts"`
 }
 
 // dtoToResponse maps the service-side AgentDTO to the wire AgentResponse.

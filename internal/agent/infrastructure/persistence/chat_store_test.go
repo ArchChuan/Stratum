@@ -172,7 +172,7 @@ func TestChatStore_AddMessage(t *testing.T) {
 		WithArgs("conv-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery("INSERT INTO chat_messages").
-		WithArgs("conv-1", "user", "hello", string(steps), false).
+		WithArgs("conv-1", "user", "hello", string(steps), false, "[]").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("msg-uuid", now))
 	mock.ExpectCommit()
 
@@ -204,7 +204,7 @@ func TestChatStore_AddMessage_nilStepsDefaultsToEmpty(t *testing.T) {
 		WithArgs("conv-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery("INSERT INTO chat_messages").
-		WithArgs("conv-1", "user", "hi", "[]", false).
+		WithArgs("conv-1", "user", "hi", "[]", false, "[]").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("msg-2", now))
 	mock.ExpectCommit()
 
@@ -225,10 +225,10 @@ func TestChatStore_ListMessages(t *testing.T) {
 	mock.ExpectQuery("SELECT m.id, m.conversation_id").
 		WithArgs("conv-1", "user-1").
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "conversation_id", "role", "content", "steps_json", "is_error", "created_at",
+			"id", "conversation_id", "role", "content", "steps_json", "is_error", "created_at", "artifacts_json",
 		}).
-			AddRow("m1", "conv-1", "user", "hi", json.RawMessage("[]"), false, now).
-			AddRow("m2", "conv-1", "assistant", "hello back", json.RawMessage("[]"), false, now))
+			AddRow("m1", "conv-1", "user", "hi", json.RawMessage("[]"), false, now, json.RawMessage("[]")).
+			AddRow("m2", "conv-1", "assistant", "hello back", json.RawMessage("[]"), false, now, json.RawMessage("[]")))
 	mock.ExpectCommit()
 
 	msgs, err := store.ListMessages(context.Background(), "t1", "conv-1", "user-1")
@@ -243,6 +243,72 @@ func TestChatStore_ListMessages(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet: %v", err)
+	}
+}
+
+func TestChatStore_ArtifactRoundTrip(t *testing.T) {
+	store, mock := newChatStoreWithMock(t)
+	defer mock.Close()
+	now := time.Now()
+	artifacts := []domain.ExecutionArtifact{{Type: "diagnostic_report", ProfileVersion: "v1", DiagnosticReport: &domain.DiagnosticReport{Inferences: []string{}}}}
+	raw, err := json.Marshal(artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := &domain.ChatMessage{ConversationID: "conv-1", Role: "assistant", Content: "ok", Artifacts: artifacts}
+	expectTenantTx(mock)
+	mock.ExpectExec("UPDATE chat_conversations").WithArgs("conv-1").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectQuery("INSERT INTO chat_messages").WithArgs("conv-1", "assistant", "ok", "[]", false, string(raw)).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at"}).AddRow("m1", now))
+	mock.ExpectCommit()
+	if err := store.AddMessage(context.Background(), "t1", msg); err != nil {
+		t.Fatal(err)
+	}
+
+	expectTenantTx(mock)
+	mock.ExpectQuery("SELECT m.id, m.conversation_id").WithArgs("conv-1", "user-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "conversation_id", "role", "content", "steps_json", "is_error", "created_at", "artifacts_json"}).
+			AddRow("m1", "conv-1", "assistant", "ok", json.RawMessage("[]"), false, now, raw))
+	mock.ExpectCommit()
+	got, err := store.ListMessages(context.Background(), "t1", "conv-1", "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || len(got[0].Artifacts) != 1 || got[0].Artifacts[0].ProfileVersion != "v1" {
+		t.Fatalf("unexpected artifacts: %#v", got)
+	}
+}
+
+func TestChatStore_HistoricalMessageHydratesEmptyArtifacts(t *testing.T) {
+	store, mock := newChatStoreWithMock(t)
+	defer mock.Close()
+	now := time.Now()
+	expectTenantTx(mock)
+	mock.ExpectQuery("SELECT m.id, m.conversation_id").WithArgs("conv-1", "user-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "conversation_id", "role", "content", "steps_json", "is_error", "created_at", "artifacts_json"}).
+			AddRow("m1", "conv-1", "assistant", "old", json.RawMessage("[]"), false, now, json.RawMessage("[]")))
+	mock.ExpectCommit()
+	got, err := store.ListMessages(context.Background(), "t1", "conv-1", "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Artifacts == nil || len(got[0].Artifacts) != 0 {
+		t.Fatalf("want non-nil empty artifacts: %#v", got[0].Artifacts)
+	}
+}
+
+func TestChatStore_MalformedArtifactsReturnError(t *testing.T) {
+	store, mock := newChatStoreWithMock(t)
+	defer mock.Close()
+	now := time.Now()
+	expectTenantTx(mock)
+	mock.ExpectQuery("SELECT m.id, m.conversation_id").WithArgs("conv-1", "user-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "conversation_id", "role", "content", "steps_json", "is_error", "created_at", "artifacts_json"}).
+			AddRow("m1", "conv-1", "assistant", "bad", json.RawMessage("[]"), false, now, []byte(`{"broken":`)))
+	mock.ExpectRollback()
+	_, err := store.ListMessages(context.Background(), "t1", "conv-1", "user-1")
+	if err == nil {
+		t.Fatal("expected malformed artifact error")
 	}
 }
 

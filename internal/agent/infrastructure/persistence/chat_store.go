@@ -191,9 +191,16 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 	if msg.StepsJSON == nil {
 		msg.StepsJSON = json.RawMessage("[]")
 	}
+	if msg.Artifacts == nil {
+		msg.Artifacts = []domain.ExecutionArtifact{}
+	}
+	artifactsJSON, err := json.Marshal(msg.Artifacts)
+	if err != nil {
+		return fmt.Errorf("chat_store: marshal artifacts: %w", err)
+	}
 	var outboxQueued bool
 	var outboxSkipReason string
-	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err = execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`UPDATE chat_conversations
 			 SET updated_at=NOW(), expires_at=NOW()+INTERVAL '30 days'
@@ -203,10 +210,10 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 			return err
 		}
 		if err := tx.QueryRow(ctx,
-			`INSERT INTO chat_messages (conversation_id, role, content, steps_json, is_error)
-			 VALUES ($1, $2, $3, $4, $5)
+			`INSERT INTO chat_messages (conversation_id, role, content, steps_json, is_error, artifacts_json)
+			 VALUES ($1, $2, $3, $4, $5, $6)
 			 RETURNING id, created_at`,
-			msg.ConversationID, msg.Role, msg.Content, string(msg.StepsJSON), msg.IsError,
+			msg.ConversationID, msg.Role, msg.Content, string(msg.StepsJSON), msg.IsError, string(artifactsJSON),
 		).Scan(&msg.ID, &msg.CreatedAt); err != nil {
 			return err
 		}
@@ -289,7 +296,7 @@ func (s *PgChatStore) ListMessages(ctx context.Context, tenantID, convID, userID
 	var out []*domain.ChatMessage
 	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT m.id, m.conversation_id, m.role, m.content, m.steps_json, m.is_error, m.created_at
+			`SELECT m.id, m.conversation_id, m.role, m.content, m.steps_json, m.is_error, m.created_at, m.artifacts_json
 			 FROM chat_messages m
 			 JOIN chat_conversations c ON c.id = m.conversation_id
 			 WHERE m.conversation_id = $1 AND c.user_id = $2 AND c.deleted_at IS NULL
@@ -303,9 +310,16 @@ func (s *PgChatStore) ListMessages(ctx context.Context, tenantID, convID, userID
 		defer rows.Close()
 		for rows.Next() {
 			var m domain.ChatMessage
+			var artifactsJSON []byte
 			if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content,
-				&m.StepsJSON, &m.IsError, &m.CreatedAt); err != nil {
+				&m.StepsJSON, &m.IsError, &m.CreatedAt, &artifactsJSON); err != nil {
 				return err
+			}
+			if err := json.Unmarshal(artifactsJSON, &m.Artifacts); err != nil {
+				return fmt.Errorf("decode message artifacts: %w", err)
+			}
+			if m.Artifacts == nil {
+				m.Artifacts = []domain.ExecutionArtifact{}
 			}
 			out = append(out, &m)
 		}
