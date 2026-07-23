@@ -13,6 +13,7 @@ import {
   Space,
   Tooltip,
   Typography,
+  Tag,
   message as antdMsg,
 } from 'antd';
 import { useState } from 'react';
@@ -20,6 +21,17 @@ import { useState } from 'react';
 import type { Agent, Conversation } from '../model/agent';
 
 const { Text, Title } = Typography;
+
+const agentLabel = (agent: Agent) => (
+  <Space size={6} wrap>
+    <Text>{agent.name}</Text>
+    {agent.isSystem && (
+      <Tag color="blue" bordered={false} style={{ marginInlineEnd: 0, fontSize: 10 }}>
+        系统内置
+      </Tag>
+    )}
+  </Space>
+);
 
 interface Props {
   agents: Agent[];
@@ -78,7 +90,7 @@ export const ChatConversationSidebar = ({
           placeholder="选择 Agent"
           value={selectedAgent}
           onChange={onSelectAgent}
-          options={agents.map((a) => ({ value: a.id, label: a.name }))}
+          options={agents.map((a) => ({ value: a.id, label: agentLabel(a) }))}
           size="small"
         />
       </div>
@@ -214,7 +226,7 @@ export const ChatConversationSidebar = ({
             type="secondary"
             style={{ fontSize: 12, padding: '8px', display: 'block', textAlign: 'center' }}
           >
-            暂无会话
+            会话还是空的
           </Text>
         )}
       </div>

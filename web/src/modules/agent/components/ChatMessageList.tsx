@@ -6,6 +6,7 @@ import type { ChatMessage } from '../model/agent';
 
 import { BUBBLE, ChatMarkdown } from './ChatMarkdown';
 import { ChatStepList } from './ChatStepList';
+import { DiagnosticReport } from './DiagnosticReport';
 
 const { Text } = Typography;
 
@@ -28,6 +29,7 @@ const StreamingBubble = ({ content }: { content: string }) => (
   <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
     {content.replace(/^\n+/, '')}
     <span
+      className="chat-stream-cursor"
       style={{
         display: 'inline-block',
         width: 2,
@@ -35,10 +37,8 @@ const StreamingBubble = ({ content }: { content: string }) => (
         background: '#1677ff',
         marginLeft: 2,
         verticalAlign: 'text-bottom',
-        animation: 'blink 0.8s step-start infinite',
       }}
     />
-    <style>{`@keyframes blink { 50% { opacity: 0 } }`}</style>
   </span>
 );
 
@@ -69,19 +69,25 @@ export const ChatMessageList = ({
   }, [scrollContainerRef, pinnedToBottomRef]);
 
   return (
-    <div
-      className="chat-message-list"
-      ref={scrollContainerRef}
-      style={{
-        flex: 1,
-        overflowY: 'auto',
-        padding: isMobile ? 12 : '20px 24px',
-        minWidth: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 12,
-      }}
-    >
+    <>
+      <style>{`
+        @keyframes chat-stream-blink { 50% { opacity: 0 } }
+        .chat-stream-cursor { animation: chat-stream-blink 0.8s step-start infinite; }
+        @media (prefers-reduced-motion: reduce) { .chat-stream-cursor { animation: none; } }
+      `}</style>
+      <div
+        className="chat-message-list"
+        ref={scrollContainerRef}
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: isMobile ? 12 : '20px 24px',
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+        }}
+      >
       {!selectedConv && !loadingMsgs && (
         <Empty
           description={selectedAgent ? '新建或选择一个会话' : '请先选择 Agent'}
@@ -126,7 +132,27 @@ export const ChatMessageList = ({
               ) : m.id === streamingMsgId ? (
                 <StreamingBubble content={m.content || ''} />
               ) : (
-                <ChatMarkdown content={m.content || ''} />
+                <>
+                  <ChatMarkdown content={m.content || ''} />
+                  {m.artifacts?.map((artifact, index) => {
+                    const artifactCitations = artifact.citations ?? [];
+                    const report = artifact.diagnosticReport ?? (artifactCitations.length > 0 ? {
+                      facts: [],
+                      inferences: [],
+                      evidenceGaps: [],
+                      recommendedActions: [],
+                      citations: artifactCitations,
+                      steps: [],
+                    } : undefined);
+                    return report ? (
+                      <DiagnosticReport
+                        key={`${artifact.type}-${artifact.profileVersion || index}`}
+                        report={report}
+                        profileVersion={artifact.profileVersion}
+                      />
+                    ) : null;
+                  })}
+                </>
               )}
               {m.interrupted && (
                 <div style={{ marginTop: 6 }}>
@@ -155,7 +181,8 @@ export const ChatMessageList = ({
           </Text>
         </div>
       )}
-      <div ref={bottomRef} />
-    </div>
+        <div ref={bottomRef} />
+      </div>
+    </>
   );
 };

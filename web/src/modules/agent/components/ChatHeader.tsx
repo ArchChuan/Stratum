@@ -1,5 +1,5 @@
-import { BranchesOutlined, MenuOutlined, RobotOutlined } from '@ant-design/icons';
-import { Button, Popover, Select, Tag, Typography, message } from 'antd';
+import { BranchesOutlined, MenuOutlined, RobotOutlined, SettingOutlined } from '@ant-design/icons';
+import { Button, Popover, Select, Space, Tag, Typography, message } from 'antd';
 import { useState } from 'react';
 import { useInRouterContext, useNavigate } from 'react-router-dom';
 
@@ -13,6 +13,8 @@ interface Props {
   agent?: Agent;
   isMobile?: boolean;
   onOpenConversations?: () => void;
+  isAdmin?: boolean;
+  onOpenSettings?: () => void;
 }
 
 const WorkflowShortcut = ({ isMobile }: { isMobile: boolean }) => {
@@ -52,18 +54,25 @@ const WorkflowShortcut = ({ isMobile }: { isMobile: boolean }) => {
   </Popover>;
 };
 
-export const ChatHeader = ({ agent, isMobile = false, onOpenConversations }: Props) => {
+export const ChatHeader = ({
+  agent,
+  isMobile = false,
+  onOpenConversations,
+  isAdmin = false,
+  onOpenSettings,
+}: Props) => {
   const inRouter = useInRouterContext();
   return (
   <div
     style={{
-      height: 48,
+      minHeight: 48,
       background: '#fff',
       borderBottom: '1px solid #f0f0f0',
       display: 'flex',
       alignItems: 'center',
       padding: isMobile ? '0 12px' : '0 20px',
-      gap: 10,
+      gap: 8,
+      flexWrap: 'wrap',
       flexShrink: 0,
     }}
   >
@@ -76,9 +85,14 @@ export const ChatHeader = ({ agent, isMobile = false, onOpenConversations }: Pro
       />
     )}
     <RobotOutlined style={{ fontSize: 18, color: '#1677ff' }} />
-    <Text strong style={{ fontSize: 15 }}>
-      {agent?.name || '请选择 Agent'}
-    </Text>
+    <Space size={6} wrap style={{ minWidth: 0 }}>
+      <Text strong style={{ fontSize: 15 }}>{agent?.name || '请选择 Agent'}</Text>
+      {agent?.isSystem && (
+        <Tag color="blue" bordered={false} style={{ marginInlineEnd: 0, fontSize: 10 }}>
+          系统内置
+        </Tag>
+      )}
+    </Space>
     {agent?.llmModel && (
       <Tag color="blue" style={{ fontSize: 11 }}>
         {agent.llmModel}
@@ -89,9 +103,24 @@ export const ChatHeader = ({ agent, isMobile = false, onOpenConversations }: Pro
         {agent.description}
       </Text>
     )}
-    <span style={{ marginLeft: 'auto' }}>
+    {agent?.isSystem && !agent.llmModel && !isAdmin && (
+      <Text type="secondary" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>
+        尚未配置模型，请联系租户管理员
+      </Text>
+    )}
+    <Space size={8} wrap style={{ marginInlineStart: 'auto' }}>
+      {agent?.isSystem && isAdmin && onOpenSettings && (
+        <Button
+          size="small"
+          icon={<SettingOutlined />}
+          aria-label="设置助手模型"
+          onClick={onOpenSettings}
+        >
+          {isMobile ? null : '助手设置'}
+        </Button>
+      )}
       {inRouter && <WorkflowShortcut isMobile={isMobile} />}
-    </span>
+    </Space>
   </div>
   );
 };

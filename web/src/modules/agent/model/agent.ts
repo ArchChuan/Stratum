@@ -14,11 +14,31 @@ export const agentSchema = z
     mcpToolIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     knowledgeWorkspaceIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     memoryScope: z.string().optional().default('user'),
+    isSystem: z.boolean().optional().default(false),
+    managementMode: z.string().optional().default(''),
     created_at: z.string().optional(),
     updated_at: z.string().optional(),
   })
   .passthrough();
-export type Agent = z.infer<typeof agentSchema>;
+export interface Agent {
+  id: string;
+  name: string;
+  description: string;
+  type: string;
+  systemPrompt: string;
+  llmModel: string;
+  maxIterations?: number;
+  maxContextTokens?: number;
+  allowedSkills: string[];
+  mcpToolIds: string[];
+  knowledgeWorkspaceIds: string[];
+  memoryScope: string;
+  isSystem?: boolean;
+  managementMode?: string;
+  created_at?: string;
+  updated_at?: string;
+  [key: string]: unknown;
+}
 
 export interface AgentFormValues {
   name: string;
@@ -56,6 +76,55 @@ export const chatStepSchema = z
   .passthrough();
 export type ChatStep = z.infer<typeof chatStepSchema>;
 
+export const citationSchema = z.object({
+  documentId: z.string(),
+  title: z.string(),
+  productVersion: z.string(),
+  section: z.string(),
+  url: z.string(),
+  excerpt: z.string(),
+});
+export type Citation = z.infer<typeof citationSchema>;
+
+export const diagnosticFactSchema = z.object({
+  area: z.string(),
+  objectId: z.string().optional(),
+  statement: z.string(),
+  source: z.string(),
+  observedAt: z.string(),
+});
+
+export const evidenceGapSchema = z.object({
+  area: z.string().optional(),
+  source: z.string().optional(),
+  code: z.string(),
+});
+
+export const diagnosticStepSchema = z.object({
+  tool: z.string(),
+  outcome: z.string(),
+  errorCode: z.string().optional(),
+  latencyMs: z.number(),
+});
+
+export const diagnosticReportSchema = z.object({
+  facts: z.array(diagnosticFactSchema).nullish().transform((v) => v ?? []),
+  inferences: z.array(z.string()).nullish().transform((v) => v ?? []),
+  evidenceGaps: z.array(evidenceGapSchema).nullish().transform((v) => v ?? []),
+  recommendedActions: z.array(z.string()).nullish().transform((v) => v ?? []),
+  citations: z.array(citationSchema).nullish().transform((v) => v ?? []),
+  steps: z.array(diagnosticStepSchema).nullish().transform((v) => v ?? []),
+});
+export type DiagnosticReport = z.infer<typeof diagnosticReportSchema>;
+
+export const executionArtifactSchema = z.object({
+  type: z.string(),
+  profileVersion: z.string().optional(),
+  citations: z.array(citationSchema).nullish().transform((v) => v ?? []),
+  diagnosticReport: diagnosticReportSchema.nullish().transform((v) => v ?? undefined),
+});
+export type ExecutionArtifact = z.infer<typeof executionArtifactSchema>;
+
 export const chatMessageSchema = z
   .object({
     id: z.string().optional(),
@@ -63,10 +132,20 @@ export const chatMessageSchema = z
     content: z.string().optional().default(''),
     created_at: z.string().optional(),
     steps: z.array(chatStepSchema).optional(),
+    artifacts: z.array(executionArtifactSchema).nullish().transform((v) => v ?? []),
     interrupted: z.boolean().optional(),
   })
   .passthrough();
-export type ChatMessage = z.infer<typeof chatMessageSchema>;
+export interface ChatMessage {
+  id?: string;
+  role: string;
+  content: string;
+  created_at?: string;
+  steps?: ChatStep[];
+  artifacts?: ExecutionArtifact[];
+  interrupted?: boolean;
+  [key: string]: unknown;
+}
 
 export interface ExecuteAgentPayload {
   query: string;
@@ -78,9 +157,17 @@ export interface ExecuteAgentPayload {
 export interface AgentExecutionResult {
   output?: string;
   steps?: ChatStep[];
+  artifacts?: ExecutionArtifact[];
   error?: string;
   [key: string]: unknown;
 }
+
+export const systemAssistantSettingsSchema = z.object({
+  agentId: z.string(),
+  llmModel: z.string(),
+  ready: z.boolean(),
+});
+export type SystemAssistantSettings = z.infer<typeof systemAssistantSettingsSchema>;
 
 export interface StreamCallbacks {
   onToken: (token: string) => void;

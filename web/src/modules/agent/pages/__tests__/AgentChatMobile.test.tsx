@@ -144,6 +144,11 @@ describe('AgentChatPage mobile layout', () => {
     });
   });
 
+  it('disables the streaming cursor animation when reduced motion is requested', () => {
+    const { container } = render(<AgentChatPage />);
+    expect(container.querySelector('style')?.textContent).toContain('prefers-reduced-motion: reduce');
+  });
+
 	it('shows approval commands only to tenant administrators', () => {
 		mocks.pendingApprovals = [{
 			approvalId: 'approval-1', agentId: 'agent-1', toolName: 'delete',
