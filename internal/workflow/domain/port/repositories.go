@@ -13,10 +13,29 @@ type DefinitionRepository interface {
 	UpdateDefinition(context.Context, string, *domain.Definition, int64) error
 }
 
+type DefinitionListQuery struct {
+	Query  string
+	Offset int
+	Limit  int
+}
+
+type DefinitionQueryRepository interface {
+	ListDefinitions(context.Context, string, DefinitionListQuery) ([]domain.Definition, int, error)
+}
+
 type VersionRepository interface {
 	CreateVersion(context.Context, string, *domain.Version) error
 	GetVersion(context.Context, string, string) (*domain.Version, error)
 	NextVersionNumber(context.Context, string, string) (int64, error)
+}
+
+type VersionListQuery struct {
+	Offset int
+	Limit  int
+}
+
+type VersionQueryRepository interface {
+	ListVersions(context.Context, string, string, VersionListQuery) ([]domain.Version, int, error)
 }
 
 type AtomicVersionPublisher interface {
@@ -28,6 +47,18 @@ type RunRepository interface {
 	CreateRun(context.Context, string, *domain.Run) error
 	GetRun(context.Context, string, string) (*domain.Run, error)
 	UpdateRun(context.Context, string, *domain.Run) error
+}
+
+type RunListQuery struct {
+	CreatedBy    string
+	DefinitionID string
+	Status       domain.RunStatus
+	Offset       int
+	Limit        int
+}
+
+type RunQueryRepository interface {
+	ListRuns(context.Context, string, RunListQuery) ([]domain.Run, int, error)
 }
 
 type IdempotentRunCreator interface {

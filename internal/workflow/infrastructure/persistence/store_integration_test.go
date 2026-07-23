@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
+	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	workflowpersist "github.com/byteBuilderX/stratum/internal/workflow/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
@@ -52,6 +53,8 @@ func TestPgStoreStage1ALifecycleAndTenantIsolation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, def.Spec, loaded.Spec)
 	require.Equal(t, inputSchema, loaded.InputSchema)
+	require.False(t, loaded.CreatedAt.IsZero())
+	require.False(t, loaded.UpdatedAt.IsZero())
 	require.NoError(t, loaded.UpdateDraft("Research v2", "changed", spec, 1, inputSchema))
 	require.NoError(t, store.UpdateDefinition(ctxA, tenantA, loaded, 1))
 	require.ErrorIs(t, store.UpdateDefinition(ctxA, tenantA, loaded, 1), domain.ErrRevisionConflict)
@@ -64,6 +67,7 @@ func TestPgStoreStage1ALifecycleAndTenantIsolation(t *testing.T) {
 	loadedVersion, err := store.GetVersion(ctxA, tenantA, version.ID)
 	require.NoError(t, err)
 	require.Equal(t, inputSchema, loadedVersion.InputSchema)
+	require.False(t, loadedVersion.CreatedAt.IsZero())
 	run, err := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "hello", "region": "east"}, "key-1", "hash-1")
 	require.NoError(t, err)
 	run.CreatedBy = "user-a"
@@ -76,6 +80,38 @@ func TestPgStoreStage1ALifecycleAndTenantIsolation(t *testing.T) {
 	require.False(t, found.UpdatedAt.IsZero())
 	_, err = store.GetRun(ctxB, tenantB, run.ID)
 	require.ErrorIs(t, err, domain.ErrNotFound)
+
+	definitions, definitionTotal, err := store.ListDefinitions(ctxA, tenantA, port.DefinitionListQuery{
+		Query: "search", Offset: 0, Limit: 20,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, definitionTotal)
+	require.Equal(t, def.ID, definitions[0].ID)
+	versions, versionTotal, err := store.ListVersions(ctxA, tenantA, def.ID, port.VersionListQuery{Offset: 0, Limit: 20})
+	require.NoError(t, err)
+	require.Equal(t, 1, versionTotal)
+	require.Equal(t, version.ID, versions[0].ID)
+
+	secondRun, err := domain.NewRun(uuid.NewString(), version, map[string]any{
+		"task": "second", "region": "west",
+	}, "key-2", "hash-2")
+	require.NoError(t, err)
+	secondRun.CreatedBy = "user-b"
+	require.NoError(t, store.CreateRun(ctxA, tenantA, secondRun))
+	memberRuns, memberTotal, err := store.ListRuns(ctxA, tenantA, port.RunListQuery{
+		CreatedBy: "user-a", DefinitionID: def.ID, Status: domain.RunStatusQueued, Offset: 0, Limit: 20,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, memberTotal)
+	require.Equal(t, run.ID, memberRuns[0].ID)
+	adminRuns, adminTotal, err := store.ListRuns(ctxA, tenantA, port.RunListQuery{Offset: 0, Limit: 20})
+	require.NoError(t, err)
+	require.Equal(t, 2, adminTotal)
+	require.Equal(t, secondRun.ID, adminRuns[0].ID)
+	otherTenantRuns, otherTenantTotal, err := store.ListRuns(ctxB, tenantB, port.RunListQuery{Offset: 0, Limit: 20})
+	require.NoError(t, err)
+	require.Zero(t, otherTenantTotal)
+	require.Empty(t, otherTenantRuns)
 
 	attempt := domain.NodeAttempt{ID: uuid.NewString(), RunID: run.ID, NodeID: "one", AttemptNo: 1, Status: domain.AttemptStatusRunning, Input: "hello"}
 	require.NoError(t, store.SaveAttempt(ctxA, tenantA, attempt))

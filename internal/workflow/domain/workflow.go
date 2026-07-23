@@ -20,6 +20,7 @@ var (
 	ErrDecisionConflict    = errors.New("workflow approval decision conflict")
 	ErrApprovalRequired    = errors.New("workflow approval required")
 	ErrNotFound            = errors.New("workflow not found")
+	ErrForbidden           = errors.New("workflow action forbidden")
 )
 
 type NodeType string
@@ -138,6 +139,8 @@ type Definition struct {
 	Revision    int64       `json:"revision"`
 	Spec        Spec        `json:"spec"`
 	InputSchema InputSchema `json:"input_schema"`
+	CreatedAt   time.Time   `json:"created_at"`
+	UpdatedAt   time.Time   `json:"updated_at"`
 }
 
 func NewDefinition(id, name, description string, spec Spec, schemas ...InputSchema) (*Definition, error) {
@@ -181,6 +184,7 @@ type Version struct {
 	Description  string      `json:"description"`
 	Spec         Spec        `json:"spec"`
 	InputSchema  InputSchema `json:"input_schema"`
+	CreatedAt    time.Time   `json:"created_at"`
 }
 
 func (d *Definition) Publish(id string, number int64) (*Version, error) {

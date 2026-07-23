@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
+	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -62,7 +63,7 @@ func (s *PgStore) GetDefinition(ctx context.Context, tenantID, id string) (*doma
 	var d domain.Definition
 	var raw, rawInputSchema []byte
 	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT id,name,description,draft_revision,draft_spec_json,draft_input_schema_json FROM workflow_definitions WHERE id=$1`, id).Scan(&d.ID, &d.Name, &d.Description, &d.Revision, &raw, &rawInputSchema)
+		return tx.QueryRow(ctx, `SELECT id,name,description,draft_revision,draft_spec_json,draft_input_schema_json,created_at,updated_at FROM workflow_definitions WHERE id=$1`, id).Scan(&d.ID, &d.Name, &d.Description, &d.Revision, &raw, &rawInputSchema, &d.CreatedAt, &d.UpdatedAt)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
@@ -77,6 +78,40 @@ func (s *PgStore) GetDefinition(ctx context.Context, tenantID, id string) (*doma
 		return nil, err
 	}
 	return &d, nil
+}
+
+func (s *PgStore) ListDefinitions(
+	ctx context.Context,
+	tenantID string,
+	query port.DefinitionListQuery,
+) ([]domain.Definition, int, error) {
+	rows := make([]domain.Definition, 0)
+	var total int
+	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM workflow_definitions
+			WHERE ($1='' OR name ILIKE '%' || $1 || '%')`, query.Query).Scan(&total); err != nil {
+			return err
+		}
+		result, err := tx.Query(ctx, `SELECT id,name,description,draft_revision,created_at,updated_at
+			FROM workflow_definitions WHERE ($1='' OR name ILIKE '%' || $1 || '%')
+			ORDER BY updated_at DESC,id DESC LIMIT $2 OFFSET $3`, query.Query, query.Limit, query.Offset)
+		if err != nil {
+			return err
+		}
+		defer result.Close()
+		for result.Next() {
+			var definition domain.Definition
+			if err := result.Scan(
+				&definition.ID, &definition.Name, &definition.Description, &definition.Revision,
+				&definition.CreatedAt, &definition.UpdatedAt,
+			); err != nil {
+				return err
+			}
+			rows = append(rows, definition)
+		}
+		return result.Err()
+	})
+	return rows, total, err
 }
 
 func (s *PgStore) UpdateDefinition(ctx context.Context, tenantID string, d *domain.Definition, expected int64) error {
@@ -119,7 +154,7 @@ func (s *PgStore) GetVersion(ctx context.Context, tenantID, id string) (*domain.
 	var v domain.Version
 	var raw, rawInputSchema []byte
 	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT id,definition_id,version_no,name,description,spec_json,input_schema_json FROM workflow_versions WHERE id=$1`, id).Scan(&v.ID, &v.DefinitionID, &v.Number, &v.Name, &v.Description, &raw, &rawInputSchema)
+		return tx.QueryRow(ctx, `SELECT id,definition_id,version_no,name,description,spec_json,input_schema_json,created_at FROM workflow_versions WHERE id=$1`, id).Scan(&v.ID, &v.DefinitionID, &v.Number, &v.Name, &v.Description, &raw, &rawInputSchema, &v.CreatedAt)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
@@ -134,6 +169,39 @@ func (s *PgStore) GetVersion(ctx context.Context, tenantID, id string) (*domain.
 		return nil, err
 	}
 	return &v, nil
+}
+
+func (s *PgStore) ListVersions(
+	ctx context.Context,
+	tenantID, definitionID string,
+	query port.VersionListQuery,
+) ([]domain.Version, int, error) {
+	rows := make([]domain.Version, 0)
+	var total int
+	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM workflow_versions WHERE definition_id=$1`, definitionID).Scan(&total); err != nil {
+			return err
+		}
+		result, err := tx.Query(ctx, `SELECT id,definition_id,version_no,name,description,created_at
+			FROM workflow_versions WHERE definition_id=$1 ORDER BY version_no DESC LIMIT $2 OFFSET $3`,
+			definitionID, query.Limit, query.Offset)
+		if err != nil {
+			return err
+		}
+		defer result.Close()
+		for result.Next() {
+			var version domain.Version
+			if err := result.Scan(
+				&version.ID, &version.DefinitionID, &version.Number, &version.Name,
+				&version.Description, &version.CreatedAt,
+			); err != nil {
+				return err
+			}
+			rows = append(rows, version)
+		}
+		return result.Err()
+	})
+	return rows, total, err
 }
 
 func (s *PgStore) NextVersionNumber(ctx context.Context, tenantID, definitionID string) (int64, error) {
@@ -243,6 +311,41 @@ func (s *PgStore) FindRunByIdempotency(ctx context.Context, tenantID, key string
 
 func (s *PgStore) GetRun(ctx context.Context, tenantID, id string) (*domain.Run, error) {
 	return s.getRun(ctx, tenantID, runSelectColumns+` WHERE id=$1`, id)
+}
+
+func (s *PgStore) ListRuns(
+	ctx context.Context,
+	tenantID string,
+	query port.RunListQuery,
+) ([]domain.Run, int, error) {
+	rows := make([]domain.Run, 0)
+	var total int
+	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		args := []any{query.CreatedBy, query.DefinitionID, query.Status, query.Limit, query.Offset}
+		where := ` WHERE ($1='' OR created_by=$1) AND ($2='' OR definition_id::text=$2) AND ($3='' OR status=$3)`
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM workflow_runs`+where, args[:3]...).Scan(&total); err != nil {
+			return err
+		}
+		result, err := tx.Query(ctx, `SELECT id,definition_id,version_id,version_no,status,created_by,
+			created_at,updated_at,started_at,finished_at FROM workflow_runs`+where+
+			` ORDER BY created_at DESC,id DESC LIMIT $4 OFFSET $5`, args...)
+		if err != nil {
+			return err
+		}
+		defer result.Close()
+		for result.Next() {
+			var run domain.Run
+			if err := result.Scan(
+				&run.ID, &run.DefinitionID, &run.VersionID, &run.VersionNumber, &run.Status, &run.CreatedBy,
+				&run.CreatedAt, &run.UpdatedAt, &run.StartedAt, &run.FinishedAt,
+			); err != nil {
+				return err
+			}
+			rows = append(rows, run)
+		}
+		return result.Err()
+	})
+	return rows, total, err
 }
 
 func (s *PgStore) getRun(ctx context.Context, tenantID, query, arg string) (*domain.Run, error) {
