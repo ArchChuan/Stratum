@@ -167,6 +167,42 @@ func TestDecodeVersion2RejectsInlineCredentials(t *testing.T) {
 	}
 }
 
+func TestDecodeVersion2RejectsSplitCredentials(t *testing.T) {
+	for _, flag := range []string{"--token", "password", "--secret", " --api-key ", "api_key"} {
+		t.Run(flag, func(t *testing.T) {
+			input := strings.Replace(validVersion2Config, `"args": ["chroma-mcp"]`,
+				`"args": ["chroma-mcp", "`+flag+`", "credential-value"]`, 1)
+			_, err := Decode(strings.NewReader(input))
+			if err == nil {
+				t.Fatal("Decode succeeded; want error")
+			}
+			if !strings.Contains(err.Error(), "services[0] args[1]") {
+				t.Fatalf("error %q does not identify service/arg index", err)
+			}
+			if strings.Contains(err.Error(), flag) || strings.Contains(err.Error(), "credential-value") {
+				t.Fatalf("error %q echoes credential flag or value", err)
+			}
+		})
+	}
+}
+
+func TestDecodeVersion2AllowsBareCredentialFlagsWithoutValues(t *testing.T) {
+	for _, args := range []string{
+		`"chroma-mcp", "--token"`,
+		`"chroma-mcp", " password "`,
+		`"chroma-mcp", "--secret", "--verbose"`,
+		`"chroma-mcp", " --api-key ", " -v "`,
+		`"chroma-mcp", "api_key", "--next=value"`,
+	} {
+		t.Run(args, func(t *testing.T) {
+			input := strings.Replace(validVersion2Config, `"args": ["chroma-mcp"]`, `"args": [`+args+`]`, 1)
+			if _, err := Decode(strings.NewReader(input)); err != nil {
+				t.Fatalf("bare credential flag rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestDecodeVersion1RejectsVersion2Fields(t *testing.T) {
 	observation := `"observation":{"events_dir":"x","reports_dir":"x","salt_path":"x","raw_retention_days":14},`
 	tests := []struct {

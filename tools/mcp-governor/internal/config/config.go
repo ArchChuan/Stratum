@@ -242,6 +242,10 @@ func validateVersion2Service(service ServiceRule, context string) error {
 		if containsInlineCredential(arg) {
 			return fmt.Errorf("%s args[%d] must not contain an inline credential assignment", context, i)
 		}
+		if isCredentialFlag(arg) && i+1 < len(service.Args) &&
+			!strings.HasPrefix(strings.TrimSpace(service.Args[i+1]), "-") {
+			return fmt.Errorf("%s args[%d] must not contain a split credential value", context, i)
+		}
 	}
 	if !validTransport(service.Transport) {
 		return fmt.Errorf("%s transport %q is invalid", context, service.Transport)
@@ -275,10 +279,21 @@ func validateVersion2Service(service ServiceRule, context string) error {
 }
 
 func containsInlineCredential(arg string) bool {
-	key, _, assigned := strings.Cut(strings.TrimLeft(strings.ToLower(arg), "-"), "=")
-	if !assigned {
-		return false
-	}
+	key, assigned := credentialArgumentKey(arg)
+	return assigned && validCredentialKey(key)
+}
+
+func isCredentialFlag(arg string) bool {
+	key, assigned := credentialArgumentKey(arg)
+	return !assigned && validCredentialKey(key)
+}
+
+func credentialArgumentKey(arg string) (string, bool) {
+	key, _, assigned := strings.Cut(strings.TrimLeft(strings.TrimSpace(strings.ToLower(arg)), "-"), "=")
+	return key, assigned
+}
+
+func validCredentialKey(key string) bool {
 	for _, credentialKey := range []string{"token", "password", "secret", "api-key", "api_key"} {
 		if key == credentialKey {
 			return true
