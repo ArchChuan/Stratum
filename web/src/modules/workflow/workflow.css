@@ -58,6 +58,10 @@
 .workflow-designer-main { min-width: 0; }
 .workflow-definition-panel { background: #fff; border: 1px solid #e7e9f2; border-radius: 12px; margin-bottom: 16px; padding: 20px; }
 .workflow-inspector-empty { color: var(--workflow-muted); }
+.workflow-version-header { align-items: flex-start; display: grid; gap: 12px; grid-template-columns: auto 1fr auto; margin-bottom: 20px; }
+.workflow-version-header h3, .workflow-version-header p { margin: 0; }
+.workflow-readonly-canvas { background: #f7f8fc; border: 1px solid #e7e9f2; border-radius: 12px; height: 480px; }
+.workflow-version-inputs { margin-top: 16px; }
 
 @media (max-width: 767px) {
   .workflow-catalog-header { align-items: stretch; flex-direction: column; }
