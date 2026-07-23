@@ -183,7 +183,7 @@ func (a mcpEvaluationAdapter) SafeSummary(
 }
 
 func (a mcpEvaluationAdapter) ExecuteRevision(
-	ctx context.Context, tenantID string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
+	ctx context.Context, tenantID, _ string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
 ) (evalport.ExecutionResult, error) {
 	if a.runtime == nil {
 		return evalport.ExecutionResult{}, errors.New("evaluation MCP adapter: runtime unavailable")

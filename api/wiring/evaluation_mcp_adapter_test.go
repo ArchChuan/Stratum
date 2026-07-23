@@ -123,7 +123,7 @@ func TestMCPEvaluationAdapterPublishRetryPreservesWinnerRuntime(t *testing.T) {
 		t.Fatalf("retry cleanup did not preserve winner: puts=%v deleted=%v", store.putRefs, store.deleted)
 	}
 	runtime.config.URL = "https://updated.example/mcp"
-	_, err = adapter.ExecuteRevision(context.Background(), "tenant-1", ref, evaldomain.EvalCase{
+	_, err = adapter.ExecuteRevision(context.Background(), "tenant-1", "user-1", ref, evaldomain.EvalCase{
 		Input: map[string]any{"tool": "lookup", "arguments": map[string]any{"id": "1"}},
 	})
 	if err != nil || runtime.callConfig.URL != "https://original.example/mcp" {
@@ -171,7 +171,7 @@ func TestMCPEvaluationAdapterDetectsSchemaDriftBeforeInvocation(t *testing.T) {
 		values: map[string]any{"object://runtime/one": mcpRuntimeConfigEnvelope{TenantID: "tenant-1",
 			Config: &mcpdomain.ServerConfig{ID: "server-1", Timeout: time.Second}}},
 	}}
-	_, err := adapter.ExecuteRevision(context.Background(), "tenant-1", mcpRef("published-1"), evaldomain.EvalCase{
+	_, err := adapter.ExecuteRevision(context.Background(), "tenant-1", "user-1", mcpRef("published-1"), evaldomain.EvalCase{
 		Input: map[string]any{"tool": "lookup", "arguments": map[string]any{"id": "1"}},
 	})
 	if err == nil || runtime.callCount != 0 || !strings.Contains(err.Error(), "schema_drift") {
@@ -197,7 +197,7 @@ func TestMCPEvaluationAdapterInvokesExistingToolWithTenantContext(t *testing.T) 
 		},
 	}}}
 	adapter := mcpEvaluationAdapter{revisions: publishedMCPRevisions(t, snapshot), runtime: runtime, runtimeStore: store}
-	result, err := adapter.ExecuteRevision(context.Background(), "tenant-1", mcpRef("published-1"), evaldomain.EvalCase{
+	result, err := adapter.ExecuteRevision(context.Background(), "tenant-1", "user-1", mcpRef("published-1"), evaldomain.EvalCase{
 		Input: map[string]any{"tool": "lookup", "arguments": map[string]any{"id": "1"}},
 	})
 	if err != nil || runtime.callTool != "lookup" || runtime.callArguments["id"] != "1" || runtime.tenantID != "tenant-1" {
@@ -223,7 +223,7 @@ func TestMCPEvaluationAdapterRejectsCrossTenantRuntimeReference(t *testing.T) {
 	}}
 	adapter := mcpEvaluationAdapter{revisions: publishedMCPRevisions(t, snapshot), runtime: &fakeMCPRuntime{},
 		runtimeStore: store}
-	_, err := adapter.ExecuteRevision(context.Background(), "tenant-2", mcpRef("published-1"), evaldomain.EvalCase{
+	_, err := adapter.ExecuteRevision(context.Background(), "tenant-2", "user-2", mcpRef("published-1"), evaldomain.EvalCase{
 		Input: map[string]any{"tool": "lookup", "arguments": map[string]any{}},
 	})
 	if err == nil {

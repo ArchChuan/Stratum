@@ -29,7 +29,12 @@ func userIDFromCtx(c *gin.Context) (string, bool) {
 // errMissingTenant is the canonical sentinel for missing tenant context. Routed
 // through ErrorHandler middleware so the response shape stays uniform.
 var errMissingTenant = errors.New("tenant context required")
+var errMissingUser = errors.New("user context required")
 
 func respondMissingTenant(c *gin.Context) {
 	_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errMissingTenant))
+}
+
+func respondMissingUser(c *gin.Context) {
+	_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errMissingUser))
 }

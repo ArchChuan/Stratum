@@ -89,7 +89,7 @@ func TestKnowledgeEvaluationAdapterRequiresPublishedTenantRevisionAndSafeOutput(
 	adapter := knowledgeEvaluationAdapter{revisions: publishedKnowledgeRevisions(t, snapshot),
 		evaluator: knowledgeapp.NewRetrievalEvaluator(retriever),
 		source:    &fakeKnowledgeSnapshotSource{documents: documents}}
-	result, err := adapter.ExecuteRevision(context.Background(), "tenant-1", knowledgeRef("published-1"), evaldomain.EvalCase{
+	result, err := adapter.ExecuteRevision(context.Background(), "tenant-1", "user-1", knowledgeRef("published-1"), evaldomain.EvalCase{
 		Input: map[string]any{"query": "refund", "relevant_document_ids": []any{"doc-1"}},
 	})
 	if err != nil {

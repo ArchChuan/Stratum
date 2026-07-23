@@ -197,7 +197,7 @@ func (a knowledgeEvaluationAdapter) SafeSummary(
 }
 
 func (a knowledgeEvaluationAdapter) ExecuteRevision(
-	ctx context.Context, tenantID string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
+	ctx context.Context, tenantID, _ string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
 ) (evalport.ExecutionResult, error) {
 	if a.evaluator == nil || a.source == nil {
 		return evalport.ExecutionResult{}, errors.New("evaluation Knowledge adapter: evaluator unavailable")

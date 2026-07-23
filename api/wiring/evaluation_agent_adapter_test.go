@@ -79,7 +79,9 @@ func TestAgentEvaluationAdapterTreatsProviderFailureAsExecutionFailure(t *testin
 		Status: evaldomain.RevisionStatusPublished,
 	}, payload: []byte(`{"agent_id":"agent-1","type":"react","system_prompt":"baseline","model":"qwen-plus","max_iterations":5}`), found: true}
 	adapter := agentEvaluationAdapter{revisions: revisions, agents: fakeAgentRevisionExecutor{err: wantErr}}
-	result, err := adapter.ExecuteRevision(context.Background(), "tenant-1", agentRef("published-1"), evaldomain.EvalCase{Input: "hello"})
+	result, err := adapter.ExecuteRevision(
+		context.Background(), "tenant-1", "user-1", agentRef("published-1"), evaldomain.EvalCase{Input: "hello"},
+	)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected provider failure, got result=%#v err=%v", result, err)
 	}
@@ -99,7 +101,9 @@ func TestAgentEvaluationAdapterRejectsDraftExecution(t *testing.T) {
 		Status: evaldomain.RevisionStatusDraft,
 	}, payload: []byte(`{"agent_id":"agent-1","type":"react","system_prompt":"baseline","model":"qwen-plus","max_iterations":5}`), found: true}
 	adapter := agentEvaluationAdapter{revisions: revisions, agents: fakeAgentRevisionExecutor{}}
-	_, err := adapter.ExecuteRevision(context.Background(), "tenant-1", agentRef("draft-1"), evaldomain.EvalCase{Input: "hello"})
+	_, err := adapter.ExecuteRevision(
+		context.Background(), "tenant-1", "user-1", agentRef("draft-1"), evaldomain.EvalCase{Input: "hello"},
+	)
 	if !errors.Is(err, evaldomain.ErrRevisionNotPublished) {
 		t.Fatalf("expected not-published error, got %v", err)
 	}
@@ -170,13 +174,15 @@ func TestAgentEvaluationAdapterExecutionReceivesTenantContext(t *testing.T) {
 	}, payload: []byte(`{"agent_id":"agent-1","type":"react","system_prompt":"baseline","model":"qwen-plus","max_iterations":5}`), found: true}
 	executor := &tenantCaptureAgentExecutor{}
 	adapter := agentEvaluationAdapter{revisions: revisions, agents: executor}
-	_, _ = adapter.ExecuteRevision(context.Background(), "tenant-1", agentRef("published-1"), evaldomain.EvalCase{Input: "hello"})
-	if executor.tenantID != "tenant-1" {
-		t.Fatalf("execution tenant context = %q", executor.tenantID)
+	_, _ = adapter.ExecuteRevision(
+		context.Background(), "tenant-1", "user-1", agentRef("published-1"), evaldomain.EvalCase{Input: "hello"},
+	)
+	if executor.tenantID != "tenant-1" || executor.userID != "user-1" {
+		t.Fatalf("execution tenant context = tenant %q user %q", executor.tenantID, executor.userID)
 	}
 }
 
-type tenantCaptureAgentExecutor struct{ tenantID string }
+type tenantCaptureAgentExecutor struct{ tenantID, userID string }
 
 func (e *tenantCaptureAgentExecutor) SnapshotRevision(context.Context, string, string) (agentdomain.AgentRevision, error) {
 	return agentdomain.AgentRevision{}, nil
@@ -188,6 +194,7 @@ func (e *tenantCaptureAgentExecutor) ExecuteRevision(
 	tenant, _ := postgres.FromContext(ctx)
 	if tenant != nil {
 		e.tenantID = tenant.TenantID
+		e.userID = tenant.UserID
 	}
 	return &agentapp.AgentResult{Output: "ok"}, 1, nil
 }

@@ -16,9 +16,10 @@ type ExecutionResult = port.ExecutionResult
 var ErrRunNotFound = errors.New("evaluation run not found")
 
 type RunInput struct {
-	TenantID string
-	Resource domain.ResourceRef
-	Suite    domain.EvalSuiteRevision
+	TenantID    string
+	RequestedBy string
+	Resource    domain.ResourceRef
+	Suite       domain.EvalSuiteRevision
 }
 
 type Service struct {
@@ -37,7 +38,7 @@ func NewService(adapter port.ResourceAdapter, repo port.RunRepository, suites ..
 
 func (s *Service) RunStored(
 	ctx context.Context,
-	tenantID string,
+	tenantID, requestedBy string,
 	resource domain.ResourceRef,
 	suiteRevisionID string,
 ) (domain.EvalRun, error) {
@@ -54,7 +55,7 @@ func (s *Service) RunStored(
 	if suite.ResourceKind != resource.Kind {
 		return domain.EvalRun{}, fmt.Errorf("evaluation suite resource kind %q does not match %q", suite.ResourceKind, resource.Kind)
 	}
-	return s.Run(ctx, RunInput{TenantID: tenantID, Resource: resource, Suite: suite})
+	return s.Run(ctx, RunInput{TenantID: tenantID, RequestedBy: requestedBy, Resource: resource, Suite: suite})
 }
 
 func (s *Service) GetRun(ctx context.Context, tenantID, runID string) (domain.EvalRun, error) {
@@ -85,7 +86,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) (domain.EvalRun, erro
 			continue
 		}
 		run.TotalCases++
-		result := s.runCase(ctx, input.TenantID, input.Resource, testCase)
+		result := s.runCase(ctx, input.TenantID, input.RequestedBy, input.Resource, testCase)
 		if result.Passed {
 			run.PassedCases++
 		} else {
@@ -99,8 +100,10 @@ func (s *Service) Run(ctx context.Context, input RunInput) (domain.EvalRun, erro
 	return run, nil
 }
 
-func (s *Service) runCase(ctx context.Context, tenantID string, ref domain.ResourceRef, testCase domain.EvalCase) domain.EvalCaseResult {
-	execution, err := s.adapter.ExecuteRevision(ctx, tenantID, ref, testCase)
+func (s *Service) runCase(
+	ctx context.Context, tenantID, requestedBy string, ref domain.ResourceRef, testCase domain.EvalCase,
+) domain.EvalCaseResult {
+	execution, err := s.adapter.ExecuteRevision(ctx, tenantID, requestedBy, ref, testCase)
 	result := domain.EvalCaseResult{CaseID: testCase.ID}
 	if err != nil {
 		result.Error = err.Error()

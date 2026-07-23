@@ -22,7 +22,7 @@ func TestEvaluationHandlerEnqueueRunReturnsAcceptedJob(t *testing.T) {
 	jobs := &fakeEvaluationJobs{}
 	h := NewEvaluationHandler(nil, jobs, nil, nil, nil, nil, nil, nil, zap.NewNop())
 	r := gin.New()
-	r.POST("/evaluations/runs", withTenant("tenant-1"), h.EnqueueRun)
+	r.POST("/evaluations/runs", withTenantAndUser("tenant-1", "user-1"), h.EnqueueRun)
 
 	req := httptest.NewRequest(http.MethodPost, "/evaluations/runs", strings.NewReader(`{
 		"resource":{"kind":"skill","resource_id":"skill-1","revision_id":"version-2"},
@@ -35,8 +35,8 @@ func TestEvaluationHandlerEnqueueRunReturnsAcceptedJob(t *testing.T) {
 	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"job_id":"job-1"`) {
 		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if jobs.tenantID != "tenant-1" {
-		t.Fatalf("tenant not propagated: %q", jobs.tenantID)
+	if jobs.tenantID != "tenant-1" || jobs.input.RequestedBy != "user-1" {
+		t.Fatalf("request identity not propagated: tenant=%q input=%+v", jobs.tenantID, jobs.input)
 	}
 }
 
@@ -331,7 +331,10 @@ func withTenant(tenantID string) gin.HandlerFunc {
 	}
 }
 
-type fakeEvaluationJobs struct{ tenantID string }
+type fakeEvaluationJobs struct {
+	tenantID string
+	input    application.EnqueueRunInput
+}
 
 type fakeEvaluationBaselines struct {
 	tenantID, resourceID string
@@ -345,8 +348,10 @@ func (f *fakeEvaluationBaselines) CreatePublishedBaseline(
 	return domain.ResourceRef{Kind: kind, ResourceID: resourceID, RevisionID: "revision-1"}, nil
 }
 
-func (f *fakeEvaluationJobs) EnqueueRun(_ context.Context, tenantID string, _ application.EnqueueRunInput) (domain.EvaluationJob, error) {
-	f.tenantID = tenantID
+func (f *fakeEvaluationJobs) EnqueueRun(
+	_ context.Context, tenantID string, input application.EnqueueRunInput,
+) (domain.EvaluationJob, error) {
+	f.tenantID, f.input = tenantID, input
 	return domain.EvaluationJob{ID: "job-1", Status: domain.JobQueued}, nil
 }
 

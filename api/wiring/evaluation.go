@@ -51,13 +51,13 @@ func (r evaluationResourceRouter) adapter(kind evaldomain.ResourceKind) (evalpor
 }
 
 func (r evaluationResourceRouter) ExecuteRevision(
-	ctx context.Context, tenantID string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
+	ctx context.Context, tenantID, requestedBy string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
 ) (evalport.ExecutionResult, error) {
 	adapter, err := r.adapter(ref.Kind)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	return adapter.ExecuteRevision(ctx, tenantID, ref, testCase)
+	return adapter.ExecuteRevision(ctx, tenantID, requestedBy, ref, testCase)
 }
 
 func (r evaluationResourceRouter) ResolveRevision(
@@ -357,14 +357,18 @@ func (a agentScenarioEvaluationAdapter) SafeSummary(
 	return a.resources.SafeSummary(ctx, tenantID, ref)
 }
 
-func (a agentScenarioEvaluationAdapter) ExecuteRevision(ctx context.Context, tenantID string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase) (evalport.ExecutionResult, error) {
+func (a agentScenarioEvaluationAdapter) ExecuteRevision(
+	ctx context.Context, tenantID, requestedBy string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
+) (evalport.ExecutionResult, error) {
 	if ref.Kind != evaldomain.ResourceKindSkill {
 		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation: unsupported resource kind %q", ref.Kind)
 	}
 	// Inject tenant context so the agent-context binding port (whose execTenant
 	// reads it) routes to the right schema; the raw agent_skill_links read now
 	// lives behind agentport.AgentSkillBinding, not here.
-	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID, UserID: "evaluation-worker", Role: postgres.RoleTenantAdmin})
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{
+		TenantID: tenantID, UserID: requestedBy, Role: postgres.RoleTenantAdmin,
+	})
 	agentID, found, err := a.bindings.FindAgentBySkill(ctx, ref.ResourceID)
 	if err != nil {
 		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation: resolve agent for Skill %s: %w", ref.ResourceID, err)
@@ -392,7 +396,7 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(ctx context.Context, ten
 	result, duration, err := a.agents.ExecuteSkillScenario(
 		ctx,
 		agentID,
-		agentapp.ExecRequest{Query: query, UserID: "evaluation-worker"},
+		agentapp.ExecRequest{Query: query, UserID: requestedBy},
 		agentapp.ExecMeta{
 			TenantID: tenantID,
 			TraceID:  traceID,

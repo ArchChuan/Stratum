@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ func TestJobServiceEnqueuesIdempotentEvaluationRun(t *testing.T) {
 		Resource:        domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
 		SuiteRevisionID: "suite-revision-1",
 		IdempotencyKey:  "request-1",
+		RequestedBy:     "user-1",
 	})
 	if err != nil {
 		t.Fatalf("EnqueueRun returned error: %v", err)
@@ -31,6 +33,7 @@ func TestJobServiceRunOnceExecutesClaimedEvaluation(t *testing.T) {
 		Payload: domain.EvalRunJobPayload{
 			Resource:        domain.ResourceRef{Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2"},
 			SuiteRevisionID: "suite-revision-1",
+			RequestedBy:     "user-1",
 		},
 	}
 	repo := &fakeJobRepo{claimed: &job}
@@ -41,9 +44,53 @@ func TestJobServiceRunOnceExecutesClaimedEvaluation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunOnce returned error: %v", err)
 	}
-	if !worked || repo.completedID != "job-1" || repo.completedResultID != "run-1" || runner.suiteRevisionID != "suite-revision-1" {
+	if !worked || repo.completedID != "job-1" || repo.completedResultID != "run-1" ||
+		runner.suiteRevisionID != "suite-revision-1" || runner.requestedBy != "user-1" {
 		t.Fatalf("job not completed: worked=%v completed=%q result=%q runner=%+v",
 			worked, repo.completedID, repo.completedResultID, runner)
+	}
+}
+
+func TestJobServiceRunOnceRejectsLegacyJobWithoutRequestIdentity(t *testing.T) {
+	job := domain.EvaluationJob{
+		ID: "job-legacy", Type: domain.JobTypeEvalRun, Status: domain.JobRunning,
+		Payload: domain.EvalRunJobPayload{
+			Resource: domain.ResourceRef{
+				Kind: domain.ResourceKindAgent, ResourceID: "agent-1", RevisionID: "revision-1",
+			},
+			SuiteRevisionID: "suite-revision-1",
+		},
+	}
+	repo := &fakeJobRepo{claimed: &job}
+	runner := &fakeStoredRunner{}
+	svc := NewJobService(repo, runner)
+
+	worked, err := svc.RunOnce(context.Background(), "tenant-1", "worker-1", time.Minute)
+	if !worked || err == nil || repo.failedID != "job-legacy" || repo.failedMessage == "" {
+		t.Fatalf("legacy job was not rejected explicitly: worked=%v err=%v repo=%+v", worked, err, repo)
+	}
+	if runner.suiteRevisionID != "" {
+		t.Fatalf("legacy job reached runner: %+v", runner)
+	}
+}
+
+func TestJobServiceRunOnceExposesLegacyJobFailureWriteError(t *testing.T) {
+	wantErr := errors.New("write failed status")
+	job := domain.EvaluationJob{
+		ID: "job-legacy", Type: domain.JobTypeEvalRun, Status: domain.JobRunning,
+		Payload: domain.EvalRunJobPayload{
+			Resource: domain.ResourceRef{
+				Kind: domain.ResourceKindAgent, ResourceID: "agent-1", RevisionID: "revision-1",
+			},
+			SuiteRevisionID: "suite-revision-1",
+		},
+	}
+	repo := &fakeJobRepo{claimed: &job, failErr: wantErr}
+	svc := NewJobService(repo, &fakeStoredRunner{})
+
+	worked, err := svc.RunOnce(context.Background(), "tenant-1", "worker-1", time.Minute)
+	if !worked || !errors.Is(err, wantErr) {
+		t.Fatalf("failure write error not exposed: worked=%v err=%v", worked, err)
 	}
 }
 
@@ -52,6 +99,9 @@ type fakeJobRepo struct {
 	claimed           *domain.EvaluationJob
 	completedID       string
 	completedResultID string
+	failedID          string
+	failedMessage     string
+	failErr           error
 }
 
 func (f *fakeJobRepo) Enqueue(_ context.Context, _ string, job domain.EvaluationJob) (domain.EvaluationJob, error) {
@@ -76,11 +126,17 @@ func (f *fakeJobRepo) Complete(_ context.Context, _ string, jobID, resultID stri
 	return nil
 }
 
-func (f *fakeJobRepo) Fail(_ context.Context, _ string, _ string, _ string) error { return nil }
+func (f *fakeJobRepo) Fail(_ context.Context, _ string, jobID, message string) error {
+	f.failedID, f.failedMessage = jobID, message
+	return f.failErr
+}
 
-type fakeStoredRunner struct{ suiteRevisionID string }
+type fakeStoredRunner struct{ suiteRevisionID, requestedBy string }
 
-func (f *fakeStoredRunner) RunStored(_ context.Context, _ string, _ domain.ResourceRef, suiteRevisionID string) (domain.EvalRun, error) {
+func (f *fakeStoredRunner) RunStored(
+	_ context.Context, _, requestedBy string, _ domain.ResourceRef, suiteRevisionID string,
+) (domain.EvalRun, error) {
 	f.suiteRevisionID = suiteRevisionID
+	f.requestedBy = requestedBy
 	return domain.EvalRun{ID: "run-1"}, nil
 }

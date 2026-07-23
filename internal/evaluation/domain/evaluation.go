@@ -96,6 +96,7 @@ const JobTypeEvalRun = "eval_run"
 type EvalRunJobPayload struct {
 	Resource        ResourceRef `json:"resource"`
 	SuiteRevisionID string      `json:"suite_revision_id"`
+	RequestedBy     string      `json:"requested_by"`
 }
 
 type EvaluationJob struct {

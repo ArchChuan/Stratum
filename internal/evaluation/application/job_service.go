@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
@@ -12,7 +13,9 @@ import (
 )
 
 type StoredRunner interface {
-	RunStored(ctx context.Context, tenantID string, resource domain.ResourceRef, suiteRevisionID string) (domain.EvalRun, error)
+	RunStored(
+		ctx context.Context, tenantID, requestedBy string, resource domain.ResourceRef, suiteRevisionID string,
+	) (domain.EvalRun, error)
 }
 
 var ErrJobNotFound = errors.New("evaluation job not found")
@@ -21,6 +24,7 @@ type EnqueueRunInput struct {
 	Resource        domain.ResourceRef
 	SuiteRevisionID string
 	IdempotencyKey  string
+	RequestedBy     string
 }
 
 type JobService struct {
@@ -42,9 +46,14 @@ func (s *JobService) EnqueueRun(ctx context.Context, tenantID string, input Enqu
 	if input.IdempotencyKey == "" {
 		return domain.EvaluationJob{}, errors.New("idempotency key required")
 	}
+	if input.RequestedBy == "" {
+		return domain.EvaluationJob{}, errors.New("requesting user id required")
+	}
 	job := domain.EvaluationJob{
 		ID: uuid.Must(uuid.NewV7()).String(), Type: domain.JobTypeEvalRun, Status: domain.JobQueued,
-		Payload:        domain.EvalRunJobPayload{Resource: input.Resource, SuiteRevisionID: input.SuiteRevisionID},
+		Payload: domain.EvalRunJobPayload{
+			Resource: input.Resource, SuiteRevisionID: input.SuiteRevisionID, RequestedBy: input.RequestedBy,
+		},
 		IdempotencyKey: input.IdempotencyKey, CreatedAt: time.Now().UTC(),
 	}
 	return s.repo.Enqueue(ctx, tenantID, job)
@@ -80,7 +89,13 @@ func (s *JobService) RunOnce(
 		_ = s.repo.Fail(ctx, tenantID, job.ID, err.Error())
 		return true, err
 	}
-	run, err := s.runner.RunStored(ctx, tenantID, job.Payload.Resource, job.Payload.SuiteRevisionID)
+	if strings.TrimSpace(job.Payload.RequestedBy) == "" {
+		err := errors.New("evaluation job requesting user identity missing; enqueue the run again")
+		return true, errors.Join(err, s.repo.Fail(ctx, tenantID, job.ID, err.Error()))
+	}
+	run, err := s.runner.RunStored(
+		ctx, tenantID, job.Payload.RequestedBy, job.Payload.Resource, job.Payload.SuiteRevisionID,
+	)
 	if err != nil {
 		_ = s.repo.Fail(ctx, tenantID, job.ID, err.Error())
 		return true, err

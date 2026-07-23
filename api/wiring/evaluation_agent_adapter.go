@@ -154,12 +154,12 @@ func (a agentEvaluationAdapter) SafeSummary(
 }
 
 func (a agentEvaluationAdapter) ExecuteRevision(
-	ctx context.Context, tenantID string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
+	ctx context.Context, tenantID, requestedBy string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
 ) (evalport.ExecutionResult, error) {
 	if a.agents == nil {
 		return evalport.ExecutionResult{}, errors.New("evaluation Agent adapter: executor unavailable")
 	}
-	ctx, err := evaluationAgentContext(ctx, tenantID)
+	ctx, err := evaluationAgentContext(ctx, tenantID, requestedBy)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
@@ -179,7 +179,7 @@ func (a agentEvaluationAdapter) ExecuteRevision(
 	}
 	traceID := uuid.Must(uuid.NewV7()).String()
 	result, duration, err := a.agents.ExecuteRevision(ctx, snapshot,
-		agentapp.ExecRequest{Query: query, UserID: "evaluation-worker"}, agentapp.ExecMeta{
+		agentapp.ExecRequest{Query: query, UserID: requestedBy}, agentapp.ExecMeta{
 			TenantID: tenantID, TraceID: traceID,
 			EvolutionTrace: agentapp.EvolutionTraceMetadata{Evaluation: true,
 				ResourceManifest: map[string]string{"agent:" + ref.ResourceID: ref.RevisionID}},
@@ -354,12 +354,15 @@ func agentCandidateSafeSummary(baseline, candidate agentdomain.AgentRevision) ma
 	}
 }
 
-func evaluationAgentContext(ctx context.Context, tenantID string) (context.Context, error) {
+func evaluationAgentContext(ctx context.Context, tenantID, requestedBy string) (context.Context, error) {
 	if strings.TrimSpace(tenantID) == "" {
 		return nil, errors.New("evaluation Agent adapter: tenant ID required")
 	}
+	if strings.TrimSpace(requestedBy) == "" {
+		return nil, errors.New("evaluation Agent adapter: requesting user ID required")
+	}
 	return postgres.WithTenant(ctx, &postgres.TenantContext{
-		TenantID: tenantID, UserID: "evaluation-worker", Role: postgres.RoleTenantAdmin,
+		TenantID: tenantID, UserID: requestedBy, Role: postgres.RoleTenantAdmin,
 	}), nil
 }
 

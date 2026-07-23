@@ -187,6 +187,11 @@ func (h *EvaluationHandler) EnqueueRun(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	requestedBy, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
 	var req dto.EnqueueEvaluationRunRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
@@ -198,6 +203,7 @@ func (h *EvaluationHandler) EnqueueRun(c *gin.Context) {
 		},
 		SuiteRevisionID: req.SuiteRevisionID,
 		IdempotencyKey:  req.IdempotencyKey,
+		RequestedBy:     requestedBy,
 	})
 	if err != nil {
 		_ = c.Error(err)
