@@ -10,7 +10,7 @@ import { streamApiGet } from '@/services/client';
 
 const terminal = new Set(['completed', 'failed', 'canceled']);
 
-export const useWorkflowRunStream = (runId: string) => {
+export const useWorkflowRunStream = (runId: string, refreshKey = 0) => {
   const [state, setState] = useState<WorkflowRunState | null>(null);
   const stateRef = useRef<WorkflowRunState | null>(null);
   const reconnectDelay = useRef(WORKFLOW_STREAM_RECONNECT_BASE_MS);
@@ -53,7 +53,7 @@ export const useWorkflowRunStream = (runId: string) => {
     }).catch(() => { if (!disposed) message.error({ content: '操作失败', duration: 0 }); });
 
     return () => { disposed = true; controller?.abort(); if (timer) clearTimeout(timer); };
-  }, [runId]);
+  }, [refreshKey, runId]);
 
   return state;
 };

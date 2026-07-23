@@ -69,6 +69,8 @@
 .workflow-runs-header h3, .workflow-runs-header p { margin: 0; }
 .workflow-run-filters { margin-bottom: 16px; }
 .workflow-run-inspector { background: #fff; border: 1px solid #e7e9f2; border-radius: 12px; padding: 18px; }
+.workflow-run-detail-header { align-items: center; display: grid; gap: 12px; grid-template-columns: auto 1fr auto; margin-bottom: 18px; }
+.workflow-run-detail-header h3, .workflow-run-detail-header p { margin: 0; }
 
 @media (max-width: 767px) {
   .workflow-catalog-header { align-items: stretch; flex-direction: column; }
