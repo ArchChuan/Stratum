@@ -209,4 +209,9 @@ grep -Fq 'source identity conflict' "${TEST_ROOT}/source-conflict.out" || \
 [[ -f "${conflict_out}/reports/inbox/conflict.md" ]] || \
   fail 'source identity conflict consumed its input'
 
+grep -Eq '^agent-interview-test:' "${ROOT}/Makefile" || \
+  fail 'Makefile is missing agent-interview-test target'
+grep -Fq 'make agent-interview-test' "${ROOT}/.github/workflows/ci.yml" || \
+  fail 'CI does not run agent-interview-test'
+
 echo 'daily agent interview fusion tests passed'

@@ -10,7 +10,7 @@
 	migration-guardrails ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	agent-instructions agent-instructions-check \
-	tool-permission-test \
+	tool-permission-test agent-interview-test \
 	dev-up dev-down \
 	run fe-dev help clean
 
@@ -195,6 +195,10 @@ risk-guardrails:
 
 tool-permission-test:
 	bash scripts/quality/tool-permission-test.sh
+
+agent-interview-test:
+	bash scripts/agent-interview/validate-library-test.sh
+	bash scripts/agent-interview/daily-agent-interview-test.sh
 
 # ─── CI 持续集成（构建+测试+推镜像）───────────────────────────────────────
 ci-backend: migration-guardrails arch-guardrails be-install be-fmt be-lint
