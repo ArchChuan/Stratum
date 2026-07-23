@@ -87,10 +87,37 @@ func TestTrackerCanonicalizesExactNumericIDs(t *testing.T) {
 	}
 }
 
-func TestTrackerRejectsFractionalAndOversizedNumericIDs(t *testing.T) {
+func TestTrackerCanonicalizesUnboundedExactIntegerIDs(t *testing.T) {
+	integer257 := "1" + strings.Repeat("2", 256)
+	tests := []struct {
+		name     string
+		request  string
+		response string
+	}{
+		{name: "large exponent", request: `1e257`, response: `10e256`},
+		{name: "257 digit integer", request: integer257, response: integer257},
+		{name: "zero huge exponent", request: `0e1000000000`, response: `0`},
+		{name: "integer and exponent", request: `100`, response: `1e2`},
+		{name: "decimal exponent and integer", request: `1.0e2`, response: `100`},
+		{name: "negative scale with trailing zero", request: `1000e-1`, response: `100`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tracker := newTestTracker(t, time.Now)
+			tracker.ClientMessage([]byte(fmt.Sprintf(
+				`{"id":%s,"method":"tools/call","params":{"name":"work"}}`, tt.request,
+			)))
+			events := tracker.ServerMessage([]byte(fmt.Sprintf(`{"id":%s,"result":{}}`, tt.response)))
+			if len(events) != 1 || events[0].Tool != "work" {
+				t.Fatalf("request %s response %s events = %+v", tt.request, tt.response, events)
+			}
+		})
+	}
+}
+
+func TestTrackerRejectsFractionalNumericIDsWithoutExpandingExponent(t *testing.T) {
 	tracker := newTestTracker(t, time.Now)
-	oversized := "1" + strings.Repeat("0", 256)
-	for _, id := range []string{`1.5`, `1e-2`, `1e1000000000`, oversized} {
+	for _, id := range []string{`1.5`, `1e-2`, `1e-1000000000`} {
 		tracker.ClientMessage([]byte(fmt.Sprintf(
 			`{"id":%s,"method":"tools/call","params":{"name":"ignored"}}`, id,
 		)))

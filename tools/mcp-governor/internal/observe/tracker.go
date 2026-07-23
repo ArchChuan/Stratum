@@ -22,8 +22,6 @@ type pendingInitialize struct {
 	startedAt time.Time
 }
 
-const maxNumericIDBytes = 256
-
 type Tracker struct {
 	mu         sync.Mutex
 	now        func() time.Time
@@ -197,9 +195,6 @@ func normalizeID(raw json.RawMessage) (string, bool) {
 	if len(trimmed) == 0 {
 		return "", false
 	}
-	if trimmed[0] != '"' && (len(trimmed) > maxNumericIDBytes || exponentTooLarge(trimmed)) {
-		return "", false
-	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var value any
@@ -210,25 +205,58 @@ func normalizeID(raw json.RawMessage) (string, bool) {
 	case string:
 		return "s:" + id, true
 	case json.Number:
-		rational, ok := new(big.Rat).SetString(string(id))
-		if !ok || rational.Denom().Cmp(big.NewInt(1)) != 0 {
-			return "", false
-		}
-		return "n:" + rational.Num().String(), true
+		return canonicalNumericID(string(id))
 	default:
 		return "", false
 	}
 }
 
-func exponentTooLarge(raw []byte) bool {
-	index := bytes.IndexAny(raw, "eE")
-	if index < 0 {
-		return false
+func canonicalNumericID(value string) (string, bool) {
+	sign := ""
+	if strings.HasPrefix(value, "-") {
+		sign = "-"
+		value = value[1:]
 	}
-	exponent := bytes.TrimPrefix(raw[index+1:], []byte("+"))
-	exponent = bytes.TrimPrefix(exponent, []byte("-"))
-	value, ok := new(big.Int).SetString(string(exponent), 10)
-	return !ok || value.Cmp(big.NewInt(maxNumericIDBytes)) > 0
+
+	mantissa := value
+	exponentText := "0"
+	if index := strings.IndexAny(value, "eE"); index >= 0 {
+		mantissa = value[:index]
+		exponentText = value[index+1:]
+	}
+	exponent, ok := new(big.Int).SetString(exponentText, 10)
+	if !ok {
+		return "", false
+	}
+
+	fractionalDigits := 0
+	coefficient := mantissa
+	if dot := strings.IndexByte(mantissa, '.'); dot >= 0 {
+		fractionalDigits = len(mantissa) - dot - 1
+		coefficient = mantissa[:dot] + mantissa[dot+1:]
+	}
+	coefficient = strings.TrimLeft(coefficient, "0")
+	if coefficient == "" {
+		return "n:0:0", true
+	}
+
+	scale := new(big.Int).Sub(exponent, big.NewInt(int64(fractionalDigits)))
+	trailingZeros := len(coefficient) - len(strings.TrimRight(coefficient, "0"))
+	if scale.Sign() < 0 {
+		needed := new(big.Int).Neg(new(big.Int).Set(scale))
+		if needed.Cmp(big.NewInt(int64(trailingZeros))) > 0 {
+			return "", false
+		}
+		remove := int(needed.Int64())
+		coefficient = coefficient[:len(coefficient)-remove]
+		trailingZeros -= remove
+		scale.SetInt64(0)
+	}
+	if trailingZeros > 0 {
+		coefficient = coefficient[:len(coefficient)-trailingZeros]
+		scale.Add(scale, big.NewInt(int64(trailingZeros)))
+	}
+	return "n:" + sign + coefficient + ":" + scale.String(), true
 }
 
 func hasJSONValue(raw json.RawMessage) bool {
