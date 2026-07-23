@@ -592,6 +592,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		if diagnostics, ok := c.Agent.DiagnosticProvider.(*systemAssistantDiagnosticAdapter); ok {
 			diagnostics.setSkillEvaluationReader(
 				c.Skill.VersionService, skillEvaluationRepositoryAdapter{repo: experimentRepo},
+				traceAgentBindingResolver{evidence: c.Agent.EvidenceProvider, registry: c.Agent.Registry},
 			)
 		}
 	}

@@ -98,6 +98,15 @@ type diagnosticSkillEvaluationStub struct {
 	tenantID string
 }
 
+type diagnosticMemberBindingsStub struct {
+	bindings memberResourceBindings
+	err      error
+}
+
+func (s diagnosticMemberBindingsStub) ResolveMemberBindings(context.Context, domain.DiagnosticRequest) (memberResourceBindings, error) {
+	return s.bindings, s.err
+}
+
 func (s *diagnosticSkillEvaluationStub) ResolveSkillEvaluation(_ context.Context, tenantID, _ string) (skillEvaluationStatus, error) {
 	s.tenantID = tenantID
 	return s.status, s.err
@@ -133,8 +142,13 @@ func TestSkillDiagnosticCollectorKeepsSkillFactsWhenEvaluationUnavailable(t *tes
 }
 
 func TestSkillDiagnosticCollectorMemberReceivesOnlyPublicStatusProjection(t *testing.T) {
-	skills := &diagnosticSkillServiceStub{products: []skillapp.SkillProduct{{ID: "skill-public", Name: "secret-name", Description: "secret-description", Status: "published", ActiveRevisionID: "rev-1"}}}
-	facts, _, err := skillDiagnosticCollector(skills, &diagnosticSkillEvaluationStub{})(context.Background(), domain.DiagnosticRequest{
+	skills := &diagnosticSkillServiceStub{products: []skillapp.SkillProduct{
+		{ID: "skill-bound", Name: "secret-name", Description: "secret-description", Status: "published", ActiveRevisionID: "rev-1"},
+		{ID: "skill-draft", Status: "draft", DraftRevisionID: "rev-draft"},
+		{ID: "skill-unbound", Status: "published", ActiveRevisionID: "rev-other"},
+	}}
+	bindings := diagnosticMemberBindingsStub{bindings: memberResourceBindings{SkillIDs: map[string]struct{}{"skill-bound": {}, "skill-draft": {}}}}
+	facts, _, err := skillDiagnosticCollector(skills, &diagnosticSkillEvaluationStub{}, bindings)(context.Background(), domain.DiagnosticRequest{
 		TenantID: "tenant-1", UserID: "member-1", Scope: domain.DiagnosticScopeSelf,
 	})
 	require.NoError(t, err)
@@ -142,6 +156,10 @@ func TestSkillDiagnosticCollectorMemberReceivesOnlyPublicStatusProjection(t *tes
 	require.Contains(t, raw, "skill_status=published")
 	require.NotContains(t, raw, "secret-name")
 	require.NotContains(t, raw, "secret-description")
+	require.NotContains(t, raw, "rev-1")
+	require.NotContains(t, raw, "evaluation")
+	require.NotContains(t, raw, "skill-draft")
+	require.NotContains(t, raw, "skill-unbound")
 }
 
 func diagnosticStatements(facts []domain.DiagnosticFact) []string {

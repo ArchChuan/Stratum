@@ -32,11 +32,11 @@ type systemAssistantDiagnosticAdapter struct {
 }
 
 func (a *systemAssistantDiagnosticAdapter) setSkillEvaluationReader(
-	service skillDiagnosticService, evaluations skillEvaluationReader,
+	service skillDiagnosticService, evaluations skillEvaluationReader, memberBindings memberResourceBindingProvider,
 ) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.collectors[domain.DiagnosticAreaSkill] = skillDiagnosticCollector(service, evaluations)
+	a.collectors[domain.DiagnosticAreaSkill] = skillDiagnosticCollector(service, evaluations, memberBindings)
 }
 
 func newSystemAssistantDiagnosticAdapter(
@@ -130,17 +130,21 @@ func (a tenantRoleAdapter) ResolveTenantRole(ctx context.Context, tenantID, user
 
 func systemAssistantDiagnosticCollectors(c *Container, a *Agent) map[domain.DiagnosticArea]diagnosticAreaCollector {
 	collectors := map[domain.DiagnosticArea]diagnosticAreaCollector{}
+	var memberBindings memberResourceBindingProvider
+	if a != nil && a.EvidenceProvider != nil && a.Registry != nil {
+		memberBindings = traceAgentBindingResolver{evidence: a.EvidenceProvider, registry: a.Registry}
+	}
 	if a != nil && a.EvidenceProvider != nil {
 		collectors[domain.DiagnosticAreaAgent] = agentDiagnosticCollector(a.EvidenceProvider)
 	}
 	if c.Skill != nil && c.Skill.VersionService != nil {
-		collectors[domain.DiagnosticAreaSkill] = skillDiagnosticCollector(c.Skill.VersionService, nil)
+		collectors[domain.DiagnosticAreaSkill] = skillDiagnosticCollector(c.Skill.VersionService, nil, memberBindings)
 	}
 	if c.MCP != nil && c.MCP.Service != nil {
-		collectors[domain.DiagnosticAreaMCP] = mcpDiagnosticCollector(c.MCP.Service)
+		collectors[domain.DiagnosticAreaMCP] = mcpDiagnosticCollector(c.MCP.Service, memberBindings)
 	}
 	if c.Knowledge != nil && c.Knowledge.WorkspaceService != nil {
-		collectors[domain.DiagnosticAreaKnowledge] = knowledgeDiagnosticCollector(c.Knowledge.WorkspaceService)
+		collectors[domain.DiagnosticAreaKnowledge] = knowledgeDiagnosticCollector(c.Knowledge.WorkspaceService, memberBindings)
 	}
 	if a != nil && a.TenantResolver != nil {
 		if diagnostics, ok := a.TenantResolver.(agentport.TenantModelDiagnosticProvider); ok {
@@ -191,7 +195,64 @@ type skillEvaluationReader interface {
 	ResolveSkillEvaluation(context.Context, string, string) (skillEvaluationStatus, error)
 }
 
-func skillDiagnosticCollector(service skillDiagnosticService, evaluations skillEvaluationReader) diagnosticAreaCollector {
+type memberResourceBindings struct {
+	SkillIDs     map[string]struct{}
+	MCPToolIDs   map[string]struct{}
+	WorkspaceIDs map[string]struct{}
+}
+
+type memberResourceBindingProvider interface {
+	ResolveMemberBindings(context.Context, domain.DiagnosticRequest) (memberResourceBindings, error)
+}
+
+type traceAgentBindingResolver struct {
+	evidence agentport.TraceEvidenceProvider
+	registry *agentapp.Registry
+}
+
+func (r traceAgentBindingResolver) ResolveMemberBindings(
+	ctx context.Context, req domain.DiagnosticRequest,
+) (memberResourceBindings, error) {
+	bindings := memberResourceBindings{SkillIDs: map[string]struct{}{}, MCPToolIDs: map[string]struct{}{}, WorkspaceIDs: map[string]struct{}{}}
+	records, _, err := r.evidence.ListExecutions(ctx, req.TenantID, domain.ListOptions{Page: 1, PageSize: 20, UserID: req.UserID})
+	if err != nil {
+		return bindings, err
+	}
+	ctx = diagnosticTenantContext(ctx, req)
+	seen := map[string]struct{}{}
+	for _, record := range records {
+		if record.AgentID == "" {
+			continue
+		}
+		if _, ok := seen[record.AgentID]; ok {
+			continue
+		}
+		seen[record.AgentID] = struct{}{}
+		agent, found, getErr := r.registry.Get(ctx, record.AgentID)
+		if getErr != nil {
+			return bindings, getErr
+		}
+		if !found {
+			continue
+		}
+		cfg := agent.GetConfig()
+		for _, id := range cfg.AllowedSkills {
+			bindings.SkillIDs[id] = struct{}{}
+		}
+		for _, id := range cfg.MCPToolIDs {
+			bindings.MCPToolIDs[id] = struct{}{}
+		}
+		for _, id := range cfg.KnowledgeWorkspaceIDs {
+			bindings.WorkspaceIDs[id] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return bindings, domain.ErrDiagnosticEvidenceUnavailable
+	}
+	return bindings, nil
+}
+
+func skillDiagnosticCollector(service skillDiagnosticService, evaluations skillEvaluationReader, memberBindings ...memberResourceBindingProvider) diagnosticAreaCollector {
 	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
 		items, err := service.ListSkills(diagnosticTenantContext(ctx, req))
 		if err != nil {
@@ -200,7 +261,29 @@ func skillDiagnosticCollector(service skillDiagnosticService, evaluations skillE
 		facts := make([]domain.DiagnosticFact, 0, len(items)*4)
 		gaps := make([]domain.EvidenceGap, 0)
 		observedAt := time.Now().UTC()
+		var allowed map[string]struct{}
+		if req.Scope == domain.DiagnosticScopeSelf {
+			if len(memberBindings) == 0 || memberBindings[0] == nil {
+				return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
+			}
+			resolved, resolveErr := memberBindings[0].ResolveMemberBindings(ctx, req)
+			if resolveErr != nil {
+				return nil, nil, resolveErr
+			}
+			allowed = resolved.SkillIDs
+			if len(allowed) == 0 {
+				return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
+			}
+		}
 		for _, item := range items {
+			if req.Scope == domain.DiagnosticScopeSelf {
+				if _, ok := allowed[item.ID]; !ok || item.ActiveRevisionID == "" || item.Status != "published" {
+					continue
+				}
+				facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.ID,
+					Statement: "skill_status=published", Source: "skill_public_status", ObservedAt: observedAt})
+				continue
+			}
 			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.ID,
 				Statement: "skill_status=" + item.Status, Source: "skill_catalog", ObservedAt: observedAt})
 			if item.ActiveRevisionID != "" {
@@ -228,11 +311,14 @@ func skillDiagnosticCollector(service skillDiagnosticService, evaluations skillE
 					Statement: "evaluation_status=not_configured", Source: "skill_evaluation", ObservedAt: observedAt})
 			}
 		}
+		if req.Scope == domain.DiagnosticScopeSelf && len(facts) == 0 {
+			return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
+		}
 		return facts, gaps, nil
 	}
 }
 
-func mcpDiagnosticCollector(service *mcpapp.MCPService) diagnosticAreaCollector {
+func mcpDiagnosticCollector(service *mcpapp.MCPService, memberBindings ...memberResourceBindingProvider) diagnosticAreaCollector {
 	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
 		ctx = diagnosticTenantContext(ctx, req)
 		servers := service.ListServers(ctx)
@@ -242,6 +328,31 @@ func mcpDiagnosticCollector(service *mcpapp.MCPService) diagnosticAreaCollector 
 			return nil, nil, err
 		}
 		observedAt := time.Now().UTC()
+		if req.Scope == domain.DiagnosticScopeSelf {
+			if len(memberBindings) == 0 || memberBindings[0] == nil {
+				return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
+			}
+			resolved, resolveErr := memberBindings[0].ResolveMemberBindings(ctx, req)
+			if resolveErr != nil {
+				return nil, nil, resolveErr
+			}
+			if len(resolved.MCPToolIDs) == 0 {
+				return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
+			}
+			facts := make([]domain.DiagnosticFact, 0)
+			for _, policy := range policies {
+				toolID := "mcp:" + policy.ServerID + ":" + policy.ToolName
+				if _, ok := resolved.MCPToolIDs[toolID]; !ok {
+					continue
+				}
+				facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaMCP, ObjectID: toolID,
+					Statement: "tool_policy=" + string(policy.RiskLevel), Source: "mcp_public_policy", ObservedAt: observedAt})
+			}
+			if len(facts) == 0 {
+				return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
+			}
+			return facts, nil, nil
+		}
 		facts := []domain.DiagnosticFact{{Area: domain.DiagnosticAreaMCP, Statement: diagnosticMCPStatus(status), Source: "mcp_status", ObservedAt: observedAt}}
 		for _, server := range servers {
 			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaMCP, ObjectID: server.ID,
@@ -261,7 +372,7 @@ func diagnosticMCPStatus(status mcpapp.ServerStatusBreakdown) string {
 		",disconnected=" + strconv.Itoa(status.Disconnected) + ",error=" + strconv.Itoa(status.Error)
 }
 
-func knowledgeDiagnosticCollector(service *knowledgeapp.WorkspaceService) diagnosticAreaCollector {
+func knowledgeDiagnosticCollector(service *knowledgeapp.WorkspaceService, memberBindings ...memberResourceBindingProvider) diagnosticAreaCollector {
 	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
 		ctx = diagnosticTenantContext(ctx, req)
 		workspaces, err := service.ListWorkspaces(ctx, req.TenantID)
@@ -269,13 +380,39 @@ func knowledgeDiagnosticCollector(service *knowledgeapp.WorkspaceService) diagno
 			return nil, nil, err
 		}
 		facts := make([]domain.DiagnosticFact, 0, len(workspaces))
+		var allowed map[string]struct{}
+		if req.Scope == domain.DiagnosticScopeSelf {
+			if len(memberBindings) == 0 || memberBindings[0] == nil {
+				return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
+			}
+			resolved, resolveErr := memberBindings[0].ResolveMemberBindings(ctx, req)
+			if resolveErr != nil {
+				return nil, nil, resolveErr
+			}
+			allowed = resolved.WorkspaceIDs
+			if len(allowed) == 0 {
+				return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
+			}
+		}
 		for _, workspace := range workspaces {
+			if req.Scope == domain.DiagnosticScopeSelf {
+				if _, ok := allowed[workspace.ID]; !ok {
+					continue
+				}
+			}
 			documents, listErr := service.ListDocuments(ctx, req.TenantID, workspace.Name)
 			if listErr != nil {
 				return nil, nil, listErr
 			}
-			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaKnowledge, ObjectID: workspace.ID,
+			objectID := workspace.ID
+			if req.Scope == domain.DiagnosticScopeSelf {
+				objectID = workspace.Name
+			}
+			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaKnowledge, ObjectID: objectID,
 				Statement: knowledgeIngestSummary(documents), Source: "knowledge_workspace", ObservedAt: workspace.UpdatedAt})
+		}
+		if req.Scope == domain.DiagnosticScopeSelf && len(facts) == 0 {
+			return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
 		}
 		return facts, nil, nil
 	}
