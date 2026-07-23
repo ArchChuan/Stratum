@@ -26,7 +26,7 @@ func (r ToolRisk) requiresApproval() bool {
 }
 
 type AgentRuntime interface {
-	ExecuteAgent(context.Context, string, string, string) (string, string, error)
+	ExecuteAgent(context.Context, string, string, string, func(string) error) (string, string, []port.NodeToolStep, error)
 }
 
 type SkillRuntime interface {
@@ -54,8 +54,10 @@ func (r *Registry) Execute(ctx context.Context, request port.NodeExecutionReques
 		if r.agent == nil {
 			return port.NodeExecutionResult{}, fmt.Errorf("agent executor unavailable")
 		}
-		output, traceID, err := r.agent.ExecuteAgent(ctx, request.TenantID, request.Node.AgentID, request.Input)
-		return port.NodeExecutionResult{Output: output, TraceID: traceID}, err
+		output, traceID, toolSteps, err := r.agent.ExecuteAgent(
+			ctx, request.TenantID, request.Node.AgentID, request.Input, request.OnOutputDelta,
+		)
+		return port.NodeExecutionResult{Output: output, TraceID: traceID, ToolSteps: toolSteps}, err
 	case domain.NodeTypeSkill:
 		if r.skill == nil {
 			return port.NodeExecutionResult{}, fmt.Errorf("skill executor unavailable")

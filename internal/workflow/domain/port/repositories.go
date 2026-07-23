@@ -92,6 +92,7 @@ type NodeExecutionRequest struct {
 	Approved       bool
 	ApprovalID     string
 	BeforeEffect   func() error
+	OnOutputDelta  func(string) error
 }
 
 type ApprovalRepository interface {
@@ -117,6 +118,13 @@ type NodeExecutionResult struct {
 	Retryable      bool
 	ErrorCode      string
 	Paused         bool
+	ToolSteps      []NodeToolStep
+}
+
+type NodeToolStep struct {
+	ToolName   string `json:"tool_name"`
+	DurationMS int64  `json:"duration_ms"`
+	Summary    string `json:"summary"`
 }
 
 type NodeExecutorRegistry interface {

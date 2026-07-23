@@ -12,9 +12,13 @@ import (
 
 type agentFake struct{ agentID, input string }
 
-func (f *agentFake) ExecuteAgent(_ context.Context, _, agentID, input string) (string, string, error) {
+func (f *agentFake) ExecuteAgent(
+	_ context.Context,
+	_, agentID, input string,
+	_ func(string) error,
+) (string, string, []port.NodeToolStep, error) {
 	f.agentID, f.input = agentID, input
-	return "agent-output", "trace-agent", nil
+	return "agent-output", "trace-agent", nil, nil
 }
 
 type skillFake struct{ agentID, skillID, revisionID string }

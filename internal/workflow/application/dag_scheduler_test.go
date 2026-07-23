@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,9 +17,10 @@ import (
 
 type dagStore struct {
 	*memoryStore
-	events    []domain.Event
-	approvals []domain.Approval
-	effects   []domain.EffectIntent
+	events        []domain.Event
+	approvals     []domain.Approval
+	effects       []domain.EffectIntent
+	appendErrType string
 }
 
 type startCheckpointStore struct {
@@ -113,9 +115,91 @@ func newDAGStore() *dagStore { return &dagStore{memoryStore: newMemoryStore()} }
 func (s *dagStore) AppendEvent(_ context.Context, _ string, event domain.Event) (domain.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if event.Type == s.appendErrType {
+		return domain.Event{}, errors.New("append display event")
+	}
 	event.SequenceNo = int64(len(s.events) + 1)
 	s.events = append(s.events, event)
 	return event, nil
+}
+
+func TestDAGSchedulerBatchesBoundedOutputDeltaEvents(t *testing.T) {
+	store := newDAGStore()
+	streamed := strings.Repeat("界", 2500)
+	registry := &scriptedRegistry{run: func(_ context.Context, request port.NodeExecutionRequest) (port.NodeExecutionResult, error) {
+		require.NotNil(t, request.OnOutputDelta)
+		for _, token := range []string{streamed[:900], streamed[900:1800], streamed[1800:]} {
+			require.NoError(t, request.OnOutputDelta(token))
+		}
+		return port.NodeExecutionResult{Output: streamed}, nil
+	}}
+	runs, run := createPublishedRun(t, store, registry, domain.Spec{Nodes: []domain.Node{{
+		ID: "writer", Type: domain.NodeTypeAgent, AgentID: "agent-1",
+	}}})
+
+	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
+	var deltas []domain.Event
+	for _, event := range store.events {
+		if event.Type == "workflow.node_output_delta" {
+			deltas = append(deltas, event)
+		}
+	}
+	require.NotEmpty(t, deltas)
+	var combined strings.Builder
+	for index, event := range deltas {
+		text, ok := event.Payload["text"].(string)
+		require.True(t, ok)
+		require.LessOrEqual(t, len([]rune(text)), 1024)
+		require.Equal(t, map[string]any{"text": text}, event.Payload)
+		if index > 0 {
+			require.Greater(t, event.SequenceNo, deltas[index-1].SequenceNo)
+		}
+		combined.WriteString(text)
+	}
+	require.Equal(t, streamed, combined.String())
+	require.Less(t, len(deltas), 10, "tokens must be coalesced instead of persisted one by one")
+}
+
+func TestDAGSchedulerPersistsOnlySafeCompletedToolSteps(t *testing.T) {
+	store := newDAGStore()
+	registry := &scriptedRegistry{run: func(_ context.Context, _ port.NodeExecutionRequest) (port.NodeExecutionResult, error) {
+		return port.NodeExecutionResult{Output: "done", ToolSteps: []port.NodeToolStep{{
+			ToolName: "search", DurationMS: 17, Summary: "工具执行成功",
+		}}}, nil
+	}}
+	runs, run := createPublishedRun(t, store, registry, domain.Spec{Nodes: []domain.Node{{
+		ID: "research", Type: domain.NodeTypeAgent, AgentID: "agent-1",
+	}}})
+
+	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
+	var steps []domain.Event
+	for _, event := range store.events {
+		if event.Type == "workflow.node_tool_step" {
+			steps = append(steps, event)
+		}
+	}
+	require.Len(t, steps, 1)
+	require.Equal(t, map[string]any{
+		"tool_name": "search", "duration_ms": int64(17), "summary": "工具执行成功",
+	}, steps[0].Payload)
+	require.NotContains(t, steps[0].Payload, "arguments")
+	require.NotContains(t, steps[0].Payload, "raw_result")
+}
+
+func TestDAGSchedulerStopsWhenOutputDeltaCannotBePersisted(t *testing.T) {
+	store := newDAGStore()
+	store.appendErrType = "workflow.node_output_delta"
+	registry := &scriptedRegistry{run: func(_ context.Context, request port.NodeExecutionRequest) (port.NodeExecutionResult, error) {
+		require.Error(t, request.OnOutputDelta(strings.Repeat("x", 1024)))
+		return port.NodeExecutionResult{}, errors.New("stream stopped")
+	}}
+	runs, run := createPublishedRun(t, store, registry, domain.Spec{Nodes: []domain.Node{{
+		ID: "writer", Type: domain.NodeTypeAgent, AgentID: "agent-1",
+	}}})
+
+	err := runs.Execute(context.Background(), "tenant-1", run.ID)
+	require.ErrorContains(t, err, "stream stopped")
+	require.NotEqual(t, domain.RunStatusCompleted, store.runs[run.ID].Status)
 }
 
 func (s *dagStore) ListEvents(_ context.Context, _, runID string, after int64, limit int) ([]domain.Event, error) {
