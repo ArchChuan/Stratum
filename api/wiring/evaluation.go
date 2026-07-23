@@ -146,6 +146,24 @@ func (r evaluationCandidateRouter) CreateCandidate(
 	return creator.CreateCandidate(ctx, tenantID, baseline, patch)
 }
 
+type skillEvaluationRepositoryAdapter struct {
+	repo evalport.ExperimentRepository
+}
+
+func (a skillEvaluationRepositoryAdapter) ResolveSkillEvaluation(
+	ctx context.Context, tenantID, skillID string,
+) (skillEvaluationStatus, error) {
+	deployment, found, err := a.repo.ResolveDeployment(ctx, tenantID, string(evaldomain.ResourceKindSkill), skillID)
+	if err != nil || !found || deployment.ExperimentID == "" {
+		return skillEvaluationStatus{}, err
+	}
+	experiment, found, err := a.repo.Get(ctx, tenantID, deployment.ExperimentID)
+	if err != nil || !found {
+		return skillEvaluationStatus{}, err
+	}
+	return skillEvaluationStatus{ExperimentID: experiment.ID, Status: string(experiment.Status)}, nil
+}
+
 type skillCandidateManager struct {
 	versions *skillapp.VersionService
 }
@@ -569,6 +587,13 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	if c.Agent != nil && c.Agent.Service != nil {
 		c.Agent.Service.SetSkillRevisionResolver(experimentSkillRevisionResolver{service: experimentService})
+	}
+	if c.Agent != nil && c.Skill != nil && c.Skill.VersionService != nil {
+		if diagnostics, ok := c.Agent.DiagnosticProvider.(*systemAssistantDiagnosticAdapter); ok {
+			diagnostics.setSkillEvaluationReader(
+				c.Skill.VersionService, skillEvaluationRepositoryAdapter{repo: experimentRepo},
+			)
+		}
 	}
 	return nil
 }

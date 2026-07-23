@@ -21,11 +21,22 @@ import (
 
 const diagnosticCollectorConcurrency = 3
 
-type diagnosticAreaCollector func(context.Context, domain.DiagnosticRequest) ([]domain.DiagnosticFact, error)
+type diagnosticAreaCollector func(
+	context.Context, domain.DiagnosticRequest,
+) ([]domain.DiagnosticFact, []domain.EvidenceGap, error)
 
 type systemAssistantDiagnosticAdapter struct {
+	mu         sync.RWMutex
 	roles      agentport.TenantRoleResolver
 	collectors map[domain.DiagnosticArea]diagnosticAreaCollector
+}
+
+func (a *systemAssistantDiagnosticAdapter) setSkillEvaluationReader(
+	service skillDiagnosticService, evaluations skillEvaluationReader,
+) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.collectors[domain.DiagnosticAreaSkill] = skillDiagnosticCollector(service, evaluations)
 }
 
 func newSystemAssistantDiagnosticAdapter(
@@ -50,7 +61,9 @@ func (a *systemAssistantDiagnosticAdapter) Collect(
 	for _, area := range req.Areas {
 		area := area
 		group.Go(func() error {
+			a.mu.RLock()
 			collector := a.collectors[area]
+			a.mu.RUnlock()
 			if collector == nil {
 				mu.Lock()
 				evidence.Gaps = append(evidence.Gaps, domain.EvidenceGap{Area: area, Code: domain.DiagnosticGapUnavailable})
@@ -58,7 +71,7 @@ func (a *systemAssistantDiagnosticAdapter) Collect(
 				return nil
 			}
 			readCtx, cancel := context.WithTimeout(groupCtx, constants.AgentDBQueryTimeout)
-			facts, collectErr := collector(readCtx, req)
+			facts, gaps, collectErr := collector(readCtx, req)
 			cancel()
 			mu.Lock()
 			defer mu.Unlock()
@@ -67,6 +80,7 @@ func (a *systemAssistantDiagnosticAdapter) Collect(
 				return nil
 			}
 			evidence.Facts = append(evidence.Facts, filterDiagnosticFacts(req, facts)...)
+			evidence.Gaps = append(evidence.Gaps, gaps...)
 			return nil
 		})
 	}
@@ -95,7 +109,8 @@ func diagnosticSafeGapCode(err error) string {
 func filterDiagnosticFacts(req domain.DiagnosticRequest, facts []domain.DiagnosticFact) []domain.DiagnosticFact {
 	out := make([]domain.DiagnosticFact, 0, len(facts))
 	for _, fact := range facts {
-		if req.Scope == domain.DiagnosticScopeSelf && fact.SubjectUserID != "" && fact.SubjectUserID != req.UserID {
+		if req.Scope == domain.DiagnosticScopeSelf && fact.Area == domain.DiagnosticAreaAgent &&
+			fact.SubjectUserID != req.UserID {
 			continue
 		}
 		fact.SubjectUserID = ""
@@ -119,7 +134,7 @@ func systemAssistantDiagnosticCollectors(c *Container, a *Agent) map[domain.Diag
 		collectors[domain.DiagnosticAreaAgent] = agentDiagnosticCollector(a.EvidenceProvider)
 	}
 	if c.Skill != nil && c.Skill.VersionService != nil {
-		collectors[domain.DiagnosticAreaSkill] = skillDiagnosticCollector(c.Skill.VersionService)
+		collectors[domain.DiagnosticAreaSkill] = skillDiagnosticCollector(c.Skill.VersionService, nil)
 	}
 	if c.MCP != nil && c.MCP.Service != nil {
 		collectors[domain.DiagnosticAreaMCP] = mcpDiagnosticCollector(c.MCP.Service)
@@ -142,10 +157,10 @@ func diagnosticTenantContext(ctx context.Context, req domain.DiagnosticRequest) 
 }
 
 func agentDiagnosticCollector(provider agentport.TraceEvidenceProvider) diagnosticAreaCollector {
-	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, error) {
+	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
 		records, _, err := provider.ListExecutions(ctx, req.TenantID, domain.ListOptions{Page: 1, PageSize: 20})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		facts := make([]domain.DiagnosticFact, 0, len(records))
 		for _, record := range records {
@@ -153,39 +168,78 @@ func agentDiagnosticCollector(provider agentport.TraceEvidenceProvider) diagnost
 				Statement: "execution_status=" + record.Status, Source: "agent_trace", ObservedAt: record.CreatedAt,
 				SubjectUserID: record.UserID})
 		}
-		return facts, nil
+		return facts, nil, nil
 	}
 }
 
-func skillDiagnosticCollector(service *skillapp.VersionService) diagnosticAreaCollector {
-	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, error) {
+type skillDiagnosticService interface {
+	ListSkills(context.Context) ([]skillapp.SkillProduct, error)
+}
+
+type skillEvaluationStatus struct {
+	ExperimentID string
+	Status       string
+}
+
+type skillEvaluationReader interface {
+	ResolveSkillEvaluation(context.Context, string, string) (skillEvaluationStatus, error)
+}
+
+func skillDiagnosticCollector(service skillDiagnosticService, evaluations skillEvaluationReader) diagnosticAreaCollector {
+	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
 		if req.Scope == domain.DiagnosticScopeSelf {
-			return nil, domain.ErrDiagnosticEvidenceUnavailable
+			return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
 		}
 		items, err := service.ListSkills(diagnosticTenantContext(ctx, req))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		facts := make([]domain.DiagnosticFact, 0, len(items))
+		facts := make([]domain.DiagnosticFact, 0, len(items)*4)
+		gaps := make([]domain.EvidenceGap, 0)
+		observedAt := time.Now().UTC()
 		for _, item := range items {
 			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.ID,
-				Statement: "skill_status=" + item.Status, Source: "skill_catalog", ObservedAt: time.Now().UTC()})
+				Statement: "skill_status=" + item.Status, Source: "skill_catalog", ObservedAt: observedAt})
+			if item.ActiveRevisionID != "" {
+				facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.ActiveRevisionID,
+					Statement: "revision_status=active", Source: "skill_revision", ObservedAt: observedAt})
+			}
+			if item.DraftRevisionID != "" {
+				facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.DraftRevisionID,
+					Statement: "revision_status=draft", Source: "skill_revision", ObservedAt: observedAt})
+			}
+			if evaluations == nil {
+				gaps = append(gaps, domain.EvidenceGap{Area: domain.DiagnosticAreaSkill, Code: domain.DiagnosticGapUnavailable})
+				continue
+			}
+			status, evaluationErr := evaluations.ResolveSkillEvaluation(ctx, req.TenantID, item.ID)
+			if evaluationErr != nil {
+				gaps = append(gaps, domain.EvidenceGap{Area: domain.DiagnosticAreaSkill, Code: diagnosticSafeGapCode(evaluationErr)})
+				continue
+			}
+			if status.ExperimentID != "" {
+				facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: status.ExperimentID,
+					Statement: "evaluation_status=" + status.Status, Source: "skill_evaluation", ObservedAt: observedAt})
+			} else {
+				facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.ID,
+					Statement: "evaluation_status=not_configured", Source: "skill_evaluation", ObservedAt: observedAt})
+			}
 		}
-		return facts, nil
+		return facts, gaps, nil
 	}
 }
 
 func mcpDiagnosticCollector(service *mcpapp.MCPService) diagnosticAreaCollector {
-	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, error) {
+	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
 		if req.Scope == domain.DiagnosticScopeSelf {
-			return nil, domain.ErrDiagnosticEvidenceUnavailable
+			return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
 		}
 		ctx = diagnosticTenantContext(ctx, req)
 		servers := service.ListServers(ctx)
 		status := service.ServerStatus(ctx)
 		policies, err := service.ListToolPolicies(ctx)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		observedAt := time.Now().UTC()
 		facts := []domain.DiagnosticFact{{Area: domain.DiagnosticAreaMCP, Statement: diagnosticMCPStatus(status), Source: "mcp_status", ObservedAt: observedAt}}
@@ -195,7 +249,7 @@ func mcpDiagnosticCollector(service *mcpapp.MCPService) diagnosticAreaCollector 
 		}
 		facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaMCP,
 			Statement: "tool_policy_count=" + strconv.Itoa(len(policies)), Source: "mcp_tool_policy", ObservedAt: observedAt})
-		return facts, nil
+		return facts, nil, nil
 	}
 }
 
@@ -205,25 +259,25 @@ func diagnosticMCPStatus(status mcpapp.ServerStatusBreakdown) string {
 }
 
 func knowledgeDiagnosticCollector(service *knowledgeapp.WorkspaceService) diagnosticAreaCollector {
-	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, error) {
+	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
 		if req.Scope == domain.DiagnosticScopeSelf {
-			return nil, domain.ErrDiagnosticEvidenceUnavailable
+			return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
 		}
 		ctx = diagnosticTenantContext(ctx, req)
 		workspaces, err := service.ListWorkspaces(ctx, req.TenantID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		facts := make([]domain.DiagnosticFact, 0, len(workspaces))
 		for _, workspace := range workspaces {
 			documents, listErr := service.ListDocuments(ctx, req.TenantID, workspace.Name)
 			if listErr != nil {
-				return nil, listErr
+				return nil, nil, listErr
 			}
 			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaKnowledge, ObjectID: workspace.ID,
 				Statement: knowledgeIngestSummary(documents), Source: "knowledge_workspace", ObservedAt: workspace.UpdatedAt})
 		}
-		return facts, nil
+		return facts, nil, nil
 	}
 }
 
@@ -244,7 +298,7 @@ func knowledgeIngestSummary(documents []knowledgeapp.DocumentView) string {
 }
 
 func modelDiagnosticCollector(resolver agentport.TenantCapabilityResolver) diagnosticAreaCollector {
-	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, error) {
+	return func(ctx context.Context, req domain.DiagnosticRequest) ([]domain.DiagnosticFact, []domain.EvidenceGap, error) {
 		_, keys, ok := resolver.Resolve(ctx, req.TenantID)
 		statement := "model_available=false"
 		if ok && len(keys) > 0 {
@@ -254,6 +308,6 @@ func modelDiagnosticCollector(resolver agentport.TenantCapabilityResolver) diagn
 			statement = "model_available=false;action=contact_admin"
 		}
 		return []domain.DiagnosticFact{{Area: domain.DiagnosticAreaModel, Statement: statement,
-			Source: "tenant_model_configuration", ObservedAt: time.Now().UTC()}}, nil
+			Source: "tenant_model_configuration", ObservedAt: time.Now().UTC()}}, nil, nil
 	}
 }
