@@ -11,6 +11,8 @@ import {
   BookOutlined,
   ThunderboltOutlined,
   ExperimentOutlined,
+  BranchesOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Link } from 'react-router-dom';
@@ -25,6 +27,18 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
   const base: MenuItem[] = [
     { key: '/', icon: <DashboardOutlined />, label: <Link to="/">概览</Link> },
     { key: '/chat', icon: <CommentOutlined />, label: <Link to="/chat">Agent 对话</Link> },
+    {
+      key: 'workflow-group',
+      icon: <BranchesOutlined />,
+      label: '流程',
+      children: [
+        { key: '/workflows', icon: <BranchesOutlined />, label: <Link to="/workflows">工作流</Link> },
+        { key: '/workflow-runs', icon: <HistoryOutlined />, label: <Link to="/workflow-runs">运行中心</Link> },
+        canManageTenant ? {
+          key: '/workflows/new', icon: <PlusCircleOutlined />, label: <Link to="/workflows/new">新建工作流</Link>,
+        } : null,
+      ],
+    },
     {
       key: 'agent-group',
       icon: <RobotOutlined />,
@@ -128,6 +142,7 @@ export const resolveOpenKeys = (pathname: string): string[] => {
   if (pathname.startsWith('/skills')) return ['skill-group'];
   if (pathname.startsWith('/mcp')) return ['mcp-group'];
   if (pathname.startsWith('/evaluations')) return ['evaluation-group'];
+  if (pathname.startsWith('/workflows') || pathname.startsWith('/workflow-runs')) return ['workflow-group'];
   if (pathname.startsWith('/tenant')) return ['tenant-group'];
   if (pathname.startsWith('/admin')) return ['admin-group'];
   return [];

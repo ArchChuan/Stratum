@@ -9,6 +9,7 @@ import { iamPublicRoutes, iamPrivateRoutes, useAuth } from '@/modules/iam';
 import { knowledgeRoutes } from '@/modules/knowledge';
 import { mcpRoutes } from '@/modules/mcp';
 import { skillRoutes } from '@/modules/skill';
+import { workflowRoutes } from '@/modules/workflow';
 
 const AUTH_PATHS = ['/login', '/auth/callback', '/onboarding'];
 
@@ -30,6 +31,7 @@ export const AppRouter = () => {
         {knowledgeRoutes}
         {skillRoutes}
         {agentRoutes}
+        {workflowRoutes}
         {iamPrivateRoutes}
         {iamPublicRoutes}
       </Routes>
