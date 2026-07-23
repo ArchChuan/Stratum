@@ -115,61 +115,7 @@ knowledge_validate_normalize <"$normalized_tmp" >/dev/null 2>&1 || {
 }
 
 markdown_tmp="$(mktemp "$report_dir/.markdown.XXXXXX")"
-jq -r '
-  def md:
-    explode |
-    map(. as $char |
-      if ([92, 96, 42, 95, 123, 125, 91, 93, 40, 41, 35, 43, 33, 124, 62, 60] | index($char))
-      then [92, $char] else [$char] end) |
-    add | implode;
-  def evidence:
-    .evidence[] | "  - Evidence: " + (((.path + (if has("anchor") then "#" + .anchor else "" end)) | md));
-  [
-    "# Knowledge deposition report",
-    "",
-    "- Client: `" + .client + "`",
-    "- Session: `" + .session_id + "`",
-    "- Task: `" + .task_id + "`",
-    "- Repository: " + (.repository.root | md),
-    "- Commit: `" + .repository.commit + "`",
-    "- Created: `" + .created_at + "`",
-    "- Decision: `" + .decision + "`",
-    "",
-    "## Task summary",
-    "",
-    "Summary: " + (.task_summary | md),
-    ""
-  ] +
-  (if .decision == "none" then
-    ["## No candidates", "", "Reason: " + (.none_reason | md), ""]
-  else
-    ["## Candidates", ""] +
-    ([.candidates[] |
-      [
-        "### " + (.id | md),
-        "",
-        "Claim: " + (.claim | md),
-        "",
-        "- Destination: `" + .destination + "`",
-        "- Target: " + (.target | md),
-        "- Scope: " + (.scope | md),
-        "- Confidence: `" + .confidence + "`",
-        "- Duplicate result: " + (.duplicate_result | md)
-      ] +
-      ([evidence]) +
-      ["- Exclusions/counterexamples: " + ((.exclusions | join("; ")) | md)] +
-      (if has("claim_group") then ["- Claim group: " + (.claim_group | md)] else [] end) +
-      (if has("consumption_purpose") then ["- Consumption purpose: " + (.consumption_purpose | md)] else [] end) +
-      (if .destination == "obsidian" then [
-        "- Knowledge type: `" + .knowledge_type + "`",
-        "- Vault queries: " + ((.vault_queries | join("; ")) | md),
-        "- Related notes: " + ((.related_notes | join("; ")) | md),
-        "- Verification status: " + (.verification_status | md),
-        "- Governance action: `" + .governance_action + "`"
-      ] else [] end) + [""]
-    ] | add)
-  end) | .[]
-' "$normalized_tmp" >"$markdown_tmp"
+knowledge_render_markdown "$normalized_tmp" >"$markdown_tmp"
 
 if [[ -e "$json_path" || -L "$json_path" || -e "$markdown_path" || -L "$markdown_path" ]]; then
   knowledge_fail 'report destination already exists'

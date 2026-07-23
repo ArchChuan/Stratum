@@ -5,7 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 knowledge_quiet_allow() { jq -cn '{continue:true,suppressOutput:true}'; }
-knowledge_block() { jq -cn --arg reason "$1" '{decision:"block",reason:$reason,continue:false,suppressOutput:false}'; }
+knowledge_block() {
+  if ! jq -cn --arg reason "$1" '{decision:"block",reason:$reason,continue:false,suppressOutput:false}' 2>/dev/null; then
+    printf '%s\n' '{"decision":"block","reason":"knowledge deposition: internal adapter failure","continue":false,"suppressOutput":false}'
+  fi
+}
 
 knowledge_payload_fields() {
   jq -er 'select(type == "object") | [.cwd,.session_id] | select(all(.[]; type == "string" and length > 0)) | @tsv' 2>/dev/null
@@ -31,7 +35,8 @@ knowledge_resolve_root() {
 }
 
 knowledge_start() {
-  local client="$1" envelope="$2" input fields cwd raw_session root session task created marker tmp command message
+  local client="$1" envelope="$2" input fields cwd raw_session root session task task_time random created marker tmp command message
+  jq --version >/dev/null 2>&1 || return 1
   input="$(cat)"
   fields="$(printf '%s' "$input" | knowledge_payload_fields)" || {
     knowledge_malformed_response "$input"
@@ -40,18 +45,23 @@ knowledge_start() {
   IFS=$'\t' read -r cwd raw_session <<<"$fields"
   root="$(knowledge_resolve_root "$cwd")" || { knowledge_quiet_allow; return; }
   session="$(knowledge_normalize_session "$raw_session")" || { knowledge_block 'knowledge deposition: invalid session identifier'; return; }
-  task="task-$(date -u +'%s%N')-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
-  created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  task_time="$(date -u +'%s%N')" || return 1
+  random="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')" || return 1
+  task="task-$task_time-$random"
+  created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" || return 1
   marker="$(knowledge_current_path "$root" "$client" "$session")"
   knowledge_prepare_private_lock "$root" || { knowledge_block 'knowledge deposition: unsafe private marker or lock path'; return; }
   knowledge_path_within_root "$root" "$marker" || { knowledge_block 'knowledge deposition: current marker path is unsafe'; return; }
   [[ ! -L "$marker" && ( ! -e "$marker" || -f "$marker" ) ]] || { knowledge_block 'knowledge deposition: current marker is unsafe'; return; }
   tmp="$(mktemp "$(dirname "$marker")/.marker.XXXXXX")" || { knowledge_block 'knowledge deposition: marker staging failed'; return; }
   jq -cn --arg client "$client" --arg session "$session" --arg task "$task" --arg root "$root" --arg created "$created" \
-    '{schema_version:1,client:$client,session_id:$session,task_id:$task,repository:{root:$root},created_at:$created}' >"$tmp"
-  chmod 600 "$tmp"
-  mv -f -- "$tmp" "$marker"
-  command="bash scripts/knowledge-deposition/report.sh --client $client --session $session --task $task --repo-root $root"
+    '{schema_version:1,client:$client,session_id:$session,task_id:$task,repository:{root:$root},created_at:$created}' >"$tmp" || {
+    rm -f -- "$tmp"
+    return 1
+  }
+  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$marker" || { rm -f -- "$tmp"; return 1; }
+  command="$(knowledge_shell_command bash scripts/knowledge-deposition/report.sh --client "$client" --session "$session" --task "$task" --repo-root "$root")"
   message="Knowledge deposition task gate active.\nClient: $client\nSession: $session\nTask: $task\nBefore stopping, submit the report JSON to:\n$command"
   if [[ "$envelope" == codex ]]; then
     jq -cn --arg message "$message" '{continue:true,systemMessage:$message}'
@@ -62,6 +72,7 @@ knowledge_start() {
 
 knowledge_stop() {
   local client="$1" input fields cwd raw_session root session reason
+  jq --version >/dev/null 2>&1 || return 1
   input="$(cat)"
   fields="$(printf '%s' "$input" | knowledge_payload_fields)" || { knowledge_malformed_response "$input"; return; }
   IFS=$'\t' read -r cwd raw_session <<<"$fields"

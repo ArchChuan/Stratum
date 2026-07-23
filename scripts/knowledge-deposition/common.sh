@@ -25,12 +25,28 @@ knowledge_sanitize_session() {
 }
 
 knowledge_normalize_session() {
-  local value
-  value="$(printf '%s' "${1:-}" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-128)"
-  [[ -n "$value" ]] || value='session'
-  [[ "$value" =~ ^[A-Za-z0-9] ]] || value="s-$value"
-  value="${value:0:128}"
-  knowledge_sanitize_session "$value"
+  local digest
+  command -v sha256sum >/dev/null 2>&1 || { knowledge_fail 'sha256sum is required for session identifiers'; return 1; }
+  if ! digest="$(printf '%s' "${1:-}" | sha256sum)"; then
+    knowledge_fail 'session identifier hashing failed'
+    return 1
+  fi
+  digest="${digest%% *}"
+  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || {
+    knowledge_fail 'session identifier hashing returned an invalid digest'
+    return 1
+  }
+  printf 'session-%s\n' "$digest"
+}
+
+knowledge_shell_command() {
+  local output='' argument quoted
+  for argument in "$@"; do
+    printf -v quoted '%q' "$argument"
+    [[ -z "$output" ]] || output+=' '
+    output+="$quoted"
+  done
+  printf '%s\n' "$output"
 }
 
 knowledge_sanitize_task() {
@@ -166,6 +182,49 @@ knowledge_validate_normalize() {
     ) |
     select(claim_groups_valid)
   '
+}
+
+knowledge_render_markdown() {
+  jq -r '
+    def md:
+      explode |
+      map(. as $char |
+        if ([92, 96, 42, 95, 123, 125, 91, 93, 40, 41, 35, 43, 33, 124, 62, 60] | index($char))
+        then [92, $char] else [$char] end) |
+      add | implode;
+    def evidence:
+      .evidence[] | "  - Evidence: " + (((.path + (if has("anchor") then "#" + .anchor else "" end)) | md));
+    [
+      "# Knowledge deposition report", "", "- Client: `" + .client + "`",
+      "- Session: `" + .session_id + "`", "- Task: `" + .task_id + "`",
+      "- Repository: " + (.repository.root | md), "- Commit: `" + .repository.commit + "`",
+      "- Created: `" + .created_at + "`", "- Decision: `" + .decision + "`", "",
+      "## Task summary", "", "Summary: " + (.task_summary | md), ""
+    ] +
+    (if .decision == "none" then
+      ["## No candidates", "", "Reason: " + (.none_reason | md), ""]
+    else
+      ["## Candidates", ""] +
+      ([.candidates[] |
+        [
+          "### " + (.id | md), "", "Claim: " + (.claim | md), "",
+          "- Destination: `" + .destination + "`", "- Target: " + (.target | md),
+          "- Scope: " + (.scope | md), "- Confidence: `" + .confidence + "`",
+          "- Duplicate result: " + (.duplicate_result | md)
+        ] + ([evidence]) +
+        ["- Exclusions/counterexamples: " + ((.exclusions | join("; ")) | md)] +
+        (if has("claim_group") then ["- Claim group: " + (.claim_group | md)] else [] end) +
+        (if has("consumption_purpose") then ["- Consumption purpose: " + (.consumption_purpose | md)] else [] end) +
+        (if .destination == "obsidian" then [
+          "- Knowledge type: `" + .knowledge_type + "`",
+          "- Vault queries: " + ((.vault_queries | join("; ")) | md),
+          "- Related notes: " + ((.related_notes | join("; ")) | md),
+          "- Verification status: " + (.verification_status | md),
+          "- Governance action: `" + .governance_action + "`"
+        ] else [] end) + [""]
+      ] | add)
+    end) | .[]
+  ' "$1"
 }
 
 knowledge_validate_marker() {
