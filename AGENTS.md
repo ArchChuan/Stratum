@@ -5,6 +5,8 @@
 
 More deeply nested `AGENTS.md` files may add narrower rules for their subtree; direct user instructions remain higher priority.
 
+Stratum-specific knowledge-deposition categories and report mechanics are defined only in `docs/agent/knowledge-deposition.md`.
+
 ---
 
 # Stratum project instructions
@@ -22,6 +24,10 @@ More deeply nested `AGENTS.md` files may add narrower rules for their subtree; d
 3. 官方文档、标准、原始论文或上游源码中的当前外部证据。
 
 仓库事实以代码、测试和运行结果为准。Obsidian 是只读长期知识输入，`provisional` 内容只能作为未核验线索；搜索摘要不能作为关键证据。来源冲突时记录版本、范围和反例，不得静默选择。知识写回是独立蒸馏任务。完整协议必须通过已配置的 `obsidian` MCP 读取 vault-relative 资源 `99-系统/知识输入与证据检索协议.md`。
+
+## End-of-task knowledge gate
+
+每个实质性任务在最终回复前都必须生成与当前 session 和 task 绑定的知识沉淀报告，保存到已忽略的 `tmp/knowledge-deposition/`；无合格候选时也必须显式记录 `none`。最终回复只总结同一份报告中的候选。Stratum 专属分类、字段、去重和写入边界遵循根入口链接的规范。
 
 ## Technology and directory map
 

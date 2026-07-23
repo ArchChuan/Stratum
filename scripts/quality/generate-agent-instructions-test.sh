@@ -78,6 +78,7 @@ validate_precommit_integration() {
     return 1
   }
   for required_path in AGENTS.md CLAUDE.md docs/agent/instructions.md \
+    docs/agent/knowledge-deposition.md \
     docs/agent/templates/agents-prefix.md docs/agent/templates/claude-prefix.md \
     scripts/quality/generate-agent-instructions.sh scripts/quality/generate-agent-instructions-test.sh; do
     if [[ ! "${required_path}" =~ ${files_regex} ]]; then
@@ -133,15 +134,24 @@ new_fixture() {
 
 shared-rule
 EOF
+  cat >"${FIXTURE}/docs/agent/knowledge-deposition.md" <<'EOF'
+# Knowledge deposition
+
+canonical-policy
+EOF
   cat >"${FIXTURE}/docs/agent/templates/agents-prefix.md" <<'EOF'
 > Codex entry
 
 codex-only
+
+See `docs/agent/knowledge-deposition.md` for the canonical policy.
 EOF
   cat >"${FIXTURE}/docs/agent/templates/claude-prefix.md" <<'EOF'
 > Claude Code entry
 
 claude-only
+
+See `docs/agent/knowledge-deposition.md` for the canonical policy.
 EOF
 }
 
@@ -176,6 +186,10 @@ assert_contains "${agents_content}" 'codex-only'
 assert_not_contains "${agents_content}" 'claude-only'
 assert_contains "${claude_content}" 'claude-only'
 assert_not_contains "${claude_content}" 'codex-only'
+[[ "$(grep -Fc 'docs/agent/knowledge-deposition.md' <<<"${agents_content}" || true)" -eq 1 ]] || \
+  fail 'generated AGENTS.md must contain exactly one knowledge deposition policy link'
+[[ "$(grep -Fc 'docs/agent/knowledge-deposition.md' <<<"${claude_content}" || true)" -eq 1 ]] || \
+  fail 'generated CLAUDE.md must contain exactly one knowledge deposition policy link'
 assert_not_contains "${agents_content}" $'codex-only\n\n\n---'
 assert_not_contains "${claude_content}" $'claude-only\n\n\n---'
 
@@ -298,6 +312,10 @@ fi
 ) || fail 'repository generated instructions are not current'
 git -C "${ROOT}" ls-files --error-unmatch AGENTS.md >/dev/null || fail 'AGENTS.md is not tracked'
 git -C "${ROOT}" ls-files --error-unmatch CLAUDE.md >/dev/null || fail 'CLAUDE.md is not tracked'
+[[ "$(grep -Fc 'docs/agent/knowledge-deposition.md' "${ROOT}/AGENTS.md" || true)" -eq 1 ]] || \
+  fail 'repository AGENTS.md must contain exactly one knowledge deposition policy link'
+[[ "$(grep -Fc 'docs/agent/knowledge-deposition.md' "${ROOT}/CLAUDE.md" || true)" -eq 1 ]] || \
+  fail 'repository CLAUDE.md must contain exactly one knowledge deposition policy link'
 if ignore_output="$(git -C "${ROOT}" check-ignore --no-index -v AGENTS.md 2>&1)"; then
   fail "AGENTS.md is ignored: ${ignore_output}"
 fi
