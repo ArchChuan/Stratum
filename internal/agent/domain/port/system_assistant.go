@@ -2,7 +2,9 @@ package port
 
 import "github.com/byteBuilderX/stratum/internal/agent/domain"
 
-// SystemAssistantProfileCatalog resolves retained, immutable profile versions.
-type SystemAssistantProfileCatalog interface {
-	Profile(version string) (domain.SystemAssistantProfile, bool)
+// SystemAssistantProfileSource exposes one selected immutable runtime profile.
+// Implementations must return defensive value copies.
+type SystemAssistantProfileSource interface {
+	Profile() domain.SystemAssistantProfile
+	Version() string
 }

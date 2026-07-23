@@ -50,7 +50,6 @@ type AgentServiceDeps struct {
 	RecallMemory            port.RecallMemoryFn
 	Metrics                 observability.MetricsProvider
 	Logger                  *zap.Logger
-	SystemAssistantProfile  *domain.SystemAssistantProfile
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields
@@ -64,9 +63,6 @@ type AgentService struct {
 func NewAgentService(deps AgentServiceDeps) *AgentService {
 	if deps.Logger == nil {
 		deps.Logger = zap.NewNop()
-	}
-	if deps.SystemAssistantProfile == nil {
-		deps.SystemAssistantProfile = BuiltinSystemAssistantProfile()
 	}
 	return &AgentService{deps: deps}
 }
@@ -481,7 +477,10 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
 	executionID := uuid.Must(uuid.NewV7()).String()
-	_, options := s.assembleOptions(ctx, a, req, meta, executionID)
+	_, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("execute agent: assemble options: %w", err)
+	}
 	options = append(options, WithExecutionID(executionID))
 
 	s.deps.Logger.Debug("agent.execute",
@@ -543,7 +542,10 @@ func (s *AgentService) ExecuteStream(
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
 	executionID := uuid.Must(uuid.NewV7()).String()
-	streamCtx, options := s.assembleOptions(ctx, a, req, meta, executionID)
+	streamCtx, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("execute stream: assemble options: %w", err)
+	}
 	options = append(options, WithTokenCallback(tokenCb))
 	options = append(options, WithExecutionID(executionID))
 
@@ -649,7 +651,10 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approva
 	}
 	req := ExecRequest{Query: payload.Query, ConversationID: payload.ConversationID, UserID: payload.UserID}
 	meta := ExecMeta{TenantID: tenantID, TraceID: payload.TraceID}
-	_, options := s.assembleOptions(ctx, a, req, meta, payload.ExecutionID)
+	_, options, err := s.assembleOptions(ctx, a, req, meta, payload.ExecutionID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("resume tool approval: assemble options: %w", err)
+	}
 	if len(payload.PinnedSkillRevisions) > 0 && s.deps.SkillActivationResolver != nil {
 		refs := make([]port.SkillRevisionRef, 0, len(payload.PinnedSkillRevisions))
 		for skillID, revisionID := range payload.PinnedSkillRevisions {
@@ -720,7 +725,10 @@ func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string,
 		return nil, 0, ErrNotFound
 	}
 	executionID := uuid.Must(uuid.NewV7()).String()
-	_, options := s.assembleOptions(ctx, a, req, meta, executionID)
+	_, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("execute skill scenario: assemble options: %w", err)
+	}
 	options = append(options, WithExecutionID(executionID), WithSkillCatalog(map[string]port.SkillActivation{activation.SkillID: activation}), WithActiveSkill(activation))
 	start := time.Now()
 	result, err := a.Execute(context.WithoutCancel(ctx), req.Query, options...)
@@ -733,7 +741,7 @@ func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string,
 // ctx carries the per-tenant LLM completer for streaming inner calls.
 func (s *AgentService) assembleOptions(
 	ctx context.Context, a Agent, req ExecRequest, meta ExecMeta, executionID string,
-) (context.Context, []ExecutionOption) {
+) (context.Context, []ExecutionOption, error) {
 	options := []ExecutionOption{WithMaxSteps(a.GetConfig().MaxIterations)}
 	if req.MaxSteps > 0 {
 		options = append(options, WithMaxSteps(req.MaxSteps))
@@ -790,7 +798,11 @@ func (s *AgentService) assembleOptions(
 		evolutionTrace.ResourceManifest = make(map[string]string)
 	}
 	if a.GetConfig().SystemKey == domain.SystemAssistantKey {
-		evolutionTrace.ResourceManifest["system-assistant-profile"] = s.deps.SystemAssistantProfile.Version
+		profileVersion, err := s.deps.Registry.systemAssistantProfileVersion()
+		if err != nil {
+			return ctx, nil, fmt.Errorf("assemble system assistant profile trace: %w", err)
+		}
+		evolutionTrace.ResourceManifest["system-assistant-profile"] = profileVersion
 	}
 	if evolutionTrace.ExperimentAssignments == nil {
 		evolutionTrace.ExperimentAssignments = make(map[string]ExperimentAssignment)
@@ -857,7 +869,7 @@ func (s *AgentService) assembleOptions(
 			return s.deps.RAGSearch.SearchKnowledge(rctx, tenantID, workspaces, query, topK)
 		}))
 	}
-	return ctx, options
+	return ctx, options, nil
 }
 
 // attachChatStore wires the configured ChatStore onto the running agent

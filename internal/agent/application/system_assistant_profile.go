@@ -4,7 +4,17 @@ import (
 	"fmt"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 )
+
+// SystemAssistantProfileSource owns one selected, code-reviewed profile value.
+// Its state is private and Profile returns a value copy, so callers cannot
+// mutate the runtime selection after wiring.
+type SystemAssistantProfileSource struct {
+	profile domain.SystemAssistantProfile
+}
+
+var _ port.SystemAssistantProfileSource = (*SystemAssistantProfileSource)(nil)
 
 const systemAssistantPrompt = "You are Stratum's platform assistant.\n" +
 	"Operate only on evidence from the current authenticated tenant. " +
@@ -24,12 +34,52 @@ const systemAssistantPrompt = "You are Stratum's platform assistant.\n" +
 // BuiltinSystemAssistantProfiles retains every released profile version.
 func BuiltinSystemAssistantProfiles() map[string]domain.SystemAssistantProfile {
 	return map[string]domain.SystemAssistantProfile{
+		"2026-07-22.v0": {
+			Key: domain.SystemAssistantKey, Version: "2026-07-22.v0",
+			Name: "Stratum 平台助手", Description: "基于官方资料提供平台使用指导和当前租户的只读诊断。",
+			SystemPrompt: systemAssistantPrompt, MaxIterations: 6, MaxContextTokens: 24576,
+		},
 		domain.CurrentSystemAssistantProfileVersion: {
 			Key: domain.SystemAssistantKey, Version: domain.CurrentSystemAssistantProfileVersion,
 			Name: "Stratum 平台助手", Description: "基于官方资料提供平台使用指导和当前租户的只读诊断。",
 			SystemPrompt: systemAssistantPrompt, MaxIterations: 8, MaxContextTokens: 32768,
 		},
 	}
+}
+
+// NewBuiltinSystemAssistantProfileSource selects a retained profile version.
+func NewBuiltinSystemAssistantProfileSource(version string) (*SystemAssistantProfileSource, error) {
+	profile, ok := BuiltinSystemAssistantProfiles()[version]
+	if !ok || profile.Key != domain.SystemAssistantKey {
+		return nil, fmt.Errorf("system assistant profile source: unknown version %q", version)
+	}
+	return &SystemAssistantProfileSource{profile: profile}, nil
+}
+
+// BuiltinSystemAssistantProfileSource selects the active profile. The active
+// constant is code-reviewed, so failure indicates an invalid build.
+func BuiltinSystemAssistantProfileSource() *SystemAssistantProfileSource {
+	source, err := NewBuiltinSystemAssistantProfileSource(domain.CurrentSystemAssistantProfileVersion)
+	if err != nil {
+		panic(err)
+	}
+	return source
+}
+
+// Profile returns a defensive value copy of the selected profile.
+func (s *SystemAssistantProfileSource) Profile() domain.SystemAssistantProfile {
+	if s == nil {
+		return domain.SystemAssistantProfile{}
+	}
+	return s.profile
+}
+
+// Version returns the selected immutable version.
+func (s *SystemAssistantProfileSource) Version() string {
+	if s == nil {
+		return ""
+	}
+	return s.profile.Version
 }
 
 // BuiltinSystemAssistantProfile returns a copy of the active profile.

@@ -132,9 +132,12 @@ func (a *optionCaptureAgent) GetMemory() []Message { return nil }
 func TestAssembleOptionsIncludesExecutionID(t *testing.T) {
 	svc := NewAgentService(AgentServiceDeps{})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{ID: "agent-1", MaxIterations: 3}}
-	_, options := svc.assembleOptions(
+	_, options, err := svc.assembleOptions(
 		context.Background(), agent, ExecRequest{}, ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1",
 	)
+	if err != nil {
+		t.Fatalf("assembleOptions() error: %v", err)
+	}
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
 	if cfg.ExecutionID != "execution-1" {
@@ -158,9 +161,11 @@ func TestAssembleOptionsBuildsHistoryCompactorFromTenantGateway(t *testing.T) {
 	})
 	a := &optionCaptureAgent{config: &domain.AgentConfig{ID: "agent-1", LLMModel: "qwen-plus", MaxIterations: 3}}
 
-	svc.assembleOptions(
+	if _, _, err := svc.assembleOptions(
 		context.Background(), a, ExecRequest{}, ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1",
-	)
+	); err != nil {
+		t.Fatalf("assembleOptions() error: %v", err)
+	}
 
 	if a.gateway != gateway {
 		t.Fatal("tenant gateway was not attached")
@@ -208,9 +213,12 @@ func TestAssembleOptionsAttributesEveryExperimentDeterministically(t *testing.T)
 		AllowedSkills: []string{"skill-b", "skill-a"},
 	}}
 
-	_, options := svc.assembleOptions(
+	_, options, err := svc.assembleOptions(
 		context.Background(), a, ExecRequest{}, ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1",
 	)
+	if err != nil {
+		t.Fatalf("assembleOptions() error: %v", err)
+	}
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
 

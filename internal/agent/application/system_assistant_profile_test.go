@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -158,9 +159,20 @@ func (r systemAssistantProfileRepo) Remove(context.Context, string) error { retu
 
 var _ port.AgentRepo = systemAssistantProfileRepo{}
 
+type systemAssistantPromptGateway struct {
+	request port.CapabilityRequest
+}
+
+func (g *systemAssistantPromptGateway) Route(
+	_ context.Context, request port.CapabilityRequest,
+) (port.CapabilityResponse, error) {
+	g.request = request
+	return port.CapabilityResponse{Content: "done"}, nil
+}
+
 func TestSystemAssistantProfileRegistryPropagatesRepositoryAndCompositionFailures(t *testing.T) {
 	wantErr := errors.New("repository unavailable")
-	registry := NewRegistry(systemAssistantProfileRepo{err: wantErr}, BuiltinSystemAssistantProfile(), zap.NewNop())
+	registry := NewRegistry(systemAssistantProfileRepo{err: wantErr}, BuiltinSystemAssistantProfileSource(), zap.NewNop())
 	if _, _, err := registry.Get(context.Background(), "assistant-1"); !errors.Is(err, wantErr) {
 		t.Fatalf("Registry.Get() error = %v, want %v", err, wantErr)
 	}
@@ -181,7 +193,7 @@ func TestSystemAssistantProfileRegistryPropagatesRepositoryAndCompositionFailure
 
 func TestSystemAssistantProfileAgentServicePropagatesRegistryFailures(t *testing.T) {
 	wantErr := errors.New("repository unavailable")
-	registry := NewRegistry(systemAssistantProfileRepo{err: wantErr}, BuiltinSystemAssistantProfile(), zap.NewNop())
+	registry := NewRegistry(systemAssistantProfileRepo{err: wantErr}, BuiltinSystemAssistantProfileSource(), zap.NewNop())
 	svc := NewAgentService(AgentServiceDeps{Registry: registry})
 
 	if _, err := svc.Get(context.Background(), "assistant-1"); !errors.Is(err, wantErr) {
@@ -193,18 +205,118 @@ func TestSystemAssistantProfileAgentServicePropagatesRegistryFailures(t *testing
 }
 
 func TestSystemAssistantProfileVersionRecordedInTraceMetadata(t *testing.T) {
-	profile := BuiltinSystemAssistantProfile()
-	svc := NewAgentService(AgentServiceDeps{SystemAssistantProfile: profile})
+	source := BuiltinSystemAssistantProfileSource()
+	svc := NewAgentService(AgentServiceDeps{Registry: NewRegistry(nil, source, zap.NewNop())})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID: "assistant-1", SystemKey: domain.SystemAssistantKey, MaxIterations: 3,
 	}}
 
-	_, options := svc.assembleOptions(
+	_, options, err := svc.assembleOptions(
 		context.Background(), agent, ExecRequest{}, ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1",
 	)
+	if err != nil {
+		t.Fatalf("assembleOptions() error = %v", err)
+	}
 	cfg := &ExecutionConfig{}
 	cfg.ApplyOptions(options)
-	if got := cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"]; got != profile.Version {
-		t.Fatalf("profile version = %q, want %q", got, profile.Version)
+	if got := cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"]; got != source.Version() {
+		t.Fatalf("profile version = %q, want %q", got, source.Version())
+	}
+}
+
+func TestSystemAssistantProfileTraceFailsClosedWithoutSharedSource(t *testing.T) {
+	svc := NewAgentService(AgentServiceDeps{Registry: NewRegistry(nil, nil, zap.NewNop())})
+	agent := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: "assistant-1", SystemKey: domain.SystemAssistantKey, MaxIterations: 3,
+	}}
+
+	if _, _, err := svc.assembleOptions(
+		context.Background(), agent, ExecRequest{}, ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1",
+	); err == nil {
+		t.Fatal("assembleOptions() error = nil without shared profile source")
+	}
+}
+
+func TestSystemAssistantProfileManagedRuntimeDoesNotAppendGlobalSuffix(t *testing.T) {
+	source, err := NewBuiltinSystemAssistantProfileSource(domain.CurrentSystemAssistantProfileVersion)
+	if err != nil {
+		t.Fatalf("NewBuiltinSystemAssistantProfileSource() error = %v", err)
+	}
+	registry := NewRegistry(systemAssistantProfileRepo{cfgs: []*domain.AgentConfig{
+		{ID: "assistant-1", SystemKey: domain.SystemAssistantKey},
+	}}, source, zap.NewNop())
+	registry.SetGlobalSystemSuffix("tenant-global-suffix")
+
+	agent, found, err := registry.Get(context.Background(), "assistant-1")
+	if err != nil || !found {
+		t.Fatalf("Registry.Get() found = %v, error = %v", found, err)
+	}
+	base := agent.(*BaseAgent)
+	if base.GlobalSystemSuffix != "" {
+		t.Fatalf("managed runtime suffix = %q, want empty", base.GlobalSystemSuffix)
+	}
+	managedGateway := &systemAssistantPromptGateway{}
+	base.SetCapGateway(managedGateway)
+	if _, err := base.Execute(context.Background(), "help"); err != nil {
+		t.Fatalf("managed Execute() error = %v", err)
+	}
+	if got := managedGateway.request.LLM.Messages[0].Content; strings.Contains(got, "tenant-global-suffix") {
+		t.Fatalf("managed effective prompt contains global suffix: %q", got)
+	}
+
+	registry = NewRegistry(systemAssistantProfileRepo{cfgs: []*domain.AgentConfig{
+		{ID: "agent-1", SystemPrompt: "tenant prompt"},
+	}}, source, zap.NewNop())
+	registry.SetGlobalSystemSuffix("tenant-global-suffix")
+	agent, found, err = registry.Get(context.Background(), "agent-1")
+	if err != nil || !found {
+		t.Fatalf("Registry.Get() found = %v, error = %v", found, err)
+	}
+	if got := agent.(*BaseAgent).GlobalSystemSuffix; got != "tenant-global-suffix" {
+		t.Fatalf("ordinary runtime suffix = %q", got)
+	}
+	ordinary := agent.(*BaseAgent)
+	ordinaryGateway := &systemAssistantPromptGateway{}
+	ordinary.SetCapGateway(ordinaryGateway)
+	if _, err := ordinary.Execute(context.Background(), "help"); err != nil {
+		t.Fatalf("ordinary Execute() error = %v", err)
+	}
+	if got := ordinaryGateway.request.LLM.Messages[0].Content; !strings.Contains(got, "tenant-global-suffix") {
+		t.Fatalf("ordinary effective prompt omits global suffix: %q", got)
+	}
+}
+
+func TestSystemAssistantProfileRollbackSourceKeepsRuntimeAndTraceOnSameImmutableVersion(t *testing.T) {
+	const rollbackVersion = "2026-07-22.v0"
+	source, err := NewBuiltinSystemAssistantProfileSource(rollbackVersion)
+	if err != nil {
+		t.Fatalf("NewBuiltinSystemAssistantProfileSource() error = %v", err)
+	}
+	snapshot := source.Profile()
+	snapshot.Version = "mutated"
+	snapshot.SystemPrompt = "mutated prompt"
+
+	registry := NewRegistry(systemAssistantProfileRepo{cfgs: []*domain.AgentConfig{
+		{ID: "assistant-1", SystemKey: domain.SystemAssistantKey},
+	}}, source, zap.NewNop())
+	agent, found, err := registry.Get(context.Background(), "assistant-1")
+	if err != nil || !found {
+		t.Fatalf("Registry.Get() found = %v, error = %v", found, err)
+	}
+	if agent.GetConfig().SystemPrompt == "mutated prompt" {
+		t.Fatal("caller mutation changed composed runtime prompt")
+	}
+
+	svc := NewAgentService(AgentServiceDeps{Registry: registry})
+	_, options, err := svc.assembleOptions(
+		context.Background(), agent, ExecRequest{}, ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1",
+	)
+	if err != nil {
+		t.Fatalf("assembleOptions() error = %v", err)
+	}
+	cfg := &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+	if got := cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"]; got != rollbackVersion {
+		t.Fatalf("trace profile version = %q, runtime source version = %q", got, rollbackVersion)
 	}
 }

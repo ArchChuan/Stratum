@@ -19,12 +19,12 @@ type Registry struct {
 	memInjector        port.MemoryInjector
 	recallFn           port.RecallMemoryFn
 	globalSystemSuffix string
-	systemProfile      *domain.SystemAssistantProfile
+	systemProfile      *SystemAssistantProfileSource
 }
 
 // NewRegistry constructs a Registry around a domain-port AgentRepo.
 func NewRegistry(
-	repo port.AgentRepo, systemProfile *domain.SystemAssistantProfile, logger *zap.Logger,
+	repo port.AgentRepo, systemProfile *SystemAssistantProfileSource, logger *zap.Logger,
 ) *Registry {
 	return &Registry{repo: repo, systemProfile: systemProfile, logger: logger}
 }
@@ -39,7 +39,12 @@ func (r *Registry) SetRecallMemoryFn(fn port.RecallMemoryFn) { r.recallFn = fn }
 func (r *Registry) SetGlobalSystemSuffix(s string) { r.globalSystemSuffix = s }
 
 func (r *Registry) hydrate(cfg *domain.AgentConfig) (Agent, error) {
-	composed, err := ComposeSystemAssistantProfile(cfg, r.systemProfile)
+	var profile *domain.SystemAssistantProfile
+	if r.systemProfile != nil {
+		selected := r.systemProfile.Profile()
+		profile = &selected
+	}
+	composed, err := ComposeSystemAssistantProfile(cfg, profile)
 	if err != nil {
 		return nil, fmt.Errorf("registry hydrate agent: %w", err)
 	}
@@ -50,10 +55,17 @@ func (r *Registry) hydrate(cfg *domain.AgentConfig) (Agent, error) {
 	if r.recallFn != nil {
 		a.RecallMemoryFn = r.recallFn
 	}
-	if r.globalSystemSuffix != "" {
+	if r.globalSystemSuffix != "" && composed.SystemKey != domain.SystemAssistantKey {
 		a.GlobalSystemSuffix = r.globalSystemSuffix
 	}
 	return a, nil
+}
+
+func (r *Registry) systemAssistantProfileVersion() (string, error) {
+	if r == nil || r.systemProfile == nil || r.systemProfile.Version() == "" {
+		return "", fmt.Errorf("registry system assistant profile: profile source unavailable")
+	}
+	return r.systemProfile.Version(), nil
 }
 
 // Register persists a new agent.
