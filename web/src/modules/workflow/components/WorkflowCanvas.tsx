@@ -5,12 +5,13 @@ import {
   MiniMap,
   ReactFlow,
   type Connection,
+  type Edge,
   type ReactFlowInstance,
 } from '@xyflow/react';
 import { Button } from 'antd';
 import { useMemo, useRef } from 'react';
 
-import { toFlowEdges, toFlowNodes, type WorkflowEditorAction, type WorkflowEditorState } from '../model/editor';
+import { toFlowEdges, toFlowNodes, type WorkflowEditorAction, type WorkflowEditorState, type WorkflowFlowNode } from '../model/editor';
 import type { WorkflowNodeType } from '../model/workflow';
 
 import { WorkflowNodePalette } from './WorkflowNodePalette';
@@ -31,7 +32,7 @@ export const WorkflowCanvas = ({
   createNodeId: () => string;
   createEdgeId: () => string;
 }) => {
-  const instanceRef = useRef<ReactFlowInstance | null>(null);
+  const instanceRef = useRef<ReactFlowInstance<WorkflowFlowNode, Edge> | null>(null);
   const nodes = useMemo(() => toFlowNodes(state), [state]);
   const edges = useMemo(() => toFlowEdges(state), [state]);
   const insertNode = (nodeType: WorkflowNodeType) => dispatch({
@@ -62,7 +63,7 @@ export const WorkflowCanvas = ({
         icon={<AimOutlined />}
         onClick={() => instanceRef.current?.fitView()}
       >适应画布</Button>
-      <ReactFlow
+      <ReactFlow<WorkflowFlowNode, Edge>
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}

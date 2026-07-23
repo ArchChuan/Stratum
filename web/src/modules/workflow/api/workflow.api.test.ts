@@ -17,8 +17,15 @@ const definition = {
   name: '客户研究',
   description: '',
   revision: 1,
-  spec: { nodes: [{ id: 'approval', type: 'approval' }], edges: [] },
-  input_schema: { task_label: '任务', fields: [] },
+  spec: {
+    nodes: [{
+      id: 'approval', type: 'approval' as const, agent_id: '', name: '', input_mapping: {}, output_mapping: {},
+      retry: { max_attempts: 0, backoff_ms: 0 }, timeout_ms: 0,
+    }],
+    edges: [],
+    max_concurrency: 0,
+  },
+  input_schema: { task_label: '任务', task_description: '', fields: [] },
   created_at: '2026-07-23T00:00:00Z',
   updated_at: '2026-07-23T00:00:00Z',
 };

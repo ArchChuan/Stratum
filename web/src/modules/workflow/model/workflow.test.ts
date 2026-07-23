@@ -83,6 +83,21 @@ describe('workflow wire models', () => {
     expect(() => workflowPageSchema.parse({ workflows: [{ id: 42 }], total: 1, page: 1, page_size: 20 })).toThrow();
   });
 
+  it('normalizes empty Go slices encoded as null at the HTTP boundary', () => {
+    const definition = workflowDefinitionSchema.parse({
+      id: 'workflow-1',
+      name: '审批流程',
+      description: '',
+      revision: 1,
+      spec: { nodes: [{ id: 'approval', type: 'approval' }], edges: null },
+      input_schema: { task_label: '任务', fields: null },
+      created_at: '0001-01-01T00:00:00Z',
+      updated_at: '0001-01-01T00:00:00Z',
+    });
+    expect(definition.spec.edges).toEqual([]);
+    expect(definition.input_schema.fields).toEqual([]);
+  });
+
   it('parses run pages, details, backend control records, and unknown event types', () => {
     const run = {
       id: 'run-1', definition_id: 'workflow-1', version_id: 'version-1', version: 1, status: 'running',

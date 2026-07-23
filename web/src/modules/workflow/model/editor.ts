@@ -28,6 +28,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   statusLabel?: string;
 }
 
+export type WorkflowFlowNode = Node<WorkflowNodeData, 'workflowNode'>;
+
 const emptySpec = (): WorkflowSpec => ({ nodes: [], edges: [], max_concurrency: 0 });
 
 const createNode = (id: string, type: WorkflowNodeType): WorkflowNode => {
@@ -133,7 +135,7 @@ export const workflowEditorReducer = (
   }
 };
 
-export const toFlowNodes = (state: WorkflowEditorState): Node<WorkflowNodeData>[] => state.spec.nodes.map((node) => ({
+export const toFlowNodes = (state: WorkflowEditorState): WorkflowFlowNode[] => state.spec.nodes.map((node) => ({
   id: node.id,
   type: 'workflowNode',
   position: state.positions[node.id] || { x: 0, y: 0 },

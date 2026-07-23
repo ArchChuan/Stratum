@@ -9,6 +9,7 @@ import { WorkflowMetadataForm } from '../components/WorkflowMetadataForm';
 import { WorkflowNodeInspector } from '../components/WorkflowNodeInspector';
 import { WorkflowValidationPanel } from '../components/WorkflowValidationPanel';
 import { useWorkflowDesigner } from '../hooks/useWorkflowDesigner';
+import { useWorkflowResources } from '../hooks/useWorkflowResources';
 import type { WorkflowInputSchema } from '../model/workflow';
 
 import { useResponsive } from '@/shared/hooks';
@@ -17,6 +18,7 @@ const WorkflowDesignerDesktop = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const designer = useWorkflowDesigner(id);
+  const resources = useWorkflowResources();
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -96,7 +98,11 @@ const WorkflowDesignerDesktop = () => {
         />
       </div>
       {selectedNode
-        ? <WorkflowNodeInspector node={selectedNode} onChange={(node) => designer.dispatch({ type: 'node.update', node })} agents={[]} skills={[]} skillRevisions={[]} mcpServers={[]} />
+        ? <WorkflowNodeInspector
+          node={selectedNode}
+          onChange={(node) => designer.dispatch({ type: 'node.update', node })}
+          {...resources}
+        />
         : <aside className="workflow-node-inspector workflow-inspector-empty">选择一个节点后在这里配置。</aside>}
     </div>
   </section>;

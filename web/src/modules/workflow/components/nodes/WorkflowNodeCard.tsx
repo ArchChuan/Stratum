@@ -1,7 +1,7 @@
 import { AuditOutlined, BranchesOutlined, RobotOutlined, SafetyCertificateOutlined, ToolOutlined } from '@ant-design/icons';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 
-import type { WorkflowNodeData } from '../../model/editor';
+import type { WorkflowFlowNode } from '../../model/editor';
 import type { WorkflowNodeType } from '../../model/workflow';
 
 const presentations: Record<WorkflowNodeType, { label: string; icon: React.ReactNode }> = {
@@ -12,7 +12,7 @@ const presentations: Record<WorkflowNodeType, { label: string; icon: React.React
   approval: { label: '人工审批', icon: <SafetyCertificateOutlined /> },
 };
 
-export const WorkflowNodeCard = ({ data, selected }: NodeProps<WorkflowNodeData>) => {
+export const WorkflowNodeCard = ({ data, selected }: NodeProps<WorkflowFlowNode>) => {
   const presentation = presentations[data.node.type];
   return <article
     aria-label={`${data.node.name || presentation.label}节点`}

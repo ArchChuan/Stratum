@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+const goSlice = <T extends z.ZodTypeAny>(item: T) => z.preprocess(
+  (value) => value ?? [],
+  z.array(item),
+);
+
 export const workflowNodeTypeSchema = z.enum(['agent', 'skill', 'mcp_tool', 'condition', 'approval']);
 export type WorkflowNodeType = z.infer<typeof workflowNodeTypeSchema>;
 
@@ -56,8 +61,8 @@ export const workflowEdgeSchema = z.object({
 export type WorkflowEdge = z.infer<typeof workflowEdgeSchema>;
 
 export const workflowSpecSchema = z.object({
-  nodes: z.array(workflowNodeSchema),
-  edges: z.array(workflowEdgeSchema),
+  nodes: goSlice(workflowNodeSchema),
+  edges: goSlice(workflowEdgeSchema),
   max_concurrency: z.number().int().nonnegative().optional().default(0),
 });
 export type WorkflowSpec = z.infer<typeof workflowSpecSchema>;
@@ -82,14 +87,14 @@ export const workflowInputFieldSchema = z.object({
   required: z.boolean().optional().default(false),
   description: z.string().optional().default(''),
   default: z.unknown().optional(),
-  options: z.array(workflowInputOptionSchema).optional().default([]),
+  options: goSlice(workflowInputOptionSchema).optional().default([]),
 });
 export type WorkflowInputField = z.infer<typeof workflowInputFieldSchema>;
 
 export const workflowInputSchemaSchema = z.object({
   task_label: z.string().min(1),
   task_description: z.string().optional().default(''),
-  fields: z.array(workflowInputFieldSchema).optional().default([]),
+  fields: goSlice(workflowInputFieldSchema).optional().default([]),
 });
 export type WorkflowInputSchema = z.infer<typeof workflowInputSchemaSchema>;
 
@@ -136,7 +141,7 @@ export const workflowVersionSummarySchema = z.object({
 });
 
 export const workflowPageSchema = z.object({
-  workflows: z.array(workflowSummarySchema),
+  workflows: goSlice(workflowSummarySchema),
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
   page_size: z.number().int().positive(),
@@ -144,7 +149,7 @@ export const workflowPageSchema = z.object({
 export type WorkflowPage = z.infer<typeof workflowPageSchema>;
 
 export const workflowVersionPageSchema = z.object({
-  versions: z.array(workflowVersionSummarySchema),
+  versions: goSlice(workflowVersionSummarySchema),
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
   page_size: z.number().int().positive(),
@@ -192,7 +197,7 @@ export const workflowNodeAttemptSchema = z.object({
   status: z.enum(['pending', 'running', 'ready', 'claimed', 'succeeded', 'failed', 'retry_wait', 'skipped', 'paused', 'canceled', 'manual_intervention']),
   input: z.string(), output_summary: z.string(), error_message: z.string().optional(), trace_id: z.string().optional(),
   fence_token: z.number().int(), run_generation: z.number().int(), error_code: z.string().optional(),
-  retry_at: z.string().nullish(), effect_class: workflowEffectClassSchema.optional(), selected_edges: z.array(z.string()).optional().default([]),
+  retry_at: z.string().nullish(), effect_class: workflowEffectClassSchema.optional(), selected_edges: goSlice(z.string()).optional().default([]),
 });
 export type WorkflowNodeAttempt = z.infer<typeof workflowNodeAttemptSchema>;
 
@@ -228,16 +233,16 @@ export const workflowRunEventSchema = z.object({
 export type WorkflowRunEvent = z.infer<typeof workflowRunEventSchema>;
 
 export const workflowRunPageSchema = z.object({
-  runs: z.array(workflowRunSummarySchema), total: z.number().int().nonnegative(), page: z.number().int().positive(), page_size: z.number().int().positive(),
+  runs: goSlice(workflowRunSummarySchema), total: z.number().int().nonnegative(), page: z.number().int().positive(), page_size: z.number().int().positive(),
 });
 export type WorkflowRunPage = z.infer<typeof workflowRunPageSchema>;
 
 export const workflowRunDetailSchema = z.object({
   run: workflowRunSchema,
-  node_attempts: z.array(workflowNodeAttemptSchema),
-  approvals: z.array(workflowApprovalSchema),
-  effect_intents: z.array(workflowEffectIntentSchema),
+  node_attempts: goSlice(workflowNodeAttemptSchema),
+  approvals: goSlice(workflowApprovalSchema),
+  effect_intents: goSlice(workflowEffectIntentSchema),
   progress: z.object({ completed: z.number().int().nonnegative(), total: z.number().int().nonnegative() }),
-  available_actions: z.array(z.enum(['pause', 'cancel', 'resume', 'mark_succeeded', 'retry', 'terminate'])),
+  available_actions: goSlice(z.enum(['pause', 'cancel', 'resume', 'mark_succeeded', 'retry', 'terminate'])),
 });
 export type WorkflowRunDetail = z.infer<typeof workflowRunDetailSchema>;

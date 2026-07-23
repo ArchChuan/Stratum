@@ -12,6 +12,9 @@ vi.mock('../hooks/useWorkflowDesigner', () => ({ useWorkflowDesigner: () => ({
   setName: vi.fn(), setDescription: vi.fn(), setInputSchema: vi.fn(), loading: false, saving: false, validating: false,
   publishing: false, dirty: false, validatedRevision: null, save: vi.fn(), validate: vi.fn(), publish: vi.fn(),
 }) }));
+vi.mock('../hooks/useWorkflowResources', () => ({ useWorkflowResources: () => ({
+  agents: [], skills: [], skillRevisions: [], mcpServers: [],
+}) }));
 
 describe('WorkflowDesignerPage', () => {
   it('shows a desktop-required gate on mobile without mounting the canvas', () => {
