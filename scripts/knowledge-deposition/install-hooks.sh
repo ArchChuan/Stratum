@@ -84,7 +84,10 @@ transform() {
     def managed($command):
       ($command | type == "string") and
       (($command == $start) or ($command == $stop) or
-       ($command | test("/scripts/knowledge-deposition/(codex|claude)-(task-start|stop)\\.sh$")));
+       ($command | test(
+         "^bash /(?:\\\\.|[A-Za-z0-9_@%+=:,./-])*/scripts/knowledge-deposition/" +
+         "(?:codex|claude)-(?:task-start|stop)\\.sh$"
+       )));
     def clean_event($event):
       (($event // []) | map(
         .hooks = ((.hooks // []) | map(select(managed(.command) | not)))

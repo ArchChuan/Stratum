@@ -373,8 +373,8 @@ installer_configs="$FIXTURES/installer-configs"
 mkdir -p "$installer_configs/codex" "$installer_configs/claude"
 codex_config="$installer_configs/codex/hooks.json"
 claude_config="$installer_configs/claude/settings.json"
-jq -n '{theme:"dark",hooks:{UserPromptSubmit:[{matcher:"existing",hooks:[{type:"command",command:"echo codex-start"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/codex-task-start.sh"}]}],Stop:[{hooks:[{type:"command",command:"echo codex-stop"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/codex-stop.sh"}]}]}}' >"$codex_config"
-jq -n '{permissions:{allow:["Read"]},hooks:{UserPromptSubmit:[{hooks:[{type:"command",command:"echo claude-start"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/claude-task-start.sh"}]}],Stop:[{hooks:[{type:"command",command:"echo claude-stop"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/claude-stop.sh"}]}]}}' >"$claude_config"
+jq -n '{theme:"dark",hooks:{UserPromptSubmit:[{matcher:"existing",hooks:[{type:"command",command:"echo codex-start"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/codex-task-start.sh"},{type:"command",command:"echo /prior/scripts/knowledge-deposition/codex-task-start.sh"},{type:"command",command:"bash /prior/scripts/knowledge-deposition/codex-task-start.sh --extra"}]}],Stop:[{hooks:[{type:"command",command:"echo codex-stop"},{type:"command",command:"bash /old/repo\\ space/scripts/knowledge-deposition/codex-stop.sh"},{type:"command",command:"bash /prior;echo/scripts/knowledge-deposition/codex-stop.sh"}]}]}}' >"$codex_config"
+jq -n '{permissions:{allow:["Read"]},hooks:{UserPromptSubmit:[{hooks:[{type:"command",command:"echo claude-start"},{type:"command",command:"bash /old/repo\\;meta/scripts/knowledge-deposition/claude-task-start.sh"}]}],Stop:[{hooks:[{type:"command",command:"echo claude-stop"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/claude-stop.sh"},{type:"command",command:"true && bash /prior/scripts/knowledge-deposition/claude-stop.sh"}]}]}}' >"$claude_config"
 codex_original="$(cat "$codex_config")"
 claude_original="$(cat "$claude_config")"
 install_out="$(CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$claude_config" run_installer --repo-root "$installer_repo")" || fail "installer failed"
@@ -384,14 +384,22 @@ for spec in \
   IFS='|' read -r config start_name stop_name unrelated_start unrelated_stop <<<"$spec"
   jq -e --arg root "$installer_repo" --arg start "$start_name" --arg stop "$stop_name" \
     --arg unrelated_start "$unrelated_start" --arg unrelated_stop "$unrelated_stop" '
-      (.hooks.UserPromptSubmit | map(.hooks[]?.command) | map(select(endswith("/scripts/knowledge-deposition/" + $start))) | length) == 1 and
-      (.hooks.Stop | map(.hooks[]?.command) | map(select(endswith("/scripts/knowledge-deposition/" + $stop))) | length) == 1 and
-      any(.hooks.UserPromptSubmit[]?.hooks[]?; .command == ("bash " + $root + "/scripts/knowledge-deposition/" + $start)) and
-      any(.hooks.Stop[]?.hooks[]?; .command == ("bash " + $root + "/scripts/knowledge-deposition/" + $stop)) and
+      (.hooks.UserPromptSubmit | map(.hooks[]?.command) | map(select(. == ("bash " + $root + "/scripts/knowledge-deposition/" + $start))) | length) == 1 and
+      (.hooks.Stop | map(.hooks[]?.command) | map(select(. == ("bash " + $root + "/scripts/knowledge-deposition/" + $stop))) | length) == 1 and
+      all(.hooks.UserPromptSubmit[]?.hooks[]?; (.command | contains("/old/repo") | not)) and
+      all(.hooks.Stop[]?.hooks[]?; (.command | contains("/old/repo") | not)) and
       any(.hooks.UserPromptSubmit[]?.hooks[]?; .command == $unrelated_start) and
       any(.hooks.Stop[]?.hooks[]?; .command == $unrelated_stop)
     ' "$config" >/dev/null || fail "installer did not preserve and install exactly one lifecycle pair: $config"
 done
+jq -e '
+  any(.hooks.UserPromptSubmit[]?.hooks[]?; .command == "echo /prior/scripts/knowledge-deposition/codex-task-start.sh") and
+  any(.hooks.UserPromptSubmit[]?.hooks[]?; .command == "bash /prior/scripts/knowledge-deposition/codex-task-start.sh --extra") and
+  any(.hooks.Stop[]?.hooks[]?; .command == "bash /prior;echo/scripts/knowledge-deposition/codex-stop.sh")
+' "$codex_config" >/dev/null || fail "Codex adapter-looking unrelated commands were removed"
+jq -e '
+  any(.hooks.Stop[]?.hooks[]?; .command == "true && bash /prior/scripts/knowledge-deposition/claude-stop.sh")
+' "$claude_config" >/dev/null || fail "Claude adapter-looking unrelated command was removed"
 jq -e '.theme == "dark"' "$codex_config" >/dev/null || fail "Codex unrelated root property lost"
 jq -e '.permissions.allow == ["Read"]' "$claude_config" >/dev/null || fail "Claude unrelated root property lost"
 first_codex="$(sha256sum "$codex_config")"; first_claude="$(sha256sum "$claude_config")"
