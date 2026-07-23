@@ -1,6 +1,6 @@
 # Worktree Guard Semantic Classification Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Allow compound read-only diagnostics and GET/HEAD downloads to explicit `/tmp` files from the Stratum primary checkout without permitting repository, Git, remote, or ambiguous writes.
 
@@ -17,7 +17,7 @@
 - Modify: `/home/yang/.local/bin/test-stratum-worktree-guard`
 - Test: `/home/yang/.local/bin/test-stratum-worktree-guard`
 
-- [ ] **Step 1: Back up the active user-level files**
+- [x] **Step 1: Back up the active user-level files**
 
 Run:
 
@@ -30,7 +30,7 @@ printf '%s\n' "$backup_dir"
 
 Expected: one explicit `/tmp/stratum-worktree-guard-backup.*` directory containing both files. Keep this path for Task 4.
 
-- [ ] **Step 2: Add an injectable policy path to the contract**
+- [x] **Step 2: Add an injectable policy path to the contract**
 
 Change the existing declaration from:
 
@@ -44,7 +44,7 @@ to:
 readonly policy=${STRATUM_WORKTREE_POLICY_UNDER_TEST:-/home/yang/.local/lib/stratum-worktree-policy.sh}
 ```
 
-- [ ] **Step 3: Verify the unchanged active policy through the new seam**
+- [x] **Step 3: Verify the unchanged active policy through the new seam**
 
 Run:
 
@@ -64,7 +64,7 @@ Expected: syntax check exits zero and the contract ends with `PASS: all Stratum 
 - Create: `/tmp/stratum-worktree-guard-candidate/policy.sh`
 - Test: `/home/yang/.local/bin/test-stratum-worktree-guard`
 
-- [ ] **Step 1: Create a candidate from the active policy**
+- [x] **Step 1: Create a candidate from the active policy**
 
 Run:
 
@@ -76,7 +76,7 @@ chmod 0755 /tmp/stratum-worktree-guard-candidate/policy.sh
 
 Expected: the candidate exists outside the repository and the active policy is unchanged.
 
-- [ ] **Step 2: Add allow cases matching the observed failures**
+- [x] **Step 2: Add allow cases matching the observed failures**
 
 Add these assertions beside the existing curl cases:
 
@@ -95,7 +95,7 @@ assert_policy 'download then inspect temp file' "$primary" Bash \
     'curl -sS -o /tmp/stratum-page.html https://example.com/ && sed -n 1,20p /tmp/stratum-page.html' allow
 ```
 
-- [ ] **Step 3: Add deny cases for every preserved boundary**
+- [x] **Step 3: Add deny cases for every preserved boundary**
 
 Add:
 
@@ -120,7 +120,7 @@ assert_policy 'process substitution' "$primary" Bash \
     'diff <(rg -l network docs) <(rg -l timeout docs)' deny
 ```
 
-- [ ] **Step 4: Run the candidate contract and verify RED**
+- [x] **Step 4: Run the candidate contract and verify RED**
 
 Run:
 
@@ -138,7 +138,7 @@ Expected: FAIL first on `read-only external search with stderr suppression`, pro
 - Modify: `/tmp/stratum-worktree-guard-candidate/policy.sh`
 - Test: `/home/yang/.local/bin/test-stratum-worktree-guard`
 
-- [ ] **Step 1: Generalize safe output target validation**
+- [x] **Step 1: Generalize safe output target validation**
 
 Add a helper adjacent to `is_safe_tmp_path`:
 
@@ -151,7 +151,7 @@ is_safe_output_path() {
 }
 ```
 
-- [ ] **Step 2: Extend the curl validator without allowing uploads**
+- [x] **Step 2: Extend the curl validator without allowing uploads**
 
 Update `is_read_only_curl` so `-o|--output` and `--output=*` call `is_safe_output_path`, continue rejecting
 `-O|--remote-name`, all data/form/upload options, and request methods other than GET or HEAD. Permit only no-op stderr
@@ -171,13 +171,13 @@ The output-option branches must be:
     ;;
 ```
 
-- [ ] **Step 3: Add a wget validator with the same destination boundary**
+- [x] **Step 3: Add a wget validator with the same destination boundary**
 
 Add `is_read_only_wget` beside the curl validator. It must accept `-O <path>` and `--output-document=<path>` only when
 `is_safe_output_path` succeeds, reject `-r|--recursive`, `-P|--directory-prefix`, `-b|--background`, and reject ordinary
 remote-name-derived output when no explicit stdout, `/dev/null`, or safe `/tmp` output is supplied.
 
-- [ ] **Step 4: Classify supported compound commands segment by segment**
+- [x] **Step 4: Classify supported compound commands segment by segment**
 
 Add a quote-aware splitter that recognizes unquoted `|`, `&&`, `||`, and `;`, rejects unbalanced quotes, heredocs,
 process substitution, command substitution, and empty segments, and emits each segment for validation. For each segment:
@@ -194,12 +194,12 @@ grep -qE "$mutation" <<<"$stripped" && return 1
 Keep the existing mutation expression for filesystem writers, Git state changes, dependency changes, formatters, and
 unknown interpreters. Remove `curl|wget` from that generic expression only after both dedicated validators are active.
 
-- [ ] **Step 5: Make denial categories precise**
+- [x] **Step 5: Make denial categories precise**
 
 Return a specific denial for ambiguous shell syntax and another for unsafe network operations. Do not include the full
 command in the reason. Preserve `(effective cwd: ...)` and the worktree hint.
 
-- [ ] **Step 6: Run syntax and contract tests until GREEN**
+- [x] **Step 6: Run syntax and contract tests until GREEN**
 
 Run:
 
@@ -221,7 +221,7 @@ Expected: both syntax checks exit zero and the contract ends with `PASS: all Str
 - Verify: `/home/yang/.claude/hooks/stratum-worktree-guard.sh`
 - Modify: `docs/superpowers/plans/2026-07-23-worktree-guard-semantics.md`
 
-- [ ] **Step 1: Install the tested candidate atomically**
+- [x] **Step 1: Install the tested candidate atomically**
 
 Run:
 
@@ -234,7 +234,7 @@ mv /home/yang/.local/lib/stratum-worktree-policy.sh.next \
 
 Expected: no partial `.next` file remains and the installed file matches the tested candidate with `cmp`.
 
-- [ ] **Step 2: Verify the active contract and adapters**
+- [x] **Step 2: Verify the active contract and adapters**
 
 Run:
 
@@ -247,7 +247,7 @@ bash -n /home/yang/.claude/hooks/stratum-worktree-guard.sh
 
 Expected: every syntax check exits zero and the full active contract passes.
 
-- [ ] **Step 3: Replay the real commands through the active Codex adapter**
+- [x] **Step 3: Replay the real commands through the active Codex adapter**
 
 Send policy payloads for the observed `rg ... 2>/dev/null`, compound read-only diagnostics, safe `/tmp` download, upload,
 and repository output cases through `/home/yang/.codex/hooks/main-branch-guard.sh`.
@@ -255,7 +255,7 @@ and repository output cases through `/home/yang/.codex/hooks/main-branch-guard.s
 Expected: the first three return `{"continue":true}`; upload and repository output return a `permissionDecision:"deny"`
 envelope.
 
-- [ ] **Step 4: Run repository guardrails in the feature worktree**
+- [x] **Step 4: Run repository guardrails in the feature worktree**
 
 Run:
 
@@ -266,7 +266,7 @@ git diff --check
 
 Expected: both exit zero. Any unrelated baseline failure is reported explicitly and is not bypassed.
 
-- [ ] **Step 5: Record completed verification and commit the plan update**
+- [x] **Step 5: Record completed verification and commit the plan update**
 
 Mark each completed checkbox in this plan, then run:
 
@@ -278,7 +278,7 @@ git commit -m '[fix](guard): classify safe diagnostic commands'
 Expected: the feature branch contains the design and completed implementation record; no repository source file outside
 `docs/superpowers/` changed because the runtime hook is user-level configuration.
 
-- [ ] **Step 6: Remove temporary candidate files after all verification passes**
+- [x] **Step 6: Remove temporary candidate files after all verification passes**
 
 Run:
 
