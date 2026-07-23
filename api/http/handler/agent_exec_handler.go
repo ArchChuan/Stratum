@@ -158,13 +158,17 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 func agentExecutionResultDTO(result *agent.AgentResult) AgentExecutionResult {
 	thoughtsJSON, _ := json.Marshal(result.Thoughts)
 	toolCallsJSON, _ := json.Marshal(result.ToolCalls)
-	artifacts := result.Artifacts
-	if artifacts == nil {
-		artifacts = []domain.ExecutionArtifact{}
-	}
+	artifacts := executionArtifactsResponse(result.Artifacts)
 	return AgentExecutionResult{AgentID: result.AgentID, Input: result.Input, Output: result.Output, Steps: result.Steps,
 		TokensUsed: result.TokensUsed, Duration: result.Duration.String(), Thoughts: result.Thoughts, ToolCalls: result.ToolCalls,
 		Artifacts: artifacts, Metadata: map[string]interface{}{"thoughtsJSON": string(thoughtsJSON), "toolCallsJSON": string(toolCallsJSON)}}
+}
+
+func executionArtifactsResponse(artifacts []domain.ExecutionArtifact) []domain.ExecutionArtifact {
+	if artifacts == nil {
+		return []domain.ExecutionArtifact{}
+	}
+	return artifacts
 }
 
 func agentExecutionDonePayload(result *agent.AgentResult) []byte {

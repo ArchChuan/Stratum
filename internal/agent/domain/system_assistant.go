@@ -72,8 +72,9 @@ type DiagnosticFact struct {
 }
 
 type EvidenceGap struct {
-	Area DiagnosticArea `json:"area"`
-	Code string         `json:"code"`
+	Area   DiagnosticArea `json:"area,omitempty"`
+	Source string         `json:"source,omitempty"`
+	Code   string         `json:"code"`
 }
 
 type DiagnosticEvidence struct {
@@ -107,12 +108,19 @@ type SystemAssistantToolArtifact struct {
 }
 
 type DiagnosticReport struct {
-	Facts              []DiagnosticFact       `json:"facts"`
-	Inferences         []string               `json:"inferences"`
-	EvidenceGaps       []EvidenceGap          `json:"evidenceGaps"`
-	RecommendedActions []string               `json:"recommendedActions"`
-	Citations          []Citation             `json:"citations"`
-	Steps              []DiagnosticAreaResult `json:"steps"`
+	Facts              []DiagnosticFact `json:"facts"`
+	Inferences         []string         `json:"inferences"`
+	EvidenceGaps       []EvidenceGap    `json:"evidenceGaps"`
+	RecommendedActions []string         `json:"recommendedActions"`
+	Citations          []Citation       `json:"citations"`
+	Steps              []DiagnosticStep `json:"steps"`
+}
+
+type DiagnosticStep struct {
+	Tool      string `json:"tool"`
+	Outcome   string `json:"outcome"`
+	ErrorCode string `json:"errorCode,omitempty"`
+	LatencyMs int64  `json:"latencyMs"`
 }
 
 type ExecutionArtifact struct {
@@ -123,13 +131,16 @@ type ExecutionArtifact struct {
 }
 
 func BuildDiagnosticReport(toolArtifacts []SystemAssistantToolArtifact) *DiagnosticReport {
-	r := &DiagnosticReport{Facts: []DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []EvidenceGap{}, RecommendedActions: []string{}, Citations: []Citation{}, Steps: []DiagnosticAreaResult{}}
+	r := &DiagnosticReport{Facts: []DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []EvidenceGap{}, RecommendedActions: []string{}, Citations: []Citation{}, Steps: []DiagnosticStep{}}
 	for _, a := range toolArtifacts {
+		r.Steps = append(r.Steps, DiagnosticStep{Tool: a.Tool, Outcome: a.Outcome, ErrorCode: a.ErrorCode, LatencyMs: a.LatencyMs})
 		r.Citations = append(r.Citations, a.Citations...)
 		if a.Evidence != nil {
 			r.Facts = append(r.Facts, a.Evidence.Facts...)
 			r.EvidenceGaps = append(r.EvidenceGaps, a.Evidence.Gaps...)
-			r.Steps = append(r.Steps, a.Evidence.AreaResults...)
+		}
+		if a.Tool == "stratum_diagnose_tenant" && a.ErrorCode != "" && a.Evidence == nil {
+			r.EvidenceGaps = append(r.EvidenceGaps, EvidenceGap{Source: a.Tool, Code: a.ErrorCode})
 		}
 	}
 	return r

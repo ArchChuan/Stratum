@@ -12,6 +12,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
@@ -263,9 +264,13 @@ func TestChatHandler_DeleteConversation_notOwned(t *testing.T) {
 // --- ListMessages ---
 
 func TestChatHandler_ListMessages_success(t *testing.T) {
+	artifact := domain.ExecutionArtifact{Type: "diagnostic_report", ProfileVersion: "v1", DiagnosticReport: &domain.DiagnosticReport{Steps: []domain.DiagnosticStep{{Tool: "stratum_diagnose_tenant", Outcome: "error", ErrorCode: "timeout", LatencyMs: 12}}}}
 	store := &mockChatStore{
 		listMsgsFn: func(_ context.Context, _, _, _ string) ([]*agent.ChatMessage, error) {
-			return []*agent.ChatMessage{nowMsg("m1", "user", "hi"), nowMsg("m2", "assistant", "hello")}, nil
+			first := nowMsg("m1", "user", "hi")
+			second := nowMsg("m2", "assistant", "hello")
+			second.Artifacts = []domain.ExecutionArtifact{artifact}
+			return []*agent.ChatMessage{first, second}, nil
 		},
 	}
 	h := NewChatHandler(store, zap.NewNop())
@@ -283,6 +288,14 @@ func TestChatHandler_ListMessages_success(t *testing.T) {
 	msgs := resp["messages"].([]any)
 	if len(msgs) != 2 {
 		t.Errorf("want 2 messages, got %d", len(msgs))
+	}
+	firstArtifacts := msgs[0].(map[string]any)["artifacts"].([]any)
+	if len(firstArtifacts) != 0 {
+		t.Fatalf("historical message artifacts=%v, want []", firstArtifacts)
+	}
+	secondArtifacts := msgs[1].(map[string]any)["artifacts"].([]any)
+	if len(secondArtifacts) != 1 {
+		t.Fatalf("reloaded artifacts=%v", secondArtifacts)
 	}
 }
 
