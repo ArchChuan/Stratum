@@ -122,8 +122,11 @@ knowledge_path_within_root "$repo_root" "$current_path" || {
   knowledge_fail 'current task marker path is unsafe'
   exit 1
 }
-marker_task="$(jq -er 'select(type == "object") | select(keys == ["task_id"]) | .task_id | select(type == "string")' \
-  "$current_path" 2>/dev/null)" || { knowledge_fail 'current task marker is invalid'; exit 1; }
+knowledge_validate_marker "$current_path" "$client" "$session" "$repo_root" >/dev/null 2>&1 || {
+  knowledge_fail 'current task marker is invalid'
+  exit 1
+}
+marker_task="$(jq -er '.task_id' "$current_path")"
 [[ "$marker_task" == "$task" ]] || { knowledge_fail 'current task marker does not match task'; exit 1; }
 
 mkdir -p "$report_dir"

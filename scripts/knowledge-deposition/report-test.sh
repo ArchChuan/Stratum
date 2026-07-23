@@ -34,7 +34,9 @@ new_repo() {
 
 write_marker() {
   local repo="$1" client="$2" session="$3" task="$4"
-  printf '{"task_id":"%s"}\n' "$task" >"$repo/tmp/knowledge-deposition/current/$client-$session.json"
+  jq -cn --arg client "$client" --arg session "$session" --arg task "$task" --arg root "$repo" \
+    '{schema_version:1,client:$client,session_id:$session,task_id:$task,repository:{root:$root},created_at:"2026-07-23T00:00:00Z"}' \
+    >"$repo/tmp/knowledge-deposition/current/$client-$session.json"
 }
 
 candidate_json() {
