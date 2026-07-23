@@ -102,7 +102,7 @@ jq -e '[paths(objects) as $p | (getpath($p) | keys_unsorted[]) | ascii_downcase 
   "$json_path" >/dev/null || fail "valid candidates: forbidden key persisted"
 grep -Fq '# Knowledge deposition report' "$output" || fail "valid candidates: missing Markdown heading"
 grep -Fq 'Atomic reports preserve task-end evidence.' "$output" || fail "valid candidates: missing claim"
-grep -Fq 'scripts/knowledge-deposition/report.sh#writer' "$output" || fail "valid candidates: missing evidence anchor"
+grep -Fq 'scripts/knowledge-deposition/report.sh\#writer' "$output" || fail "valid candidates: missing evidence anchor"
 if grep -Eiq 'transcript|prompt|password|secret|token|api_key|raw_response' "$output"; then
   fail "valid candidates: forbidden content persisted to Markdown"
 fi
@@ -217,7 +217,10 @@ expect_reject "control character injection is rejected" "$repo_invalid" \
 markdown_safe="$(valid_candidates | jq '
   .task_summary = "Summary # heading [link](target) `code` | cell" |
   .candidates[0].claim = "Claim # heading [link](target) `code` | cell" |
-  .candidates[0].scope = "Scope * emphasis _ underline"
+  .candidates[0].scope = "Scope * emphasis _ underline" |
+  .candidates[0].target = "docs/`target`` # heading [link](target) | cell.md" |
+  .candidates[0].evidence[0].path = "scripts/`evidence``#heading|cell.md" |
+  .candidates[0].evidence[0].anchor = "anchor```#heading[link](target)|cell"
 ')"
 write_marker "$repo_invalid" codex markdown-safe markdown-safe
 markdown_safe_path="$(run_report "$repo_invalid" codex markdown-safe markdown-safe "$markdown_safe")"
@@ -225,6 +228,13 @@ grep -Fq 'Summary \# heading \[link\]\(target\) \`code\` \| cell' "$markdown_saf
   fail "Markdown task summary was not escaped"
 grep -Fq 'Claim \# heading \[link\]\(target\) \`code\` \| cell' "$markdown_safe_path" || \
   fail "Markdown claim was not escaped"
+grep -Fq 'Target: docs/\`target\`\` \# heading \[link\]\(target\) \| cell.md' "$markdown_safe_path" || \
+  fail "Markdown target metacharacters were not escaped safely"
+grep -Fq 'Evidence: scripts/\`evidence\`\`\#heading\|cell.md\#anchor\`\`\`\#heading\[link\]\(target\)\|cell' \
+  "$markdown_safe_path" || fail "Markdown evidence metacharacters were not escaped safely"
+if grep -E '^- Target: |^  - Evidence: ' "$markdown_safe_path" | grep -Eq '(^|[^\\])`'; then
+  fail "Markdown renderer emitted an unsafe code span delimiter"
+fi
 pass "Markdown metacharacters are escaped"
 
 outside_tmp="$FIXTURE_ROOT/outside-tmp"
@@ -261,6 +271,29 @@ if run_report "$repo_lock_link" codex session-a task-a "$(valid_none)" >/dev/nul
 fi
 [[ "$(cat "$lock_target")" == 'do-not-truncate' ]] || fail "lock symlink target was modified"
 pass "lock symlink target is never truncated"
+
+repo_lock_file_link="$(new_repo lock-file-link)"
+write_marker "$repo_lock_file_link" codex session-a task-a
+mkdir -p "$repo_lock_file_link/tmp/knowledge-deposition/.lock"
+lock_file_target="$FIXTURE_ROOT/lock-file-target"
+printf 'do-not-modify\n' >"$lock_file_target"
+ln -s "$lock_file_target" "$repo_lock_file_link/tmp/knowledge-deposition/.lock/report.lock"
+if run_report "$repo_lock_file_link" codex session-a task-a "$(valid_none)" >/dev/null 2>&1; then
+  fail "preexisting lock file symlink was accepted"
+fi
+[[ "$(cat "$lock_file_target")" == 'do-not-modify' ]] || fail "preexisting lock symlink target was modified"
+pass "preexisting lock file symlink target is never modified"
+
+repo_dangling_lock="$(new_repo dangling-lock)"
+write_marker "$repo_dangling_lock" codex session-a task-a
+mkdir -p "$repo_dangling_lock/tmp/knowledge-deposition/.lock"
+dangling_target="$FIXTURE_ROOT/dangling-lock-target"
+ln -s "$dangling_target" "$repo_dangling_lock/tmp/knowledge-deposition/.lock/report.lock"
+if run_report "$repo_dangling_lock" codex session-a task-a "$(valid_none)" >/dev/null 2>&1; then
+  fail "dangling lock file symlink was accepted"
+fi
+[[ ! -e "$dangling_target" ]] || fail "dangling lock symlink target was created"
+pass "dangling lock file symlink target is never created"
 
 repo_pair="$(new_repo pair)"
 write_marker "$repo_pair" codex session-a task-a
