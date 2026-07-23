@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
@@ -58,8 +57,10 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	if db != nil {
 		chunkRepo := persistence.NewChunkRepo(db)
 		docRepo := persistence.NewDocRepo(db)
-		pipelineResolver = buildEmbedResolver(db, c.Platform.GatewayCache, c.Platform.AESKey, c.Logger)
-		knowledgeResolver = buildKnowledgeEmbedResolver(db, c.Platform.GatewayCache, c.Platform.AESKey, c.Logger)
+		pipelineResolver = buildEmbedResolver(db, c.Platform.GatewayCache, c.Platform.AESKey,
+			c.Config.QwenBaseURL, c.Config.ZhipuBaseURL, c.Logger)
+		knowledgeResolver = buildKnowledgeEmbedResolver(db, c.Platform.GatewayCache, c.Platform.AESKey,
+			c.Config.QwenBaseURL, c.Config.ZhipuBaseURL, c.Logger)
 		ingest.SetEmbedResolver(knowledgeResolver)
 		ingest.SetChunkRepo(chunkRepo)
 		ingest.SetDocRepo(docRepo)
@@ -141,7 +142,13 @@ func (c *Container) RecoverStuckKnowledgeIngests(ctx context.Context) {
 //
 // Copied verbatim from api/router.go:344-417 — Task 10 will delete the
 // router.go original once main.go is migrated to wiring.BuildContainer.
-func buildEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatewayCache, aesKey [32]byte, logger *zap.Logger) pipeline.EmbedServiceResolver {
+func buildEmbedResolver(
+	db tenantSettingsQuerier,
+	cache *llmgateway.TenantGatewayCache,
+	aesKey [32]byte,
+	qwenBaseURL, zhipuBaseURL string,
+	logger *zap.Logger,
+) pipeline.EmbedServiceResolver {
 	return func(ctx context.Context, tenantID string) pipeline.EmbedClient {
 		// Read settings first so embed_model is available on both cache-hit and miss paths.
 		var settingsJSON []byte
@@ -191,11 +198,17 @@ func buildEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatewayCache, 
 		gw = llmgateway.NewGateway().WithLogger(logger)
 		if qwenKey, ok := decrypted["qwen"]; ok {
 			qwenClient := llmgateway.NewQwenClient(qwenKey, logger)
+			if qwenBaseURL != "" {
+				qwenClient = llmgateway.NewQwenClientWithBase(qwenKey, qwenBaseURL, logger)
+			}
 			gw.RegisterClient(llmgateway.ProviderQwen, qwenClient)
 			gw.RegisterEmbeddingClient(llmgateway.ProviderQwen, qwenClient)
 		}
 		if zhipuKey, ok := decrypted["zhipu"]; ok {
 			zhipuClient := llmgateway.NewZhipuClient(zhipuKey, logger)
+			if zhipuBaseURL != "" {
+				zhipuClient = llmgateway.NewZhipuClientWithBase(zhipuKey, zhipuBaseURL, logger)
+			}
 			gw.RegisterClient(llmgateway.ProviderZhipu, zhipuClient)
 			gw.RegisterEmbeddingClient(llmgateway.ProviderZhipu, zhipuClient)
 		}
@@ -225,7 +238,13 @@ func buildEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatewayCache, 
 //
 // Copied verbatim from api/router.go:421-491 — Task 10 will delete the
 // router.go original once main.go is migrated to wiring.BuildContainer.
-func buildKnowledgeEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatewayCache, aesKey [32]byte, logger *zap.Logger) knowledge.EmbedResolver {
+func buildKnowledgeEmbedResolver(
+	db tenantSettingsQuerier,
+	cache *llmgateway.TenantGatewayCache,
+	aesKey [32]byte,
+	qwenBaseURL, zhipuBaseURL string,
+	logger *zap.Logger,
+) knowledge.EmbedResolver {
 	return func(ctx context.Context, tenantID, model string) knowledge.EmbedClient {
 		// Try gateway cache first.
 		gw, _, cacheHit, generation := cache.GetWithGeneration(tenantID)
@@ -275,11 +294,17 @@ func buildKnowledgeEmbedResolver(db *pgxpool.Pool, cache *llmgateway.TenantGatew
 		gw = llmgateway.NewGateway().WithLogger(logger)
 		if qwenKey, ok := decrypted["qwen"]; ok {
 			qwenClient := llmgateway.NewQwenClient(qwenKey, logger)
+			if qwenBaseURL != "" {
+				qwenClient = llmgateway.NewQwenClientWithBase(qwenKey, qwenBaseURL, logger)
+			}
 			gw.RegisterClient(llmgateway.ProviderQwen, qwenClient)
 			gw.RegisterEmbeddingClient(llmgateway.ProviderQwen, qwenClient)
 		}
 		if zhipuKey, ok := decrypted["zhipu"]; ok {
 			zhipuClient := llmgateway.NewZhipuClient(zhipuKey, logger)
+			if zhipuBaseURL != "" {
+				zhipuClient = llmgateway.NewZhipuClientWithBase(zhipuKey, zhipuBaseURL, logger)
+			}
 			gw.RegisterClient(llmgateway.ProviderZhipu, zhipuClient)
 			gw.RegisterEmbeddingClient(llmgateway.ProviderZhipu, zhipuClient)
 		}

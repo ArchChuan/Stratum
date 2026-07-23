@@ -71,6 +71,12 @@ type evaluationFeedbackService interface {
 	) (evalapp.FeedbackResult, error)
 }
 
+type evaluationBaselineService interface {
+	CreatePublishedBaseline(
+		ctx context.Context, tenantID string, kind domain.ResourceKind, resourceID string,
+	) (domain.ResourceRef, error)
+}
+
 type EvaluationHandler struct {
 	suites       evaluationSuiteService
 	jobs         evaluationJobService
@@ -80,6 +86,7 @@ type EvaluationHandler struct {
 	feedback     evaluationFeedbackService
 	queries      evaluationQueryService
 	candidates   evaluationCandidateCommandService
+	baselines    evaluationBaselineService
 	logger       *zap.Logger
 }
 
@@ -98,6 +105,34 @@ func NewEvaluationHandler(
 		suites: suites, jobs: jobs, runs: runs, optimization: optimization,
 		experiments: experiments, feedback: feedback, queries: queries, candidates: candidates, logger: logger,
 	}
+}
+
+func (h *EvaluationHandler) WithBaselineService(service evaluationBaselineService) *EvaluationHandler {
+	h.baselines = service
+	return h
+}
+
+func (h *EvaluationHandler) CreateBaseline(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	if h.baselines == nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusServiceUnavailable, errors.New("evaluation baseline unavailable")))
+		return
+	}
+	kind := domain.ResourceKind(c.Param("kind"))
+	if err := kind.Validate(); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	ref, err := h.baselines.CreatePublishedBaseline(c.Request.Context(), tenantID, kind, c.Param("id"))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusCreated, ref)
 }
 
 func (h *EvaluationHandler) CreateSuite(c *gin.Context) {

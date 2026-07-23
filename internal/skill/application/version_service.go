@@ -189,6 +189,22 @@ func (s *VersionService) ResolvePublishedRevision(
 	return revision, nil
 }
 
+func (s *VersionService) ResolveActivePublishedRevision(
+	ctx context.Context, skillID string,
+) (domain.SkillRevision, error) {
+	revision, ok, err := s.repo.GetActiveRevision(ctx, skillID)
+	if err != nil {
+		return domain.SkillRevision{}, err
+	}
+	if !ok {
+		return domain.SkillRevision{}, domain.ErrSkillNotFound
+	}
+	if revision.Status != domain.VersionStatusPublished {
+		return domain.SkillRevision{}, fmt.Errorf("active skill revision is not published: %s", revision.ID)
+	}
+	return revision, nil
+}
+
 func (s *VersionService) PublishedRevisionSafeSummary(
 	ctx context.Context, skillID, revisionID string,
 ) (map[string]any, error) {

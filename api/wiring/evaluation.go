@@ -88,6 +88,26 @@ type evaluationBaselineRouter struct {
 	providers map[evaldomain.ResourceKind]evalport.ResourceRevisionProvider
 }
 
+func newEvaluationBaselineService(
+	skillProvider evalport.ResourceRevisionProvider,
+	agentProvider evalport.ResourceRevisionProvider,
+	mcpProvider evalport.ResourceRevisionProvider,
+	knowledgeProvider evalport.ResourceRevisionProvider,
+) *evalapp.BaselineService {
+	providers := make(map[evaldomain.ResourceKind]evalport.ResourceRevisionProvider, 4)
+	for kind, provider := range map[evaldomain.ResourceKind]evalport.ResourceRevisionProvider{
+		evaldomain.ResourceKindSkill:     skillProvider,
+		evaldomain.ResourceKindAgent:     agentProvider,
+		evaldomain.ResourceKindMCP:       mcpProvider,
+		evaldomain.ResourceKindKnowledge: knowledgeProvider,
+	} {
+		if provider != nil {
+			providers[kind] = provider
+		}
+	}
+	return evalapp.NewBaselineService(evaluationBaselineRouter{providers: providers})
+}
+
 func (r evaluationBaselineRouter) CreatePublishedBaseline(
 	ctx context.Context, tenantID string, kind evaldomain.ResourceKind, resourceID string,
 ) (evaldomain.ResourceRef, error) {
@@ -132,6 +152,24 @@ type skillCandidateManager struct {
 
 type experimentSkillRevisionResolver struct {
 	service *evalapp.ExperimentService
+}
+
+func (m skillCandidateManager) CreatePublishedBaseline(
+	ctx context.Context, tenantID, skillID string,
+) (evaldomain.ResourceRef, error) {
+	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(skillID) == "" {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: tenant and skill IDs required")
+	}
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{
+		TenantID: tenantID, UserID: "evaluation-worker", Role: postgres.RoleTenantAdmin,
+	})
+	revision, err := m.versions.ResolveActivePublishedRevision(ctx, skillID)
+	if err != nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: resolve active baseline: %w", err)
+	}
+	return evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindSkill, ResourceID: skillID, RevisionID: revision.ID,
+	}, nil
 }
 
 func (r experimentSkillRevisionResolver) ResolveSkillRevision(
@@ -509,13 +547,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	worker := evalapp.NewWorker(evaluationTenantLister{pool: db}, jobService, time.Second)
 	worker.Start(ctx)
 	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })
-	var baselineService *evalapp.BaselineService
-	if sharedRevisionService != nil {
-		baselineService = evalapp.NewBaselineService(evaluationBaselineRouter{providers: map[evaldomain.ResourceKind]evalport.ResourceRevisionProvider{
-			evaldomain.ResourceKindAgent: agentProvider, evaldomain.ResourceKindMCP: mcpProvider,
-			evaldomain.ResourceKindKnowledge: knowledgeProvider,
-		}})
-	}
+	baselineService := newEvaluationBaselineService(manager, agentProvider, mcpProvider, knowledgeProvider)
 	c.Evaluation = &Evaluation{
 		Service:             service,
 		SuiteService:        suiteService,

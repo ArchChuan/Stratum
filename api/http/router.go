@@ -87,7 +87,7 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		c.Evaluation.OptimizationService, c.Evaluation.ExperimentService,
 		c.Evaluation.FeedbackService, c.Evaluation.QueryService, c.Evaluation.CandidateService,
 		c.Logger,
-	)
+	).WithBaselineService(c.Evaluation.BaselineService)
 	requireAdmin := middleware.RequireTenantRole("admin")
 	evaluations := r.Group("/evaluations", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
@@ -98,6 +98,7 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		evaluations.GET("/candidates", h.ListCandidates)
 		evaluations.GET("/experiments", h.ListExperiments)
 		evaluations.GET("/resources/:kind/:id/timeline", h.Timeline)
+		evaluations.POST("/resources/:kind/:id/baseline", requireAdmin, requireActive, h.CreateBaseline)
 		evaluations.POST("/suites", requireAdmin, requireActive, h.CreateSuite)
 		evaluations.POST("/suites/:id/publish", requireAdmin, requireActive, h.PublishSuite)
 		evaluations.POST("/runs", requireAdmin, requireActive, h.EnqueueRun)

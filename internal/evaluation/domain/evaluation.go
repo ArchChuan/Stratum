@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -183,7 +184,15 @@ func EvaluateAssertion(mode AssertionMode, actual, expected any) (AssertionResul
 		if err != nil {
 			return AssertionResult{}, fmt.Errorf("marshal expected output: %w", err)
 		}
-		passed := bytes.Equal(actualJSON, expectedJSON)
+		actualValue, err := decodeExactJSON(actualJSON)
+		if err != nil {
+			return AssertionResult{}, fmt.Errorf("normalize actual output: %w", err)
+		}
+		expectedValue, err := decodeExactJSON(expectedJSON)
+		if err != nil {
+			return AssertionResult{}, fmt.Errorf("normalize expected output: %w", err)
+		}
+		passed := reflect.DeepEqual(actualValue, expectedValue)
 		return AssertionResult{Passed: passed, Message: mismatchMessage(passed, "values differ")}, nil
 	case AssertionContains:
 		actualText, ok := actual.(string)
@@ -214,6 +223,16 @@ func EvaluateAssertion(mode AssertionMode, actual, expected any) (AssertionResul
 	default:
 		return AssertionResult{}, fmt.Errorf("unsupported assertion mode: %s", mode)
 	}
+}
+
+func decodeExactJSON(value []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }
 
 func mismatchMessage(passed bool, message string) string {

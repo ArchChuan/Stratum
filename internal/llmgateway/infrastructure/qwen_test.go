@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
@@ -81,5 +82,49 @@ func TestQwenClient_ErrorStatus(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error, got nil")
+	}
+}
+
+func TestQwenClient_ErrorStatusExcludesUpstreamBody(t *testing.T) {
+	const upstreamMarker = "raw-provider-secret-marker"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(upstreamMarker))
+	}))
+	defer srv.Close()
+
+	client := llmgateway.NewQwenClientWithBase("bad-key", srv.URL, zap.NewNop())
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "complete", run: func() error {
+			_, err := client.Complete(context.Background(), &llmgateway.CompletionRequest{Model: "qwen-turbo"})
+			return err
+		}},
+		{name: "stream", run: func() error {
+			_, err := client.CompleteStream(context.Background(), &llmgateway.CompletionRequest{Model: "qwen-turbo"}, func(string) {})
+			return err
+		}},
+		{name: "embedding", run: func() error {
+			_, err := client.CreateEmbeddings(context.Background(), &llmgateway.EmbeddingRequest{
+				Model: "text-embedding-v3", Input: []string{"hello"},
+			})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil {
+				t.Fatal("expected upstream status error")
+			}
+			if strings.Contains(err.Error(), upstreamMarker) {
+				t.Fatalf("error exposed upstream response body: %q", err)
+			}
+			if !strings.Contains(err.Error(), "qwen") || !strings.Contains(err.Error(), "401") {
+				t.Fatalf("error omitted provider or status context: %q", err)
+			}
+		})
 	}
 }

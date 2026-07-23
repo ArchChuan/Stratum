@@ -14,6 +14,8 @@
 	dev-up dev-down \
 	run fe-dev help clean
 
+.PHONY: e2e-evaluation-evolution
+
 # ─── 全局变量（CI/CD 可自动覆盖）────────────────────────────────────────────
 BE_IMAGE    ?= clawhermes-ai-go
 FE_IMAGE    ?= clawhermes-frontend
@@ -199,6 +201,11 @@ tool-permission-test:
 agent-interview-test:
 	bash scripts/agent-interview/validate-library-test.sh
 	bash scripts/agent-interview/daily-agent-interview-test.sh
+
+e2e-evaluation-evolution:
+	go test e2e/evaluation-evolution/bootstrap.go e2e/evaluation-evolution/bootstrap_test.go -count=1
+	go test -race e2e/evaluation-evolution/tcp-proxy.go e2e/evaluation-evolution/tcp-proxy_test.go
+	bash scripts/e2e/evaluation-evolution.sh
 
 # ─── CI 持续集成（构建+测试+推镜像）───────────────────────────────────────
 ci-backend: migration-guardrails arch-guardrails be-install be-fmt be-lint

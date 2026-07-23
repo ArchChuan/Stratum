@@ -26,6 +26,38 @@ func TestEvaluationSkillAdapterResolvesPublishedRevisionByTenantResourceAndRevis
 	}
 }
 
+func TestEvaluationSkillAdapterCreatesBaselineFromActivePublishedRevision(t *testing.T) {
+	repo := &evaluationSkillVersionRepo{revision: evaluationPublishedSkillRevision()}
+	manager := skillCandidateManager{versions: skillapp.NewVersionService(repo, zap.NewNop())}
+
+	ref, err := manager.CreatePublishedBaseline(context.Background(), "tenant-1", "skill-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref != (evaldomain.ResourceRef{Kind: evaldomain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "revision-1"}) {
+		t.Fatalf("unexpected baseline: %#v", ref)
+	}
+	if repo.tenantID != "tenant-1" {
+		t.Fatalf("tenant context = %q, want tenant-1", repo.tenantID)
+	}
+}
+
+func TestEvaluationBaselineServiceIncludesSkillWithoutSharedRevisionProviders(t *testing.T) {
+	repo := &evaluationSkillVersionRepo{revision: evaluationPublishedSkillRevision()}
+	manager := skillCandidateManager{versions: skillapp.NewVersionService(repo, zap.NewNop())}
+	service := newEvaluationBaselineService(manager, nil, nil, nil)
+
+	ref, err := service.CreatePublishedBaseline(
+		context.Background(), "tenant-1", evaldomain.ResourceKindSkill, "skill-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.RevisionID != "revision-1" {
+		t.Fatalf("unexpected skill baseline: %#v", ref)
+	}
+}
+
 func TestEvaluationSkillAdapterRejectsInvalidPublishedRevision(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -117,8 +149,12 @@ func (r *evaluationSkillVersionRepo) DeleteSkill(context.Context, string) error 
 func (r *evaluationSkillVersionRepo) GetDraftRevision(context.Context, string) (skilldomain.SkillRevision, bool, error) {
 	return skilldomain.SkillRevision{}, false, nil
 }
-func (r *evaluationSkillVersionRepo) GetActiveRevision(context.Context, string) (skilldomain.SkillRevision, bool, error) {
-	return skilldomain.SkillRevision{}, false, nil
+func (r *evaluationSkillVersionRepo) GetActiveRevision(ctx context.Context, skillID string) (skilldomain.SkillRevision, bool, error) {
+	tenant, ok := postgres.FromContext(ctx)
+	if ok {
+		r.tenantID = tenant.TenantID
+	}
+	return r.revision, r.revision.SkillID == skillID && r.revision.Status == skilldomain.VersionStatusPublished, nil
 }
 func (r *evaluationSkillVersionRepo) UpdateDraftCapability(context.Context, string, skilldomain.Capability, string) (skilldomain.SkillRevision, error) {
 	return skilldomain.SkillRevision{}, nil

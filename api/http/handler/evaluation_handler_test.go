@@ -40,6 +40,27 @@ func TestEvaluationHandlerEnqueueRunReturnsAcceptedJob(t *testing.T) {
 	}
 }
 
+func TestEvaluationHandlerCreateBaselineUsesTenantAndResourcePath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	baselines := &fakeEvaluationBaselines{}
+	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop()).
+		WithBaselineService(baselines)
+	r := gin.New()
+	r.POST("/evaluations/resources/:kind/:id/baseline", withTenant("tenant-1"), h.CreateBaseline)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/evaluations/resources/agent/agent-1/baseline", nil))
+
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"revision_id":"revision-1"`) {
+		t.Fatalf("unexpected response: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if baselines.tenantID != "tenant-1" || baselines.kind != domain.ResourceKindAgent ||
+		baselines.resourceID != "agent-1" {
+		t.Fatalf("baseline path not propagated: %+v", baselines)
+	}
+}
+
 func TestEvaluationHandlerGenerateOptimizationReturnsCandidates(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	optimization := &fakeOptimizationService{}
@@ -311,6 +332,18 @@ func withTenant(tenantID string) gin.HandlerFunc {
 }
 
 type fakeEvaluationJobs struct{ tenantID string }
+
+type fakeEvaluationBaselines struct {
+	tenantID, resourceID string
+	kind                 domain.ResourceKind
+}
+
+func (f *fakeEvaluationBaselines) CreatePublishedBaseline(
+	_ context.Context, tenantID string, kind domain.ResourceKind, resourceID string,
+) (domain.ResourceRef, error) {
+	f.tenantID, f.kind, f.resourceID = tenantID, kind, resourceID
+	return domain.ResourceRef{Kind: kind, ResourceID: resourceID, RevisionID: "revision-1"}, nil
+}
 
 func (f *fakeEvaluationJobs) EnqueueRun(_ context.Context, tenantID string, _ application.EnqueueRunInput) (domain.EvaluationJob, error) {
 	f.tenantID = tenantID
