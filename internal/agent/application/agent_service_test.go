@@ -96,11 +96,22 @@ func (fakeSkillActivationResolver) ResolveSkills(_ context.Context, _ string, re
 	return out, nil
 }
 
-type stubMemoryCleaner struct{ err error }
+type stubMemoryCleaner struct {
+	err   error
+	calls *int
+}
 
-func (s stubMemoryCleaner) ClearAgentMemories(context.Context, string, string) error { return s.err }
+func (s stubMemoryCleaner) ClearAgentMemories(context.Context, string, string) error {
+	if s.calls != nil {
+		(*s.calls)++
+	}
+	return s.err
+}
 
-type stubChatRepo struct{ err error }
+type stubChatRepo struct {
+	err   error
+	calls *int
+}
 
 func (s stubChatRepo) CreateConversation(context.Context, string, string, string, string) (*domain.ChatConversation, error) {
 	return nil, nil
@@ -119,8 +130,13 @@ func (s stubChatRepo) AddMessage(context.Context, string, *domain.ChatMessage) e
 func (s stubChatRepo) ListMessages(context.Context, string, string, string) ([]*domain.ChatMessage, error) {
 	return nil, nil
 }
-func (s stubChatRepo) CleanupExpired(context.Context, string) error        { return nil }
-func (s stubChatRepo) DeleteByAgent(context.Context, string, string) error { return s.err }
+func (s stubChatRepo) CleanupExpired(context.Context, string) error { return nil }
+func (s stubChatRepo) DeleteByAgent(context.Context, string, string) error {
+	if s.calls != nil {
+		(*s.calls)++
+	}
+	return s.err
+}
 
 // satisfy interfaces at compile time
 var (
@@ -354,11 +370,38 @@ func TestAgentService_Update_PreservesEmbedModel(t *testing.T) {
 
 func TestAgentService_Delete(t *testing.T) {
 	svc, repo, _ := newTestService(t)
+	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)
 	repo.On("Remove", mock.Anything, "agent-1").Return(nil)
 
 	err := svc.Delete(context.Background(), "tenant-1", "agent-1")
 	assert.NoError(t, err)
 	repo.AssertExpectations(t)
+}
+
+func TestAgentService_DeleteSystemAssistantRejectsBeforeCleanup(t *testing.T) {
+	repo := new(mockAgentRepo)
+	registry := application.NewRegistry(repo, zap.NewNop())
+	memoryCalls := 0
+	chatCalls := 0
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		Registry:      registry,
+		MemoryCleaner: stubMemoryCleaner{calls: &memoryCalls},
+		ChatStore:     stubChatRepo{calls: &chatCalls},
+		Logger:        zap.NewNop(),
+	})
+	ctx := context.Background()
+	const id = "stratum-platform-assistant"
+	repo.On("Get", ctx, id).Return(&domain.AgentConfig{
+		ID: id, SystemKey: "stratum.platform_assistant", IsSystem: true, ManagementMode: "platform",
+	}, true, nil)
+	repo.On("Remove", ctx, id).Return(domain.ErrSystemAssistantManaged).Maybe()
+
+	err := svc.Delete(ctx, "tenant-1", id)
+
+	assert.ErrorIs(t, err, domain.ErrSystemAssistantManaged)
+	assert.Zero(t, memoryCalls)
+	assert.Zero(t, chatCalls)
+	repo.AssertNotCalled(t, "Remove", mock.Anything, mock.Anything)
 }
 
 func TestAgentService_DeleteReturnsCleanupErrorBeforeRemovingRegistry(t *testing.T) {
@@ -368,6 +411,7 @@ func TestAgentService_DeleteReturnsCleanupErrorBeforeRemovingRegistry(t *testing
 		Registry:      application.NewRegistry(repo, zap.NewNop()),
 		MemoryCleaner: stubMemoryCleaner{err: wantErr}, Logger: zap.NewNop(),
 	})
+	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)
 
 	err := svc.Delete(context.Background(), "tenant-1", "agent-1")
 	assert.ErrorIs(t, err, wantErr)
@@ -380,6 +424,7 @@ func TestAgentService_DeleteReturnsChatCleanupErrorBeforeRemovingRegistry(t *tes
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry: application.NewRegistry(repo, zap.NewNop()), ChatStore: stubChatRepo{err: wantErr}, Logger: zap.NewNop(),
 	})
+	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)
 
 	err := svc.Delete(context.Background(), "tenant-1", "agent-1")
 	assert.ErrorIs(t, err, wantErr)

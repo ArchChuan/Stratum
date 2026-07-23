@@ -349,6 +349,13 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 
 // Delete removes an agent and cascades deletion to conversations and memories.
 func (s *AgentService) Delete(ctx context.Context, tenantID, id string) error {
+	existing, ok := s.deps.Registry.Get(ctx, id)
+	if !ok {
+		return ErrNotFound
+	}
+	if existing.GetConfig().SystemKey != "" {
+		return domain.ErrSystemAssistantManaged
+	}
 	if s.deps.MemoryCleaner != nil {
 		if err := s.deps.MemoryCleaner.ClearAgentMemories(ctx, tenantID, id); err != nil {
 			return fmt.Errorf("clear agent memories: %w", err)
