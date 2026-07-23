@@ -1,6 +1,7 @@
 package report
 
 import (
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -8,6 +9,55 @@ import (
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/observe"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/process"
 )
+
+func TestAccumulatorStreamsEventsAndRejectsSnapshotOverflow(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	acc, err := NewAccumulator(start, start.Add(7*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10000; i++ {
+		if err := acc.AddEvent(tool(start.Add(time.Hour), "codex", "svc", "search", "same-session",
+			observe.OutcomeSuccess, true, 1, 1, 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := acc.Report().Tools[0].Calls; got != 10000 {
+		t.Fatalf("calls = %d", got)
+	}
+	key := toolKey{client: "codex", service: "svc", tool: "search"}
+	if got := len(acc.tools[key].durations); got != 1 {
+		t.Fatalf("stored duration buckets = %d, want 1 independent of event count", got)
+	}
+	bad := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: start.Add(time.Hour), Processes: []process.Process{
+		{Identity: process.Identity{PID: 1, StartTicks: 1}, Service: "svc", PSSBytes: math.MaxUint64},
+		{Identity: process.Identity{PID: 2, StartTicks: 2}, Service: "svc", PSSBytes: 1},
+	}}
+	if err := acc.AddSnapshot(bad); err == nil {
+		t.Fatal("AddSnapshot accepted PSS overflow")
+	}
+}
+
+func TestAccumulatorRejectsDuplicateSnapshotIdentitiesAndServices(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	for _, snapshot := range []process.Snapshot{
+		{Version: 1, Mode: "observe", CapturedAt: start, Processes: []process.Process{
+			{Identity: process.Identity{PID: 1, StartTicks: 1}, Service: "svc"},
+			{Identity: process.Identity{PID: 1, StartTicks: 1}, Service: "svc"},
+		}},
+		{Version: 1, Mode: "observe", CapturedAt: start, Services: []process.ServiceSummary{
+			{Service: "svc"}, {Service: "svc"},
+		}},
+		{Version: 1, Mode: "observe", CapturedAt: start.Add(-24 * time.Hour), Services: []process.ServiceSummary{
+			{Service: ""},
+		}},
+	} {
+		acc, _ := NewAccumulator(start, start.Add(time.Hour))
+		if err := acc.AddSnapshot(snapshot); err == nil {
+			t.Fatal("AddSnapshot accepted duplicate nested records")
+		}
+	}
+}
 
 func TestAggregateUsageAndResources(t *testing.T) {
 	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
@@ -25,11 +75,11 @@ func TestAggregateUsageAndResources(t *testing.T) {
 		tool(start.Add(7*24*time.Hour), "codex", "alpha", "new", "s", observe.OutcomeSuccess, true, 1, 1, 1),
 	}
 	snapshots := []process.Snapshot{
-		{CapturedAt: start.Add(time.Hour), Processes: []process.Process{
+		{Version: 1, Mode: "observe", CapturedAt: start.Add(time.Hour), Processes: []process.Process{
 			{Identity: process.Identity{PID: 1, StartTicks: 10}, Service: "alpha", PSSBytes: 10, USSBytes: 5},
 			{Identity: process.Identity{PID: 2, StartTicks: 20}, Service: "alpha", PSSBytes: 20, USSBytes: 7},
 		}},
-		{CapturedAt: start.Add(2 * time.Hour), Processes: []process.Process{
+		{Version: 1, Mode: "observe", CapturedAt: start.Add(2 * time.Hour), Processes: []process.Process{
 			{Identity: process.Identity{PID: 1, StartTicks: 10}, Service: "alpha", PSSBytes: 40, USSBytes: 12},
 			{Identity: process.Identity{PID: 3, StartTicks: 30}, Service: "beta", PSSBytes: 50, USSBytes: 25},
 		}},

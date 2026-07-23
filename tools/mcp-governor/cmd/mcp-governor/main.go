@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/config"
@@ -561,7 +562,15 @@ func snapshot(opts options, stdout io.Writer) error {
 		}
 		return nil
 	}
-	return writeAtomic(opts.outputPath, data)
+	if err := writeAtomic(opts.outputPath, data); err != nil {
+		return err
+	}
+	if cfg.Version == 2 {
+		if err := appendSnapshotHistory(opts.outputPath, result, cfg.Observation.RawRetentionDays); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func identityErrorCategory(err error) string {
@@ -644,7 +653,11 @@ func runReport(opts reportOptions, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	events, files, err := readEventFiles(eventsDir)
+	accumulator, err := report.NewAccumulator(opts.start, opts.end)
+	if err != nil {
+		return err
+	}
+	files, err := readEventFiles(eventsDir, accumulator)
 	if err != nil {
 		return err
 	}
@@ -652,10 +665,12 @@ func runReport(opts reportOptions, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	aggregate, err := report.Aggregate(opts.start, opts.end, events, snapshots)
-	if err != nil {
-		return err
+	for i, snapshot := range snapshots {
+		if err := accumulator.AddSnapshot(snapshot); err != nil {
+			return fmt.Errorf("snapshot %d: %w", i, err)
+		}
 	}
+	aggregate := accumulator.Report()
 	data, err := json.MarshalIndent(aggregate, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode report: %w", err)
@@ -665,6 +680,7 @@ func runReport(opts reportOptions, stdout io.Writer) error {
 		if _, err := stdout.Write(data); err != nil {
 			return fmt.Errorf("write report: %w", err)
 		}
+		return nil
 	} else {
 		output := opts.outputPath
 		if !opts.outputSet {
@@ -691,11 +707,15 @@ func safeReportTime(value time.Time) string { return value.UTC().Format("2006010
 
 type eventFile struct {
 	path   string
-	events []observe.Event
+	device uint64
+	inode  uint64
+	size   int64
+	count  int
+	minAt  time.Time
+	maxAt  time.Time
 }
 
-func readEventFiles(root string) ([]observe.Event, []eventFile, error) {
-	var all []observe.Event
+func readEventFiles(root string, accumulator *report.Accumulator) ([]eventFile, error) {
 	var files []eventFile
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -714,48 +734,65 @@ func readEventFiles(root string) ([]observe.Event, []eventFile, error) {
 		if !info.Mode().IsRegular() || filepath.Ext(path) != ".jsonl" {
 			return nil
 		}
-		events, err := decodeEventJSONL(path)
+		file, err := decodeEventJSONL(path, accumulator)
 		if err != nil {
 			return err
 		}
-		files = append(files, eventFile{path: path, events: events})
-		all = append(all, events...)
+		files = append(files, file)
 		return nil
 	})
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, nil, fmt.Errorf("read events: %w", err)
+		return nil, fmt.Errorf("read events: %w", err)
 	}
-	return all, files, nil
+	return files, nil
 }
 
-func decodeEventJSONL(path string) ([]observe.Event, error) {
-	file, err := os.Open(path)
+func decodeEventJSONL(path string, accumulator *report.Accumulator) (eventFile, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open event file: %w", err)
+		return eventFile{}, fmt.Errorf("open event file: %w", err)
 	}
+	file := os.NewFile(uintptr(fd), path)
 	defer file.Close()
-	var events []observe.Event
+	if err := syscall.Flock(fd, syscall.LOCK_SH); err != nil {
+		return eventFile{}, fmt.Errorf("lock event file for report: %w", err)
+	}
+	defer syscall.Flock(fd, syscall.LOCK_UN)
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(fd, &stat); err != nil {
+		return eventFile{}, err
+	}
+	if stat.Mode&syscall.S_IFMT != syscall.S_IFREG || stat.Mode&0o777 != 0o600 {
+		return eventFile{}, fmt.Errorf("event file must be a private regular file")
+	}
+	result := eventFile{path: path, device: uint64(stat.Dev), inode: stat.Ino, size: stat.Size}
 	scanner := bufio.NewScanner(file)
 	buffer := make([]byte, 64*1024)
 	scanner.Buffer(buffer, 4*1024*1024)
 	for line := 1; scanner.Scan(); line++ {
 		data := bytes.TrimSpace(scanner.Bytes())
 		if len(data) == 0 {
-			return nil, fmt.Errorf("%s:%d: empty JSONL record", path, line)
+			return eventFile{}, fmt.Errorf("%s:%d: empty JSONL record", path, line)
 		}
 		var event observe.Event
 		if err := decodeStrictJSON(data, &event); err != nil {
-			return nil, fmt.Errorf("%s:%d: %w", path, line, err)
+			return eventFile{}, fmt.Errorf("%s:%d: %w", path, line, err)
 		}
-		if err := event.Validate(); err != nil {
-			return nil, fmt.Errorf("%s:%d: validate event: %w", path, line, err)
+		if err := accumulator.AddEvent(event); err != nil {
+			return eventFile{}, fmt.Errorf("%s:%d: validate event: %w", path, line, err)
 		}
-		events = append(events, event)
+		result.count++
+		if result.minAt.IsZero() || event.At.Before(result.minAt) {
+			result.minAt = event.At
+		}
+		if result.maxAt.IsZero() || event.At.After(result.maxAt) {
+			result.maxAt = event.At
+		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan event file: %w", err)
+		return eventFile{}, fmt.Errorf("scan event file: %w", err)
 	}
-	return events, nil
+	return result, nil
 }
 
 func decodeStrictJSON(data []byte, target any) error {
@@ -774,6 +811,12 @@ func decodeStrictJSON(data []byte, target any) error {
 }
 
 func readSnapshots(path string) ([]process.Snapshot, error) {
+	historyPath := path + ".history.jsonl"
+	if _, err := os.Stat(historyPath); err == nil {
+		return readSnapshotHistoryLocked(historyPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect snapshot history: %w", err)
+	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -791,31 +834,163 @@ func readSnapshots(path string) ([]process.Snapshot, error) {
 	return []process.Snapshot{snapshot}, nil
 }
 
+func readSnapshotHistoryLocked(historyPath string) ([]process.Snapshot, error) {
+	lockPath := historyPath + ".lock"
+	lockFD, err := syscall.Open(lockPath, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return decodeSnapshotHistory(historyPath)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open snapshot history lock: %w", err)
+	}
+	lock := os.NewFile(uintptr(lockFD), lockPath)
+	defer lock.Close()
+	if err := syscall.Flock(lockFD, syscall.LOCK_SH); err != nil {
+		return nil, fmt.Errorf("lock snapshot history: %w", err)
+	}
+	defer func() { _ = syscall.Flock(lockFD, syscall.LOCK_UN) }()
+	return decodeSnapshotHistory(historyPath)
+}
+
+func decodeSnapshotHistory(path string) ([]process.Snapshot, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open snapshot history: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(fd, &stat); err != nil {
+		return nil, err
+	}
+	if stat.Mode&syscall.S_IFMT != syscall.S_IFREG || stat.Mode&0o777 != 0o600 {
+		return nil, fmt.Errorf("snapshot history must be a private regular file")
+	}
+	var snapshots []process.Snapshot
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for line := 1; scanner.Scan(); line++ {
+		var snapshot process.Snapshot
+		if err := decodeStrictJSON(scanner.Bytes(), &snapshot); err != nil {
+			return nil, fmt.Errorf("snapshot history line %d: %w", line, err)
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan snapshot history: %w", err)
+	}
+	return snapshots, nil
+}
+
+func appendSnapshotHistory(outputPath string, snapshot process.Snapshot, retentionDays int) error {
+	historyPath := outputPath + ".history.jsonl"
+	lockFD, err := syscall.Open(historyPath+".lock", syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return fmt.Errorf("open snapshot history lock: %w", err)
+	}
+	lock := os.NewFile(uintptr(lockFD), historyPath+".lock")
+	defer lock.Close()
+	if err := syscall.Flock(lockFD, syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("lock snapshot history: %w", err)
+	}
+	defer func() { _ = syscall.Flock(lockFD, syscall.LOCK_UN) }()
+	var lockStat syscall.Stat_t
+	if err := syscall.Fstat(lockFD, &lockStat); err != nil {
+		return err
+	}
+	if lockStat.Mode&syscall.S_IFMT != syscall.S_IFREG || lockStat.Mode&0o777 != 0o600 {
+		return fmt.Errorf("snapshot history lock must be a private regular file")
+	}
+	var existing []process.Snapshot
+	if _, statErr := os.Stat(historyPath); statErr == nil {
+		decoded, err := decodeSnapshotHistory(historyPath)
+		if err != nil {
+			return err
+		}
+		existing = decoded
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("inspect snapshot history: %w", statErr)
+	}
+	boundary := snapshot.CapturedAt.AddDate(0, 0, -retentionDays)
+	kept := existing[:0]
+	for _, item := range existing {
+		validator, _ := report.NewAccumulator(item.CapturedAt.Add(-time.Nanosecond), item.CapturedAt.Add(time.Nanosecond))
+		if err := validator.AddSnapshot(item); err != nil {
+			return fmt.Errorf("validate snapshot history: %w", err)
+		}
+		if !item.CapturedAt.Before(boundary) {
+			kept = append(kept, item)
+		}
+	}
+	kept = append(kept, snapshot)
+	var data bytes.Buffer
+	encoder := json.NewEncoder(&data)
+	for _, item := range kept {
+		if err := encoder.Encode(item); err != nil {
+			return fmt.Errorf("encode snapshot history: %w", err)
+		}
+	}
+	if err := writeAtomic(historyPath, data.Bytes()); err != nil {
+		return fmt.Errorf("write snapshot history: %w", err)
+	}
+	return nil
+}
+
 func pruneEventFiles(files []eventFile, boundary time.Time) error {
 	for _, file := range files {
-		if len(file.events) == 0 {
+		if file.count == 0 || !file.maxAt.Before(boundary) {
 			continue
 		}
-		old := true
-		for _, event := range file.events {
-			if !event.At.Before(boundary) {
-				old = false
-				break
-			}
+		if err := pruneEventFile(file, boundary); err != nil {
+			return err
 		}
-		if !old {
-			continue
+	}
+	return nil
+}
+
+func pruneEventFile(candidate eventFile, boundary time.Time) error {
+	dirFD, err := syscall.Open(filepath.Dir(candidate.path), syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return fmt.Errorf("open event directory for prune: %w", err)
+	}
+	defer syscall.Close(dirFD)
+	name := filepath.Base(candidate.path)
+	fd, err := syscall.Openat(dirFD, name, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return fmt.Errorf("open event file for prune: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), name)
+	defer file.Close()
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return fmt.Errorf("lock event file for prune: %w", err)
+	}
+	defer syscall.Flock(fd, syscall.LOCK_UN)
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(fd, &stat); err != nil {
+		return err
+	}
+	if stat.Mode&syscall.S_IFMT != syscall.S_IFREG || stat.Mode&0o777 != 0o600 || uint64(stat.Dev) != candidate.device ||
+		stat.Ino != candidate.inode || stat.Size != candidate.size {
+		return nil
+	}
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var event observe.Event
+		if err := decodeStrictJSON(scanner.Bytes(), &event); err != nil {
+			return fmt.Errorf("revalidate event file: %w", err)
 		}
-		info, err := os.Lstat(file.path)
-		if err != nil {
-			return fmt.Errorf("inspect expired event file: %w", err)
+		if err := event.Validate(); err != nil {
+			return fmt.Errorf("revalidate event file: %w", err)
 		}
-		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-			continue
+		if !event.At.Before(boundary) {
+			return nil
 		}
-		if err := os.Remove(file.path); err != nil {
-			return fmt.Errorf("prune expired event file: %w", err)
-		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("revalidate event file: %w", err)
+	}
+	if err := syscall.Unlinkat(dirFD, name); err != nil {
+		return fmt.Errorf("prune expired event file: %w", err)
 	}
 	return nil
 }

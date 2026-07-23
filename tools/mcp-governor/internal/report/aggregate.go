@@ -2,6 +2,7 @@ package report
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -49,103 +50,155 @@ type toolKey struct{ client, service, tool string }
 type toolAggregate struct {
 	calls, effective, successes int
 	days, sessions              map[string]struct{}
-	durations                   []int64
-	responseBytes               []int
+	durations                   map[int64]int
+	responseBytes               map[int]int
 }
 
 type serviceAggregate struct {
 	identities       map[process.Identity]struct{}
 	peakPSS, peakUSS uint64
 	maxConcurrent    int
-	coldStarts       []int64
+	coldStarts       map[int64]int
+}
+
+type Accumulator struct {
+	start, end time.Time
+	tools      map[toolKey]*toolAggregate
+	services   map[string]*serviceAggregate
+}
+
+func NewAccumulator(start, end time.Time) (*Accumulator, error) {
+	if start.IsZero() || end.IsZero() || !start.Before(end) {
+		return nil, fmt.Errorf("report window must have start before end")
+	}
+	return &Accumulator{start: start, end: end, tools: make(map[toolKey]*toolAggregate),
+		services: make(map[string]*serviceAggregate)}, nil
+}
+
+func (a *Accumulator) serviceFor(name string) *serviceAggregate {
+	item := a.services[name]
+	if item == nil {
+		item = &serviceAggregate{identities: make(map[process.Identity]struct{}), coldStarts: make(map[int64]int)}
+		a.services[name] = item
+	}
+	return item
+}
+
+func (a *Accumulator) AddEvent(event observe.Event) error {
+	if err := event.Validate(); err != nil {
+		return err
+	}
+	if event.At.Before(a.start) || !event.At.Before(a.end) {
+		return nil
+	}
+	service := a.serviceFor(event.Service)
+	if event.Kind == observe.KindSessionReady {
+		service.coldStarts[event.DurationMS]++
+		return nil
+	}
+	if isHealthCheck(event.Tool) {
+		return nil
+	}
+	service.maxConcurrent = max(service.maxConcurrent, event.ConcurrentCalls)
+	key := toolKey{client: event.Client, service: event.Service, tool: event.Tool}
+	item := a.tools[key]
+	if item == nil {
+		item = &toolAggregate{days: make(map[string]struct{}), sessions: make(map[string]struct{}),
+			durations: make(map[int64]int), responseBytes: make(map[int]int)}
+		a.tools[key] = item
+	}
+	item.calls++
+	if event.Effective {
+		item.effective++
+	}
+	if event.Outcome == observe.OutcomeSuccess {
+		item.successes++
+	}
+	item.days[event.At.In(a.start.Location()).Format("2006-01-02")] = struct{}{}
+	item.sessions[event.SessionHash] = struct{}{}
+	item.durations[event.DurationMS]++
+	item.responseBytes[event.ResponseBytes]++
+	return nil
+}
+
+func (a *Accumulator) AddSnapshot(snapshot process.Snapshot) error {
+	if snapshot.Version != 1 || snapshot.Mode != "observe" || snapshot.CapturedAt.IsZero() {
+		return fmt.Errorf("version 1, observe mode, and captured_at are required")
+	}
+	inWindow := !snapshot.CapturedAt.Before(a.start) && snapshot.CapturedAt.Before(a.end)
+	identities := make(map[process.Identity]struct{}, len(snapshot.Processes))
+	memory := make(map[string]struct{ pss, uss uint64 })
+	for i, item := range snapshot.Processes {
+		if item.PID <= 0 || item.StartTicks == 0 {
+			return fmt.Errorf("process %d has invalid identity", i)
+		}
+		if _, exists := identities[item.Identity]; exists {
+			return fmt.Errorf("duplicate process identity")
+		}
+		identities[item.Identity] = struct{}{}
+		if strings.TrimSpace(item.Service) == "" {
+			continue
+		}
+		if inWindow {
+			a.serviceFor(item.Service).identities[item.Identity] = struct{}{}
+		}
+		current := memory[item.Service]
+		if math.MaxUint64-current.pss < item.PSSBytes || math.MaxUint64-current.uss < item.USSBytes {
+			return fmt.Errorf("service memory overflow")
+		}
+		current.pss += item.PSSBytes
+		current.uss += item.USSBytes
+		memory[item.Service] = current
+	}
+	if len(snapshot.Services) > 0 {
+		clear(memory)
+		for i, item := range snapshot.Services {
+			if strings.TrimSpace(item.Service) == "" || item.Processes < 0 || item.Orphans < 0 {
+				return fmt.Errorf("service summary %d is invalid", i)
+			}
+			if _, exists := memory[item.Service]; exists {
+				return fmt.Errorf("duplicate service summary")
+			}
+			memory[item.Service] = struct{ pss, uss uint64 }{item.PSSBytes, item.USSBytes}
+		}
+	}
+	for name, value := range memory {
+		if !inWindow {
+			continue
+		}
+		service := a.serviceFor(name)
+		service.peakPSS = max(service.peakPSS, value.pss)
+		service.peakUSS = max(service.peakUSS, value.uss)
+	}
+	return nil
 }
 
 func Aggregate(start, end time.Time, events []observe.Event, snapshots []process.Snapshot) (Report, error) {
-	if start.IsZero() || end.IsZero() || !start.Before(end) {
-		return Report{}, fmt.Errorf("report window must have start before end")
-	}
-	tools := make(map[toolKey]*toolAggregate)
-	services := make(map[string]*serviceAggregate)
-	serviceFor := func(name string) *serviceAggregate {
-		item := services[name]
-		if item == nil {
-			item = &serviceAggregate{identities: make(map[process.Identity]struct{})}
-			services[name] = item
-		}
-		return item
+	acc, err := NewAccumulator(start, end)
+	if err != nil {
+		return Report{}, err
 	}
 	for i, event := range events {
-		if err := event.Validate(); err != nil {
+		if err := acc.AddEvent(event); err != nil {
 			return Report{}, fmt.Errorf("event %d: %w", i, err)
 		}
-		if event.At.Before(start) || !event.At.Before(end) {
-			continue
-		}
-		service := serviceFor(event.Service)
-		if event.Kind == observe.KindSessionReady {
-			service.coldStarts = append(service.coldStarts, event.DurationMS)
-			continue
-		}
-		if isHealthCheck(event.Tool) {
-			continue
-		}
-		if event.ConcurrentCalls > service.maxConcurrent {
-			service.maxConcurrent = event.ConcurrentCalls
-		}
-		key := toolKey{client: event.Client, service: event.Service, tool: event.Tool}
-		item := tools[key]
-		if item == nil {
-			item = &toolAggregate{days: make(map[string]struct{}), sessions: make(map[string]struct{})}
-			tools[key] = item
-		}
-		item.calls++
-		if event.Effective {
-			item.effective++
-		}
-		if event.Outcome == observe.OutcomeSuccess {
-			item.successes++
-		}
-		item.days[event.At.In(start.Location()).Format("2006-01-02")] = struct{}{}
-		item.sessions[event.SessionHash] = struct{}{}
-		item.durations = append(item.durations, event.DurationMS)
-		item.responseBytes = append(item.responseBytes, event.ResponseBytes)
 	}
-
-	for _, snapshot := range snapshots {
-		if snapshot.CapturedAt.Before(start) || !snapshot.CapturedAt.Before(end) {
-			continue
-		}
-		memory := make(map[string]struct{ pss, uss uint64 })
-		for _, item := range snapshot.Processes {
-			if item.Service == "" {
-				continue
-			}
-			serviceFor(item.Service).identities[item.Identity] = struct{}{}
-			current := memory[item.Service]
-			current.pss += item.PSSBytes
-			current.uss += item.USSBytes
-			memory[item.Service] = current
-		}
-		if len(snapshot.Services) > 0 {
-			clear(memory)
-			for _, item := range snapshot.Services {
-				memory[item.Service] = struct{ pss, uss uint64 }{item.PSSBytes, item.USSBytes}
-			}
-		}
-		for name, value := range memory {
-			service := serviceFor(name)
-			service.peakPSS = max(service.peakPSS, value.pss)
-			service.peakUSS = max(service.peakUSS, value.uss)
+	for i, snapshot := range snapshots {
+		if err := acc.AddSnapshot(snapshot); err != nil {
+			return Report{}, fmt.Errorf("snapshot %d: %w", i, err)
 		}
 	}
+	return acc.Report(), nil
+}
 
-	result := Report{Version: Version, Start: start, End: end, Tools: make([]ToolRow, 0, len(tools)),
-		Services: make([]ServiceRow, 0, len(services))}
-	for key, item := range tools {
+func (a *Accumulator) Report() Report {
+	result := Report{Version: Version, Start: a.start, End: a.end, Tools: make([]ToolRow, 0, len(a.tools)),
+		Services: make([]ServiceRow, 0, len(a.services))}
+	for key, item := range a.tools {
 		result.Tools = append(result.Tools, ToolRow{Client: key.client, Service: key.service, Tool: key.tool,
 			Calls: item.calls, EffectiveHits: item.effective, ActiveDays: len(item.days), DistinctSessions: len(item.sessions),
-			SuccessRate: float64(item.successes) / float64(item.calls), P50DurationMS: percentile(item.durations, 50),
-			P95DurationMS: percentile(item.durations, 95), P95ResponseBytes: percentile(item.responseBytes, 95)})
+			SuccessRate: float64(item.successes) / float64(item.calls), P50DurationMS: percentileCounts(item.durations, 50),
+			P95DurationMS: percentileCounts(item.durations, 95), P95ResponseBytes: percentileCounts(item.responseBytes, 95)})
 	}
 	sort.Slice(result.Tools, func(i, j int) bool {
 		a, b := result.Tools[i], result.Tools[j]
@@ -157,13 +210,13 @@ func Aggregate(start, end time.Time, events []observe.Event, snapshots []process
 		}
 		return a.Client < b.Client
 	})
-	for name, item := range services {
+	for name, item := range a.services {
 		result.Services = append(result.Services, ServiceRow{Service: name, ProcessStarts: len(item.identities),
 			PeakPSSBytes: item.peakPSS, PeakUSSBytes: item.peakUSS, MaxConcurrentCalls: item.maxConcurrent,
-			P50ColdStartMS: percentile(item.coldStarts, 50), P95ColdStartMS: percentile(item.coldStarts, 95)})
+			P50ColdStartMS: percentileCounts(item.coldStarts, 50), P95ColdStartMS: percentileCounts(item.coldStarts, 95)})
 	}
 	sort.Slice(result.Services, func(i, j int) bool { return result.Services[i].Service < result.Services[j].Service })
-	return result, nil
+	return result
 }
 
 func percentile[T ~int | ~int64](values []T, percent int) T {
@@ -174,6 +227,28 @@ func percentile[T ~int | ~int64](values []T, percent int) T {
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
 	index := (percent*len(sorted)+99)/100 - 1
 	return sorted[index]
+}
+
+func percentileCounts[T ~int | ~int64](counts map[T]int, percent int) T {
+	if len(counts) == 0 {
+		return 0
+	}
+	keys := make([]T, 0, len(counts))
+	total := 0
+	for value, count := range counts {
+		keys = append(keys, value)
+		total += count
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	rank := (percent*total + 99) / 100
+	seen := 0
+	for _, value := range keys {
+		seen += counts[value]
+		if seen >= rank {
+			return value
+		}
+	}
+	return keys[len(keys)-1]
 }
 
 func isHealthCheck(tool string) bool {

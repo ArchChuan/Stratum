@@ -11,6 +11,42 @@ import (
 	"time"
 )
 
+func TestWriterTakesExclusiveLockForAppend(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriter(root, "codex", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	path := filepath.Join(root, "codex", "session.jsonl")
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if err := syscall.Flock(int(reader.Fd()), syscall.LOCK_SH); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- w.Write(validWriterEvent("codex", "session")) }()
+	select {
+	case err := <-done:
+		t.Fatalf("Write completed without waiting for shared lock: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err := syscall.Flock(int(reader.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Write did not finish after lock release")
+	}
+}
+
 func TestWriterCreatesPrivateJSONLFile(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "events")
 	w, err := NewWriter(root, "codex", "session-hash")

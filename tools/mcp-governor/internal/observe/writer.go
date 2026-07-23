@@ -84,12 +84,20 @@ func (w *Writer) Write(event Event) error {
 	if w.closed {
 		return fmt.Errorf("writer is closed")
 	}
+	if err := syscall.Flock(int(w.file.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("lock event file: %w", err)
+	}
 	written, err := w.file.Write(record)
 	if err != nil {
+		_ = syscall.Flock(int(w.file.Fd()), syscall.LOCK_UN)
 		return fmt.Errorf("append event: %w", err)
 	}
 	if written != len(record) {
+		_ = syscall.Flock(int(w.file.Fd()), syscall.LOCK_UN)
 		return fmt.Errorf("append event: %w", io.ErrShortWrite)
+	}
+	if err := syscall.Flock(int(w.file.Fd()), syscall.LOCK_UN); err != nil {
+		return fmt.Errorf("unlock event file: %w", err)
 	}
 	return nil
 }

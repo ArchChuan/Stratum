@@ -14,6 +14,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/observe"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/process"
+	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/report"
 )
 
 var fixedTime = time.Date(2026, 7, 16, 10, 11, 12, 0, time.UTC)
@@ -113,11 +114,85 @@ func TestReportMalformedInputPreservesPriorReport(t *testing.T) {
 	}
 }
 
+func TestSnapshotHistoryFeedsRepeatedProcessStartsAndMemoryPeaks(t *testing.T) {
+	root := t.TempDir()
+	procRoot := filepath.Join(root, "proc")
+	if err := os.Mkdir(procRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeProcessFixture(t, procRoot, "42", []string{"catalog"})
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	useDependencies(t, start.Add(time.Hour), root, nil)
+	if code := run([]string{"snapshot", "--config", configPath, "--proc-root", procRoot}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("first snapshot code=%d", code)
+	}
+	writeStatFixture(t, procRoot, "42", 456)
+	writeFile(t, filepath.Join(procRoot, "42", "smaps_rollup"),
+		[]byte("Rss: 30 kB\nPss: 20 kB\nPrivate_Clean: 7 kB\nPrivate_Dirty: 5 kB\n"), 0o600)
+	currentTime = func() time.Time { return start.Add(2 * time.Hour) }
+	if code := run([]string{"snapshot", "--config", configPath, "--proc-root", procRoot}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("second snapshot code=%d", code)
+	}
+	var stdout bytes.Buffer
+	if code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		start.Add(7 * 24 * time.Hour).Format(time.RFC3339), "--output", "-"}, &stdout, io.Discard); code != 0 {
+		t.Fatalf("report code=%d", code)
+	}
+	var got report.Report
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Services) != 1 || got.Services[0].ProcessStarts != 2 || got.Services[0].PeakPSSBytes != 20*1024 {
+		t.Fatalf("services=%+v", got.Services)
+	}
+}
+
+func TestPruneDoesNotUnlinkFileAppendedAfterReportRead(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := observe.NewWriter(root, "codex", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	end := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	expired := observe.Event{Version: 1, Kind: observe.KindToolCall, At: end.Add(-31 * 24 * time.Hour),
+		Client: "codex", Service: "fake", Tool: "old", SessionHash: "session", Outcome: observe.OutcomeSuccess}
+	if err := w.Write(expired); err != nil {
+		t.Fatal(err)
+	}
+	acc, _ := report.NewAccumulator(end.Add(-7*24*time.Hour), end)
+	files, err := readEventFiles(root, acc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := expired
+	current.At = end.Add(-time.Hour)
+	if err := w.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := pruneEventFiles(files, end.Add(-30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	data := mustReadFile(t, filepath.Join(root, "codex", "session.jsonl"))
+	if bytes.Count(data, []byte{'\n'}) != 2 {
+		t.Fatalf("events lost after prune race: %q", data)
+	}
+}
+
 func TestReportRequiresSevenDaysUnlessPartialAndStdoutDoesNotWriteDefault(t *testing.T) {
 	root := t.TempDir()
 	configPath := writeProxyConfig(t, root, "codex", "user")
 	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(6 * 24 * time.Hour)
+	dir := filepath.Join(root, "events", "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	expired := filepath.Join(dir, "expired.jsonl")
+	writeEventFile(t, expired, []observe.Event{{Version: 1, Kind: observe.KindToolCall,
+		At: end.Add(-31 * 24 * time.Hour), Client: "codex", Service: "fake", Tool: "old",
+		SessionHash: "old", Outcome: observe.OutcomeSuccess}})
 	args := []string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to", end.Format(time.RFC3339), "--output", "-"}
 	if code := run(args, &bytes.Buffer{}, &bytes.Buffer{}); code != 1 {
 		t.Fatalf("partial code=%d", code)
@@ -131,6 +206,9 @@ func TestReportRequiresSevenDaysUnlessPartialAndStdoutDoesNotWriteDefault(t *tes
 	}
 	if _, err := os.Stat(filepath.Join(root, "reports")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("reports dir created: %v", err)
+	}
+	if _, err := os.Stat(expired); err != nil {
+		t.Fatalf("stdout report pruned events: %v", err)
 	}
 }
 
