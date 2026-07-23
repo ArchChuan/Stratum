@@ -200,10 +200,29 @@ knowledge_prepare_private_lock() {
   if [[ ! -e "$lock_path" ]]; then
     (set -o noclobber; : >"$lock_path") 2>/dev/null || [[ ! -L "$lock_path" && -f "$lock_path" ]] || return 1
   fi
+  knowledge_open_private_lock "$root"
+}
+
+knowledge_open_private_lock() {
+  local root="$1" lock_dir lock_path path owner mode
+  lock_dir="$root/tmp/knowledge-deposition/.lock"
+  lock_path="$lock_dir/report.lock"
+  for path in "$root/tmp" "$root/tmp/knowledge-deposition" "$root/tmp/knowledge-deposition/current" "$lock_dir" "$lock_path"; do
+    knowledge_path_within_root "$root" "$path" || return 1
+  done
+  for path in "$root/tmp/knowledge-deposition" "$root/tmp/knowledge-deposition/current" "$lock_dir"; do
+    [[ ! -L "$path" && -d "$path" ]] || return 1
+    owner="$(stat -Lc '%u' -- "$path")" || return 1
+    [[ "$owner" == "$(id -u)" ]] || return 1
+    mode="$(stat -Lc '%a' -- "$path")" || return 1
+    [[ "$mode" == '700' ]] || return 1
+  done
   [[ ! -L "$lock_path" && -f "$lock_path" ]] || return 1
   [[ "$(stat -Lc '%u' -- "$lock_path")" == "$(id -u)" ]] || return 1
   exec 9<"$lock_path"
   [[ "$(realpath -e /proc/self/fd/9)" == "$lock_path" ]] || return 1
+  [[ -f /proc/self/fd/9 && ! -L "$lock_path" && -f "$lock_path" ]] || return 1
   [[ "$(stat -Lc '%d:%i:%u' -- /proc/self/fd/9)" == "$(stat -Lc '%d:%i:%u' -- "$lock_path")" ]] || return 1
   flock 9
+  knowledge_path_within_root "$root" "$lock_dir"
 }

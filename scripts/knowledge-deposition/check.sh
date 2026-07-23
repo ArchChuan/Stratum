@@ -21,6 +21,7 @@ session="$(knowledge_sanitize_session "$session")" || exit 1
 [[ "$repo_root" = /* ]] || { knowledge_fail 'repo root must be absolute'; exit 1; }
 repo_root="$(realpath -e "$repo_root")" || { knowledge_fail 'repo root does not exist'; exit 1; }
 knowledge_is_stratum_root "$repo_root" || { knowledge_fail 'repo root is not Stratum'; exit 1; }
+knowledge_open_private_lock "$repo_root" || { knowledge_fail 'shared report lock is missing or unsafe'; exit 1; }
 marker="$(knowledge_current_path "$repo_root" "$client" "$session")"
 fallback="bash scripts/knowledge-deposition/report.sh --client $client --session $session --task TASK --repo-root $repo_root"
 knowledge_path_within_root "$repo_root" "$marker" || { knowledge_fail "current marker path is unsafe; run: $fallback"; exit 1; }
@@ -34,6 +35,10 @@ basename="$(knowledge_report_basename "$client" "$session" "$task")"
 mapfile -d '' -t reports < <(find "$repo_root/tmp/knowledge-deposition" -mindepth 2 -maxdepth 2 -type f -name "$basename.json" ! -path '*/current/*' -print0 2>/dev/null)
 [[ "${#reports[@]}" -eq 1 ]] || { knowledge_fail "exact report is missing or ambiguous; run: $command"; exit 1; }
 json_path="${reports[0]}"; markdown_path="${json_path%.json}.md"
+report_date="$(basename "$(dirname "$json_path")")"
+[[ "$report_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || {
+  knowledge_fail "report is outside an authoritative UTC date directory; run: $command"; exit 1;
+}
 knowledge_path_within_root "$repo_root" "$json_path" && knowledge_path_within_root "$repo_root" "$markdown_path" || {
   knowledge_fail "report path is unsafe; run: $command"; exit 1;
 }
@@ -41,6 +46,8 @@ knowledge_path_within_root "$repo_root" "$json_path" && knowledge_path_within_ro
 [[ ! -L "$markdown_path" && -f "$markdown_path" ]] || { knowledge_fail "paired Markdown report is missing or unsafe; run: $command"; exit 1; }
 normalized="$(mktemp)"; trap 'rm -f "$normalized"' EXIT
 knowledge_validate_normalize <"$json_path" >"$normalized" 2>/dev/null || { knowledge_fail "report JSON is malformed; run: $command"; exit 1; }
+created_date="$(jq -r '.created_at[0:10]' "$normalized")"
+[[ "$created_date" == "$report_date" ]] || { knowledge_fail "report directory date does not match created_at; run: $command"; exit 1; }
 commit="$(git -C "$repo_root" rev-parse --verify HEAD 2>/dev/null)" || { knowledge_fail "repository commit is unavailable; run: $command"; exit 1; }
 jq -e --arg client "$client" --arg session "$session" --arg task "$task" --arg root "$repo_root" --arg commit "$commit" \
   '.client == $client and .session_id == $session and .task_id == $task and .repository.root == $root and .repository.commit == $commit' \

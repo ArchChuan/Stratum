@@ -52,20 +52,6 @@ lock_dir="$knowledge_root/.lock"
 lock_path="$lock_dir/report.lock"
 latest_path="$knowledge_root/latest.md"
 
-ensure_private_owned_directory() {
-  local path="$1" current_uid owner_uid mode
-  [[ ! -L "$path" && -d "$path" ]] || return 1
-  current_uid="$(id -u)"
-  owner_uid="$(stat -Lc '%u' -- "$path")" || return 1
-  [[ "$owner_uid" == "$current_uid" ]] || return 1
-  mode="$(stat -Lc '%a' -- "$path")" || return 1
-  if (( (8#$mode & 8#077) != 0 )); then
-    chmod 700 -- "$path" || return 1
-    mode="$(stat -Lc '%a' -- "$path")" || return 1
-  fi
-  [[ "$mode" == '700' ]]
-}
-
 for boundary_path in "$repo_root/tmp" "$knowledge_root" "$(dirname "$current_path")" "$current_path" \
   "$lock_dir" "$lock_path" "$report_dir" "$json_path" "$markdown_path" "$latest_path"; do
   knowledge_path_within_root "$repo_root" "$boundary_path" || {
@@ -74,49 +60,9 @@ for boundary_path in "$repo_root/tmp" "$knowledge_root" "$(dirname "$current_pat
   }
 done
 
-mkdir -p "$lock_dir"
-knowledge_path_within_root "$repo_root" "$lock_dir" || {
-  knowledge_fail 'lock directory is unsafe'
-  exit 1
-}
-ensure_private_owned_directory "$knowledge_root" || {
-  knowledge_fail 'knowledge report directory must be a private owned directory'
-  exit 1
-}
-ensure_private_owned_directory "$lock_dir" || {
-  knowledge_fail 'lock directory must be a private owned directory'
-  exit 1
-}
-if [[ -L "$lock_path" || ( -e "$lock_path" && ! -f "$lock_path" ) ]]; then
-  knowledge_fail 'lock file is unsafe'
-  exit 1
-fi
-if [[ ! -e "$lock_path" ]]; then
-  if ! (set -o noclobber; : >"$lock_path") 2>/dev/null; then
-    [[ ! -L "$lock_path" && -f "$lock_path" ]] || {
-      knowledge_fail 'lock file could not be created safely'
-      exit 1
-    }
-  fi
-fi
-[[ ! -L "$lock_path" && -f "$lock_path" ]] || { knowledge_fail 'lock file changed'; exit 1; }
-[[ "$(stat -Lc '%u' -- "$lock_path")" == "$(id -u)" ]] || { knowledge_fail 'lock file owner is unsafe'; exit 1; }
-
 # Threat model: reject caller-controlled or preexisting symlink escapes and pin the validated lock inode.
 # A process with the same Unix UID can mutate repository paths and is not a separate security principal.
-exec 9<"$lock_path"
-lock_fd_path="$(realpath -e "/proc/self/fd/9")" || { knowledge_fail 'lock file descriptor is unsafe'; exit 1; }
-[[ "$lock_fd_path" == "$lock_path" ]] || { knowledge_fail 'lock file descriptor escaped'; exit 1; }
-[[ -f "/proc/self/fd/9" && ! -L "$lock_path" && -f "$lock_path" ]] || {
-  knowledge_fail 'lock file descriptor changed'
-  exit 1
-}
-[[ "$(stat -Lc '%d:%i:%u' -- /proc/self/fd/9)" == "$(stat -Lc '%d:%i:%u' -- "$lock_path")" ]] || {
-  knowledge_fail 'lock file descriptor does not match lock path'
-  exit 1
-}
-flock 9
-knowledge_path_within_root "$repo_root" "$lock_dir" || { knowledge_fail 'lock directory changed'; exit 1; }
+knowledge_prepare_private_lock "$repo_root" || { knowledge_fail 'shared report lock is unsafe'; exit 1; }
 
 knowledge_path_within_root "$repo_root" "$current_path" || {
   knowledge_fail 'current task marker path is unsafe'

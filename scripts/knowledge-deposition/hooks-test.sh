@@ -82,6 +82,22 @@ report_md="${report_json%.json}.md"
 cp "$report_json" "$FIXTURES/report.json"
 cp "$report_md" "$FIXTURES/report.md"
 
+wrong_dir="$repo/tmp/knowledge-deposition/not-a-date"
+mkdir -p "$wrong_dir"
+mv "$report_json" "$report_md" "$wrong_dir/"
+jq -e '.decision == "block"' <<<"$(run_hook "$CODEX_STOP" "$stop_payload")" >/dev/null || fail "non-date report directory allowed"
+mv "$wrong_dir/$(basename "$report_json")" "$report_json"
+mv "$wrong_dir/$(basename "$report_md")" "$report_md"
+pass "report pair outside an authoritative date directory blocks"
+
+wrong_date="$repo/tmp/knowledge-deposition/2000-01-01"
+mkdir -p "$wrong_date"
+mv "$report_json" "$report_md" "$wrong_date/"
+jq -e '.decision == "block"' <<<"$(run_hook "$CODEX_STOP" "$stop_payload")" >/dev/null || fail "created_at date mismatch allowed"
+mv "$wrong_date/$(basename "$report_json")" "$report_json"
+mv "$wrong_date/$(basename "$report_md")" "$report_md"
+pass "report directory date must match created_at UTC date"
+
 printf '{bad\n' >"$report_json"
 jq -e '.decision == "block"' <<<"$(run_hook "$CODEX_STOP" "$stop_payload")" >/dev/null || fail "corrupt report allowed"
 cp "$FIXTURES/report.json" "$report_json"
@@ -173,5 +189,56 @@ for pid in "${pids[@]}"; do wait "$pid" || fail "concurrent start failed"; done
 marker="$repo_concurrent/tmp/knowledge-deposition/current/codex-same-session.json"
 jq -e '.schema_version == 1 and .client == "codex" and .session_id == "same-session" and (.task_id | test("^task-[0-9]+-[0-9a-f]{16}$"))' "$marker" >/dev/null || fail "concurrent marker incomplete"
 pass "concurrent starts leave one complete valid marker"
+
+repo_race="$(new_repo check-race)"
+race_start="$(run_hook "$CODEX_START" "$(payload "$repo_race" race-session UserPromptSubmit)")"
+race_task="$(jq -r '.systemMessage | capture("--task (?<v>[^ ]+) --repo-root").v' <<<"$race_start")"
+printf '%s' "$(valid_none)" | "$REPORT" --client codex --session race-session --task "$race_task" --repo-root "$repo_race" >/dev/null
+race_lock="$repo_race/tmp/knowledge-deposition/.lock/report.lock"
+exec {race_fd}<"$race_lock"
+flock "$race_fd"
+run_hook "$CODEX_START" "$(payload "$repo_race" race-session UserPromptSubmit)" >"$FIXTURES/race-start.out" &
+race_start_pid=$!
+sleep 0.1
+run_hook "$CODEX_STOP" "$(payload "$repo_race" race-session Stop false)" >"$FIXTURES/race-check.out" &
+race_check_pid=$!
+sleep 0.1
+flock -u "$race_fd"
+exec {race_fd}>&-
+for pid in "$race_start_pid" "$race_check_pid"; do
+  for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.02; done
+  kill -0 "$pid" 2>/dev/null && { kill "$pid" 2>/dev/null || true; fail "lock race exceeded bounded wait"; }
+  wait "$pid" || fail "lock race subprocess failed"
+done
+jq -e '.decision == "block"' "$FIXTURES/race-check.out" >/dev/null || fail "checker approved stale task during marker advance"
+pass "checker holds the shared lock across marker and report validation"
+
+claude_repo="$(new_repo claude-stop)"
+claude_start="$(run_hook "$CLAUDE_START" "$(payload "$claude_repo" claude-stop-session UserPromptSubmit)")"
+claude_task="$(jq -r '.hookSpecificOutput.additionalContext | capture("--task (?<v>[^ ]+) --repo-root").v' <<<"$claude_start")"
+claude_payload="$(payload "$claude_repo" claude-stop-session Stop false)"
+jq -e '.decision == "block" and (.reason | contains("missing"))' <<<"$(run_hook "$CLAUDE_STOP" "$claude_payload")" >/dev/null || fail "Claude missing report allowed"
+jq -e '.decision == "block"' <<<"$(run_hook "$CLAUDE_STOP" "$(payload "$claude_repo" claude-stop-session Stop true)")" >/dev/null || fail "Claude stop_hook_active bypassed"
+printf '%s' "$(valid_none)" | "$REPORT" --client claude --session claude-stop-session --task "$claude_task" --repo-root "$claude_repo" >/dev/null
+claude_json="$(find "$claude_repo/tmp/knowledge-deposition" -mindepth 2 -name "claude-claude-stop-session-$claude_task.json" -print -quit)"
+claude_md="${claude_json%.json}.md"
+cp "$claude_json" "$FIXTURES/claude.json"; cp "$claude_md" "$FIXTURES/claude.md"
+jq -e '.continue == true and .suppressOutput == true' <<<"$(run_hook "$CLAUDE_STOP" "$claude_payload")" >/dev/null || fail "Claude valid report blocked"
+printf '{bad\n' >"$claude_json"
+jq -e '.decision == "block"' <<<"$(run_hook "$CLAUDE_STOP" "$claude_payload")" >/dev/null || fail "Claude corrupt report allowed"
+cp "$FIXTURES/claude.json" "$claude_json"; rm "$claude_md"
+jq -e '.decision == "block"' <<<"$(run_hook "$CLAUDE_STOP" "$claude_payload")" >/dev/null || fail "Claude missing Markdown allowed"
+cp "$FIXTURES/claude.md" "$claude_md"
+jq '.repository.commit="0000000000000000000000000000000000000000"' "$FIXTURES/claude.json" >"$claude_json"
+jq -e '.decision == "block"' <<<"$(run_hook "$CLAUDE_STOP" "$claude_payload")" >/dev/null || fail "Claude commit mismatch allowed"
+cp "$FIXTURES/claude.json" "$claude_json"
+run_hook "$CLAUDE_START" "$(payload "$claude_repo" claude-stop-session UserPromptSubmit)" >/dev/null
+jq -e '.decision == "block"' <<<"$(run_hook "$CLAUDE_STOP" "$claude_payload")" >/dev/null || fail "Claude previous task report allowed"
+cross_claude="$(run_hook "$CLAUDE_START" "$(payload "$claude_repo" claude-cross UserPromptSubmit)")"
+cross_claude_task="$(jq -r '.hookSpecificOutput.additionalContext | capture("--task (?<v>[^ ]+) --repo-root").v' <<<"$cross_claude")"
+cross_claude_json="$(dirname "$claude_json")/claude-claude-cross-$cross_claude_task.json"
+cp "$FIXTURES/claude.json" "$cross_claude_json"; cp "$FIXTURES/claude.md" "${cross_claude_json%.json}.md"
+jq -e '.decision == "block"' <<<"$(run_hook "$CLAUDE_STOP" "$(payload "$claude_repo" claude-cross Stop false)")" >/dev/null || fail "Claude cross-session report allowed"
+pass "Claude Stop mirrors all lifecycle gates and envelopes"
 
 printf '1..%d\n' "$count"
