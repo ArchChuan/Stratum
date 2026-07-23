@@ -31,6 +31,8 @@ type Options struct {
 	Stderr  io.Writer
 	Tracker *observe.Tracker
 	Events  interface{ Write(observe.Event) error }
+	// InterruptStdin must unblock any active Stdin.Read call before returning.
+	InterruptStdin func() error
 
 	maxMessageBytes int
 	wrapChildStdin  func(io.WriteCloser) io.WriteCloser
@@ -45,7 +47,7 @@ func Run(ctx context.Context, options Options) error {
 	if options.Stdin == nil {
 		options.Stdin = strings.NewReader("")
 	}
-	if !interruptibleStdin(options.Stdin) {
+	if !interruptibleStdin(options) {
 		return fmt.Errorf("stdio proxy: %w", ErrUninterruptibleStdin)
 	}
 	if options.Stdout == nil {
@@ -84,6 +86,7 @@ func Run(ctx context.Context, options Options) error {
 	}
 
 	var eventMu sync.Mutex
+	var trackerMu sync.Mutex
 	writeEvents := func(events []observe.Event) error {
 		if options.Events == nil {
 			return nil
@@ -103,7 +106,12 @@ func Run(ctx context.Context, options Options) error {
 	}
 	results := make(chan result, 2)
 	go func() {
-		results <- result{"client", forwardLines(childCtx, "client", options.Stdin, childIn, maxBytes, func(line []byte) error {
+		results <- result{"client", forwardLines(childCtx, "client", options.Stdin, maxBytes, func(line []byte) error {
+			trackerMu.Lock()
+			defer trackerMu.Unlock()
+			if err := writeFull(childIn, line); err != nil {
+				return err
+			}
 			if options.Tracker == nil {
 				return nil
 			}
@@ -111,7 +119,12 @@ func Run(ctx context.Context, options Options) error {
 		})}
 	}()
 	go func() {
-		results <- result{"child", forwardLines(childCtx, "server", childOut, options.Stdout, maxBytes, func(line []byte) error {
+		results <- result{"child", forwardLines(childCtx, "server", childOut, maxBytes, func(line []byte) error {
+			trackerMu.Lock()
+			defer trackerMu.Unlock()
+			if err := writeFull(options.Stdout, line); err != nil {
+				return err
+			}
 			if options.Tracker == nil {
 				return nil
 			}
@@ -132,9 +145,7 @@ func Run(ctx context.Context, options Options) error {
 		cancel()
 		_ = stdinCleanup.Close()
 		_ = stdoutCleanup.Close()
-		if closer, ok := options.Stdin.(io.Closer); ok {
-			clientStdinCloseErr = closeError("client stdin", closer)
-		}
+		clientStdinCloseErr = interruptStdin(options)
 	}
 	second := <-results
 	_ = stdinCleanup.Close()
@@ -225,8 +236,15 @@ func forwardingError(err error, cancelled bool) error {
 	return err
 }
 
-func interruptibleStdin(reader io.Reader) bool {
-	if _, ok := reader.(io.Closer); ok {
+func interruptibleStdin(options Options) bool {
+	if options.InterruptStdin != nil {
+		return true
+	}
+	reader := options.Stdin
+	if _, ok := reader.(*os.File); ok {
+		return true
+	}
+	if _, ok := reader.(*io.PipeReader); ok {
 		return true
 	}
 	switch reader.(type) {
@@ -237,15 +255,28 @@ func interruptibleStdin(reader io.Reader) bool {
 	}
 }
 
+func interruptStdin(options Options) error {
+	if options.InterruptStdin != nil {
+		if err := options.InterruptStdin(); err != nil {
+			return fmt.Errorf("stdio proxy: interrupt client stdin: %w", err)
+		}
+		return nil
+	}
+	closer, ok := options.Stdin.(io.Closer)
+	if !ok {
+		return nil
+	}
+	return closeError("client stdin", closer)
+}
+
 func forwardLines(
 	ctx context.Context,
 	side string,
 	src io.Reader,
-	dst io.Writer,
 	maxBytes int,
-	observeLine func([]byte) error,
+	handleLine func([]byte) error,
 ) error {
-	reader := bufio.NewReader(src)
+	reader := bufio.NewReader(&lineLimitedReader{reader: src, remaining: maxBytes + 1, maximum: maxBytes + 1})
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -255,12 +286,8 @@ func forwardLines(
 			return fmt.Errorf("%s message exceeds %d byte limit: %w", side, maxBytes, ErrMessageTooLarge)
 		}
 		if len(line) > 0 {
-			message := strings.TrimSuffix(line, "\n")
-			if observeErr := observeLine([]byte(message)); observeErr != nil {
-				return observeErr
-			}
-			if _, writeErr := io.WriteString(dst, line); writeErr != nil {
-				return writeErr
+			if handleErr := handleLine([]byte(line)); handleErr != nil {
+				return handleErr
 			}
 		}
 		if err != nil {
@@ -270,4 +297,51 @@ func forwardLines(
 			return err
 		}
 	}
+}
+
+type lineLimitedReader struct {
+	reader    io.Reader
+	remaining int
+	maximum   int
+	pending   []byte
+}
+
+func (r *lineLimitedReader) Read(p []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, ErrMessageTooLarge
+	}
+	if len(p) > r.remaining {
+		p = p[:r.remaining]
+	}
+	var n int
+	var err error
+	if len(r.pending) > 0 {
+		n = copy(p, r.pending)
+		r.pending = r.pending[n:]
+	} else {
+		n, err = r.reader.Read(p)
+	}
+	if index := bytes.IndexByte(p[:n], '\n'); index >= 0 {
+		lineBytes := index + 1
+		if lineBytes < n {
+			tail := append([]byte(nil), p[lineBytes:n]...)
+			r.pending = append(tail, r.pending...)
+		}
+		n = lineBytes
+		r.remaining = r.maximum
+	} else {
+		r.remaining -= n
+	}
+	return n, err
+}
+
+func writeFull(dst io.Writer, data []byte) error {
+	written, err := dst.Write(data)
+	if err != nil {
+		return err
+	}
+	if written != len(data) {
+		return io.ErrShortWrite
+	}
+	return nil
 }

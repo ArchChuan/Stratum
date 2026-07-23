@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,34 @@ import (
 
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/observe"
 )
+
+var fakeServerPath string
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "mcp-governor-fake-server-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	root, err := filepath.Abs(filepath.Join("..", "..", "testdata", "e2e", "fake-mcp-server.go"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fakeServerPath = filepath.Join(dir, "fake-mcp-server")
+	buildCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	command := exec.CommandContext(buildCtx, filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-o", fakeServerPath, root)
+	combined, buildErr := command.CombinedOutput()
+	cancel()
+	if buildErr != nil {
+		fmt.Fprintf(os.Stderr, "build fake server: %v\n%s", buildErr, combined)
+		_ = os.RemoveAll(dir)
+		os.Exit(1)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 func TestRunForwardsBytesAndEmitsMetadataOnlyEvent(t *testing.T) {
 	server := buildFakeServer(t)
@@ -61,7 +90,8 @@ func TestRunHandlesPartialReadsMultipleLinesAndFinalLineWithoutNewline(t *testin
 	reader := &chunkReader{data: []byte(want), sizes: []int{1, 2, 5, 3, 1}}
 	var stdout bytes.Buffer
 	if err := Run(context.Background(), Options{
-		Command: server, Args: []string{"echo"}, Stdin: io.NopCloser(reader), Stdout: &stdout, Stderr: io.Discard,
+		Command: server, Args: []string{"echo"}, Stdin: reader, Stdout: &stdout, Stderr: io.Discard,
+		InterruptStdin: func() error { return nil },
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -114,6 +144,22 @@ func TestRunAcceptsLargeLineAndRejectsLineOverLimit(t *testing.T) {
 	})
 }
 
+func TestRunStopsReadingAfterMessageLimit(t *testing.T) {
+	server := buildFakeServer(t)
+	source := &countingByteReader{remaining: 64 << 20, value: 'x'}
+	err := Run(context.Background(), Options{
+		Command: server, Args: []string{"echo"}, Stdin: source,
+		Stdout: io.Discard, Stderr: io.Discard, maxMessageBytes: 1024,
+		InterruptStdin: func() error { return nil },
+	})
+	if !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("Run() error = %v, want ErrMessageTooLarge", err)
+	}
+	if got, max := source.read.Load(), int64(1025); got > max {
+		t.Fatalf("source consumed %d bytes, want at most %d", got, max)
+	}
+}
+
 func TestRunClientEOFAndChildExit(t *testing.T) {
 	server := buildFakeServer(t)
 	if err := Run(context.Background(), Options{
@@ -134,16 +180,26 @@ func TestRunClientEOFAndChildExit(t *testing.T) {
 
 func TestRunCancellationFlushesPendingCall(t *testing.T) {
 	server := buildFakeServer(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 	request := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"sleep","arguments":{"secret":"hidden"}}}` + "\n"
+	stdin := newRequestThenBlockingReader(request)
 	events := &eventCollector{}
-	err := Run(ctx, Options{
-		Command: server, Args: []string{"sleep"}, Stdin: strings.NewReader(request),
-		Stdout: io.Discard, Stderr: io.Discard, Tracker: newTracker(t), Events: events,
-	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Run() error = %v, want deadline exceeded", err)
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{
+			Command: server, Args: []string{"sleep"}, Stdin: stdin, InterruptStdin: stdin.Close,
+			Stdout: io.Discard, Stderr: io.Discard, Tracker: newTracker(t), Events: events,
+		})
+	}()
+	<-stdin.blocked
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() error = %v, want context canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not return after cancellation")
 	}
 	got := events.Events()
 	if len(got) != 1 || got[0].Outcome != observe.OutcomeCancelled {
@@ -221,16 +277,70 @@ func TestRunRejectsBlockingStdinThatCannotBeInterrupted(t *testing.T) {
 	}
 }
 
+func TestRunRejectsGenericReadCloserThatDoesNotInterruptRead(t *testing.T) {
+	server := buildFakeServer(t)
+	reader := &nonInterruptingReadCloser{}
+	err := Run(context.Background(), Options{
+		Command: server, Args: []string{"sleep"}, Stdin: reader,
+		Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if !errors.Is(err, ErrUninterruptibleStdin) {
+		t.Fatalf("Run() error = %v, want ErrUninterruptibleStdin", err)
+	}
+	if reader.reads.Load() != 0 || reader.closes.Load() != 0 {
+		t.Fatalf("reader calls: reads=%d closes=%d, want zero", reader.reads.Load(), reader.closes.Load())
+	}
+}
+
+func TestRunDetectsShortWritesBeforeObservation(t *testing.T) {
+	server := buildFakeServer(t)
+	t.Run("client to child", func(t *testing.T) {
+		events := &eventCollector{}
+		err := Run(context.Background(), Options{
+			Command: server, Args: []string{"echo"},
+			Stdin:  strings.NewReader(`{"id":1,"method":"tools/call","params":{"name":"echo"}}` + "\n"),
+			Stdout: io.Discard, Stderr: io.Discard, Tracker: newTracker(t), Events: events,
+			wrapChildStdin: func(closer io.WriteCloser) io.WriteCloser {
+				return &shortWriteCloser{WriteCloser: closer}
+			},
+		})
+		if !errors.Is(err, io.ErrShortWrite) {
+			t.Fatalf("Run() error = %v, want io.ErrShortWrite", err)
+		}
+		if got := events.Events(); len(got) != 0 {
+			t.Fatalf("events = %+v, want none for unforwarded request", got)
+		}
+	})
+
+	t.Run("child to client", func(t *testing.T) {
+		events := &eventCollector{}
+		err := Run(context.Background(), Options{
+			Command: server, Args: []string{"rpc"},
+			Stdin:  strings.NewReader(`{"id":1,"method":"tools/call","params":{"name":"echo"}}` + "\n"),
+			Stdout: shortWriter{}, Stderr: io.Discard, Tracker: newTracker(t), Events: events,
+		})
+		if !errors.Is(err, io.ErrShortWrite) {
+			t.Fatalf("Run() error = %v, want io.ErrShortWrite", err)
+		}
+		got := events.Events()
+		if len(got) != 1 || got[0].Outcome != observe.OutcomeDisconnected {
+			t.Fatalf("events = %+v, want only pending-call disconnect", got)
+		}
+	})
+}
+
 func TestRunJoinsPrimaryAndCleanupErrors(t *testing.T) {
 	server := buildFakeServer(t)
 	stdinCloseErr := errors.New("close child stdin")
 	stdoutCloseErr := errors.New("close child stdout")
 	waitErr := errors.New("wait child cleanup")
 	clientCloseErr := errors.New("close client stdin")
+	clientStdin := &errorReadCloser{ReadCloser: io.NopCloser(strings.NewReader("123456789")), err: clientCloseErr}
 	err := Run(context.Background(), Options{
 		Command: server, Args: []string{"sleep"},
-		Stdin:  &errorReadCloser{ReadCloser: io.NopCloser(strings.NewReader("123456789")), err: clientCloseErr},
+		Stdin:  clientStdin,
 		Stdout: io.Discard, Stderr: io.Discard, maxMessageBytes: 8,
+		InterruptStdin: clientStdin.Close,
 		wrapChildStdin: func(closer io.WriteCloser) io.WriteCloser {
 			return &errorWriteCloser{WriteCloser: closer, err: stdinCloseErr}
 		},
@@ -255,6 +365,7 @@ func TestRunPreservesSpontaneousChildExitWhenChildEOFWins(t *testing.T) {
 	err := Run(context.Background(), Options{
 		Command: server, Args: []string{"error"}, Stdin: reader,
 		Stdout: io.Discard, Stderr: io.Discard,
+		InterruptStdin: reader.Close,
 	})
 	if err == nil || !strings.Contains(err.Error(), "exit status 7") {
 		t.Fatalf("Run() error = %v, want spontaneous exit status 7", err)
@@ -267,21 +378,23 @@ func TestRunPreservesSpontaneousChildExitWhenChildEOFWins(t *testing.T) {
 func TestRunCancellationClosesAndUnblocksAcceptedStdin(t *testing.T) {
 	server := buildFakeServer(t)
 	reader := newClosableBlockingReader()
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
 		done <- Run(ctx, Options{
 			Command: server, Args: []string{"sleep"}, Stdin: reader,
 			Stdout: io.Discard, Stderr: io.Discard,
+			InterruptStdin: reader.Close,
 		})
 	}()
+	<-reader.started
+	cancel()
 	select {
 	case err := <-done:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("Run() error = %v, want deadline exceeded", err)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() error = %v, want context canceled", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("Run() did not return promptly after cancellation")
 	}
 	if !reader.Closed() || !reader.Unblocked() {
@@ -318,20 +431,101 @@ func (r *blockingReader) Read([]byte) (int, error) {
 	select {}
 }
 
+type nonInterruptingReadCloser struct {
+	reads  atomic.Int32
+	closes atomic.Int32
+}
+
+func (r *nonInterruptingReadCloser) Read([]byte) (int, error) {
+	r.reads.Add(1)
+	select {}
+}
+
+func (r *nonInterruptingReadCloser) Close() error {
+	r.closes.Add(1)
+	return nil
+}
+
+type countingByteReader struct {
+	remaining int64
+	value     byte
+	read      atomic.Int64
+}
+
+func (r *countingByteReader) Read(p []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	n := int64(len(p))
+	if n > r.remaining {
+		n = r.remaining
+	}
+	for i := range p[:n] {
+		p[i] = r.value
+	}
+	r.remaining -= n
+	r.read.Add(n)
+	return int(n), nil
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
+
+type shortWriteCloser struct{ io.WriteCloser }
+
+func (w *shortWriteCloser) Write(p []byte) (int, error) { return len(p) - 1, nil }
+
 type closableBlockingReader struct {
 	closed    chan struct{}
+	started   chan struct{}
 	unblocked chan struct{}
-	once      sync.Once
+	startOnce sync.Once
+	doneOnce  sync.Once
 }
 
 func newClosableBlockingReader() *closableBlockingReader {
-	return &closableBlockingReader{closed: make(chan struct{}), unblocked: make(chan struct{})}
+	return &closableBlockingReader{
+		closed: make(chan struct{}), started: make(chan struct{}), unblocked: make(chan struct{}),
+	}
 }
 
 func (r *closableBlockingReader) Read([]byte) (int, error) {
+	r.startOnce.Do(func() { close(r.started) })
 	<-r.closed
-	r.once.Do(func() { close(r.unblocked) })
+	r.doneOnce.Do(func() { close(r.unblocked) })
 	return 0, io.EOF
+}
+
+type requestThenBlockingReader struct {
+	reader  *strings.Reader
+	blocked chan struct{}
+	closed  chan struct{}
+	once    sync.Once
+}
+
+func newRequestThenBlockingReader(request string) *requestThenBlockingReader {
+	return &requestThenBlockingReader{
+		reader: strings.NewReader(request), blocked: make(chan struct{}), closed: make(chan struct{}),
+	}
+}
+
+func (r *requestThenBlockingReader) Read(p []byte) (int, error) {
+	if r.reader.Len() > 0 {
+		return r.reader.Read(p)
+	}
+	r.once.Do(func() { close(r.blocked) })
+	<-r.closed
+	return 0, io.EOF
+}
+
+func (r *requestThenBlockingReader) Close() error {
+	select {
+	case <-r.closed:
+	default:
+		close(r.closed)
+	}
+	return nil
 }
 
 func (r *closableBlockingReader) Close() error {
@@ -411,14 +605,5 @@ func newTracker(t *testing.T) *observe.Tracker {
 
 func buildFakeServer(t *testing.T) string {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", "..", "testdata", "e2e", "fake-mcp-server.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	output := filepath.Join(t.TempDir(), "fake-mcp-server")
-	command := exec.Command("/usr/local/go/bin/go", "build", "-o", output, root)
-	if combined, buildErr := command.CombinedOutput(); buildErr != nil {
-		t.Fatalf("build fake server: %v\n%s", buildErr, combined)
-	}
-	return output
+	return fakeServerPath
 }
