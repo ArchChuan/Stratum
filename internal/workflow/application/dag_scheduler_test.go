@@ -158,12 +158,18 @@ func createPublishedRun(t *testing.T, store *dagStore, registry port.NodeExecuto
 	t.Helper()
 	ids := &ids{}
 	definitions := application.NewDefinitionService(store, store, ids.NewID)
-	definition, err := definitions.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "DAG", Spec: spec})
+	definition, err := definitions.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{
+		Name: "DAG",
+		Spec: spec,
+		InputSchema: domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{{
+			Key: "route", Label: "路由", Type: domain.InputFieldBoolean,
+		}}},
+	})
 	require.NoError(t, err)
 	version, err := definitions.Publish(context.Background(), "tenant-1", definition.ID)
 	require.NoError(t, err)
 	runs := application.NewRunServiceWithRegistry(store, store, registry, ids.NewID)
-	run, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"route": true}, IdempotencyKey: "dag-key"})
+	run, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "执行 DAG", "route": true}, IdempotencyKey: "dag-key"})
 	require.NoError(t, err)
 	return runs, run
 }
@@ -539,11 +545,11 @@ func TestRunStartAndRecoveryUseDistinctAtomicEvents(t *testing.T) {
 	version, err := definitions.Publish(context.Background(), "tenant-1", definition.ID)
 	require.NoError(t, err)
 	runs := application.NewRunServiceWithRegistry(store, store, &scriptedRegistry{}, ids.NewID)
-	run, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{}, IdempotencyKey: "start-event"})
+	run, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "启动"}, IdempotencyKey: "start-event"})
 	require.NoError(t, err)
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
 	require.Contains(t, store.runEvents, "workflow.run_started")
-	recovery, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{}, IdempotencyKey: "recovery-event"})
+	recovery, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "恢复"}, IdempotencyKey: "recovery-event"})
 	require.NoError(t, err)
 	store.runs[recovery.ID].Status = domain.RunStatusRunning
 	store.runs[recovery.ID].Generation = 3

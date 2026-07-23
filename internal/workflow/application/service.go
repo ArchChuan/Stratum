@@ -22,12 +22,14 @@ type CreateDefinitionCommand struct {
 	Name        string
 	Description string
 	Spec        domain.Spec
+	InputSchema domain.InputSchema
 }
 
 type UpdateDefinitionCommand struct {
 	Name             string
 	Description      string
 	Spec             domain.Spec
+	InputSchema      domain.InputSchema
 	ExpectedRevision int64
 }
 
@@ -42,7 +44,7 @@ func NewDefinitionService(definitions port.DefinitionRepository, versions port.V
 }
 
 func (s *DefinitionService) Create(ctx context.Context, tenantID string, cmd CreateDefinitionCommand) (*domain.Definition, error) {
-	definition, err := domain.NewDefinition(s.newID(), cmd.Name, cmd.Description, cmd.Spec)
+	definition, err := domain.NewDefinition(s.newID(), cmd.Name, cmd.Description, cmd.Spec, normalizeInputSchema(cmd.InputSchema))
 	if err != nil {
 		return nil, err
 	}
@@ -57,13 +59,20 @@ func (s *DefinitionService) Update(ctx context.Context, tenantID, id string, cmd
 	if err != nil {
 		return nil, err
 	}
-	if err := definition.UpdateDraft(cmd.Name, cmd.Description, cmd.Spec, cmd.ExpectedRevision); err != nil {
+	if err := definition.UpdateDraft(cmd.Name, cmd.Description, cmd.Spec, cmd.ExpectedRevision, normalizeInputSchema(cmd.InputSchema)); err != nil {
 		return nil, err
 	}
 	if err := s.definitions.UpdateDefinition(ctx, tenantID, definition, cmd.ExpectedRevision); err != nil {
 		return nil, err
 	}
 	return definition, nil
+}
+
+func normalizeInputSchema(schema domain.InputSchema) domain.InputSchema {
+	if schema.TaskLabel == "" && schema.TaskDescription == "" && len(schema.Fields) == 0 {
+		return domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{}}
+	}
+	return schema
 }
 
 func (s *DefinitionService) Validate(ctx context.Context, tenantID, id string) error {

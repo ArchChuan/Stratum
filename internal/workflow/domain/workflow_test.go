@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -17,6 +18,99 @@ func linearSpec() domain.Spec {
 		},
 		Edges: []domain.Edge{{From: "analyse", To: "summarise"}},
 	}
+}
+
+func TestValidateInputSchemaAcceptsSupportedFieldTypes(t *testing.T) {
+	tests := []struct {
+		name         string
+		fieldType    domain.InputFieldType
+		defaultValue any
+		options      []domain.InputOption
+	}{
+		{name: "short text", fieldType: domain.InputFieldShortText, defaultValue: "华东"},
+		{name: "long text", fieldType: domain.InputFieldLongText, defaultValue: "详细要求"},
+		{name: "number", fieldType: domain.InputFieldNumber, defaultValue: 3.5},
+		{name: "single select", fieldType: domain.InputFieldSingleSelect, defaultValue: "east", options: []domain.InputOption{{Label: "华东", Value: "east"}}},
+		{name: "multi select", fieldType: domain.InputFieldMultiSelect, defaultValue: []string{"east"}, options: []domain.InputOption{{Label: "华东", Value: "east"}}},
+		{name: "boolean", fieldType: domain.InputFieldBoolean, defaultValue: true},
+		{name: "date", fieldType: domain.InputFieldDate, defaultValue: "2026-07-23"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := domain.InputSchema{
+				TaskLabel: "任务",
+				Fields: []domain.InputField{{
+					Key: "region", Label: "区域", Type: tt.fieldType,
+					Default: tt.defaultValue, Options: tt.options,
+				}},
+			}
+			require.NoError(t, domain.ValidateInputSchema(schema))
+		})
+	}
+}
+
+func TestValidateInputSchemaRejectsInvalidDefinitions(t *testing.T) {
+	tooManyFields := make([]domain.InputField, domain.MaxWorkflowInputFields+1)
+	for i := range tooManyFields {
+		tooManyFields[i] = domain.InputField{Key: fmt.Sprintf("field_%d", i), Label: "字段", Type: domain.InputFieldShortText}
+	}
+	tests := []struct {
+		name   string
+		schema domain.InputSchema
+	}{
+		{name: "missing task label", schema: domain.InputSchema{}},
+		{name: "duplicate keys", schema: domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{{Key: "region", Label: "区域", Type: domain.InputFieldShortText}, {Key: "region", Label: "市场", Type: domain.InputFieldShortText}}}},
+		{name: "reserved task key", schema: domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{{Key: "task", Label: "其他任务", Type: domain.InputFieldShortText}}}},
+		{name: "missing option value", schema: domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{{Key: "region", Label: "区域", Type: domain.InputFieldSingleSelect, Options: []domain.InputOption{{Label: "华东"}}}}}},
+		{name: "invalid default", schema: domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{{Key: "enabled", Label: "启用", Type: domain.InputFieldBoolean, Default: "yes"}}}},
+		{name: "too many fields", schema: domain.InputSchema{TaskLabel: "任务", Fields: tooManyFields}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.ErrorIs(t, domain.ValidateInputSchema(tt.schema), domain.ErrInvalidInputSchema)
+		})
+	}
+}
+
+func TestValidateRunInputAcceptsMixedInput(t *testing.T) {
+	schema := domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{
+		{Key: "count", Label: "数量", Type: domain.InputFieldNumber, Required: true},
+		{Key: "region", Label: "区域", Type: domain.InputFieldSingleSelect, Options: []domain.InputOption{{Label: "华东", Value: "east"}}},
+		{Key: "channels", Label: "渠道", Type: domain.InputFieldMultiSelect, Options: []domain.InputOption{{Label: "网站", Value: "web"}, {Label: "门店", Value: "store"}}},
+		{Key: "enabled", Label: "启用", Type: domain.InputFieldBoolean},
+		{Key: "due_date", Label: "日期", Type: domain.InputFieldDate},
+	}}
+	require.NoError(t, domain.ValidateRunInput(schema, map[string]any{
+		"task": "分析市场", "count": float64(3), "region": "east",
+		"channels": []any{"web", "store"}, "enabled": false, "due_date": "2026-07-23",
+	}))
+}
+
+func TestValidateRunInputReturnsFieldIssuesWithoutValues(t *testing.T) {
+	schema := domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{
+		{Key: "count", Label: "数量", Type: domain.InputFieldNumber, Required: true},
+		{Key: "region", Label: "区域", Type: domain.InputFieldSingleSelect, Options: []domain.InputOption{{Label: "华东", Value: "east"}}},
+		{Key: "channels", Label: "渠道", Type: domain.InputFieldMultiSelect, Options: []domain.InputOption{{Label: "网站", Value: "web"}}},
+		{Key: "enabled", Label: "启用", Type: domain.InputFieldBoolean},
+	}}
+	secret := "sensitive-submitted-value"
+	err := domain.ValidateRunInput(schema, map[string]any{
+		"task": "", "count": "three", "region": secret,
+		"channels": "web", "enabled": "yes", "unknown": secret,
+	})
+	require.Error(t, err)
+	var validationErr *domain.InputValidationError
+	require.True(t, errors.As(err, &validationErr))
+	require.ElementsMatch(t, []string{"task", "count", "region", "channels", "enabled", "unknown"}, issueFields(validationErr.Issues))
+	require.NotContains(t, err.Error(), secret)
+}
+
+func issueFields(issues []domain.InputIssue) []string {
+	fields := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		fields = append(fields, issue.Field)
+	}
+	return fields
 }
 
 func TestDefinitionUpdateRequiresExpectedRevision(t *testing.T) {
@@ -142,16 +236,21 @@ func TestPausedRunAndAttemptTransitionsAreFenced(t *testing.T) {
 func boolPtr(value bool) *bool { return &value }
 
 func TestPublishCreatesImmutableSnapshot(t *testing.T) {
-	def, err := domain.NewDefinition("wf-1", "Research", "desc", linearSpec())
+	schema := domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{{
+		Key: "region", Label: "区域", Type: domain.InputFieldShortText,
+	}}}
+	def, err := domain.NewDefinition("wf-1", "Research", "desc", linearSpec(), schema)
 	require.NoError(t, err)
 	version, err := def.Publish("version-1", 1)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), version.Number)
 
 	def.Spec.Nodes[0].AgentID = "changed-agent"
+	def.InputSchema.Fields[0].Label = "市场"
 	require.Equal(t, "agent-1", version.Spec.Nodes[0].AgentID)
+	require.Equal(t, "区域", version.InputSchema.Fields[0].Label)
 
-	run, err := domain.NewRun("run-1", version, map[string]any{"query": "hello"}, "key-1", "hash-1")
+	run, err := domain.NewRun("run-1", version, map[string]any{"task": "hello", "region": "east"}, "key-1", "hash-1")
 	require.NoError(t, err)
 	version.Spec.Nodes[0].AgentID = "another-agent"
 	require.Equal(t, "agent-1", run.Snapshot.Nodes[0].AgentID)
