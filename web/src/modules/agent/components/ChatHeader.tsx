@@ -1,7 +1,11 @@
-import { MenuOutlined, RobotOutlined } from '@ant-design/icons';
-import { Button, Tag, Typography } from 'antd';
+import { BranchesOutlined, MenuOutlined, RobotOutlined } from '@ant-design/icons';
+import { Button, Popover, Select, Tag, Typography, message } from 'antd';
+import { useState } from 'react';
+import { useInRouterContext, useNavigate } from 'react-router-dom';
 
 import type { Agent } from '../model/agent';
+
+import { workflowApi } from '@/modules/workflow/api/workflow.api';
 
 const { Text } = Typography;
 
@@ -11,7 +15,46 @@ interface Props {
   onOpenConversations?: () => void;
 }
 
-export const ChatHeader = ({ agent, isMobile = false, onOpenConversations }: Props) => (
+const WorkflowShortcut = ({ isMobile }: { isMobile: boolean }) => {
+  const navigate = useNavigate();
+  const [workflowOpen, setWorkflowOpen] = useState(false);
+  const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [workflows, setWorkflows] = useState<Array<{ value: string; label: string }>>([]);
+  const openWorkflows = async (open: boolean) => {
+    setWorkflowOpen(open);
+    if (!open || workflows.length) return;
+    setWorkflowLoading(true);
+    try {
+      const result = await workflowApi.listWorkflows({ page: 1, pageSize: 50 });
+      setWorkflows(result.workflows.map((workflow) => ({ value: workflow.id, label: workflow.name })));
+    } catch (error: unknown) {
+      message.error({ content: (error as { response?: { data?: { error?: string } } }).response?.data?.error || '操作失败', duration: 0 });
+    } finally {
+      setWorkflowLoading(false);
+    }
+  };
+  return <Popover
+    open={workflowOpen}
+    onOpenChange={openWorkflows}
+    trigger="click"
+    content={<Select
+      aria-label="选择固定工作流"
+      showSearch
+      loading={workflowLoading}
+      placeholder="搜索工作流"
+      options={workflows}
+      optionFilterProp="label"
+      style={{ width: isMobile ? 240 : 300 }}
+      onChange={(workflowId) => { setWorkflowOpen(false); navigate(`/workflows/${workflowId}/run`); }}
+    />}
+  >
+    <Button icon={<BranchesOutlined />}>运行固定工作流</Button>
+  </Popover>;
+};
+
+export const ChatHeader = ({ agent, isMobile = false, onOpenConversations }: Props) => {
+  const inRouter = useInRouterContext();
+  return (
   <div
     style={{
       height: 48,
@@ -46,5 +89,9 @@ export const ChatHeader = ({ agent, isMobile = false, onOpenConversations }: Pro
         {agent.description}
       </Text>
     )}
+    <span style={{ marginLeft: 'auto' }}>
+      {inRouter && <WorkflowShortcut isMobile={isMobile} />}
+    </span>
   </div>
-);
+  );
+};
