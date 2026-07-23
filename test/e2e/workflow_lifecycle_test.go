@@ -53,10 +53,19 @@ func newWorkflowE2ERouter(tenantID string, definitions *workflowapp.DefinitionSe
 	r := gin.New()
 	r.Use(middleware.ErrorHandler(zap.NewNop()))
 	r.Use(func(c *gin.Context) {
+		userID := c.GetHeader("X-E2E-User")
+		if userID == "" {
+			userID = "workflow-e2e-admin"
+		}
+		role := c.GetHeader("X-E2E-Role")
+		if role == "" {
+			role = "admin"
+		}
 		ctx := reqctx.WithTenantID(c.Request.Context(), tenantID)
-		ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID, UserID: "workflow-e2e-admin", Role: postgres.RoleTenantAdmin})
+		ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID, UserID: userID, Role: postgres.RoleTenantAdmin})
 		c.Request = c.Request.WithContext(ctx)
-		c.Set("auth.sub", "workflow-e2e-admin")
+		c.Set("auth.sub", userID)
+		c.Set(middleware.ContextKeyRole, role)
 		c.Next()
 	})
 	h := handler.NewWorkflowHandlerWithControl(definitions, runs, controls)
@@ -66,15 +75,21 @@ func newWorkflowE2ERouter(tenantID string, definitions *workflowapp.DefinitionSe
 	r.POST("/workflows/:id/publish", h.PublishDefinition)
 	r.GET("/workflows/:id/versions/:versionID", h.GetVersion)
 	r.POST("/workflow-runs", h.StartRun)
+	r.GET("/workflow-runs", h.ListRuns)
 	r.GET("/workflow-runs/:id", h.GetRun)
 	r.GET("/workflow-runs/:id/events", h.GetEvents)
 	r.GET("/workflow-runs/:id/events/stream", h.StreamEvents)
+	r.POST("/workflow-runs/:id/cancel", h.CancelRun)
 	r.POST("/workflow-runs/:id/resume", h.ResumeRun)
 	r.POST("/workflow-approvals/:id/decision", h.DecideApproval)
 	return r
 }
 
 func workflowRequest(t *testing.T, r http.Handler, method, path string, body any, want int) []byte {
+	return workflowRequestAs(t, r, method, path, body, want, "workflow-e2e-admin", "admin")
+}
+
+func workflowRequestAs(t *testing.T, r http.Handler, method, path string, body any, want int, userID, role string) []byte {
 	t.Helper()
 	var payload []byte
 	var err error
@@ -86,10 +101,22 @@ func workflowRequest(t *testing.T, r http.Handler, method, path string, body any
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	req.Header.Set("X-E2E-User", userID)
+	req.Header.Set("X-E2E-Role", role)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	require.Equal(t, want, w.Code, "response: %s", w.Body.String())
 	return w.Body.Bytes()
+}
+
+func workflowSSERequestAs(t *testing.T, r http.Handler, path, userID, role string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("X-E2E-User", userID)
+	req.Header.Set("X-E2E-Role", role)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
 }
 
 func TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E(t *testing.T) {
@@ -130,12 +157,21 @@ func TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E(t *testing.T) {
 		},
 		"max_concurrency": 2,
 	}
-	createdBody := workflowRequest(t, router, http.MethodPost, "/workflows", map[string]any{"name": "Approval diamond", "description": "draft", "spec": spec}, http.StatusCreated)
+	inputSchema := map[string]any{
+		"task_label": "任务",
+		"fields":     []map[string]any{{"key": "region", "label": "区域", "type": "short_text", "required": true}},
+	}
+	createdBody := workflowRequest(t, router, http.MethodPost, "/workflows", map[string]any{
+		"name": "Approval diamond", "description": "draft", "spec": spec, "input_schema": inputSchema,
+	}, http.StatusCreated)
 	var definition workflowdomain.Definition
 	require.NoError(t, json.Unmarshal(createdBody, &definition))
 	require.Equal(t, int64(1), definition.Revision)
 
-	updatedBody := workflowRequest(t, router, http.MethodPut, "/workflows/"+definition.ID+"/draft", map[string]any{"name": "Approval diamond", "description": "updated", "spec": spec, "expected_revision": 1}, http.StatusOK)
+	updatedBody := workflowRequest(t, router, http.MethodPut, "/workflows/"+definition.ID+"/draft", map[string]any{
+		"name": "Approval diamond", "description": "updated", "spec": spec,
+		"input_schema": inputSchema, "expected_revision": 1,
+	}, http.StatusOK)
 	require.NoError(t, json.Unmarshal(updatedBody, &definition))
 	require.Equal(t, int64(2), definition.Revision)
 	workflowRequest(t, router, http.MethodPost, "/workflows/"+definition.ID+"/validate", nil, http.StatusOK)
@@ -149,19 +185,51 @@ func TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E(t *testing.T) {
 	require.NoError(t, json.Unmarshal(versionBody, &immutable))
 	require.Equal(t, version.Spec, immutable.Spec)
 
-	startRequest := map[string]any{"version_id": version.ID, "input": map[string]any{"query": "hello"}, "idempotency_key": "workflow-http-e2e"}
-	startedBody := workflowRequest(t, router, http.MethodPost, "/workflow-runs", startRequest, http.StatusAccepted)
+	workflowRequestAs(t, router, http.MethodPost, "/workflow-runs", map[string]any{
+		"version_id": version.ID, "task": "hello", "fields": map[string]any{}, "idempotency_key": "invalid-input",
+	}, http.StatusBadRequest, "member-a", "member")
+	var emptyRunPage struct {
+		Runs  []workflowdomain.Run `json:"runs"`
+		Total int                  `json:"total"`
+	}
+	emptyBody := workflowRequest(t, router, http.MethodGet, "/workflow-runs", nil, http.StatusOK)
+	require.NoError(t, json.Unmarshal(emptyBody, &emptyRunPage))
+	require.Zero(t, emptyRunPage.Total, "invalid input must not create a run")
+
+	startRequest := map[string]any{
+		"version_id": version.ID, "task": "hello", "fields": map[string]any{"region": "cn"},
+		"idempotency_key": "workflow-http-e2e",
+	}
+	startedBody := workflowRequestAs(t, router, http.MethodPost, "/workflow-runs", startRequest, http.StatusAccepted, "member-a", "member")
 	var started struct {
 		RunID  string                   `json:"run_id"`
 		Status workflowdomain.RunStatus `json:"status"`
 	}
 	require.NoError(t, json.Unmarshal(startedBody, &started))
 	require.Equal(t, workflowdomain.RunStatusQueued, started.Status)
+	workflowRequestAs(t, router, http.MethodGet, "/workflow-runs/"+started.RunID, nil, http.StatusNotFound, "member-b", "member")
+	workflowRequestAs(t, router, http.MethodGet, "/workflow-runs/"+started.RunID+"/events", nil, http.StatusNotFound, "member-b", "member")
+	workflowRequestAs(t, router, http.MethodPost, "/workflow-runs/"+started.RunID+"/cancel", map[string]any{
+		"expected_generation": 1, "reason": "not mine",
+	}, http.StatusNotFound, "member-b", "member")
+
+	memberListBody := workflowRequestAs(t, router, http.MethodGet, "/workflow-runs", nil, http.StatusOK, "member-b", "member")
+	var memberList struct {
+		Total int `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal(memberListBody, &memberList))
+	require.Zero(t, memberList.Total)
+	adminListBody := workflowRequest(t, router, http.MethodGet, "/workflow-runs", nil, http.StatusOK)
+	var adminList struct {
+		Total int `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal(adminListBody, &adminList))
+	require.Equal(t, 1, adminList.Total)
 
 	workerA := workflowapp.NewWorker("workflow-e2e-worker-a", store, runsA, 10*time.Second)
 	require.True(t, workerA.RunOnce(ctx))
 
-	pausedBody := workflowRequest(t, router, http.MethodGet, "/workflow-runs/"+started.RunID, nil, http.StatusOK)
+	pausedBody := workflowRequestAs(t, router, http.MethodGet, "/workflow-runs/"+started.RunID, nil, http.StatusOK, "member-a", "member")
 	var paused struct {
 		Run       workflowdomain.Run           `json:"run"`
 		Attempts  []workflowdomain.NodeAttempt `json:"node_attempts"`
@@ -173,6 +241,29 @@ func TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E(t *testing.T) {
 	require.Len(t, paused.Attempts, 1)
 	require.Len(t, paused.Approvals, 1)
 	require.Contains(t, paused.Actions, "cancel")
+
+	cancelBody := workflowRequestAs(t, router, http.MethodPost, "/workflow-runs/"+started.RunID+"/cancel", map[string]any{
+		"expected_generation": paused.Run.Generation, "reason": "member requested cancellation",
+	}, http.StatusAccepted, "member-a", "member")
+	var cancelRequested workflowdomain.Run
+	require.NoError(t, json.Unmarshal(cancelBody, &cancelRequested))
+	require.Equal(t, workflowdomain.RunStatusCancelRequested, cancelRequested.Status)
+	require.True(t, workerA.RunOnce(ctx))
+	canceledBody := workflowRequestAs(t, router, http.MethodGet, "/workflow-runs/"+started.RunID, nil, http.StatusOK, "member-a", "member")
+	var canceled struct {
+		Run workflowdomain.Run `json:"run"`
+	}
+	require.NoError(t, json.Unmarshal(canceledBody, &canceled))
+	require.Equal(t, workflowdomain.RunStatusCanceled, canceled.Run.Status)
+
+	// Start a second run so the admin control path can continue through approval and restart.
+	startRequest["idempotency_key"] = "workflow-http-e2e-admin-control"
+	startedBody = workflowRequestAs(t, router, http.MethodPost, "/workflow-runs", startRequest, http.StatusAccepted, "member-a", "member")
+	require.NoError(t, json.Unmarshal(startedBody, &started))
+	require.True(t, workerA.RunOnce(ctx))
+	pausedBody = workflowRequestAs(t, router, http.MethodGet, "/workflow-runs/"+started.RunID, nil, http.StatusOK, "member-a", "member")
+	require.NoError(t, json.Unmarshal(pausedBody, &paused))
+	require.Equal(t, workflowdomain.RunStatusPaused, paused.Run.Status)
 
 	approval := paused.Approvals[0]
 	workflowRequest(t, router, http.MethodPost, "/workflow-approvals/"+approval.ID+"/decision", map[string]any{
@@ -214,22 +305,34 @@ func TestWorkflowHTTPPostgresWorkerApprovalRestartAndSSEE2E(t *testing.T) {
 		require.Equal(t, int64(i+1), event.SequenceNo)
 	}
 	cursor := page.Events[len(page.Events)/2].SequenceNo
-	req := httptest.NewRequest(http.MethodGet, "/workflow-runs/"+started.RunID+"/events/stream", nil)
-	req.Header.Set("Last-Event-ID", fmt.Sprint(cursor))
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	w := workflowSSERequestAs(t, router, "/workflow-runs/"+started.RunID+"/events/stream?after_sequence="+fmt.Sprint(cursor), "member-a", "member")
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.Equal(t, "text/event-stream", w.Header().Get("Content-Type"))
 	require.NotContains(t, w.Body.String(), fmt.Sprintf("id: %d\n", cursor))
 	require.Contains(t, w.Body.String(), fmt.Sprintf("id: %d\n", cursor+1))
+	var resumedIDs []int64
+	for _, line := range strings.Split(w.Body.String(), "\n") {
+		var id int64
+		if _, scanErr := fmt.Sscanf(line, "id: %d", &id); scanErr == nil {
+			resumedIDs = append(resumedIDs, id)
+		}
+	}
+	require.NotEmpty(t, resumedIDs)
+	for index, id := range resumedIDs {
+		require.Greater(t, id, cursor)
+		if index > 0 {
+			require.Greater(t, id, resumedIDs[index-1])
+		}
+	}
 
-	replayed := workflowRequest(t, router, http.MethodPost, "/workflow-runs", startRequest, http.StatusOK)
+	replayed := workflowRequestAs(t, router, http.MethodPost, "/workflow-runs", startRequest, http.StatusOK, "member-a", "member")
 	var replay struct {
 		RunID string `json:"run_id"`
 	}
 	require.NoError(t, json.Unmarshal(replayed, &replay))
 	require.Equal(t, started.RunID, replay.RunID)
-	workflowRequest(t, router, http.MethodPost, "/workflow-runs", map[string]any{
-		"version_id": version.ID, "input": map[string]any{"query": "different"}, "idempotency_key": "workflow-http-e2e",
-	}, http.StatusConflict)
+	workflowRequestAs(t, router, http.MethodPost, "/workflow-runs", map[string]any{
+		"version_id": version.ID, "task": "different", "fields": map[string]any{"region": "cn"},
+		"idempotency_key": "workflow-http-e2e-admin-control",
+	}, http.StatusConflict, "member-a", "member")
 }
