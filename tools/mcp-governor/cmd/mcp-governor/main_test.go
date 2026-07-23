@@ -547,6 +547,79 @@ func TestRunReportsConfigAndProcRootErrors(t *testing.T) {
 	}
 }
 
+func TestRunRenderConfigWritesStdoutAndPrivateAtomicFile(t *testing.T) {
+	root := t.TempDir()
+	catalog := filepath.Join("..", "..", "testdata", "catalog.json")
+	governor := filepath.Join(root, "mcp-governor")
+	writeFile(t, governor, []byte("binary"), 0o700)
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"render-config", "--config", catalog, "--client", "codex", "--governor", governor,
+		"--output", "-"}
+	if code := run(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "[mcp_servers.alpha]") || strings.Contains(stdout.String(), "claude-only") {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+
+	output := filepath.Join(root, "private", "mcp.toml")
+	args[len(args)-1] = output
+	if code := run(args, io.Discard, &stderr); code != 0 {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode=%#o, want 0600", info.Mode().Perm())
+	}
+	dirInfo, err := os.Stat(filepath.Dir(output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("directory mode=%#o, want 0700", dirInfo.Mode().Perm())
+	}
+}
+
+func TestRunRenderConfigRejectsUnsafeInputsWithoutLeakingArguments(t *testing.T) {
+	root := t.TempDir()
+	catalog := filepath.Join("..", "..", "testdata", "catalog.json")
+	governor := filepath.Join(root, "governor")
+	writeFile(t, governor, []byte("binary"), 0o700)
+	unsafeOutput := filepath.Join(root, "output.json")
+	writeFile(t, unsafeOutput, []byte("existing"), 0o644)
+	symlinkOutput := filepath.Join(root, "link.json")
+	if err := os.Symlink(unsafeOutput, symlinkOutput); err != nil {
+		t.Fatal(err)
+	}
+	secret := "do-not-print-secret-argument"
+	tests := []struct {
+		name string
+		args []string
+		code int
+	}{
+		{"missing output", []string{"render-config", "--config", catalog, "--client", "codex", "--governor", governor}, 2},
+		{"unknown client", []string{"render-config", "--config", catalog, "--client", "unknown", "--governor", governor, "--output", "-"}, 2},
+		{"missing governor", []string{"render-config", "--config", catalog, "--client", "codex", "--governor", filepath.Join(root, secret), "--output", "-"}, 1},
+		{"unsafe mode", []string{"render-config", "--config", catalog, "--client", "codex", "--governor", governor, "--output", unsafeOutput}, 1},
+		{"symlink", []string{"render-config", "--config", catalog, "--client", "codex", "--governor", governor, "--output", symlinkOutput}, 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			if code := run(test.args, io.Discard, &stderr); code != test.code {
+				t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+			}
+			if strings.Contains(stderr.String(), secret) {
+				t.Fatalf("stderr leaked argument: %q", stderr.String())
+			}
+		})
+	}
+}
+
 func TestRunRegistryHandling(t *testing.T) {
 	root := t.TempDir()
 	writeProcessFixture(t, root, "42", []string{"chroma-mcp", "--client-type"})

@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/clientconfig"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/config"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/identity"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/jsonstrict"
@@ -69,6 +70,10 @@ type reportOptions struct {
 	outputSet, allowPartial bool
 }
 
+type renderOptions struct {
+	configPath, client, governorPath, outputPath string
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -116,6 +121,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	case "render-config":
+		opts, err := parseRenderArgs(args)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			fmt.Fprintln(stderr, renderUsage)
+			return 2
+		}
+		if err := runRenderConfig(opts, stdout); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 		printUsage(stderr)
@@ -127,7 +144,49 @@ const proxyUsage = "usage: mcp-governor proxy --config PATH --client CLIENT --se
 	"[--session PID:START_TICKS] [--repository PATH] -- COMMAND [ARG...]"
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: mcp-governor snapshot|proxy|report ...")
+	fmt.Fprintln(w, "usage: mcp-governor snapshot|proxy|report|render-config ...")
+}
+
+const renderUsage = "usage: mcp-governor render-config --config PATH --client codex|claude|vscode|lingma " +
+	"--governor PATH --output PATH|-"
+
+func parseRenderArgs(args []string) (renderOptions, error) {
+	var opts renderOptions
+	if len(args) == 0 || args[0] != "render-config" {
+		return opts, errors.New("expected render-config command")
+	}
+	seen := make(map[string]bool)
+	for i := 1; i < len(args); i++ {
+		name := args[i]
+		if name != "--config" && name != "--client" && name != "--governor" && name != "--output" {
+			return opts, fmt.Errorf("unexpected argument")
+		}
+		if seen[name] {
+			return opts, fmt.Errorf("duplicate flag %s", name)
+		}
+		seen[name] = true
+		if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+			return opts, fmt.Errorf("flag %s requires a value", name)
+		}
+		i++
+		switch name {
+		case "--config":
+			opts.configPath = args[i]
+		case "--client":
+			opts.client = args[i]
+		case "--governor":
+			opts.governorPath = args[i]
+		case "--output":
+			opts.outputPath = args[i]
+		}
+	}
+	if opts.configPath == "" || opts.client == "" || opts.governorPath == "" || opts.outputPath == "" {
+		return opts, errors.New("--config, --client, --governor, and --output are required")
+	}
+	if !knownClient(opts.client) {
+		return opts, errors.New("--client must be codex, claude, vscode, or lingma")
+	}
+	return opts, nil
 }
 
 func parseReportArgs(args []string) (reportOptions, error) {
@@ -1087,6 +1146,71 @@ func pruneEventFile(candidate eventFile, boundary time.Time) error {
 	}
 	if err := syscall.Unlinkat(dirFD, name); err != nil {
 		return fmt.Errorf("prune expired event file: %w", err)
+	}
+	return nil
+}
+
+func runRenderConfig(opts renderOptions, stdout io.Writer) error {
+	governorInfo, err := os.Stat(opts.governorPath)
+	if err != nil || !governorInfo.Mode().IsRegular() || governorInfo.Mode().Perm()&0o111 == 0 {
+		return errors.New("governor must be an existing executable regular file")
+	}
+	file, err := os.Open(opts.configPath)
+	if err != nil {
+		return errors.New("open render catalog")
+	}
+	cfg, decodeErr := config.Decode(file)
+	closeErr := file.Close()
+	if decodeErr != nil {
+		return fmt.Errorf("decode render catalog: %w", decodeErr)
+	}
+	if closeErr != nil {
+		return errors.New("close render catalog")
+	}
+	if cfg.Version != 2 {
+		return errors.New("render-config requires config version 2")
+	}
+	client := config.Client(opts.client)
+	services := make([]config.ServiceRule, 0, len(cfg.Services))
+	for _, service := range cfg.Services {
+		if serviceEnabled(service, client) && service.Transport == config.TransportStdio &&
+			service.Scope != config.ScopeRepository {
+			services = append(services, service)
+		}
+	}
+	data, err := clientconfig.Render(clientconfig.Options{
+		Client: client, ConfigPath: opts.configPath, GovernorPath: opts.governorPath, Services: services,
+	})
+	if err != nil {
+		return fmt.Errorf("render client config: %w", err)
+	}
+	if opts.outputPath == "-" {
+		if _, err := stdout.Write(data); err != nil {
+			return fmt.Errorf("write rendered config: %w", err)
+		}
+		return nil
+	}
+	if err := validateRenderOutput(opts.outputPath); err != nil {
+		return err
+	}
+	return writeAtomic(opts.outputPath, data)
+}
+
+func validateRenderOutput(path string) error {
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+			return errors.New("render output must be a private regular file")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.New("inspect render output")
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return errors.New("create render output directory")
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		return errors.New("render output directory must be private")
 	}
 	return nil
 }
