@@ -181,7 +181,7 @@ jq -r '
     "- Client: `" + .client + "`",
     "- Session: `" + .session_id + "`",
     "- Task: `" + .task_id + "`",
-    "- Repository: `" + .repository.root + "`",
+    "- Repository: " + (.repository.root | md),
     "- Commit: `" + .repository.commit + "`",
     "- Created: `" + .created_at + "`",
     "- Decision: `" + .decision + "`",
@@ -209,7 +209,7 @@ jq -r '
       ] +
       ([evidence]) +
       ["- Exclusions/counterexamples: " + ((.exclusions | join("; ")) | md)] +
-      (if has("claim_group") then ["- Claim group: `" + (.claim_group | md) + "`"] else [] end) +
+      (if has("claim_group") then ["- Claim group: " + (.claim_group | md)] else [] end) +
       (if has("consumption_purpose") then ["- Consumption purpose: " + (.consumption_purpose | md)] else [] end) +
       (if .destination == "obsidian" then [
         "- Knowledge type: `" + .knowledge_type + "`",

@@ -220,10 +220,12 @@ markdown_safe="$(valid_candidates | jq '
   .candidates[0].scope = "Scope * emphasis _ underline" |
   .candidates[0].target = "docs/`target`` # heading [link](target) | cell.md" |
   .candidates[0].evidence[0].path = "scripts/`evidence``#heading|cell.md" |
-  .candidates[0].evidence[0].anchor = "anchor```#heading[link](target)|cell"
+  .candidates[0].evidence[0].anchor = "anchor```#heading[link](target)|cell" |
+  .candidates[0].claim_group = "group```#heading[link](target)|cell"
 ')"
-write_marker "$repo_invalid" codex markdown-safe markdown-safe
-markdown_safe_path="$(run_report "$repo_invalid" codex markdown-safe markdown-safe "$markdown_safe")"
+repo_markdown_safe="$(new_repo 'markdown-root-`tick``')"
+write_marker "$repo_markdown_safe" codex markdown-safe markdown-safe
+markdown_safe_path="$(run_report "$repo_markdown_safe" codex markdown-safe markdown-safe "$markdown_safe")"
 grep -Fq 'Summary \# heading \[link\]\(target\) \`code\` \| cell' "$markdown_safe_path" || \
   fail "Markdown task summary was not escaped"
 grep -Fq 'Claim \# heading \[link\]\(target\) \`code\` \| cell' "$markdown_safe_path" || \
@@ -232,7 +234,12 @@ grep -Fq 'Target: docs/\`target\`\` \# heading \[link\]\(target\) \| cell.md' "$
   fail "Markdown target metacharacters were not escaped safely"
 grep -Fq 'Evidence: scripts/\`evidence\`\`\#heading\|cell.md\#anchor\`\`\`\#heading\[link\]\(target\)\|cell' \
   "$markdown_safe_path" || fail "Markdown evidence metacharacters were not escaped safely"
-if grep -E '^- Target: |^  - Evidence: ' "$markdown_safe_path" | grep -Eq '(^|[^\\])`'; then
+grep -Fq "Repository: ${repo_markdown_safe//\`/\\\`}" "$markdown_safe_path" || \
+  fail "Markdown repository root backticks were not escaped safely"
+grep -Fq 'Claim group: group\`\`\`\#heading\[link\]\(target\)\|cell' "$markdown_safe_path" || \
+  fail "Markdown claim group metacharacters were not escaped safely"
+if grep -E '^- Repository: |^- Target: |^  - Evidence: |^- Claim group: ' "$markdown_safe_path" | \
+  grep -Eq '(^|[^\\])`'; then
   fail "Markdown renderer emitted an unsafe code span delimiter"
 fi
 pass "Markdown metacharacters are escaped"
