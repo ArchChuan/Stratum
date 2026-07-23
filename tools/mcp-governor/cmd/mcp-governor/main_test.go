@@ -242,6 +242,42 @@ func TestSnapshotHistorySerializesDeduplicatesAndCapsSamples(t *testing.T) {
 	}
 }
 
+func TestSnapshotHistoryOlderPublisherCannotRegressBoundaryOrCurrent(t *testing.T) {
+	root := t.TempDir()
+	output := filepath.Join(root, "snapshot.json")
+	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	expired := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base}
+	newest := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base.Add(10 * 24 * time.Hour)}
+	olderFinishingLast := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base.Add(24 * time.Hour)}
+	var history bytes.Buffer
+	encoder := json.NewEncoder(&history)
+	for _, item := range []process.Snapshot{expired, newest} {
+		if err := encoder.Encode(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, output+".history.jsonl", history.Bytes(), 0o600)
+	writeFile(t, output+".history.jsonl.lock", nil, 0o600)
+	data, _ := json.Marshal(olderFinishingLast)
+	if err := publishSnapshotData(output, append(data, '\n'), olderFinishingLast, 7); err != nil {
+		t.Fatal(err)
+	}
+	gotHistory, err := decodeSnapshotHistory(output + ".history.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotHistory) != 1 || !gotHistory[0].CapturedAt.Equal(newest.CapturedAt) {
+		t.Fatalf("retained history=%+v, want only newest sample", gotHistory)
+	}
+	var current process.Snapshot
+	if err := json.Unmarshal(mustReadFile(t, output), &current); err != nil {
+		t.Fatal(err)
+	}
+	if !current.CapturedAt.Equal(newest.CapturedAt) {
+		t.Fatalf("current captured_at=%s, want newest %s", current.CapturedAt, newest.CapturedAt)
+	}
+}
+
 func TestPruneDoesNotUnlinkFileAppendedAfterReportRead(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "events")
 	w, err := observe.NewWriter(root, "codex", "session")

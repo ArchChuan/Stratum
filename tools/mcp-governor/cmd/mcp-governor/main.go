@@ -907,7 +907,7 @@ func decodeSnapshotHistoryLimited(path string, limit int) ([]process.Snapshot, e
 	return ordered, nil
 }
 
-func publishSnapshotData(outputPath string, currentData []byte, snapshot process.Snapshot, retentionDays int) error {
+func publishSnapshotData(outputPath string, _ []byte, snapshot process.Snapshot, retentionDays int) error {
 	historyPath := outputPath + ".history.jsonl"
 	lockFD, err := syscall.Open(historyPath+".lock", syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
@@ -940,29 +940,26 @@ func publishSnapshotData(outputPath string, currentData []byte, snapshot process
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("inspect snapshot history: %w", statErr)
 	}
-	boundary := snapshot.CapturedAt.AddDate(0, 0, -retentionDays)
-	kept := make([]process.Snapshot, 0, min(len(existing)+1, maxSamples))
-	for _, item := range existing {
+	merged := make([]process.Snapshot, 0, min(len(existing)+1, maxSamples+1))
+	merged = append(merged, existing...)
+	merged = append(merged, snapshot)
+	for _, item := range merged {
 		validator, _ := report.NewAccumulator(item.CapturedAt.Add(-time.Nanosecond), item.CapturedAt.Add(time.Nanosecond))
 		if err := validator.AddSnapshot(item); err != nil {
 			return fmt.Errorf("validate snapshot history: %w", err)
 		}
-		if !item.CapturedAt.Before(boundary) {
-			kept = append(kept, item)
-		}
 	}
-	kept = append(kept, snapshot)
-	sort.Slice(kept, func(i, j int) bool {
-		if !kept[i].CapturedAt.Equal(kept[j].CapturedAt) {
-			return kept[i].CapturedAt.Before(kept[j].CapturedAt)
+	sort.Slice(merged, func(i, j int) bool {
+		if !merged[i].CapturedAt.Equal(merged[j].CapturedAt) {
+			return merged[i].CapturedAt.Before(merged[j].CapturedAt)
 		}
-		left, _ := json.Marshal(kept[i])
-		right, _ := json.Marshal(kept[j])
+		left, _ := json.Marshal(merged[i])
+		right, _ := json.Marshal(merged[j])
 		return bytes.Compare(left, right) < 0
 	})
-	deduplicated := kept[:0]
+	deduplicated := merged[:0]
 	var previous []byte
-	for _, item := range kept {
+	for _, item := range merged {
 		canonical, err := json.Marshal(item)
 		if err != nil {
 			return fmt.Errorf("canonicalize snapshot history: %w", err)
@@ -973,7 +970,14 @@ func publishSnapshotData(outputPath string, currentData []byte, snapshot process
 		deduplicated = append(deduplicated, item)
 		previous = canonical
 	}
-	kept = deduplicated
+	newestAt := deduplicated[len(deduplicated)-1].CapturedAt
+	boundary := newestAt.AddDate(0, 0, -retentionDays)
+	kept := deduplicated[:0]
+	for _, item := range deduplicated {
+		if !item.CapturedAt.Before(boundary) {
+			kept = append(kept, item)
+		}
+	}
 	if len(kept) > maxSamples {
 		kept = kept[len(kept)-maxSamples:]
 	}
@@ -987,6 +991,11 @@ func publishSnapshotData(outputPath string, currentData []byte, snapshot process
 	if err := writeAtomic(historyPath, data.Bytes()); err != nil {
 		return fmt.Errorf("write snapshot history: %w", err)
 	}
+	currentData, err := json.MarshalIndent(kept[len(kept)-1], "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode current snapshot: %w", err)
+	}
+	currentData = append(currentData, '\n')
 	if err := writeAtomic(outputPath, currentData); err != nil {
 		return fmt.Errorf("write current snapshot: %w", err)
 	}
