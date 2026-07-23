@@ -55,37 +55,34 @@ lock_path="$repo_root/tmp/knowledge-deposition/.lock"
 latest_path="$repo_root/tmp/knowledge-deposition/latest.md"
 
 mkdir -p "$report_dir" "$(dirname "$lock_path")"
-input_tmp="$(mktemp "$report_dir/.input.XXXXXX")"
 normalized_tmp="$(mktemp "$report_dir/.normalized.XXXXXX")"
 markdown_tmp=''
 latest_tmp=''
 cleanup() {
-  rm -f "$input_tmp" "$normalized_tmp"
+  rm -f "$normalized_tmp"
   [[ -z "$markdown_tmp" ]] || rm -f "$markdown_tmp"
   [[ -z "$latest_tmp" ]] || rm -f "$latest_tmp"
 }
 trap cleanup EXIT HUP INT TERM
 
-if ! jq -e 'select(type == "object")' >"$input_tmp" 2>/dev/null; then
-  knowledge_fail 'input must be one valid JSON object'
-  exit 1
-fi
-
-if ! jq \
+if ! jq -es \
   --arg client "$client" \
   --arg session "$session" \
   --arg task "$task" \
   --arg root "$repo_root" \
   --arg commit "$commit" \
   --arg created "$created_at" \
-  '. + {
-    schema_version: 1,
-    client: $client,
-    session_id: $session,
-    task_id: $task,
-    repository: {root: $root, commit: $commit},
-    created_at: $created
-  }' "$input_tmp" | knowledge_validate_normalize >"$normalized_tmp" 2>/dev/null; then
+  'if length == 1 and (.[0] | type == "object") then
+    .[0] + {
+      schema_version: 1,
+      client: $client,
+      session_id: $session,
+      task_id: $task,
+      repository: {root: $root, commit: $commit},
+      created_at: $created
+    }
+  else error("expected exactly one JSON object") end' 2>/dev/null |
+  knowledge_validate_normalize >"$normalized_tmp" 2>/dev/null; then
   knowledge_fail 'report JSON failed validation'
   exit 1
 fi
@@ -157,12 +154,13 @@ markdown_tmp=''
 latest_tmp="$(mktemp "$repo_root/tmp/knowledge-deposition/.latest.XXXXXX")"
 {
   printf '# Latest knowledge deposition reports\n'
-  find "$repo_root/tmp/knowledge-deposition" -mindepth 2 -name '*.md' -type f -print0 |
+  find "$repo_root/tmp/knowledge-deposition" -mindepth 2 -type f \
+    \( -name '*.json' -o -name '*.md' \) \
+    ! -path "$repo_root/tmp/knowledge-deposition/current/*" -print0 |
     sort -z |
     while IFS= read -r -d '' path; do
       relative="${path#"$repo_root/tmp/knowledge-deposition/"}"
-      label="${relative%.md}"
-      printf -- '- [%s](%s)\n' "$label" "$relative"
+      printf -- '- [%s](%s)\n' "$relative" "$relative"
     done
 } >"$latest_tmp"
 mv -f "$latest_tmp" "$latest_path"

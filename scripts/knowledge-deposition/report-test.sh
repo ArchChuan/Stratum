@@ -106,6 +106,12 @@ grep -Fq 'scripts/knowledge-deposition/report.sh#writer' "$output" || fail "vali
 if grep -Eiq 'transcript|prompt|password|secret|token|api_key|raw_response' "$output"; then
   fail "valid candidates: forbidden content persisted to Markdown"
 fi
+latest_valid="$repo/tmp/knowledge-deposition/latest.md"
+relative_base="$(basename "$(dirname "$output")")/$(basename "${output%.md}")"
+grep -Fq "[$relative_base.json]($relative_base.json)" "$latest_valid" || \
+  fail "valid candidates: latest pointer missing JSON artifact"
+grep -Fq "[$relative_base.md]($relative_base.md)" "$latest_valid" || \
+  fail "valid candidates: latest pointer missing Markdown artifact"
 pass "valid candidates are normalized and rendered"
 
 repo_none="$(new_repo none)"
@@ -166,6 +172,34 @@ expect_reject "unknown top-level fields are rejected" "$repo_invalid" \
 expect_reject "unknown candidate fields are rejected" "$repo_invalid" \
   "$(valid_candidates | jq '.candidates[0].unexpected = true')"
 
+write_marker "$repo_invalid" codex session-a task-a
+if printf '%s\n%s\n' "$(valid_none)" "$(valid_none)" | "$REPORT_SH" --client codex \
+  --session session-a --task task-a --repo-root "$repo_invalid" >/dev/null 2>&1; then
+  fail "two concatenated JSON objects were accepted"
+fi
+pass "two concatenated JSON objects are rejected"
+
+write_marker "$repo_invalid" codex session-a task-a
+if { printf '%s\n' "$(valid_none)"; printf '42\n'; } | "$REPORT_SH" --client codex \
+  --session session-a --task task-a --repo-root "$repo_invalid" >/dev/null 2>&1; then
+  fail "JSON object followed by scalar was accepted"
+fi
+pass "JSON object followed by scalar is rejected"
+
+raw_marker='forbidden-payload-must-never-persist-92741'
+write_marker "$repo_invalid" codex session-a task-a
+forbidden_payload="$(valid_candidates | jq --arg value "$raw_marker" '.candidates[0].secret = $value')"
+if run_report "$repo_invalid" codex session-a task-a "$forbidden_payload" >/dev/null 2>&1; then
+  fail "forbidden payload was accepted"
+fi
+if find "$repo_invalid/tmp/knowledge-deposition" -name '.input*' -print -quit | grep -q .; then
+  fail "rejected payload left an input staging file"
+fi
+if grep -RFl -- "$raw_marker" "$repo_invalid/tmp/knowledge-deposition" >/dev/null; then
+  fail "rejected payload persisted raw secret content"
+fi
+pass "rejected payload leaves no raw input staging or secret content"
+
 write_marker "$repo_invalid" codex session-a different-task
 if run_report "$repo_invalid" codex session-a task-a "$(valid_none)" >/dev/null 2>&1; then
   fail "task binding mismatch was accepted"
@@ -220,8 +254,10 @@ for report in "${reports[@]}"; do
   jq -e . "$report" >/dev/null || fail "invalid concurrent JSON: $report"
 done
 latest="$repo_concurrent/tmp/knowledge-deposition/latest.md"
-[[ "$(grep -c '^- \[' "$latest")" -eq 20 ]] || fail "latest pointer missing entries"
-if grep -Ev '^(# Latest knowledge deposition reports|- \[[^]]+\]\([^()]+\.md\))$' "$latest" | grep -q .; then
+[[ "$(grep -c '^- \[' "$latest")" -eq 40 ]] || fail "latest pointer missing paired artifact entries"
+[[ "$(grep -c '\.json)$' "$latest")" -eq 20 ]] || fail "latest pointer missing JSON entries"
+[[ "$(grep -c '\.md)$' "$latest")" -eq 20 ]] || fail "latest pointer missing Markdown entries"
+if grep -Ev '^(# Latest knowledge deposition reports|- \[[^]]+\]\([^()]+\.(json|md)\))$' "$latest" | grep -q .; then
   fail "latest pointer contains partial or malformed lines"
 fi
 pass "20 concurrent writers produce complete reports and latest pointer"
