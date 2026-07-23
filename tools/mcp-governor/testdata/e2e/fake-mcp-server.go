@@ -15,6 +15,9 @@ func main() {
 		mode = os.Args[1]
 	}
 	switch mode {
+	case "duplex":
+		_, _ = io.WriteString(os.Stdout, "server-line\n")
+		_, _ = io.Copy(io.Discard, os.Stdin)
 	case "rpc":
 		_, _ = io.WriteString(os.Stderr, "fake-server: rpc ready\n")
 		scanner := bufio.NewScanner(os.Stdin)

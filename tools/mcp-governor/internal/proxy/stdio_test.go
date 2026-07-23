@@ -160,6 +160,53 @@ func TestRunStopsReadingAfterMessageLimit(t *testing.T) {
 	}
 }
 
+func TestForwardLinesPreservesReadAheadAndDeferredErrors(t *testing.T) {
+	deferredErr := errors.New("deferred source failure")
+	tests := []struct {
+		name  string
+		data  string
+		err   error
+		max   int
+		lines []string
+	}{
+		{name: "delimiter and final tail with EOF", data: "first\nsecond", err: io.EOF, max: 64,
+			lines: []string{"first\n", "second"}},
+		{name: "newline at maximum with next line", data: "abcd\nnext\n", err: io.EOF, max: 5,
+			lines: []string{"abcd\n", "next\n"}},
+		{name: "several lines and final unterminated", data: "one\ntwo\nthree", err: io.EOF, max: 64,
+			lines: []string{"one\n", "two\n", "three"}},
+		{name: "tail before non EOF error", data: "first\nsecond", err: deferredErr, max: 64,
+			lines: []string{"first\n", "second"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			err := forwardLines(context.Background(), "client", &singleReadReader{data: []byte(tt.data), err: tt.err},
+				tt.max, func(line []byte) error {
+					got = append(got, string(line))
+					return nil
+				})
+			if strings.Join(got, "") != tt.data {
+				t.Fatalf("forwarded = %q, want exact %q; lines=%q", strings.Join(got, ""), tt.data, got)
+			}
+			if len(got) != len(tt.lines) {
+				t.Fatalf("lines = %q, want %q", got, tt.lines)
+			}
+			for i := range got {
+				if got[i] != tt.lines[i] {
+					t.Fatalf("line %d = %q, want %q", i, got[i], tt.lines[i])
+				}
+			}
+			if tt.err == deferredErr && !errors.Is(err, deferredErr) {
+				t.Fatalf("forwardLines() error = %v, want deferred error", err)
+			}
+			if tt.err == io.EOF && err != nil {
+				t.Fatalf("forwardLines() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
 func TestRunClientEOFAndChildExit(t *testing.T) {
 	server := buildFakeServer(t)
 	if err := Run(context.Background(), Options{
@@ -329,6 +376,34 @@ func TestRunDetectsShortWritesBeforeObservation(t *testing.T) {
 	})
 }
 
+func TestRunForwardsBothDirectionsWithoutWriteSerialization(t *testing.T) {
+	server := buildFakeServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	barrier := newWriteBarrier(ctx, 2)
+	request := `{"id":1,"method":"tools/call","params":{"name":"echo"}}` + "\n"
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{
+			Command: server, Args: []string{"duplex"}, Stdin: strings.NewReader(request),
+			Stdout: barrier.Writer(io.Discard), Stderr: io.Discard,
+			wrapChildStdin: func(closer io.WriteCloser) io.WriteCloser {
+				return &barrierWriteCloser{WriteCloser: closer, writer: barrier.Writer(closer)}
+			},
+		})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("opposite-direction writes were serialized")
+	}
+}
+
 func TestRunJoinsPrimaryAndCleanupErrors(t *testing.T) {
 	server := buildFakeServer(t)
 	stdinCloseErr := errors.New("close child stdin")
@@ -451,6 +526,67 @@ type countingByteReader struct {
 	value     byte
 	read      atomic.Int64
 }
+
+type singleReadReader struct {
+	data   []byte
+	err    error
+	offset int
+}
+
+func (r *singleReadReader) Read(p []byte) (int, error) {
+	if r.offset == len(r.data) {
+		return 0, r.err
+	}
+	n := copy(p, r.data[r.offset:])
+	r.offset += n
+	if r.offset == len(r.data) {
+		return n, r.err
+	}
+	return n, nil
+}
+
+type writeBarrier struct {
+	ctx     context.Context
+	mu      sync.Mutex
+	needed  int
+	entered int
+	release chan struct{}
+}
+
+func newWriteBarrier(ctx context.Context, needed int) *writeBarrier {
+	return &writeBarrier{ctx: ctx, needed: needed, release: make(chan struct{})}
+}
+
+func (b *writeBarrier) Writer(dst io.Writer) io.Writer {
+	return barrierWriter{barrier: b, dst: dst}
+}
+
+type barrierWriter struct {
+	barrier *writeBarrier
+	dst     io.Writer
+}
+
+func (w barrierWriter) Write(p []byte) (int, error) {
+	w.barrier.mu.Lock()
+	w.barrier.entered++
+	if w.barrier.entered == w.barrier.needed {
+		close(w.barrier.release)
+	}
+	w.barrier.mu.Unlock()
+	select {
+	case <-w.barrier.release:
+		return w.dst.Write(p)
+	case <-w.barrier.ctx.Done():
+		return 0, w.barrier.ctx.Err()
+	}
+}
+
+type barrierWriteCloser struct {
+	io.WriteCloser
+	writer io.Writer
+}
+
+func (w *barrierWriteCloser) Write(p []byte) (int, error) { return w.writer.Write(p) }
 
 func (r *countingByteReader) Read(p []byte) (int, error) {
 	if r.remaining == 0 {

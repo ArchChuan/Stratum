@@ -86,7 +86,7 @@ func Run(ctx context.Context, options Options) error {
 	}
 
 	var eventMu sync.Mutex
-	var trackerMu sync.Mutex
+	gate := newObservationGate()
 	writeEvents := func(events []observe.Event) error {
 		if options.Events == nil {
 			return nil
@@ -107,8 +107,10 @@ func Run(ctx context.Context, options Options) error {
 	results := make(chan result, 2)
 	go func() {
 		results <- result{"client", forwardLines(childCtx, "client", options.Stdin, maxBytes, func(line []byte) error {
-			trackerMu.Lock()
-			defer trackerMu.Unlock()
+			if options.Tracker != nil {
+				gate.beginClient()
+				defer gate.finishClient()
+			}
 			if err := writeFull(childIn, line); err != nil {
 				return err
 			}
@@ -120,13 +122,14 @@ func Run(ctx context.Context, options Options) error {
 	}()
 	go func() {
 		results <- result{"child", forwardLines(childCtx, "server", childOut, maxBytes, func(line []byte) error {
-			trackerMu.Lock()
-			defer trackerMu.Unlock()
 			if err := writeFull(options.Stdout, line); err != nil {
 				return err
 			}
 			if options.Tracker == nil {
 				return nil
+			}
+			if err := gate.waitClient(childCtx); err != nil {
+				return err
 			}
 			return writeEvents(options.Tracker.ServerMessage(line))
 		})}
@@ -304,6 +307,7 @@ type lineLimitedReader struct {
 	remaining int
 	maximum   int
 	pending   []byte
+	deferred  error
 }
 
 func (r *lineLimitedReader) Read(p []byte) (int, error) {
@@ -314,12 +318,15 @@ func (r *lineLimitedReader) Read(p []byte) (int, error) {
 		p = p[:r.remaining]
 	}
 	var n int
-	var err error
+	var readErr error
 	if len(r.pending) > 0 {
 		n = copy(p, r.pending)
 		r.pending = r.pending[n:]
+		if len(r.pending) == 0 {
+			readErr = r.deferred
+		}
 	} else {
-		n, err = r.reader.Read(p)
+		n, readErr = r.reader.Read(p)
 	}
 	if index := bytes.IndexByte(p[:n], '\n'); index >= 0 {
 		lineBytes := index + 1
@@ -327,12 +334,62 @@ func (r *lineLimitedReader) Read(p []byte) (int, error) {
 			tail := append([]byte(nil), p[lineBytes:n]...)
 			r.pending = append(tail, r.pending...)
 		}
+		if readErr != nil {
+			r.deferred = readErr
+		}
 		n = lineBytes
 		r.remaining = r.maximum
+		return n, nil
 	} else {
 		r.remaining -= n
 	}
-	return n, err
+	if len(r.pending) > 0 {
+		return n, nil
+	}
+	if readErr != nil {
+		r.deferred = nil
+	}
+	return n, readErr
+}
+
+type observationGate struct {
+	mu       sync.Mutex
+	inFlight bool
+	done     chan struct{}
+}
+
+func newObservationGate() *observationGate { return &observationGate{} }
+
+func (g *observationGate) beginClient() {
+	g.mu.Lock()
+	g.inFlight = true
+	g.done = make(chan struct{})
+	g.mu.Unlock()
+}
+
+func (g *observationGate) finishClient() {
+	g.mu.Lock()
+	if g.inFlight {
+		g.inFlight = false
+		close(g.done)
+	}
+	g.mu.Unlock()
+}
+
+func (g *observationGate) waitClient(ctx context.Context) error {
+	g.mu.Lock()
+	if !g.inFlight {
+		g.mu.Unlock()
+		return nil
+	}
+	done := g.done
+	g.mu.Unlock()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func writeFull(dst io.Writer, data []byte) error {
