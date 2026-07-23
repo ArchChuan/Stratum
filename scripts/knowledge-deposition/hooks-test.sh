@@ -42,8 +42,14 @@ valid_none() {
 
 marker_value() { jq -er '.task_id' "$1/tmp/knowledge-deposition/current/$2-$3.json"; }
 
-wait_for_exact_lock_block() {
-  local root_pid="$1" lock="$2" deadline=$((SECONDS + 5)) pid fd target wchan index child children
+wait_for_file() {
+  local path="$1" deadline=$((SECONDS + 5))
+  while (( SECONDS < deadline )); do [[ -e "$path" ]] && return 0; sleep 0.02; done
+  return 1
+}
+
+wait_for_exact_lock_fd() {
+  local root_pid="$1" lock="$2" deadline=$((SECONDS + 5)) pid fd target index child children
   local -a processes
   while (( SECONDS < deadline )); do
     processes=("$root_pid")
@@ -56,8 +62,6 @@ wait_for_exact_lock_block() {
     done
     for pid in "${processes[@]}"; do
       [[ -d "/proc/$pid/fd" ]] || continue
-      wchan="$(cat "/proc/$pid/wchan" 2>/dev/null || true)"
-      [[ "$wchan" == *lock*wait* ]] || continue
       for fd in /proc/"$pid"/fd/*; do
         target="$(readlink -f "$fd" 2>/dev/null || true)"
         [[ "$target" == "$lock" ]] && return 0
@@ -284,29 +288,50 @@ race_task="$(jq -r '.systemMessage | capture("--task (?<v>[^ ]+) --repo-root").v
 race_key="$(jq -r '.systemMessage | capture("--session (?<v>[^ ]+) --task").v' <<<"$race_start")"
 printf '%s' "$(valid_none)" | "$REPORT" --client codex --session "$race_key" --task "$race_task" --repo-root "$repo_race" >/dev/null
 race_lock="$repo_race/tmp/knowledge-deposition/.lock/report.lock"
-exec {race_fd}<"$race_lock"
-flock "$race_fd"
-run_hook "$CODEX_START" "$(payload "$repo_race" race-session UserPromptSubmit)" >"$FIXTURES/race-start.out" &
+race_marker="$repo_race/tmp/knowledge-deposition/current/codex-$race_key.json"
+race_bin="$FIXTURES/race-bin"
+race_ready="$FIXTURES/race.ready"
+race_continue="$FIXTURES/race.continue"
+real_mv="$(command -v mv)"
+mkdir -p "$race_bin"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  'destination="${!#}"' \
+  'if [[ "$destination" == "$KD_TEST_MARKER" ]]; then' \
+  '  ready_tmp="$KD_TEST_READY.$$"' \
+  '  printf "ready\n" >"$ready_tmp"' \
+  '  "$KD_TEST_REAL_MV" "$ready_tmp" "$KD_TEST_READY"' \
+  '  deadline=$((SECONDS + 5))' \
+  '  while [[ ! -e "$KD_TEST_CONTINUE" && $SECONDS -lt $deadline ]]; do sleep 0.02; done' \
+  '  [[ -e "$KD_TEST_CONTINUE" ]] || exit 74' \
+  'fi' \
+  'exec "$KD_TEST_REAL_MV" "$@"' >"$race_bin/mv"
+chmod +x "$race_bin/mv"
+PATH="$race_bin:$PATH" KD_TEST_MARKER="$race_marker" KD_TEST_READY="$race_ready" \
+  KD_TEST_CONTINUE="$race_continue" KD_TEST_REAL_MV="$real_mv" \
+  run_hook "$CODEX_START" "$(payload "$repo_race" race-session UserPromptSubmit)" >"$FIXTURES/race-start.out" &
 race_start_pid=$!
-wait_for_exact_lock_block "$race_start_pid" "$race_lock" || {
+wait_for_file "$race_ready" || {
   kill "$race_start_pid" 2>/dev/null || true
-  fail "task-start was not observably blocked on the exact shared lock"
+  fail "task-start did not reach the marker replacement handshake"
 }
 run_hook "$CODEX_STOP" "$(payload "$repo_race" race-session Stop false)" >"$FIXTURES/race-check.out" &
 race_check_pid=$!
-wait_for_exact_lock_block "$race_check_pid" "$race_lock" || {
+wait_for_exact_lock_fd "$race_check_pid" "$race_lock" || {
   kill "$race_start_pid" "$race_check_pid" 2>/dev/null || true
-  fail "checker was not observably blocked on the exact shared lock"
+  : >"$race_continue"
+  fail "checker did not open the exact shared lock while task-start held it"
 }
-flock -u "$race_fd"
-exec {race_fd}>&-
+kill -0 "$race_check_pid" 2>/dev/null || fail "checker completed before marker replacement continued"
+[[ ! -s "$FIXTURES/race-check.out" ]] || fail "checker emitted a result while task-start held the lock"
+: >"$race_continue"
 for pid in "$race_start_pid" "$race_check_pid"; do
   for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.02; done
   kill -0 "$pid" 2>/dev/null && { kill "$pid" 2>/dev/null || true; fail "ordered lock contender exceeded bounded wait"; }
   wait "$pid" || fail "ordered lock contender failed"
 done
 jq -e '.decision == "block"' "$FIXTURES/race-check.out" >/dev/null || fail "checker approved stale task during marker advance"
-pass "observed shared-lock ordering prevents stale checker approval"
+pass "mv handshake proves checker waits for marker replacement under the shared lock"
 
 claude_repo="$(new_repo claude-stop)"
 claude_start="$(run_hook "$CLAUDE_START" "$(payload "$claude_repo" claude-stop-session UserPromptSubmit)")"
