@@ -14,6 +14,7 @@ interface RetryableConfig extends InternalAxiosRequestConfig {
 type TokenRef = { current: string | null };
 type LogoutHandler = () => void;
 type StreamEventHandler = (event: unknown) => boolean | void;
+export interface ServerSentEvent { id?: string; event?: string; data: unknown }
 
 const api: AxiosInstance = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '',
@@ -185,6 +186,39 @@ const parseStreamError = async (response: Response): Promise<Error> => {
   }
 };
 
+const consumeSSE = async (
+  response: Response,
+  ctrl: AbortController,
+  onEvent: (event: ServerSentEvent) => boolean | void,
+  onClose?: () => void,
+) => {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('No readable stream');
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) { onClose?.(); return; }
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() ?? '';
+    for (const part of parts) {
+      if (part.startsWith(':')) continue;
+      const lines = part.split('\n');
+      const data = lines.filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart()).join('\n');
+      if (!data) continue;
+      let parsed: unknown;
+      try { parsed = JSON.parse(data); } catch { continue; }
+      const envelope: ServerSentEvent = {
+        id: lines.find((line) => line.startsWith('id:'))?.slice(3).trim(),
+        event: lines.find((line) => line.startsWith('event:'))?.slice(6).trim(),
+        data: parsed,
+      };
+      if (onEvent(envelope) === false) { ctrl.abort(); return; }
+    }
+  }
+};
+
 export const streamApiEvents = (
   path: string,
   payload: unknown,
@@ -222,47 +256,40 @@ export const streamApiEvents = (
 
     if (!response.ok) throw await parseStreamError(response);
 
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('No readable stream');
-
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        onClose?.();
-        return;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split('\n\n');
-      buffer = parts.pop() ?? '';
-
-      for (const part of parts) {
-        const data = part
-          .split('\n')
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).trimStart())
-          .join('\n');
-        if (!data) continue;
-        let event: unknown;
-        try {
-          event = JSON.parse(data);
-        } catch {
-          // malformed chunk, skip
-          continue;
-        }
-        const shouldContinue = onEvent(event);
-        if (shouldContinue === false) return;
-      }
-    }
+    await consumeSSE(response, ctrl, (event) => onEvent(event.data), onClose);
   };
 
   run().catch((err: Error) => {
     if (err.name !== 'AbortError') onError(err);
   });
 
+  return ctrl;
+};
+
+export const streamApiGet = (
+  path: string,
+  { lastEventId, onEvent, onClose, onError }: {
+    lastEventId?: string;
+    onEvent: (event: ServerSentEvent) => boolean | void;
+    onClose?: () => void;
+    onError: (error: Error) => void;
+  },
+): AbortController => {
+  const ctrl = new AbortController();
+  const run = async () => {
+    if (!_authReady && !isPublicRequest(path)) {
+      try { await waitWithTimeout(_authReadyPromise, AUTH_READY_TIMEOUT_MS); } catch { /* backend handles auth */ }
+    }
+    const headers: Record<string, string> = { Accept: 'text/event-stream' };
+    if (_tokenRef.current) headers.Authorization = `Bearer ${_tokenRef.current}`;
+    if (lastEventId) headers['Last-Event-ID'] = lastEventId;
+    const response = await fetch(`${api.defaults.baseURL || ''}${path}`, {
+      method: 'GET', headers, credentials: 'include', signal: ctrl.signal,
+    });
+    if (!response.ok) throw await parseStreamError(response);
+    await consumeSSE(response, ctrl, onEvent, onClose);
+  };
+  run().catch((error: Error) => { if (error.name !== 'AbortError') onError(error); });
   return ctrl;
 };
 

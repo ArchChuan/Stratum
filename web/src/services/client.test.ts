@@ -5,6 +5,7 @@ import api, {
   markAuthReady,
   resetAuthReady,
   setupApiInterceptors,
+  streamApiGet,
   streamApiEvents,
 } from './client';
 
@@ -113,5 +114,17 @@ describe('api client', () => {
     }));
     expect(onClose).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('streams resumable GET SSE with shared auth, cookies, and Last-Event-ID', async () => {
+    getTokenRef().current = 'run-token';
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({ start(controller) { controller.enqueue(encoder.encode('id: 9\nevent: workflow.node_completed\ndata: {"sequence_no":9}\n\n')); controller.close(); } });
+    const fetchMock = vi.fn().mockResolvedValue(new Response(stream));
+    vi.stubGlobal('fetch', fetchMock);
+    const onEvent = vi.fn();
+    streamApiGet('/workflow-runs/run-1/events/stream', { lastEventId: '8', onEvent, onError: vi.fn() });
+    await vi.waitFor(() => expect(onEvent).toHaveBeenCalledWith({ id: '9', event: 'workflow.node_completed', data: { sequence_no: 9 } }));
+    expect(fetchMock).toHaveBeenCalledWith('/workflow-runs/run-1/events/stream', expect.objectContaining({ method: 'GET', credentials: 'include', headers: expect.objectContaining({ Authorization: 'Bearer run-token', 'Last-Event-ID': '8' }) }));
   });
 });
