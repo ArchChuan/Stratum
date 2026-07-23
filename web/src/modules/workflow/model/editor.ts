@@ -16,6 +16,7 @@ export type WorkflowEditorAction =
   | { type: 'node.insert'; nodeId: string; nodeType: WorkflowNodeType; position: XYPosition }
   | { type: 'node.move'; nodeId: string; position: XYPosition }
   | { type: 'node.rename'; nodeId: string; name: string }
+  | { type: 'node.update'; node: WorkflowNode }
   | { type: 'node.delete'; nodeId: string }
   | { type: 'edge.connect'; edgeId: string; from: string; to: string; conditionValue?: boolean; isDefault?: boolean }
   | { type: 'edge.delete'; edgeId: string }
@@ -79,6 +80,15 @@ export const workflowEditorReducer = (
         spec: {
           ...state.spec,
           nodes: state.spec.nodes.map((node) => node.id === action.nodeId ? { ...node, name: action.name } : node),
+        },
+        dirty: true,
+      };
+    case 'node.update':
+      return {
+        ...state,
+        spec: {
+          ...state.spec,
+          nodes: state.spec.nodes.map((node) => node.id === action.node.id ? action.node : node),
         },
         dirty: true,
       };
