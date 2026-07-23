@@ -17,10 +17,8 @@ knowledge_payload_fields() {
 
 knowledge_malformed_response() {
   local input="$1" cwd root
-  cwd="$(jq -er 'select(type == "object") | .cwd | select(type == "string" and length > 0)' <<<"$input" 2>/dev/null)" || {
-    knowledge_quiet_allow
-    return
-  }
+  cwd="$(jq -er 'select(type == "object") | .cwd | select(type == "string" and length > 0)' <<<"$input" 2>/dev/null)" || \
+    cwd="$(pwd -P 2>/dev/null)" || { knowledge_quiet_allow; return; }
   root="$(knowledge_resolve_root "$cwd")" || { knowledge_quiet_allow; return; }
   knowledge_block "knowledge deposition: malformed hook payload for Stratum repository $root"
 }

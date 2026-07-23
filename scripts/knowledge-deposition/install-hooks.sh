@@ -21,6 +21,13 @@ repo_root="$2"
 [[ "$repo_root" == /* ]] || fail "--repo-root must be absolute"
 [[ -d "$repo_root" && ! -L "$repo_root" ]] || fail "repository root is not a safe directory"
 knowledge_is_stratum_root "$repo_root" || fail "repository root is not Stratum"
+repo_root="$(realpath -e "$repo_root")" || fail "repository root cannot be resolved"
+git_top="$(git -C "$repo_root" rev-parse --show-toplevel 2>/dev/null)" || fail "repository root is not a Git worktree"
+git_dir="$(git -C "$repo_root" rev-parse --absolute-git-dir 2>/dev/null)" || fail "repository Git directory is unavailable"
+git_common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || \
+  fail "repository common Git directory is unavailable"
+[[ "$(realpath -e "$git_top")" == "$repo_root" && "$(realpath -e "$git_dir")" == "$(realpath -e "$git_common_dir")" ]] || \
+  fail "repository root must be the primary Stratum checkout"
 
 script_root="$repo_root/scripts/knowledge-deposition"
 runtime_files=(common.sh hook-core.sh check.sh report.sh codex-task-start.sh codex-stop.sh claude-task-start.sh claude-stop.sh install-hooks.sh)

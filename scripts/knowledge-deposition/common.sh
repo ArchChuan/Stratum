@@ -137,6 +137,11 @@ knowledge_validate_normalize() {
       (($text | test("[[:cntrl:]]")) | not) and
       (($text | test("(?i)bearer[[:space:]]+[A-Za-z0-9._~+/-]{12,}")) | not) and
       (($text | test("(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}")) | not) and
+      (($text | test("(^|[^A-Z0-9])(AKIA|ASIA)[A-Z0-9]{16}([^A-Z0-9]|$)")) | not) and
+      (($text | test("(^|[^A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{20,}")) | not) and
+      (($text | test("-----BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY-----")) | not) and
+      (($text | test("(?i)(postgres(?:ql)?|mysql|mariadb|mongodb(?:\\+srv)?|redis)://[^[:space:]/:@]+:[^[:space:]@/]+@")) | not) and
+      (($text | test("(^|[^A-Za-z0-9])xox[baprs]-[A-Za-z0-9-]{20,}")) | not) and
       (($text | test("[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}")) | not) and
       (($text | test("(?i)(token|api[_-]?key)[[:space:]]*[:=][[:space:]]*[^[:space:]]{12,}")) | not);
     def evidence_valid:

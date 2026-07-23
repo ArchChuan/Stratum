@@ -318,10 +318,17 @@ done
 pass "stale module identity is treated as non-Stratum by all adapters"
 
 for adapter in "$CODEX_START" "$CODEX_STOP" "$CLAUDE_START" "$CLAUDE_STOP"; do
-  out="$(printf '{bad' | "$adapter")"
-  jq -e '.decision == "block" or (.continue == true and .suppressOutput == true)' <<<"$out" >/dev/null || fail "malformed payload response invalid"
+  out="$(cd "$actual_root" && printf '{bad' | "$adapter")"
+  jq -e '.decision == "block" and .continue == false and (.reason | contains("malformed hook payload"))' \
+    <<<"$out" >/dev/null || fail "malformed payload inside Stratum did not fail closed: $adapter"
+  out="$(cd "$actual_root" && printf '%s' '{"session_id":"missing-cwd"}' | "$adapter")"
+  jq -e '.decision == "block" and .continue == false and (.reason | contains("malformed hook payload"))' \
+    <<<"$out" >/dev/null || fail "missing cwd inside Stratum did not fail closed: $adapter"
+  out="$(cd "$other" && printf '{bad' | "$adapter")"
+  jq -e '.continue == true and .suppressOutput == true' <<<"$out" >/dev/null || \
+    fail "malformed payload outside Stratum was not quietly allowed: $adapter"
 done
-pass "malformed payloads fail closed when repository scope is knowable"
+pass "malformed or cwd-less payloads use trusted process cwd for repository scope"
 
 failure_bin="$FIXTURES/failure-bin"
 mkdir -p "$failure_bin"
@@ -480,6 +487,15 @@ jq -n '{theme:"dark",hooks:{UserPromptSubmit:[{matcher:"keep-metadata"},{matcher
 jq -n '{permissions:{allow:["Read"]},hooks:{UserPromptSubmit:[{hooks:[{type:"command",command:"echo claude-start"},{type:"command",command:"bash /old/repo\\;meta/scripts/knowledge-deposition/claude-task-start.sh"}]}],Stop:[{hooks:[{type:"command",command:"echo claude-stop"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/claude-stop.sh"},{type:"command",command:"true && bash /prior/scripts/knowledge-deposition/claude-stop.sh"}]}]}}' >"$claude_config"
 codex_original="$(cat "$codex_config")"
 claude_original="$(cat "$claude_config")"
+linked_installer_repo="$FIXTURES/installer-linked"
+git -C "$installer_repo" worktree add -q -b installer-linked "$linked_installer_repo"
+if CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$claude_config" \
+  run_installer --repo-root "$linked_installer_repo" >/dev/null 2>&1; then
+  fail "installer accepted a linked worktree"
+fi
+cmp -s "$codex_config" <(printf '%s\n' "$codex_original") || fail "linked worktree rejection mutated Codex config"
+cmp -s "$claude_config" <(printf '%s\n' "$claude_original") || fail "linked worktree rejection mutated Claude config"
+pass "installer accepts only a primary Stratum checkout"
 runtime_files=(common.sh hook-core.sh check.sh report.sh codex-task-start.sh codex-stop.sh claude-task-start.sh claude-stop.sh install-hooks.sh)
 for missing_runtime in "${runtime_files[@]}"; do
   bundle_repo="$(new_repo "bundle-${missing_runtime%.sh}")"

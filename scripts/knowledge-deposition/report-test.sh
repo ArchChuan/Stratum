@@ -87,10 +87,13 @@ run_report() {
     --client "$client" --session "$session" --task "$task" --repo-root "$repo"
 }
 
+reject_counter=0
 expect_reject() {
-  local name="$1" repo="$2" input="$3"
-  write_marker "$repo" codex session-a task-a
-  if run_report "$repo" codex session-a task-a "$input" >"$FIXTURE_ROOT/out" 2>"$FIXTURE_ROOT/err"; then
+  local name="$1" repo="$2" input="$3" task
+  reject_counter=$((reject_counter + 1))
+  task="reject-$reject_counter"
+  write_marker "$repo" codex session-a "$task"
+  if run_report "$repo" codex session-a "$task" "$input" >"$FIXTURE_ROOT/out" 2>"$FIXTURE_ROOT/err"; then
     fail "$name: unexpectedly accepted"
   fi
   pass "$name"
@@ -215,6 +218,11 @@ pass "rejected payload leaves no raw input staging or secret content"
 for sensitive_value in \
   'Bearer '"abcdefghijklmnopqrstuvwxyz" \
   'sk-'"abcdefghijklmnopqrstuvwxyz123456" \
+  'AKIA''IOSFODNN7EXAMPLE' \
+  'ghp_''1234567890abcdefghijklmnopqrstuvwxyz' \
+  $'-----BEGIN PRIVATE ''KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----' \
+  'postgresql://report_user:correct-horse-battery-staple@db.example.com:5432/stratum' \
+  'xoxb-''123456789012-123456789012-abcdefghijklmnopqrstuvwx' \
   'eyJhbGciOiJIUzI1NiJ9''.''eyJzdWIiOiIxMjM0NTY3ODkwIn0''.''c2lnbmF0dXJlMTIzNDU2' \
   'token='"abcdefghijklmnopqrstuvwxyz" \
   'API_KEY: '"abcdefghijklmnopqrstuvwxyz"; do
