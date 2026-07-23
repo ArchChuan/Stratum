@@ -103,7 +103,7 @@ func TestRunProxyRejectsServiceNotEnabledForClient(t *testing.T) {
 
 func TestRunProxyRejectsCommandNotClassifiedAsService(t *testing.T) {
 	root := t.TempDir()
-	configPath := writeProxyConfig(t, root, "codex", "user")
+	configPath := writeProxyConfigWithCommand(t, root, "codex", "user", "unrelated-command", nil)
 	var stderr bytes.Buffer
 	code := run([]string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
 		"--session", "1:2", "--", "unrelated-command"}, io.Discard, &stderr)
@@ -112,15 +112,64 @@ func TestRunProxyRejectsCommandNotClassifiedAsService(t *testing.T) {
 	}
 }
 
+func TestRunProxyRejectsCatalogCommandMismatchBeforeChildStart(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfigWithCommand(t, root, "codex", "user", "catalog-command",
+		[]string{"catalog-one", "catalog-two"})
+	secretCommand := "do-not-print-command"
+	var stderr bytes.Buffer
+	code := run([]string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
+		"--session", "1:2", "--", secretCommand, "catalog-one", "catalog-two"}, io.Discard, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "catalog command mismatch") {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), secretCommand) || strings.Contains(stderr.String(), "executable file not found") {
+		t.Fatalf("rejected command leaked or started: %q", stderr.String())
+	}
+}
+
+func TestRunProxyRejectsCatalogArgumentMismatchBeforeChildStart(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfigWithCommand(t, root, "codex", "user", "catalog-command",
+		[]string{"catalog-one", "catalog-two"})
+	secretArg := "do-not-print-argument"
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "missing", args: []string{"catalog-one"}},
+		{name: "extra", args: []string{"catalog-one", "catalog-two", secretArg}},
+		{name: "reordered", args: []string{"catalog-two", "catalog-one"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			args := []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
+				"--session", "1:2", "--", "catalog-command"}
+			args = append(args, test.args...)
+			code := run(args, io.Discard, &stderr)
+			if code != 1 || !strings.Contains(stderr.String(), "catalog command mismatch") {
+				t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+			}
+			if strings.Contains(stderr.String(), secretArg) || strings.Contains(stderr.String(), "executable file not found") {
+				t.Fatalf("rejected arguments leaked or started: %q", stderr.String())
+			}
+		})
+	}
+	if matches, err := filepath.Glob(filepath.Join(root, "events", "*", "*.jsonl")); err != nil || len(matches) != 0 {
+		t.Fatalf("rejected command persisted events: matches=%v err=%v", matches, err)
+	}
+}
+
 func TestRunProxyExecutesCommandAndPersistsOnlyMetadata(t *testing.T) {
 	root := t.TempDir()
-	configPath := writeProxyConfig(t, root, "codex", "repository")
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	secretArg := "do-not-persist-argument"
 	secretEnv := "do-not-persist-environment"
+	childArgs := []string{"-test.run=TestProxyHelperProcess", "--", "catalog"}
+	configPath := writeProxyConfigWithCommand(t, root, "codex", "repository", executable, childArgs)
 	t.Setenv("MCP_GOVERNOR_TEST_HELPER", "1")
 	t.Setenv("MCP_GOVERNOR_SECRET", secretEnv)
 	oldStdin := proxyStdin
@@ -129,8 +178,8 @@ func TestRunProxyExecutesCommandAndPersistsOnlyMetadata(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
-		"--session", "123:456", "--repository", filepath.Join(root, "."), "--", executable,
-		"-test.run=TestProxyHelperProcess", "--", secretArg}
+		"--session", "123:456", "--repository", filepath.Join(root, "."), "--", executable}
+	args = append(args, childArgs...)
 	if code := run(args, &stdout, &stderr); code != 0 {
 		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
 	}
@@ -138,7 +187,7 @@ func TestRunProxyExecutesCommandAndPersistsOnlyMetadata(t *testing.T) {
 		t.Fatalf("stdout=%q", stdout.String())
 	}
 	allOutput := stdout.String() + stderr.String()
-	if strings.Contains(allOutput, secretArg) || strings.Contains(allOutput, secretEnv) {
+	if strings.Contains(allOutput, secretEnv) {
 		t.Fatalf("secret printed: %q", allOutput)
 	}
 	events, err := filepath.Glob(filepath.Join(root, "events", "codex", "*.jsonl"))
@@ -146,7 +195,7 @@ func TestRunProxyExecutesCommandAndPersistsOnlyMetadata(t *testing.T) {
 		t.Fatalf("events=%v err=%v", events, err)
 	}
 	data := mustReadFile(t, events[0])
-	if strings.Contains(string(data), secretArg) || strings.Contains(string(data), secretEnv) || strings.Contains(string(data), root) {
+	if strings.Contains(string(data), secretEnv) || strings.Contains(string(data), root) {
 		t.Fatalf("secret or repository path persisted: %s", data)
 	}
 	var event map[string]any
@@ -574,6 +623,10 @@ func writeConfig(t *testing.T, dir, registry, output string) string {
 }
 
 func writeProxyConfig(t *testing.T, dir, client, scope string) string {
+	return writeProxyConfigWithCommand(t, dir, client, scope, "catalog-command", []string{"catalog-arg"})
+}
+
+func writeProxyConfigWithCommand(t *testing.T, dir, client, scope, command string, args []string) string {
 	t.Helper()
 	saltPath := filepath.Join(dir, "salt")
 	writeFile(t, saltPath, bytes.Repeat([]byte{'s'}, 32), 0o600)
@@ -586,9 +639,9 @@ func writeProxyConfig(t *testing.T, dir, client, scope string) string {
 			"salt_path": saltPath, "raw_retention_days": 30,
 		},
 		"services": []map[string]any{{
-			"name": "fake", "command": "catalog-command", "args": []string{"catalog-arg"}, "cwd": dir,
+			"name": "fake", "command": command, "args": args, "cwd": dir,
 			"transport": "stdio", "scope": scope, "session_policy": "isolated",
-			"clients": []string{client}, "all_args_contain": []string{"TestProxyHelperProcess"},
+			"clients": []string{client}, "all_args_contain": []string{"catalog"},
 		}},
 	})
 	if err != nil {

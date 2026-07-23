@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -244,6 +245,9 @@ func runProxy(opts proxyOptions, stdout, stderr io.Writer) (resultErr error) {
 	}
 	if service.Scope == config.ScopeRepository && opts.repository == "" {
 		return fmt.Errorf("service %q requires repository identity", opts.service)
+	}
+	if opts.command != service.Command || !slices.Equal(opts.args, service.Args) {
+		return fmt.Errorf("service %q catalog command mismatch", opts.service)
 	}
 	classifier, err := process.NewClassifier([]process.Rule{{
 		Name: service.Name, AllArgsContain: service.AllArgsContain,
