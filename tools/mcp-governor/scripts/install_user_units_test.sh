@@ -84,6 +84,60 @@ test "$(sha256sum "$salt")" = "$salt_digest"
 test "$(sha256sum "$catalog")" = "$catalog_digest"
 test "$(cat "$systemctl_log")" = "$expected_systemctl"
 
+upgrade_root="$tmp_dir/upgrade"
+upgrade_home="$upgrade_root/home"
+upgrade_xdg="$upgrade_root/xdg"
+mkdir -m 0700 "$upgrade_root"
+mkdir -m 0755 "$upgrade_home" "$upgrade_xdg"
+mkdir -p "$upgrade_home/.local/bin" "$upgrade_home/.local/state/mcp-governor" \
+  "$upgrade_home/.config/mcp-governor" "$upgrade_xdg/systemd/user"
+chmod 0755 "$upgrade_home/.local" "$upgrade_home/.local/bin" "$upgrade_home/.local/state" \
+  "$upgrade_home/.config" "$upgrade_xdg/systemd" "$upgrade_xdg/systemd/user"
+chmod 0700 "$upgrade_home/.local/state/mcp-governor" "$upgrade_home/.config/mcp-governor"
+printf '{"existing":"catalog"}\n' >"$upgrade_home/.config/mcp-governor/config.json"
+head -c 32 /dev/urandom >"$upgrade_home/.config/mcp-governor/identity-salt"
+chmod 0600 "$upgrade_home/.config/mcp-governor/config.json" \
+  "$upgrade_home/.config/mcp-governor/identity-salt"
+cp "$script_dir/../systemd/mcp-governor-observe.service" "$upgrade_xdg/systemd/user/"
+cp "$script_dir/../systemd/mcp-governor-observe.timer" "$upgrade_xdg/systemd/user/"
+chmod 0644 "$upgrade_xdg/systemd/user/"*
+upgrade_catalog_digest=$(sha256sum "$upgrade_home/.config/mcp-governor/config.json")
+upgrade_salt_digest=$(sha256sum "$upgrade_home/.config/mcp-governor/identity-salt")
+: >"$systemctl_log"
+HOME="$upgrade_home" XDG_CONFIG_HOME="$upgrade_xdg" bash "$installer"
+test "$(sha256sum "$upgrade_home/.config/mcp-governor/config.json")" = "$upgrade_catalog_digest"
+test "$(sha256sum "$upgrade_home/.config/mcp-governor/identity-salt")" = "$upgrade_salt_digest"
+test "$(stat -c %a "$upgrade_xdg/systemd")" = 755
+test "$(stat -c %a "$upgrade_xdg/systemd/user")" = 755
+test "$(cat "$systemctl_log")" = "$expected_systemctl"
+
+foreign_root="$tmp_dir/foreign-owner"
+mkdir -m 0700 "$foreign_root" "$foreign_root/home" "$foreign_root/xdg"
+mkdir -p "$foreign_root/home/.config/mcp-governor"
+chmod 0700 "$foreign_root/home/.config" "$foreign_root/home/.config/mcp-governor"
+printf '{"existing":true}\n' >"$foreign_root/home/.config/mcp-governor/config.json"
+chmod 0600 "$foreign_root/home/.config/mcp-governor/config.json"
+fake_stat="$foreign_root/stat"
+cat >"$fake_stat" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *'%u'* && "${!#}" == "$MCP_GOVERNOR_FAKE_FOREIGN" ]]; then
+  printf '%s\n' "$(( $(id -u) + 1 ))"
+  exit 0
+fi
+exec /usr/bin/stat "$@"
+EOF
+chmod 0755 "$fake_stat"
+for foreign_target in "$foreign_root/home" "$foreign_root/home/.config/mcp-governor/config.json"; do
+  if HOME="$foreign_root/home" XDG_CONFIG_HOME="$foreign_root/xdg" MCP_GOVERNOR_TESTING=1 \
+    MCP_GOVERNOR_STAT="$fake_stat" MCP_GOVERNOR_FAKE_FOREIGN="$foreign_target" SYSTEMCTL="$fake_systemctl" \
+    SYSTEMCTL_LOG="$foreign_root/systemctl.log" MCP_GOVERNOR_BINARY="$fixture_binary" bash "$installer" \
+    >"$foreign_root/stdout" 2>"$foreign_root/stderr"; then
+    printf 'foreign-owned target unexpectedly accepted: %s\n' "$foreign_target" >&2
+    exit 1
+  fi
+done
+
 bad_salt_root="$tmp_dir/bad-salt"
 mkdir -m 0700 "$bad_salt_root" "$bad_salt_root/home" "$bad_salt_root/xdg"
 mkdir -p "$bad_salt_root/home/.config/mcp-governor"

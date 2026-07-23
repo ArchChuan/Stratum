@@ -22,7 +22,7 @@ Omit `--output -` to write the configured snapshot file (by default, `~/.local/s
 
 ## Install observation and report timers
 
-The installer builds the binary, installs it as `~/.local/bin/mcp-governor` with mode `0755`, and creates private config, state, event, report, and user-unit directories with mode `0700`. It generates a 32-byte identity salt at `~/.config/mcp-governor/identity-salt` and installs the example catalog as `~/.config/mcp-governor/config.json`, both with mode `0600`, only when each file is absent. Existing salt and catalog files must already be private regular files; the installer validates and preserves their bytes. Unsafe symlinks, special files, permissions, or writable parent directories cause installation to stop.
+The installer builds the binary, installs it as `~/.local/bin/mcp-governor` with mode `0755`, and creates the governor config, state, event, and report directories with mode `0700`. Newly created systemd user-unit directories also use `0700`; existing current-user-owned `XDG_CONFIG_HOME`, `systemd`, and `systemd/user` directories may retain non-writable modes such as `0755` for compatibility with earlier installs. It generates a 32-byte identity salt at `~/.config/mcp-governor/identity-salt` and installs the example catalog as `~/.config/mcp-governor/config.json`, both with mode `0600`, only when each file is absent. The installer validates ownership and type for `HOME`, the config/state/unit target directories, and managed files. Existing salt and catalog bytes are preserved; unsafe target symlinks, special files, foreign ownership, or group/world-writable validated roots cause installation to stop.
 
 ```sh
 ./scripts/install-user-units.sh
