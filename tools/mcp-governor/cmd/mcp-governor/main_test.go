@@ -377,6 +377,32 @@ func TestReportRequiresSevenDaysUnlessPartialAndStdoutDoesNotWriteDefault(t *tes
 	}
 }
 
+func TestReportLatestUsesPreviousSevenCompleteLocalDaysAcrossDST(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 3, 9, 12, 34, 56, 0, location)
+	useDependencies(t, now, root, nil)
+
+	var stderr bytes.Buffer
+	if code := run([]string{"report-latest", "--config", configPath}, io.Discard, &stderr); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	output := filepath.Join(root, "reports", "report-20260302T050000Z-20260309T040000Z.json")
+	var got report.Report
+	if err := json.Unmarshal(mustReadFile(t, output), &got); err != nil {
+		t.Fatal(err)
+	}
+	wantStart := time.Date(2026, 3, 2, 0, 0, 0, 0, location)
+	wantEnd := time.Date(2026, 3, 9, 0, 0, 0, 0, location)
+	if !got.Start.Equal(wantStart) || !got.End.Equal(wantEnd) || got.End.Sub(got.Start) != 167*time.Hour {
+		t.Fatalf("window=[%s,%s) duration=%s", got.Start, got.End, got.End.Sub(got.Start))
+	}
+}
+
 func TestRunProxyRejectsInvalidInvocation(t *testing.T) {
 	root := t.TempDir()
 	configPath := writeProxyConfig(t, root, "codex", "repository")

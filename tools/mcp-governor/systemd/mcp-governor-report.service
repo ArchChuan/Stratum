@@ -1,0 +1,11 @@
+[Unit]
+Description=Aggregate the previous seven complete local days of MCP observations
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/mcp-governor report-latest --config %h/.config/mcp-governor/config.json
+UMask=0077
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes

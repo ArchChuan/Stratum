@@ -68,6 +68,7 @@ type reportOptions struct {
 	start                   time.Time
 	end                     time.Time
 	outputSet, allowPartial bool
+	calendarWindow          bool
 }
 
 type renderOptions struct {
@@ -121,6 +122,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	case "report-latest":
+		configPath, err := parseReportLatestArgs(args)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			fmt.Fprintln(stderr, "usage: mcp-governor report-latest --config PATH")
+			return 2
+		}
+		if err := runReportLatest(configPath, stdout); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
 	case "render-config":
 		opts, err := parseRenderArgs(args)
 		if err != nil {
@@ -144,7 +157,7 @@ const proxyUsage = "usage: mcp-governor proxy --config PATH --client CLIENT --se
 	"[--session PID:START_TICKS] [--repository PATH] -- COMMAND [ARG...]"
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: mcp-governor snapshot|proxy|report|render-config ...")
+	fmt.Fprintln(w, "usage: mcp-governor snapshot|proxy|report|report-latest|render-config ...")
 }
 
 const renderUsage = "usage: mcp-governor render-config --config PATH --client codex|claude|vscode|lingma " +
@@ -244,6 +257,23 @@ func parseReportArgs(args []string) (reportOptions, error) {
 		return opts, errors.New("--output must not be empty")
 	}
 	return opts, nil
+}
+
+func parseReportLatestArgs(args []string) (string, error) {
+	if len(args) != 3 || args[0] != "report-latest" || args[1] != "--config" ||
+		args[2] == "" || strings.HasPrefix(args[2], "--") {
+		return "", errors.New("--config is required")
+	}
+	return args[2], nil
+}
+
+func runReportLatest(configPath string, stdout io.Writer) error {
+	now := currentTime()
+	location := now.Location()
+	localNow := now.In(location)
+	end := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, location)
+	start := end.AddDate(0, 0, -7)
+	return runReport(reportOptions{configPath: configPath, start: start, end: end, calendarWindow: true}, stdout)
 }
 
 func parseArgs(args []string) (options, error) {
@@ -677,7 +707,7 @@ func newPathResolver() func(string) (string, error) {
 }
 
 func runReport(opts reportOptions, stdout io.Writer) error {
-	if !opts.allowPartial && opts.end.Sub(opts.start) < 7*24*time.Hour {
+	if !opts.allowPartial && !opts.calendarWindow && opts.end.Sub(opts.start) < 7*24*time.Hour {
 		return fmt.Errorf("report window must cover at least seven complete 24-hour days")
 	}
 	resolvePath := newPathResolver()
