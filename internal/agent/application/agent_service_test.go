@@ -8,6 +8,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"go.uber.org/zap"
@@ -398,6 +399,145 @@ func TestAgentService_List(t *testing.T) {
 	assert.Len(t, list, 2)
 	assert.Equal(t, "A", list[0].Name)
 	assert.Equal(t, "react", list[1].Type)
+}
+
+func TestAgentService_ListManagedAssistantFirstPreservesOrdinaryOrder(t *testing.T) {
+	svc, repo, _ := newTestService(t)
+	repo.On("GetAll", mock.Anything).Return([]*domain.AgentConfig{
+		{ID: "ordinary-1", Name: "First", Type: domain.ReActAgent},
+		{ID: domain.SystemAssistantID, Name: "Platform", Type: domain.ReActAgent,
+			SystemKey: domain.SystemAssistantKey, IsSystem: true, ManagementMode: "platform"},
+		{ID: "ordinary-2", Name: "Second", Type: domain.ReActAgent},
+	}, nil)
+
+	list, err := svc.List(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, []string{domain.SystemAssistantID, "ordinary-1", "ordinary-2"},
+		[]string{list[0].ID, list[1].ID, list[2].ID})
+	assert.True(t, list[0].IsSystem)
+	assert.Equal(t, "platform", list[0].ManagementMode)
+}
+
+type stubTenantModelValidator struct {
+	err   error
+	calls []string
+}
+
+func (v *stubTenantModelValidator) ValidateTenantChatModel(_ context.Context, tenantID, model string) error {
+	v.calls = append(v.calls, tenantID+":"+model)
+	return v.err
+}
+
+func TestAgentService_GetSystemAssistantSettings(t *testing.T) {
+	_, repo, _ := newTestService(t)
+	validator := &stubTenantModelValidator{}
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantModelValidator: validator,
+		Logger:               zap.NewNop(),
+	})
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	repo.On("GetSystemAssistant", ctx).Return(&domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "qwen-plus",
+	}, true, nil)
+
+	settings, err := svc.GetSystemAssistantSettings(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, domain.SystemAssistantID, settings.AgentID)
+	assert.Equal(t, "qwen-plus", settings.Model)
+	assert.True(t, settings.Ready)
+	assert.Equal(t, []string{"tenant-1:qwen-plus"}, validator.calls)
+}
+
+func TestAgentService_GetSystemAssistantSettingsUnavailableIsNotReady(t *testing.T) {
+	_, repo, _ := newTestService(t)
+	validator := &stubTenantModelValidator{err: domain.ErrAssistantModelUnavailable}
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantModelValidator: validator,
+		Logger:               zap.NewNop(),
+	})
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	repo.On("GetSystemAssistant", ctx).Return(&domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "qwen-plus",
+	}, true, nil)
+
+	settings, err := svc.GetSystemAssistantSettings(ctx)
+	assert.NoError(t, err)
+	assert.False(t, settings.Ready)
+}
+
+func TestAgentService_GetSystemAssistantSettingsFailsClosedOnConfigurationReadFailure(t *testing.T) {
+	_, repo, _ := newTestService(t)
+	wantErr := errors.New("settings read failed")
+	validator := &stubTenantModelValidator{err: wantErr}
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantModelValidator: validator,
+		Logger:               zap.NewNop(),
+	})
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	repo.On("GetSystemAssistant", ctx).Return(&domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "qwen-plus",
+	}, true, nil)
+
+	_, err := svc.GetSystemAssistantSettings(ctx)
+	assert.ErrorIs(t, err, wantErr)
+}
+
+func TestAgentService_UpdateSystemAssistantModelValidatesThenReloads(t *testing.T) {
+	_, repo, _ := newTestService(t)
+	validator := &stubTenantModelValidator{}
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantModelValidator: validator,
+		Logger:               zap.NewNop(),
+	})
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus").Return(nil).Once()
+	repo.On("GetSystemAssistant", ctx).Return(&domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "qwen-plus",
+	}, true, nil).Once()
+
+	settings, err := svc.UpdateSystemAssistantModel(ctx, " qwen-plus ")
+	assert.NoError(t, err)
+	assert.True(t, settings.Ready)
+	assert.Equal(t, []string{"tenant-1:qwen-plus"}, validator.calls)
+	repo.AssertExpectations(t)
+}
+
+func TestAgentService_UpdateSystemAssistantModelRejectsEmptyAndInvalid(t *testing.T) {
+	_, repo, _ := newTestService(t)
+	validator := &stubTenantModelValidator{err: domain.ErrInvalidSystemAssistantModel}
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantModelValidator: validator,
+		Logger:               zap.NewNop(),
+	})
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+	_, err := svc.UpdateSystemAssistantModel(ctx, " ")
+	assert.ErrorIs(t, err, domain.ErrInvalidSystemAssistantModel)
+	_, err = svc.UpdateSystemAssistantModel(ctx, "unknown")
+	assert.ErrorIs(t, err, domain.ErrInvalidSystemAssistantModel)
+	repo.AssertNotCalled(t, "UpdateSystemAssistantModel", mock.Anything, mock.Anything)
+}
+
+func TestAgentService_UpdateSystemAssistantModelPropagatesPersistenceFailure(t *testing.T) {
+	_, repo, _ := newTestService(t)
+	validator := &stubTenantModelValidator{}
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantModelValidator: validator,
+		Logger:               zap.NewNop(),
+	})
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	wantErr := errors.New("write failed")
+	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus").Return(wantErr)
+
+	_, err := svc.UpdateSystemAssistantModel(ctx, "qwen-plus")
+	assert.ErrorIs(t, err, wantErr)
+	repo.AssertNotCalled(t, "GetSystemAssistant", mock.Anything)
 }
 
 func TestAgentService_Update_PreservesEmbedModel(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/jackc/pgx/v5"
@@ -22,6 +23,38 @@ func TestTenantCapabilityResolverWorkerResolveReportsInfrastructureFailure(t *te
 	client, err := resolver.ResolveWorkerLLM(context.Background(), "tenant-1")
 	require.Nil(t, client)
 	require.ErrorContains(t, err, "database unavailable")
+}
+
+func TestTenantCapabilityResolverValidateTenantChatModelRejectsFallbackAndUnknownModel(t *testing.T) {
+	missingSettings, err := json.Marshal(map[string]any{})
+	require.NoError(t, err)
+	resolver := &tenantCapabilityResolver{
+		db: tenantSettingsQueryFunc(func(context.Context, string, ...any) pgx.Row {
+			return tenantSettingsRow{settings: missingSettings}
+		}),
+		cache:    llmgateway.NewTenantGatewayCache(),
+		fallback: llmgateway.NewGateway(),
+		logger:   zap.NewNop(),
+	}
+	require.ErrorIs(t, resolver.ValidateTenantChatModel(context.Background(), "tenant-1", "qwen-plus"),
+		domain.ErrAssistantModelUnavailable)
+
+	aesKey := pkgcrypto.DeriveAESKey("tenant-model-validator-key")
+	encrypted, err := pkgcrypto.Encrypt(aesKey, "provider-key")
+	require.NoError(t, err)
+	configured, err := json.Marshal(map[string]any{"llm_api_keys": map[string]any{"qwen": encrypted}})
+	require.NoError(t, err)
+	resolver = &tenantCapabilityResolver{
+		db: tenantSettingsQueryFunc(func(context.Context, string, ...any) pgx.Row {
+			return tenantSettingsRow{settings: configured}
+		}),
+		aesKey: aesKey,
+		cache:  llmgateway.NewTenantGatewayCache(),
+		logger: zap.NewNop(),
+	}
+	require.NoError(t, resolver.ValidateTenantChatModel(context.Background(), "tenant-1", "qwen-plus"))
+	require.ErrorIs(t, resolver.ValidateTenantChatModel(context.Background(), "tenant-1", "glm-4"),
+		domain.ErrInvalidSystemAssistantModel)
 }
 
 func TestNewTenantCapabilityResolverPreservesNilDatabaseBehavior(t *testing.T) {

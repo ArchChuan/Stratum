@@ -14,3 +14,10 @@ type TenantCapabilityResolver interface {
 	// streaming execution. Returns the original ctx unchanged when no keys exist.
 	InjectCompleter(ctx context.Context, tenantID string) context.Context
 }
+
+// TenantChatModelValidator verifies that a model belongs to the current
+// tenant's strictly loaded provider configuration. Implementations must not
+// use platform fallback credentials.
+type TenantChatModelValidator interface {
+	ValidateTenantChatModel(ctx context.Context, tenantID, model string) error
+}

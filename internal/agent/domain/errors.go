@@ -14,5 +14,6 @@ var (
 	ErrDiagnosticForbidden                = errors.New("diagnostic forbidden")
 	ErrDiagnosticEvidenceUnavailable      = errors.New("diagnostic evidence unavailable")
 	ErrAssistantModelUnavailable          = errors.New("system assistant model unavailable")
+	ErrInvalidSystemAssistantModel        = errors.New("invalid system assistant model")
 	ErrSystemAssistantRevisionUnsupported = errors.New("system assistant revisions are unsupported")
 )

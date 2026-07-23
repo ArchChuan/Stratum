@@ -134,11 +134,12 @@ func (r *tenantCapabilityResolver) loadGateway(ctx context.Context, tenantID str
 
 	apiKeysRaw, ok := settings["llm_api_keys"].(map[string]any)
 	if !ok || len(apiKeysRaw) == 0 {
+		if strict {
+			return nil, nil, false, fmt.Errorf("tenant llm: no provider configured: %w",
+				agentdomain.ErrAssistantModelUnavailable)
+		}
 		if r.fallback != nil {
 			return r.fallback, nil, true, nil
-		}
-		if strict {
-			return nil, nil, false, fmt.Errorf("tenant llm: no provider configured")
 		}
 		return nil, nil, false, nil
 	}
@@ -164,11 +165,12 @@ func (r *tenantCapabilityResolver) loadGateway(ctx context.Context, tenantID str
 		if strict && decryptErr != nil {
 			return nil, nil, false, fmt.Errorf("tenant llm: decrypt credentials: %w", decryptErr)
 		}
+		if strict {
+			return nil, nil, false, fmt.Errorf("tenant llm: no usable provider configured: %w",
+				agentdomain.ErrAssistantModelUnavailable)
+		}
 		if r.fallback != nil {
 			return r.fallback, nil, true, nil
-		}
-		if strict {
-			return nil, nil, false, fmt.Errorf("tenant llm: no usable provider configured")
 		}
 		return nil, nil, false, nil
 	}
@@ -195,7 +197,8 @@ func (r *tenantCapabilityResolver) loadGateway(ctx context.Context, tenantID str
 	}
 	if !registered {
 		if strict {
-			return nil, nil, false, fmt.Errorf("tenant llm: no supported provider configured")
+			return nil, nil, false, fmt.Errorf("tenant llm: no supported provider configured: %w",
+				agentdomain.ErrInvalidSystemAssistantModel)
 		}
 		return r.fallback, nil, r.fallback != nil, nil
 	}
@@ -248,6 +251,22 @@ func (r *tenantCapabilityResolver) ResolveWorkerLLM(ctx context.Context, tenantI
 		return nil, fmt.Errorf("tenant llm: unavailable")
 	}
 	return gw, nil
+}
+
+func (r *tenantCapabilityResolver) ValidateTenantChatModel(ctx context.Context, tenantID, model string) error {
+	gw, _, ok, err := r.resolveGatewayResult(ctx, tenantID, true)
+	if err != nil {
+		return fmt.Errorf("tenant llm model validation: %w", err)
+	}
+	if !ok || gw == nil {
+		return agentdomain.ErrAssistantModelUnavailable
+	}
+	for _, available := range gw.ListChatModels() {
+		if available == model {
+			return nil
+		}
+	}
+	return agentdomain.ErrInvalidSystemAssistantModel
 }
 
 // InjectCompleter injects the per-tenant LLM completer into ctx for streaming.

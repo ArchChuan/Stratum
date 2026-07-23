@@ -20,6 +20,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -35,6 +36,7 @@ type AgentServiceDeps struct {
 	SkillRevisionResolver   port.SkillRevisionResolver
 	RAGSearch               port.RAGSearchProvider
 	TenantResolver          port.TenantCapabilityResolver
+	TenantModelValidator    port.TenantChatModelValidator
 	HistoryCompactorFactory func(port.CapabilityGateway, string, *zap.Logger) port.HistoryCompactor
 	MCPTools                port.MCPToolProvider
 	MCPToolExecutor         port.MCPToolExecutor
@@ -127,6 +129,12 @@ type AgentDTO struct {
 	SystemKey             string
 	IsSystem              bool
 	ManagementMode        string
+}
+
+type SystemAssistantSettings struct {
+	AgentID string
+	Model   string
+	Ready   bool
 }
 
 // Create persists a new agent for the tenant. Inherits embed_model from
@@ -335,7 +343,72 @@ func (s *AgentService) List(ctx context.Context) ([]AgentDTO, error) {
 	for _, a := range agents {
 		out = append(out, cfgToDTO(a.GetConfig()))
 	}
+	for i := 1; i < len(out); i++ {
+		if out[i].IsSystem {
+			system := out[i]
+			copy(out[1:i+1], out[0:i])
+			out[0] = system
+			break
+		}
+	}
 	return out, nil
+}
+
+func (s *AgentService) GetSystemAssistantSettings(ctx context.Context) (SystemAssistantSettings, error) {
+	a, found, err := s.deps.Registry.GetSystemAssistant(ctx)
+	if err != nil {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service get system assistant settings: %w", err)
+	}
+	if !found {
+		return SystemAssistantSettings{}, ErrNotFound
+	}
+	cfg := a.GetConfig()
+	settings := SystemAssistantSettings{AgentID: cfg.ID, Model: cfg.LLMModel}
+	if strings.TrimSpace(cfg.LLMModel) == "" {
+		return settings, nil
+	}
+	if s.deps.TenantModelValidator == nil {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: validator unavailable")
+	}
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	if tenantID == "" {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service get system assistant settings: tenant id required")
+	}
+	if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, cfg.LLMModel); err != nil {
+		if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
+			errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
+			return settings, nil
+		}
+		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: %w", err)
+	}
+	settings.Ready = true
+	return settings, nil
+}
+
+func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model string) (SystemAssistantSettings, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return SystemAssistantSettings{}, domain.ErrInvalidSystemAssistantModel
+	}
+	if s.deps.TenantModelValidator == nil {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: validator unavailable")
+	}
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	if tenantID == "" {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: tenant id required")
+	}
+	if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, model); err != nil {
+		if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
+			errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
+			return SystemAssistantSettings{}, domain.ErrInvalidSystemAssistantModel
+		}
+		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: %w", err)
+	}
+	a, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model)
+	if err != nil {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: %w", err)
+	}
+	return SystemAssistantSettings{AgentID: a.GetConfig().ID, Model: model, Ready: true}, nil
 }
 
 // Update replaces mutable fields on an existing agent. EmbedModel is

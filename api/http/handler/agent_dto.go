@@ -55,6 +55,8 @@ type AgentResponse struct {
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 	CreatedAt             string   `json:"createdAt"`
 	MemoryScope           string   `json:"memoryScope"`
+	IsSystem              bool     `json:"isSystem"`
+	ManagementMode        string   `json:"managementMode"`
 }
 
 type ExecuteAgentRequest struct {
@@ -97,5 +99,7 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		KnowledgeWorkspaceIDs: d.KnowledgeWorkspaceIDs,
 		CreatedAt:             d.CreatedAt,
 		MemoryScope:           d.MemoryScope,
+		IsSystem:              d.IsSystem,
+		ManagementMode:        d.ManagementMode,
 	}
 }

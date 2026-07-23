@@ -114,6 +114,35 @@ func (r *Registry) GetAll(ctx context.Context) ([]Agent, error) {
 	return out, nil
 }
 
+func (r *Registry) GetSystemAssistant(ctx context.Context) (Agent, bool, error) {
+	cfg, found, err := r.repo.GetSystemAssistant(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("registry get system assistant: %w", err)
+	}
+	if !found {
+		return nil, false, nil
+	}
+	a, err := r.hydrate(cfg)
+	if err != nil {
+		return nil, false, fmt.Errorf("registry get system assistant: %w", err)
+	}
+	return a, true, nil
+}
+
+func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string) (Agent, error) {
+	if err := r.repo.UpdateSystemAssistantModel(ctx, model); err != nil {
+		return nil, fmt.Errorf("registry update system assistant model: %w", err)
+	}
+	a, found, err := r.GetSystemAssistant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, domain.ErrNotFound
+	}
+	return a, nil
+}
+
 // Remove deletes an agent.
 func (r *Registry) Remove(ctx context.Context, id string) error {
 	if err := r.repo.Remove(ctx, id); err != nil {
