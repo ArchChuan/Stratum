@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -198,9 +199,9 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 	if msg.Artifacts == nil {
 		msg.Artifacts = []domain.ExecutionArtifact{}
 	}
-	artifactsJSON, err := json.Marshal(msg.Artifacts)
+	artifactsJSON, err := encodeExecutionArtifacts(msg.Artifacts)
 	if err != nil {
-		return fmt.Errorf("chat_store: marshal artifacts: %w", err)
+		return fmt.Errorf("chat_store: encode artifacts: %w", err)
 	}
 	var outboxQueued bool
 	var outboxSkipReason string
@@ -380,26 +381,57 @@ func decodeExecutionArtifacts(raw []byte) ([]domain.ExecutionArtifact, error) {
 	return artifacts, nil
 }
 
+var artifactCodePattern = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
+func encodeExecutionArtifacts(artifacts []domain.ExecutionArtifact) ([]byte, error) {
+	raw, err := json.Marshal(artifacts)
+	if err != nil {
+		return nil, err
+	}
+	validated, err := decodeExecutionArtifacts(raw)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(validated)
+}
+
 func validateDiagnosticReport(report *domain.DiagnosticReport) error {
 	if err := validateArtifactCitations(report.Citations); err != nil {
 		return err
 	}
+	if len(report.Inferences) != 0 {
+		return errors.New("phase 1 diagnostic inferences must be empty")
+	}
+	for _, action := range report.RecommendedActions {
+		if !safeArtifactString(action) {
+			return errors.New("invalid recommended action")
+		}
+	}
 	for _, fact := range report.Facts {
-		if fact.Statement == "" || fact.Source == "" || !safeArtifactString(fact.Statement) || !safeArtifactString(fact.Source) {
+		if !fact.Area.Valid() || fact.Statement == "" || fact.Source == "" || !safeArtifactString(fact.ObjectID) || !safeArtifactString(fact.Statement) || !safeArtifactString(fact.Source) {
 			return errors.New("invalid diagnostic fact")
 		}
 	}
 	for _, gap := range report.EvidenceGaps {
-		if gap.Code == "" || !safeArtifactString(gap.Code) || !safeArtifactString(gap.Source) {
+		if (gap.Area != "" && !gap.Area.Valid()) || !artifactCodePattern.MatchString(gap.Code) || !safeArtifactString(gap.Source) {
 			return errors.New("invalid evidence gap")
 		}
 	}
 	for _, step := range report.Steps {
-		if step.Tool == "" || step.Outcome == "" || step.LatencyMs < 0 || !safeArtifactString(step.Tool) || !safeArtifactString(step.Outcome) || !safeArtifactString(step.ErrorCode) {
+		if step.Tool == "" || !validArtifactOutcome(step.Outcome) || step.LatencyMs < 0 || !safeArtifactString(step.Tool) || (step.ErrorCode != "" && !artifactCodePattern.MatchString(step.ErrorCode)) {
 			return errors.New("invalid diagnostic step")
 		}
 	}
 	return nil
+}
+
+func validArtifactOutcome(outcome string) bool {
+	switch outcome {
+	case "success", "error", "gap", "truncated":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateArtifactCitations(citations []domain.Citation) error {

@@ -44,6 +44,17 @@ func TestPgChatStoreArtifactsRealPostgresRoundTripAndHistoricalUpgrade(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	invalid := &domain.ChatMessage{ConversationID: conv.ID, Role: "assistant", Content: "invalid", Artifacts: []domain.ExecutionArtifact{{Type: "diagnostic_report", ProfileVersion: "v1", DiagnosticReport: &domain.DiagnosticReport{Inferences: []string{"password=secret"}}}}}
+	if err := store.AddMessage(ctx, tenantID, invalid); err == nil {
+		t.Fatal("invalid artifact write must fail")
+	}
+	var invalidRows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM "`+schema+`".chat_messages WHERE conversation_id=$1 AND content='invalid'`, conv.ID).Scan(&invalidRows); err != nil {
+		t.Fatal(err)
+	}
+	if invalidRows != 0 {
+		t.Fatalf("invalid artifact write persisted %d rows", invalidRows)
+	}
 	artifacts := []domain.ExecutionArtifact{
 		{Type: "citations", ProfileVersion: "v1", Citations: []domain.Citation{{DocumentID: "doc-1", Title: "guide"}}},
 		{Type: "diagnostic_report", ProfileVersion: "v1", DiagnosticReport: &domain.DiagnosticReport{Facts: []domain.DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []domain.EvidenceGap{{Source: "stratum_diagnose_tenant", Code: "timeout"}}, RecommendedActions: []string{}, Citations: []domain.Citation{}, Steps: []domain.DiagnosticStep{{Tool: "stratum_diagnose_tenant", Outcome: "error", ErrorCode: "timeout", LatencyMs: 15}}}},
