@@ -76,8 +76,30 @@ type InputValidationError struct {
 	Issues []InputIssue `json:"issues"`
 }
 
+type GraphIssue struct {
+	Path    string `json:"path"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type GraphValidationError struct {
+	Issues []GraphIssue `json:"issues"`
+}
+
+func (e *GraphValidationError) Error() string {
+	return "workflow graph validation failed"
+}
+
+func (e *GraphValidationError) Unwrap() error {
+	return ErrInvalidSpec
+}
+
 func (e *InputValidationError) Error() string {
 	return "workflow input validation failed"
+}
+
+func (e *InputValidationError) Unwrap() error {
+	return ErrInvalidInputSchema
 }
 
 const (
@@ -269,6 +291,15 @@ func ValidateRunInput(schema InputSchema, input map[string]any) error {
 }
 
 func ValidateSpec(spec Spec) error {
+	err := validateSpec(spec)
+	if err == nil {
+		return nil
+	}
+	message := strings.TrimSpace(strings.TrimPrefix(err.Error(), ErrInvalidSpec.Error()+":"))
+	return &GraphValidationError{Issues: []GraphIssue{{Path: "graph", Code: "invalid", Message: message}}}
+}
+
+func validateSpec(spec Spec) error {
 	if len(spec.Nodes) == 0 {
 		return fmt.Errorf("%w: at least one node is required", ErrInvalidSpec)
 	}

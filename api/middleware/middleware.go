@@ -1,6 +1,9 @@
 package middleware
 
 import (
+	"errors"
+
+	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -47,6 +50,16 @@ func ErrorHandler(logger *zap.Logger) gin.HandlerFunc {
 			// concurrency, ingest queue) drain in seconds.
 			if status == 429 {
 				c.Writer.Header().Set("Retry-After", "30")
+			}
+			var inputErr *workflowdomain.InputValidationError
+			if errors.As(ginErr.Err, &inputErr) {
+				c.JSON(status, gin.H{"error": msg, "issues": inputErr.Issues})
+				return
+			}
+			var graphErr *workflowdomain.GraphValidationError
+			if errors.As(ginErr.Err, &graphErr) {
+				c.JSON(status, gin.H{"error": msg, "issues": graphErr.Issues})
+				return
 			}
 			c.JSON(status, gin.H{"error": msg})
 		}

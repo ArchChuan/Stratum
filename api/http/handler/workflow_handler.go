@@ -22,6 +22,50 @@ type workflowDefinitionService interface {
 	Publish(context.Context, string, string) (*workflowdomain.Version, error)
 	Get(context.Context, string, string) (*workflowdomain.Definition, error)
 	GetVersion(context.Context, string, string) (*workflowdomain.Version, error)
+	ListDefinitions(context.Context, string, workflowapp.ListDefinitionsQuery) (workflowapp.DefinitionPage, error)
+	ListVersions(context.Context, string, string, workflowapp.ListVersionsQuery) (workflowapp.VersionPage, error)
+}
+
+func (h *WorkflowHandler) ListDefinitions(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	page, pageSize, err := workflowPagination(c)
+	if err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	result, err := h.definitions.ListDefinitions(c.Request.Context(), tenantID, workflowapp.ListDefinitionsQuery{
+		Query: c.Query("query"), Page: page, PageSize: pageSize,
+	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *WorkflowHandler) ListVersions(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	page, pageSize, err := workflowPagination(c)
+	if err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	result, err := h.definitions.ListVersions(c.Request.Context(), tenantID, c.Param("id"), workflowapp.ListVersionsQuery{
+		Page: page, PageSize: pageSize,
+	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func (h *WorkflowHandler) GetDefinition(c *gin.Context) {
@@ -60,6 +104,7 @@ type workflowRunService interface {
 	StartAsync(context.Context, string, workflowapp.StartRunCommand) (*workflowdomain.Run, bool, error)
 	Get(context.Context, string, string, workflowapp.Actor) (*workflowdomain.Run, []workflowdomain.NodeAttempt, error)
 	Events(context.Context, string, string, workflowapp.Actor, int64, int) ([]workflowdomain.Event, error)
+	ListRuns(context.Context, string, workflowapp.ListRunsQuery) (workflowapp.RunPage, error)
 }
 
 type WorkflowHandler struct {
@@ -98,7 +143,7 @@ func (h *WorkflowHandler) CreateDefinition(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	definition, err := h.definitions.Create(c.Request.Context(), tenantID, workflowapp.CreateDefinitionCommand{Name: req.Name, Description: req.Description, Spec: req.Spec})
+	definition, err := h.definitions.Create(c.Request.Context(), tenantID, workflowapp.CreateDefinitionCommand{Name: req.Name, Description: req.Description, Spec: req.Spec, InputSchema: req.InputSchema})
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -117,7 +162,7 @@ func (h *WorkflowHandler) UpdateDefinition(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	definition, err := h.definitions.Update(c.Request.Context(), tenantID, c.Param("id"), workflowapp.UpdateDefinitionCommand{Name: req.Name, Description: req.Description, Spec: req.Spec, ExpectedRevision: req.ExpectedRevision})
+	definition, err := h.definitions.Update(c.Request.Context(), tenantID, c.Param("id"), workflowapp.UpdateDefinitionCommand{Name: req.Name, Description: req.Description, Spec: req.Spec, InputSchema: req.InputSchema, ExpectedRevision: req.ExpectedRevision})
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -168,7 +213,12 @@ func (h *WorkflowHandler) StartRun(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	run, created, err := h.runs.StartAsync(c.Request.Context(), tenantID, workflowapp.StartRunCommand{VersionID: req.VersionID, Input: req.Input, IdempotencyKey: req.IdempotencyKey, CreatedBy: actor.UserID})
+	input, err := req.RunInput()
+	if err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	run, created, err := h.runs.StartAsync(c.Request.Context(), tenantID, workflowapp.StartRunCommand{VersionID: req.VersionID, Input: input, IdempotencyKey: req.IdempotencyKey, CreatedBy: actor.UserID})
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -178,6 +228,69 @@ func (h *WorkflowHandler) StartRun(c *gin.Context) {
 		status = http.StatusOK
 	}
 	c.JSON(status, gin.H{"run_id": run.ID, "status": run.Status})
+}
+
+func (h *WorkflowHandler) ListRuns(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	actor, ok := workflowActor(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
+		return
+	}
+	page, pageSize, err := workflowPagination(c)
+	if err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	status, err := workflowRunStatus(c.Query("status"))
+	if err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	result, err := h.runs.ListRuns(c.Request.Context(), tenantID, workflowapp.ListRunsQuery{
+		ActorID: actor.UserID, IsAdmin: actor.Role == "admin" || actor.Role == "owner",
+		DefinitionID: c.Query("definition_id"), Status: status, Page: page, PageSize: pageSize,
+	})
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func workflowPagination(c *gin.Context) (int, int, error) {
+	page, pageSize := 0, 0
+	var err error
+	if raw := c.Query("page"); raw != "" {
+		page, err = strconv.Atoi(raw)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid page")
+		}
+	}
+	if raw := c.Query("page_size"); raw != "" {
+		pageSize, err = strconv.Atoi(raw)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid page_size")
+		}
+	}
+	return page, pageSize, nil
+}
+
+func workflowRunStatus(raw string) (workflowdomain.RunStatus, error) {
+	status := workflowdomain.RunStatus(raw)
+	switch status {
+	case "", workflowdomain.RunStatusQueued, workflowdomain.RunStatusRunning, workflowdomain.RunStatusCompleted,
+		workflowdomain.RunStatusFailed, workflowdomain.RunStatusPaused, workflowdomain.RunStatusPauseRequested,
+		workflowdomain.RunStatusCancelRequested, workflowdomain.RunStatusCanceled,
+		workflowdomain.RunStatusManualIntervention:
+		return status, nil
+	default:
+		return "", fmt.Errorf("invalid workflow run status")
+	}
 }
 
 func (h *WorkflowHandler) GetRun(c *gin.Context) {

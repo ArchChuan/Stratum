@@ -1,24 +1,43 @@
 package dto
 
-import workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
+import (
+	"fmt"
+
+	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
+)
 
 type CreateWorkflowRequest struct {
-	Name        string              `json:"name" binding:"required"`
-	Description string              `json:"description"`
-	Spec        workflowdomain.Spec `json:"spec" binding:"required"`
+	Name        string                     `json:"name" binding:"required"`
+	Description string                     `json:"description"`
+	Spec        workflowdomain.Spec        `json:"spec" binding:"required"`
+	InputSchema workflowdomain.InputSchema `json:"input_schema" binding:"required"`
 }
 
 type UpdateWorkflowRequest struct {
-	Name             string              `json:"name" binding:"required"`
-	Description      string              `json:"description"`
-	Spec             workflowdomain.Spec `json:"spec" binding:"required"`
-	ExpectedRevision int64               `json:"expected_revision" binding:"required"`
+	Name             string                     `json:"name" binding:"required"`
+	Description      string                     `json:"description"`
+	Spec             workflowdomain.Spec        `json:"spec" binding:"required"`
+	InputSchema      workflowdomain.InputSchema `json:"input_schema" binding:"required"`
+	ExpectedRevision int64                      `json:"expected_revision" binding:"required"`
 }
 
 type StartWorkflowRunRequest struct {
 	VersionID      string         `json:"version_id" binding:"required"`
-	Input          map[string]any `json:"input" binding:"required"`
+	Task           string         `json:"task" binding:"required"`
+	Fields         map[string]any `json:"fields"`
 	IdempotencyKey string         `json:"idempotency_key" binding:"required"`
+}
+
+func (r StartWorkflowRunRequest) RunInput() (map[string]any, error) {
+	if _, exists := r.Fields["task"]; exists {
+		return nil, fmt.Errorf("fields.task is reserved")
+	}
+	input := make(map[string]any, len(r.Fields)+1)
+	input["task"] = r.Task
+	for key, value := range r.Fields {
+		input[key] = value
+	}
+	return input, nil
 }
 
 type WorkflowControlRequest struct {

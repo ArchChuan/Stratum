@@ -171,7 +171,8 @@ func MapErrorToStatus(err error) int {
 	case errors.Is(err, memorydomain.ErrInvalidStatus),
 		errors.Is(err, memorydomain.ErrUserIDMismatch),
 		errors.Is(err, memorydomain.ErrEmptyContent),
-		errors.Is(err, workflowdomain.ErrInvalidSpec):
+		errors.Is(err, workflowdomain.ErrInvalidSpec),
+		errors.Is(err, workflowdomain.ErrInvalidInputSchema):
 		return http.StatusBadRequest
 	}
 

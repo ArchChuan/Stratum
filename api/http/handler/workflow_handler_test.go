@@ -30,6 +30,9 @@ type streamingWorkflowRunFake struct {
 func (*streamingWorkflowRunFake) StartAsync(context.Context, string, workflowapp.StartRunCommand) (*workflowdomain.Run, bool, error) {
 	return nil, false, nil
 }
+func (*streamingWorkflowRunFake) ListRuns(context.Context, string, workflowapp.ListRunsQuery) (workflowapp.RunPage, error) {
+	return workflowapp.RunPage{}, nil
+}
 func (f *streamingWorkflowRunFake) Get(context.Context, string, string, workflowapp.Actor) (*workflowdomain.Run, []workflowdomain.NodeAttempt, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -69,8 +72,17 @@ func (f *workflowDefinitionFake) Get(context.Context, string, string) (*workflow
 func (*workflowDefinitionFake) GetVersion(context.Context, string, string) (*workflowdomain.Version, error) {
 	return &workflowdomain.Version{ID: "version-1", DefinitionID: "wf-1", Number: 1}, nil
 }
+func (f *workflowDefinitionFake) ListDefinitions(context.Context, string, workflowapp.ListDefinitionsQuery) (workflowapp.DefinitionPage, error) {
+	return workflowapp.DefinitionPage{Workflows: []workflowapp.DefinitionSummary{{ID: f.created.ID, Name: f.created.Name}}, Total: 1, Page: 1, PageSize: 20}, nil
+}
+func (*workflowDefinitionFake) ListVersions(context.Context, string, string, workflowapp.ListVersionsQuery) (workflowapp.VersionPage, error) {
+	return workflowapp.VersionPage{Versions: []workflowapp.VersionSummary{{ID: "version-1", DefinitionID: "wf-1", Number: 1}}, Total: 1, Page: 1, PageSize: 20}, nil
+}
 
-type workflowRunFake struct{ events []workflowdomain.Event }
+type workflowRunFake struct {
+	events  []workflowdomain.Event
+	started workflowapp.StartRunCommand
+}
 
 type workflowControlFake struct {
 	canceled      bool
@@ -106,8 +118,12 @@ func (*workflowControlFake) ListEffects(context.Context, string, string, workflo
 	return nil, nil
 }
 
-func (*workflowRunFake) StartAsync(context.Context, string, workflowapp.StartRunCommand) (*workflowdomain.Run, bool, error) {
+func (f *workflowRunFake) StartAsync(_ context.Context, _ string, command workflowapp.StartRunCommand) (*workflowdomain.Run, bool, error) {
+	f.started = command
 	return &workflowdomain.Run{ID: "run-1", Status: workflowdomain.RunStatusQueued}, true, nil
+}
+func (*workflowRunFake) ListRuns(context.Context, string, workflowapp.ListRunsQuery) (workflowapp.RunPage, error) {
+	return workflowapp.RunPage{Runs: []workflowapp.RunSummary{{ID: "run-1"}}, Total: 1, Page: 1, PageSize: 20}, nil
 }
 func (*workflowRunFake) Get(context.Context, string, string, workflowapp.Actor) (*workflowdomain.Run, []workflowdomain.NodeAttempt, error) {
 	return &workflowdomain.Run{ID: "run-1", Status: workflowdomain.RunStatusCompleted, Output: "done", Snapshot: workflowdomain.Spec{Nodes: []workflowdomain.Node{{ID: "one", Type: workflowdomain.NodeTypeAgent, AgentID: "a"}}}}, []workflowdomain.NodeAttempt{{NodeID: "one", Status: workflowdomain.AttemptStatusSucceeded}}, nil
@@ -125,7 +141,8 @@ func (f *workflowRunFake) Events(_ context.Context, _, _ string, _ workflowapp.A
 func TestWorkflowHandlerCreateAndStart(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	definitions := &workflowDefinitionFake{}
-	h := handler.NewWorkflowHandler(definitions, &workflowRunFake{})
+	runs := &workflowRunFake{}
+	h := handler.NewWorkflowHandler(definitions, runs)
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
 		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
@@ -136,7 +153,7 @@ func TestWorkflowHandlerCreateAndStart(t *testing.T) {
 	r.POST("/workflows", h.CreateDefinition)
 	r.POST("/workflow-runs", h.StartRun)
 
-	createBody := `{"name":"Research","spec":{"nodes":[{"id":"one","type":"agent","agent_id":"agent-1"}],"edges":[]}}`
+	createBody := `{"name":"Research","input_schema":{"task_label":"任务","fields":[]},"spec":{"nodes":[{"id":"one","type":"agent","agent_id":"agent-1"}],"edges":[]}}`
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/workflows", strings.NewReader(createBody))
 	req.Header.Set("Content-Type", "application/json")
@@ -147,13 +164,39 @@ func TestWorkflowHandlerCreateAndStart(t *testing.T) {
 	require.Equal(t, "wf-1", created["id"])
 
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/workflow-runs", strings.NewReader(`{"version_id":"version-1","input":{"query":"hello"},"idempotency_key":"key-1"}`))
+	req = httptest.NewRequest(http.MethodPost, "/workflow-runs", strings.NewReader(`{"version_id":"version-1","task":"hello","fields":{},"idempotency_key":"key-1"}`))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusAccepted, w.Code)
 	var started map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &started))
 	require.Equal(t, "run-1", started["run_id"])
+	require.Equal(t, "user-1", runs.started.CreatedBy)
+	require.Equal(t, "hello", runs.started.Input["task"])
+}
+
+func TestWorkflowHandlerListsProductCollections(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	definitions := &workflowDefinitionFake{created: &workflowdomain.Definition{ID: "wf-1", Name: "研究"}}
+	h := handler.NewWorkflowHandler(definitions, &workflowRunFake{})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
+		c.Set(middleware.ContextKeySub, "user-1")
+		c.Set(middleware.ContextKeyRole, "member")
+		c.Next()
+	})
+	router.GET("/workflows", h.ListDefinitions)
+	router.GET("/workflows/:id/versions", h.ListVersions)
+	router.GET("/workflow-runs", h.ListRuns)
+
+	for _, path := range []string{"/workflows?page=1&page_size=20", "/workflows/wf-1/versions", "/workflow-runs?status=queued"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusOK, recorder.Code)
+		require.Contains(t, recorder.Body.String(), `"total":1`)
+		require.Contains(t, recorder.Body.String(), `"page_size":20`)
+	}
 }
 
 func TestWorkflowHandlerEventsQueryAndSSEResumeCursor(t *testing.T) {
