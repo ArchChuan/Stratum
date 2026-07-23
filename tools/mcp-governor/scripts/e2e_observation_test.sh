@@ -17,9 +17,14 @@ if [[ ! -x "$harness" ]]; then
 fi
 
 output=$("$harness")
+if rg -n 'command=.*session|--session.*session' "$harness" >/dev/null; then
+  printf 'E2E harness appears to inject a session override\n' >&2
+  exit 1
+fi
 for assertion in \
   'PASS rendered native configs: codex claude vscode lingma' \
-  'PASS isolated sessions: 4 unique hashes' \
+  'PASS exact rendered argv launched without explicit session override' \
+  'PASS derived isolated sessions: 4 unique hashes' \
   'PASS tool outcomes: 1 cancelled, at least 3 effective, 1 disconnected' \
   'PASS metadata privacy and private modes' \
   'PASS four-client report split' \

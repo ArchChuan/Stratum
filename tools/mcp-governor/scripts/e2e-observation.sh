@@ -4,7 +4,8 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 module_dir=$(cd -- "$script_dir/.." && pwd)
 tmp_dir=$(mktemp -d)
-declare -a child_pids=()
+declare -a shim_pids=()
+declare -a proxy_pids=()
 declare -a fake_pids=()
 go_bin=${MCP_GOVERNOR_GO:-go}
 
@@ -20,12 +21,12 @@ wait_for_pid() {
 
 cleanup() {
   local pid stubborn=0
-  for pid in "${child_pids[@]}" "${fake_pids[@]}"; do
+  for pid in "${shim_pids[@]}" "${proxy_pids[@]}" "${fake_pids[@]}"; do
     if kill -0 "$pid" 2>/dev/null; then
       kill -TERM "$pid" 2>/dev/null || true
     fi
   done
-  for pid in "${child_pids[@]}" "${fake_pids[@]}"; do
+  for pid in "${shim_pids[@]}" "${proxy_pids[@]}" "${fake_pids[@]}"; do
     if kill -0 "$pid" 2>/dev/null && ! wait_for_pid "$pid"; then
       printf 'stubborn E2E process pid=%s\n' "$pid" >&2
       stubborn=1
@@ -45,7 +46,12 @@ config_dir="$tmp_dir/config"
 build_dir="$tmp_dir/build"
 render_dir="$tmp_dir/rendered"
 pid_dir="$tmp_dir/fake-pids"
-mkdir -m 0700 "$HOME" "$XDG_CONFIG_HOME" "$state_dir" "$config_dir" "$build_dir" "$render_dir" "$pid_dir"
+proxy_pid_dir="$tmp_dir/proxy-pids"
+shim_pid_dir="$tmp_dir/shim-pids"
+gate_dir="$tmp_dir/client-gates"
+launched_dir="$tmp_dir/launched"
+mkdir -m 0700 "$HOME" "$XDG_CONFIG_HOME" "$state_dir" "$config_dir" "$build_dir" "$render_dir" "$pid_dir" \
+  "$proxy_pid_dir" "$shim_pid_dir" "$gate_dir" "$launched_dir"
 export MCP_GOVERNOR_E2E_PID_DIR="$pid_dir"
 
 governor="$build_dir/mcp-governor"
@@ -113,6 +119,40 @@ PY
 chmod 0600 "$commands"
 printf 'PASS rendered native configs: codex claude vscode lingma\n'
 
+client_shim="$tmp_dir/client-shim.py"
+cat >"$client_shim" <<'PY'
+#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+commands_path, client, input_path, output_path, error_path, pid_path, launched_path, gate_path = sys.argv[1:]
+argv = json.loads(pathlib.Path(commands_path).read_text())[client]
+if "--session" in argv:
+    raise SystemExit("rendered argv unexpectedly contains an explicit session override")
+pathlib.Path(launched_path).write_text(json.dumps(argv) + "\n")
+os.chmod(launched_path, 0o600)
+with open(output_path, "wb") as stdout, open(error_path, "wb") as stderr:
+    proxy = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, close_fds=True)
+    pathlib.Path(pid_path).write_text(f"{proxy.pid}\n")
+    os.chmod(pid_path, 0o600)
+    for _ in range(500):
+        if pathlib.Path(gate_path).exists():
+            break
+        import time
+        time.sleep(0.02)
+    else:
+        proxy.terminate()
+        proxy.wait()
+        raise SystemExit("client shim gate timed out")
+    payload = pathlib.Path(input_path).read_bytes()
+    proxy.communicate(payload)
+    raise SystemExit(proxy.returncode)
+PY
+chmod 0700 "$client_shim"
+
 write_input() {
   local path=$1 mode=$2
   case "$mode" in
@@ -137,33 +177,26 @@ write_input() {
 }
 
 launch_client() {
-  local client=$1 session=$2 mode=$3
+  local client=$1 mode=$2
   local input="$tmp_dir/$client.in" output="$tmp_dir/$client.out" error="$tmp_dir/$client.err"
   write_input "$input" "$mode"
-  mapfile -d '' -t command < <(python3 - "$commands" "$client" <<'PY'
-import json, sys
-for value in json.load(open(sys.argv[1]))[sys.argv[2]]:
-    sys.stdout.buffer.write(value.encode() + b"\0")
-PY
-  )
-  local separator
-  for separator in "${!command[@]}"; do
-    [[ "${command[$separator]}" == -- ]] && break
-  done
-  command=("${command[@]:0:separator}" --session "$session" "${command[@]:separator}")
-  "${command[@]}" <"$input" >"$output" 2>"$error" &
-  child_pids+=("$!")
+  python3 "$client_shim" "$commands" "$client" "$input" "$output" "$error" \
+    "$proxy_pid_dir/$client" "$launched_dir/$client.json" "$gate_dir/$client" &
+  shim_pids+=("$!")
+  printf '%s\n' "$!" >"$shim_pid_dir/$client"
+  chmod 0600 "$shim_pid_dir/$client"
 }
 
-launch_client codex 1101:2101 success
-launch_client claude 1102:2102 cancel
-launch_client vscode 1103:2103 success
-launch_client lingma 1104:2104 disconnect
+launch_client codex success
+launch_client claude cancel
+launch_client vscode success
+launch_client lingma disconnect
 
 pid_deadline=$((SECONDS + 10))
-while (( $(find "$pid_dir" -maxdepth 1 -type f | wc -l) < 4 )); do
+while (( $(find "$pid_dir" -maxdepth 1 -type f | wc -l) < 4 || \
+  $(find "$proxy_pid_dir" -maxdepth 1 -type f | wc -l) < 4 )); do
   if (( SECONDS >= pid_deadline )); then
-    printf 'fake MCP servers did not all publish exact PIDs within 10s\n' >&2
+    printf 'proxy/fake processes did not all publish exact PIDs within 10s\n' >&2
     exit 1
   fi
   sleep 0.1
@@ -171,9 +204,40 @@ done
 while IFS= read -r pid_file; do
   fake_pids+=("$(basename "$pid_file")")
 done < <(find "$pid_dir" -maxdepth 1 -type f -print | sort)
+while IFS= read -r pid_file; do
+  proxy_pids+=("$(tr -d '[:space:]' <"$pid_file")")
+done < <(find "$proxy_pid_dir" -maxdepth 1 -type f -print | sort)
+
+python3 - "$commands" "$launched_dir" <<'PY'
+import json, pathlib, sys
+rendered = json.loads(pathlib.Path(sys.argv[1]).read_text())
+launched_dir = pathlib.Path(sys.argv[2])
+launched = {client: json.loads((launched_dir / f"{client}.json").read_text()) for client in rendered}
+assert launched == rendered, (launched, rendered)
+assert all("--session" not in argv for argv in launched.values())
+PY
+python3 - "$proxy_pid_dir" "$shim_pid_dir" <<'PY'
+import pathlib, sys
+proxy_dir, shim_dir = map(pathlib.Path, sys.argv[1:])
+shim_pids = set()
+for proxy_path in sorted(proxy_dir.iterdir()):
+    client = proxy_path.name
+    proxy_pid = int(proxy_path.read_text())
+    shim_pid = int((shim_dir / client).read_text())
+    stat = pathlib.Path(f"/proc/{proxy_pid}/stat").read_text()
+    ppid = int(stat[stat.rfind(")") + 2:].split()[1])
+    assert ppid == shim_pid, (client, proxy_pid, ppid, shim_pid)
+    shim_pids.add(shim_pid)
+assert len(shim_pids) == 4, shim_pids
+PY
+printf 'PASS exact rendered argv launched without explicit session override\n'
+for client in "${clients[@]}"; do
+  : >"$gate_dir/$client"
+  chmod 0600 "$gate_dir/$client"
+done
 
 process_failure=0
-for pid in "${child_pids[@]}"; do
+for pid in "${shim_pids[@]}"; do
   if ! wait_for_pid "$pid"; then
     printf 'E2E process did not exit within 10s: pid=%s\n' "$pid" >&2
     process_failure=1
@@ -185,13 +249,14 @@ for pid in "${child_pids[@]}"; do
   fi
 done
 (( process_failure == 0 ))
-child_pids=()
-for pid in "${fake_pids[@]}"; do
+shim_pids=()
+for pid in "${proxy_pids[@]}" "${fake_pids[@]}"; do
   if ! wait_for_pid "$pid"; then
-    printf 'fake MCP server did not exit within 10s: pid=%s\n' "$pid" >&2
+    printf 'proxy/fake process did not exit within 10s: pid=%s\n' "$pid" >&2
     exit 1
   fi
 done
+proxy_pids=()
 fake_pids=()
 
 python3 - "$state_dir" <<'PY'
@@ -229,7 +294,7 @@ if rg -l 'DO-NOT-LOG|SECRET-BODY|TOKEN=|https?://' "$state_dir" >/dev/null; then
   printf 'sensitive fixture value persisted in state directory\n' >&2
   exit 1
 fi
-printf 'PASS isolated sessions: 4 unique hashes\n'
+printf 'PASS derived isolated sessions: 4 unique hashes\n'
 printf 'PASS tool outcomes: 1 cancelled, at least 3 effective, 1 disconnected\n'
 printf 'PASS metadata privacy and private modes\n'
 
