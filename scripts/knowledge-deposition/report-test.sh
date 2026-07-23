@@ -22,7 +22,7 @@ new_repo() {
   local name="$1"
   local repo="$FIXTURE_ROOT/$name"
   mkdir -p "$repo/docs/agent" "$repo/tmp/knowledge-deposition/current"
-  printf 'module github.com/ArchChuan/Stratum\n\ngo 1.25.12\n' >"$repo/go.mod"
+  printf 'module github.com/byteBuilderX/stratum\n\ngo 1.25.12\n' >"$repo/go.mod"
   printf '# Knowledge deposition policy\n' >"$repo/docs/agent/knowledge-deposition.md"
   git -C "$repo" init -q
   git -C "$repo" config user.email test@example.com
@@ -406,6 +406,14 @@ if run_report "$non_stratum" codex session-a task-a "$(valid_none)" >/dev/null 2
   fail "non-Stratum repository was accepted"
 fi
 pass "non-Stratum repository is rejected"
+
+stale_stratum="$(new_repo stale-stratum)"
+printf 'module github.com/ArchChuan/Stratum\n\ngo 1.25.12\n' >"$stale_stratum/go.mod"
+write_marker "$stale_stratum" codex session-a task-a
+if run_report "$stale_stratum" codex session-a task-a "$(valid_none)" >/dev/null 2>&1; then
+  fail "stale Stratum module identity was accepted"
+fi
+pass "stale Stratum module identity is rejected"
 
 printf '{not-json\n' >"$repo_invalid/tmp/knowledge-deposition/current/codex-session-a.json"
 if run_report "$repo_invalid" codex session-a task-a "$(valid_none)" >/dev/null 2>&1; then

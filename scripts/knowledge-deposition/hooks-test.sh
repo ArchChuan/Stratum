@@ -20,7 +20,7 @@ new_repo() {
   local name="$1" repo
   repo="$FIXTURES/$name"
   mkdir -p "$repo/docs/agent"
-  printf 'module github.com/ArchChuan/Stratum\n\ngo 1.25.12\n' >"$repo/go.mod"
+  printf 'module github.com/byteBuilderX/stratum\n\ngo 1.25.12\n' >"$repo/go.mod"
   printf '# policy\n' >"$repo/docs/agent/knowledge-deposition.md"
   git -C "$repo" init -q
   git -C "$repo" config user.email test@example.com
@@ -78,6 +78,15 @@ for required in "$CODEX_START" "$CODEX_STOP" "$CLAUDE_START" "$CLAUDE_STOP"; do
   [[ -x "$required" ]] || fail "required adapter missing or not executable: $required"
 done
 pass "all adapters exist"
+
+actual_root="$(git -C "$SCRIPT_DIR/../.." rev-parse --show-toplevel)"
+actual_out="$(run_hook "$CODEX_START" "$(payload "$actual_root" actual-root-session UserPromptSubmit)")"
+jq -e '.continue == true and (.systemMessage | contains("Knowledge deposition task gate active."))' \
+  <<<"$actual_out" >/dev/null || fail "actual feature worktree was treated as non-Stratum"
+actual_marker="$(find "$actual_root/tmp/knowledge-deposition/current" -name 'codex-session-*.json' -print -quit)"
+[[ -f "$actual_marker" ]] || fail "actual feature worktree marker missing"
+rm -f -- "$actual_marker"
+pass "actual feature worktree activates the Stratum task gate"
 
 repo="$(new_repo main)"
 codex_raw_session='codex/session unsafe'
@@ -213,6 +222,15 @@ for adapter in "$CODEX_START" "$CODEX_STOP" "$CLAUDE_START" "$CLAUDE_STOP"; do
   jq -e '.continue == true and .suppressOutput == true' <<<"$out" >/dev/null || fail "non-Stratum adapter was not quiet: $adapter"
 done
 pass "non-Stratum payloads quietly allow all adapters"
+
+stale_repo="$(new_repo stale-module)"
+printf 'module github.com/ArchChuan/Stratum\n\ngo 1.25.12\n' >"$stale_repo/go.mod"
+for adapter in "$CODEX_START" "$CODEX_STOP" "$CLAUDE_START" "$CLAUDE_STOP"; do
+  out="$(run_hook "$adapter" "$(payload "$stale_repo" stale-session Stop false)")"
+  jq -e '.continue == true and .suppressOutput == true' <<<"$out" >/dev/null || \
+    fail "stale module identity was accepted: $adapter"
+done
+pass "stale module identity is treated as non-Stratum by all adapters"
 
 for adapter in "$CODEX_START" "$CODEX_STOP" "$CLAUDE_START" "$CLAUDE_STOP"; do
   out="$(printf '{bad' | "$adapter")"
@@ -377,6 +395,15 @@ jq -n '{theme:"dark",hooks:{UserPromptSubmit:[{matcher:"keep-metadata"},{matcher
 jq -n '{permissions:{allow:["Read"]},hooks:{UserPromptSubmit:[{hooks:[{type:"command",command:"echo claude-start"},{type:"command",command:"bash /old/repo\\;meta/scripts/knowledge-deposition/claude-task-start.sh"}]}],Stop:[{hooks:[{type:"command",command:"echo claude-stop"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/claude-stop.sh"},{type:"command",command:"true && bash /prior/scripts/knowledge-deposition/claude-stop.sh"}]}]}}' >"$claude_config"
 codex_original="$(cat "$codex_config")"
 claude_original="$(cat "$claude_config")"
+stale_installer_repo="$(new_repo stale-installer)"
+printf 'module github.com/ArchChuan/Stratum\n\ngo 1.25.12\n' >"$stale_installer_repo/go.mod"
+mkdir -p "$stale_installer_repo/scripts"
+ln -s "$SCRIPT_DIR" "$stale_installer_repo/scripts/knowledge-deposition"
+if CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$claude_config" \
+  run_installer --repo-root "$stale_installer_repo" >/dev/null 2>&1; then
+  fail "installer accepted stale Stratum module identity"
+fi
+pass "installer rejects stale Stratum module identity"
 install_out="$(CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$claude_config" run_installer --repo-root "$installer_repo")" || fail "installer failed"
 for spec in \
   "$codex_config|codex-task-start.sh|codex-stop.sh|echo codex-start|echo codex-stop" \

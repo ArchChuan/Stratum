@@ -2,6 +2,10 @@
 set -euo pipefail
 umask 077
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
+
 usage() {
   printf 'Usage: %s --repo-root ABS\n' "$(basename "$0")" >&2
   exit 2
@@ -16,9 +20,7 @@ fail() {
 repo_root="$2"
 [[ "$repo_root" == /* ]] || fail "--repo-root must be absolute"
 [[ -d "$repo_root" && ! -L "$repo_root" ]] || fail "repository root is not a safe directory"
-[[ -f "$repo_root/go.mod" ]] || fail "repository root is not Stratum"
-grep -Eq '^module github.com/(ArchChuan/Stratum|byteBuilderX/stratum)$' "$repo_root/go.mod" || \
-  fail "repository root is not Stratum"
+knowledge_is_stratum_root "$repo_root" || fail "repository root is not Stratum"
 
 script_root="$repo_root/scripts/knowledge-deposition"
 for adapter in codex-task-start.sh codex-stop.sh claude-task-start.sh claude-stop.sh; do

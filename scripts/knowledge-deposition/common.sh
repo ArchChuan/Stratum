@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+readonly KNOWLEDGE_STRATUM_MODULE='github.com/byteBuilderX/stratum'
+
 knowledge_fail() {
   printf 'knowledge deposition: %s\n' "$1" >&2
   return 1
@@ -58,7 +60,7 @@ knowledge_is_stratum_root() {
   [[ -d "$root" ]] || return 1
   [[ -f "$root/docs/agent/knowledge-deposition.md" ]] || return 1
   [[ -f "$root/go.mod" ]] || return 1
-  [[ "$(sed -n '1{s/[[:space:]]*$//;p;}' "$root/go.mod")" == 'module github.com/ArchChuan/Stratum' ]]
+  [[ "$(sed -n '1{s/[[:space:]]*$//;p;}' "$root/go.mod")" == "module $KNOWLEDGE_STRATUM_MODULE" ]]
 }
 
 knowledge_current_path() {
