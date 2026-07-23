@@ -37,6 +37,7 @@ type Agent struct {
 	TenantResolver      agentport.TenantCapabilityResolver
 	SkillLookup         agentport.SkillLookup
 	TenantSettings      agentport.TenantSettings
+	DiagnosticProvider  agentport.DiagnosticEvidenceProvider
 }
 
 // ragSearchAdapter wraps *knowledge.RAGService to satisfy
@@ -235,6 +236,9 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			})
 		}
 	}
+	a.DiagnosticProvider = newSystemAssistantDiagnosticAdapter(
+		tenantRoleAdapter{service: tenantMemberService(c)}, systemAssistantDiagnosticCollectors(c, a),
+	)
 	a.Service = agent.NewAgentService(deps)
 
 	c.Agent = a
