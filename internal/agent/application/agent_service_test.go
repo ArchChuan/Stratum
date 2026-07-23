@@ -25,6 +25,11 @@ func (m *mockAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig
 	cfg, _ := args.Get(0).(*domain.AgentConfig)
 	return cfg, args.Bool(1), args.Error(2)
 }
+func (m *mockAgentRepo) GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error) {
+	args := m.Called(ctx)
+	cfg, _ := args.Get(0).(*domain.AgentConfig)
+	return cfg, args.Bool(1), args.Error(2)
+}
 func (m *mockAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, error) {
 	args := m.Called(ctx)
 	cfgs, _ := args.Get(0).([]*domain.AgentConfig)
@@ -35,6 +40,9 @@ func (m *mockAgentRepo) Remove(ctx context.Context, id string) error {
 }
 func (m *mockAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig) error {
 	return m.Called(ctx, cfg).Error(0)
+}
+func (m *mockAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string) error {
+	return m.Called(ctx, model).Error(0)
 }
 
 type mockTenantSettings struct{ mock.Mock }

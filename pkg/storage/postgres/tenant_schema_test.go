@@ -6,6 +6,42 @@ import (
 	"testing"
 )
 
+func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS agents")
+	columnAt := strings.Index(sql, "ALTER TABLE agents ADD COLUMN IF NOT EXISTS system_key TEXT")
+	indexAt := strings.Index(sql, "CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key")
+	seedAt := strings.Index(sql, "'stratum.platform_assistant'")
+	if createAt == -1 || columnAt == -1 || indexAt == -1 || seedAt == -1 {
+		t.Fatalf("tenant schema missing managed assistant DDL: create=%d column=%d index=%d seed=%d",
+			createAt, columnAt, indexAt, seedAt)
+	}
+	if createAt >= columnAt || columnAt >= indexAt || indexAt >= seedAt {
+		t.Fatalf("managed assistant DDL must follow create/alter/index/seed order: create=%d column=%d index=%d seed=%d",
+			createAt, columnAt, indexAt, seedAt)
+	}
+	for _, want := range []string{
+		"ON agents(system_key) WHERE system_key IS NOT NULL",
+		"'stratum-platform-assistant'",
+		"'Stratum 系统助手'",
+		"'基于官方资料指导平台使用并诊断当前租户应用状态'",
+		"'', '', '', 10, 8000, 'user', 'stratum.platform_assistant'",
+		"ON CONFLICT (id) DO NOTHING",
+		"stratum platform assistant identity conflict requires operator action",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("tenant schema missing managed assistant contract %q", want)
+		}
+	}
+	if strings.Contains(sql, "ON CONFLICT (name)") {
+		t.Fatal("managed assistant seed must not hide an ordinary-agent name collision")
+	}
+}
+
 func TestTenantSchemaBackfillsStructuredMemoryFacts(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {

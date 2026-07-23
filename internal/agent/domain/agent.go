@@ -9,7 +9,6 @@ package domain
 
 import (
 	"encoding/json"
-	"errors"
 	"time"
 )
 
@@ -52,6 +51,9 @@ type AgentConfig struct {
 	KnowledgeWorkspaceDescriptions []string
 	MaxContextTokens               int
 	MemoryScope                    string
+	SystemKey                      string
+	IsSystem                       bool
+	ManagementMode                 string
 	// StuckThreshold > 0 enables lazy planning: after this many LLM rounds with
 	// no final answer the agent transitions to Reflect→Plan→Execute.
 	// 0 disables the feature (pure ReAct).
@@ -335,20 +337,3 @@ type AgentState struct {
 	ToolCalls  []ToolCall
 	TokensUsed int
 }
-
-// Sentinel errors returned by repositories. Application layer aliases
-// these (`var ErrNotFound = domain.ErrNotFound`) so external call-sites
-// keep matching with `errors.Is`.
-var (
-	// ErrNotFound is returned when an agent / conversation / message
-	// cannot be located in the tenant schema.
-	ErrNotFound = errors.New("agent not found")
-
-	// ErrNameConflict is returned when an agent with the same name
-	// already exists in the tenant.
-	ErrNameConflict = errors.New("agent name already exists")
-
-	// ErrInvalidSkill is returned when a skill ID does not exist in
-	// the tenant's skills table.
-	ErrInvalidSkill = errors.New("skill not found")
-)

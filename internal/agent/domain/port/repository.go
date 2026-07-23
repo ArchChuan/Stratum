@@ -17,9 +17,11 @@ import (
 type AgentRepo interface {
 	Register(ctx context.Context, cfg *domain.AgentConfig) error
 	Get(ctx context.Context, id string) (*domain.AgentConfig, bool, error)
+	GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error)
 	GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 	Remove(ctx context.Context, id string) error
 	Update(ctx context.Context, cfg *domain.AgentConfig) error
+	UpdateSystemAssistantModel(ctx context.Context, model string) error
 }
 
 // AgentSkillBinding resolves which agent is wired to a given skill through the

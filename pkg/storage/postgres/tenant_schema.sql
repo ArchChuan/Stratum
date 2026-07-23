@@ -37,6 +37,32 @@ CREATE TABLE IF NOT EXISTS agents (
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 8000;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS embed_model TEXT NOT NULL DEFAULT '';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'agent';
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS system_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key
+    ON agents(system_key) WHERE system_key IS NOT NULL;
+
+INSERT INTO agents (
+    id, name, type, description, system_prompt, llm_model, embed_model,
+    max_iterations, max_context_tokens, memory_scope, system_key
+) VALUES (
+    'stratum-platform-assistant',
+    'Stratum 系统助手',
+    'react',
+    '基于官方资料指导平台使用并诊断当前租户应用状态',
+    '', '', '', 10, 8000, 'user', 'stratum.platform_assistant'
+)
+ON CONFLICT (id) DO NOTHING;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM agents
+        WHERE id = 'stratum-platform-assistant'
+          AND system_key = 'stratum.platform_assistant'
+    ) THEN
+        RAISE EXCEPTION 'stratum platform assistant identity conflict requires operator action';
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS skills (
     id                 TEXT PRIMARY KEY,

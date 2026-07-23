@@ -118,8 +118,8 @@ func TestAgentRepo_Get(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
 		WithArgs(pgxmock.AnyArg()).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "embed_model", "max_iterations", "max_context_tokens", "memory_scope"}).
-			AddRow("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", "", 5, 8000, ""))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "embed_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key"}).
+			AddRow("a1", "Alpha", string(domain.ReActAgent), "", "", "gpt-4o", "", 5, 8000, "", ""))
 	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
 		WithArgs("a1").
 		WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
@@ -164,7 +164,7 @@ func TestAgentRepo_GetNotFound(t *testing.T) {
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectQuery("SELECT id, name").
 		WithArgs("missing").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "embed_model", "max_iterations", "max_context_tokens", "memory_scope"}))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "embed_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key"}))
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
@@ -186,6 +186,8 @@ func TestAgentRepo_Remove(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectQuery("SELECT COALESCE\\(system_key").
+		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"system_key"}).AddRow(""))
 	pool.ExpectExec("DELETE FROM agents").
 		WithArgs("a1").
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
@@ -194,6 +196,30 @@ func TestAgentRepo_Remove(t *testing.T) {
 	repo := &PgAgentRepo{pool: pool}
 	if err := repo.Remove(tenantCtx("t1"), "a1"); err != nil {
 		t.Fatalf("Remove: %v", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestAgentRepo_RemoveSystemAssistantRollsBackBeforeDelete(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectQuery("SELECT COALESCE\\(system_key").
+		WithArgs("stratum-platform-assistant").
+		WillReturnRows(pgxmock.NewRows([]string{"system_key"}).AddRow("stratum.platform_assistant"))
+	pool.ExpectRollback()
+
+	repo := &PgAgentRepo{pool: pool}
+	err = repo.Remove(tenantCtx("t1"), "stratum-platform-assistant")
+	if !errors.Is(err, domain.ErrSystemAssistantManaged) {
+		t.Fatalf("expected managed assistant error, got %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
@@ -209,6 +235,8 @@ func TestAgentRepo_Update_Success(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectQuery("SELECT COALESCE\\(system_key").
+		WithArgs("a1").WillReturnRows(pgxmock.NewRows([]string{"system_key"}).AddRow(""))
 	pool.ExpectExec("UPDATE agents").
 		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", "a1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -242,9 +270,8 @@ func TestAgentRepo_Update_NotFound(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	pool.ExpectExec("UPDATE agents").
-		WithArgs("Beta", "", "", "gpt-4o", 5, 0, "", "missing").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	pool.ExpectQuery("SELECT COALESCE\\(system_key").
+		WithArgs("missing").WillReturnError(pgx.ErrNoRows)
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
@@ -255,6 +282,108 @@ func TestAgentRepo_Update_NotFound(t *testing.T) {
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("expected domain.ErrNotFound, got: %v", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestAgentRepo_UpdateSystemAssistantRollsBackBeforeRelations(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectQuery("SELECT COALESCE\\(system_key").
+		WithArgs("stratum-platform-assistant").
+		WillReturnRows(pgxmock.NewRows([]string{"system_key"}).AddRow("stratum.platform_assistant"))
+	pool.ExpectRollback()
+
+	repo := &PgAgentRepo{pool: pool}
+	err = repo.Update(tenantCtx("t1"), &domain.AgentConfig{ID: "stratum-platform-assistant"})
+	if !errors.Is(err, domain.ErrSystemAssistantManaged) {
+		t.Fatalf("expected managed assistant error, got %v", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestAgentRepo_GetSystemAssistant(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectQuery("SELECT id, name").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "type", "description", "system_prompt", "llm_model", "embed_model", "max_iterations", "max_context_tokens", "memory_scope", "system_key"}).
+			AddRow("stratum-platform-assistant", "Stratum 系统助手", "react", "managed", "", "qwen-plus", "", 10, 8000, "user", "stratum.platform_assistant"))
+	pool.ExpectQuery("SELECT skill_id FROM agent_skill_links").
+		WithArgs("stratum-platform-assistant").WillReturnRows(pgxmock.NewRows([]string{"skill_id"}))
+	pool.ExpectQuery("SELECT server_id, tool_name FROM agent_mcp_tool_links").
+		WithArgs("stratum-platform-assistant").WillReturnRows(pgxmock.NewRows([]string{"server_id", "tool_name"}))
+	pool.ExpectQuery("SELECT aw.workspace_id").
+		WithArgs("stratum-platform-assistant").WillReturnRows(pgxmock.NewRows([]string{"workspace_id", "name", "description"}))
+	pool.ExpectCommit()
+
+	repo := &PgAgentRepo{pool: pool}
+	cfg, ok, err := repo.GetSystemAssistant(tenantCtx("t1"))
+	if err != nil || !ok {
+		t.Fatalf("GetSystemAssistant: ok=%v err=%v", ok, err)
+	}
+	if cfg.SystemKey != "stratum.platform_assistant" || !cfg.IsSystem || cfg.ManagementMode != "platform" {
+		t.Fatalf("unexpected managed identity: %+v", cfg)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestAgentRepo_UpdateSystemAssistantModel(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectExec("UPDATE agents SET llm_model=\\$1, updated_at=NOW\\(\\)").
+		WithArgs("qwen-plus").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+
+	repo := &PgAgentRepo{pool: pool}
+	if err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus"); err != nil {
+		t.Fatalf("UpdateSystemAssistantModel: %v", err)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestAgentRepo_UpdateSystemAssistantModelNotFound(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectExec("UPDATE agents SET llm_model=\\$1, updated_at=NOW\\(\\)").
+		WithArgs("qwen-plus").WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	pool.ExpectRollback()
+
+	repo := &PgAgentRepo{pool: pool}
+	err = repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected not found, got %v", err)
 	}
 	if err := pool.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)

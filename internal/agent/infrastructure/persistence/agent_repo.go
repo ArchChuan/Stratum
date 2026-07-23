@@ -175,8 +175,8 @@ func loadKnowledgeWorkspaces(ctx context.Context, tx pgx.Tx, agentID string) ([]
 func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
-			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_scope)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_scope, system_key)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL)`,
 			cfg.ID, cfg.Name, string(cfg.Type), cfg.Description,
 			cfg.SystemPrompt, cfg.LLMModel, cfg.EmbedModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope,
 		)
@@ -206,10 +206,12 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 	var agentType string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
-			`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_scope
+			`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_scope,
+			        COALESCE(system_key, '')
 			 FROM agents WHERE id = $1`, id).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
-				&cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope); err != nil {
+				&cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
+				&cfg.SystemKey); err != nil {
 			return err
 		}
 		skillIDs, err := loadSkillIDs(ctx, tx, id)
@@ -237,16 +239,42 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 		}
 		return nil, false, err
 	}
-	if cfg.AllowedSkills == nil {
-		cfg.AllowedSkills = []string{}
-	}
-	if cfg.MCPToolIDs == nil {
-		cfg.MCPToolIDs = []string{}
-	}
-	if cfg.KnowledgeWorkspaceIDs == nil {
-		cfg.KnowledgeWorkspaceIDs = []string{}
+	cfg.Type = domain.AgentType(agentType)
+	setManagedIdentity(&cfg)
+	cfg.AllowedSkills = nonNil(cfg.AllowedSkills)
+	cfg.MCPToolIDs = nonNil(cfg.MCPToolIDs)
+	cfg.KnowledgeWorkspaceIDs = nonNil(cfg.KnowledgeWorkspaceIDs)
+	return &cfg, true, nil
+}
+
+func (r *PgAgentRepo) GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error) {
+	var cfg domain.AgentConfig
+	var agentType string
+	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx,
+			`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens,
+			        memory_scope, system_key
+			 FROM agents WHERE system_key = 'stratum.platform_assistant'`).
+			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel,
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey); err != nil {
+			return err
+		}
+		if err := loadAgentRelations(ctx, tx, &cfg); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, err
 	}
 	cfg.Type = domain.AgentType(agentType)
+	setManagedIdentity(&cfg)
+	cfg.AllowedSkills = nonNil(cfg.AllowedSkills)
+	cfg.MCPToolIDs = nonNil(cfg.MCPToolIDs)
+	cfg.KnowledgeWorkspaceIDs = nonNil(cfg.KnowledgeWorkspaceIDs)
 	return &cfg, true, nil
 }
 
@@ -291,7 +319,8 @@ func (r *PgAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 
 func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_scope
+		`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_scope,
+		        COALESCE(system_key, '')
 		 FROM agents ORDER BY created_at`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list agents: %w", err)
@@ -303,10 +332,12 @@ func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string
 		var cfg domain.AgentConfig
 		var agentType string
 		if err := rows.Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
-			&cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope); err != nil {
+			&cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
+			&cfg.SystemKey); err != nil {
 			return nil, nil, fmt.Errorf("scan agent row: %w", err)
 		}
 		cfg.Type = domain.AgentType(agentType)
+		setManagedIdentity(&cfg)
 		cfgs = append(cfgs, &cfg)
 		ids = append(ids, cfg.ID)
 	}
@@ -386,6 +417,9 @@ func nonNil(s []string) []string {
 // Remove deletes an agent from the tenant schema.
 func (r *PgAgentRepo) Remove(ctx context.Context, id string) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := rejectManagedAssistant(ctx, tx, id); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `DELETE FROM agents WHERE id = $1`, id)
 		if err != nil {
 			return err
@@ -400,6 +434,9 @@ func (r *PgAgentRepo) Remove(ctx context.Context, id string) error {
 // Update replaces an agent's mutable fields in the tenant schema.
 func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := rejectManagedAssistant(ctx, tx, cfg.ID); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx,
 			`UPDATE agents
 			 SET name=$1, description=$2, system_prompt=$3,
@@ -426,6 +463,54 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig) error
 		}
 		return nil
 	})
+}
+
+func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string) error {
+	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE agents SET llm_model=$1, updated_at=NOW()
+			WHERE system_key='stratum.platform_assistant'`, model)
+		if err != nil {
+			return fmt.Errorf("update system assistant model: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("update system assistant model: %w", domain.ErrNotFound)
+		}
+		return nil
+	})
+}
+
+func rejectManagedAssistant(ctx context.Context, tx pgx.Tx, id string) error {
+	var systemKey string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(system_key, '') FROM agents WHERE id = $1`, id).Scan(&systemKey); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("agent %s: %w", id, domain.ErrNotFound)
+		}
+		return fmt.Errorf("load agent %s system key: %w", id, err)
+	}
+	if systemKey != "" {
+		return domain.ErrSystemAssistantManaged
+	}
+	return nil
+}
+
+func setManagedIdentity(cfg *domain.AgentConfig) {
+	if cfg.SystemKey != "" {
+		cfg.IsSystem = true
+		cfg.ManagementMode = "platform"
+	}
+}
+
+func loadAgentRelations(ctx context.Context, tx pgx.Tx, cfg *domain.AgentConfig) error {
+	var err error
+	if cfg.AllowedSkills, err = loadSkillIDs(ctx, tx, cfg.ID); err != nil {
+		return err
+	}
+	if cfg.MCPToolIDs, err = loadMCPToolIDs(ctx, tx, cfg.ID); err != nil {
+		return err
+	}
+	cfg.KnowledgeWorkspaceIDs, cfg.KnowledgeWorkspaceNames, cfg.KnowledgeWorkspaceDescriptions, err =
+		loadKnowledgeWorkspaces(ctx, tx, cfg.ID)
+	return err
 }
 
 // FindAgentBySkill returns the id of an agent bound to skillID via

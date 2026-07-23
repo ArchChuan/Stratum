@@ -121,6 +121,9 @@ type AgentDTO struct {
 	KnowledgeWorkspaceIDs []string
 	CreatedAt             string
 	MemoryScope           string
+	SystemKey             string
+	IsSystem              bool
+	ManagementMode        string
 }
 
 // Create persists a new agent for the tenant. Inherits embed_model from
@@ -386,6 +389,9 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,
 		CreatedAt:             time.Now().Format(time.RFC3339),
 		MemoryScope:           cfg.MemoryScope,
+		SystemKey:             cfg.SystemKey,
+		IsSystem:              cfg.IsSystem,
+		ManagementMode:        cfg.ManagementMode,
 	}
 }
 
