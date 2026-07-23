@@ -409,6 +409,8 @@ CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$claude_config" run_insta
 [[ "$(sha256sum "$codex_config")" == "$first_codex" && "$(sha256sum "$claude_config")" == "$first_claude" ]] || fail "second install changed canonical output"
 [[ "$(find "$installer_configs" -type f -name '*.knowledge-deposition.*.bak' | wc -l)" == "$backup_count" ]] || fail "idempotent run created unnecessary backups"
 [[ "$install_out" != *"$codex_original"* && "$install_out" != *"$claude_original"* ]] || fail "installer printed full settings"
+[[ "$(stat -c %a "$codex_config")" == 600 && "$(stat -c %a "$claude_config")" == 600 ]] || \
+  fail "published configs are not private"
 pass "installer preserves unrelated JSON, installs one pair per client, and is byte-stable idempotent"
 
 default_home="$FIXTURES/default-home"
@@ -552,5 +554,24 @@ jq -e '(.hooks.UserPromptSubmit | length) == 1 and (.hooks.Stop | length) == 1 a
 [[ "$(stat -c %a "${cooperate_codex}.knowledge-deposition.lock")" == 600 && \
    "$(stat -c %a "${cooperate_claude}.knowledge-deposition.lock")" == 600 ]] || fail "installer locks are not private"
 pass "deterministically ordered advisory locks serialize cooperating installers"
+
+chmod_failure_dir="$FIXTURES/chmod-publish"
+mkdir -p "$chmod_failure_dir/codex" "$chmod_failure_dir/claude" "$chmod_failure_dir/bin"
+chmod_failure_codex="$chmod_failure_dir/codex/hooks.json"
+chmod_failure_claude="$chmod_failure_dir/claude/settings.json"
+jq -n '{hooks:{}}' >"$chmod_failure_codex"
+jq -n '{hooks:{}}' >"$chmod_failure_claude"
+real_chmod="$(command -v chmod)"
+printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'count_file="${KD_CHMOD_COUNT}"' 'count=0' \
+  '[[ ! -f "$count_file" ]] || count="$(cat "$count_file")"' 'count=$((count + 1))' \
+  'printf "%s\n" "$count" >"$count_file"' 'if [[ "$count" -eq 5 ]]; then exit 76; fi' \
+  'exec "$KD_REAL_CHMOD" "$@"' >"$chmod_failure_dir/bin/chmod"
+chmod +x "$chmod_failure_dir/bin/chmod"
+PATH="$chmod_failure_dir/bin:$PATH" KD_CHMOD_COUNT="$chmod_failure_dir/chmod.count" KD_REAL_CHMOD="$real_chmod" \
+  CODEX_HOOKS_JSON="$chmod_failure_codex" CLAUDE_SETTINGS_JSON="$chmod_failure_claude" \
+  run_installer --repo-root "$installer_repo" >/dev/null || fail "installer depended on post-publish chmod"
+[[ "$(stat -c %a "$chmod_failure_codex")" == 600 && "$(stat -c %a "$chmod_failure_claude")" == 600 ]] || \
+  fail "published configs lost private mode without post-publish chmod"
+pass "published configs are mode 600 before replacement with no post-commit chmod failure point"
 
 printf '1..%d\n' "$count"

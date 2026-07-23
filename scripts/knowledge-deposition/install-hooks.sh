@@ -169,5 +169,4 @@ if ! mv -- "$claude_tmp" "$claude_config"; then
   fail "could not replace Claude settings; restored Codex hooks; Claude original preserved"
 fi
 claude_tmp=""
-chmod 600 "$codex_config" "$claude_config"
 printf 'Installed knowledge deposition hooks. Backups: %s %s\n' "$codex_backup" "$claude_backup"
