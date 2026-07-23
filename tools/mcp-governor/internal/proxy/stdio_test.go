@@ -207,6 +207,40 @@ func TestForwardLinesPreservesReadAheadAndDeferredErrors(t *testing.T) {
 	}
 }
 
+func TestForwardLinesRetainsTerminalErrorWhenDelimiterIsFinalByte(t *testing.T) {
+	customErr := errors.New("terminal read failure")
+	tests := []struct {
+		name    string
+		readErr error
+		wantErr error
+	}{
+		{name: "EOF", readErr: io.EOF},
+		{name: "non EOF error", readErr: customErr, wantErr: customErr},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := &oneShotTerminalReader{data: []byte("line\n"), err: tt.readErr}
+			var forwarded strings.Builder
+			err := forwardLines(context.Background(), "client", source, 64, func(line []byte) error {
+				_, writeErr := forwarded.Write(line)
+				return writeErr
+			})
+			if forwarded.String() != "line\n" {
+				t.Fatalf("forwarded = %q, want exact line", forwarded.String())
+			}
+			if source.reads.Load() != 1 {
+				t.Fatalf("underlying reads = %d, want 1", source.reads.Load())
+			}
+			if tt.wantErr == nil && err != nil {
+				t.Fatalf("forwardLines() error = %v, want nil", err)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("forwardLines() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestRunClientEOFAndChildExit(t *testing.T) {
 	server := buildFakeServer(t)
 	if err := Run(context.Background(), Options{
@@ -531,6 +565,19 @@ type singleReadReader struct {
 	data   []byte
 	err    error
 	offset int
+}
+
+type oneShotTerminalReader struct {
+	data  []byte
+	err   error
+	reads atomic.Int32
+}
+
+func (r *oneShotTerminalReader) Read(p []byte) (int, error) {
+	if r.reads.Add(1) != 1 {
+		return 0, errors.New("unexpected second underlying read")
+	}
+	return copy(p, r.data), r.err
 }
 
 func (r *singleReadReader) Read(p []byte) (int, error) {

@@ -311,6 +311,11 @@ type lineLimitedReader struct {
 }
 
 func (r *lineLimitedReader) Read(p []byte) (int, error) {
+	if len(r.pending) == 0 && r.deferred != nil {
+		err := r.deferred
+		r.deferred = nil
+		return 0, err
+	}
 	if r.remaining == 0 {
 		return 0, ErrMessageTooLarge
 	}
