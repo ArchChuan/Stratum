@@ -25,11 +25,13 @@ const OpenSystemAssistantModelModal = ({ canManage, onClose, onSaved }: Props) =
   const [loadError, setLoadError] = useState<string>();
   const [updateLoading, setUpdateLoading] = useState(false);
   const requestGenerationRef = useRef(0);
+  const mutationGenerationRef = useRef(0);
   const activeRef = useRef(true);
   const canManageRef = useRef(canManage);
   canManageRef.current = canManage;
 
   useEffect(() => {
+    activeRef.current = true;
     const requestGeneration = ++requestGenerationRef.current;
     let cancelled = false;
     setModels([]);
@@ -57,23 +59,39 @@ const OpenSystemAssistantModelModal = ({ canManage, onClose, onSaved }: Props) =
       cancelled = true;
       activeRef.current = false;
       requestGenerationRef.current += 1;
+      mutationGenerationRef.current += 1;
     };
   }, []);
 
   const canSubmit = canManage && loaded && !loading && !loadError && !!selectedModel && !updateLoading;
   const handleSave = async () => {
     if (!canSubmit || !selectedModel) return;
+    const mutationGeneration = ++mutationGenerationRef.current;
     setUpdateLoading(true);
     try {
       const settings = await agentApi.updateSystemSettings({ llmModel: selectedModel });
-      if (!activeRef.current || !canManageRef.current) return;
+      if (
+        !activeRef.current ||
+        !canManageRef.current ||
+        mutationGeneration !== mutationGenerationRef.current
+      ) return;
       onSaved(settings.llmModel);
       message.success({ content: '助手模型已更新', duration: 2 });
       onClose();
     } catch (err) {
-      message.error({ content: extractErrorMessage(err, '更新助手模型失败'), duration: 0 });
+      if (
+        activeRef.current &&
+        canManageRef.current &&
+        mutationGeneration === mutationGenerationRef.current
+      ) {
+        message.error({ content: extractErrorMessage(err, '更新助手模型失败'), duration: 0 });
+      }
     } finally {
-      if (activeRef.current) setUpdateLoading(false);
+      if (
+        activeRef.current &&
+        canManageRef.current &&
+        mutationGeneration === mutationGenerationRef.current
+      ) setUpdateLoading(false);
     }
   };
 

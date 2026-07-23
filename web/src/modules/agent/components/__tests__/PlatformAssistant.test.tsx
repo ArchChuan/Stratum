@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { agentApi } from '../../api/agent.api';
@@ -209,6 +210,41 @@ describe('平台使用小助手界面', () => {
       await update.promise;
     });
     await waitFor(() => expect(onSaved).not.toHaveBeenCalled());
+  });
+
+  it('在 React StrictMode 双重 effect 生命周期下仍可完成加载与保存', async () => {
+    vi.mocked(agentApi.models).mockResolvedValue(['strict-model']);
+    vi.mocked(agentApi.getSystemSettings).mockResolvedValue({
+      agentId: systemAgent.id, llmModel: '', ready: false,
+    });
+    vi.mocked(agentApi.updateSystemSettings).mockResolvedValue({
+      agentId: systemAgent.id, llmModel: 'strict-model', ready: true,
+    });
+    const onSaved = vi.fn();
+    const onClose = vi.fn();
+
+    render(
+      <StrictMode>
+        <SystemAssistantModelModal open canManage onClose={onClose} onSaved={onSaved} />
+      </StrictMode>,
+    );
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.mouseDown(within(dialog).getByRole('combobox'));
+    const option = await waitFor(() => {
+      const item = Array.from(document.querySelectorAll<HTMLElement>('.ant-select-item-option-content'))
+        .find((candidate) => candidate.textContent === 'strict-model');
+      expect(item).toBeDefined();
+      return item!;
+    });
+    fireEvent.click(option);
+    const save = within(dialog).getByRole('button', { name: '保存模型' });
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.click(save);
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith('strict-model'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(save).not.toHaveClass('ant-btn-loading');
   });
 
   it('把事实、缺口、建议、工具耗时和引用分区展示', () => {
