@@ -10,7 +10,7 @@
 	migration-guardrails ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	agent-instructions agent-instructions-check \
-	tool-permission-test agent-interview-test \
+	tool-permission-test agent-interview-test knowledge-deposition-test \
 	dev-up dev-down \
 	run fe-dev help clean
 
@@ -206,6 +206,10 @@ e2e-evaluation-evolution:
 	go test e2e/evaluation-evolution/bootstrap.go e2e/evaluation-evolution/bootstrap_test.go -count=1
 	go test -race e2e/evaluation-evolution/tcp-proxy.go e2e/evaluation-evolution/tcp-proxy_test.go
 	bash scripts/e2e/evaluation-evolution.sh
+
+knowledge-deposition-test:
+	bash scripts/knowledge-deposition/report-test.sh
+	bash scripts/knowledge-deposition/hooks-test.sh
 
 # ─── CI 持续集成（构建+测试+推镜像）───────────────────────────────────────
 ci-backend: migration-guardrails arch-guardrails be-install be-fmt be-lint
