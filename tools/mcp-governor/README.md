@@ -22,6 +22,8 @@ Omit `--output -` to write the configured snapshot file (by default, `~/.local/s
 
 ## Install observation and report timers
 
+Before changing any live client configuration, follow the [MCP observation rollout runbook](../../docs/operations/mcp-observation-runbook.md). It defines private backups, one-client-at-a-time gates, rollback, privacy inspection, and seven-day reporting.
+
 The installer builds the binary, installs it as `~/.local/bin/mcp-governor` with mode `0755`, and creates the governor config, state, event, and report directories with mode `0700`. Newly created systemd user-unit directories also use `0700`; existing current-user-owned `XDG_CONFIG_HOME`, `systemd`, and `systemd/user` directories may retain non-writable modes such as `0755` for compatibility with earlier installs. It generates a 32-byte identity salt at `~/.config/mcp-governor/identity-salt` and installs the example catalog as `~/.config/mcp-governor/config.json`, both with mode `0600`, only when each file is absent. The installer validates ownership and type for `HOME`, the config/state/unit target directories, and managed files. Existing salt and catalog bytes are preserved; unsafe target symlinks, special files, foreign ownership, or group/world-writable validated roots cause installation to stop.
 
 ```sh
@@ -48,6 +50,16 @@ mcp-governor report-latest --config ~/.config/mcp-governor/config.json
 ```
 
 PSS (proportional set size) apportions shared pages among the processes using them, so it is useful for estimating a process's share of total memory. USS (unique set size) counts pages private to that process and is a lower bound on memory reclaimed if it exits. Snapshot warnings indicate incomplete or changing `/proc` data, permission limitations, or processes that exited during collection; review them before drawing conclusions from totals.
+
+## Disposable cross-client E2E
+
+The [observation E2E harness](scripts/e2e-observation.sh) builds the governor and deterministic fake MCP server in a private temporary area, renders and validates all four native client config shapes, launches their rendered wrapper commands with isolated test sessions, exercises overlapping calls, cancellation and abrupt disconnect, checks metadata-only persistence and private modes, and smoke-tests report aggregation. It sets fake `HOME`, XDG, and state roots and never reads or writes live client configuration.
+
+Run its shell acceptance test:
+
+```sh
+./scripts/e2e_observation_test.sh
+```
 
 ## Disable or uninstall
 

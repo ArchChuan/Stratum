@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -31,6 +33,8 @@ func main() {
 			}
 			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"ok"}]}}`+"\n", request.ID)
 		}
+	case "observation":
+		runObservationServer()
 	case "echo":
 		_, _ = io.WriteString(os.Stderr, "fake-server: echo ready\n")
 		_, _ = io.Copy(os.Stdout, os.Stdin)
@@ -55,5 +59,43 @@ func main() {
 		_, _ = fmt.Fprintln(os.Stdout, cwd)
 	default:
 		os.Exit(9)
+	}
+}
+
+func runObservationServer() {
+	if pidDir := os.Getenv("MCP_GOVERNOR_E2E_PID_DIR"); pidDir != "" {
+		pidPath := filepath.Join(pidDir, strconv.Itoa(os.Getpid()))
+		if os.WriteFile(pidPath, nil, 0o600) != nil {
+			os.Exit(10)
+		}
+	}
+	type request struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+		Params struct {
+			RequestID json.RawMessage `json:"requestId"`
+		} `json:"params"`
+	}
+	pending := make(map[string]json.RawMessage)
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		var message request
+		if json.Unmarshal(scanner.Bytes(), &message) != nil {
+			continue
+		}
+		switch message.Method {
+		case "tools/call":
+			pending[string(message.ID)] = append(json.RawMessage(nil), message.ID...)
+		case "notifications/cancelled":
+			delete(pending, string(message.Params.RequestID))
+		}
+		if len(pending) < 2 {
+			continue
+		}
+		for key, id := range pending {
+			_, _ = fmt.Fprintf(os.Stdout,
+				`{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"SECRET-BODY"}]}}`+"\n", id)
+			delete(pending, key)
+		}
 	}
 }
