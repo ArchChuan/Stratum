@@ -105,7 +105,7 @@ func TestWriterRejectsUnsafePathComponents(t *testing.T) {
 }
 
 func TestWriterRejectsSymlinkTargets(t *testing.T) {
-	for _, target := range []string{"root", "client", "file"} {
+	for _, target := range []string{"root", "client", "lock", "file"} {
 		t.Run(target, func(t *testing.T) {
 			base := t.TempDir()
 			root := filepath.Join(base, "events")
@@ -132,6 +132,13 @@ func TestWriterRejectsSymlinkTargets(t *testing.T) {
 				if err := os.Symlink(filepath.Join(real, "target"), filepath.Join(root, "codex", "session.jsonl")); err != nil {
 					t.Fatal(err)
 				}
+			case "lock":
+				if err := os.MkdirAll(filepath.Join(root, "codex"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(real, "target"), filepath.Join(root, "codex", "session.lock")); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if w, err := NewWriter(root, "codex", "session"); err == nil {
 				_ = w.Close()
@@ -142,7 +149,7 @@ func TestWriterRejectsSymlinkTargets(t *testing.T) {
 }
 
 func TestWriterRejectsWrongExistingModes(t *testing.T) {
-	for _, target := range []string{"root", "client", "file"} {
+	for _, target := range []string{"root", "client", "lock", "file"} {
 		t.Run(target, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "events")
 			if err := os.Mkdir(root, 0o700); err != nil {
@@ -165,6 +172,11 @@ func TestWriterRejectsWrongExistingModes(t *testing.T) {
 				}
 			case "file":
 				path := filepath.Join(client, "session.jsonl")
+				if err := os.WriteFile(path, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "lock":
+				path := filepath.Join(client, "session.lock")
 				if err := os.WriteFile(path, nil, 0o644); err != nil {
 					t.Fatal(err)
 				}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -148,6 +149,99 @@ func TestSnapshotHistoryFeedsRepeatedProcessStartsAndMemoryPeaks(t *testing.T) {
 	}
 }
 
+func TestSnapshotHistoryFailurePreservesCurrentSnapshot(t *testing.T) {
+	root := t.TempDir()
+	procRoot := filepath.Join(root, "proc")
+	if err := os.Mkdir(procRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeProcessFixture(t, procRoot, "42", []string{"catalog"})
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	currentPath := filepath.Join(root, "snapshot.json")
+	writeFile(t, currentPath, []byte("previous snapshot"), 0o600)
+	oldRename := renameFile
+	renameFile = func(old, destination string) error {
+		if strings.HasSuffix(destination, ".history.jsonl") {
+			return errors.New("history publish failed")
+		}
+		return os.Rename(old, destination)
+	}
+	t.Cleanup(func() { renameFile = oldRename })
+	useDependencies(t, fixedTime, root, nil)
+	if code := run([]string{"snapshot", "--config", configPath, "--proc-root", procRoot}, io.Discard, io.Discard); code != 1 {
+		t.Fatalf("snapshot code=%d", code)
+	}
+	if got := string(mustReadFile(t, currentPath)); got != "previous snapshot" {
+		t.Fatalf("current snapshot changed before history publication: %q", got)
+	}
+}
+
+func TestSnapshotHistorySerializesDeduplicatesAndCapsSamples(t *testing.T) {
+	root := t.TempDir()
+	output := filepath.Join(root, "snapshot.json")
+	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	first := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base}
+	second := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base.Add(time.Minute)}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, snapshot := range []process.Snapshot{second, first} {
+		wg.Add(1)
+		go func(item process.Snapshot) {
+			defer wg.Done()
+			data, _ := json.Marshal(item)
+			errs <- publishSnapshotData(output, append(data, '\n'), item, 7)
+		}(snapshot)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	history, err := decodeSnapshotHistory(output + ".history.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 || !history[0].CapturedAt.Equal(base) || !history[1].CapturedAt.Equal(base.Add(time.Minute)) {
+		t.Fatalf("serialized history=%+v", history)
+	}
+	data, _ := json.Marshal(first)
+	if err := publishSnapshotData(output, append(data, '\n'), first, 7); err != nil {
+		t.Fatal(err)
+	}
+	history, err = decodeSnapshotHistory(output + ".history.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("duplicate snapshot retained: %d", len(history))
+	}
+
+	const maxSamples = 7 * 24 * 60
+	var raw bytes.Buffer
+	encoder := json.NewEncoder(&raw)
+	for i := 0; i < maxSamples+2; i++ {
+		item := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base.Add(time.Duration(i) * time.Minute)}
+		if err := encoder.Encode(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, output+".history.jsonl", raw.Bytes(), 0o600)
+	latest := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base.Add((maxSamples + 2) * time.Minute)}
+	latestData, _ := json.Marshal(latest)
+	if err := publishSnapshotData(output, append(latestData, '\n'), latest, 7); err != nil {
+		t.Fatal(err)
+	}
+	history, err = decodeSnapshotHistory(output + ".history.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != maxSamples {
+		t.Fatalf("history samples=%d, want cap %d", len(history), maxSamples)
+	}
+}
+
 func TestPruneDoesNotUnlinkFileAppendedAfterReportRead(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "events")
 	w, err := observe.NewWriter(root, "codex", "session")
@@ -177,6 +271,40 @@ func TestPruneDoesNotUnlinkFileAppendedAfterReportRead(t *testing.T) {
 	data := mustReadFile(t, filepath.Join(root, "codex", "session.jsonl"))
 	if bytes.Count(data, []byte{'\n'}) != 2 {
 		t.Fatalf("events lost after prune race: %q", data)
+	}
+}
+
+func TestPruneDoesNotUnlinkIdleActiveWriter(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := observe.NewWriter(root, "codex", "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	expired := observe.Event{Version: 1, Kind: observe.KindToolCall, At: end.Add(-31 * 24 * time.Hour),
+		Client: "codex", Service: "fake", Tool: "old", SessionHash: "active", Outcome: observe.OutcomeSuccess}
+	if err := w.Write(expired); err != nil {
+		t.Fatal(err)
+	}
+	acc, _ := report.NewAccumulator(end.Add(-7*24*time.Hour), end)
+	files, err := readEventFiles(root, acc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pruneEventFiles(files, end.Add(-30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	current := expired
+	current.At = end.Add(-time.Hour)
+	if err := w.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := mustReadFile(t, filepath.Join(root, "codex", "active.jsonl"))
+	if bytes.Count(data, []byte{'\n'}) != 2 {
+		t.Fatalf("active writer events lost: %q", data)
 	}
 }
 

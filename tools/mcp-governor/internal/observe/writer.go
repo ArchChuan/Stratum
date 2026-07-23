@@ -17,6 +17,7 @@ const (
 type Writer struct {
 	mu          sync.Mutex
 	file        *os.File
+	lifecycle   *os.File
 	client      string
 	sessionHash string
 	closed      bool
@@ -52,17 +53,36 @@ func NewWriter(root, client, sessionHash string) (*Writer, error) {
 	defer syscall.Close(clientFD)
 
 	filename := sessionHash + ".jsonl"
+	lockname := sessionHash + ".lock"
+	lockFlags := syscall.O_CREAT | syscall.O_RDWR | syscall.O_CLOEXEC | syscall.O_NOFOLLOW
+	lockFD, err := syscall.Openat(clientFD, lockname, lockFlags, privateFileMode)
+	if err != nil {
+		return nil, fmt.Errorf("open session lifecycle lock: %w", err)
+	}
+	if err := validateDescriptor(lockFD, syscall.S_IFREG, privateFileMode); err != nil {
+		_ = syscall.Close(lockFD)
+		return nil, fmt.Errorf("validate session lifecycle lock: %w", err)
+	}
+	if err := syscall.Flock(lockFD, syscall.LOCK_SH); err != nil {
+		_ = syscall.Close(lockFD)
+		return nil, fmt.Errorf("lock session lifecycle: %w", err)
+	}
 	flags := syscall.O_CREAT | syscall.O_APPEND | syscall.O_WRONLY | syscall.O_CLOEXEC | syscall.O_NOFOLLOW
 	fileFD, err := syscall.Openat(clientFD, filename, flags, privateFileMode)
 	if err != nil {
+		_ = syscall.Flock(lockFD, syscall.LOCK_UN)
+		_ = syscall.Close(lockFD)
 		return nil, fmt.Errorf("open session event file: %w", err)
 	}
 	if err := validateDescriptor(fileFD, syscall.S_IFREG, privateFileMode); err != nil {
 		_ = syscall.Close(fileFD)
+		_ = syscall.Flock(lockFD, syscall.LOCK_UN)
+		_ = syscall.Close(lockFD)
 		return nil, fmt.Errorf("validate session event file: %w", err)
 	}
 	return &Writer{
-		file: os.NewFile(uintptr(fileFD), filename), client: client, sessionHash: sessionHash,
+		file: os.NewFile(uintptr(fileFD), filename), lifecycle: os.NewFile(uintptr(lockFD), lockname),
+		client: client, sessionHash: sessionHash,
 	}, nil
 }
 
@@ -109,8 +129,17 @@ func (w *Writer) Close() error {
 		return nil
 	}
 	w.closed = true
-	if err := w.file.Close(); err != nil {
-		return fmt.Errorf("close event file: %w", err)
+	fileErr := w.file.Close()
+	unlockErr := syscall.Flock(int(w.lifecycle.Fd()), syscall.LOCK_UN)
+	lockCloseErr := w.lifecycle.Close()
+	if fileErr != nil {
+		return fmt.Errorf("close event file: %w", fileErr)
+	}
+	if unlockErr != nil {
+		return fmt.Errorf("unlock session lifecycle: %w", unlockErr)
+	}
+	if lockCloseErr != nil {
+		return fmt.Errorf("close session lifecycle lock: %w", lockCloseErr)
 	}
 	return nil
 }

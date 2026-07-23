@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -562,15 +563,10 @@ func snapshot(opts options, stdout io.Writer) error {
 		}
 		return nil
 	}
-	if err := writeAtomic(opts.outputPath, data); err != nil {
-		return err
-	}
 	if cfg.Version == 2 {
-		if err := appendSnapshotHistory(opts.outputPath, result, cfg.Observation.RawRetentionDays); err != nil {
-			return err
-		}
+		return publishSnapshotData(opts.outputPath, data, result, cfg.Observation.RawRetentionDays)
 	}
-	return nil
+	return writeAtomic(opts.outputPath, data)
 }
 
 func identityErrorCategory(err error) string {
@@ -661,7 +657,11 @@ func runReport(opts reportOptions, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	snapshots, err := readSnapshots(snapshotPath)
+	maxHistorySamples, err := snapshotHistoryLimit(cfg.Observation.RawRetentionDays)
+	if err != nil {
+		return err
+	}
+	snapshots, err := readSnapshots(snapshotPath, maxHistorySamples)
 	if err != nil {
 		return err
 	}
@@ -810,10 +810,10 @@ func decodeStrictJSON(data []byte, target any) error {
 	return nil
 }
 
-func readSnapshots(path string) ([]process.Snapshot, error) {
+func readSnapshots(path string, maxHistorySamples int) ([]process.Snapshot, error) {
 	historyPath := path + ".history.jsonl"
 	if _, err := os.Stat(historyPath); err == nil {
-		return readSnapshotHistoryLocked(historyPath)
+		return readSnapshotHistoryLocked(historyPath, maxHistorySamples)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("inspect snapshot history: %w", err)
 	}
@@ -834,11 +834,11 @@ func readSnapshots(path string) ([]process.Snapshot, error) {
 	return []process.Snapshot{snapshot}, nil
 }
 
-func readSnapshotHistoryLocked(historyPath string) ([]process.Snapshot, error) {
+func readSnapshotHistoryLocked(historyPath string, maxHistorySamples int) ([]process.Snapshot, error) {
 	lockPath := historyPath + ".lock"
 	lockFD, err := syscall.Open(lockPath, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if errors.Is(err, os.ErrNotExist) {
-		return decodeSnapshotHistory(historyPath)
+		return decodeSnapshotHistoryLimited(historyPath, maxHistorySamples)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("open snapshot history lock: %w", err)
@@ -849,10 +849,17 @@ func readSnapshotHistoryLocked(historyPath string) ([]process.Snapshot, error) {
 		return nil, fmt.Errorf("lock snapshot history: %w", err)
 	}
 	defer func() { _ = syscall.Flock(lockFD, syscall.LOCK_UN) }()
-	return decodeSnapshotHistory(historyPath)
+	return decodeSnapshotHistoryLimited(historyPath, maxHistorySamples)
 }
 
 func decodeSnapshotHistory(path string) ([]process.Snapshot, error) {
+	return decodeSnapshotHistoryLimited(path, int(^uint(0)>>1))
+}
+
+func decodeSnapshotHistoryLimited(path string, limit int) ([]process.Snapshot, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("snapshot history limit must be positive")
+	}
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open snapshot history: %w", err)
@@ -866,7 +873,9 @@ func decodeSnapshotHistory(path string) ([]process.Snapshot, error) {
 	if stat.Mode&syscall.S_IFMT != syscall.S_IFREG || stat.Mode&0o777 != 0o600 {
 		return nil, fmt.Errorf("snapshot history must be a private regular file")
 	}
-	var snapshots []process.Snapshot
+	snapshots := make([]process.Snapshot, 0, min(limit, 1024))
+	count := 0
+	var previous time.Time
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for line := 1; scanner.Scan(); line++ {
@@ -874,15 +883,31 @@ func decodeSnapshotHistory(path string) ([]process.Snapshot, error) {
 		if err := decodeStrictJSON(scanner.Bytes(), &snapshot); err != nil {
 			return nil, fmt.Errorf("snapshot history line %d: %w", line, err)
 		}
-		snapshots = append(snapshots, snapshot)
+		if !previous.IsZero() && snapshot.CapturedAt.Before(previous) {
+			return nil, fmt.Errorf("snapshot history is not deterministically sorted")
+		}
+		previous = snapshot.CapturedAt
+		if count < limit {
+			snapshots = append(snapshots, snapshot)
+		} else {
+			snapshots[count%limit] = snapshot
+		}
+		count++
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scan snapshot history: %w", err)
 	}
-	return snapshots, nil
+	if count <= limit {
+		return snapshots, nil
+	}
+	start := count % limit
+	ordered := make([]process.Snapshot, 0, limit)
+	ordered = append(ordered, snapshots[start:]...)
+	ordered = append(ordered, snapshots[:start]...)
+	return ordered, nil
 }
 
-func appendSnapshotHistory(outputPath string, snapshot process.Snapshot, retentionDays int) error {
+func publishSnapshotData(outputPath string, currentData []byte, snapshot process.Snapshot, retentionDays int) error {
 	historyPath := outputPath + ".history.jsonl"
 	lockFD, err := syscall.Open(historyPath+".lock", syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
@@ -901,9 +926,13 @@ func appendSnapshotHistory(outputPath string, snapshot process.Snapshot, retenti
 	if lockStat.Mode&syscall.S_IFMT != syscall.S_IFREG || lockStat.Mode&0o777 != 0o600 {
 		return fmt.Errorf("snapshot history lock must be a private regular file")
 	}
+	maxSamples, err := snapshotHistoryLimit(retentionDays)
+	if err != nil {
+		return err
+	}
 	var existing []process.Snapshot
 	if _, statErr := os.Stat(historyPath); statErr == nil {
-		decoded, err := decodeSnapshotHistory(historyPath)
+		decoded, err := decodeSnapshotHistoryLimited(historyPath, maxSamples)
 		if err != nil {
 			return err
 		}
@@ -912,7 +941,7 @@ func appendSnapshotHistory(outputPath string, snapshot process.Snapshot, retenti
 		return fmt.Errorf("inspect snapshot history: %w", statErr)
 	}
 	boundary := snapshot.CapturedAt.AddDate(0, 0, -retentionDays)
-	kept := existing[:0]
+	kept := make([]process.Snapshot, 0, min(len(existing)+1, maxSamples))
 	for _, item := range existing {
 		validator, _ := report.NewAccumulator(item.CapturedAt.Add(-time.Nanosecond), item.CapturedAt.Add(time.Nanosecond))
 		if err := validator.AddSnapshot(item); err != nil {
@@ -923,6 +952,31 @@ func appendSnapshotHistory(outputPath string, snapshot process.Snapshot, retenti
 		}
 	}
 	kept = append(kept, snapshot)
+	sort.Slice(kept, func(i, j int) bool {
+		if !kept[i].CapturedAt.Equal(kept[j].CapturedAt) {
+			return kept[i].CapturedAt.Before(kept[j].CapturedAt)
+		}
+		left, _ := json.Marshal(kept[i])
+		right, _ := json.Marshal(kept[j])
+		return bytes.Compare(left, right) < 0
+	})
+	deduplicated := kept[:0]
+	var previous []byte
+	for _, item := range kept {
+		canonical, err := json.Marshal(item)
+		if err != nil {
+			return fmt.Errorf("canonicalize snapshot history: %w", err)
+		}
+		if previous != nil && bytes.Equal(previous, canonical) {
+			continue
+		}
+		deduplicated = append(deduplicated, item)
+		previous = canonical
+	}
+	kept = deduplicated
+	if len(kept) > maxSamples {
+		kept = kept[len(kept)-maxSamples:]
+	}
 	var data bytes.Buffer
 	encoder := json.NewEncoder(&data)
 	for _, item := range kept {
@@ -933,7 +987,18 @@ func appendSnapshotHistory(outputPath string, snapshot process.Snapshot, retenti
 	if err := writeAtomic(historyPath, data.Bytes()); err != nil {
 		return fmt.Errorf("write snapshot history: %w", err)
 	}
+	if err := writeAtomic(outputPath, currentData); err != nil {
+		return fmt.Errorf("write current snapshot: %w", err)
+	}
 	return nil
+}
+
+func snapshotHistoryLimit(retentionDays int) (int, error) {
+	const samplesPerDay = 24 * 60
+	if retentionDays <= 0 || retentionDays > int(^uint(0)>>1)/samplesPerDay {
+		return 0, fmt.Errorf("invalid snapshot history retention")
+	}
+	return retentionDays * samplesPerDay, nil
 }
 
 func pruneEventFiles(files []eventFile, boundary time.Time) error {
@@ -955,6 +1020,28 @@ func pruneEventFile(candidate eventFile, boundary time.Time) error {
 	}
 	defer syscall.Close(dirFD)
 	name := filepath.Base(candidate.path)
+	lockName := strings.TrimSuffix(name, ".jsonl") + ".lock"
+	lifecycleFD, err := syscall.Openat(dirFD, lockName,
+		syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return fmt.Errorf("open event lifecycle lock for prune: %w", err)
+	}
+	lifecycle := os.NewFile(uintptr(lifecycleFD), lockName)
+	defer lifecycle.Close()
+	var lifecycleStat syscall.Stat_t
+	if err := syscall.Fstat(lifecycleFD, &lifecycleStat); err != nil {
+		return fmt.Errorf("inspect event lifecycle lock: %w", err)
+	}
+	if lifecycleStat.Mode&syscall.S_IFMT != syscall.S_IFREG || lifecycleStat.Mode&0o777 != 0o600 {
+		return fmt.Errorf("event lifecycle lock must be a private regular file")
+	}
+	if err := syscall.Flock(lifecycleFD, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil
+		}
+		return fmt.Errorf("lock event lifecycle for prune: %w", err)
+	}
+	defer func() { _ = syscall.Flock(lifecycleFD, syscall.LOCK_UN) }()
 	fd, err := syscall.Openat(dirFD, name, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return fmt.Errorf("open event file for prune: %w", err)
