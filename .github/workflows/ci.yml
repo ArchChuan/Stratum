@@ -58,6 +58,9 @@ jobs:
       - name: Test Agent tool permission harness
         run: make tool-permission-test
 
+      - name: Test Agent interview consolidation
+        run: make agent-interview-test
+
       - name: Enforce risk regression guard
         run: bash scripts/quality/risk-regression-guard.sh --all
 
