@@ -159,6 +159,66 @@ func TestLoadSaltErrorsContainSafeContext(t *testing.T) {
 	}
 }
 
+func TestLoadSaltOpensFinalPathWithNoFollow(t *testing.T) {
+	t.Parallel()
+
+	salt := []byte("0123456789abcdef0123456789abcdef")
+	path := writeSaltFile(t, salt, 0o600)
+
+	var gotFlags int
+	opener := func(name string, flags int, mode uint32) (int, error) {
+		gotFlags = flags
+		return syscall.Open(name, flags, mode)
+	}
+
+	if _, err := loadSalt(path, opener); err != nil {
+		t.Fatalf("loadSalt() error = %v", err)
+	}
+	if gotFlags&syscall.O_ACCMODE != syscall.O_RDONLY {
+		t.Errorf("open flags O_RDONLY missing: got %#x", gotFlags)
+	}
+	if gotFlags&syscall.O_CLOEXEC == 0 {
+		t.Errorf("open flags O_CLOEXEC missing: got %#x", gotFlags)
+	}
+	if gotFlags&syscall.O_NOFOLLOW == 0 {
+		t.Errorf("open flags O_NOFOLLOW missing: got %#x", gotFlags)
+	}
+}
+
+func TestLoadSaltRejectsSpecialPermissionBits(t *testing.T) {
+	t.Parallel()
+
+	salt := []byte("0123456789abcdef0123456789abcdef")
+
+	for _, tt := range []struct {
+		name string
+		mode os.FileMode
+		bit  os.FileMode
+	}{
+		{name: "setuid 04600", mode: 0o600 | os.ModeSetuid, bit: os.ModeSetuid},
+		{name: "setgid 02600", mode: 0o600 | os.ModeSetgid, bit: os.ModeSetgid},
+		{name: "sticky 01600", mode: 0o600 | os.ModeSticky, bit: os.ModeSticky},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeSaltFile(t, salt, 0o600)
+			if err := os.Chmod(path, tt.mode); err != nil {
+				t.Skipf("filesystem does not support chmod %#o: %v", tt.mode, err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("Stat() error = %v", err)
+			}
+			if info.Mode()&tt.bit == 0 {
+				t.Skipf("filesystem did not preserve %s permission bit", tt.name)
+			}
+
+			if _, err := LoadSalt(path); err == nil {
+				t.Fatal("LoadSalt() returned nil error")
+			}
+		})
+	}
+}
+
 func writeSaltFile(t *testing.T, content []byte, mode os.FileMode) string {
 	t.Helper()
 

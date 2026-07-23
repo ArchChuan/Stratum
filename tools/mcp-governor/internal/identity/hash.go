@@ -4,9 +4,11 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"syscall"
 )
 
 const SaltSize = 32
@@ -33,26 +35,28 @@ func (h *Hasher) Hash(domain, value string) string {
 }
 
 func LoadSalt(path string) (*Hasher, error) {
-	info, err := os.Lstat(path)
+	return loadSalt(path, syscall.Open)
+}
+
+func loadSalt(path string, openFile func(string, int, uint32) (int, error)) (*Hasher, error) {
+	flags := syscall.O_RDONLY | syscall.O_CLOEXEC | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+	fd, err := openFile(path, flags, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, fmt.Errorf("load salt %q: salt file must not be a symlink: %w", path, err)
+		}
+		return nil, fmt.Errorf("load salt %q: open file: %w", path, err)
+	}
+
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+
+	info, err := file.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("load salt %q: inspect file: %w", path, err)
 	}
 	if err := validateSaltFile(info); err != nil {
-		return nil, fmt.Errorf("load salt %q: %w", path, err)
-	}
-
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("load salt %q: open file: %w", path, err)
-	}
-	defer file.Close()
-
-	openedInfo, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("load salt %q: inspect opened file: %w", path, err)
-	}
-	if err := validateSaltFile(openedInfo); err != nil {
-		return nil, fmt.Errorf("load salt %q: validate opened file: %w", path, err)
+		return nil, fmt.Errorf("load salt %q: validate file: %w", path, err)
 	}
 
 	salt, err := io.ReadAll(io.LimitReader(file, SaltSize+1))
@@ -76,6 +80,9 @@ func validateSaltFile(info os.FileInfo) error {
 	}
 	if info.Mode().Perm() != 0o600 {
 		return fmt.Errorf("salt file permissions must be 0600")
+	}
+	if info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		return fmt.Errorf("salt file permissions must not include special bits")
 	}
 	if info.Size() != SaltSize {
 		return fmt.Errorf("salt file size must be %d bytes", SaltSize)
