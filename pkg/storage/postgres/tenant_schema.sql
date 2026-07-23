@@ -480,6 +480,7 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
     description     TEXT        NOT NULL DEFAULT '',
     draft_revision  BIGINT      NOT NULL DEFAULT 1,
     draft_spec_json JSONB       NOT NULL DEFAULT '{}',
+    draft_input_schema_json JSONB NOT NULL DEFAULT '{"task_label":"任务","fields":[]}',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (name)
@@ -487,6 +488,7 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
 ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
 ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS draft_revision BIGINT NOT NULL DEFAULT 1;
 ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS draft_spec_json JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS draft_input_schema_json JSONB NOT NULL DEFAULT '{"task_label":"任务","fields":[]}';
 ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
@@ -497,6 +499,7 @@ CREATE TABLE IF NOT EXISTS workflow_versions (
     name            TEXT        NOT NULL,
     description     TEXT        NOT NULL DEFAULT '',
     spec_json       JSONB       NOT NULL,
+    input_schema_json JSONB     NOT NULL DEFAULT '{"task_label":"任务","fields":[]}',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (definition_id, version_no)
 );
@@ -505,6 +508,7 @@ ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS version_no BIGINT NOT NUL
 ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
 ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
 ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS spec_json JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS input_schema_json JSONB NOT NULL DEFAULT '{"task_label":"任务","fields":[]}';
 ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS idx_workflow_versions_definition
     ON workflow_versions (definition_id, version_no DESC);
@@ -528,6 +532,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     error_message    TEXT        NOT NULL DEFAULT '',
     idempotency_key  TEXT        NOT NULL,
     request_hash     TEXT        NOT NULL,
+    created_by       TEXT        NOT NULL DEFAULT '',
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     started_at       TIMESTAMPTZ,
@@ -550,6 +555,7 @@ ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS output_text TEXT NOT NULL DEF
 ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS error_message TEXT NOT NULL DEFAULT '';
 ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS idempotency_key TEXT NOT NULL DEFAULT '';
 ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS request_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '';
 ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
@@ -561,6 +567,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_runs_idempotency
     ON workflow_runs (idempotency_key) WHERE idempotency_key <> '';
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status
     ON workflow_runs (status, lease_expires_at, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_created_by_created
+    ON workflow_runs (created_by, created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS workflow_node_attempts (
     id              UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),

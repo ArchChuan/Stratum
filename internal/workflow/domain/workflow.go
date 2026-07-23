@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 var (
 	ErrRevisionConflict    = errors.New("workflow revision conflict")
 	ErrInvalidSpec         = errors.New("invalid workflow specification")
+	ErrInvalidInputSchema  = errors.New("invalid workflow input schema")
 	ErrInvalidTransition   = errors.New("invalid workflow state transition")
 	ErrIdempotencyConflict = errors.New("workflow idempotency conflict")
 	ErrGenerationConflict  = errors.New("workflow generation conflict")
@@ -18,6 +20,7 @@ var (
 	ErrDecisionConflict    = errors.New("workflow approval decision conflict")
 	ErrApprovalRequired    = errors.New("workflow approval required")
 	ErrNotFound            = errors.New("workflow not found")
+	ErrForbidden           = errors.New("workflow action forbidden")
 )
 
 type NodeType string
@@ -25,9 +28,79 @@ type NodeType string
 const (
 	MaxWorkflowNodes        = 100
 	MaxWorkflowEdges        = 400
+	MaxWorkflowInputFields  = 50
 	MaxWorkflowConcurrency  = 16
 	MaxTenantConcurrentRuns = 8
 )
+
+type InputFieldType string
+
+const (
+	InputFieldShortText    InputFieldType = "short_text"
+	InputFieldLongText     InputFieldType = "long_text"
+	InputFieldNumber       InputFieldType = "number"
+	InputFieldSingleSelect InputFieldType = "single_select"
+	InputFieldMultiSelect  InputFieldType = "multi_select"
+	InputFieldBoolean      InputFieldType = "boolean"
+	InputFieldDate         InputFieldType = "date"
+)
+
+type InputOption struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+type InputField struct {
+	Key         string         `json:"key"`
+	Label       string         `json:"label"`
+	Type        InputFieldType `json:"type"`
+	Required    bool           `json:"required,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Default     any            `json:"default,omitempty"`
+	Options     []InputOption  `json:"options,omitempty"`
+}
+
+type InputSchema struct {
+	TaskLabel       string       `json:"task_label"`
+	TaskDescription string       `json:"task_description,omitempty"`
+	Fields          []InputField `json:"fields,omitempty"`
+}
+
+type InputIssue struct {
+	Field   string `json:"field"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type InputValidationError struct {
+	Issues []InputIssue `json:"issues"`
+}
+
+type GraphIssue struct {
+	Path    string `json:"path"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type GraphValidationError struct {
+	Issues []GraphIssue `json:"issues"`
+}
+
+func (e *GraphValidationError) Error() string {
+	return "workflow graph validation failed"
+}
+
+func (e *GraphValidationError) Unwrap() error {
+	return ErrInvalidSpec
+}
+
+func (e *InputValidationError) Error() string {
+	return "workflow input validation failed"
+}
+
+func (e *InputValidationError) Unwrap() error {
+	return ErrInvalidInputSchema
+}
 
 const (
 	NodeTypeAgent     NodeType = "agent"
@@ -82,39 +155,58 @@ type Spec struct {
 }
 
 type Definition struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Revision    int64  `json:"revision"`
-	Spec        Spec   `json:"spec"`
+	ID          string      `json:"id"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Revision    int64       `json:"revision"`
+	Spec        Spec        `json:"spec"`
+	InputSchema InputSchema `json:"input_schema"`
+	CreatedAt   time.Time   `json:"created_at"`
+	UpdatedAt   time.Time   `json:"updated_at"`
 }
 
-func NewDefinition(id, name, description string, spec Spec) (*Definition, error) {
+func NewDefinition(id, name, description string, spec Spec, schemas ...InputSchema) (*Definition, error) {
 	if id == "" || name == "" {
 		return nil, fmt.Errorf("%w: id and name are required", ErrInvalidSpec)
 	}
-	return &Definition{ID: id, Name: name, Description: description, Revision: 1, Spec: cloneSpec(spec)}, nil
+	schema := defaultInputSchema()
+	if len(schemas) > 0 {
+		schema = schemas[0]
+	}
+	if err := ValidateInputSchema(schema); err != nil {
+		return nil, err
+	}
+	return &Definition{ID: id, Name: name, Description: description, Revision: 1, Spec: cloneSpec(spec), InputSchema: cloneInputSchema(schema)}, nil
 }
 
-func (d *Definition) UpdateDraft(name, description string, spec Spec, expectedRevision int64) error {
+func (d *Definition) UpdateDraft(name, description string, spec Spec, expectedRevision int64, schemas ...InputSchema) error {
 	if d.Revision != expectedRevision {
 		return ErrRevisionConflict
 	}
 	if name == "" {
 		return fmt.Errorf("%w: name is required", ErrInvalidSpec)
 	}
-	d.Name, d.Description, d.Spec = name, description, cloneSpec(spec)
+	schema := d.InputSchema
+	if len(schemas) > 0 {
+		schema = schemas[0]
+	}
+	if err := ValidateInputSchema(schema); err != nil {
+		return err
+	}
+	d.Name, d.Description, d.Spec, d.InputSchema = name, description, cloneSpec(spec), cloneInputSchema(schema)
 	d.Revision++
 	return nil
 }
 
 type Version struct {
-	ID           string `json:"id"`
-	DefinitionID string `json:"definition_id"`
-	Number       int64  `json:"version"`
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	Spec         Spec   `json:"spec"`
+	ID           string      `json:"id"`
+	DefinitionID string      `json:"definition_id"`
+	Number       int64       `json:"version"`
+	Name         string      `json:"name"`
+	Description  string      `json:"description"`
+	Spec         Spec        `json:"spec"`
+	InputSchema  InputSchema `json:"input_schema"`
+	CreatedAt    time.Time   `json:"created_at"`
 }
 
 func (d *Definition) Publish(id string, number int64) (*Version, error) {
@@ -124,10 +216,90 @@ func (d *Definition) Publish(id string, number int64) (*Version, error) {
 	if err := ValidateSpec(d.Spec); err != nil {
 		return nil, err
 	}
-	return &Version{ID: id, DefinitionID: d.ID, Number: number, Name: d.Name, Description: d.Description, Spec: cloneSpec(d.Spec)}, nil
+	if err := ValidateInputSchema(d.InputSchema); err != nil {
+		return nil, err
+	}
+	return &Version{ID: id, DefinitionID: d.ID, Number: number, Name: d.Name, Description: d.Description, Spec: cloneSpec(d.Spec), InputSchema: cloneInputSchema(d.InputSchema)}, nil
+}
+
+func ValidateInputSchema(schema InputSchema) error {
+	if strings.TrimSpace(schema.TaskLabel) == "" {
+		return fmt.Errorf("%w: task label is required", ErrInvalidInputSchema)
+	}
+	if len(schema.Fields) > MaxWorkflowInputFields {
+		return fmt.Errorf("%w: too many fields", ErrInvalidInputSchema)
+	}
+	keys := make(map[string]struct{}, len(schema.Fields))
+	for _, field := range schema.Fields {
+		if field.Key == "" || field.Key == "task" || strings.TrimSpace(field.Label) == "" {
+			return fmt.Errorf("%w: field key and label are required", ErrInvalidInputSchema)
+		}
+		if _, exists := keys[field.Key]; exists {
+			return fmt.Errorf("%w: duplicate field key", ErrInvalidInputSchema)
+		}
+		keys[field.Key] = struct{}{}
+		if !validInputFieldType(field.Type) {
+			return fmt.Errorf("%w: unsupported field type", ErrInvalidInputSchema)
+		}
+		if field.Type == InputFieldSingleSelect || field.Type == InputFieldMultiSelect {
+			if err := validateOptions(field.Options); err != nil {
+				return err
+			}
+		}
+		if field.Default != nil && !validInputValue(field, field.Default) {
+			return fmt.Errorf("%w: invalid field default", ErrInvalidInputSchema)
+		}
+	}
+	return nil
+}
+
+func ValidateRunInput(schema InputSchema, input map[string]any) error {
+	issues := make([]InputIssue, 0)
+	if task, ok := input["task"].(string); !ok || strings.TrimSpace(task) == "" {
+		issues = append(issues, InputIssue{Field: "task", Code: "required", Message: "请输入任务"})
+	}
+	fields := make(map[string]InputField, len(schema.Fields))
+	for _, field := range schema.Fields {
+		fields[field.Key] = field
+		value, exists := input[field.Key]
+		if !exists || value == nil || emptyInputValue(value) {
+			if field.Required {
+				issues = append(issues, InputIssue{Field: field.Key, Code: "required", Message: field.Label + "为必填项"})
+			}
+			continue
+		}
+		if !validInputValue(field, value) {
+			issues = append(issues, InputIssue{Field: field.Key, Code: "invalid", Message: field.Label + "格式不正确"})
+		}
+	}
+	unknown := make([]string, 0)
+	for key := range input {
+		if key != "task" {
+			if _, exists := fields[key]; !exists {
+				unknown = append(unknown, key)
+			}
+		}
+	}
+	sort.Strings(unknown)
+	for _, key := range unknown {
+		issues = append(issues, InputIssue{Field: key, Code: "unknown", Message: "字段未在工作流输入中定义"})
+	}
+	if len(issues) > 0 {
+		return &InputValidationError{Issues: issues}
+	}
+	return nil
 }
 
 func ValidateSpec(spec Spec) error {
+	err := validateSpec(spec)
+	if err == nil {
+		return nil
+	}
+	message := strings.TrimSpace(strings.TrimPrefix(err.Error(), ErrInvalidSpec.Error()+":"))
+	return &GraphValidationError{Issues: []GraphIssue{{Path: "graph", Code: "invalid", Message: message}}}
+}
+
+func validateSpec(spec Spec) error {
 	if len(spec.Nodes) == 0 {
 		return fmt.Errorf("%w: at least one node is required", ErrInvalidSpec)
 	}
@@ -379,6 +551,137 @@ func cloneSpec(spec Spec) Spec {
 	return Spec{Nodes: nodes, Edges: append([]Edge(nil), spec.Edges...), MaxConcurrency: spec.MaxConcurrency}
 }
 
+func defaultInputSchema() InputSchema {
+	return InputSchema{TaskLabel: "任务", Fields: []InputField{}}
+}
+
+func cloneInputSchema(schema InputSchema) InputSchema {
+	fields := append([]InputField(nil), schema.Fields...)
+	for i := range fields {
+		fields[i].Options = append([]InputOption(nil), schema.Fields[i].Options...)
+		switch value := schema.Fields[i].Default.(type) {
+		case []string:
+			fields[i].Default = append([]string(nil), value...)
+		case []any:
+			fields[i].Default = append([]any(nil), value...)
+		}
+	}
+	return InputSchema{TaskLabel: schema.TaskLabel, TaskDescription: schema.TaskDescription, Fields: fields}
+}
+
+func validInputFieldType(fieldType InputFieldType) bool {
+	switch fieldType {
+	case InputFieldShortText, InputFieldLongText, InputFieldNumber, InputFieldSingleSelect,
+		InputFieldMultiSelect, InputFieldBoolean, InputFieldDate:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateOptions(options []InputOption) error {
+	if len(options) == 0 {
+		return fmt.Errorf("%w: select fields require options", ErrInvalidInputSchema)
+	}
+	values := make(map[string]struct{}, len(options))
+	for _, option := range options {
+		if strings.TrimSpace(option.Label) == "" || option.Value == "" {
+			return fmt.Errorf("%w: option label and value are required", ErrInvalidInputSchema)
+		}
+		if _, exists := values[option.Value]; exists {
+			return fmt.Errorf("%w: duplicate option value", ErrInvalidInputSchema)
+		}
+		values[option.Value] = struct{}{}
+	}
+	return nil
+}
+
+func validInputValue(field InputField, value any) bool {
+	switch field.Type {
+	case InputFieldShortText, InputFieldLongText:
+		_, ok := value.(string)
+		return ok
+	case InputFieldNumber:
+		return isNumber(value)
+	case InputFieldSingleSelect:
+		selected, ok := value.(string)
+		return ok && optionExists(field.Options, selected)
+	case InputFieldMultiSelect:
+		values, ok := stringSlice(value)
+		if !ok {
+			return false
+		}
+		for _, selected := range values {
+			if !optionExists(field.Options, selected) {
+				return false
+			}
+		}
+		return true
+	case InputFieldBoolean:
+		_, ok := value.(bool)
+		return ok
+	case InputFieldDate:
+		date, ok := value.(string)
+		if !ok {
+			return false
+		}
+		_, err := time.Parse("2006-01-02", date)
+		return err == nil
+	default:
+		return false
+	}
+}
+
+func isNumber(value any) bool {
+	switch value.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		return true
+	default:
+		return false
+	}
+}
+
+func stringSlice(value any) ([]string, bool) {
+	switch values := value.(type) {
+	case []string:
+		return values, true
+	case []any:
+		result := make([]string, len(values))
+		for i, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil, false
+			}
+			result[i] = text
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func optionExists(options []InputOption, selected string) bool {
+	for _, option := range options {
+		if option.Value == selected {
+			return true
+		}
+	}
+	return false
+}
+
+func emptyInputValue(value any) bool {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed) == ""
+	case []string:
+		return len(typed) == 0
+	case []any:
+		return len(typed) == 0
+	default:
+		return false
+	}
+}
+
 type RunStatus string
 
 const (
@@ -409,13 +712,21 @@ type Run struct {
 	PauseReason    string         `json:"pause_reason,omitempty"`
 	CancelReason   string         `json:"cancel_reason,omitempty"`
 	ManualReason   string         `json:"manual_reason,omitempty"`
+	CreatedBy      string         `json:"created_by"`
 	SchedulerOwner string         `json:"scheduler_owner,omitempty"`
 	LeaseExpiresAt *time.Time     `json:"lease_expires_at,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	StartedAt      *time.Time     `json:"started_at,omitempty"`
+	FinishedAt     *time.Time     `json:"finished_at,omitempty"`
 }
 
 func NewRun(id string, version *Version, input map[string]any, idempotencyKey, requestHash string) (*Run, error) {
 	if id == "" || version == nil || idempotencyKey == "" || requestHash == "" {
 		return nil, fmt.Errorf("%w: run identity, version and idempotency are required", ErrInvalidSpec)
+	}
+	if err := ValidateRunInput(version.InputSchema, input); err != nil {
+		return nil, err
 	}
 	return &Run{ID: id, DefinitionID: version.DefinitionID, VersionID: version.ID, VersionNumber: version.Number, Status: RunStatusQueued, Snapshot: cloneSpec(version.Spec), Input: cloneMap(input), IdempotencyKey: idempotencyKey, RequestHash: requestHash, Generation: 1}, nil
 }

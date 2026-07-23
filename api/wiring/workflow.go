@@ -10,26 +10,83 @@ import (
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	workflowapp "github.com/byteBuilderX/stratum/internal/workflow/application"
+	workflowport "github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	workflowexec "github.com/byteBuilderX/stratum/internal/workflow/infrastructure/executor"
 	workflowpersist "github.com/byteBuilderX/stratum/internal/workflow/infrastructure/persistence"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
 )
 
 type workflowAgentService interface {
 	Execute(context.Context, string, agentapp.ExecRequest, agentapp.ExecMeta) (*agentapp.AgentResult, int, error)
+	ExecuteStream(context.Context, string, agentapp.ExecRequest, agentapp.ExecMeta, func(string)) (
+		context.Context, context.CancelFunc, func() (*agentapp.AgentResult, int, error), error,
+	)
 	ExecuteSkillScenario(context.Context, string, agentapp.ExecRequest, agentapp.ExecMeta, agentport.SkillActivation) (*agentapp.AgentResult, int, error)
 }
 
 type workflowAgentExecutor struct{ agents workflowAgentService }
 
-func (e workflowAgentExecutor) ExecuteAgent(ctx context.Context, tenantID, agentID, input string) (string, string, error) {
+func (e workflowAgentExecutor) ExecuteAgent(
+	ctx context.Context,
+	tenantID, agentID, input string,
+	onOutputDelta func(string) error,
+) (string, string, []workflowport.NodeToolStep, error) {
 	traceID := uuid.Must(uuid.NewV7()).String()
-	result, _, err := e.agents.Execute(ctx, agentID, agentapp.ExecRequest{Query: input, UserID: "workflow"}, agentapp.ExecMeta{TenantID: tenantID, TraceID: traceID})
+	var callbackErr error
+	var cancel context.CancelFunc
+	_, streamCancel, run, err := e.agents.ExecuteStream(
+		ctx,
+		agentID,
+		agentapp.ExecRequest{Query: input, UserID: "workflow"},
+		agentapp.ExecMeta{TenantID: tenantID, TraceID: traceID},
+		func(delta string) {
+			if callbackErr != nil || onOutputDelta == nil {
+				return
+			}
+			if callbackErr = onOutputDelta(delta); callbackErr != nil && cancel != nil {
+				cancel()
+			}
+		},
+	)
 	if err != nil {
-		return "", traceID, err
+		return "", traceID, nil, err
 	}
-	return result.Output, traceID, nil
+	cancel = streamCancel
+	defer cancel()
+	result, _, err := run()
+	if callbackErr != nil {
+		return "", traceID, nil, fmt.Errorf("persist workflow output delta: %w", callbackErr)
+	}
+	if err != nil {
+		return "", traceID, nil, err
+	}
+	return result.Output, traceID, safeWorkflowToolSteps(result.ToolCalls), nil
+}
+
+func safeWorkflowToolSteps(toolCalls []agentapp.ToolCall) []workflowport.NodeToolStep {
+	steps := make([]workflowport.NodeToolStep, 0, len(toolCalls))
+	for _, call := range toolCalls {
+		summary := "工具执行成功"
+		if call.Error != nil {
+			summary = "工具执行失败"
+		}
+		steps = append(steps, workflowport.NodeToolStep{
+			ToolName:   truncateRunes(call.ToolName, constants.WorkflowToolNameMaxRunes),
+			DurationMS: max(call.Duration.Milliseconds(), 0),
+			Summary:    truncateRunes(summary, constants.WorkflowToolSummaryMaxRunes),
+		})
+	}
+	return steps
+}
+
+func truncateRunes(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
 }
 
 type workflowSkillVersions interface {

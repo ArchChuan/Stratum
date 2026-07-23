@@ -115,6 +115,10 @@ type ids struct{ n int }
 
 func (i *ids) NewID() string { i.n++; return "id-" + string(rune('0'+i.n)) }
 
+func adminActor() application.Actor {
+	return application.Actor{UserID: "admin", Role: "admin"}
+}
+
 type agentStub struct {
 	calls []string
 	fail  string
@@ -152,22 +156,22 @@ func TestRunServiceIdempotencyAndSequentialExecution(t *testing.T) {
 	require.NoError(t, err)
 	runs := application.NewRunService(store, store, agents, idgen.NewID)
 
-	run, created, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"query": "hello"}, IdempotencyKey: "same-key"})
+	run, created, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "hello"}, IdempotencyKey: "same-key"})
 	require.NoError(t, err)
 	require.True(t, created)
-	same, created, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"query": "hello"}, IdempotencyKey: "same-key"})
+	same, created, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "hello"}, IdempotencyKey: "same-key"})
 	require.NoError(t, err)
 	require.False(t, created)
 	require.Equal(t, run.ID, same.ID)
-	_, _, err = runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"query": "different"}, IdempotencyKey: "same-key"})
+	_, _, err = runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "different"}, IdempotencyKey: "same-key"})
 	require.ErrorIs(t, err, domain.ErrIdempotencyConflict)
 
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusCompleted, got.Status)
 	require.Equal(t, "output-agent-2", got.Output)
-	require.Equal(t, []string{"agent-1:{\"query\":\"hello\"}", "agent-2:output-agent-1"}, agents.calls)
+	require.Equal(t, []string{"agent-1:{\"task\":\"hello\"}", "agent-2:output-agent-1"}, agents.calls)
 	require.Len(t, attempts, 2)
 	require.Equal(t, "trace-agent-2", attempts[1].TraceID)
 }
@@ -178,10 +182,10 @@ func TestRunServiceStopsAfterUpstreamFailure(t *testing.T) {
 	def, _ := defs.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{Name: "Research", Spec: workflowSpec()})
 	version, _ := defs.Publish(context.Background(), "tenant-1", def.ID)
 	runs := application.NewRunService(store, store, agents, idgen.NewID)
-	run, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"query": "hello"}, IdempotencyKey: "failure"})
+	run, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "hello"}, IdempotencyKey: "failure"})
 	require.NoError(t, err)
 	require.Error(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusFailed, got.Status)
 	require.Len(t, attempts, 1)
@@ -195,11 +199,12 @@ func TestRunServiceStartAsyncOnlyPersistsQueuedRun(t *testing.T) {
 	version, _ := defs.Publish(context.Background(), "tenant-1", def.ID)
 	runs := application.NewRunService(store, store, agents, idgen.NewID)
 
-	run, created, err := runs.StartAsync(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"query": "hello"}, IdempotencyKey: "async"})
+	run, created, err := runs.StartAsync(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "hello"}, IdempotencyKey: "async", CreatedBy: "user-a"})
 	require.NoError(t, err)
 	require.True(t, created)
+	require.Equal(t, "user-a", run.CreatedBy)
 	time.Sleep(30 * time.Millisecond)
-	got, _, getErr := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, _, getErr := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, getErr)
 	require.Equal(t, domain.RunStatusQueued, got.Status)
 	require.Empty(t, agents.calls)

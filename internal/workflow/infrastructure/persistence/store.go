@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
+	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -16,7 +17,21 @@ import (
 
 type PgStore struct{ pool *pgxpool.Pool }
 
+const runSelectColumns = `SELECT id,definition_id,version_id,version_no,status,snapshot_json,input_json,
+	output_text,error_message,idempotency_key,request_hash,generation,scheduler_owner,lease_expires_at,
+	pause_reason,cancel_reason,manual_reason,created_by,created_at,updated_at,started_at,finished_at
+	FROM workflow_runs`
+
 func NewPgStore(pool *pgxpool.Pool) *PgStore { return &PgStore{pool: pool} }
+
+func runScanTargets(r *domain.Run, snapshot, input *[]byte) []any {
+	return []any{
+		&r.ID, &r.DefinitionID, &r.VersionID, &r.VersionNumber, &r.Status, snapshot, input,
+		&r.Output, &r.ErrorMessage, &r.IdempotencyKey, &r.RequestHash, &r.Generation,
+		&r.SchedulerOwner, &r.LeaseExpiresAt, &r.PauseReason, &r.CancelReason, &r.ManualReason,
+		&r.CreatedBy, &r.CreatedAt, &r.UpdatedAt, &r.StartedAt, &r.FinishedAt,
+	}
+}
 
 func (s *PgStore) exec(ctx context.Context, tenantID string, fn func(context.Context, pgx.Tx) error) error {
 	tc, ok := postgres.FromContext(ctx)
@@ -34,17 +49,21 @@ func (s *PgStore) CreateDefinition(ctx context.Context, tenantID string, d *doma
 	if err != nil {
 		return err
 	}
+	inputSchema, err := json.Marshal(d.InputSchema)
+	if err != nil {
+		return err
+	}
 	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO workflow_definitions (id,name,description,draft_revision,draft_spec_json) VALUES ($1,$2,$3,$4,$5)`, d.ID, d.Name, d.Description, d.Revision, string(spec))
+		_, err := tx.Exec(ctx, `INSERT INTO workflow_definitions (id,name,description,draft_revision,draft_spec_json,draft_input_schema_json) VALUES ($1,$2,$3,$4,$5,$6)`, d.ID, d.Name, d.Description, d.Revision, string(spec), string(inputSchema))
 		return err
 	})
 }
 
 func (s *PgStore) GetDefinition(ctx context.Context, tenantID, id string) (*domain.Definition, error) {
 	var d domain.Definition
-	var raw []byte
+	var raw, rawInputSchema []byte
 	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT id,name,description,draft_revision,draft_spec_json FROM workflow_definitions WHERE id=$1`, id).Scan(&d.ID, &d.Name, &d.Description, &d.Revision, &raw)
+		return tx.QueryRow(ctx, `SELECT id,name,description,draft_revision,draft_spec_json,draft_input_schema_json,created_at,updated_at FROM workflow_definitions WHERE id=$1`, id).Scan(&d.ID, &d.Name, &d.Description, &d.Revision, &raw, &rawInputSchema, &d.CreatedAt, &d.UpdatedAt)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
@@ -55,7 +74,44 @@ func (s *PgStore) GetDefinition(ctx context.Context, tenantID, id string) (*doma
 	if err := json.Unmarshal(raw, &d.Spec); err != nil {
 		return nil, err
 	}
+	if err := json.Unmarshal(rawInputSchema, &d.InputSchema); err != nil {
+		return nil, err
+	}
 	return &d, nil
+}
+
+func (s *PgStore) ListDefinitions(
+	ctx context.Context,
+	tenantID string,
+	query port.DefinitionListQuery,
+) ([]domain.Definition, int, error) {
+	rows := make([]domain.Definition, 0)
+	var total int
+	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM workflow_definitions
+			WHERE ($1='' OR name ILIKE '%' || $1 || '%')`, query.Query).Scan(&total); err != nil {
+			return err
+		}
+		result, err := tx.Query(ctx, `SELECT id,name,description,draft_revision,created_at,updated_at
+			FROM workflow_definitions WHERE ($1='' OR name ILIKE '%' || $1 || '%')
+			ORDER BY updated_at DESC,id DESC LIMIT $2 OFFSET $3`, query.Query, query.Limit, query.Offset)
+		if err != nil {
+			return err
+		}
+		defer result.Close()
+		for result.Next() {
+			var definition domain.Definition
+			if err := result.Scan(
+				&definition.ID, &definition.Name, &definition.Description, &definition.Revision,
+				&definition.CreatedAt, &definition.UpdatedAt,
+			); err != nil {
+				return err
+			}
+			rows = append(rows, definition)
+		}
+		return result.Err()
+	})
+	return rows, total, err
 }
 
 func (s *PgStore) UpdateDefinition(ctx context.Context, tenantID string, d *domain.Definition, expected int64) error {
@@ -63,8 +119,12 @@ func (s *PgStore) UpdateDefinition(ctx context.Context, tenantID string, d *doma
 	if err != nil {
 		return err
 	}
+	inputSchema, err := json.Marshal(d.InputSchema)
+	if err != nil {
+		return err
+	}
 	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE workflow_definitions SET name=$1,description=$2,draft_revision=$3,draft_spec_json=$4,updated_at=NOW() WHERE id=$5 AND draft_revision=$6`, d.Name, d.Description, d.Revision, string(spec), d.ID, expected)
+		tag, err := tx.Exec(ctx, `UPDATE workflow_definitions SET name=$1,description=$2,draft_revision=$3,draft_spec_json=$4,draft_input_schema_json=$5,updated_at=NOW() WHERE id=$6 AND draft_revision=$7`, d.Name, d.Description, d.Revision, string(spec), string(inputSchema), d.ID, expected)
 		if err != nil {
 			return err
 		}
@@ -80,17 +140,21 @@ func (s *PgStore) CreateVersion(ctx context.Context, tenantID string, v *domain.
 	if err != nil {
 		return err
 	}
+	inputSchema, err := json.Marshal(v.InputSchema)
+	if err != nil {
+		return err
+	}
 	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO workflow_versions (id,definition_id,version_no,name,description,spec_json) VALUES ($1,$2,$3,$4,$5,$6)`, v.ID, v.DefinitionID, v.Number, v.Name, v.Description, string(spec))
+		_, err := tx.Exec(ctx, `INSERT INTO workflow_versions (id,definition_id,version_no,name,description,spec_json,input_schema_json) VALUES ($1,$2,$3,$4,$5,$6,$7)`, v.ID, v.DefinitionID, v.Number, v.Name, v.Description, string(spec), string(inputSchema))
 		return err
 	})
 }
 
 func (s *PgStore) GetVersion(ctx context.Context, tenantID, id string) (*domain.Version, error) {
 	var v domain.Version
-	var raw []byte
+	var raw, rawInputSchema []byte
 	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT id,definition_id,version_no,name,description,spec_json FROM workflow_versions WHERE id=$1`, id).Scan(&v.ID, &v.DefinitionID, &v.Number, &v.Name, &v.Description, &raw)
+		return tx.QueryRow(ctx, `SELECT id,definition_id,version_no,name,description,spec_json,input_schema_json,created_at FROM workflow_versions WHERE id=$1`, id).Scan(&v.ID, &v.DefinitionID, &v.Number, &v.Name, &v.Description, &raw, &rawInputSchema, &v.CreatedAt)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
@@ -101,7 +165,43 @@ func (s *PgStore) GetVersion(ctx context.Context, tenantID, id string) (*domain.
 	if err := json.Unmarshal(raw, &v.Spec); err != nil {
 		return nil, err
 	}
+	if err := json.Unmarshal(rawInputSchema, &v.InputSchema); err != nil {
+		return nil, err
+	}
 	return &v, nil
+}
+
+func (s *PgStore) ListVersions(
+	ctx context.Context,
+	tenantID, definitionID string,
+	query port.VersionListQuery,
+) ([]domain.Version, int, error) {
+	rows := make([]domain.Version, 0)
+	var total int
+	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM workflow_versions WHERE definition_id=$1`, definitionID).Scan(&total); err != nil {
+			return err
+		}
+		result, err := tx.Query(ctx, `SELECT id,definition_id,version_no,name,description,created_at
+			FROM workflow_versions WHERE definition_id=$1 ORDER BY version_no DESC LIMIT $2 OFFSET $3`,
+			definitionID, query.Limit, query.Offset)
+		if err != nil {
+			return err
+		}
+		defer result.Close()
+		for result.Next() {
+			var version domain.Version
+			if err := result.Scan(
+				&version.ID, &version.DefinitionID, &version.Number, &version.Name,
+				&version.Description, &version.CreatedAt,
+			); err != nil {
+				return err
+			}
+			rows = append(rows, version)
+		}
+		return result.Err()
+	})
+	return rows, total, err
 }
 
 func (s *PgStore) NextVersionNumber(ctx context.Context, tenantID, definitionID string) (int64, error) {
@@ -136,7 +236,11 @@ func (s *PgStore) CreateNextVersion(ctx context.Context, tenantID string, defini
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO workflow_versions (id,definition_id,version_no,name,description,spec_json) VALUES ($1,$2,$3,$4,$5,$6)`, version.ID, version.DefinitionID, version.Number, version.Name, version.Description, string(raw)); err != nil {
+		inputSchema, err := json.Marshal(version.InputSchema)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO workflow_versions (id,definition_id,version_no,name,description,spec_json,input_schema_json) VALUES ($1,$2,$3,$4,$5,$6,$7)`, version.ID, version.DefinitionID, version.Number, version.Name, version.Description, string(raw), string(inputSchema)); err != nil {
 			return err
 		}
 		created = version
@@ -155,7 +259,7 @@ func (s *PgStore) CreateRun(ctx context.Context, tenantID string, r *domain.Run)
 		return err
 	}
 	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO workflow_runs (id,definition_id,version_id,version_no,status,snapshot_json,input_json,output_text,error_message,idempotency_key,request_hash,generation,scheduler_owner,lease_expires_at,pause_reason,cancel_reason,manual_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, r.ID, r.DefinitionID, r.VersionID, r.VersionNumber, r.Status, string(snapshot), string(input), r.Output, r.ErrorMessage, r.IdempotencyKey, r.RequestHash, r.Generation, r.SchedulerOwner, r.LeaseExpiresAt, r.PauseReason, r.CancelReason, r.ManualReason)
+		_, err := tx.Exec(ctx, `INSERT INTO workflow_runs (id,definition_id,version_id,version_no,status,snapshot_json,input_json,output_text,error_message,idempotency_key,request_hash,generation,scheduler_owner,lease_expires_at,pause_reason,cancel_reason,manual_reason,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, r.ID, r.DefinitionID, r.VersionID, r.VersionNumber, r.Status, string(snapshot), string(input), r.Output, r.ErrorMessage, r.IdempotencyKey, r.RequestHash, r.Generation, r.SchedulerOwner, r.LeaseExpiresAt, r.PauseReason, r.CancelReason, r.ManualReason, r.CreatedBy)
 		return err
 	})
 }
@@ -173,7 +277,7 @@ func (s *PgStore) CreateRunIdempotent(ctx context.Context, tenantID string, r *d
 	var existing domain.Run
 	var existingSnapshot, existingInput []byte
 	err = s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `INSERT INTO workflow_runs (id,definition_id,version_id,version_no,status,snapshot_json,input_json,output_text,error_message,idempotency_key,request_hash,generation,scheduler_owner,lease_expires_at,pause_reason,cancel_reason,manual_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (idempotency_key) WHERE idempotency_key <> '' DO NOTHING`, r.ID, r.DefinitionID, r.VersionID, r.VersionNumber, r.Status, string(snapshot), string(input), r.Output, r.ErrorMessage, r.IdempotencyKey, r.RequestHash, r.Generation, r.SchedulerOwner, r.LeaseExpiresAt, r.PauseReason, r.CancelReason, r.ManualReason)
+		tag, err := tx.Exec(ctx, `INSERT INTO workflow_runs (id,definition_id,version_id,version_no,status,snapshot_json,input_json,output_text,error_message,idempotency_key,request_hash,generation,scheduler_owner,lease_expires_at,pause_reason,cancel_reason,manual_reason,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) ON CONFLICT (idempotency_key) WHERE idempotency_key <> '' DO NOTHING`, r.ID, r.DefinitionID, r.VersionID, r.VersionNumber, r.Status, string(snapshot), string(input), r.Output, r.ErrorMessage, r.IdempotencyKey, r.RequestHash, r.Generation, r.SchedulerOwner, r.LeaseExpiresAt, r.PauseReason, r.CancelReason, r.ManualReason, r.CreatedBy)
 		if err != nil {
 			return err
 		}
@@ -182,7 +286,7 @@ func (s *PgStore) CreateRunIdempotent(ctx context.Context, tenantID string, r *d
 			existing = *r
 			return nil
 		}
-		if err := tx.QueryRow(ctx, `SELECT id,definition_id,version_id,version_no,status,snapshot_json,input_json,output_text,error_message,idempotency_key,request_hash,generation,scheduler_owner,lease_expires_at,pause_reason,cancel_reason,manual_reason FROM workflow_runs WHERE idempotency_key=$1`, r.IdempotencyKey).Scan(&existing.ID, &existing.DefinitionID, &existing.VersionID, &existing.VersionNumber, &existing.Status, &existingSnapshot, &existingInput, &existing.Output, &existing.ErrorMessage, &existing.IdempotencyKey, &existing.RequestHash, &existing.Generation, &existing.SchedulerOwner, &existing.LeaseExpiresAt, &existing.PauseReason, &existing.CancelReason, &existing.ManualReason); err != nil {
+		if err := tx.QueryRow(ctx, runSelectColumns+` WHERE idempotency_key=$1`, r.IdempotencyKey).Scan(runScanTargets(&existing, &existingSnapshot, &existingInput)...); err != nil {
 			return err
 		}
 		if existing.RequestHash != r.RequestHash {
@@ -202,18 +306,53 @@ func (s *PgStore) CreateRunIdempotent(ctx context.Context, tenantID string, r *d
 }
 
 func (s *PgStore) FindRunByIdempotency(ctx context.Context, tenantID, key string) (*domain.Run, error) {
-	return s.getRun(ctx, tenantID, `SELECT id,definition_id,version_id,version_no,status,snapshot_json,input_json,output_text,error_message,idempotency_key,request_hash,generation,scheduler_owner,lease_expires_at,pause_reason,cancel_reason,manual_reason FROM workflow_runs WHERE idempotency_key=$1`, key)
+	return s.getRun(ctx, tenantID, runSelectColumns+` WHERE idempotency_key=$1`, key)
 }
 
 func (s *PgStore) GetRun(ctx context.Context, tenantID, id string) (*domain.Run, error) {
-	return s.getRun(ctx, tenantID, `SELECT id,definition_id,version_id,version_no,status,snapshot_json,input_json,output_text,error_message,idempotency_key,request_hash,generation,scheduler_owner,lease_expires_at,pause_reason,cancel_reason,manual_reason FROM workflow_runs WHERE id=$1`, id)
+	return s.getRun(ctx, tenantID, runSelectColumns+` WHERE id=$1`, id)
+}
+
+func (s *PgStore) ListRuns(
+	ctx context.Context,
+	tenantID string,
+	query port.RunListQuery,
+) ([]domain.Run, int, error) {
+	rows := make([]domain.Run, 0)
+	var total int
+	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		args := []any{query.CreatedBy, query.DefinitionID, query.Status, query.Limit, query.Offset}
+		where := ` WHERE ($1='' OR created_by=$1) AND ($2='' OR definition_id::text=$2) AND ($3='' OR status=$3)`
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM workflow_runs`+where, args[:3]...).Scan(&total); err != nil {
+			return err
+		}
+		result, err := tx.Query(ctx, `SELECT id,definition_id,version_id,version_no,status,created_by,
+			created_at,updated_at,started_at,finished_at FROM workflow_runs`+where+
+			` ORDER BY created_at DESC,id DESC LIMIT $4 OFFSET $5`, args...)
+		if err != nil {
+			return err
+		}
+		defer result.Close()
+		for result.Next() {
+			var run domain.Run
+			if err := result.Scan(
+				&run.ID, &run.DefinitionID, &run.VersionID, &run.VersionNumber, &run.Status, &run.CreatedBy,
+				&run.CreatedAt, &run.UpdatedAt, &run.StartedAt, &run.FinishedAt,
+			); err != nil {
+				return err
+			}
+			rows = append(rows, run)
+		}
+		return result.Err()
+	})
+	return rows, total, err
 }
 
 func (s *PgStore) getRun(ctx context.Context, tenantID, query, arg string) (*domain.Run, error) {
 	var r domain.Run
 	var snapshot, input []byte
 	err := s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, query, arg).Scan(&r.ID, &r.DefinitionID, &r.VersionID, &r.VersionNumber, &r.Status, &snapshot, &input, &r.Output, &r.ErrorMessage, &r.IdempotencyKey, &r.RequestHash, &r.Generation, &r.SchedulerOwner, &r.LeaseExpiresAt, &r.PauseReason, &r.CancelReason, &r.ManualReason)
+		return tx.QueryRow(ctx, query, arg).Scan(runScanTargets(&r, &snapshot, &input)...)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound

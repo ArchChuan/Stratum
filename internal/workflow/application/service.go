@@ -15,6 +15,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/dag"
 )
 
@@ -22,12 +23,14 @@ type CreateDefinitionCommand struct {
 	Name        string
 	Description string
 	Spec        domain.Spec
+	InputSchema domain.InputSchema
 }
 
 type UpdateDefinitionCommand struct {
 	Name             string
 	Description      string
 	Spec             domain.Spec
+	InputSchema      domain.InputSchema
 	ExpectedRevision int64
 }
 
@@ -42,7 +45,7 @@ func NewDefinitionService(definitions port.DefinitionRepository, versions port.V
 }
 
 func (s *DefinitionService) Create(ctx context.Context, tenantID string, cmd CreateDefinitionCommand) (*domain.Definition, error) {
-	definition, err := domain.NewDefinition(s.newID(), cmd.Name, cmd.Description, cmd.Spec)
+	definition, err := domain.NewDefinition(s.newID(), cmd.Name, cmd.Description, cmd.Spec, normalizeInputSchema(cmd.InputSchema))
 	if err != nil {
 		return nil, err
 	}
@@ -57,13 +60,20 @@ func (s *DefinitionService) Update(ctx context.Context, tenantID, id string, cmd
 	if err != nil {
 		return nil, err
 	}
-	if err := definition.UpdateDraft(cmd.Name, cmd.Description, cmd.Spec, cmd.ExpectedRevision); err != nil {
+	if err := definition.UpdateDraft(cmd.Name, cmd.Description, cmd.Spec, cmd.ExpectedRevision, normalizeInputSchema(cmd.InputSchema)); err != nil {
 		return nil, err
 	}
 	if err := s.definitions.UpdateDefinition(ctx, tenantID, definition, cmd.ExpectedRevision); err != nil {
 		return nil, err
 	}
 	return definition, nil
+}
+
+func normalizeInputSchema(schema domain.InputSchema) domain.InputSchema {
+	if schema.TaskLabel == "" && schema.TaskDescription == "" && len(schema.Fields) == 0 {
+		return domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{}}
+	}
+	return schema
 }
 
 func (s *DefinitionService) Validate(ctx context.Context, tenantID, id string) error {
@@ -108,6 +118,7 @@ type StartRunCommand struct {
 	VersionID      string
 	Input          map[string]any
 	IdempotencyKey string
+	CreatedBy      string
 }
 
 type RunService struct {
@@ -119,6 +130,7 @@ type RunService struct {
 	}
 	executors port.NodeExecutorRegistry
 	newID     func() string
+	eventIDMu sync.Mutex
 }
 
 func NewRunService(versions port.VersionRepository, store interface {
@@ -183,6 +195,7 @@ func (s *RunService) Start(ctx context.Context, tenantID string, cmd StartRunCom
 	if err != nil {
 		return nil, false, err
 	}
+	run.CreatedBy = cmd.CreatedBy
 	if creator, ok := s.store.(port.IdempotentRunCreator); ok {
 		return creator.CreateRunIdempotent(ctx, tenantID, run)
 	}
@@ -453,6 +466,82 @@ type executionOutcome struct {
 	effect  *domain.EffectIntent
 }
 
+type nodeOutputBuffer struct {
+	mu      sync.Mutex
+	append  func(string) error
+	onError context.CancelFunc
+	buffer  []rune
+	err     error
+	timer   *time.Timer
+	closed  bool
+}
+
+func newNodeOutputBuffer(appendEvent func(string) error, onError context.CancelFunc) *nodeOutputBuffer {
+	return &nodeOutputBuffer{append: appendEvent, onError: onError}
+}
+
+func (b *nodeOutputBuffer) Append(delta string) error {
+	if delta == "" {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.err != nil {
+		return b.err
+	}
+	if b.closed {
+		return fmt.Errorf("workflow output buffer is closed")
+	}
+	b.buffer = append(b.buffer, []rune(delta)...)
+	for len(b.buffer) >= constants.WorkflowOutputDeltaMaxRunes {
+		if err := b.flushRunesLocked(constants.WorkflowOutputDeltaMaxRunes); err != nil {
+			return err
+		}
+	}
+	if len(b.buffer) > 0 && b.timer == nil {
+		b.timer = time.AfterFunc(constants.WorkflowOutputFlushInterval, b.flushOnTimer)
+	}
+	return nil
+}
+
+func (b *nodeOutputBuffer) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closed = true
+	if b.timer != nil {
+		b.timer.Stop()
+		b.timer = nil
+	}
+	if b.err != nil {
+		return b.err
+	}
+	return b.flushRunesLocked(len(b.buffer))
+}
+
+func (b *nodeOutputBuffer) flushOnTimer() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.timer = nil
+	if b.closed || b.err != nil || len(b.buffer) == 0 {
+		return
+	}
+	_ = b.flushRunesLocked(len(b.buffer))
+}
+
+func (b *nodeOutputBuffer) flushRunesLocked(size int) error {
+	if size <= 0 {
+		return nil
+	}
+	text := string(b.buffer[:size])
+	if err := b.append(text); err != nil {
+		b.err = err
+		b.onError()
+		return err
+	}
+	b.buffer = b.buffer[size:]
+	return nil
+}
+
 func (s *RunService) executeReadyBatch(ctx context.Context, tenantID string, run *domain.Run, attempts []domain.NodeAttempt, states map[string]domain.NodeAttempt, ready []domain.Node) error {
 	limit := run.Snapshot.MaxConcurrency
 	if limit <= 0 {
@@ -484,11 +573,13 @@ func (s *RunService) executeReadyBatch(ctx context.Context, tenantID string, run
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			execCtx := ctx
-			cancel := func() {}
+			cancelTimeout := func() {}
 			if node.TimeoutMS > 0 {
-				execCtx, cancel = context.WithTimeout(ctx, time.Duration(node.TimeoutMS)*time.Millisecond)
+				execCtx, cancelTimeout = context.WithTimeout(ctx, time.Duration(node.TimeoutMS)*time.Millisecond)
 			}
-			defer cancel()
+			defer cancelTimeout()
+			execCtx, cancelExecution := context.WithCancel(execCtx)
+			defer cancelExecution()
 			approved, approvalID := s.approvedForNode(ctx, tenantID, run.ID, node.ID)
 			var fencedEffect *domain.EffectIntent
 			beforeEffect := func() error {
@@ -502,7 +593,16 @@ func (s *RunService) executeReadyBatch(ctx context.Context, tenantID string, run
 				fencedEffect = domain.NewEffectIntent(s.newID(), run.ID, node.ID, attempt.ID, run.Generation, node.EffectClass, fmt.Sprintf("%s:%s", run.ID, node.ID))
 				return effects.StartExternalEffect(execCtx, tenantID, fencedEffect, run.SchedulerOwner, run.Generation)
 			}
-			result, execErr := s.executors.Execute(execCtx, port.NodeExecutionRequest{TenantID: tenantID, RunID: run.ID, Node: node, AttemptNo: attempt.AttemptNo, Input: attempt.Input, RunInput: cloneInput(run.Input), NodeOutputs: outputMap(states), IdempotencyKey: fmt.Sprintf("%s:%s:%d", run.ID, node.ID, attempt.AttemptNo), Approved: approved, ApprovalID: approvalID, BeforeEffect: beforeEffect})
+			outputBuffer := newNodeOutputBuffer(func(text string) error {
+				return s.appendNodeOutputDelta(execCtx, tenantID, attempt, text)
+			}, cancelExecution)
+			result, execErr := s.executors.Execute(execCtx, port.NodeExecutionRequest{TenantID: tenantID, RunID: run.ID, Node: node, AttemptNo: attempt.AttemptNo, Input: attempt.Input, RunInput: cloneInput(run.Input), NodeOutputs: outputMap(states), IdempotencyKey: fmt.Sprintf("%s:%s:%d", run.ID, node.ID, attempt.AttemptNo), Approved: approved, ApprovalID: approvalID, BeforeEffect: beforeEffect, OnOutputDelta: outputBuffer.Append})
+			if flushErr := outputBuffer.Close(); execErr == nil && flushErr != nil {
+				execErr = fmt.Errorf("flush node output: %w", flushErr)
+			}
+			if execErr == nil {
+				execErr = s.appendNodeToolSteps(execCtx, tenantID, attempt, result.ToolSteps)
+			}
 			outcomes[index] = executionOutcome{node: node, attempt: attempt, result: result, err: execErr, effect: fencedEffect}
 		}(index, node, attempt, nil)
 	}
@@ -513,6 +613,59 @@ func (s *RunService) executeReadyBatch(ctx context.Context, tenantID string, run
 		}
 	}
 	return nil
+}
+
+func (s *RunService) appendNodeOutputDelta(
+	ctx context.Context,
+	tenantID string,
+	attempt domain.NodeAttempt,
+	text string,
+) error {
+	event := domain.Event{
+		ID: s.nextDisplayEventID(), RunID: attempt.RunID, Type: "workflow.node_output_delta",
+		NodeID: attempt.NodeID, AttemptNo: attempt.AttemptNo, Payload: map[string]any{"text": text},
+		OccurredAt: time.Now().UTC(),
+	}
+	_, err := s.store.AppendEvent(ctx, tenantID, event)
+	return err
+}
+
+func (s *RunService) appendNodeToolSteps(
+	ctx context.Context,
+	tenantID string,
+	attempt domain.NodeAttempt,
+	steps []port.NodeToolStep,
+) error {
+	for _, step := range steps {
+		event := domain.Event{
+			ID: s.nextDisplayEventID(), RunID: attempt.RunID, Type: "workflow.node_tool_step",
+			NodeID: attempt.NodeID, AttemptNo: attempt.AttemptNo,
+			Payload: map[string]any{
+				"tool_name":   truncateWorkflowText(step.ToolName, constants.WorkflowToolNameMaxRunes),
+				"duration_ms": max(step.DurationMS, 0),
+				"summary":     truncateWorkflowText(step.Summary, constants.WorkflowToolSummaryMaxRunes),
+			},
+			OccurredAt: time.Now().UTC(),
+		}
+		if _, err := s.store.AppendEvent(ctx, tenantID, event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *RunService) nextDisplayEventID() string {
+	s.eventIDMu.Lock()
+	defer s.eventIDMu.Unlock()
+	return s.newID()
+}
+
+func truncateWorkflowText(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
 }
 
 func (s *RunService) commitOutcome(ctx context.Context, tenantID string, run *domain.Run, outcome executionOutcome) error {
@@ -711,17 +864,30 @@ func selectedConditionEdges(spec domain.Spec, nodeID string, value bool) []strin
 	return selected
 }
 
-func (s *RunService) Get(ctx context.Context, tenantID, runID string) (*domain.Run, []domain.NodeAttempt, error) {
+func (s *RunService) Get(ctx context.Context, tenantID, runID string, actor Actor) (*domain.Run, []domain.NodeAttempt, error) {
 	run, err := s.store.GetRun(ctx, tenantID, runID)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := authorizeRun(run, actor, RunActionRead); err != nil {
 		return nil, nil, err
 	}
 	attempts, err := s.store.ListAttempts(ctx, tenantID, runID)
 	return run, attempts, err
 }
 
-func (s *RunService) Events(ctx context.Context, tenantID, runID string, after int64, limit int) ([]domain.Event, error) {
-	if _, err := s.store.GetRun(ctx, tenantID, runID); err != nil {
+func (s *RunService) Events(
+	ctx context.Context,
+	tenantID, runID string,
+	actor Actor,
+	after int64,
+	limit int,
+) ([]domain.Event, error) {
+	run, err := s.store.GetRun(ctx, tenantID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if err := authorizeRun(run, actor, RunActionEvents); err != nil {
 		return nil, err
 	}
 	if limit <= 0 || limit > 1000 {

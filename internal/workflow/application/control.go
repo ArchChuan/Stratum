@@ -18,13 +18,16 @@ func NewControlService(store port.ControlRepository, newID func() string) *Contr
 	return &ControlService{store: store, newID: newID}
 }
 
-func (s *ControlService) event(runID, eventType, actor string) domain.Event {
-	return domain.Event{ID: s.newID(), RunID: runID, Type: eventType, ActorType: "human", ActorID: actor, Payload: map[string]any{"actor_id": actor}, OccurredAt: time.Now().UTC()}
+func (s *ControlService) event(runID, eventType string, actor Actor) domain.Event {
+	return domain.Event{ID: s.newID(), RunID: runID, Type: eventType, ActorType: "human", ActorID: actor.UserID, Payload: map[string]any{"actor_id": actor.UserID}, OccurredAt: time.Now().UTC()}
 }
 
-func (s *ControlService) Cancel(ctx context.Context, tenantID, runID string, expected int64, actor, reason string) (*domain.Run, error) {
+func (s *ControlService) Cancel(ctx context.Context, tenantID, runID string, expected int64, actor Actor, reason string) (*domain.Run, error) {
 	run, err := s.store.GetRun(ctx, tenantID, runID)
 	if err != nil {
+		return nil, err
+	}
+	if err := authorizeRun(run, actor, RunActionCancel); err != nil {
 		return nil, err
 	}
 	if run.Status == domain.RunStatusCancelRequested || run.Status == domain.RunStatusCanceled {
@@ -42,9 +45,12 @@ func (s *ControlService) Cancel(ctx context.Context, tenantID, runID string, exp
 	return s.store.GetRun(ctx, tenantID, runID)
 }
 
-func (s *ControlService) Pause(ctx context.Context, tenantID, runID string, expected int64, actor, reason string) (*domain.Run, error) {
+func (s *ControlService) Pause(ctx context.Context, tenantID, runID string, expected int64, actor Actor, reason string) (*domain.Run, error) {
 	run, err := s.store.GetRun(ctx, tenantID, runID)
 	if err != nil {
+		return nil, err
+	}
+	if err := authorizeRun(run, actor, RunActionPause); err != nil {
 		return nil, err
 	}
 	if run.Generation != expected {
@@ -59,9 +65,12 @@ func (s *ControlService) Pause(ctx context.Context, tenantID, runID string, expe
 	return s.store.GetRun(ctx, tenantID, runID)
 }
 
-func (s *ControlService) Resume(ctx context.Context, tenantID, runID string, expected int64, actor string) (*domain.Run, error) {
+func (s *ControlService) Resume(ctx context.Context, tenantID, runID string, expected int64, actor Actor) (*domain.Run, error) {
 	run, err := s.store.GetRun(ctx, tenantID, runID)
 	if err != nil {
+		return nil, err
+	}
+	if err := authorizeRun(run, actor, RunActionResume); err != nil {
 		return nil, err
 	}
 	if run.Generation != expected {
@@ -96,7 +105,7 @@ type DecideApprovalCommand struct {
 	ApprovalID, RunID, AttemptID string
 	ExpectedGeneration           int64
 	Decision                     domain.ApprovalDecision
-	ActorID, Comment             string
+	ActorID, ActorRole, Comment  string
 }
 
 func (s *ControlService) DecideApproval(ctx context.Context, tenantID string, cmd DecideApprovalCommand) error {
@@ -106,30 +115,49 @@ func (s *ControlService) DecideApproval(ctx context.Context, tenantID string, cm
 	if cmd.Decision != domain.ApprovalDecisionApprove && cmd.Decision != domain.ApprovalDecisionReject {
 		return fmt.Errorf("%w: decision must be approve or reject", domain.ErrInvalidSpec)
 	}
-	event := s.event(cmd.RunID, "workflow.approval_decided", cmd.ActorID)
+	actor := Actor{UserID: cmd.ActorID, Role: cmd.ActorRole}
+	run, err := s.store.GetRun(ctx, tenantID, cmd.RunID)
+	if err != nil {
+		return err
+	}
+	if err := authorizeRun(run, actor, RunActionApprove); err != nil {
+		return err
+	}
+	event := s.event(cmd.RunID, "workflow.approval_decided", actor)
 	event.Payload["decision"] = string(cmd.Decision)
 	return s.store.DecideApproval(ctx, tenantID, cmd.ApprovalID, cmd.ExpectedGeneration, cmd.AttemptID, cmd.Decision, cmd.ActorID, cmd.Comment, event)
 }
 
 type ResolveManualCommand struct {
-	RunID, EffectIntentID  string
-	ExpectedGeneration     int64
-	Action                 domain.ManualAction
-	OutputSummary, ActorID string
+	RunID, EffectIntentID             string
+	ExpectedGeneration                int64
+	Action                            domain.ManualAction
+	OutputSummary, ActorID, ActorRole string
 }
 
 func (s *ControlService) ResolveManual(ctx context.Context, tenantID string, cmd ResolveManualCommand) error {
 	if cmd.ActorID == "" {
 		return fmt.Errorf("%w: actor is required", domain.ErrInvalidSpec)
 	}
-	event := s.event(cmd.RunID, "workflow.manual_intervention_resolved", cmd.ActorID)
+	actor := Actor{UserID: cmd.ActorID, Role: cmd.ActorRole}
+	run, err := s.store.GetRun(ctx, tenantID, cmd.RunID)
+	if err != nil {
+		return err
+	}
+	if err := authorizeRun(run, actor, RunActionResolveManual); err != nil {
+		return err
+	}
+	event := s.event(cmd.RunID, "workflow.manual_intervention_resolved", actor)
 	event.Payload["action"] = string(cmd.Action)
 	return s.store.ResolveEffect(ctx, tenantID, cmd.EffectIntentID, cmd.ExpectedGeneration, cmd.Action, cmd.OutputSummary, cmd.ActorID, event)
 }
 
-func (s *ControlService) AvailableActions(ctx context.Context, tenantID, runID string) ([]string, error) {
+func (s *ControlService) AvailableActions(ctx context.Context, tenantID, runID string, actor Actor) ([]string, error) {
 	run, err := s.store.GetRun(ctx, tenantID, runID)
 	if err != nil {
+		return nil, err
+	}
+	if err := authorizeRun(run, actor, RunActionRead); err != nil {
 		return nil, err
 	}
 	approvals, err := s.store.ListApprovals(ctx, tenantID, runID, true)
@@ -144,12 +172,35 @@ func (s *ControlService) AvailableActions(ctx context.Context, tenantID, runID s
 	for _, i := range intents {
 		manual = manual || i.RequiresManualIntervention()
 	}
-	return run.AvailableActions(len(approvals) > 0, manual), nil
+	actions := run.AvailableActions(len(approvals) > 0, manual)
+	if actor.Role != "admin" && actor.Role != "owner" {
+		for _, action := range actions {
+			if action == "cancel" {
+				return []string{"cancel"}, nil
+			}
+		}
+		return nil, nil
+	}
+	return actions, nil
 }
 
-func (s *ControlService) ListApprovals(ctx context.Context, tenantID, runID string, pending bool) ([]domain.Approval, error) {
+func (s *ControlService) ListApprovals(ctx context.Context, tenantID, runID string, actor Actor, pending bool) ([]domain.Approval, error) {
+	run, err := s.store.GetRun(ctx, tenantID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if err := authorizeRun(run, actor, RunActionRead); err != nil {
+		return nil, err
+	}
 	return s.store.ListApprovals(ctx, tenantID, runID, pending)
 }
-func (s *ControlService) ListEffects(ctx context.Context, tenantID, runID string) ([]domain.EffectIntent, error) {
+func (s *ControlService) ListEffects(ctx context.Context, tenantID, runID string, actor Actor) ([]domain.EffectIntent, error) {
+	run, err := s.store.GetRun(ctx, tenantID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if err := authorizeRun(run, actor, RunActionRead); err != nil {
+		return nil, err
+	}
 	return s.store.ListEffectIntents(ctx, tenantID, runID)
 }

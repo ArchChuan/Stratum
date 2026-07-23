@@ -70,12 +70,12 @@ func (s *controlStore) ResolveEffect(_ context.Context, _ string, id string, gen
 }
 
 func TestControlServiceCancelIsPersistentAndIdempotent(t *testing.T) {
-	store := &controlStore{run: &domain.Run{ID: "run-1", Status: domain.RunStatusRunning, Generation: 3}}
+	store := &controlStore{run: &domain.Run{ID: "run-1", Status: domain.RunStatusRunning, Generation: 3, CreatedBy: "operator"}}
 	svc := application.NewControlService(store, func() string { return "event-1" })
-	run, err := svc.Cancel(context.Background(), "tenant-1", "run-1", 3, "operator", "stop")
+	run, err := svc.Cancel(context.Background(), "tenant-1", "run-1", 3, application.Actor{UserID: "operator", Role: "member"}, "stop")
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusCancelRequested, run.Status)
-	_, err = svc.Cancel(context.Background(), "tenant-1", "run-1", 4, "operator", "again")
+	_, err = svc.Cancel(context.Background(), "tenant-1", "run-1", 4, application.Actor{UserID: "operator", Role: "member"}, "again")
 	require.NoError(t, err)
 	require.Len(t, store.events, 1)
 }
@@ -83,17 +83,17 @@ func TestControlServiceCancelIsPersistentAndIdempotent(t *testing.T) {
 func TestControlServiceResumeCannotBypassPendingApproval(t *testing.T) {
 	store := &controlStore{run: &domain.Run{ID: "run-1", Status: domain.RunStatusPaused, Generation: 4}, approvals: []domain.Approval{{ID: "approval-1", Status: domain.ApprovalStatusPending}}}
 	svc := application.NewControlService(store, func() string { return "event-1" })
-	_, err := svc.Resume(context.Background(), "tenant-1", "run-1", 4, "operator")
+	_, err := svc.Resume(context.Background(), "tenant-1", "run-1", 4, application.Actor{UserID: "operator", Role: "admin"})
 	require.ErrorIs(t, err, domain.ErrApprovalRequired)
 }
 
 func TestControlServiceApprovalDecisionAndManualActionsAreFenced(t *testing.T) {
 	store := &controlStore{run: &domain.Run{ID: "run-1", Status: domain.RunStatusPaused, Generation: 5}, approvals: []domain.Approval{*domain.NewApproval("approval-1", "run-1", "node", "attempt", 5, "risk", "high", "safe")}, effects: []domain.EffectIntent{*domain.NewEffectIntent("effect-1", "run-1", "node", "attempt", 5, domain.EffectClassNonIdempotent, "key")}}
 	svc := application.NewControlService(store, func() string { return "event-1" })
-	require.NoError(t, svc.DecideApproval(context.Background(), "tenant-1", application.DecideApprovalCommand{ApprovalID: "approval-1", RunID: "run-1", AttemptID: "attempt", ExpectedGeneration: 5, Decision: domain.ApprovalDecisionApprove, ActorID: "admin"}))
-	require.ErrorIs(t, svc.DecideApproval(context.Background(), "tenant-1", application.DecideApprovalCommand{ApprovalID: "approval-1", RunID: "run-1", AttemptID: "attempt", ExpectedGeneration: 5, Decision: domain.ApprovalDecisionReject, ActorID: "admin"}), domain.ErrDecisionConflict)
+	require.NoError(t, svc.DecideApproval(context.Background(), "tenant-1", application.DecideApprovalCommand{ApprovalID: "approval-1", RunID: "run-1", AttemptID: "attempt", ExpectedGeneration: 5, Decision: domain.ApprovalDecisionApprove, ActorID: "admin", ActorRole: "admin"}))
+	require.ErrorIs(t, svc.DecideApproval(context.Background(), "tenant-1", application.DecideApprovalCommand{ApprovalID: "approval-1", RunID: "run-1", AttemptID: "attempt", ExpectedGeneration: 5, Decision: domain.ApprovalDecisionReject, ActorID: "admin", ActorRole: "admin"}), domain.ErrDecisionConflict)
 	for _, action := range []domain.ManualAction{domain.ManualActionMarkSucceeded, domain.ManualActionRetry, domain.ManualActionTerminate} {
-		require.NoError(t, svc.ResolveManual(context.Background(), "tenant-1", application.ResolveManualCommand{RunID: "run-1", EffectIntentID: "effect-1", ExpectedGeneration: 5, Action: action, ActorID: "admin", OutputSummary: "reviewed"}))
+		require.NoError(t, svc.ResolveManual(context.Background(), "tenant-1", application.ResolveManualCommand{RunID: "run-1", EffectIntentID: "effect-1", ExpectedGeneration: 5, Action: action, ActorID: "admin", ActorRole: "admin", OutputSummary: "reviewed"}))
 	}
 }
 
@@ -101,9 +101,9 @@ func TestControlServiceCannotResurrectTerminalRun(t *testing.T) {
 	for _, status := range []domain.RunStatus{domain.RunStatusCompleted, domain.RunStatusFailed, domain.RunStatusCanceled} {
 		store := &controlStore{run: &domain.Run{ID: "run-1", Status: status, Generation: 9}}
 		svc := application.NewControlService(store, func() string { return "event" })
-		_, err := svc.Cancel(context.Background(), "tenant", "run-1", 9, "admin", "late")
+		_, err := svc.Cancel(context.Background(), "tenant", "run-1", 9, application.Actor{UserID: "admin", Role: "admin"}, "late")
 		require.ErrorIs(t, err, domain.ErrInvalidTransition)
-		_, err = svc.Pause(context.Background(), "tenant", "run-1", 9, "admin", "late")
+		_, err = svc.Pause(context.Background(), "tenant", "run-1", 9, application.Actor{UserID: "admin", Role: "admin"}, "late")
 		require.ErrorIs(t, err, domain.ErrInvalidTransition)
 		require.Equal(t, status, store.run.Status)
 	}

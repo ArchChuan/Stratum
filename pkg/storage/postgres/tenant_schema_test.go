@@ -407,6 +407,41 @@ func TestTenantSchemaContainsWorkflowStage1ATablesAndBackfills(t *testing.T) {
 	}
 }
 
+func TestTenantSchemaBackfillsWorkflowProductColumnsBeforeIndexes(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	definitionsAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS workflow_definitions")
+	versionsAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS workflow_versions")
+	runsAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS workflow_runs")
+	for _, check := range []struct {
+		fragment string
+		createAt int
+	}{
+		{fragment: "\n    draft_input_schema_json JSONB NOT NULL DEFAULT '{\"task_label\":\"任务\",\"fields\":[]}'", createAt: definitionsAt},
+		{fragment: "\n    input_schema_json JSONB     NOT NULL DEFAULT '{\"task_label\":\"任务\",\"fields\":[]}'", createAt: versionsAt},
+		{fragment: "\n    created_by       TEXT        NOT NULL DEFAULT ''", createAt: runsAt},
+		{fragment: `ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS draft_input_schema_json JSONB NOT NULL DEFAULT '{"task_label":"任务","fields":[]}'`, createAt: definitionsAt},
+		{fragment: `ALTER TABLE workflow_versions ADD COLUMN IF NOT EXISTS input_schema_json JSONB NOT NULL DEFAULT '{"task_label":"任务","fields":[]}'`, createAt: versionsAt},
+		{fragment: "ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT ''", createAt: runsAt},
+	} {
+		at := strings.Index(sql, check.fragment)
+		if at == -1 {
+			t.Fatalf("tenant schema missing workflow product DDL %q", check.fragment)
+		}
+		if at < check.createAt {
+			t.Fatalf("workflow product backfill must follow table creation: %q", check.fragment)
+		}
+	}
+	backfillAt := strings.Index(sql, "ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS created_by")
+	indexAt := strings.Index(sql, "CREATE INDEX IF NOT EXISTS idx_workflow_runs_created_by_created")
+	if indexAt == -1 || indexAt < backfillAt {
+		t.Fatalf("workflow ownership index must follow created_by backfill: backfill=%d index=%d", backfillAt, indexAt)
+	}
+}
+
 func TestTenantSchemaContainsWorkflowDurableRuntime(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
