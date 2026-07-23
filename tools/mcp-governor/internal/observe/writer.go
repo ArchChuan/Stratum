@@ -15,9 +15,11 @@ const (
 )
 
 type Writer struct {
-	mu     sync.Mutex
-	file   *os.File
-	closed bool
+	mu          sync.Mutex
+	file        *os.File
+	client      string
+	sessionHash string
+	closed      bool
 }
 
 func NewWriter(root, client, sessionHash string) (*Writer, error) {
@@ -59,12 +61,17 @@ func NewWriter(root, client, sessionHash string) (*Writer, error) {
 		_ = syscall.Close(fileFD)
 		return nil, fmt.Errorf("validate session event file: %w", err)
 	}
-	return &Writer{file: os.NewFile(uintptr(fileFD), filename)}, nil
+	return &Writer{
+		file: os.NewFile(uintptr(fileFD), filename), client: client, sessionHash: sessionHash,
+	}, nil
 }
 
 func (w *Writer) Write(event Event) error {
 	if err := event.Validate(); err != nil {
 		return fmt.Errorf("validate event: %w", err)
+	}
+	if event.Client != w.client || event.SessionHash != w.sessionHash {
+		return fmt.Errorf("event client and session hash do not match writer")
 	}
 	record, err := json.Marshal(event)
 	if err != nil {
@@ -134,8 +141,9 @@ func validateDescriptor(fd int, wantType uint32, wantMode uint32) error {
 	if stat.Mode&syscall.S_IFMT != wantType {
 		return fmt.Errorf("unexpected file type")
 	}
-	if stat.Mode&0o777 != wantMode {
-		return fmt.Errorf("mode is %#o, want %#o", stat.Mode&0o777, wantMode)
+	const permissionMask = syscall.S_ISUID | syscall.S_ISGID | syscall.S_ISVTX | 0o777
+	if stat.Mode&permissionMask != wantMode {
+		return fmt.Errorf("mode is %#o, want %#o", stat.Mode&permissionMask, wantMode)
 	}
 	return nil
 }

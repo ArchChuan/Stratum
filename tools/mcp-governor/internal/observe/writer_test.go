@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -161,6 +162,75 @@ func TestWriterRejectsInvalidEventsAndWritesAfterClose(t *testing.T) {
 	}
 	if len(data) != 0 {
 		t.Fatalf("invalid event was persisted: %q", data)
+	}
+}
+
+func TestWriterRejectsEventForDifferentClientOrSession(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		client  string
+		session string
+	}{
+		{name: "different client", client: "claude", session: "session"},
+		{name: "different session", client: "codex", session: "other-session"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "events")
+			w, err := NewWriter(root, "codex", "session")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Write(validWriterEvent(tt.client, tt.session)); err == nil {
+				t.Fatal("Write() accepted event for a different session file")
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(root, "codex", "session.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(data) != 0 {
+				t.Fatalf("mismatched event was persisted: %q", data)
+			}
+		})
+	}
+}
+
+func TestWriterRejectsExistingSpecialModeBits(t *testing.T) {
+	for _, target := range []string{"root", "client", "file"} {
+		t.Run(target, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "events")
+			if err := os.Mkdir(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			client := filepath.Join(root, "codex")
+			if target != "root" {
+				if err := os.Mkdir(client, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var path string
+			var mode uint32
+			switch target {
+			case "root":
+				path, mode = root, syscall.S_ISVTX|0o700
+			case "client":
+				path, mode = client, syscall.S_ISGID|0o700
+			case "file":
+				path, mode = filepath.Join(client, "session.jsonl"), syscall.S_ISUID|0o600
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := syscall.Chmod(path, mode); err != nil {
+				t.Fatal(err)
+			}
+			if w, err := NewWriter(root, "codex", "session"); err == nil {
+				_ = w.Close()
+				t.Fatalf("NewWriter() accepted special mode bits on %s", target)
+			}
+		})
 	}
 }
 
