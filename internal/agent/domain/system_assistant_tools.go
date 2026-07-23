@@ -5,17 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/safetext"
 )
 
 var (
 	ErrInvalidSystemAssistantToolArguments = errors.New("invalid system assistant tool arguments")
 	ErrSystemAssistantEvidenceTooLarge     = errors.New("system assistant evidence too large")
-	sensitiveEvidencePattern               = regexp.MustCompile(`(?i)(password|token|api[_-]?key|authorization|secret)\s*[:=]\s*\S+`)
 )
 
 func ParseOfficialDocsToolArguments(args map[string]any) (string, error) {
@@ -166,7 +165,7 @@ func BoundDiagnosticEvidence(in DiagnosticEvidence) DiagnosticEvidence {
 }
 
 func boundEvidenceString(value string) string {
-	value = sensitiveEvidencePattern.ReplaceAllString(value, "$1=[REDACTED]")
+	value = safetext.RedactCredentials(value)
 	runes := []rune(value)
 	if len(runes) > constants.SystemAssistantEvidenceFieldMaxRunes {
 		runes = runes[:constants.SystemAssistantEvidenceFieldMaxRunes]

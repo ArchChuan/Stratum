@@ -130,6 +130,28 @@ func TestSystemAssistantBoundsProviderEvidenceBeforeGuardAndArtifact(t *testing.
 	require.LessOrEqual(t, len([]rune(got.AssistantToolArtifacts[0].Citations[0].Title)), constants.SystemAssistantEvidenceFieldMaxRunes)
 }
 
+func TestSystemAssistantRedactsCredentialFormsFromModelAndTypedArtifact(t *testing.T) {
+	secrets := []string{"raw-secret", "dXNlcjpwYXNz", "secret value", "json-secret", "tail-secret"}
+	payload := "Authorization: Bearer raw-secret\nAuthorization: Basic dXNlcjpwYXNz\napi_key: \"secret value\"\n{\"token\":\"json-secret\",\"title\":\"keep\"}\npassword=tail-secret"
+	node := makeToolNode(nil, zap.NewNop())
+	state := ReActState{GovernedAssistant: true, InternalToolResultGuardFn: testInternalGuard,
+		OfficialDocsSearchFn: func(context.Context, string) ([]domain.Citation, error) {
+			return []domain.Citation{{Title: payload, Excerpt: payload}}, nil
+		},
+		Messages: []port.LLMMessage{{Role: "assistant", ToolCalls: []port.ToolCall{{ID: "call-1", Name: "stratum_search_official_docs", Arguments: map[string]any{"query": "help"}}}}},
+	}
+	got, err := node(context.Background(), state)
+	require.NoError(t, err)
+	artifactJSON, err := json.Marshal(got.AssistantToolArtifacts[0])
+	require.NoError(t, err)
+	modelContent := got.Messages[len(got.Messages)-1].Content
+	for _, secret := range secrets {
+		require.NotContains(t, modelContent, secret)
+		require.NotContains(t, string(artifactJSON), secret)
+	}
+	require.Contains(t, modelContent, "keep")
+}
+
 func TestSystemAssistantRejectsEvidenceThatCannotFitAfterFieldBounds(t *testing.T) {
 	node := makeToolNode(nil, zap.NewNop())
 	state := ReActState{GovernedAssistant: true, InternalToolResultGuardFn: testInternalGuard,
