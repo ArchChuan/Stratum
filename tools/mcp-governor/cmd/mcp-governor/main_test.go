@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/observe"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/process"
 )
 
@@ -57,6 +58,79 @@ func TestRunRejectsInvalidInvocation(t *testing.T) {
 				t.Fatalf("run(%q) = %d, want 2", args, code)
 			}
 		})
+	}
+}
+
+func TestReportWritesAggregateAndPrunesExpiredValidFile(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(7 * 24 * time.Hour)
+	dir := filepath.Join(root, "events", "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeEventFile(t, filepath.Join(dir, "current.jsonl"), []observe.Event{{Version: 1, Kind: observe.KindToolCall,
+		At: start.Add(time.Hour), Client: "codex", Service: "fake", Tool: "search", SessionHash: "hashed",
+		Outcome: observe.OutcomeSuccess, Effective: true, DurationMS: 9, ResponseBytes: 12, ConcurrentCalls: 1}})
+	expired := filepath.Join(dir, "expired.jsonl")
+	writeEventFile(t, expired, []observe.Event{{Version: 1, Kind: observe.KindToolCall, At: end.Add(-31 * 24 * time.Hour),
+		Client: "codex", Service: "fake", Tool: "old", SessionHash: "old-hash", Outcome: observe.OutcomeSuccess}})
+	var stderr bytes.Buffer
+	if code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		end.Format(time.RFC3339)}, &bytes.Buffer{}, &stderr); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	data := mustReadFile(t, filepath.Join(root, "reports", "report-20260701T000000Z-20260708T000000Z.json"))
+	if bytes.Contains(data, []byte("hashed")) {
+		t.Fatalf("report leaked identifier: %s", data)
+	}
+	if _, err := os.Stat(expired); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired file remains: %v", err)
+	}
+}
+
+func TestReportMalformedInputPreservesPriorReport(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(7 * 24 * time.Hour)
+	dir := filepath.Join(root, "events", "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "bad.jsonl"), []byte(`{"version":1,"version":1}`+"\n"), 0o600)
+	output := filepath.Join(root, "prior.json")
+	writeFile(t, output, []byte("prior"), 0o600)
+	var stderr bytes.Buffer
+	code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		end.Format(time.RFC3339), "--output", output}, &bytes.Buffer{}, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "duplicate key") {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if got := string(mustReadFile(t, output)); got != "prior" {
+		t.Fatalf("prior report replaced: %q", got)
+	}
+}
+
+func TestReportRequiresSevenDaysUnlessPartialAndStdoutDoesNotWriteDefault(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(6 * 24 * time.Hour)
+	args := []string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to", end.Format(time.RFC3339), "--output", "-"}
+	if code := run(args, &bytes.Buffer{}, &bytes.Buffer{}); code != 1 {
+		t.Fatalf("partial code=%d", code)
+	}
+	var stdout bytes.Buffer
+	if code := run(append(args, "--allow-partial"), &stdout, &bytes.Buffer{}); code != 0 {
+		t.Fatalf("allowed code=%d", code)
+	}
+	if stdout.Len() == 0 {
+		t.Fatal("empty stdout")
+	}
+	if _, err := os.Stat(filepath.Join(root, "reports")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reports dir created: %v", err)
 	}
 }
 
@@ -709,4 +783,16 @@ func writeFile(t *testing.T, path string, data []byte, mode os.FileMode) {
 	if err := os.WriteFile(path, data, mode); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeEventFile(t *testing.T, path string, events []observe.Event) {
+	t.Helper()
+	var data bytes.Buffer
+	encoder := json.NewEncoder(&data)
+	for _, event := range events {
+		if err := encoder.Encode(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, path, data.Bytes(), 0o600)
 }

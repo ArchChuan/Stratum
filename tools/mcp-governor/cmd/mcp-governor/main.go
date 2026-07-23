@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,9 +18,11 @@ import (
 
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/config"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/identity"
+	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/jsonstrict"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/observe"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/process"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/proxy"
+	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/report"
 )
 
 type scanner interface {
@@ -53,6 +57,14 @@ type proxyOptions struct {
 	repository string
 	command    string
 	args       []string
+}
+
+type reportOptions struct {
+	configPath              string
+	outputPath              string
+	start                   time.Time
+	end                     time.Time
+	outputSet, allowPartial bool
 }
 
 func main() {
@@ -90,6 +102,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	case "report":
+		opts, err := parseReportArgs(args)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			fmt.Fprintln(stderr, "usage: mcp-governor report --config PATH --from RFC3339 --to RFC3339 [--output PATH|-] [--allow-partial]")
+			return 2
+		}
+		if err := runReport(opts, stdout); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 		printUsage(stderr)
@@ -101,7 +125,64 @@ const proxyUsage = "usage: mcp-governor proxy --config PATH --client CLIENT --se
 	"[--session PID:START_TICKS] [--repository PATH] -- COMMAND [ARG...]"
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: mcp-governor snapshot|proxy ...")
+	fmt.Fprintln(w, "usage: mcp-governor snapshot|proxy|report ...")
+}
+
+func parseReportArgs(args []string) (reportOptions, error) {
+	var opts reportOptions
+	if len(args) == 0 || args[0] != "report" {
+		return opts, errors.New("expected report command")
+	}
+	seen := make(map[string]bool)
+	for i := 1; i < len(args); i++ {
+		name := args[i]
+		if name == "--allow-partial" {
+			if seen[name] {
+				return opts, fmt.Errorf("duplicate flag %s", name)
+			}
+			seen[name], opts.allowPartial = true, true
+			continue
+		}
+		if name != "--config" && name != "--from" && name != "--to" && name != "--output" {
+			return opts, fmt.Errorf("unexpected argument %q", name)
+		}
+		if seen[name] {
+			return opts, fmt.Errorf("duplicate flag %s", name)
+		}
+		seen[name] = true
+		if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+			return opts, fmt.Errorf("flag %s requires a value", name)
+		}
+		i++
+		switch name {
+		case "--config":
+			opts.configPath = args[i]
+		case "--output":
+			opts.outputPath, opts.outputSet = args[i], true
+		case "--from":
+			value, err := time.Parse(time.RFC3339, args[i])
+			if err != nil {
+				return opts, fmt.Errorf("parse --from: %w", err)
+			}
+			opts.start = value
+		case "--to":
+			value, err := time.Parse(time.RFC3339, args[i])
+			if err != nil {
+				return opts, fmt.Errorf("parse --to: %w", err)
+			}
+			opts.end = value
+		}
+	}
+	if opts.configPath == "" || opts.start.IsZero() || opts.end.IsZero() {
+		return opts, errors.New("--config, --from, and --to are required")
+	}
+	if !opts.start.Before(opts.end) {
+		return opts, errors.New("--from must be before --to")
+	}
+	if opts.outputSet && opts.outputPath == "" {
+		return opts, errors.New("--output must not be empty")
+	}
+	return opts, nil
 }
 
 func parseArgs(args []string) (options, error) {
@@ -529,6 +610,214 @@ func newPathResolver() func(string) (string, error) {
 		}
 		return filepath.Join(home, strings.TrimPrefix(path, "%h/")), nil
 	}
+}
+
+func runReport(opts reportOptions, stdout io.Writer) error {
+	if !opts.allowPartial && opts.end.Sub(opts.start) < 7*24*time.Hour {
+		return fmt.Errorf("report window must cover at least seven complete 24-hour days")
+	}
+	resolvePath := newPathResolver()
+	configPath, err := resolvePath(opts.configPath)
+	if err != nil {
+		return err
+	}
+	file, err := os.Open(configPath)
+	if err != nil {
+		return fmt.Errorf("open config: %w", err)
+	}
+	cfg, decodeErr := config.Decode(file)
+	closeErr := file.Close()
+	if decodeErr != nil {
+		return decodeErr
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close config: %w", closeErr)
+	}
+	if cfg.Version != 2 {
+		return fmt.Errorf("report requires config version 2")
+	}
+	eventsDir, err := resolvePath(cfg.Observation.EventsDir)
+	if err != nil {
+		return err
+	}
+	snapshotPath, err := resolvePath(cfg.OutputPath)
+	if err != nil {
+		return err
+	}
+	events, files, err := readEventFiles(eventsDir)
+	if err != nil {
+		return err
+	}
+	snapshots, err := readSnapshots(snapshotPath)
+	if err != nil {
+		return err
+	}
+	aggregate, err := report.Aggregate(opts.start, opts.end, events, snapshots)
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(aggregate, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode report: %w", err)
+	}
+	data = append(data, '\n')
+	if opts.outputSet && opts.outputPath == "-" {
+		if _, err := stdout.Write(data); err != nil {
+			return fmt.Errorf("write report: %w", err)
+		}
+	} else {
+		output := opts.outputPath
+		if !opts.outputSet {
+			reportsDir, err := resolvePath(cfg.Observation.ReportsDir)
+			if err != nil {
+				return err
+			}
+			output = filepath.Join(reportsDir, "report-"+safeReportTime(opts.start)+"-"+safeReportTime(opts.end)+".json")
+		} else if output, err = resolvePath(output); err != nil {
+			return err
+		}
+		if err := writeAtomic(output, data); err != nil {
+			return err
+		}
+	}
+	boundary := opts.end.AddDate(0, 0, -cfg.Observation.RawRetentionDays)
+	if err := pruneEventFiles(files, boundary); err != nil {
+		return err
+	}
+	return nil
+}
+
+func safeReportTime(value time.Time) string { return value.UTC().Format("20060102T150405Z") }
+
+type eventFile struct {
+	path   string
+	events []observe.Event
+}
+
+func readEventFiles(root string) ([]observe.Event, []eventFile, error) {
+	var all []observe.Event
+	var files []eventFile
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if errors.Is(walkErr, os.ErrNotExist) && path == root {
+				return nil
+			}
+			return walkErr
+		}
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || filepath.Ext(path) != ".jsonl" {
+			return nil
+		}
+		events, err := decodeEventJSONL(path)
+		if err != nil {
+			return err
+		}
+		files = append(files, eventFile{path: path, events: events})
+		all = append(all, events...)
+		return nil
+	})
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, nil, fmt.Errorf("read events: %w", err)
+	}
+	return all, files, nil
+}
+
+func decodeEventJSONL(path string) ([]observe.Event, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open event file: %w", err)
+	}
+	defer file.Close()
+	var events []observe.Event
+	scanner := bufio.NewScanner(file)
+	buffer := make([]byte, 64*1024)
+	scanner.Buffer(buffer, 4*1024*1024)
+	for line := 1; scanner.Scan(); line++ {
+		data := bytes.TrimSpace(scanner.Bytes())
+		if len(data) == 0 {
+			return nil, fmt.Errorf("%s:%d: empty JSONL record", path, line)
+		}
+		var event observe.Event
+		if err := decodeStrictJSON(data, &event); err != nil {
+			return nil, fmt.Errorf("%s:%d: %w", path, line, err)
+		}
+		if err := event.Validate(); err != nil {
+			return nil, fmt.Errorf("%s:%d: validate event: %w", path, line, err)
+		}
+		events = append(events, event)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan event file: %w", err)
+	}
+	return events, nil
+}
+
+func decodeStrictJSON(data []byte, target any) error {
+	if err := jsonstrict.ValidateNoDuplicateKeys(data); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return fmt.Errorf("trailing JSON value")
+	}
+	return nil
+}
+
+func readSnapshots(path string) ([]process.Snapshot, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read snapshot: %w", err)
+	}
+	var snapshot process.Snapshot
+	if err := decodeStrictJSON(data, &snapshot); err != nil {
+		return nil, fmt.Errorf("decode snapshot: %w", err)
+	}
+	if snapshot.Version != 1 || snapshot.Mode != "observe" || snapshot.CapturedAt.IsZero() {
+		return nil, fmt.Errorf("validate snapshot: version 1, observe mode, and captured_at are required")
+	}
+	return []process.Snapshot{snapshot}, nil
+}
+
+func pruneEventFiles(files []eventFile, boundary time.Time) error {
+	for _, file := range files {
+		if len(file.events) == 0 {
+			continue
+		}
+		old := true
+		for _, event := range file.events {
+			if !event.At.Before(boundary) {
+				old = false
+				break
+			}
+		}
+		if !old {
+			continue
+		}
+		info, err := os.Lstat(file.path)
+		if err != nil {
+			return fmt.Errorf("inspect expired event file: %w", err)
+		}
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		if err := os.Remove(file.path); err != nil {
+			return fmt.Errorf("prune expired event file: %w", err)
+		}
+	}
+	return nil
 }
 
 func writeAtomic(path string, data []byte) (resultErr error) {
