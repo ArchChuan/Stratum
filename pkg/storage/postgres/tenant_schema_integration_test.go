@@ -27,7 +27,7 @@ func TestProvisionTenantSchemaSystemAssistantIsIdempotent(t *testing.T) {
 	assertOneSystemAssistant(t, pool, tenantID)
 }
 
-func TestProvisionTenantSchemaSystemAssistantNameCollisionFailsWithoutChangingOrdinaryAgent(t *testing.T) {
+func TestProvisionTenantSchemaSystemAssistantNameCollisionPreservesOrdinaryAgent(t *testing.T) {
 	pool, ctx, tenantID := systemAssistantTestPool(t, "name_collision")
 	schema := `tenant_` + tenantID
 	if _, err := pool.Exec(ctx, `CREATE TABLE "`+schema+`".agents (
@@ -41,8 +41,8 @@ func TestProvisionTenantSchemaSystemAssistantNameCollisionFailsWithoutChangingOr
 		t.Fatal(err)
 	}
 
-	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err == nil {
-		t.Fatal("expected ordinary-agent name collision to fail provisioning")
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
 	}
 	var count int
 	var description string
@@ -51,8 +51,9 @@ func TestProvisionTenantSchemaSystemAssistantNameCollisionFailsWithoutChangingOr
 		t.Fatal(err)
 	}
 	if count != 1 || description != "keep me" {
-		t.Fatalf("ordinary agent changed after failed provision: count=%d description=%q", count, description)
+		t.Fatalf("ordinary agent changed during provision: count=%d description=%q", count, description)
 	}
+	assertOneSystemAssistant(t, pool, tenantID)
 }
 
 func TestProvisionTenantSchemaSystemAssistantIDCollisionFailsWithoutChangingOrdinaryAgent(t *testing.T) {

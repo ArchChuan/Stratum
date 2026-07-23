@@ -27,7 +27,8 @@ func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
 	for _, want := range []string{
 		"ON agents(system_key) WHERE system_key IS NOT NULL",
 		"'stratum-platform-assistant'",
-		"'Stratum 系统助手'",
+		"'__stratum_platform_assistant__'",
+		"WHILE EXISTS",
 		"'基于官方资料指导平台使用并诊断当前租户应用状态'",
 		"'', '', '', 10, 8000, 'user', 'stratum.platform_assistant'",
 		"ON CONFLICT (id) DO NOTHING",
@@ -36,9 +37,6 @@ func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("tenant schema missing managed assistant contract %q", want)
 		}
-	}
-	if strings.Contains(sql, "ON CONFLICT (name)") {
-		t.Fatal("managed assistant seed must not hide an ordinary-agent name collision")
 	}
 }
 
