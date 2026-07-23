@@ -427,6 +427,28 @@ func TestAgentService_DeletePropagatesIdentityLookupFailureBeforeCleanup(t *test
 	repo.AssertNotCalled(t, "Remove", mock.Anything, mock.Anything)
 }
 
+func TestAgentService_DeleteNotFoundRejectsBeforeCleanup(t *testing.T) {
+	repo := new(mockAgentRepo)
+	registry := application.NewRegistry(repo, zap.NewNop())
+	memoryCalls := 0
+	chatCalls := 0
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		Registry:      registry,
+		MemoryCleaner: stubMemoryCleaner{calls: &memoryCalls},
+		ChatStore:     stubChatRepo{calls: &chatCalls},
+		Logger:        zap.NewNop(),
+	})
+	ctx := context.Background()
+	repo.On("Get", ctx, "missing").Return((*domain.AgentConfig)(nil), false, nil)
+
+	err := svc.Delete(ctx, "tenant-1", "missing")
+
+	assert.ErrorIs(t, err, application.ErrNotFound)
+	assert.Zero(t, memoryCalls)
+	assert.Zero(t, chatCalls)
+	repo.AssertNotCalled(t, "Remove", mock.Anything, mock.Anything)
+}
+
 func TestAgentService_DeleteReturnsCleanupErrorBeforeRemovingRegistry(t *testing.T) {
 	repo := new(mockAgentRepo)
 	wantErr := errors.New("memory cleanup failed")
