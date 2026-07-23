@@ -17,3 +17,14 @@ type SystemAssistantProfile struct {
 	MaxIterations    int
 	MaxContextTokens int
 }
+
+// Citation identifies one bounded excerpt from the platform-managed official
+// documentation catalog.
+type Citation struct {
+	DocumentID     string `json:"documentId"`
+	Title          string `json:"title"`
+	ProductVersion string `json:"productVersion"`
+	Section        string `json:"section"`
+	URL            string `json:"url"`
+	Excerpt        string `json:"excerpt"`
+}
