@@ -2,10 +2,12 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -16,6 +18,7 @@ import (
 const defaultMaxMessageBytes = 8 << 20
 
 var ErrMessageTooLarge = errors.New("message too large")
+var ErrUninterruptibleStdin = errors.New("stdin cannot be interrupted")
 
 type Options struct {
 	Command string
@@ -29,6 +32,9 @@ type Options struct {
 	Events  interface{ Write(observe.Event) error }
 
 	maxMessageBytes int
+	wrapChildStdin  func(io.WriteCloser) io.WriteCloser
+	wrapChildStdout func(io.ReadCloser) io.ReadCloser
+	waitChild       func(*exec.Cmd) error
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -37,6 +43,9 @@ func Run(ctx context.Context, options Options) error {
 	}
 	if options.Stdin == nil {
 		options.Stdin = strings.NewReader("")
+	}
+	if !interruptibleStdin(options.Stdin) {
+		return fmt.Errorf("stdio proxy: %w", ErrUninterruptibleStdin)
 	}
 	if options.Stdout == nil {
 		options.Stdout = io.Discard
@@ -58,13 +67,19 @@ func Run(ctx context.Context, options Options) error {
 	}
 	childOut, err := cmd.StdoutPipe()
 	if err != nil {
-		_ = childIn.Close()
-		return fmt.Errorf("stdio proxy: create stdout: %w", err)
+		return errors.Join(fmt.Errorf("stdio proxy: create stdout: %w", err), closeError("child stdin", childIn))
 	}
+	if options.wrapChildStdin != nil {
+		childIn = options.wrapChildStdin(childIn)
+	}
+	if options.wrapChildStdout != nil {
+		childOut = options.wrapChildStdout(childOut)
+	}
+	stdinCleanup := newCleanupCloser("child stdin", childIn)
+	stdoutCleanup := newCleanupCloser("child stdout", childOut)
 	cmd.Stderr = options.Stderr
 	if err := cmd.Start(); err != nil {
-		_ = childIn.Close()
-		return fmt.Errorf("stdio proxy: start child: %w", err)
+		return errors.Join(fmt.Errorf("stdio proxy: start child: %w", err), stdinCleanup.Close(), stdoutCleanup.Close())
 	}
 
 	var eventMu sync.Mutex
@@ -105,34 +120,36 @@ func Run(ctx context.Context, options Options) error {
 
 	first := <-results
 	if first.side == "client" && first.err == nil {
-		_ = childIn.Close()
+		_ = stdinCleanup.Close()
 	}
+	cancelledByProxy := false
+	var clientStdinCloseErr error
 	if first.err != nil || first.side == "child" {
+		cancelledByProxy = true
 		cancel()
-		_ = childIn.Close()
-		_ = childOut.Close()
+		_ = stdinCleanup.Close()
+		_ = stdoutCleanup.Close()
 		if closer, ok := options.Stdin.(io.Closer); ok {
-			_ = closer.Close()
+			clientStdinCloseErr = closeError("client stdin", closer)
 		}
 	}
 	second := <-results
-	_ = childIn.Close()
-	_ = childOut.Close()
-	waitErr := cmd.Wait()
+	_ = stdinCleanup.Close()
+	_ = stdoutCleanup.Close()
+	waitErr := waitChild(options, cmd)
 	cancel()
 
-	var primary error
+	var runErr error
 	for _, item := range []result{first, second} {
-		if item.err != nil && !errors.Is(item.err, io.EOF) && primary == nil {
-			primary = item.err
+		if err := forwardingError(item.err, cancelledByProxy || ctx.Err() != nil); err != nil {
+			runErr = errors.Join(runErr, err)
 		}
 	}
-	if primary == nil && waitErr != nil {
-		if ctx.Err() != nil {
-			primary = ctx.Err()
-		} else {
-			primary = fmt.Errorf("stdio proxy: child process: %w", waitErr)
-		}
+	if ctx.Err() != nil {
+		runErr = errors.Join(runErr, ctx.Err())
+	}
+	if err := childWaitError(waitErr, cancelledByProxy || ctx.Err() != nil); err != nil {
+		runErr = errors.Join(runErr, err)
 	}
 	if options.Tracker != nil {
 		outcome := observe.OutcomeDisconnected
@@ -140,10 +157,76 @@ func Run(ctx context.Context, options Options) error {
 			outcome = observe.OutcomeCancelled
 		}
 		if err := writeEvents(options.Tracker.Flush(outcome)); err != nil {
-			primary = errors.Join(primary, err)
+			runErr = errors.Join(runErr, err)
 		}
 	}
-	return primary
+	return errors.Join(runErr, clientStdinCloseErr, stdinCleanup.Err(), stdoutCleanup.Err())
+}
+
+type cleanupCloser struct {
+	name string
+	once sync.Once
+	err  error
+	io.Closer
+}
+
+func newCleanupCloser(name string, closer io.Closer) *cleanupCloser {
+	return &cleanupCloser{name: name, Closer: closer}
+}
+
+func (c *cleanupCloser) Close() error {
+	c.once.Do(func() { c.err = closeError(c.name, c.Closer) })
+	return c.err
+}
+
+func (c *cleanupCloser) Err() error { return c.err }
+
+func closeError(name string, closer io.Closer) error {
+	if err := closer.Close(); err != nil {
+		return fmt.Errorf("stdio proxy: close %s: %w", name, err)
+	}
+	return nil
+}
+
+func waitChild(options Options, cmd *exec.Cmd) error {
+	if options.waitChild != nil {
+		return options.waitChild(cmd)
+	}
+	return cmd.Wait()
+}
+
+func childWaitError(err error, cancelled bool) error {
+	if err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if cancelled && errors.As(err, &exitErr) {
+		return nil
+	}
+	return fmt.Errorf("stdio proxy: child process: %w", err)
+}
+
+func forwardingError(err error, cancelled bool) error {
+	if err == nil || errors.Is(err, io.EOF) {
+		return nil
+	}
+	if cancelled && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, io.ErrClosedPipe) || errors.Is(err, os.ErrClosed)) {
+		return nil
+	}
+	return err
+}
+
+func interruptibleStdin(reader io.Reader) bool {
+	if _, ok := reader.(io.Closer); ok {
+		return true
+	}
+	switch reader.(type) {
+	case *bytes.Buffer, *bytes.Reader, *strings.Reader:
+		return true
+	default:
+		return false
+	}
 }
 
 func forwardLines(

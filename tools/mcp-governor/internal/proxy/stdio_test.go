@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,7 +61,7 @@ func TestRunHandlesPartialReadsMultipleLinesAndFinalLineWithoutNewline(t *testin
 	reader := &chunkReader{data: []byte(want), sizes: []int{1, 2, 5, 3, 1}}
 	var stdout bytes.Buffer
 	if err := Run(context.Background(), Options{
-		Command: server, Args: []string{"echo"}, Stdin: reader, Stdout: &stdout, Stderr: io.Discard,
+		Command: server, Args: []string{"echo"}, Stdin: io.NopCloser(reader), Stdout: &stdout, Stderr: io.Discard,
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -197,6 +198,57 @@ func TestRunPassesEnvironmentAndDirectory(t *testing.T) {
 	}
 }
 
+func TestRunRejectsBlockingStdinThatCannotBeInterrupted(t *testing.T) {
+	server := buildFakeServer(t)
+	reader := &blockingReader{}
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(context.Background(), Options{
+			Command: server, Args: []string{"sleep"}, Stdin: reader,
+			Stdout: io.Discard, Stderr: io.Discard,
+		})
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrUninterruptibleStdin) {
+			t.Fatalf("Run() error = %v, want ErrUninterruptibleStdin", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run() hung with uninterruptible stdin")
+	}
+	if reader.reads.Load() != 0 {
+		t.Fatalf("blocking reader Read() calls = %d, want 0", reader.reads.Load())
+	}
+}
+
+func TestRunJoinsPrimaryAndCleanupErrors(t *testing.T) {
+	server := buildFakeServer(t)
+	stdinCloseErr := errors.New("close child stdin")
+	stdoutCloseErr := errors.New("close child stdout")
+	waitErr := errors.New("wait child cleanup")
+	clientCloseErr := errors.New("close client stdin")
+	err := Run(context.Background(), Options{
+		Command: server, Args: []string{"sleep"},
+		Stdin:  &errorReadCloser{ReadCloser: io.NopCloser(strings.NewReader("123456789")), err: clientCloseErr},
+		Stdout: io.Discard, Stderr: io.Discard, maxMessageBytes: 8,
+		wrapChildStdin: func(closer io.WriteCloser) io.WriteCloser {
+			return &errorWriteCloser{WriteCloser: closer, err: stdinCloseErr}
+		},
+		wrapChildStdout: func(closer io.ReadCloser) io.ReadCloser {
+			return &errorReadCloser{ReadCloser: closer, err: stdoutCloseErr}
+		},
+		waitChild: func(command *exec.Cmd) error {
+			_ = command.Wait()
+			return waitErr
+		},
+	})
+	for _, want := range []error{ErrMessageTooLarge, clientCloseErr, stdinCloseErr, stdoutCloseErr, waitErr} {
+		if !errors.Is(err, want) {
+			t.Errorf("Run() error = %v, want joined %v", err, want)
+		}
+	}
+}
+
 type eventCollector struct {
 	mu     sync.Mutex
 	events []observe.Event
@@ -218,6 +270,27 @@ func (c *eventCollector) Events() []observe.Event {
 type failingEvents struct{ err error }
 
 func (f failingEvents) Write(observe.Event) error { return f.err }
+
+type blockingReader struct{ reads atomic.Int32 }
+
+func (r *blockingReader) Read([]byte) (int, error) {
+	r.reads.Add(1)
+	select {}
+}
+
+type errorWriteCloser struct {
+	io.WriteCloser
+	err error
+}
+
+func (c *errorWriteCloser) Close() error { return errors.Join(c.WriteCloser.Close(), c.err) }
+
+type errorReadCloser struct {
+	io.ReadCloser
+	err error
+}
+
+func (c *errorReadCloser) Close() error { return errors.Join(c.ReadCloser.Close(), c.err) }
 
 type chunkReader struct {
 	data  []byte
