@@ -9,7 +9,7 @@
 
 ## 固定版本和来源
 
-- Go：`go.mod` 的 `go 1.25.0` / `toolchain go1.25.12`。
+- Go：`go.mod` 的 `go 1.25.12`。
 - PostgreSQL：`postgres:16.4-alpine`（Task 7 隔离 compose）。
 - MinIO：`minio/minio:RELEASE.2024-07-16T23-46-41Z`。
 - OTEL Collector：`otel/opentelemetry-collector-contrib:0.96.0`，与仓库 compose 一致。

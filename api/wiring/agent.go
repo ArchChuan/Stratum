@@ -17,6 +17,7 @@ import (
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // Agent groups the agent persistence/registry services and execution
