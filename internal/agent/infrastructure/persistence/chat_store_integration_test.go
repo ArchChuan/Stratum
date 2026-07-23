@@ -44,7 +44,10 @@ func TestPgChatStoreArtifactsRealPostgresRoundTripAndHistoricalUpgrade(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifacts := []domain.ExecutionArtifact{{Type: "diagnostic_report", ProfileVersion: "v1", Citations: []domain.Citation{{DocumentID: "doc-1", Title: "guide"}}, DiagnosticReport: &domain.DiagnosticReport{Facts: []domain.DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []domain.EvidenceGap{{Source: "stratum_diagnose_tenant", Code: "timeout"}}, RecommendedActions: []string{}, Citations: []domain.Citation{}, Steps: []domain.DiagnosticStep{{Tool: "stratum_diagnose_tenant", Outcome: "error", ErrorCode: "timeout", LatencyMs: 15}}}}}
+	artifacts := []domain.ExecutionArtifact{
+		{Type: "citations", ProfileVersion: "v1", Citations: []domain.Citation{{DocumentID: "doc-1", Title: "guide"}}},
+		{Type: "diagnostic_report", ProfileVersion: "v1", DiagnosticReport: &domain.DiagnosticReport{Facts: []domain.DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []domain.EvidenceGap{{Source: "stratum_diagnose_tenant", Code: "timeout"}}, RecommendedActions: []string{}, Citations: []domain.Citation{}, Steps: []domain.DiagnosticStep{{Tool: "stratum_diagnose_tenant", Outcome: "error", ErrorCode: "timeout", LatencyMs: 15}}}},
+	}
 	if err := store.AddMessage(ctx, tenantID, &domain.ChatMessage{ConversationID: conv.ID, Role: "assistant", Content: "bounded", Artifacts: artifacts, SkipOutbox: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -73,6 +76,18 @@ func TestPgChatStoreArtifactsRealPostgresRoundTripAndHistoricalUpgrade(t *testin
 	}
 	if _, err := store.ListMessages(ctx, tenantID, conv.ID, "user-1"); err == nil {
 		t.Fatal("malformed artifact domain shape must return error")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE "`+schema+`".chat_messages SET artifacts_json='null'::jsonb WHERE id=$1`, historicalID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ListMessages(ctx, tenantID, conv.ID, "user-1"); err == nil {
+		t.Fatal("null artifacts must return error")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE "`+schema+`".chat_messages SET artifacts_json='[{"type":"citations","profileVersion":"v1","citations":[],"unknown":true}]'::jsonb WHERE id=$1`, historicalID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ListMessages(ctx, tenantID, conv.ID, "user-1"); err == nil {
+		t.Fatal("unknown artifact field must return error")
 	}
 
 	var defaultExpr string

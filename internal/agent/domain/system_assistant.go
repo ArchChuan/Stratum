@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
+)
 
 const (
 	SystemAssistantKey                   = "stratum.platform_assistant"
@@ -133,17 +137,69 @@ type ExecutionArtifact struct {
 func BuildDiagnosticReport(toolArtifacts []SystemAssistantToolArtifact) *DiagnosticReport {
 	r := &DiagnosticReport{Facts: []DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []EvidenceGap{}, RecommendedActions: []string{}, Citations: []Citation{}, Steps: []DiagnosticStep{}}
 	for _, a := range toolArtifacts {
-		r.Steps = append(r.Steps, DiagnosticStep{Tool: a.Tool, Outcome: a.Outcome, ErrorCode: a.ErrorCode, LatencyMs: a.LatencyMs})
-		r.Citations = append(r.Citations, a.Citations...)
+		if len(r.Steps) < constants.SystemAssistantDiagnosticAreaResultsMaxCount {
+			r.Steps = append(r.Steps, DiagnosticStep{Tool: boundEvidenceString(a.Tool), Outcome: boundEvidenceString(a.Outcome), ErrorCode: boundEvidenceString(a.ErrorCode), LatencyMs: a.LatencyMs})
+		}
+		if a.Tool == "stratum_diagnose_tenant" {
+			r.Citations = appendUniqueCitations(r.Citations, BoundCitations(a.Citations)...)
+		}
 		if a.Evidence != nil {
-			r.Facts = append(r.Facts, a.Evidence.Facts...)
-			r.EvidenceGaps = append(r.EvidenceGaps, a.Evidence.Gaps...)
+			bounded := BoundDiagnosticEvidence(*a.Evidence)
+			r.Facts = appendUniqueFacts(r.Facts, bounded.Facts...)
+			r.EvidenceGaps = appendUniqueGaps(r.EvidenceGaps, bounded.Gaps...)
 		}
 		if a.Tool == "stratum_diagnose_tenant" && a.ErrorCode != "" && a.Evidence == nil {
 			r.EvidenceGaps = append(r.EvidenceGaps, EvidenceGap{Source: a.Tool, Code: a.ErrorCode})
 		}
 	}
 	return r
+}
+
+func appendUniqueCitations(dst []Citation, values ...Citation) []Citation {
+	for _, v := range values {
+		found := false
+		for _, old := range dst {
+			if old.DocumentID == v.DocumentID && old.Section == v.Section && old.URL == v.URL {
+				found = true
+				break
+			}
+		}
+		if !found && len(dst) < constants.SystemAssistantCitationMaxCount {
+			dst = append(dst, v)
+		}
+	}
+	return dst
+}
+func appendUniqueFacts(dst []DiagnosticFact, values ...DiagnosticFact) []DiagnosticFact {
+	for _, v := range values {
+		found := false
+		for _, old := range dst {
+			if old.Area == v.Area && old.ObjectID == v.ObjectID && old.Statement == v.Statement && old.Source == v.Source {
+				found = true
+				break
+			}
+		}
+		if !found && len(dst) < constants.SystemAssistantDiagnosticFactsMaxCount {
+			dst = append(dst, v)
+		}
+	}
+	return dst
+}
+func appendUniqueGaps(dst []EvidenceGap, values ...EvidenceGap) []EvidenceGap {
+	for _, v := range values {
+		v.Source = boundEvidenceString(v.Source)
+		found := false
+		for _, old := range dst {
+			if old.Area == v.Area && old.Source == v.Source && old.Code == v.Code {
+				found = true
+				break
+			}
+		}
+		if !found && len(dst) < constants.SystemAssistantDiagnosticGapsMaxCount {
+			dst = append(dst, v)
+		}
+	}
+	return dst
 }
 
 type TenantModelDiagnosticStatus struct {

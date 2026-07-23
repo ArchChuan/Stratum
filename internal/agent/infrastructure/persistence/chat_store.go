@@ -7,14 +7,18 @@
 package persistence
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"unicode"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/safetext"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -315,11 +319,9 @@ func (s *PgChatStore) ListMessages(ctx context.Context, tenantID, convID, userID
 				&m.StepsJSON, &m.IsError, &m.CreatedAt, &artifactsJSON); err != nil {
 				return err
 			}
-			if err := json.Unmarshal(artifactsJSON, &m.Artifacts); err != nil {
+			m.Artifacts, err = decodeExecutionArtifacts(artifactsJSON)
+			if err != nil {
 				return fmt.Errorf("decode message artifacts: %w", err)
-			}
-			if m.Artifacts == nil {
-				m.Artifacts = []domain.ExecutionArtifact{}
 			}
 			out = append(out, &m)
 		}
@@ -329,6 +331,109 @@ func (s *PgChatStore) ListMessages(ctx context.Context, tenantID, convID, userID
 		return nil, fmt.Errorf("chat_store: list messages: %w", err)
 	}
 	return out, nil
+}
+
+func decodeExecutionArtifacts(raw []byte) ([]domain.ExecutionArtifact, error) {
+	if len(raw) > constants.SystemAssistantToolMaxJSONBytes {
+		return nil, errors.New("artifacts exceed persisted size limit")
+	}
+	if strings.TrimSpace(string(raw)) == "null" {
+		return nil, errors.New("artifacts must be an array")
+	}
+	var artifacts []domain.ExecutionArtifact
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&artifacts); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, errors.New("artifacts contain trailing JSON")
+	}
+	if artifacts == nil {
+		return nil, errors.New("artifacts must be a non-null array")
+	}
+	for i := range artifacts {
+		artifact := &artifacts[i]
+		if artifact.ProfileVersion == "" || len([]rune(artifact.ProfileVersion)) > constants.SystemAssistantEvidenceFieldMaxRunes || safetext.RedactCredentials(artifact.ProfileVersion) != artifact.ProfileVersion {
+			return nil, fmt.Errorf("artifact %d has invalid profile version", i)
+		}
+		switch artifact.Type {
+		case "citations":
+			if artifact.DiagnosticReport != nil || artifact.Citations == nil {
+				return nil, fmt.Errorf("artifact %d has invalid citation fields", i)
+			}
+			if err := validateArtifactCitations(artifact.Citations); err != nil {
+				return nil, fmt.Errorf("artifact %d: %w", i, err)
+			}
+		case "diagnostic_report":
+			if artifact.DiagnosticReport == nil || artifact.Citations != nil {
+				return nil, fmt.Errorf("artifact %d has invalid diagnostic report", i)
+			}
+			normalizeDiagnosticReport(artifact.DiagnosticReport)
+			if err := validateDiagnosticReport(artifact.DiagnosticReport); err != nil {
+				return nil, fmt.Errorf("artifact %d: %w", i, err)
+			}
+		default:
+			return nil, fmt.Errorf("artifact %d has invalid type", i)
+		}
+	}
+	return artifacts, nil
+}
+
+func validateDiagnosticReport(report *domain.DiagnosticReport) error {
+	if err := validateArtifactCitations(report.Citations); err != nil {
+		return err
+	}
+	for _, fact := range report.Facts {
+		if fact.Statement == "" || fact.Source == "" || !safeArtifactString(fact.Statement) || !safeArtifactString(fact.Source) {
+			return errors.New("invalid diagnostic fact")
+		}
+	}
+	for _, gap := range report.EvidenceGaps {
+		if gap.Code == "" || !safeArtifactString(gap.Code) || !safeArtifactString(gap.Source) {
+			return errors.New("invalid evidence gap")
+		}
+	}
+	for _, step := range report.Steps {
+		if step.Tool == "" || step.Outcome == "" || step.LatencyMs < 0 || !safeArtifactString(step.Tool) || !safeArtifactString(step.Outcome) || !safeArtifactString(step.ErrorCode) {
+			return errors.New("invalid diagnostic step")
+		}
+	}
+	return nil
+}
+
+func validateArtifactCitations(citations []domain.Citation) error {
+	for _, citation := range citations {
+		if citation.DocumentID == "" || !safeArtifactString(citation.DocumentID) || !safeArtifactString(citation.Title) || !safeArtifactString(citation.ProductVersion) || !safeArtifactString(citation.Section) || !safeArtifactString(citation.URL) || !safeArtifactString(citation.Excerpt) {
+			return errors.New("invalid citation")
+		}
+	}
+	return nil
+}
+
+func safeArtifactString(value string) bool {
+	return len([]rune(value)) <= constants.SystemAssistantEvidenceFieldMaxRunes && safetext.RedactCredentials(value) == value
+}
+
+func normalizeDiagnosticReport(report *domain.DiagnosticReport) {
+	if report.Facts == nil {
+		report.Facts = []domain.DiagnosticFact{}
+	}
+	if report.Inferences == nil {
+		report.Inferences = []string{}
+	}
+	if report.EvidenceGaps == nil {
+		report.EvidenceGaps = []domain.EvidenceGap{}
+	}
+	if report.RecommendedActions == nil {
+		report.RecommendedActions = []string{}
+	}
+	if report.Citations == nil {
+		report.Citations = []domain.Citation{}
+	}
+	if report.Steps == nil {
+		report.Steps = []domain.DiagnosticStep{}
+	}
 }
 
 func (s *PgChatStore) DeleteByAgent(ctx context.Context, tenantID, agentID string) error {

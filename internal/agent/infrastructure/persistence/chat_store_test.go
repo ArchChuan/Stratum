@@ -312,6 +312,29 @@ func TestChatStore_MalformedArtifactsReturnError(t *testing.T) {
 	}
 }
 
+func TestDecodeExecutionArtifactsRejectsInvalidPersistedShapes(t *testing.T) {
+	tests := map[string]string{
+		"null":                 `null`,
+		"unknown top field":    `[{"type":"citations","profileVersion":"v1","citations":[],"extra":1}]`,
+		"unknown nested field": `[{"type":"diagnostic_report","profileVersion":"v1","diagnosticReport":{"facts":[],"inferences":[],"evidenceGaps":[],"recommendedActions":[],"citations":[],"steps":[],"extra":1}}]`,
+		"empty artifact":       `[{}]`,
+		"wrong discriminator":  `[{"type":"other","profileVersion":"v1"}]`,
+		"exclusive fields":     `[{"type":"citations","profileVersion":"v1","citations":[],"diagnosticReport":{"facts":[],"inferences":[],"evidenceGaps":[],"recommendedActions":[],"citations":[],"steps":[]}}]`,
+		"trailing json":        `[] {}`,
+	}
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodeExecutionArtifacts([]byte(raw)); err == nil {
+				t.Fatal("expected strict decode error")
+			}
+		})
+	}
+	got, err := decodeExecutionArtifacts([]byte(`[]`))
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("historical [] decode = %#v, %v", got, err)
+	}
+}
+
 func TestChatStore_CleanupExpired(t *testing.T) {
 	store, mock := newChatStoreWithMock(t)
 	defer mock.Close()

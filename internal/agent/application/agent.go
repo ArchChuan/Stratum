@@ -1089,9 +1089,21 @@ func buildExecutionArtifacts(toolArtifacts []domain.SystemAssistantToolArtifact,
 		return []domain.ExecutionArtifact{}
 	}
 	citations := make([]domain.Citation, 0)
+	seenCitations := make(map[string]struct{})
 	hasDiagnostic := false
 	for _, artifact := range toolArtifacts {
-		citations = append(citations, artifact.Citations...)
+		if artifact.Tool == "stratum_search_official_docs" {
+			for _, citation := range domain.BoundCitations(artifact.Citations) {
+				key := citation.DocumentID + "\x00" + citation.Section + "\x00" + citation.URL
+				if _, ok := seenCitations[key]; ok {
+					continue
+				}
+				seenCitations[key] = struct{}{}
+				if len(citations) < constants.SystemAssistantCitationMaxCount {
+					citations = append(citations, citation)
+				}
+			}
+		}
 		if artifact.Evidence != nil || artifact.Tool == "stratum_diagnose_tenant" {
 			hasDiagnostic = true
 		}
@@ -1103,5 +1115,35 @@ func buildExecutionArtifacts(toolArtifacts []domain.SystemAssistantToolArtifact,
 	if hasDiagnostic {
 		out = append(out, domain.ExecutionArtifact{Type: "diagnostic_report", ProfileVersion: profileVersion, DiagnosticReport: domain.BuildDiagnosticReport(toolArtifacts)})
 	}
-	return out
+	return boundExecutionArtifactsJSON(out)
+}
+
+func boundExecutionArtifactsJSON(artifacts []domain.ExecutionArtifact) []domain.ExecutionArtifact {
+	for {
+		raw, err := json.Marshal(artifacts)
+		if err == nil && len(raw) <= constants.SystemAssistantToolMaxJSONBytes {
+			return artifacts
+		}
+		changed := false
+		for i := range artifacts {
+			report := artifacts[i].DiagnosticReport
+			if report == nil {
+				continue
+			}
+			switch {
+			case len(report.Facts) > 0:
+				report.Facts = report.Facts[:len(report.Facts)-1]
+				changed = true
+			case len(report.EvidenceGaps) > 0:
+				report.EvidenceGaps = report.EvidenceGaps[:len(report.EvidenceGaps)-1]
+				changed = true
+			case len(report.Citations) > 0:
+				report.Citations = report.Citations[:len(report.Citations)-1]
+				changed = true
+			}
+		}
+		if !changed {
+			return []domain.ExecutionArtifact{{Type: "diagnostic_report", ProfileVersion: artifacts[0].ProfileVersion, DiagnosticReport: &domain.DiagnosticReport{Facts: []domain.DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []domain.EvidenceGap{{Source: "artifact_aggregate", Code: "truncated"}}, RecommendedActions: []string{}, Citations: []domain.Citation{}, Steps: []domain.DiagnosticStep{{Tool: "artifact_aggregate", Outcome: "error", ErrorCode: "truncated"}}}}}
+		}
+	}
 }
