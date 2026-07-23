@@ -209,6 +209,18 @@ grep -Fq 'source identity conflict' "${TEST_ROOT}/source-conflict.out" || \
 [[ -f "${conflict_out}/reports/inbox/conflict.md" ]] || \
   fail 'source identity conflict consumed its input'
 
+deployed_dir="${TEST_ROOT}/deployed-cron"
+mkdir -p "${deployed_dir}"
+cp "${TASK}" "${deployed_dir}/daily-agent-interview.sh"
+if ! STRATUM_ROOT="${ROOT}" \
+  AGENT_INTERVIEW_OUT_DIR="${out}" \
+  CODEX_BIN="${FAKE_CODEX}" \
+  "${deployed_dir}/daily-agent-interview.sh" --dry-run \
+  >"${TEST_ROOT}/deployed-dry-run.out" 2>&1; then
+  cat "${TEST_ROOT}/deployed-dry-run.out" >&2
+  fail 'deployed daily task could not resolve repository helpers'
+fi
+
 grep -Eq '^agent-interview-test:' "${ROOT}/Makefile" || \
   fail 'Makefile is missing agent-interview-test target'
 grep -Fq 'make agent-interview-test' "${ROOT}/.github/workflows/ci.yml" || \

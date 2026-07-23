@@ -3,8 +3,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${SCRIPT_DIR}/library-common.sh" ]]; then
+  HELPER_DIR="${SCRIPT_DIR}"
+else
+  STRATUM_ROOT="${STRATUM_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
+  HELPER_DIR="${STRATUM_ROOT}/scripts/agent-interview"
+fi
 # shellcheck source=library-common.sh
-source "${SCRIPT_DIR}/library-common.sh"
+source "${HELPER_DIR}/library-common.sh"
 
 STRATUM_ROOT="${STRATUM_ROOT:-$(agent_interview_root)}"
 OUT_DIR="${AGENT_INTERVIEW_OUT_DIR:-${STRATUM_ROOT}/tmp/agent-interview}"
@@ -171,7 +177,7 @@ fuse_input() {
     log "fusion failed for $(basename "${input}") with exit code ${status}"
     return "${status}"
   fi
-  if ! "${SCRIPT_DIR}/validate-library.sh" --library "${stage_library}" \
+  if ! "${HELPER_DIR}/validate-library.sh" --library "${stage_library}" \
     --coverage-manifest "${coverage}"; then
     rm -rf "${stage_root}"
     log "staged library validation failed for $(basename "${input}")"
@@ -196,7 +202,7 @@ if ! flock -n 9; then
   exit 0
 fi
 
-"${SCRIPT_DIR}/validate-library.sh" --library "${REPORT_DIR}"
+"${HELPER_DIR}/validate-library.sh" --library "${REPORT_DIR}"
 
 case "${MODE}" in
   dry-run)
