@@ -70,6 +70,25 @@ func TestAggregateRejectsInvalidWindowAndEvents(t *testing.T) {
 	}
 }
 
+func TestAggregateBucketsActiveDaysInWindowTimezone(t *testing.T) {
+	zone := time.FixedZone("UTC+8", 8*60*60)
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, zone)
+	events := []observe.Event{
+		tool(time.Date(2026, 7, 1, 0, 30, 0, 0, zone), "codex", "svc", "search", "s1",
+			observe.OutcomeSuccess, true, 1, 1, 1),
+		tool(time.Date(2026, 7, 1, 23, 30, 0, 0, zone), "codex", "svc", "search", "s2",
+			observe.OutcomeSuccess, true, 1, 1, 1),
+	}
+
+	got, err := Aggregate(start, start.Add(24*time.Hour), events, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Tools[0].ActiveDays != 1 {
+		t.Fatalf("active days = %d, want 1 for one window-local calendar date", got.Tools[0].ActiveDays)
+	}
+}
+
 func tool(at time.Time, client, service, name, session string, outcome observe.Outcome, effective bool,
 	duration int64, bytes, concurrent int,
 ) observe.Event {

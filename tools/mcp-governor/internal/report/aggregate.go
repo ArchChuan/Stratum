@@ -105,7 +105,7 @@ func Aggregate(start, end time.Time, events []observe.Event, snapshots []process
 		if event.Outcome == observe.OutcomeSuccess {
 			item.successes++
 		}
-		item.days[event.At.UTC().Format("2006-01-02")] = struct{}{}
+		item.days[event.At.In(start.Location()).Format("2006-01-02")] = struct{}{}
 		item.sessions[event.SessionHash] = struct{}{}
 		item.durations = append(item.durations, event.DurationMS)
 		item.responseBytes = append(item.responseBytes, event.ResponseBytes)
