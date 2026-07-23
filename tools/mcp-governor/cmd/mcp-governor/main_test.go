@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,6 +58,113 @@ func TestRunRejectsInvalidInvocation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunProxyRejectsInvalidInvocation(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "repository")
+	tests := []struct {
+		name string
+		args []string
+		want string
+		code int
+	}{
+		{name: "missing separator", args: []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake", "command"}, want: "separator", code: 2},
+		{name: "unknown client", args: []string{"proxy", "--config", configPath, "--client", "unknown", "--service", "fake", "--repository", root, "--", "command"}, want: "client", code: 1},
+		{name: "unknown service", args: []string{"proxy", "--config", configPath, "--client", "codex", "--service", "unknown", "--repository", root, "--", "command"}, want: "service", code: 1},
+		{name: "empty session", args: []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake", "--session", "", "--repository", root, "--", "command"}, want: "session", code: 2},
+		{name: "malformed session", args: []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake", "--session", "1:0", "--repository", root, "--", "command"}, want: "session", code: 2},
+		{name: "repository required", args: []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake", "--session", "1:2", "--", "command"}, want: "repository", code: 1},
+		{name: "empty command", args: []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake", "--session", "1:2", "--repository", root, "--"}, want: "command", code: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run(test.args, &stdout, &stderr); code != test.code {
+				t.Fatalf("run() = %d, want %d; stderr=%q", code, test.code, stderr.String())
+			}
+			if !strings.Contains(strings.ToLower(stderr.String()), test.want) {
+				t.Fatalf("stderr=%q, want %q", stderr.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestRunProxyRejectsServiceNotEnabledForClient(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "claude", "user")
+	var stderr bytes.Buffer
+	code := run([]string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
+		"--session", "1:2", "--", "command"}, io.Discard, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "not enabled") {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestRunProxyRejectsCommandNotClassifiedAsService(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	var stderr bytes.Buffer
+	code := run([]string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
+		"--session", "1:2", "--", "unrelated-command"}, io.Discard, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "does not match") {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestRunProxyExecutesCommandAndPersistsOnlyMetadata(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "repository")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretArg := "do-not-persist-argument"
+	secretEnv := "do-not-persist-environment"
+	t.Setenv("MCP_GOVERNOR_TEST_HELPER", "1")
+	t.Setenv("MCP_GOVERNOR_SECRET", secretEnv)
+	oldStdin := proxyStdin
+	proxyStdin = strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n")
+	t.Cleanup(func() { proxyStdin = oldStdin })
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
+		"--session", "123:456", "--repository", filepath.Join(root, "."), "--", executable,
+		"-test.run=TestProxyHelperProcess", "--", secretArg}
+	if code := run(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"protocolVersion":"2025-03-26"`) {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	allOutput := stdout.String() + stderr.String()
+	if strings.Contains(allOutput, secretArg) || strings.Contains(allOutput, secretEnv) {
+		t.Fatalf("secret printed: %q", allOutput)
+	}
+	events, err := filepath.Glob(filepath.Join(root, "events", "codex", "*.jsonl"))
+	if err != nil || len(events) != 1 {
+		t.Fatalf("events=%v err=%v", events, err)
+	}
+	data := mustReadFile(t, events[0])
+	if strings.Contains(string(data), secretArg) || strings.Contains(string(data), secretEnv) || strings.Contains(string(data), root) {
+		t.Fatalf("secret or repository path persisted: %s", data)
+	}
+	var event map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(data), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event["kind"] != "session_ready" || event["client"] != "codex" || event["service"] != "fake" ||
+		event["session_hash"] == "123:456" || event["repository_hash"] == "" {
+		t.Fatalf("unexpected event: %+v", event)
+	}
+}
+
+func TestProxyHelperProcess(t *testing.T) {
+	if os.Getenv("MCP_GOVERNOR_TEST_HELPER") != "1" {
+		return
+	}
+	_, _ = io.ReadAll(os.Stdin)
+	_, _ = fmt.Fprintln(os.Stdout, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}`)
 }
 
 func TestRunReportsConfigAndProcRootErrors(t *testing.T) {
@@ -457,6 +565,31 @@ func writeConfig(t *testing.T, dir, registry, output string) string {
 	data, err := json.Marshal(map[string]any{
 		"version": 1, "output_path": output, "registry_path": registry,
 		"services": []map[string]any{{"name": "chroma", "all_args_contain": []string{"chroma-mcp", "--client-type"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, data, 0o600)
+	return path
+}
+
+func writeProxyConfig(t *testing.T, dir, client, scope string) string {
+	t.Helper()
+	saltPath := filepath.Join(dir, "salt")
+	writeFile(t, saltPath, bytes.Repeat([]byte{'s'}, 32), 0o600)
+	path := filepath.Join(dir, "proxy-config.json")
+	data, err := json.Marshal(map[string]any{
+		"version": 2, "output_path": filepath.Join(dir, "snapshot.json"),
+		"registry_path": filepath.Join(dir, "registry.json"),
+		"observation": map[string]any{
+			"events_dir": filepath.Join(dir, "events"), "reports_dir": filepath.Join(dir, "reports"),
+			"salt_path": saltPath, "raw_retention_days": 30,
+		},
+		"services": []map[string]any{{
+			"name": "fake", "command": "catalog-command", "args": []string{"catalog-arg"}, "cwd": dir,
+			"transport": "stdio", "scope": scope, "session_policy": "isolated",
+			"clients": []string{client}, "all_args_contain": []string{"TestProxyHelperProcess"},
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
