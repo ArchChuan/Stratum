@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -445,7 +444,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					status, errMsg, content = domain.ToolTraceStatusError, "official docs tool unavailable", "error: tool unavailable"
 					break
 				}
-				query, parseErr := parseOfficialDocsToolArguments(tc.Arguments)
+				query, parseErr := domain.ParseOfficialDocsToolArguments(tc.Arguments)
 				if parseErr != nil {
 					status, errMsg, content = domain.ToolTraceStatusError, parseErr.Error(), "error: invalid tool arguments"
 					break
@@ -457,6 +456,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					status, errMsg, content = domain.ToolTraceStatusError, safeAssistantToolError(callErr), "error: "+safeAssistantToolError(callErr)
 					break
 				}
+				citations = domain.BoundCitations(citations)
 				content, callErr = guardInternalAssistantEvidence(s.InternalToolResultGuardFn, map[string]any{"citations": citations})
 				if callErr != nil {
 					status, errMsg, content = domain.ToolTraceStatusError, callErr.Error(), "error: tool result exceeded safe bounds"
@@ -470,7 +470,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					status, errMsg, content = domain.ToolTraceStatusError, "diagnostic tool unavailable", "error: tool unavailable"
 					break
 				}
-				areas, parseErr := parseDiagnosticToolArguments(tc.Arguments)
+				areas, parseErr := domain.ParseDiagnosticToolArguments(tc.Arguments)
 				if parseErr != nil {
 					status, errMsg, content = domain.ToolTraceStatusError, parseErr.Error(), "error: invalid tool arguments"
 					break
@@ -482,6 +482,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 					status, errMsg, content = domain.ToolTraceStatusError, safeAssistantToolError(callErr), "error: "+safeAssistantToolError(callErr)
 					break
 				}
+				evidence = domain.BoundDiagnosticEvidence(evidence)
 				content, callErr = guardInternalAssistantEvidence(s.InternalToolResultGuardFn, map[string]any{"evidence": evidence})
 				if callErr != nil {
 					status, errMsg, content = domain.ToolTraceStatusError, callErr.Error(), "error: tool result exceeded safe bounds"
@@ -944,44 +945,11 @@ func effectiveTools(
 	return out
 }
 
-func parseOfficialDocsToolArguments(args map[string]any) (string, error) {
-	if len(args) != 1 {
-		return "", errors.New("invalid official docs arguments")
-	}
-	query, ok := args["query"].(string)
-	query = strings.TrimSpace(query)
-	if !ok || query == "" {
-		return "", errors.New("invalid official docs arguments")
-	}
-	return query, nil
-}
-
-func parseDiagnosticToolArguments(args map[string]any) ([]domain.DiagnosticArea, error) {
-	if len(args) != 1 {
-		return nil, errors.New("invalid diagnostic arguments")
-	}
-	raw, ok := args["areas"].([]any)
-	if !ok || len(raw) == 0 {
-		return nil, errors.New("invalid diagnostic arguments")
-	}
-	areas := make([]domain.DiagnosticArea, 0, len(raw))
-	seen := map[domain.DiagnosticArea]struct{}{}
-	for _, value := range raw {
-		name, ok := value.(string)
-		area := domain.DiagnosticArea(name)
-		if !ok || !area.Valid() {
-			return nil, errors.New("invalid diagnostic arguments")
-		}
-		if _, exists := seen[area]; exists {
-			continue
-		}
-		seen[area] = struct{}{}
-		areas = append(areas, area)
-	}
-	return areas, nil
-}
-
 func guardInternalAssistantEvidence(fn func(any) (port.GuardedToolResult, error), value any) (string, error) {
+	raw, err := json.Marshal(value)
+	if err != nil || len(raw) > constants.SystemAssistantToolMaxJSONBytes {
+		return "", domain.ErrSystemAssistantEvidenceTooLarge
+	}
 	if fn == nil {
 		return "", errors.New("internal tool result guard unavailable")
 	}
@@ -1019,6 +987,10 @@ func assistantToolErrorCode(message string) string {
 		return "forbidden"
 	case "invalid official docs arguments", "invalid diagnostic arguments":
 		return "invalid_arguments"
+	case domain.ErrInvalidSystemAssistantToolArguments.Error():
+		return "invalid_arguments"
+	case domain.ErrSystemAssistantEvidenceTooLarge.Error():
+		return "evidence_too_large"
 	default:
 		return "unavailable"
 	}

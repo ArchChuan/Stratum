@@ -3,10 +3,10 @@ package application
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 const (
@@ -23,7 +23,7 @@ func SystemAssistantToolDefinitions() []port.ToolDefinition {
 			Description: "检索当前版本的 Stratum 官方文档。仅在需要回答平台使用方式时调用。",
 			InputSchema: map[string]any{
 				"type": "object", "additionalProperties": false,
-				"properties": map[string]any{"query": map[string]any{"type": "string", "minLength": 1}},
+				"properties": map[string]any{"query": map[string]any{"type": "string", "minLength": 1, "maxLength": constants.SystemAssistantQueryMaxRunes}},
 				"required":   []string{"query"},
 			},
 		},
@@ -33,7 +33,7 @@ func SystemAssistantToolDefinitions() []port.ToolDefinition {
 			InputSchema: map[string]any{
 				"type": "object", "additionalProperties": false,
 				"properties": map[string]any{"areas": map[string]any{
-					"type": "array", "minItems": 1, "uniqueItems": true,
+					"type": "array", "minItems": 1, "maxItems": constants.SystemAssistantAreasMaxCount, "uniqueItems": true,
 					"items": map[string]any{"type": "string", "enum": []string{"agent", "skill", "mcp", "knowledge", "model"}},
 				}},
 				"required": []string{"areas"},
@@ -43,42 +43,17 @@ func SystemAssistantToolDefinitions() []port.ToolDefinition {
 }
 
 func parseOfficialDocsArguments(args map[string]any) (string, error) {
-	if len(args) != 1 {
-		return "", ErrInvalidSystemAssistantToolArguments
-	}
-	query, ok := args["query"].(string)
-	query = strings.TrimSpace(query)
-	if !ok || query == "" {
-		return "", ErrInvalidSystemAssistantToolArguments
+	query, err := domain.ParseOfficialDocsToolArguments(args)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidSystemAssistantToolArguments, err)
 	}
 	return query, nil
 }
 
 func parseDiagnosticArguments(args map[string]any) ([]domain.DiagnosticArea, error) {
-	if len(args) != 1 {
-		return nil, ErrInvalidSystemAssistantToolArguments
-	}
-	raw, ok := args["areas"]
-	if !ok {
-		return nil, ErrInvalidSystemAssistantToolArguments
-	}
-	items, ok := raw.([]any)
-	if !ok || len(items) == 0 {
-		return nil, ErrInvalidSystemAssistantToolArguments
-	}
-	areas := make([]domain.DiagnosticArea, 0, len(items))
-	seen := make(map[domain.DiagnosticArea]struct{}, len(items))
-	for _, item := range items {
-		value, ok := item.(string)
-		area := domain.DiagnosticArea(value)
-		if !ok || !area.Valid() {
-			return nil, fmt.Errorf("%w: area", ErrInvalidSystemAssistantToolArguments)
-		}
-		if _, duplicate := seen[area]; duplicate {
-			continue
-		}
-		seen[area] = struct{}{}
-		areas = append(areas, area)
+	areas, err := domain.ParseDiagnosticToolArguments(args)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidSystemAssistantToolArguments, err)
 	}
 	return areas, nil
 }
