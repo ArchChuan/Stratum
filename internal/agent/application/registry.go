@@ -4,6 +4,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
@@ -62,7 +63,7 @@ func (r *Registry) Register(ctx context.Context, a Agent) error {
 
 // Get retrieves a hydrated Agent by ID. Returns (nil, false) on miss.
 func (r *Registry) Get(ctx context.Context, id string) (Agent, bool) {
-	cfg, found, err := r.repo.Get(ctx, id)
+	agent, found, err := r.GetWithError(ctx, id)
 	if err != nil {
 		if r.logger != nil {
 			r.logger.Error("registry: get agent failed",
@@ -73,7 +74,20 @@ func (r *Registry) Get(ctx context.Context, id string) (Agent, bool) {
 	if !found {
 		return nil, false
 	}
-	return r.hydrate(cfg), true
+	return agent, true
+}
+
+// GetWithError retrieves a hydrated Agent while preserving repository errors.
+// Callers that gate destructive side effects must use this fail-closed path.
+func (r *Registry) GetWithError(ctx context.Context, id string) (Agent, bool, error) {
+	cfg, found, err := r.repo.Get(ctx, id)
+	if err != nil {
+		return nil, false, fmt.Errorf("registry get agent %s: %w", id, err)
+	}
+	if !found {
+		return nil, false, nil
+	}
+	return r.hydrate(cfg), true, nil
 }
 
 // GetAll returns all hydrated agents in the tenant schema.
