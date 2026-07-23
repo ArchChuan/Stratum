@@ -70,7 +70,7 @@ func (e Event) Validate() error {
 			return fmt.Errorf("unknown tool call outcome %q", e.Outcome)
 		}
 	case KindSessionReady:
-		if e.Tool != "" || e.Outcome != "" || e.Effective {
+		if e.Tool != "" || e.Outcome != "" || e.Effective || e.ConcurrentCalls != 0 {
 			return fmt.Errorf("session ready event contains tool call fields")
 		}
 	default:

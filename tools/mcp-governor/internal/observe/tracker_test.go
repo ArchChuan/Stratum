@@ -3,6 +3,7 @@ package observe
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -60,6 +61,45 @@ func TestTrackerStringAndNumericIDsDoNotCollide(t *testing.T) {
 	}
 }
 
+func TestTrackerCanonicalizesExactNumericIDs(t *testing.T) {
+	tracker := newTestTracker(t, time.Now)
+	tracker.ClientMessage([]byte(`{"id":1.0,"method":"tools/call","params":{"name":"decimal"}}`))
+	tracker.ClientMessage([]byte(`{"id":1e2,"method":"tools/call","params":{"name":"exponent"}}`))
+	tracker.ClientMessage([]byte(`{"id":-2.0,"method":"tools/call","params":{"name":"negative"}}`))
+	tracker.ClientMessage([]byte(`{"id":-0,"method":"tools/call","params":{"name":"zero"}}`))
+	tracker.ClientMessage([]byte(`{"id":"1","method":"tools/call","params":{"name":"string"}}`))
+
+	responses := []struct {
+		id   string
+		tool string
+	}{
+		{id: `1`, tool: "decimal"},
+		{id: `100`, tool: "exponent"},
+		{id: `-2`, tool: "negative"},
+		{id: `0`, tool: "zero"},
+		{id: `"1"`, tool: "string"},
+	}
+	for _, response := range responses {
+		events := tracker.ServerMessage([]byte(fmt.Sprintf(`{"id":%s,"result":{}}`, response.id)))
+		if len(events) != 1 || events[0].Tool != response.tool {
+			t.Fatalf("response ID %s events = %+v, want tool %q", response.id, events, response.tool)
+		}
+	}
+}
+
+func TestTrackerRejectsFractionalAndOversizedNumericIDs(t *testing.T) {
+	tracker := newTestTracker(t, time.Now)
+	oversized := "1" + strings.Repeat("0", 256)
+	for _, id := range []string{`1.5`, `1e-2`, `1e1000000000`, oversized} {
+		tracker.ClientMessage([]byte(fmt.Sprintf(
+			`{"id":%s,"method":"tools/call","params":{"name":"ignored"}}`, id,
+		)))
+		if events := tracker.ServerMessage([]byte(fmt.Sprintf(`{"id":%s,"result":{}}`, id))); len(events) != 0 {
+			t.Fatalf("invalid numeric ID %s correlated: %+v", id, events)
+		}
+	}
+}
+
 func TestTrackerErrorTimeoutAndCancellation(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -83,10 +123,20 @@ func TestTrackerErrorTimeoutAndCancellation(t *testing.T) {
 	}
 
 	tracker := newTestTracker(t, time.Now)
+	reasonSecret := "unique-cancellation-reason"
 	tracker.ClientMessage([]byte(`{"id":"x","method":"tools/call","params":{"name":"work"}}`))
-	events := tracker.ClientMessage([]byte(`{"method":"notifications/cancelled","params":{"requestId":"x","reason":"secret"}}`))
+	events := tracker.ClientMessage([]byte(fmt.Sprintf(
+		`{"method":"notifications/cancelled","params":{"requestId":"x","reason":%q}}`, reasonSecret,
+	)))
 	if len(events) != 1 || events[0].Outcome != OutcomeCancelled || events[0].ResponseBytes != 0 {
 		t.Fatalf("cancel events = %+v", events)
+	}
+	encoded, err := json.Marshal(events[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(string(encoded), reasonSecret) {
+		t.Fatalf("serialized cancellation event leaked reason: %s", encoded)
 	}
 	if got := tracker.ServerMessage([]byte(`{"id":"x","result":{}}`)); len(got) != 0 {
 		t.Fatalf("cancelled call remained pending: %+v", got)
@@ -189,6 +239,23 @@ func TestTrackerInitializeLatencyAndCancellation(t *testing.T) {
 	}
 	if got := tracker.ServerMessage([]byte(`{"id":2,"result":{}}`)); len(got) != 0 {
 		t.Fatalf("cancelled initialize remained pending: %+v", got)
+	}
+}
+
+func TestTrackerInitializeErrorAndNullResultDoNotEmitReady(t *testing.T) {
+	for _, response := range []string{
+		`{"id":1,"error":{"code":-32603,"message":"failed"}}`,
+		`{"id":1,"result":null}`,
+		`{"id":1}`,
+	} {
+		tracker := newTestTracker(t, time.Now)
+		tracker.ClientMessage([]byte(`{"id":1,"method":"initialize"}`))
+		if events := tracker.ServerMessage([]byte(response)); len(events) != 0 {
+			t.Fatalf("initialize response %s emitted %+v", response, events)
+		}
+		if events := tracker.ServerMessage([]byte(`{"id":1,"result":{}}`)); len(events) != 0 {
+			t.Fatalf("initialize state was not cleared after %s: %+v", response, events)
+		}
 	}
 }
 
@@ -296,6 +363,7 @@ func TestTrackerMetadataAndEventValidation(t *testing.T) {
 		withEvent(session, func(e *Event) { e.Tool = "x" }),
 		withEvent(session, func(e *Event) { e.Outcome = OutcomeSuccess }),
 		withEvent(session, func(e *Event) { e.Effective = true }),
+		withEvent(session, func(e *Event) { e.ConcurrentCalls = 1 }),
 		withEvent(session, func(e *Event) { e.DurationMS = -1 }),
 	} {
 		if err := event.Validate(); err == nil {

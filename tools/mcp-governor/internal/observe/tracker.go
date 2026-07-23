@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +21,8 @@ type pendingInitialize struct {
 	id        string
 	startedAt time.Time
 }
+
+const maxNumericIDBytes = 256
 
 type Tracker struct {
 	mu         sync.Mutex
@@ -116,15 +118,18 @@ func (t *Tracker) ServerMessage(raw []byte) []Event {
 	if !ok {
 		return nil
 	}
-	if message.Result == nil && !hasJSONValue(message.Error) {
-		return nil
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.initialize != nil && t.initialize.id == id {
 		startedAt := t.initialize.startedAt
 		t.initialize = nil
+		if hasJSONValue(message.Error) || !hasJSONValue(message.Result) {
+			return nil
+		}
 		return []Event{t.sessionEvent(startedAt, len(raw))}
+	}
+	if message.Result == nil && !hasJSONValue(message.Error) {
+		return nil
 	}
 	call, exists := t.pending[id]
 	if !exists {
@@ -188,6 +193,13 @@ func durationMS(at, startedAt time.Time) int64 {
 }
 
 func normalizeID(raw json.RawMessage) (string, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return "", false
+	}
+	if trimmed[0] != '"' && (len(trimmed) > maxNumericIDBytes || exponentTooLarge(trimmed)) {
+		return "", false
+	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var value any
@@ -198,78 +210,25 @@ func normalizeID(raw json.RawMessage) (string, bool) {
 	case string:
 		return "s:" + id, true
 	case json.Number:
-		rational, ok := new(bigRat).setString(string(id))
-		if !ok || !rational.isInteger() {
+		rational, ok := new(big.Rat).SetString(string(id))
+		if !ok || rational.Denom().Cmp(big.NewInt(1)) != 0 {
 			return "", false
 		}
-		return "n:" + rational.integerString(), true
+		return "n:" + rational.Num().String(), true
 	default:
 		return "", false
 	}
 }
 
-// bigRat is a small decimal/exponent parser used to canonicalize exact integer JSON numbers.
-type bigRat struct {
-	digits   string
-	negative bool
-	scale    int
-}
-
-func (r *bigRat) setString(value string) (*bigRat, bool) {
-	negative := strings.HasPrefix(value, "-")
-	value = strings.TrimPrefix(value, "-")
-	parts := strings.SplitN(value, "e", 2)
-	if len(parts) == 1 {
-		parts = strings.SplitN(value, "E", 2)
-	}
-	exponent := 0
-	if len(parts) == 2 {
-		parsed, err := strconv.Atoi(parts[1])
-		if err != nil {
-			return nil, false
-		}
-		exponent = parsed
-	}
-	mantissa := parts[0]
-	dot := strings.IndexByte(mantissa, '.')
-	scale := 0
-	if dot >= 0 {
-		scale = len(mantissa) - dot - 1
-		mantissa = mantissa[:dot] + mantissa[dot+1:]
-	}
-	mantissa = strings.TrimLeft(mantissa, "0")
-	if mantissa == "" {
-		mantissa = "0"
-		negative = false
-	}
-	return &bigRat{digits: mantissa, negative: negative, scale: scale - exponent}, true
-}
-
-func (r *bigRat) isInteger() bool {
-	if r.scale <= 0 {
-		return true
-	}
-	if r.scale > len(r.digits) {
+func exponentTooLarge(raw []byte) bool {
+	index := bytes.IndexAny(raw, "eE")
+	if index < 0 {
 		return false
 	}
-	return strings.Trim(r.digits[len(r.digits)-r.scale:], "0") == ""
-}
-
-func (r *bigRat) integerString() string {
-	digits := r.digits
-	if r.scale < 0 {
-		digits += strings.Repeat("0", -r.scale)
-	} else if r.scale > 0 {
-		digits = digits[:len(digits)-r.scale]
-	}
-	digits = strings.TrimLeft(digits, "0")
-	if digits == "" {
-		return "0"
-	}
-	if r.negative {
-		return "-" + digits
-	}
-	return digits
+	exponent := bytes.TrimPrefix(raw[index+1:], []byte("+"))
+	exponent = bytes.TrimPrefix(exponent, []byte("-"))
+	value, ok := new(big.Int).SetString(string(exponent), 10)
+	return !ok || value.Cmp(big.NewInt(maxNumericIDBytes)) > 0
 }
 
 func hasJSONValue(raw json.RawMessage) bool {
