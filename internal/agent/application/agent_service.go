@@ -189,7 +189,10 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 	if strings.TrimSpace(tenantID) == "" {
 		return domain.AgentRevision{}, fmt.Errorf("agent service: tenant id required")
 	}
-	a, ok := s.deps.Registry.Get(ctx, id)
+	a, ok, err := s.deps.Registry.Get(ctx, id)
+	if err != nil {
+		return domain.AgentRevision{}, fmt.Errorf("agent service: snapshot revision: %w", err)
+	}
 	if !ok {
 		return domain.AgentRevision{}, ErrNotFound
 	}
@@ -253,7 +256,10 @@ func (s *AgentService) ExecuteRevision(
 		a = a.WithMetrics(s.deps.Metrics)
 	}
 	executionID := uuid.Must(uuid.NewV7()).String()
-	_, options := s.assembleOptions(ctx, a, req, meta, executionID)
+	_, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
+	if err != nil {
+		return nil, 0, err
+	}
 	options = append(options, WithExecutionID(executionID))
 	start := time.Now()
 	execCtx, cancel := revisionExecutionContext(ctx)

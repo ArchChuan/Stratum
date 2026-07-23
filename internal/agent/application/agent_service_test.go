@@ -292,7 +292,7 @@ func TestAgentService_SnapshotRevisionCapturesAuthorizedBindings(t *testing.T) {
 
 func TestAgentService_SnapshotRevisionPreservesExecutionParity(t *testing.T) {
 	repo := new(mockAgentRepo)
-	registry := application.NewRegistry(repo, zap.NewNop())
+	registry := application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop())
 	registry.SetGlobalSystemSuffix("platform rules")
 	registry.SetMemoryInjector(stubMemoryInjector{})
 	registry.SetRecallMemoryFn(func(context.Context, string, string, string, string, map[string]any) (string, error) {
