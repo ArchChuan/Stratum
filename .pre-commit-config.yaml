@@ -56,7 +56,7 @@ repos:
         entry: /bin/bash -c 'make knowledge-deposition-test'
         language: system
         pass_filenames: false
-        files: '^(scripts/knowledge-deposition/|docs/agent/(instructions|knowledge-deposition|knowledge-workspace)\.md|docs/agent/templates/(agents-prefix|claude-prefix)\.md|AGENTS\.md|CLAUDE\.md|Makefile$)'
+        files: '^(\.pre-commit-config\.yaml|scripts/knowledge-deposition/|docs/agent/(instructions|knowledge-deposition|knowledge-workspace)\.md|docs/agent/templates/(agents-prefix|claude-prefix)\.md|AGENTS\.md|CLAUDE\.md|Makefile$)'
 
       # YAML validation (skip helm templates, k8s, and node_modules)
       - id: check-yaml

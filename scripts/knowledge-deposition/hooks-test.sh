@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+INHERITED_GIT_INDEX_FILE="${GIT_INDEX_FILE:-}"
+[[ -z "$INHERITED_GIT_INDEX_FILE" ]] || INHERITED_GIT_INDEX_FILE="$(realpath -m "$INHERITED_GIT_INDEX_FILE")"
+unset GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 CODEX_START="$SCRIPT_DIR/codex-task-start.sh"
@@ -55,12 +60,17 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 pass() { count=$((count + 1)); printf 'ok %d - %s\n' "$count" "$1"; }
 
 new_repo() {
-  local name="$1" repo
+  local name="$1" repo repo_index
   repo="$FIXTURES/$name"
   mkdir -p "$repo/docs/agent"
   printf 'module github.com/byteBuilderX/stratum\n\ngo 1.25.12\n' >"$repo/go.mod"
   printf '# policy\n' >"$repo/docs/agent/knowledge-deposition.md"
   git -C "$repo" init -q
+  repo_index="$(git -C "$repo" rev-parse --absolute-git-dir)/index"
+  [[ -z "$INHERITED_GIT_INDEX_FILE" || "$repo_index" != "$INHERITED_GIT_INDEX_FILE" ]] || \
+    fail "temporary repository inherited the caller Git index: $repo_index"
+  mkdir -p "$FIXTURES/empty-hooks"
+  git -C "$repo" config core.hooksPath "$FIXTURES/empty-hooks"
   git -C "$repo" config user.email test@example.com
   git -C "$repo" config user.name Test
   git -C "$repo" add .

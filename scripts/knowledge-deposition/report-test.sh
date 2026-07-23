@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+INHERITED_GIT_INDEX_FILE="${GIT_INDEX_FILE:-}"
+[[ -z "$INHERITED_GIT_INDEX_FILE" ]] || INHERITED_GIT_INDEX_FILE="$(realpath -m "$INHERITED_GIT_INDEX_FILE")"
+unset GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPORT_SH="$SCRIPT_DIR/report.sh"
 FIXTURE_ROOT="$(mktemp -d)"
@@ -19,12 +24,17 @@ pass() {
 }
 
 new_repo() {
-  local name="$1"
+  local name="$1" repo_index
   local repo="$FIXTURE_ROOT/$name"
   mkdir -p "$repo/docs/agent" "$repo/tmp/knowledge-deposition/current"
   printf 'module github.com/byteBuilderX/stratum\n\ngo 1.25.12\n' >"$repo/go.mod"
   printf '# Knowledge deposition policy\n' >"$repo/docs/agent/knowledge-deposition.md"
   git -C "$repo" init -q
+  repo_index="$(git -C "$repo" rev-parse --absolute-git-dir)/index"
+  [[ -z "$INHERITED_GIT_INDEX_FILE" || "$repo_index" != "$INHERITED_GIT_INDEX_FILE" ]] || \
+    fail "temporary repository inherited the caller Git index: $repo_index"
+  mkdir -p "$FIXTURE_ROOT/empty-hooks"
+  git -C "$repo" config core.hooksPath "$FIXTURE_ROOT/empty-hooks"
   git -C "$repo" config user.email test@example.com
   git -C "$repo" config user.name Test
   git -C "$repo" add go.mod docs/agent/knowledge-deposition.md
@@ -397,6 +407,7 @@ mkdir -p "$non_stratum/docs/agent" "$non_stratum/tmp/knowledge-deposition/curren
 printf 'module example.com/not-stratum\n' >"$non_stratum/go.mod"
 printf '# policy\n' >"$non_stratum/docs/agent/knowledge-deposition.md"
 git -C "$non_stratum" init -q
+git -C "$non_stratum" config core.hooksPath "$FIXTURE_ROOT/empty-hooks"
 git -C "$non_stratum" config user.email test@example.com
 git -C "$non_stratum" config user.name Test
 git -C "$non_stratum" add .

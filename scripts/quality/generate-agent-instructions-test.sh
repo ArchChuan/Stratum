@@ -127,7 +127,7 @@ validate_precommit_integration() {
     echo 'missing single-quoted files regex in bounded knowledge pre-commit hook' >&2
     return 1
   }
-  for required_path in AGENTS.md CLAUDE.md Makefile \
+  for required_path in .pre-commit-config.yaml AGENTS.md CLAUDE.md Makefile \
     docs/agent/instructions.md docs/agent/knowledge-deposition.md docs/agent/knowledge-workspace.md \
     docs/agent/templates/agents-prefix.md docs/agent/templates/claude-prefix.md \
     scripts/knowledge-deposition/install-hooks.sh scripts/knowledge-deposition/hook-core.sh; do
