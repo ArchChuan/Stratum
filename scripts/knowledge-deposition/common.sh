@@ -51,12 +51,27 @@ knowledge_report_basename() {
   printf '%s-%s-%s\n' "$client" "$session" "$task"
 }
 
+knowledge_path_within_root() {
+  local root="$1" path="$2" relative current component
+  [[ "$path" == "$root" || "$path" == "$root/"* ]] || return 1
+  [[ "$(realpath -m "$path")" == "$root" || "$(realpath -m "$path")" == "$root/"* ]] || return 1
+  relative="${path#"$root"}"
+  relative="${relative#/}"
+  current="$root"
+  IFS='/' read -r -a components <<<"$relative"
+  for component in "${components[@]}"; do
+    [[ -n "$component" ]] || continue
+    current="$current/$component"
+    [[ ! -L "$current" ]] || return 1
+  done
+}
+
 knowledge_validate_normalize() {
   jq -eS '
     def keys_exact($allowed):
       ((keys_unsorted - $allowed) | length) == 0;
     def nonempty: type == "string" and length > 0;
-    def strings: type == "array" and all(.[]; nonempty);
+    def string_array: type == "array" and all(.[]; nonempty);
     def forbidden_key:
       [paths(objects) as $p | (getpath($p) | keys_unsorted[]) |
         ascii_downcase |
@@ -66,6 +81,14 @@ knowledge_validate_normalize() {
     def safe_evidence_path:
       nonempty and startswith("/") == false and
       (split("/") | all(.[]; . != ".." and . != ""));
+    def persisted_text_valid:
+      . as $text |
+      (($text | length) <= 8192) and
+      (($text | test("[[:cntrl:]]")) | not) and
+      (($text | test("(?i)bearer[[:space:]]+[A-Za-z0-9._~+/-]{12,}")) | not) and
+      (($text | test("sk-[A-Za-z0-9_-]{20,}")) | not) and
+      (($text | test("[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}")) | not) and
+      (($text | test("(?i)(token|api[_-]?key)[[:space:]]*[:=][[:space:]]*[^[:space:]]{12,}")) | not);
     def evidence_valid:
       type == "array" and length > 0 and all(.[];
         type == "object" and keys_exact(["path", "anchor"]) and
@@ -85,7 +108,7 @@ knowledge_validate_normalize() {
        .destination == "obsidian" or .destination == "project_git") and
       (.evidence | evidence_valid) and
       (.scope | nonempty) and
-      (.exclusions | strings) and
+      (.exclusions | string_array) and
       (.duplicate_result | nonempty) and
       (.target | nonempty) and
       (.confidence == "low" or .confidence == "medium" or .confidence == "high") and
@@ -94,8 +117,8 @@ knowledge_validate_normalize() {
       (if .destination == "obsidian" then
         (.knowledge_type == "fact" or .knowledge_type == "principle" or .knowledge_type == "case" or
          .knowledge_type == "counterexample" or .knowledge_type == "correction") and
-        (.vault_queries | strings and length > 0) and
-        (.related_notes | strings and length > 0) and
+        (.vault_queries | string_array and length > 0) and
+        (.related_notes | string_array and length > 0) and
         (.verification_status | nonempty) and
         (.governance_action == "create" or .governance_action == "merge" or
          .governance_action == "correct" or .governance_action == "queue")
@@ -112,6 +135,7 @@ knowledge_validate_normalize() {
          ([.[].consumption_purpose] | unique | length) == length)
       );
     if forbidden_key then error("forbidden key") else . end |
+    select([.. | strings] | all(.[]; persisted_text_valid)) |
     select(type == "object") |
     select(keys_exact(["schema_version", "client", "session_id", "task_id", "repository", "created_at",
       "decision", "task_summary", "none_reason", "candidates"])) |

@@ -200,6 +200,116 @@ if grep -RFl -- "$raw_marker" "$repo_invalid/tmp/knowledge-deposition" >/dev/nul
 fi
 pass "rejected payload leaves no raw input staging or secret content"
 
+for sensitive_value in \
+  'Bearer '"abcdefghijklmnopqrstuvwxyz" \
+  'sk-'"abcdefghijklmnopqrstuvwxyz123456" \
+  'eyJhbGciOiJIUzI1NiJ9''.''eyJzdWIiOiIxMjM0NTY3ODkwIn0''.''c2lnbmF0dXJlMTIzNDU2' \
+  'token='"abcdefghijklmnopqrstuvwxyz" \
+  'API_KEY: '"abcdefghijklmnopqrstuvwxyz"; do
+  expect_reject "high-signal sensitive value is rejected" "$repo_invalid" \
+    "$(valid_none | jq --arg value "$sensitive_value" '.task_summary = $value')"
+done
+expect_reject "newline structural injection is rejected" "$repo_invalid" \
+  "$(valid_none | jq '.task_summary = "summary\n# injected heading"')"
+expect_reject "control character injection is rejected" "$repo_invalid" \
+  "$(valid_none | jq '.task_summary = "summary\twith tab"')"
+
+markdown_safe="$(valid_candidates | jq '
+  .task_summary = "Summary # heading [link](target) `code` | cell" |
+  .candidates[0].claim = "Claim # heading [link](target) `code` | cell" |
+  .candidates[0].scope = "Scope * emphasis _ underline"
+')"
+write_marker "$repo_invalid" codex markdown-safe markdown-safe
+markdown_safe_path="$(run_report "$repo_invalid" codex markdown-safe markdown-safe "$markdown_safe")"
+grep -Fq 'Summary \# heading \[link\]\(target\) \`code\` \| cell' "$markdown_safe_path" || \
+  fail "Markdown task summary was not escaped"
+grep -Fq 'Claim \# heading \[link\]\(target\) \`code\` \| cell' "$markdown_safe_path" || \
+  fail "Markdown claim was not escaped"
+pass "Markdown metacharacters are escaped"
+
+outside_tmp="$FIXTURE_ROOT/outside-tmp"
+repo_tmp_link="$(new_repo tmp-link)"
+rm -rf "$repo_tmp_link/tmp"
+mkdir -p "$outside_tmp/knowledge-deposition/current"
+ln -s "$outside_tmp" "$repo_tmp_link/tmp"
+printf '{"task_id":"task-a"}\n' >"$outside_tmp/knowledge-deposition/current/codex-session-a.json"
+if run_report "$repo_tmp_link" codex session-a task-a "$(valid_none)" >/dev/null 2>&1; then
+  fail "tmp symlink escape was accepted"
+fi
+[[ ! -e "$outside_tmp/knowledge-deposition/.lock" ]] || fail "tmp symlink escape wrote outside repository"
+pass "tmp symlink escape is rejected"
+
+outside_kd="$FIXTURE_ROOT/outside-kd"
+repo_kd_link="$(new_repo kd-link)"
+rm -rf "$repo_kd_link/tmp/knowledge-deposition"
+mkdir -p "$outside_kd/current"
+ln -s "$outside_kd" "$repo_kd_link/tmp/knowledge-deposition"
+printf '{"task_id":"task-a"}\n' >"$outside_kd/current/codex-session-a.json"
+if run_report "$repo_kd_link" codex session-a task-a "$(valid_none)" >/dev/null 2>&1; then
+  fail "knowledge-deposition symlink escape was accepted"
+fi
+[[ ! -e "$outside_kd/.lock" ]] || fail "knowledge-deposition symlink escape wrote outside repository"
+pass "knowledge-deposition symlink escape is rejected"
+
+repo_lock_link="$(new_repo lock-link)"
+write_marker "$repo_lock_link" codex session-a task-a
+lock_target="$FIXTURE_ROOT/lock-target"
+printf 'do-not-truncate\n' >"$lock_target"
+ln -s "$lock_target" "$repo_lock_link/tmp/knowledge-deposition/.lock"
+if run_report "$repo_lock_link" codex session-a task-a "$(valid_none)" >/dev/null 2>&1; then
+  fail "lock symlink was accepted"
+fi
+[[ "$(cat "$lock_target")" == 'do-not-truncate' ]] || fail "lock symlink target was modified"
+pass "lock symlink target is never truncated"
+
+repo_pair="$(new_repo pair)"
+write_marker "$repo_pair" codex session-a task-a
+if KNOWLEDGE_REPORT_TEST_FAIL_SECOND_PUBLISH=1 run_report "$repo_pair" codex session-a task-a \
+  "$(valid_none)" >/dev/null 2>&1; then
+  fail "injected second publish failure unexpectedly succeeded"
+fi
+if find "$repo_pair/tmp/knowledge-deposition" -mindepth 2 -type f \
+  \( -name 'codex-session-a-task-a.json' -o -name 'codex-session-a-task-a.md' \) | grep -q .; then
+  fail "second publish failure left a partial authoritative pair"
+fi
+pass "second publish failure rolls back the report pair"
+
+write_marker "$repo_pair" codex session-b task-b
+pair_path="$(run_report "$repo_pair" codex session-b task-b "$(valid_none)")"
+pair_json="${pair_path%.md}.json"
+json_hash="$(sha256sum "$pair_json" | awk '{print $1}')"
+md_hash="$(sha256sum "$pair_path" | awk '{print $1}')"
+if run_report "$repo_pair" codex session-b task-b "$(valid_none | jq '.task_summary = "retry overwrite"')" \
+  >/dev/null 2>&1; then
+  fail "existing report pair was overwritten on retry"
+fi
+[[ "$(sha256sum "$pair_json" | awk '{print $1}')" == "$json_hash" ]] || fail "retry changed existing JSON"
+[[ "$(sha256sum "$pair_path" | awk '{print $1}')" == "$md_hash" ]] || fail "retry changed existing Markdown"
+pass "existing report pair is collision protected"
+
+repo_marker_race="$(new_repo marker-race)"
+write_marker "$repo_marker_race" codex race-session old-task
+ready_file="$FIXTURE_ROOT/marker-lock-ready"
+continue_file="$FIXTURE_ROOT/marker-lock-continue"
+KNOWLEDGE_REPORT_TEST_LOCK_READY="$ready_file" KNOWLEDGE_REPORT_TEST_LOCK_CONTINUE="$continue_file" \
+  run_report "$repo_marker_race" codex race-session old-task "$(valid_none)" \
+  >"$FIXTURE_ROOT/marker-race.out" 2>"$FIXTURE_ROOT/marker-race.err" &
+marker_pid=$!
+for _ in $(seq 1 100); do
+  [[ -e "$ready_file" ]] && break
+  sleep 0.02
+done
+[[ -e "$ready_file" ]] || fail "marker race hook did not observe acquired lock"
+write_marker "$repo_marker_race" codex race-session new-task
+: >"$continue_file"
+if wait "$marker_pid"; then
+  fail "stale task published after current marker advanced"
+fi
+if find "$repo_marker_race/tmp/knowledge-deposition" -mindepth 2 -type f -name '*old-task*' | grep -q .; then
+  fail "stale task left report artifacts"
+fi
+pass "marker advancement under the publication lock rejects stale task"
+
 write_marker "$repo_invalid" codex session-a different-task
 if run_report "$repo_invalid" codex session-a task-a "$(valid_none)" >/dev/null 2>&1; then
   fail "task binding mismatch was accepted"
