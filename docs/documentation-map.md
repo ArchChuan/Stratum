@@ -2,6 +2,13 @@
 
 > 当前事实基线：`37d8f05`（2026-07-21）。代码、测试与部署清单优先于文档描述。
 
+## Agent 上下文入口
+
+- Codex 自动加载适用范围内的 `AGENTS.md`；根文件由 `docs/agent/instructions.md` 和对应模板生成。
+- Claude Code 通过根或子目录 `CLAUDE.md` 的 `@...` 引用加载选定的 `docs/agent/*.md`。
+- `docs/agent/` 是按任务引用的模块上下文，不因文件位于该目录就全部常驻。
+- 其他 `docs/` Markdown 是人工导航或任务证据，只有被入口引用或为当前任务主动打开时才进入上下文。
+
 ## 新用户
 
 - [项目概览](../README.md)：能力、架构、技术栈和快速开始。
@@ -31,10 +38,12 @@
 <http://101.200.181.141:6879/api/health>。该 profile 使用公网 IP 和明文 HTTP，
 不要求域名或 HTTPS；公网 `6879` 由 Traefik `web2` 接收，再转发到集群内部 HTTP 服务。
 
-## 模块资料
+## 文档职责
 
-`agent/` 下的 Agent、API、Memory、Knowledge、Milvus、NATS、Observability 等文档是当前开发约束。
-LLM、MCP、持久化和本地 CI/CD 的专题指南位于 `docs/` 顶层。
+- `docs/agent/`：Agent 可按任务直接引用的当前约束和项目事实。
+- `docs/go-package-architecture/`：生成的包级代码参考，不作为常驻指令。
+- 顶层及 `deployment/`、`operations/`：面向开发者和运维人员的当前指南。
+- `audits/`、`superpowers/specs/`、`superpowers/plans/`：带日期的历史证据，不作为当前运行手册。
 
 ## 历史记录
 
