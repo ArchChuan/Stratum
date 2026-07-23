@@ -46,6 +46,8 @@ type AgentServiceDeps struct {
 	CheckpointStore         CheckpointStore
 	MemoryCleaner           port.AgentMemoryCleaner
 	MemoryBuffer            port.BufferMemoryFn
+	MemoryInjector          port.MemoryInjector
+	RecallMemory            port.RecallMemoryFn
 	Metrics                 observability.MetricsProvider
 	Logger                  *zap.Logger
 }
@@ -169,6 +171,134 @@ func (s *AgentService) Get(ctx context.Context, id string) (AgentDTO, error) {
 		return AgentDTO{}, ErrNotFound
 	}
 	return cfgToDTO(a.GetConfig()), nil
+}
+
+// SnapshotRevision returns a deterministic, execution-ready snapshot of the
+// currently authorized Agent configuration. Tenant routing remains explicit
+// in the call and is enforced by the repository context supplied by wiring.
+func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string) (domain.AgentRevision, error) {
+	if strings.TrimSpace(tenantID) == "" {
+		return domain.AgentRevision{}, fmt.Errorf("agent service: tenant id required")
+	}
+	a, ok := s.deps.Registry.Get(ctx, id)
+	if !ok {
+		return domain.AgentRevision{}, ErrNotFound
+	}
+	cfg := a.GetConfig()
+	revision := domain.AgentRevision{
+		AgentID: cfg.ID, Type: cfg.Type, SystemPrompt: cfg.SystemPrompt, Model: cfg.LLMModel,
+		EmbedModel: cfg.EmbedModel, MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
+		CheckpointEnabled: cfg.CheckpointEnabled,
+		StuckThreshold:    cfg.StuckThreshold,
+		ModelParameters:   domain.ModelParameters{MaxContextTokens: cfg.MaxContextTokens},
+		Bindings: make([]domain.AgentBinding, 0,
+			len(cfg.AllowedSkills)+len(cfg.MCPToolIDs)+len(cfg.KnowledgeWorkspaceIDs)),
+	}
+	if base, ok := a.(*BaseAgent); ok {
+		revision.GlobalSystemSuffix = base.GlobalSystemSuffix
+		revision.MemoryInjectorRequired = base.MemoryInjector != nil
+		revision.RecallMemoryRequired = base.RecallMemoryFn != nil
+	}
+	for _, id := range cfg.AllowedSkills {
+		revision.Bindings = append(revision.Bindings,
+			domain.AgentBinding{Kind: domain.AgentBindingSkill, ID: id, Enabled: true})
+	}
+	for _, id := range cfg.MCPToolIDs {
+		revision.Bindings = append(revision.Bindings,
+			domain.AgentBinding{Kind: domain.AgentBindingMCP, ID: id, Enabled: true})
+	}
+	for i, id := range cfg.KnowledgeWorkspaceIDs {
+		var name, description string
+		if i < len(cfg.KnowledgeWorkspaceNames) {
+			name = cfg.KnowledgeWorkspaceNames[i]
+		}
+		if i < len(cfg.KnowledgeWorkspaceDescriptions) {
+			description = cfg.KnowledgeWorkspaceDescriptions[i]
+		}
+		revision.Bindings = append(revision.Bindings,
+			domain.AgentBinding{Kind: domain.AgentBindingKnowledge, ID: id,
+				Name: name, Description: description, Enabled: true})
+	}
+	if _, err := revision.ContentHash(); err != nil {
+		return domain.AgentRevision{}, fmt.Errorf("agent service: snapshot revision: %w", err)
+	}
+	return revision, nil
+}
+
+// ExecuteRevision runs an immutable snapshot without changing the mutable
+// Agent row or its binding relations.
+func (s *AgentService) ExecuteRevision(
+	ctx context.Context, revision domain.AgentRevision, req ExecRequest, meta ExecMeta,
+) (*AgentResult, int, error) {
+	if strings.TrimSpace(meta.TenantID) == "" {
+		return nil, 0, fmt.Errorf("agent service: tenant id required")
+	}
+	if err := revision.Validate(); err != nil {
+		return nil, 0, fmt.Errorf("agent service: validate revision: %w", err)
+	}
+	a, err := s.buildRevisionAgent(revision)
+	if err != nil {
+		return nil, 0, err
+	}
+	if s.deps.Metrics != nil {
+		a = a.WithMetrics(s.deps.Metrics)
+	}
+	executionID := uuid.Must(uuid.NewV7()).String()
+	_, options := s.assembleOptions(ctx, a, req, meta, executionID)
+	options = append(options, WithExecutionID(executionID))
+	start := time.Now()
+	execCtx, cancel := revisionExecutionContext(ctx)
+	defer cancel()
+	result, err := a.Execute(execCtx, req.Query, options...)
+	return result, int(time.Since(start).Milliseconds()), err
+}
+
+func revisionExecutionContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), constants.AgentExecTimeout)
+}
+
+func (s *AgentService) buildRevisionAgent(revision domain.AgentRevision) (*BaseAgent, error) {
+	if revision.MemoryInjectorRequired && s.deps.MemoryInjector == nil {
+		return nil, fmt.Errorf("agent service: revision requires memory injector")
+	}
+	if revision.RecallMemoryRequired && s.deps.RecallMemory == nil {
+		return nil, fmt.Errorf("agent service: revision requires recall memory")
+	}
+	a := NewBaseAgent(revisionConfig(revision), s.deps.Logger)
+	a.GlobalSystemSuffix = revision.GlobalSystemSuffix
+	if revision.MemoryInjectorRequired {
+		a.MemoryInjector = s.deps.MemoryInjector
+	}
+	if revision.RecallMemoryRequired {
+		a.RecallMemoryFn = s.deps.RecallMemory
+	}
+	return a, nil
+}
+
+func revisionConfig(revision domain.AgentRevision) *domain.AgentConfig {
+	cfg := &domain.AgentConfig{
+		ID: revision.AgentID, Type: revision.Type, SystemPrompt: revision.SystemPrompt,
+		LLMModel: revision.Model, EmbedModel: revision.EmbedModel, MaxIterations: revision.MaxIterations,
+		MaxContextTokens: revision.ModelParameters.MaxContextTokens, MemoryScope: revision.MemoryScope,
+		CheckpointEnabled: revision.CheckpointEnabled,
+		StuckThreshold:    revision.StuckThreshold,
+	}
+	for _, binding := range revision.Bindings {
+		if !binding.Enabled {
+			continue
+		}
+		switch binding.Kind {
+		case domain.AgentBindingSkill:
+			cfg.AllowedSkills = append(cfg.AllowedSkills, binding.ID)
+		case domain.AgentBindingMCP:
+			cfg.MCPToolIDs = append(cfg.MCPToolIDs, binding.ID)
+		case domain.AgentBindingKnowledge:
+			cfg.KnowledgeWorkspaceIDs = append(cfg.KnowledgeWorkspaceIDs, binding.ID)
+			cfg.KnowledgeWorkspaceNames = append(cfg.KnowledgeWorkspaceNames, binding.Name)
+			cfg.KnowledgeWorkspaceDescriptions = append(cfg.KnowledgeWorkspaceDescriptions, binding.Description)
+		}
+	}
+	return cfg
 }
 
 // List returns all agents in the tenant schema.

@@ -77,7 +77,7 @@ func TestServiceRunStoredLoadsPublishedSuiteRevision(t *testing.T) {
 	}}
 	svc := NewService(adapter, runRepo, suiteRepo)
 
-	run, err := svc.RunStored(context.Background(), "tenant-1", domain.ResourceRef{
+	run, err := svc.RunStored(context.Background(), "tenant-1", "user-1", domain.ResourceRef{
 		Kind: domain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: "version-2",
 	}, "suite-revision-1")
 	if err != nil {
@@ -107,7 +107,17 @@ type fakeAdapter struct {
 	tenantID string
 }
 
-func (f *fakeAdapter) ExecuteRevision(_ context.Context, tenantID string, _ domain.ResourceRef, c domain.EvalCase) (ExecutionResult, error) {
+func (f *fakeAdapter) ResolveRevision(_ context.Context, _ string, ref domain.ResourceRef) (domain.ResourceRevision, error) {
+	return domain.ResourceRevision{ID: ref.RevisionID, ResourceKind: ref.Kind, ResourceID: ref.ResourceID}, nil
+}
+
+func (f *fakeAdapter) SafeSummary(context.Context, string, domain.ResourceRef) (map[string]any, error) {
+	return map[string]any{}, nil
+}
+
+func (f *fakeAdapter) ExecuteRevision(
+	_ context.Context, tenantID, _ string, _ domain.ResourceRef, c domain.EvalCase,
+) (ExecutionResult, error) {
 	f.tenantID = tenantID
 	if c.ID == f.errCase {
 		return ExecutionResult{}, errFakeExecution

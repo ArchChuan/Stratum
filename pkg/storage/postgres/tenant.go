@@ -24,6 +24,8 @@ type tenantTxBeginner interface {
 	Begin(context.Context) (pgx.Tx, error)
 }
 
+var ErrCommitOutcomeUnknown = errors.New("postgres: transaction commit outcome unknown")
+
 // WithSchemaProvisionLock serializes the complete startup schema bootstrap
 // across application instances using one PostgreSQL transaction advisory lock.
 func WithSchemaProvisionLock(
@@ -99,6 +101,12 @@ type TenantContext struct {
 }
 
 type ctxKey struct{}
+type tenantTxKey struct{}
+
+type tenantTxContext struct {
+	tenantID string
+	tx       pgx.Tx
+}
 
 // WithTenant returns a new context with tc embedded.
 func WithTenant(ctx context.Context, tc *TenantContext) context.Context {
@@ -125,6 +133,12 @@ func ExecTenant(ctx context.Context, pool *pgxpool.Pool, fn func(ctx context.Con
 	}
 	if tc.TenantID == "" {
 		return fmt.Errorf("postgres: tenant_id is empty (global_admin cannot use ExecTenant)")
+	}
+	if current, ok := ctx.Value(tenantTxKey{}).(tenantTxContext); ok {
+		if current.tenantID != tc.TenantID {
+			return fmt.Errorf("postgres: tenant transaction context mismatch")
+		}
+		return fn(ctx, current.tx)
 	}
 	return execTenantOnPool(ctx, pool, tc.TenantID, fn)
 }
@@ -172,12 +186,19 @@ func execTenantOnPool(ctx context.Context, pool tenantTxBeginner, tenantID strin
 		return fmt.Errorf("postgres: set search_path: %w", err)
 	}
 
-	if err := fn(ctx, tx); err != nil {
+	txCtx := context.WithValue(ctx, tenantTxKey{}, tenantTxContext{tenantID: tenantID, tx: tx})
+	if err := fn(txCtx, tx); err != nil {
 		_ = tx.Rollback(ctx)
 		return err
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		if errors.Is(err, pgx.ErrTxCommitRollback) {
+			return fmt.Errorf("postgres: commit transaction: %w", err)
+		}
+		return errors.Join(ErrCommitOutcomeUnknown, fmt.Errorf("postgres: commit transaction: %w", err))
+	}
+	return nil
 }
 
 // isSafeTenantIDChar returns true for characters safe in a PostgreSQL identifier.

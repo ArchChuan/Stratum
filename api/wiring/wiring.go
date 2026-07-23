@@ -19,8 +19,10 @@ import (
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/storage/milvus"
+	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	pkgredis "github.com/byteBuilderX/stratum/pkg/storage/redis"
+	"github.com/minio/minio-go/v7"
 )
 
 // Container is the root holder for all wired dependencies. It is
@@ -30,18 +32,20 @@ type Container struct {
 	Config *config.Config
 	Logger *zap.Logger
 
-	Storage        *Storage
-	LLMGateway     *LLMGateway
-	Platform       *Platform
-	MCP            *MCP
-	Skill          *Skill
-	Evaluation     *Evaluation
-	Knowledge      *Knowledge
-	Memory         *Memory
-	IAM            *IAM
-	Agent          *Agent
-	Workflow       *Workflow
-	ReadinessCheck func(context.Context) map[string]error
+	Storage              *Storage
+	LLMGateway           *LLMGateway
+	Platform             *Platform
+	MCP                  *MCP
+	Skill                *Skill
+	Evaluation           *Evaluation
+	Knowledge            *Knowledge
+	Memory               *Memory
+	IAM                  *IAM
+	Agent                *Agent
+	Workflow             *Workflow
+	ReadinessCheck       func(context.Context) map[string]error
+	RevisionObjectStore  pkgobjectstore.Store
+	revisionObjectClient *minio.Client
 
 	shutdown []func(context.Context) error
 }
@@ -66,6 +70,7 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 		{"storage", c.buildStorage},
 		{"llmgateway", c.buildLLMGateway},
 		{"platform", c.buildPlatform},
+		{"revision-object-store", c.buildRevisionObjectStore},
 		{"mcp", c.buildMCP},
 		{"skill", c.buildSkill},
 		{"knowledge", c.buildKnowledge},
@@ -162,11 +167,7 @@ func NewFromExisting(
 	}
 
 	// Run the derived sub-builders that don't need Skill or Memory yet.
-	for _, step := range []buildStep{
-		{"platform", c.buildPlatform},
-		{"mcp", c.buildMCP},
-		{"knowledge", c.buildKnowledge},
-	} {
+	for _, step := range c.newFromExistingInitialSteps() {
 		if err := step.fn(ctx); err != nil {
 			_ = c.Shutdown(ctx)
 			return nil, fmt.Errorf("wiring.%s: %w", step.name, err)
@@ -203,4 +204,13 @@ func NewFromExisting(
 		return nil, fmt.Errorf("wiring.evaluation: %w", err)
 	}
 	return c, nil
+}
+
+func (c *Container) newFromExistingInitialSteps() []buildStep {
+	return []buildStep{
+		{"platform", c.buildPlatform},
+		{"revision-object-store", c.buildRevisionObjectStore},
+		{"mcp", c.buildMCP},
+		{"knowledge", c.buildKnowledge},
+	}
 }

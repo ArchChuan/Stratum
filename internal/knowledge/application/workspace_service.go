@@ -212,6 +212,17 @@ func (s *WorkspaceService) GetWorkspace(ctx context.Context, tenantID, name stri
 	return s.repo.GetByName(ctx, tenantID, name)
 }
 
+// ListSnapshotDocuments returns document metadata used to fingerprint an
+// immutable evaluation snapshot. Document bodies remain in retrieval stores.
+func (s *WorkspaceService) ListSnapshotDocuments(
+	ctx context.Context, tenantID, workspaceID string,
+) ([]*domain.Document, error) {
+	if s == nil || s.docRepo == nil {
+		return nil, errors.New("knowledge document repository unavailable")
+	}
+	return s.docRepo.List(ctx, tenantID, workspaceID)
+}
+
 // IngestUpload reads the uploaded file and dispatches ingestion using the workspace's configured embedding model.
 func (s *WorkspaceService) IngestUpload(ctx context.Context, tenantID, workspace string, fileHeader *multipart.FileHeader) (*IngestUploadResult, error) {
 	ws, err := s.repo.GetByName(ctx, tenantID, workspace)

@@ -1,7 +1,7 @@
 package dto
 
 type EvaluationResourceRef struct {
-	Kind       string `json:"kind" binding:"required,oneof=skill"`
+	Kind       string `json:"kind" binding:"required,oneof=skill agent mcp knowledge"`
 	ResourceID string `json:"resource_id" binding:"required"`
 	RevisionID string `json:"revision_id" binding:"required"`
 }
@@ -17,7 +17,7 @@ type EvaluationCaseRequest struct {
 type CreateEvaluationSuiteRequest struct {
 	Name         string                  `json:"name" binding:"required,max=255"`
 	Description  string                  `json:"description" binding:"max=2048"`
-	ResourceKind string                  `json:"resource_kind" binding:"required,oneof=skill"`
+	ResourceKind string                  `json:"resource_kind" binding:"required,oneof=skill agent mcp knowledge"`
 	Cases        []EvaluationCaseRequest `json:"cases" binding:"required,min=1,dive"`
 }
 
@@ -35,6 +35,7 @@ type EvaluationJobResponse struct {
 }
 
 type GenerateOptimizationRequest struct {
+	IdempotencyKey   string                `json:"idempotency_key" binding:"omitempty,max=255"`
 	Baseline         EvaluationResourceRef `json:"baseline" binding:"required"`
 	SuiteRevisionID  string                `json:"suite_revision_id" binding:"required"`
 	SearchSpace      map[string][]any      `json:"search_space"`
@@ -48,6 +49,7 @@ type CreateEvaluationExperimentRequest struct {
 }
 
 type EvaluateExperimentStageRequest struct {
+	IdempotencyKey       string  `json:"idempotency_key" binding:"omitempty,max=255"`
 	Samples              int     `json:"samples" binding:"min=0"`
 	ObservedMinutes      int     `json:"observed_minutes" binding:"min=0"`
 	QualityImprovement   float64 `json:"quality_improvement"`
@@ -58,9 +60,23 @@ type EvaluateExperimentStageRequest struct {
 	SecurityViolation    bool    `json:"security_violation"`
 }
 
+type EvaluationCenterQuery struct {
+	ResourceKind string `form:"resource_kind" binding:"omitempty,oneof=skill agent mcp knowledge"`
+	ResourceID   string `form:"resource_id"`
+	Status       string `form:"status"`
+	Cursor       string `form:"cursor"`
+	Limit        int    `form:"limit" binding:"omitempty,min=1,max=100"`
+}
+
+type EvaluationCommandRequest struct {
+	Reason               string `json:"reason" binding:"required,max=2048"`
+	IdempotencyKey       string `json:"idempotency_key" binding:"required,max=255"`
+	ExpectedStateVersion int64  `json:"expected_state_version" binding:"required,min=1"`
+}
+
 type RecordEvaluationFeedbackRequest struct {
 	TraceID           string         `json:"trace_id" binding:"required"`
-	ResourceKind      string         `json:"resource_kind" binding:"required,oneof=skill"`
+	ResourceKind      string         `json:"resource_kind" binding:"required,oneof=skill agent mcp knowledge"`
 	ResourceID        string         `json:"resource_id" binding:"required"`
 	Score             float64        `json:"score" binding:"min=0,max=1"`
 	Outcome           map[string]any `json:"outcome"`

@@ -90,6 +90,60 @@ func TestVersionServiceCandidateCanOnlyRewriteInstructions(t *testing.T) {
 	}
 }
 
+func TestVersionServiceResolvePublishedRevisionRejectsUnpublished(t *testing.T) {
+	repo := newFakeVersionRepo()
+	svc := NewVersionService(repo, zap.NewNop())
+	view := mustCreateDraft(t, svc)
+
+	if _, err := svc.ResolvePublishedRevision(context.Background(), view.Skill.ID, view.Draft.ID); err == nil {
+		t.Fatal("draft revision must not resolve for evaluation")
+	}
+	_, err := svc.UpdateActivation(context.Background(), view.Skill.ID, UpdateActivationInput{
+		Name: "classify_complaint", Description: "判断投诉类型",
+		InputSchema: map[string]any{"type": "object"}, OutputSchema: map[string]any{"type": "object"}, Confirmed: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := svc.PublishDraft(context.Background(), view.Skill.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := svc.ResolvePublishedRevision(context.Background(), view.Skill.ID, published.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ID != published.ID || resolved.SkillID != view.Skill.ID {
+		t.Fatalf("unexpected published revision: %#v", resolved)
+	}
+}
+
+func TestVersionServicePublishedRevisionSafeSummaryHasNoSensitiveFields(t *testing.T) {
+	repo := newFakeVersionRepo()
+	svc := NewVersionService(repo, zap.NewNop())
+	view := mustCreateDraft(t, svc)
+	_, err := svc.UpdateActivation(context.Background(), view.Skill.ID, UpdateActivationInput{
+		Name: "classify_complaint", Description: "判断投诉类型",
+		InputSchema: map[string]any{"type": "object"}, OutputSchema: map[string]any{"type": "object"}, Confirmed: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := svc.PublishDraft(context.Background(), view.Skill.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := svc.PublishedRevisionSafeSummary(context.Background(), view.Skill.ID, published.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"secret", "token", "api_key", "requirements", "destination", "instructions"} {
+		if _, ok := summary[key]; ok {
+			t.Fatalf("safe summary contains %q: %#v", key, summary)
+		}
+	}
+}
+
 func mustCreateDraft(t *testing.T, svc *VersionService) SkillWorkspaceView {
 	t.Helper()
 	view, err := svc.CreateSkillDraft(context.Background(), CreateSkillDraftInput{

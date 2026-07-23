@@ -226,7 +226,7 @@ func (c *OpenAICompatClient) Complete(ctx context.Context, req *CompletionReques
 					}
 				}
 			}
-			lastErr = fmt.Errorf("%s: status %d: %s", c.cfg.Name, resp.StatusCode, string(raw))
+			lastErr = fmt.Errorf("%s: complete status %d", c.cfg.Name, resp.StatusCode)
 			if !isRetryableHTTPStatus(resp.StatusCode) {
 				c.logger.Error(c.cfg.Name+": http error (no retry)",
 					zap.String("model", req.Model),
@@ -326,7 +326,7 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			raw, _ := io.ReadAll(resp.Body)
+			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close() // #nosec G104
 			// 429: respect Retry-After
 			if resp.StatusCode == http.StatusTooManyRequests {
@@ -338,7 +338,7 @@ func (c *OpenAICompatClient) CompleteStream(ctx context.Context, req *Completion
 					}
 				}
 			}
-			lastErr = fmt.Errorf("%s: stream status %d: %s", c.cfg.Name, resp.StatusCode, string(raw))
+			lastErr = fmt.Errorf("%s: stream status %d", c.cfg.Name, resp.StatusCode)
 			if !isRetryableHTTPStatus(resp.StatusCode) {
 				c.logger.Error(c.cfg.Name+": stream error (no retry)",
 					zap.String("model", req.Model),
@@ -481,7 +481,7 @@ func (c *OpenAICompatClient) CreateEmbeddings(ctx context.Context, req *Embeddin
 			zap.String("model", req.Model),
 			zap.Int("status", resp.StatusCode),
 		)
-		return nil, fmt.Errorf("%s: embed status %d: %s", c.cfg.Name, resp.StatusCode, string(raw))
+		return nil, fmt.Errorf("%s: embed status %d", c.cfg.Name, resp.StatusCode)
 	}
 
 	var out openAIEmbedResp

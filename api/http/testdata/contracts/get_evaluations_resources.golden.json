@@ -1,0 +1,9 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/evaluations/resources",
+    "want_status": 200,
+    "want_body": {"items":[]}
+  }
+]

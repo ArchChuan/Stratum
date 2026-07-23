@@ -37,6 +37,11 @@ describe('buildMenuItems', () => {
     expect(screen.queryByRole('link', { name: '创建 Agent' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '创建技能' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '添加服务器' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '评测与进化' })).toHaveAttribute('href', '/evaluations');
+  });
+
+  it('opens the evaluation navigation group', () => {
+    expect(resolveOpenKeys('/evaluations')).toEqual(['evaluation-group']);
   });
 
   it('does not expose execution history in navigation', () => {

@@ -6,6 +6,7 @@ type ExperimentStatus string
 
 const (
 	ExperimentRunning    ExperimentStatus = "running"
+	ExperimentPaused     ExperimentStatus = "paused"
 	ExperimentCompleted  ExperimentStatus = "completed"
 	ExperimentRolledBack ExperimentStatus = "rolled_back"
 )
@@ -14,6 +15,7 @@ type Decision string
 
 const (
 	DecisionHold     Decision = "hold"
+	DecisionAdvance  Decision = "advance"
 	DecisionPromote  Decision = "promote"
 	DecisionRollback Decision = "rollback"
 )
@@ -59,6 +61,9 @@ type Experiment struct {
 	Status           ExperimentStatus `json:"status"`
 	Stage            int              `json:"stage"`
 	Policy           PromotionPolicy  `json:"policy"`
+	StateVersion     int64            `json:"state_version"`
+	Recommendation   Decision         `json:"recommendation"`
+	SafetyStopped    bool             `json:"safety_stopped"`
 }
 
 type Deployment struct {
@@ -93,11 +98,19 @@ func (e Experiment) Decide(metrics StageMetrics, policy PromotionPolicy) (Experi
 	if e.Status != ExperimentRunning {
 		return e, DecisionHold
 	}
+	if e.SafetyStopped {
+		e.Stage = 0
+		e.Recommendation = DecisionRollback
+		return e, DecisionRollback
+	}
+	e.Recommendation = DecisionHold
 	if metrics.SecurityViolation ||
 		metrics.CostRegression > policy.MaxCostRegression ||
 		metrics.P95LatencyRegression > policy.MaxLatencyRegression ||
 		metrics.ErrorRateIncrease > policy.MaxErrorRateIncrease {
-		e.Status = ExperimentRolledBack
+		e.Stage = 0
+		e.Recommendation = DecisionRollback
+		e.SafetyStopped = true
 		return e, DecisionRollback
 	}
 	if metrics.Samples < policy.MinSamples || metrics.ObservedMinutes < policy.MinObservationMinutes ||
@@ -105,14 +118,27 @@ func (e Experiment) Decide(metrics StageMetrics, policy PromotionPolicy) (Experi
 		return e, DecisionHold
 	}
 	for i, stage := range policy.Stages {
-		if stage != e.Stage || i+1 >= len(policy.Stages) {
+		if stage != e.Stage {
 			continue
 		}
-		e.Stage = policy.Stages[i+1]
-		if e.Stage == 100 {
-			e.Status = ExperimentCompleted
+		if i+1 >= len(policy.Stages) {
+			e.Recommendation = DecisionPromote
+			return e, DecisionPromote
 		}
-		return e, DecisionPromote
+		e.Stage = policy.Stages[i+1]
+		e.Recommendation = DecisionAdvance
+		return e, DecisionAdvance
 	}
 	return e, DecisionHold
+}
+
+func CanApplyExperimentCommand(status ExperimentStatus, action ExperimentCommandAction) bool {
+	switch status {
+	case ExperimentRunning:
+		return action == CommandPause || action == CommandPromote || action == CommandRollback
+	case ExperimentPaused:
+		return action == CommandRollback
+	default:
+		return false
+	}
 }

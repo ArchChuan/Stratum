@@ -85,11 +85,20 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 	h := handler.NewEvaluationHandler(
 		c.Evaluation.SuiteService, c.Evaluation.JobService, c.Evaluation.Service,
 		c.Evaluation.OptimizationService, c.Evaluation.ExperimentService,
-		c.Evaluation.FeedbackService, c.Logger,
-	)
+		c.Evaluation.FeedbackService, c.Evaluation.QueryService, c.Evaluation.CandidateService,
+		c.Logger,
+	).WithBaselineService(c.Evaluation.BaselineService)
 	requireAdmin := middleware.RequireTenantRole("admin")
 	evaluations := r.Group("/evaluations", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
+		evaluations.GET("/overview", h.Overview)
+		evaluations.GET("/resources", h.ListResources)
+		evaluations.GET("/suites", h.ListSuites)
+		evaluations.GET("/runs", h.ListRuns)
+		evaluations.GET("/candidates", h.ListCandidates)
+		evaluations.GET("/experiments", h.ListExperiments)
+		evaluations.GET("/resources/:kind/:id/timeline", h.Timeline)
+		evaluations.POST("/resources/:kind/:id/baseline", requireAdmin, requireActive, h.CreateBaseline)
 		evaluations.POST("/suites", requireAdmin, requireActive, h.CreateSuite)
 		evaluations.POST("/suites/:id/publish", requireAdmin, requireActive, h.PublishSuite)
 		evaluations.POST("/runs", requireAdmin, requireActive, h.EnqueueRun)
@@ -98,6 +107,10 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		evaluations.POST("/optimizations", requireAdmin, requireActive, h.GenerateOptimization)
 		evaluations.POST("/experiments", requireAdmin, requireActive, h.CreateExperiment)
 		evaluations.POST("/experiments/:id/evaluate", requireAdmin, requireActive, h.EvaluateExperiment)
+		evaluations.POST("/candidates/:id/reject", requireAdmin, requireActive, h.RejectCandidate)
+		evaluations.POST("/experiments/:id/pause", requireAdmin, requireActive, h.PauseExperiment)
+		evaluations.POST("/experiments/:id/promote", requireAdmin, requireActive, h.PromoteExperiment)
+		evaluations.POST("/experiments/:id/rollback", requireAdmin, requireActive, h.RollbackExperiment)
 		evaluations.POST("/feedback", requireActive, h.RecordFeedback)
 	}
 }

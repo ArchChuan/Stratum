@@ -1,0 +1,14 @@
+[
+  {
+    "name": "authenticated-conflict",
+    "method": "POST",
+    "path": "/evaluations/experiments/experiment-1/pause",
+    "body": {
+      "reason": "reviewed",
+      "idempotency_key": "contract-request",
+      "expected_state_version": 1
+    },
+    "want_status": 409,
+    "want_body": {"error":"experiment state version conflict"}
+  }
+]

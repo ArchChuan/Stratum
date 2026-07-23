@@ -5,33 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
 )
-
-type ResourceKind string
-
-const ResourceKindSkill ResourceKind = "skill"
-
-type ResourceRef struct {
-	Kind       ResourceKind `json:"kind"`
-	ResourceID string       `json:"resource_id"`
-	RevisionID string       `json:"revision_id"`
-}
-
-func (r ResourceRef) Validate() error {
-	if r.Kind == "" {
-		return errors.New("resource kind required")
-	}
-	if strings.TrimSpace(r.ResourceID) == "" {
-		return errors.New("resource id required")
-	}
-	if strings.TrimSpace(r.RevisionID) == "" {
-		return errors.New("revision id required")
-	}
-	return nil
-}
 
 type AssertionMode string
 
@@ -118,6 +96,7 @@ const JobTypeEvalRun = "eval_run"
 type EvalRunJobPayload struct {
 	Resource        ResourceRef `json:"resource"`
 	SuiteRevisionID string      `json:"suite_revision_id"`
+	RequestedBy     string      `json:"requested_by"`
 }
 
 type EvaluationJob struct {
@@ -206,7 +185,15 @@ func EvaluateAssertion(mode AssertionMode, actual, expected any) (AssertionResul
 		if err != nil {
 			return AssertionResult{}, fmt.Errorf("marshal expected output: %w", err)
 		}
-		passed := bytes.Equal(actualJSON, expectedJSON)
+		actualValue, err := decodeExactJSON(actualJSON)
+		if err != nil {
+			return AssertionResult{}, fmt.Errorf("normalize actual output: %w", err)
+		}
+		expectedValue, err := decodeExactJSON(expectedJSON)
+		if err != nil {
+			return AssertionResult{}, fmt.Errorf("normalize expected output: %w", err)
+		}
+		passed := reflect.DeepEqual(actualValue, expectedValue)
 		return AssertionResult{Passed: passed, Message: mismatchMessage(passed, "values differ")}, nil
 	case AssertionContains:
 		actualText, ok := actual.(string)
@@ -237,6 +224,16 @@ func EvaluateAssertion(mode AssertionMode, actual, expected any) (AssertionResul
 	default:
 		return AssertionResult{}, fmt.Errorf("unsupported assertion mode: %s", mode)
 	}
+}
+
+func decodeExactJSON(value []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }
 
 func mismatchMessage(passed bool, message string) string {

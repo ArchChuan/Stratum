@@ -1,0 +1,9 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/evaluations/resources/skill/resource-1/timeline",
+    "want_status": 200,
+    "want_body": {"items":[]}
+  }
+]

@@ -4,6 +4,7 @@ import { AppShell } from './layout/AppShell';
 
 import { agentRoutes } from '@/modules/agent';
 import { dashboardRoutes } from '@/modules/dashboard';
+import { evaluationRoutes } from '@/modules/evaluation';
 import { iamPublicRoutes, iamPrivateRoutes, useAuth } from '@/modules/iam';
 import { knowledgeRoutes } from '@/modules/knowledge';
 import { mcpRoutes } from '@/modules/mcp';
@@ -24,6 +25,7 @@ export const AppRouter = () => {
     <AppShell>
       <Routes key={user?.tenant_id || 'no-tenant'}>
         {dashboardRoutes}
+        {evaluationRoutes}
         {mcpRoutes}
         {knowledgeRoutes}
         {skillRoutes}

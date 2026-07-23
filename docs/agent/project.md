@@ -88,6 +88,9 @@ grafana/                    - Grafana 数据源 + 仪表板配置
 - 运行：`go vet && go test -short ./...`（单元），`go test -v -race -timeout 30s ./...`（完整）
 - API 契约测试：`api/http/contract_test.go` + `api/http/testdata/contracts/*.golden.json`
 - 目标覆盖率 ≥ 80% 业务逻辑代码
+- 评测与进化中心的跨层验收入口是 `make e2e-evaluation-evolution`。它必须使用独立 PostgreSQL、MinIO、
+  OTEL Collector 和经审核固定版本的 Opik Compose，并为每次运行生成 tenant/user/resource ID；浏览器只做
+  DOM/网络断言且不截图，证据见 `docs/e2e/evaluation-evolution.md`。
 
 ## Build & Deploy
 

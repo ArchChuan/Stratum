@@ -2,19 +2,30 @@ package infrastructure
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestHTTPClientErrorDoesNotExposeResponseBody(t *testing.T) {
+	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("Mcp-Session-Id", "session-1")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte("mcp-sensitive-sentinel"))
 	}))
@@ -378,6 +389,169 @@ func TestBaseClientGetServerInfo(t *testing.T) {
 		t.Errorf("expected status disconnected, got %s", info.Status)
 	}
 }
+
+func TestClientManagerCallToolWithConfigClosesIsolatedClient(t *testing.T) {
+	manager := NewClientManager(zap.NewNop(), nil, nil)
+	client := &revisionClientFake{result: map[string]any{"ok": true}}
+	manager.clientFactory = func(config *MCPServerConfig, _ *zap.Logger) MCPClient {
+		client.config = config
+		return client
+	}
+	config := &MCPServerConfig{ID: "revision-server", URL: "https://original.example/mcp"}
+	result, err := manager.CallToolWithConfig(context.Background(), config, "lookup", map[string]any{"id": "1"})
+	if err != nil || client.connectCalls != 1 || client.disconnectCalls != 1 || client.config != config {
+		t.Fatalf("result=%+v client=%+v err=%v", result, client, err)
+	}
+}
+
+func TestBaseClientHTTPInitializeRejectsNon2xxWithoutLeakingQuery(t *testing.T) {
+	secretQuery := "credential=synthetic-sensitive-value"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "raw upstream body", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "server-1", Name: "test", Transport: "http", URL: server.URL + "?" + secretQuery, Timeout: time.Second,
+	}, zap.NewNop())
+	err := client.Connect(context.Background())
+	if err == nil || strings.Contains(err.Error(), secretQuery) || strings.Contains(client.GetServerInfo().Error, secretQuery) ||
+		client.GetServerInfo().Error != "connect_failed" {
+		t.Fatalf("err=%v server_info=%+v", err, client.GetServerInfo())
+	}
+}
+
+func TestBaseClientHTTPInitializeTimeoutAndLogsExcludeQuery(t *testing.T) {
+	core, observed := observer.New(zap.DebugLevel)
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "server-1", Transport: "http", URL: server.URL + "?credential=synthetic-sensitive-value",
+		Timeout: 10 * time.Millisecond,
+	}, zap.New(core))
+	if err := client.Connect(context.Background()); err == nil {
+		t.Fatal("expected initialize timeout")
+	}
+	for _, entry := range observed.All() {
+		if strings.Contains(entry.Message+fmt.Sprint(entry.ContextMap()), "synthetic-sensitive-value") {
+			t.Fatalf("secret query leaked in logs: %+v", entry)
+		}
+	}
+}
+
+func TestBaseClientCallToolTransportFailureDoesNotLeakURLOrSession(t *testing.T) {
+	core, observed := observer.New(zap.DebugLevel)
+	secretQuery := "credential=synthetic-query-secret"
+	secretSession := "synthetic-session-secret"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Mcp-Session-Id", secretSession)
+		w.WriteHeader(http.StatusOK)
+	}))
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "server-1", Transport: "http", URL: server.URL + "?" + secretQuery, Timeout: time.Second,
+	}, zap.New(core))
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	server.Close()
+	_, err := client.CallTool(context.Background(), " lookup ", map[string]any{})
+	if err == nil || strings.Contains(err.Error(), secretQuery) || strings.Contains(err.Error(), server.URL) {
+		t.Fatalf("unsafe transport error: %v", err)
+	}
+	if strings.Contains(client.GetServerInfo().Error, secretQuery) || strings.Contains(client.GetServerInfo().Error, server.URL) {
+		t.Fatalf("unsafe server info: %+v", client.GetServerInfo())
+	}
+	for _, entry := range observed.All() {
+		logged := entry.Message + fmt.Sprint(entry.ContextMap())
+		if strings.Contains(logged, secretQuery) || strings.Contains(logged, server.URL) ||
+			strings.Contains(logged, secretSession) {
+			t.Fatalf("HTTP secret leaked in logs: %s", logged)
+		}
+	}
+}
+
+func TestBaseClientDisconnectKillsAndWaitsForStdioChild(t *testing.T) {
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "server-1", Transport: "stdio", Command: "sh", Args: []string{"-c", "sleep 30"},
+	}, zap.NewNop())
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	process := client.cmd.Process
+	if err := client.Disconnect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Signal(syscall.Signal(0)); err == nil {
+		t.Fatal("stdio child still alive after disconnect")
+	}
+}
+
+func TestClientManagerConnectFailsClosedWhenDiscoveryFails(t *testing.T) {
+	manager := NewClientManager(zap.NewNop(), nil, nil)
+	client := &revisionClientFake{listToolsErr: errors.New("discovery failed")}
+	manager.clientFactory = func(*MCPServerConfig, *zap.Logger) MCPClient { return client }
+	err := manager.Connect(context.Background(), &MCPServerConfig{ID: "server-1"})
+	if err == nil || client.disconnectCalls != 1 || manager.GetClient(context.Background(), "server-1") != nil {
+		t.Fatalf("client=%+v err=%v", client, err)
+	}
+}
+
+func TestClientManagerConnectFailureAlwaysDisconnects(t *testing.T) {
+	manager := NewClientManager(zap.NewNop(), nil, nil)
+	client := &revisionClientFake{connectErr: errors.New("initialize failed")}
+	manager.clientFactory = func(*MCPServerConfig, *zap.Logger) MCPClient { return client }
+	if err := manager.Connect(context.Background(), &MCPServerConfig{ID: "server-1"}); err == nil {
+		t.Fatal("expected connect failure")
+	}
+	if client.disconnectCalls != 1 || manager.GetClient(context.Background(), "server-1") != nil {
+		t.Fatalf("partial connection not cleaned up: %+v", client)
+	}
+}
+
+func TestClientManagerHTTPInitializeFailureClosesPartialClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	manager := NewClientManager(zap.NewNop(), nil, nil)
+	var client *BaseClient
+	manager.clientFactory = func(config *MCPServerConfig, logger *zap.Logger) MCPClient {
+		client = NewBaseClient(config, logger)
+		return client
+	}
+	err := manager.Connect(context.Background(), &MCPServerConfig{
+		ID: "server-1", Transport: "http", URL: server.URL, Timeout: time.Second,
+	})
+	if err == nil || client == nil || client.httpClient != nil || manager.GetClient(context.Background(), "server-1") != nil {
+		t.Fatalf("partial HTTP client not cleaned up: client=%+v err=%v", client, err)
+	}
+}
+
+type revisionClientFake struct {
+	config          *MCPServerConfig
+	result          any
+	connectCalls    int
+	disconnectCalls int
+	listToolsErr    error
+	connectErr      error
+}
+
+func (c *revisionClientFake) Connect(context.Context) error {
+	c.connectCalls++
+	return c.connectErr
+}
+func (c *revisionClientFake) Disconnect(context.Context) error { c.disconnectCalls++; return nil }
+func (*revisionClientFake) IsConnected() bool                  { return true }
+func (*revisionClientFake) IsHealthy() bool                    { return true }
+func (c *revisionClientFake) CallTool(context.Context, string, interface{}) (interface{}, error) {
+	return c.result, nil
+}
+func (c *revisionClientFake) ListTools(context.Context) ([]*MCPTool, error) {
+	return nil, c.listToolsErr
+}
+func (*revisionClientFake) ListResources(context.Context) ([]*MCPResource, error) { return nil, nil }
+func (*revisionClientFake) GetServerInfo() *MCPServerInfo                         { return nil }
 
 // TestClientManagerGetAllServerInfo 测试获取所有服务器信息
 func TestClientManagerGetAllServerInfo(t *testing.T) {

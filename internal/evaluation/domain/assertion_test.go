@@ -2,6 +2,14 @@ package domain
 
 import "testing"
 
+type structuredAssertionFixture struct {
+	Relevant bool `json:"relevant"`
+	Details  struct {
+		Count int      `json:"count"`
+		IDs   []string `json:"ids"`
+	} `json:"details"`
+}
+
 func TestEvaluateAssertionModes(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -32,6 +40,33 @@ func TestEvaluateAssertionModes(t *testing.T) {
 func TestEvaluateAssertionRejectsInvalidRegex(t *testing.T) {
 	if _, err := EvaluateAssertion(AssertionRegex, "value", "["); err == nil {
 		t.Fatal("expected invalid regex error")
+	}
+}
+
+func TestEvaluateAssertionExactUsesJSONSemantics(t *testing.T) {
+	actual := structuredAssertionFixture{Relevant: true}
+	actual.Details.Count = 1
+	actual.Details.IDs = []string{"doc-1"}
+	expected := map[string]any{"details": map[string]any{"ids": []any{"doc-1"}, "count": float64(1)},
+		"relevant": true}
+	result, err := EvaluateAssertion(AssertionExact, actual, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Passed {
+		t.Fatalf("semantically equivalent structured JSON failed: %+v", result)
+	}
+
+	result, err = EvaluateAssertion(AssertionExact, "exact", "exact ")
+	if err != nil || result.Passed {
+		t.Fatalf("string exact semantics changed: result=%+v err=%v", result, err)
+	}
+	if _, err := EvaluateAssertion(AssertionExact, make(chan int), nil); err == nil {
+		t.Fatal("unsupported actual value did not fail explicitly")
+	}
+	result, err = EvaluateAssertion(AssertionExact, uint64(9007199254740992), uint64(9007199254740993))
+	if err != nil || result.Passed {
+		t.Fatalf("distinct large integers collapsed during normalization: result=%+v err=%v", result, err)
 	}
 }
 

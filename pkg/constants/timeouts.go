@@ -35,7 +35,8 @@ const (
 	RouterHealthTimeout = 3 * time.Second
 
 	// MCP client connection idle
-	MCPIdleTimeout = 5 * time.Minute
+	MCPIdleTimeout                 = 5 * time.Minute
+	RevisionObjectStoreInitTimeout = 10 * time.Second
 
 	// Gateway cache entry TTL
 	GatewayCacheTTL = 5 * time.Minute

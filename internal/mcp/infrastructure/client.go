@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -86,8 +87,8 @@ func (c *BaseClient) doConnect(ctx context.Context) error {
 
 	if err != nil {
 		c.serverInfo.Status = "error"
-		c.serverInfo.Error = err.Error()
-		c.logger.Error("failed to connect", zap.Error(err))
+		c.serverInfo.Error = "connect_failed"
+		c.logger.Error("failed to connect", zap.String("error_category", "connect_failed"))
 		return err
 	}
 
@@ -118,17 +119,41 @@ func (c *BaseClient) ensureConnected(ctx context.Context) error {
 func (c *BaseClient) Disconnect(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	if !c.connected {
-		return nil
-	}
-
 	c.connected = false
 	c.healthy = false
 	c.serverInfo.Status = "disconnected"
+	var result error
+	if c.stdin != nil {
+		if err := c.stdin.Close(); err != nil {
+			result = errors.Join(result, fmt.Errorf("close MCP stdin: %w", err))
+		}
+		c.stdin = nil
+	}
+	if c.stdout != nil {
+		if err := c.stdout.Close(); err != nil {
+			result = errors.Join(result, fmt.Errorf("close MCP stdout: %w", err))
+		}
+		c.stdout = nil
+	}
+	if c.cmd != nil && c.cmd.Process != nil {
+		command := c.cmd
+		if err := command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			result = errors.Join(result, fmt.Errorf("stop MCP process: %w", err))
+		}
+		if err := command.Wait(); err != nil {
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				result = errors.Join(result, fmt.Errorf("wait MCP process: %w", err))
+			}
+		}
+		c.cmd = nil
+	}
+	if c.httpClient != nil {
+		c.httpClient.CloseIdleConnections()
+		c.httpClient = nil
+	}
 	c.logger.Info("disconnected from MCP server")
-
-	return nil
+	return result
 }
 
 // IsConnected 检查是否已连接
@@ -267,10 +292,13 @@ func (c *BaseClient) connectStdio(ctx context.Context) error {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close()
 		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
 		return fmt.Errorf("failed to start command: %w", err)
 	}
 
@@ -306,22 +334,26 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.config.URL, bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("failed to create initialize request: %w", err)
+		return errors.New("MCP HTTP initialize request invalid")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to connect to HTTP server: %w", err)
+		return errors.New("MCP HTTP initialize transport failed")
 	}
 	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("MCP HTTP initialize failed with status %d", resp.StatusCode)
+	}
 
 	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
 		c.sessionID = sid
 	}
 
-	c.logger.Info("HTTP connection established", zap.String("url", c.config.URL), zap.String("session_id", c.sessionID))
+	c.logger.Info("HTTP connection established", zap.String("transport", c.config.Transport),
+		zap.String("server_id", c.config.ID))
 	return nil
 }
 
@@ -387,7 +419,7 @@ func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCP
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.URL, bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, errors.New("MCP HTTP request invalid")
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -398,7 +430,7 @@ func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCP
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, errors.New("MCP HTTP transport failed")
 	}
 	defer resp.Body.Close() //nolint:errcheck
 

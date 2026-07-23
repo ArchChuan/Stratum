@@ -15,6 +15,7 @@ import (
 	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	evalpersist "github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/persistence"
+	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
@@ -29,6 +30,120 @@ type Evaluation struct {
 	OptimizationService *evalapp.OptimizationService
 	ExperimentService   *evalapp.ExperimentService
 	FeedbackService     *evalapp.FeedbackService
+	QueryService        *evalapp.QueryService
+	CandidateService    *evalapp.CandidateCommandService
+	AgentProvider       evalport.AgentRevisionProvider
+	MCPProvider         evalport.ResourceRevisionProvider
+	KnowledgeProvider   evalport.ResourceRevisionProvider
+	BaselineService     *evalapp.BaselineService
+}
+
+type evaluationResourceRouter struct {
+	adapters map[evaldomain.ResourceKind]evalport.ResourceAdapter
+}
+
+func (r evaluationResourceRouter) adapter(kind evaldomain.ResourceKind) (evalport.ResourceAdapter, error) {
+	adapter := r.adapters[kind]
+	if adapter == nil {
+		return nil, fmt.Errorf("evaluation resource adapter unavailable for %q", kind)
+	}
+	return adapter, nil
+}
+
+func (r evaluationResourceRouter) ExecuteRevision(
+	ctx context.Context, tenantID, requestedBy string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
+) (evalport.ExecutionResult, error) {
+	adapter, err := r.adapter(ref.Kind)
+	if err != nil {
+		return evalport.ExecutionResult{}, err
+	}
+	return adapter.ExecuteRevision(ctx, tenantID, requestedBy, ref, testCase)
+}
+
+func (r evaluationResourceRouter) ResolveRevision(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (evaldomain.ResourceRevision, error) {
+	adapter, err := r.adapter(ref.Kind)
+	if err != nil {
+		return evaldomain.ResourceRevision{}, err
+	}
+	return adapter.ResolveRevision(ctx, tenantID, ref)
+}
+
+func (r evaluationResourceRouter) SafeSummary(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (map[string]any, error) {
+	adapter, err := r.adapter(ref.Kind)
+	if err != nil {
+		return nil, err
+	}
+	return adapter.SafeSummary(ctx, tenantID, ref)
+}
+
+type evaluationCandidateRouter struct {
+	creators map[evaldomain.ResourceKind]evalport.CandidateCreator
+}
+
+type evaluationBaselineRouter struct {
+	providers map[evaldomain.ResourceKind]evalport.ResourceRevisionProvider
+}
+
+func newEvaluationBaselineService(
+	skillProvider evalport.ResourceRevisionProvider,
+	agentProvider evalport.ResourceRevisionProvider,
+	mcpProvider evalport.ResourceRevisionProvider,
+	knowledgeProvider evalport.ResourceRevisionProvider,
+) *evalapp.BaselineService {
+	providers := make(map[evaldomain.ResourceKind]evalport.ResourceRevisionProvider, 4)
+	for kind, provider := range map[evaldomain.ResourceKind]evalport.ResourceRevisionProvider{
+		evaldomain.ResourceKindSkill:     skillProvider,
+		evaldomain.ResourceKindAgent:     agentProvider,
+		evaldomain.ResourceKindMCP:       mcpProvider,
+		evaldomain.ResourceKindKnowledge: knowledgeProvider,
+	} {
+		if provider != nil {
+			providers[kind] = provider
+		}
+	}
+	return evalapp.NewBaselineService(evaluationBaselineRouter{providers: providers})
+}
+
+func (r evaluationBaselineRouter) CreatePublishedBaseline(
+	ctx context.Context, tenantID string, kind evaldomain.ResourceKind, resourceID string,
+) (evaldomain.ResourceRef, error) {
+	provider := r.providers[kind]
+	if provider == nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation baseline provider unavailable for %q", kind)
+	}
+	return provider.CreatePublishedBaseline(ctx, tenantID, resourceID)
+}
+
+func (r evaluationCandidateRouter) creator(kind evaldomain.ResourceKind) (evalport.CandidateCreator, error) {
+	creator := r.creators[kind]
+	if creator == nil {
+		return nil, fmt.Errorf("evaluation candidate creator unavailable for %q", kind)
+	}
+	return creator, nil
+}
+
+func (r evaluationCandidateRouter) LoadOptimizableSnapshot(
+	ctx context.Context, tenantID string, baseline evaldomain.ResourceRef,
+) (map[string]any, error) {
+	creator, err := r.creator(baseline.Kind)
+	if err != nil {
+		return nil, err
+	}
+	return creator.LoadOptimizableSnapshot(ctx, tenantID, baseline)
+}
+
+func (r evaluationCandidateRouter) CreateCandidate(
+	ctx context.Context, tenantID string, baseline evaldomain.ResourceRef, patch evaldomain.CandidatePatch,
+) (evaldomain.ResourceRef, error) {
+	creator, err := r.creator(baseline.Kind)
+	if err != nil {
+		return evaldomain.ResourceRef{}, err
+	}
+	return creator.CreateCandidate(ctx, tenantID, baseline, patch)
 }
 
 type skillCandidateManager struct {
@@ -37,6 +152,24 @@ type skillCandidateManager struct {
 
 type experimentSkillRevisionResolver struct {
 	service *evalapp.ExperimentService
+}
+
+func (m skillCandidateManager) CreatePublishedBaseline(
+	ctx context.Context, tenantID, skillID string,
+) (evaldomain.ResourceRef, error) {
+	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(skillID) == "" {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: tenant and skill IDs required")
+	}
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{
+		TenantID: tenantID, UserID: "evaluation-worker", Role: postgres.RoleTenantAdmin,
+	})
+	revision, err := m.versions.ResolveActivePublishedRevision(ctx, skillID)
+	if err != nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: resolve active baseline: %w", err)
+	}
+	return evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindSkill, ResourceID: skillID, RevisionID: revision.ID,
+	}, nil
 }
 
 func (r experimentSkillRevisionResolver) ResolveSkillRevision(
@@ -50,21 +183,31 @@ func (r experimentSkillRevisionResolver) ResolveSkillRevision(
 }
 
 func (m skillCandidateManager) LoadOptimizableSnapshot(
-	ctx context.Context, _ string, baseline evaldomain.ResourceRef,
+	ctx context.Context, tenantID string, baseline evaldomain.ResourceRef,
 ) (map[string]any, error) {
-	version, err := m.versions.GetVersion(ctx, baseline.ResourceID, baseline.RevisionID)
+	ctx, err := evaluationSkillContext(ctx, tenantID, baseline)
+	if err != nil {
+		return nil, err
+	}
+	version, err := m.versions.ResolvePublishedRevision(ctx, baseline.ResourceID, baseline.RevisionID)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
 		"instructions": version.Instructions,
-		"requirements": version.Requirements,
 	}, nil
 }
 
 func (m skillCandidateManager) CreateCandidate(
-	ctx context.Context, _ string, baseline evaldomain.ResourceRef, patch evaldomain.CandidatePatch,
+	ctx context.Context, tenantID string, baseline evaldomain.ResourceRef, patch evaldomain.CandidatePatch,
 ) (evaldomain.ResourceRef, error) {
+	ctx, err := evaluationSkillContext(ctx, tenantID, baseline)
+	if err != nil {
+		return evaldomain.ResourceRef{}, err
+	}
+	if _, err := m.versions.ResolvePublishedRevision(ctx, baseline.ResourceID, baseline.RevisionID); err != nil {
+		return evaldomain.ResourceRef{}, err
+	}
 	version, err := m.versions.CreateCandidate(ctx, baseline.ResourceID, baseline.RevisionID, skillapp.CandidateInput{
 		Source: patch.Source, PromptPatch: patch.PromptPatch,
 		GenerationMetadata: map[string]any{"rationale": patch.Rationale},
@@ -75,6 +218,56 @@ func (m skillCandidateManager) CreateCandidate(
 	return evaldomain.ResourceRef{
 		Kind: baseline.Kind, ResourceID: baseline.ResourceID, RevisionID: version.ID,
 	}, nil
+}
+
+func (m skillCandidateManager) ResolveRevision(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (evaldomain.ResourceRevision, error) {
+	ctx, err := evaluationSkillContext(ctx, tenantID, ref)
+	if err != nil {
+		return evaldomain.ResourceRevision{}, err
+	}
+	version, err := m.versions.ResolvePublishedRevision(ctx, ref.ResourceID, ref.RevisionID)
+	if err != nil {
+		return evaldomain.ResourceRevision{}, err
+	}
+	summary, err := m.versions.PublishedRevisionSafeSummary(ctx, ref.ResourceID, ref.RevisionID)
+	if err != nil {
+		return evaldomain.ResourceRevision{}, err
+	}
+	return evaldomain.ResourceRevision{
+		ID: version.ID, ResourceKind: evaldomain.ResourceKindSkill, ResourceID: version.SkillID,
+		Source: evaldomain.RevisionSourceManual, Status: evaldomain.RevisionStatusPublished,
+		ContentHash: version.ContentHash, PayloadRef: "skill://" + version.ID, PayloadHash: version.ContentHash,
+		SafeSummary: summary,
+	}, nil
+}
+
+func (m skillCandidateManager) SafeSummary(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (map[string]any, error) {
+	ctx, err := evaluationSkillContext(ctx, tenantID, ref)
+	if err != nil {
+		return nil, err
+	}
+	return m.versions.PublishedRevisionSafeSummary(ctx, ref.ResourceID, ref.RevisionID)
+}
+
+func evaluationSkillContext(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (context.Context, error) {
+	if strings.TrimSpace(tenantID) == "" {
+		return nil, fmt.Errorf("evaluation Skill adapter: tenant ID required")
+	}
+	if ref.Kind != evaldomain.ResourceKindSkill {
+		return nil, fmt.Errorf("evaluation Skill adapter: unsupported resource kind %q", ref.Kind)
+	}
+	if err := ref.Validate(); err != nil {
+		return nil, fmt.Errorf("evaluation Skill adapter: %w", err)
+	}
+	return postgres.WithTenant(ctx, &postgres.TenantContext{
+		TenantID: tenantID, UserID: "evaluation-worker", Role: postgres.RoleTenantAdmin,
+	}), nil
 }
 
 type gatewayPromptRewriter struct {
@@ -146,19 +339,36 @@ type evaluationTenantLister struct {
 }
 
 type agentScenarioEvaluationAdapter struct {
-	agents   *agentapp.AgentService
-	skills   agentport.SkillActivationResolver
-	bindings agentport.AgentSkillBinding
+	agents    *agentapp.AgentService
+	skills    agentport.SkillActivationResolver
+	bindings  agentport.AgentSkillBinding
+	resources skillCandidateManager
 }
 
-func (a agentScenarioEvaluationAdapter) ExecuteRevision(ctx context.Context, tenantID string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase) (evalport.ExecutionResult, error) {
+func (a agentScenarioEvaluationAdapter) ResolveRevision(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (evaldomain.ResourceRevision, error) {
+	return a.resources.ResolveRevision(ctx, tenantID, ref)
+}
+
+func (a agentScenarioEvaluationAdapter) SafeSummary(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+) (map[string]any, error) {
+	return a.resources.SafeSummary(ctx, tenantID, ref)
+}
+
+func (a agentScenarioEvaluationAdapter) ExecuteRevision(
+	ctx context.Context, tenantID, requestedBy string, ref evaldomain.ResourceRef, testCase evaldomain.EvalCase,
+) (evalport.ExecutionResult, error) {
 	if ref.Kind != evaldomain.ResourceKindSkill {
 		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation: unsupported resource kind %q", ref.Kind)
 	}
 	// Inject tenant context so the agent-context binding port (whose execTenant
 	// reads it) routes to the right schema; the raw agent_skill_links read now
 	// lives behind agentport.AgentSkillBinding, not here.
-	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{TenantID: tenantID, UserID: "evaluation-worker", Role: postgres.RoleTenantAdmin})
+	ctx = postgres.WithTenant(ctx, &postgres.TenantContext{
+		TenantID: tenantID, UserID: requestedBy, Role: postgres.RoleTenantAdmin,
+	})
 	agentID, found, err := a.bindings.FindAgentBySkill(ctx, ref.ResourceID)
 	if err != nil {
 		return evalport.ExecutionResult{}, fmt.Errorf("agent scenario evaluation: resolve agent for Skill %s: %w", ref.ResourceID, err)
@@ -186,7 +396,7 @@ func (a agentScenarioEvaluationAdapter) ExecuteRevision(ctx context.Context, ten
 	result, duration, err := a.agents.ExecuteSkillScenario(
 		ctx,
 		agentID,
-		agentapp.ExecRequest{Query: query, UserID: "evaluation-worker"},
+		agentapp.ExecRequest{Query: query, UserID: requestedBy},
 		agentapp.ExecMeta{
 			TenantID: tenantID,
 			TraceID:  traceID,
@@ -271,21 +481,69 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	optimizationRepo := evalpersist.NewPgOptimizationRepository(db)
 	experimentRepo := evalpersist.NewPgExperimentRepository(db)
 	feedbackRepo := evalpersist.NewPgFeedbackRepository(db)
+	queryRepo := evalpersist.NewPgCenterQueryRepository(db)
+	candidateRepo := evalpersist.NewPgCandidateCommandRepository(db)
 	suiteService := evalapp.NewSuiteService(suiteRepo)
 	activationResolver := publishedSkillActivationResolver{versions: c.Skill.VersionService}
-	adapter := agentScenarioEvaluationAdapter{
-		agents:   c.Agent.Service,
-		skills:   activationResolver,
-		bindings: agentpersist.NewPgAgentRepo(db),
-	}
-	service := evalapp.NewService(adapter, runRepo, suiteRepo)
-	jobService := evalapp.NewJobService(jobRepo, service)
 	manager := skillCandidateManager{versions: c.Skill.VersionService}
+	skillAdapter := agentScenarioEvaluationAdapter{
+		agents:    c.Agent.Service,
+		skills:    activationResolver,
+		bindings:  agentpersist.NewPgAgentRepo(db),
+		resources: manager,
+	}
+	resourceAdapters := map[evaldomain.ResourceKind]evalport.ResourceAdapter{
+		evaldomain.ResourceKindSkill: skillAdapter,
+	}
+	candidateCreators := map[evaldomain.ResourceKind]evalport.CandidateCreator{
+		evaldomain.ResourceKindSkill: manager,
+	}
+	var agentProvider evalport.AgentRevisionProvider
+	var mcpProvider evalport.ResourceRevisionProvider
+	var knowledgeProvider evalport.ResourceRevisionProvider
+	var sharedRevisionService *evalapp.RevisionService
+	if c.RevisionObjectStore != nil {
+		sharedRevisionService = evalapp.NewRevisionService(
+			evalpersist.RevisionObjectStoreAdapter{Store: c.RevisionObjectStore},
+			evalpersist.NewPgRevisionRepository(db),
+		)
+	}
+	if c.Agent != nil && sharedRevisionService != nil {
+		agentAdapter := agentEvaluationAdapter{
+			revisions: sharedRevisionService, agents: c.Agent.Service, actorID: "evaluation-worker",
+		}
+		resourceAdapters[evaldomain.ResourceKindAgent] = agentAdapter
+		candidateCreators[evaldomain.ResourceKindAgent] = agentAdapter
+		agentProvider = agentAdapter
+	}
+	if c.MCP != nil && c.MCP.Manager != nil && sharedRevisionService != nil {
+		mcpAdapter := mcpEvaluationAdapter{
+			runtime: c.MCP.Manager, revisions: sharedRevisionService,
+			runtimeStore: c.RevisionObjectStore, actorID: "evaluation-worker",
+		}
+		resourceAdapters[evaldomain.ResourceKindMCP] = mcpAdapter
+		candidateCreators[evaldomain.ResourceKindMCP] = mcpAdapter
+		mcpProvider = mcpAdapter
+	}
+	if c.Knowledge != nil && c.Knowledge.WorkspaceService != nil && c.Knowledge.RAGService != nil &&
+		sharedRevisionService != nil {
+		knowledgeAdapter := knowledgeEvaluationAdapter{
+			revisions: sharedRevisionService, source: c.Knowledge.WorkspaceService,
+			evaluator: knowledgeapp.NewRetrievalEvaluator(c.Knowledge.RAGService), actorID: "evaluation-worker",
+		}
+		resourceAdapters[evaldomain.ResourceKindKnowledge] = knowledgeAdapter
+		candidateCreators[evaldomain.ResourceKindKnowledge] = knowledgeAdapter
+		knowledgeProvider = knowledgeAdapter
+	}
+	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, suiteRepo)
+	jobService := evalapp.NewJobService(jobRepo, service)
 	var rewriter evalapp.PromptRewriter
 	if c.Agent != nil && c.Agent.TenantResolver != nil {
 		rewriter = gatewayPromptRewriter{resolver: c.Agent.TenantResolver}
 	}
-	optimizationService := evalapp.NewOptimizationService(manager, rewriter, optimizationRepo)
+	optimizationService := evalapp.NewOptimizationService(
+		evaluationCandidateRouter{creators: candidateCreators}, rewriter, optimizationRepo,
+	)
 	experimentService := evalapp.NewExperimentService(experimentRepo)
 	feedbackService := evalapp.NewFeedbackService(
 		feedbackRepo, experimentService, evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider},
@@ -293,6 +551,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	worker := evalapp.NewWorker(evaluationTenantLister{pool: db}, jobService, time.Second)
 	worker.Start(ctx)
 	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })
+	baselineService := newEvaluationBaselineService(manager, agentProvider, mcpProvider, knowledgeProvider)
 	c.Evaluation = &Evaluation{
 		Service:             service,
 		SuiteService:        suiteService,
@@ -301,6 +560,12 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		OptimizationService: optimizationService,
 		ExperimentService:   experimentService,
 		FeedbackService:     feedbackService,
+		QueryService:        evalapp.NewQueryService(queryRepo),
+		CandidateService:    evalapp.NewCandidateCommandService(candidateRepo),
+		AgentProvider:       agentProvider,
+		MCPProvider:         mcpProvider,
+		KnowledgeProvider:   knowledgeProvider,
+		BaselineService:     baselineService,
 	}
 	if c.Agent != nil && c.Agent.Service != nil {
 		c.Agent.Service.SetSkillRevisionResolver(experimentSkillRevisionResolver{service: experimentService})

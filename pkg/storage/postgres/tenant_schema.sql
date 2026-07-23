@@ -38,50 +38,6 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL 
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS embed_model TEXT NOT NULL DEFAULT '';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'agent';
 
--- Executable Skills were replaced by versioned instruction bundles. Detect
--- the legacy shape instead of using a permanent DROP so repeated tenant
--- provisioning never deletes data written to the new tables.
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = current_schema()
-          AND table_name = 'skill_versions'
-          AND column_name = 'implementation'
-    ) THEN
-        IF to_regclass('evaluation_deployments') IS NOT NULL THEN
-            DELETE FROM evaluation_deployments WHERE resource_kind = 'skill';
-        END IF;
-        IF to_regclass('evaluation_experiments') IS NOT NULL THEN
-            DELETE FROM evaluation_experiments WHERE resource_kind = 'skill';
-        END IF;
-        IF to_regclass('optimization_jobs') IS NOT NULL THEN
-            DELETE FROM optimization_jobs WHERE resource_kind = 'skill';
-        END IF;
-        IF to_regclass('eval_runs') IS NOT NULL THEN
-            DELETE FROM eval_runs WHERE resource_kind = 'skill';
-        END IF;
-        IF to_regclass('evaluation_feedback') IS NOT NULL THEN
-            DELETE FROM evaluation_feedback WHERE resource_kind = 'skill';
-        END IF;
-        IF to_regclass('evaluation_jobs') IS NOT NULL THEN
-            DELETE FROM evaluation_jobs WHERE payload->>'resource_kind' = 'skill';
-        END IF;
-        IF to_regclass('eval_suite_revisions') IS NOT NULL THEN
-            DELETE FROM eval_suite_revisions WHERE resource_kind = 'skill';
-            DELETE FROM eval_suites s
-            WHERE NOT EXISTS (SELECT 1 FROM eval_suite_revisions r WHERE r.suite_id = s.id);
-        END IF;
-
-        DROP TABLE IF EXISTS agent_skill_links;
-        DROP TABLE IF EXISTS skill_eval_runs;
-        DROP TABLE IF EXISTS skill_test_cases;
-        DROP TABLE IF EXISTS skill_versions;
-        DROP TABLE IF EXISTS skills;
-    END IF;
-END $$;
-
 CREATE TABLE IF NOT EXISTS skills (
     id                 TEXT PRIMARY KEY,
     name               TEXT NOT NULL UNIQUE,
@@ -92,6 +48,12 @@ CREATE TABLE IF NOT EXISTS skills (
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS active_revision_id TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS draft_revision_id TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 CREATE TABLE IF NOT EXISTS skill_revisions (
     id                  TEXT PRIMARY KEY,
@@ -120,6 +82,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_revisions_one_draft
 CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_revisions_published_no
     ON skill_revisions(skill_id, revision_no)
     WHERE revision_no IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS resource_revisions (
+    id                 TEXT PRIMARY KEY,
+    resource_kind      TEXT NOT NULL
+        CHECK (resource_kind IN ('skill', 'agent', 'mcp', 'knowledge')),
+    resource_id        TEXT NOT NULL,
+    parent_revision_id TEXT REFERENCES resource_revisions(id) ON DELETE SET NULL,
+    source             TEXT NOT NULL
+        CHECK (source IN ('manual', 'optimization', 'rollback')),
+    status             TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'published')),
+    content_hash       TEXT NOT NULL,
+    payload_hash       TEXT NOT NULL,
+    payload_ref        TEXT NOT NULL,
+    safe_summary       JSONB NOT NULL DEFAULT '{}',
+    created_by         TEXT NOT NULL DEFAULT '',
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at       TIMESTAMPTZ,
+    idempotency_key    TEXT NOT NULL DEFAULT '',
+    UNIQUE (resource_kind, resource_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_resource_revisions_resource
+    ON resource_revisions(resource_kind, resource_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_revisions_idempotency
+    ON resource_revisions(idempotency_key) WHERE idempotency_key <> '';
 
 -- Generic evaluation and optimization control plane. Resource payloads remain
 -- owned by their bounded context; these tables store immutable references and evidence.
@@ -211,9 +199,17 @@ CREATE TABLE IF NOT EXISTS optimization_jobs (
     rewrite_config        JSONB NOT NULL DEFAULT '{}',
     error_message         TEXT NOT NULL DEFAULT '',
     created_by            TEXT NOT NULL DEFAULT '',
+    idempotency_key       TEXT NOT NULL DEFAULT '',
+    request_fingerprint   TEXT NOT NULL DEFAULT '',
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at          TIMESTAMPTZ
 );
+ALTER TABLE optimization_jobs ADD COLUMN IF NOT EXISTS idempotency_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE optimization_jobs ADD COLUMN IF NOT EXISTS request_fingerprint TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_optimization_jobs_idempotency
+    ON optimization_jobs(idempotency_key) WHERE idempotency_key <> '';
+CREATE INDEX IF NOT EXISTS idx_optimization_jobs_center_query
+    ON optimization_jobs(resource_kind, resource_id, status, created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS optimization_candidates (
     id                    TEXT PRIMARY KEY,
@@ -225,8 +221,22 @@ CREATE TABLE IF NOT EXISTS optimization_candidates (
     generation_metadata   JSONB NOT NULL DEFAULT '{}',
     eval_run_id           TEXT REFERENCES eval_runs(id) ON DELETE SET NULL,
     rank                  INT,
+    status                TEXT NOT NULL DEFAULT 'proposed',
+    state_version         BIGINT NOT NULL DEFAULT 1,
+    rejection_reason      TEXT NOT NULL DEFAULT '',
+    rejected_by           TEXT NOT NULL DEFAULT '',
+    rejection_key         TEXT,
+    rejection_fingerprint TEXT NOT NULL DEFAULT '',
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'proposed';
+ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS state_version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS rejection_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS rejected_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS rejection_key TEXT;
+ALTER TABLE optimization_candidates ADD COLUMN IF NOT EXISTS rejection_fingerprint TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_optimization_candidates_job_created
+    ON optimization_candidates(optimization_job_id, created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS evaluation_experiments (
     id                    TEXT PRIMARY KEY,
@@ -239,13 +249,37 @@ CREATE TABLE IF NOT EXISTS evaluation_experiments (
     stage_percent         INT NOT NULL DEFAULT 5,
     policy                JSONB NOT NULL DEFAULT '{}',
     decision_snapshot     JSONB NOT NULL DEFAULT '{}',
+    state_version         BIGINT NOT NULL DEFAULT 1,
+    recommendation        TEXT NOT NULL DEFAULT 'hold',
+    safety_stopped        BOOL NOT NULL DEFAULT false,
     created_by            TEXT NOT NULL DEFAULT '',
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at          TIMESTAMPTZ
 );
+ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS state_version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS recommendation TEXT NOT NULL DEFAULT 'hold';
+ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS safety_stopped BOOL NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_evaluation_experiments_resource
     ON evaluation_experiments(resource_kind, resource_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS experiment_decisions (
+    id              TEXT PRIMARY KEY,
+    experiment_id   TEXT NOT NULL REFERENCES evaluation_experiments(id) ON DELETE CASCADE,
+    action          TEXT NOT NULL,
+    actor_type      TEXT NOT NULL,
+    actor_id        TEXT NOT NULL DEFAULT '',
+    prior_status    TEXT NOT NULL,
+    new_status      TEXT NOT NULL,
+    recommendation TEXT NOT NULL DEFAULT 'hold',
+    metrics         JSONB NOT NULL DEFAULT '{}',
+    reason          TEXT NOT NULL DEFAULT '',
+    idempotency_key TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (experiment_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_experiment_decisions_experiment
+    ON experiment_decisions(experiment_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS evaluation_deployments (
     resource_kind      TEXT NOT NULL,
@@ -405,6 +439,8 @@ CREATE TABLE IF NOT EXISTS agent_skill_links (
     revision_id TEXT REFERENCES skill_revisions(id) ON DELETE SET NULL,
     PRIMARY KEY (agent_id, skill_id)
 );
+ALTER TABLE agent_skill_links ADD COLUMN IF NOT EXISTS revision_id TEXT
+    REFERENCES skill_revisions(id) ON DELETE SET NULL;
 
 CREATE TABLE IF NOT EXISTS agent_execution_checkpoints (
     id                        UUID        PRIMARY KEY DEFAULT public.gen_uuid_v7(),

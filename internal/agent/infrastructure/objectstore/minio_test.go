@@ -41,7 +41,7 @@ func TestStorePutRedactsEncryptsAndReturnsOpaqueReference(t *testing.T) {
 
 	ref, err := store.Put(context.Background(), port.TracePayload{
 		TenantID: "tenant-1", TraceID: "trace-1", Kind: "tool-result",
-		Value: map[string]any{"answer": "42", "api_key": "do-not-store"},
+		Value: map[string]any{"answer": "opaque-answer-plaintext-sentinel", "api_key": "do-not-store"},
 	})
 	if err != nil {
 		t.Fatalf("Put() error: %v", err)
@@ -49,7 +49,7 @@ func TestStorePutRedactsEncryptsAndReturnsOpaqueReference(t *testing.T) {
 	if client.bucket != "trace-evidence" || !strings.HasPrefix(client.key, "tenant-1/trace-1/") {
 		t.Fatalf("bucket=%q key=%q", client.bucket, client.key)
 	}
-	if bytes.Contains(client.body, []byte("42")) || bytes.Contains(client.body, []byte("do-not-store")) {
+	if bytes.Contains(client.body, []byte("opaque-answer-plaintext-sentinel")) || bytes.Contains(client.body, []byte("do-not-store")) {
 		t.Fatalf("object contains plaintext: %q", client.body)
 	}
 	plain, err := pkgcrypto.Decrypt(key, string(client.body))

@@ -60,7 +60,7 @@ func TestExperimentAdvanceRequiresEnoughEvidence(t *testing.T) {
 	}
 }
 
-func TestExperimentRollsBackOnGuardrailBreach(t *testing.T) {
+func TestExperimentSafetyStopsOnGuardrailBreach(t *testing.T) {
 	exp := Experiment{Status: ExperimentRunning, Stage: 20}
 	policy := DefaultPromotionPolicy()
 
@@ -74,8 +74,8 @@ func TestExperimentRollsBackOnGuardrailBreach(t *testing.T) {
 		ErrorRateIncrease:    0,
 	}, policy)
 
-	if decision != DecisionRollback || next.Status != ExperimentRolledBack {
-		t.Fatalf("expected rollback, got decision=%s status=%s", decision, next.Status)
+	if decision != DecisionRollback || next.Status != ExperimentRunning || !next.SafetyStopped || next.Stage != 0 {
+		t.Fatalf("expected safety stop recommendation, got decision=%s experiment=%+v", decision, next)
 	}
 }
 
@@ -92,19 +92,42 @@ func TestExperimentAdvancesThroughConfiguredStages(t *testing.T) {
 	wantStages := []int{20, 50, 100}
 	for _, want := range wantStages {
 		next, decision := exp.Decide(metrics, policy)
-		if decision != DecisionPromote || next.Stage != want {
-			t.Fatalf("expected promotion to %d, got decision=%s stage=%d", want, decision, next.Stage)
+		if decision != DecisionAdvance || next.Stage != want || next.Recommendation == DecisionPromote {
+			t.Fatalf("expected advance to %d, got decision=%s experiment=%+v", want, decision, next)
 		}
 		exp = next
 	}
-	if exp.Status != ExperimentCompleted {
-		t.Fatalf("expected completed at 100%%, got %s", exp.Status)
+	next, decision := exp.Decide(metrics, policy)
+	if decision != DecisionPromote || next.Status != ExperimentRunning || next.Recommendation != DecisionPromote {
+		t.Fatalf("final stage should recommend promotion: decision=%s experiment=%+v", decision, next)
+	}
+}
+
+func TestExperimentCommandTransitionTable(t *testing.T) {
+	tests := []struct {
+		status  ExperimentStatus
+		action  ExperimentCommandAction
+		allowed bool
+	}{
+		{ExperimentRunning, CommandPause, true},
+		{ExperimentRunning, CommandRollback, true},
+		{ExperimentRunning, CommandPromote, true},
+		{ExperimentPaused, CommandRollback, true},
+		{ExperimentPaused, CommandPause, false},
+		{ExperimentPaused, CommandPromote, false},
+		{ExperimentCompleted, CommandRollback, false},
+		{ExperimentRolledBack, CommandRollback, false},
+	}
+	for _, tt := range tests {
+		if got := CanApplyExperimentCommand(tt.status, tt.action); got != tt.allowed {
+			t.Errorf("status=%s action=%s allowed=%v want=%v", tt.status, tt.action, got, tt.allowed)
+		}
 	}
 }
 
 func TestExperimentCannotPromoteWithoutQualitySignal(t *testing.T) {
 	policy := DefaultPromotionPolicy()
-	exp := Experiment{Status: ExperimentRunning, Stage: 50}
+	exp := Experiment{Status: ExperimentRunning, Stage: 50, Recommendation: DecisionPromote}
 
 	next, decision := exp.Decide(StageMetrics{
 		Samples:            policy.MinSamples,
@@ -112,7 +135,7 @@ func TestExperimentCannotPromoteWithoutQualitySignal(t *testing.T) {
 		QualityImprovement: 0.10,
 	}, policy)
 
-	if decision != DecisionHold || next.Stage != 50 {
+	if decision != DecisionHold || next.Stage != 50 || next.Recommendation != DecisionHold {
 		t.Fatalf("expected hold without significant quality signal, got decision=%s stage=%d", decision, next.Stage)
 	}
 }

@@ -2,10 +2,29 @@ package port
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 )
+
+var ErrRevisionCommitUnknown = errors.New("revision metadata commit outcome unknown")
+var ErrCenterResourceNotFound = errors.New("evaluation center resource not found")
+
+type CenterFilter struct {
+	ResourceKind, ResourceID, Status, Cursor string
+	Limit                                    int
+}
+
+type CenterQueryRepository interface {
+	Overview(context.Context, string) (domain.CenterOverview, error)
+	ListResources(context.Context, string, CenterFilter) (domain.ResourcePage, error)
+	ListSuites(context.Context, string, CenterFilter) (domain.SuitePage, error)
+	ListRuns(context.Context, string, CenterFilter) (domain.RunPage, error)
+	ListCandidates(context.Context, string, CenterFilter) (domain.CandidatePage, error)
+	ListExperiments(context.Context, string, CenterFilter) (domain.ExperimentPage, error)
+	Timeline(context.Context, string, CenterFilter) (domain.TimelinePage, error)
+}
 
 type ExecutionResult struct {
 	Output     any
@@ -16,7 +35,11 @@ type ExecutionResult struct {
 }
 
 type ResourceAdapter interface {
-	ExecuteRevision(ctx context.Context, tenantID string, ref domain.ResourceRef, testCase domain.EvalCase) (ExecutionResult, error)
+	ExecuteRevision(
+		ctx context.Context, tenantID, requestedBy string, ref domain.ResourceRef, testCase domain.EvalCase,
+	) (ExecutionResult, error)
+	ResolveRevision(context.Context, string, domain.ResourceRef) (domain.ResourceRevision, error)
+	SafeSummary(context.Context, string, domain.ResourceRef) (map[string]any, error)
 }
 
 type RunRepository interface {
@@ -46,12 +69,58 @@ type CandidateCreator interface {
 }
 
 type OptimizationRepository interface {
+	WithinTransaction(context.Context, string, func(context.Context) error) error
+	GetByIdempotencyKey(context.Context, string, string) (
+		domain.OptimizationJob, []domain.OptimizationCandidate, string, bool, error,
+	)
 	SaveJobWithCandidates(
 		ctx context.Context,
 		tenantID string,
 		job domain.OptimizationJob,
 		candidates []domain.OptimizationCandidate,
-	) error
+		idempotencyKey, requestFingerprint string,
+	) (bool, error)
+}
+
+type CandidateCommandRepository interface {
+	Reject(context.Context, string, string, domain.CandidateCommand) (domain.CandidateSummary, error)
+}
+
+type CreateRevisionInput struct {
+	ResourceKind                                            domain.ResourceKind
+	ResourceID, ParentRevisionID, CreatedBy, IdempotencyKey string
+	FingerprintPayload                                      any
+	Source                                                  domain.RevisionSource
+	Payload                                                 any
+	SafeSummary                                             map[string]any
+}
+
+type RevisionRepository interface {
+	Create(context.Context, string, domain.ResourceRevision, string) (domain.ResourceRevision, bool, error)
+	Get(context.Context, string, domain.ResourceRef) (domain.ResourceRevision, bool, error)
+	Publish(context.Context, string, domain.ResourceRef) (domain.ResourceRevision, error)
+}
+
+type ResourceRevisionProvider interface {
+	CreatePublishedBaseline(context.Context, string, string) (domain.ResourceRef, error)
+}
+
+type AgentRevisionProvider = ResourceRevisionProvider
+
+type RevisionObjectStore interface {
+	Put(context.Context, RevisionPayload) (RevisionPayloadRef, error)
+	Get(context.Context, RevisionPayloadRef) ([]byte, error)
+	Delete(context.Context, RevisionPayloadRef) error
+}
+
+type RevisionPayload struct {
+	TenantID, Namespace, ID string
+	Value                   any
+}
+
+type RevisionPayloadRef struct {
+	URI, SHA256 string
+	SizeBytes   int64
 }
 
 type ExperimentRepository interface {
@@ -63,7 +132,10 @@ type ExperimentRepository interface {
 		experiment domain.Experiment,
 		decision domain.Decision,
 		metrics domain.StageMetrics,
-	) error
+		idempotencyKey, fingerprint string,
+	) (domain.Experiment, domain.Decision, error)
+	ApplyCommand(ctx context.Context, tenantID, experimentID string, action domain.ExperimentCommandAction,
+		command domain.ExperimentCommand) (domain.Experiment, error)
 	ResolveDeployment(ctx context.Context, tenantID, resourceKind, resourceID string) (domain.Deployment, bool, error)
 }
 
