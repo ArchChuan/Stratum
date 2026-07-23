@@ -373,7 +373,7 @@ installer_configs="$FIXTURES/installer-configs"
 mkdir -p "$installer_configs/codex" "$installer_configs/claude"
 codex_config="$installer_configs/codex/hooks.json"
 claude_config="$installer_configs/claude/settings.json"
-jq -n '{theme:"dark",hooks:{UserPromptSubmit:[{matcher:"existing",hooks:[{type:"command",command:"echo codex-start"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/codex-task-start.sh"},{type:"command",command:"echo /prior/scripts/knowledge-deposition/codex-task-start.sh"},{type:"command",command:"bash /prior/scripts/knowledge-deposition/codex-task-start.sh --extra"}]}],Stop:[{hooks:[{type:"command",command:"echo codex-stop"},{type:"command",command:"bash /old/repo\\ space/scripts/knowledge-deposition/codex-stop.sh"},{type:"command",command:"bash /prior;echo/scripts/knowledge-deposition/codex-stop.sh"}]}]}}' >"$codex_config"
+jq -n '{theme:"dark",hooks:{UserPromptSubmit:[{matcher:"keep-metadata"},{matcher:"existing",hooks:[{type:"command",command:"echo codex-start"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/codex-task-start.sh"},{type:"command",command:"echo /prior/scripts/knowledge-deposition/codex-task-start.sh"},{type:"command",command:"bash /prior/scripts/knowledge-deposition/codex-task-start.sh --extra"}]}],Stop:[{hooks:[{type:"command",command:"echo codex-stop"},{type:"command",command:"bash /old/repo\\ space/scripts/knowledge-deposition/codex-stop.sh"},{type:"command",command:"bash /prior;echo/scripts/knowledge-deposition/codex-stop.sh"}]}]}}' >"$codex_config"
 jq -n '{permissions:{allow:["Read"]},hooks:{UserPromptSubmit:[{hooks:[{type:"command",command:"echo claude-start"},{type:"command",command:"bash /old/repo\\;meta/scripts/knowledge-deposition/claude-task-start.sh"}]}],Stop:[{hooks:[{type:"command",command:"echo claude-stop"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/claude-stop.sh"},{type:"command",command:"true && bash /prior/scripts/knowledge-deposition/claude-stop.sh"}]}]}}' >"$claude_config"
 codex_original="$(cat "$codex_config")"
 claude_original="$(cat "$claude_config")"
@@ -402,6 +402,7 @@ jq -e '
 ' "$claude_config" >/dev/null || fail "Claude adapter-looking unrelated command was removed"
 jq -e '.theme == "dark"' "$codex_config" >/dev/null || fail "Codex unrelated root property lost"
 jq -e '.permissions.allow == ["Read"]' "$claude_config" >/dev/null || fail "Claude unrelated root property lost"
+jq -e '.hooks.UserPromptSubmit | any(.[]; .matcher == "keep-metadata" and (has("hooks") | not))' "$codex_config" >/dev/null || fail "entry without hooks was normalized or dropped"
 first_codex="$(sha256sum "$codex_config")"; first_claude="$(sha256sum "$claude_config")"
 backup_count="$(find "$installer_configs" -type f -name '*.knowledge-deposition.*.bak' | wc -l)"
 CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$claude_config" run_installer --repo-root "$installer_repo" >/dev/null || fail "idempotent installer run failed"
@@ -461,5 +462,95 @@ while IFS= read -r backup; do
   [[ "$(stat -c %a "$backup")" == 600 ]] || fail "backup permissions are not private: $backup"
 done < <(find "$rollback_dir" -type f -name '*.bak')
 pass "second rename failure restores the first file and preserves both originals"
+
+backup_failure_dir="$FIXTURES/backup-failure"
+mkdir -p "$backup_failure_dir/codex" "$backup_failure_dir/claude" "$backup_failure_dir/bin"
+backup_failure_codex="$backup_failure_dir/codex/hooks.json"
+backup_failure_claude="$backup_failure_dir/claude/settings.json"
+jq -n '{hooks:{},keep:"codex-edit"}' >"$backup_failure_codex"
+jq -n '{hooks:{},keep:"claude-edit"}' >"$backup_failure_claude"
+backup_failure_codex_before="$(cat "$backup_failure_codex")"
+backup_failure_claude_before="$(cat "$backup_failure_claude")"
+real_cp="$(command -v cp)"
+printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'count_file="${KD_CP_COUNT}"' 'count=0' \
+  '[[ ! -f "$count_file" ]] || count="$(cat "$count_file")"' 'count=$((count + 1))' \
+  'printf "%s\n" "$count" >"$count_file"' 'if [[ "$count" -eq 2 ]]; then exit 75; fi' \
+  'exec "$KD_REAL_CP" "$@"' >"$backup_failure_dir/bin/cp"
+chmod +x "$backup_failure_dir/bin/cp"
+if PATH="$backup_failure_dir/bin:$PATH" KD_CP_COUNT="$backup_failure_dir/cp.count" KD_REAL_CP="$real_cp" \
+  CODEX_HOOKS_JSON="$backup_failure_codex" CLAUDE_SETTINGS_JSON="$backup_failure_claude" \
+  run_installer --repo-root "$installer_repo" >"$backup_failure_dir/out" 2>"$backup_failure_dir/err"; then
+  fail "injected second backup failure succeeded"
+fi
+[[ "$(cat "$backup_failure_codex")" == "$backup_failure_codex_before" && \
+   "$(cat "$backup_failure_claude")" == "$backup_failure_claude_before" ]] || fail "backup failure mutated configs"
+if find "$backup_failure_dir" -type f \( -name '*.bak' -o -name '.hooks.json.knowledge-deposition.*' -o \
+  -name '.settings.json.knowledge-deposition.*' \) -print -quit | grep -q .; then
+  fail "backup failure left an orphan backup or temp"
+fi
+pass "second backup failure cleans backups and temps before mutation"
+
+cas_dir="$FIXTURES/cas-edit"
+mkdir -p "$cas_dir/codex" "$cas_dir/claude" "$cas_dir/bin"
+cas_codex="$cas_dir/codex/hooks.json"
+cas_claude="$cas_dir/claude/settings.json"
+jq -n '{hooks:{},keep:"codex-before"}' >"$cas_codex"
+jq -n '{hooks:{},keep:"claude-before"}' >"$cas_claude"
+real_sha256sum="$(command -v sha256sum)"
+printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'count_file="${KD_SHA_COUNT}"' 'count=0' \
+  '[[ ! -f "$count_file" ]] || count="$(cat "$count_file")"' 'count=$((count + 1))' \
+  'printf "%s\n" "$count" >"$count_file"' \
+  'if [[ "$count" -eq 3 ]]; then printf "{\"hooks\":{},\"keep\":\"external-edit\"}\n" >"$KD_EDIT_CONFIG"; fi' \
+  'exec "$KD_REAL_SHA256SUM" "$@"' >"$cas_dir/bin/sha256sum"
+chmod +x "$cas_dir/bin/sha256sum"
+if PATH="$cas_dir/bin:$PATH" KD_SHA_COUNT="$cas_dir/sha.count" KD_EDIT_CONFIG="$cas_codex" \
+  KD_REAL_SHA256SUM="$real_sha256sum" CODEX_HOOKS_JSON="$cas_codex" CLAUDE_SETTINGS_JSON="$cas_claude" \
+  run_installer --repo-root "$installer_repo" >"$cas_dir/out" 2>"$cas_dir/err"; then
+  fail "concurrent config edit was not detected"
+fi
+jq -e '.keep == "external-edit" and .hooks == {}' "$cas_codex" >/dev/null || fail "concurrent edit was overwritten"
+jq -e '.keep == "claude-before" and .hooks == {}' "$cas_claude" >/dev/null || fail "untouched config was mutated"
+if find "$cas_dir" -type f \( -name '*.bak' -o -name '.hooks.json.knowledge-deposition.*' -o \
+  -name '.settings.json.knowledge-deposition.*' \) -print -quit | grep -q .; then
+  fail "concurrent edit abort left a backup or temp"
+fi
+grep -Fq 'configuration changed during installation' "$cas_dir/err" || fail "concurrent edit error was not actionable"
+pass "digest check preserves a noncooperating edit detected before publish"
+
+lock_target="$FIXTURES/installer-lock-target"
+printf 'unchanged\n' >"$lock_target"
+rm -f "${cas_codex}.knowledge-deposition.lock"
+ln -s "$lock_target" "${cas_codex}.knowledge-deposition.lock"
+if CODEX_HOOKS_JSON="$cas_codex" CLAUDE_SETTINGS_JSON="$cas_claude" \
+  run_installer --repo-root "$installer_repo" >/dev/null 2>&1; then
+  fail "symlink installer lock was accepted"
+fi
+[[ "$(cat "$lock_target")" == unchanged ]] || fail "symlink installer lock target was modified"
+pass "installer advisory locks are private and symlink-safe"
+
+cooperate_dir="$FIXTURES/cooperating-installers"
+mkdir -p "$cooperate_dir/codex" "$cooperate_dir/claude"
+cooperate_codex="$cooperate_dir/codex/hooks.json"
+cooperate_claude="$cooperate_dir/claude/settings.json"
+jq -n '{hooks:{},keep:"codex"}' >"$cooperate_codex"
+jq -n '{hooks:{},keep:"claude"}' >"$cooperate_claude"
+pids=()
+for index in 1 2; do
+  CODEX_HOOKS_JSON="$cooperate_codex" CLAUDE_SETTINGS_JSON="$cooperate_claude" \
+    run_installer --repo-root "$installer_repo" >"$cooperate_dir/$index.out" 2>"$cooperate_dir/$index.err" &
+  pids+=("$!")
+done
+for pid in "${pids[@]}"; do
+  for _ in $(seq 1 500); do kill -0 "$pid" 2>/dev/null || break; sleep 0.02; done
+  kill -0 "$pid" 2>/dev/null && { kill "$pid" 2>/dev/null || true; fail "cooperating installer exceeded bounded wait"; }
+  wait "$pid" || fail "cooperating installer failed"
+done
+jq -e '(.hooks.UserPromptSubmit | length) == 1 and (.hooks.Stop | length) == 1 and .keep == "codex"' \
+  "$cooperate_codex" >/dev/null || fail "concurrent Codex install was inconsistent"
+jq -e '(.hooks.UserPromptSubmit | length) == 1 and (.hooks.Stop | length) == 1 and .keep == "claude"' \
+  "$cooperate_claude" >/dev/null || fail "concurrent Claude install was inconsistent"
+[[ "$(stat -c %a "${cooperate_codex}.knowledge-deposition.lock")" == 600 && \
+   "$(stat -c %a "${cooperate_claude}.knowledge-deposition.lock")" == 600 ]] || fail "installer locks are not private"
+pass "deterministically ordered advisory locks serialize cooperating installers"
 
 printf '1..%d\n' "$count"

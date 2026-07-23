@@ -60,8 +60,29 @@ validate_config() {
 safe_config "$codex_config"
 safe_config "$claude_config"
 [[ "$codex_config" != "$claude_config" ]] || fail "Codex and Claude config paths must be distinct"
+
+codex_lock="${codex_config}.knowledge-deposition.lock"
+claude_lock="${claude_config}.knowledge-deposition.lock"
+# These advisory locks serialize cooperating installers. The digest check below also detects
+# noncooperating edits observed before publish; it is not an atomic CAS against arbitrary same-UID editors.
+lock_paths=("$codex_lock" "$claude_lock")
+if [[ "${lock_paths[0]}" > "${lock_paths[1]}" ]]; then
+  lock_paths=("${lock_paths[1]}" "${lock_paths[0]}")
+fi
+for lock_path in "${lock_paths[@]}"; do
+  [[ ! -L "$lock_path" && ( ! -e "$lock_path" || -f "$lock_path" ) ]] || fail "unsafe installer lock: $lock_path"
+done
+exec {lock_fd_one}>"${lock_paths[0]}" || fail "could not open installer lock"
+chmod 600 "${lock_paths[0]}" || fail "could not protect installer lock"
+flock -x "$lock_fd_one" || fail "could not acquire installer lock"
+exec {lock_fd_two}>"${lock_paths[1]}" || fail "could not open installer lock"
+chmod 600 "${lock_paths[1]}" || fail "could not protect installer lock"
+flock -x "$lock_fd_two" || fail "could not acquire installer lock"
+
 validate_config "$codex_config"
 validate_config "$claude_config"
+codex_digest="$(sha256sum "$codex_config" | awk '{print $1}')" || fail "could not hash Codex hooks"
+claude_digest="$(sha256sum "$claude_config" | awk '{print $1}')" || fail "could not hash Claude settings"
 
 shell_quote() { printf '%q' "$1"; }
 codex_start="bash $(shell_quote "$script_root/codex-task-start.sh")"
@@ -90,8 +111,13 @@ transform() {
        )));
     def clean_event($event):
       (($event // []) | map(
-        .hooks = ((.hooks // []) | map(select(managed(.command) | not)))
-      ) | map(select((.hooks | length) > 0)));
+        if has("hooks") then
+          .hooks = (.hooks | map(select(managed(.command) | not))) |
+          select((.hooks | length) > 0)
+        else
+          .
+        end
+      ));
     .hooks = (.hooks // {}) |
     .hooks.UserPromptSubmit = (clean_event(.hooks.UserPromptSubmit) + [{
       matcher: "*", hooks: [{type:"command", command:$start, timeout:10}]
@@ -116,9 +142,21 @@ timestamp="$(date -u +%Y%m%dT%H%M%S%N)-$$"
 codex_backup="${codex_config}.knowledge-deposition.${timestamp}.bak"
 claude_backup="${claude_config}.knowledge-deposition.${timestamp}.bak"
 [[ ! -e "$codex_backup" && ! -e "$claude_backup" ]] || fail "backup collision"
-cp -- "$codex_config" "$codex_backup"
-cp -- "$claude_config" "$claude_backup"
-chmod 600 "$codex_backup" "$claude_backup"
+[[ "$(sha256sum "$codex_config" | awk '{print $1}')" == "$codex_digest" && \
+   "$(sha256sum "$claude_config" | awk '{print $1}')" == "$claude_digest" ]] || \
+  fail "configuration changed during installation; no changes made"
+if ! cp -- "$codex_config" "$codex_backup"; then
+  rm -f "$codex_backup" "$claude_backup"
+  fail "could not back up Codex hooks; no changes made"
+fi
+if ! cp -- "$claude_config" "$claude_backup"; then
+  rm -f "$codex_backup" "$claude_backup"
+  fail "could not back up Claude settings; no changes made"
+fi
+if ! chmod 600 "$codex_backup" "$claude_backup"; then
+  rm -f "$codex_backup" "$claude_backup"
+  fail "could not protect configuration backups; no changes made"
+fi
 
 if ! mv -- "$codex_tmp" "$codex_config"; then
   fail "could not replace Codex hooks; originals remain in place"
