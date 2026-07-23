@@ -1,0 +1,41 @@
+.workflow-page-shell {
+  --workflow-ink: #172033;
+  --workflow-muted: #647089;
+  --workflow-track: #5b5bd6;
+  --workflow-paper: #f7f8fc;
+  color: var(--workflow-ink);
+}
+
+.workflow-catalog-header {
+  align-items: flex-end;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.workflow-catalog-heading { align-items: flex-start; display: flex; gap: 14px; }
+.workflow-catalog-heading h3 { margin: 0 0 4px; }
+.workflow-catalog-heading p { color: var(--workflow-muted); margin: 0; }
+.workflow-section-mark {
+  align-items: center;
+  background: #ececff;
+  border: 1px solid #d8d8ff;
+  border-radius: 10px;
+  color: var(--workflow-track);
+  display: inline-flex;
+  font-size: 20px;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+.workflow-catalog-actions .ant-input-affix-wrapper { min-width: 240px; }
+.workflow-catalog-card { overflow: hidden; position: relative; }
+.workflow-card-spine { background: var(--workflow-track); inset: 0 auto 0 0; position: absolute; width: 4px; }
+.workflow-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+
+@media (max-width: 767px) {
+  .workflow-catalog-header { align-items: stretch; flex-direction: column; }
+  .workflow-catalog-actions { display: grid; grid-template-columns: 1fr; }
+  .workflow-catalog-actions .ant-input-affix-wrapper { min-width: 0; width: 100%; }
+}

@@ -34,6 +34,8 @@ describe('buildMenuItems', () => {
     expect(screen.getByRole('link', { name: 'Agent 列表' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '技能列表' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '服务器列表' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '工作流' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '新建工作流' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '创建 Agent' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '创建技能' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '添加服务器' })).not.toBeInTheDocument();
@@ -42,6 +44,17 @@ describe('buildMenuItems', () => {
 
   it('opens the evaluation navigation group', () => {
     expect(resolveOpenKeys('/evaluations')).toEqual(['evaluation-group']);
+  });
+
+  it('shows workflow authoring only to tenant admins', () => {
+    const labels = collectLabels(buildMenuItems({
+      sub: 'admin-1', tenant_id: 'tenant-1', role: 'admin', avatar_url: '', github_login: 'admin',
+      current_tenant: { id: 'tenant-1', name: 'Test', role: 'admin' },
+    }));
+    render(<MemoryRouter>{labels.map((label, index) => <div key={index}>{label}</div>)}</MemoryRouter>);
+    expect(screen.getByRole('link', { name: '工作流' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '新建工作流' })).toBeInTheDocument();
+    expect(resolveOpenKeys('/workflows/new')).toEqual(['workflow-group']);
   });
 
   it('does not expose execution history in navigation', () => {
