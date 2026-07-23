@@ -14,6 +14,7 @@ func TestWorkflowErrorStatusMapping(t *testing.T) {
 		status int
 	}{
 		{err: workflowdomain.ErrNotFound, status: http.StatusNotFound},
+		{err: workflowdomain.ErrForbidden, status: http.StatusForbidden},
 		{err: workflowdomain.ErrRevisionConflict, status: http.StatusConflict},
 		{err: workflowdomain.ErrIdempotencyConflict, status: http.StatusConflict},
 		{err: workflowdomain.ErrInvalidSpec, status: http.StatusBadRequest},

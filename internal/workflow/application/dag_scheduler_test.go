@@ -184,7 +184,7 @@ func TestDAGSchedulerDiamondFanInExecutesJoinOnce(t *testing.T) {
 	}, Edges: []domain.Edge{{From: "start", To: "left"}, {From: "start", To: "right"}, {From: "left", To: "join"}, {From: "right", To: "join"}}, MaxConcurrency: 2}
 	runs, run := createPublishedRun(t, store, registry, spec)
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusCompleted, got.Status)
 	require.Len(t, attempts, 4)
@@ -209,7 +209,7 @@ func TestDAGSchedulerConditionSkipsUnselectedBranch(t *testing.T) {
 	}, Edges: []domain.Edge{{From: "route", To: "selected", ConditionValue: &truth}, {From: "route", To: "fallback", Default: true}}}
 	runs, run := createPublishedRun(t, store, registry, spec)
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	_, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	_, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	byNode := map[string]domain.AttemptStatus{}
 	var selectedEdges []string
@@ -236,7 +236,7 @@ func TestDAGSchedulerRetryCreatesNewAttempt(t *testing.T) {
 	spec := domain.Spec{Nodes: []domain.Node{{ID: "retry", Type: domain.NodeTypeAgent, AgentID: "a", Retry: domain.RetryPolicy{MaxAttempts: 2}}}}
 	runs, run := createPublishedRun(t, store, registry, spec)
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	_, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	_, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Len(t, attempts, 2)
 	require.Equal(t, 1, attempts[0].AttemptNo)
@@ -253,7 +253,7 @@ func TestDAGSchedulerDoesNotRetryUndeclaredNonIdempotentEffect(t *testing.T) {
 	spec := domain.Spec{Nodes: []domain.Node{{ID: "write", Type: domain.NodeTypeMCPTool, MCPServerID: "crm", MCPToolName: "create", EffectClass: domain.EffectClassNonIdempotent, Retry: domain.RetryPolicy{MaxAttempts: 3}}}}
 	runs, run := createPublishedRun(t, store, registry, spec)
 	require.Error(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	_, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	_, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Len(t, attempts, 1)
 	require.Equal(t, domain.AttemptStatusFailed, attempts[0].Status)
@@ -272,13 +272,13 @@ func TestDAGSchedulerPersistsBackoffWithoutSleepingWorker(t *testing.T) {
 	started := time.Now()
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
 	require.Less(t, time.Since(started), 15*time.Millisecond)
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusQueued, got.Status)
 	require.Len(t, attempts, 1)
 	time.Sleep(25 * time.Millisecond)
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, attempts, err = runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err = runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusCompleted, got.Status)
 	require.Len(t, attempts, 2)
@@ -303,13 +303,13 @@ func TestWorkflowEventsHaveMonotonicCursorAndResumeAfterSequence(t *testing.T) {
 	spec := domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "a"}}}
 	runs, run := createPublishedRun(t, store, registry, spec)
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	events, err := runs.Events(context.Background(), "tenant-1", run.ID, 0, 100)
+	events, err := runs.Events(context.Background(), "tenant-1", run.ID, adminActor(), 0, 100)
 	require.NoError(t, err)
 	require.NotEmpty(t, events)
 	for i := range events {
 		require.Equal(t, int64(i+1), events[i].SequenceNo)
 	}
-	after, err := runs.Events(context.Background(), "tenant-1", run.ID, events[1].SequenceNo, 100)
+	after, err := runs.Events(context.Background(), "tenant-1", run.ID, adminActor(), events[1].SequenceNo, 100)
 	require.NoError(t, err)
 	require.Equal(t, events[2:], after)
 }
@@ -333,7 +333,7 @@ func TestHighRiskMCPPausedResultStopsDownstream(t *testing.T) {
 	spec := domain.Spec{Nodes: []domain.Node{{ID: "tool", Type: domain.NodeTypeMCPTool, MCPServerID: "crm", MCPToolName: "delete", EffectClass: domain.EffectClassNonIdempotent}, {ID: "after", Type: domain.NodeTypeAgent, AgentID: "agent"}}, Edges: []domain.Edge{{From: "tool", To: "after"}}}
 	runs, run := createPublishedRun(t, store, registry, spec)
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusPaused, got.Status)
 	require.Len(t, attempts, 1)
@@ -346,7 +346,7 @@ func TestApprovalNodePersistsRequestAndPauses(t *testing.T) {
 	store, registry := newDAGStore(), &scriptedRegistry{}
 	runs, run := createPublishedRun(t, store, registry, domain.Spec{Nodes: []domain.Node{{ID: "approval", Type: domain.NodeTypeApproval}}})
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusPaused, got.Status)
 	require.Equal(t, domain.AttemptStatusPaused, attempts[0].Status)
@@ -363,7 +363,7 @@ func TestNonIdempotentCanceledExecutionBecomesManualIntervention(t *testing.T) {
 	}}
 	runs, run := createPublishedRun(t, store, registry, domain.Spec{Nodes: []domain.Node{{ID: "tool", Type: domain.NodeTypeMCPTool, MCPServerID: "crm", MCPToolName: "create", EffectClass: domain.EffectClassNonIdempotent, TimeoutMS: 10}}})
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusManualIntervention, got.Status)
 	require.Equal(t, domain.AttemptStatusManualIntervention, attempts[0].Status)
@@ -388,7 +388,7 @@ func TestApprovedHighRiskMCPExecutesExactlyOnceAfterExplicitResume(t *testing.T)
 	store.runs[run.ID].Generation++
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
 	require.Equal(t, 1, calls)
-	got, _, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, _, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusCompleted, got.Status)
 }
@@ -414,7 +414,7 @@ func TestCancelBeforeStartFinalizesWithoutExecutingNode(t *testing.T) {
 	runs, run := createPublishedRun(t, store, registry, domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "a"}}})
 	store.runs[run.ID].Status = domain.RunStatusCancelRequested
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusCanceled, got.Status)
 	require.Empty(t, attempts)
@@ -430,7 +430,7 @@ func TestCancelDuringPureNodeCannotCommitSuccess(t *testing.T) {
 	}}
 	runs, run := createPublishedRun(t, store, registry, domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "a", EffectClass: domain.EffectClassPure}}})
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusCanceled, got.Status)
 	require.Equal(t, domain.AttemptStatusCanceled, attempts[0].Status)
@@ -441,7 +441,7 @@ func TestPauseBeforeStartStopsAtBoundary(t *testing.T) {
 	runs, run := createPublishedRun(t, store, registry, domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "a"}}})
 	store.runs[run.ID].Status = domain.RunStatusPauseRequested
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusPaused, got.Status)
 	require.Empty(t, attempts)
@@ -457,7 +457,7 @@ func TestRecoveryRequeuesExpiredPureAttemptWithoutRerunningSucceededNodes(t *tes
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
 	require.Zero(t, registry.attempts["done"])
 	require.Equal(t, 1, registry.attempts["crashed"])
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusCompleted, got.Status)
 	require.Len(t, attempts, 3)
@@ -475,7 +475,7 @@ func TestRecoveryMarksStartedNonIdempotentEffectUnknownWithoutReplay(t *testing.
 	store.effects = []domain.EffectIntent{*intent}
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
 	require.Empty(t, registry.calls)
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusManualIntervention, got.Status)
 	require.Equal(t, domain.AttemptStatusManualIntervention, attempts[0].Status)
@@ -496,7 +496,7 @@ func TestRunningPauseRetriesAgentAtNodeBoundary(t *testing.T) {
 	}}
 	runs, run := createPublishedRun(t, store, registry, domain.Spec{Nodes: []domain.Node{{ID: "agent", Type: domain.NodeTypeAgent, AgentID: "a", EffectClass: domain.EffectClassPure}}})
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	paused, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	paused, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusPaused, paused.Status)
 	require.Equal(t, domain.AttemptStatusRetryWait, attempts[0].Status)
@@ -527,7 +527,7 @@ func TestRunningPauseRetriesIdempotentMCPButManualsNonIdempotent(t *testing.T) {
 			}}
 			runs, run := createPublishedRun(t, store, registry, domain.Spec{Nodes: []domain.Node{{ID: "tool", Type: domain.NodeTypeMCPTool, MCPServerID: "crm", MCPToolName: "write", EffectClass: tc.class}}})
 			require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-			got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+			got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 			require.NoError(t, err)
 			require.Equal(t, tc.wantRun, got.Status)
 			require.Equal(t, tc.wantAttempt, attempts[0].Status)
@@ -566,7 +566,7 @@ func TestDAGSchedulerAppliesStructuredOutputMapping(t *testing.T) {
 	spec := domain.Spec{Nodes: []domain.Node{{ID: "mapped", Type: domain.NodeTypeAgent, AgentID: "agent", OutputMapping: map[string]string{"answer": "$.value"}}}}
 	runs, run := createPublishedRun(t, store, registry, spec)
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, `{"answer":"ok"}`, got.Output)
 	require.Equal(t, `{"answer":"ok"}`, attempts[0].OutputSummary)
@@ -580,7 +580,7 @@ func TestDAGSchedulerAppliesNestedOutputSelector(t *testing.T) {
 	spec := domain.Spec{Nodes: []domain.Node{{ID: "mapped", Type: domain.NodeTypeAgent, AgentID: "agent", OutputMapping: map[string]string{"name": "$.customer.name"}}}}
 	runs, run := createPublishedRun(t, store, registry, spec)
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, _, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, _, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, `{"name":"Ada"}`, got.Output)
 }

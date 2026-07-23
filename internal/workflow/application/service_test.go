@@ -115,6 +115,10 @@ type ids struct{ n int }
 
 func (i *ids) NewID() string { i.n++; return "id-" + string(rune('0'+i.n)) }
 
+func adminActor() application.Actor {
+	return application.Actor{UserID: "admin", Role: "admin"}
+}
+
 type agentStub struct {
 	calls []string
 	fail  string
@@ -163,7 +167,7 @@ func TestRunServiceIdempotencyAndSequentialExecution(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrIdempotencyConflict)
 
 	require.NoError(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusCompleted, got.Status)
 	require.Equal(t, "output-agent-2", got.Output)
@@ -181,7 +185,7 @@ func TestRunServiceStopsAfterUpstreamFailure(t *testing.T) {
 	run, _, err := runs.Start(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "hello"}, IdempotencyKey: "failure"})
 	require.NoError(t, err)
 	require.Error(t, runs.Execute(context.Background(), "tenant-1", run.ID))
-	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, attempts, err := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusFailed, got.Status)
 	require.Len(t, attempts, 1)
@@ -200,7 +204,7 @@ func TestRunServiceStartAsyncOnlyPersistsQueuedRun(t *testing.T) {
 	require.True(t, created)
 	require.Equal(t, "user-a", run.CreatedBy)
 	time.Sleep(30 * time.Millisecond)
-	got, _, getErr := runs.Get(context.Background(), "tenant-1", run.ID)
+	got, _, getErr := runs.Get(context.Background(), "tenant-1", run.ID, adminActor())
 	require.NoError(t, getErr)
 	require.Equal(t, domain.RunStatusQueued, got.Status)
 	require.Empty(t, agents.calls)

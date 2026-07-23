@@ -722,17 +722,30 @@ func selectedConditionEdges(spec domain.Spec, nodeID string, value bool) []strin
 	return selected
 }
 
-func (s *RunService) Get(ctx context.Context, tenantID, runID string) (*domain.Run, []domain.NodeAttempt, error) {
+func (s *RunService) Get(ctx context.Context, tenantID, runID string, actor Actor) (*domain.Run, []domain.NodeAttempt, error) {
 	run, err := s.store.GetRun(ctx, tenantID, runID)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := authorizeRun(run, actor, RunActionRead); err != nil {
 		return nil, nil, err
 	}
 	attempts, err := s.store.ListAttempts(ctx, tenantID, runID)
 	return run, attempts, err
 }
 
-func (s *RunService) Events(ctx context.Context, tenantID, runID string, after int64, limit int) ([]domain.Event, error) {
-	if _, err := s.store.GetRun(ctx, tenantID, runID); err != nil {
+func (s *RunService) Events(
+	ctx context.Context,
+	tenantID, runID string,
+	actor Actor,
+	after int64,
+	limit int,
+) ([]domain.Event, error) {
+	run, err := s.store.GetRun(ctx, tenantID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if err := authorizeRun(run, actor, RunActionEvents); err != nil {
 		return nil, err
 	}
 	if limit <= 0 || limit > 1000 {

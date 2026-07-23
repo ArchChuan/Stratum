@@ -58,8 +58,8 @@ func (h *WorkflowHandler) GetVersion(c *gin.Context) {
 
 type workflowRunService interface {
 	StartAsync(context.Context, string, workflowapp.StartRunCommand) (*workflowdomain.Run, bool, error)
-	Get(context.Context, string, string) (*workflowdomain.Run, []workflowdomain.NodeAttempt, error)
-	Events(context.Context, string, string, int64, int) ([]workflowdomain.Event, error)
+	Get(context.Context, string, string, workflowapp.Actor) (*workflowdomain.Run, []workflowdomain.NodeAttempt, error)
+	Events(context.Context, string, string, workflowapp.Actor, int64, int) ([]workflowdomain.Event, error)
 }
 
 type WorkflowHandler struct {
@@ -69,14 +69,14 @@ type WorkflowHandler struct {
 }
 
 type workflowControlService interface {
-	Cancel(context.Context, string, string, int64, string, string) (*workflowdomain.Run, error)
-	Pause(context.Context, string, string, int64, string, string) (*workflowdomain.Run, error)
-	Resume(context.Context, string, string, int64, string) (*workflowdomain.Run, error)
+	Cancel(context.Context, string, string, int64, workflowapp.Actor, string) (*workflowdomain.Run, error)
+	Pause(context.Context, string, string, int64, workflowapp.Actor, string) (*workflowdomain.Run, error)
+	Resume(context.Context, string, string, int64, workflowapp.Actor) (*workflowdomain.Run, error)
 	DecideApproval(context.Context, string, workflowapp.DecideApprovalCommand) error
 	ResolveManual(context.Context, string, workflowapp.ResolveManualCommand) error
-	AvailableActions(context.Context, string, string) ([]string, error)
-	ListApprovals(context.Context, string, string, bool) ([]workflowdomain.Approval, error)
-	ListEffects(context.Context, string, string) ([]workflowdomain.EffectIntent, error)
+	AvailableActions(context.Context, string, string, workflowapp.Actor) ([]string, error)
+	ListApprovals(context.Context, string, string, workflowapp.Actor, bool) ([]workflowdomain.Approval, error)
+	ListEffects(context.Context, string, string, workflowapp.Actor) ([]workflowdomain.EffectIntent, error)
 }
 
 func NewWorkflowHandler(definitions workflowDefinitionService, runs workflowRunService) *WorkflowHandler {
@@ -158,12 +158,17 @@ func (h *WorkflowHandler) StartRun(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	actor, ok := workflowActor(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
+		return
+	}
 	var req dto.StartWorkflowRunRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	run, created, err := h.runs.StartAsync(c.Request.Context(), tenantID, workflowapp.StartRunCommand{VersionID: req.VersionID, Input: req.Input, IdempotencyKey: req.IdempotencyKey})
+	run, created, err := h.runs.StartAsync(c.Request.Context(), tenantID, workflowapp.StartRunCommand{VersionID: req.VersionID, Input: req.Input, IdempotencyKey: req.IdempotencyKey, CreatedBy: actor.UserID})
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -181,7 +186,12 @@ func (h *WorkflowHandler) GetRun(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	run, attempts, err := h.runs.Get(c.Request.Context(), tenantID, c.Param("id"))
+	actor, ok := workflowActor(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
+		return
+	}
+	run, attempts, err := h.runs.Get(c.Request.Context(), tenantID, c.Param("id"), actor)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -196,14 +206,25 @@ func (h *WorkflowHandler) GetRun(c *gin.Context) {
 	approvals := []workflowdomain.Approval{}
 	effects := []workflowdomain.EffectIntent{}
 	if h.controls != nil {
-		actions, _ = h.controls.AvailableActions(c.Request.Context(), tenantID, run.ID)
-		approvals, _ = h.controls.ListApprovals(c.Request.Context(), tenantID, run.ID, false)
-		effects, _ = h.controls.ListEffects(c.Request.Context(), tenantID, run.ID)
+		actions, _ = h.controls.AvailableActions(c.Request.Context(), tenantID, run.ID, actor)
+		approvals, _ = h.controls.ListApprovals(c.Request.Context(), tenantID, run.ID, actor, false)
+		effects, _ = h.controls.ListEffects(c.Request.Context(), tenantID, run.ID, actor)
 	}
 	c.JSON(http.StatusOK, gin.H{"run": run, "node_attempts": attempts, "approvals": approvals, "effect_intents": effects, "progress": gin.H{"completed": completed, "total": len(run.Snapshot.Nodes)}, "available_actions": actions})
 }
 
-func workflowActor(c *gin.Context) (string, bool) { return userIDFromCtx(c) }
+func workflowActor(c *gin.Context) (workflowapp.Actor, bool) {
+	userID, ok := userIDFromCtx(c)
+	if !ok {
+		return workflowapp.Actor{}, false
+	}
+	roleValue, ok := c.Get(middleware.ContextKeyRole)
+	role, roleOK := roleValue.(string)
+	if !ok || !roleOK || role == "" {
+		return workflowapp.Actor{}, false
+	}
+	return workflowapp.Actor{UserID: userID, Role: role}, true
+}
 func (h *WorkflowHandler) controlRun(c *gin.Context, action string) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
@@ -245,8 +266,13 @@ func (h *WorkflowHandler) ListApprovals(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	actor, ok := workflowActor(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
+		return
+	}
 	pending := c.Query("pending") != "false"
-	rows, err := h.controls.ListApprovals(c.Request.Context(), tenantID, c.Query("run_id"), pending)
+	rows, err := h.controls.ListApprovals(c.Request.Context(), tenantID, c.Query("run_id"), actor, pending)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -269,7 +295,7 @@ func (h *WorkflowHandler) DecideApproval(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	err := h.controls.DecideApproval(c.Request.Context(), tenantID, workflowapp.DecideApprovalCommand{ApprovalID: c.Param("id"), RunID: req.RunID, AttemptID: req.AttemptID, ExpectedGeneration: req.ExpectedGeneration, Decision: req.Decision, ActorID: actor, Comment: req.Comment})
+	err := h.controls.DecideApproval(c.Request.Context(), tenantID, workflowapp.DecideApprovalCommand{ApprovalID: c.Param("id"), RunID: req.RunID, AttemptID: req.AttemptID, ExpectedGeneration: req.ExpectedGeneration, Decision: req.Decision, ActorID: actor.UserID, ActorRole: actor.Role, Comment: req.Comment})
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -292,7 +318,7 @@ func (h *WorkflowHandler) ResolveManual(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	err := h.controls.ResolveManual(c.Request.Context(), tenantID, workflowapp.ResolveManualCommand{RunID: c.Param("id"), EffectIntentID: c.Param("effectID"), ExpectedGeneration: req.ExpectedGeneration, Action: req.Action, OutputSummary: req.OutputSummary, ActorID: actor})
+	err := h.controls.ResolveManual(c.Request.Context(), tenantID, workflowapp.ResolveManualCommand{RunID: c.Param("id"), EffectIntentID: c.Param("effectID"), ExpectedGeneration: req.ExpectedGeneration, Action: req.Action, OutputSummary: req.OutputSummary, ActorID: actor.UserID, ActorRole: actor.Role})
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -306,12 +332,17 @@ func (h *WorkflowHandler) GetEvents(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	actor, ok := workflowActor(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
+		return
+	}
 	after, err := parseSequence(c.Query("after_sequence"))
 	if err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	events, err := h.runs.Events(c.Request.Context(), tenantID, c.Param("id"), after, 500)
+	events, err := h.runs.Events(c.Request.Context(), tenantID, c.Param("id"), actor, after, 500)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -323,6 +354,11 @@ func (h *WorkflowHandler) StreamEvents(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {
 		respondMissingTenant(c)
+		return
+	}
+	actor, ok := workflowActor(c)
+	if !ok {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("authenticated actor required")))
 		return
 	}
 	cursor := c.GetHeader("Last-Event-ID")
@@ -345,7 +381,7 @@ func (h *WorkflowHandler) StreamEvents(c *gin.Context) {
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 	for {
-		events, queryErr := h.runs.Events(c.Request.Context(), tenantID, c.Param("id"), eventCursor, 200)
+		events, queryErr := h.runs.Events(c.Request.Context(), tenantID, c.Param("id"), actor, eventCursor, 200)
 		if queryErr != nil {
 			return
 		}
@@ -365,7 +401,7 @@ func (h *WorkflowHandler) StreamEvents(c *gin.Context) {
 		if len(events) == 200 {
 			continue
 		}
-		run, _, getErr := h.runs.Get(c.Request.Context(), tenantID, c.Param("id"))
+		run, _, getErr := h.runs.Get(c.Request.Context(), tenantID, c.Param("id"), actor)
 		if getErr != nil {
 			return
 		}

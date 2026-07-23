@@ -146,7 +146,8 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, iamapp.ErrForbiddenRemoveOwner),
 		errors.Is(err, iamapp.ErrForbiddenAdminRemove),
 		errors.Is(err, memorydomain.ErrAgentMemoryDisabled),
-		errors.Is(err, memorydomain.ErrScopeMismatch):
+		errors.Is(err, memorydomain.ErrScopeMismatch),
+		errors.Is(err, workflowdomain.ErrForbidden):
 		return http.StatusForbidden
 
 	// 400 — Validation / Bad Request
