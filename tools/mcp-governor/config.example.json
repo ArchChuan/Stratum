@@ -1,14 +1,98 @@
 {
-  "version": 1,
+  "version": 2,
   "output_path": "%h/.local/state/mcp-governor/snapshot.json",
   "registry_path": "%h/.local/state/mcp-governor/registry.json",
+  "observation": {
+    "events_dir": "%h/.local/state/mcp-governor/events",
+    "reports_dir": "%h/.local/state/mcp-governor/reports",
+    "salt_path": "%h/.config/mcp-governor/identity-salt",
+    "raw_retention_days": 14
+  },
   "services": [
-    { "name": "chroma", "all_args_contain": ["chroma-mcp", "--client-type"] },
-    { "name": "codegraph", "all_args_contain": ["/codegraph", "serve", "--mcp"] },
-    { "name": "obsidian", "all_args_contain": ["obsidian-mcp-server"] },
-    { "name": "claude-mem", "all_args_contain": ["claude-mem", "scripts/mcp-server.cjs"] },
-    { "name": "headroom", "all_args_contain": ["/headroom", "mcp", "serve"] },
-    { "name": "playwright", "all_args_contain": ["playwright-mcp"] },
-    { "name": "chrome-devtools", "all_args_contain": ["chrome-devtools-mcp", "--headless"] }
+    {
+      "name": "chroma", "command": "uvx", "args": ["chroma-mcp", "--client-type", "persistent"], "cwd": "%h",
+      "transport": "stdio", "scope": "user", "session_policy": "isolated",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["chroma-mcp", "--client-type"]
+    },
+    {
+      "name": "codegraph", "command": "codegraph", "args": ["serve", "--mcp"], "cwd": "%h",
+      "transport": "stdio", "scope": "repository", "session_policy": "isolated",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["/codegraph", "serve", "--mcp"]
+    },
+    {
+      "name": "code-review-graph", "command": "npx", "args": ["-y", "code-review-graph", "--mcp"], "cwd": "%h",
+      "transport": "stdio", "scope": "repository", "session_policy": "isolated",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["code-review-graph", "--mcp"]
+    },
+    {
+      "name": "codebase-memory", "command": "npx", "args": ["-y", "codebase-memory-mcp"], "cwd": "%h",
+      "transport": "stdio", "scope": "repository", "session_policy": "isolated",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["codebase-memory-mcp"]
+    },
+    {
+      "name": "obsidian", "command": "npx", "args": ["-y", "obsidian-mcp-server"], "cwd": "%h",
+      "transport": "stdio", "scope": "user", "session_policy": "isolated",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["obsidian-mcp-server"]
+    },
+    {
+      "name": "claude-mem", "command": "node", "args": ["%h/.claude/plugins/claude-mem/scripts/mcp-server.cjs"], "cwd": "%h",
+      "transport": "stdio", "scope": "user", "session_policy": "isolated",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["claude-mem", "scripts/mcp-server.cjs"]
+    },
+    {
+      "name": "headroom", "command": "headroom", "args": ["mcp", "serve"], "cwd": "%h",
+      "transport": "stdio", "scope": "user", "session_policy": "isolated",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["/headroom", "mcp", "serve"]
+    },
+    {
+      "name": "playwright", "command": "npx", "args": ["-y", "playwright-mcp"], "cwd": "%h",
+      "transport": "stdio", "scope": "session", "session_policy": "session_local",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["playwright-mcp"]
+    },
+    {
+      "name": "chrome-devtools", "command": "npx", "args": ["-y", "chrome-devtools-mcp@latest", "--headless"], "cwd": "%h",
+      "transport": "stdio", "scope": "session", "session_policy": "session_local",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["chrome-devtools-mcp", "--headless"]
+    },
+    {
+      "name": "yinxiang", "command": "npx", "args": ["-y", "yinxiang-mcp"], "cwd": "%h",
+      "transport": "stdio", "scope": "user", "session_policy": "isolated",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["yinxiang-mcp"]
+    },
+    {
+      "name": "fetch", "command": "uvx", "args": ["mcp-server-fetch"], "cwd": "%h",
+      "transport": "stdio", "scope": "session", "session_policy": "session_local",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["mcp-server-fetch"]
+    },
+    {
+      "name": "memory", "command": "npx", "args": ["-y", "mcp-server-memory"], "cwd": "%h",
+      "transport": "stdio", "scope": "user", "session_policy": "isolated",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["mcp-server-memory"]
+    },
+    {
+      "name": "sequential-thinking", "command": "npx", "args": ["-y", "mcp-server-sequential-thinking"], "cwd": "%h",
+      "transport": "stdio", "scope": "session", "session_policy": "session_local",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["mcp-server-sequential-thinking"]
+    },
+    {
+      "name": "mcp-delve", "command": "mcp-delve", "args": [], "cwd": "%h",
+      "transport": "stdio", "scope": "repository", "session_policy": "isolated",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["mcp-delve"]
+    },
+    {
+      "name": "tokensave", "command": "npx", "args": ["-y", "tokensave-mcp"], "cwd": "%h",
+      "transport": "stdio", "scope": "session", "session_policy": "session_local",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["tokensave-mcp"]
+    },
+    {
+      "name": "context7", "command": "npx", "args": ["-y", "context7-mcp"], "cwd": "%h",
+      "transport": "stdio", "scope": "session", "session_policy": "session_local",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["context7-mcp"]
+    },
+    {
+      "name": "figma", "command": "npx", "args": ["-y", "figma-developer-mcp"], "cwd": "%h",
+      "transport": "stdio", "scope": "session", "session_policy": "session_local",
+      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["figma-developer-mcp"]
+    }
   ]
 }

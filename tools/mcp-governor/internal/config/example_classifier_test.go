@@ -34,11 +34,21 @@ func TestExampleConfigClassifiesReviewedCommands(t *testing.T) {
 	}{
 		{"chroma", []string{"python", "/opt/bin/chroma-mcp", "--client-type", "persistent"}},
 		{"codegraph", []string{"/opt/codegraph", "serve", "--mcp"}},
+		{"code-review-graph", []string{"code-review-graph", "--mcp"}},
+		{"codebase-memory", []string{"codebase-memory-mcp"}},
 		{"obsidian", []string{"node", "/opt/obsidian-mcp-server"}},
 		{"claude-mem", []string{"node", "/opt/claude-mem/plugin/scripts/mcp-server.cjs"}},
 		{"headroom", []string{"python", "/opt/headroom", "mcp", "serve"}},
 		{"playwright", []string{"node", "/opt/playwright-mcp"}},
 		{"chrome-devtools", []string{"npm", "exec", "chrome-devtools-mcp@latest", "--headless"}},
+		{"yinxiang", []string{"yinxiang-mcp"}},
+		{"fetch", []string{"mcp-server-fetch"}},
+		{"memory", []string{"mcp-server-memory"}},
+		{"sequential-thinking", []string{"mcp-server-sequential-thinking"}},
+		{"mcp-delve", []string{"mcp-delve"}},
+		{"tokensave", []string{"tokensave-mcp"}},
+		{"context7", []string{"context7-mcp"}},
+		{"figma", []string{"figma-developer-mcp"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.service, func(t *testing.T) {

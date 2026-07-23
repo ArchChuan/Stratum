@@ -10,16 +10,68 @@ import (
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/jsonstrict"
 )
 
+const (
+	minRawRetentionDays = 7
+	maxRawRetentionDays = 90
+)
+
+type Transport string
+
+const (
+	TransportStdio          Transport = "stdio"
+	TransportStreamableHTTP Transport = "streamable_http"
+	TransportSSE            Transport = "sse"
+)
+
+type Scope string
+
+const (
+	ScopeUser       Scope = "user"
+	ScopeRepository Scope = "repository"
+	ScopeSession    Scope = "session"
+)
+
+type SessionPolicy string
+
+const (
+	SessionPolicyIsolated     SessionPolicy = "isolated"
+	SessionPolicySessionLocal SessionPolicy = "session_local"
+)
+
+type Client string
+
+const (
+	ClientCodex  Client = "codex"
+	ClientClaude Client = "claude"
+	ClientVSCode Client = "vscode"
+	ClientLingma Client = "lingma"
+)
+
+type Observation struct {
+	EventsDir        string `json:"events_dir"`
+	ReportsDir       string `json:"reports_dir"`
+	SaltPath         string `json:"salt_path"`
+	RawRetentionDays int    `json:"raw_retention_days"`
+}
+
 type Config struct {
 	Version      int           `json:"version"`
 	OutputPath   string        `json:"output_path"`
 	RegistryPath string        `json:"registry_path"`
+	Observation  Observation   `json:"observation"`
 	Services     []ServiceRule `json:"services"`
 }
 
 type ServiceRule struct {
-	Name           string   `json:"name"`
-	AllArgsContain []string `json:"all_args_contain"`
+	Name           string        `json:"name"`
+	Command        string        `json:"command"`
+	Args           []string      `json:"args"`
+	Cwd            string        `json:"cwd"`
+	Transport      Transport     `json:"transport"`
+	Scope          Scope         `json:"scope"`
+	SessionPolicy  SessionPolicy `json:"session_policy"`
+	Clients        []Client      `json:"clients"`
+	AllArgsContain []string      `json:"all_args_contain"`
 }
 
 func Decode(r io.Reader) (Config, error) {
@@ -45,15 +97,15 @@ func Decode(r io.Reader) (Config, error) {
 		}
 		return Config{}, fmt.Errorf("decode config trailing data: %w", err)
 	}
-	if err := validate(cfg); err != nil {
+	if err := validate(&cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
 }
 
-func validate(cfg Config) error {
-	if cfg.Version != 1 {
-		return fmt.Errorf("config version must be 1, got %d", cfg.Version)
+func validate(cfg *Config) error {
+	if cfg.Version != 1 && cfg.Version != 2 {
+		return fmt.Errorf("config version must be 1 or 2, got %d", cfg.Version)
 	}
 	if strings.TrimSpace(cfg.OutputPath) == "" {
 		return fmt.Errorf("config output_path must not be empty")
@@ -64,9 +116,15 @@ func validate(cfg Config) error {
 	if len(cfg.Services) == 0 {
 		return fmt.Errorf("config services must contain at least one service")
 	}
+	if cfg.Version == 2 {
+		if err := validateObservation(cfg.Observation); err != nil {
+			return err
+		}
+	}
 
 	names := make(map[string]struct{}, len(cfg.Services))
-	for i, service := range cfg.Services {
+	for i := range cfg.Services {
+		service := &cfg.Services[i]
 		context := fmt.Sprintf("config services[%d]", i)
 		if strings.TrimSpace(service.Name) == "" {
 			return fmt.Errorf("%s name must not be empty", context)
@@ -75,6 +133,11 @@ func validate(cfg Config) error {
 			return fmt.Errorf("%s name %q is duplicate", context, service.Name)
 		}
 		names[service.Name] = struct{}{}
+		if cfg.Version == 1 {
+			applyVersion1Defaults(service)
+		} else if err := validateVersion2Service(*service, context); err != nil {
+			return err
+		}
 		if len(service.AllArgsContain) == 0 {
 			return fmt.Errorf("%s all_args_contain must contain at least one fragment", context)
 		}
@@ -90,4 +153,98 @@ func validate(cfg Config) error {
 		}
 	}
 	return nil
+}
+
+func applyVersion1Defaults(service *ServiceRule) {
+	service.Transport = TransportStdio
+	service.Scope = ScopeUser
+	service.SessionPolicy = SessionPolicyIsolated
+	service.Clients = []Client{ClientCodex, ClientClaude, ClientVSCode, ClientLingma}
+}
+
+func validateObservation(observation Observation) error {
+	paths := []struct {
+		name  string
+		value string
+	}{
+		{"events_dir", observation.EventsDir},
+		{"reports_dir", observation.ReportsDir},
+		{"salt_path", observation.SaltPath},
+	}
+	for _, path := range paths {
+		if strings.TrimSpace(path.value) == "" {
+			return fmt.Errorf("config observation %s must not be empty", path.name)
+		}
+	}
+	if observation.RawRetentionDays < minRawRetentionDays || observation.RawRetentionDays > maxRawRetentionDays {
+		return fmt.Errorf("config observation raw_retention_days must be between %d and %d", minRawRetentionDays,
+			maxRawRetentionDays)
+	}
+	return nil
+}
+
+func validateVersion2Service(service ServiceRule, context string) error {
+	if strings.TrimSpace(service.Command) == "" {
+		return fmt.Errorf("%s command must not be empty", context)
+	}
+	for i, arg := range service.Args {
+		if containsInlineCredential(arg) {
+			return fmt.Errorf("%s args[%d] must not contain an inline credential assignment", context, i)
+		}
+	}
+	if !validTransport(service.Transport) {
+		return fmt.Errorf("%s transport %q is invalid", context, service.Transport)
+	}
+	if !validScope(service.Scope) {
+		return fmt.Errorf("%s scope %q is invalid", context, service.Scope)
+	}
+	if !validSessionPolicy(service.SessionPolicy) {
+		return fmt.Errorf("%s session_policy %q is invalid", context, service.SessionPolicy)
+	}
+	if service.Scope == ScopeRepository && service.SessionPolicy != SessionPolicyIsolated {
+		return fmt.Errorf("%s session_policy must be isolated for repository scope", context)
+	}
+	if service.Scope == ScopeSession && service.SessionPolicy != SessionPolicySessionLocal {
+		return fmt.Errorf("%s session_policy must be session_local for session scope", context)
+	}
+	if len(service.Clients) == 0 {
+		return fmt.Errorf("%s clients must contain at least one client", context)
+	}
+	clients := make(map[Client]struct{}, len(service.Clients))
+	for i, client := range service.Clients {
+		if !validClient(client) {
+			return fmt.Errorf("%s clients[%d] %q is invalid", context, i, client)
+		}
+		if _, exists := clients[client]; exists {
+			return fmt.Errorf("%s clients[%d] %q is duplicate", context, i, client)
+		}
+		clients[client] = struct{}{}
+	}
+	return nil
+}
+
+func containsInlineCredential(arg string) bool {
+	lower := strings.ToLower(arg)
+	for _, key := range []string{"token", "password", "secret", "api-key", "api_key"} {
+		if strings.Contains(lower, key+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func validTransport(value Transport) bool {
+	return value == TransportStdio || value == TransportStreamableHTTP || value == TransportSSE
+}
+
+func validScope(value Scope) bool {
+	return value == ScopeUser || value == ScopeRepository || value == ScopeSession
+}
+
+func validSessionPolicy(value SessionPolicy) bool {
+	return value == SessionPolicyIsolated || value == SessionPolicySessionLocal
+}
+
+func validClient(value Client) bool {
+	return value == ClientCodex || value == ClientClaude || value == ClientVSCode || value == ClientLingma
 }
