@@ -23,9 +23,10 @@ repo_root="$2"
 knowledge_is_stratum_root "$repo_root" || fail "repository root is not Stratum"
 
 script_root="$repo_root/scripts/knowledge-deposition"
-for adapter in codex-task-start.sh codex-stop.sh claude-task-start.sh claude-stop.sh; do
-  [[ -f "$script_root/$adapter" && -r "$script_root/$adapter" && ! -L "$script_root/$adapter" ]] || \
-    fail "required adapter is missing, unreadable, or a symlink: $adapter"
+runtime_files=(common.sh hook-core.sh check.sh report.sh codex-task-start.sh codex-stop.sh claude-task-start.sh claude-stop.sh install-hooks.sh)
+for runtime_file in "${runtime_files[@]}"; do
+  [[ -f "$script_root/$runtime_file" && -r "$script_root/$runtime_file" && ! -L "$script_root/$runtime_file" ]] || \
+    fail "required runtime file is missing, unreadable, or a symlink: $runtime_file"
 done
 
 codex_config="${CODEX_HOOKS_JSON:-${HOME:?HOME is required}/.codex/hooks.json}"

@@ -79,11 +79,9 @@ mkdir -p "$report_dir"
 knowledge_path_within_root "$repo_root" "$report_dir" || { knowledge_fail 'report directory is unsafe'; exit 1; }
 normalized_tmp="$(mktemp "$report_dir/.normalized.XXXXXX")"
 markdown_tmp=''
-latest_tmp=''
 cleanup() {
   rm -f "$normalized_tmp"
   [[ -z "$markdown_tmp" ]] || rm -f "$markdown_tmp"
-  [[ -z "$latest_tmp" ]] || rm -f "$latest_tmp"
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -131,19 +129,6 @@ if [[ "${KNOWLEDGE_REPORT_TEST_FAIL_SECOND_PUBLISH:-}" == '1' ]] || ! mv "$markd
 fi
 markdown_tmp=''
 
-latest_tmp="$(mktemp "$repo_root/tmp/knowledge-deposition/.latest.XXXXXX")"
-{
-  printf '# Latest knowledge deposition reports\n'
-  find "$repo_root/tmp/knowledge-deposition" -mindepth 2 -type f \
-    \( -name '*.json' -o -name '*.md' \) \
-    ! -path "$repo_root/tmp/knowledge-deposition/current/*" -print0 |
-    sort -z |
-    while IFS= read -r -d '' path; do
-      relative="${path#"$repo_root/tmp/knowledge-deposition/"}"
-      printf -- '- [%s](%s)\n' "$relative" "$relative"
-    done
-} >"$latest_tmp"
-mv -f "$latest_tmp" "$latest_path"
-latest_tmp=''
+knowledge_rebuild_latest "$repo_root" || { knowledge_fail 'failed to rebuild latest report index'; exit 1; }
 
 printf '%s\n' "$markdown_path"

@@ -78,6 +78,29 @@ knowledge_report_basename() {
   printf '%s-%s-%s\n' "$client" "$session" "$task"
 }
 
+# Caller must hold tmp/knowledge-deposition/.lock/report.lock.
+knowledge_rebuild_latest() {
+  local root="$1" knowledge_root latest_path latest_tmp json_path markdown_path relative path
+  knowledge_root="$root/tmp/knowledge-deposition"
+  latest_path="$knowledge_root/latest.md"
+  knowledge_path_within_root "$root" "$latest_path" || return 1
+  [[ ! -L "$latest_path" && ( ! -e "$latest_path" || -f "$latest_path" ) ]] || return 1
+  latest_tmp="$(mktemp "$knowledge_root/.latest.XXXXXX")" || return 1
+  {
+    printf '# Latest knowledge deposition reports\n'
+    while IFS= read -r -d '' json_path; do
+      markdown_path="${json_path%.json}.md"
+      [[ ! -L "$json_path" && -f "$json_path" && ! -L "$markdown_path" && -f "$markdown_path" ]] || continue
+      for path in "$json_path" "$markdown_path"; do
+        relative="${path#"$knowledge_root/"}"
+        printf -- '- [%s](%s)\n' "$relative" "$relative"
+      done
+    done < <(find "$knowledge_root" -mindepth 2 -maxdepth 2 -type f \
+      -path "$knowledge_root/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/*.json" -print0 | sort -z)
+  } >"$latest_tmp" || { rm -f -- "$latest_tmp"; return 1; }
+  mv -f -- "$latest_tmp" "$latest_path" || { rm -f -- "$latest_tmp"; return 1; }
+}
+
 knowledge_path_within_root() {
   local root="$1" path="$2" relative current component
   [[ "$path" == "$root" || "$path" == "$root/"* ]] || return 1

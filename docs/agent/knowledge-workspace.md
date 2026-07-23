@@ -512,17 +512,21 @@ bash scripts/knowledge-deposition/install-hooks.sh --repo-root /home/yang/go-pro
 客户端的 Stop hook，避免生命周期半启用。备份缺失或来源不明时停止操作，先从受信配置副本恢复。
 
 功能分支不得注册真实用户 hook：主 checkout 尚无 `scripts/knowledge-deposition/` 时安装器不具备稳定目标，
-因此合并前只允许在私有临时配置副本中验收。合并后先确认主 checkout 含四个 adapter 和安装器，再记录
-真实配置哈希、执行安装、复核每客户端各一个受管 start/stop，最后在新的真实客户端 session 验证一次
+因此合并前只允许在私有临时配置副本中验收。合并后先确认主 checkout 的完整运行时 bundle 均为可读、常规、
+非符号链接文件：`common.sh`、`hook-core.sh`、`check.sh`、`report.sh`、Codex/Claude 各自的 task-start/stop
+adapter，以及 `install-hooks.sh`。安装器在修改任一配置前执行同一完整性门禁。随后再记录真实配置哈希、执行安装、
+复核每客户端各一个受管 start/stop，最后在新的真实客户端 session 验证一次
 prompt → 缺报告 Stop 阻断 → `decision: "none"` 报告 → Stop 放行；异常时用配对备份整体回滚。
 
 ### 12.3 当前客户端证据与限制（2026-07-23）
 
-- 本地版本为 Codex CLI `0.144.6`、Claude Code `2.1.211`。只读检查已注册事件结构；验收前后真实
+- 以下版本与真实配置事实仅是 2026-07-23 的一次性人工观察，不是 Git 中可重复执行的回归证据：当时本地版本为
+  Codex CLI `0.144.6`、Claude Code `2.1.211`；只读检查已注册事件结构，验收前后真实
   `~/.codex/hooks.json` 与 `~/.claude/settings.json` 内容哈希保持不变，且未注册本功能分支。
 - 两个 CLI 的公开帮助均未提供受支持的 hook dry-run 或可脚本化真实 Stop 驱动。最接近真实客户端的证据是：
-  将真实配置复制到权限隔离的临时目录、在副本上运行安装器，以及把真实 `UserPromptSubmit`/`Stop` JSON
-  payload 直接送入四个 adapter，贯通 current 标记、`report.sh`、报告文件和 Stop 判定。该证据不能宣称
-  已完成真实交互客户端 Stop E2E；合并安装后的新 session 验证仍是发布步骤。
-- `report-test.sh` 49 项、`hooks-test.sh` 38 项覆盖主路径、门禁、并发/持久化、失败恢复、安装幂等与回滚；
+  2026-07-23 曾人工将真实配置复制到权限隔离的临时目录并在副本上运行安装器，再把真实
+  `UserPromptSubmit`/`Stop` JSON payload 直接送入四个 adapter。该私有本地副本的内容未打印、未保留，也不在
+  Git 中；不能由提交内容重放或宣称已完成真实交互客户端 Stop E2E。合并安装后的新 session 验证仍是发布步骤。
+- 自动化 `report-test.sh` 与 `hooks-test.sh` 只使用测试生成的仓库和配置 fixtures，覆盖主路径、门禁、
+  并发/持久化、失败恢复、安装幂等与回滚；
   后端、前端、浏览器、HTTP API 和数据库均不参与这条纯本地文件系统/配置链路。

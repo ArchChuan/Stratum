@@ -13,23 +13,39 @@ FIXTURES="$(mktemp -d)"
 actual_marker=''
 actual_json=''
 actual_md=''
-actual_latest=''
-actual_latest_backup=''
-actual_latest_existed=false
+actual_root=''
+actual_other_marker=''
+actual_other_json=''
+actual_other_md=''
 
 cleanup_actual_root() {
+  local date_dir=''
+  [[ -z "$actual_root" || ! -d "$actual_root" ]] && return 0
+  [[ -z "$actual_marker" && -z "$actual_json" && -z "$actual_md" ]] && return 0
+  knowledge_open_private_lock "$actual_root" || return 1
   [[ -z "$actual_marker" ]] || rm -f -- "$actual_marker"
-  [[ -z "$actual_json" ]] || rm -f -- "$actual_json"
+  [[ -z "$actual_json" ]] || { date_dir="$(dirname "$actual_json")"; rm -f -- "$actual_json"; }
   [[ -z "$actual_md" ]] || rm -f -- "$actual_md"
-  if [[ "$actual_latest_existed" == true && -n "$actual_latest_backup" && -f "$actual_latest_backup" ]]; then
-    cp -- "$actual_latest_backup" "$actual_latest"
-  elif [[ -n "$actual_latest" ]]; then
-    rm -f -- "$actual_latest"
-  fi
+  knowledge_rebuild_latest "$actual_root" || return 1
+  [[ -z "$date_dir" ]] || rmdir "$date_dir" 2>/dev/null || true
+  rmdir "$actual_root/tmp/knowledge-deposition/current" 2>/dev/null || true
+  flock -u 9
+  exec 9<&-
 }
 
 cleanup() {
   cleanup_actual_root
+  if [[ -n "$actual_root" && -d "$actual_root" && ( -n "$actual_other_marker" || -n "$actual_other_json" || -n "$actual_other_md" ) ]]; then
+    knowledge_open_private_lock "$actual_root" || true
+    [[ -z "$actual_other_marker" ]] || rm -f -- "$actual_other_marker"
+    [[ -z "$actual_other_json" ]] || { other_date_dir="$(dirname "$actual_other_json")"; rm -f -- "$actual_other_json"; }
+    [[ -z "$actual_other_md" ]] || rm -f -- "$actual_other_md"
+    knowledge_rebuild_latest "$actual_root" || true
+    [[ -z "${other_date_dir:-}" ]] || rmdir "$other_date_dir" 2>/dev/null || true
+    rmdir "$actual_root/tmp/knowledge-deposition/current" 2>/dev/null || true
+    flock -u 9 2>/dev/null || true
+    exec 9<&- 2>/dev/null || true
+  fi
   rm -rf "$FIXTURES"
 }
 trap cleanup EXIT
@@ -103,12 +119,6 @@ pass "all adapters exist"
 
 actual_root="$(git -C "$SCRIPT_DIR/../.." rev-parse --show-toplevel)"
 actual_raw_session="actual-root-$(date +%s%N)-$RANDOM"
-actual_latest="$actual_root/tmp/knowledge-deposition/latest.md"
-actual_latest_backup="$FIXTURES/actual-latest.md"
-if [[ -f "$actual_latest" ]]; then
-  cp -- "$actual_latest" "$actual_latest_backup"
-  actual_latest_existed=true
-fi
 actual_out="$(run_hook "$CODEX_START" "$(payload "$actual_root" "$actual_raw_session" UserPromptSubmit)")"
 jq -e '.continue == true and (.systemMessage | contains("Knowledge deposition task gate active."))' \
   <<<"$actual_out" >/dev/null || fail "actual feature worktree was treated as non-Stratum"
@@ -127,8 +137,30 @@ jq -e --arg root "$actual_root" --arg session "$actual_session" --arg task "$act
 actual_stop="$(run_hook "$CODEX_STOP" "$(payload "$actual_root" "$actual_raw_session" Stop false)")"
 jq -e '.continue == true and .suppressOutput == true' <<<"$actual_stop" >/dev/null || \
   fail "actual feature worktree Stop did not allow quietly"
+actual_other_raw_session="actual-other-$(date +%s%N)-$RANDOM"
+actual_other_out="$(run_hook "$CODEX_START" "$(payload "$actual_root" "$actual_other_raw_session" UserPromptSubmit)")"
+actual_other_session="$(jq -er '.systemMessage | capture("--session (?<value>[^ ]+) --task").value' <<<"$actual_other_out")"
+actual_other_task="$(jq -er '.systemMessage | capture("--task (?<value>[^ ]+) --repo-root").value' <<<"$actual_other_out")"
+actual_other_marker="$actual_root/tmp/knowledge-deposition/current/codex-$actual_other_session.json"
+actual_other_report="$(printf '%s' "$(valid_none)" | "$REPORT" --client codex --session "$actual_other_session" \
+  --task "$actual_other_task" --repo-root "$actual_root")" || fail "concurrent actual-root report failed"
+actual_other_md="$actual_other_report"
+actual_other_json="${actual_other_report%.md}.json"
 cleanup_actual_root
-actual_marker=''; actual_json=''; actual_md=''; actual_latest=''; actual_latest_backup=''; actual_latest_existed=false
+[[ -f "$actual_other_json" && -f "$actual_other_md" && -f "$actual_other_marker" ]] || \
+  fail "actual-root cleanup deleted a later report"
+grep -Fq "$(basename "$actual_other_json")" "$actual_root/tmp/knowledge-deposition/latest.md" || \
+  fail "actual-root cleanup dropped a later report from latest"
+knowledge_open_private_lock "$actual_root" || fail "could not lock concurrent actual-root cleanup"
+rm -f -- "$actual_other_marker" "$actual_other_json" "$actual_other_md"
+knowledge_rebuild_latest "$actual_root" || fail "could not rebuild latest after concurrent cleanup"
+actual_other_date_dir="$(dirname "$actual_other_json")"
+rmdir "$actual_other_date_dir" 2>/dev/null || true
+rmdir "$actual_root/tmp/knowledge-deposition/current" 2>/dev/null || true
+flock -u 9
+exec 9<&-
+actual_other_marker=''; actual_other_json=''; actual_other_md=''
+actual_marker=''; actual_json=''; actual_md=''
 pass "actual feature worktree completes task start, report, and Stop lifecycle"
 
 repo="$(new_repo main)"
@@ -438,6 +470,26 @@ jq -n '{theme:"dark",hooks:{UserPromptSubmit:[{matcher:"keep-metadata"},{matcher
 jq -n '{permissions:{allow:["Read"]},hooks:{UserPromptSubmit:[{hooks:[{type:"command",command:"echo claude-start"},{type:"command",command:"bash /old/repo\\;meta/scripts/knowledge-deposition/claude-task-start.sh"}]}],Stop:[{hooks:[{type:"command",command:"echo claude-stop"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/claude-stop.sh"},{type:"command",command:"true && bash /prior/scripts/knowledge-deposition/claude-stop.sh"}]}]}}' >"$claude_config"
 codex_original="$(cat "$codex_config")"
 claude_original="$(cat "$claude_config")"
+runtime_files=(common.sh hook-core.sh check.sh report.sh codex-task-start.sh codex-stop.sh claude-task-start.sh claude-stop.sh install-hooks.sh)
+for missing_runtime in "${runtime_files[@]}"; do
+  bundle_repo="$(new_repo "bundle-${missing_runtime%.sh}")"
+  mkdir -p "$bundle_repo/scripts/knowledge-deposition"
+  for runtime_file in "${runtime_files[@]}"; do
+    cp -- "$SCRIPT_DIR/$runtime_file" "$bundle_repo/scripts/knowledge-deposition/$runtime_file"
+  done
+  rm -f -- "$bundle_repo/scripts/knowledge-deposition/$missing_runtime"
+  bundle_codex="$installer_configs/codex/bundle-${missing_runtime}.json"
+  bundle_claude="$installer_configs/claude/bundle-${missing_runtime}.json"
+  printf '%s\n' "$codex_original" >"$bundle_codex"
+  printf '%s\n' "$claude_original" >"$bundle_claude"
+  if CODEX_HOOKS_JSON="$bundle_codex" CLAUDE_SETTINGS_JSON="$bundle_claude" \
+    run_installer --repo-root "$bundle_repo" >/dev/null 2>&1; then
+    fail "installer accepted bundle missing $missing_runtime"
+  fi
+  cmp -s "$bundle_codex" <(printf '%s\n' "$codex_original") || fail "missing $missing_runtime mutated Codex config"
+  cmp -s "$bundle_claude" <(printf '%s\n' "$claude_original") || fail "missing $missing_runtime mutated Claude config"
+done
+pass "installer rejects incomplete runtime bundles before config mutation"
 stale_installer_repo="$(new_repo stale-installer)"
 printf 'module github.com/ArchChuan/Stratum\n\ngo 1.25.12\n' >"$stale_installer_repo/go.mod"
 mkdir -p "$stale_installer_repo/scripts"
