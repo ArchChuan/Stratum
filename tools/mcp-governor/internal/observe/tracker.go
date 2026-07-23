@@ -116,9 +116,13 @@ func (t *Tracker) ServerMessage(raw []byte) []Event {
 	if !ok {
 		return nil
 	}
+	responseShape := hasJSONValue(message.Result) || hasJSONValue(message.Error)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.initialize != nil && t.initialize.id == id {
+		if !responseShape {
+			return nil
+		}
 		startedAt := t.initialize.startedAt
 		t.initialize = nil
 		if hasJSONValue(message.Error) || !hasJSONValue(message.Result) {

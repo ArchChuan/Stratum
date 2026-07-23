@@ -269,20 +269,40 @@ func TestTrackerInitializeLatencyAndCancellation(t *testing.T) {
 	}
 }
 
-func TestTrackerInitializeErrorAndNullResultDoNotEmitReady(t *testing.T) {
-	for _, response := range []string{
-		`{"id":1,"error":{"code":-32603,"message":"failed"}}`,
-		`{"id":1,"result":null}`,
-		`{"id":1}`,
-	} {
+func TestTrackerInitializeErrorClearsWithoutReady(t *testing.T) {
+	tracker := newTestTracker(t, time.Now)
+	tracker.ClientMessage([]byte(`{"id":1,"method":"initialize"}`))
+	response := `{"id":1,"error":{"code":-32603,"message":"failed"}}`
+	if events := tracker.ServerMessage([]byte(response)); len(events) != 0 {
+		t.Fatalf("initialize error emitted %+v", events)
+	}
+	if events := tracker.ServerMessage([]byte(`{"id":1,"result":{}}`)); len(events) != 0 {
+		t.Fatalf("initialize state was not cleared after error: %+v", events)
+	}
+}
+
+func TestTrackerInitializeNullOrMissingResultDoesNotClear(t *testing.T) {
+	for _, response := range []string{`{"id":1,"result":null}`, `{"id":1}`} {
 		tracker := newTestTracker(t, time.Now)
 		tracker.ClientMessage([]byte(`{"id":1,"method":"initialize"}`))
 		if events := tracker.ServerMessage([]byte(response)); len(events) != 0 {
-			t.Fatalf("initialize response %s emitted %+v", response, events)
+			t.Fatalf("initialize message %s emitted %+v", response, events)
 		}
-		if events := tracker.ServerMessage([]byte(`{"id":1,"result":{}}`)); len(events) != 0 {
-			t.Fatalf("initialize state was not cleared after %s: %+v", response, events)
+		if events := tracker.ServerMessage([]byte(`{"id":1,"result":{}}`)); len(events) != 1 || events[0].Kind != KindSessionReady {
+			t.Fatalf("initialize state was cleared after %s: %+v", response, events)
 		}
+	}
+}
+
+func TestTrackerServerRequestDoesNotClearPendingInitialize(t *testing.T) {
+	tracker := newTestTracker(t, time.Now)
+	tracker.ClientMessage([]byte(`{"id":1,"method":"initialize"}`))
+	if events := tracker.ServerMessage([]byte(`{"id":1,"method":"roots/list","params":{}}`)); len(events) != 0 {
+		t.Fatalf("server request emitted events: %+v", events)
+	}
+	events := tracker.ServerMessage([]byte(`{"id":1,"result":{"protocolVersion":"2025-06-18"}}`))
+	if len(events) != 1 || events[0].Kind != KindSessionReady {
+		t.Fatalf("initialize state was cleared by server request: %+v", events)
 	}
 }
 
