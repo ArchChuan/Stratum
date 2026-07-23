@@ -289,26 +289,53 @@ pass "existing report pair is collision protected"
 
 repo_marker_race="$(new_repo marker-race)"
 write_marker "$repo_marker_race" codex race-session old-task
-ready_file="$FIXTURE_ROOT/marker-lock-ready"
-continue_file="$FIXTURE_ROOT/marker-lock-continue"
-KNOWLEDGE_REPORT_TEST_LOCK_READY="$ready_file" KNOWLEDGE_REPORT_TEST_LOCK_CONTINUE="$continue_file" \
-  run_report "$repo_marker_race" codex race-session old-task "$(valid_none)" \
+mkdir -p "$repo_marker_race/tmp/knowledge-deposition/.lock"
+marker_lock="$repo_marker_race/tmp/knowledge-deposition/.lock/report.lock"
+: >"$marker_lock"
+exec {marker_lock_fd}>>"$marker_lock"
+flock "$marker_lock_fd"
+run_report "$repo_marker_race" codex race-session old-task "$(valid_none)" \
   >"$FIXTURE_ROOT/marker-race.out" 2>"$FIXTURE_ROOT/marker-race.err" &
 marker_pid=$!
-for _ in $(seq 1 100); do
-  [[ -e "$ready_file" ]] && break
+for _ in $(seq 1 50); do
+  kill -0 "$marker_pid" 2>/dev/null || fail "stale reporter exited before publication lock release"
   sleep 0.02
 done
-[[ -e "$ready_file" ]] || fail "marker race hook did not observe acquired lock"
-write_marker "$repo_marker_race" codex race-session new-task
-: >"$continue_file"
-if wait "$marker_pid"; then
+marker_tmp="$repo_marker_race/tmp/knowledge-deposition/current/.marker.XXXXXX"
+marker_tmp="$(mktemp "$marker_tmp")"
+printf '{"task_id":"new-task"}\n' >"$marker_tmp"
+mv "$marker_tmp" "$repo_marker_race/tmp/knowledge-deposition/current/codex-race-session.json"
+flock -u "$marker_lock_fd"
+exec {marker_lock_fd}>&-
+for _ in $(seq 1 100); do
+  kill -0 "$marker_pid" 2>/dev/null || break
+  sleep 0.02
+done
+if kill -0 "$marker_pid" 2>/dev/null; then
+  kill "$marker_pid" 2>/dev/null || true
+  wait "$marker_pid" 2>/dev/null || true
+  fail "stale reporter did not exit within bounded wait"
+fi
+marker_status=0
+wait "$marker_pid" || marker_status=$?
+if [[ "$marker_status" -eq 0 ]]; then
   fail "stale task published after current marker advanced"
 fi
 if find "$repo_marker_race/tmp/knowledge-deposition" -mindepth 2 -type f -name '*old-task*' | grep -q .; then
   fail "stale task left report artifacts"
 fi
 pass "marker advancement under the publication lock rejects stale task"
+
+repo_legacy_env="$(new_repo legacy-env)"
+write_marker "$repo_legacy_env" codex legacy-session legacy-task
+legacy_ready="$FIXTURE_ROOT/legacy-ready-must-not-exist"
+legacy_continue="$FIXTURE_ROOT/legacy-continue"
+: >"$legacy_continue"
+KNOWLEDGE_REPORT_TEST_LOCK_READY="$legacy_ready" KNOWLEDGE_REPORT_TEST_LOCK_CONTINUE="$legacy_continue" \
+  run_report "$repo_legacy_env" codex legacy-session legacy-task "$(valid_none)" >/dev/null || \
+  fail "legacy environment variables disrupted report publication"
+[[ ! -e "$legacy_ready" ]] || fail "legacy environment variable caused an arbitrary path write"
+pass "legacy test-control environment variables cannot mutate outside paths"
 
 write_marker "$repo_invalid" codex session-a different-task
 if run_report "$repo_invalid" codex session-a task-a "$(valid_none)" >/dev/null 2>&1; then

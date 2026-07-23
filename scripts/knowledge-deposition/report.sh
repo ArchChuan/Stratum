@@ -82,13 +82,6 @@ flock 9
 knowledge_path_within_root "$repo_root" "$lock_dir" || { knowledge_fail 'lock directory changed'; exit 1; }
 [[ ! -L "$lock_path" && -f "$lock_path" ]] || { knowledge_fail 'lock file changed'; exit 1; }
 
-if [[ -n "${KNOWLEDGE_REPORT_TEST_LOCK_READY:-}" ]]; then
-  : >"$KNOWLEDGE_REPORT_TEST_LOCK_READY"
-  while [[ ! -e "${KNOWLEDGE_REPORT_TEST_LOCK_CONTINUE:-}" ]]; do
-    sleep 0.01
-  done
-fi
-
 knowledge_path_within_root "$repo_root" "$current_path" || {
   knowledge_fail 'current task marker path is unsafe'
   exit 1
