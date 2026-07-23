@@ -152,8 +152,8 @@ func (r systemAssistantProfileRepo) GetAll(context.Context) ([]*domain.AgentConf
 	return r.cfgs, r.err
 }
 func (r systemAssistantProfileRepo) Update(context.Context, *domain.AgentConfig) error { return nil }
-func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(context.Context, string) error {
-	return nil
+func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(context.Context, string) (*domain.AgentConfig, error) {
+	return nil, nil
 }
 func (r systemAssistantProfileRepo) Remove(context.Context, string) error { return nil }
 

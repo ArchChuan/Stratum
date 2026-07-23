@@ -130,15 +130,13 @@ func (r *Registry) GetSystemAssistant(ctx context.Context) (Agent, bool, error) 
 }
 
 func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string) (Agent, error) {
-	if err := r.repo.UpdateSystemAssistantModel(ctx, model); err != nil {
+	cfg, err := r.repo.UpdateSystemAssistantModel(ctx, model)
+	if err != nil {
 		return nil, fmt.Errorf("registry update system assistant model: %w", err)
 	}
-	a, found, err := r.GetSystemAssistant(ctx)
+	a, err := r.hydrate(cfg)
 	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, domain.ErrNotFound
+		return nil, fmt.Errorf("registry update system assistant model: %w", err)
 	}
 	return a, nil
 }

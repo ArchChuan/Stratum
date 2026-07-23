@@ -32,12 +32,12 @@ func (r *settingsAgentRepo) GetSystemAssistant(context.Context) (*domain.AgentCo
 func (r *settingsAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) { return nil, nil }
 func (r *settingsAgentRepo) Remove(context.Context, string) error                  { return nil }
 func (r *settingsAgentRepo) Update(context.Context, *domain.AgentConfig) error     { return nil }
-func (r *settingsAgentRepo) UpdateSystemAssistantModel(_ context.Context, model string) error {
+func (r *settingsAgentRepo) UpdateSystemAssistantModel(_ context.Context, model string) (*domain.AgentConfig, error) {
 	if r.updateErr != nil {
-		return r.updateErr
+		return nil, r.updateErr
 	}
 	r.cfg.LLMModel = model
-	return nil
+	return r.cfg, nil
 }
 
 type settingsModelValidator struct{ err error }

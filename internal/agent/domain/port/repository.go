@@ -21,7 +21,7 @@ type AgentRepo interface {
 	GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 	Remove(ctx context.Context, id string) error
 	Update(ctx context.Context, cfg *domain.AgentConfig) error
-	UpdateSystemAssistantModel(ctx context.Context, model string) error
+	UpdateSystemAssistantModel(ctx context.Context, model string) (*domain.AgentConfig, error)
 }
 
 // AgentSkillBinding resolves which agent is wired to a given skill through the

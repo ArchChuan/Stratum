@@ -412,7 +412,12 @@ func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model str
 	if err != nil {
 		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: %w", err)
 	}
-	return s.systemAssistantSettings(ctx, a)
+	cfg := a.GetConfig()
+	return SystemAssistantSettings{
+		AgentID: cfg.ID,
+		Model:   cfg.LLMModel,
+		Ready:   strings.TrimSpace(cfg.LLMModel) != "" && cfg.LLMModel == model,
+	}, nil
 }
 
 // Update replaces mutable fields on an existing agent. EmbedModel is
