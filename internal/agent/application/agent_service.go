@@ -362,6 +362,10 @@ func (s *AgentService) GetSystemAssistantSettings(ctx context.Context) (SystemAs
 	if !found {
 		return SystemAssistantSettings{}, ErrNotFound
 	}
+	return s.systemAssistantSettings(ctx, a)
+}
+
+func (s *AgentService) systemAssistantSettings(ctx context.Context, a Agent) (SystemAssistantSettings, error) {
 	cfg := a.GetConfig()
 	settings := SystemAssistantSettings{AgentID: cfg.ID, Model: cfg.LLMModel}
 	if strings.TrimSpace(cfg.LLMModel) == "" {
@@ -408,7 +412,7 @@ func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model str
 	if err != nil {
 		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: %w", err)
 	}
-	return SystemAssistantSettings{AgentID: a.GetConfig().ID, Model: model, Ready: true}, nil
+	return s.systemAssistantSettings(ctx, a)
 }
 
 // Update replaces mutable fields on an existing agent. EmbedModel is
@@ -420,6 +424,9 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	}
 	if !ok {
 		return AgentDTO{}, ErrNotFound
+	}
+	if existing.GetConfig().SystemKey != "" {
+		return AgentDTO{}, domain.ErrSystemAssistantManaged
 	}
 	skills := in.AllowedSkills
 	if skills == nil {

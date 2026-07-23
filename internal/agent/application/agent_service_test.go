@@ -496,13 +496,14 @@ func TestAgentService_UpdateSystemAssistantModelValidatesThenReloads(t *testing.
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
 	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus").Return(nil).Once()
 	repo.On("GetSystemAssistant", ctx).Return(&domain.AgentConfig{
-		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "qwen-plus",
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "qwen-plus-latest",
 	}, true, nil).Once()
 
 	settings, err := svc.UpdateSystemAssistantModel(ctx, " qwen-plus ")
 	assert.NoError(t, err)
 	assert.True(t, settings.Ready)
-	assert.Equal(t, []string{"tenant-1:qwen-plus"}, validator.calls)
+	assert.Equal(t, "qwen-plus-latest", settings.Model)
+	assert.Equal(t, []string{"tenant-1:qwen-plus", "tenant-1:qwen-plus-latest"}, validator.calls)
 	repo.AssertExpectations(t)
 }
 
@@ -540,6 +541,23 @@ func TestAgentService_UpdateSystemAssistantModelPropagatesPersistenceFailure(t *
 	repo.AssertNotCalled(t, "GetSystemAssistant", mock.Anything)
 }
 
+func TestAgentService_UpdateSystemAssistantModelPropagatesReloadFailure(t *testing.T) {
+	_, repo, _ := newTestService(t)
+	validator := &stubTenantModelValidator{}
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantModelValidator: validator,
+		Logger:               zap.NewNop(),
+	})
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	wantErr := errors.New("reload failed")
+	repo.On("UpdateSystemAssistantModel", ctx, "qwen-plus").Return(nil)
+	repo.On("GetSystemAssistant", ctx).Return((*domain.AgentConfig)(nil), false, wantErr)
+
+	_, err := svc.UpdateSystemAssistantModel(ctx, "qwen-plus")
+	assert.ErrorIs(t, err, wantErr)
+}
+
 func TestAgentService_Update_PreservesEmbedModel(t *testing.T) {
 	svc, repo, _ := newTestService(t)
 
@@ -556,6 +574,20 @@ func TestAgentService_Update_PreservesEmbedModel(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "frozen-embed", dto.EmbedModel)
 	assert.Equal(t, "Renamed", dto.Name)
+}
+
+func TestAgentService_UpdateSystemAssistantRejectsBeforePersistence(t *testing.T) {
+	svc, repo, _ := newTestService(t)
+	ctx := context.Background()
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(&domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+	}, true, nil)
+
+	_, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{
+		Name: "renamed", LLMModel: "qwen-plus",
+	})
+	assert.ErrorIs(t, err, domain.ErrSystemAssistantManaged)
+	repo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
 }
 
 func TestAgentService_Delete(t *testing.T) {

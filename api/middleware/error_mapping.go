@@ -108,6 +108,7 @@ func MapErrorToStatus(err error) int {
 
 	// 409 — Conflict
 	case errors.Is(err, knowledgedomain.ErrWorkspaceConflict),
+		errors.Is(err, agentdomain.ErrSystemAssistantManaged),
 		errors.Is(err, knowledgedomain.ErrWorkspaceLinked),
 		errors.Is(err, knowledgedomain.ErrDuplicateDocument),
 		errors.Is(err, knowledgedomain.ErrDocumentProcessing),
