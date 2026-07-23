@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { agentApi } from '../../api/agent.api';
@@ -7,6 +7,16 @@ import { ChatConversationSidebar } from '../ChatConversationSidebar';
 import { ChatHeader } from '../ChatHeader';
 import { DiagnosticReport } from '../DiagnosticReport';
 import { SystemAssistantModelModal } from '../SystemAssistantModelModal';
+
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
 
 vi.mock('../../api/agent.api', () => ({
   agentApi: {
@@ -87,7 +97,7 @@ describe('平台使用小助手界面', () => {
       ready: true,
     });
     const onSaved = vi.fn();
-    render(<SystemAssistantModelModal open onClose={vi.fn()} onSaved={onSaved} />);
+    render(<SystemAssistantModelModal open canManage onClose={vi.fn()} onSaved={onSaved} />);
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getAllByRole('combobox')).toHaveLength(1);
@@ -109,9 +119,96 @@ describe('平台使用小助手界面', () => {
   });
 
   it('弹窗关闭时不加载模型或设置', () => {
-    render(<SystemAssistantModelModal open={false} onClose={vi.fn()} onSaved={vi.fn()} />);
+    render(<SystemAssistantModelModal open={false} canManage onClose={vi.fn()} onSaved={vi.fn()} />);
     expect(agentApi.models).not.toHaveBeenCalled();
     expect(agentApi.getSystemSettings).not.toHaveBeenCalled();
+  });
+
+  it('关闭重开时忽略旧请求，并在当前加载完成前禁止提交', async () => {
+    const oldModels = deferred<string[]>();
+    const oldSettings = deferred<{ agentId: string; llmModel: string; ready: boolean }>();
+    vi.mocked(agentApi.models)
+      .mockReturnValueOnce(oldModels.promise)
+      .mockResolvedValueOnce(['new-model']);
+    vi.mocked(agentApi.getSystemSettings)
+      .mockReturnValueOnce(oldSettings.promise)
+      .mockResolvedValueOnce({ agentId: systemAgent.id, llmModel: '', ready: false });
+    vi.mocked(agentApi.updateSystemSettings).mockResolvedValue({
+      agentId: systemAgent.id, llmModel: 'new-model', ready: true,
+    });
+
+    const view = render(
+      <SystemAssistantModelModal open canManage onClose={vi.fn()} onSaved={vi.fn()} />,
+    );
+    expect(await screen.findByRole('button', { name: '保存模型' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '保存模型' }));
+    expect(agentApi.updateSystemSettings).not.toHaveBeenCalled();
+
+    view.rerender(
+      <SystemAssistantModelModal open={false} canManage onClose={vi.fn()} onSaved={vi.fn()} />,
+    );
+    view.rerender(
+      <SystemAssistantModelModal open canManage onClose={vi.fn()} onSaved={vi.fn()} />,
+    );
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.mouseDown(within(dialog).getByRole('combobox'));
+    const newOption = await waitFor(() => {
+      const option = Array.from(document.querySelectorAll<HTMLElement>('.ant-select-item-option-content'))
+        .find((item) => item.textContent === 'new-model');
+      expect(option).toBeDefined();
+      return option!;
+    });
+    fireEvent.click(newOption);
+
+    oldModels.resolve(['old-model']);
+    oldSettings.resolve({ agentId: systemAgent.id, llmModel: 'old-model', ready: true });
+    await Promise.resolve();
+    expect(within(dialog).queryByText('old-model')).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存模型' }));
+    await waitFor(() => expect(agentApi.updateSystemSettings).toHaveBeenCalledWith({
+      llmModel: 'new-model',
+    }));
+  });
+
+  it('加载失败后保留错误状态并禁止提交', async () => {
+    vi.mocked(agentApi.models).mockRejectedValue(new Error('model service unavailable'));
+    vi.mocked(agentApi.getSystemSettings).mockResolvedValue({
+      agentId: systemAgent.id, llmModel: '', ready: false,
+    });
+
+    render(<SystemAssistantModelModal open canManage onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    expect(await screen.findByText('加载助手模型失败')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存模型' })).toBeDisabled();
+    expect(agentApi.updateSystemSettings).not.toHaveBeenCalled();
+  });
+
+  it('保存期间权限失效时不应用迟到响应', async () => {
+    const update = deferred<{ agentId: string; llmModel: string; ready: boolean }>();
+    vi.mocked(agentApi.models).mockResolvedValue(['tenant-model']);
+    vi.mocked(agentApi.getSystemSettings).mockResolvedValue({
+      agentId: systemAgent.id, llmModel: 'tenant-model', ready: true,
+    });
+    vi.mocked(agentApi.updateSystemSettings).mockReturnValue(update.promise);
+    const onSaved = vi.fn();
+    const view = render(
+      <SystemAssistantModelModal open canManage onClose={vi.fn()} onSaved={onSaved} />,
+    );
+    const save = await screen.findByRole('button', { name: '保存模型' });
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.click(save);
+    expect(agentApi.updateSystemSettings).toHaveBeenCalledWith({ llmModel: 'tenant-model' });
+
+    view.rerender(
+      <SystemAssistantModelModal open canManage={false} onClose={vi.fn()} onSaved={onSaved} />,
+    );
+    await act(async () => {
+      update.resolve({ agentId: systemAgent.id, llmModel: 'tenant-model', ready: true });
+      await update.promise;
+    });
+    await waitFor(() => expect(onSaved).not.toHaveBeenCalled());
   });
 
   it('把事实、缺口、建议、工具耗时和引用分区展示', () => {

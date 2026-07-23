@@ -14,7 +14,7 @@ import { useResponsive } from '@/shared/hooks/useResponsive';
 export const AgentChatPage = () => {
   const { isMobile } = useResponsive();
   const [conversationDrawerOpen, setConversationDrawerOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTargetID, setSettingsTargetID] = useState<string | null>(null);
   const { isAdmin } = useTenantRole();
   const {
     agents,
@@ -44,6 +44,9 @@ export const AgentChatPage = () => {
   } = useChatPage();
 
   const agentObj = agents.find((a) => a.id === selectedAgent);
+  const canManageSettings = !!(
+    isAdmin && agentObj?.isSystem && agentObj.id === settingsTargetID
+  );
   const pendingApproval = pendingApprovals.find(
     (item) => !item.agentId || item.agentId === selectedAgent,
   );
@@ -69,6 +72,10 @@ export const AgentChatPage = () => {
   useEffect(() => {
     if (!isMobile) setConversationDrawerOpen(false);
   }, [isMobile]);
+
+  useEffect(() => {
+    if (settingsTargetID && !canManageSettings) setSettingsTargetID(null);
+  }, [canManageSettings, settingsTargetID]);
 
   return (
     <div
@@ -100,7 +107,7 @@ export const AgentChatPage = () => {
           isMobile={isMobile}
           onOpenConversations={() => setConversationDrawerOpen(true)}
           isAdmin={isAdmin}
-          onOpenSettings={agentObj?.isSystem ? () => setSettingsOpen(true) : undefined}
+          onOpenSettings={agentObj?.isSystem ? () => setSettingsTargetID(agentObj.id) : undefined}
         />
         <ChatMessageList
           messages={messages}
@@ -132,9 +139,12 @@ export const AgentChatPage = () => {
           isMobile={isMobile}
         />
         <SystemAssistantModelModal
-          open={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
-          onSaved={updateSystemAssistantModel}
+          open={canManageSettings}
+          canManage={canManageSettings}
+          onClose={() => setSettingsTargetID(null)}
+          onSaved={(llmModel) => {
+            if (canManageSettings) updateSystemAssistantModel(llmModel);
+          }}
         />
       </div>
     </div>

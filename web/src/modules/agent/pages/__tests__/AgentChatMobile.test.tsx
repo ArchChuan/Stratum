@@ -17,6 +17,15 @@ const mocks = vi.hoisted(() => ({
 	isAdmin: true,
 	pendingApprovals: [] as Array<Record<string, string>>,
 	approvalActionId: null as string | null,
+  agents: [
+    { id: 'agent-1', name: '移动 Agent', description: '测试', llmModel: 'gpt-test' },
+    { id: 'agent-2', name: '备用 Agent' },
+  ] as Array<Record<string, unknown>>,
+  selectedAgent: 'agent-1',
+  models: vi.fn(),
+  settings: vi.fn(),
+  updateSettings: vi.fn(),
+  updateSystemAssistantModel: vi.fn(),
 }));
 
 vi.mock('@/shared/hooks/useResponsive', () => ({
@@ -27,13 +36,18 @@ vi.mock('@/modules/iam', () => ({
   useTenantRole: () => ({ isAdmin: mocks.isAdmin }),
 }));
 
+vi.mock('../../api/agent.api', () => ({
+  agentApi: {
+    models: mocks.models,
+    getSystemSettings: mocks.settings,
+    updateSystemSettings: mocks.updateSettings,
+  },
+}));
+
 vi.mock('../../hooks/useChatPage', () => ({
   useChatPage: () => ({
-    agents: [
-      { id: 'agent-1', name: '移动 Agent', description: '测试', llmModel: 'gpt-test' },
-      { id: 'agent-2', name: '备用 Agent' },
-    ],
-    selectedAgent: 'agent-1',
+    agents: mocks.agents,
+    selectedAgent: mocks.selectedAgent,
     setSelectedAgent: mocks.setSelectedAgent,
     conversations: [
       { id: 'conv-1', name: '第一会话' },
@@ -58,14 +72,25 @@ vi.mock('../../hooks/useChatPage', () => ({
 	approvalActionId: mocks.approvalActionId,
     handleApprove: mocks.approve,
     handleReject: mocks.reject,
+    updateSystemAssistantModel: mocks.updateSystemAssistantModel,
   }),
 }));
 
 describe('AgentChatPage mobile layout', () => {
 	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.isMobile = true;
 		mocks.isAdmin = true;
 		mocks.pendingApprovals = [];
 		mocks.approvalActionId = null;
+		mocks.agents = [
+      { id: 'agent-1', name: '移动 Agent', description: '测试', llmModel: 'gpt-test' },
+      { id: 'agent-2', name: '备用 Agent' },
+    ];
+    mocks.selectedAgent = 'agent-1';
+    mocks.models.mockResolvedValue(['tenant-model']);
+    mocks.settings.mockResolvedValue({ agentId: 'system', llmModel: '', ready: false });
+    mocks.updateSettings.mockResolvedValue({ agentId: 'system', llmModel: 'tenant-model', ready: true });
 	});
 
   it('opens the conversation drawer and closes it after selecting a conversation', async () => {
@@ -173,4 +198,39 @@ describe('AgentChatPage mobile layout', () => {
 		expect(screen.getByText('工具执行结果未知，需要人工对账')).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
 	});
+
+  it('closes assistant settings after an administrator is downgraded without updating', async () => {
+    mocks.isMobile = false;
+    mocks.agents = [{
+      id: 'system', name: '平台使用小助手', description: '系统助手', llmModel: '', isSystem: true,
+    }];
+    mocks.selectedAgent = 'system';
+    const view = render(<AgentChatPage />);
+    fireEvent.click(screen.getByRole('button', { name: '设置助手模型' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+
+    mocks.isAdmin = false;
+    view.rerender(<AgentChatPage />);
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('closes assistant settings when selection changes to an ordinary Agent', async () => {
+    mocks.isMobile = false;
+    mocks.agents = [
+      { id: 'system', name: '平台使用小助手', description: '系统助手', llmModel: '', isSystem: true },
+      { id: 'regular', name: '普通 Agent', description: '', llmModel: 'tenant-model' },
+    ];
+    mocks.selectedAgent = 'system';
+    const view = render(<AgentChatPage />);
+    fireEvent.click(screen.getByRole('button', { name: '设置助手模型' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+
+    mocks.selectedAgent = 'regular';
+    view.rerender(<AgentChatPage />);
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
 });
