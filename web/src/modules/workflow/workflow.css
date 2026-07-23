@@ -62,6 +62,9 @@
 .workflow-version-header h3, .workflow-version-header p { margin: 0; }
 .workflow-readonly-canvas { background: #f7f8fc; border: 1px solid #e7e9f2; border-radius: 12px; height: 480px; }
 .workflow-version-inputs { margin-top: 16px; }
+.workflow-execution-page { margin: 0 auto; max-width: 760px; }
+.workflow-execution-header { align-items: flex-start; display: grid; gap: 12px; grid-template-columns: auto auto 1fr; margin-bottom: 20px; }
+.workflow-execution-header h3, .workflow-execution-header p { margin: 0; }
 
 @media (max-width: 767px) {
   .workflow-catalog-header { align-items: stretch; flex-direction: column; }
