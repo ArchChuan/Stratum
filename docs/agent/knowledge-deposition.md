@@ -7,8 +7,9 @@ Generated root instructions contain only a gate and a link to this policy.
 
 Before the final response for every substantive implementation, architecture, incident, debugging, or review task:
 
-1. Create one report at `tmp/knowledge-deposition/<session-id>/<task-id>.md`, using stable identifiers for the current
-   session and task and recording both identifiers in the report.
+1. Create an authoritative JSON report and rendered Markdown pair at
+   `tmp/knowledge-deposition/YYYY-MM-DD/<client>-<session-id>-<task-id>.{json,md}`, with the current-task marker at
+   `tmp/knowledge-deposition/current/<client>-<session-id>.json`.
 2. Evaluate each candidate against the destination boundaries and evidence requirements below.
 3. Record every retained candidate, or explicitly record `none` when no candidate qualifies.
 4. Summarize the same report in the final response; do not introduce candidates that are absent from the report.
