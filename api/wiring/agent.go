@@ -9,6 +9,7 @@ import (
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	agentobjects "github.com/byteBuilderX/stratum/internal/agent/infrastructure/objectstore"
+	"github.com/byteBuilderX/stratum/internal/agent/infrastructure/officialdocs"
 	agentopik "github.com/byteBuilderX/stratum/internal/agent/infrastructure/opik"
 	persistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
@@ -239,6 +240,9 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	a.DiagnosticProvider = newSystemAssistantDiagnosticAdapter(
 		tenantRoleAdapter{service: tenantMemberService(c)}, systemAssistantDiagnosticCollectors(c, a),
 	)
+	deps.OfficialDocsSearch = officialdocs.Search
+	deps.DiagnosticProvider = a.DiagnosticProvider
+	deps.TenantRoleResolver = tenantRoleAdapter{service: tenantMemberService(c)}
 	a.Service = agent.NewAgentService(deps)
 
 	c.Agent = a

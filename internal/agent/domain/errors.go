@@ -13,4 +13,5 @@ var (
 	ErrOfficialEvidenceNotFound      = errors.New("official evidence not found")
 	ErrDiagnosticForbidden           = errors.New("diagnostic forbidden")
 	ErrDiagnosticEvidenceUnavailable = errors.New("diagnostic evidence unavailable")
+	ErrAssistantModelUnavailable     = errors.New("system assistant model unavailable")
 )

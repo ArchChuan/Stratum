@@ -2,10 +2,38 @@ package observability
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
 )
+
+func TestSystemAssistantMetricsUseOnlyBoundedLabels(t *testing.T) {
+	m := NewPrometheusMetrics(zap.NewNop())
+	m.IncSystemAssistantRequest("member", "2026-07-23.v1", "success")
+	m.RecordSystemAssistantTTFT("member", "2026-07-23.v1", 0.1)
+	m.RecordOfficialDocsSearchResults("2026-07-23.v1", "matched", 2)
+	m.RecordSystemAssistantDiagnosticArea("admin", "mcp", "unavailable", 0.2)
+	m.RecordSystemAssistantEvidenceGaps("admin", "2026-07-23.v1", 1)
+	families, err := m.reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if !strings.HasPrefix(family.GetName(), "system_assistant_") {
+			continue
+		}
+		for _, metric := range family.Metric {
+			for _, label := range metric.Label {
+				switch label.GetName() {
+				case "role_class", "profile_version", "outcome", "area":
+				default:
+					t.Fatalf("unbounded assistant metric label %q on %s", label.GetName(), family.GetName())
+				}
+			}
+		}
+	}
+}
 
 func TestDefaultTraceConfig(t *testing.T) {
 	cfg := DefaultTraceConfig()

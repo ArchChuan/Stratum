@@ -43,27 +43,31 @@ type (
 // in the application layer because it references port.ToolDefinition and
 // function types that depend on cross-context ports.
 type ExecutionConfig struct {
-	MaxSteps          int
-	Timeout           time.Duration
-	Temperature       float32
-	EnableTools       bool
-	AvailableTools    []string
-	Stream            bool
-	TokenCallback     func(string)
-	TenantID          string
-	TraceID           string
-	ExecutionID       string
-	LLMAPIKeys        map[string]string
-	RAGSearchFn       func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
-	ExtraTools        []port.ToolDefinition
-	SkillCatalog      map[string]port.SkillActivation
-	ToolExecutionFn   port.ToolExecutionFn
-	ActiveSkill       *port.SkillActivation
-	TracePayloadStore port.TracePayloadStore
-	ConversationID    string
-	UserID            string
-	HistoryWindow     int
-	EvolutionTrace    EvolutionTraceMetadata
+	MaxSteps                 int
+	Timeout                  time.Duration
+	Temperature              float32
+	EnableTools              bool
+	AvailableTools           []string
+	Stream                   bool
+	TokenCallback            func(string)
+	TenantID                 string
+	TraceID                  string
+	ExecutionID              string
+	LLMAPIKeys               map[string]string
+	RAGSearchFn              func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	ExtraTools               []port.ToolDefinition
+	SkillCatalog             map[string]port.SkillActivation
+	ToolExecutionFn          port.ToolExecutionFn
+	ActiveSkill              *port.SkillActivation
+	TracePayloadStore        port.TracePayloadStore
+	ConversationID           string
+	UserID                   string
+	HistoryWindow            int
+	EvolutionTrace           EvolutionTraceMetadata
+	OfficialDocsSearchFn     func(context.Context, string) ([]domain.Citation, error)
+	DiagnosticFn             func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
+	SystemAssistantMode      bool
+	SystemAssistantRoleClass string
 }
 
 // EvolutionTraceMetadata attributes an execution to evaluation and rollout evidence.
@@ -320,8 +324,10 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		)
 
 		availableTools := buildBuiltinTools(workspaceNames, workspaceDescs,
-			len(workspaceNames) > 0 && cfg.RAGSearchFn != nil,
-			a.MemoryInjector != nil)
+			len(workspaceNames) > 0 && cfg.RAGSearchFn != nil, a.MemoryInjector != nil)
+		if cfg.SystemAssistantMode {
+			availableTools = nil
+		}
 		initState := agentgraph.ReActState{
 			TenantID:                   cfg.TenantID,
 			TraceID:                    cfg.TraceID,
@@ -335,6 +341,9 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			ActiveSkill:                cfg.ActiveSkill,
 			TracePayloadStore:          cfg.TracePayloadStore,
 			ToolExecutionFn:            cfg.ToolExecutionFn,
+			OfficialDocsSearchFn:       cfg.OfficialDocsSearchFn,
+			DiagnosticFn:               cfg.DiagnosticFn,
+			GovernedAssistant:          cfg.SystemAssistantMode,
 			ExecutionID:                cfg.ExecutionID,
 			AgentKnowledgeWorkspaceIDs: workspaceNames,
 			AgentMemoryScope:           memoryScope,
@@ -399,6 +408,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		result.CostUSD = finalState.TotalCostUSD
 		result.ToolObservations = enrichToolObservations(finalState.ToolObservations, cfg.TraceID, cfg.ExecutionID, cfg.ConversationID, agentID, cfg.UserID)
 		result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, cfg.TraceID, cfg.ExecutionID, cfg.ConversationID, agentID, cfg.UserID)
+		result.AssistantToolArtifacts = append([]domain.SystemAssistantToolArtifact(nil), finalState.AssistantToolArtifacts...)
 		finalAnswerAt := time.Now()
 		result.TraceEvents = append(result.TraceEvents, domain.AgentTraceEvent{
 			TraceID:         cfg.TraceID,
@@ -881,6 +891,22 @@ func WithEvolutionTraceMetadata(metadata EvolutionTraceMetadata) ExecutionOption
 	return func(cfg *ExecutionConfig) {
 		cfg.EvolutionTrace = metadata
 	}
+}
+
+func WithOfficialDocsSearchFn(fn func(context.Context, string) ([]domain.Citation, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.OfficialDocsSearchFn = fn }
+}
+
+func WithDiagnosticFn(fn func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.DiagnosticFn = fn }
+}
+
+func WithSystemAssistantMode() ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.SystemAssistantMode = true }
+}
+
+func withSystemAssistantRoleClass(roleClass string) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.SystemAssistantRoleClass = roleClass }
 }
 
 func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cfg ExecutionConfig) []attribute.KeyValue {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -37,6 +38,10 @@ type ReActState struct {
 	ActiveSkill                *port.SkillActivation
 	TracePayloadStore          port.TracePayloadStore
 	ToolExecutionFn            port.ToolExecutionFn
+	OfficialDocsSearchFn       func(context.Context, string) ([]domain.Citation, error)
+	DiagnosticFn               func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
+	GovernedAssistant          bool
+	AssistantToolArtifacts     []domain.SystemAssistantToolArtifact
 	ExecutionID                string
 	AgentKnowledgeWorkspaceIDs []string
 	AgentMemoryScope           string
@@ -117,7 +122,7 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 	return func(ctx context.Context, s ReActState) (ReActState, error) {
 		start := time.Now()
 
-		tools := effectiveTools(s.AvailableTools, s.SkillCatalog, s.ActiveSkill, s.AgentKnowledgeWorkspaceIDs, s.AgentMemoryScope)
+		tools := effectiveTools(s.AvailableTools, s.SkillCatalog, s.ActiveSkill, s.AgentKnowledgeWorkspaceIDs, s.AgentMemoryScope, s.GovernedAssistant)
 		if s.PlanToolsDisabled {
 			tools = withoutPlanTools(tools)
 		}
@@ -404,9 +409,11 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 				attribute.String("opik.metadata.stratum.capability_id", provider.CapabilityID),
 				attribute.String("opik.metadata.stratum.resource_revision_id", metadataString(provider.Metadata, "version_id")),
 			}
-			toolAttributes = append(toolAttributes, tracePayloadAttributes(
-				ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-arguments", tc.Arguments,
-			)...)
+			if !s.GovernedAssistant {
+				toolAttributes = append(toolAttributes, tracePayloadAttributes(
+					ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-arguments", tc.Arguments,
+				)...)
+			}
 			toolCtx, toolSpan := tracer.Start(ctx, "react.tool",
 				oteltrace.WithAttributes(toolAttributes...),
 			)
@@ -432,6 +439,56 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 				EndedAt:         toolStart,
 			})
 			switch tc.Name {
+			case "stratum_search_official_docs":
+				if !s.GovernedAssistant || s.OfficialDocsSearchFn == nil {
+					status, errMsg, content = domain.ToolTraceStatusError, "official docs tool unavailable", "error: tool unavailable"
+					break
+				}
+				query, parseErr := parseOfficialDocsToolArguments(tc.Arguments)
+				if parseErr != nil {
+					status, errMsg, content = domain.ToolTraceStatusError, parseErr.Error(), "error: invalid tool arguments"
+					break
+				}
+				callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
+				citations, callErr := s.OfficialDocsSearchFn(callCtx, query)
+				cancel()
+				if callErr != nil {
+					status, errMsg, content = domain.ToolTraceStatusError, safeAssistantToolError(callErr), "error: "+safeAssistantToolError(callErr)
+					break
+				}
+				content, callErr = marshalUntrustedAssistantEvidence(map[string]any{"citations": citations})
+				if callErr != nil {
+					status, errMsg, content = domain.ToolTraceStatusError, callErr.Error(), "error: tool result exceeded safe bounds"
+					break
+				}
+				s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
+					Tool: tc.Name, Citations: citations, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
+				})
+			case "stratum_diagnose_tenant":
+				if !s.GovernedAssistant || s.DiagnosticFn == nil {
+					status, errMsg, content = domain.ToolTraceStatusError, "diagnostic tool unavailable", "error: tool unavailable"
+					break
+				}
+				areas, parseErr := parseDiagnosticToolArguments(tc.Arguments)
+				if parseErr != nil {
+					status, errMsg, content = domain.ToolTraceStatusError, parseErr.Error(), "error: invalid tool arguments"
+					break
+				}
+				callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
+				evidence, callErr := s.DiagnosticFn(callCtx, areas)
+				cancel()
+				if callErr != nil {
+					status, errMsg, content = domain.ToolTraceStatusError, safeAssistantToolError(callErr), "error: "+safeAssistantToolError(callErr)
+					break
+				}
+				content, callErr = marshalUntrustedAssistantEvidence(map[string]any{"evidence": evidence})
+				if callErr != nil {
+					status, errMsg, content = domain.ToolTraceStatusError, callErr.Error(), "error: tool result exceeded safe bounds"
+					break
+				}
+				s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
+					Tool: tc.Name, Evidence: &evidence, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
+				})
 			case "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan":
 				var planErr error
 				content, planErr = ExecutePlanTool(toolCtx, &s, tc)
@@ -606,9 +663,11 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 				attribute.Int64("opik.metadata.stratum.latency_ms", toolLatencyMs),
 				attribute.String("opik.metadata.stratum.status", status),
 			}
-			resultAttributes = append(resultAttributes, tracePayloadAttributes(
-				toolCtx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-result", content,
-			)...)
+			if !s.GovernedAssistant {
+				resultAttributes = append(resultAttributes, tracePayloadAttributes(
+					toolCtx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-result", content,
+				)...)
+			}
 			toolSpan.SetAttributes(resultAttributes...)
 			summary := summarizeToolObservation(tc.Name, content, status, errMsg)
 			s.ToolObservations = append(s.ToolObservations, domain.ToolObservation{
@@ -659,7 +718,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 				StartedAt:       toolStart,
 				EndedAt:         toolStart.Add(time.Duration(toolLatencyMs) * time.Millisecond),
 			})
-			if logger.Core().Enabled(zap.DebugLevel) {
+			if !s.GovernedAssistant && logger.Core().Enabled(zap.DebugLevel) {
 				preview := content
 				if len(preview) > 200 {
 					preview = preview[:200] + "..."
@@ -726,6 +785,9 @@ type toolProviderRef struct {
 
 func classifyToolProvider(name string, tools []port.ToolDefinition) toolProviderRef {
 	switch name {
+	case "stratum_search_official_docs", "stratum_diagnose_tenant":
+		return toolProviderRef{ToolType: domain.ToolTypeInternal, ProviderType: domain.ProviderTypeInternal,
+			ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	case "stratum_continue_reasoning":
 		return toolProviderRef{ToolType: domain.ToolTypeReasoning, ProviderType: domain.ProviderTypeBuiltin, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	case "stratum_search_knowledge":
@@ -827,7 +889,11 @@ func effectiveTools(
 	active *port.SkillActivation,
 	agentKnowledgeWorkspaceIDs []string,
 	agentMemoryScope string,
+	governedAssistant bool,
 ) []port.ToolDefinition {
+	if governedAssistant {
+		return append([]port.ToolDefinition(nil), available...)
+	}
 	out := make([]port.ToolDefinition, 0, len(available)+5)
 	out = append(out, PlanToolDefinitions()...)
 	if len(catalog) > 0 {
@@ -870,6 +936,67 @@ func effectiveTools(
 		out = append(out, tool)
 	}
 	return out
+}
+
+func parseOfficialDocsToolArguments(args map[string]any) (string, error) {
+	if len(args) != 1 {
+		return "", errors.New("invalid official docs arguments")
+	}
+	query, ok := args["query"].(string)
+	query = strings.TrimSpace(query)
+	if !ok || query == "" {
+		return "", errors.New("invalid official docs arguments")
+	}
+	return query, nil
+}
+
+func parseDiagnosticToolArguments(args map[string]any) ([]domain.DiagnosticArea, error) {
+	if len(args) != 1 {
+		return nil, errors.New("invalid diagnostic arguments")
+	}
+	raw, ok := args["areas"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil, errors.New("invalid diagnostic arguments")
+	}
+	areas := make([]domain.DiagnosticArea, 0, len(raw))
+	seen := map[domain.DiagnosticArea]struct{}{}
+	for _, value := range raw {
+		name, ok := value.(string)
+		area := domain.DiagnosticArea(name)
+		if !ok || !area.Valid() {
+			return nil, errors.New("invalid diagnostic arguments")
+		}
+		if _, exists := seen[area]; exists {
+			continue
+		}
+		seen[area] = struct{}{}
+		areas = append(areas, area)
+	}
+	return areas, nil
+}
+
+func marshalUntrustedAssistantEvidence(value any) (string, error) {
+	safe := observability.SafeTracePayload(value, constants.SystemAssistantToolMaxJSONBytes)
+	content := "<untrusted_tool_result>\n" + safe.Preview
+	if safe.Truncated {
+		content += "\n[TRUNCATED]"
+	}
+	return content + "\n</untrusted_tool_result>", nil
+}
+
+func safeAssistantToolError(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "tool timeout"
+	case errors.Is(err, context.Canceled):
+		return "tool cancelled"
+	case errors.Is(err, domain.ErrOfficialEvidenceNotFound):
+		return "official evidence not found"
+	case errors.Is(err, domain.ErrDiagnosticForbidden):
+		return "diagnostic forbidden"
+	default:
+		return "evidence unavailable"
+	}
 }
 
 func isReservedPlanTool(name string) bool {

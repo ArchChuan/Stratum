@@ -20,6 +20,11 @@ type MetricsProvider interface {
 	IncAgentExecution(agentID, agentType, status string)
 	RecordAgentExecutionDuration(agentID, agentType string, duration float64)
 	RecordAgentStepCount(agentID, agentType string, steps int)
+	IncSystemAssistantRequest(roleClass, profileVersion, outcome string)
+	RecordSystemAssistantTTFT(roleClass, profileVersion string, duration float64)
+	RecordOfficialDocsSearchResults(profileVersion, outcome string, count int)
+	RecordSystemAssistantDiagnosticArea(roleClass, area, outcome string, duration float64)
+	RecordSystemAssistantEvidenceGaps(roleClass, profileVersion string, count int)
 
 	// LLM
 	IncLLMRequest(model, provider, status string)
@@ -45,27 +50,32 @@ type MetricsProvider interface {
 // NoopMetrics satisfies MetricsProvider with no-ops. Safe for tests and disabled mode.
 type NoopMetrics struct{}
 
-func (NoopMetrics) IncHTTPRequest(_, _ string, _ int)                   {}
-func (NoopMetrics) RecordHTTPRequestDuration(_, _ string, _ float64)    {}
-func (NoopMetrics) IncHTTPRequestsInFlight()                            {}
-func (NoopMetrics) DecHTTPRequestsInFlight()                            {}
-func (NoopMetrics) IncSkillExecution(_, _, _ string)                    {}
-func (NoopMetrics) RecordSkillExecutionDuration(_ string, _ float64)    {}
-func (NoopMetrics) SetSkillCircuitBreakerState(_ string, _ float64)     {}
-func (NoopMetrics) IncAgentExecution(_, _, _ string)                    {}
-func (NoopMetrics) RecordAgentExecutionDuration(_, _ string, _ float64) {}
-func (NoopMetrics) RecordAgentStepCount(_, _ string, _ int)             {}
-func (NoopMetrics) IncLLMRequest(_, _, _ string)                        {}
-func (NoopMetrics) RecordLLMRequestDuration(_, _ string, _ float64)     {}
-func (NoopMetrics) IncLLMTokenUsage(_, _ string, _ int64)               {}
-func (NoopMetrics) RecordLLMTokenHistogram(_, _ string, _ float64)      {}
-func (NoopMetrics) RecordLLMFirstTokenLatency(_, _ string, _ float64)   {}
-func (NoopMetrics) IncKnowledgeQuery(_, _ string)                       {}
-func (NoopMetrics) RecordKnowledgeQueryDuration(_ string, _ float64)    {}
-func (NoopMetrics) RecordMemoryRetrievalDuration(_ string, _ float64)   {}
-func (NoopMetrics) IncKnowledgeIngest(_ string)                         {}
-func (NoopMetrics) RecordKnowledgeIngestDuration(_ float64)             {}
-func (NoopMetrics) IncKnowledgeIngestInFlight()                         {}
-func (NoopMetrics) DecKnowledgeIngestInFlight()                         {}
-func (NoopMetrics) IncHermesEvent(_ string)                             {}
-func (NoopMetrics) IncHermesEventProcessed(_, _ string)                 {}
+func (NoopMetrics) IncHTTPRequest(_, _ string, _ int)                             {}
+func (NoopMetrics) RecordHTTPRequestDuration(_, _ string, _ float64)              {}
+func (NoopMetrics) IncHTTPRequestsInFlight()                                      {}
+func (NoopMetrics) DecHTTPRequestsInFlight()                                      {}
+func (NoopMetrics) IncSkillExecution(_, _, _ string)                              {}
+func (NoopMetrics) RecordSkillExecutionDuration(_ string, _ float64)              {}
+func (NoopMetrics) SetSkillCircuitBreakerState(_ string, _ float64)               {}
+func (NoopMetrics) IncAgentExecution(_, _, _ string)                              {}
+func (NoopMetrics) RecordAgentExecutionDuration(_, _ string, _ float64)           {}
+func (NoopMetrics) RecordAgentStepCount(_, _ string, _ int)                       {}
+func (NoopMetrics) IncSystemAssistantRequest(_, _, _ string)                      {}
+func (NoopMetrics) RecordSystemAssistantTTFT(_, _ string, _ float64)              {}
+func (NoopMetrics) RecordOfficialDocsSearchResults(_, _ string, _ int)            {}
+func (NoopMetrics) RecordSystemAssistantDiagnosticArea(_, _, _ string, _ float64) {}
+func (NoopMetrics) RecordSystemAssistantEvidenceGaps(_, _ string, _ int)          {}
+func (NoopMetrics) IncLLMRequest(_, _, _ string)                                  {}
+func (NoopMetrics) RecordLLMRequestDuration(_, _ string, _ float64)               {}
+func (NoopMetrics) IncLLMTokenUsage(_, _ string, _ int64)                         {}
+func (NoopMetrics) RecordLLMTokenHistogram(_, _ string, _ float64)                {}
+func (NoopMetrics) RecordLLMFirstTokenLatency(_, _ string, _ float64)             {}
+func (NoopMetrics) IncKnowledgeQuery(_, _ string)                                 {}
+func (NoopMetrics) RecordKnowledgeQueryDuration(_ string, _ float64)              {}
+func (NoopMetrics) RecordMemoryRetrievalDuration(_ string, _ float64)             {}
+func (NoopMetrics) IncKnowledgeIngest(_ string)                                   {}
+func (NoopMetrics) RecordKnowledgeIngestDuration(_ float64)                       {}
+func (NoopMetrics) IncKnowledgeIngestInFlight()                                   {}
+func (NoopMetrics) DecKnowledgeIngestInFlight()                                   {}
+func (NoopMetrics) IncHermesEvent(_ string)                                       {}
+func (NoopMetrics) IncHermesEventProcessed(_, _ string)                           {}

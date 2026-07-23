@@ -208,7 +208,7 @@ func TestSystemAssistantProfileVersionRecordedInTraceMetadata(t *testing.T) {
 	source := BuiltinSystemAssistantProfileSource()
 	svc := NewAgentService(AgentServiceDeps{Registry: NewRegistry(nil, source, zap.NewNop())})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: "assistant-1", SystemKey: domain.SystemAssistantKey, MaxIterations: 3,
+		ID: "assistant-1", SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model", MaxIterations: 3,
 	}}
 
 	_, options, err := svc.assembleOptions(
@@ -227,7 +227,7 @@ func TestSystemAssistantProfileVersionRecordedInTraceMetadata(t *testing.T) {
 func TestSystemAssistantProfileTraceFailsClosedWithoutSharedSource(t *testing.T) {
 	svc := NewAgentService(AgentServiceDeps{Registry: NewRegistry(nil, nil, zap.NewNop())})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
-		ID: "assistant-1", SystemKey: domain.SystemAssistantKey, MaxIterations: 3,
+		ID: "assistant-1", SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model", MaxIterations: 3,
 	}}
 
 	if _, _, err := svc.assembleOptions(
@@ -243,7 +243,7 @@ func TestSystemAssistantProfileManagedRuntimeDoesNotAppendGlobalSuffix(t *testin
 		t.Fatalf("NewBuiltinSystemAssistantProfileSource() error = %v", err)
 	}
 	registry := NewRegistry(systemAssistantProfileRepo{cfgs: []*domain.AgentConfig{
-		{ID: "assistant-1", SystemKey: domain.SystemAssistantKey},
+		{ID: "assistant-1", SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model"},
 	}}, source, zap.NewNop())
 	registry.SetGlobalSystemSuffix("tenant-global-suffix")
 
@@ -297,7 +297,7 @@ func TestSystemAssistantProfileRollbackSourceKeepsRuntimeAndTraceOnSameImmutable
 	snapshot.SystemPrompt = "mutated prompt"
 
 	registry := NewRegistry(systemAssistantProfileRepo{cfgs: []*domain.AgentConfig{
-		{ID: "assistant-1", SystemKey: domain.SystemAssistantKey},
+		{ID: "assistant-1", SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model"},
 	}}, source, zap.NewNop())
 	agent, found, err := registry.Get(context.Background(), "assistant-1")
 	if err != nil || !found {

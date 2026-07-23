@@ -82,6 +82,16 @@ type DiagnosticEvidence struct {
 	CollectedAt time.Time        `json:"collectedAt"`
 }
 
+// SystemAssistantToolArtifact is typed evidence captured directly from a
+// governed internal tool. It is never reconstructed from model prose.
+type SystemAssistantToolArtifact struct {
+	Tool      string              `json:"tool"`
+	Citations []Citation          `json:"citations,omitempty"`
+	Evidence  *DiagnosticEvidence `json:"evidence,omitempty"`
+	LatencyMs int64               `json:"latencyMs"`
+	Outcome   string              `json:"outcome"`
+}
+
 type TenantModelDiagnosticStatus struct {
 	Configured bool
 }

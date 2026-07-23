@@ -316,19 +316,20 @@ type AgentExecutionCheckpoint struct {
 
 // AgentResult holds the output of a completed agent execution.
 type AgentResult struct {
-	AgentID          string
-	Input            string
-	Output           string
-	Thoughts         []Thought
-	ToolCalls        []ToolCall
-	ToolObservations []ToolObservation
-	TraceEvents      []AgentTraceEvent
-	Steps            int
-	TokensUsed       int
-	CostUSD          float64
-	Duration         time.Duration
-	Error            error
-	Metadata         map[string]interface{}
+	AgentID                string
+	Input                  string
+	Output                 string
+	Thoughts               []Thought
+	ToolCalls              []ToolCall
+	ToolObservations       []ToolObservation
+	TraceEvents            []AgentTraceEvent
+	Steps                  int
+	TokensUsed             int
+	CostUSD                float64
+	Duration               time.Duration
+	Error                  error
+	Metadata               map[string]interface{}
+	AssistantToolArtifacts []SystemAssistantToolArtifact
 }
 
 // AgentState tracks mutable execution progress during a single run.
