@@ -30,39 +30,6 @@
       "session_policy": "session_local",
       "clients": ["codex", "claude", "vscode", "lingma"],
       "all_args_contain": ["alpha", "serve"]
-    },
-    {
-      "name": "claude-only",
-      "command": "/opt/mcp/claude",
-      "args": ["start"],
-      "cwd": "/tmp",
-      "transport": "stdio",
-      "scope": "user",
-      "session_policy": "isolated",
-      "clients": ["claude"],
-      "all_args_contain": ["mcp", "claude"]
-    },
-    {
-      "name": "repository-index",
-      "command": "/opt/mcp/index",
-      "args": ["serve"],
-      "cwd": "/tmp",
-      "transport": "stdio",
-      "scope": "repository",
-      "session_policy": "isolated",
-      "clients": ["codex", "claude", "vscode", "lingma"],
-      "all_args_contain": ["mcp", "index"]
-    },
-    {
-      "name": "remote",
-      "command": "/opt/mcp/remote",
-      "args": ["serve"],
-      "cwd": "/tmp",
-      "transport": "streamable_http",
-      "scope": "user",
-      "session_policy": "isolated",
-      "clients": ["codex", "claude", "vscode", "lingma"],
-      "all_args_contain": ["mcp", "remote"]
     }
   ]
 }

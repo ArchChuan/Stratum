@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/config"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/observe"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/process"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/report"
@@ -618,6 +619,80 @@ func TestRunRenderConfigRejectsUnsafeInputsWithoutLeakingArguments(t *testing.T)
 			}
 		})
 	}
+}
+
+func TestRunRenderConfigRejectsIncompleteCatalogWithoutPartialOutput(t *testing.T) {
+	root := t.TempDir()
+	governor := filepath.Join(root, "governor")
+	writeFile(t, governor, []byte("binary"), 0o700)
+	secretCommand := "do-not-print-secret-command"
+	tests := []struct {
+		name, service, reason string
+		mutate                func(*config.ServiceRule)
+	}{
+		{"unavailable client", "claude-only", "not enabled", func(service *config.ServiceRule) {
+			service.Clients = []config.Client{config.ClientClaude}
+		}},
+		{"repository scope", "repository-index", "repository", func(service *config.ServiceRule) {
+			service.Scope = config.ScopeRepository
+			service.SessionPolicy = config.SessionPolicyIsolated
+		}},
+		{"non stdio", "remote", "stdio", func(service *config.ServiceRule) {
+			service.Transport = config.TransportStreamableHTTP
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			catalog := writeRenderCatalog(t, root, test.service, secretCommand, test.mutate)
+			for _, output := range []string{"-", filepath.Join(root, test.service+".json")} {
+				var stdout, stderr bytes.Buffer
+				args := []string{"render-config", "--config", catalog, "--client", "codex", "--governor", governor,
+					"--output", output}
+				if code := run(args, &stdout, &stderr); code != 1 {
+					t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+				}
+				if stdout.Len() != 0 {
+					t.Fatalf("partial stdout=%q", stdout.String())
+				}
+				if output != "-" {
+					if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("partial output exists: %v", err)
+					}
+				}
+				message := strings.ToLower(stderr.String())
+				if !strings.Contains(message, test.service) || !strings.Contains(message, test.reason) {
+					t.Fatalf("stderr=%q, want service %q and reason %q", stderr.String(), test.service, test.reason)
+				}
+				if strings.Contains(stderr.String(), secretCommand) {
+					t.Fatalf("stderr leaked command: %q", stderr.String())
+				}
+			}
+		})
+	}
+}
+
+func writeRenderCatalog(t *testing.T, root, name, command string, mutate func(*config.ServiceRule)) string {
+	t.Helper()
+	fixture, err := os.Open(filepath.Join("..", "..", "testdata", "catalog.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, decodeErr := config.Decode(fixture)
+	closeErr := fixture.Close()
+	if decodeErr != nil || closeErr != nil {
+		t.Fatalf("decode fixture: %v; close: %v", decodeErr, closeErr)
+	}
+	service := cfg.Services[0]
+	service.Name, service.Command = name, command
+	mutate(&service)
+	cfg.Services = append(cfg.Services, service)
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, name+"-catalog.json")
+	writeFile(t, path, data, 0o600)
+	return path
 }
 
 func TestRunRegistryHandling(t *testing.T) {

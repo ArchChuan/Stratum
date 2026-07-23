@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -20,18 +19,14 @@ func TestRenderGoldenClientConfigs(t *testing.T) {
 		want   string
 	}{
 		{config.ClientCodex, "[mcp_servers.alpha]\ncommand = \"/usr/local/bin/mcp-governor\"\nargs = [\"proxy\", \"--config\", \"/etc/mcp/catalog.json\", \"--client\", \"codex\", \"--service\", \"alpha\", \"--\", \"/opt/mcp/alpha\", \"serve\", \"--safe\"]\n\n[mcp_servers.zeta]\ncommand = \"/usr/local/bin/mcp-governor\"\nargs = [\"proxy\", \"--config\", \"/etc/mcp/catalog.json\", \"--client\", \"codex\", \"--service\", \"zeta\", \"--\", \"/opt/mcp/zeta server\", \"--label\", \"quoted \\\"value\\\"\"]\n"},
-		{config.ClientClaude, "{\n  \"mcpServers\": {\n    \"alpha\": {\n      \"type\": \"stdio\",\n      \"command\": \"/usr/local/bin/mcp-governor\",\n      \"args\": [\n        \"proxy\",\n        \"--config\",\n        \"/etc/mcp/catalog.json\",\n        \"--client\",\n        \"claude\",\n        \"--service\",\n        \"alpha\",\n        \"--\",\n        \"/opt/mcp/alpha\",\n        \"serve\",\n        \"--safe\"\n      ]\n    },\n    \"claude-only\": {\n      \"type\": \"stdio\",\n      \"command\": \"/usr/local/bin/mcp-governor\",\n      \"args\": [\n        \"proxy\",\n        \"--config\",\n        \"/etc/mcp/catalog.json\",\n        \"--client\",\n        \"claude\",\n        \"--service\",\n        \"claude-only\",\n        \"--\",\n        \"/opt/mcp/claude\",\n        \"start\"\n      ]\n    },\n    \"zeta\": {\n      \"type\": \"stdio\",\n      \"command\": \"/usr/local/bin/mcp-governor\",\n      \"args\": [\n        \"proxy\",\n        \"--config\",\n        \"/etc/mcp/catalog.json\",\n        \"--client\",\n        \"claude\",\n        \"--service\",\n        \"zeta\",\n        \"--\",\n        \"/opt/mcp/zeta server\",\n        \"--label\",\n        \"quoted \\\"value\\\"\"\n      ]\n    }\n  }\n}\n"},
-		{config.ClientVSCode, "{\n  \"servers\": {\n    \"alpha\": {\n      \"type\": \"stdio\",\n      \"command\": \"/usr/local/bin/mcp-governor\",\n      \"args\": [\n        \"proxy\",\n        \"--config\",\n        \"/etc/mcp/catalog.json\",\n        \"--client\",\n        \"vscode\",\n        \"--service\",\n        \"alpha\",\n        \"--\",\n        \"/opt/mcp/alpha\",\n        \"serve\",\n        \"--safe\"\n      ]\n    },\n    \"zeta\": {\n      \"type\": \"stdio\",\n      \"command\": \"/usr/local/bin/mcp-governor\",\n      \"args\": [\n        \"proxy\",\n        \"--config\",\n        \"/etc/mcp/catalog.json\",\n        \"--client\",\n        \"vscode\",\n        \"--service\",\n        \"zeta\",\n        \"--\",\n        \"/opt/mcp/zeta server\",\n        \"--label\",\n        \"quoted \\\"value\\\"\"\n      ]\n    }\n  }\n}\n"},
-		{config.ClientLingma, "{\n  \"mcpServers\": {\n    \"alpha\": {\n      \"command\": \"/usr/local/bin/mcp-governor\",\n      \"args\": [\n        \"proxy\",\n        \"--config\",\n        \"/etc/mcp/catalog.json\",\n        \"--client\",\n        \"lingma\",\n        \"--service\",\n        \"alpha\",\n        \"--\",\n        \"/opt/mcp/alpha\",\n        \"serve\",\n        \"--safe\"\n      ]\n    },\n    \"zeta\": {\n      \"command\": \"/usr/local/bin/mcp-governor\",\n      \"args\": [\n        \"proxy\",\n        \"--config\",\n        \"/etc/mcp/catalog.json\",\n        \"--client\",\n        \"lingma\",\n        \"--service\",\n        \"zeta\",\n        \"--\",\n        \"/opt/mcp/zeta server\",\n        \"--label\",\n        \"quoted \\\"value\\\"\"\n      ]\n    }\n  }\n}\n"},
+		{config.ClientClaude, jsonGolden("mcpServers", "claude", true)},
+		{config.ClientVSCode, jsonGolden("servers", "vscode", true)},
+		{config.ClientLingma, jsonGolden("mcpServers", "lingma", false)},
 	}
 	for _, test := range tests {
 		t.Run(string(test.client), func(t *testing.T) {
-			names := []string{"alpha", "zeta"}
-			if test.client == config.ClientClaude {
-				names = append(names, "claude-only")
-			}
 			got, err := Render(Options{Client: test.client, ConfigPath: "/etc/mcp/catalog.json",
-				GovernorPath: "/usr/local/bin/mcp-governor", Services: selectServices(t, cfg, names...)})
+				GovernorPath: "/usr/local/bin/mcp-governor", Services: cfg.Services})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -41,13 +36,11 @@ func TestRenderGoldenClientConfigs(t *testing.T) {
 			if !strings.HasSuffix(string(got), "\n") {
 				t.Fatal("config lacks trailing newline")
 			}
-			if strings.Contains(string(got), "--session") || strings.Contains(string(got), "PID") ||
-				strings.Contains(string(got), "environment") || strings.Contains(string(got), "\"env\"") {
-				t.Fatalf("unsafe generated field: %s", got)
-			}
-			for _, credential := range []string{"token", "password", "secret", "api_key", "api-key"} {
-				if strings.Contains(strings.ToLower(string(got)), credential) {
-					t.Fatalf("generated config contains credential field %q: %s", credential, got)
+			lower := strings.ToLower(string(got))
+			for _, forbidden := range []string{"--session", "pid", "environment", "\"env\"", "token", "password",
+				"secret", "api_key", "api-key"} {
+				if strings.Contains(lower, forbidden) {
+					t.Fatalf("generated config contains forbidden field %q: %s", forbidden, got)
 				}
 			}
 			if test.client != config.ClientCodex {
@@ -62,6 +55,13 @@ func TestRenderGoldenClientConfigs(t *testing.T) {
 
 func TestRenderRejectsInvalidOrUnavailableSelections(t *testing.T) {
 	cfg := readCatalog(t)
+	base := cfg.Services[0]
+	unavailable := base
+	unavailable.Name, unavailable.Clients = "claude-only", []config.Client{config.ClientClaude}
+	repository := base
+	repository.Name, repository.Scope = "repository-index", config.ScopeRepository
+	nonStdio := base
+	nonStdio.Name, nonStdio.Transport = "remote", config.TransportStreamableHTTP
 	tests := []struct {
 		name string
 		opts Options
@@ -70,9 +70,9 @@ func TestRenderRejectsInvalidOrUnavailableSelections(t *testing.T) {
 		{"unknown client", Options{Client: "other", ConfigPath: "/catalog", GovernorPath: "/governor", Services: cfg.Services}, "client"},
 		{"empty catalog", Options{Client: config.ClientCodex, GovernorPath: "/governor", Services: cfg.Services}, "config path"},
 		{"empty governor", Options{Client: config.ClientCodex, ConfigPath: "/catalog", Services: cfg.Services}, "governor path"},
-		{"unavailable client", Options{Client: config.ClientCodex, ConfigPath: "/catalog", GovernorPath: "/governor", Services: selectServices(t, cfg, "claude-only")}, "not enabled"},
-		{"repository scope", Options{Client: config.ClientCodex, ConfigPath: "/catalog", GovernorPath: "/governor", Services: selectServices(t, cfg, "repository-index")}, "repository"},
-		{"non stdio", Options{Client: config.ClientCodex, ConfigPath: "/catalog", GovernorPath: "/governor", Services: selectServices(t, cfg, "remote")}, "stdio"},
+		{"unavailable client", Options{Client: config.ClientCodex, ConfigPath: "/catalog", GovernorPath: "/governor", Services: []config.ServiceRule{unavailable}}, "not enabled"},
+		{"repository scope", Options{Client: config.ClientCodex, ConfigPath: "/catalog", GovernorPath: "/governor", Services: []config.ServiceRule{repository}}, "repository"},
+		{"non stdio", Options{Client: config.ClientCodex, ConfigPath: "/catalog", GovernorPath: "/governor", Services: []config.ServiceRule{nonStdio}}, "stdio"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -82,6 +82,22 @@ func TestRenderRejectsInvalidOrUnavailableSelections(t *testing.T) {
 			}
 		})
 	}
+}
+
+func jsonGolden(root, client string, withType bool) string {
+	typeField := ""
+	if withType {
+		typeField = "\n      \"type\": \"stdio\","
+	}
+	entry := func(name, command string, serviceArgs []string) string {
+		args := []string{"proxy", "--config", "/etc/mcp/catalog.json", "--client", client, "--service", name, "--", command}
+		args = append(args, serviceArgs...)
+		data, _ := json.MarshalIndent(args, "      ", "  ")
+		return "    \"" + name + "\": {" + typeField + "\n      \"command\": \"/usr/local/bin/mcp-governor\",\n" +
+			"      \"args\": " + strings.TrimSpace(string(data)) + "\n    }"
+	}
+	return "{\n  \"" + root + "\": {\n" + entry("alpha", "/opt/mcp/alpha", []string{"serve", "--safe"}) + ",\n" +
+		entry("zeta", "/opt/mcp/zeta server", []string{"--label", "quoted \"value\""}) + "\n  }\n}\n"
 }
 
 func readCatalog(t *testing.T) config.Config {
@@ -96,18 +112,4 @@ func readCatalog(t *testing.T) config.Config {
 		t.Fatal(err)
 	}
 	return cfg
-}
-
-func selectServices(t *testing.T, cfg config.Config, names ...string) []config.ServiceRule {
-	t.Helper()
-	var selected []config.ServiceRule
-	for _, service := range cfg.Services {
-		if slices.Contains(names, service.Name) {
-			selected = append(selected, service)
-		}
-	}
-	if len(selected) != len(names) {
-		t.Fatalf("selected %d services, want %d", len(selected), len(names))
-	}
-	return selected
 }

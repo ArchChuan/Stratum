@@ -1171,15 +1171,8 @@ func runRenderConfig(opts renderOptions, stdout io.Writer) error {
 		return errors.New("render-config requires config version 2")
 	}
 	client := config.Client(opts.client)
-	services := make([]config.ServiceRule, 0, len(cfg.Services))
-	for _, service := range cfg.Services {
-		if serviceEnabled(service, client) && service.Transport == config.TransportStdio &&
-			service.Scope != config.ScopeRepository {
-			services = append(services, service)
-		}
-	}
 	data, err := clientconfig.Render(clientconfig.Options{
-		Client: client, ConfigPath: opts.configPath, GovernorPath: opts.governorPath, Services: services,
+		Client: client, ConfigPath: opts.configPath, GovernorPath: opts.governorPath, Services: cfg.Services,
 	})
 	if err != nil {
 		return fmt.Errorf("render client config: %w", err)
