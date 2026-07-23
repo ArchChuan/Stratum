@@ -249,6 +249,46 @@ func TestRunJoinsPrimaryAndCleanupErrors(t *testing.T) {
 	}
 }
 
+func TestRunPreservesSpontaneousChildExitWhenChildEOFWins(t *testing.T) {
+	server := buildFakeServer(t)
+	reader := newClosableBlockingReader()
+	err := Run(context.Background(), Options{
+		Command: server, Args: []string{"error"}, Stdin: reader,
+		Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if err == nil || !strings.Contains(err.Error(), "exit status 7") {
+		t.Fatalf("Run() error = %v, want spontaneous exit status 7", err)
+	}
+	if !reader.Closed() || !reader.Unblocked() {
+		t.Fatalf("reader closed=%v unblocked=%v", reader.Closed(), reader.Unblocked())
+	}
+}
+
+func TestRunCancellationClosesAndUnblocksAcceptedStdin(t *testing.T) {
+	server := buildFakeServer(t)
+	reader := newClosableBlockingReader()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{
+			Command: server, Args: []string{"sleep"}, Stdin: reader,
+			Stdout: io.Discard, Stderr: io.Discard,
+		})
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Run() error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run() did not return promptly after cancellation")
+	}
+	if !reader.Closed() || !reader.Unblocked() {
+		t.Fatalf("reader closed=%v unblocked=%v", reader.Closed(), reader.Unblocked())
+	}
+}
+
 type eventCollector struct {
 	mu     sync.Mutex
 	events []observe.Event
@@ -276,6 +316,49 @@ type blockingReader struct{ reads atomic.Int32 }
 func (r *blockingReader) Read([]byte) (int, error) {
 	r.reads.Add(1)
 	select {}
+}
+
+type closableBlockingReader struct {
+	closed    chan struct{}
+	unblocked chan struct{}
+	once      sync.Once
+}
+
+func newClosableBlockingReader() *closableBlockingReader {
+	return &closableBlockingReader{closed: make(chan struct{}), unblocked: make(chan struct{})}
+}
+
+func (r *closableBlockingReader) Read([]byte) (int, error) {
+	<-r.closed
+	r.once.Do(func() { close(r.unblocked) })
+	return 0, io.EOF
+}
+
+func (r *closableBlockingReader) Close() error {
+	select {
+	case <-r.closed:
+	default:
+		close(r.closed)
+	}
+	return nil
+}
+
+func (r *closableBlockingReader) Closed() bool {
+	select {
+	case <-r.closed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *closableBlockingReader) Unblocked() bool {
+	select {
+	case <-r.unblocked:
+		return true
+	default:
+		return false
+	}
 }
 
 type errorWriteCloser struct {

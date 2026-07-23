@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/observe"
 )
@@ -122,10 +123,12 @@ func Run(ctx context.Context, options Options) error {
 	if first.side == "client" && first.err == nil {
 		_ = stdinCleanup.Close()
 	}
-	cancelledByProxy := false
+	shutdownInitiated := false
+	exitCancellationExpected := false
 	var clientStdinCloseErr error
 	if first.err != nil || first.side == "child" {
-		cancelledByProxy = true
+		shutdownInitiated = true
+		exitCancellationExpected = first.err != nil || ctx.Err() != nil
 		cancel()
 		_ = stdinCleanup.Close()
 		_ = stdoutCleanup.Close()
@@ -141,14 +144,14 @@ func Run(ctx context.Context, options Options) error {
 
 	var runErr error
 	for _, item := range []result{first, second} {
-		if err := forwardingError(item.err, cancelledByProxy || ctx.Err() != nil); err != nil {
+		if err := forwardingError(item.err, shutdownInitiated || ctx.Err() != nil); err != nil {
 			runErr = errors.Join(runErr, err)
 		}
 	}
 	if ctx.Err() != nil {
 		runErr = errors.Join(runErr, ctx.Err())
 	}
-	if err := childWaitError(waitErr, cancelledByProxy || ctx.Err() != nil); err != nil {
+	if err := childWaitError(waitErr, exitCancellationExpected || ctx.Err() != nil); err != nil {
 		runErr = errors.Join(runErr, err)
 	}
 	if options.Tracker != nil {
@@ -200,10 +203,15 @@ func childWaitError(err error, cancelled bool) error {
 		return nil
 	}
 	var exitErr *exec.ExitError
-	if cancelled && errors.As(err, &exitErr) {
+	if cancelled && errors.As(err, &exitErr) && processWasSignalled(exitErr) {
 		return nil
 	}
 	return fmt.Errorf("stdio proxy: child process: %w", err)
+}
+
+func processWasSignalled(err *exec.ExitError) bool {
+	status, ok := err.ProcessState.Sys().(syscall.WaitStatus)
+	return ok && status.Signaled()
 }
 
 func forwardingError(err error, cancelled bool) error {
