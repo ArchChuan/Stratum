@@ -467,3 +467,60 @@ rrfScores[r.ID] += 1.0 / (rrfK + float64(rank+1))
 ### 11.3 Handler → Service 编排
 
 `RAGHandler.Query` 先 `WorkspaceService.GetWorkspace` 拿 `ws.ID + ws.Config.EmbeddingModel`，再喂给 `RAGService.Query`；`collectionName = CollectionName(tenantID, ws.ID)` 决定查哪个 Milvus 集合。
+
+---
+
+## 12. Agent 任务知识沉淀门禁
+
+本节只说明 Codex/Claude Code 的本地任务生命周期。分类规则和字段契约以
+`docs/agent/knowledge-deposition.md` 为准；权威报告是
+`tmp/knowledge-deposition/YYYY-MM-DD/<client>-<session>-<task>.json`，同名 `.md` 只是由 JSON 确定性渲染的
+审阅件。`tmp/knowledge-deposition/latest.md` 是历史索引，
+`tmp/knowledge-deposition/current/<client>-<session>.json` 是当前任务标记。四者均为本地忽略文件，不提交，
+也不自动清理或设置保留期限。
+
+### 12.1 生命周期
+
+1. `UserPromptSubmit` 收到 Stratum payload 后，为原始 session 生成不透明 session key 和新的 task ID，原子更新
+   current 标记，并把当前任务唯一可用的报告命令注入上下文。
+2. 命令形状固定为
+   `bash scripts/knowledge-deposition/report.sh --client <codex|claude> --session <opaque-session> --task <task-id> --repo-root <absolute-root>`；
+   JSON 从标准输入传入。路径和参数由 hook 按 shell 规则引用，必须原样执行注入的命令，不要手工删改引号或重新拼接。
+3. `report.sh` 校验 schema、任务/session、仓库根目录和当前 commit，随后原子生成配对 JSON/Markdown、latest
+   索引和 current 状态。即使结论为 `decision: "none"`，也必须提交有效报告。
+4. `Stop` 只读校验当前标记及报告。缺失、损坏、未配对、跨任务、跨 session 或 commit 不一致均 fail closed，
+   并返回同一条修复命令；有效报告则静默放行。`stop_hook_active: true` 不绕过门禁。非 Stratum payload
+   静默放行；能够确认属于 Stratum 的畸形 payload 必须阻断。
+
+同一 session 的后续 prompt 总会创建新 task；旧报告不能满足新 task。门禁只生成分类建议，绝不自动写入
+Skill、hook、全局指令、项目文档/ADR 或 Obsidian，目标写入必须另开经授权、可审查的任务。
+
+### 12.2 安装、回滚与恢复
+
+合并到主分支后，从主 checkout 执行：
+
+```bash
+bash scripts/knowledge-deposition/install-hooks.sh --repo-root /home/yang/go-projects/stratum
+```
+
+安装器在同目录创建带 UTC 时间戳的 `*.knowledge-deposition.*.bak`，保留无法识别的顶层字段、事件和 hook，
+每个客户端只收敛为一个受管 `UserPromptSubmit` 和一个受管 `Stop`，重复执行无变化，配置和备份权限为
+`0600`。安装失败时先看标准错误：发布第二个配置失败会尝试恢复第一个；若提示恢复也失败，按消息给出的
+备份路径人工恢复。回滚或卸载应恢复安装前对应的两个备份并保持 `0600`，再校验 JSON；不要只删除一个
+客户端的 Stop hook，避免生命周期半启用。备份缺失或来源不明时停止操作，先从受信配置副本恢复。
+
+功能分支不得注册真实用户 hook：主 checkout 尚无 `scripts/knowledge-deposition/` 时安装器不具备稳定目标，
+因此合并前只允许在私有临时配置副本中验收。合并后先确认主 checkout 含四个 adapter 和安装器，再记录
+真实配置哈希、执行安装、复核每客户端各一个受管 start/stop，最后在新的真实客户端 session 验证一次
+prompt → 缺报告 Stop 阻断 → `decision: "none"` 报告 → Stop 放行；异常时用配对备份整体回滚。
+
+### 12.3 当前客户端证据与限制（2026-07-23）
+
+- 本地版本为 Codex CLI `0.144.6`、Claude Code `2.1.211`。只读检查已注册事件结构；验收前后真实
+  `~/.codex/hooks.json` 与 `~/.claude/settings.json` 内容哈希保持不变，且未注册本功能分支。
+- 两个 CLI 的公开帮助均未提供受支持的 hook dry-run 或可脚本化真实 Stop 驱动。最接近真实客户端的证据是：
+  将真实配置复制到权限隔离的临时目录、在副本上运行安装器，以及把真实 `UserPromptSubmit`/`Stop` JSON
+  payload 直接送入四个 adapter，贯通 current 标记、`report.sh`、报告文件和 Stop 判定。该证据不能宣称
+  已完成真实交互客户端 Stop E2E；合并安装后的新 session 验证仍是发布步骤。
+- `report-test.sh` 49 项、`hooks-test.sh` 38 项覆盖主路径、门禁、并发/持久化、失败恢复、安装幂等与回滚；
+  后端、前端、浏览器、HTTP API 和数据库均不参与这条纯本地文件系统/配置链路。
