@@ -42,13 +42,17 @@ func TestPgStoreStage1ALifecycleAndTenantIsolation(t *testing.T) {
 	ctxB := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{TenantID: tenantB})
 
 	spec := domain.Spec{Nodes: []domain.Node{{ID: "one", Type: domain.NodeTypeAgent, AgentID: "agent-1"}}}
-	def, err := domain.NewDefinition(uuid.NewString(), "Research", "desc", spec)
+	inputSchema := domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{{
+		Key: "region", Label: "区域", Type: domain.InputFieldShortText,
+	}}}
+	def, err := domain.NewDefinition(uuid.NewString(), "Research", "desc", spec, inputSchema)
 	require.NoError(t, err)
 	require.NoError(t, store.CreateDefinition(ctxA, tenantA, def))
 	loaded, err := store.GetDefinition(ctxA, tenantA, def.ID)
 	require.NoError(t, err)
 	require.Equal(t, def.Spec, loaded.Spec)
-	require.NoError(t, loaded.UpdateDraft("Research v2", "changed", spec, 1))
+	require.Equal(t, inputSchema, loaded.InputSchema)
+	require.NoError(t, loaded.UpdateDraft("Research v2", "changed", spec, 1, inputSchema))
 	require.NoError(t, store.UpdateDefinition(ctxA, tenantA, loaded, 1))
 	require.ErrorIs(t, store.UpdateDefinition(ctxA, tenantA, loaded, 1), domain.ErrRevisionConflict)
 	_, err = store.GetDefinition(ctxB, tenantB, def.ID)
@@ -57,12 +61,21 @@ func TestPgStoreStage1ALifecycleAndTenantIsolation(t *testing.T) {
 	version, err := def.Publish(uuid.NewString(), 1)
 	require.NoError(t, err)
 	require.NoError(t, store.CreateVersion(ctxA, tenantA, version))
-	run, err := domain.NewRun(uuid.NewString(), version, map[string]any{"query": "hello"}, "key-1", "hash-1")
+	loadedVersion, err := store.GetVersion(ctxA, tenantA, version.ID)
 	require.NoError(t, err)
+	require.Equal(t, inputSchema, loadedVersion.InputSchema)
+	run, err := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "hello", "region": "east"}, "key-1", "hash-1")
+	require.NoError(t, err)
+	run.CreatedBy = "user-a"
 	require.NoError(t, store.CreateRun(ctxA, tenantA, run))
 	found, err := store.FindRunByIdempotency(ctxA, tenantA, "key-1")
 	require.NoError(t, err)
 	require.Equal(t, run.ID, found.ID)
+	require.Equal(t, "user-a", found.CreatedBy)
+	require.False(t, found.CreatedAt.IsZero())
+	require.False(t, found.UpdatedAt.IsZero())
+	_, err = store.GetRun(ctxB, tenantB, run.ID)
+	require.ErrorIs(t, err, domain.ErrNotFound)
 
 	attempt := domain.NodeAttempt{ID: uuid.NewString(), RunID: run.ID, NodeID: "one", AttemptNo: 1, Status: domain.AttemptStatusRunning, Input: "hello"}
 	require.NoError(t, store.SaveAttempt(ctxA, tenantA, attempt))
@@ -145,7 +158,7 @@ func TestPgStoreClaimsRunOnceAndRejectsStaleRelease(t *testing.T) {
 	require.NoError(t, store.CreateDefinition(tenantCtx, tenantID, definition))
 	version, _ := definition.Publish(uuid.NewString(), 1)
 	require.NoError(t, store.CreateVersion(tenantCtx, tenantID, version))
-	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"query": "hello"}, "claim-key", "hash")
+	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "hello"}, "claim-key", "hash")
 	require.NoError(t, store.CreateRun(tenantCtx, tenantID, run))
 
 	claimedTenant, first, claimed, err := store.ClaimRun(ctx, "worker-a", time.Minute)
@@ -161,12 +174,12 @@ func TestPgStoreClaimsRunOnceAndRejectsStaleRelease(t *testing.T) {
 	first.Status = domain.RunStatusRunning
 	require.NoError(t, store.UpdateRun(tenantCtx, tenantID, first))
 	for i := 1; i < domain.MaxTenantConcurrentRuns; i++ {
-		active, newErr := domain.NewRun(uuid.NewString(), version, map[string]any{}, fmt.Sprintf("active-%d", i), fmt.Sprintf("hash-%d", i))
+		active, newErr := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "active"}, fmt.Sprintf("active-%d", i), fmt.Sprintf("hash-%d", i))
 		require.NoError(t, newErr)
 		require.NoError(t, active.Start())
 		require.NoError(t, store.CreateRun(tenantCtx, tenantID, active))
 	}
-	queued, newErr := domain.NewRun(uuid.NewString(), version, map[string]any{}, "over-limit", "over-limit-hash")
+	queued, newErr := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "queued"}, "over-limit", "over-limit-hash")
 	require.NoError(t, newErr)
 	require.NoError(t, store.CreateRun(tenantCtx, tenantID, queued))
 	_, _, claimed, err = store.ClaimRun(ctx, "worker-over-limit", time.Minute)
@@ -204,7 +217,7 @@ func TestPgStoreClaimRunSkipsActiveTenantWhoseSchemaIsNotYetProvisioned(t *testi
 	version, err := definition.Publish(uuid.NewString(), 1)
 	require.NoError(t, err)
 	require.NoError(t, store.CreateVersion(tenantCtx, readyTenantID, version))
-	run, err := domain.NewRun(uuid.NewString(), version, map[string]any{}, "schema-race", "hash")
+	run, err := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "schema race"}, "schema-race", "hash")
 	require.NoError(t, err)
 	require.NoError(t, store.CreateRun(tenantCtx, readyTenantID, run))
 
@@ -234,7 +247,7 @@ func TestPgStoreRejectsLateAttemptCompletionFence(t *testing.T) {
 	require.NoError(t, store.CreateDefinition(tenantCtx, tenantID, definition))
 	version, _ := definition.Publish(uuid.NewString(), 1)
 	require.NoError(t, store.CreateVersion(tenantCtx, tenantID, version))
-	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{}, "fence-key", "hash")
+	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "fence"}, "fence-key", "hash")
 	require.NoError(t, store.CreateRun(tenantCtx, tenantID, run))
 	attempt := domain.NodeAttempt{ID: uuid.NewString(), RunID: run.ID, NodeID: "one", AttemptNo: 1, Status: domain.AttemptStatusSucceeded, OutputSummary: "new", FenceToken: 2}
 	require.NoError(t, store.SaveAttempt(tenantCtx, tenantID, attempt))
@@ -273,7 +286,7 @@ func TestPgStorePhase1CControlApprovalAndEffectAreTenantScopedAndFenced(t *testi
 	version, err := definition.Publish(uuid.NewString(), 1)
 	require.NoError(t, err)
 	require.NoError(t, store.CreateVersion(ctxA, tenantA, version))
-	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{}, "control-key", "hash")
+	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "control"}, "control-key", "hash")
 	require.NoError(t, store.CreateRun(ctxA, tenantA, run))
 
 	require.NoError(t, store.ControlRun(ctxA, tenantA, run.ID, run.Generation, domain.RunStatusPauseRequested, "maintenance", domain.Event{ID: uuid.NewString(), Type: "workflow.pause_requested", OccurredAt: time.Now().UTC()}))
@@ -297,7 +310,7 @@ func TestPgStorePhase1CControlApprovalAndEffectAreTenantScopedAndFenced(t *testi
 	require.ErrorIs(t, err, domain.ErrNotFound)
 	require.NoError(t, store.DecideApproval(ctxA, tenantA, approval.ID, approval.RunGeneration, approval.AttemptID, domain.ApprovalDecisionApprove, "admin", "ok", domain.Event{ID: uuid.NewString(), Type: "workflow.approval_decided", OccurredAt: time.Now().UTC()}))
 	require.ErrorIs(t, store.DecideApproval(ctxA, tenantA, approval.ID, approval.RunGeneration, approval.AttemptID, domain.ApprovalDecisionReject, "admin", "again", domain.Event{ID: uuid.NewString(), Type: "workflow.approval_decided", OccurredAt: time.Now().UTC()}), domain.ErrDecisionConflict)
-	run2, _ := domain.NewRun(uuid.NewString(), version, map[string]any{}, "reject-key", "reject-hash")
+	run2, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "reject"}, "reject-key", "reject-hash")
 	require.NoError(t, run2.Start())
 	require.NoError(t, store.CreateRun(ctxA, tenantA, run2))
 	attempt2 := domain.NodeAttempt{ID: uuid.NewString(), RunID: run2.ID, NodeID: "approve", AttemptNo: 1, Status: domain.AttemptStatusPaused, FenceToken: run2.Generation, RunGeneration: run2.Generation}
@@ -341,7 +354,7 @@ func TestPgStoreReclaimsExpiredRunAndRenewsLease(t *testing.T) {
 	require.NoError(t, store.CreateDefinition(tenantCtx, tenantID, definition))
 	version, _ := definition.Publish(uuid.NewString(), 1)
 	require.NoError(t, store.CreateVersion(tenantCtx, tenantID, version))
-	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{}, "recovery-key", "hash")
+	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "recovery"}, "recovery-key", "hash")
 	require.NoError(t, run.Start())
 	run.SchedulerOwner = "dead-worker"
 	expired := time.Now().Add(-time.Minute)
@@ -378,7 +391,7 @@ func TestPgStoreClaimsPersistentCancelWithoutOverwritingControlState(t *testing.
 	require.NoError(t, store.CreateDefinition(tenantCtx, tenantID, definition))
 	version, _ := definition.Publish(uuid.NewString(), 1)
 	require.NoError(t, store.CreateVersion(tenantCtx, tenantID, version))
-	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{}, "cancel-key", "hash")
+	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "cancel"}, "cancel-key", "hash")
 	require.NoError(t, store.CreateRun(tenantCtx, tenantID, run))
 	require.NoError(t, store.ControlRun(tenantCtx, tenantID, run.ID, run.Generation, domain.RunStatusCancelRequested, "stop", domain.Event{ID: uuid.NewString(), Type: "workflow.cancel_requested", OccurredAt: time.Now().UTC()}))
 	claimedTenant, claimedRun, claimed, err := store.ClaimRun(ctx, "worker", time.Minute)
@@ -407,7 +420,7 @@ func TestPgStoreAttemptCheckpointRollsBackWhenEventInsertFails(t *testing.T) {
 	require.NoError(t, store.CreateDefinition(tenantCtx, tenantID, definition))
 	version, _ := definition.Publish(uuid.NewString(), 1)
 	require.NoError(t, store.CreateVersion(tenantCtx, tenantID, version))
-	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{}, "atomic-key", "hash")
+	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "atomic"}, "atomic-key", "hash")
 	require.NoError(t, store.CreateRun(tenantCtx, tenantID, run))
 	attempt := domain.NodeAttempt{ID: uuid.NewString(), RunID: run.ID, NodeID: "one", AttemptNo: 1, Status: domain.AttemptStatusRunning, FenceToken: 1, RunGeneration: 1}
 	eventID := uuid.NewString()
@@ -439,7 +452,7 @@ func TestPgStoreRunCheckpointRollsBackWhenEventInsertFails(t *testing.T) {
 	require.NoError(t, store.CreateDefinition(tenantCtx, tenantID, definition))
 	version, _ := definition.Publish(uuid.NewString(), 1)
 	require.NoError(t, store.CreateVersion(tenantCtx, tenantID, version))
-	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{}, "run-atomic", "hash")
+	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "run atomic"}, "run-atomic", "hash")
 	require.NoError(t, store.CreateRun(tenantCtx, tenantID, run))
 	eventID := uuid.NewString()
 	_, err = store.AppendEvent(tenantCtx, tenantID, domain.Event{ID: eventID, RunID: run.ID, Type: "seed", OccurredAt: time.Now().UTC()})
@@ -475,7 +488,7 @@ func TestPgStoreManualInterventionActionsAndConcurrentDecision(t *testing.T) {
 		action domain.ManualAction
 		want   domain.RunStatus
 	}{{domain.ManualActionMarkSucceeded, domain.RunStatusQueued}, {domain.ManualActionRetry, domain.RunStatusQueued}, {domain.ManualActionTerminate, domain.RunStatusFailed}} {
-		run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{}, "manual-"+string(tc.action), "hash-"+string(tc.action))
+		run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "manual"}, "manual-"+string(tc.action), "hash-"+string(tc.action))
 		require.NoError(t, run.Start())
 		require.NoError(t, store.CreateRun(tenantCtx, tenantID, run))
 		require.NoError(t, store.ControlRun(tenantCtx, tenantID, run.ID, run.Generation, domain.RunStatusManualIntervention, "unknown", domain.Event{ID: uuid.NewString(), Type: "workflow.manual_intervention", OccurredAt: time.Now().UTC()}))
@@ -503,7 +516,7 @@ func TestPgStoreManualInterventionActionsAndConcurrentDecision(t *testing.T) {
 		}
 	}
 
-	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{}, "decision-race", "hash-race")
+	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "decision race"}, "decision-race", "hash-race")
 	require.NoError(t, run.Start())
 	require.NoError(t, store.CreateRun(tenantCtx, tenantID, run))
 	attempt := domain.NodeAttempt{ID: uuid.NewString(), RunID: run.ID, NodeID: "tool", AttemptNo: 1, Status: domain.AttemptStatusPaused, FenceToken: run.Generation, RunGeneration: run.Generation}
@@ -551,7 +564,7 @@ func TestPgStoreTerminalRunsCannotBeResurrectedByControlCAS(t *testing.T) {
 	version, _ := definition.Publish(uuid.NewString(), 1)
 	require.NoError(t, store.CreateVersion(tenantCtx, tenantID, version))
 	for _, status := range []domain.RunStatus{domain.RunStatusCompleted, domain.RunStatusFailed, domain.RunStatusCanceled} {
-		run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{}, "terminal-"+string(status), "hash-"+string(status))
+		run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "terminal"}, "terminal-"+string(status), "hash-"+string(status))
 		run.Status = status
 		require.NoError(t, store.CreateRun(tenantCtx, tenantID, run))
 		for _, target := range []domain.RunStatus{domain.RunStatusPauseRequested, domain.RunStatusCancelRequested} {
@@ -587,7 +600,7 @@ func TestPgStoreReclaimsExpiredRunAtTenantConcurrencyLimit(t *testing.T) {
 	require.NoError(t, store.CreateVersion(tenantCtx, tenantID, version))
 	expired := time.Now().Add(-time.Minute)
 	for i := 0; i < domain.MaxTenantConcurrentRuns; i++ {
-		run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{}, fmt.Sprintf("expired-%d", i), fmt.Sprintf("hash-%d", i))
+		run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "expired"}, fmt.Sprintf("expired-%d", i), fmt.Sprintf("hash-%d", i))
 		require.NoError(t, run.Start())
 		run.SchedulerOwner, run.LeaseExpiresAt = "dead", &expired
 		require.NoError(t, store.CreateRun(tenantCtx, tenantID, run))
@@ -619,7 +632,7 @@ func TestPgStoreExternalEffectFenceRejectsStaleWorkerBeforeCall(t *testing.T) {
 	require.NoError(t, store.CreateDefinition(tenantCtx, tenantID, definition))
 	version, _ := definition.Publish(uuid.NewString(), 1)
 	require.NoError(t, store.CreateVersion(tenantCtx, tenantID, version))
-	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{}, "fence-effect", "hash")
+	run, _ := domain.NewRun(uuid.NewString(), version, map[string]any{"task": "fence effect"}, "fence-effect", "hash")
 	require.NoError(t, store.CreateRun(tenantCtx, tenantID, run))
 	_, claimedA, ok, err := store.ClaimRun(ctx, "worker-a", 25*time.Millisecond)
 	require.NoError(t, err)

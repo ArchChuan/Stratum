@@ -677,8 +677,13 @@ type Run struct {
 	PauseReason    string         `json:"pause_reason,omitempty"`
 	CancelReason   string         `json:"cancel_reason,omitempty"`
 	ManualReason   string         `json:"manual_reason,omitempty"`
+	CreatedBy      string         `json:"created_by"`
 	SchedulerOwner string         `json:"scheduler_owner,omitempty"`
 	LeaseExpiresAt *time.Time     `json:"lease_expires_at,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	StartedAt      *time.Time     `json:"started_at,omitempty"`
+	FinishedAt     *time.Time     `json:"finished_at,omitempty"`
 }
 
 func NewRun(id string, version *Version, input map[string]any, idempotencyKey, requestHash string) (*Run, error) {

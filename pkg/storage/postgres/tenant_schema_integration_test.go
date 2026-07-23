@@ -103,6 +103,52 @@ func TestProvisionTenantSchema_ReplacesLegacySkillsAndDropsAgentObservationTable
 	}
 }
 
+func TestProvisionTenantSchemaBackfillsWorkflowProductColumns(t *testing.T) {
+	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
+	if url == "" {
+		t.Skip("STRATUM_TEST_POSTGRES_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := postgres.ProvisionPublicSchema(ctx, pool, zap.NewNop()); err != nil {
+		t.Fatal(err)
+	}
+
+	tenantID := fmt.Sprintf("tmp_workflow_product_%d", time.Now().UnixNano())
+	schema := `tenant_` + tenantID
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`) })
+	legacy := `CREATE SCHEMA "` + schema + `";
+		CREATE TABLE "` + schema + `".workflow_definitions (id UUID PRIMARY KEY);
+		CREATE TABLE "` + schema + `".workflow_versions (id UUID PRIMARY KEY);
+		CREATE TABLE "` + schema + `".workflow_runs (id UUID PRIMARY KEY);`
+	if _, err := pool.Exec(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+
+	var columns, indexes int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns
+		WHERE table_schema=$1 AND ((table_name='workflow_definitions' AND column_name='draft_input_schema_json')
+		OR (table_name='workflow_versions' AND column_name='input_schema_json')
+		OR (table_name='workflow_runs' AND column_name='created_by'))`, schema).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_indexes WHERE schemaname=$1
+		AND indexname='idx_workflow_runs_created_by_created'`, schema).Scan(&indexes); err != nil {
+		t.Fatal(err)
+	}
+	if columns != 3 || indexes != 1 {
+		t.Fatalf("workflow product backfill incomplete: columns=%d indexes=%d", columns, indexes)
+	}
+}
+
 func TestProvisionTenantSchemaAddsFactSourceIdentityWithoutBackfillingLegacyFacts(t *testing.T) {
 	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
 	if url == "" {

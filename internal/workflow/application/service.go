@@ -117,6 +117,7 @@ type StartRunCommand struct {
 	VersionID      string
 	Input          map[string]any
 	IdempotencyKey string
+	CreatedBy      string
 }
 
 type RunService struct {
@@ -192,6 +193,7 @@ func (s *RunService) Start(ctx context.Context, tenantID string, cmd StartRunCom
 	if err != nil {
 		return nil, false, err
 	}
+	run.CreatedBy = cmd.CreatedBy
 	if creator, ok := s.store.(port.IdempotentRunCreator); ok {
 		return creator.CreateRunIdempotent(ctx, tenantID, run)
 	}

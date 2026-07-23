@@ -195,9 +195,10 @@ func TestRunServiceStartAsyncOnlyPersistsQueuedRun(t *testing.T) {
 	version, _ := defs.Publish(context.Background(), "tenant-1", def.ID)
 	runs := application.NewRunService(store, store, agents, idgen.NewID)
 
-	run, created, err := runs.StartAsync(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "hello"}, IdempotencyKey: "async"})
+	run, created, err := runs.StartAsync(context.Background(), "tenant-1", application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"task": "hello"}, IdempotencyKey: "async", CreatedBy: "user-a"})
 	require.NoError(t, err)
 	require.True(t, created)
+	require.Equal(t, "user-a", run.CreatedBy)
 	time.Sleep(30 * time.Millisecond)
 	got, _, getErr := runs.Get(context.Background(), "tenant-1", run.ID)
 	require.NoError(t, getErr)
