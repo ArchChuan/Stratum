@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 usage() {
   printf 'Usage: %s --repo-root ABS\n' "$(basename "$0")" >&2
@@ -25,8 +26,8 @@ for adapter in codex-task-start.sh codex-stop.sh claude-task-start.sh claude-sto
     fail "required adapter is missing, unreadable, or a symlink: $adapter"
 done
 
-codex_config="${CODEX_HOOKS_JSON:-/home/yang/.codex/hooks.json}"
-claude_config="${CLAUDE_SETTINGS_JSON:-/home/yang/.claude/settings.json}"
+codex_config="${CODEX_HOOKS_JSON:-${HOME:?HOME is required}/.codex/hooks.json}"
+claude_config="${CLAUDE_SETTINGS_JSON:-${HOME:?HOME is required}/.claude/settings.json}"
 
 safe_config() {
   local path="$1" parent component current
@@ -79,15 +80,11 @@ chmod 600 "$codex_tmp" "$claude_tmp"
 
 transform() {
   local source="$1" destination="$2" start_command="$3" stop_command="$4"
-  jq --arg root "$script_root/" --arg start "$start_command" --arg stop "$stop_command" '
+  jq --arg start "$start_command" --arg stop "$stop_command" '
     def managed($command):
       ($command | type == "string") and
       (($command == $start) or ($command == $stop) or
-       (($command | contains($root)) and
-        (($command | endswith("/codex-task-start.sh")) or
-         ($command | endswith("/codex-stop.sh")) or
-         ($command | endswith("/claude-task-start.sh")) or
-         ($command | endswith("/claude-stop.sh")))));
+       ($command | test("/scripts/knowledge-deposition/(codex|claude)-(task-start|stop)\\.sh$")));
     def clean_event($event):
       (($event // []) | map(
         .hooks = ((.hooks // []) | map(select(managed(.command) | not)))

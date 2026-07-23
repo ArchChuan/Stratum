@@ -36,6 +36,7 @@ payload() {
 }
 
 run_hook() { printf '%s' "$2" | "$1"; }
+run_installer() { timeout 10s "$INSTALLER" "$@"; }
 
 valid_none() {
   jq -cn '{decision:"none",task_summary:"Routine maintenance only.",none_reason:"No reusable knowledge was produced.",candidates:[]}'
@@ -372,19 +373,21 @@ installer_configs="$FIXTURES/installer-configs"
 mkdir -p "$installer_configs/codex" "$installer_configs/claude"
 codex_config="$installer_configs/codex/hooks.json"
 claude_config="$installer_configs/claude/settings.json"
-jq -n '{theme:"dark",hooks:{UserPromptSubmit:[{matcher:"existing",hooks:[{type:"command",command:"echo codex-start"}]}],Stop:[{hooks:[{type:"command",command:"echo codex-stop"}]}]}}' >"$codex_config"
-jq -n '{permissions:{allow:["Read"]},hooks:{UserPromptSubmit:[{hooks:[{type:"command",command:"echo claude-start"}]}],Stop:[{hooks:[{type:"command",command:"echo claude-stop"}]}]}}' >"$claude_config"
+jq -n '{theme:"dark",hooks:{UserPromptSubmit:[{matcher:"existing",hooks:[{type:"command",command:"echo codex-start"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/codex-task-start.sh"}]}],Stop:[{hooks:[{type:"command",command:"echo codex-stop"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/codex-stop.sh"}]}]}}' >"$codex_config"
+jq -n '{permissions:{allow:["Read"]},hooks:{UserPromptSubmit:[{hooks:[{type:"command",command:"echo claude-start"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/claude-task-start.sh"}]}],Stop:[{hooks:[{type:"command",command:"echo claude-stop"},{type:"command",command:"bash /old/repo/scripts/knowledge-deposition/claude-stop.sh"}]}]}}' >"$claude_config"
 codex_original="$(cat "$codex_config")"
 claude_original="$(cat "$claude_config")"
-install_out="$(CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$claude_config" "$INSTALLER" --repo-root "$installer_repo")" || fail "installer failed"
+install_out="$(CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$claude_config" run_installer --repo-root "$installer_repo")" || fail "installer failed"
 for spec in \
   "$codex_config|codex-task-start.sh|codex-stop.sh|echo codex-start|echo codex-stop" \
   "$claude_config|claude-task-start.sh|claude-stop.sh|echo claude-start|echo claude-stop"; do
   IFS='|' read -r config start_name stop_name unrelated_start unrelated_stop <<<"$spec"
   jq -e --arg root "$installer_repo" --arg start "$start_name" --arg stop "$stop_name" \
     --arg unrelated_start "$unrelated_start" --arg unrelated_stop "$unrelated_stop" '
-      (.hooks.UserPromptSubmit | map(.hooks[]?.command) | map(select(contains($root + "/scripts/knowledge-deposition/" + $start))) | length) == 1 and
-      (.hooks.Stop | map(.hooks[]?.command) | map(select(contains($root + "/scripts/knowledge-deposition/" + $stop))) | length) == 1 and
+      (.hooks.UserPromptSubmit | map(.hooks[]?.command) | map(select(endswith("/scripts/knowledge-deposition/" + $start))) | length) == 1 and
+      (.hooks.Stop | map(.hooks[]?.command) | map(select(endswith("/scripts/knowledge-deposition/" + $stop))) | length) == 1 and
+      any(.hooks.UserPromptSubmit[]?.hooks[]?; .command == ("bash " + $root + "/scripts/knowledge-deposition/" + $start)) and
+      any(.hooks.Stop[]?.hooks[]?; .command == ("bash " + $root + "/scripts/knowledge-deposition/" + $stop)) and
       any(.hooks.UserPromptSubmit[]?.hooks[]?; .command == $unrelated_start) and
       any(.hooks.Stop[]?.hooks[]?; .command == $unrelated_stop)
     ' "$config" >/dev/null || fail "installer did not preserve and install exactly one lifecycle pair: $config"
@@ -393,35 +396,47 @@ jq -e '.theme == "dark"' "$codex_config" >/dev/null || fail "Codex unrelated roo
 jq -e '.permissions.allow == ["Read"]' "$claude_config" >/dev/null || fail "Claude unrelated root property lost"
 first_codex="$(sha256sum "$codex_config")"; first_claude="$(sha256sum "$claude_config")"
 backup_count="$(find "$installer_configs" -type f -name '*.knowledge-deposition.*.bak' | wc -l)"
-CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$claude_config" "$INSTALLER" --repo-root "$installer_repo" >/dev/null || fail "idempotent installer run failed"
+CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$claude_config" run_installer --repo-root "$installer_repo" >/dev/null || fail "idempotent installer run failed"
 [[ "$(sha256sum "$codex_config")" == "$first_codex" && "$(sha256sum "$claude_config")" == "$first_claude" ]] || fail "second install changed canonical output"
 [[ "$(find "$installer_configs" -type f -name '*.knowledge-deposition.*.bak' | wc -l)" == "$backup_count" ]] || fail "idempotent run created unnecessary backups"
 [[ "$install_out" != *"$codex_original"* && "$install_out" != *"$claude_original"* ]] || fail "installer printed full settings"
 pass "installer preserves unrelated JSON, installs one pair per client, and is byte-stable idempotent"
 
+default_home="$FIXTURES/default-home"
+mkdir -p "$default_home/.codex" "$default_home/.claude"
+jq -n '{hooks:{},client:"codex-default"}' >"$default_home/.codex/hooks.json"
+jq -n '{hooks:{},client:"claude-default"}' >"$default_home/.claude/settings.json"
+HOME="$default_home" run_installer --repo-root "$installer_repo" >/dev/null || fail "installer did not use HOME-relative defaults"
+jq -e '.client == "codex-default" and (.hooks.UserPromptSubmit | length) == 1 and (.hooks.Stop | length) == 1' \
+  "$default_home/.codex/hooks.json" >/dev/null || fail "Codex default fixture was not installed"
+jq -e '.client == "claude-default" and (.hooks.UserPromptSubmit | length) == 1 and (.hooks.Stop | length) == 1' \
+  "$default_home/.claude/settings.json" >/dev/null || fail "Claude default fixture was not installed"
+if HOME="$default_home" run_installer "$installer_repo" >/dev/null 2>&1; then fail "positional repository root accepted"; fi
+pass "installer defaults are HOME-relative and the CLI accepts only --repo-root"
+
 malformed_codex="$installer_configs/codex/malformed.json"
 malformed_claude="$installer_configs/claude/malformed.json"
 printf '{bad\n' >"$malformed_codex"; cp "$claude_config" "$malformed_claude"
 malformed_codex_before="$(cat "$malformed_codex")"; malformed_claude_before="$(cat "$malformed_claude")"
-if CODEX_HOOKS_JSON="$malformed_codex" CLAUDE_SETTINGS_JSON="$malformed_claude" "$INSTALLER" --repo-root "$installer_repo" >/dev/null 2>&1; then fail "malformed input accepted"; fi
+if CODEX_HOOKS_JSON="$malformed_codex" CLAUDE_SETTINGS_JSON="$malformed_claude" run_installer --repo-root "$installer_repo" >/dev/null 2>&1; then fail "malformed input accepted"; fi
 [[ "$(cat "$malformed_codex")" == "$malformed_codex_before" && "$(cat "$malformed_claude")" == "$malformed_claude_before" ]] || fail "malformed validation mutated inputs"
 cp "$codex_config" "$malformed_codex"; printf '[]\n' >"$malformed_claude"
 malformed_codex_before="$(cat "$malformed_codex")"; malformed_claude_before="$(cat "$malformed_claude")"
-if CODEX_HOOKS_JSON="$malformed_codex" CLAUDE_SETTINGS_JSON="$malformed_claude" "$INSTALLER" --repo-root "$installer_repo" >/dev/null 2>&1; then fail "non-object input accepted"; fi
+if CODEX_HOOKS_JSON="$malformed_codex" CLAUDE_SETTINGS_JSON="$malformed_claude" run_installer --repo-root "$installer_repo" >/dev/null 2>&1; then fail "non-object input accepted"; fi
 [[ "$(cat "$malformed_codex")" == "$malformed_codex_before" && "$(cat "$malformed_claude")" == "$malformed_claude_before" ]] || fail "shape validation mutated inputs"
 cp "$codex_config" "$malformed_codex"; jq '.hooks.Stop[0].hooks = ["bad"]' "$claude_config" >"$malformed_claude"
-if CODEX_HOOKS_JSON="$malformed_codex" CLAUDE_SETTINGS_JSON="$malformed_claude" "$INSTALLER" --repo-root "$installer_repo" >/dev/null 2>&1; then fail "malformed hook entry accepted"; fi
+if CODEX_HOOKS_JSON="$malformed_codex" CLAUDE_SETTINGS_JSON="$malformed_claude" run_installer --repo-root "$installer_repo" >/dev/null 2>&1; then fail "malformed hook entry accepted"; fi
 same_config="$installer_configs/same.json"; cp "$codex_config" "$same_config"
-if CODEX_HOOKS_JSON="$same_config" CLAUDE_SETTINGS_JSON="$same_config" "$INSTALLER" --repo-root "$installer_repo" >/dev/null 2>&1; then fail "identical config destinations accepted"; fi
+if CODEX_HOOKS_JSON="$same_config" CLAUDE_SETTINGS_JSON="$same_config" run_installer --repo-root "$installer_repo" >/dev/null 2>&1; then fail "identical config destinations accepted"; fi
 pass "installer validates both JSON inputs before either mutation"
 
 missing_root="$FIXTURES/missing-parent/codex/hooks.json"
 missing_claude="$FIXTURES/missing-parent/claude/settings.json"
-if CODEX_HOOKS_JSON="$missing_root" CLAUDE_SETTINGS_JSON="$missing_claude" "$INSTALLER" --repo-root "$installer_repo" >/dev/null 2>&1; then fail "missing config parent accepted"; fi
+if CODEX_HOOKS_JSON="$missing_root" CLAUDE_SETTINGS_JSON="$missing_claude" run_installer --repo-root "$installer_repo" >/dev/null 2>&1; then fail "missing config parent accepted"; fi
 [[ ! -e "$missing_root" && ! -e "$missing_claude" ]] || fail "missing config paths were created"
 link_target="$installer_configs/link-target.json"; cp "$claude_config" "$link_target"
 link_config="$installer_configs/claude/settings-link.json"; ln -s "$link_target" "$link_config"
-if CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$link_config" "$INSTALLER" --repo-root "$installer_repo" >/dev/null 2>&1; then fail "symlink config accepted"; fi
+if CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$link_config" run_installer --repo-root "$installer_repo" >/dev/null 2>&1; then fail "symlink config accepted"; fi
 pass "installer rejects missing parents and symlink destinations"
 
 rollback_dir="$FIXTURES/rollback"
@@ -432,7 +447,7 @@ rollback_codex_before="$(cat "$rollback_codex")"; rollback_claude_before="$(cat 
 real_mv="$(command -v mv)"
 printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'count_file="${KD_MV_COUNT}"' 'count=0' '[[ ! -f "$count_file" ]] || count="$(cat "$count_file")"' 'count=$((count + 1))' 'printf "%s\n" "$count" >"$count_file"' 'if [[ "$count" -eq 2 ]]; then exit 73; fi' 'exec "$KD_REAL_MV" "$@"' >"$rollback_dir/bin/mv"
 chmod +x "$rollback_dir/bin/mv"
-if PATH="$rollback_dir/bin:$PATH" KD_MV_COUNT="$rollback_dir/mv.count" KD_REAL_MV="$real_mv" CODEX_HOOKS_JSON="$rollback_codex" CLAUDE_SETTINGS_JSON="$rollback_claude" "$INSTALLER" --repo-root "$installer_repo" >"$rollback_dir/out" 2>"$rollback_dir/err"; then fail "injected second rename failure succeeded"; fi
+if PATH="$rollback_dir/bin:$PATH" KD_MV_COUNT="$rollback_dir/mv.count" KD_REAL_MV="$real_mv" CODEX_HOOKS_JSON="$rollback_codex" CLAUDE_SETTINGS_JSON="$rollback_claude" run_installer --repo-root "$installer_repo" >"$rollback_dir/out" 2>"$rollback_dir/err"; then fail "injected second rename failure succeeded"; fi
 [[ "$(cat "$rollback_codex")" == "$rollback_codex_before" && "$(cat "$rollback_claude")" == "$rollback_claude_before" ]] || fail "transaction rollback did not preserve both originals"
 while IFS= read -r backup; do
   [[ "$(stat -c %a "$backup")" == 600 ]] || fail "backup permissions are not private: $backup"
