@@ -10,7 +10,29 @@ CLAUDE_STOP="$SCRIPT_DIR/claude-stop.sh"
 REPORT="$SCRIPT_DIR/report.sh"
 INSTALLER="$SCRIPT_DIR/install-hooks.sh"
 FIXTURES="$(mktemp -d)"
-trap 'rm -rf "$FIXTURES"' EXIT
+actual_marker=''
+actual_json=''
+actual_md=''
+actual_latest=''
+actual_latest_backup=''
+actual_latest_existed=false
+
+cleanup_actual_root() {
+  [[ -z "$actual_marker" ]] || rm -f -- "$actual_marker"
+  [[ -z "$actual_json" ]] || rm -f -- "$actual_json"
+  [[ -z "$actual_md" ]] || rm -f -- "$actual_md"
+  if [[ "$actual_latest_existed" == true && -n "$actual_latest_backup" && -f "$actual_latest_backup" ]]; then
+    cp -- "$actual_latest_backup" "$actual_latest"
+  elif [[ -n "$actual_latest" ]]; then
+    rm -f -- "$actual_latest"
+  fi
+}
+
+cleanup() {
+  cleanup_actual_root
+  rm -rf "$FIXTURES"
+}
+trap cleanup EXIT
 
 count=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -80,13 +102,34 @@ done
 pass "all adapters exist"
 
 actual_root="$(git -C "$SCRIPT_DIR/../.." rev-parse --show-toplevel)"
-actual_out="$(run_hook "$CODEX_START" "$(payload "$actual_root" actual-root-session UserPromptSubmit)")"
+actual_raw_session="actual-root-$(date +%s%N)-$RANDOM"
+actual_latest="$actual_root/tmp/knowledge-deposition/latest.md"
+actual_latest_backup="$FIXTURES/actual-latest.md"
+if [[ -f "$actual_latest" ]]; then
+  cp -- "$actual_latest" "$actual_latest_backup"
+  actual_latest_existed=true
+fi
+actual_out="$(run_hook "$CODEX_START" "$(payload "$actual_root" "$actual_raw_session" UserPromptSubmit)")"
 jq -e '.continue == true and (.systemMessage | contains("Knowledge deposition task gate active."))' \
   <<<"$actual_out" >/dev/null || fail "actual feature worktree was treated as non-Stratum"
-actual_marker="$(find "$actual_root/tmp/knowledge-deposition/current" -name 'codex-session-*.json' -print -quit)"
+actual_session="$(jq -er '.systemMessage | capture("--session (?<value>[^ ]+) --task").value' <<<"$actual_out")"
+actual_task="$(jq -er '.systemMessage | capture("--task (?<value>[^ ]+) --repo-root").value' <<<"$actual_out")"
+actual_marker="$actual_root/tmp/knowledge-deposition/current/codex-$actual_session.json"
 [[ -f "$actual_marker" ]] || fail "actual feature worktree marker missing"
-rm -f -- "$actual_marker"
-pass "actual feature worktree activates the Stratum task gate"
+actual_report="$(printf '%s' "$(valid_none)" | "$REPORT" --client codex --session "$actual_session" \
+  --task "$actual_task" --repo-root "$actual_root")" || fail "actual feature worktree report failed"
+actual_md="$actual_report"
+actual_json="${actual_report%.md}.json"
+actual_head="$(git -C "$actual_root" rev-parse --verify HEAD)"
+jq -e --arg root "$actual_root" --arg session "$actual_session" --arg task "$actual_task" --arg commit "$actual_head" \
+  '.repository == {root:$root,commit:$commit} and .session_id == $session and .task_id == $task and .decision == "none"' \
+  "$actual_json" >/dev/null || fail "actual feature worktree report identity mismatch"
+actual_stop="$(run_hook "$CODEX_STOP" "$(payload "$actual_root" "$actual_raw_session" Stop false)")"
+jq -e '.continue == true and .suppressOutput == true' <<<"$actual_stop" >/dev/null || \
+  fail "actual feature worktree Stop did not allow quietly"
+cleanup_actual_root
+actual_marker=''; actual_json=''; actual_md=''; actual_latest=''; actual_latest_backup=''; actual_latest_existed=false
+pass "actual feature worktree completes task start, report, and Stop lifecycle"
 
 repo="$(new_repo main)"
 codex_raw_session='codex/session unsafe'

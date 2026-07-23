@@ -486,9 +486,11 @@ rrfScores[r.ID] += 1.0 / (rrfK + float64(rank+1))
 2. 命令形状固定为
    `bash scripts/knowledge-deposition/report.sh --client <codex|claude> --session <opaque-session> --task <task-id> --repo-root <absolute-root>`；
    JSON 从标准输入传入。路径和参数由 hook 按 shell 规则引用，必须原样执行注入的命令，不要手工删改引号或重新拼接。
-3. `report.sh` 校验 schema、任务/session、仓库根目录和当前 commit，随后原子生成配对 JSON/Markdown、latest
-   索引和 current 状态。即使结论为 `decision: "none"`，也必须提交有效报告。
-4. `Stop` 只读校验当前标记及报告。缺失、损坏、未配对、跨任务、跨 session 或 commit 不一致均 fail closed，
+3. `report.sh` 先读取并校验 task-start 已创建的 current 标记，再校验 schema、任务/session、仓库根目录和当前
+   commit，随后原子生成带日期的配对 JSON/Markdown 与 latest 索引；它不创建或推进 current 标记。即使结论为
+   `decision: "none"`，也必须提交有效报告。
+4. `Stop` 通过 `check.sh` 只读 current 标记，并校验与其 task/session/仓库/commit 精确匹配的唯一报告对。缺失、
+   损坏、未配对、跨任务、跨 session 或 commit 不一致均 fail closed，
    并返回同一条修复命令；有效报告则静默放行。`stop_hook_active: true` 不绕过门禁。非 Stratum payload
    静默放行；能够确认属于 Stratum 的畸形 payload 必须阻断。
 
