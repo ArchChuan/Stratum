@@ -47,6 +47,10 @@
 .workflow-node-icon.type-condition { background: #fff5db; color: #a86500; }
 .workflow-node-icon.type-approval { background: #fff0f0; color: #c0394b; }
 .workflow-node-size-contract { display: none; }
+.workflow-input-editor { border-top: 1px solid #eceef5; margin-top: 20px; padding-top: 20px; }
+.workflow-input-editor > .ant-typography { display: block; margin-bottom: 16px; }
+.workflow-input-field { background: #f8f9fc; border: 1px solid #eceef5; border-radius: 10px; margin-bottom: 12px; padding: 12px; }
+.workflow-node-inspector { background: #fff; border-left: 1px solid #e7e9f2; padding: 18px; }
 
 @media (max-width: 767px) {
   .workflow-catalog-header { align-items: stretch; flex-direction: column; }
