@@ -138,7 +138,7 @@ func TestDecodeVersion2ScopeSessionPolicy(t *testing.T) {
 }
 
 func TestDecodeVersion2RejectsInlineCredentials(t *testing.T) {
-	for _, arg := range []string{"--token=value", "PASSWORD=value", "prefix-api_key=value", "--Api-Key=value"} {
+	for _, arg := range []string{"--token=value", "PASSWORD=value", "api_key=value", "--Api-Key=value"} {
 		t.Run(arg, func(t *testing.T) {
 			input := strings.Replace(validVersion2Config, `"args": ["chroma-mcp"]`,
 				`"args": ["chroma-mcp", "`+arg+`"]`, 1)
@@ -154,9 +154,49 @@ func TestDecodeVersion2RejectsInlineCredentials(t *testing.T) {
 			}
 		})
 	}
-	input := strings.Replace(validVersion2Config, `"args": ["chroma-mcp"]`, `"args": ["chroma-mcp", "--token"]`, 1)
-	if _, err := Decode(strings.NewReader(input)); err != nil {
-		t.Fatalf("bare credential flag rejected: %v", err)
+	for _, arg := range []string{
+		"--token", "--notsecret=value", "--mytoken=value", "prefix-api_key=value", "template_api_key=value",
+	} {
+		t.Run("allows "+arg, func(t *testing.T) {
+			input := strings.Replace(validVersion2Config, `"args": ["chroma-mcp"]`,
+				`"args": ["chroma-mcp", "`+arg+`"]`, 1)
+			if _, err := Decode(strings.NewReader(input)); err != nil {
+				t.Fatalf("benign argument rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestDecodeVersion1RejectsVersion2Fields(t *testing.T) {
+	observation := `"observation":{"events_dir":"x","reports_dir":"x","salt_path":"x","raw_retention_days":14},`
+	tests := []struct {
+		name, input, want string
+	}{
+		{"observation", strings.Replace(validConfig, `"services":`, observation+`"services":`, 1), "observation"},
+	}
+	serviceFields := []struct {
+		name, value string
+	}{
+		{"command", `"uvx"`},
+		{"args", `[]`},
+		{"cwd", `"%h"`},
+		{"transport", `"stdio"`},
+		{"scope", `"user"`},
+		{"session_policy", `"isolated"`},
+		{"clients", `["codex"]`},
+	}
+	for _, field := range serviceFields {
+		input := strings.Replace(validConfig, `"name":"chroma"`,
+			`"name":"chroma","`+field.name+`":`+field.value, 1)
+		tests = append(tests, struct {
+			name, input, want string
+		}{field.name, input, field.name})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertDecodeError(t, tt.input, "unknown field")
+			assertDecodeError(t, tt.input, tt.want)
+		})
 	}
 }
 

@@ -74,6 +74,22 @@ type ServiceRule struct {
 	AllArgsContain []string      `json:"all_args_contain"`
 }
 
+type configVersion struct {
+	Version int `json:"version"`
+}
+
+type configVersion1 struct {
+	Version      int                   `json:"version"`
+	OutputPath   string                `json:"output_path"`
+	RegistryPath string                `json:"registry_path"`
+	Services     []serviceRuleVersion1 `json:"services"`
+}
+
+type serviceRuleVersion1 struct {
+	Name           string   `json:"name"`
+	AllArgsContain []string `json:"all_args_contain"`
+}
+
 func Decode(r io.Reader) (Config, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -83,24 +99,59 @@ func Decode(r io.Reader) (Config, error) {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 
-	var cfg Config
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&cfg); err != nil {
+	var version configVersion
+	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&version); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return Config{}, fmt.Errorf("decode config: trailing JSON value")
+	var cfg Config
+	switch version.Version {
+	case 1:
+		var wire configVersion1
+		if err := decodeStrict(data, &wire); err != nil {
+			return Config{}, err
 		}
-		return Config{}, fmt.Errorf("decode config trailing data: %w", err)
+		cfg = convertVersion1(wire)
+	case 2:
+		if err := decodeStrict(data, &cfg); err != nil {
+			return Config{}, err
+		}
+	default:
+		return Config{}, fmt.Errorf("config version must be 1 or 2, got %d", version.Version)
 	}
 	if err := validate(&cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func decodeStrict(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("decode config: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("decode config: trailing JSON value")
+		}
+		return fmt.Errorf("decode config trailing data: %w", err)
+	}
+	return nil
+}
+
+func convertVersion1(wire configVersion1) Config {
+	services := make([]ServiceRule, len(wire.Services))
+	for i, service := range wire.Services {
+		services[i] = ServiceRule{Name: service.Name, AllArgsContain: service.AllArgsContain}
+	}
+	return Config{
+		Version:      wire.Version,
+		OutputPath:   wire.OutputPath,
+		RegistryPath: wire.RegistryPath,
+		Services:     services,
+	}
 }
 
 func validate(cfg *Config) error {
@@ -224,9 +275,12 @@ func validateVersion2Service(service ServiceRule, context string) error {
 }
 
 func containsInlineCredential(arg string) bool {
-	lower := strings.ToLower(arg)
-	for _, key := range []string{"token", "password", "secret", "api-key", "api_key"} {
-		if strings.Contains(lower, key+"=") {
+	key, _, assigned := strings.Cut(strings.TrimLeft(strings.ToLower(arg), "-"), "=")
+	if !assigned {
+		return false
+	}
+	for _, credentialKey := range []string{"token", "password", "secret", "api-key", "api_key"} {
+		if key == credentialKey {
 			return true
 		}
 	}
