@@ -422,9 +422,10 @@ func TestAgentService_ListManagedAssistantFirstPreservesOrdinaryOrder(t *testing
 }
 
 type stubTenantModelValidator struct {
-	mu    sync.Mutex
-	err   error
-	calls []string
+	mu         sync.Mutex
+	err        error
+	catalogErr error
+	calls      []string
 }
 
 func (v *stubTenantModelValidator) ValidateTenantChatModel(_ context.Context, tenantID, model string) error {
@@ -434,12 +435,17 @@ func (v *stubTenantModelValidator) ValidateTenantChatModel(_ context.Context, te
 	return v.err
 }
 
+func (v *stubTenantModelValidator) ListTenantChatModels(context.Context, string) ([]string, error) {
+	return []string{"qwen-plus", "qwen-plus-latest", "qwen-max"}, v.catalogErr
+}
+
 func TestAgentService_GetSystemAssistantSettings(t *testing.T) {
 	_, repo, _ := newTestService(t)
 	validator := &stubTenantModelValidator{}
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
 		TenantModelValidator: validator,
+		TenantModelCatalog:   validator,
 		Logger:               zap.NewNop(),
 	})
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
@@ -461,6 +467,7 @@ func TestAgentService_GetSystemAssistantSettingsUnavailableIsNotReady(t *testing
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
 		TenantModelValidator: validator,
+		TenantModelCatalog:   validator,
 		Logger:               zap.NewNop(),
 	})
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
@@ -480,6 +487,7 @@ func TestAgentService_GetSystemAssistantSettingsFailsClosedOnConfigurationReadFa
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
 		TenantModelValidator: validator,
+		TenantModelCatalog:   validator,
 		Logger:               zap.NewNop(),
 	})
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
@@ -497,6 +505,7 @@ func TestAgentService_UpdateSystemAssistantModelUsesAtomicReturnedConfig(t *test
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
 		TenantModelValidator: validator,
+		TenantModelCatalog:   validator,
 		Logger:               zap.NewNop(),
 	})
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
@@ -513,12 +522,28 @@ func TestAgentService_UpdateSystemAssistantModelUsesAtomicReturnedConfig(t *test
 	repo.AssertNotCalled(t, "GetSystemAssistant", mock.Anything)
 }
 
+func TestAgentService_UpdateSystemAssistantModelDoesNotPersistWhenCatalogReadFails(t *testing.T) {
+	_, repo, _ := newTestService(t)
+	wantErr := errors.New("catalog read failed")
+	validator := &stubTenantModelValidator{catalogErr: wantErr}
+	svc := application.NewAgentService(application.AgentServiceDeps{
+		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantModelValidator: validator, TenantModelCatalog: validator, Logger: zap.NewNop(),
+	})
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+
+	_, err := svc.UpdateSystemAssistantModel(ctx, "qwen-plus")
+	assert.ErrorIs(t, err, wantErr)
+	repo.AssertNotCalled(t, "UpdateSystemAssistantModel", mock.Anything, mock.Anything)
+}
+
 func TestAgentService_UpdateSystemAssistantModelMarksUnexpectedReturnedModelNotReady(t *testing.T) {
 	_, repo, _ := newTestService(t)
 	validator := &stubTenantModelValidator{}
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
 		TenantModelValidator: validator,
+		TenantModelCatalog:   validator,
 		Logger:               zap.NewNop(),
 	})
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
@@ -540,6 +565,7 @@ func TestAgentService_UpdateSystemAssistantModelConcurrentCallsKeepAtomicResults
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
 		TenantModelValidator: validator,
+		TenantModelCatalog:   validator,
 		Logger:               zap.NewNop(),
 	})
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
@@ -587,6 +613,7 @@ func TestAgentService_UpdateSystemAssistantModelRejectsEmptyAndInvalid(t *testin
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
 		TenantModelValidator: validator,
+		TenantModelCatalog:   validator,
 		Logger:               zap.NewNop(),
 	})
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
@@ -604,6 +631,7 @@ func TestAgentService_UpdateSystemAssistantModelPropagatesPersistenceFailure(t *
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
 		TenantModelValidator: validator,
+		TenantModelCatalog:   validator,
 		Logger:               zap.NewNop(),
 	})
 	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")

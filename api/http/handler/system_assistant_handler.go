@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
+	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/gin-gonic/gin"
 )
 
@@ -16,9 +17,10 @@ type UpdateSystemAssistantModelRequest struct {
 }
 
 type SystemAssistantSettingsResponse struct {
-	AgentID  string `json:"agentId"`
-	LLMModel string `json:"llmModel"`
-	Ready    bool   `json:"ready"`
+	AgentID         string   `json:"agentId"`
+	LLMModel        string   `json:"llmModel"`
+	Ready           bool     `json:"ready"`
+	AvailableModels []string `json:"availableModels"`
 }
 
 func (h *AgentHandler) GetSettings(c *gin.Context) {
@@ -31,7 +33,7 @@ func (h *AgentHandler) GetSettings(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, settingsResponse(settings.AgentID, settings.Model, settings.Ready))
+	c.JSON(http.StatusOK, settingsResponse(settings))
 }
 
 func (h *AgentHandler) UpdateModel(c *gin.Context) {
@@ -49,11 +51,14 @@ func (h *AgentHandler) UpdateModel(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, settingsResponse(settings.AgentID, settings.Model, settings.Ready))
+	c.JSON(http.StatusOK, settingsResponse(settings))
 }
 
-func settingsResponse(agentID, model string, ready bool) SystemAssistantSettingsResponse {
-	return SystemAssistantSettingsResponse{AgentID: agentID, LLMModel: model, Ready: ready}
+func settingsResponse(settings agentapp.SystemAssistantSettings) SystemAssistantSettingsResponse {
+	return SystemAssistantSettingsResponse{
+		AgentID: settings.AgentID, LLMModel: settings.Model, Ready: settings.Ready,
+		AvailableModels: settings.AvailableModels,
+	}
 }
 
 func decodeClosedJSON(c *gin.Context, dst any) error {

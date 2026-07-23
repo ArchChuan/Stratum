@@ -57,6 +57,63 @@ func TestTenantCapabilityResolverValidateTenantChatModelRejectsFallbackAndUnknow
 		domain.ErrInvalidSystemAssistantModel)
 }
 
+func TestTenantCapabilityResolverListTenantChatModelsIncludesOnlyConfiguredProviders(t *testing.T) {
+	aesKey := pkgcrypto.DeriveAESKey("tenant-model-catalog-key")
+	encrypted, err := pkgcrypto.Encrypt(aesKey, "provider-key")
+	require.NoError(t, err)
+	configured, err := json.Marshal(map[string]any{"llm_api_keys": map[string]any{"qwen": encrypted}})
+	require.NoError(t, err)
+	resolver := &tenantCapabilityResolver{
+		db: tenantSettingsQueryFunc(func(context.Context, string, ...any) pgx.Row {
+			return tenantSettingsRow{settings: configured}
+		}),
+		aesKey: aesKey,
+		cache:  llmgateway.NewTenantGatewayCache(),
+		logger: zap.NewNop(),
+	}
+
+	models, err := resolver.ListTenantChatModels(context.Background(), "tenant-1")
+	require.NoError(t, err)
+	require.Contains(t, models, "qwen-plus")
+	require.NotContains(t, models, "glm-4")
+}
+
+func TestTenantCapabilityResolverListTenantChatModelsReturnsEmptyWhenUnconfigured(t *testing.T) {
+	settings, err := json.Marshal(map[string]any{})
+	require.NoError(t, err)
+	resolver := &tenantCapabilityResolver{
+		db: tenantSettingsQueryFunc(func(context.Context, string, ...any) pgx.Row {
+			return tenantSettingsRow{settings: settings}
+		}),
+		cache:  llmgateway.NewTenantGatewayCache(),
+		logger: zap.NewNop(),
+	}
+
+	models, err := resolver.ListTenantChatModels(context.Background(), "tenant-1")
+	require.NoError(t, err)
+	require.Empty(t, models)
+}
+
+func TestTenantCapabilityResolverListTenantChatModelsReturnsEmptyForUnsupportedProviders(t *testing.T) {
+	aesKey := pkgcrypto.DeriveAESKey("unsupported-model-catalog-key")
+	encrypted, err := pkgcrypto.Encrypt(aesKey, "provider-key")
+	require.NoError(t, err)
+	settings, err := json.Marshal(map[string]any{"llm_api_keys": map[string]any{"stale": encrypted}})
+	require.NoError(t, err)
+	resolver := &tenantCapabilityResolver{
+		db: tenantSettingsQueryFunc(func(context.Context, string, ...any) pgx.Row {
+			return tenantSettingsRow{settings: settings}
+		}),
+		aesKey: aesKey,
+		cache:  llmgateway.NewTenantGatewayCache(),
+		logger: zap.NewNop(),
+	}
+
+	models, err := resolver.ListTenantChatModels(context.Background(), "tenant-1")
+	require.NoError(t, err)
+	require.Empty(t, models)
+}
+
 func TestNewTenantCapabilityResolverPreservesNilDatabaseBehavior(t *testing.T) {
 	resolver := newTenantCapabilityResolver(
 		nil,

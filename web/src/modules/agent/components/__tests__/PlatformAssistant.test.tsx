@@ -21,7 +21,6 @@ const deferred = <T,>() => {
 
 vi.mock('../../api/agent.api', () => ({
   agentApi: {
-    models: vi.fn(),
     getSystemSettings: vi.fn(),
     updateSystemSettings: vi.fn(),
   },
@@ -86,16 +85,17 @@ describe('平台使用小助手界面', () => {
   });
 
   it('模型设置弹窗只提交 llmModel 且不渲染其他配置字段', async () => {
-    vi.mocked(agentApi.models).mockResolvedValue(['tenant-model', 'backup-model']);
     vi.mocked(agentApi.getSystemSettings).mockResolvedValue({
       agentId: systemAgent.id,
       llmModel: '',
       ready: false,
+      availableModels: ['tenant-model', 'backup-model'],
     });
     vi.mocked(agentApi.updateSystemSettings).mockResolvedValue({
       agentId: systemAgent.id,
       llmModel: 'tenant-model',
       ready: true,
+      availableModels: ['tenant-model', 'backup-model'],
     });
     const onSaved = vi.fn();
     render(<SystemAssistantModelModal open canManage onClose={vi.fn()} onSaved={onSaved} />);
@@ -121,21 +121,16 @@ describe('平台使用小助手界面', () => {
 
   it('弹窗关闭时不加载模型或设置', () => {
     render(<SystemAssistantModelModal open={false} canManage onClose={vi.fn()} onSaved={vi.fn()} />);
-    expect(agentApi.models).not.toHaveBeenCalled();
     expect(agentApi.getSystemSettings).not.toHaveBeenCalled();
   });
 
   it('关闭重开时忽略旧请求，并在当前加载完成前禁止提交', async () => {
-    const oldModels = deferred<string[]>();
-    const oldSettings = deferred<{ agentId: string; llmModel: string; ready: boolean }>();
-    vi.mocked(agentApi.models)
-      .mockReturnValueOnce(oldModels.promise)
-      .mockResolvedValueOnce(['new-model']);
+    const oldSettings = deferred<{ agentId: string; llmModel: string; ready: boolean; availableModels: string[] }>();
     vi.mocked(agentApi.getSystemSettings)
       .mockReturnValueOnce(oldSettings.promise)
-      .mockResolvedValueOnce({ agentId: systemAgent.id, llmModel: '', ready: false });
+      .mockResolvedValueOnce({ agentId: systemAgent.id, llmModel: '', ready: false, availableModels: ['new-model'] });
     vi.mocked(agentApi.updateSystemSettings).mockResolvedValue({
-      agentId: systemAgent.id, llmModel: 'new-model', ready: true,
+      agentId: systemAgent.id, llmModel: 'new-model', ready: true, availableModels: ['new-model'],
     });
 
     const view = render(
@@ -162,8 +157,7 @@ describe('平台使用小助手界面', () => {
     });
     fireEvent.click(newOption);
 
-    oldModels.resolve(['old-model']);
-    oldSettings.resolve({ agentId: systemAgent.id, llmModel: 'old-model', ready: true });
+    oldSettings.resolve({ agentId: systemAgent.id, llmModel: 'old-model', ready: true, availableModels: ['old-model'] });
     await Promise.resolve();
     expect(within(dialog).queryByText('old-model')).not.toBeInTheDocument();
 
@@ -174,10 +168,7 @@ describe('平台使用小助手界面', () => {
   });
 
   it('加载失败后保留错误状态并禁止提交', async () => {
-    vi.mocked(agentApi.models).mockRejectedValue(new Error('model service unavailable'));
-    vi.mocked(agentApi.getSystemSettings).mockResolvedValue({
-      agentId: systemAgent.id, llmModel: '', ready: false,
-    });
+    vi.mocked(agentApi.getSystemSettings).mockRejectedValue(new Error('model service unavailable'));
 
     render(<SystemAssistantModelModal open canManage onClose={vi.fn()} onSaved={vi.fn()} />);
 
@@ -187,10 +178,11 @@ describe('平台使用小助手界面', () => {
   });
 
   it('保存期间权限失效时不应用迟到响应', async () => {
-    const update = deferred<{ agentId: string; llmModel: string; ready: boolean }>();
-    vi.mocked(agentApi.models).mockResolvedValue(['tenant-model']);
+    const update = deferred<{
+      agentId: string; llmModel: string; ready: boolean; availableModels: string[];
+    }>();
     vi.mocked(agentApi.getSystemSettings).mockResolvedValue({
-      agentId: systemAgent.id, llmModel: 'tenant-model', ready: true,
+      agentId: systemAgent.id, llmModel: 'tenant-model', ready: true, availableModels: ['tenant-model'],
     });
     vi.mocked(agentApi.updateSystemSettings).mockReturnValue(update.promise);
     const onSaved = vi.fn();
@@ -206,19 +198,21 @@ describe('平台使用小助手界面', () => {
       <SystemAssistantModelModal open canManage={false} onClose={vi.fn()} onSaved={onSaved} />,
     );
     await act(async () => {
-      update.resolve({ agentId: systemAgent.id, llmModel: 'tenant-model', ready: true });
+      update.resolve({
+        agentId: systemAgent.id, llmModel: 'tenant-model', ready: true,
+        availableModels: ['tenant-model'],
+      });
       await update.promise;
     });
     await waitFor(() => expect(onSaved).not.toHaveBeenCalled());
   });
 
   it('在 React StrictMode 双重 effect 生命周期下仍可完成加载与保存', async () => {
-    vi.mocked(agentApi.models).mockResolvedValue(['strict-model']);
     vi.mocked(agentApi.getSystemSettings).mockResolvedValue({
-      agentId: systemAgent.id, llmModel: '', ready: false,
+      agentId: systemAgent.id, llmModel: '', ready: false, availableModels: ['strict-model'],
     });
     vi.mocked(agentApi.updateSystemSettings).mockResolvedValue({
-      agentId: systemAgent.id, llmModel: 'strict-model', ready: true,
+      agentId: systemAgent.id, llmModel: 'strict-model', ready: true, availableModels: ['strict-model'],
     });
     const onSaved = vi.fn();
     const onClose = vi.fn();

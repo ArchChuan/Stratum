@@ -37,6 +37,7 @@ type AgentServiceDeps struct {
 	RAGSearch               port.RAGSearchProvider
 	TenantResolver          port.TenantCapabilityResolver
 	TenantModelValidator    port.TenantChatModelValidator
+	TenantModelCatalog      port.TenantChatModelCatalog
 	HistoryCompactorFactory func(port.CapabilityGateway, string, *zap.Logger) port.HistoryCompactor
 	MCPTools                port.MCPToolProvider
 	MCPToolExecutor         port.MCPToolExecutor
@@ -132,9 +133,10 @@ type AgentDTO struct {
 }
 
 type SystemAssistantSettings struct {
-	AgentID string
-	Model   string
-	Ready   bool
+	AgentID         string
+	Model           string
+	Ready           bool
+	AvailableModels []string
 }
 
 // Create persists a new agent for the tenant. Inherits embed_model from
@@ -367,16 +369,22 @@ func (s *AgentService) GetSystemAssistantSettings(ctx context.Context) (SystemAs
 
 func (s *AgentService) systemAssistantSettings(ctx context.Context, a Agent) (SystemAssistantSettings, error) {
 	cfg := a.GetConfig()
-	settings := SystemAssistantSettings{AgentID: cfg.ID, Model: cfg.LLMModel}
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	if tenantID == "" {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service get system assistant settings: tenant id required")
+	}
+	models, err := s.listTenantChatModels(ctx, tenantID)
+	if err != nil {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service list tenant models: %w", err)
+	}
+	settings := SystemAssistantSettings{
+		AgentID: cfg.ID, Model: cfg.LLMModel, AvailableModels: append([]string(nil), models...),
+	}
 	if strings.TrimSpace(cfg.LLMModel) == "" {
 		return settings, nil
 	}
 	if s.deps.TenantModelValidator == nil {
 		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: validator unavailable")
-	}
-	tenantID := reqctx.TenantIDFromContext(ctx)
-	if tenantID == "" {
-		return SystemAssistantSettings{}, fmt.Errorf("agent service get system assistant settings: tenant id required")
 	}
 	if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, cfg.LLMModel); err != nil {
 		if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
@@ -408,16 +416,30 @@ func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model str
 		}
 		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: %w", err)
 	}
+	models, err := s.listTenantChatModels(ctx, tenantID)
+	if err != nil {
+		return SystemAssistantSettings{}, err
+	}
 	a, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model)
 	if err != nil {
 		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: %w", err)
 	}
 	cfg := a.GetConfig()
 	return SystemAssistantSettings{
-		AgentID: cfg.ID,
-		Model:   cfg.LLMModel,
-		Ready:   strings.TrimSpace(cfg.LLMModel) != "" && cfg.LLMModel == model,
+		AgentID: cfg.ID, Model: cfg.LLMModel,
+		Ready: cfg.LLMModel == model, AvailableModels: models,
 	}, nil
+}
+
+func (s *AgentService) listTenantChatModels(ctx context.Context, tenantID string) ([]string, error) {
+	if s.deps.TenantModelCatalog == nil {
+		return nil, fmt.Errorf("agent service list tenant models: catalog unavailable")
+	}
+	models, err := s.deps.TenantModelCatalog.ListTenantChatModels(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("agent service list tenant models: %w", err)
+	}
+	return append([]string(nil), models...), nil
 }
 
 // Update replaces mutable fields on an existing agent. EmbedModel is

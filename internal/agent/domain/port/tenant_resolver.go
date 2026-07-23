@@ -21,3 +21,9 @@ type TenantCapabilityResolver interface {
 type TenantChatModelValidator interface {
 	ValidateTenantChatModel(ctx context.Context, tenantID, model string) error
 }
+
+// TenantChatModelCatalog lists models backed by providers configured for the
+// current tenant. Implementations must not include platform fallback models.
+type TenantChatModelCatalog interface {
+	ListTenantChatModels(ctx context.Context, tenantID string) ([]string, error)
+}

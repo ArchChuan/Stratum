@@ -3,6 +3,7 @@ package wiring
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -267,6 +268,21 @@ func (r *tenantCapabilityResolver) ValidateTenantChatModel(ctx context.Context, 
 		}
 	}
 	return agentdomain.ErrInvalidSystemAssistantModel
+}
+
+func (r *tenantCapabilityResolver) ListTenantChatModels(ctx context.Context, tenantID string) ([]string, error) {
+	gw, _, ok, err := r.resolveGatewayResult(ctx, tenantID, true)
+	if err != nil {
+		if errors.Is(err, agentdomain.ErrAssistantModelUnavailable) ||
+			errors.Is(err, agentdomain.ErrInvalidSystemAssistantModel) {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("tenant llm model catalogue: %w", err)
+	}
+	if !ok || gw == nil {
+		return []string{}, nil
+	}
+	return gw.ListChatModels(), nil
 }
 
 // InjectCompleter injects the per-tenant LLM completer into ctx for streaming.

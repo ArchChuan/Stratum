@@ -166,6 +166,7 @@ export const systemAssistantSettingsSchema = z.object({
   agentId: z.string(),
   llmModel: z.string(),
   ready: z.boolean(),
+  availableModels: z.array(z.string()),
 });
 export type SystemAssistantSettings = z.infer<typeof systemAssistantSettingsSchema>;
 

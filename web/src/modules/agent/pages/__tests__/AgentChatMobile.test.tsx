@@ -89,8 +89,12 @@ describe('AgentChatPage mobile layout', () => {
     ];
     mocks.selectedAgent = 'agent-1';
     mocks.models.mockResolvedValue(['tenant-model']);
-    mocks.settings.mockResolvedValue({ agentId: 'system', llmModel: '', ready: false });
-    mocks.updateSettings.mockResolvedValue({ agentId: 'system', llmModel: 'tenant-model', ready: true });
+    mocks.settings.mockResolvedValue({
+      agentId: 'system', llmModel: '', ready: false, availableModels: ['tenant-model'],
+    });
+    mocks.updateSettings.mockResolvedValue({
+      agentId: 'system', llmModel: 'tenant-model', ready: true, availableModels: ['tenant-model'],
+    });
 	});
 
   it('opens the conversation drawer and closes it after selecting a conversation', async () => {

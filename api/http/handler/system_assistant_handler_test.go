@@ -46,13 +46,23 @@ func (v settingsModelValidator) ValidateTenantChatModel(context.Context, string,
 	return v.err
 }
 
+type settingsModelCatalog struct {
+	models []string
+	err    error
+}
+
+func (c settingsModelCatalog) ListTenantChatModels(context.Context, string) ([]string, error) {
+	return c.models, c.err
+}
+
 var _ port.AgentRepo = (*settingsAgentRepo)(nil)
 
 func newSettingsRouter(repo *settingsAgentRepo, validator port.TenantChatModelValidator) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	registry := agentapp.NewRegistry(repo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop())
 	svc := agentapp.NewAgentService(agentapp.AgentServiceDeps{
-		Registry: registry, TenantModelValidator: validator, Logger: zap.NewNop(),
+		Registry: registry, TenantModelValidator: validator,
+		TenantModelCatalog: settingsModelCatalog{models: []string{"qwen-plus"}}, Logger: zap.NewNop(),
 	})
 	h := NewAgentHandler(svc, zap.NewNop())
 	r := gin.New()
@@ -77,7 +87,7 @@ func TestSystemAssistantHandlerMemberGetsSettingsWithoutSecrets(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/agents/system/settings", nil))
 
 	if rec.Code != http.StatusOK || rec.Body.String() !=
-		`{"agentId":"stratum-platform-assistant","llmModel":"qwen-plus","ready":true}` {
+		`{"agentId":"stratum-platform-assistant","llmModel":"qwen-plus","ready":true,"availableModels":["qwen-plus"]}` {
 		t.Fatalf("response = %d %s", rec.Code, rec.Body.String())
 	}
 }

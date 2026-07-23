@@ -193,6 +193,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		SkillActivationResolver: publishedSkillActivationResolver{versions: skillVersionService(c)},
 		TenantResolver:          a.TenantResolver,
 		TenantModelValidator:    tenantModelValidator(a.TenantResolver),
+		TenantModelCatalog:      tenantModelCatalog(a.TenantResolver),
 		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger) agentport.HistoryCompactor {
 			return capgateway.NewLLMHistoryCompactor(gw, model, logger)
 		},
@@ -252,4 +253,9 @@ func (c *Container) buildAgent(ctx context.Context) error {
 func tenantModelValidator(resolver agentport.TenantCapabilityResolver) agentport.TenantChatModelValidator {
 	validator, _ := resolver.(agentport.TenantChatModelValidator)
 	return validator
+}
+
+func tenantModelCatalog(resolver agentport.TenantCapabilityResolver) agentport.TenantChatModelCatalog {
+	catalog, _ := resolver.(agentport.TenantChatModelCatalog)
+	return catalog
 }

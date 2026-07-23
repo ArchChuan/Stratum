@@ -76,6 +76,10 @@ func (deterministicModelValidator) ValidateTenantChatModel(_ context.Context, _ 
 	return nil
 }
 
+func (deterministicModelValidator) ListTenantChatModels(context.Context, string) ([]string, error) {
+	return []string{"deterministic-e2e-model"}, nil
+}
+
 func (deterministicDiagnostics) Authorize(_ context.Context, request domain.DiagnosticRequest) (domain.DiagnosticAuthorization, error) {
 	request.Scope = domain.DiagnosticScopeTenant
 	return domain.DiagnosticAuthorization{Request: request, RoleClass: "admin"}, nil
@@ -289,7 +293,7 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 	registry := agentapp.NewRegistry(repo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop())
 	service := agentapp.NewAgentService(agentapp.AgentServiceDeps{
 		Registry: registry, TenantResolver: deterministicTenantResolver{gateway: gateway},
-		TenantModelValidator: deterministicModelValidator{}, ChatStore: chat,
+		TenantModelValidator: deterministicModelValidator{}, TenantModelCatalog: deterministicModelValidator{}, ChatStore: chat,
 		OfficialDocsSearch: officialdocs.Search, DiagnosticProvider: deterministicDiagnostics{}, Logger: zap.NewNop(),
 	})
 	conversation, err := chat.CreateConversation(ctx, tenantID, domain.SystemAssistantID, userID, "确定性 Agent Loop")
@@ -336,7 +340,7 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 	repo := agentpersist.NewPgAgentRepo(pool)
 	service := agentapp.NewAgentService(agentapp.AgentServiceDeps{
 		Registry:             agentapp.NewRegistry(repo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
-		TenantModelValidator: deterministicModelValidator{}, Logger: zap.NewNop(),
+		TenantModelValidator: deterministicModelValidator{}, TenantModelCatalog: deterministicModelValidator{}, Logger: zap.NewNop(),
 	})
 	h := handler.NewAgentHandler(service, zap.NewNop())
 	gin.SetMode(gin.TestMode)
@@ -373,12 +377,16 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 	require.Contains(t, list.Body.String(), `"managementMode":"platform"`)
 	settings := request(http.MethodGet, "/agents/system/settings", "member", "")
 	require.Equal(t, http.StatusOK, settings.Code)
-	require.JSONEq(t, `{"agentId":"stratum-platform-assistant","llmModel":"","ready":false}`, settings.Body.String())
+	require.JSONEq(t,
+		`{"agentId":"stratum-platform-assistant","llmModel":"","ready":false,"availableModels":["deterministic-e2e-model"]}`,
+		settings.Body.String())
 	require.Equal(t, http.StatusForbidden,
 		request(http.MethodPut, "/agents/system/settings", "member", `{"llmModel":"deterministic-e2e-model"}`).Code)
 	updated := request(http.MethodPut, "/agents/system/settings", "admin", `{"llmModel":"deterministic-e2e-model"}`)
 	require.Equal(t, http.StatusOK, updated.Code)
-	require.JSONEq(t, `{"agentId":"stratum-platform-assistant","llmModel":"deterministic-e2e-model","ready":true}`, updated.Body.String())
+	require.JSONEq(t,
+		`{"agentId":"stratum-platform-assistant","llmModel":"deterministic-e2e-model","ready":true,"availableModels":["deterministic-e2e-model"]}`,
+		updated.Body.String())
 	readback := request(http.MethodGet, "/agents/system/settings", "member", "")
 	require.Equal(t, http.StatusOK, readback.Code)
 	require.Contains(t, readback.Body.String(), `"llmModel":"deterministic-e2e-model"`)

@@ -39,10 +39,10 @@ const OpenSystemAssistantModelModal = ({ canManage, onClose, onSaved }: Props) =
     setLoadError(undefined);
     setLoaded(false);
     setLoading(true);
-    Promise.all([agentApi.models(), agentApi.getSystemSettings()])
-      .then(([availableModels, settings]) => {
+    agentApi.getSystemSettings()
+      .then((settings) => {
         if (cancelled || requestGeneration !== requestGenerationRef.current) return;
-        setModels(availableModels);
+        setModels(settings.availableModels);
         setSelectedModel(settings.llmModel || undefined);
         setLoaded(true);
       })
