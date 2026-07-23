@@ -6,6 +6,9 @@ import {
   workflowInputSchemaSchema,
   workflowNodeSchema,
   workflowPageSchema,
+  workflowRunDetailSchema,
+  workflowRunEventSchema,
+  workflowRunPageSchema,
   workflowVersionPageSchema,
 } from './workflow';
 
@@ -78,5 +81,24 @@ describe('workflow wire models', () => {
 
   it('rejects malformed API payloads instead of silently accepting them', () => {
     expect(() => workflowPageSchema.parse({ workflows: [{ id: 42 }], total: 1, page: 1, page_size: 20 })).toThrow();
+  });
+
+  it('parses run pages, details, backend control records, and unknown event types', () => {
+    const run = {
+      id: 'run-1', definition_id: 'workflow-1', version_id: 'version-1', version: 1, status: 'running',
+      snapshot: spec, input: { task: '研究' }, output: '', generation: 2, created_by: 'user-1',
+      created_at: '2026-07-23T00:00:00Z', updated_at: '2026-07-23T00:00:01Z',
+    };
+    expect(workflowRunPageSchema.parse({ runs: [run], total: 1, page: 1, page_size: 20 }).runs[0].status).toBe('running');
+    const detail = workflowRunDetailSchema.parse({
+      run,
+      node_attempts: [],
+      approvals: [{ ID: 'approval-1', RunID: 'run-1', NodeID: 'approval', AttemptID: 'attempt-1', RunGeneration: 2, Reason: '确认', Risk: 'medium', RequestSummary: '摘要', Status: 'pending', DecisionActor: '', DecisionComment: '', DecidedAt: null }],
+      effect_intents: [{ ID: 'effect-1', RunID: 'run-1', NodeID: 'tool', AttemptID: 'attempt-2', RunGeneration: 2, EffectClass: 'non_idempotent', IdempotencyKey: 'hidden', Status: 'unknown', Reason: '结果未知', OutputSummary: '' }],
+      progress: { completed: 0, total: 5 }, available_actions: ['pause', 'cancel'],
+    });
+    expect(detail.approvals[0].id).toBe('approval-1');
+    expect(detail.effect_intents[0]).not.toHaveProperty('IdempotencyKey');
+    expect(workflowRunEventSchema.parse({ id: 'event-1', run_id: 'run-1', sequence_no: 7, event_type: 'workflow.future_event', occurred_at: '2026-07-23T00:00:02Z' }).event_type).toBe('workflow.future_event');
   });
 });

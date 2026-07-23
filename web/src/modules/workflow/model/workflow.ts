@@ -162,3 +162,82 @@ export const validationIssueSchema = z.object({
 export type ValidationIssue = z.infer<typeof validationIssueSchema>;
 
 export type WorkflowDraftPayload = Pick<WorkflowDefinition, 'name' | 'description' | 'spec' | 'input_schema'>;
+
+export const workflowRunStatusSchema = z.enum([
+  'queued', 'running', 'completed', 'failed', 'paused', 'pause_requested', 'cancel_requested', 'canceled', 'manual_intervention',
+]);
+export type WorkflowRunStatus = z.infer<typeof workflowRunStatusSchema>;
+
+export const workflowRunSummarySchema = z.object({
+  id: z.string(), definition_id: z.string(), version_id: z.string(), version: z.number().int(),
+  status: workflowRunStatusSchema, created_by: z.string(), created_at: z.string(), updated_at: z.string(),
+  started_at: z.string().nullish(), finished_at: z.string().nullish(),
+});
+export type WorkflowRunSummary = z.infer<typeof workflowRunSummarySchema>;
+
+export const workflowRunSchema = workflowRunSummarySchema.extend({
+  snapshot: workflowSpecSchema,
+  input: z.record(z.unknown()),
+  output: z.string(),
+  error_message: z.string().optional(),
+  generation: z.number().int().positive(),
+  pause_reason: z.string().optional(),
+  cancel_reason: z.string().optional(),
+  manual_reason: z.string().optional(),
+});
+export type WorkflowRun = z.infer<typeof workflowRunSchema>;
+
+export const workflowNodeAttemptSchema = z.object({
+  id: z.string(), run_id: z.string(), node_id: z.string(), attempt_no: z.number().int(),
+  status: z.enum(['pending', 'running', 'ready', 'claimed', 'succeeded', 'failed', 'retry_wait', 'skipped', 'paused', 'canceled', 'manual_intervention']),
+  input: z.string(), output_summary: z.string(), error_message: z.string().optional(), trace_id: z.string().optional(),
+  fence_token: z.number().int(), run_generation: z.number().int(), error_code: z.string().optional(),
+  retry_at: z.string().nullish(), effect_class: workflowEffectClassSchema.optional(), selected_edges: z.array(z.string()).optional().default([]),
+});
+export type WorkflowNodeAttempt = z.infer<typeof workflowNodeAttemptSchema>;
+
+const approvalWireSchema = z.object({
+  ID: z.string(), RunID: z.string(), NodeID: z.string(), AttemptID: z.string(), RunGeneration: z.number().int(),
+  Reason: z.string(), Risk: z.string(), RequestSummary: z.string(), Status: z.enum(['pending', 'approved', 'rejected']),
+  DecisionActor: z.string(), DecisionComment: z.string(), DecidedAt: z.string().nullish(),
+}).transform((row) => ({
+  id: row.ID, run_id: row.RunID, node_id: row.NodeID, attempt_id: row.AttemptID, run_generation: row.RunGeneration,
+  reason: row.Reason, risk: row.Risk, request_summary: row.RequestSummary, status: row.Status,
+  decision_actor: row.DecisionActor, decision_comment: row.DecisionComment, decided_at: row.DecidedAt,
+}));
+export const workflowApprovalSchema = approvalWireSchema;
+export type WorkflowApproval = z.infer<typeof workflowApprovalSchema>;
+
+const effectIntentWireSchema = z.object({
+  ID: z.string(), RunID: z.string(), NodeID: z.string(), AttemptID: z.string(), RunGeneration: z.number().int(),
+  EffectClass: workflowEffectClassSchema, IdempotencyKey: z.string(), Status: z.enum(['prepared', 'started', 'succeeded', 'failed', 'unknown']),
+  Reason: z.string(), OutputSummary: z.string(),
+}).transform((row) => ({
+  id: row.ID, run_id: row.RunID, node_id: row.NodeID, attempt_id: row.AttemptID, run_generation: row.RunGeneration,
+  effect_class: row.EffectClass, status: row.Status, reason: row.Reason, output_summary: row.OutputSummary,
+}));
+export const workflowEffectIntentSchema = effectIntentWireSchema;
+export type WorkflowEffectIntent = z.infer<typeof workflowEffectIntentSchema>;
+
+export const workflowRunEventSchema = z.object({
+  id: z.string(), run_id: z.string(), sequence_no: z.number().int().nonnegative(), event_type: z.string().min(1),
+  status: z.string().optional(), node_id: z.string().optional(), attempt_no: z.number().int().optional(),
+  summary: z.string().optional(), actor_type: z.string().optional(), actor_id: z.string().optional(),
+  data: z.record(z.unknown()).optional().default({}), occurred_at: z.string(),
+});
+export type WorkflowRunEvent = z.infer<typeof workflowRunEventSchema>;
+
+export const workflowRunPageSchema = z.object({
+  runs: z.array(workflowRunSummarySchema), total: z.number().int().nonnegative(), page: z.number().int().positive(), page_size: z.number().int().positive(),
+});
+export type WorkflowRunPage = z.infer<typeof workflowRunPageSchema>;
+
+export const workflowRunDetailSchema = z.object({
+  run: workflowRunSchema,
+  node_attempts: z.array(workflowNodeAttemptSchema),
+  approvals: z.array(workflowApprovalSchema),
+  effect_intents: z.array(workflowEffectIntentSchema),
+  progress: z.object({ completed: z.number().int().nonnegative(), total: z.number().int().nonnegative() }),
+  available_actions: z.array(z.enum(['pause', 'cancel', 'resume', 'mark_succeeded', 'retry', 'terminate'])),
+});
+export type WorkflowRunDetail = z.infer<typeof workflowRunDetailSchema>;

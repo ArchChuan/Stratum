@@ -60,4 +60,23 @@ describe('workflowApi', () => {
     expect(api.post).toHaveBeenNthCalledWith(3, '/workflows/workflow-1/publish');
     expect(api.get).toHaveBeenCalledWith('/workflows/workflow-1/versions', { params: { page: 1, page_size: 20 } });
   });
+
+  it('starts, lists, reads, and controls workflow runs through the shared client', async () => {
+    const run = { id: 'run-1', definition_id: 'workflow-1', version_id: 'version-1', version: 1, status: 'running', snapshot: { nodes: [], edges: [] }, input: { task: '研究' }, output: '', generation: 1, created_by: 'user-1', created_at: '2026-07-23T00:00:00Z', updated_at: '2026-07-23T00:00:00Z' };
+    vi.mocked(api.post)
+      .mockResolvedValueOnce({ data: { run_id: 'run-1', status: 'queued' } })
+      .mockResolvedValueOnce({ data: run });
+    vi.mocked(api.get)
+      .mockResolvedValueOnce({ data: { runs: [run], total: 1, page: 1, page_size: 20 } })
+      .mockResolvedValueOnce({ data: { run, node_attempts: [], approvals: [], effect_intents: [], progress: { completed: 0, total: 0 }, available_actions: ['cancel'] } });
+
+    const payload = { version_id: 'version-1', task: '研究', fields: {}, idempotency_key: 'idem-1' };
+    await workflowApi.startWorkflowRun(payload);
+    await workflowApi.listWorkflowRuns({ status: 'running', page: 1, pageSize: 20 });
+    await workflowApi.getWorkflowRun('run-1');
+    await workflowApi.cancelWorkflowRun('run-1', { expected_generation: 1, reason: '停止' });
+    expect(api.post).toHaveBeenNthCalledWith(1, '/workflow-runs', payload);
+    expect(api.get).toHaveBeenNthCalledWith(1, '/workflow-runs', { params: { definition_id: '', status: 'running', page: 1, page_size: 20 } });
+    expect(api.post).toHaveBeenNthCalledWith(2, '/workflow-runs/run-1/cancel', { expected_generation: 1, reason: '停止' });
+  });
 });
