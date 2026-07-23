@@ -42,6 +42,8 @@ make helm-lint
 make helm-diff
 ```
 
+`make helm-diff` 需要 helm-diff 插件；插件缺失时，Makefile 会尝试从上游仓库安装。
+
 ## 安装与升级
 
 ```bash

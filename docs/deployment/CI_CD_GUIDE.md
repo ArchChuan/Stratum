@@ -22,6 +22,9 @@ make fe-lint
 make fe-build
 ```
 
+`make ci-backend` 会组合上述后端步骤并启动依赖，但它还会执行 `go fmt` 和
+`gofmt -s -w` 改写源码；只在准备接受格式化变更时使用。
+
 `ci.yml` 使用 Go 1.25 和 golangci-lint v2.12.2。覆盖率低于 80% 在 GitHub Actions 中仅告警；Makefile 的 `be-test` 会直接失败。
 
 ## 部署所需 GitHub Secrets

@@ -32,6 +32,14 @@ make fe-dev
 make obs-up
 ```
 
+常用本地地址：
+
+- API：<http://localhost:8080>
+- 前端：<http://localhost:3002>
+- Prometheus：<http://localhost:9090>
+- Grafana：<http://localhost:3000>
+- Jaeger：<http://localhost:16686>
+
 ## 日常验证
 
 ```bash

@@ -12,6 +12,9 @@ api/http/handler/mcp_handler.go
   → tenant schema mcp_servers
 ```
 
+包级职责和依赖图见 [Go 包架构索引](go-package-architecture/README.md#internalmcp)；
+本页只维护对使用者稳定的运行时、API 和权限契约。
+
 `api/wiring/mcp.go` 在启动时构造 manager / registry / service，并从数据库恢复租户 MCP 服务器。服务器配置通过 REST API 管理，仓库中没有 `config/mcp.yaml`。
 
 ## 传输与配置
