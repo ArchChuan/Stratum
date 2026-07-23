@@ -242,6 +242,18 @@ fi
 [[ "$(<"${FIXTURE}/AGENTS.md")" == 'old-agents' ]] || fail 'failed generation changed AGENTS.md'
 [[ "$(<"${FIXTURE}/CLAUDE.md")" == 'old-claude' ]] || fail 'failed generation changed CLAUDE.md'
 
+new_fixture missing-knowledge-deposition
+(
+  cd "${FIXTURE}"
+  /bin/bash scripts/quality/generate-agent-instructions.sh
+)
+rm "${FIXTURE}/docs/agent/knowledge-deposition.md"
+if missing_output="$(cd "${FIXTURE}" && /bin/bash scripts/quality/generate-agent-instructions.sh --check 2>&1)"; then
+  fail '--check succeeded with missing knowledge deposition policy'
+fi
+assert_contains "${missing_output}" \
+  'agent instructions: required input is not readable: docs/agent/knowledge-deposition.md'
+
 new_fixture extra-prefix-blank-line
 printf '%s\n' 'old-agents' >"${FIXTURE}/AGENTS.md"
 printf '%s\n' 'old-claude' >"${FIXTURE}/CLAUDE.md"
