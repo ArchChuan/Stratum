@@ -197,6 +197,9 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 		return domain.AgentRevision{}, ErrNotFound
 	}
 	cfg := a.GetConfig()
+	if cfg.SystemKey == domain.SystemAssistantKey {
+		return domain.AgentRevision{}, domain.ErrSystemAssistantRevisionUnsupported
+	}
 	revision := domain.AgentRevision{
 		AgentID: cfg.ID, Type: cfg.Type, SystemPrompt: cfg.SystemPrompt, Model: cfg.LLMModel,
 		EmbedModel: cfg.EmbedModel, MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
@@ -245,6 +248,9 @@ func (s *AgentService) ExecuteRevision(
 	if strings.TrimSpace(meta.TenantID) == "" {
 		return nil, 0, fmt.Errorf("agent service: tenant id required")
 	}
+	if revision.AgentID == domain.SystemAssistantID {
+		return nil, 0, domain.ErrSystemAssistantRevisionUnsupported
+	}
 	if err := revision.Validate(); err != nil {
 		return nil, 0, fmt.Errorf("agent service: validate revision: %w", err)
 	}
@@ -273,6 +279,9 @@ func revisionExecutionContext(ctx context.Context) (context.Context, context.Can
 }
 
 func (s *AgentService) buildRevisionAgent(revision domain.AgentRevision) (*BaseAgent, error) {
+	if revision.AgentID == domain.SystemAssistantID {
+		return nil, domain.ErrSystemAssistantRevisionUnsupported
+	}
 	if revision.MemoryInjectorRequired && s.deps.MemoryInjector == nil {
 		return nil, fmt.Errorf("agent service: revision requires memory injector")
 	}

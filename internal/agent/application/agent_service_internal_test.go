@@ -277,6 +277,14 @@ func TestRevisionAgentOnlyInstallsSnapshotRequiredHooks(t *testing.T) {
 	}
 }
 
+func TestBuildRevisionAgentRejectsCraftedSystemAssistantRevision(t *testing.T) {
+	svc := NewAgentService(AgentServiceDeps{Logger: zap.NewNop()})
+	_, err := svc.buildRevisionAgent(domain.AgentRevision{AgentID: domain.SystemAssistantID})
+	if !errors.Is(err, domain.ErrSystemAssistantRevisionUnsupported) {
+		t.Fatalf("buildRevisionAgent() error = %v", err)
+	}
+}
+
 func TestRevisionConfigFiltersKnowledgeMetadataWithDisabledBinding(t *testing.T) {
 	revision := domain.AgentRevision{Bindings: []domain.AgentBinding{
 		{Kind: domain.AgentBindingKnowledge, ID: "workspace-1", Name: "One", Description: "first", Enabled: true},

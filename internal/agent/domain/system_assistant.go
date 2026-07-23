@@ -4,6 +4,7 @@ import "time"
 
 const (
 	SystemAssistantKey                   = "stratum.platform_assistant"
+	SystemAssistantID                    = "stratum-platform-assistant"
 	CurrentSystemAssistantProfileVersion = "2026-07-23.v1"
 )
 

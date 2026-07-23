@@ -321,6 +321,56 @@ func TestAgentService_SnapshotRevisionPreservesExecutionParity(t *testing.T) {
 	assert.True(t, revision.RecallMemoryRequired)
 }
 
+func TestAgentServiceManagedAssistantRevisionEntrypointsFailClosed(t *testing.T) {
+	svc, repo, _ := newTestService(t)
+	repo.On("Get", mock.Anything, domain.SystemAssistantID).Return(&domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model",
+	}, true, nil)
+
+	_, err := svc.SnapshotRevision(context.Background(), "tenant-1", domain.SystemAssistantID)
+	assert.ErrorIs(t, err, domain.ErrSystemAssistantRevisionUnsupported)
+
+	toolCalls := 0
+	memoryCalls := 0
+	gatewayCalls := 0
+	blocked := application.NewAgentService(application.AgentServiceDeps{
+		Logger:             zap.NewNop(),
+		TenantResolver:     countingRevisionTenantResolver{gateway: countingRevisionGateway{calls: &gatewayCalls}},
+		OfficialDocsSearch: func(context.Context, string) ([]domain.Citation, error) { toolCalls++; return nil, nil },
+		MemoryInjector:     countingRevisionMemoryInjector{calls: &memoryCalls},
+	})
+	_, _, err = blocked.ExecuteRevision(context.Background(), domain.AgentRevision{AgentID: domain.SystemAssistantID},
+		application.ExecRequest{Query: "crafted"}, application.ExecMeta{TenantID: "tenant-1"})
+	assert.ErrorIs(t, err, domain.ErrSystemAssistantRevisionUnsupported)
+	assert.Zero(t, toolCalls)
+	assert.Zero(t, memoryCalls)
+	assert.Zero(t, gatewayCalls)
+}
+
+type countingRevisionMemoryInjector struct{ calls *int }
+
+func (m countingRevisionMemoryInjector) BuildContext(context.Context, port.InjectionContext) (string, error) {
+	(*m.calls)++
+	return "", nil
+}
+
+type countingRevisionGateway struct{ calls *int }
+
+func (g countingRevisionGateway) Route(context.Context, port.CapabilityRequest) (port.CapabilityResponse, error) {
+	(*g.calls)++
+	return port.CapabilityResponse{}, nil
+}
+
+type countingRevisionTenantResolver struct{ gateway port.CapabilityGateway }
+
+func (r countingRevisionTenantResolver) Resolve(context.Context, string) (port.CapabilityGateway, map[string]string, bool) {
+	return r.gateway, nil, true
+}
+
+func (countingRevisionTenantResolver) InjectCompleter(ctx context.Context, _ string) context.Context {
+	return ctx
+}
+
 func TestAgentService_ExecuteRevisionFailsClosedWhenMemoryHookIsUnavailable(t *testing.T) {
 	svc := application.NewAgentService(application.AgentServiceDeps{Logger: zap.NewNop()})
 	revision := domain.AgentRevision{AgentID: "agent-1", Type: domain.ReActAgent,
