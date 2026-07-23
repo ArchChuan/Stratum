@@ -4,7 +4,7 @@ package safetext
 import "regexp"
 
 var (
-	authorizationCredential = regexp.MustCompile(`(?i)(authorization[ \t]*[:=][ \t]*)(?:(?:bearer|basic)[ \t]+)?(?:"[^"\r\n]*"|'[^'\r\n]*'|[^ \t,;}\]\r\n]+)`)
+	authorizationCredential = regexp.MustCompile(`(?i)((?:"authorization"|authorization)[ \t]*[:=][ \t]*)(?:(?:bearer|basic)[ \t]+)?(?:"[^"\r\n]*"|'[^'\r\n]*'|[^ \t,;}\]\r\n]+)`)
 	namedCredential         = regexp.MustCompile(`(?i)((?:"(?:password|token|api[_-]?key|apikey|secret)"|(?:password|token|api[_-]?key|apikey|secret))[ \t]*[:=][ \t]*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^ \t,;}\]\r\n]+)`)
 )
 

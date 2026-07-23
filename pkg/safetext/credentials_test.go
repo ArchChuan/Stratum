@@ -20,3 +20,16 @@ func TestRedactCredentialsCoversAuthorizationAndQuotedValues(t *testing.T) {
 		t.Fatalf("redactions = %q", got)
 	}
 }
+
+func TestRedactCredentialsCoversJSONAuthorizationKeys(t *testing.T) {
+	input := `{"authorization":"Bearer json-secret","Authorization":"Basic dXNlcjpwYXNz","title":"keep"}`
+	got := RedactCredentials(input)
+	for _, secret := range []string{"json-secret", "dXNlcjpwYXNz"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("credential %q leaked in %q", secret, got)
+		}
+	}
+	if !strings.Contains(got, `"title":"keep"`) {
+		t.Fatalf("adjacent field was swallowed: %q", got)
+	}
+}

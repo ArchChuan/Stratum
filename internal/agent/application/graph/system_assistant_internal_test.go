@@ -152,6 +152,27 @@ func TestSystemAssistantRedactsCredentialFormsFromModelAndTypedArtifact(t *testi
 	require.Contains(t, modelContent, "keep")
 }
 
+func TestSystemAssistantRedactsJSONAuthorizationFromModelAndArtifact(t *testing.T) {
+	payload := `{"authorization":"Bearer json-secret","Authorization":"Basic dXNlcjpwYXNz","title":"keep"}`
+	node := makeToolNode(nil, zap.NewNop())
+	state := ReActState{GovernedAssistant: true, InternalToolResultGuardFn: testInternalGuard,
+		OfficialDocsSearchFn: func(context.Context, string) ([]domain.Citation, error) {
+			return []domain.Citation{{Title: payload}}, nil
+		},
+		Messages: []port.LLMMessage{{Role: "assistant", ToolCalls: []port.ToolCall{{ID: "call-1", Name: "stratum_search_official_docs", Arguments: map[string]any{"query": "help"}}}}},
+	}
+	got, err := node(context.Background(), state)
+	require.NoError(t, err)
+	raw, err := json.Marshal(got.AssistantToolArtifacts[0])
+	require.NoError(t, err)
+	model := got.Messages[len(got.Messages)-1].Content
+	for _, secret := range []string{"json-secret", "dXNlcjpwYXNz"} {
+		require.NotContains(t, model, secret)
+		require.NotContains(t, string(raw), secret)
+	}
+	require.Contains(t, model, "keep")
+}
+
 func TestSystemAssistantRejectsEvidenceThatCannotFitAfterFieldBounds(t *testing.T) {
 	node := makeToolNode(nil, zap.NewNop())
 	state := ReActState{GovernedAssistant: true, InternalToolResultGuardFn: testInternalGuard,
