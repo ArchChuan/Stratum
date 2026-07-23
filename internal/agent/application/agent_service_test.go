@@ -152,7 +152,7 @@ func newTestService(t *testing.T) (*application.AgentService, *mockAgentRepo, *m
 	t.Helper()
 	repo := new(mockAgentRepo)
 	ts := new(mockTenantSettings)
-	reg := application.NewRegistry(repo, zap.NewNop())
+	reg := application.NewRegistry(repo, application.BuiltinSystemAssistantProfile(), zap.NewNop())
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:       reg,
 		TenantSettings: ts,
@@ -380,7 +380,7 @@ func TestAgentService_Delete(t *testing.T) {
 
 func TestAgentService_DeleteSystemAssistantRejectsBeforeCleanup(t *testing.T) {
 	repo := new(mockAgentRepo)
-	registry := application.NewRegistry(repo, zap.NewNop())
+	registry := application.NewRegistry(repo, application.BuiltinSystemAssistantProfile(), zap.NewNop())
 	memoryCalls := 0
 	chatCalls := 0
 	svc := application.NewAgentService(application.AgentServiceDeps{
@@ -406,7 +406,7 @@ func TestAgentService_DeleteSystemAssistantRejectsBeforeCleanup(t *testing.T) {
 
 func TestAgentService_DeletePropagatesIdentityLookupFailureBeforeCleanup(t *testing.T) {
 	repo := new(mockAgentRepo)
-	registry := application.NewRegistry(repo, zap.NewNop())
+	registry := application.NewRegistry(repo, application.BuiltinSystemAssistantProfile(), zap.NewNop())
 	memoryCalls := 0
 	chatCalls := 0
 	svc := application.NewAgentService(application.AgentServiceDeps{
@@ -429,7 +429,7 @@ func TestAgentService_DeletePropagatesIdentityLookupFailureBeforeCleanup(t *test
 
 func TestAgentService_DeleteNotFoundRejectsBeforeCleanup(t *testing.T) {
 	repo := new(mockAgentRepo)
-	registry := application.NewRegistry(repo, zap.NewNop())
+	registry := application.NewRegistry(repo, application.BuiltinSystemAssistantProfile(), zap.NewNop())
 	memoryCalls := 0
 	chatCalls := 0
 	svc := application.NewAgentService(application.AgentServiceDeps{
@@ -453,7 +453,7 @@ func TestAgentService_DeleteReturnsCleanupErrorBeforeRemovingRegistry(t *testing
 	repo := new(mockAgentRepo)
 	wantErr := errors.New("memory cleanup failed")
 	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry:      application.NewRegistry(repo, zap.NewNop()),
+		Registry:      application.NewRegistry(repo, application.BuiltinSystemAssistantProfile(), zap.NewNop()),
 		MemoryCleaner: stubMemoryCleaner{err: wantErr}, Logger: zap.NewNop(),
 	})
 	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)
@@ -467,7 +467,7 @@ func TestAgentService_DeleteReturnsChatCleanupErrorBeforeRemovingRegistry(t *tes
 	repo := new(mockAgentRepo)
 	wantErr := errors.New("chat cleanup failed")
 	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry: application.NewRegistry(repo, zap.NewNop()), ChatStore: stubChatRepo{err: wantErr}, Logger: zap.NewNop(),
+		Registry: application.NewRegistry(repo, application.BuiltinSystemAssistantProfile(), zap.NewNop()), ChatStore: stubChatRepo{err: wantErr}, Logger: zap.NewNop(),
 	})
 	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)
 
@@ -480,7 +480,7 @@ func TestAgentService_DeleteReturnsChatCleanupErrorBeforeRemovingRegistry(t *tes
 
 func TestAgentService_BuildExtraTools_Empty(t *testing.T) {
 	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry: application.NewRegistry(new(mockAgentRepo), zap.NewNop()),
+		Registry: application.NewRegistry(new(mockAgentRepo), application.BuiltinSystemAssistantProfile(), zap.NewNop()),
 		Logger:   zap.NewNop(),
 	})
 	tools, _ := svc.BuildExtraToolsForTest(context.Background(), "tenant-1", nil, nil)
@@ -494,7 +494,7 @@ func TestAgentService_BuildExtraTools_MCPDelegates(t *testing.T) {
 		{Name: "mcp:srv1:search", Description: "web search"},
 	})
 	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry: application.NewRegistry(repo, zap.NewNop()),
+		Registry: application.NewRegistry(repo, application.BuiltinSystemAssistantProfile(), zap.NewNop()),
 		MCPTools: mcpProv,
 		Logger:   zap.NewNop(),
 	})
@@ -530,7 +530,7 @@ func TestAgentService_Execute_NotFound(t *testing.T) {
 	repo.On("Get", mock.Anything, "missing").Return((*domain.AgentConfig)(nil), false, nil)
 
 	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry: application.NewRegistry(repo, zap.NewNop()),
+		Registry: application.NewRegistry(repo, application.BuiltinSystemAssistantProfile(), zap.NewNop()),
 		Logger:   zap.NewNop(),
 	})
 	_, _, err := svc.Execute(context.Background(), "missing", application.ExecRequest{Query: "hi"}, application.ExecMeta{TenantID: "t1"})

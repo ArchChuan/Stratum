@@ -139,10 +139,11 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	db := c.dbOrNil()
 
 	var registry *agent.Registry
+	systemAssistantProfile := agent.BuiltinSystemAssistantProfile()
 	if db != nil {
-		registry = agent.NewRegistry(persistence.NewPgAgentRepo(db), c.Logger)
+		registry = agent.NewRegistry(persistence.NewPgAgentRepo(db), systemAssistantProfile, c.Logger)
 	} else {
-		registry = agent.NewRegistry(nil, c.Logger)
+		registry = agent.NewRegistry(nil, systemAssistantProfile, c.Logger)
 	}
 	if c.Memory != nil && c.Memory.Injector != nil {
 		registry.SetMemoryInjector(c.Memory.Injector)
@@ -192,11 +193,12 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger) agentport.HistoryCompactor {
 			return capgateway.NewLLMHistoryCompactor(gw, model, logger)
 		},
-		ChatStore:         a.ChatStore,
-		EvidenceProvider:  a.EvidenceProvider,
-		TracePayloadStore: a.TracePayloadStore,
-		CheckpointStore:   a.CheckpointStore,
-		ApprovalService:   a.ApprovalService,
+		ChatStore:              a.ChatStore,
+		EvidenceProvider:       a.EvidenceProvider,
+		TracePayloadStore:      a.TracePayloadStore,
+		CheckpointStore:        a.CheckpointStore,
+		SystemAssistantProfile: systemAssistantProfile,
+		ApprovalService:        a.ApprovalService,
 		ToolAuthorizer: agent.NewToolAuthorizer(agentToolUserScopeResolver{
 			members: tenantMemberService(c),
 		}),

@@ -19,11 +19,14 @@ type Registry struct {
 	memInjector        port.MemoryInjector
 	recallFn           port.RecallMemoryFn
 	globalSystemSuffix string
+	systemProfile      *domain.SystemAssistantProfile
 }
 
 // NewRegistry constructs a Registry around a domain-port AgentRepo.
-func NewRegistry(repo port.AgentRepo, logger *zap.Logger) *Registry {
-	return &Registry{repo: repo, logger: logger}
+func NewRegistry(
+	repo port.AgentRepo, systemProfile *domain.SystemAssistantProfile, logger *zap.Logger,
+) *Registry {
+	return &Registry{repo: repo, systemProfile: systemProfile, logger: logger}
 }
 
 // SetMemoryInjector injects a MemoryInjector so agents created via Get/GetAll have it wired.
@@ -35,8 +38,12 @@ func (r *Registry) SetRecallMemoryFn(fn port.RecallMemoryFn) { r.recallFn = fn }
 // SetGlobalSystemSuffix injects a platform-level system prompt appended to every agent's prompt.
 func (r *Registry) SetGlobalSystemSuffix(s string) { r.globalSystemSuffix = s }
 
-func (r *Registry) hydrate(cfg *domain.AgentConfig) Agent {
-	a := NewBaseAgent(cfg, r.logger)
+func (r *Registry) hydrate(cfg *domain.AgentConfig) (Agent, error) {
+	composed, err := ComposeSystemAssistantProfile(cfg, r.systemProfile)
+	if err != nil {
+		return nil, fmt.Errorf("registry hydrate agent: %w", err)
+	}
+	a := NewBaseAgent(composed, r.logger)
 	if r.memInjector != nil {
 		a.MemoryInjector = r.memInjector
 	}
@@ -46,7 +53,7 @@ func (r *Registry) hydrate(cfg *domain.AgentConfig) Agent {
 	if r.globalSystemSuffix != "" {
 		a.GlobalSystemSuffix = r.globalSystemSuffix
 	}
-	return a
+	return a, nil
 }
 
 // Register persists a new agent.
@@ -61,25 +68,9 @@ func (r *Registry) Register(ctx context.Context, a Agent) error {
 	return nil
 }
 
-// Get retrieves a hydrated Agent by ID. Returns (nil, false) on miss.
-func (r *Registry) Get(ctx context.Context, id string) (Agent, bool) {
-	agent, found, err := r.GetWithError(ctx, id)
-	if err != nil {
-		if r.logger != nil {
-			r.logger.Error("registry: get agent failed",
-				zap.String("agent_id", id), zap.Error(err))
-		}
-		return nil, false
-	}
-	if !found {
-		return nil, false
-	}
-	return agent, true
-}
-
-// GetWithError retrieves a hydrated Agent while preserving repository errors.
-// Callers that gate destructive side effects must use this fail-closed path.
-func (r *Registry) GetWithError(ctx context.Context, id string) (Agent, bool, error) {
+// Get retrieves a hydrated Agent by ID while preserving repository and
+// composition failures. A miss is the only case returning found=false.
+func (r *Registry) Get(ctx context.Context, id string) (Agent, bool, error) {
 	cfg, found, err := r.repo.Get(ctx, id)
 	if err != nil {
 		return nil, false, fmt.Errorf("registry get agent %s: %w", id, err)
@@ -87,23 +78,28 @@ func (r *Registry) GetWithError(ctx context.Context, id string) (Agent, bool, er
 	if !found {
 		return nil, false, nil
 	}
-	return r.hydrate(cfg), true, nil
+	agent, err := r.hydrate(cfg)
+	if err != nil {
+		return nil, false, fmt.Errorf("registry get agent %s: %w", id, err)
+	}
+	return agent, true, nil
 }
 
 // GetAll returns all hydrated agents in the tenant schema.
-func (r *Registry) GetAll(ctx context.Context) []Agent {
+func (r *Registry) GetAll(ctx context.Context) ([]Agent, error) {
 	cfgs, err := r.repo.GetAll(ctx)
 	if err != nil {
-		if r.logger != nil {
-			r.logger.Error("registry: list agents failed", zap.Error(err))
-		}
-		return nil
+		return nil, fmt.Errorf("registry list agents: %w", err)
 	}
 	out := make([]Agent, 0, len(cfgs))
 	for _, c := range cfgs {
-		out = append(out, r.hydrate(c))
+		agent, err := r.hydrate(c)
+		if err != nil {
+			return nil, fmt.Errorf("registry list agents: %w", err)
+		}
+		out = append(out, agent)
 	}
-	return out
+	return out, nil
 }
 
 // Remove deletes an agent.

@@ -50,6 +50,7 @@ type AgentServiceDeps struct {
 	RecallMemory            port.RecallMemoryFn
 	Metrics                 observability.MetricsProvider
 	Logger                  *zap.Logger
+	SystemAssistantProfile  *domain.SystemAssistantProfile
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields
@@ -63,6 +64,9 @@ type AgentService struct {
 func NewAgentService(deps AgentServiceDeps) *AgentService {
 	if deps.Logger == nil {
 		deps.Logger = zap.NewNop()
+	}
+	if deps.SystemAssistantProfile == nil {
+		deps.SystemAssistantProfile = BuiltinSystemAssistantProfile()
 	}
 	return &AgentService{deps: deps}
 }
@@ -169,7 +173,10 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 
 // Get returns the agent's DTO or ErrNotFound.
 func (s *AgentService) Get(ctx context.Context, id string) (AgentDTO, error) {
-	a, ok := s.deps.Registry.Get(ctx, id)
+	a, ok, err := s.deps.Registry.Get(ctx, id)
+	if err != nil {
+		return AgentDTO{}, fmt.Errorf("agent service get: %w", err)
+	}
 	if !ok {
 		return AgentDTO{}, ErrNotFound
 	}
@@ -306,7 +313,10 @@ func revisionConfig(revision domain.AgentRevision) *domain.AgentConfig {
 
 // List returns all agents in the tenant schema.
 func (s *AgentService) List(ctx context.Context) ([]AgentDTO, error) {
-	agents := s.deps.Registry.GetAll(ctx)
+	agents, err := s.deps.Registry.GetAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("agent service list: %w", err)
+	}
 	out := make([]AgentDTO, 0, len(agents))
 	for _, a := range agents {
 		out = append(out, cfgToDTO(a.GetConfig()))
@@ -317,7 +327,10 @@ func (s *AgentService) List(ctx context.Context) ([]AgentDTO, error) {
 // Update replaces mutable fields on an existing agent. EmbedModel is
 // immutable post-create — callers cannot change it through Update.
 func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInput) (AgentDTO, error) {
-	existing, ok := s.deps.Registry.Get(ctx, id)
+	existing, ok, err := s.deps.Registry.Get(ctx, id)
+	if err != nil {
+		return AgentDTO{}, fmt.Errorf("agent service update: %w", err)
+	}
 	if !ok {
 		return AgentDTO{}, ErrNotFound
 	}
@@ -349,7 +362,7 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 
 // Delete removes an agent and cascades deletion to conversations and memories.
 func (s *AgentService) Delete(ctx context.Context, tenantID, id string) error {
-	existing, ok, err := s.deps.Registry.GetWithError(ctx, id)
+	existing, ok, err := s.deps.Registry.Get(ctx, id)
 	if err != nil {
 		return fmt.Errorf("delete agent: load managed identity: %w", err)
 	}
@@ -459,7 +472,10 @@ func (s *AgentService) ensureConversation(ctx context.Context, tenantID, agentID
 }
 
 func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta) (*AgentResult, int, error) {
-	a, ok := s.deps.Registry.Get(ctx, agentID)
+	a, ok, err := s.deps.Registry.Get(ctx, agentID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("execute agent: get agent: %w", err)
+	}
 	if !ok {
 		return nil, 0, ErrNotFound
 	}
@@ -518,7 +534,10 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 func (s *AgentService) ExecuteStream(
 	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, tokenCb func(string),
 ) (execCtx context.Context, cancel context.CancelFunc, run func() (*AgentResult, int, error), err error) {
-	a, ok := s.deps.Registry.Get(ctx, agentID)
+	a, ok, err := s.deps.Registry.Get(ctx, agentID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("execute stream: get agent: %w", err)
+	}
 	if !ok {
 		return nil, nil, nil, ErrNotFound
 	}
@@ -621,7 +640,10 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approva
 	if err != nil {
 		return nil, 0, err
 	}
-	a, ok := s.deps.Registry.Get(ctx, payload.AgentID)
+	a, ok, err := s.deps.Registry.Get(ctx, payload.AgentID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("resume tool approval: get agent: %w", err)
+	}
 	if !ok {
 		return nil, 0, ErrNotFound
 	}
@@ -690,7 +712,10 @@ func completeApprovalResume(
 }
 
 func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, activation port.SkillActivation) (*AgentResult, int, error) {
-	a, ok := s.deps.Registry.Get(ctx, agentID)
+	a, ok, err := s.deps.Registry.Get(ctx, agentID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("execute skill scenario: get agent: %w", err)
+	}
 	if !ok {
 		return nil, 0, ErrNotFound
 	}
@@ -763,6 +788,9 @@ func (s *AgentService) assembleOptions(
 	evolutionTrace := meta.EvolutionTrace
 	if evolutionTrace.ResourceManifest == nil {
 		evolutionTrace.ResourceManifest = make(map[string]string)
+	}
+	if a.GetConfig().SystemKey == domain.SystemAssistantKey {
+		evolutionTrace.ResourceManifest["system-assistant-profile"] = s.deps.SystemAssistantProfile.Version
 	}
 	if evolutionTrace.ExperimentAssignments == nil {
 		evolutionTrace.ExperimentAssignments = make(map[string]ExperimentAssignment)
