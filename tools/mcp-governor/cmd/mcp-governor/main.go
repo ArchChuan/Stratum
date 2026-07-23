@@ -1178,8 +1178,12 @@ func runRenderConfig(opts renderOptions, stdout io.Writer) error {
 		return fmt.Errorf("render client config: %w", err)
 	}
 	if opts.outputPath == "-" {
-		if _, err := stdout.Write(data); err != nil {
+		written, err := stdout.Write(data)
+		if err != nil {
 			return fmt.Errorf("write rendered config: %w", err)
+		}
+		if written != len(data) {
+			return fmt.Errorf("write rendered config: %w", io.ErrShortWrite)
 		}
 		return nil
 	}

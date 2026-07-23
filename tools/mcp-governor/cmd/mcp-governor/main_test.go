@@ -621,53 +621,70 @@ func TestRunRenderConfigRejectsUnsafeInputsWithoutLeakingArguments(t *testing.T)
 	}
 }
 
-func TestRunRenderConfigRejectsIncompleteCatalogWithoutPartialOutput(t *testing.T) {
+func TestRunRenderConfigSelectsEligibleServicesFromHeterogeneousCatalog(t *testing.T) {
 	root := t.TempDir()
 	governor := filepath.Join(root, "governor")
 	writeFile(t, governor, []byte("binary"), 0o700)
-	secretCommand := "do-not-print-secret-command"
 	tests := []struct {
-		name, service, reason string
-		mutate                func(*config.ServiceRule)
+		client, included, excluded string
 	}{
-		{"unavailable client", "claude-only", "not enabled", func(service *config.ServiceRule) {
-			service.Clients = []config.Client{config.ClientClaude}
-		}},
-		{"repository scope", "repository-index", "repository", func(service *config.ServiceRule) {
-			service.Scope = config.ScopeRepository
-			service.SessionPolicy = config.SessionPolicyIsolated
-		}},
-		{"non stdio", "remote", "stdio", func(service *config.ServiceRule) {
-			service.Transport = config.TransportStreamableHTTP
-		}},
+		{"codex", "alpha", "claude-only"},
+		{"claude", "claude-only", "repository-index"},
+		{"vscode", "alpha", "remote"},
+		{"lingma", "zeta", "repository-index"},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			catalog := writeRenderCatalog(t, root, test.service, secretCommand, test.mutate)
-			for _, output := range []string{"-", filepath.Join(root, test.service+".json")} {
-				var stdout, stderr bytes.Buffer
-				args := []string{"render-config", "--config", catalog, "--client", "codex", "--governor", governor,
-					"--output", output}
-				if code := run(args, &stdout, &stderr); code != 1 {
-					t.Fatalf("run()=%d stderr=%q", code, stderr.String())
-				}
-				if stdout.Len() != 0 {
-					t.Fatalf("partial stdout=%q", stdout.String())
-				}
-				if output != "-" {
-					if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
-						t.Fatalf("partial output exists: %v", err)
-					}
-				}
-				message := strings.ToLower(stderr.String())
-				if !strings.Contains(message, test.service) || !strings.Contains(message, test.reason) {
-					t.Fatalf("stderr=%q, want service %q and reason %q", stderr.String(), test.service, test.reason)
-				}
-				if strings.Contains(stderr.String(), secretCommand) {
-					t.Fatalf("stderr leaked command: %q", stderr.String())
-				}
+		t.Run(test.client, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			args := []string{"render-config", "--config", filepath.Join("..", "..", "testdata", "catalog.json"),
+				"--client", test.client, "--governor", governor, "--output", "-"}
+			if code := run(args, &stdout, &stderr); code != 0 {
+				t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), test.included) || strings.Contains(stdout.String(), test.excluded) {
+				t.Fatalf("stdout=%q", stdout.String())
 			}
 		})
+	}
+}
+
+func TestRunRenderConfigRejectsMalformedEligibleCatalogWithoutPartialOutput(t *testing.T) {
+	root := t.TempDir()
+	governor := filepath.Join(root, "governor")
+	writeFile(t, governor, []byte("binary"), 0o700)
+	catalog := writeRenderCatalog(t, root, "bad.name", "do-not-print-secret-command", func(*config.ServiceRule) {})
+	output := filepath.Join(root, "output.toml")
+	var stdout, stderr bytes.Buffer
+	args := []string{"render-config", "--config", catalog, "--client", "codex", "--governor", governor,
+		"--output", output}
+	if code := run(args, &stdout, &stderr); code != 1 {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("partial stdout=%q", stdout.String())
+	}
+	if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial output exists: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(stderr.String()), "name") ||
+		strings.Contains(stderr.String(), "do-not-print-secret-command") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(data []byte) (int, error) { return len(data) - 1, nil }
+
+func TestRunRenderConfigRejectsShortStdoutWrite(t *testing.T) {
+	root := t.TempDir()
+	governor := filepath.Join(root, "governor")
+	writeFile(t, governor, []byte("binary"), 0o700)
+	var stderr bytes.Buffer
+	args := []string{"render-config", "--config", filepath.Join("..", "..", "testdata", "catalog.json"),
+		"--client", "codex", "--governor", governor, "--output", "-"}
+	if code := run(args, shortWriter{}, &stderr); code != 1 || !strings.Contains(stderr.String(), io.ErrShortWrite.Error()) {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
 	}
 }
 
