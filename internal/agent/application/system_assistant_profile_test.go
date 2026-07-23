@@ -206,7 +206,9 @@ func TestSystemAssistantProfileAgentServicePropagatesRegistryFailures(t *testing
 
 func TestSystemAssistantProfileVersionRecordedInTraceMetadata(t *testing.T) {
 	source := BuiltinSystemAssistantProfileSource()
-	svc := NewAgentService(AgentServiceDeps{Registry: NewRegistry(nil, source, zap.NewNop())})
+	svc := NewAgentService(AgentServiceDeps{
+		Registry: NewRegistry(nil, source, zap.NewNop()), TenantModelValidator: &strictModelValidatorStub{},
+	})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID: "assistant-1", SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model", MaxIterations: 3,
 	}}
@@ -225,7 +227,9 @@ func TestSystemAssistantProfileVersionRecordedInTraceMetadata(t *testing.T) {
 }
 
 func TestSystemAssistantProfileTraceFailsClosedWithoutSharedSource(t *testing.T) {
-	svc := NewAgentService(AgentServiceDeps{Registry: NewRegistry(nil, nil, zap.NewNop())})
+	svc := NewAgentService(AgentServiceDeps{
+		Registry: NewRegistry(nil, nil, zap.NewNop()), TenantModelValidator: &strictModelValidatorStub{},
+	})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID: "assistant-1", SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model", MaxIterations: 3,
 	}}
@@ -307,7 +311,7 @@ func TestSystemAssistantProfileRollbackSourceKeepsRuntimeAndTraceOnSameImmutable
 		t.Fatal("caller mutation changed composed runtime prompt")
 	}
 
-	svc := NewAgentService(AgentServiceDeps{Registry: registry})
+	svc := NewAgentService(AgentServiceDeps{Registry: registry, TenantModelValidator: &strictModelValidatorStub{}})
 	_, options, err := svc.assembleOptions(
 		context.Background(), agent, ExecRequest{}, ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1",
 	)

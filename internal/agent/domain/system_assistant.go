@@ -148,7 +148,7 @@ func BuildDiagnosticReport(toolArtifacts []SystemAssistantToolArtifact) *Diagnos
 			r.Facts = appendUniqueFacts(r.Facts, bounded.Facts...)
 			r.EvidenceGaps = appendUniqueGaps(r.EvidenceGaps, bounded.Gaps...)
 		}
-		if a.Tool == "stratum_diagnose_tenant" && a.ErrorCode != "" && a.Evidence == nil {
+		if a.ErrorCode != "" && a.Evidence == nil {
 			r.EvidenceGaps = append(r.EvidenceGaps, EvidenceGap{Source: a.Tool, Code: a.ErrorCode})
 		}
 	}

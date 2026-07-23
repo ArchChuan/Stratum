@@ -21,5 +21,5 @@ func TestBuildDiagnosticReportPreservesDocsFailureStepWithoutInventingClaims(t *
 	}})
 	require.Equal(t, []DiagnosticStep{{Tool: "stratum_search_official_docs", Outcome: "error", ErrorCode: "not_found", LatencyMs: 9}}, report.Steps)
 	require.Empty(t, report.Facts)
-	require.Empty(t, report.EvidenceGaps)
+	require.Equal(t, []EvidenceGap{{Source: "stratum_search_official_docs", Code: "not_found"}}, report.EvidenceGaps)
 }

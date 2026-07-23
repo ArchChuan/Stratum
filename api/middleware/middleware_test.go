@@ -27,6 +27,7 @@ func TestMapErrorToStatusMapsTraceEvidenceFailures(t *testing.T) {
 		{name: "not found", err: agentdomain.ErrEvidenceNotFound, want: http.StatusNotFound},
 		{name: "invalid", err: fmt.Errorf("decode: %w", agentdomain.ErrEvidenceInvalid), want: http.StatusBadGateway},
 		{name: "unavailable", err: fmt.Errorf("opik: %w", agentdomain.ErrEvidenceUnavailable), want: http.StatusServiceUnavailable},
+		{name: "assistant model unavailable", err: agentdomain.ErrAssistantModelUnavailable, want: http.StatusServiceUnavailable},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

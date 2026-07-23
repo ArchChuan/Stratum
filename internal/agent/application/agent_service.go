@@ -932,8 +932,17 @@ func (s *AgentService) assembleOptions(
 		options = append(options, WithMaxSteps(req.MaxSteps))
 	}
 	isSystemAssistant := a.GetConfig().SystemKey == domain.SystemAssistantKey
-	if isSystemAssistant && strings.TrimSpace(a.GetConfig().LLMModel) == "" {
-		return ctx, nil, domain.ErrAssistantModelUnavailable
+	if isSystemAssistant {
+		model := strings.TrimSpace(a.GetConfig().LLMModel)
+		if model == "" || s.deps.TenantModelValidator == nil {
+			return ctx, nil, domain.ErrAssistantModelUnavailable
+		}
+		if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, meta.TenantID, model); err != nil {
+			if errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
+				return ctx, nil, domain.ErrAssistantModelUnavailable
+			}
+			return ctx, nil, fmt.Errorf("assemble system assistant model: %w", err)
+		}
 	}
 	if s.deps.TenantResolver != nil {
 		if capGW, apiKeys, ok := s.deps.TenantResolver.Resolve(ctx, meta.TenantID); ok {

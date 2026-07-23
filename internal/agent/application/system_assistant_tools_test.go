@@ -14,6 +14,16 @@ import (
 
 type assistantDiagnosticStub struct{}
 
+type strictModelValidatorStub struct {
+	err   error
+	calls []string
+}
+
+func (v *strictModelValidatorStub) ValidateTenantChatModel(_ context.Context, tenantID, model string) error {
+	v.calls = append(v.calls, tenantID+":"+model)
+	return v.err
+}
+
 func (assistantDiagnosticStub) Authorize(_ context.Context, req domain.DiagnosticRequest) (domain.DiagnosticAuthorization, error) {
 	req.Scope = domain.DiagnosticScopeSelf
 	return domain.DiagnosticAuthorization{Request: req, RoleClass: "member"}, nil
@@ -81,9 +91,10 @@ func TestSystemAssistantCallbacksPreserveNoMatchAndDiagnosticGaps(t *testing.T) 
 func TestAssembleOptionsExposesExactlyTwoToolsOnlyToSystemAssistant(t *testing.T) {
 	source := BuiltinSystemAssistantProfileSource()
 	svc := NewAgentService(AgentServiceDeps{
-		Registry:           NewRegistry(nil, source, zap.NewNop()),
-		OfficialDocsSearch: func(context.Context, string) ([]domain.Citation, error) { return nil, nil },
-		DiagnosticProvider: assistantDiagnosticStub{},
+		Registry:             NewRegistry(nil, source, zap.NewNop()),
+		OfficialDocsSearch:   func(context.Context, string) ([]domain.Citation, error) { return nil, nil },
+		DiagnosticProvider:   assistantDiagnosticStub{},
+		TenantModelValidator: &strictModelValidatorStub{},
 	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{ID: "system", SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model", MaxIterations: 3}}
 	_, options, err := svc.assembleOptions(context.Background(), system,
@@ -131,6 +142,66 @@ func TestSystemAssistantWithoutModelFailsBeforeCapabilityResolution(t *testing.T
 	}
 }
 
+func TestSystemAssistantExecutionFailsClosedWhenTenantModelIsUnavailable(t *testing.T) {
+	validator := &strictModelValidatorStub{err: domain.ErrAssistantModelUnavailable}
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:             NewRegistry(nil, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantModelValidator: validator,
+	})
+	system := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		LLMModel: "qwen-plus", MaxIterations: 3,
+	}}
+
+	_, _, err := svc.assembleOptions(context.Background(), system, ExecRequest{},
+		ExecMeta{TenantID: "tenant-1"}, "execution-1")
+	if !errors.Is(err, domain.ErrAssistantModelUnavailable) {
+		t.Fatalf("assembleOptions() error = %v", err)
+	}
+	if len(validator.calls) != 1 || validator.calls[0] != "tenant-1:qwen-plus" {
+		t.Fatalf("validator calls = %#v", validator.calls)
+	}
+}
+
+func TestSystemAssistantExecutionTreatsStaleConfiguredModelAsUnavailable(t *testing.T) {
+	validator := &strictModelValidatorStub{err: domain.ErrInvalidSystemAssistantModel}
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:             NewRegistry(nil, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		TenantModelValidator: validator,
+	})
+	system := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+		LLMModel: "retired-model", MaxIterations: 3,
+	}}
+
+	_, _, err := svc.assembleOptions(context.Background(), system, ExecRequest{},
+		ExecMeta{TenantID: "tenant-1"}, "execution-1")
+	if !errors.Is(err, domain.ErrAssistantModelUnavailable) {
+		t.Fatalf("assembleOptions() error = %v", err)
+	}
+	if errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
+		t.Fatalf("assembleOptions() exposed stale configuration as client error: %v", err)
+	}
+}
+
+func TestBuildExecutionArtifactsPreservesOfficialDocsFailureAsEvidenceGap(t *testing.T) {
+	artifacts := buildExecutionArtifacts([]domain.SystemAssistantToolArtifact{{
+		Tool: ToolSearchOfficialDocs, Outcome: "error", ErrorCode: "not_found",
+	}}, domain.CurrentSystemAssistantProfileVersion)
+
+	if len(artifacts) != 1 || artifacts[0].Type != "diagnostic_report" || artifacts[0].DiagnosticReport == nil {
+		t.Fatalf("artifacts = %#v", artifacts)
+	}
+	report := artifacts[0].DiagnosticReport
+	if len(report.Steps) != 1 || report.Steps[0].ErrorCode != "not_found" {
+		t.Fatalf("steps = %#v", report.Steps)
+	}
+	if len(report.EvidenceGaps) != 1 || report.EvidenceGaps[0].Source != ToolSearchOfficialDocs ||
+		report.EvidenceGaps[0].Code != "not_found" {
+		t.Fatalf("evidence gaps = %#v", report.EvidenceGaps)
+	}
+}
+
 var _ port.DiagnosticEvidenceProvider = assistantDiagnosticStub{}
 
 type countingAuthorizedDiagnostics struct{ authorizeCalls, collectCalls int }
@@ -148,7 +219,10 @@ func (d *countingAuthorizedDiagnostics) CollectAuthorized(_ context.Context, req
 
 func TestSystemAssistantAuthorizesRoleOnceAndCapturesScope(t *testing.T) {
 	provider := &countingAuthorizedDiagnostics{}
-	svc := NewAgentService(AgentServiceDeps{Registry: NewRegistry(nil, BuiltinSystemAssistantProfileSource(), zap.NewNop()), DiagnosticProvider: provider})
+	svc := NewAgentService(AgentServiceDeps{
+		Registry:           NewRegistry(nil, BuiltinSystemAssistantProfileSource(), zap.NewNop()),
+		DiagnosticProvider: provider, TenantModelValidator: &strictModelValidatorStub{},
+	})
 	system := &optionCaptureAgent{config: &domain.AgentConfig{ID: "system", SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model", MaxIterations: 3}}
 	_, options, err := svc.assembleOptions(context.Background(), system, ExecRequest{UserID: "user-1"}, ExecMeta{TenantID: "tenant-1"}, "execution-1")
 	if err != nil {
@@ -219,6 +293,7 @@ func TestSystemAssistantRequestMetricsCoverAssembleFailureAndMemoryWritesStayDis
 	readyRegistry := NewRegistry(systemAssistantProfileRepo{cfgs: []*domain.AgentConfig{{ID: "system", SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model"}}}, BuiltinSystemAssistantProfileSource(), zap.NewNop())
 	readySvc := NewAgentService(AgentServiceDeps{Registry: readyRegistry, Metrics: metrics,
 		TenantResolver: tenantResolverFake{gateway: &systemAssistantPromptGateway{}}, DiagnosticProvider: assistantDiagnosticStub{},
+		TenantModelValidator: &strictModelValidatorStub{},
 		MemoryBuffer: func(context.Context, string, string, string, string, string, string, string) error {
 			buffers++
 			return nil

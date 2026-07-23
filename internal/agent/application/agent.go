@@ -1090,7 +1090,7 @@ func buildExecutionArtifacts(toolArtifacts []domain.SystemAssistantToolArtifact,
 	}
 	citations := make([]domain.Citation, 0)
 	seenCitations := make(map[string]struct{})
-	hasDiagnostic := false
+	hasReport := false
 	for _, artifact := range toolArtifacts {
 		if artifact.Tool == "stratum_search_official_docs" {
 			for _, citation := range domain.BoundCitations(artifact.Citations) {
@@ -1105,14 +1105,17 @@ func buildExecutionArtifacts(toolArtifacts []domain.SystemAssistantToolArtifact,
 			}
 		}
 		if artifact.Evidence != nil || artifact.Tool == "stratum_diagnose_tenant" {
-			hasDiagnostic = true
+			hasReport = true
+		}
+		if artifact.ErrorCode != "" {
+			hasReport = true
 		}
 	}
 	out := make([]domain.ExecutionArtifact, 0, 2)
 	if len(citations) > 0 {
 		out = append(out, domain.ExecutionArtifact{Type: "citations", ProfileVersion: profileVersion, Citations: citations})
 	}
-	if hasDiagnostic {
+	if hasReport {
 		out = append(out, domain.ExecutionArtifact{Type: "diagnostic_report", ProfileVersion: profileVersion, DiagnosticReport: domain.BuildDiagnosticReport(toolArtifacts)})
 	}
 	return boundExecutionArtifactsJSON(out)
