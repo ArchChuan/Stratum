@@ -176,11 +176,13 @@ application 直接 import 兄弟 context 的 application 或 infrastructure。
 |---|---|---|
 | Agent | 创建、更新普通配置 | 删除、修改系统助手 |
 | Skill | 创建、更新草稿 | 发布、部署候选、归档或删除 |
-| MCP | 创建、更新非密钥配置 | 执行工具、采集或回显密钥、删除 |
+| MCP | 创建无认证配置；更新已有配置的非敏感字段并保留原凭据 | 创建需认证配置、替换凭据、执行工具、删除 |
 | Knowledge | 创建、更新 workspace 配置 | 上传文档、删除 workspace |
 
-需要凭据的 MCP 配置只能在审阅页选择已有 secret reference。密钥值不进入聊天、提案 payload、执行 trace
-或通用日志。没有可用 secret reference 时提案不能应用。
+当前仓库没有独立 secret reference 模型。二期不顺带建设凭据管理子系统：系统助手只能创建
+`AuthTypeNone` 的 MCP 配置；更新已有 MCP 时由现有 `MCPService.UpdateServer` 保留已存凭据，提案不得包含
+敏感 `env`、header 或 auth 值。新增或更换凭据继续使用专用 MCP 表单，不进入聊天、提案 payload、执行 trace
+或通用日志。
 
 ### 7.2 提案状态机
 
