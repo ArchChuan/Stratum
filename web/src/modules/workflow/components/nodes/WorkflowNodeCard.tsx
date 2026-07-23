@@ -20,7 +20,7 @@ export const WorkflowNodeCard = ({ data, selected }: NodeProps<WorkflowNodeData>
   >
     <Handle type="target" position={Position.Left} />
     <span className={`workflow-node-icon type-${data.node.type}`}>{presentation.icon}</span>
-    <span><strong>{data.node.name || presentation.label}</strong><small>{presentation.label}</small></span>
+    <span><strong>{data.node.name || presentation.label}</strong><small>{data.statusLabel || presentation.label}</small></span>
     <Handle type="source" position={Position.Right} />
   </article>;
 };

@@ -25,6 +25,7 @@ export type WorkflowEditorAction =
 export interface WorkflowNodeData extends Record<string, unknown> {
   node: WorkflowNode;
   selected: boolean;
+  statusLabel?: string;
 }
 
 const emptySpec = (): WorkflowSpec => ({ nodes: [], edges: [], max_concurrency: 0 });
