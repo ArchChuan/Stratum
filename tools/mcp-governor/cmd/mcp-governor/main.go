@@ -857,16 +857,22 @@ func decodeEventJSONL(path string, accumulator *report.Accumulator) (eventFile, 
 	if err := syscall.Flock(fd, syscall.LOCK_SH); err != nil {
 		return eventFile{}, fmt.Errorf("lock event file for report: %w", err)
 	}
-	defer syscall.Flock(fd, syscall.LOCK_UN)
 	var stat syscall.Stat_t
 	if err := syscall.Fstat(fd, &stat); err != nil {
+		_ = syscall.Flock(fd, syscall.LOCK_UN)
 		return eventFile{}, err
 	}
 	if stat.Mode&syscall.S_IFMT != syscall.S_IFREG || stat.Mode&0o777 != 0o600 {
+		_ = syscall.Flock(fd, syscall.LOCK_UN)
 		return eventFile{}, fmt.Errorf("event file must be a private regular file")
 	}
 	result := eventFile{path: path, device: uint64(stat.Dev), inode: stat.Ino, size: stat.Size}
-	scanner := bufio.NewScanner(file)
+	data, err := io.ReadAll(file)
+	_ = syscall.Flock(fd, syscall.LOCK_UN)
+	if err != nil {
+		return eventFile{}, fmt.Errorf("snapshot event file: %w", err)
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	buffer := make([]byte, 64*1024)
 	scanner.Buffer(buffer, 4*1024*1024)
 	for line := 1; scanner.Scan(); line++ {

@@ -309,12 +309,16 @@ func TestRunPropagatesEventWriterError(t *testing.T) {
 	server := buildFakeServer(t)
 	request := `{"id":1,"method":"tools/call","params":{"name":"echo"}}` + "\n"
 	want := errors.New("event storage unavailable")
+	var stdout bytes.Buffer
 	err := Run(context.Background(), Options{
 		Command: server, Args: []string{"echo"}, Stdin: strings.NewReader(request),
-		Stdout: io.Discard, Stderr: io.Discard, Tracker: newTracker(t), Events: failingEvents{err: want},
+		Stdout: &stdout, Stderr: io.Discard, Tracker: newTracker(t), Events: failingEvents{err: want},
 	})
 	if !errors.Is(err, want) {
 		t.Fatalf("Run() error = %v, want event writer error", err)
+	}
+	if !strings.Contains(stdout.String(), `"id":1`) {
+		t.Fatalf("stdout = %q, want forwarded response despite event writer error", stdout.String())
 	}
 }
 
@@ -532,6 +536,94 @@ func (c *eventCollector) Events() []observe.Event {
 type failingEvents struct{ err error }
 
 func (f failingEvents) Write(observe.Event) error { return f.err }
+
+func TestObservationSinkCloseIsIdempotentAndConcurrentEnqueueSafe(t *testing.T) {
+	sink := newObservationSink(&eventCollector{})
+	event := observe.Event{Version: observe.EventVersion, Kind: observe.KindSessionReady,
+		At: time.Now(), Client: "codex", Service: "svc", SessionHash: "session"}
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		for i := 0; i < observationQueueSize*4; i++ {
+			sink.enqueue([]observe.Event{event})
+		}
+	}()
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := sink.close(ctx); err != nil && !strings.Contains(err.Error(), "dropped") {
+		t.Fatalf("first close error = %v", err)
+	}
+	if err := sink.close(ctx); err != nil && !strings.Contains(err.Error(), "dropped") {
+		t.Fatalf("second close error = %v", err)
+	}
+}
+
+type blockingEvents struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingEvents) Write(observe.Event) error {
+	select {
+	case <-b.started:
+	default:
+		close(b.started)
+	}
+	<-b.release
+	return nil
+}
+
+func TestObservationSinkSlowWriterDoesNotBlockProtocolForwarding(t *testing.T) {
+	server := buildFakeServer(t)
+	writer := &blockingEvents{started: make(chan struct{}), release: make(chan struct{})}
+	request := `{"id":1,"method":"tools/call","params":{"name":"echo"}}` + "\n"
+	var stdout bytes.Buffer
+	started := time.Now()
+	err := Run(context.Background(), Options{
+		Command: server, Args: []string{"rpc"}, Stdin: strings.NewReader(request),
+		Stdout: &stdout, Stderr: io.Discard, Tracker: newTracker(t), Events: writer,
+	})
+	close(writer.release)
+	if !strings.Contains(stdout.String(), `"id":1`) {
+		t.Fatalf("stdout = %q, want forwarded response", stdout.String())
+	}
+	if err == nil || !strings.Contains(err.Error(), "observation sink drain") {
+		t.Fatalf("Run() error = %v, want bounded observation drain error", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("Run() took %s with blocked observation writer", elapsed)
+	}
+}
+
+func TestObservationSinkQueueFullIsObservable(t *testing.T) {
+	writer := &blockingEvents{started: make(chan struct{}), release: make(chan struct{})}
+	sink := newObservationSink(writer)
+	event := observe.Event{Version: observe.EventVersion, Kind: observe.KindSessionReady,
+		At: time.Now(), Client: "codex", Service: "svc", SessionHash: "session"}
+	events := make([]observe.Event, observationQueueSize*2)
+	for i := range events {
+		events[i] = event
+	}
+	sink.enqueue(events)
+	select {
+	case <-writer.started:
+	case <-time.After(time.Second):
+		t.Fatal("observation writer did not start")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	err := sink.close(ctx)
+	cancel()
+	if err == nil || !strings.Contains(err.Error(), "observation sink drain") {
+		t.Fatalf("close() error = %v, want bounded drain error", err)
+	}
+	close(writer.release)
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := sink.close(ctx); err == nil || !strings.Contains(err.Error(), "dropped") {
+		t.Fatalf("second close error = %v, want dropped-event visibility", err)
+	}
+}
 
 type blockingReader struct{ reads atomic.Int32 }
 

@@ -1,12 +1,14 @@
 package observe
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"sync"
 	"syscall"
+	"time"
 )
 
 const (
@@ -87,6 +89,16 @@ func NewWriter(root, client, sessionHash string) (*Writer, error) {
 }
 
 func (w *Writer) Write(event Event) error {
+	return w.WriteContext(context.Background(), event)
+}
+
+// WriteContext is the cancellation-aware form used by the proxy's
+// asynchronous observation sink. It keeps an observation write from holding
+// the writer mutex or event-file lock past the sink's shutdown budget.
+func (w *Writer) WriteContext(ctx context.Context, event Event) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := event.Validate(); err != nil {
 		return fmt.Errorf("validate event: %w", err)
 	}
@@ -99,12 +111,14 @@ func (w *Writer) Write(event Event) error {
 	}
 	record = append(record, '\n')
 
-	w.mu.Lock()
+	if err := lockWriterMutex(ctx, &w.mu); err != nil {
+		return fmt.Errorf("lock writer: %w", err)
+	}
 	defer w.mu.Unlock()
 	if w.closed {
 		return fmt.Errorf("writer is closed")
 	}
-	if err := syscall.Flock(int(w.file.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flockContext(ctx, int(w.file.Fd()), syscall.LOCK_EX); err != nil {
 		return fmt.Errorf("lock event file: %w", err)
 	}
 	written, err := w.file.Write(record)
@@ -120,6 +134,44 @@ func (w *Writer) Write(event Event) error {
 		return fmt.Errorf("unlock event file: %w", err)
 	}
 	return nil
+}
+
+func lockWriterMutex(ctx context.Context, mutex *sync.Mutex) error {
+	for {
+		if mutex.TryLock() {
+			return nil
+		}
+		timer := time.NewTimer(time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func flockContext(ctx context.Context, fd int, operation int) error {
+	for {
+		err := syscall.Flock(fd, operation|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			return err
+		}
+		timer := time.NewTimer(time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (w *Writer) Close() error {

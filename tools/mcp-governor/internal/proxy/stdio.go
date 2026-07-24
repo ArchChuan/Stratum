@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -47,6 +48,105 @@ type Options struct {
 	waitChild       func(*exec.Cmd) error
 	shutdownGrace   time.Duration
 	shutdownBudget  time.Duration
+}
+
+const observationQueueSize = 128
+
+// observationSink decouples protocol forwarding from best-effort observation I/O.
+// A full queue drops observations and exposes the count at shutdown; it never
+// causes the MCP byte stream to fail.
+type observationSink struct {
+	writer     observeWriter
+	queue      chan observe.Event
+	closed     chan struct{}
+	dropped    atomic.Uint64
+	mu         sync.Mutex
+	stateMu    sync.Mutex
+	err        error
+	closing    bool
+	cancel     context.CancelFunc
+	cancelOnce sync.Once
+}
+
+type observeWriter interface {
+	Write(observe.Event) error
+}
+
+func newObservationSink(writer observeWriter) *observationSink {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &observationSink{writer: writer, queue: make(chan observe.Event, observationQueueSize), closed: make(chan struct{}), cancel: cancel}
+	go s.run(ctx)
+	return s
+}
+
+func (s *observationSink) run(ctx context.Context) {
+	defer close(s.closed)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-s.queue:
+			if !ok {
+				return
+			}
+			if err := writeObservation(ctx, s.writer, event); err != nil {
+				s.mu.Lock()
+				if s.err == nil {
+					s.err = err
+				}
+				s.mu.Unlock()
+			}
+		}
+	}
+}
+
+type contextObserveWriter interface {
+	WriteContext(context.Context, observe.Event) error
+}
+
+func writeObservation(ctx context.Context, writer observeWriter, event observe.Event) error {
+	if contextual, ok := writer.(contextObserveWriter); ok {
+		return contextual.WriteContext(ctx, event)
+	}
+	return writer.Write(event)
+}
+
+func (s *observationSink) enqueue(events []observe.Event) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.closing {
+		s.dropped.Add(uint64(len(events)))
+		return
+	}
+	for _, event := range events {
+		select {
+		case s.queue <- event:
+		default:
+			s.dropped.Add(1)
+		}
+	}
+}
+
+func (s *observationSink) close(ctx context.Context) error {
+	s.stateMu.Lock()
+	if !s.closing {
+		s.closing = true
+		close(s.queue)
+	}
+	s.stateMu.Unlock()
+	select {
+	case <-s.closed:
+	case <-ctx.Done():
+		s.cancelOnce.Do(s.cancel)
+		return fmt.Errorf("observation sink drain: %w", ctx.Err())
+	}
+	s.mu.Lock()
+	err := s.err
+	s.mu.Unlock()
+	if dropped := s.dropped.Load(); dropped > 0 {
+		err = errors.Join(err, fmt.Errorf("observation sink dropped %d events", dropped))
+	}
+	return err
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -97,21 +197,25 @@ func Run(ctx context.Context, options Options) error {
 		return errors.Join(fmt.Errorf("stdio proxy: start child: %w", err), stdinCleanup.Close(), stdoutCleanup.Close())
 	}
 
-	var eventMu sync.Mutex
 	gate := newObservationGate()
+	var sink *observationSink
+	if options.Events != nil {
+		sink = newObservationSink(options.Events)
+	}
 	writeEvents := func(events []observe.Event) error {
-		if options.Events == nil {
+		if sink == nil {
 			return nil
 		}
-		eventMu.Lock()
-		defer eventMu.Unlock()
-		for _, event := range events {
-			if err := options.Events.Write(event); err != nil {
-				return fmt.Errorf("stdio proxy: write event: %w", err)
-			}
-		}
+		sink.enqueue(events)
 		return nil
 	}
+	defer func() {
+		if sink != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), defaultShutdownGrace)
+			_ = sink.close(ctx)
+			cancel()
+		}
+	}()
 	type result struct {
 		side string
 		err  error
@@ -255,9 +359,16 @@ func Run(ctx context.Context, options Options) error {
 		if ctx.Err() != nil {
 			outcome = observe.OutcomeCancelled
 		}
-		if err := writeEvents(options.Tracker.Flush(outcome)); err != nil {
-			runErr = errors.Join(runErr, err)
+		_ = writeEvents(options.Tracker.Flush(outcome))
+	}
+	if sink != nil {
+		drainCtx, cancelDrain := context.WithTimeout(context.Background(), defaultShutdownGrace)
+		sinkErr := sink.close(drainCtx)
+		cancelDrain()
+		if sinkErr != nil {
+			runErr = errors.Join(runErr, sinkErr)
 		}
+		sink = nil
 	}
 	return errors.Join(runErr, shutdownErr, clientStdinCloseErr, stdinCleanup.Err(), stdoutCleanup.Err())
 }
