@@ -238,7 +238,7 @@ describe('平台使用小助手界面', () => {
 
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith('strict-model'));
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(save).not.toHaveClass('ant-btn-loading');
+    await waitFor(() => expect(save).not.toHaveClass('ant-btn-loading'));
   });
 
   it('把事实、缺口、建议、工具耗时和引用分区展示', () => {
