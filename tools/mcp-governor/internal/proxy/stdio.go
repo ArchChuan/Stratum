@@ -56,16 +56,18 @@ const observationQueueSize = 128
 // A full queue drops observations and exposes the count at shutdown; it never
 // causes the MCP byte stream to fail.
 type observationSink struct {
-	writer     observeWriter
-	queue      chan observe.Event
-	closed     chan struct{}
-	dropped    atomic.Uint64
-	mu         sync.Mutex
-	stateMu    sync.Mutex
-	err        error
-	closing    bool
-	cancel     context.CancelFunc
-	cancelOnce sync.Once
+	writer      observeWriter
+	queue       chan observe.Event
+	closed      chan struct{}
+	dropped     atomic.Uint64
+	writeErrors atomic.Uint64
+	mu          sync.Mutex
+	stateMu     sync.Mutex
+	err         error
+	closing     bool
+	marked      bool
+	cancel      context.CancelFunc
+	cancelOnce  sync.Once
 }
 
 type observeWriter interface {
@@ -90,6 +92,7 @@ func (s *observationSink) run(ctx context.Context) {
 				return
 			}
 			if err := writeObservation(ctx, s.writer, event); err != nil {
+				s.writeErrors.Add(1)
 				s.mu.Lock()
 				if s.err == nil {
 					s.err = err
@@ -98,6 +101,32 @@ func (s *observationSink) run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+type observationDegradedMarker interface {
+	MarkDegraded(reason string, count uint64) error
+}
+
+func (s *observationSink) persistDegraded() error {
+	marker, ok := s.writer.(observationDegradedMarker)
+	if !ok {
+		return nil
+	}
+	s.stateMu.Lock()
+	if s.marked {
+		s.stateMu.Unlock()
+		return nil
+	}
+	s.marked = true
+	s.stateMu.Unlock()
+	var err error
+	if dropped := s.dropped.Load(); dropped > 0 {
+		err = errors.Join(err, marker.MarkDegraded("observation_sink_dropped", dropped))
+	}
+	if writeErrors := s.writeErrors.Load(); writeErrors > 0 {
+		err = errors.Join(err, marker.MarkDegraded("observation_sink_write_error", writeErrors))
+	}
+	return err
 }
 
 type contextObserveWriter interface {
@@ -134,11 +163,12 @@ func (s *observationSink) close(ctx context.Context) error {
 		close(s.queue)
 	}
 	s.stateMu.Unlock()
+	var drainErr error
 	select {
 	case <-s.closed:
 	case <-ctx.Done():
 		s.cancelOnce.Do(s.cancel)
-		return fmt.Errorf("observation sink drain: %w", ctx.Err())
+		drainErr = fmt.Errorf("observation sink drain: %w", ctx.Err())
 	}
 	s.mu.Lock()
 	err := s.err
@@ -146,7 +176,7 @@ func (s *observationSink) close(ctx context.Context) error {
 	if dropped := s.dropped.Load(); dropped > 0 {
 		err = errors.Join(err, fmt.Errorf("observation sink dropped %d events", dropped))
 	}
-	return err
+	return errors.Join(drainErr, err, s.persistDegraded())
 }
 
 func Run(ctx context.Context, options Options) error {

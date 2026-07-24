@@ -29,6 +29,20 @@ type WriterOptions struct {
 	RotateDaily     bool
 }
 
+// DegradedStatus is a private per-session sidecar describing observations
+// which could not be persisted by the asynchronous proxy sink. It contains
+// no event payloads or credentials.
+type DegradedStatus struct {
+	Version        int       `json:"version"`
+	Client         string    `json:"client"`
+	SessionHash    string    `json:"session_hash"`
+	FirstEventAt   time.Time `json:"first_event_at,omitempty"`
+	LastEventAt    time.Time `json:"last_event_at,omitempty"`
+	RecordsDropped int       `json:"records_dropped,omitempty"`
+	WriteErrors    int       `json:"write_errors,omitempty"`
+	Reasons        []string  `json:"reasons,omitempty"`
+}
+
 type Writer struct {
 	mu              sync.Mutex
 	file            *os.File
@@ -41,6 +55,8 @@ type Writer struct {
 	maxSegmentBytes int64
 	rotateDaily     bool
 	closed          bool
+	statusMu        sync.Mutex
+	status          DegradedStatus
 }
 
 func NewWriter(root, client, sessionHash string) (*Writer, error) {
@@ -119,6 +135,7 @@ func NewWriterWithOptions(root, client, sessionHash string, options WriterOption
 		clientDirFD: clientFD, client: client, sessionHash: sessionHash,
 		segment: segment, segmentDay: segmentDay,
 		maxSegmentBytes: maxSegmentBytes, rotateDaily: options.RotateDaily,
+		status: DegradedStatus{Version: 1, Client: client, SessionHash: sessionHash},
 	}, nil
 }
 
@@ -152,6 +169,14 @@ func (w *Writer) WriteContext(ctx context.Context, event Event) error {
 	if w.closed {
 		return fmt.Errorf("writer is closed")
 	}
+	w.statusMu.Lock()
+	if w.status.FirstEventAt.IsZero() || event.At.Before(w.status.FirstEventAt) {
+		w.status.FirstEventAt = event.At
+	}
+	if w.status.LastEventAt.IsZero() || event.At.After(w.status.LastEventAt) {
+		w.status.LastEventAt = event.At
+	}
+	w.statusMu.Unlock()
 	currentFile := w.file
 	if err := flockContext(ctx, int(currentFile.Fd()), syscall.LOCK_EX); err != nil {
 		return fmt.Errorf("lock event file: %w", err)
@@ -172,6 +197,88 @@ func (w *Writer) WriteContext(ctx context.Context, event Event) error {
 	}
 	if err := syscall.Flock(int(activeFile.Fd()), syscall.LOCK_UN); err != nil {
 		return fmt.Errorf("unlock event file: %w", err)
+	}
+	return nil
+}
+
+// MarkDegraded persists an observation loss marker without taking the event
+// append lock. It is intentionally optional so in-memory test sinks and other
+// writers remain compatible with the proxy's observation interface.
+func (w *Writer) MarkDegraded(reason string, count uint64) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("degraded reason is required")
+	}
+	w.statusMu.Lock()
+	defer w.statusMu.Unlock()
+	for _, existing := range w.status.Reasons {
+		if existing == reason {
+			goto counted
+		}
+	}
+	w.status.Reasons = append(w.status.Reasons, reason)
+counted:
+	if count == 0 {
+		count = 1
+	}
+	maxInt := uint64(^uint(0) >> 1)
+	if count > maxInt {
+		count = maxInt
+	}
+	if strings.Contains(reason, "write_error") {
+		if w.status.WriteErrors > int(maxInt-count) {
+			w.status.WriteErrors = int(maxInt)
+		} else {
+			w.status.WriteErrors += int(count)
+		}
+	} else if w.status.RecordsDropped > int(maxInt-count) {
+		w.status.RecordsDropped = int(maxInt)
+	} else {
+		w.status.RecordsDropped += int(count)
+	}
+	return w.writeStatusLocked()
+}
+
+func (w *Writer) writeStatusLocked() error {
+	if w.clientDirFD < 0 {
+		return fmt.Errorf("writer is closed")
+	}
+	data, err := json.Marshal(w.status)
+	if err != nil {
+		return fmt.Errorf("marshal degraded status: %w", err)
+	}
+	data = append(data, '\n')
+	name := w.sessionHash + ".status.json"
+	fd, err := syscall.Openat(w.clientDirFD, name,
+		syscall.O_CREAT|syscall.O_WRONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW,
+		privateFileMode)
+	if err != nil {
+		return fmt.Errorf("open degraded status: %w", err)
+	}
+	if err := validateDescriptor(fd, syscall.S_IFREG, privateFileMode); err != nil {
+		_ = syscall.Close(fd)
+		return fmt.Errorf("validate degraded status: %w", err)
+	}
+	if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
+		_ = syscall.Close(fd)
+		return fmt.Errorf("lock degraded status: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), name)
+	defer func() {
+		_ = syscall.Flock(fd, syscall.LOCK_UN)
+		_ = file.Close()
+	}()
+	if err := file.Truncate(0); err != nil {
+		return fmt.Errorf("truncate degraded status: %w", err)
+	}
+	written, err := file.Write(data)
+	if err != nil {
+		return fmt.Errorf("write degraded status: %w", err)
+	}
+	if written != len(data) {
+		return fmt.Errorf("write degraded status: %w", io.ErrShortWrite)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync degraded status: %w", err)
 	}
 	return nil
 }

@@ -20,23 +20,27 @@ var ErrBudgetExceeded = fmt.Errorf("report budget exceeded")
 // fields select conservative defaults; callers can provide smaller limits in
 // tests or controlled report jobs.
 type Budget struct {
-	MaxEventBytes              int64
-	MaxRecords                 int
-	MaxToolCardinality         int
-	MaxSessionCardinality      int
-	MaxServiceCardinality      int
-	MaxDistributionCardinality int
-	MaxWorkUnits               int64
+	MaxEventBytes                  int64
+	MaxRecords                     int
+	MaxToolCardinality             int
+	MaxSessionCardinality          int
+	MaxDayCardinality              int
+	MaxServiceCardinality          int
+	MaxSnapshotIdentityCardinality int
+	MaxDistributionCardinality     int
+	MaxWorkUnits                   int64
 }
 
 const (
-	defaultMaxEventBytes              int64 = 256 << 20
-	defaultMaxRecords                       = 1_000_000
-	defaultMaxToolCardinality               = 10_000
-	defaultMaxSessionCardinality            = 10_000
-	defaultMaxServiceCardinality            = 10_000
-	defaultMaxDistributionCardinality       = 10_000
-	defaultMaxWorkUnits               int64 = 2_000_000
+	defaultMaxEventBytes                  int64 = 256 << 20
+	defaultMaxRecords                           = 1_000_000
+	defaultMaxToolCardinality                   = 10_000
+	defaultMaxSessionCardinality                = 10_000
+	defaultMaxDayCardinality                    = 366
+	defaultMaxServiceCardinality                = 10_000
+	defaultMaxSnapshotIdentityCardinality       = 10_000
+	defaultMaxDistributionCardinality           = 10_000
+	defaultMaxWorkUnits                   int64 = 2_000_000
 )
 
 func normalizeBudget(b Budget) Budget {
@@ -52,8 +56,14 @@ func normalizeBudget(b Budget) Budget {
 	if b.MaxSessionCardinality <= 0 {
 		b.MaxSessionCardinality = defaultMaxSessionCardinality
 	}
+	if b.MaxDayCardinality <= 0 {
+		b.MaxDayCardinality = defaultMaxDayCardinality
+	}
 	if b.MaxServiceCardinality <= 0 {
 		b.MaxServiceCardinality = defaultMaxServiceCardinality
+	}
+	if b.MaxSnapshotIdentityCardinality <= 0 {
+		b.MaxSnapshotIdentityCardinality = defaultMaxSnapshotIdentityCardinality
 	}
 	if b.MaxDistributionCardinality <= 0 {
 		b.MaxDistributionCardinality = defaultMaxDistributionCardinality
@@ -155,6 +165,78 @@ func (a *Accumulator) mark(reason string, dropped bool) {
 		a.reasons[reason] = struct{}{}
 		a.status.OverflowReasons = append(a.status.OverflowReasons, reason)
 	}
+}
+
+// MarkDegraded merges a persisted observation loss marker into the report.
+// It does not allocate aggregate state and is safe to call for sidecars that
+// contain no usable event records.
+func (a *Accumulator) MarkDegraded(reason string, dropped int) {
+	if strings.TrimSpace(reason) == "" {
+		reason = "observation_degraded"
+	}
+	a.status.Complete = false
+	a.status.Degraded = true
+	if dropped > 0 {
+		if a.status.RecordsDropped > int(^uint(0)>>1)-dropped {
+			a.status.RecordsDropped = int(^uint(0) >> 1)
+		} else {
+			a.status.RecordsDropped += dropped
+		}
+	}
+	if _, exists := a.reasons[reason]; !exists {
+		a.reasons[reason] = struct{}{}
+		a.status.OverflowReasons = append(a.status.OverflowReasons, reason)
+	}
+}
+
+// MergeObservationStatus folds a writer sidecar into completeness. Sidecars
+// are metadata-only and never contribute tool or service rows.
+func (a *Accumulator) MergeObservationStatus(status observe.DegradedStatus) error {
+	if status.Version != 1 {
+		return fmt.Errorf("unsupported degraded status version %d", status.Version)
+	}
+	if strings.TrimSpace(status.Client) == "" || strings.TrimSpace(status.SessionHash) == "" {
+		return fmt.Errorf("degraded status client and session hash are required")
+	}
+	if status.RecordsDropped < 0 || status.WriteErrors < 0 {
+		return fmt.Errorf("degraded status counts must be nonnegative")
+	}
+	if !status.FirstEventAt.IsZero() && !status.LastEventAt.IsZero() && status.LastEventAt.Before(status.FirstEventAt) {
+		return fmt.Errorf("degraded status event range is invalid")
+	}
+	first, last := status.FirstEventAt, status.LastEventAt
+	if first.IsZero() {
+		first = last
+	}
+	if last.IsZero() {
+		last = first
+	}
+	// Sidecars are retained beyond the raw event window. Ignore markers which
+	// cannot be associated with an event in this report window.
+	if first.IsZero() || !last.After(a.start) || !first.Before(a.end) {
+		return nil
+	}
+	count := status.RecordsDropped
+	if status.WriteErrors > int(^uint(0)>>1)-count {
+		count = int(^uint(0) >> 1)
+	} else {
+		count += status.WriteErrors
+	}
+	if len(status.Reasons) == 0 {
+		a.MarkDegraded("observation_degraded", count)
+		return nil
+	}
+	for _, reason := range status.Reasons {
+		a.MarkDegraded(reason, 0)
+	}
+	if count > 0 {
+		if a.status.RecordsDropped > int(^uint(0)>>1)-count {
+			a.status.RecordsDropped = int(^uint(0) >> 1)
+		} else {
+			a.status.RecordsDropped += count
+		}
+	}
+	return nil
 }
 
 func (a *Accumulator) consumeWork(units int64) bool {
@@ -259,7 +341,14 @@ func (a *Accumulator) AddEventBytes(event observe.Event, bytesRead int64) error 
 	if event.Outcome == observe.OutcomeSuccess {
 		item.successes++
 	}
-	item.days[event.At.In(a.start.Location()).Format("2006-01-02")] = struct{}{}
+	day := event.At.In(a.start.Location()).Format("2006-01-02")
+	if _, exists := item.days[day]; !exists {
+		if len(item.days) >= a.budget.MaxDayCardinality {
+			a.mark("day_cardinality", true)
+		} else {
+			item.days[day] = struct{}{}
+		}
+	}
 	if _, exists := item.sessions[event.SessionHash]; !exists {
 		if len(item.sessions) >= a.budget.MaxSessionCardinality {
 			a.mark("session_cardinality", true)
@@ -295,7 +384,8 @@ func (a *Accumulator) AddSnapshot(snapshot process.Snapshot) error {
 		return fmt.Errorf("version 1, observe mode, and captured_at are required")
 	}
 	inWindow := !snapshot.CapturedAt.Before(a.start) && snapshot.CapturedAt.Before(a.end)
-	identities := make(map[process.Identity]struct{}, len(snapshot.Processes))
+	identities := make(map[process.Identity]struct{})
+	identitiesCapped := false
 	memory := make(map[string]struct{ pss, uss uint64 })
 	for i, item := range snapshot.Processes {
 		if !a.consumeWork(1) {
@@ -304,17 +394,30 @@ func (a *Accumulator) AddSnapshot(snapshot process.Snapshot) error {
 		if item.PID <= 0 || item.StartTicks == 0 {
 			return fmt.Errorf("process %d has invalid identity", i)
 		}
-		if _, exists := identities[item.Identity]; exists {
-			return fmt.Errorf("duplicate process identity")
+		if !identitiesCapped {
+			if _, exists := identities[item.Identity]; exists {
+				return fmt.Errorf("duplicate process identity")
+			}
+			if len(identities) >= a.budget.MaxSnapshotIdentityCardinality {
+				identitiesCapped = true
+				a.mark("snapshot_identity_cardinality", true)
+			} else {
+				identities[item.Identity] = struct{}{}
+			}
 		}
-		identities[item.Identity] = struct{}{}
 		if strings.TrimSpace(item.Service) == "" {
 			continue
 		}
 		if inWindow {
 			service := a.serviceFor(item.Service)
 			if service != nil {
-				service.identities[item.Identity] = struct{}{}
+				if _, exists := service.identities[item.Identity]; !exists {
+					if len(service.identities) >= a.budget.MaxSnapshotIdentityCardinality {
+						a.mark("snapshot_identity_cardinality", true)
+					} else {
+						service.identities[item.Identity] = struct{}{}
+					}
+				}
 			}
 		}
 		if !inWindow {

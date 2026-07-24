@@ -98,6 +98,44 @@ func TestAccumulatorBoundsServiceCardinality(t *testing.T) {
 	}
 }
 
+func TestAccumulatorBoundsActiveDayCardinality(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	acc, err := NewAccumulatorWithBudget(start, start.Add(10*24*time.Hour), Budget{
+		MaxDayCardinality: 2, MaxToolCardinality: 10, MaxSessionCardinality: 10,
+		MaxDistributionCardinality: 10, MaxServiceCardinality: 10, MaxRecords: 100,
+		MaxEventBytes: 1 << 20, MaxWorkUnits: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		if err := acc.AddEvent(tool(start.Add(time.Duration(i)*24*time.Hour), "codex", "svc", "search",
+			fmt.Sprintf("s%d", i), observe.OutcomeSuccess, true, 1, 1, 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := acc.Report()
+	if len(acc.tools) != 1 || len(acc.tools[toolKey{client: "codex", service: "svc", tool: "search"}].days) > 2 {
+		t.Fatalf("days cardinality = %d, want <=2", len(acc.tools[toolKey{client: "codex", service: "svc", tool: "search"}].days))
+	}
+	if got.Completeness.Complete || !slices.Contains(got.Completeness.OverflowReasons, "day_cardinality") {
+		t.Fatalf("completeness = %+v, want day cardinality degradation", got.Completeness)
+	}
+}
+
+func TestAccumulatorMergesObservationDegradedStatus(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	acc, err := NewAccumulator(start, start.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	acc.MarkDegraded("observation_sink_write_error", 2)
+	status := acc.Report().Completeness
+	if status.Complete || !status.Degraded || status.RecordsDropped != 2 || !slices.Contains(status.OverflowReasons, "observation_sink_write_error") {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
 func TestAccumulatorBoundsRecordsBytesAndWork(t *testing.T) {
 	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	acc, err := NewAccumulatorWithBudget(start, start.Add(time.Hour), Budget{

@@ -751,13 +751,15 @@ func runReport(opts reportOptions, stdout io.Writer) error {
 		return err
 	}
 	accumulator, err := report.NewAccumulatorWithBudget(opts.start, opts.end, report.Budget{
-		MaxEventBytes:              cfg.Observation.ReportMaxEventBytes,
-		MaxRecords:                 cfg.Observation.ReportMaxRecords,
-		MaxToolCardinality:         cfg.Observation.ReportMaxToolCardinality,
-		MaxSessionCardinality:      cfg.Observation.ReportMaxSessionCardinality,
-		MaxServiceCardinality:      cfg.Observation.ReportMaxServiceCardinality,
-		MaxDistributionCardinality: cfg.Observation.ReportMaxDistributionValues,
-		MaxWorkUnits:               cfg.Observation.ReportMaxWorkUnits,
+		MaxEventBytes:                  cfg.Observation.ReportMaxEventBytes,
+		MaxRecords:                     cfg.Observation.ReportMaxRecords,
+		MaxToolCardinality:             cfg.Observation.ReportMaxToolCardinality,
+		MaxSessionCardinality:          cfg.Observation.ReportMaxSessionCardinality,
+		MaxDayCardinality:              cfg.Observation.ReportMaxDayCardinality,
+		MaxServiceCardinality:          cfg.Observation.ReportMaxServiceCardinality,
+		MaxSnapshotIdentityCardinality: cfg.Observation.ReportMaxSnapshotIdentityCardinality,
+		MaxDistributionCardinality:     cfg.Observation.ReportMaxDistributionValues,
+		MaxWorkUnits:                   cfg.Observation.ReportMaxWorkUnits,
 	})
 	if err != nil {
 		return err
@@ -826,6 +828,9 @@ func runReport(opts reportOptions, stdout io.Writer) error {
 	if err := pruneEventFiles(files, boundary); err != nil {
 		return err
 	}
+	if err := pruneObservationStatuses(eventsDir, boundary); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -843,6 +848,8 @@ type eventFile struct {
 
 func readEventFiles(root string, accumulator *report.Accumulator) ([]eventFile, error) {
 	var files []eventFile
+	statusFiles := 0
+	const maxStatusFiles = 10_000
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if errors.Is(walkErr, os.ErrNotExist) && path == root {
@@ -858,6 +865,21 @@ func readEventFiles(root string, accumulator *report.Accumulator) ([]eventFile, 
 			return err
 		}
 		if !info.Mode().IsRegular() || filepath.Ext(path) != ".jsonl" {
+			if info.Mode().Perm() != 0o600 || !strings.HasSuffix(entry.Name(), ".status.json") {
+				return nil
+			}
+			if statusFiles >= maxStatusFiles {
+				accumulator.MarkDegraded("observation_status_cardinality", 1)
+				return nil
+			}
+			statusFiles++
+			status, err := decodeObservationStatus(path)
+			if err != nil {
+				return err
+			}
+			if err := accumulator.MergeObservationStatus(status); err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
 			return nil
 		}
 		// Once a hard report input/work budget is exhausted, do not spend more
@@ -877,6 +899,39 @@ func readEventFiles(root string, accumulator *report.Accumulator) ([]eventFile, 
 		return nil, fmt.Errorf("read events: %w", err)
 	}
 	return files, nil
+}
+
+func decodeObservationStatus(path string) (observe.DegradedStatus, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return observe.DegradedStatus{}, fmt.Errorf("open observation status: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(fd, &stat); err != nil {
+		return observe.DegradedStatus{}, fmt.Errorf("inspect observation status: %w", err)
+	}
+	if stat.Mode&syscall.S_IFMT != syscall.S_IFREG || stat.Mode&0o777 != 0o600 {
+		return observe.DegradedStatus{}, fmt.Errorf("observation status must be a private regular file")
+	}
+	if err := syscall.Flock(fd, syscall.LOCK_SH); err != nil {
+		return observe.DegradedStatus{}, fmt.Errorf("lock observation status: %w", err)
+	}
+	defer syscall.Flock(fd, syscall.LOCK_UN)
+	const maxStatusBytes = 64 << 10
+	data, err := io.ReadAll(io.LimitReader(file, maxStatusBytes+1))
+	if err != nil {
+		return observe.DegradedStatus{}, fmt.Errorf("read observation status: %w", err)
+	}
+	if len(data) > maxStatusBytes {
+		return observe.DegradedStatus{}, fmt.Errorf("observation status exceeds %d bytes", maxStatusBytes)
+	}
+	var status observe.DegradedStatus
+	if err := decodeStrictJSON(data, &status); err != nil {
+		return observe.DegradedStatus{}, fmt.Errorf("decode observation status: %w", err)
+	}
+	return status, nil
 }
 
 func decodeEventJSONL(path string, accumulator *report.Accumulator) (eventFile, error) {
@@ -1230,6 +1285,92 @@ func pruneEventFile(candidate eventFile, boundary time.Time) error {
 	}
 	if err := syscall.Unlinkat(dirFD, name); err != nil {
 		return fmt.Errorf("prune expired event file: %w", err)
+	}
+	// The lifecycle lock is per segment. Remove it only after the event file
+	// was unlinked while holding its EX lock; active writers therefore cannot
+	// lose their lock sidecar, and a failed sidecar cleanup remains visible.
+	if err := syscall.Unlinkat(dirFD, lockName); err != nil && !errors.Is(err, syscall.ENOENT) {
+		return fmt.Errorf("prune expired event lifecycle lock: %w", err)
+	}
+	return nil
+}
+
+func pruneObservationStatuses(root string, boundary time.Time) error {
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if errors.Is(walkErr, os.ErrNotExist) && path == root {
+				return nil
+			}
+			return walkErr
+		}
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(entry.Name(), ".status.json") {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+			return nil
+		}
+		return pruneObservationStatus(path, boundary)
+	})
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("prune observation statuses: %w", err)
+	}
+	return nil
+}
+
+func pruneObservationStatus(path string, boundary time.Time) error {
+	dirFD, err := syscall.Open(filepath.Dir(path), syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return fmt.Errorf("open observation status directory: %w", err)
+	}
+	defer syscall.Close(dirFD)
+	name := filepath.Base(path)
+	fd, err := syscall.Openat(dirFD, name, syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ENOENT) {
+			return nil
+		}
+		return fmt.Errorf("open observation status for prune: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), name)
+	defer file.Close()
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil
+		}
+		return fmt.Errorf("lock observation status for prune: %w", err)
+	}
+	defer syscall.Flock(fd, syscall.LOCK_UN)
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(fd, &stat); err != nil {
+		return fmt.Errorf("inspect observation status for prune: %w", err)
+	}
+	if stat.Mode&syscall.S_IFMT != syscall.S_IFREG || stat.Mode&0o777 != 0o600 {
+		return fmt.Errorf("observation status must be a private regular file")
+	}
+	const maxStatusBytes = 64 << 10
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("seek observation status for prune: %w", err)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxStatusBytes+1))
+	if err != nil {
+		return fmt.Errorf("read observation status for prune: %w", err)
+	}
+	if len(data) > maxStatusBytes {
+		return fmt.Errorf("observation status exceeds %d bytes", maxStatusBytes)
+	}
+	var status observe.DegradedStatus
+	if err := decodeStrictJSON(data, &status); err != nil {
+		return fmt.Errorf("decode observation status for prune: %w", err)
+	}
+	if status.LastEventAt.IsZero() || !status.LastEventAt.Before(boundary) {
+		return nil
+	}
+	if err := syscall.Unlinkat(dirFD, name); err != nil && !errors.Is(err, syscall.ENOENT) {
+		return fmt.Errorf("prune observation status: %w", err)
 	}
 	return nil
 }

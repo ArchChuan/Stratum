@@ -93,6 +93,9 @@ func TestReportWritesAggregateAndPrunesExpiredValidFile(t *testing.T) {
 	if _, err := os.Stat(expired); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expired file remains: %v", err)
 	}
+	if _, err := os.Stat(strings.TrimSuffix(expired, ".jsonl") + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired lifecycle lock remains: %v", err)
+	}
 }
 
 func TestReportMalformedInputPreservesPriorReport(t *testing.T) {
@@ -115,6 +118,66 @@ func TestReportMalformedInputPreservesPriorReport(t *testing.T) {
 	}
 	if got := string(mustReadFile(t, output)); got != "prior" {
 		t.Fatalf("prior report replaced: %q", got)
+	}
+}
+
+func TestReportObservationStatusMakesReportIncompleteAndPreservesPrior(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(7 * 24 * time.Hour)
+	dir := filepath.Join(root, "events", "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	event := observe.Event{Version: 1, Kind: observe.KindToolCall, At: start.Add(time.Hour), Client: "codex",
+		Service: "fake", Tool: "search", SessionHash: "hashed", Outcome: observe.OutcomeSuccess}
+	writeEventFile(t, filepath.Join(dir, "hashed.jsonl"), []observe.Event{event})
+	status := observe.DegradedStatus{Version: 1, Client: "codex", SessionHash: "hashed",
+		FirstEventAt: event.At, LastEventAt: event.At, RecordsDropped: 2,
+		Reasons: []string{"observation_sink_dropped"}}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "hashed.status.json"), data, 0o600)
+	output := filepath.Join(root, "prior.json")
+	writeFile(t, output, []byte("prior"), 0o600)
+	var stderr bytes.Buffer
+	code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		end.Format(time.RFC3339), "--output", output}, &bytes.Buffer{}, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "observation_sink_dropped") {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if got := string(mustReadFile(t, output)); got != "prior" {
+		t.Fatalf("prior report replaced: %q", got)
+	}
+}
+
+func TestReportIgnoresObservationStatusOutsideWindow(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(7 * 24 * time.Hour)
+	dir := filepath.Join(root, "events", "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	event := observe.Event{Version: 1, Kind: observe.KindToolCall, At: start.Add(time.Hour), Client: "codex",
+		Service: "fake", Tool: "search", SessionHash: "hashed", Outcome: observe.OutcomeSuccess}
+	writeEventFile(t, filepath.Join(dir, "hashed.jsonl"), []observe.Event{event})
+	status := observe.DegradedStatus{Version: 1, Client: "codex", SessionHash: "old",
+		FirstEventAt: start.Add(-30 * 24 * time.Hour), LastEventAt: start.Add(-29 * 24 * time.Hour),
+		RecordsDropped: 1, Reasons: []string{"observation_sink_dropped"}}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "old.status.json"), data, 0o600)
+	var stderr bytes.Buffer
+	if code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		end.Format(time.RFC3339)}, &bytes.Buffer{}, &stderr); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
 }
 

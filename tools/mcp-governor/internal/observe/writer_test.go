@@ -186,6 +186,31 @@ func TestWriterReopensLatestSegmentAndPreservesDateRotationAfterRestart(t *testi
 	}
 }
 
+func TestWriterPersistsDegradedStatus(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriter(root, "codex", "session-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.MarkDegraded("observation_sink_dropped", 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "codex", "session-hash.status.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status DegradedStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.RecordsDropped != 3 || len(status.Reasons) != 1 || status.Reasons[0] != "observation_sink_dropped" {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
 func TestWriterRejectsUnsafePathComponents(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "events")
 	for _, tt := range []struct {
