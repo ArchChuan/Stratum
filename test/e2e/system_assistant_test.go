@@ -107,13 +107,21 @@ func systemAssistantPostgresURL(t *testing.T) string {
 	if value := os.Getenv("STRATUM_TEST_POSTGRES_URL"); value != "" {
 		return value
 	}
-	if os.Getenv("CI") != "" {
-		t.Fatal("STRATUM_TEST_POSTGRES_URL is required for system assistant E2E in CI")
-	}
 	if value := os.Getenv("TEST_POSTGRES_URL"); value != "" {
 		return value
 	}
+	if os.Getenv("CI") != "" {
+		t.Fatal("STRATUM_TEST_POSTGRES_URL or TEST_POSTGRES_URL is required for system assistant E2E in CI")
+	}
 	return "postgres://stratum:stratum@localhost:5432/stratum?sslmode=disable"
+}
+
+func TestSystemAssistantPostgresURLAcceptsMemoryE2EDSNUnderCI(t *testing.T) {
+	t.Setenv("STRATUM_TEST_POSTGRES_URL", "")
+	t.Setenv("TEST_POSTGRES_URL", "postgres://ci-memory-e2e")
+	t.Setenv("CI", "true")
+
+	require.Equal(t, "postgres://ci-memory-e2e", systemAssistantPostgresURL(t))
 }
 
 func setupSystemAssistantPostgres(t *testing.T) (*pgxpool.Pool, []string) {
