@@ -333,8 +333,17 @@ func Run(ctx context.Context, options Options) error {
 		case <-budgetC:
 			budgetC = nil
 			_ = signalOwnedProcessGroup(cmd, syscall.SIGKILL)
-			return errors.Join(errors.New("stdio proxy: shutdown budget exceeded"), shutdownErr,
-				clientStdinCloseErr, stdinCleanup.Err(), stdoutCleanup.Err())
+			budgetErr := errors.New("stdio proxy: shutdown budget exceeded")
+			if sink != nil {
+				drainCtx, cancelDrain := context.WithTimeout(context.Background(), defaultShutdownGrace)
+				sinkErr := sink.close(drainCtx)
+				cancelDrain()
+				if sinkErr != nil {
+					budgetErr = errors.Join(budgetErr, sinkErr)
+				}
+				sink = nil
+			}
+			return errors.Join(budgetErr, shutdownErr, clientStdinCloseErr, stdinCleanup.Err(), stdoutCleanup.Err())
 		}
 		if shutdownInitiated && waitComplete && len(forwarded) == 2 && !ownedProcessGroupExists(cmd) {
 			escalationComplete = true
