@@ -48,10 +48,17 @@ const (
 )
 
 type Observation struct {
-	EventsDir        string `json:"events_dir"`
-	ReportsDir       string `json:"reports_dir"`
-	SaltPath         string `json:"salt_path"`
-	RawRetentionDays int    `json:"raw_retention_days"`
+	EventsDir                   string `json:"events_dir"`
+	ReportsDir                  string `json:"reports_dir"`
+	SaltPath                    string `json:"salt_path"`
+	RawRetentionDays            int    `json:"raw_retention_days"`
+	MaxEventSegmentBytes        int64  `json:"max_event_segment_bytes,omitempty"`
+	ReportMaxEventBytes         int64  `json:"report_max_event_bytes,omitempty"`
+	ReportMaxRecords            int    `json:"report_max_records,omitempty"`
+	ReportMaxToolCardinality    int    `json:"report_max_tool_cardinality,omitempty"`
+	ReportMaxSessionCardinality int    `json:"report_max_session_cardinality,omitempty"`
+	ReportMaxDistributionValues int    `json:"report_max_distribution_values,omitempty"`
+	ReportMaxWorkUnits          int64  `json:"report_max_work_units,omitempty"`
 }
 
 type Config struct {
@@ -230,6 +237,27 @@ func validateObservation(observation Observation) error {
 	if observation.RawRetentionDays < minRawRetentionDays || observation.RawRetentionDays > maxRawRetentionDays {
 		return fmt.Errorf("config observation raw_retention_days must be between %d and %d", minRawRetentionDays,
 			maxRawRetentionDays)
+	}
+	if observation.MaxEventSegmentBytes < 0 || observation.MaxEventSegmentBytes > 1<<30 {
+		return fmt.Errorf("config observation max_event_segment_bytes must be between 0 and %d", 1<<30)
+	}
+	if observation.ReportMaxEventBytes < 0 || observation.ReportMaxEventBytes > 1<<32 {
+		return fmt.Errorf("config observation report_max_event_bytes must be between 0 and %d", 1<<32)
+	}
+	if observation.ReportMaxRecords < 0 || observation.ReportMaxRecords > 100_000_000 {
+		return fmt.Errorf("config observation report_max_records must be between 0 and %d", 100_000_000)
+	}
+	if observation.ReportMaxToolCardinality < 0 || observation.ReportMaxToolCardinality > 10_000_000 {
+		return fmt.Errorf("config observation report_max_tool_cardinality must be between 0 and %d", 10_000_000)
+	}
+	if observation.ReportMaxSessionCardinality < 0 || observation.ReportMaxSessionCardinality > 10_000_000 {
+		return fmt.Errorf("config observation report_max_session_cardinality must be between 0 and %d", 10_000_000)
+	}
+	if observation.ReportMaxDistributionValues < 0 || observation.ReportMaxDistributionValues > 10_000_000 {
+		return fmt.Errorf("config observation report_max_distribution_values must be between 0 and %d", 10_000_000)
+	}
+	if observation.ReportMaxWorkUnits < 0 || observation.ReportMaxWorkUnits > 1_000_000_000 {
+		return fmt.Errorf("config observation report_max_work_units must be between 0 and %d", 1_000_000_000)
 	}
 	return nil
 }

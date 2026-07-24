@@ -118,6 +118,45 @@ func TestReportMalformedInputPreservesPriorReport(t *testing.T) {
 	}
 }
 
+func TestReportBudgetOverflowPreservesPriorReportAndExposesStatus(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(7 * 24 * time.Hour)
+	dir := filepath.Join(root, "events", "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeEventFile(t, filepath.Join(dir, "current.jsonl"), []observe.Event{{Version: 1, Kind: observe.KindToolCall,
+		At: start.Add(time.Hour), Client: "codex", Service: "fake", Tool: "search", SessionHash: "s",
+		Outcome: observe.OutcomeSuccess}, {Version: 1, Kind: observe.KindToolCall,
+		At: start.Add(2 * time.Hour), Client: "codex", Service: "fake", Tool: "search", SessionHash: "s",
+		Outcome: observe.OutcomeSuccess}})
+	var firstErr bytes.Buffer
+	if code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		end.Format(time.RFC3339)}, &bytes.Buffer{}, &firstErr); code != 0 {
+		t.Fatalf("initial report code=%d stderr=%q", code, firstErr.String())
+	}
+	output := filepath.Join(root, "reports", "report-20260701T000000Z-20260708T000000Z.json")
+	prior := append([]byte(nil), mustReadFile(t, output)...)
+	var cfg map[string]any
+	if err := json.Unmarshal(mustReadFile(t, configPath), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	observation := cfg["observation"].(map[string]any)
+	observation["report_max_records"] = 1
+	data, _ := json.Marshal(cfg)
+	writeFile(t, configPath, data, 0o600)
+	var stderr bytes.Buffer
+	if code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		end.Format(time.RFC3339)}, &bytes.Buffer{}, &stderr); code != 1 || !strings.Contains(stderr.String(), "report incomplete") {
+		t.Fatalf("budget report code=%d stderr=%q", code, stderr.String())
+	}
+	if got := mustReadFile(t, output); !bytes.Equal(got, prior) {
+		t.Fatalf("prior report replaced after budget overflow: %q", got)
+	}
+}
+
 func TestSnapshotHistoryFeedsRepeatedProcessStartsAndMemoryPeaks(t *testing.T) {
 	root := t.TempDir()
 	procRoot := filepath.Join(root, "proc")
@@ -344,6 +383,42 @@ func TestPruneDoesNotUnlinkIdleActiveWriter(t *testing.T) {
 	data := mustReadFile(t, filepath.Join(root, "codex", "active.jsonl"))
 	if bytes.Count(data, []byte{'\n'}) != 2 {
 		t.Fatalf("active writer events lost: %q", data)
+	}
+}
+
+func TestPruneDoesNotUnlinkActiveRotatedSegment(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := observe.NewWriterWithOptions(root, "codex", "active", observe.WriterOptions{MaxSegmentBytes: 1, RotateDaily: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	expired := observe.Event{Version: 1, Kind: observe.KindToolCall, At: end.Add(-31 * 24 * time.Hour),
+		Client: "codex", Service: "fake", Tool: "old", SessionHash: "active", Outcome: observe.OutcomeSuccess}
+	if err := w.Write(expired); err != nil {
+		t.Fatal(err)
+	}
+	current := expired
+	current.At = end.Add(-time.Hour)
+	if err := w.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	acc, _ := report.NewAccumulator(end.Add(-7*24*time.Hour), end)
+	files, err := readEventFiles(root, acc)
+	if err != nil {
+		_ = w.Close()
+		t.Fatal(err)
+	}
+	if err := pruneEventFiles(files, end.Add(-30*24*time.Hour)); err != nil {
+		_ = w.Close()
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	segments, _ := filepath.Glob(filepath.Join(root, "codex", "active*.jsonl"))
+	if len(segments) != 2 {
+		t.Fatalf("active rotated segments = %v, want both segments preserved", segments)
 	}
 }
 

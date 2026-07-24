@@ -81,6 +81,58 @@ func TestWriterCreatesPrivateJSONLFile(t *testing.T) {
 	}
 }
 
+func TestWriterRotatesBySizeAndPreservesAllRecords(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriterWithOptions(root, "codex", "session-hash", WriterOptions{MaxSegmentBytes: 1, RotateDaily: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := validWriterEvent("codex", "session-hash")
+	for i := 0; i < 3; i++ {
+		event.At = time.Unix(int64(100+i), 0).UTC()
+		if err := w.Write(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(root, "codex", "session-hash*.jsonl"))
+	if err != nil || len(files) != 3 {
+		t.Fatalf("rotated files = %v, err=%v; want 3", files, err)
+	}
+	for _, path := range files {
+		assertMode(t, path, 0o600)
+		data, err := os.ReadFile(path)
+		if err != nil || len(data) == 0 {
+			t.Fatalf("read rotated segment %s: %v", path, err)
+		}
+	}
+}
+
+func TestWriterRotatesAtCalendarDateBoundary(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriterWithOptions(root, "codex", "session-hash", WriterOptions{MaxSegmentBytes: 1 << 20, RotateDaily: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := validWriterEvent("codex", "session-hash")
+	first.At = time.Date(2026, 7, 1, 23, 59, 0, 0, time.UTC)
+	second := first
+	second.At = first.At.Add(2 * time.Minute)
+	if err := w.Write(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Write(second); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	files, _ := filepath.Glob(filepath.Join(root, "codex", "session-hash*.jsonl"))
+	if len(files) != 2 {
+		t.Fatalf("date boundary files = %v, want 2", files)
+	}
+}
+
 func TestWriterRejectsUnsafePathComponents(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "events")
 	for _, tt := range []struct {

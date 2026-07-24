@@ -1,6 +1,7 @@
 package report
 
 import (
+	"fmt"
 	"math"
 	"reflect"
 	"testing"
@@ -35,6 +36,57 @@ func TestAccumulatorStreamsEventsAndRejectsSnapshotOverflow(t *testing.T) {
 	}}
 	if err := acc.AddSnapshot(bad); err == nil {
 		t.Fatal("AddSnapshot accepted PSS overflow")
+	}
+}
+
+func TestAccumulatorBoundsHighCardinalityAndReportsDegradedStatus(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	acc, err := NewAccumulatorWithBudget(start, start.Add(time.Hour), Budget{
+		MaxToolCardinality: 2, MaxSessionCardinality: 2, MaxDistributionCardinality: 2,
+		MaxRecords: 100, MaxEventBytes: 1 << 20, MaxWorkUnits: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		event := tool(start.Add(time.Minute), "codex", "svc", fmt.Sprintf("tool-%d", i),
+			fmt.Sprintf("session-%d", i), observe.OutcomeSuccess, true, int64(i), i+1, 1)
+		if err := acc.AddEvent(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := acc.Report()
+	if got.Completeness.Complete || !got.Completeness.Degraded {
+		t.Fatalf("completeness = %+v, want degraded", got.Completeness)
+	}
+	if len(got.Tools) > 2 || len(acc.tools) > 2 {
+		t.Fatalf("tool cardinality = %d, want <= 2", len(acc.tools))
+	}
+	if got.Completeness.RecordsDropped == 0 {
+		t.Fatalf("completeness = %+v, want dropped records", got.Completeness)
+	}
+}
+
+func TestAccumulatorBoundsRecordsBytesAndWork(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	acc, err := NewAccumulatorWithBudget(start, start.Add(time.Hour), Budget{
+		MaxRecords: 2, MaxEventBytes: 100, MaxWorkUnits: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		if err := acc.AddEvent(tool(start.Add(time.Minute), "codex", "svc", "tool", fmt.Sprintf("s%d", i),
+			observe.OutcomeSuccess, true, int64(i), 1, 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status := acc.Report().Completeness
+	if status.Complete || status.RecordsRead != 5 || status.RecordsDropped == 0 {
+		t.Fatalf("status = %+v, want bounded incomplete report", status)
+	}
+	if status.WorkUnits > 2 || status.BytesRead > 100 {
+		t.Fatalf("status = %+v, exceeds configured budgets", status)
 	}
 }
 

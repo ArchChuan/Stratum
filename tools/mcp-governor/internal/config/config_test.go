@@ -115,6 +115,23 @@ func TestDecodeVersion2ObservationValidation(t *testing.T) {
 			}
 		})
 	}
+	for _, tt := range []struct {
+		field, value, want string
+	}{
+		{"max_event_segment_bytes", "-1", "max_event_segment_bytes"},
+		{"report_max_event_bytes", "-1", "report_max_event_bytes"},
+		{"report_max_records", "-1", "report_max_records"},
+		{"report_max_tool_cardinality", "-1", "report_max_tool_cardinality"},
+		{"report_max_session_cardinality", "-1", "report_max_session_cardinality"},
+		{"report_max_distribution_values", "-1", "report_max_distribution_values"},
+		{"report_max_work_units", "-1", "report_max_work_units"},
+	} {
+		t.Run(tt.field, func(t *testing.T) {
+			input := strings.Replace(validVersion2Config, `"raw_retention_days": 14`,
+				`"raw_retention_days": 14, "`+tt.field+`": `+tt.value, 1)
+			assertDecodeError(t, input, tt.want)
+		})
+	}
 }
 
 func TestDecodeVersion2RejectsMissingCommand(t *testing.T) {

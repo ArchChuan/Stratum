@@ -1,6 +1,7 @@
 package report
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -13,12 +14,68 @@ import (
 
 const Version = 1
 
+var ErrBudgetExceeded = fmt.Errorf("report budget exceeded")
+
+// Budget bounds report work and the cardinality of exact distributions. Zero
+// fields select conservative defaults; callers can provide smaller limits in
+// tests or controlled report jobs.
+type Budget struct {
+	MaxEventBytes              int64
+	MaxRecords                 int
+	MaxToolCardinality         int
+	MaxSessionCardinality      int
+	MaxDistributionCardinality int
+	MaxWorkUnits               int64
+}
+
+const (
+	defaultMaxEventBytes              int64 = 256 << 20
+	defaultMaxRecords                       = 1_000_000
+	defaultMaxToolCardinality               = 10_000
+	defaultMaxSessionCardinality            = 10_000
+	defaultMaxDistributionCardinality       = 10_000
+	defaultMaxWorkUnits               int64 = 2_000_000
+)
+
+func normalizeBudget(b Budget) Budget {
+	if b.MaxEventBytes <= 0 {
+		b.MaxEventBytes = defaultMaxEventBytes
+	}
+	if b.MaxRecords <= 0 {
+		b.MaxRecords = defaultMaxRecords
+	}
+	if b.MaxToolCardinality <= 0 {
+		b.MaxToolCardinality = defaultMaxToolCardinality
+	}
+	if b.MaxSessionCardinality <= 0 {
+		b.MaxSessionCardinality = defaultMaxSessionCardinality
+	}
+	if b.MaxDistributionCardinality <= 0 {
+		b.MaxDistributionCardinality = defaultMaxDistributionCardinality
+	}
+	if b.MaxWorkUnits <= 0 {
+		b.MaxWorkUnits = defaultMaxWorkUnits
+	}
+	return b
+}
+
+type Completeness struct {
+	Complete        bool     `json:"complete"`
+	Degraded        bool     `json:"degraded"`
+	RecordsRead     int      `json:"records_read"`
+	RecordsDropped  int      `json:"records_dropped"`
+	BytesRead       int64    `json:"bytes_read"`
+	WorkUnits       int64    `json:"work_units"`
+	OverflowReasons []string `json:"overflow_reasons,omitempty"`
+}
+
 type Report struct {
-	Version  int          `json:"version"`
-	Start    time.Time    `json:"start"`
-	End      time.Time    `json:"end"`
-	Tools    []ToolRow    `json:"tools"`
-	Services []ServiceRow `json:"services"`
+	Version      int          `json:"version"`
+	Start        time.Time    `json:"start"`
+	End          time.Time    `json:"end"`
+	Tools        []ToolRow    `json:"tools"`
+	Services     []ServiceRow `json:"services"`
+	Completeness Completeness `json:"completeness"`
 }
 
 type ToolRow struct {
@@ -65,14 +122,58 @@ type Accumulator struct {
 	start, end time.Time
 	tools      map[toolKey]*toolAggregate
 	services   map[string]*serviceAggregate
+	budget     Budget
+	status     Completeness
+	reasons    map[string]struct{}
 }
 
 func NewAccumulator(start, end time.Time) (*Accumulator, error) {
+	return NewAccumulatorWithBudget(start, end, Budget{})
+}
+
+func NewAccumulatorWithBudget(start, end time.Time, budget Budget) (*Accumulator, error) {
 	if start.IsZero() || end.IsZero() || !start.Before(end) {
 		return nil, fmt.Errorf("report window must have start before end")
 	}
 	return &Accumulator{start: start, end: end, tools: make(map[toolKey]*toolAggregate),
-		services: make(map[string]*serviceAggregate)}, nil
+		services: make(map[string]*serviceAggregate), budget: normalizeBudget(budget),
+		status: Completeness{Complete: true}, reasons: make(map[string]struct{})}, nil
+}
+
+func (a *Accumulator) mark(reason string, dropped bool) {
+	a.status.Complete = false
+	a.status.Degraded = true
+	if dropped {
+		a.status.RecordsDropped++
+	}
+	if _, exists := a.reasons[reason]; !exists {
+		a.reasons[reason] = struct{}{}
+		a.status.OverflowReasons = append(a.status.OverflowReasons, reason)
+	}
+}
+
+func (a *Accumulator) consumeWork(units int64) bool {
+	if units <= 0 {
+		return true
+	}
+	if a.status.WorkUnits > a.budget.MaxWorkUnits-units {
+		a.mark("work_units", true)
+		return false
+	}
+	a.status.WorkUnits += units
+	return true
+}
+
+// StopReading reports whether continuing to decode raw records cannot improve
+// the report because a hard input/work budget has already been reached.
+func (a *Accumulator) StopReading() bool {
+	for _, reason := range a.status.OverflowReasons {
+		switch reason {
+		case "event_bytes", "records", "work_units":
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Accumulator) serviceFor(name string) *serviceAggregate {
@@ -85,8 +186,34 @@ func (a *Accumulator) serviceFor(name string) *serviceAggregate {
 }
 
 func (a *Accumulator) AddEvent(event observe.Event) error {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("marshal event for budget: %w", err)
+	}
+	return a.AddEventBytes(event, int64(len(data)))
+}
+
+// AddEventBytes records the physical input size when decoding JSONL. It
+// validates every record but refuses to allocate new aggregate state after a
+// configured budget is reached, leaving an explicit degraded marker.
+func (a *Accumulator) AddEventBytes(event observe.Event, bytesRead int64) error {
 	if err := event.Validate(); err != nil {
 		return err
+	}
+	a.status.RecordsRead++
+	if bytesRead > 0 {
+		if a.status.BytesRead > a.budget.MaxEventBytes-bytesRead {
+			a.mark("event_bytes", true)
+			return nil
+		}
+		a.status.BytesRead += bytesRead
+	}
+	if a.status.RecordsRead > a.budget.MaxRecords {
+		a.mark("records", true)
+		return nil
+	}
+	if !a.consumeWork(1) {
+		return nil
 	}
 	if event.At.Before(a.start) || !event.At.Before(a.end) {
 		return nil
@@ -103,6 +230,10 @@ func (a *Accumulator) AddEvent(event observe.Event) error {
 	key := toolKey{client: event.Client, service: event.Service, tool: event.Tool}
 	item := a.tools[key]
 	if item == nil {
+		if len(a.tools) >= a.budget.MaxToolCardinality {
+			a.mark("tool_cardinality", true)
+			return nil
+		}
 		item = &toolAggregate{days: make(map[string]struct{}), sessions: make(map[string]struct{}),
 			durations: make(map[int64]int), responseBytes: make(map[int]int)}
 		a.tools[key] = item
@@ -115,9 +246,33 @@ func (a *Accumulator) AddEvent(event observe.Event) error {
 		item.successes++
 	}
 	item.days[event.At.In(a.start.Location()).Format("2006-01-02")] = struct{}{}
-	item.sessions[event.SessionHash] = struct{}{}
-	item.durations[event.DurationMS]++
-	item.responseBytes[event.ResponseBytes]++
+	if _, exists := item.sessions[event.SessionHash]; !exists {
+		if len(item.sessions) >= a.budget.MaxSessionCardinality {
+			a.mark("session_cardinality", true)
+		} else {
+			item.sessions[event.SessionHash] = struct{}{}
+		}
+	}
+	if _, exists := item.durations[event.DurationMS]; !exists {
+		if len(item.durations) >= a.budget.MaxDistributionCardinality {
+			a.mark("duration_cardinality", true)
+		} else {
+			item.durations[event.DurationMS] = 0
+		}
+	}
+	if _, tracked := item.durations[event.DurationMS]; tracked {
+		item.durations[event.DurationMS]++
+	}
+	if _, exists := item.responseBytes[event.ResponseBytes]; !exists {
+		if len(item.responseBytes) >= a.budget.MaxDistributionCardinality {
+			a.mark("response_bytes_cardinality", true)
+		} else {
+			item.responseBytes[event.ResponseBytes] = 0
+		}
+	}
+	if _, tracked := item.responseBytes[event.ResponseBytes]; tracked {
+		item.responseBytes[event.ResponseBytes]++
+	}
 	return nil
 }
 
@@ -129,6 +284,9 @@ func (a *Accumulator) AddSnapshot(snapshot process.Snapshot) error {
 	identities := make(map[process.Identity]struct{}, len(snapshot.Processes))
 	memory := make(map[string]struct{ pss, uss uint64 })
 	for i, item := range snapshot.Processes {
+		if !a.consumeWork(1) {
+			break
+		}
 		if item.PID <= 0 || item.StartTicks == 0 {
 			return fmt.Errorf("process %d has invalid identity", i)
 		}
@@ -163,6 +321,9 @@ func (a *Accumulator) AddSnapshot(snapshot process.Snapshot) error {
 		}
 	}
 	for name, value := range memory {
+		if !a.consumeWork(1) {
+			break
+		}
 		if !inWindow {
 			continue
 		}
@@ -193,7 +354,7 @@ func Aggregate(start, end time.Time, events []observe.Event, snapshots []process
 
 func (a *Accumulator) Report() Report {
 	result := Report{Version: Version, Start: a.start, End: a.end, Tools: make([]ToolRow, 0, len(a.tools)),
-		Services: make([]ServiceRow, 0, len(a.services))}
+		Services: make([]ServiceRow, 0, len(a.services)), Completeness: a.status}
 	for key, item := range a.tools {
 		result.Tools = append(result.Tools, ToolRow{Client: key.client, Service: key.service, Tool: key.tool,
 			Calls: item.calls, EffectiveHits: item.effective, ActiveDays: len(item.days), DistinctSessions: len(item.sessions),

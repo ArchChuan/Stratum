@@ -468,7 +468,8 @@ func runProxyContext(ctx context.Context, opts proxyOptions, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	writer, err := observe.NewWriter(eventsDir, opts.client, sessionHash)
+	writer, err := observe.NewWriterWithOptions(eventsDir, opts.client, sessionHash,
+		observe.WriterOptions{MaxSegmentBytes: cfg.Observation.MaxEventSegmentBytes, RotateDaily: true})
 	if err != nil {
 		return fmt.Errorf("create observation writer: %w", err)
 	}
@@ -749,7 +750,14 @@ func runReport(opts reportOptions, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	accumulator, err := report.NewAccumulator(opts.start, opts.end)
+	accumulator, err := report.NewAccumulatorWithBudget(opts.start, opts.end, report.Budget{
+		MaxEventBytes:              cfg.Observation.ReportMaxEventBytes,
+		MaxRecords:                 cfg.Observation.ReportMaxRecords,
+		MaxToolCardinality:         cfg.Observation.ReportMaxToolCardinality,
+		MaxSessionCardinality:      cfg.Observation.ReportMaxSessionCardinality,
+		MaxDistributionCardinality: cfg.Observation.ReportMaxDistributionValues,
+		MaxWorkUnits:               cfg.Observation.ReportMaxWorkUnits,
+	})
 	if err != nil {
 		return err
 	}
@@ -791,6 +799,19 @@ func runReport(opts reportOptions, stdout io.Writer) error {
 			output = filepath.Join(reportsDir, "report-"+safeReportTime(opts.start)+"-"+safeReportTime(opts.end)+".json")
 		} else if output, err = resolvePath(output); err != nil {
 			return err
+		}
+		if !aggregate.Completeness.Complete {
+			if _, statErr := os.Stat(output); statErr == nil {
+				return fmt.Errorf("report incomplete (%s); previous report preserved",
+					strings.Join(aggregate.Completeness.OverflowReasons, ","))
+			} else if !errors.Is(statErr, os.ErrNotExist) {
+				return fmt.Errorf("inspect prior report: %w", statErr)
+			}
+			if err := writeAtomic(output, data); err != nil {
+				return err
+			}
+			return fmt.Errorf("report incomplete (%s)",
+				strings.Join(aggregate.Completeness.OverflowReasons, ","))
 		}
 		if err := writeAtomic(output, data); err != nil {
 			return err
@@ -834,6 +855,12 @@ func readEventFiles(root string, accumulator *report.Accumulator) ([]eventFile, 
 		if !info.Mode().IsRegular() || filepath.Ext(path) != ".jsonl" {
 			return nil
 		}
+		// Once a hard report input/work budget is exhausted, do not spend more
+		// CPU or memory decoding additional files. Files not returned here are
+		// intentionally not eligible for this run's retention prune.
+		if accumulator.StopReading() {
+			return nil
+		}
 		file, err := decodeEventJSONL(path, accumulator)
 		if err != nil {
 			return err
@@ -857,6 +884,7 @@ func decodeEventJSONL(path string, accumulator *report.Accumulator) (eventFile, 
 	if err := syscall.Flock(fd, syscall.LOCK_SH); err != nil {
 		return eventFile{}, fmt.Errorf("lock event file for report: %w", err)
 	}
+	defer func() { _ = syscall.Flock(fd, syscall.LOCK_UN) }()
 	var stat syscall.Stat_t
 	if err := syscall.Fstat(fd, &stat); err != nil {
 		_ = syscall.Flock(fd, syscall.LOCK_UN)
@@ -867,12 +895,11 @@ func decodeEventJSONL(path string, accumulator *report.Accumulator) (eventFile, 
 		return eventFile{}, fmt.Errorf("event file must be a private regular file")
 	}
 	result := eventFile{path: path, device: uint64(stat.Dev), inode: stat.Ino, size: stat.Size}
-	data, err := io.ReadAll(file)
-	_ = syscall.Flock(fd, syscall.LOCK_UN)
-	if err != nil {
-		return eventFile{}, fmt.Errorf("snapshot event file: %w", err)
-	}
-	scanner := bufio.NewScanner(bytes.NewReader(data))
+	// Decode directly from the locked descriptor with a bounded record buffer.
+	// This avoids a second unbounded allocation proportional to a long-lived
+	// session file. The lock is released after scanning; prune revalidates the
+	// inode/size before unlinking.
+	scanner := bufio.NewScanner(file)
 	buffer := make([]byte, 64*1024)
 	scanner.Buffer(buffer, 4*1024*1024)
 	for line := 1; scanner.Scan(); line++ {
@@ -884,7 +911,8 @@ func decodeEventJSONL(path string, accumulator *report.Accumulator) (eventFile, 
 		if err := decodeStrictJSON(data, &event); err != nil {
 			return eventFile{}, fmt.Errorf("%s:%d: %w", path, line, err)
 		}
-		if err := accumulator.AddEvent(event); err != nil {
+		if err := accumulator.AddEventBytes(event, int64(len(data))); err != nil {
+			_ = syscall.Flock(fd, syscall.LOCK_UN)
 			return eventFile{}, fmt.Errorf("%s:%d: validate event: %w", path, line, err)
 		}
 		result.count++
@@ -894,7 +922,11 @@ func decodeEventJSONL(path string, accumulator *report.Accumulator) (eventFile, 
 		if result.maxAt.IsZero() || event.At.After(result.maxAt) {
 			result.maxAt = event.At
 		}
+		if accumulator.StopReading() {
+			break
+		}
 	}
+	_ = syscall.Flock(fd, syscall.LOCK_UN)
 	if err := scanner.Err(); err != nil {
 		return eventFile{}, fmt.Errorf("scan event file: %w", err)
 	}
@@ -1135,7 +1167,7 @@ func pruneEventFile(candidate eventFile, boundary time.Time) error {
 	}
 	defer syscall.Close(dirFD)
 	name := filepath.Base(candidate.path)
-	lockName := strings.TrimSuffix(name, ".jsonl") + ".lock"
+	lockName := eventLifecycleLockName(name)
 	lifecycleFD, err := syscall.Openat(dirFD, lockName,
 		syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
@@ -1195,6 +1227,30 @@ func pruneEventFile(candidate eventFile, boundary time.Time) error {
 		return fmt.Errorf("prune expired event file: %w", err)
 	}
 	return nil
+}
+
+// eventLifecycleLockName maps both the historical <session>.jsonl file and
+// rotated <session>.<sequence>.jsonl segments to the one session lifecycle
+// lock. Holding that lock in Writer prevents report/prune from unlinking an
+// active segment while a long-lived client is appending to it.
+func eventLifecycleLockName(name string) string {
+	base := strings.TrimSuffix(name, ".jsonl")
+	if dot := strings.LastIndexByte(base, '.'); dot > 0 {
+		suffix := base[dot+1:]
+		if len(suffix) == 6 {
+			allDigits := true
+			for _, ch := range suffix {
+				if ch < '0' || ch > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits {
+				base = base[:dot]
+			}
+		}
+	}
+	return base + ".lock"
 }
 
 func runRenderConfig(opts renderOptions, stdout io.Writer) error {
