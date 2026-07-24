@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMMON="${ROOT}/docs/agent/instructions.md"
+KNOWLEDGE_DEPOSITION="${ROOT}/docs/agent/knowledge-deposition.md"
 PREFIXES=(
   "${ROOT}/docs/agent/templates/agents-prefix.md"
   "${ROOT}/docs/agent/templates/claude-prefix.md"
@@ -25,7 +26,7 @@ case "$#:${1:-}" in
     ;;
 esac
 
-for input in "${COMMON}" "${PREFIXES[@]}"; do
+for input in "${COMMON}" "${KNOWLEDGE_DEPOSITION}" "${PREFIXES[@]}"; do
   if [[ ! -r "${input}" ]]; then
     echo "agent instructions: required input is not readable: ${input#"${ROOT}/"}" >&2
     exit 1

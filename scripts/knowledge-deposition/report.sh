@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  knowledge_fail 'usage: report.sh --client codex|claude --session SAFE --task SAFE --repo-root ABSOLUTE'
+}
+
+[[ $# -eq 8 ]] || { usage; exit 1; }
+
+client=''
+session=''
+task=''
+repo_root=''
+while [[ $# -gt 0 ]]; do
+  flag="$1"
+  [[ $# -ge 2 ]] || { usage; exit 1; }
+  value="$2"
+  shift 2
+  case "$flag" in
+    --client) [[ -z "$client" ]] || { usage; exit 1; }; client="$value" ;;
+    --session) [[ -z "$session" ]] || { usage; exit 1; }; session="$value" ;;
+    --task) [[ -z "$task" ]] || { usage; exit 1; }; task="$value" ;;
+    --repo-root) [[ -z "$repo_root" ]] || { usage; exit 1; }; repo_root="$value" ;;
+    *) usage; exit 1 ;;
+  esac
+done
+
+client="$(knowledge_safe_client "$client")" || exit 1
+session="$(knowledge_sanitize_session "$session")" || exit 1
+task="$(knowledge_sanitize_task "$task")" || exit 1
+[[ "$repo_root" = /* ]] || { knowledge_fail 'repo root must be absolute'; exit 1; }
+repo_root="$(realpath -e "$repo_root")" || { knowledge_fail 'repo root does not exist'; exit 1; }
+knowledge_is_stratum_root "$repo_root" || { knowledge_fail 'repo root is not Stratum'; exit 1; }
+
+commit="$(git -C "$repo_root" rev-parse --verify HEAD 2>/dev/null)" || {
+  knowledge_fail 'repository commit is unavailable'
+  exit 1
+}
+created_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+report_date="${created_at%%T*}"
+report_dir="$(knowledge_report_directory "$repo_root" "$report_date")"
+basename="$(knowledge_report_basename "$client" "$session" "$task")"
+json_path="$report_dir/$basename.json"
+markdown_path="$report_dir/$basename.md"
+knowledge_root="$repo_root/tmp/knowledge-deposition"
+current_path="$(knowledge_current_path "$repo_root" "$client" "$session")"
+lock_dir="$knowledge_root/.lock"
+lock_path="$lock_dir/report.lock"
+latest_path="$knowledge_root/latest.md"
+
+for boundary_path in "$repo_root/tmp" "$knowledge_root" "$(dirname "$current_path")" "$current_path" \
+  "$lock_dir" "$lock_path" "$report_dir" "$json_path" "$markdown_path" "$latest_path"; do
+  knowledge_path_within_root "$repo_root" "$boundary_path" || {
+    knowledge_fail 'repository report path contains a symlink or escapes the repository'
+    exit 1
+  }
+done
+
+# Threat model: reject caller-controlled or preexisting symlink escapes and pin the validated lock inode.
+# A process with the same Unix UID can mutate repository paths and is not a separate security principal.
+knowledge_prepare_private_lock "$repo_root" || { knowledge_fail 'shared report lock is unsafe'; exit 1; }
+
+knowledge_path_within_root "$repo_root" "$current_path" || {
+  knowledge_fail 'current task marker path is unsafe'
+  exit 1
+}
+knowledge_validate_marker "$current_path" "$client" "$session" "$repo_root" >/dev/null 2>&1 || {
+  knowledge_fail 'current task marker is invalid'
+  exit 1
+}
+marker_task="$(jq -er '.task_id' "$current_path")"
+[[ "$marker_task" == "$task" ]] || { knowledge_fail 'current task marker does not match task'; exit 1; }
+
+mkdir -p "$report_dir"
+knowledge_path_within_root "$repo_root" "$report_dir" || { knowledge_fail 'report directory is unsafe'; exit 1; }
+normalized_tmp="$(mktemp "$report_dir/.normalized.XXXXXX")"
+markdown_tmp=''
+cleanup() {
+  rm -f "$normalized_tmp"
+  [[ -z "$markdown_tmp" ]] || rm -f "$markdown_tmp"
+}
+trap cleanup EXIT HUP INT TERM
+
+if ! jq -es \
+  --arg client "$client" \
+  --arg session "$session" \
+  --arg task "$task" \
+  --arg root "$repo_root" \
+  --arg commit "$commit" \
+  --arg created "$created_at" \
+  'if length == 1 and (.[0] | type == "object") then
+    .[0] + {
+      schema_version: 1,
+      client: $client,
+      session_id: $session,
+      task_id: $task,
+      repository: {root: $root, commit: $commit},
+      created_at: $created
+    }
+  else error("expected exactly one JSON object") end' 2>/dev/null |
+  knowledge_validate_normalize >"$normalized_tmp" 2>/dev/null; then
+  knowledge_fail 'report JSON failed validation'
+  exit 1
+fi
+
+knowledge_validate_normalize <"$normalized_tmp" >/dev/null 2>&1 || {
+  knowledge_fail 'normalized report failed validation'
+  exit 1
+}
+
+markdown_tmp="$(mktemp "$report_dir/.markdown.XXXXXX")"
+knowledge_render_markdown "$normalized_tmp" >"$markdown_tmp"
+
+if [[ -e "$json_path" || -L "$json_path" || -e "$markdown_path" || -L "$markdown_path" ]]; then
+  knowledge_fail 'report destination already exists'
+  exit 1
+fi
+
+mv "$normalized_tmp" "$json_path"
+normalized_tmp=''
+if [[ "${KNOWLEDGE_REPORT_TEST_FAIL_SECOND_PUBLISH:-}" == '1' ]] || ! mv "$markdown_tmp" "$markdown_path"; then
+  rm -f "$json_path" || knowledge_fail 'failed to roll back partial report publication'
+  knowledge_fail 'failed to publish report pair'
+  exit 1
+fi
+markdown_tmp=''
+
+knowledge_rebuild_latest "$repo_root" || { knowledge_fail 'failed to rebuild latest report index'; exit 1; }
+
+printf '%s\n' "$markdown_path"

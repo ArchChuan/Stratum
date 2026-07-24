@@ -34,19 +34,19 @@ assert_block_field() {
 }
 
 validate_precommit_integration() {
-  local file="$1" block files_regex required_path
-  block="$(awk '
+  local file="$1" agent_block knowledge_block files_regex required_path
+  agent_block="$(awk -v target_id='agent-instructions-check' '
     /^repos:$/ { repos++; in_repos = 1; next }
     /^[^ #]/ && !/^repos:$/ { in_repos = 0; in_local = 0; in_hooks = 0 }
     in_repos && /^  - repo: local$/ { local_repos++; in_local = 1; in_hooks = 0; next }
     in_repos && /^  - repo:/ && !/^  - repo: local$/ { in_local = 0; in_hooks = 0 }
     in_local && /^    hooks:$/ { hooks++; in_hooks = 1; next }
     in_hooks && /^    [^ ]/ && !/^    hooks:$/ { in_hooks = 0 }
-    in_hooks && /^      - id: agent-instructions-check$/ {
+    in_hooks && $0 == "      - id: " target_id {
       targets++
       if (targets == 1) printing = 1
     }
-    printing && !/^      - id: agent-instructions-check$/ && /^      - id:/ { printing = 0 }
+    printing && $0 != "      - id: " target_id && /^      - id:/ { printing = 0 }
     printing && /^[^ ]|^  [^ ]|^    [^ ]/ { printing = 0 }
     printing { block = block $0 ORS }
     END {
@@ -57,31 +57,82 @@ validate_precommit_integration() {
       printf "%s", block
     }
   ' "${file}")" || return 1
-  assert_block_field "${block}" name \
+  assert_block_field "${agent_block}" name \
     '^        name: agent instructions are generated and current$' 'exact hook name' || return 1
-  assert_block_field "${block}" language '^        language: system$' \
+  assert_block_field "${agent_block}" language '^        language: system$' \
     'system hook language' || return 1
-  assert_block_field "${block}" entry \
+  assert_block_field "${agent_block}" entry \
     '^        entry: /bin/bash scripts/quality/generate-agent-instructions\.sh --check$' \
     'exact check-only hook entry' || return 1
-  assert_block_field "${block}" pass_filenames '^        pass_filenames: false$' \
+  assert_block_field "${agent_block}" pass_filenames '^        pass_filenames: false$' \
     'disabled filename passing' || return 1
-  assert_block_field "${block}" require_serial '^        require_serial: true$' \
+  assert_block_field "${agent_block}" require_serial '^        require_serial: true$' \
     'serialized hook' || return 1
-  [[ "$(grep -Ec '^        files:' <<<"${block}" || true)" -eq 1 ]] || {
+  [[ "$(grep -Ec '^        files:' <<<"${agent_block}" || true)" -eq 1 ]] || {
     echo 'expected exactly one files regex in bounded pre-commit hook' >&2
     return 1
   }
-  files_regex="$(sed -nE "s/^        files: '([^']+)'$/\1/p" <<<"${block}")"
+  files_regex="$(sed -nE "s/^        files: '([^']+)'$/\1/p" <<<"${agent_block}")"
   [[ -n "${files_regex}" ]] || {
     echo 'missing single-quoted files regex in bounded pre-commit hook' >&2
     return 1
   }
   for required_path in AGENTS.md CLAUDE.md docs/agent/instructions.md \
+    docs/agent/knowledge-deposition.md \
     docs/agent/templates/agents-prefix.md docs/agent/templates/claude-prefix.md \
     scripts/quality/generate-agent-instructions.sh scripts/quality/generate-agent-instructions-test.sh; do
     if [[ ! "${required_path}" =~ ${files_regex} ]]; then
       echo "pre-commit files regex does not cover ${required_path}" >&2
+      return 1
+    fi
+  done
+
+  knowledge_block="$(awk -v target_id='knowledge-deposition-test' '
+    /^repos:$/ { repos++; in_repos = 1; next }
+    /^[^ #]/ && !/^repos:$/ { in_repos = 0; in_local = 0; in_hooks = 0 }
+    in_repos && /^  - repo: local$/ { local_repos++; in_local = 1; in_hooks = 0; next }
+    in_repos && /^  - repo:/ && !/^  - repo: local$/ { in_local = 0; in_hooks = 0 }
+    in_local && /^    hooks:$/ { hooks++; in_hooks = 1; next }
+    in_hooks && /^    [^ ]/ && !/^    hooks:$/ { in_hooks = 0 }
+    in_hooks && $0 == "      - id: " target_id {
+      targets++
+      if (targets == 1) printing = 1
+    }
+    printing && $0 != "      - id: " target_id && /^      - id:/ { printing = 0 }
+    printing && /^[^ ]|^  [^ ]|^    [^ ]/ { printing = 0 }
+    printing { block = block $0 ORS }
+    END {
+      if (repos != 1 || local_repos != 1 || hooks != 1 || targets != 1) {
+        print "invalid repos/local/hooks hierarchy or target hook count" > "/dev/stderr"
+        exit 1
+      }
+      printf "%s", block
+    }
+  ' "${file}")" || return 1
+  assert_block_field "${knowledge_block}" name \
+    '^        name: knowledge deposition hooks are valid$' 'exact knowledge hook name' || return 1
+  assert_block_field "${knowledge_block}" entry \
+    "^        entry: /bin/bash -c 'make knowledge-deposition-test'$" \
+    'exact knowledge hook entry' || return 1
+  assert_block_field "${knowledge_block}" language '^        language: system$' \
+    'knowledge hook language' || return 1
+  assert_block_field "${knowledge_block}" pass_filenames '^        pass_filenames: false$' \
+    'disabled knowledge hook filename passing' || return 1
+  [[ "$(grep -Ec '^        files:' <<<"${knowledge_block}" || true)" -eq 1 ]] || {
+    echo 'expected exactly one files regex in bounded knowledge pre-commit hook' >&2
+    return 1
+  }
+  files_regex="$(sed -nE "s/^        files: '([^']+)'$/\1/p" <<<"${knowledge_block}")"
+  [[ -n "${files_regex}" ]] || {
+    echo 'missing single-quoted files regex in bounded knowledge pre-commit hook' >&2
+    return 1
+  }
+  for required_path in .pre-commit-config.yaml AGENTS.md CLAUDE.md Makefile \
+    docs/agent/instructions.md docs/agent/knowledge-deposition.md docs/agent/knowledge-workspace.md \
+    docs/agent/templates/agents-prefix.md docs/agent/templates/claude-prefix.md \
+    scripts/knowledge-deposition/install-hooks.sh scripts/knowledge-deposition/hook-core.sh; do
+    if [[ ! "${required_path}" =~ ${files_regex} ]]; then
+      echo "knowledge pre-commit files regex does not cover ${required_path}" >&2
       return 1
     fi
   done
@@ -133,15 +184,24 @@ new_fixture() {
 
 shared-rule
 EOF
+  cat >"${FIXTURE}/docs/agent/knowledge-deposition.md" <<'EOF'
+# Knowledge deposition
+
+canonical-policy
+EOF
   cat >"${FIXTURE}/docs/agent/templates/agents-prefix.md" <<'EOF'
 > Codex entry
 
 codex-only
+
+See `docs/agent/knowledge-deposition.md` for the canonical policy.
 EOF
   cat >"${FIXTURE}/docs/agent/templates/claude-prefix.md" <<'EOF'
 > Claude Code entry
 
 claude-only
+
+See `docs/agent/knowledge-deposition.md` for the canonical policy.
 EOF
 }
 
@@ -176,6 +236,10 @@ assert_contains "${agents_content}" 'codex-only'
 assert_not_contains "${agents_content}" 'claude-only'
 assert_contains "${claude_content}" 'claude-only'
 assert_not_contains "${claude_content}" 'codex-only'
+[[ "$(grep -Fc 'docs/agent/knowledge-deposition.md' <<<"${agents_content}" || true)" -eq 1 ]] || \
+  fail 'generated AGENTS.md must contain exactly one knowledge deposition policy link'
+[[ "$(grep -Fc 'docs/agent/knowledge-deposition.md' <<<"${claude_content}" || true)" -eq 1 ]] || \
+  fail 'generated CLAUDE.md must contain exactly one knowledge deposition policy link'
 assert_not_contains "${agents_content}" $'codex-only\n\n\n---'
 assert_not_contains "${claude_content}" $'claude-only\n\n\n---'
 
@@ -227,6 +291,18 @@ if missing_output="$(cd "${FIXTURE}" && /bin/bash scripts/quality/generate-agent
 fi
 [[ "$(<"${FIXTURE}/AGENTS.md")" == 'old-agents' ]] || fail 'failed generation changed AGENTS.md'
 [[ "$(<"${FIXTURE}/CLAUDE.md")" == 'old-claude' ]] || fail 'failed generation changed CLAUDE.md'
+
+new_fixture missing-knowledge-deposition
+(
+  cd "${FIXTURE}"
+  /bin/bash scripts/quality/generate-agent-instructions.sh
+)
+rm "${FIXTURE}/docs/agent/knowledge-deposition.md"
+if missing_output="$(cd "${FIXTURE}" && /bin/bash scripts/quality/generate-agent-instructions.sh --check 2>&1)"; then
+  fail '--check succeeded with missing knowledge deposition policy'
+fi
+assert_contains "${missing_output}" \
+  'agent instructions: required input is not readable: docs/agent/knowledge-deposition.md'
 
 new_fixture extra-prefix-blank-line
 printf '%s\n' 'old-agents' >"${FIXTURE}/AGENTS.md"
@@ -298,6 +374,10 @@ fi
 ) || fail 'repository generated instructions are not current'
 git -C "${ROOT}" ls-files --error-unmatch AGENTS.md >/dev/null || fail 'AGENTS.md is not tracked'
 git -C "${ROOT}" ls-files --error-unmatch CLAUDE.md >/dev/null || fail 'CLAUDE.md is not tracked'
+[[ "$(grep -Fc 'docs/agent/knowledge-deposition.md' "${ROOT}/AGENTS.md" || true)" -eq 1 ]] || \
+  fail 'repository AGENTS.md must contain exactly one knowledge deposition policy link'
+[[ "$(grep -Fc 'docs/agent/knowledge-deposition.md' "${ROOT}/CLAUDE.md" || true)" -eq 1 ]] || \
+  fail 'repository CLAUDE.md must contain exactly one knowledge deposition policy link'
 if ignore_output="$(git -C "${ROOT}" check-ignore --no-index -v AGENTS.md 2>&1)"; then
   fail "AGENTS.md is ignored: ${ignore_output}"
 fi
@@ -337,6 +417,35 @@ outside_repos:
 EOF
 if validate_precommit_integration "${wrong_parent_precommit}" >/dev/null 2>&1; then
   fail 'pre-commit validation accepted a complete hook outside repos[].hooks'
+fi
+
+missing_knowledge_precommit="${TEST_ROOT}/missing-knowledge-pre-commit.yaml"
+awk '
+  /^      - id: knowledge-deposition-test$/ { skipping = 1; next }
+  skipping && /^      - id:/ { skipping = 0 }
+  !skipping { print }
+' "${ROOT}/.pre-commit-config.yaml" >"${missing_knowledge_precommit}"
+if validate_precommit_integration "${missing_knowledge_precommit}" >/dev/null 2>&1; then
+  fail 'pre-commit validation accepted a missing knowledge deposition hook'
+fi
+
+misnested_knowledge_precommit="${TEST_ROOT}/misnested-knowledge-pre-commit.yaml"
+awk '
+  /^      - id: knowledge-deposition-test$/ { skipping = 1; next }
+  skipping && /^      - id:/ { skipping = 0 }
+  !skipping { print }
+  END {
+    print "outside_repos:"
+    print "      - id: knowledge-deposition-test"
+    print "        name: knowledge deposition hooks are valid"
+    print "        entry: /bin/bash -c \047make knowledge-deposition-test\047"
+    print "        language: system"
+    print "        pass_filenames: false"
+    print "        files: \047^(scripts/knowledge-deposition/|docs/agent/|AGENTS\\.md|CLAUDE\\.md|Makefile$)\047"
+  }
+' "${ROOT}/.pre-commit-config.yaml" >"${misnested_knowledge_precommit}"
+if validate_precommit_integration "${misnested_knowledge_precommit}" >/dev/null 2>&1; then
+  fail 'pre-commit validation accepted a knowledge deposition hook outside repos[].hooks'
 fi
 
 bad_ci="${TEST_ROOT}/bad-ci.yml"

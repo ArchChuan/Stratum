@@ -49,7 +49,14 @@ repos:
         entry: /bin/bash scripts/quality/generate-agent-instructions.sh --check
         pass_filenames: false
         require_serial: true
-        files: '^(AGENTS\.md|CLAUDE\.md|docs/agent/instructions\.md|docs/agent/templates/(agents-prefix|claude-prefix)\.md|scripts/quality/generate-agent-instructions(-test)?\.sh)$'
+        files: '^(AGENTS\.md|CLAUDE\.md|docs/agent/(instructions|knowledge-deposition)\.md|docs/agent/templates/(agents-prefix|claude-prefix)\.md|scripts/quality/generate-agent-instructions(-test)?\.sh)$'
+
+      - id: knowledge-deposition-test
+        name: knowledge deposition hooks are valid
+        entry: /bin/bash -c 'make knowledge-deposition-test'
+        language: system
+        pass_filenames: false
+        files: '^(\.pre-commit-config\.yaml|scripts/knowledge-deposition/|docs/agent/(instructions|knowledge-deposition|knowledge-workspace)\.md|docs/agent/templates/(agents-prefix|claude-prefix)\.md|AGENTS\.md|CLAUDE\.md|Makefile$)'
 
       # YAML validation (skip helm templates, k8s, and node_modules)
       - id: check-yaml
