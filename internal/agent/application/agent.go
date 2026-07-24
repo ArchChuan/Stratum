@@ -590,6 +590,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			AgentID:        agentID,
 			MemoryScope:    memoryScope,
 			SkipOutbox:     false,
+			Visibility:     domain.ChatMessageVisibilityUser,
 		}
 		_, saveUserSpan := tracer.Start(ctx, "agent.chat_store.save_user")
 		saveCtx1, saveCancel1 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
@@ -609,6 +610,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			AgentID:        agentID,
 			MemoryScope:    memoryScope,
 			SkipOutbox:     false,
+			Visibility:     domain.ChatMessageVisibilityUser,
 			Artifacts:      result.Artifacts,
 		}
 		_, saveAgentSpan := tracer.Start(ctx, "agent.chat_store.save_assistant")
@@ -630,6 +632,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 				AgentID:        agentID,
 				MemoryScope:    memoryScope,
 				SkipOutbox:     true,
+				Visibility:     domain.ChatMessageVisibilityInternal,
 			}
 			_, saveSummarySpan := tracer.Start(ctx, "agent.chat_store.save_tool_summary")
 			saveCtx3, saveCancel3 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)

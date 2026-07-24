@@ -463,6 +463,7 @@ func TestExecute_ReturnsToolTraceAndPersistsSummaryMessage(t *testing.T) {
 	require.Contains(t, savedMsgs[2].Content, "本轮工具观察摘要")
 	require.Contains(t, savedMsgs[2].Content, "calc")
 	require.True(t, savedMsgs[2].SkipOutbox)
+	require.Equal(t, agent.ChatMessageVisibilityInternal, savedMsgs[2].Visibility)
 }
 
 func TestExecute_LoadsHistoryFromChatStore(t *testing.T) {

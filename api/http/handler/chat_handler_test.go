@@ -270,7 +270,9 @@ func TestChatHandler_ListMessages_success(t *testing.T) {
 			first := nowMsg("m1", "user", "hi")
 			second := nowMsg("m2", "assistant", "hello")
 			second.Artifacts = []domain.ExecutionArtifact{artifact}
-			return []*agent.ChatMessage{first, second}, nil
+			internal := nowMsg("m3", "assistant", "本轮工具观察摘要")
+			internal.Visibility = domain.ChatMessageVisibilityInternal
+			return []*agent.ChatMessage{first, second, internal}, nil
 		},
 	}
 	h := NewChatHandler(store, zap.NewNop())

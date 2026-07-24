@@ -199,6 +199,9 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 	if msg.Artifacts == nil {
 		msg.Artifacts = []domain.ExecutionArtifact{}
 	}
+	if msg.Visibility == "" {
+		msg.Visibility = domain.ChatMessageVisibilityUser
+	}
 	artifactsJSON, err := encodeExecutionArtifacts(msg.Artifacts)
 	if err != nil {
 		return fmt.Errorf("chat_store: encode artifacts: %w", err)
@@ -215,10 +218,10 @@ func (s *PgChatStore) AddMessage(ctx context.Context, tenantID string, msg *doma
 			return err
 		}
 		if err := tx.QueryRow(ctx,
-			`INSERT INTO chat_messages (conversation_id, role, content, steps_json, is_error, artifacts_json)
-			 VALUES ($1, $2, $3, $4, $5, $6)
+			`INSERT INTO chat_messages (conversation_id, role, content, steps_json, is_error, artifacts_json, visibility)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)
 			 RETURNING id, created_at`,
-			msg.ConversationID, msg.Role, msg.Content, string(msg.StepsJSON), msg.IsError, string(artifactsJSON),
+			msg.ConversationID, msg.Role, msg.Content, string(msg.StepsJSON), msg.IsError, string(artifactsJSON), msg.Visibility,
 		).Scan(&msg.ID, &msg.CreatedAt); err != nil {
 			return err
 		}
@@ -301,7 +304,7 @@ func (s *PgChatStore) ListMessages(ctx context.Context, tenantID, convID, userID
 	var out []*domain.ChatMessage
 	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT m.id, m.conversation_id, m.role, m.content, m.steps_json, m.is_error, m.created_at, m.artifacts_json
+			`SELECT m.id, m.conversation_id, m.role, m.content, m.steps_json, m.is_error, m.created_at, m.artifacts_json, m.visibility
 			 FROM chat_messages m
 			 JOIN chat_conversations c ON c.id = m.conversation_id
 			 WHERE m.conversation_id = $1 AND c.user_id = $2 AND c.deleted_at IS NULL
@@ -317,7 +320,7 @@ func (s *PgChatStore) ListMessages(ctx context.Context, tenantID, convID, userID
 			var m domain.ChatMessage
 			var artifactsJSON []byte
 			if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content,
-				&m.StepsJSON, &m.IsError, &m.CreatedAt, &artifactsJSON); err != nil {
+				&m.StepsJSON, &m.IsError, &m.CreatedAt, &artifactsJSON, &m.Visibility); err != nil {
 				return err
 			}
 			m.Artifacts, err = decodeExecutionArtifacts(artifactsJSON)

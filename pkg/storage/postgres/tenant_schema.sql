@@ -467,6 +467,11 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 ALTER TABLE chat_messages
     ADD COLUMN IF NOT EXISTS artifacts_json JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE chat_messages
+    ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'user';
+ALTER TABLE chat_messages DROP CONSTRAINT IF EXISTS chat_messages_visibility_check;
+ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_visibility_check
+    CHECK (visibility IN ('user', 'internal'));
 CREATE INDEX IF NOT EXISTS idx_chat_msg_conv
     ON chat_messages (conversation_id, created_at ASC);
 
