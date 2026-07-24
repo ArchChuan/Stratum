@@ -308,10 +308,11 @@ jobs:
       - name: Install pinned Opik observability release
         if: steps.candidate.outputs.current == 'true'
         run: |
-          helm repo add opik https://comet-ml.github.io/opik
-          helm repo update
-          helm upgrade --install opik opik/opik \
-            --version 2.1.32 \
+          curl --fail-with-body --location --output /tmp/opik-2.1.32.tgz \
+            https://raw.githubusercontent.com/comet-ml/opik/gh-pages/opik-2.1.32.tgz
+          echo "c0a4642569e06c9c4890702bfd3a0e87e9559d36847559504168e26295fc3524  /tmp/opik-2.1.32.tgz" \
+            | sha256sum --check
+          helm upgrade --install opik /tmp/opik-2.1.32.tgz \
             --namespace opik --create-namespace \
             -f helm/opik/values-demo.yaml \
             --atomic --wait --timeout=20m

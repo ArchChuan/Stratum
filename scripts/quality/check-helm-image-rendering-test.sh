@@ -61,9 +61,9 @@ grep -Fq 'GITHUB_CALLBACK_URL: "http://203.0.113.10:6879/api/auth/github/callbac
 grep -Fq 'SECURE_COOKIES: "false"' "${REMOTE_HTTP_RENDER}"
 grep -Fq 'OPIK_URL: "http://opik-backend.opik.svc.cluster.local:8080"' "${REMOTE_HTTP_RENDER}"
 
-if ! grep -Eq 'image:[[:space:]]*otel/opentelemetry-collector-contrib:[0-9]+\.[0-9]+\.[0-9]+' \
+if ! grep -Eq 'image:[[:space:]]*otel/opentelemetry-collector-contrib@sha256:[0-9a-f]{64}' \
     "${OPIK_COLLECTOR}"; then
-    echo 'collector image is not version pinned' >&2
+    echo 'collector image is not digest pinned' >&2
     exit 1
 fi
 grep -Fq 'otlphttp/opik:' "${OPIK_COLLECTOR}"

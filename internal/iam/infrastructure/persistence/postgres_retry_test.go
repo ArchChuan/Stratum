@@ -3,6 +3,8 @@ package persistence
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"testing"
 	"time"
 
@@ -30,6 +32,23 @@ func TestIsRetryablePostgresError(t *testing.T) {
 			}
 			if got := isRetryablePostgresError(err); got != tt.want {
 				t.Fatalf("isRetryablePostgresError(%q) = %v, want %v", tt.code, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsRetryablePostgresErrorAcceptsTransportFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "dial failure", err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}},
+		{name: "connection closed", err: io.EOF},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !isRetryablePostgresError(tt.err) {
+				t.Fatalf("isRetryablePostgresError(%T) = false, want true", tt.err)
 			}
 		})
 	}

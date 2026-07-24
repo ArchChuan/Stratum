@@ -53,7 +53,11 @@ require 'api\.github\.com/repos/.*/commits/main' 'fail-closed current main looku
 require 'sha256:\[0-9a-f\]\{64\}' 'registry digest validation'
 require '--set-string app\.image\.digest=' 'backend digest deployment'
 require '--set-string frontend\.image\.digest=' 'frontend digest deployment'
-require 'opik/opik.*--version 2\.1\.32|--version 2\.1\.32' 'pinned Opik Helm chart'
+require 'opik-2\.1\.32\.tgz' 'versioned Opik Helm chart artifact'
+require 'sha256sum --check' 'Opik Helm chart checksum verification'
+require 'helm upgrade --install opik /tmp/opik-2\.1\.32\.tgz' 'verified local Opik chart installation'
+require_file "${OPIK_COLLECTOR}" 'opentelemetry-collector-contrib@sha256:[0-9a-f]{64}' \
+    'collector image digest pin'
 require 'opik-backend\.opik\.svc\.cluster\.local:8080' 'in-cluster Opik API URL'
 require 'Apply Opik OTLP collector' 'collector applied before Stratum release'
 require 'rollout status deployment/opik-backend' 'Opik backend readiness wait'
@@ -157,8 +161,8 @@ require_file "${OPIK_VALUES}" 'resources:' 'Opik resource limits'
 require_file "${OPIK_COLLECTOR}" 'receivers:' 'collector OTLP receiver'
 require_file "${OPIK_COLLECTOR}" 'otlphttp/opik:' 'collector Opik exporter'
 require_file "${OPIK_COLLECTOR}" 'health_check:' 'collector readiness health check'
-require_file "${OPIK_COLLECTOR}" 'image:[[:space:]]*otel/opentelemetry-collector-contrib:[0-9]' \
-    'collector image is version pinned'
+require_file "${OPIK_COLLECTOR}" 'image:[[:space:]]*otel/opentelemetry-collector-contrib@sha256:[0-9a-f]{64}' \
+    'collector image is digest pinned'
 
 for values_file in "${DEMO_VALUES}" "${DEMO_LOCAL_VALUES}"; do
     for key in opikUrl opikProject opikWorkspace tracePayloadEnabled tracePayloadEndpoint tracePayloadBucket tracePayloadUseTls; do
