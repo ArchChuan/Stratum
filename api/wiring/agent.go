@@ -9,6 +9,7 @@ import (
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	agentobjects "github.com/byteBuilderX/stratum/internal/agent/infrastructure/objectstore"
+	"github.com/byteBuilderX/stratum/internal/agent/infrastructure/officialdocs"
 	agentopik "github.com/byteBuilderX/stratum/internal/agent/infrastructure/opik"
 	persistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
@@ -37,6 +38,7 @@ type Agent struct {
 	TenantResolver      agentport.TenantCapabilityResolver
 	SkillLookup         agentport.SkillLookup
 	TenantSettings      agentport.TenantSettings
+	DiagnosticProvider  agentport.DiagnosticEvidenceProvider
 }
 
 // ragSearchAdapter wraps *knowledge.RAGService to satisfy
@@ -139,10 +141,11 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	db := c.dbOrNil()
 
 	var registry *agent.Registry
+	systemAssistantProfile := agent.BuiltinSystemAssistantProfileSource()
 	if db != nil {
-		registry = agent.NewRegistry(persistence.NewPgAgentRepo(db), c.Logger)
+		registry = agent.NewRegistry(persistence.NewPgAgentRepo(db), systemAssistantProfile, c.Logger)
 	} else {
-		registry = agent.NewRegistry(nil, c.Logger)
+		registry = agent.NewRegistry(nil, systemAssistantProfile, c.Logger)
 	}
 	if c.Memory != nil && c.Memory.Injector != nil {
 		registry.SetMemoryInjector(c.Memory.Injector)
@@ -189,6 +192,8 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		SkillLookup:             a.SkillLookup,
 		SkillActivationResolver: publishedSkillActivationResolver{versions: skillVersionService(c)},
 		TenantResolver:          a.TenantResolver,
+		TenantModelValidator:    tenantModelValidator(a.TenantResolver),
+		TenantModelCatalog:      tenantModelCatalog(a.TenantResolver),
 		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger) agentport.HistoryCompactor {
 			return capgateway.NewLLMHistoryCompactor(gw, model, logger)
 		},
@@ -234,8 +239,23 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			})
 		}
 	}
+	a.DiagnosticProvider = newSystemAssistantDiagnosticAdapter(
+		tenantRoleAdapter{service: tenantMemberService(c)}, systemAssistantDiagnosticCollectors(c, a),
+	)
+	deps.OfficialDocsSearch = officialdocs.Search
+	deps.DiagnosticProvider = a.DiagnosticProvider
 	a.Service = agent.NewAgentService(deps)
 
 	c.Agent = a
 	return nil
+}
+
+func tenantModelValidator(resolver agentport.TenantCapabilityResolver) agentport.TenantChatModelValidator {
+	validator, _ := resolver.(agentport.TenantChatModelValidator)
+	return validator
+}
+
+func tenantModelCatalog(resolver agentport.TenantCapabilityResolver) agentport.TenantChatModelCatalog {
+	catalog, _ := resolver.(agentport.TenantChatModelCatalog)
+	return catalog
 }

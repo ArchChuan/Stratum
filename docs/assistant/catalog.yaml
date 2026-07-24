@@ -1,0 +1,14 @@
+product_version: "2026.07"
+documents:
+  - id: agent-guide
+    title: Agent 使用指南
+    source: docs/agent/agent.md
+    url: /docs/agent/agent
+  - id: mcp-guide
+    title: MCP 使用指南
+    source: docs/mcp-integration.md
+    url: /docs/mcp-integration
+  - id: knowledge-guide
+    title: Knowledge 使用指南
+    source: docs/agent/knowledge-workspace.md
+    url: /docs/agent/knowledge-workspace

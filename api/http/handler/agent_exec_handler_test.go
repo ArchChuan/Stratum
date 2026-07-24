@@ -5,13 +5,35 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
+
+func TestExecuteAgentAndStreamDoneUseSameArtifactShape(t *testing.T) {
+	result := &domain.AgentResult{AgentID: "a1", Input: "q", Output: "ok", Steps: 1, Duration: time.Second,
+		Artifacts: []domain.ExecutionArtifact{{Type: "diagnostic_report", ProfileVersion: "v1", DiagnosticReport: &domain.DiagnosticReport{Facts: []domain.DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []domain.EvidenceGap{}, RecommendedActions: []string{}, Citations: []domain.Citation{}, Steps: []domain.DiagnosticStep{}}}}}
+	syncDTO := agentExecutionResultDTO(result)
+	done := agentExecutionDonePayload(result)
+	var decoded map[string]any
+	if err := json.Unmarshal(done, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	syncRaw, _ := json.Marshal(syncDTO.Artifacts)
+	var syncDecoded any
+	if err := json.Unmarshal(syncRaw, &syncDecoded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(syncDecoded, decoded["artifacts"]) {
+		t.Fatalf("artifact shapes drifted: sync=%v done=%v", syncDecoded, decoded["artifacts"])
+	}
+}
 
 func TestAgentExecutionErrorUsesHTTPErrorPipeline(t *testing.T) {
 	gin.SetMode(gin.TestMode)

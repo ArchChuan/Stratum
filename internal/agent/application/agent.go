@@ -43,27 +43,32 @@ type (
 // in the application layer because it references port.ToolDefinition and
 // function types that depend on cross-context ports.
 type ExecutionConfig struct {
-	MaxSteps          int
-	Timeout           time.Duration
-	Temperature       float32
-	EnableTools       bool
-	AvailableTools    []string
-	Stream            bool
-	TokenCallback     func(string)
-	TenantID          string
-	TraceID           string
-	ExecutionID       string
-	LLMAPIKeys        map[string]string
-	RAGSearchFn       func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
-	ExtraTools        []port.ToolDefinition
-	SkillCatalog      map[string]port.SkillActivation
-	ToolExecutionFn   port.ToolExecutionFn
-	ActiveSkill       *port.SkillActivation
-	TracePayloadStore port.TracePayloadStore
-	ConversationID    string
-	UserID            string
-	HistoryWindow     int
-	EvolutionTrace    EvolutionTraceMetadata
+	MaxSteps                  int
+	Timeout                   time.Duration
+	Temperature               float32
+	EnableTools               bool
+	AvailableTools            []string
+	Stream                    bool
+	TokenCallback             func(string)
+	TenantID                  string
+	TraceID                   string
+	ExecutionID               string
+	LLMAPIKeys                map[string]string
+	RAGSearchFn               func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	ExtraTools                []port.ToolDefinition
+	SkillCatalog              map[string]port.SkillActivation
+	ToolExecutionFn           port.ToolExecutionFn
+	ActiveSkill               *port.SkillActivation
+	TracePayloadStore         port.TracePayloadStore
+	ConversationID            string
+	UserID                    string
+	HistoryWindow             int
+	EvolutionTrace            EvolutionTraceMetadata
+	OfficialDocsSearchFn      func(context.Context, string) ([]domain.Citation, error)
+	DiagnosticFn              func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
+	SystemAssistantMode       bool
+	SystemAssistantRoleClass  string
+	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)
 }
 
 // EvolutionTraceMetadata attributes an execution to evaluation and rollout evidence.
@@ -248,7 +253,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 
 	// Inject memory context into system prompt
 	var memCtx string
-	if a.MemoryInjector != nil && cfg.ConversationID != "" {
+	if !cfg.SystemAssistantMode && a.MemoryInjector != nil && cfg.ConversationID != "" {
 		ic := port.InjectionContext{
 			TenantID:       cfg.TenantID,
 			UserID:         cfg.UserID,
@@ -273,8 +278,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		zap.String("agent_id", agentID),
 		zap.String("trace_id", cfg.TraceID),
 		zap.String("conversation_id", cfg.ConversationID),
-		zap.String("type", string(agentType)),
-		zap.String("input", input))
+		zap.String("type", string(agentType)))
 
 	result := &AgentResult{
 		AgentID:  agentID,
@@ -320,8 +324,10 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		)
 
 		availableTools := buildBuiltinTools(workspaceNames, workspaceDescs,
-			len(workspaceNames) > 0 && cfg.RAGSearchFn != nil,
-			a.MemoryInjector != nil)
+			len(workspaceNames) > 0 && cfg.RAGSearchFn != nil, a.MemoryInjector != nil)
+		if cfg.SystemAssistantMode {
+			availableTools = nil
+		}
 		initState := agentgraph.ReActState{
 			TenantID:                   cfg.TenantID,
 			TraceID:                    cfg.TraceID,
@@ -335,6 +341,10 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			ActiveSkill:                cfg.ActiveSkill,
 			TracePayloadStore:          cfg.TracePayloadStore,
 			ToolExecutionFn:            cfg.ToolExecutionFn,
+			OfficialDocsSearchFn:       cfg.OfficialDocsSearchFn,
+			DiagnosticFn:               cfg.DiagnosticFn,
+			GovernedAssistant:          cfg.SystemAssistantMode,
+			InternalToolResultGuardFn:  cfg.InternalToolResultGuardFn,
 			ExecutionID:                cfg.ExecutionID,
 			AgentKnowledgeWorkspaceIDs: workspaceNames,
 			AgentMemoryScope:           memoryScope,
@@ -374,7 +384,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			}
 			return agentgraph.PlanNodeExecutionResult{Summary: final.Output}, nil
 		}
-		if a.RecallMemoryFn != nil {
+		if !cfg.SystemAssistantMode && a.RecallMemoryFn != nil {
 			fn := a.RecallMemoryFn
 			initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
 				return fn(ctx, cfg.TenantID, cfg.UserID, agentID, memoryScope, input)
@@ -399,6 +409,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		result.CostUSD = finalState.TotalCostUSD
 		result.ToolObservations = enrichToolObservations(finalState.ToolObservations, cfg.TraceID, cfg.ExecutionID, cfg.ConversationID, agentID, cfg.UserID)
 		result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, cfg.TraceID, cfg.ExecutionID, cfg.ConversationID, agentID, cfg.UserID)
+		result.AssistantToolArtifacts = append([]domain.SystemAssistantToolArtifact(nil), finalState.AssistantToolArtifacts...)
 		finalAnswerAt := time.Now()
 		result.TraceEvents = append(result.TraceEvents, domain.AgentTraceEvent{
 			TraceID:         cfg.TraceID,
@@ -567,6 +578,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		result.Output = "Unknown agent type"
 		execErr = fmt.Errorf("unknown agent type: %s", agentType)
 	}
+	result.Artifacts = buildExecutionArtifacts(result.AssistantToolArtifacts, cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"])
 
 	// Persist user input and agent output to ChatStore (outside switch — all agent types benefit).
 	if chatStore != nil && cfg.ConversationID != "" && execErr == nil {
@@ -597,6 +609,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			AgentID:        agentID,
 			MemoryScope:    memoryScope,
 			SkipOutbox:     false,
+			Artifacts:      result.Artifacts,
 		}
 		_, saveAgentSpan := tracer.Start(ctx, "agent.chat_store.save_assistant")
 		saveCtx2, saveCancel2 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
@@ -883,6 +896,26 @@ func WithEvolutionTraceMetadata(metadata EvolutionTraceMetadata) ExecutionOption
 	}
 }
 
+func WithOfficialDocsSearchFn(fn func(context.Context, string) ([]domain.Citation, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.OfficialDocsSearchFn = fn }
+}
+
+func WithDiagnosticFn(fn func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.DiagnosticFn = fn }
+}
+
+func WithSystemAssistantMode() ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.SystemAssistantMode = true }
+}
+
+func withSystemAssistantRoleClass(roleClass string) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.SystemAssistantRoleClass = roleClass }
+}
+
+func withInternalToolResultGuard(fn func(any) (port.GuardedToolResult, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.InternalToolResultGuardFn = fn }
+}
+
 func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cfg ExecutionConfig) []attribute.KeyValue {
 	resourceManifest := cfg.EvolutionTrace.ResourceManifest
 	if resourceManifest == nil {
@@ -1049,4 +1082,71 @@ func buildBuiltinTools(workspaceNames, workspaceDescs []string, hasRAG, hasMemor
 		},
 	})
 	return tools
+}
+
+func buildExecutionArtifacts(toolArtifacts []domain.SystemAssistantToolArtifact, profileVersion string) []domain.ExecutionArtifact {
+	if len(toolArtifacts) == 0 {
+		return []domain.ExecutionArtifact{}
+	}
+	citations := make([]domain.Citation, 0)
+	seenCitations := make(map[string]struct{})
+	hasReport := false
+	for _, artifact := range toolArtifacts {
+		if artifact.Tool == "stratum_search_official_docs" {
+			for _, citation := range domain.BoundCitations(artifact.Citations) {
+				key := citation.DocumentID + "\x00" + citation.Section + "\x00" + citation.URL
+				if _, ok := seenCitations[key]; ok {
+					continue
+				}
+				seenCitations[key] = struct{}{}
+				if len(citations) < constants.SystemAssistantCitationMaxCount {
+					citations = append(citations, citation)
+				}
+			}
+		}
+		if artifact.Evidence != nil || artifact.Tool == "stratum_diagnose_tenant" {
+			hasReport = true
+		}
+		if artifact.ErrorCode != "" {
+			hasReport = true
+		}
+	}
+	out := make([]domain.ExecutionArtifact, 0, 2)
+	if len(citations) > 0 {
+		out = append(out, domain.ExecutionArtifact{Type: "citations", ProfileVersion: profileVersion, Citations: citations})
+	}
+	if hasReport {
+		out = append(out, domain.ExecutionArtifact{Type: "diagnostic_report", ProfileVersion: profileVersion, DiagnosticReport: domain.BuildDiagnosticReport(toolArtifacts)})
+	}
+	return boundExecutionArtifactsJSON(out)
+}
+
+func boundExecutionArtifactsJSON(artifacts []domain.ExecutionArtifact) []domain.ExecutionArtifact {
+	for {
+		raw, err := json.Marshal(artifacts)
+		if err == nil && len(raw) <= constants.SystemAssistantToolMaxJSONBytes {
+			return artifacts
+		}
+		changed := false
+		for i := range artifacts {
+			report := artifacts[i].DiagnosticReport
+			if report == nil {
+				continue
+			}
+			switch {
+			case len(report.Facts) > 0:
+				report.Facts = report.Facts[:len(report.Facts)-1]
+				changed = true
+			case len(report.EvidenceGaps) > 0:
+				report.EvidenceGaps = report.EvidenceGaps[:len(report.EvidenceGaps)-1]
+				changed = true
+			case len(report.Citations) > 0:
+				report.Citations = report.Citations[:len(report.Citations)-1]
+				changed = true
+			}
+		}
+		if !changed {
+			return []domain.ExecutionArtifact{{Type: "diagnostic_report", ProfileVersion: artifacts[0].ProfileVersion, DiagnosticReport: &domain.DiagnosticReport{Facts: []domain.DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []domain.EvidenceGap{{Source: "artifact_aggregate", Code: "truncated"}}, RecommendedActions: []string{}, Citations: []domain.Citation{}, Steps: []domain.DiagnosticStep{{Tool: "artifact_aggregate", Outcome: "error", ErrorCode: "truncated"}}}}}
+		}
+	}
 }

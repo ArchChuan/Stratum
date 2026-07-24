@@ -5,15 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
-	"regexp"
 	"strings"
+
+	"github.com/byteBuilderX/stratum/pkg/safetext"
 )
 
 const traceRedactedValue = "[REDACTED]"
-
-var traceSensitiveTextPattern = regexp.MustCompile(
-	`(?i)\b(password|token|api_key|apikey|authorization|secret)=((bearer|basic)\s+)?\S+`,
-)
 
 // TracePayload is a bounded, redacted representation safe for telemetry attributes.
 type TracePayload struct {
@@ -43,12 +40,7 @@ func SanitizedTracePayload(value any) ([]byte, string) {
 	if err != nil {
 		raw = []byte(`"[UNSERIALIZABLE]"`)
 	}
-	text := traceSensitiveTextPattern.ReplaceAllStringFunc(string(raw), func(match string) string {
-		if idx := strings.Index(match, "="); idx >= 0 {
-			return match[:idx+1] + traceRedactedValue
-		}
-		return traceRedactedValue
-	})
+	text := safetext.RedactCredentials(string(raw))
 	sum := sha256.Sum256([]byte(text))
 	return []byte(text), hex.EncodeToString(sum[:])
 }

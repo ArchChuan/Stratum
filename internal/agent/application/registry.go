@@ -4,6 +4,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
@@ -18,11 +19,14 @@ type Registry struct {
 	memInjector        port.MemoryInjector
 	recallFn           port.RecallMemoryFn
 	globalSystemSuffix string
+	systemProfile      *SystemAssistantProfileSource
 }
 
 // NewRegistry constructs a Registry around a domain-port AgentRepo.
-func NewRegistry(repo port.AgentRepo, logger *zap.Logger) *Registry {
-	return &Registry{repo: repo, logger: logger}
+func NewRegistry(
+	repo port.AgentRepo, systemProfile *SystemAssistantProfileSource, logger *zap.Logger,
+) *Registry {
+	return &Registry{repo: repo, systemProfile: systemProfile, logger: logger}
 }
 
 // SetMemoryInjector injects a MemoryInjector so agents created via Get/GetAll have it wired.
@@ -34,18 +38,34 @@ func (r *Registry) SetRecallMemoryFn(fn port.RecallMemoryFn) { r.recallFn = fn }
 // SetGlobalSystemSuffix injects a platform-level system prompt appended to every agent's prompt.
 func (r *Registry) SetGlobalSystemSuffix(s string) { r.globalSystemSuffix = s }
 
-func (r *Registry) hydrate(cfg *domain.AgentConfig) Agent {
-	a := NewBaseAgent(cfg, r.logger)
+func (r *Registry) hydrate(cfg *domain.AgentConfig) (Agent, error) {
+	var profile *domain.SystemAssistantProfile
+	if r.systemProfile != nil {
+		selected := r.systemProfile.Profile()
+		profile = &selected
+	}
+	composed, err := ComposeSystemAssistantProfile(cfg, profile)
+	if err != nil {
+		return nil, fmt.Errorf("registry hydrate agent: %w", err)
+	}
+	a := NewBaseAgent(composed, r.logger)
 	if r.memInjector != nil {
 		a.MemoryInjector = r.memInjector
 	}
 	if r.recallFn != nil {
 		a.RecallMemoryFn = r.recallFn
 	}
-	if r.globalSystemSuffix != "" {
+	if r.globalSystemSuffix != "" && composed.SystemKey != domain.SystemAssistantKey {
 		a.GlobalSystemSuffix = r.globalSystemSuffix
 	}
-	return a
+	return a, nil
+}
+
+func (r *Registry) systemAssistantProfileVersion() (string, error) {
+	if r == nil || r.systemProfile == nil || r.systemProfile.Version() == "" {
+		return "", fmt.Errorf("registry system assistant profile: profile source unavailable")
+	}
+	return r.systemProfile.Version(), nil
 }
 
 // Register persists a new agent.
@@ -60,36 +80,65 @@ func (r *Registry) Register(ctx context.Context, a Agent) error {
 	return nil
 }
 
-// Get retrieves a hydrated Agent by ID. Returns (nil, false) on miss.
-func (r *Registry) Get(ctx context.Context, id string) (Agent, bool) {
+// Get retrieves a hydrated Agent by ID while preserving repository and
+// composition failures. A miss is the only case returning found=false.
+func (r *Registry) Get(ctx context.Context, id string) (Agent, bool, error) {
 	cfg, found, err := r.repo.Get(ctx, id)
 	if err != nil {
-		if r.logger != nil {
-			r.logger.Error("registry: get agent failed",
-				zap.String("agent_id", id), zap.Error(err))
-		}
-		return nil, false
+		return nil, false, fmt.Errorf("registry get agent %s: %w", id, err)
 	}
 	if !found {
-		return nil, false
+		return nil, false, nil
 	}
-	return r.hydrate(cfg), true
+	agent, err := r.hydrate(cfg)
+	if err != nil {
+		return nil, false, fmt.Errorf("registry get agent %s: %w", id, err)
+	}
+	return agent, true, nil
 }
 
 // GetAll returns all hydrated agents in the tenant schema.
-func (r *Registry) GetAll(ctx context.Context) []Agent {
+func (r *Registry) GetAll(ctx context.Context) ([]Agent, error) {
 	cfgs, err := r.repo.GetAll(ctx)
 	if err != nil {
-		if r.logger != nil {
-			r.logger.Error("registry: list agents failed", zap.Error(err))
-		}
-		return nil
+		return nil, fmt.Errorf("registry list agents: %w", err)
 	}
 	out := make([]Agent, 0, len(cfgs))
 	for _, c := range cfgs {
-		out = append(out, r.hydrate(c))
+		agent, err := r.hydrate(c)
+		if err != nil {
+			return nil, fmt.Errorf("registry list agents: %w", err)
+		}
+		out = append(out, agent)
 	}
-	return out
+	return out, nil
+}
+
+func (r *Registry) GetSystemAssistant(ctx context.Context) (Agent, bool, error) {
+	cfg, found, err := r.repo.GetSystemAssistant(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("registry get system assistant: %w", err)
+	}
+	if !found {
+		return nil, false, nil
+	}
+	a, err := r.hydrate(cfg)
+	if err != nil {
+		return nil, false, fmt.Errorf("registry get system assistant: %w", err)
+	}
+	return a, true, nil
+}
+
+func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string) (Agent, error) {
+	cfg, err := r.repo.UpdateSystemAssistantModel(ctx, model)
+	if err != nil {
+		return nil, fmt.Errorf("registry update system assistant model: %w", err)
+	}
+	a, err := r.hydrate(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("registry update system assistant model: %w", err)
+	}
+	return a, nil
 }
 
 // Remove deletes an agent.

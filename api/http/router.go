@@ -268,6 +268,8 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		agents.GET("/tool-approvals", agentHandler.ListToolApprovals)
 		agents.POST("/tool-approvals/:approvalID/decision", requireAdmin, requireActive, agentHandler.DecideToolApproval)
 		agents.POST("/tool-approvals/:approvalID/resume", requireAdmin, requireActive, agentHandler.ResumeToolApproval)
+		agents.GET("/system/settings", agentHandler.GetSettings)
+		agents.PUT("/system/settings", requireAdmin, requireActive, agentHandler.UpdateModel)
 		agents.GET("/:id", agentHandler.GetAgent)
 		execLimiter := newRateLimiterStore(c, middleware.LLMExecRate, middleware.LLMExecBurst)
 		execRateLimit := middleware.RateLimitByKey(execLimiter, func(c *gin.Context) string {

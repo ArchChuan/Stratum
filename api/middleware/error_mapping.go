@@ -77,6 +77,8 @@ func MapErrorToStatus(err error) int {
 	switch {
 	case errors.Is(err, agentdomain.ErrEvidenceUnavailable):
 		return http.StatusServiceUnavailable
+	case errors.Is(err, agentdomain.ErrAssistantModelUnavailable):
+		return http.StatusServiceUnavailable
 	case errors.Is(err, agentdomain.ErrEvidenceInvalid):
 		return http.StatusBadGateway
 	// 404 — NotFound
@@ -108,6 +110,7 @@ func MapErrorToStatus(err error) int {
 
 	// 409 — Conflict
 	case errors.Is(err, knowledgedomain.ErrWorkspaceConflict),
+		errors.Is(err, agentdomain.ErrSystemAssistantManaged),
 		errors.Is(err, knowledgedomain.ErrWorkspaceLinked),
 		errors.Is(err, knowledgedomain.ErrDuplicateDocument),
 		errors.Is(err, knowledgedomain.ErrDocumentProcessing),
@@ -165,6 +168,7 @@ func MapErrorToStatus(err error) int {
 
 	// 400 — Validation / Bad Request
 	case errors.Is(err, iamapp.ErrInvalidSettings),
+		errors.Is(err, agentdomain.ErrInvalidSystemAssistantModel),
 		errors.Is(err, iamapp.ErrEmbedModelAlreadySet),
 		errors.Is(err, iamdomain.ErrDefaultTenantDelete),
 		errors.Is(err, knowledgedomain.ErrInvalidEmbeddingModel),

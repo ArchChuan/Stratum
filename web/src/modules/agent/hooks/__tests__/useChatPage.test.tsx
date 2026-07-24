@@ -21,7 +21,10 @@ const mocks = vi.hoisted(() => ({
   stream: {
     streamConversationId: null as string | null,
     accumulatedContent: '',
-    streamResult: null,
+    streamResult: null as null | {
+      output?: string;
+      artifacts?: Array<{ type: string; diagnosticReport?: { facts?: unknown[] } }>;
+    },
     streamError: null,
     streamDone: false,
     streamApproval: null as null | Record<string, string>,
@@ -132,5 +135,44 @@ describe('useChatPage tool approvals', () => {
     await waitFor(() => {
       expect(result.current.messages.some((item) => item.content === '工具调用等待审批')).toBe(true);
     });
+  });
+
+  it('orders a stale API response system-first and selects it by default', async () => {
+    mocks.listAgents.mockResolvedValue([
+      { id: 'regular', name: '普通 Agent', isSystem: false },
+      { id: 'system', name: '平台使用小助手', isSystem: true },
+    ]);
+
+    const { result } = renderHook(() => useChatPage());
+
+    await waitFor(() => expect(result.current.agents.map((agent) => agent.id)).toEqual([
+      'system', 'regular',
+    ]));
+    expect(result.current.selectedAgent).toBe('system');
+  });
+
+  it('hydrates streamed structured artifacts into the completed assistant message', async () => {
+    mocks.listAgents.mockResolvedValue([{ id: 'system', name: '平台使用小助手', isSystem: true }]);
+    mocks.listConversations.mockResolvedValue([{ id: 'conversation-1', name: 'Conversation' }]);
+    const { result, rerender } = renderHook(() => useChatPage());
+    await waitFor(() => expect(result.current.selectedConv).toBe('conversation-1'));
+    act(() => result.current.setInput('诊断'));
+    act(() => result.current.handleSend());
+
+    mocks.stream.streamConversationId = 'conversation-1';
+    mocks.stream.streamDone = true;
+    mocks.stream.streamResult = {
+      output: '诊断完成',
+      artifacts: [{ type: 'diagnostic_report', diagnosticReport: { facts: [] } }],
+    };
+    rerender();
+
+    await waitFor(() => expect(
+      result.current.messages[result.current.messages.length - 1]?.artifacts,
+    ).toHaveLength(1));
+    expect(
+      result.current.messages[result.current.messages.length - 1]
+        ?.artifacts?.[0]?.diagnosticReport?.evidenceGaps,
+    ).toEqual([]);
   });
 });

@@ -1,0 +1,389 @@
+[
+  {
+    "documentId": "agent-guide",
+    "title": "Agent 使用指南",
+    "productVersion": "2026.07",
+    "section": "AgentConfig",
+    "url": "/docs/agent/agent",
+    "ordinal": 0,
+    "body": "关键权限字段：\n\n```go\ntype AgentConfig struct {\n    AllowedSkills         []string // 可激活 Skill ID\n    MCPToolIDs            []string // mcp:\u003cserver\u003e:\u003ctool\u003e 精确 allowlist\n    KnowledgeWorkspaceIDs []string\n    MemoryScope           string\n}\n```\n\n权限取交集：租户权限 ∩ 用户权限 ∩ Agent allowlist ∩ active Skill requirements。Agent 绑定具体 MCP tool，不绑定整个 server，避免 server 新增工具后自动扩权。"
+  },
+  {
+    "documentId": "agent-guide",
+    "title": "Agent 使用指南",
+    "productVersion": "2026.07",
+    "section": "Capability Boundaries",
+    "url": "/docs/agent/agent",
+    "ordinal": 0,
+    "body": "Agent Loop 是运行期唯一动态决策者。其他上下文职责固定：\n\n| 上下文 | 职责 | 禁止事项 |\n|---|---|---|\n| Agent | 推理、选择 Skill、调用工具、状态机、checkpoint | 不在 handler 中实现路由或重试 |\n| Skill | 版本化 instruction bundle：capability、activation contract、instructions、requirements | 不执行代码、HTTP、LLM 或 MCP |\n| MCP | 外部工具发现和副作用执行 | 不自报可信 risk level，不伪装成 Skill |\n| Knowledge | `stratum_search_knowledge` 内部检索能力 | 不执行外部副作用 |\n| Memory | 自动会话历史、注入、按需 recall | 不作为通用工具网关 |\n\n依赖方向：`Agent -\u003e Skill snapshot / MCP port / Knowledge port / Memory port`。Skill 不依赖或调用 MCP；Skill requirements 只声明运行期所需的稳定 MCP tool IDs。"
+  },
+  {
+    "documentId": "agent-guide",
+    "title": "Agent 使用指南",
+    "productVersion": "2026.07",
+    "section": "Context Budget And Compaction",
+    "url": "/docs/agent/agent",
+    "ordinal": 0,
+    "body": "`AgentConfig.MaxContextTokens` 控制 Agent 每次 LLM 请求的上下文上限；未配置时使用 `constants.DefaultAgentContextTokens`（8000）。当前运行行为分两层：\n\n1. 初始上下文由 `BuildContextMessagesWithCompaction` 组装，优先级为当前输入 \u003e system prompt 保底 \u003e memory（剩余预算最多 30%）\u003e 会话历史。窗口外和超出预算的最老历史会交给 `HistoryCompactor` 生成摘要，摘要只注入当次请求的 system message。\n2. ReAct 循环（包括 Planning 子步骤的 ReAct）每次调用 LLM 前对消息副本估算 token；达到 `MaxContextTokens * LoopCompactionSafetyRatio`（当前 80%）后，保留 system/user 锚点和最近 3 个完整消息组，较老中间组整体压缩。assistant tool call 与对应 tool result 必须作为原子组保留或删除，禁止产生孤立消息。Reflect、Plan、Synthesize 的结构化单次请求不在本次循环压缩范围内。\n\n生产 wiring 在每次执行解析租户 `CapabilityGateway` 后，用 Agent 配置的 LLM model 创建 `LLMHistoryCompactor`，再注入 `BaseAgent` 和 ReAct/Planning 状态。这样摘要调用沿用当前租户的 provider 与凭据，不会跨租户共享网关。压缩失败、工厂未配置或未注入时必须降级为硬截断/计数标记，不能阻断 Agent Loop；trace 与持久化会话历史保持完整，压缩只影响当次 LLM 请求副本。"
+  },
+  {
+    "documentId": "agent-guide",
+    "title": "Agent 使用指南",
+    "productVersion": "2026.07",
+    "section": "MCP Risk And Approval",
+    "url": "/docs/agent/agent",
+    "ordinal": 0,
+    "body": "租户管理员为每个 `(server_id, tool_name)` 设置风险：`read`、`write_reversible`、`destructive`、`unclassified`。未配置或读取失败必须视为 `unclassified`。MCP discovery payload 不能设置受信风险。\n\n- `read` / `write_reversible`：通过 Execution Guard 复核后直接执行。\n- `destructive` / `unclassified`：Run 进入 `waiting_approval`，工具不得执行。\n- 参数、query、固定 Skill revisions 使用 AES-256-GCM 存入 `agent_tool_approvals.encrypted_payload`。\n- checkpoint 只保存 approval ID，不保存原始参数。\n- 批准后使用同 execution ID 恢复；审批只解除风险门槛，不能补授 tenant、user、Agent 或 Skill 缺失的权限。\n- resume 在执行前重新解析用户状态、Agent allowlist、固定 Skill revisions 和 policy version；仅完整绑定匹配时可执行一次。\n- 执行前原子抢占 `approved -\u003e executing`；失败回退 `approved`，成功转 `executed`，防止重复副作用。\n- 请求发送后发生 timeout、cancel 或连接中断时进入 `unknown_outcome`，禁止自动重放，必须人工对账或补偿。\n\n所有 MCP 调用都必须经过 `ToolExecutionGuard`；Tool Catalog 过滤只是最小暴露，不是授权执行点。MCP 返回值在进入\n下一轮 LLM 上下文前必须经过 `ToolResultGuard`：拒绝协议/Schema 错误，脱敏、限长并标记为\n`\u003cuntrusted_tool_result\u003e`。MCP annotations 和外部文本均不可信。\n\n阻断式回归入口是 `make tool-permission-test`。它覆盖纯授权性质、审批状态机、Execution/Result Guard、fake MCP、\nAgent Loop/SSE、PostgreSQL tenant 隔离和审批 UI；CI 必须设置 `STRATUM_TEST_POSTGRES_URL`，缺失时直接失败。"
+  },
+  {
+    "documentId": "agent-guide",
+    "title": "Agent 使用指南",
+    "productVersion": "2026.07",
+    "section": "Rules",
+    "url": "/docs/agent/agent",
+    "ordinal": 0,
+    "body": "1. 路由、审批、重试、checkpoint 和权限交集必须硬编码，不交给模型决定。\n2. MCP 工具默认 `unclassified`，禁止 fail-open。\n3. Skill revision 在 Run 内不可漂移；审批恢复使用 payload 固定的 revision。\n4. Tool trace 和 Agent trace 是不可变历史；删除旧 Skill 存储时必须保留。\n5. `MaxIterations` 和 execution timeout 必须有限。\n6. 上下文裁剪必须保持 tool call/tool result 配对，并保留 system/user 锚点；不得直接修改持久化历史或 trace。\n7. 不记录 token、API key、password、审批明文 payload 或敏感原始响应。\n8. Agent/Skill/MCP/Knowledge/Memory 改动必须完成真实 API、数据库、Agent Loop 和浏览器 E2E。"
+  },
+  {
+    "documentId": "agent-guide",
+    "title": "Agent 使用指南",
+    "productVersion": "2026.07",
+    "section": "Skill Activation",
+    "url": "/docs/agent/agent",
+    "ordinal": 0,
+    "body": "- Run 启动时解析允许的 published/candidate Skill revision，并固定 revision ID。\n- 模型通过内置 `stratum_activate_skill` 激活一个 instruction bundle。\n- 同一时刻只允许一个 active Skill；再次激活会替换前一个。\n- 激活后 system messages 注入该 revision instructions。\n- Skill 不生成可执行 ToolDefinition，也不经过 CapabilityGateway。\n- Agent 可以不激活 Skill，直接使用 Agent allowlist 中的 MCP 工具。"
+  },
+  {
+    "documentId": "agent-guide",
+    "title": "Agent 使用指南",
+    "productVersion": "2026.07",
+    "section": "Tool Execution",
+    "url": "/docs/agent/agent",
+    "ordinal": 0,
+    "body": "`CapabilityGateway` 只负责 LLM completion。外部工具调用通过消费侧 `MCPToolExecutor`，最终到 `ClientManager.CallTool(serverID, rawToolName, args)`。\n\n暴露给模型的名称是 `mcp:\u003cserver\u003e:\u003ctool\u003e`；发送给 MCP server 的 name 是原始 tool name。不得混用。\n\n内置工具：\n\n| 工具 | 权限 |\n|---|---|\n| `stratum_activate_skill` | 当前 Run 的 Skill catalog |\n| `stratum_search_knowledge` | Agent workspaces ∩ active Skill workspaces |\n| `stratum_recall_memory` | Agent memory scope ∩ active Skill memory scopes |\n| `stratum_continue_reasoning` | Agent Loop 内部控制 |"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "1. 分层职责",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "| 层 | 路径 | 说明 |\n|----|------|------|\n| Handler | `api/http/handler/rag_handler.go` | 绑定请求、鉴权解析 tenantID、编排响应；≤15 行/方法 |\n| DTO | `api/http/dto/rag.go` | `CreateWorkspaceRequest` / `UpdateWorkspaceRequest` / `QueryRequest` / `UploadDocumentRequest` |\n| Router | `api/http/router.go` (`registerKnowledge`) | `/knowledge/*` 分组，member 读 / admin 写 / `BodyLimit(MaxUploadBytes)` 挡入口 |\n| Application | `internal/knowledge/application/` | `WorkspaceService` · `KnowledgeIngest` · `RAGService` |\n| Domain | `internal/knowledge/domain/` | `Workspace` 聚合、`WorkspaceConfig` 值对象、Sentinel errors |\n| Port | `internal/knowledge/domain/port/` | `WorkspaceRepo` · `DocRepo` · `ChunkRepo` · `DocumentParser` · `Embedder` |\n| Infrastructure | `internal/knowledge/infrastructure/persistence/` | `WorkspaceRepo` · `DocRepo` · `ChunkRepo`；`pkg/storage/milvus.VectorStore` · `pkg/textchunk` 策略包 |\n| Wiring | `api/wiring/knowledge.go` (`buildKnowledge`) | 装配依赖、注入 `EmbedResolver`、`DocRepo`、`VectorStore` |\n\n**依赖方向**：`handler → application → domain/port`；`infrastructure` 实现 `port`；wiring 集中构造，禁止反向依赖。\n\n---"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "10.1 架构：同步接受 + 异步执行",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "`IngestDocument` 立即返回 `Status='processing'`，后台 goroutine 完成 embed → vector → PG 写入。前端通过 `GET /workspaces/:name/documents` 轮询终态。\n\n两级并发控制：\n\n- **queueSem**（有缓冲 channel）：入口准入，满则立即返回 `ErrIngestQueueFull`（HTTP 429）\n- **sem**（有缓冲 channel）：worker 槽位，goroutine 在后台阻塞等待，超 `KnowledgeIngestTimeout` 标为失败\n\ngoroutine 通过 `context.WithoutCancel` 与请求 context 解耦，客户端断开不中断摄取。"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "10.2 流程图",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```mermaid\nflowchart TD\n    A[multipart file] --\u003e B{Global BodyLimit\u003cbr/\u003e10 MB?}\n    B --\u003e|是| E1[400 file size exceeds]\n    B --\u003e|否| C[WorkspaceService.IngestUpload]\n    C --\u003e D[WorkspaceRepo.GetByName\u003cbr/\u003e→ ws.ID, ws.Config]\n    D --\u003e H[SHA256 content_hash]\n    H --\u003e DUP{DocRepo.ExistsByHash?}\n    DUP --\u003e|是| E2[ErrDuplicateDocument]\n    DUP --\u003e|否| ID[uuid.NewV7 → documentID]\n    ID --\u003e PARSE[Parser.ParseBytes]\n    PARSE --\u003e CLEAN[TextCleaner.Clean]\n    CLEAN --\u003e STRAT{ChunkingStrategy}\n    STRAT --\u003e|recursive| REC[RecursiveStrategy.Chunk]\n    STRAT --\u003e|structure_recursive| STR[StructureRecursiveStrategy.Chunk]\n    STRAT --\u003e|semantic| SEM[SemanticStrategy.Chunk\u003cbr/\u003e需要 EmbedClient]\n    REC --\u003e FILTER[TextCleaner.FilterChunks]\n    STR --\u003e FILTER\n    SEM --\u003e FILTER\n    FILTER --\u003e Q{queueSem 准入}\n    Q --\u003e|满| E3[429 ErrIngestQueueFull]\n    Q --\u003e|成功| SAVE[DocRepo.Save\u003cbr/\u003estatus=processing]\n    SAVE --\u003e SPAWN[goroutine runIngestJob]\n    SPAWN --\u003e RESP[立即返回 IngestResult\u003cbr/\u003estatus=processing]"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "10.2 流程图",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 1,
+    "body": "tatus=processing]\n    SAVE --\u003e SPAWN[goroutine runIngestJob]\n    SPAWN --\u003e RESP[立即返回 IngestResult\u003cbr/\u003estatus=processing]\n\n\n\n    subgraph ASYNC [runIngestJob - 异步]\n        W[sem 槽位等待] --\u003e EB[EmbedClient.EmbedBatch leaves]\n        EB --\u003e VI[VectorStore.Insert + Flush]\n        VI --\u003e PB[ChunkRepo.InsertParentBatch\u003cbr/\u003e若有 parents]\n        PB --\u003e IB[ChunkRepo.InsertBatch leaves]\n        IB --\u003e DONE[DocRepo.MarkIngestCompleted]\n        W --\u003e|超时| FAIL[DocRepo.MarkIngestFailed]\n        EB --\u003e|错误| FAIL\n        VI --\u003e|错误| FAIL\n    end\n```"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "10.3 关键实现细节",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "- **去重键**：`SHA256(fileBytes)` 落 `knowledge_docs.content_hash`；查表用 `(workspace_id, content_hash)` 组合索引。\n- **DocumentID**：uuid v7（含时间序），Milvus chunk ID = `\u003cdocumentID\u003e_chunk_\u003ci\u003e`，parent ID = `\u003cdocumentID\u003e_parent_\u003ci\u003e`。\n- **TextCleaner**（`pkg/textchunk/cleaner.go`）：`Clean` 规范化空白/控制字符，`FilterChunks` 剔除过短片段，在 chunking 前后各执行一次。\n- **PG chunks 落库容错**：`InsertBatch` / `InsertParentBatch` 失败仅 `logger.Warn`，不回滚——向量已入 Milvus，PG 关键词索引可后台补偿。\n- **EmbedResolver**：逐租户从 `public.tenants.settings.llm_api_keys` 解密密钥→构造 `llmgateway.Gateway`→缓存 `TenantGatewayCache`（TTL = `constants.GatewayCacheTTL`）。Workspace-level `EmbeddingModel` 覆盖 tenant 默认。"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "10.4 三种 Chunking Strategy（`pkg/textchunk/`）",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "所有策略实现 `Strategy` 接口：\n\n```go\ntype Strategy interface {\n    Name() string\n    Chunk(ctx context.Context, text string, maxRunes, overlapRunes int, embedder Embedder) ChunkResult\n}\n\ntype ChunkResult struct {\n    Leaves  []TextChunk // 小检索单元：入 Milvus + PG knowledge_chunks\n    Parents []TextChunk // 大上下文单元：仅入 PG knowledge_parent_chunks（Parent-Child策略才有）\n}\n```\n\n| 策略 | 文件 | 机制 | Parents |\n|------|------|------|---------|\n| `recursive` | `recursive.go` | 递归按段落/句子切割，超长再细分，带 overlap | 无 |\n| `structure_recursive`（**默认**） | `structure.go` | Markdown 标题层级 → 父块；段落/句子 → 叶块；叶块 `ParentID` 指向父 | 有 |\n| `semantic` | `semantic.go` | 逐句嵌入，余弦相似度低于阈值则切分；语义相似句子聚合成块 | 无 |\n\n**Semantic 特殊点**：需在 chunking 阶段传入 `EmbedClient`，`KnowledgeIngest` 在策略为 `semantic` 时提前 resolve；其余策略 `embedder = nil`。\n\n**旧 `SmartChunk`**：`pkg/textchunk/chunker.go` 保留，但摄取主路径已切换到 `Strategy` 接口，不再直接调用。\n\n---"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "11.1 查询模式",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```mermaid\nflowchart LR\n    Q[QueryRequest\u003cbr/\u003equestion, workspace, mode, topK] --\u003e R{Mode}\n    R --\u003e|vector| V[queryVector\u003cbr/\u003eEmbed → Milvus.Search topK]\n    R --\u003e|graph 兼容别名| V\n    R --\u003e|keyword| K[chunkRepo.KeywordSearch\u003cbr/\u003ePG tsv @@ plainto_tsquery]\n    R --\u003e|hybrid| H1[并发]\n    H1 --\u003e V2[queryVector topK*2]\n    H1 --\u003e K2[KeywordSearch topK*2]\n    V2 --\u003e RRF[RRF 融合\u003cbr/\u003escore_id += 1 / rrfK + rank]\n    K2 --\u003e RRF\n    RRF --\u003e SORT[按 score DESC 排序\u003cbr/\u003e截取 topK]\n    V --\u003e RESP[Sources: doc_id, content, chunk_index, score]\n    K --\u003e RESP\n    SORT --\u003e RESP\n```"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "11.2 RRF 参数",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```go\nconst rrfK = 60.0\nrrfScores[r.ID] += 1.0 / (rrfK + float64(rank+1))\n```\n\n`rrfK=60`：RRF 原论文（Cormack 2009）经验值；向量与关键词各取 `topK*2` 留召回冗余，截断在融合后完成。"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "11.3 Handler → Service 编排",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "`RAGHandler.Query` 先 `WorkspaceService.GetWorkspace` 拿 `ws.ID + ws.Config.EmbeddingModel`，再喂给 `RAGService.Query`；`collectionName = CollectionName(tenantID, ws.ID)` 决定查哪个 Milvus 集合。"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "2. HTTP API 契约",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "Base：`/knowledge`（挂在 JWT + tenant 中间件下，member 角色可读）\n\n| Method | Path | Role | 说明 |\n|--------|------|------|------|\n| GET | `/knowledge/workspaces` | member | 列出当前 tenant 全部 workspace |\n| GET | `/knowledge/workspaces/:name/stats` | member | 元数据 + Milvus 统计（`vector_count`, `collection`） |\n| GET | `/knowledge/workspaces/:name/documents` | member | 列出该 workspace 文档及摄取状态（前端轮询） |\n| POST | `/knowledge/query` | member + active | RAG 查询：vector/keyword/hybrid |\n| POST | `/knowledge/workspaces` | admin + active | 创建 workspace |\n| PATCH | `/knowledge/workspaces/:name` | admin + active | 部分更新（rename / description / 可变 config） |\n| DELETE | `/knowledge/workspaces/:name` | admin + active | 删除 workspace，级联清 Milvus + PG chunks + DB 记录 |\n| POST | `/knowledge/ingest` | admin + active + `BodyLimit` | multipart 上传文档并异步摄取 |\n\n请求/响应形状：见 `api/http/dto/rag.go`。响应错误体固定 `{\"error\":\"...\"}`（由 `middleware.ErrorHandler` 映射）。\n\n---"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "3. 端到端时序图",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```mermaid\nsequenceDiagram\n    autonumber\n    participant FE as 前端 (knowledgeApi)\n    participant GW as Gin Router + Middleware\n    participant H as RAGHandler\n    participant WS as WorkspaceService\n    participant DOM as domain.Workspace\n    participant WR as WorkspaceRepo (PG)\n    participant VS as VectorStore (Milvus)"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "3. 端到端时序图",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 1,
+    "body": "participant DOM as domain.Workspace\n    participant WR as WorkspaceRepo (PG)\n    participant VS as VectorStore (Milvus)\n\n\n\n    FE-\u003e\u003eGW: POST /knowledge/workspaces\n    Note over GW: JWT → tenantID\u003cbr/\u003eRequireTenantRole=admin\u003cbr/\u003eactive check\n    GW-\u003e\u003eH: CreateWorkspace(c)\n    H-\u003e\u003eH: ShouldBindJSON(CreateWorkspaceRequest)\n    H-\u003e\u003eWS: CreateWorkspace(ctx, tenantID, in)\n    WS-\u003e\u003eDOM: NewWorkspace(name, desc, cfg, DefaultChunkSize, DefaultTopK)\n    DOM-\u003e\u003eDOM: applyDefaults + Validate\u003cbr/\u003e(EmbeddingModel / QueryMode / ChunkingStrategy 白名单)\n    DOM--\u003e\u003eWS: *Workspace 或 ErrInvalidEmbeddingModel / ErrInvalidQueryMode / ErrInvalidChunkingStrategy\n    WS-\u003e\u003eWR: Create(ctx, tenantID, ws)\n    WR-\u003e\u003eWR: INSERT INTO \"tenant_\u003cid\u003e\".rag_workspaces RETURNING id\n    WR--\u003e\u003eWS: ws.ID = uuid（或 ErrWorkspaceConflict）\n    WS-\u003e\u003eVS: CreateCollectionWithDim(col, vectorDim(embedModel))\n    alt Milvus 失败\n        WS-\u003e\u003eWR: Delete(tenantID, ws.Name)  \\  Rollback\n        WS--\u003e\u003eH: fmt.Errorf(\"failed to create vector collection: %w\", err)\n    else 成功\n        WS--\u003e\u003eH: *Workspace\n        H--\u003e\u003eGW: 201 {id, name, description, config}\n    end\n```\n\n关键不变量：**PG 与 Milvus 双写**——若 Milvus 建集失败，同步删 PG 行，保证租户 workspace 视图与向量集合最终一致。"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "3. 端到端时序图",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 2,
+    "body": "id, name, description, config}\n    end\n```\n\n关键不变量：**PG 与 Milvus 双写**——若 Milvus 建集失败，同步删 PG 行，保证租户 workspace 视图与向量集合最终一致。\n\n\n\n---"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "4.1 `rag_workspaces`",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```sql\nCREATE TABLE rag_workspaces (\n    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n    name        VARCHAR(255) NOT NULL UNIQUE,\n    description TEXT NOT NULL DEFAULT '',\n    config      JSONB NOT NULL DEFAULT '{}',\n    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\n```\n\n`config` 列存储的 JSONB 结构为 `{embedding_model, chunk_size, chunk_overlap, query_mode, top_k, chunking_strategy}`；`workspace_repo.go` 的 `toJSONB` / `fromJSONB` 必须保持双向一致。"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "4.2 `knowledge_docs`",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```sql\nCREATE TABLE knowledge_docs (\n    id                  VARCHAR(255) PRIMARY KEY,\n    workspace_id        UUID NOT NULL REFERENCES rag_workspaces(id) ON DELETE CASCADE,\n    title               TEXT NOT NULL DEFAULT '',\n    content_hash        VARCHAR(64),\n    ingest_status       VARCHAR(32) NOT NULL DEFAULT 'processing',\n    ingest_error        TEXT NOT NULL DEFAULT '',\n    processed_chunks    INT NOT NULL DEFAULT 0,\n    total_chunks        INT NOT NULL DEFAULT 0,\n    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n    ingest_started_at   TIMESTAMPTZ,\n    ingest_finished_at  TIMESTAMPTZ\n);\nCREATE UNIQUE INDEX ON knowledge_docs(workspace_id, content_hash);\n```\n\n`ingest_status` 三态：`processing` → `completed` | `failed`"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "4.3 `knowledge_chunks`",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```sql\nCREATE TABLE knowledge_chunks (\n    id            VARCHAR(255) PRIMARY KEY,\n    workspace_id  UUID NOT NULL,\n    doc_id        VARCHAR(255) NOT NULL REFERENCES knowledge_docs(id) ON DELETE CASCADE,\n    chunk_index   BIGINT NOT NULL,\n    content       TEXT NOT NULL,\n    parent_id     VARCHAR(255),      -- 指向 knowledge_parent_chunks.id（Parent-Child 策略才有值）\n    tsv           TSVECTOR GENERATED ALWAYS AS (to_tsvector('public.chinese_zh', content)) STORED\n);\nCREATE INDEX ON knowledge_chunks USING GIN(tsv);\nCREATE INDEX ON knowledge_chunks(workspace_id);\n```\n\n`parent_id` 格式：`\u003cdocumentID\u003e_parent_\u003ci\u003e`（`structure_recursive` 策略才填充）。"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "4.4 `knowledge_parent_chunks`",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```sql\nCREATE TABLE knowledge_parent_chunks (\n    id            VARCHAR(255) PRIMARY KEY,\n    workspace_id  UUID NOT NULL,\n    doc_id        VARCHAR(255) NOT NULL,\n    chunk_index   BIGINT NOT NULL,\n    content       TEXT NOT NULL\n);\nCREATE INDEX ON knowledge_parent_chunks(workspace_id);\n```\n\n存储 `structure_recursive` 策略生成的父块（大上下文单元），仅用于 RAG 检索后的上下文扩展，不进 Milvus。"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "4.5 Milvus Collection Schema",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "Collection 名称：`CollectionName(tenantID, workspaceID)` → `kb_\u003cworkspaceID\u003e`。`workspaceID` 是全局唯一 UUID，因此当前实现忽略 `tenantID`；非法字符会替换为下划线。\n\n| 字段 | 类型 | 说明 |\n|------|------|------|\n| `id` | VarChar PK | `\u003cdocumentID\u003e_chunk_\u003ci\u003e` |\n| `user_id` | VarChar | 预留过滤字段（知识库摄取时为空） |\n| `agent_id` | VarChar | 预留过滤字段 |\n| `scope` | VarChar | 预留 |\n| `content` | VarChar | chunk 文本 |\n| `source_document` | VarChar | documentID |\n| `chunk_index` | Int64 | chunk 序号 |\n| `vector` | FloatVector(dim) | 嵌入向量（dim 由 `vectorDim(embedModel)` 决定） |\n\n索引：IVF_FLAT L2，nlist=128；标量字段 `user_id`/`agent_id`/`scope` 建 Trie 索引。\n\n---"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "5.1 DocRepo 接口（`port/doc_repo.go`）",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```go\ntype DocRepo interface {\n    Save(ctx, tenantID, kbID string, doc *Document) error\n    List(ctx, tenantID, kbID string) ([]*Document, error)\n    Delete(ctx, tenantID, kbID, docID string) error\n    ExistsByHash(ctx, tenantID, workspaceID, hash string) (bool, error)\n    CountByWorkspace(ctx, tenantID, workspaceID string) (int, error)\n    MarkIngestStarted(ctx, tenantID, docID string, totalChunks int) error\n    MarkIngestCompleted(ctx, tenantID, docID string, processedChunks int) error\n    MarkIngestFailed(ctx, tenantID, docID, errMsg string) error\n    RecoverStuckIngests(ctx, tenantID string, threshold time.Duration) (int, error)\n}\n```"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "5.2 状态机",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```\nSave(status='processing')\n      ↓\n   goroutine 启动\n      ↓\n    成功 → MarkIngestCompleted(processedChunks=N)\n    失败 → MarkIngestFailed(errMsg)\n    超时 → MarkIngestFailed(\"worker slot wait timed out\")\n```\n\n`RecoverStuckIngests`：服务重启时调用，将超过阈值仍处于 `processing` 的文档置为 `failed`（errMsg = \"ingest aborted by server restart\"）。"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "5.3 前端轮询模式",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```\nPOST /knowledge/ingest         → status=processing (立即)\nGET  /workspaces/:name/documents → 每次返回最新 ingest_status\n```\n\n前端持续轮询 `GET /documents` 直到 `ingest_status != 'processing'`；`DocumentView` 暴露 `ProcessedChunks`、`TotalChunks` 可展示进度百分比。\n\n---"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "6. 错误映射（`middleware/error_mapping.go`）",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "| Domain Sentinel | HTTP | 触发场景 |\n|----------------|------|---------|\n| `ErrWorkspaceConflict` | 409 | POST workspace name 已存在 |\n| `ErrWorkspaceNotFound` | 404 | GET/PATCH/DELETE workspace 不存在 |\n| `ErrInvalidEmbeddingModel` | 400 | 创建 workspace 时模型不在白名单 |\n| `ErrInvalidQueryMode` | 400 | 创建/更新 workspace 时 query_mode 非法 |\n| `ErrInvalidChunkingStrategy` | 400 | 创建 workspace 时策略不在白名单 |\n| `ErrEmbeddingModelImmutable` | 422 | PATCH 尝试修改 embedding_model |\n| `ErrChunkSizeImmutable` | 422 | PATCH 尝试修改 chunk_size |\n| `ErrChunkOverlapImmutable` | 422 | PATCH 尝试修改 chunk_overlap |\n| `ErrChunkingStrategyImmutable` | 422 | PATCH 尝试修改 chunking_strategy |\n| `ErrDuplicateDocument` | 409 | 摄取内容 hash 与已入库文档冲突 |\n| `ErrIngestQueueFull` | 429 | 准入队列满（queueSem 已满） |\n| `ErrChunkLimitExceeded` | 400 | 单文档 chunk 数超 `MaxChunksPerDocument` |\n\n---"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "7.1 数据模型（`model/knowledge.ts`）",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```typescript\ntype WorkspaceConfig = {\n  embedding_model: string;       // 创建时必填\n  chunking_strategy: string;     // default: \"structure_recursive\"\n  chunk_size?: number;           // 不传则后端 default 512\n  chunk_overlap?: number;\n  query_mode?: string;\n  top_k?: number;\n};\n\ntype KnowledgeDocument = {\n  id: string;\n  source: string;               // 原始文件名\n  content_hash: string;\n  ingest_status: string;        // 'processing' | 'completed' | 'failed'\n  ingest_error: string;\n  processed_chunks: number;\n  total_chunks: number;\n  created_at?: string | null;\n  ingest_started_at?: string | null;\n  ingest_finished_at?: string | null;\n};\n```"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "7.2 创建 Workspace（`components/WorkspaceCreateModal.tsx`）",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "- `description` 必填（产品规范）\n- `name` 提交后只读（向量 collection 命名绑定）\n- `chunking_strategy` 选择器三选一，默认 `structure_recursive`\n- `embedding_model` 提交后灰显不可改"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "7.3 文档状态展示规则",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "| `ingest_status` | UI 呈现 |\n|----------------|---------|\n| `processing` | Spin + \"处理中 X/N chunks\" |\n| `completed` | CheckCircle 绿色 + processedChunks |\n| `failed` | ExclamationCircle 红色 + `ingest_error` tooltip |\n\n---"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "8. 已知限制与注意事项",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "1. **上传入口的有效上限是 10 MB**：全局 `BodyLimit(MaxRequestBodyBytes)`（10 MB）先于 knowledge 路由的 `BodyLimit(MaxUploadBytes)`（50 MB）执行，handler 内的 `MaxUploadFileSize`（100 MB）也无法放宽全局限制。调用方应按 10 MB 处理，除非同时调整三层限制。\n\n2. **`graph` 仍是兼容别名**：领域白名单接受 `graph`，但 `RAGService.Query` 将它与 `vector` 走同一向量检索分支；当前没有独立图查询实现。\n\n3. **异步摄取不是跨进程任务队列**：任务运行在进程内 goroutine 中；重启后启动流程会把超过 `KnowledgeIngestStuckThreshold` 的 `processing` 文档标记为 `failed`，不会自动续跑。\n\n---"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "9.1 聚合与值对象（`internal/knowledge/domain/workspace.go`）",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```go\ntype Workspace struct {\n    ID, Name, Description string\n    Config    WorkspaceConfig\n    CreatedAt, UpdatedAt time.Time\n}\ntype WorkspaceConfig struct {\n    EmbeddingModel   string // \"text-embedding-v3\" | \"embedding-3\"\n    ChunkingStrategy string // \"recursive\" | \"structure_recursive\" | \"semantic\"\n    ChunkSize        int\n    ChunkOverlap     int\n    QueryMode        string // \"vector\" | \"graph\" | \"hybrid\"\n    TopK             int\n}\n```"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "9.2 默认值 \u0026 白名单",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "| 字段 | Default | Allowed |\n|------|---------|---------|\n| EmbeddingModel | `text-embedding-v3` | `{text-embedding-v3, embedding-3}` |\n| ChunkingStrategy | `structure_recursive` | `{recursive, structure_recursive, semantic}` |\n| QueryMode | `hybrid` | `{vector, graph, hybrid}` |\n| ChunkSize | `512` | 任意正整数 |\n| ChunkOverlap | `64` | 任意正整数 |\n| TopK | `5` | 任意正整数 |"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "9.3 不变性规则（`MergeUpdate`）",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "| 字段 | 可变 | 违反时 |\n|------|------|--------|\n| EmbeddingModel | ❌ | `ErrEmbeddingModelImmutable` |\n| ChunkSize | ❌ | `ErrChunkSizeImmutable` |\n| ChunkOverlap | ❌ | `ErrChunkOverlapImmutable` |\n| ChunkingStrategy | ❌ | `ErrChunkingStrategyImmutable` |\n| QueryMode | ✅（须在白名单） | `ErrInvalidQueryMode` |\n| TopK | ✅ | — |\n\n**为什么 `ChunkingStrategy` 不可变**：不同策略生成的 chunk 边界与 parent-child 关系完全不同，混合摄取会导致关键词索引结构与向量索引结构不一致，检索时 parent 回溯断链。\n\n**为什么 `EmbeddingModel` / `ChunkSize` / `ChunkOverlap` 不可变**：`EmbeddingModel` 决定 Milvus collection 维度（1024/2048/1536），改后已入库向量与新查询向量维度不匹配。`ChunkSize/ChunkOverlap` 改变后新旧 chunk 边界不一致，检索命中率崩塌。"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "9.4 向量维度决议（`vectorDim`，`workspace_service.go`）",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "```go\nfunc vectorDim(model string) int {\n    switch model {\n    case \"text-embedding-v2\", \"text-embedding-v3\", \"text-embedding-v4\":\n        return 1024\n    case \"embedding-3\":\n        return 2048\n    default:\n        return 1536\n    }\n}\n```\n\n---"
+  },
+  {
+    "documentId": "knowledge-guide",
+    "title": "Knowledge 使用指南",
+    "productVersion": "2026.07",
+    "section": "知识库（Knowledge Workspace）全流程与业务实现",
+    "url": "/docs/agent/knowledge-workspace",
+    "ordinal": 0,
+    "body": "\u003e Bounded context: `knowledge`。负责 RAG workspace CRUD、文档摄取（parse → clean → chunk → embed → 向量入库 → 关键词入库）与三种查询模式（vector / keyword / hybrid RRF）。"
+  },
+  {
+    "documentId": "mcp-guide",
+    "title": "MCP 使用指南",
+    "productVersion": "2026.07",
+    "section": "Agent 集成",
+    "url": "/docs/mcp-integration",
+    "ordinal": 0,
+    "body": "`api/wiring/agent.go` 把 MCP tool provider、executor 和 policy resolver 注入 `AgentService`。Agent 配置中的 `MCPServerIDs` 限定可用服务器；执行时 ReAct 图合并 MCP 工具与当前 Skill activation，且不会让外部工具覆盖同名内置 `stratum_*` 工具。危险或未分类工具先生成 approval，管理员通过 `/agents/tool-approvals/...` 决策并恢复执行；真正的 MCP 调用经内部 `MCPToolExecutor` 完成。"
+  },
+  {
+    "documentId": "mcp-guide",
+    "title": "MCP 使用指南",
+    "productVersion": "2026.07",
+    "section": "HTTP API",
+    "url": "/docs/mcp-integration",
+    "ordinal": 0,
+    "body": "所有 `/mcp` 路由都需要 JWT 与 tenant context。普通 `member` 可读取服务器、能力和工具风险策略；服务器管理及工具风险策略写入需要 active tenant 的 `admin` 或更高角色。当前没有通用 HTTP 工具执行路由。\n\n| 方法 | 路径 | 用途 | 最低角色 |\n|------|------|------|----------|\n| GET | `/mcp/servers` | 列出服务器 | member |\n| POST | `/mcp/servers` | 保存并连接服务器 | admin |\n| GET | `/mcp/servers/:id` | 服务器状态 | member |\n| GET | `/mcp/servers/:id/config` | 读取完整配置 | member |\n| PUT | `/mcp/servers/:id` | 更新并重连 | admin |\n| DELETE | `/mcp/servers/:id` | 断开当前连接 | admin |\n| DELETE | `/mcp/servers/:id/config` | 永久删除配置 | admin |\n| POST | `/mcp/servers/:id/reconnect` | 重连 | admin |\n| GET | `/mcp/servers/:id/tools` | 列出工具 | member |\n| GET | `/mcp/servers/:id/resources` | 列出资源 | member |\n| GET | `/mcp/tool-policies` | 列出工具风险策略 | member |\n| PUT | `/mcp/tool-policies/:serverId/:toolName` | 设置工具风险级别 | active admin |\n| GET | `/mcp/status` | 连接状态汇总 | member |"
+  },
+  {
+    "documentId": "mcp-guide",
+    "title": "MCP 使用指南",
+    "productVersion": "2026.07",
+    "section": "传输与配置",
+    "url": "/docs/mcp-integration",
+    "ordinal": 0,
+    "body": "`domain.ServerConfig` 支持 stdio 和 HTTP/SSE 形态，主要字段包括：\n\n- `id` / `name` / `version`\n- `transport`\n- stdio：`command` / `args` / `env`\n- HTTP：`url` / `headers`\n- `capabilities` / `timeout`\n- `auth`：`none` / `bearer` / `api_key` / `oauth2`\n- `retry`：重试开关、次数和指数退避参数\n\n不要把真实 token、API key 或 OAuth client secret 写入文档、日志或版本库。"
+  },
+  {
+    "documentId": "mcp-guide",
+    "title": "MCP 使用指南",
+    "productVersion": "2026.07",
+    "section": "当前架构",
+    "url": "/docs/mcp-integration",
+    "ordinal": 0,
+    "body": "MCP 是独立 bounded context：\n\n```text\napi/http/handler/mcp_handler.go\n  → internal/mcp/application/MCPService\n  → internal/mcp/domain/port\n  → internal/mcp/infrastructure/{ClientManager,BaseClient,MCPToolRegistry}\n  → tenant schema mcp_servers\n```\n\n包级职责和依赖图见 [Go 包架构索引](go-package-architecture/README.md#internalmcp)；\n本页只维护对使用者稳定的运行时、API 和权限契约。\n\n`api/wiring/mcp.go` 在启动时构造 manager / registry / service，并从数据库恢复租户 MCP 服务器。服务器配置通过 REST API 管理，仓库中没有 `config/mcp.yaml`。"
+  },
+  {
+    "documentId": "mcp-guide",
+    "title": "MCP 使用指南",
+    "productVersion": "2026.07",
+    "section": "验证",
+    "url": "/docs/mcp-integration",
+    "ordinal": 0,
+    "body": "```bash\ngo test -short ./internal/mcp/... ./api/http/handler/...\ngo vet ./...\n```\n\n需要真实 MCP server 时，使用非生产测试实例，并在验证后删除临时配置。"
+  }
+]

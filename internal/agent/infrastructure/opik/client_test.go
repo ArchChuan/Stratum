@@ -156,6 +156,31 @@ func TestTraceFiltersUseOpikMetadataJSONPaths(t *testing.T) {
 	}
 }
 
+func TestListExecutionsFiltersUserBeforePageLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var filters []map[string]string
+		if err := json.Unmarshal([]byte(r.URL.Query().Get("filters")), &filters); err != nil {
+			t.Fatal(err)
+		}
+		foundUser := false
+		for _, filter := range filters {
+			if filter["key"] == metadataJSONPath("user_id") && filter["value"] == "user-1" {
+				foundUser = true
+			}
+		}
+		if !foundUser {
+			t.Fatal("missing upstream user metadata filter")
+		}
+		_, _ = w.Write([]byte(`{"total":1,"content":[{"id":"opik-mine","start_time":"2026-07-20T01:00:00Z","metadata":{"opik.metadata.stratum.tenant_id":"tenant-1","opik.metadata.stratum.user_id":"user-1","opik.metadata.stratum.execution_id":"execution-mine"}}]}`))
+	}))
+	defer server.Close()
+	client := NewClient(Config{BaseURL: server.URL, Timeout: time.Second})
+	got, _, err := client.ListExecutions(context.Background(), "tenant-1", domain.ListOptions{Page: 1, PageSize: 20, UserID: "user-1"})
+	if err != nil || len(got) != 1 || got[0].ID != "execution-mine" {
+		t.Fatalf("got=%#v err=%v", got, err)
+	}
+}
+
 func TestMapEvidenceAcceptsStructuredOpikMetadata(t *testing.T) {
 	evidence, err := mapEvidence(opikTrace{Metadata: map[string]any{
 		metadataPrefix + "total_tokens":      33,

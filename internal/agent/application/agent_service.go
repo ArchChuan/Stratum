@@ -13,12 +13,14 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -34,6 +36,8 @@ type AgentServiceDeps struct {
 	SkillRevisionResolver   port.SkillRevisionResolver
 	RAGSearch               port.RAGSearchProvider
 	TenantResolver          port.TenantCapabilityResolver
+	TenantModelValidator    port.TenantChatModelValidator
+	TenantModelCatalog      port.TenantChatModelCatalog
 	HistoryCompactorFactory func(port.CapabilityGateway, string, *zap.Logger) port.HistoryCompactor
 	MCPTools                port.MCPToolProvider
 	MCPToolExecutor         port.MCPToolExecutor
@@ -49,6 +53,8 @@ type AgentServiceDeps struct {
 	MemoryInjector          port.MemoryInjector
 	RecallMemory            port.RecallMemoryFn
 	Metrics                 observability.MetricsProvider
+	OfficialDocsSearch      func(context.Context, string) ([]domain.Citation, error)
+	DiagnosticProvider      port.DiagnosticEvidenceProvider
 	Logger                  *zap.Logger
 }
 
@@ -121,6 +127,16 @@ type AgentDTO struct {
 	KnowledgeWorkspaceIDs []string
 	CreatedAt             string
 	MemoryScope           string
+	SystemKey             string
+	IsSystem              bool
+	ManagementMode        string
+}
+
+type SystemAssistantSettings struct {
+	AgentID         string
+	Model           string
+	Ready           bool
+	AvailableModels []string
 }
 
 // Create persists a new agent for the tenant. Inherits embed_model from
@@ -166,7 +182,10 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 
 // Get returns the agent's DTO or ErrNotFound.
 func (s *AgentService) Get(ctx context.Context, id string) (AgentDTO, error) {
-	a, ok := s.deps.Registry.Get(ctx, id)
+	a, ok, err := s.deps.Registry.Get(ctx, id)
+	if err != nil {
+		return AgentDTO{}, fmt.Errorf("agent service get: %w", err)
+	}
 	if !ok {
 		return AgentDTO{}, ErrNotFound
 	}
@@ -180,11 +199,17 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 	if strings.TrimSpace(tenantID) == "" {
 		return domain.AgentRevision{}, fmt.Errorf("agent service: tenant id required")
 	}
-	a, ok := s.deps.Registry.Get(ctx, id)
+	a, ok, err := s.deps.Registry.Get(ctx, id)
+	if err != nil {
+		return domain.AgentRevision{}, fmt.Errorf("agent service: snapshot revision: %w", err)
+	}
 	if !ok {
 		return domain.AgentRevision{}, ErrNotFound
 	}
 	cfg := a.GetConfig()
+	if cfg.SystemKey == domain.SystemAssistantKey {
+		return domain.AgentRevision{}, domain.ErrSystemAssistantRevisionUnsupported
+	}
 	revision := domain.AgentRevision{
 		AgentID: cfg.ID, Type: cfg.Type, SystemPrompt: cfg.SystemPrompt, Model: cfg.LLMModel,
 		EmbedModel: cfg.EmbedModel, MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
@@ -233,6 +258,9 @@ func (s *AgentService) ExecuteRevision(
 	if strings.TrimSpace(meta.TenantID) == "" {
 		return nil, 0, fmt.Errorf("agent service: tenant id required")
 	}
+	if revision.AgentID == domain.SystemAssistantID {
+		return nil, 0, domain.ErrSystemAssistantRevisionUnsupported
+	}
 	if err := revision.Validate(); err != nil {
 		return nil, 0, fmt.Errorf("agent service: validate revision: %w", err)
 	}
@@ -244,7 +272,10 @@ func (s *AgentService) ExecuteRevision(
 		a = a.WithMetrics(s.deps.Metrics)
 	}
 	executionID := uuid.Must(uuid.NewV7()).String()
-	_, options := s.assembleOptions(ctx, a, req, meta, executionID)
+	_, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
+	if err != nil {
+		return nil, 0, err
+	}
 	options = append(options, WithExecutionID(executionID))
 	start := time.Now()
 	execCtx, cancel := revisionExecutionContext(ctx)
@@ -258,6 +289,9 @@ func revisionExecutionContext(ctx context.Context) (context.Context, context.Can
 }
 
 func (s *AgentService) buildRevisionAgent(revision domain.AgentRevision) (*BaseAgent, error) {
+	if revision.AgentID == domain.SystemAssistantID {
+		return nil, domain.ErrSystemAssistantRevisionUnsupported
+	}
 	if revision.MemoryInjectorRequired && s.deps.MemoryInjector == nil {
 		return nil, fmt.Errorf("agent service: revision requires memory injector")
 	}
@@ -303,20 +337,123 @@ func revisionConfig(revision domain.AgentRevision) *domain.AgentConfig {
 
 // List returns all agents in the tenant schema.
 func (s *AgentService) List(ctx context.Context) ([]AgentDTO, error) {
-	agents := s.deps.Registry.GetAll(ctx)
+	agents, err := s.deps.Registry.GetAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("agent service list: %w", err)
+	}
 	out := make([]AgentDTO, 0, len(agents))
 	for _, a := range agents {
 		out = append(out, cfgToDTO(a.GetConfig()))
 	}
+	for i := 1; i < len(out); i++ {
+		if out[i].IsSystem {
+			system := out[i]
+			copy(out[1:i+1], out[0:i])
+			out[0] = system
+			break
+		}
+	}
 	return out, nil
+}
+
+func (s *AgentService) GetSystemAssistantSettings(ctx context.Context) (SystemAssistantSettings, error) {
+	a, found, err := s.deps.Registry.GetSystemAssistant(ctx)
+	if err != nil {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service get system assistant settings: %w", err)
+	}
+	if !found {
+		return SystemAssistantSettings{}, ErrNotFound
+	}
+	return s.systemAssistantSettings(ctx, a)
+}
+
+func (s *AgentService) systemAssistantSettings(ctx context.Context, a Agent) (SystemAssistantSettings, error) {
+	cfg := a.GetConfig()
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	if tenantID == "" {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service get system assistant settings: tenant id required")
+	}
+	models, err := s.listTenantChatModels(ctx, tenantID)
+	if err != nil {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service list tenant models: %w", err)
+	}
+	settings := SystemAssistantSettings{
+		AgentID: cfg.ID, Model: cfg.LLMModel, AvailableModels: append([]string(nil), models...),
+	}
+	if strings.TrimSpace(cfg.LLMModel) == "" {
+		return settings, nil
+	}
+	if s.deps.TenantModelValidator == nil {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: validator unavailable")
+	}
+	if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, cfg.LLMModel); err != nil {
+		if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
+			errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
+			return settings, nil
+		}
+		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: %w", err)
+	}
+	settings.Ready = true
+	return settings, nil
+}
+
+func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model string) (SystemAssistantSettings, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return SystemAssistantSettings{}, domain.ErrInvalidSystemAssistantModel
+	}
+	if s.deps.TenantModelValidator == nil {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: validator unavailable")
+	}
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	if tenantID == "" {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: tenant id required")
+	}
+	if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, model); err != nil {
+		if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
+			errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
+			return SystemAssistantSettings{}, domain.ErrInvalidSystemAssistantModel
+		}
+		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: %w", err)
+	}
+	models, err := s.listTenantChatModels(ctx, tenantID)
+	if err != nil {
+		return SystemAssistantSettings{}, err
+	}
+	a, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model)
+	if err != nil {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: %w", err)
+	}
+	cfg := a.GetConfig()
+	return SystemAssistantSettings{
+		AgentID: cfg.ID, Model: cfg.LLMModel,
+		Ready: cfg.LLMModel == model, AvailableModels: models,
+	}, nil
+}
+
+func (s *AgentService) listTenantChatModels(ctx context.Context, tenantID string) ([]string, error) {
+	if s.deps.TenantModelCatalog == nil {
+		return nil, fmt.Errorf("agent service list tenant models: catalog unavailable")
+	}
+	models, err := s.deps.TenantModelCatalog.ListTenantChatModels(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("agent service list tenant models: %w", err)
+	}
+	return append([]string(nil), models...), nil
 }
 
 // Update replaces mutable fields on an existing agent. EmbedModel is
 // immutable post-create — callers cannot change it through Update.
 func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInput) (AgentDTO, error) {
-	existing, ok := s.deps.Registry.Get(ctx, id)
+	existing, ok, err := s.deps.Registry.Get(ctx, id)
+	if err != nil {
+		return AgentDTO{}, fmt.Errorf("agent service update: %w", err)
+	}
 	if !ok {
 		return AgentDTO{}, ErrNotFound
+	}
+	if existing.GetConfig().SystemKey != "" {
+		return AgentDTO{}, domain.ErrSystemAssistantManaged
 	}
 	skills := in.AllowedSkills
 	if skills == nil {
@@ -346,6 +483,16 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 
 // Delete removes an agent and cascades deletion to conversations and memories.
 func (s *AgentService) Delete(ctx context.Context, tenantID, id string) error {
+	existing, ok, err := s.deps.Registry.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("delete agent: load managed identity: %w", err)
+	}
+	if !ok {
+		return ErrNotFound
+	}
+	if existing.GetConfig().SystemKey != "" {
+		return domain.ErrSystemAssistantManaged
+	}
 	if s.deps.MemoryCleaner != nil {
 		if err := s.deps.MemoryCleaner.ClearAgentMemories(ctx, tenantID, id); err != nil {
 			return fmt.Errorf("clear agent memories: %w", err)
@@ -386,6 +533,9 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		KnowledgeWorkspaceIDs: cfg.KnowledgeWorkspaceIDs,
 		CreatedAt:             time.Now().Format(time.RFC3339),
 		MemoryScope:           cfg.MemoryScope,
+		SystemKey:             cfg.SystemKey,
+		IsSystem:              cfg.IsSystem,
+		ManagementMode:        cfg.ManagementMode,
 	}
 }
 
@@ -443,14 +593,23 @@ func (s *AgentService) ensureConversation(ctx context.Context, tenantID, agentID
 }
 
 func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta) (*AgentResult, int, error) {
-	a, ok := s.deps.Registry.Get(ctx, agentID)
+	a, ok, err := s.deps.Registry.Get(ctx, agentID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("execute agent: get agent: %w", err)
+	}
 	if !ok {
 		return nil, 0, ErrNotFound
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
 	executionID := uuid.Must(uuid.NewV7()).String()
-	_, options := s.assembleOptions(ctx, a, req, meta, executionID)
+	_, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
+	if err != nil {
+		s.recordSystemAssistantRequest(a, "unknown", "error")
+		return nil, 0, fmt.Errorf("execute agent: assemble options: %w", err)
+	}
 	options = append(options, WithExecutionID(executionID))
+	assistantCfg := &ExecutionConfig{}
+	assistantCfg.ApplyOptions(options)
 
 	s.deps.Logger.Debug("agent.execute",
 		zap.String("agent_id", agentID),
@@ -466,6 +625,16 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 	start := time.Now()
 	result, err := a.Execute(execCtx, req.Query, options...)
 	durationMs := int(time.Since(start).Milliseconds())
+	if assistantCfg.SystemAssistantMode && s.deps.Metrics != nil {
+		outcome := "success"
+		if err != nil {
+			outcome = "error"
+		} else if hasFailedAssistantArtifact(result) {
+			outcome = "evidence_error"
+		}
+		s.deps.Metrics.IncSystemAssistantRequest(assistantCfg.SystemAssistantRoleClass,
+			assistantCfg.EvolutionTrace.ResourceManifest["system-assistant-profile"], outcome)
+	}
 
 	if err != nil {
 		s.deps.Logger.Error("agent.execute",
@@ -486,7 +655,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		)
 	}
 
-	if err == nil && result != nil && s.deps.MemoryBuffer != nil {
+	if err == nil && result != nil && s.deps.MemoryBuffer != nil && !assistantCfg.SystemAssistantMode {
 		scope := a.GetConfig().MemoryScope
 		_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "user", req.Query)
 		_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "assistant", result.Output)
@@ -502,14 +671,37 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 func (s *AgentService) ExecuteStream(
 	ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, tokenCb func(string),
 ) (execCtx context.Context, cancel context.CancelFunc, run func() (*AgentResult, int, error), err error) {
-	a, ok := s.deps.Registry.Get(ctx, agentID)
+	a, ok, err := s.deps.Registry.Get(ctx, agentID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("execute stream: get agent: %w", err)
+	}
 	if !ok {
 		return nil, nil, nil, ErrNotFound
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
 	executionID := uuid.Must(uuid.NewV7()).String()
-	streamCtx, options := s.assembleOptions(ctx, a, req, meta, executionID)
-	options = append(options, WithTokenCallback(tokenCb))
+	streamCtx, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
+	if err != nil {
+		s.recordSystemAssistantRequest(a, "unknown", "error")
+		return nil, nil, nil, fmt.Errorf("execute stream: assemble options: %w", err)
+	}
+	assistantCfg := &ExecutionConfig{}
+	assistantCfg.ApplyOptions(options)
+	var firstToken sync.Once
+	var streamStarted time.Time
+	wrappedTokenCb := tokenCb
+	if assistantCfg.SystemAssistantMode && s.deps.Metrics != nil {
+		wrappedTokenCb = func(token string) {
+			firstToken.Do(func() {
+				s.deps.Metrics.RecordSystemAssistantTTFT(assistantCfg.SystemAssistantRoleClass,
+					assistantCfg.EvolutionTrace.ResourceManifest["system-assistant-profile"], time.Since(streamStarted).Seconds())
+			})
+			if tokenCb != nil {
+				tokenCb(token)
+			}
+		}
+	}
+	options = append(options, WithTokenCallback(wrappedTokenCb))
 	options = append(options, WithExecutionID(executionID))
 
 	execCtx, cancel = context.WithTimeout(context.WithoutCancel(streamCtx), constants.AgentExecTimeout)
@@ -522,8 +714,19 @@ func (s *AgentService) ExecuteStream(
 			zap.String("conversation_id", req.ConversationID),
 		)
 		start := time.Now()
+		streamStarted = start
 		res, runErr := a.Execute(execCtx, req.Query, options...)
 		durationMs := int(time.Since(start).Milliseconds())
+		if assistantCfg.SystemAssistantMode && s.deps.Metrics != nil {
+			outcome := "success"
+			if runErr != nil {
+				outcome = "error"
+			} else if hasFailedAssistantArtifact(res) {
+				outcome = "evidence_error"
+			}
+			s.deps.Metrics.IncSystemAssistantRequest(assistantCfg.SystemAssistantRoleClass,
+				assistantCfg.EvolutionTrace.ResourceManifest["system-assistant-profile"], outcome)
+		}
 		if runErr != nil {
 			s.deps.Logger.Error("agent.execute_stream",
 				zap.String("agent_id", agentID),
@@ -540,7 +743,7 @@ func (s *AgentService) ExecuteStream(
 				zap.Int("duration_ms", durationMs),
 			)
 		}
-		if runErr == nil && res != nil && s.deps.MemoryBuffer != nil {
+		if runErr == nil && res != nil && s.deps.MemoryBuffer != nil && !assistantCfg.SystemAssistantMode {
 			scope := a.GetConfig().MemoryScope
 			_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "user", req.Query)
 			_ = s.deps.MemoryBuffer(ctx, meta.TenantID, req.UserID, agentID, req.ConversationID, scope, "assistant", res.Output)
@@ -548,6 +751,47 @@ func (s *AgentService) ExecuteStream(
 		return res, durationMs, runErr
 	}
 	return execCtx, cancel, run, nil
+}
+
+func (s *AgentService) recordSystemAssistantRequest(a Agent, roleClass, outcome string) {
+	if a == nil || a.GetConfig().SystemKey != domain.SystemAssistantKey || s.deps.Metrics == nil {
+		return
+	}
+	version := domain.CurrentSystemAssistantProfileVersion
+	if s.deps.Registry != nil {
+		if resolved, err := s.deps.Registry.systemAssistantProfileVersion(); err == nil {
+			version = resolved
+		}
+	}
+	s.deps.Metrics.IncSystemAssistantRequest(roleClass, version, outcome)
+}
+
+func hasFailedAssistantArtifact(result *AgentResult) bool {
+	if result == nil {
+		return false
+	}
+	for _, artifact := range result.AssistantToolArtifacts {
+		if artifact.Outcome != "success" {
+			return true
+		}
+	}
+	return false
+}
+
+func boundedAssistantRoleClass(role string) string {
+	if role == "admin" || role == "member" {
+		return role
+	}
+	return "unknown"
+}
+
+func boundedAssistantOutcome(outcome string) string {
+	switch outcome {
+	case "success", "gap", "error", "evidence_error", "matched":
+		return outcome
+	default:
+		return "unknown"
+	}
 }
 
 // ListExecutions paginates the per-tenant execution history.
@@ -605,13 +849,19 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approva
 	if err != nil {
 		return nil, 0, err
 	}
-	a, ok := s.deps.Registry.Get(ctx, payload.AgentID)
+	a, ok, err := s.deps.Registry.Get(ctx, payload.AgentID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("resume tool approval: get agent: %w", err)
+	}
 	if !ok {
 		return nil, 0, ErrNotFound
 	}
 	req := ExecRequest{Query: payload.Query, ConversationID: payload.ConversationID, UserID: payload.UserID}
 	meta := ExecMeta{TenantID: tenantID, TraceID: payload.TraceID}
-	_, options := s.assembleOptions(ctx, a, req, meta, payload.ExecutionID)
+	_, options, err := s.assembleOptions(ctx, a, req, meta, payload.ExecutionID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("resume tool approval: assemble options: %w", err)
+	}
 	if len(payload.PinnedSkillRevisions) > 0 && s.deps.SkillActivationResolver != nil {
 		refs := make([]port.SkillRevisionRef, 0, len(payload.PinnedSkillRevisions))
 		for skillID, revisionID := range payload.PinnedSkillRevisions {
@@ -674,12 +924,18 @@ func completeApprovalResume(
 }
 
 func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, activation port.SkillActivation) (*AgentResult, int, error) {
-	a, ok := s.deps.Registry.Get(ctx, agentID)
+	a, ok, err := s.deps.Registry.Get(ctx, agentID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("execute skill scenario: get agent: %w", err)
+	}
 	if !ok {
 		return nil, 0, ErrNotFound
 	}
 	executionID := uuid.Must(uuid.NewV7()).String()
-	_, options := s.assembleOptions(ctx, a, req, meta, executionID)
+	_, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("execute skill scenario: assemble options: %w", err)
+	}
 	options = append(options, WithExecutionID(executionID), WithSkillCatalog(map[string]port.SkillActivation{activation.SkillID: activation}), WithActiveSkill(activation))
 	start := time.Now()
 	result, err := a.Execute(context.WithoutCancel(ctx), req.Query, options...)
@@ -692,10 +948,23 @@ func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string,
 // ctx carries the per-tenant LLM completer for streaming inner calls.
 func (s *AgentService) assembleOptions(
 	ctx context.Context, a Agent, req ExecRequest, meta ExecMeta, executionID string,
-) (context.Context, []ExecutionOption) {
+) (context.Context, []ExecutionOption, error) {
 	options := []ExecutionOption{WithMaxSteps(a.GetConfig().MaxIterations)}
 	if req.MaxSteps > 0 {
 		options = append(options, WithMaxSteps(req.MaxSteps))
+	}
+	isSystemAssistant := a.GetConfig().SystemKey == domain.SystemAssistantKey
+	if isSystemAssistant {
+		model := strings.TrimSpace(a.GetConfig().LLMModel)
+		if model == "" || s.deps.TenantModelValidator == nil {
+			return ctx, nil, domain.ErrAssistantModelUnavailable
+		}
+		if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, meta.TenantID, model); err != nil {
+			if errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
+				return ctx, nil, domain.ErrAssistantModelUnavailable
+			}
+			return ctx, nil, fmt.Errorf("assemble system assistant model: %w", err)
+		}
 	}
 	if s.deps.TenantResolver != nil {
 		if capGW, apiKeys, ok := s.deps.TenantResolver.Resolve(ctx, meta.TenantID); ok {
@@ -741,12 +1010,26 @@ func (s *AgentService) assembleOptions(
 	if subjectID == "" {
 		subjectID = meta.TraceID
 	}
-	extraTools, skillCatalog := s.buildExtraTools(
-		ctx, meta.TenantID, subjectID, a.GetConfig().MCPToolIDs, a.GetConfig().AllowedSkills,
-	)
+	var extraTools []port.ToolDefinition
+	var skillCatalog map[string]port.SkillActivation
+	if isSystemAssistant {
+		extraTools = SystemAssistantToolDefinitions()
+		skillCatalog = map[string]port.SkillActivation{}
+	} else {
+		extraTools, skillCatalog = s.buildExtraTools(
+			ctx, meta.TenantID, subjectID, a.GetConfig().MCPToolIDs, a.GetConfig().AllowedSkills,
+		)
+	}
 	evolutionTrace := meta.EvolutionTrace
 	if evolutionTrace.ResourceManifest == nil {
 		evolutionTrace.ResourceManifest = make(map[string]string)
+	}
+	if a.GetConfig().SystemKey == domain.SystemAssistantKey {
+		profileVersion, err := s.deps.Registry.systemAssistantProfileVersion()
+		if err != nil {
+			return ctx, nil, fmt.Errorf("assemble system assistant profile trace: %w", err)
+		}
+		evolutionTrace.ResourceManifest["system-assistant-profile"] = profileVersion
 	}
 	if evolutionTrace.ExperimentAssignments == nil {
 		evolutionTrace.ExperimentAssignments = make(map[string]ExperimentAssignment)
@@ -773,6 +1056,61 @@ func (s *AgentService) assembleOptions(
 		WithSkillCatalog(skillCatalog),
 		WithEvolutionTraceMetadata(evolutionTrace),
 	)
+	if isSystemAssistant {
+		profileVersion := evolutionTrace.ResourceManifest["system-assistant-profile"]
+		roleClass := "unknown"
+		var authorization domain.DiagnosticAuthorization
+		if s.deps.DiagnosticProvider != nil {
+			var authorizeErr error
+			authorization, authorizeErr = s.deps.DiagnosticProvider.Authorize(ctx, domain.DiagnosticRequest{
+				TenantID: meta.TenantID, UserID: req.UserID,
+				Areas: []domain.DiagnosticArea{domain.DiagnosticAreaAgent, domain.DiagnosticAreaSkill, domain.DiagnosticAreaMCP, domain.DiagnosticAreaKnowledge, domain.DiagnosticAreaModel},
+			})
+			if authorizeErr != nil {
+				return ctx, nil, authorizeErr
+			}
+			roleClass = boundedAssistantRoleClass(authorization.RoleClass)
+		}
+		if s.deps.OfficialDocsSearch != nil {
+			search := s.deps.OfficialDocsSearch
+			options = append(options, WithOfficialDocsSearchFn(func(callCtx context.Context, query string) ([]domain.Citation, error) {
+				citations, searchErr := search(callCtx, query)
+				if s.deps.Metrics != nil {
+					outcome := "matched"
+					if searchErr != nil {
+						outcome = "error"
+					}
+					s.deps.Metrics.RecordOfficialDocsSearchResults(profileVersion, outcome, len(citations))
+				}
+				return citations, searchErr
+			}))
+		}
+		if s.deps.DiagnosticProvider != nil {
+			provider, authorized := s.deps.DiagnosticProvider, authorization.Request
+			options = append(options, WithDiagnosticFn(func(callCtx context.Context, areas []domain.DiagnosticArea) (domain.DiagnosticEvidence, error) {
+				request := authorized
+				request.Areas = append([]domain.DiagnosticArea(nil), areas...)
+				evidence, diagnosticErr := provider.CollectAuthorized(callCtx, request)
+				if s.deps.Metrics != nil {
+					for _, result := range evidence.AreaResults {
+						s.deps.Metrics.RecordSystemAssistantDiagnosticArea(roleClass, string(result.Area), boundedAssistantOutcome(result.Outcome), float64(result.DurationMs)/1000)
+					}
+					s.deps.Metrics.RecordSystemAssistantEvidenceGaps(roleClass, profileVersion, len(evidence.Gaps))
+				}
+				return evidence, diagnosticErr
+			}))
+		}
+		guard := NewToolResultGuard()
+		options = append(options, WithSystemAssistantMode(), withSystemAssistantRoleClass(roleClass),
+			withInternalToolResultGuard(func(value any) (port.GuardedToolResult, error) {
+				structured, ok := value.(map[string]any)
+				if !ok {
+					return port.GuardedToolResult{}, ErrMCPToolResultSchema
+				}
+				return guard.Validate(port.MCPToolResult{StructuredContent: structured}, nil)
+			}))
+		return ctx, options, nil
+	}
 	if s.deps.ToolAuthorizer != nil {
 		agentID, userID, conversationID, query := a.GetConfig().ID, req.UserID, req.ConversationID, req.Query
 		pinned := make(map[string]string, len(skillCatalog))
@@ -813,7 +1151,7 @@ func (s *AgentService) assembleOptions(
 			return s.deps.RAGSearch.SearchKnowledge(rctx, tenantID, workspaces, query, topK)
 		}))
 	}
-	return ctx, options
+	return ctx, options, nil
 }
 
 // attachChatStore wires the configured ChatStore onto the running agent

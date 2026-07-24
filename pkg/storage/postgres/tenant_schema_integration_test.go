@@ -8,9 +8,149 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
+
+const systemAssistantKey = "stratum.platform_assistant"
+
+func TestProvisionTenantSchemaSystemAssistantIsIdempotent(t *testing.T) {
+	pool, ctx, tenantID := systemAssistantTestPool(t, "idempotent")
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	assertOneSystemAssistant(t, pool, tenantID)
+}
+
+func TestProvisionTenantSchemaSystemAssistantNameCollisionPreservesOrdinaryAgent(t *testing.T) {
+	pool, ctx, tenantID := systemAssistantTestPool(t, "name_collision")
+	schema := `tenant_` + tenantID
+	if _, err := pool.Exec(ctx, `CREATE TABLE "`+schema+`".agents (
+		id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, type TEXT NOT NULL DEFAULT 'react',
+		description TEXT NOT NULL DEFAULT '', system_prompt TEXT NOT NULL DEFAULT '',
+		llm_model TEXT NOT NULL DEFAULT '', embed_model TEXT NOT NULL DEFAULT '',
+		max_iterations INT NOT NULL DEFAULT 10, max_context_tokens INTEGER NOT NULL DEFAULT 8000,
+		memory_scope TEXT NOT NULL DEFAULT 'agent', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+		INSERT INTO "`+schema+`".agents (id, name, description) VALUES ('ordinary', 'Stratum 系统助手', 'keep me')`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	var description string
+	if err := pool.QueryRow(ctx, `SELECT count(*), max(description) FROM "`+schema+
+		`".agents WHERE id='ordinary' AND name='Stratum 系统助手'`).Scan(&count, &description); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || description != "keep me" {
+		t.Fatalf("ordinary agent changed during provision: count=%d description=%q", count, description)
+	}
+	assertOneSystemAssistant(t, pool, tenantID)
+}
+
+func TestProvisionTenantSchemaSystemAssistantIDCollisionFailsWithoutChangingOrdinaryAgent(t *testing.T) {
+	pool, ctx, tenantID := systemAssistantTestPool(t, "id_collision")
+	schema := `tenant_` + tenantID
+	if _, err := pool.Exec(ctx, `CREATE TABLE "`+schema+`".agents (
+		id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, type TEXT NOT NULL DEFAULT 'react',
+		description TEXT NOT NULL DEFAULT '', system_prompt TEXT NOT NULL DEFAULT '',
+		llm_model TEXT NOT NULL DEFAULT '', embed_model TEXT NOT NULL DEFAULT '',
+		max_iterations INT NOT NULL DEFAULT 10, max_context_tokens INTEGER NOT NULL DEFAULT 8000,
+		memory_scope TEXT NOT NULL DEFAULT 'agent', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+		INSERT INTO "`+schema+`".agents (id, name, description)
+		VALUES ('stratum-platform-assistant', 'Ordinary Agent', 'keep me')`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err == nil {
+		t.Fatal("expected ordinary-agent fixed ID collision to fail provisioning")
+	}
+	var count int
+	var description string
+	if err := pool.QueryRow(ctx, `SELECT count(*), max(description) FROM "`+schema+
+		`".agents WHERE id='stratum-platform-assistant' AND name='Ordinary Agent'`).Scan(&count, &description); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || description != "keep me" {
+		t.Fatalf("ordinary agent changed after failed provision: count=%d description=%q", count, description)
+	}
+}
+
+func TestProvisionTenantSchemaSystemAssistantRollsBackOnLaterFailure(t *testing.T) {
+	pool, ctx, tenantID := systemAssistantTestPool(t, "rollback")
+	schema := `tenant_` + tenantID
+	if _, err := pool.Exec(ctx, `CREATE TABLE "`+schema+`".agents (
+		id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, type TEXT NOT NULL DEFAULT 'react',
+		description TEXT NOT NULL DEFAULT '', system_prompt TEXT NOT NULL DEFAULT '',
+		llm_model TEXT NOT NULL DEFAULT '', embed_model TEXT NOT NULL DEFAULT '',
+		max_iterations INT NOT NULL DEFAULT 10, max_context_tokens INTEGER NOT NULL DEFAULT 8000,
+		memory_scope TEXT NOT NULL DEFAULT 'agent', system_key TEXT,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+		CREATE VIEW "`+schema+`".skills AS SELECT 'blocked'::text AS id`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err == nil {
+		t.Fatal("expected later tenant DDL failure")
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM "`+schema+`".agents WHERE system_key=$1`,
+		systemAssistantKey).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("failed provision left %d managed assistant rows", count)
+	}
+}
+
+func systemAssistantTestPool(t *testing.T, suffix string) (*pgxpool.Pool, context.Context, string) {
+	t.Helper()
+	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")
+	if url == "" {
+		t.Skip("STRATUM_TEST_POSTGRES_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if err := postgres.ProvisionPublicSchema(ctx, pool, zap.NewNop()); err != nil {
+		t.Fatal(err)
+	}
+	tenantID := fmt.Sprintf("tmp_system_assistant_%s_%d", suffix, time.Now().UnixNano())
+	schema := `tenant_` + tenantID
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`) })
+	if _, err := pool.Exec(ctx, `CREATE SCHEMA "`+schema+`"`); err != nil {
+		t.Fatal(err)
+	}
+	return pool, ctx, tenantID
+}
+
+func assertOneSystemAssistant(t *testing.T, pool *pgxpool.Pool, tenantID string) {
+	t.Helper()
+	var count int
+	ctx := tenantdb.WithTenant(context.Background(), &tenantdb.TenantContext{TenantID: tenantID})
+	err := tenantdb.ExecTenant(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM agents WHERE system_key=$1`, systemAssistantKey).Scan(&count)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("managed assistant count=%d, want 1", count)
+	}
+}
 
 func TestProvisionTenantSchemaPreservesLegacySkillsAndDropsAgentObservationTables(t *testing.T) {
 	url := os.Getenv("STRATUM_TEST_POSTGRES_URL")

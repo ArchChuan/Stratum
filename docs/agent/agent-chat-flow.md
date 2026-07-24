@@ -4,6 +4,38 @@
 > `internal/agent/application/agent_service.go`，ReAct 工具循环见
 > `internal/agent/application/graph/react.go`。
 
+## Platform Assistant Run
+
+平台助手沿用同一 `/agents/:id/execute` 与 `/agents/:id/execute/stream` Agent Loop，但装配阶段先验证 tenant
+模型，再组合不可变 Profile，并只注入两个 internal tools。诊断在模型调用前完成一次角色授权；后续 tool call
+只能复用这份已授权且绑定 tenant/user 的请求，不能由模型扩大 scope。
+
+```mermaid
+sequenceDiagram
+    participant UI as Chat UI
+    participant API as Agent API
+    participant Service as AgentService
+    participant LLM as Tenant model
+    participant Tools as Governed internal tools
+    participant DB as Tenant PostgreSQL
+    UI->>API: execute/stream system assistant
+    API->>Service: tenant/user from authenticated context
+    Service->>DB: load managed row
+    Service->>Service: compose Profile 2026-07-23.v1
+    Service->>Service: authorize member self or admin tenant scope
+    Service->>LLM: exactly official-search + diagnose tools
+    LLM->>Tools: bounded typed call(s)
+    Tools-->>LLM: citations / diagnostic evidence or explicit gap
+    LLM-->>UI: concise streamed summary
+    Service->>DB: persist citations + diagnostic_report artifacts
+```
+
+相关路由：`GET /agents/system/settings`（member）、`PUT /agents/system/settings`（admin/owner 且 active tenant）、
+`GET /agents`、`POST /agents/:id/execute`、`POST /agents/:id/execute/stream`、会话与消息路由。错误正文继续使用
+冻结的 `{"error":"..."}`：未配置/不可用模型为 `system assistant model unavailable`，非法模型为
+`invalid system assistant model`，通用修改为 `system assistant is platform managed`。官方无匹配和 area 失败进入
+typed artifact，不泄露上游原始错误。
+
 ## Normal Run
 
 ```mermaid

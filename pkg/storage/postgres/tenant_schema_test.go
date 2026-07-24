@@ -6,6 +6,40 @@ import (
 	"testing"
 )
 
+func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS agents")
+	columnAt := strings.Index(sql, "ALTER TABLE agents ADD COLUMN IF NOT EXISTS system_key TEXT")
+	indexAt := strings.Index(sql, "CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key")
+	seedAt := strings.Index(sql, "'stratum.platform_assistant'")
+	if createAt == -1 || columnAt == -1 || indexAt == -1 || seedAt == -1 {
+		t.Fatalf("tenant schema missing managed assistant DDL: create=%d column=%d index=%d seed=%d",
+			createAt, columnAt, indexAt, seedAt)
+	}
+	if createAt >= columnAt || columnAt >= indexAt || indexAt >= seedAt {
+		t.Fatalf("managed assistant DDL must follow create/alter/index/seed order: create=%d column=%d index=%d seed=%d",
+			createAt, columnAt, indexAt, seedAt)
+	}
+	for _, want := range []string{
+		"ON agents(system_key) WHERE system_key IS NOT NULL",
+		"'stratum-platform-assistant'",
+		"'__stratum_platform_assistant__'",
+		"WHILE EXISTS",
+		"'基于官方资料指导平台使用并诊断当前租户应用状态'",
+		"'', '', '', 10, 8000, 'user', 'stratum.platform_assistant'",
+		"ON CONFLICT (id) DO NOTHING",
+		"stratum platform assistant identity conflict requires operator action",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("tenant schema missing managed assistant contract %q", want)
+		}
+	}
+}
+
 func TestTenantSchemaBackfillsStructuredMemoryFacts(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {
@@ -635,5 +669,21 @@ func TestTenantSchemaMigratesLegacyTSVAfterTableCreate(t *testing.T) {
 	}
 	if !strings.Contains(sql, "CREATE INDEX idx_kc_tsv ON knowledge_chunks USING GIN(tsv)") {
 		t.Fatal("legacy tsv migration must rebuild the idx_kc_tsv GIN index")
+	}
+}
+
+func TestTenantSchemaBackfillsChatMessageArtifactsAfterTableCreate(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS chat_messages")
+	backfillAt := strings.Index(sql, "ALTER TABLE chat_messages\n    ADD COLUMN IF NOT EXISTS artifacts_json JSONB NOT NULL DEFAULT '[]'")
+	if createAt == -1 || backfillAt == -1 {
+		t.Fatal("tenant schema must create chat_messages and backfill artifacts_json")
+	}
+	if backfillAt < createAt {
+		t.Fatal("artifacts_json backfill must follow chat_messages creation for historical tenants")
 	}
 }

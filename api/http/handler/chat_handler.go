@@ -229,6 +229,7 @@ func messageResponse(m *agent.ChatMessage) gin.H {
 		"role":            m.Role,
 		"content":         m.Content,
 		"steps":           steps,
+		"artifacts":       executionArtifactsResponse(m.Artifacts),
 		"is_error":        m.IsError,
 		"created_at":      m.CreatedAt,
 	}

@@ -9,7 +9,6 @@ package domain
 
 import (
 	"encoding/json"
-	"errors"
 	"time"
 )
 
@@ -52,6 +51,9 @@ type AgentConfig struct {
 	KnowledgeWorkspaceDescriptions []string
 	MaxContextTokens               int
 	MemoryScope                    string
+	SystemKey                      string
+	IsSystem                       bool
+	ManagementMode                 string
 	// StuckThreshold > 0 enables lazy planning: after this many LLM rounds with
 	// no final answer the agent transitions to Reflect→Plan→Execute.
 	// 0 disables the feature (pure ReAct).
@@ -112,6 +114,7 @@ type ChatMessage struct {
 	AgentID        string
 	MemoryScope    string
 	SkipOutbox     bool
+	Artifacts      []ExecutionArtifact
 }
 
 const (
@@ -141,6 +144,7 @@ type ExecutionRecord struct {
 type ListOptions struct {
 	Page     int
 	PageSize int
+	UserID   string
 }
 
 // Message represents a single message in an agent's in-memory conversation history.
@@ -313,19 +317,21 @@ type AgentExecutionCheckpoint struct {
 
 // AgentResult holds the output of a completed agent execution.
 type AgentResult struct {
-	AgentID          string
-	Input            string
-	Output           string
-	Thoughts         []Thought
-	ToolCalls        []ToolCall
-	ToolObservations []ToolObservation
-	TraceEvents      []AgentTraceEvent
-	Steps            int
-	TokensUsed       int
-	CostUSD          float64
-	Duration         time.Duration
-	Error            error
-	Metadata         map[string]interface{}
+	AgentID                string
+	Input                  string
+	Output                 string
+	Thoughts               []Thought
+	ToolCalls              []ToolCall
+	ToolObservations       []ToolObservation
+	TraceEvents            []AgentTraceEvent
+	Steps                  int
+	TokensUsed             int
+	CostUSD                float64
+	Duration               time.Duration
+	Error                  error
+	Metadata               map[string]interface{}
+	AssistantToolArtifacts []SystemAssistantToolArtifact
+	Artifacts              []ExecutionArtifact
 }
 
 // AgentState tracks mutable execution progress during a single run.
@@ -335,20 +341,3 @@ type AgentState struct {
 	ToolCalls  []ToolCall
 	TokensUsed int
 }
-
-// Sentinel errors returned by repositories. Application layer aliases
-// these (`var ErrNotFound = domain.ErrNotFound`) so external call-sites
-// keep matching with `errors.Is`.
-var (
-	// ErrNotFound is returned when an agent / conversation / message
-	// cannot be located in the tenant schema.
-	ErrNotFound = errors.New("agent not found")
-
-	// ErrNameConflict is returned when an agent with the same name
-	// already exists in the tenant.
-	ErrNameConflict = errors.New("agent name already exists")
-
-	// ErrInvalidSkill is returned when a skill ID does not exist in
-	// the tenant's skills table.
-	ErrInvalidSkill = errors.New("skill not found")
-)

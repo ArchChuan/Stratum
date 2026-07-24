@@ -1,5 +1,37 @@
 # Agent Development Rules
 
+## Built-in Platform Assistant (Phase 1)
+
+每个 tenant schema 由 `pkg/storage/postgres/tenant_schema.sql` 幂等 provision 恰好一条托管 Agent：
+`id=stratum-platform-assistant`、`system_key=stratum.platform_assistant`。读取时返回
+`isSystem=true`、`managementMode=platform`；通用 Agent update/delete/revision 路径必须返回
+`system assistant is platform managed`。租户管理员唯一可改字段是 `llmModel`，普通成员可读取设置但不能写。
+
+运行时不信任数据库中的托管字段。`BuiltinSystemAssistantProfileSource` 按
+`CurrentSystemAssistantProfileVersion=2026-07-23.v1` 选择保留在代码中的不可变 Profile，并覆盖名称、描述、
+system prompt、迭代和上下文预算，同时清空 Skill、MCP、Knowledge、Memory 等租户扩展。执行 trace 和 artifact
+记录 `system-assistant-profile` 版本，历史版本继续可解析。
+
+官方知识来自构建期生成并 embed 的只读 catalog：manifest 是 `docs/assistant/catalog.yaml`，生成器位于
+`internal/agent/infrastructure/officialdocs/generate`。检索结果必须包含 document ID、标题、产品版本、章节、
+官方 URL 和有界 excerpt；无匹配返回 `official evidence not found`，不得回退为模型臆测。
+
+角色证据边界如下：
+
+| tenant role | diagnostic scope | 可见证据 |
+|---|---|---|
+| member | `self` | 当前用户关联的 Agent/Skill/MCP/Knowledge/Model 脱敏状态 |
+| admin/owner | `tenant` | 当前租户上述五个 area 的脱敏汇总 |
+| membership 读取失败/未知角色 | 无 | fail closed，不执行 area collector |
+
+系统助手只暴露 `stratum_search_official_docs` 与 `stratum_diagnose_tenant` 两个硬编码 internal tool；普通
+Agent 看不到它们。诊断 collector 有界并发、逐 area 独立失败，失败用 `evidence_unavailable`、
+`evidence_timeout` 或 `evidence_cancelled` 表达，禁止把缺口写成事实。
+
+Phase 1 artifact 为 `citations` 和 `diagnostic_report`。报告只保存 typed facts、evidence gaps、建议、工具步骤、
+耗时和引用；`inferences` 必须为空。所有字段经凭据脱敏、长度/数量/JSON 大小边界校验后写入
+`chat_messages.artifacts_json`。Phase 1 没有资源创建、更新、删除、Skill publish、MCP 执行或 Knowledge 上传入口。
+
 ## Capability Boundaries
 
 Agent Loop 是运行期唯一动态决策者。其他上下文职责固定：

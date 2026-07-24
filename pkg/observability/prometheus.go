@@ -27,9 +27,14 @@ type PrometheusMetrics struct {
 	skillCircuitBreakerState *prometheus.GaugeVec
 
 	// Agent
-	agentExecutionsTotal   *prometheus.CounterVec
-	agentExecutionDuration *prometheus.HistogramVec
-	agentStepCount         *prometheus.HistogramVec
+	agentExecutionsTotal              *prometheus.CounterVec
+	agentExecutionDuration            *prometheus.HistogramVec
+	agentStepCount                    *prometheus.HistogramVec
+	systemAssistantRequests           *prometheus.CounterVec
+	systemAssistantTTFT               *prometheus.HistogramVec
+	systemAssistantSearchResults      *prometheus.HistogramVec
+	systemAssistantDiagnosticDuration *prometheus.HistogramVec
+	systemAssistantEvidenceGaps       *prometheus.HistogramVec
 
 	// LLM – core
 	llmRequestsTotal   *prometheus.CounterVec
@@ -108,6 +113,26 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 				Buckets: []float64{1, 2, 3, 5, 8, 13, 21, 34},
 			},
 			[]string{"agent_id", "agent_type"},
+		),
+		systemAssistantRequests: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "system_assistant_requests_total", Help: "System assistant requests by bounded role and outcome"},
+			[]string{"role_class", "profile_version", "outcome"},
+		),
+		systemAssistantTTFT: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "system_assistant_ttft_seconds", Help: "System assistant time to first token", Buckets: latencyBuckets},
+			[]string{"role_class", "profile_version"},
+		),
+		systemAssistantSearchResults: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "system_assistant_official_search_results", Help: "Official document search result count", Buckets: []float64{0, 1, 2, 3, 5}},
+			[]string{"profile_version", "outcome"},
+		),
+		systemAssistantDiagnosticDuration: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "system_assistant_diagnostic_area_duration_seconds", Help: "Diagnostic area duration", Buckets: latencyBuckets},
+			[]string{"role_class", "area", "outcome"},
+		),
+		systemAssistantEvidenceGaps: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "system_assistant_evidence_gaps", Help: "Evidence gap count", Buckets: []float64{0, 1, 2, 3, 5}},
+			[]string{"role_class", "profile_version"},
 		),
 
 		// LLM – core
@@ -227,6 +252,26 @@ func (m *PrometheusMetrics) RecordAgentExecutionDuration(agentID, agentType stri
 
 func (m *PrometheusMetrics) RecordAgentStepCount(agentID, agentType string, steps int) {
 	m.agentStepCount.WithLabelValues(agentID, agentType).Observe(float64(steps))
+}
+
+func (m *PrometheusMetrics) IncSystemAssistantRequest(roleClass, profileVersion, outcome string) {
+	m.systemAssistantRequests.WithLabelValues(roleClass, profileVersion, outcome).Inc()
+}
+
+func (m *PrometheusMetrics) RecordSystemAssistantTTFT(roleClass, profileVersion string, duration float64) {
+	m.systemAssistantTTFT.WithLabelValues(roleClass, profileVersion).Observe(duration)
+}
+
+func (m *PrometheusMetrics) RecordOfficialDocsSearchResults(profileVersion, outcome string, count int) {
+	m.systemAssistantSearchResults.WithLabelValues(profileVersion, outcome).Observe(float64(count))
+}
+
+func (m *PrometheusMetrics) RecordSystemAssistantDiagnosticArea(roleClass, area, outcome string, duration float64) {
+	m.systemAssistantDiagnosticDuration.WithLabelValues(roleClass, area, outcome).Observe(duration)
+}
+
+func (m *PrometheusMetrics) RecordSystemAssistantEvidenceGaps(roleClass, profileVersion string, count int) {
+	m.systemAssistantEvidenceGaps.WithLabelValues(roleClass, profileVersion).Observe(float64(count))
 }
 
 // --- LLM ---

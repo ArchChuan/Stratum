@@ -2,7 +2,13 @@ import { message as msg } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { agentApi, conversationApi } from '../api/agent.api';
-import type { Agent, ChatMessage, Conversation, ToolApproval } from '../model/agent';
+import {
+  executionArtifactSchema,
+  type Agent,
+  type ChatMessage,
+  type Conversation,
+  type ToolApproval,
+} from '../model/agent';
 
 import { useChatStream } from './ChatStreamContext';
 
@@ -10,6 +16,10 @@ import { extractErrorMessage } from '@/shared/lib/errorMessage';
 
 const SS_AGENT = 'chat:lastAgentId';
 const ssConv = (aid: string) => `chat:lastConvId:${aid}`;
+const normalizeArtifacts = (value: unknown) => {
+  const parsed = executionArtifactSchema.array().safeParse(value ?? []);
+  return parsed.success ? parsed.data : [];
+};
 
 export const useChatPage = () => {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -62,11 +72,14 @@ export const useChatPage = () => {
       try {
         const list = await agentApi.list();
         if (cancelled) return;
-        setAgents(list);
+        const ordered = [...list].sort((left, right) => Number(right.isSystem) - Number(left.isSystem));
+        setAgents(ordered);
         setSelectedAgent((prev) => {
-          if (prev && list.some((a) => a.id === prev)) return prev;
-          sessionStorage.removeItem(SS_AGENT);
-          return null;
+          if (prev && ordered.some((a) => a.id === prev)) return prev;
+          const defaultAgent = ordered.find((agent) => agent.isSystem)?.id ?? null;
+          if (defaultAgent) sessionStorage.setItem(SS_AGENT, defaultAgent);
+          else sessionStorage.removeItem(SS_AGENT);
+          return defaultAgent;
         });
       } catch {
         if (!cancelled) msg.error('加载 Agent 列表失败');
@@ -165,6 +178,7 @@ export const useChatPage = () => {
                   content: st.error || finalContent,
                   created_at: new Date().toISOString(),
                   steps: st.result?.steps,
+                  artifacts: normalizeArtifacts(st.result?.artifacts),
                 } as ChatMessage,
               ]);
             } else if (!hasUserMsg && st.userQuery) {
@@ -205,7 +219,14 @@ export const useChatPage = () => {
       const finalContent = streamResult.output || accumulatedContent;
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === msgId ? { ...m, content: finalContent, steps: streamResult.steps } : m,
+          m.id === msgId
+            ? {
+                ...m,
+                content: finalContent,
+                steps: streamResult.steps,
+                artifacts: normalizeArtifacts(streamResult.artifacts),
+              }
+            : m,
         ),
       );
     } else if (streamError) {
@@ -365,6 +386,12 @@ export const useChatPage = () => {
 		}
 	}, []);
 
+  const updateSystemAssistantModel = useCallback((llmModel: string) => {
+    setAgents((rows) => rows.map((agent) => (
+      agent.isSystem ? { ...agent, llmModel } : agent
+    )));
+  }, []);
+
   return {
     agents,
     selectedAgent,
@@ -389,6 +416,7 @@ export const useChatPage = () => {
 		approvalActionId,
 		handleApprove,
 		handleReject,
+    updateSystemAssistantModel,
     cancelStream,
   };
 };
