@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -54,7 +55,11 @@ type Writer struct {
 	segmentDay      string
 	maxSegmentBytes int64
 	rotateDaily     bool
-	closed          bool
+	closed          atomic.Bool
+	closeRequested  atomic.Bool
+	activeFile      atomic.Pointer[os.File]
+	closeOnce       sync.Once
+	closeErr        error
 	statusMu        sync.Mutex
 	status          DegradedStatus
 }
@@ -130,13 +135,15 @@ func NewWriterWithOptions(root, client, sessionHash string, options WriterOption
 		_ = syscall.Close(clientFD)
 		return nil, fmt.Errorf("read latest event segment: %w", err)
 	}
-	return &Writer{
+	w := &Writer{
 		file: os.NewFile(uintptr(fileFD), filename), lifecycle: lockFD,
 		clientDirFD: clientFD, client: client, sessionHash: sessionHash,
 		segment: segment, segmentDay: segmentDay,
 		maxSegmentBytes: maxSegmentBytes, rotateDaily: options.RotateDaily,
 		status: DegradedStatus{Version: 1, Client: client, SessionHash: sessionHash},
-	}, nil
+	}
+	w.activeFile.Store(w.file)
+	return w, nil
 }
 
 func (w *Writer) Write(event Event) error {
@@ -165,8 +172,16 @@ func (w *Writer) WriteContext(ctx context.Context, event Event) error {
 	if err := lockWriterMutex(ctx, &w.mu); err != nil {
 		return fmt.Errorf("lock writer: %w", err)
 	}
-	defer w.mu.Unlock()
-	if w.closed {
+	locked := true
+	defer func() {
+		if locked {
+			if w.closeRequested.Load() {
+				_ = w.closeLocked()
+			}
+			w.mu.Unlock()
+		}
+	}()
+	if w.closed.Load() {
 		return fmt.Errorf("writer is closed")
 	}
 	w.statusMu.Lock()
@@ -185,7 +200,14 @@ func (w *Writer) WriteContext(ctx context.Context, event Event) error {
 		_ = syscall.Flock(int(currentFile.Fd()), syscall.LOCK_UN)
 		return fmt.Errorf("rotate event segment: %w", err)
 	}
+	if w.closed.Load() {
+		_ = syscall.Flock(int(currentFile.Fd()), syscall.LOCK_UN)
+		return fmt.Errorf("writer is closed")
+	}
 	activeFile := w.file
+	w.activeFile.Store(activeFile)
+	w.mu.Unlock()
+	locked = false
 	written, err := activeFile.Write(record)
 	if err != nil {
 		_ = syscall.Flock(int(activeFile.Fd()), syscall.LOCK_UN)
@@ -238,8 +260,34 @@ counted:
 	return w.writeStatusLocked()
 }
 
+// MarkObservationWindow records the time range represented by enqueued
+// observations, including records that were later dropped before persistence.
+func (w *Writer) MarkObservationWindow(first, last time.Time) error {
+	if first.IsZero() && last.IsZero() {
+		return nil
+	}
+	if first.IsZero() {
+		first = last
+	}
+	if last.IsZero() {
+		last = first
+	}
+	if last.Before(first) {
+		return fmt.Errorf("observation window is invalid")
+	}
+	w.statusMu.Lock()
+	defer w.statusMu.Unlock()
+	if w.status.FirstEventAt.IsZero() || first.Before(w.status.FirstEventAt) {
+		w.status.FirstEventAt = first
+	}
+	if w.status.LastEventAt.IsZero() || last.After(w.status.LastEventAt) {
+		w.status.LastEventAt = last
+	}
+	return nil
+}
+
 func (w *Writer) writeStatusLocked() error {
-	if w.clientDirFD < 0 {
+	if w.closed.Load() || w.clientDirFD < 0 {
 		return fmt.Errorf("writer is closed")
 	}
 	data, err := json.Marshal(w.status)
@@ -374,6 +422,7 @@ func (w *Writer) openNextSegment(ctx context.Context, day string) error {
 		w.file = newFile
 		w.lifecycle = newLifecycle
 		w.segmentDay = day
+		w.activeFile.Store(newFile)
 		return nil
 	}
 }
@@ -571,25 +620,80 @@ func flockContext(ctx context.Context, fd int, operation int) error {
 func (w *Writer) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.closed {
+	return w.closeLocked()
+}
+
+// CloseContext closes the writer without allowing a busy WriteContext to hold
+// shutdown indefinitely. Event-file writes run after the writer mutex is
+// released, so this method can always acquire the lifecycle mutex and close
+// the file, segment lock, and directory within its context. If the mutex is
+// still held in the pre-write phase when ctx expires, the active os.File is
+// closed concurrently and the owner finishes cleanup when it releases w.mu.
+func (w *Writer) CloseContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := lockWriterMutex(ctx, &w.mu); err != nil {
+		forcedErr := w.interruptActiveWrite()
+		return errors.Join(fmt.Errorf("close writer: %w", err), forcedErr)
+	}
+	defer w.mu.Unlock()
+	return w.closeLocked()
+}
+
+func (w *Writer) interruptActiveWrite() error {
+	w.closeRequested.Store(true)
+	w.closed.Store(true)
+	file := w.activeFile.Load()
+	if file == nil {
 		return nil
 	}
-	w.closed = true
-	fileErr := w.file.Close()
-	unlockErr := syscall.Flock(int(w.lifecycle.Fd()), syscall.LOCK_UN)
-	lockCloseErr := w.lifecycle.Close()
-	if w.clientDirFD >= 0 {
-		_ = syscall.Close(w.clientDirFD)
+	if err := file.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+		return fmt.Errorf("interrupt event write: %w", err)
+	}
+	return nil
+}
+
+// closeLocked performs the one-time lifecycle cleanup and must be called with
+// w.mu held. A timed-out CloseContext asks a pre-write owner to call this after
+// it releases w.mu; normal event writes do not hold w.mu while in File.Write.
+func (w *Writer) closeLocked() error {
+	w.closeRequested.Store(true)
+	w.closed.Store(true)
+	w.closeOnce.Do(func() {
+		var errs []error
+		if err := closeObservationFile(w.file); err != nil {
+			errs = append(errs, fmt.Errorf("close event file: %w", err))
+		}
+		if w.lifecycle != nil {
+			if err := syscall.Flock(int(w.lifecycle.Fd()), syscall.LOCK_UN); err != nil && !errors.Is(err, syscall.EBADF) {
+				errs = append(errs, fmt.Errorf("unlock session lifecycle: %w", err))
+			}
+			if err := w.lifecycle.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+				errs = append(errs, fmt.Errorf("close session lifecycle lock: %w", err))
+			}
+		}
+		w.statusMu.Lock()
+		clientDirFD := w.clientDirFD
 		w.clientDirFD = -1
+		w.statusMu.Unlock()
+		if clientDirFD >= 0 {
+			if err := syscall.Close(clientDirFD); err != nil && !errors.Is(err, syscall.EBADF) {
+				errs = append(errs, fmt.Errorf("close client events directory: %w", err))
+			}
+		}
+		w.activeFile.Store(nil)
+		w.closeErr = errors.Join(errs...)
+	})
+	return w.closeErr
+}
+
+func closeObservationFile(file *os.File) error {
+	if file == nil {
+		return nil
 	}
-	if fileErr != nil {
-		return fmt.Errorf("close event file: %w", fileErr)
-	}
-	if unlockErr != nil {
-		return fmt.Errorf("unlock session lifecycle: %w", unlockErr)
-	}
-	if lockCloseErr != nil {
-		return fmt.Errorf("close session lifecycle lock: %w", lockCloseErr)
+	if err := file.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+		return err
 	}
 	return nil
 }

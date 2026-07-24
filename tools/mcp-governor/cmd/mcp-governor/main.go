@@ -76,6 +76,8 @@ type renderOptions struct {
 	configPath, client, governorPath, outputPath string
 }
 
+const observationWriterCloseBudget = 2 * time.Second
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
@@ -473,7 +475,11 @@ func runProxyContext(ctx context.Context, opts proxyOptions, stdout, stderr io.W
 	if err != nil {
 		return fmt.Errorf("create observation writer: %w", err)
 	}
-	defer func() { resultErr = errors.Join(resultErr, writer.Close()) }()
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), observationWriterCloseBudget)
+		resultErr = errors.Join(resultErr, writer.CloseContext(closeCtx))
+		cancel()
+	}()
 	tracker, err := observe.NewTracker(currentTime, observe.Metadata{
 		Client: opts.client, Service: service.Name, SessionHash: sessionHash, RepositoryHash: repositoryHash,
 	})

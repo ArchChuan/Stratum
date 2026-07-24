@@ -574,6 +574,28 @@ func (b *blockingEvents) Write(observe.Event) error {
 	return nil
 }
 
+type degradedMarkerEvents struct {
+	blockingEvents
+	mu      sync.Mutex
+	first   time.Time
+	last    time.Time
+	dropped uint64
+}
+
+func (d *degradedMarkerEvents) MarkObservationWindow(first, last time.Time) error {
+	d.mu.Lock()
+	d.first, d.last = first, last
+	d.mu.Unlock()
+	return nil
+}
+
+func (d *degradedMarkerEvents) MarkDegraded(_ string, count uint64) error {
+	d.mu.Lock()
+	d.dropped += count
+	d.mu.Unlock()
+	return nil
+}
+
 func TestObservationSinkSlowWriterDoesNotBlockProtocolForwarding(t *testing.T) {
 	server := buildFakeServer(t)
 	writer := &blockingEvents{started: make(chan struct{}), release: make(chan struct{})}
@@ -622,6 +644,34 @@ func TestObservationSinkQueueFullIsObservable(t *testing.T) {
 	defer cancel()
 	if err := sink.close(ctx); err == nil || !strings.Contains(err.Error(), "dropped") {
 		t.Fatalf("second close error = %v, want dropped-event visibility", err)
+	}
+}
+
+func TestObservationSinkPersistsWindowWhenAllQueuedEventsAreDropped(t *testing.T) {
+	writer := &degradedMarkerEvents{blockingEvents: blockingEvents{started: make(chan struct{}), release: make(chan struct{})}}
+	sink := newObservationSink(writer)
+	first := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	events := make([]observe.Event, observationQueueSize+2)
+	for i := range events {
+		events[i] = observe.Event{Version: observe.EventVersion, Kind: observe.KindSessionReady,
+			At: first.Add(time.Duration(i) * time.Minute), Client: "codex", Service: "svc", SessionHash: "session"}
+	}
+	sink.enqueue(events)
+	select {
+	case <-writer.started:
+	case <-time.After(time.Second):
+		t.Fatal("observation writer did not start")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	_ = sink.close(ctx)
+	cancel()
+	close(writer.release)
+	writer.mu.Lock()
+	gotFirst, gotLast, dropped := writer.first, writer.last, writer.dropped
+	writer.mu.Unlock()
+	wantLast := events[len(events)-1].At
+	if gotFirst.IsZero() || gotLast.IsZero() || !gotFirst.Equal(first) || !gotLast.Equal(wantLast) || dropped == 0 {
+		t.Fatalf("window=(%v,%v) dropped=%d, want persisted dropped window", gotFirst, gotLast, dropped)
 	}
 }
 

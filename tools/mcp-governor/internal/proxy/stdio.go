@@ -56,18 +56,21 @@ const observationQueueSize = 128
 // A full queue drops observations and exposes the count at shutdown; it never
 // causes the MCP byte stream to fail.
 type observationSink struct {
-	writer      observeWriter
-	queue       chan observe.Event
-	closed      chan struct{}
-	dropped     atomic.Uint64
-	writeErrors atomic.Uint64
-	mu          sync.Mutex
-	stateMu     sync.Mutex
-	err         error
-	closing     bool
-	marked      bool
-	cancel      context.CancelFunc
-	cancelOnce  sync.Once
+	writer       observeWriter
+	queue        chan observe.Event
+	closed       chan struct{}
+	dropped      atomic.Uint64
+	writeErrors  atomic.Uint64
+	mu           sync.Mutex
+	stateMu      sync.Mutex
+	windowMu     sync.Mutex
+	err          error
+	closing      bool
+	marked       bool
+	cancel       context.CancelFunc
+	cancelOnce   sync.Once
+	firstEventAt time.Time
+	lastEventAt  time.Time
 }
 
 type observeWriter interface {
@@ -107,6 +110,10 @@ type observationDegradedMarker interface {
 	MarkDegraded(reason string, count uint64) error
 }
 
+type observationWindowMarker interface {
+	MarkObservationWindow(first, last time.Time) error
+}
+
 func (s *observationSink) persistDegraded() error {
 	marker, ok := s.writer.(observationDegradedMarker)
 	if !ok {
@@ -120,6 +127,12 @@ func (s *observationSink) persistDegraded() error {
 	s.marked = true
 	s.stateMu.Unlock()
 	var err error
+	s.windowMu.Lock()
+	first, last := s.firstEventAt, s.lastEventAt
+	s.windowMu.Unlock()
+	if window, ok := s.writer.(observationWindowMarker); ok && !first.IsZero() {
+		err = errors.Join(err, window.MarkObservationWindow(first, last))
+	}
 	if dropped := s.dropped.Load(); dropped > 0 {
 		err = errors.Join(err, marker.MarkDegraded("observation_sink_dropped", dropped))
 	}
@@ -143,6 +156,16 @@ func writeObservation(ctx context.Context, writer observeWriter, event observe.E
 func (s *observationSink) enqueue(events []observe.Event) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
+	s.windowMu.Lock()
+	for _, event := range events {
+		if s.firstEventAt.IsZero() || event.At.Before(s.firstEventAt) {
+			s.firstEventAt = event.At
+		}
+		if s.lastEventAt.IsZero() || event.At.After(s.lastEventAt) {
+			s.lastEventAt = event.At
+		}
+	}
+	s.windowMu.Unlock()
 	if s.closing {
 		s.dropped.Add(uint64(len(events)))
 		return

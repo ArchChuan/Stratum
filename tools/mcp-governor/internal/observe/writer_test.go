@@ -2,7 +2,9 @@ package observe
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -209,6 +211,76 @@ func TestWriterPersistsDegradedStatus(t *testing.T) {
 	if status.RecordsDropped != 3 || len(status.Reasons) != 1 || status.Reasons[0] != "observation_sink_dropped" {
 		t.Fatalf("status = %+v", status)
 	}
+}
+
+func TestWriterCloseContextReturnsWhenWriterMutexIsBusy(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriter(root, "codex", "session-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.Close() }()
+
+	w.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.CloseContext(ctx) }()
+
+	select {
+	case err := <-done:
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("CloseContext() error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CloseContext() blocked while writer mutex was busy")
+	}
+	w.mu.Unlock()
+}
+
+func TestWriterCloseContextInterruptsActiveFileWrite(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriter(root, "codex", "session-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.Close() }()
+
+	reader, pipeWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	originalFile := w.file
+	w.mu.Lock()
+	w.file = pipeWriter
+	w.activeFile.Store(pipeWriter)
+	writeDone := make(chan error, 1)
+	go func() {
+		_, writeErr := pipeWriter.Write(make([]byte, 1<<20))
+		writeDone <- writeErr
+	}()
+	time.Sleep(20 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- w.CloseContext(ctx) }()
+	select {
+	case err := <-closeDone:
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("CloseContext() error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CloseContext() blocked while active file write was busy")
+	}
+	cancel()
+	select {
+	case <-writeDone:
+	case <-time.After(time.Second):
+		t.Fatal("closing active os.File did not interrupt the blocked write")
+	}
+	w.file = originalFile
+	w.activeFile.Store(originalFile)
+	w.mu.Unlock()
 }
 
 func TestWriterRejectsUnsafePathComponents(t *testing.T) {
