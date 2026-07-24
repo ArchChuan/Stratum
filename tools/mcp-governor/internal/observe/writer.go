@@ -61,6 +61,7 @@ type Writer struct {
 	closeOnce       sync.Once
 	closeErr        error
 	statusMu        sync.Mutex
+	statusWriteMu   sync.Mutex
 	status          DegradedStatus
 }
 
@@ -231,7 +232,6 @@ func (w *Writer) MarkDegraded(reason string, count uint64) error {
 		return fmt.Errorf("degraded reason is required")
 	}
 	w.statusMu.Lock()
-	defer w.statusMu.Unlock()
 	for _, existing := range w.status.Reasons {
 		if existing == reason {
 			goto counted
@@ -257,7 +257,18 @@ counted:
 	} else {
 		w.status.RecordsDropped += int(count)
 	}
-	return w.writeStatusLocked()
+	if w.closed.Load() || w.clientDirFD < 0 {
+		w.statusMu.Unlock()
+		return fmt.Errorf("writer is closed")
+	}
+	status := w.status
+	clientDirFD, err := syscall.Dup(w.clientDirFD)
+	w.statusMu.Unlock()
+	if err != nil {
+		return fmt.Errorf("duplicate degraded status directory: %w", err)
+	}
+	syscall.CloseOnExec(clientDirFD)
+	return w.writeStatus(clientDirFD, status)
 }
 
 // MarkObservationWindow records the time range represented by enqueued
@@ -286,17 +297,17 @@ func (w *Writer) MarkObservationWindow(first, last time.Time) error {
 	return nil
 }
 
-func (w *Writer) writeStatusLocked() error {
-	if w.closed.Load() || w.clientDirFD < 0 {
-		return fmt.Errorf("writer is closed")
-	}
-	data, err := json.Marshal(w.status)
+func (w *Writer) writeStatus(clientDirFD int, status DegradedStatus) error {
+	defer syscall.Close(clientDirFD)
+	w.statusWriteMu.Lock()
+	defer w.statusWriteMu.Unlock()
+	data, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("marshal degraded status: %w", err)
 	}
 	data = append(data, '\n')
-	name := w.sessionHash + ".status.json"
-	fd, err := syscall.Openat(w.clientDirFD, name,
+	name := status.SessionHash + ".status.json"
+	fd, err := syscall.Openat(clientDirFD, name,
 		syscall.O_CREAT|syscall.O_WRONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW,
 		privateFileMode)
 	if err != nil {

@@ -582,6 +582,19 @@ type degradedMarkerEvents struct {
 	dropped uint64
 }
 
+type blockingDegradedMarker struct {
+	release chan struct{}
+}
+
+func (b *blockingDegradedMarker) Write(observe.Event) error {
+	return errors.New("observation write failed")
+}
+
+func (b *blockingDegradedMarker) MarkDegraded(string, uint64) error {
+	<-b.release
+	return nil
+}
+
 func (d *degradedMarkerEvents) MarkObservationWindow(first, last time.Time) error {
 	d.mu.Lock()
 	d.first, d.last = first, last
@@ -673,6 +686,25 @@ func TestObservationSinkPersistsWindowWhenAllQueuedEventsAreDropped(t *testing.T
 	if gotFirst.IsZero() || gotLast.IsZero() || !gotFirst.Equal(first) || !gotLast.Equal(wantLast) || dropped == 0 {
 		t.Fatalf("window=(%v,%v) dropped=%d, want persisted dropped window", gotFirst, gotLast, dropped)
 	}
+}
+
+func TestObservationSinkDegradedStatusDoesNotBlockShutdown(t *testing.T) {
+	writer := &blockingDegradedMarker{release: make(chan struct{})}
+	sink := newObservationSink(writer)
+	event := observe.Event{Version: observe.EventVersion, Kind: observe.KindSessionReady,
+		At: time.Now(), Client: "codex", Service: "svc", SessionHash: "session"}
+	sink.enqueue([]observe.Event{event})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := sink.close(ctx)
+	if err == nil || !strings.Contains(err.Error(), "persist observation status") {
+		t.Fatalf("close() error = %v, want bounded status persistence error", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("close() took %s with blocked degraded status writer", elapsed)
+	}
+	close(writer.release)
 }
 
 type blockingReader struct{ reads atomic.Int32 }

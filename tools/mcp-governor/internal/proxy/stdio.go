@@ -114,7 +114,10 @@ type observationWindowMarker interface {
 	MarkObservationWindow(first, last time.Time) error
 }
 
-func (s *observationSink) persistDegraded() error {
+func (s *observationSink) persistDegraded(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	marker, ok := s.writer.(observationDegradedMarker)
 	if !ok {
 		return nil
@@ -131,15 +134,43 @@ func (s *observationSink) persistDegraded() error {
 	first, last := s.firstEventAt, s.lastEventAt
 	s.windowMu.Unlock()
 	if window, ok := s.writer.(observationWindowMarker); ok && !first.IsZero() {
-		err = errors.Join(err, window.MarkObservationWindow(first, last))
+		err = errors.Join(err, boundedMarkObservationWindow(ctx, window, first, last))
 	}
 	if dropped := s.dropped.Load(); dropped > 0 {
-		err = errors.Join(err, marker.MarkDegraded("observation_sink_dropped", dropped))
+		err = errors.Join(err, boundedMarkDegraded(ctx, marker, "observation_sink_dropped", dropped))
 	}
 	if writeErrors := s.writeErrors.Load(); writeErrors > 0 {
-		err = errors.Join(err, marker.MarkDegraded("observation_sink_write_error", writeErrors))
+		err = errors.Join(err, boundedMarkDegraded(ctx, marker, "observation_sink_write_error", writeErrors))
 	}
 	return err
+}
+
+func boundedMarkObservationWindow(ctx context.Context, marker observationWindowMarker, first, last time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("persist observation window: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- marker.MarkObservationWindow(first, last) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("persist observation window: %w", ctx.Err())
+	}
+}
+
+func boundedMarkDegraded(ctx context.Context, marker observationDegradedMarker, reason string, count uint64) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("persist observation status %q: %w", reason, err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- marker.MarkDegraded(reason, count) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("persist observation status %q: %w", reason, ctx.Err())
+	}
 }
 
 type contextObserveWriter interface {
@@ -199,7 +230,14 @@ func (s *observationSink) close(ctx context.Context) error {
 	if dropped := s.dropped.Load(); dropped > 0 {
 		err = errors.Join(err, fmt.Errorf("observation sink dropped %d events", dropped))
 	}
-	return errors.Join(drainErr, err, s.persistDegraded())
+	statusCtx := ctx
+	statusCancel := func() {}
+	if ctx.Err() != nil {
+		statusCtx, statusCancel = context.WithTimeout(context.Background(), defaultShutdownGrace)
+	}
+	statusErr := s.persistDegraded(statusCtx)
+	statusCancel()
+	return errors.Join(drainErr, err, statusErr)
 }
 
 func Run(ctx context.Context, options Options) error {
