@@ -57,20 +57,32 @@ mysql:
 redis:
   enabled: true
   architecture: standalone
+  resources:
+    requests:
+      cpu: 25m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 512Mi
   persistence:
     enabled: true
     size: 2Gi
 
 minio:
-  enabled: true
-  replicaCount: 1
-  persistence:
-    enabled: true
-    size: 5Gi
+  # Trace ingestion does not require object storage, and the Demo node's
+  # registry proxy rejects the chart's cloudpirates MinIO image.
+  enabled: false
 
 zookeeper:
   enabled: true
   replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
   persistence:
     enabled: true
     size: 2Gi
@@ -80,14 +92,22 @@ clickhouse:
   shardsCount: 1
   replicasCount: 1
   storage: 10Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
 
 altinity-clickhouse-operator:
   enabled: true
   crdHook:
     image:
-      repository: bitnami/kubectl
-      # Keep the hook client within one minor of the K3s kubectl used by CI.
-      tag: "1.28.4"
+      # Match the official Opik chart's pinned kubectl image family. The Demo's
+      # Docker Hub proxy rejects the Bitnami repository used by the subchart.
+      repository: alpine/kubectl
+      tag: "1.35.0"
     resources:
       requests:
         cpu: 25m

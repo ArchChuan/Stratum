@@ -134,8 +134,9 @@ The demo Helm values deploy these dependencies inside the same K3s namespace:
 - Redis as `stratum-redis`
 - NATS JetStream as `stratum-nats`
 - etcd, MinIO, and Milvus standalone for vector search
-- Opik 2.1.32 in a separate `opik` namespace (MySQL, Redis, MinIO,
-  ClickHouse, and the Opik backend)
+- Opik 2.1.32 in a separate `opik` namespace (MySQL, Redis, ZooKeeper,
+  ClickHouse, and the Opik backend); bundled MinIO is disabled because the
+  trace evidence path does not require object storage
 - an in-cluster OTLP Collector in `stratum`, forwarding traces to the private
   Opik ingestion endpoint
 

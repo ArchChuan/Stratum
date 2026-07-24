@@ -51,7 +51,8 @@ config:
   otelCollectorEndpoint: "http://stratum-otel-collector:4317"
   otelServiceName: "stratum-ai"
   otelExporterType: "otlp"
-  otelSamplingRatio: "0.1"
+  # Agent execution evidence must reach Opik deterministically in Demo.
+  otelSamplingRatio: "1.0"
   # Official Opik release is installed in the opik namespace by the Demo
   # deployment workflow. The backend serves the REST API at its root.
   opikUrl: "http://opik-backend.opik.svc.cluster.local:8080"
