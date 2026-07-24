@@ -1,0 +1,101 @@
+# Single-node Demo override for the official Comet Opik chart.
+# The release is pinned by .github/workflows/deploy.yml to chart 2.1.32.
+standalone: true
+basicAuth: false
+demoDataJob:
+  enabled: false
+chartMigration:
+  enabled: false
+
+component:
+  backend:
+    replicaCount: 1
+    ingress:
+      enabled: false
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+  python-backend:
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  frontend:
+    replicaCount: 1
+    ingress:
+      enabled: false
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+mysql:
+  enabled: true
+  primary:
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+redis:
+  enabled: true
+  architecture: standalone
+  persistence:
+    enabled: true
+    size: 2Gi
+
+minio:
+  enabled: true
+  replicaCount: 1
+  persistence:
+    enabled: true
+    size: 5Gi
+
+zookeeper:
+  enabled: true
+  replicaCount: 1
+  persistence:
+    enabled: true
+    size: 2Gi
+
+clickhouse:
+  enabled: true
+  shardsCount: 1
+  replicasCount: 1
+  storage: 10Gi
+
+altinity-clickhouse-operator:
+  enabled: true
+  crdHook:
+    image:
+      repository: bitnami/kubectl
+      # Keep the hook client within one minor of the K3s kubectl used by CI.
+      tag: "1.28.4"
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+  metrics:
+    enabled: false
+  serviceMonitor:
+    enabled: false

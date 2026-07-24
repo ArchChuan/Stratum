@@ -11,6 +11,8 @@ DEMO_VALUES="${ROOT}/helm/values-demo.yaml"
 DEMO_LOCAL_VALUES="${ROOT}/helm/values-demo-local.yaml"
 REMOTE_HTTP_VALUES="${ROOT}/helm/values-demo-remote-http.yaml"
 POSTGRES_DOCKERFILE="${ROOT}/docker/postgres-zhparser.Dockerfile"
+OPIK_VALUES="${ROOT}/helm/opik/values-demo.yaml"
+OPIK_COLLECTOR="${ROOT}/k8s/opik-otel-collector.yaml"
 
 require() {
     local pattern="$1" description="$2"
@@ -51,6 +53,11 @@ require 'api\.github\.com/repos/.*/commits/main' 'fail-closed current main looku
 require 'sha256:\[0-9a-f\]\{64\}' 'registry digest validation'
 require '--set-string app\.image\.digest=' 'backend digest deployment'
 require '--set-string frontend\.image\.digest=' 'frontend digest deployment'
+require 'opik/opik.*--version 2\.1\.32|--version 2\.1\.32' 'pinned Opik Helm chart'
+require 'opik-backend\.opik\.svc\.cluster\.local:8080' 'in-cluster Opik API URL'
+require 'Apply Opik OTLP collector' 'collector applied before Stratum release'
+require 'rollout status deployment/opik-backend' 'Opik backend readiness wait'
+reject 'continue-on-error:[[:space:]]*true' 'deployment errors are not suppressed'
 
 for component in database redis nats etcd minio milvus; do
     require "--set-string ${component}\\.image\\.digest=" "${component} digest deployment"
@@ -140,6 +147,18 @@ require_file "${POSTGRES_DOCKERFILE}" 'curl .*--connect-timeout[[:space:]]+[0-9]
 require_file "${POSTGRES_DOCKERFILE}" 'curl .*--max-time[[:space:]]+[0-9]+' 'SCWS download total timeout'
 require_file "${POSTGRES_DOCKERFILE}" 'curl .*--retry[[:space:]]+[1-9][0-9]*' 'SCWS download finite retries'
 require_file "${POSTGRES_DOCKERFILE}" 'curl .*--retry-all-errors' 'SCWS download retry classification'
+if [[ ! -f "${OPIK_VALUES}" || ! -f "${OPIK_COLLECTOR}" ]]; then
+    echo 'deployment safety contract missing: pinned Opik values or collector manifest' >&2
+    exit 1
+fi
+require_file "${OPIK_VALUES}" 'replicaCount:[[:space:]]*1' 'single-node Opik replicas'
+require_file "${OPIK_VALUES}" 'persistence:' 'Opik persistent storage'
+require_file "${OPIK_VALUES}" 'resources:' 'Opik resource limits'
+require_file "${OPIK_COLLECTOR}" 'receivers:' 'collector OTLP receiver'
+require_file "${OPIK_COLLECTOR}" 'otlphttp/opik:' 'collector Opik exporter'
+require_file "${OPIK_COLLECTOR}" 'health_check:' 'collector readiness health check'
+require_file "${OPIK_COLLECTOR}" 'image:[[:space:]]*otel/opentelemetry-collector-contrib:[0-9]' \
+    'collector image is version pinned'
 
 for values_file in "${DEMO_VALUES}" "${DEMO_LOCAL_VALUES}"; do
     for key in opikUrl opikProject opikWorkspace tracePayloadEnabled tracePayloadEndpoint tracePayloadBucket tracePayloadUseTls; do
@@ -149,6 +168,9 @@ for values_file in "${DEMO_VALUES}" "${DEMO_LOCAL_VALUES}"; do
         fi
     done
 done
+
+require_file "${DEMO_VALUES}" 'opikUrl:[[:space:]]*"http://opik-backend\.opik\.svc\.cluster\.local:8080"' \
+    'Demo uses the in-cluster Opik API'
 
 if [[ -e "${ROOT}/.github/workflows/mirror.yml" ]]; then
     echo 'deployment safety contract violated: Gitee mirror workflow still exists' >&2

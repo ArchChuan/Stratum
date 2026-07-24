@@ -134,6 +134,10 @@ The demo Helm values deploy these dependencies inside the same K3s namespace:
 - Redis as `stratum-redis`
 - NATS JetStream as `stratum-nats`
 - etcd, MinIO, and Milvus standalone for vector search
+- Opik 2.1.32 in a separate `opik` namespace (MySQL, Redis, MinIO,
+  ClickHouse, and the Opik backend)
+- an in-cluster OTLP Collector in `stratum`, forwarding traces to the private
+  Opik ingestion endpoint
 
 All dependency Services are `ClusterIP`. Do not expose them through the cloud security group or Ingress.
 
@@ -150,14 +154,33 @@ helm upgrade --install stratum ./helm \
 ```
 
 Normal production deployment runs through `.github/workflows/deploy.yml` so
-image digests, secret checksums, rollout gates, and public verification are not
-skipped. The manual command is for rendering and operator diagnosis.
+image digests, secret checksums, the pinned Opik 2.1.32 release, collector
+readiness, rollout gates, and public verification are not skipped. The manual
+command is for rendering and operator diagnosis; deploy Opik first when
+reproducing the workflow manually:
+
+```bash
+helm repo add opik https://comet-ml.github.io/opik
+helm repo update
+helm upgrade --install opik opik/opik --version 2.1.32 \
+  --namespace opik --create-namespace \
+  -f helm/opik/values-demo.yaml --atomic --wait --timeout=20m
+kubectl apply -f k8s/opik-otel-collector.yaml
+kubectl rollout status deployment/opik-otel-collector -n stratum --timeout=5m
+```
+
+Stratum uses `http://opik-backend.opik.svc.cluster.local:8080` for
+diagnostic reads. The collector sends OTLP traces to the corresponding
+`/v1/private/otel` endpoint; neither endpoint is published through the
+public Ingress.
 
 ## Verify
 
 ```bash
 kubectl get pods -n stratum
+kubectl get pods -n opik
 kubectl get pvc -n stratum
+kubectl get pvc -n opik
 kubectl get ingress -n stratum -o wide
 kubectl get endpoints stratum stratum-frontend -n stratum
 kubectl port-forward service/stratum-frontend 18080:80 -n stratum
@@ -166,6 +189,9 @@ curl --fail --silent --show-error --max-time 15 \
 curl --fail --silent --show-error --max-time 15 -I "$PUBLIC_BASE_URL/"
 curl --fail --silent --show-error --max-time 15 \
   "$PUBLIC_BASE_URL/api/health" >/dev/null
+
+kubectl rollout status deployment/opik-backend -n opik --timeout=10m
+kubectl rollout status deployment/opik-otel-collector -n stratum --timeout=5m
 ```
 
 Run the port-forward in a separate terminal. The internal check isolates the

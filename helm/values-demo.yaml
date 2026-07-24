@@ -52,7 +52,9 @@ config:
   otelServiceName: "stratum-ai"
   otelExporterType: "otlp"
   otelSamplingRatio: "0.1"
-  opikUrl: ""
+  # Official Opik release is installed in the opik namespace by the Demo
+  # deployment workflow. The backend serves the REST API at its root.
+  opikUrl: "http://opik-backend.opik.svc.cluster.local:8080"
   opikProject: "stratum"
   opikWorkspace: "default"
   tracePayloadEnabled: "false"
@@ -174,7 +176,7 @@ minio:
       memory: "512Mi"
 
 observability:
-  enabled: false
+  enabled: true
   otelCollectorEndpoint: "http://stratum-otel-collector:4317"
 
 persistence:
