@@ -27,6 +27,7 @@ for assertion in \
   'PASS derived isolated sessions: 4 unique hashes' \
   'PASS tool outcomes: 1 cancelled, at least 3 effective, 1 disconnected' \
   'PASS metadata privacy and private modes' \
+  'PASS signal and EOF clean exact owned process groups without cross-session kill' \
   'PASS four-client report split' \
   'PASS child processes exited within 10s'; do
   grep -Fqx "$assertion" <<<"$output"

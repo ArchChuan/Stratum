@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -551,9 +553,53 @@ func TestRunProxyExecutesCommandAndPersistsOnlyMetadata(t *testing.T) {
 	}
 }
 
+func TestRunContextCancellationStopsProxyWithoutGlobalSignalRegistration(t *testing.T) {
+	root := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	childArgs := []string{"-test.run=TestProxyHelperProcess", "--", "catalog"}
+	configPath := writeProxyConfigWithCommand(t, root, "codex", "repository", executable, childArgs)
+	t.Setenv("MCP_GOVERNOR_TEST_HELPER", "1")
+	t.Setenv("MCP_GOVERNOR_TEST_HELPER_MODE", "block")
+	reader, writer := io.Pipe()
+	oldStdin := proxyStdin
+	proxyStdin = reader
+	t.Cleanup(func() {
+		proxyStdin = oldStdin
+		_ = writer.Close()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	args := []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
+		"--session", "123:456", "--repository", root, "--", executable}
+	args = append(args, childArgs...)
+	go func() { done <- runContext(ctx, args, io.Discard, io.Discard) }()
+	if _, err := writer.Write([]byte("request\n")); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case code := <-done:
+		if code != 1 {
+			t.Fatalf("runContext() = %d, want cancellation exit code 1", code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("runContext did not propagate cancellation to proxy")
+	}
+}
+
 func TestProxyHelperProcess(t *testing.T) {
 	if os.Getenv("MCP_GOVERNOR_TEST_HELPER") != "1" {
 		return
+	}
+	if os.Getenv("MCP_GOVERNOR_TEST_HELPER_MODE") == "block" {
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		for {
+			time.Sleep(time.Hour)
+		}
 	}
 	_, _ = io.ReadAll(os.Stdin)
 	_, _ = fmt.Fprintln(os.Stdout, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}`)

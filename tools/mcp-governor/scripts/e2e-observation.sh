@@ -86,6 +86,15 @@ doc = {
         "session_policy": "isolated",
         "clients": ["codex", "claude", "vscode", "lingma"],
         "all_args_contain": ["fake-mcp-server", "observation"],
+    }, {
+        "name": "stubborn-tree",
+        "command": server,
+        "args": ["stubborn-tree"],
+        "transport": "stdio",
+        "scope": "user",
+        "session_policy": "isolated",
+        "clients": ["codex", "claude", "vscode", "lingma"],
+        "all_args_contain": ["fake-mcp-server", "stubborn-tree"],
     }],
 }
 pathlib.Path(path).write_text(json.dumps(doc) + "\n")
@@ -297,6 +306,71 @@ fi
 printf 'PASS derived isolated sessions: 4 unique hashes\n'
 printf 'PASS tool outcomes: 1 cancelled, at least 3 effective, 1 disconnected\n'
 printf 'PASS metadata privacy and private modes\n'
+
+tree_one="$tmp_dir/tree-one"
+tree_two="$tmp_dir/tree-two"
+mkdir -m 0700 "$tree_one" "$tree_two"
+fifo_one="$tmp_dir/tree-one.stdin"
+fifo_two="$tmp_dir/tree-two.stdin"
+mkfifo -m 0600 "$fifo_one" "$fifo_two"
+exec 8<>"$fifo_one"
+exec 9<>"$fifo_two"
+(exec 8>&- 9>&-; MCP_GOVERNOR_TREE_PID_DIR="$tree_one" exec "$governor" proxy --config "$catalog" \
+  --client codex --service stubborn-tree --session 9001:1 -- "$fake_server" stubborn-tree) <"$fifo_one" \
+  >"$tmp_dir/tree-one.out" 2>"$tmp_dir/tree-one.err" &
+tree_proxy_one=$!
+proxy_pids+=("$tree_proxy_one")
+(exec 8>&- 9>&-; MCP_GOVERNOR_TREE_PID_DIR="$tree_two" exec "$governor" proxy --config "$catalog" \
+  --client claude --service stubborn-tree --session 9002:1 -- "$fake_server" stubborn-tree) <"$fifo_two" \
+  >"$tmp_dir/tree-two.out" 2>"$tmp_dir/tree-two.err" &
+tree_proxy_two=$!
+proxy_pids+=("$tree_proxy_two")
+
+tree_deadline=$((SECONDS + 10))
+while [[ ! -f "$tree_one/grandchild" || ! -f "$tree_two/grandchild" ]]; do
+  if (( SECONDS >= tree_deadline )); then
+    printf 'stubborn E2E trees did not publish exact PIDs\n' >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+tree_one_child=$(tr -d '[:space:]' <"$tree_one/child")
+tree_one_grandchild=$(tr -d '[:space:]' <"$tree_one/grandchild")
+tree_two_child=$(tr -d '[:space:]' <"$tree_two/child")
+tree_two_grandchild=$(tr -d '[:space:]' <"$tree_two/grandchild")
+fake_pids+=("$tree_one_child" "$tree_one_grandchild" "$tree_two_child" "$tree_two_grandchild")
+
+kill -TERM "$tree_proxy_one"
+if wait "$tree_proxy_one"; then
+  printf 'signal-cancelled proxy unexpectedly returned success\n' >&2
+  exit 1
+fi
+if ! kill -0 "$tree_proxy_two" 2>/dev/null || ! kill -0 "$tree_two_child" 2>/dev/null || \
+  ! kill -0 "$tree_two_grandchild" 2>/dev/null; then
+  printf 'unrelated concurrent proxy tree was affected\n' >&2
+  exit 1
+fi
+for pid in "$tree_one_child" "$tree_one_grandchild"; do
+  if ! wait_for_pid "$pid"; then
+    printf 'signalled proxy left owned process pid=%s\n' "$pid" >&2
+    exit 1
+  fi
+done
+exec 9>&-
+if ! wait "$tree_proxy_two"; then
+  printf 'EOF-shutdown proxy failed\n' >&2
+  exit 1
+fi
+for pid in "$tree_two_child" "$tree_two_grandchild"; do
+  if ! wait_for_pid "$pid"; then
+    printf 'EOF proxy left owned process pid=%s\n' "$pid" >&2
+    exit 1
+  fi
+done
+exec 8>&-
+proxy_pids=()
+fake_pids=()
+printf 'PASS signal and EOF clean exact owned process groups without cross-session kill\n'
 
 from=$(date -u -d '1 minute ago' +%Y-%m-%dT%H:%M:%SZ)
 to=$(date -u -d '1 minute' +%Y-%m-%dT%H:%M:%SZ)

@@ -12,11 +12,18 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/observe"
 )
 
 const defaultMaxMessageBytes = 8 << 20
+
+const (
+	defaultClientEOFDrain = 250 * time.Millisecond
+	defaultShutdownGrace  = 750 * time.Millisecond
+	defaultShutdownBudget = 2 * time.Second
+)
 
 var ErrMessageTooLarge = errors.New("message too large")
 var ErrUninterruptibleStdin = errors.New("stdin cannot be interrupted")
@@ -38,6 +45,8 @@ type Options struct {
 	wrapChildStdin  func(io.WriteCloser) io.WriteCloser
 	wrapChildStdout func(io.ReadCloser) io.ReadCloser
 	waitChild       func(*exec.Cmd) error
+	shutdownGrace   time.Duration
+	shutdownBudget  time.Duration
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -60,9 +69,12 @@ func Run(ctx context.Context, options Options) error {
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxMessageBytes
 	}
-	childCtx, cancel := context.WithCancel(ctx)
+	childCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cmd := exec.CommandContext(childCtx, options.Command, options.Args...)
+	cmd := exec.Command(options.Command, options.Args...)
+	if err := configureOwnedProcess(cmd); err != nil {
+		return fmt.Errorf("stdio proxy: configure owned process: %w", err)
+	}
 	cmd.Env, cmd.Dir = options.Env, options.Dir
 	childIn, err := cmd.StdinPipe()
 	if err != nil {
@@ -135,29 +147,99 @@ func Run(ctx context.Context, options Options) error {
 		})}
 	}()
 
-	first := <-results
-	if first.side == "client" && first.err == nil {
-		_ = stdinCleanup.Close()
-	}
+	waitResult := make(chan error, 1)
+	go func() { waitResult <- waitChild(options, cmd) }()
+
+	forwarded := make([]result, 0, 2)
+	var waitErr error
+	waitComplete := false
 	shutdownInitiated := false
 	exitCancellationExpected := false
-	var clientStdinCloseErr error
-	if first.err != nil || first.side == "child" {
+	escalationComplete := false
+	var clientStdinCloseErr, shutdownErr error
+	var drainTimer, graceTimer, budgetTimer *time.Timer
+	var drainC, graceC, budgetC <-chan time.Time
+	grace := options.shutdownGrace
+	if grace <= 0 {
+		grace = defaultShutdownGrace
+	}
+	budget := options.shutdownBudget
+	if budget <= 0 {
+		budget = defaultShutdownBudget
+	}
+	stopTimer := func(timer *time.Timer) {
+		if timer != nil {
+			timer.Stop()
+		}
+	}
+	defer func() {
+		stopTimer(drainTimer)
+		stopTimer(graceTimer)
+		stopTimer(budgetTimer)
+	}()
+	initiateShutdown := func(expectedCancellation bool) {
+		exitCancellationExpected = exitCancellationExpected || expectedCancellation
+		if shutdownInitiated {
+			return
+		}
 		shutdownInitiated = true
-		exitCancellationExpected = first.err != nil || ctx.Err() != nil
 		cancel()
 		_ = stdinCleanup.Close()
 		_ = stdoutCleanup.Close()
 		clientStdinCloseErr = interruptStdin(options)
+		if err := signalOwnedProcessGroup(cmd, syscall.SIGTERM); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("stdio proxy: terminate process group: %w", err))
+		}
+		graceTimer = time.NewTimer(grace)
+		graceC = graceTimer.C
+		budgetTimer = time.NewTimer(budget)
+		budgetC = budgetTimer.C
 	}
-	second := <-results
-	_ = stdinCleanup.Close()
-	_ = stdoutCleanup.Close()
-	waitErr := waitChild(options, cmd)
+
+	for len(forwarded) < 2 || !waitComplete || !escalationComplete {
+		select {
+		case item := <-results:
+			forwarded = append(forwarded, item)
+			if item.side == "client" && item.err == nil && !shutdownInitiated {
+				_ = stdinCleanup.Close()
+				if drainTimer == nil {
+					drainTimer = time.NewTimer(defaultClientEOFDrain)
+					drainC = drainTimer.C
+				}
+			} else {
+				initiateShutdown(item.err != nil)
+			}
+		case waitErr = <-waitResult:
+			waitComplete = true
+			initiateShutdown(false)
+			if !ownedProcessGroupExists(cmd) {
+				escalationComplete = true
+			}
+		case <-ctx.Done():
+			initiateShutdown(true)
+		case <-drainC:
+			drainC = nil
+			initiateShutdown(true)
+		case <-graceC:
+			graceC = nil
+			if err := signalOwnedProcessGroup(cmd, syscall.SIGKILL); err != nil {
+				shutdownErr = errors.Join(shutdownErr, fmt.Errorf("stdio proxy: kill process group: %w", err))
+			}
+			escalationComplete = true
+		case <-budgetC:
+			budgetC = nil
+			_ = signalOwnedProcessGroup(cmd, syscall.SIGKILL)
+			return errors.Join(errors.New("stdio proxy: shutdown budget exceeded"), shutdownErr,
+				clientStdinCloseErr, stdinCleanup.Err(), stdoutCleanup.Err())
+		}
+		if shutdownInitiated && waitComplete && len(forwarded) == 2 && !ownedProcessGroupExists(cmd) {
+			escalationComplete = true
+		}
+	}
 	cancel()
 
 	var runErr error
-	for _, item := range []result{first, second} {
+	for _, item := range forwarded {
 		if err := forwardingError(item.err, shutdownInitiated || ctx.Err() != nil); err != nil {
 			runErr = errors.Join(runErr, err)
 		}
@@ -177,7 +259,7 @@ func Run(ctx context.Context, options Options) error {
 			runErr = errors.Join(runErr, err)
 		}
 	}
-	return errors.Join(runErr, clientStdinCloseErr, stdinCleanup.Err(), stdoutCleanup.Err())
+	return errors.Join(runErr, shutdownErr, clientStdinCloseErr, stdinCleanup.Err(), stdoutCleanup.Err())
 }
 
 type cleanupCloser struct {
@@ -200,6 +282,9 @@ func (c *cleanupCloser) Err() error { return c.err }
 
 func closeError(name string, closer io.Closer) error {
 	if err := closer.Close(); err != nil {
+		if errors.Is(err, os.ErrClosed) {
+			return nil
+		}
 		return fmt.Errorf("stdio proxy: close %s: %w", name, err)
 	}
 	return nil

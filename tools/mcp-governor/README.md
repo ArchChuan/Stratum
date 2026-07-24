@@ -61,6 +61,15 @@ Run its shell acceptance test:
 ./scripts/e2e_observation_test.sh
 ```
 
+### Stdio process ownership
+
+On Linux, every stdio MCP command runs in a process group owned by that proxy session. Cancellation, terminal
+forwarding failure, or a client EOF that does not drain promptly triggers bounded `SIGTERM` then `SIGKILL` for that
+exact group. This includes descendants that remain in the inherited process group, including descendants forked
+during the grace period. A descendant that deliberately creates a new session or process group with `setsid(2)` has
+left the proxy's ownership boundary and is not claimed as cleaned up; MCP services must not daemonize outside the
+session-owned group.
+
 ## Disable or uninstall
 
 Stop future observations without removing files:

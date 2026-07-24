@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -76,10 +77,16 @@ type renderOptions struct {
 }
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+	os.Exit(runContext(ctx, os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	return runContext(context.Background(), args, stdout, stderr)
+}
+
+func runContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "expected command")
 		printUsage(stderr)
@@ -105,7 +112,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, proxyUsage)
 			return 2
 		}
-		if err := runProxy(opts, stdout, stderr); err != nil {
+		if err := runProxyContext(ctx, opts, stdout, stderr); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -382,6 +389,10 @@ func validateSessionIdentity(value string) error {
 }
 
 func runProxy(opts proxyOptions, stdout, stderr io.Writer) (resultErr error) {
+	return runProxyContext(context.Background(), opts, stdout, stderr)
+}
+
+func runProxyContext(ctx context.Context, opts proxyOptions, stdout, stderr io.Writer) (resultErr error) {
 	resolvePath := newPathResolver()
 	configPath, err := resolvePath(opts.configPath)
 	if err != nil {
@@ -475,7 +486,7 @@ func runProxy(opts proxyOptions, stdout, stderr io.Writer) (resultErr error) {
 			return err
 		}
 	}
-	return proxy.Run(context.Background(), proxy.Options{
+	return proxy.Run(ctx, proxy.Options{
 		Command: opts.command, Args: opts.args, Env: os.Environ(), Dir: dir,
 		Stdin: proxyStdin, Stdout: stdout, Stderr: stderr, Tracker: tracker, Events: writer,
 	})

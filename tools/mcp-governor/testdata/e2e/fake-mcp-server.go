@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -57,8 +60,43 @@ func main() {
 		}
 		_, _ = fmt.Fprintln(os.Stdout, os.Getenv("FAKE_VALUE"))
 		_, _ = fmt.Fprintln(os.Stdout, cwd)
+	case "stubborn-tree":
+		runStubbornTree()
+	case "stubborn-grandchild":
+		signal.Ignore(os.Interrupt, os.Signal(syscall.SIGTERM), os.Signal(syscall.SIGHUP))
+		writeTreePID("grandchild", os.Getpid())
+		for {
+			time.Sleep(time.Hour)
+		}
 	default:
 		os.Exit(9)
+	}
+}
+
+func runStubbornTree() {
+	signal.Ignore(os.Interrupt, os.Signal(syscall.SIGTERM), os.Signal(syscall.SIGHUP))
+	writeTreePID("child", os.Getpid())
+	grandchild := exec.Command(os.Args[0], "stubborn-grandchild")
+	grandchild.Stdin = nil
+	grandchild.Stdout = os.Stdout
+	grandchild.Stderr = os.Stderr
+	if err := grandchild.Start(); err != nil {
+		os.Exit(11)
+	}
+	_, _ = io.WriteString(os.Stdout, "tree-ready\n")
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
+func writeTreePID(name string, pid int) {
+	dir := os.Getenv("MCP_GOVERNOR_TREE_PID_DIR")
+	if dir == "" {
+		return
+	}
+	if os.WriteFile(filepath.Join(dir, name), []byte(strconv.Itoa(pid)+"\n"), 0o600) != nil {
+		os.Exit(12)
 	}
 }
 
