@@ -231,6 +231,8 @@ func (w *Writer) MarkDegraded(reason string, count uint64) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("degraded reason is required")
 	}
+	w.statusWriteMu.Lock()
+	defer w.statusWriteMu.Unlock()
 	w.statusMu.Lock()
 	for _, existing := range w.status.Reasons {
 		if existing == reason {
@@ -299,8 +301,6 @@ func (w *Writer) MarkObservationWindow(first, last time.Time) error {
 
 func (w *Writer) writeStatus(clientDirFD int, status DegradedStatus) error {
 	defer syscall.Close(clientDirFD)
-	w.statusWriteMu.Lock()
-	defer w.statusWriteMu.Unlock()
 	data, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("marshal degraded status: %w", err)
