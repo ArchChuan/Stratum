@@ -111,7 +111,7 @@ func systemAssistantPostgresURL(t *testing.T) string {
 		return value
 	}
 	if os.Getenv("CI") != "" {
-		t.Fatal("STRATUM_TEST_POSTGRES_URL or TEST_POSTGRES_URL is required for system assistant E2E in CI")
+		t.Skip("system assistant PostgreSQL E2E runs in the dedicated memory E2E job")
 	}
 	return "postgres://stratum:stratum@localhost:5432/stratum?sslmode=disable"
 }
