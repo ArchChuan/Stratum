@@ -134,6 +134,12 @@ type ExecutionArtifact struct {
 	DiagnosticReport *DiagnosticReport `json:"diagnosticReport,omitempty"`
 }
 
+var diagnosticRecommendedActions = map[string]string{
+	DiagnosticGapUnavailable: "Check the Opik backend, OTEL Collector export path, and dependency health.",
+	DiagnosticGapTimeout:     "Check Opik backend and OTEL Collector latency, then retry the diagnostic request.",
+	DiagnosticGapCancelled:   "Retry the diagnostic request and verify the Opik backend and OTEL Collector are reachable.",
+}
+
 func BuildDiagnosticReport(toolArtifacts []SystemAssistantToolArtifact) *DiagnosticReport {
 	r := &DiagnosticReport{Facts: []DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []EvidenceGap{}, RecommendedActions: []string{}, Citations: []Citation{}, Steps: []DiagnosticStep{}}
 	for _, a := range toolArtifacts {
@@ -152,7 +158,30 @@ func BuildDiagnosticReport(toolArtifacts []SystemAssistantToolArtifact) *Diagnos
 			r.EvidenceGaps = append(r.EvidenceGaps, EvidenceGap{Source: a.Tool, Code: a.ErrorCode})
 		}
 	}
+	r.RecommendedActions = recommendedActionsForGaps(r.EvidenceGaps)
 	return r
+}
+
+func recommendedActionsForGaps(gaps []EvidenceGap) []string {
+	actions := make([]string, 0, len(gaps))
+	for _, gap := range gaps {
+		action, ok := diagnosticRecommendedActions[gap.Code]
+		if !ok {
+			continue
+		}
+		action = boundEvidenceString(action)
+		duplicate := false
+		for _, existing := range actions {
+			if existing == action {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate && len(actions) < constants.SystemAssistantDiagnosticGapsMaxCount {
+			actions = append(actions, action)
+		}
+	}
+	return actions
 }
 
 func appendUniqueCitations(dst []Citation, values ...Citation) []Citation {

@@ -11,6 +11,7 @@ DIGEST_RENDER="${TMP_ROOT}/digest.yaml"
 REMOTE_HTTP_RENDER="${TMP_ROOT}/remote-http.yaml"
 REMOTE_HTTP_INGRESS="${TMP_ROOT}/remote-http-ingress.yaml"
 REMOTE_HTTP_VALUES="${ROOT}/helm/values-demo-remote-http.yaml"
+OPIK_COLLECTOR="${ROOT}/k8s/opik-otel-collector.yaml"
 
 if [[ ! -f "${REMOTE_HTTP_VALUES}" ]]; then
     echo 'remote HTTP Helm values are missing' >&2
@@ -58,6 +59,15 @@ helm template stratum "${ROOT}/helm" \
 grep -Fq 'FRONTEND_URL: "http://203.0.113.10:6879"' "${REMOTE_HTTP_RENDER}"
 grep -Fq 'GITHUB_CALLBACK_URL: "http://203.0.113.10:6879/api/auth/github/callback"' "${REMOTE_HTTP_RENDER}"
 grep -Fq 'SECURE_COOKIES: "false"' "${REMOTE_HTTP_RENDER}"
+grep -Fq 'OPIK_URL: "http://opik-backend.opik.svc.cluster.local:8080"' "${REMOTE_HTTP_RENDER}"
+
+if ! grep -Eq 'image:[[:space:]]*otel/opentelemetry-collector-contrib@sha256:[0-9a-f]{64}' \
+    "${OPIK_COLLECTOR}"; then
+    echo 'collector image is not digest pinned' >&2
+    exit 1
+fi
+grep -Fq 'otlphttp/opik:' "${OPIK_COLLECTOR}"
+grep -Fq 'opik-backend.opik.svc.cluster.local:8080/v1/private/otel' "${OPIK_COLLECTOR}"
 
 awk '/^kind: Ingress$/{found=1} found{print} found && /^---$/{exit}' \
     "${REMOTE_HTTP_RENDER}" >"${REMOTE_HTTP_INGRESS}"

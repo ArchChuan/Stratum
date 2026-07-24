@@ -23,3 +23,23 @@ func TestBuildDiagnosticReportPreservesDocsFailureStepWithoutInventingClaims(t *
 	require.Empty(t, report.Facts)
 	require.Equal(t, []EvidenceGap{{Source: "stratum_search_official_docs", Code: "not_found"}}, report.EvidenceGaps)
 }
+
+func TestBuildDiagnosticReportRecommendsOpikHealthCheckForUnavailableEvidence(t *testing.T) {
+	report := BuildDiagnosticReport([]SystemAssistantToolArtifact{
+		{Tool: "stratum_diagnose_tenant", Outcome: "error", ErrorCode: DiagnosticGapUnavailable},
+		{Tool: "stratum_trace_evidence", Outcome: "error", ErrorCode: DiagnosticGapUnavailable},
+	})
+
+	require.Len(t, report.RecommendedActions, 1)
+	require.NotEmpty(t, report.RecommendedActions[0])
+	require.Contains(t, report.RecommendedActions[0], "Opik")
+	require.Contains(t, report.RecommendedActions[0], "OTEL")
+}
+
+func TestBuildDiagnosticReportDoesNotInventActionsForUnknownGap(t *testing.T) {
+	report := BuildDiagnosticReport([]SystemAssistantToolArtifact{
+		{Tool: "stratum_diagnose_tenant", Outcome: "error", ErrorCode: "unknown_gap"},
+	})
+
+	require.Empty(t, report.RecommendedActions)
+}

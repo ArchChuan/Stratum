@@ -95,10 +95,43 @@ func TestSystemAssistantHandlerMemberGetsSettingsWithoutSecrets(t *testing.T) {
 func TestManagedAgentDTOExposesPublicManagementFieldsWithoutSystemKey(t *testing.T) {
 	response := dtoToResponse(agentapp.AgentDTO{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
-		IsSystem: true, ManagementMode: "platform",
+		SystemPrompt: "platform prompt must not cross the transport boundary",
+		IsSystem:     true, ManagementMode: "platform",
 	})
 	if !response.IsSystem || response.ManagementMode != "platform" {
 		t.Fatalf("managed fields = isSystem:%v managementMode:%q", response.IsSystem, response.ManagementMode)
+	}
+	if response.SystemPrompt != "" {
+		t.Fatalf("managed system prompt leaked through DTO: %q", response.SystemPrompt)
+	}
+}
+
+func TestManagedAgentDTORedactsByManagedIDOrSystemKey(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		id        string
+		systemKey string
+	}{
+		{name: "managed id", id: domain.SystemAssistantID},
+		{name: "managed key", id: "tenant-copy", systemKey: domain.SystemAssistantKey},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := dtoToResponse(agentapp.AgentDTO{
+				ID: tc.id, SystemKey: tc.systemKey, SystemPrompt: "platform prompt",
+			})
+			if response.SystemPrompt != "" {
+				t.Fatalf("managed prompt leaked for %s: %q", tc.name, response.SystemPrompt)
+			}
+		})
+	}
+}
+
+func TestCustomAgentDTOPreservesSystemPrompt(t *testing.T) {
+	response := dtoToResponse(agentapp.AgentDTO{
+		ID: "custom-agent", SystemKey: "", SystemPrompt: "custom prompt",
+	})
+	if response.SystemPrompt != "custom prompt" {
+		t.Fatalf("custom system prompt = %q", response.SystemPrompt)
 	}
 }
 

@@ -114,8 +114,14 @@ type ChatMessage struct {
 	AgentID        string
 	MemoryScope    string
 	SkipOutbox     bool
+	Visibility     string
 	Artifacts      []ExecutionArtifact
 }
+
+const (
+	ChatMessageVisibilityUser     = "user"
+	ChatMessageVisibilityInternal = "internal"
+)
 
 const (
 	ExecStatusSuccess         = "success"

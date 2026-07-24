@@ -1,0 +1,143 @@
+# Single-node Demo override for the official Comet Opik chart.
+# The release is pinned by .github/workflows/deploy.yml to chart 2.1.32.
+standalone: true
+basicAuth: false
+demoDataJob:
+  enabled: false
+chartMigration:
+  enabled: false
+
+component:
+  backend:
+    image:
+      tag: "2.1.32@sha256:db2c0b82b33e530730c85334a1920c8e9fb92ed4f7b490a0dd6bf1e760f5d98b"
+    waitForClickhouse:
+      image:
+        tag: "8.12.1@sha256:94e9e444bcba979c2ea12e27ae39bee4cd10bc7041a472c4727a558e213744e6"
+    replicaCount: 1
+    ingress:
+      enabled: false
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+  python-backend:
+    image:
+      tag: "2.1.32@sha256:f87e7d455b96741f885d25b2e7e3498e6b6e8b8870ddabaa741eb9fe9d3201ac"
+    waitForRedis:
+      image:
+        tag: "1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  frontend:
+    image:
+      tag: "2.1.32@sha256:f7dc11b64504272bdfc579f30ef1b776967abd04aa7e96f15b4b78813e1793db"
+    replicaCount: 1
+    ingress:
+      enabled: false
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+mysql:
+  enabled: true
+  image:
+    tag: "8.4.2@sha256:ac80b6e09e5b12b4f9d5cd4f6425e43464247aa4ba4f6169da5daf59e5877f7d"
+  primary:
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+redis:
+  enabled: true
+  architecture: standalone
+  image:
+    tag: "7.2.0-v10@sha256:e44b2b49d059ee0e404305624d78f920b0f932434f42a0a9b9e7d07053799324"
+  resources:
+    requests:
+      cpu: 25m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 512Mi
+  persistence:
+    enabled: true
+    size: 2Gi
+
+minio:
+  # Trace ingestion does not require object storage, and the Demo node's
+  # registry proxy rejects the chart's cloudpirates MinIO image.
+  enabled: false
+
+zookeeper:
+  enabled: true
+  replicaCount: 1
+  image:
+    tag: "3.9.4@sha256:dfa9ba46d14bd52bcb3c1dac3ba91f179cf4cebf7ee576e1c2df09c68fc1d30d"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    enabled: true
+    size: 2Gi
+
+clickhouse:
+  enabled: true
+  shardsCount: 1
+  replicasCount: 1
+  image: "altinity/clickhouse-server:25.8.16.10002.altinitystable@sha256:0b80ad5a1759c8dbfae192e0c42145917359590490735aaee0230882edc355ae"
+  storage: 10Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+altinity-clickhouse-operator:
+  enabled: true
+  crdHook:
+    image:
+      # Match the official Opik chart's pinned kubectl image family. The Demo's
+      # Docker Hub proxy rejects the Bitnami repository used by the subchart.
+      repository: alpine/kubectl
+      tag: "1.35.0@sha256:862d86046bbcad03c252bbc10ab8bf893e7aa50aa7a20de8bfc46727dd645883"
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+  operator:
+    image:
+      tag: "0.27.1@sha256:a802b3a19d2011f672c32cea6733e573e004938ff463d1c3ab4ac0b16b9877dd"
+  metrics:
+    enabled: false
+  serviceMonitor:
+    enabled: false

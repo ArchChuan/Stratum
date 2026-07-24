@@ -281,6 +281,45 @@ func TestBaseAgentRootSpanCarriesEvaluationEvidence(t *testing.T) {
 	require.Equal(t, "skill-revision-2", manifest["skill:skill-1"])
 }
 
+func TestBaseAgentCopiesExecutionEvidenceToRequestSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	ctx, requestSpan := otel.Tracer("test/http").Start(context.Background(), "/agents/:id/execute")
+	a := newReActAgent()
+	a.SetCapGateway(&mockCapGW{responses: []port.CapabilityResponse{{Content: "OK"}}})
+	_, err := a.Execute(ctx, "reply OK",
+		agent.WithTenantID("tenant-1"),
+		agent.WithUserID("user-1"),
+		agent.WithTraceID("business-trace-1"),
+		agent.WithExecutionID("execution-1"),
+	)
+	require.NoError(t, err)
+	requestSpan.End()
+
+	var request sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		if span.Name() == "/agents/:id/execute" {
+			request = span
+			break
+		}
+	}
+	require.NotNil(t, request)
+	attrs := spanAttributes(request)
+	require.Equal(t, "tenant-1", attrs["opik.metadata.stratum.tenant_id"])
+	require.Equal(t, "user-1", attrs["opik.metadata.stratum.user_id"])
+	require.Equal(t, "execution-1", attrs["opik.metadata.stratum.execution_id"])
+	require.Equal(t, "agent-001", attrs["opik.metadata.stratum.agent_id"])
+	require.Equal(t, "success", attrs["opik.metadata.stratum.status"])
+	require.Contains(t, attrs, "opik.metadata.stratum.duration_ms")
+}
+
 func spanAttributes(span sdktrace.ReadOnlySpan) map[string]any {
 	out := make(map[string]any)
 	for _, attr := range span.Attributes() {
@@ -463,6 +502,7 @@ func TestExecute_ReturnsToolTraceAndPersistsSummaryMessage(t *testing.T) {
 	require.Contains(t, savedMsgs[2].Content, "本轮工具观察摘要")
 	require.Contains(t, savedMsgs[2].Content, "calc")
 	require.True(t, savedMsgs[2].SkipOutbox)
+	require.Equal(t, agent.ChatMessageVisibilityInternal, savedMsgs[2].Visibility)
 }
 
 func TestExecute_LoadsHistoryFromChatStore(t *testing.T) {

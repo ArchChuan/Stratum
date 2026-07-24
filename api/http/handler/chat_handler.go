@@ -6,6 +6,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -150,6 +151,9 @@ func (h *ChatHandler) ListMessages(c *gin.Context) {
 	}
 	out := make([]gin.H, 0, len(msgs))
 	for _, m := range msgs {
+		if m.Visibility != "" && m.Visibility != domain.ChatMessageVisibilityUser {
+			continue
+		}
 		out = append(out, messageResponse(m))
 	}
 	c.JSON(http.StatusOK, gin.H{"messages": out})
