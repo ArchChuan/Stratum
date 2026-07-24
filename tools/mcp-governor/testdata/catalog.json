@@ -1,0 +1,68 @@
+{
+  "version": 2,
+  "output_path": "/tmp/mcp-governor-snapshot.json",
+  "registry_path": "/tmp/mcp-governor-registry.json",
+  "observation": {
+    "events_dir": "/tmp/mcp-governor-events",
+    "reports_dir": "/tmp/mcp-governor-reports",
+    "salt_path": "/tmp/mcp-governor-salt",
+    "raw_retention_days": 7
+  },
+  "services": [
+    {
+      "name": "zeta",
+      "command": "/opt/mcp/zeta server",
+      "args": ["--label", "quoted \"value\""],
+      "cwd": "/tmp",
+      "transport": "stdio",
+      "scope": "user",
+      "session_policy": "isolated",
+      "clients": ["codex", "claude", "vscode", "lingma"],
+      "all_args_contain": ["zeta", "server"]
+    },
+    {
+      "name": "alpha",
+      "command": "/opt/mcp/alpha",
+      "args": ["serve", "--safe"],
+      "cwd": "/tmp",
+      "transport": "stdio",
+      "scope": "session",
+      "session_policy": "session_local",
+      "clients": ["codex", "claude", "vscode", "lingma"],
+      "all_args_contain": ["alpha", "serve"]
+    },
+    {
+      "name": "claude-only",
+      "command": "/opt/mcp/claude",
+      "args": ["start"],
+      "cwd": "/tmp",
+      "transport": "stdio",
+      "scope": "user",
+      "session_policy": "isolated",
+      "clients": ["claude"],
+      "all_args_contain": ["mcp", "claude"]
+    },
+    {
+      "name": "repository-index",
+      "command": "/opt/mcp/index",
+      "args": ["serve"],
+      "cwd": "/tmp",
+      "transport": "stdio",
+      "scope": "repository",
+      "session_policy": "isolated",
+      "clients": ["codex", "claude", "vscode", "lingma"],
+      "all_args_contain": ["mcp", "index"]
+    },
+    {
+      "name": "remote",
+      "command": "/opt/mcp/remote",
+      "args": ["serve"],
+      "cwd": "/tmp",
+      "transport": "streamable_http",
+      "scope": "user",
+      "session_policy": "isolated",
+      "clients": ["codex", "claude", "vscode", "lingma"],
+      "all_args_contain": ["mcp", "remote"]
+    }
+  ]
+}

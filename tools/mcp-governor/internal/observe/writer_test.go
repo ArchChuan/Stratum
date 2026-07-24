@@ -1,0 +1,542 @@
+package observe
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func TestWriterTakesExclusiveLockForAppend(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriter(root, "codex", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	path := filepath.Join(root, "codex", "session.jsonl")
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if err := syscall.Flock(int(reader.Fd()), syscall.LOCK_SH); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- w.Write(validWriterEvent("codex", "session")) }()
+	select {
+	case err := <-done:
+		t.Fatalf("Write completed without waiting for shared lock: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err := syscall.Flock(int(reader.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Write did not finish after lock release")
+	}
+}
+
+func TestWriterCreatesPrivateJSONLFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriter(root, "codex", "session-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := validWriterEvent("codex", "session-hash")
+	if err := w.Write(event); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	assertMode(t, root, 0o700)
+	assertMode(t, filepath.Join(root, "codex"), 0o700)
+	path := filepath.Join(root, "codex", "session-hash.jsonl")
+	assertMode(t, path, 0o600)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Count(data, []byte{'\n'}) != 1 || len(data) == 0 || data[len(data)-1] != '\n' {
+		t.Fatalf("event file = %q, want exactly one newline-terminated record", data)
+	}
+	var got Event
+	if err := json.Unmarshal(bytes.TrimSuffix(data, []byte{'\n'}), &got); err != nil {
+		t.Fatalf("unmarshal record: %v", err)
+	}
+	if got != event {
+		t.Fatalf("record = %+v, want %+v", got, event)
+	}
+}
+
+func TestWriterRotatesBySizeAndPreservesAllRecords(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriterWithOptions(root, "codex", "session-hash", WriterOptions{MaxSegmentBytes: 1, RotateDaily: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := validWriterEvent("codex", "session-hash")
+	for i := 0; i < 3; i++ {
+		event.At = time.Unix(int64(100+i), 0).UTC()
+		if err := w.Write(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(root, "codex", "session-hash*.jsonl"))
+	if err != nil || len(files) != 3 {
+		t.Fatalf("rotated files = %v, err=%v; want 3", files, err)
+	}
+	for _, path := range files {
+		assertMode(t, path, 0o600)
+		data, err := os.ReadFile(path)
+		if err != nil || len(data) == 0 {
+			t.Fatalf("read rotated segment %s: %v", path, err)
+		}
+	}
+}
+
+func TestWriterRotatesAtCalendarDateBoundary(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriterWithOptions(root, "codex", "session-hash", WriterOptions{MaxSegmentBytes: 1 << 20, RotateDaily: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := validWriterEvent("codex", "session-hash")
+	first.At = time.Date(2026, 7, 1, 23, 59, 0, 0, time.UTC)
+	second := first
+	second.At = first.At.Add(2 * time.Minute)
+	if err := w.Write(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Write(second); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	files, _ := filepath.Glob(filepath.Join(root, "codex", "session-hash*.jsonl"))
+	if len(files) != 2 {
+		t.Fatalf("date boundary files = %v, want 2", files)
+	}
+}
+
+func TestWriterReopensLatestSegmentAndPreservesDateRotationAfterRestart(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	options := WriterOptions{MaxSegmentBytes: 1 << 20, RotateDaily: true}
+	first, err := NewWriterWithOptions(root, "codex", "session-hash", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := validWriterEvent("codex", "session-hash")
+	event.At = time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	if err := first.Write(event); err != nil {
+		t.Fatal(err)
+	}
+	event.At = time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	if err := first.Write(event); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := NewWriterWithOptions(root, "codex", "session-hash", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event.At = time.Date(2026, 7, 2, 13, 0, 0, 0, time.UTC)
+	if err := second.Write(event); err != nil {
+		t.Fatal(err)
+	}
+	event.At = time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	if err := second.Write(event); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	counts := make(map[string]int)
+	for _, path := range []string{
+		filepath.Join(root, "codex", "session-hash.jsonl"),
+		filepath.Join(root, "codex", "session-hash.000001.jsonl"),
+		filepath.Join(root, "codex", "session-hash.000002.jsonl"),
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts[filepath.Base(path)] = bytes.Count(data, []byte{'\n'})
+	}
+	if counts["session-hash.jsonl"] != 1 || counts["session-hash.000001.jsonl"] != 2 || counts["session-hash.000002.jsonl"] != 1 {
+		t.Fatalf("segment record counts = %v, want base=1 seq1=2 seq2=1", counts)
+	}
+}
+
+func TestWriterPersistsDegradedStatus(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriter(root, "codex", "session-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.MarkDegraded("observation_sink_dropped", 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "codex", "session-hash.status.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status DegradedStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.RecordsDropped != 3 || len(status.Reasons) != 1 || status.Reasons[0] != "observation_sink_dropped" {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
+func TestWriterCloseContextReturnsWhenWriterMutexIsBusy(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriter(root, "codex", "session-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.Close() }()
+
+	w.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.CloseContext(ctx) }()
+
+	select {
+	case err := <-done:
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("CloseContext() error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CloseContext() blocked while writer mutex was busy")
+	}
+	w.mu.Unlock()
+}
+
+func TestWriterCloseContextInterruptsActiveFileWrite(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriter(root, "codex", "session-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.Close() }()
+
+	reader, pipeWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	originalFile := w.file
+	w.mu.Lock()
+	w.file = pipeWriter
+	w.activeFile.Store(pipeWriter)
+	writeDone := make(chan error, 1)
+	go func() {
+		_, writeErr := pipeWriter.Write(make([]byte, 1<<20))
+		writeDone <- writeErr
+	}()
+	time.Sleep(20 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- w.CloseContext(ctx) }()
+	select {
+	case err := <-closeDone:
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("CloseContext() error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CloseContext() blocked while active file write was busy")
+	}
+	cancel()
+	select {
+	case <-writeDone:
+	case <-time.After(time.Second):
+		t.Fatal("closing active os.File did not interrupt the blocked write")
+	}
+	w.file = originalFile
+	w.activeFile.Store(originalFile)
+	w.mu.Unlock()
+}
+
+func TestWriterRejectsUnsafePathComponents(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	for _, tt := range []struct {
+		name, client, session string
+	}{
+		{name: "empty client", client: "", session: "session"},
+		{name: "dot client", client: ".", session: "session"},
+		{name: "parent client", client: "..", session: "session"},
+		{name: "client slash", client: "a/b", session: "session"},
+		{name: "empty session", client: "codex", session: ""},
+		{name: "dot session", client: "codex", session: "."},
+		{name: "parent session", client: "codex", session: ".."},
+		{name: "session slash", client: "codex", session: "a/b"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if w, err := NewWriter(root, tt.client, tt.session); err == nil {
+				_ = w.Close()
+				t.Fatal("NewWriter() succeeded for unsafe path component")
+			}
+		})
+	}
+}
+
+func TestWriterRejectsSymlinkTargets(t *testing.T) {
+	for _, target := range []string{"root", "client", "lock", "file"} {
+		t.Run(target, func(t *testing.T) {
+			base := t.TempDir()
+			root := filepath.Join(base, "events")
+			real := filepath.Join(base, "real")
+			if err := os.Mkdir(real, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			switch target {
+			case "root":
+				if err := os.Symlink(real, root); err != nil {
+					t.Fatal(err)
+				}
+			case "client":
+				if err := os.Mkdir(root, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(real, filepath.Join(root, "codex")); err != nil {
+					t.Fatal(err)
+				}
+			case "file":
+				if err := os.MkdirAll(filepath.Join(root, "codex"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(real, "target"), filepath.Join(root, "codex", "session.jsonl")); err != nil {
+					t.Fatal(err)
+				}
+			case "lock":
+				if err := os.MkdirAll(filepath.Join(root, "codex"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(real, "target"), filepath.Join(root, "codex", "session.lock")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if w, err := NewWriter(root, "codex", "session"); err == nil {
+				_ = w.Close()
+				t.Fatalf("NewWriter() followed %s symlink", target)
+			}
+		})
+	}
+}
+
+func TestWriterRejectsWrongExistingModes(t *testing.T) {
+	for _, target := range []string{"root", "client", "lock", "file"} {
+		t.Run(target, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "events")
+			if err := os.Mkdir(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			client := filepath.Join(root, "codex")
+			if target != "root" {
+				if err := os.Mkdir(client, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch target {
+			case "root":
+				if err := os.Chmod(root, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			case "client":
+				if err := os.Chmod(client, 0o750); err != nil {
+					t.Fatal(err)
+				}
+			case "file":
+				path := filepath.Join(client, "session.jsonl")
+				if err := os.WriteFile(path, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "lock":
+				path := filepath.Join(client, "session.lock")
+				if err := os.WriteFile(path, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if w, err := NewWriter(root, "codex", "session"); err == nil {
+				_ = w.Close()
+				t.Fatalf("NewWriter() accepted wrong %s mode", target)
+			}
+		})
+	}
+}
+
+func TestWriterRejectsInvalidEventsAndWritesAfterClose(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := NewWriter(root, "codex", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Write(Event{}); err == nil {
+		t.Fatal("Write() accepted invalid event")
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Write(validWriterEvent("codex", "session")); err == nil {
+		t.Fatal("Write() after Close() succeeded")
+	}
+	data, err := os.ReadFile(filepath.Join(root, "codex", "session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("invalid event was persisted: %q", data)
+	}
+}
+
+func TestWriterRejectsEventForDifferentClientOrSession(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		client  string
+		session string
+	}{
+		{name: "different client", client: "claude", session: "session"},
+		{name: "different session", client: "codex", session: "other-session"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "events")
+			w, err := NewWriter(root, "codex", "session")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Write(validWriterEvent(tt.client, tt.session)); err == nil {
+				t.Fatal("Write() accepted event for a different session file")
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(root, "codex", "session.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(data) != 0 {
+				t.Fatalf("mismatched event was persisted: %q", data)
+			}
+		})
+	}
+}
+
+func TestWriterRejectsExistingSpecialModeBits(t *testing.T) {
+	for _, target := range []string{"root", "client", "file"} {
+		t.Run(target, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "events")
+			if err := os.Mkdir(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			client := filepath.Join(root, "codex")
+			if target != "root" {
+				if err := os.Mkdir(client, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var path string
+			var mode uint32
+			switch target {
+			case "root":
+				path, mode = root, syscall.S_ISVTX|0o700
+			case "client":
+				path, mode = client, syscall.S_ISGID|0o700
+			case "file":
+				path, mode = filepath.Join(client, "session.jsonl"), syscall.S_ISUID|0o600
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := syscall.Chmod(path, mode); err != nil {
+				t.Fatal(err)
+			}
+			if w, err := NewWriter(root, "codex", "session"); err == nil {
+				_ = w.Close()
+				t.Fatalf("NewWriter() accepted special mode bits on %s", target)
+			}
+		})
+	}
+}
+
+func TestWriterConcurrentDifferentSessions(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	const writers = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			session := "session-" + string(rune('a'+i))
+			w, err := NewWriter(root, "codex", session)
+			if err == nil {
+				err = w.Write(validWriterEvent("codex", session))
+			}
+			if err == nil {
+				err = w.Close()
+			}
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < writers; i++ {
+		session := "session-" + string(rune('a'+i))
+		data, err := os.ReadFile(filepath.Join(root, "codex", session+".jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Count(data, []byte{'\n'}) != 1 {
+			t.Fatalf("%s records = %q", session, data)
+		}
+	}
+}
+
+func validWriterEvent(client, session string) Event {
+	return Event{
+		Version: EventVersion, Kind: KindSessionReady, At: time.Unix(100, 0).UTC(), Client: client,
+		Service: "github", SessionHash: session, DurationMS: 12, ResponseBytes: 34,
+	}
+}
+
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s mode = %#o, want %#o", path, got, want)
+	}
+}

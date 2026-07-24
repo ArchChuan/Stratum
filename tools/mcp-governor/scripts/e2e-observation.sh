@@ -1,0 +1,387 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+module_dir=$(cd -- "$script_dir/.." && pwd)
+tmp_dir=$(mktemp -d)
+declare -a shim_pids=()
+declare -a proxy_pids=()
+declare -a fake_pids=()
+go_bin=${MCP_GOVERNOR_GO:-go}
+
+wait_for_pid() {
+  local pid=$1 deadline=$((SECONDS + 10))
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( SECONDS >= deadline )); then
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+
+cleanup() {
+  local pid stubborn=0
+  for pid in "${shim_pids[@]}" "${proxy_pids[@]}" "${fake_pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+  done
+  for pid in "${shim_pids[@]}" "${proxy_pids[@]}" "${fake_pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null && ! wait_for_pid "$pid"; then
+      printf 'stubborn E2E process pid=%s\n' "$pid" >&2
+      stubborn=1
+    fi
+    wait "$pid" 2>/dev/null || true
+  done
+  rm -rf -- "$tmp_dir"
+  return "$stubborn"
+}
+trap cleanup EXIT INT TERM
+
+umask 077
+export HOME="$tmp_dir/home"
+export XDG_CONFIG_HOME="$tmp_dir/xdg-config"
+state_dir="$tmp_dir/state"
+config_dir="$tmp_dir/config"
+build_dir="$tmp_dir/build"
+render_dir="$tmp_dir/rendered"
+pid_dir="$tmp_dir/fake-pids"
+proxy_pid_dir="$tmp_dir/proxy-pids"
+shim_pid_dir="$tmp_dir/shim-pids"
+gate_dir="$tmp_dir/client-gates"
+launched_dir="$tmp_dir/launched"
+mkdir -m 0700 "$HOME" "$XDG_CONFIG_HOME" "$state_dir" "$config_dir" "$build_dir" "$render_dir" "$pid_dir" \
+  "$proxy_pid_dir" "$shim_pid_dir" "$gate_dir" "$launched_dir"
+export MCP_GOVERNOR_E2E_PID_DIR="$pid_dir"
+
+governor="$build_dir/mcp-governor"
+fake_server="$build_dir/fake-mcp-server"
+(cd "$module_dir" && GOTOOLCHAIN=local "$go_bin" build -o "$governor" ./cmd/mcp-governor)
+(cd "$module_dir" && GOTOOLCHAIN=local "$go_bin" build -o "$fake_server" ./testdata/e2e/fake-mcp-server.go)
+
+salt="$config_dir/identity-salt"
+head -c 32 /dev/urandom >"$salt"
+chmod 0600 "$salt"
+catalog="$config_dir/catalog.json"
+python3 - "$catalog" "$state_dir" "$salt" "$fake_server" <<'PY'
+import json, pathlib, sys
+path, state, salt, server = sys.argv[1:]
+doc = {
+    "version": 2,
+    "output_path": f"{state}/snapshot.json",
+    "registry_path": f"{state}/registry.json",
+    "observation": {
+        "events_dir": f"{state}/events",
+        "reports_dir": f"{state}/reports",
+        "salt_path": salt,
+        "raw_retention_days": 30,
+    },
+    "services": [{
+        "name": "fixture",
+        "command": server,
+        "args": ["observation"],
+        "cwd": state,
+        "transport": "stdio",
+        "scope": "user",
+        "session_policy": "isolated",
+        "clients": ["codex", "claude", "vscode", "lingma"],
+        "all_args_contain": ["fake-mcp-server", "observation"],
+    }, {
+        "name": "stubborn-tree",
+        "command": server,
+        "args": ["stubborn-tree"],
+        "transport": "stdio",
+        "scope": "user",
+        "session_policy": "isolated",
+        "clients": ["codex", "claude", "vscode", "lingma"],
+        "all_args_contain": ["fake-mcp-server", "stubborn-tree"],
+    }],
+}
+pathlib.Path(path).write_text(json.dumps(doc) + "\n")
+PY
+chmod 0600 "$catalog"
+
+clients=(codex claude vscode lingma)
+for client in "${clients[@]}"; do
+  extension=json
+  [[ "$client" == codex ]] && extension=toml
+  "$governor" render-config --config "$catalog" --client "$client" --governor "$governor" \
+    --output "$render_dir/$client.$extension"
+done
+
+commands="$tmp_dir/commands.json"
+python3 - "$render_dir" "$commands" <<'PY'
+import json, pathlib, sys, tomllib
+root = pathlib.Path(sys.argv[1])
+result = {}
+codex = tomllib.loads((root / "codex.toml").read_text())
+entry = codex["mcp_servers"]["fixture"]
+result["codex"] = [entry["command"], *entry["args"]]
+for client in ("claude", "vscode", "lingma"):
+    doc = json.loads((root / f"{client}.json").read_text())
+    servers = doc["servers"] if client == "vscode" else doc["mcpServers"]
+    entry = servers["fixture"]
+    assert entry.get("type", "stdio") == "stdio"
+    result[client] = [entry["command"], *entry["args"]]
+pathlib.Path(sys.argv[2]).write_text(json.dumps(result) + "\n")
+PY
+chmod 0600 "$commands"
+printf 'PASS rendered native configs: codex claude vscode lingma\n'
+
+client_shim="$tmp_dir/client-shim.py"
+cat >"$client_shim" <<'PY'
+#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+commands_path, client, input_path, output_path, error_path, pid_path, launched_path, gate_path = sys.argv[1:]
+argv = json.loads(pathlib.Path(commands_path).read_text())[client]
+if "--session" in argv:
+    raise SystemExit("rendered argv unexpectedly contains an explicit session override")
+pathlib.Path(launched_path).write_text(json.dumps(argv) + "\n")
+os.chmod(launched_path, 0o600)
+with open(output_path, "wb") as stdout, open(error_path, "wb") as stderr:
+    proxy = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, close_fds=True)
+    pathlib.Path(pid_path).write_text(f"{proxy.pid}\n")
+    os.chmod(pid_path, 0o600)
+    for _ in range(500):
+        if pathlib.Path(gate_path).exists():
+            break
+        import time
+        time.sleep(0.02)
+    else:
+        proxy.terminate()
+        proxy.wait()
+        raise SystemExit("client shim gate timed out")
+    payload = pathlib.Path(input_path).read_bytes()
+    proxy.communicate(payload)
+    raise SystemExit(proxy.returncode)
+PY
+chmod 0700 "$client_shim"
+
+write_input() {
+  local path=$1 mode=$2
+  case "$mode" in
+    success)
+      printf '%s\n' \
+        '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_only","arguments":{"marker":"DO-NOT-LOG","url":"https://private.invalid"}}}' \
+        '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_only","arguments":{"token":"TOKEN=hidden"}}}' >"$path"
+      ;;
+    cancel)
+      printf '%s\n' \
+        '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"cancelled_read","arguments":{"marker":"DO-NOT-LOG"}}}' \
+        '{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1,"reason":"SECRET-BODY"}}' \
+        '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_only","arguments":{"token":"TOKEN=hidden"}}}' \
+        '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_only","arguments":{"url":"https://private.invalid"}}}' >"$path"
+      ;;
+    disconnect)
+      printf '%s\n' \
+        '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"abrupt_read","arguments":{"marker":"DO-NOT-LOG","token":"TOKEN=hidden"}}}' >"$path"
+      ;;
+  esac
+  chmod 0600 "$path"
+}
+
+launch_client() {
+  local client=$1 mode=$2
+  local input="$tmp_dir/$client.in" output="$tmp_dir/$client.out" error="$tmp_dir/$client.err"
+  write_input "$input" "$mode"
+  python3 "$client_shim" "$commands" "$client" "$input" "$output" "$error" \
+    "$proxy_pid_dir/$client" "$launched_dir/$client.json" "$gate_dir/$client" &
+  shim_pids+=("$!")
+  printf '%s\n' "$!" >"$shim_pid_dir/$client"
+  chmod 0600 "$shim_pid_dir/$client"
+}
+
+launch_client codex success
+launch_client claude cancel
+launch_client vscode success
+launch_client lingma disconnect
+
+pid_deadline=$((SECONDS + 10))
+while (( $(find "$pid_dir" -maxdepth 1 -type f | wc -l) < 4 || \
+  $(find "$proxy_pid_dir" -maxdepth 1 -type f | wc -l) < 4 )); do
+  if (( SECONDS >= pid_deadline )); then
+    printf 'proxy/fake processes did not all publish exact PIDs within 10s\n' >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+while IFS= read -r pid_file; do
+  fake_pids+=("$(basename "$pid_file")")
+done < <(find "$pid_dir" -maxdepth 1 -type f -print | sort)
+while IFS= read -r pid_file; do
+  proxy_pids+=("$(tr -d '[:space:]' <"$pid_file")")
+done < <(find "$proxy_pid_dir" -maxdepth 1 -type f -print | sort)
+
+python3 - "$commands" "$launched_dir" <<'PY'
+import json, pathlib, sys
+rendered = json.loads(pathlib.Path(sys.argv[1]).read_text())
+launched_dir = pathlib.Path(sys.argv[2])
+launched = {client: json.loads((launched_dir / f"{client}.json").read_text()) for client in rendered}
+assert launched == rendered, (launched, rendered)
+assert all("--session" not in argv for argv in launched.values())
+PY
+python3 - "$proxy_pid_dir" "$shim_pid_dir" <<'PY'
+import pathlib, sys
+proxy_dir, shim_dir = map(pathlib.Path, sys.argv[1:])
+shim_pids = set()
+for proxy_path in sorted(proxy_dir.iterdir()):
+    client = proxy_path.name
+    proxy_pid = int(proxy_path.read_text())
+    shim_pid = int((shim_dir / client).read_text())
+    stat = pathlib.Path(f"/proc/{proxy_pid}/stat").read_text()
+    ppid = int(stat[stat.rfind(")") + 2:].split()[1])
+    assert ppid == shim_pid, (client, proxy_pid, ppid, shim_pid)
+    shim_pids.add(shim_pid)
+assert len(shim_pids) == 4, shim_pids
+PY
+printf 'PASS exact rendered argv launched without explicit session override\n'
+for client in "${clients[@]}"; do
+  : >"$gate_dir/$client"
+  chmod 0600 "$gate_dir/$client"
+done
+
+process_failure=0
+for pid in "${shim_pids[@]}"; do
+  if ! wait_for_pid "$pid"; then
+    printf 'E2E process did not exit within 10s: pid=%s\n' "$pid" >&2
+    process_failure=1
+    continue
+  fi
+  if ! wait "$pid"; then
+    printf 'E2E client process failed: pid=%s\n' "$pid" >&2
+    process_failure=1
+  fi
+done
+(( process_failure == 0 ))
+shim_pids=()
+for pid in "${proxy_pids[@]}" "${fake_pids[@]}"; do
+  if ! wait_for_pid "$pid"; then
+    printf 'proxy/fake process did not exit within 10s: pid=%s\n' "$pid" >&2
+    exit 1
+  fi
+done
+proxy_pids=()
+fake_pids=()
+
+python3 - "$state_dir" <<'PY'
+import json, pathlib, stat, sys
+root = pathlib.Path(sys.argv[1])
+events = []
+for path in sorted((root / "events").glob("*/*.jsonl")):
+    for line in path.read_text().splitlines():
+        event = json.loads(line)
+        assert event["kind"] == "tool_call"
+        for key in ("client", "service", "tool", "session_hash"):
+            assert event.get(key), (path, key, event)
+        forbidden = {"params", "result", "error", "arguments", "url", "urls"}
+        assert forbidden.isdisjoint(event), (path, event)
+        events.append(event)
+sessions = len({event["session_hash"] for event in events})
+cancelled = sum(event["outcome"] == "cancelled" for event in events)
+effective = sum(bool(event.get("effective")) for event in events)
+disconnected = sum(event["outcome"] == "disconnected" for event in events)
+outcomes = sorted((event["client"], event["outcome"]) for event in events)
+concurrency = max((event.get("concurrent_calls", 0) for event in events), default=0)
+assert sessions == 4, f"session hash count={sessions}"
+assert cancelled == 1, f"cancelled count={cancelled}"
+assert effective >= 3, f"effective count={effective}"
+assert disconnected == 1, f"disconnected count={disconnected}, outcomes={outcomes}"
+assert concurrency >= 2, f"max concurrency={concurrency}"
+for path in [root, *root.rglob("*")]:
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if path.is_dir():
+        assert mode & 0o077 == 0, (path, oct(mode))
+    elif path.is_file():
+        assert mode & 0o177 == 0, (path, oct(mode))
+PY
+if rg -l 'DO-NOT-LOG|SECRET-BODY|TOKEN=|https?://' "$state_dir" >/dev/null; then
+  printf 'sensitive fixture value persisted in state directory\n' >&2
+  exit 1
+fi
+printf 'PASS derived isolated sessions: 4 unique hashes\n'
+printf 'PASS tool outcomes: 1 cancelled, at least 3 effective, 1 disconnected\n'
+printf 'PASS metadata privacy and private modes\n'
+
+tree_one="$tmp_dir/tree-one"
+tree_two="$tmp_dir/tree-two"
+mkdir -m 0700 "$tree_one" "$tree_two"
+fifo_one="$tmp_dir/tree-one.stdin"
+fifo_two="$tmp_dir/tree-two.stdin"
+mkfifo -m 0600 "$fifo_one" "$fifo_two"
+exec 8<>"$fifo_one"
+exec 9<>"$fifo_two"
+(exec 8>&- 9>&-; MCP_GOVERNOR_TREE_PID_DIR="$tree_one" exec "$governor" proxy --config "$catalog" \
+  --client codex --service stubborn-tree --session 9001:1 -- "$fake_server" stubborn-tree) <"$fifo_one" \
+  >"$tmp_dir/tree-one.out" 2>"$tmp_dir/tree-one.err" &
+tree_proxy_one=$!
+proxy_pids+=("$tree_proxy_one")
+(exec 8>&- 9>&-; MCP_GOVERNOR_TREE_PID_DIR="$tree_two" exec "$governor" proxy --config "$catalog" \
+  --client claude --service stubborn-tree --session 9002:1 -- "$fake_server" stubborn-tree) <"$fifo_two" \
+  >"$tmp_dir/tree-two.out" 2>"$tmp_dir/tree-two.err" &
+tree_proxy_two=$!
+proxy_pids+=("$tree_proxy_two")
+
+tree_deadline=$((SECONDS + 10))
+while [[ ! -f "$tree_one/grandchild" || ! -f "$tree_two/grandchild" ]]; do
+  if (( SECONDS >= tree_deadline )); then
+    printf 'stubborn E2E trees did not publish exact PIDs\n' >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+tree_one_child=$(tr -d '[:space:]' <"$tree_one/child")
+tree_one_grandchild=$(tr -d '[:space:]' <"$tree_one/grandchild")
+tree_two_child=$(tr -d '[:space:]' <"$tree_two/child")
+tree_two_grandchild=$(tr -d '[:space:]' <"$tree_two/grandchild")
+fake_pids+=("$tree_one_child" "$tree_one_grandchild" "$tree_two_child" "$tree_two_grandchild")
+
+kill -TERM "$tree_proxy_one"
+if wait "$tree_proxy_one"; then
+  printf 'signal-cancelled proxy unexpectedly returned success\n' >&2
+  exit 1
+fi
+if ! kill -0 "$tree_proxy_two" 2>/dev/null || ! kill -0 "$tree_two_child" 2>/dev/null || \
+  ! kill -0 "$tree_two_grandchild" 2>/dev/null; then
+  printf 'unrelated concurrent proxy tree was affected\n' >&2
+  exit 1
+fi
+for pid in "$tree_one_child" "$tree_one_grandchild"; do
+  if ! wait_for_pid "$pid"; then
+    printf 'signalled proxy left owned process pid=%s\n' "$pid" >&2
+    exit 1
+  fi
+done
+exec 9>&-
+if ! wait "$tree_proxy_two"; then
+  printf 'EOF-shutdown proxy failed\n' >&2
+  exit 1
+fi
+for pid in "$tree_two_child" "$tree_two_grandchild"; do
+  if ! wait_for_pid "$pid"; then
+    printf 'EOF proxy left owned process pid=%s\n' "$pid" >&2
+    exit 1
+  fi
+done
+exec 8>&-
+proxy_pids=()
+fake_pids=()
+printf 'PASS signal and EOF clean exact owned process groups without cross-session kill\n'
+
+from=$(date -u -d '1 minute ago' +%Y-%m-%dT%H:%M:%SZ)
+to=$(date -u -d '1 minute' +%Y-%m-%dT%H:%M:%SZ)
+report="$state_dir/reports/e2e.json"
+"$governor" report --config "$catalog" --from "$from" --to "$to" --output "$report" --allow-partial
+python3 - "$report" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+clients = {row["client"] for row in doc["tools"]}
+assert clients == {"codex", "claude", "vscode", "lingma"}, clients
+assert all(row["service"] == "fixture" for row in doc["tools"])
+PY
+printf 'PASS four-client report split\n'
+printf 'PASS child processes exited within 10s\n'

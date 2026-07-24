@@ -1,17 +1,24 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/config"
+	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/observe"
 	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/process"
+	"github.com/byteBuilderX/stratum/tools/mcp-governor/internal/report"
 )
 
 var fixedTime = time.Date(2026, 7, 16, 10, 11, 12, 0, time.UTC)
@@ -59,6 +66,729 @@ func TestRunRejectsInvalidInvocation(t *testing.T) {
 	}
 }
 
+func TestReportWritesAggregateAndPrunesExpiredValidFile(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(7 * 24 * time.Hour)
+	dir := filepath.Join(root, "events", "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeEventFile(t, filepath.Join(dir, "current.jsonl"), []observe.Event{{Version: 1, Kind: observe.KindToolCall,
+		At: start.Add(time.Hour), Client: "codex", Service: "fake", Tool: "search", SessionHash: "hashed",
+		Outcome: observe.OutcomeSuccess, Effective: true, DurationMS: 9, ResponseBytes: 12, ConcurrentCalls: 1}})
+	expired := filepath.Join(dir, "expired.jsonl")
+	writeEventFile(t, expired, []observe.Event{{Version: 1, Kind: observe.KindToolCall, At: end.Add(-31 * 24 * time.Hour),
+		Client: "codex", Service: "fake", Tool: "old", SessionHash: "old-hash", Outcome: observe.OutcomeSuccess}})
+	var stderr bytes.Buffer
+	if code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		end.Format(time.RFC3339)}, &bytes.Buffer{}, &stderr); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	data := mustReadFile(t, filepath.Join(root, "reports", "report-20260701T000000Z-20260708T000000Z.json"))
+	if bytes.Contains(data, []byte("hashed")) {
+		t.Fatalf("report leaked identifier: %s", data)
+	}
+	if _, err := os.Stat(expired); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired file remains: %v", err)
+	}
+	if _, err := os.Stat(strings.TrimSuffix(expired, ".jsonl") + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired lifecycle lock remains: %v", err)
+	}
+}
+
+func TestReportMalformedInputPreservesPriorReport(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(7 * 24 * time.Hour)
+	dir := filepath.Join(root, "events", "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "bad.jsonl"), []byte(`{"version":1,"version":1}`+"\n"), 0o600)
+	output := filepath.Join(root, "prior.json")
+	writeFile(t, output, []byte("prior"), 0o600)
+	var stderr bytes.Buffer
+	code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		end.Format(time.RFC3339), "--output", output}, &bytes.Buffer{}, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "duplicate key") {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if got := string(mustReadFile(t, output)); got != "prior" {
+		t.Fatalf("prior report replaced: %q", got)
+	}
+}
+
+func TestReportObservationStatusMakesReportIncompleteAndPreservesPrior(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(7 * 24 * time.Hour)
+	dir := filepath.Join(root, "events", "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	event := observe.Event{Version: 1, Kind: observe.KindToolCall, At: start.Add(time.Hour), Client: "codex",
+		Service: "fake", Tool: "search", SessionHash: "hashed", Outcome: observe.OutcomeSuccess}
+	writeEventFile(t, filepath.Join(dir, "hashed.jsonl"), []observe.Event{event})
+	status := observe.DegradedStatus{Version: 1, Client: "codex", SessionHash: "hashed",
+		FirstEventAt: event.At, LastEventAt: event.At, RecordsDropped: 2,
+		Reasons: []string{"observation_sink_dropped"}}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "hashed.status.json"), data, 0o600)
+	output := filepath.Join(root, "prior.json")
+	writeFile(t, output, []byte("prior"), 0o600)
+	var stderr bytes.Buffer
+	code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		end.Format(time.RFC3339), "--output", output}, &bytes.Buffer{}, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "observation_sink_dropped") {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if got := string(mustReadFile(t, output)); got != "prior" {
+		t.Fatalf("prior report replaced: %q", got)
+	}
+}
+
+func TestReportIgnoresObservationStatusOutsideWindow(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(7 * 24 * time.Hour)
+	dir := filepath.Join(root, "events", "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	event := observe.Event{Version: 1, Kind: observe.KindToolCall, At: start.Add(time.Hour), Client: "codex",
+		Service: "fake", Tool: "search", SessionHash: "hashed", Outcome: observe.OutcomeSuccess}
+	writeEventFile(t, filepath.Join(dir, "hashed.jsonl"), []observe.Event{event})
+	status := observe.DegradedStatus{Version: 1, Client: "codex", SessionHash: "old",
+		FirstEventAt: start.Add(-30 * 24 * time.Hour), LastEventAt: start.Add(-29 * 24 * time.Hour),
+		RecordsDropped: 1, Reasons: []string{"observation_sink_dropped"}}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "old.status.json"), data, 0o600)
+	var stderr bytes.Buffer
+	if code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		end.Format(time.RFC3339)}, &bytes.Buffer{}, &stderr); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestReportBudgetOverflowPreservesPriorReportAndExposesStatus(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(7 * 24 * time.Hour)
+	dir := filepath.Join(root, "events", "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeEventFile(t, filepath.Join(dir, "current.jsonl"), []observe.Event{{Version: 1, Kind: observe.KindToolCall,
+		At: start.Add(time.Hour), Client: "codex", Service: "fake", Tool: "search", SessionHash: "s",
+		Outcome: observe.OutcomeSuccess}, {Version: 1, Kind: observe.KindToolCall,
+		At: start.Add(2 * time.Hour), Client: "codex", Service: "fake", Tool: "search", SessionHash: "s",
+		Outcome: observe.OutcomeSuccess}})
+	var firstErr bytes.Buffer
+	if code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		end.Format(time.RFC3339)}, &bytes.Buffer{}, &firstErr); code != 0 {
+		t.Fatalf("initial report code=%d stderr=%q", code, firstErr.String())
+	}
+	output := filepath.Join(root, "reports", "report-20260701T000000Z-20260708T000000Z.json")
+	prior := append([]byte(nil), mustReadFile(t, output)...)
+	var cfg map[string]any
+	if err := json.Unmarshal(mustReadFile(t, configPath), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	observation := cfg["observation"].(map[string]any)
+	observation["report_max_records"] = 1
+	data, _ := json.Marshal(cfg)
+	writeFile(t, configPath, data, 0o600)
+	var stderr bytes.Buffer
+	if code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		end.Format(time.RFC3339)}, &bytes.Buffer{}, &stderr); code != 1 || !strings.Contains(stderr.String(), "report incomplete") {
+		t.Fatalf("budget report code=%d stderr=%q", code, stderr.String())
+	}
+	if got := mustReadFile(t, output); !bytes.Equal(got, prior) {
+		t.Fatalf("prior report replaced after budget overflow: %q", got)
+	}
+}
+
+func TestSnapshotHistoryFeedsRepeatedProcessStartsAndMemoryPeaks(t *testing.T) {
+	root := t.TempDir()
+	procRoot := filepath.Join(root, "proc")
+	if err := os.Mkdir(procRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeProcessFixture(t, procRoot, "42", []string{"catalog"})
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	useDependencies(t, start.Add(time.Hour), root, nil)
+	if code := run([]string{"snapshot", "--config", configPath, "--proc-root", procRoot}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("first snapshot code=%d", code)
+	}
+	writeStatFixture(t, procRoot, "42", 456)
+	writeFile(t, filepath.Join(procRoot, "42", "smaps_rollup"),
+		[]byte("Rss: 30 kB\nPss: 20 kB\nPrivate_Clean: 7 kB\nPrivate_Dirty: 5 kB\n"), 0o600)
+	currentTime = func() time.Time { return start.Add(2 * time.Hour) }
+	if code := run([]string{"snapshot", "--config", configPath, "--proc-root", procRoot}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("second snapshot code=%d", code)
+	}
+	var stdout bytes.Buffer
+	if code := run([]string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to",
+		start.Add(7 * 24 * time.Hour).Format(time.RFC3339), "--output", "-"}, &stdout, io.Discard); code != 0 {
+		t.Fatalf("report code=%d", code)
+	}
+	var got report.Report
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Services) != 1 || got.Services[0].ProcessStarts != 2 || got.Services[0].PeakPSSBytes != 20*1024 {
+		t.Fatalf("services=%+v", got.Services)
+	}
+}
+
+func TestSnapshotHistoryFailurePreservesCurrentSnapshot(t *testing.T) {
+	root := t.TempDir()
+	procRoot := filepath.Join(root, "proc")
+	if err := os.Mkdir(procRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeProcessFixture(t, procRoot, "42", []string{"catalog"})
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	currentPath := filepath.Join(root, "snapshot.json")
+	writeFile(t, currentPath, []byte("previous snapshot"), 0o600)
+	oldRename := renameFile
+	renameFile = func(old, destination string) error {
+		if strings.HasSuffix(destination, ".history.jsonl") {
+			return errors.New("history publish failed")
+		}
+		return os.Rename(old, destination)
+	}
+	t.Cleanup(func() { renameFile = oldRename })
+	useDependencies(t, fixedTime, root, nil)
+	if code := run([]string{"snapshot", "--config", configPath, "--proc-root", procRoot}, io.Discard, io.Discard); code != 1 {
+		t.Fatalf("snapshot code=%d", code)
+	}
+	if got := string(mustReadFile(t, currentPath)); got != "previous snapshot" {
+		t.Fatalf("current snapshot changed before history publication: %q", got)
+	}
+}
+
+func TestSnapshotHistorySerializesDeduplicatesAndCapsSamples(t *testing.T) {
+	root := t.TempDir()
+	output := filepath.Join(root, "snapshot.json")
+	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	first := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base}
+	second := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base.Add(time.Minute)}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, snapshot := range []process.Snapshot{second, first} {
+		wg.Add(1)
+		go func(item process.Snapshot) {
+			defer wg.Done()
+			data, _ := json.Marshal(item)
+			errs <- publishSnapshotData(output, append(data, '\n'), item, 7)
+		}(snapshot)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	history, err := decodeSnapshotHistory(output + ".history.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 || !history[0].CapturedAt.Equal(base) || !history[1].CapturedAt.Equal(base.Add(time.Minute)) {
+		t.Fatalf("serialized history=%+v", history)
+	}
+	data, _ := json.Marshal(first)
+	if err := publishSnapshotData(output, append(data, '\n'), first, 7); err != nil {
+		t.Fatal(err)
+	}
+	history, err = decodeSnapshotHistory(output + ".history.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("duplicate snapshot retained: %d", len(history))
+	}
+
+	const maxSamples = 7 * 24 * 60
+	var raw bytes.Buffer
+	encoder := json.NewEncoder(&raw)
+	for i := 0; i < maxSamples+2; i++ {
+		item := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base.Add(time.Duration(i) * time.Minute)}
+		if err := encoder.Encode(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, output+".history.jsonl", raw.Bytes(), 0o600)
+	latest := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base.Add((maxSamples + 2) * time.Minute)}
+	latestData, _ := json.Marshal(latest)
+	if err := publishSnapshotData(output, append(latestData, '\n'), latest, 7); err != nil {
+		t.Fatal(err)
+	}
+	history, err = decodeSnapshotHistory(output + ".history.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != maxSamples {
+		t.Fatalf("history samples=%d, want cap %d", len(history), maxSamples)
+	}
+}
+
+func TestSnapshotHistoryOlderPublisherCannotRegressBoundaryOrCurrent(t *testing.T) {
+	root := t.TempDir()
+	output := filepath.Join(root, "snapshot.json")
+	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	expired := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base}
+	newest := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base.Add(10 * 24 * time.Hour)}
+	olderFinishingLast := process.Snapshot{Version: 1, Mode: "observe", CapturedAt: base.Add(24 * time.Hour)}
+	var history bytes.Buffer
+	encoder := json.NewEncoder(&history)
+	for _, item := range []process.Snapshot{expired, newest} {
+		if err := encoder.Encode(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, output+".history.jsonl", history.Bytes(), 0o600)
+	writeFile(t, output+".history.jsonl.lock", nil, 0o600)
+	data, _ := json.Marshal(olderFinishingLast)
+	if err := publishSnapshotData(output, append(data, '\n'), olderFinishingLast, 7); err != nil {
+		t.Fatal(err)
+	}
+	gotHistory, err := decodeSnapshotHistory(output + ".history.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotHistory) != 1 || !gotHistory[0].CapturedAt.Equal(newest.CapturedAt) {
+		t.Fatalf("retained history=%+v, want only newest sample", gotHistory)
+	}
+	var current process.Snapshot
+	if err := json.Unmarshal(mustReadFile(t, output), &current); err != nil {
+		t.Fatal(err)
+	}
+	if !current.CapturedAt.Equal(newest.CapturedAt) {
+		t.Fatalf("current captured_at=%s, want newest %s", current.CapturedAt, newest.CapturedAt)
+	}
+}
+
+func TestPruneDoesNotUnlinkFileAppendedAfterReportRead(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := observe.NewWriter(root, "codex", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	end := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	expired := observe.Event{Version: 1, Kind: observe.KindToolCall, At: end.Add(-31 * 24 * time.Hour),
+		Client: "codex", Service: "fake", Tool: "old", SessionHash: "session", Outcome: observe.OutcomeSuccess}
+	if err := w.Write(expired); err != nil {
+		t.Fatal(err)
+	}
+	acc, _ := report.NewAccumulator(end.Add(-7*24*time.Hour), end)
+	files, err := readEventFiles(root, acc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := expired
+	current.At = end.Add(-time.Hour)
+	if err := w.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := pruneEventFiles(files, end.Add(-30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	data := mustReadFile(t, filepath.Join(root, "codex", "session.jsonl"))
+	if bytes.Count(data, []byte{'\n'}) != 2 {
+		t.Fatalf("events lost after prune race: %q", data)
+	}
+}
+
+func TestPruneDoesNotUnlinkIdleActiveWriter(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := observe.NewWriter(root, "codex", "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	expired := observe.Event{Version: 1, Kind: observe.KindToolCall, At: end.Add(-31 * 24 * time.Hour),
+		Client: "codex", Service: "fake", Tool: "old", SessionHash: "active", Outcome: observe.OutcomeSuccess}
+	if err := w.Write(expired); err != nil {
+		t.Fatal(err)
+	}
+	acc, _ := report.NewAccumulator(end.Add(-7*24*time.Hour), end)
+	files, err := readEventFiles(root, acc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pruneEventFiles(files, end.Add(-30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	current := expired
+	current.At = end.Add(-time.Hour)
+	if err := w.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := mustReadFile(t, filepath.Join(root, "codex", "active.jsonl"))
+	if bytes.Count(data, []byte{'\n'}) != 2 {
+		t.Fatalf("active writer events lost: %q", data)
+	}
+}
+
+func TestPruneRemovesExpiredRotatedSegmentButKeepsActiveSegment(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	w, err := observe.NewWriterWithOptions(root, "codex", "active", observe.WriterOptions{MaxSegmentBytes: 1, RotateDaily: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	expired := observe.Event{Version: 1, Kind: observe.KindToolCall, At: end.Add(-31 * 24 * time.Hour),
+		Client: "codex", Service: "fake", Tool: "old", SessionHash: "active", Outcome: observe.OutcomeSuccess}
+	if err := w.Write(expired); err != nil {
+		t.Fatal(err)
+	}
+	current := expired
+	current.At = end.Add(-time.Hour)
+	if err := w.Write(current); err != nil {
+		t.Fatal(err)
+	}
+	acc, _ := report.NewAccumulator(end.Add(-7*24*time.Hour), end)
+	files, err := readEventFiles(root, acc)
+	if err != nil {
+		_ = w.Close()
+		t.Fatal(err)
+	}
+	if err := pruneEventFiles(files, end.Add(-30*24*time.Hour)); err != nil {
+		_ = w.Close()
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	segments, _ := filepath.Glob(filepath.Join(root, "codex", "active*.jsonl"))
+	if len(segments) != 1 || !strings.HasSuffix(segments[0], "active.000001.jsonl") {
+		t.Fatalf("active rotated segments = %v, want only current segment", segments)
+	}
+	data := mustReadFile(t, segments[0])
+	if bytes.Count(data, []byte{'\n'}) != 1 {
+		t.Fatalf("current active segment records = %q, want one record", data)
+	}
+}
+
+func TestReportRequiresSevenDaysUnlessPartialAndStdoutDoesNotWriteDefault(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(6 * 24 * time.Hour)
+	dir := filepath.Join(root, "events", "codex")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	expired := filepath.Join(dir, "expired.jsonl")
+	writeEventFile(t, expired, []observe.Event{{Version: 1, Kind: observe.KindToolCall,
+		At: end.Add(-31 * 24 * time.Hour), Client: "codex", Service: "fake", Tool: "old",
+		SessionHash: "old", Outcome: observe.OutcomeSuccess}})
+	args := []string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to", end.Format(time.RFC3339), "--output", "-"}
+	if code := run(args, &bytes.Buffer{}, &bytes.Buffer{}); code != 1 {
+		t.Fatalf("partial code=%d", code)
+	}
+	var stdout bytes.Buffer
+	if code := run(append(args, "--allow-partial"), &stdout, &bytes.Buffer{}); code != 0 {
+		t.Fatalf("allowed code=%d", code)
+	}
+	if stdout.Len() == 0 {
+		t.Fatal("empty stdout")
+	}
+	if _, err := os.Stat(filepath.Join(root, "reports")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reports dir created: %v", err)
+	}
+	if _, err := os.Stat(expired); err != nil {
+		t.Fatalf("stdout report pruned events: %v", err)
+	}
+}
+
+func TestReportIncompleteStdoutReturnsNonzeroAfterPublishingStatus(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	var configData map[string]any
+	if err := json.Unmarshal(mustReadFile(t, configPath), &configData); err != nil {
+		t.Fatal(err)
+	}
+	configData["observation"].(map[string]any)["report_max_records"] = 1
+	encoded, err := json.Marshal(configData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, configPath, encoded, 0o600)
+
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(7 * 24 * time.Hour)
+	path := filepath.Join(root, "events", "codex", "session.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	events := []observe.Event{
+		{Version: 1, Kind: observe.KindToolCall, At: start.Add(time.Hour), Client: "codex", Service: "fake",
+			Tool: "one", SessionHash: "session", Outcome: observe.OutcomeSuccess},
+		{Version: 1, Kind: observe.KindToolCall, At: start.Add(2 * time.Hour), Client: "codex", Service: "fake",
+			Tool: "two", SessionHash: "session", Outcome: observe.OutcomeSuccess},
+	}
+	writeEventFile(t, path, events)
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to", end.Format(time.RFC3339), "--output", "-"}
+	if code := run(args, &stdout, &stderr); code == 0 {
+		t.Fatalf("incomplete stdout report returned success; output=%s", stdout.String())
+	}
+	var got report.Report
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("stdout report is not valid JSON: %v; output=%s", err, stdout.String())
+	}
+	if got.Completeness.Complete || !strings.Contains(stderr.String(), "report incomplete") {
+		t.Fatalf("completeness=%+v stderr=%q", got.Completeness, stderr.String())
+	}
+}
+
+func TestReportLatestUsesPreviousSevenCompleteLocalDaysAcrossDST(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 3, 9, 12, 34, 56, 0, location)
+	useDependencies(t, now, root, nil)
+
+	var stderr bytes.Buffer
+	if code := run([]string{"report-latest", "--config", configPath}, io.Discard, &stderr); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	output := filepath.Join(root, "reports", "report-20260302T050000Z-20260309T040000Z.json")
+	var got report.Report
+	if err := json.Unmarshal(mustReadFile(t, output), &got); err != nil {
+		t.Fatal(err)
+	}
+	wantStart := time.Date(2026, 3, 2, 0, 0, 0, 0, location)
+	wantEnd := time.Date(2026, 3, 9, 0, 0, 0, 0, location)
+	if !got.Start.Equal(wantStart) || !got.End.Equal(wantEnd) || got.End.Sub(got.Start) != 167*time.Hour {
+		t.Fatalf("window=[%s,%s) duration=%s", got.Start, got.End, got.End.Sub(got.Start))
+	}
+}
+
+func TestRunProxyRejectsInvalidInvocation(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "repository")
+	tests := []struct {
+		name string
+		args []string
+		want string
+		code int
+	}{
+		{name: "missing separator", args: []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake", "command"}, want: "separator", code: 2},
+		{name: "unknown client", args: []string{"proxy", "--config", configPath, "--client", "unknown", "--service", "fake", "--repository", root, "--", "command"}, want: "client", code: 1},
+		{name: "unknown service", args: []string{"proxy", "--config", configPath, "--client", "codex", "--service", "unknown", "--repository", root, "--", "command"}, want: "service", code: 1},
+		{name: "empty session", args: []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake", "--session", "", "--repository", root, "--", "command"}, want: "session", code: 2},
+		{name: "malformed session", args: []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake", "--session", "1:0", "--repository", root, "--", "command"}, want: "session", code: 2},
+		{name: "repository required", args: []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake", "--session", "1:2", "--", "command"}, want: "repository", code: 1},
+		{name: "empty command", args: []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake", "--session", "1:2", "--repository", root, "--"}, want: "command", code: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run(test.args, &stdout, &stderr); code != test.code {
+				t.Fatalf("run() = %d, want %d; stderr=%q", code, test.code, stderr.String())
+			}
+			if !strings.Contains(strings.ToLower(stderr.String()), test.want) {
+				t.Fatalf("stderr=%q, want %q", stderr.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestRunProxyRejectsServiceNotEnabledForClient(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "claude", "user")
+	var stderr bytes.Buffer
+	code := run([]string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
+		"--session", "1:2", "--", "command"}, io.Discard, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "not enabled") {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestRunProxyRejectsCommandNotClassifiedAsService(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfigWithCommand(t, root, "codex", "user", "unrelated-command", nil)
+	var stderr bytes.Buffer
+	code := run([]string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
+		"--session", "1:2", "--", "unrelated-command"}, io.Discard, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "does not match") {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestRunProxyRejectsCatalogCommandMismatchBeforeChildStart(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfigWithCommand(t, root, "codex", "user", "catalog-command",
+		[]string{"catalog-one", "catalog-two"})
+	secretCommand := "do-not-print-command"
+	var stderr bytes.Buffer
+	code := run([]string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
+		"--session", "1:2", "--", secretCommand, "catalog-one", "catalog-two"}, io.Discard, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "catalog command mismatch") {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), secretCommand) || strings.Contains(stderr.String(), "executable file not found") {
+		t.Fatalf("rejected command leaked or started: %q", stderr.String())
+	}
+}
+
+func TestRunProxyRejectsCatalogArgumentMismatchBeforeChildStart(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfigWithCommand(t, root, "codex", "user", "catalog-command",
+		[]string{"catalog-one", "catalog-two"})
+	secretArg := "do-not-print-argument"
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "missing", args: []string{"catalog-one"}},
+		{name: "extra", args: []string{"catalog-one", "catalog-two", secretArg}},
+		{name: "reordered", args: []string{"catalog-two", "catalog-one"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			args := []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
+				"--session", "1:2", "--", "catalog-command"}
+			args = append(args, test.args...)
+			code := run(args, io.Discard, &stderr)
+			if code != 1 || !strings.Contains(stderr.String(), "catalog command mismatch") {
+				t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+			}
+			if strings.Contains(stderr.String(), secretArg) || strings.Contains(stderr.String(), "executable file not found") {
+				t.Fatalf("rejected arguments leaked or started: %q", stderr.String())
+			}
+		})
+	}
+	if matches, err := filepath.Glob(filepath.Join(root, "events", "*", "*.jsonl")); err != nil || len(matches) != 0 {
+		t.Fatalf("rejected command persisted events: matches=%v err=%v", matches, err)
+	}
+}
+
+func TestRunProxyExecutesCommandAndPersistsOnlyMetadata(t *testing.T) {
+	root := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretEnv := "do-not-persist-environment"
+	childArgs := []string{"-test.run=TestProxyHelperProcess", "--", "catalog"}
+	configPath := writeProxyConfigWithCommand(t, root, "codex", "repository", executable, childArgs)
+	t.Setenv("MCP_GOVERNOR_TEST_HELPER", "1")
+	t.Setenv("MCP_GOVERNOR_SECRET", secretEnv)
+	oldStdin := proxyStdin
+	proxyStdin = strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n")
+	t.Cleanup(func() { proxyStdin = oldStdin })
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
+		"--session", "123:456", "--repository", filepath.Join(root, "."), "--", executable}
+	args = append(args, childArgs...)
+	if code := run(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"protocolVersion":"2025-03-26"`) {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	allOutput := stdout.String() + stderr.String()
+	if strings.Contains(allOutput, secretEnv) {
+		t.Fatalf("secret printed: %q", allOutput)
+	}
+	events, err := filepath.Glob(filepath.Join(root, "events", "codex", "*.jsonl"))
+	if err != nil || len(events) != 1 {
+		t.Fatalf("events=%v err=%v", events, err)
+	}
+	data := mustReadFile(t, events[0])
+	if strings.Contains(string(data), secretEnv) || strings.Contains(string(data), root) {
+		t.Fatalf("secret or repository path persisted: %s", data)
+	}
+	var event map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(data), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event["kind"] != "session_ready" || event["client"] != "codex" || event["service"] != "fake" ||
+		event["session_hash"] == "123:456" || event["repository_hash"] == "" {
+		t.Fatalf("unexpected event: %+v", event)
+	}
+}
+
+func TestRunContextCancellationStopsProxyWithoutGlobalSignalRegistration(t *testing.T) {
+	root := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	childArgs := []string{"-test.run=TestProxyHelperProcess", "--", "catalog"}
+	configPath := writeProxyConfigWithCommand(t, root, "codex", "repository", executable, childArgs)
+	t.Setenv("MCP_GOVERNOR_TEST_HELPER", "1")
+	t.Setenv("MCP_GOVERNOR_TEST_HELPER_MODE", "block")
+	reader, writer := io.Pipe()
+	oldStdin := proxyStdin
+	proxyStdin = reader
+	t.Cleanup(func() {
+		proxyStdin = oldStdin
+		_ = writer.Close()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	args := []string{"proxy", "--config", configPath, "--client", "codex", "--service", "fake",
+		"--session", "123:456", "--repository", root, "--", executable}
+	args = append(args, childArgs...)
+	go func() { done <- runContext(ctx, args, io.Discard, io.Discard) }()
+	if _, err := writer.Write([]byte("request\n")); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case code := <-done:
+		if code != 1 {
+			t.Fatalf("runContext() = %d, want cancellation exit code 1", code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("runContext did not propagate cancellation to proxy")
+	}
+}
+
+func TestProxyHelperProcess(t *testing.T) {
+	if os.Getenv("MCP_GOVERNOR_TEST_HELPER") != "1" {
+		return
+	}
+	if os.Getenv("MCP_GOVERNOR_TEST_HELPER_MODE") == "block" {
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
+	_, _ = io.ReadAll(os.Stdin)
+	_, _ = fmt.Fprintln(os.Stdout, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}`)
+}
+
 func TestRunReportsConfigAndProcRootErrors(t *testing.T) {
 	root := t.TempDir()
 	malformed := filepath.Join(root, "bad.json")
@@ -72,6 +802,170 @@ func TestRunReportsConfigAndProcRootErrors(t *testing.T) {
 			t.Fatalf("run(%q) = %d, want 1", args, code)
 		}
 	}
+}
+
+func TestRunRenderConfigWritesStdoutAndPrivateAtomicFile(t *testing.T) {
+	root := t.TempDir()
+	catalog := filepath.Join("..", "..", "testdata", "catalog.json")
+	governor := filepath.Join(root, "mcp-governor")
+	writeFile(t, governor, []byte("binary"), 0o700)
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"render-config", "--config", catalog, "--client", "codex", "--governor", governor,
+		"--output", "-"}
+	if code := run(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "[mcp_servers.alpha]") || strings.Contains(stdout.String(), "claude-only") {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+
+	output := filepath.Join(root, "private", "mcp.toml")
+	args[len(args)-1] = output
+	if code := run(args, io.Discard, &stderr); code != 0 {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode=%#o, want 0600", info.Mode().Perm())
+	}
+	dirInfo, err := os.Stat(filepath.Dir(output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("directory mode=%#o, want 0700", dirInfo.Mode().Perm())
+	}
+}
+
+func TestRunRenderConfigRejectsUnsafeInputsWithoutLeakingArguments(t *testing.T) {
+	root := t.TempDir()
+	catalog := filepath.Join("..", "..", "testdata", "catalog.json")
+	governor := filepath.Join(root, "governor")
+	writeFile(t, governor, []byte("binary"), 0o700)
+	unsafeOutput := filepath.Join(root, "output.json")
+	writeFile(t, unsafeOutput, []byte("existing"), 0o644)
+	symlinkOutput := filepath.Join(root, "link.json")
+	if err := os.Symlink(unsafeOutput, symlinkOutput); err != nil {
+		t.Fatal(err)
+	}
+	secret := "do-not-print-secret-argument"
+	tests := []struct {
+		name string
+		args []string
+		code int
+	}{
+		{"missing output", []string{"render-config", "--config", catalog, "--client", "codex", "--governor", governor}, 2},
+		{"unknown client", []string{"render-config", "--config", catalog, "--client", "unknown", "--governor", governor, "--output", "-"}, 2},
+		{"missing governor", []string{"render-config", "--config", catalog, "--client", "codex", "--governor", filepath.Join(root, secret), "--output", "-"}, 1},
+		{"unsafe mode", []string{"render-config", "--config", catalog, "--client", "codex", "--governor", governor, "--output", unsafeOutput}, 1},
+		{"symlink", []string{"render-config", "--config", catalog, "--client", "codex", "--governor", governor, "--output", symlinkOutput}, 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			if code := run(test.args, io.Discard, &stderr); code != test.code {
+				t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+			}
+			if strings.Contains(stderr.String(), secret) {
+				t.Fatalf("stderr leaked argument: %q", stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunRenderConfigSelectsEligibleServicesFromHeterogeneousCatalog(t *testing.T) {
+	root := t.TempDir()
+	governor := filepath.Join(root, "governor")
+	writeFile(t, governor, []byte("binary"), 0o700)
+	tests := []struct {
+		client, included, excluded string
+	}{
+		{"codex", "alpha", "claude-only"},
+		{"claude", "claude-only", "repository-index"},
+		{"vscode", "alpha", "remote"},
+		{"lingma", "zeta", "repository-index"},
+	}
+	for _, test := range tests {
+		t.Run(test.client, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			args := []string{"render-config", "--config", filepath.Join("..", "..", "testdata", "catalog.json"),
+				"--client", test.client, "--governor", governor, "--output", "-"}
+			if code := run(args, &stdout, &stderr); code != 0 {
+				t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), test.included) || strings.Contains(stdout.String(), test.excluded) {
+				t.Fatalf("stdout=%q", stdout.String())
+			}
+		})
+	}
+}
+
+func TestRunRenderConfigRejectsMalformedEligibleCatalogWithoutPartialOutput(t *testing.T) {
+	root := t.TempDir()
+	governor := filepath.Join(root, "governor")
+	writeFile(t, governor, []byte("binary"), 0o700)
+	catalog := writeRenderCatalog(t, root, "bad.name", "do-not-print-secret-command", func(*config.ServiceRule) {})
+	output := filepath.Join(root, "output.toml")
+	var stdout, stderr bytes.Buffer
+	args := []string{"render-config", "--config", catalog, "--client", "codex", "--governor", governor,
+		"--output", output}
+	if code := run(args, &stdout, &stderr); code != 1 {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("partial stdout=%q", stdout.String())
+	}
+	if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial output exists: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(stderr.String()), "name") ||
+		strings.Contains(stderr.String(), "do-not-print-secret-command") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(data []byte) (int, error) { return len(data) - 1, nil }
+
+func TestRunRenderConfigRejectsShortStdoutWrite(t *testing.T) {
+	root := t.TempDir()
+	governor := filepath.Join(root, "governor")
+	writeFile(t, governor, []byte("binary"), 0o700)
+	var stderr bytes.Buffer
+	args := []string{"render-config", "--config", filepath.Join("..", "..", "testdata", "catalog.json"),
+		"--client", "codex", "--governor", governor, "--output", "-"}
+	if code := run(args, shortWriter{}, &stderr); code != 1 || !strings.Contains(stderr.String(), io.ErrShortWrite.Error()) {
+		t.Fatalf("run()=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func writeRenderCatalog(t *testing.T, root, name, command string, mutate func(*config.ServiceRule)) string {
+	t.Helper()
+	fixture, err := os.Open(filepath.Join("..", "..", "testdata", "catalog.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, decodeErr := config.Decode(fixture)
+	closeErr := fixture.Close()
+	if decodeErr != nil || closeErr != nil {
+		t.Fatalf("decode fixture: %v; close: %v", decodeErr, closeErr)
+	}
+	service := cfg.Services[0]
+	service.Name, service.Command = name, command
+	mutate(&service)
+	cfg.Services = append(cfg.Services, service)
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, name+"-catalog.json")
+	writeFile(t, path, data, 0o600)
+	return path
 }
 
 func TestRunRegistryHandling(t *testing.T) {
@@ -465,6 +1359,35 @@ func writeConfig(t *testing.T, dir, registry, output string) string {
 	return path
 }
 
+func writeProxyConfig(t *testing.T, dir, client, scope string) string {
+	return writeProxyConfigWithCommand(t, dir, client, scope, "catalog-command", []string{"catalog-arg"})
+}
+
+func writeProxyConfigWithCommand(t *testing.T, dir, client, scope, command string, args []string) string {
+	t.Helper()
+	saltPath := filepath.Join(dir, "salt")
+	writeFile(t, saltPath, bytes.Repeat([]byte{'s'}, 32), 0o600)
+	path := filepath.Join(dir, "proxy-config.json")
+	data, err := json.Marshal(map[string]any{
+		"version": 2, "output_path": filepath.Join(dir, "snapshot.json"),
+		"registry_path": filepath.Join(dir, "registry.json"),
+		"observation": map[string]any{
+			"events_dir": filepath.Join(dir, "events"), "reports_dir": filepath.Join(dir, "reports"),
+			"salt_path": saltPath, "raw_retention_days": 30,
+		},
+		"services": []map[string]any{{
+			"name": "fake", "command": command, "args": args, "cwd": dir,
+			"transport": "stdio", "scope": scope, "session_policy": "isolated",
+			"clients": []string{client}, "all_args_contain": []string{"catalog"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, data, 0o600)
+	return path
+}
+
 func writeProcessFixture(t *testing.T, root, pid string, args []string) {
 	t.Helper()
 	dir := filepath.Join(root, pid)
@@ -523,4 +1446,16 @@ func writeFile(t *testing.T, path string, data []byte, mode os.FileMode) {
 	if err := os.WriteFile(path, data, mode); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeEventFile(t *testing.T, path string, events []observe.Event) {
+	t.Helper()
+	var data bytes.Buffer
+	encoder := json.NewEncoder(&data)
+	for _, event := range events {
+		if err := encoder.Encode(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, path, data.Bytes(), 0o600)
 }

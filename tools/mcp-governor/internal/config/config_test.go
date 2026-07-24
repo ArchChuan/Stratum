@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -14,6 +15,29 @@ const validConfig = `{
   "services": [{"name":"chroma","all_args_contain":["chroma-mcp"]}]
 }`
 
+const validVersion2Config = `{
+  "version": 2,
+  "output_path": "%h/out.json",
+  "registry_path": "%h/registry.json",
+  "observation": {
+    "events_dir": "%h/events",
+    "reports_dir": "%h/reports",
+    "salt_path": "%h/salt",
+    "raw_retention_days": 14
+  },
+  "services": [{
+    "name": "chroma",
+    "command": "uvx",
+    "args": ["chroma-mcp"],
+    "cwd": "%h",
+    "transport": "stdio",
+    "scope": "user",
+    "session_policy": "isolated",
+    "clients": ["codex", "claude", "vscode", "lingma"],
+    "all_args_contain": ["chroma-mcp"]
+  }]
+}`
+
 func TestDecodeValidConfig(t *testing.T) {
 	cfg, err := Decode(strings.NewReader(validConfig))
 	if err != nil {
@@ -21,6 +45,212 @@ func TestDecodeValidConfig(t *testing.T) {
 	}
 	if cfg.Version != 1 || cfg.OutputPath != "%h/out.json" || len(cfg.Services) != 1 {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+	service := cfg.Services[0]
+	if service.Transport != TransportStdio || service.Scope != ScopeUser ||
+		service.SessionPolicy != SessionPolicyIsolated ||
+		!slices.Equal(service.Clients, []Client{ClientCodex, ClientClaude, ClientVSCode, ClientLingma}) {
+		t.Fatalf("version 1 compatibility defaults = %+v", service)
+	}
+}
+
+func TestDecodeVersion2(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(validVersion2Config))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if cfg.Observation.RawRetentionDays != 14 || cfg.Services[0].Command != "uvx" ||
+		cfg.Services[0].Transport != TransportStdio {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestDecodeVersion2RejectsInvalidOrMissingEnums(t *testing.T) {
+	tests := []struct {
+		name, old, replacement, want string
+	}{
+		{"missing transport", `"transport": "stdio",`, ``, "transport"},
+		{"invalid transport", `"transport": "stdio"`, `"transport": "socket"`, "transport"},
+		{"missing scope", `"scope": "user",`, ``, "scope"},
+		{"invalid scope", `"scope": "user"`, `"scope": "global"`, "scope"},
+		{"missing session policy", `"session_policy": "isolated",`, ``, "session_policy"},
+		{"invalid session policy", `"session_policy": "isolated"`, `"session_policy": "shared"`, "session_policy"},
+		{"missing clients", `"clients": ["codex", "claude", "vscode", "lingma"],`, ``, "clients"},
+		{"invalid client", `"codex"`, `"other"`, "clients"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertDecodeError(t, strings.Replace(validVersion2Config, tt.old, tt.replacement, 1), tt.want)
+		})
+	}
+}
+
+func TestDecodeVersion2RejectsDuplicateClients(t *testing.T) {
+	input := strings.Replace(validVersion2Config, `"codex", "claude"`, `"codex", "codex"`, 1)
+	assertDecodeError(t, input, "duplicate")
+}
+
+func TestDecodeVersion2ObservationValidation(t *testing.T) {
+	for _, field := range []string{"events_dir", "reports_dir", "salt_path"} {
+		t.Run("missing "+field, func(t *testing.T) {
+			input := strings.Replace(validVersion2Config, `"`+field+`": "%h/`+map[string]string{
+				"events_dir": "events", "reports_dir": "reports", "salt_path": "salt",
+			}[field]+`"`, `"`+field+`": ""`, 1)
+			assertDecodeError(t, input, field)
+		})
+	}
+	for _, retention := range []int{6, 91} {
+		t.Run(fmt.Sprintf("retention %d", retention), func(t *testing.T) {
+			input := strings.Replace(validVersion2Config, `"raw_retention_days": 14`,
+				fmt.Sprintf(`"raw_retention_days": %d`, retention), 1)
+			assertDecodeError(t, input, "raw_retention_days")
+		})
+	}
+	for _, retention := range []int{7, 90} {
+		t.Run(fmt.Sprintf("retention boundary %d", retention), func(t *testing.T) {
+			input := strings.Replace(validVersion2Config, `"raw_retention_days": 14`,
+				fmt.Sprintf(`"raw_retention_days": %d`, retention), 1)
+			if _, err := Decode(strings.NewReader(input)); err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+		})
+	}
+	for _, tt := range []struct {
+		field, value, want string
+	}{
+		{"max_event_segment_bytes", "-1", "max_event_segment_bytes"},
+		{"report_max_event_bytes", "-1", "report_max_event_bytes"},
+		{"report_max_records", "-1", "report_max_records"},
+		{"report_max_tool_cardinality", "-1", "report_max_tool_cardinality"},
+		{"report_max_session_cardinality", "-1", "report_max_session_cardinality"},
+		{"report_max_service_cardinality", "-1", "report_max_service_cardinality"},
+		{"report_max_distribution_values", "-1", "report_max_distribution_values"},
+		{"report_max_work_units", "-1", "report_max_work_units"},
+	} {
+		t.Run(tt.field, func(t *testing.T) {
+			input := strings.Replace(validVersion2Config, `"raw_retention_days": 14`,
+				`"raw_retention_days": 14, "`+tt.field+`": `+tt.value, 1)
+			assertDecodeError(t, input, tt.want)
+		})
+	}
+}
+
+func TestDecodeVersion2RejectsMissingCommand(t *testing.T) {
+	assertDecodeError(t, strings.Replace(validVersion2Config, `"command": "uvx"`, `"command": ""`, 1), "command")
+}
+
+func TestDecodeVersion2ScopeSessionPolicy(t *testing.T) {
+	tests := []struct {
+		name, scope, policy string
+	}{
+		{"repository must be isolated", "repository", "session_local"},
+		{"session must be local", "session", "isolated"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := strings.Replace(validVersion2Config, `"scope": "user"`, `"scope": "`+tt.scope+`"`, 1)
+			input = strings.Replace(input, `"session_policy": "isolated"`, `"session_policy": "`+tt.policy+`"`, 1)
+			assertDecodeError(t, input, "session_policy")
+		})
+	}
+}
+
+func TestDecodeVersion2RejectsInlineCredentials(t *testing.T) {
+	for _, arg := range []string{"--token=value", "PASSWORD=value", "api_key=value", "--Api-Key=value"} {
+		t.Run(arg, func(t *testing.T) {
+			input := strings.Replace(validVersion2Config, `"args": ["chroma-mcp"]`,
+				`"args": ["chroma-mcp", "`+arg+`"]`, 1)
+			_, err := Decode(strings.NewReader(input))
+			if err == nil {
+				t.Fatal("Decode succeeded; want error")
+			}
+			if !strings.Contains(err.Error(), "services[0] args[1]") {
+				t.Fatalf("error %q does not identify service/arg index", err)
+			}
+			if strings.Contains(err.Error(), arg) {
+				t.Fatalf("error %q echoes credential argument", err)
+			}
+		})
+	}
+	for _, arg := range []string{
+		"--token", "--notsecret=value", "--mytoken=value", "prefix-api_key=value", "template_api_key=value",
+	} {
+		t.Run("allows "+arg, func(t *testing.T) {
+			input := strings.Replace(validVersion2Config, `"args": ["chroma-mcp"]`,
+				`"args": ["chroma-mcp", "`+arg+`"]`, 1)
+			if _, err := Decode(strings.NewReader(input)); err != nil {
+				t.Fatalf("benign argument rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestDecodeVersion2RejectsSplitCredentials(t *testing.T) {
+	for _, flag := range []string{"--token", "password", "--secret", " --api-key ", "api_key"} {
+		t.Run(flag, func(t *testing.T) {
+			input := strings.Replace(validVersion2Config, `"args": ["chroma-mcp"]`,
+				`"args": ["chroma-mcp", "`+flag+`", "credential-value"]`, 1)
+			_, err := Decode(strings.NewReader(input))
+			if err == nil {
+				t.Fatal("Decode succeeded; want error")
+			}
+			if !strings.Contains(err.Error(), "services[0] args[1]") {
+				t.Fatalf("error %q does not identify service/arg index", err)
+			}
+			if strings.Contains(err.Error(), flag) || strings.Contains(err.Error(), "credential-value") {
+				t.Fatalf("error %q echoes credential flag or value", err)
+			}
+		})
+	}
+}
+
+func TestDecodeVersion2AllowsBareCredentialFlagsWithoutValues(t *testing.T) {
+	for _, args := range []string{
+		`"chroma-mcp", "--token"`,
+		`"chroma-mcp", " password "`,
+		`"chroma-mcp", "--secret", "--verbose"`,
+		`"chroma-mcp", " --api-key ", " -v "`,
+		`"chroma-mcp", "api_key", "--next=value"`,
+	} {
+		t.Run(args, func(t *testing.T) {
+			input := strings.Replace(validVersion2Config, `"args": ["chroma-mcp"]`, `"args": [`+args+`]`, 1)
+			if _, err := Decode(strings.NewReader(input)); err != nil {
+				t.Fatalf("bare credential flag rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestDecodeVersion1RejectsVersion2Fields(t *testing.T) {
+	observation := `"observation":{"events_dir":"x","reports_dir":"x","salt_path":"x","raw_retention_days":14},`
+	tests := []struct {
+		name, input, want string
+	}{
+		{"observation", strings.Replace(validConfig, `"services":`, observation+`"services":`, 1), "observation"},
+	}
+	serviceFields := []struct {
+		name, value string
+	}{
+		{"command", `"uvx"`},
+		{"args", `[]`},
+		{"cwd", `"%h"`},
+		{"transport", `"stdio"`},
+		{"scope", `"user"`},
+		{"session_policy", `"isolated"`},
+		{"clients", `["codex"]`},
+	}
+	for _, field := range serviceFields {
+		input := strings.Replace(validConfig, `"name":"chroma"`,
+			`"name":"chroma","`+field.name+`":`+field.value, 1)
+		tests = append(tests, struct {
+			name, input, want string
+		}{field.name, input, field.name})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertDecodeError(t, tt.input, "unknown field")
+			assertDecodeError(t, tt.input, tt.want)
+		})
 	}
 }
 
@@ -35,7 +265,11 @@ func TestExampleConfigContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode example config: %v", err)
 	}
-	wantNames := []string{"chroma", "codegraph", "obsidian", "claude-mem", "headroom", "playwright", "chrome-devtools"}
+	wantNames := []string{
+		"chroma", "codegraph", "code-review-graph", "codebase-memory", "obsidian", "claude-mem", "headroom",
+		"playwright", "chrome-devtools", "yinxiang", "fetch", "memory", "sequential-thinking", "mcp-delve",
+		"tokensave", "context7", "figma",
+	}
 	if len(cfg.Services) != len(wantNames) {
 		t.Fatalf("service count = %d; want %d", len(cfg.Services), len(wantNames))
 	}
@@ -88,7 +322,7 @@ func TestDecodeRejectsTrailingJSON(t *testing.T) {
 }
 
 func TestDecodeRejectsUnsupportedVersion(t *testing.T) {
-	assertDecodeError(t, strings.Replace(validConfig, `"version": 1`, `"version": 2`, 1), "version")
+	assertDecodeError(t, strings.Replace(validConfig, `"version": 1`, `"version": 3`, 1), "version")
 }
 
 func TestDecodeRejectsMissingPaths(t *testing.T) {

@@ -1,0 +1,10 @@
+[Unit]
+Description=Generate the MCP observation report daily
+
+[Timer]
+OnCalendar=*-*-* 00:15:00
+Persistent=true
+Unit=mcp-governor-report.service
+
+[Install]
+WantedBy=timers.target
