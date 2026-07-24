@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestAccumulatorStreamsEventsAndRejectsSnapshotOverflow(t *testing.T) {
 func TestAccumulatorBoundsHighCardinalityAndReportsDegradedStatus(t *testing.T) {
 	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	acc, err := NewAccumulatorWithBudget(start, start.Add(time.Hour), Budget{
-		MaxToolCardinality: 2, MaxSessionCardinality: 2, MaxDistributionCardinality: 2,
+		MaxToolCardinality: 2, MaxSessionCardinality: 2, MaxServiceCardinality: 2, MaxDistributionCardinality: 2,
 		MaxRecords: 100, MaxEventBytes: 1 << 20, MaxWorkUnits: 100,
 	})
 	if err != nil {
@@ -64,6 +65,36 @@ func TestAccumulatorBoundsHighCardinalityAndReportsDegradedStatus(t *testing.T) 
 	}
 	if got.Completeness.RecordsDropped == 0 {
 		t.Fatalf("completeness = %+v, want dropped records", got.Completeness)
+	}
+}
+
+func TestAccumulatorBoundsServiceCardinality(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	acc, err := NewAccumulatorWithBudget(start, start.Add(time.Hour), Budget{
+		MaxServiceCardinality: 2,
+		MaxToolCardinality:    100,
+		MaxRecords:            100,
+		MaxEventBytes:         1 << 20,
+		MaxWorkUnits:          100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		if err := acc.AddEvent(tool(start.Add(time.Minute), "codex", fmt.Sprintf("svc-%d", i), "search",
+			fmt.Sprintf("session-%d", i), observe.OutcomeSuccess, true, 1, 1, 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := acc.Report()
+	if len(got.Services) > 2 || len(acc.services) > 2 {
+		t.Fatalf("service cardinality = %d, want <= 2", len(acc.services))
+	}
+	if got.Completeness.Complete || !got.Completeness.Degraded {
+		t.Fatalf("completeness = %+v, want degraded", got.Completeness)
+	}
+	if !slices.Contains(got.Completeness.OverflowReasons, "service_cardinality") {
+		t.Fatalf("completeness = %+v, want service cardinality overflow", got.Completeness)
 	}
 }
 

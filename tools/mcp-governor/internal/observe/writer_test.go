@@ -133,6 +133,59 @@ func TestWriterRotatesAtCalendarDateBoundary(t *testing.T) {
 	}
 }
 
+func TestWriterReopensLatestSegmentAndPreservesDateRotationAfterRestart(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "events")
+	options := WriterOptions{MaxSegmentBytes: 1 << 20, RotateDaily: true}
+	first, err := NewWriterWithOptions(root, "codex", "session-hash", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := validWriterEvent("codex", "session-hash")
+	event.At = time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	if err := first.Write(event); err != nil {
+		t.Fatal(err)
+	}
+	event.At = time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	if err := first.Write(event); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := NewWriterWithOptions(root, "codex", "session-hash", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event.At = time.Date(2026, 7, 2, 13, 0, 0, 0, time.UTC)
+	if err := second.Write(event); err != nil {
+		t.Fatal(err)
+	}
+	event.At = time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	if err := second.Write(event); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	counts := make(map[string]int)
+	for _, path := range []string{
+		filepath.Join(root, "codex", "session-hash.jsonl"),
+		filepath.Join(root, "codex", "session-hash.000001.jsonl"),
+		filepath.Join(root, "codex", "session-hash.000002.jsonl"),
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts[filepath.Base(path)] = bytes.Count(data, []byte{'\n'})
+	}
+	if counts["session-hash.jsonl"] != 1 || counts["session-hash.000001.jsonl"] != 2 || counts["session-hash.000002.jsonl"] != 1 {
+		t.Fatalf("segment record counts = %v, want base=1 seq1=2 seq2=1", counts)
+	}
+}
+
 func TestWriterRejectsUnsafePathComponents(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "events")
 	for _, tt := range []struct {

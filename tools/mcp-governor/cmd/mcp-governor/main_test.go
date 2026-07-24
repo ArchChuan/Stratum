@@ -386,7 +386,7 @@ func TestPruneDoesNotUnlinkIdleActiveWriter(t *testing.T) {
 	}
 }
 
-func TestPruneDoesNotUnlinkActiveRotatedSegment(t *testing.T) {
+func TestPruneRemovesExpiredRotatedSegmentButKeepsActiveSegment(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "events")
 	w, err := observe.NewWriterWithOptions(root, "codex", "active", observe.WriterOptions{MaxSegmentBytes: 1, RotateDaily: true})
 	if err != nil {
@@ -417,8 +417,12 @@ func TestPruneDoesNotUnlinkActiveRotatedSegment(t *testing.T) {
 		t.Fatal(err)
 	}
 	segments, _ := filepath.Glob(filepath.Join(root, "codex", "active*.jsonl"))
-	if len(segments) != 2 {
-		t.Fatalf("active rotated segments = %v, want both segments preserved", segments)
+	if len(segments) != 1 || !strings.HasSuffix(segments[0], "active.000001.jsonl") {
+		t.Fatalf("active rotated segments = %v, want only current segment", segments)
+	}
+	data := mustReadFile(t, segments[0])
+	if bytes.Count(data, []byte{'\n'}) != 1 {
+		t.Fatalf("current active segment records = %q, want one record", data)
 	}
 }
 
@@ -451,6 +455,48 @@ func TestReportRequiresSevenDaysUnlessPartialAndStdoutDoesNotWriteDefault(t *tes
 	}
 	if _, err := os.Stat(expired); err != nil {
 		t.Fatalf("stdout report pruned events: %v", err)
+	}
+}
+
+func TestReportIncompleteStdoutReturnsNonzeroAfterPublishingStatus(t *testing.T) {
+	root := t.TempDir()
+	configPath := writeProxyConfig(t, root, "codex", "user")
+	var configData map[string]any
+	if err := json.Unmarshal(mustReadFile(t, configPath), &configData); err != nil {
+		t.Fatal(err)
+	}
+	configData["observation"].(map[string]any)["report_max_records"] = 1
+	encoded, err := json.Marshal(configData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, configPath, encoded, 0o600)
+
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(7 * 24 * time.Hour)
+	path := filepath.Join(root, "events", "codex", "session.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	events := []observe.Event{
+		{Version: 1, Kind: observe.KindToolCall, At: start.Add(time.Hour), Client: "codex", Service: "fake",
+			Tool: "one", SessionHash: "session", Outcome: observe.OutcomeSuccess},
+		{Version: 1, Kind: observe.KindToolCall, At: start.Add(2 * time.Hour), Client: "codex", Service: "fake",
+			Tool: "two", SessionHash: "session", Outcome: observe.OutcomeSuccess},
+	}
+	writeEventFile(t, path, events)
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"report", "--config", configPath, "--from", start.Format(time.RFC3339), "--to", end.Format(time.RFC3339), "--output", "-"}
+	if code := run(args, &stdout, &stderr); code == 0 {
+		t.Fatalf("incomplete stdout report returned success; output=%s", stdout.String())
+	}
+	var got report.Report
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("stdout report is not valid JSON: %v; output=%s", err, stdout.String())
+	}
+	if got.Completeness.Complete || !strings.Contains(stderr.String(), "report incomplete") {
+		t.Fatalf("completeness=%+v stderr=%q", got.Completeness, stderr.String())
 	}
 }
 

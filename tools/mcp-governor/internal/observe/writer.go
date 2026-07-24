@@ -1,11 +1,14 @@
 package observe
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -76,42 +79,45 @@ func NewWriterWithOptions(root, client, sessionHash string, options WriterOption
 	if maxSegmentBytes <= 0 {
 		maxSegmentBytes = DefaultMaxSegmentBytes
 	}
-	filename := sessionHash + ".jsonl"
-	lockname := sessionHash + ".lock"
-	lockFlags := syscall.O_CREAT | syscall.O_RDWR | syscall.O_CLOEXEC | syscall.O_NOFOLLOW
-	lockFD, err := syscall.Openat(clientFD, lockname, lockFlags, privateFileMode)
+	segment, err := discoverLatestSegment(clientFD, sessionHash)
 	if err != nil {
 		_ = syscall.Close(clientFD)
-		return nil, fmt.Errorf("open session lifecycle lock: %w", err)
+		return nil, fmt.Errorf("discover latest event segment: %w", err)
 	}
-	if err := validateDescriptor(lockFD, syscall.S_IFREG, privateFileMode); err != nil {
-		_ = syscall.Close(lockFD)
+	filename := eventSegmentName(sessionHash, segment)
+	lockname := eventSegmentLockName(filename)
+	lockFD, err := openSegmentLifecycle(clientFD, lockname)
+	if err != nil {
 		_ = syscall.Close(clientFD)
-		return nil, fmt.Errorf("validate session lifecycle lock: %w", err)
-	}
-	if err := syscall.Flock(lockFD, syscall.LOCK_SH); err != nil {
-		_ = syscall.Close(lockFD)
-		_ = syscall.Close(clientFD)
-		return nil, fmt.Errorf("lock session lifecycle: %w", err)
+		return nil, fmt.Errorf("open event segment lifecycle lock: %w", err)
 	}
 	flags := syscall.O_CREAT | syscall.O_APPEND | syscall.O_WRONLY | syscall.O_CLOEXEC | syscall.O_NOFOLLOW
 	fileFD, err := syscall.Openat(clientFD, filename, flags, privateFileMode)
 	if err != nil {
-		_ = syscall.Flock(lockFD, syscall.LOCK_UN)
-		_ = syscall.Close(lockFD)
+		_ = syscall.Flock(int(lockFD.Fd()), syscall.LOCK_UN)
+		_ = lockFD.Close()
 		_ = syscall.Close(clientFD)
 		return nil, fmt.Errorf("open session event file: %w", err)
 	}
 	if err := validateDescriptor(fileFD, syscall.S_IFREG, privateFileMode); err != nil {
 		_ = syscall.Close(fileFD)
-		_ = syscall.Flock(lockFD, syscall.LOCK_UN)
-		_ = syscall.Close(lockFD)
+		_ = syscall.Flock(int(lockFD.Fd()), syscall.LOCK_UN)
+		_ = lockFD.Close()
 		_ = syscall.Close(clientFD)
 		return nil, fmt.Errorf("validate session event file: %w", err)
 	}
+	segmentDay, err := readSegmentDay(clientFD, filename, maxSegmentBytes)
+	if err != nil {
+		_ = syscall.Close(fileFD)
+		_ = syscall.Flock(int(lockFD.Fd()), syscall.LOCK_UN)
+		_ = lockFD.Close()
+		_ = syscall.Close(clientFD)
+		return nil, fmt.Errorf("read latest event segment: %w", err)
+	}
 	return &Writer{
-		file: os.NewFile(uintptr(fileFD), filename), lifecycle: os.NewFile(uintptr(lockFD), lockname),
+		file: os.NewFile(uintptr(fileFD), filename), lifecycle: lockFD,
 		clientDirFD: clientFD, client: client, sessionHash: sessionHash,
+		segment: segment, segmentDay: segmentDay,
 		maxSegmentBytes: maxSegmentBytes, rotateDaily: options.RotateDaily,
 	}, nil
 }
@@ -146,34 +152,37 @@ func (w *Writer) WriteContext(ctx context.Context, event Event) error {
 	if w.closed {
 		return fmt.Errorf("writer is closed")
 	}
-	if err := flockContext(ctx, int(w.file.Fd()), syscall.LOCK_EX); err != nil {
+	currentFile := w.file
+	if err := flockContext(ctx, int(currentFile.Fd()), syscall.LOCK_EX); err != nil {
 		return fmt.Errorf("lock event file: %w", err)
 	}
-	if err := w.rotateIfNeeded(event, int64(len(record))); err != nil {
-		_ = syscall.Flock(int(w.file.Fd()), syscall.LOCK_UN)
+	if err := w.rotateIfNeeded(ctx, event, int64(len(record))); err != nil {
+		_ = syscall.Flock(int(currentFile.Fd()), syscall.LOCK_UN)
 		return fmt.Errorf("rotate event segment: %w", err)
 	}
-	written, err := w.file.Write(record)
+	activeFile := w.file
+	written, err := activeFile.Write(record)
 	if err != nil {
-		_ = syscall.Flock(int(w.file.Fd()), syscall.LOCK_UN)
+		_ = syscall.Flock(int(activeFile.Fd()), syscall.LOCK_UN)
 		return fmt.Errorf("append event: %w", err)
 	}
 	if written != len(record) {
-		_ = syscall.Flock(int(w.file.Fd()), syscall.LOCK_UN)
+		_ = syscall.Flock(int(activeFile.Fd()), syscall.LOCK_UN)
 		return fmt.Errorf("append event: %w", io.ErrShortWrite)
 	}
-	if err := syscall.Flock(int(w.file.Fd()), syscall.LOCK_UN); err != nil {
+	if err := syscall.Flock(int(activeFile.Fd()), syscall.LOCK_UN); err != nil {
 		return fmt.Errorf("unlock event file: %w", err)
 	}
 	return nil
 }
 
 // rotateIfNeeded is called while the writer mutex and current file lock are
-// held. The lifecycle lock is held for the complete session lifetime, so
-// report/prune cannot unlink any segment while the writer is active.
-func (w *Writer) rotateIfNeeded(event Event, nextBytes int64) error {
+// held. The lifecycle lock belongs to the current segment only, allowing
+// report/prune to remove closed expired segments from a still-active session.
+func (w *Writer) rotateIfNeeded(ctx context.Context, event Event, nextBytes int64) error {
 	day := event.At.Format("2006-01-02")
-	stat, err := w.file.Stat()
+	currentFile := w.file
+	stat, err := currentFile.Stat()
 	if err != nil {
 		return err
 	}
@@ -183,41 +192,235 @@ func (w *Writer) rotateIfNeeded(event Event, nextBytes int64) error {
 	}
 	if (w.rotateDaily && w.segmentDay != "" && w.segmentDay != day) ||
 		(w.maxSegmentBytes > 0 && stat.Size()+nextBytes > w.maxSegmentBytes) {
-		if err := w.openNextSegment(day); err != nil {
+		if err := w.openNextSegment(ctx, day); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (w *Writer) openNextSegment(day string) error {
-	if err := w.file.Close(); err != nil {
-		return fmt.Errorf("close current event segment: %w", err)
-	}
+func (w *Writer) openNextSegment(ctx context.Context, day string) error {
+	oldFile := w.file
+	oldLifecycle := w.lifecycle
 	for {
 		w.segment++
 		name := fmt.Sprintf("%s.%06d.jsonl", w.sessionHash, w.segment)
+		lockName := eventSegmentLockName(name)
+		lockFD, err := syscall.Openat(w.clientDirFD, lockName,
+			syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, privateFileMode)
+		if err != nil {
+			return fmt.Errorf("open next event segment lifecycle lock: %w", err)
+		}
+		if err := validateDescriptor(lockFD, syscall.S_IFREG, privateFileMode); err != nil {
+			_ = syscall.Close(lockFD)
+			return fmt.Errorf("validate next event segment lifecycle lock: %w", err)
+		}
+		if err := flockContext(ctx, lockFD, syscall.LOCK_SH); err != nil {
+			_ = syscall.Close(lockFD)
+			return fmt.Errorf("lock next event segment lifecycle: %w", err)
+		}
 		fd, err := syscall.Openat(w.clientDirFD, name,
 			syscall.O_CREAT|syscall.O_EXCL|syscall.O_APPEND|syscall.O_WRONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW,
 			privateFileMode)
 		if err == syscall.EEXIST {
+			_ = syscall.Flock(lockFD, syscall.LOCK_UN)
+			_ = syscall.Close(lockFD)
 			continue
 		}
 		if err != nil {
+			_ = syscall.Flock(lockFD, syscall.LOCK_UN)
+			_ = syscall.Close(lockFD)
 			return fmt.Errorf("open next event segment: %w", err)
 		}
 		if err := validateDescriptor(fd, syscall.S_IFREG, privateFileMode); err != nil {
 			_ = syscall.Close(fd)
+			_ = syscall.Flock(lockFD, syscall.LOCK_UN)
+			_ = syscall.Close(lockFD)
 			return fmt.Errorf("validate next event segment: %w", err)
 		}
-		if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
+		if err := flockContext(ctx, fd, syscall.LOCK_EX); err != nil {
 			_ = syscall.Close(fd)
+			_ = syscall.Flock(lockFD, syscall.LOCK_UN)
+			_ = syscall.Close(lockFD)
 			return fmt.Errorf("lock next event segment: %w", err)
 		}
-		w.file = os.NewFile(uintptr(fd), name)
+		newFile := os.NewFile(uintptr(fd), name)
+		newLifecycle := os.NewFile(uintptr(lockFD), lockName)
+		if err := oldFile.Close(); err != nil {
+			_ = newFile.Close()
+			_ = syscall.Flock(lockFD, syscall.LOCK_UN)
+			_ = newLifecycle.Close()
+			return fmt.Errorf("close current event segment: %w", err)
+		}
+		if err := syscall.Flock(int(oldLifecycle.Fd()), syscall.LOCK_UN); err != nil {
+			_ = newFile.Close()
+			_ = syscall.Flock(lockFD, syscall.LOCK_UN)
+			_ = newLifecycle.Close()
+			return fmt.Errorf("unlock current event segment lifecycle: %w", err)
+		}
+		if err := oldLifecycle.Close(); err != nil {
+			_ = newFile.Close()
+			_ = syscall.Flock(lockFD, syscall.LOCK_UN)
+			_ = newLifecycle.Close()
+			return fmt.Errorf("close current event segment lifecycle: %w", err)
+		}
+		w.file = newFile
+		w.lifecycle = newLifecycle
 		w.segmentDay = day
 		return nil
 	}
+}
+
+func eventSegmentName(session string, segment int) string {
+	if segment == 0 {
+		return session + ".jsonl"
+	}
+	return fmt.Sprintf("%s.%06d.jsonl", session, segment)
+}
+
+func eventSegmentLockName(name string) string {
+	return strings.TrimSuffix(name, ".jsonl") + ".lock"
+}
+
+func parseEventSegmentName(name, session string) (int, bool) {
+	if name == session+".jsonl" {
+		return 0, true
+	}
+	prefix := session + "."
+	suffix := ".jsonl"
+	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+		return 0, false
+	}
+	digits := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
+	if len(digits) != 6 {
+		return 0, false
+	}
+	value := 0
+	for _, char := range digits {
+		if char < '0' || char > '9' {
+			return 0, false
+		}
+		value = value*10 + int(char-'0')
+	}
+	if value == 0 {
+		return 0, false
+	}
+	return value, true
+}
+
+func discoverLatestSegment(dirFD int, session string) (int, error) {
+	dupFD, err := syscall.Openat(dirFD, ".", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return 0, err
+	}
+	var names []string
+	buffer := make([]byte, 16*1024)
+	for {
+		n, readErr := syscall.ReadDirent(dupFD, buffer)
+		if readErr != nil {
+			_ = syscall.Close(dupFD)
+			return 0, readErr
+		}
+		if n == 0 {
+			break
+		}
+		_, _, names = syscall.ParseDirent(buffer[:n], -1, names)
+	}
+	closeErr := syscall.Close(dupFD)
+	if closeErr != nil {
+		return 0, closeErr
+	}
+	latest := -1
+	for _, name := range names {
+		segment, ok := parseEventSegmentName(name, session)
+		if !ok {
+			continue
+		}
+		fd, openErr := syscall.Openat(dirFD, name, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+		if errors.Is(openErr, syscall.ENOENT) {
+			continue
+		}
+		if openErr != nil {
+			return 0, fmt.Errorf("open event segment %q: %w", name, openErr)
+		}
+		validateErr := validateDescriptor(fd, syscall.S_IFREG, privateFileMode)
+		_ = syscall.Close(fd)
+		if validateErr != nil {
+			return 0, fmt.Errorf("validate event segment %q: %w", name, validateErr)
+		}
+		if segment > latest {
+			latest = segment
+		}
+	}
+	if latest < 0 {
+		return 0, nil
+	}
+	return latest, nil
+}
+
+func openSegmentLifecycle(dirFD int, name string) (*os.File, error) {
+	fd, err := syscall.Openat(dirFD, name,
+		syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, privateFileMode)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateDescriptor(fd, syscall.S_IFREG, privateFileMode); err != nil {
+		_ = syscall.Close(fd)
+		return nil, err
+	}
+	if err := syscall.Flock(fd, syscall.LOCK_SH); err != nil {
+		_ = syscall.Close(fd)
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), name), nil
+}
+
+func readSegmentDay(dirFD int, name string, maxSegmentBytes int64) (string, error) {
+	fd, err := syscall.Openat(dirFD, name, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return "", err
+	}
+	if err := validateDescriptor(fd, syscall.S_IFREG, privateFileMode); err != nil {
+		_ = syscall.Close(fd)
+		return "", err
+	}
+	if err := syscall.Flock(fd, syscall.LOCK_SH); err != nil {
+		_ = syscall.Close(fd)
+		return "", err
+	}
+	defer func() { _ = syscall.Flock(fd, syscall.LOCK_UN) }()
+	file := os.NewFile(uintptr(fd), name)
+	defer file.Close()
+	limit := maxScannerBytes(maxSegmentBytes)
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), limit)
+	day := ""
+	for line := 1; scanner.Scan(); line++ {
+		data := scanner.Bytes()
+		if len(strings.TrimSpace(string(data))) == 0 {
+			return "", fmt.Errorf("line %d is empty", line)
+		}
+		var event Event
+		if err := json.Unmarshal(data, &event); err != nil {
+			return "", fmt.Errorf("decode line %d: %w", line, err)
+		}
+		if err := event.Validate(); err != nil {
+			return "", fmt.Errorf("validate line %d: %w", line, err)
+		}
+		day = event.At.Format("2006-01-02")
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return day, nil
+}
+
+func maxScannerBytes(maxSegmentBytes int64) int {
+	maxInt := int64(^uint(0) >> 1)
+	if maxSegmentBytes <= 0 || maxSegmentBytes >= maxInt-1 {
+		return int(maxInt)
+	}
+	return int(maxSegmentBytes + 1)
 }
 
 func lockWriterMutex(ctx context.Context, mutex *sync.Mutex) error {

@@ -24,6 +24,7 @@ type Budget struct {
 	MaxRecords                 int
 	MaxToolCardinality         int
 	MaxSessionCardinality      int
+	MaxServiceCardinality      int
 	MaxDistributionCardinality int
 	MaxWorkUnits               int64
 }
@@ -33,6 +34,7 @@ const (
 	defaultMaxRecords                       = 1_000_000
 	defaultMaxToolCardinality               = 10_000
 	defaultMaxSessionCardinality            = 10_000
+	defaultMaxServiceCardinality            = 10_000
 	defaultMaxDistributionCardinality       = 10_000
 	defaultMaxWorkUnits               int64 = 2_000_000
 )
@@ -49,6 +51,9 @@ func normalizeBudget(b Budget) Budget {
 	}
 	if b.MaxSessionCardinality <= 0 {
 		b.MaxSessionCardinality = defaultMaxSessionCardinality
+	}
+	if b.MaxServiceCardinality <= 0 {
+		b.MaxServiceCardinality = defaultMaxServiceCardinality
 	}
 	if b.MaxDistributionCardinality <= 0 {
 		b.MaxDistributionCardinality = defaultMaxDistributionCardinality
@@ -179,6 +184,10 @@ func (a *Accumulator) StopReading() bool {
 func (a *Accumulator) serviceFor(name string) *serviceAggregate {
 	item := a.services[name]
 	if item == nil {
+		if len(a.services) >= a.budget.MaxServiceCardinality {
+			a.mark("service_cardinality", true)
+			return nil
+		}
 		item = &serviceAggregate{identities: make(map[process.Identity]struct{}), coldStarts: make(map[int64]int)}
 		a.services[name] = item
 	}
@@ -220,7 +229,12 @@ func (a *Accumulator) AddEventBytes(event observe.Event, bytesRead int64) error 
 	}
 	service := a.serviceFor(event.Service)
 	if event.Kind == observe.KindSessionReady {
-		service.coldStarts[event.DurationMS]++
+		if service != nil {
+			service.coldStarts[event.DurationMS]++
+		}
+		return nil
+	}
+	if service == nil {
 		return nil
 	}
 	if isHealthCheck(event.Tool) {
@@ -298,7 +312,17 @@ func (a *Accumulator) AddSnapshot(snapshot process.Snapshot) error {
 			continue
 		}
 		if inWindow {
-			a.serviceFor(item.Service).identities[item.Identity] = struct{}{}
+			service := a.serviceFor(item.Service)
+			if service != nil {
+				service.identities[item.Identity] = struct{}{}
+			}
+		}
+		if !inWindow {
+			continue
+		}
+		if _, exists := memory[item.Service]; !exists && len(memory) >= a.budget.MaxServiceCardinality {
+			a.mark("service_cardinality", true)
+			continue
 		}
 		current := memory[item.Service]
 		if math.MaxUint64-current.pss < item.PSSBytes || math.MaxUint64-current.uss < item.USSBytes {
@@ -317,6 +341,10 @@ func (a *Accumulator) AddSnapshot(snapshot process.Snapshot) error {
 			if _, exists := memory[item.Service]; exists {
 				return fmt.Errorf("duplicate service summary")
 			}
+			if inWindow && len(memory) >= a.budget.MaxServiceCardinality {
+				a.mark("service_cardinality", true)
+				continue
+			}
 			memory[item.Service] = struct{ pss, uss uint64 }{item.PSSBytes, item.USSBytes}
 		}
 	}
@@ -328,6 +356,9 @@ func (a *Accumulator) AddSnapshot(snapshot process.Snapshot) error {
 			continue
 		}
 		service := a.serviceFor(name)
+		if service == nil {
+			continue
+		}
 		service.peakPSS = max(service.peakPSS, value.pss)
 		service.peakUSS = max(service.peakUSS, value.uss)
 	}

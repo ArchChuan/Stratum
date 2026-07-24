@@ -755,6 +755,7 @@ func runReport(opts reportOptions, stdout io.Writer) error {
 		MaxRecords:                 cfg.Observation.ReportMaxRecords,
 		MaxToolCardinality:         cfg.Observation.ReportMaxToolCardinality,
 		MaxSessionCardinality:      cfg.Observation.ReportMaxSessionCardinality,
+		MaxServiceCardinality:      cfg.Observation.ReportMaxServiceCardinality,
 		MaxDistributionCardinality: cfg.Observation.ReportMaxDistributionValues,
 		MaxWorkUnits:               cfg.Observation.ReportMaxWorkUnits,
 	})
@@ -787,6 +788,10 @@ func runReport(opts reportOptions, stdout io.Writer) error {
 	if opts.outputSet && opts.outputPath == "-" {
 		if _, err := stdout.Write(data); err != nil {
 			return fmt.Errorf("write report: %w", err)
+		}
+		if !aggregate.Completeness.Complete {
+			return fmt.Errorf("report incomplete (%s)",
+				strings.Join(aggregate.Completeness.OverflowReasons, ","))
 		}
 		return nil
 	} else {
@@ -1229,27 +1234,11 @@ func pruneEventFile(candidate eventFile, boundary time.Time) error {
 	return nil
 }
 
-// eventLifecycleLockName maps both the historical <session>.jsonl file and
-// rotated <session>.<sequence>.jsonl segments to the one session lifecycle
-// lock. Holding that lock in Writer prevents report/prune from unlinking an
-// active segment while a long-lived client is appending to it.
+// eventLifecycleLockName maps each event segment to its own lifecycle lock.
+// Writers hold a shared lock only for the current segment; this allows
+// pruning closed expired segments while preserving the active segment.
 func eventLifecycleLockName(name string) string {
 	base := strings.TrimSuffix(name, ".jsonl")
-	if dot := strings.LastIndexByte(base, '.'); dot > 0 {
-		suffix := base[dot+1:]
-		if len(suffix) == 6 {
-			allDigits := true
-			for _, ch := range suffix {
-				if ch < '0' || ch > '9' {
-					allDigits = false
-					break
-				}
-			}
-			if allDigits {
-				base = base[:dot]
-			}
-		}
-	}
 	return base + ".lock"
 }
 

@@ -57,6 +57,7 @@ type Observation struct {
 	ReportMaxRecords            int    `json:"report_max_records,omitempty"`
 	ReportMaxToolCardinality    int    `json:"report_max_tool_cardinality,omitempty"`
 	ReportMaxSessionCardinality int    `json:"report_max_session_cardinality,omitempty"`
+	ReportMaxServiceCardinality int    `json:"report_max_service_cardinality,omitempty"`
 	ReportMaxDistributionValues int    `json:"report_max_distribution_values,omitempty"`
 	ReportMaxWorkUnits          int64  `json:"report_max_work_units,omitempty"`
 }
@@ -252,6 +253,9 @@ func validateObservation(observation Observation) error {
 	}
 	if observation.ReportMaxSessionCardinality < 0 || observation.ReportMaxSessionCardinality > 10_000_000 {
 		return fmt.Errorf("config observation report_max_session_cardinality must be between 0 and %d", 10_000_000)
+	}
+	if observation.ReportMaxServiceCardinality < 0 || observation.ReportMaxServiceCardinality > 10_000_000 {
+		return fmt.Errorf("config observation report_max_service_cardinality must be between 0 and %d", 10_000_000)
 	}
 	if observation.ReportMaxDistributionValues < 0 || observation.ReportMaxDistributionValues > 10_000_000 {
 		return fmt.Errorf("config observation report_max_distribution_values must be between 0 and %d", 10_000_000)

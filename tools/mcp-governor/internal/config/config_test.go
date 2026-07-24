@@ -123,6 +123,7 @@ func TestDecodeVersion2ObservationValidation(t *testing.T) {
 		{"report_max_records", "-1", "report_max_records"},
 		{"report_max_tool_cardinality", "-1", "report_max_tool_cardinality"},
 		{"report_max_session_cardinality", "-1", "report_max_session_cardinality"},
+		{"report_max_service_cardinality", "-1", "report_max_service_cardinality"},
 		{"report_max_distribution_values", "-1", "report_max_distribution_values"},
 		{"report_max_work_units", "-1", "report_max_work_units"},
 	} {
