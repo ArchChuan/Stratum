@@ -53,4 +53,19 @@ describe('CallbackPage', () => {
     expect(screen.getByText(/"pathname":"\/onboarding"/)).toHaveTextContent('"search":""');
     expect(storageSpy).not.toHaveBeenCalled();
   });
+
+  it('renders the callback loading state without an Ant Design Spin warning', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(authApi.exchangeOAuth).mockImplementation(() => new Promise(() => undefined));
+
+    render(
+      <MemoryRouter initialEntries={['/auth/callback?code=one-time-code']}>
+        <Routes><Route path="/auth/callback" element={<CallbackPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('status', { name: '正在完成登录...' })).toBeInTheDocument();
+    await waitFor(() => expect(consoleError).not.toHaveBeenCalledWith(expect.stringContaining('[antd: Spin]')));
+    consoleError.mockRestore();
+  });
 });

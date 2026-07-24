@@ -3,7 +3,6 @@ package infrastructure
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -189,25 +188,17 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 
 	traceID := reqctx.TraceIDFromContext(ctx)
 	tenantID := reqctx.TenantIDFromContext(ctx)
-	if raw, merr := json.Marshal(req.Messages); merr == nil {
-		fields := []zap.Field{
-			zap.String("trace_id", traceID),
-			zap.String("tenant_id", tenantID),
-			zap.String("model", req.Model),
-			zap.String("provider", string(provider)),
-			zap.ByteString("messages", raw),
-			zap.Int("tool_count", len(req.Tools)),
-		}
-		if len(req.Tools) > 0 {
-			if toolsRaw, terr := json.Marshal(req.Tools); terr == nil {
-				fields = append(fields, zap.ByteString("tools", toolsRaw))
-			}
-			if req.ToolChoice != "" {
-				fields = append(fields, zap.String("tool_choice", req.ToolChoice))
-			}
-		}
-		g.logger.Info("llm.request", fields...)
+	fields := []zap.Field{
+		zap.String("trace_id", traceID),
+		zap.String("tenant_id", tenantID),
+		zap.String("model", req.Model),
+		zap.String("provider", string(provider)),
+		zap.Int("tool_count", len(req.Tools)),
 	}
+	if req.ToolChoice != "" {
+		fields = append(fields, zap.String("tool_choice", req.ToolChoice))
+	}
+	g.logger.Info("llm.request", fields...)
 
 	start := time.Now()
 	resp, err := client.Complete(ctx, req)
@@ -240,15 +231,6 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 			zap.Int("prompt_tokens", resp.Usage.PromptTokens),
 			zap.Int("completion_tokens", resp.Usage.CompletionTokens),
 		)
-		if g.logger.Core().Enabled(zap.DebugLevel) {
-			if raw, merr := json.Marshal(resp); merr == nil {
-				g.logger.Debug("llm.response",
-					zap.String("trace_id", traceID),
-					zap.String("model", req.Model),
-					zap.ByteString("output", raw),
-				)
-			}
-		}
 	} else if err != nil {
 		g.logger.Error("llm.complete",
 			zap.String("trace_id", traceID),
@@ -273,32 +255,20 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 		g.metrics.IncLLMRequest(req.Model, string(provider), llmStatusError)
 		return nil, fmt.Errorf("llmgateway: no client for provider %q", provider)
 	}
-	if g.logger.Core().Enabled(zap.DebugLevel) {
-		if raw, merr := json.Marshal(req.Messages); merr == nil {
-			g.logger.Debug("llm.request", zap.String("model", req.Model), zap.ByteString("messages", raw))
-		}
-	}
 	streamTraceID := reqctx.TraceIDFromContext(ctx)
 	streamTenantID := reqctx.TenantIDFromContext(ctx)
-	if raw, merr := json.Marshal(req.Messages); merr == nil {
-		fields := []zap.Field{
-			zap.String("trace_id", streamTraceID),
-			zap.String("tenant_id", streamTenantID),
-			zap.String("model", req.Model),
-			zap.String("provider", string(provider)),
-			zap.ByteString("messages", raw),
-			zap.Int("tool_count", len(req.Tools)),
-		}
-		if len(req.Tools) > 0 {
-			if toolsRaw, terr := json.Marshal(req.Tools); terr == nil {
-				fields = append(fields, zap.ByteString("tools", toolsRaw))
-			}
-			if req.ToolChoice != "" {
-				fields = append(fields, zap.String("tool_choice", req.ToolChoice))
-			}
-		}
-		g.logger.Info("llm.request", fields...)
+	fields := []zap.Field{
+		zap.String("trace_id", streamTraceID),
+		zap.String("tenant_id", streamTenantID),
+		zap.String("model", req.Model),
+		zap.String("provider", string(provider)),
+		zap.Bool("stream", true),
+		zap.Int("tool_count", len(req.Tools)),
 	}
+	if req.ToolChoice != "" {
+		fields = append(fields, zap.String("tool_choice", req.ToolChoice))
+	}
+	g.logger.Info("llm.request", fields...)
 	start := time.Now()
 	tracer := otel.Tracer("stratum/llmgateway")
 	ctx, llmGWSpan := tracer.Start(ctx, "llm.complete",
@@ -357,15 +327,6 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 			zap.Int("prompt_tokens", resp.Usage.PromptTokens),
 			zap.Int("completion_tokens", resp.Usage.CompletionTokens),
 		)
-		if g.logger.Core().Enabled(zap.DebugLevel) {
-			if raw, merr := json.Marshal(resp); merr == nil {
-				g.logger.Debug("llm.response",
-					zap.String("trace_id", streamTraceID),
-					zap.String("model", req.Model),
-					zap.ByteString("output", raw),
-				)
-			}
-		}
 	} else if err != nil {
 		llmGWSpan.RecordError(err)
 		llmGWSpan.SetStatus(codes.Error, "llm provider call failed")

@@ -15,6 +15,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type failingLLMClient struct{ err error }
@@ -24,6 +25,14 @@ func (c failingLLMClient) Complete(context.Context, *CompletionRequest) (*Comple
 }
 func (c failingLLMClient) Health(context.Context) error { return c.err }
 func (failingLLMClient) Models() []string               { return []string{"qwen-turbo"} }
+
+type successfulLLMClient struct{}
+
+func (successfulLLMClient) Complete(context.Context, *CompletionRequest) (*CompletionResponse, error) {
+	return &CompletionResponse{Content: "ok", Usage: TokenUsage{PromptTokens: 1, CompletionTokens: 1}}, nil
+}
+func (successfulLLMClient) Health(context.Context) error { return nil }
+func (successfulLLMClient) Models() []string             { return []string{"qwen-turbo"} }
 
 func TestNewGateway(t *testing.T) {
 	gateway := NewGateway()
@@ -137,6 +146,30 @@ func TestGatewayOTelMarksFailureAsError(t *testing.T) {
 		}
 	}
 	t.Fatal("llm.complete span not found")
+}
+
+func TestGatewayLLMLogsExcludePromptToolAndResponsePayloads(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	gateway := NewGateway().WithLogger(zap.New(core))
+	gateway.RegisterClient(ProviderQwen, successfulLLMClient{})
+
+	_, err := gateway.CompleteStream(context.Background(), &CompletionRequest{
+		Model:    "qwen-turbo",
+		Messages: []Message{{Role: "user", Content: "private prompt"}},
+		Tools:    []Tool{{Type: "function", Function: ToolFunction{Name: "private_tool"}}},
+	}, func(string) {})
+	require.NoError(t, err)
+
+	for _, entry := range logs.All() {
+		if entry.Message != "llm.request" && entry.Message != "llm.complete" && entry.Message != "llm.response" {
+			continue
+		}
+		for _, field := range entry.Context {
+			if field.Key == "messages" || field.Key == "tools" || field.Key == "output" {
+				t.Fatalf("%s log contained sensitive payload field %q", entry.Message, field.Key)
+			}
+		}
+	}
 }
 
 func TestQwenComplete_ToolCalls(t *testing.T) {
