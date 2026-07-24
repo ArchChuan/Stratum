@@ -10,18 +10,26 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
+
+type pgxPool interface {
+	BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
 
 // OnboardRepo implements port.OnboardRepo backed by PostgreSQL.
 type OnboardRepo struct {
-	db *pgxpool.Pool
+	db pgxPool
 }
 
 // NewOnboardRepo creates an OnboardRepo backed by the given pool.
-func NewOnboardRepo(db *pgxpool.Pool) *OnboardRepo {
+func NewOnboardRepo(db pgxPool) *OnboardRepo {
 	return &OnboardRepo{db: db}
 }
 
@@ -273,6 +281,19 @@ func (r *OnboardRepo) IsMember(ctx context.Context, userID, tenantID string) (bo
 // tenant as a member in one tx. Mirrors AutoJoinDefaultTenant but flags is_guest
 // and stamps expires_at; caller supplies the pre-namespaced github_id.
 func (r *OnboardRepo) CreateGuestInDefaultTenant(ctx context.Context, githubID, githubLogin, avatarURL string, expiresAt time.Time) (string, string, error) {
+	var userID, tenantID string
+	err := retryPostgres(ctx, constants.GuestProvisionMaxAttempts, constants.GuestProvisionRetryBackoff, func() error {
+		var err error
+		userID, tenantID, err = r.createGuestAttempt(ctx, githubID, githubLogin, avatarURL, expiresAt)
+		return err
+	})
+	if err != nil {
+		return "", "", err
+	}
+	return userID, tenantID, nil
+}
+
+func (r *OnboardRepo) createGuestAttempt(ctx context.Context, githubID, githubLogin, avatarURL string, expiresAt time.Time) (string, string, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return "", "", fmt.Errorf("onboard_repo: begin tx: %w", err)
@@ -283,6 +304,12 @@ func (r *OnboardRepo) CreateGuestInDefaultTenant(ctx context.Context, githubID, 
 	err = tx.QueryRow(ctx,
 		`INSERT INTO users (github_id, github_login, avatar_url, is_guest, expires_at, last_login_at)
 		 VALUES ($1, $2, $3, true, $4, now())
+		 ON CONFLICT (github_id) DO UPDATE
+		   SET github_login = EXCLUDED.github_login,
+		       avatar_url = EXCLUDED.avatar_url,
+		       is_guest = true,
+		       expires_at = EXCLUDED.expires_at,
+		       last_login_at = now()
 		 RETURNING id`,
 		githubID, githubLogin, avatarURL, expiresAt,
 	).Scan(&uid)

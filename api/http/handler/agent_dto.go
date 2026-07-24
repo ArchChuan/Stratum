@@ -82,14 +82,18 @@ type AgentExecutionResult struct {
 }
 
 // dtoToResponse maps the service-side AgentDTO to the wire AgentResponse.
-// Field-for-field copy — no transformation logic here.
+// Platform-managed prompts are intentionally omitted at this transport boundary.
 func dtoToResponse(d agent.AgentDTO) AgentResponse {
+	systemPrompt := d.SystemPrompt
+	if d.ID == domain.SystemAssistantID || d.SystemKey == domain.SystemAssistantKey {
+		systemPrompt = ""
+	}
 	return AgentResponse{
 		ID:                    d.ID,
 		Name:                  d.Name,
 		Type:                  d.Type,
 		Description:           d.Description,
-		SystemPrompt:          d.SystemPrompt,
+		SystemPrompt:          systemPrompt,
 		LLMModel:              d.LLMModel,
 		EmbedModel:            d.EmbedModel,
 		MaxIterations:         d.MaxIterations,
