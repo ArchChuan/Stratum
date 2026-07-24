@@ -17,22 +17,22 @@
 - Modify: `web/src/modules/evaluation/pages/EvaluationCenterPage.tsx`
 - Modify: `web/src/modules/evaluation/pages/EvaluationCenterPage.test.tsx`
 
-- [ ] Add tests that render the page at `?kind=skill&resource_id=skill-1`, assert the center hook receives both filters, reject an unknown kind, and assert selector changes update the URL.
-- [ ] Run `npm --prefix web test -- src/modules/evaluation/pages/EvaluationCenterPage.test.tsx` and confirm the new assertions fail because the page does not read search parameters.
-- [ ] Use `useSearchParams`, validate `kind` with the existing `resourceKindSchema`, and pass `resource_id` to `useEvaluationCenter`.
-- [ ] Update `kind` through `setSearchParams` while preserving other parameters, then rerun the focused test.
+- [x] Add tests that render the page at `?kind=skill&resource_id=skill-1`, assert the center hook receives both filters, reject an unknown kind, and assert selector changes update the URL.
+- [x] Run `npm --prefix web test -- src/modules/evaluation/pages/EvaluationCenterPage.test.tsx` and confirm the new assertions fail because the page does not read search parameters.
+- [x] Use `useSearchParams`, validate `kind` with the existing `resourceKindSchema`, and pass `resource_id` to `useEvaluationCenter`.
+- [x] Update `kind` through `setSearchParams` while preserving other parameters, then rerun the focused test.
 
 ## Task 2: Warning-Free Private Loading State
 
 **Files:**
 
 - Modify: `web/src/modules/iam/components/PrivateRoute.tsx`
-- Modify: `web/src/modules/iam/components/__tests__/PrivateRoute.test.tsx`
+- Create: `web/src/modules/iam/components/PrivateRoute.test.tsx`
 
-- [ ] Add a test that renders the loading state and asserts no Ant Design Spin warning reaches `console.error`.
-- [ ] Run the focused test and confirm it fails with the current standalone `Spin tip` warning.
-- [ ] Remove the unsupported `tip` prop while preserving the centered loading state and accessible loading text.
-- [ ] Rerun the focused test and existing IAM route tests.
+- [x] Add a test that renders the loading state and asserts no Ant Design Spin warning reaches `console.error`.
+- [x] Run the focused test and confirm it fails with the current standalone `Spin tip` warning.
+- [x] Remove the unsupported `tip` prop while preserving the centered loading state and accessible loading text.
+- [x] Rerun the focused test and existing IAM route tests.
 
 ## Task 3: E2E Dependency Preflight
 
@@ -41,7 +41,7 @@
 - Modify: `scripts/e2e/evaluation-evolution.sh`
 - Create: `scripts/e2e/evaluation-evolution-test.sh`
 
-- [ ] Add a shell test that runs the preflight with a fake npm executable returning a missing-package result and asserts a non-zero exit before Docker is invoked.
-- [ ] Run `bash scripts/e2e/evaluation-evolution-test.sh` and confirm it fails because no dependency preflight exists.
-- [ ] Add the minimal `npm ls --prefix "$repo_dir/web" --depth=0 @xyflow/react` preflight and a safe `npm ci` remediation message.
-- [ ] Rerun the shell test, frontend tests, lint, build, `make risk-guardrails`, and the isolated evaluation E2E.
+- [x] Add a shell test that runs the preflight with a fake npm executable returning a missing-package result and asserts a non-zero exit before Docker is invoked.
+- [x] Run `bash scripts/e2e/evaluation-evolution-test.sh` and confirm it fails because no dependency preflight exists.
+- [x] Add the minimal `npm ls --prefix "$repo_dir/web" --depth=0 @xyflow/react` preflight and a safe `npm ci` remediation message.
+- [x] Rerun the shell test, frontend tests, lint, build, `make risk-guardrails`, and the isolated evaluation E2E.

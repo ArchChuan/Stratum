@@ -42,6 +42,31 @@ for (const kind of resourceKinds) {
 }
 
 test.describe('responsive center', () => {
+  test('scoped resource deep link filters every center collection', async ({ authenticatedPage, manifest }) => {
+    const resource = manifest.resources.skill;
+    const collectionPaths = [
+      '/evaluations/resources',
+      '/evaluations/suites',
+      '/evaluations/runs',
+      '/evaluations/candidates',
+      '/evaluations/experiments',
+    ];
+    const requestedCollections = new Set<string>();
+    authenticatedPage.on('request', (request) => {
+      const url = new URL(request.url());
+      if (!collectionPaths.includes(url.pathname)) return;
+      expect(url.searchParams.get('resource_kind')).toBe('skill');
+      expect(url.searchParams.get('resource_id')).toBe(resource.id);
+      requestedCollections.add(url.pathname);
+    });
+
+    await authenticatedPage.goto(`/evaluations?kind=skill&resource_id=${encodeURIComponent(resource.id)}`);
+    await expect(authenticatedPage.getByRole('heading', { name: '评测与进化中心' })).toBeVisible();
+    await expect(authenticatedPage.getByRole('cell', { name: resource.id }).first()).toBeVisible();
+    await expect(authenticatedPage.getByRole('cell', { name: manifest.resources.agent.id })).toHaveCount(0);
+    await expect.poll(() => [...requestedCollections].sort()).toEqual([...collectionPaths].sort());
+  });
+
   for (const viewport of [
     { name: 'desktop', width: 1440, height: 900 },
     { name: 'mobile', width: 390, height: 844 },

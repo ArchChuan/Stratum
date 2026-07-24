@@ -25,6 +25,8 @@ export const PrivateRoute = ({
   if (loading) {
     return (
       <div
+        role="status"
+        aria-label="加载中..."
         style={{
           minHeight: '100vh',
           display: 'flex',
@@ -32,7 +34,7 @@ export const PrivateRoute = ({
           justifyContent: 'center',
         }}
       >
-        <Spin size="large" tip="加载中..." />
+        <Spin size="large" />
       </div>
     );
   }
