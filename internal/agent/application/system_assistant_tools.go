@@ -52,17 +52,110 @@ func SystemAssistantToolDefinitionsForRole(roleClass string) []port.ToolDefiniti
 	return append(tools, port.ToolDefinition{
 		Name: ToolProposeResourceChange, ProviderType: domain.ProviderTypeInternal,
 		Description: "创建受治理的资源变更提案。只生成待审提案，不直接修改资源。",
-		InputSchema: map[string]any{
+		InputSchema: proposalToolSchema(),
+	})
+}
+
+func proposalToolSchema() map[string]any {
+	payloads := map[domain.ResourceKind]map[string]any{
+		domain.ResourceAgent: {
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{
-				"resourceKind": map[string]any{"type": "string", "enum": []string{"agent", "skill_draft", "mcp_config", "knowledge_workspace"}},
-				"operation":    map[string]any{"type": "string", "enum": []string{"create", "update"}},
-				"resourceId":   map[string]any{"type": "string"},
-				"payload":      map[string]any{"type": "object"},
+				"name":             map[string]any{"type": "string", "minLength": 1},
+				"description":      map[string]any{"type": "string"},
+				"model":            map[string]any{"type": "string"},
+				"maxIterations":    map[string]any{"type": "integer", "minimum": 1, "maximum": 20},
+				"maxContextTokens": map[string]any{"type": "integer", "minimum": 1},
+				"skillIds":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "uniqueItems": true},
+				"mcpToolIds":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "uniqueItems": true},
+				"workspaceIds":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "uniqueItems": true},
 			},
-			"required": []string{"resourceKind", "operation", "payload"},
+			"required": []string{"name", "description", "model", "maxIterations", "maxContextTokens"},
 		},
-	})
+		domain.ResourceSkillDraft: {
+			"type": "object", "additionalProperties": false,
+			"properties": map[string]any{
+				"name":         map[string]any{"type": "string", "minLength": 1},
+				"description":  map[string]any{"type": "string"},
+				"instructions": map[string]any{"type": "string", "minLength": 1},
+			},
+			"required": []string{"name", "description", "instructions"},
+		},
+		domain.ResourceMCPConfig: {
+			"type": "object", "additionalProperties": false,
+			"properties": map[string]any{
+				"name":         map[string]any{"type": "string", "minLength": 1},
+				"version":      map[string]any{"type": "string"},
+				"transport":    map[string]any{"type": "string", "enum": []string{"stdio", "streamable-http"}},
+				"command":      map[string]any{"type": "string"},
+				"args":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"url":          map[string]any{"type": "string"},
+				"capabilities": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "uniqueItems": true},
+				"timeoutSec": map[string]any{
+					"type": "integer", "minimum": minProposalMCPTimeoutSec, "maximum": maxProposalMCPTimeoutSec,
+				},
+				"retry": proposalRetrySchema(),
+			},
+			"required": []string{"name", "version", "transport", "timeoutSec"},
+		},
+		domain.ResourceKnowledgeWorkspace: {
+			"type": "object", "additionalProperties": false,
+			"properties": map[string]any{
+				"name":           map[string]any{"type": "string", "minLength": 1},
+				"description":    map[string]any{"type": "string", "minLength": 1},
+				"embeddingModel": map[string]any{"type": "string"},
+			},
+			"required": []string{"name", "description", "embeddingModel"},
+		},
+	}
+	kinds := []domain.ResourceKind{
+		domain.ResourceAgent, domain.ResourceSkillDraft, domain.ResourceMCPConfig, domain.ResourceKnowledgeWorkspace,
+	}
+	branches := make([]any, 0, len(kinds)*2)
+	for _, kind := range kinds {
+		for _, operation := range []domain.ProposalOperation{domain.OperationCreate, domain.OperationUpdate} {
+			properties := map[string]any{
+				"resourceKind": map[string]any{"const": string(kind)},
+				"operation":    map[string]any{"const": string(operation)},
+				"payload":      payloads[kind],
+			}
+			required := []string{"resourceKind", "operation", "payload"}
+			if operation == domain.OperationUpdate {
+				properties["resourceId"] = map[string]any{"type": "string", "minLength": 1}
+				required = append(required, "resourceId")
+			}
+			branches = append(branches, map[string]any{
+				"type": "object", "additionalProperties": false,
+				"properties": properties, "required": required,
+			})
+		}
+	}
+	return map[string]any{"oneOf": branches}
+}
+
+func proposalRetrySchema() map[string]any {
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"properties": map[string]any{
+			"enabled": map[string]any{"type": "boolean"},
+			"maxRetries": map[string]any{
+				"type": "integer", "minimum": minProposalMCPRetryCount, "maximum": maxProposalMCPRetryCount,
+			},
+			"initialDelayMs": map[string]any{
+				"type": "integer", "minimum": minProposalMCPRetryInitialDelayMs,
+				"maximum": maxProposalMCPRetryInitialDelayMs,
+			},
+			"maxDelayMs": map[string]any{
+				"type": "integer", "minimum": minProposalMCPRetryMaxDelayMs,
+				"maximum": maxProposalMCPRetryMaxDelayMs,
+			},
+			"backoffFactor": map[string]any{
+				"type": "number", "minimum": minProposalMCPRetryBackoffFactor,
+				"maximum": maxProposalMCPRetryBackoffFactor,
+			},
+		},
+		"required": []string{"enabled", "maxRetries", "initialDelayMs", "maxDelayMs", "backoffFactor"},
+	}
 }
 
 func parseProposalArguments(args map[string]any) (domain.ResourceKind, domain.ProposalOperation, string, []byte, error) {

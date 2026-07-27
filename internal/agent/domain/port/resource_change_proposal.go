@@ -2,6 +2,7 @@ package port
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -24,7 +25,12 @@ type ProposalAuthorizer interface {
 }
 
 type BaselineResolver interface {
-	ResolveBaseline(context.Context, domain.ResourceChangeProposal) (string, error)
+	ResolveBaseline(context.Context, domain.ResourceChangeProposal) (ResourceBaseline, error)
+}
+
+type ResourceBaseline struct {
+	Fingerprint string
+	Projection  json.RawMessage
 }
 
 type ResourceChangeApplier interface {

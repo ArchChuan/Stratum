@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -35,12 +36,30 @@ func TestProposalAgentRejectsManagedAssistantAndReturnsSafeReadback(t *testing.T
 	require.NotEmpty(t, result.Fingerprint)
 }
 
+func TestProposalMCPBaselineContainsTypedFieldsWithoutCredentials(t *testing.T) {
+	mcp := &proposalMCPFake{configs: map[string]*mcpdomain.ServerConfig{"server-1": {
+		ID: "server-1", Name: "docs", Version: "1", Transport: "streamable-http",
+		URL: "https://user:keep-me@example.test/mcp?api_token=keep-me&mode=safe", Timeout: 30 * time.Second,
+		Headers: map[string]string{"Authorization": "Bearer keep-me"},
+		Env:     map[string]string{"API_TOKEN": "keep-me"},
+		Auth:    &mcpdomain.AuthConfig{Type: mcpdomain.AuthTypeBearer, Token: "keep-me"},
+	}}}
+	adapter := NewResourceChangeProposalAdapters(nil, nil, mcp, nil)
+	baseline, err := adapter.ResolveBaseline(context.Background(), agentdomain.ResourceChangeProposal{
+		ResourceKind: agentdomain.ResourceMCPConfig, ResourceID: "server-1",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, baseline.Fingerprint)
+	require.JSONEq(t, `{"name":"docs","version":"1","transport":"streamable-http","url":"https://example.test/mcp?mode=safe","timeoutSec":30}`, string(baseline.Projection))
+	require.NotContains(t, string(baseline.Projection), "keep-me")
+}
+
 func TestProposalMCPCreateHasNoCredentialsAndUpdatePreservesStoredCredentials(t *testing.T) {
 	mcp := &proposalMCPFake{configs: map[string]*mcpdomain.ServerConfig{}}
 	adapter := NewResourceChangeProposalAdapters(nil, nil, mcp, nil)
 	created, err := adapter.ApplyResourceChange(context.Background(), agentdomain.ProposalEnvelope{
 		Proposal: agentdomain.ResourceChangeProposal{ResourceKind: agentdomain.ResourceMCPConfig, Operation: agentdomain.OperationCreate},
-		Payload:  &agentdomain.MCPConfigChange{Name: "docs", Version: "1", Transport: "streamable_http", URL: "https://example.test/mcp", TimeoutSec: 30},
+		Payload:  &agentdomain.MCPConfigChange{Name: "docs", Version: "1", Transport: "streamable-http", URL: "https://example.test/mcp", TimeoutSec: 30},
 	})
 	require.NoError(t, err)
 	createdConfig := mcp.configs[created.ResourceID]
@@ -49,13 +68,13 @@ func TestProposalMCPCreateHasNoCredentialsAndUpdatePreservesStoredCredentials(t 
 	require.Empty(t, createdConfig.Headers)
 
 	mcp.configs["server-1"] = &mcpdomain.ServerConfig{
-		ID: "server-1", Name: "old", Transport: "streamable_http", URL: "https://old.test/mcp",
+		ID: "server-1", Name: "old", Transport: "streamable-http", URL: "https://old.test/mcp",
 		Headers: map[string]string{"Authorization": "Bearer keep-me"},
 		Auth:    &mcpdomain.AuthConfig{Type: mcpdomain.AuthTypeBearer, Token: "keep-me"},
 	}
 	result, err := adapter.ApplyResourceChange(context.Background(), agentdomain.ProposalEnvelope{
 		Proposal: agentdomain.ResourceChangeProposal{ResourceKind: agentdomain.ResourceMCPConfig, ResourceID: "server-1", Operation: agentdomain.OperationUpdate},
-		Payload:  &agentdomain.MCPConfigChange{Name: "new", Version: "2", Transport: "streamable_http", URL: "https://new.test/mcp", TimeoutSec: 30},
+		Payload:  &agentdomain.MCPConfigChange{Name: "new", Version: "2", Transport: "streamable-http", URL: "https://new.test/mcp", TimeoutSec: 30},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "keep-me", mcp.configs["server-1"].Auth.Token)
@@ -66,14 +85,14 @@ func TestProposalMCPCreateHasNoCredentialsAndUpdatePreservesStoredCredentials(t 
 func TestProposalMCPUpdateFailureHasUnknownOutcome(t *testing.T) {
 	mcp := &proposalMCPFake{
 		configs: map[string]*mcpdomain.ServerConfig{"server-1": {
-			ID: "server-1", Name: "old", Transport: "streamable_http", URL: "https://old.test/mcp",
+			ID: "server-1", Name: "old", Transport: "streamable-http", URL: "https://old.test/mcp",
 		}},
 		updateErr: errors.New("replacement connection failed"),
 	}
 	adapter := NewResourceChangeProposalAdapters(nil, nil, mcp, nil)
 	_, err := adapter.ApplyResourceChange(context.Background(), agentdomain.ProposalEnvelope{
 		Proposal: agentdomain.ResourceChangeProposal{ResourceKind: agentdomain.ResourceMCPConfig, ResourceID: "server-1", Operation: agentdomain.OperationUpdate},
-		Payload:  &agentdomain.MCPConfigChange{Name: "new", Transport: "streamable_http", URL: "https://new.test/mcp", TimeoutSec: 30},
+		Payload:  &agentdomain.MCPConfigChange{Name: "new", Transport: "streamable-http", URL: "https://new.test/mcp", TimeoutSec: 30},
 	})
 	var applyErr *agentport.ResourceApplyError
 	require.ErrorAs(t, err, &applyErr)

@@ -13,11 +13,13 @@ describe('resourceChangeProposalSchema', () => {
     const parsed = resourceChangeProposalSchema.parse({
       ...base,
       resourceKind: 'skill_draft',
+      baselineProjection: { name: '旧名称', description: '旧说明', instructions: '旧指令' },
       payload: { name: '检索助手', description: '查找资料', instructions: '只引用已核验来源' },
     });
     expect(parsed.resourceKind).toBe('skill_draft');
     if (parsed.resourceKind !== 'skill_draft') throw new Error('unexpected proposal kind');
     expect(parsed.payload.instructions).toBe('只引用已核验来源');
+    expect(parsed.baselineProjection?.instructions).toBe('旧指令');
   });
 
   it.each(['temperature', 'token', 'apiKey', 'headers', 'env'])('rejects unsupported or secret field %s', (field) => {

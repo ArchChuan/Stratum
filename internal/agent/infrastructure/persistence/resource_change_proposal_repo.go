@@ -54,6 +54,7 @@ func (r *PgResourceChangeProposalRepo) Create(
 	if err != nil {
 		return fmt.Errorf("marshal proposal result: %w", err)
 	}
+	baselineProjection := proposalBaselineProjectionJSON(proposal.BaselineProjection)
 	detail, err := marshalProposalEventDetail(event)
 	if err != nil {
 		return err
@@ -61,13 +62,13 @@ func (r *PgResourceChangeProposalRepo) Create(
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `INSERT INTO resource_change_proposals
             (id, conversation_id, proposer_id, confirmer_id, resource_kind, resource_id, operation,
-             baseline_fingerprint, payload, safe_summary, status, result, error_code, created_at, updated_at,
+             baseline_fingerprint, baseline_projection, payload, safe_summary, status, result, error_code, created_at, updated_at,
              confirmed_at, applied_at, expires_at)
-            VALUES ($1, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11,
-                    $12::jsonb, $13, $14, $15, $16, $17, $18)`,
+            VALUES ($1, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12,
+                    $13::jsonb, $14, $15, $16, $17, $18, $19)`,
 			proposal.ID, proposal.ConversationID, proposal.ProposerID, proposal.ConfirmerID,
 			proposal.ResourceKind, proposal.ResourceID, proposal.Operation, proposal.BaselineFingerprint,
-			string(payload), string(summary), proposal.Status, string(result), proposal.ErrorCode,
+			string(baselineProjection), string(payload), string(summary), proposal.Status, string(result), proposal.ErrorCode,
 			proposal.CreatedAt, proposal.UpdatedAt, proposal.ConfirmedAt, proposal.AppliedAt, proposal.ExpiresAt)
 		if err != nil {
 			return fmt.Errorf("insert resource change proposal: %w", err)
@@ -80,12 +81,12 @@ func (r *PgResourceChangeProposalRepo) Get(ctx context.Context, id string) (doma
 	var proposal domain.ResourceChangeProposal
 	tenant, _ := tenantdb.FromContext(ctx)
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		var payload, summary, result []byte
-		err := scanProposal(tx.QueryRow(ctx, proposalSelect+` WHERE id=$1`, id), &proposal, &payload, &summary, &result)
+		var baselineProjection, payload, summary, result []byte
+		err := scanProposal(tx.QueryRow(ctx, proposalSelect+` WHERE id=$1`, id), &proposal, &baselineProjection, &payload, &summary, &result)
 		if err != nil {
 			return err
 		}
-		return decodeProposalJSON(&proposal, payload, summary, result)
+		return decodeProposalJSON(&proposal, baselineProjection, payload, summary, result)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ResourceChangeProposal{}, domain.ErrProposalNotFound
@@ -114,13 +115,15 @@ func (r *PgResourceChangeProposalRepo) UpdateDraft(
 	if err != nil {
 		return err
 	}
+	baselineProjection := proposalBaselineProjectionJSON(proposal.BaselineProjection)
 	var transitionErr error
 	err = r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		command, err := tx.Exec(ctx, `UPDATE resource_change_proposals
-            SET resource_id=$2, baseline_fingerprint=$3, payload=$4::jsonb, safe_summary=$5::jsonb,
-                status=$6, updated_at=$7
-			WHERE id=$1 AND status IN ('draft','ready_for_review') AND expires_at>$7`, proposal.ID, proposal.ResourceID,
-			proposal.BaselineFingerprint, string(payload), string(summary), proposal.Status, proposal.UpdatedAt)
+			SET resource_id=$2, baseline_fingerprint=$3, baseline_projection=$4::jsonb, payload=$5::jsonb,
+				safe_summary=$6::jsonb, status=$7, updated_at=$8
+			WHERE id=$1 AND status IN ('draft','ready_for_review') AND expires_at>$8`, proposal.ID, proposal.ResourceID,
+			proposal.BaselineFingerprint, string(baselineProjection), string(payload), string(summary), proposal.Status,
+			proposal.UpdatedAt)
 		if err != nil {
 			return fmt.Errorf("update proposal draft: %w", err)
 		}
@@ -178,11 +181,11 @@ func (r *PgResourceChangeProposalRepo) ClaimApplying(
 	var proposal domain.ResourceChangeProposal
 	var transitionErr error
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		var payload, summary, result []byte
+		var baselineProjection, payload, summary, result []byte
 		err := scanProposal(tx.QueryRow(ctx, `UPDATE resource_change_proposals
             SET status='applying', updated_at=$2
             WHERE id=$1 AND status='confirmed' AND expires_at>$2
-            RETURNING `+proposalColumns, id, at), &proposal, &payload, &summary, &result)
+			RETURNING `+proposalColumns, id, at), &proposal, &baselineProjection, &payload, &summary, &result)
 		if errors.Is(err, pgx.ErrNoRows) {
 			transitionErr = classifyTransitionFailure(ctx, tx, id, at)
 			if errors.Is(transitionErr, domain.ErrProposalExpired) {
@@ -193,7 +196,7 @@ func (r *PgResourceChangeProposalRepo) ClaimApplying(
 		if err != nil {
 			return fmt.Errorf("claim proposal: %w", err)
 		}
-		if err := decodeProposalJSON(&proposal, payload, summary, result); err != nil {
+		if err := decodeProposalJSON(&proposal, baselineProjection, payload, summary, result); err != nil {
 			return err
 		}
 		return insertProposalEvent(ctx, tx, id, domain.ProposalEvent{
@@ -305,19 +308,20 @@ func (r *PgResourceChangeProposalRepo) transition(
 }
 
 const proposalColumns = `id, COALESCE(conversation_id::text,''), proposer_id, confirmer_id, resource_kind,
-    resource_id, operation, baseline_fingerprint, payload, safe_summary, status, result, error_code,
+    resource_id, operation, baseline_fingerprint, baseline_projection, payload, safe_summary, status, result, error_code,
     created_at, updated_at, confirmed_at, applied_at, expires_at`
 
 const proposalSelect = `SELECT ` + proposalColumns + ` FROM resource_change_proposals`
 
-func scanProposal(row pgx.Row, proposal *domain.ResourceChangeProposal, payload, summary, result *[]byte) error {
+func scanProposal(row pgx.Row, proposal *domain.ResourceChangeProposal, baselineProjection, payload, summary, result *[]byte) error {
 	return row.Scan(&proposal.ID, &proposal.ConversationID, &proposal.ProposerID, &proposal.ConfirmerID,
 		&proposal.ResourceKind, &proposal.ResourceID, &proposal.Operation, &proposal.BaselineFingerprint,
-		payload, summary, &proposal.Status, result, &proposal.ErrorCode, &proposal.CreatedAt, &proposal.UpdatedAt,
+		baselineProjection, payload, summary, &proposal.Status, result, &proposal.ErrorCode, &proposal.CreatedAt, &proposal.UpdatedAt,
 		&proposal.ConfirmedAt, &proposal.AppliedAt, &proposal.ExpiresAt)
 }
 
-func decodeProposalJSON(proposal *domain.ResourceChangeProposal, payload, summary, result []byte) error {
+func decodeProposalJSON(proposal *domain.ResourceChangeProposal, baselineProjection, payload, summary, result []byte) error {
+	proposal.BaselineProjection = append(proposal.BaselineProjection[:0], baselineProjection...)
 	proposal.Payload = append(proposal.Payload[:0], payload...)
 	var safeSummary map[string]string
 	if err := json.Unmarshal(summary, &safeSummary); err != nil {
@@ -330,6 +334,13 @@ func decodeProposalJSON(proposal *domain.ResourceChangeProposal, payload, summar
 		}
 	}
 	return nil
+}
+
+func proposalBaselineProjectionJSON(value json.RawMessage) []byte {
+	if len(value) == 0 || string(value) == "null" {
+		return []byte(`{}`)
+	}
+	return value
 }
 
 func classifyTransitionFailure(ctx context.Context, tx pgx.Tx, id string, now time.Time) error {

@@ -40,10 +40,12 @@ Skill publish、MCP tool execution 或 Knowledge upload。proposal payload 使�
 
 proposal 状态由 application service 硬编码：`ready_for_review -> confirmed -> applying -> applied`，并可终止为
 `invalid`、`stale`、`expired`、`failed`、`unknown_outcome` 或 `cancelled`。创建、编辑、确认、apply 前都重新授权；
-update 以 owning context 的安全 projection 计算基线 fingerprint，确认时重新计算，冲突转 `stale`。确认和 apply
+update 保存去密 typed baseline projection 供审阅页显示 old/new 差异，并以独立 fingerprint 做冲突判断；确认时重新计算
+fingerprint，不同则转 `stale`。确认和 apply
 claim 是 tenant PostgreSQL 原子更新，并发请求只允许一个 applier。`unknown_outcome` 无 API/UI 重试入口。
 
-MCP proposal create 强制 `AuthTypeNone`；update 只能修改非敏感配置，保存的 env、headers、bearer/API key/OAuth
+MCP proposal 仅接受 `stdio`、`streamable-http`；HTTP URL 禁止 userinfo 和凭据形 query key。create 强制
+`AuthTypeNone`；update 只能修改非敏感配置，保存的 env、headers、bearer/API key/OAuth
 凭据保持原值且不进入 baseline、artifact、响应或日志。所有 proposal/event SQL 经 `execTenant`，审计事件追加写入
 `resource_change_proposal_events`。管理员路由为 `GET/PATCH /resource-change-proposals/:id`、
 `POST /resource-change-proposals/:id/cancel|confirm`。

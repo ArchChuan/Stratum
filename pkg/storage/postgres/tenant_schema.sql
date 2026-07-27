@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS resource_change_proposals (
     resource_id          TEXT NOT NULL DEFAULT '',
     operation            TEXT NOT NULL CHECK (operation IN ('create', 'update')),
     baseline_fingerprint TEXT NOT NULL DEFAULT '',
+    baseline_projection  JSONB NOT NULL DEFAULT '{}',
     payload              JSONB NOT NULL,
     safe_summary         JSONB NOT NULL DEFAULT '{}',
     status               TEXT NOT NULL CHECK (status IN ('draft', 'ready_for_review', 'confirmed', 'applying', 'applied', 'invalid', 'stale', 'expired', 'failed', 'unknown_outcome', 'cancelled')),
@@ -89,6 +90,8 @@ CREATE TABLE IF NOT EXISTS resource_change_proposals (
     applied_at           TIMESTAMPTZ,
     expires_at           TIMESTAMPTZ NOT NULL
 );
+ALTER TABLE resource_change_proposals
+    ADD COLUMN IF NOT EXISTS baseline_projection JSONB NOT NULL DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_resource_change_proposals_status
     ON resource_change_proposals(status, expires_at, created_at);
 

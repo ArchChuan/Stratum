@@ -5,7 +5,9 @@ const json = (route: Route, body: unknown, status = 200) =>
 
 const baseProposal = {
   id: 'proposal-browser', proposerId: 'admin-browser', resourceKind: 'knowledge_workspace',
-  operation: 'create', summary: 'create knowledge_workspace', status: 'ready_for_review',
+  resourceId: 'workspace-browser', operation: 'update', summary: 'update knowledge_workspace', status: 'ready_for_review',
+  baselineFingerprint: 'sha256:browser-baseline',
+  baselineProjection: { name: '官方文档', description: '旧版资料', embeddingModel: 'text-embedding-v2' },
   payload: { name: '官方文档', description: '已核验产品资料', embeddingModel: 'text-embedding-v3' },
   events: [{ id: 'event-1', actorId: 'admin-browser', toStatus: 'ready_for_review', createdAt: '2026-07-27T00:00:00Z' }],
   expiresAt: '2026-07-28T00:00:00Z', createdAt: '2026-07-27T00:00:00Z', updatedAt: '2026-07-27T00:00:00Z',
@@ -46,7 +48,9 @@ test('admin reviews, edits, and confirms exactly once without overflow', async (
 
   await page.goto('/resource-change-proposals/proposal-browser');
   await expect(page.getByRole('heading', { name: '审阅资源变更' })).toBeVisible();
-  await expect(page.getByRole('row', { name: /说明 已核验产品资料/ })).toBeVisible();
+  await expect(page.getByRole('row', { name: /说明 旧版资料 已核验产品资料/ })).toBeVisible();
+  await expect(page.getByText('租户管理员或所有者')).toBeVisible();
+  await expect(page.getByText('已记录，确认时重新校验')).toBeVisible();
   await page.getByRole('textbox', { name: '说明' }).fill('已核验产品资料与变更记录');
   await page.getByRole('button', { name: '保存调整' }).click();
   await expect(page.getByText('提案已保存')).toBeVisible();

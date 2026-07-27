@@ -37,7 +37,11 @@ export const ResourceChangeProposalPage = () => {
   const navigate = useNavigate();
   const { proposal, events = [], loading, saving, confirming, canceling, saveDraft, confirm, cancel } = useResourceChangeProposal(id);
   const [form] = Form.useForm<Record<string, unknown>>();
-  const rows = useMemo(() => proposal ? Object.entries(proposal.payload).map(([field, value]) => ({ field, value })) : [], [proposal]);
+  const rows = useMemo(() => {
+    if (!proposal) return [];
+    const baseline = proposal.baselineProjection ?? {};
+    return Object.entries(proposal.payload).map(([field, value]) => ({ field, oldValue: baseline[field], value }));
+  }, [proposal]);
 
   if (loading) return <Skeleton active paragraph={{ rows: 8 }} />;
   if (!proposal) return <Empty description="没有找到这条变更提案" />;
@@ -79,13 +83,17 @@ export const ResourceChangeProposalPage = () => {
         <Descriptions.Item label="提案编号">{proposal.id}</Descriptions.Item>
         <Descriptions.Item label="发起人">{proposal.proposerId}</Descriptions.Item>
         <Descriptions.Item label="有效期">{new Date(proposal.expiresAt).toLocaleString('zh-CN')}</Descriptions.Item>
+        <Descriptions.Item label="影响范围">当前租户的单个 {KIND_LABEL[proposal.resourceKind]} 资源</Descriptions.Item>
+        <Descriptions.Item label="所需权限">租户管理员或所有者</Descriptions.Item>
+        <Descriptions.Item label="基线状态">{proposal.operation === 'create' ? '不适用（新建）' : proposal.baselineFingerprint ? '已记录，确认时重新校验' : '缺少基线'}</Descriptions.Item>
       </Descriptions>
 
       <section style={{ marginTop: 24, minWidth: 0 }}>
         <Title level={4}>字段变更</Title>
         <Table size="small" pagination={false} rowKey="field" scroll={{ x: 520 }} dataSource={rows} columns={[
           { title: '字段', dataIndex: 'field', width: 180, render: (field: string) => FIELD_LABEL[field] || field },
-          { title: proposal.operation === 'create' ? '新值' : '提议值', dataIndex: 'value', render: formatValue },
+          { title: '当前值', dataIndex: 'oldValue', render: (value: unknown) => proposal.operation === 'create' ? '无（新建）' : formatValue(value) },
+          { title: '提议值', dataIndex: 'value', render: formatValue },
           { title: '影响', key: 'impact', width: 220, render: () => proposal.operation === 'create' ? '创建新的租户资源' : '通过基线校验后覆盖该字段' },
         ]} />
       </section>

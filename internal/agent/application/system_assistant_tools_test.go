@@ -10,6 +10,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -91,6 +92,47 @@ func TestProposalArtifactUsesTypedExecutionChannel(t *testing.T) {
 	}}, domain.CurrentSystemAssistantProfileVersion)
 	if len(artifacts) != 1 || artifacts[0].Type != "resource_change_proposal" || artifacts[0].ResourceChangeProposal == nil {
 		t.Fatalf("artifacts = %#v", artifacts)
+	}
+}
+
+func TestProposalToolSchemaUsesClosedDiscriminatedPayloads(t *testing.T) {
+	tools := SystemAssistantToolDefinitionsForRole("admin")
+	require.Len(t, tools, 3)
+	schema := tools[2].InputSchema
+	branches, ok := schema["oneOf"].([]any)
+	require.True(t, ok, "proposal schema must use oneOf")
+	require.Len(t, branches, 8, "four resource kinds must each define create and update")
+
+	seen := map[string]bool{}
+	for _, rawBranch := range branches {
+		branch, ok := rawBranch.(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, false, branch["additionalProperties"])
+		properties := branch["properties"].(map[string]any)
+		kind := properties["resourceKind"].(map[string]any)["const"].(string)
+		operation := properties["operation"].(map[string]any)["const"].(string)
+		payload := properties["payload"].(map[string]any)
+		require.Equal(t, false, payload["additionalProperties"], "%s/%s payload must be closed", kind, operation)
+		require.NotEmpty(t, payload["properties"])
+		required := branch["required"].([]string)
+		require.Contains(t, required, "resourceKind")
+		require.Contains(t, required, "operation")
+		require.Contains(t, required, "payload")
+		if operation == string(domain.OperationUpdate) {
+			require.Contains(t, required, "resourceId")
+		} else {
+			require.NotContains(t, properties, "resourceId")
+		}
+		seen[kind+":"+operation] = true
+		if kind == string(domain.ResourceMCPConfig) {
+			transport := payload["properties"].(map[string]any)["transport"].(map[string]any)
+			require.Equal(t, []string{"stdio", "streamable-http"}, transport["enum"])
+		}
+	}
+	for _, kind := range []domain.ResourceKind{domain.ResourceAgent, domain.ResourceSkillDraft, domain.ResourceMCPConfig, domain.ResourceKnowledgeWorkspace} {
+		for _, operation := range []domain.ProposalOperation{domain.OperationCreate, domain.OperationUpdate} {
+			require.True(t, seen[string(kind)+":"+string(operation)])
+		}
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
@@ -86,41 +88,61 @@ func NewResourceChangeProposalAdapters(
 func (a *ResourceChangeProposalAdapters) ResolveBaseline(
 	ctx context.Context,
 	proposal agentdomain.ResourceChangeProposal,
-) (string, error) {
+) (agentport.ResourceBaseline, error) {
+	var projection any
+	var fingerprintValue string
 	switch proposal.ResourceKind {
 	case agentdomain.ResourceAgent:
 		value, err := a.agents.Get(ctx, proposal.ResourceID)
 		if err != nil {
-			return "", err
+			return agentport.ResourceBaseline{}, err
 		}
 		if value.SystemKey != "" {
-			return "", agentdomain.ErrSystemAssistantManaged
+			return agentport.ResourceBaseline{}, agentdomain.ErrSystemAssistantManaged
 		}
-		return fingerprint(agentSafeProjection(value))
+		projection = agentChangeProjection(value)
 	case agentdomain.ResourceSkillDraft:
 		value, err := a.skills.GetWorkspace(ctx, proposal.ResourceID)
 		if err != nil {
-			return "", err
+			return agentport.ResourceBaseline{}, err
 		}
 		if value.Draft.Status != skilldomain.VersionStatusDraft {
-			return "", skilldomain.ErrSkillNotFound
+			return agentport.ResourceBaseline{}, skilldomain.ErrSkillNotFound
 		}
-		return value.Draft.ContentHash, nil
+		projection = map[string]any{"name": value.Skill.Name, "description": value.Skill.Description,
+			"instructions": value.Draft.Instructions}
+		fingerprintValue = value.Draft.ContentHash
 	case agentdomain.ResourceMCPConfig:
 		value, err := a.mcp.GetServerConfig(ctx, proposal.ResourceID)
 		if err != nil {
-			return "", err
+			return agentport.ResourceBaseline{}, err
 		}
-		return fingerprint(mcpSafeProjection(value))
+		projection = mcpChangeProjection(value)
+		fingerprintValue, err = fingerprint(value)
+		if err != nil {
+			return agentport.ResourceBaseline{}, err
+		}
 	case agentdomain.ResourceKnowledgeWorkspace:
 		value, err := a.knowledge.GetWorkspace(ctx, proposal.TenantID, proposal.ResourceID)
 		if err != nil {
-			return "", err
+			return agentport.ResourceBaseline{}, err
 		}
-		return fingerprint(knowledgeSafeProjection(value))
+		projection = map[string]any{"name": value.Name, "description": value.Description,
+			"embeddingModel": value.Config.EmbeddingModel}
 	default:
-		return "", agentdomain.ErrProposalInvalid
+		return agentport.ResourceBaseline{}, agentdomain.ErrProposalInvalid
 	}
+	encoded, err := json.Marshal(projection)
+	if err != nil {
+		return agentport.ResourceBaseline{}, fmt.Errorf("marshal resource baseline: %w", err)
+	}
+	if fingerprintValue == "" {
+		fingerprintValue, err = fingerprint(projection)
+		if err != nil {
+			return agentport.ResourceBaseline{}, err
+		}
+	}
+	return agentport.ResourceBaseline{Fingerprint: fingerprintValue, Projection: encoded}, nil
 }
 
 func (a *ResourceChangeProposalAdapters) ApplyResourceChange(
@@ -289,15 +311,74 @@ func agentSafeProjection(value agentapp.AgentDTO) map[string]any {
 	}
 }
 
+func agentChangeProjection(value agentapp.AgentDTO) map[string]any {
+	return map[string]any{
+		"name": value.Name, "description": value.Description, "model": value.LLMModel,
+		"maxIterations": value.MaxIterations, "maxContextTokens": value.MaxContextTokens,
+		"skillIds": value.AllowedSkills, "mcpToolIds": value.MCPToolIDs,
+		"workspaceIds": value.KnowledgeWorkspaceIDs,
+	}
+}
+
+func mcpChangeProjection(value *mcpdomain.ServerConfig) map[string]any {
+	if value == nil {
+		return map[string]any{}
+	}
+	projection := map[string]any{
+		"name": value.Name, "version": value.Version, "transport": value.Transport,
+		"timeoutSec": int(value.Timeout / time.Second),
+	}
+	if value.Command != "" {
+		projection["command"] = value.Command
+	}
+	if len(value.Args) > 0 {
+		projection["args"] = value.Args
+	}
+	if safeURL := mcpSafeURL(value.URL); safeURL != "" {
+		projection["url"] = safeURL
+	}
+	if len(value.Capabilities) > 0 {
+		projection["capabilities"] = value.Capabilities
+	}
+	if value.Retry != nil {
+		projection["retry"] = map[string]any{
+			"enabled": value.Retry.Enabled, "maxRetries": value.Retry.MaxRetries,
+			"initialDelayMs": value.Retry.InitialDelayMs, "maxDelayMs": value.Retry.MaxDelayMs,
+			"backoffFactor": value.Retry.BackoffFactor,
+		}
+	}
+	return projection
+}
+
 func mcpSafeProjection(value *mcpdomain.ServerConfig) map[string]any {
 	if value == nil {
 		return map[string]any{}
 	}
 	return map[string]any{
 		"id": value.ID, "name": value.Name, "version": value.Version, "transport": value.Transport,
-		"command": value.Command, "args": value.Args, "url": value.URL, "capabilities": value.Capabilities,
+		"command": value.Command, "args": value.Args, "url": mcpSafeURL(value.URL), "capabilities": value.Capabilities,
 		"timeoutMs": value.Timeout.Milliseconds(), "retry": value.Retry,
 	}
+}
+
+func mcpSafeURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	parsed.User = nil
+	query := parsed.Query()
+	for key := range query {
+		normalized := strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key))
+		for _, marker := range []string{"token", "apikey", "authorization", "password", "secret", "credential"} {
+			if strings.Contains(normalized, marker) {
+				query.Del(key)
+				break
+			}
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func knowledgeSafeProjection(value *knowledgedomain.Workspace) map[string]any {

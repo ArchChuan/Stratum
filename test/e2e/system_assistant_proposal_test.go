@@ -34,6 +34,18 @@ type proposalE2EApplier struct {
 	calls int
 }
 
+type proposalE2EBaseline struct{ fingerprint string }
+
+func (b *proposalE2EBaseline) ResolveBaseline(
+	context.Context,
+	domain.ResourceChangeProposal,
+) (agentport.ResourceBaseline, error) {
+	return agentport.ResourceBaseline{
+		Fingerprint: b.fingerprint,
+		Projection:  json.RawMessage(`{"name":"原资源"}`),
+	}, nil
+}
+
 func (a *proposalE2EApplier) ApplyResourceChange(
 	_ context.Context,
 	envelope domain.ProposalEnvelope,
@@ -62,7 +74,10 @@ func TestSystemAssistantProposalPostgresAuthorizationSecretsAndConcurrency(t *te
 		repo,
 		proposalE2EAuthorizer{roles: map[string]string{adminID: "admin", memberID: "member"}},
 		nil,
-		map[domain.ResourceKind]agentport.ResourceChangeApplier{domain.ResourceAgent: applier},
+		map[domain.ResourceKind]agentport.ResourceChangeApplier{
+			domain.ResourceAgent: applier, domain.ResourceSkillDraft: applier,
+			domain.ResourceMCPConfig: applier, domain.ResourceKnowledgeWorkspace: applier,
+		},
 		nil,
 	)
 
@@ -87,6 +102,20 @@ func TestSystemAssistantProposalPostgresAuthorizationSecretsAndConcurrency(t *te
 	require.NoError(t, err)
 	require.JSONEq(t, `{}`, string(storedInvalid.Payload))
 	require.NotContains(t, string(storedInvalid.Payload), "marker-secret")
+
+	for _, field := range []string{"apiKey", "Authorization", "password", "env", "headers"} {
+		marker := "marker-" + field
+		secretPayload := json.RawMessage(`{"name":"blocked","description":"x","model":"m","maxIterations":2,"maxContextTokens":1024,"` +
+			field + `":"` + marker + `"}`)
+		invalidProposal, createErr := service.CreateProposal(adminCtx, agentapp.CreateProposalInput{
+			TenantID: tenants[0], ActorID: adminID, Kind: domain.ResourceAgent,
+			Operation: domain.OperationCreate, Payload: secretPayload,
+		})
+		require.ErrorIs(t, createErr, domain.ErrProposalInvalid)
+		stored, getErr := repo.Get(adminCtx, invalidProposal.ID)
+		require.NoError(t, getErr)
+		require.NotContains(t, string(stored.Payload), marker)
+	}
 
 	proposal, err := service.CreateProposal(adminCtx, agentapp.CreateProposalInput{
 		TenantID: tenants[0], ActorID: adminID, Kind: domain.ResourceAgent,
@@ -114,4 +143,71 @@ func TestSystemAssistantProposalPostgresAuthorizationSecretsAndConcurrency(t *te
 	stored, err := repo.Get(adminCtx, proposal.ID)
 	require.NoError(t, err)
 	require.Equal(t, domain.StatusApplied, stored.Status)
+
+	otherCreates := []struct {
+		kind    domain.ResourceKind
+		payload json.RawMessage
+	}{
+		{domain.ResourceSkillDraft, json.RawMessage(`{"name":"检索 Skill","description":"检索资料","instructions":"只引用已核验资料"}`)},
+		{domain.ResourceMCPConfig, json.RawMessage(`{"name":"docs","version":"1","transport":"streamable-http","url":"https://example.test/mcp","timeoutSec":30}`)},
+		{domain.ResourceKnowledgeWorkspace, json.RawMessage(`{"name":"官方资料","description":"已核验资料","embeddingModel":"text-embedding-v3"}`)},
+	}
+	for _, tc := range otherCreates {
+		created, createErr := service.CreateProposal(adminCtx, agentapp.CreateProposalInput{
+			TenantID: tenants[0], ActorID: adminID, Kind: tc.kind,
+			Operation: domain.OperationCreate, Payload: tc.payload,
+		})
+		require.NoError(t, createErr)
+		applied, applyErr := service.ConfirmAndApply(adminCtx, tenants[0], created.ID, adminID)
+		require.NoError(t, applyErr)
+		require.Equal(t, domain.StatusApplied, applied.Status)
+	}
+	require.Equal(t, 4, applier.callCount())
+
+	baseline := &proposalE2EBaseline{fingerprint: "baseline-v1"}
+	updateService := agentapp.NewResourceChangeProposalService(
+		repo,
+		proposalE2EAuthorizer{roles: map[string]string{adminID: "admin"}},
+		baseline,
+		map[domain.ResourceKind]agentport.ResourceChangeApplier{
+			domain.ResourceAgent: applier, domain.ResourceSkillDraft: applier,
+			domain.ResourceMCPConfig: applier, domain.ResourceKnowledgeWorkspace: applier,
+		},
+		nil,
+	)
+	updates := []struct {
+		kind    domain.ResourceKind
+		payload json.RawMessage
+	}{
+		{domain.ResourceAgent, payload},
+		{domain.ResourceSkillDraft, json.RawMessage(`{"name":"检索 Skill","description":"新说明","instructions":"只引用已核验资料"}`)},
+		{domain.ResourceMCPConfig, json.RawMessage(`{"name":"docs","version":"2","transport":"streamable-http","url":"https://example.test/mcp","timeoutSec":30}`)},
+		{domain.ResourceKnowledgeWorkspace, json.RawMessage(`{"name":"官方资料","description":"新说明","embeddingModel":"text-embedding-v3"}`)},
+	}
+	for _, tc := range updates {
+		created, createErr := updateService.CreateProposal(adminCtx, agentapp.CreateProposalInput{
+			TenantID: tenants[0], ActorID: adminID, Kind: tc.kind, ResourceID: "resource-1",
+			Operation: domain.OperationUpdate, Payload: tc.payload,
+		})
+		require.NoError(t, createErr)
+		require.Equal(t, "baseline-v1", created.BaselineFingerprint)
+		require.JSONEq(t, `{"name":"原资源"}`, string(created.BaselineProjection))
+		applied, applyErr := updateService.ConfirmAndApply(adminCtx, tenants[0], created.ID, adminID)
+		require.NoError(t, applyErr)
+		require.Equal(t, domain.StatusApplied, applied.Status)
+	}
+
+	stale, err := updateService.CreateProposal(adminCtx, agentapp.CreateProposalInput{
+		TenantID: tenants[0], ActorID: adminID, Kind: domain.ResourceAgent, ResourceID: "resource-stale",
+		Operation: domain.OperationUpdate, Payload: payload,
+	})
+	require.NoError(t, err)
+	baseline.fingerprint = "baseline-v2"
+	beforeStale := applier.callCount()
+	_, err = updateService.ConfirmAndApply(adminCtx, tenants[0], stale.ID, adminID)
+	require.ErrorIs(t, err, domain.ErrProposalStale)
+	require.Equal(t, beforeStale, applier.callCount())
+	storedStale, err := repo.Get(adminCtx, stale.ID)
+	require.NoError(t, err)
+	require.Equal(t, domain.StatusStale, storedStale.Status)
 }

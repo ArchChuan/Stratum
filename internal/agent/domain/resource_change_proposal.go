@@ -50,6 +50,7 @@ type ResourceChangeProposal struct {
 	ResourceID          string            `json:"resourceId,omitempty"`
 	Operation           ProposalOperation `json:"operation"`
 	BaselineFingerprint string            `json:"baselineFingerprint,omitempty"`
+	BaselineProjection  json.RawMessage   `json:"baselineProjection,omitempty"`
 	Payload             json.RawMessage   `json:"payload"`
 	Summary             string            `json:"summary"`
 	Status              ProposalStatus    `json:"status"`

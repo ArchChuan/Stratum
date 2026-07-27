@@ -18,7 +18,7 @@ func TestResourceChangeProposalCreateIsAtomic(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO resource_change_proposals").
-		WithArgs(anyArgs(18)...).
+		WithArgs(anyArgs(19)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("INSERT INTO resource_change_proposal_events").
 		WithArgs(anyArgs(7)...).
@@ -92,7 +92,7 @@ func TestResourceChangeProposalUpdateDraftPersistsExpiration(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("UPDATE resource_change_proposals").
-		WithArgs("proposal-1", "", "", pgxmock.AnyArg(), pgxmock.AnyArg(), domain.StatusReadyForReview, now).
+		WithArgs("proposal-1", "", "", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), domain.StatusReadyForReview, now).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	pool.ExpectQuery("SELECT status, expires_at FROM resource_change_proposals").
 		WithArgs("proposal-1").
