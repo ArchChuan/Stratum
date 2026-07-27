@@ -43,6 +43,28 @@ func TestEvaluateRetrievalAppliesExactRevisionConfigWithoutLeakingContent(t *tes
 	}
 }
 
+func TestRetrieveContextAppliesSnapshotOrderThresholdAndLimit(t *testing.T) {
+	retriever := &fakeEvaluationRetriever{result: &RAGQueryResult{Sources: []Source{
+		{DocumentID: "low", Content: "low", Score: 0.4},
+		{DocumentID: "second", Content: "second", Score: 0.8},
+		{DocumentID: "first", Content: "first", Score: 0.9},
+	}}}
+	snapshot := RetrievalSnapshot{
+		WorkspaceID: "workspace-1", WorkspaceName: "support", EmbeddingModel: "embedding-3",
+		QueryMode: "hybrid", TopK: 2, ScoreThreshold: 0.7,
+		Reranking: RerankingScoreDesc, QueryRewrite: QueryRewriteLowercaseTrim,
+	}
+
+	content, err := NewRetrievalEvaluator(retriever).RetrieveContext(
+		reqctx.WithTenantID(context.Background(), "tenant-1"), snapshot, "  QUERY  ",
+	)
+
+	if err != nil || content != "first\n---\nsecond\n---\n" || retriever.request.Question != "query" ||
+		retriever.request.TopK != 2 || retriever.request.Mode != "hybrid" {
+		t.Fatalf("content=%q request=%+v err=%v", content, retriever.request, err)
+	}
+}
+
 func TestEvaluateRetrievalCoversNoAnswerAndDependencyFailure(t *testing.T) {
 	evaluator := NewRetrievalEvaluator(&fakeEvaluationRetriever{result: &RAGQueryResult{Sources: []Source{
 		{DocumentID: "doc-low", Content: "private", Score: 0.2},

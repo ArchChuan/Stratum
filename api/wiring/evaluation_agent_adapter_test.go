@@ -109,6 +109,20 @@ func TestAgentEvaluationAdapterRejectsDraftExecution(t *testing.T) {
 	}
 }
 
+func TestAgentEvaluationAdapterResolvesOptimizationCandidateForOfflineEvaluation(t *testing.T) {
+	revisions := &fakeAgentRevisionService{revision: evaldomain.ResourceRevision{
+		ID: "candidate-1", ResourceKind: evaldomain.ResourceKindAgent, ResourceID: "agent-1",
+		Status: evaldomain.RevisionStatusDraft, Source: evaldomain.RevisionSourceOptimization,
+	}, payload: []byte(`{"agent_id":"agent-1","type":"react","system_prompt":"candidate","model":"qwen-plus","max_iterations":5}`), found: true}
+
+	resolved, err := (agentEvaluationAdapter{revisions: revisions}).ResolveRevision(
+		context.Background(), "tenant-1", agentRef("candidate-1"),
+	)
+	if err != nil || !resolved.CanEvaluateOffline() {
+		t.Fatalf("candidate resolution=%+v err=%v", resolved, err)
+	}
+}
+
 func TestAgentEvaluationAdapterCreatesPublishedBaselineFromLiveAgent(t *testing.T) {
 	revisions := &fakeAgentRevisionService{}
 	agents := fakeAgentRevisionExecutor{snapshot: agentdomain.AgentRevision{

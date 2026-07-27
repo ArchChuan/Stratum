@@ -44,14 +44,17 @@ func (r *PgFeedbackRepository) Record(
 		feedback.ID = uuid.Must(uuid.NewV7()).String()
 		err = tx.QueryRow(ctx,
 			`INSERT INTO evaluation_feedback
-			 (id, trace_id, resource_kind, resource_id, revision_id, score, outcome, idempotency_key)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+			 (id, trace_id, resource_kind, resource_id, revision_id, experiment_id, variant,
+			  score, outcome, idempotency_key)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 			 ON CONFLICT (trace_id, resource_id) DO UPDATE SET
 			 score=EXCLUDED.score, outcome=EXCLUDED.outcome, idempotency_key=EXCLUDED.idempotency_key
-			 RETURNING id, trace_id, resource_kind, resource_id, revision_id, score, outcome, idempotency_key, created_at`,
+			 RETURNING id, trace_id, resource_kind, resource_id, revision_id, experiment_id, variant,
+			           score, outcome, idempotency_key, created_at`,
 			feedback.ID, input.TraceID, string(input.ResourceKind), input.ResourceID, input.RevisionID,
-			input.Score, string(outcomeJSON), input.IdempotencyKey,
+			input.ExperimentID, input.Variant, input.Score, string(outcomeJSON), input.IdempotencyKey,
 		).Scan(&feedback.ID, &feedback.TraceID, &kind, &feedback.ResourceID, &feedback.RevisionID,
+			&feedback.ExperimentID, &feedback.Variant,
 			&feedback.Score, &storedOutcome, &feedback.IdempotencyKey, &feedback.CreatedAt)
 		if err != nil {
 			return err
@@ -98,12 +101,14 @@ func (r *PgFeedbackRepository) StageFeedback(
 	observedMinutes := 0
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var stageStartedAt time.Time
-		if err := tx.QueryRow(ctx, `SELECT updated_at FROM evaluation_experiments WHERE id=$1`, experiment.ID).Scan(&stageStartedAt); err != nil {
+		if err := tx.QueryRow(ctx,
+			`SELECT stage_started_at FROM evaluation_experiments WHERE id=$1`, experiment.ID,
+		).Scan(&stageStartedAt); err != nil {
 			return err
 		}
 		observedMinutes = int(time.Since(stageStartedAt).Minutes())
 		var err error
-		feedback, err = loadStageFeedback(ctx, tx, experiment.ResourceID, stageStartedAt)
+		feedback, err = loadStageFeedback(ctx, tx, experiment, stageStartedAt)
 		return err
 	})
 	return feedback, observedMinutes, err
@@ -112,14 +117,17 @@ func (r *PgFeedbackRepository) StageFeedback(
 func loadStageFeedback(
 	ctx context.Context,
 	tx pgx.Tx,
-	resourceID string,
+	experiment domain.Experiment,
 	stageStartedAt time.Time,
 ) ([]domain.EvaluationFeedback, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT id, trace_id, resource_kind, resource_id, revision_id, score, outcome, idempotency_key, created_at
+		`SELECT id, trace_id, resource_kind, resource_id, revision_id, experiment_id, variant,
+		        score, outcome, idempotency_key, created_at
 		 FROM evaluation_feedback
-		 WHERE resource_id=$1 AND created_at >= $2
-		 ORDER BY created_at`, resourceID, stageStartedAt)
+		 WHERE resource_kind=$1 AND resource_id=$2 AND experiment_id=$3 AND created_at >= $4
+		   AND ((revision_id=$5 AND variant='stable') OR (revision_id=$6 AND variant='canary'))
+		 ORDER BY created_at`, string(experiment.ResourceKind), experiment.ResourceID, experiment.ID, stageStartedAt,
+		experiment.StableRevisionID, experiment.CanaryRevisionID)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +138,7 @@ func loadStageFeedback(
 		var resourceKind string
 		var outcome []byte
 		if err := rows.Scan(&row.ID, &row.TraceID, &resourceKind, &row.ResourceID, &row.RevisionID,
+			&row.ExperimentID, &row.Variant,
 			&row.Score, &outcome, &row.IdempotencyKey, &row.CreatedAt); err != nil {
 			return nil, err
 		}

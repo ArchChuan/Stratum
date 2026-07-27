@@ -388,6 +388,10 @@ func TestTenantSchemaUpgradeBackfillsExperimentStateBeforeDependentDDL(t *testin
 		"ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS state_version BIGINT NOT NULL DEFAULT 1",
 		"ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS recommendation TEXT NOT NULL DEFAULT 'hold'",
 		"ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS safety_stopped BOOL NOT NULL DEFAULT false",
+		"ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS stage_started_at TIMESTAMPTZ",
+		"UPDATE evaluation_experiments SET stage_started_at=updated_at WHERE stage_started_at IS NULL",
+		"ALTER TABLE evaluation_experiments ALTER COLUMN stage_started_at SET DEFAULT NOW()",
+		"ALTER TABLE evaluation_experiments ALTER COLUMN stage_started_at SET NOT NULL",
 	}
 	lastBackfill := -1
 	for _, statement := range backfills {
@@ -507,6 +511,20 @@ func TestTenantSchemaContainsEvaluationControlPlane(t *testing.T) {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("tenant_schema.sql missing evaluation control-plane DDL %q", want)
 		}
+	}
+}
+
+func TestTenantSchemaPreservesFeedbackExperimentAttributionForHistoricalTenants(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS evaluation_feedback")
+	experimentAt := strings.Index(sql, "ALTER TABLE evaluation_feedback ADD COLUMN IF NOT EXISTS experiment_id")
+	variantAt := strings.Index(sql, "ALTER TABLE evaluation_feedback ADD COLUMN IF NOT EXISTS variant")
+	if createAt == -1 || experimentAt < createAt || variantAt < createAt {
+		t.Fatal("evaluation feedback attribution columns must upgrade historical tenant schemas after table creation")
 	}
 }
 

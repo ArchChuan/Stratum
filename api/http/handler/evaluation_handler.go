@@ -302,43 +302,6 @@ func (h *EvaluationHandler) CreateExperiment(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"experiment": experiment, "deployment": deployment})
 }
 
-func (h *EvaluationHandler) EvaluateExperiment(c *gin.Context) {
-	tenantID, ok := tenantIDFromCtx(c)
-	if !ok {
-		respondMissingTenant(c)
-		return
-	}
-	var req dto.EvaluateExperimentStageRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
-		return
-	}
-	idempotencyKey := req.IdempotencyKey
-	if idempotencyKey == "" {
-		idempotencyKey = c.GetHeader("Idempotency-Key")
-	}
-	if idempotencyKey == "" {
-		metrics := domain.StageMetrics{
-			Samples: req.Samples, ObservedMinutes: req.ObservedMinutes,
-			QualityImprovement: req.QualityImprovement, QualitySignificant: req.QualitySignificant,
-			CostRegression: req.CostRegression, P95LatencyRegression: req.P95LatencyRegression,
-			ErrorRateIncrease: req.ErrorRateIncrease, SecurityViolation: req.SecurityViolation,
-		}
-		idempotencyKey = "legacy-evaluate-" + domain.MetricsFingerprint(metrics)
-	}
-	experiment, decision, err := h.experiments.EvaluateStageIdempotent(c.Request.Context(), tenantID, c.Param("id"), evalapp.EvaluateStageInput{Metrics: domain.StageMetrics{
-		Samples: req.Samples, ObservedMinutes: req.ObservedMinutes,
-		QualityImprovement: req.QualityImprovement, QualitySignificant: req.QualitySignificant,
-		CostRegression: req.CostRegression, P95LatencyRegression: req.P95LatencyRegression,
-		ErrorRateIncrease: req.ErrorRateIncrease, SecurityViolation: req.SecurityViolation,
-	}, IdempotencyKey: idempotencyKey})
-	if err != nil {
-		_ = c.Error(err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"experiment": experiment, "decision": decision})
-}
-
 func (h *EvaluationHandler) Overview(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)
 	if !ok {

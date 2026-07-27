@@ -137,7 +137,7 @@ func (a agentEvaluationAdapter) ResolveRevision(
 	if !found {
 		return evaldomain.ResourceRevision{}, evalport.ErrCenterResourceNotFound
 	}
-	if revision.Status != evaldomain.RevisionStatusPublished {
+	if !revision.CanEvaluateOffline() {
 		return evaldomain.ResourceRevision{}, evaldomain.ErrRevisionNotPublished
 	}
 	return revision, nil
@@ -170,7 +170,7 @@ func (a agentEvaluationAdapter) ExecuteRevision(
 	if !found {
 		return evalport.ExecutionResult{}, evalport.ErrCenterResourceNotFound
 	}
-	if revision.Status != evaldomain.RevisionStatusPublished {
+	if !revision.CanEvaluateOffline() {
 		return evalport.ExecutionResult{}, evaldomain.ErrRevisionNotPublished
 	}
 	query, err := evaluationCaseQuery(testCase.Input)

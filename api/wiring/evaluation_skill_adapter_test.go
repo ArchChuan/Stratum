@@ -26,9 +26,25 @@ func TestEvaluationSkillAdapterResolvesPublishedRevisionByTenantResourceAndRevis
 	}
 }
 
+func TestEvaluationSkillAdapterResolvesOptimizationCandidateForOfflineEvaluation(t *testing.T) {
+	revision := evaluationPublishedSkillRevision()
+	revision.Status = skilldomain.VersionStatusCandidate
+	manager := skillCandidateManager{versions: skillapp.NewVersionService(
+		&evaluationSkillVersionRepo{revision: revision}, zap.NewNop(),
+	)}
+
+	resolved, err := manager.ResolveRevision(context.Background(), "tenant-1", evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: revision.ID,
+	})
+	if err != nil || !resolved.CanEvaluateOffline() || resolved.Status != evaldomain.RevisionStatusDraft {
+		t.Fatalf("candidate resolution=%+v err=%v", resolved, err)
+	}
+}
+
 func TestEvaluationSkillAdapterCreatesBaselineFromActivePublishedRevision(t *testing.T) {
 	repo := &evaluationSkillVersionRepo{revision: evaluationPublishedSkillRevision()}
-	manager := skillCandidateManager{versions: skillapp.NewVersionService(repo, zap.NewNop())}
+	index := &validatingRevisionRepo{}
+	manager := skillCandidateManager{versions: skillapp.NewVersionService(repo, zap.NewNop()), revisions: index}
 
 	ref, err := manager.CreatePublishedBaseline(context.Background(), "tenant-1", "skill-1")
 	if err != nil {
@@ -40,11 +56,18 @@ func TestEvaluationSkillAdapterCreatesBaselineFromActivePublishedRevision(t *tes
 	if repo.tenantID != "tenant-1" {
 		t.Fatalf("tenant context = %q, want tenant-1", repo.tenantID)
 	}
+	indexed, found := index.revisions[ref.RevisionID]
+	if !found || indexed.ResourceID != ref.ResourceID || indexed.Status != evaldomain.RevisionStatusPublished ||
+		indexed.PayloadRef != "skill://revision-1" {
+		t.Fatalf("published baseline was not registered in shared evaluation revisions: %+v", indexed)
+	}
 }
 
 func TestEvaluationBaselineServiceIncludesSkillWithoutSharedRevisionProviders(t *testing.T) {
 	repo := &evaluationSkillVersionRepo{revision: evaluationPublishedSkillRevision()}
-	manager := skillCandidateManager{versions: skillapp.NewVersionService(repo, zap.NewNop())}
+	manager := skillCandidateManager{
+		versions: skillapp.NewVersionService(repo, zap.NewNop()), revisions: &validatingRevisionRepo{},
+	}
 	service := newEvaluationBaselineService(manager, nil, nil, nil)
 
 	ref, err := service.CreatePublishedBaseline(

@@ -102,6 +102,11 @@ type ResourceRevision struct {
 	CreatedAt        time.Time      `json:"created_at"`
 }
 
+func (r ResourceRevision) CanEvaluateOffline() bool {
+	return r.Status == RevisionStatusPublished ||
+		(r.Status == RevisionStatusDraft && r.Source == RevisionSourceOptimization)
+}
+
 func (r ResourceRevision) Validate() error {
 	if strings.TrimSpace(r.ID) == "" {
 		return errors.New("revision id required")

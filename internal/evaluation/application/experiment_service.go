@@ -52,6 +52,9 @@ func (s *ExperimentService) Create(
 		input.Stable.RevisionID == input.Canary.RevisionID {
 		return domain.Experiment{}, domain.Deployment{}, errors.New("stable and canary must be different revisions of the same resource")
 	}
+	if err := s.repo.ValidatePrerequisites(ctx, tenantID, input.Stable, input.Canary, input.SuiteRevisionID); err != nil {
+		return domain.Experiment{}, domain.Deployment{}, err
+	}
 	policy := domain.DefaultPromotionPolicy()
 	experiment := domain.Experiment{
 		ID: uuid.Must(uuid.NewV7()).String(), ResourceKind: input.Stable.Kind, ResourceID: input.Stable.ResourceID,

@@ -18,6 +18,18 @@ func TestGenerateParameterPatchesUsesDeterministicCartesianProduct(t *testing.T)
 	}
 }
 
+func TestGenerateParameterPatchesSupportsEachResourceBoundary(t *testing.T) {
+	for _, field := range []string{
+		"model", "max_context_tokens", "max_iterations", "bindings",
+		"enabled_tools", "timeout_ms", "max_retries",
+		"top_k", "score_threshold", "reranking", "query_rewrite",
+	} {
+		if _, err := GenerateParameterPatches(map[string][]any{field: {1}}); err != nil {
+			t.Fatalf("supported field %q rejected: %v", field, err)
+		}
+	}
+}
+
 func TestGenerateParameterPatchesRejectsProtectedFields(t *testing.T) {
 	for _, field := range []string{"secretRefs", "permissions", "api_key"} {
 		if _, err := GenerateParameterPatches(map[string][]any{field: {"unsafe"}}); err == nil {

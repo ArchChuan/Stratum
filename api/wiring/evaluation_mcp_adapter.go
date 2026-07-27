@@ -119,7 +119,7 @@ func (a mcpEvaluationAdapter) CreatePublishedBaseline(
 func (a mcpEvaluationAdapter) LoadOptimizableSnapshot(
 	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
 ) (map[string]any, error) {
-	_, snapshot, err := a.loadPublished(ctx, tenantID, ref)
+	_, snapshot, err := a.loadRevision(ctx, tenantID, ref, false)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +130,7 @@ func (a mcpEvaluationAdapter) LoadOptimizableSnapshot(
 func (a mcpEvaluationAdapter) CreateCandidate(
 	ctx context.Context, tenantID string, baseline evaldomain.ResourceRef, patch evaldomain.CandidatePatch,
 ) (evaldomain.ResourceRef, error) {
-	parent, snapshot, err := a.loadPublished(ctx, tenantID, baseline)
+	parent, snapshot, err := a.loadRevision(ctx, tenantID, baseline, false)
 	if err != nil {
 		return evaldomain.ResourceRef{}, err
 	}
@@ -168,7 +168,7 @@ func (a mcpEvaluationAdapter) CreateCandidate(
 func (a mcpEvaluationAdapter) ResolveRevision(
 	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
 ) (evaldomain.ResourceRevision, error) {
-	revision, _, err := a.loadPublished(ctx, tenantID, ref)
+	revision, _, err := a.loadRevision(ctx, tenantID, ref, true)
 	return revision, err
 }
 
@@ -192,7 +192,7 @@ func (a mcpEvaluationAdapter) ExecuteRevision(
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	_, snapshot, err := a.loadPublished(ctx, tenantID, ref)
+	_, snapshot, err := a.loadRevision(ctx, tenantID, ref, true)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
@@ -222,8 +222,8 @@ func (a mcpEvaluationAdapter) ExecuteRevision(
 	return evalport.ExecutionResult{Output: result.Output, DurationMs: result.DurationMs}, err
 }
 
-func (a mcpEvaluationAdapter) loadPublished(
-	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+func (a mcpEvaluationAdapter) loadRevision(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef, allowCandidate bool,
 ) (evaldomain.ResourceRevision, mcpRevisionSnapshot, error) {
 	ctx, err := evaluationMCPContext(ctx, tenantID)
 	if err != nil {
@@ -246,7 +246,7 @@ func (a mcpEvaluationAdapter) loadPublished(
 	if !found {
 		return evaldomain.ResourceRevision{}, mcpRevisionSnapshot{}, evalport.ErrCenterResourceNotFound
 	}
-	if revision.Status != evaldomain.RevisionStatusPublished {
+	if revision.Status != evaldomain.RevisionStatusPublished && (!allowCandidate || !revision.CanEvaluateOffline()) {
 		return evaldomain.ResourceRevision{}, mcpRevisionSnapshot{}, evaldomain.ErrRevisionNotPublished
 	}
 	var snapshot mcpRevisionSnapshot

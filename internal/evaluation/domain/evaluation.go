@@ -160,6 +160,8 @@ type EvaluationFeedback struct {
 	ResourceKind   ResourceKind   `json:"resource_kind"`
 	ResourceID     string         `json:"resource_id"`
 	RevisionID     string         `json:"revision_id"`
+	ExperimentID   string         `json:"experiment_id,omitempty"`
+	Variant        string         `json:"variant,omitempty"`
 	Score          float64        `json:"score"`
 	Outcome        map[string]any `json:"outcome,omitempty"`
 	IdempotencyKey string         `json:"idempotency_key"`

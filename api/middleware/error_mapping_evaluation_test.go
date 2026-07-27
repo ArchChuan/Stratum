@@ -19,6 +19,10 @@ func TestMapEvaluationEvolutionErrors(t *testing.T) {
 		{domain.ErrExperimentStateConflict, http.StatusConflict},
 		{domain.ErrExperimentCommandConflict, http.StatusConflict},
 		{domain.ErrExperimentDeploymentConflict, http.StatusConflict},
+		{domain.ErrExperimentStableNotPublished, http.StatusConflict},
+		{domain.ErrExperimentInvalidCandidate, http.StatusConflict},
+		{domain.ErrExperimentSuiteNotPublished, http.StatusConflict},
+		{domain.ErrExperimentOfflineRunRequired, http.StatusConflict},
 		{domain.ErrCandidateStateConflict, http.StatusConflict},
 		{domain.ErrOptimizationIdempotencyConflict, http.StatusConflict},
 	}

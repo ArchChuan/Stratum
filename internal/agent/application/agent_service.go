@@ -22,6 +22,9 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -29,34 +32,37 @@ import (
 // Everything is an interface or value type — no concrete infrastructure
 // imports allowed.
 type AgentServiceDeps struct {
-	Registry                *Registry
-	TenantSettings          port.TenantSettings
-	SkillLookup             port.SkillLookup
-	SkillActivationResolver port.SkillActivationResolver
-	SkillRevisionResolver   port.SkillRevisionResolver
-	RAGSearch               port.RAGSearchProvider
-	TenantResolver          port.TenantCapabilityResolver
-	TenantModelValidator    port.TenantChatModelValidator
-	TenantModelCatalog      port.TenantChatModelCatalog
-	HistoryCompactorFactory func(port.CapabilityGateway, string, *zap.Logger) port.HistoryCompactor
-	MCPTools                port.MCPToolProvider
-	MCPToolExecutor         port.MCPToolExecutor
-	MCPToolPolicy           port.MCPToolPolicyResolver
-	ToolAuthorizer          *ToolAuthorizer
-	ApprovalService         *ToolApprovalService
-	ChatStore               ChatStore
-	EvidenceProvider        port.TraceEvidenceProvider
-	TracePayloadStore       port.TracePayloadStore
-	CheckpointStore         CheckpointStore
-	MemoryCleaner           port.AgentMemoryCleaner
-	MemoryBuffer            port.BufferMemoryFn
-	MemoryInjector          port.MemoryInjector
-	RecallMemory            port.RecallMemoryFn
-	Metrics                 observability.MetricsProvider
-	OfficialDocsSearch      func(context.Context, string) ([]domain.Citation, error)
-	DiagnosticProvider      port.DiagnosticEvidenceProvider
-	ProposalService         *ResourceChangeProposalService
-	Logger                  *zap.Logger
+	Registry                  *Registry
+	TenantSettings            port.TenantSettings
+	SkillLookup               port.SkillLookup
+	SkillActivationResolver   port.SkillActivationResolver
+	SkillRevisionResolver     port.SkillRevisionResolver
+	AgentRevisionResolver     port.AgentRevisionResolver
+	MCPRevisionResolver       port.MCPRevisionResolver
+	KnowledgeRevisionResolver port.KnowledgeRevisionResolver
+	RAGSearch                 port.RAGSearchProvider
+	TenantResolver            port.TenantCapabilityResolver
+	TenantModelValidator      port.TenantChatModelValidator
+	TenantModelCatalog        port.TenantChatModelCatalog
+	HistoryCompactorFactory   func(port.CapabilityGateway, string, *zap.Logger) port.HistoryCompactor
+	MCPTools                  port.MCPToolProvider
+	MCPToolExecutor           port.MCPToolExecutor
+	MCPToolPolicy             port.MCPToolPolicyResolver
+	ToolAuthorizer            *ToolAuthorizer
+	ApprovalService           *ToolApprovalService
+	ChatStore                 ChatStore
+	EvidenceProvider          port.TraceEvidenceProvider
+	TracePayloadStore         port.TracePayloadStore
+	CheckpointStore           CheckpointStore
+	MemoryCleaner             port.AgentMemoryCleaner
+	MemoryBuffer              port.BufferMemoryFn
+	MemoryInjector            port.MemoryInjector
+	RecallMemory              port.RecallMemoryFn
+	Metrics                   observability.MetricsProvider
+	OfficialDocsSearch        func(context.Context, string) ([]domain.Citation, error)
+	DiagnosticProvider        port.DiagnosticEvidenceProvider
+	ProposalService           *ResourceChangeProposalService
+	Logger                    *zap.Logger
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields
@@ -80,6 +86,22 @@ func (s *AgentService) SetSkillRevisionResolver(resolver port.SkillRevisionResol
 
 func (s *AgentService) SetResourceChangeProposalService(service *ResourceChangeProposalService) {
 	s.deps.ProposalService = service
+}
+
+func (s *AgentService) SetAgentRevisionResolver(resolver port.AgentRevisionResolver) {
+	s.deps.AgentRevisionResolver = resolver
+}
+
+func (s *AgentService) SetMCPRevisionResolver(resolver port.MCPRevisionResolver) {
+	s.deps.MCPRevisionResolver = resolver
+}
+
+func (s *AgentService) SetKnowledgeRevisionResolver(resolver port.KnowledgeRevisionResolver) {
+	s.deps.KnowledgeRevisionResolver = resolver
+}
+
+func (s *AgentService) SetMCPToolExecutor(executor port.MCPToolExecutor) {
+	s.deps.MCPToolExecutor = executor
 }
 
 // CreateAgentInput is the create-agent payload application receives from
@@ -557,10 +579,12 @@ type ExecRequest struct {
 // ExecMeta carries per-call routing metadata sourced from middleware
 // (tenant, trace) — never inferred from request body.
 type ExecMeta struct {
-	TenantID       string
-	TraceID        string
-	Stream         bool
-	EvolutionTrace EvolutionTraceMetadata
+	TenantID                   string
+	TraceID                    string
+	Stream                     bool
+	EvolutionTrace             EvolutionTraceMetadata
+	KnowledgeAssignmentsPinned bool
+	PinnedKnowledgeRevisions   map[string]port.KnowledgeRevisionPin
 }
 
 // ExecutionRowDTO is the wire shape emitted by ListExecutions.
@@ -597,6 +621,99 @@ func (s *AgentService) ensureConversation(ctx context.Context, tenantID, agentID
 	req.ConversationID = conv.ID
 }
 
+func executionSubject(req ExecRequest, meta ExecMeta) string {
+	if req.ConversationID != "" {
+		return req.ConversationID
+	}
+	return meta.TraceID
+}
+
+func (s *AgentService) resolveExecutionAgent(
+	ctx context.Context,
+	current Agent,
+	tenantID, agentID, subjectID string,
+) (Agent, port.AgentRevisionAssignment, error) {
+	if current.GetConfig().SystemKey == domain.SystemAssistantKey || s.deps.AgentRevisionResolver == nil {
+		return current, port.AgentRevisionAssignment{}, nil
+	}
+	assignment, found, err := s.deps.AgentRevisionResolver.ResolveAgentRevision(
+		ctx, tenantID, agentID, subjectID,
+	)
+	if err != nil {
+		return nil, port.AgentRevisionAssignment{}, fmt.Errorf("resolve Agent experiment assignment: %w", err)
+	}
+	if !found {
+		return current, port.AgentRevisionAssignment{}, nil
+	}
+	if assignment.Revision.AgentID != agentID || assignment.RevisionID == "" {
+		return nil, port.AgentRevisionAssignment{}, errors.New("resolve Agent experiment assignment: invalid revision")
+	}
+	resolved, err := s.buildRevisionAgent(assignment.Revision)
+	if err != nil {
+		return nil, port.AgentRevisionAssignment{}, fmt.Errorf("resolve Agent experiment revision: %w", err)
+	}
+	if s.deps.Metrics != nil {
+		resolved = resolved.WithMetrics(s.deps.Metrics)
+	}
+	resolved.Name = current.GetConfig().Name
+	return resolved, assignment, nil
+}
+
+func applyAgentAssignment(meta *ExecMeta, agentID string, assignment port.AgentRevisionAssignment) {
+	if assignment.RevisionID == "" {
+		return
+	}
+	if meta.EvolutionTrace.ResourceManifest == nil {
+		meta.EvolutionTrace.ResourceManifest = make(map[string]string)
+	}
+	key := "agent:" + agentID
+	meta.EvolutionTrace.ResourceManifest[key] = assignment.RevisionID
+	if assignment.ExperimentID == "" {
+		return
+	}
+	if meta.EvolutionTrace.ExperimentAssignments == nil {
+		meta.EvolutionTrace.ExperimentAssignments = make(map[string]ExperimentAssignment)
+	}
+	meta.EvolutionTrace.ExperimentAssignments[key] = ExperimentAssignment{
+		ExperimentID: assignment.ExperimentID,
+		Variant:      assignment.Variant,
+	}
+	if meta.EvolutionTrace.ExperimentID == "" {
+		meta.EvolutionTrace.ExperimentID = assignment.ExperimentID
+		meta.EvolutionTrace.Variant = assignment.Variant
+	}
+}
+
+func recordExecutionPreparation(
+	ctx context.Context, a Agent, req ExecRequest, meta ExecMeta, executionID string,
+) {
+	cfg := ExecutionConfig{
+		TenantID:       meta.TenantID,
+		TraceID:        meta.TraceID,
+		ExecutionID:    executionID,
+		ConversationID: req.ConversationID,
+		UserID:         req.UserID,
+		EvolutionTrace: meta.EvolutionTrace,
+	}
+	config := a.GetConfig()
+	oteltrace.SpanFromContext(ctx).SetAttributes(
+		agentExecutionAttributes(config.ID, config.Name, domain.ReActAgent, cfg)...,
+	)
+}
+
+func recordExecutionPreparationFailure(ctx context.Context, start time.Time, stage string) {
+	span := oteltrace.SpanFromContext(ctx)
+	span.SetAttributes(
+		attribute.String("stratum.error.category", "resource_preparation_failed"),
+		attribute.String("stratum.failure.stage", stage),
+		attribute.String("opik.metadata.stratum.status", domain.ExecStatusError),
+		attribute.String("opik.metadata.stratum.error_category", "resource_preparation_failed"),
+		attribute.String("opik.metadata.stratum.failure_stage", stage),
+		attribute.Int64("opik.metadata.stratum.duration_ms", time.Since(start).Milliseconds()),
+	)
+	span.SetStatus(codes.Error, "agent resource preparation failed")
+}
+
 func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta) (*AgentResult, int, error) {
 	a, ok, err := s.deps.Registry.Get(ctx, agentID)
 	if err != nil {
@@ -607,9 +724,19 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
 	executionID := uuid.Must(uuid.NewV7()).String()
+	preparationStart := time.Now()
+	recordExecutionPreparation(ctx, a, req, meta, executionID)
+	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
+	if err != nil {
+		recordExecutionPreparationFailure(ctx, preparationStart, "resolve_agent_revision")
+		return nil, 0, fmt.Errorf("execute agent: resolve revision: %w", err)
+	}
+	applyAgentAssignment(&meta, agentID, assignment)
+	recordExecutionPreparation(ctx, a, req, meta, executionID)
 	_, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
 	if err != nil {
 		s.recordSystemAssistantRequest(a, "unknown", "error")
+		recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
 		return nil, 0, fmt.Errorf("execute agent: assemble options: %w", err)
 	}
 	options = append(options, WithExecutionID(executionID))
@@ -685,9 +812,19 @@ func (s *AgentService) ExecuteStream(
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
 	executionID := uuid.Must(uuid.NewV7()).String()
+	preparationStart := time.Now()
+	recordExecutionPreparation(ctx, a, req, meta, executionID)
+	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
+	if err != nil {
+		recordExecutionPreparationFailure(ctx, preparationStart, "resolve_agent_revision")
+		return nil, nil, nil, fmt.Errorf("execute stream: resolve revision: %w", err)
+	}
+	applyAgentAssignment(&meta, agentID, assignment)
+	recordExecutionPreparation(ctx, a, req, meta, executionID)
 	streamCtx, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
 	if err != nil {
 		s.recordSystemAssistantRequest(a, "unknown", "error")
+		recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
 		return nil, nil, nil, fmt.Errorf("execute stream: assemble options: %w", err)
 	}
 	assistantCfg := &ExecutionConfig{}
@@ -862,7 +999,8 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approva
 		return nil, 0, ErrNotFound
 	}
 	req := ExecRequest{Query: payload.Query, ConversationID: payload.ConversationID, UserID: payload.UserID}
-	meta := ExecMeta{TenantID: tenantID, TraceID: payload.TraceID}
+	meta := ExecMeta{TenantID: tenantID, TraceID: payload.TraceID,
+		KnowledgeAssignmentsPinned: true, PinnedKnowledgeRevisions: payload.PinnedKnowledgeRevisions}
 	_, options, err := s.assembleOptions(ctx, a, req, meta, payload.ExecutionID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("resume tool approval: assemble options: %w", err)
@@ -1017,13 +1155,19 @@ func (s *AgentService) assembleOptions(
 	}
 	var extraTools []port.ToolDefinition
 	var skillCatalog map[string]port.SkillActivation
+	mcpAssignments := make(map[string]port.MCPRevisionAssignment)
+	knowledgeAssignments := make(map[string]port.KnowledgeRevisionAssignment)
 	if isSystemAssistant {
 		extraTools = SystemAssistantToolDefinitions()
 		skillCatalog = map[string]port.SkillActivation{}
 	} else {
-		extraTools, skillCatalog = s.buildExtraTools(
+		var resolveErr error
+		extraTools, skillCatalog, resolveErr = s.buildExtraToolsChecked(
 			ctx, meta.TenantID, subjectID, a.GetConfig().MCPToolIDs, a.GetConfig().AllowedSkills,
 		)
+		if resolveErr != nil {
+			return ctx, nil, fmt.Errorf("resolve experiment resources: %w", resolveErr)
+		}
 	}
 	evolutionTrace := meta.EvolutionTrace
 	if evolutionTrace.ResourceManifest == nil {
@@ -1038,6 +1182,85 @@ func (s *AgentService) assembleOptions(
 	}
 	if evolutionTrace.ExperimentAssignments == nil {
 		evolutionTrace.ExperimentAssignments = make(map[string]ExperimentAssignment)
+	}
+	if s.deps.MCPRevisionResolver != nil {
+		for _, tool := range extraTools {
+			if tool.ProviderType != domain.ProviderTypeMCP || tool.ServerID == "" {
+				continue
+			}
+			if _, resolved := mcpAssignments[tool.ServerID]; resolved {
+				continue
+			}
+			assignment, found, err := s.deps.MCPRevisionResolver.ResolveMCPRevision(
+				ctx, meta.TenantID, tool.ServerID, subjectID,
+			)
+			if err != nil {
+				return ctx, nil, fmt.Errorf("resolve MCP %s experiment assignment: %w", tool.ServerID, err)
+			}
+			if !found {
+				continue
+			}
+			if assignment.RevisionID == "" {
+				return ctx, nil, fmt.Errorf("resolve MCP %s experiment assignment: revision required", tool.ServerID)
+			}
+			mcpAssignments[tool.ServerID] = assignment
+			key := "mcp:" + tool.ServerID
+			evolutionTrace.ResourceManifest[key] = assignment.RevisionID
+			if assignment.ExperimentID == "" {
+				continue
+			}
+			evolutionTrace.ExperimentAssignments[key] = ExperimentAssignment{
+				ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
+			}
+			if evolutionTrace.ExperimentID == "" {
+				evolutionTrace.ExperimentID, evolutionTrace.Variant = assignment.ExperimentID, assignment.Variant
+			}
+		}
+	}
+	if s.deps.KnowledgeRevisionResolver != nil {
+		config := a.GetConfig()
+		for index, workspaceID := range config.KnowledgeWorkspaceIDs {
+			workspaceName := workspaceID
+			if index < len(config.KnowledgeWorkspaceNames) && config.KnowledgeWorkspaceNames[index] != "" {
+				workspaceName = config.KnowledgeWorkspaceNames[index]
+			}
+			var assignment port.KnowledgeRevisionAssignment
+			var found bool
+			var err error
+			if meta.KnowledgeAssignmentsPinned {
+				pin, pinned := meta.PinnedKnowledgeRevisions[workspaceName]
+				if !pinned {
+					continue
+				}
+				assignment.Revision, err = s.deps.KnowledgeRevisionResolver.LoadKnowledgeRevision(
+					ctx, meta.TenantID, workspaceName, pin.RevisionID,
+				)
+				assignment.ExperimentID, assignment.Variant, found = pin.ExperimentID, pin.Variant, true
+			} else {
+				assignment, found, err = s.deps.KnowledgeRevisionResolver.ResolveKnowledgeRevision(
+					ctx, meta.TenantID, workspaceName, subjectID,
+				)
+			}
+			if err != nil {
+				return ctx, nil, fmt.Errorf("resolve Knowledge %s experiment assignment: %w", workspaceName, err)
+			}
+			if !found {
+				continue
+			}
+			if assignment.Revision.RevisionID == "" || assignment.Revision.WorkspaceName != workspaceName ||
+				assignment.ExperimentID == "" || (assignment.Variant != "stable" && assignment.Variant != "canary") {
+				return ctx, nil, fmt.Errorf("resolve Knowledge %s experiment assignment: invalid assignment", workspaceName)
+			}
+			knowledgeAssignments[workspaceName] = assignment
+			key := "knowledge:" + workspaceName
+			evolutionTrace.ResourceManifest[key] = assignment.Revision.RevisionID
+			evolutionTrace.ExperimentAssignments[key] = ExperimentAssignment{
+				ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
+			}
+			if evolutionTrace.ExperimentID == "" {
+				evolutionTrace.ExperimentID, evolutionTrace.Variant = assignment.ExperimentID, assignment.Variant
+			}
+		}
 	}
 	for _, skillID := range a.GetConfig().AllowedSkills {
 		activation, ok := skillCatalog[skillID]
@@ -1143,6 +1366,14 @@ func (s *AgentService) assembleOptions(
 		for skillID, activation := range skillCatalog {
 			pinned[skillID] = activation.RevisionID
 		}
+		pinnedKnowledge := make(map[string]port.KnowledgeRevisionPin, len(knowledgeAssignments))
+		for workspaceName, assignment := range knowledgeAssignments {
+			pinnedKnowledge[workspaceName] = port.KnowledgeRevisionPin{
+				RevisionID:   assignment.Revision.RevisionID,
+				ExperimentID: assignment.ExperimentID,
+				Variant:      assignment.Variant,
+			}
+		}
 		var requestApproval port.ToolApprovalRequester
 		if s.deps.ApprovalService != nil {
 			approvalService := s.deps.ApprovalService
@@ -1153,6 +1384,8 @@ func (s *AgentService) assembleOptions(
 					ToolCallID: request.ToolCallID, ServerID: request.ServerID,
 					ToolName: request.ToolName, RiskLevel: request.RiskLevel,
 					Query: query, Arguments: request.Arguments, PinnedSkillRevisions: pinned,
+					PinnedMCPRevisions:       map[string]string{request.ServerID: mcpAssignments[request.ServerID].RevisionID},
+					PinnedKnowledgeRevisions: pinnedKnowledge,
 				})
 			}
 		}
@@ -1168,13 +1401,39 @@ func (s *AgentService) assembleOptions(
 			request.TraceID = meta.TraceID
 			request.ExecutionID = executionID
 			request.AgentToolIDs = a.GetConfig().MCPToolIDs
+			request.MCPRevisionID = mcpAssignments[request.Tool.ServerID].RevisionID
 			return guard.Execute(callCtx, request)
 		}))
 	}
 	if s.deps.RAGSearch != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
-		tenantID := meta.TenantID
+		tenantID, search := meta.TenantID, s.deps.RAGSearch
 		options = append(options, WithRAGSearchFn(func(rctx context.Context, workspaces []string, query string, topK int) (string, error) {
-			return s.deps.RAGSearch.SearchKnowledge(rctx, tenantID, workspaces, query, topK)
+			var combined strings.Builder
+			mutable := make([]string, 0, len(workspaces))
+			for _, workspace := range workspaces {
+				assignment, found := knowledgeAssignments[workspace]
+				if !found {
+					mutable = append(mutable, workspace)
+					continue
+				}
+				revisionSearch, ok := search.(port.KnowledgeRevisionSearchProvider)
+				if !ok {
+					return "", errors.New("Knowledge revision search provider not configured")
+				}
+				content, err := revisionSearch.SearchKnowledgeRevision(rctx, tenantID, assignment.Revision, query)
+				if err != nil {
+					return "", fmt.Errorf("%w: %w", domain.ErrKnowledgeRevisionUnavailable, err)
+				}
+				combined.WriteString(content)
+			}
+			if len(mutable) > 0 {
+				content, err := search.SearchKnowledge(rctx, tenantID, mutable, query, topK)
+				if err != nil {
+					return "", err
+				}
+				combined.WriteString(content)
+			}
+			return combined.String(), nil
 		}))
 	}
 	return ctx, options, nil
@@ -1214,6 +1473,15 @@ func (s *AgentService) buildExtraTools(
 	tenantID, subjectID string,
 	mcpToolIDs, allowedSkills []string,
 ) ([]port.ToolDefinition, map[string]port.SkillActivation) {
+	tools, catalog, _ := s.buildExtraToolsChecked(ctx, tenantID, subjectID, mcpToolIDs, allowedSkills)
+	return tools, catalog
+}
+
+func (s *AgentService) buildExtraToolsChecked(
+	ctx context.Context,
+	tenantID, subjectID string,
+	mcpToolIDs, allowedSkills []string,
+) ([]port.ToolDefinition, map[string]port.SkillActivation, error) {
 	var tools []port.ToolDefinition
 	refs := make([]port.SkillRevisionRef, 0, len(allowedSkills))
 
@@ -1272,7 +1540,11 @@ func (s *AgentService) buildExtraTools(
 		ref := port.SkillRevisionRef{SkillID: skillID}
 		var assignment port.SkillRevisionAssignment
 		if s.deps.SkillRevisionResolver != nil {
-			if resolved, found, err := s.deps.SkillRevisionResolver.ResolveSkillRevision(ctx, tenantID, skillID, subjectID); err == nil && found {
+			resolved, found, err := s.deps.SkillRevisionResolver.ResolveSkillRevision(ctx, tenantID, skillID, subjectID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("resolve Skill %s experiment assignment: %w", skillID, err)
+			}
+			if found {
 				assignment = resolved
 				ref.RevisionID = resolved.RevisionID
 			}
@@ -1284,9 +1556,11 @@ func (s *AgentService) buildExtraTools(
 	}
 	catalog := make(map[string]port.SkillActivation)
 	if s.deps.SkillActivationResolver != nil && len(refs) > 0 {
-		if resolved, err := s.deps.SkillActivationResolver.ResolveSkills(ctx, tenantID, refs); err == nil {
-			catalog = resolved
+		resolved, err := s.deps.SkillActivationResolver.ResolveSkills(ctx, tenantID, refs)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve Skill experiment revisions: %w", err)
 		}
+		catalog = resolved
 	}
 	for skillID, assignment := range assignments {
 		activation := catalog[skillID]
@@ -1296,7 +1570,7 @@ func (s *AgentService) buildExtraTools(
 		activation.Variant = assignment.Variant
 		catalog[skillID] = activation
 	}
-	return tools, catalog
+	return tools, catalog, nil
 }
 
 func (s *AgentService) ListToolTraces(ctx context.Context, tenantID, traceID string) ([]ToolObservation, error) {

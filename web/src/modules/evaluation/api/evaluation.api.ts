@@ -23,6 +23,7 @@ import {
   type EvaluationCenterFilters,
   type EvaluationCommand,
   type ResourceKind,
+  resourceRefSchema,
   candidateCommandResponseSchema,
   experimentCommandResponseSchema,
 } from '../model/evaluation';
@@ -30,6 +31,10 @@ import {
 import api from '@/services/client';
 
 export const evaluationApi = {
+  createBaseline: async (kind: ResourceKind, resourceId: string): Promise<ResourceRef> => {
+    const response = await api.post(`/evaluations/resources/${kind}/${encodeURIComponent(resourceId)}/baseline`);
+    return resourceRefSchema.parse(response.data);
+  },
   getOverview: async () => {
     const response = await api.get('/evaluations/overview');
     return centerOverviewSchema.parse(response.data);

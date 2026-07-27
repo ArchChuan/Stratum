@@ -44,6 +44,29 @@ describe('useEvaluationCenter', () => {
     expect(result.current.error).toBe('评测资源不存在');
   });
 
+  it('clears the previous filter generation when any current collection fails', async () => {
+    api.getOverview.mockResolvedValueOnce({ resources: 1, suites: 1, runs: 0, candidates: 0, experiments: 0 });
+    api.listResources.mockResolvedValueOnce({ items: [{ resource_kind: 'skill', resource_id: 'skill-old' }] });
+    const { result, rerender } = renderHook(({ kind }) => useEvaluationCenter({ resource_kind: kind }), {
+      initialProps: { kind: 'skill' as 'skill' | 'agent' },
+    });
+    await waitFor(() => expect(result.current.resources.items).toHaveLength(1));
+
+    api.getOverview.mockResolvedValue({ resources: 0, suites: 0, runs: 0, candidates: 0, experiments: 0 });
+    api.listResources.mockResolvedValue({ items: [] });
+    api.listSuites.mockRejectedValueOnce({ response: { data: { error: '评测套件服务不可用' } } });
+    rerender({ kind: 'agent' });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBe('评测套件服务不可用');
+    expect(result.current.overview).toBeNull();
+    expect(result.current.resources.items).toEqual([]);
+    expect(result.current.suites.items).toEqual([]);
+    expect(result.current.runs.items).toEqual([]);
+    expect(result.current.candidates.items).toEqual([]);
+    expect(result.current.experiments.items).toEqual([]);
+  });
+
   it('does not update state after unmounting an async effect', async () => {
     let resolveOverview!: (value: unknown) => void;
     api.getOverview.mockReturnValue(new Promise((resolve) => { resolveOverview = resolve; }));

@@ -90,6 +90,115 @@ func TestKnowledgeOutagePreservesMilvusPublishedPort(t *testing.T) {
 	}
 }
 
+func TestKnowledgeFlowIncludesOnlineCanaryAndFeedbackAttribution(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("bootstrap.go")
+	if err != nil {
+		t.Fatalf("read bootstrap source: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"executeLiveKnowledgeCanaryFlow", "stratum_search_knowledge",
+		`"resource_kind": "knowledge"`, `"variant"] != "canary"`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Knowledge online canary evidence is missing %q", required)
+		}
+	}
+}
+
+func TestKnowledgeCanaryFailsClosedAfterDocumentDrift(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("bootstrap.go")
+	if err != nil {
+		t.Fatalf("read bootstrap source: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"assertKnowledgeDocumentDriftFailsClosed", "document set changed",
+		`readCounter(mustEnv("E2E_LLM_EVIDENCE"), "requests")`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Knowledge document drift evidence is missing %q", required)
+		}
+	}
+}
+
+func TestKnowledgeCanaryFailsClosedDuringRuntimeDependencyOutage(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("bootstrap.go")
+	if err != nil {
+		t.Fatalf("read bootstrap source: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"assertKnowledgeRuntimeOutageFailsClosed", "runtimeOutageRejected", "runtimeOutageRecovered",
+		`setMilvusProxyEnabled(false)`, `setMilvusProxyEnabled(true)`,
+		`readCounter(mustEnv("E2E_LLM_EVIDENCE"), "requests")`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Knowledge runtime outage evidence is missing %q", required)
+		}
+	}
+}
+
+func TestMCPPreparationFailureRemainsVisibleInExecutionHistory(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("bootstrap.go")
+	if err != nil {
+		t.Fatalf("read bootstrap source: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"assertMCPPreparationFailureIsObservable", "preparationFailureRecorded", "preparationFailureRecovered",
+		`"opik.metadata.stratum.status"] != "error"`, `"agent:"+agentID`, `"mcp:"+serverID`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("MCP preparation failure evidence is missing %q", required)
+		}
+	}
+}
+
+func TestKnowledgeCanaryIgnoresUntrustedClientSecurityClaim(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("bootstrap.go")
+	if err != nil {
+		t.Fatalf("read bootstrap source: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"assertClientSecurityClaimDoesNotStopExperiment", "clientSecurityClaimIgnored",
+		`"security_violation": true`, `"safety_stopped"`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("client security trust-boundary evidence is missing %q", required)
+		}
+	}
+}
+
+func TestKnowledgeCanaryEvidenceIsTenantIsolated(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("bootstrap.go")
+	if err != nil {
+		t.Fatalf("read bootstrap source: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"assertKnowledgeTenantIsolation", "/auth/create-tenant", "crossTenantIsolated",
+		`http.StatusNotFound`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Knowledge tenant isolation evidence is missing %q", required)
+		}
+	}
+}
+
 func TestSanitizeContainerDiagnosticRedactsCredentials(t *testing.T) {
 	t.Parallel()
 
@@ -126,6 +235,29 @@ func TestHarnessHasBoundedCleanupAndOpikFailureDiagnostics(t *testing.T) {
 		if !strings.Contains(text, required) {
 			t.Fatalf("E2E harness is missing %s", required)
 		}
+	}
+}
+
+func TestOpikReadinessRequiresCollectorIngestAndQueryParity(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("../../scripts/e2e/evaluation-evolution.sh")
+	if err != nil {
+		t.Fatalf("read E2E harness: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"verify_opik_data_plane", "TestRealOpikCollectorEvidenceParity", "TEST_OPIK_E2E=1",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Opik readiness does not verify Collector ingest/query parity: missing %q", required)
+		}
+	}
+	connect := strings.Index(text, `docker network connect "${project}-opik_default"`)
+	verify := strings.Index(text, "\nverify_opik_data_plane\n")
+	milvus := strings.Index(text, `up -d --wait milvus`)
+	if connect < 0 || verify < 0 || milvus < 0 || !(connect < verify && verify < milvus) {
+		t.Fatalf("Opik data-plane verification order invalid: connect=%d verify=%d milvus=%d", connect, verify, milvus)
 	}
 }
 

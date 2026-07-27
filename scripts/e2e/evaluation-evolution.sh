@@ -33,7 +33,7 @@ bounded_compose_down() {
   local label=$1 compose_project=$2
   shift 2
   local compose=(docker compose -p "$compose_project" "$@")
-  local container_ids=() remaining_ids=()
+  local container_ids=() network_ids=() remaining_ids=() volume_names=()
   if ! timeout 60 "${compose[@]}" down -v --remove-orphans >/dev/null 2>&1; then
     printf 'evaluation-evolution cleanup: %s compose down exceeded 60s; force-removing exact project containers\n' \
       "$label" >&2
@@ -53,6 +53,21 @@ bounded_compose_down() {
   if (( ${#remaining_ids[@]} > 0 )); then
     printf 'evaluation-evolution cleanup: %s project still has %d container(s)\n' \
       "$label" "${#remaining_ids[@]}" >&2
+    return 1
+  fi
+  mapfile -t network_ids < <(docker network ls -q --filter "label=com.docker.compose.project=$compose_project")
+  if (( ${#network_ids[@]} > 0 )); then
+    timeout 30 docker network rm "${network_ids[@]}" >/dev/null 2>&1 || true
+  fi
+  mapfile -t volume_names < <(docker volume ls -q --filter "label=com.docker.compose.project=$compose_project")
+  if (( ${#volume_names[@]} > 0 )); then
+    timeout 30 docker volume rm "${volume_names[@]}" >/dev/null 2>&1 || true
+  fi
+  mapfile -t network_ids < <(docker network ls -q --filter "label=com.docker.compose.project=$compose_project")
+  mapfile -t volume_names < <(docker volume ls -q --filter "label=com.docker.compose.project=$compose_project")
+  if (( ${#network_ids[@]} > 0 || ${#volume_names[@]} > 0 )); then
+    printf 'evaluation-evolution cleanup: %s project still has %d network(s) and %d volume(s)\n' \
+      "$label" "${#network_ids[@]}" "${#volume_names[@]}" >&2
     return 1
   fi
 }
@@ -89,6 +104,21 @@ trap cleanup_on_exit EXIT
 trap 'exit 130' INT TERM
 
 fail() { printf 'evaluation-evolution E2E: %s\n' "$1" >&2; exit 1; }
+print_runtime_diagnostics() {
+  printf 'evaluation-evolution diagnostics: postgres sessions by state/wait\n' >&2
+  docker exec -i "$E2E_POSTGRES_CONTAINER" psql -U stratum_e2e -d stratum_e2e -XAt \
+    -c "SELECT COALESCE(state,'none') || '|' || COALESCE(wait_event_type,'none') || '|' || \
+      COALESCE(wait_event,'none') || '|' || count(*) FROM pg_stat_activity \
+      WHERE datname='stratum_e2e' GROUP BY state,wait_event_type,wait_event ORDER BY 1" >&2 || true
+  printf 'evaluation-evolution diagnostics: sanitized backend tail\n' >&2
+  python3 - "$backend_log" <<'PY'
+import re, sys
+for line in open(sys.argv[1], encoding='utf-8', errors='replace').read().splitlines()[-120:]:
+    line = re.sub(r'Bearer\s+[A-Za-z0-9._~+/=-]+', 'Bearer [REDACTED]', line, flags=re.I)
+    line = re.sub(r'(?i)(api[_-]?key|access[_-]?token|credential|secret)([=: ]+)[^ ,;}]+', r'\1\2[REDACTED]', line)
+    print(line)
+PY
+}
 collector_diagnostics() {
   local collector_id collector_state collector_health collector_mapping
   collector_id=$(docker compose -p "$project" -f "$work_dir/compose.yml" ps -q otel 2>/dev/null)
@@ -215,6 +245,14 @@ poll_opik() {
   opik_readiness_diagnostics
   fail 'timed out waiting for Opik'
 }
+verify_opik_data_plane() {
+  timeout 120 env \
+    TEST_OPIK_E2E=1 \
+    TEST_OTLP_GRPC_ENDPOINT="127.0.0.1:${otel_port}" \
+    TEST_OPIK_URL="$OPIK_URL" \
+    go test -tags=integration ./internal/agent/infrastructure/opik \
+      -run '^TestRealOpikCollectorEvidenceParity$' -count=1
+}
 wait_container_success() {
   local service=$1 cid status exit_code
   cid=$("${opik_compose[@]}" ps -aq "$service")
@@ -249,11 +287,27 @@ wait_container_healthy() {
   fail "timed out waiting for healthy Opik service $service"
 }
 
+assert_host_memory_budget() {
+  local meminfo_file=${E2E_MEMINFO_FILE:-/proc/meminfo}
+  local min_available_kib=${E2E_MIN_AVAILABLE_KIB:-6291456}
+  local available_kib swap_free_kib
+  [[ "$min_available_kib" =~ ^[0-9]+$ && -r "$meminfo_file" ]] || \
+    fail 'host memory preflight configuration is invalid'
+  available_kib=$(awk '$1 == "MemAvailable:" { print $2; exit }' "$meminfo_file")
+  swap_free_kib=$(awk '$1 == "SwapFree:" { print $2; exit }' "$meminfo_file")
+  [[ "$available_kib" =~ ^[0-9]+$ && "$swap_free_kib" =~ ^[0-9]+$ ]] || \
+    fail 'host memory evidence is unavailable'
+  if (( available_kib < min_available_kib )); then
+    fail "insufficient host memory for isolated Opik and Milvus: available_mib=$((available_kib / 1024)) swap_free_mib=$((swap_free_kib / 1024)) required_mib=$((min_available_kib / 1024))"
+  fi
+}
+
 command -v docker >/dev/null || fail 'docker is required'
 command -v openssl >/dev/null || fail 'openssl is required'
 command -v npm >/dev/null || fail 'npm is required'
 npm ls --prefix "$repo_dir/web" --depth=0 @xyflow/react >/dev/null 2>&1 || \
   fail 'frontend dependencies are incomplete; run npm ci --prefix web'
+assert_host_memory_budget
 [[ -n "${OPENAI_API_KEY:-}" ]] || fail 'a test LLM key is required in OPENAI_API_KEY'
 [[ -n "${E2E_OPIK_COMPOSE_FILE:-}" && -f "${E2E_OPIK_COMPOSE_FILE}" ]] || \
   fail 'E2E_OPIK_COMPOSE_FILE must point to a reviewed, pinned upstream Opik self-hosting compose file'
@@ -426,6 +480,7 @@ export OPIK_URL=${E2E_OPIK_URL:-http://127.0.0.1:${E2E_OPIK_BACKEND_PORT}}
 export OPIK_OTLP_ENDPOINT=${E2E_OPIK_OTLP_ENDPOINT:-http://127.0.0.1:${E2E_OPIK_BACKEND_PORT}/v1/private/otel}
 export OPIK_PROJECT='Default Project'
 poll_opik
+verify_opik_data_plane
 
 docker compose -p "$project" -f "$work_dir/compose.yml" up -d --wait milvus
 milvus_port=$(docker compose -p "$project" -f "$work_dir/compose.yml" port milvus 19530 | awk -F: '{print $NF}')
@@ -494,9 +549,7 @@ for ((i=1; i<=30; i++)); do
   fi
   sleep 1
 done
-if [[ "$readiness_verified" != true ]]; then
-  printf 'evaluation-evolution E2E concern: /readyz remained unavailable; continuing with /health evidence\n' >&2
-fi
+[[ "$readiness_verified" == true ]] || fail '/readyz remained unavailable after dependency startup'
 kill -0 "$backend_pid" 2>/dev/null || fail 'isolated backend exited after readiness poll'
 
 # The fixture bootstrap intentionally uses the real guest and refresh flows. A generated
@@ -530,7 +583,16 @@ setsid bash -c 'cd "$1/web" && exec npm run dev -- --host 127.0.0.1' _ "$repo_di
 poll frontend "curl -fsS http://127.0.0.1:15173/evaluations"
 kill -0 "$frontend_pid" 2>/dev/null || fail 'isolated frontend exited after readiness poll'
 
-(cd "$repo_dir" && npx --prefix web playwright test --config=e2e/evaluation-evolution/playwright.config.ts)
+playwright_args=(test --config=e2e/evaluation-evolution/playwright.config.ts)
+if [[ -n "${E2E_PLAYWRIGHT_GREP:-}" ]]; then
+  playwright_args+=(--grep "$E2E_PLAYWRIGHT_GREP")
+fi
+if ! (cd "$repo_dir" && npx --prefix web playwright "${playwright_args[@]}" 2>&1) | sed -E \
+  -e 's/Bearer [A-Za-z0-9._~+\/-]+/Bearer [REDACTED]/g' \
+  -e 's/(api[_-]?key|access[_-]?token|credential|secret)([=: ]+)[^ ,;}]+/\1\2[REDACTED]/Ig'; then
+  print_runtime_diagnostics
+  fail 'Playwright verification failed'
+fi
 assert_collector_binding
 
 scan_file="$work_dir/combined.log"

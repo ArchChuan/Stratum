@@ -41,6 +41,18 @@ func TestPgCandidateCommandRepositoryReplayAndIsolation(t *testing.T) {
 	repo := NewPgCandidateCommandRepository(pool)
 	command := domain.CandidateCommand{ActorID: "admin-1", ActorType: domain.ActorTypeAdmin, Reason: "unsafe",
 		IdempotencyKey: "request-1", ExpectedStateVersion: 1}
+	schema := `"tenant_` + tenantID + `"`
+	if _, err := pool.Exec(ctx, `INSERT INTO `+schema+`.eval_suites(id,name) VALUES('suite-active','active');
+		INSERT INTO `+schema+`.eval_suite_revisions(id,suite_id,version_no,status,resource_kind)
+		VALUES('suite-active-revision','suite-active',1,'published','skill');
+		INSERT INTO `+schema+`.evaluation_experiments
+		(id,resource_kind,resource_id,stable_revision_id,canary_revision_id,suite_revision_id,status)
+		VALUES('experiment-active','skill','skill-1','revision-1','revision-3','suite-active-revision','running')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Reject(ctx, tenantID, "tenant-one-only", command); !errors.Is(err, domain.ErrCandidateCommandNotAllowed) {
+		t.Fatalf("active experiment candidate rejection error=%v", err)
+	}
 
 	first, err := repo.Reject(ctx, tenantID, "candidate-1", command)
 	if err != nil || first.Status != "rejected" {

@@ -204,6 +204,10 @@ func (contractQueryRepo) Timeline(context.Context, string, port.CenterFilter) (d
 
 type contractExperimentRepo struct{}
 
+func (contractExperimentRepo) ValidatePrerequisites(context.Context, string, domain.ResourceRef,
+	domain.ResourceRef, string) error {
+	return nil
+}
 func (contractExperimentRepo) Create(context.Context, string, domain.Experiment, domain.Deployment) error {
 	return nil
 }

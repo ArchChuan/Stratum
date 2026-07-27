@@ -13,7 +13,8 @@ import (
 
 type completionRequest struct {
 	Messages []struct {
-		Role string `json:"role"`
+		Role    string `json:"role"`
+		Content string `json:"content"`
 	} `json:"messages"`
 	Tools []struct {
 		Function struct {
@@ -63,23 +64,33 @@ func main() {
 			return
 		}
 		toolResultSeen := false
+		knowledgeRequest := false
 		for _, message := range request.Messages {
 			toolResultSeen = toolResultSeen || message.Role == "tool"
+			knowledgeRequest = knowledgeRequest || strings.Contains(strings.ToLower(message.Content), "knowledge")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		message := map[string]any{"content": "bounded-agent-result"}
 		if !toolResultSeen {
 			toolName := ""
 			for _, tool := range request.Tools {
+				if knowledgeRequest && tool.Function.Name == "stratum_search_knowledge" {
+					toolName = tool.Function.Name
+					break
+				}
 				if strings.HasPrefix(tool.Function.Name, "mcp:") {
 					toolName = tool.Function.Name
 					break
 				}
 			}
 			if toolName != "" {
+				arguments := `{"id":"agent-evidence"}`
+				if toolName == "stratum_search_knowledge" {
+					arguments = `{"workspaces":[],"query":"evolution center recovery code","top_k":20}`
+				}
 				message = map[string]any{"content": "", "tool_calls": []map[string]any{{
 					"id": "e2e-tool-call", "type": "function", "function": map[string]any{
-						"name": toolName, "arguments": `{"id":"agent-evidence"}`},
+						"name": toolName, "arguments": arguments},
 				}}}
 			}
 		}

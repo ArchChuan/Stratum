@@ -491,6 +491,7 @@ func TestTenantSchemaUpgradePreservesSkillEvaluationRowsAcrossReprovision(t *tes
 	}
 
 	var experimentRows, newTables, backfilledColumns int
+	var stageBoundaryMatches bool
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM "`+schema+`".evaluation_experiments
 		WHERE id='experiment-existing' AND resource_kind='skill'`).Scan(&experimentRows); err != nil {
 		t.Fatal(err)
@@ -501,11 +502,15 @@ func TestTenantSchemaUpgradePreservesSkillEvaluationRowsAcrossReprovision(t *tes
 	}
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema=$1
 		AND table_name='evaluation_experiments'
-		AND column_name IN ('state_version','recommendation','safety_stopped')`, schema).Scan(&backfilledColumns); err != nil {
+		AND column_name IN ('state_version','recommendation','safety_stopped','stage_started_at')`, schema).Scan(&backfilledColumns); err != nil {
 		t.Fatal(err)
 	}
-	if experimentRows != 1 || newTables != 2 || backfilledColumns != 3 {
-		t.Fatalf("experiment_rows=%d new_tables=%d backfilled_columns=%d",
-			experimentRows, newTables, backfilledColumns)
+	if err := pool.QueryRow(ctx, `SELECT stage_started_at=updated_at FROM "`+schema+`".evaluation_experiments
+		WHERE id='experiment-existing'`).Scan(&stageBoundaryMatches); err != nil {
+		t.Fatal(err)
+	}
+	if experimentRows != 1 || newTables != 2 || backfilledColumns != 4 || !stageBoundaryMatches {
+		t.Fatalf("experiment_rows=%d new_tables=%d backfilled_columns=%d stage_boundary_matches=%t",
+			experimentRows, newTables, backfilledColumns, stageBoundaryMatches)
 	}
 }

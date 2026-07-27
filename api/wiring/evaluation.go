@@ -3,6 +3,7 @@ package wiring
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -16,7 +17,9 @@ import (
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	evalpersist "github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/persistence"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
+	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -165,11 +168,27 @@ func (a skillEvaluationRepositoryAdapter) ResolveSkillEvaluation(
 }
 
 type skillCandidateManager struct {
-	versions *skillapp.VersionService
+	versions  *skillapp.VersionService
+	revisions evalport.RevisionRepository
 }
 
 type experimentSkillRevisionResolver struct {
 	service *evalapp.ExperimentService
+}
+
+type experimentAgentRevisionResolver struct {
+	service *evalapp.ExperimentService
+	adapter agentEvaluationAdapter
+}
+
+type experimentMCPRevisionResolver struct {
+	service *evalapp.ExperimentService
+	adapter mcpEvaluationAdapter
+}
+
+type experimentKnowledgeRevisionResolver struct {
+	service *evalapp.ExperimentService
+	adapter knowledgeEvaluationAdapter
 }
 
 func (m skillCandidateManager) CreatePublishedBaseline(
@@ -185,6 +204,28 @@ func (m skillCandidateManager) CreatePublishedBaseline(
 	if err != nil {
 		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: resolve active baseline: %w", err)
 	}
+	if m.revisions == nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: revision index unavailable")
+	}
+	summary, err := m.versions.PublishedRevisionSafeSummary(ctx, skillID, revision.ID)
+	if err != nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: summarize baseline: %w", err)
+	}
+	indexed := evaldomain.ResourceRevision{
+		ID: revision.ID, ResourceKind: evaldomain.ResourceKindSkill, ResourceID: skillID,
+		Source: evaldomain.RevisionSourceManual, Status: evaldomain.RevisionStatusPublished,
+		ContentHash: revision.ContentHash, PayloadRef: "skill://" + revision.ID, PayloadHash: revision.ContentHash,
+		SafeSummary: summary, CreatedBy: "evaluation-worker", CreatedAt: time.Now().UTC(),
+	}
+	if err := indexed.Validate(); err != nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: validate baseline index: %w", err)
+	}
+	_, _, err = m.revisions.Create(ctx, tenantID, indexed, "skill-baseline-"+stableTenantFingerprint(
+		tenantID, strings.Join([]string{skillID, revision.ID, revision.ContentHash}, "\x00"),
+	))
+	if err != nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: register baseline: %w", err)
+	}
 	return evaldomain.ResourceRef{
 		Kind: evaldomain.ResourceKindSkill, ResourceID: skillID, RevisionID: revision.ID,
 	}, nil
@@ -198,6 +239,114 @@ func (r experimentSkillRevisionResolver) ResolveSkillRevision(
 	return agentport.SkillRevisionAssignment{
 		RevisionID: assignment.RevisionID, ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
 	}, found, err
+}
+
+func (r experimentAgentRevisionResolver) ResolveAgentRevision(
+	ctx context.Context,
+	tenantID, agentID, subjectID string,
+) (agentport.AgentRevisionAssignment, bool, error) {
+	assignment, found, err := r.service.ResolveAssignment(
+		ctx, tenantID, evaldomain.ResourceKindAgent, agentID, subjectID,
+	)
+	if err != nil || !found {
+		return agentport.AgentRevisionAssignment{}, found, err
+	}
+	_, snapshot, revisionFound, err := r.adapter.get(ctx, tenantID, evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindAgent, ResourceID: agentID, RevisionID: assignment.RevisionID,
+	})
+	if err != nil {
+		return agentport.AgentRevisionAssignment{}, false, err
+	}
+	if !revisionFound {
+		return agentport.AgentRevisionAssignment{}, false, evalport.ErrCenterResourceNotFound
+	}
+	return agentport.AgentRevisionAssignment{
+		Revision: snapshot, RevisionID: assignment.RevisionID,
+		ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
+	}, true, nil
+}
+
+func (r experimentMCPRevisionResolver) ResolveMCPRevision(
+	ctx context.Context,
+	tenantID, serverID, subjectID string,
+) (agentport.MCPRevisionAssignment, bool, error) {
+	assignment, found, err := r.service.ResolveAssignment(
+		ctx, tenantID, evaldomain.ResourceKindMCP, serverID, subjectID,
+	)
+	return agentport.MCPRevisionAssignment{
+		RevisionID: assignment.RevisionID, ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
+	}, found, err
+}
+
+func (r experimentMCPRevisionResolver) LoadMCPRuntimeRevision(
+	ctx context.Context, tenantID, serverID, revisionID string,
+) (mcpRuntimeRevision, error) {
+	_, snapshot, err := r.adapter.loadRevision(ctx, tenantID, evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindMCP, ResourceID: serverID, RevisionID: revisionID,
+	}, true)
+	if err != nil {
+		return mcpRuntimeRevision{}, err
+	}
+	config, err := r.adapter.loadRuntimeConfig(ctx, tenantID, snapshot)
+	if err != nil {
+		return mcpRuntimeRevision{}, err
+	}
+	config.Timeout = time.Duration(snapshot.TimeoutMS) * time.Millisecond
+	if config.Retry == nil {
+		config.Retry = &mcpdomain.RetryConfig{}
+	}
+	config.Retry.Enabled = snapshot.MaxRetries > 0
+	config.Retry.MaxRetries = snapshot.MaxRetries
+	return mcpRuntimeRevision{
+		Config: config, EnabledTools: append([]string(nil), snapshot.EnabledTools...),
+		Timeout: config.Timeout, MaxRetries: snapshot.MaxRetries,
+	}, nil
+}
+
+func (r experimentKnowledgeRevisionResolver) ResolveKnowledgeRevision(
+	ctx context.Context, tenantID, workspaceName, subjectID string,
+) (agentport.KnowledgeRevisionAssignment, bool, error) {
+	assignment, found, err := r.service.ResolveAssignment(
+		ctx, tenantID, evaldomain.ResourceKindKnowledge, workspaceName, subjectID,
+	)
+	if err != nil || !found {
+		return agentport.KnowledgeRevisionAssignment{}, found, err
+	}
+	revision, err := r.LoadKnowledgeRevision(ctx, tenantID, workspaceName, assignment.RevisionID)
+	if err != nil {
+		return agentport.KnowledgeRevisionAssignment{}, false, err
+	}
+	return agentport.KnowledgeRevisionAssignment{
+		Revision: revision, ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
+	}, true, nil
+}
+
+func (r experimentKnowledgeRevisionResolver) LoadKnowledgeRevision(
+	ctx context.Context, tenantID, workspaceName, revisionID string,
+) (agentport.KnowledgeRetrievalRevision, error) {
+	_, snapshot, err := r.adapter.loadRevision(ctx, tenantID, evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindKnowledge, ResourceID: workspaceName, RevisionID: revisionID,
+	}, true)
+	if err != nil {
+		return agentport.KnowledgeRetrievalRevision{}, err
+	}
+	documents, err := r.adapter.source.ListSnapshotDocuments(ctx, tenantID, snapshot.WorkspaceID)
+	if err != nil {
+		return agentport.KnowledgeRetrievalRevision{}, fmt.Errorf("load Knowledge runtime documents: %w", err)
+	}
+	documentSetHash, err := knowledgeDocumentSetHash(documents)
+	if err != nil {
+		return agentport.KnowledgeRetrievalRevision{}, err
+	}
+	if documentSetHash != snapshot.DocumentSetHash {
+		return agentport.KnowledgeRetrievalRevision{}, errors.New("Knowledge runtime document set changed")
+	}
+	return agentport.KnowledgeRetrievalRevision{
+		RevisionID: revisionID, WorkspaceID: snapshot.WorkspaceID, WorkspaceName: snapshot.WorkspaceName,
+		EmbeddingModel: snapshot.EmbeddingIdentity, QueryMode: snapshot.QueryMode, TopK: snapshot.TopK,
+		ScoreThreshold: snapshot.ScoreThreshold, Reranking: snapshot.Reranking,
+		QueryRewrite: snapshot.QueryRewrite,
+	}, nil
 }
 
 func (m skillCandidateManager) LoadOptimizableSnapshot(
@@ -245,17 +394,17 @@ func (m skillCandidateManager) ResolveRevision(
 	if err != nil {
 		return evaldomain.ResourceRevision{}, err
 	}
-	version, err := m.versions.ResolvePublishedRevision(ctx, ref.ResourceID, ref.RevisionID)
+	version, err := m.versions.ResolveEvaluableRevision(ctx, ref.ResourceID, ref.RevisionID)
 	if err != nil {
 		return evaldomain.ResourceRevision{}, err
 	}
-	summary, err := m.versions.PublishedRevisionSafeSummary(ctx, ref.ResourceID, ref.RevisionID)
+	summary, err := m.versions.EvaluableRevisionSafeSummary(ctx, ref.ResourceID, ref.RevisionID)
 	if err != nil {
 		return evaldomain.ResourceRevision{}, err
 	}
 	return evaldomain.ResourceRevision{
 		ID: version.ID, ResourceKind: evaldomain.ResourceKindSkill, ResourceID: version.SkillID,
-		Source: evaldomain.RevisionSourceManual, Status: evaldomain.RevisionStatusPublished,
+		Source: skillRevisionSource(version.Status), Status: skillRevisionStatus(version.Status),
 		ContentHash: version.ContentHash, PayloadRef: "skill://" + version.ID, PayloadHash: version.ContentHash,
 		SafeSummary: summary,
 	}, nil
@@ -268,7 +417,21 @@ func (m skillCandidateManager) SafeSummary(
 	if err != nil {
 		return nil, err
 	}
-	return m.versions.PublishedRevisionSafeSummary(ctx, ref.ResourceID, ref.RevisionID)
+	return m.versions.EvaluableRevisionSafeSummary(ctx, ref.ResourceID, ref.RevisionID)
+}
+
+func skillRevisionSource(status skilldomain.VersionStatus) evaldomain.RevisionSource {
+	if status == skilldomain.VersionStatusCandidate {
+		return evaldomain.RevisionSourceOptimization
+	}
+	return evaldomain.RevisionSourceManual
+}
+
+func skillRevisionStatus(status skilldomain.VersionStatus) evaldomain.RevisionStatus {
+	if status == skilldomain.VersionStatusPublished {
+		return evaldomain.RevisionStatusPublished
+	}
+	return evaldomain.RevisionStatusDraft
 }
 
 func evaluationSkillContext(
@@ -503,7 +666,8 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	candidateRepo := evalpersist.NewPgCandidateCommandRepository(db)
 	suiteService := evalapp.NewSuiteService(suiteRepo)
 	activationResolver := publishedSkillActivationResolver{versions: c.Skill.VersionService}
-	manager := skillCandidateManager{versions: c.Skill.VersionService}
+	revisionRepo := evalpersist.NewPgRevisionRepository(db)
+	manager := skillCandidateManager{versions: c.Skill.VersionService, revisions: revisionRepo}
 	skillAdapter := agentScenarioEvaluationAdapter{
 		agents:    c.Agent.Service,
 		skills:    activationResolver,
@@ -517,13 +681,16 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		evaldomain.ResourceKindSkill: manager,
 	}
 	var agentProvider evalport.AgentRevisionProvider
+	var runtimeAgentAdapter *agentEvaluationAdapter
 	var mcpProvider evalport.ResourceRevisionProvider
+	var runtimeMCPAdapter *mcpEvaluationAdapter
 	var knowledgeProvider evalport.ResourceRevisionProvider
+	var runtimeKnowledgeAdapter *knowledgeEvaluationAdapter
 	var sharedRevisionService *evalapp.RevisionService
 	if c.RevisionObjectStore != nil {
 		sharedRevisionService = evalapp.NewRevisionService(
 			evalpersist.RevisionObjectStoreAdapter{Store: c.RevisionObjectStore},
-			evalpersist.NewPgRevisionRepository(db),
+			revisionRepo,
 		)
 	}
 	if c.Agent != nil && sharedRevisionService != nil {
@@ -533,6 +700,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		resourceAdapters[evaldomain.ResourceKindAgent] = agentAdapter
 		candidateCreators[evaldomain.ResourceKindAgent] = agentAdapter
 		agentProvider = agentAdapter
+		runtimeAgentAdapter = &agentAdapter
 	}
 	if c.MCP != nil && c.MCP.Manager != nil && sharedRevisionService != nil {
 		mcpAdapter := mcpEvaluationAdapter{
@@ -542,6 +710,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		resourceAdapters[evaldomain.ResourceKindMCP] = mcpAdapter
 		candidateCreators[evaldomain.ResourceKindMCP] = mcpAdapter
 		mcpProvider = mcpAdapter
+		runtimeMCPAdapter = &mcpAdapter
 	}
 	if c.Knowledge != nil && c.Knowledge.WorkspaceService != nil && c.Knowledge.RAGService != nil &&
 		sharedRevisionService != nil {
@@ -552,6 +721,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		resourceAdapters[evaldomain.ResourceKindKnowledge] = knowledgeAdapter
 		candidateCreators[evaldomain.ResourceKindKnowledge] = knowledgeAdapter
 		knowledgeProvider = knowledgeAdapter
+		runtimeKnowledgeAdapter = &knowledgeAdapter
 	}
 	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, suiteRepo)
 	jobService := evalapp.NewJobService(jobRepo, service)
@@ -587,6 +757,23 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	if c.Agent != nil && c.Agent.Service != nil {
 		c.Agent.Service.SetSkillRevisionResolver(experimentSkillRevisionResolver{service: experimentService})
+		if runtimeAgentAdapter != nil {
+			c.Agent.Service.SetAgentRevisionResolver(experimentAgentRevisionResolver{
+				service: experimentService, adapter: *runtimeAgentAdapter,
+			})
+		}
+		if runtimeMCPAdapter != nil && c.MCP != nil && c.MCP.Manager != nil {
+			resolver := experimentMCPRevisionResolver{service: experimentService, adapter: *runtimeMCPAdapter}
+			c.Agent.Service.SetMCPRevisionResolver(resolver)
+			c.Agent.Service.SetMCPToolExecutor(agentMCPExecutor{
+				clients: c.MCP.Manager, revisionRuntime: c.MCP.Manager, revisions: resolver,
+			})
+		}
+		if runtimeKnowledgeAdapter != nil {
+			c.Agent.Service.SetKnowledgeRevisionResolver(experimentKnowledgeRevisionResolver{
+				service: experimentService, adapter: *runtimeKnowledgeAdapter,
+			})
+		}
 	}
 	if c.Agent != nil && c.Skill != nil && c.Skill.VersionService != nil {
 		if diagnostics, ok := c.Agent.DiagnosticProvider.(*systemAssistantDiagnosticAdapter); ok {

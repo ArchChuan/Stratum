@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
@@ -52,10 +53,15 @@ func main() {
 		literal(adminGuest.TenantID), literal(adminGuest.User.Sub)))
 	adminToken := refresh(adminClient, apiURL)
 	liveMCP := executeLiveMCPFlow(adminClient, apiURL, adminToken, postgresContainer, adminGuest.TenantID, runID)
-	liveAgent := executeLiveAgentFlow(adminClient, apiURL, adminToken, liveMCP["serverId"].(string), runID)
+	liveAgent := executeLiveAgentFlow(adminClient, apiURL, adminToken, liveMCP["serverId"].(string),
+		postgresContainer, adminGuest.TenantID, runID)
+	executeLiveMCPCanaryFlow(adminClient, apiURL, adminToken, liveMCP, liveAgent["resourceId"].(string),
+		postgresContainer, adminGuest.TenantID, runID)
 	liveSkill := executeLiveSkillFlow(adminClient, apiURL, adminToken, liveAgent["resourceId"].(string),
 		liveMCP["serverId"].(string), runID)
 	liveKnowledge := executeLiveKnowledgeFlow(adminClient, apiURL, adminToken, runID)
+	executeLiveKnowledgeCanaryFlow(adminClient, apiURL, adminToken, liveKnowledge,
+		liveAgent["resourceId"].(string), memberGuest.AccessToken, runID)
 
 	prefix := strings.ReplaceAll(runID, "-", "_")
 	schema := quoteIdentifier(tenantSchemaName(adminGuest.TenantID))
@@ -239,7 +245,7 @@ func executeLiveKnowledgeFlow(client *http.Client, apiURL, token, runID string) 
 	assertKnowledgeRun(recoveryJob, recoveryRun, baseline.RevisionID, ingest.DocumentID, true)
 
 	return map[string]any{"resourceId": workspaceName, "workspaceId": workspace.ID,
-		"revisionId": baseline.RevisionID, "documentId": ingest.DocumentID,
+		"revisionId": baseline.RevisionID, "suiteRevisionId": suiteRevision.ID, "documentId": ingest.DocumentID,
 		"chunkIndex": directQuery.Sources[0].ChunkIndex, "jobId": successJob.JobID, "runId": successRun.ID,
 		"failureJobId": failureJob.JobID, "failureRunId": failureRun.ID,
 		"failureError":  failureRun.Results[0].Error,
@@ -271,6 +277,269 @@ func assertKnowledgeRun(
 	if !ok || len(ids) != 1 || ids[0] != documentID {
 		panic("live Knowledge citation identity invalid")
 	}
+}
+
+func executeLiveKnowledgeCanaryFlow(
+	client *http.Client, apiURL, token string, liveKnowledge map[string]any, agentID, memberToken, runID string,
+) {
+	workspaceName := liveKnowledge["resourceId"].(string)
+	workspaceID := liveKnowledge["workspaceId"].(string)
+	baselineRevisionID := liveKnowledge["revisionId"].(string)
+	suiteRevisionID := liveKnowledge["suiteRevisionId"].(string)
+	var optimization struct {
+		Candidates []struct {
+			Revision struct {
+				RevisionID string `json:"revision_id"`
+			} `json:"revision"`
+		} `json:"candidates"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/optimizations", token, map[string]any{
+		"idempotency_key": runID + "-live-knowledge-canary-optimization",
+		"baseline": map[string]any{"kind": "knowledge", "resource_id": workspaceName,
+			"revision_id": baselineRevisionID},
+		"suite_revision_id": suiteRevisionID,
+		"search_space":      map[string]any{"top_k": []int{2}},
+		"failure_summaries": []string{},
+	}, http.StatusCreated, &optimization)
+	if len(optimization.Candidates) != 1 || optimization.Candidates[0].Revision.RevisionID == "" {
+		panic("live Knowledge canary candidate generation invalid")
+	}
+	candidateRevisionID := optimization.Candidates[0].Revision.RevisionID
+	candidateJob, candidateRun := executeStoredEvaluationRun(client, apiURL, token, "knowledge", workspaceName,
+		candidateRevisionID, suiteRevisionID, runID+"-live-knowledge-canary-run")
+	if candidateJob.Status != "succeeded" || !candidateRun.Passed {
+		panic("live Knowledge canary offline evaluation did not pass")
+	}
+	var experiment struct {
+		Experiment struct {
+			ID string `json:"id"`
+		} `json:"experiment"`
+		Deployment struct {
+			CanaryPercent int `json:"canary_percent"`
+		} `json:"deployment"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/experiments", token, map[string]any{
+		"stable": map[string]any{"kind": "knowledge", "resource_id": workspaceName,
+			"revision_id": baselineRevisionID},
+		"canary": map[string]any{"kind": "knowledge", "resource_id": workspaceName,
+			"revision_id": candidateRevisionID},
+		"suite_revision_id": suiteRevisionID,
+	}, http.StatusCreated, &experiment)
+	if experiment.Experiment.ID == "" || experiment.Deployment.CanaryPercent <= 0 {
+		panic("live Knowledge canary experiment creation invalid")
+	}
+	requestJSON(client, http.MethodPut, apiURL+"/agents/"+agentID, token, map[string]any{
+		"name": runID + " live agent", "type": "react", "description": "isolated live Knowledge runtime",
+		"systemPrompt": "Search the bound Knowledge workspace exactly once, then return the bounded result.",
+		"llmModel":     "qwen-plus", "maxIterations": 4, "maxContextTokens": 4096,
+		"allowedSkills": []string{}, "mcpToolIds": []string{},
+		"knowledgeWorkspaceIds": []string{workspaceID},
+	}, http.StatusOK, nil)
+	conversationID := createResourceCanaryConversation(client, apiURL, token, agentID, workspaceName,
+		experiment.Deployment.CanaryPercent, runID+" Knowledge")
+	var onlineResult map[string]any
+	onlineTraceID := requestJSONWithTrace(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use Knowledge to find the evolution center recovery code.",
+			"conversation_id": conversationID}, http.StatusOK, &onlineResult)
+	onlineJSON, _ := json.Marshal(onlineResult)
+	if onlineResult["output"] != "bounded-agent-result" || onlineTraceID == "" ||
+		!bytes.Contains(onlineJSON, []byte("stratum_search_knowledge")) {
+		panic("live Knowledge canary runtime execution invalid")
+	}
+	feedback := waitForFeedback(client, apiURL, token, map[string]any{
+		"trace_id": onlineTraceID, "resource_kind": "knowledge", "resource_id": workspaceName,
+		"score": 1, "outcome": map[string]any{"status": "success"},
+		"idempotency_key": runID + "-live-knowledge-canary-feedback",
+	})
+	feedbackRow, _ := feedback["feedback"].(map[string]any)
+	feedbackExperiment, _ := feedback["experiment"].(map[string]any)
+	if feedbackRow["revision_id"] != candidateRevisionID ||
+		feedbackRow["experiment_id"] != experiment.Experiment.ID || feedbackRow["variant"] != "canary" ||
+		feedbackExperiment["id"] != experiment.Experiment.ID {
+		panic("live Knowledge canary feedback attribution mismatch")
+	}
+	liveKnowledge["candidateRevisionId"] = candidateRevisionID
+	liveKnowledge["candidateRunId"] = candidateRun.ID
+	liveKnowledge["experimentId"] = experiment.Experiment.ID
+	liveKnowledge["onlineTraceId"] = onlineTraceID
+	liveKnowledge["onlineVariant"] = feedbackRow["variant"]
+	assertClientSecurityClaimDoesNotStopExperiment(client, apiURL, memberToken, liveKnowledge,
+		experiment.Experiment.ID, experiment.Deployment.CanaryPercent, runID)
+	assertKnowledgeRuntimeOutageFailsClosed(client, apiURL, token, liveKnowledge, agentID,
+		experiment.Deployment.CanaryPercent, runID)
+	assertKnowledgeDocumentDriftFailsClosed(client, apiURL, token, liveKnowledge, agentID,
+		experiment.Deployment.CanaryPercent, runID)
+	assertKnowledgeTenantIsolation(client, apiURL, token, liveKnowledge, runID)
+}
+
+func assertClientSecurityClaimDoesNotStopExperiment(
+	client *http.Client, apiURL, memberToken string, liveKnowledge map[string]any,
+	experimentID string, canaryPercent int, runID string,
+) {
+	var feedback struct {
+		Decision   string `json:"decision"`
+		Experiment struct {
+			ID            string `json:"id"`
+			Stage         int    `json:"stage"`
+			SafetyStopped bool   `json:"safety_stopped"`
+		} `json:"experiment"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/feedback", memberToken, map[string]any{
+		"trace_id": liveKnowledge["onlineTraceId"], "resource_kind": "knowledge",
+		"resource_id": liveKnowledge["resourceId"], "score": 1,
+		"security_violation": true, "outcome": map[string]any{"security_violation": true},
+		"idempotency_key": runID + "-untrusted-client-security-claim",
+	}, http.StatusCreated, &feedback)
+	if feedback.Decision == "rollback" || feedback.Experiment.ID != experimentID ||
+		feedback.Experiment.Stage != canaryPercent || feedback.Experiment.SafetyStopped {
+		panic("untrusted client security claim changed the active experiment")
+	}
+	liveKnowledge["clientSecurityClaimIgnored"] = true
+}
+
+func assertKnowledgeRuntimeOutageFailsClosed(
+	client *http.Client, apiURL, token string, liveKnowledge map[string]any, agentID string,
+	canaryPercent int, runID string,
+) {
+	workspaceName := liveKnowledge["resourceId"].(string)
+	milvusContainer := mustEnv("E2E_MILVUS_CONTAINER")
+	assertMilvusContainerHealthy(milvusContainer)
+	setMilvusProxyEnabled(false)
+	restored := false
+	defer func() {
+		if !restored {
+			setMilvusProxyEnabled(true)
+		}
+	}()
+
+	conversationID := createResourceCanaryConversation(client, apiURL, token, agentID, workspaceName,
+		canaryPercent, runID+" Knowledge outage")
+	requestsBefore := readCounter(mustEnv("E2E_LLM_EVIDENCE"), "requests")
+	var failure struct {
+		Error string `json:"error"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use Knowledge while its retrieval dependency is unavailable.",
+			"conversation_id": conversationID}, http.StatusInternalServerError, &failure)
+	if failure.Error != "internal server error" ||
+		readCounter(mustEnv("E2E_LLM_EVIDENCE"), "requests") != requestsBefore+1 {
+		panic("live Knowledge runtime dependency failure did not stop before a second LLM call")
+	}
+	liveKnowledge["runtimeOutageRejected"] = true
+
+	setMilvusProxyEnabled(true)
+	restored = true
+	assertMilvusContainerHealthy(milvusContainer)
+	waitForTCP("127.0.0.1:" + mustEnv("E2E_MILVUS_PORT"))
+	recoveryConversationID := createResourceCanaryConversation(client, apiURL, token, agentID, workspaceName,
+		canaryPercent, runID+" Knowledge outage recovery")
+	var recovery map[string]any
+	requestJSON(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use Knowledge to find the evolution center recovery code.",
+			"conversation_id": recoveryConversationID}, http.StatusOK, &recovery)
+	recoveryJSON, _ := json.Marshal(recovery)
+	if recovery["output"] != "bounded-agent-result" ||
+		!bytes.Contains(recoveryJSON, []byte("stratum_search_knowledge")) {
+		panic("live Knowledge runtime did not recover after dependency restoration")
+	}
+	liveKnowledge["runtimeOutageRecovered"] = true
+}
+
+func assertKnowledgeDocumentDriftFailsClosed(
+	client *http.Client, apiURL, token string, liveKnowledge map[string]any, agentID string,
+	canaryPercent int, runID string,
+) {
+	workspaceName := liveKnowledge["resourceId"].(string)
+	var ingest struct {
+		DocumentID string `json:"document_id"`
+		Status     string `json:"status"`
+	}
+	requestMultipart(client, apiURL+"/knowledge/ingest", token, workspaceName,
+		"evolution-drift.txt", []byte("A later document changes the immutable Knowledge snapshot."), &ingest)
+	if ingest.DocumentID == "" || ingest.Status != "processing" {
+		panic("live Knowledge document drift ingest acceptance invalid")
+	}
+	completed := false
+	for range 90 {
+		var documents struct {
+			Documents []struct {
+				ID              string `json:"id"`
+				Status          string `json:"ingest_status"`
+				ProcessedChunks int    `json:"processed_chunks"`
+			} `json:"documents"`
+		}
+		requestJSON(client, http.MethodGet,
+			apiURL+"/knowledge/workspaces/"+url.PathEscape(workspaceName)+"/documents",
+			token, nil, http.StatusOK, &documents)
+		for _, document := range documents.Documents {
+			if document.ID == ingest.DocumentID {
+				completed = document.Status == "completed" && document.ProcessedChunks > 0
+			}
+		}
+		if completed {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if !completed {
+		panic("live Knowledge document drift ingest polling timed out")
+	}
+	conversationID := createResourceCanaryConversation(client, apiURL, token, agentID, workspaceName,
+		canaryPercent, runID+" Knowledge drift")
+	requestsBefore := readCounter(mustEnv("E2E_LLM_EVIDENCE"), "requests")
+	var failure struct {
+		Error string `json:"error"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use Knowledge after the document set changed.",
+			"conversation_id": conversationID}, http.StatusInternalServerError, &failure)
+	if failure.Error != "internal server error" ||
+		readCounter(mustEnv("E2E_LLM_EVIDENCE"), "requests") != requestsBefore {
+		panic("live Knowledge document set changed was not rejected before LLM execution")
+	}
+	liveKnowledge["documentDriftRejected"] = true
+}
+
+func assertKnowledgeTenantIsolation(
+	client *http.Client, apiURL, token string, liveKnowledge map[string]any, runID string,
+) {
+	var createdTenant struct {
+		AccessToken string `json:"access_token"`
+		TenantID    string `json:"tenant_id"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/auth/create-tenant", token,
+		map[string]string{"tenant_name": runID + " foreign tenant"}, http.StatusCreated, &createdTenant)
+	if createdTenant.AccessToken == "" || createdTenant.TenantID == "" {
+		panic("live Knowledge cross-tenant identity creation invalid")
+	}
+	workspaceName := liveKnowledge["resourceId"].(string)
+	var workspace struct {
+		ID string `json:"id"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/knowledge/workspaces", createdTenant.AccessToken,
+		map[string]any{"name": workspaceName, "description": "isolated foreign tenant workspace",
+			"config": map[string]any{"embedding_model": "text-embedding-v3", "chunking_strategy": "recursive",
+				"chunk_size": 128, "chunk_overlap": 16, "query_mode": "vector", "top_k": 1}},
+		http.StatusCreated, &workspace)
+	if workspace.ID == "" || workspace.ID == liveKnowledge["workspaceId"] {
+		panic("live Knowledge cross-tenant workspace identity invalid")
+	}
+	requestJSON(client, http.MethodGet, apiURL+"/evaluations/runs/"+liveKnowledge["candidateRunId"].(string),
+		createdTenant.AccessToken, nil, http.StatusNotFound, nil)
+	var experiments struct {
+		Items []any `json:"items"`
+	}
+	requestJSON(client, http.MethodGet,
+		apiURL+"/evaluations/experiments?resource_kind=knowledge&resource_id="+url.QueryEscape(workspaceName),
+		createdTenant.AccessToken, nil, http.StatusOK, &experiments)
+	if len(experiments.Items) != 0 {
+		panic("live Knowledge cross-tenant experiment leaked")
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/feedback", createdTenant.AccessToken,
+		map[string]any{"trace_id": liveKnowledge["onlineTraceId"], "resource_kind": "knowledge",
+			"resource_id": workspaceName, "score": 1, "outcome": map[string]any{"status": "success"},
+			"idempotency_key": runID + "-cross-tenant-feedback"}, http.StatusNotFound, nil)
+	liveKnowledge["crossTenantIsolated"] = true
 }
 
 func executeStoredEvaluationRun(
@@ -564,7 +833,10 @@ func executeLiveSkillFlow(client *http.Client, apiURL, token, agentID, serverID,
 		"traceId": run.Results[0].TraceID, "tokens": run.Results[0].Tokens, "llmRequests": requestDelta}
 }
 
-func executeLiveAgentFlow(client *http.Client, apiURL, token, serverID, runID string) map[string]any {
+func executeLiveAgentFlow(
+	client *http.Client,
+	apiURL, token, serverID, postgresContainer, tenantID, runID string,
+) map[string]any {
 	const providerMarker = "e2e-provider-marker"
 	requestJSON(client, http.MethodPatch, apiURL+"/tenant/settings", token, map[string]any{
 		"settings": map[string]any{"llm_api_keys": map[string]string{"qwen": providerMarker}},
@@ -692,13 +964,175 @@ func executeLiveAgentFlow(client *http.Client, apiURL, token, serverID, runID st
 		recoveryRun.Resource.RevisionID != baseline.RevisionID {
 		panic("live Agent stable revision did not recover after provider restoration")
 	}
+
+	var optimization struct {
+		Candidates []struct {
+			ID       string `json:"id"`
+			Revision struct {
+				RevisionID string `json:"revision_id"`
+			} `json:"revision"`
+		} `json:"candidates"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/optimizations", token, map[string]any{
+		"idempotency_key": runID + "-live-agent-canary-optimization",
+		"baseline": map[string]any{"kind": "agent", "resource_id": agent.ID,
+			"revision_id": baseline.RevisionID},
+		"suite_revision_id": published.ID,
+		"search_space":      map[string]any{"max_iterations": []int{5}},
+		"failure_summaries": []string{},
+	}, http.StatusCreated, &optimization)
+	if len(optimization.Candidates) != 1 || optimization.Candidates[0].Revision.RevisionID == "" {
+		panic("live Agent canary candidate generation invalid")
+	}
+	candidate := optimization.Candidates[0]
+	candidateJob, candidateRun := executeAgentEvaluationRun(client, apiURL, token, agent.ID,
+		candidate.Revision.RevisionID, published.ID, runID+"-live-agent-canary-run")
+	if candidateJob.Status != "succeeded" || !candidateRun.Passed {
+		panic("live Agent canary offline evaluation did not pass")
+	}
+	var experiment struct {
+		Experiment struct {
+			ID string `json:"id"`
+		} `json:"experiment"`
+		Deployment struct {
+			CanaryPercent int `json:"canary_percent"`
+		} `json:"deployment"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/experiments", token, map[string]any{
+		"stable": map[string]any{"kind": "agent", "resource_id": agent.ID,
+			"revision_id": baseline.RevisionID},
+		"canary": map[string]any{"kind": "agent", "resource_id": agent.ID,
+			"revision_id": candidate.Revision.RevisionID},
+		"suite_revision_id": published.ID,
+	}, http.StatusCreated, &experiment)
+	if experiment.Experiment.ID == "" || experiment.Deployment.CanaryPercent <= 0 {
+		panic("live Agent canary experiment creation invalid")
+	}
+	conversationID := createCanaryConversation(client, apiURL, token, agent.ID,
+		experiment.Deployment.CanaryPercent, runID)
+	var onlineResult map[string]any
+	onlineTraceID := requestJSONWithTrace(client, http.MethodPost, apiURL+"/agents/"+agent.ID+"/execute", token,
+		map[string]any{"query": "Use the lookup tool and return bounded-agent-result.",
+			"conversation_id": conversationID}, http.StatusOK, &onlineResult)
+	if onlineResult["output"] != "bounded-agent-result" || onlineTraceID == "" {
+		panic("live Agent canary runtime execution invalid")
+	}
+	feedback := waitForFeedback(client, apiURL, token, map[string]any{
+		"trace_id": onlineTraceID, "resource_kind": "agent", "resource_id": agent.ID,
+		"score": 1, "outcome": map[string]any{"status": "success"},
+		"idempotency_key": runID + "-live-agent-canary-feedback",
+	})
+	feedbackRow, _ := feedback["feedback"].(map[string]any)
+	feedbackExperiment, _ := feedback["experiment"].(map[string]any)
+	if feedbackRow["revision_id"] != candidate.Revision.RevisionID ||
+		feedbackRow["experiment_id"] != experiment.Experiment.ID || feedbackRow["variant"] != "canary" ||
+		feedbackExperiment["id"] != experiment.Experiment.ID {
+		panic("live Agent canary feedback attribution mismatch")
+	}
+	feedbackWindowAdvanced := assertAgentFeedbackWindowAdvances(client, apiURL, token, agent.ID,
+		experiment.Experiment.ID, experiment.Deployment.CanaryPercent, postgresContainer, tenantID, runID)
 	return map[string]any{"resourceId": agent.ID, "revisionId": baseline.RevisionID,
 		"suiteRevisionId": published.ID, "jobId": queued.JobID, "runId": run.ID,
 		"traceId": run.Results[0].TraceID, "tokens": run.Results[0].Tokens,
 		"toolTraces": len(toolEvidence.ToolTraces), "traceEvents": len(traceEvidence.TraceEvents),
 		"failureJobId": failureJob.JobID, "failureRunId": failureRun.ID,
 		"failureError":  failureRun.Results[0].Error,
-		"recoveryJobId": recoveryJob.JobID, "recoveryRunId": recoveryRun.ID}
+		"recoveryJobId": recoveryJob.JobID, "recoveryRunId": recoveryRun.ID,
+		"candidateRevisionId": candidate.Revision.RevisionID, "candidateRunId": candidateRun.ID,
+		"experimentId": experiment.Experiment.ID, "onlineTraceId": onlineTraceID,
+		"onlineVariant": feedbackRow["variant"], "feedbackWindowAdvanced": feedbackWindowAdvanced,
+		"advancedStage": 20}
+}
+
+func assertAgentFeedbackWindowAdvances(
+	client *http.Client,
+	apiURL, token, agentID, experimentID string,
+	canaryPercent int,
+	postgresContainer, tenantID, runID string,
+) bool {
+	schema := quoteIdentifier(tenantSchemaName(tenantID))
+	policy := `{"stages":[5,20],"min_samples":2,"min_observation_minutes":0,"max_cost_regression":1,` +
+		`"max_latency_regression":1,"max_error_rate_increase":1}`
+	execSQL(postgresContainer, "configure feedback window E2E policy", fmt.Sprintf(
+		`UPDATE %s.evaluation_experiments SET policy=%s::jsonb WHERE id=%s`,
+		schema, literal(policy), literal(experimentID)))
+
+	observations := []struct {
+		variant string
+		score   float64
+	}{{variant: "stable", score: 0}, {variant: "stable", score: 0}, {variant: "canary", score: 1}}
+	for index, observation := range observations {
+		conversationID := createResourceVariantConversation(client, apiURL, token, agentID, agentID,
+			canaryPercent, observation.variant == "canary", fmt.Sprintf("%s feedback-window-%d", runID, index))
+		var result map[string]any
+		traceID := requestJSONWithTrace(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+			map[string]any{"query": "Use the lookup tool and return bounded-agent-result.",
+				"conversation_id": conversationID}, http.StatusOK, &result)
+		if result["output"] != "bounded-agent-result" || traceID == "" {
+			panic("feedback window runtime execution invalid")
+		}
+		feedback := waitForFeedback(client, apiURL, token, map[string]any{
+			"trace_id": traceID, "resource_kind": "agent", "resource_id": agentID,
+			"score": observation.score, "outcome": map[string]any{"status": "success"},
+			"idempotency_key": fmt.Sprintf("%s-feedback-window-%d", runID, index),
+		})
+		feedbackRow, _ := feedback["feedback"].(map[string]any)
+		if feedbackRow["experiment_id"] != experimentID || feedbackRow["variant"] != observation.variant {
+			panic("feedback window attribution mismatch")
+		}
+	}
+
+	var experiments struct {
+		Items []struct {
+			ID    string `json:"id"`
+			Stage int    `json:"stage"`
+		} `json:"items"`
+	}
+	requestJSON(client, http.MethodGet,
+		apiURL+"/evaluations/experiments?resource_kind=agent&resource_id="+url.QueryEscape(agentID),
+		token, nil, http.StatusOK, &experiments)
+	for _, current := range experiments.Items {
+		if current.ID == experimentID {
+			if current.Stage != 20 {
+				panic(fmt.Sprintf("feedback window did not advance: stage=%d", current.Stage))
+			}
+			return true
+		}
+	}
+	panic("feedback window experiment disappeared")
+}
+
+func createCanaryConversation(
+	client *http.Client, apiURL, token, agentID string, canaryPercent int, runID string,
+) string {
+	return createResourceCanaryConversation(client, apiURL, token, agentID, agentID, canaryPercent, runID)
+}
+
+func createResourceCanaryConversation(
+	client *http.Client, apiURL, token, agentID, resourceID string, canaryPercent int, runID string,
+) string {
+	return createResourceVariantConversation(client, apiURL, token, agentID, resourceID, canaryPercent, true, runID)
+}
+
+func createResourceVariantConversation(
+	client *http.Client,
+	apiURL, token, agentID, resourceID string,
+	canaryPercent int,
+	wantCanary bool,
+	runID string,
+) string {
+	for attempt := range 200 {
+		var conversation struct {
+			ID string `json:"id"`
+		}
+		requestJSON(client, http.MethodPost, apiURL+"/agents/"+agentID+"/conversations", token,
+			map[string]string{"name": fmt.Sprintf("%s canary %d", runID, attempt)}, http.StatusCreated, &conversation)
+		if conversation.ID != "" &&
+			evaldomain.AssignVariant(conversation.ID+":"+resourceID, canaryPercent) == wantCanary {
+			return conversation.ID
+		}
+	}
+	panic("could not allocate deterministic experiment variant subject")
 }
 
 type agentEvaluationRun struct {
@@ -996,6 +1430,229 @@ func executeLiveMCPFlow(client *http.Client, apiURL, token, postgresContainer, t
 		"toolCalls": 1, "encryptedPayloadVerified": true}
 }
 
+func executeLiveMCPCanaryFlow(
+	client *http.Client, apiURL, token string, liveMCP map[string]any, agentID, postgresContainer, tenantID, runID string,
+) {
+	serverID, baselineRevisionID := liveMCP["serverId"].(string), liveMCP["revisionId"].(string)
+	suiteRevisionID := liveMCP["suiteRevisionId"].(string)
+	var optimization struct {
+		Candidates []struct {
+			Revision struct {
+				RevisionID string `json:"revision_id"`
+			} `json:"revision"`
+		} `json:"candidates"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/optimizations", token, map[string]any{
+		"idempotency_key": runID + "-live-mcp-canary-optimization",
+		"baseline": map[string]any{"kind": "mcp", "resource_id": serverID,
+			"revision_id": baselineRevisionID},
+		"suite_revision_id": suiteRevisionID,
+		"search_space":      map[string]any{"timeout_ms": []int{6500}},
+		"failure_summaries": []string{},
+	}, http.StatusCreated, &optimization)
+	if len(optimization.Candidates) != 1 || optimization.Candidates[0].Revision.RevisionID == "" {
+		panic("live MCP canary candidate generation invalid")
+	}
+	candidateRevisionID := optimization.Candidates[0].Revision.RevisionID
+	var queued struct {
+		JobID string `json:"job_id"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/runs", token, map[string]any{
+		"resource": map[string]any{"kind": "mcp", "resource_id": serverID,
+			"revision_id": candidateRevisionID},
+		"suite_revision_id": suiteRevisionID,
+		"idempotency_key":   runID + "-live-mcp-canary-run",
+	}, http.StatusAccepted, &queued)
+	job := waitForEvaluationJob(client, apiURL, token, queued.JobID)
+	if job.Status != "succeeded" || job.ResultID == "" {
+		panic("live MCP canary offline evaluation did not complete")
+	}
+	var run struct {
+		Passed bool `json:"passed"`
+	}
+	requestJSON(client, http.MethodGet, apiURL+"/evaluations/runs/"+job.ResultID, token,
+		nil, http.StatusOK, &run)
+	if !run.Passed {
+		panic("live MCP canary offline evaluation did not pass")
+	}
+	var experiment struct {
+		Experiment struct {
+			ID string `json:"id"`
+		} `json:"experiment"`
+		Deployment struct {
+			CanaryPercent int `json:"canary_percent"`
+		} `json:"deployment"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/experiments", token, map[string]any{
+		"stable": map[string]any{"kind": "mcp", "resource_id": serverID,
+			"revision_id": baselineRevisionID},
+		"canary": map[string]any{"kind": "mcp", "resource_id": serverID,
+			"revision_id": candidateRevisionID},
+		"suite_revision_id": suiteRevisionID,
+	}, http.StatusCreated, &experiment)
+	if experiment.Experiment.ID == "" || experiment.Deployment.CanaryPercent <= 0 {
+		panic("live MCP canary experiment creation invalid")
+	}
+	conversationID := createResourceCanaryConversation(
+		client, apiURL, token, agentID, serverID, experiment.Deployment.CanaryPercent, runID+" MCP",
+	)
+	beforeCalls := readCounter(mustEnv("E2E_MCP_EVIDENCE"), "calls")
+	var onlineResult map[string]any
+	onlineTraceID := requestJSONWithTrace(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use the lookup tool and return bounded-agent-result.",
+			"conversation_id": conversationID}, http.StatusOK, &onlineResult)
+	if onlineResult["output"] != "bounded-agent-result" || onlineTraceID == "" ||
+		readCounter(mustEnv("E2E_MCP_EVIDENCE"), "calls") != beforeCalls+1 {
+		panic("live MCP canary runtime execution invalid")
+	}
+	feedback := waitForFeedback(client, apiURL, token, map[string]any{
+		"trace_id": onlineTraceID, "resource_kind": "mcp", "resource_id": serverID,
+		"score": 1, "outcome": map[string]any{"status": "success"},
+		"idempotency_key": runID + "-live-mcp-canary-feedback",
+	})
+	feedbackRow, _ := feedback["feedback"].(map[string]any)
+	feedbackExperiment, _ := feedback["experiment"].(map[string]any)
+	if feedbackRow["revision_id"] != candidateRevisionID ||
+		feedbackRow["experiment_id"] != experiment.Experiment.ID || feedbackRow["variant"] != "canary" ||
+		feedbackExperiment["id"] != experiment.Experiment.ID {
+		panic("live MCP canary feedback attribution mismatch")
+	}
+	liveMCP["candidateRevisionId"] = candidateRevisionID
+	liveMCP["candidateRunId"] = job.ResultID
+	liveMCP["experimentId"] = experiment.Experiment.ID
+	liveMCP["onlineTraceId"] = onlineTraceID
+	liveMCP["onlineVariant"] = feedbackRow["variant"]
+	assertMCPPreparationFailureIsObservable(client, apiURL, token, liveMCP, agentID, postgresContainer,
+		tenantID, experiment.Deployment.CanaryPercent, runID)
+}
+
+func assertMCPPreparationFailureIsObservable(
+	client *http.Client, apiURL, token string, liveMCP map[string]any, agentID, postgresContainer,
+	tenantID string, canaryPercent int, runID string,
+) {
+	serverID := liveMCP["serverId"].(string)
+	candidateRevisionID := liveMCP["candidateRevisionId"].(string)
+	schema := quoteIdentifier(tenantSchemaName(tenantID))
+	originalRef := querySQL(postgresContainer, fmt.Sprintf(
+		`SELECT payload_ref FROM %s.resource_revisions WHERE id=%s AND resource_kind='mcp' AND resource_id=%s`,
+		schema, literal(candidateRevisionID), literal(serverID)))
+	if originalRef == "" {
+		panic("MCP preparation failure fixture revision reference missing")
+	}
+	restored := false
+	defer func() {
+		if !restored {
+			execSQL(postgresContainer, "restore MCP canary revision object reference", fmt.Sprintf(
+				`UPDATE %s.resource_revisions SET payload_ref=%s WHERE id=%s AND resource_kind='mcp' AND resource_id=%s`,
+				schema, literal(originalRef), literal(candidateRevisionID), literal(serverID)))
+		}
+	}()
+	missingRef := "object://" + mustEnv("TRACE_PAYLOAD_BUCKET") + "/missing/" + runID + "-mcp-revision"
+	execSQL(postgresContainer, "invalidate exact MCP canary revision object reference", fmt.Sprintf(
+		`UPDATE %s.resource_revisions SET payload_ref=%s WHERE id=%s AND resource_kind='mcp' AND resource_id=%s`,
+		schema, literal(missingRef), literal(candidateRevisionID), literal(serverID)))
+
+	conversationID := createResourceCanaryConversation(
+		client, apiURL, token, agentID, serverID, canaryPercent, runID+" MCP preparation failure",
+	)
+	beforeCalls := readCounter(mustEnv("E2E_MCP_EVIDENCE"), "calls")
+	var failure struct {
+		Error string `json:"error"`
+	}
+	traceID := requestJSONWithTrace(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use the lookup tool while its immutable revision is unavailable.",
+			"conversation_id": conversationID}, http.StatusInternalServerError, &failure)
+	if traceID == "" || failure.Error != "internal server error" ||
+		readCounter(mustEnv("E2E_MCP_EVIDENCE"), "calls") != beforeCalls {
+		panic("MCP preparation failure did not fail before tool execution")
+	}
+	metadata := waitForOpikTraceMetadata(client, tenantID, traceID)
+	manifest := decodeStringMap(metadata["opik.metadata.stratum.resource_manifest"])
+	assignments := decodeAnyMap(metadata["opik.metadata.stratum.experiment_assignments"])
+	if metadata["opik.metadata.stratum.status"] != "error" || manifest["agent:"+agentID] == "" ||
+		manifest["mcp:"+serverID] != "" || assignments["agent:"+agentID] == nil ||
+		assignments["mcp:"+serverID] != nil {
+		panic("MCP preparation failure execution attribution invalid")
+	}
+	liveMCP["preparationFailureTraceId"] = traceID
+	liveMCP["preparationFailureRecorded"] = true
+
+	execSQL(postgresContainer, "restore MCP canary revision object reference", fmt.Sprintf(
+		`UPDATE %s.resource_revisions SET payload_ref=%s WHERE id=%s AND resource_kind='mcp' AND resource_id=%s`,
+		schema, literal(originalRef), literal(candidateRevisionID), literal(serverID)))
+	restored = true
+	var recovery map[string]any
+	requestJSON(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use the lookup tool and return bounded-agent-result.",
+			"conversation_id": conversationID}, http.StatusOK, &recovery)
+	if recovery["output"] != "bounded-agent-result" ||
+		readCounter(mustEnv("E2E_MCP_EVIDENCE"), "calls") != beforeCalls+1 {
+		panic("MCP execution did not recover after revision object restoration")
+	}
+	liveMCP["preparationFailureRecovered"] = true
+}
+
+func waitForOpikTraceMetadata(client *http.Client, tenantID, traceID string) map[string]any {
+	filters, _ := json.Marshal([]map[string]string{
+		{"field": "metadata", "operator": "=", "key": "$['opik.metadata.stratum.tenant_id']", "value": tenantID},
+		{"field": "metadata", "operator": "=", "key": "$['opik.metadata.stratum.trace_id']", "value": traceID},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	for ctx.Err() == nil {
+		endpoint, _ := url.Parse(strings.TrimRight(mustEnv("OPIK_URL"), "/") + "/v1/private/traces")
+		query := endpoint.Query()
+		query.Set("project_name", mustEnv("OPIK_PROJECT"))
+		query.Set("page", "1")
+		query.Set("size", "2")
+		query.Set("filters", string(filters))
+		endpoint.RawQuery = query.Encode()
+		request, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+		request.Header.Set("projectName", mustEnv("OPIK_PROJECT"))
+		response, err := client.Do(request)
+		if err == nil && response.StatusCode == http.StatusOK {
+			var page struct {
+				Content []struct {
+					Metadata map[string]any `json:"metadata"`
+				} `json:"content"`
+			}
+			decodeErr := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&page)
+			response.Body.Close()
+			if decodeErr == nil && len(page.Content) == 1 {
+				return page.Content[0].Metadata
+			}
+		} else if response != nil {
+			response.Body.Close()
+		}
+		time.Sleep(time.Second)
+	}
+	panic("timed out waiting for MCP preparation failure trace metadata")
+}
+
+func decodeStringMap(value any) map[string]string {
+	encoded, _ := json.Marshal(value)
+	if raw, ok := value.(string); ok {
+		encoded = []byte(raw)
+	}
+	result := map[string]string{}
+	if json.Unmarshal(encoded, &result) != nil {
+		panic("decode trace resource manifest failed")
+	}
+	return result
+}
+
+func decodeAnyMap(value any) map[string]any {
+	encoded, _ := json.Marshal(value)
+	if raw, ok := value.(string); ok {
+		encoded = []byte(raw)
+	}
+	result := map[string]any{}
+	if json.Unmarshal(encoded, &result) != nil {
+		panic("decode trace experiment assignments failed")
+	}
+	return result
+}
+
 func verifyEncryptedRevisionObject(postgresContainer, tenantID, revisionID string, plaintextMarkers ...string) {
 	schema := quoteIdentifier(tenantSchemaName(tenantID))
 	row := querySQL(postgresContainer, fmt.Sprintf(
@@ -1052,6 +1709,65 @@ func waitForEvaluationJob(client *http.Client, apiURL, token, jobID string) eval
 		time.Sleep(time.Second)
 	}
 	panic("evaluation job polling timed out")
+}
+
+func requestJSONWithTrace(
+	client *http.Client, method, requestURL, token string, payload any, status int, output any,
+) string {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		panic("encode traced E2E request failed")
+	}
+	request, err := http.NewRequest(method, requestURL, bytes.NewReader(encoded))
+	if err != nil {
+		panic("create traced E2E request failed")
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		panic("traced E2E API request failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != status {
+		panic(fmt.Sprintf("traced E2E API request failed: method=%s status=%d", method, response.StatusCode))
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(output); err != nil {
+		panic("decode traced E2E API response failed")
+	}
+	return response.Header.Get("X-Request-ID")
+}
+
+func waitForFeedback(client *http.Client, apiURL, token string, payload map[string]any) map[string]any {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		panic("encode feedback E2E request failed")
+	}
+	for range 90 {
+		request, requestErr := http.NewRequest(http.MethodPost, apiURL+"/evaluations/feedback", bytes.NewReader(encoded))
+		if requestErr != nil {
+			panic("create feedback E2E request failed")
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Content-Type", "application/json")
+		response, responseErr := client.Do(request)
+		if responseErr != nil {
+			time.Sleep(time.Second)
+			continue
+		}
+		if response.StatusCode == http.StatusCreated {
+			var result map[string]any
+			decodeErr := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result)
+			response.Body.Close()
+			if decodeErr != nil {
+				panic("decode feedback E2E response failed")
+			}
+			return result
+		}
+		response.Body.Close()
+		time.Sleep(time.Second)
+	}
+	panic("timed out waiting for Agent canary feedback attribution")
 }
 
 func requestJSON(client *http.Client, method, url, token string, payload any, status int, output any) {

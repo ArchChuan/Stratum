@@ -87,40 +87,13 @@ func NewRetrievalEvaluator(retriever EvaluationRetriever) *RetrievalEvaluator {
 func (e *RetrievalEvaluator) EvaluateRetrieval(
 	ctx context.Context, snapshot RetrievalSnapshot, testCase RetrievalCase,
 ) (RetrievalEvaluation, error) {
-	if e == nil || e.retriever == nil {
-		return RetrievalEvaluation{}, errors.New("knowledge retrieval evaluator unavailable")
-	}
-	if err := snapshot.Validate(); err != nil {
-		return RetrievalEvaluation{}, err
-	}
-	query := rewriteEvaluationQuery(testCase.Query, snapshot.QueryRewrite)
-	if query == "" {
-		return RetrievalEvaluation{}, errors.New("knowledge retrieval evaluator: query required")
-	}
-	result, err := e.retriever.Query(ctx, RAGQueryRequest{
-		Question: query, Workspace: snapshot.WorkspaceName, WorkspaceID: snapshot.WorkspaceID,
-		TenantID: tenantIDFromContext(ctx), Mode: snapshot.QueryMode, TopK: snapshot.TopK,
-		EmbeddingModel: snapshot.EmbeddingModel,
-	})
+	sources, err := e.retrieveSources(ctx, snapshot, testCase.Query)
 	if err != nil {
-		return RetrievalEvaluation{}, ErrRetrievalDependency
-	}
-	if result == nil {
-		return RetrievalEvaluation{}, errors.New("knowledge retrieval evaluator: empty retrieval result")
-	}
-	sources := append([]Source(nil), result.Sources...)
-	if snapshot.Reranking == RerankingScoreDesc {
-		sort.SliceStable(sources, func(i, j int) bool { return sources[i].Score > sources[j].Score })
+		return RetrievalEvaluation{}, err
 	}
 	documentIDs := make([]string, 0, min(snapshot.TopK, len(sources)))
 	for _, source := range sources {
-		if float64(source.Score) < snapshot.ScoreThreshold {
-			continue
-		}
 		documentIDs = append(documentIDs, source.DocumentID)
-		if len(documentIDs) == snapshot.TopK {
-			break
-		}
 	}
 	noAnswer := len(documentIDs) == 0
 	relevant := containsExpectedID(documentIDs, testCase.RelevantDocumentIDs)
@@ -130,6 +103,62 @@ func (e *RetrievalEvaluator) EvaluateRetrieval(
 	citationCorrect := containsAllIDs(documentIDs, testCase.CitationDocumentIDs)
 	return RetrievalEvaluation{Relevant: relevant, CitationCorrect: citationCorrect,
 		NoAnswer: noAnswer, RetrievedCount: len(documentIDs), RetrievedDocumentIDs: documentIDs}, nil
+}
+
+func (e *RetrievalEvaluator) RetrieveContext(
+	ctx context.Context, snapshot RetrievalSnapshot, query string,
+) (string, error) {
+	sources, err := e.retrieveSources(ctx, snapshot, query)
+	if err != nil {
+		return "", err
+	}
+	var content strings.Builder
+	for _, source := range sources {
+		content.WriteString(source.Content)
+		content.WriteString("\n---\n")
+	}
+	return content.String(), nil
+}
+
+func (e *RetrievalEvaluator) retrieveSources(
+	ctx context.Context, snapshot RetrievalSnapshot, rawQuery string,
+) ([]Source, error) {
+	if e == nil || e.retriever == nil {
+		return nil, errors.New("knowledge retrieval evaluator unavailable")
+	}
+	if err := snapshot.Validate(); err != nil {
+		return nil, err
+	}
+	query := rewriteEvaluationQuery(rawQuery, snapshot.QueryRewrite)
+	if query == "" {
+		return nil, errors.New("knowledge retrieval evaluator: query required")
+	}
+	result, err := e.retriever.Query(ctx, RAGQueryRequest{
+		Question: query, Workspace: snapshot.WorkspaceName, WorkspaceID: snapshot.WorkspaceID,
+		TenantID: tenantIDFromContext(ctx), Mode: snapshot.QueryMode, TopK: snapshot.TopK,
+		EmbeddingModel: snapshot.EmbeddingModel,
+	})
+	if err != nil {
+		return nil, ErrRetrievalDependency
+	}
+	if result == nil {
+		return nil, errors.New("knowledge retrieval evaluator: empty retrieval result")
+	}
+	sources := append([]Source(nil), result.Sources...)
+	if snapshot.Reranking == RerankingScoreDesc {
+		sort.SliceStable(sources, func(i, j int) bool { return sources[i].Score > sources[j].Score })
+	}
+	filtered := make([]Source, 0, min(snapshot.TopK, len(sources)))
+	for _, source := range sources {
+		if float64(source.Score) < snapshot.ScoreThreshold {
+			continue
+		}
+		filtered = append(filtered, source)
+		if len(filtered) == snapshot.TopK {
+			break
+		}
+	}
+	return filtered, nil
 }
 
 func rewriteEvaluationQuery(query, mode string) string {

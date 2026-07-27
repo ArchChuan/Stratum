@@ -14,6 +14,80 @@ test('MCP evidence comes from a real encrypted revision and network tool call', 
   } });
 });
 
+test('MCP online canary executes the immutable candidate and attributes feedback', async ({ adminApi, manifest }) => {
+  const evidence = manifest.liveEvidence.mcp;
+  expect(evidence.onlineTraceId).not.toBe('');
+  expect(evidence.onlineVariant).toBe('canary');
+  const candidateRun = await adminApi.get(`/evaluations/runs/${evidence.candidateRunId}`);
+  expect(candidateRun.status()).toBe(200);
+  expect(await candidateRun.json()).toMatchObject({ passed: true, resource: {
+    kind: 'mcp', resource_id: evidence.serverId, revision_id: evidence.candidateRevisionId,
+  } });
+  const experiments = await adminApi.get(
+    `/evaluations/experiments?resource_kind=mcp&resource_id=${evidence.serverId}`,
+  );
+  expect(experiments.status()).toBe(200);
+  expect((await experiments.json()).items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: evidence.experimentId, canary_revision_id: evidence.candidateRevisionId }),
+  ]));
+});
+
+test('MCP preparation failure remains observable and recovers without tool execution', async ({ adminApi, manifest }) => {
+  const evidence = manifest.liveEvidence.mcp;
+  expect(evidence.preparationFailureTraceId).not.toBe('');
+  expect(evidence.preparationFailureRecorded).toBe(true);
+  expect(evidence.preparationFailureRecovered).toBe(true);
+
+  const executions = await adminApi.get('/agents/executions?page=1&page_size=100');
+  expect(executions.status()).toBe(200);
+  expect((await executions.json()).executions).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      trace_id: evidence.preparationFailureTraceId,
+      status: 'error',
+      agent_id: manifest.liveEvidence.agent.resourceId,
+    }),
+  ]));
+});
+
+test('MCP and Knowledge parameter search creates durable candidates through the public API', async ({ adminApi, manifest }) => {
+  const requests = [
+    {
+      kind: 'mcp', resourceId: manifest.liveEvidence.mcp.serverId,
+      baselineRevision: manifest.liveEvidence.mcp.revisionId,
+      suiteRevisionId: manifest.liveEvidence.mcp.suiteRevisionId,
+      searchSpace: { timeout_ms: [1500] }, key: 'e2e-mcp-parameter-search',
+    },
+    {
+      kind: 'knowledge', resourceId: manifest.liveEvidence.knowledge.resourceId,
+      baselineRevision: manifest.liveEvidence.knowledge.revisionId,
+      suiteRevisionId: manifest.liveEvidence.knowledge.suiteRevisionId,
+      searchSpace: { top_k: [8] }, key: 'e2e-knowledge-parameter-search',
+    },
+  ] as const;
+
+  for (const request of requests) {
+    const response = await adminApi.post('/evaluations/optimizations', { data: {
+      idempotency_key: request.key,
+      baseline: { kind: request.kind, resource_id: request.resourceId,
+        revision_id: request.baselineRevision },
+      suite_revision_id: request.suiteRevisionId,
+      search_space: request.searchSpace,
+      failure_summaries: [],
+    } });
+    expect(response.status(), await response.text()).toBe(201);
+    const body = await response.json();
+    expect(body.candidates).toEqual([expect.objectContaining({ source: 'parameter_search' })]);
+
+    const listed = await adminApi.get(
+      `/evaluations/candidates?resource_kind=${request.kind}&resource_id=${request.resourceId}`,
+    );
+    expect(listed.status()).toBe(200);
+    expect((await listed.json()).items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: body.candidates[0].id, source: 'parameter_search' }),
+    ]));
+  }
+});
+
 test('Agent provider failure is recorded and the same stable revision recovers', async ({ adminApi, manifest, scanSafe }) => {
   const evidence = manifest.liveEvidence.agent;
   expect(evidence.toolTraces).toBeGreaterThan(0);
@@ -38,6 +112,28 @@ test('Agent provider failure is recorded and the same stable revision recovers',
   expect(await recoveryRun.json()).toMatchObject({ passed: true, resource: {
     kind: 'agent', resource_id: evidence.resourceId, revision_id: evidence.revisionId,
   }, results: [{ passed: true, actual: 'bounded-agent-result' }] });
+});
+
+test('Agent online canary executes the immutable candidate and attributes feedback', async ({ adminApi, manifest }) => {
+  const evidence = manifest.liveEvidence.agent;
+  expect(evidence.onlineTraceId).not.toBe('');
+  expect(evidence.onlineVariant).toBe('canary');
+  expect(evidence.feedbackWindowAdvanced).toBe(true);
+  expect(evidence.advancedStage).toBe(20);
+
+  const candidateRun = await adminApi.get(`/evaluations/runs/${evidence.candidateRunId}`);
+  expect(candidateRun.status()).toBe(200);
+  expect(await candidateRun.json()).toMatchObject({ passed: true, resource: {
+    kind: 'agent', resource_id: evidence.resourceId, revision_id: evidence.candidateRevisionId,
+  } });
+  const experiments = await adminApi.get(
+    `/evaluations/experiments?resource_kind=agent&resource_id=${evidence.resourceId}`,
+  );
+  expect(experiments.status()).toBe(200);
+  expect((await experiments.json()).items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: evidence.experimentId, canary_revision_id: evidence.candidateRevisionId,
+      stage: evidence.advancedStage }),
+  ]));
 });
 
 test('Skill evidence executes the exact published revision through its bound Agent', async ({ adminApi, manifest }) => {
@@ -73,6 +169,29 @@ test('Knowledge evidence preserves document citation through outage and recovery
   expect(recovery.status()).toBe(200);
   expect(await recovery.json()).toMatchObject({ passed: true, resource: { revision_id: evidence.revisionId },
     results: [{ passed: true, actual: { retrieved_document_ids: [evidence.documentId] } }] });
+});
+
+test('Knowledge online canary searches the immutable candidate and attributes feedback', async ({ adminApi, manifest }) => {
+  const evidence = manifest.liveEvidence.knowledge;
+  expect(evidence.onlineTraceId).not.toBe('');
+  expect(evidence.onlineVariant).toBe('canary');
+  expect(evidence.runtimeOutageRejected).toBe(true);
+  expect(evidence.runtimeOutageRecovered).toBe(true);
+  expect(evidence.clientSecurityClaimIgnored).toBe(true);
+  expect(evidence.documentDriftRejected).toBe(true);
+  expect(evidence.crossTenantIsolated).toBe(true);
+  const candidateRun = await adminApi.get(`/evaluations/runs/${evidence.candidateRunId}`);
+  expect(candidateRun.status()).toBe(200);
+  expect(await candidateRun.json()).toMatchObject({ passed: true, resource: {
+    kind: 'knowledge', resource_id: evidence.resourceId, revision_id: evidence.candidateRevisionId,
+  } });
+  const experiments = await adminApi.get(
+    `/evaluations/experiments?resource_kind=knowledge&resource_id=${evidence.resourceId}`,
+  );
+  expect(experiments.status()).toBe(200);
+  expect((await experiments.json()).items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: evidence.experimentId, canary_revision_id: evidence.candidateRevisionId }),
+  ]));
 });
 
 test('member reads but cannot issue administrator commands', async ({ memberApi, manifest }) => {

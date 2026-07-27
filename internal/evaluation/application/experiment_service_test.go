@@ -63,6 +63,31 @@ func TestExperimentServiceCreatesFivePercentCanaryDeployment(t *testing.T) {
 	}
 }
 
+func TestExperimentServiceRequiresVerifiedOfflinePrerequisites(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "published stable revision", err: domain.ErrExperimentStableNotPublished},
+		{name: "optimization candidate revision", err: domain.ErrExperimentInvalidCandidate},
+		{name: "published matching suite", err: domain.ErrExperimentSuiteNotPublished},
+		{name: "passed candidate offline run", err: domain.ErrExperimentOfflineRunRequired},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &fakeExperimentRepo{prerequisiteErr: tc.err}
+			svc := NewExperimentService(repo)
+			_, _, err := svc.Create(context.Background(), "tenant-1", CreateExperimentInput{
+				Stable:          domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1", RevisionID: "stable-1"},
+				Canary:          domain.ResourceRef{Kind: domain.ResourceKindAgent, ResourceID: "agent-1", RevisionID: "candidate-1"},
+				SuiteRevisionID: "suite-revision-1",
+			})
+			if !errors.Is(err, tc.err) || repo.createCalls != 0 || repo.prerequisiteCalls != 1 {
+				t.Fatalf("err=%v prerequisite calls=%d create calls=%d", err, repo.prerequisiteCalls, repo.createCalls)
+			}
+		})
+	}
+}
+
 func TestExperimentServiceSafetyStopsWithoutRollingBackStable(t *testing.T) {
 	repo := &fakeExperimentRepo{experiment: domain.Experiment{
 		ID: "experiment-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
@@ -204,6 +229,9 @@ type fakeExperimentRepo struct {
 	commandActorType  domain.ActorType
 	decisions         map[string]fakeEvaluationDecision
 	saveDecisionCalls int
+	prerequisiteErr   error
+	prerequisiteCalls int
+	createCalls       int
 }
 
 type fakeEvaluationDecision struct {
@@ -239,8 +267,16 @@ func (f *fakeExperimentRepo) ApplyCommand(
 func (f *fakeExperimentRepo) Create(
 	_ context.Context, _ string, experiment domain.Experiment, deployment domain.Deployment,
 ) error {
+	f.createCalls++
 	f.experiment, f.deployment = experiment, deployment
 	return nil
+}
+
+func (f *fakeExperimentRepo) ValidatePrerequisites(
+	_ context.Context, _ string, _, _ domain.ResourceRef, _ string,
+) error {
+	f.prerequisiteCalls++
+	return f.prerequisiteErr
 }
 
 func (f *fakeExperimentRepo) Get(_ context.Context, _ string, _ string) (domain.Experiment, bool, error) {

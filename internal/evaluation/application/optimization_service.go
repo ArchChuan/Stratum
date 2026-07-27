@@ -75,6 +75,18 @@ func (s *OptimizationService) Generate(
 		return job, candidates, nil
 	}
 	patches := make([]domain.CandidatePatch, 0, 3)
+	if len(input.SearchSpace) > 0 {
+		parameterPatches, err := domain.GenerateParameterPatches(input.SearchSpace)
+		if err != nil {
+			return domain.OptimizationJob{}, nil, err
+		}
+		for _, parameterPatch := range parameterPatches {
+			patches = append(patches, domain.CandidatePatch{
+				Source: "parameter_search", ParameterPatch: parameterPatch,
+				Rationale: "bounded parameter search",
+			})
+		}
+	}
 	if s.rewriter != nil && len(input.FailureSummaries) > 0 {
 		snapshot, err := s.creator.LoadOptimizableSnapshot(ctx, tenantID, input.Baseline)
 		if err != nil {
@@ -95,8 +107,13 @@ func (s *OptimizationService) Generate(
 			patches = append(patches, rewrite)
 		}
 	}
+	if len(patches) > domain.MaxGeneratedCandidates {
+		return domain.OptimizationJob{}, nil,
+			fmt.Errorf("optimization exceeds %d candidates", domain.MaxGeneratedCandidates)
+	}
 	if len(patches) == 0 {
-		return domain.OptimizationJob{}, nil, errors.New("instruction optimization requires failure summaries and a prompt rewriter")
+		return domain.OptimizationJob{}, nil,
+			errors.New("optimization requires a parameter search space or failure summaries with a prompt rewriter")
 	}
 	now := time.Now().UTC()
 	job := domain.OptimizationJob{

@@ -65,6 +65,11 @@ func TestEvaluationEvolutionRoutesRBAC(t *testing.T) {
 		}
 	}
 	admin := signEvaluationToken(t, tokens, "tenant-1", "admin")
+	for _, route := range r.Routes() {
+		if route.Method == http.MethodPost && route.Path == "/evaluations/experiments/:id/evaluate" {
+			t.Fatal("client-reported experiment metrics route must not be registered")
+		}
+	}
 	rec := performEvaluationRequest(r, http.MethodPost, "/evaluations/experiments/experiment-1/pause", admin, "inactive", strings.NewReader(`{}`))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("inactive admin status=%d body=%s", rec.Code, rec.Body.String())
@@ -113,6 +118,10 @@ func (r *evaluationCandidateRepoFake) Reject(_ context.Context, tenantID, candid
 
 type evaluationExperimentRepoFake struct{ actors []string }
 
+func (*evaluationExperimentRepoFake) ValidatePrerequisites(context.Context, string, domain.ResourceRef,
+	domain.ResourceRef, string) error {
+	return nil
+}
 func (*evaluationExperimentRepoFake) Create(context.Context, string, domain.Experiment, domain.Deployment) error {
 	return nil
 }

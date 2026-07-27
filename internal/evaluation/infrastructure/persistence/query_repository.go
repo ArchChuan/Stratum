@@ -80,7 +80,8 @@ func (r *PgCenterQueryRepository) ListResources(ctx context.Context, tenantID st
 	err = r.tenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `WITH latest AS (
 			SELECT DISTINCT ON (rr.resource_kind,rr.resource_id) rr.id,rr.resource_kind,rr.resource_id,rr.status,
-				rr.safe_summary,rr.created_at,d.stable_revision_id,
+				rr.safe_summary,rr.created_at,
+				COALESCE(d.stable_revision_id,CASE WHEN rr.status='published' THEN rr.id ELSE '' END) stable_revision_id,
 				(SELECT er.status FROM eval_runs er WHERE er.resource_kind=rr.resource_kind AND er.resource_id=rr.resource_id ORDER BY er.created_at DESC,er.id DESC LIMIT 1) latest_run_status
 			FROM resource_revisions rr LEFT JOIN evaluation_deployments d USING(resource_kind,resource_id)
 			WHERE ($1='' OR rr.resource_kind=$1) AND ($2='' OR rr.resource_id=$2)

@@ -337,12 +337,17 @@ CREATE TABLE IF NOT EXISTS evaluation_experiments (
     safety_stopped        BOOL NOT NULL DEFAULT false,
     created_by            TEXT NOT NULL DEFAULT '',
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    stage_started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at          TIMESTAMPTZ
 );
 ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS state_version BIGINT NOT NULL DEFAULT 1;
 ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS recommendation TEXT NOT NULL DEFAULT 'hold';
 ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS safety_stopped BOOL NOT NULL DEFAULT false;
+ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS stage_started_at TIMESTAMPTZ;
+UPDATE evaluation_experiments SET stage_started_at=updated_at WHERE stage_started_at IS NULL;
+ALTER TABLE evaluation_experiments ALTER COLUMN stage_started_at SET DEFAULT NOW();
+ALTER TABLE evaluation_experiments ALTER COLUMN stage_started_at SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_evaluation_experiments_resource
     ON evaluation_experiments(resource_kind, resource_id, created_at DESC);
 
@@ -382,6 +387,8 @@ CREATE TABLE IF NOT EXISTS evaluation_feedback (
     resource_kind   TEXT NOT NULL,
     resource_id     TEXT NOT NULL,
     revision_id     TEXT NOT NULL,
+    experiment_id   TEXT,
+    variant         TEXT,
     score           DOUBLE PRECISION,
     outcome         JSONB NOT NULL DEFAULT '{}',
     idempotency_key TEXT NOT NULL,
@@ -389,6 +396,8 @@ CREATE TABLE IF NOT EXISTS evaluation_feedback (
     UNIQUE (idempotency_key),
     UNIQUE (trace_id, resource_id)
 );
+ALTER TABLE evaluation_feedback ADD COLUMN IF NOT EXISTS experiment_id TEXT;
+ALTER TABLE evaluation_feedback ADD COLUMN IF NOT EXISTS variant TEXT;
 CREATE INDEX IF NOT EXISTS idx_evaluation_feedback_resource
     ON evaluation_feedback(resource_kind, resource_id, revision_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_evaluation_feedback_trace_resource
@@ -574,6 +583,8 @@ CREATE TABLE IF NOT EXISTS agent_tool_approvals (
         CHECK (risk_level IN ('destructive', 'unclassified')),
     arguments_digest  TEXT        NOT NULL DEFAULT '',
     skill_revisions_digest TEXT    NOT NULL DEFAULT '',
+    mcp_revisions_digest TEXT      NOT NULL DEFAULT '',
+    knowledge_revisions_digest TEXT NOT NULL DEFAULT '',
     policy_version    TEXT        NOT NULL DEFAULT '',
     encrypted_payload TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
@@ -589,6 +600,8 @@ CREATE TABLE IF NOT EXISTS agent_tool_approvals (
 ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS decision_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS arguments_digest TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS skill_revisions_digest TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS mcp_revisions_digest TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS knowledge_revisions_digest TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS policy_version TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_tool_approvals DROP CONSTRAINT IF EXISTS agent_tool_approvals_status_check;
 ALTER TABLE agent_tool_approvals ADD CONSTRAINT agent_tool_approvals_status_check

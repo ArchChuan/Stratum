@@ -231,6 +231,36 @@ func TestMCPEvaluationAdapterRejectsCrossTenantRuntimeReference(t *testing.T) {
 	}
 }
 
+func TestExperimentMCPRevisionResolverAppliesCandidateRuntimeParameters(t *testing.T) {
+	ref := pkgobjectstore.Reference{URI: "object://runtime/tenant-1", SHA256: "hash"}
+	snapshot := mcpRevisionSnapshot{
+		ServerID: "server-1", Name: "orders", RuntimeRef: ref,
+		EnabledTools: []string{"lookup"}, TimeoutMS: 2500, MaxRetries: 3, ToolSchemaHash: "hash",
+	}
+	store := &fakeMCPRuntimeStore{values: map[string]any{
+		ref.URI: mcpRuntimeConfigEnvelope{TenantID: "tenant-1", Config: &mcpdomain.ServerConfig{
+			ID: "server-1", Timeout: time.Second, Retry: &mcpdomain.RetryConfig{Enabled: false},
+		}},
+	}}
+	resolver := experimentMCPRevisionResolver{adapter: mcpEvaluationAdapter{
+		revisions: publishedMCPRevisions(t, snapshot), runtimeStore: store,
+	}}
+
+	runtimeRevision, err := resolver.LoadMCPRuntimeRevision(
+		context.Background(), "tenant-1", "server-1", "published-1",
+	)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimeRevision.Timeout != 2500*time.Millisecond || runtimeRevision.Config.Timeout != 2500*time.Millisecond ||
+		runtimeRevision.MaxRetries != 3 || !runtimeRevision.Config.Retry.Enabled ||
+		runtimeRevision.Config.Retry.MaxRetries != 3 || len(runtimeRevision.EnabledTools) != 1 ||
+		runtimeRevision.EnabledTools[0] != "lookup" {
+		t.Fatalf("unexpected runtime revision: %+v", runtimeRevision)
+	}
+}
+
 func TestMCPEvaluationAdapterSummariesPassRealRevisionValidation(t *testing.T) {
 	revisions := evalapp.NewRevisionService(&validatingRevisionStore{}, &validatingRevisionRepo{})
 	runtime := &fakeMCPRuntime{config: &mcpdomain.ServerConfig{
@@ -392,6 +422,21 @@ func publishedMCPRevisions(t *testing.T, snapshot mcpRevisionSnapshot) *fakeMCPR
 	}
 	return &fakeMCPRevisionService{revision: evaldomain.ResourceRevision{ID: "published-1", ResourceKind: evaldomain.ResourceKindMCP,
 		ResourceID: "server-1", Status: evaldomain.RevisionStatusPublished}, payload: payload, found: true}
+}
+
+func TestMCPEvaluationAdapterResolvesOptimizationCandidateForOfflineEvaluation(t *testing.T) {
+	revisions := publishedMCPRevisions(t, mcpRevisionSnapshot{
+		ServerID: "server-1", TimeoutMS: 1000, MaxRetries: 1,
+		RuntimeRef: pkgobjectstore.Reference{URI: "object://runtime", SHA256: "hash"},
+	})
+	revisions.revision.Status = evaldomain.RevisionStatusDraft
+	revisions.revision.Source = evaldomain.RevisionSourceOptimization
+	resolved, err := (mcpEvaluationAdapter{revisions: revisions}).ResolveRevision(
+		context.Background(), "tenant-1", mcpRef("published-1"),
+	)
+	if err != nil || !resolved.CanEvaluateOffline() {
+		t.Fatalf("candidate resolution=%+v err=%v", resolved, err)
+	}
 }
 func mcpRef(revisionID string) evaldomain.ResourceRef {
 	return evaldomain.ResourceRef{Kind: evaldomain.ResourceKindMCP, ResourceID: "server-1", RevisionID: revisionID}

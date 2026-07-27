@@ -28,15 +28,23 @@ type Manifest = {
   ids: { memberDenied: string; duplicate: string };
   liveEvidence: {
     mcp: { serverId: string; revisionId: string; suiteRevisionId: string; jobId: string; runId: string;
-      toolCalls: number; encryptedPayloadVerified: boolean };
+      toolCalls: number; encryptedPayloadVerified: boolean; candidateRevisionId: string; candidateRunId: string;
+      experimentId: string; onlineTraceId: string; onlineVariant: string; preparationFailureTraceId: string;
+      preparationFailureRecorded: boolean; preparationFailureRecovered: boolean };
     agent: { resourceId: string; revisionId: string; suiteRevisionId: string; jobId: string; runId: string;
       traceId: string; tokens: number; toolTraces: number; traceEvents: number; failureJobId: string;
-      failureRunId: string; failureError: string; recoveryJobId: string; recoveryRunId: string };
+      failureRunId: string; failureError: string; recoveryJobId: string; recoveryRunId: string;
+      candidateRevisionId: string; candidateRunId: string; experimentId: string; onlineTraceId: string;
+      onlineVariant: string; feedbackWindowAdvanced: boolean; advancedStage: number };
     skill: { resourceId: string; revisionId: string; suiteRevisionId: string; jobId: string; runId: string;
       traceId: string; tokens: number; llmRequests: number };
-    knowledge: { resourceId: string; workspaceId: string; revisionId: string; documentId: string;
-      chunkIndex: number; jobId: string; runId: string; failureJobId: string; failureRunId: string;
-      failureError: string; recoveryJobId: string; recoveryRunId: string };
+    knowledge: { resourceId: string; workspaceId: string; revisionId: string; suiteRevisionId: string;
+      documentId: string; chunkIndex: number; jobId: string; runId: string; failureJobId: string; failureRunId: string;
+      failureError: string; recoveryJobId: string; recoveryRunId: string; candidateRevisionId: string;
+      candidateRunId: string; experimentId: string; onlineTraceId: string; onlineVariant: string;
+      runtimeOutageRejected: boolean; runtimeOutageRecovered: boolean; clientSecurityClaimIgnored: boolean;
+      documentDriftRejected: boolean;
+      crossTenantIsolated: boolean };
   };
 };
 

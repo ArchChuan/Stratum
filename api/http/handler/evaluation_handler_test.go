@@ -201,29 +201,6 @@ func TestEvaluationHandlerExperimentCommandValidationUsesFrozenEnvelope(t *testi
 	}
 }
 
-func TestEvaluationHandlerEvaluateExperimentLegacyBodyUsesStableIdempotencyKey(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	experiments := &fakeExperimentCommands{}
-	h := NewEvaluationHandler(nil, nil, nil, nil, experiments, nil, nil, nil, zap.NewNop())
-	r := gin.New()
-	r.Use(middleware.ErrorHandler(zap.NewNop()))
-	r.POST("/evaluations/experiments/:id/evaluate", withTenant("tenant-1"), h.EvaluateExperiment)
-	body := `{"samples":10,"quality_improvement":0.2}`
-	for range 2 {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/evaluations/experiments/experiment-1/evaluate", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		r.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("legacy request status=%d body=%s", rec.Code, rec.Body.String())
-		}
-	}
-	if len(experiments.evaluateKeys) != 2 || experiments.evaluateKeys[0] == "" ||
-		experiments.evaluateKeys[0] != experiments.evaluateKeys[1] {
-		t.Fatalf("unstable legacy idempotency keys: %v", experiments.evaluateKeys)
-	}
-}
-
 func TestEvaluationHandlerListSuitesPropagatesResourceID(t *testing.T) {
 	queries := &fakeEvaluationQueries{}
 	h := NewEvaluationHandler(nil, nil, nil, nil, nil, nil, queries, nil, zap.NewNop())

@@ -23,6 +23,67 @@ func NewPgExperimentRepository(pool *pgxpool.Pool) *PgExperimentRepository {
 	return &PgExperimentRepository{pool: pool}
 }
 
+func (r *PgExperimentRepository) ValidatePrerequisites(
+	ctx context.Context,
+	tenantID string,
+	stable, canary domain.ResourceRef,
+	suiteRevisionID string,
+) error {
+	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT
+			CASE WHEN $2 = 'skill' THEN EXISTS (
+				SELECT 1 FROM skill_revisions WHERE id=$1 AND skill_id=$3 AND status='published'
+			) ELSE EXISTS (
+				SELECT 1 FROM resource_revisions
+				WHERE id=$1 AND resource_kind=$2 AND resource_id=$3 AND status='published'
+			) END`, stable.RevisionID, string(stable.Kind), stable.ResourceID).Scan(&exists); err != nil {
+			return fmt.Errorf("experiment repository: validate stable revision: %w", err)
+		}
+		if !exists {
+			return domain.ErrExperimentStableNotPublished
+		}
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM optimization_candidates c
+			WHERE c.revision_id=$1 AND c.status='proposed' AND (
+				($2 = 'skill' AND EXISTS (
+					SELECT 1 FROM skill_revisions s
+					WHERE s.id=c.revision_id AND s.skill_id=$3 AND s.status='candidate'
+				)) OR ($2 <> 'skill' AND EXISTS (
+					SELECT 1 FROM resource_revisions r
+					WHERE r.id=c.revision_id AND r.resource_kind=$2 AND r.resource_id=$3
+					  AND r.source='optimization' AND r.status='draft'
+				))
+			)
+		)`, canary.RevisionID, string(canary.Kind), canary.ResourceID).Scan(&exists); err != nil {
+			return fmt.Errorf("experiment repository: validate canary revision: %w", err)
+		}
+		if !exists {
+			return domain.ErrExperimentInvalidCandidate
+		}
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM eval_suite_revisions
+			WHERE id=$1 AND status='published' AND resource_kind=$2
+		)`, suiteRevisionID, string(canary.Kind)).Scan(&exists); err != nil {
+			return fmt.Errorf("experiment repository: validate suite revision: %w", err)
+		}
+		if !exists {
+			return domain.ErrExperimentSuiteNotPublished
+		}
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM eval_runs
+			WHERE resource_kind=$1 AND resource_id=$2 AND revision_id=$3
+			  AND suite_revision_id=$4 AND status='succeeded' AND passed=true
+		)`, string(canary.Kind), canary.ResourceID, canary.RevisionID, suiteRevisionID).Scan(&exists); err != nil {
+			return fmt.Errorf("experiment repository: validate offline run: %w", err)
+		}
+		if !exists {
+			return domain.ErrExperimentOfflineRunRequired
+		}
+		return nil
+	})
+}
+
 func (r *PgExperimentRepository) Create(
 	ctx context.Context,
 	tenantID string,
@@ -153,7 +214,9 @@ func (r *PgExperimentRepository) SaveDecision(
 		result, err := tx.Exec(ctx,
 			`UPDATE evaluation_experiments
 			 SET status=$2, stage_percent=$3, decision_snapshot=$4, recommendation=$5,
-			     safety_stopped=$6, state_version=$7, updated_at=NOW()
+			     safety_stopped=$6, state_version=$7,
+			     stage_started_at=CASE WHEN stage_percent<>$3 THEN NOW() ELSE stage_started_at END,
+			     updated_at=NOW()
 			 WHERE id=$1 AND state_version=$8`, experiment.ID, string(experiment.Status), experiment.Stage,
 			string(snapshotJSON), string(decision), experiment.SafetyStopped, experiment.StateVersion,
 			experiment.StateVersion-1)

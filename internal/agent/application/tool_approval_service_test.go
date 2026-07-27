@@ -64,6 +64,8 @@ func TestToolApprovalServiceEncryptsPayloadAndCreatesSafeCheckpoint(t *testing.T
 	require.NotEmpty(t, repo.row.DecisionID)
 	require.Contains(t, repo.row.ArgumentsDigest, "tool-arguments:v1:sha256:")
 	require.Contains(t, repo.row.SkillRevisionsDigest, "skill-revisions:v1:sha256:")
+	require.Contains(t, repo.row.MCPRevisionsDigest, "mcp-revisions:v1:sha256:")
+	require.Contains(t, repo.row.KnowledgeRevisionsDigest, "knowledge-revisions:v1:sha256:")
 }
 
 func TestToolApprovalServiceRejectsTamperedBinding(t *testing.T) {
@@ -74,6 +76,10 @@ func TestToolApprovalServiceRejectsTamperedBinding(t *testing.T) {
 		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", AgentID: "agent-1", UserID: "user-1",
 		ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
 		Arguments: map[string]any{"order_id": "order-1"}, PinnedSkillRevisions: map[string]string{"skill-1": "revision-1"},
+		PinnedMCPRevisions: map[string]string{"orders": "mcp-revision-1"},
+		PinnedKnowledgeRevisions: map[string]port.KnowledgeRevisionPin{
+			"support": {RevisionID: "knowledge-revision-1", ExperimentID: "experiment-1", Variant: "canary"},
+		},
 		PolicyVersion: "policy-1",
 	}
 	if _, err := svc.Request(context.Background(), payload); err != nil {
@@ -96,6 +102,8 @@ func TestToolApprovalServiceRejectsTamperedBinding(t *testing.T) {
 		{name: "tool", mutate: func(row *domain.ToolApproval) { row.ToolName = "other" }},
 		{name: "arguments", mutate: func(row *domain.ToolApproval) { row.ArgumentsDigest = "other" }},
 		{name: "skill revisions", mutate: func(row *domain.ToolApproval) { row.SkillRevisionsDigest = "other" }},
+		{name: "MCP revisions", mutate: func(row *domain.ToolApproval) { row.MCPRevisionsDigest = "other" }},
+		{name: "Knowledge revisions", mutate: func(row *domain.ToolApproval) { row.KnowledgeRevisionsDigest = "other" }},
 		{name: "policy", mutate: func(row *domain.ToolApproval) { row.PolicyVersion = "other" }},
 	}
 
@@ -149,6 +157,49 @@ func TestToolApprovalServiceReportsUnknownOutcomeDistinctly(t *testing.T) {
 
 type failingMCPExecutor struct {
 	err error
+}
+
+type revisionCapturingMCPExecutor struct {
+	revisionID string
+	risk       port.ToolRiskLevel
+}
+
+func (e *revisionCapturingMCPExecutor) ExecuteMCPTool(
+	context.Context, string, string, map[string]any,
+) (port.MCPToolResult, error) {
+	return port.MCPToolResult{}, errors.New("mutable MCP execution must not be used")
+}
+
+func (e *revisionCapturingMCPExecutor) ExecuteMCPToolRevision(
+	_ context.Context, _, _, revisionID string, risk port.ToolRiskLevel, _ map[string]any,
+) (port.MCPToolResult, error) {
+	e.revisionID = revisionID
+	e.risk = risk
+	return port.MCPToolResult{StructuredContent: map[string]any{"ok": true}}, nil
+}
+
+func TestToolApprovalExecutionUsesPinnedMCPRevision(t *testing.T) {
+	repo := &approvalRepoFake{}
+	svc := NewToolApprovalService(repo, nil, crypto.DeriveAESKey("test-key"))
+	payload := ToolApprovalPayload{
+		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", AgentID: "agent-1", UserID: "user-1",
+		ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
+		Arguments: map[string]any{"id": "order-1"}, PinnedMCPRevisions: map[string]string{"orders": "mcp-revision-1"},
+	}
+	_, err := svc.Request(context.Background(), payload)
+	require.NoError(t, err)
+	repo.row.ID = "approval-1"
+	repo.row.Status = "approved"
+	repo.row.ExpiresAt = time.Now().Add(time.Minute)
+	executor := &revisionCapturingMCPExecutor{}
+
+	_, err = svc.ExecuteApproved(
+		context.Background(), "tenant-1", "approval-1", "orders", "delete", payload.Arguments, executor,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, "mcp-revision-1", executor.revisionID)
+	require.Equal(t, port.ToolRiskDestructive, executor.risk)
 }
 
 func (e failingMCPExecutor) ExecuteMCPTool(context.Context, string, string, map[string]any) (port.MCPToolResult, error) {
