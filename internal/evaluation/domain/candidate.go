@@ -6,10 +6,13 @@ import (
 	"sort"
 )
 
-const maxGeneratedCandidates = 64
+const MaxGeneratedCandidates = 64
 
 var allowedParameterFields = map[string]struct{}{
-	"model": {}, "temperature": {}, "maxTokens": {},
+	"model": {}, "temperature": {}, "maxTokens": {}, "max_tokens": {},
+	"max_context_tokens": {}, "max_iterations": {}, "bindings": {},
+	"enabled_tools": {}, "timeout_ms": {}, "max_retries": {},
+	"top_k": {}, "score_threshold": {}, "reranking": {}, "query_rewrite": {},
 }
 
 var allowedPromptFields = map[string]struct{}{
@@ -34,8 +37,8 @@ func GenerateParameterPatches(searchSpace map[string][]any) ([]map[string]any, e
 	patches := []map[string]any{{}}
 	for _, key := range keys {
 		values := searchSpace[key]
-		if len(patches)*len(values) > maxGeneratedCandidates {
-			return nil, fmt.Errorf("parameter search exceeds %d candidates", maxGeneratedCandidates)
+		if len(patches)*len(values) > MaxGeneratedCandidates {
+			return nil, fmt.Errorf("parameter search exceeds %d candidates", MaxGeneratedCandidates)
 		}
 		next := make([]map[string]any, 0, len(patches)*len(values))
 		for _, patch := range patches {

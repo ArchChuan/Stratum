@@ -37,6 +37,29 @@ func TestOptimizationServiceCreatesOnlyInstructionCandidates(t *testing.T) {
 	}
 }
 
+func TestOptimizationServiceCreatesParameterCandidatesFromSearchSpace(t *testing.T) {
+	creator := &fakeCandidateCreator{}
+	svc := NewOptimizationService(creator, nil, &fakeOptimizationRepo{})
+
+	_, candidates, err := svc.Generate(context.Background(), "tenant-1", GenerateCandidatesInput{
+		IdempotencyKey:  "mcp-search-1",
+		Baseline:        domain.ResourceRef{Kind: domain.ResourceKindMCP, ResourceID: "mcp-1", RevisionID: "baseline-1"},
+		SuiteRevisionID: "suite-1",
+		SearchSpace:     map[string][]any{"timeout_ms": {1000.0, 2000.0}, "max_retries": {1.0}},
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	if len(candidates) != 2 || len(creator.patches) != 2 {
+		t.Fatalf("candidates=%d patches=%+v", len(candidates), creator.patches)
+	}
+	for _, patch := range creator.patches {
+		if patch.Source != "parameter_search" || len(patch.ParameterPatch) != 2 || len(patch.PromptPatch) != 0 {
+			t.Fatalf("unexpected parameter patch: %+v", patch)
+		}
+	}
+}
+
 func TestOptimizationServiceReplaysSameKeyAndPayloadWithoutCreatingCandidate(t *testing.T) {
 	existingJob := domain.OptimizationJob{ID: "existing-job"}
 	existingCandidates := []domain.OptimizationCandidate{{ID: "existing-candidate"}}
@@ -111,6 +134,7 @@ func optimizationInput(key string) GenerateCandidatesInput {
 type fakeCandidateCreator struct {
 	calls     int
 	persisted int
+	patches   []domain.CandidatePatch
 }
 
 func (f *fakeCandidateCreator) LoadOptimizableSnapshot(
@@ -124,6 +148,7 @@ func (f *fakeCandidateCreator) CreateCandidate(
 ) (domain.ResourceRef, error) {
 	f.calls++
 	f.persisted++
+	f.patches = append(f.patches, patch)
 	return domain.ResourceRef{Kind: baseline.Kind, ResourceID: baseline.ResourceID, RevisionID: "candidate-" + patch.Source + "-" + string(rune(f.calls+'0'))}, nil
 }
 
