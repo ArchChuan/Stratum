@@ -44,7 +44,8 @@ frontend:
 config:
   port: "8080"
   logLevel: "info"
-  environment: "demo"
+  environment: "production"
+  ginMode: "release"
   natsUrl: "nats://stratum-nats:4222"
   milvusHost: "stratum-milvus"
   milvusPort: "19530"

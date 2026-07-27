@@ -386,10 +386,12 @@ jobs:
           kubectl port-forward service/stratum-frontend 18080:80 -n stratum \
             >/tmp/stratum-frontend-port-forward.log 2>&1 &
           port_forward_pid=$!
+          public_health_body=$(mktemp)
           cleanup_port_forward() {
             if kill "$port_forward_pid" >/dev/null 2>&1; then
               wait "$port_forward_pid" >/dev/null 2>&1 || :
             fi
+            /usr/bin/rm -f -- "$public_health_body"
           }
           trap cleanup_port_forward EXIT
 
@@ -412,12 +414,16 @@ jobs:
           fi
           echo "internal frontend health status=200"
 
-          if ! public_status=$(curl --silent --output /dev/null --max-time 15 \
+          if ! public_status=$(curl --silent --output "$public_health_body" --max-time 15 \
             --write-out '%{http_code}' "$PUBLIC_BASE_URL/api/health"); then
             echo "public health request failed before receiving an HTTP response" >&2
             exit 1
           fi
           echo "public health status=$public_status"
           if [[ "$public_status" != "200" ]]; then
+            exit 1
+          fi
+          if ! jq -e '.status == "ok" and .service == "Stratum"' "$public_health_body" >/dev/null; then
+            echo "public health response did not match the backend contract" >&2
             exit 1
           fi

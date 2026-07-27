@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKFLOW="${ROOT}/.github/workflows/deploy.yml"
 CI_WORKFLOW="${ROOT}/.github/workflows/ci.yml"
 HELM_DEPLOYMENT="${ROOT}/helm/templates/deployment.yaml"
+HELM_CONFIGMAP="${ROOT}/helm/templates/configmap.yaml"
 PROD_VALUES="${ROOT}/helm/values-prod.yaml"
 DEMO_VALUES="${ROOT}/helm/values-demo.yaml"
 DEMO_LOCAL_VALUES="${ROOT}/helm/values-demo-local.yaml"
@@ -107,6 +108,8 @@ fi
 require_file "${DEMO_VALUES}" 'frontendUrl:[[:space:]]*"https://' 'HTTPS demo frontend URL'
 require_file "${DEMO_VALUES}" 'githubCallbackUrl:[[:space:]]*"https://' 'HTTPS demo OAuth callback URL'
 require_file "${DEMO_VALUES}" 'secureCookies:[[:space:]]*"true"' 'HTTPS demo secure cookies'
+require_file "${DEMO_VALUES}" 'environment:[[:space:]]*"production"' 'remote demo production app environment'
+require_file "${DEMO_VALUES}" 'ginMode:[[:space:]]*"release"' 'remote demo Gin release mode'
 require_file "${DEMO_VALUES}" 'router\.entrypoints:[[:space:]]*"websecure"' 'HTTPS demo secure entrypoint'
 require_file "${DEMO_VALUES}" '^[[:space:]]+tls:' 'HTTPS demo TLS configuration'
 
@@ -114,6 +117,8 @@ require_file "${DEMO_LOCAL_VALUES}" 'frontendUrl:[[:space:]]*"http://localhost([
     'localhost-only demo frontend URL'
 require_file "${DEMO_LOCAL_VALUES}" 'githubCallbackUrl:[[:space:]]*"http://localhost([:/"]|$)' \
     'localhost-only demo OAuth callback URL'
+require_file "${DEMO_LOCAL_VALUES}" 'environment:[[:space:]]*"demo"' 'local demo app environment'
+require_file "${DEMO_LOCAL_VALUES}" 'ginMode:[[:space:]]*"debug"' 'local demo Gin debug mode'
 reject_file "${DEMO_LOCAL_VALUES}" 'http://([0-9]{1,3}\.){3}[0-9]{1,3}' \
     'local demo contains a remote IP URL'
 
@@ -125,6 +130,10 @@ require_file "${REMOTE_HTTP_VALUES}" 'host:[[:space:]]*""' 'remote HTTP profile 
 require_file "${REMOTE_HTTP_VALUES}" 'tls:[[:space:]]*\[\]' 'remote HTTP profile disables TLS'
 reject_file "${REMOTE_HTTP_VALUES}" 'frontendUrl:|githubCallbackUrl:|http://([0-9]{1,3}\.){3}[0-9]{1,3}' \
     'remote HTTP profile hard-codes its public address'
+
+require_file "${HELM_CONFIGMAP}" 'GIN_MODE:.*config\.ginMode' 'Gin mode ConfigMap entry'
+require_file "${HELM_DEPLOYMENT}" 'name:[[:space:]]*APP_ENV' 'application environment injection'
+require_file "${HELM_DEPLOYMENT}" 'name:[[:space:]]*GIN_MODE' 'Gin mode injection'
 
 require 'validate-remote-http-base-url\.sh[[:space:]]+"\$PUBLIC_BASE_URL"' \
     'PUBLIC_BASE_URL validation before deployment'
@@ -147,6 +156,8 @@ require 'kubectl get deployment traefik -n kube-system -o json' 'Traefik entrypo
 require 'svccontroller\.k3s\.cattle\.io/svcname=traefik' 'Traefik ServiceLB diagnostics'
 require 'kubectl port-forward service/stratum-frontend 18080:80' 'internal frontend verification tunnel'
 require 'http://127\.0\.0\.1:18080/api/health' 'internal frontend health verification'
+require '\.status == "ok" and \.service == "Stratum"' \
+    'public backend health response contract verification'
 require_file "${POSTGRES_DOCKERFILE}" 'curl .*--connect-timeout[[:space:]]+[0-9]+' \
     'SCWS download connection timeout'
 require_file "${POSTGRES_DOCKERFILE}" 'curl .*--max-time[[:space:]]+[0-9]+' 'SCWS download total timeout'
@@ -194,6 +205,8 @@ if [[ ! -f "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" ]]; then
     exit 1
 fi
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" '/api/health' 'remote public health check'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'public_health_contract' \
+    'remote public health response contract'
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'GUEST_ATTEMPTS=5' 'five bounded guest login attempts'
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" '/api/agents/stratum-platform-assistant' \
     'managed Agent member read check'

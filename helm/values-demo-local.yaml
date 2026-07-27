@@ -42,6 +42,7 @@ config:
   port: "8080"
   logLevel: "info"
   environment: "demo"
+  ginMode: "debug"
   natsUrl: "nats://stratum-nats:4222"
   milvusHost: "stratum-milvus"
   milvusPort: "19530"
