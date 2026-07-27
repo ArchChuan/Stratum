@@ -267,6 +267,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			},
 			metrics,
 		)
+		a.Service.SetResourceChangeProposalService(a.ProposalService)
 	}
 
 	c.Agent = a

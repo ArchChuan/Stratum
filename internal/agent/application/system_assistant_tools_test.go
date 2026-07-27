@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
@@ -48,6 +49,48 @@ func TestSystemAssistantToolDefinitionsAreFixedAndClosed(t *testing.T) {
 				t.Fatalf("%s schema contains forbidden field %q: %s", tool.Name, forbidden, raw)
 			}
 		}
+	}
+}
+
+func TestProposalToolIsExposedOnlyToAdminRolesAndHasNoIdentityFields(t *testing.T) {
+	for _, role := range []string{"member", "unknown"} {
+		tools := SystemAssistantToolDefinitionsForRole(role)
+		if len(tools) != 2 {
+			t.Fatalf("role %s tools = %#v", role, tools)
+		}
+	}
+	for _, role := range []string{"admin", "owner"} {
+		tools := SystemAssistantToolDefinitionsForRole(role)
+		if len(tools) != 3 || tools[2].Name != ToolProposeResourceChange {
+			t.Fatalf("role %s tools = %#v", role, tools)
+		}
+		raw, _ := json.Marshal(tools[2].InputSchema)
+		for _, forbidden := range []string{"tenantId", "actorId", "userId", "status", "confirmerId"} {
+			if containsFold(string(raw), forbidden) {
+				t.Fatalf("proposal schema contains identity field %q: %s", forbidden, raw)
+			}
+		}
+	}
+	_, _, _, _, err := parseProposalArguments(map[string]any{
+		"resourceKind": "agent", "operation": "create", "payload": map[string]any{"name": "agent"},
+		"tenantId": "other",
+	})
+	if !errors.Is(err, ErrInvalidSystemAssistantToolArguments) {
+		t.Fatalf("forged tenant error = %v", err)
+	}
+}
+
+func TestProposalArtifactUsesTypedExecutionChannel(t *testing.T) {
+	expires := time.Now().UTC().Add(time.Hour)
+	artifacts := buildExecutionArtifacts([]domain.SystemAssistantToolArtifact{{
+		Tool: ToolProposeResourceChange,
+		Proposal: &domain.ResourceChangeProposalArtifact{
+			ID: "proposal-1", ResourceKind: domain.ResourceAgent, Operation: domain.OperationCreate,
+			Status: domain.StatusReadyForReview, Summary: "create agent", ExpiresAt: expires,
+		},
+	}}, domain.CurrentSystemAssistantProfileVersion)
+	if len(artifacts) != 1 || artifacts[0].Type != "resource_change_proposal" || artifacts[0].ResourceChangeProposal == nil {
+		t.Fatalf("artifacts = %#v", artifacts)
 	}
 }
 

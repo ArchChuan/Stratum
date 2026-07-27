@@ -66,6 +66,7 @@ type ExecutionConfig struct {
 	EvolutionTrace            EvolutionTraceMetadata
 	OfficialDocsSearchFn      func(context.Context, string) ([]domain.Citation, error)
 	DiagnosticFn              func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
+	ProposalCreateFn          func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
 	SystemAssistantMode       bool
 	SystemAssistantRoleClass  string
 	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)
@@ -346,6 +347,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			ToolExecutionFn:            cfg.ToolExecutionFn,
 			OfficialDocsSearchFn:       cfg.OfficialDocsSearchFn,
 			DiagnosticFn:               cfg.DiagnosticFn,
+			ProposalCreateFn:           cfg.ProposalCreateFn,
 			GovernedAssistant:          cfg.SystemAssistantMode,
 			InternalToolResultGuardFn:  cfg.InternalToolResultGuardFn,
 			ExecutionID:                cfg.ExecutionID,
@@ -912,6 +914,10 @@ func WithDiagnosticFn(fn func(context.Context, []domain.DiagnosticArea) (domain.
 	return func(cfg *ExecutionConfig) { cfg.DiagnosticFn = fn }
 }
 
+func withProposalCreateFn(fn func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)) ExecutionOption {
+	return func(cfg *ExecutionConfig) { cfg.ProposalCreateFn = fn }
+}
+
 func WithSystemAssistantMode() ExecutionOption {
 	return func(cfg *ExecutionConfig) { cfg.SystemAssistantMode = true }
 }
@@ -1099,7 +1105,12 @@ func buildExecutionArtifacts(toolArtifacts []domain.SystemAssistantToolArtifact,
 	citations := make([]domain.Citation, 0)
 	seenCitations := make(map[string]struct{})
 	hasReport := false
+	out := make([]domain.ExecutionArtifact, 0, 3)
 	for _, artifact := range toolArtifacts {
+		if artifact.Proposal != nil {
+			proposal := *artifact.Proposal
+			out = append(out, domain.ExecutionArtifact{Type: "resource_change_proposal", ProfileVersion: profileVersion, ResourceChangeProposal: &proposal})
+		}
 		if artifact.Tool == "stratum_search_official_docs" {
 			for _, citation := range domain.BoundCitations(artifact.Citations) {
 				key := citation.DocumentID + "\x00" + citation.Section + "\x00" + citation.URL
@@ -1119,7 +1130,6 @@ func buildExecutionArtifacts(toolArtifacts []domain.SystemAssistantToolArtifact,
 			hasReport = true
 		}
 	}
-	out := make([]domain.ExecutionArtifact, 0, 2)
 	if len(citations) > 0 {
 		out = append(out, domain.ExecutionArtifact{Type: "citations", ProfileVersion: profileVersion, Citations: citations})
 	}
