@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stratum.local/schemas/e2e-attestation-v1.json",
+  "title": "Stratum system E2E attestation",
+  "type": "object",
+  "required": ["schema_version", "source_digest", "manifest_digest", "tested_git_parent", "browser", "mode", "seed", "started_at", "duration_seconds", "host_class", "packs", "capabilities", "action_count", "sequence_digest", "evidence", "artifacts", "cleanup", "unverified_capabilities", "risk_classification", "status", "expires_at"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "source_digest": {"$ref": "#/$defs/digest"},
+    "manifest_digest": {"$ref": "#/$defs/digest"},
+    "tested_git_parent": {"type": "string", "minLength": 1},
+    "browser": {"type": "object", "additionalProperties": false, "required": ["name", "version"], "properties": {"name": {"const": "chromium"}, "version": {"type": "string", "minLength": 1}}},
+    "mode": {"enum": ["short", "soak"]},
+    "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "started_at": {"type": "string", "format": "date-time"},
+    "duration_seconds": {"type": "integer", "minimum": 1},
+    "host_class": {"type": "string", "minLength": 1},
+    "packs": {"type": "array", "items": {"$ref": "#/$defs/result"}},
+    "capabilities": {"type": "array", "items": {"$ref": "#/$defs/result"}},
+    "action_count": {"type": "integer", "minimum": 1},
+    "sequence_digest": {"$ref": "#/$defs/digest"},
+    "evidence": {"type": "object", "additionalProperties": false, "required": ["ui", "http", "database", "reconciled"], "properties": {"ui": {"type": "integer", "minimum": 1}, "http": {"type": "integer", "minimum": 1}, "database": {"type": "integer", "minimum": 1}, "reconciled": {"type": "integer", "minimum": 1}}},
+    "artifacts": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["kind", "path", "sha256"], "properties": {"kind": {"type": "string", "minLength": 1}, "path": {"type": "string", "minLength": 1}, "sha256": {"$ref": "#/$defs/digest"}}}},
+    "cleanup": {"type": "object", "additionalProperties": false, "required": ["passed", "residual_entity_ids"], "properties": {"passed": {"type": "boolean"}, "residual_entity_ids": {"type": "array", "items": {"type": "string"}}}},
+    "unverified_capabilities": {"type": "array", "items": {"type": "string"}},
+    "risk_classification": {"type": "string", "minLength": 1},
+    "status": {"enum": ["passed", "failed"]},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "signature": {"type": "string"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "result": {"type": "object", "additionalProperties": false, "required": ["id", "status"], "properties": {"id": {"type": "string", "minLength": 1}, "status": {"enum": ["passed", "failed", "skipped"]}}}
+  }
+}
