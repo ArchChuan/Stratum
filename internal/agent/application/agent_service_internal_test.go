@@ -202,6 +202,56 @@ func (multiExperimentActivationResolver) ResolveSkills(
 	return out, nil
 }
 
+type failingExperimentRevisionResolver struct{ err error }
+
+func (f failingExperimentRevisionResolver) ResolveSkillRevision(
+	context.Context, string, string, string,
+) (port.SkillRevisionAssignment, bool, error) {
+	return port.SkillRevisionAssignment{}, false, f.err
+}
+
+type failingSkillActivationResolver struct{ err error }
+
+func (f failingSkillActivationResolver) ResolveSkills(
+	context.Context, string, []port.SkillRevisionRef,
+) (map[string]port.SkillActivation, error) {
+	return nil, f.err
+}
+
+func TestAssembleOptionsFailsClosedWhenExperimentAssignmentFails(t *testing.T) {
+	wantErr := errors.New("experiment store unavailable")
+	svc := NewAgentService(AgentServiceDeps{
+		SkillRevisionResolver: failingExperimentRevisionResolver{err: wantErr},
+	})
+	a := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: "agent-1", MaxIterations: 3, AllowedSkills: []string{"skill-1"},
+	}}
+
+	_, _, err := svc.assembleOptions(
+		context.Background(), a, ExecRequest{}, ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1",
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("assembleOptions() error=%v want %v", err, wantErr)
+	}
+}
+
+func TestAssembleOptionsFailsClosedWhenExperimentRevisionLoadFails(t *testing.T) {
+	wantErr := errors.New("revision store unavailable")
+	svc := NewAgentService(AgentServiceDeps{
+		SkillActivationResolver: failingSkillActivationResolver{err: wantErr},
+	})
+	a := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: "agent-1", MaxIterations: 3, AllowedSkills: []string{"skill-1"},
+	}}
+
+	_, _, err := svc.assembleOptions(
+		context.Background(), a, ExecRequest{}, ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1",
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("assembleOptions() error=%v want %v", err, wantErr)
+	}
+}
+
 func TestAssembleOptionsAttributesEveryExperimentDeterministically(t *testing.T) {
 	svc := NewAgentService(AgentServiceDeps{
 		SkillRevisionResolver:   multiExperimentRevisionResolver{},

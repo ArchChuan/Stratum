@@ -1021,9 +1021,13 @@ func (s *AgentService) assembleOptions(
 		extraTools = SystemAssistantToolDefinitions()
 		skillCatalog = map[string]port.SkillActivation{}
 	} else {
-		extraTools, skillCatalog = s.buildExtraTools(
+		var resolveErr error
+		extraTools, skillCatalog, resolveErr = s.buildExtraToolsChecked(
 			ctx, meta.TenantID, subjectID, a.GetConfig().MCPToolIDs, a.GetConfig().AllowedSkills,
 		)
+		if resolveErr != nil {
+			return ctx, nil, fmt.Errorf("resolve experiment resources: %w", resolveErr)
+		}
 	}
 	evolutionTrace := meta.EvolutionTrace
 	if evolutionTrace.ResourceManifest == nil {
@@ -1214,6 +1218,15 @@ func (s *AgentService) buildExtraTools(
 	tenantID, subjectID string,
 	mcpToolIDs, allowedSkills []string,
 ) ([]port.ToolDefinition, map[string]port.SkillActivation) {
+	tools, catalog, _ := s.buildExtraToolsChecked(ctx, tenantID, subjectID, mcpToolIDs, allowedSkills)
+	return tools, catalog
+}
+
+func (s *AgentService) buildExtraToolsChecked(
+	ctx context.Context,
+	tenantID, subjectID string,
+	mcpToolIDs, allowedSkills []string,
+) ([]port.ToolDefinition, map[string]port.SkillActivation, error) {
 	var tools []port.ToolDefinition
 	refs := make([]port.SkillRevisionRef, 0, len(allowedSkills))
 
@@ -1272,7 +1285,11 @@ func (s *AgentService) buildExtraTools(
 		ref := port.SkillRevisionRef{SkillID: skillID}
 		var assignment port.SkillRevisionAssignment
 		if s.deps.SkillRevisionResolver != nil {
-			if resolved, found, err := s.deps.SkillRevisionResolver.ResolveSkillRevision(ctx, tenantID, skillID, subjectID); err == nil && found {
+			resolved, found, err := s.deps.SkillRevisionResolver.ResolveSkillRevision(ctx, tenantID, skillID, subjectID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("resolve Skill %s experiment assignment: %w", skillID, err)
+			}
+			if found {
 				assignment = resolved
 				ref.RevisionID = resolved.RevisionID
 			}
@@ -1284,9 +1301,11 @@ func (s *AgentService) buildExtraTools(
 	}
 	catalog := make(map[string]port.SkillActivation)
 	if s.deps.SkillActivationResolver != nil && len(refs) > 0 {
-		if resolved, err := s.deps.SkillActivationResolver.ResolveSkills(ctx, tenantID, refs); err == nil {
-			catalog = resolved
+		resolved, err := s.deps.SkillActivationResolver.ResolveSkills(ctx, tenantID, refs)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve Skill experiment revisions: %w", err)
 		}
+		catalog = resolved
 	}
 	for skillID, assignment := range assignments {
 		activation := catalog[skillID]
@@ -1296,7 +1315,7 @@ func (s *AgentService) buildExtraTools(
 		activation.Variant = assignment.Variant
 		catalog[skillID] = activation
 	}
-	return tools, catalog
+	return tools, catalog, nil
 }
 
 func (s *AgentService) ListToolTraces(ctx context.Context, tenantID, traceID string) ([]ToolObservation, error) {
