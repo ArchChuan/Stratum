@@ -59,6 +59,12 @@ export const useEvaluationCenter = (filters: EvaluationCenterFilters = {}) => {
     const requestFilters = filtersRef.current;
     setLoading(true);
     setError('');
+    setOverview(null);
+    setResources(EMPTY_PAGE);
+    setSuites(EMPTY_PAGE);
+    setRuns(EMPTY_PAGE);
+    setCandidates(EMPTY_PAGE);
+    setExperiments(EMPTY_PAGE);
     try {
       const values = await Promise.all([
         evaluationApi.getOverview(), evaluationApi.listResources(requestFilters), evaluationApi.listSuites(requestFilters),
