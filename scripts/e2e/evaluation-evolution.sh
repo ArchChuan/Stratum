@@ -235,28 +235,23 @@ for raw in open(sys.argv[1], encoding='utf-8', errors='replace'):
     print('opik-backend-log:', line[:500], file=sys.stderr)
 PY
 }
-opik_otlp_ready() {
-  local status
-  status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
-    -H 'Content-Type: application/json' \
-    --data '{"resourceSpans":[]}' \
-    "http://127.0.0.1:${E2E_OPIK_BACKEND_PORT}/v1/private/otel/v1/traces" 2>/dev/null || true)
-  [[ "$status" =~ ^2[0-9][0-9]$ ]]
-}
 poll_opik() {
-  local consecutive=0
   for ((attempt=1; attempt<=300; attempt++)); do
-    if curl -fsS --max-time 3 "http://127.0.0.1:${E2E_OPIK_BACKEND_PORT}/health-check" >/dev/null 2>&1 && \
-      opik_otlp_ready; then
-      consecutive=$((consecutive + 1))
-      (( consecutive >= 3 )) && return 0
-    else
-      consecutive=0
+    if curl -fsS --max-time 3 "http://127.0.0.1:${E2E_OPIK_BACKEND_PORT}/health-check" >/dev/null 2>&1; then
+      return 0
     fi
     sleep 1
   done
   opik_readiness_diagnostics
   fail 'timed out waiting for Opik'
+}
+verify_opik_data_plane() {
+  timeout 120 env \
+    TEST_OPIK_E2E=1 \
+    TEST_OTLP_GRPC_ENDPOINT="127.0.0.1:${otel_port}" \
+    TEST_OPIK_URL="$OPIK_URL" \
+    go test -tags=integration ./internal/agent/infrastructure/opik \
+      -run '^TestRealOpikCollectorEvidenceParity$' -count=1
 }
 wait_container_success() {
   local service=$1 cid status exit_code
@@ -469,6 +464,7 @@ export OPIK_URL=${E2E_OPIK_URL:-http://127.0.0.1:${E2E_OPIK_BACKEND_PORT}}
 export OPIK_OTLP_ENDPOINT=${E2E_OPIK_OTLP_ENDPOINT:-http://127.0.0.1:${E2E_OPIK_BACKEND_PORT}/v1/private/otel}
 export OPIK_PROJECT='Default Project'
 poll_opik
+verify_opik_data_plane
 
 docker compose -p "$project" -f "$work_dir/compose.yml" up -d --wait milvus
 milvus_port=$(docker compose -p "$project" -f "$work_dir/compose.yml" port milvus 19530 | awk -F: '{print $NF}')
@@ -537,9 +533,7 @@ for ((i=1; i<=30; i++)); do
   fi
   sleep 1
 done
-if [[ "$readiness_verified" != true ]]; then
-  printf 'evaluation-evolution E2E concern: /readyz remained unavailable; continuing with /health evidence\n' >&2
-fi
+[[ "$readiness_verified" == true ]] || fail '/readyz remained unavailable after dependency startup'
 kill -0 "$backend_pid" 2>/dev/null || fail 'isolated backend exited after readiness poll'
 
 # The fixture bootstrap intentionally uses the real guest and refresh flows. A generated

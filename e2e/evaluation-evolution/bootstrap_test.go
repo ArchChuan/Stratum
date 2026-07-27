@@ -129,7 +129,7 @@ func TestHarnessHasBoundedCleanupAndOpikFailureDiagnostics(t *testing.T) {
 	}
 }
 
-func TestOpikReadinessRequiresOTLPDataPlane(t *testing.T) {
+func TestOpikReadinessRequiresCollectorIngestAndQueryParity(t *testing.T) {
 	t.Parallel()
 
 	source, err := os.ReadFile("../../scripts/e2e/evaluation-evolution.sh")
@@ -138,11 +138,17 @@ func TestOpikReadinessRequiresOTLPDataPlane(t *testing.T) {
 	}
 	text := string(source)
 	for _, required := range []string{
-		"opik_otlp_ready", "/v1/private/otel/v1/traces", `"resourceSpans":[]`,
+		"verify_opik_data_plane", "TestRealOpikCollectorEvidenceParity", "TEST_OPIK_E2E=1",
 	} {
 		if !strings.Contains(text, required) {
-			t.Fatalf("Opik readiness does not verify OTLP data plane: missing %q", required)
+			t.Fatalf("Opik readiness does not verify Collector ingest/query parity: missing %q", required)
 		}
+	}
+	connect := strings.Index(text, `docker network connect "${project}-opik_default"`)
+	verify := strings.Index(text, "\nverify_opik_data_plane\n")
+	milvus := strings.Index(text, `up -d --wait milvus`)
+	if connect < 0 || verify < 0 || milvus < 0 || !(connect < verify && verify < milvus) {
+		t.Fatalf("Opik data-plane verification order invalid: connect=%d verify=%d milvus=%d", connect, verify, milvus)
 	}
 }
 
