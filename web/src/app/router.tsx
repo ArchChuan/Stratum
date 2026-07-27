@@ -10,8 +10,11 @@ import { knowledgeRoutes } from '@/modules/knowledge';
 import { mcpRoutes } from '@/modules/mcp';
 import { skillRoutes } from '@/modules/skill';
 import { workflowRoutes } from '@/modules/workflow';
+import systemE2ESurface from '@/services/e2e-surface.json';
 
 const AUTH_PATHS = ['/login', '/auth/callback', '/onboarding'];
+
+export const MANAGED_ROUTE_PATHS = systemE2ESurface.routes;
 
 export const AppRouter = () => {
   const { user } = useAuth();
