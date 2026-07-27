@@ -239,7 +239,7 @@ func executeLiveKnowledgeFlow(client *http.Client, apiURL, token, runID string) 
 	assertKnowledgeRun(recoveryJob, recoveryRun, baseline.RevisionID, ingest.DocumentID, true)
 
 	return map[string]any{"resourceId": workspaceName, "workspaceId": workspace.ID,
-		"revisionId": baseline.RevisionID, "documentId": ingest.DocumentID,
+		"revisionId": baseline.RevisionID, "suiteRevisionId": suiteRevision.ID, "documentId": ingest.DocumentID,
 		"chunkIndex": directQuery.Sources[0].ChunkIndex, "jobId": successJob.JobID, "runId": successRun.ID,
 		"failureJobId": failureJob.JobID, "failureRunId": failureRun.ID,
 		"failureError":  failureRun.Results[0].Error,

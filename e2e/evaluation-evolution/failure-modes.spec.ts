@@ -14,6 +14,45 @@ test('MCP evidence comes from a real encrypted revision and network tool call', 
   } });
 });
 
+test('MCP and Knowledge parameter search creates durable candidates through the public API', async ({ adminApi, manifest }) => {
+  const requests = [
+    {
+      kind: 'mcp', resourceId: manifest.liveEvidence.mcp.serverId,
+      baselineRevision: manifest.liveEvidence.mcp.revisionId,
+      suiteRevisionId: manifest.liveEvidence.mcp.suiteRevisionId,
+      searchSpace: { timeout_ms: [1500] }, key: 'e2e-mcp-parameter-search',
+    },
+    {
+      kind: 'knowledge', resourceId: manifest.liveEvidence.knowledge.resourceId,
+      baselineRevision: manifest.liveEvidence.knowledge.revisionId,
+      suiteRevisionId: manifest.liveEvidence.knowledge.suiteRevisionId,
+      searchSpace: { top_k: [8] }, key: 'e2e-knowledge-parameter-search',
+    },
+  ] as const;
+
+  for (const request of requests) {
+    const response = await adminApi.post('/evaluations/optimizations', { data: {
+      idempotency_key: request.key,
+      baseline: { kind: request.kind, resource_id: request.resourceId,
+        revision_id: request.baselineRevision },
+      suite_revision_id: request.suiteRevisionId,
+      search_space: request.searchSpace,
+      failure_summaries: [],
+    } });
+    expect(response.status(), await response.text()).toBe(201);
+    const body = await response.json();
+    expect(body.candidates).toEqual([expect.objectContaining({ source: 'parameter_search' })]);
+
+    const listed = await adminApi.get(
+      `/evaluations/candidates?resource_kind=${request.kind}&resource_id=${request.resourceId}`,
+    );
+    expect(listed.status()).toBe(200);
+    expect((await listed.json()).items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: body.candidates[0].id, source: 'parameter_search' }),
+    ]));
+  }
+});
+
 test('Agent provider failure is recorded and the same stable revision recovers', async ({ adminApi, manifest, scanSafe }) => {
   const evidence = manifest.liveEvidence.agent;
   expect(evidence.toolTraces).toBeGreaterThan(0);

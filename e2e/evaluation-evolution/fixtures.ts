@@ -34,8 +34,8 @@ type Manifest = {
       failureRunId: string; failureError: string; recoveryJobId: string; recoveryRunId: string };
     skill: { resourceId: string; revisionId: string; suiteRevisionId: string; jobId: string; runId: string;
       traceId: string; tokens: number; llmRequests: number };
-    knowledge: { resourceId: string; workspaceId: string; revisionId: string; documentId: string;
-      chunkIndex: number; jobId: string; runId: string; failureJobId: string; failureRunId: string;
+    knowledge: { resourceId: string; workspaceId: string; revisionId: string; suiteRevisionId: string;
+      documentId: string; chunkIndex: number; jobId: string; runId: string; failureJobId: string; failureRunId: string;
       failureError: string; recoveryJobId: string; recoveryRunId: string };
   };
 };
