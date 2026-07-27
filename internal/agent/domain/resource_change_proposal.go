@@ -96,10 +96,9 @@ type AgentChange struct {
 }
 
 type SkillDraftChange struct {
-	Name         string  `json:"name"`
-	Description  string  `json:"description"`
-	Instructions string  `json:"instructions"`
-	Temperature  float64 `json:"temperature"`
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	Instructions string `json:"instructions"`
 }
 
 type MCPConfigChange struct {

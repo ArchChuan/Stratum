@@ -76,7 +76,7 @@ func TestDecodeProposalPayloadStrictly(t *testing.T) {
 		wantErr   bool
 	}{
 		{"agent", ResourceAgent, OperationCreate, `{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096}`, false},
-		{"skill draft", ResourceSkillDraft, OperationUpdate, `{"name":"skill","description":"desc","instructions":"do work","temperature":0.3}`, false},
+		{"skill draft", ResourceSkillDraft, OperationUpdate, `{"name":"skill","description":"desc","instructions":"do work"}`, false},
 		{"mcp", ResourceMCPConfig, OperationCreate, `{"name":"docs","version":"1","transport":"streamable_http","url":"https://example.test/mcp","timeoutSec":30}`, false},
 		{"knowledge", ResourceKnowledgeWorkspace, OperationCreate, `{"name":"docs","description":"official docs","embeddingModel":"text-embedding-v3"}`, false},
 		{"unknown field", ResourceAgent, OperationCreate, `{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096,"systemPrompt":"override"}`, true},
@@ -94,4 +94,13 @@ func TestDecodeProposalPayloadStrictly(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestSkillDraftProposalRejectsUnsupportedTemperature(t *testing.T) {
+	_, err := DecodeProposalPayload(
+		ResourceSkillDraft,
+		OperationUpdate,
+		json.RawMessage(`{"name":"skill","description":"desc","instructions":"do work","temperature":0.3}`),
+	)
+	require.ErrorIs(t, err, ErrProposalInvalid)
 }

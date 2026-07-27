@@ -321,7 +321,7 @@ func validateProposalPayload(payload any) error {
 			return domain.ErrProposalInvalid
 		}
 	case *domain.SkillDraftChange:
-		if strings.TrimSpace(value.Name) == "" || strings.TrimSpace(value.Instructions) == "" || value.Temperature < 0 || value.Temperature > 2 {
+		if strings.TrimSpace(value.Name) == "" || strings.TrimSpace(value.Instructions) == "" {
 			return domain.ErrProposalInvalid
 		}
 	case *domain.MCPConfigChange:
