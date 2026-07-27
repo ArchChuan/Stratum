@@ -33,7 +33,11 @@ test('real admin chat creates, edits, reloads, and applies one governed proposal
   { browser },
   testInfo,
 ) => {
-  const context = await browser.newContext({ baseURL: process.env.E2E_WEB_URL || 'http://127.0.0.1:5173' });
+  const contextOptions = {
+    baseURL: process.env.E2E_WEB_URL || 'http://127.0.0.1:5173',
+    viewport: testInfo.project.use.viewport,
+  };
+  const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
   let session: Awaited<ReturnType<typeof createPlatformAssistantSession>> | undefined;
   try {
@@ -121,7 +125,7 @@ test('real admin chat creates, edits, reloads, and applies one governed proposal
     await expect(page.getByRole('button', { name: '确认并应用' })).toHaveCount(0);
   }
 
-  const memberContext = await browser.newContext();
+  const memberContext = await browser.newContext(contextOptions);
   let memberSession: Awaited<ReturnType<typeof createPlatformAssistantSession>> | undefined;
   try {
     memberSession = await createPlatformAssistantSession(memberContext, 'member');
