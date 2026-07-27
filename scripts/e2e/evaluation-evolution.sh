@@ -104,6 +104,21 @@ trap cleanup_on_exit EXIT
 trap 'exit 130' INT TERM
 
 fail() { printf 'evaluation-evolution E2E: %s\n' "$1" >&2; exit 1; }
+print_runtime_diagnostics() {
+  printf 'evaluation-evolution diagnostics: postgres sessions by state/wait\n' >&2
+  docker exec -i "$E2E_POSTGRES_CONTAINER" psql -U stratum_e2e -d stratum_e2e -XAt \
+    -c "SELECT COALESCE(state,'none') || '|' || COALESCE(wait_event_type,'none') || '|' || \
+      COALESCE(wait_event,'none') || '|' || count(*) FROM pg_stat_activity \
+      WHERE datname='stratum_e2e' GROUP BY state,wait_event_type,wait_event ORDER BY 1" >&2 || true
+  printf 'evaluation-evolution diagnostics: sanitized backend tail\n' >&2
+  python3 - "$backend_log" <<'PY'
+import re, sys
+for line in open(sys.argv[1], encoding='utf-8', errors='replace').read().splitlines()[-120:]:
+    line = re.sub(r'Bearer\s+[A-Za-z0-9._~+/=-]+', 'Bearer [REDACTED]', line, flags=re.I)
+    line = re.sub(r'(?i)(api[_-]?key|access[_-]?token|credential|secret)([=: ]+)[^ ,;}]+', r'\1\2[REDACTED]', line)
+    print(line)
+PY
+}
 collector_diagnostics() {
   local collector_id collector_state collector_health collector_mapping
   collector_id=$(docker compose -p "$project" -f "$work_dir/compose.yml" ps -q otel 2>/dev/null)
@@ -220,10 +235,23 @@ for raw in open(sys.argv[1], encoding='utf-8', errors='replace'):
     print('opik-backend-log:', line[:500], file=sys.stderr)
 PY
 }
+opik_otlp_ready() {
+  local status
+  status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
+    -H 'Content-Type: application/json' \
+    --data '{"resourceSpans":[]}' \
+    "http://127.0.0.1:${E2E_OPIK_BACKEND_PORT}/v1/private/otel/v1/traces" 2>/dev/null || true)
+  [[ "$status" =~ ^2[0-9][0-9]$ ]]
+}
 poll_opik() {
+  local consecutive=0
   for ((attempt=1; attempt<=300; attempt++)); do
-    if curl -fsS --max-time 3 "http://127.0.0.1:${E2E_OPIK_BACKEND_PORT}/health-check" >/dev/null 2>&1; then
-      return 0
+    if curl -fsS --max-time 3 "http://127.0.0.1:${E2E_OPIK_BACKEND_PORT}/health-check" >/dev/null 2>&1 && \
+      opik_otlp_ready; then
+      consecutive=$((consecutive + 1))
+      (( consecutive >= 3 )) && return 0
+    else
+      consecutive=0
     fi
     sleep 1
   done
@@ -545,7 +573,16 @@ setsid bash -c 'cd "$1/web" && exec npm run dev -- --host 127.0.0.1' _ "$repo_di
 poll frontend "curl -fsS http://127.0.0.1:15173/evaluations"
 kill -0 "$frontend_pid" 2>/dev/null || fail 'isolated frontend exited after readiness poll'
 
-(cd "$repo_dir" && npx --prefix web playwright test --config=e2e/evaluation-evolution/playwright.config.ts)
+playwright_args=(test --config=e2e/evaluation-evolution/playwright.config.ts)
+if [[ -n "${E2E_PLAYWRIGHT_GREP:-}" ]]; then
+  playwright_args+=(--grep "$E2E_PLAYWRIGHT_GREP")
+fi
+if ! (cd "$repo_dir" && npx --prefix web playwright "${playwright_args[@]}" 2>&1) | sed -E \
+  -e 's/Bearer [A-Za-z0-9._~+\/-]+/Bearer [REDACTED]/g' \
+  -e 's/(api[_-]?key|access[_-]?token|credential|secret)([=: ]+)[^ ,;}]+/\1\2[REDACTED]/Ig'; then
+  print_runtime_diagnostics
+  fail 'Playwright verification failed'
+fi
 assert_collector_binding
 
 scan_file="$work_dir/combined.log"

@@ -14,6 +14,24 @@ test('MCP evidence comes from a real encrypted revision and network tool call', 
   } });
 });
 
+test('MCP online canary executes the immutable candidate and attributes feedback', async ({ adminApi, manifest }) => {
+  const evidence = manifest.liveEvidence.mcp;
+  expect(evidence.onlineTraceId).not.toBe('');
+  expect(evidence.onlineVariant).toBe('canary');
+  const candidateRun = await adminApi.get(`/evaluations/runs/${evidence.candidateRunId}`);
+  expect(candidateRun.status()).toBe(200);
+  expect(await candidateRun.json()).toMatchObject({ passed: true, resource: {
+    kind: 'mcp', resource_id: evidence.serverId, revision_id: evidence.candidateRevisionId,
+  } });
+  const experiments = await adminApi.get(
+    `/evaluations/experiments?resource_kind=mcp&resource_id=${evidence.serverId}`,
+  );
+  expect(experiments.status()).toBe(200);
+  expect((await experiments.json()).items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: evidence.experimentId, canary_revision_id: evidence.candidateRevisionId }),
+  ]));
+});
+
 test('MCP and Knowledge parameter search creates durable candidates through the public API', async ({ adminApi, manifest }) => {
   const requests = [
     {

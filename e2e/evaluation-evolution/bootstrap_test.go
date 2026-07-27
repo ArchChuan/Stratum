@@ -129,6 +129,23 @@ func TestHarnessHasBoundedCleanupAndOpikFailureDiagnostics(t *testing.T) {
 	}
 }
 
+func TestOpikReadinessRequiresOTLPDataPlane(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("../../scripts/e2e/evaluation-evolution.sh")
+	if err != nil {
+		t.Fatalf("read E2E harness: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"opik_otlp_ready", "/v1/private/otel/v1/traces", `"resourceSpans":[]`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Opik readiness does not verify OTLP data plane: missing %q", required)
+		}
+	}
+}
+
 func TestHarnessStartsMilvusAfterOpikAndBeforeStratum(t *testing.T) {
 	t.Parallel()
 

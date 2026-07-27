@@ -28,7 +28,8 @@ type Manifest = {
   ids: { memberDenied: string; duplicate: string };
   liveEvidence: {
     mcp: { serverId: string; revisionId: string; suiteRevisionId: string; jobId: string; runId: string;
-      toolCalls: number; encryptedPayloadVerified: boolean };
+      toolCalls: number; encryptedPayloadVerified: boolean; candidateRevisionId: string; candidateRunId: string;
+      experimentId: string; onlineTraceId: string; onlineVariant: string };
     agent: { resourceId: string; revisionId: string; suiteRevisionId: string; jobId: string; runId: string;
       traceId: string; tokens: number; toolTraces: number; traceEvents: number; failureJobId: string;
       failureRunId: string; failureError: string; recoveryJobId: string; recoveryRunId: string;

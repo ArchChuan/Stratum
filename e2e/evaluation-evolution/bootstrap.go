@@ -54,6 +54,7 @@ func main() {
 	adminToken := refresh(adminClient, apiURL)
 	liveMCP := executeLiveMCPFlow(adminClient, apiURL, adminToken, postgresContainer, adminGuest.TenantID, runID)
 	liveAgent := executeLiveAgentFlow(adminClient, apiURL, adminToken, liveMCP["serverId"].(string), runID)
+	executeLiveMCPCanaryFlow(adminClient, apiURL, adminToken, liveMCP, liveAgent["resourceId"].(string), runID)
 	liveSkill := executeLiveSkillFlow(adminClient, apiURL, adminToken, liveAgent["resourceId"].(string),
 		liveMCP["serverId"].(string), runID)
 	liveKnowledge := executeLiveKnowledgeFlow(adminClient, apiURL, adminToken, runID)
@@ -773,17 +774,23 @@ func executeLiveAgentFlow(client *http.Client, apiURL, token, serverID, runID st
 func createCanaryConversation(
 	client *http.Client, apiURL, token, agentID string, canaryPercent int, runID string,
 ) string {
+	return createResourceCanaryConversation(client, apiURL, token, agentID, agentID, canaryPercent, runID)
+}
+
+func createResourceCanaryConversation(
+	client *http.Client, apiURL, token, agentID, resourceID string, canaryPercent int, runID string,
+) string {
 	for attempt := range 200 {
 		var conversation struct {
 			ID string `json:"id"`
 		}
 		requestJSON(client, http.MethodPost, apiURL+"/agents/"+agentID+"/conversations", token,
 			map[string]string{"name": fmt.Sprintf("%s canary %d", runID, attempt)}, http.StatusCreated, &conversation)
-		if conversation.ID != "" && evaldomain.AssignVariant(conversation.ID+":"+agentID, canaryPercent) {
+		if conversation.ID != "" && evaldomain.AssignVariant(conversation.ID+":"+resourceID, canaryPercent) {
 			return conversation.ID
 		}
 	}
-	panic("could not allocate deterministic Agent canary subject")
+	panic("could not allocate deterministic resource canary subject")
 }
 
 type agentEvaluationRun struct {
@@ -1079,6 +1086,100 @@ func executeLiveMCPFlow(client *http.Client, apiURL, token, postgresContainer, t
 	return map[string]any{"serverId": serverID, "revisionId": baseline.RevisionID,
 		"suiteRevisionId": published.ID, "jobId": queued.JobID, "runId": run.ID,
 		"toolCalls": 1, "encryptedPayloadVerified": true}
+}
+
+func executeLiveMCPCanaryFlow(
+	client *http.Client, apiURL, token string, liveMCP map[string]any, agentID, runID string,
+) {
+	serverID, baselineRevisionID := liveMCP["serverId"].(string), liveMCP["revisionId"].(string)
+	suiteRevisionID := liveMCP["suiteRevisionId"].(string)
+	var optimization struct {
+		Candidates []struct {
+			Revision struct {
+				RevisionID string `json:"revision_id"`
+			} `json:"revision"`
+		} `json:"candidates"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/optimizations", token, map[string]any{
+		"idempotency_key": runID + "-live-mcp-canary-optimization",
+		"baseline": map[string]any{"kind": "mcp", "resource_id": serverID,
+			"revision_id": baselineRevisionID},
+		"suite_revision_id": suiteRevisionID,
+		"search_space":      map[string]any{"timeout_ms": []int{6500}},
+		"failure_summaries": []string{},
+	}, http.StatusCreated, &optimization)
+	if len(optimization.Candidates) != 1 || optimization.Candidates[0].Revision.RevisionID == "" {
+		panic("live MCP canary candidate generation invalid")
+	}
+	candidateRevisionID := optimization.Candidates[0].Revision.RevisionID
+	var queued struct {
+		JobID string `json:"job_id"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/runs", token, map[string]any{
+		"resource": map[string]any{"kind": "mcp", "resource_id": serverID,
+			"revision_id": candidateRevisionID},
+		"suite_revision_id": suiteRevisionID,
+		"idempotency_key":   runID + "-live-mcp-canary-run",
+	}, http.StatusAccepted, &queued)
+	job := waitForEvaluationJob(client, apiURL, token, queued.JobID)
+	if job.Status != "succeeded" || job.ResultID == "" {
+		panic("live MCP canary offline evaluation did not complete")
+	}
+	var run struct {
+		Passed bool `json:"passed"`
+	}
+	requestJSON(client, http.MethodGet, apiURL+"/evaluations/runs/"+job.ResultID, token,
+		nil, http.StatusOK, &run)
+	if !run.Passed {
+		panic("live MCP canary offline evaluation did not pass")
+	}
+	var experiment struct {
+		Experiment struct {
+			ID string `json:"id"`
+		} `json:"experiment"`
+		Deployment struct {
+			CanaryPercent int `json:"canary_percent"`
+		} `json:"deployment"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/experiments", token, map[string]any{
+		"stable": map[string]any{"kind": "mcp", "resource_id": serverID,
+			"revision_id": baselineRevisionID},
+		"canary": map[string]any{"kind": "mcp", "resource_id": serverID,
+			"revision_id": candidateRevisionID},
+		"suite_revision_id": suiteRevisionID,
+	}, http.StatusCreated, &experiment)
+	if experiment.Experiment.ID == "" || experiment.Deployment.CanaryPercent <= 0 {
+		panic("live MCP canary experiment creation invalid")
+	}
+	conversationID := createResourceCanaryConversation(
+		client, apiURL, token, agentID, serverID, experiment.Deployment.CanaryPercent, runID+" MCP",
+	)
+	beforeCalls := readCounter(mustEnv("E2E_MCP_EVIDENCE"), "calls")
+	var onlineResult map[string]any
+	onlineTraceID := requestJSONWithTrace(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use the lookup tool and return bounded-agent-result.",
+			"conversation_id": conversationID}, http.StatusOK, &onlineResult)
+	if onlineResult["output"] != "bounded-agent-result" || onlineTraceID == "" ||
+		readCounter(mustEnv("E2E_MCP_EVIDENCE"), "calls") != beforeCalls+1 {
+		panic("live MCP canary runtime execution invalid")
+	}
+	feedback := waitForFeedback(client, apiURL, token, map[string]any{
+		"trace_id": onlineTraceID, "resource_kind": "mcp", "resource_id": serverID,
+		"score": 1, "outcome": map[string]any{"status": "success"},
+		"idempotency_key": runID + "-live-mcp-canary-feedback",
+	})
+	feedbackRow, _ := feedback["feedback"].(map[string]any)
+	feedbackExperiment, _ := feedback["experiment"].(map[string]any)
+	if feedbackRow["revision_id"] != candidateRevisionID ||
+		feedbackRow["experiment_id"] != experiment.Experiment.ID || feedbackRow["variant"] != "canary" ||
+		feedbackExperiment["id"] != experiment.Experiment.ID {
+		panic("live MCP canary feedback attribution mismatch")
+	}
+	liveMCP["candidateRevisionId"] = candidateRevisionID
+	liveMCP["candidateRunId"] = job.ResultID
+	liveMCP["experimentId"] = experiment.Experiment.ID
+	liveMCP["onlineTraceId"] = onlineTraceID
+	liveMCP["onlineVariant"] = feedbackRow["variant"]
 }
 
 func verifyEncryptedRevisionObject(postgresContainer, tenantID, revisionID string, plaintextMarkers ...string) {
