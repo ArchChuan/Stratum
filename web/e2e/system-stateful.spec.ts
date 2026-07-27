@@ -7,9 +7,11 @@ import { expect, test } from '@playwright/test';
 
 import { createActorContexts, createGuestActor, type ActorLabel, type BrowserActor } from './stateful/core/actors';
 import { createSafePool, deleteGeneratedActors } from './stateful/core/database';
+import { acceptanceError, acceptanceErrors } from './stateful/core/errors';
 import type { EvidenceRecord } from './stateful/core/evidence';
 import { parseRuntimeOptions, type SystemPack } from './stateful/core/runtime';
 import { dashboardActions } from './stateful/packs/dashboard';
+import { executeIAMPack } from './stateful/packs/iam';
 
 interface ManifestCapability { id: string; domain: string }
 interface SafeResultItem { id: string; status: 'passed' }
@@ -36,33 +38,49 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
   const completedActions: string[] = [];
   const startedAt = new Date();
   let cleanupPassed = false;
+  let executionError: unknown;
   try {
     for (const label of Object.keys(contexts) as ActorLabel[]) {
-      actors[label] = await createGuestActor(contexts[label], backendURL, pool);
+      actors[label] = await createGuestActor(contexts[label], webURL, backendURL, pool);
     }
     for (const pack of runtime.packs) {
-      await executePack(pack, actors, pool, evidence, webURL, completedActions);
+      await executePack(pack, actors, pool, evidence, webURL, backendURL, completedActions);
       completedPacks.push({ id: pack, status: 'passed' });
     }
-  } finally {
-    let cleanupError: unknown;
-    try {
-      await Promise.all(Object.values(contexts).map(({ context }) => context.close()));
-      await deleteGeneratedActors(pool, Object.values(actors).flatMap(({ userID }) => userID ? [userID] : []));
-      cleanupPassed = true;
-    } catch (error) {
-      cleanupError = error;
-    } finally {
-      await pool.end();
-    }
-    if (cleanupError) throw cleanupError;
+  } catch (error) {
+    executionError = error;
   }
+
+  let cleanupError: unknown;
+  const closeResults = await Promise.allSettled(Object.values(contexts).map(({ context }) => context.close()));
+  cleanupError = acceptanceErrors(closeResults.flatMap((result) => (
+    result.status === 'rejected' ? [result.reason] : []
+  )));
+  try {
+    await deleteGeneratedActors(pool, Object.values(actors).flatMap(({ userID }) => userID ? [userID] : []));
+  } catch (error) {
+    cleanupError = acceptanceError(cleanupError, error);
+  }
+  try {
+    await pool.end();
+  } catch (error) {
+    cleanupError = acceptanceError(cleanupError, error);
+  }
+  cleanupPassed = cleanupError === undefined;
+  const failure = acceptanceError(executionError, cleanupError);
+  if (failure) throw failure;
 
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { capabilities: ManifestCapability[] };
   const selectedDomains = new Set(runtime.packs.filter((pack) => !pack.includes('-')));
-  const capabilities = manifest.capabilities
-    .filter(({ domain }) => selectedDomains.has(domain as SystemPack))
+  const selectedCapabilities = manifest.capabilities
+    .filter(({ domain }) => selectedDomains.has(domain as SystemPack));
+  const completedSet = new Set(completedActions);
+  const capabilities = selectedCapabilities
+    .filter(({ id }) => completedSet.has(id))
     .map(({ id }) => ({ id, status: 'passed' as const }));
+  const unverifiedCapabilities = selectedCapabilities
+    .filter(({ id }) => !completedSet.has(id))
+    .map(({ id }) => id);
   const durationSeconds = Math.max(1, Math.ceil((Date.now() - startedAt.getTime()) / 1000));
   const safeResults = {
     tested_git_parent: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot, encoding: 'utf8' }).trim(),
@@ -84,11 +102,12 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
     },
     artifacts: [],
     cleanup: { passed: cleanupPassed, residual_entity_ids: [] },
-    unverified_capabilities: [],
+    unverified_capabilities: unverifiedCapabilities,
     risk_classification: runtime.mode,
-    status: 'passed',
+    status: unverifiedCapabilities.length === 0 ? 'passed' : 'failed',
   };
   await writeFile(resultsPath, `${JSON.stringify(safeResults, null, 2)}\n`, { mode: 0o600 });
+  expect(unverifiedCapabilities, 'every selected manifest capability must execute').toEqual([]);
 });
 
 const executePack = async (
@@ -97,8 +116,13 @@ const executePack = async (
   pool: Awaited<ReturnType<typeof createSafePool>>,
   evidence: EvidenceRecord,
   webURL: string,
+  backendURL: string,
   completedActions: string[],
 ): Promise<void> => {
+  if (pack === 'iam') {
+    completedActions.push(...await executeIAMPack({ actors, pool, evidence, webURL, backendURL }));
+    return;
+  }
   if (pack !== 'dashboard') throw new Error(`stateful pack ${pack} is not implemented`);
   const actor = actors.memberA;
   if (!actor.tenantID) throw new Error('member A tenant is unavailable');

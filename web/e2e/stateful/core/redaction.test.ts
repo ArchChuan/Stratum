@@ -1,10 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createActorContexts } from './actors';
-import { assertSafeDatabaseURL, deleteGeneratedActors, requireUUID, withTenantQuery } from './database';
+import {
+  assertSafeDatabaseURL,
+  deleteGeneratedActors,
+  deleteGeneratedOAuthUser,
+  requireUUID,
+  restoreDefaultTenant,
+  SAFE_POOL_OPTIONS,
+  setGeneratedActorVerifiedEmail,
+  suspendDefaultTenant,
+  withTenantQuery,
+} from './database';
 import { redactSensitive } from './redaction';
 
 describe('stateful E2E security boundaries', () => {
+  it('bounds database connection and query waits', () => {
+    expect(SAFE_POOL_OPTIONS.connectionTimeoutMillis).toBeGreaterThan(0);
+    expect(SAFE_POOL_OPTIONS.query_timeout).toBeGreaterThan(0);
+    expect(SAFE_POOL_OPTIONS.statement_timeout).toBeGreaterThan(0);
+  });
+
   it('redacts credential values recursively without retaining the originals', () => {
     const serialized = JSON.stringify(redactSensitive({
       authorization: 'Bearer fixture-access-token',
@@ -29,6 +45,8 @@ describe('stateful E2E security boundaries', () => {
 
   it('requires UUID parameters and uses a transaction-local tenant search path', async () => {
     expect(() => requireUUID('not-a-uuid', 'tenant_id')).toThrow('tenant_id must be a UUID');
+    expect(requireUUID('0198d0f5-7385-7d9a-8e11-18b0e21fd2b4', 'tenant_id'))
+      .toBe('0198d0f5-7385-7d9a-8e11-18b0e21fd2b4');
     const query = vi.fn()
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(undefined)
@@ -65,7 +83,12 @@ describe('stateful E2E security boundaries', () => {
   });
 
   it('cleans up only the exact generated user UUIDs', async () => {
-    const query = vi.fn().mockResolvedValue({ rowCount: 2 });
+    const query = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ rowCount: 1 })
+      .mockResolvedValueOnce({ rowCount: 1 })
+      .mockResolvedValueOnce({ rowCount: 2 })
+      .mockResolvedValueOnce(undefined);
     const release = vi.fn();
     const pool = { connect: vi.fn().mockResolvedValue({ query, release }) };
     const userIDs = [
@@ -75,10 +98,89 @@ describe('stateful E2E security boundaries', () => {
 
     await deleteGeneratedActors(pool, userIDs);
 
-    expect(query).toHaveBeenCalledWith(
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      'BEGIN',
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      'UPDATE public.tenant_members SET invited_by = NULL WHERE invited_by = ANY($1::uuid[])',
+      [userIDs],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      3,
+      'DELETE FROM public.tenant_invitations WHERE invited_by = ANY($1::uuid[])',
+      [userIDs],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      4,
       'DELETE FROM public.users WHERE id = ANY($1::uuid[]) RETURNING id',
       [userIDs],
     );
+    expect(query).toHaveBeenNthCalledWith(5, 'COMMIT');
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('sets a verified synthetic email for exactly one generated actor', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 1 });
+    const release = vi.fn();
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release }) };
+    const userID = '123e4567-e89b-42d3-a456-426614174000';
+
+    await setGeneratedActorVerifiedEmail(pool, userID, 'member-a@example.test');
+
+    expect(query).toHaveBeenCalledWith(
+      `UPDATE public.users
+       SET email = $1, email_verified_at = now()
+       WHERE id = $2 AND is_guest = true
+       RETURNING id`,
+      ['member-a@example.test', userID],
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('cleans up exactly one generated oauth user by provider identity and email', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 1 });
+    const release = vi.fn();
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release }) };
+
+    await deleteGeneratedOAuthUser(pool, '730001', 'stateful-oauth@example.test');
+
+    expect(query).toHaveBeenCalledWith(
+      `DELETE FROM public.users
+       WHERE github_id = $1 AND email = $2 AND is_guest = false
+       RETURNING id`,
+      ['730001', 'stateful-oauth@example.test'],
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('suspends and restores only the exact default tenant around oauth onboarding', async () => {
+    const tenantID = '123e4567-e89b-42d3-a456-426614174000';
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: tenantID }], rowCount: 1 })
+      .mockResolvedValueOnce({ rowCount: 1 });
+    const release = vi.fn();
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release }) };
+
+    const suspendedID = await suspendDefaultTenant(pool);
+    await restoreDefaultTenant(pool, suspendedID);
+
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      `UPDATE public.tenants
+       SET is_default = false
+       WHERE is_default = true AND deleted_at IS NULL
+       RETURNING id`,
+      [],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      `UPDATE public.tenants
+       SET is_default = true
+       WHERE id = $1 AND is_default = false AND deleted_at IS NULL`,
+      [tenantID],
+    );
+    expect(release).toHaveBeenCalledTimes(2);
   });
 });

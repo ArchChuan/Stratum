@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
-import type { BrowserContext } from '@playwright/test';
+import { expect, type BrowserContext } from '@playwright/test';
 
-import { elevateGeneratedActor, requireUUID, type DatabasePool } from './database';
+import {
+  elevateGeneratedActor,
+  requireUUID,
+  setGeneratedActorVerifiedEmail,
+  type DatabasePool,
+} from './database';
 
 export type ActorLabel = 'systemAdmin' | 'tenantAdmin' | 'memberA' | 'memberB';
 
@@ -16,6 +21,8 @@ export interface BrowserActor<C = BrowserContext> {
   context: C;
   tenantID?: string;
   userID?: string;
+  email?: string;
+  accessToken?: string;
 }
 
 const ACTOR_LABELS: ActorLabel[] = ['systemAdmin', 'tenantAdmin', 'memberA', 'memberB'];
@@ -30,25 +37,43 @@ export const createActorContexts = async <C>(browser: BrowserLike<C>): Promise<R
 };
 
 interface GuestResponse {
+  access_token: string;
   tenant_id: string;
   user: { sub: string };
 }
 
 export const createGuestActor = async (
   actor: BrowserActor,
+  webURL: string,
   backendURL: string,
   pool: DatabasePool,
 ): Promise<BrowserActor> => {
-  const guest = await actor.context.request.post(`${backendURL}/auth/guest`);
+  const page = await actor.context.newPage();
+  const guestPromise = page.waitForResponse((response) => (
+    response.url() === `${backendURL}/auth/guest`
+    && response.request().method() === 'POST'
+  ));
+  await page.goto(`${webURL}/login`);
+  await expect(page.getByRole('button', { name: /快速体验/ })).toBeVisible();
+  await page.getByRole('button', { name: /快速体验/ }).click();
+  const guest = await guestPromise;
   if (guest.status() !== 201) throw new Error(`guest actor creation failed with status ${guest.status()}`);
   const body = await guest.json() as GuestResponse;
+  if (!body.access_token) throw new Error('guest actor access token is missing');
+  await expect(page).toHaveURL(`${webURL}/`);
+  await page.close();
   const tenantID = requireUUID(body.tenant_id, 'tenant_id');
   const userID = requireUUID(body.user.sub, 'user_id');
   if (actor.label === 'systemAdmin') await elevateGeneratedActor(pool, tenantID, userID, 'root');
   if (actor.label === 'tenantAdmin') await elevateGeneratedActor(pool, tenantID, userID, 'owner');
+  const email = `${actor.label.toLowerCase()}-${userID}@example.test`;
+  await setGeneratedActorVerifiedEmail(pool, userID, email);
+  let accessToken = body.access_token;
   if (actor.label === 'systemAdmin' || actor.label === 'tenantAdmin') {
     const refreshed = await actor.context.request.post(`${backendURL}/auth/refresh`);
     if (refreshed.status() !== 200) throw new Error(`actor refresh failed with status ${refreshed.status()}`);
+    accessToken = (await refreshed.json() as { access_token: string }).access_token;
+    if (!accessToken) throw new Error('refreshed actor access token is missing');
   }
-  return { ...actor, tenantID, userID };
+  return { ...actor, tenantID, userID, email, accessToken };
 };

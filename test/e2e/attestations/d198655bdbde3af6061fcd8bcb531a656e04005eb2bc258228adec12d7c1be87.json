@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "source_digest": "d198655bdbde3af6061fcd8bcb531a656e04005eb2bc258228adec12d7c1be87",
+  "manifest_digest": "811bf4b9d4cfa2ae5e744e0326a2c3847dbfc4848cc959d46e98d75f20279a5d",
+  "tested_git_parent": "49b184805fc00e9b2190fd8df94ead63ced29b93",
+  "browser": {
+    "name": "chromium",
+    "version": "149.0.7827.55"
+  },
+  "mode": "short",
+  "seed": 1,
+  "started_at": "2026-07-27T13:31:22.465Z",
+  "duration_seconds": 53,
+  "host_class": "developer",
+  "packs": [
+    {
+      "id": "iam",
+      "status": "passed"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "iam.mutation.delete.admin.tenants.tenantid",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.delete.tenant",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.delete.tenant.members.userid",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.patch.admin.tenants.tenantid",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.patch.tenant.embed.model",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.patch.tenant.members.userid.role",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.patch.tenant.settings",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.admin.tenants",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.create.tenant",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.guest",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.logout",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.oauth.exchange",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.refresh",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.register",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.auth.switch.tenant",
+      "status": "passed"
+    },
+    {
+      "id": "iam.mutation.post.tenant.members.invite",
+      "status": "passed"
+    },
+    {
+      "id": "iam.route.admin.tenants",
+      "status": "passed"
+    },
+    {
+      "id": "iam.route.auth.callback",
+      "status": "passed"
+    },
+    {
+      "id": "iam.route.login",
+      "status": "passed"
+    },
+    {
+      "id": "iam.route.onboarding",
+      "status": "passed"
+    },
+    {
+      "id": "iam.route.tenant.members",
+      "status": "passed"
+    },
+    {
+      "id": "iam.route.tenant.settings",
+      "status": "passed"
+    }
+  ],
+  "action_count": 23,
+  "sequence_digest": "2b58841728e2d1558f3e3e9f47b8f0c8a5b3132968456ada24771ae95903ac51",
+  "evidence": {
+    "ui": 12,
+    "http": 12,
+    "database": 12,
+    "reconciled": 23
+  },
+  "artifacts": [],
+  "cleanup": {
+    "passed": true,
+    "residual_entity_ids": []
+  },
+  "unverified_capabilities": [],
+  "risk_classification": "short",
+  "status": "passed",
+  "expires_at": "2026-07-30T13:32:16.793238758Z"
+}
