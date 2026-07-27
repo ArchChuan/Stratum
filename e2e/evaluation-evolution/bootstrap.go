@@ -361,6 +361,63 @@ func executeLiveKnowledgeCanaryFlow(
 	liveKnowledge["experimentId"] = experiment.Experiment.ID
 	liveKnowledge["onlineTraceId"] = onlineTraceID
 	liveKnowledge["onlineVariant"] = feedbackRow["variant"]
+	assertKnowledgeDocumentDriftFailsClosed(client, apiURL, token, liveKnowledge, agentID,
+		experiment.Deployment.CanaryPercent, runID)
+}
+
+func assertKnowledgeDocumentDriftFailsClosed(
+	client *http.Client, apiURL, token string, liveKnowledge map[string]any, agentID string,
+	canaryPercent int, runID string,
+) {
+	workspaceName := liveKnowledge["resourceId"].(string)
+	var ingest struct {
+		DocumentID string `json:"document_id"`
+		Status     string `json:"status"`
+	}
+	requestMultipart(client, apiURL+"/knowledge/ingest", token, workspaceName,
+		"evolution-drift.txt", []byte("A later document changes the immutable Knowledge snapshot."), &ingest)
+	if ingest.DocumentID == "" || ingest.Status != "processing" {
+		panic("live Knowledge document drift ingest acceptance invalid")
+	}
+	completed := false
+	for range 90 {
+		var documents struct {
+			Documents []struct {
+				ID              string `json:"id"`
+				Status          string `json:"ingest_status"`
+				ProcessedChunks int    `json:"processed_chunks"`
+			} `json:"documents"`
+		}
+		requestJSON(client, http.MethodGet,
+			apiURL+"/knowledge/workspaces/"+url.PathEscape(workspaceName)+"/documents",
+			token, nil, http.StatusOK, &documents)
+		for _, document := range documents.Documents {
+			if document.ID == ingest.DocumentID {
+				completed = document.Status == "completed" && document.ProcessedChunks > 0
+			}
+		}
+		if completed {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if !completed {
+		panic("live Knowledge document drift ingest polling timed out")
+	}
+	conversationID := createResourceCanaryConversation(client, apiURL, token, agentID, workspaceName,
+		canaryPercent, runID+" Knowledge drift")
+	requestsBefore := readCounter(mustEnv("E2E_LLM_EVIDENCE"), "requests")
+	var failure struct {
+		Error string `json:"error"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use Knowledge after the document set changed.",
+			"conversation_id": conversationID}, http.StatusInternalServerError, &failure)
+	if failure.Error != "internal server error" ||
+		readCounter(mustEnv("E2E_LLM_EVIDENCE"), "requests") != requestsBefore {
+		panic("live Knowledge document set changed was not rejected before LLM execution")
+	}
+	liveKnowledge["documentDriftRejected"] = true
 }
 
 func executeStoredEvaluationRun(

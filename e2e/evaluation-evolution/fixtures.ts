@@ -40,7 +40,8 @@ type Manifest = {
     knowledge: { resourceId: string; workspaceId: string; revisionId: string; suiteRevisionId: string;
       documentId: string; chunkIndex: number; jobId: string; runId: string; failureJobId: string; failureRunId: string;
       failureError: string; recoveryJobId: string; recoveryRunId: string; candidateRevisionId: string;
-      candidateRunId: string; experimentId: string; onlineTraceId: string; onlineVariant: string };
+      candidateRunId: string; experimentId: string; onlineTraceId: string; onlineVariant: string;
+      documentDriftRejected: boolean };
   };
 };
 
