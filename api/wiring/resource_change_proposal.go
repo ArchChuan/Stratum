@@ -256,6 +256,12 @@ func (a *ResourceChangeProposalAdapters) applyKnowledge(
 		value, err = a.knowledge.CreateWorkspace(ctx, proposal.TenantID, knowledgeapp.CreateWorkspaceInput{
 			Name: change.Name, Description: change.Description, Config: config,
 		})
+		if err != nil {
+			return agentdomain.ApplyResult{}, &agentport.ResourceApplyError{
+				Outcome: agentport.ResourceApplyUnknownOutcome,
+				Err:     err,
+			}
+		}
 	} else {
 		existing, getErr := a.knowledge.GetWorkspace(ctx, proposal.TenantID, proposal.ResourceID)
 		if getErr != nil {

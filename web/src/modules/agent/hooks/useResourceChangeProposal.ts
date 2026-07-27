@@ -13,6 +13,11 @@ const errorContent = (error: unknown) => {
   return value.response?.data?.error || '操作失败';
 };
 
+const preserveEvents = (current: ResourceChangeProposal | undefined, next: ResourceChangeProposal) => ({
+  ...next,
+  events: next.events.length > 0 ? next.events : (current?.events ?? []),
+});
+
 export const useResourceChangeProposal = (id: string) => {
   const [proposal, setProposal] = useState<ResourceChangeProposal>();
   const [loading, setLoading] = useState(true);
@@ -51,7 +56,8 @@ export const useResourceChangeProposal = (id: string) => {
     if (!proposal || !mutable || saving) return;
     setSaving(true);
     try {
-      setProposal(await proposalApi.update(proposal.id, payload));
+      const value = await proposalApi.update(proposal.id, payload);
+      setProposal((current) => preserveEvents(current, value));
       message.success({ content: '提案已保存', duration: 2 });
     } catch (error) { message.error({ content: errorContent(error), duration: 0 }); }
     finally { setSaving(false); }
@@ -60,7 +66,8 @@ export const useResourceChangeProposal = (id: string) => {
     if (!proposal || !mutable || confirming) return;
     setConfirming(true);
     try {
-      setProposal(await proposalApi.confirm(proposal.id));
+      const value = await proposalApi.confirm(proposal.id);
+      setProposal((current) => preserveEvents(current, value));
       message.success({ content: '变更已应用', duration: 2 });
     } catch (error) { message.error({ content: errorContent(error), duration: 0 }); void load(); }
     finally { setConfirming(false); }

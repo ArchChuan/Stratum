@@ -90,6 +90,7 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, iamdomain.ErrTenantNotFound),
 		errors.Is(err, agentapp.ErrNotFound),
 		errors.Is(err, agentdomain.ErrApprovalNotFound),
+		errors.Is(err, agentdomain.ErrProposalNotFound),
 		errors.Is(err, agentdomain.ErrNotFound),
 		errors.Is(err, memoryapp.ErrNotFound),
 		errors.Is(err, memorydomain.ErrEntryNotFound),

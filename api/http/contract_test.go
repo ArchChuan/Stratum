@@ -134,7 +134,7 @@ func (contractProposalRepo) Create(context.Context, agentdomain.ResourceChangePr
 	return nil
 }
 func (contractProposalRepo) Get(context.Context, string) (agentdomain.ResourceChangeProposal, error) {
-	return agentdomain.ResourceChangeProposal{}, agentdomain.ErrNotFound
+	return agentdomain.ResourceChangeProposal{}, agentdomain.ErrProposalNotFound
 }
 func (contractProposalRepo) UpdateDraft(
 	context.Context, agentdomain.ResourceChangeProposal, agentdomain.ProposalEvent,
@@ -146,7 +146,7 @@ func (contractProposalRepo) Confirm(context.Context, string, string, time.Time) 
 func (contractProposalRepo) ClaimApplying(
 	context.Context, string, string, time.Time,
 ) (agentdomain.ResourceChangeProposal, error) {
-	return agentdomain.ResourceChangeProposal{}, agentdomain.ErrNotFound
+	return agentdomain.ResourceChangeProposal{}, agentdomain.ErrProposalNotFound
 }
 func (contractProposalRepo) Finish(
 	context.Context, string, agentdomain.ProposalStatus, agentdomain.ApplyResult, agentdomain.ProposalEvent,
@@ -154,7 +154,7 @@ func (contractProposalRepo) Finish(
 	return nil
 }
 func (contractProposalRepo) ListEvents(context.Context, string) ([]agentdomain.ProposalEvent, error) {
-	return nil, agentdomain.ErrNotFound
+	return nil, agentdomain.ErrProposalNotFound
 }
 
 type contractProposalAuthorizer struct{}

@@ -4,6 +4,6 @@
     "method": "GET",
     "path": "/resource-change-proposals/missing-proposal",
     "want_status": 404,
-    "want_body": {"error":"agent not found"}
+    "want_body": {"error":"proposal not found"}
   }
 ]

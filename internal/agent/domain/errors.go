@@ -17,6 +17,7 @@ var (
 	ErrInvalidSystemAssistantModel        = errors.New("invalid system assistant model")
 	ErrSystemAssistantRevisionUnsupported = errors.New("system assistant revisions are unsupported")
 	ErrProposalInvalid                    = errors.New("proposal invalid")
+	ErrProposalNotFound                   = errors.New("proposal not found")
 	ErrProposalStale                      = errors.New("proposal stale")
 	ErrProposalExpired                    = errors.New("proposal expired")
 	ErrProposalForbidden                  = errors.New("proposal forbidden")

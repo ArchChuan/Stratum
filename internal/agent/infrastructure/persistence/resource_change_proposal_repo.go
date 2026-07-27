@@ -88,7 +88,7 @@ func (r *PgResourceChangeProposalRepo) Get(ctx context.Context, id string) (doma
 		return decodeProposalJSON(&proposal, payload, summary, result)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.ResourceChangeProposal{}, domain.ErrNotFound
+		return domain.ResourceChangeProposal{}, domain.ErrProposalNotFound
 	}
 	if err != nil {
 		return domain.ResourceChangeProposal{}, fmt.Errorf("get resource change proposal: %w", err)
@@ -338,7 +338,7 @@ func classifyTransitionFailure(ctx context.Context, tx pgx.Tx, id string, now ti
 	if err := tx.QueryRow(ctx, `SELECT status, expires_at FROM resource_change_proposals WHERE id=$1`, id).
 		Scan(&status, &expiresAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return domain.ErrNotFound
+			return domain.ErrProposalNotFound
 		}
 		return fmt.Errorf("classify proposal transition: %w", err)
 	}
