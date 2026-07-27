@@ -153,6 +153,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		OnboardSvc:         c.Platform.OnboardSvc,
 		InvitationSvc:      invitationSvc,
 		Logger:             c.Logger,
+		GitHubAuthorizeURL: cfg.GitHubAuthorizeURL,
 		CallbackURL:        cfg.GitHubCallbackURL,
 		FrontendURL:        cfg.FrontendURL,
 		GlobalAdmin:        cfg.GlobalAdminGitHubLogin,

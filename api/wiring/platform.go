@@ -64,7 +64,12 @@ func (c *Container) buildPlatform(_ context.Context) error {
 			c.Logger.Warn("JWT private key parse failed, auth routes disabled", zap.Error(err))
 		} else {
 			p.JWTService = iamtoken.NewJWTService(key)
-			p.GitHubClient = iamoauth.NewGitHubClient(c.Config.GitHubClientID, c.Config.GitHubClientSecret, "", "")
+			p.GitHubClient = iamoauth.NewGitHubClient(
+				c.Config.GitHubClientID,
+				c.Config.GitHubClientSecret,
+				c.Config.GitHubTokenURL,
+				c.Config.GitHubUserURL,
+			)
 			if c.Storage != nil && c.Storage.PG != nil {
 				db := c.Storage.PG.DB()
 				if c.Storage.Redis != nil {

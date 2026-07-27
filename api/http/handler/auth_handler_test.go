@@ -118,6 +118,35 @@ func setupAuthRouter(h *handler.AuthHandler) *gin.Engine {
 	return r
 }
 
+func TestAuthHandler_GitHubLoginUsesConfiguredAuthorizeURL(t *testing.T) {
+	h := handler.NewAuthHandler(handler.AuthHandlerDeps{
+		GitHubClient:       githubOAuthFake{},
+		GitHubAuthorizeURL: "http://127.0.0.1:19090/login/oauth/authorize",
+		CallbackURL:        "http://127.0.0.1:18080/auth/github/callback",
+		Logger:             zap.NewNop(),
+	})
+	r := setupAuthRouter(h)
+	req := httptest.NewRequest(http.MethodGet, "/auth/github", nil) //nolint:noctx
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	location, err := url.Parse(w.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse redirect: %v", err)
+	}
+	if location.Scheme != "http" || location.Host != "127.0.0.1:19090" || location.Path != "/login/oauth/authorize" {
+		t.Fatalf("unexpected authorize redirect: %s", location.String())
+	}
+	query := location.Query()
+	if query.Get("redirect_uri") != "http://127.0.0.1:18080/auth/github/callback" || query.Get("state") == "" {
+		t.Fatalf("missing callback or state: %s", location.String())
+	}
+}
+
 func TestAuthHandler_OAuthExchange_ConsumesLoginCodeOnce(t *testing.T) {
 	store := &oauthExchangeStoreFake{payload: &iamport.OAuthExchange{
 		Kind:        iamport.OAuthExchangeLogin,

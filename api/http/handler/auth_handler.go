@@ -35,6 +35,7 @@ type AuthHandlerDeps struct {
 	OAuthExchangeStore iamport.OAuthExchangeStore
 	Logger             *zap.Logger
 	SchemaProvisioner  iamport.TenantSchemaProvisioner
+	GitHubAuthorizeURL string
 	CallbackURL        string
 	FrontendURL        string
 	GlobalAdmin        string
