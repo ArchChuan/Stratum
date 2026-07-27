@@ -58,6 +58,8 @@ func main() {
 	liveSkill := executeLiveSkillFlow(adminClient, apiURL, adminToken, liveAgent["resourceId"].(string),
 		liveMCP["serverId"].(string), runID)
 	liveKnowledge := executeLiveKnowledgeFlow(adminClient, apiURL, adminToken, runID)
+	executeLiveKnowledgeCanaryFlow(adminClient, apiURL, adminToken, liveKnowledge,
+		liveAgent["resourceId"].(string), runID)
 
 	prefix := strings.ReplaceAll(runID, "-", "_")
 	schema := quoteIdentifier(tenantSchemaName(adminGuest.TenantID))
@@ -273,6 +275,92 @@ func assertKnowledgeRun(
 	if !ok || len(ids) != 1 || ids[0] != documentID {
 		panic("live Knowledge citation identity invalid")
 	}
+}
+
+func executeLiveKnowledgeCanaryFlow(
+	client *http.Client, apiURL, token string, liveKnowledge map[string]any, agentID, runID string,
+) {
+	workspaceName := liveKnowledge["resourceId"].(string)
+	workspaceID := liveKnowledge["workspaceId"].(string)
+	baselineRevisionID := liveKnowledge["revisionId"].(string)
+	suiteRevisionID := liveKnowledge["suiteRevisionId"].(string)
+	var optimization struct {
+		Candidates []struct {
+			Revision struct {
+				RevisionID string `json:"revision_id"`
+			} `json:"revision"`
+		} `json:"candidates"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/optimizations", token, map[string]any{
+		"idempotency_key": runID + "-live-knowledge-canary-optimization",
+		"baseline": map[string]any{"kind": "knowledge", "resource_id": workspaceName,
+			"revision_id": baselineRevisionID},
+		"suite_revision_id": suiteRevisionID,
+		"search_space":      map[string]any{"top_k": []int{2}},
+		"failure_summaries": []string{},
+	}, http.StatusCreated, &optimization)
+	if len(optimization.Candidates) != 1 || optimization.Candidates[0].Revision.RevisionID == "" {
+		panic("live Knowledge canary candidate generation invalid")
+	}
+	candidateRevisionID := optimization.Candidates[0].Revision.RevisionID
+	candidateJob, candidateRun := executeStoredEvaluationRun(client, apiURL, token, "knowledge", workspaceName,
+		candidateRevisionID, suiteRevisionID, runID+"-live-knowledge-canary-run")
+	if candidateJob.Status != "succeeded" || !candidateRun.Passed {
+		panic("live Knowledge canary offline evaluation did not pass")
+	}
+	var experiment struct {
+		Experiment struct {
+			ID string `json:"id"`
+		} `json:"experiment"`
+		Deployment struct {
+			CanaryPercent int `json:"canary_percent"`
+		} `json:"deployment"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/experiments", token, map[string]any{
+		"stable": map[string]any{"kind": "knowledge", "resource_id": workspaceName,
+			"revision_id": baselineRevisionID},
+		"canary": map[string]any{"kind": "knowledge", "resource_id": workspaceName,
+			"revision_id": candidateRevisionID},
+		"suite_revision_id": suiteRevisionID,
+	}, http.StatusCreated, &experiment)
+	if experiment.Experiment.ID == "" || experiment.Deployment.CanaryPercent <= 0 {
+		panic("live Knowledge canary experiment creation invalid")
+	}
+	requestJSON(client, http.MethodPut, apiURL+"/agents/"+agentID, token, map[string]any{
+		"name": runID + " live agent", "type": "react", "description": "isolated live Knowledge runtime",
+		"systemPrompt": "Search the bound Knowledge workspace exactly once, then return the bounded result.",
+		"llmModel":     "qwen-plus", "maxIterations": 4, "maxContextTokens": 4096,
+		"allowedSkills": []string{}, "mcpToolIds": []string{},
+		"knowledgeWorkspaceIds": []string{workspaceID},
+	}, http.StatusOK, nil)
+	conversationID := createResourceCanaryConversation(client, apiURL, token, agentID, workspaceName,
+		experiment.Deployment.CanaryPercent, runID+" Knowledge")
+	var onlineResult map[string]any
+	onlineTraceID := requestJSONWithTrace(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use Knowledge to find the evolution center recovery code.",
+			"conversation_id": conversationID}, http.StatusOK, &onlineResult)
+	onlineJSON, _ := json.Marshal(onlineResult)
+	if onlineResult["output"] != "bounded-agent-result" || onlineTraceID == "" ||
+		!bytes.Contains(onlineJSON, []byte("stratum_search_knowledge")) {
+		panic("live Knowledge canary runtime execution invalid")
+	}
+	feedback := waitForFeedback(client, apiURL, token, map[string]any{
+		"trace_id": onlineTraceID, "resource_kind": "knowledge", "resource_id": workspaceName,
+		"score": 1, "outcome": map[string]any{"status": "success"},
+		"idempotency_key": runID + "-live-knowledge-canary-feedback",
+	})
+	feedbackRow, _ := feedback["feedback"].(map[string]any)
+	feedbackExperiment, _ := feedback["experiment"].(map[string]any)
+	if feedbackRow["revision_id"] != candidateRevisionID ||
+		feedbackRow["experiment_id"] != experiment.Experiment.ID || feedbackRow["variant"] != "canary" ||
+		feedbackExperiment["id"] != experiment.Experiment.ID {
+		panic("live Knowledge canary feedback attribution mismatch")
+	}
+	liveKnowledge["candidateRevisionId"] = candidateRevisionID
+	liveKnowledge["candidateRunId"] = candidateRun.ID
+	liveKnowledge["experimentId"] = experiment.Experiment.ID
+	liveKnowledge["onlineTraceId"] = onlineTraceID
+	liveKnowledge["onlineVariant"] = feedbackRow["variant"]
 }
 
 func executeStoredEvaluationRun(

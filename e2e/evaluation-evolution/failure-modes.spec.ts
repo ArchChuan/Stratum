@@ -151,6 +151,24 @@ test('Knowledge evidence preserves document citation through outage and recovery
     results: [{ passed: true, actual: { retrieved_document_ids: [evidence.documentId] } }] });
 });
 
+test('Knowledge online canary searches the immutable candidate and attributes feedback', async ({ adminApi, manifest }) => {
+  const evidence = manifest.liveEvidence.knowledge;
+  expect(evidence.onlineTraceId).not.toBe('');
+  expect(evidence.onlineVariant).toBe('canary');
+  const candidateRun = await adminApi.get(`/evaluations/runs/${evidence.candidateRunId}`);
+  expect(candidateRun.status()).toBe(200);
+  expect(await candidateRun.json()).toMatchObject({ passed: true, resource: {
+    kind: 'knowledge', resource_id: evidence.resourceId, revision_id: evidence.candidateRevisionId,
+  } });
+  const experiments = await adminApi.get(
+    `/evaluations/experiments?resource_kind=knowledge&resource_id=${evidence.resourceId}`,
+  );
+  expect(experiments.status()).toBe(200);
+  expect((await experiments.json()).items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: evidence.experimentId, canary_revision_id: evidence.candidateRevisionId }),
+  ]));
+});
+
 test('member reads but cannot issue administrator commands', async ({ memberApi, manifest }) => {
   const experiment = manifest.resources.skill;
   const read = await memberApi.get('/evaluations/overview');

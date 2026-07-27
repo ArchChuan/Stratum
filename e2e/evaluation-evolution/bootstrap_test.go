@@ -90,6 +90,24 @@ func TestKnowledgeOutagePreservesMilvusPublishedPort(t *testing.T) {
 	}
 }
 
+func TestKnowledgeFlowIncludesOnlineCanaryAndFeedbackAttribution(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("bootstrap.go")
+	if err != nil {
+		t.Fatalf("read bootstrap source: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"executeLiveKnowledgeCanaryFlow", "stratum_search_knowledge",
+		`"resource_kind": "knowledge"`, `"variant"] != "canary"`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Knowledge online canary evidence is missing %q", required)
+		}
+	}
+}
+
 func TestSanitizeContainerDiagnosticRedactsCredentials(t *testing.T) {
 	t.Parallel()
 
