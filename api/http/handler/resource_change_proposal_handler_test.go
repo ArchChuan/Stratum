@@ -31,6 +31,22 @@ func TestResourceChangeProposalHandlerGetReturnsSafeReview(t *testing.T) {
 	require.Equal(t, "admin-1", service.actorID)
 }
 
+func TestResourceChangeProposalHandlerOmitsNullBaselineForCreate(t *testing.T) {
+	proposal := proposalHandlerFixture()
+	proposal.Operation = domain.OperationCreate
+	proposal.ResourceID = ""
+	proposal.BaselineFingerprint = ""
+	proposal.BaselineProjection = json.RawMessage(`null`)
+	router := proposalHandlerRouter(&proposalHandlerServiceFake{proposal: proposal}, true)
+
+	request := httptest.NewRequest(http.MethodGet, "/resource-change-proposals/proposal-1", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.NotContains(t, recorder.Body.String(), "baselineProjection")
+}
+
 func TestResourceChangeProposalHandlerRejectsUnknownPatchFields(t *testing.T) {
 	router := proposalHandlerRouter(&proposalHandlerServiceFake{proposal: proposalHandlerFixture()}, true)
 	recorder := httptest.NewRecorder()

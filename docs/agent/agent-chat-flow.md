@@ -59,8 +59,9 @@ sequenceDiagram
     Proposal-->>Admin: applied/stale/failed/unknown outcome
 ```
 
-只有 admin/owner 能创建、读取、编辑、取消或确认 proposal。更新操作在创建 proposal 时保存安全 baseline fingerprint，
-apply 前再次解析 owning context 当前投影；不同则进入 `stale`，不调用 applier。`unknown_outcome` 表示副作用可能已发生，
+只有 admin/owner 能创建、读取、编辑、取消或确认 proposal。更新操作保存去密 baseline projection 供 old/new 审阅，并
+保存独立 fingerprint；apply 前再次解析 owning context 当前投影并比较 fingerprint，不同则进入 `stale`，不调用 applier。
+`unknown_outcome` 表示副作用可能已发生，
 API 和 UI 都不提供重试。MCP update 保留现有凭据但不允许读出或替换；Knowledge 不允许改名或上传文档；Skill 只改
 draft bundle，不 publish；Agent 不允许以托管系统助手为目标。
 

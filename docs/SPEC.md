@@ -431,7 +431,8 @@ Knowledge 或凭据配置入口。admin/owner 可在对话中生成严格类型�
 - Areas：Agent、Skill、MCP、Knowledge、Model；单 area 失败形成 evidence gap，不影响其他 area。
 - Artifacts：`citations`、`diagnostic_report` 写入 `chat_messages.artifacts_json`，包含 Profile version，严格脱敏和限长。
 - Proposals：仅允许 Agent、Skill draft、credential-free MCP config、Knowledge workspace 的 create/update；模型只写
-  proposal，不持有资源 service；确认后由确定性 service 重授权、比较 baseline、原子 claim 并调用一次 owning adapter。
+  proposal，不持有资源 service；update 以去密 typed projection 展示 old/new、以独立 fingerprint 检查冲突；确认后由
+  确定性 service 重授权、比较 baseline、原子 claim 并调用一次 owning adapter。
 - Safety：未知字段和凭据形字段在持久化前拒绝，无效记录 payload 为 `{}`；MCP update 保留但不暴露现有凭据；
   `unknown_outcome` 不可重试；不支持 delete、Skill publish、MCP execution 或 Knowledge upload。
 - UI：系统助手始终排序第一并显示“系统内置”；回答为摘要 + typed artifact；管理员可进入提案页查看字段影响、

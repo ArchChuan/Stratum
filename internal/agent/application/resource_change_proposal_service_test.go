@@ -36,6 +36,96 @@ func TestResourceChangeProposalCreateAuthorizationAndInvalidPayload(t *testing.T
 	require.NotContains(t, string(repo.proposals[proposal.ID].Payload), "secret")
 }
 
+func TestResourceChangeProposalRejectsUnsupportedMCPTransportBeforeReview(t *testing.T) {
+	repo := newProposalRepoFake()
+	service := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{}, nil)
+	proposal, err := service.CreateProposal(context.Background(), CreateProposalInput{
+		TenantID: "tenant-1", ActorID: "admin", Kind: domain.ResourceMCPConfig,
+		Operation: domain.OperationCreate,
+		Payload: json.RawMessage(
+			`{"name":"docs","version":"1","transport":"streamable_http","url":"https://example.test/mcp","timeoutSec":30}`,
+		),
+	})
+	require.ErrorIs(t, err, domain.ErrProposalInvalid)
+	require.Equal(t, domain.StatusInvalid, proposal.Status)
+	require.JSONEq(t, `{}`, string(repo.proposals[proposal.ID].Payload))
+}
+
+func TestResourceChangeProposalValidatesMCPConfigurationBeforeReview(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		wantErr error
+	}{
+		{
+			name:    "stdio requires command",
+			payload: `{"name":"local","version":"1","transport":"stdio","timeoutSec":30}`,
+			wantErr: domain.ErrProposalInvalid,
+		},
+		{
+			name:    "stdio rejects URL",
+			payload: `{"name":"local","version":"1","transport":"stdio","command":"mcp-server","url":"https://example.test/mcp","timeoutSec":30}`,
+			wantErr: domain.ErrProposalInvalid,
+		},
+		{
+			name:    "streamable HTTP requires URL",
+			payload: `{"name":"docs","version":"1","transport":"streamable-http","timeoutSec":30}`,
+			wantErr: domain.ErrProposalInvalid,
+		},
+		{
+			name:    "streamable HTTP rejects command and args",
+			payload: `{"name":"docs","version":"1","transport":"streamable-http","url":"https://example.test/mcp","command":"mcp-server","args":["serve"],"timeoutSec":30}`,
+			wantErr: domain.ErrProposalInvalid,
+		},
+		{
+			name:    "streamable HTTP rejects credentials in URL",
+			payload: `{"name":"docs","version":"1","transport":"streamable-http","url":"https://user:secret@example.test/mcp?api_token=marker-secret","timeoutSec":30}`,
+			wantErr: domain.ErrProposalInvalid,
+		},
+		{
+			name:    "timeout has an upper bound",
+			payload: `{"name":"docs","version":"1","transport":"streamable-http","url":"https://example.test/mcp","timeoutSec":301}`,
+			wantErr: domain.ErrProposalInvalid,
+		},
+		{
+			name:    "retry values are bounded",
+			payload: `{"name":"docs","version":"1","transport":"streamable-http","url":"https://example.test/mcp","timeoutSec":30,"retry":{"enabled":true,"maxRetries":21,"initialDelayMs":99,"maxDelayMs":999,"backoffFactor":0.5}}`,
+			wantErr: domain.ErrProposalInvalid,
+		},
+		{
+			name:    "retry maximum delay cannot precede initial delay",
+			payload: `{"name":"docs","version":"1","transport":"streamable-http","url":"https://example.test/mcp","timeoutSec":30,"retry":{"enabled":true,"maxRetries":3,"initialDelayMs":60000,"maxDelayMs":1000,"backoffFactor":2}}`,
+			wantErr: domain.ErrProposalInvalid,
+		},
+		{
+			name:    "valid stdio",
+			payload: `{"name":"local","version":"1","transport":"stdio","command":"mcp-server","args":["serve"],"timeoutSec":30}`,
+		},
+		{
+			name:    "valid streamable HTTP with retry",
+			payload: `{"name":"docs","version":"1","transport":"streamable-http","url":"https://example.test/mcp","timeoutSec":300,"retry":{"enabled":true,"maxRetries":20,"initialDelayMs":100,"maxDelayMs":300000,"backoffFactor":10}}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newProposalRepoFake()
+			service := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{}, nil)
+			proposal, err := service.CreateProposal(context.Background(), CreateProposalInput{
+				TenantID: "tenant-1", ActorID: "admin", Kind: domain.ResourceMCPConfig,
+				Operation: domain.OperationCreate, Payload: json.RawMessage(tc.payload),
+			})
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				require.Equal(t, domain.StatusInvalid, proposal.Status)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, domain.StatusReadyForReview, proposal.Status)
+		})
+	}
+}
+
 func TestResourceChangeProposalConfirmReauthorizesAndChecksBaseline(t *testing.T) {
 	repo := newProposalRepoFake()
 	authorizer := &proposalAuthorizerFake{}
@@ -331,8 +421,8 @@ type baselineFake struct {
 	err   error
 }
 
-func (f *baselineFake) ResolveBaseline(context.Context, domain.ResourceChangeProposal) (string, error) {
-	return f.value, f.err
+func (f *baselineFake) ResolveBaseline(context.Context, domain.ResourceChangeProposal) (port.ResourceBaseline, error) {
+	return port.ResourceBaseline{Fingerprint: f.value, Projection: json.RawMessage(`{"name":"before"}`)}, f.err
 }
 
 type proposalApplierFake struct {

@@ -20,6 +20,7 @@ type ResourceChangeProposalResponse struct {
 	ResourceID          string                   `json:"resourceId,omitempty"`
 	Operation           domain.ProposalOperation `json:"operation"`
 	BaselineFingerprint string                   `json:"baselineFingerprint,omitempty"`
+	BaselineProjection  json.RawMessage          `json:"baselineProjection,omitempty"`
 	Payload             json.RawMessage          `json:"payload"`
 	Summary             string                   `json:"summary"`
 	Status              domain.ProposalStatus    `json:"status"`
@@ -38,11 +39,16 @@ func NewResourceChangeProposalResponse(
 	if events == nil {
 		events = []domain.ProposalEvent{}
 	}
+	baselineProjection := proposal.BaselineProjection
+	if proposal.Operation == domain.OperationCreate {
+		baselineProjection = nil
+	}
 	return ResourceChangeProposalResponse{
 		ID: proposal.ID, ConversationID: proposal.ConversationID, ProposerID: proposal.ProposerID,
 		ConfirmerID: proposal.ConfirmerID, ResourceKind: proposal.ResourceKind, ResourceID: proposal.ResourceID,
 		Operation: proposal.Operation, BaselineFingerprint: proposal.BaselineFingerprint,
-		Payload: proposal.Payload, Summary: proposal.Summary, Status: proposal.Status,
+		BaselineProjection: baselineProjection,
+		Payload:            proposal.Payload, Summary: proposal.Summary, Status: proposal.Status,
 		ErrorCode: proposal.ErrorCode, ApplyResult: proposal.ApplyResult, Events: events,
 		ExpiresAt: proposal.ExpiresAt, CreatedAt: proposal.CreatedAt, UpdatedAt: proposal.UpdatedAt,
 	}

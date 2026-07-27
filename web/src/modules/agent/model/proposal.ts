@@ -31,6 +31,7 @@ const proposalBase = {
   id: z.string(), conversationId: z.string().optional(), proposerId: z.string(), confirmerId: z.string().optional(),
   resourceId: z.string().optional(), operation: proposalOperationSchema,
   baselineFingerprint: z.string().optional(), summary: z.string(), status: proposalStatusSchema,
+  baselineProjection: z.record(z.unknown()).optional(),
   errorCode: z.string().optional(), expiresAt: z.string(), createdAt: z.string(), updatedAt: z.string(),
   applyResult: z.object({
     resourceId: z.string().optional(), fingerprint: z.string().optional(), readback: z.unknown().optional(),

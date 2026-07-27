@@ -77,11 +77,11 @@ func TestDecodeProposalPayloadStrictly(t *testing.T) {
 	}{
 		{"agent", ResourceAgent, OperationCreate, `{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096}`, false},
 		{"skill draft", ResourceSkillDraft, OperationUpdate, `{"name":"skill","description":"desc","instructions":"do work"}`, false},
-		{"mcp", ResourceMCPConfig, OperationCreate, `{"name":"docs","version":"1","transport":"streamable_http","url":"https://example.test/mcp","timeoutSec":30}`, false},
+		{"mcp", ResourceMCPConfig, OperationCreate, `{"name":"docs","version":"1","transport":"streamable-http","url":"https://example.test/mcp","timeoutSec":30}`, false},
 		{"knowledge", ResourceKnowledgeWorkspace, OperationCreate, `{"name":"docs","description":"official docs","embeddingModel":"text-embedding-v3"}`, false},
 		{"unknown field", ResourceAgent, OperationCreate, `{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096,"systemPrompt":"override"}`, true},
 		{"secret env", ResourceMCPConfig, OperationCreate, `{"name":"docs","version":"1","transport":"stdio","command":"server","timeoutSec":30,"env":{"TOKEN":"secret"}}`, true},
-		{"secret headers", ResourceMCPConfig, OperationUpdate, `{"name":"docs","version":"1","transport":"streamable_http","url":"https://example.test/mcp","timeoutSec":30,"headers":{"Authorization":"Bearer secret"}}`, true},
+		{"secret headers", ResourceMCPConfig, OperationUpdate, `{"name":"docs","version":"1","transport":"streamable-http","url":"https://example.test/mcp","timeoutSec":30,"headers":{"Authorization":"Bearer secret"}}`, true},
 		{"trailing object", ResourceKnowledgeWorkspace, OperationCreate, `{"name":"docs","description":"official docs","embeddingModel":"embed"}{}`, true},
 	}
 	for _, tc := range tests {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -95,14 +96,15 @@ func (s *ResourceChangeProposalService) CreateProposal(
 		if in.ResourceID == "" || s.baseline == nil {
 			return s.persistInvalid(ctx, proposal, "Update requires a target resource and baseline resolver.")
 		}
-		fingerprint, baselineErr := s.baseline.ResolveBaseline(ctx, proposal)
+		baseline, baselineErr := s.baseline.ResolveBaseline(ctx, proposal)
 		if baselineErr != nil {
 			return domain.ResourceChangeProposal{}, fmt.Errorf("resolve proposal baseline: %w", baselineErr)
 		}
-		if fingerprint == "" {
+		if baseline.Fingerprint == "" || len(baseline.Projection) == 0 {
 			return s.persistInvalid(ctx, proposal, "Target resource has no stable baseline.")
 		}
-		proposal.BaselineFingerprint = fingerprint
+		proposal.BaselineFingerprint = baseline.Fingerprint
+		proposal.BaselineProjection = append(json.RawMessage(nil), baseline.Projection...)
 	}
 	if err := proposal.Validate(now); err != nil {
 		return s.persistInvalid(ctx, proposal, "Proposal envelope rejected by validation.")
@@ -156,11 +158,12 @@ func (s *ResourceChangeProposalService) UpdateDraft(
 	proposal.UpdatedAt = s.now()
 	proposal.Status = domain.StatusReadyForReview
 	if proposal.Operation == domain.OperationUpdate {
-		fingerprint, err := s.baseline.ResolveBaseline(ctx, proposal)
+		baseline, err := s.baseline.ResolveBaseline(ctx, proposal)
 		if err != nil {
 			return domain.ResourceChangeProposal{}, fmt.Errorf("resolve edited proposal baseline: %w", err)
 		}
-		proposal.BaselineFingerprint = fingerprint
+		proposal.BaselineFingerprint = baseline.Fingerprint
+		proposal.BaselineProjection = append(json.RawMessage(nil), baseline.Projection...)
 	}
 	if err := s.repo.UpdateDraft(ctx, proposal, domain.ProposalEvent{
 		ActorID: in.ActorID, FromStatus: fromStatus, ToStatus: domain.StatusReadyForReview,
@@ -252,7 +255,7 @@ func (s *ResourceChangeProposalService) ConfirmAndApply(
 			return domain.ResourceChangeProposal{}, fmt.Errorf("%w: recheck proposal baseline: %v",
 				domain.ErrProposalApplyFailed, resolveErr)
 		}
-		if current != claimed.BaselineFingerprint {
+		if current.Fingerprint != claimed.BaselineFingerprint {
 			if finishErr := s.finish(ctx, claimed, domain.StatusStale, domain.ApplyResult{}, "proposal_stale", actorID); finishErr != nil {
 				return domain.ResourceChangeProposal{}, errors.Join(domain.ErrProposalStale, finishErr)
 			}
@@ -357,7 +360,7 @@ func validateProposalPayload(payload any) error {
 			return domain.ErrProposalInvalid
 		}
 	case *domain.MCPConfigChange:
-		if strings.TrimSpace(value.Name) == "" || strings.TrimSpace(value.Transport) == "" || value.TimeoutSec < 1 {
+		if !validMCPConfigChange(value) {
 			return domain.ErrProposalInvalid
 		}
 	case *domain.KnowledgeWorkspaceChange:
@@ -368,4 +371,57 @@ func validateProposalPayload(payload any) error {
 		return domain.ErrProposalInvalid
 	}
 	return nil
+}
+
+func validMCPConfigChange(value *domain.MCPConfigChange) bool {
+	if strings.TrimSpace(value.Name) == "" ||
+		value.TimeoutSec < minProposalMCPTimeoutSec || value.TimeoutSec > maxProposalMCPTimeoutSec {
+		return false
+	}
+	switch value.Transport {
+	case "stdio":
+		if strings.TrimSpace(value.Command) == "" || strings.TrimSpace(value.URL) != "" {
+			return false
+		}
+	case "streamable-http":
+		if !validProposalMCPURL(value.URL) || strings.TrimSpace(value.Command) != "" || len(value.Args) > 0 {
+			return false
+		}
+	default:
+		return false
+	}
+	if value.Retry == nil {
+		return true
+	}
+	retry := value.Retry
+	return retry.MaxRetries >= minProposalMCPRetryCount && retry.MaxRetries <= maxProposalMCPRetryCount &&
+		retry.InitialDelayMs >= minProposalMCPRetryInitialDelayMs &&
+		retry.InitialDelayMs <= maxProposalMCPRetryInitialDelayMs &&
+		retry.MaxDelayMs >= minProposalMCPRetryMaxDelayMs && retry.MaxDelayMs <= maxProposalMCPRetryMaxDelayMs &&
+		retry.MaxDelayMs >= retry.InitialDelayMs &&
+		retry.BackoffFactor >= minProposalMCPRetryBackoffFactor &&
+		retry.BackoffFactor <= maxProposalMCPRetryBackoffFactor
+}
+
+func validProposalMCPURL(raw string) bool {
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
+		return false
+	}
+	for key := range parsed.Query() {
+		if proposalSecretLikeKey(key) {
+			return false
+		}
+	}
+	return true
+}
+
+func proposalSecretLikeKey(key string) bool {
+	normalized := strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key))
+	for _, marker := range []string{"token", "apikey", "authorization", "password", "secret", "credential"} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
