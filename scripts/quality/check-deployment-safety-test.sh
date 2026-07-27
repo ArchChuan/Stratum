@@ -147,6 +147,8 @@ require 'kubectl get deployment traefik -n kube-system -o json' 'Traefik entrypo
 require 'svccontroller\.k3s\.cattle\.io/svcname=traefik' 'Traefik ServiceLB diagnostics'
 require 'kubectl port-forward service/stratum-frontend 18080:80' 'internal frontend verification tunnel'
 require 'http://127\.0\.0\.1:18080/api/health' 'internal frontend health verification'
+require '\.status == "ok" and \.service == "Stratum"' \
+    'public backend health response contract verification'
 require_file "${POSTGRES_DOCKERFILE}" 'curl .*--connect-timeout[[:space:]]+[0-9]+' \
     'SCWS download connection timeout'
 require_file "${POSTGRES_DOCKERFILE}" 'curl .*--max-time[[:space:]]+[0-9]+' 'SCWS download total timeout'
@@ -194,6 +196,8 @@ if [[ ! -f "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" ]]; then
     exit 1
 fi
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" '/api/health' 'remote public health check'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'public_health_contract' \
+    'remote public health response contract'
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'GUEST_ATTEMPTS=5' 'five bounded guest login attempts'
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" '/api/agents/stratum-platform-assistant' \
     'managed Agent member read check'

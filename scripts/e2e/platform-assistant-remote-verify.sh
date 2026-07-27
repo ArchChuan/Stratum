@@ -60,6 +60,8 @@ authorized_post_status() {
 
 status=$(http_status GET "$base_url/api/health") || fail "public_health"
 [[ "$status" == "200" ]] || fail "public_health"
+jq -e '.status == "ok" and .service == "Stratum"' "$response_file" >/dev/null ||
+    fail "public_health_contract"
 : >"$response_file"
 
 member_bearer=""
