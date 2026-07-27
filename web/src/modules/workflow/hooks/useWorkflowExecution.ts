@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { workflowApi } from '../api/workflow.api';
 import type { WorkflowVersion } from '../model/workflow';
+import { createIdempotencyKey } from './idempotencyKey';
 
 interface RequestError { response?: { data?: { error?: string } } }
 
@@ -10,7 +11,7 @@ export const useWorkflowExecution = (workflowId: string) => {
   const [version, setVersion] = useState<WorkflowVersion | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const idempotencyKey = useRef(crypto.randomUUID());
+  const idempotencyKey = useRef(createIdempotencyKey());
 
   useEffect(() => {
     let cancelled = false;
@@ -28,7 +29,7 @@ export const useWorkflowExecution = (workflowId: string) => {
     setSubmitting(true);
     try {
       const result = await workflowApi.startWorkflowRun({ version_id: version.id, ...input, idempotency_key: idempotencyKey.current });
-      idempotencyKey.current = crypto.randomUUID();
+      idempotencyKey.current = createIdempotencyKey();
       return result;
     } catch (error: unknown) {
       message.error({ content: (error as RequestError).response?.data?.error || '操作失败', duration: 0 });
