@@ -35,7 +35,7 @@ type Manifest = {
       traceId: string; tokens: number; toolTraces: number; traceEvents: number; failureJobId: string;
       failureRunId: string; failureError: string; recoveryJobId: string; recoveryRunId: string;
       candidateRevisionId: string; candidateRunId: string; experimentId: string; onlineTraceId: string;
-      onlineVariant: string };
+      onlineVariant: string; feedbackWindowAdvanced: boolean; advancedStage: number };
     skill: { resourceId: string; revisionId: string; suiteRevisionId: string; jobId: string; runId: string;
       traceId: string; tokens: number; llmRequests: number };
     knowledge: { resourceId: string; workspaceId: string; revisionId: string; suiteRevisionId: string;

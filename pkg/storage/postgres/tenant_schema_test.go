@@ -370,6 +370,10 @@ func TestTenantSchemaUpgradeBackfillsExperimentStateBeforeDependentDDL(t *testin
 		"ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS state_version BIGINT NOT NULL DEFAULT 1",
 		"ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS recommendation TEXT NOT NULL DEFAULT 'hold'",
 		"ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS safety_stopped BOOL NOT NULL DEFAULT false",
+		"ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS stage_started_at TIMESTAMPTZ",
+		"UPDATE evaluation_experiments SET stage_started_at=updated_at WHERE stage_started_at IS NULL",
+		"ALTER TABLE evaluation_experiments ALTER COLUMN stage_started_at SET DEFAULT NOW()",
+		"ALTER TABLE evaluation_experiments ALTER COLUMN stage_started_at SET NOT NULL",
 	}
 	lastBackfill := -1
 	for _, statement := range backfills {

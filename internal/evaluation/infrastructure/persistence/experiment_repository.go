@@ -214,7 +214,9 @@ func (r *PgExperimentRepository) SaveDecision(
 		result, err := tx.Exec(ctx,
 			`UPDATE evaluation_experiments
 			 SET status=$2, stage_percent=$3, decision_snapshot=$4, recommendation=$5,
-			     safety_stopped=$6, state_version=$7, updated_at=NOW()
+			     safety_stopped=$6, state_version=$7,
+			     stage_started_at=CASE WHEN stage_percent<>$3 THEN NOW() ELSE stage_started_at END,
+			     updated_at=NOW()
 			 WHERE id=$1 AND state_version=$8`, experiment.ID, string(experiment.Status), experiment.Stage,
 			string(snapshotJSON), string(decision), experiment.SafetyStopped, experiment.StateVersion,
 			experiment.StateVersion-1)

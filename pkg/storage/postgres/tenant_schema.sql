@@ -334,12 +334,17 @@ CREATE TABLE IF NOT EXISTS evaluation_experiments (
     safety_stopped        BOOL NOT NULL DEFAULT false,
     created_by            TEXT NOT NULL DEFAULT '',
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    stage_started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at          TIMESTAMPTZ
 );
 ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS state_version BIGINT NOT NULL DEFAULT 1;
 ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS recommendation TEXT NOT NULL DEFAULT 'hold';
 ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS safety_stopped BOOL NOT NULL DEFAULT false;
+ALTER TABLE evaluation_experiments ADD COLUMN IF NOT EXISTS stage_started_at TIMESTAMPTZ;
+UPDATE evaluation_experiments SET stage_started_at=updated_at WHERE stage_started_at IS NULL;
+ALTER TABLE evaluation_experiments ALTER COLUMN stage_started_at SET DEFAULT NOW();
+ALTER TABLE evaluation_experiments ALTER COLUMN stage_started_at SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_evaluation_experiments_resource
     ON evaluation_experiments(resource_kind, resource_id, created_at DESC);
 

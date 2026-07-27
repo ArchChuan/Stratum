@@ -101,7 +101,9 @@ func (r *PgFeedbackRepository) StageFeedback(
 	observedMinutes := 0
 	err := r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var stageStartedAt time.Time
-		if err := tx.QueryRow(ctx, `SELECT updated_at FROM evaluation_experiments WHERE id=$1`, experiment.ID).Scan(&stageStartedAt); err != nil {
+		if err := tx.QueryRow(ctx,
+			`SELECT stage_started_at FROM evaluation_experiments WHERE id=$1`, experiment.ID,
+		).Scan(&stageStartedAt); err != nil {
 			return err
 		}
 		observedMinutes = int(time.Since(stageStartedAt).Minutes())

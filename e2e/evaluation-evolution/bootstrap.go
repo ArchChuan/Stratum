@@ -53,7 +53,8 @@ func main() {
 		literal(adminGuest.TenantID), literal(adminGuest.User.Sub)))
 	adminToken := refresh(adminClient, apiURL)
 	liveMCP := executeLiveMCPFlow(adminClient, apiURL, adminToken, postgresContainer, adminGuest.TenantID, runID)
-	liveAgent := executeLiveAgentFlow(adminClient, apiURL, adminToken, liveMCP["serverId"].(string), runID)
+	liveAgent := executeLiveAgentFlow(adminClient, apiURL, adminToken, liveMCP["serverId"].(string),
+		postgresContainer, adminGuest.TenantID, runID)
 	executeLiveMCPCanaryFlow(adminClient, apiURL, adminToken, liveMCP, liveAgent["resourceId"].(string),
 		postgresContainer, adminGuest.TenantID, runID)
 	liveSkill := executeLiveSkillFlow(adminClient, apiURL, adminToken, liveAgent["resourceId"].(string),
@@ -832,7 +833,10 @@ func executeLiveSkillFlow(client *http.Client, apiURL, token, agentID, serverID,
 		"traceId": run.Results[0].TraceID, "tokens": run.Results[0].Tokens, "llmRequests": requestDelta}
 }
 
-func executeLiveAgentFlow(client *http.Client, apiURL, token, serverID, runID string) map[string]any {
+func executeLiveAgentFlow(
+	client *http.Client,
+	apiURL, token, serverID, postgresContainer, tenantID, runID string,
+) map[string]any {
 	const providerMarker = "e2e-provider-marker"
 	requestJSON(client, http.MethodPatch, apiURL+"/tenant/settings", token, map[string]any{
 		"settings": map[string]any{"llm_api_keys": map[string]string{"qwen": providerMarker}},
@@ -1025,6 +1029,8 @@ func executeLiveAgentFlow(client *http.Client, apiURL, token, serverID, runID st
 		feedbackExperiment["id"] != experiment.Experiment.ID {
 		panic("live Agent canary feedback attribution mismatch")
 	}
+	feedbackWindowAdvanced := assertAgentFeedbackWindowAdvances(client, apiURL, token, agent.ID,
+		experiment.Experiment.ID, experiment.Deployment.CanaryPercent, postgresContainer, tenantID, runID)
 	return map[string]any{"resourceId": agent.ID, "revisionId": baseline.RevisionID,
 		"suiteRevisionId": published.ID, "jobId": queued.JobID, "runId": run.ID,
 		"traceId": run.Results[0].TraceID, "tokens": run.Results[0].Tokens,
@@ -1034,7 +1040,66 @@ func executeLiveAgentFlow(client *http.Client, apiURL, token, serverID, runID st
 		"recoveryJobId": recoveryJob.JobID, "recoveryRunId": recoveryRun.ID,
 		"candidateRevisionId": candidate.Revision.RevisionID, "candidateRunId": candidateRun.ID,
 		"experimentId": experiment.Experiment.ID, "onlineTraceId": onlineTraceID,
-		"onlineVariant": feedbackRow["variant"]}
+		"onlineVariant": feedbackRow["variant"], "feedbackWindowAdvanced": feedbackWindowAdvanced,
+		"advancedStage": 20}
+}
+
+func assertAgentFeedbackWindowAdvances(
+	client *http.Client,
+	apiURL, token, agentID, experimentID string,
+	canaryPercent int,
+	postgresContainer, tenantID, runID string,
+) bool {
+	schema := quoteIdentifier(tenantSchemaName(tenantID))
+	policy := `{"stages":[5,20],"min_samples":2,"min_observation_minutes":0,"max_cost_regression":1,` +
+		`"max_latency_regression":1,"max_error_rate_increase":1}`
+	execSQL(postgresContainer, "configure feedback window E2E policy", fmt.Sprintf(
+		`UPDATE %s.evaluation_experiments SET policy=%s::jsonb WHERE id=%s`,
+		schema, literal(policy), literal(experimentID)))
+
+	observations := []struct {
+		variant string
+		score   float64
+	}{{variant: "stable", score: 0}, {variant: "stable", score: 0}, {variant: "canary", score: 1}}
+	for index, observation := range observations {
+		conversationID := createResourceVariantConversation(client, apiURL, token, agentID, agentID,
+			canaryPercent, observation.variant == "canary", fmt.Sprintf("%s feedback-window-%d", runID, index))
+		var result map[string]any
+		traceID := requestJSONWithTrace(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+			map[string]any{"query": "Use the lookup tool and return bounded-agent-result.",
+				"conversation_id": conversationID}, http.StatusOK, &result)
+		if result["output"] != "bounded-agent-result" || traceID == "" {
+			panic("feedback window runtime execution invalid")
+		}
+		feedback := waitForFeedback(client, apiURL, token, map[string]any{
+			"trace_id": traceID, "resource_kind": "agent", "resource_id": agentID,
+			"score": observation.score, "outcome": map[string]any{"status": "success"},
+			"idempotency_key": fmt.Sprintf("%s-feedback-window-%d", runID, index),
+		})
+		feedbackRow, _ := feedback["feedback"].(map[string]any)
+		if feedbackRow["experiment_id"] != experimentID || feedbackRow["variant"] != observation.variant {
+			panic("feedback window attribution mismatch")
+		}
+	}
+
+	var experiments struct {
+		Items []struct {
+			ID    string `json:"id"`
+			Stage int    `json:"stage"`
+		} `json:"items"`
+	}
+	requestJSON(client, http.MethodGet,
+		apiURL+"/evaluations/experiments?resource_kind=agent&resource_id="+url.QueryEscape(agentID),
+		token, nil, http.StatusOK, &experiments)
+	for _, current := range experiments.Items {
+		if current.ID == experimentID {
+			if current.Stage != 20 {
+				panic(fmt.Sprintf("feedback window did not advance: stage=%d", current.Stage))
+			}
+			return true
+		}
+	}
+	panic("feedback window experiment disappeared")
 }
 
 func createCanaryConversation(
@@ -1046,17 +1111,28 @@ func createCanaryConversation(
 func createResourceCanaryConversation(
 	client *http.Client, apiURL, token, agentID, resourceID string, canaryPercent int, runID string,
 ) string {
+	return createResourceVariantConversation(client, apiURL, token, agentID, resourceID, canaryPercent, true, runID)
+}
+
+func createResourceVariantConversation(
+	client *http.Client,
+	apiURL, token, agentID, resourceID string,
+	canaryPercent int,
+	wantCanary bool,
+	runID string,
+) string {
 	for attempt := range 200 {
 		var conversation struct {
 			ID string `json:"id"`
 		}
 		requestJSON(client, http.MethodPost, apiURL+"/agents/"+agentID+"/conversations", token,
 			map[string]string{"name": fmt.Sprintf("%s canary %d", runID, attempt)}, http.StatusCreated, &conversation)
-		if conversation.ID != "" && evaldomain.AssignVariant(conversation.ID+":"+resourceID, canaryPercent) {
+		if conversation.ID != "" &&
+			evaldomain.AssignVariant(conversation.ID+":"+resourceID, canaryPercent) == wantCanary {
 			return conversation.ID
 		}
 	}
-	panic("could not allocate deterministic resource canary subject")
+	panic("could not allocate deterministic experiment variant subject")
 }
 
 type agentEvaluationRun struct {

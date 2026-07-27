@@ -118,6 +118,8 @@ test('Agent online canary executes the immutable candidate and attributes feedba
   const evidence = manifest.liveEvidence.agent;
   expect(evidence.onlineTraceId).not.toBe('');
   expect(evidence.onlineVariant).toBe('canary');
+  expect(evidence.feedbackWindowAdvanced).toBe(true);
+  expect(evidence.advancedStage).toBe(20);
 
   const candidateRun = await adminApi.get(`/evaluations/runs/${evidence.candidateRunId}`);
   expect(candidateRun.status()).toBe(200);
@@ -129,7 +131,8 @@ test('Agent online canary executes the immutable candidate and attributes feedba
   );
   expect(experiments.status()).toBe(200);
   expect((await experiments.json()).items).toEqual(expect.arrayContaining([
-    expect.objectContaining({ id: evidence.experimentId, canary_revision_id: evidence.candidateRevisionId }),
+    expect.objectContaining({ id: evidence.experimentId, canary_revision_id: evidence.candidateRevisionId,
+      stage: evidence.advancedStage }),
   ]));
 });
 
