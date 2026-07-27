@@ -7,7 +7,7 @@
 	docker-start \
 	k8s-deploy k8s-delete k8s-logs \
 	helm-install helm-upgrade helm-uninstall helm-diff helm-lint \
-	migration-guardrails ci-backend ci-frontend ci-docker \
+	migration-guardrails e2e-attestation-check ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	agent-instructions agent-instructions-check \
 	tool-permission-test agent-interview-test knowledge-deposition-test \
@@ -194,6 +194,12 @@ agent-instructions-check:
 risk-guardrails:
 	bash scripts/quality/risk-regression-guard-test.sh
 	bash scripts/quality/risk-regression-guard.sh --all
+
+E2E_REQUIRED_MODE ?= short
+e2e-attestation-check:
+	@digest=$$(go run ./cmd/e2e-attestation digest --root . --ref HEAD); \
+	go run ./cmd/e2e-attestation verify --root . --ref HEAD --required-mode $(E2E_REQUIRED_MODE) \
+		--attestation test/e2e/attestations/$$digest.json
 
 tool-permission-test:
 	bash scripts/quality/tool-permission-test.sh

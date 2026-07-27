@@ -19,6 +19,16 @@ labels=(
   tool-permissions
 )
 declare -A selected=()
+acceptance_mode=short
+
+classify_acceptance_path() {
+  case "${1#./}" in
+    internal/iam/*|api/http/handler/auth_*|pkg/migration/*|pkg/storage/postgres/*schema*|internal/platform/messaging/*|\
+    internal/llmgateway/*|internal/mcp/*|pkg/storage/milvus/*|pkg/httpclient/*)
+      acceptance_mode=soak
+      ;;
+  esac
+}
 
 select_all() {
   local label
@@ -97,6 +107,15 @@ run_check() {
   "$@"
 }
 
+if [[ "${1:-}" == "--acceptance" ]]; then
+  shift
+  for path in "$@"; do
+    classify_acceptance_path "$path"
+  done
+  printf '%s\n' "$acceptance_mode"
+  exit 0
+fi
+
 if [[ "${1:-}" == "--explain" ]]; then
   if [[ "$#" -ne 1 ]]; then
     echo 'usage: risk-regression-guard.sh --explain' >&2
@@ -114,6 +133,7 @@ if [[ "${1:-}" == "--explain" ]]; then
 
 自动报告只是候选证据，必须按当前代码、测试和运行结果复核。
 提交前运行：make risk-guardrails
+本地系统验收：普通功能改动要求 short；认证、租户迁移、消息、向量库或外部依赖改动要求 soak。
 EOF
   exit 0
 fi

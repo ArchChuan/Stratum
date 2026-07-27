@@ -33,6 +33,7 @@ func TestVerifyAttestationRejectsInvalidClaims(t *testing.T) {
 		{"credential pattern", func(a *Attestation) {
 			a.RiskClassification = "Authorization: Bearer fixture-secret"
 		}, "credential"},
+		{"soak required", func(a *Attestation) { a.Mode = "short" }, "required mode"},
 		{"source mutation", func(*Attestation) {
 			require.NoError(t, os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("changed"), 0o600))
 		}, "source digest"},
@@ -41,8 +42,13 @@ func TestVerifyAttestationRejectsInvalidClaims(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			copy := cloneAttestation(t, report)
 			tt.mutate(&copy)
+			requiredMode := ""
+			if tt.name == "soak required" {
+				requiredMode = "soak"
+			}
 			err := VerifyAttestation(root, copy, VerifyOptions{
-				Now: now, ManifestPath: "manifest.json", RequiredPacks: []string{"agent", "iam"},
+				Now: now, ManifestPath: "manifest.json", RequiredMode: requiredMode,
+				RequiredPacks: []string{"agent", "iam"},
 			})
 			require.ErrorContains(t, err, tt.want)
 			require.NoError(t, os.WriteFile(

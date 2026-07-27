@@ -254,6 +254,14 @@ for principle in 'fail closed' 'bearer credential' 'tenant-scoped' \
     exit 1
   fi
 done
+[[ "$(/bin/bash "${CHECKER}" --acceptance web/src/modules/agent/pages/AgentChatPage.tsx)" == short ]] || {
+  echo 'ordinary feature changes must require short acceptance' >&2
+  exit 1
+}
+[[ "$(/bin/bash "${CHECKER}" --acceptance internal/iam/application/user_service.go)" == soak ]] || {
+  echo 'IAM changes must require soak acceptance' >&2
+  exit 1
+}
 if ! grep -q 'make risk-guardrails' <<< "${explanation}"; then
   echo 'risk guard explanation does not expose make risk-guardrails' >&2
   exit 1

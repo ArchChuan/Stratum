@@ -86,9 +86,9 @@ type GenerateOptions struct {
 	Validity                time.Duration
 }
 type VerifyOptions struct {
-	ManifestPath, Ref string
-	Now               time.Time
-	RequiredPacks     []string
+	ManifestPath, Ref, RequiredMode string
+	Now                             time.Time
+	RequiredPacks                   []string
 }
 
 var credentialPatterns = []*regexp.Regexp{
@@ -217,6 +217,9 @@ func VerifyAttestation(root string, report Attestation, options VerifyOptions) e
 	}
 	if report.Status != StatusPassed {
 		return errors.New("attestation status is not passed")
+	}
+	if options.RequiredMode != "" && report.Mode != options.RequiredMode {
+		return fmt.Errorf("attestation mode %q does not satisfy required mode %q", report.Mode, options.RequiredMode)
 	}
 	if !report.Cleanup.Passed || len(report.Cleanup.ResidualEntityIDs) != 0 {
 		return errors.New("cleanup did not complete without residual entities")

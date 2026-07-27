@@ -86,6 +86,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		path := flags.String("attestation", "", "attestation JSON")
 		manifest := flags.String("manifest", "test/e2e/stateful/manifest.json", "coverage manifest")
 		ref := flags.String("ref", "", "committed Git ref; defaults to local source")
+		requiredMode := flags.String("required-mode", "short", "required execution mode: short or soak")
 		packs := stringListFlag{}
 		flags.Var(&packs, "required-pack", "required passing pack; repeat to override full-system defaults")
 		if err := flags.Parse(args[1:]); err != nil {
@@ -94,12 +95,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if *path == "" {
 			return errors.New("--attestation is required")
 		}
+		if *requiredMode != "short" && *requiredMode != "soak" {
+			return errors.New("--required-mode must be short or soak")
+		}
 		required := systemPacks
 		if len(packs) > 0 {
 			required = packs
 		}
 		return e2eattestation.VerifyAttestationFile(*root, *path, e2eattestation.VerifyOptions{
-			ManifestPath: *manifest, Ref: *ref, RequiredPacks: required,
+			ManifestPath: *manifest, Ref: *ref, RequiredMode: *requiredMode, RequiredPacks: required,
 		})
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
