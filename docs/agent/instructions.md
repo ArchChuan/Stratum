@@ -71,7 +71,7 @@ CI 全绿后合并，再用 `git worktree remove ../stratum-<feature>` 清理。
 ## Development and end-to-end verification
 
 - 编码前运行 `bash scripts/quality/risk-regression-guard.sh --explain`。后端快速验证：`go vet && go test -short ./...`；PR 前：`go test -v -race -timeout 30s ./...`。前端 PR 前：`make fe-lint && make fe-build`。依赖服务可用 `make infra-up`。
-- 功能开发、Bug 修复、前后端联调、数据库链路，或 Agent/Skill/MCP/Memory/Knowledge/IAM 能力改动必须使用 `stratum-e2e-development` skill，完成真实 API、浏览器操作、后端服务和测试数据库链路的端到端验证。目标未满足时继续定位修复；清理临时脚本和自启动进程，禁止输出 token、密钥或原始 API key。
+- 功能开发、Bug 修复、前后端联调、数据库链路，或 Agent/Skill/MCP/Memory/Knowledge/IAM 能力改动必须使用 `stratum-e2e-development` skill。普通改动完成后运行 `make e2e-system-short`；认证、租户迁移、消息、向量库、外部依赖或风险规则命中的改动还必须运行 `STATEFUL_E2E_DURATION_SEC=3600 STATEFUL_E2E_PACKS=all make e2e-system-soak`。两者都由无头 Chromium 发起真实 UI 操作，以 HTTP 和测试数据库证据对账；可读取测试数据库凭据或精确提升临时身份，但禁止输出 token、cookie、密钥、密码或原始 API key。只有当前源码匹配的 attestation 通过 `make e2e-attestation-check`、无 skipped/unreconciled capability、清理完成且残留风险已明确报告时才可宣告完成；临时 Playwright、纯 API 或手工场景只能诊断，不能替代系统验收。
 - 所有登录测试和验证流程必须使用无头浏览器（Playwright headless）；禁止为测试或验证启动有头浏览器。纯 API/单元测试不属于登录测试，但涉及登录态恢复时必须通过无头浏览器完成。
 - AI 生成测试前必须先读同域优质测试模板，复用 mock 和断言风格。代码是主、测试是行为契约；冲突时依据产品意图判断改实现或改测试，禁止为过测扭曲实现。
 - API 兼容性由 `api/http/contract_test.go` 和 `api/http/testdata/contracts/*.golden.json` 守护。业务逻辑目标覆盖率 ≥80%，外部依赖须 mock，完整套件使用 `-race`。
