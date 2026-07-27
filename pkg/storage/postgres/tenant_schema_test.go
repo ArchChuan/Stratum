@@ -4,7 +4,33 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
+
+func TestTenantSchemaDefaultsSystemAssistantModelWithoutOverwritingTenantChoice(t *testing.T) {
+	if constants.DefaultSystemAssistantModel != "glm-5.2" {
+		t.Fatalf("DefaultSystemAssistantModel = %q, want %q", constants.DefaultSystemAssistantModel, "glm-5.2")
+	}
+
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	for _, want := range []string{
+		"'', 'glm-5.2', '', 10, 8000, 'user', 'stratum.platform_assistant'",
+		"UPDATE agents",
+		"SET llm_model = 'glm-5.2',",
+		"updated_at = NOW()",
+		"WHERE system_key = 'stratum.platform_assistant'",
+		"AND BTRIM(llm_model) = ''",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("tenant_schema.sql missing default model contract %q", want)
+		}
+	}
+}
 
 func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
@@ -30,7 +56,7 @@ func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
 		"'__stratum_platform_assistant__'",
 		"WHILE EXISTS",
 		"'基于官方资料指导平台使用并诊断当前租户应用状态'",
-		"'', '', '', 10, 8000, 'user', 'stratum.platform_assistant'",
+		"'', 'glm-5.2', '', 10, 8000, 'user', 'stratum.platform_assistant'",
 		"ON CONFLICT (id) DO NOTHING",
 		"stratum platform assistant identity conflict requires operator action",
 	} {
