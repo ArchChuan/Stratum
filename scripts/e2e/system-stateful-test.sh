@@ -30,6 +30,22 @@ cat >"$test_dir/process" <<'SH'
 trap 'touch "$STATEFUL_E2E_CLEANUP_MARKER"; exit 0' TERM INT
 while :; do read -r -t 1 _ || true; done
 SH
+cat >"$test_dir/oauth-process" <<'SH'
+#!/usr/bin/env bash
+touch "$STATEFUL_E2E_OAUTH_STARTED_MARKER"
+trap 'touch "$STATEFUL_E2E_OAUTH_CLEANUP_MARKER"; exit 0' TERM INT
+while :; do read -r -t 1 _ || true; done
+SH
+cat >"$test_dir/backend-process" <<'SH'
+#!/usr/bin/env bash
+[[ -e "$STATEFUL_E2E_OAUTH_STARTED_MARKER" ]] || exit 31
+[[ ${STRATUM_E2E_MODE:-} == true ]] || exit 32
+[[ ${GITHUB_AUTHORIZE_URL:-} == http://127.0.0.1:19090/login/oauth/authorize ]] || exit 33
+[[ ${GITHUB_TOKEN_URL:-} == http://127.0.0.1:19090/login/oauth/access_token ]] || exit 34
+[[ ${GITHUB_USER_URL:-} == http://127.0.0.1:19090/user ]] || exit 35
+trap 'touch "$STATEFUL_E2E_CLEANUP_MARKER"; exit 0' TERM INT
+while :; do read -r -t 1 _ || true; done
+SH
 cat >"$test_dir/playwright-pass" <<'SH'
 #!/usr/bin/env bash
 cat >"$STATEFUL_E2E_RESULTS_PATH" <<'JSON'
@@ -54,19 +70,40 @@ cat >"$test_dir/attest" <<'SH'
 [[ ${1:-} == "$STATEFUL_E2E_RESULTS_PATH" ]] || exit 1
 touch "$STATEFUL_E2E_ATTESTATION_MARKER"
 SH
+cat >"$test_dir/migrate" <<'SH'
+#!/usr/bin/env bash
+[[ -z "${STATEFUL_E2E_MIGRATION_MARKER:-}" ]] || touch "$STATEFUL_E2E_MIGRATION_MARKER"
+SH
+cat >"$test_dir/migrate-fail" <<'SH'
+#!/usr/bin/env bash
+printf 'migration prepare failed\n' >&2
+exit 23
+SH
 chmod +x "$test_dir/digest" "$test_dir/process" "$test_dir/playwright-pass" "$test_dir/playwright-skip" \
-  "$test_dir/digest-change" "$test_dir/attest"
+  "$test_dir/oauth-process" "$test_dir/backend-process" "$test_dir/digest-change" "$test_dir/attest" \
+  "$test_dir/migrate" "$test_dir/migrate-fail"
 
 common=(env TEST_DATABASE_URL="$safe_db" STATEFUL_E2E_DIGEST_COMMAND="$test_dir/digest"
   STATEFUL_E2E_INFRA_UP_COMMAND=true STATEFUL_E2E_INFRA_DOWN_COMMAND=true
   STATEFUL_E2E_DATABASE_PREPARE_COMMAND=true STATEFUL_E2E_ENV_FILE="$test_dir/missing.env"
-  STATEFUL_E2E_BACKEND_COMMAND="$test_dir/process" STATEFUL_E2E_FRONTEND_COMMAND="$test_dir/process"
-  STATEFUL_E2E_HEALTH_ATTEMPTS=1 STATEFUL_E2E_FRONTEND_HEALTH_COMMAND=true)
+  STATEFUL_E2E_MIGRATION_COMMAND="$test_dir/migrate"
+  STATEFUL_E2E_OAUTH_COMMAND="$test_dir/oauth-process" STATEFUL_E2E_BACKEND_COMMAND="$test_dir/backend-process"
+  STATEFUL_E2E_FRONTEND_COMMAND="$test_dir/process" STATEFUL_E2E_HEALTH_ATTEMPTS=1
+  STATEFUL_E2E_OAUTH_HEALTH_COMMAND=true STATEFUL_E2E_FRONTEND_HEALTH_COMMAND=true
+  STATEFUL_E2E_OAUTH_STARTED_MARKER="$test_dir/oauth-started"
+  STATEFUL_E2E_OAUTH_CLEANUP_MARKER="$test_dir/oauth-cleaned")
 cleanup_marker="$test_dir/cleaned"
 expect_failure 'backend failed health check' "${common[@]}" STATEFUL_E2E_CLEANUP_MARKER="$cleanup_marker" \
   STATEFUL_E2E_BACKEND_HEALTH_COMMAND=false bash "$runner" short
 for _ in {1..20}; do [[ -e "$cleanup_marker" ]] && break; sleep 0.05; done
 [[ -e "$cleanup_marker" ]] || { printf 'runner did not clean up owned child processes\n' >&2; exit 1; }
+
+oauth_cleanup_marker="$test_dir/oauth-cleaned"
+for _ in {1..20}; do [[ -e "$oauth_cleanup_marker" ]] && break; sleep 0.05; done
+[[ -e "$oauth_cleanup_marker" ]] || { printf 'runner did not clean up oauth process\n' >&2; exit 1; }
+
+expect_failure 'oauth provider failed health check' "${common[@]}" \
+  STATEFUL_E2E_OAUTH_HEALTH_COMMAND=false STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true bash "$runner" short
 
 expect_failure 'failed or skipped coverage' "${common[@]}" STATEFUL_E2E_CLEANUP_MARKER="$cleanup_marker" \
   STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true STATEFUL_E2E_PLAYWRIGHT_COMMAND="$test_dir/playwright-skip" \
@@ -79,9 +116,15 @@ expect_failure 'covered source changed' "${common[@]}" STATEFUL_E2E_CLEANUP_MARK
   bash "$runner" short
 
 attestation_marker="$test_dir/attested"
+migration_marker="$test_dir/migrated"
 "${common[@]}" STATEFUL_E2E_CLEANUP_MARKER="$cleanup_marker" STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true \
   STATEFUL_E2E_PLAYWRIGHT_COMMAND="$test_dir/playwright-pass" STATEFUL_E2E_ATTESTATION_MARKER="$attestation_marker" \
+  STATEFUL_E2E_MIGRATION_MARKER="$migration_marker" \
   STATEFUL_E2E_ATTESTATION_COMMAND="$test_dir/attest \"\$STATEFUL_E2E_RESULTS_PATH\"" bash "$runner" short
+[[ -e "$migration_marker" ]] || { printf 'public schema migration was not executed\n' >&2; exit 1; }
 [[ -e "$attestation_marker" ]] || { printf 'safe result was not forwarded to attestation generation\n' >&2; exit 1; }
+
+expect_failure 'migration prepare failed' "${common[@]}" STATEFUL_E2E_MIGRATION_COMMAND="$test_dir/migrate-fail" \
+  bash "$runner" short
 
 printf 'system stateful runner contract tests passed\n'

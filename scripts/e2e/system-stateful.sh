@@ -30,11 +30,12 @@ database_name=${database_name##*/}
 [[ "$database_name" =~ ^[A-Za-z0-9_]+$ ]] || { printf 'unsafe E2E database name\n' >&2; exit 2; }
 
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/stratum-system-stateful.XXXXXX")
-backend_pid='' frontend_pid='' infra_started=false infra_owned=false
+oauth_pid='' backend_pid='' frontend_pid='' infra_started=false infra_owned=false
 cleanup() {
   local status=$?
   [[ -z "$frontend_pid" ]] || { kill -- "-$frontend_pid" 2>/dev/null || true; wait "$frontend_pid" 2>/dev/null || true; }
   [[ -z "$backend_pid" ]] || { kill -- "-$backend_pid" 2>/dev/null || true; wait "$backend_pid" 2>/dev/null || true; }
+  [[ -z "$oauth_pid" ]] || { kill -- "-$oauth_pid" 2>/dev/null || true; wait "$oauth_pid" 2>/dev/null || true; }
   if [[ "$infra_started" == true && "$infra_owned" == true ]]; then
     bash -c "${STATEFUL_E2E_INFRA_DOWN_COMMAND:-make -C '$repo_dir' infra-down}" >/dev/null 2>&1 || status=1
   fi
@@ -54,6 +55,18 @@ if [[ -r "$env_file" ]]; then
   set +a
 fi
 export TEST_DATABASE_URL=$database_url STRATUM_TEST_POSTGRES_URL=$database_url POSTGRES_URL=$database_url
+
+oauth_suffix="$(date +%s)-$$"
+oauth_client_secret=$(openssl rand -hex 32)
+oauth_github_id=$(($(date +%s) * 100000 + $$ % 100000))
+export STRATUM_E2E_MODE=true
+export GITHUB_CLIENT_ID=stratum-stateful-e2e GITHUB_CLIENT_SECRET=$oauth_client_secret
+export GITHUB_CALLBACK_URL=http://127.0.0.1:18080/auth/github/callback
+export GITHUB_AUTHORIZE_URL=http://127.0.0.1:19090/login/oauth/authorize
+export GITHUB_TOKEN_URL=http://127.0.0.1:19090/login/oauth/access_token
+export GITHUB_USER_URL=http://127.0.0.1:19090/user
+export E2E_GITHUB_LISTEN_ADDRESS=127.0.0.1:19090 E2E_GITHUB_ID=$oauth_github_id
+export E2E_GITHUB_LOGIN="stateful-oauth-$oauth_suffix" E2E_GITHUB_EMAIL="stateful-oauth-$oauth_suffix@example.test"
 
 digest_command=${STATEFUL_E2E_DIGEST_COMMAND:-go run ./cmd/e2e-attestation digest --root .}
 source_before=$(cd "$repo_dir" && bash -c "$digest_command")
@@ -75,7 +88,12 @@ fi
 database_prepare_command=${STATEFUL_E2E_DATABASE_PREPARE_COMMAND:-\
 "cd '$repo_dir/web' && node --input-type=module -e 'import pg from \"pg\"; const target=new URL(process.env.TEST_DATABASE_URL); const name=target.pathname.slice(1); target.pathname=\"/postgres\"; const client=new pg.Client({connectionString:target.toString()}); await client.connect(); const found=await client.query(\"SELECT 1 FROM pg_database WHERE datname = \$1\",[name]); if (found.rowCount === 0) await client.query(\"CREATE DATABASE \\\"\"+name+\"\\\"\"); await client.end();'"}
 bash -c "$database_prepare_command"
+migration_command=${STATEFUL_E2E_MIGRATION_COMMAND:-\
+"cd '$repo_dir' && go run ./cmd/migrate-public --sql-dir '$repo_dir/pkg/migration/sql'"}
+bash -c "$migration_command"
 
+oauth_command=${STATEFUL_E2E_OAUTH_COMMAND:-"cd '$repo_dir' && go run ./cmd/e2e-github-oauth"}
+setsid bash -c "exec bash -c \"\$1\"" _ "$oauth_command" >"$work_dir/oauth.log" 2>&1 & oauth_pid=$!
 backend_command=${STATEFUL_E2E_BACKEND_COMMAND:-"cd '$repo_dir' && FRONTEND_URL=http://127.0.0.1:15173 PORT=18080 SECURE_COOKIES=false go run ./cmd/server"}
 setsid bash -c "exec bash -c \"\$1\"" _ "$backend_command" >"$work_dir/backend.log" 2>&1 & backend_pid=$!
 frontend_command=${STATEFUL_E2E_FRONTEND_COMMAND:-"cd '$repo_dir/web' && VITE_API_BASE_URL=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 15173"}
@@ -90,8 +108,10 @@ poll() {
   printf '%s failed health check\n' "$label" >&2
   return 1
 }
+poll 'oauth provider' "${STATEFUL_E2E_OAUTH_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:19090/health}"
 poll backend "${STATEFUL_E2E_BACKEND_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:18080/health}"
 poll frontend "${STATEFUL_E2E_FRONTEND_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:15173/}"
+kill -0 "$oauth_pid" 2>/dev/null || { printf 'oauth provider exited before browser execution\n' >&2; exit 1; }
 kill -0 "$backend_pid" 2>/dev/null || { printf 'backend exited before browser execution\n' >&2; exit 1; }
 kill -0 "$frontend_pid" 2>/dev/null || { printf 'frontend exited before browser execution\n' >&2; exit 1; }
 
