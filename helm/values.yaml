@@ -82,6 +82,7 @@ config:
   port: "8080"
   logLevel: "info"
   environment: "demo"
+  ginMode: "debug"
   natsUrl: "nats://nats:4222"
   milvusHost: "milvus"
   milvusPort: "19530"
