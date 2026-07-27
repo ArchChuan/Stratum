@@ -51,10 +51,16 @@ export const useChatPage = () => {
     streamError,
 		streamDone,
 		streamApproval,
-    startStream,
-    cancelStream,
+		streamFailure,
+		startStream,
+		cancelStream,
+		clearStreamFailure,
     getStreamState,
 	} = useChatStream();
+
+	useEffect(() => {
+		clearStreamFailure();
+	}, [selectedAgent, selectedConv, clearStreamFailure]);
 
 	useEffect(() => {
 		let cancelled=false;
@@ -416,7 +422,9 @@ export const useChatPage = () => {
 		approvalActionId,
 		handleApprove,
 		handleReject,
-    updateSystemAssistantModel,
-    cancelStream,
+		updateSystemAssistantModel,
+		streamFailure,
+		clearStreamFailure,
+		cancelStream,
   };
 };

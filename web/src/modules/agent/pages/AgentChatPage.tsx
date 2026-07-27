@@ -41,6 +41,8 @@ export const AgentChatPage = () => {
     handleApprove,
     handleReject,
     updateSystemAssistantModel,
+		streamFailure,
+		clearStreamFailure,
   } = useChatPage();
 
   const agentObj = agents.find((a) => a.id === selectedAgent);
@@ -50,6 +52,10 @@ export const AgentChatPage = () => {
   const pendingApproval = pendingApprovals.find(
     (item) => !item.agentId || item.agentId === selectedAgent,
   );
+	const assistantModelUnavailable = !!(
+		agentObj?.isSystem &&
+		streamFailure?.code === 'SYSTEM_ASSISTANT_MODEL_UNAVAILABLE'
+	);
   const sidebar = (
     <ChatConversationSidebar
       agents={agents}
@@ -130,6 +136,20 @@ export const AgentChatPage = () => {
             onReject={handleReject}
           />
         )}
+				{assistantModelUnavailable && (
+					<Alert
+						type="error"
+						showIcon
+						message={isAdmin
+							? '租户尚未配置平台助手模型'
+							: '租户尚未配置平台助手模型，请联系租户管理员配置'}
+						action={isAdmin ? (
+							<Button onClick={() => setSettingsTargetID(agentObj.id)}>
+								设置助手模型
+							</Button>
+						) : undefined}
+					/>
+				)}
         <ChatComposer
           input={input}
           setInput={setInput}
@@ -143,7 +163,10 @@ export const AgentChatPage = () => {
           canManage={canManageSettings}
           onClose={() => setSettingsTargetID(null)}
           onSaved={(llmModel) => {
-            if (canManageSettings) updateSystemAssistantModel(llmModel);
+						if (canManageSettings) {
+							updateSystemAssistantModel(llmModel);
+							clearStreamFailure();
+						}
           }}
         />
       </div>
