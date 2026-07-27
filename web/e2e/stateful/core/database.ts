@@ -1,3 +1,5 @@
+import { createCipheriv, createHash, randomBytes } from 'node:crypto';
+
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -142,6 +144,32 @@ export const setGeneratedActorVerifiedEmail = async (
     if (result.rowCount !== 1) {
       throw new Error('generated actor email setup did not update exactly one guest');
     }
+  } finally {
+    client.release();
+  }
+};
+
+export const copyConfiguredLLMCredentials = async (
+  pool: DatabasePool,
+  tenantID: string,
+  jwtPrivateKeyPEM: string,
+): Promise<void> => {
+  requireUUID(tenantID, 'tenant_id');
+  if (!jwtPrivateKeyPEM) throw new Error('JWT private key is required for synthetic LLM credential encryption');
+  const key = createHash('sha256').update(jwtPrivateKeyPEM).digest();
+  const nonce = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, nonce);
+  const encrypted = Buffer.concat([cipher.update('stateful-local-provider-key'), cipher.final(), cipher.getAuthTag()]);
+  const llmAPIKeys = { qwen: Buffer.concat([nonce, encrypted]).toString('base64') };
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `UPDATE public.tenants
+       SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{llm_api_keys}', $1::jsonb, true)
+       WHERE id = $2 AND deleted_at IS NULL`,
+      [llmAPIKeys, tenantID],
+    );
+    if (result.rowCount !== 1) throw new Error('generated tenant LLM credential setup did not update exactly one tenant');
   } finally {
     client.release();
   }

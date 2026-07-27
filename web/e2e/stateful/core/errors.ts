@@ -8,3 +8,16 @@ export const acceptanceErrors = (values: unknown[]): unknown => {
   if (failures.length === 1) return failures[0];
   return new AggregateError(failures, 'stateful acceptance and cleanup both failed');
 };
+
+export const runCleanupTasks = async (tasks: Array<() => Promise<unknown>>): Promise<void> => {
+  const failures: unknown[] = [];
+  for (const task of tasks) {
+    try {
+      await task();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  const failure = acceptanceErrors(failures);
+  if (failure) throw failure;
+};

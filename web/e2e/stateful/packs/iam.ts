@@ -205,6 +205,20 @@ export const executeIAMPack = async ({
     expect(removedRows).toEqual([{ count: '0' }]);
     completed.push('iam.mutation.delete.tenant.members.userid');
 
+    for (const actor of [actors.tenantAdmin, actors.memberA]) {
+      if (!actor.tenantID) continue;
+      let restoredStatus = 0;
+      try {
+        const restored = await actor.context.request.post(`${backendURL}/auth/switch-tenant`, {
+          data: { tenant_id: actor.tenantID }, headers: { Authorization: `Bearer ${actor.accessToken}` },
+        });
+        restoredStatus = restored.status();
+      } catch {
+        throw new Error('restore generated actor tenant failed without exposing credentials');
+      }
+      expect(restoredStatus).toBe(200);
+    }
+
     const initialAdminList = waitForMutation(systemAdminPage, '/admin/tenants', 'GET');
     await systemAdminPage.goto(`${webURL}/admin/tenants`);
     await expect(systemAdminPage.getByRole('heading', { name: '所有租户' })).toBeVisible();

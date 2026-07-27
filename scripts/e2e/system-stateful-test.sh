@@ -36,13 +36,21 @@ touch "$STATEFUL_E2E_OAUTH_STARTED_MARKER"
 trap 'touch "$STATEFUL_E2E_OAUTH_CLEANUP_MARKER"; exit 0' TERM INT
 while :; do read -r -t 1 _ || true; done
 SH
+cat >"$test_dir/mcp-process" <<'SH'
+#!/usr/bin/env bash
+touch "$STATEFUL_E2E_MCP_STARTED_MARKER"
+trap 'touch "$STATEFUL_E2E_MCP_CLEANUP_MARKER"; exit 0' TERM INT
+while :; do read -r -t 1 _ || true; done
+SH
 cat >"$test_dir/backend-process" <<'SH'
 #!/usr/bin/env bash
 [[ -e "$STATEFUL_E2E_OAUTH_STARTED_MARKER" ]] || exit 31
+[[ -e "$STATEFUL_E2E_MCP_STARTED_MARKER" ]] || exit 36
 [[ ${STRATUM_E2E_MODE:-} == true ]] || exit 32
 [[ ${GITHUB_AUTHORIZE_URL:-} == http://127.0.0.1:19090/login/oauth/authorize ]] || exit 33
 [[ ${GITHUB_TOKEN_URL:-} == http://127.0.0.1:19090/login/oauth/access_token ]] || exit 34
 [[ ${GITHUB_USER_URL:-} == http://127.0.0.1:19090/user ]] || exit 35
+[[ ${QWEN_BASE_URL:-} == http://127.0.0.1:19091/v1 ]] || exit 37
 trap 'touch "$STATEFUL_E2E_CLEANUP_MARKER"; exit 0' TERM INT
 while :; do read -r -t 1 _ || true; done
 SH
@@ -79,19 +87,36 @@ cat >"$test_dir/migrate-fail" <<'SH'
 printf 'migration prepare failed\n' >&2
 exit 23
 SH
+cat >"$test_dir/milvus-find" <<'SH'
+#!/usr/bin/env bash
+printf 'stateful-shared-milvus\n'
+SH
+cat >"$test_dir/milvus-start" <<'SH'
+#!/usr/bin/env bash
+[[ ${STATEFUL_E2E_SHARED_MILVUS_CONTAINER:-} == stateful-shared-milvus ]] || exit 41
+touch "$STATEFUL_E2E_SHARED_MILVUS_READY_MARKER" "$STATEFUL_E2E_SHARED_MILVUS_STARTED_MARKER"
+SH
+cat >"$test_dir/milvus-stop" <<'SH'
+#!/usr/bin/env bash
+[[ ${STATEFUL_E2E_SHARED_MILVUS_CONTAINER:-} == stateful-shared-milvus ]] || exit 42
+touch "$STATEFUL_E2E_SHARED_MILVUS_STOPPED_MARKER"
+SH
 chmod +x "$test_dir/digest" "$test_dir/process" "$test_dir/playwright-pass" "$test_dir/playwright-skip" \
-  "$test_dir/oauth-process" "$test_dir/backend-process" "$test_dir/digest-change" "$test_dir/attest" \
-  "$test_dir/migrate" "$test_dir/migrate-fail"
+  "$test_dir/oauth-process" "$test_dir/mcp-process" "$test_dir/backend-process" "$test_dir/digest-change" "$test_dir/attest" \
+  "$test_dir/migrate" "$test_dir/migrate-fail" "$test_dir/milvus-find" "$test_dir/milvus-start" "$test_dir/milvus-stop"
 
 common=(env TEST_DATABASE_URL="$safe_db" STATEFUL_E2E_DIGEST_COMMAND="$test_dir/digest"
   STATEFUL_E2E_INFRA_UP_COMMAND=true STATEFUL_E2E_INFRA_DOWN_COMMAND=true
   STATEFUL_E2E_DATABASE_PREPARE_COMMAND=true STATEFUL_E2E_ENV_FILE="$test_dir/missing.env"
   STATEFUL_E2E_MIGRATION_COMMAND="$test_dir/migrate"
-  STATEFUL_E2E_OAUTH_COMMAND="$test_dir/oauth-process" STATEFUL_E2E_BACKEND_COMMAND="$test_dir/backend-process"
+  STATEFUL_E2E_OAUTH_COMMAND="$test_dir/oauth-process" STATEFUL_E2E_MCP_COMMAND="$test_dir/mcp-process"
+  STATEFUL_E2E_BACKEND_COMMAND="$test_dir/backend-process"
   STATEFUL_E2E_FRONTEND_COMMAND="$test_dir/process" STATEFUL_E2E_HEALTH_ATTEMPTS=1
-  STATEFUL_E2E_OAUTH_HEALTH_COMMAND=true STATEFUL_E2E_FRONTEND_HEALTH_COMMAND=true
+  STATEFUL_E2E_OAUTH_HEALTH_COMMAND=true STATEFUL_E2E_MCP_HEALTH_COMMAND=true STATEFUL_E2E_FRONTEND_HEALTH_COMMAND=true
   STATEFUL_E2E_OAUTH_STARTED_MARKER="$test_dir/oauth-started"
-  STATEFUL_E2E_OAUTH_CLEANUP_MARKER="$test_dir/oauth-cleaned")
+  STATEFUL_E2E_OAUTH_CLEANUP_MARKER="$test_dir/oauth-cleaned"
+  STATEFUL_E2E_MCP_STARTED_MARKER="$test_dir/mcp-started"
+  STATEFUL_E2E_MCP_CLEANUP_MARKER="$test_dir/mcp-cleaned")
 cleanup_marker="$test_dir/cleaned"
 expect_failure 'backend failed health check' "${common[@]}" STATEFUL_E2E_CLEANUP_MARKER="$cleanup_marker" \
   STATEFUL_E2E_BACKEND_HEALTH_COMMAND=false bash "$runner" short
@@ -102,8 +127,15 @@ oauth_cleanup_marker="$test_dir/oauth-cleaned"
 for _ in {1..20}; do [[ -e "$oauth_cleanup_marker" ]] && break; sleep 0.05; done
 [[ -e "$oauth_cleanup_marker" ]] || { printf 'runner did not clean up oauth process\n' >&2; exit 1; }
 
+mcp_cleanup_marker="$test_dir/mcp-cleaned"
+for _ in {1..20}; do [[ -e "$mcp_cleanup_marker" ]] && break; sleep 0.05; done
+[[ -e "$mcp_cleanup_marker" ]] || { printf 'runner did not clean up MCP process\n' >&2; exit 1; }
+
 expect_failure 'oauth provider failed health check' "${common[@]}" \
   STATEFUL_E2E_OAUTH_HEALTH_COMMAND=false STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true bash "$runner" short
+
+expect_failure 'MCP server failed health check' "${common[@]}" \
+  STATEFUL_E2E_MCP_HEALTH_COMMAND=false STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true bash "$runner" short
 
 expect_failure 'failed or skipped coverage' "${common[@]}" STATEFUL_E2E_CLEANUP_MARKER="$cleanup_marker" \
   STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true STATEFUL_E2E_PLAYWRIGHT_COMMAND="$test_dir/playwright-skip" \
@@ -126,5 +158,22 @@ migration_marker="$test_dir/migrated"
 
 expect_failure 'migration prepare failed' "${common[@]}" STATEFUL_E2E_MIGRATION_COMMAND="$test_dir/migrate-fail" \
   bash "$runner" short
+
+milvus_ready_marker="$test_dir/milvus-ready"
+milvus_started_marker="$test_dir/milvus-started"
+milvus_stopped_marker="$test_dir/milvus-stopped"
+"${common[@]}" STATEFUL_E2E_INFRA_UP_COMMAND= STATEFUL_E2E_BASE_INFRA_HEALTH_COMMAND=true \
+  STATEFUL_E2E_MILVUS_HEALTH_COMMAND="test -e '$milvus_ready_marker'" \
+  STATEFUL_E2E_SHARED_MILVUS_FIND_COMMAND="$test_dir/milvus-find" \
+  STATEFUL_E2E_SHARED_MILVUS_START_COMMAND="$test_dir/milvus-start" \
+  STATEFUL_E2E_SHARED_MILVUS_STOP_COMMAND="$test_dir/milvus-stop" \
+  STATEFUL_E2E_SHARED_MILVUS_READY_MARKER="$milvus_ready_marker" \
+  STATEFUL_E2E_SHARED_MILVUS_STARTED_MARKER="$milvus_started_marker" \
+  STATEFUL_E2E_SHARED_MILVUS_STOPPED_MARKER="$milvus_stopped_marker" \
+  STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true STATEFUL_E2E_PLAYWRIGHT_COMMAND="$test_dir/playwright-pass" \
+  STATEFUL_E2E_ATTESTATION_MARKER="$test_dir/shared-attested" \
+  STATEFUL_E2E_ATTESTATION_COMMAND="$test_dir/attest \"\$STATEFUL_E2E_RESULTS_PATH\"" bash "$runner" short
+[[ -e "$milvus_started_marker" ]] || { printf 'runner did not start shared Milvus\n' >&2; exit 1; }
+[[ -e "$milvus_stopped_marker" ]] || { printf 'runner did not restore shared Milvus state\n' >&2; exit 1; }
 
 printf 'system stateful runner contract tests passed\n'

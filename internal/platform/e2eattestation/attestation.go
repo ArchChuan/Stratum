@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	StatusPassed    = "passed"
-	StatusFailed    = "failed"
-	StatusSkipped   = "skipped"
-	defaultValidity = 72 * time.Hour
+	StatusPassed                     = "passed"
+	StatusFailed                     = "failed"
+	StatusSkipped                    = "skipped"
+	minimumReleaseSoakDurationSecond = 3600
+	defaultValidity                  = 72 * time.Hour
 )
 
 type Browser struct {
@@ -220,6 +221,10 @@ func VerifyAttestation(root string, report Attestation, options VerifyOptions) e
 	}
 	if options.RequiredMode != "" && report.Mode != options.RequiredMode {
 		return fmt.Errorf("attestation mode %q does not satisfy required mode %q", report.Mode, options.RequiredMode)
+	}
+	if options.RequiredMode == "soak" && report.DurationSeconds < minimumReleaseSoakDurationSecond {
+		return fmt.Errorf("soak duration %d seconds is below release minimum %d seconds",
+			report.DurationSeconds, minimumReleaseSoakDurationSecond)
 	}
 	if !report.Cleanup.Passed || len(report.Cleanup.ResidualEntityIDs) != 0 {
 		return errors.New("cleanup did not complete without residual entities")

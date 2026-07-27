@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
-import { acceptanceError, acceptanceErrors } from './errors';
+import { acceptanceError, acceptanceErrors, runCleanupTasks } from './errors';
 
 describe('stateful acceptance error reporting', () => {
+  it('runs every cleanup task and propagates all failures', async () => {
+    const completed: string[] = [];
+
+    await expect(runCleanupTasks([
+      async () => { completed.push('first'); throw new Error('first cleanup failed'); },
+      async () => { completed.push('second'); },
+      async () => { completed.push('third'); throw new Error('third cleanup failed'); },
+    ])).rejects.toThrow('stateful acceptance and cleanup both failed');
+
+    expect(completed).toEqual(['first', 'second', 'third']);
+  });
+
   it('preserves execution and cleanup failures together', () => {
     const execution = new Error('execution failed');
     const cleanup = new Error('cleanup failed');

@@ -85,6 +85,7 @@ export const executeIAMOAuthJourney = async ({
     );
     registered = true;
     await expect(page).toHaveURL(`${webURL}/`);
+    await expect(page.getByRole('button', { name: '打开用户菜单' })).toBeVisible();
     const registrationRows = await publicQuery<{
       github_id: string;
       email: string;

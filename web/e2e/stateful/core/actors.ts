@@ -25,6 +25,18 @@ export interface BrowserActor<C = BrowserContext> {
   accessToken?: string;
 }
 
+interface SessionResponse {
+  status(): number;
+  json(): Promise<unknown>;
+}
+
+interface SessionContext {
+  request: {
+    post(url: string, options: { data: { tenant_id: string }; headers: { Authorization: string } }):
+      Promise<SessionResponse>;
+  };
+}
+
 const ACTOR_LABELS: ActorLabel[] = ['systemAdmin', 'tenantAdmin', 'memberA', 'memberB'];
 
 export const createActorContexts = async <C>(browser: BrowserLike<C>): Promise<Record<ActorLabel, BrowserActor<C>>> => {
@@ -34,6 +46,27 @@ export const createActorContexts = async <C>(browser: BrowserLike<C>): Promise<R
     context: await browser.newContext(),
   }] as const));
   return Object.fromEntries(entries) as Record<ActorLabel, BrowserActor<C>>;
+};
+
+export const restoreActorSession = async <C extends SessionContext>(
+  actor: BrowserActor<C>,
+  backendURL: string,
+): Promise<void> => {
+  if (!actor.tenantID || !actor.accessToken) throw new Error(`actor ${actor.label} session cannot be restored`);
+  try {
+    const response = await actor.context.request.post(`${backendURL}/auth/switch-tenant`, {
+      data: { tenant_id: actor.tenantID },
+      headers: { Authorization: `Bearer ${actor.accessToken}` },
+    });
+    if (response.status() !== 200) throw new Error('unexpected response status');
+    const body = await response.json() as { access_token?: unknown };
+    if (typeof body.access_token !== 'string' || body.access_token.length === 0) {
+      throw new Error('missing replacement access token');
+    }
+    actor.accessToken = body.access_token;
+  } catch {
+    throw new Error(`actor ${actor.label} session restore failed`);
+  }
 };
 
 interface GuestResponse {

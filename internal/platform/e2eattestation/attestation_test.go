@@ -34,6 +34,10 @@ func TestVerifyAttestationRejectsInvalidClaims(t *testing.T) {
 			a.RiskClassification = "Authorization: Bearer fixture-secret"
 		}, "credential"},
 		{"soak required", func(a *Attestation) { a.Mode = "short" }, "required mode"},
+		{"short soak duration", func(a *Attestation) {
+			a.Mode = "soak"
+			a.DurationSeconds = 3599
+		}, "soak duration"},
 		{"source mutation", func(*Attestation) {
 			require.NoError(t, os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("changed"), 0o600))
 		}, "source digest"},
@@ -43,7 +47,7 @@ func TestVerifyAttestationRejectsInvalidClaims(t *testing.T) {
 			copy := cloneAttestation(t, report)
 			tt.mutate(&copy)
 			requiredMode := ""
-			if tt.name == "soak required" {
+			if tt.name == "soak required" || tt.name == "short soak duration" {
 				requiredMode = "soak"
 			}
 			err := VerifyAttestation(root, copy, VerifyOptions{

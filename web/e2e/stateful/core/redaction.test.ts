@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createActorContexts } from './actors';
+import { createActorContexts, restoreActorSession } from './actors';
 import {
   assertSafeDatabaseURL,
+  copyConfiguredLLMCredentials,
   deleteGeneratedActors,
   deleteGeneratedOAuthUser,
   requireUUID,
@@ -120,6 +121,27 @@ describe('stateful E2E security boundaries', () => {
     expect(browser.newContext).toHaveBeenCalledTimes(4);
   });
 
+  it('restores an actor context to its generated tenant without exposing credentials', async () => {
+    const post = vi.fn().mockResolvedValue({
+      status: () => 200,
+      json: async () => ({ access_token: 'replacement-access-token' }),
+    });
+    const actor = {
+      label: 'tenantAdmin' as const,
+      contextID: 'context-id',
+      context: { request: { post } },
+      tenantID: '123e4567-e89b-42d3-a456-426614174000',
+      accessToken: 'original-access-token',
+    };
+
+    await restoreActorSession(actor, 'http://127.0.0.1:18080');
+
+    expect(post).toHaveBeenCalledWith('http://127.0.0.1:18080/auth/switch-tenant', expect.objectContaining({
+      data: { tenant_id: actor.tenantID },
+    }));
+    expect(actor.accessToken).toBe('replacement-access-token');
+  });
+
   it('cleans up only the exact generated user UUIDs', async () => {
     const query = vi.fn()
       .mockResolvedValueOnce(undefined)
@@ -174,6 +196,20 @@ describe('stateful E2E security boundaries', () => {
        RETURNING id`,
       ['member-a@example.test', userID],
     );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('copies only encrypted LLM settings into the exact generated tenant', async () => {
+    const tenantID = '123e4567-e89b-42d3-a456-426614174000';
+    const query = vi.fn().mockResolvedValueOnce({ rowCount: 1 });
+    const release = vi.fn();
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release }) };
+
+    await copyConfiguredLLMCredentials(pool, tenantID, 'test-private-key');
+
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('UPDATE public.tenants'), [
+      expect.objectContaining({ qwen: expect.any(String) }), tenantID,
+    ]);
     expect(release).toHaveBeenCalledOnce();
   });
 

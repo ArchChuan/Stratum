@@ -1,11 +1,13 @@
-import { PlusOutlined } from '@ant-design/icons';
+import { ExperimentOutlined, PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, Drawer, Empty, Flex, Select, Skeleton, Space, Table, Tabs, Typography, message } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
+import { evaluationApi } from '../api/evaluation.api';
 import { CandidateDrawer } from '../components/CandidateDrawer';
 import { CreateEvaluationModal } from '../components/CreateEvaluationModal';
 import { EvaluationOverview } from '../components/EvaluationOverview';
+import { EvolutionCommandModal } from '../components/EvolutionCommandModal';
 import { ExperimentDrawer } from '../components/ExperimentDrawer';
 import { ResourceTable } from '../components/ResourceTable';
 import { RunDrawer } from '../components/RunDrawer';
@@ -38,6 +40,7 @@ export const EvaluationCenterPage = () => {
   const [experimentId, setExperimentId] = useState('');
   const timeline = useEvaluationTimeline();
   const [createOpen, setCreateOpen] = useState(false);
+  const [evolutionOpen, setEvolutionOpen] = useState(false);
   const resource = useMemo(() => center.resources.items.find((item) => item.id === resourceId) || null,
     [center.resources.items, resourceId]);
   const run = center.runs.items.find((item) => item.id === runId) || null;
@@ -75,8 +78,11 @@ export const EvaluationCenterPage = () => {
     <Tabs style={{ marginTop: 16 }} items={[
       { key: 'runs', label: `运行记录 ${center.runs.items.length}`, children: <CompactList rows={center.runs.items}
         empty="运行记录还是空的" onOpen={(row) => setRunId(row.id)} /> },
-      { key: 'candidates', label: `候选版本 ${center.candidates.items.length}`, children: <CompactList rows={center.candidates.items}
-        empty="候选版本还是空的" onOpen={(row) => setCandidateId(row.id)} /> },
+      { key: 'candidates', label: `候选版本 ${center.candidates.items.length}`, children: <>
+        {center.canManageEvaluation && <Button icon={<ExperimentOutlined />} style={{ marginBottom: 12 }}
+          onClick={() => setEvolutionOpen(true)}>进化操作</Button>}
+        <CompactList rows={center.candidates.items} empty="候选版本还是空的" onOpen={(row) => setCandidateId(row.id)} />
+      </> },
       { key: 'experiments', label: `金丝雀实验 ${center.experiments.items.length}`, children: <CompactList rows={center.experiments.items}
         empty="金丝雀实验还是空的" onOpen={(row) => setExperimentId(row.id)} /> },
     ]} />
@@ -111,6 +117,48 @@ export const EvaluationCenterPage = () => {
           message.success({ content: '评测已创建并进入运行队列', duration: 2 });
         } catch (error) {
           message.error({ content: error instanceof Error ? error.message : '创建评测失败', duration: 0 });
+          throw error;
+        }
+      }} />
+    <EvolutionCommandModal open={evolutionOpen} onClose={() => setEvolutionOpen(false)}
+      onOptimize={async (values) => {
+        try {
+          await evaluationApi.generateOptimization({
+            baseline: { kind: values.resource_kind, resource_id: values.resource_id,
+              revision_id: values.stable_revision_id },
+            suiteRevisionId: values.suite_revision_id,
+            searchSpace: {}, failureSummaries: [values.failure_summary], idempotencyKey: crypto.randomUUID(),
+          });
+          await center.reload();
+          message.success({ content: '优化候选已生成', duration: 2 });
+        } catch (error) {
+          message.error({ content: error instanceof Error ? error.message : '生成优化候选失败', duration: 0 });
+          throw error;
+        }
+      }}
+      onExperiment={async (values) => {
+        try {
+          const resource = { kind: values.resource_kind, resource_id: values.resource_id };
+          await evaluationApi.createExperiment(
+            { ...resource, revision_id: values.stable_revision_id },
+            { ...resource, revision_id: values.candidate_revision_id },
+            values.suite_revision_id,
+          );
+          await center.reload();
+          message.success({ content: '金丝雀实验已创建', duration: 2 });
+        } catch (error) {
+          message.error({ content: error instanceof Error ? error.message : '创建金丝雀失败', duration: 0 });
+          throw error;
+        }
+      }}
+      onFeedback={async (values) => {
+        try {
+          await evaluationApi.recordFeedback({ traceId: values.trace_id, resourceId: values.resource_id,
+            score: values.score, outcome: { source: 'manual' }, idempotencyKey: crypto.randomUUID() });
+          await center.reload();
+          message.success({ content: '反馈已记录', duration: 2 });
+        } catch (error) {
+          message.error({ content: error instanceof Error ? error.message : '记录反馈失败', duration: 0 });
           throw error;
         }
       }} />

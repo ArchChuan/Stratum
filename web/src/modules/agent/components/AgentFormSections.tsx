@@ -1,9 +1,9 @@
 import { RobotOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import { Collapse, Form, Input, InputNumber, Select, Tag, Typography } from 'antd';
+import { Collapse, Form, Input, InputNumber, Select, Slider, Tag, Typography } from 'antd';
 
 import { AgentMemoryConfig } from './AgentMemoryConfig';
 
-import { CHAT_MODEL_OPTIONS } from '@/constants';
+import { AGENT_MAX_MAX_ITERATIONS, AGENT_MIN_MAX_ITERATIONS, CHAT_MODEL_OPTIONS } from '@/constants';
 import type { Workspace } from '@/modules/knowledge';
 import type { MCPToolOption } from '@/modules/mcp';
 import type { Skill } from '@/modules/skill';
@@ -157,10 +157,15 @@ export const AgentFormSections = ({
                 <Form.Item
                   label="最大迭代次数"
                   name="maxIterations"
-                  rules={[{ required: true, message: '请输入最大迭代次数' }, { type: 'number', min: 1, message: '最小值为 1' }]}
-                  extra="推荐值：简单对话 10，多步工具调用 20-30，复杂任务 40-50"
+                  rules={[{ required: true, message: '请选择最大迭代次数' }]}
+                  extra="限制 Agent 单次执行的最大推理和工具调用轮数"
                 >
-                  <InputNumber min={1} max={50} style={{ width: '100%' }} />
+                  <Slider
+                    min={AGENT_MIN_MAX_ITERATIONS}
+                    max={AGENT_MAX_MAX_ITERATIONS}
+                    marks={{ 1: '1', 10: '10', 20: '20' }}
+                    ariaLabelForHandle="最大迭代次数"
+                  />
                 </Form.Item>
                 <Form.Item
                   label="最大上下文 Token"

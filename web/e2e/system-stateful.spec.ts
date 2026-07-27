@@ -5,16 +5,30 @@ import { fileURLToPath } from 'node:url';
 
 import { expect, test } from '@playwright/test';
 
-import { createActorContexts, createGuestActor, type ActorLabel, type BrowserActor } from './stateful/core/actors';
+import {
+  createActorContexts, createGuestActor, restoreActorSession, type ActorLabel, type BrowserActor,
+} from './stateful/core/actors';
 import { createSafePool, deleteGeneratedActors } from './stateful/core/database';
 import { acceptanceError, acceptanceErrors } from './stateful/core/errors';
 import type { EvidenceRecord } from './stateful/core/evidence';
+import {
+  capabilityDomainsForPacks, reconcileCapabilities, type ManifestCapability,
+} from './stateful/core/model';
 import { parseRuntimeOptions, type SystemPack } from './stateful/core/runtime';
+import { executeAcceptanceSchedule } from './stateful/core/scheduler';
 import { dashboardActions } from './stateful/packs/dashboard';
+import { executeAgentPack } from './stateful/packs/agent';
+import { executeAgentContextPack } from './stateful/packs/agent-context';
+import { executeAgentSkillMCPPack } from './stateful/packs/agent-skill-mcp';
+import { executeEvaluationPack } from './stateful/packs/evaluation';
+import { executeEvaluationPromotionPack } from './stateful/packs/evaluation-promotion';
 import { executeIAMPack } from './stateful/packs/iam';
+import { executeKnowledgePack } from './stateful/packs/knowledge';
+import { executeMCPPack } from './stateful/packs/mcp';
+import { executeMemoryPack } from './stateful/packs/memory';
+import { executeSkillPack } from './stateful/packs/skill';
 import { executeWorkflowPack } from './stateful/packs/workflow';
 
-interface ManifestCapability { id: string; domain: string }
 interface SafeResultItem { id: string; status: 'passed' }
 
 const runtime = parseRuntimeOptions(process.env);
@@ -44,10 +58,27 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
     for (const label of Object.keys(contexts) as ActorLabel[]) {
       actors[label] = await createGuestActor(contexts[label], webURL, backendURL, pool);
     }
-    for (const pack of runtime.packs) {
-      await executePack(pack, actors, pool, evidence, webURL, backendURL, completedActions);
-      completedPacks.push({ id: pack, status: 'passed' });
-    }
+    const schedule = await executeAcceptanceSchedule({
+      ...runtime,
+      startedAtMs: startedAt.getTime(),
+      now: Date.now,
+      execute: async (pack) => {
+        await Promise.all(Object.values(actors).map((actor) => restoreActorSession(actor, backendURL)));
+        const before = {
+          ui: evidence.ui.length,
+          http: evidence.http.length,
+          database: evidence.database.length,
+        };
+        await executePack(pack, actors, pool, evidence, webURL, backendURL, completedActions);
+        return {
+          ui: evidence.ui.length - before.ui,
+          http: evidence.http.length - before.http,
+          database: evidence.database.length - before.database,
+          reconciled: true,
+        };
+      },
+    });
+    completedPacks.push(...schedule.requiredPacks.map((id) => ({ id, status: 'passed' as const })));
   } catch (error) {
     executionError = error;
   }
@@ -72,17 +103,18 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
   if (failure) throw failure;
 
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { capabilities: ManifestCapability[] };
-  const selectedDomains = new Set(runtime.packs.filter((pack) => !pack.includes('-')));
+  const selectedDomains = capabilityDomainsForPacks(runtime.packs);
   const selectedCapabilities = manifest.capabilities
     .filter(({ domain }) => selectedDomains.has(domain as SystemPack));
-  const completedSet = new Set(completedActions);
-  const capabilities = selectedCapabilities
-    .filter(({ id }) => completedSet.has(id))
-    .map(({ id }) => ({ id, status: 'passed' as const }));
-  const unverifiedCapabilities = selectedCapabilities
-    .filter(({ id }) => !completedSet.has(id))
-    .map(({ id }) => id);
+  const { capabilities, unverifiedCapabilities } = reconcileCapabilities(
+    selectedCapabilities,
+    new Set(completedActions),
+  );
   const durationSeconds = Math.max(1, Math.ceil((Date.now() - startedAt.getTime()) / 1000));
+  if (runtime.mode === 'soak') {
+    expect(durationSeconds, 'soak must run for the requested duration')
+      .toBeGreaterThanOrEqual(runtime.durationSeconds);
+  }
   const safeResults = {
     tested_git_parent: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot, encoding: 'utf8' }).trim(),
     browser: { name: 'chromium', version: browser.version() },
@@ -124,8 +156,46 @@ const executePack = async (
     completedActions.push(...await executeIAMPack({ actors, pool, evidence, webURL, backendURL }));
     return;
   }
+  if (pack === 'agent') {
+    completedActions.push(...await executeAgentPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    return;
+  }
+  if (pack === 'agent-context') {
+    completedActions.push(...await executeAgentContextPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    return;
+  }
+  if (pack === 'agent-skill-mcp') {
+    completedActions.push(...await executeAgentSkillMCPPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    return;
+  }
   if (pack === 'workflow') {
     completedActions.push(...await executeWorkflowPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    return;
+  }
+  if (pack === 'skill') {
+    completedActions.push(...await executeSkillPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    return;
+  }
+  if (pack === 'mcp') {
+    completedActions.push(...await executeMCPPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    return;
+  }
+  if (pack === 'knowledge') {
+    completedActions.push(...await executeKnowledgePack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    return;
+  }
+  if (pack === 'evaluation') {
+    completedActions.push(...await executeEvaluationPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    return;
+  }
+  if (pack === 'evaluation-promotion') {
+    completedActions.push(...await executeEvaluationPromotionPack({
+      actor: actors.tenantAdmin, pool, evidence, webURL,
+    }));
+    return;
+  }
+  if (pack === 'memory') {
+    completedActions.push(...await executeMemoryPack({ actor: actors.memberA, pool, evidence, webURL }));
     return;
   }
   if (pack !== 'dashboard') throw new Error(`stateful pack ${pack} is not implemented`);

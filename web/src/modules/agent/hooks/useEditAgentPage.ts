@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { agentApi } from '../api/agent.api';
 import type { Agent, AgentFormValues } from '../model/agent';
 
+import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 import { knowledgeApi } from '@/modules/knowledge';
 import type { Workspace } from '@/modules/knowledge';
 import { mcpApi } from '@/modules/mcp';
@@ -50,7 +51,7 @@ export const useEditAgentPage = () => {
           description: a.description,
           systemPrompt: a.systemPrompt,
           llmModel: a.llmModel,
-          maxIterations: a.maxIterations ?? 25,
+          maxIterations: a.maxIterations ?? AGENT_DEFAULT_MAX_ITERATIONS,
           maxContextTokens: a.maxContextTokens ?? 8000,
           allowedSkills: a.allowedSkills || [],
           mcpToolIds: a.mcpToolIds || [],

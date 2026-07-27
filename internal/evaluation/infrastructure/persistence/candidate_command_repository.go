@@ -37,7 +37,7 @@ func (r *PgCandidateCommandRepository) Reject(
 				parent.resource_id=j.resource_id AND parent.id=c.parent_revision_id
 			LEFT JOIN resource_revisions candidate ON candidate.resource_kind=j.resource_kind AND
 				candidate.resource_id=j.resource_id AND candidate.id=c.revision_id
-			WHERE c.id=$1 FOR UPDATE`, candidateID).Scan(
+			WHERE c.id=$1 FOR UPDATE OF c`, candidateID).Scan(
 			&result.ID, &result.ResourceKind, &result.ResourceID, &result.RevisionID, &result.ParentRevisionID,
 			&result.Source, &result.Status, &result.Rank, &result.CreatedAt, &key, &fingerprint, &version,
 			&parent, &parentExists, &candidate,

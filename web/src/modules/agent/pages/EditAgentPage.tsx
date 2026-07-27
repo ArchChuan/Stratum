@@ -5,6 +5,8 @@ import { AgentFormSections } from '../components/AgentFormSections';
 import { SystemAssistantSettingsForm } from '../components/SystemAssistantSettingsForm';
 import { useEditAgentPage } from '../hooks/useEditAgentPage';
 
+import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
+
 const { Title, Text } = Typography;
 
 export const EditAgentPage = () => {
@@ -66,7 +68,7 @@ export const EditAgentPage = () => {
         layout="vertical"
         onFinish={onFinish}
         initialValues={{
-          maxIterations: 25,
+          maxIterations: AGENT_DEFAULT_MAX_ITERATIONS,
           maxContextTokens: 8000,
           allowedSkills: [],
           memoryScope: 'user',

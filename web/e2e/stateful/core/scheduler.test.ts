@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createSeededRandom } from './random';
-import { runStatefulSchedule, serializeScheduleDiagnostics } from './scheduler';
+import { executeAcceptanceSchedule, runStatefulSchedule, serializeScheduleDiagnostics } from './scheduler';
 import type { StatefulAction } from './types';
 
 interface CounterModel { count: number }
@@ -20,6 +20,41 @@ const action = (id: string, enabled: (model: CounterModel) => boolean): Stateful
 });
 
 describe('stateful scheduler', () => {
+  it('runs every selected pack once in short mode', async () => {
+    const executed: string[] = [];
+
+    const result = await executeAcceptanceSchedule({
+      mode: 'short', packs: ['iam', 'workflow'], durationSeconds: 600, maxCycles: 100, seed: 1,
+      startedAtMs: 0, now: () => 0,
+      execute: async (pack) => {
+        executed.push(pack);
+        return { ui: 1, http: 1, database: 1, reconciled: true };
+      },
+    });
+
+    expect(executed).toEqual(['iam', 'workflow']);
+    expect(result.stopReason).toBe('required_pass');
+  });
+
+  it('repeats seeded pack operations in soak mode until the deadline', async () => {
+    const executed: string[] = [];
+    let now = 0;
+
+    const result = await executeAcceptanceSchedule({
+      mode: 'soak', packs: ['iam', 'workflow'], durationSeconds: 10, maxCycles: 100, seed: 42,
+      startedAtMs: 0, now: () => now,
+      execute: async (pack) => {
+        executed.push(pack);
+        now += 2_000;
+        return { ui: 1, http: 1, database: 1, reconciled: true };
+      },
+    });
+
+    expect(executed.slice(0, 2)).toEqual(['iam', 'workflow']);
+    expect(executed.length).toBeGreaterThan(2);
+    expect(result.stopReason).toBe('deadline');
+  });
+
   it('replays the same enabled action sequence for the same seed', async () => {
     const actions = [action('first', () => true), action('second', () => true)];
     const execute = async () => {
