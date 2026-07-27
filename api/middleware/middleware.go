@@ -46,26 +46,29 @@ func ErrorHandler(logger *zap.Logger) gin.HandlerFunc {
 		)
 
 		if !c.Writer.Written() {
-			msg := ginErr.Error()
-			if status >= 500 {
-				msg = "internal server error"
-			}
+			descriptor := DescribePublicError(ginErr.Err, status)
 			// 429 clients back off; both back-pressure paths (skill
 			// concurrency, ingest queue) drain in seconds.
 			if status == 429 {
 				c.Writer.Header().Set("Retry-After", "30")
 			}
+			body := gin.H{"error": descriptor.Message}
+			if descriptor.Code != "" {
+				body["code"] = descriptor.Code
+			}
 			var inputErr *workflowdomain.InputValidationError
 			if errors.As(ginErr.Err, &inputErr) {
-				c.JSON(status, gin.H{"error": msg, "issues": inputErr.Issues})
+				body["issues"] = inputErr.Issues
+				c.JSON(status, body)
 				return
 			}
 			var graphErr *workflowdomain.GraphValidationError
 			if errors.As(ginErr.Err, &graphErr) {
-				c.JSON(status, gin.H{"error": msg, "issues": graphErr.Issues})
+				body["issues"] = graphErr.Issues
+				c.JSON(status, body)
 				return
 			}
-			c.JSON(status, gin.H{"error": msg})
+			c.JSON(status, body)
 		}
 	}
 }
