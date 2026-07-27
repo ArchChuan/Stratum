@@ -3,9 +3,11 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,5 +67,46 @@ func TestExecuteStreamApprovalEventContainsOnlySafeBindingMetadata(t *testing.T)
 	}
 	if len(decoded) != 6 {
 		t.Fatalf("approval SSE payload contains unexpected fields: %s", payload)
+	}
+}
+
+func TestAgentExecutionErrorPayloadUsesPublicContract(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		want      map[string]string
+		forbidden string
+	}{
+		{
+			name: "assistant model unavailable",
+			err:  fmt.Errorf("assemble options: %w", domain.ErrAssistantModelUnavailable),
+			want: map[string]string{
+				"error": "租户尚未配置平台助手模型",
+				"code":  middleware.CodeSystemAssistantModelUnavailable,
+			},
+			forbidden: "assemble options",
+		},
+		{
+			name:      "unknown server error",
+			err:       errors.New("provider api_key=do-not-leak"),
+			want:      map[string]string{"error": "internal server error"},
+			forbidden: "do-not-leak",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := agentExecutionErrorPayload(tt.err)
+			var decoded map[string]string
+			if err := json.Unmarshal(payload, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(decoded, tt.want) {
+				t.Fatalf("payload = %#v, want %#v", decoded, tt.want)
+			}
+			if strings.Contains(string(payload), tt.forbidden) {
+				t.Fatalf("payload leaked %q: %s", tt.forbidden, payload)
+			}
+		})
 	}
 }
