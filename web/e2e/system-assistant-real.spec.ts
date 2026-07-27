@@ -33,7 +33,7 @@ test('real admin chat creates, edits, reloads, and applies one governed proposal
   { browser },
   testInfo,
 ) => {
-  const context = await browser.newContext();
+  const context = await browser.newContext({ baseURL: process.env.E2E_WEB_URL || 'http://127.0.0.1:5173' });
   const page = await context.newPage();
   let session: Awaited<ReturnType<typeof createPlatformAssistantSession>> | undefined;
   try {
