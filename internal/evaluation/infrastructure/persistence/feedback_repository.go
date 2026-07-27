@@ -42,20 +42,44 @@ func (r *PgFeedbackRepository) Record(
 		var kind string
 		var storedOutcome []byte
 		feedback.ID = uuid.Must(uuid.NewV7()).String()
-		err = tx.QueryRow(ctx,
+		row := tx.QueryRow(ctx,
 			`INSERT INTO evaluation_feedback
 			 (id, trace_id, resource_kind, resource_id, revision_id, experiment_id, variant,
 			  score, outcome, idempotency_key)
 			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-			 ON CONFLICT (trace_id, resource_id) DO UPDATE SET
-			 score=EXCLUDED.score, outcome=EXCLUDED.outcome, idempotency_key=EXCLUDED.idempotency_key
+			 ON CONFLICT DO NOTHING
 			 RETURNING id, trace_id, resource_kind, resource_id, revision_id, experiment_id, variant,
 			           score, outcome, idempotency_key, created_at`,
 			feedback.ID, input.TraceID, string(input.ResourceKind), input.ResourceID, input.RevisionID,
 			input.ExperimentID, input.Variant, input.Score, string(outcomeJSON), input.IdempotencyKey,
-		).Scan(&feedback.ID, &feedback.TraceID, &kind, &feedback.ResourceID, &feedback.RevisionID,
+		)
+		err = row.Scan(&feedback.ID, &feedback.TraceID, &kind, &feedback.ResourceID, &feedback.RevisionID,
 			&feedback.ExperimentID, &feedback.Variant,
 			&feedback.Score, &storedOutcome, &feedback.IdempotencyKey, &feedback.CreatedAt)
+		if err == pgx.ErrNoRows {
+			var matches, exactMatches int
+			err = tx.QueryRow(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE
+				trace_id=$1 AND resource_kind=$2 AND resource_id=$3 AND revision_id=$4
+				AND COALESCE(experiment_id,'')=$5 AND COALESCE(variant,'')=$6
+				AND score IS NOT DISTINCT FROM $7 AND outcome=$8::jsonb AND idempotency_key=$9)
+				FROM evaluation_feedback
+				WHERE idempotency_key=$9 OR (trace_id=$1 AND resource_id=$3)`,
+				input.TraceID, string(input.ResourceKind), input.ResourceID, input.RevisionID,
+				input.ExperimentID, input.Variant, input.Score, string(outcomeJSON), input.IdempotencyKey,
+			).Scan(&matches, &exactMatches)
+			if err != nil {
+				return err
+			}
+			if matches != 1 || exactMatches != 1 {
+				return domain.ErrFeedbackIdempotencyConflict
+			}
+			err = tx.QueryRow(ctx, `SELECT id, trace_id, resource_kind, resource_id, revision_id,
+				COALESCE(experiment_id,''), COALESCE(variant,''), score, outcome, idempotency_key, created_at
+				FROM evaluation_feedback WHERE idempotency_key=$1`, input.IdempotencyKey,
+			).Scan(&feedback.ID, &feedback.TraceID, &kind, &feedback.ResourceID, &feedback.RevisionID,
+				&feedback.ExperimentID, &feedback.Variant, &feedback.Score, &storedOutcome,
+				&feedback.IdempotencyKey, &feedback.CreatedAt)
+		}
 		if err != nil {
 			return err
 		}

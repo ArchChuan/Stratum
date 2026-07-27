@@ -322,6 +322,9 @@ func (r *PgExperimentRepository) ApplyCommand(
 			deploymentResult, err = tx.Exec(ctx, `UPDATE evaluation_deployments SET canary_percent=0, updated_at=NOW()
 				WHERE experiment_id=$1`, experimentID)
 		case domain.CommandPromote:
+			if err := promoteCandidateTx(ctx, tx, current); err != nil {
+				return err
+			}
 			deploymentResult, err = tx.Exec(ctx, `UPDATE evaluation_deployments
 				SET stable_revision_id=$2, canary_revision_id=NULL, canary_percent=0, experiment_id=NULL,
 				policy_version=policy_version+1, updated_at=NOW() WHERE experiment_id=$1`,
@@ -358,6 +361,50 @@ func (r *PgExperimentRepository) ApplyCommand(
 		return nil
 	})
 	return updated, err
+}
+
+func promoteCandidateTx(ctx context.Context, tx pgx.Tx, experiment domain.Experiment) error {
+	var revisionResult pgconn.CommandTag
+	var err error
+	if experiment.ResourceKind == domain.ResourceKindSkill {
+		if _, err = tx.Exec(ctx, `UPDATE skill_revisions SET status='deprecated',updated_at=NOW()
+			WHERE skill_id=$1 AND status='published'`, experiment.ResourceID); err != nil {
+			return fmt.Errorf("experiment repository: deprecate stable Skill revision: %w", err)
+		}
+		revisionResult, err = tx.Exec(ctx, `UPDATE skill_revisions
+			SET status='published',revision_no=(SELECT COALESCE(MAX(revision_no),0)+1 FROM skill_revisions WHERE skill_id=$1),
+			    published_at=NOW(),updated_at=NOW()
+			WHERE id=$2 AND skill_id=$1 AND status='candidate'`, experiment.ResourceID, experiment.CanaryRevisionID)
+		if err == nil {
+			var skillResult pgconn.CommandTag
+			skillResult, err = tx.Exec(ctx, `UPDATE skills SET status='published',active_revision_id=$2,draft_revision_id=NULL,
+				updated_at=NOW() WHERE id=$1`, experiment.ResourceID, experiment.CanaryRevisionID)
+			if err == nil && skillResult.RowsAffected() != 1 {
+				return domain.ErrExperimentInvalidCandidate
+			}
+		}
+	} else {
+		revisionResult, err = tx.Exec(ctx, `UPDATE resource_revisions SET status='published',published_at=NOW(),updated_at=NOW()
+			WHERE id=$1 AND resource_kind=$2 AND resource_id=$3 AND source='optimization' AND status='draft'`,
+			experiment.CanaryRevisionID, string(experiment.ResourceKind), experiment.ResourceID)
+	}
+	if err != nil {
+		return fmt.Errorf("experiment repository: publish canary revision: %w", err)
+	}
+	if revisionResult.RowsAffected() != 1 {
+		return domain.ErrExperimentInvalidCandidate
+	}
+	candidateResult, err := tx.Exec(ctx, `UPDATE optimization_candidates c SET status='promoted',state_version=state_version+1
+		FROM optimization_jobs j WHERE c.optimization_job_id=j.id AND c.revision_id=$1 AND c.status='proposed'
+		AND j.resource_kind=$2 AND j.resource_id=$3`, experiment.CanaryRevisionID, string(experiment.ResourceKind),
+		experiment.ResourceID)
+	if err != nil {
+		return fmt.Errorf("experiment repository: consume promoted candidate: %w", err)
+	}
+	if candidateResult.RowsAffected() != 1 {
+		return domain.ErrExperimentInvalidCandidate
+	}
+	return nil
 }
 
 func getExperimentTx(ctx context.Context, tx pgx.Tx, experimentID string, lock bool) (domain.Experiment, bool, error) {

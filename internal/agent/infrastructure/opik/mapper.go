@@ -34,6 +34,7 @@ func mapEvidence(trace opikTrace, spans []opikSpan) (domain.TraceEvidence, error
 	evidence := domain.TraceEvidence{
 		OpikTraceID: trace.ID, TraceID: metadataString(trace.Metadata, "trace_id"),
 		ExecutionID: metadataString(trace.Metadata, "execution_id"), AgentID: metadataString(trace.Metadata, "agent_id"),
+		UserID: metadataString(trace.Metadata, "user_id"),
 		Status: metadataString(trace.Metadata, "status"), TotalTokens: metadataInt(trace.Metadata, "total_tokens", usageTotal(trace.Usage)),
 		CostUSD:           metadataFloat(trace.Metadata, "cost_usd", trace.TotalEstimatedCost),
 		LatencyMs:         metadataInt64(trace.Metadata, "duration_ms", int64(trace.Duration)),
@@ -172,7 +173,7 @@ func errorMessage(info *errorInfo) string {
 	if info == nil {
 		return ""
 	}
-	return info.Message
+	return "上游执行失败"
 }
 
 func observationType(name string) string {
