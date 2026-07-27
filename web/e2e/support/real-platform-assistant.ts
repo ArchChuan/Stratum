@@ -31,6 +31,39 @@ export const requireResourceID = (value: string, field: string) => {
   return value;
 };
 
+export const requireCleanupTenantKind = (raw: string, requireDefault: boolean) => {
+  const rows = raw
+    .split('\n')
+    .map((row) => row.trim())
+    .filter(Boolean);
+  if (rows.length === 0) throw new Error('cleanup tenant missing');
+  if (rows.length !== 1) throw new Error('cleanup tenant lookup is ambiguous');
+  if (rows[0] !== 'true' && rows[0] !== 'false') {
+    throw new Error('cleanup tenant kind is invalid');
+  }
+  const isDefault = rows[0] === 'true';
+  if (requireDefault && !isDefault) throw new Error('guest cleanup requires the default tenant');
+  if (!requireDefault && isDefault) throw new Error('default tenant is protected from tenant cleanup');
+};
+
+const tenantDefaultEvidence = (tenantId: string) => {
+  requireUUID(tenantId, 'tenant_id');
+  return runSQL(
+    `SELECT is_default::text FROM public.tenants WHERE id='${tenantId}' AND deleted_at IS NULL`,
+  );
+};
+
+export const requireDisposableTenant = (tenantId: string) => {
+  requireCleanupTenantKind(tenantDefaultEvidence(tenantId), false);
+};
+
+export const cleanupPlatformAssistantSession = (session: PlatformAssistantSession) => {
+  requireUUID(session.userId, 'user_id');
+  requireCleanupTenantKind(tenantDefaultEvidence(session.tenantId), true);
+  const deleted = runSQL(`DELETE FROM public.users WHERE id='${session.userId}' RETURNING id`);
+  expect(deleted, 'guest cleanup must delete exactly its generated user').toBe(session.userId);
+};
+
 const runSQL = (sql: string) => execFileSync(
   'docker',
   ['exec', '-i', postgresContainer(), 'psql', '-U', 'stratum', '-d', 'stratum', '-qAt', '-c', sql],
