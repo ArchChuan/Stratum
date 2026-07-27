@@ -393,6 +393,21 @@ func publishedMCPRevisions(t *testing.T, snapshot mcpRevisionSnapshot) *fakeMCPR
 	return &fakeMCPRevisionService{revision: evaldomain.ResourceRevision{ID: "published-1", ResourceKind: evaldomain.ResourceKindMCP,
 		ResourceID: "server-1", Status: evaldomain.RevisionStatusPublished}, payload: payload, found: true}
 }
+
+func TestMCPEvaluationAdapterResolvesOptimizationCandidateForOfflineEvaluation(t *testing.T) {
+	revisions := publishedMCPRevisions(t, mcpRevisionSnapshot{
+		ServerID: "server-1", TimeoutMS: 1000, MaxRetries: 1,
+		RuntimeRef: pkgobjectstore.Reference{URI: "object://runtime", SHA256: "hash"},
+	})
+	revisions.revision.Status = evaldomain.RevisionStatusDraft
+	revisions.revision.Source = evaldomain.RevisionSourceOptimization
+	resolved, err := (mcpEvaluationAdapter{revisions: revisions}).ResolveRevision(
+		context.Background(), "tenant-1", mcpRef("published-1"),
+	)
+	if err != nil || !resolved.CanEvaluateOffline() {
+		t.Fatalf("candidate resolution=%+v err=%v", resolved, err)
+	}
+}
 func mcpRef(revisionID string) evaldomain.ResourceRef {
 	return evaldomain.ResourceRef{Kind: evaldomain.ResourceKindMCP, ResourceID: "server-1", RevisionID: revisionID}
 }

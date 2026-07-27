@@ -121,7 +121,6 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		evaluations.GET("/jobs/:id", requireAdmin, h.GetJob)
 		evaluations.POST("/optimizations", requireAdmin, requireActive, h.GenerateOptimization)
 		evaluations.POST("/experiments", requireAdmin, requireActive, h.CreateExperiment)
-		evaluations.POST("/experiments/:id/evaluate", requireAdmin, requireActive, h.EvaluateExperiment)
 		evaluations.POST("/candidates/:id/reject", requireAdmin, requireActive, h.RejectCandidate)
 		evaluations.POST("/experiments/:id/pause", requireAdmin, requireActive, h.PauseExperiment)
 		evaluations.POST("/experiments/:id/promote", requireAdmin, requireActive, h.PromoteExperiment)

@@ -206,6 +206,22 @@ func publishedKnowledgeRevisions(t *testing.T, snapshot knowledgeRetrievalSnapsh
 		payload: payload, found: true}
 }
 
+func TestKnowledgeEvaluationAdapterResolvesOptimizationCandidateForOfflineEvaluation(t *testing.T) {
+	snapshot := knowledgeRetrievalSnapshot{TenantID: "tenant-1", WorkspaceID: "workspace-id",
+		WorkspaceName: "support", DocumentSetHash: "documents", EmbeddingIdentity: "embedding",
+		RerankingIdentity: knowledgeRerankingIdentity, QueryMode: "vector", TopK: 5,
+		Reranking: "none", QueryRewrite: "none"}
+	revisions := publishedKnowledgeRevisions(t, snapshot)
+	revisions.revision.Status = evaldomain.RevisionStatusDraft
+	revisions.revision.Source = evaldomain.RevisionSourceOptimization
+	resolved, err := (knowledgeEvaluationAdapter{revisions: revisions}).ResolveRevision(
+		context.Background(), "tenant-1", knowledgeRef("published-1"),
+	)
+	if err != nil || !resolved.CanEvaluateOffline() {
+		t.Fatalf("candidate resolution=%+v err=%v", resolved, err)
+	}
+}
+
 func knowledgeRef(revisionID string) evaldomain.ResourceRef {
 	return evaldomain.ResourceRef{Kind: evaldomain.ResourceKindKnowledge, ResourceID: "support", RevisionID: revisionID}
 }

@@ -48,18 +48,6 @@ type CreateEvaluationExperimentRequest struct {
 	SuiteRevisionID string                `json:"suite_revision_id" binding:"required"`
 }
 
-type EvaluateExperimentStageRequest struct {
-	IdempotencyKey       string  `json:"idempotency_key" binding:"omitempty,max=255"`
-	Samples              int     `json:"samples" binding:"min=0"`
-	ObservedMinutes      int     `json:"observed_minutes" binding:"min=0"`
-	QualityImprovement   float64 `json:"quality_improvement"`
-	QualitySignificant   bool    `json:"quality_significant"`
-	CostRegression       float64 `json:"cost_regression"`
-	P95LatencyRegression float64 `json:"p95_latency_regression"`
-	ErrorRateIncrease    float64 `json:"error_rate_increase"`
-	SecurityViolation    bool    `json:"security_violation"`
-}
-
 type EvaluationCenterQuery struct {
 	ResourceKind string `form:"resource_kind" binding:"omitempty,oneof=skill agent mcp knowledge"`
 	ResourceID   string `form:"resource_id"`

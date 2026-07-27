@@ -292,6 +292,10 @@ type feedbackExperimentRepo struct {
 func (f *feedbackExperimentRepo) Create(context.Context, string, domain.Experiment, domain.Deployment) error {
 	return nil
 }
+func (f *feedbackExperimentRepo) ValidatePrerequisites(context.Context, string, domain.ResourceRef,
+	domain.ResourceRef, string) error {
+	return nil
+}
 func (f *feedbackExperimentRepo) Get(context.Context, string, string) (domain.Experiment, bool, error) {
 	return f.experiment, true, nil
 }

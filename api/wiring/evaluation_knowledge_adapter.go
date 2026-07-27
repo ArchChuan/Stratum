@@ -132,7 +132,7 @@ func (a knowledgeEvaluationAdapter) CreatePublishedBaseline(
 func (a knowledgeEvaluationAdapter) LoadOptimizableSnapshot(
 	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
 ) (map[string]any, error) {
-	_, snapshot, err := a.loadPublished(ctx, tenantID, ref)
+	_, snapshot, err := a.loadRevision(ctx, tenantID, ref, false)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +143,7 @@ func (a knowledgeEvaluationAdapter) LoadOptimizableSnapshot(
 func (a knowledgeEvaluationAdapter) CreateCandidate(
 	ctx context.Context, tenantID string, baseline evaldomain.ResourceRef, patch evaldomain.CandidatePatch,
 ) (evaldomain.ResourceRef, error) {
-	parent, snapshot, err := a.loadPublished(ctx, tenantID, baseline)
+	parent, snapshot, err := a.loadRevision(ctx, tenantID, baseline, false)
 	if err != nil {
 		return evaldomain.ResourceRef{}, err
 	}
@@ -182,7 +182,7 @@ func (a knowledgeEvaluationAdapter) CreateCandidate(
 func (a knowledgeEvaluationAdapter) ResolveRevision(
 	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
 ) (evaldomain.ResourceRevision, error) {
-	revision, _, err := a.loadPublished(ctx, tenantID, ref)
+	revision, _, err := a.loadRevision(ctx, tenantID, ref, true)
 	return revision, err
 }
 
@@ -206,7 +206,7 @@ func (a knowledgeEvaluationAdapter) ExecuteRevision(
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
-	_, snapshot, err := a.loadPublished(ctx, tenantID, ref)
+	_, snapshot, err := a.loadRevision(ctx, tenantID, ref, true)
 	if err != nil {
 		return evalport.ExecutionResult{}, err
 	}
@@ -232,8 +232,8 @@ func (a knowledgeEvaluationAdapter) ExecuteRevision(
 	return evalport.ExecutionResult{Output: result}, nil
 }
 
-func (a knowledgeEvaluationAdapter) loadPublished(
-	ctx context.Context, tenantID string, ref evaldomain.ResourceRef,
+func (a knowledgeEvaluationAdapter) loadRevision(
+	ctx context.Context, tenantID string, ref evaldomain.ResourceRef, allowCandidate bool,
 ) (evaldomain.ResourceRevision, knowledgeRetrievalSnapshot, error) {
 	ctx, err := evaluationKnowledgeContext(ctx, tenantID)
 	if err != nil {
@@ -257,7 +257,7 @@ func (a knowledgeEvaluationAdapter) loadPublished(
 	if !found || revision.ResourceKind != ref.Kind || revision.ResourceID != ref.ResourceID {
 		return evaldomain.ResourceRevision{}, knowledgeRetrievalSnapshot{}, evalport.ErrCenterResourceNotFound
 	}
-	if revision.Status != evaldomain.RevisionStatusPublished {
+	if revision.Status != evaldomain.RevisionStatusPublished && (!allowCandidate || !revision.CanEvaluateOffline()) {
 		return evaldomain.ResourceRevision{}, knowledgeRetrievalSnapshot{}, evaldomain.ErrRevisionNotPublished
 	}
 	var snapshot knowledgeRetrievalSnapshot

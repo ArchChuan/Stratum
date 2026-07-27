@@ -124,6 +124,8 @@ type RevisionPayloadRef struct {
 }
 
 type ExperimentRepository interface {
+	ValidatePrerequisites(ctx context.Context, tenantID string, stable, canary domain.ResourceRef,
+		suiteRevisionID string) error
 	Create(ctx context.Context, tenantID string, experiment domain.Experiment, deployment domain.Deployment) error
 	Get(ctx context.Context, tenantID, experimentID string) (domain.Experiment, bool, error)
 	SaveDecision(

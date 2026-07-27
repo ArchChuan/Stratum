@@ -6,6 +6,25 @@ import (
 	"time"
 )
 
+func TestResourceRevisionOfflineEvaluationEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		revision ResourceRevision
+		want     bool
+	}{
+		{name: "published baseline", revision: ResourceRevision{Status: RevisionStatusPublished, Source: RevisionSourceManual}, want: true},
+		{name: "optimization candidate", revision: ResourceRevision{Status: RevisionStatusDraft, Source: RevisionSourceOptimization}, want: true},
+		{name: "manual draft", revision: ResourceRevision{Status: RevisionStatusDraft, Source: RevisionSourceManual}, want: false},
+		{name: "rollback draft", revision: ResourceRevision{Status: RevisionStatusDraft, Source: RevisionSourceRollback}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.revision.CanEvaluateOffline(); got != tc.want {
+				t.Fatalf("CanEvaluateOffline()=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResourceKindValidate(t *testing.T) {
 	tests := []struct {
 		name    string

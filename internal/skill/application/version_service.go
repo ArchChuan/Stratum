@@ -196,6 +196,19 @@ func (s *VersionService) ResolvePublishedRevision(
 	return revision, nil
 }
 
+func (s *VersionService) ResolveEvaluableRevision(
+	ctx context.Context, skillID, revisionID string,
+) (domain.SkillRevision, error) {
+	revision, err := s.GetVersion(ctx, skillID, revisionID)
+	if err != nil {
+		return domain.SkillRevision{}, err
+	}
+	if revision.Status != domain.VersionStatusPublished && revision.Status != domain.VersionStatusCandidate {
+		return domain.SkillRevision{}, fmt.Errorf("skill revision is not evaluable: %s", revisionID)
+	}
+	return revision, nil
+}
+
 func (s *VersionService) ResolveActivePublishedRevision(
 	ctx context.Context, skillID string,
 ) (domain.SkillRevision, error) {
@@ -216,6 +229,19 @@ func (s *VersionService) PublishedRevisionSafeSummary(
 	ctx context.Context, skillID, revisionID string,
 ) (map[string]any, error) {
 	revision, err := s.ResolvePublishedRevision(ctx, skillID, revisionID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"version_label":  fmt.Sprintf("revision-%d", revision.RevisionNo),
+		"changed_fields": []string{"instructions"},
+	}, nil
+}
+
+func (s *VersionService) EvaluableRevisionSafeSummary(
+	ctx context.Context, skillID, revisionID string,
+) (map[string]any, error) {
+	revision, err := s.ResolveEvaluableRevision(ctx, skillID, revisionID)
 	if err != nil {
 		return nil, err
 	}

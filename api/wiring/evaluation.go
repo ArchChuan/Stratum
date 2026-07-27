@@ -17,6 +17,7 @@ import (
 	evalpersist "github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/persistence"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
+	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -245,17 +246,17 @@ func (m skillCandidateManager) ResolveRevision(
 	if err != nil {
 		return evaldomain.ResourceRevision{}, err
 	}
-	version, err := m.versions.ResolvePublishedRevision(ctx, ref.ResourceID, ref.RevisionID)
+	version, err := m.versions.ResolveEvaluableRevision(ctx, ref.ResourceID, ref.RevisionID)
 	if err != nil {
 		return evaldomain.ResourceRevision{}, err
 	}
-	summary, err := m.versions.PublishedRevisionSafeSummary(ctx, ref.ResourceID, ref.RevisionID)
+	summary, err := m.versions.EvaluableRevisionSafeSummary(ctx, ref.ResourceID, ref.RevisionID)
 	if err != nil {
 		return evaldomain.ResourceRevision{}, err
 	}
 	return evaldomain.ResourceRevision{
 		ID: version.ID, ResourceKind: evaldomain.ResourceKindSkill, ResourceID: version.SkillID,
-		Source: evaldomain.RevisionSourceManual, Status: evaldomain.RevisionStatusPublished,
+		Source: skillRevisionSource(version.Status), Status: skillRevisionStatus(version.Status),
 		ContentHash: version.ContentHash, PayloadRef: "skill://" + version.ID, PayloadHash: version.ContentHash,
 		SafeSummary: summary,
 	}, nil
@@ -268,7 +269,21 @@ func (m skillCandidateManager) SafeSummary(
 	if err != nil {
 		return nil, err
 	}
-	return m.versions.PublishedRevisionSafeSummary(ctx, ref.ResourceID, ref.RevisionID)
+	return m.versions.EvaluableRevisionSafeSummary(ctx, ref.ResourceID, ref.RevisionID)
+}
+
+func skillRevisionSource(status skilldomain.VersionStatus) evaldomain.RevisionSource {
+	if status == skilldomain.VersionStatusCandidate {
+		return evaldomain.RevisionSourceOptimization
+	}
+	return evaldomain.RevisionSourceManual
+}
+
+func skillRevisionStatus(status skilldomain.VersionStatus) evaldomain.RevisionStatus {
+	if status == skilldomain.VersionStatusPublished {
+		return evaldomain.RevisionStatusPublished
+	}
+	return evaldomain.RevisionStatusDraft
 }
 
 func evaluationSkillContext(

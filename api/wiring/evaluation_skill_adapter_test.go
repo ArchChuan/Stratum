@@ -26,6 +26,21 @@ func TestEvaluationSkillAdapterResolvesPublishedRevisionByTenantResourceAndRevis
 	}
 }
 
+func TestEvaluationSkillAdapterResolvesOptimizationCandidateForOfflineEvaluation(t *testing.T) {
+	revision := evaluationPublishedSkillRevision()
+	revision.Status = skilldomain.VersionStatusCandidate
+	manager := skillCandidateManager{versions: skillapp.NewVersionService(
+		&evaluationSkillVersionRepo{revision: revision}, zap.NewNop(),
+	)}
+
+	resolved, err := manager.ResolveRevision(context.Background(), "tenant-1", evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindSkill, ResourceID: "skill-1", RevisionID: revision.ID,
+	})
+	if err != nil || !resolved.CanEvaluateOffline() || resolved.Status != evaldomain.RevisionStatusDraft {
+		t.Fatalf("candidate resolution=%+v err=%v", resolved, err)
+	}
+}
+
 func TestEvaluationSkillAdapterCreatesBaselineFromActivePublishedRevision(t *testing.T) {
 	repo := &evaluationSkillVersionRepo{revision: evaluationPublishedSkillRevision()}
 	manager := skillCandidateManager{versions: skillapp.NewVersionService(repo, zap.NewNop())}
