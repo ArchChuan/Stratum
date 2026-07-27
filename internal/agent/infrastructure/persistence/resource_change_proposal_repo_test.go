@@ -18,7 +18,7 @@ func TestResourceChangeProposalCreateIsAtomic(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
 	pool.ExpectExec("INSERT INTO resource_change_proposals").
-		WithArgs(anyArgs(19)...).
+		WithArgs(anyArgs(20)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	pool.ExpectExec("INSERT INTO resource_change_proposal_events").
 		WithArgs(anyArgs(7)...).
@@ -108,6 +108,28 @@ func TestResourceChangeProposalUpdateDraftPersistsExpiration(t *testing.T) {
 	repo := &PgResourceChangeProposalRepo{pool: pool}
 	err = repo.UpdateDraft(tenantCtx("t1"), proposal, domain.ProposalEvent{})
 	require.ErrorIs(t, err, domain.ErrProposalExpired)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+func TestResourceChangeProposalUpdateDraftIncrementsEditCountAtomically(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer pool.Close()
+
+	proposal := testResourceProposal("proposal-1")
+	pool.ExpectBegin()
+	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
+	pool.ExpectExec("edit_count=edit_count\\+1").
+		WithArgs("proposal-1", "", "", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			domain.StatusReadyForReview, proposal.UpdatedAt).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("INSERT INTO resource_change_proposal_events").
+		WithArgs(anyArgs(7)...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	pool.ExpectCommit()
+
+	repo := &PgResourceChangeProposalRepo{pool: pool}
+	require.NoError(t, repo.UpdateDraft(tenantCtx("t1"), proposal, domain.ProposalEvent{}))
 	require.NoError(t, pool.ExpectationsWereMet())
 }
 

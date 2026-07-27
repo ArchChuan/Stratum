@@ -63,13 +63,14 @@ func (r *PgResourceChangeProposalRepo) Create(
 		_, err := tx.Exec(ctx, `INSERT INTO resource_change_proposals
             (id, conversation_id, proposer_id, confirmer_id, resource_kind, resource_id, operation,
              baseline_fingerprint, baseline_projection, payload, safe_summary, status, result, error_code, created_at, updated_at,
-             confirmed_at, applied_at, expires_at)
+             confirmed_at, applied_at, expires_at, edit_count)
             VALUES ($1, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12,
-                    $13::jsonb, $14, $15, $16, $17, $18, $19)`,
+                    $13::jsonb, $14, $15, $16, $17, $18, $19, $20)`,
 			proposal.ID, proposal.ConversationID, proposal.ProposerID, proposal.ConfirmerID,
 			proposal.ResourceKind, proposal.ResourceID, proposal.Operation, proposal.BaselineFingerprint,
 			string(baselineProjection), string(payload), string(summary), proposal.Status, string(result), proposal.ErrorCode,
-			proposal.CreatedAt, proposal.UpdatedAt, proposal.ConfirmedAt, proposal.AppliedAt, proposal.ExpiresAt)
+			proposal.CreatedAt, proposal.UpdatedAt, proposal.ConfirmedAt, proposal.AppliedAt, proposal.ExpiresAt,
+			proposal.EditCount)
 		if err != nil {
 			return fmt.Errorf("insert resource change proposal: %w", err)
 		}
@@ -120,7 +121,7 @@ func (r *PgResourceChangeProposalRepo) UpdateDraft(
 	err = r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		command, err := tx.Exec(ctx, `UPDATE resource_change_proposals
 			SET resource_id=$2, baseline_fingerprint=$3, baseline_projection=$4::jsonb, payload=$5::jsonb,
-				safe_summary=$6::jsonb, status=$7, updated_at=$8
+				safe_summary=$6::jsonb, status=$7, updated_at=$8, edit_count=edit_count+1
 			WHERE id=$1 AND status IN ('draft','ready_for_review') AND expires_at>$8`, proposal.ID, proposal.ResourceID,
 			proposal.BaselineFingerprint, string(baselineProjection), string(payload), string(summary), proposal.Status,
 			proposal.UpdatedAt)
@@ -309,7 +310,7 @@ func (r *PgResourceChangeProposalRepo) transition(
 
 const proposalColumns = `id, COALESCE(conversation_id::text,''), proposer_id, confirmer_id, resource_kind,
     resource_id, operation, baseline_fingerprint, baseline_projection, payload, safe_summary, status, result, error_code,
-    created_at, updated_at, confirmed_at, applied_at, expires_at`
+    created_at, updated_at, confirmed_at, applied_at, expires_at, edit_count`
 
 const proposalSelect = `SELECT ` + proposalColumns + ` FROM resource_change_proposals`
 
@@ -317,7 +318,7 @@ func scanProposal(row pgx.Row, proposal *domain.ResourceChangeProposal, baseline
 	return row.Scan(&proposal.ID, &proposal.ConversationID, &proposal.ProposerID, &proposal.ConfirmerID,
 		&proposal.ResourceKind, &proposal.ResourceID, &proposal.Operation, &proposal.BaselineFingerprint,
 		baselineProjection, payload, summary, &proposal.Status, result, &proposal.ErrorCode, &proposal.CreatedAt, &proposal.UpdatedAt,
-		&proposal.ConfirmedAt, &proposal.AppliedAt, &proposal.ExpiresAt)
+		&proposal.ConfirmedAt, &proposal.AppliedAt, &proposal.ExpiresAt, &proposal.EditCount)
 }
 
 func decodeProposalJSON(proposal *domain.ResourceChangeProposal, baselineProjection, payload, summary, result []byte) error {

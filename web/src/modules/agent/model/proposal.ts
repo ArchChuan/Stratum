@@ -33,6 +33,7 @@ const proposalBase = {
   baselineFingerprint: z.string().optional(), summary: z.string(), status: proposalStatusSchema,
   baselineProjection: z.record(z.unknown()).optional(),
   errorCode: z.string().optional(), expiresAt: z.string(), createdAt: z.string(), updatedAt: z.string(),
+	editCount: z.number().int().nonnegative(),
   applyResult: z.object({
     resourceId: z.string().optional(), fingerprint: z.string().optional(), readback: z.unknown().optional(),
   }).optional(),

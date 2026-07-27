@@ -40,6 +40,24 @@ func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
 	}
 }
 
+func TestTenantSchemaUpgradesResourceProposalEditCount(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS resource_change_proposals")
+	columnAt := strings.Index(sql, "edit_count           INT NOT NULL DEFAULT 0")
+	upgradeAt := strings.Index(sql, "ADD COLUMN IF NOT EXISTS edit_count INT NOT NULL DEFAULT 0")
+	if createAt == -1 || columnAt == -1 || upgradeAt == -1 {
+		t.Fatalf("proposal edit-count DDL missing: create=%d column=%d upgrade=%d", createAt, columnAt, upgradeAt)
+	}
+	if createAt >= columnAt || columnAt >= upgradeAt {
+		t.Fatalf("proposal edit-count DDL must follow create/column/upgrade order: create=%d column=%d upgrade=%d",
+			createAt, columnAt, upgradeAt)
+	}
+}
+
 func TestTenantSchemaBackfillsStructuredMemoryFacts(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {

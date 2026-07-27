@@ -27,6 +27,7 @@ type ResourceChangeProposalResponse struct {
 	ErrorCode           string                   `json:"errorCode,omitempty"`
 	ApplyResult         domain.ApplyResult       `json:"applyResult,omitempty"`
 	Events              []domain.ProposalEvent   `json:"events"`
+	EditCount           int                      `json:"editCount"`
 	ExpiresAt           time.Time                `json:"expiresAt"`
 	CreatedAt           time.Time                `json:"createdAt"`
 	UpdatedAt           time.Time                `json:"updatedAt"`
@@ -49,7 +50,7 @@ func NewResourceChangeProposalResponse(
 		Operation: proposal.Operation, BaselineFingerprint: proposal.BaselineFingerprint,
 		BaselineProjection: baselineProjection,
 		Payload:            proposal.Payload, Summary: proposal.Summary, Status: proposal.Status,
-		ErrorCode: proposal.ErrorCode, ApplyResult: proposal.ApplyResult, Events: events,
+		ErrorCode: proposal.ErrorCode, ApplyResult: proposal.ApplyResult, Events: events, EditCount: proposal.EditCount,
 		ExpiresAt: proposal.ExpiresAt, CreatedAt: proposal.CreatedAt, UpdatedAt: proposal.UpdatedAt,
 	}
 }

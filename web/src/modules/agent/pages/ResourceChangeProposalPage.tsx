@@ -85,6 +85,7 @@ export const ResourceChangeProposalPage = () => {
         <Descriptions.Item label="有效期">{new Date(proposal.expiresAt).toLocaleString('zh-CN')}</Descriptions.Item>
         <Descriptions.Item label="影响范围">当前租户的单个 {KIND_LABEL[proposal.resourceKind]} 资源</Descriptions.Item>
         <Descriptions.Item label="所需权限">租户管理员或所有者</Descriptions.Item>
+		<Descriptions.Item label="调整次数">{proposal.editCount > 0 ? `已调整 ${proposal.editCount} 次` : '尚未调整'}</Descriptions.Item>
         <Descriptions.Item label="基线状态">{proposal.operation === 'create' ? '不适用（新建）' : proposal.baselineFingerprint ? '已记录，确认时重新校验' : '缺少基线'}</Descriptions.Item>
       </Descriptions>
 

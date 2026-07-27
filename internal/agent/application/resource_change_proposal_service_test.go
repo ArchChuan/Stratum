@@ -307,6 +307,7 @@ func TestResourceChangeProposalUpdateDraftRevalidatesPayload(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Contains(t, string(updated.Payload), `"after"`)
+	require.Equal(t, 1, updated.EditCount)
 	require.Equal(t, domain.StatusReadyForReview, repo.events[len(repo.events)-1].FromStatus)
 	_, err = service.UpdateDraft(context.Background(), UpdateProposalInput{
 		TenantID: "tenant-1", ActorID: "admin", ProposalID: proposal.ID,
@@ -314,6 +315,35 @@ func TestResourceChangeProposalUpdateDraftRevalidatesPayload(t *testing.T) {
 	})
 	require.ErrorIs(t, err, domain.ErrProposalInvalid)
 	require.NotContains(t, string(repo.proposals[proposal.ID].Payload), "do-not-store")
+}
+
+func TestResourceChangeProposalRecordsPersistedDraftEditCount(t *testing.T) {
+	repo := newProposalRepoFake()
+	metrics := &proposalMetricsSpy{}
+	applier := &proposalApplierFake{result: domain.ApplyResult{ResourceID: "created"}}
+	service := NewResourceChangeProposalService(repo, &proposalAuthorizerFake{}, &baselineFake{},
+		map[domain.ResourceKind]port.ResourceChangeApplier{domain.ResourceAgent: applier}, metrics)
+	service.now = func() time.Time { return time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC) }
+	service.newID = func() string { return "proposal-edits" }
+	proposal, err := service.CreateProposal(context.Background(), CreateProposalInput{
+		TenantID: "tenant-1", ActorID: "admin", Kind: domain.ResourceAgent, Operation: domain.OperationCreate,
+		Payload: json.RawMessage(`{"name":"before","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096}`),
+	})
+	require.NoError(t, err)
+	for _, payload := range []json.RawMessage{
+		json.RawMessage(`{"name":"middle","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096}`),
+		json.RawMessage(`{"name":"after","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096}`),
+	} {
+		_, err = service.UpdateDraft(context.Background(), UpdateProposalInput{
+			TenantID: "tenant-1", ActorID: "admin", ProposalID: proposal.ID, Payload: payload,
+		})
+		require.NoError(t, err)
+	}
+	_, err = service.ConfirmAndApply(context.Background(), "tenant-1", proposal.ID, "admin")
+	require.NoError(t, err)
+	require.Equal(t, 2, metrics.draftEdits)
+	require.Equal(t, "agent", metrics.kind)
+	require.Equal(t, "create", metrics.operation)
 }
 
 func TestResourceChangeProposalCancelReturnsReauthorizationFailure(t *testing.T) {
@@ -338,6 +368,18 @@ type proposalRepoFake struct {
 	finishErr error
 }
 
+type proposalMetricsSpy struct {
+	observability.NoopMetrics
+	kind, operation string
+	draftEdits      int
+}
+
+func (m *proposalMetricsSpy) RecordResourceProposalDraftEdits(kind, operation string, count int) {
+	m.kind = kind
+	m.operation = operation
+	m.draftEdits = count
+}
+
 func newProposalRepoFake() *proposalRepoFake {
 	return &proposalRepoFake{proposals: map[string]domain.ResourceChangeProposal{}}
 }
@@ -353,6 +395,7 @@ func (f *proposalRepoFake) Get(_ context.Context, id string) (domain.ResourceCha
 	return p, nil
 }
 func (f *proposalRepoFake) UpdateDraft(_ context.Context, p domain.ResourceChangeProposal, event domain.ProposalEvent) error {
+	p.EditCount++
 	f.proposals[p.ID] = p
 	f.events = append(f.events, event)
 	return nil
