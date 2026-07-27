@@ -18,6 +18,11 @@ type (
 	ChatMessage      = domain.ChatMessage
 )
 
+const (
+	ChatMessageVisibilityUser     = domain.ChatMessageVisibilityUser
+	ChatMessageVisibilityInternal = domain.ChatMessageVisibilityInternal
+)
+
 // Sentinel aliases. Centralized in domain/agent.go.
 var (
 	ErrNotFound     = domain.ErrNotFound

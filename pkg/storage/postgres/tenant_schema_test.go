@@ -608,6 +608,22 @@ func TestTenantSchemaContainsWorkflowDurableRuntime(t *testing.T) {
 	}
 }
 
+func TestTenantSchemaContainsChatMessageVisibilityUpgrade(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	columnAt := strings.Index(sql, "ALTER TABLE chat_messages\n    ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'user'")
+	constraintAt := strings.Index(sql, "chat_messages_visibility_check")
+	if columnAt == -1 {
+		t.Fatal("tenant schema missing chat message visibility backfill")
+	}
+	if constraintAt == -1 || constraintAt < columnAt {
+		t.Fatalf("chat message visibility constraint must follow backfill: column=%d constraint=%d", columnAt, constraintAt)
+	}
+}
+
 func TestTenantSchemaContainsWorkflowStage1BEventAndAttemptBackfills(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {

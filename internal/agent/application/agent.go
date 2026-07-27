@@ -246,8 +246,11 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	a.mu.Unlock()
 
 	tracer := otel.Tracer("stratum/agent")
+	executionAttrs := agentExecutionAttributes(agentID, agentName, agentType, *cfg)
+	requestSpan := oteltrace.SpanFromContext(ctx)
+	requestSpan.SetAttributes(executionAttrs...)
 	ctx, execSpan := tracer.Start(ctx, "agent.execute",
-		oteltrace.WithAttributes(agentExecutionAttributes(agentID, agentName, agentType, *cfg)...),
+		oteltrace.WithAttributes(executionAttrs...),
 	)
 	defer execSpan.End()
 
@@ -590,6 +593,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			AgentID:        agentID,
 			MemoryScope:    memoryScope,
 			SkipOutbox:     false,
+			Visibility:     domain.ChatMessageVisibilityUser,
 		}
 		_, saveUserSpan := tracer.Start(ctx, "agent.chat_store.save_user")
 		saveCtx1, saveCancel1 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
@@ -609,6 +613,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			AgentID:        agentID,
 			MemoryScope:    memoryScope,
 			SkipOutbox:     false,
+			Visibility:     domain.ChatMessageVisibilityUser,
 			Artifacts:      result.Artifacts,
 		}
 		_, saveAgentSpan := tracer.Start(ctx, "agent.chat_store.save_assistant")
@@ -630,6 +635,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 				AgentID:        agentID,
 				MemoryScope:    memoryScope,
 				SkipOutbox:     true,
+				Visibility:     domain.ChatMessageVisibilityInternal,
 			}
 			_, saveSummarySpan := tracer.Start(ctx, "agent.chat_store.save_tool_summary")
 			saveCtx3, saveCancel3 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
@@ -653,12 +659,14 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	if execErr != nil {
 		status = domain.ExecStatusError
 	}
-	execSpan.SetAttributes(
+	completionAttrs := []attribute.KeyValue{
 		attribute.String("opik.metadata.stratum.status", status),
 		attribute.Int64("opik.metadata.stratum.duration_ms", result.Duration.Milliseconds()),
 		attribute.Int64("opik.metadata.stratum.total_tokens", int64(result.TokensUsed)),
 		attribute.Float64("opik.metadata.stratum.cost_usd", result.CostUSD),
-	)
+	}
+	execSpan.SetAttributes(completionAttrs...)
+	requestSpan.SetAttributes(completionAttrs...)
 	metrics.IncAgentExecution(agentID, string(agentType), status)
 	metrics.RecordAgentExecutionDuration(agentID, string(agentType), result.Duration.Seconds())
 	metrics.RecordAgentStepCount(agentID, string(agentType), result.Steps)

@@ -20,7 +20,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25.12'
 
       - name: Run tests
         run: |
@@ -38,7 +38,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25.12'
           cache: true
 
       - name: Build Go binary
@@ -305,10 +305,30 @@ jobs:
               -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
           fi
 
+      - name: Install pinned Opik observability release
+        if: steps.candidate.outputs.current == 'true'
+        run: |
+          curl --fail-with-body --location --output /tmp/opik-2.1.32.tgz \
+            https://raw.githubusercontent.com/comet-ml/opik/gh-pages/opik-2.1.32.tgz
+          echo "c0a4642569e06c9c4890702bfd3a0e87e9559d36847559504168e26295fc3524  /tmp/opik-2.1.32.tgz" \
+            | sha256sum --check
+          helm upgrade --install opik /tmp/opik-2.1.32.tgz \
+            --namespace opik --create-namespace \
+            -f helm/opik/values-demo.yaml \
+            --atomic --wait --timeout=20m
+          kubectl rollout status deployment/opik-backend -n opik --timeout=10m
+          kubectl get pods -n opik -o wide
+
+      - name: Apply Opik OTLP collector
+        if: steps.candidate.outputs.current == 'true'
+        run: |
+          kubectl apply -f k8s/opik-otel-collector.yaml
+          kubectl rollout status deployment/opik-otel-collector -n stratum --timeout=5m
+          kubectl get service stratum-otel-collector -n stratum
+
       - name: Helm deploy
         id: helm-deploy
         if: steps.candidate.outputs.current == 'true'
-        continue-on-error: true
         run: |
           EXTERNAL_SECRET_CHECKSUM="$(kubectl get secret stratum-secrets -n stratum -o json | jq -cS '{data:.data,type:.type}' | sha256sum | awk '{print $1}')"
           helm upgrade --install stratum ./helm \
@@ -331,6 +351,7 @@ jobs:
             --set milvus.image.repository="${{ env.IMAGE_REPO }}/milvus" \
             --set-string milvus.image.digest="${{ steps.images.outputs.milvus }}" \
             --set-string secrets.externalChecksum="${EXTERNAL_SECRET_CHECKSUM}" \
+            --set-string config.opikUrl="http://opik-backend.opik.svc.cluster.local:8080" \
             --set-string config.frontendUrl="$PUBLIC_BASE_URL" \
             --set-string config.githubCallbackUrl="$PUBLIC_BASE_URL/api/auth/github/callback" \
             --set-string config.secureCookies="false" \
