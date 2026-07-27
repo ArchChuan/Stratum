@@ -6,6 +6,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work_dir=$(mktemp -d)
 trap '/usr/bin/rm -rf -- "$work_dir"' EXIT
 
+if grep -q 'jsonb_object_length' "$ROOT/scripts/e2e/platform-assistant-remote-verify.sh"; then
+    echo 'remote verifier uses unsupported jsonb_object_length' >&2
+    exit 1
+fi
+
 cat >"$work_dir/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail

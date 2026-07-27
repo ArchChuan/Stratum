@@ -17,7 +17,7 @@ import {
 } from '../model/agent';
 
 import { AGENT_EXEC_TIMEOUT_MS, DEFAULT_PAGE_SIZE } from '@/constants';
-import api, { streamApiEvents } from '@/services/client';
+import api, { StreamRequestError, streamApiEvents } from '@/services/client';
 
 export const agentApi = {
   list: async (): Promise<Agent[]> => {
@@ -89,7 +89,7 @@ export const executeAgentStream = (
 
   return streamApiEvents(`/agents/${id}/execute/stream`, payload, {
     onEvent: (evt) => {
-		const event = evt as { error?: string; done?: boolean; token?: unknown; status?: string; approvalId?: string; toolName?: string; serverId?: string; riskLevel?: string };
+		const event = evt as { error?: string; code?: string; done?: boolean; token?: unknown; status?: string; approvalId?: string; toolName?: string; serverId?: string; riskLevel?: string };
 		if (event.status === 'waiting_approval' && event.approvalId) {
 			completed = true;
 			onApprovalRequired({ approvalId: event.approvalId, toolName: event.toolName || '', serverId: event.serverId || '', riskLevel: event.riskLevel || 'unclassified', status: event.status });
@@ -97,7 +97,7 @@ export const executeAgentStream = (
 		}
       if (event.error) {
         completed = true;
-        onError(new Error(event.error));
+        onError(new StreamRequestError(event.error, undefined, event.code));
         return false;
       }
       if (event.done) {

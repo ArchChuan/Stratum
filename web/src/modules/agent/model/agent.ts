@@ -165,6 +165,12 @@ export interface AgentExecutionResult {
   [key: string]: unknown;
 }
 
+export interface AgentExecutionFailure {
+  message: string;
+  code?: string;
+  status?: number;
+}
+
 export const systemAssistantSettingsSchema = z.object({
   agentId: z.string(),
   llmModel: z.string(),

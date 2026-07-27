@@ -1,17 +1,22 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
+	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -65,5 +70,84 @@ func TestExecuteStreamApprovalEventContainsOnlySafeBindingMetadata(t *testing.T)
 	}
 	if len(decoded) != 6 {
 		t.Fatalf("approval SSE payload contains unexpected fields: %s", payload)
+	}
+}
+
+func TestAgentExecutionErrorPayloadUsesPublicContract(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		want      map[string]string
+		forbidden string
+	}{
+		{
+			name: "assistant model unavailable",
+			err:  fmt.Errorf("assemble options: %w", domain.ErrAssistantModelUnavailable),
+			want: map[string]string{
+				"error": "租户尚未配置平台助手模型",
+				"code":  middleware.CodeSystemAssistantModelUnavailable,
+			},
+			forbidden: "assemble options",
+		},
+		{
+			name:      "unknown server error",
+			err:       errors.New("provider api_key=do-not-leak"),
+			want:      map[string]string{"error": "internal server error"},
+			forbidden: "do-not-leak",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := agentExecutionErrorPayload(tt.err)
+			var decoded map[string]string
+			if err := json.Unmarshal(payload, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(decoded, tt.want) {
+				t.Fatalf("payload = %#v, want %#v", decoded, tt.want)
+			}
+			if strings.Contains(string(payload), tt.forbidden) {
+				t.Fatalf("payload leaked %q: %s", tt.forbidden, payload)
+			}
+		})
+	}
+}
+
+func TestExecuteAgentStreamReturnsJSONContractBeforeStreamStarts(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &settingsAgentRepo{cfg: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+	}}
+	registry := agentapp.NewRegistry(repo, agentapp.BuiltinSystemAssistantProfileSource(), zap.NewNop())
+	svc := agentapp.NewAgentService(agentapp.AgentServiceDeps{Registry: registry, Logger: zap.NewNop()})
+	handler := NewAgentHandler(svc, zap.NewNop())
+	router := gin.New()
+	router.Use(middleware.ErrorHandler(zap.NewNop()))
+	router.Use(func(c *gin.Context) {
+		ctx := reqctx.WithTenantID(c.Request.Context(), "tenant-1")
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	router.POST("/agents/:id/execute/stream", handler.ExecuteAgentStream)
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/agents/"+domain.SystemAssistantID+"/execute/stream",
+		bytes.NewBufferString(`{"query":"hello"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("content type = %q, want application/json", got)
+	}
+	wantBody := "{\"code\":\"SYSTEM_ASSISTANT_MODEL_UNAVAILABLE\",\"error\":\"租户尚未配置平台助手模型\"}"
+	if response.Body.String() != wantBody {
+		t.Fatalf("body = %q, want %q", response.Body.String(), wantBody)
 	}
 }

@@ -26,10 +26,12 @@ const mocks = vi.hoisted(() => ({
       artifacts?: Array<{ type: string; diagnosticReport?: { facts?: unknown[] } }>;
     },
     streamError: null,
+		streamFailure: null as null | { message: string; code?: string; status?: number },
     streamDone: false,
     streamApproval: null as null | Record<string, string>,
     startStream: vi.fn(),
     cancelStream: vi.fn(),
+		clearStreamFailure: vi.fn(),
     getStreamState: vi.fn(() => ({
       streaming: false,
       conversationId: null,
@@ -79,6 +81,7 @@ describe('useChatPage tool approvals', () => {
     mocks.stream.accumulatedContent = '';
     mocks.stream.streamDone = false;
     mocks.stream.streamApproval = null;
+		mocks.stream.streamFailure = null;
   });
 
   it('turns an unknown resume result into non-retryable reconciliation work', async () => {

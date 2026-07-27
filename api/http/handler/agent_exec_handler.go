@@ -84,12 +84,6 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	}
 	userID, _ := userIDFromCtx(c)
 
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Header("X-Accel-Buffering", "no")
-	c.Header("Transfer-Encoding", "chunked")
-
 	writer := newSSEEventWriter(c.Writer)
 
 	clientCtx := c.Request.Context()
@@ -113,6 +107,11 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Header("Transfer-Encoding", "chunked")
 	defer cancel()
 	writer.EnqueueComment("heartbeat")
 	go func() {
@@ -144,8 +143,7 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 				return
 			}
 			h.logger.Error("agent stream execution failed", zap.String("agentId", id), zap.Error(runErr))
-			payload, _ := json.Marshal(map[string]interface{}{"error": runErr.Error()})
-			writer.EnqueueData(string(payload))
+			writer.EnqueueData(string(agentExecutionErrorPayload(runErr)))
 			return
 		}
 		donePayload := agentExecutionDonePayload(result)
@@ -153,6 +151,16 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	}()
 
 	writer.WriteUntilClosed(0)
+}
+
+func agentExecutionErrorPayload(err error) []byte {
+	descriptor := middleware.DescribePublicError(err, middleware.MapErrorToStatus(err))
+	payload := map[string]string{"error": descriptor.Message}
+	if descriptor.Code != "" {
+		payload["code"] = descriptor.Code
+	}
+	encoded, _ := json.Marshal(payload)
+	return encoded
 }
 
 func agentExecutionResultDTO(result *agent.AgentResult) AgentExecutionResult {
