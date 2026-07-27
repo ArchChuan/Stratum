@@ -22,6 +22,9 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -652,6 +655,7 @@ func (s *AgentService) resolveExecutionAgent(
 	if s.deps.Metrics != nil {
 		resolved = resolved.WithMetrics(s.deps.Metrics)
 	}
+	resolved.Name = current.GetConfig().Name
 	return resolved, assignment, nil
 }
 
@@ -680,6 +684,36 @@ func applyAgentAssignment(meta *ExecMeta, agentID string, assignment port.AgentR
 	}
 }
 
+func recordExecutionPreparation(
+	ctx context.Context, a Agent, req ExecRequest, meta ExecMeta, executionID string,
+) {
+	cfg := ExecutionConfig{
+		TenantID:       meta.TenantID,
+		TraceID:        meta.TraceID,
+		ExecutionID:    executionID,
+		ConversationID: req.ConversationID,
+		UserID:         req.UserID,
+		EvolutionTrace: meta.EvolutionTrace,
+	}
+	config := a.GetConfig()
+	oteltrace.SpanFromContext(ctx).SetAttributes(
+		agentExecutionAttributes(config.ID, config.Name, domain.ReActAgent, cfg)...,
+	)
+}
+
+func recordExecutionPreparationFailure(ctx context.Context, start time.Time, stage string) {
+	span := oteltrace.SpanFromContext(ctx)
+	span.SetAttributes(
+		attribute.String("stratum.error.category", "resource_preparation_failed"),
+		attribute.String("stratum.failure.stage", stage),
+		attribute.String("opik.metadata.stratum.status", domain.ExecStatusError),
+		attribute.String("opik.metadata.stratum.error_category", "resource_preparation_failed"),
+		attribute.String("opik.metadata.stratum.failure_stage", stage),
+		attribute.Int64("opik.metadata.stratum.duration_ms", time.Since(start).Milliseconds()),
+	)
+	span.SetStatus(codes.Error, "agent resource preparation failed")
+}
+
 func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta) (*AgentResult, int, error) {
 	a, ok, err := s.deps.Registry.Get(ctx, agentID)
 	if err != nil {
@@ -689,15 +723,20 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		return nil, 0, ErrNotFound
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
+	executionID := uuid.Must(uuid.NewV7()).String()
+	preparationStart := time.Now()
+	recordExecutionPreparation(ctx, a, req, meta, executionID)
 	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
 	if err != nil {
+		recordExecutionPreparationFailure(ctx, preparationStart, "resolve_agent_revision")
 		return nil, 0, fmt.Errorf("execute agent: resolve revision: %w", err)
 	}
 	applyAgentAssignment(&meta, agentID, assignment)
-	executionID := uuid.Must(uuid.NewV7()).String()
+	recordExecutionPreparation(ctx, a, req, meta, executionID)
 	_, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
 	if err != nil {
 		s.recordSystemAssistantRequest(a, "unknown", "error")
+		recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
 		return nil, 0, fmt.Errorf("execute agent: assemble options: %w", err)
 	}
 	options = append(options, WithExecutionID(executionID))
@@ -772,15 +811,20 @@ func (s *AgentService) ExecuteStream(
 		return nil, nil, nil, ErrNotFound
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
+	executionID := uuid.Must(uuid.NewV7()).String()
+	preparationStart := time.Now()
+	recordExecutionPreparation(ctx, a, req, meta, executionID)
 	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
 	if err != nil {
+		recordExecutionPreparationFailure(ctx, preparationStart, "resolve_agent_revision")
 		return nil, nil, nil, fmt.Errorf("execute stream: resolve revision: %w", err)
 	}
 	applyAgentAssignment(&meta, agentID, assignment)
-	executionID := uuid.Must(uuid.NewV7()).String()
+	recordExecutionPreparation(ctx, a, req, meta, executionID)
 	streamCtx, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
 	if err != nil {
 		s.recordSystemAssistantRequest(a, "unknown", "error")
+		recordExecutionPreparationFailure(ctx, preparationStart, "assemble_options")
 		return nil, nil, nil, fmt.Errorf("execute stream: assemble options: %w", err)
 	}
 	assistantCfg := &ExecutionConfig{}

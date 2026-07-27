@@ -2,7 +2,10 @@ package application_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -12,12 +15,50 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
 )
 
 // ---------- mocks ----------
 
 type mockAgentRepo struct{ mock.Mock }
+
+type preparationAgentRevisionResolver struct{}
+
+func (preparationAgentRevisionResolver) ResolveAgentRevision(
+	context.Context, string, string, string,
+) (port.AgentRevisionAssignment, bool, error) {
+	return port.AgentRevisionAssignment{
+		Revision: domain.AgentRevision{
+			AgentID: "agent-1", Type: domain.ReActAgent,
+			SystemPrompt: "canary prompt", Model: "qwen-plus", MaxIterations: 3,
+			Bindings: []domain.AgentBinding{{
+				Kind: domain.AgentBindingMCP, ID: "mcp:server-1:lookup", Enabled: true,
+			}},
+		},
+		RevisionID: "agent-revision-canary", ExperimentID: "experiment-agent", Variant: "canary",
+	}, true, nil
+}
+
+type preparationMCPTools struct{}
+
+func (preparationMCPTools) ToolsForServer(context.Context, string) []port.ToolDefinition {
+	return []port.ToolDefinition{{
+		Name: "mcp:server-1:lookup", ProviderType: domain.ProviderTypeMCP,
+		ServerID: "server-1", CapabilityID: "lookup",
+	}}
+}
+
+type failingPreparationMCPRevisionResolver struct{ err error }
+
+func (f failingPreparationMCPRevisionResolver) ResolveMCPRevision(
+	context.Context, string, string, string,
+) (port.MCPRevisionAssignment, bool, error) {
+	return port.MCPRevisionAssignment{}, false, f.err
+}
 
 func (m *mockAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig) error {
 	return m.Called(ctx, cfg).Error(0)
@@ -26,6 +67,101 @@ func (m *mockAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig
 	args := m.Called(ctx, id)
 	cfg, _ := args.Get(0).(*domain.AgentConfig)
 	return cfg, args.Bool(1), args.Error(2)
+}
+
+func TestAgentServicePreparationFailureRemainsObservable(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(context.Context, *application.AgentService) error
+	}{
+		{
+			name: "execute",
+			run: func(ctx context.Context, svc *application.AgentService) error {
+				_, _, err := svc.Execute(ctx, "agent-1", application.ExecRequest{
+					UserID: "user-1", Query: "use the lookup tool",
+				}, application.ExecMeta{TenantID: "tenant-1", TraceID: "business-trace-1"})
+				return err
+			},
+		},
+		{
+			name: "execute stream",
+			run: func(ctx context.Context, svc *application.AgentService) error {
+				_, _, _, err := svc.ExecuteStream(ctx, "agent-1", application.ExecRequest{
+					UserID: "user-1", Query: "use the lookup tool",
+				}, application.ExecMeta{TenantID: "tenant-1", TraceID: "business-trace-1"}, nil)
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := tracetest.NewSpanRecorder()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+			previous := otel.GetTracerProvider()
+			otel.SetTracerProvider(provider)
+			t.Cleanup(func() {
+				otel.SetTracerProvider(previous)
+				_ = provider.Shutdown(context.Background())
+			})
+
+			repo := new(mockAgentRepo)
+			repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{
+				ID: "agent-1", Name: "Mutable Agent", Type: domain.ReActAgent,
+				SystemPrompt: "mutable prompt", LLMModel: "qwen-plus", MaxIterations: 3,
+			}, true, nil).Once()
+			dependencyErr := errors.New("mcp revision backend leaked-secret-body")
+			svc := application.NewAgentService(application.AgentServiceDeps{
+				Registry: application.NewRegistry(
+					repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop(),
+				),
+				AgentRevisionResolver: preparationAgentRevisionResolver{},
+				MCPTools:              preparationMCPTools{},
+				MCPRevisionResolver: failingPreparationMCPRevisionResolver{
+					err: dependencyErr,
+				},
+			})
+
+			ctx, requestSpan := otel.Tracer("test/http").Start(context.Background(), "/agents/:id/execute")
+			err := tc.run(ctx, svc)
+			requestSpan.End()
+			require.ErrorIs(t, err, dependencyErr)
+
+			var request sdktrace.ReadOnlySpan
+			for _, span := range recorder.Ended() {
+				if span.Name() == "/agents/:id/execute" {
+					request = span
+					break
+				}
+			}
+			require.NotNil(t, request)
+			attrs := spanAttributes(request)
+			require.Equal(t, "tenant-1", attrs["opik.metadata.stratum.tenant_id"])
+			require.Equal(t, "business-trace-1", attrs["opik.metadata.stratum.trace_id"])
+			require.NotEmpty(t, attrs["opik.metadata.stratum.execution_id"])
+			require.Equal(t, "agent-1", attrs["opik.metadata.stratum.agent_id"])
+			require.Equal(t, "Mutable Agent", attrs["opik.metadata.stratum.agent_name"])
+			require.Equal(t, "error", attrs["opik.metadata.stratum.status"])
+			require.Equal(t, "resource_preparation_failed", attrs["opik.metadata.stratum.error_category"])
+			require.Equal(t, "assemble_options", attrs["opik.metadata.stratum.failure_stage"])
+			require.Contains(t, attrs, "opik.metadata.stratum.duration_ms")
+
+			var manifest map[string]string
+			require.NoError(t, json.Unmarshal(
+				[]byte(attrs["opik.metadata.stratum.resource_manifest"].(string)), &manifest,
+			))
+			require.Equal(t, "agent-revision-canary", manifest["agent:agent-1"])
+			var assignments map[string]application.ExperimentAssignment
+			require.NoError(t, json.Unmarshal(
+				[]byte(attrs["opik.metadata.stratum.experiment_assignments"].(string)), &assignments,
+			))
+			require.Equal(t, application.ExperimentAssignment{
+				ExperimentID: "experiment-agent", Variant: "canary",
+			}, assignments["agent:agent-1"])
+			for key, value := range attrs {
+				require.False(t, strings.Contains(fmt.Sprint(value), "leaked-secret-body"), key)
+			}
+			repo.AssertExpectations(t)
+		})
+	}
 }
 func (m *mockAgentRepo) GetSystemAssistant(ctx context.Context) (*domain.AgentConfig, bool, error) {
 	args := m.Called(ctx)

@@ -145,6 +145,24 @@ func TestKnowledgeCanaryFailsClosedDuringRuntimeDependencyOutage(t *testing.T) {
 	}
 }
 
+func TestMCPPreparationFailureRemainsVisibleInExecutionHistory(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("bootstrap.go")
+	if err != nil {
+		t.Fatalf("read bootstrap source: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"assertMCPPreparationFailureIsObservable", "preparationFailureRecorded", "preparationFailureRecovered",
+		`"opik.metadata.stratum.status"] != "error"`, `"agent:"+agentID`, `"mcp:"+serverID`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("MCP preparation failure evidence is missing %q", required)
+		}
+	}
+}
+
 func TestKnowledgeCanaryIgnoresUntrustedClientSecurityClaim(t *testing.T) {
 	t.Parallel()
 

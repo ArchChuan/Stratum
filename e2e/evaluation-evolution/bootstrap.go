@@ -54,7 +54,8 @@ func main() {
 	adminToken := refresh(adminClient, apiURL)
 	liveMCP := executeLiveMCPFlow(adminClient, apiURL, adminToken, postgresContainer, adminGuest.TenantID, runID)
 	liveAgent := executeLiveAgentFlow(adminClient, apiURL, adminToken, liveMCP["serverId"].(string), runID)
-	executeLiveMCPCanaryFlow(adminClient, apiURL, adminToken, liveMCP, liveAgent["resourceId"].(string), runID)
+	executeLiveMCPCanaryFlow(adminClient, apiURL, adminToken, liveMCP, liveAgent["resourceId"].(string),
+		postgresContainer, adminGuest.TenantID, runID)
 	liveSkill := executeLiveSkillFlow(adminClient, apiURL, adminToken, liveAgent["resourceId"].(string),
 		liveMCP["serverId"].(string), runID)
 	liveKnowledge := executeLiveKnowledgeFlow(adminClient, apiURL, adminToken, runID)
@@ -1354,7 +1355,7 @@ func executeLiveMCPFlow(client *http.Client, apiURL, token, postgresContainer, t
 }
 
 func executeLiveMCPCanaryFlow(
-	client *http.Client, apiURL, token string, liveMCP map[string]any, agentID, runID string,
+	client *http.Client, apiURL, token string, liveMCP map[string]any, agentID, postgresContainer, tenantID, runID string,
 ) {
 	serverID, baselineRevisionID := liveMCP["serverId"].(string), liveMCP["revisionId"].(string)
 	suiteRevisionID := liveMCP["suiteRevisionId"].(string)
@@ -1445,6 +1446,135 @@ func executeLiveMCPCanaryFlow(
 	liveMCP["experimentId"] = experiment.Experiment.ID
 	liveMCP["onlineTraceId"] = onlineTraceID
 	liveMCP["onlineVariant"] = feedbackRow["variant"]
+	assertMCPPreparationFailureIsObservable(client, apiURL, token, liveMCP, agentID, postgresContainer,
+		tenantID, experiment.Deployment.CanaryPercent, runID)
+}
+
+func assertMCPPreparationFailureIsObservable(
+	client *http.Client, apiURL, token string, liveMCP map[string]any, agentID, postgresContainer,
+	tenantID string, canaryPercent int, runID string,
+) {
+	serverID := liveMCP["serverId"].(string)
+	candidateRevisionID := liveMCP["candidateRevisionId"].(string)
+	schema := quoteIdentifier(tenantSchemaName(tenantID))
+	originalRef := querySQL(postgresContainer, fmt.Sprintf(
+		`SELECT payload_ref FROM %s.resource_revisions WHERE id=%s AND resource_kind='mcp' AND resource_id=%s`,
+		schema, literal(candidateRevisionID), literal(serverID)))
+	if originalRef == "" {
+		panic("MCP preparation failure fixture revision reference missing")
+	}
+	restored := false
+	defer func() {
+		if !restored {
+			execSQL(postgresContainer, "restore MCP canary revision object reference", fmt.Sprintf(
+				`UPDATE %s.resource_revisions SET payload_ref=%s WHERE id=%s AND resource_kind='mcp' AND resource_id=%s`,
+				schema, literal(originalRef), literal(candidateRevisionID), literal(serverID)))
+		}
+	}()
+	missingRef := "object://" + mustEnv("TRACE_PAYLOAD_BUCKET") + "/missing/" + runID + "-mcp-revision"
+	execSQL(postgresContainer, "invalidate exact MCP canary revision object reference", fmt.Sprintf(
+		`UPDATE %s.resource_revisions SET payload_ref=%s WHERE id=%s AND resource_kind='mcp' AND resource_id=%s`,
+		schema, literal(missingRef), literal(candidateRevisionID), literal(serverID)))
+
+	conversationID := createResourceCanaryConversation(
+		client, apiURL, token, agentID, serverID, canaryPercent, runID+" MCP preparation failure",
+	)
+	beforeCalls := readCounter(mustEnv("E2E_MCP_EVIDENCE"), "calls")
+	var failure struct {
+		Error string `json:"error"`
+	}
+	traceID := requestJSONWithTrace(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use the lookup tool while its immutable revision is unavailable.",
+			"conversation_id": conversationID}, http.StatusInternalServerError, &failure)
+	if traceID == "" || failure.Error != "internal server error" ||
+		readCounter(mustEnv("E2E_MCP_EVIDENCE"), "calls") != beforeCalls {
+		panic("MCP preparation failure did not fail before tool execution")
+	}
+	metadata := waitForOpikTraceMetadata(client, tenantID, traceID)
+	manifest := decodeStringMap(metadata["opik.metadata.stratum.resource_manifest"])
+	assignments := decodeAnyMap(metadata["opik.metadata.stratum.experiment_assignments"])
+	if metadata["opik.metadata.stratum.status"] != "error" || manifest["agent:"+agentID] == "" ||
+		manifest["mcp:"+serverID] != "" || assignments["agent:"+agentID] == nil ||
+		assignments["mcp:"+serverID] != nil {
+		panic("MCP preparation failure execution attribution invalid")
+	}
+	liveMCP["preparationFailureTraceId"] = traceID
+	liveMCP["preparationFailureRecorded"] = true
+
+	execSQL(postgresContainer, "restore MCP canary revision object reference", fmt.Sprintf(
+		`UPDATE %s.resource_revisions SET payload_ref=%s WHERE id=%s AND resource_kind='mcp' AND resource_id=%s`,
+		schema, literal(originalRef), literal(candidateRevisionID), literal(serverID)))
+	restored = true
+	var recovery map[string]any
+	requestJSON(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use the lookup tool and return bounded-agent-result.",
+			"conversation_id": conversationID}, http.StatusOK, &recovery)
+	if recovery["output"] != "bounded-agent-result" ||
+		readCounter(mustEnv("E2E_MCP_EVIDENCE"), "calls") != beforeCalls+1 {
+		panic("MCP execution did not recover after revision object restoration")
+	}
+	liveMCP["preparationFailureRecovered"] = true
+}
+
+func waitForOpikTraceMetadata(client *http.Client, tenantID, traceID string) map[string]any {
+	filters, _ := json.Marshal([]map[string]string{
+		{"field": "metadata", "operator": "=", "key": "$['opik.metadata.stratum.tenant_id']", "value": tenantID},
+		{"field": "metadata", "operator": "=", "key": "$['opik.metadata.stratum.trace_id']", "value": traceID},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	for ctx.Err() == nil {
+		endpoint, _ := url.Parse(strings.TrimRight(mustEnv("OPIK_URL"), "/") + "/v1/private/traces")
+		query := endpoint.Query()
+		query.Set("project_name", mustEnv("OPIK_PROJECT"))
+		query.Set("page", "1")
+		query.Set("size", "2")
+		query.Set("filters", string(filters))
+		endpoint.RawQuery = query.Encode()
+		request, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+		request.Header.Set("projectName", mustEnv("OPIK_PROJECT"))
+		response, err := client.Do(request)
+		if err == nil && response.StatusCode == http.StatusOK {
+			var page struct {
+				Content []struct {
+					Metadata map[string]any `json:"metadata"`
+				} `json:"content"`
+			}
+			decodeErr := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&page)
+			response.Body.Close()
+			if decodeErr == nil && len(page.Content) == 1 {
+				return page.Content[0].Metadata
+			}
+		} else if response != nil {
+			response.Body.Close()
+		}
+		time.Sleep(time.Second)
+	}
+	panic("timed out waiting for MCP preparation failure trace metadata")
+}
+
+func decodeStringMap(value any) map[string]string {
+	encoded, _ := json.Marshal(value)
+	if raw, ok := value.(string); ok {
+		encoded = []byte(raw)
+	}
+	result := map[string]string{}
+	if json.Unmarshal(encoded, &result) != nil {
+		panic("decode trace resource manifest failed")
+	}
+	return result
+}
+
+func decodeAnyMap(value any) map[string]any {
+	encoded, _ := json.Marshal(value)
+	if raw, ok := value.(string); ok {
+		encoded = []byte(raw)
+	}
+	result := map[string]any{}
+	if json.Unmarshal(encoded, &result) != nil {
+		panic("decode trace experiment assignments failed")
+	}
+	return result
 }
 
 func verifyEncryptedRevisionObject(postgresContainer, tenantID, revisionID string, plaintextMarkers ...string) {

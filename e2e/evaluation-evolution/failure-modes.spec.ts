@@ -32,6 +32,23 @@ test('MCP online canary executes the immutable candidate and attributes feedback
   ]));
 });
 
+test('MCP preparation failure remains observable and recovers without tool execution', async ({ adminApi, manifest }) => {
+  const evidence = manifest.liveEvidence.mcp;
+  expect(evidence.preparationFailureTraceId).not.toBe('');
+  expect(evidence.preparationFailureRecorded).toBe(true);
+  expect(evidence.preparationFailureRecovered).toBe(true);
+
+  const executions = await adminApi.get('/agents/executions?page=1&page_size=100');
+  expect(executions.status()).toBe(200);
+  expect((await executions.json()).executions).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      trace_id: evidence.preparationFailureTraceId,
+      status: 'error',
+      agent_id: manifest.liveEvidence.agent.resourceId,
+    }),
+  ]));
+});
+
 test('MCP and Knowledge parameter search creates durable candidates through the public API', async ({ adminApi, manifest }) => {
   const requests = [
     {
