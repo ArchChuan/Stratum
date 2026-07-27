@@ -20,6 +20,7 @@ export const useTenantMembers = () => {
   const [loading, setLoading] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteLoading, setInviteLoading] = useState(false);
+  const [invitationCode, setInvitationCode] = useState('');
   const [pagination, setPagination] = useState<PaginationState>({
     current: 1,
     pageSize: DEFAULT_PAGE_SIZE,
@@ -28,6 +29,16 @@ export const useTenantMembers = () => {
 
   const isOwner = user?.role === 'owner';
   const canInvite = user?.role === 'owner' || user?.role === 'admin';
+
+  const openInvite = () => {
+    setInvitationCode('');
+    setInviteOpen(true);
+  };
+
+  const closeInvite = () => {
+    setInviteOpen(false);
+    setInvitationCode('');
+  };
 
   const fetchPage = useCallback(async (page: number, pageSize: number) => {
     setLoading(true);
@@ -51,12 +62,13 @@ export const useTenantMembers = () => {
   const handleInvite = async (values: { email: string; role: 'admin' | 'member' }) => {
     setInviteLoading(true);
     try {
-      await tenantApi.inviteMember(values);
-      message.success('邀请已发送');
-      setInviteOpen(false);
-      void fetchPage(1, pagination.pageSize);
+      const invitation = await tenantApi.inviteMember(values);
+      setInvitationCode(invitation.invitation_code);
+      message.success({ content: '邀请码已生成', duration: 2 });
     } catch (err: any) {
-      if (err?.response?.status !== 403) message.error(extractErrorMessage(err, '邀请失败'));
+      if (err?.response?.status !== 403) {
+        message.error({ content: extractErrorMessage(err, '邀请失败'), duration: 0 });
+      }
     } finally {
       setInviteLoading(false);
     }
@@ -92,8 +104,10 @@ export const useTenantMembers = () => {
     pagination,
     fetchPage,
     inviteOpen,
-    setInviteOpen,
+    openInvite,
+    closeInvite,
     inviteLoading,
+    invitationCode,
     isOwner,
     canInvite,
     handleInvite,

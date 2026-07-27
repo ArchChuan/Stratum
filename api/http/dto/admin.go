@@ -47,11 +47,9 @@ type InviteMemberRequest struct {
 
 // InviteMemberResponse is returned after creating an invitation.
 type InviteMemberResponse struct {
-	InvitationID  string    `json:"invitation_id"`
-	Email         string    `json:"email"`
-	Role          string    `json:"role"`
-	InvitationURL string    `json:"invitation_url"`
-	ExpiresAt     time.Time `json:"expires_at"`
+	InvitationCode string `json:"invitation_code"`
+	Email          string `json:"email"`
+	Role           string `json:"role"`
 }
 
 // UpdateMemberRoleRequest is the body for PATCH /tenant/members/:user_id/role.

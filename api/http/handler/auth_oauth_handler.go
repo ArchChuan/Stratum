@@ -131,7 +131,9 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 		return
 	}
 
-	userID, targetTenantID, dbGlobalRole, err := h.deps.OnboardSvc.AutoJoinDefaultTenant(ctx, ghUser.ID, ghUser.Login, ghUser.AvatarURL, h.deps.GlobalAdmin)
+	userID, targetTenantID, dbGlobalRole, err := h.deps.OnboardSvc.AutoJoinDefaultTenant(
+		ctx, ghUser.ID, ghUser.Login, ghUser.AvatarURL, ghUser.Email, h.deps.GlobalAdmin,
+	)
 	if err == nil {
 		if globalRole == "global_admin" && dbGlobalRole != "global_admin" {
 			_ = h.deps.OnboardSvc.SetGlobalRole(ctx, userID, "global_admin")
@@ -174,6 +176,7 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 		GitHubID:    ghUser.ID,
 		GitHubLogin: ghUser.Login,
 		AvatarURL:   ghUser.AvatarURL,
+		Email:       ghUser.Email,
 	}
 	obToken, err := h.deps.JWTService.SignOnboarding(ob, constants.OnboardingTTL)
 	if err != nil {

@@ -442,3 +442,50 @@ func TestAuthHandler_Register_InvalidAction(t *testing.T) {
 		t.Errorf("expected 500 (nil JWTService), got %d", w.Code)
 	}
 }
+
+func TestAuthHandler_Register_JoinConsumesInvitation(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwtSvc := iamtoken.NewJWTService(key)
+	onboardingToken, err := jwtSvc.SignOnboarding(iamport.OnboardingClaims{
+		GitHubID: 42, GitHubLogin: "new-user", Email: "new.user@example.com",
+	}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invitationRepo := &authInvitationRepoFake{result: domain.InvitationJoinResult{
+		UserID: "user-1", TenantID: "tenant-1", Role: "member", GlobalRole: "user",
+	}}
+	h := handler.NewAuthHandler(handler.AuthHandlerDeps{
+		JWTService: jwtSvc, TokenStore: &refreshTokenStoreFake{},
+		InvitationSvc: application.NewInvitationService(invitationRepo), Logger: zap.NewNop(),
+	})
+	r := setupAuthRouter(h)
+	body := `{"onboarding_token":"` + onboardingToken + `","action":"join","invitation_token":"one-time-code"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body)) //nolint:noctx
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if invitationRepo.input.Identity.Email != "new.user@example.com" {
+		t.Fatalf("join email=%q", invitationRepo.input.Identity.Email)
+	}
+}
+
+type authInvitationRepoFake struct {
+	input  domain.InvitationJoinInput
+	result domain.InvitationJoinResult
+}
+
+func (f *authInvitationRepoFake) Create(context.Context, domain.TenantInvitation) error { return nil }
+func (f *authInvitationRepoFake) ConsumeAndJoin(_ context.Context, input domain.InvitationJoinInput) (*domain.InvitationJoinResult, error) {
+	f.input = input
+	return &f.result, nil
+}
+func (f *authInvitationRepoFake) ConsumeAndJoinExisting(_ context.Context, _ domain.ExistingInvitationJoinInput) (*domain.InvitationJoinResult, error) {
+	return &f.result, nil
+}

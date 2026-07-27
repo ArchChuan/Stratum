@@ -46,14 +46,16 @@ func (r *OnboardRepo) CreateTenant(ctx context.Context, in domain.CreateTenantIn
 
 	var userUUID string
 	err = tx.QueryRow(ctx,
-		`INSERT INTO users (github_id, github_login, avatar_url)
-		 VALUES ($1, $2, $3)
+		`INSERT INTO users (github_id, github_login, avatar_url, email, email_verified_at)
+		 VALUES ($1, $2, $3, NULLIF($4, ''), CASE WHEN $4 = '' THEN NULL ELSE now() END)
 		 ON CONFLICT (github_id) DO UPDATE
 		   SET github_login = EXCLUDED.github_login,
 		       avatar_url   = EXCLUDED.avatar_url,
+		       email = COALESCE(EXCLUDED.email, users.email),
+		       email_verified_at = COALESCE(EXCLUDED.email_verified_at, users.email_verified_at),
 		       last_login_at = now()
 		 RETURNING id`,
-		fmt.Sprintf("%d", in.GitHubID), in.GitHubLogin, in.AvatarURL,
+		fmt.Sprintf("%d", in.GitHubID), in.GitHubLogin, in.AvatarURL, in.Email,
 	).Scan(&userUUID)
 	if err != nil {
 		return nil, fmt.Errorf("onboard_repo: upsert user: %w", err)
@@ -213,14 +215,16 @@ func (r *OnboardRepo) AutoJoinDefaultTenant(ctx context.Context, in domain.AutoJ
 
 	var uid, gr string
 	err = tx.QueryRow(ctx,
-		`INSERT INTO users (github_id, github_login, avatar_url)
-		 VALUES ($1, $2, $3)
+		`INSERT INTO users (github_id, github_login, avatar_url, email, email_verified_at)
+		 VALUES ($1, $2, $3, NULLIF($4, ''), CASE WHEN $4 = '' THEN NULL ELSE now() END)
 		 ON CONFLICT (github_id) DO UPDATE
 		   SET github_login  = EXCLUDED.github_login,
 		       avatar_url    = EXCLUDED.avatar_url,
+		       email = COALESCE(EXCLUDED.email, users.email),
+		       email_verified_at = COALESCE(EXCLUDED.email_verified_at, users.email_verified_at),
 		       last_login_at = now()
 		 RETURNING id, COALESCE(global_role, '')`,
-		fmt.Sprintf("%d", in.GitHubID), in.GitHubLogin, in.AvatarURL,
+		fmt.Sprintf("%d", in.GitHubID), in.GitHubLogin, in.AvatarURL, in.Email,
 	).Scan(&uid, &gr)
 	if err != nil {
 		return "", "", "", fmt.Errorf("onboard_repo: upsert user: %w", err)

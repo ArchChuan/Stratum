@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { authApi } from '../../api/auth.api';
+import { tenantApi } from '../../api/tenant.api';
 import { useAuth } from '../../components/AuthContext';
 
 import { extractErrorMessage } from '@/shared/lib';
@@ -12,7 +13,7 @@ const { Title, Text } = Typography;
 export const OnboardingPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login } = useAuth();
+  const { login, user, switchTenant } = useAuth();
   const [createLoading, setCreateLoading] = useState(false);
   const [joinLoading, setJoinLoading] = useState(false);
 
@@ -22,15 +23,7 @@ export const OnboardingPage = () => {
     avatarURL?: string;
   } | null;
 
-  const getOnboardingToken = (): string | null => {
-    const token = onboardingState?.onboardingToken;
-    if (!token) {
-      message.error('登录已过期，请重新登录');
-      navigate('/login', { replace: true });
-      return null;
-    }
-    return token;
-  };
+  const getOnboardingToken = (): string | null => onboardingState?.onboardingToken || null;
 
   const finishLogin = async (accessToken: string, tenantId: string) => {
     login(
@@ -65,18 +58,26 @@ export const OnboardingPage = () => {
 
   const handleCreate = async (values: { name: string }) => {
     const onboardingToken = getOnboardingToken();
-    if (!onboardingToken) return;
     setCreateLoading(true);
     try {
-      const res = await authApi.register({
-        onboarding_token: onboardingToken,
-        action: 'create',
-        tenant_name: values.name,
-      });
-      message.success('租户创建成功！');
-      await finishLogin(res.access_token, res.tenant_id);
+      if (onboardingToken) {
+        const res = await authApi.register({
+          onboarding_token: onboardingToken,
+          action: 'create',
+          tenant_name: values.name,
+        });
+        await finishLogin(res.access_token, res.tenant_id);
+      } else if (user?.sub) {
+        const res = await authApi.createUserTenant(values.name);
+        await switchTenant(res.tenant_id);
+        navigate('/', { replace: true });
+      } else {
+        navigate('/login', { replace: true });
+        return;
+      }
+      message.success({ content: '租户创建成功', duration: 2 });
     } catch (err) {
-      message.error(extractErrorMessage(err, '创建失败'));
+      message.error({ content: extractErrorMessage(err, '创建失败'), duration: 0 });
     } finally {
       setCreateLoading(false);
     }
@@ -84,18 +85,26 @@ export const OnboardingPage = () => {
 
   const handleJoin = async (values: { invite_code: string }) => {
     const onboardingToken = getOnboardingToken();
-    if (!onboardingToken) return;
     setJoinLoading(true);
     try {
-      const res = await authApi.register({
-        onboarding_token: onboardingToken,
-        action: 'join',
-        invitation_token: values.invite_code,
-      });
-      message.success('加入成功！');
-      await finishLogin(res.access_token, res.tenant_id);
+      if (onboardingToken) {
+        const res = await authApi.register({
+          onboarding_token: onboardingToken,
+          action: 'join',
+          invitation_token: values.invite_code,
+        });
+        await finishLogin(res.access_token, res.tenant_id);
+      } else if (user?.sub) {
+        const res = await tenantApi.joinExisting(values.invite_code);
+        await switchTenant(res.tenant_id);
+        navigate('/', { replace: true });
+      } else {
+        navigate('/login', { replace: true });
+        return;
+      }
+      message.success({ content: '加入成功', duration: 2 });
     } catch (err) {
-      message.error(extractErrorMessage(err, '加入失败，邀请码无效或已过期'));
+      message.error({ content: extractErrorMessage(err, '加入失败，邀请码无效或已过期'), duration: 0 });
     } finally {
       setJoinLoading(false);
     }

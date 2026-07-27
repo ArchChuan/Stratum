@@ -30,6 +30,12 @@ func TestExchangeCode_Success(t *testing.T) {
 func TestGetUser_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/user/emails" {
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"email": "dev@example.com", "primary": true, "verified": true},
+			})
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"id":         int64(42),
 			"login":      "byteBuilderX",
@@ -49,5 +55,34 @@ func TestGetUser_Success(t *testing.T) {
 	}
 	if user.ID != 42 {
 		t.Errorf("expected 42, got %d", user.ID)
+	}
+	if user.Email != "dev@example.com" {
+		t.Errorf("expected verified profile email, got %q", user.Email)
+	}
+}
+
+func TestGetUser_UsesPrimaryVerifiedEmail(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/user/emails" {
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"email": "unverified@example.com", "primary": true, "verified": false},
+				{"email": "verified@example.com", "primary": true, "verified": true},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id": int64(42), "login": "byteBuilderX", "avatar_url": "https://example.com/avatar",
+		})
+	}))
+	defer ts.Close()
+
+	client := oauth.NewGitHubClient("clientid", "clientsecret", ts.URL+"/token", ts.URL+"/user")
+	user, err := client.GetUser(context.Background(), "gho_test123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if user.Email != "verified@example.com" {
+		t.Fatalf("expected primary verified email, got %q", user.Email)
 	}
 }

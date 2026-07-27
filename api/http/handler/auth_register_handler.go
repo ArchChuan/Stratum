@@ -45,6 +45,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 
 	var userID, tenantID string
+	tenantRole := "owner"
 	switch req.Action {
 	case "create":
 		if req.TenantName == "" {
@@ -55,6 +56,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			GitHubID:    ob.GitHubID,
 			GitHubLogin: ob.GitHubLogin,
 			AvatarURL:   ob.AvatarURL,
+			Email:       ob.Email,
 			Name:        req.TenantName,
 			GitHubOrg:   req.GitHubOrg,
 		})
@@ -75,6 +77,21 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		} else if dbRole, rErr := h.deps.OnboardSvc.GetGlobalRole(ctx, userID); rErr == nil && dbRole != "" {
 			globalRole = dbRole
 		}
+	case "join":
+		if req.InvitationToken == "" || h.deps.InvitationSvc == nil {
+			_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("invitation_token required for action=join")))
+			return
+		}
+		result, joinErr := h.deps.InvitationSvc.Join(ctx, req.InvitationToken, domain.InvitationIdentity{
+			GitHubID: ob.GitHubID, GitHubLogin: ob.GitHubLogin, AvatarURL: ob.AvatarURL, Email: ob.Email,
+		})
+		if joinErr != nil {
+			h.deps.Logger.Warn("join tenant with invitation failed")
+			_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("invalid or expired invitation")))
+			return
+		}
+		userID, tenantID, tenantRole = result.UserID, result.TenantID, result.Role
+		globalRole = result.GlobalRole
 
 	default:
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("action must be 'create' or 'join'")))
@@ -82,9 +99,9 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 
 	systemRole := domain.DeriveSystemRole([]domain.TenantMembership{
-		{TenantID: tenantID, Role: "owner"},
+		{TenantID: tenantID, Role: tenantRole},
 	})
-	rawRT, accessJWT, err := h.issueTokenPair(ctx, userID, tenantID, "owner", globalRole, systemRole, ob.AvatarURL, ob.GitHubLogin)
+	rawRT, accessJWT, err := h.issueTokenPair(ctx, userID, tenantID, tenantRole, globalRole, systemRole, ob.AvatarURL, ob.GitHubLogin)
 	if err != nil {
 		h.deps.Logger.Error("issue token pair", zap.Error(err))
 		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("token issuance failed")))

@@ -16,6 +16,7 @@ type CreateTenantInput struct {
 	GitHubID    int64
 	GitHubLogin string
 	AvatarURL   string
+	Email       string
 	Name        string
 	GitHubOrg   string
 }
@@ -32,5 +33,6 @@ type AutoJoinInput struct {
 	GitHubID         int64
 	GitHubLogin      string
 	AvatarURL        string
+	Email            string
 	GlobalAdminLogin string
 }

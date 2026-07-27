@@ -19,6 +19,7 @@ type githubUserJSON struct {
 	ID        int64  `json:"id"`
 	Login     string `json:"login"`
 	AvatarURL string `json:"avatar_url"`
+	Email     string `json:"email"`
 }
 
 // GitHubClient handles GitHub OAuth code exchange and user fetching.
@@ -27,6 +28,7 @@ type GitHubClient struct {
 	clientSecret string
 	tokenURL     string
 	userURL      string
+	emailsURL    string
 	httpClient   *http.Client
 }
 
@@ -44,6 +46,7 @@ func NewGitHubClient(clientID, clientSecret, tokenURL, userURL string) *GitHubCl
 		clientSecret: clientSecret,
 		tokenURL:     tokenURL,
 		userURL:      userURL,
+		emailsURL:    strings.TrimSuffix(userURL, "/user") + "/user/emails",
 		httpClient:   &http.Client{Timeout: constants.OAuthTokenExchangeTimeout},
 	}
 }
@@ -115,5 +118,40 @@ func (c *GitHubClient) GetUser(ctx context.Context, accessToken string) (*iampor
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("github: decode user response: %w", err)
 	}
-	return &iamport.GitHubProfile{ID: raw.ID, Login: raw.Login, AvatarURL: raw.AvatarURL}, nil
+	email, err := c.getPrimaryVerifiedEmail(ctx, accessToken)
+	if err != nil {
+		return nil, err
+	}
+	return &iamport.GitHubProfile{ID: raw.ID, Login: raw.Login, AvatarURL: raw.AvatarURL, Email: email}, nil
+}
+
+func (c *GitHubClient) getPrimaryVerifiedEmail(ctx context.Context, accessToken string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.emailsURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("github: build emails request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("github: emails request: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github: emails endpoint returned %d", resp.StatusCode)
+	}
+	var emails []struct {
+		Email    string `json:"email"`
+		Primary  bool   `json:"primary"`
+		Verified bool   `json:"verified"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&emails); err != nil {
+		return "", fmt.Errorf("github: decode emails response: %w", err)
+	}
+	for _, candidate := range emails {
+		if candidate.Primary && candidate.Verified {
+			return strings.ToLower(strings.TrimSpace(candidate.Email)), nil
+		}
+	}
+	return "", fmt.Errorf("github: primary verified email unavailable")
 }

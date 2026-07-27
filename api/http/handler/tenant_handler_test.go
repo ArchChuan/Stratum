@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,24 @@ type fakeTenantRepo struct {
 	deleted        []string
 	tenantName     string
 	tenantSettings []byte
+}
+
+type fakeInvitationRepo struct {
+	created domain.TenantInvitation
+	result  domain.InvitationJoinResult
+}
+
+func (f *fakeInvitationRepo) Create(_ context.Context, invitation domain.TenantInvitation) error {
+	f.created = invitation
+	return nil
+}
+
+func (f *fakeInvitationRepo) ConsumeAndJoin(_ context.Context, _ domain.InvitationJoinInput) (*domain.InvitationJoinResult, error) {
+	return &f.result, nil
+}
+
+func (f *fakeInvitationRepo) ConsumeAndJoinExisting(_ context.Context, _ domain.ExistingInvitationJoinInput) (*domain.InvitationJoinResult, error) {
+	return &f.result, nil
 }
 
 func (f *fakeTenantRepo) CountMembers(_ context.Context, _ string) (int, error) {
@@ -93,7 +112,89 @@ func injectTenant(tenantID string) gin.HandlerFunc {
 
 func newTenantHandler(repo *fakeTenantRepo) *TenantHandler {
 	svc := application.NewTenantService(repo, zap.NewNop(), [32]byte{}, nil)
-	return NewTenantHandler(svc, nil, zap.NewNop())
+	return NewTenantHandler(svc, application.NewInvitationService(&fakeInvitationRepo{}), nil, zap.NewNop())
+}
+
+func TestInviteMemberReturnsOneTimeCode(t *testing.T) {
+	repo := &fakeInvitationRepo{}
+	h := NewTenantHandler(
+		application.NewTenantService(&fakeTenantRepo{}, zap.NewNop(), [32]byte{}, nil),
+		application.NewInvitationService(repo), nil, zap.NewNop(),
+	)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/tenant/members/invite", injectTenant("tenant-abc"), func(c *gin.Context) {
+		c.Set("auth.role", "admin")
+		c.Set("auth.sub", "admin-1")
+		c.Next()
+	}, h.InviteMember)
+	req := httptest.NewRequest(http.MethodPost, "/tenant/members/invite", strings.NewReader(`{"email":"new.user@example.com","role":"member"}`)) //nolint:noctx
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["invitation_code"] == "" {
+		t.Fatal("missing one-time invitation code")
+	}
+	if _, exists := body["invitation_url"]; exists {
+		t.Fatal("invitation bearer credential must not be placed in a URL")
+	}
+}
+
+func TestInviteMemberRejectsMember(t *testing.T) {
+	h := NewTenantHandler(
+		application.NewTenantService(&fakeTenantRepo{}, zap.NewNop(), [32]byte{}, nil),
+		application.NewInvitationService(&fakeInvitationRepo{}), nil, zap.NewNop(),
+	)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/tenant/members/invite", injectTenant("tenant-abc"), func(c *gin.Context) {
+		c.Set("auth.role", "member")
+		c.Set("auth.sub", "member-1")
+		c.Next()
+	}, h.InviteMember)
+	req := httptest.NewRequest(http.MethodPost, "/tenant/members/invite", strings.NewReader(`{"email":"new.user@example.com","role":"member"}`)) //nolint:noctx
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestJoinTenantUsesAuthenticatedUser(t *testing.T) {
+	invitationRepo := &fakeInvitationRepo{result: domain.InvitationJoinResult{
+		UserID: "user-1", TenantID: "tenant-target", Role: "member",
+	}}
+	h := NewTenantHandler(
+		application.NewTenantService(&fakeTenantRepo{}, zap.NewNop(), [32]byte{}, nil),
+		application.NewInvitationService(invitationRepo), nil, zap.NewNop(),
+	)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler(zap.NewNop()))
+	r.POST("/tenant/join", func(c *gin.Context) {
+		c.Set("auth.sub", "user-1")
+		c.Next()
+	}, h.JoinTenant)
+	req := httptest.NewRequest(http.MethodPost, "/tenant/join", strings.NewReader(`{"invitation_code":"one-time-code"}`)) //nolint:noctx
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "tenant-target") {
+		t.Fatalf("target tenant missing: %s", w.Body.String())
+	}
 }
 
 func setupTenantHandlerRouter(h *TenantHandler) *gin.Engine {

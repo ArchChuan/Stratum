@@ -47,3 +47,11 @@ describe('tenantApi.members', () => {
     });
   });
 });
+
+describe('tenantApi.joinExisting', () => {
+  it('posts only the invitation code in the request body', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { tenant_id: 'tenant-target' } });
+    await expect(tenantApi.joinExisting('one-time-code')).resolves.toEqual({ tenant_id: 'tenant-target' });
+    expect(api.post).toHaveBeenCalledWith('/tenant/join', { invitation_code: 'one-time-code' });
+  });
+});

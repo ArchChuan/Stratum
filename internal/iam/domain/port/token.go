@@ -15,6 +15,7 @@ type TokenClaims struct {
 type OnboardingClaims struct {
 	GitHubID               int64
 	GitHubLogin, AvatarURL string
+	Email                  string
 }
 
 type TokenService interface {

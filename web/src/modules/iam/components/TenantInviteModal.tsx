@@ -1,14 +1,15 @@
-import { Button, Form, Input, Modal, Select } from 'antd';
+import { Alert, Button, Form, Input, Modal, Select, Space, Typography } from 'antd';
 import { useEffect } from 'react';
 
 interface Props {
   open: boolean;
   loading: boolean;
+  invitationCode: string;
   onCancel: () => void;
   onSubmit: (values: { email: string; role: 'admin' | 'member' }) => void;
 }
 
-export const TenantInviteModal = ({ open, loading, onCancel, onSubmit }: Props) => {
+export const TenantInviteModal = ({ open, loading, invitationCode, onCancel, onSubmit }: Props) => {
   const [form] = Form.useForm<{ email: string; role: 'admin' | 'member' }>();
 
   useEffect(() => {
@@ -16,7 +17,33 @@ export const TenantInviteModal = ({ open, loading, onCancel, onSubmit }: Props) 
   }, [open, form]);
 
   return (
-    <Modal title="邀请成员" open={open} onCancel={onCancel} footer={null} destroyOnHidden>
+    <Modal
+      title={invitationCode ? '邀请码已生成' : '邀请成员'}
+      open={open}
+      onCancel={onCancel}
+      footer={null}
+      destroyOnHidden
+    >
+      {invitationCode ? (
+        <Space direction="vertical" size={16} style={{ width: '100%', marginTop: 16 }}>
+          <Alert
+            type="warning"
+            showIcon
+            message="请立即复制邀请码"
+            description="关闭窗口后将不再显示。请通过可信渠道发送给受邀成员。"
+          />
+          <Typography.Text
+            code
+            copyable={{ text: invitationCode, tooltips: ['复制邀请码', '已复制'] }}
+            style={{ display: 'block', overflowWrap: 'anywhere', padding: 12 }}
+          >
+            {invitationCode}
+          </Typography.Text>
+          <Button type="primary" block onClick={onCancel}>
+            完成
+          </Button>
+        </Space>
+      ) : (
       <Form form={form} layout="vertical" onFinish={onSubmit} style={{ marginTop: 16 }}>
         <Form.Item
           label="邮箱"
@@ -39,6 +66,7 @@ export const TenantInviteModal = ({ open, loading, onCancel, onSubmit }: Props) 
           </Button>
         </Form.Item>
       </Form>
+      )}
     </Modal>
   );
 };

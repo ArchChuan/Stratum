@@ -22,6 +22,12 @@ const memberPageSchema = z.object({
   page_size: z.number(),
 });
 
+const invitationSchema = z.object({
+  invitation_code: z.string().min(1),
+  email: z.string().email(),
+  role: z.enum(['admin', 'member']),
+});
+
 export type MemberPage = z.infer<typeof memberPageSchema>;
 
 export const tenantApi = {
@@ -47,8 +53,10 @@ export const tenantApi = {
     const res = await api.get('/tenant/members', { params: { page, page_size: pageSize } });
     return memberPageSchema.parse(res.data);
   },
-  inviteMember: (data: { email: string; role: string }) =>
-    api.post('/tenant/members/invite', data),
+  inviteMember: async (data: { email: string; role: string }) => {
+    const res = await api.post('/tenant/members/invite', data);
+    return invitationSchema.parse(res.data);
+  },
   updateMemberRole: (userId: string, role: string) =>
     api.patch(`/tenant/members/${userId}/role`, { role }),
   removeMember: (userId: string) => api.delete(`/tenant/members/${userId}`),
@@ -58,6 +66,8 @@ export const tenantApi = {
       action: 'join',
       invitation_token: inviteCode,
     }),
+  joinExisting: (inviteCode: string) =>
+    api.post<{ tenant_id: string }>('/tenant/join', { invitation_code: inviteCode }).then((res) => res.data),
   // admin
   listAllTenants: async (): Promise<AdminTenant[]> => {
     const res = await api.get('/admin/tenants');

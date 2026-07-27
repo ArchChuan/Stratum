@@ -26,6 +26,7 @@ type jwtOnboardingClaims struct {
 	GitHubID    int64  `json:"github_id"`
 	GitHubLogin string `json:"github_login"`
 	AvatarURL   string `json:"avatar_url"`
+	Email       string `json:"email"`
 	jwt.RegisteredClaims
 }
 
@@ -99,6 +100,7 @@ func (s *JWTService) SignOnboarding(ob iamport.OnboardingClaims, ttl time.Durati
 		GitHubID:    ob.GitHubID,
 		GitHubLogin: ob.GitHubLogin,
 		AvatarURL:   ob.AvatarURL,
+		Email:       ob.Email,
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
@@ -131,5 +133,6 @@ func (s *JWTService) VerifyOnboarding(tokenStr string) (*iamport.OnboardingClaim
 		GitHubID:    c.GitHubID,
 		GitHubLogin: c.GitHubLogin,
 		AvatarURL:   c.AvatarURL,
+		Email:       c.Email,
 	}, nil
 }

@@ -17,8 +17,10 @@ export const MembersPage = () => {
     pagination,
     fetchPage,
     inviteOpen,
-    setInviteOpen,
+    openInvite,
+    closeInvite,
     inviteLoading,
+    invitationCode,
     isOwner,
     canInvite,
     handleInvite,
@@ -46,7 +48,7 @@ export const MembersPage = () => {
           </Text>
         </div>
         {canInvite && (
-          <Button type="primary" icon={<UserAddOutlined />} onClick={() => setInviteOpen(true)}>
+          <Button type="primary" icon={<UserAddOutlined />} onClick={openInvite}>
             邀请成员
           </Button>
         )}
@@ -67,7 +69,8 @@ export const MembersPage = () => {
       <TenantInviteModal
         open={inviteOpen}
         loading={inviteLoading}
-        onCancel={() => setInviteOpen(false)}
+        invitationCode={invitationCode}
+        onCancel={closeInvite}
         onSubmit={handleInvite}
       />
     </div>
