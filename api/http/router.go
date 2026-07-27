@@ -24,10 +24,10 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	r.Use(gin.Recovery())
 	r.Use(middleware.BodyLimit(constants.MaxRequestBodyBytes))
 
-	// Middleware (order matches the legacy api.SetupRouter exactly).
-	r.Use(middleware.ErrorHandler(c.Logger))
+	// Trace wraps error rendering so its access log observes the final status.
 	r.Use(otelgin.Middleware("stratum-ai"))
 	r.Use(middleware.TraceMiddleware(c.Logger))
+	r.Use(middleware.ErrorHandler(c.Logger))
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.CORSMiddleware(c.Config.FrontendURL))
 	r.Use(middleware.MetricsMiddleware(c.Platform.Metrics))

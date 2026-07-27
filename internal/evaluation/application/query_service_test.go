@@ -67,6 +67,36 @@ func TestQueryServicePreservesCandidateSafeDiff(t *testing.T) {
 	}
 }
 
+func TestQueryServiceReturnsEmptyCollectionsAsArrays(t *testing.T) {
+	svc := NewQueryService(&queryRepoStub{})
+	ctx := context.Background()
+
+	resources, err := svc.ListResources(ctx, "tenant-1", port.CenterFilter{})
+	if err != nil || resources.Items == nil {
+		t.Fatalf("resources items = %#v, err = %v; want non-nil empty slice", resources.Items, err)
+	}
+	suites, err := svc.ListSuites(ctx, "tenant-1", port.CenterFilter{})
+	if err != nil || suites.Items == nil {
+		t.Fatalf("suites items = %#v, err = %v; want non-nil empty slice", suites.Items, err)
+	}
+	runs, err := svc.ListRuns(ctx, "tenant-1", port.CenterFilter{})
+	if err != nil || runs.Items == nil {
+		t.Fatalf("runs items = %#v, err = %v; want non-nil empty slice", runs.Items, err)
+	}
+	candidates, err := svc.ListCandidates(ctx, "tenant-1", port.CenterFilter{})
+	if err != nil || candidates.Items == nil {
+		t.Fatalf("candidates items = %#v, err = %v; want non-nil empty slice", candidates.Items, err)
+	}
+	experiments, err := svc.ListExperiments(ctx, "tenant-1", port.CenterFilter{})
+	if err != nil || experiments.Items == nil {
+		t.Fatalf("experiments items = %#v, err = %v; want non-nil empty slice", experiments.Items, err)
+	}
+	timeline, err := svc.Timeline(ctx, "tenant-1", port.CenterFilter{ResourceKind: "skill", ResourceID: "resource-1"})
+	if err != nil || timeline.Items == nil {
+		t.Fatalf("timeline items = %#v, err = %v; want non-nil empty slice", timeline.Items, err)
+	}
+}
+
 type queryRepoStub struct {
 	filter     port.CenterFilter
 	err        error

@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/byteBuilderX/stratum/api/wiring"
 	"github.com/byteBuilderX/stratum/config"
@@ -77,5 +78,34 @@ func TestBaseAuthRoutesRegisterWithoutGitHubOAuth(t *testing.T) {
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/auth/oauth/exchange", nil)) //nolint:noctx
 	if w.Code == http.StatusNotFound {
 		t.Fatal("oauth exchange route was not registered with base auth routes")
+	}
+}
+
+func TestRefreshFailureAccessLogUsesFinalResponseStatus(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	core, logs := observer.New(zap.InfoLevel)
+	logger := zap.New(core)
+	metrics := observability.NewPrometheusMetrics(zap.NewNop())
+	router := NewRouter(&wiring.Container{
+		Config: &config.Config{FrontendURL: "http://localhost:3002"}, Logger: logger,
+		Platform:   &wiring.Platform{JWTService: iamtoken.NewJWTService(key), Metrics: metrics},
+		LLMGateway: &wiring.LLMGateway{}, Skill: &wiring.Skill{}, Agent: &wiring.Agent{},
+		Knowledge: &wiring.Knowledge{}, MCP: &wiring.MCP{},
+	})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)) //nolint:noctx
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("refresh status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+	entries := logs.FilterMessage("access").All()
+	if len(entries) != 1 {
+		t.Fatalf("access log entries = %d, want 1", len(entries))
+	}
+	if got := entries[0].ContextMap()["status"]; got != int64(http.StatusUnauthorized) {
+		t.Fatalf("access log status = %v, want %d", got, http.StatusUnauthorized)
 	}
 }

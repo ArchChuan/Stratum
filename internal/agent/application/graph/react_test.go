@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/tokenutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestBuildReActGraph_DestructiveToolPausesBeforeExecution(t *testing.T) {
@@ -356,6 +358,57 @@ func TestBuildReActGraph_DirectAnswer(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "42", out.Output)
 	require.Equal(t, 1, out.Steps)
+}
+
+func TestBuildReActGraph_DoesNotLogLLMResponseContent(t *testing.T) {
+	core, observed := observer.New(zap.DebugLevel)
+	stub := &capGWSequence{responses: []port.CapabilityResponse{{Content: "synthetic-private-answer"}}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.New(core))
+	require.NoError(t, err)
+
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		TraceID:  "trace-1",
+		TenantID: "tenant-1",
+		Model:    "qwen-turbo",
+		Messages: []port.LLMMessage{{Role: "user", Content: "private prompt"}},
+	}, graph.RunConfig{MaxSteps: 2})
+	require.NoError(t, err)
+
+	for _, entry := range observed.All() {
+		logged := entry.Message + fmt.Sprint(entry.ContextMap())
+		require.NotContains(t, logged, "synthetic-private-answer")
+		require.NotContains(t, logged, "content_preview")
+	}
+}
+
+func TestBuildReActGraph_DoesNotLogToolResponseContent(t *testing.T) {
+	core, observed := observer.New(zap.DebugLevel)
+	stub := &capGWSequence{responses: []port.CapabilityResponse{
+		{ToolCalls: []port.ToolCall{{ID: "call-1", Name: "lookup", Arguments: map[string]any{}}}},
+		{Content: "done"},
+	}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.New(core))
+	require.NoError(t, err)
+
+	_, err = cg.Invoke(context.Background(), graph.ReActState{
+		TraceID:  "trace-1",
+		TenantID: "tenant-1",
+		Model:    "qwen-turbo",
+		Messages: []port.LLMMessage{{Role: "user", Content: "private prompt"}},
+		AvailableTools: []port.ToolDefinition{{
+			Name: "lookup", ProviderType: "mcp", ServerID: "server-1", Metadata: map[string]any{"risk_level": "read"},
+		}},
+		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) {
+			return guardedToolOutput("synthetic-private-tool-result"), nil
+		},
+	}, graph.RunConfig{MaxSteps: 4})
+	require.NoError(t, err)
+
+	for _, entry := range observed.All() {
+		logged := entry.Message + fmt.Sprint(entry.ContextMap())
+		require.NotContains(t, logged, "synthetic-private-tool-result")
+		require.NotContains(t, logged, "content_preview")
+	}
 }
 
 func TestBuildReActGraph_ToolCall(t *testing.T) {

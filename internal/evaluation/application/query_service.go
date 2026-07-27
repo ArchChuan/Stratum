@@ -57,6 +57,9 @@ func (s *QueryService) ListResources(ctx context.Context, tenantID string, filte
 		return domain.ResourcePage{}, e
 	}
 	p, e := s.repo.ListResources(ctx, tenantID, f)
+	if p.Items == nil {
+		p.Items = []domain.ResourceSummary{}
+	}
 	return p, mapCenterError(e)
 }
 func (s *QueryService) ListSuites(ctx context.Context, tenantID string, filter port.CenterFilter) (domain.SuitePage, error) {
@@ -65,6 +68,9 @@ func (s *QueryService) ListSuites(ctx context.Context, tenantID string, filter p
 		return domain.SuitePage{}, e
 	}
 	p, e := s.repo.ListSuites(ctx, tenantID, f)
+	if p.Items == nil {
+		p.Items = []domain.SuiteSummary{}
+	}
 	return p, mapCenterError(e)
 }
 func (s *QueryService) ListRuns(ctx context.Context, tenantID string, filter port.CenterFilter) (domain.RunPage, error) {
@@ -73,6 +79,9 @@ func (s *QueryService) ListRuns(ctx context.Context, tenantID string, filter por
 		return domain.RunPage{}, e
 	}
 	p, e := s.repo.ListRuns(ctx, tenantID, f)
+	if p.Items == nil {
+		p.Items = []domain.RunSummary{}
+	}
 	return p, mapCenterError(e)
 }
 func (s *QueryService) ListCandidates(ctx context.Context, tenantID string, filter port.CenterFilter) (domain.CandidatePage, error) {
@@ -81,6 +90,9 @@ func (s *QueryService) ListCandidates(ctx context.Context, tenantID string, filt
 		return domain.CandidatePage{}, e
 	}
 	p, e := s.repo.ListCandidates(ctx, tenantID, f)
+	if p.Items == nil {
+		p.Items = []domain.CandidateSummary{}
+	}
 	return p, mapCenterError(e)
 }
 func (s *QueryService) ListExperiments(ctx context.Context, tenantID string, filter port.CenterFilter) (domain.ExperimentPage, error) {
@@ -89,6 +101,9 @@ func (s *QueryService) ListExperiments(ctx context.Context, tenantID string, fil
 		return domain.ExperimentPage{}, e
 	}
 	p, e := s.repo.ListExperiments(ctx, tenantID, f)
+	if p.Items == nil {
+		p.Items = []domain.ExperimentSummary{}
+	}
 	return p, mapCenterError(e)
 }
 func (s *QueryService) Timeline(ctx context.Context, tenantID string, filter port.CenterFilter) (domain.TimelinePage, error) {
@@ -100,5 +115,8 @@ func (s *QueryService) Timeline(ctx context.Context, tenantID string, filter por
 		return domain.TimelinePage{}, fmt.Errorf("%w: resource required", domain.ErrInvalidCenterQuery)
 	}
 	p, e := s.repo.Timeline(ctx, tenantID, f)
+	if p.Items == nil {
+		p.Items = []domain.TimelineEvent{}
+	}
 	return p, mapCenterError(e)
 }

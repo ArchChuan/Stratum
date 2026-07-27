@@ -271,19 +271,6 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 			zap.Int64("latency_ms", latencyMs),
 			zap.Bool("has_tool_calls", len(resp.ToolCalls) > 0),
 		)
-		if logger.Core().Enabled(zap.DebugLevel) {
-			preview := resp.Content
-			if len(preview) > 200 {
-				preview = preview[:200] + "..."
-			}
-			logger.Debug("react.llm.response",
-				zap.String("trace_id", s.TraceID),
-				zap.String("model", s.Model),
-				zap.Int("step", s.Steps),
-				zap.Int("tool_calls", len(resp.ToolCalls)),
-				zap.String("content_preview", preview),
-			)
-		}
 		if len(resp.ToolCalls) == 0 {
 			s.Output = resp.Content
 			s.Messages = append(s.Messages, port.LLMMessage{
@@ -725,18 +712,6 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 				StartedAt:       toolStart,
 				EndedAt:         toolStart.Add(time.Duration(toolLatencyMs) * time.Millisecond),
 			})
-			if !s.GovernedAssistant && logger.Core().Enabled(zap.DebugLevel) {
-				preview := content
-				if len(preview) > 200 {
-					preview = preview[:200] + "..."
-				}
-				logger.Debug("react.tool.response",
-					zap.String("trace_id", s.TraceID),
-					zap.String("tool_name", tc.Name),
-					zap.Int("step", s.Steps),
-					zap.String("content_preview", preview),
-				)
-			}
 			s.Messages = append(s.Messages, port.LLMMessage{
 				Role:       "tool",
 				Content:    content,

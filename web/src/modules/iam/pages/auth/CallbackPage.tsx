@@ -86,6 +86,8 @@ export const CallbackPage = () => {
 
   return (
     <div
+      role="status"
+      aria-label="正在完成登录..."
       className="auth-page"
       style={{
         minHeight: '100vh',
@@ -94,7 +96,7 @@ export const CallbackPage = () => {
         justifyContent: 'center',
       }}
     >
-      <Spin size="large" tip="正在完成登录..." />
+      <Spin size="large" />
     </div>
   );
 };

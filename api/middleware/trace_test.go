@@ -1,6 +1,7 @@
 package middleware_test
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -41,5 +42,31 @@ func TestTraceMiddlewareDoesNotLogRequestOrResponseBodies(t *testing.T) {
 	}
 	if fields["resp_bytes"] == nil {
 		t.Fatal("access log must retain response byte count")
+	}
+}
+
+func TestTraceMiddlewareLogsStatusWrittenByErrorHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	core, logs := observer.New(zap.InfoLevel)
+	logger := zap.New(core)
+	router := gin.New()
+	router.Use(middleware.TraceMiddleware(logger))
+	router.Use(middleware.ErrorHandler(logger))
+	router.GET("/refresh", func(c *gin.Context) {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("refresh token cookie missing")))
+	})
+
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/refresh", nil))
+
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("response status = %d, want %d", res.Code, http.StatusUnauthorized)
+	}
+	entries := logs.FilterMessage("access").All()
+	if len(entries) != 1 {
+		t.Fatalf("access log entries = %d, want 1", len(entries))
+	}
+	if got := entries[0].ContextMap()["status"]; got != int64(http.StatusUnauthorized) {
+		t.Fatalf("access log status = %v, want %d", got, http.StatusUnauthorized)
 	}
 }

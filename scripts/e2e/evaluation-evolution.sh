@@ -68,7 +68,8 @@ cleanup_resources() {
   if [[ -f "$work_dir/compose.yml" ]]; then
     bounded_compose_down base "$project" -f "$work_dir/compose.yml" || cleanup_status=1
   fi
-  if [[ -n "${E2E_OPIK_COMPOSE_FILE:-}" && -f "${E2E_OPIK_COMPOSE_FILE:-}" ]]; then
+  if [[ -n "${E2E_OPIK_COMPOSE_FILE:-}" && -f "${E2E_OPIK_COMPOSE_FILE:-}" && \
+    -f "$work_dir/opik-override.yml" ]]; then
     bounded_compose_down opik "${project}-opik" -f "$E2E_OPIK_COMPOSE_FILE" \
       -f "$work_dir/opik-override.yml" || cleanup_status=1
   fi
@@ -250,6 +251,9 @@ wait_container_healthy() {
 
 command -v docker >/dev/null || fail 'docker is required'
 command -v openssl >/dev/null || fail 'openssl is required'
+command -v npm >/dev/null || fail 'npm is required'
+npm ls --prefix "$repo_dir/web" --depth=0 @xyflow/react >/dev/null 2>&1 || \
+  fail 'frontend dependencies are incomplete; run npm ci --prefix web'
 [[ -n "${OPENAI_API_KEY:-}" ]] || fail 'a test LLM key is required in OPENAI_API_KEY'
 [[ -n "${E2E_OPIK_COMPOSE_FILE:-}" && -f "${E2E_OPIK_COMPOSE_FILE}" ]] || \
   fail 'E2E_OPIK_COMPOSE_FILE must point to a reviewed, pinned upstream Opik self-hosting compose file'

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 
 	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
@@ -17,6 +18,9 @@ func ErrorHandler(logger *zap.Logger) gin.HandlerFunc {
 			return
 		}
 		ginErr := c.Errors.Last()
+		if errors.Is(c.Request.Context().Err(), context.Canceled) {
+			return
+		}
 
 		// pull context fields set by earlier middleware
 		requestID, _ := c.Get(traceIDKey)

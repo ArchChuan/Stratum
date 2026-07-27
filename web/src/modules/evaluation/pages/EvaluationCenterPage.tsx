@@ -1,6 +1,7 @@
 import { PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, Drawer, Empty, Flex, Select, Skeleton, Space, Table, Tabs, Typography, message } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import { CandidateDrawer } from '../components/CandidateDrawer';
 import { CreateEvaluationModal } from '../components/CreateEvaluationModal';
@@ -12,6 +13,7 @@ import { TimelineDrawer } from '../components/TimelineDrawer';
 import { StatusTag, displayLabel, drawerWidth } from '../components/evaluationView';
 import { useEvaluationCenter } from '../hooks/useEvaluationCenter';
 import { useEvaluationTimeline } from '../hooks/useEvaluationTimeline';
+import { resourceKindSchema } from '../model/evaluation';
 import type { CandidateSummary, ExperimentSummary, ResourceKind, RunSummary } from '../model/evaluation';
 
 import { useResponsive } from '@/shared/hooks';
@@ -23,9 +25,12 @@ const command = (version: number, reason: string) => ({ reason, expected_state_v
 
 export const EvaluationCenterPage = () => {
   const { isMobile } = useResponsive();
-  const [kind, setKind] = useState<ResourceKind | undefined>();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const parsedKind = resourceKindSchema.safeParse(searchParams.get('kind'));
+  const kind = parsedKind.success ? parsedKind.data : undefined;
+  const filterResourceId = searchParams.get('resource_id')?.trim() || undefined;
   const [status, setStatus] = useState<string | undefined>();
-  const center = useEvaluationCenter({ resource_kind: kind, status });
+  const center = useEvaluationCenter({ resource_kind: kind, resource_id: filterResourceId, status });
   const [resourceId, setResourceId] = useState('');
   const [runId, setRunId] = useState('');
   const [candidateId, setCandidateId] = useState('');
@@ -42,6 +47,11 @@ export const EvaluationCenterPage = () => {
   const decide = async (action: () => Promise<unknown>, success: string) => {
     try { await action(); message.success({ content: success, duration: 2 }); }
     catch (error) { message.error({ content: error instanceof Error ? error.message : '操作失败', duration: 0 }); }
+  };
+  const setKind = (value: ResourceKind | undefined) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set('kind', value); else next.delete('kind');
+    setSearchParams(next);
   };
 
   if (center.loading && !center.overview) return <Skeleton active />;

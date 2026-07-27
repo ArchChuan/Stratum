@@ -1,12 +1,16 @@
 package middleware
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestErrorHandler(t *testing.T) {
@@ -35,5 +39,28 @@ func TestMapErrorToStatusMapsTraceEvidenceFailures(t *testing.T) {
 				t.Fatalf("MapErrorToStatus() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestErrorHandlerDoesNotTurnCanceledClientRequestIntoServerError(t *testing.T) {
+	core, logs := observer.New(zap.ErrorLevel)
+	router := gin.New()
+	router.Use(ErrorHandler(zap.New(core)))
+	router.GET("/canceled", func(c *gin.Context) {
+		ctx, cancel := context.WithCancel(c.Request.Context())
+		cancel()
+		c.Request = c.Request.WithContext(ctx)
+		_ = c.Error(fmt.Errorf("repository: %w", context.Canceled))
+	})
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/canceled", nil)
+	router.ServeHTTP(response, request)
+
+	if response.Code >= http.StatusInternalServerError {
+		t.Fatalf("canceled request returned server error: %d", response.Code)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("canceled request emitted error log: %s", logs.All()[0].Message)
 	}
 }

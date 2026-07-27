@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EvaluationCenterPage } from './EvaluationCenterPage';
@@ -24,13 +25,35 @@ const center = vi.hoisted(() => ({
   loading: false, error: '', canManageEvaluation: true, reload: vi.fn(), rejectCandidate: vi.fn(),
   pauseExperiment: vi.fn(), promoteExperiment: vi.fn(), rollbackExperiment: vi.fn(), createEvaluation: vi.fn(),
 }));
-vi.mock('../hooks/useEvaluationCenter', () => ({ useEvaluationCenter: () => center }));
+const useCenter = vi.hoisted(() => vi.fn(() => center));
+vi.mock('../hooks/useEvaluationCenter', () => ({ useEvaluationCenter: useCenter }));
+
+const LocationProbe = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return <>
+    <output aria-label="当前查询参数">{location.search}</output>
+    <button type="button" onClick={() => navigate(-1)}>返回</button>
+  </>;
+};
+
+const renderPage = (entry = '/evaluations') => {
+  render(
+    <MemoryRouter
+      initialEntries={[entry]}
+      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+    >
+      <EvaluationCenterPage />
+      <LocationProbe />
+    </MemoryRouter>,
+  );
+};
 
 describe('EvaluationCenterPage', () => {
-  beforeEach(() => { center.canManageEvaluation = true; });
+  beforeEach(() => { center.canManageEvaluation = true; useCenter.mockClear(); });
 
   it('exposes only the three primary first-viewport decisions', () => {
-    render(<EvaluationCenterPage />);
+    renderPage();
     expect(screen.getByRole('combobox', { name: '资源类型' })).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: '资源状态' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /新建评测/ })).toBeInTheDocument();
@@ -39,7 +62,7 @@ describe('EvaluationCenterPage', () => {
 
   it('keeps new evaluation hidden for members while details remain available', () => {
     center.canManageEvaluation = false;
-    render(<EvaluationCenterPage />);
+    renderPage();
     expect(screen.queryByRole('button', { name: /新建评测/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '查看 skill-1' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '查看 skill-1' }));
@@ -48,7 +71,7 @@ describe('EvaluationCenterPage', () => {
 
   it('creates a suite and baseline run then refreshes through the center hook', async () => {
     center.createEvaluation.mockResolvedValue({ job_id: 'job-1', status: 'queued' });
-    render(<EvaluationCenterPage />);
+    renderPage();
     fireEvent.click(screen.getByRole('button', { name: /新建评测/ }));
     fireEvent.mouseDown(screen.getByRole('combobox', { name: '目标资源' }));
     expect(await screen.findByText('检索 MCP（mcp-1）')).toBeInTheDocument();
@@ -66,9 +89,39 @@ describe('EvaluationCenterPage', () => {
   });
 
   it('enables promotion from the real eligible experiment summary shape', () => {
-    render(<EvaluationCenterPage />);
+    renderPage();
     fireEvent.click(screen.getByRole('tab', { name: '金丝雀实验 1' }));
     fireEvent.click(screen.getByRole('button', { name: '详情' }));
     expect(screen.getByRole('button', { name: /晋\s*级/ })).toBeEnabled();
+  });
+
+  it('initializes the center from a valid resource deep link', () => {
+    renderPage('/evaluations?kind=skill&resource_id=skill-1');
+    expect(useCenter).toHaveBeenLastCalledWith({ resource_kind: 'skill', resource_id: 'skill-1', status: undefined });
+  });
+
+  it('ignores an unsupported resource kind without dropping the resource id', () => {
+    renderPage('/evaluations?kind=workflow&resource_id=resource-1');
+    expect(useCenter).toHaveBeenLastCalledWith({ resource_kind: undefined, resource_id: 'resource-1', status: undefined });
+  });
+
+  it('keeps the resource deep link while changing kind and follows history navigation', async () => {
+    renderPage('/evaluations?kind=skill&resource_id=skill-1&view=evidence');
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '资源类型' }));
+    const option = await waitFor(() => {
+      const item = Array.from(document.querySelectorAll<HTMLElement>('.ant-select-item-option-content'))
+        .find((value) => value.textContent === 'Agent');
+      expect(item).toBeDefined();
+      return item!;
+    });
+    fireEvent.click(option);
+    await waitFor(() => expect(screen.getByRole('status', { name: '当前查询参数' }))
+      .toHaveTextContent('?kind=agent&resource_id=skill-1&view=evidence'));
+    expect(useCenter).toHaveBeenLastCalledWith({ resource_kind: 'agent', resource_id: 'skill-1', status: undefined });
+
+    fireEvent.click(screen.getByRole('button', { name: '返回' }));
+    await waitFor(() => expect(useCenter).toHaveBeenLastCalledWith({
+      resource_kind: 'skill', resource_id: 'skill-1', status: undefined,
+    }));
   });
 });
