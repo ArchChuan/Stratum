@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS resource_change_proposals (
     status               TEXT NOT NULL CHECK (status IN ('draft', 'ready_for_review', 'confirmed', 'applying', 'applied', 'invalid', 'stale', 'expired', 'failed', 'unknown_outcome', 'cancelled')),
     result               JSONB NOT NULL DEFAULT '{}',
     error_code           TEXT NOT NULL DEFAULT '',
+	edit_count           INT NOT NULL DEFAULT 0,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     confirmed_at         TIMESTAMPTZ,
@@ -92,6 +93,8 @@ CREATE TABLE IF NOT EXISTS resource_change_proposals (
 );
 ALTER TABLE resource_change_proposals
     ADD COLUMN IF NOT EXISTS baseline_projection JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE resource_change_proposals
+    ADD COLUMN IF NOT EXISTS edit_count INT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_resource_change_proposals_status
     ON resource_change_proposals(status, expires_at, created_at);
 

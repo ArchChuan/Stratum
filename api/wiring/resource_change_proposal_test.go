@@ -103,11 +103,47 @@ func TestProposalKnowledgeUpdateCannotRenameWorkspace(t *testing.T) {
 	knowledge := &proposalKnowledgeFake{value: &knowledgedomain.Workspace{ID: "ws-1", Name: "docs", Description: "old", Config: knowledgedomain.WorkspaceConfig{EmbeddingModel: knowledgedomain.DefaultEmbeddingModel}}}
 	adapter := NewResourceChangeProposalAdapters(nil, nil, nil, knowledge)
 	_, err := adapter.ApplyResourceChange(context.Background(), agentdomain.ProposalEnvelope{
-		Proposal: agentdomain.ResourceChangeProposal{TenantID: "tenant-1", ResourceKind: agentdomain.ResourceKnowledgeWorkspace, ResourceID: "docs", Operation: agentdomain.OperationUpdate},
+		Proposal: agentdomain.ResourceChangeProposal{TenantID: "tenant-1", ResourceKind: agentdomain.ResourceKnowledgeWorkspace, ResourceID: "ws-1", Operation: agentdomain.OperationUpdate},
 		Payload:  &agentdomain.KnowledgeWorkspaceChange{Name: "renamed", Description: "new", EmbeddingModel: knowledgedomain.DefaultEmbeddingModel},
 	})
 	require.Error(t, err)
 	require.Equal(t, "docs", knowledge.value.Name)
+}
+
+func TestProposalKnowledgeUpdateResolvesApplyResultResourceID(t *testing.T) {
+	knowledge := &proposalKnowledgeFake{}
+	adapter := NewResourceChangeProposalAdapters(nil, nil, nil, knowledge)
+	created, err := adapter.ApplyResourceChange(context.Background(), agentdomain.ProposalEnvelope{
+		Proposal: agentdomain.ResourceChangeProposal{
+			TenantID: "tenant-1", ResourceKind: agentdomain.ResourceKnowledgeWorkspace,
+			Operation: agentdomain.OperationCreate,
+		},
+		Payload: &agentdomain.KnowledgeWorkspaceChange{
+			Name: "docs", Description: "old", EmbeddingModel: knowledgedomain.DefaultEmbeddingModel,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ws-created", created.ResourceID)
+
+	proposal := agentdomain.ResourceChangeProposal{
+		TenantID: "tenant-1", ResourceKind: agentdomain.ResourceKnowledgeWorkspace,
+		ResourceID: created.ResourceID, Operation: agentdomain.OperationUpdate,
+	}
+	baseline, err := adapter.ResolveBaseline(context.Background(), proposal)
+	require.NoError(t, err)
+	require.NotEmpty(t, baseline.Fingerprint)
+
+	updated, err := adapter.ApplyResourceChange(context.Background(), agentdomain.ProposalEnvelope{
+		Proposal: proposal,
+		Payload: &agentdomain.KnowledgeWorkspaceChange{
+			Name: "docs", Description: "new", EmbeddingModel: knowledgedomain.DefaultEmbeddingModel,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, created.ResourceID, updated.ResourceID)
+	require.Equal(t, []string{created.ResourceID, created.ResourceID}, knowledge.lookupIDs)
+	require.Equal(t, "docs", knowledge.lastUpdateName)
+	require.Equal(t, "new", knowledge.value.Description)
 }
 
 type proposalAgentFake struct{ values map[string]agentapp.AgentDTO }
@@ -153,19 +189,28 @@ func cloneMCPConfigForTest(cfg *mcpdomain.ServerConfig) *mcpdomain.ServerConfig 
 	return &cloned
 }
 
-type proposalKnowledgeFake struct{ value *knowledgedomain.Workspace }
+type proposalKnowledgeFake struct {
+	value          *knowledgedomain.Workspace
+	lookupIDs      []string
+	lastUpdateName string
+}
 
 func (f *proposalKnowledgeFake) CreateWorkspace(_ context.Context, _ string, in knowledgeapp.CreateWorkspaceInput) (*knowledgedomain.Workspace, error) {
 	f.value = &knowledgedomain.Workspace{ID: "ws-created", Name: in.Name, Description: in.Description, Config: in.Config}
 	return f.value, nil
 }
-func (f *proposalKnowledgeFake) UpdateWorkspace(_ context.Context, _, _ string, in knowledgeapp.UpdateWorkspaceInput) (*knowledgedomain.Workspace, error) {
+func (f *proposalKnowledgeFake) UpdateWorkspace(_ context.Context, _, name string, in knowledgeapp.UpdateWorkspaceInput) (*knowledgedomain.Workspace, error) {
+	f.lastUpdateName = name
 	if in.Description != nil {
 		f.value.Description = *in.Description
 	}
 	return f.value, nil
 }
-func (f *proposalKnowledgeFake) GetWorkspace(context.Context, string, string) (*knowledgedomain.Workspace, error) {
+func (f *proposalKnowledgeFake) GetWorkspaceByID(_ context.Context, _, id string) (*knowledgedomain.Workspace, error) {
+	f.lookupIDs = append(f.lookupIDs, id)
+	if f.value == nil || f.value.ID != id {
+		return nil, knowledgedomain.ErrWorkspaceNotFound
+	}
 	return f.value, nil
 }
 

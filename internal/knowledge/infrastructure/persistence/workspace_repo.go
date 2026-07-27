@@ -97,6 +97,27 @@ func (r *WorkspaceRepo) GetByName(ctx context.Context, tenantID, name string) (*
 	return &ws, nil
 }
 
+// GetByID returns a workspace by UUID; ErrWorkspaceNotFound if absent.
+func (r *WorkspaceRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.Workspace, error) {
+	var (
+		ws domain.Workspace
+		jc jsonbConfig
+	)
+	err := execTenant(ctx, r.db, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT id, name, COALESCE(description,''), config, created_at, updated_at
+                     FROM rag_workspaces WHERE id = $1::uuid`, id,
+		).Scan(&ws.ID, &ws.Name, &ws.Description, &jc, &ws.CreatedAt, &ws.UpdatedAt)
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrWorkspaceNotFound
+		}
+		return nil, fmt.Errorf("workspace_repo: get by id: %w", err)
+	}
+	ws.Config = fromJSONB(jc)
+	return &ws, nil
+}
+
 // List returns workspaces ordered by created_at DESC.
 func (r *WorkspaceRepo) List(ctx context.Context, tenantID string) ([]*domain.Workspace, error) {
 	var out []*domain.Workspace

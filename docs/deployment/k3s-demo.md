@@ -202,6 +202,24 @@ path; the public check must independently return HTTP 200.
 Complete verification includes a browser GitHub login and callback. Do not log
 authorization codes, tokens, cookies, PII, or upstream response bodies.
 
+For the managed platform assistant, run the repository verifier after the
+deployment rollout:
+
+```bash
+bash scripts/e2e/platform-assistant-remote-verify.sh "$PUBLIC_BASE_URL" root@demo-host
+```
+
+The verifier checks the public member boundary, Agent diagnostics, Opik and
+collector readiness, proposal schema compatibility, and aggregate execution
+prerequisites. Its `configuredChain` result has three states: `passed`,
+`failed`, and `prerequisite_missing`. A failed check exits nonzero.
+`prerequisite_missing` remains an explicit incomplete result and lists only
+missing prerequisite categories. When a legitimate administrator session is
+available, supply its bearer value through the process-only
+`PLATFORM_ASSISTANT_ADMIN_BEARER` environment variable; never place it in a
+command argument, file, or log. The verifier does not promote members, change
+tenant settings, or create resources.
+
 ## Backup And Restore Notes
 
 Before deleting the host or reinstalling K3s, create a database dump:

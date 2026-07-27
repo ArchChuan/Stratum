@@ -56,6 +56,7 @@ type ResourceChangeProposal struct {
 	Status              ProposalStatus    `json:"status"`
 	ErrorCode           string            `json:"errorCode,omitempty"`
 	ApplyResult         ApplyResult       `json:"applyResult,omitempty"`
+	EditCount           int               `json:"editCount"`
 	ExpiresAt           time.Time         `json:"expiresAt"`
 	CreatedAt           time.Time         `json:"createdAt"`
 	UpdatedAt           time.Time         `json:"updatedAt"`

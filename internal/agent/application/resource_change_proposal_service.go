@@ -171,6 +171,7 @@ func (s *ResourceChangeProposalService) UpdateDraft(
 	}); err != nil {
 		return domain.ResourceChangeProposal{}, fmt.Errorf("update proposal draft: %w", err)
 	}
+	proposal.EditCount++
 	return proposal, nil
 }
 
@@ -237,6 +238,9 @@ func (s *ResourceChangeProposalService) ConfirmAndApply(
 	if err != nil {
 		return domain.ResourceChangeProposal{}, err
 	}
+	s.metrics.RecordResourceProposalDraftEdits(
+		string(claimed.ResourceKind), string(claimed.Operation), claimed.EditCount,
+	)
 	if err := s.authorize(ctx, tenantID, actorID, claimed.ResourceKind, claimed.Operation); err != nil {
 		finishErr := s.finish(ctx, claimed, domain.StatusFailed, domain.ApplyResult{}, "proposal_forbidden", actorID)
 		if finishErr != nil {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -110,6 +111,9 @@ func systemAssistantPostgresURL(t *testing.T) string {
 	if value := os.Getenv("TEST_POSTGRES_URL"); value != "" {
 		return value
 	}
+	if os.Getenv("REQUIRE_PLATFORM_ASSISTANT_E2E") == "1" {
+		t.Fatal("platform assistant PostgreSQL E2E requires STRATUM_TEST_POSTGRES_URL or TEST_POSTGRES_URL")
+	}
 	if os.Getenv("CI") != "" {
 		t.Skip("system assistant PostgreSQL E2E runs in the dedicated memory E2E job")
 	}
@@ -122,6 +126,24 @@ func TestSystemAssistantPostgresURLAcceptsMemoryE2EDSNUnderCI(t *testing.T) {
 	t.Setenv("CI", "true")
 
 	require.Equal(t, "postgres://ci-memory-e2e", systemAssistantPostgresURL(t))
+}
+
+func TestSystemAssistantPostgresURLRequireModeFailsClosed(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestSystemAssistantPostgresURLFailClosedProbe$")
+	cmd.Env = append(os.Environ(),
+		"PLATFORM_ASSISTANT_E2E_FAILURE_PROBE=1",
+		"REQUIRE_PLATFORM_ASSISTANT_E2E=1",
+		"STRATUM_TEST_POSTGRES_URL=",
+		"TEST_POSTGRES_URL=",
+	)
+	require.Error(t, cmd.Run(), "require mode accepted a missing PostgreSQL DSN")
+}
+
+func TestSystemAssistantPostgresURLFailClosedProbe(t *testing.T) {
+	if os.Getenv("PLATFORM_ASSISTANT_E2E_FAILURE_PROBE") != "1" {
+		t.Skip("subprocess probe only")
+	}
+	_ = systemAssistantPostgresURL(t)
 }
 
 func setupSystemAssistantPostgres(t *testing.T) (*pgxpool.Pool, []string) {

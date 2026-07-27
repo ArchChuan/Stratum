@@ -13,6 +13,7 @@ REMOTE_HTTP_VALUES="${ROOT}/helm/values-demo-remote-http.yaml"
 POSTGRES_DOCKERFILE="${ROOT}/docker/postgres-zhparser.Dockerfile"
 OPIK_VALUES="${ROOT}/helm/opik/values-demo.yaml"
 OPIK_COLLECTOR="${ROOT}/k8s/opik-otel-collector.yaml"
+PLATFORM_ASSISTANT_REMOTE_VERIFY="${ROOT}/scripts/e2e/platform-assistant-remote-verify.sh"
 
 require() {
     local pattern="$1" description="$2"
@@ -187,6 +188,42 @@ done
 
 require_file "${DEMO_VALUES}" 'opikUrl:[[:space:]]*"http://opik-backend\.opik\.svc\.cluster\.local:8080"' \
     'Demo uses the in-cluster Opik API'
+
+if [[ ! -f "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" ]]; then
+    echo 'deployment safety contract missing: platform assistant remote verifier' >&2
+    exit 1
+fi
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" '/api/health' 'remote public health check'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'GUEST_ATTEMPTS=5' 'five bounded guest login attempts'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" '/api/agents/stratum-platform-assistant' \
+    'managed Agent member read check'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'systemPrompt' 'managed Agent prompt omission check'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" '/api/agents/executions' 'member execution diagnostics check'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'deployment/opik-backend' 'Opik backend readiness check'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'deployment/opik-otel-collector' 'OTEL collector readiness check'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'baseline_projection' 'proposal baseline column check'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'edit_count' 'proposal edit count column check'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'GROUP BY table_schema' \
+    'proposal columns checked per tenant schema'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" '/api/auth/me' 'administrator bearer identity check'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" "role IN \('owner',[[:space:]]*'admin'\)" \
+    'aggregate tenant administrator count'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" "settings->'llm_api_keys'" \
+    'aggregate configured provider count'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'stratum_diagnose_tenant' \
+    'configured chain diagnostic tool evidence'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'diagnosticReport' \
+    'configured chain structured diagnostic report'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'X-Request-ID' \
+    'configured chain request trace correlation'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'trace_id' \
+    'configured chain Opik execution correlation'
+for state in passed failed prerequisite_missing; do
+    require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" "${state}" "configured chain ${state} state"
+done
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'exit 1' 'failed remote verification exits nonzero'
+reject_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'echo.*(token|password|api[_-]?key)' \
+    'remote verifier prints a credential'
 
 if [[ -e "${ROOT}/.github/workflows/mirror.yml" ]]; then
     echo 'deployment safety contract violated: Gitee mirror workflow still exists' >&2

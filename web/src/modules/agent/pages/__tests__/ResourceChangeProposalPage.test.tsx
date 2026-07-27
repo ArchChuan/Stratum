@@ -15,6 +15,7 @@ vi.mock('../../hooks/useResourceChangeProposal', () => ({
       baselineProjection: { name: '官方文档', description: '旧说明', embeddingModel: 'text-embedding-v2' },
       payload: { name: '官方文档', description: '已核验资料', embeddingModel: 'text-embedding-v3' },
       summary: 'create knowledge workspace', status: 'ready_for_review', events: [],
+      editCount: 0,
       expiresAt: '2026-07-28T00:00:00Z', createdAt: '2026-07-27T00:00:00Z', updatedAt: '2026-07-27T00:00:00Z',
     },
     loading: false, saving: false, confirming: false, canceling: false,
@@ -35,6 +36,7 @@ describe('ResourceChangeProposalPage', () => {
     expect(screen.getByText('旧说明')).toBeInTheDocument();
     expect(screen.getByText('已记录，确认时重新校验')).toBeInTheDocument();
     expect(screen.getByText('租户管理员或所有者')).toBeInTheDocument();
+    expect(screen.getByText('尚未调整')).toBeInTheDocument();
     expect(screen.queryByText(/token|apiKey|headers|env/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '确认并应用' }));
     expect(await screen.findAllByText('确认应用这次变更？')).not.toHaveLength(0);

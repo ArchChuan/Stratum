@@ -37,6 +37,7 @@ type PrometheusMetrics struct {
 	systemAssistantEvidenceGaps       *prometheus.HistogramVec
 	resourceProposalsTotal            *prometheus.CounterVec
 	resourceProposalReviewDuration    *prometheus.HistogramVec
+	resourceProposalDraftEdits        *prometheus.HistogramVec
 
 	// LLM – core
 	llmRequestsTotal   *prometheus.CounterVec
@@ -142,6 +143,14 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 		),
 		resourceProposalReviewDuration: factory.NewHistogramVec(
 			prometheus.HistogramOpts{Name: "system_assistant_resource_proposal_review_duration_seconds", Help: "Resource proposal review duration", Buckets: latencyBuckets},
+			[]string{"kind", "operation"},
+		),
+		resourceProposalDraftEdits: factory.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "system_assistant_resource_proposal_draft_edits",
+				Help:    "Draft edit count observed when a resource proposal is claimed",
+				Buckets: []float64{0, 1, 2, 3, 5, 8},
+			},
 			[]string{"kind", "operation"},
 		),
 
@@ -290,6 +299,10 @@ func (m *PrometheusMetrics) IncResourceProposal(kind, operation, outcome string)
 
 func (m *PrometheusMetrics) RecordResourceProposalReviewDuration(kind, operation string, duration float64) {
 	m.resourceProposalReviewDuration.WithLabelValues(kind, operation).Observe(duration)
+}
+
+func (m *PrometheusMetrics) RecordResourceProposalDraftEdits(kind, operation string, count int) {
+	m.resourceProposalDraftEdits.WithLabelValues(kind, operation).Observe(float64(count))
 }
 
 // --- LLM ---

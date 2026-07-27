@@ -27,6 +27,7 @@ type MetricsProvider interface {
 	RecordSystemAssistantEvidenceGaps(roleClass, profileVersion string, count int)
 	IncResourceProposal(kind, operation, outcome string)
 	RecordResourceProposalReviewDuration(kind, operation string, duration float64)
+	RecordResourceProposalDraftEdits(kind, operation string, count int)
 
 	// LLM
 	IncLLMRequest(model, provider, status string)
@@ -69,6 +70,7 @@ func (NoopMetrics) RecordSystemAssistantDiagnosticArea(_, _, _ string, _ float64
 func (NoopMetrics) RecordSystemAssistantEvidenceGaps(_, _ string, _ int)          {}
 func (NoopMetrics) IncResourceProposal(_, _, _ string)                            {}
 func (NoopMetrics) RecordResourceProposalReviewDuration(_, _ string, _ float64)   {}
+func (NoopMetrics) RecordResourceProposalDraftEdits(_, _ string, _ int)           {}
 func (NoopMetrics) IncLLMRequest(_, _, _ string)                                  {}
 func (NoopMetrics) RecordLLMRequestDuration(_, _ string, _ float64)               {}
 func (NoopMetrics) IncLLMTokenUsage(_, _ string, _ int64)                         {}

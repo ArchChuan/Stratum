@@ -17,6 +17,7 @@ func TestSystemAssistantMetricsUseOnlyBoundedLabels(t *testing.T) {
 	m.RecordSystemAssistantEvidenceGaps("admin", "2026-07-23.v1", 1)
 	m.IncResourceProposal("agent", "update", "applied")
 	m.RecordResourceProposalReviewDuration("agent", "update", 2)
+	m.RecordResourceProposalDraftEdits("agent", "update", 3)
 	families, err := m.reg.Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -35,6 +36,25 @@ func TestSystemAssistantMetricsUseOnlyBoundedLabels(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestResourceProposalDraftEditsRecordsOneObservation(t *testing.T) {
+	m := NewPrometheusMetrics(zap.NewNop())
+	m.RecordResourceProposalDraftEdits("knowledge_workspace", "update", 2)
+	families, err := m.reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "system_assistant_resource_proposal_draft_edits" {
+			continue
+		}
+		if len(family.Metric) != 1 || family.Metric[0].GetHistogram().GetSampleCount() != 1 {
+			t.Fatalf("draft edit histogram = %#v", family.Metric)
+		}
+		return
+	}
+	t.Fatal("draft edit histogram not registered")
 }
 
 func TestDefaultTraceConfig(t *testing.T) {

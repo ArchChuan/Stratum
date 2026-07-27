@@ -4,7 +4,7 @@ import { resourceChangeProposalSchema } from '../proposal';
 
 const base = {
   id: 'proposal-1', proposerId: 'admin-1', operation: 'update', resourceId: 'skill-1',
-  summary: 'update skill_draft', status: 'ready_for_review', events: [],
+  summary: 'update skill_draft', status: 'ready_for_review', events: [], editCount: 2,
   expiresAt: '2026-07-28T00:00:00Z', createdAt: '2026-07-27T00:00:00Z', updatedAt: '2026-07-27T00:00:00Z',
 };
 
@@ -20,6 +20,7 @@ describe('resourceChangeProposalSchema', () => {
     if (parsed.resourceKind !== 'skill_draft') throw new Error('unexpected proposal kind');
     expect(parsed.payload.instructions).toBe('只引用已核验来源');
     expect(parsed.baselineProjection?.instructions).toBe('旧指令');
+    expect(parsed.editCount).toBe(2);
   });
 
   it.each(['temperature', 'token', 'apiKey', 'headers', 'env'])('rejects unsupported or secret field %s', (field) => {
