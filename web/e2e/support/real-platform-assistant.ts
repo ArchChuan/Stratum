@@ -2,7 +2,7 @@ import { expect, type BrowserContext } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const fixedIDPattern = /^[a-z0-9][a-z0-9_-]{2,127}$/i;
 const apiURL = process.env.E2E_API_URL || 'http://127.0.0.1:8080';
 

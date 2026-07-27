@@ -141,7 +141,7 @@ uuid_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 admin_role=""
 
 configured_identity_count=$(remote_psql \
-    "SELECT count(*) FROM public.tenants t JOIN public.tenant_members m ON m.tenant_id=t.id WHERE t.id='${admin_tenant}' AND m.user_id='${admin_user}' AND m.role IN ('owner', 'admin') AND t.deleted_at IS NULL AND jsonb_object_length(COALESCE(t.settings->'llm_api_keys','{}'::jsonb)) > 0;") || fail "configured_identity"
+    "SELECT count(*) FROM public.tenants t JOIN public.tenant_members m ON m.tenant_id=t.id WHERE t.id='${admin_tenant}' AND m.user_id='${admin_user}' AND m.role IN ('owner', 'admin') AND t.deleted_at IS NULL AND EXISTS (SELECT 1 FROM jsonb_object_keys(COALESCE(t.settings->'llm_api_keys','{}'::jsonb)) provider);") || fail "configured_identity"
 if [[ "$configured_identity_count" != "1" ]]; then
     jq -cn '{configuredChain:"prerequisite_missing",missing:["tenant_admin_provider_pair"]}'
     exit 0
