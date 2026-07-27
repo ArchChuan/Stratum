@@ -90,6 +90,8 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, iamdomain.ErrTenantNotFound),
 		errors.Is(err, agentapp.ErrNotFound),
 		errors.Is(err, agentdomain.ErrApprovalNotFound),
+		errors.Is(err, agentdomain.ErrProposalNotFound),
+		errors.Is(err, agentdomain.ErrNotFound),
 		errors.Is(err, memoryapp.ErrNotFound),
 		errors.Is(err, memorydomain.ErrEntryNotFound),
 		errors.Is(err, memorydomain.ErrSessionNotFound),
@@ -110,6 +112,10 @@ func MapErrorToStatus(err error) int {
 
 	// 409 — Conflict
 	case errors.Is(err, knowledgedomain.ErrWorkspaceConflict),
+		errors.Is(err, agentdomain.ErrProposalStale),
+		errors.Is(err, agentdomain.ErrProposalExpired),
+		errors.Is(err, agentdomain.ErrProposalAlreadyClaimed),
+		errors.Is(err, agentdomain.ErrProposalUnknownOutcome),
 		errors.Is(err, agentdomain.ErrSystemAssistantManaged),
 		errors.Is(err, knowledgedomain.ErrWorkspaceLinked),
 		errors.Is(err, knowledgedomain.ErrDuplicateDocument),
@@ -148,6 +154,8 @@ func MapErrorToStatus(err error) int {
 	// 422 — Unprocessable Entity
 	case errors.Is(err, agentapp.ErrInvalidSkill):
 		return http.StatusUnprocessableEntity
+	case errors.Is(err, agentdomain.ErrProposalApplyFailed):
+		return http.StatusUnprocessableEntity
 
 	// 429 — Too Many Requests
 	case errors.Is(err, skilldomain.ErrConcurrencyLimit),
@@ -156,6 +164,7 @@ func MapErrorToStatus(err error) int {
 
 	// 403 — Forbidden
 	case errors.Is(err, iamapp.ErrForbiddenAdminOrOwner),
+		errors.Is(err, agentdomain.ErrProposalForbidden),
 		errors.Is(err, iamapp.ErrForbiddenOwner),
 		errors.Is(err, iamapp.ErrForbiddenSelfModify),
 		errors.Is(err, iamapp.ErrForbiddenOwnerRole),
@@ -168,6 +177,7 @@ func MapErrorToStatus(err error) int {
 
 	// 400 — Validation / Bad Request
 	case errors.Is(err, iamapp.ErrInvalidSettings),
+		errors.Is(err, agentdomain.ErrProposalInvalid),
 		errors.Is(err, agentdomain.ErrInvalidSystemAssistantModel),
 		errors.Is(err, iamapp.ErrEmbedModelAlreadySet),
 		errors.Is(err, iamdomain.ErrDefaultTenantDelete),

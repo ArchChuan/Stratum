@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { resourceChangeProposalArtifactSchema } from './proposal';
+
 export const agentSchema = z
   .object({
     id: z.string(),
@@ -122,6 +124,7 @@ export const executionArtifactSchema = z.object({
   profileVersion: z.string().optional(),
   citations: z.array(citationSchema).nullish().transform((v) => v ?? []),
   diagnosticReport: diagnosticReportSchema.nullish().transform((v) => v ?? undefined),
+  resourceChangeProposal: resourceChangeProposalArtifactSchema.nullish().transform((v) => v ?? undefined),
 });
 export type ExecutionArtifact = z.infer<typeof executionArtifactSchema>;
 

@@ -65,6 +65,31 @@ func TestSystemAssistantDiagnosticToolKeepsGapsInTypedArtifact(t *testing.T) {
 	require.Contains(t, got.Messages[len(got.Messages)-1].Content, "evidence_unavailable")
 }
 
+func TestProposalToolDispatchesOnlyFixedInternalCallback(t *testing.T) {
+	called := false
+	node := makeToolNode(nil, zap.NewNop())
+	state := ReActState{
+		GovernedAssistant: true, InternalToolResultGuardFn: testInternalGuard,
+		ProposalCreateFn: func(_ context.Context, args map[string]any) (domain.ResourceChangeProposalArtifact, error) {
+			called = true
+			require.Equal(t, "agent", args["resourceKind"])
+			return domain.ResourceChangeProposalArtifact{
+				ID: "proposal-1", ResourceKind: domain.ResourceAgent, Operation: domain.OperationCreate,
+				Status: domain.StatusReadyForReview,
+			}, nil
+		},
+		Messages: []port.LLMMessage{{Role: "assistant", ToolCalls: []port.ToolCall{{
+			ID: "call-1", Name: "stratum_propose_resource_change",
+			Arguments: map[string]any{"resourceKind": "agent", "operation": "create", "payload": map[string]any{"name": "agent"}},
+		}}}},
+	}
+	got, err := node(context.Background(), state)
+	require.NoError(t, err)
+	require.True(t, called)
+	require.Len(t, got.AssistantToolArtifacts, 1)
+	require.Equal(t, "proposal-1", got.AssistantToolArtifacts[0].Proposal.ID)
+}
+
 func TestSystemAssistantToolTimeoutIsSanitized(t *testing.T) {
 	node := makeToolNode(nil, zap.NewNop())
 	state := ReActState{GovernedAssistant: true,

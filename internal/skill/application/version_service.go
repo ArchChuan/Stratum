@@ -51,6 +51,13 @@ type UpdateInstructionBundleInput struct {
 	Requirements domain.Requirements
 }
 
+type UpdateDraftBundleInput struct {
+	Name         string
+	Description  string
+	Instructions string
+	Requirements domain.Requirements
+}
+
 type CandidateInput struct {
 	Source             string
 	PromptPatch        map[string]any
@@ -335,6 +342,49 @@ func (s *VersionService) UpdateInstructionBundle(
 		return domain.SkillRevision{}, err
 	}
 	return s.repo.UpdateDraftInstructions(ctx, skillID, in.Instructions, in.Requirements, contentHash)
+}
+
+func (s *VersionService) UpdateDraftBundle(
+	ctx context.Context,
+	skillID, expectedContentHash string,
+	in UpdateDraftBundleInput,
+) (SkillWorkspaceView, error) {
+	skill, ok, err := s.repo.GetSkill(ctx, skillID)
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	if !ok {
+		return SkillWorkspaceView{}, domain.ErrSkillNotFound
+	}
+	draft, ok, err := s.repo.GetDraftRevision(ctx, skillID)
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	if !ok {
+		return SkillWorkspaceView{}, domain.ErrSkillNotFound
+	}
+	if expectedContentHash == "" || draft.ContentHash != expectedContentHash {
+		return SkillWorkspaceView{}, domain.ErrSkillDraftStale
+	}
+	draft.Capability.Goal = strings.TrimSpace(in.Description)
+	draft.Capability.WhenToUse = strings.TrimSpace(in.Description)
+	draft.ActivationContract.Name = generatedActivationName(in.Name)
+	draft.ActivationContract.Description = strings.TrimSpace(in.Description)
+	draft.Instructions = strings.TrimSpace(in.Instructions)
+	draft.Requirements = in.Requirements
+	contentHash, err := draft.ComputeContentHash()
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	draft.ContentHash = contentHash
+	skill.Name = strings.TrimSpace(in.Name)
+	skill.Description = strings.TrimSpace(in.Description)
+	updated, err := s.repo.UpdateDraftBundle(ctx, skillID, expectedContentHash, skill, draft)
+	if err != nil {
+		return SkillWorkspaceView{}, err
+	}
+	skill.DraftRevisionID = updated.ID
+	return SkillWorkspaceView{Skill: skill, Draft: updated}, nil
 }
 
 var nonActivationName = regexp.MustCompile(`[^a-zA-Z0-9_]+`)

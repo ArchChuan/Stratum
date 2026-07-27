@@ -4,10 +4,20 @@ import { AgentChatPage } from './pages/AgentChatPage';
 import { AgentsListPage } from './pages/AgentsListPage';
 import { CreateAgentPage } from './pages/CreateAgentPage';
 import { EditAgentPage } from './pages/EditAgentPage';
+import { ResourceChangeProposalPage } from './pages/ResourceChangeProposalPage';
 
 import { PrivateRoute } from '@/modules/iam';
 
 export const agentRoutes = [
+  <Route
+    key="resource-change-proposal"
+    path="/resource-change-proposals/:id"
+    element={
+      <PrivateRoute requiredTenantRole="admin">
+        <ResourceChangeProposalPage />
+      </PrivateRoute>
+    }
+  />,
   <Route
     key="agents"
     path="/agents"

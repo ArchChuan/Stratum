@@ -55,6 +55,7 @@ type AgentServiceDeps struct {
 	Metrics                 observability.MetricsProvider
 	OfficialDocsSearch      func(context.Context, string) ([]domain.Citation, error)
 	DiagnosticProvider      port.DiagnosticEvidenceProvider
+	ProposalService         *ResourceChangeProposalService
 	Logger                  *zap.Logger
 }
 
@@ -75,6 +76,10 @@ func NewAgentService(deps AgentServiceDeps) *AgentService {
 
 func (s *AgentService) SetSkillRevisionResolver(resolver port.SkillRevisionResolver) {
 	s.deps.SkillRevisionResolver = resolver
+}
+
+func (s *AgentService) SetResourceChangeProposalService(service *ResourceChangeProposalService) {
+	s.deps.ProposalService = service
 }
 
 // CreateAgentInput is the create-agent payload application receives from
@@ -1101,6 +1106,27 @@ func (s *AgentService) assembleOptions(
 			}))
 		}
 		guard := NewToolResultGuard()
+		if (roleClass == "admin" || roleClass == "owner") && s.deps.ProposalService != nil {
+			proposalService := s.deps.ProposalService
+			tenantID, actorID, conversationID := meta.TenantID, req.UserID, req.ConversationID
+			options = append(options,
+				WithExtraTools(SystemAssistantToolDefinitionsForRole(roleClass)),
+				withProposalCreateFn(func(callCtx context.Context, args map[string]any) (domain.ResourceChangeProposalArtifact, error) {
+					kind, operation, resourceID, payload, parseErr := parseProposalArguments(args)
+					if parseErr != nil {
+						return domain.ResourceChangeProposalArtifact{}, parseErr
+					}
+					proposal, createErr := proposalService.CreateProposal(callCtx, CreateProposalInput{
+						TenantID: tenantID, ConversationID: conversationID, ActorID: actorID,
+						Kind: kind, Operation: operation, ResourceID: resourceID, Payload: payload,
+					})
+					artifact := domain.ResourceChangeProposalArtifact{
+						ID: proposal.ID, ResourceKind: proposal.ResourceKind, Operation: proposal.Operation,
+						Status: proposal.Status, Summary: proposal.Summary, ExpiresAt: proposal.ExpiresAt,
+					}
+					return artifact, createErr
+				}))
+		}
 		options = append(options, WithSystemAssistantMode(), withSystemAssistantRoleClass(roleClass),
 			withInternalToolResultGuard(func(value any) (port.GuardedToolResult, error) {
 				structured, ok := value.(map[string]any)

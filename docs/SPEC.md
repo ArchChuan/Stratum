@@ -115,6 +115,7 @@ stratum/
 | | `agent_skill_links` | (agent_id, skill_id) CASCADE |
 | | `agent_workspaces` | (agent_id, workspace_id) CASCADE |
 | | Agent execution evidence | Opik trace/span evidence; PostgreSQL historical observation tables have been removed |
+| | `resource_change_proposals` · `resource_change_proposal_events` | admin/owner 审阅式资源变更、原子 claim、基线冲突与追加审计事件 |
 | MCP | `mcp_configs` | id TEXT, transport, command/url, args/env/headers/auth_config/retry_config JSONB, timeout_sec DEFAULT 30 |
 | Skill | `skills` | id, name UNIQUE, description, status, active_revision_id / draft_revision_id |
 | | `skill_revisions` | parent/revision/status/source、content_hash、capability、activation_contract、instructions、requirements、publish_checks |
@@ -161,6 +162,7 @@ stratum/
 - **memory_entries.type**: `short_term` → `long_term`（pipeline enricher 提升）/ `entity` / `summary`
 - **tenant_members.role**: `owner` ↔ `admin` ↔ `member`（owner-only 改写，禁 self-modify，admin 不能 remove admin）
 - **users guest lifecycle**: `is_guest=true` 且 `expires_at` 到期后由回收流程清理
+- **resource proposal**: `ready_for_review -> confirmed -> applying -> applied`；失败终态为 `invalid/stale/expired/failed/unknown_outcome/cancelled`，终态不可回退
 
 ---
 
@@ -176,6 +178,7 @@ stratum/
 | Admin | `/admin/tenants` · `/admin/tenants/:id` | global admin |
 | Tenant | `/tenant/list` · `/tenant/members` · `/tenant/members/:user_id/role` · `/tenant/settings` · `/tenant/embed-model` · `DELETE /tenant` | member 底线；设置写入需 active；删除 tenant 需 owner |
 | Agent | `/agents` · `/agents/:id` · `/agents/:id/execute` · `/agents/:id/execute/stream` · `/agents/executions` · execution trace 子路由 | member 可读/执行，admin 写；执行需 active + rate limit |
+| Resource proposal | `/resource-change-proposals/:id` · `PATCH` · `/cancel` · `/confirm` | active admin/owner；严格 typed payload、确认前重授权、一次性 apply |
 | Chat | `/agents/:id/conversations` · `/conversations/:convID` · `/conversations/:convID/messages` | JWT + tenant context |
 | Skill | `/skills` · `/skills/:id` · `/skills/:id/workspace` · draft capability/activation/instructions · publish | member 可读，active admin 写；无直接执行/测试路由 |
 | Evaluation | `/evaluations/suites` · publish · runs/jobs · optimizations · experiments/evaluate · feedback | admin 创建/查询评估控制面；active member 可提交 feedback |
@@ -410,26 +413,32 @@ openssl rand -base64 32
 
 `llm.request` · `llm.complete` · `react.llm` · `react.tool` · `react.llm.response`（DEBUG）· `react.tool.response`（DEBUG）· `agent created/updated/deleted` · `agent execution started/finished`
 
-### E. Built-in Platform Assistant — Phase 1 Current State
+### E. Built-in Platform Assistant — Current State
 
 Stratum 为每个租户 provision 一个固定在 Agent 对话首位的“平台使用小助手”。它提供带产品版本引用的官方
 使用指导，以及按登录成员角色裁剪的当前租户应用状态只读诊断。托管实例采用 tenant-owned model；平台不提供
 凭据 fallback。管理员只能通过 `/agents/system/settings` 选择模型，终端用户界面不暴露 prompt、Skill、MCP、
-Knowledge、凭据或资源变更入口。
+Knowledge 或凭据配置入口。admin/owner 可在对话中生成严格类型的资源变更提案，并在独立审阅页编辑、取消或确认。
 
 实现契约：
 
 - Identity：`stratum-platform-assistant` / `stratum.platform_assistant`，每 tenant 恰好一条。
 - Profile：代码审查、不可变、可回滚并版本化；当前 `2026-07-23.v1`。
 - Catalog：`docs/assistant/catalog.yaml` 构建为 embedded JSON，运行时不读取仓库或 tenant 文件。
-- Tools：仅 `stratum_search_official_docs`、`stratum_diagnose_tenant`；普通 Agent 不可见。
+- Tools：所有角色可见 `stratum_search_official_docs`、`stratum_diagnose_tenant`；仅 admin/owner 可见
+  `stratum_propose_resource_change`；普通 Agent 不可见平台工具。
 - Scope：member=`self`，admin/owner=`tenant`；membership 失败时不查询证据。
 - Areas：Agent、Skill、MCP、Knowledge、Model；单 area 失败形成 evidence gap，不影响其他 area。
 - Artifacts：`citations`、`diagnostic_report` 写入 `chat_messages.artifacts_json`，包含 Profile version，严格脱敏和限长。
-- UI：系统助手始终排序第一并显示“系统内置”；回答为摘要 + 可折叠的事实、缺口、建议、工具耗时与引用。
+- Proposals：仅允许 Agent、Skill draft、credential-free MCP config、Knowledge workspace 的 create/update；模型只写
+  proposal，不持有资源 service；确认后由确定性 service 重授权、比较 baseline、原子 claim 并调用一次 owning adapter。
+- Safety：未知字段和凭据形字段在持久化前拒绝，无效记录 payload 为 `{}`；MCP update 保留但不暴露现有凭据；
+  `unknown_outcome` 不可重试；不支持 delete、Skill publish、MCP execution 或 Knowledge upload。
+- UI：系统助手始终排序第一并显示“系统内置”；回答为摘要 + typed artifact；管理员可进入提案页查看字段影响、
+  编辑 ready proposal、查看事件轨迹并二次确认，成员路由 fail closed。
 
-Phase 1 明确不实现主动监控、基础设施/Kubernetes/全局日志诊断，也不实现资源创建/更新、删除、Skill 发布、
-MCP tool execution 或 Knowledge 上传。受控资源 proposal/review 属于 Phase 2，不能视为当前能力。
+当前仍不实现主动监控、基础设施/Kubernetes/全局日志诊断、资源删除、Skill 发布、MCP tool execution 或
+Knowledge 上传。
 
 验收命令：
 
@@ -438,6 +447,7 @@ make risk-guardrails
 make tool-permission-test
 STRATUM_TEST_POSTGRES_URL='<redacted>' go test -v -count=1 ./test/e2e -run SystemAssistant
 cd web && npx playwright test e2e/system-assistant.spec.ts
+cd web && npx playwright test e2e/system-assistant-proposal.spec.ts --project=mobile-390 --project=desktop-1440
 go vet ./...
 go test -short ./...
 go test -v -race -timeout 30s ./...

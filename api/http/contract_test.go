@@ -22,6 +22,8 @@ import (
 	apihttp "github.com/byteBuilderX/stratum/api/http"
 	"github.com/byteBuilderX/stratum/api/wiring"
 	"github.com/byteBuilderX/stratum/config"
+	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
+	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
@@ -62,7 +64,11 @@ func TestContracts(t *testing.T) {
 	router := api.SetupRouter(cfg, logger, gateway, nil, nil, nil, nil)
 	evaluationRouter := apihttp.NewRouter(&wiring.Container{
 		Config: cfg, Logger: logger, Platform: &wiring.Platform{JWTService: iamtoken.NewJWTService(key), Metrics: metrics},
-		LLMGateway: &wiring.LLMGateway{}, Skill: &wiring.Skill{}, Agent: &wiring.Agent{}, Workflow: &wiring.Workflow{},
+		LLMGateway: &wiring.LLMGateway{}, Skill: &wiring.Skill{}, Agent: &wiring.Agent{
+			ProposalService: agentapp.NewResourceChangeProposalService(
+				contractProposalRepo{}, contractProposalAuthorizer{}, nil, nil, metrics,
+			),
+		}, Workflow: &wiring.Workflow{},
 		Knowledge: &wiring.Knowledge{}, MCP: &wiring.MCP{}, Memory: &wiring.Memory{},
 		Evaluation: &wiring.Evaluation{
 			SuiteService: evalapp.NewSuiteService(nil), JobService: evalapp.NewJobService(nil, nil),
@@ -91,7 +97,8 @@ func TestContracts(t *testing.T) {
 			}
 			for _, c := range cases {
 				req := httptest.NewRequest(c.Method, c.Path, bytes.NewReader(c.Body))
-				if strings.HasPrefix(c.Path, "/evaluations/") {
+				if strings.HasPrefix(c.Path, "/evaluations/") ||
+					strings.HasPrefix(c.Path, "/resource-change-proposals/") {
 					token, signErr := iamtoken.NewJWTService(key).Sign(iamport.TokenClaims{
 						Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin",
 					}, time.Hour)
@@ -104,7 +111,8 @@ func TestContracts(t *testing.T) {
 					req.Header.Set(k, v)
 				}
 				rec := httptest.NewRecorder()
-				if strings.HasPrefix(c.Path, "/evaluations/") {
+				if strings.HasPrefix(c.Path, "/evaluations/") ||
+					strings.HasPrefix(c.Path, "/resource-change-proposals/") {
 					evaluationRouter.ServeHTTP(rec, req)
 				} else {
 					router.ServeHTTP(rec, req)
@@ -118,6 +126,43 @@ func TestContracts(t *testing.T) {
 			}
 		})
 	}
+}
+
+type contractProposalRepo struct{}
+
+func (contractProposalRepo) Create(context.Context, agentdomain.ResourceChangeProposal, agentdomain.ProposalEvent) error {
+	return nil
+}
+func (contractProposalRepo) Get(context.Context, string) (agentdomain.ResourceChangeProposal, error) {
+	return agentdomain.ResourceChangeProposal{}, agentdomain.ErrProposalNotFound
+}
+func (contractProposalRepo) UpdateDraft(
+	context.Context, agentdomain.ResourceChangeProposal, agentdomain.ProposalEvent,
+) error {
+	return nil
+}
+func (contractProposalRepo) Cancel(context.Context, string, string, time.Time) error  { return nil }
+func (contractProposalRepo) Confirm(context.Context, string, string, time.Time) error { return nil }
+func (contractProposalRepo) ClaimApplying(
+	context.Context, string, string, time.Time,
+) (agentdomain.ResourceChangeProposal, error) {
+	return agentdomain.ResourceChangeProposal{}, agentdomain.ErrProposalNotFound
+}
+func (contractProposalRepo) Finish(
+	context.Context, string, agentdomain.ProposalStatus, agentdomain.ApplyResult, agentdomain.ProposalEvent,
+) error {
+	return nil
+}
+func (contractProposalRepo) ListEvents(context.Context, string) ([]agentdomain.ProposalEvent, error) {
+	return nil, agentdomain.ErrProposalNotFound
+}
+
+type contractProposalAuthorizer struct{}
+
+func (contractProposalAuthorizer) AuthorizeProposal(
+	context.Context, string, string, agentdomain.ResourceKind, agentdomain.ProposalOperation,
+) error {
+	return nil
 }
 
 func jsonEquivalent(got, want []byte) bool {

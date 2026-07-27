@@ -68,6 +68,42 @@ BEGIN
     ON CONFLICT (id) DO NOTHING;
 END $$;
 
+-- Platform-assistant resource changes are staged as typed, reviewable proposals.
+CREATE TABLE IF NOT EXISTS resource_change_proposals (
+    id                   TEXT PRIMARY KEY,
+    conversation_id      UUID,
+    proposer_id          TEXT NOT NULL,
+    confirmer_id         TEXT NOT NULL DEFAULT '',
+    resource_kind        TEXT NOT NULL CHECK (resource_kind IN ('agent', 'skill_draft', 'mcp_config', 'knowledge_workspace')),
+    resource_id          TEXT NOT NULL DEFAULT '',
+    operation            TEXT NOT NULL CHECK (operation IN ('create', 'update')),
+    baseline_fingerprint TEXT NOT NULL DEFAULT '',
+    payload              JSONB NOT NULL,
+    safe_summary         JSONB NOT NULL DEFAULT '{}',
+    status               TEXT NOT NULL CHECK (status IN ('draft', 'ready_for_review', 'confirmed', 'applying', 'applied', 'invalid', 'stale', 'expired', 'failed', 'unknown_outcome', 'cancelled')),
+    result               JSONB NOT NULL DEFAULT '{}',
+    error_code           TEXT NOT NULL DEFAULT '',
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    confirmed_at         TIMESTAMPTZ,
+    applied_at           TIMESTAMPTZ,
+    expires_at           TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_resource_change_proposals_status
+    ON resource_change_proposals(status, expires_at, created_at);
+
+CREATE TABLE IF NOT EXISTS resource_change_proposal_events (
+    id           UUID PRIMARY KEY DEFAULT public.gen_uuid_v7(),
+    proposal_id  TEXT NOT NULL REFERENCES resource_change_proposals(id) ON DELETE CASCADE,
+    actor_id     TEXT NOT NULL DEFAULT '',
+    from_status  TEXT NOT NULL DEFAULT '',
+    to_status    TEXT NOT NULL,
+    detail       JSONB NOT NULL DEFAULT '{}',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_resource_change_proposal_events_order
+    ON resource_change_proposal_events(proposal_id, created_at, id);
+
 DO $$
 BEGIN
     IF NOT EXISTS (

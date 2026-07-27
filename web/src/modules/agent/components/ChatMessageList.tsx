@@ -7,6 +7,7 @@ import type { ChatMessage } from '../model/agent';
 import { BUBBLE, ChatMarkdown } from './ChatMarkdown';
 import { ChatStepList } from './ChatStepList';
 import { DiagnosticReport } from './DiagnosticReport';
+import { ResourceChangeProposalCard } from './ResourceChangeProposalCard';
 
 const { Text } = Typography;
 
@@ -144,6 +145,9 @@ export const ChatMessageList = ({
                       citations: artifactCitations,
                       steps: [],
                     } : undefined);
+                    if (artifact.resourceChangeProposal) {
+                      return <ResourceChangeProposalCard key={`proposal-${artifact.resourceChangeProposal.id}`} proposal={artifact.resourceChangeProposal} />;
+                    }
                     return report ? (
                       <DiagnosticReport
                         key={`${artifact.type}-${artifact.profileVersion || index}`}

@@ -1,6 +1,6 @@
 # Agent Development Rules
 
-## Built-in Platform Assistant (Phase 1)
+## Built-in Platform Assistant
 
 每个 tenant schema 由 `pkg/storage/postgres/tenant_schema.sql` 幂等 provision 恰好一条托管 Agent：
 `id=stratum-platform-assistant`、`system_key=stratum.platform_assistant`。读取时返回
@@ -24,13 +24,29 @@ system prompt、迭代和上下文预算，同时清空 Skill、MCP、Knowledge�
 | admin/owner | `tenant` | 当前租户上述五个 area 的脱敏汇总 |
 | membership 读取失败/未知角色 | 无 | fail closed，不执行 area collector |
 
-系统助手只暴露 `stratum_search_official_docs` 与 `stratum_diagnose_tenant` 两个硬编码 internal tool；普通
-Agent 看不到它们。诊断 collector 有界并发、逐 area 独立失败，失败用 `evidence_unavailable`、
+系统助手向所有角色暴露 `stratum_search_official_docs` 与 `stratum_diagnose_tenant`；仅 admin/owner 额外看到
+`stratum_propose_resource_change`。普通 Agent 看不到这些平台工具。诊断 collector 有界并发、逐 area 独立失败，失败用 `evidence_unavailable`、
 `evidence_timeout` 或 `evidence_cancelled` 表达，禁止把缺口写成事实。
 
-Phase 1 artifact 为 `citations` 和 `diagnostic_report`。报告只保存 typed facts、evidence gaps、建议、工具步骤、
+诊断 artifact 为 `citations` 和 `diagnostic_report`。报告只保存 typed facts、evidence gaps、建议、工具步骤、
 耗时和引用；`inferences` 必须为空。所有字段经凭据脱敏、长度/数量/JSON 大小边界校验后写入
-`chat_messages.artifacts_json`。Phase 1 没有资源创建、更新、删除、Skill publish、MCP 执行或 Knowledge 上传入口。
+`chat_messages.artifacts_json`。
+
+资源变更使用 `resource_change_proposal` artifact 和独立审阅页。模型只能创建严格类型的 proposal，不能调用资源
+写 service。支持 `agent`、`skill_draft`、`mcp_config`、`knowledge_workspace` 的 `create`/`update`；不支持删除、
+Skill publish、MCP tool execution 或 Knowledge upload。proposal payload 使用 closed JSON Schema，未知字段和
+`token`、`apiKey`、`Authorization`、`password`、`env`、`headers` 等凭据形字段在持久化前拒绝；无效记录只保存
+`{}` 与安全错误码。
+
+proposal 状态由 application service 硬编码：`ready_for_review -> confirmed -> applying -> applied`，并可终止为
+`invalid`、`stale`、`expired`、`failed`、`unknown_outcome` 或 `cancelled`。创建、编辑、确认、apply 前都重新授权；
+update 以 owning context 的安全 projection 计算基线 fingerprint，确认时重新计算，冲突转 `stale`。确认和 apply
+claim 是 tenant PostgreSQL 原子更新，并发请求只允许一个 applier。`unknown_outcome` 无 API/UI 重试入口。
+
+MCP proposal create 强制 `AuthTypeNone`；update 只能修改非敏感配置，保存的 env、headers、bearer/API key/OAuth
+凭据保持原值且不进入 baseline、artifact、响应或日志。所有 proposal/event SQL 经 `execTenant`，审计事件追加写入
+`resource_change_proposal_events`。管理员路由为 `GET/PATCH /resource-change-proposals/:id`、
+`POST /resource-change-proposals/:id/cancel|confirm`。
 
 ## Capability Boundaries
 

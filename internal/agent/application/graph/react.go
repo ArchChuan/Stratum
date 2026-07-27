@@ -39,6 +39,7 @@ type ReActState struct {
 	ToolExecutionFn            port.ToolExecutionFn
 	OfficialDocsSearchFn       func(context.Context, string) ([]domain.Citation, error)
 	DiagnosticFn               func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
+	ProposalCreateFn           func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
 	GovernedAssistant          bool
 	AssistantToolArtifacts     []domain.SystemAssistantToolArtifact
 	InternalToolResultGuardFn  func(any) (port.GuardedToolResult, error)
@@ -478,6 +479,30 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 				s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
 					Tool: tc.Name, Evidence: &evidence, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
 				})
+			case "stratum_propose_resource_change":
+				if !s.GovernedAssistant || s.ProposalCreateFn == nil {
+					status, errMsg, content = domain.ToolTraceStatusError, "proposal tool unavailable", "error: tool unavailable"
+					break
+				}
+				proposal, callErr := s.ProposalCreateFn(toolCtx, tc.Arguments)
+				if callErr != nil {
+					if proposal.ID != "" {
+						s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
+							Tool: tc.Name, Proposal: &proposal, LatencyMs: time.Since(toolStart).Milliseconds(),
+							Outcome: "error", ErrorCode: assistantToolErrorCode(callErr.Error()),
+						})
+					}
+					status, errMsg, content = domain.ToolTraceStatusError, safeAssistantToolError(callErr), "error: "+safeAssistantToolError(callErr)
+					break
+				}
+				content, callErr = guardInternalAssistantEvidence(s.InternalToolResultGuardFn, map[string]any{"proposal": proposal})
+				if callErr != nil {
+					status, errMsg, content = domain.ToolTraceStatusError, callErr.Error(), "error: tool result exceeded safe bounds"
+					break
+				}
+				s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
+					Tool: tc.Name, Proposal: &proposal, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
+				})
 			case "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan":
 				var planErr error
 				content, planErr = ExecutePlanTool(toolCtx, &s, tc)
@@ -767,7 +792,7 @@ type toolProviderRef struct {
 
 func classifyToolProvider(name string, tools []port.ToolDefinition) toolProviderRef {
 	switch name {
-	case "stratum_search_official_docs", "stratum_diagnose_tenant":
+	case "stratum_search_official_docs", "stratum_diagnose_tenant", "stratum_propose_resource_change":
 		return toolProviderRef{ToolType: domain.ToolTypeInternal, ProviderType: domain.ProviderTypeInternal,
 			ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	case "stratum_continue_reasoning":

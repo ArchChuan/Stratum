@@ -103,12 +103,22 @@ type DiagnosticAuthorization struct {
 // SystemAssistantToolArtifact is typed evidence captured directly from a
 // governed internal tool. It is never reconstructed from model prose.
 type SystemAssistantToolArtifact struct {
-	Tool      string              `json:"tool"`
-	Citations []Citation          `json:"citations,omitempty"`
-	Evidence  *DiagnosticEvidence `json:"evidence,omitempty"`
-	LatencyMs int64               `json:"latencyMs"`
-	Outcome   string              `json:"outcome"`
-	ErrorCode string              `json:"errorCode,omitempty"`
+	Tool      string                          `json:"tool"`
+	Citations []Citation                      `json:"citations,omitempty"`
+	Evidence  *DiagnosticEvidence             `json:"evidence,omitempty"`
+	LatencyMs int64                           `json:"latencyMs"`
+	Outcome   string                          `json:"outcome"`
+	ErrorCode string                          `json:"errorCode,omitempty"`
+	Proposal  *ResourceChangeProposalArtifact `json:"proposal,omitempty"`
+}
+
+type ResourceChangeProposalArtifact struct {
+	ID           string            `json:"id"`
+	ResourceKind ResourceKind      `json:"resourceKind"`
+	Operation    ProposalOperation `json:"operation"`
+	Status       ProposalStatus    `json:"status"`
+	Summary      string            `json:"summary"`
+	ExpiresAt    time.Time         `json:"expiresAt"`
 }
 
 type DiagnosticReport struct {
@@ -128,10 +138,11 @@ type DiagnosticStep struct {
 }
 
 type ExecutionArtifact struct {
-	Type             string            `json:"type"`
-	ProfileVersion   string            `json:"profileVersion,omitempty"`
-	Citations        []Citation        `json:"citations,omitempty"`
-	DiagnosticReport *DiagnosticReport `json:"diagnosticReport,omitempty"`
+	Type                   string                          `json:"type"`
+	ProfileVersion         string                          `json:"profileVersion,omitempty"`
+	Citations              []Citation                      `json:"citations,omitempty"`
+	DiagnosticReport       *DiagnosticReport               `json:"diagnosticReport,omitempty"`
+	ResourceChangeProposal *ResourceChangeProposalArtifact `json:"resourceChangeProposal,omitempty"`
 }
 
 var diagnosticRecommendedActions = map[string]string{

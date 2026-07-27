@@ -1,0 +1,9 @@
+[
+  {
+    "name": "missing resource change proposal",
+    "method": "GET",
+    "path": "/resource-change-proposals/missing-proposal",
+    "want_status": 404,
+    "want_body": {"error":"proposal not found"}
+  }
+]

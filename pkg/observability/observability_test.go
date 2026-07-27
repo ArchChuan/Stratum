@@ -15,6 +15,8 @@ func TestSystemAssistantMetricsUseOnlyBoundedLabels(t *testing.T) {
 	m.RecordOfficialDocsSearchResults("2026-07-23.v1", "matched", 2)
 	m.RecordSystemAssistantDiagnosticArea("admin", "mcp", "unavailable", 0.2)
 	m.RecordSystemAssistantEvidenceGaps("admin", "2026-07-23.v1", 1)
+	m.IncResourceProposal("agent", "update", "applied")
+	m.RecordResourceProposalReviewDuration("agent", "update", 2)
 	families, err := m.reg.Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -26,7 +28,7 @@ func TestSystemAssistantMetricsUseOnlyBoundedLabels(t *testing.T) {
 		for _, metric := range family.Metric {
 			for _, label := range metric.Label {
 				switch label.GetName() {
-				case "role_class", "profile_version", "outcome", "area":
+				case "role_class", "profile_version", "outcome", "area", "kind", "operation":
 				default:
 					t.Fatalf("unbounded assistant metric label %q on %s", label.GetName(), family.GetName())
 				}

@@ -17,6 +17,7 @@ var (
 	// ErrSkillNotPublishable is returned when a draft fails publish validation.
 	// Callers wrap the detail: fmt.Errorf("reason: %w", ErrSkillNotPublishable).
 	ErrSkillNotPublishable = errors.New("skill not publishable")
+	ErrSkillDraftStale     = errors.New("skill draft stale")
 )
 
 // AnalysisError carries analyzer reasons for a static-analysis rejection.

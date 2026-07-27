@@ -35,6 +35,8 @@ type PrometheusMetrics struct {
 	systemAssistantSearchResults      *prometheus.HistogramVec
 	systemAssistantDiagnosticDuration *prometheus.HistogramVec
 	systemAssistantEvidenceGaps       *prometheus.HistogramVec
+	resourceProposalsTotal            *prometheus.CounterVec
+	resourceProposalReviewDuration    *prometheus.HistogramVec
 
 	// LLM – core
 	llmRequestsTotal   *prometheus.CounterVec
@@ -133,6 +135,14 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 		systemAssistantEvidenceGaps: factory.NewHistogramVec(
 			prometheus.HistogramOpts{Name: "system_assistant_evidence_gaps", Help: "Evidence gap count", Buckets: []float64{0, 1, 2, 3, 5}},
 			[]string{"role_class", "profile_version"},
+		),
+		resourceProposalsTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "system_assistant_resource_proposals_total", Help: "Resource proposal outcomes by bounded kind and operation"},
+			[]string{"kind", "operation", "outcome"},
+		),
+		resourceProposalReviewDuration: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "system_assistant_resource_proposal_review_duration_seconds", Help: "Resource proposal review duration", Buckets: latencyBuckets},
+			[]string{"kind", "operation"},
 		),
 
 		// LLM – core
@@ -272,6 +282,14 @@ func (m *PrometheusMetrics) RecordSystemAssistantDiagnosticArea(roleClass, area,
 
 func (m *PrometheusMetrics) RecordSystemAssistantEvidenceGaps(roleClass, profileVersion string, count int) {
 	m.systemAssistantEvidenceGaps.WithLabelValues(roleClass, profileVersion).Observe(float64(count))
+}
+
+func (m *PrometheusMetrics) IncResourceProposal(kind, operation, outcome string) {
+	m.resourceProposalsTotal.WithLabelValues(kind, operation, outcome).Inc()
+}
+
+func (m *PrometheusMetrics) RecordResourceProposalReviewDuration(kind, operation string, duration float64) {
+	m.resourceProposalReviewDuration.WithLabelValues(kind, operation).Observe(duration)
 }
 
 // --- LLM ---
