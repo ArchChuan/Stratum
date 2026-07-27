@@ -133,7 +133,7 @@ func CanTransition(from, to ProposalStatus) bool {
 		StatusDraft:          {StatusReadyForReview: true, StatusInvalid: true, StatusExpired: true, StatusCancelled: true},
 		StatusReadyForReview: {StatusConfirmed: true, StatusStale: true, StatusExpired: true, StatusCancelled: true},
 		StatusConfirmed:      {StatusApplying: true, StatusStale: true, StatusExpired: true},
-		StatusApplying:       {StatusApplied: true, StatusFailed: true, StatusUnknownOutcome: true},
+		StatusApplying:       {StatusApplied: true, StatusFailed: true, StatusStale: true, StatusUnknownOutcome: true},
 	}
 	return allowed[from][to]
 }

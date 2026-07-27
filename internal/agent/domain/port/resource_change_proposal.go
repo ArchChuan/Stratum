@@ -2,6 +2,7 @@ package port
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -29,3 +30,21 @@ type BaselineResolver interface {
 type ResourceChangeApplier interface {
 	ApplyResourceChange(context.Context, domain.ProposalEnvelope) (domain.ApplyResult, error)
 }
+
+type ResourceApplyOutcome string
+
+const (
+	ResourceApplyDefiniteFailure ResourceApplyOutcome = "definite_failure"
+	ResourceApplyUnknownOutcome  ResourceApplyOutcome = "unknown_outcome"
+)
+
+type ResourceApplyError struct {
+	Outcome ResourceApplyOutcome
+	Err     error
+}
+
+func (e *ResourceApplyError) Error() string {
+	return fmt.Sprintf("resource apply %s: %v", e.Outcome, e.Err)
+}
+
+func (e *ResourceApplyError) Unwrap() error { return e.Err }
