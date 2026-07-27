@@ -68,6 +68,23 @@ func TestResourceChangeProposalConfirmReauthorizesAndChecksBaseline(t *testing.T
 	require.Equal(t, domain.StatusStale, repo.proposals[proposal.ID].Status)
 }
 
+func TestResourceChangeProposalBaselineReadFailureFinishesApplyingProposal(t *testing.T) {
+	repo := newProposalRepoFake()
+	baseline := &baselineFake{value: "baseline-a"}
+	service := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, baseline, nil)
+	proposal, err := service.CreateProposal(context.Background(), CreateProposalInput{
+		TenantID: "tenant-1", ActorID: "admin", Kind: domain.ResourceAgent, Operation: domain.OperationUpdate,
+		ResourceID: "agent-1", Payload: json.RawMessage(`{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096}`),
+	})
+	require.NoError(t, err)
+
+	baseline.err = errors.New("resource unavailable")
+	_, err = service.ConfirmAndApply(context.Background(), "tenant-1", proposal.ID, "admin")
+	require.ErrorIs(t, err, domain.ErrProposalApplyFailed)
+	require.Equal(t, domain.StatusFailed, repo.proposals[proposal.ID].Status)
+	require.Equal(t, "proposal_baseline_unavailable", repo.proposals[proposal.ID].ErrorCode)
+}
+
 func TestResourceChangeProposalApplyOutcomes(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -102,6 +119,90 @@ func TestResourceChangeProposalApplyOutcomes(t *testing.T) {
 	}
 }
 
+func TestResourceChangeProposalRetryResumesConfirmedWithoutReconfirming(t *testing.T) {
+	repo := newProposalRepoFake()
+	applier := &proposalApplierFake{result: domain.ApplyResult{ResourceID: "created"}}
+	service := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{},
+		map[domain.ResourceKind]port.ResourceChangeApplier{domain.ResourceAgent: applier})
+	proposal, err := service.CreateProposal(context.Background(), CreateProposalInput{
+		TenantID: "tenant-1", ActorID: "admin", Kind: domain.ResourceAgent, Operation: domain.OperationCreate,
+		Payload: json.RawMessage(`{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096}`),
+	})
+	require.NoError(t, err)
+	stored := repo.proposals[proposal.ID]
+	stored.Status = domain.StatusConfirmed
+	repo.proposals[proposal.ID] = stored
+
+	result, err := service.ConfirmAndApply(context.Background(), "tenant-1", proposal.ID, "admin")
+	require.NoError(t, err)
+	require.Equal(t, domain.StatusApplied, result.Status)
+	require.Equal(t, 1, applier.calls)
+}
+
+func TestResourceChangeProposalRetryMarksInterruptedApplyingAsUnknown(t *testing.T) {
+	repo := newProposalRepoFake()
+	applier := &proposalApplierFake{}
+	service := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{},
+		map[domain.ResourceKind]port.ResourceChangeApplier{domain.ResourceAgent: applier})
+	proposal, err := service.CreateProposal(context.Background(), CreateProposalInput{
+		TenantID: "tenant-1", ActorID: "admin", Kind: domain.ResourceAgent, Operation: domain.OperationCreate,
+		Payload: json.RawMessage(`{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096}`),
+	})
+	require.NoError(t, err)
+	stored := repo.proposals[proposal.ID]
+	stored.Status = domain.StatusApplying
+	stored.UpdatedAt = stored.UpdatedAt.Add(-proposalApplyingRecoveryLease)
+	repo.proposals[proposal.ID] = stored
+
+	_, err = service.ConfirmAndApply(context.Background(), "tenant-1", proposal.ID, "admin")
+	require.ErrorIs(t, err, domain.ErrProposalUnknownOutcome)
+	require.Equal(t, domain.StatusUnknownOutcome, repo.proposals[proposal.ID].Status)
+	require.Zero(t, applier.calls)
+}
+
+func TestResourceChangeProposalRetryAfterFinishFailureDoesNotRepeatApply(t *testing.T) {
+	repo := newProposalRepoFake()
+	repo.finishErr = errors.New("database unavailable")
+	applier := &proposalApplierFake{result: domain.ApplyResult{ResourceID: "created"}}
+	service := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{},
+		map[domain.ResourceKind]port.ResourceChangeApplier{domain.ResourceAgent: applier})
+	proposal, err := service.CreateProposal(context.Background(), CreateProposalInput{
+		TenantID: "tenant-1", ActorID: "admin", Kind: domain.ResourceAgent, Operation: domain.OperationCreate,
+		Payload: json.RawMessage(`{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096}`),
+	})
+	require.NoError(t, err)
+
+	_, err = service.ConfirmAndApply(context.Background(), "tenant-1", proposal.ID, "admin")
+	require.ErrorContains(t, err, "database unavailable")
+	require.Equal(t, domain.StatusApplying, repo.proposals[proposal.ID].Status)
+	require.Equal(t, 1, applier.calls)
+	stored := repo.proposals[proposal.ID]
+	stored.UpdatedAt = stored.UpdatedAt.Add(-proposalApplyingRecoveryLease)
+	repo.proposals[proposal.ID] = stored
+
+	_, err = service.ConfirmAndApply(context.Background(), "tenant-1", proposal.ID, "admin")
+	require.ErrorIs(t, err, domain.ErrProposalUnknownOutcome)
+	require.Equal(t, domain.StatusUnknownOutcome, repo.proposals[proposal.ID].Status)
+	require.Equal(t, 1, applier.calls)
+}
+
+func TestResourceChangeProposalConcurrentConfirmDoesNotFinalizeActiveClaim(t *testing.T) {
+	repo := newProposalRepoFake()
+	service := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{}, nil)
+	proposal, err := service.CreateProposal(context.Background(), CreateProposalInput{
+		TenantID: "tenant-1", ActorID: "admin", Kind: domain.ResourceAgent, Operation: domain.OperationCreate,
+		Payload: json.RawMessage(`{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096}`),
+	})
+	require.NoError(t, err)
+	stored := repo.proposals[proposal.ID]
+	stored.Status = domain.StatusApplying
+	repo.proposals[proposal.ID] = stored
+
+	_, err = service.ConfirmAndApply(context.Background(), "tenant-1", proposal.ID, "admin")
+	require.ErrorIs(t, err, domain.ErrProposalAlreadyClaimed)
+	require.Equal(t, domain.StatusApplying, repo.proposals[proposal.ID].Status)
+}
+
 func TestResourceChangeProposalUpdateDraftRevalidatesPayload(t *testing.T) {
 	repo := newProposalRepoFake()
 	service := newProposalServiceForTest(repo, &proposalAuthorizerFake{}, &baselineFake{}, nil)
@@ -116,6 +217,7 @@ func TestResourceChangeProposalUpdateDraftRevalidatesPayload(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Contains(t, string(updated.Payload), `"after"`)
+	require.Equal(t, domain.StatusReadyForReview, repo.events[len(repo.events)-1].FromStatus)
 	_, err = service.UpdateDraft(context.Background(), UpdateProposalInput{
 		TenantID: "tenant-1", ActorID: "admin", ProposalID: proposal.ID,
 		Payload: json.RawMessage(`{"name":"after","secret":"do-not-store"}`),
@@ -124,8 +226,26 @@ func TestResourceChangeProposalUpdateDraftRevalidatesPayload(t *testing.T) {
 	require.NotContains(t, string(repo.proposals[proposal.ID].Payload), "do-not-store")
 }
 
+func TestResourceChangeProposalCancelReturnsReauthorizationFailure(t *testing.T) {
+	repo := newProposalRepoFake()
+	authorizer := &proposalAuthorizerFake{failAt: 2}
+	service := newProposalServiceForTest(repo, authorizer, &baselineFake{}, nil)
+	proposal, err := service.CreateProposal(context.Background(), CreateProposalInput{
+		TenantID: "tenant-1", ActorID: "admin", Kind: domain.ResourceAgent, Operation: domain.OperationCreate,
+		Payload: json.RawMessage(`{"name":"agent","description":"desc","model":"qwen-plus","maxIterations":5,"maxContextTokens":4096}`),
+	})
+	require.NoError(t, err)
+	authorizer.calls = 0
+
+	err = service.Cancel(context.Background(), "tenant-1", "admin", proposal.ID)
+	require.ErrorIs(t, err, domain.ErrProposalForbidden)
+	require.Equal(t, domain.StatusReadyForReview, repo.proposals[proposal.ID].Status)
+}
+
 type proposalRepoFake struct {
 	proposals map[string]domain.ResourceChangeProposal
+	events    []domain.ProposalEvent
+	finishErr error
 }
 
 func newProposalRepoFake() *proposalRepoFake {
@@ -142,8 +262,9 @@ func (f *proposalRepoFake) Get(_ context.Context, id string) (domain.ResourceCha
 	}
 	return p, nil
 }
-func (f *proposalRepoFake) UpdateDraft(_ context.Context, p domain.ResourceChangeProposal, _ domain.ProposalEvent) error {
+func (f *proposalRepoFake) UpdateDraft(_ context.Context, p domain.ResourceChangeProposal, event domain.ProposalEvent) error {
 	f.proposals[p.ID] = p
+	f.events = append(f.events, event)
 	return nil
 }
 func (f *proposalRepoFake) Cancel(_ context.Context, id, _ string, _ time.Time) error {
@@ -154,6 +275,9 @@ func (f *proposalRepoFake) Cancel(_ context.Context, id, _ string, _ time.Time) 
 }
 func (f *proposalRepoFake) Confirm(_ context.Context, id, actor string, at time.Time) error {
 	p := f.proposals[id]
+	if p.Status != domain.StatusReadyForReview {
+		return domain.ErrProposalAlreadyClaimed
+	}
 	p.Status = domain.StatusConfirmed
 	p.ConfirmerID = actor
 	p.ConfirmedAt = &at
@@ -170,6 +294,11 @@ func (f *proposalRepoFake) ClaimApplying(_ context.Context, id, _ string, _ time
 	return p, nil
 }
 func (f *proposalRepoFake) Finish(_ context.Context, id string, status domain.ProposalStatus, result domain.ApplyResult, event domain.ProposalEvent) error {
+	if f.finishErr != nil {
+		err := f.finishErr
+		f.finishErr = nil
+		return err
+	}
 	p := f.proposals[id]
 	p.Status = status
 	p.ApplyResult = result

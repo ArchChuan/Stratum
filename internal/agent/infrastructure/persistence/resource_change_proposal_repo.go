@@ -114,28 +114,39 @@ func (r *PgResourceChangeProposalRepo) UpdateDraft(
 	if err != nil {
 		return err
 	}
-	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+	var transitionErr error
+	err = r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		command, err := tx.Exec(ctx, `UPDATE resource_change_proposals
             SET resource_id=$2, baseline_fingerprint=$3, payload=$4::jsonb, safe_summary=$5::jsonb,
                 status=$6, updated_at=$7
-            WHERE id=$1 AND status IN ('draft','ready_for_review')`, proposal.ID, proposal.ResourceID,
+			WHERE id=$1 AND status IN ('draft','ready_for_review') AND expires_at>$7`, proposal.ID, proposal.ResourceID,
 			proposal.BaselineFingerprint, string(payload), string(summary), proposal.Status, proposal.UpdatedAt)
 		if err != nil {
 			return fmt.Errorf("update proposal draft: %w", err)
 		}
 		if command.RowsAffected() != 1 {
-			return domain.ErrProposalAlreadyClaimed
+			transitionErr = classifyTransitionFailure(ctx, tx, proposal.ID, proposal.UpdatedAt)
+			if errors.Is(transitionErr, domain.ErrProposalExpired) {
+				return nil
+			}
+			return transitionErr
 		}
 		return insertProposalEvent(ctx, tx, proposal.ID, event, detail)
 	})
+	if err != nil {
+		return err
+	}
+	return transitionErr
 }
 
 func (r *PgResourceChangeProposalRepo) Cancel(ctx context.Context, id, actor string, at time.Time) error {
-	return r.transition(ctx, id, actor, at, domain.StatusCancelled, "status IN ('draft','ready_for_review')")
+	return r.transition(ctx, id, actor, at, domain.StatusCancelled,
+		"status IN ('draft','ready_for_review') AND expires_at>$3")
 }
 
 func (r *PgResourceChangeProposalRepo) Confirm(ctx context.Context, id, actor string, at time.Time) error {
-	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+	var transitionErr error
+	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		command, err := tx.Exec(ctx, `UPDATE resource_change_proposals
             SET status='confirmed', confirmer_id=$2, confirmed_at=$3, updated_at=$3
             WHERE id=$1 AND status='ready_for_review' AND expires_at>$3`, id, actor, at)
@@ -143,12 +154,20 @@ func (r *PgResourceChangeProposalRepo) Confirm(ctx context.Context, id, actor st
 			return fmt.Errorf("confirm proposal: %w", err)
 		}
 		if command.RowsAffected() != 1 {
-			return classifyTransitionFailure(ctx, tx, id, at)
+			transitionErr = classifyTransitionFailure(ctx, tx, id, at)
+			if errors.Is(transitionErr, domain.ErrProposalExpired) {
+				return nil
+			}
+			return transitionErr
 		}
 		return insertProposalEvent(ctx, tx, id, domain.ProposalEvent{
 			ActorID: actor, FromStatus: domain.StatusReadyForReview, ToStatus: domain.StatusConfirmed, CreatedAt: at,
 		}, []byte(`{}`))
 	})
+	if err != nil {
+		return err
+	}
+	return transitionErr
 }
 
 func (r *PgResourceChangeProposalRepo) ClaimApplying(
@@ -157,6 +176,7 @@ func (r *PgResourceChangeProposalRepo) ClaimApplying(
 	at time.Time,
 ) (domain.ResourceChangeProposal, error) {
 	var proposal domain.ResourceChangeProposal
+	var transitionErr error
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		var payload, summary, result []byte
 		err := scanProposal(tx.QueryRow(ctx, `UPDATE resource_change_proposals
@@ -164,7 +184,11 @@ func (r *PgResourceChangeProposalRepo) ClaimApplying(
             WHERE id=$1 AND status='confirmed' AND expires_at>$2
             RETURNING `+proposalColumns, id, at), &proposal, &payload, &summary, &result)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return classifyTransitionFailure(ctx, tx, id, at)
+			transitionErr = classifyTransitionFailure(ctx, tx, id, at)
+			if errors.Is(transitionErr, domain.ErrProposalExpired) {
+				return nil
+			}
+			return transitionErr
 		}
 		if err != nil {
 			return fmt.Errorf("claim proposal: %w", err)
@@ -178,6 +202,9 @@ func (r *PgResourceChangeProposalRepo) ClaimApplying(
 	})
 	if err != nil {
 		return domain.ResourceChangeProposal{}, err
+	}
+	if transitionErr != nil {
+		return domain.ResourceChangeProposal{}, transitionErr
 	}
 	tenant, _ := tenantdb.FromContext(ctx)
 	proposal.TenantID = tenant.TenantID
@@ -249,19 +276,32 @@ func (r *PgResourceChangeProposalRepo) transition(
 	to domain.ProposalStatus,
 	condition string,
 ) error {
-	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		query := `UPDATE resource_change_proposals SET status=$2, updated_at=$3 WHERE id=$1 AND ` + condition
-		command, err := tx.Exec(ctx, query, id, to, at)
-		if err != nil {
+	var transitionErr error
+	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		query := `WITH candidate AS (
+            SELECT status FROM resource_change_proposals WHERE id=$1 AND ` + condition + ` FOR UPDATE
+        ), updated AS (
+            UPDATE resource_change_proposals SET status=$2, updated_at=$3
+            WHERE id=$1 AND EXISTS (SELECT 1 FROM candidate)
+        ) SELECT status FROM candidate`
+		var from domain.ProposalStatus
+		if err := tx.QueryRow(ctx, query, id, to, at).Scan(&from); errors.Is(err, pgx.ErrNoRows) {
+			transitionErr = classifyTransitionFailure(ctx, tx, id, at)
+			if errors.Is(transitionErr, domain.ErrProposalExpired) {
+				return nil
+			}
+			return transitionErr
+		} else if err != nil {
 			return fmt.Errorf("transition proposal: %w", err)
 		}
-		if command.RowsAffected() != 1 {
-			return classifyTransitionFailure(ctx, tx, id, at)
-		}
 		return insertProposalEvent(ctx, tx, id, domain.ProposalEvent{
-			ActorID: actor, ToStatus: to, CreatedAt: at,
+			ActorID: actor, FromStatus: from, ToStatus: to, CreatedAt: at,
 		}, []byte(`{}`))
 	})
+	if err != nil {
+		return err
+	}
+	return transitionErr
 }
 
 const proposalColumns = `id, COALESCE(conversation_id::text,''), proposer_id, confirmer_id, resource_kind,
@@ -303,6 +343,22 @@ func classifyTransitionFailure(ctx context.Context, tx pgx.Tx, id string, now ti
 		return fmt.Errorf("classify proposal transition: %w", err)
 	}
 	if !expiresAt.After(now) {
+		if !domain.CanTransition(status, domain.StatusExpired) {
+			return fmt.Errorf("%w: status=%s", domain.ErrProposalAlreadyClaimed, status)
+		}
+		command, err := tx.Exec(ctx, `UPDATE resource_change_proposals
+            SET status='expired', updated_at=$2 WHERE id=$1 AND status=$3 AND expires_at<=$2`, id, now, status)
+		if err != nil {
+			return fmt.Errorf("persist proposal expiration: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return domain.ErrProposalAlreadyClaimed
+		}
+		if err := insertProposalEvent(ctx, tx, id, domain.ProposalEvent{
+			FromStatus: status, ToStatus: domain.StatusExpired, CreatedAt: now,
+		}, []byte(`{}`)); err != nil {
+			return err
+		}
 		return domain.ErrProposalExpired
 	}
 	return fmt.Errorf("%w: status=%s", domain.ErrProposalAlreadyClaimed, status)

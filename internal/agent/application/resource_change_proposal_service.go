@@ -41,6 +41,8 @@ type ResourceChangeProposalService struct {
 	newID      func() string
 }
 
+const proposalApplyingRecoveryLease = 5 * time.Minute
+
 func NewResourceChangeProposalService(
 	repo port.ProposalRepo,
 	authorizer port.ProposalAuthorizer,
@@ -149,6 +151,7 @@ func (s *ResourceChangeProposalService) UpdateDraft(
 	if err := validateProposalPayload(decoded); err != nil {
 		return domain.ResourceChangeProposal{}, err
 	}
+	fromStatus := proposal.Status
 	proposal.Payload = append(json.RawMessage(nil), in.Payload...)
 	proposal.UpdatedAt = s.now()
 	proposal.Status = domain.StatusReadyForReview
@@ -160,7 +163,7 @@ func (s *ResourceChangeProposalService) UpdateDraft(
 		proposal.BaselineFingerprint = fingerprint
 	}
 	if err := s.repo.UpdateDraft(ctx, proposal, domain.ProposalEvent{
-		ActorID: in.ActorID, FromStatus: domain.StatusDraft, ToStatus: domain.StatusReadyForReview,
+		ActorID: in.ActorID, FromStatus: fromStatus, ToStatus: domain.StatusReadyForReview,
 		Summary: "Proposal draft updated.", CreatedAt: proposal.UpdatedAt,
 	}); err != nil {
 		return domain.ResourceChangeProposal{}, fmt.Errorf("update proposal draft: %w", err)
@@ -202,7 +205,30 @@ func (s *ResourceChangeProposalService) ConfirmAndApply(
 	}
 	now := s.now()
 	if err := s.repo.Confirm(ctx, proposalID, actorID, now); err != nil {
-		return domain.ResourceChangeProposal{}, err
+		if !errors.Is(err, domain.ErrProposalAlreadyClaimed) {
+			return domain.ResourceChangeProposal{}, err
+		}
+		current, getErr := s.repo.Get(ctx, proposalID)
+		if getErr != nil {
+			return domain.ResourceChangeProposal{}, errors.Join(err, getErr)
+		}
+		switch current.Status {
+		case domain.StatusConfirmed:
+			proposal = current
+		case domain.StatusApplying:
+			if current.UpdatedAt.Add(proposalApplyingRecoveryLease).After(now) {
+				return domain.ResourceChangeProposal{}, err
+			}
+			if finishErr := s.finish(ctx, current, domain.StatusUnknownOutcome, domain.ApplyResult{},
+				"proposal_interrupted_applying", actorID); finishErr != nil {
+				return domain.ResourceChangeProposal{}, errors.Join(domain.ErrProposalUnknownOutcome, finishErr)
+			}
+			s.metrics.IncResourceProposal(string(current.ResourceKind), string(current.Operation),
+				string(domain.StatusUnknownOutcome))
+			return domain.ResourceChangeProposal{}, domain.ErrProposalUnknownOutcome
+		default:
+			return domain.ResourceChangeProposal{}, err
+		}
 	}
 	claimed, err := s.repo.ClaimApplying(ctx, proposalID, actorID, now)
 	if err != nil {
@@ -218,7 +244,13 @@ func (s *ResourceChangeProposalService) ConfirmAndApply(
 	if claimed.Operation == domain.OperationUpdate {
 		current, resolveErr := s.baseline.ResolveBaseline(ctx, claimed)
 		if resolveErr != nil {
-			return domain.ResourceChangeProposal{}, fmt.Errorf("recheck proposal baseline: %w", resolveErr)
+			if finishErr := s.finish(ctx, claimed, domain.StatusFailed, domain.ApplyResult{},
+				"proposal_baseline_unavailable", actorID); finishErr != nil {
+				return domain.ResourceChangeProposal{}, errors.Join(domain.ErrProposalApplyFailed, resolveErr, finishErr)
+			}
+			s.metrics.IncResourceProposal(string(claimed.ResourceKind), string(claimed.Operation), string(domain.StatusFailed))
+			return domain.ResourceChangeProposal{}, fmt.Errorf("%w: recheck proposal baseline: %v",
+				domain.ErrProposalApplyFailed, resolveErr)
 		}
 		if current != claimed.BaselineFingerprint {
 			if finishErr := s.finish(ctx, claimed, domain.StatusStale, domain.ApplyResult{}, "proposal_stale", actorID); finishErr != nil {
