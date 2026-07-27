@@ -3,6 +3,7 @@ package migration
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -27,6 +28,9 @@ func RunPublicSchema(postgresURL string, sqlDir string, logger *zap.Logger) erro
 	if dirty {
 		logger.Warn("dirty migration detected, forcing version to retry",
 			zap.Uint("version", version))
+		if version == 0 || version > math.MaxInt32 {
+			return fmt.Errorf("migration: force clean: invalid dirty version %d", version)
+		}
 		if err := m.Force(int(version) - 1); err != nil {
 			return fmt.Errorf("migration: force clean: %w", err)
 		}

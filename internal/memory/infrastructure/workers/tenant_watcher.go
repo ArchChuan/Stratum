@@ -101,7 +101,7 @@ func (w *TenantWatcher) reconcile(ctx context.Context) {
 		if _, ok := w.running[tid]; ok {
 			continue
 		}
-		workerCtx, cancel := context.WithCancel(ctx)
+		workerCtx, cancel := context.WithCancel(ctx) //nolint:gosec // G118 false positive: cancel is stored in tenantEntry and invoked on tenant removal (entry.cancel) and stopAll
 		ws := w.build(tid)
 		w.running[tid] = tenantEntry{cancel: cancel, workers: ws}
 		for _, worker := range ws {

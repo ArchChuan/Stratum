@@ -9,6 +9,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/memory/application"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 var errInvalidInput = errors.New("invalid user")
@@ -96,8 +97,13 @@ func (h *UserMemoryHandler) GetMemory(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errInvalidInput))
 		return
 	}
+	factID := c.Param("id")
+	if _, err := uuid.Parse(factID); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("invalid memory id: must be a UUID")))
+		return
+	}
 	memory, err := h.svc.GetUserMemory(c.Request.Context(), &application.GetUserMemoryRequest{
-		TenantID: tenantID, UserID: userID, FactID: c.Param("id"),
+		TenantID: tenantID, UserID: userID, FactID: factID,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -158,8 +164,13 @@ func (h *UserMemoryHandler) DeleteMemory(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errInvalidInput))
 		return
 	}
+	factID := c.Param("id")
+	if _, err := uuid.Parse(factID); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, errors.New("invalid memory id: must be a UUID")))
+		return
+	}
 	if err := h.svc.ForgetUserMemory(c.Request.Context(), &application.ForgetMemoryRequest{
-		TenantID: tenantID, UserID: userID, FactID: c.Param("id"),
+		TenantID: tenantID, UserID: userID, FactID: factID,
 	}); err != nil {
 		_ = c.Error(err)
 		return

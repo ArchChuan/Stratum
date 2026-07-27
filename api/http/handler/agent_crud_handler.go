@@ -116,7 +116,7 @@ func (h *AgentHandler) DeleteAgent(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "agent deleted successfully"})
+	c.Status(http.StatusNoContent)
 }
 
 // executionRow is the wire shape rendered by ListExecutions. JSON tags
