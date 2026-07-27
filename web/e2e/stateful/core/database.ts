@@ -66,7 +66,7 @@ export const elevateGeneratedActor = async (
   pool: DatabasePool,
   tenantID: string,
   userID: string,
-  role: 'admin' | 'root',
+  role: 'admin' | 'owner' | 'root',
 ): Promise<void> => {
   requireUUID(tenantID, 'tenant_id');
   requireUUID(userID, 'user_id');
@@ -77,6 +77,23 @@ export const elevateGeneratedActor = async (
       [role, tenantID, userID],
     );
     if (result.rowCount !== 1) throw new Error('generated actor role elevation did not update exactly one membership');
+  } finally {
+    client.release();
+  }
+};
+
+export const deleteGeneratedActors = async (pool: DatabasePool, userIDs: string[]): Promise<void> => {
+  if (userIDs.length === 0) return;
+  userIDs.forEach((userID) => requireUUID(userID, 'user_id'));
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      'DELETE FROM public.users WHERE id = ANY($1::uuid[]) RETURNING id',
+      [userIDs],
+    );
+    if (result.rowCount !== userIDs.length) {
+      throw new Error('generated actor cleanup did not delete every exact user');
+    }
   } finally {
     client.release();
   }

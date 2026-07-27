@@ -16,7 +16,7 @@
         ]
       },
       "mutation": "NAVIGATE /",
-      "browser_action_id": "dashboard.route.overview",
+      "browser_action_id": "dashboard.summary.refresh",
       "http_evidence": "Dashboard summary requests complete successfully",
       "db_evidence": "Recent execution and resource totals agree with tenant records",
       "coverage": "short"

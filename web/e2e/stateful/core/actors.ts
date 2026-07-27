@@ -45,7 +45,7 @@ export const createGuestActor = async (
   const tenantID = requireUUID(body.tenant_id, 'tenant_id');
   const userID = requireUUID(body.user.sub, 'user_id');
   if (actor.label === 'systemAdmin') await elevateGeneratedActor(pool, tenantID, userID, 'root');
-  if (actor.label === 'tenantAdmin') await elevateGeneratedActor(pool, tenantID, userID, 'admin');
+  if (actor.label === 'tenantAdmin') await elevateGeneratedActor(pool, tenantID, userID, 'owner');
   if (actor.label === 'systemAdmin' || actor.label === 'tenantAdmin') {
     const refreshed = await actor.context.request.post(`${backendURL}/auth/refresh`);
     if (refreshed.status() !== 200) throw new Error(`actor refresh failed with status ${refreshed.status()}`);

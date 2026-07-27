@@ -59,6 +59,7 @@ chmod +x "$test_dir/digest" "$test_dir/process" "$test_dir/playwright-pass" "$te
 
 common=(env TEST_DATABASE_URL="$safe_db" STATEFUL_E2E_DIGEST_COMMAND="$test_dir/digest"
   STATEFUL_E2E_INFRA_UP_COMMAND=true STATEFUL_E2E_INFRA_DOWN_COMMAND=true
+  STATEFUL_E2E_DATABASE_PREPARE_COMMAND=true STATEFUL_E2E_ENV_FILE="$test_dir/missing.env"
   STATEFUL_E2E_BACKEND_COMMAND="$test_dir/process" STATEFUL_E2E_FRONTEND_COMMAND="$test_dir/process"
   STATEFUL_E2E_HEALTH_ATTEMPTS=1 STATEFUL_E2E_FRONTEND_HEALTH_COMMAND=true)
 cleanup_marker="$test_dir/cleaned"

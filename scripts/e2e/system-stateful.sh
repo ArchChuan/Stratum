@@ -21,18 +21,21 @@ for pack in "${selected_packs[@]}"; do
   [[ ",$all_packs," == *",$pack,"* ]] || { printf 'unknown stateful E2E pack: %s\n' "$pack" >&2; exit 2; }
 done
 
-database_url=${TEST_DATABASE_URL:-${STRATUM_TEST_POSTGRES_URL:-}}
+database_url=${TEST_DATABASE_URL:-${STRATUM_TEST_POSTGRES_URL:-postgres://stratum:stratum@127.0.0.1:5432/stratum_e2e?sslmode=disable}}
 [[ "$database_url" =~ ^postgres(ql)?://[^[:space:]]+@(127\.0\.0\.1|localhost|postgres)(:[0-9]+)?/[^/?]*(test|e2e)[^/?]*([?].*)?$ ]] || {
   printf 'unsafe E2E database target\n' >&2; exit 2;
 }
+database_name=${database_url%%\?*}
+database_name=${database_name##*/}
+[[ "$database_name" =~ ^[A-Za-z0-9_]+$ ]] || { printf 'unsafe E2E database name\n' >&2; exit 2; }
 
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/stratum-system-stateful.XXXXXX")
-backend_pid='' frontend_pid='' infra_started=false
+backend_pid='' frontend_pid='' infra_started=false infra_owned=false
 cleanup() {
   local status=$?
   [[ -z "$frontend_pid" ]] || { kill -- "-$frontend_pid" 2>/dev/null || true; wait "$frontend_pid" 2>/dev/null || true; }
   [[ -z "$backend_pid" ]] || { kill -- "-$backend_pid" 2>/dev/null || true; wait "$backend_pid" 2>/dev/null || true; }
-  if [[ "$infra_started" == true ]]; then
+  if [[ "$infra_started" == true && "$infra_owned" == true ]]; then
     bash -c "${STATEFUL_E2E_INFRA_DOWN_COMMAND:-make -C '$repo_dir' infra-down}" >/dev/null 2>&1 || status=1
   fi
   rm -rf "$work_dir"
@@ -42,11 +45,36 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+common_git_dir=$(cd "$repo_dir" && git rev-parse --path-format=absolute --git-common-dir)
+env_file=${STATEFUL_E2E_ENV_FILE:-$(dirname "$common_git_dir")/.env}
+if [[ -r "$env_file" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$env_file"
+  set +a
+fi
+export TEST_DATABASE_URL=$database_url STRATUM_TEST_POSTGRES_URL=$database_url POSTGRES_URL=$database_url
+
 digest_command=${STATEFUL_E2E_DIGEST_COMMAND:-go run ./cmd/e2e-attestation digest --root .}
 source_before=$(cd "$repo_dir" && bash -c "$digest_command")
 
-bash -c "${STATEFUL_E2E_INFRA_UP_COMMAND:-make -C '$repo_dir' infra-up infra-wait}"
-infra_started=true
+core_infra_ready() {
+  local port
+  for port in 5432 6379 4222; do
+    timeout 1 bash -c "</dev/tcp/127.0.0.1/$port" 2>/dev/null || return 1
+  done
+}
+if [[ -n "${STATEFUL_E2E_INFRA_UP_COMMAND:-}" ]]; then
+  infra_started=true
+  bash -c "$STATEFUL_E2E_INFRA_UP_COMMAND"
+elif ! core_infra_ready; then
+  infra_owned=true
+  infra_started=true
+  make -C "$repo_dir" infra-up infra-wait
+fi
+database_prepare_command=${STATEFUL_E2E_DATABASE_PREPARE_COMMAND:-\
+"cd '$repo_dir/web' && node --input-type=module -e 'import pg from \"pg\"; const target=new URL(process.env.TEST_DATABASE_URL); const name=target.pathname.slice(1); target.pathname=\"/postgres\"; const client=new pg.Client({connectionString:target.toString()}); await client.connect(); const found=await client.query(\"SELECT 1 FROM pg_database WHERE datname = \$1\",[name]); if (found.rowCount === 0) await client.query(\"CREATE DATABASE \\\"\"+name+\"\\\"\"); await client.end();'"}
+bash -c "$database_prepare_command"
 
 backend_command=${STATEFUL_E2E_BACKEND_COMMAND:-"cd '$repo_dir' && FRONTEND_URL=http://127.0.0.1:15173 PORT=18080 SECURE_COOKIES=false go run ./cmd/server"}
 setsid bash -c "exec bash -c \"\$1\"" _ "$backend_command" >"$work_dir/backend.log" 2>&1 & backend_pid=$!

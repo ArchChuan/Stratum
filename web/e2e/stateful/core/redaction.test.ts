@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createActorContexts } from './actors';
-import { assertSafeDatabaseURL, requireUUID, withTenantQuery } from './database';
+import { assertSafeDatabaseURL, deleteGeneratedActors, requireUUID, withTenantQuery } from './database';
 import { redactSensitive } from './redaction';
 
 describe('stateful E2E security boundaries', () => {
@@ -62,5 +62,23 @@ describe('stateful E2E security boundaries', () => {
     expect(Object.keys(actors)).toEqual(['systemAdmin', 'tenantAdmin', 'memberA', 'memberB']);
     expect(new Set(Object.values(actors).map((actor) => actor.contextID)).size).toBe(4);
     expect(browser.newContext).toHaveBeenCalledTimes(4);
+  });
+
+  it('cleans up only the exact generated user UUIDs', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 2 });
+    const release = vi.fn();
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release }) };
+    const userIDs = [
+      '123e4567-e89b-42d3-a456-426614174000',
+      '123e4567-e89b-42d3-a456-426614174001',
+    ];
+
+    await deleteGeneratedActors(pool, userIDs);
+
+    expect(query).toHaveBeenCalledWith(
+      'DELETE FROM public.users WHERE id = ANY($1::uuid[]) RETURNING id',
+      [userIDs],
+    );
+    expect(release).toHaveBeenCalledOnce();
   });
 });
