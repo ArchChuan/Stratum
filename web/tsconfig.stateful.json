@@ -4,5 +4,5 @@
     "types": ["vitest/globals", "node"],
     "noEmit": true
   },
-  "include": ["e2e/stateful/**/*.ts", "vitest.stateful.config.ts"]
+  "include": ["e2e/stateful/**/*.ts", "e2e/system-stateful.spec.ts", "playwright.stateful.config.ts", "vitest.stateful.config.ts"]
 }

@@ -14,7 +14,7 @@
 	dev-up dev-down \
 	run fe-dev help clean
 
-.PHONY: e2e-evaluation-evolution
+.PHONY: e2e-evaluation-evolution e2e-system-short e2e-system-soak
 
 # ─── 全局变量（CI/CD 可自动覆盖）────────────────────────────────────────────
 BE_IMAGE    ?= clawhermes-ai-go
@@ -206,6 +206,12 @@ e2e-evaluation-evolution:
 	go test e2e/evaluation-evolution/bootstrap.go e2e/evaluation-evolution/bootstrap_test.go -count=1
 	go test -race e2e/evaluation-evolution/tcp-proxy.go e2e/evaluation-evolution/tcp-proxy_test.go
 	bash scripts/e2e/evaluation-evolution.sh
+
+e2e-system-short:
+	bash scripts/e2e/system-stateful.sh short
+
+e2e-system-soak:
+	bash scripts/e2e/system-stateful.sh soak
 
 knowledge-deposition-test:
 	bash scripts/knowledge-deposition/report-test.sh
