@@ -7,7 +7,6 @@ import {
   adminTenantSchema,
   type TenantSettings,
   type TenantSummary,
-  type AdminTenant,
 } from '../model/auth';
 
 import api from '@/services/client';
@@ -22,6 +21,13 @@ const memberPageSchema = z.object({
   page_size: z.number(),
 });
 
+const adminTenantPageSchema = z.object({
+  tenants: z.array(adminTenantSchema),
+  total: z.number(),
+  page: z.number(),
+  page_size: z.number(),
+});
+
 const invitationSchema = z.object({
   invitation_code: z.string().min(1),
   email: z.string().email(),
@@ -29,6 +35,12 @@ const invitationSchema = z.object({
 });
 
 export type MemberPage = z.infer<typeof memberPageSchema>;
+export type CreateAdminTenantInput = {
+  name: string;
+  slug: string;
+  plan: 'free' | 'pro' | 'enterprise';
+  status: 'active' | 'suspended';
+};
 
 export const tenantApi = {
   listMine: async (token?: string): Promise<TenantSummary[]> => {
@@ -69,15 +81,15 @@ export const tenantApi = {
   joinExisting: (inviteCode: string) =>
     api.post<{ tenant_id: string }>('/tenant/join', { invitation_code: inviteCode }).then((res) => res.data),
   // admin
-  listAllTenants: async (): Promise<AdminTenant[]> => {
-    const res = await api.get('/admin/tenants');
-    return z.array(adminTenantSchema).parse(res.data?.tenants ?? res.data ?? []);
+  listAllTenants: async (page: number, pageSize: number) => {
+    const res = await api.get('/admin/tenants', { params: { page, page_size: pageSize } });
+    return adminTenantPageSchema.parse(res.data);
   },
   setTenantEnabled: (tenantId: string, enabled: boolean) =>
     api.patch(`/admin/tenants/${tenantId}`, {
       status: enabled ? 'active' : 'suspended',
     }),
-  createTenant: (data: { name: string }) => api.post('/admin/tenants', data),
+  createTenant: (data: CreateAdminTenantInput) => api.post('/admin/tenants', data),
   adminDeleteTenant: (tenantId: string) => api.delete(`/admin/tenants/${tenantId}`),
   deleteSelf: () => api.delete('/tenant'),
 };
