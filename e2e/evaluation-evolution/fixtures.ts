@@ -41,7 +41,8 @@ type Manifest = {
       documentId: string; chunkIndex: number; jobId: string; runId: string; failureJobId: string; failureRunId: string;
       failureError: string; recoveryJobId: string; recoveryRunId: string; candidateRevisionId: string;
       candidateRunId: string; experimentId: string; onlineTraceId: string; onlineVariant: string;
-      runtimeOutageRejected: boolean; runtimeOutageRecovered: boolean; documentDriftRejected: boolean;
+      runtimeOutageRejected: boolean; runtimeOutageRecovered: boolean; clientSecurityClaimIgnored: boolean;
+      documentDriftRejected: boolean;
       crossTenantIsolated: boolean };
   };
 };

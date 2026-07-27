@@ -145,6 +145,24 @@ func TestKnowledgeCanaryFailsClosedDuringRuntimeDependencyOutage(t *testing.T) {
 	}
 }
 
+func TestKnowledgeCanaryIgnoresUntrustedClientSecurityClaim(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("bootstrap.go")
+	if err != nil {
+		t.Fatalf("read bootstrap source: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"assertClientSecurityClaimDoesNotStopExperiment", "clientSecurityClaimIgnored",
+		`"security_violation": true`, `"safety_stopped"`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("client security trust-boundary evidence is missing %q", required)
+		}
+	}
+}
+
 func TestKnowledgeCanaryEvidenceIsTenantIsolated(t *testing.T) {
 	t.Parallel()
 

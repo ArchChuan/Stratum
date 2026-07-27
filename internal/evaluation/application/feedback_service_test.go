@@ -126,6 +126,73 @@ func TestFeedbackServiceSafetyStopsOnFirstSecurityViolation(t *testing.T) {
 	}
 }
 
+func TestFeedbackServiceDoesNotSafetyStopActiveExperimentFromStaleTrace(t *testing.T) {
+	policy := domain.DefaultPromotionPolicy()
+	repo := &fakeFeedbackRepo{experiment: domain.Experiment{
+		ID: "experiment-new", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		StableRevisionID: "stable-1", CanaryRevisionID: "canary-new", Status: domain.ExperimentRunning,
+		Stage: 5, Policy: policy, StateVersion: 1,
+	}}
+	experimentRepo := &feedbackExperimentRepo{experiment: repo.experiment}
+	evidence := feedbackEvidence("trace-old-security", repo, "stable-1", "stable")
+	trace := evidence.traces["trace-old-security"]
+	trace.SecurityViolation = true
+	trace.Assignments["skill:skill-1"] = port.ObservedResourceAssignment{
+		RevisionID: "stable-1", ExperimentID: "experiment-old", Variant: "stable",
+	}
+	evidence.traces["trace-old-security"] = trace
+	svc := NewFeedbackService(repo, NewExperimentService(experimentRepo), evidence)
+
+	result, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		TraceID: "trace-old-security", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		Score: 0.1, IdempotencyKey: "feedback-old-security",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Experiment != nil || result.Decision != domain.DecisionHold || experimentRepo.decisionCount != 0 ||
+		experimentRepo.experiment.Stage != 5 || experimentRepo.experiment.SafetyStopped {
+		t.Fatalf("stale trace changed active experiment: result=%+v stored=%+v decisions=%d",
+			result, experimentRepo.experiment, experimentRepo.decisionCount)
+	}
+}
+
+func TestFeedbackServiceDoesNotTrustClientSecurityClaimsForHardStop(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input RecordFeedbackInput
+	}{
+		{name: "top-level flag", input: RecordFeedbackInput{SecurityViolation: true}},
+		{name: "outcome flag", input: RecordFeedbackInput{Outcome: map[string]any{"security_violation": true}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			policy := domain.DefaultPromotionPolicy()
+			repo := &fakeFeedbackRepo{experiment: domain.Experiment{
+				ID: "experiment-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+				StableRevisionID: "stable-1", CanaryRevisionID: "canary-1", Status: domain.ExperimentRunning,
+				Stage: 5, Policy: policy, StateVersion: 1,
+			}}
+			experimentRepo := &feedbackExperimentRepo{experiment: repo.experiment}
+			svc := NewFeedbackService(repo, NewExperimentService(experimentRepo),
+				feedbackEvidence("trace-client-claim", repo, "canary-1", "canary"))
+			test.input.TraceID = "trace-client-claim"
+			test.input.ResourceKind = domain.ResourceKindSkill
+			test.input.ResourceID = "skill-1"
+			test.input.Score = 0.1
+			test.input.IdempotencyKey = "feedback-client-claim"
+
+			result, err := svc.Record(context.Background(), "tenant-1", test.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Decision == domain.DecisionRollback || experimentRepo.experiment.Stage != 5 ||
+				experimentRepo.experiment.SafetyStopped {
+				t.Fatalf("client claim triggered hard stop: result=%+v stored=%+v", result, experimentRepo.experiment)
+			}
+		})
+	}
+}
+
 func TestEvaluationIdempotencyKeyDoesNotDependOnMutableStage(t *testing.T) {
 	first := evaluationIdempotencyKey("feedback-1", "experiment-1")
 	retry := evaluationIdempotencyKey("feedback-1", "experiment-1")
@@ -196,7 +263,16 @@ type fakeFeedbackRepo struct {
 
 func (f *fakeFeedbackRepo) Record(_ context.Context, _ string, input RecordFeedbackInput) (domain.EvaluationFeedback, error) {
 	f.recorded = input
-	return domain.EvaluationFeedback{ID: "feedback-1", TraceID: input.TraceID, ResourceID: input.ResourceID, Score: input.Score}, nil
+	outcome := make(map[string]any, len(input.Outcome)+1)
+	for key, value := range input.Outcome {
+		outcome[key] = value
+	}
+	if input.SecurityViolation {
+		outcome["security_violation"] = true
+	}
+	return domain.EvaluationFeedback{
+		ID: "feedback-1", TraceID: input.TraceID, ResourceID: input.ResourceID, Score: input.Score, Outcome: outcome,
+	}, nil
 }
 
 type fakeTraceEvidenceReader struct {

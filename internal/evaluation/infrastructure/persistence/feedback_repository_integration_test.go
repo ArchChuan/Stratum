@@ -44,15 +44,23 @@ func TestPgFeedbackRepositoryStageFeedbackReadsOnlyControlPlaneRows(t *testing.T
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO `+schema+`.evaluation_feedback
-		(id, trace_id, resource_kind, resource_id, revision_id, score, outcome, idempotency_key)
-		VALUES ('feedback-1','trace-1','skill','skill-1','stable-1',0.8,
-		        '{"security_violation":true}','key-1')`); err != nil {
+		(id, trace_id, resource_kind, resource_id, revision_id, experiment_id, variant, score, outcome, idempotency_key)
+		VALUES
+		 ('feedback-1','trace-1','skill','skill-1','stable-1','experiment-1','stable',0.8,
+		  '{"security_violation":true}','key-1'),
+		 ('feedback-old-experiment','trace-old-experiment','skill','skill-1','stable-1','experiment-old','stable',0.2,
+		  '{}','key-old-experiment'),
+		 ('feedback-wrong-kind','trace-wrong-kind','agent','skill-1','stable-1','experiment-1','stable',0.2,
+		  '{}','key-wrong-kind'),
+		 ('feedback-wrong-variant','trace-wrong-variant','skill','skill-1','stable-1','experiment-1','canary',0.2,
+		  '{}','key-wrong-variant')`); err != nil {
 		t.Fatal(err)
 	}
 
 	repo := NewPgFeedbackRepository(pool)
 	feedback, _, err := repo.StageFeedback(ctx, tenantID, domain.Experiment{
-		ID: "experiment-1", ResourceID: "skill-1", StableRevisionID: "stable-1", CanaryRevisionID: "canary-1",
+		ID: "experiment-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		StableRevisionID: "stable-1", CanaryRevisionID: "canary-1",
 	})
 	if err != nil {
 		t.Fatal(err)

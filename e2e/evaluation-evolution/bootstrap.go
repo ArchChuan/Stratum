@@ -59,7 +59,7 @@ func main() {
 		liveMCP["serverId"].(string), runID)
 	liveKnowledge := executeLiveKnowledgeFlow(adminClient, apiURL, adminToken, runID)
 	executeLiveKnowledgeCanaryFlow(adminClient, apiURL, adminToken, liveKnowledge,
-		liveAgent["resourceId"].(string), runID)
+		liveAgent["resourceId"].(string), memberGuest.AccessToken, runID)
 
 	prefix := strings.ReplaceAll(runID, "-", "_")
 	schema := quoteIdentifier(tenantSchemaName(adminGuest.TenantID))
@@ -278,7 +278,7 @@ func assertKnowledgeRun(
 }
 
 func executeLiveKnowledgeCanaryFlow(
-	client *http.Client, apiURL, token string, liveKnowledge map[string]any, agentID, runID string,
+	client *http.Client, apiURL, token string, liveKnowledge map[string]any, agentID, memberToken, runID string,
 ) {
 	workspaceName := liveKnowledge["resourceId"].(string)
 	workspaceID := liveKnowledge["workspaceId"].(string)
@@ -361,11 +361,38 @@ func executeLiveKnowledgeCanaryFlow(
 	liveKnowledge["experimentId"] = experiment.Experiment.ID
 	liveKnowledge["onlineTraceId"] = onlineTraceID
 	liveKnowledge["onlineVariant"] = feedbackRow["variant"]
+	assertClientSecurityClaimDoesNotStopExperiment(client, apiURL, memberToken, liveKnowledge,
+		experiment.Experiment.ID, experiment.Deployment.CanaryPercent, runID)
 	assertKnowledgeRuntimeOutageFailsClosed(client, apiURL, token, liveKnowledge, agentID,
 		experiment.Deployment.CanaryPercent, runID)
 	assertKnowledgeDocumentDriftFailsClosed(client, apiURL, token, liveKnowledge, agentID,
 		experiment.Deployment.CanaryPercent, runID)
 	assertKnowledgeTenantIsolation(client, apiURL, token, liveKnowledge, runID)
+}
+
+func assertClientSecurityClaimDoesNotStopExperiment(
+	client *http.Client, apiURL, memberToken string, liveKnowledge map[string]any,
+	experimentID string, canaryPercent int, runID string,
+) {
+	var feedback struct {
+		Decision   string `json:"decision"`
+		Experiment struct {
+			ID            string `json:"id"`
+			Stage         int    `json:"stage"`
+			SafetyStopped bool   `json:"safety_stopped"`
+		} `json:"experiment"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/feedback", memberToken, map[string]any{
+		"trace_id": liveKnowledge["onlineTraceId"], "resource_kind": "knowledge",
+		"resource_id": liveKnowledge["resourceId"], "score": 1,
+		"security_violation": true, "outcome": map[string]any{"security_violation": true},
+		"idempotency_key": runID + "-untrusted-client-security-claim",
+	}, http.StatusCreated, &feedback)
+	if feedback.Decision == "rollback" || feedback.Experiment.ID != experimentID ||
+		feedback.Experiment.Stage != canaryPercent || feedback.Experiment.SafetyStopped {
+		panic("untrusted client security claim changed the active experiment")
+	}
+	liveKnowledge["clientSecurityClaimIgnored"] = true
 }
 
 func assertKnowledgeRuntimeOutageFailsClosed(

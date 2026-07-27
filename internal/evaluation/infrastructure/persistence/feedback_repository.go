@@ -106,7 +106,7 @@ func (r *PgFeedbackRepository) StageFeedback(
 		}
 		observedMinutes = int(time.Since(stageStartedAt).Minutes())
 		var err error
-		feedback, err = loadStageFeedback(ctx, tx, experiment.ResourceID, stageStartedAt)
+		feedback, err = loadStageFeedback(ctx, tx, experiment, stageStartedAt)
 		return err
 	})
 	return feedback, observedMinutes, err
@@ -115,15 +115,17 @@ func (r *PgFeedbackRepository) StageFeedback(
 func loadStageFeedback(
 	ctx context.Context,
 	tx pgx.Tx,
-	resourceID string,
+	experiment domain.Experiment,
 	stageStartedAt time.Time,
 ) ([]domain.EvaluationFeedback, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT id, trace_id, resource_kind, resource_id, revision_id, experiment_id, variant,
 		        score, outcome, idempotency_key, created_at
 		 FROM evaluation_feedback
-		 WHERE resource_id=$1 AND created_at >= $2
-		 ORDER BY created_at`, resourceID, stageStartedAt)
+		 WHERE resource_kind=$1 AND resource_id=$2 AND experiment_id=$3 AND created_at >= $4
+		   AND ((revision_id=$5 AND variant='stable') OR (revision_id=$6 AND variant='canary'))
+		 ORDER BY created_at`, string(experiment.ResourceKind), experiment.ResourceID, experiment.ID, stageStartedAt,
+		experiment.StableRevisionID, experiment.CanaryRevisionID)
 	if err != nil {
 		return nil, err
 	}

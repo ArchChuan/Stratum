@@ -65,7 +65,10 @@ func (s *FeedbackService) Record(
 	if err != nil || !ok {
 		return result, err
 	}
-	if observed.SecurityViolation || input.SecurityViolation || feedbackSecurityViolation(feedback) {
+	if !assignmentMatchesExperiment(assignment, experiment) {
+		return result, nil
+	}
+	if observed.SecurityViolation {
 		next, decision, err := s.experiments.EvaluateStageIdempotent(ctx, tenantID, experiment.ID, EvaluateStageInput{
 			Metrics:        domain.StageMetrics{SecurityViolation: true},
 			IdempotencyKey: evaluationIdempotencyKey(input.IdempotencyKey, experiment.ID),
@@ -152,12 +155,13 @@ func (s *FeedbackService) observations(
 			return nil, nil, errors.New("trace evidence unavailable")
 		}
 		assignment, ok := trace.Assignments[resourceKey]
-		if !ok || assignment.RevisionID != feedback.RevisionID {
+		if !ok || assignment.RevisionID != feedback.RevisionID ||
+			!assignmentMatchesExperiment(assignment, experiment) {
 			return nil, nil, errors.New("trace evidence assignment mismatch")
 		}
 		observation := domain.OnlineObservation{
 			Score: feedback.Score, CostUSD: trace.CostUSD, LatencyMs: trace.LatencyMs,
-			Success: trace.Success, SecurityViolation: trace.SecurityViolation || feedbackSecurityViolation(feedback),
+			Success: trace.Success, SecurityViolation: trace.SecurityViolation,
 		}
 		switch feedback.RevisionID {
 		case experiment.StableRevisionID:
@@ -169,9 +173,18 @@ func (s *FeedbackService) observations(
 	return stable, canary, nil
 }
 
-func feedbackSecurityViolation(feedback domain.EvaluationFeedback) bool {
-	value, _ := feedback.Outcome["security_violation"].(bool)
-	return value
+func assignmentMatchesExperiment(assignment port.ObservedResourceAssignment, experiment domain.Experiment) bool {
+	if assignment.ExperimentID != experiment.ID {
+		return false
+	}
+	switch assignment.Variant {
+	case "stable":
+		return assignment.RevisionID == experiment.StableRevisionID
+	case "canary":
+		return assignment.RevisionID == experiment.CanaryRevisionID
+	default:
+		return false
+	}
 }
 
 func hasSecurityViolation(observations []domain.OnlineObservation) bool {
