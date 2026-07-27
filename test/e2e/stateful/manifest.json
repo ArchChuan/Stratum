@@ -1694,6 +1694,26 @@
       "coverage": "short"
     },
     {
+      "id": "workflow.mutation.delete.workflows.workflowid",
+      "domain": "workflow",
+      "user_goal": "Delete an unused workflow draft",
+      "route": "/workflows",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "member",
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /workflows/:workflowId",
+      "browser_action_id": "workflow.mutation.delete.workflows.workflowid",
+      "http_evidence": "The browser observes a successful DELETE /workflows/:workflowId response",
+      "db_evidence": "The unused workflow definition no longer exists in the selected tenant schema",
+      "coverage": "short"
+    },
+    {
       "id": "workflow.mutation.post.workflows.workflowid.validate",
       "domain": "workflow",
       "user_goal": "Complete POST /workflows/:workflowId/validate",

@@ -10,6 +10,7 @@ export const WorkflowManualInterventionPanel = ({ intent, generation, onChanged 
   const [summary, setSummary] = useState('');
   const resolve = (action: 'mark_succeeded' | 'retry' | 'terminate') => Modal.confirm({
     title: '确认人工处置？', content: '该工具调用结果未知，请根据外部系统实际状态谨慎选择。',
+    okText: '确认', cancelText: '返回',
     onOk: async () => {
       try { await workflowApi.resolveWorkflowManualIntervention(intent.run_id, intent.id, { expected_generation: generation, action, output_summary: summary }); message.success({ content: '操作成功', duration: 2 }); onChanged(); }
       catch (error: unknown) { message.error({ content: (error as { response?: { data?: { error?: string } } }).response?.data?.error || '操作失败', duration: 0 }); onChanged(); }

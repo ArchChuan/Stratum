@@ -67,6 +67,31 @@ export const withTenantQuery = async <R extends QueryResultRow = QueryResultRow>
   }
 };
 
+export const withTenantMutation = async <R extends QueryResultRow = QueryResultRow>(
+  pool: DatabasePool,
+  tenantID: string,
+  query: QuerySpec,
+): Promise<QueryResult<R>> => {
+  requireUUID(tenantID, 'tenant_id');
+  if (!query.text.trim() || !Array.isArray(query.values)) throw new Error('parameterized query is required');
+  const client = await pool.connect();
+  let began = false;
+  try {
+    await client.query('BEGIN');
+    began = true;
+    await client.query("SELECT set_config('search_path', $1, true)", [`tenant_${tenantID},public`]);
+    const result = await client.query<R>(query.text, query.values);
+    await client.query('COMMIT');
+    began = false;
+    return result;
+  } catch (error) {
+    if (began) await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 export const elevateGeneratedActor = async (
   pool: DatabasePool,
   tenantID: string,

@@ -12,6 +12,7 @@ import type { EvidenceRecord } from './stateful/core/evidence';
 import { parseRuntimeOptions, type SystemPack } from './stateful/core/runtime';
 import { dashboardActions } from './stateful/packs/dashboard';
 import { executeIAMPack } from './stateful/packs/iam';
+import { executeWorkflowPack } from './stateful/packs/workflow';
 
 interface ManifestCapability { id: string; domain: string }
 interface SafeResultItem { id: string; status: 'passed' }
@@ -121,6 +122,10 @@ const executePack = async (
 ): Promise<void> => {
   if (pack === 'iam') {
     completedActions.push(...await executeIAMPack({ actors, pool, evidence, webURL, backendURL }));
+    return;
+  }
+  if (pack === 'workflow') {
+    completedActions.push(...await executeWorkflowPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
     return;
   }
   if (pack !== 'dashboard') throw new Error(`stateful pack ${pack} is not implemented`);

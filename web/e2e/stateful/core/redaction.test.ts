@@ -11,6 +11,7 @@ import {
   setGeneratedActorVerifiedEmail,
   suspendDefaultTenant,
   withTenantQuery,
+  withTenantMutation,
 } from './database';
 import { redactSensitive } from './redaction';
 
@@ -69,6 +70,43 @@ describe('stateful E2E security boundaries', () => {
     ]);
     expect(result.rows).toEqual([{ count: 1 }]);
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('commits parameterized tenant setup mutations and rolls back failures', async () => {
+    const committedQuery = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ rowCount: 1 })
+      .mockResolvedValueOnce(undefined);
+    const committedRelease = vi.fn();
+    const committedPool = {
+      connect: vi.fn().mockResolvedValue({ query: committedQuery, release: committedRelease }),
+    };
+
+    await withTenantMutation(committedPool, '123e4567-e89b-42d3-a456-426614174000', {
+      text: 'INSERT INTO workflow_runs (id) VALUES ($1)', values: ['123e4567-e89b-42d3-a456-426614174001'],
+    });
+
+    expect(committedQuery.mock.calls.map(([text]) => text)).toEqual([
+      'BEGIN', "SELECT set_config('search_path', $1, true)",
+      'INSERT INTO workflow_runs (id) VALUES ($1)', 'COMMIT',
+    ]);
+    expect(committedRelease).toHaveBeenCalledOnce();
+
+    const failure = new Error('insert failed');
+    const failedQuery = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce(undefined);
+    const failedRelease = vi.fn();
+    const failedPool = { connect: vi.fn().mockResolvedValue({ query: failedQuery, release: failedRelease }) };
+
+    await expect(withTenantMutation(failedPool, '123e4567-e89b-42d3-a456-426614174000', {
+      text: 'INSERT INTO workflow_runs (id) VALUES ($1)', values: ['123e4567-e89b-42d3-a456-426614174001'],
+    })).rejects.toThrow('insert failed');
+    expect(failedQuery).toHaveBeenLastCalledWith('ROLLBACK');
+    expect(failedRelease).toHaveBeenCalledOnce();
   });
 
   it('creates a distinct browser context for every system actor', async () => {
