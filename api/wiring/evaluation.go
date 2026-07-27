@@ -289,7 +289,7 @@ func (r experimentKnowledgeRevisionResolver) ResolveKnowledgeRevision(
 	if err != nil || !found {
 		return agentport.KnowledgeRevisionAssignment{}, found, err
 	}
-	revision, err := r.LoadKnowledgeRuntimeRevision(ctx, tenantID, workspaceName, assignment.RevisionID)
+	revision, err := r.LoadKnowledgeRevision(ctx, tenantID, workspaceName, assignment.RevisionID)
 	if err != nil {
 		return agentport.KnowledgeRevisionAssignment{}, false, err
 	}
@@ -298,7 +298,7 @@ func (r experimentKnowledgeRevisionResolver) ResolveKnowledgeRevision(
 	}, true, nil
 }
 
-func (r experimentKnowledgeRevisionResolver) LoadKnowledgeRuntimeRevision(
+func (r experimentKnowledgeRevisionResolver) LoadKnowledgeRevision(
 	ctx context.Context, tenantID, workspaceName, revisionID string,
 ) (agentport.KnowledgeRetrievalRevision, error) {
 	_, snapshot, err := r.adapter.loadRevision(ctx, tenantID, evaldomain.ResourceRef{

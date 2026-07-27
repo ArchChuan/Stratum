@@ -239,7 +239,7 @@ func TestExperimentKnowledgeRevisionResolverLoadsExactRuntimeAndRejectsDocumentD
 		revisions: publishedKnowledgeRevisions(t, snapshot), source: source,
 	}}
 
-	revision, err := resolver.LoadKnowledgeRuntimeRevision(
+	revision, err := resolver.LoadKnowledgeRevision(
 		context.Background(), "tenant-1", "support", "published-1",
 	)
 	if err != nil || revision.RevisionID != "published-1" || revision.WorkspaceID != "workspace-id" ||
@@ -248,7 +248,7 @@ func TestExperimentKnowledgeRevisionResolverLoadsExactRuntimeAndRejectsDocumentD
 	}
 	source.documents = append(source.documents,
 		&knowledgedomain.Document{ID: "doc-2", ContentHash: "hash-2", IngestStatus: "completed"})
-	if _, err := resolver.LoadKnowledgeRuntimeRevision(
+	if _, err := resolver.LoadKnowledgeRevision(
 		context.Background(), "tenant-1", "support", "published-1",
 	); err == nil || !strings.Contains(err.Error(), "document set changed") {
 		t.Fatalf("document drift error=%v", err)

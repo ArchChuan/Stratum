@@ -51,9 +51,19 @@ type KnowledgeRevisionAssignment struct {
 	Variant      string
 }
 
+type KnowledgeRevisionPin struct {
+	RevisionID   string `json:"revision_id"`
+	ExperimentID string `json:"experiment_id"`
+	Variant      string `json:"variant"`
+}
+
 type KnowledgeRevisionResolver interface {
 	ResolveKnowledgeRevision(
 		ctx context.Context,
 		tenantID, workspaceName, subjectID string,
 	) (KnowledgeRevisionAssignment, bool, error)
+	LoadKnowledgeRevision(
+		ctx context.Context,
+		tenantID, workspaceName, revisionID string,
+	) (KnowledgeRetrievalRevision, error)
 }

@@ -33,25 +33,27 @@ func approvedToolResumeError(consumed bool, runErr error) error {
 }
 
 type ToolApprovalPayload struct {
-	TenantID             string             `json:"tenant_id"`
-	DecisionID           string             `json:"decision_id"`
-	ExecutionID          string             `json:"execution_id"`
-	TraceID              string             `json:"trace_id"`
-	AgentID              string             `json:"agent_id"`
-	UserID               string             `json:"user_id"`
-	ConversationID       string             `json:"conversation_id"`
-	ToolCallID           string             `json:"tool_call_id"`
-	ServerID             string             `json:"server_id"`
-	ToolName             string             `json:"tool_name"`
-	RiskLevel            port.ToolRiskLevel `json:"risk_level"`
-	Query                string             `json:"query"`
-	Arguments            map[string]any     `json:"arguments"`
-	PinnedSkillRevisions map[string]string  `json:"pinned_skill_revisions,omitempty"`
-	PinnedMCPRevisions   map[string]string  `json:"pinned_mcp_revisions,omitempty"`
-	PolicyVersion        string             `json:"policy_version"`
-	ArgumentsDigest      string             `json:"arguments_digest"`
-	SkillRevisionsDigest string             `json:"skill_revisions_digest"`
-	MCPRevisionsDigest   string             `json:"mcp_revisions_digest"`
+	TenantID                 string                               `json:"tenant_id"`
+	DecisionID               string                               `json:"decision_id"`
+	ExecutionID              string                               `json:"execution_id"`
+	TraceID                  string                               `json:"trace_id"`
+	AgentID                  string                               `json:"agent_id"`
+	UserID                   string                               `json:"user_id"`
+	ConversationID           string                               `json:"conversation_id"`
+	ToolCallID               string                               `json:"tool_call_id"`
+	ServerID                 string                               `json:"server_id"`
+	ToolName                 string                               `json:"tool_name"`
+	RiskLevel                port.ToolRiskLevel                   `json:"risk_level"`
+	Query                    string                               `json:"query"`
+	Arguments                map[string]any                       `json:"arguments"`
+	PinnedSkillRevisions     map[string]string                    `json:"pinned_skill_revisions,omitempty"`
+	PinnedMCPRevisions       map[string]string                    `json:"pinned_mcp_revisions,omitempty"`
+	PinnedKnowledgeRevisions map[string]port.KnowledgeRevisionPin `json:"pinned_knowledge_revisions,omitempty"`
+	PolicyVersion            string                               `json:"policy_version"`
+	ArgumentsDigest          string                               `json:"arguments_digest"`
+	SkillRevisionsDigest     string                               `json:"skill_revisions_digest"`
+	MCPRevisionsDigest       string                               `json:"mcp_revisions_digest"`
+	KnowledgeRevisionsDigest string                               `json:"knowledge_revisions_digest"`
 }
 
 type ToolApprovalService struct {
@@ -82,6 +84,10 @@ func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalP
 	if err != nil {
 		return "", fmt.Errorf("digest tool approval MCP revisions: %w", err)
 	}
+	payload.KnowledgeRevisionsDigest, err = canonicalKnowledgeRevisionsDigest(payload.PinnedKnowledgeRevisions)
+	if err != nil {
+		return "", fmt.Errorf("digest tool approval Knowledge revisions: %w", err)
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("marshal approval payload: %w", err)
@@ -96,9 +102,10 @@ func (s *ToolApprovalService) Request(ctx context.Context, payload ToolApprovalP
 		ExecutionID: payload.ExecutionID, TraceID: payload.TraceID, AgentID: payload.AgentID, UserID: payload.UserID,
 		ToolCallID: payload.ToolCallID, ServerID: payload.ServerID, ToolName: payload.ToolName, RiskLevel: string(payload.RiskLevel),
 		ArgumentsDigest: payload.ArgumentsDigest, SkillRevisionsDigest: payload.SkillRevisionsDigest,
-		MCPRevisionsDigest: payload.MCPRevisionsDigest,
-		PolicyVersion:      payload.PolicyVersion,
-		EncryptedPayload:   encrypted, Status: "pending", ExpiresAt: expires,
+		MCPRevisionsDigest:       payload.MCPRevisionsDigest,
+		KnowledgeRevisionsDigest: payload.KnowledgeRevisionsDigest,
+		PolicyVersion:            payload.PolicyVersion,
+		EncryptedPayload:         encrypted, Status: "pending", ExpiresAt: expires,
 	})
 	if err != nil {
 		return "", fmt.Errorf("create tool approval: %w", err)
@@ -151,7 +158,8 @@ func toolApprovalBindingMatches(tenantID string, row domain.ToolApproval, payloa
 	argumentsDigest, argumentsErr := CanonicalToolArgumentsDigest(payload.Arguments)
 	skillDigest, skillErr := canonicalSkillRevisionsDigest(payload.PinnedSkillRevisions)
 	mcpDigest, mcpErr := canonicalMCPRevisionsDigest(payload.PinnedMCPRevisions)
-	return argumentsErr == nil && skillErr == nil && mcpErr == nil &&
+	knowledgeDigest, knowledgeErr := canonicalKnowledgeRevisionsDigest(payload.PinnedKnowledgeRevisions)
+	return argumentsErr == nil && skillErr == nil && mcpErr == nil && knowledgeErr == nil &&
 		payload.TenantID == tenantID &&
 		row.DecisionID == payload.DecisionID &&
 		row.ExecutionID == payload.ExecutionID &&
@@ -168,6 +176,8 @@ func toolApprovalBindingMatches(tenantID string, row domain.ToolApproval, payloa
 		row.SkillRevisionsDigest == skillDigest &&
 		row.MCPRevisionsDigest == payload.MCPRevisionsDigest &&
 		row.MCPRevisionsDigest == mcpDigest &&
+		row.KnowledgeRevisionsDigest == payload.KnowledgeRevisionsDigest &&
+		row.KnowledgeRevisionsDigest == knowledgeDigest &&
 		row.PolicyVersion == payload.PolicyVersion
 }
 

@@ -5,12 +5,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 )
 
 const (
-	toolArgumentsDigestPrefix  = "tool-arguments:v1:sha256:"
-	skillRevisionsDigestPrefix = "skill-revisions:v1:sha256:"
-	mcpRevisionsDigestPrefix   = "mcp-revisions:v1:sha256:"
+	toolArgumentsDigestPrefix      = "tool-arguments:v1:sha256:"
+	skillRevisionsDigestPrefix     = "skill-revisions:v1:sha256:"
+	mcpRevisionsDigestPrefix       = "mcp-revisions:v1:sha256:"
+	knowledgeRevisionsDigestPrefix = "knowledge-revisions:v1:sha256:"
 )
 
 func CanonicalToolArgumentsDigest(arguments map[string]any) (string, error) {
@@ -23,6 +26,10 @@ func canonicalSkillRevisionsDigest(revisions map[string]string) (string, error) 
 
 func canonicalMCPRevisionsDigest(revisions map[string]string) (string, error) {
 	return canonicalJSONDigest(mcpRevisionsDigestPrefix, revisions)
+}
+
+func canonicalKnowledgeRevisionsDigest(revisions map[string]port.KnowledgeRevisionPin) (string, error) {
+	return canonicalJSONDigest(knowledgeRevisionsDigestPrefix, revisions)
 }
 
 func canonicalJSONDigest(prefix string, value any) (string, error) {

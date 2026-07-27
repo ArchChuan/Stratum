@@ -84,13 +84,23 @@ func (historyCompactorFake) CompactHistory(context.Context, []port.LLMMessage) (
 }
 
 type knowledgeRevisionResolverFake struct {
-	assignment port.KnowledgeRevisionAssignment
+	assignment      port.KnowledgeRevisionAssignment
+	assignmentCalls int
+	loadCalls       int
 }
 
-func (f knowledgeRevisionResolverFake) ResolveKnowledgeRevision(
+func (f *knowledgeRevisionResolverFake) ResolveKnowledgeRevision(
 	context.Context, string, string, string,
 ) (port.KnowledgeRevisionAssignment, bool, error) {
+	f.assignmentCalls++
 	return f.assignment, true, nil
+}
+
+func (f *knowledgeRevisionResolverFake) LoadKnowledgeRevision(
+	context.Context, string, string, string,
+) (port.KnowledgeRetrievalRevision, error) {
+	f.loadCalls++
+	return f.assignment.Revision, nil
 }
 
 type knowledgeRevisionSearchFake struct {
@@ -183,11 +193,12 @@ func TestAssembleOptionsPinsKnowledgeExperimentRevisionForTraceAndSearch(t *test
 		ScoreThreshold: 0.7, Reranking: "score_desc", QueryRewrite: "lowercase_trim",
 	}
 	search := &knowledgeRevisionSearchFake{}
+	resolver := &knowledgeRevisionResolverFake{assignment: port.KnowledgeRevisionAssignment{
+		Revision: revision, ExperimentID: "experiment-1", Variant: "canary",
+	}}
 	svc := NewAgentService(AgentServiceDeps{
-		KnowledgeRevisionResolver: knowledgeRevisionResolverFake{assignment: port.KnowledgeRevisionAssignment{
-			Revision: revision, ExperimentID: "experiment-1", Variant: "canary",
-		}},
-		RAGSearch: search,
+		KnowledgeRevisionResolver: resolver,
+		RAGSearch:                 search,
 	})
 	agent := &optionCaptureAgent{config: &domain.AgentConfig{
 		ID: "agent-1", MaxIterations: 3, KnowledgeWorkspaceIDs: []string{"workspace-1"},
@@ -210,6 +221,30 @@ func TestAssembleOptionsPinsKnowledgeExperimentRevisionForTraceAndSearch(t *test
 		search.revision.RevisionID != revision.RevisionID {
 		t.Fatalf("content=%q mutable=%d revision=%d snapshot=%+v err=%v",
 			content, search.mutableCalls, search.revisionCalls, search.revision, err)
+	}
+}
+
+func TestAssembleOptionsLoadsPinnedKnowledgeRevisionWithoutReassignment(t *testing.T) {
+	revision := port.KnowledgeRetrievalRevision{
+		RevisionID: "knowledge-revision-1", WorkspaceID: "workspace-1", WorkspaceName: "Knowledge One",
+		EmbeddingModel: "embedding-1", QueryMode: "hybrid", TopK: 2,
+		Reranking: "none", QueryRewrite: "none",
+	}
+	resolver := &knowledgeRevisionResolverFake{assignment: port.KnowledgeRevisionAssignment{Revision: revision}}
+	svc := NewAgentService(AgentServiceDeps{KnowledgeRevisionResolver: resolver, RAGSearch: &knowledgeRevisionSearchFake{}})
+	agent := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: "agent-1", MaxIterations: 3, KnowledgeWorkspaceIDs: []string{"workspace-1"},
+		KnowledgeWorkspaceNames: []string{"Knowledge One"},
+	}}
+	_, _, err := svc.assembleOptions(context.Background(), agent,
+		ExecRequest{ConversationID: "conversation-1"}, ExecMeta{
+			TenantID: "tenant-1", TraceID: "trace-1", KnowledgeAssignmentsPinned: true,
+			PinnedKnowledgeRevisions: map[string]port.KnowledgeRevisionPin{
+				"Knowledge One": {RevisionID: "knowledge-revision-1", ExperimentID: "experiment-1", Variant: "canary"},
+			},
+		}, "execution-1")
+	if err != nil || resolver.assignmentCalls != 0 || resolver.loadCalls != 1 {
+		t.Fatalf("assignmentCalls=%d loadCalls=%d err=%v", resolver.assignmentCalls, resolver.loadCalls, err)
 	}
 }
 

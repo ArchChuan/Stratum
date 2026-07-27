@@ -576,10 +576,12 @@ type ExecRequest struct {
 // ExecMeta carries per-call routing metadata sourced from middleware
 // (tenant, trace) — never inferred from request body.
 type ExecMeta struct {
-	TenantID       string
-	TraceID        string
-	Stream         bool
-	EvolutionTrace EvolutionTraceMetadata
+	TenantID                   string
+	TraceID                    string
+	Stream                     bool
+	EvolutionTrace             EvolutionTraceMetadata
+	KnowledgeAssignmentsPinned bool
+	PinnedKnowledgeRevisions   map[string]port.KnowledgeRevisionPin
 }
 
 // ExecutionRowDTO is the wire shape emitted by ListExecutions.
@@ -953,7 +955,8 @@ func (s *AgentService) ResumeToolApproval(ctx context.Context, tenantID, approva
 		return nil, 0, ErrNotFound
 	}
 	req := ExecRequest{Query: payload.Query, ConversationID: payload.ConversationID, UserID: payload.UserID}
-	meta := ExecMeta{TenantID: tenantID, TraceID: payload.TraceID}
+	meta := ExecMeta{TenantID: tenantID, TraceID: payload.TraceID,
+		KnowledgeAssignmentsPinned: true, PinnedKnowledgeRevisions: payload.PinnedKnowledgeRevisions}
 	_, options, err := s.assembleOptions(ctx, a, req, meta, payload.ExecutionID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("resume tool approval: assemble options: %w", err)
@@ -1177,9 +1180,23 @@ func (s *AgentService) assembleOptions(
 			if index < len(config.KnowledgeWorkspaceNames) && config.KnowledgeWorkspaceNames[index] != "" {
 				workspaceName = config.KnowledgeWorkspaceNames[index]
 			}
-			assignment, found, err := s.deps.KnowledgeRevisionResolver.ResolveKnowledgeRevision(
-				ctx, meta.TenantID, workspaceName, subjectID,
-			)
+			var assignment port.KnowledgeRevisionAssignment
+			var found bool
+			var err error
+			if meta.KnowledgeAssignmentsPinned {
+				pin, pinned := meta.PinnedKnowledgeRevisions[workspaceName]
+				if !pinned {
+					continue
+				}
+				assignment.Revision, err = s.deps.KnowledgeRevisionResolver.LoadKnowledgeRevision(
+					ctx, meta.TenantID, workspaceName, pin.RevisionID,
+				)
+				assignment.ExperimentID, assignment.Variant, found = pin.ExperimentID, pin.Variant, true
+			} else {
+				assignment, found, err = s.deps.KnowledgeRevisionResolver.ResolveKnowledgeRevision(
+					ctx, meta.TenantID, workspaceName, subjectID,
+				)
+			}
 			if err != nil {
 				return ctx, nil, fmt.Errorf("resolve Knowledge %s experiment assignment: %w", workspaceName, err)
 			}
@@ -1305,6 +1322,14 @@ func (s *AgentService) assembleOptions(
 		for skillID, activation := range skillCatalog {
 			pinned[skillID] = activation.RevisionID
 		}
+		pinnedKnowledge := make(map[string]port.KnowledgeRevisionPin, len(knowledgeAssignments))
+		for workspaceName, assignment := range knowledgeAssignments {
+			pinnedKnowledge[workspaceName] = port.KnowledgeRevisionPin{
+				RevisionID:   assignment.Revision.RevisionID,
+				ExperimentID: assignment.ExperimentID,
+				Variant:      assignment.Variant,
+			}
+		}
 		var requestApproval port.ToolApprovalRequester
 		if s.deps.ApprovalService != nil {
 			approvalService := s.deps.ApprovalService
@@ -1315,7 +1340,8 @@ func (s *AgentService) assembleOptions(
 					ToolCallID: request.ToolCallID, ServerID: request.ServerID,
 					ToolName: request.ToolName, RiskLevel: request.RiskLevel,
 					Query: query, Arguments: request.Arguments, PinnedSkillRevisions: pinned,
-					PinnedMCPRevisions: map[string]string{request.ServerID: mcpAssignments[request.ServerID].RevisionID},
+					PinnedMCPRevisions:       map[string]string{request.ServerID: mcpAssignments[request.ServerID].RevisionID},
+					PinnedKnowledgeRevisions: pinnedKnowledge,
 				})
 			}
 		}

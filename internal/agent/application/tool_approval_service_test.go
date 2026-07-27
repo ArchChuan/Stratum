@@ -65,6 +65,7 @@ func TestToolApprovalServiceEncryptsPayloadAndCreatesSafeCheckpoint(t *testing.T
 	require.Contains(t, repo.row.ArgumentsDigest, "tool-arguments:v1:sha256:")
 	require.Contains(t, repo.row.SkillRevisionsDigest, "skill-revisions:v1:sha256:")
 	require.Contains(t, repo.row.MCPRevisionsDigest, "mcp-revisions:v1:sha256:")
+	require.Contains(t, repo.row.KnowledgeRevisionsDigest, "knowledge-revisions:v1:sha256:")
 }
 
 func TestToolApprovalServiceRejectsTamperedBinding(t *testing.T) {
@@ -76,7 +77,10 @@ func TestToolApprovalServiceRejectsTamperedBinding(t *testing.T) {
 		ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
 		Arguments: map[string]any{"order_id": "order-1"}, PinnedSkillRevisions: map[string]string{"skill-1": "revision-1"},
 		PinnedMCPRevisions: map[string]string{"orders": "mcp-revision-1"},
-		PolicyVersion:      "policy-1",
+		PinnedKnowledgeRevisions: map[string]port.KnowledgeRevisionPin{
+			"support": {RevisionID: "knowledge-revision-1", ExperimentID: "experiment-1", Variant: "canary"},
+		},
+		PolicyVersion: "policy-1",
 	}
 	if _, err := svc.Request(context.Background(), payload); err != nil {
 		t.Fatal(err)
@@ -99,6 +103,7 @@ func TestToolApprovalServiceRejectsTamperedBinding(t *testing.T) {
 		{name: "arguments", mutate: func(row *domain.ToolApproval) { row.ArgumentsDigest = "other" }},
 		{name: "skill revisions", mutate: func(row *domain.ToolApproval) { row.SkillRevisionsDigest = "other" }},
 		{name: "MCP revisions", mutate: func(row *domain.ToolApproval) { row.MCPRevisionsDigest = "other" }},
+		{name: "Knowledge revisions", mutate: func(row *domain.ToolApproval) { row.KnowledgeRevisionsDigest = "other" }},
 		{name: "policy", mutate: func(row *domain.ToolApproval) { row.PolicyVersion = "other" }},
 	}
 
