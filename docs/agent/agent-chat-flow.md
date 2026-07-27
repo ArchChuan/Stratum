@@ -23,7 +23,7 @@ sequenceDiagram
     Service->>DB: load managed row
     Service->>Service: compose Profile 2026-07-23.v1
     Service->>Service: authorize member self or admin tenant scope
-    Service->>LLM: exactly official-search + diagnose tools
+    Service->>LLM: role-filtered official-search + diagnose + proposal tool
     LLM->>Tools: bounded typed call(s)
     Tools-->>LLM: citations / diagnostic evidence or explicit gap
     LLM-->>UI: concise streamed summary
@@ -35,6 +35,34 @@ sequenceDiagram
 冻结的 `{"error":"..."}`：未配置/不可用模型为 `system assistant model unavailable`，非法模型为
 `invalid system assistant model`，通用修改为 `system assistant is platform managed`。官方无匹配和 area 失败进入
 typed artifact，不泄露上游原始错误。
+
+## Governed Resource Proposal
+
+```mermaid
+sequenceDiagram
+    participant Admin as Admin Chat UI
+    participant Agent as Managed Assistant
+    participant Proposal as ProposalService
+    participant DB as Tenant PostgreSQL
+    participant Owner as Owning Context Adapter
+    Admin->>Agent: request resource create/update
+    Agent->>Proposal: strict typed proposal arguments
+    Proposal->>Proposal: authorize and validate closed payload
+    Proposal->>DB: ready_for_review + append-only event
+    Agent-->>Admin: resource_change_proposal artifact
+    Admin->>Proposal: edit or confirm through review route
+    Proposal->>DB: atomic confirm and applying claim
+    Proposal->>Proposal: reauthorize and compare baseline
+    Proposal->>Owner: exactly one safe create/update call
+    Owner-->>Proposal: credential-free readback + fingerprint
+    Proposal->>DB: terminal state + audit event
+    Proposal-->>Admin: applied/stale/failed/unknown outcome
+```
+
+只有 admin/owner 能创建、读取、编辑、取消或确认 proposal。更新操作在创建 proposal 时保存安全 baseline fingerprint，
+apply 前再次解析 owning context 当前投影；不同则进入 `stale`，不调用 applier。`unknown_outcome` 表示副作用可能已发生，
+API 和 UI 都不提供重试。MCP update 保留现有凭据但不允许读出或替换；Knowledge 不允许改名或上传文档；Skill 只改
+draft bundle，不 publish；Agent 不允许以托管系统助手为目标。
 
 ## Normal Run
 
