@@ -8,6 +8,7 @@ var ErrConcurrencyLimit = errors.New("concurrency limit reached")
 // Repository / service-level sentinels.
 var (
 	ErrSkillNotFound        = errors.New("skill not found")
+	ErrSkillDraftNotFound   = errors.New("skill has no draft revision")
 	ErrSkillNameConflict    = errors.New("skill name already exists")
 	ErrSkillLinked          = errors.New("skill still linked to agents")
 	ErrSkillTypeImmutable   = errors.New("cannot change skill type")
