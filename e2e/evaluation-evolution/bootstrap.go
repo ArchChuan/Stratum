@@ -361,9 +361,59 @@ func executeLiveKnowledgeCanaryFlow(
 	liveKnowledge["experimentId"] = experiment.Experiment.ID
 	liveKnowledge["onlineTraceId"] = onlineTraceID
 	liveKnowledge["onlineVariant"] = feedbackRow["variant"]
+	assertKnowledgeRuntimeOutageFailsClosed(client, apiURL, token, liveKnowledge, agentID,
+		experiment.Deployment.CanaryPercent, runID)
 	assertKnowledgeDocumentDriftFailsClosed(client, apiURL, token, liveKnowledge, agentID,
 		experiment.Deployment.CanaryPercent, runID)
 	assertKnowledgeTenantIsolation(client, apiURL, token, liveKnowledge, runID)
+}
+
+func assertKnowledgeRuntimeOutageFailsClosed(
+	client *http.Client, apiURL, token string, liveKnowledge map[string]any, agentID string,
+	canaryPercent int, runID string,
+) {
+	workspaceName := liveKnowledge["resourceId"].(string)
+	milvusContainer := mustEnv("E2E_MILVUS_CONTAINER")
+	assertMilvusContainerHealthy(milvusContainer)
+	setMilvusProxyEnabled(false)
+	restored := false
+	defer func() {
+		if !restored {
+			setMilvusProxyEnabled(true)
+		}
+	}()
+
+	conversationID := createResourceCanaryConversation(client, apiURL, token, agentID, workspaceName,
+		canaryPercent, runID+" Knowledge outage")
+	requestsBefore := readCounter(mustEnv("E2E_LLM_EVIDENCE"), "requests")
+	var failure struct {
+		Error string `json:"error"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use Knowledge while its retrieval dependency is unavailable.",
+			"conversation_id": conversationID}, http.StatusInternalServerError, &failure)
+	if failure.Error != "internal server error" ||
+		readCounter(mustEnv("E2E_LLM_EVIDENCE"), "requests") != requestsBefore+1 {
+		panic("live Knowledge runtime dependency failure did not stop before a second LLM call")
+	}
+	liveKnowledge["runtimeOutageRejected"] = true
+
+	setMilvusProxyEnabled(true)
+	restored = true
+	assertMilvusContainerHealthy(milvusContainer)
+	waitForTCP("127.0.0.1:" + mustEnv("E2E_MILVUS_PORT"))
+	recoveryConversationID := createResourceCanaryConversation(client, apiURL, token, agentID, workspaceName,
+		canaryPercent, runID+" Knowledge outage recovery")
+	var recovery map[string]any
+	requestJSON(client, http.MethodPost, apiURL+"/agents/"+agentID+"/execute", token,
+		map[string]any{"query": "Use Knowledge to find the evolution center recovery code.",
+			"conversation_id": recoveryConversationID}, http.StatusOK, &recovery)
+	recoveryJSON, _ := json.Marshal(recovery)
+	if recovery["output"] != "bounded-agent-result" ||
+		!bytes.Contains(recoveryJSON, []byte("stratum_search_knowledge")) {
+		panic("live Knowledge runtime did not recover after dependency restoration")
+	}
+	liveKnowledge["runtimeOutageRecovered"] = true
 }
 
 func assertKnowledgeDocumentDriftFailsClosed(

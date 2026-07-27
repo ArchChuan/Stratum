@@ -107,6 +107,7 @@ type knowledgeRevisionSearchFake struct {
 	mutableCalls  int
 	revisionCalls int
 	revision      port.KnowledgeRetrievalRevision
+	revisionErr   error
 }
 
 func (f *knowledgeRevisionSearchFake) SearchKnowledge(
@@ -121,6 +122,9 @@ func (f *knowledgeRevisionSearchFake) SearchKnowledgeRevision(
 ) (string, error) {
 	f.revisionCalls++
 	f.revision = revision
+	if f.revisionErr != nil {
+		return "", f.revisionErr
+	}
 	return "canary knowledge", nil
 }
 
@@ -221,6 +225,39 @@ func TestAssembleOptionsPinsKnowledgeExperimentRevisionForTraceAndSearch(t *test
 		search.revision.RevisionID != revision.RevisionID {
 		t.Fatalf("content=%q mutable=%d revision=%d snapshot=%+v err=%v",
 			content, search.mutableCalls, search.revisionCalls, search.revision, err)
+	}
+}
+
+func TestAssembleOptionsClassifiesKnowledgeRevisionSearchFailure(t *testing.T) {
+	revision := port.KnowledgeRetrievalRevision{
+		RevisionID: "knowledge-revision-1", WorkspaceID: "workspace-1", WorkspaceName: "Knowledge One",
+	}
+	searchErr := errors.New("vector backend unavailable")
+	search := &knowledgeRevisionSearchFake{revisionErr: searchErr}
+	svc := NewAgentService(AgentServiceDeps{
+		KnowledgeRevisionResolver: &knowledgeRevisionResolverFake{assignment: port.KnowledgeRevisionAssignment{
+			Revision: revision, ExperimentID: "experiment-1", Variant: "canary",
+		}},
+		RAGSearch: search,
+	})
+	agent := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: "agent-1", MaxIterations: 3, KnowledgeWorkspaceIDs: []string{"workspace-1"},
+		KnowledgeWorkspaceNames: []string{"Knowledge One"},
+	}}
+	_, options, err := svc.assembleOptions(context.Background(), agent, ExecRequest{ConversationID: "conversation-1"},
+		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1")
+	if err != nil {
+		t.Fatalf("assembleOptions() error: %v", err)
+	}
+	cfg := &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+
+	_, err = cfg.RAGSearchFn(context.Background(), []string{"Knowledge One"}, "query", 5)
+	if !errors.Is(err, domain.ErrKnowledgeRevisionUnavailable) || !errors.Is(err, searchErr) {
+		t.Fatalf("RAGSearchFn() error = %v, want classified revision error wrapping %v", err, searchErr)
+	}
+	if search.mutableCalls != 0 || search.revisionCalls != 1 {
+		t.Fatalf("mutableCalls=%d revisionCalls=%d", search.mutableCalls, search.revisionCalls)
 	}
 }
 

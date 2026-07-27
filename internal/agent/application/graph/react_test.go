@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/application/graph"
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/tokenutil"
@@ -315,6 +316,34 @@ func TestBuildReActGraph_ActiveSkillIntersectsKnowledgeWorkspaces(t *testing.T) 
 	}, graph.RunConfig{MaxSteps: 8})
 	require.NoError(t, err)
 	require.Equal(t, []string{"kb-allowed"}, searched)
+}
+
+func TestBuildReActGraph_KnowledgeRevisionFailureStopsBeforeSecondLLMCall(t *testing.T) {
+	stub := &capGWSequence{responses: []port.CapabilityResponse{
+		{ToolCalls: []port.ToolCall{{
+			ID: "knowledge-1", Name: "stratum_search_knowledge",
+			Arguments: map[string]any{"workspaces": []any{"Knowledge One"}, "query": "q"},
+		}}},
+		{Content: "must not turn a failed revision search into success"},
+	}}
+	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
+	require.NoError(t, err)
+
+	state, err := cg.Invoke(context.Background(), graph.ReActState{
+		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "search"}},
+		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
+		AgentKnowledgeWorkspaceIDs: []string{"Knowledge One"},
+		RAGSearchFn: func(context.Context, []string, string, int) (string, error) {
+			return "", fmt.Errorf("%w: vector backend unavailable", domain.ErrKnowledgeRevisionUnavailable)
+		},
+	}, graph.RunConfig{MaxSteps: 5})
+
+	require.ErrorIs(t, err, domain.ErrKnowledgeRevisionUnavailable)
+	require.Len(t, stub.llmReqs, 1)
+	require.Len(t, state.ToolObservations, 1)
+	require.Equal(t, domain.ToolTraceStatusError, state.ToolObservations[0].Status)
+	require.Len(t, state.TraceEvents, 4)
+	require.Equal(t, domain.TraceEventToolFailed, state.TraceEvents[3].EventType)
 }
 
 func toolNames(tools []port.ToolDefinition) []string {

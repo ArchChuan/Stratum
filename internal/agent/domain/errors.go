@@ -13,6 +13,7 @@ var (
 	ErrOfficialEvidenceNotFound           = errors.New("official evidence not found")
 	ErrDiagnosticForbidden                = errors.New("diagnostic forbidden")
 	ErrDiagnosticEvidenceUnavailable      = errors.New("diagnostic evidence unavailable")
+	ErrKnowledgeRevisionUnavailable       = errors.New("knowledge revision unavailable")
 	ErrAssistantModelUnavailable          = errors.New("system assistant model unavailable")
 	ErrInvalidSystemAssistantModel        = errors.New("invalid system assistant model")
 	ErrSystemAssistantRevisionUnsupported = errors.New("system assistant revisions are unsupported")

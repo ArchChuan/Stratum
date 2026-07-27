@@ -126,6 +126,25 @@ func TestKnowledgeCanaryFailsClosedAfterDocumentDrift(t *testing.T) {
 	}
 }
 
+func TestKnowledgeCanaryFailsClosedDuringRuntimeDependencyOutage(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("bootstrap.go")
+	if err != nil {
+		t.Fatalf("read bootstrap source: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"assertKnowledgeRuntimeOutageFailsClosed", "runtimeOutageRejected", "runtimeOutageRecovered",
+		`setMilvusProxyEnabled(false)`, `setMilvusProxyEnabled(true)`,
+		`readCounter(mustEnv("E2E_LLM_EVIDENCE"), "requests")`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Knowledge runtime outage evidence is missing %q", required)
+		}
+	}
+}
+
 func TestKnowledgeCanaryEvidenceIsTenantIsolated(t *testing.T) {
 	t.Parallel()
 

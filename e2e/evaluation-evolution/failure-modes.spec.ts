@@ -155,6 +155,8 @@ test('Knowledge online canary searches the immutable candidate and attributes fe
   const evidence = manifest.liveEvidence.knowledge;
   expect(evidence.onlineTraceId).not.toBe('');
   expect(evidence.onlineVariant).toBe('canary');
+  expect(evidence.runtimeOutageRejected).toBe(true);
+  expect(evidence.runtimeOutageRecovered).toBe(true);
   expect(evidence.documentDriftRejected).toBe(true);
   expect(evidence.crossTenantIsolated).toBe(true);
   const candidateRun = await adminApi.get(`/evaluations/runs/${evidence.candidateRunId}`);

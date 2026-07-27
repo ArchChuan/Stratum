@@ -1378,7 +1378,7 @@ func (s *AgentService) assembleOptions(
 				}
 				content, err := revisionSearch.SearchKnowledgeRevision(rctx, tenantID, assignment.Revision, query)
 				if err != nil {
-					return "", err
+					return "", fmt.Errorf("%w: %w", domain.ErrKnowledgeRevisionUnavailable, err)
 				}
 				combined.WriteString(content)
 			}

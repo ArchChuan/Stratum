@@ -408,6 +408,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 			var content string
 			status := domain.ToolTraceStatusSuccess
 			errMsg := ""
+			var fatalToolErr error
 			s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
 				TraceID:         s.TraceID,
 				ConversationID:  s.ConversationID,
@@ -558,6 +559,9 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 						content = fmt.Sprintf("error: %v", ragErr)
 						status = domain.ToolTraceStatusError
 						errMsg = ragErr.Error()
+						if errors.Is(ragErr, domain.ErrKnowledgeRevisionUnavailable) {
+							fatalToolErr = ragErr
+						}
 					}
 				}
 				toolLatencyMs := time.Since(toolStart).Milliseconds()
@@ -744,6 +748,9 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 			})
 			toolSpan.End()
 			s.AllToolCalls = append(s.AllToolCalls, tc)
+			if fatalToolErr != nil {
+				return s, fatalToolErr
+			}
 		}
 		return s, nil
 	}
