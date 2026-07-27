@@ -10,18 +10,19 @@ import { ExperimentDrawer } from '../components/ExperimentDrawer';
 import { ResourceTable } from '../components/ResourceTable';
 import { RunDrawer } from '../components/RunDrawer';
 import { TimelineDrawer } from '../components/TimelineDrawer';
-import { StatusTag, displayLabel, drawerWidth } from '../components/evaluationView';
+import { StatusTag, displayLabel, drawerWidth, runDisplayStatus } from '../components/evaluationView';
 import { useEvaluationCenter } from '../hooks/useEvaluationCenter';
 import { useEvaluationTimeline } from '../hooks/useEvaluationTimeline';
 import { resourceKindSchema } from '../model/evaluation';
 import type { CandidateSummary, ExperimentSummary, ResourceKind, RunSummary } from '../model/evaluation';
 
 import { useResponsive } from '@/shared/hooks';
+import { createIdempotencyKey } from '@/shared/lib/idempotencyKey';
 
 const resourceOptions = ['skill', 'agent', 'mcp', 'knowledge'].map((value) => ({ value, label: displayLabel(value) }));
-const statusOptions = ['active', 'proposed', 'running', 'succeeded', 'failed', 'paused'].map((value) => ({ value, label: displayLabel(value) }));
+const statusOptions = ['active', 'proposed', 'promoted', 'running', 'succeeded', 'failed', 'paused'].map((value) => ({ value, label: displayLabel(value) }));
 const command = (version: number, reason: string) => ({ reason, expected_state_version: version,
-  idempotency_key: crypto.randomUUID() });
+  idempotency_key: createIdempotencyKey() });
 
 export const EvaluationCenterPage = () => {
   const { isMobile } = useResponsive();
@@ -122,6 +123,7 @@ const CompactList = <T extends RunSummary | CandidateSummary | ExperimentSummary
   locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={empty} /> }} columns={[
     { title: '记录', dataIndex: 'id', ellipsis: true },
     { title: '资源', dataIndex: 'resource_id', ellipsis: true },
-    { title: '状态', dataIndex: 'status', width: 120, render: (value: string) => <StatusTag value={value} /> },
+    { title: '状态', dataIndex: 'status', width: 120, render: (value: string, row) => <StatusTag
+      value={'passed' in row ? runDisplayStatus(value, row.passed) : value} /> },
     { title: '操作', width: 80, render: (_, row) => <Button type="link" size="small" onClick={() => onOpen(row)}>详情</Button> },
   ]} />;

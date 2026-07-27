@@ -232,7 +232,16 @@ func (s *VersionService) PublishedRevisionSafeSummary(
 	if err != nil {
 		return nil, err
 	}
+	skill, found, err := s.repo.GetSkill(ctx, skillID)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, domain.ErrSkillNotFound
+	}
 	return map[string]any{
+		"name":           skill.Name,
+		"description":    skill.Description,
 		"version_label":  fmt.Sprintf("revision-%d", revision.RevisionNo),
 		"changed_fields": []string{"instructions"},
 	}, nil

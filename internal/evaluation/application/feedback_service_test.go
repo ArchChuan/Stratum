@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -251,6 +252,29 @@ func TestFeedbackServiceValidatesAndPersistsObservedRevision(t *testing.T) {
 	}
 	if repo.recorded.RevisionID != "revision-1" {
 		t.Fatalf("persisted revision = %q", repo.recorded.RevisionID)
+	}
+}
+
+func TestFeedbackServiceRejectsFeedbackFromAnotherTraceOwner(t *testing.T) {
+	repo := &fakeFeedbackRepo{}
+	evidence := &fakeTraceEvidenceReader{traces: map[string]port.ObservedTrace{
+		"trace-1": {
+			TraceID: "trace-1", UserID: "user-a",
+			Assignments: map[string]port.ObservedResourceAssignment{
+				"skill:skill-1": {RevisionID: "revision-1"},
+			},
+		},
+	}}
+	svc := NewFeedbackService(repo, NewExperimentService(&feedbackExperimentRepo{}), evidence)
+	_, err := svc.Record(context.Background(), "tenant-1", RecordFeedbackInput{
+		ActorID: "user-b", TraceID: "trace-1", ResourceKind: domain.ResourceKindSkill,
+		ResourceID: "skill-1", Score: 1, IdempotencyKey: "feedback-1",
+	})
+	if !errors.Is(err, domain.ErrFeedbackTraceForbidden) {
+		t.Fatalf("cross-user feedback error = %v, want forbidden", err)
+	}
+	if repo.recorded.TraceID != "" {
+		t.Fatal("cross-user feedback reached persistence")
 	}
 }
 

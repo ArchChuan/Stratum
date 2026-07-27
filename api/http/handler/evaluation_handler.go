@@ -447,13 +447,18 @@ func (h *EvaluationHandler) RecordFeedback(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	actorID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
 	var req dto.RecordEvaluationFeedbackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
 	result, err := h.feedback.Record(c.Request.Context(), tenantID, evalapp.RecordFeedbackInput{
-		TraceID: req.TraceID, ResourceKind: domain.ResourceKind(req.ResourceKind), ResourceID: req.ResourceID,
+		ActorID: actorID, TraceID: req.TraceID, ResourceKind: domain.ResourceKind(req.ResourceKind), ResourceID: req.ResourceID,
 		Score: req.Score, Outcome: req.Outcome, IdempotencyKey: req.IdempotencyKey,
 		SecurityViolation: req.SecurityViolation,
 	})

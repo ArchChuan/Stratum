@@ -50,6 +50,7 @@ type opikSpan struct {
 }
 
 type errorInfo struct {
-	Message string `json:"message"`
-	Type    string `json:"exception_type"`
+	Message   string `json:"message"`
+	Type      string `json:"exception_type"`
+	Traceback string `json:"traceback"`
 }

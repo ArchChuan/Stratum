@@ -27,6 +27,29 @@ func TestProvisionTenantSchemaSystemAssistantIsIdempotent(t *testing.T) {
 	assertOneSystemAssistant(t, pool, tenantID)
 }
 
+func TestProvisionTenantSchemaRestoresFeedbackIdempotencyUniqueness(t *testing.T) {
+	pool, ctx, tenantID := systemAssistantTestPool(t, "feedback_idempotency")
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	schema := `"tenant_` + tenantID + `"`
+	if _, err := pool.Exec(ctx, `ALTER TABLE `+schema+
+		`.evaluation_feedback DROP CONSTRAINT evaluation_feedback_idempotency_key_key`); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	insert := `INSERT INTO ` + schema + `.evaluation_feedback
+		(id,trace_id,resource_kind,resource_id,revision_id,idempotency_key) VALUES($1,$2,'skill','skill-1','revision-1','same-key')`
+	if _, err := pool.Exec(ctx, insert, "feedback-1", "trace-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, insert, "feedback-2", "trace-2"); err == nil {
+		t.Fatal("reprovisioned historical tenant accepted duplicate feedback idempotency key")
+	}
+}
+
 func TestProvisionTenantSchemaSystemAssistantNameCollisionPreservesOrdinaryAgent(t *testing.T) {
 	pool, ctx, tenantID := systemAssistantTestPool(t, "name_collision")
 	schema := `tenant_` + tenantID

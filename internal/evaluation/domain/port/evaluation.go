@@ -159,6 +159,7 @@ type ObservedResourceAssignment struct {
 
 type ObservedTrace struct {
 	TraceID           string
+	UserID            string
 	CostUSD           float64
 	LatencyMs         int64
 	Success           bool

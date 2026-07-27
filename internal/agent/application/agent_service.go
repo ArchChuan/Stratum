@@ -938,13 +938,13 @@ func boundedAssistantOutcome(outcome string) string {
 
 // ListExecutions paginates the per-tenant execution history.
 func (s *AgentService) ListExecutions(
-	ctx context.Context, tenantID string, page, pageSize int,
+	ctx context.Context, tenantID, userID string, page, pageSize int,
 ) ([]ExecutionRowDTO, int64, error) {
 	if s.deps.EvidenceProvider == nil {
 		return nil, 0, domain.ErrEvidenceUnavailable
 	}
 	records, total, err := s.deps.EvidenceProvider.ListExecutions(
-		ctx, tenantID, ListOptions{Page: page, PageSize: pageSize},
+		ctx, tenantID, ListOptions{Page: page, PageSize: pageSize, UserID: userID},
 	)
 	if err != nil {
 		return nil, 0, err
@@ -1573,18 +1573,39 @@ func (s *AgentService) buildExtraToolsChecked(
 	return tools, catalog, nil
 }
 
-func (s *AgentService) ListToolTraces(ctx context.Context, tenantID, traceID string) ([]ToolObservation, error) {
+func (s *AgentService) ListToolTraces(
+	ctx context.Context, tenantID, userID, traceID string,
+) ([]ToolObservation, error) {
 	if s.deps.EvidenceProvider == nil {
 		return nil, domain.ErrEvidenceUnavailable
+	}
+	if err := s.authorizeTraceOwner(ctx, tenantID, userID, traceID); err != nil {
+		return nil, err
 	}
 	return s.deps.EvidenceProvider.ToolObservations(ctx, tenantID, traceID)
 }
 
-func (s *AgentService) ListTraceEvents(ctx context.Context, tenantID, traceID string) ([]AgentTraceEvent, error) {
+func (s *AgentService) ListTraceEvents(
+	ctx context.Context, tenantID, userID, traceID string,
+) ([]AgentTraceEvent, error) {
 	if s.deps.EvidenceProvider == nil {
 		return nil, domain.ErrEvidenceUnavailable
 	}
+	if err := s.authorizeTraceOwner(ctx, tenantID, userID, traceID); err != nil {
+		return nil, err
+	}
 	return s.deps.EvidenceProvider.TraceEvents(ctx, tenantID, traceID)
+}
+
+func (s *AgentService) authorizeTraceOwner(ctx context.Context, tenantID, userID, traceID string) error {
+	evidence, err := s.deps.EvidenceProvider.Resolve(ctx, tenantID, traceID)
+	if err != nil {
+		return err
+	}
+	if userID == "" || evidence.UserID != userID {
+		return domain.ErrEvidenceNotFound
+	}
+	return nil
 }
 
 // truncateRunes returns s truncated to maxRunes runes (not bytes).

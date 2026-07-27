@@ -157,6 +157,9 @@ func TestVersionServicePublishedRevisionSafeSummaryHasNoSensitiveFields(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	if summary["name"] != view.Skill.Name || summary["description"] != view.Skill.Description {
+		t.Fatalf("safe resource identity missing: %#v", summary)
+	}
 	for _, key := range []string{"secret", "token", "api_key", "requirements", "destination", "instructions"} {
 		if _, ok := summary[key]; ok {
 			t.Fatalf("safe summary contains %q: %#v", key, summary)

@@ -85,6 +85,17 @@ func TestCreateGuestInDefaultTenantReplayUpsertsExistingUserAndMembership(t *tes
 	}
 }
 
+func TestTenantSlugUsesTheFullGeneratedIDWhenNoOrganizationExists(t *testing.T) {
+	first := "019fa3bd-105a-7ec6-aa08-eb8fb40ff228"
+	second := "019fa3bd-ffff-7ec6-aa08-eb8fb40ff228"
+	if tenantSlug(first, "") == tenantSlug(second, "") {
+		t.Fatal("different UUIDv7 tenant IDs produced the same slug")
+	}
+	if got := tenantSlug(first, "acme"); got != "acme" {
+		t.Fatalf("organization slug = %q, want acme", got)
+	}
+}
+
 func expectSuccessfulGuestAttempt(mock pgxmock.PgxPoolIface, githubID, userID, tenantID string) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("(?s)INSERT INTO users.*ON CONFLICT \\(github_id\\)").

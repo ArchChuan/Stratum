@@ -22,6 +22,7 @@ type TraceEvidence struct {
 	TraceID             string
 	ExecutionID         string
 	AgentID             string
+	UserID              string
 	Status              string
 	TotalTokens         int
 	CostUSD             float64

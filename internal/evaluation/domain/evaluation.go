@@ -142,6 +142,7 @@ type OptimizationCandidate struct {
 }
 
 type FeedbackRequest struct {
+	ActorID           string
 	TraceID           string
 	ResourceKind      ResourceKind
 	ResourceID        string

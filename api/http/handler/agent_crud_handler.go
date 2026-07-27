@@ -142,10 +142,15 @@ func (h *AgentHandler) ListExecutions(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	userID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 
-	rows, total, err := h.svc.ListExecutions(c.Request.Context(), tenantID, page, pageSize)
+	rows, total, err := h.svc.ListExecutions(c.Request.Context(), tenantID, userID, page, pageSize)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -176,8 +181,13 @@ func (h *AgentHandler) ListExecutionToolTraces(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	userID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
 	traceID := c.Param("traceID")
-	rows, err := h.svc.ListToolTraces(c.Request.Context(), tenantID, traceID)
+	rows, err := h.svc.ListToolTraces(c.Request.Context(), tenantID, userID, traceID)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -191,8 +201,13 @@ func (h *AgentHandler) ListExecutionTraceEvents(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
+	userID, ok := userIDFromCtx(c)
+	if !ok {
+		respondMissingUser(c)
+		return
+	}
 	traceID := c.Param("traceID")
-	rows, err := h.svc.ListTraceEvents(c.Request.Context(), tenantID, traceID)
+	rows, err := h.svc.ListTraceEvents(c.Request.Context(), tenantID, userID, traceID)
 	if err != nil {
 		_ = c.Error(err)
 		return

@@ -2,7 +2,7 @@ import { Alert, Descriptions, Drawer, Progress, Typography } from 'antd';
 
 import type { RunSummary } from '../model/evaluation';
 
-import { drawerWidth, StatusTag } from './evaluationView';
+import { drawerWidth, runDisplayStatus, StatusTag } from './evaluationView';
 
 export const RunDrawer = ({ run, open, onClose, isMobile }: {
   run: RunSummary | null; open: boolean; onClose: () => void; isMobile?: boolean;
@@ -11,7 +11,7 @@ export const RunDrawer = ({ run, open, onClose, isMobile }: {
     {run && <>
       <Typography.Title level={5}>观测事实</Typography.Title>
       <Descriptions bordered size="small" column={isMobile ? 1 : 2}>
-        <Descriptions.Item label="运行状态"><StatusTag value={run.status} /></Descriptions.Item>
+        <Descriptions.Item label="运行状态"><StatusTag value={runDisplayStatus(run.status, run.passed)} /></Descriptions.Item>
         <Descriptions.Item label="资源版本">{run.revision_id}</Descriptions.Item>
         <Descriptions.Item label="通过用例">{run.passed_cases} / {run.total_cases}</Descriptions.Item>
         <Descriptions.Item label="创建时间">{new Date(run.created_at).toLocaleString('zh-CN')}</Descriptions.Item>

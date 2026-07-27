@@ -24,6 +24,8 @@ var (
 	ErrCandidateCommandNotAllowed      = errors.New("candidate command not allowed")
 	ErrInvalidCandidateCommand         = errors.New("invalid candidate command")
 	ErrOptimizationIdempotencyConflict = errors.New("optimization idempotency conflict")
+	ErrFeedbackIdempotencyConflict     = errors.New("feedback idempotency conflict")
+	ErrFeedbackTraceForbidden          = errors.New("feedback trace belongs to another user")
 )
 
 type CandidateCommand struct {

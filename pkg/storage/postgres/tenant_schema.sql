@@ -402,6 +402,19 @@ CREATE INDEX IF NOT EXISTS idx_evaluation_feedback_resource
     ON evaluation_feedback(resource_kind, resource_id, revision_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_evaluation_feedback_trace_resource
     ON evaluation_feedback(trace_id, resource_id);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_index i
+        JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=ANY(i.indkey)
+        WHERE i.indrelid='evaluation_feedback'::regclass
+          AND i.indisunique AND i.indnatts=1 AND a.attname='idempotency_key'
+    ) THEN
+        CREATE UNIQUE INDEX idx_evaluation_feedback_idempotency_key
+            ON evaluation_feedback(idempotency_key);
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS evaluation_jobs (
     id              TEXT PRIMARY KEY,
