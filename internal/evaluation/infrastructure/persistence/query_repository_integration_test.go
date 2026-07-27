@@ -27,7 +27,6 @@ func TestPgCenterQueryRepositoryEvidenceTimelinePaginationAndIsolation(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
 	tenants := []string{"center_query_one", "center_query_two"}
 	for _, tenant := range tenants {
 		if err := postgres.ProvisionTenantSchema(ctx, pool, tenant); err != nil {
@@ -38,6 +37,7 @@ func TestPgCenterQueryRepositoryEvidenceTimelinePaginationAndIsolation(t *testin
 		for _, tenant := range tenants {
 			_, _ = pool.Exec(context.Background(), fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenant))
 		}
+		pool.Close()
 	})
 
 	seedCenterQuery(t, ctx, pool, "tenant_center_query_one", "one")
@@ -55,7 +55,8 @@ func TestPgCenterQueryRepositoryEvidenceTimelinePaginationAndIsolation(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Items) != 1 || first.Items[0].SafeSummary["label"] != "one-new" || first.NextCursor == "" {
+	if len(first.Items) != 1 || first.Items[0].SafeSummary["label"] != "one-new" ||
+		first.Items[0].StableRevisionID != "rev-new" || first.NextCursor == "" {
 		t.Fatalf("first page=%+v", first)
 	}
 	second, err := repo.ListResources(ctx, tenants[0], port.CenterFilter{ResourceKind: "skill", Status: "published", Limit: 1, Cursor: first.NextCursor})
@@ -79,7 +80,11 @@ func TestPgCenterQueryRepositoryEvidenceTimelinePaginationAndIsolation(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(other.Items) == 0 || other.Items[0].SafeSummary["label"] != "two-new" {
+	foundOtherTenant := false
+	for _, item := range other.Items {
+		foundOtherTenant = foundOtherTenant || item.SafeSummary["label"] == "two-new"
+	}
+	if !foundOtherTenant {
 		t.Fatalf("tenant isolation=%+v", other)
 	}
 	assertCenterLists(t, ctx, repo, tenants[0], "one")

@@ -168,7 +168,8 @@ func (a skillEvaluationRepositoryAdapter) ResolveSkillEvaluation(
 }
 
 type skillCandidateManager struct {
-	versions *skillapp.VersionService
+	versions  *skillapp.VersionService
+	revisions evalport.RevisionRepository
 }
 
 type experimentSkillRevisionResolver struct {
@@ -202,6 +203,28 @@ func (m skillCandidateManager) CreatePublishedBaseline(
 	revision, err := m.versions.ResolveActivePublishedRevision(ctx, skillID)
 	if err != nil {
 		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: resolve active baseline: %w", err)
+	}
+	if m.revisions == nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: revision index unavailable")
+	}
+	summary, err := m.versions.PublishedRevisionSafeSummary(ctx, skillID, revision.ID)
+	if err != nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: summarize baseline: %w", err)
+	}
+	indexed := evaldomain.ResourceRevision{
+		ID: revision.ID, ResourceKind: evaldomain.ResourceKindSkill, ResourceID: skillID,
+		Source: evaldomain.RevisionSourceManual, Status: evaldomain.RevisionStatusPublished,
+		ContentHash: revision.ContentHash, PayloadRef: "skill://" + revision.ID, PayloadHash: revision.ContentHash,
+		SafeSummary: summary, CreatedBy: "evaluation-worker", CreatedAt: time.Now().UTC(),
+	}
+	if err := indexed.Validate(); err != nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: validate baseline index: %w", err)
+	}
+	_, _, err = m.revisions.Create(ctx, tenantID, indexed, "skill-baseline-"+stableTenantFingerprint(
+		tenantID, strings.Join([]string{skillID, revision.ID, revision.ContentHash}, "\x00"),
+	))
+	if err != nil {
+		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Skill adapter: register baseline: %w", err)
 	}
 	return evaldomain.ResourceRef{
 		Kind: evaldomain.ResourceKindSkill, ResourceID: skillID, RevisionID: revision.ID,
@@ -643,7 +666,8 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	candidateRepo := evalpersist.NewPgCandidateCommandRepository(db)
 	suiteService := evalapp.NewSuiteService(suiteRepo)
 	activationResolver := publishedSkillActivationResolver{versions: c.Skill.VersionService}
-	manager := skillCandidateManager{versions: c.Skill.VersionService}
+	revisionRepo := evalpersist.NewPgRevisionRepository(db)
+	manager := skillCandidateManager{versions: c.Skill.VersionService, revisions: revisionRepo}
 	skillAdapter := agentScenarioEvaluationAdapter{
 		agents:    c.Agent.Service,
 		skills:    activationResolver,
@@ -666,7 +690,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	if c.RevisionObjectStore != nil {
 		sharedRevisionService = evalapp.NewRevisionService(
 			evalpersist.RevisionObjectStoreAdapter{Store: c.RevisionObjectStore},
-			evalpersist.NewPgRevisionRepository(db),
+			revisionRepo,
 		)
 	}
 	if c.Agent != nil && sharedRevisionService != nil {

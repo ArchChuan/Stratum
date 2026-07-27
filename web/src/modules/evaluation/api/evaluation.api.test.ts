@@ -40,6 +40,14 @@ describe('evaluation center api', () => {
     });
   });
 
+  it('registers a published resource baseline through the shared client', async () => {
+    client.post.mockResolvedValue({ data: { kind: 'skill', resource_id: 'skill/1', revision_id: 'revision-1' } });
+    await expect(evaluationApi.createBaseline('skill', 'skill/1')).resolves.toMatchObject({
+      resource_id: 'skill/1', revision_id: 'revision-1',
+    });
+    expect(client.post).toHaveBeenCalledWith('/evaluations/resources/skill/skill%2F1/baseline');
+  });
+
   it('parses serialized promotion evidence from the experiment center endpoint', async () => {
     client.get.mockResolvedValue({ data: { items: [{ id: 'experiment-1', resource_id: 'agent-1',
       stable_revision_id: 'stable-1', canary_revision_id: 'canary-1', status: 'running', recommendation: 'promote',
