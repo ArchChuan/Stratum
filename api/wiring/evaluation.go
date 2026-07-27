@@ -173,6 +173,11 @@ type experimentSkillRevisionResolver struct {
 	service *evalapp.ExperimentService
 }
 
+type experimentAgentRevisionResolver struct {
+	service *evalapp.ExperimentService
+	adapter agentEvaluationAdapter
+}
+
 func (m skillCandidateManager) CreatePublishedBaseline(
 	ctx context.Context, tenantID, skillID string,
 ) (evaldomain.ResourceRef, error) {
@@ -199,6 +204,31 @@ func (r experimentSkillRevisionResolver) ResolveSkillRevision(
 	return agentport.SkillRevisionAssignment{
 		RevisionID: assignment.RevisionID, ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
 	}, found, err
+}
+
+func (r experimentAgentRevisionResolver) ResolveAgentRevision(
+	ctx context.Context,
+	tenantID, agentID, subjectID string,
+) (agentport.AgentRevisionAssignment, bool, error) {
+	assignment, found, err := r.service.ResolveAssignment(
+		ctx, tenantID, evaldomain.ResourceKindAgent, agentID, subjectID,
+	)
+	if err != nil || !found {
+		return agentport.AgentRevisionAssignment{}, found, err
+	}
+	_, snapshot, revisionFound, err := r.adapter.get(ctx, tenantID, evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindAgent, ResourceID: agentID, RevisionID: assignment.RevisionID,
+	})
+	if err != nil {
+		return agentport.AgentRevisionAssignment{}, false, err
+	}
+	if !revisionFound {
+		return agentport.AgentRevisionAssignment{}, false, evalport.ErrCenterResourceNotFound
+	}
+	return agentport.AgentRevisionAssignment{
+		Revision: snapshot, RevisionID: assignment.RevisionID,
+		ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
+	}, true, nil
 }
 
 func (m skillCandidateManager) LoadOptimizableSnapshot(
@@ -532,6 +562,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		evaldomain.ResourceKindSkill: manager,
 	}
 	var agentProvider evalport.AgentRevisionProvider
+	var runtimeAgentAdapter *agentEvaluationAdapter
 	var mcpProvider evalport.ResourceRevisionProvider
 	var knowledgeProvider evalport.ResourceRevisionProvider
 	var sharedRevisionService *evalapp.RevisionService
@@ -548,6 +579,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		resourceAdapters[evaldomain.ResourceKindAgent] = agentAdapter
 		candidateCreators[evaldomain.ResourceKindAgent] = agentAdapter
 		agentProvider = agentAdapter
+		runtimeAgentAdapter = &agentAdapter
 	}
 	if c.MCP != nil && c.MCP.Manager != nil && sharedRevisionService != nil {
 		mcpAdapter := mcpEvaluationAdapter{
@@ -602,6 +634,11 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	if c.Agent != nil && c.Agent.Service != nil {
 		c.Agent.Service.SetSkillRevisionResolver(experimentSkillRevisionResolver{service: experimentService})
+		if runtimeAgentAdapter != nil {
+			c.Agent.Service.SetAgentRevisionResolver(experimentAgentRevisionResolver{
+				service: experimentService, adapter: *runtimeAgentAdapter,
+			})
+		}
 	}
 	if c.Agent != nil && c.Skill != nil && c.Skill.VersionService != nil {
 		if diagnostics, ok := c.Agent.DiagnosticProvider.(*systemAssistantDiagnosticAdapter); ok {

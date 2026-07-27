@@ -218,6 +218,59 @@ func (f failingSkillActivationResolver) ResolveSkills(
 	return nil, f.err
 }
 
+type agentRevisionResolverFake struct {
+	revision domain.AgentRevision
+	err      error
+}
+
+func (f agentRevisionResolverFake) ResolveAgentRevision(
+	context.Context, string, string, string,
+) (port.AgentRevisionAssignment, bool, error) {
+	if f.err != nil {
+		return port.AgentRevisionAssignment{}, false, f.err
+	}
+	return port.AgentRevisionAssignment{
+		Revision: f.revision, RevisionID: "agent-revision-canary",
+		ExperimentID: "experiment-agent", Variant: "canary",
+	}, true, nil
+}
+
+func TestResolveExecutionAgentUsesImmutableCanaryRevision(t *testing.T) {
+	svc := NewAgentService(AgentServiceDeps{AgentRevisionResolver: agentRevisionResolverFake{revision: domain.AgentRevision{
+		AgentID: "agent-1", Type: domain.ReActAgent, SystemPrompt: "canary prompt",
+		Model: "qwen-plus", MaxIterations: 7,
+	}}})
+	mutable := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: "agent-1", Type: domain.ReActAgent, SystemPrompt: "mutable prompt",
+		LLMModel: "qwen-plus", MaxIterations: 3,
+	}}
+
+	resolved, assignment, err := svc.resolveExecutionAgent(
+		context.Background(), mutable, "tenant-1", "agent-1", "conversation-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.GetConfig().SystemPrompt != "canary prompt" || resolved.GetConfig().MaxIterations != 7 {
+		t.Fatalf("resolved config = %#v", resolved.GetConfig())
+	}
+	if assignment.RevisionID != "agent-revision-canary" || assignment.ExperimentID != "experiment-agent" ||
+		assignment.Variant != "canary" {
+		t.Fatalf("assignment = %#v", assignment)
+	}
+}
+
+func TestResolveExecutionAgentFailsClosed(t *testing.T) {
+	wantErr := errors.New("experiment deployment unavailable")
+	svc := NewAgentService(AgentServiceDeps{AgentRevisionResolver: agentRevisionResolverFake{err: wantErr}})
+	mutable := &optionCaptureAgent{config: &domain.AgentConfig{ID: "agent-1", MaxIterations: 3}}
+
+	_, _, err := svc.resolveExecutionAgent(context.Background(), mutable, "tenant-1", "agent-1", "trace-1")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("resolveExecutionAgent() error = %v, want %v", err, wantErr)
+	}
+}
+
 func TestAssembleOptionsFailsClosedWhenExperimentAssignmentFails(t *testing.T) {
 	wantErr := errors.New("experiment store unavailable")
 	svc := NewAgentService(AgentServiceDeps{

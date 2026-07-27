@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	evaldomain "github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
@@ -692,13 +693,97 @@ func executeLiveAgentFlow(client *http.Client, apiURL, token, serverID, runID st
 		recoveryRun.Resource.RevisionID != baseline.RevisionID {
 		panic("live Agent stable revision did not recover after provider restoration")
 	}
+
+	var optimization struct {
+		Candidates []struct {
+			ID       string `json:"id"`
+			Revision struct {
+				RevisionID string `json:"revision_id"`
+			} `json:"revision"`
+		} `json:"candidates"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/optimizations", token, map[string]any{
+		"idempotency_key": runID + "-live-agent-canary-optimization",
+		"baseline": map[string]any{"kind": "agent", "resource_id": agent.ID,
+			"revision_id": baseline.RevisionID},
+		"suite_revision_id": published.ID,
+		"search_space":      map[string]any{"max_iterations": []int{5}},
+		"failure_summaries": []string{},
+	}, http.StatusCreated, &optimization)
+	if len(optimization.Candidates) != 1 || optimization.Candidates[0].Revision.RevisionID == "" {
+		panic("live Agent canary candidate generation invalid")
+	}
+	candidate := optimization.Candidates[0]
+	candidateJob, candidateRun := executeAgentEvaluationRun(client, apiURL, token, agent.ID,
+		candidate.Revision.RevisionID, published.ID, runID+"-live-agent-canary-run")
+	if candidateJob.Status != "succeeded" || !candidateRun.Passed {
+		panic("live Agent canary offline evaluation did not pass")
+	}
+	var experiment struct {
+		Experiment struct {
+			ID string `json:"id"`
+		} `json:"experiment"`
+		Deployment struct {
+			CanaryPercent int `json:"canary_percent"`
+		} `json:"deployment"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/experiments", token, map[string]any{
+		"stable": map[string]any{"kind": "agent", "resource_id": agent.ID,
+			"revision_id": baseline.RevisionID},
+		"canary": map[string]any{"kind": "agent", "resource_id": agent.ID,
+			"revision_id": candidate.Revision.RevisionID},
+		"suite_revision_id": published.ID,
+	}, http.StatusCreated, &experiment)
+	if experiment.Experiment.ID == "" || experiment.Deployment.CanaryPercent <= 0 {
+		panic("live Agent canary experiment creation invalid")
+	}
+	conversationID := createCanaryConversation(client, apiURL, token, agent.ID,
+		experiment.Deployment.CanaryPercent, runID)
+	var onlineResult map[string]any
+	onlineTraceID := requestJSONWithTrace(client, http.MethodPost, apiURL+"/agents/"+agent.ID+"/execute", token,
+		map[string]any{"query": "Use the lookup tool and return bounded-agent-result.",
+			"conversation_id": conversationID}, http.StatusOK, &onlineResult)
+	if onlineResult["output"] != "bounded-agent-result" || onlineTraceID == "" {
+		panic("live Agent canary runtime execution invalid")
+	}
+	feedback := waitForFeedback(client, apiURL, token, map[string]any{
+		"trace_id": onlineTraceID, "resource_kind": "agent", "resource_id": agent.ID,
+		"score": 1, "outcome": map[string]any{"status": "success"},
+		"idempotency_key": runID + "-live-agent-canary-feedback",
+	})
+	feedbackRow, _ := feedback["feedback"].(map[string]any)
+	feedbackExperiment, _ := feedback["experiment"].(map[string]any)
+	if feedbackRow["revision_id"] != candidate.Revision.RevisionID ||
+		feedbackRow["experiment_id"] != experiment.Experiment.ID || feedbackRow["variant"] != "canary" ||
+		feedbackExperiment["id"] != experiment.Experiment.ID {
+		panic("live Agent canary feedback attribution mismatch")
+	}
 	return map[string]any{"resourceId": agent.ID, "revisionId": baseline.RevisionID,
 		"suiteRevisionId": published.ID, "jobId": queued.JobID, "runId": run.ID,
 		"traceId": run.Results[0].TraceID, "tokens": run.Results[0].Tokens,
 		"toolTraces": len(toolEvidence.ToolTraces), "traceEvents": len(traceEvidence.TraceEvents),
 		"failureJobId": failureJob.JobID, "failureRunId": failureRun.ID,
 		"failureError":  failureRun.Results[0].Error,
-		"recoveryJobId": recoveryJob.JobID, "recoveryRunId": recoveryRun.ID}
+		"recoveryJobId": recoveryJob.JobID, "recoveryRunId": recoveryRun.ID,
+		"candidateRevisionId": candidate.Revision.RevisionID, "candidateRunId": candidateRun.ID,
+		"experimentId": experiment.Experiment.ID, "onlineTraceId": onlineTraceID,
+		"onlineVariant": feedbackRow["variant"]}
+}
+
+func createCanaryConversation(
+	client *http.Client, apiURL, token, agentID string, canaryPercent int, runID string,
+) string {
+	for attempt := range 200 {
+		var conversation struct {
+			ID string `json:"id"`
+		}
+		requestJSON(client, http.MethodPost, apiURL+"/agents/"+agentID+"/conversations", token,
+			map[string]string{"name": fmt.Sprintf("%s canary %d", runID, attempt)}, http.StatusCreated, &conversation)
+		if conversation.ID != "" && evaldomain.AssignVariant(conversation.ID+":"+agentID, canaryPercent) {
+			return conversation.ID
+		}
+	}
+	panic("could not allocate deterministic Agent canary subject")
 }
 
 type agentEvaluationRun struct {
@@ -1052,6 +1137,65 @@ func waitForEvaluationJob(client *http.Client, apiURL, token, jobID string) eval
 		time.Sleep(time.Second)
 	}
 	panic("evaluation job polling timed out")
+}
+
+func requestJSONWithTrace(
+	client *http.Client, method, requestURL, token string, payload any, status int, output any,
+) string {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		panic("encode traced E2E request failed")
+	}
+	request, err := http.NewRequest(method, requestURL, bytes.NewReader(encoded))
+	if err != nil {
+		panic("create traced E2E request failed")
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		panic("traced E2E API request failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != status {
+		panic(fmt.Sprintf("traced E2E API request failed: method=%s status=%d", method, response.StatusCode))
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(output); err != nil {
+		panic("decode traced E2E API response failed")
+	}
+	return response.Header.Get("X-Request-ID")
+}
+
+func waitForFeedback(client *http.Client, apiURL, token string, payload map[string]any) map[string]any {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		panic("encode feedback E2E request failed")
+	}
+	for range 90 {
+		request, requestErr := http.NewRequest(http.MethodPost, apiURL+"/evaluations/feedback", bytes.NewReader(encoded))
+		if requestErr != nil {
+			panic("create feedback E2E request failed")
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Content-Type", "application/json")
+		response, responseErr := client.Do(request)
+		if responseErr != nil {
+			time.Sleep(time.Second)
+			continue
+		}
+		if response.StatusCode == http.StatusCreated {
+			var result map[string]any
+			decodeErr := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result)
+			response.Body.Close()
+			if decodeErr != nil {
+				panic("decode feedback E2E response failed")
+			}
+			return result
+		}
+		response.Body.Close()
+		time.Sleep(time.Second)
+	}
+	panic("timed out waiting for Agent canary feedback attribution")
 }
 
 func requestJSON(client *http.Client, method, url, token string, payload any, status int, output any) {

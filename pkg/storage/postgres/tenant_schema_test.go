@@ -492,6 +492,20 @@ func TestTenantSchemaContainsEvaluationControlPlane(t *testing.T) {
 	}
 }
 
+func TestTenantSchemaPreservesFeedbackExperimentAttributionForHistoricalTenants(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	createAt := strings.Index(sql, "CREATE TABLE IF NOT EXISTS evaluation_feedback")
+	experimentAt := strings.Index(sql, "ALTER TABLE evaluation_feedback ADD COLUMN IF NOT EXISTS experiment_id")
+	variantAt := strings.Index(sql, "ALTER TABLE evaluation_feedback ADD COLUMN IF NOT EXISTS variant")
+	if createAt == -1 || experimentAt < createAt || variantAt < createAt {
+		t.Fatal("evaluation feedback attribution columns must upgrade historical tenant schemas after table creation")
+	}
+}
+
 func TestTenantSchemaIndexesEvaluationCenterCandidateQueriesAfterTables(t *testing.T) {
 	data, err := os.ReadFile("tenant_schema.sql")
 	if err != nil {

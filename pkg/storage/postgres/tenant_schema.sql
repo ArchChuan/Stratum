@@ -379,6 +379,8 @@ CREATE TABLE IF NOT EXISTS evaluation_feedback (
     resource_kind   TEXT NOT NULL,
     resource_id     TEXT NOT NULL,
     revision_id     TEXT NOT NULL,
+    experiment_id   TEXT,
+    variant         TEXT,
     score           DOUBLE PRECISION,
     outcome         JSONB NOT NULL DEFAULT '{}',
     idempotency_key TEXT NOT NULL,
@@ -386,6 +388,8 @@ CREATE TABLE IF NOT EXISTS evaluation_feedback (
     UNIQUE (idempotency_key),
     UNIQUE (trace_id, resource_id)
 );
+ALTER TABLE evaluation_feedback ADD COLUMN IF NOT EXISTS experiment_id TEXT;
+ALTER TABLE evaluation_feedback ADD COLUMN IF NOT EXISTS variant TEXT;
 CREATE INDEX IF NOT EXISTS idx_evaluation_feedback_resource
     ON evaluation_feedback(resource_kind, resource_id, revision_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_evaluation_feedback_trace_resource

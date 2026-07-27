@@ -63,6 +63,37 @@ func TestPgFeedbackRepositoryStageFeedbackReadsOnlyControlPlaneRows(t *testing.T
 	}
 }
 
+func TestPgFeedbackRepositoryPersistsTraceExperimentAttribution(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	tenantID := fmt.Sprintf("eval_feedback_attribution_%d", time.Now().UnixNano())
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)) })
+
+	stored, err := NewPgFeedbackRepository(pool).Record(ctx, tenantID, domain.FeedbackRequest{
+		TraceID: "trace-1", ResourceKind: domain.ResourceKindAgent, ResourceID: "agent-1",
+		RevisionID: "candidate-1", ExperimentID: "experiment-1", Variant: "canary",
+		Score: 1, IdempotencyKey: "feedback-attribution-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ExperimentID != "experiment-1" || stored.Variant != "canary" {
+		t.Fatalf("stored attribution = experiment %q variant %q", stored.ExperimentID, stored.Variant)
+	}
+}
+
 func TestPgFeedbackRepositoryObservationsExcludePreviousStageFeedback(t *testing.T) {
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {

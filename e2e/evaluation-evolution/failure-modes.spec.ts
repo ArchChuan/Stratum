@@ -79,6 +79,25 @@ test('Agent provider failure is recorded and the same stable revision recovers',
   }, results: [{ passed: true, actual: 'bounded-agent-result' }] });
 });
 
+test('Agent online canary executes the immutable candidate and attributes feedback', async ({ adminApi, manifest }) => {
+  const evidence = manifest.liveEvidence.agent;
+  expect(evidence.onlineTraceId).not.toBe('');
+  expect(evidence.onlineVariant).toBe('canary');
+
+  const candidateRun = await adminApi.get(`/evaluations/runs/${evidence.candidateRunId}`);
+  expect(candidateRun.status()).toBe(200);
+  expect(await candidateRun.json()).toMatchObject({ passed: true, resource: {
+    kind: 'agent', resource_id: evidence.resourceId, revision_id: evidence.candidateRevisionId,
+  } });
+  const experiments = await adminApi.get(
+    `/evaluations/experiments?resource_kind=agent&resource_id=${evidence.resourceId}`,
+  );
+  expect(experiments.status()).toBe(200);
+  expect((await experiments.json()).items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: evidence.experimentId, canary_revision_id: evidence.candidateRevisionId }),
+  ]));
+});
+
 test('Skill evidence executes the exact published revision through its bound Agent', async ({ adminApi, manifest }) => {
   const evidence = manifest.liveEvidence.skill;
   expect(evidence.traceId).not.toBe('');

@@ -34,6 +34,7 @@ type AgentServiceDeps struct {
 	SkillLookup             port.SkillLookup
 	SkillActivationResolver port.SkillActivationResolver
 	SkillRevisionResolver   port.SkillRevisionResolver
+	AgentRevisionResolver   port.AgentRevisionResolver
 	RAGSearch               port.RAGSearchProvider
 	TenantResolver          port.TenantCapabilityResolver
 	TenantModelValidator    port.TenantChatModelValidator
@@ -80,6 +81,10 @@ func (s *AgentService) SetSkillRevisionResolver(resolver port.SkillRevisionResol
 
 func (s *AgentService) SetResourceChangeProposalService(service *ResourceChangeProposalService) {
 	s.deps.ProposalService = service
+}
+
+func (s *AgentService) SetAgentRevisionResolver(resolver port.AgentRevisionResolver) {
+	s.deps.AgentRevisionResolver = resolver
 }
 
 // CreateAgentInput is the create-agent payload application receives from
@@ -597,6 +602,68 @@ func (s *AgentService) ensureConversation(ctx context.Context, tenantID, agentID
 	req.ConversationID = conv.ID
 }
 
+func executionSubject(req ExecRequest, meta ExecMeta) string {
+	if req.ConversationID != "" {
+		return req.ConversationID
+	}
+	return meta.TraceID
+}
+
+func (s *AgentService) resolveExecutionAgent(
+	ctx context.Context,
+	current Agent,
+	tenantID, agentID, subjectID string,
+) (Agent, port.AgentRevisionAssignment, error) {
+	if current.GetConfig().SystemKey == domain.SystemAssistantKey || s.deps.AgentRevisionResolver == nil {
+		return current, port.AgentRevisionAssignment{}, nil
+	}
+	assignment, found, err := s.deps.AgentRevisionResolver.ResolveAgentRevision(
+		ctx, tenantID, agentID, subjectID,
+	)
+	if err != nil {
+		return nil, port.AgentRevisionAssignment{}, fmt.Errorf("resolve Agent experiment assignment: %w", err)
+	}
+	if !found {
+		return current, port.AgentRevisionAssignment{}, nil
+	}
+	if assignment.Revision.AgentID != agentID || assignment.RevisionID == "" {
+		return nil, port.AgentRevisionAssignment{}, errors.New("resolve Agent experiment assignment: invalid revision")
+	}
+	resolved, err := s.buildRevisionAgent(assignment.Revision)
+	if err != nil {
+		return nil, port.AgentRevisionAssignment{}, fmt.Errorf("resolve Agent experiment revision: %w", err)
+	}
+	if s.deps.Metrics != nil {
+		resolved = resolved.WithMetrics(s.deps.Metrics)
+	}
+	return resolved, assignment, nil
+}
+
+func applyAgentAssignment(meta *ExecMeta, agentID string, assignment port.AgentRevisionAssignment) {
+	if assignment.RevisionID == "" {
+		return
+	}
+	if meta.EvolutionTrace.ResourceManifest == nil {
+		meta.EvolutionTrace.ResourceManifest = make(map[string]string)
+	}
+	key := "agent:" + agentID
+	meta.EvolutionTrace.ResourceManifest[key] = assignment.RevisionID
+	if assignment.ExperimentID == "" {
+		return
+	}
+	if meta.EvolutionTrace.ExperimentAssignments == nil {
+		meta.EvolutionTrace.ExperimentAssignments = make(map[string]ExperimentAssignment)
+	}
+	meta.EvolutionTrace.ExperimentAssignments[key] = ExperimentAssignment{
+		ExperimentID: assignment.ExperimentID,
+		Variant:      assignment.Variant,
+	}
+	if meta.EvolutionTrace.ExperimentID == "" {
+		meta.EvolutionTrace.ExperimentID = assignment.ExperimentID
+		meta.EvolutionTrace.Variant = assignment.Variant
+	}
+}
+
 func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta) (*AgentResult, int, error) {
 	a, ok, err := s.deps.Registry.Get(ctx, agentID)
 	if err != nil {
@@ -606,6 +673,11 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		return nil, 0, ErrNotFound
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
+	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
+	if err != nil {
+		return nil, 0, fmt.Errorf("execute agent: resolve revision: %w", err)
+	}
+	applyAgentAssignment(&meta, agentID, assignment)
 	executionID := uuid.Must(uuid.NewV7()).String()
 	_, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
 	if err != nil {
@@ -684,6 +756,11 @@ func (s *AgentService) ExecuteStream(
 		return nil, nil, nil, ErrNotFound
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
+	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("execute stream: resolve revision: %w", err)
+	}
+	applyAgentAssignment(&meta, agentID, assignment)
 	executionID := uuid.Must(uuid.NewV7()).String()
 	streamCtx, options, err := s.assembleOptions(ctx, a, req, meta, executionID)
 	if err != nil {

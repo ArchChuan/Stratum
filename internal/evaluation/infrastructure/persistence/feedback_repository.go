@@ -44,14 +44,17 @@ func (r *PgFeedbackRepository) Record(
 		feedback.ID = uuid.Must(uuid.NewV7()).String()
 		err = tx.QueryRow(ctx,
 			`INSERT INTO evaluation_feedback
-			 (id, trace_id, resource_kind, resource_id, revision_id, score, outcome, idempotency_key)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+			 (id, trace_id, resource_kind, resource_id, revision_id, experiment_id, variant,
+			  score, outcome, idempotency_key)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 			 ON CONFLICT (trace_id, resource_id) DO UPDATE SET
 			 score=EXCLUDED.score, outcome=EXCLUDED.outcome, idempotency_key=EXCLUDED.idempotency_key
-			 RETURNING id, trace_id, resource_kind, resource_id, revision_id, score, outcome, idempotency_key, created_at`,
+			 RETURNING id, trace_id, resource_kind, resource_id, revision_id, experiment_id, variant,
+			           score, outcome, idempotency_key, created_at`,
 			feedback.ID, input.TraceID, string(input.ResourceKind), input.ResourceID, input.RevisionID,
-			input.Score, string(outcomeJSON), input.IdempotencyKey,
+			input.ExperimentID, input.Variant, input.Score, string(outcomeJSON), input.IdempotencyKey,
 		).Scan(&feedback.ID, &feedback.TraceID, &kind, &feedback.ResourceID, &feedback.RevisionID,
+			&feedback.ExperimentID, &feedback.Variant,
 			&feedback.Score, &storedOutcome, &feedback.IdempotencyKey, &feedback.CreatedAt)
 		if err != nil {
 			return err
@@ -116,7 +119,8 @@ func loadStageFeedback(
 	stageStartedAt time.Time,
 ) ([]domain.EvaluationFeedback, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT id, trace_id, resource_kind, resource_id, revision_id, score, outcome, idempotency_key, created_at
+		`SELECT id, trace_id, resource_kind, resource_id, revision_id, experiment_id, variant,
+		        score, outcome, idempotency_key, created_at
 		 FROM evaluation_feedback
 		 WHERE resource_id=$1 AND created_at >= $2
 		 ORDER BY created_at`, resourceID, stageStartedAt)
@@ -130,6 +134,7 @@ func loadStageFeedback(
 		var resourceKind string
 		var outcome []byte
 		if err := rows.Scan(&row.ID, &row.TraceID, &resourceKind, &row.ResourceID, &row.RevisionID,
+			&row.ExperimentID, &row.Variant,
 			&row.Score, &outcome, &row.IdempotencyKey, &row.CreatedAt); err != nil {
 			return nil, err
 		}
