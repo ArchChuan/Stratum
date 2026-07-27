@@ -18,6 +18,7 @@ import (
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -83,6 +84,21 @@ func (a ragSearchAdapter) SearchKnowledge(
 	ctx context.Context, tenantID string, workspaceIDs []string, query string, topK int,
 ) (string, error) {
 	return knowledge.NewRAGSearchFn(a.rag, tenantID)(ctx, workspaceIDs, query, topK)
+}
+
+func (a ragSearchAdapter) SearchKnowledgeRevision(
+	ctx context.Context, tenantID string, revision agentport.KnowledgeRetrievalRevision, query string,
+) (string, error) {
+	if a.rag == nil {
+		return "", fmt.Errorf("Knowledge revision search: RAG service unavailable")
+	}
+	ctx = reqctx.WithTenantID(ctx, tenantID)
+	return knowledge.NewRetrievalEvaluator(a.rag).RetrieveContext(ctx, knowledge.RetrievalSnapshot{
+		WorkspaceID: revision.WorkspaceID, WorkspaceName: revision.WorkspaceName,
+		EmbeddingModel: revision.EmbeddingModel, QueryMode: revision.QueryMode, TopK: revision.TopK,
+		ScoreThreshold: revision.ScoreThreshold, Reranking: revision.Reranking,
+		QueryRewrite: revision.QueryRewrite,
+	}, query)
 }
 
 // skillVersionService returns the wired skill VersionService, or nil when the

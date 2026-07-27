@@ -222,6 +222,39 @@ func TestKnowledgeEvaluationAdapterResolvesOptimizationCandidateForOfflineEvalua
 	}
 }
 
+func TestExperimentKnowledgeRevisionResolverLoadsExactRuntimeAndRejectsDocumentDrift(t *testing.T) {
+	documents := []*knowledgedomain.Document{{ID: "doc-1", ContentHash: "hash-1", IngestStatus: "completed"}}
+	documentSetHash, err := knowledgeDocumentSetHash(documents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := knowledgeRetrievalSnapshot{
+		TenantID: "tenant-1", WorkspaceID: "workspace-id", WorkspaceName: "support",
+		DocumentSetHash: documentSetHash, EmbeddingIdentity: "embedding-3",
+		RerankingIdentity: knowledgeRerankingIdentity, QueryMode: "hybrid", TopK: 2,
+		ScoreThreshold: 0.7, Reranking: "score_desc", QueryRewrite: "lowercase_trim",
+	}
+	source := &fakeKnowledgeSnapshotSource{documents: documents}
+	resolver := experimentKnowledgeRevisionResolver{adapter: knowledgeEvaluationAdapter{
+		revisions: publishedKnowledgeRevisions(t, snapshot), source: source,
+	}}
+
+	revision, err := resolver.LoadKnowledgeRuntimeRevision(
+		context.Background(), "tenant-1", "support", "published-1",
+	)
+	if err != nil || revision.RevisionID != "published-1" || revision.WorkspaceID != "workspace-id" ||
+		revision.TopK != 2 || revision.ScoreThreshold != 0.7 || revision.QueryRewrite != "lowercase_trim" {
+		t.Fatalf("revision=%+v err=%v", revision, err)
+	}
+	source.documents = append(source.documents,
+		&knowledgedomain.Document{ID: "doc-2", ContentHash: "hash-2", IngestStatus: "completed"})
+	if _, err := resolver.LoadKnowledgeRuntimeRevision(
+		context.Background(), "tenant-1", "support", "published-1",
+	); err == nil || !strings.Contains(err.Error(), "document set changed") {
+		t.Fatalf("document drift error=%v", err)
+	}
+}
+
 func knowledgeRef(revisionID string) evaldomain.ResourceRef {
 	return evaldomain.ResourceRef{Kind: evaldomain.ResourceKindKnowledge, ResourceID: "support", RevisionID: revisionID}
 }

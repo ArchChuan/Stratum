@@ -13,3 +13,12 @@ type RAGSearchProvider interface {
 	// workspaces are bound or no chunks are retrieved.
 	SearchKnowledge(ctx context.Context, tenantID string, workspaceIDs []string, query string, topK int) (string, error)
 }
+
+type KnowledgeRevisionSearchProvider interface {
+	SearchKnowledgeRevision(
+		ctx context.Context,
+		tenantID string,
+		revision KnowledgeRetrievalRevision,
+		query string,
+	) (string, error)
+}

@@ -3,6 +3,7 @@ package wiring
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -184,6 +185,11 @@ type experimentMCPRevisionResolver struct {
 	adapter mcpEvaluationAdapter
 }
 
+type experimentKnowledgeRevisionResolver struct {
+	service *evalapp.ExperimentService
+	adapter knowledgeEvaluationAdapter
+}
+
 func (m skillCandidateManager) CreatePublishedBaseline(
 	ctx context.Context, tenantID, skillID string,
 ) (evaldomain.ResourceRef, error) {
@@ -271,6 +277,52 @@ func (r experimentMCPRevisionResolver) LoadMCPRuntimeRevision(
 	return mcpRuntimeRevision{
 		Config: config, EnabledTools: append([]string(nil), snapshot.EnabledTools...),
 		Timeout: config.Timeout, MaxRetries: snapshot.MaxRetries,
+	}, nil
+}
+
+func (r experimentKnowledgeRevisionResolver) ResolveKnowledgeRevision(
+	ctx context.Context, tenantID, workspaceName, subjectID string,
+) (agentport.KnowledgeRevisionAssignment, bool, error) {
+	assignment, found, err := r.service.ResolveAssignment(
+		ctx, tenantID, evaldomain.ResourceKindKnowledge, workspaceName, subjectID,
+	)
+	if err != nil || !found {
+		return agentport.KnowledgeRevisionAssignment{}, found, err
+	}
+	revision, err := r.LoadKnowledgeRuntimeRevision(ctx, tenantID, workspaceName, assignment.RevisionID)
+	if err != nil {
+		return agentport.KnowledgeRevisionAssignment{}, false, err
+	}
+	return agentport.KnowledgeRevisionAssignment{
+		Revision: revision, ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
+	}, true, nil
+}
+
+func (r experimentKnowledgeRevisionResolver) LoadKnowledgeRuntimeRevision(
+	ctx context.Context, tenantID, workspaceName, revisionID string,
+) (agentport.KnowledgeRetrievalRevision, error) {
+	_, snapshot, err := r.adapter.loadRevision(ctx, tenantID, evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindKnowledge, ResourceID: workspaceName, RevisionID: revisionID,
+	}, true)
+	if err != nil {
+		return agentport.KnowledgeRetrievalRevision{}, err
+	}
+	documents, err := r.adapter.source.ListSnapshotDocuments(ctx, tenantID, snapshot.WorkspaceID)
+	if err != nil {
+		return agentport.KnowledgeRetrievalRevision{}, fmt.Errorf("load Knowledge runtime documents: %w", err)
+	}
+	documentSetHash, err := knowledgeDocumentSetHash(documents)
+	if err != nil {
+		return agentport.KnowledgeRetrievalRevision{}, err
+	}
+	if documentSetHash != snapshot.DocumentSetHash {
+		return agentport.KnowledgeRetrievalRevision{}, errors.New("Knowledge runtime document set changed")
+	}
+	return agentport.KnowledgeRetrievalRevision{
+		RevisionID: revisionID, WorkspaceID: snapshot.WorkspaceID, WorkspaceName: snapshot.WorkspaceName,
+		EmbeddingModel: snapshot.EmbeddingIdentity, QueryMode: snapshot.QueryMode, TopK: snapshot.TopK,
+		ScoreThreshold: snapshot.ScoreThreshold, Reranking: snapshot.Reranking,
+		QueryRewrite: snapshot.QueryRewrite,
 	}, nil
 }
 
@@ -609,6 +661,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	var mcpProvider evalport.ResourceRevisionProvider
 	var runtimeMCPAdapter *mcpEvaluationAdapter
 	var knowledgeProvider evalport.ResourceRevisionProvider
+	var runtimeKnowledgeAdapter *knowledgeEvaluationAdapter
 	var sharedRevisionService *evalapp.RevisionService
 	if c.RevisionObjectStore != nil {
 		sharedRevisionService = evalapp.NewRevisionService(
@@ -644,6 +697,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		resourceAdapters[evaldomain.ResourceKindKnowledge] = knowledgeAdapter
 		candidateCreators[evaldomain.ResourceKindKnowledge] = knowledgeAdapter
 		knowledgeProvider = knowledgeAdapter
+		runtimeKnowledgeAdapter = &knowledgeAdapter
 	}
 	service := evalapp.NewService(evaluationResourceRouter{adapters: resourceAdapters}, runRepo, suiteRepo)
 	jobService := evalapp.NewJobService(jobRepo, service)
@@ -689,6 +743,11 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 			c.Agent.Service.SetMCPRevisionResolver(resolver)
 			c.Agent.Service.SetMCPToolExecutor(agentMCPExecutor{
 				clients: c.MCP.Manager, revisionRuntime: c.MCP.Manager, revisions: resolver,
+			})
+		}
+		if runtimeKnowledgeAdapter != nil {
+			c.Agent.Service.SetKnowledgeRevisionResolver(experimentKnowledgeRevisionResolver{
+				service: experimentService, adapter: *runtimeKnowledgeAdapter,
 			})
 		}
 	}

@@ -29,36 +29,37 @@ import (
 // Everything is an interface or value type — no concrete infrastructure
 // imports allowed.
 type AgentServiceDeps struct {
-	Registry                *Registry
-	TenantSettings          port.TenantSettings
-	SkillLookup             port.SkillLookup
-	SkillActivationResolver port.SkillActivationResolver
-	SkillRevisionResolver   port.SkillRevisionResolver
-	AgentRevisionResolver   port.AgentRevisionResolver
-	MCPRevisionResolver     port.MCPRevisionResolver
-	RAGSearch               port.RAGSearchProvider
-	TenantResolver          port.TenantCapabilityResolver
-	TenantModelValidator    port.TenantChatModelValidator
-	TenantModelCatalog      port.TenantChatModelCatalog
-	HistoryCompactorFactory func(port.CapabilityGateway, string, *zap.Logger) port.HistoryCompactor
-	MCPTools                port.MCPToolProvider
-	MCPToolExecutor         port.MCPToolExecutor
-	MCPToolPolicy           port.MCPToolPolicyResolver
-	ToolAuthorizer          *ToolAuthorizer
-	ApprovalService         *ToolApprovalService
-	ChatStore               ChatStore
-	EvidenceProvider        port.TraceEvidenceProvider
-	TracePayloadStore       port.TracePayloadStore
-	CheckpointStore         CheckpointStore
-	MemoryCleaner           port.AgentMemoryCleaner
-	MemoryBuffer            port.BufferMemoryFn
-	MemoryInjector          port.MemoryInjector
-	RecallMemory            port.RecallMemoryFn
-	Metrics                 observability.MetricsProvider
-	OfficialDocsSearch      func(context.Context, string) ([]domain.Citation, error)
-	DiagnosticProvider      port.DiagnosticEvidenceProvider
-	ProposalService         *ResourceChangeProposalService
-	Logger                  *zap.Logger
+	Registry                  *Registry
+	TenantSettings            port.TenantSettings
+	SkillLookup               port.SkillLookup
+	SkillActivationResolver   port.SkillActivationResolver
+	SkillRevisionResolver     port.SkillRevisionResolver
+	AgentRevisionResolver     port.AgentRevisionResolver
+	MCPRevisionResolver       port.MCPRevisionResolver
+	KnowledgeRevisionResolver port.KnowledgeRevisionResolver
+	RAGSearch                 port.RAGSearchProvider
+	TenantResolver            port.TenantCapabilityResolver
+	TenantModelValidator      port.TenantChatModelValidator
+	TenantModelCatalog        port.TenantChatModelCatalog
+	HistoryCompactorFactory   func(port.CapabilityGateway, string, *zap.Logger) port.HistoryCompactor
+	MCPTools                  port.MCPToolProvider
+	MCPToolExecutor           port.MCPToolExecutor
+	MCPToolPolicy             port.MCPToolPolicyResolver
+	ToolAuthorizer            *ToolAuthorizer
+	ApprovalService           *ToolApprovalService
+	ChatStore                 ChatStore
+	EvidenceProvider          port.TraceEvidenceProvider
+	TracePayloadStore         port.TracePayloadStore
+	CheckpointStore           CheckpointStore
+	MemoryCleaner             port.AgentMemoryCleaner
+	MemoryBuffer              port.BufferMemoryFn
+	MemoryInjector            port.MemoryInjector
+	RecallMemory              port.RecallMemoryFn
+	Metrics                   observability.MetricsProvider
+	OfficialDocsSearch        func(context.Context, string) ([]domain.Citation, error)
+	DiagnosticProvider        port.DiagnosticEvidenceProvider
+	ProposalService           *ResourceChangeProposalService
+	Logger                    *zap.Logger
 }
 
 // AgentService aggregates agent CRUD + Execute/ExecuteStream and shields
@@ -90,6 +91,10 @@ func (s *AgentService) SetAgentRevisionResolver(resolver port.AgentRevisionResol
 
 func (s *AgentService) SetMCPRevisionResolver(resolver port.MCPRevisionResolver) {
 	s.deps.MCPRevisionResolver = resolver
+}
+
+func (s *AgentService) SetKnowledgeRevisionResolver(resolver port.KnowledgeRevisionResolver) {
+	s.deps.KnowledgeRevisionResolver = resolver
 }
 
 func (s *AgentService) SetMCPToolExecutor(executor port.MCPToolExecutor) {
@@ -1104,6 +1109,7 @@ func (s *AgentService) assembleOptions(
 	var extraTools []port.ToolDefinition
 	var skillCatalog map[string]port.SkillActivation
 	mcpAssignments := make(map[string]port.MCPRevisionAssignment)
+	knowledgeAssignments := make(map[string]port.KnowledgeRevisionAssignment)
 	if isSystemAssistant {
 		extraTools = SystemAssistantToolDefinitions()
 		skillCatalog = map[string]port.SkillActivation{}
@@ -1156,6 +1162,37 @@ func (s *AgentService) assembleOptions(
 			if assignment.ExperimentID == "" {
 				continue
 			}
+			evolutionTrace.ExperimentAssignments[key] = ExperimentAssignment{
+				ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
+			}
+			if evolutionTrace.ExperimentID == "" {
+				evolutionTrace.ExperimentID, evolutionTrace.Variant = assignment.ExperimentID, assignment.Variant
+			}
+		}
+	}
+	if s.deps.KnowledgeRevisionResolver != nil {
+		config := a.GetConfig()
+		for index, workspaceID := range config.KnowledgeWorkspaceIDs {
+			workspaceName := workspaceID
+			if index < len(config.KnowledgeWorkspaceNames) && config.KnowledgeWorkspaceNames[index] != "" {
+				workspaceName = config.KnowledgeWorkspaceNames[index]
+			}
+			assignment, found, err := s.deps.KnowledgeRevisionResolver.ResolveKnowledgeRevision(
+				ctx, meta.TenantID, workspaceName, subjectID,
+			)
+			if err != nil {
+				return ctx, nil, fmt.Errorf("resolve Knowledge %s experiment assignment: %w", workspaceName, err)
+			}
+			if !found {
+				continue
+			}
+			if assignment.Revision.RevisionID == "" || assignment.Revision.WorkspaceName != workspaceName ||
+				assignment.ExperimentID == "" || (assignment.Variant != "stable" && assignment.Variant != "canary") {
+				return ctx, nil, fmt.Errorf("resolve Knowledge %s experiment assignment: invalid assignment", workspaceName)
+			}
+			knowledgeAssignments[workspaceName] = assignment
+			key := "knowledge:" + workspaceName
+			evolutionTrace.ResourceManifest[key] = assignment.Revision.RevisionID
 			evolutionTrace.ExperimentAssignments[key] = ExperimentAssignment{
 				ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
 			}
@@ -1299,9 +1336,34 @@ func (s *AgentService) assembleOptions(
 		}))
 	}
 	if s.deps.RAGSearch != nil && len(a.GetConfig().KnowledgeWorkspaceIDs) > 0 {
-		tenantID := meta.TenantID
+		tenantID, search := meta.TenantID, s.deps.RAGSearch
 		options = append(options, WithRAGSearchFn(func(rctx context.Context, workspaces []string, query string, topK int) (string, error) {
-			return s.deps.RAGSearch.SearchKnowledge(rctx, tenantID, workspaces, query, topK)
+			var combined strings.Builder
+			mutable := make([]string, 0, len(workspaces))
+			for _, workspace := range workspaces {
+				assignment, found := knowledgeAssignments[workspace]
+				if !found {
+					mutable = append(mutable, workspace)
+					continue
+				}
+				revisionSearch, ok := search.(port.KnowledgeRevisionSearchProvider)
+				if !ok {
+					return "", errors.New("Knowledge revision search provider not configured")
+				}
+				content, err := revisionSearch.SearchKnowledgeRevision(rctx, tenantID, assignment.Revision, query)
+				if err != nil {
+					return "", err
+				}
+				combined.WriteString(content)
+			}
+			if len(mutable) > 0 {
+				content, err := search.SearchKnowledge(rctx, tenantID, mutable, query, topK)
+				if err != nil {
+					return "", err
+				}
+				combined.WriteString(content)
+			}
+			return combined.String(), nil
 		}))
 	}
 	return ctx, options, nil

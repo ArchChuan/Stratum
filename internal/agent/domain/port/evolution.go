@@ -32,3 +32,28 @@ type MCPRevisionResolver interface {
 		tenantID, serverID, subjectID string,
 	) (assignment MCPRevisionAssignment, found bool, err error)
 }
+
+type KnowledgeRetrievalRevision struct {
+	RevisionID     string
+	WorkspaceID    string
+	WorkspaceName  string
+	EmbeddingModel string
+	QueryMode      string
+	TopK           int
+	ScoreThreshold float64
+	Reranking      string
+	QueryRewrite   string
+}
+
+type KnowledgeRevisionAssignment struct {
+	Revision     KnowledgeRetrievalRevision
+	ExperimentID string
+	Variant      string
+}
+
+type KnowledgeRevisionResolver interface {
+	ResolveKnowledgeRevision(
+		ctx context.Context,
+		tenantID, workspaceName, subjectID string,
+	) (KnowledgeRevisionAssignment, bool, error)
+}

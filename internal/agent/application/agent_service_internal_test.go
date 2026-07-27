@@ -83,6 +83,37 @@ func (historyCompactorFake) CompactHistory(context.Context, []port.LLMMessage) (
 	return "summary", nil
 }
 
+type knowledgeRevisionResolverFake struct {
+	assignment port.KnowledgeRevisionAssignment
+}
+
+func (f knowledgeRevisionResolverFake) ResolveKnowledgeRevision(
+	context.Context, string, string, string,
+) (port.KnowledgeRevisionAssignment, bool, error) {
+	return f.assignment, true, nil
+}
+
+type knowledgeRevisionSearchFake struct {
+	mutableCalls  int
+	revisionCalls int
+	revision      port.KnowledgeRetrievalRevision
+}
+
+func (f *knowledgeRevisionSearchFake) SearchKnowledge(
+	context.Context, string, []string, string, int,
+) (string, error) {
+	f.mutableCalls++
+	return "", errors.New("mutable knowledge search must not be used")
+}
+
+func (f *knowledgeRevisionSearchFake) SearchKnowledgeRevision(
+	_ context.Context, _ string, revision port.KnowledgeRetrievalRevision, _ string,
+) (string, error) {
+	f.revisionCalls++
+	f.revision = revision
+	return "canary knowledge", nil
+}
+
 type evidenceProviderFake struct {
 	tenantID string
 }
@@ -142,6 +173,43 @@ func TestAssembleOptionsIncludesExecutionID(t *testing.T) {
 	cfg.ApplyOptions(options)
 	if cfg.ExecutionID != "execution-1" {
 		t.Fatalf("execution ID not propagated: %q", cfg.ExecutionID)
+	}
+}
+
+func TestAssembleOptionsPinsKnowledgeExperimentRevisionForTraceAndSearch(t *testing.T) {
+	revision := port.KnowledgeRetrievalRevision{
+		RevisionID: "knowledge-revision-1", WorkspaceID: "workspace-1", WorkspaceName: "Knowledge One",
+		EmbeddingModel: "embedding-1", QueryMode: "hybrid", TopK: 2,
+		ScoreThreshold: 0.7, Reranking: "score_desc", QueryRewrite: "lowercase_trim",
+	}
+	search := &knowledgeRevisionSearchFake{}
+	svc := NewAgentService(AgentServiceDeps{
+		KnowledgeRevisionResolver: knowledgeRevisionResolverFake{assignment: port.KnowledgeRevisionAssignment{
+			Revision: revision, ExperimentID: "experiment-1", Variant: "canary",
+		}},
+		RAGSearch: search,
+	})
+	agent := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: "agent-1", MaxIterations: 3, KnowledgeWorkspaceIDs: []string{"workspace-1"},
+		KnowledgeWorkspaceNames: []string{"Knowledge One"},
+	}}
+	_, options, err := svc.assembleOptions(context.Background(), agent,
+		ExecRequest{ConversationID: "conversation-1"},
+		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1")
+	if err != nil {
+		t.Fatalf("assembleOptions() error: %v", err)
+	}
+	cfg := &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+	if cfg.EvolutionTrace.ResourceManifest["knowledge:Knowledge One"] != "knowledge-revision-1" ||
+		cfg.EvolutionTrace.ExperimentAssignments["knowledge:Knowledge One"].Variant != "canary" {
+		t.Fatalf("knowledge assignment not traced: %+v", cfg.EvolutionTrace)
+	}
+	content, err := cfg.RAGSearchFn(context.Background(), []string{"Knowledge One"}, "QUERY", 9)
+	if err != nil || content != "canary knowledge" || search.mutableCalls != 0 || search.revisionCalls != 1 ||
+		search.revision.RevisionID != revision.RevisionID {
+		t.Fatalf("content=%q mutable=%d revision=%d snapshot=%+v err=%v",
+			content, search.mutableCalls, search.revisionCalls, search.revision, err)
 	}
 }
 
