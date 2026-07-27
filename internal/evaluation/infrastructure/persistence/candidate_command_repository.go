@@ -63,6 +63,17 @@ func (r *PgCandidateCommandRepository) Reject(
 		if version != command.ExpectedStateVersion {
 			return domain.ErrCandidateStateConflict
 		}
+		var activeExperiment bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM evaluation_experiments
+			WHERE resource_kind=$1 AND resource_id=$2 AND canary_revision_id=$3
+			  AND status IN ('running','paused')
+		)`, result.ResourceKind, result.ResourceID, result.RevisionID).Scan(&activeExperiment); err != nil {
+			return fmt.Errorf("candidate command repository: check active experiment: %w", err)
+		}
+		if activeExperiment {
+			return domain.ErrCandidateCommandNotAllowed
+		}
 		_, err = tx.Exec(ctx, `UPDATE optimization_candidates SET status='rejected',state_version=state_version+1,
 			rejection_reason=$2,rejected_by=$3,rejection_key=$4,rejection_fingerprint=$5 WHERE id=$1`,
 			candidateID, command.Reason, command.ActorID, command.IdempotencyKey, command.Fingerprint())
