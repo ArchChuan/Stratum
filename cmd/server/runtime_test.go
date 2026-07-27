@@ -14,40 +14,21 @@ import (
 	"go.uber.org/zap"
 )
 
-type readinessPingerFake struct{ err error }
-
-func (f readinessPingerFake) Ping(context.Context) error { return f.err }
-
-func TestWithPostgresReadinessIncludesPingFailure(t *testing.T) {
-	wantErr := errors.New("postgres down")
+func TestWithPostgresReadinessIncludesDatabaseFailure(t *testing.T) {
+	wantErr := errors.New("database not ready")
 	check := withPostgresReadiness(
 		func(context.Context) map[string]error { return map[string]error{"worker": nil} },
-		readinessPingerFake{err: wantErr},
-		func(context.Context) error { return nil },
-	)
-	results := check(context.Background())
-	if !errors.Is(results["postgres"], wantErr) {
-		t.Fatalf("postgres error = %v, want wrapped ping failure", results["postgres"])
-	}
-}
-
-func TestWithPostgresReadinessIncludesInvariantFailure(t *testing.T) {
-	wantErr := errors.New("default tenant schema missing")
-	check := withPostgresReadiness(
-		func(context.Context) map[string]error { return map[string]error{} },
-		readinessPingerFake{},
 		func(context.Context) error { return wantErr },
 	)
 	results := check(context.Background())
 	if !errors.Is(results["postgres"], wantErr) {
-		t.Fatalf("postgres error = %v, want wrapped invariant failure", results["postgres"])
+		t.Fatalf("postgres error = %v, want database readiness failure", results["postgres"])
 	}
 }
 
 func TestWithPostgresReadinessIsHealthyWhenPingAndInvariantPass(t *testing.T) {
 	check := withPostgresReadiness(
 		func(context.Context) map[string]error { return map[string]error{} },
-		readinessPingerFake{},
 		func(context.Context) error { return nil },
 	)
 	if err := check(context.Background())["postgres"]; err != nil {
@@ -55,19 +36,15 @@ func TestWithPostgresReadinessIsHealthyWhenPingAndInvariantPass(t *testing.T) {
 	}
 }
 
-func TestWithPostgresReadinessPreservesBaseComponentsAndFailsClosedWithoutDatabase(t *testing.T) {
+func TestWithPostgresReadinessPreservesBaseComponents(t *testing.T) {
 	workerErr := errors.New("worker down")
 	check := withPostgresReadiness(
 		func(context.Context) map[string]error { return map[string]error{"worker": workerErr} },
-		nil,
-		func(context.Context) error { t.Fatal("invariant check called without database"); return nil },
+		func(context.Context) error { return nil },
 	)
 	results := check(context.Background())
 	if !errors.Is(results["worker"], workerErr) {
 		t.Fatalf("worker error = %v, want base component preserved", results["worker"])
-	}
-	if results["postgres"] == nil {
-		t.Fatalf("postgres error missing without database: %#v", results)
 	}
 }
 

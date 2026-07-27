@@ -23,26 +23,13 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 )
 
-type readinessPinger interface {
-	Ping(context.Context) error
-}
-
 func withPostgresReadiness(
 	base func(context.Context) map[string]error,
-	db readinessPinger,
-	checkInvariant func(context.Context) error,
+	checkDatabase func(context.Context) error,
 ) func(context.Context) map[string]error {
 	return func(ctx context.Context) map[string]error {
 		results := base(ctx)
-		if db == nil {
-			results["postgres"] = fmt.Errorf("postgres not configured")
-			return results
-		}
-		if err := db.Ping(ctx); err != nil {
-			results["postgres"] = fmt.Errorf("postgres ping: %w", err)
-			return results
-		}
-		results["postgres"] = checkInvariant(ctx)
+		results["postgres"] = checkDatabase(ctx)
 		return results
 	}
 }
@@ -116,12 +103,15 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 	registerChatCleanup(appHarness, c, logger)
 	registerGuestReaper(appHarness, c, logger)
 	registerWorkflowWorker(appHarness, c, logger)
-	var postgres readinessPinger
-	if c.DB() != nil {
-		postgres = c.DB()
-	}
-	c.ReadinessCheck = withPostgresReadiness(appHarness.HealthCheck, postgres, func(ctx context.Context) error {
-		return postgresstorage.CheckDefaultTenantReadiness(ctx, c.DB())
+	c.ReadinessCheck = withPostgresReadiness(appHarness.HealthCheck, func(ctx context.Context) error {
+		db := c.DB()
+		if db == nil {
+			return fmt.Errorf("postgres not configured")
+		}
+		if err := db.Ping(ctx); err != nil {
+			return fmt.Errorf("postgres ping: %w", err)
+		}
+		return postgresstorage.CheckDefaultTenantReadiness(ctx, db)
 	})
 	registerHTTPServer(appHarness, cfg, c, logger)
 
