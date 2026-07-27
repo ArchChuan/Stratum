@@ -3,10 +3,12 @@ package wiring
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
+	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	knowledgedomain "github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
@@ -61,6 +63,23 @@ func TestProposalMCPCreateHasNoCredentialsAndUpdatePreservesStoredCredentials(t 
 	require.NotContains(t, string(result.Readback), "keep-me")
 }
 
+func TestProposalMCPUpdateFailureHasUnknownOutcome(t *testing.T) {
+	mcp := &proposalMCPFake{
+		configs: map[string]*mcpdomain.ServerConfig{"server-1": {
+			ID: "server-1", Name: "old", Transport: "streamable_http", URL: "https://old.test/mcp",
+		}},
+		updateErr: errors.New("replacement connection failed"),
+	}
+	adapter := NewResourceChangeProposalAdapters(nil, nil, mcp, nil)
+	_, err := adapter.ApplyResourceChange(context.Background(), agentdomain.ProposalEnvelope{
+		Proposal: agentdomain.ResourceChangeProposal{ResourceKind: agentdomain.ResourceMCPConfig, ResourceID: "server-1", Operation: agentdomain.OperationUpdate},
+		Payload:  &agentdomain.MCPConfigChange{Name: "new", Transport: "streamable_http", URL: "https://new.test/mcp", TimeoutSec: 30},
+	})
+	var applyErr *agentport.ResourceApplyError
+	require.ErrorAs(t, err, &applyErr)
+	require.Equal(t, agentport.ResourceApplyUnknownOutcome, applyErr.Outcome)
+}
+
 func TestProposalKnowledgeUpdateCannotRenameWorkspace(t *testing.T) {
 	knowledge := &proposalKnowledgeFake{value: &knowledgedomain.Workspace{ID: "ws-1", Name: "docs", Description: "old", Config: knowledgedomain.WorkspaceConfig{EmbeddingModel: knowledgedomain.DefaultEmbeddingModel}}}
 	adapter := NewResourceChangeProposalAdapters(nil, nil, nil, knowledge)
@@ -90,7 +109,8 @@ func (f *proposalAgentFake) Update(_ context.Context, id string, in agentapp.Upd
 }
 
 type proposalMCPFake struct {
-	configs map[string]*mcpdomain.ServerConfig
+	configs   map[string]*mcpdomain.ServerConfig
+	updateErr error
 }
 
 func (f *proposalMCPFake) ConnectServer(_ context.Context, cfg *mcpdomain.ServerConfig) error {
@@ -98,6 +118,9 @@ func (f *proposalMCPFake) ConnectServer(_ context.Context, cfg *mcpdomain.Server
 	return nil
 }
 func (f *proposalMCPFake) UpdateServer(_ context.Context, cfg *mcpdomain.ServerConfig) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
 	f.configs[cfg.ID] = cloneMCPConfigForTest(cfg)
 	return nil
 }

@@ -231,7 +231,10 @@ func (a *ResourceChangeProposalAdapters) applyMCP(
 		config.Headers = cloneStringValues(stored.Headers)
 		config.Auth = cloneMCPAuth(stored.Auth)
 		if err := a.mcp.UpdateServer(ctx, config); err != nil {
-			return agentdomain.ApplyResult{}, definiteApplyError(err)
+			return agentdomain.ApplyResult{}, &agentport.ResourceApplyError{
+				Outcome: agentport.ResourceApplyUnknownOutcome,
+				Err:     err,
+			}
 		}
 	}
 	readback, err := a.mcp.GetServerConfig(ctx, id)
