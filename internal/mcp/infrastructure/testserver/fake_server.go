@@ -110,6 +110,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		tools := append([]Tool(nil), s.tools...)
 		s.mu.RUnlock()
 		writeRPCResult(w, request.ID, map[string]any{"tools": tools})
+	case "resources/list":
+		writeRPCResult(w, request.ID, map[string]any{"resources": []any{}})
 	case "tools/call":
 		s.callTool(r.Context(), w, request)
 	default:

@@ -212,6 +212,10 @@ func (s *WorkspaceService) GetWorkspace(ctx context.Context, tenantID, name stri
 	return s.repo.GetByName(ctx, tenantID, name)
 }
 
+func (s *WorkspaceService) GetWorkspaceByID(ctx context.Context, tenantID, id string) (*domain.Workspace, error) {
+	return s.repo.GetByID(ctx, tenantID, id)
+}
+
 // ListSnapshotDocuments returns document metadata used to fingerprint an
 // immutable evaluation snapshot. Document bodies remain in retrieval stores.
 func (s *WorkspaceService) ListSnapshotDocuments(

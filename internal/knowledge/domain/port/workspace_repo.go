@@ -10,6 +10,7 @@ import (
 type WorkspaceRepo interface {
 	Create(ctx context.Context, tenantID string, ws *domain.Workspace) error
 	GetByName(ctx context.Context, tenantID, name string) (*domain.Workspace, error)
+	GetByID(ctx context.Context, tenantID, id string) (*domain.Workspace, error)
 	List(ctx context.Context, tenantID string) ([]*domain.Workspace, error)
 	UpdateDescriptionAndConfig(ctx context.Context, tenantID, name string, description *string, cfg domain.WorkspaceConfig) error
 	UpdateName(ctx context.Context, tenantID, oldName, newName string) error

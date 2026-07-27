@@ -320,6 +320,10 @@ func (r *recordingWorkspaceRepo) GetByName(ctx context.Context, tenantID, name s
 	return r.workspace, nil
 }
 
+func (r *recordingWorkspaceRepo) GetByID(ctx context.Context, tenantID, id string) (*domain.Workspace, error) {
+	return r.workspace, nil
+}
+
 func (r *recordingWorkspaceRepo) List(ctx context.Context, tenantID string) ([]*domain.Workspace, error) {
 	return nil, nil
 }

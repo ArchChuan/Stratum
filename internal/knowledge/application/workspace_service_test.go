@@ -13,6 +13,7 @@ import (
 
 type deleteWorkspaceRepo struct {
 	workspace *domain.Workspace
+	getByID   string
 }
 
 func (r *deleteWorkspaceRepo) Create(context.Context, string, *domain.Workspace) error { return nil }
@@ -20,6 +21,10 @@ func (r *deleteWorkspaceRepo) List(context.Context, string) ([]*domain.Workspace
 	return []*domain.Workspace{r.workspace}, nil
 }
 func (r *deleteWorkspaceRepo) GetByName(context.Context, string, string) (*domain.Workspace, error) {
+	return r.workspace, nil
+}
+func (r *deleteWorkspaceRepo) GetByID(_ context.Context, _, id string) (*domain.Workspace, error) {
+	r.getByID = id
 	return r.workspace, nil
 }
 func (r *deleteWorkspaceRepo) UpdateName(context.Context, string, string, string) error { return nil }
@@ -70,6 +75,20 @@ func (s *deleteVectorStore) DeleteByDocumentIDs(_ context.Context, collection st
 	s.deletedCollection = collection
 	s.deletedDocIDs = append([]string(nil), docIDs...)
 	return nil
+}
+
+func TestGetWorkspaceByIDUsesStableResourceID(t *testing.T) {
+	repo := &deleteWorkspaceRepo{workspace: &domain.Workspace{ID: "ws-1", Name: "docs"}}
+	service := NewWorkspaceService(repo, nil, zap.NewNop())
+
+	workspace, err := service.GetWorkspaceByID(context.Background(), "tenant-1", "ws-1")
+
+	if err != nil {
+		t.Fatalf("GetWorkspaceByID() error = %v", err)
+	}
+	if workspace.ID != "ws-1" || repo.getByID != "ws-1" {
+		t.Fatalf("workspace ID = %q, repository lookup ID = %q", workspace.ID, repo.getByID)
+	}
 }
 
 func TestDeleteDocumentRejectsProcessingDocument(t *testing.T) {

@@ -43,7 +43,7 @@ type proposalMCPService interface {
 type proposalKnowledgeService interface {
 	CreateWorkspace(context.Context, string, knowledgeapp.CreateWorkspaceInput) (*knowledgedomain.Workspace, error)
 	UpdateWorkspace(context.Context, string, string, knowledgeapp.UpdateWorkspaceInput) (*knowledgedomain.Workspace, error)
-	GetWorkspace(context.Context, string, string) (*knowledgedomain.Workspace, error)
+	GetWorkspaceByID(context.Context, string, string) (*knowledgedomain.Workspace, error)
 }
 
 type ResourceChangeProposalAdapters struct {
@@ -123,7 +123,7 @@ func (a *ResourceChangeProposalAdapters) ResolveBaseline(
 			return agentport.ResourceBaseline{}, err
 		}
 	case agentdomain.ResourceKnowledgeWorkspace:
-		value, err := a.knowledge.GetWorkspace(ctx, proposal.TenantID, proposal.ResourceID)
+		value, err := a.knowledge.GetWorkspaceByID(ctx, proposal.TenantID, proposal.ResourceID)
 		if err != nil {
 			return agentport.ResourceBaseline{}, err
 		}
@@ -285,7 +285,7 @@ func (a *ResourceChangeProposalAdapters) applyKnowledge(
 			}
 		}
 	} else {
-		existing, getErr := a.knowledge.GetWorkspace(ctx, proposal.TenantID, proposal.ResourceID)
+		existing, getErr := a.knowledge.GetWorkspaceByID(ctx, proposal.TenantID, proposal.ResourceID)
 		if getErr != nil {
 			return agentdomain.ApplyResult{}, definiteApplyError(getErr)
 		}
