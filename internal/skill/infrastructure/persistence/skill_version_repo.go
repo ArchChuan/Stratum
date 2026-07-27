@@ -166,6 +166,55 @@ func (r *PgSkillRevisionRepo) UpdateDraftInstructions(
 	return r.updateDraft(ctx, skillID, "instructions=$2, requirements=$3", []any{instructions, string(payload)}, contentHash)
 }
 
+func (r *PgSkillRevisionRepo) UpdateDraftBundle(
+	ctx context.Context,
+	skillID, expectedContentHash string,
+	skill port.SkillProductRow,
+	draft domain.SkillRevision,
+) (domain.SkillRevision, error) {
+	capabilityJSON, err := json.Marshal(draft.Capability)
+	if err != nil {
+		return domain.SkillRevision{}, fmt.Errorf("skill_revision_repo: marshal capability: %w", err)
+	}
+	activationJSON, err := json.Marshal(draft.ActivationContract)
+	if err != nil {
+		return domain.SkillRevision{}, fmt.Errorf("skill_revision_repo: marshal activation: %w", err)
+	}
+	requirementsJSON, err := json.Marshal(draft.Requirements)
+	if err != nil {
+		return domain.SkillRevision{}, fmt.Errorf("skill_revision_repo: marshal requirements: %w", err)
+	}
+	var updated domain.SkillRevision
+	err = tenantdb.ExecTenant(ctx, r.pool, func(ctx context.Context, tx pgx.Tx) error {
+		value, updateErr := scanSkillRevision(tx.QueryRow(ctx, `UPDATE skill_revisions
+			SET capability=$3::jsonb, activation_contract=$4::jsonb, instructions=$5,
+			    requirements=$6::jsonb, content_hash=$7, updated_at=NOW()
+			WHERE skill_id=$1 AND status='draft' AND content_hash=$2
+			RETURNING `+revisionColumns, skillID, expectedContentHash, string(capabilityJSON), string(activationJSON),
+			draft.Instructions, string(requirementsJSON), draft.ContentHash))
+		if updateErr != nil {
+			if updateErr != pgx.ErrNoRows {
+				return updateErr
+			}
+			var exists bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM skill_revisions WHERE skill_id=$1 AND status='draft')`, skillID).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return domain.ErrSkillNotFound
+			}
+			return domain.ErrSkillDraftStale
+		}
+		if _, err := tx.Exec(ctx, `UPDATE skills SET name=$2, description=$3, updated_at=NOW() WHERE id=$1`,
+			skillID, skill.Name, skill.Description); err != nil {
+			return err
+		}
+		updated = value
+		return nil
+	})
+	return updated, err
+}
+
 func (r *PgSkillRevisionRepo) updateDraft(
 	ctx context.Context, skillID, assignments string, values []any, contentHash string,
 ) (domain.SkillRevision, error) {

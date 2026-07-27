@@ -70,6 +70,26 @@ func TestVersionServiceUpdateInstructionBundleRefreshesHash(t *testing.T) {
 	}
 }
 
+func TestProposalSkillUpdateDraftBundleUsesExpectedHash(t *testing.T) {
+	repo := newFakeVersionRepo()
+	svc := NewVersionService(repo, zap.NewNop())
+	view := mustCreateDraft(t, svc)
+	updated, err := svc.UpdateDraftBundle(context.Background(), view.Skill.ID, view.Draft.ContentHash, UpdateDraftBundleInput{
+		Name: "updated_skill", Description: "updated description", Instructions: "updated instructions",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Skill.Name != "updated_skill" || updated.Draft.ContentHash == view.Draft.ContentHash {
+		t.Fatalf("unexpected bundle update: %#v", updated)
+	}
+	if _, err := svc.UpdateDraftBundle(context.Background(), view.Skill.ID, view.Draft.ContentHash, UpdateDraftBundleInput{
+		Name: "stale", Description: "stale", Instructions: "stale",
+	}); err != domain.ErrSkillDraftStale {
+		t.Fatalf("expected stale hash rejection, got %v", err)
+	}
+}
+
 func TestVersionServiceCandidateCanOnlyRewriteInstructions(t *testing.T) {
 	repo := newFakeVersionRepo()
 	svc := NewVersionService(repo, zap.NewNop())
@@ -230,6 +250,21 @@ func (r *fakeVersionRepo) UpdateDraftInstructions(_ context.Context, skillID, in
 	return r.updateDraft(skillID, func(v *domain.SkillRevision) {
 		v.Instructions, v.Requirements, v.ContentHash = instructions, requirements, hash
 	})
+}
+
+func (r *fakeVersionRepo) UpdateDraftBundle(_ context.Context, skillID, expected string, skill port.SkillProductRow, draft domain.SkillRevision) (domain.SkillRevision, error) {
+	for id, current := range r.revisions {
+		if current.SkillID != skillID || current.Status != domain.VersionStatusDraft {
+			continue
+		}
+		if current.ContentHash != expected {
+			return domain.SkillRevision{}, domain.ErrSkillDraftStale
+		}
+		r.skills[skillID] = skill
+		r.revisions[id] = draft
+		return draft, nil
+	}
+	return domain.SkillRevision{}, domain.ErrSkillNotFound
 }
 func (r *fakeVersionRepo) NextRevisionNo(_ context.Context, skillID string) (int, error) {
 	next := 1

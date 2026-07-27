@@ -27,6 +27,7 @@ type VersionRepo interface {
 	UpdateDraftCapability(ctx context.Context, skillID string, capability domain.Capability, contentHash string) (domain.SkillRevision, error)
 	UpdateDraftActivation(ctx context.Context, skillID string, contract domain.ActivationContract, contentHash string) (domain.SkillRevision, error)
 	UpdateDraftInstructions(ctx context.Context, skillID, instructions string, requirements domain.Requirements, contentHash string) (domain.SkillRevision, error)
+	UpdateDraftBundle(ctx context.Context, skillID, expectedContentHash string, skill SkillProductRow, draft domain.SkillRevision) (domain.SkillRevision, error)
 	PublishDraft(ctx context.Context, skillID, draftRevisionID string, nextRevisionNo int, checks map[string]any) (domain.SkillRevision, error)
 	NextRevisionNo(ctx context.Context, skillID string) (int, error)
 }

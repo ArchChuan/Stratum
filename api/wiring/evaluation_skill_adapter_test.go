@@ -165,6 +165,9 @@ func (r *evaluationSkillVersionRepo) UpdateDraftActivation(context.Context, stri
 func (r *evaluationSkillVersionRepo) UpdateDraftInstructions(context.Context, string, string, skilldomain.Requirements, string) (skilldomain.SkillRevision, error) {
 	return skilldomain.SkillRevision{}, nil
 }
+func (r *evaluationSkillVersionRepo) UpdateDraftBundle(context.Context, string, string, skillport.SkillProductRow, skilldomain.SkillRevision) (skilldomain.SkillRevision, error) {
+	return skilldomain.SkillRevision{}, nil
+}
 func (r *evaluationSkillVersionRepo) PublishDraft(context.Context, string, string, int, map[string]any) (skilldomain.SkillRevision, error) {
 	return skilldomain.SkillRevision{}, nil
 }

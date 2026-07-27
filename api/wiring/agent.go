@@ -6,6 +6,7 @@ import (
 	"time"
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	agentobjects "github.com/byteBuilderX/stratum/internal/agent/infrastructure/objectstore"
@@ -16,6 +17,7 @@ import (
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -39,6 +41,7 @@ type Agent struct {
 	SkillLookup         agentport.SkillLookup
 	TenantSettings      agentport.TenantSettings
 	DiagnosticProvider  agentport.DiagnosticEvidenceProvider
+	ProposalService     *agent.ResourceChangeProposalService
 }
 
 // ragSearchAdapter wraps *knowledge.RAGService to satisfy
@@ -245,6 +248,26 @@ func (c *Container) buildAgent(ctx context.Context) error {
 	deps.OfficialDocsSearch = officialdocs.Search
 	deps.DiagnosticProvider = a.DiagnosticProvider
 	a.Service = agent.NewAgentService(deps)
+	if db != nil && c.Skill != nil && c.MCP != nil && c.Knowledge != nil &&
+		c.Skill.VersionService != nil && c.MCP.Service != nil && c.Knowledge.WorkspaceService != nil {
+		adapters := NewResourceChangeProposalAdapters(
+			a.Service, c.Skill.VersionService, c.MCP.Service, c.Knowledge.WorkspaceService,
+		)
+		metrics := deps.Metrics
+		if metrics == nil {
+			metrics = observability.NoopMetrics{}
+		}
+		a.ProposalService = agent.NewResourceChangeProposalService(
+			persistence.NewPgResourceChangeProposalRepo(db),
+			proposalAuthorizer{roles: tenantRoleAdapter{service: tenantMemberService(c)}},
+			adapters,
+			map[domain.ResourceKind]agentport.ResourceChangeApplier{
+				domain.ResourceAgent: adapters, domain.ResourceSkillDraft: adapters,
+				domain.ResourceMCPConfig: adapters, domain.ResourceKnowledgeWorkspace: adapters,
+			},
+			metrics,
+		)
+	}
 
 	c.Agent = a
 	return nil
