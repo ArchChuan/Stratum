@@ -203,10 +203,21 @@ require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'deployment/opik-backend' 'Op
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'deployment/opik-otel-collector' 'OTEL collector readiness check'
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'baseline_projection' 'proposal baseline column check'
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'edit_count' 'proposal edit count column check'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'GROUP BY table_schema' \
+    'proposal columns checked per tenant schema'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" '/api/auth/me' 'administrator bearer identity check'
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" "role IN \('owner',[[:space:]]*'admin'\)" \
     'aggregate tenant administrator count'
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" "settings->'llm_api_keys'" \
     'aggregate configured provider count'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'stratum_diagnose_tenant' \
+    'configured chain diagnostic tool evidence'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'diagnosticReport' \
+    'configured chain structured diagnostic report'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'X-Request-ID' \
+    'configured chain request trace correlation'
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'trace_id' \
+    'configured chain Opik execution correlation'
 for state in passed failed prerequisite_missing; do
     require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" "${state}" "configured chain ${state} state"
 done

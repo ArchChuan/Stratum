@@ -29,6 +29,10 @@ require "$script" 'stop_process_group' 'exact child-process cleanup'
 require "$config" "name: 'mobile-390'" 'mobile viewport'
 require "$config" "name: 'desktop-1440'" 'desktop viewport'
 require "$spec" "REAL_PLATFORM_ASSISTANT_E2E" 'spec cannot silently run in mocked mode'
+require "$spec" 'page\.screenshot' 'real viewport screenshot capture'
+require "$spec" 'canvas' 'canvas-free content check'
+require "$spec" 'byteLength' 'non-empty screenshot pixel evidence'
+require "$spec" 'sensitiveMarkers' 'screenshot secret-marker boundary check'
 if grep -Eq 'page\.route\(' "$spec"; then
   printf 'platform assistant browser E2E must not intercept business APIs\n' >&2
   exit 1

@@ -38,7 +38,7 @@ pass.
 | --- | --- | --- | --- | --- | --- |
 | Static and focused verification | remediation implementation and deployment manifests | `stratum-verify go-full`; deployment safety; focused Go; diff check | Passed locally on 2026-07-27 | passed | Final diff check must be repeated after this file |
 | Race and integration verification | affected packages and real PostgreSQL harness | race command; `scripts/test-platform-assistant-e2e.sh` | Race and all real-service cases passed | passed | Opik remote readiness is checked separately |
-| Real local user journeys | real backend/frontend/DB/stub harness | `scripts/test-platform-assistant-browser-e2e.sh` | Mobile and desktop passed chat, edit, reload, apply, prompt redaction, and repeated guest flows | passed | Deterministic local provider is test-only and loopback-bound |
+| Real local user journeys | real backend/frontend/DB/stub harness | `scripts/test-platform-assistant-browser-e2e.sh` | Mobile and desktop passed chat, edit, reload, apply, prompt redaction, non-empty PNG capture, no-canvas rendering, and sensitive-marker scans | passed | Deterministic local provider is test-only and loopback-bound |
 | Deploy and remote acceptance | `scripts/e2e/platform-assistant-remote-verify.sh` | deployment safety contract plus post-CD verifier | Pre-deploy Demo failed at missing `edit_count`, correctly blocking stale release | pending_deploy | Re-run after merge and CD; configured chain also requires legal admin/provider prerequisites |
 | Final evidence and knowledge gate | this audit; `tmp/knowledge-deposition/` report | final status/diff and knowledge report checks | Pending final commit, CI, CD, and remote rerun | pending | Ignored knowledge report must be preserved before worktree cleanup |
 

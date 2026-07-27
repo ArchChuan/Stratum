@@ -20,7 +20,18 @@ const openConversationControls = async (page: Page) => {
   return page;
 };
 
-test('real admin chat creates, edits, reloads, and applies one governed proposal', async ({ browser, context, page }) => {
+const sensitiveMarkers = [
+  'platform-assistant-browser-e2e-key',
+  'Authorization:',
+  'Bearer ',
+  'apiKey',
+  'password',
+];
+
+test('real admin chat creates, edits, reloads, and applies one governed proposal', async (
+  { browser, context, page },
+  testInfo,
+) => {
   const session = await createPlatformAssistantSession(context, 'admin');
   await page.goto('/chat');
   await expect(page.getByText('Stratum 平台助手').first()).toBeVisible();
@@ -81,6 +92,16 @@ test('real admin chat creates, edits, reloads, and applies one governed proposal
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
   expect(overflow).toBe(false);
+  await expect(page.locator('canvas')).toHaveCount(0);
+  const visibleText = await page.locator('body').innerText();
+  for (const marker of sensitiveMarkers) expect(visibleText).not.toContain(marker);
+  const screenshot = await page.screenshot({
+    path: testInfo.outputPath('platform-assistant-applied.png'),
+    fullPage: true,
+  });
+  expect(screenshot.byteLength).toBeGreaterThan(5_000);
+  const screenshotBytes = screenshot.toString('latin1');
+  for (const marker of sensitiveMarkers) expect(screenshotBytes).not.toContain(marker);
 
   for (const terminal of [
     { status: 'stale', label: '基线冲突', reason: '目标资源已变化' },
