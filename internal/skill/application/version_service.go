@@ -126,7 +126,14 @@ func (s *VersionService) PublishDraft(ctx context.Context, skillID string) (doma
 		return domain.SkillRevision{}, err
 	}
 	if !ok {
-		return domain.SkillRevision{}, domain.ErrSkillNotFound
+		_, skillExists, getErr := s.repo.GetSkill(ctx, skillID)
+		if getErr != nil {
+			return domain.SkillRevision{}, getErr
+		}
+		if !skillExists {
+			return domain.SkillRevision{}, domain.ErrSkillNotFound
+		}
+		return domain.SkillRevision{}, domain.ErrSkillDraftNotFound
 	}
 	if err := draft.ValidatePublishable(0); err != nil {
 		return domain.SkillRevision{}, err

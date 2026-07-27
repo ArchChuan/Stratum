@@ -123,6 +123,7 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, agentapp.ErrNameConflict),
 		errors.Is(err, mcpdomain.ErrNameConflict),
 		errors.Is(err, skilldomain.ErrSkillNameConflict),
+		errors.Is(err, skilldomain.ErrSkillDraftNotFound),
 		errors.Is(err, skilldomain.ErrSkillLinked):
 		return http.StatusConflict
 	case errors.Is(err, memorydomain.ErrFactQuotaExceeded),
