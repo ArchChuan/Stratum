@@ -10,6 +10,7 @@ import (
 const (
 	toolArgumentsDigestPrefix  = "tool-arguments:v1:sha256:"
 	skillRevisionsDigestPrefix = "skill-revisions:v1:sha256:"
+	mcpRevisionsDigestPrefix   = "mcp-revisions:v1:sha256:"
 )
 
 func CanonicalToolArgumentsDigest(arguments map[string]any) (string, error) {
@@ -18,6 +19,10 @@ func CanonicalToolArgumentsDigest(arguments map[string]any) (string, error) {
 
 func canonicalSkillRevisionsDigest(revisions map[string]string) (string, error) {
 	return canonicalJSONDigest(skillRevisionsDigestPrefix, revisions)
+}
+
+func canonicalMCPRevisionsDigest(revisions map[string]string) (string, error) {
+	return canonicalJSONDigest(mcpRevisionsDigestPrefix, revisions)
 }
 
 func canonicalJSONDigest(prefix string, value any) (string, error) {

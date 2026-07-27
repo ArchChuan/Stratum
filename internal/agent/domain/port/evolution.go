@@ -19,3 +19,16 @@ type AgentRevisionResolver interface {
 		tenantID, agentID, subjectID string,
 	) (assignment AgentRevisionAssignment, found bool, err error)
 }
+
+type MCPRevisionAssignment struct {
+	RevisionID   string
+	ExperimentID string
+	Variant      string
+}
+
+type MCPRevisionResolver interface {
+	ResolveMCPRevision(
+		ctx context.Context,
+		tenantID, serverID, subjectID string,
+	) (assignment MCPRevisionAssignment, found bool, err error)
+}

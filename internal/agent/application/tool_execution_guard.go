@@ -92,7 +92,19 @@ func (g *ToolExecutionGuard) Execute(ctx context.Context, req ToolExecutionReque
 	if g.deps.Executor == nil {
 		return nil, fmt.Errorf("MCP tool executor not configured")
 	}
-	result, err := g.deps.Executor.ExecuteMCPTool(ctx, req.Tool.ServerID, req.Tool.CapabilityID, req.Arguments)
+	var result port.MCPToolResult
+	var err error
+	if req.MCPRevisionID != "" {
+		revisionExecutor, ok := g.deps.Executor.(port.MCPRevisionToolExecutor)
+		if !ok {
+			return nil, fmt.Errorf("MCP revision executor not configured")
+		}
+		result, err = revisionExecutor.ExecuteMCPToolRevision(
+			ctx, req.Tool.ServerID, req.Tool.CapabilityID, req.MCPRevisionID, decision.RiskLevel, req.Arguments,
+		)
+	} else {
+		result, err = g.deps.Executor.ExecuteMCPTool(ctx, req.Tool.ServerID, req.Tool.CapabilityID, req.Arguments)
+	}
 	if err != nil {
 		return nil, err
 	}

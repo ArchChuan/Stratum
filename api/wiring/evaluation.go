@@ -16,6 +16,7 @@ import (
 	evalport "github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
 	evalpersist "github.com/byteBuilderX/stratum/internal/evaluation/infrastructure/persistence"
 	knowledgeapp "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -178,6 +179,11 @@ type experimentAgentRevisionResolver struct {
 	adapter agentEvaluationAdapter
 }
 
+type experimentMCPRevisionResolver struct {
+	service *evalapp.ExperimentService
+	adapter mcpEvaluationAdapter
+}
+
 func (m skillCandidateManager) CreatePublishedBaseline(
 	ctx context.Context, tenantID, skillID string,
 ) (evaldomain.ResourceRef, error) {
@@ -229,6 +235,43 @@ func (r experimentAgentRevisionResolver) ResolveAgentRevision(
 		Revision: snapshot, RevisionID: assignment.RevisionID,
 		ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
 	}, true, nil
+}
+
+func (r experimentMCPRevisionResolver) ResolveMCPRevision(
+	ctx context.Context,
+	tenantID, serverID, subjectID string,
+) (agentport.MCPRevisionAssignment, bool, error) {
+	assignment, found, err := r.service.ResolveAssignment(
+		ctx, tenantID, evaldomain.ResourceKindMCP, serverID, subjectID,
+	)
+	return agentport.MCPRevisionAssignment{
+		RevisionID: assignment.RevisionID, ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
+	}, found, err
+}
+
+func (r experimentMCPRevisionResolver) LoadMCPRuntimeRevision(
+	ctx context.Context, tenantID, serverID, revisionID string,
+) (mcpRuntimeRevision, error) {
+	_, snapshot, err := r.adapter.loadRevision(ctx, tenantID, evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindMCP, ResourceID: serverID, RevisionID: revisionID,
+	}, true)
+	if err != nil {
+		return mcpRuntimeRevision{}, err
+	}
+	config, err := r.adapter.loadRuntimeConfig(ctx, tenantID, snapshot)
+	if err != nil {
+		return mcpRuntimeRevision{}, err
+	}
+	config.Timeout = time.Duration(snapshot.TimeoutMS) * time.Millisecond
+	if config.Retry == nil {
+		config.Retry = &mcpdomain.RetryConfig{}
+	}
+	config.Retry.Enabled = snapshot.MaxRetries > 0
+	config.Retry.MaxRetries = snapshot.MaxRetries
+	return mcpRuntimeRevision{
+		Config: config, EnabledTools: append([]string(nil), snapshot.EnabledTools...),
+		Timeout: config.Timeout, MaxRetries: snapshot.MaxRetries,
+	}, nil
 }
 
 func (m skillCandidateManager) LoadOptimizableSnapshot(
@@ -564,6 +607,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	var agentProvider evalport.AgentRevisionProvider
 	var runtimeAgentAdapter *agentEvaluationAdapter
 	var mcpProvider evalport.ResourceRevisionProvider
+	var runtimeMCPAdapter *mcpEvaluationAdapter
 	var knowledgeProvider evalport.ResourceRevisionProvider
 	var sharedRevisionService *evalapp.RevisionService
 	if c.RevisionObjectStore != nil {
@@ -589,6 +633,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		resourceAdapters[evaldomain.ResourceKindMCP] = mcpAdapter
 		candidateCreators[evaldomain.ResourceKindMCP] = mcpAdapter
 		mcpProvider = mcpAdapter
+		runtimeMCPAdapter = &mcpAdapter
 	}
 	if c.Knowledge != nil && c.Knowledge.WorkspaceService != nil && c.Knowledge.RAGService != nil &&
 		sharedRevisionService != nil {
@@ -637,6 +682,13 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 		if runtimeAgentAdapter != nil {
 			c.Agent.Service.SetAgentRevisionResolver(experimentAgentRevisionResolver{
 				service: experimentService, adapter: *runtimeAgentAdapter,
+			})
+		}
+		if runtimeMCPAdapter != nil && c.MCP != nil && c.MCP.Manager != nil {
+			resolver := experimentMCPRevisionResolver{service: experimentService, adapter: *runtimeMCPAdapter}
+			c.Agent.Service.SetMCPRevisionResolver(resolver)
+			c.Agent.Service.SetMCPToolExecutor(agentMCPExecutor{
+				clients: c.MCP.Manager, revisionRuntime: c.MCP.Manager, revisions: resolver,
 			})
 		}
 	}

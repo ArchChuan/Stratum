@@ -35,6 +35,7 @@ type AgentServiceDeps struct {
 	SkillActivationResolver port.SkillActivationResolver
 	SkillRevisionResolver   port.SkillRevisionResolver
 	AgentRevisionResolver   port.AgentRevisionResolver
+	MCPRevisionResolver     port.MCPRevisionResolver
 	RAGSearch               port.RAGSearchProvider
 	TenantResolver          port.TenantCapabilityResolver
 	TenantModelValidator    port.TenantChatModelValidator
@@ -85,6 +86,14 @@ func (s *AgentService) SetResourceChangeProposalService(service *ResourceChangeP
 
 func (s *AgentService) SetAgentRevisionResolver(resolver port.AgentRevisionResolver) {
 	s.deps.AgentRevisionResolver = resolver
+}
+
+func (s *AgentService) SetMCPRevisionResolver(resolver port.MCPRevisionResolver) {
+	s.deps.MCPRevisionResolver = resolver
+}
+
+func (s *AgentService) SetMCPToolExecutor(executor port.MCPToolExecutor) {
+	s.deps.MCPToolExecutor = executor
 }
 
 // CreateAgentInput is the create-agent payload application receives from
@@ -1094,6 +1103,7 @@ func (s *AgentService) assembleOptions(
 	}
 	var extraTools []port.ToolDefinition
 	var skillCatalog map[string]port.SkillActivation
+	mcpAssignments := make(map[string]port.MCPRevisionAssignment)
 	if isSystemAssistant {
 		extraTools = SystemAssistantToolDefinitions()
 		skillCatalog = map[string]port.SkillActivation{}
@@ -1119,6 +1129,40 @@ func (s *AgentService) assembleOptions(
 	}
 	if evolutionTrace.ExperimentAssignments == nil {
 		evolutionTrace.ExperimentAssignments = make(map[string]ExperimentAssignment)
+	}
+	if s.deps.MCPRevisionResolver != nil {
+		for _, tool := range extraTools {
+			if tool.ProviderType != domain.ProviderTypeMCP || tool.ServerID == "" {
+				continue
+			}
+			if _, resolved := mcpAssignments[tool.ServerID]; resolved {
+				continue
+			}
+			assignment, found, err := s.deps.MCPRevisionResolver.ResolveMCPRevision(
+				ctx, meta.TenantID, tool.ServerID, subjectID,
+			)
+			if err != nil {
+				return ctx, nil, fmt.Errorf("resolve MCP %s experiment assignment: %w", tool.ServerID, err)
+			}
+			if !found {
+				continue
+			}
+			if assignment.RevisionID == "" {
+				return ctx, nil, fmt.Errorf("resolve MCP %s experiment assignment: revision required", tool.ServerID)
+			}
+			mcpAssignments[tool.ServerID] = assignment
+			key := "mcp:" + tool.ServerID
+			evolutionTrace.ResourceManifest[key] = assignment.RevisionID
+			if assignment.ExperimentID == "" {
+				continue
+			}
+			evolutionTrace.ExperimentAssignments[key] = ExperimentAssignment{
+				ExperimentID: assignment.ExperimentID, Variant: assignment.Variant,
+			}
+			if evolutionTrace.ExperimentID == "" {
+				evolutionTrace.ExperimentID, evolutionTrace.Variant = assignment.ExperimentID, assignment.Variant
+			}
+		}
 	}
 	for _, skillID := range a.GetConfig().AllowedSkills {
 		activation, ok := skillCatalog[skillID]
@@ -1234,6 +1278,7 @@ func (s *AgentService) assembleOptions(
 					ToolCallID: request.ToolCallID, ServerID: request.ServerID,
 					ToolName: request.ToolName, RiskLevel: request.RiskLevel,
 					Query: query, Arguments: request.Arguments, PinnedSkillRevisions: pinned,
+					PinnedMCPRevisions: map[string]string{request.ServerID: mcpAssignments[request.ServerID].RevisionID},
 				})
 			}
 		}
@@ -1249,6 +1294,7 @@ func (s *AgentService) assembleOptions(
 			request.TraceID = meta.TraceID
 			request.ExecutionID = executionID
 			request.AgentToolIDs = a.GetConfig().MCPToolIDs
+			request.MCPRevisionID = mcpAssignments[request.Tool.ServerID].RevisionID
 			return guard.Execute(callCtx, request)
 		}))
 	}

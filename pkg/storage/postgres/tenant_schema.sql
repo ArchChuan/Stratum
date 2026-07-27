@@ -575,6 +575,7 @@ CREATE TABLE IF NOT EXISTS agent_tool_approvals (
         CHECK (risk_level IN ('destructive', 'unclassified')),
     arguments_digest  TEXT        NOT NULL DEFAULT '',
     skill_revisions_digest TEXT    NOT NULL DEFAULT '',
+    mcp_revisions_digest TEXT      NOT NULL DEFAULT '',
     policy_version    TEXT        NOT NULL DEFAULT '',
     encrypted_payload TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
@@ -590,6 +591,7 @@ CREATE TABLE IF NOT EXISTS agent_tool_approvals (
 ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS decision_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS arguments_digest TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS skill_revisions_digest TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS mcp_revisions_digest TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_tool_approvals ADD COLUMN IF NOT EXISTS policy_version TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_tool_approvals DROP CONSTRAINT IF EXISTS agent_tool_approvals_status_check;
 ALTER TABLE agent_tool_approvals ADD CONSTRAINT agent_tool_approvals_status_check

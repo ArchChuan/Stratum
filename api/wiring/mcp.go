@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"go.uber.org/zap"
@@ -12,6 +13,7 @@ import (
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	mcpport "github.com/byteBuilderX/stratum/internal/mcp/domain/port"
 	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
+	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
 
 var _ mcpport.RevisionClientManager = (*mcp.ClientManager)(nil)
@@ -30,7 +32,24 @@ type mcpClientResolver interface {
 	GetClient(ctx context.Context, serverID string) mcp.MCPClient
 }
 
-type agentMCPExecutor struct{ clients mcpClientResolver }
+type mcpRuntimeRevision struct {
+	Config       *mcp.MCPServerConfig
+	EnabledTools []string
+	Timeout      time.Duration
+	MaxRetries   int
+}
+
+type mcpRuntimeRevisionLoader interface {
+	LoadMCPRuntimeRevision(
+		ctx context.Context, tenantID, serverID, revisionID string,
+	) (mcpRuntimeRevision, error)
+}
+
+type agentMCPExecutor struct {
+	clients         mcpClientResolver
+	revisionRuntime mcpport.RevisionClientManager
+	revisions       mcpRuntimeRevisionLoader
+}
 
 func (e agentMCPExecutor) ExecuteMCPTool(
 	ctx context.Context, serverID, toolName string, input map[string]any,
@@ -56,6 +75,62 @@ func (e agentMCPExecutor) ExecuteMCPTool(
 		}
 	}
 	return normalizeMCPToolResult(output)
+}
+
+func (e agentMCPExecutor) ExecuteMCPToolRevision(
+	ctx context.Context,
+	serverID, toolName, revisionID string,
+	risk agentport.ToolRiskLevel,
+	input map[string]any,
+) (agentport.MCPToolResult, error) {
+	tenant, ok := postgres.FromContext(ctx)
+	if !ok || tenant == nil || tenant.TenantID == "" || e.revisions == nil || e.revisionRuntime == nil {
+		return agentport.MCPToolResult{}, &agentport.MCPToolExecutionError{
+			Outcome: agentport.ToolExecutionOutcomeNotSent,
+			Err:     fmt.Errorf("MCP revision runtime unavailable"),
+		}
+	}
+	revision, err := e.revisions.LoadMCPRuntimeRevision(ctx, tenant.TenantID, serverID, revisionID)
+	if err != nil {
+		return agentport.MCPToolResult{}, &agentport.MCPToolExecutionError{
+			Outcome: agentport.ToolExecutionOutcomeNotSent, Err: err,
+		}
+	}
+	if !slices.Contains(revision.EnabledTools, toolName) {
+		return agentport.MCPToolResult{}, &agentport.MCPToolExecutionError{
+			Outcome: agentport.ToolExecutionOutcomeNotSent,
+			Err:     fmt.Errorf("MCP tool disabled by assigned revision"),
+		}
+	}
+	attempts := 1
+	if risk == agentport.ToolRiskRead {
+		attempts += revision.MaxRetries
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
+		callCtx, cancel := context.WithTimeout(ctx, revision.Timeout)
+		output, callErr := e.revisionRuntime.CallToolWithConfig(callCtx, revision.Config, toolName, input)
+		cancel()
+		if callErr == nil {
+			return normalizeMCPToolResult(output)
+		}
+		if attempt+1 == attempts {
+			return agentport.MCPToolResult{}, &agentport.MCPToolExecutionError{
+				Outcome: agentport.ToolExecutionOutcomeUnknown, Err: callErr,
+			}
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return agentport.MCPToolResult{}, &agentport.MCPToolExecutionError{
+				Outcome: agentport.ToolExecutionOutcomeNotSent, Err: ctx.Err(),
+			}
+		case <-timer.C:
+		}
+	}
+	return agentport.MCPToolResult{}, &agentport.MCPToolExecutionError{
+		Outcome: agentport.ToolExecutionOutcomeUnknown, Err: fmt.Errorf("MCP revision execution exhausted"),
+	}
 }
 
 func normalizeMCPToolResult(output any) (agentport.MCPToolResult, error) {

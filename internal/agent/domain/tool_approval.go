@@ -53,6 +53,7 @@ type ToolApproval struct {
 	RiskLevel            string     `json:"risk_level"`
 	ArgumentsDigest      string     `json:"arguments_digest"`
 	SkillRevisionsDigest string     `json:"skill_revisions_digest"`
+	MCPRevisionsDigest   string     `json:"mcp_revisions_digest"`
 	PolicyVersion        string     `json:"policy_version"`
 	EncryptedPayload     string     `json:"-"`
 	Status               string     `json:"status"`

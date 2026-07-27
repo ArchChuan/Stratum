@@ -16,6 +16,15 @@ type MCPToolExecutor interface {
 	ExecuteMCPTool(ctx context.Context, serverID, toolName string, input map[string]any) (MCPToolResult, error)
 }
 
+type MCPRevisionToolExecutor interface {
+	ExecuteMCPToolRevision(
+		ctx context.Context,
+		serverID, toolName, revisionID string,
+		risk ToolRiskLevel,
+		input map[string]any,
+	) (MCPToolResult, error)
+}
+
 type MCPContent struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
@@ -69,6 +78,7 @@ type ToolExecutionRequest struct {
 	ActiveSkill   *SkillActivation
 	ApprovalID    string
 	PolicyVersion string
+	MCPRevisionID string
 }
 
 type ToolExecutionFn func(context.Context, ToolExecutionRequest) (any, error)

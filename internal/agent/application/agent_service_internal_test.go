@@ -223,6 +223,78 @@ type agentRevisionResolverFake struct {
 	err      error
 }
 
+type mcpRevisionResolverFake struct{}
+
+func (mcpRevisionResolverFake) ResolveMCPRevision(
+	_ context.Context, _, serverID, _ string,
+) (port.MCPRevisionAssignment, bool, error) {
+	return port.MCPRevisionAssignment{
+		RevisionID: "revision-" + serverID, ExperimentID: "experiment-" + serverID, Variant: "canary",
+	}, true, nil
+}
+
+type mcpToolProviderFake struct{}
+
+func (mcpToolProviderFake) ToolsForServer(context.Context, string) []port.ToolDefinition {
+	return []port.ToolDefinition{{
+		Name: "mcp:server-1:lookup", ProviderType: domain.ProviderTypeMCP,
+		ServerID: "server-1", CapabilityID: "lookup",
+		InputSchema: map[string]any{"type": "object"}, Metadata: map[string]any{
+			"risk_level": "read", "policy_resolved": true,
+		},
+	}}
+}
+
+type revisionCaptureMCPExecutor struct{ revisionID string }
+
+func (e *revisionCaptureMCPExecutor) ExecuteMCPTool(
+	context.Context, string, string, map[string]any,
+) (port.MCPToolResult, error) {
+	return port.MCPToolResult{}, errors.New("mutable MCP execution used")
+}
+
+func (e *revisionCaptureMCPExecutor) ExecuteMCPToolRevision(
+	_ context.Context, _, _, revisionID string, _ port.ToolRiskLevel, _ map[string]any,
+) (port.MCPToolResult, error) {
+	e.revisionID = revisionID
+	return port.MCPToolResult{StructuredContent: map[string]any{"status": "ok"}}, nil
+}
+
+func TestAssembleOptionsPinsMCPExperimentRevisionForTraceAndExecution(t *testing.T) {
+	executor := &revisionCaptureMCPExecutor{}
+	svc := NewAgentService(AgentServiceDeps{
+		MCPRevisionResolver: mcpRevisionResolverFake{}, MCPTools: mcpToolProviderFake{},
+		MCPToolExecutor: executor, ToolAuthorizer: NewToolAuthorizer(stubToolUserScopeResolver{
+			scope: port.ToolUserScope{UserActive: true, AllowsTool: true},
+		}),
+	})
+	a := &optionCaptureAgent{config: &domain.AgentConfig{
+		ID: "agent-1", MaxIterations: 3, MCPToolIDs: []string{"mcp:server-1:lookup"},
+	}}
+
+	_, options, err := svc.assembleOptions(context.Background(), a, ExecRequest{UserID: "user-1"},
+		ExecMeta{TenantID: "tenant-1", TraceID: "trace-1"}, "execution-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &ExecutionConfig{}
+	cfg.ApplyOptions(options)
+	if cfg.EvolutionTrace.ResourceManifest["mcp:server-1"] != "revision-server-1" ||
+		cfg.EvolutionTrace.ExperimentAssignments["mcp:server-1"].ExperimentID != "experiment-server-1" {
+		t.Fatalf("MCP trace assignment = %#v", cfg.EvolutionTrace)
+	}
+	_, err = cfg.ToolExecutionFn(context.Background(), port.ToolExecutionRequest{
+		ToolCallID: "call-1", Tool: mcpToolProviderFake{}.ToolsForServer(context.Background(), "server-1")[0],
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executor.revisionID != "revision-server-1" {
+		t.Fatalf("executed MCP revision = %q", executor.revisionID)
+	}
+}
+
 func (f agentRevisionResolverFake) ResolveAgentRevision(
 	context.Context, string, string, string,
 ) (port.AgentRevisionAssignment, bool, error) {
