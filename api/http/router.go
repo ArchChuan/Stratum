@@ -39,11 +39,26 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerSkills(r, c, requireActive)
 	registerEvaluations(r, c, requireActive)
 	registerAgents(r, c, requireActive)
+	registerResourceChangeProposals(r, c, requireActive)
 	registerWorkflows(r, c, requireActive)
 	registerKnowledge(r, c, requireActive)
 	registerMCP(r, c, requireActive)
 	registerMemory(r, c, requireActive)
 	return r
+}
+
+func registerResourceChangeProposals(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Agent == nil || c.Agent.ProposalService == nil {
+		return
+	}
+	h := handler.NewResourceChangeProposalHandler(c.Agent.ProposalService)
+	routes := r.Group("/resource-change-proposals",
+		protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"))...)
+	routes.Use(requireActive)
+	routes.GET("/:id", h.Get)
+	routes.PATCH("/:id", h.Update)
+	routes.POST("/:id/cancel", h.Cancel)
+	routes.POST("/:id/confirm", h.Confirm)
 }
 
 func registerWorkflows(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {

@@ -179,6 +179,16 @@ func (s *ResourceChangeProposalService) Cancel(ctx context.Context, tenantID, ac
 	return s.repo.Cancel(ctx, id, actorID, s.now())
 }
 
+func (s *ResourceChangeProposalService) ListEvents(
+	ctx context.Context,
+	tenantID, actorID, id string,
+) ([]domain.ProposalEvent, error) {
+	if _, err := s.Get(ctx, tenantID, actorID, id); err != nil {
+		return nil, err
+	}
+	return s.repo.ListEvents(ctx, id)
+}
+
 func (s *ResourceChangeProposalService) ConfirmAndApply(
 	ctx context.Context,
 	tenantID, proposalID, actorID string,
@@ -268,13 +278,13 @@ func (s *ResourceChangeProposalService) finishApplyFailure(
 	ctx context.Context,
 	proposal domain.ResourceChangeProposal,
 	actorID string,
-	cause error,
+	_ error,
 ) error {
 	if err := s.finish(ctx, proposal, domain.StatusFailed, domain.ApplyResult{}, "proposal_apply_failed", actorID); err != nil {
-		return errors.Join(domain.ErrProposalApplyFailed, cause, err)
+		return errors.Join(domain.ErrProposalApplyFailed, err)
 	}
 	s.metrics.IncResourceProposal(string(proposal.ResourceKind), string(proposal.Operation), string(domain.StatusFailed))
-	return fmt.Errorf("%w: %v", domain.ErrProposalApplyFailed, cause)
+	return domain.ErrProposalApplyFailed
 }
 
 func (s *ResourceChangeProposalService) finish(
