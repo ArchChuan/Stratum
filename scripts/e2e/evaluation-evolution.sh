@@ -287,11 +287,27 @@ wait_container_healthy() {
   fail "timed out waiting for healthy Opik service $service"
 }
 
+assert_host_memory_budget() {
+  local meminfo_file=${E2E_MEMINFO_FILE:-/proc/meminfo}
+  local min_available_kib=${E2E_MIN_AVAILABLE_KIB:-6291456}
+  local available_kib swap_free_kib
+  [[ "$min_available_kib" =~ ^[0-9]+$ && -r "$meminfo_file" ]] || \
+    fail 'host memory preflight configuration is invalid'
+  available_kib=$(awk '$1 == "MemAvailable:" { print $2; exit }' "$meminfo_file")
+  swap_free_kib=$(awk '$1 == "SwapFree:" { print $2; exit }' "$meminfo_file")
+  [[ "$available_kib" =~ ^[0-9]+$ && "$swap_free_kib" =~ ^[0-9]+$ ]] || \
+    fail 'host memory evidence is unavailable'
+  if (( available_kib < min_available_kib )); then
+    fail "insufficient host memory for isolated Opik and Milvus: available_mib=$((available_kib / 1024)) swap_free_mib=$((swap_free_kib / 1024)) required_mib=$((min_available_kib / 1024))"
+  fi
+}
+
 command -v docker >/dev/null || fail 'docker is required'
 command -v openssl >/dev/null || fail 'openssl is required'
 command -v npm >/dev/null || fail 'npm is required'
 npm ls --prefix "$repo_dir/web" --depth=0 @xyflow/react >/dev/null 2>&1 || \
   fail 'frontend dependencies are incomplete; run npm ci --prefix web'
+assert_host_memory_budget
 [[ -n "${OPENAI_API_KEY:-}" ]] || fail 'a test LLM key is required in OPENAI_API_KEY'
 [[ -n "${E2E_OPIK_COMPOSE_FILE:-}" && -f "${E2E_OPIK_COMPOSE_FILE}" ]] || \
   fail 'E2E_OPIK_COMPOSE_FILE must point to a reviewed, pinned upstream Opik self-hosting compose file'
