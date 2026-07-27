@@ -76,6 +76,7 @@ func registerWorkflows(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 	definitions.GET("/:id/versions/:versionID", h.GetVersion)
 	definitions.POST("", admin, requireActive, h.CreateDefinition)
 	definitions.PUT("/:id/draft", admin, requireActive, h.UpdateDefinition)
+	definitions.DELETE("/:id", admin, requireActive, h.DeleteDefinition)
 	definitions.POST("/:id/validate", admin, requireActive, h.ValidateDefinition)
 	definitions.POST("/:id/publish", admin, requireActive, h.PublishDefinition)
 	startRuns := r.Group("/workflow-runs", member...)

@@ -20,6 +20,11 @@ type memoryStore struct {
 	attempts    map[string][]domain.NodeAttempt
 }
 
+func (s *memoryStore) DeleteDefinition(_ context.Context, _, id string) error {
+	delete(s.definitions, id)
+	return nil
+}
+
 func newMemoryStore() *memoryStore {
 	return &memoryStore{definitions: map[string]*domain.Definition{}, versions: map[string]*domain.Version{}, runs: map[string]*domain.Run{}, attempts: map[string][]domain.NodeAttempt{}}
 }
@@ -145,6 +150,19 @@ func TestDefinitionServicePublishesVersion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, def.ID, version.DefinitionID)
 	require.Equal(t, int64(1), version.Number)
+}
+
+func TestDefinitionServiceDeletesDraft(t *testing.T) {
+	store, idgen := newMemoryStore(), &ids{}
+	svc := application.NewDefinitionService(store, store, idgen.NewID)
+	definition, err := svc.Create(context.Background(), "tenant-1", application.CreateDefinitionCommand{
+		Name: "Disposable", Spec: workflowSpec(),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.Delete(context.Background(), "tenant-1", definition.ID))
+	_, exists := store.definitions[definition.ID]
+	require.False(t, exists)
 }
 
 func TestRunServiceIdempotencyAndSequentialExecution(t *testing.T) {

@@ -135,6 +135,19 @@ func (s *PgStore) UpdateDefinition(ctx context.Context, tenantID string, d *doma
 	})
 }
 
+func (s *PgStore) DeleteDefinition(ctx context.Context, tenantID, id string) error {
+	return s.exec(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM workflow_definitions WHERE id=$1`, id)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return domain.ErrNotFound
+		}
+		return nil
+	})
+}
+
 func (s *PgStore) CreateVersion(ctx context.Context, tenantID string, v *domain.Version) error {
 	spec, err := json.Marshal(v.Spec)
 	if err != nil {

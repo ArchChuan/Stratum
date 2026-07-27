@@ -18,6 +18,7 @@ import (
 type workflowDefinitionService interface {
 	Create(context.Context, string, workflowapp.CreateDefinitionCommand) (*workflowdomain.Definition, error)
 	Update(context.Context, string, string, workflowapp.UpdateDefinitionCommand) (*workflowdomain.Definition, error)
+	Delete(context.Context, string, string) error
 	Validate(context.Context, string, string) error
 	Publish(context.Context, string, string) (*workflowdomain.Version, error)
 	Get(context.Context, string, string) (*workflowdomain.Definition, error)
@@ -168,6 +169,19 @@ func (h *WorkflowHandler) UpdateDefinition(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, definition)
+}
+
+func (h *WorkflowHandler) DeleteDefinition(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	if err := h.definitions.Delete(c.Request.Context(), tenantID, c.Param("id")); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "workflow deleted"})
 }
 
 func (h *WorkflowHandler) ValidateDefinition(c *gin.Context) {

@@ -15,7 +15,7 @@ vi.mock('react-router-dom', async () => {
   return { ...actual, useNavigate: () => navigate };
 });
 vi.mock('../api/workflow.api', () => ({
-  workflowApi: { listWorkflows: vi.fn() },
+  workflowApi: { listWorkflows: vi.fn(), deleteWorkflow: vi.fn() },
 }));
 
 beforeAll(() => {
@@ -52,6 +52,11 @@ describe('WorkflowCatalogPage', () => {
     expect(await screen.findByRole('button', { name: '新建工作流' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '编辑草稿' }));
     expect(navigate).toHaveBeenCalledWith('/workflows/workflow-1/edit');
+
+    vi.mocked(workflowApi.deleteWorkflow).mockResolvedValue(undefined);
+    fireEvent.click(screen.getByRole('button', { name: '删除草稿' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认删除' }));
+    await waitFor(() => expect(workflowApi.deleteWorkflow).toHaveBeenCalledWith('workflow-1'));
   });
 
   it('forwards search and server pagination and renders approved empty copy', async () => {

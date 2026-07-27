@@ -9,6 +9,7 @@ vi.mock('@/services/client', () => ({
     get: vi.fn(),
     post: vi.fn(),
     put: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
@@ -66,6 +67,14 @@ describe('workflowApi', () => {
     expect(api.post).toHaveBeenNthCalledWith(2, '/workflows/workflow-1/validate');
     expect(api.post).toHaveBeenNthCalledWith(3, '/workflows/workflow-1/publish');
     expect(api.get).toHaveBeenCalledWith('/workflows/workflow-1/versions', { params: { page: 1, page_size: 20 } });
+  });
+
+  it('deletes a draft through the shared client', async () => {
+    vi.mocked(api.delete).mockResolvedValueOnce({ data: { message: 'workflow deleted' } });
+
+    await workflowApi.deleteWorkflow('workflow-1');
+
+    expect(api.delete).toHaveBeenCalledWith('/workflows/workflow-1');
   });
 
   it('starts, lists, reads, and controls workflow runs through the shared client', async () => {
