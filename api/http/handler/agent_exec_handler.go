@@ -84,12 +84,6 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 	}
 	userID, _ := userIDFromCtx(c)
 
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Header("X-Accel-Buffering", "no")
-	c.Header("Transfer-Encoding", "chunked")
-
 	writer := newSSEEventWriter(c.Writer)
 
 	clientCtx := c.Request.Context()
@@ -113,6 +107,11 @@ func (h *AgentHandler) ExecuteAgentStream(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Header("Transfer-Encoding", "chunked")
 	defer cancel()
 	writer.EnqueueComment("heartbeat")
 	go func() {
