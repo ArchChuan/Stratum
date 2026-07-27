@@ -156,6 +156,7 @@ test('Knowledge online canary searches the immutable candidate and attributes fe
   expect(evidence.onlineTraceId).not.toBe('');
   expect(evidence.onlineVariant).toBe('canary');
   expect(evidence.documentDriftRejected).toBe(true);
+  expect(evidence.crossTenantIsolated).toBe(true);
   const candidateRun = await adminApi.get(`/evaluations/runs/${evidence.candidateRunId}`);
   expect(candidateRun.status()).toBe(200);
   expect(await candidateRun.json()).toMatchObject({ passed: true, resource: {

@@ -126,6 +126,24 @@ func TestKnowledgeCanaryFailsClosedAfterDocumentDrift(t *testing.T) {
 	}
 }
 
+func TestKnowledgeCanaryEvidenceIsTenantIsolated(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("bootstrap.go")
+	if err != nil {
+		t.Fatalf("read bootstrap source: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"assertKnowledgeTenantIsolation", "/auth/create-tenant", "crossTenantIsolated",
+		`http.StatusNotFound`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Knowledge tenant isolation evidence is missing %q", required)
+		}
+	}
+}
+
 func TestSanitizeContainerDiagnosticRedactsCredentials(t *testing.T) {
 	t.Parallel()
 

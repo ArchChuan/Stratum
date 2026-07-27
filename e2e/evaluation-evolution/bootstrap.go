@@ -363,6 +363,7 @@ func executeLiveKnowledgeCanaryFlow(
 	liveKnowledge["onlineVariant"] = feedbackRow["variant"]
 	assertKnowledgeDocumentDriftFailsClosed(client, apiURL, token, liveKnowledge, agentID,
 		experiment.Deployment.CanaryPercent, runID)
+	assertKnowledgeTenantIsolation(client, apiURL, token, liveKnowledge, runID)
 }
 
 func assertKnowledgeDocumentDriftFailsClosed(
@@ -418,6 +419,48 @@ func assertKnowledgeDocumentDriftFailsClosed(
 		panic("live Knowledge document set changed was not rejected before LLM execution")
 	}
 	liveKnowledge["documentDriftRejected"] = true
+}
+
+func assertKnowledgeTenantIsolation(
+	client *http.Client, apiURL, token string, liveKnowledge map[string]any, runID string,
+) {
+	var createdTenant struct {
+		AccessToken string `json:"access_token"`
+		TenantID    string `json:"tenant_id"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/auth/create-tenant", token,
+		map[string]string{"tenant_name": runID + " foreign tenant"}, http.StatusCreated, &createdTenant)
+	if createdTenant.AccessToken == "" || createdTenant.TenantID == "" {
+		panic("live Knowledge cross-tenant identity creation invalid")
+	}
+	workspaceName := liveKnowledge["resourceId"].(string)
+	var workspace struct {
+		ID string `json:"id"`
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/knowledge/workspaces", createdTenant.AccessToken,
+		map[string]any{"name": workspaceName, "description": "isolated foreign tenant workspace",
+			"config": map[string]any{"embedding_model": "text-embedding-v3", "chunking_strategy": "recursive",
+				"chunk_size": 128, "chunk_overlap": 16, "query_mode": "vector", "top_k": 1}},
+		http.StatusCreated, &workspace)
+	if workspace.ID == "" || workspace.ID == liveKnowledge["workspaceId"] {
+		panic("live Knowledge cross-tenant workspace identity invalid")
+	}
+	requestJSON(client, http.MethodGet, apiURL+"/evaluations/runs/"+liveKnowledge["candidateRunId"].(string),
+		createdTenant.AccessToken, nil, http.StatusNotFound, nil)
+	var experiments struct {
+		Items []any `json:"items"`
+	}
+	requestJSON(client, http.MethodGet,
+		apiURL+"/evaluations/experiments?resource_kind=knowledge&resource_id="+url.QueryEscape(workspaceName),
+		createdTenant.AccessToken, nil, http.StatusOK, &experiments)
+	if len(experiments.Items) != 0 {
+		panic("live Knowledge cross-tenant experiment leaked")
+	}
+	requestJSON(client, http.MethodPost, apiURL+"/evaluations/feedback", createdTenant.AccessToken,
+		map[string]any{"trace_id": liveKnowledge["onlineTraceId"], "resource_kind": "knowledge",
+			"resource_id": workspaceName, "score": 1, "outcome": map[string]any{"status": "success"},
+			"idempotency_key": runID + "-cross-tenant-feedback"}, http.StatusNotFound, nil)
+	liveKnowledge["crossTenantIsolated"] = true
 }
 
 func executeStoredEvaluationRun(
