@@ -160,6 +160,18 @@ require_file "${OPIK_VALUES}" 'persistence:' 'Opik persistent storage'
 require_file "${OPIK_VALUES}" 'resources:' 'Opik resource limits'
 require_file "${OPIK_COLLECTOR}" 'receivers:' 'collector OTLP receiver'
 require_file "${OPIK_COLLECTOR}" 'otlphttp/opik:' 'collector Opik exporter'
+require_file "${OPIK_COLLECTOR}" 'otlp/jaeger:' 'collector Jaeger exporter'
+require_file "${OPIK_COLLECTOR}" 'exporters:[[:space:]]*\[otlp/jaeger,[[:space:]]*otlphttp/opik\]' \
+    'collector fan-out to Jaeger and Opik'
+require_file "${OPIK_COLLECTOR}" 'filter/drop_probes:' 'collector probe trace filter'
+for route in readyz livez metrics; do
+    require_file "${OPIK_COLLECTOR}" "http\.route.*\\\"/${route}\\\"" "collector drops /${route} traces"
+done
+require_file "${OPIK_COLLECTOR}" 'file_storage/queue:' 'collector persistent queue storage'
+require_file "${OPIK_COLLECTOR}" 'storage:[[:space:]]*file_storage/queue' \
+    'collector exporters use persistent queues'
+require_file "${OPIK_COLLECTOR}" 'claimName:[[:space:]]*opik-otel-collector-queue' \
+    'collector queue uses persistent volume storage'
 require_file "${OPIK_COLLECTOR}" 'health_check:' 'collector readiness health check'
 require_file "${OPIK_COLLECTOR}" 'image:[[:space:]]*otel/opentelemetry-collector-contrib@sha256:[0-9a-f]{64}' \
     'collector image is digest pinned'

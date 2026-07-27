@@ -17,25 +17,116 @@ data:
         check_interval: 5s
         limit_mib: 128
         spike_limit_mib: 32
+      filter/drop_probes:
+        error_mode: ignore
+        traces:
+          span:
+            - 'attributes["http.route"] == "/readyz"'
+            - 'attributes["http.route"] == "/livez"'
+            - 'attributes["http.route"] == "/metrics"'
+            - 'attributes["http.route"] == "/health"'
+            - 'attributes["http.route"] == "/healthz"'
+      resource:
+        attributes:
+          - key: environment
+            value: demo
+            action: upsert
+      tail_sampling:
+        decision_wait: 10s
+        policies:
+          - name: evaluation-always
+            type: string_attribute
+            string_attribute:
+              key: stratum.evaluation
+              values: ["true"]
+          - name: experiment-always
+            type: string_attribute
+            string_attribute:
+              key: stratum.experiment.id
+              values: [".+"]
+              enabled_regex_matching: true
+          - name: security-always
+            type: string_attribute
+            string_attribute:
+              key: stratum.security_violation
+              values: ["true"]
+          - name: chat-always
+            type: string_attribute
+            string_attribute:
+              key: http.route
+              values:
+                - /agents/:id/execute
+                - /agents/:id/execute/stream
+                - /conversations/:convID/messages
+          - name: error-policy
+            type: status_code
+            status_code:
+              status_codes: [ERROR]
+          - name: slow-policy
+            type: latency
+            latency:
+              threshold_ms: 1000
+          - name: default-policy
+            type: probabilistic
+            probabilistic:
+              sampling_percentage: 10
       batch:
         timeout: 1s
         send_batch_size: 256
     exporters:
+      otlp/jaeger:
+        endpoint: jaeger.monitoring.svc.cluster.local:4317
+        tls:
+          insecure: true
+        retry_on_failure:
+          enabled: true
+          initial_interval: 1s
+          max_interval: 30s
+          max_elapsed_time: 5m
+        sending_queue:
+          enabled: true
+          queue_size: 2048
+          storage: file_storage/queue
       otlphttp/opik:
         endpoint: http://opik-backend.opik.svc.cluster.local:8080/v1/private/otel
         headers:
           projectName: stratum
           Comet-Workspace: default
+        retry_on_failure:
+          enabled: true
+          initial_interval: 1s
+          max_interval: 30s
+          max_elapsed_time: 5m
+        sending_queue:
+          enabled: true
+          queue_size: 2048
+          storage: file_storage/queue
     extensions:
       health_check:
         endpoint: 0.0.0.0:13133
+      file_storage/queue:
+        directory: /var/lib/otelcol/queue
+        create_directory: true
+        fsync: true
     service:
-      extensions: [health_check]
+      extensions: [health_check, file_storage/queue]
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [memory_limiter, batch]
-          exporters: [otlphttp/opik]
+          processors: [memory_limiter, filter/drop_probes, resource, tail_sampling, batch]
+          exporters: [otlp/jaeger, otlphttp/opik]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: opik-otel-collector-queue
+  namespace: stratum
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -54,6 +145,9 @@ spec:
       labels:
         app.kubernetes.io/name: opik-otel-collector
     spec:
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: collector
           image: otel/opentelemetry-collector-contrib@sha256:98274b756324abdb2473fa0c898247a246091e861e61d1548f9be483198eecea
@@ -68,6 +162,8 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /conf
+            - name: queue
+              mountPath: /var/lib/otelcol/queue
           resources:
             requests:
               cpu: 50m
@@ -89,6 +185,9 @@ spec:
         - name: config
           configMap:
             name: opik-otel-collector-config
+        - name: queue
+          persistentVolumeClaim:
+            claimName: opik-otel-collector-queue
 ---
 apiVersion: v1
 kind: Service
