@@ -1,6 +1,6 @@
 {
   "routes": [
-    "/login", "/auth/callback", "/onboarding", "/tenant/members", "/tenant/settings", "/admin/tenants",
+    "/", "/login", "/auth/callback", "/onboarding", "/tenant/members", "/tenant/settings", "/admin/tenants",
     "/agents", "/agents/create", "/agents/:id/edit", "/chat", "/skills", "/skills/create",
     "/skills/:id/workspace", "/mcp", "/mcp/create", "/mcp/:id/edit", "/knowledge", "/knowledge/:name",
     "/evaluations", "/workflows", "/workflows/new", "/workflows/:id/edit",

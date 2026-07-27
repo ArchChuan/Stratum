@@ -9,6 +9,7 @@ Add a development-completion acceptance workflow that exercises all Stratum prod
 The acceptance workflow covers every user-visible product domain:
 
 - IAM;
+- Dashboard;
 - Agent;
 - Skill;
 - MCP;
@@ -53,6 +54,7 @@ Each domain pack owns a state model and repeated CRUD or operational journeys:
 
 | Pack | Required browser behavior |
 |---|---|
+| Dashboard | tenant summary, recent executions, resource counts, navigation entry and refresh read-back |
 | IAM | login, refresh, tenant selection, membership CRUD, role changes, denied administration |
 | Agent | Agent CRUD, resource binding, conversation, execution, execution-history read-back |
 | Skill | draft creation, repeated editing, publication, revision selection, standalone test execution |

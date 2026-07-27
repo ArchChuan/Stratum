@@ -20,7 +20,7 @@
 - `scripts/e2e/system-stateful.sh`: local short/soak environment owner and browser runner.
 - `scripts/e2e/system-stateful-test.sh`: hermetic shell contract tests.
 - `web/e2e/stateful/core/`: seeded scheduler, model, actors, evidence, database, and attestation client.
-- `web/e2e/stateful/packs/`: IAM, Agent, Skill, MCP, Knowledge, Memory, Evaluation, Workflow, and cross-domain packs.
+- `web/e2e/stateful/packs/`: Dashboard, IAM, Agent, Skill, MCP, Knowledge, Memory, Evaluation, Workflow, and cross-domain packs.
 - `web/e2e/system-stateful.spec.ts`: Playwright pack dispatcher.
 - `web/playwright.stateful.config.ts`: headless-only configuration and safe artifact policy.
 - `.github/workflows/ci.yml`: attestation validation only.
@@ -254,11 +254,12 @@ git add web/playwright.stateful.config.ts web/e2e/system-stateful.spec.ts web/e2
 git commit -m "[test](e2e): add local system browser harness"
 ```
 
-### Task 6: Add IAM and Workflow Packs
+### Task 6: Add Dashboard, IAM, and Workflow Packs
 
 **Files:**
 
 - Create: `web/e2e/stateful/packs/iam.ts`
+- Create: `web/e2e/stateful/packs/dashboard.ts`
 - Create: `web/e2e/stateful/packs/workflow.ts`
 - Create: `web/e2e/stateful/packs/iam.test.ts`
 - Create: `web/e2e/stateful/packs/workflow.test.ts`
@@ -267,7 +268,7 @@ git commit -m "[test](e2e): add local system browser harness"
 
 - [ ] **Step 1: Write failing action-registration tests**
 
-Require IAM actions for login, refresh, tenant selection, membership invite/role/remove, settings update, and denied administration. Require Workflow actions for repeated draft saves, invalid publish gate, validation, publish, version refresh, member run, member-B denial, approval/cancel, and stream reconnect.
+Require Dashboard actions for tenant summary and refresh read-back. Require IAM actions for login, refresh, tenant selection, membership invite/role/remove, settings update, and denied administration. Require Workflow actions for repeated draft saves, invalid publish gate, validation, publish, version refresh, member run, member-B denial, approval/cancel, and stream reconnect.
 
 - [ ] **Step 2: Verify RED**
 
@@ -281,7 +282,7 @@ Move reusable UUID/session helpers from `real-workflow.ts` into the new core. Tr
 
 - [ ] **Step 4: Run real packs**
 
-Run: `STATEFUL_E2E_PACKS=iam,workflow make e2e-system-short`
+Run: `STATEFUL_E2E_PACKS=dashboard,iam,workflow make e2e-system-short`
 
 Expected: PASS with two mutation/read-back cycles per pack and a generated partial-scope diagnostic report. No credentials appear in output.
 

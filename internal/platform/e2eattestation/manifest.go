@@ -10,7 +10,7 @@ import (
 )
 
 var manifestDomains = map[string]struct{}{
-	"iam": {}, "agent": {}, "skill": {}, "mcp": {},
+	"dashboard": {}, "iam": {}, "agent": {}, "skill": {}, "mcp": {},
 	"knowledge": {}, "memory": {}, "evaluation": {}, "workflow": {},
 }
 
@@ -97,7 +97,7 @@ func ValidateManifest(
 		if len(capability.Roles.Allowed) == 0 {
 			validationErrors = append(validationErrors, fmt.Errorf("%s: allowed role coverage is required", label))
 		}
-		if len(capability.Roles.Denied) == 0 {
+		if capability.Roles.Denied == nil {
 			validationErrors = append(validationErrors, fmt.Errorf("%s: denied role coverage is required", label))
 		}
 		if strings.TrimSpace(capability.Mutation) == "" {

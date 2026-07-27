@@ -2,17 +2,35 @@
   "version": 1,
   "capabilities": [
     {
+      "id": "dashboard.route.overview",
+      "domain": "dashboard",
+      "user_goal": "Review the current tenant overview",
+      "route": "/",
+      "roles": {
+        "allowed": [
+          "member",
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /",
+      "browser_action_id": "dashboard.route.overview",
+      "http_evidence": "Dashboard summary requests complete successfully",
+      "db_evidence": "Recent execution and resource totals agree with tenant records",
+      "coverage": "short"
+    },
+    {
       "id": "iam.route.login",
       "domain": "iam",
       "user_goal": "Open /login",
       "route": "/login",
       "roles": {
         "allowed": [
-          "tenant_admin"
-        ],
-        "denied": [
           "unauthenticated"
-        ]
+        ],
+        "denied": []
       },
       "mutation": "NAVIGATE /login",
       "browser_action_id": "iam.route.login",
@@ -27,11 +45,9 @@
       "route": "/auth/callback",
       "roles": {
         "allowed": [
-          "tenant_admin"
-        ],
-        "denied": [
           "unauthenticated"
-        ]
+        ],
+        "denied": []
       },
       "mutation": "NAVIGATE /auth/callback",
       "browser_action_id": "iam.route.auth.callback",
@@ -46,11 +62,9 @@
       "route": "/onboarding",
       "roles": {
         "allowed": [
-          "tenant_admin"
-        ],
-        "denied": [
           "unauthenticated"
-        ]
+        ],
+        "denied": []
       },
       "mutation": "NAVIGATE /onboarding",
       "browser_action_id": "iam.route.onboarding",
