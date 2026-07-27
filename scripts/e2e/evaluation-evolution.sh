@@ -33,7 +33,7 @@ bounded_compose_down() {
   local label=$1 compose_project=$2
   shift 2
   local compose=(docker compose -p "$compose_project" "$@")
-  local container_ids=() remaining_ids=()
+  local container_ids=() network_ids=() remaining_ids=() volume_names=()
   if ! timeout 60 "${compose[@]}" down -v --remove-orphans >/dev/null 2>&1; then
     printf 'evaluation-evolution cleanup: %s compose down exceeded 60s; force-removing exact project containers\n' \
       "$label" >&2
@@ -53,6 +53,21 @@ bounded_compose_down() {
   if (( ${#remaining_ids[@]} > 0 )); then
     printf 'evaluation-evolution cleanup: %s project still has %d container(s)\n' \
       "$label" "${#remaining_ids[@]}" >&2
+    return 1
+  fi
+  mapfile -t network_ids < <(docker network ls -q --filter "label=com.docker.compose.project=$compose_project")
+  if (( ${#network_ids[@]} > 0 )); then
+    timeout 30 docker network rm "${network_ids[@]}" >/dev/null 2>&1 || true
+  fi
+  mapfile -t volume_names < <(docker volume ls -q --filter "label=com.docker.compose.project=$compose_project")
+  if (( ${#volume_names[@]} > 0 )); then
+    timeout 30 docker volume rm "${volume_names[@]}" >/dev/null 2>&1 || true
+  fi
+  mapfile -t network_ids < <(docker network ls -q --filter "label=com.docker.compose.project=$compose_project")
+  mapfile -t volume_names < <(docker volume ls -q --filter "label=com.docker.compose.project=$compose_project")
+  if (( ${#network_ids[@]} > 0 || ${#volume_names[@]} > 0 )); then
+    printf 'evaluation-evolution cleanup: %s project still has %d network(s) and %d volume(s)\n' \
+      "$label" "${#network_ids[@]}" "${#volume_names[@]}" >&2
     return 1
   fi
 }
