@@ -94,7 +94,7 @@ func TestSystemAssistantProposalPostgresAuthorizationSecretsAndConcurrency(t *te
 	})
 	require.NoError(t, err)
 	_, err = service.Get(otherTenantCtx, tenants[1], adminID, proposal.ID)
-	require.True(t, errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrProposalForbidden))
+	require.True(t, errors.Is(err, domain.ErrProposalNotFound) || errors.Is(err, domain.ErrProposalForbidden))
 
 	results := make(chan error, 2)
 	for range 2 {
