@@ -2,12 +2,13 @@ import { ArrowLeftOutlined } from '@ant-design/icons';
 import { Button, Form, Skeleton, Typography } from 'antd';
 
 import { AgentFormSections } from '../components/AgentFormSections';
+import { SystemAssistantSettingsForm } from '../components/SystemAssistantSettingsForm';
 import { useEditAgentPage } from '../hooks/useEditAgentPage';
 
 const { Title, Text } = Typography;
 
 export const EditAgentPage = () => {
-  const { form, loading, pageLoading, skills, mcpTools, workspaces, navigate, onFinish } =
+  const { agent, form, loading, pageLoading, skills, mcpTools, workspaces, navigate, onFinish } =
     useEditAgentPage();
 
   if (pageLoading) {
@@ -47,15 +48,20 @@ export const EditAgentPage = () => {
         </Button>
         <div>
           <Title level={4} style={{ margin: 0 }}>
-            编辑 Agent
+            {agent?.isSystem ? '平台助手设置' : '编辑 Agent'}
           </Title>
           <Text type="secondary" style={{ fontSize: 13 }}>
-            修改 Agent 配置
+            {agent?.isSystem ? '系统托管 Agent，仅可修改对话模型' : '修改 Agent 配置'}
           </Text>
         </div>
       </div>
 
-      <Form
+      {agent?.isSystem ? (
+        <SystemAssistantSettingsForm
+          onCancel={() => navigate('/agents')}
+          onSaved={() => navigate('/agents')}
+        />
+      ) : <Form
         form={form}
         layout="vertical"
         onFinish={onFinish}
@@ -74,7 +80,7 @@ export const EditAgentPage = () => {
             保存修改
           </Button>
         </div>
-      </Form>
+      </Form>}
     </div>
   );
 };

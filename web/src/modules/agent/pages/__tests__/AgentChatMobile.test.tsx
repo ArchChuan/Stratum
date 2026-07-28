@@ -24,10 +24,6 @@ const mocks = vi.hoisted(() => ({
     { id: 'agent-2', name: '备用 Agent' },
   ] as Array<Record<string, unknown>>,
   selectedAgent: 'agent-1',
-  models: vi.fn(),
-  settings: vi.fn(),
-  updateSettings: vi.fn(),
-  updateSystemAssistantModel: vi.fn(),
 }));
 
 vi.mock('@/shared/hooks/useResponsive', () => ({
@@ -36,14 +32,6 @@ vi.mock('@/shared/hooks/useResponsive', () => ({
 
 vi.mock('@/modules/iam', () => ({
   useTenantRole: () => ({ isAdmin: mocks.isAdmin }),
-}));
-
-vi.mock('../../api/agent.api', () => ({
-  agentApi: {
-    models: mocks.models,
-    getSystemSettings: mocks.settings,
-    updateSystemSettings: mocks.updateSettings,
-  },
 }));
 
 vi.mock('../../hooks/useChatPage', () => ({
@@ -76,7 +64,6 @@ vi.mock('../../hooks/useChatPage', () => ({
 		clearStreamFailure: mocks.clearStreamFailure,
     handleApprove: mocks.approve,
     handleReject: mocks.reject,
-    updateSystemAssistantModel: mocks.updateSystemAssistantModel,
   }),
 }));
 
@@ -93,13 +80,6 @@ describe('AgentChatPage mobile layout', () => {
       { id: 'agent-2', name: '备用 Agent' },
     ];
     mocks.selectedAgent = 'agent-1';
-    mocks.models.mockResolvedValue(['tenant-model']);
-    mocks.settings.mockResolvedValue({
-      agentId: 'system', llmModel: '', ready: false, availableModels: ['tenant-model'],
-    });
-    mocks.updateSettings.mockResolvedValue({
-      agentId: 'system', llmModel: 'tenant-model', ready: true, availableModels: ['tenant-model'],
-    });
 	});
 
   it('opens the conversation drawer and closes it after selecting a conversation', async () => {
@@ -208,42 +188,21 @@ describe('AgentChatPage mobile layout', () => {
 		expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument();
 	});
 
-  it('closes assistant settings after an administrator is downgraded without updating', async () => {
-    mocks.isMobile = false;
+  it('does not expose platform assistant model settings in chat', () => {
     mocks.agents = [{
-      id: 'system', name: '平台使用小助手', description: '系统助手', llmModel: '', isSystem: true,
+      id: 'system', name: '平台使用小助手', description: '系统助手', llmModel: 'glm-5.2', isSystem: true,
     }];
     mocks.selectedAgent = 'system';
     const view = render(<AgentChatPage />);
-    fireEvent.click(screen.getByRole('button', { name: '设置助手模型' }));
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '设置助手模型' })).not.toBeInTheDocument();
+    expect(screen.queryByText('助手设置')).not.toBeInTheDocument();
 
-    mocks.isAdmin = false;
-    view.rerender(<AgentChatPage />);
-
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(mocks.updateSettings).not.toHaveBeenCalled();
-  });
-
-  it('closes assistant settings when selection changes to an ordinary Agent', async () => {
     mocks.isMobile = false;
-    mocks.agents = [
-      { id: 'system', name: '平台使用小助手', description: '系统助手', llmModel: '', isSystem: true },
-      { id: 'regular', name: '普通 Agent', description: '', llmModel: 'tenant-model' },
-    ];
-    mocks.selectedAgent = 'system';
-    const view = render(<AgentChatPage />);
-    fireEvent.click(screen.getByRole('button', { name: '设置助手模型' }));
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
-
-    mocks.selectedAgent = 'regular';
     view.rerender(<AgentChatPage />);
-
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: '设置助手模型' })).not.toBeInTheDocument();
   });
 
-  it('offers assistant model recovery to administrators', async () => {
+  it('keeps assistant model recovery out of chat for administrators', () => {
     mocks.isMobile = false;
     mocks.agents = [{
       id: 'system', name: '平台使用小助手', description: '系统助手', llmModel: '', isSystem: true,
@@ -258,9 +217,8 @@ describe('AgentChatPage mobile layout', () => {
     render(<AgentChatPage />);
 
     expect(screen.getByText('租户尚未配置平台助手模型')).toBeInTheDocument();
-    const settingsButtons = screen.getAllByRole('button', { name: '设置助手模型' });
-    fireEvent.click(settingsButtons[settingsButtons.length - 1]);
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '设置助手模型' })).not.toBeInTheDocument();
+    expect(screen.queryByText('助手设置')).not.toBeInTheDocument();
   });
 
   it('shows contact-admin guidance to members without a recovery action', () => {

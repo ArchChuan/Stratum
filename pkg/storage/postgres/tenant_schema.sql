@@ -63,10 +63,16 @@ BEGIN
         assistant_name,
         'react',
         '基于官方资料指导平台使用并诊断当前租户应用状态',
-        '', '', '', 10, 8000, 'user', 'stratum.platform_assistant'
+        '', 'glm-5.2', '', 10, 8000, 'user', 'stratum.platform_assistant'
     )
     ON CONFLICT (id) DO NOTHING;
 END $$;
+
+UPDATE agents
+SET llm_model = 'glm-5.2',
+    updated_at = NOW()
+WHERE system_key = 'stratum.platform_assistant'
+  AND BTRIM(llm_model) = '';
 
 -- Platform-assistant resource changes are staged as typed, reviewable proposals.
 CREATE TABLE IF NOT EXISTS resource_change_proposals (

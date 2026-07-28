@@ -392,12 +392,6 @@ export const useChatPage = () => {
 		}
 	}, []);
 
-  const updateSystemAssistantModel = useCallback((llmModel: string) => {
-    setAgents((rows) => rows.map((agent) => (
-      agent.isSystem ? { ...agent, llmModel } : agent
-    )));
-  }, []);
-
   return {
     agents,
     selectedAgent,
@@ -422,7 +416,6 @@ export const useChatPage = () => {
 		approvalActionId,
 		handleApprove,
 		handleReject,
-		updateSystemAssistantModel,
 		streamFailure,
 		clearStreamFailure,
 		cancelStream,

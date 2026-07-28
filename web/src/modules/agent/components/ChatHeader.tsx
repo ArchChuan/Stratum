@@ -1,4 +1,4 @@
-import { BranchesOutlined, MenuOutlined, RobotOutlined, SettingOutlined } from '@ant-design/icons';
+import { BranchesOutlined, MenuOutlined, RobotOutlined } from '@ant-design/icons';
 import { Button, Popover, Select, Space, Tag, Typography, message } from 'antd';
 import { useState } from 'react';
 import { useInRouterContext, useNavigate } from 'react-router-dom';
@@ -14,7 +14,6 @@ interface Props {
   isMobile?: boolean;
   onOpenConversations?: () => void;
   isAdmin?: boolean;
-  onOpenSettings?: () => void;
 }
 
 const WorkflowShortcut = ({ isMobile }: { isMobile: boolean }) => {
@@ -59,7 +58,6 @@ export const ChatHeader = ({
   isMobile = false,
   onOpenConversations,
   isAdmin = false,
-  onOpenSettings,
 }: Props) => {
   const inRouter = useInRouterContext();
   return (
@@ -109,16 +107,6 @@ export const ChatHeader = ({
       </Text>
     )}
     <Space size={8} wrap style={{ marginInlineStart: 'auto' }}>
-      {agent?.isSystem && isAdmin && onOpenSettings && (
-        <Button
-          size="small"
-          icon={<SettingOutlined />}
-          aria-label="设置助手模型"
-          onClick={onOpenSettings}
-        >
-          {isMobile ? null : '助手设置'}
-        </Button>
-      )}
       {inRouter && <WorkflowShortcut isMobile={isMobile} />}
     </Space>
   </div>

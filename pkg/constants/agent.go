@@ -2,6 +2,7 @@ package constants
 
 const (
 	DefaultAgentContextTokens                    = 8000
+	DefaultSystemAssistantModel                  = "glm-5.2"
 	MinSystemPromptTokens                        = 200
 	DefaultInitHistoryWindow                     = 20  // BuildInitMessages fallback window
 	DefaultContextHistoryWindow                  = 50  // BuildContextMessages fallback window

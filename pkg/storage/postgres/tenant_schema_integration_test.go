@@ -27,6 +27,43 @@ func TestProvisionTenantSchemaSystemAssistantIsIdempotent(t *testing.T) {
 	assertOneSystemAssistant(t, pool, tenantID)
 }
 
+func TestProvisionTenantSchemaSystemAssistantModelBackfillPreservesTenantChoice(t *testing.T) {
+	for _, tt := range []struct {
+		name, model, wantModel string
+	}{
+		{name: "empty managed model", model: "  ", wantModel: "glm-5.2"},
+		{name: "tenant override", model: "qwen-plus", wantModel: "qwen-plus"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pool, ctx, tenantID := systemAssistantTestPool(t, "model_backfill")
+			schema := `tenant_` + tenantID
+			if _, err := pool.Exec(ctx, `CREATE TABLE "`+schema+`".agents (
+				id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, type TEXT NOT NULL DEFAULT 'react',
+				description TEXT NOT NULL DEFAULT '', system_prompt TEXT NOT NULL DEFAULT '',
+				llm_model TEXT NOT NULL DEFAULT '', embed_model TEXT NOT NULL DEFAULT '',
+				max_iterations INT NOT NULL DEFAULT 10, max_context_tokens INTEGER NOT NULL DEFAULT 8000,
+				memory_scope TEXT NOT NULL DEFAULT 'agent', system_key TEXT,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pool.Exec(ctx, `INSERT INTO "`+schema+`".agents (id, name, llm_model, system_key)
+				VALUES ('stratum-platform-assistant', '__stratum_platform_assistant__', $1, $2)`, tt.model, systemAssistantKey); err != nil {
+				t.Fatal(err)
+			}
+			if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+				t.Fatal(err)
+			}
+			var model string
+			if err := pool.QueryRow(ctx, `SELECT llm_model FROM "`+schema+`".agents WHERE system_key=$1`, systemAssistantKey).Scan(&model); err != nil {
+				t.Fatal(err)
+			}
+			if model != tt.wantModel {
+				t.Fatalf("managed assistant model = %q, want %q", model, tt.wantModel)
+			}
+		})
+	}
+}
+
 func TestProvisionTenantSchemaRestoresFeedbackIdempotencyUniqueness(t *testing.T) {
 	pool, ctx, tenantID := systemAssistantTestPool(t, "feedback_idempotency")
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
