@@ -9,6 +9,8 @@ import { extractErrorMessage } from '@/shared/lib';
 export function useProviders() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(false);
+  const [createLoading, setCreateLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const fetch = useCallback(async () => {
     setLoading(true);
@@ -39,16 +41,30 @@ export function useProviders() {
   }, []);
 
   const createProvider = useCallback(async (values: CreateProviderInput) => {
-    await llmApi.createProvider(values);
-    message.success({ content: '厂商已创建', duration: 2 });
-    await fetch();
+    setCreateLoading(true);
+    try {
+      await llmApi.createProvider(values);
+      message.success({ content: '厂商已创建', duration: 2 });
+      await fetch();
+    } catch (err: any) {
+      message.error({ content: err.response?.data?.error || '创建厂商失败', duration: 0 });
+    } finally {
+      setCreateLoading(false);
+    }
   }, [fetch]);
 
   const deleteProvider = useCallback(async (id: string) => {
-    await llmApi.deleteProvider(id);
-    message.success({ content: '厂商已删除', duration: 2 });
-    setProviders((prev) => prev.filter((p) => p.id !== id));
-  }, []);
+    setDeleteLoading(true);
+    try {
+      await llmApi.deleteProvider(id);
+      message.success({ content: '厂商已删除', duration: 2 });
+      await fetch();
+    } catch (err: any) {
+      message.error({ content: err.response?.data?.error || '删除厂商失败', duration: 0 });
+    } finally {
+      setDeleteLoading(false);
+    }
+  }, [fetch]);
 
-  return { providers, loading, refresh: fetch, createProvider, deleteProvider };
+  return { providers, loading, createLoading, deleteLoading, refresh: fetch, createProvider, deleteProvider };
 }

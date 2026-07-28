@@ -40,24 +40,18 @@ const KIND_COLORS: Record<ProviderKind, string> = {
 };
 
 export function ProviderListPage() {
-  const { providers, loading, refresh, createProvider, deleteProvider } = useProviders();
+  const { providers, loading, createLoading, deleteLoading, refresh, createProvider, deleteProvider } = useProviders();
   const { isAdmin } = useTenantRole();
   const [createOpen, setCreateOpen] = useState(false);
-  const [createLoading, setCreateLoading] = useState(false);
-  const [discovering, setDiscovering] = useState(false);
+  const [discoveringIds, setDiscoveringIds] = useState<Set<string>>(new Set());
   const [discoverResults, setDiscoverResults] = useState<Model[]>([]);
   const [discoverProviderName, setDiscoverProviderName] = useState('');
   const [discoverOpen, setDiscoverOpen] = useState(false);
 
   const handleCreate = useCallback(
     async (values: CreateProviderInput) => {
-      setCreateLoading(true);
-      try {
-        await createProvider(values);
-        setCreateOpen(false);
-      } finally {
-        setCreateLoading(false);
-      }
+      await createProvider(values);
+      setCreateOpen(false);
     },
     [createProvider],
   );
@@ -83,7 +77,7 @@ export function ProviderListPage() {
   );
 
   const handleDiscover = useCallback(async (record: Provider) => {
-    setDiscovering(true);
+    setDiscoveringIds(prev => new Set(prev).add(record.id));
     try {
       const res = await llmApi.discoverModels(record.id);
       setDiscoverResults(res.models);
@@ -95,7 +89,7 @@ export function ProviderListPage() {
         content: extractErrorMessage(err) || '请检查厂商配置和网络连接',
       });
     } finally {
-      setDiscovering(false);
+      setDiscoveringIds(prev => { const next = new Set(prev); next.delete(record.id); return next; });
     }
   }, []);
 
@@ -168,7 +162,7 @@ export function ProviderListPage() {
           <Button
             size="small"
             onClick={() => handleDiscover(record)}
-            loading={discovering}
+            loading={discoveringIds.has(record.id)}
           >
             发现模型
           </Button>

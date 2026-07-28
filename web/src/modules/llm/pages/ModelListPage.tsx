@@ -57,8 +57,10 @@ export function ModelListPage() {
       setEditLoading(true);
       try {
         await updateModel(id, values);
+        message.success({ content: '模型已更新', duration: 2 });
         setEditOpen(false);
-        setEditModel(null);
+      } catch (err: any) {
+        message.error({ content: err.response?.data?.error || '更新模型失败', duration: 0 });
       } finally {
         setEditLoading(false);
       }

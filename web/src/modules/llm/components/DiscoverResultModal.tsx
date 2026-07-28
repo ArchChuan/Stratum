@@ -1,5 +1,5 @@
-import { Modal, Table, Tag, Typography } from 'antd';
-import { useState } from 'react';
+import { Modal, Table, Typography } from 'antd';
+import { useEffect, useState } from 'react';
 import type { Model, ModelCapability } from '../model/llm';
 import { ModelCapabilityTags } from './ModelCapabilityTags';
 
@@ -14,6 +14,8 @@ interface Props {
 
 export function DiscoverResultModal({ open, onClose, results, providerName }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  useEffect(() => { setExpanded(new Set()); }, [results]);
 
   const columns = [
     { title: '模型名称', dataIndex: 'name', key: 'name', width: 200 },

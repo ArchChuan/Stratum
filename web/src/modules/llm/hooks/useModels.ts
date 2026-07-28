@@ -9,6 +9,7 @@ import { extractErrorMessage } from '@/shared/lib';
 export function useModels() {
   const [models, setModels] = useState<Model[]>([]);
   const [loading, setLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const fetch = useCallback(async () => {
     setLoading(true);
@@ -55,10 +56,17 @@ export function useModels() {
   }, [fetch]);
 
   const deleteModel = useCallback(async (id: string) => {
-    await llmApi.deleteModel(id);
-    message.success({ content: '模型已删除', duration: 2 });
-    setModels((prev) => prev.filter((m) => m.id !== id));
-  }, []);
+    setDeleteLoading(true);
+    try {
+      await llmApi.deleteModel(id);
+      message.success({ content: '模型已删除', duration: 2 });
+      await fetch();
+    } catch (err: any) {
+      message.error({ content: err.response?.data?.error || '删除模型失败', duration: 0 });
+    } finally {
+      setDeleteLoading(false);
+    }
+  }, [fetch]);
 
-  return { models, loading, refresh: fetch, toggleModel, updateModel, deleteModel };
+  return { models, loading, deleteLoading, refresh: fetch, toggleModel, updateModel, deleteModel };
 }
