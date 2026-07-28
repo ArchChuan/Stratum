@@ -6,4 +6,7 @@ package port
 type ModelCatalog interface {
 	ListChatModels() []string
 	ListEmbeddingModels() []string
+
+	// TODO: add ListChatModelsByTenant(ctx, tenantID) once all
+	// implementations provide it (see model management refactor).
 }
