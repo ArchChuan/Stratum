@@ -3,19 +3,19 @@ groups:
     interval: 1m
     rules:
       - record: stratum:http_requests:increase5m
-        expr: sum(increase(http_requests_total{path!~"^/(health|livez|readyz|metrics)$"}[5m]))
+        expr: sum(increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$"}[5m]))
         labels:
           service: stratum
           environment: remote-test
 
       - record: stratum:http_5xx_ratio:ratio5m
-        expr: sum(increase(http_requests_total{path!~"^/(health|livez|readyz|metrics)$",status=~"5.."}[5m])) / clamp_min(sum(increase(http_requests_total{path!~"^/(health|livez|readyz|metrics)$"}[5m])), 1)
+        expr: sum(increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$",status=~"5.."}[5m])) / clamp_min(sum(increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$"}[5m])), 1)
         labels:
           service: stratum
           environment: remote-test
 
       - record: stratum:http_request_duration_seconds:p95_5m
-        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{path!~"^/(health|livez|readyz|metrics)$"}[5m])))
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$"}[5m])))
         labels:
           service: stratum
           environment: remote-test
@@ -49,7 +49,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#critical-http-5xx-rate
 
       - alert: StratumHighHTTPP95Latency
-        expr: stratum:http_request_duration_seconds:p95_5m{service="stratum",environment="remote-test"} > 2 and on() sum(increase(http_request_duration_seconds_bucket{path!~"^/(health|livez|readyz|metrics)$",le="+Inf"}[5m])) >= 20
+        expr: stratum:http_request_duration_seconds:p95_5m{service="stratum",environment="remote-test"} > 2 and on() sum(increase(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$",le="+Inf"}[5m])) >= 20
         for: 15m
         labels:
           severity: warning
@@ -63,7 +63,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#high-http-p95-latency
 
       - alert: StratumCriticalHTTPP95Latency
-        expr: stratum:http_request_duration_seconds:p95_5m{service="stratum",environment="remote-test"} > 5 and on() sum(increase(http_request_duration_seconds_bucket{path!~"^/(health|livez|readyz|metrics)$",le="+Inf"}[5m])) >= 20
+        expr: stratum:http_request_duration_seconds:p95_5m{service="stratum",environment="remote-test"} > 5 and on() sum(increase(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$",le="+Inf"}[5m])) >= 20
         for: 5m
         labels:
           severity: critical

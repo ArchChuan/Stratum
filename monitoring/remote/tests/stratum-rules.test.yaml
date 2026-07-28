@@ -92,12 +92,76 @@ tests:
         alertname: StratumFrontendUnavailable
         exp_alerts: []
 
+  - name: availability alerts detect missing series and resolve after recovery
+    interval: 1m
+    input_series:
+      - series: 'probe_success{job="stratum-blackbox-prometheus-blackbox-exporter",service="stratum",environment="remote-test"}'
+        values: '_x4 1x3'
+      - series: 'kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum"}'
+        values: '_x4 1x3'
+      - series: 'kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"}'
+        values: '_x4 1x3'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: StratumPublicEndpointDown
+        exp_alerts:
+          - exp_labels:
+              job: stratum-blackbox-prometheus-blackbox-exporter
+              severity: critical
+              service: stratum
+              environment: remote-test
+              component: public-endpoint
+            exp_annotations:
+              summary: Stratum public endpoint is unavailable
+              description: The remote public health probe has failed for three minutes (current value 1).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/remote-monitoring-runbook.md#public-endpoint-down
+      - eval_time: 3m
+        alertname: StratumBackendUnavailable
+        exp_alerts:
+          - exp_labels:
+              namespace: stratum
+              deployment: stratum
+              severity: critical
+              service: stratum
+              environment: remote-test
+              component: backend
+            exp_annotations:
+              summary: Stratum backend has no ready replicas
+              description: The backend deployment has had no ready replicas for three minutes (current value 1).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/remote-monitoring-runbook.md#backend-unavailable
+      - eval_time: 3m
+        alertname: StratumFrontendUnavailable
+        exp_alerts:
+          - exp_labels:
+              namespace: stratum
+              deployment: stratum-frontend
+              severity: critical
+              service: stratum
+              environment: remote-test
+              component: frontend
+            exp_annotations:
+              summary: Stratum frontend has no ready replicas
+              description: The frontend deployment has had no ready replicas for three minutes (current value 1).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/remote-monitoring-runbook.md#frontend-unavailable
+      - eval_time: 6m
+        alertname: StratumPublicEndpointDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: StratumBackendUnavailable
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: StratumFrontendUnavailable
+        exp_alerts: []
+
   - name: HTTP 5xx warning fires above five percent
     interval: 1m
     input_series:
-      - series: 'http_requests_total{method="GET",path="/api/warning",status="500"}'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/warning",status="5xx"}'
         values: '0+2x18'
-      - series: 'http_requests_total{method="GET",path="/api/warning",status="200"}'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/warning",status="2xx"}'
         values: '0+18x18'
     alert_rule_test:
       - eval_time: 11m
@@ -117,9 +181,9 @@ tests:
   - name: HTTP 5xx critical fires above twenty percent
     interval: 1m
     input_series:
-      - series: 'http_requests_total{method="POST",path="/api/critical",status="503"}'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/api/critical",status="5xx"}'
         values: '0+5x12'
-      - series: 'http_requests_total{method="POST",path="/api/critical",status="201"}'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/api/critical",status="2xx"}'
         values: '0+15x12'
     alert_rule_test:
       - eval_time: 6m
@@ -139,7 +203,7 @@ tests:
   - name: HTTP 5xx does not alert below twenty requests
     interval: 1m
     input_series:
-      - series: 'http_requests_total{method="GET",path="/api/low-volume",status="500"}'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/low-volume",status="5xx"}'
         values: '0+3x18'
     alert_rule_test:
       - eval_time: 17m
@@ -152,9 +216,9 @@ tests:
   - name: HTTP 5xx warning boundary does not alert
     interval: 1m
     input_series:
-      - series: 'http_requests_total{method="GET",path="/api/boundary-warning",status="500"}'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-warning",status="5xx"}'
         values: '0+1x18'
-      - series: 'http_requests_total{method="GET",path="/api/boundary-warning",status="200"}'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-warning",status="2xx"}'
         values: '0+19x18'
     alert_rule_test:
       - eval_time: 17m
@@ -164,9 +228,9 @@ tests:
   - name: HTTP 5xx critical boundary does not alert
     interval: 1m
     input_series:
-      - series: 'http_requests_total{method="GET",path="/api/boundary-critical",status="500"}'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-critical",status="5xx"}'
         values: '0+4x18'
-      - series: 'http_requests_total{method="GET",path="/api/boundary-critical",status="200"}'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-critical",status="2xx"}'
         values: '0+16x18'
     alert_rule_test:
       - eval_time: 17m
@@ -176,13 +240,13 @@ tests:
   - name: HTTP 5xx probe routes do not alert
     interval: 1m
     input_series:
-      - series: 'http_requests_total{method="GET",path="/health",status="500"}'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/health",status="5xx"}'
         values: '0+20x18'
-      - series: 'http_requests_total{method="GET",path="/livez",status="500"}'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/livez",status="5xx"}'
         values: '0+20x18'
-      - series: 'http_requests_total{method="GET",path="/readyz",status="500"}'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/readyz",status="5xx"}'
         values: '0+20x18'
-      - series: 'http_requests_total{method="GET",path="/metrics",status="500"}'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/metrics",status="5xx"}'
         values: '0+20x18'
     alert_rule_test:
       - eval_time: 17m
@@ -195,11 +259,37 @@ tests:
   - name: HTTP 5xx alerts resolve
     interval: 1m
     input_series:
-      - series: 'http_requests_total{method="GET",path="/api/recovered",status="500"}'
-        values: '0+2x12 24x12'
-      - series: 'http_requests_total{method="GET",path="/api/recovered",status="200"}'
-        values: '0+18x12 216x12'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",status="5xx"}'
+        values: '0+5x12 60x12'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",status="2xx"}'
+        values: '0+15x12 180+20x12'
     alert_rule_test:
+      - eval_time: 11m
+        alertname: StratumHighHTTP5xxRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: http
+            exp_annotations:
+              summary: Stratum HTTP 5xx rate is elevated
+              description: The five-minute HTTP 5xx ratio has exceeded 5% for ten minutes (current value 0.25).
+              dashboard_url: /d/stratum-http
+              runbook_url: /docs/operations/remote-monitoring-runbook.md#high-http-5xx-rate
+      - eval_time: 11m
+        alertname: StratumCriticalHTTP5xxRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: stratum
+              environment: remote-test
+              component: http
+            exp_annotations:
+              summary: Stratum HTTP 5xx rate is critical
+              description: The five-minute HTTP 5xx ratio has exceeded 20% for five minutes (current value 0.25).
+              dashboard_url: /d/stratum-http
+              runbook_url: /docs/operations/remote-monitoring-runbook.md#critical-http-5xx-rate
       - eval_time: 23m
         alertname: StratumHighHTTP5xxRate
         exp_alerts: []
@@ -207,16 +297,39 @@ tests:
         alertname: StratumCriticalHTTP5xxRate
         exp_alerts: []
 
+  - name: HTTP metrics from foreign targets are ignored
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="other",service="other",endpoint="http",method="GET",path="/api/noisy",status="5xx"}'
+        values: '0+100x18'
+      - series: 'http_request_duration_seconds_bucket{namespace="other",service="other",endpoint="http",method="GET",path="/api/noisy",le="10"}'
+        values: '0+100x18'
+      - series: 'http_request_duration_seconds_bucket{namespace="other",service="other",endpoint="http",method="GET",path="/api/noisy",le="+Inf"}'
+        values: '0+100x18'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: StratumHighHTTP5xxRate
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: StratumCriticalHTTP5xxRate
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: StratumHighHTTPP95Latency
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: StratumCriticalHTTPP95Latency
+        exp_alerts: []
+
   - name: HTTP P95 warning fires above two seconds
     interval: 1m
     input_series:
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/warning",le="1"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/warning",le="1"}'
         values: '0+18x22'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/warning",le="2.5"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/warning",le="2.5"}'
         values: '0+18x22'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/warning",le="5"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/warning",le="5"}'
         values: '0+20x22'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/warning",le="+Inf"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/warning",le="+Inf"}'
         values: '0+20x22'
     alert_rule_test:
       - eval_time: 16m
@@ -236,13 +349,13 @@ tests:
   - name: HTTP P95 critical fires above five seconds
     interval: 1m
     input_series:
-      - series: 'http_request_duration_seconds_bucket{method="POST",path="/api/critical",le="2.5"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/api/critical",le="2.5"}'
         values: '0+18x12'
-      - series: 'http_request_duration_seconds_bucket{method="POST",path="/api/critical",le="5"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/api/critical",le="5"}'
         values: '0+18x12'
-      - series: 'http_request_duration_seconds_bucket{method="POST",path="/api/critical",le="10"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/api/critical",le="10"}'
         values: '0+20x12'
-      - series: 'http_request_duration_seconds_bucket{method="POST",path="/api/critical",le="+Inf"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/api/critical",le="+Inf"}'
         values: '0+20x12'
     alert_rule_test:
       - eval_time: 6m
@@ -262,11 +375,11 @@ tests:
   - name: HTTP P95 warning boundary does not alert
     interval: 1m
     input_series:
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/boundary-two",le="1"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-two",le="1"}'
         values: '0+17x29'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/boundary-two",le="2.5"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-two",le="2.5"}'
         values: '0+20x29'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/boundary-two",le="+Inf"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-two",le="+Inf"}'
         values: '0+20x29'
     alert_rule_test:
       - eval_time: 20m
@@ -282,11 +395,11 @@ tests:
   - name: HTTP P95 critical boundary does not alert
     interval: 1m
     input_series:
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/boundary-five",le="2.5"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-five",le="2.5"}'
         values: '0+18x29'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/boundary-five",le="5"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-five",le="5"}'
         values: '0+19x29'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/boundary-five",le="+Inf"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-five",le="+Inf"}'
         values: '0+20x29'
     alert_rule_test:
       - eval_time: 20m
@@ -302,13 +415,13 @@ tests:
   - name: HTTP P95 probe routes do not alert
     interval: 1m
     input_series:
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/health",le="+Inf"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/health",le="+Inf"}'
         values: '0+20x29'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/livez",le="+Inf"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/livez",le="+Inf"}'
         values: '0+20x29'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/readyz",le="+Inf"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/readyz",le="+Inf"}'
         values: '0+20x29'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/metrics",le="+Inf"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/metrics",le="+Inf"}'
         values: '0+20x29'
     alert_rule_test:
       - eval_time: 20m
@@ -321,13 +434,13 @@ tests:
   - name: HTTP P95 does not alert below twenty samples
     interval: 1m
     input_series:
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/low-volume",le="1"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/low-volume",le="1"}'
         values: '0x20'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/low-volume",le="2.5"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/low-volume",le="2.5"}'
         values: '0x20'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/low-volume",le="10"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/low-volume",le="10"}'
         values: '0+3x20'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/low-volume",le="+Inf"}'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/low-volume",le="+Inf"}'
         values: '0+3x20'
     alert_rule_test:
       - eval_time: 19m
@@ -340,13 +453,43 @@ tests:
   - name: HTTP P95 alerts resolve
     interval: 1m
     input_series:
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/recovered",le="2.5"}'
-        values: '0+18x17 306x12'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/recovered",le="5"}'
-        values: '0+20x17 340x12'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/recovered",le="+Inf"}'
-        values: '0+20x17 340x12'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",le="1"}'
+        values: '0x18 0+20x12'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",le="2.5"}'
+        values: '0+18x17 306+20x12'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",le="5"}'
+        values: '0+18x17 306+20x12'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",le="10"}'
+        values: '0+20x17 340+20x12'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",le="+Inf"}'
+        values: '0+20x17 340+20x12'
     alert_rule_test:
+      - eval_time: 16m
+        alertname: StratumHighHTTPP95Latency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: http
+            exp_annotations:
+              summary: Stratum HTTP P95 latency is elevated
+              description: The five-minute HTTP P95 latency has exceeded two seconds for fifteen minutes (current value 7.5s).
+              dashboard_url: /d/stratum-http
+              runbook_url: /docs/operations/remote-monitoring-runbook.md#high-http-p95-latency
+      - eval_time: 16m
+        alertname: StratumCriticalHTTPP95Latency
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: stratum
+              environment: remote-test
+              component: http
+            exp_annotations:
+              summary: Stratum HTTP P95 latency is critical
+              description: The five-minute HTTP P95 latency has exceeded five seconds for five minutes (current value 7.5s).
+              dashboard_url: /d/stratum-http
+              runbook_url: /docs/operations/remote-monitoring-runbook.md#critical-http-p95-latency
       - eval_time: 28m
         alertname: StratumHighHTTPP95Latency
         exp_alerts: []

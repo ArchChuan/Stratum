@@ -2,7 +2,7 @@ groups:
   - name: stratum-availability
     rules:
       - alert: StratumPublicEndpointDown
-        expr: probe_success{job="stratum-blackbox-prometheus-blackbox-exporter",service="stratum",environment="remote-test"} == 0
+        expr: absent(probe_success{job="stratum-blackbox-prometheus-blackbox-exporter",service="stratum",environment="remote-test"}) or probe_success{job="stratum-blackbox-prometheus-blackbox-exporter",service="stratum",environment="remote-test"} == 0
         for: 3m
         labels:
           severity: critical
@@ -16,7 +16,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#public-endpoint-down
 
       - alert: StratumBackendUnavailable
-        expr: kube_deployment_status_replicas_ready{namespace="stratum",deployment=~"stratum(-backend)?"} == 0
+        expr: absent(kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum"}) or kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum"} == 0
         for: 3m
         labels:
           severity: critical
@@ -30,7 +30,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#backend-unavailable
 
       - alert: StratumFrontendUnavailable
-        expr: kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"} == 0
+        expr: absent(kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"}) or kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"} == 0
         for: 3m
         labels:
           severity: critical
