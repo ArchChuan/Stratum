@@ -71,7 +71,10 @@ func TestComposeSystemAssistantProfileReplacesProtectedFieldsAndPreservesTenantR
 		got.MemoryScope != want.MemoryScope {
 		t.Fatalf("tenant runtime selection not preserved: %#v", got)
 	}
-	if got.Name != want.Name || got.Description != want.Description || got.SystemPrompt != want.SystemPrompt {
+	if got.Name != profile.Name {
+		t.Fatalf("Name not from profile: got %q, want %q", got.Name, profile.Name)
+	}
+	if got.Description != want.Description || got.SystemPrompt != want.SystemPrompt {
 		t.Fatalf("DB text fields not preserved: got %#v, want DB values", got)
 	}
 	if got.MaxIterations != want.MaxIterations || got.MaxContextTokens != want.MaxContextTokens {
