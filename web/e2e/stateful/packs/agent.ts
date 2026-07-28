@@ -142,18 +142,15 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     const systemCard = page.locator('.ant-card').filter({ hasText: systemAgent.name });
     await expect(systemCard).toHaveCount(1);
     const systemAgentResponse = waitForMutation(page, `/agents/${systemAgent.id}`, 'GET');
-    const systemSettingsResponse = waitForMutation(page, '/agents/system/settings', 'GET');
     await systemCard.getByRole('button', { name: '编辑 Agent' }).click();
     expect((await systemAgentResponse).status()).toBe(200);
-    expect((await systemSettingsResponse).status()).toBe(200);
     await expect(page).toHaveURL(`${webURL}/agents/${systemAgent.id}/edit`);
-    const modelInput = page.getByRole('combobox', { name: '助手模型' });
+    const modelInput = page.getByRole('combobox', { name: 'LLM 模型' });
     await expect(modelInput).toBeEnabled();
-    const modelSelect = page.locator('.ant-select');
-    await modelSelect.locator('.ant-select-selector').click();
+    await modelInput.click();
     await modelInput.press('ArrowDown');
     await modelInput.press('Enter');
-    const settingsResponse = waitForMutation(page, '/agents/system/settings', 'PUT');
+    const settingsResponse = waitForMutation(page, `/agents/${systemAgent.id}`, 'PUT');
     await page.getByRole('button', { name: '保存修改' }).click();
     expect((await settingsResponse).status()).toBe(200);
     const savedSystemModel = await rows<{ llm_model: string }>(pool, tenantID,
