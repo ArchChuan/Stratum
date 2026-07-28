@@ -29,7 +29,7 @@ jobs:
 
       - name: Probe remote health and reconcile alert state
         env:
-          REMOTE_HEALTH_URL: ${{ vars.REMOTE_HEALTH_URL }}
+          REMOTE_HEALTH_URL: ${{ vars.PUBLIC_BASE_URL }}/api/health
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}

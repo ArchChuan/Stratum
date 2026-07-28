@@ -45,12 +45,14 @@ type probe interface {
 }
 
 type issue struct {
-	Number int `json:"number"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
 }
 
 type issueStore interface {
 	FindOpen(context.Context) (*issue, error)
-	Create(context.Context, string) error
+	Create(context.Context, string) (*issue, error)
 	Update(context.Context, int, string) error
 	Close(context.Context, int, string) error
 }
@@ -115,16 +117,26 @@ func (g *githubIssues) FindOpen(ctx context.Context) (*issue, error) {
 	if len(issues) > 1 {
 		return nil, errors.New("query monitor issue: duplicate open issues")
 	}
+	if issues[0].Title != issueTitle {
+		return nil, errors.New("query monitor issue: title mismatch")
+	}
 	return &issues[0], nil
 }
 
-func (g *githubIssues) Create(ctx context.Context, body string) error {
+func (g *githubIssues) Create(ctx context.Context, body string) (*issue, error) {
 	payload := struct {
 		Title  string   `json:"title"`
 		Body   string   `json:"body"`
 		Labels []string `json:"labels"`
 	}{Title: issueTitle, Body: body, Labels: []string{issueLabel}}
-	return g.doJSON(ctx, http.MethodPost, fmt.Sprintf("%s/repos/%s/issues", g.baseURL, g.repo), payload, nil)
+	var created issue
+	if err := g.doJSON(ctx, http.MethodPost, fmt.Sprintf("%s/repos/%s/issues", g.baseURL, g.repo), payload, &created); err != nil {
+		return nil, err
+	}
+	if created.Number <= 0 || created.Title != issueTitle || created.Body != body {
+		return nil, errors.New("create monitor issue: invalid response")
+	}
+	return &created, nil
 }
 
 func (g *githubIssues) Update(ctx context.Context, number int, body string) error {
@@ -205,9 +217,31 @@ func monitor(ctx context.Context, health probe, issues issueStore, sender messag
 		return err
 	}
 	timestamp := now().UTC().Format(time.RFC3339)
+	var state *issueState
+	if openIssue != nil {
+		if openIssue.Title != issueTitle {
+			return errors.New("monitor issue title mismatch")
+		}
+		state, err = parseIssueBody(openIssue.Body)
+		if err != nil {
+			return fmt.Errorf("parse monitor issue state: %w", err)
+		}
+	}
 	if category == diagnosticNone {
 		if openIssue == nil {
 			return nil
+		}
+		if state.Status == "resolved" && state.Notification == "sent" {
+			if err := issues.Close(ctx, openIssue.Number, openIssue.Body); err != nil {
+				return fmt.Errorf("close monitor issue: %w", err)
+			}
+			return nil
+		}
+		pendingBody := issueBody(timestamp, "resolved", diagnosticNone, "pending")
+		if state.Status != "resolved" || state.Notification != "pending" {
+			if err := issues.Update(ctx, openIssue.Number, pendingBody); err != nil {
+				return fmt.Errorf("persist resolved pending state: %w", err)
+			}
 		}
 		message, err := renderMessage("resolved", timestamp, diagnosticNone)
 		if err != nil {
@@ -216,21 +250,34 @@ func monitor(ctx context.Context, health probe, issues issueStore, sender messag
 		if err := sender.Send(ctx, message); err != nil {
 			return fmt.Errorf("send resolved notification: %w", err)
 		}
-		if err := issues.Close(ctx, openIssue.Number, issueBody(timestamp, "resolved", diagnosticNone)); err != nil {
+		sentBody := issueBody(timestamp, "resolved", diagnosticNone, "sent")
+		if err := issues.Update(ctx, openIssue.Number, sentBody); err != nil {
+			return fmt.Errorf("persist resolved sent state: %w", err)
+		}
+		if err := issues.Close(ctx, openIssue.Number, sentBody); err != nil {
 			return fmt.Errorf("close monitor issue: %w", err)
 		}
 		return nil
 	}
 
-	body := issueBody(timestamp, "firing", category)
+	pendingBody := issueBody(timestamp, "firing", category, "pending")
 	if openIssue != nil {
-		if err := issues.Update(ctx, openIssue.Number, body); err != nil {
-			return fmt.Errorf("update monitor issue: %w", err)
+		if state.Status == "firing" && state.Notification == "sent" {
+			if err := issues.Update(ctx, openIssue.Number, issueBody(timestamp, "firing", category, "sent")); err != nil {
+				return fmt.Errorf("update monitor issue: %w", err)
+			}
+			return nil
 		}
-		return nil
-	}
-	if err := issues.Create(ctx, body); err != nil {
-		return fmt.Errorf("create monitor issue: %w", err)
+		if state.Status != "firing" || state.Notification != "pending" {
+			if err := issues.Update(ctx, openIssue.Number, pendingBody); err != nil {
+				return fmt.Errorf("persist firing pending state: %w", err)
+			}
+		}
+	} else {
+		openIssue, err = issues.Create(ctx, pendingBody)
+		if err != nil {
+			return fmt.Errorf("create monitor issue: %w", err)
+		}
 	}
 	message, err := renderMessage("firing", timestamp, category)
 	if err != nil {
@@ -239,11 +286,60 @@ func monitor(ctx context.Context, health probe, issues issueStore, sender messag
 	if err := sender.Send(ctx, message); err != nil {
 		return fmt.Errorf("send firing notification: %w", err)
 	}
+	if err := issues.Update(ctx, openIssue.Number, issueBody(timestamp, "firing", category, "sent")); err != nil {
+		return fmt.Errorf("persist firing sent state: %w", err)
+	}
 	return nil
 }
 
-func issueBody(timestamp, status string, category diagnosticCategory) string {
-	return fmt.Sprintf("timestamp: %s\nstatus: %s\ndiagnostic: %s\n", timestamp, status, displayCategory(category))
+type issueState struct {
+	Timestamp    time.Time
+	Status       string
+	Diagnostic   diagnosticCategory
+	Notification string
+}
+
+func issueBody(timestamp, status string, category diagnosticCategory, notification string) string {
+	return fmt.Sprintf(
+		"timestamp: %s\nstatus: %s\ndiagnostic: %s\nnotification: %s\n",
+		timestamp, status, displayCategory(category), notification,
+	)
+}
+
+func parseIssueBody(body string) (*issueState, error) {
+	lines := strings.Split(strings.TrimSuffix(body, "\n"), "\n")
+	if len(lines) != 4 {
+		return nil, errors.New("invalid field count")
+	}
+	values := make([]string, 4)
+	keys := []string{"timestamp: ", "status: ", "diagnostic: ", "notification: "}
+	for index, key := range keys {
+		if !strings.HasPrefix(lines[index], key) {
+			return nil, errors.New("invalid field")
+		}
+		values[index] = strings.TrimPrefix(lines[index], key)
+	}
+	timestamp, err := time.Parse(time.RFC3339, values[0])
+	if err != nil {
+		return nil, errors.New("invalid timestamp")
+	}
+	if values[1] != "firing" && values[1] != "resolved" {
+		return nil, errors.New("invalid status")
+	}
+	category := diagnosticCategory(values[2])
+	if values[2] == "none" {
+		category = diagnosticNone
+	}
+	if category != diagnosticNone && category != diagnosticTransport && category != diagnosticHTTPStatus && category != diagnosticContract {
+		return nil, errors.New("invalid diagnostic")
+	}
+	if values[1] == "resolved" && category != diagnosticNone {
+		return nil, errors.New("invalid resolved diagnostic")
+	}
+	if values[3] != "pending" && values[3] != "sent" {
+		return nil, errors.New("invalid notification state")
+	}
+	return &issueState{Timestamp: timestamp, Status: values[1], Diagnostic: category, Notification: values[3]}, nil
 }
 
 func renderMessage(status, timestamp string, category diagnosticCategory) (alerting.FeishuMessage, error) {
