@@ -18,6 +18,8 @@ up，且相关应用可用性/错误率正常。critical 立即升级依赖与�
 
 ## StratumDependencyTargetMissing
 
-影响：etcd 或 Milvus 监控失明，依赖本身未必故障；紧急度：warning。查询
-`absent(up{namespace="stratum",job=~".*(etcd|milvus).*"})`，并在 targets 页按 service 核对。若应用同时异常，
+影响：etcd 或 Milvus 监控失明，依赖本身未必故障；紧急度：warning。分别查询
+`up{namespace="stratum",service="stratum-etcd-metrics",endpoint="metrics"}` 和
+`up{namespace="stratum",service="stratum-milvus-metrics",endpoint="metrics"}`，缺失 series 或值为 0 即可识别具体
+依赖，并在 targets 页按 service 核对。若应用同时异常，
 按依赖故障升级；若仅 target 缺失，修复 ServiceMonitor/Service/端口映射。恢复后确认两类 target 和规则无错误。

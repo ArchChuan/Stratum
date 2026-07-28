@@ -123,6 +123,98 @@ if MONITORING_RULES_DIR="${TMP_ROOT}/rules-duplicate-url" run_validator >/dev/nu
     exit 1
 fi
 
+mkdir -p "${TMP_ROOT}/rules-traversal"
+cp "${ROOT}"/monitoring/remote/rules/*.yaml "${TMP_ROOT}/rules-traversal/"
+sed -i 's|/docs/operations/alerts/availability.md#public-endpoint-down|/docs/../docs/operations/alerts/availability.md#public-endpoint-down|' \
+    "${TMP_ROOT}/rules-traversal/stratum-availability.yaml"
+if MONITORING_RULES_DIR="${TMP_ROOT}/rules-traversal" run_validator >/dev/null 2>&1; then
+    echo 'validator accepted a runbook path containing traversal' >&2
+    exit 1
+fi
+
+mkdir -p "${TMP_ROOT}/rules-encoded-traversal"
+cp "${ROOT}"/monitoring/remote/rules/*.yaml "${TMP_ROOT}/rules-encoded-traversal/"
+sed -i 's|/docs/operations/alerts/availability.md#public-endpoint-down|/docs/%2e%2e%2fdocs%2foperations%2falerts%2favailability.md#public-endpoint-down|' \
+    "${TMP_ROOT}/rules-encoded-traversal/stratum-availability.yaml"
+if MONITORING_RULES_DIR="${TMP_ROOT}/rules-encoded-traversal" run_validator >/dev/null 2>&1; then
+    echo 'validator accepted an encoded runbook traversal' >&2
+    exit 1
+fi
+
+mkdir -p "${TMP_ROOT}/rules-backslash"
+cp "${ROOT}"/monitoring/remote/rules/*.yaml "${TMP_ROOT}/rules-backslash/"
+sed -i 's|/docs/operations/alerts/availability.md#public-endpoint-down|/docs/\\operations\\alerts\\availability.md#public-endpoint-down|' \
+    "${TMP_ROOT}/rules-backslash/stratum-availability.yaml"
+if MONITORING_RULES_DIR="${TMP_ROOT}/rules-backslash" run_validator >/dev/null 2>&1; then
+    echo 'validator accepted a runbook path containing backslashes' >&2
+    exit 1
+fi
+
+mkdir -p "${TMP_ROOT}/rules-repeated-separator"
+cp "${ROOT}"/monitoring/remote/rules/*.yaml "${TMP_ROOT}/rules-repeated-separator/"
+sed -i 's|/docs/operations/alerts/availability.md#public-endpoint-down|/docs//operations/alerts/availability.md#public-endpoint-down|' \
+    "${TMP_ROOT}/rules-repeated-separator/stratum-availability.yaml"
+if MONITORING_RULES_DIR="${TMP_ROOT}/rules-repeated-separator" run_validator >/dev/null 2>&1; then
+    echo 'validator accepted a runbook path containing repeated separators' >&2
+    exit 1
+fi
+
+mkdir -p "${TMP_ROOT}/rules-symlink" "${TMP_ROOT}/runbook-symlink/docs/operations/alerts"
+cp "${ROOT}"/monitoring/remote/rules/*.yaml "${TMP_ROOT}/rules-symlink/"
+cp -R "${ROOT}/docs/operations/." "${TMP_ROOT}/runbook-symlink/docs/operations/"
+printf '<a id="public-endpoint-down"></a>\n\n## StratumPublicEndpointDown\n' >"${TMP_ROOT}/outside.md"
+ln -s "${TMP_ROOT}/outside.md" "${TMP_ROOT}/runbook-symlink/docs/operations/alerts/escape.md"
+sed -i 's|/docs/operations/alerts/availability.md#public-endpoint-down|/docs/operations/alerts/escape.md#public-endpoint-down|' \
+    "${TMP_ROOT}/rules-symlink/stratum-availability.yaml"
+if MONITORING_RULES_DIR="${TMP_ROOT}/rules-symlink" RUNBOOK_ROOT="${TMP_ROOT}/runbook-symlink" \
+    run_validator >/dev/null 2>&1; then
+    echo 'validator accepted a runbook symlink escaping the docs tree' >&2
+    exit 1
+fi
+
+mkdir -p "${TMP_ROOT}/rules-duplicate-expr"
+cp "${ROOT}"/monitoring/remote/rules/*.yaml "${TMP_ROOT}/rules-duplicate-expr/"
+sed -i '/expr: .*probe_success/a\        expr: vector(1)' \
+    "${TMP_ROOT}/rules-duplicate-expr/stratum-availability.yaml"
+if MONITORING_RULES_DIR="${TMP_ROOT}/rules-duplicate-expr" run_validator >/dev/null 2>&1; then
+    echo 'validator accepted a duplicate non-runbook mapping key' >&2
+    exit 1
+fi
+
+mkdir -p "${TMP_ROOT}/rules-nested-duplicate"
+cp "${ROOT}"/monitoring/remote/rules/*.yaml "${TMP_ROOT}/rules-nested-duplicate/"
+sed -i '/severity: critical/a\          severity: warning' \
+    "${TMP_ROOT}/rules-nested-duplicate/stratum-availability.yaml"
+if MONITORING_RULES_DIR="${TMP_ROOT}/rules-nested-duplicate" run_validator >/dev/null 2>&1; then
+    echo 'validator accepted a duplicate key in a nested mapping' >&2
+    exit 1
+fi
+
+mkdir -p "${TMP_ROOT}/rules-multi-document"
+cp "${ROOT}"/monitoring/remote/rules/*.yaml "${TMP_ROOT}/rules-multi-document/"
+printf '\n---\ngroups: []\n' >>"${TMP_ROOT}/rules-multi-document/stratum-availability.yaml"
+if MONITORING_RULES_DIR="${TMP_ROOT}/rules-multi-document" run_validator >/dev/null 2>&1; then
+    echo 'validator accepted a multi-document rule file' >&2
+    exit 1
+fi
+
+mkdir -p "${TMP_ROOT}/rules-trailing-document"
+cp "${ROOT}"/monitoring/remote/rules/*.yaml "${TMP_ROOT}/rules-trailing-document/"
+printf '\n---\n' >>"${TMP_ROOT}/rules-trailing-document/stratum-availability.yaml"
+if MONITORING_RULES_DIR="${TMP_ROOT}/rules-trailing-document" run_validator >/dev/null 2>&1; then
+    echo 'validator accepted an empty trailing YAML document' >&2
+    exit 1
+fi
+
+mkdir -p "${TMP_ROOT}/runbook-promql/docs/operations"
+cp -R "${ROOT}/docs/operations/." "${TMP_ROOT}/runbook-promql/docs/operations/"
+sed -i 's/feishu_alert_delivery_total{status="failed"}/stratum_feishu_delivery_failures_total/' \
+    "${TMP_ROOT}/runbook-promql/docs/operations/alerts/monitoring-system.md"
+if RUNBOOK_ROOT="${TMP_ROOT}/runbook-promql" run_validator >/dev/null 2>&1; then
+    echo 'validator accepted stale Feishu delivery PromQL in the runbook' >&2
+    exit 1
+fi
+
 for expected in helm promtool amtool; do
     if ! grep -q "^${expected} " "${CALLS}"; then
         echo "validator did not invoke ${expected}" >&2

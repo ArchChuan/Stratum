@@ -27,8 +27,8 @@ rules、通知和看板均正常，并做一次受控 firing/resolved。critical
 
 ## StratumPrometheusRuleEvaluationFailures
 
-影响：告警可能漏发或错误；紧急度：critical。查询
-`increase(prometheus_rule_evaluation_failures_total[5m])`。按 rule group 定位表达式/series 问题，先回滚相关规则；
+影响：告警可能漏发或错误；紧急度：warning。查询
+`increase(prometheus_rule_evaluation_failures_total[10m])`。按 rule group 定位表达式/series 问题，先回滚相关规则；
 恢复后计数不再增长且所有 group `lastError` 为空。
 
 <a id="alertmanager-notification-failures"></a>
@@ -60,5 +60,6 @@ ServiceMonitor、端口和 rollout；只验证 Secret 存在与引用，不读�
 ## StratumFeishuDeliveryFailures
 
 影响：适配器收到告警但 webhook 投递失败；紧急度：critical。查询
-`increase(stratum_feishu_delivery_failures_total[5m])`。检查失败计数、Pod 状态和最近 webhook rotation；不要读取
+`feishu_alert_delivery_total{status="failed"}`，并在 Grafana 选择最近十分钟范围检查增量。检查失败计数、Pod
+状态和最近 webhook rotation；不要读取
 webhook 或上游正文。必要时重新应用受控 Secret 并 rollout，恢复后验证 firing/resolved 且失败计数停止增长。

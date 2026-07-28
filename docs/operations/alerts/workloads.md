@@ -27,7 +27,7 @@ revision 和时间线，不输出 Secret、env 或日志中的敏感正文。
 ## StratumPodRestartingFrequently
 
 影响：实例抖动或短暂失败；紧急度：warning。查询
-`increase(kube_pod_container_status_restarts_total{namespace="stratum"}[15m])`。按 exit reason、events、OOM、
+`increase(kube_pod_container_status_restarts_total{namespace="stratum"}[10m])`。按 exit reason、events、OOM、
 probe 和发布顺序定位；若新版本相关则回滚，恢复后观察重启计数不再增长。
 
 <a id="pod-crash-looping"></a>

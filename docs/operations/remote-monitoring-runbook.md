@@ -44,16 +44,16 @@ Grafana 应出现“服务总览、HTTP 性能、资源容量、依赖与监控�
 1. 在飞书侧创建新 webhook；只把值写入受控 Secret 管理流程，不在命令行、工单或日志中回显。
 2. 更新 `monitoring/stratum-feishu-webhook` 后重启适配器并等待 rollout：
 
-```bash
-kubectl rollout restart deployment/stratum-feishu-alert-adapter -n monitoring
-kubectl rollout status deployment/stratum-feishu-alert-adapter -n monitoring --timeout=5m
-kubectl get pods -n monitoring -l app.kubernetes.io/name=stratum-feishu-alert-adapter
-```
+    ```bash
+    kubectl rollout restart deployment/stratum-feishu-alert-adapter -n monitoring
+    kubectl rollout status deployment/stratum-feishu-alert-adapter -n monitoring --timeout=5m
+    kubectl get pods -n monitoring -l app.kubernetes.io/name=stratum-feishu-alert-adapter
+    ```
 
-1. 用临时 `PrometheusRule` 产生一个明确标记为测试的 firing，确认飞书收到；删除该测试规则后确认收到
+3. 用临时 `PrometheusRule` 产生一个明确标记为测试的 firing，确认飞书收到；删除该测试规则后确认收到
 resolved。测试规则必须有短时限、唯一名称和负责人，验收完成立即清理。不要直接调用 webhook，也不要输出
 Secret、容器环境变量或上游原始响应体。
-2. 保留消息时间、alertname、状态和关联变更号；不要保存 webhook URL。
+4. 保留消息时间、alertname、状态和关联变更号；不要保存 webhook URL。
 
 ## 安全静默
 
