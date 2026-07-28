@@ -15,7 +15,6 @@ import (
 func PrometheusMiddleware(metrics *observability.PrometheusMetrics, logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
-		path := c.Request.URL.Path
 
 		// 增加正在处理的请求计数
 		metrics.IncHTTPRequestsInFlight()
@@ -27,6 +26,7 @@ func PrometheusMiddleware(metrics *observability.PrometheusMetrics, logger *zap.
 
 		// 计算请求持续时间（秒）
 		duration := time.Since(start).Seconds()
+		path := metricsRouteLabel(c)
 
 		// 记录指标
 		metrics.IncHTTPRequest(c.Request.Method, path, c.Writer.Status())
