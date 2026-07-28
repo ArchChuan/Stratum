@@ -70,7 +70,7 @@ func (c *Container) buildLLMGateway(_ context.Context) error {
 	gw := llmgateway.NewGateway(registry, chatProtos, embedProtos).
 		WithLogger(c.Logger).WithMetrics(metrics)
 
-	providerSvc := llmapp.NewProviderService(providerRepo, modelRepo, chatProtos)
+	providerSvc := llmapp.NewProviderService(providerRepo, modelRepo, llmgateway.NewProviderRuntime(chatProtos))
 	mgmtSvc := llmapp.NewModelMgmtService(modelRepo)
 
 	c.LLMGateway = &LLMGateway{

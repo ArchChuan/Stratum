@@ -29,7 +29,8 @@ func (h *ModelHandler) ListModels(c *gin.Context) {
 	} else if tid, ok := tenantIDFromCtx(c); ok {
 		chat, embedding = h.svc.CatalogueWithTenant(c.Request.Context(), tid)
 	} else {
-		chat, embedding = h.svc.Catalogue(c.Request.Context())
+		chat = []string{}
+		embedding = []string{}
 	}
 	c.JSON(http.StatusOK, gin.H{"models": chat, "embedding_models": embedding})
 }

@@ -231,6 +231,29 @@ func TestQwenComplete_ToolCalls(t *testing.T) {
 	require.Empty(t, resp.Content)
 }
 
+func TestOpenAICompatProtocolUsesResolvedProviderConfig(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/chat/completions", r.URL.Path)
+		require.Equal(t, "Bearer tenant-key", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"qwen-max","choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+
+	template := infrastructure.NewOpenAICompatClient(infrastructure.ProviderConfig{Name: "template"}, zap.NewNop())
+	protocol := infrastructure.NewOpenAICompatProtocol(template)
+	resp, err := protocol.Complete(context.Background(), infrastructure.ProviderConfig{
+		Name: "tenant-provider", BaseURL: srv.URL, APIKey: "tenant-key",
+	}, &infrastructure.CompletionRequest{
+		Model: "qwen-max", Messages: []infrastructure.Message{{Role: "user", Content: "hello"}},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "ok", resp.Content)
+}
+
 func TestZhipuComplete_ToolCalls(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

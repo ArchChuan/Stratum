@@ -8,7 +8,6 @@ import (
 	"github.com/byteBuilderX/stratum/internal/llmgateway/application"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
-	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 )
 
 // ---------------------------------------------------------------------------
@@ -120,29 +119,21 @@ func (m *mockModelRepo) Toggle(_ context.Context, _, _ string, _ bool) error {
 	return m.err
 }
 
-type mockChatProto struct {
-	listModelsFn func(ctx context.Context, cfg infrastructure.ProviderConfig) ([]string, error)
-	healthFn     func(ctx context.Context, cfg infrastructure.ProviderConfig) error
+type mockProviderRuntime struct {
+	listModelsFn func(ctx context.Context, provider domain.Provider) ([]string, error)
+	healthFn     func(ctx context.Context, provider domain.Provider) error
 }
 
-func (m *mockChatProto) Complete(_ context.Context, _ infrastructure.ProviderConfig, _ *infrastructure.CompletionRequest) (*infrastructure.CompletionResponse, error) {
-	return nil, nil
-}
-
-func (m *mockChatProto) CompleteStream(_ context.Context, _ infrastructure.ProviderConfig, _ *infrastructure.CompletionRequest, _ func(string)) (*infrastructure.CompletionResponse, error) {
-	return nil, nil
-}
-
-func (m *mockChatProto) Health(ctx context.Context, cfg infrastructure.ProviderConfig) error {
+func (m *mockProviderRuntime) Health(ctx context.Context, provider domain.Provider) error {
 	if m.healthFn != nil {
-		return m.healthFn(ctx, cfg)
+		return m.healthFn(ctx, provider)
 	}
 	return nil
 }
 
-func (m *mockChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]string, error) {
+func (m *mockProviderRuntime) ListModels(ctx context.Context, provider domain.Provider) ([]string, error) {
 	if m.listModelsFn != nil {
-		return m.listModelsFn(ctx, cfg)
+		return m.listModelsFn(ctx, provider)
 	}
 	return nil, nil
 }
@@ -151,8 +142,8 @@ func (m *mockChatProto) ListModels(ctx context.Context, cfg infrastructure.Provi
 // Helper
 // ---------------------------------------------------------------------------
 
-func newTestProviderService(pr *mockProviderRepo, mr *mockModelRepo, chatProtos map[domain.ProviderKind]infrastructure.ChatProtocol) *application.ProviderService {
-	return application.NewProviderService(pr, mr, chatProtos)
+func newTestProviderService(pr *mockProviderRepo, mr *mockModelRepo, runtime port.ProviderRuntime) *application.ProviderService {
+	return application.NewProviderService(pr, mr, runtime)
 }
 
 // ---------------------------------------------------------------------------
@@ -162,10 +153,7 @@ func newTestProviderService(pr *mockProviderRepo, mr *mockModelRepo, chatProtos 
 func TestProviderService_Create_HappyPath(t *testing.T) {
 	pr := &mockProviderRepo{}
 	mr := &mockModelRepo{}
-	protos := map[domain.ProviderKind]infrastructure.ChatProtocol{
-		domain.ProviderOpenAICompat: &mockChatProto{},
-	}
-	svc := newTestProviderService(pr, mr, protos)
+	svc := newTestProviderService(pr, mr, &mockProviderRuntime{})
 
 	input := application.CreateProviderInput{
 		Name:    "My OpenAI",
@@ -317,14 +305,12 @@ func TestProviderService_DiscoverModels_HappyPath(t *testing.T) {
 		},
 	}
 	mr := &mockModelRepo{}
-	protos := map[domain.ProviderKind]infrastructure.ChatProtocol{
-		domain.ProviderOpenAICompat: &mockChatProto{
-			listModelsFn: func(_ context.Context, _ infrastructure.ProviderConfig) ([]string, error) {
-				return []string{"gpt-4", "gpt-3.5-turbo"}, nil
-			},
+	runtime := &mockProviderRuntime{
+		listModelsFn: func(_ context.Context, _ domain.Provider) ([]string, error) {
+			return []string{"gpt-4", "gpt-3.5-turbo"}, nil
 		},
 	}
-	svc := newTestProviderService(pr, mr, protos)
+	svc := newTestProviderService(pr, mr, runtime)
 
 	models, err := svc.DiscoverModels(context.Background(), "t1", "p1")
 	if err != nil {
@@ -348,7 +334,7 @@ func TestProviderService_DiscoverModels_NoProtocol(t *testing.T) {
 		},
 	}
 	// Empty protocol map
-	svc := newTestProviderService(pr, &mockModelRepo{}, map[domain.ProviderKind]infrastructure.ChatProtocol{})
+	svc := newTestProviderService(pr, &mockModelRepo{}, nil)
 
 	_, err := svc.DiscoverModels(context.Background(), "t1", "p1")
 	if err == nil {
@@ -372,12 +358,10 @@ func TestProviderService_HealthCheck_Success(t *testing.T) {
 			"p1": {ID: "p1", Name: "Healthy Prov", Kind: domain.ProviderOpenAICompat, BaseURL: "https://h.test", APIKey: "sk-h", DefaultModel: "gpt-4"},
 		},
 	}
-	protos := map[domain.ProviderKind]infrastructure.ChatProtocol{
-		domain.ProviderOpenAICompat: &mockChatProto{
-			healthFn: func(_ context.Context, _ infrastructure.ProviderConfig) error { return nil },
-		},
+	runtime := &mockProviderRuntime{
+		healthFn: func(_ context.Context, _ domain.Provider) error { return nil },
 	}
-	svc := newTestProviderService(pr, &mockModelRepo{}, protos)
+	svc := newTestProviderService(pr, &mockModelRepo{}, runtime)
 
 	if err := svc.HealthCheck(context.Background(), "t1", "p1"); err != nil {
 		t.Fatalf("HealthCheck failed: %v", err)
@@ -390,14 +374,12 @@ func TestProviderService_HealthCheck_Failure(t *testing.T) {
 			"p1": {ID: "p1", Name: "Unhealthy", Kind: domain.ProviderOpenAICompat, BaseURL: "https://bad.test", APIKey: "sk-bad"},
 		},
 	}
-	protos := map[domain.ProviderKind]infrastructure.ChatProtocol{
-		domain.ProviderOpenAICompat: &mockChatProto{
-			healthFn: func(_ context.Context, _ infrastructure.ProviderConfig) error {
-				return errors.New("connection refused")
-			},
+	runtime := &mockProviderRuntime{
+		healthFn: func(_ context.Context, _ domain.Provider) error {
+			return errors.New("connection refused")
 		},
 	}
-	svc := newTestProviderService(pr, &mockModelRepo{}, protos)
+	svc := newTestProviderService(pr, &mockModelRepo{}, runtime)
 
 	err := svc.HealthCheck(context.Background(), "t1", "p1")
 	if err == nil {
