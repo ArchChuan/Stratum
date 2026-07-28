@@ -4,8 +4,6 @@ package infrastructure
 import (
 	"context"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -19,12 +17,7 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
-type ModelProvider string
-
 const (
-	ProviderQwen  ModelProvider = "qwen"
-	ProviderZhipu ModelProvider = "zhipu"
-
 	llmStatusSuccess = "success"
 	llmStatusError   = "error"
 )
@@ -88,41 +81,25 @@ type openAIEmbedResp struct {
 	} `json:"data"`
 }
 
-type LLMClient interface {
-	Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error)
-	Health(ctx context.Context) error
-	// Models returns the chat model names supported by this provider.
-	Models() []string
-}
-
-// StreamingLLMClient is an optional extension of LLMClient for providers that support token streaming.
-type StreamingLLMClient interface {
-	CompleteStream(ctx context.Context, req *CompletionRequest, onToken func(string)) (*CompletionResponse, error)
-}
-
-type EmbeddingClient interface {
-	CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error)
-	// BatchSize returns the maximum number of texts that can be embedded in a single request.
-	// Providers have different limits (Qwen: 10, OpenAI: 100+).
-	BatchSize() int
-}
-
+// Gateway delegates LLM requests to the ModelRegistry, resolving each model
+// name to a provider configuration and protocol at call time.
 type Gateway struct {
-	clients          map[ModelProvider]LLMClient
-	embeddingClients map[ModelProvider]EmbeddingClient
-	defaultProvider  ModelProvider
-	metrics          observability.MetricsProvider
-	logger           *zap.Logger
+	registry    *ModelRegistry
+	chatProtos  map[domain.ProviderKind]ChatProtocol
+	embedProtos map[domain.ProviderKind]EmbedProtocol
+	metrics     observability.MetricsProvider
+	logger      *zap.Logger
 }
 
 // NewGateway creates a Gateway with a no-op metrics provider.
 // Call WithMetrics to inject a real provider.
-func NewGateway() *Gateway {
+func NewGateway(registry *ModelRegistry, chatProtos map[domain.ProviderKind]ChatProtocol, embedProtos map[domain.ProviderKind]EmbedProtocol) *Gateway {
 	return &Gateway{
-		clients:          make(map[ModelProvider]LLMClient),
-		embeddingClients: make(map[ModelProvider]EmbeddingClient),
-		metrics:          observability.NoopMetrics{},
-		logger:           zap.NewNop(),
+		registry:    registry,
+		chatProtos:  chatProtos,
+		embedProtos: embedProtos,
+		metrics:     observability.NoopMetrics{},
+		logger:      zap.NewNop(),
 	}
 }
 
@@ -138,61 +115,22 @@ func (g *Gateway) WithLogger(l *zap.Logger) *Gateway {
 	return g
 }
 
-func (g *Gateway) RegisterClient(provider ModelProvider, client LLMClient) {
-	g.clients[provider] = client
-}
-
-func (g *Gateway) RegisterEmbeddingClient(provider ModelProvider, client EmbeddingClient) {
-	g.embeddingClients[provider] = client
-}
-
-func (g *Gateway) HasEmbeddingClient() bool {
-	return len(g.embeddingClients) > 0
-}
-
-// DefaultEmbeddingModel returns the appropriate embedding model name for the default provider.
-func (g *Gateway) DefaultEmbeddingModel() string {
-	switch g.defaultProvider {
-	case ProviderQwen:
-		return "text-embedding-v3"
-	case ProviderZhipu:
-		return "embedding-3"
-	default:
-		return "text-embedding-3-small"
-	}
-}
-
-func (g *Gateway) SetDefault(provider ModelProvider) {
-	g.defaultProvider = provider
-}
-
+// Complete resolves the model via the registry and delegates to the resolved
+// ChatProtocol.
 func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error) {
-	provider := g.defaultProvider
-	if req.Model != "" {
-		provider = g.parseProvider(req.Model)
-	}
-
-	client, ok := g.clients[provider]
-	if !ok {
-		g.metrics.IncLLMRequest(req.Model, string(provider), llmStatusError)
-		return nil, fmt.Errorf("provider not found: %s", provider)
-	}
-
-	if req.Model == "" {
-		if models := client.Models(); len(models) > 0 {
-			cp := *req
-			cp.Model = models[0]
-			req = &cp
-		}
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	cfg, proto, err := g.registry.Resolve(ctx, tenantID, req.Model)
+	if err != nil {
+		g.metrics.IncLLMRequest(req.Model, "unknown", llmStatusError)
+		return nil, fmt.Errorf("llmgateway: resolve model %q: %w", req.Model, err)
 	}
 
 	traceID := reqctx.TraceIDFromContext(ctx)
-	tenantID := reqctx.TenantIDFromContext(ctx)
 	fields := []zap.Field{
 		zap.String("trace_id", traceID),
 		zap.String("tenant_id", tenantID),
 		zap.String("model", req.Model),
-		zap.String("provider", string(provider)),
+		zap.String("provider", cfg.Name),
 		zap.Int("tool_count", len(req.Tools)),
 	}
 	if req.ToolChoice != "" {
@@ -201,7 +139,7 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 	g.logger.Info("llm.request", fields...)
 
 	start := time.Now()
-	resp, err := client.Complete(ctx, req)
+	resp, err := proto.Complete(ctx, cfg, req)
 	elapsed := time.Since(start).Seconds()
 
 	status := llmStatusSuccess
@@ -209,8 +147,8 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 		status = llmStatusError
 	}
 
-	g.metrics.IncLLMRequest(req.Model, string(provider), status)
-	g.metrics.RecordLLMRequestDuration(req.Model, string(provider), elapsed)
+	g.metrics.IncLLMRequest(req.Model, cfg.Name, status)
+	g.metrics.RecordLLMRequestDuration(req.Model, cfg.Name, elapsed)
 
 	if err == nil && resp != nil {
 		if resp.Usage.PromptTokens > 0 {
@@ -225,7 +163,7 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 			zap.String("trace_id", traceID),
 			zap.String("tenant_id", tenantID),
 			zap.String("model", req.Model),
-			zap.String("provider", string(provider)),
+			zap.String("provider", cfg.Name),
 			zap.Bool("stream", false),
 			zap.Int64("latency_ms", int64(elapsed*1000)),
 			zap.Int("prompt_tokens", resp.Usage.PromptTokens),
@@ -236,7 +174,7 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 			zap.String("trace_id", traceID),
 			zap.String("tenant_id", tenantID),
 			zap.String("model", req.Model),
-			zap.String("provider", string(provider)),
+			zap.String("provider", cfg.Name),
 			zap.Bool("stream", false),
 			zap.Int64("latency_ms", int64(elapsed*1000)),
 			zap.Error(err),
@@ -246,22 +184,23 @@ func (g *Gateway) Complete(ctx context.Context, req *CompletionRequest) (*Comple
 	return resp, err
 }
 
-// CompleteStream streams tokens from the LLM via onToken callback.
-// Falls back to non-streaming Complete if the provider does not implement StreamingLLMClient.
+// CompleteStream resolves the model via the registry and delegates to the
+// resolved ChatProtocol's streaming method.
 func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, onToken func(string)) (*CompletionResponse, error) {
-	provider := g.parseProvider(req.Model)
-	client, ok := g.clients[provider]
-	if !ok {
-		g.metrics.IncLLMRequest(req.Model, string(provider), llmStatusError)
-		return nil, fmt.Errorf("llmgateway: no client for provider %q", provider)
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	cfg, proto, err := g.registry.Resolve(ctx, tenantID, req.Model)
+	if err != nil {
+		g.metrics.IncLLMRequest(req.Model, "unknown", llmStatusError)
+		return nil, fmt.Errorf("llmgateway: resolve model %q: %w", req.Model, err)
 	}
+
 	streamTraceID := reqctx.TraceIDFromContext(ctx)
-	streamTenantID := reqctx.TenantIDFromContext(ctx)
+	streamTenantID := tenantID
 	fields := []zap.Field{
 		zap.String("trace_id", streamTraceID),
 		zap.String("tenant_id", streamTenantID),
 		zap.String("model", req.Model),
-		zap.String("provider", string(provider)),
+		zap.String("provider", cfg.Name),
 		zap.Bool("stream", true),
 		zap.Int("tool_count", len(req.Tools)),
 	}
@@ -269,43 +208,41 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 		fields = append(fields, zap.String("tool_choice", req.ToolChoice))
 	}
 	g.logger.Info("llm.request", fields...)
+
 	start := time.Now()
 	tracer := otel.Tracer("stratum/llmgateway")
 	ctx, llmGWSpan := tracer.Start(ctx, "llm.complete",
 		oteltrace.WithAttributes(
 			attribute.String("llm.model", req.Model),
-			attribute.String("llm.provider", string(provider)),
+			attribute.String("llm.provider", cfg.Name),
 			attribute.Bool("llm.stream", true),
 		),
 	)
 	defer llmGWSpan.End()
+
 	var (
 		resp         *CompletionResponse
-		err          error
 		ttftRecorded bool
 	)
 	wrappedOnToken := func(t string) {
 		if !ttftRecorded {
 			ttftRecorded = true
-			g.metrics.RecordLLMFirstTokenLatency(req.Model, string(provider), time.Since(start).Seconds())
+			g.metrics.RecordLLMFirstTokenLatency(req.Model, cfg.Name, time.Since(start).Seconds())
 		}
 		onToken(t)
 	}
-	if sc, ok := client.(StreamingLLMClient); ok {
-		resp, err = sc.CompleteStream(ctx, req, wrappedOnToken)
-	} else {
-		resp, err = client.Complete(ctx, req)
-		if err == nil && resp != nil {
-			wrappedOnToken(resp.Content)
-		}
-	}
+
+	resp, err = proto.CompleteStream(ctx, cfg, req, wrappedOnToken)
 	elapsed := time.Since(start).Seconds()
+
 	status := llmStatusSuccess
 	if err != nil {
 		status = llmStatusError
 	}
-	g.metrics.IncLLMRequest(req.Model, string(provider), status)
-	g.metrics.RecordLLMRequestDuration(req.Model, string(provider), elapsed)
+
+	g.metrics.IncLLMRequest(req.Model, cfg.Name, status)
+	g.metrics.RecordLLMRequestDuration(req.Model, cfg.Name, elapsed)
+
 	if err == nil && resp != nil {
 		llmGWSpan.SetAttributes(
 			attribute.Int("llm.prompt_tokens", resp.Usage.PromptTokens),
@@ -321,7 +258,7 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 			zap.String("trace_id", streamTraceID),
 			zap.String("tenant_id", streamTenantID),
 			zap.String("model", req.Model),
-			zap.String("provider", string(provider)),
+			zap.String("provider", cfg.Name),
 			zap.Bool("stream", true),
 			zap.Int64("latency_ms", int64(elapsed*1000)),
 			zap.Int("prompt_tokens", resp.Usage.PromptTokens),
@@ -334,89 +271,55 @@ func (g *Gateway) CompleteStream(ctx context.Context, req *CompletionRequest, on
 			zap.String("trace_id", streamTraceID),
 			zap.String("tenant_id", streamTenantID),
 			zap.String("model", req.Model),
-			zap.String("provider", string(provider)),
+			zap.String("provider", cfg.Name),
 			zap.Bool("stream", true),
 			zap.Int64("latency_ms", int64(elapsed*1000)),
 			zap.Error(err),
 		)
 	}
+
 	return resp, err
 }
 
+// CreateEmbeddings resolves the embedding model via the registry and delegates
+// to the resolved EmbedProtocol.
 func (g *Gateway) CreateEmbeddings(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
-	provider := g.parseProvider(req.Model)
-	client, ok := g.embeddingClients[provider]
-	if !ok {
-		client, ok = g.embeddingClients[g.defaultProvider]
-		if !ok {
-			return nil, fmt.Errorf("no embedding client registered")
-		}
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	cfg, proto, err := g.registry.ResolveEmbedding(ctx, tenantID, req.Model)
+	if err != nil {
+		return nil, fmt.Errorf("llmgateway: resolve embedding model %q: %w", req.Model, err)
 	}
-	return client.CreateEmbeddings(ctx, req)
+	return proto.CreateEmbeddings(ctx, cfg, req)
 }
 
-// BatchSize returns the batch size limit for embedding requests.
-// It delegates to the default provider's client, or returns the most conservative
-// (smallest) limit among all registered providers.
-func (g *Gateway) BatchSize() int {
-	if client, ok := g.embeddingClients[g.defaultProvider]; ok {
-		return client.BatchSize()
-	}
-	// Fallback: return smallest batch size (most conservative)
-	minBatch := 100
-	for _, client := range g.embeddingClients {
-		if bs := client.BatchSize(); bs > 0 && bs < minBatch {
-			minBatch = bs
-		}
-	}
-	return minBatch
-}
-
-func (g *Gateway) Health(ctx context.Context) error {
-	for provider, client := range g.clients {
-		if err := client.Health(ctx); err != nil {
-			return fmt.Errorf("provider %s health check failed: %w", provider, err)
-		}
-	}
+// Health returns nil. Per-tenant health checks are delegated to the
+// ModelRegistry and are not performed at the global Gateway level.
+func (g *Gateway) Health(context.Context) error {
 	return nil
 }
 
-// ListEmbeddingModels returns embedding model names for all registered embedding providers, sorted.
+// ListEmbeddingModels returns an empty slice. Tenant-scoped model lists are
+// available via ListEmbeddingModelsByTenant.
 func (g *Gateway) ListEmbeddingModels() []string {
-	var models []string
-	for provider := range g.embeddingClients {
-		switch provider {
-		case ProviderQwen:
-			models = append(models, "text-embedding-v3", "text-embedding-v2")
-		case ProviderZhipu:
-			models = append(models, "embedding-3")
-		default:
-			models = append(models, "text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002")
-		}
-	}
-	sort.Strings(models)
-	return models
+	return []string{}
 }
 
-// ListChatModels returns all chat model names across registered providers, sorted.
+// ListChatModels returns an empty slice. Tenant-scoped model lists are
+// available via ListChatModelsByTenant.
 func (g *Gateway) ListChatModels() []string {
-	var models []string
-	for _, client := range g.clients {
-		models = append(models, client.Models()...)
-	}
-	sort.Strings(models)
-	return models
+	return []string{}
 }
 
-func (g *Gateway) parseProvider(model string) ModelProvider {
-	switch {
-	case strings.HasPrefix(model, "text-embedding-v3"), strings.HasPrefix(model, "qwen-"):
-		return ProviderQwen
-	case strings.HasPrefix(model, "embedding-3"), strings.HasPrefix(model, "glm-"):
-		return ProviderZhipu
-	default:
-		return g.defaultProvider
-	}
+// ListChatModelsByTenant returns sorted enabled chat model names for the
+// given tenant, delegating to the registry.
+func (g *Gateway) ListChatModelsByTenant(ctx context.Context, tenantID string) ([]string, error) {
+	return g.registry.ListChatModelsByTenant(ctx, tenantID)
+}
+
+// ListEmbeddingModelsByTenant returns sorted enabled embedding model names
+// for the given tenant, delegating to the registry.
+func (g *Gateway) ListEmbeddingModelsByTenant(ctx context.Context, tenantID string) ([]string, error) {
+	return g.registry.ListEmbeddingModelsByTenant(ctx, tenantID)
 }
 
 // WithGateway returns a new context carrying gw as the LLM gateway override.
