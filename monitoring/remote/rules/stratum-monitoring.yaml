@@ -2,7 +2,7 @@ groups:
   - name: stratum-monitoring
     rules:
       - alert: StratumPrometheusConfigReloadFailed
-        expr: prometheus_config_last_reload_successful{namespace="monitoring"} == 0
+        expr: min by (namespace) (prometheus_config_last_reload_successful{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus",endpoint="http-web"}) == 0
         for: 10m
         labels:
           severity: critical
@@ -16,7 +16,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#prometheus-config-reload-failed
 
       - alert: StratumPrometheusRuleEvaluationFailures
-        expr: sum by (namespace) (increase(prometheus_rule_evaluation_failures_total{namespace="monitoring"}[10m])) > 0
+        expr: sum by (namespace) (increase(prometheus_rule_evaluation_failures_total{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus",endpoint="http-web"}[10m])) > 0
         for: 5m
         labels:
           severity: warning
@@ -30,7 +30,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#prometheus-rule-evaluation-failures
 
       - alert: StratumAlertmanagerNotificationFailures
-        expr: sum by (namespace) (increase(alertmanager_notifications_failed_total{namespace="monitoring"}[10m])) > 0
+        expr: sum by (namespace) (increase(alertmanager_notifications_failed_total{namespace="monitoring",service="kps-kube-prometheus-stack-alertmanager",endpoint="http-web"}[10m])) > 0
         for: 5m
         labels:
           severity: critical
@@ -72,7 +72,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#blackbox-exporter-missing
 
       - alert: StratumFeishuDeliveryFailures
-        expr: increase(feishu_alert_delivery_total{status="failed"}[10m]) > 0
+        expr: sum(increase(feishu_alert_delivery_total{namespace="monitoring",service="stratum-feishu-alert-adapter",endpoint="http",status="failed"}[10m])) > 0
         labels:
           severity: critical
           service: stratum

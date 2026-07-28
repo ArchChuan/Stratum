@@ -270,18 +270,34 @@ tests:
   - name: monitoring pipeline failures are observable
     interval: 1m
     input_series:
-      - series: 'prometheus_config_last_reload_successful{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus"}'
+      - series: 'prometheus_config_last_reload_successful{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus",endpoint="http-web",instance="prometheus-a"}'
         values: '0x12'
-      - series: 'prometheus_rule_evaluation_failures_total{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus"}'
+      - series: 'prometheus_config_last_reload_successful{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus",endpoint="http-web",instance="prometheus-b"}'
+        values: '1x12'
+      - series: 'prometheus_config_last_reload_successful{namespace="monitoring",service="foreign-prometheus",endpoint="http-web",instance="foreign"}'
+        values: '0x12'
+      - series: 'prometheus_rule_evaluation_failures_total{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus",endpoint="http-web",instance="prometheus-a"}'
         values: '0+1x12'
-      - series: 'alertmanager_notifications_failed_total{namespace="monitoring",service="kps-kube-prometheus-stack-alertmanager",integration="webhook"}'
+      - series: 'prometheus_rule_evaluation_failures_total{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus",endpoint="http-web",instance="prometheus-b"}'
+        values: '0+2x12'
+      - series: 'prometheus_rule_evaluation_failures_total{namespace="monitoring",service="foreign-prometheus",endpoint="http-web",instance="foreign"}'
+        values: '0+10x12'
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring",service="kps-kube-prometheus-stack-alertmanager",endpoint="http-web",instance="alertmanager-a",integration="webhook"}'
         values: '0+1x12'
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring",service="kps-kube-prometheus-stack-alertmanager",endpoint="http-web",instance="alertmanager-b",integration="webhook"}'
+        values: '0+2x12'
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring",service="foreign-alertmanager",endpoint="http-web",instance="foreign",integration="webhook"}'
+        values: '0+10x12'
       - series: 'up{namespace="monitoring",service="stratum-feishu-alert-adapter",endpoint="http"}'
         values: '0x12'
       - series: 'up{namespace="monitoring",service="stratum-blackbox-prometheus-blackbox-exporter",endpoint="http"}'
         values: '0x12'
-      - series: 'feishu_alert_delivery_total{status="failed"}'
+      - series: 'feishu_alert_delivery_total{namespace="monitoring",service="stratum-feishu-alert-adapter",endpoint="http",instance="adapter-a",status="failed"}'
         values: '0+1x12'
+      - series: 'feishu_alert_delivery_total{namespace="monitoring",service="stratum-feishu-alert-adapter",endpoint="http",instance="adapter-b",status="failed"}'
+        values: '0+2x12'
+      - series: 'feishu_alert_delivery_total{namespace="monitoring",service="foreign-adapter",endpoint="http",instance="foreign",status="failed"}'
+        values: '0+10x12'
     promql_expr_test:
       - expr: ALERTS{alertname=~"StratumPrometheusConfigReloadFailed|StratumPrometheusRuleEvaluationFailures|StratumAlertmanagerNotificationFailures|StratumFeishuAdapterMissing|StratumBlackboxExporterMissing|StratumFeishuDeliveryFailures",alertstate="firing"}
         eval_time: 10m
@@ -296,8 +312,24 @@ tests:
             value: 1
           - labels: '{__name__="ALERTS",alertname="StratumBlackboxExporterMissing",alertstate="firing",component="blackbox",endpoint="http",environment="remote-test",namespace="monitoring",service="stratum",severity="critical"}'
             value: 1
-          - labels: '{__name__="ALERTS",alertname="StratumFeishuDeliveryFailures",alertstate="firing",component="notification",environment="remote-test",service="stratum",severity="critical",status="failed"}'
+          - labels: '{__name__="ALERTS",alertname="StratumFeishuDeliveryFailures",alertstate="firing",component="notification",environment="remote-test",service="stratum",severity="critical"}'
             value: 1
+
+  - name: monitoring pipeline ignores foreign self metrics
+    interval: 1m
+    input_series:
+      - series: 'prometheus_config_last_reload_successful{namespace="monitoring",service="foreign-prometheus",endpoint="http-web",instance="foreign"}'
+        values: '0x12'
+      - series: 'prometheus_rule_evaluation_failures_total{namespace="monitoring",service="foreign-prometheus",endpoint="http-web",instance="foreign"}'
+        values: '0+10x12'
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring",service="foreign-alertmanager",endpoint="http-web",instance="foreign"}'
+        values: '0+10x12'
+      - series: 'feishu_alert_delivery_total{namespace="monitoring",service="foreign-adapter",endpoint="http",instance="foreign",status="failed"}'
+        values: '0+10x12'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"StratumPrometheusConfigReloadFailed|StratumPrometheusRuleEvaluationFailures|StratumAlertmanagerNotificationFailures|StratumFeishuDeliveryFailures",alertstate="firing"}
+        eval_time: 10m
+        exp_samples: []
 
   - name: availability alerts respect persistence and recovery
     interval: 1m
