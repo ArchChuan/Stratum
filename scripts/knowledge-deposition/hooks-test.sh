@@ -14,6 +14,7 @@ CLAUDE_START="$SCRIPT_DIR/claude-task-start.sh"
 CLAUDE_STOP="$SCRIPT_DIR/claude-stop.sh"
 REPORT="$SCRIPT_DIR/report.sh"
 INSTALLER="$SCRIPT_DIR/install-hooks.sh"
+UNINSTALLER="$SCRIPT_DIR/uninstall-hooks.sh"
 FIXTURES="$(mktemp -d)"
 actual_marker=''
 actual_json=''
@@ -85,6 +86,7 @@ payload() {
 
 run_hook() { printf '%s' "$2" | "$1"; }
 run_installer() { timeout 10s "$INSTALLER" "$@"; }
+run_uninstaller() { timeout 10s "$UNINSTALLER" "$@"; }
 
 valid_none() {
   jq -cn '{decision:"none",task_summary:"Routine maintenance only.",none_reason:"No reusable knowledge was produced.",candidates:[]}'
@@ -560,6 +562,42 @@ CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$claude_config" run_insta
 [[ "$(stat -c %a "$codex_config")" == 600 && "$(stat -c %a "$claude_config")" == 600 ]] || \
   fail "published configs are not private"
 pass "installer preserves unrelated JSON, installs one pair per client, and is byte-stable idempotent"
+
+managed_hook_regex='^bash /(?:\\.|[A-Za-z0-9_@%+=:,./-])*/scripts/knowledge-deposition/(?:codex|claude)-(?:task-start|stop)\.sh$'
+uninstall_codex_before="$(jq -c --arg managed "$managed_hook_regex" \
+  '[.hooks.UserPromptSubmit[]?.hooks[]?.command, .hooks.Stop[]?.hooks[]?.command] |
+  map(select(test($managed) | not))' "$codex_config")"
+uninstall_claude_before="$(jq -c --arg managed "$managed_hook_regex" \
+  '[.hooks.UserPromptSubmit[]?.hooks[]?.command, .hooks.Stop[]?.hooks[]?.command] |
+  map(select(test($managed) | not))' "$claude_config")"
+uninstall_out="$(CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$claude_config" \
+  run_uninstaller --repo-root "$installer_repo")" || fail "uninstaller failed"
+for config in "$codex_config" "$claude_config"; do
+  jq -e --arg managed "$managed_hook_regex" \
+    '[.hooks.UserPromptSubmit[]?.hooks[]?.command, .hooks.Stop[]?.hooks[]?.command] |
+    map(select(test($managed))) | length == 0' "$config" >/dev/null || \
+    fail "managed hook remained after uninstall: $config"
+done
+[[ "$(jq -c --arg managed "$managed_hook_regex" \
+  '[.hooks.UserPromptSubmit[]?.hooks[]?.command, .hooks.Stop[]?.hooks[]?.command] |
+  map(select(test($managed) | not))' "$codex_config")" == "$uninstall_codex_before" ]] || \
+  fail "uninstaller changed unrelated Codex hooks"
+[[ "$(jq -c --arg managed "$managed_hook_regex" \
+  '[.hooks.UserPromptSubmit[]?.hooks[]?.command, .hooks.Stop[]?.hooks[]?.command] |
+  map(select(test($managed) | not))' "$claude_config")" == "$uninstall_claude_before" ]] || \
+  fail "uninstaller changed unrelated Claude hooks"
+uninstall_codex_digest="$(sha256sum "$codex_config")"
+uninstall_claude_digest="$(sha256sum "$claude_config")"
+uninstall_backup_count="$(find "$installer_configs" -type f -name '*.knowledge-deposition.*.bak' | wc -l)"
+CODEX_HOOKS_JSON="$codex_config" CLAUDE_SETTINGS_JSON="$claude_config" \
+  run_uninstaller --repo-root "$installer_repo" >/dev/null || fail "idempotent uninstaller run failed"
+[[ "$(sha256sum "$codex_config")" == "$uninstall_codex_digest" && \
+   "$(sha256sum "$claude_config")" == "$uninstall_claude_digest" ]] || fail "second uninstall changed configs"
+[[ "$(find "$installer_configs" -type f -name '*.knowledge-deposition.*.bak' | wc -l)" == \
+   "$uninstall_backup_count" ]] || fail "idempotent uninstall created unnecessary backups"
+[[ "$uninstall_out" != *"$codex_original"* && "$uninstall_out" != *"$claude_original"* ]] || \
+  fail "uninstaller printed full settings"
+pass "uninstaller removes only managed hooks and is byte-stable idempotent"
 
 default_home="$FIXTURES/default-home"
 mkdir -p "$default_home/.codex" "$default_home/.claude"
