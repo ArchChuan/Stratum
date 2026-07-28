@@ -62,7 +62,7 @@ knowledge_start() {
   command="$(knowledge_shell_command bash scripts/knowledge-deposition/report.sh --client "$client" --session "$session" --task "$task" --repo-root "$root")"
   message="Knowledge deposition task gate active.\nClient: $client\nSession: $session\nTask: $task\nBefore stopping, submit the report JSON to:\n$command"
   if [[ "$envelope" == codex ]]; then
-    jq -cn --arg message "$message" '{continue:true,systemMessage:$message}'
+    jq -cn --arg message "$message" '{continue:true,suppressOutput:true,systemMessage:$message}'
   else
     jq -cn --arg message "$message" '{continue:true,hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$message}}'
   fi
