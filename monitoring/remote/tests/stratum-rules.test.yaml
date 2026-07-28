@@ -91,12 +91,12 @@ tests:
       - expr: ALERTS{alertname="StratumPVCUsageHigh",alertstate="firing",persistentvolumeclaim="warning-pvc"}
         eval_time: 15m
         exp_samples:
-          - labels: '{__name__="ALERTS",alertname="StratumPVCUsageHigh",alertstate="firing",component="storage",environment="remote-test",namespace="stratum",persistentvolumeclaim="warning-pvc",service="stratum",severity="warning"}'
+          - labels: '{__name__="ALERTS",alert_family="pvc-usage",alertname="StratumPVCUsageHigh",alertstate="firing",component="storage",environment="remote-test",namespace="stratum",persistentvolumeclaim="warning-pvc",service="stratum",severity="warning"}'
             value: 1
       - expr: ALERTS{alertname="StratumPVCUsageCritical",alertstate="firing"}
         eval_time: 5m
         exp_samples:
-          - labels: '{__name__="ALERTS",alertname="StratumPVCUsageCritical",alertstate="firing",component="storage",environment="remote-test",namespace="stratum",persistentvolumeclaim="critical-pvc",service="stratum",severity="critical"}'
+          - labels: '{__name__="ALERTS",alert_family="pvc-usage",alertname="StratumPVCUsageCritical",alertstate="firing",component="storage",environment="remote-test",namespace="stratum",persistentvolumeclaim="critical-pvc",service="stratum",severity="critical"}'
             value: 1
 
   - name: capacity rules detect node and container saturation
@@ -228,9 +228,9 @@ tests:
       - expr: ALERTS{alertname=~"StratumFilesystemExhaustionPredicted|StratumFilesystemExhaustionImminent",alertstate="firing"}
         eval_time: 6h15m
         exp_samples:
-          - labels: '{__name__="ALERTS",alertname="StratumFilesystemExhaustionPredicted",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node",service="stratum",severity="warning"}'
+          - labels: '{__name__="ALERTS",alert_family="filesystem-exhaustion",alertname="StratumFilesystemExhaustionPredicted",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node",service="stratum",severity="warning"}'
             value: 1
-          - labels: '{__name__="ALERTS",alertname="StratumFilesystemExhaustionImminent",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node",service="stratum",severity="critical"}'
+          - labels: '{__name__="ALERTS",alert_family="filesystem-exhaustion",alertname="StratumFilesystemExhaustionImminent",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node",service="stratum",severity="critical"}'
             value: 1
 
   - name: dependency targets disappear independently
@@ -498,6 +498,7 @@ tests:
               service: stratum
               environment: remote-test
               component: http
+              alert_family: http-5xx-rate
             exp_annotations:
               summary: Stratum HTTP 5xx rate is elevated
               description: The five-minute HTTP 5xx ratio has exceeded 5% for ten minutes (current value 0.1).
@@ -520,6 +521,7 @@ tests:
               service: stratum
               environment: remote-test
               component: http
+              alert_family: http-5xx-rate
             exp_annotations:
               summary: Stratum HTTP 5xx rate is critical
               description: The five-minute HTTP 5xx ratio has exceeded 20% for five minutes (current value 0.25).
@@ -598,6 +600,7 @@ tests:
               service: stratum
               environment: remote-test
               component: http
+              alert_family: http-5xx-rate
             exp_annotations:
               summary: Stratum HTTP 5xx rate is elevated
               description: The five-minute HTTP 5xx ratio has exceeded 5% for ten minutes (current value 0.25).
@@ -611,6 +614,7 @@ tests:
               service: stratum
               environment: remote-test
               component: http
+              alert_family: http-5xx-rate
             exp_annotations:
               summary: Stratum HTTP 5xx rate is critical
               description: The five-minute HTTP 5xx ratio has exceeded 20% for five minutes (current value 0.25).
@@ -666,6 +670,7 @@ tests:
               service: stratum
               environment: remote-test
               component: http
+              alert_family: http-p95-latency
             exp_annotations:
               summary: Stratum HTTP P95 latency is elevated
               description: The five-minute HTTP P95 latency has exceeded two seconds for fifteen minutes (current value 3.75s).
@@ -692,6 +697,7 @@ tests:
               service: stratum
               environment: remote-test
               component: http
+              alert_family: http-p95-latency
             exp_annotations:
               summary: Stratum HTTP P95 latency is critical
               description: The five-minute HTTP P95 latency has exceeded five seconds for five minutes (current value 7.5s).
@@ -798,6 +804,7 @@ tests:
               service: stratum
               environment: remote-test
               component: http
+              alert_family: http-p95-latency
             exp_annotations:
               summary: Stratum HTTP P95 latency is elevated
               description: The five-minute HTTP P95 latency has exceeded two seconds for fifteen minutes (current value 7.5s).
@@ -811,6 +818,7 @@ tests:
               service: stratum
               environment: remote-test
               component: http
+              alert_family: http-p95-latency
             exp_annotations:
               summary: Stratum HTTP P95 latency is critical
               description: The five-minute HTTP P95 latency has exceeded five seconds for five minutes (current value 7.5s).

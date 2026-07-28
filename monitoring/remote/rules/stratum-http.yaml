@@ -28,6 +28,7 @@ groups:
           service: stratum
           environment: remote-test
           component: http
+          alert_family: http-5xx-rate
         annotations:
           summary: Stratum HTTP 5xx rate is elevated
           description: The five-minute HTTP 5xx ratio has exceeded 5% for ten minutes (current value {{ $value }}).
@@ -42,6 +43,7 @@ groups:
           service: stratum
           environment: remote-test
           component: http
+          alert_family: http-5xx-rate
         annotations:
           summary: Stratum HTTP 5xx rate is critical
           description: The five-minute HTTP 5xx ratio has exceeded 20% for five minutes (current value {{ $value }}).
@@ -56,6 +58,7 @@ groups:
           service: stratum
           environment: remote-test
           component: http
+          alert_family: http-p95-latency
         annotations:
           summary: Stratum HTTP P95 latency is elevated
           description: The five-minute HTTP P95 latency has exceeded two seconds for fifteen minutes (current value {{ $value }}s).
@@ -70,6 +73,7 @@ groups:
           service: stratum
           environment: remote-test
           component: http
+          alert_family: http-p95-latency
         annotations:
           summary: Stratum HTTP P95 latency is critical
           description: The five-minute HTTP P95 latency has exceeded five seconds for five minutes (current value {{ $value }}s).

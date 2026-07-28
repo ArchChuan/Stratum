@@ -1,0 +1,50 @@
+- input:
+    alertname: StratumAPIUnavailable
+    service: stratum
+    environment: remote-test
+    severity: critical
+  receivers:
+    - feishu-critical
+
+- input:
+    alertname: StratumAPIHighLatency
+    service: stratum
+    environment: remote-test
+    severity: warning
+  time: 2026-07-29T10:00:00+08:00
+  receivers:
+    - feishu-warning
+
+- input:
+    alertname: StratumAPIHighLatency
+    service: stratum
+    environment: remote-test
+    severity: warning
+  time: 2026-07-29T20:00:00+08:00
+  receivers:
+    - "null"
+
+- input:
+    alertname: StratumAPIHighLatency
+    service: stratum
+    environment: remote-test
+    severity: warning
+  time: 2026-08-01T10:00:00+08:00
+  receivers:
+    - "null"
+
+- input:
+    alertname: StratumCapacityForecast
+    service: stratum
+    environment: remote-test
+    severity: info
+  receivers:
+    - "null"
+
+- input:
+    alertname: Watchdog
+    service: monitoring
+    environment: remote-test
+    severity: none
+  receivers:
+    - "null"

@@ -1,0 +1,8 @@
+{{ define "stratum.alert.summary" -}}
+{{- if gt (len .Alerts.Firing) 0 -}}
+[FIRING:{{ len .Alerts.Firing }}] {{ .CommonLabels.alertname }}
+{{- else -}}
+[RESOLVED] {{ .CommonLabels.alertname }}
+{{- end -}}
+{{- end }}
+

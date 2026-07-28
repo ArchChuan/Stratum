@@ -93,6 +93,7 @@ groups:
           service: stratum
           environment: remote-test
           component: storage
+          alert_family: pvc-usage
         annotations:
           summary: A Stratum PVC is more than 80% full
           description: Persistent volume usage has remained above 80% for fifteen minutes (current ratio {{ $value }}).
@@ -107,6 +108,7 @@ groups:
           service: stratum
           environment: remote-test
           component: storage
+          alert_family: pvc-usage
         annotations:
           summary: A Stratum PVC is more than 90% full
           description: Persistent volume usage has remained above 90% for five minutes (current ratio {{ $value }}).
@@ -127,6 +129,7 @@ groups:
           service: stratum
           environment: remote-test
           component: storage
+          alert_family: pvc-exhaustion
         annotations:
           summary: A Stratum PVC may fill within four days
           description: Six hours of positive storage growth predicts exhaustion within four days (current value {{ $value }}).
@@ -141,6 +144,7 @@ groups:
           service: stratum
           environment: remote-test
           component: storage
+          alert_family: pvc-exhaustion
         annotations:
           summary: A Stratum PVC may fill within one day
           description: Six hours of positive storage growth predicts exhaustion within one day (current value {{ $value }}).
@@ -161,6 +165,7 @@ groups:
           service: stratum
           environment: remote-test
           component: storage
+          alert_family: filesystem-exhaustion
         annotations:
           summary: A Stratum host filesystem may fill within four days
           description: Six hours of positive filesystem growth predicts exhaustion within four days (current value {{ $value }}).
@@ -175,6 +180,7 @@ groups:
           service: stratum
           environment: remote-test
           component: storage
+          alert_family: filesystem-exhaustion
         annotations:
           summary: A Stratum host filesystem may fill within one day
           description: Six hours of positive filesystem growth predicts exhaustion within one day (current value {{ $value }}).
