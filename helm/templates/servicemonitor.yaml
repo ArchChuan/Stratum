@@ -12,6 +12,7 @@ spec:
   selector:
     matchLabels:
       {{- include "stratum.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
   namespaceSelector:
     matchNames:
       - {{ .Release.Namespace }}

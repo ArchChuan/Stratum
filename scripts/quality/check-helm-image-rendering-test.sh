@@ -23,9 +23,11 @@ fi
 helm template stratum "${ROOT}/helm" -f "${ROOT}/helm/values-demo.yaml" >"${TAG_RENDER}"
 grep -Fq 'registry.cn-hangzhou.aliyuncs.com/stratum-demo/stratum-backend:demo' "${TAG_RENDER}"
 
-helm template stratum "${ROOT}/helm" -f "${ROOT}/helm/values-demo.yaml" >"${SERVICE_MONITOR_RENDER}"
+helm template stratum "${ROOT}/helm" -f "${ROOT}/helm/values-demo.yaml" | \
+    awk '/# Source: stratum\/templates\/servicemonitor.yaml/{found=1} found{print}' >"${SERVICE_MONITOR_RENDER}"
 grep -Fq 'kind: ServiceMonitor' "${SERVICE_MONITOR_RENDER}"
 grep -Fq 'release: kps' "${SERVICE_MONITOR_RENDER}"
+grep -Fq 'app.kubernetes.io/component: backend' "${SERVICE_MONITOR_RENDER}"
 grep -Eq 'path:[[:space:]]*"?/metrics"?$' "${SERVICE_MONITOR_RENDER}"
 grep -Eq 'interval:[[:space:]]*"?30s"?$' "${SERVICE_MONITOR_RENDER}"
 grep -Eq 'scrapeTimeout:[[:space:]]*"?10s"?$' "${SERVICE_MONITOR_RENDER}"
