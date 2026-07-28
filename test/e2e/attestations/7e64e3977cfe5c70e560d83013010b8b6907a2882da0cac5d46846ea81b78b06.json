@@ -2,19 +2,47 @@
   "schema_version": 1,
   "source_digest": "7e64e3977cfe5c70e560d83013010b8b6907a2882da0cac5d46846ea81b78b06",
   "manifest_digest": "046b72d9fe7d7cb748c9b1e88bee06b155444199b5280a9931f98959a5918560",
-  "tested_git_parent": "4bed0a534c2ff31ef2d12ee73e5895f071a10dc0",
+  "tested_git_parent": "4abecaee33e7cf4d6069ef93ad306d462cc1ae9d",
   "browser": {
     "name": "chromium",
     "version": "149.0.7827.55"
   },
   "mode": "short",
   "seed": 1,
-  "started_at": "2026-07-28T16:32:35.335Z",
-  "duration_seconds": 69,
+  "started_at": "2026-07-28T16:36:55.051Z",
+  "duration_seconds": 90,
   "host_class": "developer",
   "packs": [
     {
       "id": "agent",
+      "status": "passed"
+    },
+    {
+      "id": "dashboard",
+      "status": "passed"
+    },
+    {
+      "id": "evaluation",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge",
+      "status": "passed"
+    },
+    {
+      "id": "mcp",
+      "status": "passed"
+    },
+    {
+      "id": "memory",
+      "status": "passed"
+    },
+    {
+      "id": "skill",
+      "status": "passed"
+    },
+    {
+      "id": "workflow",
       "status": "passed"
     }
   ],
@@ -74,15 +102,243 @@
     {
       "id": "agent.route.chat",
       "status": "passed"
+    },
+    {
+      "id": "dashboard.route.overview",
+      "status": "passed"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.candidates.candidateid.reject",
+      "status": "passed"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.experiments",
+      "status": "passed"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.experiments.experimentid.pause",
+      "status": "passed"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.experiments.experimentid.promote",
+      "status": "passed"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.experiments.experimentid.rollback",
+      "status": "passed"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.feedback",
+      "status": "passed"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.optimizations",
+      "status": "passed"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.runs",
+      "status": "passed"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.suites",
+      "status": "passed"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.suites.suiteid.publish",
+      "status": "passed"
+    },
+    {
+      "id": "evaluation.route.evaluations",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.mutation.delete.knowledge.workspaces.name",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.mutation.delete.knowledge.workspaces.name.documents.documentid",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.mutation.patch.knowledge.workspaces.name",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.mutation.post.knowledge.ingest",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.mutation.post.knowledge.query",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.mutation.post.knowledge.workspaces",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.route.knowledge",
+      "status": "passed"
+    },
+    {
+      "id": "knowledge.route.knowledge.name",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.mutation.delete.mcp.servers.id",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.mutation.delete.mcp.servers.id.config",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.mutation.post.mcp.servers",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.mutation.post.mcp.servers.id.reconnect",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.mutation.put.mcp.servers.id",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.mutation.put.mcp.tool.policies.serverid.toolname",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.route.mcp",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.route.mcp.create",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.route.mcp.id.edit",
+      "status": "passed"
+    },
+    {
+      "id": "memory.mutation.delete.memory.clear",
+      "status": "passed"
+    },
+    {
+      "id": "skill.mutation.delete.skills.id",
+      "status": "passed"
+    },
+    {
+      "id": "skill.mutation.patch.skills.id.draft.activation",
+      "status": "passed"
+    },
+    {
+      "id": "skill.mutation.patch.skills.id.draft.capability",
+      "status": "passed"
+    },
+    {
+      "id": "skill.mutation.patch.skills.id.draft.instructions",
+      "status": "passed"
+    },
+    {
+      "id": "skill.mutation.post.skills",
+      "status": "passed"
+    },
+    {
+      "id": "skill.mutation.post.skills.id.publish",
+      "status": "passed"
+    },
+    {
+      "id": "skill.route.skills",
+      "status": "passed"
+    },
+    {
+      "id": "skill.route.skills.create",
+      "status": "passed"
+    },
+    {
+      "id": "skill.route.skills.id.workspace",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.delete.workflows.workflowid",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.approvals.approvalid.decision",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs.runid.cancel",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs.runid.manual.interventions.effectid.resolve",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs.runid.pause",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs.runid.resume",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflows",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflows.workflowid.publish",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.post.workflows.workflowid.validate",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.mutation.put.workflows.workflowid.draft",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflow.runs",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflow.runs.runid",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflows",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflows.id.edit",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflows.id.run",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflows.id.versions.versionid",
+      "status": "passed"
+    },
+    {
+      "id": "workflow.route.workflows.new",
+      "status": "passed"
     }
   ],
-  "action_count": 14,
-  "sequence_digest": "4ca8efe1c469c297fd0451780e5d1a6b9513c52a9c1a57174d7499dd4fbdb2fb",
+  "action_count": 71,
+  "sequence_digest": "e17f166785f9978edd794b9a70ca09f80b36f9abf6178428746a16984af1f67b",
   "evidence": {
-    "ui": 5,
-    "http": 5,
-    "database": 5,
-    "reconciled": 14
+    "ui": 22,
+    "http": 22,
+    "database": 25,
+    "reconciled": 71
   },
   "artifacts": [],
   "cleanup": {
@@ -92,5 +348,5 @@
   "unverified_capabilities": [],
   "risk_classification": "short",
   "status": "passed",
-  "expires_at": "2026-07-31T16:33:47.944877035Z"
+  "expires_at": "2026-07-31T16:38:27.393144673Z"
 }
