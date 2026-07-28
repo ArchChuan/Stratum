@@ -248,9 +248,11 @@ jobs:
             --docker-username="$REGISTRY_USERNAME" \
             --docker-password="$REGISTRY_PASSWORD" \
             --dry-run=client -o yaml | kubectl apply -f -
+          kubectl wait --for=condition=Established crd/servicemonitors.monitoring.coreos.com --timeout=2m
           adapter_image="${{ env.IMAGE_REPO }}/stratum-feishu-alert-adapter@${adapter_digest}"
           sed "s|__FEISHU_ADAPTER_IMAGE__|${adapter_image}|" \
             monitoring/remote/resources/feishu-alert-adapter.yaml | kubectl apply -f -
+          kubectl rollout restart deployment/stratum-feishu-alert-adapter -n monitoring
           kubectl rollout status deployment/stratum-feishu-alert-adapter -n monitoring --timeout=5m
 
       - name: Diagnose ingress edge

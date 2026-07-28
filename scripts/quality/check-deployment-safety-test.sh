@@ -69,6 +69,10 @@ require 'adapter_digest="\$\{\{ needs\.build-and-push\.outputs\.adapter-digest \
     'adapter digest is not consumed from the build job'
 require '\$adapter_digest.*\^sha256:\[0-9a-f\]\{64\}\$' 'adapter digest validation missing'
 require '__FEISHU_ADAPTER_IMAGE__' 'adapter immutable image substitution missing'
+require 'kubectl wait --for=condition=Established crd/servicemonitors\.monitoring\.coreos\.com' \
+    'ServiceMonitor CRD readiness gate missing'
+require 'kubectl rollout restart deployment/stratum-feishu-alert-adapter -n monitoring' \
+    'adapter restart after Secret rotation missing'
 require 'rollout status deployment/stratum-feishu-alert-adapter' 'adapter rollout readiness wait missing'
 require 'Verify deployment candidate' 'stale main SHA gate'
 require 'api\.github\.com/repos/.*/commits/main' 'fail-closed current main lookup'
@@ -105,6 +109,8 @@ require_file "${FEISHU_ADAPTER_MANIFEST}" 'runAsNonRoot:[[:space:]]*true' 'adapt
 require_file "${FEISHU_ADAPTER_MANIFEST}" 'runAsUser:[[:space:]]*65532' 'adapter runtime UID missing'
 require_file "${FEISHU_ADAPTER_MANIFEST}" 'runAsGroup:[[:space:]]*65532' 'adapter runtime GID missing'
 require_file "${FEISHU_ADAPTER_MANIFEST}" 'capabilities:' 'adapter capability policy missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'drop:[[:space:]]*$' 'adapter dropped-capability list missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" '^[[:space:]]+- ALL$' 'adapter does not drop every Linux capability'
 require_file "${FEISHU_ADAPTER_MANIFEST}" 'allowPrivilegeEscalation:[[:space:]]*false' \
     'adapter privilege escalation policy missing'
 require_file "${FEISHU_ADAPTER_MANIFEST}" 'seccompProfile:' 'adapter seccomp policy missing'
