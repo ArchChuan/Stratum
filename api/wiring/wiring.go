@@ -16,6 +16,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/storage/milvus"
 	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -155,12 +156,18 @@ func NewFromExisting(
 	c.shutdown = append(c.shutdown, func(_ context.Context) error { return mil.Close() })
 
 	// LLMGateway: build from DB using the standard builder.
-	// The gateway parameter from the caller is ignored during this
-	// transitional phase (Task 10c deletes this path entirely).
+	// When db is unavailable (contract test path), use the gateway
+	// constructed by the caller so downstream sub-builders (platform)
+	// don't panic on a nil c.LLMGateway.
 	if db != nil {
 		if err := c.buildLLMGateway(ctx); err != nil {
 			_ = c.Shutdown(ctx)
 			return nil, fmt.Errorf("wiring.llmgateway: %w", err)
+		}
+	} else if gateway != nil {
+		c.LLMGateway = &LLMGateway{
+			Gateway: gateway,
+			Metrics: observability.NewPrometheusMetrics(logger),
 		}
 	}
 

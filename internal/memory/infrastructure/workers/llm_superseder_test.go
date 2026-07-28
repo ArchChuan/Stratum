@@ -1,39 +1,23 @@
 package workers_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	llminfra "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memport "github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 type completionClientFunc func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error)
 
 func (f completionClientFunc) Complete(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
 	return f(ctx, req)
-}
-
-type testGatewayAdapter struct{ gateway *llminfra.Gateway }
-
-func (a testGatewayAdapter) Complete(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
-	messages := make([]llminfra.Message, len(req.Messages))
-	for i, message := range req.Messages {
-		messages[i] = llminfra.Message{Role: message.Role, Content: message.Content}
-	}
-	response, err := a.gateway.Complete(ctx, &llminfra.CompletionRequest{
-		Model: req.Model, Messages: messages, Temperature: float32(req.Temperature), MaxTokens: req.MaxTokens,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &memport.CompletionResponse{Content: response.Content}, nil
 }
 
 func TestResolvingLLMSupersederUsesCurrentTenantClientOnEveryCall(t *testing.T) {
@@ -80,19 +64,19 @@ func TestResolvingLLMSupersederRoutesThroughNewProviderGateway(t *testing.T) {
 	zhipuServer := completionServer(&zhipuCalls, true)
 	defer zhipuServer.Close()
 
-	qwenGateway := llminfra.NewGateway()
-	qwenGateway.RegisterClient(llminfra.ProviderQwen, llminfra.NewQwenClientWithBase("fake-key-qwen", qwenServer.URL, zap.NewNop()))
-	qwenGateway.SetDefault(llminfra.ProviderQwen)
-	zhipuGateway := llminfra.NewGateway()
-	zhipuGateway.RegisterClient(llminfra.ProviderZhipu, llminfra.NewZhipuClientWithBase("fake-key-zhipu", zhipuServer.URL, zap.NewNop()))
-	zhipuGateway.SetDefault(llminfra.ProviderZhipu)
+	clientA := completionClientFunc(func(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+		return callCompletionServer(ctx, qwenServer.URL, req)
+	})
+	clientB := completionClientFunc(func(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+		return callCompletionServer(ctx, zhipuServer.URL, req)
+	})
 	resolved := 0
 	judge := workers.NewResolvingLLMSuperseder("tenant-1", func(context.Context, string) (workers.TenantLLMClient, error) {
 		resolved++
 		if resolved == 1 {
-			return testGatewayAdapter{gateway: qwenGateway}, nil
+			return clientA, nil
 		}
-		return testGatewayAdapter{gateway: zhipuGateway}, nil
+		return clientB, nil
 	})
 
 	first, err := judge.JudgeSupersede(context.Background(), "old", "new")
@@ -103,6 +87,34 @@ func TestResolvingLLMSupersederRoutesThroughNewProviderGateway(t *testing.T) {
 	require.True(t, second.Supersedes)
 	require.Equal(t, 1, qwenCalls)
 	require.Equal(t, 1, zhipuCalls)
+}
+
+func callCompletionServer(ctx context.Context, baseURL string, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	body := map[string]interface{}{
+		"model":    req.Model,
+		"messages": []map[string]string{},
+	}
+	for _, m := range req.Messages {
+		body["messages"] = append(body["messages"].([]map[string]string), map[string]string{"role": m.Role, "content": m.Content})
+	}
+	b, _ := json.Marshal(body)
+	httpReq, _ := http.NewRequestWithContext(ctx, "POST", baseURL+"/v1/chat/completions", bytes.NewReader(b))
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer test-key")
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Choices []struct {
+			Message struct{ Content string } `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return &memport.CompletionResponse{Content: result.Choices[0].Message.Content}, nil
 }
 
 func TestResolvingLLMSupersederDoesNotReuseClientAfterResolverFailure(t *testing.T) {

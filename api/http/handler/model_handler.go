@@ -23,7 +23,10 @@ func NewModelHandler(svc *llmapp.ModelService) *ModelHandler {
 // tenant-scoped catalogue to return only the tenant's enabled models.
 func (h *ModelHandler) ListModels(c *gin.Context) {
 	var chat, embedding []string
-	if tid, ok := tenantIDFromCtx(c); ok {
+	if h.svc == nil {
+		chat = []string{}
+		embedding = []string{}
+	} else if tid, ok := tenantIDFromCtx(c); ok {
 		chat, embedding = h.svc.CatalogueWithTenant(c.Request.Context(), tid)
 	} else {
 		chat, embedding = h.svc.Catalogue(c.Request.Context())
