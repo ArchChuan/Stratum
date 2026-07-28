@@ -454,7 +454,7 @@ tests:
               summary: Stratum public endpoint is unavailable
               description: The remote public health probe has failed for three minutes (current value 0).
               dashboard_url: /d/stratum-service-overview
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#public-endpoint-down
+              runbook_url: /docs/operations/alerts/availability.md#public-endpoint-down
       - eval_time: 3m
         alertname: StratumBackendUnavailable
         exp_alerts:
@@ -469,7 +469,7 @@ tests:
               summary: Stratum backend has no ready replicas
               description: The backend deployment has had no ready replicas for three minutes (current value 0).
               dashboard_url: /d/stratum-service-overview
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#backend-unavailable
+              runbook_url: /docs/operations/alerts/availability.md#backend-unavailable
       - eval_time: 3m
         alertname: StratumFrontendUnavailable
         exp_alerts:
@@ -484,7 +484,7 @@ tests:
               summary: Stratum frontend has no ready replicas
               description: The frontend deployment has had no ready replicas for three minutes (current value 0).
               dashboard_url: /d/stratum-service-overview
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#frontend-unavailable
+              runbook_url: /docs/operations/alerts/availability.md#frontend-unavailable
       - eval_time: 10m
         alertname: StratumTargetMissing
         exp_alerts:
@@ -499,7 +499,7 @@ tests:
               summary: Stratum application target is missing
               description: The expected Stratum scrape target has been absent or down for ten minutes (current value 0).
               dashboard_url: /d/stratum-service-overview
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#target-missing
+              runbook_url: /docs/operations/alerts/availability.md#target-missing
       - eval_time: 12m
         alertname: StratumTargetMissing
         exp_alerts: []
@@ -536,7 +536,7 @@ tests:
               summary: Stratum public endpoint is unavailable
               description: The remote public health probe has failed for three minutes (current value 0).
               dashboard_url: /d/stratum-service-overview
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#public-endpoint-down
+              runbook_url: /docs/operations/alerts/availability.md#public-endpoint-down
       - eval_time: 3m
         alertname: StratumBackendUnavailable
         exp_alerts:
@@ -551,7 +551,7 @@ tests:
               summary: Stratum backend has no ready replicas
               description: The backend deployment has had no ready replicas for three minutes (current value 0).
               dashboard_url: /d/stratum-service-overview
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#backend-unavailable
+              runbook_url: /docs/operations/alerts/availability.md#backend-unavailable
       - eval_time: 3m
         alertname: StratumFrontendUnavailable
         exp_alerts:
@@ -566,7 +566,7 @@ tests:
               summary: Stratum frontend has no ready replicas
               description: The frontend deployment has had no ready replicas for three minutes (current value 0).
               dashboard_url: /d/stratum-service-overview
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#frontend-unavailable
+              runbook_url: /docs/operations/alerts/availability.md#frontend-unavailable
       - eval_time: 6m
         alertname: StratumPublicEndpointDown
         exp_alerts: []
@@ -598,7 +598,7 @@ tests:
               summary: Stratum HTTP 5xx rate is elevated
               description: The five-minute HTTP 5xx ratio has exceeded 5% for ten minutes (current value 0.1).
               dashboard_url: /d/stratum-http
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#high-http-5xx-rate
+              runbook_url: /docs/operations/alerts/http-performance.md#high-http-5xx-rate
 
   - name: HTTP 5xx critical fires above twenty percent
     interval: 1m
@@ -621,7 +621,7 @@ tests:
               summary: Stratum HTTP 5xx rate is critical
               description: The five-minute HTTP 5xx ratio has exceeded 20% for five minutes (current value 0.25).
               dashboard_url: /d/stratum-http
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#critical-http-5xx-rate
+              runbook_url: /docs/operations/alerts/http-performance.md#critical-http-5xx-rate
 
   - name: HTTP 5xx does not alert below twenty requests
     interval: 1m
@@ -700,7 +700,7 @@ tests:
               summary: Stratum HTTP 5xx rate is elevated
               description: The five-minute HTTP 5xx ratio has exceeded 5% for ten minutes (current value 0.25).
               dashboard_url: /d/stratum-http
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#high-http-5xx-rate
+              runbook_url: /docs/operations/alerts/http-performance.md#high-http-5xx-rate
       - eval_time: 11m
         alertname: StratumCriticalHTTP5xxRate
         exp_alerts:
@@ -714,7 +714,7 @@ tests:
               summary: Stratum HTTP 5xx rate is critical
               description: The five-minute HTTP 5xx ratio has exceeded 20% for five minutes (current value 0.25).
               dashboard_url: /d/stratum-http
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#critical-http-5xx-rate
+              runbook_url: /docs/operations/alerts/http-performance.md#critical-http-5xx-rate
       - eval_time: 23m
         alertname: StratumHighHTTP5xxRate
         exp_alerts: []
@@ -770,7 +770,7 @@ tests:
               summary: Stratum HTTP P95 latency is elevated
               description: The five-minute HTTP P95 latency has exceeded two seconds for fifteen minutes (current value 3.75s).
               dashboard_url: /d/stratum-http
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#high-http-p95-latency
+              runbook_url: /docs/operations/alerts/http-performance.md#high-http-p95-latency
 
   - name: HTTP P95 critical fires above five seconds
     interval: 1m
@@ -797,7 +797,7 @@ tests:
               summary: Stratum HTTP P95 latency is critical
               description: The five-minute HTTP P95 latency has exceeded five seconds for five minutes (current value 7.5s).
               dashboard_url: /d/stratum-http
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#critical-http-p95-latency
+              runbook_url: /docs/operations/alerts/http-performance.md#critical-http-p95-latency
 
   - name: HTTP P95 warning boundary does not alert
     interval: 1m
@@ -904,7 +904,7 @@ tests:
               summary: Stratum HTTP P95 latency is elevated
               description: The five-minute HTTP P95 latency has exceeded two seconds for fifteen minutes (current value 7.5s).
               dashboard_url: /d/stratum-http
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#high-http-p95-latency
+              runbook_url: /docs/operations/alerts/http-performance.md#high-http-p95-latency
       - eval_time: 16m
         alertname: StratumCriticalHTTPP95Latency
         exp_alerts:
@@ -918,7 +918,7 @@ tests:
               summary: Stratum HTTP P95 latency is critical
               description: The five-minute HTTP P95 latency has exceeded five seconds for five minutes (current value 7.5s).
               dashboard_url: /d/stratum-http
-              runbook_url: /docs/operations/remote-monitoring-runbook.md#critical-http-p95-latency
+              runbook_url: /docs/operations/alerts/http-performance.md#critical-http-p95-latency
       - eval_time: 28m
         alertname: StratumHighHTTPP95Latency
         exp_alerts: []

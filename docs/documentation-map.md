@@ -33,6 +33,11 @@
 - [Helm 指南](deployment/HELM_GUIDE.md)：Chart 参数和发布操作。
 - [CI/CD 指南](deployment/CI_CD_GUIDE.md)：流水线、环境和回滚。
 - [部署架构](agent/deployment-architecture.md)：公网、Traefik 与集群端口关系。
+- [远端监控运行手册](operations/remote-monitoring-runbook.md)：固定版本、部署、通知、升级回滚与日常检查。
+- 告警处置手册：[可用性](operations/alerts/availability.md)、
+  [HTTP 性能](operations/alerts/http-performance.md)、[工作负载](operations/alerts/workloads.md)、
+  [容量](operations/alerts/capacity.md)、[依赖](operations/alerts/dependencies.md)、
+  [监控系统](operations/alerts/monitoring-system.md)。
 
 当前 Demo 的公网入口是 <http://101.200.181.141:6879>，健康检查是
 <http://101.200.181.141:6879/api/health>。该 profile 使用公网 IP 和明文 HTTP，
@@ -43,6 +48,7 @@
 - `docs/agent/`：Agent 可按任务直接引用的当前约束和项目事实。
 - `docs/go-package-architecture/`：生成的包级代码参考，不作为常驻指令。
 - 顶层及 `deployment/`、`operations/`：面向开发者和运维人员的当前指南。
+- `monitoring/remote/`：远端测试环境监控的唯一配置权威；旧 standalone 清单不属于远端部署入口。
 - `audits/`、`superpowers/specs/`、`superpowers/plans/`：带日期的历史证据，不作为当前运行手册。
 
 ## 历史记录

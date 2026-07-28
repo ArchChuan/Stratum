@@ -13,7 +13,7 @@ groups:
           summary: Stratum public endpoint is unavailable
           description: The remote public health probe has failed for three minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-service-overview
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#public-endpoint-down
+          runbook_url: /docs/operations/alerts/availability.md#public-endpoint-down
 
       - alert: StratumBackendUnavailable
         expr: absent(kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum"}) * 0 or kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum"} == 0
@@ -27,7 +27,7 @@ groups:
           summary: Stratum backend has no ready replicas
           description: The backend deployment has had no ready replicas for three minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-service-overview
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#backend-unavailable
+          runbook_url: /docs/operations/alerts/availability.md#backend-unavailable
 
       - alert: StratumFrontendUnavailable
         expr: absent(kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"}) * 0 or kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"} == 0
@@ -41,7 +41,7 @@ groups:
           summary: Stratum frontend has no ready replicas
           description: The frontend deployment has had no ready replicas for three minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-service-overview
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#frontend-unavailable
+          runbook_url: /docs/operations/alerts/availability.md#frontend-unavailable
 
       - alert: StratumTargetMissing
         expr: absent(up{namespace="stratum",service="stratum",endpoint="http"}) or up{namespace="stratum",service="stratum",endpoint="http"} == 0
@@ -55,4 +55,4 @@ groups:
           summary: Stratum application target is missing
           description: The expected Stratum scrape target has been absent or down for ten minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-service-overview
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#target-missing
+          runbook_url: /docs/operations/alerts/availability.md#target-missing

@@ -13,4 +13,4 @@ groups:
           summary: A verified Stratum dependency metrics target is unavailable
           description: Prometheus has been unable to scrape the dependency metrics endpoint for ten minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-dependencies
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#dependency-target-missing
+          runbook_url: /docs/operations/alerts/dependencies.md#dependency-target-missing

@@ -19,7 +19,7 @@ groups:
           summary: Stratum host node is not ready
           description: The node hosting the remote Stratum environment has not been ready for five minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#node-not-ready
+          runbook_url: /docs/operations/alerts/workloads.md#node-not-ready
 
       - alert: StratumPodRestartingFrequently
         expr: (increase(kube_pod_container_status_restarts_total{namespace="stratum"}[10m]) > 3) * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
@@ -34,7 +34,7 @@ groups:
           summary: A Stratum container is restarting frequently
           description: The container restarted more than three times in ten minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#pod-restarting-frequently
+          runbook_url: /docs/operations/alerts/workloads.md#pod-restarting-frequently
 
       - alert: StratumPodCrashLooping
         expr: (kube_pod_container_status_waiting_reason{namespace="stratum",reason="CrashLoopBackOff"} == 1) * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
@@ -49,7 +49,7 @@ groups:
           summary: A Stratum container is crash looping
           description: The container has remained in CrashLoopBackOff for five minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#pod-crash-looping
+          runbook_url: /docs/operations/alerts/workloads.md#pod-crash-looping
 
       - alert: StratumPodPendingTooLong
         expr: (kube_pod_status_phase{namespace="stratum",phase="Pending"} == 1) * on (namespace, pod) group_left (node, deployment) stratum:kube_pod:placement
@@ -63,4 +63,4 @@ groups:
           summary: A Stratum pod has remained pending
           description: The pod has remained pending for fifteen minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#pod-pending-too-long
+          runbook_url: /docs/operations/alerts/workloads.md#pod-pending-too-long

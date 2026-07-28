@@ -13,7 +13,7 @@ groups:
           summary: Stratum host memory availability is low
           description: Available node memory has remained below 10% for fifteen minutes (current ratio {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#node-memory-low
+          runbook_url: /docs/operations/alerts/capacity.md#node-memory-low
 
       - alert: StratumNodeCPUHigh
         expr: (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.85) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
@@ -27,7 +27,7 @@ groups:
           summary: Stratum host CPU utilization is high
           description: Node CPU utilization has remained above 85% for fifteen minutes (current ratio {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#node-cpu-high
+          runbook_url: /docs/operations/alerts/capacity.md#node-cpu-high
 
       - alert: StratumNodeFilesystemLow
         expr: (node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} < 0.15) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
@@ -41,7 +41,7 @@ groups:
           summary: Stratum host filesystem space is low
           description: Available filesystem space has remained below 15% for fifteen minutes (current ratio {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#node-filesystem-low
+          runbook_url: /docs/operations/alerts/capacity.md#node-filesystem-low
 
       - alert: StratumNodeInodesLow
         expr: (node_filesystem_files_free{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_files{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} < 0.15) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
@@ -55,7 +55,7 @@ groups:
           summary: Stratum host filesystem inodes are low
           description: Available filesystem inodes have remained below 15% for fifteen minutes (current ratio {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#node-inodes-low
+          runbook_url: /docs/operations/alerts/capacity.md#node-inodes-low
 
       - alert: StratumContainerMemoryNearLimit
         expr: sum by (namespace, pod, container) (container_memory_working_set_bytes{namespace="stratum",container!="",container!="POD"}) / sum by (namespace, pod, container) (container_spec_memory_limit_bytes{namespace="stratum",container!="",container!="POD"}) > 0.90 and sum by (namespace, pod, container) (container_spec_memory_limit_bytes{namespace="stratum",container!="",container!="POD"}) > 0
@@ -69,7 +69,7 @@ groups:
           summary: A Stratum container is near its memory limit
           description: Container working-set memory has remained above 90% of its limit for fifteen minutes (current ratio {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#container-memory-near-limit
+          runbook_url: /docs/operations/alerts/capacity.md#container-memory-near-limit
 
       - alert: StratumContainerCPUThrottled
         expr: sum by (namespace, pod, container) (rate(container_cpu_cfs_throttled_periods_total{namespace="stratum",container!="",container!="POD"}[5m])) / sum by (namespace, pod, container) (rate(container_cpu_cfs_periods_total{namespace="stratum",container!="",container!="POD"}[5m])) > 0.25
@@ -83,7 +83,7 @@ groups:
           summary: A Stratum container is CPU throttled
           description: More than 25% of container CPU periods have been throttled for fifteen minutes (current ratio {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#container-cpu-throttled
+          runbook_url: /docs/operations/alerts/capacity.md#container-cpu-throttled
 
       - alert: StratumPVCUsageHigh
         expr: kubelet_volume_stats_used_bytes{namespace="stratum"} / kubelet_volume_stats_capacity_bytes{namespace="stratum"} > 0.80
@@ -98,7 +98,7 @@ groups:
           summary: A Stratum PVC is more than 80% full
           description: Persistent volume usage has remained above 80% for fifteen minutes (current ratio {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#pvc-usage-high
+          runbook_url: /docs/operations/alerts/capacity.md#pvc-usage-high
 
       - alert: StratumPVCUsageCritical
         expr: kubelet_volume_stats_used_bytes{namespace="stratum"} / kubelet_volume_stats_capacity_bytes{namespace="stratum"} > 0.90
@@ -113,7 +113,7 @@ groups:
           summary: A Stratum PVC is more than 90% full
           description: Persistent volume usage has remained above 90% for five minutes (current ratio {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#pvc-usage-critical
+          runbook_url: /docs/operations/alerts/capacity.md#pvc-usage-critical
 
       - record: stratum:pvc_exhaustion_within_4d
         expr: ((predict_linear(kubelet_volume_stats_available_bytes{namespace="stratum"}[6h], 4 * 24 * 60 * 60) < bool 0) == 1) and on (namespace, persistentvolumeclaim) (deriv(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) > 0) and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} and on (namespace, persistentvolumeclaim) kubelet_volume_stats_available_bytes{namespace="stratum"} offset 6h
@@ -134,7 +134,7 @@ groups:
           summary: A Stratum PVC may fill within four days
           description: Six hours of positive storage growth predicts exhaustion within four days (current value {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#pvc-exhaustion-predicted
+          runbook_url: /docs/operations/alerts/capacity.md#pvc-exhaustion-predicted
 
       - alert: StratumPVCExhaustionImminent
         expr: stratum:pvc_exhaustion_within_1d == 1
@@ -149,7 +149,7 @@ groups:
           summary: A Stratum PVC may fill within one day
           description: Six hours of positive storage growth predicts exhaustion within one day (current value {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#pvc-exhaustion-imminent
+          runbook_url: /docs/operations/alerts/capacity.md#pvc-exhaustion-imminent
 
       - record: stratum:filesystem_exhaustion_within_4d
         expr: (((predict_linear(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h], 4 * 24 * 60 * 60) < bool 0) == 1) and on (instance, device, mountpoint, fstype) (deriv(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h]) < 0) and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} offset 6h) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
@@ -170,7 +170,7 @@ groups:
           summary: A Stratum host filesystem may fill within four days
           description: Six hours of positive filesystem growth predicts exhaustion within four days (current value {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#filesystem-exhaustion-predicted
+          runbook_url: /docs/operations/alerts/capacity.md#filesystem-exhaustion-predicted
 
       - alert: StratumFilesystemExhaustionImminent
         expr: stratum:filesystem_exhaustion_within_1d == 1
@@ -185,4 +185,4 @@ groups:
           summary: A Stratum host filesystem may fill within one day
           description: Six hours of positive filesystem growth predicts exhaustion within one day (current value {{ $value }}).
           dashboard_url: /d/stratum-resources
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#filesystem-exhaustion-imminent
+          runbook_url: /docs/operations/alerts/capacity.md#filesystem-exhaustion-imminent

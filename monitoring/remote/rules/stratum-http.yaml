@@ -51,7 +51,7 @@ groups:
           summary: Stratum HTTP 5xx rate is elevated
           description: The five-minute HTTP 5xx ratio has exceeded 5% for ten minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-http
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#high-http-5xx-rate
+          runbook_url: /docs/operations/alerts/http-performance.md#high-http-5xx-rate
 
       - alert: StratumCriticalHTTP5xxRate
         expr: stratum:http_5xx_ratio:ratio5m{service="stratum",environment="remote-test"} > 0.20 and stratum:http_requests:increase5m{service="stratum",environment="remote-test"} >= 20
@@ -66,7 +66,7 @@ groups:
           summary: Stratum HTTP 5xx rate is critical
           description: The five-minute HTTP 5xx ratio has exceeded 20% for five minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-http
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#critical-http-5xx-rate
+          runbook_url: /docs/operations/alerts/http-performance.md#critical-http-5xx-rate
 
       - alert: StratumHighHTTPP95Latency
         expr: stratum:http_request_duration_seconds:p95_5m{service="stratum",environment="remote-test"} > 2 and on() sum(increase(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$",le="+Inf"}[5m])) >= 20
@@ -81,7 +81,7 @@ groups:
           summary: Stratum HTTP P95 latency is elevated
           description: The five-minute HTTP P95 latency has exceeded two seconds for fifteen minutes (current value {{ $value }}s).
           dashboard_url: /d/stratum-http
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#high-http-p95-latency
+          runbook_url: /docs/operations/alerts/http-performance.md#high-http-p95-latency
 
       - alert: StratumCriticalHTTPP95Latency
         expr: stratum:http_request_duration_seconds:p95_5m{service="stratum",environment="remote-test"} > 5 and on() sum(increase(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!~"^/(health|livez|readyz|metrics)$",le="+Inf"}[5m])) >= 20
@@ -96,4 +96,4 @@ groups:
           summary: Stratum HTTP P95 latency is critical
           description: The five-minute HTTP P95 latency has exceeded five seconds for five minutes (current value {{ $value }}s).
           dashboard_url: /d/stratum-http
-          runbook_url: /docs/operations/remote-monitoring-runbook.md#critical-http-p95-latency
+          runbook_url: /docs/operations/alerts/http-performance.md#critical-http-p95-latency

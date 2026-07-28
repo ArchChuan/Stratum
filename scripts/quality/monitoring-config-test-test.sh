@@ -93,6 +93,18 @@ if ! grep -q '^dashboards ' "${CALLS}"; then
     exit 1
 fi
 
+RUNBOOK_FILE="${ROOT}/docs/operations/alerts/availability.md"
+if [[ -f "${RUNBOOK_FILE}" ]]; then
+    mkdir -p "${TMP_ROOT}/runbook-root/docs/operations"
+    cp -R "${ROOT}/docs/operations/." "${TMP_ROOT}/runbook-root/docs/operations/"
+    sed -i 's/^## StratumPublicEndpointDown$/## WrongAlertHeading/' \
+        "${TMP_ROOT}/runbook-root/docs/operations/alerts/availability.md"
+    if RUNBOOK_ROOT="${TMP_ROOT}/runbook-root" run_validator >/dev/null 2>&1; then
+        echo 'validator accepted a runbook without the corresponding alert heading' >&2
+        exit 1
+    fi
+fi
+
 for expected in helm promtool amtool; do
     if ! grep -q "^${expected} " "${CALLS}"; then
         echo "validator did not invoke ${expected}" >&2
