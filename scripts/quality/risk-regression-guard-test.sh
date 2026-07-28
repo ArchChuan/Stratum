@@ -262,6 +262,19 @@ done
   echo 'IAM changes must require soak acceptance' >&2
   exit 1
 }
+for monitoring_path in \
+  monitoring/remote/rules/stratum-availability.yaml \
+  internal/platform/alerting/delivery.go \
+  cmd/feishu-alert-adapter/main.go \
+  cmd/remote-health-monitor/main.go \
+  scripts/deploy-remote-monitoring.sh \
+  .github/workflows/deploy.yml \
+  .github/workflows/remote-health-monitor.yml; do
+  [[ "$(/bin/bash "${CHECKER}" --acceptance "${monitoring_path}")" == soak ]] || {
+    echo "remote monitoring change must require soak acceptance: ${monitoring_path}" >&2
+    exit 1
+  }
+done
 if ! grep -q 'make risk-guardrails' <<< "${explanation}"; then
   echo 'risk guard explanation does not expose make risk-guardrails' >&2
   exit 1
