@@ -1,10 +1,157 @@
 rule_files:
   - ../rules/stratum-availability.yaml
   - ../rules/stratum-http.yaml
+  - ../rules/stratum-workloads.yaml
+  - ../rules/stratum-capacity.yaml
+  - ../rules/stratum-dependencies.yaml
+  - ../rules/stratum-monitoring.yaml
 
 evaluation_interval: 1m
 
 tests:
+  - name: workload rules expose node inhibition input and detect restart growth
+    interval: 1m
+    input_series:
+      - series: 'kube_node_status_condition{node="remote-node",condition="Ready",status="true"}'
+        values: '0x7'
+      - series: 'kube_pod_container_status_restarts_total{namespace="stratum",pod="stratum-abc",container="stratum"}'
+        values: '0+1x7'
+    promql_expr_test:
+      - expr: ALERTS{alertname="StratumNodeNotReady",alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumNodeNotReady",alertstate="firing",component="node",environment="remote-test",node="remote-node",service="stratum",severity="critical"}'
+            value: 1
+      - expr: ALERTS{alertname="StratumPodRestartingFrequently",alertstate="firing"}
+        eval_time: 6m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumPodRestartingFrequently",alertstate="firing",component="workload",container="stratum",environment="remote-test",namespace="stratum",pod="stratum-abc",service="stratum",severity="warning"}'
+            value: 1
+
+  - name: capacity rules detect low node memory and PVC thresholds
+    interval: 1m
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{instance="remote-node"}'
+        values: '90x17'
+      - series: 'node_memory_MemTotal_bytes{instance="remote-node"}'
+        values: '1000x17'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="warning-pvc"}'
+        values: '85x17'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="stratum",persistentvolumeclaim="warning-pvc"}'
+        values: '100x17'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="critical-pvc"}'
+        values: '95x17'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="stratum",persistentvolumeclaim="critical-pvc"}'
+        values: '100x17'
+    promql_expr_test:
+      - expr: ALERTS{alertname="StratumNodeMemoryLow",alertstate="firing"}
+        eval_time: 15m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumNodeMemoryLow",alertstate="firing",component="node",environment="remote-test",instance="remote-node",service="stratum",severity="warning"}'
+            value: 1
+      - expr: ALERTS{alertname="StratumPVCUsageHigh",alertstate="firing",persistentvolumeclaim="warning-pvc"}
+        eval_time: 15m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumPVCUsageHigh",alertstate="firing",component="storage",environment="remote-test",namespace="stratum",persistentvolumeclaim="warning-pvc",service="stratum",severity="warning"}'
+            value: 1
+      - expr: ALERTS{alertname="StratumPVCUsageCritical",alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumPVCUsageCritical",alertstate="firing",component="storage",environment="remote-test",namespace="stratum",persistentvolumeclaim="critical-pvc",service="stratum",severity="critical"}'
+            value: 1
+
+  - name: PVC prediction requires six hours of positive growth
+    interval: 30s
+    input_series:
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="growing-pvc"}'
+        values: '1000000+1000000x724'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="growing-pvc"}'
+        values: '800000000-1000000x724'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="flat-pvc"}'
+        values: '1000000x724'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="flat-pvc"}'
+        values: '800000000x724'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="shrinking-pvc"}'
+        values: '800000000-1000000x724'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="shrinking-pvc"}'
+        values: '1000000+1000000x724'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="young-pvc"}'
+        values: '_x604 1000000+1000000x120'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="young-pvc"}'
+        values: '_x604 800000000-1000000x120'
+    promql_expr_test:
+      - expr: stratum:pvc_exhaustion_within_4d
+        eval_time: 6h2m
+        exp_samples:
+          - labels: '{__name__="stratum:pvc_exhaustion_within_4d",namespace="stratum",persistentvolumeclaim="growing-pvc"}'
+            value: 1
+
+  - name: dependency targets disappear independently
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="stratum",service="stratum-etcd-metrics",endpoint="metrics"}'
+        values: '0x12'
+      - series: 'up{namespace="stratum",service="stratum-milvus-metrics",endpoint="metrics"}'
+        values: '0x12'
+    promql_expr_test:
+      - expr: ALERTS{alertname="StratumDependencyTargetMissing",alertstate="firing"}
+        eval_time: 10m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumDependencyTargetMissing",alertstate="firing",component="dependency",dependency="etcd",endpoint="metrics",environment="remote-test",namespace="stratum",service="stratum",severity="warning"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumDependencyTargetMissing",alertstate="firing",component="dependency",dependency="milvus",endpoint="metrics",environment="remote-test",namespace="stratum",service="stratum",severity="warning"}'
+            value: 1
+
+  - name: absent dependency and exporter series are treated as target loss
+    interval: 1m
+    promql_expr_test:
+      - expr: ALERTS{alertname="StratumDependencyTargetMissing",alertstate="firing"}
+        eval_time: 10m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumDependencyTargetMissing",alertstate="firing",component="dependency",dependency="etcd",endpoint="metrics",environment="remote-test",namespace="stratum",service="stratum",severity="warning"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumDependencyTargetMissing",alertstate="firing",component="dependency",dependency="milvus",endpoint="metrics",environment="remote-test",namespace="stratum",service="stratum",severity="warning"}'
+            value: 1
+      - expr: ALERTS{alertname=~"StratumFeishuAdapterMissing|StratumBlackboxExporterMissing",alertstate="firing"}
+        eval_time: 10m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumFeishuAdapterMissing",alertstate="firing",component="notification",endpoint="http",environment="remote-test",namespace="monitoring",service="stratum",severity="critical"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumBlackboxExporterMissing",alertstate="firing",component="blackbox",endpoint="http",environment="remote-test",namespace="monitoring",service="stratum",severity="critical"}'
+            value: 1
+
+  - name: monitoring pipeline failures are observable
+    interval: 1m
+    input_series:
+      - series: 'prometheus_config_last_reload_successful{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus"}'
+        values: '0x12'
+      - series: 'prometheus_rule_evaluation_failures_total{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus"}'
+        values: '0+1x12'
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring",service="kps-kube-prometheus-stack-alertmanager",integration="webhook"}'
+        values: '0+1x12'
+      - series: 'up{namespace="monitoring",service="stratum-feishu-alert-adapter",endpoint="http"}'
+        values: '0x12'
+      - series: 'up{namespace="monitoring",service="stratum-blackbox-prometheus-blackbox-exporter",endpoint="http"}'
+        values: '0x12'
+      - series: 'feishu_alert_delivery_total{status="failed"}'
+        values: '0+1x12'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"StratumPrometheusConfigReloadFailed|StratumPrometheusRuleEvaluationFailures|StratumAlertmanagerNotificationFailures|StratumFeishuAdapterMissing|StratumBlackboxExporterMissing|StratumFeishuDeliveryFailures",alertstate="firing"}
+        eval_time: 10m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumPrometheusConfigReloadFailed",alertstate="firing",component="prometheus",environment="remote-test",namespace="monitoring",service="stratum",severity="critical"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumPrometheusRuleEvaluationFailures",alertstate="firing",component="prometheus",environment="remote-test",namespace="monitoring",service="stratum",severity="warning"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumAlertmanagerNotificationFailures",alertstate="firing",component="alertmanager",environment="remote-test",namespace="monitoring",service="stratum",severity="critical"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumFeishuAdapterMissing",alertstate="firing",component="notification",endpoint="http",environment="remote-test",namespace="monitoring",service="stratum",severity="critical"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumBlackboxExporterMissing",alertstate="firing",component="blackbox",endpoint="http",environment="remote-test",namespace="monitoring",service="stratum",severity="critical"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumFeishuDeliveryFailures",alertstate="firing",component="notification",environment="remote-test",service="stratum",severity="critical",status="failed"}'
+            value: 1
+
   - name: availability alerts respect persistence and recovery
     interval: 1m
     input_series:

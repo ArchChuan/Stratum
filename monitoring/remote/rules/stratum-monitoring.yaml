@@ -1,0 +1,85 @@
+groups:
+  - name: stratum-monitoring
+    rules:
+      - alert: StratumPrometheusConfigReloadFailed
+        expr: prometheus_config_last_reload_successful{namespace="monitoring"} == 0
+        for: 10m
+        labels:
+          severity: critical
+          service: stratum
+          environment: remote-test
+          component: prometheus
+        annotations:
+          summary: Prometheus configuration reload is failing
+          description: Prometheus has reported an unsuccessful configuration reload for ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#prometheus-config-reload-failed
+
+      - alert: StratumPrometheusRuleEvaluationFailures
+        expr: sum by (namespace) (increase(prometheus_rule_evaluation_failures_total{namespace="monitoring"}[10m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: stratum
+          environment: remote-test
+          component: prometheus
+        annotations:
+          summary: Prometheus rule evaluations are failing
+          description: Prometheus recorded rule evaluation failures during the last ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#prometheus-rule-evaluation-failures
+
+      - alert: StratumAlertmanagerNotificationFailures
+        expr: sum by (namespace) (increase(alertmanager_notifications_failed_total{namespace="monitoring"}[10m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: stratum
+          environment: remote-test
+          component: alertmanager
+        annotations:
+          summary: Alertmanager notifications are failing
+          description: Alertmanager recorded notification delivery failures during the last ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#alertmanager-notification-failures
+
+      - alert: StratumFeishuAdapterMissing
+        expr: absent(up{namespace="monitoring",service="stratum-feishu-alert-adapter",endpoint="http"}) or up{namespace="monitoring",service="stratum-feishu-alert-adapter",endpoint="http"} == 0
+        for: 10m
+        labels:
+          severity: critical
+          service: stratum
+          environment: remote-test
+          component: notification
+        annotations:
+          summary: Feishu alert adapter is unavailable
+          description: Prometheus has been unable to scrape the Feishu adapter for ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#feishu-adapter-missing
+
+      - alert: StratumBlackboxExporterMissing
+        expr: absent(up{namespace="monitoring",service="stratum-blackbox-prometheus-blackbox-exporter",endpoint="http"}) or up{namespace="monitoring",service="stratum-blackbox-prometheus-blackbox-exporter",endpoint="http"} == 0
+        for: 10m
+        labels:
+          severity: critical
+          service: stratum
+          environment: remote-test
+          component: blackbox
+        annotations:
+          summary: Blackbox Exporter is unavailable
+          description: Prometheus has been unable to scrape Blackbox Exporter for ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#blackbox-exporter-missing
+
+      - alert: StratumFeishuDeliveryFailures
+        expr: increase(feishu_alert_delivery_total{status="failed"}[10m]) > 0
+        labels:
+          severity: critical
+          service: stratum
+          environment: remote-test
+          component: notification
+        annotations:
+          summary: Feishu alert deliveries are failing
+          description: The Feishu adapter recorded at least one failed delivery during the last ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#feishu-delivery-failures

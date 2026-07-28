@@ -1,0 +1,78 @@
+groups:
+  - name: stratum-capacity
+    rules:
+      - alert: StratumNodeMemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 15m
+        labels:
+          severity: warning
+          service: stratum
+          environment: remote-test
+          component: node
+        annotations:
+          summary: Stratum host memory availability is low
+          description: Available node memory has remained below 10% for fifteen minutes (current ratio {{ $value }}).
+          dashboard_url: /d/stratum-resources
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#node-memory-low
+
+      - alert: StratumPVCUsageHigh
+        expr: kubelet_volume_stats_used_bytes{namespace="stratum"} / kubelet_volume_stats_capacity_bytes{namespace="stratum"} > 0.80
+        for: 15m
+        labels:
+          severity: warning
+          service: stratum
+          environment: remote-test
+          component: storage
+        annotations:
+          summary: A Stratum PVC is more than 80% full
+          description: Persistent volume usage has remained above 80% for fifteen minutes (current ratio {{ $value }}).
+          dashboard_url: /d/stratum-resources
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#pvc-usage-high
+
+      - alert: StratumPVCUsageCritical
+        expr: kubelet_volume_stats_used_bytes{namespace="stratum"} / kubelet_volume_stats_capacity_bytes{namespace="stratum"} > 0.90
+        for: 5m
+        labels:
+          severity: critical
+          service: stratum
+          environment: remote-test
+          component: storage
+        annotations:
+          summary: A Stratum PVC is more than 90% full
+          description: Persistent volume usage has remained above 90% for five minutes (current ratio {{ $value }}).
+          dashboard_url: /d/stratum-resources
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#pvc-usage-critical
+
+      - record: stratum:pvc_exhaustion_within_4d
+        expr: ((predict_linear(kubelet_volume_stats_available_bytes{namespace="stratum"}[6h], 4 * 24 * 60 * 60) < bool 0) == 1) and (deriv(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) > 0) and (count_over_time(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) >= 720)
+
+      - record: stratum:pvc_exhaustion_within_1d
+        expr: ((predict_linear(kubelet_volume_stats_available_bytes{namespace="stratum"}[6h], 24 * 60 * 60) < bool 0) == 1) and (deriv(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) > 0) and (count_over_time(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) >= 720)
+
+      - alert: StratumPVCExhaustionPredicted
+        expr: stratum:pvc_exhaustion_within_4d == 1
+        for: 15m
+        labels:
+          severity: warning
+          service: stratum
+          environment: remote-test
+          component: storage
+        annotations:
+          summary: A Stratum PVC may fill within four days
+          description: Six hours of positive storage growth predicts exhaustion within four days (current value {{ $value }}).
+          dashboard_url: /d/stratum-resources
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#pvc-exhaustion-predicted
+
+      - alert: StratumPVCExhaustionImminent
+        expr: stratum:pvc_exhaustion_within_1d == 1
+        for: 5m
+        labels:
+          severity: critical
+          service: stratum
+          environment: remote-test
+          component: storage
+        annotations:
+          summary: A Stratum PVC may fill within one day
+          description: Six hours of positive storage growth predicts exhaustion within one day (current value {{ $value }}).
+          dashboard_url: /d/stratum-resources
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#pvc-exhaustion-imminent
