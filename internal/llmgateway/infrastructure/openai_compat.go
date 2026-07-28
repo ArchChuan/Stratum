@@ -546,3 +546,47 @@ func (c *OpenAICompatClient) EmbedCreateEmbeddings(ctx context.Context, cfg Prov
 func (c *OpenAICompatClient) EmbedBatchSize() int {
 	return c.BatchSize()
 }
+
+// ---------------------------------------------------------------------------
+// OpenAICompatProtocol — protocol adapter that satisfies ChatProtocol and
+// EmbedProtocol by delegating to an embedded OpenAICompatClient.
+//
+// The ProviderConfig parameter received at call time is intentionally ignored
+// (interim limitation — full cfg plumbing is deferred). All protocol methods
+// delegate to the client's instance methods, which use their own cfg set at
+// construction time.
+// ---------------------------------------------------------------------------
+
+// OpenAICompatProtocol satisfies ChatProtocol and EmbedProtocol.
+type OpenAICompatProtocol struct {
+	client *OpenAICompatClient
+}
+
+// NewOpenAICompatProtocol returns a protocol adapter backed by client.
+func NewOpenAICompatProtocol(client *OpenAICompatClient) *OpenAICompatProtocol {
+	return &OpenAICompatProtocol{client: client}
+}
+
+func (p *OpenAICompatProtocol) Complete(ctx context.Context, _ ProviderConfig, req *CompletionRequest) (*CompletionResponse, error) {
+	return p.client.Complete(ctx, req)
+}
+
+func (p *OpenAICompatProtocol) CompleteStream(ctx context.Context, _ ProviderConfig, req *CompletionRequest, onToken func(string)) (*CompletionResponse, error) {
+	return p.client.CompleteStream(ctx, req, onToken)
+}
+
+func (p *OpenAICompatProtocol) Health(ctx context.Context, _ ProviderConfig) error {
+	return p.client.Health(ctx)
+}
+
+func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]string, error) {
+	return cfg.Models, nil
+}
+
+func (p *OpenAICompatProtocol) CreateEmbeddings(ctx context.Context, _ ProviderConfig, req *EmbeddingRequest) (*EmbeddingResponse, error) {
+	return p.client.CreateEmbeddings(ctx, req)
+}
+
+func (p *OpenAICompatProtocol) BatchSize() int {
+	return p.client.BatchSize()
+}

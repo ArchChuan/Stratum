@@ -14,10 +14,8 @@ import (
 
 	"github.com/byteBuilderX/stratum/config"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	llmapp "github.com/byteBuilderX/stratum/internal/llmgateway/application"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	mempipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
-	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/storage/milvus"
 	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -156,14 +154,14 @@ func NewFromExisting(
 	c.Storage = storage
 	c.shutdown = append(c.shutdown, func(_ context.Context) error { return mil.Close() })
 
-	// LLMGateway: adopt the gateway main.go already initialized;
-	// build a fresh metrics provider (router used to do this inline).
-	metrics := observability.NewPrometheusMetrics(logger)
-	gateway.WithMetrics(metrics)
-	c.LLMGateway = &LLMGateway{
-		Gateway:      gateway,
-		Metrics:      metrics,
-		ModelService: llmapp.NewModelService(gateway),
+	// LLMGateway: build from DB using the standard builder.
+	// The gateway parameter from the caller is ignored during this
+	// transitional phase (Task 10c deletes this path entirely).
+	if db != nil {
+		if err := c.buildLLMGateway(ctx); err != nil {
+			_ = c.Shutdown(ctx)
+			return nil, fmt.Errorf("wiring.llmgateway: %w", err)
+		}
 	}
 
 	// Run the derived sub-builders that don't need Skill or Memory yet.

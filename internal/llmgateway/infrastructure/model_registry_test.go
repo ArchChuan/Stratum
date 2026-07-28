@@ -360,7 +360,7 @@ func TestModelRegistry_ListChatModels(t *testing.T) {
 	pr := &mockProviderRepo{providers: map[string]*domain.Provider{}}
 	reg := newTestRegistry(mr, pr)
 
-	names, err := reg.ListChatModels(context.Background(), "t1")
+	names, err := reg.ListChatModelsByTenant(context.Background(), "t1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -377,7 +377,7 @@ func TestModelRegistry_ListChatModels_Empty(t *testing.T) {
 	pr := &mockProviderRepo{providers: map[string]*domain.Provider{}}
 	reg := newTestRegistry(mr, pr)
 
-	names, err := reg.ListChatModels(context.Background(), "t1")
+	names, err := reg.ListChatModelsByTenant(context.Background(), "t1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestModelRegistry_ListEmbeddingModels(t *testing.T) {
 	pr := &mockProviderRepo{providers: map[string]*domain.Provider{}}
 	reg := newTestRegistry(mr, pr)
 
-	names, err := reg.ListEmbeddingModels(context.Background(), "t1")
+	names, err := reg.ListEmbeddingModelsByTenant(context.Background(), "t1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -582,7 +582,7 @@ func TestModelRegistry_ListChatModels_Error(t *testing.T) {
 	pr := &mockProviderRepo{}
 	reg := newTestRegistry(mr, pr)
 
-	_, err := reg.ListChatModels(context.Background(), "t1")
+	_, err := reg.ListChatModelsByTenant(context.Background(), "t1")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

@@ -313,13 +313,13 @@ func (g *Gateway) ListChatModels() []string {
 // ListChatModelsByTenant returns sorted enabled chat model names for the
 // given tenant, delegating to the registry.
 func (g *Gateway) ListChatModelsByTenant(ctx context.Context, tenantID string) ([]string, error) {
-	return g.registry.ListChatModels(ctx, tenantID)
+	return g.registry.ListChatModelsByTenant(ctx, tenantID)
 }
 
 // ListEmbeddingModelsByTenant returns sorted enabled embedding model names
 // for the given tenant, delegating to the registry.
 func (g *Gateway) ListEmbeddingModelsByTenant(ctx context.Context, tenantID string) ([]string, error) {
-	return g.registry.ListEmbeddingModels(ctx, tenantID)
+	return g.registry.ListEmbeddingModelsByTenant(ctx, tenantID)
 }
 
 // WithGateway returns a new context carrying gw as the LLM gateway override.

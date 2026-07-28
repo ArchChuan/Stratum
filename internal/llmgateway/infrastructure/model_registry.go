@@ -121,8 +121,8 @@ func (r *ModelRegistry) resolveModelFromDB(ctx context.Context, tenantID, modelN
 	return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: model %q not found for tenant %s", modelName, tenantID)
 }
 
-// ListChatModels returns sorted enabled chat model names for a tenant.
-func (r *ModelRegistry) ListChatModels(ctx context.Context, tenantID string) ([]string, error) {
+// ListChatModelsByTenant returns sorted enabled chat model names for a tenant.
+func (r *ModelRegistry) ListChatModelsByTenant(ctx context.Context, tenantID string) ([]string, error) {
 	enabled := true
 	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{
 		Enabled:    &enabled,
@@ -139,8 +139,8 @@ func (r *ModelRegistry) ListChatModels(ctx context.Context, tenantID string) ([]
 	return names, nil
 }
 
-// ListEmbeddingModels returns sorted enabled embedding model names for a tenant.
-func (r *ModelRegistry) ListEmbeddingModels(ctx context.Context, tenantID string) ([]string, error) {
+// ListEmbeddingModelsByTenant returns sorted enabled embedding model names for a tenant.
+func (r *ModelRegistry) ListEmbeddingModelsByTenant(ctx context.Context, tenantID string) ([]string, error) {
 	enabled := true
 	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{
 		Enabled:    &enabled,
@@ -188,6 +188,19 @@ func (r *ModelRegistry) WarmTenant(ctx context.Context, tenantID string) error {
 		}
 	}
 	return nil
+}
+
+// ListChatModels returns an empty slice. Tenant-scoped model lists are
+// available via ListChatModels(ctx, tenantID). This method satisfies
+// port.ModelCatalog for non-tenant contexts.
+func (r *ModelRegistry) ListChatModels() []string {
+	return []string{}
+}
+
+// ListEmbeddingModels returns an empty slice. Tenant-scoped model lists
+// are available via ListEmbeddingModels(ctx, tenantID).
+func (r *ModelRegistry) ListEmbeddingModels() []string {
+	return []string{}
 }
 
 // Invalidate removes all cached entries for a tenant.

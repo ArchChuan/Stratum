@@ -195,13 +195,14 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		a.ApprovalService = agent.NewToolApprovalService(a.ApprovalStore, a.CheckpointStore, c.Platform.AESKey)
 		a.SkillLookup = persistence.NewPgSkillLookup(db)
 		a.TenantSettings = persistence.NewPgTenantSettings(db)
-		var fallbackGateway *llmgateway.Gateway
+		var registry *llmgateway.ModelRegistry
+		var gw *llmgateway.Gateway
 		if c.LLMGateway != nil {
-			fallbackGateway = c.LLMGateway.Gateway
+			registry = c.LLMGateway.Registry
+			gw = c.LLMGateway.Gateway
 		}
 		a.TenantResolver = newTenantCapabilityResolver(
-			db, c.Platform.AESKey, c.Platform.GatewayCache, fallbackGateway, c.Logger,
-			c.Config.QwenBaseURL, c.Config.ZhipuBaseURL,
+			db, c.Platform.AESKey, registry, gw, c.Logger,
 		)
 	}
 
