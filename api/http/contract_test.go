@@ -60,7 +60,7 @@ func TestContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	metrics := observability.NewPrometheusMetrics(logger)
-	gateway := llmgateway.NewGateway(nil).WithLogger(logger)
+	gateway := llmgateway.NewGateway(nil, nil, nil).WithLogger(logger)
 	router := api.SetupRouter(cfg, logger, gateway, nil, nil, nil, nil)
 	evaluationRouter := apihttp.NewRouter(&wiring.Container{
 		Config: cfg, Logger: logger, Platform: &wiring.Platform{JWTService: iamtoken.NewJWTService(key), Metrics: metrics},

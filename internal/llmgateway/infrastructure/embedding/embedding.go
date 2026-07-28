@@ -10,9 +10,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// EmbeddingClient is the minimal embedding interface needed by EmbeddingService.
-// Defined here because the old gateway-level EmbeddingClient was removed in
-// favour of *OpenAICompatClient directly.
+// EmbeddingClient is the minimal embedding capability consumed by this service.
+// Satisfied by *llmgateway.OpenAICompatClient and other types that implement
+// CreateEmbeddings and BatchSize.
 type EmbeddingClient interface {
 	CreateEmbeddings(ctx context.Context, req *llmgateway.EmbeddingRequest) (*llmgateway.EmbeddingResponse, error)
 	BatchSize() int

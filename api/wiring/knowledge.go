@@ -2,6 +2,7 @@ package wiring
 
 import (
 	"context"
+	"encoding/json"
 
 	"go.uber.org/zap"
 
@@ -51,11 +52,13 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	var pipelineResolver pipeline.EmbedServiceResolver
 	var knowledgeResolver knowledge.EmbedResolver
 	db := c.dbOrNil()
-	if db != nil && c.Platform != nil && c.Platform.ModelRegistry != nil {
+	if db != nil {
 		chunkRepo := persistence.NewChunkRepo(db)
 		docRepo := persistence.NewDocRepo(db)
-		pipelineResolver = buildEmbedResolver(c.Platform.ModelRegistry, c.Logger)
-		knowledgeResolver = buildKnowledgeEmbedResolver(c.Platform.ModelRegistry, c.Logger)
+		if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
+			pipelineResolver = buildEmbedResolver(db, c.LLMGateway.Registry, c.Logger)
+			knowledgeResolver = buildKnowledgeEmbedResolver(db, c.LLMGateway.Registry, c.Logger)
+		}
 		ingest.SetEmbedResolver(knowledgeResolver)
 		ingest.SetChunkRepo(chunkRepo)
 		ingest.SetDocRepo(docRepo)
@@ -132,39 +135,78 @@ func (c *Container) RecoverStuckKnowledgeIngests(ctx context.Context) {
 	}
 }
 
-// buildEmbedResolver creates a per-tenant EmbedServiceResolver backed by
-// ModelRegistry. The registry handles caching, decryption, and provider
-// selection internally — no more per-tenant Gateway construction.
-func buildEmbedResolver(reg *llmgateway.ModelRegistry, logger *zap.Logger) pipeline.EmbedServiceResolver {
+// buildEmbedResolver creates a per-tenant EmbedServiceResolver that resolves
+// embedding capability from tenant DB settings via the ModelRegistry.
+//
+// Copied from api/router.go:344-417 — Task 10 will delete the
+// router.go original once main.go is migrated to wiring.BuildContainer.
+func buildEmbedResolver(
+	db tenantSettingsQuerier,
+	registry *llmgateway.ModelRegistry,
+	logger *zap.Logger,
+) pipeline.EmbedServiceResolver {
 	return func(ctx context.Context, tenantID string) pipeline.EmbedClient {
-		client, err := reg.ResolveEmbedding(ctx, tenantID, "")
-		if err != nil {
-			logger.Warn("embed_resolver.resolve_failed",
-				zap.String("tenant_id", tenantID),
-				zap.Error(err))
+		var settingsJSON []byte
+		if err := db.QueryRow(ctx,
+			"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL",
+			tenantID,
+		).Scan(&settingsJSON); err != nil {
 			return nil
 		}
-		return embedding.NewEmbeddingService(client, logger)
+		var settings map[string]interface{}
+		if err := json.Unmarshal(settingsJSON, &settings); err != nil {
+			return nil
+		}
+		embedModel, _ := settings["embed_model"].(string)
+		if embedModel == "" {
+			embedModel = "text-embedding-v3"
+		}
+
+		cfg, _, err := registry.ResolveEmbedding(ctx, tenantID, embedModel)
+		if err != nil {
+			return nil
+		}
+		client := llmgateway.NewOpenAICompatClient(cfg, logger)
+		return embedding.NewEmbeddingServiceWithModel(client, embedModel, logger)
 	}
 }
 
-// buildKnowledgeEmbedResolver returns a knowledge.EmbedResolver backed by
-// ModelRegistry. The optional model parameter selects a specific embedding
-// model; when empty the provider default is used.
-func buildKnowledgeEmbedResolver(reg *llmgateway.ModelRegistry, logger *zap.Logger) knowledge.EmbedResolver {
+// buildKnowledgeEmbedResolver returns a knowledge.EmbedResolver that resolves
+// the embedding client for a given tenant, honouring the workspace-level model.
+//
+// Copied from api/router.go:421-491 — Task 10 will delete the
+// router.go original once main.go is migrated to wiring.BuildContainer.
+func buildKnowledgeEmbedResolver(
+	db tenantSettingsQuerier,
+	registry *llmgateway.ModelRegistry,
+	logger *zap.Logger,
+) knowledge.EmbedResolver {
 	return func(ctx context.Context, tenantID, model string) knowledge.EmbedClient {
-		client, err := reg.ResolveEmbedding(ctx, tenantID, model)
-		if err != nil {
-			logger.Warn("knowledge_embed_resolver.resolve_failed",
-				zap.String("tenant_id", tenantID),
-				zap.String("model", model),
-				zap.Error(err))
+		var settingsJSON []byte
+		if err := db.QueryRow(ctx,
+			"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL",
+			tenantID,
+		).Scan(&settingsJSON); err != nil {
 			return nil
 		}
-		svc := embedding.NewEmbeddingServiceWithModel(client, model, logger)
-		if model == "" {
-			svc = embedding.NewEmbeddingService(client, logger)
+		var settings map[string]interface{}
+		if err := json.Unmarshal(settingsJSON, &settings); err != nil {
+			return nil
 		}
-		return svc
+		m := model
+		if m == "" {
+			if em, ok := settings["embed_model"].(string); ok && em != "" {
+				m = em
+			} else {
+				m = "text-embedding-v3"
+			}
+		}
+
+		cfg, _, err := registry.ResolveEmbedding(ctx, tenantID, m)
+		if err != nil {
+			return nil
+		}
+		client := llmgateway.NewOpenAICompatClient(cfg, logger)
+		return embedding.NewEmbeddingServiceWithModel(client, m, logger)
 	}
 }

@@ -1,4 +1,4 @@
-package infrastructure
+package infrastructure_test
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -17,84 +18,58 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
-	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
+	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
-// testAESKey is derived from a fixed test PEM so encrypted values are deterministic.
-var testAESKey = pkgcrypto.DeriveAESKey("test-pem")
+// errChatProto returns errors on all chat methods.
+type errChatProto struct{}
 
-// encryptTestKey encrypts a plaintext API key with testAESKey. Panics on error
-// (test-only helper).
-func encryptTestKey(plain string) string {
-	enc, err := pkgcrypto.Encrypt(testAESKey, plain)
-	if err != nil {
-		panic(fmt.Sprintf("encrypt test key: %v", err))
-	}
-	return enc
+func (errChatProto) Complete(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.CompletionRequest) (*infrastructure.CompletionResponse, error) {
+	return nil, errors.New("provider error")
+}
+func (errChatProto) CompleteStream(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.CompletionRequest, onToken func(string)) (*infrastructure.CompletionResponse, error) {
+	return nil, errors.New("provider error")
+}
+func (errChatProto) Health(ctx context.Context, cfg infrastructure.ProviderConfig) error {
+	return errors.New("provider error")
+}
+func (errChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]string, error) {
+	return nil, nil
 }
 
-// testRegistry builds a ModelRegistry that returns encrypted provider keys for
-// every tenant. It is used by tests that need a functional Gateway.
-func testRegistry(t *testing.T, provider, apiKey string) *ModelRegistry {
-	t.Helper()
-	_ = t
-	readSettings := func(_ context.Context, tenantID string) ([]byte, error) {
-		if tenantID == "missing" {
-			return nil, errors.New("no such tenant")
-		}
-		return json.Marshal(map[string]any{
-			"llm_api_keys": map[string]string{provider: apiKey},
-		})
-	}
-	return NewModelRegistry(readSettings, testAESKey, zap.NewNop())
-}
+// successChatProto returns successful responses.
+type successChatProto struct{}
 
-// tenantCtx returns a context with the given tenant ID injected via reqctx.
-func tenantCtx(ctx context.Context, tenantID string) context.Context {
-	return reqctx.WithTenantID(ctx, tenantID)
+func (successChatProto) Complete(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.CompletionRequest) (*infrastructure.CompletionResponse, error) {
+	return &infrastructure.CompletionResponse{Content: "ok", Usage: infrastructure.TokenUsage{PromptTokens: 1, CompletionTokens: 1}}, nil
+}
+func (successChatProto) CompleteStream(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.CompletionRequest, onToken func(string)) (*infrastructure.CompletionResponse, error) {
+	onToken("test")
+	return &infrastructure.CompletionResponse{Content: "test", Usage: infrastructure.TokenUsage{PromptTokens: 1, CompletionTokens: 1}}, nil
+}
+func (successChatProto) Health(ctx context.Context, cfg infrastructure.ProviderConfig) error {
+	return nil
+}
+func (successChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]string, error) {
+	return nil, nil
 }
 
 func TestNewGateway(t *testing.T) {
-	gateway := NewGateway(testRegistry(t, "qwen", "k"))
+	gateway := infrastructure.NewGateway(nil, nil, nil)
 	if gateway == nil {
 		t.Error("expected Gateway to be non-nil")
 	}
 }
 
-func TestListChatModels_static(t *testing.T) {
-	g := NewGateway(testRegistry(t, "qwen", "fake"))
-	models := g.ListChatModels()
-	if len(models) == 0 {
-		t.Fatal("expected static models, got none")
-	}
-	for i := 1; i < len(models); i++ {
-		if models[i] < models[i-1] {
-			t.Errorf("not sorted: %v", models)
-			break
-		}
-	}
-	hasQwen, hasGlm := false, false
-	for _, m := range models {
-		if m == "qwen-turbo" {
-			hasQwen = true
-		}
-		if m == "glm-4-flash" {
-			hasGlm = true
-		}
-	}
-	if !hasQwen || !hasGlm {
-		t.Errorf("expected qwen-turbo and glm-4-flash in %v", models)
-	}
-}
-
 func TestCompletionRequestHasToolsField(t *testing.T) {
-	req := CompletionRequest{
+	req := infrastructure.CompletionRequest{
 		Model:    "qwen-turbo",
-		Messages: []Message{{Role: "user", Content: "hi"}},
-		Tools: []Tool{{
+		Messages: []infrastructure.Message{{Role: "user", Content: "hi"}},
+		Tools: []infrastructure.Tool{{
 			Type: "function",
-			Function: ToolFunction{
+			Function: infrastructure.ToolFunction{
 				Name:        "get_weather",
 				Description: "Get weather",
 				Parameters:  map[string]any{"type": "object"},
@@ -109,9 +84,9 @@ func TestCompletionRequestHasToolsField(t *testing.T) {
 }
 
 func TestMessageHasToolCallFields(t *testing.T) {
-	msg := Message{
+	msg := infrastructure.Message{
 		Role: "assistant",
-		ToolCalls: []ToolCall{{
+		ToolCalls: []infrastructure.ToolCall{{
 			ID:   "call_abc",
 			Type: "function",
 			Function: struct {
@@ -126,8 +101,8 @@ func TestMessageHasToolCallFields(t *testing.T) {
 }
 
 func TestCompletionResponseHasToolCallsField(t *testing.T) {
-	resp := CompletionResponse{
-		ToolCalls: []ToolCall{{ID: "call_1", Type: "function"}},
+	resp := infrastructure.CompletionResponse{
+		ToolCalls: []infrastructure.ToolCall{{ID: "call_1", Type: "function"}},
 	}
 	b, err := json.Marshal(resp)
 	require.NoError(t, err)
@@ -144,14 +119,28 @@ func TestGatewayOTelMarksFailureAsError(t *testing.T) {
 		_ = provider.Shutdown(context.Background())
 	})
 
-	// Registry with no usable provider — will fail on resolve.
-	readSettings := func(_ context.Context, _ string) ([]byte, error) {
-		return json.Marshal(map[string]any{"llm_api_keys": map[string]string{}})
+	modelRepo := &mockModelRepo{
+		models: []domain.Model{
+			{ID: "m1", ProviderID: "p1", Name: "qwen-turbo", Enabled: true},
+		},
 	}
-	reg := NewModelRegistry(readSettings, [32]byte{}, zap.NewNop())
-	gateway := NewGateway(reg).WithLogger(zap.NewNop())
+	providerRepo := &mockProviderRepo{
+		providers: map[string]*domain.Provider{
+			"p1": {
+				ID: "p1", Name: "Test Qwen", Kind: domain.ProviderOpenAICompat,
+				BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "qwen-turbo",
+			},
+		},
+	}
+	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{
+		domain.ProviderOpenAICompat: errChatProto{},
+	}
+	embedProtos := map[domain.ProviderKind]infrastructure.EmbedProtocol{}
+	reg := infrastructure.NewModelRegistry(modelRepo, providerRepo, chatProtos, embedProtos, 5*time.Minute)
 
-	_, err := gateway.CompleteStream(tenantCtx(context.Background(), "test-tenant"), &CompletionRequest{Model: "qwen-turbo"}, func(string) {})
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+	gateway := infrastructure.NewGateway(reg, chatProtos, embedProtos).WithLogger(zap.NewNop())
+	_, err := gateway.CompleteStream(ctx, &infrastructure.CompletionRequest{Model: "qwen-turbo"}, func(string) {})
 	require.Error(t, err)
 
 	for _, span := range recorder.Ended() {
@@ -165,35 +154,38 @@ func TestGatewayOTelMarksFailureAsError(t *testing.T) {
 
 func TestGatewayLLMLogsExcludePromptToolAndResponsePayloads(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{
-			"model": "qwen-turbo",
-			"choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
-			"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-		}`)
-	}))
-	defer srv.Close()
 
-	// Build a custom registry that resolves to a Qwen client pointing at our test server.
-	readSettings := func(_ context.Context, _ string) ([]byte, error) {
-		return json.Marshal(map[string]any{
-			"llm_api_keys": map[string]string{"qwen": encryptTestKey("test-key")},
-			"base_urls":    map[string]string{"qwen": srv.URL},
-		})
+	modelRepo := &mockModelRepo{
+		models: []domain.Model{
+			{ID: "m1", ProviderID: "p1", Name: "qwen-turbo", Enabled: true},
+		},
 	}
-	reg := NewModelRegistry(readSettings, testAESKey, zap.NewNop())
-	gateway := NewGateway(reg).WithLogger(zap.New(core))
+	providerRepo := &mockProviderRepo{
+		providers: map[string]*domain.Provider{
+			"p1": {
+				ID: "p1", Name: "Test Qwen", Kind: domain.ProviderOpenAICompat,
+				BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "qwen-turbo",
+			},
+		},
+	}
+	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{
+		domain.ProviderOpenAICompat: successChatProto{},
+	}
+	embedProtos := map[domain.ProviderKind]infrastructure.EmbedProtocol{}
+	reg := infrastructure.NewModelRegistry(modelRepo, providerRepo, chatProtos, embedProtos, 5*time.Minute)
 
-	_, err := gateway.CompleteStream(tenantCtx(context.Background(), "test-tenant"), &CompletionRequest{
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+	gateway := infrastructure.NewGateway(reg, chatProtos, embedProtos).WithLogger(zap.New(core))
+
+	_, err := gateway.CompleteStream(ctx, &infrastructure.CompletionRequest{
 		Model:    "qwen-turbo",
-		Messages: []Message{{Role: "user", Content: "private prompt"}},
-		Tools:    []Tool{{Type: "function", Function: ToolFunction{Name: "private_tool"}}},
+		Messages: []infrastructure.Message{{Role: "user", Content: "private prompt"}},
+		Tools:    []infrastructure.Tool{{Type: "function", Function: infrastructure.ToolFunction{Name: "private_tool"}}},
 	}, func(string) {})
 	require.NoError(t, err)
 
 	for _, entry := range logs.All() {
-		if entry.Message != "llm.request" && entry.Message != "llm.complete" {
+		if entry.Message != "llm.request" && entry.Message != "llm.complete" && entry.Message != "llm.response" {
 			continue
 		}
 		for _, field := range entry.Context {
@@ -226,10 +218,10 @@ func TestQwenComplete_ToolCalls(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewQwenClientWithBase("test-key", srv.URL, zap.NewNop())
-	resp, err := client.Complete(context.Background(), &CompletionRequest{
+	client := infrastructure.NewQwenClientWithBase("test-key", srv.URL, zap.NewNop())
+	resp, err := client.Complete(context.Background(), &infrastructure.CompletionRequest{
 		Model:    "qwen-turbo",
-		Messages: []Message{{Role: "user", Content: "weather?"}},
+		Messages: []infrastructure.Message{{Role: "user", Content: "weather?"}},
 	})
 	require.NoError(t, err)
 	require.Len(t, resp.ToolCalls, 1)
@@ -237,6 +229,29 @@ func TestQwenComplete_ToolCalls(t *testing.T) {
 	require.Equal(t, "get_weather", resp.ToolCalls[0].Function.Name)
 	require.Equal(t, `{"city":"Beijing"}`, resp.ToolCalls[0].Function.Arguments)
 	require.Empty(t, resp.Content)
+}
+
+func TestOpenAICompatProtocolUsesResolvedProviderConfig(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/chat/completions", r.URL.Path)
+		require.Equal(t, "Bearer tenant-key", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"qwen-max","choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+
+	template := infrastructure.NewOpenAICompatClient(infrastructure.ProviderConfig{Name: "template"}, zap.NewNop())
+	protocol := infrastructure.NewOpenAICompatProtocol(template)
+	resp, err := protocol.Complete(context.Background(), infrastructure.ProviderConfig{
+		Name: "tenant-provider", BaseURL: srv.URL, APIKey: "tenant-key",
+	}, &infrastructure.CompletionRequest{
+		Model: "qwen-max", Messages: []infrastructure.Message{{Role: "user", Content: "hello"}},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "ok", resp.Content)
 }
 
 func TestZhipuComplete_ToolCalls(t *testing.T) {
@@ -261,10 +276,10 @@ func TestZhipuComplete_ToolCalls(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewZhipuClientWithBase("test-key", srv.URL, zap.NewNop())
-	resp, err := client.Complete(context.Background(), &CompletionRequest{
+	client := infrastructure.NewZhipuClientWithBase("test-key", srv.URL, zap.NewNop())
+	resp, err := client.Complete(context.Background(), &infrastructure.CompletionRequest{
 		Model:    "glm-4-flash",
-		Messages: []Message{{Role: "user", Content: "search?"}},
+		Messages: []infrastructure.Message{{Role: "user", Content: "search?"}},
 	})
 	require.NoError(t, err)
 	require.Len(t, resp.ToolCalls, 1)

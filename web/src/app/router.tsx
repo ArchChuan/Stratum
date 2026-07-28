@@ -8,6 +8,7 @@ import { evaluationRoutes } from '@/modules/evaluation';
 import { iamPublicRoutes, iamPrivateRoutes, useAuth } from '@/modules/iam';
 import { knowledgeRoutes } from '@/modules/knowledge';
 import { mcpRoutes } from '@/modules/mcp';
+import { llmRoutes } from '@/modules/llm';
 import { skillRoutes } from '@/modules/skill';
 import { workflowRoutes } from '@/modules/workflow';
 import systemE2ESurface from '@/services/e2e-surface.json';
@@ -34,6 +35,7 @@ export const AppRouter = () => {
         {knowledgeRoutes}
         {skillRoutes}
         {agentRoutes}
+        {llmRoutes}
         {workflowRoutes}
         {iamPrivateRoutes}
         {iamPublicRoutes}

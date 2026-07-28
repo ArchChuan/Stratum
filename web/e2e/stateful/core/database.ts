@@ -162,14 +162,54 @@ export const copyConfiguredLLMCredentials = async (
   const encrypted = Buffer.concat([cipher.update('stateful-local-provider-key'), cipher.final(), cipher.getAuthTag()]);
   const llmAPIKeys = { qwen: Buffer.concat([nonce, encrypted]).toString('base64') };
   const client = await pool.connect();
+  let began = false;
   try {
-    const result = await client.query(
+    await client.query('BEGIN');
+    began = true;
+    await client.query("SELECT set_config('search_path', $1, true)", [`tenant_${tenantID},public`]);
+    const tenantResult = await client.query(
       `UPDATE public.tenants
        SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{llm_api_keys}', $1::jsonb, true)
        WHERE id = $2 AND deleted_at IS NULL`,
       [llmAPIKeys, tenantID],
     );
-    if (result.rowCount !== 1) throw new Error('generated tenant LLM credential setup did not update exactly one tenant');
+    if (tenantResult.rowCount !== 1) {
+      throw new Error('generated tenant LLM credential setup did not update exactly one tenant');
+    }
+    const providerResult = await client.query(
+      `INSERT INTO providers (id, tenant_id, name, kind, base_url, api_key, default_model, enabled)
+       VALUES ($1, $2, 'stateful-qwen', 'openai_compat', $3, $4, 'qwen-max', true)
+       ON CONFLICT (tenant_id, name) DO UPDATE SET
+         kind = EXCLUDED.kind,
+         base_url = EXCLUDED.base_url,
+         api_key = EXCLUDED.api_key,
+         default_model = EXCLUDED.default_model,
+         enabled = true,
+         updated_at = now()`,
+      ['stateful-qwen', tenantID, 'http://127.0.0.1:19091/v1', 'stateful-local-provider-key'],
+    );
+    if (providerResult.rowCount !== 1) throw new Error('synthetic LLM provider setup did not affect exactly one row');
+    const modelResult = await client.query(
+      `INSERT INTO models (id, tenant_id, provider_id, name, display_name, capabilities, enabled)
+       SELECT 'stateful-' || model.name, $1, $2, model.name, model.name, model.capabilities, true
+       FROM (VALUES
+         ('qwen-turbo', ARRAY['chat', 'tool_use']::TEXT[]),
+         ('qwen-plus', ARRAY['chat', 'tool_use']::TEXT[]),
+         ('qwen-max', ARRAY['chat', 'tool_use']::TEXT[]),
+         ('text-embedding-v3', ARRAY['embedding']::TEXT[])
+       ) AS model(name, capabilities)
+       ON CONFLICT (tenant_id, provider_id, name) DO UPDATE SET
+         capabilities = EXCLUDED.capabilities,
+         enabled = true,
+         updated_at = now()`,
+      [tenantID, 'stateful-qwen'],
+    );
+    if (modelResult.rowCount !== 4) throw new Error('synthetic LLM model setup did not affect all expected rows');
+    await client.query('COMMIT');
+    began = false;
+  } catch (error) {
+    if (began) await client.query('ROLLBACK');
+    throw error;
   } finally {
     client.release();
   }

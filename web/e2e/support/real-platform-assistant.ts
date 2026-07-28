@@ -98,11 +98,27 @@ export const createPlatformAssistantSession = async (
 
   if (role === 'admin') {
     const headers = { Authorization: `Bearer ${refresh.access_token}` };
+    const llmBaseURL = process.env.QWEN_BASE_URL || '';
+    expect(llmBaseURL, 'QWEN_BASE_URL must target the local E2E stub').toMatch(
+      /^http:\/\/(?:127\.0\.0\.1|localhost):[0-9]+\/v1$/,
+    );
     const providerResponse = await context.request.patch(`${apiURL}/tenant/settings`, {
       headers,
       data: { settings: { llm_api_keys: { qwen: 'platform-assistant-browser-e2e-key' } } },
     });
     expect(providerResponse.status()).toBe(200);
+    queryTenant(tenantId, `
+      INSERT INTO providers (id, tenant_id, name, kind, base_url, api_key, default_model, enabled)
+      VALUES ('platform-assistant-e2e-qwen', '${tenantId}', 'platform-assistant-e2e-qwen',
+              'openai_compat', '${llmBaseURL}', 'platform-assistant-browser-e2e-key', 'qwen-plus', true)
+      ON CONFLICT (tenant_id, name) DO UPDATE SET
+        base_url=EXCLUDED.base_url, api_key=EXCLUDED.api_key, default_model=EXCLUDED.default_model, enabled=true;
+      INSERT INTO models (id, tenant_id, provider_id, name, display_name, capabilities, enabled)
+      VALUES ('platform-assistant-e2e-qwen-plus', '${tenantId}', 'platform-assistant-e2e-qwen',
+              'qwen-plus', 'qwen-plus', ARRAY['chat','tool_use']::TEXT[], true)
+      ON CONFLICT (tenant_id, provider_id, name) DO UPDATE SET
+        capabilities=EXCLUDED.capabilities, enabled=true;
+    `);
     const modelResponse = await context.request.put(`${apiURL}/agents/system/settings`, {
       headers,
       data: { llmModel: 'qwen-plus' },

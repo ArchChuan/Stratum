@@ -141,6 +141,16 @@ func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string)
 	return a, nil
 }
 
+func (r *Registry) UpdateSystemAssistant(ctx context.Context, cfg *domain.AgentConfig) error {
+	if _, err := r.repo.UpdateSystemAssistantModel(ctx, cfg.LLMModel); err != nil {
+		return fmt.Errorf("registry update system assistant: %w", err)
+	}
+	if r.logger != nil {
+		r.logger.Info("system assistant updated", zap.String("id", cfg.ID))
+	}
+	return nil
+}
+
 func (r *Registry) UpdateSystemAssistantBindings(
 	ctx context.Context, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills []string,
 ) (Agent, error) {

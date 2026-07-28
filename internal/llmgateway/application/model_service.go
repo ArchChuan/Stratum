@@ -14,20 +14,23 @@ type ModelService struct {
 	catalog port.ModelCatalog
 }
 
-// NewModelService wires a ModelService with the provided catalog.
+// NewModelService wires a ModelService with the provided registry. The
+// registry must satisfy port.ModelCatalog so that the legacy Catalogue
+// method continues to compile (even if it returns empty results).
 func NewModelService(catalog port.ModelCatalog) *ModelService {
 	return &ModelService{catalog: catalog}
 }
 
-// Catalogue returns chat and embedding model names. Returned slices are
-// never nil (callers can iterate without nil checks).
-func (s *ModelService) Catalogue(_ context.Context) (chat, embedding []string) {
-	chat = s.catalog.ListChatModels()
-	if chat == nil {
+// CatalogueWithTenant returns chat and embedding model names scoped to a
+// tenant. It delegates to the underlying ModelRegistry which queries
+// the tenant's enabled models. Returned slices are never nil.
+func (s *ModelService) CatalogueWithTenant(ctx context.Context, tenantID string) (chat, embedding []string) {
+	chat, err := s.catalog.ListChatModelsByTenant(ctx, tenantID)
+	if err != nil || chat == nil {
 		chat = []string{}
 	}
-	embedding = s.catalog.ListEmbeddingModels()
-	if embedding == nil {
+	embedding, err = s.catalog.ListEmbeddingModelsByTenant(ctx, tenantID)
+	if err != nil || embedding == nil {
 		embedding = []string{}
 	}
 	return chat, embedding

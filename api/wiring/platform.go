@@ -47,7 +47,7 @@ func (c *Container) buildPlatform(_ context.Context) error {
 		Metrics: c.LLMGateway.Metrics,
 	}
 	if c.LLMGateway != nil {
-		p.ModelRegistry = c.LLMGateway.ModelRegistry
+		p.ModelRegistry = c.LLMGateway.Registry
 	}
 
 	production := os.Getenv("APP_ENV") == "production"

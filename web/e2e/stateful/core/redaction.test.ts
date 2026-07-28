@@ -199,17 +199,34 @@ describe('stateful E2E security boundaries', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it('copies only encrypted LLM settings into the exact generated tenant', async () => {
+  it('configures encrypted legacy credentials and the tenant model registry', async () => {
     const tenantID = '123e4567-e89b-42d3-a456-426614174000';
-    const query = vi.fn().mockResolvedValueOnce({ rowCount: 1 });
+    const query = vi.fn()
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ rowCount: 1 })
+      .mockResolvedValueOnce({ rowCount: 1 })
+      .mockResolvedValueOnce({ rowCount: 4 })
+      .mockResolvedValueOnce({});
     const release = vi.fn();
     const pool = { connect: vi.fn().mockResolvedValue({ query, release }) };
 
     await copyConfiguredLLMCredentials(pool, tenantID, 'test-private-key');
 
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('UPDATE public.tenants'), [
+    expect(query).toHaveBeenNthCalledWith(1, 'BEGIN');
+    expect(query).toHaveBeenNthCalledWith(2, "SELECT set_config('search_path', $1, true)", [
+      `tenant_${tenantID},public`,
+    ]);
+    expect(query).toHaveBeenNthCalledWith(3, expect.stringContaining('UPDATE public.tenants'), [
       expect.objectContaining({ qwen: expect.any(String) }), tenantID,
     ]);
+    expect(query).toHaveBeenNthCalledWith(4, expect.stringContaining('INSERT INTO providers'), [
+      'stateful-qwen', tenantID, 'http://127.0.0.1:19091/v1', 'stateful-local-provider-key',
+    ]);
+    expect(query).toHaveBeenNthCalledWith(5, expect.stringContaining('INSERT INTO models'), [
+      tenantID, 'stateful-qwen',
+    ]);
+    expect(query).toHaveBeenNthCalledWith(6, 'COMMIT');
     expect(release).toHaveBeenCalledOnce();
   });
 

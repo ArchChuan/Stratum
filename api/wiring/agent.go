@@ -14,6 +14,7 @@ import (
 	agentopik "github.com/byteBuilderX/stratum/internal/agent/infrastructure/opik"
 	persistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -192,8 +193,14 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		a.ApprovalStore = persistence.NewPgToolApprovalStore(db)
 		a.ApprovalService = agent.NewToolApprovalService(a.ApprovalStore, a.CheckpointStore, c.Platform.AESKey)
 		a.SkillLookup = persistence.NewPgSkillLookup(db)
+		var registry *llmgateway.ModelRegistry
+		var gw *llmgateway.Gateway
+		if c.LLMGateway != nil {
+			registry = c.LLMGateway.Registry
+			gw = c.LLMGateway.Gateway
+		}
 		a.TenantResolver = newTenantCapabilityResolver(
-			c.Platform.ModelRegistry, c.LLMGateway.Gateway, c.Logger,
+			db, c.Platform.AESKey, registry, gw, c.Logger,
 		)
 	}
 

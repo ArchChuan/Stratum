@@ -32,6 +32,23 @@ func (r *settingsAgentRepo) GetSystemAssistant(context.Context) (*domain.AgentCo
 func (r *settingsAgentRepo) GetAll(context.Context) ([]*domain.AgentConfig, error) { return nil, nil }
 func (r *settingsAgentRepo) Remove(context.Context, string) error                  { return nil }
 func (r *settingsAgentRepo) Update(context.Context, *domain.AgentConfig) error     { return nil }
+func (r *settingsAgentRepo) UpdateSystemAssistant(_ context.Context, cfg *domain.AgentConfig) error {
+	if r.updateErr != nil {
+		return r.updateErr
+	}
+	r.cfg.Name = cfg.Name
+	r.cfg.Description = cfg.Description
+	r.cfg.SystemPrompt = cfg.SystemPrompt
+	r.cfg.LLMModel = cfg.LLMModel
+	r.cfg.MaxIterations = cfg.MaxIterations
+	r.cfg.MaxContextTokens = cfg.MaxContextTokens
+	r.cfg.MemoryScope = cfg.MemoryScope
+	r.cfg.MCPToolIDs = cfg.MCPToolIDs
+	r.cfg.KnowledgeWorkspaceIDs = cfg.KnowledgeWorkspaceIDs
+	r.cfg.AllowedSkills = cfg.AllowedSkills
+	return nil
+}
+
 func (r *settingsAgentRepo) UpdateSystemAssistantModel(_ context.Context, model string) (*domain.AgentConfig, error) {
 	if r.updateErr != nil {
 		return nil, r.updateErr
@@ -102,21 +119,21 @@ func TestSystemAssistantHandlerMemberGetsSettingsWithoutSecrets(t *testing.T) {
 	}
 }
 
-func TestManagedAgentDTOExposesPublicManagementFieldsWithoutSystemKey(t *testing.T) {
+func TestManagedAgentDTOExposesPublicManagementFieldsWithSystemPrompt(t *testing.T) {
 	response := dtoToResponse(agentapp.AgentDTO{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
-		SystemPrompt: "platform prompt must not cross the transport boundary",
+		SystemPrompt: "platform prompt is now visible for editing",
 		IsSystem:     true, ManagementMode: "platform",
 	})
 	if !response.IsSystem || response.ManagementMode != "platform" {
 		t.Fatalf("managed fields = isSystem:%v managementMode:%q", response.IsSystem, response.ManagementMode)
 	}
-	if response.SystemPrompt != "" {
-		t.Fatalf("managed system prompt leaked through DTO: %q", response.SystemPrompt)
+	if response.SystemPrompt != "platform prompt is now visible for editing" {
+		t.Fatalf("managed system prompt = %q", response.SystemPrompt)
 	}
 }
 
-func TestManagedAgentDTORedactsByManagedIDOrSystemKey(t *testing.T) {
+func TestManagedAgentDTOExposesSystemPromptRegardlessOfSystemKey(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		id        string
@@ -129,8 +146,8 @@ func TestManagedAgentDTORedactsByManagedIDOrSystemKey(t *testing.T) {
 			response := dtoToResponse(agentapp.AgentDTO{
 				ID: tc.id, SystemKey: tc.systemKey, SystemPrompt: "platform prompt",
 			})
-			if response.SystemPrompt != "" {
-				t.Fatalf("managed prompt leaked for %s: %q", tc.name, response.SystemPrompt)
+			if response.SystemPrompt != "platform prompt" {
+				t.Fatalf("system prompt not exposed for %s: %q", tc.name, response.SystemPrompt)
 			}
 		})
 	}
