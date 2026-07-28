@@ -16,6 +16,7 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 3
     steps:
       - name: Check out repository

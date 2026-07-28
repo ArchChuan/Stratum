@@ -29,6 +29,15 @@ require 'issues:[[:space:]]*write' 'issue write permission'
 require 'group:[[:space:]]*remote-health-monitor' 'fixed concurrency group'
 require 'cancel-in-progress:[[:space:]]*false' 'non-cancelling execution'
 require 'timeout-minutes:[[:space:]]*3' 'three-minute job timeout'
+if ! awk '
+    /^  monitor:/ { in_monitor = 1; next }
+    in_monitor && /^  [[:alnum:]_-]+:/ { exit }
+    in_monitor && /^    environment:[[:space:]]*production[[:space:]]*$/ { found = 1 }
+    END { exit(found ? 0 : 1) }
+' "${WORKFLOW}"; then
+    echo 'remote health workflow contract missing: production environment binding for monitor job configuration' >&2
+    exit 1
+fi
 require "go-version:[[:space:]]*['\"]1\\.25\\.12['\"]" 'repository Go version'
 require 'REMOTE_HEALTH_URL:[[:space:]]*\$\{\{ vars\.PUBLIC_BASE_URL \}\}/api/health' \
     'public base URL health endpoint wiring'
