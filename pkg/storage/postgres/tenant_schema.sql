@@ -1258,3 +1258,46 @@ BEGIN
         CREATE INDEX idx_kc_tsv ON knowledge_chunks USING GIN(tsv);
     END IF;
 END $$;
+
+-- =============================================================================
+-- Provider & Model Registry (tenant-scoped LLM provider and model catalogue)
+-- =============================================================================
+
+-- Provider registry (tenant-scoped LLM providers)
+CREATE TABLE IF NOT EXISTS providers (
+    id              TEXT PRIMARY KEY DEFAULT gen_ulid(),
+    tenant_id       TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    base_url        TEXT NOT NULL DEFAULT '',
+    api_key         TEXT NOT NULL DEFAULT '',
+    default_model   TEXT NOT NULL DEFAULT '',
+    enabled         BOOLEAN NOT NULL DEFAULT true,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(tenant_id, name)
+);
+
+-- Model catalogue (tenant-scoped model registry)
+CREATE TABLE IF NOT EXISTS models (
+    id                TEXT PRIMARY KEY DEFAULT gen_ulid(),
+    tenant_id         TEXT NOT NULL,
+    provider_id       TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    name              TEXT NOT NULL,
+    display_name      TEXT NOT NULL DEFAULT '',
+    capabilities      TEXT[] NOT NULL DEFAULT '{}',
+    context_window    INT NOT NULL DEFAULT 0,
+    max_tokens        INT NOT NULL DEFAULT 0,
+    input_price       DOUBLE PRECISION NOT NULL DEFAULT 0,
+    output_price      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    recommended       BOOLEAN NOT NULL DEFAULT false,
+    enabled           BOOLEAN NOT NULL DEFAULT true,
+    provider_managed  BOOLEAN NOT NULL DEFAULT false,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(tenant_id, provider_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_models_tenant ON models(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id);
+CREATE INDEX IF NOT EXISTS idx_models_enabled ON models(tenant_id, enabled);
