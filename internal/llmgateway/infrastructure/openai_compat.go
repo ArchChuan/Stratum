@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -548,18 +549,15 @@ func (c *OpenAICompatClient) EmbedBatchSize() int {
 }
 
 // ---------------------------------------------------------------------------
-// OpenAICompatProtocol — protocol adapter that satisfies ChatProtocol and
-// EmbedProtocol by delegating to an embedded OpenAICompatClient.
-//
-// The ProviderConfig parameter received at call time is intentionally ignored
-// (interim limitation — full cfg plumbing is deferred). All protocol methods
-// delegate to the client's instance methods, which use their own cfg set at
-// construction time.
+// OpenAICompatProtocol adapts tenant-resolved provider configuration to the
+// shared OpenAI-compatible HTTP clients. Circuit-breaker state is isolated per
+// resolved provider configuration while transports remain shared.
 // ---------------------------------------------------------------------------
 
 // OpenAICompatProtocol satisfies ChatProtocol and EmbedProtocol.
 type OpenAICompatProtocol struct {
-	client *OpenAICompatClient
+	client   *OpenAICompatClient
+	breakers sync.Map
 }
 
 // NewOpenAICompatProtocol returns a protocol adapter backed by client.
@@ -567,21 +565,33 @@ func NewOpenAICompatProtocol(client *OpenAICompatClient) *OpenAICompatProtocol {
 	return &OpenAICompatProtocol{client: client}
 }
 
-func (p *OpenAICompatProtocol) Complete(ctx context.Context, _ ProviderConfig, req *CompletionRequest) (*CompletionResponse, error) {
-	return p.client.Complete(ctx, req)
+func (p *OpenAICompatProtocol) clientFor(cfg ProviderConfig) *OpenAICompatClient {
+	key := fmt.Sprintf("%x", sha256.Sum256([]byte(cfg.Name+"\x00"+cfg.BaseURL+"\x00"+cfg.APIKey)))
+	breaker, _ := p.breakers.LoadOrStore(key, &providerBreaker{state: cbClosed})
+	return &OpenAICompatClient{
+		cfg:        cfg,
+		http:       p.client.http,
+		streamHTTP: p.client.streamHTTP,
+		logger:     p.client.logger,
+		breaker:    breaker.(*providerBreaker),
+	}
+}
+
+func (p *OpenAICompatProtocol) Complete(ctx context.Context, cfg ProviderConfig, req *CompletionRequest) (*CompletionResponse, error) {
+	return p.clientFor(cfg).Complete(ctx, req)
 }
 
 func (p *OpenAICompatProtocol) CompleteStream(
 	ctx context.Context,
-	_ ProviderConfig,
+	cfg ProviderConfig,
 	req *CompletionRequest,
 	onToken func(string),
 ) (*CompletionResponse, error) {
-	return p.client.CompleteStream(ctx, req, onToken)
+	return p.clientFor(cfg).CompleteStream(ctx, req, onToken)
 }
 
-func (p *OpenAICompatProtocol) Health(ctx context.Context, _ ProviderConfig) error {
-	return p.client.Health(ctx)
+func (p *OpenAICompatProtocol) Health(ctx context.Context, cfg ProviderConfig) error {
+	return p.clientFor(cfg).Health(ctx)
 }
 
 func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]string, error) {
@@ -590,10 +600,10 @@ func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfi
 
 func (p *OpenAICompatProtocol) CreateEmbeddings(
 	ctx context.Context,
-	_ ProviderConfig,
+	cfg ProviderConfig,
 	req *EmbeddingRequest,
 ) (*EmbeddingResponse, error) {
-	return p.client.CreateEmbeddings(ctx, req)
+	return p.clientFor(cfg).CreateEmbeddings(ctx, req)
 }
 
 func (p *OpenAICompatProtocol) BatchSize() int {

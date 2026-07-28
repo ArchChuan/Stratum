@@ -40,7 +40,7 @@ const KIND_COLORS: Record<ProviderKind, string> = {
 };
 
 export function ProviderListPage() {
-  const { providers, loading, createLoading, deleteLoading, refresh, createProvider, deleteProvider } = useProviders();
+  const { providers, loading, createLoading, refresh, createProvider, deleteProvider } = useProviders();
   const { isAdmin } = useTenantRole();
   const [createOpen, setCreateOpen] = useState(false);
   const [discoveringIds, setDiscoveringIds] = useState<Set<string>>(new Set());

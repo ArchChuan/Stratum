@@ -90,7 +90,6 @@ func (r *PgModelRepo) List(ctx context.Context, tenantID string, filter port.Mod
 		if filter.Capability != "" {
 			query += fmt.Sprintf(" AND $%d = ANY(capabilities)", argIdx)
 			args = append(args, string(filter.Capability))
-			argIdx++
 		}
 		query += " ORDER BY name"
 		rows, err := tx.Query(ctx, query, args...)
@@ -248,9 +247,6 @@ func modelCapsToStrings(caps []domain.ModelCapability) []string {
 	out := make([]string, len(caps))
 	for i, c := range caps {
 		out[i] = string(c)
-	}
-	if out == nil {
-		out = []string{}
 	}
 	return out
 }

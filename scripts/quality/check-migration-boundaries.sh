@@ -126,6 +126,16 @@ while IFS= read -r -d '' migration; do
     comment_free_sql="$(strip_sql_comments <"${migration}" | tr '\n' ' ')"
     executable_sql="$(strip_sql_comments_and_strings <"${migration}" | tr '\n' ' ')"
     for table in "${tenant_tables[@]}"; do
+        if [[ "${table}" == models ]]; then
+            case "${migration_name}" in
+                001_public_schema.down.sql | 018_drop_redundant_tables.up.sql)
+                    # These historical migrations remove the former public.models
+                    # table. The current tenant-only models table reused the name
+                    # after that public table had been retired.
+                    continue
+                    ;;
+            esac
+        fi
         table_context="(TABLE[[:space:]]+(IF[[:space:]]+(NOT[[:space:]]+)?EXISTS[[:space:]]+)?|INTO[[:space:]]+|UPDATE[[:space:]]+|FROM[[:space:]]+|JOIN[[:space:]]+|REFERENCES[[:space:]]+|ON[[:space:]]+COLUMN[[:space:]]+|ON[[:space:]]+|TRUNCATE[[:space:]]+(TABLE[[:space:]]+)?)"
         qualified_table="(\"?[a-z_][a-z0-9_]*\"?\.)?\"?${table}\"?([^a-zA-Z0-9_]|$)"
         direct_reference="${table_context}(ONLY[[:space:]]+)?${qualified_table}"

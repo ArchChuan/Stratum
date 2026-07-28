@@ -8,7 +8,6 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
-	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 )
 
 // genULID generates a unique identifier using UUID v7 (time-ordered).
@@ -36,14 +35,10 @@ type UpdateProviderInput struct {
 
 // ProviderService orchestrates LLM provider CRUD operations and
 // provider-managed tasks such as model discovery and health checks.
-//
-// DDD note: this service imports infrastructure.ChatProtocol and
-// infrastructure.ProviderConfig directly (plan-mandated layering
-// exception — see SDD task 8 brief).
 type ProviderService struct {
-	repo       port.ProviderRepository
-	modelRepo  port.ModelRepository
-	chatProtos map[domain.ProviderKind]infrastructure.ChatProtocol
+	repo      port.ProviderRepository
+	modelRepo port.ModelRepository
+	runtime   port.ProviderRuntime
 }
 
 // NewProviderService returns a ProviderService wired with the given
@@ -51,12 +46,12 @@ type ProviderService struct {
 func NewProviderService(
 	repo port.ProviderRepository,
 	modelRepo port.ModelRepository,
-	chatProtos map[domain.ProviderKind]infrastructure.ChatProtocol,
+	runtime port.ProviderRuntime,
 ) *ProviderService {
 	return &ProviderService{
-		repo:       repo,
-		modelRepo:  modelRepo,
-		chatProtos: chatProtos,
+		repo:      repo,
+		modelRepo: modelRepo,
+		runtime:   runtime,
 	}
 }
 
@@ -75,9 +70,7 @@ func (s *ProviderService) Create(ctx context.Context, tenantID string, input Cre
 		return nil, fmt.Errorf("provider service: create: %w", err)
 	}
 	// Best-effort model discovery — log but never fail the create operation.
-	if _, err := s.DiscoverModels(ctx, tenantID, p.ID); err != nil {
-		// discovery failure is non-fatal
-	}
+	_, _ = s.DiscoverModels(ctx, tenantID, p.ID)
 	return p, nil
 }
 
@@ -121,16 +114,10 @@ func (s *ProviderService) DiscoverModels(ctx context.Context, tenantID, provider
 	if err != nil {
 		return nil, fmt.Errorf("discover models: %w", err)
 	}
-	proto, ok := s.chatProtos[provider.Kind]
-	if !ok {
-		return nil, fmt.Errorf("discover models: no protocol for kind %q", provider.Kind)
+	if s.runtime == nil {
+		return nil, fmt.Errorf("discover models: no runtime for kind %q", provider.Kind)
 	}
-	cfg := infrastructure.ProviderConfig{
-		Name:    provider.Name,
-		BaseURL: provider.BaseURL,
-		APIKey:  provider.APIKey,
-	}
-	names, err := proto.ListModels(ctx, cfg)
+	names, err := s.runtime.ListModels(ctx, *provider)
 	if err != nil {
 		return nil, fmt.Errorf("discover models: list from provider: %w", err)
 	}
@@ -156,15 +143,8 @@ func (s *ProviderService) HealthCheck(ctx context.Context, tenantID, providerID 
 	if err != nil {
 		return err
 	}
-	proto, ok := s.chatProtos[provider.Kind]
-	if !ok {
+	if s.runtime == nil {
 		return fmt.Errorf("no protocol for kind %q", provider.Kind)
 	}
-	cfg := infrastructure.ProviderConfig{
-		Name:        provider.Name,
-		BaseURL:     provider.BaseURL,
-		APIKey:      provider.APIKey,
-		HealthModel: provider.DefaultModel,
-	}
-	return proto.Health(ctx, cfg)
+	return s.runtime.Health(ctx, *provider)
 }

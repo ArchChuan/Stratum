@@ -420,9 +420,23 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 	readback := request(http.MethodGet, "/agents/system/settings", "member", "")
 	require.Equal(t, http.StatusOK, readback.Code)
 	require.Contains(t, readback.Body.String(), `"llmModel":"deterministic-e2e-model"`)
-	require.Equal(t, http.StatusConflict,
-		request(http.MethodPut, "/agents/"+domain.SystemAssistantID, "admin",
-			`{"name":"tampered","llmModel":"deterministic-e2e-model"}`).Code)
+	bindings := request(http.MethodPut, "/agents/"+domain.SystemAssistantID, "admin",
+		`{"name":"tampered","llmModel":"deterministic-e2e-model",`+
+			`"allowedSkills":[],"mcpToolIds":[],"knowledgeWorkspaceIds":[]}`)
+	require.Equal(t, http.StatusOK, bindings.Code)
+	require.Contains(t, bindings.Body.String(), `"id":"stratum-platform-assistant"`)
+	require.Contains(t, bindings.Body.String(), `"isSystem":true`)
+	require.Contains(t, bindings.Body.String(), `"managementMode":"platform"`)
+	require.NotContains(t, bindings.Body.String(), `"name":"tampered"`)
+	persisted, found, err := repo.GetSystemAssistant(
+		assistantTenantContext(tenantID, userID, tenantdb.RoleTenantAdmin))
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, domain.SystemAssistantID, persisted.ID)
+	require.Equal(t, domain.SystemAssistantKey, persisted.SystemKey)
+	require.Empty(t, persisted.AllowedSkills)
+	require.Empty(t, persisted.MCPToolIDs)
+	require.Empty(t, persisted.KnowledgeWorkspaceIDs)
 	require.Equal(t, http.StatusConflict,
 		request(http.MethodDelete, "/agents/"+domain.SystemAssistantID, "admin", "").Code)
 }
