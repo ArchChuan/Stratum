@@ -41,7 +41,7 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('描述').fill('全系统 stateful Agent 验收');
     await page.getByLabel('系统提示词').fill('请简洁回答，并明确包含 stateful。');
-    await expect(page.getByRole('slider', { name: '最大迭代次数' })).toHaveAttribute('aria-valuemax', '20');
+    await expect(page.getByRole('slider', { name: '最大迭代次数' })).toHaveAttribute('aria-valuemax', '90');
     const createResponse = waitForMutation(page, '/agents', 'POST');
     const createdListResponse = waitForMutation(page, '/agents', 'GET');
     await page.getByRole('button', { name: '创建 Agent' }).click();
