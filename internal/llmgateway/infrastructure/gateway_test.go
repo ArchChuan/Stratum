@@ -32,8 +32,12 @@ func (errChatProto) Complete(ctx context.Context, cfg infrastructure.ProviderCon
 func (errChatProto) CompleteStream(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.CompletionRequest, onToken func(string)) (*infrastructure.CompletionResponse, error) {
 	return nil, errors.New("provider error")
 }
-func (errChatProto) Health(ctx context.Context, cfg infrastructure.ProviderConfig) error { return errors.New("provider error") }
-func (errChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]string, error) { return nil, nil }
+func (errChatProto) Health(ctx context.Context, cfg infrastructure.ProviderConfig) error {
+	return errors.New("provider error")
+}
+func (errChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]string, error) {
+	return nil, nil
+}
 
 // successChatProto returns successful responses.
 type successChatProto struct{}
@@ -45,8 +49,12 @@ func (successChatProto) CompleteStream(ctx context.Context, cfg infrastructure.P
 	onToken("test")
 	return &infrastructure.CompletionResponse{Content: "test", Usage: infrastructure.TokenUsage{PromptTokens: 1, CompletionTokens: 1}}, nil
 }
-func (successChatProto) Health(ctx context.Context, cfg infrastructure.ProviderConfig) error { return nil }
-func (successChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]string, error) { return nil, nil }
+func (successChatProto) Health(ctx context.Context, cfg infrastructure.ProviderConfig) error {
+	return nil
+}
+func (successChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]string, error) {
+	return nil, nil
+}
 
 func TestNewGateway(t *testing.T) {
 	gateway := infrastructure.NewGateway(nil, nil, nil)

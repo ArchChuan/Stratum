@@ -142,8 +142,8 @@ type ProviderConfig struct {
 	EmbedBatchSize int // max texts per embedding request; 0 = use default (100)
 }
 
-// OpenAICompatClient implements LLMClient, StreamingLLMClient, and
-// EmbeddingClient for any provider that speaks the OpenAI-compatible protocol.
+// OpenAICompatClient is an OpenAI-compatible provider that implements
+// ChatProtocol and EmbedProtocol.
 type OpenAICompatClient struct {
 	cfg        ProviderConfig
 	http       *http.Client // non-streaming: flat Timeout guards stuck complete calls
