@@ -55,7 +55,7 @@ func TestComposeSystemAssistantProfileReplacesProtectedFieldsAndPreservesTenantR
 	want := &domain.AgentConfig{
 		ID: "assistant-1", SystemKey: domain.SystemAssistantKey,
 		Name: "tenant name", Description: "tenant description", SystemPrompt: "tenant prompt",
-		LLMModel: "qwen-plus", EmbedModel: "tenant-embed", MemoryScope: "user",
+		LLMModel: "qwen-plus", MemoryScope: "user",
 		MaxIterations: 99, MaxContextTokens: 99999,
 		AllowedSkills: []string{"skill-1"}, MCPToolIDs: []string{"mcp-1"},
 		KnowledgeWorkspaceIDs:   []string{"knowledge-1"},
@@ -67,15 +67,15 @@ func TestComposeSystemAssistantProfileReplacesProtectedFieldsAndPreservesTenantR
 	if err != nil {
 		t.Fatalf("ComposeSystemAssistantProfile() error = %v", err)
 	}
-	if got.ID != want.ID || got.LLMModel != want.LLMModel || got.EmbedModel != want.EmbedModel ||
+	if got.ID != want.ID || got.LLMModel != want.LLMModel ||
 		got.MemoryScope != want.MemoryScope {
 		t.Fatalf("tenant runtime selection not preserved: %#v", got)
 	}
-	if got.Name != want.Name || got.Description != want.Description || got.SystemPrompt != want.SystemPrompt {
-		t.Fatalf("DB text fields not preserved: got %#v, want DB values", got)
+	if got.Name != profile.Name || got.Description != profile.Description || got.SystemPrompt != profile.SystemPrompt {
+		t.Fatalf("protected text fields not replaced: %#v", got)
 	}
-	if got.MaxIterations != want.MaxIterations || got.MaxContextTokens != want.MaxContextTokens {
-		t.Fatalf("DB budgets not preserved: got %#v, want DB values", got)
+	if got.MaxIterations != profile.MaxIterations || got.MaxContextTokens != profile.MaxContextTokens {
+		t.Fatalf("protected budgets not replaced: %#v", got)
 	}
 	if got.SystemKey != profile.Key || !got.IsSystem || got.ManagementMode != "platform" {
 		t.Fatalf("managed identity not composed: %#v", got)
@@ -160,9 +160,12 @@ func (r systemAssistantProfileRepo) GetAll(context.Context) ([]*domain.AgentConf
 	return r.cfgs, r.err
 }
 func (r systemAssistantProfileRepo) Update(context.Context, *domain.AgentConfig) error { return nil }
-func (r systemAssistantProfileRepo) Remove(context.Context, string) error              { return nil }
-func (r systemAssistantProfileRepo) UpdateSystemAssistant(context.Context, *domain.AgentConfig) error {
-	return nil
+func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(context.Context, string) (*domain.AgentConfig, error) {
+	return nil, nil
+}
+func (r systemAssistantProfileRepo) Remove(context.Context, string) error { return nil }
+func (r systemAssistantProfileRepo) UpdateSystemAssistantBindings(context.Context, []string, []string, []string) (*domain.AgentConfig, error) {
+	return nil, nil
 }
 
 var _ port.AgentRepo = systemAssistantProfileRepo{}

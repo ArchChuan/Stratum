@@ -49,6 +49,24 @@ func (r *settingsAgentRepo) UpdateSystemAssistant(_ context.Context, cfg *domain
 	return nil
 }
 
+func (r *settingsAgentRepo) UpdateSystemAssistantModel(_ context.Context, model string) (*domain.AgentConfig, error) {
+	if r.updateErr != nil {
+		return nil, r.updateErr
+	}
+	r.cfg.LLMModel = model
+	return r.cfg, nil
+}
+
+func (r *settingsAgentRepo) UpdateSystemAssistantBindings(_ context.Context, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills []string) (*domain.AgentConfig, error) {
+	if r.updateErr != nil {
+		return nil, r.updateErr
+	}
+	r.cfg.MCPToolIDs = mcpToolIDs
+	r.cfg.KnowledgeWorkspaceIDs = knowledgeWorkspaceIDs
+	r.cfg.AllowedSkills = allowedSkills
+	return r.cfg, nil
+}
+
 type settingsModelValidator struct{ err error }
 
 func (v settingsModelValidator) ValidateTenantChatModel(context.Context, string, string) error {

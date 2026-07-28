@@ -53,5 +53,6 @@ func main() {
 		logger.Fatal("tenant bootstrap failed", zap.Error(err))
 	}
 	container.RecoverStuckKnowledgeIngests(ctx)
+	container.SeedBuiltinKnowledgeDocs(ctx)
 	Run(ctx, cfg, container, logger)
 }

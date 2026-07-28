@@ -8,11 +8,9 @@ import (
 	"os"
 	"sync"
 	"testing"
-	"time"
 
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memworkers "github.com/byteBuilderX/stratum/internal/memory/infrastructure/workers"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	pgstorage "github.com/byteBuilderX/stratum/pkg/storage/postgres"
@@ -23,7 +21,10 @@ import (
 )
 
 func TestMemoryWorkerReloadsTenantCredentialThroughSettingsPath(t *testing.T) {
+	// TODO: adapt for ModelRegistry-based resolver — TenantGatewayCache was removed;
+	// cache-invalidation now goes through ModelRegistry.Invalidate(tenantID).
 	t.Skip("TODO: adapt for ModelRegistry-based resolver")
+
 	dsn := os.Getenv("TEST_POSTGRES_URL")
 	required := os.Getenv("REQUIRE_MEMORY_E2E") == "1"
 	if dsn == "" {
@@ -78,8 +79,10 @@ func TestMemoryWorkerReloadsTenantCredentialThroughSettingsPath(t *testing.T) {
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM public.tenants WHERE id=$1`, tenantID) })
 
 	aesKey := pkgcrypto.DeriveAESKey("fake-memory-worker-test-key-material")
-	cache := llmgateway.NewTenantGatewayCache()
-	service := iamapp.NewTenantService(iampersistence.NewTenantRepo(pool), zap.NewNop(), aesKey, cache)
+	// ModelRegistry expects model and provider repos + protocol maps, which
+	// require a full wiring setup. The test is skipped until the reload path
+	// is redesigned around the new ModelRegistry API.
+	service := iamapp.NewTenantService(iampersistence.NewTenantRepo(pool), zap.NewNop(), aesKey, nil)
 	resolver := newTenantCapabilityResolver(pool, aesKey, nil, nil, zap.NewNop()).(*tenantCapabilityResolver)
 	processor := memworkers.NewResolvingLLMHistorySummarizer(tenantID, func(ctx context.Context, tenantID string) (memworkers.TenantLLMClient, error) {
 		client, err := resolver.ResolveWorkerLLM(ctx, tenantID)
@@ -100,11 +103,9 @@ func TestMemoryWorkerReloadsTenantCredentialThroughSettingsPath(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "summary-A", first)
 
-	_, _, _, staleGeneration := cache.GetWithGeneration(tenantID)
 	require.NoError(t, service.UpdateSettings(ctx, tenantID, "owner", iamapp.UpdateSettingsInput{Settings: map[string]any{
 		"llm_api_keys": map[string]any{"qwen": fakeKeyB},
 	}}))
-	require.False(t, cache.SetIfGeneration(tenantID, new(llmgateway.Gateway), map[string]string{"qwen": fakeKeyA}, time.Minute, staleGeneration))
 
 	second, err := processor.SummarizeHistory(ctx, []string{"second"})
 	require.NoError(t, err)

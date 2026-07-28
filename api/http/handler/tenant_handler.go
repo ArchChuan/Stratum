@@ -250,33 +250,6 @@ func (h *TenantHandler) ListUserTenants(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.TenantListResponse{Tenants: items})
 }
 
-// SetEmbedModel PATCH /tenant/embed-model — set-once: fails if embed_model already configured.
-func (h *TenantHandler) SetEmbedModel(c *gin.Context) {
-	tenantID, ok := tenantIDFromCtx(c)
-	if !ok {
-		respondMissingTenant(c)
-		return
-	}
-	roleVal, _ := c.Get("auth.role")
-	roleStr, _ := roleVal.(string)
-	if roleStr != "admin" && roleStr != "owner" {
-		_ = c.Error(middleware.NewHTTPError(http.StatusForbidden, application.ErrForbiddenAdminOrOwner))
-		return
-	}
-	var req struct {
-		EmbedModel string `json:"embed_model" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
-		return
-	}
-	if err := h.svc.SetEmbedModel(c.Request.Context(), tenantID, roleStr, req.EmbedModel); err != nil {
-		_ = c.Error(err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"embed_model": req.EmbedModel})
-}
-
 // DeleteSelf DELETE /tenant — tenant owner deletes their own tenant and all associated storage.
 func (h *TenantHandler) DeleteSelf(c *gin.Context) {
 	tenantID, ok := tenantIDFromCtx(c)

@@ -33,7 +33,6 @@ type CapabilityRequest struct {
 	Type        CapabilityType
 	LLM         *LLMCapRequest
 	Timeout     time.Duration
-	LLMAPIKeys  map[string]string
 	TokenStream func(string)
 }
 

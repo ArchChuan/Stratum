@@ -458,7 +458,7 @@ type gatewayPromptRewriter struct {
 func (r gatewayPromptRewriter) Rewrite(
 	ctx context.Context, request evalapp.PromptRewriteRequest,
 ) ([]evaldomain.CandidatePatch, error) {
-	gateway, keys, ok := r.resolver.Resolve(ctx, request.TenantID)
+	gateway, ok := r.resolver.Resolve(ctx, request.TenantID)
 	if !ok || gateway == nil {
 		return nil, fmt.Errorf("prompt optimizer: tenant has no LLM provider configured")
 	}
@@ -471,10 +471,9 @@ func (r gatewayPromptRewriter) Rewrite(
 		return nil, err
 	}
 	response, err := gateway.Route(ctx, agentport.CapabilityRequest{
-		TenantID:   request.TenantID,
-		Type:       agentport.CapLLM,
-		LLMAPIKeys: keys,
-		Timeout:    60 * time.Second,
+		TenantID: request.TenantID,
+		Type:     agentport.CapLLM,
+		Timeout:  60 * time.Second,
 		LLM: &agentport.LLMCapRequest{
 			Model: "qwen-plus", Temperature: 0.2, MaxTokens: 2048,
 			Messages: []agentport.LLMMessage{

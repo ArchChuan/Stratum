@@ -29,7 +29,8 @@ const (
 //go:embed catalog.json
 var catalogJSON []byte
 
-type catalogEntry struct {
+// CatalogEntry is one section within an official documentation article.
+type CatalogEntry struct {
 	DocumentID     string `json:"documentId"`
 	Title          string `json:"title"`
 	ProductVersion string `json:"productVersion"`
@@ -40,8 +41,18 @@ type catalogEntry struct {
 }
 
 type scoredEntry struct {
-	entry catalogEntry
+	entry CatalogEntry
 	score int
+}
+
+// AllCatalogEntries returns every entry in the embedded official documentation
+// catalog. Useful for seeding knowledge workspaces and other bulk operations.
+func AllCatalogEntries() ([]CatalogEntry, error) {
+	var entries []CatalogEntry
+	if err := json.Unmarshal(catalogJSON, &entries); err != nil {
+		return nil, fmt.Errorf("decode embedded official docs catalog: %w", err)
+	}
+	return entries, nil
 }
 
 // Search returns only citations backed by the embedded official catalog.
@@ -54,7 +65,7 @@ func Search(ctx context.Context, query string) ([]domain.Citation, error) {
 		return nil, domain.ErrInvalidOfficialEvidenceQuery
 	}
 
-	var entries []catalogEntry
+	var entries []CatalogEntry
 	if err := json.Unmarshal(catalogJSON, &entries); err != nil {
 		return nil, fmt.Errorf("decode embedded official docs catalog: %w", err)
 	}
@@ -106,7 +117,7 @@ func Search(ctx context.Context, query string) ([]domain.Citation, error) {
 	return citations, nil
 }
 
-func score(entry catalogEntry, tokens []string) (int, int) {
+func score(entry CatalogEntry, tokens []string) (int, int) {
 	title := tokenSet(entry.Title)
 	section := tokenSet(entry.Section)
 	body := tokenSet(entry.Body)

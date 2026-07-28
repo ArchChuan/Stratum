@@ -84,43 +84,43 @@ func newTenantCapabilityResolver(
 	}
 }
 
-func (r *tenantCapabilityResolver) resolveGateway(ctx context.Context, tenantID string) (*llmgateway.Gateway, map[string]string, bool) {
-	gw, keys, ok, _ := r.resolveGatewayResult(ctx, tenantID, false)
-	return gw, keys, ok
+func (r *tenantCapabilityResolver) resolveGateway(ctx context.Context, tenantID string) (*llmgateway.Gateway, bool) {
+	gw, ok, _ := r.resolveGatewayResult(ctx, tenantID, false)
+	return gw, ok
 }
 
-func (r *tenantCapabilityResolver) resolveGatewayResult(ctx context.Context, tenantID string, strict bool) (*llmgateway.Gateway, map[string]string, bool, error) {
+func (r *tenantCapabilityResolver) resolveGatewayResult(ctx context.Context, tenantID string, strict bool) (*llmgateway.Gateway, bool, error) {
 	if r.registry == nil {
 		if strict {
-			return nil, nil, false, fmt.Errorf("tenant llm: registry unavailable")
+			return nil, false, fmt.Errorf("tenant llm: registry unavailable")
 		}
-		return r.gateway, nil, r.gateway != nil, nil
+		return r.gateway, r.gateway != nil, nil
 	}
 	if err := r.registry.WarmTenant(ctx, tenantID); err != nil {
 		if strict {
-			return nil, nil, false, fmt.Errorf("tenant llm: warm: %w", err)
+			return nil, false, fmt.Errorf("tenant llm: warm: %w", err)
 		}
-		return r.gateway, nil, r.gateway != nil, nil
+		return r.gateway, r.gateway != nil, nil
 	}
-	return r.gateway, nil, true, nil
+	return r.gateway, true, nil
 }
 
-// Resolve returns a per-tenant CapabilityGateway and the raw API-key map.
-func (r *tenantCapabilityResolver) Resolve(ctx context.Context, tenantID string) (agentport.CapabilityGateway, map[string]string, bool) {
-	gw, keys, ok := r.resolveGateway(ctx, tenantID)
+// Resolve returns a per-tenant CapabilityGateway.
+func (r *tenantCapabilityResolver) Resolve(ctx context.Context, tenantID string) (agentport.CapabilityGateway, bool) {
+	gw, ok := r.resolveGateway(ctx, tenantID)
 	if !ok {
-		return nil, nil, false
+		return nil, false
 	}
 	llmAdapter := newAgentLLMAdapter(gw)
 	capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, r.logger)
-	return capGW, keys, true
+	return capGW, true
 }
 
 // ResolveLLM returns the tenant's LLM gateway as a pipeline.LLMClient. Returns
 // nil when the tenant has no provider configured. Used by the memory pipeline
 // to drive enrich/summary jobs against tenant-private gateways.
 func (r *tenantCapabilityResolver) ResolveLLM(ctx context.Context, tenantID string) *llmgateway.Gateway {
-	gw, _, ok := r.resolveGateway(ctx, tenantID)
+	gw, ok := r.resolveGateway(ctx, tenantID)
 	if !ok {
 		return nil
 	}
@@ -130,7 +130,7 @@ func (r *tenantCapabilityResolver) ResolveLLM(ctx context.Context, tenantID stri
 // ResolveWorkerLLM resolves the current tenant gateway without hiding
 // infrastructure or credential failures behind the global fallback.
 func (r *tenantCapabilityResolver) ResolveWorkerLLM(ctx context.Context, tenantID string) (*llmgateway.Gateway, error) {
-	gw, _, ok, err := r.resolveGatewayResult(ctx, tenantID, true)
+	gw, ok, err := r.resolveGatewayResult(ctx, tenantID, true)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +173,7 @@ func (r *tenantCapabilityResolver) ListTenantChatModels(ctx context.Context, ten
 
 // InjectCompleter injects the per-tenant LLM completer into ctx for streaming.
 func (r *tenantCapabilityResolver) InjectCompleter(ctx context.Context, tenantID string) context.Context {
-	gw, _, ok := r.resolveGateway(ctx, tenantID)
+	gw, ok := r.resolveGateway(ctx, tenantID)
 	if !ok {
 		return ctx
 	}

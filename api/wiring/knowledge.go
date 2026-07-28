@@ -9,6 +9,7 @@ import (
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/document"
 	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/persistence"
+	"github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/seeds"
 	knowledgevector "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/vectorstore"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
@@ -29,6 +30,7 @@ type Knowledge struct {
 	Ingest            *knowledge.KnowledgeIngest
 	RAGService        *knowledge.RAGService
 	WorkspaceService  *knowledge.WorkspaceService
+	DocRepo           *persistence.DocRepo
 	EmbedResolver     pipeline.EmbedServiceResolver
 	KnowledgeResolver knowledge.EmbedResolver
 }
@@ -51,10 +53,11 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 
 	var pipelineResolver pipeline.EmbedServiceResolver
 	var knowledgeResolver knowledge.EmbedResolver
+	var docRepo *persistence.DocRepo
 	db := c.dbOrNil()
 	if db != nil {
 		chunkRepo := persistence.NewChunkRepo(db)
-		docRepo := persistence.NewDocRepo(db)
+		docRepo = persistence.NewDocRepo(db)
 		if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
 			pipelineResolver = buildEmbedResolver(db, c.LLMGateway.Registry, c.Logger)
 			knowledgeResolver = buildKnowledgeEmbedResolver(db, c.LLMGateway.Registry, c.Logger)
@@ -78,13 +81,14 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 		EmbedSvc:          embedSvc,
 		Ingest:            ingest,
 		RAGService:        rag,
+		DocRepo:           docRepo,
 		EmbedResolver:     pipelineResolver,
 		KnowledgeResolver: knowledgeResolver,
 	}
 	if db != nil {
 		repo := persistence.NewWorkspaceRepo(db)
 		c.Knowledge.WorkspaceService = knowledge.NewWorkspaceService(repo, ingest, c.Logger)
-		c.Knowledge.WorkspaceService.SetDocRepo(persistence.NewDocRepo(db))
+		c.Knowledge.WorkspaceService.SetDocRepo(docRepo)
 		c.Knowledge.WorkspaceService.SetVectorStore(vs)
 	}
 	return nil
@@ -208,5 +212,44 @@ func buildKnowledgeEmbedResolver(
 		}
 		client := llmgateway.NewOpenAICompatClient(cfg, logger)
 		return embedding.NewEmbeddingServiceWithModel(client, m, logger)
+	}
+}
+
+// SeedBuiltinKnowledgeDocs ingests official documentation catalog entries into
+// the built-in stratum_docs workspace for every active tenant. Idempotent —
+// existing docs (matched by content hash) are skipped. Errors are logged as
+// warnings and do not prevent startup. Call after BootstrapTenants and
+// RecoverStuckKnowledgeIngests.
+func (c *Container) SeedBuiltinKnowledgeDocs(ctx context.Context) {
+	if c.Knowledge == nil || c.Knowledge.Ingest == nil || c.Knowledge.DocRepo == nil {
+		c.Logger.Debug("knowledge.seed_builtin_docs.skipped",
+			zap.String("reason", "knowledge ingest or docRepo not wired"))
+		return
+	}
+	db := c.dbOrNil()
+	if db == nil {
+		return
+	}
+
+	rows, err := db.Query(ctx, "SELECT id FROM public.tenants WHERE deleted_at IS NULL")
+	if err != nil {
+		c.Logger.Warn("knowledge.seed_builtin_docs.list_tenants_failed", zap.Error(err))
+		return
+	}
+	defer rows.Close()
+
+	var tenantIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			c.Logger.Warn("knowledge.seed_builtin_docs.scan_failed", zap.Error(err))
+			return
+		}
+		tenantIDs = append(tenantIDs, id)
+	}
+
+	for _, tid := range tenantIDs {
+		seeds.SeedBuiltinDocs(ctx, tid, "text-embedding-v3",
+			c.Knowledge.Ingest, c.Knowledge.DocRepo, c.Logger)
 	}
 }
