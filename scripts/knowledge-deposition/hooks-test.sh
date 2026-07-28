@@ -130,7 +130,7 @@ pass "all adapters exist"
 actual_root="$(git -C "$SCRIPT_DIR/../.." rev-parse --show-toplevel)"
 actual_raw_session="actual-root-$(date +%s%N)-$RANDOM"
 actual_out="$(run_hook "$CODEX_START" "$(payload "$actual_root" "$actual_raw_session" UserPromptSubmit)")"
-jq -e '.continue == true and (.systemMessage | contains("Knowledge deposition task gate active."))' \
+jq -e '.continue == true and .suppressOutput == true and (.systemMessage | contains("Knowledge deposition task gate active."))' \
   <<<"$actual_out" >/dev/null || fail "actual feature worktree was treated as non-Stratum"
 actual_session="$(jq -er '.systemMessage | capture("--session (?<value>[^ ]+) --task").value' <<<"$actual_out")"
 actual_task="$(jq -er '.systemMessage | capture("--task (?<value>[^ ]+) --repo-root").value' <<<"$actual_out")"
@@ -176,7 +176,7 @@ pass "actual feature worktree completes task start, report, and Stop lifecycle"
 repo="$(new_repo main)"
 codex_raw_session='codex/session unsafe'
 codex_out="$(run_hook "$CODEX_START" "$(payload "$repo" "$codex_raw_session" UserPromptSubmit)")"
-jq -e '.continue == true and (.systemMessage | contains("Client: codex") and contains("Session:") and contains("Task:") and contains("bash scripts/knowledge-deposition/report.sh --client codex"))' \
+jq -e '.continue == true and .suppressOutput == true and (.systemMessage | contains("Client: codex") and contains("Session:") and contains("Task:") and contains("bash scripts/knowledge-deposition/report.sh --client codex"))' \
   <<<"$codex_out" >/dev/null || fail "Codex start envelope mismatch"
 codex_marker="$(find "$repo/tmp/knowledge-deposition/current" -name 'codex-*.json' -print -quit)"
 [[ -f "$codex_marker" ]] || fail "Codex marker missing"
