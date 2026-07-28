@@ -263,6 +263,7 @@ done
   exit 1
 }
 for monitoring_path in \
+  monitoring/remote \
   monitoring/remote/rules/stratum-availability.yaml \
   internal/platform/alerting/delivery.go \
   cmd/feishu-alert-adapter/main.go \
@@ -272,6 +273,17 @@ for monitoring_path in \
   .github/workflows/remote-health-monitor.yml; do
   [[ "$(/bin/bash "${CHECKER}" --acceptance "${monitoring_path}")" == soak ]] || {
     echo "remote monitoring change must require soak acceptance: ${monitoring_path}" >&2
+    exit 1
+  }
+done
+for ordinary_path in \
+  monitoring/remoteish \
+  internal/platform/alerting2 \
+  cmd/feishu-alert-adapter2 \
+  cmd/remote-health-monitor2 \
+  .github/workflows/deploy-preview.yml; do
+  [[ "$(/bin/bash "${CHECKER}" --acceptance "${ordinary_path}")" == short ]] || {
+    echo "ordinary near-match must require short acceptance: ${ordinary_path}" >&2
     exit 1
   }
 done
