@@ -97,7 +97,7 @@ for index in "${!dashboard_names[@]}"; do
         fail "tenant/user identifier variable in ${file#"${ROOT}/"}"
     fi
     if jq -e '[.. | objects | .expr? | select(type == "string")] | join(" ") |
-        test("(tenant|user)(_|-)?id|vector\\s*\\(\\s*0\\s*\\)"; "i")' "${file}" >/dev/null; then
+        test("(tenant|user)(_|-)?id|vector\\s*\\(\\s*0\\s*\\)|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"; "i")' "${file}" >/dev/null; then
         fail "sensitive identifier or zero-filled missing data in ${file#"${ROOT}/"}"
     fi
 
@@ -115,10 +115,14 @@ jq -e '[.. | objects | .expr? | select(type == "string")] | join(" ") |
     "${DASHBOARD_DIR}/stratum-service-overview.json" >/dev/null || fail 'overview core queries are incomplete'
 
 jq -e '[.. | objects | .expr? | select(type == "string")] | join(" ") |
-    test("stratum:http_requests:increase5m") and test("stratum:http_5xx_ratio:ratio5m") and
-    test("stratum:http_request_duration_seconds:p95_5m") and
+    test("stratum:http_requests_by_path:increase5m") and
+    test("stratum:http_5xx_ratio_by_path:ratio5m") and
+    test("stratum:http_request_duration_seconds_by_path:p95_5m") and
     (test("http_requests_total|http_request_duration_seconds_bucket") | not)' \
     "${DASHBOARD_DIR}/stratum-http.json" >/dev/null || fail 'HTTP dashboard must use bounded recording rules'
+jq -e '[.panels[].targets[]? | select(.expr | contains("_by_path:")) | .legendFormat] |
+    length == 3 and all(. == "{{path}}")' \
+    "${DASHBOARD_DIR}/stratum-http.json" >/dev/null || fail 'HTTP dashboard must identify bounded path series'
 
 jq -e '[.. | objects | .expr? | select(type == "string")] | join(" ") |
     test("stratum:kube_pod:placement") and test("node_cpu_seconds_total") and

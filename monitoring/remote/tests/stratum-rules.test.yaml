@@ -9,6 +9,50 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
+  - name: HTTP by-path records preserve only bounded route templates
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/agents/:id",status="2xx"}'
+        values: '0+10x8'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/agents/:id",status="5xx"}'
+        values: '0x8'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/workflows/:id",status="5xx"}'
+        values: '0+2x8'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/agents/550e8400-e29b-41d4-a716-446655440000",status="2xx"}'
+        values: '0+100x8'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/agents/:id",le="1"}'
+        values: '0+9x8'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/agents/:id",le="+Inf"}'
+        values: '0+10x8'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/workflows/:id",le="1"}'
+        values: '0x8'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/workflows/:id",le="5"}'
+        values: '0+2x8'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/workflows/:id",le="+Inf"}'
+        values: '0+2x8'
+    promql_expr_test:
+      - expr: stratum:http_requests_by_path:increase5m
+        eval_time: 6m
+        exp_samples:
+          - labels: '{__name__="stratum:http_requests_by_path:increase5m",environment="remote-test",path="/agents/:id",service="stratum"}'
+            value: 50
+          - labels: '{__name__="stratum:http_requests_by_path:increase5m",environment="remote-test",path="/workflows/:id",service="stratum"}'
+            value: 10
+      - expr: stratum:http_5xx_ratio_by_path:ratio5m
+        eval_time: 6m
+        exp_samples:
+          - labels: '{__name__="stratum:http_5xx_ratio_by_path:ratio5m",environment="remote-test",path="/agents/:id",service="stratum"}'
+            value: 0
+          - labels: '{__name__="stratum:http_5xx_ratio_by_path:ratio5m",environment="remote-test",path="/workflows/:id",service="stratum"}'
+            value: 1
+      - expr: stratum:http_request_duration_seconds_by_path:p95_5m
+        eval_time: 6m
+        exp_samples:
+          - labels: '{__name__="stratum:http_request_duration_seconds_by_path:p95_5m",environment="remote-test",path="/agents/:id",service="stratum"}'
+            value: 1
+          - labels: '{__name__="stratum:http_request_duration_seconds_by_path:p95_5m",environment="remote-test",path="/workflows/:id",service="stratum"}'
+            value: 4.799999999999999
+
   - name: workload rules expose node inhibition input and detect restart growth
     interval: 1m
     input_series:

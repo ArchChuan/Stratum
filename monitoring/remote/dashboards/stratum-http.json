@@ -9,7 +9,7 @@
       "fieldConfig": {"defaults": {"min": 0, "unit": "reqps"}, "overrides": []},
       "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0}, "id": 1,
       "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "stratum:http_requests:increase5m{service=\"stratum\",environment=\"remote-test\"} / 300", "legendFormat": "每秒请求", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "stratum:http_requests_by_path:increase5m{service=\"stratum\",environment=\"remote-test\"} / 300", "legendFormat": "{{path}}", "refId": "A"}],
       "title": "请求速率", "type": "timeseries"
     },
     {
@@ -17,7 +17,7 @@
       "fieldConfig": {"defaults": {"min": 0, "unit": "percentunit"}, "overrides": []},
       "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0}, "id": 2,
       "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "stratum:http_5xx_ratio:ratio5m{service=\"stratum\",environment=\"remote-test\"}", "legendFormat": "5xx 比例", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "stratum:http_5xx_ratio_by_path:ratio5m{service=\"stratum\",environment=\"remote-test\"}", "legendFormat": "{{path}}", "refId": "A"}],
       "title": "5xx 比例", "type": "timeseries"
     },
     {
@@ -25,12 +25,12 @@
       "fieldConfig": {"defaults": {"min": 0, "unit": "s"}, "overrides": []},
       "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0}, "id": 3,
       "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "stratum:http_request_duration_seconds:p95_5m{service=\"stratum\",environment=\"remote-test\"}", "legendFormat": "P95", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "stratum:http_request_duration_seconds_by_path:p95_5m{service=\"stratum\",environment=\"remote-test\"}", "legendFormat": "{{path}}", "refId": "A"}],
       "title": "P95 延迟", "type": "timeseries"
     },
     {
       "gridPos": {"h": 4, "w": 24, "x": 0, "y": 8}, "id": 4,
-      "options": {"content": "该视图只使用经过规则测试的低基数聚合指标。路径维度在 recording rule 中汇总，避免原始 URL 和动态标识进入看板。", "mode": "markdown"},
+      "options": {"content": "该视图只使用经过规则测试的路由模板聚合指标。路径来自 Gin 路由模板，例如 `/agents/:id`；未匹配请求和原始动态标识不会进入看板。", "mode": "markdown"},
       "title": "查询边界", "type": "text"
     }
   ],

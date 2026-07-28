@@ -20,6 +20,24 @@ groups:
           service: stratum
           environment: remote-test
 
+      - record: stratum:http_requests_by_path:increase5m
+        expr: sum by (path) (increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!="unmatched",path!~"^/(health|livez|readyz|metrics)$",path!~".*/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}($|/).*"}[5m]))
+        labels:
+          service: stratum
+          environment: remote-test
+
+      - record: stratum:http_5xx_ratio_by_path:ratio5m
+        expr: sum by (path) (increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!="unmatched",path!~"^/(health|livez|readyz|metrics)$",path!~".*/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}($|/).*",status=~"5.."}[5m])) / clamp_min(sum by (path) (increase(http_requests_total{namespace="stratum",service="stratum",endpoint="http",path!="unmatched",path!~"^/(health|livez|readyz|metrics)$",path!~".*/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}($|/).*"}[5m])), 1)
+        labels:
+          service: stratum
+          environment: remote-test
+
+      - record: stratum:http_request_duration_seconds_by_path:p95_5m
+        expr: histogram_quantile(0.95, sum by (path, le) (rate(http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",path!="unmatched",path!~"^/(health|livez|readyz|metrics)$",path!~".*/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}($|/).*"}[5m])))
+        labels:
+          service: stratum
+          environment: remote-test
+
       - alert: StratumHighHTTP5xxRate
         expr: stratum:http_5xx_ratio:ratio5m{service="stratum",environment="remote-test"} > 0.05 and stratum:http_requests:increase5m{service="stratum",environment="remote-test"} >= 20
         for: 10m
