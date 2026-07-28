@@ -44,10 +44,10 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#pvc-usage-critical
 
       - record: stratum:pvc_exhaustion_within_4d
-        expr: ((predict_linear(kubelet_volume_stats_available_bytes{namespace="stratum"}[6h], 4 * 24 * 60 * 60) < bool 0) == 1) and (deriv(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) > 0) and (count_over_time(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) >= 720)
+        expr: ((predict_linear(kubelet_volume_stats_available_bytes{namespace="stratum"}[6h], 4 * 24 * 60 * 60) < bool 0) == 1) and on (namespace, persistentvolumeclaim) (deriv(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) > 0) and on (namespace, persistentvolumeclaim) kubelet_volume_stats_used_bytes{namespace="stratum"} and on (namespace, persistentvolumeclaim) kubelet_volume_stats_used_bytes{namespace="stratum"} offset 6h
 
       - record: stratum:pvc_exhaustion_within_1d
-        expr: ((predict_linear(kubelet_volume_stats_available_bytes{namespace="stratum"}[6h], 24 * 60 * 60) < bool 0) == 1) and (deriv(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) > 0) and (count_over_time(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) >= 720)
+        expr: ((predict_linear(kubelet_volume_stats_available_bytes{namespace="stratum"}[6h], 24 * 60 * 60) < bool 0) == 1) and on (namespace, persistentvolumeclaim) (deriv(kubelet_volume_stats_used_bytes{namespace="stratum"}[6h]) > 0) and on (namespace, persistentvolumeclaim) kubelet_volume_stats_used_bytes{namespace="stratum"} and on (namespace, persistentvolumeclaim) kubelet_volume_stats_used_bytes{namespace="stratum"} offset 6h
 
       - alert: StratumPVCExhaustionPredicted
         expr: stratum:pvc_exhaustion_within_4d == 1

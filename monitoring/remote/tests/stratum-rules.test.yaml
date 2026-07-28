@@ -86,6 +86,25 @@ tests:
           - labels: '{__name__="stratum:pvc_exhaustion_within_4d",namespace="stratum",persistentvolumeclaim="growing-pvc"}'
             value: 1
 
+  - name: PVC prediction history gate is independent of scrape interval
+    interval: 1h
+    input_series:
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="hourly-pvc"}'
+        values: '100000000+100000000x7'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="hourly-pvc"}'
+        values: '800000000-100000000x7'
+    promql_expr_test:
+      - expr: stratum:pvc_exhaustion_within_4d
+        eval_time: 6h
+        exp_samples:
+          - labels: '{__name__="stratum:pvc_exhaustion_within_4d",namespace="stratum",persistentvolumeclaim="hourly-pvc"}'
+            value: 1
+      - expr: stratum:pvc_exhaustion_within_1d
+        eval_time: 6h
+        exp_samples:
+          - labels: '{__name__="stratum:pvc_exhaustion_within_1d",namespace="stratum",persistentvolumeclaim="hourly-pvc"}'
+            value: 1
+
   - name: dependency targets disappear independently
     interval: 1m
     input_series:
