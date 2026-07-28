@@ -5,11 +5,29 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"go.uber.org/zap"
 )
+
+func TestZhipuClient_ModelsCoverStaticCatalog(t *testing.T) {
+	client := llmgateway.NewZhipuClient("test-key", zap.NewNop())
+	registered := make(map[string]struct{}, len(client.Models()))
+	for _, model := range client.Models() {
+		registered[model] = struct{}{}
+	}
+
+	for _, model := range (llmgateway.StaticModelCatalog{}).ListChatModels() {
+		if !strings.HasPrefix(model, "glm-") {
+			continue
+		}
+		if _, ok := registered[model]; !ok {
+			t.Errorf("Zhipu client does not register catalog model %q", model)
+		}
+	}
+}
 
 func TestZhipuClient_Complete(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

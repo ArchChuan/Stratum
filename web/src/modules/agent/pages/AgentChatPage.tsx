@@ -37,9 +37,8 @@ export const AgentChatPage = () => {
     pendingApprovals,
     approvalActionId,
     handleApprove,
-    handleReject,
+		handleReject,
 		streamFailure,
-		clearStreamFailure,
   } = useChatPage();
 
   const agentObj = agents.find((a) => a.id === selectedAgent);
@@ -103,7 +102,6 @@ export const AgentChatPage = () => {
           isMobile={isMobile}
           onOpenConversations={() => setConversationDrawerOpen(true)}
           isAdmin={isAdmin}
-          onOpenSettings={agentObj?.isSystem ? () => setSettingsTargetID(agentObj.id) : undefined}
         />
         <ChatMessageList
           messages={messages}

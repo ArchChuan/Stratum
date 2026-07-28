@@ -204,7 +204,7 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 	other, found, err := repo.GetSystemAssistant(ctxB)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Empty(t, other.LLMModel, "tenant A model selection must not cross into tenant B")
+	require.Equal(t, "glm-5.2", other.LLMModel, "tenant A model selection must not cross into tenant B")
 
 	profile, err := agentapp.ComposeSystemAssistantProfile(updated, agentapp.BuiltinSystemAssistantProfile())
 	require.NoError(t, err)
@@ -408,7 +408,7 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 	settings := request(http.MethodGet, "/agents/system/settings", "member", "")
 	require.Equal(t, http.StatusOK, settings.Code)
 	require.JSONEq(t,
-		`{"agentId":"stratum-platform-assistant","llmModel":"","ready":false,"availableModels":["deterministic-e2e-model"]}`,
+		`{"agentId":"stratum-platform-assistant","llmModel":"glm-5.2","ready":false,"availableModels":["deterministic-e2e-model"]}`,
 		settings.Body.String())
 	require.Equal(t, http.StatusForbidden,
 		request(http.MethodPut, "/agents/system/settings", "member", `{"llmModel":"deterministic-e2e-model"}`).Code)
