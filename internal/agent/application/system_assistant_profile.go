@@ -125,5 +125,7 @@ func ComposeSystemAssistantProfile(
 		SystemPrompt: profile.SystemPrompt, LLMModel: cfg.LLMModel, EmbedModel: cfg.EmbedModel,
 		MaxIterations: profile.MaxIterations, MaxContextTokens: profile.MaxContextTokens,
 		MemoryScope: cfg.MemoryScope, SystemKey: profile.Key, IsSystem: true, ManagementMode: "platform",
+		MCPToolIDs: copyCfg.MCPToolIDs, KnowledgeWorkspaceIDs: copyCfg.KnowledgeWorkspaceIDs,
+		AllowedSkills: copyCfg.AllowedSkills,
 	}, nil
 }

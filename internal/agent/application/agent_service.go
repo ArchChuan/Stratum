@@ -480,7 +480,7 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		return AgentDTO{}, ErrNotFound
 	}
 	if existing.GetConfig().SystemKey != "" {
-		return AgentDTO{}, domain.ErrSystemAssistantManaged
+		return s.updateSystemAssistant(ctx, existing.GetConfig(), in)
 	}
 	skills := in.AllowedSkills
 	if skills == nil {
@@ -506,6 +506,47 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	}
 	s.deps.Logger.Info("agent updated", zap.String("id", id), zap.String("name", in.Name))
 	return cfgToDTO(cfg), nil
+}
+
+func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.AgentConfig, in UpdateAgentInput) (AgentDTO, error) {
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	if tenantID == "" {
+		return AgentDTO{}, fmt.Errorf("update system assistant: tenant id required")
+	}
+	if in.LLMModel != "" && in.LLMModel != cfg.LLMModel {
+		if s.deps.TenantModelValidator != nil {
+			if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, in.LLMModel); err != nil {
+				if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
+					errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
+					return AgentDTO{}, domain.ErrInvalidSystemAssistantModel
+				}
+				return AgentDTO{}, fmt.Errorf("update system assistant model: %w", err)
+			}
+		}
+		updated, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, in.LLMModel)
+		if err != nil {
+			return AgentDTO{}, fmt.Errorf("update system assistant model: %w", err)
+		}
+		cfg = updated.GetConfig()
+	}
+	skills := in.AllowedSkills
+	if skills == nil {
+		skills = []string{}
+	}
+	mcpTools := in.MCPToolIDs
+	if mcpTools == nil {
+		mcpTools = []string{}
+	}
+	knowledge := in.KnowledgeWorkspaceIDs
+	if knowledge == nil {
+		knowledge = []string{}
+	}
+	updated, err := s.deps.Registry.UpdateSystemAssistantBindings(ctx, mcpTools, knowledge, skills)
+	if err != nil {
+		return AgentDTO{}, fmt.Errorf("update system assistant bindings: %w", err)
+	}
+	s.deps.Logger.Info("system assistant updated", zap.String("id", cfg.ID))
+	return cfgToDTO(updated.GetConfig()), nil
 }
 
 // Delete removes an agent and cascades deletion to conversations and memories.

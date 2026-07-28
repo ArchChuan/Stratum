@@ -496,6 +496,49 @@ func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model stri
 	return &cfg, nil
 }
 
+func (r *PgAgentRepo) UpdateSystemAssistantBindings(
+	ctx context.Context, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills []string,
+) (*domain.AgentConfig, error) {
+	var cfg domain.AgentConfig
+	var agentType string
+	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx,
+			`UPDATE agents SET updated_at=NOW()
+			 WHERE system_key='stratum.platform_assistant'
+			 RETURNING id, name, type, description, system_prompt, llm_model, embed_model,
+			           max_iterations, max_context_tokens, memory_scope, system_key`).
+			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
+				&cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("update system assistant bindings: %w", domain.ErrNotFound)
+			}
+			return fmt.Errorf("update system assistant bindings: %w", err)
+		}
+		if err := r.replaceSkills(ctx, tx, domain.SystemAssistantID, allowedSkills); err != nil {
+			return err
+		}
+		if err := r.replaceMCPTools(ctx, tx, domain.SystemAssistantID, mcpToolIDs); err != nil {
+			return err
+		}
+		if err := r.replaceKnowledgeWorkspaces(ctx, tx, domain.SystemAssistantID, knowledgeWorkspaceIDs); err != nil {
+			return err
+		}
+		if err := loadAgentRelations(ctx, tx, &cfg); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	cfg.Type = domain.AgentType(agentType)
+	setManagedIdentity(&cfg)
+	cfg.AllowedSkills = nonNil(cfg.AllowedSkills)
+	cfg.MCPToolIDs = nonNil(cfg.MCPToolIDs)
+	cfg.KnowledgeWorkspaceIDs = nonNil(cfg.KnowledgeWorkspaceIDs)
+	return &cfg, nil
+}
+
 func rejectManagedAssistant(ctx context.Context, tx pgx.Tx, id string) error {
 	var systemKey string
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(system_key, '') FROM agents WHERE id = $1`, id).Scan(&systemKey); err != nil {
