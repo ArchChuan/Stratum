@@ -405,15 +405,35 @@ func TestModelRegistry_ListEmbeddingModels(t *testing.T) {
 }
 
 func TestModelRegistry_WarmTenant(t *testing.T) {
-	mr := &mockModelRepo{models: []domain.Model{
-		{ID: "m1", Name: "gpt-4", Enabled: true},
-	}}
-	pr := &mockProviderRepo{providers: map[string]*domain.Provider{}}
+	providerID := "prov-warm"
+	providers := map[string]*domain.Provider{
+		providerID: {
+			ID: providerID, Name: "Warm Prov", Kind: domain.ProviderOpenAICompat,
+			BaseURL: "https://warm.test", APIKey: "sk-warm", DefaultModel: "gpt-4",
+		},
+	}
+	models := []domain.Model{
+		{ID: "m1", ProviderID: providerID, Name: "gpt-4", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapChat}},
+	}
+	mr := &mockModelRepo{models: models}
+	pr := &mockProviderRepo{providers: providers}
 	reg := newTestRegistry(mr, pr)
 
 	err := reg.WarmTenant(context.Background(), "t1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify cache is populated — a resolve should hit cache even after wiping repos
+	mr.models = nil
+	delete(pr.providers, providerID)
+
+	cfg, _, err := reg.Resolve(context.Background(), "t1", "gpt-4")
+	if err != nil {
+		t.Fatal("expected cache hit after warm, got:", err)
+	}
+	if cfg.Name != "Warm Prov" {
+		t.Errorf("unexpected config name: %s", cfg.Name)
 	}
 }
 

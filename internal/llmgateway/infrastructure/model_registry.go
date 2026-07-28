@@ -27,7 +27,7 @@ type ModelRegistry struct {
 	cacheTTL     time.Duration
 
 	mu    sync.RWMutex
-	cache map[string]map[string]*resolvedEntry // tenantID -> modelName -> entry
+	cache map[string]map[string]*resolvedEntry // tenantID -> "chat:"|"embed:"+modelName -> entry
 }
 
 // NewModelRegistry returns a new ModelRegistry.
@@ -51,41 +51,61 @@ func NewModelRegistry(
 // Resolve looks up modelName for the given tenant and returns the provider
 // configuration and chat protocol. Results are cached per tenant per model.
 func (r *ModelRegistry) Resolve(ctx context.Context, tenantID, modelName string) (ProviderConfig, ChatProtocol, error) {
-	if e := r.cacheGet(tenantID, modelName); e != nil {
+	cacheKey := "chat:" + modelName
+	if e := r.cacheGet(tenantID, cacheKey); e != nil {
 		proto, ok := r.chatProtos[e.provider.Kind]
 		if !ok {
 			return ProviderConfig{}, nil, fmt.Errorf("model registry: no chat protocol for provider kind %q", e.provider.Kind)
 		}
 		return e.config, proto, nil
 	}
-	return r.resolveFromDB(ctx, tenantID, modelName)
+	cfg, provider, err := r.resolveModelFromDB(ctx, tenantID, modelName, cacheKey)
+	if err != nil {
+		return ProviderConfig{}, nil, err
+	}
+	proto, ok := r.chatProtos[provider.Kind]
+	if !ok {
+		return ProviderConfig{}, nil, fmt.Errorf("model registry: no chat protocol for %q", provider.Kind)
+	}
+	return cfg, proto, nil
 }
 
 // ResolveEmbedding looks up modelName for the given tenant and returns the
 // provider configuration and embedding protocol. Results are cached.
 func (r *ModelRegistry) ResolveEmbedding(ctx context.Context, tenantID, modelName string) (ProviderConfig, EmbedProtocol, error) {
-	if e := r.cacheGet(tenantID, modelName); e != nil {
+	cacheKey := "embed:" + modelName
+	if e := r.cacheGet(tenantID, cacheKey); e != nil {
 		proto, ok := r.embedProtos[e.provider.Kind]
 		if !ok {
 			return ProviderConfig{}, nil, fmt.Errorf("model registry: no embed protocol for provider kind %q", e.provider.Kind)
 		}
 		return e.config, proto, nil
 	}
-	return r.resolveEmbedFromDB(ctx, tenantID, modelName)
+	cfg, provider, err := r.resolveModelFromDB(ctx, tenantID, modelName, cacheKey)
+	if err != nil {
+		return ProviderConfig{}, nil, err
+	}
+	proto, ok := r.embedProtos[provider.Kind]
+	if !ok {
+		return ProviderConfig{}, nil, fmt.Errorf("model registry: no embed protocol for %q", provider.Kind)
+	}
+	return cfg, proto, nil
 }
 
-// resolveFromDB performs a cache-miss resolution for a chat model.
-func (r *ModelRegistry) resolveFromDB(ctx context.Context, tenantID, modelName string) (ProviderConfig, ChatProtocol, error) {
+// resolveModelFromDB performs the shared cache-miss resolution: lists enabled
+// models, finds the matching model, looks up its provider, caches the result,
+// and returns the provider config and provider info.
+func (r *ModelRegistry) resolveModelFromDB(ctx context.Context, tenantID, modelName, cacheKey string) (ProviderConfig, domain.Provider, error) {
 	enabled := true
 	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled})
 	if err != nil {
-		return ProviderConfig{}, nil, fmt.Errorf("model registry: list models: %w", err)
+		return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: list models: %w", err)
 	}
 	for _, m := range models {
 		if m.Name == modelName {
 			provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
 			if err != nil {
-				return ProviderConfig{}, nil, fmt.Errorf("model registry: get provider: %w", err)
+				return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: get provider: %w", err)
 			}
 			cfg := ProviderConfig{
 				Name:        provider.Name,
@@ -94,46 +114,11 @@ func (r *ModelRegistry) resolveFromDB(ctx context.Context, tenantID, modelName s
 				HealthModel: provider.DefaultModel,
 				Models:      []string{m.Name},
 			}
-			r.cacheSet(tenantID, modelName, cfg, *provider)
-			proto, ok := r.chatProtos[provider.Kind]
-			if !ok {
-				return ProviderConfig{}, nil, fmt.Errorf("model registry: no chat protocol for %q", provider.Kind)
-			}
-			return cfg, proto, nil
+			r.cacheSet(tenantID, cacheKey, cfg, *provider)
+			return cfg, *provider, nil
 		}
 	}
-	return ProviderConfig{}, nil, fmt.Errorf("model registry: model %q not found for tenant %s", modelName, tenantID)
-}
-
-// resolveEmbedFromDB performs a cache-miss resolution for an embedding model.
-func (r *ModelRegistry) resolveEmbedFromDB(ctx context.Context, tenantID, modelName string) (ProviderConfig, EmbedProtocol, error) {
-	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled})
-	if err != nil {
-		return ProviderConfig{}, nil, fmt.Errorf("model registry: list models: %w", err)
-	}
-	for _, m := range models {
-		if m.Name == modelName {
-			provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
-			if err != nil {
-				return ProviderConfig{}, nil, fmt.Errorf("model registry: get provider: %w", err)
-			}
-			cfg := ProviderConfig{
-				Name:        provider.Name,
-				BaseURL:     provider.BaseURL,
-				APIKey:      provider.APIKey,
-				HealthModel: provider.DefaultModel,
-				Models:      []string{m.Name},
-			}
-			r.cacheSet(tenantID, modelName, cfg, *provider)
-			proto, ok := r.embedProtos[provider.Kind]
-			if !ok {
-				return ProviderConfig{}, nil, fmt.Errorf("model registry: no embed protocol for %q", provider.Kind)
-			}
-			return cfg, proto, nil
-		}
-	}
-	return ProviderConfig{}, nil, fmt.Errorf("model registry: embedding model %q not found for tenant %s", modelName, tenantID)
+	return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: model %q not found for tenant %s", modelName, tenantID)
 }
 
 // ListChatModels returns sorted enabled chat model names for a tenant.
@@ -144,7 +129,7 @@ func (r *ModelRegistry) ListChatModels(ctx context.Context, tenantID string) ([]
 		Capability: domain.CapChat,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("model registry: list models: %w", err)
 	}
 	names := make([]string, 0, len(models))
 	for _, m := range models {
@@ -162,7 +147,7 @@ func (r *ModelRegistry) ListEmbeddingModels(ctx context.Context, tenantID string
 		Capability: domain.CapEmbedding,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("model registry: list models: %w", err)
 	}
 	names := make([]string, 0, len(models))
 	for _, m := range models {
@@ -172,12 +157,37 @@ func (r *ModelRegistry) ListEmbeddingModels(ctx context.Context, tenantID string
 	return names, nil
 }
 
-// WarmTenant pre-warms the cache by listing enabled models for a tenant.
-// The actual caching happens on subsequent Resolve / ResolveEmbedding calls.
+// WarmTenant pre-warms the cache by listing enabled models for a tenant and
+// populating cache entries for each model so that subsequent Resolve and
+// ResolveEmbedding calls hit the cache.
 func (r *ModelRegistry) WarmTenant(ctx context.Context, tenantID string) error {
 	enabled := true
-	_, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled})
-	return err
+	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled})
+	if err != nil {
+		return fmt.Errorf("model registry: warm tenant: %w", err)
+	}
+	for _, m := range models {
+		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+		if err != nil {
+			return fmt.Errorf("model registry: warm tenant: get provider: %w", err)
+		}
+		cfg := ProviderConfig{
+			Name:        provider.Name,
+			BaseURL:     provider.BaseURL,
+			APIKey:      provider.APIKey,
+			HealthModel: provider.DefaultModel,
+			Models:      []string{m.Name},
+		}
+		for _, cap := range m.Capabilities {
+			switch cap {
+			case domain.CapChat:
+				r.cacheSet(tenantID, "chat:"+m.Name, cfg, *provider)
+			case domain.CapEmbedding:
+				r.cacheSet(tenantID, "embed:"+m.Name, cfg, *provider)
+			}
+		}
+	}
+	return nil
 }
 
 // Invalidate removes all cached entries for a tenant.
@@ -188,14 +198,14 @@ func (r *ModelRegistry) Invalidate(tenantID string) {
 }
 
 // cacheGet returns a non-expired cached entry, or nil.
-func (r *ModelRegistry) cacheGet(tenantID, modelName string) *resolvedEntry {
+func (r *ModelRegistry) cacheGet(tenantID, key string) *resolvedEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	tenantCache, ok := r.cache[tenantID]
 	if !ok {
 		return nil
 	}
-	e, ok := tenantCache[modelName]
+	e, ok := tenantCache[key]
 	if !ok || time.Now().After(e.expires) {
 		return nil
 	}
@@ -203,13 +213,13 @@ func (r *ModelRegistry) cacheGet(tenantID, modelName string) *resolvedEntry {
 }
 
 // cacheSet stores an entry in the cache.
-func (r *ModelRegistry) cacheSet(tenantID, modelName string, cfg ProviderConfig, provider domain.Provider) {
+func (r *ModelRegistry) cacheSet(tenantID, key string, cfg ProviderConfig, provider domain.Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.cache[tenantID] == nil {
 		r.cache[tenantID] = make(map[string]*resolvedEntry)
 	}
-	r.cache[tenantID][modelName] = &resolvedEntry{
+	r.cache[tenantID][key] = &resolvedEntry{
 		config:   cfg,
 		provider: provider,
 		expires:  time.Now().Add(r.cacheTTL),
