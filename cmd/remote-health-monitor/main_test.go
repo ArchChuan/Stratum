@@ -296,6 +296,29 @@ func TestHTTPProbeRejectsUnknownHealthFields(t *testing.T) {
 	require.Equal(t, diagnosticContract, probe.Check(context.Background()).category)
 }
 
+func TestHTTPProbeRetryClassification(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		body      string
+		wantRetry bool
+	}{
+		{name: "request timeout", status: http.StatusRequestTimeout, wantRetry: true},
+		{name: "permanent client error", status: http.StatusBadRequest, wantRetry: false},
+		{name: "contract failure", status: http.StatusOK, body: `{"service":"Stratum","status":"degraded"}`, wantRetry: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			probe, server := newProbeTestServer(t, tt.status, tt.body)
+			defer server.Close()
+
+			outcome := probe.Check(context.Background())
+
+			require.Equal(t, tt.wantRetry, outcome.retry)
+		})
+	}
+}
+
 type stubProbe struct {
 	results []probeResult
 	calls   int

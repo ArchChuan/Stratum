@@ -119,7 +119,8 @@ func (p *httpProbe) Check(ctx context.Context) probeResult {
 	if resp.StatusCode != http.StatusOK {
 		return probeResult{
 			category: diagnosticHTTPStatus,
-			retry:    resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500,
+			retry: resp.StatusCode == http.StatusRequestTimeout ||
+				resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500,
 		}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
