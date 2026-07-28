@@ -194,7 +194,11 @@ kill -0 "$frontend_pid" 2>/dev/null || { printf 'frontend exited before browser 
 
 results_path=${STATEFUL_E2E_RESULTS_PATH:-$work_dir/safe-results.json}
 export STATEFUL_E2E_MODE=$mode STATEFUL_E2E_DURATION_SEC=$duration STATEFUL_E2E_PACKS=$packs
-export STATEFUL_E2E_PROFILE=$profile
+if [[ "$mode" == soak ]]; then
+  export STATEFUL_E2E_PROFILE=$profile
+else
+  unset STATEFUL_E2E_PROFILE
+fi
 export E2E_API_URL=http://127.0.0.1:18080 E2E_WEB_URL=http://127.0.0.1:15173 STATEFUL_E2E_RESULTS_PATH=$results_path
 playwright_command=${STATEFUL_E2E_PLAYWRIGHT_COMMAND:-"cd '$repo_dir/web' && npx playwright test --config playwright.stateful.config.ts"}
 bash -c "$playwright_command"

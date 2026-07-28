@@ -10,7 +10,7 @@
 	migration-guardrails e2e-attestation-check ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	agent-instructions agent-instructions-check \
-	tool-permission-test agent-interview-test knowledge-deposition-test \
+	tool-permission-test agent-interview-test \
 	dev-up dev-down \
 	run fe-dev help clean
 
@@ -223,10 +223,6 @@ e2e-system-soak:
 
 e2e-system-release-soak:
 	STATEFUL_E2E_PROFILE=release STATEFUL_E2E_DURATION_SEC=3600 bash scripts/e2e/system-stateful.sh soak
-
-knowledge-deposition-test:
-	bash scripts/knowledge-deposition/report-test.sh
-	bash scripts/knowledge-deposition/hooks-test.sh
 
 # ─── CI 持续集成（构建+测试+推镜像）───────────────────────────────────────
 ci-backend: migration-guardrails arch-guardrails be-install be-fmt be-lint

@@ -64,6 +64,11 @@ while :; do read -r -t 1 _ || true; done
 SH
 cat >"$test_dir/playwright-pass" <<'SH'
 #!/usr/bin/env bash
+if [[ -v STATEFUL_E2E_EXPECTED_PROFILE ]]; then
+  [[ ${STATEFUL_E2E_PROFILE:-} == "$STATEFUL_E2E_EXPECTED_PROFILE" ]] || exit 24
+else
+  [[ ! -v STATEFUL_E2E_PROFILE ]] || exit 25
+fi
 cat >"$STATEFUL_E2E_RESULTS_PATH" <<'JSON'
 {"status":"passed","cleanup":{"passed":true},"unverified_capabilities":[],"packs":[{"id":"iam","status":"passed"}],"capabilities":[{"id":"iam.login","status":"passed"}]}
 JSON
