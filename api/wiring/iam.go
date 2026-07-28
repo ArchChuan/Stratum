@@ -49,8 +49,9 @@ func BuildHermesFuncs(cfg *config.Config, logger *zap.Logger) (
 
 // IAM holds identity & access management bounded-context services.
 type IAM struct {
-	TenantService *application.TenantService
-	AdminService  *application.AdminService
+	TenantService     *application.TenantService
+	InvitationService *application.InvitationService
+	AdminService      *application.AdminService
 }
 
 func (c *Container) buildIAM(_ context.Context) error {
@@ -64,6 +65,7 @@ func (c *Container) buildIAM(_ context.Context) error {
 			c.Platform.AESKey,
 			c.Platform.GatewayCache,
 		)
+		iam.InvitationService = application.NewInvitationService(iampersistence.NewInvitationRepo(db))
 		opts := []application.AdminServiceOption{
 			application.WithSchemaCleaner(iampersistence.NewTenantSchemaCleaner(db)),
 			application.WithAdminLogger(c.Logger),

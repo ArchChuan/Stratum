@@ -69,6 +69,10 @@ func (s *DefinitionService) Update(ctx context.Context, tenantID, id string, cmd
 	return definition, nil
 }
 
+func (s *DefinitionService) Delete(ctx context.Context, tenantID, id string) error {
+	return s.definitions.DeleteDefinition(ctx, tenantID, id)
+}
+
 func normalizeInputSchema(schema domain.InputSchema) domain.InputSchema {
 	if schema.TaskLabel == "" && schema.TaskDescription == "" && len(schema.Fields) == 0 {
 		return domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{}}

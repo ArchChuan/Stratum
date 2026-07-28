@@ -118,6 +118,35 @@ func setupAuthRouter(h *handler.AuthHandler) *gin.Engine {
 	return r
 }
 
+func TestAuthHandler_GitHubLoginUsesConfiguredAuthorizeURL(t *testing.T) {
+	h := handler.NewAuthHandler(handler.AuthHandlerDeps{
+		GitHubClient:       githubOAuthFake{},
+		GitHubAuthorizeURL: "http://127.0.0.1:19090/login/oauth/authorize",
+		CallbackURL:        "http://127.0.0.1:18080/auth/github/callback",
+		Logger:             zap.NewNop(),
+	})
+	r := setupAuthRouter(h)
+	req := httptest.NewRequest(http.MethodGet, "/auth/github", nil) //nolint:noctx
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	location, err := url.Parse(w.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse redirect: %v", err)
+	}
+	if location.Scheme != "http" || location.Host != "127.0.0.1:19090" || location.Path != "/login/oauth/authorize" {
+		t.Fatalf("unexpected authorize redirect: %s", location.String())
+	}
+	query := location.Query()
+	if query.Get("redirect_uri") != "http://127.0.0.1:18080/auth/github/callback" || query.Get("state") == "" {
+		t.Fatalf("missing callback or state: %s", location.String())
+	}
+}
+
 func TestAuthHandler_OAuthExchange_ConsumesLoginCodeOnce(t *testing.T) {
 	store := &oauthExchangeStoreFake{payload: &iamport.OAuthExchange{
 		Kind:        iamport.OAuthExchangeLogin,
@@ -441,4 +470,51 @@ func TestAuthHandler_Register_InvalidAction(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500 (nil JWTService), got %d", w.Code)
 	}
+}
+
+func TestAuthHandler_Register_JoinConsumesInvitation(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwtSvc := iamtoken.NewJWTService(key)
+	onboardingToken, err := jwtSvc.SignOnboarding(iamport.OnboardingClaims{
+		GitHubID: 42, GitHubLogin: "new-user", Email: "new.user@example.com",
+	}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invitationRepo := &authInvitationRepoFake{result: domain.InvitationJoinResult{
+		UserID: "user-1", TenantID: "tenant-1", Role: "member", GlobalRole: "user",
+	}}
+	h := handler.NewAuthHandler(handler.AuthHandlerDeps{
+		JWTService: jwtSvc, TokenStore: &refreshTokenStoreFake{},
+		InvitationSvc: application.NewInvitationService(invitationRepo), Logger: zap.NewNop(),
+	})
+	r := setupAuthRouter(h)
+	body := `{"onboarding_token":"` + onboardingToken + `","action":"join","invitation_token":"one-time-code"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body)) //nolint:noctx
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if invitationRepo.input.Identity.Email != "new.user@example.com" {
+		t.Fatalf("join email=%q", invitationRepo.input.Identity.Email)
+	}
+}
+
+type authInvitationRepoFake struct {
+	input  domain.InvitationJoinInput
+	result domain.InvitationJoinResult
+}
+
+func (f *authInvitationRepoFake) Create(context.Context, domain.TenantInvitation) error { return nil }
+func (f *authInvitationRepoFake) ConsumeAndJoin(_ context.Context, input domain.InvitationJoinInput) (*domain.InvitationJoinResult, error) {
+	f.input = input
+	return &f.result, nil
+}
+func (f *authInvitationRepoFake) ConsumeAndJoinExisting(_ context.Context, _ domain.ExistingInvitationJoinInput) (*domain.InvitationJoinResult, error) {
+	return &f.result, nil
 }

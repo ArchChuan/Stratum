@@ -27,4 +27,13 @@ describe('CandidateDrawer', () => {
     rerender(<CandidateDrawer candidate={{ ...candidate, status: 'rejected' }} open onClose={vi.fn()} canManage onReject={vi.fn()} />);
     expect(screen.queryByRole('button', { name: '拒绝候选' })).not.toBeInTheDocument();
   });
+
+  it('requests an offline evaluation for a proposed candidate', () => {
+    const onEvaluate = vi.fn();
+    render(<CandidateDrawer candidate={candidate} open onClose={vi.fn()} canManage
+      onReject={vi.fn()} onEvaluate={onEvaluate} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '运行离线评测' }));
+    expect(onEvaluate).toHaveBeenCalledWith(candidate);
+  });
 });

@@ -13,6 +13,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/api/wiring"
+	"github.com/byteBuilderX/stratum/internal/iam/application"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
@@ -75,6 +76,7 @@ func registerWorkflows(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 	definitions.GET("/:id/versions/:versionID", h.GetVersion)
 	definitions.POST("", admin, requireActive, h.CreateDefinition)
 	definitions.PUT("/:id/draft", admin, requireActive, h.UpdateDefinition)
+	definitions.DELETE("/:id", admin, requireActive, h.DeleteDefinition)
 	definitions.POST("/:id/validate", admin, requireActive, h.ValidateDefinition)
 	definitions.POST("/:id/publish", admin, requireActive, h.PublishDefinition)
 	startRuns := r.Group("/workflow-runs", member...)
@@ -138,6 +140,10 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		return
 	}
 	jwtSvc := c.Platform.JWTService
+	var invitationSvc *application.InvitationService
+	if c.IAM != nil {
+		invitationSvc = c.IAM.InvitationService
+	}
 
 	authHandler := handler.NewAuthHandler(handler.AuthHandlerDeps{
 		GitHubClient:       c.Platform.GitHubClient,
@@ -146,7 +152,9 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		TokenStore:         c.Platform.TokenStore,
 		OAuthExchangeStore: c.Platform.OAuthExchangeStore,
 		OnboardSvc:         c.Platform.OnboardSvc,
+		InvitationSvc:      invitationSvc,
 		Logger:             c.Logger,
+		GitHubAuthorizeURL: cfg.GitHubAuthorizeURL,
 		CallbackURL:        cfg.GitHubCallbackURL,
 		FrontendURL:        cfg.FrontendURL,
 		GlobalAdmin:        cfg.GlobalAdminGitHubLogin,
@@ -174,7 +182,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	}
 	jwtMW := middleware.JWTMiddleware(jwtSvc)
 	adminHandler := handler.NewAdminHandler(c.IAM.AdminService, c.Logger)
-	tenantHandler := handler.NewTenantHandler(c.IAM.TenantService, c.IAM.AdminService, c.Logger)
+	tenantHandler := handler.NewTenantHandler(c.IAM.TenantService, c.IAM.InvitationService, c.IAM.AdminService, c.Logger)
 
 	adminGroup := r.Group("/admin", jwtMW, middleware.RequireGlobalAdmin())
 	{
@@ -188,6 +196,8 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	tenantGroup := r.Group("/tenant", jwtMW, middleware.InjectTenantContext(), middleware.RequireTenantRole("member"))
 	{
 		tenantGroup.GET("/members", tenantHandler.ListMembers)
+		tenantGroup.POST("/members/invite", requireActive, tenantHandler.InviteMember)
+		tenantGroup.POST("/join", tenantHandler.JoinTenant)
 		tenantGroup.PATCH("/members/:user_id/role", tenantHandler.UpdateMemberRole)
 		tenantGroup.DELETE("/members/:user_id", tenantHandler.RemoveMember)
 		tenantGroup.GET("/settings", tenantHandler.GetSettings)

@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2021", "DOM", "DOM.Iterable"],
+    "types": ["vitest/globals", "node"],
+    "noEmit": true
+  },
+  "include": ["e2e/stateful/**/*.ts", "e2e/system-stateful.spec.ts", "playwright.stateful.config.ts", "vitest.stateful.config.ts"]
+}

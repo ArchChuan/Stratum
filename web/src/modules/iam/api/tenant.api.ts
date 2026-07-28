@@ -7,7 +7,6 @@ import {
   adminTenantSchema,
   type TenantSettings,
   type TenantSummary,
-  type AdminTenant,
 } from '../model/auth';
 
 import api from '@/services/client';
@@ -22,7 +21,26 @@ const memberPageSchema = z.object({
   page_size: z.number(),
 });
 
+const adminTenantPageSchema = z.object({
+  tenants: z.array(adminTenantSchema),
+  total: z.number(),
+  page: z.number(),
+  page_size: z.number(),
+});
+
+const invitationSchema = z.object({
+  invitation_code: z.string().min(1),
+  email: z.string().email(),
+  role: z.enum(['admin', 'member']),
+});
+
 export type MemberPage = z.infer<typeof memberPageSchema>;
+export type CreateAdminTenantInput = {
+  name: string;
+  slug: string;
+  plan: 'free' | 'pro' | 'enterprise';
+  status: 'active' | 'suspended';
+};
 
 export const tenantApi = {
   listMine: async (token?: string): Promise<TenantSummary[]> => {
@@ -47,8 +65,10 @@ export const tenantApi = {
     const res = await api.get('/tenant/members', { params: { page, page_size: pageSize } });
     return memberPageSchema.parse(res.data);
   },
-  inviteMember: (data: { email: string; role: string }) =>
-    api.post('/tenant/members/invite', data),
+  inviteMember: async (data: { email: string; role: string }) => {
+    const res = await api.post('/tenant/members/invite', data);
+    return invitationSchema.parse(res.data);
+  },
   updateMemberRole: (userId: string, role: string) =>
     api.patch(`/tenant/members/${userId}/role`, { role }),
   removeMember: (userId: string) => api.delete(`/tenant/members/${userId}`),
@@ -58,16 +78,18 @@ export const tenantApi = {
       action: 'join',
       invitation_token: inviteCode,
     }),
+  joinExisting: (inviteCode: string) =>
+    api.post<{ tenant_id: string }>('/tenant/join', { invitation_code: inviteCode }).then((res) => res.data),
   // admin
-  listAllTenants: async (): Promise<AdminTenant[]> => {
-    const res = await api.get('/admin/tenants');
-    return z.array(adminTenantSchema).parse(res.data?.tenants ?? res.data ?? []);
+  listAllTenants: async (page: number, pageSize: number) => {
+    const res = await api.get('/admin/tenants', { params: { page, page_size: pageSize } });
+    return adminTenantPageSchema.parse(res.data);
   },
   setTenantEnabled: (tenantId: string, enabled: boolean) =>
     api.patch(`/admin/tenants/${tenantId}`, {
       status: enabled ? 'active' : 'suspended',
     }),
-  createTenant: (data: { name: string }) => api.post('/admin/tenants', data),
+  createTenant: (data: CreateAdminTenantInput) => api.post('/admin/tenants', data),
   adminDeleteTenant: (tenantId: string) => api.delete(`/admin/tenants/${tenantId}`),
   deleteSelf: () => api.delete('/tenant'),
 };

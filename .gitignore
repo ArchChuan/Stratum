@@ -122,6 +122,7 @@ ENV/
 /scripts/scan-risks-daily.sh
 /scripts/update-docs-daily.sh
 /test-results/
+/web/test-results/
 
 # Pre-commit framework
 .pre-commit-framework/

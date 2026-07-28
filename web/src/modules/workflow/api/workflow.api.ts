@@ -32,6 +32,9 @@ export const workflowApi = {
     const response = await api.put(`/workflows/${workflowId}/draft`, payload);
     return workflowDefinitionSchema.parse(response.data);
   },
+  deleteWorkflow: async (workflowId: string) => {
+    await api.delete(`/workflows/${workflowId}`);
+  },
   validateWorkflow: async (workflowId: string) => {
     const response = await api.post(`/workflows/${workflowId}/validate`);
     return validResponseSchema.parse(response.data);

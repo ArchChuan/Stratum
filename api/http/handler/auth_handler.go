@@ -30,10 +30,12 @@ type AuthHandlerDeps struct {
 	JWTService         iamport.TokenService
 	TokenStore         iamport.RefreshTokenStore
 	OnboardSvc         *application.OnboardService
+	InvitationSvc      *application.InvitationService
 	MembershipReader   membershipReader
 	OAuthExchangeStore iamport.OAuthExchangeStore
 	Logger             *zap.Logger
 	SchemaProvisioner  iamport.TenantSchemaProvisioner
+	GitHubAuthorizeURL string
 	CallbackURL        string
 	FrontendURL        string
 	GlobalAdmin        string

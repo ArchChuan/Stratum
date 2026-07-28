@@ -38,5 +38,16 @@ export const useWorkflowCatalog = () => {
     setPage(1);
   };
 
-  return { workflows, query, search, page, pageSize, total, loading, setPage, setPageSize };
+  const deleteWorkflow = async (workflowId: string) => {
+    try {
+      await workflowApi.deleteWorkflow(workflowId);
+      message.success({ content: '工作流草稿已删除', duration: 2 });
+      setWorkflows((current) => current.filter((workflow) => workflow.id !== workflowId));
+      setTotal((current) => Math.max(0, current - 1));
+    } catch (err: any) {
+      message.error({ content: err.response?.data?.error || '删除工作流失败', duration: 0 });
+    }
+  };
+
+  return { workflows, query, search, page, pageSize, total, loading, deleteWorkflow, setPage, setPageSize };
 };

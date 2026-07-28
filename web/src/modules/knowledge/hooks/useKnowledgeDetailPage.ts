@@ -1,5 +1,5 @@
 import { Form, message } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { knowledgeApi } from '../api/knowledge.api';
@@ -32,6 +32,7 @@ export const useKnowledgeDetailPage = () => {
   const [stats, setStats] = useState<WorkspaceStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [configForm] = Form.useForm<ConfigValues>();
+  const lastLoadedConfig = useRef<ConfigValues>({});
   const [configLoading, setConfigLoading] = useState(false);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [queryForm] = Form.useForm<QueryValues>();
@@ -60,12 +61,20 @@ export const useKnowledgeDetailPage = () => {
     try {
       const data = await knowledgeApi.stats(name);
       setStats(data);
-      configForm.setFieldsValue({
+      const values: ConfigValues = {
         chunk_size: data.config?.chunk_size,
         chunk_overlap: data.config?.chunk_overlap,
         query_mode: data.config?.query_mode,
         top_k: data.config?.top_k,
-      });
+      };
+      for (const field of Object.keys(values) as (keyof ConfigValues)[]) {
+        const currentValue = configForm.getFieldValue(field);
+        const lastLoadedValue = lastLoadedConfig.current[field];
+        if (lastLoadedValue === undefined || Object.is(currentValue, lastLoadedValue)) {
+          configForm.setFieldValue(field, values[field]);
+        }
+      }
+      lastLoadedConfig.current = values;
     } catch (err) {
       message.error(extractErrorMessage(err) || '获取知识库详情失败');
     } finally {

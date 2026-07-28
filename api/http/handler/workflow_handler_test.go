@@ -53,7 +53,10 @@ func (f *streamingWorkflowRunFake) Events(_ context.Context, _, _ string, _ work
 	return out, nil
 }
 
-type workflowDefinitionFake struct{ created *workflowdomain.Definition }
+type workflowDefinitionFake struct {
+	created   *workflowdomain.Definition
+	deletedID string
+}
 
 func (f *workflowDefinitionFake) Create(_ context.Context, _ string, cmd workflowapp.CreateDefinitionCommand) (*workflowdomain.Definition, error) {
 	f.created = &workflowdomain.Definition{ID: "wf-1", Name: cmd.Name, Revision: 1, Spec: cmd.Spec}
@@ -77,6 +80,10 @@ func (f *workflowDefinitionFake) ListDefinitions(context.Context, string, workfl
 }
 func (*workflowDefinitionFake) ListVersions(context.Context, string, string, workflowapp.ListVersionsQuery) (workflowapp.VersionPage, error) {
 	return workflowapp.VersionPage{Versions: []workflowapp.VersionSummary{{ID: "version-1", DefinitionID: "wf-1", Number: 1}}, Total: 1, Page: 1, PageSize: 20}, nil
+}
+func (f *workflowDefinitionFake) Delete(_ context.Context, _, id string) error {
+	f.deletedID = id
+	return nil
 }
 
 type workflowRunFake struct {
@@ -173,6 +180,24 @@ func TestWorkflowHandlerCreateAndStart(t *testing.T) {
 	require.Equal(t, "run-1", started["run_id"])
 	require.Equal(t, "user-1", runs.started.CreatedBy)
 	require.Equal(t, "hello", runs.started.Input["task"])
+}
+
+func TestWorkflowHandlerDeletesDraft(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	definitions := &workflowDefinitionFake{}
+	h := handler.NewWorkflowHandler(definitions, &workflowRunFake{})
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
+		c.Next()
+	})
+	router.DELETE("/workflows/:id", h.DeleteDefinition)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/workflows/wf-1", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "wf-1", definitions.deletedID)
 }
 
 func TestWorkflowHandlerListsProductCollections(t *testing.T) {

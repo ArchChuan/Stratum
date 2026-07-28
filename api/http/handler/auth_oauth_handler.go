@@ -25,12 +25,22 @@ func (h *AuthHandler) GitHubLogin(c *gin.Context) {
 		return
 	}
 	c.SetCookie("oauth_state", state, 300, "/", "", h.deps.SecureCookies, true)
-	redirectURL := "https://github.com/login/oauth/authorize" +
-		"?client_id=" + h.deps.GitHubClient.ClientID() +
-		"&redirect_uri=" + h.deps.CallbackURL +
-		"&scope=user:email" +
-		"&state=" + state
-	c.Redirect(http.StatusFound, redirectURL)
+	authorizeURL := h.deps.GitHubAuthorizeURL
+	if authorizeURL == "" {
+		authorizeURL = "https://github.com/login/oauth/authorize"
+	}
+	redirectURL, err := url.Parse(authorizeURL)
+	if err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("invalid oauth authorize url")))
+		return
+	}
+	query := redirectURL.Query()
+	query.Set("client_id", h.deps.GitHubClient.ClientID())
+	query.Set("redirect_uri", h.deps.CallbackURL)
+	query.Set("scope", "user:email")
+	query.Set("state", state)
+	redirectURL.RawQuery = query.Encode()
+	c.Redirect(http.StatusFound, redirectURL.String())
 }
 
 // GitHubCallback handles the OAuth callback, exchanges code, and issues an onboarding token.
@@ -131,7 +141,9 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 		return
 	}
 
-	userID, targetTenantID, dbGlobalRole, err := h.deps.OnboardSvc.AutoJoinDefaultTenant(ctx, ghUser.ID, ghUser.Login, ghUser.AvatarURL, h.deps.GlobalAdmin)
+	userID, targetTenantID, dbGlobalRole, err := h.deps.OnboardSvc.AutoJoinDefaultTenant(
+		ctx, ghUser.ID, ghUser.Login, ghUser.AvatarURL, ghUser.Email, h.deps.GlobalAdmin,
+	)
 	if err == nil {
 		if globalRole == "global_admin" && dbGlobalRole != "global_admin" {
 			_ = h.deps.OnboardSvc.SetGlobalRole(ctx, userID, "global_admin")
@@ -174,6 +186,7 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 		GitHubID:    ghUser.ID,
 		GitHubLogin: ghUser.Login,
 		AvatarURL:   ghUser.AvatarURL,
+		Email:       ghUser.Email,
 	}
 	obToken, err := h.deps.JWTService.SignOnboarding(ob, constants.OnboardingTTL)
 	if err != nil {

@@ -20,6 +20,22 @@ export const useWorkflowRunStream = (runId: string, refreshKey = 0) => {
     let controller: AbortController | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const update = (next: WorkflowRunState) => { stateRef.current = next; setState(next); };
+    const reloadServerCollections = async () => {
+      try {
+        const detail = await workflowApi.getWorkflowRun(runId);
+        if (disposed || !stateRef.current) return;
+        update({
+          ...stateRef.current,
+          run: detail.run,
+          attempts: detail.node_attempts,
+          approvals: detail.approvals,
+          effectIntents: detail.effect_intents,
+          availableActions: detail.available_actions,
+        });
+      } catch {
+        if (!disposed) message.error({ content: '操作失败', duration: 0 });
+      }
+    };
 
     const connect = () => {
       const current = stateRef.current;
@@ -32,6 +48,10 @@ export const useWorkflowRunStream = (runId: string, refreshKey = 0) => {
           if (!parsed.success || !stateRef.current) return;
           reconnectDelay.current = WORKFLOW_STREAM_RECONNECT_BASE_MS;
           update({ ...reduceRunEvent(stateRef.current, parsed.data), connection: 'connected' });
+          if (parsed.data.event_type === 'workflow.approval_requested'
+            || parsed.data.event_type === 'workflow.manual_intervention') {
+            void reloadServerCollections();
+          }
         },
         onClose: () => scheduleReconnect(),
         onError: () => scheduleReconnect(),

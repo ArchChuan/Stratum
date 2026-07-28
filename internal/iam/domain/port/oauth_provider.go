@@ -7,6 +7,7 @@ type GitHubProfile struct {
 	ID        int64
 	Login     string
 	AvatarURL string
+	Email     string
 }
 
 // GitHubOAuthClient abstracts GitHub OAuth code exchange and profile retrieval.

@@ -78,6 +78,7 @@ func TestJWT_OnboardingToken(t *testing.T) {
 		GitHubID:    42,
 		GitHubLogin: "byteBuilderX",
 		AvatarURL:   "https://avatars.githubusercontent.com/u/42",
+		Email:       "developer@example.com",
 	}
 	token, err := svc.SignOnboarding(ob, 5*time.Minute)
 	if err != nil {
@@ -90,5 +91,8 @@ func TestJWT_OnboardingToken(t *testing.T) {
 	}
 	if parsed.GitHubLogin != ob.GitHubLogin {
 		t.Errorf("GitHubLogin mismatch: got %s want %s", parsed.GitHubLogin, ob.GitHubLogin)
+	}
+	if parsed.Email != ob.Email {
+		t.Errorf("Email mismatch: got %s want %s", parsed.Email, ob.Email)
 	}
 }

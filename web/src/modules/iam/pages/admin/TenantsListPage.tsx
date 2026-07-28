@@ -1,9 +1,13 @@
+import { PlusOutlined } from '@ant-design/icons';
 import { Button, Tag, Typography, message, Card, Flex, Space } from 'antd';
+import type { TablePaginationConfig } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 
-import { tenantApi } from '../../api/tenant.api';
+import { tenantApi, type CreateAdminTenantInput } from '../../api/tenant.api';
 import { useAuth } from '../../components/AuthContext';
 import type { AdminTenant } from '../../model/auth';
+
+import { CreateTenantModal } from './CreateTenantModal';
 
 import { DEFAULT_PAGE_SIZE } from '@/constants';
 import { extractErrorMessage } from '@/shared/lib';
@@ -16,11 +20,20 @@ export const TenantsListPage = () => {
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
   const [loading, setLoading] = useState(false);
   const [deleteLoadingId, setDeleteLoadingId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createLoading, setCreateLoading] = useState(false);
+  const [pagination, setPagination] = useState({
+    current: 1,
+    pageSize: DEFAULT_PAGE_SIZE,
+    total: 0,
+  });
 
-  const fetchTenants = async () => {
+  const fetchTenants = async (page: number, pageSize: number) => {
     setLoading(true);
     try {
-      setTenants(await tenantApi.listAllTenants());
+      const result = await tenantApi.listAllTenants(page, pageSize);
+      setTenants(result.tenants);
+      setPagination({ current: result.page, pageSize: result.page_size, total: result.total });
     } catch {
       message.error('获取租户列表失败');
     } finally {
@@ -29,7 +42,7 @@ export const TenantsListPage = () => {
   };
 
   useEffect(() => {
-    fetchTenants();
+    void fetchTenants(1, DEFAULT_PAGE_SIZE);
   }, []);
 
   const handleToggle = async (tenantId: string, currentStatus?: string) => {
@@ -37,7 +50,7 @@ export const TenantsListPage = () => {
     try {
       await tenantApi.setTenantEnabled(tenantId, enabling);
       message.success(enabling ? '已启用' : '已禁用');
-      fetchTenants();
+      void fetchTenants(pagination.current, pagination.pageSize);
     } catch (err) {
       message.error(extractErrorMessage(err, '操作失败'));
     }
@@ -48,11 +61,26 @@ export const TenantsListPage = () => {
     try {
       await tenantApi.adminDeleteTenant(tenantId);
       message.success('租户已删除');
-      fetchTenants();
+      void fetchTenants(pagination.current, pagination.pageSize);
     } catch (err) {
       message.error(extractErrorMessage(err, '删除失败'));
     } finally {
       setDeleteLoadingId(null);
+    }
+  };
+
+  const handleCreate = async (input: CreateAdminTenantInput) => {
+    setCreateLoading(true);
+    try {
+      await tenantApi.createTenant(input);
+      message.success({ content: '租户创建成功', duration: 2 });
+      setCreateOpen(false);
+      await fetchTenants(pagination.current, pagination.pageSize);
+    } catch (err) {
+      message.error({ content: extractErrorMessage(err, '创建租户失败'), duration: 0 });
+      throw err;
+    } finally {
+      setCreateLoading(false);
     }
   };
 
@@ -127,21 +155,40 @@ export const TenantsListPage = () => {
 
   return (
     <div>
-      <div style={{ marginBottom: 20 }}>
-        <Title level={4} style={{ margin: 0 }}>
-          所有租户
-        </Title>
-        <Text type="secondary" style={{ fontSize: 13 }}>
-          查看和管理平台所有租户
-        </Text>
-      </div>
+      <Flex justify="space-between" align="center" gap={16} style={{ marginBottom: 20 }}>
+        <div>
+          <Title level={4} style={{ margin: 0 }}>
+            所有租户
+          </Title>
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            查看和管理平台所有租户
+          </Text>
+        </div>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          aria-label="创建租户"
+          onClick={() => setCreateOpen(true)}
+        >
+          创建租户
+        </Button>
+      </Flex>
       <Card style={{ borderRadius: 12, border: '1px solid #f0f0f0' }} styles={{ body: { padding: 0 } }}>
         <ResponsiveDataView
           rows={tenants}
           columns={columns}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: DEFAULT_PAGE_SIZE, showTotal: (t) => `共 ${t} 个租户` }}
+          pagination={{
+            current: pagination.current,
+            pageSize: pagination.pageSize,
+            total: pagination.total,
+            showTotal: (t) => `共 ${t} 个租户`,
+          }}
+          mobilePaginationMode="server"
+          onChange={(next: TablePaginationConfig) => {
+            void fetchTenants(next.current || 1, next.pageSize || DEFAULT_PAGE_SIZE);
+          }}
           renderMobileItem={(tenant) => {
             const id = String(tenant.id);
             const isActive = tenant.status === 'active';
@@ -192,6 +239,12 @@ export const TenantsListPage = () => {
           }}
         />
       </Card>
+      <CreateTenantModal
+        open={createOpen}
+        loading={createLoading}
+        onCancel={() => setCreateOpen(false)}
+        onCreate={handleCreate}
+      />
     </div>
   );
 };

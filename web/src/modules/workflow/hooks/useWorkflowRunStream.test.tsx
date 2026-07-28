@@ -33,4 +33,35 @@ describe('useWorkflowRunStream', () => {
     unmount();
     expect(abort).toHaveBeenCalled();
   });
+
+  it('reloads server-created approvals when approval is requested', async () => {
+    let handlers: Parameters<typeof streamApiGet>[1] | undefined;
+    vi.mocked(streamApiGet).mockImplementation((_, next) => {
+      handlers = next;
+      return { abort: vi.fn() } as unknown as AbortController;
+    });
+    vi.mocked(workflowApi.getWorkflowRun)
+      .mockResolvedValueOnce(detail)
+      .mockResolvedValueOnce({
+        ...detail,
+        run: { ...detail.run, status: 'paused', generation: 2 },
+        approvals: [{
+          id: 'approval-1', run_id: 'run-1', node_id: 'approval', attempt_id: 'attempt-1',
+          run_generation: 2, reason: '需要审批', risk: 'medium', request_summary: '摘要',
+          status: 'pending', decision_actor: '', decision_comment: '', decided_at: null,
+        }],
+        available_actions: ['cancel'],
+      });
+    const { result } = renderHook(() => useWorkflowRunStream('run-1'));
+    await waitFor(() => expect(streamApiGet).toHaveBeenCalled());
+
+    act(() => handlers?.onEvent({
+      id: '2', event: 'workflow.approval_requested',
+      data: { id: 'event-2', run_id: 'run-1', sequence_no: 2, event_type: 'workflow.approval_requested', occurred_at: '' },
+    }));
+
+    await waitFor(() => expect(result.current?.approvals).toHaveLength(1));
+    expect(workflowApi.getWorkflowRun).toHaveBeenCalledTimes(2);
+    expect(result.current?.lastSequence).toBe(2);
+  });
 });

@@ -70,11 +70,16 @@ func (s *OnboardService) GetGlobalRole(ctx context.Context, userID string) (stri
 
 // AutoJoinDefaultTenant upserts the GitHub user into `users` and adds them to the default tenant.
 // Returns userID, tenantID, and global_role.
-func (s *OnboardService) AutoJoinDefaultTenant(ctx context.Context, githubID int64, githubLogin, avatarURL, globalAdminLogin string) (string, string, string, error) {
+func (s *OnboardService) AutoJoinDefaultTenant(
+	ctx context.Context,
+	githubID int64,
+	githubLogin, avatarURL, email, globalAdminLogin string,
+) (string, string, string, error) {
 	return s.repo.AutoJoinDefaultTenant(ctx, domain.AutoJoinInput{
 		GitHubID:         githubID,
 		GitHubLogin:      githubLogin,
 		AvatarURL:        avatarURL,
+		Email:            email,
 		GlobalAdminLogin: globalAdminLogin,
 	})
 }

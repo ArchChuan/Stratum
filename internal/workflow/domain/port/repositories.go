@@ -11,6 +11,7 @@ type DefinitionRepository interface {
 	CreateDefinition(context.Context, string, *domain.Definition) error
 	GetDefinition(context.Context, string, string) (*domain.Definition, error)
 	UpdateDefinition(context.Context, string, *domain.Definition, int64) error
+	DeleteDefinition(context.Context, string, string) error
 }
 
 type DefinitionListQuery struct {

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"net/url"
 	"os"
 	"time"
 
@@ -17,6 +19,9 @@ type Config struct {
 	RedisURL                string
 	GitHubClientID          string
 	GitHubClientSecret      string
+	GitHubAuthorizeURL      string
+	GitHubTokenURL          string
+	GitHubUserURL           string
 	JWTPrivateKeyPEM        string
 	GlobalAdminGitHubLogin  string
 	FrontendURL             string
@@ -66,6 +71,10 @@ type MemoryPipelineConfig struct {
 
 func Load() (*Config, error) {
 	natsURL := getEnv("NATS_URL", "nats://localhost:4222")
+	authorizeURL, tokenURL, userURL, err := githubOAuthEndpoints()
+	if err != nil {
+		return nil, err
+	}
 	return &Config{
 		Port:                    getEnv("PORT", "8080"),
 		NatsURL:                 natsURL,
@@ -76,6 +85,9 @@ func Load() (*Config, error) {
 		RedisURL:                getEnv("REDIS_URL", "redis://localhost:6379"),
 		GitHubClientID:          getEnv("GITHUB_CLIENT_ID", ""),
 		GitHubClientSecret:      getEnv("GITHUB_CLIENT_SECRET", ""),
+		GitHubAuthorizeURL:      authorizeURL,
+		GitHubTokenURL:          tokenURL,
+		GitHubUserURL:           userURL,
 		JWTPrivateKeyPEM:        getEnv("JWT_PRIVATE_KEY_PEM", ""),
 		GlobalAdminGitHubLogin:  getEnv("GLOBAL_ADMIN_GITHUB_LOGIN", "ArchChuan"),
 		FrontendURL:             getEnv("FRONTEND_URL", "http://localhost:3002"),
@@ -114,6 +126,42 @@ func Load() (*Config, error) {
 			SummaryTokenThreshold: constants.EnricherSummaryTokenThreshold,
 		},
 	}, nil
+}
+
+func githubOAuthEndpoints() (string, string, string, error) {
+	const (
+		defaultAuthorizeURL = "https://github.com/login/oauth/authorize"
+		defaultTokenURL     = "https://github.com/login/oauth/access_token"
+		defaultUserURL      = "https://api.github.com/user"
+	)
+	overrides := []string{
+		os.Getenv("GITHUB_AUTHORIZE_URL"),
+		os.Getenv("GITHUB_TOKEN_URL"),
+		os.Getenv("GITHUB_USER_URL"),
+	}
+	configured := 0
+	for _, endpoint := range overrides {
+		if endpoint != "" {
+			configured++
+		}
+	}
+	if configured == 0 {
+		return defaultAuthorizeURL, defaultTokenURL, defaultUserURL, nil
+	}
+	if configured != len(overrides) {
+		return "", "", "", fmt.Errorf("GitHub OAuth endpoint overrides must be configured together")
+	}
+	if os.Getenv("STRATUM_E2E_MODE") != "true" {
+		return "", "", "", fmt.Errorf("GitHub OAuth endpoint overrides require STRATUM_E2E_MODE=true")
+	}
+	for _, endpoint := range overrides {
+		parsed, err := url.Parse(endpoint)
+		if err != nil || parsed.Scheme != "http" || parsed.User != nil ||
+			(parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost") {
+			return "", "", "", fmt.Errorf("GitHub OAuth endpoint overrides must use loopback HTTP URLs")
+		}
+	}
+	return overrides[0], overrides[1], overrides[2], nil
 }
 
 func getEnv(key, defaultValue string) string {

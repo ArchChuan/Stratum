@@ -1,10 +1,10 @@
-import { EditOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { Button, Card, Space, Tag, Typography } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 
 import type { WorkflowSummary } from '../model/workflow';
 
-import { ResponsiveDataView } from '@/shared/ui';
+import { DangerPopconfirm, ResponsiveDataView } from '@/shared/ui';
 
 const { Paragraph, Text } = Typography;
 
@@ -20,6 +20,7 @@ export const WorkflowCatalogTable = ({
   canManage,
   onRun,
   onEdit,
+  onDelete,
   onPageChange,
 }: {
   workflows: WorkflowSummary[];
@@ -29,6 +30,7 @@ export const WorkflowCatalogTable = ({
   canManage: boolean;
   onRun: (workflow: WorkflowSummary) => void;
   onEdit: (workflow: WorkflowSummary) => void;
+  onDelete: (workflow: WorkflowSummary) => void;
   onPageChange: (page: number, pageSize: number) => void;
 }) => {
   const columns: ColumnsType<WorkflowSummary> = [
@@ -39,10 +41,18 @@ export const WorkflowCatalogTable = ({
     { title: '草稿', dataIndex: 'revision', key: 'revision', width: 110, render: (revision) => <Tag>修订 {revision}</Tag> },
     { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 150, render: formatTime },
     {
-      title: '操作', key: 'actions', width: canManage ? 210 : 120,
+      title: '操作', key: 'actions', width: canManage ? 320 : 120,
       render: (_, workflow) => <Space>
         <Button aria-label="运行工作流" type="link" icon={<PlayCircleOutlined />} onClick={() => onRun(workflow)}>运行工作流</Button>
         {canManage && <Button aria-label="编辑草稿" type="link" icon={<EditOutlined />} onClick={() => onEdit(workflow)}>编辑草稿</Button>}
+        {canManage && <DangerPopconfirm
+          title="确认删除这个工作流草稿？"
+          description="已发布或已有运行记录的工作流无法删除。"
+          okText="确认删除"
+          onConfirm={() => onDelete(workflow)}
+        >
+          <Button aria-label="删除草稿" type="link" danger icon={<DeleteOutlined />}>删除草稿</Button>
+        </DangerPopconfirm>}
       </Space>,
     },
   ];
@@ -64,6 +74,14 @@ export const WorkflowCatalogTable = ({
       <div className="workflow-card-actions">
         <Button aria-label="运行工作流" type="primary" ghost icon={<PlayCircleOutlined />} onClick={() => onRun(workflow)}>运行工作流</Button>
         {canManage && <Button aria-label="编辑草稿" icon={<EditOutlined />} onClick={() => onEdit(workflow)}>编辑草稿</Button>}
+        {canManage && <DangerPopconfirm
+          title="确认删除这个工作流草稿？"
+          description="已发布或已有运行记录的工作流无法删除。"
+          okText="确认删除"
+          onConfirm={() => onDelete(workflow)}
+        >
+          <Button aria-label="删除草稿" danger icon={<DeleteOutlined />}>删除草稿</Button>
+        </DangerPopconfirm>}
       </div>
     </Card>}
   />;

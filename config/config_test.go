@@ -2,8 +2,71 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
+
+func TestLoadGitHubOAuthEndpointDefaults(t *testing.T) {
+	t.Setenv("GITHUB_AUTHORIZE_URL", "")
+	t.Setenv("GITHUB_TOKEN_URL", "")
+	t.Setenv("GITHUB_USER_URL", "")
+	t.Setenv("STRATUM_E2E_MODE", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.GitHubAuthorizeURL != "https://github.com/login/oauth/authorize" {
+		t.Fatalf("unexpected authorize URL: %q", cfg.GitHubAuthorizeURL)
+	}
+	if cfg.GitHubTokenURL != "https://github.com/login/oauth/access_token" {
+		t.Fatalf("unexpected token URL: %q", cfg.GitHubTokenURL)
+	}
+	if cfg.GitHubUserURL != "https://api.github.com/user" {
+		t.Fatalf("unexpected user URL: %q", cfg.GitHubUserURL)
+	}
+}
+
+func TestLoadGitHubOAuthEndpointsRequireE2EMode(t *testing.T) {
+	t.Setenv("GITHUB_AUTHORIZE_URL", "http://127.0.0.1:19090/login/oauth/authorize")
+	t.Setenv("GITHUB_TOKEN_URL", "http://127.0.0.1:19090/login/oauth/access_token")
+	t.Setenv("GITHUB_USER_URL", "http://127.0.0.1:19090/user")
+	t.Setenv("STRATUM_E2E_MODE", "")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "STRATUM_E2E_MODE") {
+		t.Fatalf("expected explicit E2E mode error, got %v", err)
+	}
+}
+
+func TestLoadGitHubOAuthEndpointsRejectNonLoopback(t *testing.T) {
+	t.Setenv("GITHUB_AUTHORIZE_URL", "http://oauth.example.test/login/oauth/authorize")
+	t.Setenv("GITHUB_TOKEN_URL", "http://oauth.example.test/login/oauth/access_token")
+	t.Setenv("GITHUB_USER_URL", "http://oauth.example.test/user")
+	t.Setenv("STRATUM_E2E_MODE", "true")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("expected loopback validation error, got %v", err)
+	}
+}
+
+func TestLoadGitHubOAuthEndpointsAcceptCompleteLoopbackSet(t *testing.T) {
+	t.Setenv("GITHUB_AUTHORIZE_URL", "http://localhost:19090/login/oauth/authorize")
+	t.Setenv("GITHUB_TOKEN_URL", "http://localhost:19090/login/oauth/access_token")
+	t.Setenv("GITHUB_USER_URL", "http://localhost:19090/user")
+	t.Setenv("STRATUM_E2E_MODE", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.GitHubAuthorizeURL != "http://localhost:19090/login/oauth/authorize" ||
+		cfg.GitHubTokenURL != "http://localhost:19090/login/oauth/access_token" ||
+		cfg.GitHubUserURL != "http://localhost:19090/user" {
+		t.Fatalf("unexpected OAuth endpoints: %#v", cfg)
+	}
+}
 
 func TestLoad(t *testing.T) {
 	cfg, err := Load()

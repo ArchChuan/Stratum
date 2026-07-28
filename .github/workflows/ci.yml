@@ -13,6 +13,28 @@ env:
   COVERAGE_BASELINE: "38.0"
 
 jobs:
+  system-e2e-attestation:
+    name: System E2E Attestation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Classify required local acceptance
+        run: |
+          mode=$(bash scripts/quality/risk-regression-guard.sh --acceptance $(git diff --name-only HEAD^ HEAD))
+          echo "E2E_REQUIRED_MODE=$mode" >> "$GITHUB_ENV"
+          if [ "$mode" = soak ]; then echo "E2E_REQUIRED_PROFILE=test" >> "$GITHUB_ENV"; fi
+
+      - name: Verify source-bound local browser acceptance
+        run: make e2e-attestation-check E2E_REQUIRED_MODE="$E2E_REQUIRED_MODE" E2E_REQUIRED_PROFILE="$E2E_REQUIRED_PROFILE"
+
   guardrails:
     name: Migration Guardrails
     runs-on: ubuntu-latest
@@ -211,7 +233,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [guardrails, lint, test, workflow-e2e, platform-assistant-e2e, platform-assistant-browser-e2e, tool-permission-browser]
+    needs: [system-e2e-attestation, guardrails, lint, test, workflow-e2e, platform-assistant-e2e, platform-assistant-browser-e2e, tool-permission-browser]
     steps:
       - uses: actions/checkout@v4
 

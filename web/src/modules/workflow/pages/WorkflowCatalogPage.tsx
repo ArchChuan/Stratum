@@ -11,7 +11,7 @@ import '../workflow.css';
 export const WorkflowCatalogPage = () => {
   const navigate = useNavigate();
   const { isAdmin } = useTenantRole();
-  const { workflows, query, search, page, pageSize, total, loading, setPage, setPageSize } = useWorkflowCatalog();
+  const { workflows, query, search, page, pageSize, total, loading, deleteWorkflow, setPage, setPageSize } = useWorkflowCatalog();
   const emptyText = query ? '没有找到匹配的工作流' : '工作流还是空的';
 
   return <section className="workflow-page-shell">
@@ -25,6 +25,7 @@ export const WorkflowCatalogPage = () => {
       onPageChange={(nextPage, nextPageSize) => { setPage(nextPage); setPageSize(nextPageSize); }}
       onRun={(workflow) => navigate(`/workflows/${workflow.id}/run`)}
       onEdit={(workflow) => navigate(`/workflows/${workflow.id}/edit`)}
+      onDelete={(workflow) => deleteWorkflow(workflow.id)}
     />
   </section>;
 };

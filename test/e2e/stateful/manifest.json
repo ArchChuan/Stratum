@@ -1,0 +1,1877 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "dashboard.route.overview",
+      "domain": "dashboard",
+      "user_goal": "Review the current tenant overview",
+      "route": "/",
+      "roles": {
+        "allowed": [
+          "member",
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /",
+      "browser_action_id": "dashboard.summary.refresh",
+      "http_evidence": "Dashboard summary requests complete successfully",
+      "db_evidence": "Recent execution and resource totals agree with tenant records",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.route.login",
+      "domain": "iam",
+      "user_goal": "Open /login",
+      "route": "/login",
+      "roles": {
+        "allowed": [
+          "unauthenticated"
+        ],
+        "denied": []
+      },
+      "mutation": "NAVIGATE /login",
+      "browser_action_id": "iam.route.login",
+      "http_evidence": "The route and required read requests complete successfully for /login",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.route.auth.callback",
+      "domain": "iam",
+      "user_goal": "Open /auth/callback",
+      "route": "/auth/callback",
+      "roles": {
+        "allowed": [
+          "unauthenticated"
+        ],
+        "denied": []
+      },
+      "mutation": "NAVIGATE /auth/callback",
+      "browser_action_id": "iam.route.auth.callback",
+      "http_evidence": "The route and required read requests complete successfully for /auth/callback",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.route.onboarding",
+      "domain": "iam",
+      "user_goal": "Open /onboarding",
+      "route": "/onboarding",
+      "roles": {
+        "allowed": [
+          "unauthenticated"
+        ],
+        "denied": []
+      },
+      "mutation": "NAVIGATE /onboarding",
+      "browser_action_id": "iam.route.onboarding",
+      "http_evidence": "The route and required read requests complete successfully for /onboarding",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.route.tenant.members",
+      "domain": "iam",
+      "user_goal": "Open /tenant/members",
+      "route": "/tenant/members",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /tenant/members",
+      "browser_action_id": "iam.route.tenant.members",
+      "http_evidence": "The route and required read requests complete successfully for /tenant/members",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.route.tenant.settings",
+      "domain": "iam",
+      "user_goal": "Open /tenant/settings",
+      "route": "/tenant/settings",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /tenant/settings",
+      "browser_action_id": "iam.route.tenant.settings",
+      "http_evidence": "The route and required read requests complete successfully for /tenant/settings",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.route.admin.tenants",
+      "domain": "iam",
+      "user_goal": "Open /admin/tenants",
+      "route": "/admin/tenants",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /admin/tenants",
+      "browser_action_id": "iam.route.admin.tenants",
+      "http_evidence": "The route and required read requests complete successfully for /admin/tenants",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.route.agents",
+      "domain": "agent",
+      "user_goal": "Open /agents",
+      "route": "/agents",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /agents",
+      "browser_action_id": "agent.route.agents",
+      "http_evidence": "The route and required read requests complete successfully for /agents",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.route.agents.create",
+      "domain": "agent",
+      "user_goal": "Open /agents/create",
+      "route": "/agents/create",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /agents/create",
+      "browser_action_id": "agent.route.agents.create",
+      "http_evidence": "The route and required read requests complete successfully for /agents/create",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.route.agents.id.edit",
+      "domain": "agent",
+      "user_goal": "Open /agents/:id/edit",
+      "route": "/agents/:id/edit",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /agents/:id/edit",
+      "browser_action_id": "agent.route.agents.id.edit",
+      "http_evidence": "The route and required read requests complete successfully for /agents/:id/edit",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.route.chat",
+      "domain": "agent",
+      "user_goal": "Open /chat",
+      "route": "/chat",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /chat",
+      "browser_action_id": "agent.route.chat",
+      "http_evidence": "The route and required read requests complete successfully for /chat",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "skill.route.skills",
+      "domain": "skill",
+      "user_goal": "Open /skills",
+      "route": "/skills",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /skills",
+      "browser_action_id": "skill.route.skills",
+      "http_evidence": "The route and required read requests complete successfully for /skills",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "skill.route.skills.create",
+      "domain": "skill",
+      "user_goal": "Open /skills/create",
+      "route": "/skills/create",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /skills/create",
+      "browser_action_id": "skill.route.skills.create",
+      "http_evidence": "The route and required read requests complete successfully for /skills/create",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "skill.route.skills.id.workspace",
+      "domain": "skill",
+      "user_goal": "Open /skills/:id/workspace",
+      "route": "/skills/:id/workspace",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /skills/:id/workspace",
+      "browser_action_id": "skill.route.skills.id.workspace",
+      "http_evidence": "The route and required read requests complete successfully for /skills/:id/workspace",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "mcp.route.mcp",
+      "domain": "mcp",
+      "user_goal": "Open /mcp",
+      "route": "/mcp",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /mcp",
+      "browser_action_id": "mcp.route.mcp",
+      "http_evidence": "The route and required read requests complete successfully for /mcp",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "mcp.route.mcp.create",
+      "domain": "mcp",
+      "user_goal": "Open /mcp/create",
+      "route": "/mcp/create",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /mcp/create",
+      "browser_action_id": "mcp.route.mcp.create",
+      "http_evidence": "The route and required read requests complete successfully for /mcp/create",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "mcp.route.mcp.id.edit",
+      "domain": "mcp",
+      "user_goal": "Open /mcp/:id/edit",
+      "route": "/mcp/:id/edit",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /mcp/:id/edit",
+      "browser_action_id": "mcp.route.mcp.id.edit",
+      "http_evidence": "The route and required read requests complete successfully for /mcp/:id/edit",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "knowledge.route.knowledge",
+      "domain": "knowledge",
+      "user_goal": "Open /knowledge",
+      "route": "/knowledge",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /knowledge",
+      "browser_action_id": "knowledge.route.knowledge",
+      "http_evidence": "The route and required read requests complete successfully for /knowledge",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "knowledge.route.knowledge.name",
+      "domain": "knowledge",
+      "user_goal": "Open /knowledge/:name",
+      "route": "/knowledge/:name",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /knowledge/:name",
+      "browser_action_id": "knowledge.route.knowledge.name",
+      "http_evidence": "The route and required read requests complete successfully for /knowledge/:name",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "evaluation.route.evaluations",
+      "domain": "evaluation",
+      "user_goal": "Open /evaluations",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /evaluations",
+      "browser_action_id": "evaluation.route.evaluations",
+      "http_evidence": "The route and required read requests complete successfully for /evaluations",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.route.workflows",
+      "domain": "workflow",
+      "user_goal": "Open /workflows",
+      "route": "/workflows",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /workflows",
+      "browser_action_id": "workflow.route.workflows",
+      "http_evidence": "The route and required read requests complete successfully for /workflows",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.route.workflows.new",
+      "domain": "workflow",
+      "user_goal": "Open /workflows/new",
+      "route": "/workflows/new",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /workflows/new",
+      "browser_action_id": "workflow.route.workflows.new",
+      "http_evidence": "The route and required read requests complete successfully for /workflows/new",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.route.workflows.id.edit",
+      "domain": "workflow",
+      "user_goal": "Open /workflows/:id/edit",
+      "route": "/workflows/:id/edit",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /workflows/:id/edit",
+      "browser_action_id": "workflow.route.workflows.id.edit",
+      "http_evidence": "The route and required read requests complete successfully for /workflows/:id/edit",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.route.workflows.id.versions.versionid",
+      "domain": "workflow",
+      "user_goal": "Open /workflows/:id/versions/:versionId",
+      "route": "/workflows/:id/versions/:versionId",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /workflows/:id/versions/:versionId",
+      "browser_action_id": "workflow.route.workflows.id.versions.versionid",
+      "http_evidence": "The route and required read requests complete successfully for /workflows/:id/versions/:versionId",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.route.workflows.id.run",
+      "domain": "workflow",
+      "user_goal": "Open /workflows/:id/run",
+      "route": "/workflows/:id/run",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /workflows/:id/run",
+      "browser_action_id": "workflow.route.workflows.id.run",
+      "http_evidence": "The route and required read requests complete successfully for /workflows/:id/run",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.route.workflow.runs",
+      "domain": "workflow",
+      "user_goal": "Open /workflow-runs",
+      "route": "/workflow-runs",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /workflow-runs",
+      "browser_action_id": "workflow.route.workflow.runs",
+      "http_evidence": "The route and required read requests complete successfully for /workflow-runs",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.route.workflow.runs.runid",
+      "domain": "workflow",
+      "user_goal": "Open /workflow-runs/:runId",
+      "route": "/workflow-runs/:runId",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /workflow-runs/:runId",
+      "browser_action_id": "workflow.route.workflow.runs.runid",
+      "http_evidence": "The route and required read requests complete successfully for /workflow-runs/:runId",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.post.auth.refresh",
+      "domain": "iam",
+      "user_goal": "Complete POST /auth/refresh",
+      "route": "/login",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /auth/refresh",
+      "browser_action_id": "iam.mutation.post.auth.refresh",
+      "http_evidence": "The browser observes the expected successful response for POST /auth/refresh",
+      "db_evidence": "Persisted state is reconciled after POST /auth/refresh",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.post.auth.oauth.exchange",
+      "domain": "iam",
+      "user_goal": "Complete POST /auth/oauth/exchange",
+      "route": "/auth/callback",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /auth/oauth/exchange",
+      "browser_action_id": "iam.mutation.post.auth.oauth.exchange",
+      "http_evidence": "The browser observes the expected successful response for POST /auth/oauth/exchange",
+      "db_evidence": "Persisted state is reconciled after POST /auth/oauth/exchange",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.post.auth.logout",
+      "domain": "iam",
+      "user_goal": "Complete POST /auth/logout",
+      "route": "/login",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /auth/logout",
+      "browser_action_id": "iam.mutation.post.auth.logout",
+      "http_evidence": "The browser observes the expected successful response for POST /auth/logout",
+      "db_evidence": "Persisted state is reconciled after POST /auth/logout",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.post.auth.guest",
+      "domain": "iam",
+      "user_goal": "Complete POST /auth/guest",
+      "route": "/login",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /auth/guest",
+      "browser_action_id": "iam.mutation.post.auth.guest",
+      "http_evidence": "The browser observes the expected successful response for POST /auth/guest",
+      "db_evidence": "Persisted state is reconciled after POST /auth/guest",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.post.auth.register",
+      "domain": "iam",
+      "user_goal": "Complete POST /auth/register",
+      "route": "/onboarding",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /auth/register",
+      "browser_action_id": "iam.mutation.post.auth.register",
+      "http_evidence": "The browser observes the expected successful response for POST /auth/register",
+      "db_evidence": "Persisted state is reconciled after POST /auth/register",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.post.auth.switch.tenant",
+      "domain": "iam",
+      "user_goal": "Complete POST /auth/switch-tenant",
+      "route": "/tenant/settings",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /auth/switch-tenant",
+      "browser_action_id": "iam.mutation.post.auth.switch.tenant",
+      "http_evidence": "The browser observes the expected successful response for POST /auth/switch-tenant",
+      "db_evidence": "Persisted state is reconciled after POST /auth/switch-tenant",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.post.auth.create.tenant",
+      "domain": "iam",
+      "user_goal": "Complete POST /auth/create-tenant",
+      "route": "/onboarding",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /auth/create-tenant",
+      "browser_action_id": "iam.mutation.post.auth.create.tenant",
+      "http_evidence": "The browser observes the expected successful response for POST /auth/create-tenant",
+      "db_evidence": "Persisted state is reconciled after POST /auth/create-tenant",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.patch.tenant.settings",
+      "domain": "iam",
+      "user_goal": "Complete PATCH /tenant/settings",
+      "route": "/tenant/settings",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PATCH /tenant/settings",
+      "browser_action_id": "iam.mutation.patch.tenant.settings",
+      "http_evidence": "The browser observes the expected successful response for PATCH /tenant/settings",
+      "db_evidence": "Persisted state is reconciled after PATCH /tenant/settings",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.patch.tenant.embed.model",
+      "domain": "iam",
+      "user_goal": "Complete PATCH /tenant/embed-model",
+      "route": "/tenant/settings",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PATCH /tenant/embed-model",
+      "browser_action_id": "iam.mutation.patch.tenant.embed.model",
+      "http_evidence": "The browser observes the expected successful response for PATCH /tenant/embed-model",
+      "db_evidence": "Persisted state is reconciled after PATCH /tenant/embed-model",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.post.tenant.members.invite",
+      "domain": "iam",
+      "user_goal": "Complete POST /tenant/members/invite",
+      "route": "/tenant/members",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /tenant/members/invite",
+      "browser_action_id": "iam.mutation.post.tenant.members.invite",
+      "http_evidence": "The browser observes the expected successful response for POST /tenant/members/invite",
+      "db_evidence": "Persisted state is reconciled after POST /tenant/members/invite",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.patch.tenant.members.userid.role",
+      "domain": "iam",
+      "user_goal": "Complete PATCH /tenant/members/:userId/role",
+      "route": "/tenant/members",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PATCH /tenant/members/:userId/role",
+      "browser_action_id": "iam.mutation.patch.tenant.members.userid.role",
+      "http_evidence": "The browser observes the expected successful response for PATCH /tenant/members/:userId/role",
+      "db_evidence": "Persisted state is reconciled after PATCH /tenant/members/:userId/role",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.delete.tenant.members.userid",
+      "domain": "iam",
+      "user_goal": "Complete DELETE /tenant/members/:userId",
+      "route": "/tenant/members",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /tenant/members/:userId",
+      "browser_action_id": "iam.mutation.delete.tenant.members.userid",
+      "http_evidence": "The browser observes the expected successful response for DELETE /tenant/members/:userId",
+      "db_evidence": "Persisted state is reconciled after DELETE /tenant/members/:userId",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.patch.admin.tenants.tenantid",
+      "domain": "iam",
+      "user_goal": "Complete PATCH /admin/tenants/:tenantId",
+      "route": "/admin/tenants",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PATCH /admin/tenants/:tenantId",
+      "browser_action_id": "iam.mutation.patch.admin.tenants.tenantid",
+      "http_evidence": "The browser observes the expected successful response for PATCH /admin/tenants/:tenantId",
+      "db_evidence": "Persisted state is reconciled after PATCH /admin/tenants/:tenantId",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.post.admin.tenants",
+      "domain": "iam",
+      "user_goal": "Complete POST /admin/tenants",
+      "route": "/admin/tenants",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /admin/tenants",
+      "browser_action_id": "iam.mutation.post.admin.tenants",
+      "http_evidence": "The browser observes the expected successful response for POST /admin/tenants",
+      "db_evidence": "Persisted state is reconciled after POST /admin/tenants",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.delete.admin.tenants.tenantid",
+      "domain": "iam",
+      "user_goal": "Complete DELETE /admin/tenants/:tenantId",
+      "route": "/admin/tenants",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /admin/tenants/:tenantId",
+      "browser_action_id": "iam.mutation.delete.admin.tenants.tenantid",
+      "http_evidence": "The browser observes the expected successful response for DELETE /admin/tenants/:tenantId",
+      "db_evidence": "Persisted state is reconciled after DELETE /admin/tenants/:tenantId",
+      "coverage": "short"
+    },
+    {
+      "id": "iam.mutation.delete.tenant",
+      "domain": "iam",
+      "user_goal": "Complete DELETE /tenant",
+      "route": "/tenant/settings",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /tenant",
+      "browser_action_id": "iam.mutation.delete.tenant",
+      "http_evidence": "The browser observes the expected successful response for DELETE /tenant",
+      "db_evidence": "Persisted state is reconciled after DELETE /tenant",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.post.agents",
+      "domain": "agent",
+      "user_goal": "Complete POST /agents",
+      "route": "/agents/create",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /agents",
+      "browser_action_id": "agent.mutation.post.agents",
+      "http_evidence": "The browser observes the expected successful response for POST /agents",
+      "db_evidence": "Persisted state is reconciled after POST /agents",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.put.agents.id",
+      "domain": "agent",
+      "user_goal": "Complete PUT /agents/:id",
+      "route": "/agents/:id/edit",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PUT /agents/:id",
+      "browser_action_id": "agent.mutation.put.agents.id",
+      "http_evidence": "The browser observes the expected successful response for PUT /agents/:id",
+      "db_evidence": "Persisted state is reconciled after PUT /agents/:id",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.delete.agents.id",
+      "domain": "agent",
+      "user_goal": "Complete DELETE /agents/:id",
+      "route": "/agents",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /agents/:id",
+      "browser_action_id": "agent.mutation.delete.agents.id",
+      "http_evidence": "The browser observes the expected successful response for DELETE /agents/:id",
+      "db_evidence": "Persisted state is reconciled after DELETE /agents/:id",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.post.agents.id.execute",
+      "domain": "agent",
+      "user_goal": "Complete POST /agents/:id/execute",
+      "route": "/chat",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /agents/:id/execute",
+      "browser_action_id": "agent.mutation.post.agents.id.execute",
+      "http_evidence": "The browser observes the expected successful response for POST /agents/:id/execute",
+      "db_evidence": "Persisted state is reconciled after POST /agents/:id/execute",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.post.agents.id.execute.stream",
+      "domain": "agent",
+      "user_goal": "Complete POST /agents/:id/execute/stream",
+      "route": "/chat",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /agents/:id/execute/stream",
+      "browser_action_id": "agent.mutation.post.agents.id.execute.stream",
+      "http_evidence": "The browser observes the expected successful response for POST /agents/:id/execute/stream",
+      "db_evidence": "Persisted state is reconciled after POST /agents/:id/execute/stream",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.put.agents.system.settings",
+      "domain": "agent",
+      "user_goal": "Complete PUT /agents/system/settings",
+      "route": "/agents",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PUT /agents/system/settings",
+      "browser_action_id": "agent.mutation.put.agents.system.settings",
+      "http_evidence": "The browser observes the expected successful response for PUT /agents/system/settings",
+      "db_evidence": "Persisted state is reconciled after PUT /agents/system/settings",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.post.agents.tool.approvals.id.decision",
+      "domain": "agent",
+      "user_goal": "Complete POST /agents/tool-approvals/:id/decision",
+      "route": "/chat",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /agents/tool-approvals/:id/decision",
+      "browser_action_id": "agent.mutation.post.agents.tool.approvals.id.decision",
+      "http_evidence": "The browser observes the expected successful response for POST /agents/tool-approvals/:id/decision",
+      "db_evidence": "Persisted state is reconciled after POST /agents/tool-approvals/:id/decision",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.post.agents.tool.approvals.id.resume",
+      "domain": "agent",
+      "user_goal": "Complete POST /agents/tool-approvals/:id/resume",
+      "route": "/chat",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /agents/tool-approvals/:id/resume",
+      "browser_action_id": "agent.mutation.post.agents.tool.approvals.id.resume",
+      "http_evidence": "The browser observes the expected successful response for POST /agents/tool-approvals/:id/resume",
+      "db_evidence": "Persisted state is reconciled after POST /agents/tool-approvals/:id/resume",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.post.agents.agentid.conversations",
+      "domain": "agent",
+      "user_goal": "Complete POST /agents/:agentId/conversations",
+      "route": "/chat",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /agents/:agentId/conversations",
+      "browser_action_id": "agent.mutation.post.agents.agentid.conversations",
+      "http_evidence": "The browser observes the expected successful response for POST /agents/:agentId/conversations",
+      "db_evidence": "Persisted state is reconciled after POST /agents/:agentId/conversations",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.patch.conversations.convid",
+      "domain": "agent",
+      "user_goal": "Complete PATCH /conversations/:convId",
+      "route": "/chat",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PATCH /conversations/:convId",
+      "browser_action_id": "agent.mutation.patch.conversations.convid",
+      "http_evidence": "The browser observes the expected successful response for PATCH /conversations/:convId",
+      "db_evidence": "Persisted state is reconciled after PATCH /conversations/:convId",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.delete.conversations.convid",
+      "domain": "agent",
+      "user_goal": "Complete DELETE /conversations/:convId",
+      "route": "/chat",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /conversations/:convId",
+      "browser_action_id": "agent.mutation.delete.conversations.convid",
+      "http_evidence": "The browser observes the expected successful response for DELETE /conversations/:convId",
+      "db_evidence": "Persisted state is reconciled after DELETE /conversations/:convId",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.post.conversations.convid.messages",
+      "domain": "agent",
+      "user_goal": "Complete POST /conversations/:convId/messages",
+      "route": "/chat",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /conversations/:convId/messages",
+      "browser_action_id": "agent.mutation.post.conversations.convid.messages",
+      "http_evidence": "The browser observes the expected successful response for POST /conversations/:convId/messages",
+      "db_evidence": "Persisted state is reconciled after POST /conversations/:convId/messages",
+      "coverage": "short"
+    },
+    {
+      "id": "skill.mutation.post.skills",
+      "domain": "skill",
+      "user_goal": "Complete POST /skills",
+      "route": "/skills/create",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /skills",
+      "browser_action_id": "skill.mutation.post.skills",
+      "http_evidence": "The browser observes the expected successful response for POST /skills",
+      "db_evidence": "Persisted state is reconciled after POST /skills",
+      "coverage": "short"
+    },
+    {
+      "id": "skill.mutation.patch.skills.id.draft.capability",
+      "domain": "skill",
+      "user_goal": "Complete PATCH /skills/:id/draft/capability",
+      "route": "/skills/:id/workspace",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PATCH /skills/:id/draft/capability",
+      "browser_action_id": "skill.mutation.patch.skills.id.draft.capability",
+      "http_evidence": "The browser observes the expected successful response for PATCH /skills/:id/draft/capability",
+      "db_evidence": "Persisted state is reconciled after PATCH /skills/:id/draft/capability",
+      "coverage": "short"
+    },
+    {
+      "id": "skill.mutation.patch.skills.id.draft.activation",
+      "domain": "skill",
+      "user_goal": "Complete PATCH /skills/:id/draft/activation",
+      "route": "/skills/:id/workspace",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PATCH /skills/:id/draft/activation",
+      "browser_action_id": "skill.mutation.patch.skills.id.draft.activation",
+      "http_evidence": "The browser observes the expected successful response for PATCH /skills/:id/draft/activation",
+      "db_evidence": "Persisted state is reconciled after PATCH /skills/:id/draft/activation",
+      "coverage": "short"
+    },
+    {
+      "id": "skill.mutation.patch.skills.id.draft.instructions",
+      "domain": "skill",
+      "user_goal": "Complete PATCH /skills/:id/draft/instructions",
+      "route": "/skills/:id/workspace",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PATCH /skills/:id/draft/instructions",
+      "browser_action_id": "skill.mutation.patch.skills.id.draft.instructions",
+      "http_evidence": "The browser observes the expected successful response for PATCH /skills/:id/draft/instructions",
+      "db_evidence": "Persisted state is reconciled after PATCH /skills/:id/draft/instructions",
+      "coverage": "short"
+    },
+    {
+      "id": "skill.mutation.delete.skills.id",
+      "domain": "skill",
+      "user_goal": "Complete DELETE /skills/:id",
+      "route": "/skills",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /skills/:id",
+      "browser_action_id": "skill.mutation.delete.skills.id",
+      "http_evidence": "The browser observes the expected successful response for DELETE /skills/:id",
+      "db_evidence": "Persisted state is reconciled after DELETE /skills/:id",
+      "coverage": "short"
+    },
+    {
+      "id": "skill.mutation.post.skills.id.publish",
+      "domain": "skill",
+      "user_goal": "Complete POST /skills/:id/publish",
+      "route": "/skills/:id/workspace",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /skills/:id/publish",
+      "browser_action_id": "skill.mutation.post.skills.id.publish",
+      "http_evidence": "The browser observes the expected successful response for POST /skills/:id/publish",
+      "db_evidence": "Persisted state is reconciled after POST /skills/:id/publish",
+      "coverage": "short"
+    },
+    {
+      "id": "mcp.mutation.post.mcp.servers",
+      "domain": "mcp",
+      "user_goal": "Complete POST /mcp/servers",
+      "route": "/mcp/create",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /mcp/servers",
+      "browser_action_id": "mcp.mutation.post.mcp.servers",
+      "http_evidence": "The browser observes the expected successful response for POST /mcp/servers",
+      "db_evidence": "Persisted state is reconciled after POST /mcp/servers",
+      "coverage": "short"
+    },
+    {
+      "id": "mcp.mutation.put.mcp.servers.id",
+      "domain": "mcp",
+      "user_goal": "Complete PUT /mcp/servers/:id",
+      "route": "/mcp/:id/edit",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PUT /mcp/servers/:id",
+      "browser_action_id": "mcp.mutation.put.mcp.servers.id",
+      "http_evidence": "The browser observes the expected successful response for PUT /mcp/servers/:id",
+      "db_evidence": "Persisted state is reconciled after PUT /mcp/servers/:id",
+      "coverage": "short"
+    },
+    {
+      "id": "mcp.mutation.delete.mcp.servers.id",
+      "domain": "mcp",
+      "user_goal": "Complete DELETE /mcp/servers/:id",
+      "route": "/mcp",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /mcp/servers/:id",
+      "browser_action_id": "mcp.mutation.delete.mcp.servers.id",
+      "http_evidence": "The browser observes the expected successful response for DELETE /mcp/servers/:id",
+      "db_evidence": "Persisted state is reconciled after DELETE /mcp/servers/:id",
+      "coverage": "short"
+    },
+    {
+      "id": "mcp.mutation.delete.mcp.servers.id.config",
+      "domain": "mcp",
+      "user_goal": "Complete DELETE /mcp/servers/:id/config",
+      "route": "/mcp/:id/edit",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /mcp/servers/:id/config",
+      "browser_action_id": "mcp.mutation.delete.mcp.servers.id.config",
+      "http_evidence": "The browser observes the expected successful response for DELETE /mcp/servers/:id/config",
+      "db_evidence": "Persisted state is reconciled after DELETE /mcp/servers/:id/config",
+      "coverage": "short"
+    },
+    {
+      "id": "mcp.mutation.post.mcp.servers.id.reconnect",
+      "domain": "mcp",
+      "user_goal": "Complete POST /mcp/servers/:id/reconnect",
+      "route": "/mcp",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /mcp/servers/:id/reconnect",
+      "browser_action_id": "mcp.mutation.post.mcp.servers.id.reconnect",
+      "http_evidence": "The browser observes the expected successful response for POST /mcp/servers/:id/reconnect",
+      "db_evidence": "Persisted state is reconciled after POST /mcp/servers/:id/reconnect",
+      "coverage": "short"
+    },
+    {
+      "id": "mcp.mutation.put.mcp.tool.policies.serverid.toolname",
+      "domain": "mcp",
+      "user_goal": "Complete PUT /mcp/tool-policies/:serverId/:toolName",
+      "route": "/mcp/:id/edit",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PUT /mcp/tool-policies/:serverId/:toolName",
+      "browser_action_id": "mcp.mutation.put.mcp.tool.policies.serverid.toolname",
+      "http_evidence": "The browser observes the expected successful response for PUT /mcp/tool-policies/:serverId/:toolName",
+      "db_evidence": "Persisted state is reconciled after PUT /mcp/tool-policies/:serverId/:toolName",
+      "coverage": "short"
+    },
+    {
+      "id": "knowledge.mutation.post.knowledge.workspaces",
+      "domain": "knowledge",
+      "user_goal": "Complete POST /knowledge/workspaces",
+      "route": "/knowledge",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /knowledge/workspaces",
+      "browser_action_id": "knowledge.mutation.post.knowledge.workspaces",
+      "http_evidence": "The browser observes the expected successful response for POST /knowledge/workspaces",
+      "db_evidence": "Persisted state is reconciled after POST /knowledge/workspaces",
+      "coverage": "short"
+    },
+    {
+      "id": "knowledge.mutation.patch.knowledge.workspaces.name",
+      "domain": "knowledge",
+      "user_goal": "Complete PATCH /knowledge/workspaces/:name",
+      "route": "/knowledge/:name",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PATCH /knowledge/workspaces/:name",
+      "browser_action_id": "knowledge.mutation.patch.knowledge.workspaces.name",
+      "http_evidence": "The browser observes the expected successful response for PATCH /knowledge/workspaces/:name",
+      "db_evidence": "Persisted state is reconciled after PATCH /knowledge/workspaces/:name",
+      "coverage": "short"
+    },
+    {
+      "id": "knowledge.mutation.delete.knowledge.workspaces.name",
+      "domain": "knowledge",
+      "user_goal": "Complete DELETE /knowledge/workspaces/:name",
+      "route": "/knowledge",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /knowledge/workspaces/:name",
+      "browser_action_id": "knowledge.mutation.delete.knowledge.workspaces.name",
+      "http_evidence": "The browser observes the expected successful response for DELETE /knowledge/workspaces/:name",
+      "db_evidence": "Persisted state is reconciled after DELETE /knowledge/workspaces/:name",
+      "coverage": "short"
+    },
+    {
+      "id": "knowledge.mutation.post.knowledge.ingest",
+      "domain": "knowledge",
+      "user_goal": "Complete POST /knowledge/ingest",
+      "route": "/knowledge/:name",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /knowledge/ingest",
+      "browser_action_id": "knowledge.mutation.post.knowledge.ingest",
+      "http_evidence": "The browser observes the expected successful response for POST /knowledge/ingest",
+      "db_evidence": "Persisted state is reconciled after POST /knowledge/ingest",
+      "coverage": "short"
+    },
+    {
+      "id": "knowledge.mutation.delete.knowledge.workspaces.name.documents.documentid",
+      "domain": "knowledge",
+      "user_goal": "Complete DELETE /knowledge/workspaces/:name/documents/:documentId",
+      "route": "/knowledge/:name",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /knowledge/workspaces/:name/documents/:documentId",
+      "browser_action_id": "knowledge.mutation.delete.knowledge.workspaces.name.documents.documentid",
+      "http_evidence": "The browser observes the expected successful response for DELETE /knowledge/workspaces/:name/documents/:documentId",
+      "db_evidence": "Persisted state is reconciled after DELETE /knowledge/workspaces/:name/documents/:documentId",
+      "coverage": "short"
+    },
+    {
+      "id": "knowledge.mutation.post.knowledge.query",
+      "domain": "knowledge",
+      "user_goal": "Complete POST /knowledge/query",
+      "route": "/knowledge/:name",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /knowledge/query",
+      "browser_action_id": "knowledge.mutation.post.knowledge.query",
+      "http_evidence": "The browser observes the expected successful response for POST /knowledge/query",
+      "db_evidence": "Persisted state is reconciled after POST /knowledge/query",
+      "coverage": "short"
+    },
+    {
+      "id": "memory.mutation.delete.memory.clear",
+      "domain": "memory",
+      "user_goal": "Complete DELETE /memory/clear",
+      "route": "/chat",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /memory/clear",
+      "browser_action_id": "memory.mutation.delete.memory.clear",
+      "http_evidence": "The browser observes the expected successful response for DELETE /memory/clear",
+      "db_evidence": "Persisted state is reconciled after DELETE /memory/clear",
+      "coverage": "short"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.suites",
+      "domain": "evaluation",
+      "user_goal": "Complete POST /evaluations/suites",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /evaluations/suites",
+      "browser_action_id": "evaluation.mutation.post.evaluations.suites",
+      "http_evidence": "The browser observes the expected successful response for POST /evaluations/suites",
+      "db_evidence": "Persisted state is reconciled after POST /evaluations/suites",
+      "coverage": "short"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.suites.suiteid.publish",
+      "domain": "evaluation",
+      "user_goal": "Complete POST /evaluations/suites/:suiteId/publish",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /evaluations/suites/:suiteId/publish",
+      "browser_action_id": "evaluation.mutation.post.evaluations.suites.suiteid.publish",
+      "http_evidence": "The browser observes the expected successful response for POST /evaluations/suites/:suiteId/publish",
+      "db_evidence": "Persisted state is reconciled after POST /evaluations/suites/:suiteId/publish",
+      "coverage": "short"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.runs",
+      "domain": "evaluation",
+      "user_goal": "Complete POST /evaluations/runs",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /evaluations/runs",
+      "browser_action_id": "evaluation.mutation.post.evaluations.runs",
+      "http_evidence": "The browser observes the expected successful response for POST /evaluations/runs",
+      "db_evidence": "Persisted state is reconciled after POST /evaluations/runs",
+      "coverage": "short"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.optimizations",
+      "domain": "evaluation",
+      "user_goal": "Complete POST /evaluations/optimizations",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /evaluations/optimizations",
+      "browser_action_id": "evaluation.mutation.post.evaluations.optimizations",
+      "http_evidence": "The browser observes the expected successful response for POST /evaluations/optimizations",
+      "db_evidence": "Persisted state is reconciled after POST /evaluations/optimizations",
+      "coverage": "short"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.experiments",
+      "domain": "evaluation",
+      "user_goal": "Complete POST /evaluations/experiments",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /evaluations/experiments",
+      "browser_action_id": "evaluation.mutation.post.evaluations.experiments",
+      "http_evidence": "The browser observes the expected successful response for POST /evaluations/experiments",
+      "db_evidence": "Persisted state is reconciled after POST /evaluations/experiments",
+      "coverage": "short"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.feedback",
+      "domain": "evaluation",
+      "user_goal": "Complete POST /evaluations/feedback",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /evaluations/feedback",
+      "browser_action_id": "evaluation.mutation.post.evaluations.feedback",
+      "http_evidence": "The browser observes the expected successful response for POST /evaluations/feedback",
+      "db_evidence": "Persisted state is reconciled after POST /evaluations/feedback",
+      "coverage": "short"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.candidates.candidateid.reject",
+      "domain": "evaluation",
+      "user_goal": "Complete POST /evaluations/candidates/:candidateId/reject",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /evaluations/candidates/:candidateId/reject",
+      "browser_action_id": "evaluation.mutation.post.evaluations.candidates.candidateid.reject",
+      "http_evidence": "The browser observes the expected successful response for POST /evaluations/candidates/:candidateId/reject",
+      "db_evidence": "Persisted state is reconciled after POST /evaluations/candidates/:candidateId/reject",
+      "coverage": "short"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.experiments.experimentid.pause",
+      "domain": "evaluation",
+      "user_goal": "Complete POST /evaluations/experiments/:experimentId/pause",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /evaluations/experiments/:experimentId/pause",
+      "browser_action_id": "evaluation.mutation.post.evaluations.experiments.experimentid.pause",
+      "http_evidence": "The browser observes the expected successful response for POST /evaluations/experiments/:experimentId/pause",
+      "db_evidence": "Persisted state is reconciled after POST /evaluations/experiments/:experimentId/pause",
+      "coverage": "short"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.experiments.experimentid.promote",
+      "domain": "evaluation",
+      "user_goal": "Complete POST /evaluations/experiments/:experimentId/promote",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /evaluations/experiments/:experimentId/promote",
+      "browser_action_id": "evaluation.mutation.post.evaluations.experiments.experimentid.promote",
+      "http_evidence": "The browser observes the expected successful response for POST /evaluations/experiments/:experimentId/promote",
+      "db_evidence": "Persisted state is reconciled after POST /evaluations/experiments/:experimentId/promote",
+      "coverage": "short"
+    },
+    {
+      "id": "evaluation.mutation.post.evaluations.experiments.experimentid.rollback",
+      "domain": "evaluation",
+      "user_goal": "Complete POST /evaluations/experiments/:experimentId/rollback",
+      "route": "/evaluations",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /evaluations/experiments/:experimentId/rollback",
+      "browser_action_id": "evaluation.mutation.post.evaluations.experiments.experimentid.rollback",
+      "http_evidence": "The browser observes the expected successful response for POST /evaluations/experiments/:experimentId/rollback",
+      "db_evidence": "Persisted state is reconciled after POST /evaluations/experiments/:experimentId/rollback",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.mutation.post.workflows",
+      "domain": "workflow",
+      "user_goal": "Complete POST /workflows",
+      "route": "/workflows/new",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /workflows",
+      "browser_action_id": "workflow.mutation.post.workflows",
+      "http_evidence": "The browser observes the expected successful response for POST /workflows",
+      "db_evidence": "Persisted state is reconciled after POST /workflows",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.mutation.put.workflows.workflowid.draft",
+      "domain": "workflow",
+      "user_goal": "Complete PUT /workflows/:workflowId/draft",
+      "route": "/workflows/:id/edit",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PUT /workflows/:workflowId/draft",
+      "browser_action_id": "workflow.mutation.put.workflows.workflowid.draft",
+      "http_evidence": "The browser observes the expected successful response for PUT /workflows/:workflowId/draft",
+      "db_evidence": "Persisted state is reconciled after PUT /workflows/:workflowId/draft",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.mutation.delete.workflows.workflowid",
+      "domain": "workflow",
+      "user_goal": "Delete an unused workflow draft",
+      "route": "/workflows",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "member",
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /workflows/:workflowId",
+      "browser_action_id": "workflow.mutation.delete.workflows.workflowid",
+      "http_evidence": "The browser observes a successful DELETE /workflows/:workflowId response",
+      "db_evidence": "The unused workflow definition no longer exists in the selected tenant schema",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.mutation.post.workflows.workflowid.validate",
+      "domain": "workflow",
+      "user_goal": "Complete POST /workflows/:workflowId/validate",
+      "route": "/workflows/:id/edit",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /workflows/:workflowId/validate",
+      "browser_action_id": "workflow.mutation.post.workflows.workflowid.validate",
+      "http_evidence": "The browser observes the expected successful response for POST /workflows/:workflowId/validate",
+      "db_evidence": "Persisted state is reconciled after POST /workflows/:workflowId/validate",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.mutation.post.workflows.workflowid.publish",
+      "domain": "workflow",
+      "user_goal": "Complete POST /workflows/:workflowId/publish",
+      "route": "/workflows/:id/edit",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /workflows/:workflowId/publish",
+      "browser_action_id": "workflow.mutation.post.workflows.workflowid.publish",
+      "http_evidence": "The browser observes the expected successful response for POST /workflows/:workflowId/publish",
+      "db_evidence": "Persisted state is reconciled after POST /workflows/:workflowId/publish",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs",
+      "domain": "workflow",
+      "user_goal": "Complete POST /workflow-runs",
+      "route": "/workflows/:id/run",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /workflow-runs",
+      "browser_action_id": "workflow.mutation.post.workflow.runs",
+      "http_evidence": "The browser observes the expected successful response for POST /workflow-runs",
+      "db_evidence": "Persisted state is reconciled after POST /workflow-runs",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs.runid.cancel",
+      "domain": "workflow",
+      "user_goal": "Complete POST /workflow-runs/:runId/cancel",
+      "route": "/workflow-runs/:runId",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /workflow-runs/:runId/cancel",
+      "browser_action_id": "workflow.mutation.post.workflow.runs.runid.cancel",
+      "http_evidence": "The browser observes the expected successful response for POST /workflow-runs/:runId/cancel",
+      "db_evidence": "Persisted state is reconciled after POST /workflow-runs/:runId/cancel",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs.runid.pause",
+      "domain": "workflow",
+      "user_goal": "Complete POST /workflow-runs/:runId/pause",
+      "route": "/workflow-runs/:runId",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /workflow-runs/:runId/pause",
+      "browser_action_id": "workflow.mutation.post.workflow.runs.runid.pause",
+      "http_evidence": "The browser observes the expected successful response for POST /workflow-runs/:runId/pause",
+      "db_evidence": "Persisted state is reconciled after POST /workflow-runs/:runId/pause",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs.runid.resume",
+      "domain": "workflow",
+      "user_goal": "Complete POST /workflow-runs/:runId/resume",
+      "route": "/workflow-runs/:runId",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /workflow-runs/:runId/resume",
+      "browser_action_id": "workflow.mutation.post.workflow.runs.runid.resume",
+      "http_evidence": "The browser observes the expected successful response for POST /workflow-runs/:runId/resume",
+      "db_evidence": "Persisted state is reconciled after POST /workflow-runs/:runId/resume",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.approvals.approvalid.decision",
+      "domain": "workflow",
+      "user_goal": "Complete POST /workflow-approvals/:approvalId/decision",
+      "route": "/workflow-runs/:runId",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /workflow-approvals/:approvalId/decision",
+      "browser_action_id": "workflow.mutation.post.workflow.approvals.approvalid.decision",
+      "http_evidence": "The browser observes the expected successful response for POST /workflow-approvals/:approvalId/decision",
+      "db_evidence": "Persisted state is reconciled after POST /workflow-approvals/:approvalId/decision",
+      "coverage": "short"
+    },
+    {
+      "id": "workflow.mutation.post.workflow.runs.runid.manual.interventions.effectid.resolve",
+      "domain": "workflow",
+      "user_goal": "Complete POST /workflow-runs/:runId/manual-interventions/:effectId/resolve",
+      "route": "/workflow-runs/:runId",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /workflow-runs/:runId/manual-interventions/:effectId/resolve",
+      "browser_action_id": "workflow.mutation.post.workflow.runs.runid.manual.interventions.effectid.resolve",
+      "http_evidence": "The browser observes the expected successful response for POST /workflow-runs/:runId/manual-interventions/:effectId/resolve",
+      "db_evidence": "Persisted state is reconciled after POST /workflow-runs/:runId/manual-interventions/:effectId/resolve",
+      "coverage": "short"
+    }
+  ]
+}

@@ -18,14 +18,69 @@ import (
 
 // TenantHandler handles /tenant/* endpoints; it delegates business logic to TenantService.
 type TenantHandler struct {
-	svc      *application.TenantService
-	adminSvc *application.AdminService
-	logger   *zap.Logger
+	svc       *application.TenantService
+	inviteSvc *application.InvitationService
+	adminSvc  *application.AdminService
+	logger    *zap.Logger
 }
 
 // NewTenantHandler returns a TenantHandler bound to the given service.
-func NewTenantHandler(svc *application.TenantService, adminSvc *application.AdminService, logger *zap.Logger) *TenantHandler {
-	return &TenantHandler{svc: svc, adminSvc: adminSvc, logger: logger}
+func NewTenantHandler(
+	svc *application.TenantService,
+	inviteSvc *application.InvitationService,
+	adminSvc *application.AdminService,
+	logger *zap.Logger,
+) *TenantHandler {
+	return &TenantHandler{svc: svc, inviteSvc: inviteSvc, adminSvc: adminSvc, logger: logger}
+}
+
+// InviteMember POST /tenant/members/invite.
+func (h *TenantHandler) InviteMember(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	callerRole, _ := c.Get("auth.role")
+	callerID, _ := c.Get("auth.sub")
+	var req dto.InviteMemberRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	code, err := h.inviteSvc.Create(
+		c.Request.Context(), tenantID, callerID.(string), callerRole.(string), req.Email, req.Role,
+	)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusCreated, dto.InviteMemberResponse{
+		InvitationCode: code, Email: req.Email, Role: req.Role,
+	})
+}
+
+// JoinTenant POST /tenant/join.
+func (h *TenantHandler) JoinTenant(c *gin.Context) {
+	userValue, ok := c.Get("auth.sub")
+	userID, valid := userValue.(string)
+	if !ok || !valid || userID == "" {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("authenticated user required")))
+		return
+	}
+	var req struct {
+		InvitationCode string `json:"invitation_code" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	result, err := h.inviteSvc.JoinExisting(c.Request.Context(), req.InvitationCode, userID)
+	if err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("invalid or expired invitation")))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"tenant_id": result.TenantID})
 }
 
 // ListMembers GET /tenant/members?page=1&page_size=20
