@@ -20,8 +20,6 @@ groups:
           service: stratum
           environment: remote-test
 
-  - name: stratum-http-alerts
-    rules:
       - alert: StratumHighHTTP5xxRate
         expr: stratum:http_5xx_ratio:ratio5m{service="stratum",environment="remote-test"} > 0.05 and stratum:http_requests:increase5m{service="stratum",environment="remote-test"} >= 20
         for: 10m

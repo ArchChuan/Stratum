@@ -212,7 +212,7 @@ tests:
     input_series:
       - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/warning",le="1"}'
         values: '0+18x22'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/warning",le="2"}'
+      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/warning",le="2.5"}'
         values: '0+18x22'
       - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/warning",le="5"}'
         values: '0+20x22'
@@ -229,14 +229,14 @@ tests:
               component: http
             exp_annotations:
               summary: Stratum HTTP P95 latency is elevated
-              description: The five-minute HTTP P95 latency has exceeded two seconds for fifteen minutes (current value 3.5s).
+              description: The five-minute HTTP P95 latency has exceeded two seconds for fifteen minutes (current value 3.75s).
               dashboard_url: /d/stratum-http
               runbook_url: /docs/operations/remote-monitoring-runbook.md#high-http-p95-latency
 
   - name: HTTP P95 critical fires above five seconds
     interval: 1m
     input_series:
-      - series: 'http_request_duration_seconds_bucket{method="POST",path="/api/critical",le="2"}'
+      - series: 'http_request_duration_seconds_bucket{method="POST",path="/api/critical",le="2.5"}'
         values: '0+18x12'
       - series: 'http_request_duration_seconds_bucket{method="POST",path="/api/critical",le="5"}'
         values: '0+18x12'
@@ -263,9 +263,9 @@ tests:
     interval: 1m
     input_series:
       - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/boundary-two",le="1"}'
-        values: '0+18x29'
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/boundary-two",le="2"}'
-        values: '0+19x29'
+        values: '0+17x29'
+      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/boundary-two",le="2.5"}'
+        values: '0+20x29'
       - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/boundary-two",le="+Inf"}'
         values: '0+20x29'
     alert_rule_test:
@@ -282,7 +282,7 @@ tests:
   - name: HTTP P95 critical boundary does not alert
     interval: 1m
     input_series:
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/boundary-five",le="2"}'
+      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/boundary-five",le="2.5"}'
         values: '0+18x29'
       - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/boundary-five",le="5"}'
         values: '0+19x29'
@@ -318,10 +318,29 @@ tests:
         alertname: StratumCriticalHTTPP95Latency
         exp_alerts: []
 
+  - name: HTTP P95 does not alert below twenty samples
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/low-volume",le="1"}'
+        values: '0x20'
+      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/low-volume",le="2.5"}'
+        values: '0x20'
+      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/low-volume",le="10"}'
+        values: '0+3x20'
+      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/low-volume",le="+Inf"}'
+        values: '0+3x20'
+    alert_rule_test:
+      - eval_time: 19m
+        alertname: StratumHighHTTPP95Latency
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: StratumCriticalHTTPP95Latency
+        exp_alerts: []
+
   - name: HTTP P95 alerts resolve
     interval: 1m
     input_series:
-      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/recovered",le="2"}'
+      - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/recovered",le="2.5"}'
         values: '0+18x17 306x12'
       - series: 'http_request_duration_seconds_bucket{method="GET",path="/api/recovered",le="5"}'
         values: '0+20x17 340x12'
