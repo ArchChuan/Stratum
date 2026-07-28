@@ -33,6 +33,7 @@ jobs:
     needs: test
     outputs:
       image-tag: ${{ github.sha }}
+      adapter-digest: ${{ steps.adapter-build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -79,6 +80,17 @@ jobs:
           file: ./web/Dockerfile
           push: true
           tags: ${{ env.IMAGE_REPO }}/${{ env.IMAGE_NAME }}-frontend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Feishu alert adapter
+        id: adapter-build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/feishu-alert-adapter.Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_REPO }}/stratum-feishu-alert-adapter:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -207,6 +219,39 @@ jobs:
       - name: Verify cluster
         if: steps.candidate.outputs.current == 'true'
         run: kubectl get nodes
+
+      - name: Apply monitoring credentials and Feishu adapter
+        if: steps.candidate.outputs.current == 'true'
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          REGISTRY_SERVER: ${{ secrets.DOCKER_REGISTRY_URL }}
+          REGISTRY_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          test -n "$FEISHU_WEBHOOK_URL"
+          test -n "$REGISTRY_SERVER"
+          test -n "$REGISTRY_USERNAME"
+          test -n "$REGISTRY_PASSWORD"
+          adapter_digest="${{ needs.build-and-push.outputs.adapter-digest }}"
+          if [[ ! "$adapter_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo 'invalid Feishu adapter image digest' >&2
+            exit 1
+          fi
+          kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret generic stratum-monitoring-secrets \
+            --namespace monitoring \
+            --from-literal=FEISHU_WEBHOOK_URL="$FEISHU_WEBHOOK_URL" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret docker-registry aliyun-registry \
+            --namespace monitoring \
+            --docker-server="$REGISTRY_SERVER" \
+            --docker-username="$REGISTRY_USERNAME" \
+            --docker-password="$REGISTRY_PASSWORD" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          adapter_image="${{ env.IMAGE_REPO }}/stratum-feishu-alert-adapter@${adapter_digest}"
+          sed "s|__FEISHU_ADAPTER_IMAGE__|${adapter_image}|" \
+            monitoring/remote/resources/feishu-alert-adapter.yaml | kubectl apply -f -
+          kubectl rollout status deployment/stratum-feishu-alert-adapter -n monitoring --timeout=5m
 
       - name: Diagnose ingress edge
         if: steps.candidate.outputs.current == 'true'

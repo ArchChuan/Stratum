@@ -15,6 +15,8 @@ POSTGRES_DOCKERFILE="${ROOT}/docker/postgres-zhparser.Dockerfile"
 OPIK_VALUES="${ROOT}/helm/opik/values-demo.yaml"
 OPIK_COLLECTOR="${ROOT}/k8s/opik-otel-collector.yaml"
 PLATFORM_ASSISTANT_REMOTE_VERIFY="${ROOT}/scripts/e2e/platform-assistant-remote-verify.sh"
+FEISHU_ADAPTER_MANIFEST="${ROOT}/monitoring/remote/resources/feishu-alert-adapter.yaml"
+FEISHU_ADAPTER_DOCKERFILE="${ROOT}/docker/feishu-alert-adapter.Dockerfile"
 
 require() {
     local pattern="$1" description="$2"
@@ -50,6 +52,24 @@ reject_file() {
 
 require 'group:[[:space:]]*stratum-production' 'fixed production concurrency group'
 require 'cancel-in-progress:[[:space:]]*false' 'non-cancelling active deployment'
+require 'adapter-digest:[[:space:]]*\$\{\{ steps\.adapter-build\.outputs\.digest \}\}' \
+    'adapter build digest output missing'
+require 'file:[[:space:]]*\./docker/feishu-alert-adapter\.Dockerfile' 'adapter image build missing'
+require 'FEISHU_WEBHOOK_URL' 'Feishu secret injection missing'
+require 'kubectl create namespace monitoring --dry-run=client -o yaml \| kubectl apply -f -' \
+    'monitoring namespace idempotent apply missing'
+require 'kubectl create secret generic stratum-monitoring-secrets' 'monitoring secret creation missing'
+require 'FEISHU_WEBHOOK_URL:[[:space:]]*\$\{\{ secrets\.FEISHU_WEBHOOK_URL \}\}' \
+    'Feishu webhook is not passed through the step environment'
+require 'test -n "\$FEISHU_WEBHOOK_URL"' 'Feishu webhook presence validation missing'
+require '--from-literal=FEISHU_WEBHOOK_URL="\$FEISHU_WEBHOOK_URL"' \
+    'monitoring secret does not use the validated environment variable'
+require 'kubectl create secret docker-registry aliyun-registry' 'monitoring registry pull secret creation missing'
+require 'adapter_digest="\$\{\{ needs\.build-and-push\.outputs\.adapter-digest \}\}"' \
+    'adapter digest is not consumed from the build job'
+require '\$adapter_digest.*\^sha256:\[0-9a-f\]\{64\}\$' 'adapter digest validation missing'
+require '__FEISHU_ADAPTER_IMAGE__' 'adapter immutable image substitution missing'
+require 'rollout status deployment/stratum-feishu-alert-adapter' 'adapter rollout readiness wait missing'
 require 'Verify deployment candidate' 'stale main SHA gate'
 require 'api\.github\.com/repos/.*/commits/main' 'fail-closed current main lookup'
 require 'sha256:\[0-9a-f\]\{64\}' 'registry digest validation'
@@ -76,6 +96,40 @@ reject 'metrics-server/releases/latest' 'mutable metrics-server latest manifest'
 reject '\|\|[[:space:]]*true' 'suppressed deployment errors'
 reject 'StrictHostKeyChecking=no' 'disabled SSH host verification'
 reject 'insecure-skip-tls-verify|certificate-authority-data:/d' 'disabled Kubernetes API verification'
+
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'readOnlyRootFilesystem:[[:space:]]*true' \
+    'adapter filesystem hardening missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'automountServiceAccountToken:[[:space:]]*false' \
+    'adapter service account token automount is not disabled'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'runAsNonRoot:[[:space:]]*true' 'adapter non-root policy missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'runAsUser:[[:space:]]*65532' 'adapter runtime UID missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'runAsGroup:[[:space:]]*65532' 'adapter runtime GID missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'capabilities:' 'adapter capability policy missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'allowPrivilegeEscalation:[[:space:]]*false' \
+    'adapter privilege escalation policy missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'seccompProfile:' 'adapter seccomp policy missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'type:[[:space:]]*RuntimeDefault' 'adapter seccomp profile is not RuntimeDefault'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'livenessProbe:' 'adapter liveness probe missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'readinessProbe:' 'adapter readiness probe missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'resources:' 'adapter resource budget missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'terminationGracePeriodSeconds:[[:space:]]*30' \
+    'adapter termination grace period missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'type:[[:space:]]*ClusterIP' 'adapter service is not explicitly ClusterIP'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'kind:[[:space:]]*ServiceMonitor' 'adapter scrape contract missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'release:[[:space:]]*kps' 'adapter ServiceMonitor release selector missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'image:[[:space:]]*__FEISHU_ADAPTER_IMAGE__' \
+    'adapter manifest image placeholder missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'secretKeyRef:' 'adapter webhook Secret reference missing'
+require_file "${FEISHU_ADAPTER_DOCKERFILE}" '^FROM .*@sha256:' 'adapter build image is not digest pinned'
+reject_file "${FEISHU_ADAPTER_DOCKERFILE}" '^FROM .*:latest' 'adapter uses a mutable latest base image'
+require_file "${FEISHU_ADAPTER_DOCKERFILE}" '^FROM scratch$' 'adapter runtime stage is not minimal'
+require_file "${FEISHU_ADAPTER_DOCKERFILE}" \
+    '^COPY --from=builder /etc/ssl/certs/ca-certificates\.crt /etc/ssl/certs/ca-certificates\.crt$' \
+    'adapter runtime CA certificates missing'
+require_file "${FEISHU_ADAPTER_DOCKERFILE}" '^USER 65532:65532$' 'adapter image does not run as UID/GID 65532'
+require_file "${FEISHU_ADAPTER_DOCKERFILE}" '^EXPOSE 8080$' 'adapter image port contract missing'
+require_file "${FEISHU_ADAPTER_DOCKERFILE}" '^ENTRYPOINT \["/feishu-alert-adapter"\]$' \
+    'adapter image entrypoint contract missing'
 
 if grep -Eq 'gosec@latest|gosec .*\|\|[[:space:]]*true' "${CI_WORKFLOW}"; then
     echo 'deployment safety contract violated: security scanner is unpinned or non-blocking' >&2

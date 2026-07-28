@@ -1,0 +1,113 @@
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: stratum-feishu-alert-adapter
+      namespace: monitoring
+      labels:
+        app.kubernetes.io/name: stratum-feishu-alert-adapter
+        app.kubernetes.io/part-of: stratum-monitoring
+    spec:
+      replicas: 1
+      strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxSurge: 1
+          maxUnavailable: 0
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: stratum-feishu-alert-adapter
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: stratum-feishu-alert-adapter
+            app.kubernetes.io/part-of: stratum-monitoring
+        spec:
+          automountServiceAccountToken: false
+          imagePullSecrets:
+            - name: aliyun-registry
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: adapter
+              image: __FEISHU_ADAPTER_IMAGE__
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              env:
+                - name: APP_ENV
+                  value: production
+                - name: FEISHU_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: stratum-monitoring-secrets
+                      key: FEISHU_WEBHOOK_URL
+              ports:
+                - name: http
+                  containerPort: 8080
+              livenessProbe:
+                httpGet:
+                  path: /livez
+                  port: http
+                periodSeconds: 10
+                timeoutSeconds: 2
+                failureThreshold: 3
+              readinessProbe:
+                httpGet:
+                  path: /readyz
+                  port: http
+                periodSeconds: 5
+                timeoutSeconds: 2
+                failureThreshold: 3
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+          terminationGracePeriodSeconds: 30
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: stratum-feishu-alert-adapter
+      namespace: monitoring
+      labels:
+        app.kubernetes.io/name: stratum-feishu-alert-adapter
+    spec:
+      type: ClusterIP
+      selector:
+        app.kubernetes.io/name: stratum-feishu-alert-adapter
+      ports:
+        - name: http
+          port: 8080
+          targetPort: http
+  - apiVersion: monitoring.coreos.com/v1
+    kind: ServiceMonitor
+    metadata:
+      name: stratum-feishu-alert-adapter
+      namespace: monitoring
+      labels:
+        release: kps
+    spec:
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: stratum-feishu-alert-adapter
+      namespaceSelector:
+        matchNames:
+          - monitoring
+      endpoints:
+        - port: http
+          path: /metrics
+          interval: 30s
+          scrapeTimeout: 10s
