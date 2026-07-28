@@ -18,10 +18,8 @@ helm template kps prometheus-community/kube-prometheus-stack \
     --namespace "${MONITORING_NAMESPACE}" \
     -f "${ROOT}/monitoring/remote/kube-prometheus-stack-values.yaml" >"${KPS_RENDER}"
 
-awk -F '"' '
-    /^  alertmanager.yaml: "/ { print $2; found++ }
-    END { if (found != 1) exit 1 }
-' "${KPS_RENDER}" >"${ALERTMANAGER_B64}"
+go run "${ROOT}/scripts/quality/alertmanager-routing-test.go" extract-secret "${KPS_RENDER}" \
+    alertmanager-kps-kube-prometheus-stack-alertmanager >"${ALERTMANAGER_B64}"
 base64 -d "${ALERTMANAGER_B64}" >"${RENDERED_ALERTMANAGER}"
 go run "${ROOT}/scripts/quality/alertmanager-routing-test.go" compare \
     "${ROOT}/monitoring/remote/alertmanager/alertmanager.yaml" "${RENDERED_ALERTMANAGER}"

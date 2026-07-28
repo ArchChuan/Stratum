@@ -32,7 +32,16 @@ if [[ "${name}" == "helm" ]]; then
         else
             encoded="$(base64 -w0 "${TEST_ROOT:?}/monitoring/remote/alertmanager/alertmanager.yaml")"
         fi
-        printf 'data:\n  alertmanager.yaml: "%s"\n' "${encoded}"
+        kind=Secret
+        secret_name=alertmanager-kps-kube-prometheus-stack-alertmanager
+        if [[ "${WRONG_ALERTMANAGER_KIND:-}" == "1" ]]; then kind=ConfigMap; fi
+        if [[ "${WRONG_ALERTMANAGER_NAME:-}" == "1" ]]; then secret_name=wrong-alertmanager; fi
+        printf 'apiVersion: v1\nkind: %s\nmetadata:\n  name: %s\ndata:\n  alertmanager.yaml: "%s"\n' \
+            "${kind}" "${secret_name}" "${encoded}"
+        if [[ "${DUPLICATE_ALERTMANAGER_SECRET:-}" == "1" ]]; then
+            printf '%s\napiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\ndata:\n  alertmanager.yaml: "%s"\n' \
+                '---' 'alertmanager-kps-kube-prometheus-stack-alertmanager' "${encoded}"
+        fi
         exit 0
     fi
     cat <<'YAML'
@@ -95,6 +104,18 @@ if DRIFT_CHART_CONFIG=1 run_validator >/dev/null 2>&1; then
 fi
 if OMIT_ALERTMANAGER_CONFIG=1 run_validator >/dev/null 2>&1; then
     echo 'validator accepted a chart render without Alertmanager config' >&2
+    exit 1
+fi
+if WRONG_ALERTMANAGER_KIND=1 run_validator >/dev/null 2>&1; then
+    echo 'validator accepted Alertmanager data from a non-Secret object' >&2
+    exit 1
+fi
+if WRONG_ALERTMANAGER_NAME=1 run_validator >/dev/null 2>&1; then
+    echo 'validator accepted Alertmanager data from the wrong Secret' >&2
+    exit 1
+fi
+if DUPLICATE_ALERTMANAGER_SECRET=1 run_validator >/dev/null 2>&1; then
+    echo 'validator accepted duplicate Alertmanager Secrets' >&2
     exit 1
 fi
 if FAIL_TOOL=routing CALLS="${CALLS}" TEST_ROOT="${ROOT}" \

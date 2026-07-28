@@ -77,15 +77,28 @@ type inhibitionTest struct {
 	Expected bool              `yaml:"expected"`
 }
 
+type kubernetesDocument struct {
+	Kind     string `yaml:"kind"`
+	Metadata struct {
+		Name string `yaml:"name"`
+	} `yaml:"metadata"`
+	Data map[string]string `yaml:"data"`
+}
+
 var matcherPattern = regexp.MustCompile(`^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*(=~|!~|=|!=)\s*"(.*)"\s*$`)
 
 func main() {
+	if len(os.Args) == 4 && os.Args[1] == "extract-secret" {
+		extractAlertmanagerSecret(os.Args[2], os.Args[3])
+		return
+	}
 	if len(os.Args) == 4 && os.Args[1] == "compare" {
 		compareYAML(os.Args[2], os.Args[3])
 		return
 	}
 	if len(os.Args) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: alertmanager-routing-test.go CONFIG FIXTURE | compare LEFT RIGHT")
+		fmt.Fprintln(os.Stderr,
+			"usage: alertmanager-routing-test.go CONFIG FIXTURE | compare LEFT RIGHT | extract-secret RENDER NAME")
 		os.Exit(2)
 	}
 	var cfg config
@@ -147,6 +160,43 @@ func main() {
 			failf("inhibition contract %q: expected %t, got %t", test.Name, test.Expected, actual)
 		}
 	}
+}
+
+func extractAlertmanagerSecret(renderPath, expectedName string) {
+	var reader io.Reader = os.Stdin
+	if renderPath != "-" {
+		file, err := os.Open(renderPath)
+		if err != nil {
+			failf("open rendered chart: %v", err)
+		}
+		defer file.Close()
+		reader = file
+	}
+
+	decoder := yaml.NewDecoder(reader)
+	var payloads []string
+	for {
+		var document kubernetesDocument
+		err := decoder.Decode(&document)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			failf("parse rendered chart: %v", err)
+		}
+		if document.Kind != "Secret" || document.Metadata.Name != expectedName {
+			continue
+		}
+		payload := document.Data["alertmanager.yaml"]
+		if payload == "" {
+			failf("rendered Alertmanager Secret has empty alertmanager.yaml")
+		}
+		payloads = append(payloads, payload)
+	}
+	if len(payloads) != 1 {
+		failf("expected exactly one rendered Alertmanager Secret %q, found %d", expectedName, len(payloads))
+	}
+	fmt.Print(payloads[0])
 }
 
 func compareYAML(leftPath, rightPath string) {
