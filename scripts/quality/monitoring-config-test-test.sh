@@ -105,6 +105,24 @@ if [[ -f "${RUNBOOK_FILE}" ]]; then
     fi
 fi
 
+mkdir -p "${TMP_ROOT}/rules-missing-url"
+cp "${ROOT}"/monitoring/remote/rules/*.yaml "${TMP_ROOT}/rules-missing-url/"
+sed -i '/runbook_url: .*public-endpoint-down/d' \
+    "${TMP_ROOT}/rules-missing-url/stratum-availability.yaml"
+if MONITORING_RULES_DIR="${TMP_ROOT}/rules-missing-url" run_validator >/dev/null 2>&1; then
+    echo 'validator accepted an alert without a runbook_url' >&2
+    exit 1
+fi
+
+mkdir -p "${TMP_ROOT}/rules-duplicate-url"
+cp "${ROOT}"/monitoring/remote/rules/*.yaml "${TMP_ROOT}/rules-duplicate-url/"
+sed -i '/runbook_url: .*public-endpoint-down/a\          runbook_url: /docs/operations/alerts/availability.md#public-endpoint-down' \
+    "${TMP_ROOT}/rules-duplicate-url/stratum-availability.yaml"
+if MONITORING_RULES_DIR="${TMP_ROOT}/rules-duplicate-url" run_validator >/dev/null 2>&1; then
+    echo 'validator accepted an alert with duplicate runbook_url annotations' >&2
+    exit 1
+fi
+
 for expected in helm promtool amtool; do
     if ! grep -q "^${expected} " "${CALLS}"; then
         echo "validator did not invoke ${expected}" >&2
