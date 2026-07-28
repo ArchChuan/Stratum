@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "source_digest": "7e64e3977cfe5c70e560d83013010b8b6907a2882da0cac5d46846ea81b78b06",
+  "manifest_digest": "046b72d9fe7d7cb748c9b1e88bee06b155444199b5280a9931f98959a5918560",
+  "tested_git_parent": "4bed0a534c2ff31ef2d12ee73e5895f071a10dc0",
+  "browser": {
+    "name": "chromium",
+    "version": "149.0.7827.55"
+  },
+  "mode": "short",
+  "seed": 1,
+  "started_at": "2026-07-28T16:32:35.335Z",
+  "duration_seconds": 69,
+  "host_class": "developer",
+  "packs": [
+    {
+      "id": "agent",
+      "status": "passed"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "agent.mutation.delete.agents.id",
+      "status": "passed"
+    },
+    {
+      "id": "agent.mutation.delete.conversations.convid",
+      "status": "passed"
+    },
+    {
+      "id": "agent.mutation.patch.conversations.convid",
+      "status": "passed"
+    },
+    {
+      "id": "agent.mutation.post.agents",
+      "status": "passed"
+    },
+    {
+      "id": "agent.mutation.post.agents.agentid.conversations",
+      "status": "passed"
+    },
+    {
+      "id": "agent.mutation.post.agents.id.execute",
+      "status": "passed"
+    },
+    {
+      "id": "agent.mutation.post.agents.id.execute.stream",
+      "status": "passed"
+    },
+    {
+      "id": "agent.mutation.post.conversations.convid.messages",
+      "status": "passed"
+    },
+    {
+      "id": "agent.mutation.put.agents.id",
+      "status": "passed"
+    },
+    {
+      "id": "agent.mutation.put.agents.system.settings",
+      "status": "passed"
+    },
+    {
+      "id": "agent.route.agents",
+      "status": "passed"
+    },
+    {
+      "id": "agent.route.agents.create",
+      "status": "passed"
+    },
+    {
+      "id": "agent.route.agents.id.edit",
+      "status": "passed"
+    },
+    {
+      "id": "agent.route.chat",
+      "status": "passed"
+    }
+  ],
+  "action_count": 14,
+  "sequence_digest": "4ca8efe1c469c297fd0451780e5d1a6b9513c52a9c1a57174d7499dd4fbdb2fb",
+  "evidence": {
+    "ui": 5,
+    "http": 5,
+    "database": 5,
+    "reconciled": 14
+  },
+  "artifacts": [],
+  "cleanup": {
+    "passed": true,
+    "residual_entity_ids": []
+  },
+  "unverified_capabilities": [],
+  "risk_classification": "short",
+  "status": "passed",
+  "expires_at": "2026-07-31T16:33:47.944877035Z"
+}
