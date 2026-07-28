@@ -2,7 +2,7 @@ groups:
   - name: stratum-capacity
     rules:
       - alert: StratumNodeMemoryLow
-        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        expr: (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
         for: 15m
         labels:
           severity: warning
@@ -16,7 +16,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#node-memory-low
 
       - alert: StratumNodeCPUHigh
-        expr: 1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.85
+        expr: (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.85) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
         for: 15m
         labels:
           severity: warning
@@ -30,7 +30,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#node-cpu-high
 
       - alert: StratumNodeFilesystemLow
-        expr: node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} < 0.15
+        expr: (node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} < 0.15) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
         for: 15m
         labels:
           severity: warning
@@ -44,7 +44,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#node-filesystem-low
 
       - alert: StratumNodeInodesLow
-        expr: node_filesystem_files_free{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_files{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} < 0.15
+        expr: (node_filesystem_files_free{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_files{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} < 0.15) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
         for: 15m
         labels:
           severity: warning
@@ -148,10 +148,10 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#pvc-exhaustion-imminent
 
       - record: stratum:filesystem_exhaustion_within_4d
-        expr: ((predict_linear(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h], 4 * 24 * 60 * 60) < bool 0) == 1) and on (instance, device, mountpoint, fstype) (deriv(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h]) < 0) and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} offset 6h
+        expr: (((predict_linear(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h], 4 * 24 * 60 * 60) < bool 0) == 1) and on (instance, device, mountpoint, fstype) (deriv(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h]) < 0) and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} offset 6h) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
 
       - record: stratum:filesystem_exhaustion_within_1d
-        expr: ((predict_linear(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h], 24 * 60 * 60) < bool 0) == 1) and on (instance, device, mountpoint, fstype) (deriv(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h]) < 0) and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} offset 6h
+        expr: (((predict_linear(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h], 24 * 60 * 60) < bool 0) == 1) and on (instance, device, mountpoint, fstype) (deriv(node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"}[6h]) < 0) and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} and on (instance, device, mountpoint, fstype) node_filesystem_avail_bytes{mountpoint=~"^/(data)?$",fstype!~"tmpfs|overlay|squashfs"} offset 6h) * on (instance) group_left (node) label_replace(node_uname_info{job="node-exporter"}, "node", "$1", "nodename", "(.+)") and on (node) max by (node) (kube_pod_info{namespace="stratum"})
 
       - alert: StratumFilesystemExhaustionPredicted
         expr: stratum:filesystem_exhaustion_within_4d == 1

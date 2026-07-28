@@ -14,8 +14,12 @@ tests:
     input_series:
       - series: 'kube_node_status_condition{node="remote-node",condition="Ready",status="true"}'
         values: '0x7'
+      - series: 'kube_node_status_condition{node="foreign-node",condition="Ready",status="true"}'
+        values: '0x7'
       - series: 'kube_pod_container_status_restarts_total{namespace="stratum",pod="stratum-abc",container="stratum"}'
         values: '0+1x7'
+      - series: 'kube_pod_info{namespace="stratum",pod="stratum-abc",node="remote-node"}'
+        values: '1x7'
     promql_expr_test:
       - expr: ALERTS{alertname="StratumNodeNotReady",alertstate="firing"}
         eval_time: 5m
@@ -25,7 +29,7 @@ tests:
       - expr: ALERTS{alertname="StratumPodRestartingFrequently",alertstate="firing"}
         eval_time: 6m
         exp_samples:
-          - labels: '{__name__="ALERTS",alertname="StratumPodRestartingFrequently",alertstate="firing",component="workload",container="stratum",environment="remote-test",namespace="stratum",pod="stratum-abc",service="stratum",severity="warning"}'
+          - labels: '{__name__="ALERTS",alertname="StratumPodRestartingFrequently",alertstate="firing",component="workload",container="stratum",environment="remote-test",namespace="stratum",node="remote-node",pod="stratum-abc",service="stratum",severity="warning"}'
             value: 1
 
   - name: workload rules detect crash loops and prolonged pending pods
@@ -35,18 +39,22 @@ tests:
         values: '1x18'
       - series: 'kube_pod_status_phase{namespace="stratum",pod="pending-pod",phase="Pending"}'
         values: '1x18'
+      - series: 'kube_pod_info{namespace="stratum",pod="crashing-pod",node="remote-node"}'
+        values: '1x18'
+      - series: 'kube_pod_info{namespace="stratum",pod="pending-pod",node="remote-node"}'
+        values: '1x18'
       - series: 'kube_pod_container_status_waiting_reason{namespace="other",pod="foreign-pod",container="other",reason="CrashLoopBackOff"}'
         values: '1x18'
     promql_expr_test:
       - expr: ALERTS{alertname="StratumPodCrashLooping",alertstate="firing"}
         eval_time: 5m
         exp_samples:
-          - labels: '{__name__="ALERTS",alertname="StratumPodCrashLooping",alertstate="firing",component="workload",container="stratum",environment="remote-test",namespace="stratum",pod="crashing-pod",reason="CrashLoopBackOff",service="stratum",severity="critical"}'
+          - labels: '{__name__="ALERTS",alertname="StratumPodCrashLooping",alertstate="firing",component="workload",container="stratum",environment="remote-test",namespace="stratum",node="remote-node",pod="crashing-pod",reason="CrashLoopBackOff",service="stratum",severity="critical"}'
             value: 1
       - expr: ALERTS{alertname="StratumPodPendingTooLong",alertstate="firing"}
         eval_time: 15m
         exp_samples:
-          - labels: '{__name__="ALERTS",alertname="StratumPodPendingTooLong",alertstate="firing",component="workload",environment="remote-test",namespace="stratum",phase="Pending",pod="pending-pod",service="stratum",severity="warning"}'
+          - labels: '{__name__="ALERTS",alertname="StratumPodPendingTooLong",alertstate="firing",component="workload",environment="remote-test",namespace="stratum",node="remote-node",phase="Pending",pod="pending-pod",service="stratum",severity="warning"}'
             value: 1
 
   - name: capacity rules detect low node memory and PVC thresholds
@@ -56,6 +64,16 @@ tests:
         values: '90x17'
       - series: 'node_memory_MemTotal_bytes{instance="remote-node"}'
         values: '1000x17'
+      - series: 'node_memory_MemAvailable_bytes{instance="foreign-instance"}'
+        values: '10x17'
+      - series: 'node_memory_MemTotal_bytes{instance="foreign-instance"}'
+        values: '1000x17'
+      - series: 'node_uname_info{job="node-exporter",instance="remote-node",nodename="remote-k3s-node"}'
+        values: '1x17'
+      - series: 'node_uname_info{job="node-exporter",instance="foreign-instance",nodename="foreign-node"}'
+        values: '1x17'
+      - series: 'kube_pod_info{namespace="stratum",pod="stratum-abc",node="remote-k3s-node"}'
+        values: '1x17'
       - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="warning-pvc"}'
         values: '85x17'
       - series: 'kubelet_volume_stats_capacity_bytes{namespace="stratum",persistentvolumeclaim="warning-pvc"}'
@@ -68,7 +86,7 @@ tests:
       - expr: ALERTS{alertname="StratumNodeMemoryLow",alertstate="firing"}
         eval_time: 15m
         exp_samples:
-          - labels: '{__name__="ALERTS",alertname="StratumNodeMemoryLow",alertstate="firing",component="node",environment="remote-test",instance="remote-node",service="stratum",severity="warning"}'
+          - labels: '{__name__="ALERTS",alertname="StratumNodeMemoryLow",alertstate="firing",component="node",environment="remote-test",instance="remote-node",node="remote-k3s-node",service="stratum",severity="warning"}'
             value: 1
       - expr: ALERTS{alertname="StratumPVCUsageHigh",alertstate="firing",persistentvolumeclaim="warning-pvc"}
         eval_time: 15m
@@ -102,15 +120,19 @@ tests:
         values: '0+4x20'
       - series: 'container_cpu_cfs_periods_total{namespace="stratum",pod="stratum-abc",container="stratum"}'
         values: '0+10x20'
+      - series: 'node_uname_info{job="node-exporter",instance="remote-node",nodename="remote-k3s-node"}'
+        values: '1x20'
+      - series: 'kube_pod_info{namespace="stratum",pod="stratum-abc",node="remote-k3s-node"}'
+        values: '1x20'
     promql_expr_test:
       - expr: ALERTS{alertname=~"StratumNodeCPUHigh|StratumNodeFilesystemLow|StratumNodeInodesLow|StratumContainerMemoryNearLimit|StratumContainerCPUThrottled",alertstate="firing"}
         eval_time: 17m
         exp_samples:
-          - labels: '{__name__="ALERTS",alertname="StratumNodeCPUHigh",alertstate="firing",component="node",environment="remote-test",instance="remote-node",service="stratum",severity="warning"}'
+          - labels: '{__name__="ALERTS",alertname="StratumNodeCPUHigh",alertstate="firing",component="node",environment="remote-test",instance="remote-node",node="remote-k3s-node",service="stratum",severity="warning"}'
             value: 1
-          - labels: '{__name__="ALERTS",alertname="StratumNodeFilesystemLow",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",service="stratum",severity="warning"}'
+          - labels: '{__name__="ALERTS",alertname="StratumNodeFilesystemLow",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node",service="stratum",severity="warning"}'
             value: 1
-          - labels: '{__name__="ALERTS",alertname="StratumNodeInodesLow",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",service="stratum",severity="warning"}'
+          - labels: '{__name__="ALERTS",alertname="StratumNodeInodesLow",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node",service="stratum",severity="warning"}'
             value: 1
           - labels: '{__name__="ALERTS",alertname="StratumContainerMemoryNearLimit",alertstate="firing",component="workload",container="stratum",environment="remote-test",namespace="stratum",pod="stratum-abc",service="stratum",severity="warning"}'
             value: 1
@@ -176,29 +198,39 @@ tests:
         values: '100000000+100000000x8'
       - series: 'node_filesystem_avail_bytes{instance="young-node",device="/dev/root",mountpoint="/",fstype="ext4"}'
         values: '_x2 800000000-100000000x6'
+      - series: 'node_uname_info{job="node-exporter",instance="remote-node",nodename="remote-k3s-node"}'
+        values: '1x8'
+      - series: 'node_uname_info{job="node-exporter",instance="young-node",nodename="young-k3s-node"}'
+        values: '1x8'
+      - series: 'kube_pod_info{namespace="stratum",pod="stratum-abc",node="remote-k3s-node"}'
+        values: '1x8'
     promql_expr_test:
       - expr: stratum:filesystem_exhaustion_within_4d
         eval_time: 6h
         exp_samples:
-          - labels: '{__name__="stratum:filesystem_exhaustion_within_4d",device="/dev/root",fstype="ext4",instance="remote-node",mountpoint="/"}'
+          - labels: '{__name__="stratum:filesystem_exhaustion_within_4d",device="/dev/root",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node"}'
             value: 1
       - expr: stratum:filesystem_exhaustion_within_1d
         eval_time: 6h
         exp_samples:
-          - labels: '{__name__="stratum:filesystem_exhaustion_within_1d",device="/dev/root",fstype="ext4",instance="remote-node",mountpoint="/"}'
+          - labels: '{__name__="stratum:filesystem_exhaustion_within_1d",device="/dev/root",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node"}'
             value: 1
   - name: filesystem exhaustion predictions persist into alerts
     interval: 5m
     input_series:
       - series: 'node_filesystem_avail_bytes{instance="remote-node",device="/dev/root",mountpoint="/",fstype="ext4"}'
         values: '800000000-10000000x76'
+      - series: 'node_uname_info{job="node-exporter",instance="remote-node",nodename="remote-k3s-node"}'
+        values: '1x76'
+      - series: 'kube_pod_info{namespace="stratum",pod="stratum-abc",node="remote-k3s-node"}'
+        values: '1x76'
     promql_expr_test:
       - expr: ALERTS{alertname=~"StratumFilesystemExhaustionPredicted|StratumFilesystemExhaustionImminent",alertstate="firing"}
         eval_time: 6h15m
         exp_samples:
-          - labels: '{__name__="ALERTS",alertname="StratumFilesystemExhaustionPredicted",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",service="stratum",severity="warning"}'
+          - labels: '{__name__="ALERTS",alertname="StratumFilesystemExhaustionPredicted",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node",service="stratum",severity="warning"}'
             value: 1
-          - labels: '{__name__="ALERTS",alertname="StratumFilesystemExhaustionImminent",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",service="stratum",severity="critical"}'
+          - labels: '{__name__="ALERTS",alertname="StratumFilesystemExhaustionImminent",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node",service="stratum",severity="critical"}'
             value: 1
 
   - name: dependency targets disappear independently

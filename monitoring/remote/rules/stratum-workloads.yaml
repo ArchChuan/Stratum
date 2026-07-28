@@ -2,7 +2,7 @@ groups:
   - name: stratum-workloads
     rules:
       - alert: StratumNodeNotReady
-        expr: max by (node) (kube_node_status_condition{condition="Ready",status="true"} == 0)
+        expr: max by (node) (kube_node_status_condition{condition="Ready",status="true"} == 0) and on (node) max by (node) (kube_pod_info{namespace="stratum"})
         for: 5m
         labels:
           severity: critical
@@ -16,7 +16,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#node-not-ready
 
       - alert: StratumPodRestartingFrequently
-        expr: increase(kube_pod_container_status_restarts_total{namespace="stratum"}[10m]) > 3
+        expr: (increase(kube_pod_container_status_restarts_total{namespace="stratum"}[10m]) > 3) * on (namespace, pod) group_left (node) max by (namespace, pod, node) (kube_pod_info{namespace="stratum"})
         for: 2m
         labels:
           severity: warning
@@ -30,7 +30,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#pod-restarting-frequently
 
       - alert: StratumPodCrashLooping
-        expr: kube_pod_container_status_waiting_reason{namespace="stratum",reason="CrashLoopBackOff"} == 1
+        expr: (kube_pod_container_status_waiting_reason{namespace="stratum",reason="CrashLoopBackOff"} == 1) * on (namespace, pod) group_left (node) max by (namespace, pod, node) (kube_pod_info{namespace="stratum"})
         for: 5m
         labels:
           severity: critical
@@ -44,7 +44,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#pod-crash-looping
 
       - alert: StratumPodPendingTooLong
-        expr: kube_pod_status_phase{namespace="stratum",phase="Pending"} == 1
+        expr: (kube_pod_status_phase{namespace="stratum",phase="Pending"} == 1) * on (namespace, pod) group_left (node) max by (namespace, pod, node) (kube_pod_info{namespace="stratum"})
         for: 15m
         labels:
           severity: warning
