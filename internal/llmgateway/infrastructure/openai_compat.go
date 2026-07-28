@@ -571,7 +571,12 @@ func (p *OpenAICompatProtocol) Complete(ctx context.Context, _ ProviderConfig, r
 	return p.client.Complete(ctx, req)
 }
 
-func (p *OpenAICompatProtocol) CompleteStream(ctx context.Context, _ ProviderConfig, req *CompletionRequest, onToken func(string)) (*CompletionResponse, error) {
+func (p *OpenAICompatProtocol) CompleteStream(
+	ctx context.Context,
+	_ ProviderConfig,
+	req *CompletionRequest,
+	onToken func(string),
+) (*CompletionResponse, error) {
 	return p.client.CompleteStream(ctx, req, onToken)
 }
 
@@ -583,7 +588,11 @@ func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfi
 	return cfg.Models, nil
 }
 
-func (p *OpenAICompatProtocol) CreateEmbeddings(ctx context.Context, _ ProviderConfig, req *EmbeddingRequest) (*EmbeddingResponse, error) {
+func (p *OpenAICompatProtocol) CreateEmbeddings(
+	ctx context.Context,
+	_ ProviderConfig,
+	req *EmbeddingRequest,
+) (*EmbeddingResponse, error) {
 	return p.client.CreateEmbeddings(ctx, req)
 }
 

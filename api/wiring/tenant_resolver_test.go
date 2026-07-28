@@ -52,7 +52,7 @@ func TestNewTenantCapabilityResolverPreservesNilDatabaseBehavior(t *testing.T) {
 
 	client, err := resolver.ResolveWorkerLLM(context.Background(), "tenant-1")
 	require.Nil(t, client)
-	require.ErrorContains(t, err, "database unavailable")
+	require.ErrorContains(t, err, "registry unavailable")
 }
 
 func TestTenantCapabilityResolverDiagnosticModelStatus(t *testing.T) {

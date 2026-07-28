@@ -33,7 +33,10 @@ type LLMGateway struct {
 func (c *Container) buildLLMGateway(_ context.Context) error {
 	db := c.DB()
 	if db == nil {
-		return nil // no database — skip gateway building
+		// c.LLMGateway remains nil when db is unavailable.
+		// Downstream consumers (knowledge, memory, agent resolvers) must
+		// guard against nil c.LLMGateway and nil c.LLMGateway.Registry.
+		return nil
 	}
 	metrics := observability.NewPrometheusMetrics(c.Logger)
 

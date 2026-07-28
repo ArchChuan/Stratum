@@ -55,8 +55,10 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	if db != nil {
 		chunkRepo := persistence.NewChunkRepo(db)
 		docRepo := persistence.NewDocRepo(db)
-		pipelineResolver = buildEmbedResolver(db, c.LLMGateway.Registry, c.Logger)
-		knowledgeResolver = buildKnowledgeEmbedResolver(db, c.LLMGateway.Registry, c.Logger)
+		if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
+			pipelineResolver = buildEmbedResolver(db, c.LLMGateway.Registry, c.Logger)
+			knowledgeResolver = buildKnowledgeEmbedResolver(db, c.LLMGateway.Registry, c.Logger)
+		}
 		ingest.SetEmbedResolver(knowledgeResolver)
 		ingest.SetChunkRepo(chunkRepo)
 		ingest.SetDocRepo(docRepo)
