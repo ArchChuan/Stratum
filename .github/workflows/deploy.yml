@@ -220,7 +220,7 @@ jobs:
         if: steps.candidate.outputs.current == 'true'
         run: kubectl get nodes
 
-      - name: Apply monitoring credentials and Feishu adapter
+      - name: Apply monitoring credentials
         if: steps.candidate.outputs.current == 'true'
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
@@ -248,12 +248,6 @@ jobs:
             --docker-username="$REGISTRY_USERNAME" \
             --docker-password="$REGISTRY_PASSWORD" \
             --dry-run=client -o yaml | kubectl apply -f -
-          kubectl wait --for=condition=Established crd/servicemonitors.monitoring.coreos.com --timeout=2m
-          adapter_image="${{ env.IMAGE_REPO }}/stratum-feishu-alert-adapter@${adapter_digest}"
-          sed "s|__FEISHU_ADAPTER_IMAGE__|${adapter_image}|" \
-            monitoring/remote/resources/feishu-alert-adapter.yaml | kubectl apply -f -
-          kubectl rollout restart deployment/stratum-feishu-alert-adapter -n monitoring
-          kubectl rollout status deployment/stratum-feishu-alert-adapter -n monitoring --timeout=5m
 
       - name: Diagnose ingress edge
         if: steps.candidate.outputs.current == 'true'
@@ -474,3 +468,28 @@ jobs:
             echo "public health response did not match the backend contract" >&2
             exit 1
           fi
+
+      - name: Reconcile remote monitoring
+        if: steps.candidate.outputs.current == 'true'
+        env:
+          FEISHU_ADAPTER_IMAGE: ${{ env.IMAGE_REPO }}/stratum-feishu-alert-adapter@${{ needs.build-and-push.outputs.adapter-digest }}
+        run: |
+          validator_dir=$(mktemp -d)
+          prometheus_container=""
+          alertmanager_container=""
+          cleanup_validators() {
+            if [[ -n "$prometheus_container" ]]; then
+              docker rm -f "$prometheus_container" >/dev/null 2>&1 || :
+            fi
+            if [[ -n "$alertmanager_container" ]]; then
+              docker rm -f "$alertmanager_container" >/dev/null 2>&1 || :
+            fi
+            /usr/bin/rm -rf -- "$validator_dir"
+          }
+          trap cleanup_validators EXIT
+          prometheus_container=$(docker create prom/prometheus:v3.8.1)
+          docker cp "$prometheus_container:/bin/promtool" "$validator_dir/promtool"
+          alertmanager_container=$(docker create prom/alertmanager:v0.33.1)
+          docker cp "$alertmanager_container:/bin/amtool" "$validator_dir/amtool"
+          chmod 0755 "$validator_dir/promtool" "$validator_dir/amtool"
+          PATH="$validator_dir:$PATH" bash scripts/deploy-remote-monitoring.sh
