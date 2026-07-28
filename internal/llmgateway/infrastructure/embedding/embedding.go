@@ -10,13 +10,21 @@ import (
 	"go.uber.org/zap"
 )
 
+// EmbeddingClient is the minimal embedding interface needed by EmbeddingService.
+// Defined here because the old gateway-level EmbeddingClient was removed in
+// favour of *OpenAICompatClient directly.
+type EmbeddingClient interface {
+	CreateEmbeddings(ctx context.Context, req *llmgateway.EmbeddingRequest) (*llmgateway.EmbeddingResponse, error)
+	BatchSize() int
+}
+
 type EmbeddingService struct {
-	client llmgateway.EmbeddingClient
+	client EmbeddingClient
 	model  string
 	logger *zap.Logger
 }
 
-func NewEmbeddingService(client llmgateway.EmbeddingClient, logger *zap.Logger) *EmbeddingService {
+func NewEmbeddingService(client EmbeddingClient, logger *zap.Logger) *EmbeddingService {
 	return &EmbeddingService{
 		client: client,
 		model:  "text-embedding-3-small",
@@ -25,7 +33,7 @@ func NewEmbeddingService(client llmgateway.EmbeddingClient, logger *zap.Logger) 
 }
 
 // NewEmbeddingServiceWithModel creates an EmbeddingService with a specific model name.
-func NewEmbeddingServiceWithModel(client llmgateway.EmbeddingClient, model string, logger *zap.Logger) *EmbeddingService {
+func NewEmbeddingServiceWithModel(client EmbeddingClient, model string, logger *zap.Logger) *EmbeddingService {
 	return &EmbeddingService{
 		client: client,
 		model:  model,

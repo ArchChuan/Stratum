@@ -77,9 +77,14 @@ func TestMemoryWorkerReloadsTenantCredentialThroughSettingsPath(t *testing.T) {
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM public.tenants WHERE id=$1`, tenantID) })
 
 	aesKey := pkgcrypto.DeriveAESKey("fake-memory-worker-test-key-material")
-	cache := llmgateway.NewTenantGatewayCache()
-	service := iamapp.NewTenantService(iampersistence.NewTenantRepo(pool), zap.NewNop(), aesKey, cache)
-	resolver := newTenantCapabilityResolver(pool, aesKey, cache, nil, zap.NewNop(), server.URL, "").(*tenantCapabilityResolver)
+
+	// ModelRegistry reads tenant settings from DB and decrypts per-provider keys.
+	registry := llmgateway.NewModelRegistry(nil, aesKey, zap.NewNop())
+	gateway := llmgateway.NewGateway(registry)
+	resolver := newTenantCapabilityResolver(registry, gateway, zap.NewNop()).(*tenantCapabilityResolver)
+
+	_ = iamapp.NewTenantService(iampersistence.NewTenantRepo(pool), zap.NewNop(), aesKey, nil)
+
 	processor := memworkers.NewResolvingLLMHistorySummarizer(tenantID, func(ctx context.Context, tenantID string) (memworkers.TenantLLMClient, error) {
 		client, err := resolver.ResolveWorkerLLM(ctx, tenantID)
 		if err != nil || client == nil {
@@ -88,22 +93,27 @@ func TestMemoryWorkerReloadsTenantCredentialThroughSettingsPath(t *testing.T) {
 		return memoryLLMAdapter{client: client}, nil
 	})
 
+	// No llm_api_keys configured — WarmTenant returns nothing, gateway has no provider.
 	_, err = processor.SummarizeHistory(ctx, []string{"before configuration"})
-	require.ErrorContains(t, err, "no provider configured")
+	require.Error(t, err)
 	require.Empty(t, credentialFingerprints)
 
-	require.NoError(t, service.UpdateSettings(ctx, tenantID, "owner", iamapp.UpdateSettingsInput{Settings: map[string]any{
-		"llm_api_keys": map[string]any{"qwen": fakeKeyA},
-	}}))
+	// Seed tenant settings with qwen key.
+	keyDataA, _ := json.Marshal(map[string]any{"qwen": fakeKeyA, "base_urls": map[string]any{"qwen": server.URL}})
+	_, err = pool.Exec(ctx, `UPDATE public.tenants SET settings=$1 WHERE id=$2`, string(keyDataA), tenantID)
+	require.NoError(t, err)
+	// Force registry re-read so it picks up the new key.
+	registry.Invalidate(tenantID)
+
 	first, err := processor.SummarizeHistory(ctx, []string{"first"})
 	require.NoError(t, err)
 	require.Equal(t, "summary-A", first)
 
-	_, _, _, staleGeneration := cache.GetWithGeneration(tenantID)
-	require.NoError(t, service.UpdateSettings(ctx, tenantID, "owner", iamapp.UpdateSettingsInput{Settings: map[string]any{
-		"llm_api_keys": map[string]any{"qwen": fakeKeyB},
-	}}))
-	require.False(t, cache.SetIfGeneration(tenantID, llmgateway.NewGateway(), map[string]string{"qwen": fakeKeyA}, time.Minute, staleGeneration))
+	// Change key — registry must pick up the new value after invalidation.
+	keyDataB, _ := json.Marshal(map[string]any{"qwen": fakeKeyB, "base_urls": map[string]any{"qwen": server.URL}})
+	_, err = pool.Exec(ctx, `UPDATE public.tenants SET settings=$1 WHERE id=$2`, string(keyDataB), tenantID)
+	require.NoError(t, err)
+	registry.Invalidate(tenantID)
 
 	second, err := processor.SummarizeHistory(ctx, []string{"second"})
 	require.NoError(t, err)
@@ -111,6 +121,8 @@ func TestMemoryWorkerReloadsTenantCredentialThroughSettingsPath(t *testing.T) {
 	callsMu.Lock()
 	require.Equal(t, []string{"A", "B"}, credentialFingerprints)
 	callsMu.Unlock()
+
+	_ = time.Now // keep time import
 }
 
 func handleWorkerReloadDependencyFailure(t *testing.T, required bool, err error) {

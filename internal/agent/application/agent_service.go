@@ -33,7 +33,6 @@ import (
 // imports allowed.
 type AgentServiceDeps struct {
 	Registry                  *Registry
-	TenantSettings            port.TenantSettings
 	SkillLookup               port.SkillLookup
 	SkillActivationResolver   port.SkillActivationResolver
 	SkillRevisionResolver     port.SkillRevisionResolver
@@ -113,7 +112,6 @@ type CreateAgentInput struct {
 	Description           string
 	SystemPrompt          string
 	LLMModel              string
-	EmbedModel            string
 	MaxIterations         int
 	MaxContextTokens      int
 	AllowedSkills         []string
@@ -122,7 +120,6 @@ type CreateAgentInput struct {
 	MemoryScope           string
 }
 
-// UpdateAgentInput mirrors CreateAgentInput minus immutable EmbedModel.
 type UpdateAgentInput struct {
 	Name                  string
 	Type                  string
@@ -146,7 +143,6 @@ type AgentDTO struct {
 	Description           string
 	SystemPrompt          string
 	LLMModel              string
-	EmbedModel            string
 	MaxIterations         int
 	MaxContextTokens      int
 	AllowedSkills         []string
@@ -166,18 +162,8 @@ type SystemAssistantSettings struct {
 	AvailableModels []string
 }
 
-// Create persists a new agent for the tenant. Inherits embed_model from
-// tenant defaults when caller omits it.
+// Create persists a new agent for the tenant.
 func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDTO, error) {
-	embedModel := in.EmbedModel
-	if embedModel == "" && s.deps.TenantSettings != nil {
-		inherited, err := s.deps.TenantSettings.GetEmbedModel(ctx, in.TenantID)
-		if err != nil {
-			return AgentDTO{}, fmt.Errorf("agent service: get embed_model: %w", err)
-		}
-		embedModel = inherited
-	}
-
 	id := uuid.Must(uuid.NewV7()).String()
 	cfg := &domain.AgentConfig{
 		ID:                    id,
@@ -186,7 +172,6 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		Description:           in.Description,
 		SystemPrompt:          in.SystemPrompt,
 		LLMModel:              in.LLMModel,
-		EmbedModel:            embedModel,
 		MaxIterations:         in.MaxIterations,
 		MaxContextTokens:      in.MaxContextTokens,
 		AllowedSkills:         in.AllowedSkills,
@@ -239,7 +224,7 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 	}
 	revision := domain.AgentRevision{
 		AgentID: cfg.ID, Type: cfg.Type, SystemPrompt: cfg.SystemPrompt, Model: cfg.LLMModel,
-		EmbedModel: cfg.EmbedModel, MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
+		MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
 		CheckpointEnabled: cfg.CheckpointEnabled,
 		StuckThreshold:    cfg.StuckThreshold,
 		ModelParameters:   domain.ModelParameters{MaxContextTokens: cfg.MaxContextTokens},
@@ -339,7 +324,7 @@ func (s *AgentService) buildRevisionAgent(revision domain.AgentRevision) (*BaseA
 func revisionConfig(revision domain.AgentRevision) *domain.AgentConfig {
 	cfg := &domain.AgentConfig{
 		ID: revision.AgentID, Type: revision.Type, SystemPrompt: revision.SystemPrompt,
-		LLMModel: revision.Model, EmbedModel: revision.EmbedModel, MaxIterations: revision.MaxIterations,
+		LLMModel: revision.Model, MaxIterations: revision.MaxIterations,
 		MaxContextTokens: revision.ModelParameters.MaxContextTokens, MemoryScope: revision.MemoryScope,
 		CheckpointEnabled: revision.CheckpointEnabled,
 		StuckThreshold:    revision.StuckThreshold,
@@ -469,7 +454,6 @@ func (s *AgentService) listTenantChatModels(ctx context.Context, tenantID string
 	return append([]string(nil), models...), nil
 }
 
-// Update replaces mutable fields on an existing agent. EmbedModel is
 // immutable post-create — callers cannot change it through Update.
 func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInput) (AgentDTO, error) {
 	existing, ok, err := s.deps.Registry.Get(ctx, id)
@@ -493,7 +477,6 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		Description:           in.Description,
 		SystemPrompt:          in.SystemPrompt,
 		LLMModel:              in.LLMModel,
-		EmbedModel:            existing.GetConfig().EmbedModel,
 		MaxIterations:         in.MaxIterations,
 		MaxContextTokens:      in.MaxContextTokens,
 		AllowedSkills:         skills,
@@ -593,7 +576,6 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		Description:           cfg.Description,
 		SystemPrompt:          cfg.SystemPrompt,
 		LLMModel:              cfg.LLMModel,
-		EmbedModel:            cfg.EmbedModel,
 		MaxIterations:         cfg.MaxIterations,
 		MaxContextTokens:      cfg.MaxContextTokens,
 		AllowedSkills:         cfg.AllowedSkills,
@@ -1151,7 +1133,7 @@ func (s *AgentService) assembleOptions(
 		}
 	}
 	if s.deps.TenantResolver != nil {
-		if capGW, apiKeys, ok := s.deps.TenantResolver.Resolve(ctx, meta.TenantID); ok {
+		if capGW, ok := s.deps.TenantResolver.Resolve(ctx, meta.TenantID); ok {
 			ctx = s.deps.TenantResolver.InjectCompleter(ctx, meta.TenantID)
 			type capGWSetter interface {
 				SetCapGateway(port.CapabilityGateway)
@@ -1168,9 +1150,6 @@ func (s *AgentService) assembleOptions(
 						setter.SetHistoryCompactor(compactor)
 					}
 				}
-			}
-			if len(apiKeys) > 0 {
-				options = append(options, WithLLMAPIKeys(apiKeys))
 			}
 		}
 	}

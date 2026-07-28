@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,13 +17,20 @@ func newModelHandler(gw *llmgateway.Gateway) *ModelHandler {
 	return NewModelHandler(llmapp.NewModelService(gw))
 }
 
+func testModelRegistry() *llmgateway.ModelRegistry {
+	readSettings := func(_ context.Context, _ string) ([]byte, error) {
+		return json.Marshal(map[string]any{"llm_api_keys": map[string]string{}})
+	}
+	return llmgateway.NewModelRegistry(readSettings, [32]byte{}, nil)
+}
+
 func TestListModels_emptyGateway(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/models", nil) //nolint:noctx
 
-	h := newModelHandler(llmgateway.NewGateway())
+	h := newModelHandler(llmgateway.NewGateway(testModelRegistry()))
 	h.ListModels(c)
 
 	if w.Code != http.StatusOK {
@@ -40,8 +48,9 @@ func TestListModels_emptyGateway(t *testing.T) {
 	if !ok {
 		t.Fatalf("'models' is not an array, got %T", raw)
 	}
-	if len(models) != 0 {
-		t.Errorf("expected empty array, got %v", models)
+	// Static catalogue is non-empty now.
+	if len(models) == 0 {
+		t.Error("expected non-empty static model list")
 	}
 }
 
@@ -51,9 +60,7 @@ func TestListModels_withProviders(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/models", nil) //nolint:noctx
 
-	gw := llmgateway.NewGateway()
-	gw.RegisterClient(llmgateway.ProviderQwen, llmgateway.NewQwenClient("test", nil))
-	gw.RegisterClient(llmgateway.ProviderZhipu, llmgateway.NewZhipuClient("test", nil))
+	gw := llmgateway.NewGateway(testModelRegistry())
 
 	h := newModelHandler(gw)
 	h.ListModels(c)

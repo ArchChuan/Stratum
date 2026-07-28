@@ -26,7 +26,6 @@ CREATE TABLE IF NOT EXISTS agents (
     description    TEXT NOT NULL DEFAULT '',
     system_prompt  TEXT NOT NULL DEFAULT '',
     llm_model      TEXT NOT NULL DEFAULT '',
-    embed_model    TEXT NOT NULL DEFAULT '',
     max_iterations INT  NOT NULL DEFAULT 10,
     max_context_tokens INTEGER NOT NULL DEFAULT 8000,
     memory_scope   TEXT NOT NULL DEFAULT 'agent',
@@ -35,7 +34,7 @@ CREATE TABLE IF NOT EXISTS agents (
 );
 
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 8000;
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS embed_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE agents DROP COLUMN IF EXISTS embed_model;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'agent';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS system_key TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key
@@ -56,14 +55,14 @@ BEGIN
     END LOOP;
 
     INSERT INTO agents (
-        id, name, type, description, system_prompt, llm_model, embed_model,
+        id, name, type, description, system_prompt, llm_model,
         max_iterations, max_context_tokens, memory_scope, system_key
     ) VALUES (
         'stratum-platform-assistant',
         assistant_name,
         'react',
         '基于官方资料指导平台使用并诊断当前租户应用状态',
-        '', 'glm-5.2', '', 10, 8000, 'user', 'stratum.platform_assistant'
+        '', 'glm-5.2', 10, 8000, 'user', 'stratum.platform_assistant'
     )
     ON CONFLICT (id) DO NOTHING;
 END $$;
@@ -960,7 +959,7 @@ CREATE INDEX IF NOT EXISTS idx_memory_entries_user_id ON memory_entries (user_id
 
 -- agents extensions
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL DEFAULT 8000;
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS embed_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE agents DROP COLUMN IF EXISTS embed_model;
 ALTER TABLE agents DROP COLUMN IF EXISTS persona;
 
 -- chat_conversations soft-delete backfill

@@ -53,7 +53,6 @@ type ExecutionConfig struct {
 	TenantID                  string
 	TraceID                   string
 	ExecutionID               string
-	LLMAPIKeys                map[string]string
 	RAGSearchFn               func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
 	ExtraTools                []port.ToolDefinition
 	SkillCatalog              map[string]port.SkillActivation
@@ -336,7 +335,6 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			TenantID:                   cfg.TenantID,
 			TraceID:                    cfg.TraceID,
 			ConversationID:             cfg.ConversationID,
-			LLMAPIKeys:                 cfg.LLMAPIKeys,
 			Model:                      llmModel,
 			Messages:                   initMessages,
 			OnToken:                    cfg.TokenCallback,
@@ -498,7 +496,6 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			TenantID:                   cfg.TenantID,
 			TraceID:                    cfg.TraceID,
 			ConversationID:             cfg.ConversationID,
-			LLMAPIKeys:                 cfg.LLMAPIKeys,
 			Model:                      llmModel,
 			Messages:                   initMessages,
 			OnToken:                    cfg.TokenCallback,
@@ -829,13 +826,6 @@ func WithTraceID(id string) ExecutionOption {
 func WithExecutionID(id string) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.ExecutionID = id
-	}
-}
-
-// WithLLMAPIKeys injects per-tenant decrypted LLM API keys into the execution.
-func WithLLMAPIKeys(keys map[string]string) ExecutionOption {
-	return func(cfg *ExecutionConfig) {
-		cfg.LLMAPIKeys = keys
 	}
 }
 

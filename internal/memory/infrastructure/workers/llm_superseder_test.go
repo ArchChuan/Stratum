@@ -20,22 +20,6 @@ func (f completionClientFunc) Complete(ctx context.Context, req *memport.Complet
 	return f(ctx, req)
 }
 
-type testGatewayAdapter struct{ gateway *llminfra.Gateway }
-
-func (a testGatewayAdapter) Complete(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
-	messages := make([]llminfra.Message, len(req.Messages))
-	for i, message := range req.Messages {
-		messages[i] = llminfra.Message{Role: message.Role, Content: message.Content}
-	}
-	response, err := a.gateway.Complete(ctx, &llminfra.CompletionRequest{
-		Model: req.Model, Messages: messages, Temperature: float32(req.Temperature), MaxTokens: req.MaxTokens,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &memport.CompletionResponse{Content: response.Content}, nil
-}
-
 func TestResolvingLLMSupersederUsesCurrentTenantClientOnEveryCall(t *testing.T) {
 	var resolved, calledA, calledB int
 	clientA := completionClientFunc(func(context.Context, *memport.CompletionRequest) (*memport.CompletionResponse, error) {
@@ -80,19 +64,16 @@ func TestResolvingLLMSupersederRoutesThroughNewProviderGateway(t *testing.T) {
 	zhipuServer := completionServer(&zhipuCalls, true)
 	defer zhipuServer.Close()
 
-	qwenGateway := llminfra.NewGateway()
-	qwenGateway.RegisterClient(llminfra.ProviderQwen, llminfra.NewQwenClientWithBase("fake-key-qwen", qwenServer.URL, zap.NewNop()))
-	qwenGateway.SetDefault(llminfra.ProviderQwen)
-	zhipuGateway := llminfra.NewGateway()
-	zhipuGateway.RegisterClient(llminfra.ProviderZhipu, llminfra.NewZhipuClientWithBase("fake-key-zhipu", zhipuServer.URL, zap.NewNop()))
-	zhipuGateway.SetDefault(llminfra.ProviderZhipu)
+	qwenClient := llminfra.NewQwenClientWithBase("fake-key-qwen", qwenServer.URL, zap.NewNop())
+	zhipuClient := llminfra.NewZhipuClientWithBase("fake-key-zhipu", zhipuServer.URL, zap.NewNop())
+
 	resolved := 0
 	judge := workers.NewResolvingLLMSuperseder("tenant-1", func(context.Context, string) (workers.TenantLLMClient, error) {
 		resolved++
 		if resolved == 1 {
-			return testGatewayAdapter{gateway: qwenGateway}, nil
+			return openAICompatAdapter{client: qwenClient}, nil
 		}
-		return testGatewayAdapter{gateway: zhipuGateway}, nil
+		return openAICompatAdapter{client: zhipuClient}, nil
 	})
 
 	first, err := judge.JudgeSupersede(context.Background(), "old", "new")
@@ -103,6 +84,25 @@ func TestResolvingLLMSupersederRoutesThroughNewProviderGateway(t *testing.T) {
 	require.True(t, second.Supersedes)
 	require.Equal(t, 1, qwenCalls)
 	require.Equal(t, 1, zhipuCalls)
+}
+
+type openAICompatAdapter struct{ client *llminfra.OpenAICompatClient }
+
+func (a openAICompatAdapter) Complete(ctx context.Context, req *memport.CompletionRequest) (*memport.CompletionResponse, error) {
+	messages := make([]llminfra.Message, len(req.Messages))
+	for i, m := range req.Messages {
+		messages[i] = llminfra.Message{Role: m.Role, Content: m.Content}
+	}
+	resp, err := a.client.Complete(ctx, &llminfra.CompletionRequest{
+		Model:       req.Model,
+		Messages:    messages,
+		Temperature: float32(req.Temperature),
+		MaxTokens:   req.MaxTokens,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &memport.CompletionResponse{Content: resp.Content}, nil
 }
 
 func TestResolvingLLMSupersederDoesNotReuseClientAfterResolverFailure(t *testing.T) {

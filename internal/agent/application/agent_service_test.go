@@ -191,13 +191,6 @@ func (m *mockAgentRepo) UpdateSystemAssistantBindings(ctx context.Context, mcpTo
 	return cfg, args.Error(1)
 }
 
-type mockTenantSettings struct{ mock.Mock }
-
-func (m *mockTenantSettings) GetEmbedModel(ctx context.Context, tenantID string) (string, error) {
-	args := m.Called(ctx, tenantID)
-	return args.String(0), args.Error(1)
-}
-
 type mockSkillLookup struct{ mock.Mock }
 
 func (m *mockSkillLookup) LookupSkill(ctx context.Context, tenantID, skillID string) (string, string, error) {
@@ -287,51 +280,24 @@ func (s stubChatRepo) DeleteByAgent(context.Context, string, string) error {
 // satisfy interfaces at compile time
 var (
 	_ port.AgentRepo       = (*mockAgentRepo)(nil)
-	_ port.TenantSettings  = (*mockTenantSettings)(nil)
 	_ port.SkillLookup     = (*mockSkillLookup)(nil)
 	_ port.MCPToolProvider = (*mockMCPTools)(nil)
 )
 
 // ---------- helpers ----------
 
-func newTestService(t *testing.T) (*application.AgentService, *mockAgentRepo, *mockTenantSettings) {
+func newTestService(t *testing.T) (*application.AgentService, *mockAgentRepo) {
 	t.Helper()
 	repo := new(mockAgentRepo)
-	ts := new(mockTenantSettings)
 	reg := application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop())
 	svc := application.NewAgentService(application.AgentServiceDeps{
-		Registry:       reg,
-		TenantSettings: ts,
-		Logger:         zap.NewNop(),
+		Registry: reg,
+		Logger:   zap.NewNop(),
 	})
-	return svc, repo, ts
+	return svc, repo
 }
 
 // ---------- tests ----------
-
-func TestAgentService_Create_InheritsEmbedModel(t *testing.T) {
-	svc, repo, ts := newTestService(t)
-
-	ts.On("GetEmbedModel", mock.Anything, "tenant-1").Return("text-embedding-ada-002", nil)
-	repo.On("Register", mock.Anything, mock.MatchedBy(func(cfg *domain.AgentConfig) bool {
-		return cfg.Name == "TestAgent" && cfg.EmbedModel == "text-embedding-ada-002" && cfg.Type == domain.ReActAgent
-	})).Return(nil)
-
-	dto, err := svc.Create(context.Background(), application.CreateAgentInput{
-		TenantID:      "tenant-1",
-		Name:          "TestAgent",
-		Type:          "react",
-		LLMModel:      "gpt-4",
-		MaxIterations: 10,
-	})
-	assert.NoError(t, err)
-	assert.Equal(t, "TestAgent", dto.Name)
-	assert.Equal(t, "text-embedding-ada-002", dto.EmbedModel)
-	assert.Equal(t, "react", dto.Type)
-	assert.NotEmpty(t, dto.ID)
-	repo.AssertExpectations(t)
-	ts.AssertExpectations(t)
-}
 
 func TestBuildExtraToolsBuildsInstructionSkillCatalogWithoutExecutableTool(t *testing.T) {
 	svc := application.NewAgentService(application.AgentServiceDeps{
@@ -357,43 +323,8 @@ func TestBuildExtraToolsUsesExperimentRevisionResolver(t *testing.T) {
 	assert.Equal(t, "canary", catalog["skill-1"].Variant)
 }
 
-func TestAgentService_Create_KeepsExplicitEmbedModel(t *testing.T) {
-	svc, repo, ts := newTestService(t)
-
-	repo.On("Register", mock.Anything, mock.MatchedBy(func(cfg *domain.AgentConfig) bool {
-		return cfg.EmbedModel == "explicit-model"
-	})).Return(nil)
-
-	dto, err := svc.Create(context.Background(), application.CreateAgentInput{
-		TenantID:      "tenant-1",
-		Name:          "TestAgent",
-		LLMModel:      "gpt-4",
-		EmbedModel:    "explicit-model",
-		MaxIterations: 10,
-	})
-	assert.NoError(t, err)
-	assert.Equal(t, "explicit-model", dto.EmbedModel)
-	ts.AssertNotCalled(t, "GetEmbedModel")
-	repo.AssertExpectations(t)
-}
-
-func TestAgentService_Create_PropagatesEmbedLookupError(t *testing.T) {
-	svc, _, ts := newTestService(t)
-	ts.On("GetEmbedModel", mock.Anything, "tenant-1").
-		Return("", errors.New("db down"))
-
-	_, err := svc.Create(context.Background(), application.CreateAgentInput{
-		TenantID:      "tenant-1",
-		Name:          "TestAgent",
-		LLMModel:      "gpt-4",
-		MaxIterations: 10,
-	})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "embed_model")
-}
-
 func TestAgentService_Get(t *testing.T) {
-	svc, repo, _ := newTestService(t)
+	svc, repo := newTestService(t)
 
 	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{
 		ID: "agent-1", Name: "Foo", Type: domain.ReActAgent, LLMModel: "gpt-4",
@@ -406,7 +337,7 @@ func TestAgentService_Get(t *testing.T) {
 }
 
 func TestAgentService_Get_NotFound(t *testing.T) {
-	svc, repo, _ := newTestService(t)
+	svc, repo := newTestService(t)
 	repo.On("Get", mock.Anything, "missing").Return((*domain.AgentConfig)(nil), false, nil)
 
 	_, err := svc.Get(context.Background(), "missing")
@@ -414,7 +345,7 @@ func TestAgentService_Get_NotFound(t *testing.T) {
 }
 
 func TestAgentService_SnapshotRevisionCapturesAuthorizedBindings(t *testing.T) {
-	svc, repo, _ := newTestService(t)
+	svc, repo := newTestService(t)
 	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{
 		ID: "agent-1", Type: domain.ReActAgent, SystemPrompt: "be precise", LLMModel: "qwen-plus",
 		MaxIterations: 8, MaxContextTokens: 4096,
@@ -468,7 +399,7 @@ func TestAgentService_SnapshotRevisionPreservesExecutionParity(t *testing.T) {
 }
 
 func TestAgentServiceManagedAssistantRevisionEntrypointsFailClosed(t *testing.T) {
-	svc, repo, _ := newTestService(t)
+	svc, repo := newTestService(t)
 	repo.On("Get", mock.Anything, domain.SystemAssistantID).Return(&domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "tenant-model",
 	}, true, nil)
@@ -509,8 +440,8 @@ func (g countingRevisionGateway) Route(context.Context, port.CapabilityRequest) 
 
 type countingRevisionTenantResolver struct{ gateway port.CapabilityGateway }
 
-func (r countingRevisionTenantResolver) Resolve(context.Context, string) (port.CapabilityGateway, map[string]string, bool) {
-	return r.gateway, nil, true
+func (r countingRevisionTenantResolver) Resolve(context.Context, string) (port.CapabilityGateway, bool) {
+	return r.gateway, true
 }
 
 func (countingRevisionTenantResolver) InjectCompleter(ctx context.Context, _ string) context.Context {
@@ -533,7 +464,7 @@ func (stubMemoryInjector) BuildContext(context.Context, port.InjectionContext) (
 }
 
 func TestAgentService_List(t *testing.T) {
-	svc, repo, _ := newTestService(t)
+	svc, repo := newTestService(t)
 	repo.On("GetAll", mock.Anything).Return([]*domain.AgentConfig{
 		{ID: "a", Name: "A", Type: domain.ReActAgent},
 		{ID: "b", Name: "B", Type: domain.CoTAgent},
@@ -547,7 +478,7 @@ func TestAgentService_List(t *testing.T) {
 }
 
 func TestAgentService_ListManagedAssistantFirstPreservesOrdinaryOrder(t *testing.T) {
-	svc, repo, _ := newTestService(t)
+	svc, repo := newTestService(t)
 	repo.On("GetAll", mock.Anything).Return([]*domain.AgentConfig{
 		{ID: "ordinary-1", Name: "First", Type: domain.ReActAgent},
 		{ID: domain.SystemAssistantID, Name: "Platform", Type: domain.ReActAgent,
@@ -582,7 +513,7 @@ func (v *stubTenantModelValidator) ListTenantChatModels(context.Context, string)
 }
 
 func TestAgentService_GetSystemAssistantSettings(t *testing.T) {
-	_, repo, _ := newTestService(t)
+	_, repo := newTestService(t)
 	validator := &stubTenantModelValidator{}
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
@@ -604,7 +535,7 @@ func TestAgentService_GetSystemAssistantSettings(t *testing.T) {
 }
 
 func TestAgentService_GetSystemAssistantSettingsUnavailableIsNotReady(t *testing.T) {
-	_, repo, _ := newTestService(t)
+	_, repo := newTestService(t)
 	validator := &stubTenantModelValidator{err: domain.ErrAssistantModelUnavailable}
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
@@ -623,7 +554,7 @@ func TestAgentService_GetSystemAssistantSettingsUnavailableIsNotReady(t *testing
 }
 
 func TestAgentService_GetSystemAssistantSettingsFailsClosedOnConfigurationReadFailure(t *testing.T) {
-	_, repo, _ := newTestService(t)
+	_, repo := newTestService(t)
 	wantErr := errors.New("settings read failed")
 	validator := &stubTenantModelValidator{err: wantErr}
 	svc := application.NewAgentService(application.AgentServiceDeps{
@@ -642,7 +573,7 @@ func TestAgentService_GetSystemAssistantSettingsFailsClosedOnConfigurationReadFa
 }
 
 func TestAgentService_UpdateSystemAssistantModelUsesAtomicReturnedConfig(t *testing.T) {
-	_, repo, _ := newTestService(t)
+	_, repo := newTestService(t)
 	validator := &stubTenantModelValidator{}
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
@@ -665,7 +596,7 @@ func TestAgentService_UpdateSystemAssistantModelUsesAtomicReturnedConfig(t *test
 }
 
 func TestAgentService_UpdateSystemAssistantModelDoesNotPersistWhenCatalogReadFails(t *testing.T) {
-	_, repo, _ := newTestService(t)
+	_, repo := newTestService(t)
 	wantErr := errors.New("catalog read failed")
 	validator := &stubTenantModelValidator{catalogErr: wantErr}
 	svc := application.NewAgentService(application.AgentServiceDeps{
@@ -680,7 +611,7 @@ func TestAgentService_UpdateSystemAssistantModelDoesNotPersistWhenCatalogReadFai
 }
 
 func TestAgentService_UpdateSystemAssistantModelMarksUnexpectedReturnedModelNotReady(t *testing.T) {
-	_, repo, _ := newTestService(t)
+	_, repo := newTestService(t)
 	validator := &stubTenantModelValidator{}
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
@@ -702,7 +633,7 @@ func TestAgentService_UpdateSystemAssistantModelMarksUnexpectedReturnedModelNotR
 }
 
 func TestAgentService_UpdateSystemAssistantModelConcurrentCallsKeepAtomicResults(t *testing.T) {
-	_, repo, _ := newTestService(t)
+	_, repo := newTestService(t)
 	validator := &stubTenantModelValidator{}
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
@@ -750,7 +681,7 @@ func TestAgentService_UpdateSystemAssistantModelConcurrentCallsKeepAtomicResults
 }
 
 func TestAgentService_UpdateSystemAssistantModelRejectsEmptyAndInvalid(t *testing.T) {
-	_, repo, _ := newTestService(t)
+	_, repo := newTestService(t)
 	validator := &stubTenantModelValidator{err: domain.ErrInvalidSystemAssistantModel}
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
@@ -768,7 +699,7 @@ func TestAgentService_UpdateSystemAssistantModelRejectsEmptyAndInvalid(t *testin
 }
 
 func TestAgentService_UpdateSystemAssistantModelPropagatesPersistenceFailure(t *testing.T) {
-	_, repo, _ := newTestService(t)
+	_, repo := newTestService(t)
 	validator := &stubTenantModelValidator{}
 	svc := application.NewAgentService(application.AgentServiceDeps{
 		Registry:             application.NewRegistry(repo, application.BuiltinSystemAssistantProfileSource(), zap.NewNop()),
@@ -785,26 +716,8 @@ func TestAgentService_UpdateSystemAssistantModelPropagatesPersistenceFailure(t *
 	repo.AssertNotCalled(t, "GetSystemAssistant", mock.Anything)
 }
 
-func TestAgentService_Update_PreservesEmbedModel(t *testing.T) {
-	svc, repo, _ := newTestService(t)
-
-	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{
-		ID: "agent-1", EmbedModel: "frozen-embed", Type: domain.ReActAgent,
-	}, true, nil)
-	repo.On("Update", mock.Anything, mock.MatchedBy(func(cfg *domain.AgentConfig) bool {
-		return cfg.ID == "agent-1" && cfg.EmbedModel == "frozen-embed" && cfg.Name == "Renamed"
-	})).Return(nil)
-
-	dto, err := svc.Update(context.Background(), "agent-1", application.UpdateAgentInput{
-		Name: "Renamed", LLMModel: "gpt-4", MaxIterations: 5,
-	})
-	assert.NoError(t, err)
-	assert.Equal(t, "frozen-embed", dto.EmbedModel)
-	assert.Equal(t, "Renamed", dto.Name)
-}
-
-func TestAgentService_UpdateSystemAssistantSucceeds(t *testing.T) {
-	svc, repo, _ := newTestService(t)
+func TestAgentService_UpdateSystemAssistant_IgnoresName(t *testing.T) {
+	svc, repo := newTestService(t)
 	cfg := &domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
 	}
@@ -822,7 +735,7 @@ func TestAgentService_UpdateSystemAssistantSucceeds(t *testing.T) {
 }
 
 func TestAgentService_Delete(t *testing.T) {
-	svc, repo, _ := newTestService(t)
+	svc, repo := newTestService(t)
 	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)
 	repo.On("Remove", mock.Anything, "agent-1").Return(nil)
 

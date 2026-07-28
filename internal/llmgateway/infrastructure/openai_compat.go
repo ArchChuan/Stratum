@@ -508,3 +508,9 @@ func (c *OpenAICompatClient) Health(ctx context.Context) error {
 func (c *OpenAICompatClient) Models() []string {
 	return c.cfg.Models
 }
+
+// ProviderName returns the provider name from the client's configuration
+// (e.g. "qwen", "zhipu").
+func (c *OpenAICompatClient) ProviderName() string {
+	return c.cfg.Name
+}

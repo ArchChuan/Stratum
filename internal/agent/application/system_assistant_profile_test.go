@@ -55,7 +55,7 @@ func TestComposeSystemAssistantProfileReplacesProtectedFieldsAndPreservesTenantR
 	want := &domain.AgentConfig{
 		ID: "assistant-1", SystemKey: domain.SystemAssistantKey,
 		Name: "tenant name", Description: "tenant description", SystemPrompt: "tenant prompt",
-		LLMModel: "qwen-plus", EmbedModel: "tenant-embed", MemoryScope: "user",
+		LLMModel: "qwen-plus", MemoryScope: "user",
 		MaxIterations: 99, MaxContextTokens: 99999,
 		AllowedSkills: []string{"skill-1"}, MCPToolIDs: []string{"mcp-1"},
 		KnowledgeWorkspaceIDs:   []string{"knowledge-1"},
@@ -67,7 +67,7 @@ func TestComposeSystemAssistantProfileReplacesProtectedFieldsAndPreservesTenantR
 	if err != nil {
 		t.Fatalf("ComposeSystemAssistantProfile() error = %v", err)
 	}
-	if got.ID != want.ID || got.LLMModel != want.LLMModel || got.EmbedModel != want.EmbedModel ||
+	if got.ID != want.ID || got.LLMModel != want.LLMModel ||
 		got.MemoryScope != want.MemoryScope {
 		t.Fatalf("tenant runtime selection not preserved: %#v", got)
 	}

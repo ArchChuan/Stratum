@@ -175,10 +175,10 @@ func loadKnowledgeWorkspaces(ctx context.Context, tx pgx.Tx, agentID string) ([]
 func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
-			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_scope, system_key)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL)`,
+			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL)`,
 			cfg.ID, cfg.Name, string(cfg.Type), cfg.Description,
-			cfg.SystemPrompt, cfg.LLMModel, cfg.EmbedModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope,
+			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope,
 		)
 		if err != nil {
 			var pgErr *pgconn.PgError
@@ -206,11 +206,11 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 	var agentType string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
-			`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_scope,
+			`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope,
 			        COALESCE(system_key, '')
 			 FROM agents WHERE id = $1`, id).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
-				&cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
+				&cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
 				&cfg.SystemKey); err != nil {
 			return err
 		}
@@ -252,10 +252,10 @@ func (r *PgAgentRepo) GetSystemAssistant(ctx context.Context) (*domain.AgentConf
 	var agentType string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
-			`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens,
+			`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens,
 			        memory_scope, system_key
 			 FROM agents WHERE system_key = 'stratum.platform_assistant'`).
-			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel,
+			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
 				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey); err != nil {
 			return err
 		}
@@ -319,7 +319,7 @@ func (r *PgAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 
 func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT id, name, type, description, system_prompt, llm_model, embed_model, max_iterations, max_context_tokens, memory_scope,
+		`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope,
 		        COALESCE(system_key, '')
 		 FROM agents ORDER BY created_at`)
 	if err != nil {
@@ -332,7 +332,7 @@ func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string
 		var cfg domain.AgentConfig
 		var agentType string
 		if err := rows.Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
-			&cfg.SystemPrompt, &cfg.LLMModel, &cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
+			&cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
 			&cfg.SystemKey); err != nil {
 			return nil, nil, fmt.Errorf("scan agent row: %w", err)
 		}
@@ -471,10 +471,10 @@ func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model stri
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, updated_at=NOW()
 			WHERE system_key='stratum.platform_assistant'
-			RETURNING id, name, type, description, system_prompt, llm_model, embed_model,
+			RETURNING id, name, type, description, system_prompt, llm_model,
 			          max_iterations, max_context_tokens, memory_scope, system_key`, model).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey); err != nil {
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("update system assistant model: %w", domain.ErrNotFound)
 			}
@@ -505,10 +505,10 @@ func (r *PgAgentRepo) UpdateSystemAssistantBindings(
 		if err := tx.QueryRow(ctx,
 			`UPDATE agents SET updated_at=NOW()
 			 WHERE system_key='stratum.platform_assistant'
-			 RETURNING id, name, type, description, system_prompt, llm_model, embed_model,
+			 RETURNING id, name, type, description, system_prompt, llm_model,
 			           max_iterations, max_context_tokens, memory_scope, system_key`).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey); err != nil {
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("update system assistant bindings: %w", domain.ErrNotFound)
 			}

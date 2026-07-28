@@ -14,7 +14,6 @@ import (
 	agentopik "github.com/byteBuilderX/stratum/internal/agent/infrastructure/opik"
 	persistence "github.com/byteBuilderX/stratum/internal/agent/infrastructure/persistence"
 	knowledge "github.com/byteBuilderX/stratum/internal/knowledge/application"
-	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	memapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -40,7 +39,6 @@ type Agent struct {
 	ApprovalService     *agent.ToolApprovalService
 	TenantResolver      agentport.TenantCapabilityResolver
 	SkillLookup         agentport.SkillLookup
-	TenantSettings      agentport.TenantSettings
 	DiagnosticProvider  agentport.DiagnosticEvidenceProvider
 	ProposalService     *agent.ResourceChangeProposalService
 }
@@ -194,20 +192,13 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		a.ApprovalStore = persistence.NewPgToolApprovalStore(db)
 		a.ApprovalService = agent.NewToolApprovalService(a.ApprovalStore, a.CheckpointStore, c.Platform.AESKey)
 		a.SkillLookup = persistence.NewPgSkillLookup(db)
-		a.TenantSettings = persistence.NewPgTenantSettings(db)
-		var fallbackGateway *llmgateway.Gateway
-		if c.LLMGateway != nil {
-			fallbackGateway = c.LLMGateway.Gateway
-		}
 		a.TenantResolver = newTenantCapabilityResolver(
-			db, c.Platform.AESKey, c.Platform.GatewayCache, fallbackGateway, c.Logger,
-			c.Config.QwenBaseURL, c.Config.ZhipuBaseURL,
+			c.Platform.ModelRegistry, c.LLMGateway.Gateway, c.Logger,
 		)
 	}
 
 	deps := agent.AgentServiceDeps{
 		Registry:                registry,
-		TenantSettings:          a.TenantSettings,
 		SkillLookup:             a.SkillLookup,
 		SkillActivationResolver: publishedSkillActivationResolver{versions: skillVersionService(c)},
 		TenantResolver:          a.TenantResolver,

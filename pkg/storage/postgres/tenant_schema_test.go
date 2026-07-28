@@ -19,7 +19,7 @@ func TestTenantSchemaDefaultsSystemAssistantModelWithoutOverwritingTenantChoice(
 	}
 	sql := string(data)
 	for _, want := range []string{
-		"'', 'glm-5.2', '', 10, 8000, 'user', 'stratum.platform_assistant'",
+		"'', 'glm-5.2', 10, 8000, 'user', 'stratum.platform_assistant'",
 		"UPDATE agents",
 		"SET llm_model = 'glm-5.2',",
 		"updated_at = NOW()",
@@ -56,7 +56,7 @@ func TestTenantSchemaContainsSystemAssistantIdentityAndSeed(t *testing.T) {
 		"'__stratum_platform_assistant__'",
 		"WHILE EXISTS",
 		"'基于官方资料指导平台使用并诊断当前租户应用状态'",
-		"'', 'glm-5.2', '', 10, 8000, 'user', 'stratum.platform_assistant'",
+		"'', 'glm-5.2', 10, 8000, 'user', 'stratum.platform_assistant'",
 		"ON CONFLICT (id) DO NOTHING",
 		"stratum platform assistant identity conflict requires operator action",
 	} {

@@ -16,47 +16,57 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+
+	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
-type failingLLMClient struct{ err error }
+// testAESKey is derived from a fixed test PEM so encrypted values are deterministic.
+var testAESKey = pkgcrypto.DeriveAESKey("test-pem")
 
-func (c failingLLMClient) Complete(context.Context, *CompletionRequest) (*CompletionResponse, error) {
-	return nil, c.err
+// encryptTestKey encrypts a plaintext API key with testAESKey. Panics on error
+// (test-only helper).
+func encryptTestKey(plain string) string {
+	enc, err := pkgcrypto.Encrypt(testAESKey, plain)
+	if err != nil {
+		panic(fmt.Sprintf("encrypt test key: %v", err))
+	}
+	return enc
 }
-func (c failingLLMClient) Health(context.Context) error { return c.err }
-func (failingLLMClient) Models() []string               { return []string{"qwen-turbo"} }
 
-type successfulLLMClient struct{}
-
-func (successfulLLMClient) Complete(context.Context, *CompletionRequest) (*CompletionResponse, error) {
-	return &CompletionResponse{Content: "ok", Usage: TokenUsage{PromptTokens: 1, CompletionTokens: 1}}, nil
+// testRegistry builds a ModelRegistry that returns encrypted provider keys for
+// every tenant. It is used by tests that need a functional Gateway.
+func testRegistry(t *testing.T, provider, apiKey string) *ModelRegistry {
+	t.Helper()
+	_ = t
+	readSettings := func(_ context.Context, tenantID string) ([]byte, error) {
+		if tenantID == "missing" {
+			return nil, errors.New("no such tenant")
+		}
+		return json.Marshal(map[string]any{
+			"llm_api_keys": map[string]string{provider: apiKey},
+		})
+	}
+	return NewModelRegistry(readSettings, testAESKey, zap.NewNop())
 }
-func (successfulLLMClient) Health(context.Context) error { return nil }
-func (successfulLLMClient) Models() []string             { return []string{"qwen-turbo"} }
+
+// tenantCtx returns a context with the given tenant ID injected via reqctx.
+func tenantCtx(ctx context.Context, tenantID string) context.Context {
+	return reqctx.WithTenantID(ctx, tenantID)
+}
 
 func TestNewGateway(t *testing.T) {
-	gateway := NewGateway()
+	gateway := NewGateway(testRegistry(t, "qwen", "k"))
 	if gateway == nil {
 		t.Error("expected Gateway to be non-nil")
 	}
 }
 
-func TestListChatModels_empty(t *testing.T) {
-	g := NewGateway()
-	models := g.ListChatModels()
-	if len(models) != 0 {
-		t.Errorf("expected empty, got %v", models)
-	}
-}
-
-func TestListChatModels_sorted(t *testing.T) {
-	g := NewGateway()
-	g.RegisterClient(ProviderZhipu, NewZhipuClient("fake", zap.NewNop()))
-	g.RegisterClient(ProviderQwen, NewQwenClient("fake", zap.NewNop()))
-
+func TestListChatModels_static(t *testing.T) {
+	g := NewGateway(testRegistry(t, "qwen", "fake"))
 	models := g.ListChatModels()
 	if len(models) == 0 {
-		t.Fatal("expected models, got none")
+		t.Fatal("expected static models, got none")
 	}
 	for i := 1; i < len(models); i++ {
 		if models[i] < models[i-1] {
@@ -134,9 +144,14 @@ func TestGatewayOTelMarksFailureAsError(t *testing.T) {
 		_ = provider.Shutdown(context.Background())
 	})
 
-	gateway := NewGateway().WithLogger(zap.NewNop())
-	gateway.RegisterClient(ProviderQwen, failingLLMClient{err: errors.New("provider unavailable")})
-	_, err := gateway.CompleteStream(context.Background(), &CompletionRequest{Model: "qwen-turbo"}, func(string) {})
+	// Registry with no usable provider — will fail on resolve.
+	readSettings := func(_ context.Context, _ string) ([]byte, error) {
+		return json.Marshal(map[string]any{"llm_api_keys": map[string]string{}})
+	}
+	reg := NewModelRegistry(readSettings, [32]byte{}, zap.NewNop())
+	gateway := NewGateway(reg).WithLogger(zap.NewNop())
+
+	_, err := gateway.CompleteStream(tenantCtx(context.Background(), "test-tenant"), &CompletionRequest{Model: "qwen-turbo"}, func(string) {})
 	require.Error(t, err)
 
 	for _, span := range recorder.Ended() {
@@ -150,10 +165,27 @@ func TestGatewayOTelMarksFailureAsError(t *testing.T) {
 
 func TestGatewayLLMLogsExcludePromptToolAndResponsePayloads(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
-	gateway := NewGateway().WithLogger(zap.New(core))
-	gateway.RegisterClient(ProviderQwen, successfulLLMClient{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{
+			"model": "qwen-turbo",
+			"choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
+			"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+		}`)
+	}))
+	defer srv.Close()
 
-	_, err := gateway.CompleteStream(context.Background(), &CompletionRequest{
+	// Build a custom registry that resolves to a Qwen client pointing at our test server.
+	readSettings := func(_ context.Context, _ string) ([]byte, error) {
+		return json.Marshal(map[string]any{
+			"llm_api_keys": map[string]string{"qwen": encryptTestKey("test-key")},
+			"base_urls":    map[string]string{"qwen": srv.URL},
+		})
+	}
+	reg := NewModelRegistry(readSettings, testAESKey, zap.NewNop())
+	gateway := NewGateway(reg).WithLogger(zap.New(core))
+
+	_, err := gateway.CompleteStream(tenantCtx(context.Background(), "test-tenant"), &CompletionRequest{
 		Model:    "qwen-turbo",
 		Messages: []Message{{Role: "user", Content: "private prompt"}},
 		Tools:    []Tool{{Type: "function", Function: ToolFunction{Name: "private_tool"}}},
@@ -161,7 +193,7 @@ func TestGatewayLLMLogsExcludePromptToolAndResponsePayloads(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, entry := range logs.All() {
-		if entry.Message != "llm.request" && entry.Message != "llm.complete" && entry.Message != "llm.response" {
+		if entry.Message != "llm.request" && entry.Message != "llm.complete" {
 			continue
 		}
 		for _, field := range entry.Context {

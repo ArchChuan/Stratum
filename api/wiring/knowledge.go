@@ -2,7 +2,6 @@ package wiring
 
 import (
 	"context"
-	"encoding/json"
 
 	"go.uber.org/zap"
 
@@ -13,8 +12,6 @@ import (
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure/embedding"
 	pipeline "github.com/byteBuilderX/stratum/internal/memory/infrastructure/pipeline"
-	"github.com/byteBuilderX/stratum/pkg/constants"
-	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/textchunk"
 	vectorstore "github.com/byteBuilderX/stratum/pkg/vector"
 )
@@ -54,13 +51,11 @@ func (c *Container) buildKnowledge(ctx context.Context) error {
 	var pipelineResolver pipeline.EmbedServiceResolver
 	var knowledgeResolver knowledge.EmbedResolver
 	db := c.dbOrNil()
-	if db != nil {
+	if db != nil && c.Platform != nil && c.Platform.ModelRegistry != nil {
 		chunkRepo := persistence.NewChunkRepo(db)
 		docRepo := persistence.NewDocRepo(db)
-		pipelineResolver = buildEmbedResolver(db, c.Platform.GatewayCache, c.Platform.AESKey,
-			c.Config.QwenBaseURL, c.Config.ZhipuBaseURL, c.Logger)
-		knowledgeResolver = buildKnowledgeEmbedResolver(db, c.Platform.GatewayCache, c.Platform.AESKey,
-			c.Config.QwenBaseURL, c.Config.ZhipuBaseURL, c.Logger)
+		pipelineResolver = buildEmbedResolver(c.Platform.ModelRegistry, c.Logger)
+		knowledgeResolver = buildKnowledgeEmbedResolver(c.Platform.ModelRegistry, c.Logger)
 		ingest.SetEmbedResolver(knowledgeResolver)
 		ingest.SetChunkRepo(chunkRepo)
 		ingest.SetDocRepo(docRepo)
@@ -137,191 +132,39 @@ func (c *Container) RecoverStuckKnowledgeIngests(ctx context.Context) {
 	}
 }
 
-// buildEmbedResolver creates a per-tenant EmbedServiceResolver that resolves
-// embedding capability from tenant DB settings via the gateway cache.
-//
-// Copied verbatim from api/router.go:344-417 — Task 10 will delete the
-// router.go original once main.go is migrated to wiring.BuildContainer.
-func buildEmbedResolver(
-	db tenantSettingsQuerier,
-	cache *llmgateway.TenantGatewayCache,
-	aesKey [32]byte,
-	qwenBaseURL, zhipuBaseURL string,
-	logger *zap.Logger,
-) pipeline.EmbedServiceResolver {
+// buildEmbedResolver creates a per-tenant EmbedServiceResolver backed by
+// ModelRegistry. The registry handles caching, decryption, and provider
+// selection internally — no more per-tenant Gateway construction.
+func buildEmbedResolver(reg *llmgateway.ModelRegistry, logger *zap.Logger) pipeline.EmbedServiceResolver {
 	return func(ctx context.Context, tenantID string) pipeline.EmbedClient {
-		// Read settings first so embed_model is available on both cache-hit and miss paths.
-		var settingsJSON []byte
-		if err := db.QueryRow(ctx,
-			"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL",
-			tenantID,
-		).Scan(&settingsJSON); err != nil {
+		client, err := reg.ResolveEmbedding(ctx, tenantID, "")
+		if err != nil {
+			logger.Warn("embed_resolver.resolve_failed",
+				zap.String("tenant_id", tenantID),
+				zap.Error(err))
 			return nil
 		}
-		var settings map[string]interface{}
-		if err := json.Unmarshal(settingsJSON, &settings); err != nil {
-			return nil
-		}
-		embedModel, _ := settings["embed_model"].(string)
-
-		gw, _, cacheHit, generation := cache.GetWithGeneration(tenantID)
-		if cacheHit && gw.HasEmbeddingClient() {
-			m := embedModel
-			if m == "" {
-				m = gw.DefaultEmbeddingModel()
-			}
-			return embedding.NewEmbeddingServiceWithModel(gw, m, logger)
-		}
-		defer cache.ReleaseLoad(tenantID, generation)
-
-		apiKeysRaw, ok := settings["llm_api_keys"].(map[string]interface{})
-		if !ok || len(apiKeysRaw) == 0 {
-			return nil
-		}
-
-		decrypted := make(map[string]string, len(apiKeysRaw))
-		for provider, enc := range apiKeysRaw {
-			encStr, ok := enc.(string)
-			if !ok || encStr == "" {
-				continue
-			}
-			plain, err := pkgcrypto.Decrypt(aesKey, encStr)
-			if err != nil {
-				continue
-			}
-			decrypted[provider] = plain
-		}
-		if len(decrypted) == 0 {
-			return nil
-		}
-
-		gw = llmgateway.NewGateway().WithLogger(logger)
-		if qwenKey, ok := decrypted["qwen"]; ok {
-			qwenClient := llmgateway.NewQwenClient(qwenKey, logger)
-			if qwenBaseURL != "" {
-				qwenClient = llmgateway.NewQwenClientWithBase(qwenKey, qwenBaseURL, logger)
-			}
-			gw.RegisterClient(llmgateway.ProviderQwen, qwenClient)
-			gw.RegisterEmbeddingClient(llmgateway.ProviderQwen, qwenClient)
-		}
-		if zhipuKey, ok := decrypted["zhipu"]; ok {
-			zhipuClient := llmgateway.NewZhipuClient(zhipuKey, logger)
-			if zhipuBaseURL != "" {
-				zhipuClient = llmgateway.NewZhipuClientWithBase(zhipuKey, zhipuBaseURL, logger)
-			}
-			gw.RegisterClient(llmgateway.ProviderZhipu, zhipuClient)
-			gw.RegisterEmbeddingClient(llmgateway.ProviderZhipu, zhipuClient)
-		}
-		for _, pref := range []llmgateway.ModelProvider{llmgateway.ProviderQwen, llmgateway.ProviderZhipu} {
-			if _, ok := decrypted[string(pref)]; ok {
-				gw.SetDefault(pref)
-				break
-			}
-		}
-
-		if !gw.HasEmbeddingClient() {
-			return nil
-		}
-		if !cache.SetIfGeneration(tenantID, gw, decrypted, constants.GatewayCacheTTL, generation) {
-			return nil
-		}
-		m := embedModel
-		if m == "" {
-			m = gw.DefaultEmbeddingModel()
-		}
-		return embedding.NewEmbeddingServiceWithModel(gw, m, logger)
+		return embedding.NewEmbeddingService(client, logger)
 	}
 }
 
-// buildKnowledgeEmbedResolver returns a knowledge.EmbedResolver that resolves
-// the embedding client for a given tenant, honouring the workspace-level model.
-//
-// Copied verbatim from api/router.go:421-491 — Task 10 will delete the
-// router.go original once main.go is migrated to wiring.BuildContainer.
-func buildKnowledgeEmbedResolver(
-	db tenantSettingsQuerier,
-	cache *llmgateway.TenantGatewayCache,
-	aesKey [32]byte,
-	qwenBaseURL, zhipuBaseURL string,
-	logger *zap.Logger,
-) knowledge.EmbedResolver {
+// buildKnowledgeEmbedResolver returns a knowledge.EmbedResolver backed by
+// ModelRegistry. The optional model parameter selects a specific embedding
+// model; when empty the provider default is used.
+func buildKnowledgeEmbedResolver(reg *llmgateway.ModelRegistry, logger *zap.Logger) knowledge.EmbedResolver {
 	return func(ctx context.Context, tenantID, model string) knowledge.EmbedClient {
-		// Try gateway cache first.
-		gw, _, cacheHit, generation := cache.GetWithGeneration(tenantID)
-		if cacheHit && gw.HasEmbeddingClient() {
-			m := model
-			if m == "" {
-				m = gw.DefaultEmbeddingModel()
-			}
-			return embedding.NewEmbeddingServiceWithModel(gw, m, logger)
-		}
-		defer cache.ReleaseLoad(tenantID, generation)
-
-		// Fall back to tenant DB settings to build gateway.
-		var settingsJSON []byte
-		if err := db.QueryRow(ctx,
-			"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL",
-			tenantID,
-		).Scan(&settingsJSON); err != nil {
+		client, err := reg.ResolveEmbedding(ctx, tenantID, model)
+		if err != nil {
+			logger.Warn("knowledge_embed_resolver.resolve_failed",
+				zap.String("tenant_id", tenantID),
+				zap.String("model", model),
+				zap.Error(err))
 			return nil
 		}
-		var settings map[string]interface{}
-		if err := json.Unmarshal(settingsJSON, &settings); err != nil {
-			return nil
+		svc := embedding.NewEmbeddingServiceWithModel(client, model, logger)
+		if model == "" {
+			svc = embedding.NewEmbeddingService(client, logger)
 		}
-
-		apiKeysRaw, ok := settings["llm_api_keys"].(map[string]interface{})
-		if !ok || len(apiKeysRaw) == 0 {
-			return nil
-		}
-
-		decrypted := make(map[string]string, len(apiKeysRaw))
-		for provider, enc := range apiKeysRaw {
-			encStr, ok := enc.(string)
-			if !ok || encStr == "" {
-				continue
-			}
-			plain, err := pkgcrypto.Decrypt(aesKey, encStr)
-			if err != nil {
-				continue
-			}
-			decrypted[provider] = plain
-		}
-		if len(decrypted) == 0 {
-			return nil
-		}
-
-		gw = llmgateway.NewGateway().WithLogger(logger)
-		if qwenKey, ok := decrypted["qwen"]; ok {
-			qwenClient := llmgateway.NewQwenClient(qwenKey, logger)
-			if qwenBaseURL != "" {
-				qwenClient = llmgateway.NewQwenClientWithBase(qwenKey, qwenBaseURL, logger)
-			}
-			gw.RegisterClient(llmgateway.ProviderQwen, qwenClient)
-			gw.RegisterEmbeddingClient(llmgateway.ProviderQwen, qwenClient)
-		}
-		if zhipuKey, ok := decrypted["zhipu"]; ok {
-			zhipuClient := llmgateway.NewZhipuClient(zhipuKey, logger)
-			if zhipuBaseURL != "" {
-				zhipuClient = llmgateway.NewZhipuClientWithBase(zhipuKey, zhipuBaseURL, logger)
-			}
-			gw.RegisterClient(llmgateway.ProviderZhipu, zhipuClient)
-			gw.RegisterEmbeddingClient(llmgateway.ProviderZhipu, zhipuClient)
-		}
-		for _, pref := range []llmgateway.ModelProvider{llmgateway.ProviderQwen, llmgateway.ProviderZhipu} {
-			if _, ok := decrypted[string(pref)]; ok {
-				gw.SetDefault(pref)
-				break
-			}
-		}
-
-		if !cache.SetIfGeneration(tenantID, gw, decrypted, constants.GatewayCacheTTL, generation) {
-			return nil
-		}
-		m := model
-		if m == "" {
-			m = gw.DefaultEmbeddingModel()
-		}
-		return embedding.NewEmbeddingServiceWithModel(gw, m, logger)
+		return svc
 	}
 }

@@ -79,10 +79,9 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		mem.Service = memory.NewMemoryService(factRepo, entityRepo, queue, nil, nil, nil, messageBufferStore, c.Logger)
 		mem.Service.SetMemoryRepo(memRepo)
 
-		if c.Platform != nil && c.Platform.GatewayCache != nil {
+		if c.Platform != nil && c.Platform.ModelRegistry != nil {
 			llmRes := newTenantCapabilityResolver(
-				db, c.Platform.AESKey, c.Platform.GatewayCache, c.LLMGateway.Gateway, c.Logger,
-				c.Config.QwenBaseURL, c.Config.ZhipuBaseURL,
+				c.Platform.ModelRegistry, c.LLMGateway.Gateway, c.Logger,
 			).(*tenantCapabilityResolver)
 			mem.Service.SetLLMExtractResolver(func(ctx context.Context, tenantID string) memport.LLMExtractor {
 				llm := llmRes.ResolveLLM(ctx, tenantID)
@@ -189,10 +188,9 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
 			p.SetEmbedResolver(c.Knowledge.EmbedResolver)
 		}
-		if c.Platform != nil && c.Platform.GatewayCache != nil {
+		if c.Platform != nil && c.Platform.ModelRegistry != nil {
 			llmRes := newTenantCapabilityResolver(
-				db, c.Platform.AESKey, c.Platform.GatewayCache, c.LLMGateway.Gateway, c.Logger,
-				c.Config.QwenBaseURL, c.Config.ZhipuBaseURL,
+				c.Platform.ModelRegistry, c.LLMGateway.Gateway, c.Logger,
 			).(*tenantCapabilityResolver)
 			p.SetLLMResolver(func(ctx context.Context, tenantID string) pipeline.LLMClient {
 				gw := llmRes.ResolveLLM(ctx, tenantID)
@@ -253,10 +251,9 @@ func BuildMemoryWorkers(c *Container) []interface {
 	}
 
 	var llmRes *tenantCapabilityResolver
-	if c.Platform != nil && c.Platform.GatewayCache != nil {
+	if c.Platform != nil && c.Platform.ModelRegistry != nil {
 		llmRes = newTenantCapabilityResolver(
-			db, c.Platform.AESKey, c.Platform.GatewayCache, c.LLMGateway.Gateway, c.Logger,
-			c.Config.QwenBaseURL, c.Config.ZhipuBaseURL,
+			c.Platform.ModelRegistry, c.LLMGateway.Gateway, c.Logger,
 		).(*tenantCapabilityResolver)
 	}
 

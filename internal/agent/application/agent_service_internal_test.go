@@ -65,8 +65,8 @@ func TestCompleteApprovalResumePropagatesCheckpointPersistenceFailure(t *testing
 
 type tenantResolverFake struct{ gateway port.CapabilityGateway }
 
-func (f tenantResolverFake) Resolve(context.Context, string) (port.CapabilityGateway, map[string]string, bool) {
-	return f.gateway, nil, true
+func (f tenantResolverFake) Resolve(context.Context, string) (port.CapabilityGateway, bool) {
+	return f.gateway, true
 }
 
 func (tenantResolverFake) InjectCompleter(ctx context.Context, _ string) context.Context { return ctx }
