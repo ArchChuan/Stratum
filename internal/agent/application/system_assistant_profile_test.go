@@ -80,10 +80,18 @@ func TestComposeSystemAssistantProfileReplacesProtectedFieldsAndPreservesTenantR
 	if got.SystemKey != profile.Key || !got.IsSystem || got.ManagementMode != "platform" {
 		t.Fatalf("managed identity not composed: %#v", got)
 	}
-	if len(got.AllowedSkills) != 0 || len(got.MCPToolIDs) != 0 || len(got.KnowledgeWorkspaceIDs) != 0 ||
-		len(got.KnowledgeWorkspaceNames) != 0 || len(got.KnowledgeWorkspaceDescriptions) != 0 ||
+	if len(got.AllowedSkills) != 1 || got.AllowedSkills[0] != "skill-1" {
+		t.Fatal("tenant skills not preserved")
+	}
+	if len(got.MCPToolIDs) != 1 || got.MCPToolIDs[0] != "mcp-1" {
+		t.Fatal("tenant MCP tools not preserved")
+	}
+	if len(got.KnowledgeWorkspaceIDs) != 1 || got.KnowledgeWorkspaceIDs[0] != "knowledge-1" {
+		t.Fatal("tenant knowledge workspaces not preserved")
+	}
+	if len(got.KnowledgeWorkspaceNames) != 0 || len(got.KnowledgeWorkspaceDescriptions) != 0 ||
 		len(got.Capabilities) != 0 || got.StuckThreshold != 0 || got.CheckpointEnabled {
-		t.Fatalf("tenant extensions survived composition: %#v", got)
+		t.Fatalf("unexpected tenant extensions survived composition: %#v", got)
 	}
 }
 
@@ -156,6 +164,9 @@ func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(context.Context, 
 	return nil, nil
 }
 func (r systemAssistantProfileRepo) Remove(context.Context, string) error { return nil }
+func (r systemAssistantProfileRepo) UpdateSystemAssistantBindings(context.Context, []string, []string, []string) (*domain.AgentConfig, error) {
+	return nil, nil
+}
 
 var _ port.AgentRepo = systemAssistantProfileRepo{}
 

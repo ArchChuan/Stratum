@@ -26,7 +26,7 @@ export const parseRuntimeOptions = (environment: NodeJS.ProcessEnv): RuntimeOpti
   const mode = environment.STATEFUL_E2E_MODE ?? 'short';
   if (mode !== 'short' && mode !== 'soak') throw new Error(`unsupported stateful E2E mode: ${mode}`);
   const rawProfile = environment.STATEFUL_E2E_PROFILE;
-  if (mode === 'short' && rawProfile !== undefined) {
+  if (mode === 'short' && rawProfile !== undefined && rawProfile !== '') {
     throw new Error('short mode cannot declare an acceptance profile');
   }
   if (mode === 'soak' && rawProfile !== undefined && rawProfile !== 'test' && rawProfile !== 'release') {

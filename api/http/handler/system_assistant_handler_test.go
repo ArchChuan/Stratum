@@ -40,6 +40,16 @@ func (r *settingsAgentRepo) UpdateSystemAssistantModel(_ context.Context, model 
 	return r.cfg, nil
 }
 
+func (r *settingsAgentRepo) UpdateSystemAssistantBindings(_ context.Context, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills []string) (*domain.AgentConfig, error) {
+	if r.updateErr != nil {
+		return nil, r.updateErr
+	}
+	r.cfg.MCPToolIDs = mcpToolIDs
+	r.cfg.KnowledgeWorkspaceIDs = knowledgeWorkspaceIDs
+	r.cfg.AllowedSkills = allowedSkills
+	return r.cfg, nil
+}
+
 type settingsModelValidator struct{ err error }
 
 func (v settingsModelValidator) ValidateTenantChatModel(context.Context, string, string) error {
@@ -186,29 +196,30 @@ func TestSystemAssistantHandlerPersistenceFailurePropagates(t *testing.T) {
 	}
 }
 
-func TestManagedAssistantGeneralUpdateAndDeleteUseFrozenConflictResponse(t *testing.T) {
-	for _, tc := range []struct {
-		method string
-		body   string
-	}{
-		{method: http.MethodPut, body: `{"name":"renamed","llmModel":"qwen-plus"}`},
-		{method: http.MethodDelete},
-	} {
-		repo := &settingsAgentRepo{cfg: &domain.AgentConfig{
-			ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
-		}}
-		r := newSettingsRouter(repo, settingsModelValidator{})
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(tc.method, "/agents/"+domain.SystemAssistantID,
-			bytes.NewBufferString(tc.body))
-		if tc.body != "" {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		r.ServeHTTP(rec, req)
+func TestManagedAssistantGeneralUpdateSucceeds(t *testing.T) {
+	repo := &settingsAgentRepo{cfg: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+	}}
+	r := newSettingsRouter(repo, settingsModelValidator{})
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/agents/"+domain.SystemAssistantID,
+		bytes.NewBufferString(`{"name":"ignored","llmModel":"qwen-plus","allowedSkills":[],"mcpToolIds":[],"knowledgeWorkspaceIds":[]}`)))
 
-		if rec.Code != http.StatusConflict ||
-			rec.Body.String() != `{"error":"system assistant is platform managed"}` {
-			t.Fatalf("%s response = %d %s", tc.method, rec.Code, rec.Body.String())
-		}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT system assistant response = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestManagedAssistantGeneralDeleteReturnsConflict(t *testing.T) {
+	repo := &settingsAgentRepo{cfg: &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
+	}}
+	r := newSettingsRouter(repo, settingsModelValidator{})
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/agents/"+domain.SystemAssistantID, nil))
+
+	if rec.Code != http.StatusConflict ||
+		rec.Body.String() != `{"error":"system assistant is platform managed"}` {
+		t.Fatalf("DELETE response = %d %s", rec.Code, rec.Body.String())
 	}
 }

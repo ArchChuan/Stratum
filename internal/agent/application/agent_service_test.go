@@ -185,6 +185,12 @@ func (m *mockAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model st
 	return cfg, args.Error(1)
 }
 
+func (m *mockAgentRepo) UpdateSystemAssistantBindings(ctx context.Context, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills []string) (*domain.AgentConfig, error) {
+	args := m.Called(ctx, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills)
+	cfg, _ := args.Get(0).(*domain.AgentConfig)
+	return cfg, args.Error(1)
+}
+
 type mockTenantSettings struct{ mock.Mock }
 
 func (m *mockTenantSettings) GetEmbedModel(ctx context.Context, tenantID string) (string, error) {
@@ -797,18 +803,22 @@ func TestAgentService_Update_PreservesEmbedModel(t *testing.T) {
 	assert.Equal(t, "Renamed", dto.Name)
 }
 
-func TestAgentService_UpdateSystemAssistantRejectsBeforePersistence(t *testing.T) {
+func TestAgentService_UpdateSystemAssistantSucceeds(t *testing.T) {
 	svc, repo, _ := newTestService(t)
-	ctx := context.Background()
-	repo.On("Get", ctx, domain.SystemAssistantID).Return(&domain.AgentConfig{
+	cfg := &domain.AgentConfig{
 		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey,
-	}, true, nil)
+	}
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
+	repo.On("UpdateSystemAssistantBindings", ctx, []string{}, []string{}, []string{}).
+		Return(cfg, nil)
 
-	_, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{
-		Name: "renamed", LLMModel: "qwen-plus",
+	dto, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{
+		Name: "ignored",
 	})
-	assert.ErrorIs(t, err, domain.ErrSystemAssistantManaged)
-	repo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
+	assert.NoError(t, err)
+	assert.Equal(t, domain.SystemAssistantID, dto.ID)
+	repo.AssertExpectations(t)
 }
 
 func TestAgentService_Delete(t *testing.T) {

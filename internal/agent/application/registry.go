@@ -141,6 +141,16 @@ func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string)
 	return a, nil
 }
 
+func (r *Registry) UpdateSystemAssistantBindings(
+	ctx context.Context, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills []string,
+) (Agent, error) {
+	cfg, err := r.repo.UpdateSystemAssistantBindings(ctx, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills)
+	if err != nil {
+		return nil, fmt.Errorf("registry update system assistant bindings: %w", err)
+	}
+	return r.hydrate(cfg)
+}
+
 // Remove deletes an agent.
 func (r *Registry) Remove(ctx context.Context, id string) error {
 	if err := r.repo.Remove(ctx, id); err != nil {
