@@ -1265,7 +1265,7 @@ END $$;
 
 -- Provider registry (tenant-scoped LLM providers)
 CREATE TABLE IF NOT EXISTS providers (
-    id              TEXT PRIMARY KEY DEFAULT gen_ulid(),
+    id              TEXT PRIMARY KEY,
     tenant_id       TEXT NOT NULL,
     name            TEXT NOT NULL,
     kind            TEXT NOT NULL,
@@ -1280,7 +1280,7 @@ CREATE TABLE IF NOT EXISTS providers (
 
 -- Model catalogue (tenant-scoped model registry)
 CREATE TABLE IF NOT EXISTS models (
-    id                TEXT PRIMARY KEY DEFAULT gen_ulid(),
+    id                TEXT PRIMARY KEY,
     tenant_id         TEXT NOT NULL,
     provider_id       TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
     name              TEXT NOT NULL,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -165,7 +166,8 @@ func (r *PgModelRepo) UpsertDiscovered(ctx context.Context, tenantID, providerID
 				_, err = tx.Exec(ctx,
 					`INSERT INTO models (id, tenant_id, provider_id, name, display_name, capabilities,
 					 context_window, max_tokens, input_price, output_price, recommended, enabled, provider_managed)
-					 VALUES (gen_ulid(), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,true)`,
+					 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,true)`,
+					uuid.Must(uuid.NewV7()).String(),
 					tenantID, providerID, m.Name, m.DisplayName, caps,
 					m.ContextWindow, m.MaxTokens, m.InputPrice, m.OutputPrice, m.Recommended,
 				)
