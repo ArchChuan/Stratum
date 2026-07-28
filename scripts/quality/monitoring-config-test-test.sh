@@ -7,6 +7,8 @@ VALIDATOR="${ROOT}/scripts/quality/monitoring-config-test.sh"
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
+bash "${ROOT}/scripts/quality/alertmanager-routing-test-test.sh" >/dev/null
+
 FAKE_BIN="${TMP_ROOT}/bin"
 CALLS="${TMP_ROOT}/calls.log"
 mkdir -p "${FAKE_BIN}"

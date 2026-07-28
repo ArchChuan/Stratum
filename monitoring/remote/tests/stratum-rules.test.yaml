@@ -74,6 +74,40 @@ tests:
           - labels: '{__name__="ALERTS",alertname="StratumPodPendingTooLong",alertstate="firing",component="workload",deployment="stratum-frontend",environment="remote-test",namespace="stratum",node="remote-node",phase="Pending",pod="pending-pod",service="stratum",severity="warning"}'
             value: 1
 
+  - name: workload rules preserve Pods without Deployment ownership
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="stratum",pod="direct-pod",container="direct"}'
+        values: '0+1x18'
+      - series: 'kube_pod_container_status_waiting_reason{namespace="stratum",pod="stateful-pod",container="stateful",reason="CrashLoopBackOff"}'
+        values: '1x18'
+      - series: 'kube_pod_status_phase{namespace="stratum",pod="pending-direct-pod",phase="Pending"}'
+        values: '1x18'
+      - series: 'kube_pod_info{namespace="stratum",pod="direct-pod",node="remote-node"}'
+        values: '1x18'
+      - series: 'kube_pod_info{namespace="stratum",pod="stateful-pod",node="remote-node"}'
+        values: '1x18'
+      - series: 'kube_pod_info{namespace="stratum",pod="pending-direct-pod",node="remote-node"}'
+        values: '1x18'
+      - series: 'kube_pod_owner{namespace="stratum",pod="stateful-pod",owner_kind="StatefulSet",owner_name="stateful"}'
+        values: '1x18'
+    promql_expr_test:
+      - expr: ALERTS{alertname="StratumPodRestartingFrequently",alertstate="firing",pod="direct-pod"}
+        eval_time: 6m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alert_family="pod-health",alertname="StratumPodRestartingFrequently",alertstate="firing",component="workload",container="direct",environment="remote-test",namespace="stratum",node="remote-node",pod="direct-pod",service="stratum",severity="warning"}'
+            value: 1
+      - expr: ALERTS{alertname="StratumPodCrashLooping",alertstate="firing",pod="stateful-pod"}
+        eval_time: 5m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alert_family="pod-health",alertname="StratumPodCrashLooping",alertstate="firing",component="workload",container="stateful",environment="remote-test",namespace="stratum",node="remote-node",pod="stateful-pod",reason="CrashLoopBackOff",service="stratum",severity="critical"}'
+            value: 1
+      - expr: ALERTS{alertname="StratumPodPendingTooLong",alertstate="firing",pod="pending-direct-pod"}
+        eval_time: 15m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumPodPendingTooLong",alertstate="firing",component="workload",environment="remote-test",namespace="stratum",node="remote-node",phase="Pending",pod="pending-direct-pod",service="stratum",severity="warning"}'
+            value: 1
+
   - name: capacity rules detect low node memory and PVC thresholds
     interval: 1m
     input_series:

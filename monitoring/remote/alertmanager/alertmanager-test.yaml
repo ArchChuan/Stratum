@@ -3,103 +3,97 @@
     {
       "name": "critical routes at all times",
       "input": {"alertname": "StratumAPIUnavailable", "service": "stratum", "environment": "remote-test", "severity": "critical"},
-      "receivers": ["feishu-critical"]
+      "expected": ["feishu-critical"]
     },
     {
       "name": "info is discarded",
       "input": {"alertname": "StratumCapacityForecast", "service": "stratum", "environment": "remote-test", "severity": "info"},
-      "receivers": ["null"]
+      "expected": ["null"]
     },
     {
       "name": "critical Watchdog is discarded",
       "input": {"alertname": "Watchdog", "service": "monitoring", "environment": "remote-test", "severity": "critical"},
-      "receivers": ["null"]
+      "expected": ["null"]
     },
     {
       "name": "warning before work hours is discarded",
       "input": {"alertname": "StratumAPIHighLatency", "service": "stratum", "environment": "remote-test", "severity": "warning"},
       "time": "2026-07-29T08:59:59+08:00",
-      "receivers": ["null"]
+      "expected": ["null"]
     },
     {
       "name": "warning at 09:00 is delivered",
       "input": {"alertname": "StratumAPIHighLatency", "service": "stratum", "environment": "remote-test", "severity": "warning"},
       "time": "2026-07-29T09:00:00+08:00",
-      "receivers": ["feishu-warning"]
+      "expected": ["feishu-warning"]
     },
     {
       "name": "warning before 19:00 is delivered",
       "input": {"alertname": "StratumAPIHighLatency", "service": "stratum", "environment": "remote-test", "severity": "warning"},
       "time": "2026-07-29T18:59:59+08:00",
-      "receivers": ["feishu-warning"]
+      "expected": ["feishu-warning"]
     },
     {
       "name": "warning at 19:00 is discarded",
       "input": {"alertname": "StratumAPIHighLatency", "service": "stratum", "environment": "remote-test", "severity": "warning"},
       "time": "2026-07-29T19:00:00+08:00",
-      "receivers": ["null"]
+      "expected": ["null"]
     },
     {
       "name": "warning on weekend is discarded",
       "input": {"alertname": "StratumAPIHighLatency", "service": "stratum", "environment": "remote-test", "severity": "warning"},
       "time": "2026-08-01T10:00:00+08:00",
-      "receivers": ["null"]
+      "expected": ["null"]
     },
     {
       "name": "critical off hours is delivered",
       "input": {"alertname": "StratumAPIUnavailable", "service": "stratum", "environment": "remote-test", "severity": "critical"},
       "time": "2026-07-29T23:00:00+08:00",
-      "receivers": ["feishu-critical"]
+      "expected": ["feishu-critical"]
     },
     {
       "name": "critical on weekend is delivered",
       "input": {"alertname": "StratumAPIUnavailable", "service": "stratum", "environment": "remote-test", "severity": "critical"},
       "time": "2026-08-01T10:00:00+08:00",
-      "receivers": ["feishu-critical"]
+      "expected": ["feishu-critical"]
     }
   ],
   "inhibition_tests": [
     {
       "name": "public symptom suppresses workload cause",
-      "policy": "public-component-cause",
       "source": {"alertname": "StratumPublicEndpointDown", "service": "stratum", "environment": "remote-test", "component": "public-endpoint"},
       "target": {"alertname": "StratumContainerMemoryNearLimit", "service": "stratum", "environment": "remote-test", "component": "workload"},
-      "inhibited": true
+      "expected": true
     },
     {
       "name": "public symptom does not suppress monitoring alert",
-      "policy": "public-component-cause",
       "source": {"alertname": "StratumPublicEndpointDown", "service": "stratum", "environment": "remote-test", "component": "public-endpoint"},
       "target": {"alertname": "StratumPrometheusRuleEvaluationFailures", "service": "stratum", "environment": "remote-test", "component": "prometheus"},
-      "inhibited": false
+      "expected": false
     },
     {
       "name": "deployment suppresses only its own Pod cause",
-      "policy": "deployment-pod-cause",
       "source": {"alertname": "StratumBackendUnavailable", "service": "stratum", "environment": "remote-test", "namespace": "stratum", "deployment": "stratum"},
       "target": {"alertname": "StratumPodCrashLooping", "service": "stratum", "environment": "remote-test", "namespace": "stratum", "deployment": "stratum", "pod": "stratum-abc"},
-      "inhibited": true
+      "expected": true
     },
     {
       "name": "deployment does not suppress another deployment Pod",
-      "policy": "deployment-pod-cause",
       "source": {"alertname": "StratumBackendUnavailable", "service": "stratum", "environment": "remote-test", "namespace": "stratum", "deployment": "stratum"},
       "target": {"alertname": "StratumPodCrashLooping", "service": "stratum", "environment": "remote-test", "namespace": "stratum", "deployment": "stratum-frontend", "pod": "frontend-abc"},
-      "inhibited": false
+      "expected": false
     },
     {
       "name": "critical Pod alert suppresses warning for same container",
-      "policy": "critical-warning-family",
       "source": {"severity": "critical", "service": "stratum", "environment": "remote-test", "component": "workload", "alert_family": "pod-health", "namespace": "stratum", "deployment": "stratum", "pod": "stratum-abc", "container": "stratum"},
       "target": {"severity": "warning", "service": "stratum", "environment": "remote-test", "component": "workload", "alert_family": "pod-health", "namespace": "stratum", "deployment": "stratum", "pod": "stratum-abc", "container": "stratum"},
-      "inhibited": true
+      "expected": true
     },
     {
       "name": "critical Pod alert does not suppress another Pod",
-      "policy": "critical-warning-family",
       "source": {"severity": "critical", "service": "stratum", "environment": "remote-test", "component": "workload", "alert_family": "pod-health", "namespace": "stratum", "deployment": "stratum", "pod": "stratum-abc", "container": "stratum"},
       "target": {"severity": "warning", "service": "stratum", "environment": "remote-test", "component": "workload", "alert_family": "pod-health", "namespace": "stratum", "deployment": "stratum", "pod": "stratum-def", "container": "stratum"},
-      "inhibited": false
+      "expected": false
     }
   ]
 }
