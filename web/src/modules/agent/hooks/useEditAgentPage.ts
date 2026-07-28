@@ -37,7 +37,6 @@ export const useEditAgentPage = () => {
         const a = await agentApi.get(id);
         if (cancelled) return;
         setAgent(a);
-        if (a.isSystem) return;
 
         const [skillsRes, mcpRes, workspacesRes] = await Promise.allSettled([
           skillApi.list(), mcpApi.toolOptions(), knowledgeApi.list(),

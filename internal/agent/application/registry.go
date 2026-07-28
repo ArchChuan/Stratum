@@ -129,26 +129,14 @@ func (r *Registry) GetSystemAssistant(ctx context.Context) (Agent, bool, error) 
 	return a, true, nil
 }
 
-func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string) (Agent, error) {
-	cfg, err := r.repo.UpdateSystemAssistantModel(ctx, model)
-	if err != nil {
-		return nil, fmt.Errorf("registry update system assistant model: %w", err)
+func (r *Registry) UpdateSystemAssistant(ctx context.Context, cfg *domain.AgentConfig) error {
+	if err := r.repo.UpdateSystemAssistant(ctx, cfg); err != nil {
+		return fmt.Errorf("registry update system assistant: %w", err)
 	}
-	a, err := r.hydrate(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("registry update system assistant model: %w", err)
+	if r.logger != nil {
+		r.logger.Info("system assistant updated", zap.String("id", cfg.ID))
 	}
-	return a, nil
-}
-
-func (r *Registry) UpdateSystemAssistantBindings(
-	ctx context.Context, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills []string,
-) (Agent, error) {
-	cfg, err := r.repo.UpdateSystemAssistantBindings(ctx, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills)
-	if err != nil {
-		return nil, fmt.Errorf("registry update system assistant bindings: %w", err)
-	}
-	return r.hydrate(cfg)
+	return nil
 }
 
 // Remove deletes an agent.

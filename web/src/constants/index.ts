@@ -4,7 +4,7 @@ export const API_DEFAULT_TIMEOUT_MS = 10_000;
 export const AGENT_EXEC_TIMEOUT_MS = 120_000;
 export const AGENT_DEFAULT_MAX_ITERATIONS = 10;
 export const AGENT_MIN_MAX_ITERATIONS = 1;
-export const AGENT_MAX_MAX_ITERATIONS = 20;
+export const AGENT_MAX_MAX_ITERATIONS = 90;
 
 export const DEFAULT_PAGE_SIZE = 20;
 export const COMPACT_PAGE_SIZE = 10;

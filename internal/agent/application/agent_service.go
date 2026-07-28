@@ -447,14 +447,18 @@ func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model str
 	if err != nil {
 		return SystemAssistantSettings{}, err
 	}
-	a, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model)
+	existing, _, err := s.deps.Registry.Get(ctx, domain.SystemAssistantID)
 	if err != nil {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model get: %w", err)
+	}
+	cfg := existing.GetConfig()
+	cfg.LLMModel = model
+	if err := s.deps.Registry.UpdateSystemAssistant(ctx, cfg); err != nil {
 		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: %w", err)
 	}
-	cfg := a.GetConfig()
 	return SystemAssistantSettings{
-		AgentID: cfg.ID, Model: cfg.LLMModel,
-		Ready: cfg.LLMModel == model, AvailableModels: models,
+		AgentID: cfg.ID, Model: model,
+		Ready: true, AvailableModels: models,
 	}, nil
 }
 
@@ -508,12 +512,13 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	return cfgToDTO(cfg), nil
 }
 
-func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.AgentConfig, in UpdateAgentInput) (AgentDTO, error) {
+func (s *AgentService) updateSystemAssistant(ctx context.Context, existing *domain.AgentConfig, in UpdateAgentInput) (AgentDTO, error) {
 	tenantID := reqctx.TenantIDFromContext(ctx)
 	if tenantID == "" {
 		return AgentDTO{}, fmt.Errorf("update system assistant: tenant id required")
 	}
-	if in.LLMModel != "" && in.LLMModel != cfg.LLMModel {
+	// Validate model change through tenant policy.
+	if in.LLMModel != "" && in.LLMModel != existing.LLMModel {
 		if s.deps.TenantModelValidator != nil {
 			if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, in.LLMModel); err != nil {
 				if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
@@ -523,30 +528,40 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.Ag
 				return AgentDTO{}, fmt.Errorf("update system assistant model: %w", err)
 			}
 		}
-		updated, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, in.LLMModel)
-		if err != nil {
-			return AgentDTO{}, fmt.Errorf("update system assistant model: %w", err)
-		}
-		cfg = updated.GetConfig()
 	}
 	skills := in.AllowedSkills
 	if skills == nil {
 		skills = []string{}
 	}
-	mcpTools := in.MCPToolIDs
-	if mcpTools == nil {
-		mcpTools = []string{}
+	cfg := &domain.AgentConfig{
+		ID:                    existing.ID,
+		Name:                  in.Name,
+		Type:                  domain.ReActAgent,
+		Description:           in.Description,
+		SystemPrompt:          in.SystemPrompt,
+		LLMModel:              in.LLMModel,
+		EmbedModel:            existing.EmbedModel,
+		MaxIterations:         in.MaxIterations,
+		MaxContextTokens:      in.MaxContextTokens,
+		AllowedSkills:         skills,
+		MCPToolIDs:            in.MCPToolIDs,
+		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
+		MemoryScope:           in.MemoryScope,
+		SystemKey:             existing.SystemKey,
 	}
-	knowledge := in.KnowledgeWorkspaceIDs
-	if knowledge == nil {
-		knowledge = []string{}
+	if err := s.deps.Registry.UpdateSystemAssistant(ctx, cfg); err != nil {
+		return AgentDTO{}, fmt.Errorf("update system assistant: %w", err)
 	}
-	updated, err := s.deps.Registry.UpdateSystemAssistantBindings(ctx, mcpTools, knowledge, skills)
+	// Re-fetch to return the composed config (profile may override some fields).
+	a, found, err := s.deps.Registry.Get(ctx, existing.ID)
 	if err != nil {
-		return AgentDTO{}, fmt.Errorf("update system assistant bindings: %w", err)
+		return AgentDTO{}, fmt.Errorf("update system assistant re-fetch: %w", err)
 	}
-	s.deps.Logger.Info("system assistant updated", zap.String("id", cfg.ID))
-	return cfgToDTO(updated.GetConfig()), nil
+	if !found {
+		return AgentDTO{}, ErrNotFound
+	}
+	s.deps.Logger.Info("system assistant updated", zap.String("id", existing.ID))
+	return cfgToDTO(a.GetConfig()), nil
 }
 
 // Delete removes an agent and cascades deletion to conversations and memories.

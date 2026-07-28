@@ -163,7 +163,7 @@ export const AgentFormSections = ({
                   <Slider
                     min={AGENT_MIN_MAX_ITERATIONS}
                     max={AGENT_MAX_MAX_ITERATIONS}
-                    marks={{ 1: '1', 10: '10', 20: '20' }}
+                    marks={{ 1: '1', 30: '30', 60: '60', 90: '90' }}
                     ariaLabelForHandle="最大迭代次数"
                   />
                 </Form.Item>

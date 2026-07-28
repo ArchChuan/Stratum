@@ -2,7 +2,6 @@ import { ArrowLeftOutlined } from '@ant-design/icons';
 import { Button, Form, Skeleton, Typography } from 'antd';
 
 import { AgentFormSections } from '../components/AgentFormSections';
-import { SystemAssistantSettingsForm } from '../components/SystemAssistantSettingsForm';
 import { useEditAgentPage } from '../hooks/useEditAgentPage';
 
 import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
@@ -53,17 +52,12 @@ export const EditAgentPage = () => {
             {agent?.isSystem ? '平台助手设置' : '编辑 Agent'}
           </Title>
           <Text type="secondary" style={{ fontSize: 13 }}>
-            {agent?.isSystem ? '系统托管 Agent，仅可修改对话模型' : '修改 Agent 配置'}
+            修改 Agent 配置
           </Text>
         </div>
       </div>
 
-      {agent?.isSystem ? (
-        <SystemAssistantSettingsForm
-          onCancel={() => navigate('/agents')}
-          onSaved={() => navigate('/agents')}
-        />
-      ) : <Form
+      <Form
         form={form}
         layout="vertical"
         onFinish={onFinish}
@@ -82,7 +76,7 @@ export const EditAgentPage = () => {
             保存修改
           </Button>
         </div>
-      </Form>}
+      </Form>
     </div>
   );
 };

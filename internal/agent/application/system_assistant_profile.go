@@ -121,11 +121,28 @@ func ComposeSystemAssistantProfile(
 	profile = &known
 
 	return &domain.AgentConfig{
-		ID: cfg.ID, Name: profile.Name, Type: domain.ReActAgent, Description: profile.Description,
-		SystemPrompt: profile.SystemPrompt, LLMModel: cfg.LLMModel, EmbedModel: cfg.EmbedModel,
-		MaxIterations: profile.MaxIterations, MaxContextTokens: profile.MaxContextTokens,
-		MemoryScope: cfg.MemoryScope, SystemKey: profile.Key, IsSystem: true, ManagementMode: "platform",
+		ID: cfg.ID, Name: pickString(cfg.Name, profile.Name), Type: domain.ReActAgent,
+		Description:  pickString(cfg.Description, profile.Description),
+		SystemPrompt: pickString(cfg.SystemPrompt, profile.SystemPrompt),
+		LLMModel:     cfg.LLMModel, EmbedModel: cfg.EmbedModel,
+		MaxIterations:    pickInt(cfg.MaxIterations, profile.MaxIterations),
+		MaxContextTokens: pickInt(cfg.MaxContextTokens, profile.MaxContextTokens),
+		MemoryScope:      cfg.MemoryScope, SystemKey: profile.Key, IsSystem: true, ManagementMode: "platform",
 		MCPToolIDs: copyCfg.MCPToolIDs, KnowledgeWorkspaceIDs: copyCfg.KnowledgeWorkspaceIDs,
 		AllowedSkills: copyCfg.AllowedSkills,
 	}, nil
+}
+
+func pickString(dbVal, fallback string) string {
+	if dbVal != "" {
+		return dbVal
+	}
+	return fallback
+}
+
+func pickInt(dbVal, fallback int) int {
+	if dbVal > 0 {
+		return dbVal
+	}
+	return fallback
 }
