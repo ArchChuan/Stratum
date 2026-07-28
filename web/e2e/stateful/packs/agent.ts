@@ -6,9 +6,11 @@ import { copyConfiguredLLMCredentials, requireUUID, withTenantQuery, type Databa
 import type { EvidenceRecord } from '../core/evidence';
 
 interface AgentPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
-const waitForMutation = (page: Page, path: string, method: string) => page.waitForResponse((response) => (
-  new URL(response.url()).pathname === path && response.request().method() === method
-));
+const waitForMutation = (page: Page, path: string, method: string) => page.waitForResponse((response) => {
+  const resourceType = response.request().resourceType();
+  return (resourceType === 'xhr' || resourceType === 'fetch') &&
+    new URL(response.url()).pathname === path && response.request().method() === method;
+});
 const rows = async <R extends QueryResultRow>(pool: DatabasePool, tenantID: string, text: string, values: unknown[]) => (
   await withTenantQuery<R>(pool, tenantID, { text, values })
 ).rows;
@@ -41,11 +43,13 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     await page.getByLabel('系统提示词').fill('请简洁回答，并明确包含 stateful。');
     await expect(page.getByRole('slider', { name: '最大迭代次数' })).toHaveAttribute('aria-valuemax', '20');
     const createResponse = waitForMutation(page, '/agents', 'POST');
+    const createdListResponse = waitForMutation(page, '/agents', 'GET');
     await page.getByRole('button', { name: '创建 Agent' }).click();
     const created = await createResponse;
     expect(created.status()).toBe(201);
     agentID = (await created.json() as { id: string }).id;
     await expect(page).toHaveURL(`${webURL}/agents`);
+    expect((await createdListResponse).status()).toBe(200);
     completed.push('agent.mutation.post.agents');
     recordEvidence(evidence, 'Agent creation');
 
@@ -55,8 +59,10 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     completed.push('agent.route.agents.id.edit');
     await page.getByLabel('描述').fill('全系统 stateful Agent 验收，已更新');
     const updateResponse = waitForMutation(page, `/agents/${agentID}`, 'PUT');
+    const updatedListResponse = waitForMutation(page, '/agents', 'GET');
     await page.getByRole('button', { name: '保存修改' }).click();
     expect((await updateResponse).status()).toBe(200);
+    expect((await updatedListResponse).status()).toBe(200);
     expect(await rows<{ description: string; max_iterations: number }>(pool, tenantID,
       'SELECT description,max_iterations FROM agents WHERE id=$1', [agentID]))
       .toEqual([{ description: '全系统 stateful Agent 验收，已更新', max_iterations: 10 }]);
@@ -121,16 +127,32 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     await page.evaluate(() => sessionStorage.setItem('chat:lastAgentId', 'stratum-platform-assistant'));
     await page.reload();
     await expect(page.getByText('Stratum 平台助手', { exact: true }).first()).toBeVisible();
-    await page.getByRole('button', { name: '设置助手模型' }).click();
-    const settingsDialog = page.getByRole('dialog', { name: '设置助手模型' });
-    const modelInput = settingsDialog.getByRole('combobox', { name: '助手模型' });
+    const agentListResponse = waitForMutation(page, '/agents', 'GET');
+    await page.goto(`${webURL}/agents`);
+    const agentList = await agentListResponse;
+    expect(agentList.status()).toBe(200);
+    const agentListBody = await agentList.json() as {
+      agents?: Array<{ id: string; name: string; isSystem?: boolean }>;
+    };
+    const systemAgents = agentListBody.agents?.filter(({ isSystem }) => isSystem) ?? [];
+    expect(systemAgents, 'agent list must contain exactly one system assistant').toHaveLength(1);
+    const [systemAgent] = systemAgents;
+    const systemCard = page.locator('.ant-card').filter({ hasText: systemAgent.name });
+    await expect(systemCard).toHaveCount(1);
+    const systemAgentResponse = waitForMutation(page, `/agents/${systemAgent.id}`, 'GET');
+    const systemSettingsResponse = waitForMutation(page, '/agents/system/settings', 'GET');
+    await systemCard.getByRole('button', { name: '编辑 Agent' }).click();
+    expect((await systemAgentResponse).status()).toBe(200);
+    expect((await systemSettingsResponse).status()).toBe(200);
+    await expect(page).toHaveURL(`${webURL}/agents/${systemAgent.id}/edit`);
+    const modelInput = page.getByRole('combobox', { name: '助手模型' });
     await expect(modelInput).toBeEnabled();
-    const modelSelect = settingsDialog.locator('.ant-select');
+    const modelSelect = page.locator('.ant-select');
     await modelSelect.locator('.ant-select-selector').click();
     await modelInput.press('ArrowDown');
     await modelInput.press('Enter');
     const settingsResponse = waitForMutation(page, '/agents/system/settings', 'PUT');
-    await page.getByRole('button', { name: '保存模型' }).click();
+    await page.getByRole('button', { name: '保存修改' }).click();
     expect((await settingsResponse).status()).toBe(200);
     const savedSystemModel = await rows<{ llm_model: string }>(pool, tenantID,
       "SELECT llm_model FROM agents WHERE system_key='stratum.platform_assistant'", []);

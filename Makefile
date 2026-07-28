@@ -14,7 +14,7 @@
 	dev-up dev-down \
 	run fe-dev help clean
 
-.PHONY: e2e-evaluation-evolution e2e-system-short e2e-system-soak
+.PHONY: e2e-evaluation-evolution e2e-system-short e2e-system-soak e2e-system-release-soak
 
 # ─── 全局变量（CI/CD 可自动覆盖）────────────────────────────────────────────
 BE_IMAGE    ?= clawhermes-ai-go
@@ -196,9 +196,11 @@ risk-guardrails:
 	bash scripts/quality/risk-regression-guard.sh --all
 
 E2E_REQUIRED_MODE ?= short
+E2E_REQUIRED_PROFILE ?=
 e2e-attestation-check:
 	@digest=$$(go run ./cmd/e2e-attestation digest --root . --ref HEAD); \
 	go run ./cmd/e2e-attestation verify --root . --ref HEAD --required-mode $(E2E_REQUIRED_MODE) \
+		$(if $(E2E_REQUIRED_PROFILE),--required-profile $(E2E_REQUIRED_PROFILE),) \
 		--attestation test/e2e/attestations/$$digest.json
 
 tool-permission-test:
@@ -218,6 +220,9 @@ e2e-system-short:
 
 e2e-system-soak:
 	bash scripts/e2e/system-stateful.sh soak
+
+e2e-system-release-soak:
+	STATEFUL_E2E_PROFILE=release STATEFUL_E2E_DURATION_SEC=3600 bash scripts/e2e/system-stateful.sh soak
 
 knowledge-deposition-test:
 	bash scripts/knowledge-deposition/report-test.sh

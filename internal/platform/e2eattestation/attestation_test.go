@@ -34,10 +34,6 @@ func TestVerifyAttestationRejectsInvalidClaims(t *testing.T) {
 			a.RiskClassification = "Authorization: Bearer fixture-secret"
 		}, "credential"},
 		{"soak required", func(a *Attestation) { a.Mode = "short" }, "required mode"},
-		{"short soak duration", func(a *Attestation) {
-			a.Mode = "soak"
-			a.DurationSeconds = 3599
-		}, "soak duration"},
 		{"source mutation", func(*Attestation) {
 			require.NoError(t, os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("changed"), 0o600))
 		}, "source digest"},
@@ -47,7 +43,7 @@ func TestVerifyAttestationRejectsInvalidClaims(t *testing.T) {
 			copy := cloneAttestation(t, report)
 			tt.mutate(&copy)
 			requiredMode := ""
-			if tt.name == "soak required" || tt.name == "short soak duration" {
+			if tt.name == "soak required" {
 				requiredMode = "soak"
 			}
 			err := VerifyAttestation(root, copy, VerifyOptions{
@@ -58,6 +54,54 @@ func TestVerifyAttestationRejectsInvalidClaims(t *testing.T) {
 			require.NoError(t, os.WriteFile(
 				filepath.Join(root, "test/e2e/attestations/safe.log"), []byte("safe evidence"), 0o600,
 			))
+		})
+	}
+}
+
+func TestVerifyAttestationEnforcesAcceptanceProfileDuration(t *testing.T) {
+	t.Parallel()
+	root, report, now := validAttestationFixture(t)
+	tests := []struct {
+		name            string
+		mode            string
+		profile         string
+		duration        int
+		requiredMode    string
+		requiredProfile string
+		wantError       string
+	}{
+		{name: "test minimum", mode: "soak", profile: AcceptanceProfileTest, duration: 600,
+			requiredMode: "soak", requiredProfile: AcceptanceProfileTest},
+		{name: "test below minimum", mode: "soak", profile: AcceptanceProfileTest, duration: 599,
+			requiredMode: "soak", requiredProfile: AcceptanceProfileTest, wantError: "below test minimum"},
+		{name: "release minimum", mode: "soak", profile: AcceptanceProfileRelease, duration: 3600,
+			requiredMode: "soak", requiredProfile: AcceptanceProfileRelease},
+		{name: "release below minimum", mode: "soak", profile: AcceptanceProfileRelease, duration: 3599,
+			requiredMode: "soak", requiredProfile: AcceptanceProfileRelease, wantError: "below release minimum"},
+		{name: "profile mismatch", mode: "soak", profile: AcceptanceProfileTest, duration: 3600,
+			requiredMode: "soak", requiredProfile: AcceptanceProfileRelease, wantError: "profile"},
+		{name: "missing soak profile", mode: "soak", duration: 600,
+			requiredMode: "soak", requiredProfile: AcceptanceProfileTest, wantError: "profile"},
+		{name: "unknown soak profile", mode: "soak", profile: "unknown", duration: 600,
+			requiredMode: "soak", requiredProfile: AcceptanceProfileTest, wantError: "profile"},
+		{name: "short rejects profile", mode: "short", profile: AcceptanceProfileTest, duration: 60,
+			requiredMode: "short", wantError: "short"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := cloneAttestation(t, report)
+			candidate.Mode = tt.mode
+			candidate.AcceptanceProfile = tt.profile
+			candidate.DurationSeconds = tt.duration
+			err := VerifyAttestation(root, candidate, VerifyOptions{
+				Now: now, ManifestPath: "manifest.json", RequiredMode: tt.requiredMode,
+				RequiredProfile: tt.requiredProfile, RequiredPacks: []string{"agent", "iam"},
+			})
+			if tt.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tt.wantError)
+			}
 		})
 	}
 }

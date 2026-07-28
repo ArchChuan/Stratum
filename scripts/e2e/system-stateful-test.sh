@@ -6,6 +6,11 @@ runner="$repo_dir/scripts/e2e/system-stateful.sh"
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/stratum-stateful-runner-test.XXXXXX")
 trap 'rm -rf "$test_dir"' EXIT
 
+grep -Eq '^[[:space:]]+- "127\.0\.0\.1:9091:9091"$' "$repo_dir/docker-compose.yml" || {
+  printf 'docker compose must publish the Milvus health endpoint used by infra-wait\n' >&2
+  exit 1
+}
+
 expect_failure() {
   local expected=$1; shift
   set +e
@@ -18,6 +23,9 @@ expect_failure() {
 safe_db='postgres://e2e:e2e@127.0.0.1:5432/stratum_e2e?sslmode=disable'
 expect_failure unsupported env TEST_DATABASE_URL="$safe_db" bash "$runner" invalid
 expect_failure 'between 600 and 14400' env TEST_DATABASE_URL="$safe_db" STATEFUL_E2E_DURATION_SEC=599 bash "$runner" short
+expect_failure 'release profile requires at least 3600' env TEST_DATABASE_URL="$safe_db" \
+  STATEFUL_E2E_PROFILE=release STATEFUL_E2E_DURATION_SEC=3599 bash "$runner" soak
+expect_failure 'short mode cannot declare' env TEST_DATABASE_URL="$safe_db" STATEFUL_E2E_PROFILE=test bash "$runner" short
 expect_failure 'unknown stateful E2E pack' env TEST_DATABASE_URL="$safe_db" STATEFUL_E2E_PACKS=unknown bash "$runner" short
 expect_failure 'unsafe E2E database target' env TEST_DATABASE_URL='postgres://u:p@prod-db/stratum' bash "$runner" short
 
@@ -76,6 +84,7 @@ SH
 cat >"$test_dir/attest" <<'SH'
 #!/usr/bin/env bash
 [[ ${1:-} == "$STATEFUL_E2E_RESULTS_PATH" ]] || exit 1
+[[ ${STATEFUL_E2E_EXPECTED_PROFILE:-} == "${STATEFUL_E2E_PROFILE:-}" ]] || exit 2
 touch "$STATEFUL_E2E_ATTESTATION_MARKER"
 SH
 cat >"$test_dir/migrate" <<'SH'
@@ -155,6 +164,14 @@ migration_marker="$test_dir/migrated"
   STATEFUL_E2E_ATTESTATION_COMMAND="$test_dir/attest \"\$STATEFUL_E2E_RESULTS_PATH\"" bash "$runner" short
 [[ -e "$migration_marker" ]] || { printf 'public schema migration was not executed\n' >&2; exit 1; }
 [[ -e "$attestation_marker" ]] || { printf 'safe result was not forwarded to attestation generation\n' >&2; exit 1; }
+
+test_profile_attestation_marker="$test_dir/test-profile-attested"
+"${common[@]}" STATEFUL_E2E_MODE=soak STATEFUL_E2E_EXPECTED_PROFILE=test \
+  STATEFUL_E2E_CLEANUP_MARKER="$cleanup_marker" STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true \
+  STATEFUL_E2E_PLAYWRIGHT_COMMAND="$test_dir/playwright-pass" \
+  STATEFUL_E2E_ATTESTATION_MARKER="$test_profile_attestation_marker" \
+  STATEFUL_E2E_ATTESTATION_COMMAND="$test_dir/attest \"\$STATEFUL_E2E_RESULTS_PATH\"" bash "$runner" soak
+[[ -e "$test_profile_attestation_marker" ]] || { printf 'soak did not default to the test profile\n' >&2; exit 1; }
 
 expect_failure 'migration prepare failed' "${common[@]}" STATEFUL_E2E_MIGRATION_COMMAND="$test_dir/migrate-fail" \
   bash "$runner" short

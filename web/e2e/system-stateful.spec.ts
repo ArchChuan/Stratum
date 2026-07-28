@@ -119,6 +119,7 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
     tested_git_parent: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot, encoding: 'utf8' }).trim(),
     browser: { name: 'chromium', version: browser.version() },
     mode: runtime.mode,
+    ...(runtime.acceptanceProfile ? { acceptance_profile: runtime.acceptanceProfile } : {}),
     seed: runtime.seed,
     started_at: startedAt.toISOString(),
     duration_seconds: durationSeconds,

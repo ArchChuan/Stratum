@@ -8,6 +8,7 @@ cd "$root"
 grep -Fq 'name: System E2E Attestation' "$ci"
 grep -Fq 'make e2e-attestation-check' "$ci"
 grep -Fq 'E2E_REQUIRED_MODE=' "$ci"
+grep -Fq 'E2E_REQUIRED_PROFILE=test' "$ci"
 grep -Fq 'system-e2e-attestation' "$ci"
 
 job=$(awk '
@@ -20,5 +21,5 @@ if grep -Eq 'playwright install|Install Chromium|npm ci|go run ./cmd/server|dock
   exit 1
 fi
 
-go test ./internal/platform/e2eattestation ./cmd/e2e-attestation -run 'Attestation|RunRejects' -count=1
+go test ./internal/platform/e2eattestation ./cmd/e2e-attestation -run 'Attestation|AcceptanceProfile|RunRejects' -count=1
 printf 'E2E attestation guard tests passed\n'

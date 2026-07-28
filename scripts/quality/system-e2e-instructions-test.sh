@@ -7,6 +7,8 @@ source_file="$root/docs/agent/instructions.md"
 for phrase in \
   'make e2e-system-short' \
   'make e2e-system-soak' \
+  'make e2e-system-release-soak' \
+  'STATEFUL_E2E_PROFILE=test' \
   '无头 Chromium' \
   '测试数据库凭据' \
   'make e2e-attestation-check' \

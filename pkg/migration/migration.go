@@ -4,6 +4,7 @@ package migration
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -33,7 +34,11 @@ func RunPublicSchema(postgresURL string, sqlDir string, logger *zap.Logger) erro
 	if dirty {
 		logger.Warn("dirty migration detected, forcing version to retry",
 			zap.Uint("version", version))
-		if err := m.Force(int(version) - 1); err != nil {
+		forceVersion, versionErr := previousVersion(version)
+		if versionErr != nil {
+			return fmt.Errorf("migration: dirty version: %w", versionErr)
+		}
+		if err := m.Force(forceVersion); err != nil {
 			return fmt.Errorf("migration: force clean: %w", err)
 		}
 	}
@@ -44,6 +49,13 @@ func RunPublicSchema(postgresURL string, sqlDir string, logger *zap.Logger) erro
 
 	logger.Info("public schema migration complete")
 	return nil
+}
+
+func previousVersion(version uint) (int, error) {
+	if uint64(version) > uint64(math.MaxInt) {
+		return 0, fmt.Errorf("version %d exceeds int range", version)
+	}
+	return int(version) - 1, nil
 }
 
 func driverURL(postgresURL string) (string, error) {

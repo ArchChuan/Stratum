@@ -2,6 +2,7 @@
 package migration
 
 import (
+	"math"
 	"testing"
 )
 
@@ -12,6 +13,21 @@ func TestMigrationSetup(t *testing.T) {
 		// Full migration execution tests should use integration test suite.
 		t.Log("Migration setup verified")
 	})
+}
+
+func TestPreviousVersionRejectsIntegerOverflow(t *testing.T) {
+	t.Parallel()
+	if got, err := previousVersion(0); err != nil || got != -1 {
+		t.Fatalf("previousVersion(0) = %d, %v; want -1, nil", got, err)
+	}
+	if got, err := previousVersion(uint(math.MaxInt)); err != nil || got != math.MaxInt-1 {
+		t.Fatalf("previousVersion(MaxInt) = %d, %v", got, err)
+	}
+	if ^uint(0) > uint(math.MaxInt) {
+		if _, err := previousVersion(^uint(0)); err == nil {
+			t.Fatal("previousVersion(MaxUint) must reject overflow")
+		}
+	}
 }
 
 func TestDriverURLUsesRegisteredPGXV5Scheme(t *testing.T) {

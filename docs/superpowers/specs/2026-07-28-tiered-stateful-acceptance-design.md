@@ -13,15 +13,17 @@ Introduce two explicit acceptance profiles:
 - `test`: minimum 600 seconds, used by the current remote test environment and PR acceptance.
 - `release`: minimum 3600 seconds, reserved for an explicit production release workflow.
 
-Both profiles use soak mode. A profile changes only the minimum uninterrupted wall-clock duration; it does not reduce
-pack, capability, browser, evidence, reconciliation, cleanup, freshness, or source-integrity requirements.
+Both profiles apply only to soak mode. Short acceptance remains mode-only and carries no profile. A soak profile
+changes only the minimum uninterrupted wall-clock duration; it does not reduce pack, capability, browser, evidence,
+reconciliation, cleanup, freshness, or source-integrity requirements.
 
 ## Attestation Contract
 
-The attestation records its acceptance profile. Generation rejects an unknown profile. Verification requires an
-explicit profile and applies that profile's minimum duration. A `test` attestation cannot satisfy `release`, even when
-its measured duration happens to exceed 3600 seconds; release evidence must be generated intentionally as release
-evidence.
+Every soak attestation records its acceptance profile. Generation rejects a missing or unknown soak profile and
+rejects a profile on short results. Soak verification requires an explicit profile and applies that profile's minimum
+duration. A `test` attestation cannot satisfy `release`, even when its measured duration happens to exceed 3600
+seconds; release evidence must be generated intentionally as release evidence. Short verification does not accept or
+require a profile.
 
 Existing attestations without a profile are invalid after this contract change. This is acceptable because
 attestations are short-lived, source-bound evidence and the implementation change already invalidates their source
@@ -58,7 +60,7 @@ Both profiles retain all current system acceptance requirements:
 
 ## Failure Behavior
 
-Unknown profiles, missing profile metadata, profile mismatch, insufficient duration, source or manifest mismatch,
+Unknown soak profiles, missing soak profile metadata, profile mismatch, insufficient duration, source or manifest mismatch,
 missing evidence, cleanup residue, credential patterns, and artifact hash mismatch all fail closed. A short-mode
 attestation cannot satisfy either soak profile.
 

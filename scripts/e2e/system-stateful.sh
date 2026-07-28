@@ -4,9 +4,23 @@ set -euo pipefail
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 mode=${1:-short}
 duration=${STATEFUL_E2E_DURATION_SEC:-}
+profile=${STATEFUL_E2E_PROFILE:-}
 case "$mode" in
-  short) duration=${duration:-600} ;;
-  soak) duration=${duration:-3600} ;;
+  short)
+    [[ -z "$profile" ]] || { printf 'short mode cannot declare an acceptance profile\n' >&2; exit 2; }
+    duration=${duration:-600}
+    ;;
+  soak)
+    profile=${profile:-test}
+    case "$profile" in
+      test) duration=${duration:-600} ;;
+      release)
+        duration=${duration:-3600}
+        ((duration >= 3600)) || { printf 'release profile requires at least 3600 seconds\n' >&2; exit 2; }
+        ;;
+      *) printf 'unsupported stateful E2E profile: %s\n' "$profile" >&2; exit 2 ;;
+    esac
+    ;;
   *) printf 'unsupported stateful E2E mode: %s\n' "$mode" >&2; exit 2 ;;
 esac
 [[ "$duration" =~ ^[0-9]+$ ]] && ((duration >= 600 && duration <= 14400)) || {
@@ -180,6 +194,7 @@ kill -0 "$frontend_pid" 2>/dev/null || { printf 'frontend exited before browser 
 
 results_path=${STATEFUL_E2E_RESULTS_PATH:-$work_dir/safe-results.json}
 export STATEFUL_E2E_MODE=$mode STATEFUL_E2E_DURATION_SEC=$duration STATEFUL_E2E_PACKS=$packs
+export STATEFUL_E2E_PROFILE=$profile
 export E2E_API_URL=http://127.0.0.1:18080 E2E_WEB_URL=http://127.0.0.1:15173 STATEFUL_E2E_RESULTS_PATH=$results_path
 playwright_command=${STATEFUL_E2E_PLAYWRIGHT_COMMAND:-"cd '$repo_dir/web' && npx playwright test --config playwright.stateful.config.ts"}
 bash -c "$playwright_command"
@@ -196,5 +211,10 @@ jq -e '
 source_after=$(cd "$repo_dir" && bash -c "$digest_command")
 [[ "$source_before" == "$source_after" ]] || { printf 'covered source changed during stateful E2E execution\n' >&2; exit 1; }
 
-attestation_command=${STATEFUL_E2E_ATTESTATION_COMMAND:-"go run ./cmd/e2e-attestation generate --input '$results_path' --output-dir test/e2e/attestations"}
+if [[ -n "$profile" ]]; then
+  default_attestation_command="go run ./cmd/e2e-attestation generate --input '$results_path' --profile '$profile' --output-dir test/e2e/attestations"
+else
+  default_attestation_command="go run ./cmd/e2e-attestation generate --input '$results_path' --output-dir test/e2e/attestations"
+fi
+attestation_command=${STATEFUL_E2E_ATTESTATION_COMMAND:-$default_attestation_command}
 (cd "$repo_dir" && bash -c "$attestation_command")

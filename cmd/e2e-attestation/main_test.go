@@ -25,6 +25,21 @@ func TestRunRejectsMissingInputsAndUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestRunVerifyRejectsInvalidAcceptanceProfilesBeforeReadingAttestation(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"verify", "--attestation", "missing.json", "--required-mode", "soak"}, want: "required-profile"},
+		{args: []string{"verify", "--attestation", "missing.json", "--required-mode", "soak", "--required-profile", "unknown"}, want: "required-profile"},
+		{args: []string{"verify", "--attestation", "missing.json", "--required-mode", "short", "--required-profile", "test"}, want: "short"},
+	} {
+		err := run(tt.args, &bytes.Buffer{}, &bytes.Buffer{})
+		require.ErrorContains(t, err, tt.want)
+	}
+}
+
 func initCLIRepository(t *testing.T) string {
 	t.Helper()
 	// Reuse the package's public behavior without coupling CLI tests to its private fixture.

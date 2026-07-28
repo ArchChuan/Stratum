@@ -53,6 +53,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		inputPath := flags.String("input", "", "safe results JSON")
 		outputDir := flags.String("output-dir", "test/e2e/attestations", "attestation output directory")
 		manifest := flags.String("manifest", "test/e2e/stateful/manifest.json", "coverage manifest")
+		profile := flags.String("profile", "", "soak acceptance profile: test or release")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -66,6 +67,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		results, err := e2eattestation.DecodeSafeResults(data)
 		if err != nil {
 			return err
+		}
+		if err := validateProfileFlags(results.Mode, *profile); err != nil {
+			return err
+		}
+		if results.AcceptanceProfile != *profile {
+			return fmt.Errorf("safe results profile %q does not match --profile %q", results.AcceptanceProfile, *profile)
 		}
 		path, _, err := e2eattestation.GenerateAttestation(*root, results, e2eattestation.GenerateOptions{
 			ManifestPath: *manifest, OutputDir: *outputDir,
@@ -87,6 +94,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		manifest := flags.String("manifest", "test/e2e/stateful/manifest.json", "coverage manifest")
 		ref := flags.String("ref", "", "committed Git ref; defaults to local source")
 		requiredMode := flags.String("required-mode", "short", "required execution mode: short or soak")
+		requiredProfile := flags.String("required-profile", "", "required soak acceptance profile: test or release")
 		packs := stringListFlag{}
 		flags.Var(&packs, "required-pack", "required passing pack; repeat to override full-system defaults")
 		if err := flags.Parse(args[1:]); err != nil {
@@ -98,16 +106,33 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if *requiredMode != "short" && *requiredMode != "soak" {
 			return errors.New("--required-mode must be short or soak")
 		}
+		if err := validateProfileFlags(*requiredMode, *requiredProfile); err != nil {
+			return err
+		}
 		required := systemPacks
 		if len(packs) > 0 {
 			required = packs
 		}
 		return e2eattestation.VerifyAttestationFile(*root, *path, e2eattestation.VerifyOptions{
-			ManifestPath: *manifest, Ref: *ref, RequiredMode: *requiredMode, RequiredPacks: required,
+			ManifestPath: *manifest, Ref: *ref, RequiredMode: *requiredMode,
+			RequiredProfile: *requiredProfile, RequiredPacks: required,
 		})
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func validateProfileFlags(mode, profile string) error {
+	if mode == "short" {
+		if profile != "" {
+			return errors.New("short mode cannot use --required-profile or --profile")
+		}
+		return nil
+	}
+	if profile != e2eattestation.AcceptanceProfileTest && profile != e2eattestation.AcceptanceProfileRelease {
+		return errors.New("soak mode requires --required-profile/--profile set to test or release")
+	}
+	return nil
 }
 
 type stringListFlag []string

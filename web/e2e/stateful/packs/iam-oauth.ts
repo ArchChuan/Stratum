@@ -112,9 +112,12 @@ export const executeIAMOAuthJourney = async ({
     evidence.database.push('verified oauth user, tenant, and owner membership reconciled');
     completed.push('iam.mutation.post.auth.register');
 
+    const tenantSettingsResponse = waitForRequest(page, '/tenant/settings', 'GET');
     await page.goto(`${webURL}/tenant/settings`);
+    expect((await tenantSettingsResponse).status()).toBe(200);
     await expect(page.getByRole('heading', { name: '租户设置' })).toBeVisible();
-    await page.locator('.tenant-embedding-controls .ant-select').click();
+    const embeddingCard = page.locator('.tenant-embedding-card');
+    await embeddingCard.getByRole('combobox').click();
     await page.getByText(/text-embedding-v3（推荐/).click();
     const embedResponse = waitForRequest(page, '/tenant/embed-model', 'PATCH');
     await page.getByRole('button', { name: '确认设置' }).click();

@@ -20,6 +20,9 @@ const (
 	StatusPassed                     = "passed"
 	StatusFailed                     = "failed"
 	StatusSkipped                    = "skipped"
+	AcceptanceProfileTest            = "test"
+	AcceptanceProfileRelease         = "release"
+	minimumTestSoakDurationSecond    = 600
 	minimumReleaseSoakDurationSecond = 3600
 	defaultValidity                  = 72 * time.Hour
 )
@@ -56,6 +59,7 @@ type SafeResults struct {
 	TestedGitParent        string             `json:"tested_git_parent"`
 	Browser                Browser            `json:"browser"`
 	Mode                   string             `json:"mode"`
+	AcceptanceProfile      string             `json:"acceptance_profile,omitempty"`
 	Seed                   uint32             `json:"seed"`
 	StartedAt              time.Time          `json:"started_at"`
 	DurationSeconds        int                `json:"duration_seconds"`
@@ -87,9 +91,9 @@ type GenerateOptions struct {
 	Validity                time.Duration
 }
 type VerifyOptions struct {
-	ManifestPath, Ref, RequiredMode string
-	Now                             time.Time
-	RequiredPacks                   []string
+	ManifestPath, Ref, RequiredMode, RequiredProfile string
+	Now                                              time.Time
+	RequiredPacks                                    []string
 }
 
 var credentialPatterns = []*regexp.Regexp{
@@ -107,6 +111,9 @@ func GenerateAttestation(root string, input SafeResults, options GenerateOptions
 	}
 	if options.Validity <= 0 {
 		options.Validity = defaultValidity
+	}
+	if err := validateAcceptanceProfile(input.Mode, input.AcceptanceProfile, input.DurationSeconds); err != nil {
+		return "", Attestation{}, err
 	}
 	sourceDigest, err := LocalSourceDigest(root)
 	if err != nil {
@@ -222,9 +229,20 @@ func VerifyAttestation(root string, report Attestation, options VerifyOptions) e
 	if options.RequiredMode != "" && report.Mode != options.RequiredMode {
 		return fmt.Errorf("attestation mode %q does not satisfy required mode %q", report.Mode, options.RequiredMode)
 	}
-	if options.RequiredMode == "soak" && report.DurationSeconds < minimumReleaseSoakDurationSecond {
-		return fmt.Errorf("soak duration %d seconds is below release minimum %d seconds",
-			report.DurationSeconds, minimumReleaseSoakDurationSecond)
+	if options.RequiredMode == "short" && options.RequiredProfile != "" {
+		return errors.New("short verification cannot require an acceptance profile")
+	}
+	if options.RequiredMode == "soak" {
+		if options.RequiredProfile != AcceptanceProfileTest && options.RequiredProfile != AcceptanceProfileRelease {
+			return errors.New("soak verification requires test or release acceptance profile")
+		}
+		if report.AcceptanceProfile != options.RequiredProfile {
+			return fmt.Errorf("attestation profile %q does not satisfy required profile %q",
+				report.AcceptanceProfile, options.RequiredProfile)
+		}
+	}
+	if err := validateAcceptanceProfile(report.Mode, report.AcceptanceProfile, report.DurationSeconds); err != nil {
+		return err
 	}
 	if !report.Cleanup.Passed || len(report.Cleanup.ResidualEntityIDs) != 0 {
 		return errors.New("cleanup did not complete without residual entities")
@@ -290,6 +308,33 @@ func VerifyAttestation(root string, report Attestation, options VerifyOptions) e
 		}
 	}
 	return nil
+}
+
+func validateAcceptanceProfile(mode, profile string, durationSeconds int) error {
+	switch mode {
+	case "short":
+		if profile != "" {
+			return errors.New("short attestation cannot declare an acceptance profile")
+		}
+		return nil
+	case "soak":
+		minimum := 0
+		switch profile {
+		case AcceptanceProfileTest:
+			minimum = minimumTestSoakDurationSecond
+		case AcceptanceProfileRelease:
+			minimum = minimumReleaseSoakDurationSecond
+		default:
+			return errors.New("soak attestation requires test or release acceptance profile")
+		}
+		if durationSeconds < minimum {
+			return fmt.Errorf("soak duration %d seconds is below %s minimum %d seconds",
+				durationSeconds, profile, minimum)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported attestation mode %q", mode)
+	}
 }
 
 func DecodeAttestation(data []byte) (Attestation, error) {

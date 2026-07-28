@@ -26,6 +26,7 @@ const (
 	serverWriteTimeout   = 10 * time.Second
 	serverIdleTimeout    = 30 * time.Second
 	serverShutdownBudget = 5 * time.Second
+	maxOAuthFormBytes    = 16 << 10
 )
 
 type providerConfig struct {
@@ -88,6 +89,7 @@ func (p *provider) authorize(w http.ResponseWriter, request *http.Request) {
 }
 
 func (p *provider) exchange(w http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(w, request.Body, maxOAuthFormBytes)
 	if err := request.ParseForm(); err != nil || request.Form.Get("client_id") != p.config.clientID ||
 		request.Form.Get("client_secret") != p.config.clientSecret ||
 		request.Form.Get("redirect_uri") != p.config.callbackURL {

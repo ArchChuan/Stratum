@@ -83,6 +83,29 @@ func TestProviderRejectsInvalidBearerAndDoesNotEchoSecret(t *testing.T) {
 	}
 }
 
+func TestProviderRejectsOversizedTokenForm(t *testing.T) {
+	provider := newProvider(providerConfig{
+		clientID: testClientID, clientSecret: testClientSecret, callbackURL: testCallbackURL,
+	})
+	server := httptest.NewServer(provider.routes())
+	defer server.Close()
+
+	body := strings.NewReader("client_id=" + strings.Repeat("x", maxOAuthFormBytes))
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/login/oauth/access_token", body) //nolint:noctx
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("oversized token request: %v", err)
+	}
+	defer response.Body.Close() //nolint:errcheck
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversized token status=%d", response.StatusCode)
+	}
+}
+
 func exchangeToken(t *testing.T, client *http.Client, baseURL, code, secret string) string {
 	t.Helper()
 	response := exchangeTokenResponse(t, client, baseURL, code, secret)
