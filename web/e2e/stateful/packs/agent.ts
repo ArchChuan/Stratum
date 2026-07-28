@@ -125,7 +125,9 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     completed.push('agent.mutation.delete.conversations.convid');
 
     await page.evaluate(() => sessionStorage.setItem('chat:lastAgentId', 'stratum-platform-assistant'));
+    const reloadAgentsResponse = waitForMutation(page, '/agents', 'GET');
     await page.reload();
+    await reloadAgentsResponse;
     await expect(page.getByText('Stratum 平台助手', { exact: true }).first()).toBeVisible();
     const agentListResponse = waitForMutation(page, '/agents', 'GET');
     await page.goto(`${webURL}/agents`);
