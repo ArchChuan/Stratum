@@ -204,6 +204,8 @@ func (s *feishuSender) Send(ctx context.Context, message alerting.FeishuMessage)
 func monitor(ctx context.Context, health probe, issues issueStore, sender messageSender, now func() time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, monitorBudget)
 	defer cancel()
+	// GitHub issue state and Feishu delivery cannot be committed atomically. The outbox chooses
+	// no-loss, at-least-once delivery and keeps each pending event payload stable across retries.
 
 	category := diagnosticNone
 	for attempt := 0; attempt < maxProbeAttempts; attempt++ {
@@ -237,20 +239,24 @@ func monitor(ctx context.Context, health probe, issues issueStore, sender messag
 			}
 			return nil
 		}
-		pendingBody := issueBody(timestamp, "resolved", diagnosticNone, "pending")
+		eventTimestamp := timestamp
+		if state.Status == "resolved" && state.Notification == "pending" {
+			eventTimestamp = state.Timestamp.UTC().Format(time.RFC3339)
+		}
+		pendingBody := issueBody(eventTimestamp, "resolved", diagnosticNone, "pending")
 		if state.Status != "resolved" || state.Notification != "pending" {
 			if err := issues.Update(ctx, openIssue.Number, pendingBody); err != nil {
 				return fmt.Errorf("persist resolved pending state: %w", err)
 			}
 		}
-		message, err := renderMessage("resolved", timestamp, diagnosticNone)
+		message, err := renderMessage("resolved", eventTimestamp, diagnosticNone)
 		if err != nil {
 			return err
 		}
 		if err := sender.Send(ctx, message); err != nil {
 			return fmt.Errorf("send resolved notification: %w", err)
 		}
-		sentBody := issueBody(timestamp, "resolved", diagnosticNone, "sent")
+		sentBody := issueBody(eventTimestamp, "resolved", diagnosticNone, "sent")
 		if err := issues.Update(ctx, openIssue.Number, sentBody); err != nil {
 			return fmt.Errorf("persist resolved sent state: %w", err)
 		}
@@ -260,7 +266,8 @@ func monitor(ctx context.Context, health probe, issues issueStore, sender messag
 		return nil
 	}
 
-	pendingBody := issueBody(timestamp, "firing", category, "pending")
+	eventTimestamp := timestamp
+	eventCategory := category
 	if openIssue != nil {
 		if state.Status == "firing" && state.Notification == "sent" {
 			if err := issues.Update(ctx, openIssue.Number, issueBody(timestamp, "firing", category, "sent")); err != nil {
@@ -268,25 +275,31 @@ func monitor(ctx context.Context, health probe, issues issueStore, sender messag
 			}
 			return nil
 		}
+		if state.Status == "firing" && state.Notification == "pending" {
+			eventTimestamp = state.Timestamp.UTC().Format(time.RFC3339)
+			eventCategory = state.Diagnostic
+		}
+		pendingBody := issueBody(eventTimestamp, "firing", eventCategory, "pending")
 		if state.Status != "firing" || state.Notification != "pending" {
 			if err := issues.Update(ctx, openIssue.Number, pendingBody); err != nil {
 				return fmt.Errorf("persist firing pending state: %w", err)
 			}
 		}
 	} else {
+		pendingBody := issueBody(eventTimestamp, "firing", eventCategory, "pending")
 		openIssue, err = issues.Create(ctx, pendingBody)
 		if err != nil {
 			return fmt.Errorf("create monitor issue: %w", err)
 		}
 	}
-	message, err := renderMessage("firing", timestamp, category)
+	message, err := renderMessage("firing", eventTimestamp, eventCategory)
 	if err != nil {
 		return err
 	}
 	if err := sender.Send(ctx, message); err != nil {
 		return fmt.Errorf("send firing notification: %w", err)
 	}
-	if err := issues.Update(ctx, openIssue.Number, issueBody(timestamp, "firing", category, "sent")); err != nil {
+	if err := issues.Update(ctx, openIssue.Number, issueBody(eventTimestamp, "firing", eventCategory, "sent")); err != nil {
 		return fmt.Errorf("persist firing sent state: %w", err)
 	}
 	return nil
@@ -335,6 +348,9 @@ func parseIssueBody(body string) (*issueState, error) {
 	}
 	if values[1] == "resolved" && category != diagnosticNone {
 		return nil, errors.New("invalid resolved diagnostic")
+	}
+	if values[1] == "firing" && category == diagnosticNone {
+		return nil, errors.New("invalid firing diagnostic")
 	}
 	if values[3] != "pending" && values[3] != "sent" {
 		return nil, errors.New("invalid notification state")

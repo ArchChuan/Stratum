@@ -178,6 +178,37 @@ func TestMonitorFiringSentStateUpdateFailureExitsNonzeroWithPendingIssue(t *test
 	require.Empty(t, issues.bodies)
 }
 
+func TestParseIssueBodyRejectsFiringWithoutDiagnostic(t *testing.T) {
+	_, err := parseIssueBody(issueBody(fixedNow().Format(time.RFC3339), "firing", diagnosticNone, "pending"))
+	require.Error(t, err)
+}
+
+func TestParseIssueBodyRejectsUnknownDiagnostic(t *testing.T) {
+	body := "timestamp: 2026-07-29T01:02:03Z\nstatus: firing\ndiagnostic: database\nnotification: pending\n"
+	_, err := parseIssueBody(body)
+	require.Error(t, err)
+}
+
+func TestMonitorFiringRetryUsesStablePendingEventPayload(t *testing.T) {
+	originalTimestamp := "2026-07-28T23:00:00Z"
+	pendingBody := issueBody(originalTimestamp, "firing", diagnosticHTTPStatus, "pending")
+	issues := &stubIssues{open: &issue{Number: 42, Title: issueTitle, Body: pendingBody}, updateErr: errors.New("github unavailable")}
+	sender := &stubSender{}
+	probe := &stubProbe{results: []probeResult{{category: diagnosticContract}}}
+
+	require.Error(t, monitor(context.Background(), probe, issues, sender, fixedNow))
+	require.Len(t, sender.messages, 1)
+	first := sender.messages[0]
+
+	issues.updateErr = nil
+	probe.calls = 0
+	require.NoError(t, monitor(context.Background(), probe, issues, sender, fixedNow))
+	require.Len(t, sender.messages, 2)
+	require.Equal(t, first, sender.messages[1])
+	require.Contains(t, issues.bodies[len(issues.bodies)-1], "timestamp: "+originalTimestamp)
+	require.Contains(t, issues.bodies[len(issues.bodies)-1], "diagnostic: http_status")
+}
+
 func TestHTTPProbeRequiresExactStableContractAndDoesNotLeakBody(t *testing.T) {
 	probe, server := newProbeTestServer(t, 200, `{"service":"Stratum","status":"degraded","secret":"do-not-log"}`)
 	defer server.Close()
