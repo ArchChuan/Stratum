@@ -682,25 +682,6 @@
       "coverage": "short"
     },
     {
-      "id": "iam.mutation.patch.tenant.embed.model",
-      "domain": "iam",
-      "user_goal": "Complete PATCH /tenant/embed-model",
-      "route": "/tenant/settings",
-      "roles": {
-        "allowed": [
-          "tenant_admin"
-        ],
-        "denied": [
-          "unauthenticated"
-        ]
-      },
-      "mutation": "PATCH /tenant/embed-model",
-      "browser_action_id": "iam.mutation.patch.tenant.embed.model",
-      "http_evidence": "The browser observes the expected successful response for PATCH /tenant/embed-model",
-      "db_evidence": "Persisted state is reconciled after PATCH /tenant/embed-model",
-      "coverage": "short"
-    },
-    {
       "id": "iam.mutation.post.tenant.members.invite",
       "domain": "iam",
       "user_goal": "Complete POST /tenant/members/invite",
@@ -936,8 +917,8 @@
     {
       "id": "agent.mutation.put.agents.system.settings",
       "domain": "agent",
-      "user_goal": "Complete PUT /agents/system/settings",
-      "route": "/agents",
+      "user_goal": "Complete PUT /agents/:id for system assistant",
+      "route": "/agents/:id/edit",
       "roles": {
         "allowed": [
           "tenant_admin",
@@ -947,10 +928,10 @@
           "unauthenticated"
         ]
       },
-      "mutation": "PUT /agents/system/settings",
+      "mutation": "PUT /agents/:id",
       "browser_action_id": "agent.mutation.put.agents.system.settings",
-      "http_evidence": "The browser observes the expected successful response for PUT /agents/system/settings",
-      "db_evidence": "Persisted state is reconciled after PUT /agents/system/settings",
+      "http_evidence": "The browser observes the expected successful response for PUT /agents/:id",
+      "db_evidence": "Persisted state is reconciled after PUT /agents/:id",
       "coverage": "short"
     },
     {

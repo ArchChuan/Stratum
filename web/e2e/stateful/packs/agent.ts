@@ -41,7 +41,7 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('描述').fill('全系统 stateful Agent 验收');
     await page.getByLabel('系统提示词').fill('请简洁回答，并明确包含 stateful。');
-    await expect(page.getByRole('slider', { name: '最大迭代次数' })).toHaveAttribute('aria-valuemax', '20');
+    await expect(page.getByRole('slider', { name: '最大迭代次数' })).toHaveAttribute('aria-valuemax', '90');
     const createResponse = waitForMutation(page, '/agents', 'POST');
     const createdListResponse = waitForMutation(page, '/agents', 'GET');
     await page.getByRole('button', { name: '创建 Agent' }).click();
@@ -140,18 +140,11 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     const systemCard = page.locator('.ant-card').filter({ hasText: systemAgent.name });
     await expect(systemCard).toHaveCount(1);
     const systemAgentResponse = waitForMutation(page, `/agents/${systemAgent.id}`, 'GET');
-    const systemSettingsResponse = waitForMutation(page, '/agents/system/settings', 'GET');
     await systemCard.getByRole('button', { name: '编辑 Agent' }).click();
     expect((await systemAgentResponse).status()).toBe(200);
-    expect((await systemSettingsResponse).status()).toBe(200);
     await expect(page).toHaveURL(`${webURL}/agents/${systemAgent.id}/edit`);
-    const modelInput = page.getByRole('combobox', { name: '助手模型' });
-    await expect(modelInput).toBeEnabled();
-    const modelSelect = page.locator('.ant-select');
-    await modelSelect.locator('.ant-select-selector').click();
-    await modelInput.press('ArrowDown');
-    await modelInput.press('Enter');
-    const settingsResponse = waitForMutation(page, '/agents/system/settings', 'PUT');
+    await expect(page.getByLabel('LLM 模型')).toBeVisible();
+    const settingsResponse = waitForMutation(page, `/agents/${systemAgent.id}`, 'PUT');
     await page.getByRole('button', { name: '保存修改' }).click();
     expect((await settingsResponse).status()).toBe(200);
     const savedSystemModel = await rows<{ llm_model: string }>(pool, tenantID,

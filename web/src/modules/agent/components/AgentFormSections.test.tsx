@@ -9,7 +9,7 @@ describe('AgentFormSections', () => {
     render(<Form initialValues={{ maxIterations: 10 }}><AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} /></Form>);
     const slider = screen.getByRole('slider', { name: '最大迭代次数' });
     expect(slider).toHaveAttribute('aria-valuemin', '1');
-    expect(slider).toHaveAttribute('aria-valuemax', '20');
+    expect(slider).toHaveAttribute('aria-valuemax', '90');
     expect(slider).toHaveAttribute('aria-valuenow', '10');
   });
 });

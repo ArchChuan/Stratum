@@ -10,9 +10,6 @@ vi.mock('../../hooks/useEditAgentPage', () => ({ useEditAgentPage: vi.fn() }));
 vi.mock('../../components/AgentFormSections', () => ({
   AgentFormSections: () => <div>普通 Agent 完整表单</div>,
 }));
-vi.mock('../../components/SystemAssistantSettingsForm', () => ({
-  SystemAssistantSettingsForm: () => <div>平台助手模型设置</div>,
-}));
 
 const baseHook = {
   loading: false,
@@ -53,17 +50,17 @@ const renderPage = (agentValues: Pick<Agent, 'isSystem' | 'name'>, id: string) =
 describe('EditAgentPage', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('renders the model-only view for the platform assistant', () => {
+  it('renders the unified form for the platform assistant', () => {
     renderPage({ isSystem: true, name: 'Stratum 平台助手' }, 'stratum-platform-assistant');
 
-    expect(screen.getByText('平台助手模型设置')).toBeInTheDocument();
-    expect(screen.queryByText('普通 Agent 完整表单')).not.toBeInTheDocument();
+    expect(screen.getByText('平台助手设置')).toBeInTheDocument();
+    expect(screen.getByText('普通 Agent 完整表单')).toBeInTheDocument();
   });
 
   it('retains the complete form for an ordinary Agent', () => {
     renderPage({ isSystem: false, name: '普通 Agent' }, 'agent-1');
 
+    expect(screen.getByText('编辑 Agent')).toBeInTheDocument();
     expect(screen.getByText('普通 Agent 完整表单')).toBeInTheDocument();
-    expect(screen.queryByText('平台助手模型设置')).not.toBeInTheDocument();
   });
 });
