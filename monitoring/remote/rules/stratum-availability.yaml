@@ -1,0 +1,58 @@
+groups:
+  - name: stratum-availability
+    rules:
+      - alert: StratumPublicEndpointDown
+        expr: probe_success{job="stratum-blackbox-prometheus-blackbox-exporter",service="stratum",environment="remote-test"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          service: stratum
+          environment: remote-test
+          component: public-endpoint
+        annotations:
+          summary: Stratum public endpoint is unavailable
+          description: The remote public health probe has failed for three minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#public-endpoint-down
+
+      - alert: StratumBackendUnavailable
+        expr: kube_deployment_status_replicas_ready{namespace="stratum",deployment=~"stratum(-backend)?"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          service: stratum
+          environment: remote-test
+          component: backend
+        annotations:
+          summary: Stratum backend has no ready replicas
+          description: The backend deployment has had no ready replicas for three minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#backend-unavailable
+
+      - alert: StratumFrontendUnavailable
+        expr: kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          service: stratum
+          environment: remote-test
+          component: frontend
+        annotations:
+          summary: Stratum frontend has no ready replicas
+          description: The frontend deployment has had no ready replicas for three minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#frontend-unavailable
+
+      - alert: StratumTargetMissing
+        expr: absent(up{namespace="stratum",service="stratum",endpoint="http"}) or up{namespace="stratum",service="stratum",endpoint="http"} == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: stratum
+          environment: remote-test
+          component: backend
+        annotations:
+          summary: Stratum application target is missing
+          description: The expected Stratum scrape target has been absent or down for ten minutes (current value {{ $value }}).
+          dashboard_url: /d/stratum-service-overview
+          runbook_url: /docs/operations/remote-monitoring-runbook.md#target-missing
