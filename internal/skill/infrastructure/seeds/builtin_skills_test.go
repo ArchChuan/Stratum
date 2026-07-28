@@ -69,7 +69,8 @@ func TestBuiltinSkillsSQLGolden(t *testing.T) {
 		"rev-builtin-tenant-diagnostic-v1",
 		"stratum-platform-assistant",
 		"ON CONFLICT (id) DO NOTHING",
-		"ON CONFLICT (agent_id, skill_id) DO NOTHING",
+		"WHERE NOT EXISTS",
+		"SELECT 1 FROM agent_skill_links",
 	} {
 		if !contains(sql, want) {
 			t.Errorf("expected SQL to contain %q", want)

@@ -1328,8 +1328,11 @@ INSERT INTO skill_revisions (
 ) ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO agent_skill_links (agent_id, skill_id)
-VALUES ('stratum-platform-assistant', 'builtin:platform-guide')
-ON CONFLICT (agent_id, skill_id) DO NOTHING;
+SELECT 'stratum-platform-assistant', 'builtin:platform-guide'
+WHERE NOT EXISTS (
+    SELECT 1 FROM agent_skill_links
+    WHERE agent_id = 'stratum-platform-assistant' AND skill_id = 'builtin:platform-guide'
+);
 
 -- Built-in skill: tenant diagnostic
 INSERT INTO skills (id, name, description, status, active_revision_id, created_at, updated_at)
@@ -1353,8 +1356,11 @@ INSERT INTO skill_revisions (
 ) ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO agent_skill_links (agent_id, skill_id)
-VALUES ('stratum-platform-assistant', 'builtin:tenant-diagnostic')
-ON CONFLICT (agent_id, skill_id) DO NOTHING;
+SELECT 'stratum-platform-assistant', 'builtin:tenant-diagnostic'
+WHERE NOT EXISTS (
+    SELECT 1 FROM agent_skill_links
+    WHERE agent_id = 'stratum-platform-assistant' AND skill_id = 'builtin:tenant-diagnostic'
+);
 
 -- Built-in knowledge workspace: platform documentation
 INSERT INTO rag_workspaces (id, name, description, config, created_at, updated_at)

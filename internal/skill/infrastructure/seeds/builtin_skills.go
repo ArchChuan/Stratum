@@ -132,8 +132,9 @@ func tenantDiagnostic() BuiltinSkill {
 }
 
 // SkillSQL generates the tenant_schema.sql seed INSERT statements for all
-// built-in skills, revisions, and agent bindings. All statements use
-// ON CONFLICT DO NOTHING for idempotency.
+// built-in skills, revisions, and agent bindings. Skills and revisions use
+// ON CONFLICT DO NOTHING; agent_skill_links uses WHERE NOT EXISTS (its table
+// may lack a PK in legacy schemas).
 func SkillSQL() string {
 	var b strings.Builder
 	b.WriteString("-- Builtin skills: platform guide + tenant diagnostic\n")
@@ -169,14 +170,17 @@ INSERT INTO skill_revisions (
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO agent_skill_links (agent_id, skill_id)
-VALUES ('stratum-platform-assistant', '%s')
-ON CONFLICT (agent_id, skill_id) DO NOTHING;
+SELECT 'stratum-platform-assistant', '%s'
+WHERE NOT EXISTS (
+    SELECT 1 FROM agent_skill_links
+    WHERE agent_id = 'stratum-platform-assistant' AND skill_id = '%s'
+);
 `,
 			sk.ID, sk.Name, sk.Description, rev.ID,
 			rev.ID, sk.ID, rev.RevisionNo,
 			rev.ContentHash, genMeta, capJSON, contractJSON,
 			escapeSQL(rev.Instructions), reqJSON, publishChecks,
-			sk.ID,
+			sk.ID, sk.ID,
 		)
 	}
 	return b.String()
