@@ -199,6 +199,7 @@ risk-guardrails:
 monitoring-config-test:
 	bash scripts/quality/monitoring-config-test-test.sh
 	bash scripts/quality/monitoring-config-test.sh
+	bash scripts/quality/remote-health-monitor-workflow-test.sh
 
 E2E_REQUIRED_MODE ?= short
 E2E_REQUIRED_PROFILE ?=

@@ -29,7 +29,7 @@ func TestMonitorHealthyWithoutIssueIsSilent(t *testing.T) {
 func TestMonitorFailureAttemptsThreeTimesThenCreatesIssueAndFiresOnce(t *testing.T) {
 	probe := &stubProbe{results: []probeResult{
 		{category: diagnosticTransport},
-		{category: diagnosticHTTPStatus},
+		{category: diagnosticHTTPStatus, retry: true},
 		{category: diagnosticContract},
 	}}
 	issues := &stubIssues{}
@@ -148,7 +148,7 @@ func TestMonitorTitleMismatchFailsClosed(t *testing.T) {
 }
 
 func TestMonitorMalformedIssueBodyFailsClosed(t *testing.T) {
-	issues := &stubIssues{open: &issue{Number: 42, Title: issueTitle, Body: "status: firing\nraw: unexpected\n"}}
+	issues := &stubIssues{open: &issue{Number: 42, Title: issueTitle, Labels: []label{{Name: issueLabel}}, Body: "status: firing\nraw: unexpected\n"}}
 	sender := &stubSender{}
 
 	require.Error(t, monitor(context.Background(), &stubProbe{results: []probeResult{{}}}, issues, sender, fixedNow))
@@ -192,7 +192,9 @@ func TestParseIssueBodyRejectsUnknownDiagnostic(t *testing.T) {
 func TestMonitorFiringRetryUsesStablePendingEventPayload(t *testing.T) {
 	originalTimestamp := "2026-07-28T23:00:00Z"
 	pendingBody := issueBody(originalTimestamp, "firing", diagnosticHTTPStatus, "pending")
-	issues := &stubIssues{open: &issue{Number: 42, Title: issueTitle, Body: pendingBody}, updateErr: errors.New("github unavailable")}
+	issues := &stubIssues{open: &issue{
+		Number: 42, Title: issueTitle, Labels: []label{{Name: issueLabel}}, Body: pendingBody,
+	}, updateErr: errors.New("github unavailable")}
 	sender := &stubSender{}
 	probe := &stubProbe{results: []probeResult{{category: diagnosticContract}}}
 
@@ -205,15 +207,83 @@ func TestMonitorFiringRetryUsesStablePendingEventPayload(t *testing.T) {
 	require.NoError(t, monitor(context.Background(), probe, issues, sender, fixedNow))
 	require.Len(t, sender.messages, 2)
 	require.Equal(t, first, sender.messages[1])
-	require.Contains(t, issues.bodies[len(issues.bodies)-1], "timestamp: "+originalTimestamp)
-	require.Contains(t, issues.bodies[len(issues.bodies)-1], "diagnostic: http_status")
+	require.Contains(t, issues.bodies[0], "timestamp: "+originalTimestamp)
+	require.Contains(t, issues.bodies[0], "diagnostic: http_status")
+}
+
+func TestMonitorFiringPendingThenHealthyDeliversBothEventsWithoutLoss(t *testing.T) {
+	issues := &stubIssues{open: firingIssue(42, "pending")}
+	sender := &stubSender{}
+
+	require.NoError(t, monitor(context.Background(), &stubProbe{results: []probeResult{{}}}, issues, sender, fixedNow))
+	require.Len(t, sender.messages, 2)
+	require.Contains(t, sender.messages[0].Card.Header.Title.Content, "FIRING")
+	require.Contains(t, sender.messages[1].Card.Header.Title.Content, "RESOLVED")
+	require.Equal(t, []int{42}, issues.closed)
+}
+
+func TestMonitorResolvedPendingThenFailureDeliversBothEventsWithoutLoss(t *testing.T) {
+	issues := &stubIssues{open: resolvedIssue(42, "pending")}
+	sender := &stubSender{}
+
+	require.NoError(t, monitor(context.Background(), &stubProbe{results: []probeResult{{category: diagnosticTransport}}}, issues, sender, fixedNow))
+	require.Len(t, sender.messages, 2)
+	require.Contains(t, sender.messages[0].Card.Header.Title.Content, "RESOLVED")
+	require.Contains(t, sender.messages[1].Card.Header.Title.Content, "FIRING")
+	require.Equal(t, []int{42}, issues.closed)
+	require.Len(t, issues.created, 1)
+}
+
+func TestMonitorDroppedIssueLabelFailsClosed(t *testing.T) {
+	open := firingIssue(42, "sent")
+	open.Labels = nil
+	issues := &stubIssues{open: open}
+	sender := &stubSender{}
+
+	require.Error(t, monitor(context.Background(), &stubProbe{results: []probeResult{{}}}, issues, sender, fixedNow))
+	require.Empty(t, sender.messages)
+}
+
+func TestGitHubIssuesProvisionsMissingLabel(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch r.Method {
+		case http.MethodGet:
+			w.WriteHeader(http.StatusNotFound)
+		case http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"name":"remote-health-monitor"}`))
+		default:
+			t.Fatalf("unexpected request: %s", r.Method)
+		}
+	}))
+	defer server.Close()
+	client := &githubIssues{client: server.Client(), baseURL: server.URL, repo: "owner/repo", token: "redacted"}
+
+	require.NoError(t, client.EnsureLabel(context.Background()))
+	require.Equal(t, 2, requests)
+}
+
+func TestGitHubIssueCreateRejectsDroppedLabel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"number":7,"title":"[monitoring] Remote Stratum health check failing","body":"event"}`))
+	}))
+	defer server.Close()
+	client := &githubIssues{client: server.Client(), baseURL: server.URL, repo: "owner/repo", token: "redacted"}
+
+	_, err := client.Create(context.Background(), "event")
+	require.Error(t, err)
 }
 
 func TestHTTPProbeRequiresExactStableContractAndDoesNotLeakBody(t *testing.T) {
 	probe, server := newProbeTestServer(t, 200, `{"service":"Stratum","status":"degraded","secret":"do-not-log"}`)
 	defer server.Close()
 
-	category := probe.Check(context.Background())
+	category := probe.Check(context.Background()).category
 
 	require.Equal(t, diagnosticContract, category)
 	require.NotContains(t, string(category), "do-not-log")
@@ -223,7 +293,7 @@ func TestHTTPProbeRejectsUnknownHealthFields(t *testing.T) {
 	probe, server := newProbeTestServer(t, 200, `{"service":"Stratum","status":"ok","extra":"unexpected"}`)
 	defer server.Close()
 
-	require.Equal(t, diagnosticContract, probe.Check(context.Background()))
+	require.Equal(t, diagnosticContract, probe.Check(context.Background()).category)
 }
 
 type stubProbe struct {
@@ -231,16 +301,18 @@ type stubProbe struct {
 	calls   int
 }
 
-func (s *stubProbe) Check(context.Context) diagnosticCategory {
+func (s *stubProbe) Check(context.Context) probeResult {
 	index := s.calls
 	s.calls++
 	if index >= len(s.results) {
 		index = len(s.results) - 1
 	}
-	return s.results[index].category
+	result := s.results[index]
+	if result.category == diagnosticTransport {
+		result.retry = true
+	}
+	return result
 }
-
-type probeResult struct{ category diagnosticCategory }
 
 type stubIssues struct {
 	open      *issue
@@ -253,10 +325,11 @@ type stubIssues struct {
 	updateErr error
 }
 
+func (s *stubIssues) EnsureLabel(context.Context) error        { return nil }
 func (s *stubIssues) FindOpen(context.Context) (*issue, error) { return s.open, s.findErr }
 func (s *stubIssues) Create(_ context.Context, body string) (*issue, error) {
 	s.created = append(s.created, body)
-	return &issue{Number: 101, Title: issueTitle, Body: body}, nil
+	return &issue{Number: 101, Title: issueTitle, Body: body, Labels: []label{{Name: issueLabel}}}, nil
 }
 func (s *stubIssues) Update(_ context.Context, number int, body string) error {
 	if s.updateErr != nil {
@@ -287,13 +360,13 @@ func (s *stubSender) Send(_ context.Context, message alerting.FeishuMessage) err
 func fixedNow() time.Time { return time.Date(2026, 7, 29, 1, 2, 3, 0, time.UTC) }
 
 func firingIssue(number int, notification string) *issue {
-	return &issue{Number: number, Title: issueTitle, Body: issueBody(
+	return &issue{Number: number, Title: issueTitle, Labels: []label{{Name: issueLabel}}, Body: issueBody(
 		fixedNow().Format(time.RFC3339), "firing", diagnosticTransport, notification,
 	)}
 }
 
 func resolvedIssue(number int, notification string) *issue {
-	return &issue{Number: number, Title: issueTitle, Body: issueBody(
+	return &issue{Number: number, Title: issueTitle, Labels: []label{{Name: issueLabel}}, Body: issueBody(
 		fixedNow().Format(time.RFC3339), "resolved", diagnosticNone, notification,
 	)}
 }

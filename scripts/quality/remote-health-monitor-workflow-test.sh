@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKFLOW="${ROOT}/.github/workflows/remote-health-monitor.yml"
+MAKEFILE="${ROOT}/Makefile"
 
 require() {
     local pattern="$1" description="$2"
@@ -37,3 +38,8 @@ require 'GITHUB_REPOSITORY:[[:space:]]*\$\{\{ github\.repository \}\}' 'reposito
 require 'go run ./cmd/remote-health-monitor' 'monitor execution'
 reject 'continue-on-error:[[:space:]]*true' 'failure suppression'
 reject 'curl|wget' 'unsafe parallel HTTP implementation'
+
+if ! grep -Eq 'bash scripts/quality/remote-health-monitor-workflow-test\.sh' "${MAKEFILE}"; then
+    echo 'remote health workflow contract missing: monitoring guardrail integration' >&2
+    exit 1
+fi

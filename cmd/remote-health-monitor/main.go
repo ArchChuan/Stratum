@@ -21,6 +21,7 @@ const (
 	monitorBudget    = 30 * time.Second
 	requestTimeout   = 8 * time.Second
 	maxProbeAttempts = 3
+	probeBackoffBase = 100 * time.Millisecond
 	maxResponseBytes = 64 << 10
 	issueLabel       = "remote-health-monitor"
 	issueTitle       = "[monitoring] Remote Stratum health check failing"
@@ -41,20 +42,59 @@ const (
 )
 
 type probe interface {
-	Check(context.Context) diagnosticCategory
+	Check(context.Context) probeResult
+}
+
+type probeResult struct {
+	category diagnosticCategory
+	retry    bool
 }
 
 type issue struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	Body   string `json:"body"`
+	Number int     `json:"number"`
+	Title  string  `json:"title"`
+	Body   string  `json:"body"`
+	Labels []label `json:"labels"`
+}
+
+type label struct {
+	Name string `json:"name"`
 }
 
 type issueStore interface {
+	EnsureLabel(context.Context) error
 	FindOpen(context.Context) (*issue, error)
 	Create(context.Context, string) (*issue, error)
 	Update(context.Context, int, string) error
 	Close(context.Context, int, string) error
+}
+
+func (g *githubIssues) EnsureLabel(ctx context.Context) error {
+	endpoint := fmt.Sprintf("%s/repos/%s/labels/%s", g.baseURL, g.repo, issueLabel)
+	var existing label
+	status, err := g.doJSONStatus(ctx, http.MethodGet, endpoint, nil, &existing)
+	if err == nil && status == http.StatusOK {
+		if existing.Name != issueLabel {
+			return errors.New("ensure monitor label: invalid response")
+		}
+		return nil
+	}
+	if status != http.StatusNotFound {
+		return fmt.Errorf("ensure monitor label: %w", err)
+	}
+	payload := struct {
+		Name        string `json:"name"`
+		Color       string `json:"color"`
+		Description string `json:"description"`
+	}{Name: issueLabel, Color: "d73a4a", Description: "External remote health monitor durable state"}
+	var created label
+	if _, err := g.doJSONStatus(ctx, http.MethodPost, fmt.Sprintf("%s/repos/%s/labels", g.baseURL, g.repo), payload, &created); err != nil {
+		return fmt.Errorf("create monitor label: %w", err)
+	}
+	if created.Name != issueLabel {
+		return errors.New("create monitor label: invalid response")
+	}
+	return nil
 }
 
 type messageSender interface {
@@ -66,22 +106,25 @@ type httpProbe struct {
 	url    string
 }
 
-func (p *httpProbe) Check(ctx context.Context) diagnosticCategory {
+func (p *httpProbe) Check(ctx context.Context) probeResult {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url, nil)
 	if err != nil {
-		return diagnosticTransport
+		return probeResult{category: diagnosticTransport, retry: true}
 	}
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return diagnosticTransport
+		return probeResult{category: diagnosticTransport, retry: true}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return diagnosticHTTPStatus
+		return probeResult{
+			category: diagnosticHTTPStatus,
+			retry:    resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500,
+		}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil || len(body) > maxResponseBytes {
-		return diagnosticContract
+		return probeResult{category: diagnosticContract}
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
@@ -90,12 +133,12 @@ func (p *httpProbe) Check(ctx context.Context) diagnosticCategory {
 		Status  string `json:"status"`
 	}
 	if err := decoder.Decode(&health); err != nil || health.Service != expectedService || health.Status != expectedStatus {
-		return diagnosticContract
+		return probeResult{category: diagnosticContract}
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return diagnosticContract
+		return probeResult{category: diagnosticContract}
 	}
-	return diagnosticNone
+	return probeResult{}
 }
 
 type githubIssues struct {
@@ -120,6 +163,9 @@ func (g *githubIssues) FindOpen(ctx context.Context) (*issue, error) {
 	if issues[0].Title != issueTitle {
 		return nil, errors.New("query monitor issue: title mismatch")
 	}
+	if !hasMonitorLabel(issues[0].Labels) {
+		return nil, errors.New("query monitor issue: label missing")
+	}
 	return &issues[0], nil
 }
 
@@ -133,7 +179,7 @@ func (g *githubIssues) Create(ctx context.Context, body string) (*issue, error) 
 	if err := g.doJSON(ctx, http.MethodPost, fmt.Sprintf("%s/repos/%s/issues", g.baseURL, g.repo), payload, &created); err != nil {
 		return nil, err
 	}
-	if created.Number <= 0 || created.Title != issueTitle || created.Body != body {
+	if created.Number <= 0 || created.Title != issueTitle || created.Body != body || !hasMonitorLabel(created.Labels) {
 		return nil, errors.New("create monitor issue: invalid response")
 	}
 	return &created, nil
@@ -158,17 +204,22 @@ func (g *githubIssues) patch(ctx context.Context, number int, payload any) error
 }
 
 func (g *githubIssues) doJSON(ctx context.Context, method, endpoint string, payload, result any) error {
+	_, err := g.doJSONStatus(ctx, method, endpoint, payload, result)
+	return err
+}
+
+func (g *githubIssues) doJSONStatus(ctx context.Context, method, endpoint string, payload, result any) (int, error) {
 	var body io.Reader
 	if payload != nil {
 		encoded, err := json.Marshal(payload)
 		if err != nil {
-			return errors.New("encode GitHub request")
+			return 0, errors.New("encode GitHub request")
 		}
 		body = bytes.NewReader(encoded)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
-		return errors.New("build GitHub request")
+		return 0, errors.New("build GitHub request")
 	}
 	req.Header.Set("Accept", githubAccept)
 	req.Header.Set("Authorization", "Bearer "+g.token)
@@ -178,18 +229,18 @@ func (g *githubIssues) doJSON(ctx context.Context, method, endpoint string, payl
 	}
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return errors.New("GitHub transport failure")
+		return 0, errors.New("GitHub transport failure")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("GitHub non-success status=%d", resp.StatusCode)
+		return resp.StatusCode, fmt.Errorf("GitHub non-success status=%d", resp.StatusCode)
 	}
 	if result != nil {
 		if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes+1)).Decode(result); err != nil {
-			return errors.New("decode GitHub response")
+			return resp.StatusCode, errors.New("decode GitHub response")
 		}
 	}
-	return nil
+	return resp.StatusCode, nil
 }
 
 type feishuSender struct {
@@ -207,11 +258,20 @@ func monitor(ctx context.Context, health probe, issues issueStore, sender messag
 	// GitHub issue state and Feishu delivery cannot be committed atomically. The outbox chooses
 	// no-loss, at-least-once delivery and keeps each pending event payload stable across retries.
 
+	if err := issues.EnsureLabel(ctx); err != nil {
+		return err
+	}
 	category := diagnosticNone
 	for attempt := 0; attempt < maxProbeAttempts; attempt++ {
-		category = health.Check(ctx)
-		if category == diagnosticNone {
+		outcome := health.Check(ctx)
+		category = outcome.category
+		if category == diagnosticNone || !outcome.retry {
 			break
+		}
+		if attempt < maxProbeAttempts-1 {
+			if err := sleepContext(ctx, probeBackoffBase<<attempt); err != nil {
+				return err
+			}
 		}
 	}
 	openIssue, err := issues.FindOpen(ctx)
@@ -224,85 +284,114 @@ func monitor(ctx context.Context, health probe, issues issueStore, sender messag
 		if openIssue.Title != issueTitle {
 			return errors.New("monitor issue title mismatch")
 		}
+		if !hasMonitorLabel(openIssue.Labels) {
+			return errors.New("monitor issue label missing")
+		}
 		state, err = parseIssueBody(openIssue.Body)
 		if err != nil {
 			return fmt.Errorf("parse monitor issue state: %w", err)
+		}
+	}
+	if openIssue != nil && state.Notification == "pending" {
+		sentBody, err := deliverPending(ctx, issues, sender, openIssue, state)
+		if err != nil {
+			return err
+		}
+		state.Notification, openIssue.Body = "sent", sentBody
+		if state.Status == "resolved" {
+			if err := issues.Close(ctx, openIssue.Number, sentBody); err != nil {
+				return fmt.Errorf("close monitor issue: %w", err)
+			}
+			openIssue, state = nil, nil
 		}
 	}
 	if category == diagnosticNone {
 		if openIssue == nil {
 			return nil
 		}
-		if state.Status == "resolved" && state.Notification == "sent" {
-			if err := issues.Close(ctx, openIssue.Number, openIssue.Body); err != nil {
-				return fmt.Errorf("close monitor issue: %w", err)
-			}
-			return nil
+		if state.Status == "resolved" {
+			return closeIssue(ctx, issues, openIssue)
 		}
-		eventTimestamp := timestamp
-		if state.Status == "resolved" && state.Notification == "pending" {
-			eventTimestamp = state.Timestamp.UTC().Format(time.RFC3339)
-		}
-		pendingBody := issueBody(eventTimestamp, "resolved", diagnosticNone, "pending")
-		if state.Status != "resolved" || state.Notification != "pending" {
-			if err := issues.Update(ctx, openIssue.Number, pendingBody); err != nil {
-				return fmt.Errorf("persist resolved pending state: %w", err)
-			}
-		}
-		message, err := renderMessage("resolved", eventTimestamp, diagnosticNone)
-		if err != nil {
+		return transitionAndDeliver(ctx, issues, sender, openIssue, timestamp, "resolved", diagnosticNone, true)
+	}
+	if openIssue == nil {
+		return createAndDeliver(ctx, issues, sender, timestamp, category)
+	}
+	if state.Status == "resolved" {
+		if err := closeIssue(ctx, issues, openIssue); err != nil {
 			return err
 		}
-		if err := sender.Send(ctx, message); err != nil {
-			return fmt.Errorf("send resolved notification: %w", err)
-		}
-		sentBody := issueBody(eventTimestamp, "resolved", diagnosticNone, "sent")
-		if err := issues.Update(ctx, openIssue.Number, sentBody); err != nil {
-			return fmt.Errorf("persist resolved sent state: %w", err)
-		}
-		if err := issues.Close(ctx, openIssue.Number, sentBody); err != nil {
-			return fmt.Errorf("close monitor issue: %w", err)
-		}
-		return nil
+		return createAndDeliver(ctx, issues, sender, timestamp, category)
 	}
+	return issues.Update(ctx, openIssue.Number, issueBody(timestamp, "firing", category, "sent"))
+}
 
-	eventTimestamp := timestamp
-	eventCategory := category
-	if openIssue != nil {
-		if state.Status == "firing" && state.Notification == "sent" {
-			if err := issues.Update(ctx, openIssue.Number, issueBody(timestamp, "firing", category, "sent")); err != nil {
-				return fmt.Errorf("update monitor issue: %w", err)
-			}
-			return nil
-		}
-		if state.Status == "firing" && state.Notification == "pending" {
-			eventTimestamp = state.Timestamp.UTC().Format(time.RFC3339)
-			eventCategory = state.Diagnostic
-		}
-		pendingBody := issueBody(eventTimestamp, "firing", eventCategory, "pending")
-		if state.Status != "firing" || state.Notification != "pending" {
-			if err := issues.Update(ctx, openIssue.Number, pendingBody); err != nil {
-				return fmt.Errorf("persist firing pending state: %w", err)
-			}
-		}
-	} else {
-		pendingBody := issueBody(eventTimestamp, "firing", eventCategory, "pending")
-		openIssue, err = issues.Create(ctx, pendingBody)
-		if err != nil {
-			return fmt.Errorf("create monitor issue: %w", err)
-		}
+func deliverPending(ctx context.Context, issues issueStore, sender messageSender, item *issue, state *issueState) (string, error) {
+	timestamp := state.Timestamp.UTC().Format(time.RFC3339)
+	message, err := renderMessage(state.Status, timestamp, state.Diagnostic)
+	if err != nil {
+		return "", err
 	}
-	message, err := renderMessage("firing", eventTimestamp, eventCategory)
+	if err := sender.Send(ctx, message); err != nil {
+		return "", fmt.Errorf("send %s notification: %w", state.Status, err)
+	}
+	sentBody := issueBody(timestamp, state.Status, state.Diagnostic, "sent")
+	if err := issues.Update(ctx, item.Number, sentBody); err != nil {
+		return "", fmt.Errorf("persist %s sent state: %w", state.Status, err)
+	}
+	return sentBody, nil
+}
+
+func transitionAndDeliver(ctx context.Context, issues issueStore, sender messageSender, item *issue, timestamp, status string, category diagnosticCategory, closeAfter bool) error {
+	pending := issueBody(timestamp, status, category, "pending")
+	if err := issues.Update(ctx, item.Number, pending); err != nil {
+		return fmt.Errorf("persist %s pending state: %w", status, err)
+	}
+	state, _ := parseIssueBody(pending)
+	sent, err := deliverPending(ctx, issues, sender, item, state)
 	if err != nil {
 		return err
 	}
-	if err := sender.Send(ctx, message); err != nil {
-		return fmt.Errorf("send firing notification: %w", err)
-	}
-	if err := issues.Update(ctx, openIssue.Number, issueBody(eventTimestamp, "firing", eventCategory, "sent")); err != nil {
-		return fmt.Errorf("persist firing sent state: %w", err)
+	if closeAfter {
+		return closeIssueBody(ctx, issues, item.Number, sent)
 	}
 	return nil
+}
+
+func createAndDeliver(ctx context.Context, issues issueStore, sender messageSender, timestamp string, category diagnosticCategory) error {
+	pending := issueBody(timestamp, "firing", category, "pending")
+	item, err := issues.Create(ctx, pending)
+	if err != nil {
+		return fmt.Errorf("create monitor issue: %w", err)
+	}
+	state, _ := parseIssueBody(pending)
+	_, err = deliverPending(ctx, issues, sender, item, state)
+	return err
+}
+
+func closeIssue(ctx context.Context, issues issueStore, item *issue) error {
+	return closeIssueBody(ctx, issues, item.Number, item.Body)
+}
+func closeIssueBody(ctx context.Context, issues issueStore, number int, body string) error {
+	if err := issues.Close(ctx, number, body); err != nil {
+		return fmt.Errorf("close monitor issue: %w", err)
+	}
+	return nil
+}
+
+func hasMonitorLabel(labels []label) bool {
+	return len(labels) == 1 && labels[0].Name == issueLabel
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 type issueState struct {
