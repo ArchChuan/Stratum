@@ -207,15 +207,27 @@ run_signal_case() {
         MONITORING_DEPLOY_TEST_REPORT_CLEANUP=1 \
         MONITORING_SMOKE_ATTEMPTS=1 MONITORING_SMOKE_INTERVAL_SEC=0 \
         MONITORING_VALIDATION_COMMAND="printf 'validation\\n' >>\"${case_dir}/calls.log\"" \
-        bash "${DEPLOY_SCRIPT}" >"${case_dir}/stdout.log" 2>"${case_dir}/stderr.log" &
+        /usr/bin/python3 -c '
+import os
+import signal
+import sys
+
+os.setsid()
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+os.execv("/bin/bash", ["bash", sys.argv[1]])
+' "${DEPLOY_SCRIPT}" >"${case_dir}/stdout.log" 2>"${case_dir}/stderr.log" &
     local deploy_pid=$!
 
-    timeout 5 bash -c '
+    if ! timeout 5 bash -c '
         while [[ ! -e "$1" ]]; do
             kill -0 "$2" >/dev/null 2>&1 || exit 1
         done
-    ' _ "${case_dir}/signal.ready" "${deploy_pid}" || \
+    ' _ "${case_dir}/signal.ready" "${deploy_pid}"; then
+        kill -TERM "${deploy_pid}" >/dev/null 2>&1 || :
+        wait "${deploy_pid}" >/dev/null 2>&1 || :
         fail 'signal test did not reach its deterministic termination point'
+    fi
     kill "-${signal}" "${deploy_pid}"
 
     set +e
@@ -226,7 +238,7 @@ run_signal_case() {
         fail "${signal} returned ${status}; expected fail-closed status ${expected_status}"
     assert_inventory_cleaned "${scenario}"
     assert_port_forward_cleaned "${scenario}"
-    cleanup_count=$(grep -c '^inventory directory removed: ' "${case_dir}/stderr.log")
+    cleanup_count=$(grep -c '^inventory directory removed: ' "${case_dir}/stderr.log" || true)
     [[ ${cleanup_count} -eq 1 ]] || \
         fail "${signal} cleanup ran ${cleanup_count} times; expected exactly once"
 }
