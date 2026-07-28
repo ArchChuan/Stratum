@@ -9,11 +9,11 @@
   "mutations": [
     "POST /auth/refresh", "POST /auth/oauth/exchange", "POST /auth/logout", "POST /auth/guest",
     "POST /auth/register", "POST /auth/switch-tenant", "POST /auth/create-tenant", "PATCH /tenant/settings",
-    "PATCH /tenant/embed-model", "POST /tenant/members/invite", "PATCH /tenant/members/:userId/role",
+    "POST /tenant/members/invite", "PATCH /tenant/members/:userId/role",
     "DELETE /tenant/members/:userId", "PATCH /admin/tenants/:tenantId", "POST /admin/tenants",
     "DELETE /admin/tenants/:tenantId", "DELETE /tenant", "POST /agents", "PUT /agents/:id",
     "DELETE /agents/:id", "POST /agents/:id/execute", "POST /agents/:id/execute/stream",
-    "PUT /agents/system/settings", "POST /agents/tool-approvals/:id/decision",
+    "POST /agents/tool-approvals/:id/decision",
     "POST /agents/tool-approvals/:id/resume", "POST /agents/:agentId/conversations",
     "PATCH /conversations/:convId", "DELETE /conversations/:convId", "POST /conversations/:convId/messages",
     "POST /skills", "PATCH /skills/:id/draft/capability", "PATCH /skills/:id/draft/activation",
