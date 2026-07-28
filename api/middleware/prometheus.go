@@ -18,26 +18,29 @@ func PrometheusMiddleware(metrics *observability.PrometheusMetrics, logger *zap.
 
 		// 增加正在处理的请求计数
 		metrics.IncHTTPRequestsInFlight()
+		defer func() {
+			recovered := recover()
+			status := c.Writer.Status()
+			if recovered != nil {
+				status = 500
+			}
+			metrics.DecHTTPRequestsInFlight()
+			duration := time.Since(start).Seconds()
+			path := metricsRouteLabel(c)
+			metrics.IncHTTPRequest(c.Request.Method, path, status)
+			metrics.RecordHTTPRequestDuration(c.Request.Method, path, duration)
+			logger.Debug("request metrics recorded",
+				zap.String("method", c.Request.Method),
+				zap.String("path", path),
+				zap.Int("status", status),
+				zap.Float64("duration_seconds", duration),
+			)
+			if recovered != nil {
+				panic(recovered)
+			}
+		}()
 
 		c.Next()
-
-		// 减少正在处理的请求计数
-		metrics.DecHTTPRequestsInFlight()
-
-		// 计算请求持续时间（秒）
-		duration := time.Since(start).Seconds()
-		path := metricsRouteLabel(c)
-
-		// 记录指标
-		metrics.IncHTTPRequest(c.Request.Method, path, c.Writer.Status())
-		metrics.RecordHTTPRequestDuration(c.Request.Method, path, duration)
-
-		logger.Debug("request metrics recorded",
-			zap.String("method", c.Request.Method),
-			zap.String("path", path),
-			zap.Int("status", c.Writer.Status()),
-			zap.Float64("duration_seconds", duration),
-		)
 	}
 }
 

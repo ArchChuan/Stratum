@@ -30,7 +30,7 @@
     },
     {
       "gridPos": {"h": 4, "w": 24, "x": 0, "y": 8}, "id": 4,
-      "options": {"content": "该视图只使用经过规则测试的路由模板聚合指标。路径来自 Gin 路由模板，例如 `/agents/:id`；未匹配请求和原始动态标识不会进入看板。", "mode": "markdown"},
+      "options": {"content": "该视图只使用经过规则测试的路由模板聚合指标。路径来自 Gin 的 `FullPath()`，例如 `/agents/:id`；未匹配请求和原始动态标识不会进入看板。", "mode": "markdown"},
       "title": "查询边界", "type": "text"
     }
   ],

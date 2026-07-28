@@ -27,13 +27,12 @@ fail() {
 
 generate_manifest() {
     local output="$1"
-    local index file json
+    local index file
 
     printf 'apiVersion: v1\nkind: List\nitems:\n' >"${output}"
     for index in "${!dashboard_names[@]}"; do
         file="${DASHBOARD_DIR}/${dashboard_names[index]}.json"
         [[ -f "${file}" ]] || fail "missing ${file#"${ROOT}/"}"
-        json="$(jq -cS . "${file}")"
         printf '%s\n' \
             '  - apiVersion: v1' \
             '    kind: ConfigMap' \
@@ -44,7 +43,8 @@ generate_manifest() {
             '        grafana_dashboard: "1"' \
             '        app.kubernetes.io/part-of: stratum-monitoring' \
             '    data:' \
-            "      ${dashboard_names[index]}.json: ${json@Q}" >>"${output}"
+            "      ${dashboard_names[index]}.json: |-" >>"${output}"
+        jq -S . "${file}" | sed 's/^/        /' >>"${output}"
     done
 }
 
@@ -84,12 +84,18 @@ for index in "${!dashboard_names[@]}"; do
     ' "${file}" >/dev/null || fail "non-prometheus or missing datasource in ${file#"${ROOT}/"}"
 
     jq -e '
-        [.panels[] | select(.type != "row") | .gridPos] |
-        length > 0 and all(
+        [.panels[] | select(.type != "row") | .gridPos] as $panels |
+        ($panels | length > 0 and all(
             (.x | type == "number") and (.y | type == "number") and
             (.w | type == "number") and (.h | type == "number") and
             .x >= 0 and .y >= 0 and .w > 0 and .h > 0 and (.x + .w) <= 24
-        )
+        )) and
+        all(range(0; $panels | length); . as $left |
+            all(range($left + 1; $panels | length); . as $right |
+                (($panels[$left].x + $panels[$left].w <= $panels[$right].x) or
+                 ($panels[$right].x + $panels[$right].w <= $panels[$left].x) or
+                 ($panels[$left].y + $panels[$left].h <= $panels[$right].y) or
+                 ($panels[$right].y + $panels[$right].h <= $panels[$left].y))))
     ' "${file}" >/dev/null || fail "unstable or out-of-grid panel dimensions in ${file#"${ROOT}/"}"
 
     if jq -e '[.templating.list[]? | ((.name // "") + " " + (.query // ""))] | join(" ") |
@@ -146,5 +152,6 @@ command -v "${PROMTOOL_COMMAND[0]}" >/dev/null || fail 'promtool is required to 
 GENERATED="${TMP_ROOT}/dashboards.yaml"
 generate_manifest "${GENERATED}"
 cmp -s "${GENERATED}" "${MANIFEST}" || fail 'dashboard ConfigMaps are stale; run monitoring-dashboard-test.sh --generate'
+go run "${ROOT}/scripts/quality/monitoring-dashboard-roundtrip.go" "${MANIFEST}" "${DASHBOARD_DIR}"
 
 printf 'Monitoring dashboard contracts passed\n'
