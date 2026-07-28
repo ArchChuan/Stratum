@@ -155,10 +155,6 @@ func (s *ToolApprovalService) ApprovedPayload(ctx context.Context, tenantID, app
 	return payload, nil
 }
 
-func toolApprovalBindingMatches(tenantID string, row domain.ToolApproval, payload ToolApprovalPayload) bool {
-	return len(toolApprovalBindingMismatches(tenantID, row, payload)) == 0
-}
-
 func toolApprovalBindingMismatches(tenantID string, row domain.ToolApproval, payload ToolApprovalPayload) []string {
 	argumentsDigest, argumentsErr := CanonicalToolArgumentsDigest(payload.Arguments)
 	skillDigest, skillErr := canonicalSkillRevisionsDigest(payload.PinnedSkillRevisions)
