@@ -57,7 +57,9 @@ inhibit_rules:
   - source_matchers:
       - alertname = "StratumPublicEndpointDown"
     target_matchers:
-      - alertname =~ "Stratum(BackendUnavailable|FrontendUnavailable|TargetMissing)"
+      - service = "stratum"
+      - component != ""
+      - component !~ "public-endpoint|prometheus|alertmanager|notification|blackbox"
     equal:
       - service
       - environment
@@ -77,6 +79,7 @@ inhibit_rules:
       - service
       - environment
       - namespace
+      - deployment
   - source_matchers:
       - severity = "critical"
       - alert_family != ""
@@ -90,9 +93,11 @@ inhibit_rules:
       - environment
       - alert_family
       - namespace
+      - deployment
+      - pod
+      - container
       - persistentvolumeclaim
       - node
       - instance
       - device
       - mountpoint
-

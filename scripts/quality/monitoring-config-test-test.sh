@@ -32,11 +32,27 @@ TOOL
     chmod +x "${FAKE_BIN}/${tool}"
 done
 
+cat >"${FAKE_BIN}/alertmanager-routing-test" <<'TOOL'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'routing %s\n' "$*" >>"${CALLS:?}"
+if [[ "${FAIL_TOOL:-}" == "routing" ]]; then
+    exit 17
+fi
+TOOL
+chmod +x "${FAKE_BIN}/alertmanager-routing-test"
+
 run_validator() {
-    CALLS="${CALLS}" PATH="${FAKE_BIN}:${PATH}" bash "${VALIDATOR}"
+    CALLS="${CALLS}" ALERTMANAGER_ROUTING_TEST="${FAKE_BIN}/alertmanager-routing-test" \
+        PATH="${FAKE_BIN}:${PATH}" bash "${VALIDATOR}"
 }
 
 run_validator >/dev/null
+
+if ! grep -q '^routing ' "${CALLS}"; then
+    echo 'validator did not invoke Alertmanager routing contracts' >&2
+    exit 1
+fi
 
 for expected in helm promtool amtool; do
     if ! grep -q "^${expected} " "${CALLS}"; then
@@ -57,5 +73,10 @@ assert_fails() {
 assert_fails helm
 assert_fails promtool
 assert_fails amtool
+if FAIL_TOOL=routing CALLS="${CALLS}" ALERTMANAGER_ROUTING_TEST="${FAKE_BIN}/alertmanager-routing-test" \
+    PATH="${FAKE_BIN}:${PATH}" bash "${VALIDATOR}" >/dev/null 2>&1; then
+    echo 'validator swallowed routing contract failure' >&2
+    exit 1
+fi
 
 echo 'Monitoring validator self-tests passed'

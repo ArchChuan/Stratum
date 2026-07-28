@@ -1,6 +1,9 @@
 groups:
   - name: stratum-workloads
     rules:
+      - record: stratum:kube_pod_owner:deployment
+        expr: max by (namespace, pod, deployment) (max by (namespace, pod, replicaset) (label_replace(kube_pod_owner{namespace="stratum",owner_kind="ReplicaSet"}, "replicaset", "$1", "owner_name", "(.+)")) * on (namespace, replicaset) group_left (deployment) max by (namespace, replicaset, deployment) (label_replace(kube_replicaset_owner{namespace="stratum",owner_kind="Deployment"}, "deployment", "$1", "owner_name", "(.+)")))
+
       - alert: StratumNodeNotReady
         expr: max by (node) (kube_node_status_condition{condition="Ready",status="true"} == 0) and on (node) max by (node) (kube_pod_info{namespace="stratum"})
         for: 5m
@@ -16,13 +19,14 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#node-not-ready
 
       - alert: StratumPodRestartingFrequently
-        expr: (increase(kube_pod_container_status_restarts_total{namespace="stratum"}[10m]) > 3) * on (namespace, pod) group_left (node) max by (namespace, pod, node) (kube_pod_info{namespace="stratum"})
+        expr: ((increase(kube_pod_container_status_restarts_total{namespace="stratum"}[10m]) > 3) * on (namespace, pod) group_left (node) max by (namespace, pod, node) (kube_pod_info{namespace="stratum"})) * on (namespace, pod) group_left (deployment) stratum:kube_pod_owner:deployment
         for: 2m
         labels:
           severity: warning
           service: stratum
           environment: remote-test
           component: workload
+          alert_family: pod-health
         annotations:
           summary: A Stratum container is restarting frequently
           description: The container restarted more than three times in ten minutes (current value {{ $value }}).
@@ -30,13 +34,14 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#pod-restarting-frequently
 
       - alert: StratumPodCrashLooping
-        expr: (kube_pod_container_status_waiting_reason{namespace="stratum",reason="CrashLoopBackOff"} == 1) * on (namespace, pod) group_left (node) max by (namespace, pod, node) (kube_pod_info{namespace="stratum"})
+        expr: ((kube_pod_container_status_waiting_reason{namespace="stratum",reason="CrashLoopBackOff"} == 1) * on (namespace, pod) group_left (node) max by (namespace, pod, node) (kube_pod_info{namespace="stratum"})) * on (namespace, pod) group_left (deployment) stratum:kube_pod_owner:deployment
         for: 5m
         labels:
           severity: critical
           service: stratum
           environment: remote-test
           component: workload
+          alert_family: pod-health
         annotations:
           summary: A Stratum container is crash looping
           description: The container has remained in CrashLoopBackOff for five minutes (current value {{ $value }}).
@@ -44,7 +49,7 @@ groups:
           runbook_url: /docs/operations/remote-monitoring-runbook.md#pod-crash-looping
 
       - alert: StratumPodPendingTooLong
-        expr: (kube_pod_status_phase{namespace="stratum",phase="Pending"} == 1) * on (namespace, pod) group_left (node) max by (namespace, pod, node) (kube_pod_info{namespace="stratum"})
+        expr: ((kube_pod_status_phase{namespace="stratum",phase="Pending"} == 1) * on (namespace, pod) group_left (node) max by (namespace, pod, node) (kube_pod_info{namespace="stratum"})) * on (namespace, pod) group_left (deployment) stratum:kube_pod_owner:deployment
         for: 15m
         labels:
           severity: warning

@@ -27,6 +27,7 @@ if [[ -d "${ROOT}/monitoring/remote/rules" ]]; then
 fi
 promtool test rules "${ROOT}/monitoring/remote/tests/stratum-rules.test.yaml"
 amtool check-config "${ROOT}/monitoring/remote/alertmanager/alertmanager.yaml"
+bash "${ALERTMANAGER_ROUTING_TEST:-${ROOT}/scripts/quality/alertmanager-routing-test.sh}"
 
 if [[ -d "${ROOT}/monitoring/remote/dashboards" ]]; then
     find "${ROOT}/monitoring/remote/dashboards" -type f -name '*.json' -print0 | \

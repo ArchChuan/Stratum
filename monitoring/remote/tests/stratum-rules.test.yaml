@@ -20,6 +20,10 @@ tests:
         values: '0+1x7'
       - series: 'kube_pod_info{namespace="stratum",pod="stratum-abc",node="remote-node"}'
         values: '1x7'
+      - series: 'kube_pod_owner{namespace="stratum",pod="stratum-abc",owner_kind="ReplicaSet",owner_name="stratum-abc-rs"}'
+        values: '1x7'
+      - series: 'kube_replicaset_owner{namespace="stratum",replicaset="stratum-abc-rs",owner_kind="Deployment",owner_name="stratum"}'
+        values: '1x7'
     promql_expr_test:
       - expr: ALERTS{alertname="StratumNodeNotReady",alertstate="firing"}
         eval_time: 5m
@@ -29,7 +33,12 @@ tests:
       - expr: ALERTS{alertname="StratumPodRestartingFrequently",alertstate="firing"}
         eval_time: 6m
         exp_samples:
-          - labels: '{__name__="ALERTS",alertname="StratumPodRestartingFrequently",alertstate="firing",component="workload",container="stratum",environment="remote-test",namespace="stratum",node="remote-node",pod="stratum-abc",service="stratum",severity="warning"}'
+          - labels: '{__name__="ALERTS",alert_family="pod-health",alertname="StratumPodRestartingFrequently",alertstate="firing",component="workload",container="stratum",deployment="stratum",environment="remote-test",namespace="stratum",node="remote-node",pod="stratum-abc",service="stratum",severity="warning"}'
+            value: 1
+      - expr: stratum:kube_pod_owner:deployment{namespace="stratum",pod="stratum-abc"}
+        eval_time: 1m
+        exp_samples:
+          - labels: '{__name__="stratum:kube_pod_owner:deployment",deployment="stratum",namespace="stratum",pod="stratum-abc"}'
             value: 1
 
   - name: workload rules detect crash loops and prolonged pending pods
@@ -43,18 +52,26 @@ tests:
         values: '1x18'
       - series: 'kube_pod_info{namespace="stratum",pod="pending-pod",node="remote-node"}'
         values: '1x18'
+      - series: 'kube_pod_owner{namespace="stratum",pod="crashing-pod",owner_kind="ReplicaSet",owner_name="stratum-crash-rs"}'
+        values: '1x18'
+      - series: 'kube_replicaset_owner{namespace="stratum",replicaset="stratum-crash-rs",owner_kind="Deployment",owner_name="stratum"}'
+        values: '1x18'
+      - series: 'kube_pod_owner{namespace="stratum",pod="pending-pod",owner_kind="ReplicaSet",owner_name="frontend-pending-rs"}'
+        values: '1x18'
+      - series: 'kube_replicaset_owner{namespace="stratum",replicaset="frontend-pending-rs",owner_kind="Deployment",owner_name="stratum-frontend"}'
+        values: '1x18'
       - series: 'kube_pod_container_status_waiting_reason{namespace="other",pod="foreign-pod",container="other",reason="CrashLoopBackOff"}'
         values: '1x18'
     promql_expr_test:
       - expr: ALERTS{alertname="StratumPodCrashLooping",alertstate="firing"}
         eval_time: 5m
         exp_samples:
-          - labels: '{__name__="ALERTS",alertname="StratumPodCrashLooping",alertstate="firing",component="workload",container="stratum",environment="remote-test",namespace="stratum",node="remote-node",pod="crashing-pod",reason="CrashLoopBackOff",service="stratum",severity="critical"}'
+          - labels: '{__name__="ALERTS",alert_family="pod-health",alertname="StratumPodCrashLooping",alertstate="firing",component="workload",container="stratum",deployment="stratum",environment="remote-test",namespace="stratum",node="remote-node",pod="crashing-pod",reason="CrashLoopBackOff",service="stratum",severity="critical"}'
             value: 1
       - expr: ALERTS{alertname="StratumPodPendingTooLong",alertstate="firing"}
         eval_time: 15m
         exp_samples:
-          - labels: '{__name__="ALERTS",alertname="StratumPodPendingTooLong",alertstate="firing",component="workload",environment="remote-test",namespace="stratum",node="remote-node",phase="Pending",pod="pending-pod",service="stratum",severity="warning"}'
+          - labels: '{__name__="ALERTS",alertname="StratumPodPendingTooLong",alertstate="firing",component="workload",deployment="stratum-frontend",environment="remote-test",namespace="stratum",node="remote-node",phase="Pending",pod="pending-pod",service="stratum",severity="warning"}'
             value: 1
 
   - name: capacity rules detect low node memory and PVC thresholds
