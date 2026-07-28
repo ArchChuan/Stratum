@@ -19,7 +19,14 @@ func NewModelHandler(svc *llmapp.ModelService) *ModelHandler {
 }
 
 // ListModels GET /models — returns chat and embedding model names, sorted, no auth required.
+// When a tenant context is available (e.g. JWT-authenticated request), it uses the
+// tenant-scoped catalogue to return only the tenant's enabled models.
 func (h *ModelHandler) ListModels(c *gin.Context) {
-	chat, embedding := h.svc.Catalogue(c.Request.Context())
+	var chat, embedding []string
+	if tid, ok := tenantIDFromCtx(c); ok {
+		chat, embedding = h.svc.CatalogueWithTenant(c.Request.Context(), tid)
+	} else {
+		chat, embedding = h.svc.Catalogue(c.Request.Context())
+	}
 	c.JSON(http.StatusOK, gin.H{"models": chat, "embedding_models": embedding})
 }

@@ -45,6 +45,7 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerKnowledge(r, c, requireActive)
 	registerMCP(r, c, requireActive)
 	registerMemory(r, c, requireActive)
+	registerLLMAdmin(r, c, requireActive)
 	return r
 }
 
@@ -375,4 +376,35 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 	g.GET("/summary/:session_id", userHandler.GetSummary)
 	g.DELETE("/:id", userHandler.DeleteMemory)
 	g.DELETE("/session/:session_id", userHandler.ClearSession)
+}
+
+// registerLLMAdmin wires /admin/providers and /admin/models under JWT + tenant
+// context with the admin role. These routes are only registered when the
+// LLMGateway is fully built (DB available).
+func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.LLMGateway == nil || c.LLMGateway.ProviderService == nil || c.LLMGateway.ModelMgmtService == nil {
+		return
+	}
+	providerH := handler.NewProviderHandler(c.LLMGateway.ProviderService)
+	modelMgmtH := handler.NewModelMgmtHandler(c.LLMGateway.ModelMgmtService)
+	adminMW := middleware.RequireTenantRole("admin")
+
+	providers := r.Group("/admin/providers", protectedTenantMiddleware(c, adminMW)...)
+	{
+		providers.GET("", providerH.List)
+		providers.POST("", requireActive, providerH.Create)
+		providers.PUT("/:id", requireActive, providerH.Update)
+		providers.DELETE("/:id", requireActive, providerH.Delete)
+		providers.POST("/:id/discover", requireActive, providerH.Discover)
+		providers.POST("/:id/health", requireActive, providerH.HealthCheck)
+	}
+
+	models := r.Group("/admin/models", protectedTenantMiddleware(c, adminMW)...)
+	{
+		models.GET("", modelMgmtH.List)
+		models.GET("/:id", modelMgmtH.Get)
+		models.PUT("/:id", modelMgmtH.Update)
+		models.PATCH("/:id/toggle", modelMgmtH.Toggle)
+		models.DELETE("/:id", modelMgmtH.Delete)
+	}
 }

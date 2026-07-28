@@ -23,11 +23,16 @@ import (
 //
 // ModelService surfaces the model catalogue to HTTP handlers without
 // leaking the infrastructure type across layers.
+//
+// ProviderService and ModelMgmtService expose tenant-scoped admin CRUD
+// operations to HTTP handlers for provider and model management.
 type LLMGateway struct {
-	Gateway      *llmgateway.Gateway
-	Metrics      *observability.PrometheusMetrics
-	ModelService *llmapp.ModelService
-	Registry     *llmgateway.ModelRegistry
+	Gateway          *llmgateway.Gateway
+	Metrics          *observability.PrometheusMetrics
+	ModelService     *llmapp.ModelService
+	Registry         *llmgateway.ModelRegistry
+	ProviderService  *llmapp.ProviderService
+	ModelMgmtService *llmapp.ModelMgmtService
 }
 
 func (c *Container) buildLLMGateway(_ context.Context) error {
@@ -65,11 +70,16 @@ func (c *Container) buildLLMGateway(_ context.Context) error {
 	gw := llmgateway.NewGateway(registry, chatProtos, embedProtos).
 		WithLogger(c.Logger).WithMetrics(metrics)
 
+	providerSvc := llmapp.NewProviderService(providerRepo, modelRepo, chatProtos)
+	mgmtSvc := llmapp.NewModelMgmtService(modelRepo)
+
 	c.LLMGateway = &LLMGateway{
-		Gateway:      gw,
-		Metrics:      metrics,
-		ModelService: llmapp.NewModelService(registry),
-		Registry:     registry,
+		Gateway:          gw,
+		Metrics:          metrics,
+		ModelService:     llmapp.NewModelService(registry),
+		Registry:         registry,
+		ProviderService:  providerSvc,
+		ModelMgmtService: mgmtSvc,
 	}
 	return nil
 }
