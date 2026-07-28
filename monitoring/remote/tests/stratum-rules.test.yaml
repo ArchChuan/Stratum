@@ -113,7 +113,7 @@ tests:
               component: public-endpoint
             exp_annotations:
               summary: Stratum public endpoint is unavailable
-              description: The remote public health probe has failed for three minutes (current value 1).
+              description: The remote public health probe has failed for three minutes (current value 0).
               dashboard_url: /d/stratum-service-overview
               runbook_url: /docs/operations/remote-monitoring-runbook.md#public-endpoint-down
       - eval_time: 3m
@@ -128,7 +128,7 @@ tests:
               component: backend
             exp_annotations:
               summary: Stratum backend has no ready replicas
-              description: The backend deployment has had no ready replicas for three minutes (current value 1).
+              description: The backend deployment has had no ready replicas for three minutes (current value 0).
               dashboard_url: /d/stratum-service-overview
               runbook_url: /docs/operations/remote-monitoring-runbook.md#backend-unavailable
       - eval_time: 3m
@@ -143,7 +143,7 @@ tests:
               component: frontend
             exp_annotations:
               summary: Stratum frontend has no ready replicas
-              description: The frontend deployment has had no ready replicas for three minutes (current value 1).
+              description: The frontend deployment has had no ready replicas for three minutes (current value 0).
               dashboard_url: /d/stratum-service-overview
               runbook_url: /docs/operations/remote-monitoring-runbook.md#frontend-unavailable
       - eval_time: 6m
