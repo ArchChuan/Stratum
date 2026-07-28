@@ -1,0 +1,38 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [{"title": "依赖告警运行手册", "type": "link", "url": "/docs/operations/remote-monitoring-runbook.md#dependency-target-missing"}],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 6, "w": 12, "x": 0, "y": 0}, "id": 1,
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "text": "不可抓取"}, "1": {"color": "green", "text": "正常"}}, "type": "value"}]}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{namespace=\"stratum\",service=\"stratum-etcd-metrics\",endpoint=\"metrics\"}", "legendFormat": "etcd", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{namespace=\"stratum\",service=\"stratum-milvus-metrics\",endpoint=\"metrics\"}", "legendFormat": "Milvus", "refId": "B"}
+      ],
+      "title": "已验证业务依赖", "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 6, "w": 12, "x": 12, "y": 0}, "id": 2,
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "text": "不可抓取"}, "1": {"color": "green", "text": "正常"}}, "type": "value"}]}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{namespace=\"monitoring\",service=\"stratum-feishu-alert-adapter\",endpoint=\"http\"}", "legendFormat": "飞书适配器", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{namespace=\"monitoring\",service=\"kps-kube-prometheus-stack-prometheus\",endpoint=\"http-web\"}", "legendFormat": "Prometheus", "refId": "B"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{namespace=\"monitoring\",service=\"kps-kube-prometheus-stack-alertmanager\",endpoint=\"http-web\"}", "legendFormat": "Alertmanager", "refId": "C"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{namespace=\"monitoring\",service=\"stratum-blackbox-prometheus-blackbox-exporter\",endpoint=\"http\"}", "legendFormat": "Blackbox Exporter", "refId": "D"}
+      ],
+      "title": "监控链路", "type": "stat"
+    },
+    {
+      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 6}, "id": 3,
+      "options": {"content": "**未覆盖 / 不支持**\n\nPostgreSQL、Redis、NATS 与 MinIO 尚无经 Task 7 验证的抓取目标。本看板不推测这些依赖的健康状态；请按运行手册使用应用告警与受控诊断命令排查。", "mode": "markdown"},
+      "title": "覆盖边界", "type": "text"
+    }
+  ],
+  "refresh": "30s", "schemaVersion": 39, "tags": ["stratum", "remote-test"],
+  "templating": {"list": []}, "time": {"from": "now-6h", "to": "now"}, "timezone": "browser",
+  "title": "Stratum 依赖与监控链路", "uid": "stratum-remote-dependencies", "version": 1
+}

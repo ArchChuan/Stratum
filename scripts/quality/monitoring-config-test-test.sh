@@ -65,9 +65,20 @@ fi
 TOOL
 chmod +x "${FAKE_BIN}/alertmanager-routing-test"
 
+cat >"${FAKE_BIN}/monitoring-dashboard-test" <<'TOOL'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'dashboards %s\n' "$*" >>"${CALLS:?}"
+if [[ "${FAIL_TOOL:-}" == "dashboards" ]]; then
+    exit 17
+fi
+TOOL
+chmod +x "${FAKE_BIN}/monitoring-dashboard-test"
+
 run_validator() {
     CALLS="${CALLS}" TEST_ROOT="${ROOT}" \
         ALERTMANAGER_ROUTING_TEST="${FAKE_BIN}/alertmanager-routing-test" \
+        MONITORING_DASHBOARD_TEST="${FAKE_BIN}/monitoring-dashboard-test" \
         PATH="${FAKE_BIN}:${PATH}" bash "${VALIDATOR}"
 }
 
@@ -75,6 +86,10 @@ run_validator >/dev/null
 
 if ! grep -q '^routing ' "${CALLS}"; then
     echo 'validator did not invoke Alertmanager routing contracts' >&2
+    exit 1
+fi
+if ! grep -q '^dashboards ' "${CALLS}"; then
+    echo 'validator did not invoke dashboard contracts' >&2
     exit 1
 fi
 
@@ -89,6 +104,7 @@ assert_fails() {
     local failing_tool="$1"
     if FAIL_TOOL="${failing_tool}" CALLS="${CALLS}" TEST_ROOT="${ROOT}" \
         ALERTMANAGER_ROUTING_TEST="${FAKE_BIN}/alertmanager-routing-test" \
+        MONITORING_DASHBOARD_TEST="${FAKE_BIN}/monitoring-dashboard-test" \
         PATH="${FAKE_BIN}:${PATH}" bash "${VALIDATOR}" >/dev/null 2>&1; then
         echo "validator swallowed ${failing_tool} failure" >&2
         exit 1
@@ -122,6 +138,13 @@ if FAIL_TOOL=routing CALLS="${CALLS}" TEST_ROOT="${ROOT}" \
     ALERTMANAGER_ROUTING_TEST="${FAKE_BIN}/alertmanager-routing-test" \
     PATH="${FAKE_BIN}:${PATH}" bash "${VALIDATOR}" >/dev/null 2>&1; then
     echo 'validator swallowed routing contract failure' >&2
+    exit 1
+fi
+if FAIL_TOOL=dashboards CALLS="${CALLS}" TEST_ROOT="${ROOT}" \
+    ALERTMANAGER_ROUTING_TEST="${FAKE_BIN}/alertmanager-routing-test" \
+    MONITORING_DASHBOARD_TEST="${FAKE_BIN}/monitoring-dashboard-test" \
+    PATH="${FAKE_BIN}:${PATH}" bash "${VALIDATOR}" >/dev/null 2>&1; then
+    echo 'validator swallowed dashboard contract failure' >&2
     exit 1
 fi
 

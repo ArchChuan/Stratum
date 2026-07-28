@@ -42,6 +42,7 @@ promtool test rules "${ROOT}/monitoring/remote/tests/stratum-rules.test.yaml"
 amtool check-config "${RENDERED_ALERTMANAGER}"
 bash "${ALERTMANAGER_ROUTING_TEST:-${ROOT}/scripts/quality/alertmanager-routing-test.sh}" \
     "${RENDERED_ALERTMANAGER}" "${ROOT}/monitoring/remote/alertmanager/alertmanager-test.yaml"
+bash "${MONITORING_DASHBOARD_TEST:-${ROOT}/scripts/quality/monitoring-dashboard-test.sh}"
 
 if [[ -d "${ROOT}/monitoring/remote/dashboards" ]]; then
     find "${ROOT}/monitoring/remote/dashboards" -type f -name '*.json' -print0 | \
