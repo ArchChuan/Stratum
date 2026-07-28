@@ -915,6 +915,46 @@
       "coverage": "short"
     },
     {
+      "id": "agent.mutation.post.agents.tool.approvals.id.decision",
+      "domain": "agent",
+      "user_goal": "Complete POST /agents/tool-approvals/:id/decision",
+      "route": "/chat",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /agents/tool-approvals/:id/decision",
+      "browser_action_id": "agent.mutation.post.agents.tool.approvals.id.decision",
+      "http_evidence": "The browser observes the expected successful response for POST /agents/tool-approvals/:id/decision",
+      "db_evidence": "Persisted state is reconciled after POST /agents/tool-approvals/:id/decision",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.post.agents.tool.approvals.id.resume",
+      "domain": "agent",
+      "user_goal": "Complete POST /agents/tool-approvals/:id/resume",
+      "route": "/chat",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /agents/tool-approvals/:id/resume",
+      "browser_action_id": "agent.mutation.post.agents.tool.approvals.id.resume",
+      "http_evidence": "The browser observes the expected successful response for POST /agents/tool-approvals/:id/resume",
+      "db_evidence": "Persisted state is reconciled after POST /agents/tool-approvals/:id/resume",
+      "coverage": "short"
+    },
+    {
       "id": "agent.mutation.put.agents.system.settings",
       "domain": "agent",
       "user_goal": "Complete PUT /agents/:id for system assistant",
