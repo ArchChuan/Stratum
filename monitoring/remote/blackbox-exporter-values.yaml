@@ -1,0 +1,31 @@
+config:
+  modules:
+    stratum_http_health:
+      prober: http
+      timeout: 8s
+      http:
+        method: GET
+        preferred_ip_protocol: ip4
+        follow_redirects: false
+        valid_status_codes:
+          - 200
+        fail_if_body_not_matches_regexp:
+          - '"service"[[:space:]]*:[[:space:]]*"Stratum"'
+          - '"status"[[:space:]]*:[[:space:]]*"ok"'
+
+serviceMonitor:
+  enabled: true
+  defaults:
+    labels:
+      release: kps
+    interval: 30s
+    scrapeTimeout: 10s
+  targets:
+    - name: stratum-public-health
+      url: http://101.200.181.141:6879/api/health
+      module: stratum_http_health
+      labels:
+        release: kps
+      additionalMetricsRelabels:
+        environment: remote-test
+        service: stratum
