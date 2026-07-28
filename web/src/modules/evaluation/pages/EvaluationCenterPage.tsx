@@ -5,6 +5,7 @@ import { useSearchParams } from 'react-router-dom';
 
 import { evaluationApi } from '../api/evaluation.api';
 import { CandidateDrawer } from '../components/CandidateDrawer';
+import { CandidateEvaluationModal } from '../components/CandidateEvaluationModal';
 import { CreateEvaluationModal } from '../components/CreateEvaluationModal';
 import { EvaluationOverview } from '../components/EvaluationOverview';
 import { EvolutionCommandModal } from '../components/EvolutionCommandModal';
@@ -41,6 +42,7 @@ export const EvaluationCenterPage = () => {
   const timeline = useEvaluationTimeline();
   const [createOpen, setCreateOpen] = useState(false);
   const [evolutionOpen, setEvolutionOpen] = useState(false);
+  const [candidateEvaluationOpen, setCandidateEvaluationOpen] = useState(false);
   const resource = useMemo(() => center.resources.items.find((item) => item.id === resourceId) || null,
     [center.resources.items, resourceId]);
   const run = center.runs.items.find((item) => item.id === runId) || null;
@@ -97,7 +99,21 @@ export const EvaluationCenterPage = () => {
     <RunDrawer run={run} open={!!run} onClose={() => setRunId('')} isMobile={isMobile} />
     <CandidateDrawer candidate={candidate} open={!!candidate} onClose={() => setCandidateId('')}
       canManage={center.canManageEvaluation} isMobile={isMobile} onReject={(value) => void decide(
-        () => center.rejectCandidate(value.id, command(value.state_version, '管理员拒绝候选版本')), '候选版本已拒绝')} />
+        () => center.rejectCandidate(value.id, command(value.state_version, '管理员拒绝候选版本')), '候选版本已拒绝')}
+      onEvaluate={() => setCandidateEvaluationOpen(true)} />
+    <CandidateEvaluationModal open={candidateEvaluationOpen} onClose={() => setCandidateEvaluationOpen(false)}
+      onSubmit={async (suiteRevisionId, idempotencyKey) => {
+        if (!candidate) throw new Error('候选版本已不可用');
+        try {
+          await evaluationApi.enqueueRun({ kind: candidate.resource_kind, resource_id: candidate.resource_id,
+            revision_id: candidate.revision_id }, suiteRevisionId, idempotencyKey);
+          await center.reload();
+          message.success({ content: '候选离线评测已进入运行队列', duration: 2 });
+        } catch (error) {
+          message.error({ content: error instanceof Error ? error.message : '候选离线评测启动失败', duration: 0 });
+          throw error;
+        }
+      }} />
     <ExperimentDrawer experiment={experiment} open={!!experiment} onClose={() => setExperimentId('')}
       canManage={center.canManageEvaluation} isMobile={isMobile}
       onPause={(value) => void decide(() => center.pauseExperiment(value.id, command(value.state_version, '管理员暂停实验')), '实验已暂停')}

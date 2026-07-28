@@ -119,6 +119,26 @@ func TestToolApprovalServiceRejectsTamperedBinding(t *testing.T) {
 	}
 }
 
+func TestToolApprovalServiceReportsBindingMismatchFields(t *testing.T) {
+	key := crypto.DeriveAESKey("test-key")
+	repo := &approvalRepoFake{}
+	svc := NewToolApprovalService(repo, nil, key)
+	_, err := svc.Request(context.Background(), ToolApprovalPayload{
+		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", AgentID: "agent-1", UserID: "user-1",
+		ToolCallID: "call-1", ServerID: "orders", ToolName: "delete", RiskLevel: port.ToolRiskDestructive,
+		Arguments: map[string]any{"order_id": "order-1"},
+	})
+	require.NoError(t, err)
+	repo.row.Status = string(domain.ToolApprovalApproved)
+	repo.row.ExpiresAt = time.Now().Add(time.Minute)
+	repo.row.TraceID = "other"
+	repo.row.PolicyVersion = "other"
+
+	_, err = svc.ApprovedPayload(context.Background(), "tenant-1", "approval-1")
+	require.ErrorIs(t, err, ErrApprovalBindingMismatch)
+	require.EqualError(t, err, "tool approval binding mismatch: policy_version,trace_id")
+}
+
 func TestToolApprovalServiceDecryptsApprovedPayload(t *testing.T) {
 	key := crypto.DeriveAESKey("test-key")
 	repo := &approvalRepoFake{}
@@ -137,6 +157,26 @@ func TestToolApprovalServiceDecryptsApprovedPayload(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "resume", payload.Query)
 	require.Equal(t, "o1", payload.Arguments["id"])
+}
+
+func TestToolApprovalServiceNormalizesEmptyRevisionPinsAcrossJSONRoundTrip(t *testing.T) {
+	key := crypto.DeriveAESKey("test-key")
+	repo := &approvalRepoFake{}
+	svc := NewToolApprovalService(repo, nil, key)
+	_, err := svc.Request(context.Background(), ToolApprovalPayload{
+		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", AgentID: "agent-1", UserID: "user-1",
+		ToolCallID: "call-1", ServerID: "orders", ToolName: "get", RiskLevel: port.ToolRiskUnclassified,
+		Arguments:                map[string]any{"id": "o1"},
+		PinnedSkillRevisions:     map[string]string{},
+		PinnedMCPRevisions:       map[string]string{},
+		PinnedKnowledgeRevisions: map[string]port.KnowledgeRevisionPin{},
+	})
+	require.NoError(t, err)
+	repo.row.Status = string(domain.ToolApprovalApproved)
+	repo.row.ExpiresAt = time.Now().Add(time.Minute)
+
+	_, err = svc.ApprovedPayload(context.Background(), "tenant-1", "approval-1")
+	require.NoError(t, err)
 }
 
 func TestToolApprovalServiceRejectsExpiredApproval(t *testing.T) {

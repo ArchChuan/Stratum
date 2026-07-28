@@ -56,25 +56,37 @@ const seedDecisionFixtures = async (
   for (const fixture of fixtures) {
     const stable = `${fixture.resource}-stable`;
     const canary = `${fixture.resource}-canary`;
+    const optimizationJob = `${fixture.resource}-optimization`;
+    const candidate = `${fixture.resource}-candidate`;
     await mutate(pool, tenantID, `
       INSERT INTO resource_revisions
         (id,resource_kind,resource_id,source,status,content_hash,payload_hash,payload_ref,safe_summary,published_at)
-      VALUES ($1,'skill',$2,'manual','published',$3,$3,$4,$5::jsonb,now()),
-             ($6,'skill',$2,'optimization','published',$7,$7,$8,$9::jsonb,now())`,
+      VALUES ($1,'mcp',$2,'manual','published',$3,$3,$4,$5::jsonb,now()),
+             ($6,'mcp',$2,'optimization','draft',$7,$7,$8,$9::jsonb,NULL)`,
     [stable, fixture.resource, `hash-${stable}`, `fixture://${stable}`,
       JSON.stringify({ name: fixture.resource, revision: 'stable' }), canary, `hash-${canary}`, `fixture://${canary}`,
       JSON.stringify({ name: fixture.resource, revision: 'canary' })]);
     await mutate(pool, tenantID, `
+      INSERT INTO optimization_jobs
+        (id,resource_kind,resource_id,baseline_revision_id,suite_revision_id,status,completed_at)
+      VALUES ($1,'mcp',$2,$3,$4,'succeeded',now())`,
+    [optimizationJob, fixture.resource, stable, suiteRevisionID]);
+    await mutate(pool, tenantID, `
+      INSERT INTO optimization_candidates
+        (id,optimization_job_id,revision_id,parent_revision_id,source,status)
+      VALUES ($1,$2,$3,$4,'optimization','proposed')`,
+    [candidate, optimizationJob, canary, stable]);
+    await mutate(pool, tenantID, `
       INSERT INTO evaluation_experiments
         (id,resource_kind,resource_id,stable_revision_id,canary_revision_id,suite_revision_id,status,stage_percent,
          policy,decision_snapshot,state_version,recommendation,safety_stopped)
-      VALUES ($1,'skill',$2,$3,$4,$5,'running',5,$6::jsonb,$7::jsonb,1,$8,false)`,
+      VALUES ($1,'mcp',$2,$3,$4,$5,'running',5,$6::jsonb,$7::jsonb,1,$8,false)`,
     [fixture.experiment, fixture.resource, stable, canary, suiteRevisionID, policy, fixture.snapshot,
       fixture.recommendation]);
     await mutate(pool, tenantID, `
       INSERT INTO evaluation_deployments
         (resource_kind,resource_id,stable_revision_id,canary_revision_id,canary_percent,experiment_id)
-      VALUES ('skill',$1,$2,$3,5,$4)`, [fixture.resource, stable, canary, fixture.experiment]);
+      VALUES ('mcp',$1,$2,$3,5,$4)`, [fixture.resource, stable, canary, fixture.experiment]);
   }
   return fixtures.map((fixture) => ({ ...fixture, stable: `${fixture.resource}-stable`, canary: `${fixture.resource}-canary` }));
 };
@@ -83,6 +95,7 @@ export const executeEvaluationPack = async ({
   actor, pool, evidence, webURL,
 }: EvaluationPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
+  const userID = requireUUID(actor.userID ?? '', 'user_id');
   await copyConfiguredLLMCredentials(pool, tenantID, process.env.JWT_PRIVATE_KEY_PEM ?? '');
   const page = await actor.context.newPage();
   const suffix = String(Date.now());
@@ -205,12 +218,32 @@ export const executeEvaluationPack = async ({
     await expect(dialog).toBeHidden();
 
     await page.getByRole('tab', { name: /候选版本/ }).click();
+    const evaluatedRow = page.getByRole('row').filter({ hasText: candidates[1].id });
+    await evaluatedRow.getByRole('button', { name: '详情' }).click();
+    const candidateDrawer = page.locator('.ant-drawer:visible');
+    await candidateDrawer.getByRole('button', { name: '运行离线评测' }).click();
+    const evaluationDialog = page.getByRole('dialog', { name: '运行候选离线评测' });
+    await evaluationDialog.getByLabel('Suite Revision ID').fill(suiteRevisionID);
+    const candidateRunResponse = waitFor(page, '/evaluations/runs', 'POST');
+    await evaluationDialog.getByRole('button', { name: '开始评测' }).click();
+    expect((await candidateRunResponse).status()).toBe(202);
+    await expect(evaluationDialog).toBeHidden();
+    await expect.poll(async () => (await rows<{ status: string; passed: boolean }>(pool, tenantID, `
+      SELECT status,passed FROM eval_runs WHERE resource_id=$1 AND revision_id=$2 AND suite_revision_id=$3
+      ORDER BY created_at DESC LIMIT 1`, [skillID, candidates[1].revision.revision_id, suiteRevisionID]))[0],
+    { timeout: 120_000 }).toEqual({ status: 'succeeded', passed: true });
+    await closeDrawerIfOpen(page);
+    await page.reload();
+    await page.getByRole('tab', { name: /候选版本/ }).click();
+
     const rejectedRow = page.getByRole('row').filter({ hasText: candidates[0].id });
     await rejectedRow.getByRole('button', { name: '详情' }).click();
     const rejectResponse = waitFor(page, `/evaluations/candidates/${candidates[0].id}/reject`, 'POST');
     await page.getByRole('button', { name: '拒绝候选' }).click();
-    await page.getByRole('dialog', { name: '确认拒绝此候选版本？' }).getByRole('button', { name: '拒绝候选' }).click();
+    const rejectDialog = page.getByRole('dialog', { name: '确认拒绝此候选版本？' });
+    await rejectDialog.getByRole('button', { name: '拒绝候选' }).click();
     expect((await rejectResponse).status()).toBe(200);
+    await expect(rejectDialog).toBeHidden();
     await closeDrawerIfOpen(page);
 
     dialog = await openEvolution(page);
@@ -225,12 +258,15 @@ export const executeEvaluationPack = async ({
     const experimentResponse = waitFor(page, '/evaluations/experiments', 'POST');
     await dialog.getByRole('button', { name: '创建金丝雀' }).click();
     const experimentCreated = await experimentResponse;
-    expect(experimentCreated.status()).toBe(201);
+    if (experimentCreated.status() !== 201) {
+      throw new Error(`experiment status ${experimentCreated.status()}: ${await experimentCreated.text()}`);
+    }
     experimentID = (await experimentCreated.json() as { experiment: { id: string } }).experiment.id;
     await expect(dialog).toBeHidden();
 
     const evidenceRegistration = await page.request.post('http://127.0.0.1:19091/e2e/opik/register', { data: {
-      trace_id: run.trace_id, tenant_id: tenantID, resource_id: skillID, revision_id: stableRevisionID,
+      trace_id: run.trace_id, tenant_id: tenantID, user_id: userID,
+      resource_id: skillID, revision_id: stableRevisionID,
     } });
     expect(evidenceRegistration.status()).toBe(204);
     dialog = await openEvolution(page);
@@ -265,8 +301,8 @@ export const executeEvaluationPack = async ({
     const fixtures = await seedDecisionFixtures(pool, tenantID, suiteRevisionID, suffix);
     fixtureIDs = fixtures.map(({ experiment }) => experiment);
     await page.reload();
-    await page.getByRole('tab', { name: /金丝雀实验/ }).click();
     for (const fixture of fixtures) {
+      await page.getByRole('tab', { name: /金丝雀实验/ }).click();
       await page.getByRole('row').filter({ hasText: fixture.experiment }).getByRole('button', { name: '详情' }).click();
       const decisionDrawer = page.locator('.ant-drawer:visible');
       await expect(decisionDrawer).toBeVisible();
@@ -275,9 +311,13 @@ export const executeEvaluationPack = async ({
       const label = fixture.action === 'promote' ? '晋级' : '回滚';
       const actionName = new RegExp(label.split('').join('\\s*'));
       await decisionDrawer.getByRole('button', { name: actionName }).click();
-      await page.getByRole('dialog', { name: `确认${label}此实验？` })
-        .getByRole('button', { name: actionName }).click();
-      expect((await commandResponse).status()).toBe(200);
+      const decisionDialog = page.getByRole('dialog', { name: `确认${label}此实验？` });
+      await decisionDialog.getByRole('button', { name: actionName }).click();
+      const commandResult = await commandResponse;
+      if (commandResult.status() !== 200) {
+        throw new Error(`${fixture.action} status ${commandResult.status()}: ${await commandResult.text()}`);
+      }
+      await expect(decisionDialog).toBeHidden();
       const expectedStatus = fixture.action === 'promote' ? 'completed' : 'rolled_back';
       await expect.poll(async () => (await rows<{ status: string }>(pool, tenantID,
         'SELECT status FROM evaluation_experiments WHERE id=$1', [fixture.experiment]))[0]?.status,
@@ -288,6 +328,7 @@ export const executeEvaluationPack = async ({
       expect(deployment.stable_revision_id).toBe(fixture.action === 'promote' ? fixture.canary : fixture.stable);
       expect(deployment.canary_revision_id).toBeNull();
       await closeDrawerIfOpen(page);
+      await page.reload();
     }
 
     expect(await rows<{ status: string }>(pool, tenantID,
@@ -314,10 +355,13 @@ export const executeEvaluationPack = async ({
         { text: 'DELETE FROM optimization_candidates WHERE optimization_job_id IN (SELECT id FROM optimization_jobs WHERE resource_id=$1)',
           values: [skillID] },
         { text: 'DELETE FROM optimization_jobs WHERE resource_id=$1', values: [skillID] },
+        { text: 'DELETE FROM optimization_jobs WHERE resource_id LIKE $1 OR resource_id LIKE $2',
+          values: [`e2e-promote-${suffix}`, `e2e-rollback-${suffix}`] },
         { text: "DELETE FROM evaluation_jobs WHERE result_id=$1 OR payload->'resource'->>'resource_id'=$2",
           values: [runID || 'none', skillID] },
-        { text: 'DELETE FROM eval_case_results WHERE run_id=$1', values: [runID || 'none'] },
-        { text: 'DELETE FROM eval_runs WHERE id=$1', values: [runID || 'none'] },
+        { text: 'DELETE FROM eval_case_results WHERE run_id IN (SELECT id FROM eval_runs WHERE resource_id=$1)',
+          values: [skillID] },
+        { text: 'DELETE FROM eval_runs WHERE resource_id=$1', values: [skillID] },
         { text: 'DELETE FROM eval_suites WHERE id=$1', values: [suiteID] },
         { text: 'DELETE FROM resource_revisions WHERE resource_id=$1 OR id LIKE $2 OR id LIKE $3',
           values: [skillID, `e2e-promote-%-${suffix}`, `e2e-rollback-%-${suffix}`] },

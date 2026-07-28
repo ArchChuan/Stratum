@@ -12,10 +12,28 @@ const waitForMutation = (page: Page, path: string, method: string) => page.waitF
 const rows = async <R extends QueryResultRow>(pool: DatabasePool, tenantID: string, text: string, values: unknown[]) => (
   await withTenantQuery<R>(pool, tenantID, { text, values })
 ).rows;
-const chooseOption = async (page: Page, label: string, optionName: string) => {
+const chooseOption = async (page: Page, label: string, searchValue: string, optionName: string) => {
   const select = page.locator('.ant-form-item').filter({ hasText: label }).locator('.ant-select');
   await select.locator('.ant-select-selector').click();
+  await select.locator('input').fill(searchValue);
   await page.locator('.ant-select-item-option-content').filter({ hasText: optionName }).click();
+};
+const findServerRow = async (page: Page, serverName: string) => {
+  const row = page.locator('tr').filter({ hasText: serverName });
+  const activePage = page.locator('.ant-pagination-item-active');
+  if (await activePage.count() > 0 && (await activePage.textContent())?.trim() !== '1') {
+    await page.locator('.ant-pagination-item[title="1"]').click();
+    await expect(activePage).toHaveText('1');
+  }
+  while (await row.count() === 0) {
+    const next = page.getByRole('button', { name: 'right' });
+    if (await next.isDisabled()) break;
+    const currentPage = (await activePage.textContent())?.trim() ?? '';
+    await next.click();
+    await expect(activePage).not.toHaveText(currentPage);
+  }
+  await expect(row).toBeVisible();
+  return row;
 };
 
 export const executeAgentSkillMCPPack = async ({
@@ -70,11 +88,25 @@ export const executeAgentSkillMCPPack = async ({
     await page.getByRole('button', { name: '发布当前 Revision' }).click();
     expect((await publishResponse).status()).toBe(200);
 
+    const skillsListResponse = page.waitForResponse((response) => (
+      new URL(response.url()).pathname === '/skills' && response.request().method() === 'GET'
+    ));
+    const toolOptionsResponse = page.waitForResponse((response) => (
+      new URL(response.url()).pathname === `/mcp/servers/${serverID}/tools`
+      && response.request().method() === 'GET'
+    ));
     await page.goto(`${webURL}/agents/create`);
+    const [skillsListed, toolsListed] = await Promise.all([skillsListResponse, toolOptionsResponse]);
+    expect(skillsListed.status()).toBe(200);
+    const skillsBody = JSON.stringify(await skillsListed.json());
+    expect(skillsBody).toContain(skillID);
+    expect(skillsBody).toContain(skillName);
+    expect(toolsListed.status()).toBe(200);
+    expect(JSON.stringify(await toolsListed.json())).toContain('stateful_echo');
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('系统提示词').fill('必须激活可用 Skill 并调用 MCP 工具。');
-    await chooseOption(page, '技能', skillName);
-    await chooseOption(page, 'MCP 工具', `${serverName} / stateful_echo`);
+    await chooseOption(page, '技能', skillID, skillName);
+    await chooseOption(page, 'MCP 工具', `mcp:${serverID}:stateful_echo`, `${serverName} / stateful_echo`);
     const agentResponse = waitForMutation(page, '/agents', 'POST');
     await page.getByRole('button', { name: '创建 Agent' }).click();
     const agentCreated = await agentResponse;
@@ -121,10 +153,18 @@ export const executeAgentSkillMCPPack = async ({
     const skillCard = page.locator('.ant-card').filter({ hasText: skillName });
     await skillCard.getByRole('button', { name: '删除技能' }).click();
     await page.locator('.ant-popconfirm').getByRole('button', { name: /删\s*除/ }).click();
+    const mcpListResponse = waitForMutation(page, '/mcp/servers', 'GET');
     await page.goto(`${webURL}/mcp`);
-    const mcpRow = page.locator('tr').filter({ hasText: serverName });
+    const mcpList = await mcpListResponse;
+    expect(mcpList.status()).toBe(200);
+    expect(JSON.stringify(await mcpList.json())).toContain(serverName);
+    const mcpRow = await findServerRow(page, serverName);
+    const deleteMCPResponse = waitForMutation(page, `/mcp/servers/${serverID}/config`, 'DELETE');
     await mcpRow.getByRole('button', { name: '删除' }).click();
     await page.locator('.ant-popconfirm').getByRole('button', { name: /删\s*除/ }).click();
+    expect((await deleteMCPResponse).status()).toBe(200);
+    expect(await rows<{ count: string }>(pool, tenantID,
+      'SELECT count(*)::text AS count FROM mcp_configs WHERE id=$1', [serverID])).toEqual([{ count: '0' }]);
   } finally {
     await page.close();
   }

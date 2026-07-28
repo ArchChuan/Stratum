@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -148,37 +149,47 @@ func (s *ToolApprovalService) ApprovedPayload(ctx context.Context, tenantID, app
 	if err := json.Unmarshal([]byte(plain), &payload); err != nil {
 		return ToolApprovalPayload{}, fmt.Errorf("decode approval payload: %w", err)
 	}
-	if !toolApprovalBindingMatches(tenantID, row, payload) {
-		return ToolApprovalPayload{}, ErrApprovalBindingMismatch
+	if mismatches := toolApprovalBindingMismatches(tenantID, row, payload); len(mismatches) > 0 {
+		return ToolApprovalPayload{}, fmt.Errorf("%w: %s", ErrApprovalBindingMismatch, strings.Join(mismatches, ","))
 	}
 	return payload, nil
 }
 
 func toolApprovalBindingMatches(tenantID string, row domain.ToolApproval, payload ToolApprovalPayload) bool {
+	return len(toolApprovalBindingMismatches(tenantID, row, payload)) == 0
+}
+
+func toolApprovalBindingMismatches(tenantID string, row domain.ToolApproval, payload ToolApprovalPayload) []string {
 	argumentsDigest, argumentsErr := CanonicalToolArgumentsDigest(payload.Arguments)
 	skillDigest, skillErr := canonicalSkillRevisionsDigest(payload.PinnedSkillRevisions)
 	mcpDigest, mcpErr := canonicalMCPRevisionsDigest(payload.PinnedMCPRevisions)
 	knowledgeDigest, knowledgeErr := canonicalKnowledgeRevisionsDigest(payload.PinnedKnowledgeRevisions)
-	return argumentsErr == nil && skillErr == nil && mcpErr == nil && knowledgeErr == nil &&
-		payload.TenantID == tenantID &&
-		row.DecisionID == payload.DecisionID &&
-		row.ExecutionID == payload.ExecutionID &&
-		row.TraceID == payload.TraceID &&
-		row.AgentID == payload.AgentID &&
-		row.UserID == payload.UserID &&
-		row.ToolCallID == payload.ToolCallID &&
-		row.ServerID == payload.ServerID &&
-		row.ToolName == payload.ToolName &&
-		row.RiskLevel == string(payload.RiskLevel) &&
-		row.ArgumentsDigest == payload.ArgumentsDigest &&
-		row.ArgumentsDigest == argumentsDigest &&
-		row.SkillRevisionsDigest == payload.SkillRevisionsDigest &&
-		row.SkillRevisionsDigest == skillDigest &&
-		row.MCPRevisionsDigest == payload.MCPRevisionsDigest &&
-		row.MCPRevisionsDigest == mcpDigest &&
-		row.KnowledgeRevisionsDigest == payload.KnowledgeRevisionsDigest &&
-		row.KnowledgeRevisionsDigest == knowledgeDigest &&
-		row.PolicyVersion == payload.PolicyVersion
+	mismatches := make([]string, 0, 16)
+	check := func(name string, matches bool) {
+		if !matches {
+			mismatches = append(mismatches, name)
+		}
+	}
+	check("arguments_digest", argumentsErr == nil && row.ArgumentsDigest == payload.ArgumentsDigest &&
+		row.ArgumentsDigest == argumentsDigest)
+	check("decision_id", row.DecisionID == payload.DecisionID)
+	check("execution_id", row.ExecutionID == payload.ExecutionID)
+	check("knowledge_revisions_digest", knowledgeErr == nil &&
+		row.KnowledgeRevisionsDigest == payload.KnowledgeRevisionsDigest && row.KnowledgeRevisionsDigest == knowledgeDigest)
+	check("mcp_revisions_digest", mcpErr == nil && row.MCPRevisionsDigest == payload.MCPRevisionsDigest &&
+		row.MCPRevisionsDigest == mcpDigest)
+	check("policy_version", row.PolicyVersion == payload.PolicyVersion)
+	check("skill_revisions_digest", skillErr == nil && row.SkillRevisionsDigest == payload.SkillRevisionsDigest &&
+		row.SkillRevisionsDigest == skillDigest)
+	check("tenant_id", payload.TenantID == tenantID)
+	check("trace_id", row.TraceID == payload.TraceID)
+	check("agent_id", row.AgentID == payload.AgentID)
+	check("user_id", row.UserID == payload.UserID)
+	check("tool_call_id", row.ToolCallID == payload.ToolCallID)
+	check("server_id", row.ServerID == payload.ServerID)
+	check("tool_name", row.ToolName == payload.ToolName)
+	check("risk_level", row.RiskLevel == string(payload.RiskLevel))
+	return mismatches
 }
 
 func (s *ToolApprovalService) Decide(ctx context.Context, tenantID, id, decision, actor, reason string) error {

@@ -25,6 +25,7 @@ type rpcRequest struct {
 type opikEvidence struct {
 	TraceID    string `json:"trace_id"`
 	TenantID   string `json:"tenant_id"`
+	UserID     string `json:"user_id"`
 	ResourceID string `json:"resource_id"`
 	RevisionID string `json:"revision_id"`
 }
@@ -106,6 +107,7 @@ func opikHandler(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		var evidence opikEvidence
 		if json.NewDecoder(r.Body).Decode(&evidence) != nil || evidence.TraceID == "" || evidence.TenantID == "" ||
+			evidence.UserID == "" ||
 			evidence.ResourceID == "" || evidence.RevisionID == "" {
 			http.Error(w, "invalid evidence registration", http.StatusBadRequest)
 			return
@@ -133,6 +135,7 @@ func opikHandler(w http.ResponseWriter, r *http.Request) {
 			"usage": map[string]int{"total_tokens": 1},
 			"metadata": map[string]any{
 				"opik.metadata.stratum.tenant_id":         evidence.TenantID,
+				"opik.metadata.stratum.user_id":           evidence.UserID,
 				"opik.metadata.stratum.trace_id":          evidence.TraceID,
 				"opik.metadata.stratum.execution_id":      "e2e-" + evidence.TraceID,
 				"opik.metadata.stratum.status":            "success",

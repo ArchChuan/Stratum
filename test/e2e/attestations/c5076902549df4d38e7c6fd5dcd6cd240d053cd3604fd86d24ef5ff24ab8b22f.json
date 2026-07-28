@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
-  "source_digest": "0a91315419465775e3298d7a1ec0b28b41e3ef32c597d8eaf0d6b72289ea78d3",
+  "source_digest": "c5076902549df4d38e7c6fd5dcd6cd240d053cd3604fd86d24ef5ff24ab8b22f",
   "manifest_digest": "cc7b977b3427c318c21301e640b6f14894bf884bf02802ca6a32334eda6aac16",
-  "tested_git_parent": "83da575860b9a220b336e2178be5528f78b4b70e",
+  "tested_git_parent": "91c59dd495d9e87ce4e98a7eb50e072f6a43b514",
   "browser": {
     "name": "chromium",
     "version": "149.0.7827.55"
   },
   "mode": "soak",
   "seed": 1,
-  "started_at": "2026-07-27T20:41:24.379Z",
-  "duration_seconds": 3625,
+  "started_at": "2026-07-28T01:37:18.62Z",
+  "duration_seconds": 3615,
   "host_class": "developer",
   "packs": [
     {
@@ -444,13 +444,13 @@
       "status": "passed"
     }
   ],
-  "action_count": 2402,
-  "sequence_digest": "01d91a1a3c55f0c3300352614d0a90eaefb286e26aeebef92fc45e155c7a1c89",
+  "action_count": 1826,
+  "sequence_digest": "25c6d25bf638c622f5de22c8bb5deba8cc5bf0d381a1ca174a5643ce79321d79",
   "evidence": {
-    "ui": 790,
-    "http": 790,
-    "database": 890,
-    "reconciled": 2402
+    "ui": 612,
+    "http": 612,
+    "database": 707,
+    "reconciled": 1826
   },
   "artifacts": [],
   "cleanup": {
@@ -460,5 +460,5 @@
   "unverified_capabilities": [],
   "risk_classification": "soak",
   "status": "passed",
-  "expires_at": "2026-07-30T21:41:49.45623834Z"
+  "expires_at": "2026-07-31T02:37:33.79434811Z"
 }

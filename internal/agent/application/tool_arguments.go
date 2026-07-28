@@ -21,14 +21,23 @@ func CanonicalToolArgumentsDigest(arguments map[string]any) (string, error) {
 }
 
 func canonicalSkillRevisionsDigest(revisions map[string]string) (string, error) {
+	if len(revisions) == 0 {
+		revisions = nil
+	}
 	return canonicalJSONDigest(skillRevisionsDigestPrefix, revisions)
 }
 
 func canonicalMCPRevisionsDigest(revisions map[string]string) (string, error) {
+	if len(revisions) == 0 {
+		revisions = nil
+	}
 	return canonicalJSONDigest(mcpRevisionsDigestPrefix, revisions)
 }
 
 func canonicalKnowledgeRevisionsDigest(revisions map[string]port.KnowledgeRevisionPin) (string, error) {
+	if len(revisions) == 0 {
+		revisions = nil
+	}
 	return canonicalJSONDigest(knowledgeRevisionsDigestPrefix, revisions)
 }
 

@@ -146,7 +146,8 @@ func TestHandlerServesRegisteredOpikEvidence(t *testing.T) {
 	t.Parallel()
 	traceID := "trace-opik-contract"
 	register := httptest.NewRequest(http.MethodPost, "/e2e/opik/register", bytes.NewBufferString(
-		`{"trace_id":"`+traceID+`","tenant_id":"tenant-1","resource_id":"skill-1","revision_id":"revision-1"}`))
+		`{"trace_id":"`+traceID+`","tenant_id":"tenant-1","user_id":"user-1",`+
+			`"resource_id":"skill-1","revision_id":"revision-1"}`))
 	registerRec := httptest.NewRecorder()
 	handler(registerRec, register)
 	if registerRec.Code != http.StatusNoContent {
@@ -161,6 +162,8 @@ func TestHandlerServesRegisteredOpikEvidence(t *testing.T) {
 	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte(`skill:skill-1`)) ||
 		!bytes.Contains(rec.Body.Bytes(), []byte(`revision-1`)) ||
+		!bytes.Contains(rec.Body.Bytes(), []byte(`opik.metadata.stratum.user_id`)) ||
+		!bytes.Contains(rec.Body.Bytes(), []byte(`user-1`)) ||
 		!bytes.Contains(rec.Body.Bytes(), []byte(traceID)) {
 		t.Fatalf("trace evidence=%s", rec.Body.String())
 	}
