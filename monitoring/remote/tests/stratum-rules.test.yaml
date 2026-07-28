@@ -136,6 +136,10 @@ tests:
         values: '_x604 1000000+1000000x120'
       - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="young-pvc"}'
         values: '_x604 800000000-1000000x120'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="mismatched-pvc"}'
+        values: '1000000+1000000x724'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="mismatched-pvc"}'
+        values: '_x604 800000000-1000000x120'
     promql_expr_test:
       - expr: stratum:pvc_exhaustion_within_4d
         eval_time: 6h2m
