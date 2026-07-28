@@ -1,4 +1,4 @@
-package infrastructure
+package infrastructure_test
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -16,75 +17,51 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	"github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 )
 
-type failingLLMClient struct{ err error }
+// errChatProto returns errors on all chat methods.
+type errChatProto struct{}
 
-func (c failingLLMClient) Complete(context.Context, *CompletionRequest) (*CompletionResponse, error) {
-	return nil, c.err
+func (errChatProto) Complete(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.CompletionRequest) (*infrastructure.CompletionResponse, error) {
+	return nil, errors.New("provider error")
 }
-func (c failingLLMClient) Health(context.Context) error { return c.err }
-func (failingLLMClient) Models() []string               { return []string{"qwen-turbo"} }
-
-type successfulLLMClient struct{}
-
-func (successfulLLMClient) Complete(context.Context, *CompletionRequest) (*CompletionResponse, error) {
-	return &CompletionResponse{Content: "ok", Usage: TokenUsage{PromptTokens: 1, CompletionTokens: 1}}, nil
+func (errChatProto) CompleteStream(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.CompletionRequest, onToken func(string)) (*infrastructure.CompletionResponse, error) {
+	return nil, errors.New("provider error")
 }
-func (successfulLLMClient) Health(context.Context) error { return nil }
-func (successfulLLMClient) Models() []string             { return []string{"qwen-turbo"} }
+func (errChatProto) Health(ctx context.Context, cfg infrastructure.ProviderConfig) error { return errors.New("provider error") }
+func (errChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]string, error) { return nil, nil }
+
+// successChatProto returns successful responses.
+type successChatProto struct{}
+
+func (successChatProto) Complete(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.CompletionRequest) (*infrastructure.CompletionResponse, error) {
+	return &infrastructure.CompletionResponse{Content: "ok", Usage: infrastructure.TokenUsage{PromptTokens: 1, CompletionTokens: 1}}, nil
+}
+func (successChatProto) CompleteStream(ctx context.Context, cfg infrastructure.ProviderConfig, req *infrastructure.CompletionRequest, onToken func(string)) (*infrastructure.CompletionResponse, error) {
+	onToken("test")
+	return &infrastructure.CompletionResponse{Content: "test", Usage: infrastructure.TokenUsage{PromptTokens: 1, CompletionTokens: 1}}, nil
+}
+func (successChatProto) Health(ctx context.Context, cfg infrastructure.ProviderConfig) error { return nil }
+func (successChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]string, error) { return nil, nil }
 
 func TestNewGateway(t *testing.T) {
-	gateway := NewGateway()
+	gateway := infrastructure.NewGateway(nil, nil, nil)
 	if gateway == nil {
 		t.Error("expected Gateway to be non-nil")
 	}
 }
 
-func TestListChatModels_empty(t *testing.T) {
-	g := NewGateway()
-	models := g.ListChatModels()
-	if len(models) != 0 {
-		t.Errorf("expected empty, got %v", models)
-	}
-}
-
-func TestListChatModels_sorted(t *testing.T) {
-	g := NewGateway()
-	g.RegisterClient(ProviderZhipu, NewZhipuClient("fake", zap.NewNop()))
-	g.RegisterClient(ProviderQwen, NewQwenClient("fake", zap.NewNop()))
-
-	models := g.ListChatModels()
-	if len(models) == 0 {
-		t.Fatal("expected models, got none")
-	}
-	for i := 1; i < len(models); i++ {
-		if models[i] < models[i-1] {
-			t.Errorf("not sorted: %v", models)
-			break
-		}
-	}
-	hasQwen, hasGlm := false, false
-	for _, m := range models {
-		if m == "qwen-turbo" {
-			hasQwen = true
-		}
-		if m == "glm-4-flash" {
-			hasGlm = true
-		}
-	}
-	if !hasQwen || !hasGlm {
-		t.Errorf("expected qwen-turbo and glm-4-flash in %v", models)
-	}
-}
-
 func TestCompletionRequestHasToolsField(t *testing.T) {
-	req := CompletionRequest{
+	req := infrastructure.CompletionRequest{
 		Model:    "qwen-turbo",
-		Messages: []Message{{Role: "user", Content: "hi"}},
-		Tools: []Tool{{
+		Messages: []infrastructure.Message{{Role: "user", Content: "hi"}},
+		Tools: []infrastructure.Tool{{
 			Type: "function",
-			Function: ToolFunction{
+			Function: infrastructure.ToolFunction{
 				Name:        "get_weather",
 				Description: "Get weather",
 				Parameters:  map[string]any{"type": "object"},
@@ -99,9 +76,9 @@ func TestCompletionRequestHasToolsField(t *testing.T) {
 }
 
 func TestMessageHasToolCallFields(t *testing.T) {
-	msg := Message{
+	msg := infrastructure.Message{
 		Role: "assistant",
-		ToolCalls: []ToolCall{{
+		ToolCalls: []infrastructure.ToolCall{{
 			ID:   "call_abc",
 			Type: "function",
 			Function: struct {
@@ -116,8 +93,8 @@ func TestMessageHasToolCallFields(t *testing.T) {
 }
 
 func TestCompletionResponseHasToolCallsField(t *testing.T) {
-	resp := CompletionResponse{
-		ToolCalls: []ToolCall{{ID: "call_1", Type: "function"}},
+	resp := infrastructure.CompletionResponse{
+		ToolCalls: []infrastructure.ToolCall{{ID: "call_1", Type: "function"}},
 	}
 	b, err := json.Marshal(resp)
 	require.NoError(t, err)
@@ -134,9 +111,28 @@ func TestGatewayOTelMarksFailureAsError(t *testing.T) {
 		_ = provider.Shutdown(context.Background())
 	})
 
-	gateway := NewGateway().WithLogger(zap.NewNop())
-	gateway.RegisterClient(ProviderQwen, failingLLMClient{err: errors.New("provider unavailable")})
-	_, err := gateway.CompleteStream(context.Background(), &CompletionRequest{Model: "qwen-turbo"}, func(string) {})
+	modelRepo := &mockModelRepo{
+		models: []domain.Model{
+			{ID: "m1", ProviderID: "p1", Name: "qwen-turbo", Enabled: true},
+		},
+	}
+	providerRepo := &mockProviderRepo{
+		providers: map[string]*domain.Provider{
+			"p1": {
+				ID: "p1", Name: "Test Qwen", Kind: domain.ProviderOpenAICompat,
+				BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "qwen-turbo",
+			},
+		},
+	}
+	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{
+		domain.ProviderOpenAICompat: errChatProto{},
+	}
+	embedProtos := map[domain.ProviderKind]infrastructure.EmbedProtocol{}
+	reg := infrastructure.NewModelRegistry(modelRepo, providerRepo, chatProtos, embedProtos, 5*time.Minute)
+
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+	gateway := infrastructure.NewGateway(reg, chatProtos, embedProtos).WithLogger(zap.NewNop())
+	_, err := gateway.CompleteStream(ctx, &infrastructure.CompletionRequest{Model: "qwen-turbo"}, func(string) {})
 	require.Error(t, err)
 
 	for _, span := range recorder.Ended() {
@@ -150,13 +146,33 @@ func TestGatewayOTelMarksFailureAsError(t *testing.T) {
 
 func TestGatewayLLMLogsExcludePromptToolAndResponsePayloads(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
-	gateway := NewGateway().WithLogger(zap.New(core))
-	gateway.RegisterClient(ProviderQwen, successfulLLMClient{})
 
-	_, err := gateway.CompleteStream(context.Background(), &CompletionRequest{
+	modelRepo := &mockModelRepo{
+		models: []domain.Model{
+			{ID: "m1", ProviderID: "p1", Name: "qwen-turbo", Enabled: true},
+		},
+	}
+	providerRepo := &mockProviderRepo{
+		providers: map[string]*domain.Provider{
+			"p1": {
+				ID: "p1", Name: "Test Qwen", Kind: domain.ProviderOpenAICompat,
+				BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "qwen-turbo",
+			},
+		},
+	}
+	chatProtos := map[domain.ProviderKind]infrastructure.ChatProtocol{
+		domain.ProviderOpenAICompat: successChatProto{},
+	}
+	embedProtos := map[domain.ProviderKind]infrastructure.EmbedProtocol{}
+	reg := infrastructure.NewModelRegistry(modelRepo, providerRepo, chatProtos, embedProtos, 5*time.Minute)
+
+	ctx := reqctx.WithTenantID(context.Background(), "test-tenant")
+	gateway := infrastructure.NewGateway(reg, chatProtos, embedProtos).WithLogger(zap.New(core))
+
+	_, err := gateway.CompleteStream(ctx, &infrastructure.CompletionRequest{
 		Model:    "qwen-turbo",
-		Messages: []Message{{Role: "user", Content: "private prompt"}},
-		Tools:    []Tool{{Type: "function", Function: ToolFunction{Name: "private_tool"}}},
+		Messages: []infrastructure.Message{{Role: "user", Content: "private prompt"}},
+		Tools:    []infrastructure.Tool{{Type: "function", Function: infrastructure.ToolFunction{Name: "private_tool"}}},
 	}, func(string) {})
 	require.NoError(t, err)
 
@@ -194,10 +210,10 @@ func TestQwenComplete_ToolCalls(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewQwenClientWithBase("test-key", srv.URL, zap.NewNop())
-	resp, err := client.Complete(context.Background(), &CompletionRequest{
+	client := infrastructure.NewQwenClientWithBase("test-key", srv.URL, zap.NewNop())
+	resp, err := client.Complete(context.Background(), &infrastructure.CompletionRequest{
 		Model:    "qwen-turbo",
-		Messages: []Message{{Role: "user", Content: "weather?"}},
+		Messages: []infrastructure.Message{{Role: "user", Content: "weather?"}},
 	})
 	require.NoError(t, err)
 	require.Len(t, resp.ToolCalls, 1)
@@ -229,10 +245,10 @@ func TestZhipuComplete_ToolCalls(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewZhipuClientWithBase("test-key", srv.URL, zap.NewNop())
-	resp, err := client.Complete(context.Background(), &CompletionRequest{
+	client := infrastructure.NewZhipuClientWithBase("test-key", srv.URL, zap.NewNop())
+	resp, err := client.Complete(context.Background(), &infrastructure.CompletionRequest{
 		Model:    "glm-4-flash",
-		Messages: []Message{{Role: "user", Content: "search?"}},
+		Messages: []infrastructure.Message{{Role: "user", Content: "search?"}},
 	})
 	require.NoError(t, err)
 	require.Len(t, resp.ToolCalls, 1)

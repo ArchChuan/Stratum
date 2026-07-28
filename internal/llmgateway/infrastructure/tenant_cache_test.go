@@ -10,7 +10,7 @@ import (
 
 func TestTenantGatewayCache_SetAndGet(t *testing.T) {
 	cache := llmgateway.NewTenantGatewayCache()
-	gw := llmgateway.NewGateway()
+	gw := llmgateway.NewGateway(nil, nil, nil)
 
 	cache.Set("tenant-1", gw, nil, 5*time.Minute)
 
@@ -25,7 +25,7 @@ func TestTenantGatewayCache_SetAndGet(t *testing.T) {
 
 func TestTenantGatewayCache_CopiesAPIKeys(t *testing.T) {
 	cache := llmgateway.NewTenantGatewayCache()
-	gw := llmgateway.NewGateway()
+	gw := llmgateway.NewGateway(nil, nil, nil)
 	keys := map[string]string{"qwen": "secret"}
 
 	cache.Set("tenant-1", gw, keys, 5*time.Minute)
@@ -59,7 +59,7 @@ func TestTenantGatewayCache_Miss(t *testing.T) {
 
 func TestTenantGatewayCache_Expiry(t *testing.T) {
 	cache := llmgateway.NewTenantGatewayCache()
-	gw := llmgateway.NewGateway()
+	gw := llmgateway.NewGateway(nil, nil, nil)
 
 	cache.Set("tenant-1", gw, nil, 10*time.Millisecond)
 	time.Sleep(20 * time.Millisecond)
@@ -72,7 +72,7 @@ func TestTenantGatewayCache_Expiry(t *testing.T) {
 
 func TestTenantGatewayCache_Invalidate(t *testing.T) {
 	cache := llmgateway.NewTenantGatewayCache()
-	gw := llmgateway.NewGateway()
+	gw := llmgateway.NewGateway(nil, nil, nil)
 
 	cache.Set("tenant-1", gw, nil, 5*time.Minute)
 	cache.Invalidate("tenant-1")
@@ -85,7 +85,7 @@ func TestTenantGatewayCache_Invalidate(t *testing.T) {
 
 func TestTenantGatewayCache_InvalidateRejectsStaleGenerationSet(t *testing.T) {
 	cache := llmgateway.NewTenantGatewayCache()
-	staleGateway := llmgateway.NewGateway()
+	staleGateway := llmgateway.NewGateway(nil, nil, nil)
 	loadStarted := make(chan struct{})
 	releaseLoad := make(chan struct{})
 	setResult := make(chan bool, 1)
@@ -123,7 +123,7 @@ func TestTenantGatewayCache_ConcurrentGenerationAndKeysClone(t *testing.T) {
 				if hit {
 					keys["qwen"] = "caller-mutated-fake-key"
 				}
-				cache.SetIfGeneration("tenant-1", llmgateway.NewGateway(), map[string]string{"qwen": "fake-key-a"}, time.Minute, generation)
+				cache.SetIfGeneration("tenant-1", llmgateway.NewGateway(nil, nil, nil), map[string]string{"qwen": "fake-key-a"}, time.Minute, generation)
 				if i%8 == 0 {
 					cache.Invalidate("tenant-1")
 				}
