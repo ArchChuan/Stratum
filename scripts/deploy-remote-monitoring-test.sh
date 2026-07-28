@@ -30,6 +30,17 @@ assert_not_contains() {
     fi
 }
 
+assert_inventory_cleaned() {
+    local scenario="$1"
+    local stderr_log="${TEST_ROOT}/${scenario}/stderr.log"
+    assert_contains "${stderr_log}" '^inventory directory removed: ' \
+        "${scenario} did not report private inventory cleanup"
+    local inventory_dir
+    inventory_dir=$(sed -n 's/^inventory directory removed: //p' "${stderr_log}" | tail -1)
+    [[ -n "${inventory_dir}" && ! -e "${inventory_dir}" ]] || \
+        fail "${scenario} left its private inventory directory behind"
+}
+
 write_fake_tools() {
     local bin_dir="$1"
     mkdir -p "${bin_dir}"
@@ -56,7 +67,12 @@ case "${1:-}" in
                 ;;
         esac
         ;;
-    status|get)
+    status)
+        [[ "${SCENARIO:-}" != "status_failure" ]] || exit 47
+        printf '{}\n'
+        ;;
+    get)
+        [[ "${SCENARIO:-}" != "values_failure" ]] || exit 48
         printf '{}\n'
         ;;
     upgrade)
@@ -92,7 +108,9 @@ case "$*" in
         [[ "${SCENARIO:-}" != "rollout_failure" ]] || exit 44
         ;;
     *"port-forward"*)
-        trap 'exit 0' TERM INT
+        printf 'port-forward-started %s\n' "$$" >>"${CALL_LOG}"
+        : >"${PF_READY_FILE}"
+        trap 'printf "port-forward-terminated %s\n" "$$" >>"${CALL_LOG}"; exit 0' TERM INT
         while :; do sleep 1; done
         ;;
 esac
@@ -103,7 +121,10 @@ FAKE
 set -euo pipefail
 printf 'curl %s\n' "$*" >>"${CALL_LOG}"
 if [[ "$*" == *'/-/ready'* ]]; then
-    exit 0
+    for _ in $(seq 1 1000); do
+        [[ -e "${PF_READY_FILE}" ]] && exit 0
+    done
+    exit 49
 elif [[ "$*" == *'/api/v1/targets'* ]]; then
     [[ "${SCENARIO:-}" != "target_failure" ]] || exit 45
     printf '{"status":"success","data":{"activeTargets":[{"labels":{"namespace":"stratum","service":"stratum","endpoint":"http"},"health":"up"},{"labels":{"job":"stratum-blackbox-prometheus-blackbox-exporter","service":"stratum","environment":"remote-test"},"health":"up"},{"labels":{"namespace":"monitoring","service":"stratum-feishu-alert-adapter"},"health":"up"},{"labels":{"namespace":"stratum","service":"stratum-etcd-metrics"},"health":"up"},{"labels":{"namespace":"stratum","service":"stratum-milvus-metrics"},"health":"up"}]}}\n'
@@ -135,6 +156,7 @@ run_case() {
 
     set +e
     PATH="${case_dir}/bin:/usr/bin:/bin" CALL_LOG="${case_dir}/calls.log" SCENARIO="${scenario}" \
+        PF_READY_FILE="${case_dir}/port-forward.ready" \
         FEISHU_ADAPTER_IMAGE='registry.example/adapter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
         MONITORING_DEPLOY_TEST_REPORT_CLEANUP=1 \
         MONITORING_SMOKE_ATTEMPTS=1 MONITORING_SMOKE_INTERVAL_SEC=0 \
@@ -155,11 +177,15 @@ run_case() {
         "${scenario} attempted a destructive or stale operation"
 }
 
-for scenario in inventory_failure unexpected_release unexpected_namespace unexpected_chart; do
+for scenario in inventory_failure status_failure values_failure unexpected_release unexpected_namespace unexpected_chart; do
     run_case "${scenario}" failure
     assert_not_contains "${TEST_ROOT}/${scenario}/calls.log" \
         'helm upgrade|kubectl apply|kubectl rollout|kubectl port-forward' \
         "${scenario} mutated the cluster after unsafe inventory"
+done
+
+for scenario in inventory_failure status_failure values_failure; do
+    assert_inventory_cleaned "${scenario}"
 done
 
 for scenario in helm_failure apply_failure rollout_failure target_failure rule_health_failure; do
@@ -175,6 +201,18 @@ assert_contains "${TEST_ROOT}/target_failure/calls.log" '/api/v1/targets' \
     'target failure scenario did not reach the target smoke check'
 assert_contains "${TEST_ROOT}/rule_health_failure/calls.log" '/api/v1/rules' \
     'rule-health failure scenario did not reach the rule smoke check'
+for scenario in target_failure rule_health_failure; do
+    assert_inventory_cleaned "${scenario}"
+    assert_contains "${TEST_ROOT}/${scenario}/calls.log" '^port-forward-terminated [0-9]+$' \
+        "${scenario} left its Prometheus port-forward running"
+    started_pid=$(sed -n 's/^port-forward-started //p' "${TEST_ROOT}/${scenario}/calls.log" | tail -1)
+    terminated_pid=$(sed -n 's/^port-forward-terminated //p' "${TEST_ROOT}/${scenario}/calls.log" | tail -1)
+    [[ -n "${started_pid}" && "${started_pid}" == "${terminated_pid}" ]] || \
+        fail "${scenario} did not terminate the exact port-forward process it started"
+    if kill -0 "${started_pid}" >/dev/null 2>&1; then
+        fail "${scenario} returned while its Prometheus port-forward process was still alive"
+    fi
+done
 
 run_case success success
 SUCCESS_LOG="${TEST_ROOT}/success/calls.log"
