@@ -256,3 +256,7 @@ networkPolicy:
 
 serviceMonitor:
   enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  path: /metrics
+  additionalLabels: {}

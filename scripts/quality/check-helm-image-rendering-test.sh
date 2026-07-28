@@ -10,6 +10,7 @@ TAG_RENDER="${TMP_ROOT}/tag.yaml"
 DIGEST_RENDER="${TMP_ROOT}/digest.yaml"
 REMOTE_HTTP_RENDER="${TMP_ROOT}/remote-http.yaml"
 REMOTE_HTTP_INGRESS="${TMP_ROOT}/remote-http-ingress.yaml"
+SERVICE_MONITOR_RENDER="${TMP_ROOT}/service-monitor.yaml"
 LOCAL_RENDER="${TMP_ROOT}/local.yaml"
 REMOTE_HTTP_VALUES="${ROOT}/helm/values-demo-remote-http.yaml"
 OPIK_COLLECTOR="${ROOT}/k8s/opik-otel-collector.yaml"
@@ -21,6 +22,13 @@ fi
 
 helm template stratum "${ROOT}/helm" -f "${ROOT}/helm/values-demo.yaml" >"${TAG_RENDER}"
 grep -Fq 'registry.cn-hangzhou.aliyuncs.com/stratum-demo/stratum-backend:demo' "${TAG_RENDER}"
+
+helm template stratum "${ROOT}/helm" -f "${ROOT}/helm/values-demo.yaml" >"${SERVICE_MONITOR_RENDER}"
+grep -Fq 'kind: ServiceMonitor' "${SERVICE_MONITOR_RENDER}"
+grep -Fq 'release: kps' "${SERVICE_MONITOR_RENDER}"
+grep -Eq 'path:[[:space:]]*"?/metrics"?$' "${SERVICE_MONITOR_RENDER}"
+grep -Eq 'interval:[[:space:]]*"?30s"?$' "${SERVICE_MONITOR_RENDER}"
+grep -Eq 'scrapeTimeout:[[:space:]]*"?10s"?$' "${SERVICE_MONITOR_RENDER}"
 
 args=()
 components=(app frontend database redis nats etcd minio milvus)
