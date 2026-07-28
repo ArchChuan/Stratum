@@ -16,6 +16,17 @@ type LogoutHandler = () => void;
 type StreamEventHandler = (event: unknown) => boolean | void;
 export interface ServerSentEvent { id?: string; event?: string; data: unknown }
 
+export class StreamRequestError extends Error {
+  constructor(
+    message: string,
+    public readonly status?: number,
+    public readonly code?: string,
+  ) {
+    super(message);
+    this.name = 'StreamRequestError';
+  }
+}
+
 const api: AxiosInstance = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '',
   timeout: API_DEFAULT_TIMEOUT_MS,
@@ -179,10 +190,14 @@ export const setupApiInterceptors = (tokenRef: TokenRef, onLogout?: LogoutHandle
 
 const parseStreamError = async (response: Response): Promise<Error> => {
   try {
-    const data = (await response.json()) as { error?: string; message?: string };
-    return new Error(data.message || data.error || `HTTP ${response.status}`);
+    const data = (await response.json()) as { error?: string; message?: string; code?: string };
+    return new StreamRequestError(
+      data.message || data.error || `HTTP ${response.status}`,
+      response.status,
+      data.code,
+    );
   } catch {
-    return new Error(`HTTP ${response.status}`);
+    return new StreamRequestError(`HTTP ${response.status}`, response.status);
   }
 };
 

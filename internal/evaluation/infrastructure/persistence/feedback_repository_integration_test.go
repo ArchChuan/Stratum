@@ -4,8 +4,10 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +17,108 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestPgFeedbackRepositoryRejectsChangedReplay(t *testing.T) {
+	pool, ctx, tenantID := feedbackRepositoryTestPool(t, "changed_replay")
+	repo := NewPgFeedbackRepository(pool)
+	original := domain.FeedbackRequest{
+		TraceID: "trace-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+		RevisionID: "revision-1", Score: 1, Outcome: map[string]any{"label": "good"},
+		IdempotencyKey: "feedback-1",
+	}
+	stored, err := repo.Record(ctx, tenantID, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name  string
+		input domain.FeedbackRequest
+	}{
+		{name: "same trace with another key", input: domain.FeedbackRequest{
+			TraceID: "trace-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+			RevisionID: "revision-1", Score: 0, Outcome: map[string]any{"label": "bad"},
+			IdempotencyKey: "feedback-2",
+		}},
+		{name: "same key with another trace", input: domain.FeedbackRequest{
+			TraceID: "trace-2", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+			RevisionID: "revision-1", Score: 0, Outcome: map[string]any{"label": "bad"},
+			IdempotencyKey: "feedback-1",
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := repo.Record(ctx, tenantID, test.input); !errors.Is(err, domain.ErrFeedbackIdempotencyConflict) {
+				t.Fatalf("changed replay error=%v", err)
+			}
+			replayed, err := repo.Record(ctx, tenantID, original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if replayed.ID != stored.ID || replayed.Score != stored.Score ||
+				replayed.IdempotencyKey != stored.IdempotencyKey || replayed.Outcome["label"] != "good" {
+				t.Fatalf("immutable feedback changed: before=%+v after=%+v", stored, replayed)
+			}
+		})
+	}
+}
+
+func TestPgFeedbackRepositoryConcurrentChangedReplayHasOneWinner(t *testing.T) {
+	pool, ctx, tenantID := feedbackRepositoryTestPool(t, "concurrent_replay")
+	repo := NewPgFeedbackRepository(pool)
+	inputs := []domain.FeedbackRequest{
+		{TraceID: "trace-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+			RevisionID: "revision-1", Score: 1, IdempotencyKey: "feedback-1"},
+		{TraceID: "trace-1", ResourceKind: domain.ResourceKindSkill, ResourceID: "skill-1",
+			RevisionID: "revision-1", Score: 0, IdempotencyKey: "feedback-2"},
+	}
+	errs := make(chan error, len(inputs))
+	var wg sync.WaitGroup
+	for _, input := range inputs {
+		input := input
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := repo.Record(ctx, tenantID, input)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	var succeeded, conflicted int
+	for err := range errs {
+		if err == nil {
+			succeeded++
+		} else if errors.Is(err, domain.ErrFeedbackIdempotencyConflict) {
+			conflicted++
+		} else {
+			t.Fatalf("unexpected concurrent replay error: %v", err)
+		}
+	}
+	if succeeded != 1 || conflicted != 1 {
+		t.Fatalf("concurrent changed replay succeeded=%d conflicted=%d", succeeded, conflicted)
+	}
+}
+
+func feedbackRepositoryTestPool(t *testing.T, suffix string) (*pgxpool.Pool, context.Context, string) {
+	t.Helper()
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	tenantID := fmt.Sprintf("eval_feedback_%s_%d", suffix, time.Now().UnixNano())
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "tenant_%s" CASCADE`, tenantID)) })
+	return pool, ctx, tenantID
+}
 
 func TestPgFeedbackRepositoryStageFeedbackReadsOnlyControlPlaneRows(t *testing.T) {
 	url := os.Getenv("TEST_DATABASE_URL")

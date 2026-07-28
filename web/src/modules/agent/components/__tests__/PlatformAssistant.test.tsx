@@ -37,18 +37,17 @@ const sidebarProps = {
 describe('平台使用小助手界面', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('在选择器和标题中用 React 节点展示系统身份', async () => {
+  it('在选择器和标题中展示系统助手且不暴露模型设置', async () => {
     render(<ChatConversationSidebar {...sidebarProps} />);
-    expect(screen.getByText('系统内置')).toBeInTheDocument();
+    expect(screen.getByText('平台使用小助手')).toBeInTheDocument();
     fireEvent.mouseDown(screen.getByRole('combobox'));
     await waitFor(() => {
       const option = document.querySelector('.ant-select-item-option-content');
       expect(option).toHaveTextContent('平台使用小助手');
-      expect(option).toHaveTextContent('系统内置');
     });
 
     render(<ChatHeader agent={systemAgent} isAdmin />);
-    expect(screen.getAllByText('系统内置').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('平台使用小助手').length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByRole('button', { name: '设置助手模型' })).not.toBeInTheDocument();
     expect(screen.queryByText('助手设置')).not.toBeInTheDocument();
   });

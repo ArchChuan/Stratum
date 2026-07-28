@@ -130,12 +130,14 @@ func (f *knowledgeRevisionSearchFake) SearchKnowledgeRevision(
 
 type evidenceProviderFake struct {
 	tenantID string
+	userID   string
 }
 
 func (f *evidenceProviderFake) ListExecutions(
-	_ context.Context, tenantID string, _ domain.ListOptions,
+	_ context.Context, tenantID string, options domain.ListOptions,
 ) ([]domain.ExecutionRecord, int64, error) {
 	f.tenantID = tenantID
+	f.userID = options.UserID
 	return []domain.ExecutionRecord{{ID: "execution-1", TraceID: "trace-1", Status: domain.ExecStatusSuccess}}, 1, nil
 }
 
@@ -152,7 +154,7 @@ func (f *evidenceProviderFake) TraceEvents(
 }
 
 func (f *evidenceProviderFake) Resolve(context.Context, string, string) (domain.TraceEvidence, error) {
-	return domain.TraceEvidence{}, nil
+	return domain.TraceEvidence{UserID: "user-1"}, nil
 }
 
 func (f *evidenceProviderFake) ResolveBatch(
@@ -551,12 +553,23 @@ func TestAssembleOptionsAttributesEveryExperimentDeterministically(t *testing.T)
 func TestAgentServiceListsExecutionsFromEvidenceProviderWithExplicitTenant(t *testing.T) {
 	evidence := &evidenceProviderFake{}
 	svc := NewAgentService(AgentServiceDeps{EvidenceProvider: evidence})
-	rows, total, err := svc.ListExecutions(context.Background(), "tenant-1", 1, 20)
+	rows, total, err := svc.ListExecutions(context.Background(), "tenant-1", "user-1", 1, 20)
 	if err != nil {
 		t.Fatalf("ListExecutions() error: %v", err)
 	}
-	if total != 1 || len(rows) != 1 || evidence.tenantID != "tenant-1" {
-		t.Fatalf("rows=%#v total=%d tenant=%q", rows, total, evidence.tenantID)
+	if total != 1 || len(rows) != 1 || evidence.tenantID != "tenant-1" || evidence.userID != "user-1" {
+		t.Fatalf("rows=%#v total=%d tenant=%q user=%q", rows, total, evidence.tenantID, evidence.userID)
+	}
+}
+
+func TestAgentServiceHidesTraceDetailsFromAnotherUser(t *testing.T) {
+	evidence := &evidenceProviderFake{}
+	svc := NewAgentService(AgentServiceDeps{EvidenceProvider: evidence})
+	if _, err := svc.ListToolTraces(context.Background(), "tenant-1", "user-2", "trace-1"); !errors.Is(err, domain.ErrEvidenceNotFound) {
+		t.Fatalf("cross-user tool traces error = %v", err)
+	}
+	if _, err := svc.ListTraceEvents(context.Background(), "tenant-1", "user-2", "trace-1"); !errors.Is(err, domain.ErrEvidenceNotFound) {
+		t.Fatalf("cross-user trace events error = %v", err)
 	}
 }
 

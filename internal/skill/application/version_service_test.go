@@ -2,12 +2,25 @@ package application
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/internal/skill/domain"
 	"github.com/byteBuilderX/stratum/internal/skill/domain/port"
 	"go.uber.org/zap"
 )
+
+func TestVersionServicePublishDistinguishesMissingDraft(t *testing.T) {
+	repo := newFakeVersionRepo()
+	repo.skills["published-skill"] = port.SkillProductRow{ID: "published-skill", Status: "published"}
+	svc := NewVersionService(repo, zap.NewNop())
+	if _, err := svc.PublishDraft(context.Background(), "published-skill"); !errors.Is(err, domain.ErrSkillDraftNotFound) {
+		t.Fatalf("expected missing draft conflict, got %v", err)
+	}
+	if _, err := svc.PublishDraft(context.Background(), "missing-skill"); !errors.Is(err, domain.ErrSkillNotFound) {
+		t.Fatalf("expected missing skill error, got %v", err)
+	}
+}
 
 func TestVersionServiceCreatesInstructionBundleDraft(t *testing.T) {
 	repo := newFakeVersionRepo()
@@ -156,6 +169,9 @@ func TestVersionServicePublishedRevisionSafeSummaryHasNoSensitiveFields(t *testi
 	summary, err := svc.PublishedRevisionSafeSummary(context.Background(), view.Skill.ID, published.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if summary["name"] != view.Skill.Name || summary["description"] != view.Skill.Description {
+		t.Fatalf("safe resource identity missing: %#v", summary)
 	}
 	for _, key := range []string{"secret", "token", "api_key", "requirements", "destination", "instructions"} {
 		if _, ok := summary[key]; ok {

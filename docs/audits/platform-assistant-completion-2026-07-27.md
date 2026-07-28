@@ -39,8 +39,8 @@ pass.
 | Static and focused verification | remediation implementation and deployment manifests | `stratum-verify go-full`; deployment safety; focused Go; diff check | Passed locally on 2026-07-27 | passed | Final diff check must be repeated after this file |
 | Race and integration verification | affected packages and real PostgreSQL harness | race command; `scripts/test-platform-assistant-e2e.sh` | Race and all real-service cases passed | passed | Opik remote readiness is checked separately |
 | Real local user journeys | real backend/frontend/DB/stub harness | `scripts/test-platform-assistant-browser-e2e.sh` | Mobile and desktop passed chat, edit, reload, apply, prompt redaction, non-empty PNG capture, no-canvas rendering, and sensitive-marker scans | passed | Deterministic local provider is test-only and loopback-bound |
-| Deploy and remote acceptance | `scripts/e2e/platform-assistant-remote-verify.sh` | deployment safety contract plus post-CD verifier | Pre-deploy Demo failed at missing `edit_count`, correctly blocking stale release | pending_deploy | Re-run after merge and CD; configured chain also requires legal admin/provider prerequisites |
-| Final evidence and knowledge gate | this audit; `tmp/knowledge-deposition/` report | final status/diff and knowledge report checks | Pending final commit, CI, CD, and remote rerun | pending | Ignored knowledge report must be preserved before worktree cleanup |
+| Deploy and remote acceptance | `scripts/e2e/platform-assistant-remote-verify.sh` | deployment safety contract plus post-CD verifier | Main CD run `30268637949` passed; fresh post-deploy verification passed public/member, Opik, Collector, schema, administrator, and Provider checks, then reported `prerequisite_missing: admin_session` | prerequisite_missing | The configured diagnostic and Opik-correlation chain still requires a legitimate process-only administrator bearer |
+| Final evidence and knowledge gate | this audit; `tmp/knowledge-deposition/` report | final status/diff and knowledge report checks | PR #140, CI, main CD, post-deploy noncredential checks, and the task-bound knowledge report passed | passed | The ignored knowledge report remains local; it does not satisfy the separate administrator-session prerequisite |
 
 ## Resource Decision
 
@@ -51,3 +51,15 @@ the managed profile would violate the approved isolation contract. The remote
 configured chain instead requires a legitimate tenant administrator session
 and a tenant-owned Provider configuration; the verifier never manufactures
 either prerequisite.
+
+## Current Conclusion
+
+The approved product design contains exactly two delivery phases. Phase 1 and
+Phase 2 are implemented and covered by the gates above. There is no approved
+Phase 3 in `2026-07-23-builtin-platform-assistant-design.md`.
+
+The remaining remote result is not an implementation phase: it is an
+acceptance prerequisite. Until an administrator supplies a legitimate bearer
+for a tenant that owns a Provider, the configured assistant execution and its
+request-ID-to-Opik correlation remain unverified and must not be reported as
+passed.

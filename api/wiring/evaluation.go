@@ -644,7 +644,7 @@ func mapEvaluationEvidence(evidence agentdomain.TraceEvidence) evalport.Observed
 		}
 	}
 	return evalport.ObservedTrace{
-		TraceID: evidence.TraceID, CostUSD: evidence.CostUSD, LatencyMs: evidence.LatencyMs,
+		TraceID: evidence.TraceID, UserID: evidence.UserID, CostUSD: evidence.CostUSD, LatencyMs: evidence.LatencyMs,
 		Success: evidence.Status == agentdomain.ExecStatusSuccess, SecurityViolation: evidence.SecurityViolation,
 		Assignments: assignments,
 	}

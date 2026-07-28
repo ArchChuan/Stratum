@@ -183,6 +183,7 @@ func TestListExecutionsFiltersUserBeforePageLimit(t *testing.T) {
 
 func TestMapEvidenceAcceptsStructuredOpikMetadata(t *testing.T) {
 	evidence, err := mapEvidence(opikTrace{Metadata: map[string]any{
+		metadataPrefix + "user_id":           "user-1",
 		metadataPrefix + "total_tokens":      33,
 		metadataPrefix + "cost_usd":          0.42,
 		metadataPrefix + "duration_ms":       1250,
@@ -197,9 +198,22 @@ func TestMapEvidenceAcceptsStructuredOpikMetadata(t *testing.T) {
 	if evidence.TotalTokens != 33 || evidence.CostUSD != 0.42 || evidence.LatencyMs != 1250 {
 		t.Fatalf("metrics = tokens:%d cost:%v latency:%d", evidence.TotalTokens, evidence.CostUSD, evidence.LatencyMs)
 	}
+	if evidence.UserID != "user-1" {
+		t.Fatalf("user id = %q", evidence.UserID)
+	}
 	assignment := evidence.ResourceAssignments["skill:skill-1"]
 	if assignment.RevisionID != "revision-1" || assignment.ExperimentID != "experiment-1" || assignment.Variant != "canary" {
 		t.Fatalf("assignment = %#v", assignment)
+	}
+}
+
+func TestErrorMessageMapsRealOpikErrorInfoToSafeSummary(t *testing.T) {
+	info := &errorInfo{Type: "ProviderError", Traceback: "secret upstream body and URL"}
+	if got := errorMessage(info); got != "上游执行失败" {
+		t.Fatalf("safe error summary = %q", got)
+	}
+	if got := errorMessage(nil); got != "" {
+		t.Fatalf("nil error summary = %q", got)
 	}
 }
 

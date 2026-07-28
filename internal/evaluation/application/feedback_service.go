@@ -49,6 +49,9 @@ func (s *FeedbackService) Record(
 	if err != nil {
 		return FeedbackResult{}, err
 	}
+	if observed.UserID != input.ActorID {
+		return FeedbackResult{}, domain.ErrFeedbackTraceForbidden
+	}
 	assignment, ok := observed.Assignments[string(input.ResourceKind)+":"+input.ResourceID]
 	if !ok || assignment.RevisionID == "" {
 		return FeedbackResult{}, errors.New("trace resource assignment not found")

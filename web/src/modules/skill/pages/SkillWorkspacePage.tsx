@@ -23,6 +23,7 @@ export const SkillWorkspacePage = () => {
   const navigate = useNavigate();
   const { isAdmin } = useTenantRole();
   const [workspace, setWorkspace] = useState<SkillWorkspace | null>(null);
+  const [activeTab, setActiveTab] = useState('capability');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState('');
   const [error, setError] = useState('');
@@ -43,12 +44,34 @@ export const SkillWorkspacePage = () => {
   if (error) return <Alert type="error" message={error} showIcon />;
   if (!workspace) return <Alert type="warning" message="技能工作台不存在" showIcon />;
   const { skill, draft } = workspace;
+  const canEdit = isAdmin && draft.status === 'draft';
+  const activationConfirmed = Boolean(draft.activationContract.confirmed);
   const updateDraft = (next: SkillRevision) => { setWorkspace({ ...workspace, draft: next }); fillForms(next, capabilityForm, activationForm, instructionForm); };
   const perform = async (key: string, operation: () => Promise<SkillRevision>, success: string) => {
     setSaving(key);
     try { updateDraft(await operation()); message.success(success); }
     catch (err) { message.error({ content: extractErrorMessage(err) || '保存失败', duration: 0 }); }
     finally { setSaving(''); }
+  };
+  const publishDraft = async () => {
+    setSaving('publish');
+    try {
+      await skillApi.publish(skill.id);
+    } catch (err) {
+      message.error({ content: extractErrorMessage(err) || '发布失败', duration: 0 });
+      setSaving('');
+      return;
+    }
+    try {
+      const next = await skillApi.getWorkspace(skill.id);
+      setWorkspace(next);
+      fillForms(next.draft, capabilityForm, activationForm, instructionForm);
+      message.success({ content: 'Skill Revision 已发布', duration: 2 });
+    } catch {
+      setError('Revision 已发布，但工作台状态刷新失败。请重新进入页面确认最新状态。');
+    } finally {
+      setSaving('');
+    }
   };
 
   return <div>
@@ -58,15 +81,15 @@ export const SkillWorkspacePage = () => {
         <Text type="secondary">状态：{skill.status} · 草稿 Revision：{skill.draftRevisionId || '无'} · 当前 Revision：{skill.activeRevisionId || '未发布'}</Text>
       </div>
     </div>
-    <Tabs items={[
-      { key: 'capability', label: '能力', children: <Form form={capabilityForm} layout="vertical" onFinish={(v) => perform('capability', () => skillApi.updateCapability(skill.id, v), '能力定义已保存')}>
+    <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
+      { key: 'capability', label: '能力', children: <Form disabled={!canEdit} form={capabilityForm} layout="vertical" onFinish={(v) => perform('capability', () => skillApi.updateCapability(skill.id, v), '能力定义已保存')}>
         <Form.Item label="能力目标" name="goal" rules={[{ required: true }]}><TextArea rows={3} /></Form.Item>
         <Form.Item label="调用时机" name="whenToUse" rules={[{ required: true }]}><TextArea rows={3} /></Form.Item>
         <Form.Item label="输入说明" name="inputSpec"><TextArea rows={2} /></Form.Item>
         <Form.Item label="输出说明" name="outputSpec"><TextArea rows={2} /></Form.Item>
-        {isAdmin && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'capability'}>保存能力</Button></ActionRow>}
+        {canEdit && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'capability'}>保存能力</Button></ActionRow>}
       </Form> },
-      { key: 'activation', label: '激活契约', children: <Form form={activationForm} layout="vertical" onFinish={(v) => perform('activation', () => skillApi.updateActivation(skill.id, {
+      { key: 'activation', label: '激活契约', children: <Form disabled={!canEdit} form={activationForm} layout="vertical" onFinish={(v) => perform('activation', () => skillApi.updateActivation(skill.id, {
         name: v.name, description: v.description, inputSchema: parseObject(v.inputSchemaJson, '输入 Schema'), outputSchema: parseObject(v.outputSchemaJson, '输出 Schema'), confirmed: v.confirmed,
       }), '激活契约已保存')}>
         <Form.Item label="激活名称" name="name" rules={[{ required: true }]}><Input /></Form.Item>
@@ -74,21 +97,22 @@ export const SkillWorkspacePage = () => {
         <Form.Item label="输入 Schema" name="inputSchemaJson" rules={[{ required: true }]}><TextArea rows={6} /></Form.Item>
         <Form.Item label="输出 Schema" name="outputSchemaJson" rules={[{ required: true }]}><TextArea rows={6} /></Form.Item>
         <Form.Item label="确认契约" name="confirmed" valuePropName="checked"><Switch /></Form.Item>
-        {isAdmin && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'activation'}>保存激活契约</Button></ActionRow>}
+        {canEdit && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'activation'}>保存激活契约</Button></ActionRow>}
       </Form> },
-      { key: 'instructions', label: '指令与权限', children: <Form form={instructionForm} layout="vertical" onFinish={(v) => perform('instructions', () => skillApi.updateInstructions(skill.id, {
+      { key: 'instructions', label: '指令与权限', children: <Form disabled={!canEdit} form={instructionForm} layout="vertical" onFinish={(v) => perform('instructions', () => skillApi.updateInstructions(skill.id, {
         instructions: v.instructions, requirements: { mcpToolIds: lines(v.mcpToolIDs), knowledgeWorkspaceIds: lines(v.knowledgeWorkspaceIDs), memoryScopes: v.memoryScopes || [] },
       }), '指令与权限已保存')}>
         <Form.Item label="执行指令" name="instructions" rules={[{ required: true }]}><TextArea rows={10} /></Form.Item>
         <Form.Item label="MCP 工具 ID" name="mcpToolIDs" extra="一行一个，格式 mcp:<server>:<tool>"><TextArea rows={4} /></Form.Item>
         <Form.Item label="知识工作区 ID" name="knowledgeWorkspaceIDs"><TextArea rows={3} /></Form.Item>
         <Form.Item label="记忆范围" name="memoryScopes"><Checkbox.Group options={[{ label: '当前会话', value: 'conversation' }, { label: '用户', value: 'user' }, { label: 'Agent', value: 'agent' }]} /></Form.Item>
-        {isAdmin && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'instructions'}>保存指令与权限</Button></ActionRow>}
+        {canEdit && <ActionRow><Button type="primary" htmlType="submit" loading={saving === 'instructions'}>保存指令与权限</Button></ActionRow>}
       </Form> },
       { key: 'revision', label: 'Revision', children: <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Alert type={draft.status === 'published' ? 'success' : 'warning'} showIcon message={draft.status === 'published' ? `已发布 Revision ${draft.revisionNo || 1}` : '发布后 Agent 才能激活此指令包。'} />
+        {canEdit && !activationConfirmed && <Alert type="warning" showIcon message="发布前需要确认激活契约。" action={<Button onClick={() => setActiveTab('activation')}>去确认激活契约</Button>} />}
         <Paragraph>Revision ID：{draft.id}<br />激活名称：{String(draft.activationContract.name || '')}</Paragraph>
-        {isAdmin && <ActionRow><Button icon={<SendOutlined />} type="primary" loading={saving === 'publish'} onClick={() => perform('publish', () => skillApi.publish(skill.id), 'Skill Revision 已发布')}>发布当前 Revision</Button></ActionRow>}
+        {canEdit && <ActionRow><Button disabled={!activationConfirmed} icon={<SendOutlined />} type="primary" loading={saving === 'publish'} onClick={publishDraft}>发布当前 Revision</Button></ActionRow>}
       </Space> },
       { key: 'evaluation', label: '评测与优化', children: <SkillEvaluationPanel skillId={skill.id} stableRevisionId={skill.activeRevisionId || (draft.status === 'published' ? draft.id : '')} isAdmin={isAdmin} /> },
     ]} />

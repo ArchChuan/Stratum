@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
 	isAdmin: true,
 	pendingApprovals: [] as Array<Record<string, string>>,
 	approvalActionId: null as string | null,
+	streamFailure: null as null | { message: string; code?: string; status?: number },
+	clearStreamFailure: vi.fn(),
   agents: [
     { id: 'agent-1', name: '移动 Agent', description: '测试', llmModel: 'gpt-test' },
     { id: 'agent-2', name: '备用 Agent' },
@@ -57,7 +59,9 @@ vi.mock('../../hooks/useChatPage', () => ({
     handleRenameConv: mocks.rename,
     handleDeleteConv: mocks.remove,
 	pendingApprovals: mocks.pendingApprovals,
-	approvalActionId: mocks.approvalActionId,
+		approvalActionId: mocks.approvalActionId,
+		streamFailure: mocks.streamFailure,
+		clearStreamFailure: mocks.clearStreamFailure,
     handleApprove: mocks.approve,
     handleReject: mocks.reject,
   }),
@@ -70,6 +74,7 @@ describe('AgentChatPage mobile layout', () => {
 		mocks.isAdmin = true;
 		mocks.pendingApprovals = [];
 		mocks.approvalActionId = null;
+		mocks.streamFailure = null;
 		mocks.agents = [
       { id: 'agent-1', name: '移动 Agent', description: '测试', llmModel: 'gpt-test' },
       { id: 'agent-2', name: '备用 Agent' },
@@ -195,5 +200,64 @@ describe('AgentChatPage mobile layout', () => {
     mocks.isMobile = false;
     view.rerender(<AgentChatPage />);
     expect(screen.queryByRole('button', { name: '设置助手模型' })).not.toBeInTheDocument();
+  });
+
+  it('keeps assistant model recovery out of chat for administrators', () => {
+    mocks.isMobile = false;
+    mocks.agents = [{
+      id: 'system', name: '平台使用小助手', description: '系统助手', llmModel: '', isSystem: true,
+    }];
+    mocks.selectedAgent = 'system';
+    mocks.streamFailure = {
+      message: '租户尚未配置平台助手模型',
+      code: 'SYSTEM_ASSISTANT_MODEL_UNAVAILABLE',
+      status: 503,
+    };
+
+    render(<AgentChatPage />);
+
+    expect(screen.getByText('租户尚未配置平台助手模型')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '设置助手模型' })).not.toBeInTheDocument();
+    expect(screen.queryByText('助手设置')).not.toBeInTheDocument();
+  });
+
+  it('shows contact-admin guidance to members without a recovery action', () => {
+    mocks.isMobile = false;
+    mocks.isAdmin = false;
+    mocks.agents = [{
+      id: 'system', name: '平台使用小助手', description: '系统助手', llmModel: '', isSystem: true,
+    }];
+    mocks.selectedAgent = 'system';
+    mocks.streamFailure = {
+      message: '租户尚未配置平台助手模型',
+      code: 'SYSTEM_ASSISTANT_MODEL_UNAVAILABLE',
+      status: 503,
+    };
+
+    render(<AgentChatPage />);
+
+    expect(screen.getByText('租户尚未配置平台助手模型，请联系租户管理员配置')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '设置助手模型' })).not.toBeInTheDocument();
+  });
+
+  it('does not offer model recovery for ordinary agents or unrelated errors', () => {
+    mocks.isMobile = false;
+    mocks.streamFailure = {
+      message: '租户尚未配置平台助手模型',
+      code: 'SYSTEM_ASSISTANT_MODEL_UNAVAILABLE',
+      status: 503,
+    };
+
+    const view = render(<AgentChatPage />);
+    expect(screen.queryByText('租户尚未配置平台助手模型，请联系租户管理员配置')).not.toBeInTheDocument();
+
+    mocks.agents = [{
+      id: 'system', name: '平台使用小助手', description: '系统助手', llmModel: '', isSystem: true,
+    }];
+    mocks.selectedAgent = 'system';
+    mocks.streamFailure = { message: '服务暂时不可用', code: 'OTHER_FAILURE', status: 503 };
+    view.rerender(<AgentChatPage />);
+
+    expect(screen.queryByText('租户尚未配置平台助手模型')).not.toBeInTheDocument();
   });
 });

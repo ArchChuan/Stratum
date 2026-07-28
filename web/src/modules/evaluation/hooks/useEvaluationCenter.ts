@@ -17,6 +17,7 @@ import type {
 
 import { useAuth } from '@/modules/iam';
 import { extractErrorMessage } from '@/shared/lib';
+import { createIdempotencyKey } from '@/shared/lib/idempotencyKey';
 
 const EMPTY_PAGE = { items: [] };
 const MANAGEMENT_ERROR = '仅租户管理员可执行评测命令';
@@ -105,7 +106,7 @@ export const useEvaluationCenter = (filters: EvaluationCenterFilters = {}) => {
     const fingerprint = JSON.stringify(data);
     let workflow = createWorkflowRef.current;
     if (!workflow || workflow.fingerprint !== fingerprint) {
-      workflow = { fingerprint, idempotencyKey: crypto.randomUUID() };
+      workflow = { fingerprint, idempotencyKey: createIdempotencyKey() };
       createWorkflowRef.current = workflow;
     }
     if (workflow.inFlight) return workflow.inFlight;

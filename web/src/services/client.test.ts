@@ -116,6 +116,28 @@ describe('api client', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it('preserves status and public code from a failed stream request', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: '租户尚未配置平台助手模型',
+      code: 'SYSTEM_ASSISTANT_MODEL_UNAVAILABLE',
+    }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+    const onError = vi.fn();
+
+    streamApiEvents('/agents/system/execute/stream', { query: 'hello' }, {
+      onEvent: vi.fn(),
+      onError,
+    });
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    const error = onError.mock.calls[0][0] as Error & { status?: number; code?: string };
+    expect(error.message).toBe('租户尚未配置平台助手模型');
+    expect(error.status).toBe(503);
+    expect(error.code).toBe('SYSTEM_ASSISTANT_MODEL_UNAVAILABLE');
+  });
+
   it('streams resumable GET SSE with shared auth, cookies, and Last-Event-ID', async () => {
     getTokenRef().current = 'run-token';
     const encoder = new TextEncoder();

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import {
+  cleanupPlatformAssistantSession,
   createPlatformAssistantSession,
   getProposalAsSession,
   proposalApplyEventEvidence,
@@ -29,10 +30,18 @@ const sensitiveMarkers = [
 ];
 
 test('real admin chat creates, edits, reloads, and applies one governed proposal', async (
-  { browser, context, page },
+  { browser },
   testInfo,
 ) => {
-  const session = await createPlatformAssistantSession(context, 'admin');
+  const contextOptions = {
+    baseURL: process.env.E2E_WEB_URL || 'http://127.0.0.1:5173',
+    viewport: testInfo.project.use.viewport,
+  };
+  const context = await browser.newContext(contextOptions);
+  const page = await context.newPage();
+  let session: Awaited<ReturnType<typeof createPlatformAssistantSession>> | undefined;
+  try {
+  session = await createPlatformAssistantSession(context, 'admin');
   await page.goto('/chat');
   await expect(page.getByText('Stratum 平台助手').first()).toBeVisible();
 
@@ -116,9 +125,10 @@ test('real admin chat creates, edits, reloads, and applies one governed proposal
     await expect(page.getByRole('button', { name: '确认并应用' })).toHaveCount(0);
   }
 
-  const memberContext = await browser.newContext();
+  const memberContext = await browser.newContext(contextOptions);
+  let memberSession: Awaited<ReturnType<typeof createPlatformAssistantSession>> | undefined;
   try {
-    const memberSession = await createPlatformAssistantSession(memberContext, 'member');
+    memberSession = await createPlatformAssistantSession(memberContext, 'member');
     const memberPage = await memberContext.newPage();
     await memberPage.goto(`/resource-change-proposals/${proposalId}`);
     await expect(memberPage.getByText('仅管理员可访问此页面，普通成员无权限。')).toBeVisible();
@@ -127,5 +137,10 @@ test('real admin chat creates, edits, reloads, and applies one governed proposal
     await expect(memberPage.getByRole('button', { name: '确认并应用' })).toHaveCount(0);
   } finally {
     await memberContext.close();
+    if (memberSession) cleanupPlatformAssistantSession(memberSession);
+  }
+  } finally {
+    await context.close();
+    if (session) cleanupPlatformAssistantSession(session);
   }
 });

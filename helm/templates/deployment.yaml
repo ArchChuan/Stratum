@@ -56,11 +56,16 @@ spec:
                 configMapKeyRef:
                   name: {{ include "stratum.fullname" . }}-config
                   key: LOG_LEVEL
-            - name: ENVIRONMENT
+            - name: APP_ENV
               valueFrom:
                 configMapKeyRef:
                   name: {{ include "stratum.fullname" . }}-config
                   key: ENVIRONMENT
+            - name: GIN_MODE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "stratum.fullname" . }}-config
+                  key: GIN_MODE
             - name: NATS_URL
               valueFrom:
                 configMapKeyRef:

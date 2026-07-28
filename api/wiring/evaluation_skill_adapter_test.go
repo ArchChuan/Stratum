@@ -162,8 +162,9 @@ func (r *evaluationSkillVersionRepo) InsertCandidate(_ context.Context, candidat
 func (r *evaluationSkillVersionRepo) InsertSkillWithDraft(context.Context, skillport.SkillProductRow, skilldomain.SkillRevision) error {
 	return nil
 }
-func (r *evaluationSkillVersionRepo) GetSkill(context.Context, string) (skillport.SkillProductRow, bool, error) {
-	return skillport.SkillProductRow{}, false, nil
+func (r *evaluationSkillVersionRepo) GetSkill(_ context.Context, skillID string) (skillport.SkillProductRow, bool, error) {
+	return skillport.SkillProductRow{ID: skillID, Name: "skill name", Description: "skill description"},
+		skillID == r.revision.SkillID, nil
 }
 func (r *evaluationSkillVersionRepo) ListSkills(context.Context) ([]skillport.SkillProductRow, error) {
 	return nil, nil

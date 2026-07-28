@@ -59,10 +59,7 @@ func (r *OnboardRepo) CreateTenant(ctx context.Context, in domain.CreateTenantIn
 		return nil, fmt.Errorf("onboard_repo: upsert user: %w", err)
 	}
 
-	slug := in.GitHubOrg
-	if slug == "" {
-		slug = tenantID[:8]
-	}
+	slug := tenantSlug(tenantID, in.GitHubOrg)
 
 	if _, err = tx.Exec(ctx,
 		`INSERT INTO tenants (id, name, slug, github_org_name, status) VALUES ($1, $2, $3, $4, 'provisioning')`,
@@ -101,7 +98,7 @@ func (r *OnboardRepo) CreateTenantForUser(ctx context.Context, userID, name stri
 
 	if _, err = tx.Exec(ctx,
 		`INSERT INTO tenants (id, name, slug, status) VALUES ($1, $2, $3, 'provisioning')`,
-		tenantID, name, tenantID[:8],
+		tenantID, name, tenantSlug(tenantID, ""),
 	); err != nil {
 		return "", fmt.Errorf("onboard_repo: insert tenant: %w", err)
 	}
@@ -118,6 +115,13 @@ func (r *OnboardRepo) CreateTenantForUser(ctx context.Context, userID, name stri
 		return "", fmt.Errorf("onboard_repo: commit: %w", err)
 	}
 	return tenantID, nil
+}
+
+func tenantSlug(tenantID, preferred string) string {
+	if preferred != "" {
+		return preferred
+	}
+	return tenantID
 }
 
 // GetUserTenant returns the user's first active tenant by GitHub ID.

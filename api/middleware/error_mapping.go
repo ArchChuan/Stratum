@@ -123,13 +123,17 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, agentapp.ErrNameConflict),
 		errors.Is(err, mcpdomain.ErrNameConflict),
 		errors.Is(err, skilldomain.ErrSkillNameConflict),
+		errors.Is(err, skilldomain.ErrSkillDraftNotFound),
 		errors.Is(err, skilldomain.ErrSkillLinked):
 		return http.StatusConflict
 	case errors.Is(err, memorydomain.ErrFactQuotaExceeded),
 		errors.Is(err, memorydomain.ErrFactAlreadyDeleted):
 		return http.StatusConflict
-	case errors.Is(err, evaldomain.ErrOptimizationIdempotencyConflict):
+	case errors.Is(err, evaldomain.ErrOptimizationIdempotencyConflict),
+		errors.Is(err, evaldomain.ErrFeedbackIdempotencyConflict):
 		return http.StatusConflict
+	case errors.Is(err, evaldomain.ErrFeedbackTraceForbidden):
+		return http.StatusForbidden
 	case errors.Is(err, agentapp.ErrApprovalNotApproved),
 		errors.Is(err, agentapp.ErrApprovalOutcomeUnknown),
 		errors.Is(err, agentdomain.ErrApprovalAlreadyDecided),

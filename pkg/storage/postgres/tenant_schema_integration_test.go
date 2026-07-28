@@ -29,9 +29,7 @@ func TestProvisionTenantSchemaSystemAssistantIsIdempotent(t *testing.T) {
 
 func TestProvisionTenantSchemaSystemAssistantModelBackfillPreservesTenantChoice(t *testing.T) {
 	for _, tt := range []struct {
-		name      string
-		model     string
-		wantModel string
+		name, model, wantModel string
 	}{
 		{name: "empty managed model", model: "  ", wantModel: "glm-5.2"},
 		{name: "tenant override", model: "qwen-plus", wantModel: "qwen-plus"},
@@ -49,23 +47,43 @@ func TestProvisionTenantSchemaSystemAssistantModelBackfillPreservesTenantChoice(
 				t.Fatal(err)
 			}
 			if _, err := pool.Exec(ctx, `INSERT INTO "`+schema+`".agents (id, name, llm_model, system_key)
-				VALUES ('stratum-platform-assistant', '__stratum_platform_assistant__', $1, $2)`,
-				tt.model, systemAssistantKey); err != nil {
+				VALUES ('stratum-platform-assistant', '__stratum_platform_assistant__', $1, $2)`, tt.model, systemAssistantKey); err != nil {
 				t.Fatal(err)
 			}
-
 			if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
 				t.Fatal(err)
 			}
 			var model string
-			if err := pool.QueryRow(ctx, `SELECT llm_model FROM "`+schema+`".agents WHERE system_key=$1`,
-				systemAssistantKey).Scan(&model); err != nil {
+			if err := pool.QueryRow(ctx, `SELECT llm_model FROM "`+schema+`".agents WHERE system_key=$1`, systemAssistantKey).Scan(&model); err != nil {
 				t.Fatal(err)
 			}
 			if model != tt.wantModel {
 				t.Fatalf("managed assistant model = %q, want %q", model, tt.wantModel)
 			}
 		})
+	}
+}
+
+func TestProvisionTenantSchemaRestoresFeedbackIdempotencyUniqueness(t *testing.T) {
+	pool, ctx, tenantID := systemAssistantTestPool(t, "feedback_idempotency")
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	schema := `"tenant_` + tenantID + `"`
+	if _, err := pool.Exec(ctx, `ALTER TABLE `+schema+
+		`.evaluation_feedback DROP CONSTRAINT evaluation_feedback_idempotency_key_key`); err != nil {
+		t.Fatal(err)
+	}
+	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	insert := `INSERT INTO ` + schema + `.evaluation_feedback
+		(id,trace_id,resource_kind,resource_id,revision_id,idempotency_key) VALUES($1,$2,'skill','skill-1','revision-1','same-key')`
+	if _, err := pool.Exec(ctx, insert, "feedback-1", "trace-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, insert, "feedback-2", "trace-2"); err == nil {
+		t.Fatal("reprovisioned historical tenant accepted duplicate feedback idempotency key")
 	}
 }
 

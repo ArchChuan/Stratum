@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 
 const json = (route: Route, body: unknown, status = 200) =>
   route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -76,15 +76,27 @@ async function installHarness(page: Page, role: 'member' | 'admin', ready = fals
   }));
 }
 
+async function expectSelectorWithoutSystemBadge(page: Page, selector: Locator) {
+  await selector.click();
+  const systemOption = page.locator('.ant-select-dropdown:visible .ant-select-item-option-content')
+    .filter({ hasText: '平台使用小助手' });
+  await expect(systemOption).toBeVisible();
+  await expect(systemOption).toHaveText('平台使用小助手');
+  await systemOption.click();
+}
+
 async function openAssistant(page: Page) {
   await page.goto('/chat');
+  await expect(page.getByText('平台使用小助手').last()).toBeVisible();
   if (page.viewportSize()!.width < 768) {
     await page.getByRole('button', { name: '打开会话列表' }).click();
     const drawer = page.getByRole('dialog', { name: '会话列表' });
     await expect(drawer).toBeVisible();
     await expect(drawer.getByText('平台使用小助手')).toBeVisible();
+    await expectSelectorWithoutSystemBadge(page, drawer.locator('.ant-select'));
     await drawer.getByText('平台验收会话').click();
   } else {
+    await expectSelectorWithoutSystemBadge(page, page.locator('.agent-chat-page .ant-select'));
     await page.getByText('平台验收会话').click();
   }
   await expect(page.getByText('平台使用小助手').last()).toBeVisible();

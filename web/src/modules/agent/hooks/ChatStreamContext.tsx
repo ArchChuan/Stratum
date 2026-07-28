@@ -9,7 +9,12 @@ import {
 } from 'react';
 
 import { executeAgentStream } from '../api/agent.api';
-import type { AgentExecutionResult, ExecuteAgentPayload, ToolApproval } from '../model/agent';
+import type {
+  AgentExecutionFailure,
+  AgentExecutionResult,
+  ExecuteAgentPayload,
+  ToolApproval,
+} from '../model/agent';
 
 interface StreamInternalState {
   conversationId: string | null;
@@ -19,6 +24,7 @@ interface StreamInternalState {
   done: boolean;
   result: AgentExecutionResult | null;
 	error: string | null;
+	failure: AgentExecutionFailure | null;
 	approval: ToolApproval | null;
   ctrl: AbortController | null;
 }
@@ -42,8 +48,10 @@ interface ChatStreamContextValue {
   streamError: string | null;
 	streamDone: boolean;
 	streamApproval: ToolApproval | null;
+	streamFailure: AgentExecutionFailure | null;
   startStream: (agentId: string, payload: ExecuteAgentPayload) => void;
   cancelStream: () => void;
+	clearStreamFailure: () => void;
   getStreamState: () => StreamSnapshot;
 }
 
@@ -65,6 +73,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
     done: false,
     result: null,
 		error: null,
+		failure: null,
 		approval: null,
     ctrl: null,
   });
@@ -98,6 +107,7 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
     s.done = false;
     s.result = null;
 		s.error = null;
+		s.failure = null;
 		s.approval = null;
     notify();
 
@@ -117,7 +127,12 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
 		onError: (err) => {
         if (stateRef.current.ctrl !== ctrl) return;
         stateRef.current.done = true;
-        stateRef.current.error = err.message || String(err);
+		stateRef.current.error = err.message || String(err);
+		stateRef.current.failure = {
+			message: err.message || String(err),
+			code: (err as Error & { code?: string }).code,
+			status: (err as Error & { status?: number }).status,
+		};
         stateRef.current.ctrl = null;
         notify();
 		},
@@ -138,6 +153,12 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
       notify();
     }
   }, [notify]);
+
+	const clearStreamFailure = useCallback(() => {
+		if (!stateRef.current.failure) return;
+		stateRef.current.failure = null;
+		notify();
+	}, [notify]);
 
   const getStreamState = useCallback(
     (): StreamSnapshot => ({
@@ -161,8 +182,10 @@ export const ChatStreamProvider = ({ children }: { children: ReactNode }) => {
     streamError: stateRef.current.error,
 	streamDone: stateRef.current.done,
 	streamApproval: stateRef.current.approval,
+	streamFailure: stateRef.current.failure,
     startStream,
     cancelStream,
+	clearStreamFailure,
     getStreamState,
   };
 

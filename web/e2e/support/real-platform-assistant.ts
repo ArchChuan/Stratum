@@ -2,7 +2,7 @@ import { expect, type BrowserContext } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const fixedIDPattern = /^[a-z0-9][a-z0-9_-]{2,127}$/i;
 const apiURL = process.env.E2E_API_URL || 'http://127.0.0.1:8080';
 
@@ -29,6 +29,39 @@ export const requireResourceID = (value: string, field: string) => {
     `${field} must be a UUID or fixed resource ID`,
   ).toBe(true);
   return value;
+};
+
+export const requireCleanupTenantKind = (raw: string, requireDefault: boolean) => {
+  const rows = raw
+    .split('\n')
+    .map((row) => row.trim())
+    .filter(Boolean);
+  if (rows.length === 0) throw new Error('cleanup tenant missing');
+  if (rows.length !== 1) throw new Error('cleanup tenant lookup is ambiguous');
+  if (rows[0] !== 'true' && rows[0] !== 'false') {
+    throw new Error('cleanup tenant kind is invalid');
+  }
+  const isDefault = rows[0] === 'true';
+  if (requireDefault && !isDefault) throw new Error('guest cleanup requires the default tenant');
+  if (!requireDefault && isDefault) throw new Error('default tenant is protected from tenant cleanup');
+};
+
+const tenantDefaultEvidence = (tenantId: string) => {
+  requireUUID(tenantId, 'tenant_id');
+  return runSQL(
+    `SELECT is_default::text FROM public.tenants WHERE id='${tenantId}' AND deleted_at IS NULL`,
+  );
+};
+
+export const requireDisposableTenant = (tenantId: string) => {
+  requireCleanupTenantKind(tenantDefaultEvidence(tenantId), false);
+};
+
+export const cleanupPlatformAssistantSession = (session: PlatformAssistantSession) => {
+  requireUUID(session.userId, 'user_id');
+  requireCleanupTenantKind(tenantDefaultEvidence(session.tenantId), true);
+  const deleted = runSQL(`DELETE FROM public.users WHERE id='${session.userId}' RETURNING id`);
+  expect(deleted, 'guest cleanup must delete exactly its generated user').toBe(session.userId);
 };
 
 const runSQL = (sql: string) => execFileSync(
