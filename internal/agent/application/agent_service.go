@@ -535,14 +535,14 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, existing *doma
 	}
 	cfg := &domain.AgentConfig{
 		ID:                    existing.ID,
-		Name:                  in.Name,
+		Name:                  existing.Name, // system assistant name is immutable
 		Type:                  domain.ReActAgent,
-		Description:           in.Description,
-		SystemPrompt:          in.SystemPrompt,
+		Description:           existing.Description,
+		SystemPrompt:          existing.SystemPrompt,
 		LLMModel:              in.LLMModel,
 		EmbedModel:            existing.EmbedModel,
-		MaxIterations:         in.MaxIterations,
-		MaxContextTokens:      in.MaxContextTokens,
+		MaxIterations:         existing.MaxIterations,
+		MaxContextTokens:      existing.MaxContextTokens,
 		AllowedSkills:         skills,
 		MCPToolIDs:            in.MCPToolIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
