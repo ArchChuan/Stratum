@@ -96,7 +96,9 @@ export const executeSkillPack = async ({ actor, pool, evidence, webURL }: SkillP
     completed.push('skill.mutation.post.skills.id.publish');
     recordEvidence(evidence, 'skill draft updates and publication');
 
+    const refreshedListResponse = waitForMutation(page, '/skills', 'GET');
     await page.goto(`${webURL}/skills`);
+    expect((await refreshedListResponse).status()).toBe(200);
     const card = page.locator('.ant-card').filter({ hasText: skillName });
     await expect(card).toBeVisible();
     const deleteResponse = waitForMutation(page, `/skills/${skillID}`, 'DELETE');
