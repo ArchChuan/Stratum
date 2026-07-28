@@ -1215,7 +1215,13 @@ func (s *AgentService) assembleOptions(
 	knowledgeAssignments := make(map[string]port.KnowledgeRevisionAssignment)
 	if isSystemAssistant {
 		extraTools = SystemAssistantToolDefinitions()
-		skillCatalog = map[string]port.SkillActivation{}
+		var resolveErr error
+		_, skillCatalog, resolveErr = s.buildExtraToolsChecked(
+			ctx, meta.TenantID, subjectID, nil, a.GetConfig().AllowedSkills,
+		)
+		if resolveErr != nil {
+			return ctx, nil, fmt.Errorf("resolve system assistant skills: %w", resolveErr)
+		}
 	} else {
 		var resolveErr error
 		extraTools, skillCatalog, resolveErr = s.buildExtraToolsChecked(

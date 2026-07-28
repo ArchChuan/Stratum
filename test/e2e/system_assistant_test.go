@@ -217,9 +217,9 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, domain.CurrentSystemAssistantProfileVersion,
 		agentapp.BuiltinSystemAssistantProfileSource().Version())
-	require.Empty(t, profile.AllowedSkills)
+	require.Equal(t, []string{"builtin:platform-guide", "builtin:tenant-diagnostic"}, profile.AllowedSkills)
 	require.Empty(t, profile.MCPToolIDs)
-	require.Empty(t, profile.KnowledgeWorkspaceIDs)
+	require.Equal(t, []string{"a0a0a0a0-0000-0000-0000-000000000001"}, profile.KnowledgeWorkspaceIDs)
 
 	roles := systemAssistantRoleResolver{roles: map[string]string{
 		tenants[0] + ":" + users[tenants[0]][0]: "admin",

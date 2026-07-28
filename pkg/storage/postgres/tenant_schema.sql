@@ -1301,3 +1301,69 @@ CREATE TABLE IF NOT EXISTS models (
 CREATE INDEX IF NOT EXISTS idx_models_tenant ON models(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id);
 CREATE INDEX IF NOT EXISTS idx_models_enabled ON models(tenant_id, enabled);
+
+-- =============================================================================
+-- Built-in platform assistant resources (skills + knowledge workspace)
+-- =============================================================================
+
+-- Built-in skill: platform guide
+INSERT INTO skills (id, name, description, status, active_revision_id, created_at, updated_at)
+VALUES ('builtin:platform-guide', 'stratum-platform-guide', '基于官方资料提供平台使用指导',
+        'published', 'rev-builtin-platform-guide-v1', NOW(), NOW())
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO skill_revisions (
+    id, skill_id, parent_revision_id, revision_no, status, source,
+    content_hash, generation_metadata, capability, activation_contract,
+    instructions, requirements, publish_checks, created_at, published_at
+) VALUES (
+    'rev-builtin-platform-guide-v1', 'builtin:platform-guide', NULL, 1, 'published', 'manual',
+    'e751fc5f6b337b674ab5a872c9e83a8da4301b4ba9d591e5d51b83b4e1f5302c',
+    '{}'::jsonb,
+    '{"examples":[{"expectedOutput":{"answer":"在 Agent 管理页面点击新建..."},"input":{"question":"如何创建 Agent"}}],"goal":"基于官方资料回答 Stratum 平台使用问题","inputSpec":"{\"question\": \"string\"} — 用户问题","outputSpec":"{\"answer\": \"string\", \"citations\": [\"string\"]} — 带引用来源的答案","whenToUse":"用户询问平台功能、概念、使用方法、配置步骤时"}'::jsonb,
+    '{"confirmed":true,"description":"基于官方资料提供平台使用指导","inputSchema":{"properties":{"question":{"type":"string"}},"required":["question"],"type":"object"},"name":"platform_guide","outputSchema":{"type":"object"}}'::jsonb,
+    '先用 stratum_search_official_docs 检索官方资料。基于检索结果回答用户问题。每条声明必须引用来源（文档标题 + section）。找不到资料时明确告知证据缺口，禁止编造。',
+    '{"memoryScopes":["conversation"]}'::jsonb,
+    '{}'::jsonb, NOW(), NOW()
+) ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO agent_skill_links (agent_id, skill_id)
+VALUES ('stratum-platform-assistant', 'builtin:platform-guide')
+ON CONFLICT (agent_id, skill_id) DO NOTHING;
+
+-- Built-in skill: tenant diagnostic
+INSERT INTO skills (id, name, description, status, active_revision_id, created_at, updated_at)
+VALUES ('builtin:tenant-diagnostic', 'stratum-tenant-diagnostic', '诊断当前租户各模块运行状态',
+        'published', 'rev-builtin-tenant-diagnostic-v1', NOW(), NOW())
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO skill_revisions (
+    id, skill_id, parent_revision_id, revision_no, status, source,
+    content_hash, generation_metadata, capability, activation_contract,
+    instructions, requirements, publish_checks, created_at, published_at
+) VALUES (
+    'rev-builtin-tenant-diagnostic-v1', 'builtin:tenant-diagnostic', NULL, 1, 'published', 'manual',
+    'a6426878ddc0d3c0ed10e4bf1a39591976a5ece07f7930a6e1153d22ba09b366',
+    '{}'::jsonb,
+    '{"examples":[{"expectedOutput":{"modules":[],"status":"healthy"},"input":{"area":"agent"}}],"goal":"诊断当前租户各模块运行状态","inputSpec":"{\"area\": \"string\"} — 可选，限定诊断范围","outputSpec":"{\"status\": \"string\", \"modules\": [...], \"issues\": [...]} — 诊断汇总","whenToUse":"用户询问系统状态、排查问题、检查配置时"}'::jsonb,
+    '{"confirmed":true,"description":"诊断当前租户各模块运行状态","inputSchema":{"properties":{"area":{"type":"string"}},"type":"object"},"name":"diagnose_tenant","outputSchema":{"type":"object"}}'::jsonb,
+    '调用 stratum_diagnose_tenant 收集各模块诊断证据。汇总结果时严格分层：已确认事实（有证据支持）、推断（基于证据的合理推断）、证据缺口（无法获取或失败的检查项）。禁止将证据缺口报告为系统正常。',
+    '{"memoryScopes":["conversation"]}'::jsonb,
+    '{}'::jsonb, NOW(), NOW()
+) ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO agent_skill_links (agent_id, skill_id)
+VALUES ('stratum-platform-assistant', 'builtin:tenant-diagnostic')
+ON CONFLICT (agent_id, skill_id) DO NOTHING;
+
+-- Built-in knowledge workspace: platform documentation
+INSERT INTO rag_workspaces (id, name, description, config, created_at, updated_at)
+VALUES ('a0a0a0a0-0000-0000-0000-000000000001', 'stratum_docs',
+        'Stratum 平台官方文档知识库',
+        '{"embedding_model":"text-embedding-v3","chunk_size":512,"chunk_overlap":64,"query_mode":"hybrid","top_k":5,"chunking_strategy":"structure_recursive"}'::jsonb,
+        NOW(), NOW())
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO agent_workspaces (agent_id, workspace_id)
+VALUES ('stratum-platform-assistant', 'a0a0a0a0-0000-0000-0000-000000000001')
+ON CONFLICT (agent_id, workspace_id) DO NOTHING;
