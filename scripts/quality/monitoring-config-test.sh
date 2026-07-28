@@ -6,12 +6,27 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck disable=SC1091
 source "${ROOT}/monitoring/remote/versions.env"
 
+umask 077
+TMP_ROOT="$(mktemp -d)"
+trap 'rm -rf "${TMP_ROOT}"' EXIT
+KPS_RENDER="${TMP_ROOT}/kube-prometheus-stack.yaml"
+RENDERED_ALERTMANAGER="${TMP_ROOT}/alertmanager.yaml"
+ALERTMANAGER_B64="${TMP_ROOT}/alertmanager.b64"
+
 helm template kps prometheus-community/kube-prometheus-stack \
     --version "${KUBE_PROMETHEUS_STACK_CHART_VERSION}" \
     --namespace "${MONITORING_NAMESPACE}" \
-    -f "${ROOT}/monitoring/remote/kube-prometheus-stack-values.yaml" >/dev/null
-BLACKBOX_RENDER="$(mktemp)"
-trap 'rm -f "${BLACKBOX_RENDER}"' EXIT
+    -f "${ROOT}/monitoring/remote/kube-prometheus-stack-values.yaml" >"${KPS_RENDER}"
+
+awk -F '"' '
+    /^  alertmanager.yaml: "/ { print $2; found++ }
+    END { if (found != 1) exit 1 }
+' "${KPS_RENDER}" >"${ALERTMANAGER_B64}"
+base64 -d "${ALERTMANAGER_B64}" >"${RENDERED_ALERTMANAGER}"
+go run "${ROOT}/scripts/quality/alertmanager-routing-test.go" compare \
+    "${ROOT}/monitoring/remote/alertmanager/alertmanager.yaml" "${RENDERED_ALERTMANAGER}"
+
+BLACKBOX_RENDER="${TMP_ROOT}/blackbox.yaml"
 helm template stratum-blackbox prometheus-community/prometheus-blackbox-exporter \
     --version "${BLACKBOX_EXPORTER_CHART_VERSION}" \
     --namespace "${MONITORING_NAMESPACE}" \
@@ -26,8 +41,9 @@ if [[ -d "${ROOT}/monitoring/remote/rules" ]]; then
         xargs -0 -r promtool check rules
 fi
 promtool test rules "${ROOT}/monitoring/remote/tests/stratum-rules.test.yaml"
-amtool check-config "${ROOT}/monitoring/remote/alertmanager/alertmanager.yaml"
-bash "${ALERTMANAGER_ROUTING_TEST:-${ROOT}/scripts/quality/alertmanager-routing-test.sh}"
+amtool check-config "${RENDERED_ALERTMANAGER}"
+bash "${ALERTMANAGER_ROUTING_TEST:-${ROOT}/scripts/quality/alertmanager-routing-test.sh}" \
+    "${RENDERED_ALERTMANAGER}" "${ROOT}/monitoring/remote/alertmanager/alertmanager-test.yaml"
 
 if [[ -d "${ROOT}/monitoring/remote/dashboards" ]]; then
     find "${ROOT}/monitoring/remote/dashboards" -type f -name '*.json' -print0 | \
