@@ -29,26 +29,23 @@ var (
 	ErrForbiddenOwnerRole    = errors.New("iam: cannot change owner's role")
 	ErrForbiddenRemoveOwner  = errors.New("iam: cannot remove owner")
 	ErrForbiddenAdminRemove  = errors.New("iam: admin cannot remove another admin")
-	ErrEmbedModelAlreadySet  = errors.New("iam: embed_model already set and cannot be changed")
 	ErrInvalidSettings       = errors.New("iam: invalid settings")
 )
 
-// TenantGatewayCache is the minimal cache invalidation interface needed by
-// TenantService. Satisfied by *llmgateway.TenantGatewayCache without
-// importing the infrastructure package directly.
-type TenantGatewayCache interface {
+// TenantCacheInvalidator evicts per-tenant in-process caches (model registry, etc).
+type TenantCacheInvalidator interface {
 	Invalidate(tenantID string)
 }
 
-// TenantService orchestrates tenant member, settings, and embed-model operations.
+// TenantService orchestrates tenant member and settings operations.
 type TenantService struct {
 	repo   port.TenantRepo
 	logger *zap.Logger
 	aesKey [32]byte
-	cache  TenantGatewayCache
+	cache  TenantCacheInvalidator
 }
 
-func NewTenantService(repo port.TenantRepo, logger *zap.Logger, aesKey [32]byte, cache TenantGatewayCache) *TenantService {
+func NewTenantService(repo port.TenantRepo, logger *zap.Logger, aesKey [32]byte, cache TenantCacheInvalidator) *TenantService {
 	return &TenantService{repo: repo, logger: logger, aesKey: aesKey, cache: cache}
 }
 
@@ -224,33 +221,6 @@ func (s *TenantService) ListUserTenants(ctx context.Context, userID string) ([]d
 // GetMemberRole returns the role of a tenant member; ErrMemberNotFound if absent.
 func (s *TenantService) GetMemberRole(ctx context.Context, tenantID, userID string) (string, error) {
 	return s.repo.GetMemberRole(ctx, tenantID, userID)
-}
-
-// SetEmbedModel performs a set-once write of the embed_model setting.
-func (s *TenantService) SetEmbedModel(ctx context.Context, tenantID, callerRole, embedModel string) error {
-	if callerRole != "admin" && callerRole != "owner" {
-		return ErrForbiddenAdminOrOwner
-	}
-	_, _, existingJSON, _ := s.repo.GetTenantSettings(ctx, tenantID)
-	existing := map[string]interface{}{}
-	if len(existingJSON) > 0 {
-		_ = json.Unmarshal(existingJSON, &existing)
-	}
-	if v, ok := existing["embed_model"]; ok && v != "" {
-		return ErrEmbedModelAlreadySet
-	}
-	existing["embed_model"] = embedModel
-	merged, err := json.Marshal(existing)
-	if err != nil {
-		return fmt.Errorf("tenant: marshal embed model: %w", err)
-	}
-	if err := s.repo.UpdateTenantSettings(ctx, tenantID, merged); err != nil {
-		return err
-	}
-	if s.cache != nil {
-		s.cache.Invalidate(tenantID)
-	}
-	return nil
 }
 
 // maskAPIKey shows the first 6 chars then 8 bullets — enough to identify the key without exposing it.

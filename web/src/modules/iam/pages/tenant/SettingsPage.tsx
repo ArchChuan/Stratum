@@ -5,7 +5,6 @@ import { useNavigate } from 'react-router-dom';
 import { tenantApi } from '../../api/tenant.api';
 import { TenantApiKeyCard } from '../../components/TenantApiKeyCard';
 import { TenantBasicCard } from '../../components/TenantBasicCard';
-import { TenantEmbeddingCard } from '../../components/TenantEmbeddingCard';
 import { useTenantSettings } from '../../hooks/useTenantSettings';
 
 const { Title, Text } = Typography;
@@ -19,12 +18,9 @@ export const SettingsPage = () => {
     keyLoading,
     fetchLoading,
     maskedKeys,
-    embedModel,
-    embedLoading,
     tenantName,
     isDefault,
     handleBasicSave,
-    handleEmbedSave,
     handleKeySave,
   } = useTenantSettings();
 
@@ -71,16 +67,6 @@ export const SettingsPage = () => {
             initialName={tenantName || user?.current_tenant?.name || ''}
             loading={loading}
             onSave={handleBasicSave}
-          />
-        </Col>
-        <Col xs={24} md={12} xl={14}>
-          <TenantEmbeddingCard
-            embedModel={embedModel}
-            fetchLoading={fetchLoading}
-            embedLoading={embedLoading}
-            canEditKeys={canEditKeys}
-            role={role}
-            onSave={handleEmbedSave}
           />
         </Col>
       </Row>

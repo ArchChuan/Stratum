@@ -203,7 +203,6 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		tenantGroup.DELETE("/members/:user_id", tenantHandler.RemoveMember)
 		tenantGroup.GET("/settings", tenantHandler.GetSettings)
 		tenantGroup.PATCH("/settings", requireActive, tenantHandler.UpdateSettings)
-		tenantGroup.PATCH("/embed-model", requireActive, tenantHandler.SetEmbedModel)
 		tenantGroup.DELETE("", middleware.RequireTenantRole("owner"), tenantHandler.DeleteSelf)
 	}
 

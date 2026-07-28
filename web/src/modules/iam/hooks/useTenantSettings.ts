@@ -12,8 +12,6 @@ export const useTenantSettings = () => {
   const [keyLoading, setKeyLoading] = useState(false);
   const [fetchLoading, setFetchLoading] = useState(true);
   const [maskedKeys, setMaskedKeys] = useState<Record<string, string>>({});
-  const [embedModel, setEmbedModel] = useState('');
-  const [embedLoading, setEmbedLoading] = useState(false);
   const [tenantName, setTenantName] = useState('');
   const [isDefault, setIsDefault] = useState(false);
 
@@ -24,7 +22,6 @@ export const useTenantSettings = () => {
     try {
       const settings = await tenantApi.settings();
       setMaskedKeys(settings.llm_api_keys || {});
-      setEmbedModel(settings.embed_model || '');
       setTenantName(settings.tenant_name || '');
       setIsDefault(settings.is_default ?? false);
     } catch (err: any) {
@@ -58,26 +55,6 @@ export const useTenantSettings = () => {
     }
   };
 
-  const handleEmbedSave = async (selectedEmbedModel: string) => {
-    if (!selectedEmbedModel) {
-      message.warning('请选择嵌入模型');
-      return;
-    }
-    setEmbedLoading(true);
-    try {
-      await tenantApi.setEmbedModel(selectedEmbedModel);
-      setEmbedModel(selectedEmbedModel);
-      message.success('嵌入模型已设置');
-    } catch (err: any) {
-      if (err?.response?.status === 400) {
-        message.error(extractErrorMessage(err, '嵌入模型已设置且不可更改'));
-      } else if (err?.response?.status !== 403) {
-        message.error(extractErrorMessage(err, '设置失败'));
-      }
-    } finally {
-      setEmbedLoading(false);
-    }
-  };
 
   const handleKeySave = async (llm_api_keys: Record<string, string>) => {
     if (Object.keys(llm_api_keys).length === 0) {
@@ -104,12 +81,9 @@ export const useTenantSettings = () => {
     keyLoading,
     fetchLoading,
     maskedKeys,
-    embedModel,
-    embedLoading,
     tenantName,
     isDefault,
     handleBasicSave,
-    handleEmbedSave,
     handleKeySave,
   };
 };

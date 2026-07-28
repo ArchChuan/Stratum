@@ -61,7 +61,6 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 		Description:           req.Description,
 		SystemPrompt:          req.SystemPrompt,
 		LLMModel:              req.LLMModel,
-		EmbedModel:            req.EmbedModel,
 		MaxIterations:         req.MaxIterations,
 		MaxContextTokens:      req.MaxContextTokens,
 		AllowedSkills:         req.AllowedSkills,

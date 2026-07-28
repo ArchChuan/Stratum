@@ -187,7 +187,6 @@ func MapErrorToStatus(err error) int {
 	case errors.Is(err, iamapp.ErrInvalidSettings),
 		errors.Is(err, agentdomain.ErrProposalInvalid),
 		errors.Is(err, agentdomain.ErrInvalidSystemAssistantModel),
-		errors.Is(err, iamapp.ErrEmbedModelAlreadySet),
 		errors.Is(err, iamdomain.ErrDefaultTenantDelete),
 		errors.Is(err, knowledgedomain.ErrInvalidEmbeddingModel),
 		errors.Is(err, knowledgedomain.ErrInvalidQueryMode),

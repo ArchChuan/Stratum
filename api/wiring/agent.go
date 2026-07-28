@@ -40,7 +40,6 @@ type Agent struct {
 	ApprovalService     *agent.ToolApprovalService
 	TenantResolver      agentport.TenantCapabilityResolver
 	SkillLookup         agentport.SkillLookup
-	TenantSettings      agentport.TenantSettings
 	DiagnosticProvider  agentport.DiagnosticEvidenceProvider
 	ProposalService     *agent.ResourceChangeProposalService
 }
@@ -194,7 +193,6 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		a.ApprovalStore = persistence.NewPgToolApprovalStore(db)
 		a.ApprovalService = agent.NewToolApprovalService(a.ApprovalStore, a.CheckpointStore, c.Platform.AESKey)
 		a.SkillLookup = persistence.NewPgSkillLookup(db)
-		a.TenantSettings = persistence.NewPgTenantSettings(db)
 		var registry *llmgateway.ModelRegistry
 		var gw *llmgateway.Gateway
 		if c.LLMGateway != nil {
@@ -208,7 +206,6 @@ func (c *Container) buildAgent(ctx context.Context) error {
 
 	deps := agent.AgentServiceDeps{
 		Registry:                registry,
-		TenantSettings:          a.TenantSettings,
 		SkillLookup:             a.SkillLookup,
 		SkillActivationResolver: publishedSkillActivationResolver{versions: skillVersionService(c)},
 		TenantResolver:          a.TenantResolver,

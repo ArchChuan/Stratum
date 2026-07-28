@@ -54,13 +54,10 @@ export const tenantApi = {
     return tenantSettingsSchema.parse({
       tenant_id: data.tenant_id,
       tenant_name: data.tenant_name,
-      embed_model: inner.embed_model,
       llm_api_keys: inner.llm_api_keys,
     });
   },
   updateSettings: (patch: Record<string, unknown>) => api.patch('/tenant/settings', patch),
-  setEmbedModel: (embedModel: string) =>
-    api.patch('/tenant/embed-model', { embed_model: embedModel }),
   members: async (page: number, pageSize: number): Promise<MemberPage> => {
     const res = await api.get('/tenant/members', { params: { page, page_size: pageSize } });
     return memberPageSchema.parse(res.data);

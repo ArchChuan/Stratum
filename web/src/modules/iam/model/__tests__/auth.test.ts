@@ -39,10 +39,6 @@ describe('iam model schemas', () => {
       const parsed = tenantSettingsSchema.parse({ llm_api_keys: { qwen: 'sk-1' } });
       expect(parsed.llm_api_keys?.qwen).toBe('sk-1');
     });
-    it('embed_model 可为 null', () => {
-      const parsed = tenantSettingsSchema.parse({ embed_model: null });
-      expect(parsed.embed_model).toBeNull();
-    });
   });
 
   describe('adminTenantSchema', () => {
