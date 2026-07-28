@@ -41,6 +41,21 @@ assert_inventory_cleaned() {
         fail "${scenario} left its private inventory directory behind"
 }
 
+assert_port_forward_cleaned() {
+    local scenario="$1"
+    local call_log="${TEST_ROOT}/${scenario}/calls.log"
+    assert_contains "${call_log}" '^port-forward-terminated [0-9]+$' \
+        "${scenario} left its Prometheus port-forward running"
+    local started_pid terminated_pid
+    started_pid=$(sed -n 's/^port-forward-started //p' "${call_log}" | tail -1)
+    terminated_pid=$(sed -n 's/^port-forward-terminated //p' "${call_log}" | tail -1)
+    [[ -n "${started_pid}" && "${started_pid}" == "${terminated_pid}" ]] || \
+        fail "${scenario} did not terminate the exact port-forward process it started"
+    if kill -0 "${started_pid}" >/dev/null 2>&1; then
+        fail "${scenario} returned while its Prometheus port-forward process was still alive"
+    fi
+}
+
 write_fake_tools() {
     local bin_dir="$1"
     mkdir -p "${bin_dir}"
@@ -121,10 +136,12 @@ FAKE
 set -euo pipefail
 printf 'curl %s\n' "$*" >>"${CALL_LOG}"
 if [[ "$*" == *'/-/ready'* ]]; then
-    for _ in $(seq 1 1000); do
-        [[ -e "${PF_READY_FILE}" ]] && exit 0
-    done
-    exit 49
+    timeout 5 bash -c 'while [[ ! -e "$1" ]]; do :; done' _ "${PF_READY_FILE}" || exit 49
+    if [[ "${SCENARIO:-}" == signal_* ]]; then
+        : >"${SIGNAL_READY_FILE}"
+        exit 49
+    fi
+    exit 0
 elif [[ "$*" == *'/api/v1/targets'* ]]; then
     [[ "${SCENARIO:-}" != "target_failure" ]] || exit 45
     printf '{"status":"success","data":{"activeTargets":[{"labels":{"namespace":"stratum","service":"stratum","endpoint":"http"},"health":"up"},{"labels":{"job":"stratum-blackbox-prometheus-blackbox-exporter","service":"stratum","environment":"remote-test"},"health":"up"},{"labels":{"namespace":"monitoring","service":"stratum-feishu-alert-adapter"},"health":"up"},{"labels":{"namespace":"stratum","service":"stratum-etcd-metrics"},"health":"up"},{"labels":{"namespace":"stratum","service":"stratum-milvus-metrics"},"health":"up"}]}}\n'
@@ -177,6 +194,43 @@ run_case() {
         "${scenario} attempted a destructive or stale operation"
 }
 
+run_signal_case() {
+    local scenario="$1" signal="$2" expected_status="$3"
+    local case_dir="${TEST_ROOT}/${scenario}"
+    mkdir -p "${case_dir}"
+    write_fake_tools "${case_dir}/bin"
+    : >"${case_dir}/calls.log"
+
+    PATH="${case_dir}/bin:/usr/bin:/bin" CALL_LOG="${case_dir}/calls.log" SCENARIO="${scenario}" \
+        PF_READY_FILE="${case_dir}/port-forward.ready" SIGNAL_READY_FILE="${case_dir}/signal.ready" \
+        FEISHU_ADAPTER_IMAGE='registry.example/adapter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+        MONITORING_DEPLOY_TEST_REPORT_CLEANUP=1 \
+        MONITORING_SMOKE_ATTEMPTS=1 MONITORING_SMOKE_INTERVAL_SEC=0 \
+        MONITORING_VALIDATION_COMMAND="printf 'validation\\n' >>\"${case_dir}/calls.log\"" \
+        bash "${DEPLOY_SCRIPT}" >"${case_dir}/stdout.log" 2>"${case_dir}/stderr.log" &
+    local deploy_pid=$!
+
+    timeout 5 bash -c '
+        while [[ ! -e "$1" ]]; do
+            kill -0 "$2" >/dev/null 2>&1 || exit 1
+        done
+    ' _ "${case_dir}/signal.ready" "${deploy_pid}" || \
+        fail 'signal test did not reach its deterministic termination point'
+    kill "-${signal}" "${deploy_pid}"
+
+    set +e
+    wait "${deploy_pid}"
+    local status=$?
+    set -e
+    [[ ${status} -eq ${expected_status} ]] || \
+        fail "${signal} returned ${status}; expected fail-closed status ${expected_status}"
+    assert_inventory_cleaned "${scenario}"
+    assert_port_forward_cleaned "${scenario}"
+    cleanup_count=$(grep -c '^inventory directory removed: ' "${case_dir}/stderr.log")
+    [[ ${cleanup_count} -eq 1 ]] || \
+        fail "${signal} cleanup ran ${cleanup_count} times; expected exactly once"
+}
+
 for scenario in inventory_failure status_failure values_failure unexpected_release unexpected_namespace unexpected_chart; do
     run_case "${scenario}" failure
     assert_not_contains "${TEST_ROOT}/${scenario}/calls.log" \
@@ -203,15 +257,7 @@ assert_contains "${TEST_ROOT}/rule_health_failure/calls.log" '/api/v1/rules' \
     'rule-health failure scenario did not reach the rule smoke check'
 for scenario in target_failure rule_health_failure; do
     assert_inventory_cleaned "${scenario}"
-    assert_contains "${TEST_ROOT}/${scenario}/calls.log" '^port-forward-terminated [0-9]+$' \
-        "${scenario} left its Prometheus port-forward running"
-    started_pid=$(sed -n 's/^port-forward-started //p' "${TEST_ROOT}/${scenario}/calls.log" | tail -1)
-    terminated_pid=$(sed -n 's/^port-forward-terminated //p' "${TEST_ROOT}/${scenario}/calls.log" | tail -1)
-    [[ -n "${started_pid}" && "${started_pid}" == "${terminated_pid}" ]] || \
-        fail "${scenario} did not terminate the exact port-forward process it started"
-    if kill -0 "${started_pid}" >/dev/null 2>&1; then
-        fail "${scenario} returned while its Prometheus port-forward process was still alive"
-    fi
+    assert_port_forward_cleaned "${scenario}"
 done
 
 run_case success success
@@ -243,5 +289,9 @@ assert_contains "${TEST_ROOT}/success/stderr.log" 'inventory directory removed:'
 inventory_dir=$(sed -n 's/^inventory directory removed: //p' "${TEST_ROOT}/success/stderr.log" | tail -1)
 [[ -n "${inventory_dir}" && ! -e "${inventory_dir}" ]] || fail 'private inventory directory was not removed'
 [[ "${inventory_dir}" == /tmp/* ]] || fail 'inventory directory was not created under the system temporary directory'
+assert_port_forward_cleaned success
+
+run_signal_case signal_term TERM 143
+run_signal_case signal_int INT 130
 
 echo 'remote monitoring deployment contract tests passed'

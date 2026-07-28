@@ -11,8 +11,6 @@ INVENTORY_DIR="$(mktemp -d)"
 PORT_FORWARD_PID=""
 
 cleanup() {
-    local status=$?
-    trap - EXIT INT TERM
     if [[ -n "${PORT_FORWARD_PID}" ]] && kill -0 "${PORT_FORWARD_PID}" >/dev/null 2>&1; then
         kill "${PORT_FORWARD_PID}" >/dev/null 2>&1 || :
         wait "${PORT_FORWARD_PID}" >/dev/null 2>&1 || :
@@ -21,9 +19,17 @@ cleanup() {
     if [[ "${MONITORING_DEPLOY_TEST_REPORT_CLEANUP:-}" == "1" ]]; then
         echo "inventory directory removed: ${INVENTORY_DIR}" >&2
     fi
+}
+
+exit_for_signal() {
+    local status="$1"
+    trap - INT TERM
     exit "${status}"
 }
-trap cleanup EXIT INT TERM
+
+trap cleanup EXIT
+trap 'exit_for_signal 130' INT
+trap 'exit_for_signal 143' TERM
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || {
