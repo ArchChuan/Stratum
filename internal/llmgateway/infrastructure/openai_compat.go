@@ -508,3 +508,41 @@ func (c *OpenAICompatClient) Health(ctx context.Context) error {
 func (c *OpenAICompatClient) Models() []string {
 	return c.cfg.Models
 }
+
+// ---------------------------------------------------------------------------
+// ChatProtocol adapters — stateless wrappers that accept a ProviderConfig at
+// call time, delegating to the existing instance-method implementations.
+// These verify the new interface contracts compile; full stateless migration
+// is deferred.
+// ---------------------------------------------------------------------------
+
+// ChatComplete delegates to the instance's Complete method.
+func (c *OpenAICompatClient) ChatComplete(ctx context.Context, cfg ProviderConfig, req *CompletionRequest) (*CompletionResponse, error) {
+	return c.Complete(ctx, req)
+}
+
+// ChatCompleteStream delegates to the instance's CompleteStream method.
+func (c *OpenAICompatClient) ChatCompleteStream(ctx context.Context, cfg ProviderConfig, req *CompletionRequest, onToken func(string)) (*CompletionResponse, error) {
+	return c.CompleteStream(ctx, req, onToken)
+}
+
+// ChatHealth delegates to the instance's Health method.
+func (c *OpenAICompatClient) ChatHealth(ctx context.Context, cfg ProviderConfig) error {
+	return c.Health(ctx)
+}
+
+// ChatListModels delegates to the instance's Models method.
+func (c *OpenAICompatClient) ChatListModels(ctx context.Context, cfg ProviderConfig) ([]string, error) {
+	return c.Models(), nil
+}
+
+// EmbedCreateEmbeddings delegates to the instance's CreateEmbeddings method.
+func (c *OpenAICompatClient) EmbedCreateEmbeddings(ctx context.Context, cfg ProviderConfig, req *EmbeddingRequest) (*EmbeddingResponse, error) {
+	return c.CreateEmbeddings(ctx, req)
+}
+
+// EmbedBatchSize is an alias for BatchSize that satisfies the EmbedProtocol contract.
+// It shadows the existing BatchSize method but is identical in behaviour.
+func (c *OpenAICompatClient) EmbedBatchSize() int {
+	return c.BatchSize()
+}
