@@ -75,8 +75,8 @@ func (r AgentRevision) Validate() error {
 	default:
 		return fmt.Errorf("agent revision: unsupported agent type %q", r.Type)
 	}
-	if r.MaxIterations < 1 || r.MaxIterations > 20 {
-		return errors.New("agent revision: max iterations must be between 1 and 20")
+	if r.MaxIterations < 1 || r.MaxIterations > 90 {
+		return errors.New("agent revision: max iterations must be between 1 and 90")
 	}
 	seen := make(map[string]struct{}, len(r.Bindings))
 	for _, binding := range r.Bindings {

@@ -465,78 +465,38 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig) error
 	})
 }
 
-func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string) (*domain.AgentConfig, error) {
-	var cfg domain.AgentConfig
-	var agentType string
-	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, updated_at=NOW()
-			WHERE system_key='stratum.platform_assistant'
-			RETURNING id, name, type, description, system_prompt, llm_model, embed_model,
-			          max_iterations, max_context_tokens, memory_scope, system_key`, model).
-			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return fmt.Errorf("update system assistant model: %w", domain.ErrNotFound)
-			}
-			return fmt.Errorf("update system assistant model: %w", err)
+// UpdateSystemAssistant writes all mutable fields for the system assistant.
+// Unlike Update it targets by system_key and skips the rejectManagedAssistant
+// guard so managed assistants are editable through this dedicated path.
+func (r *PgAgentRepo) UpdateSystemAssistant(ctx context.Context, cfg *domain.AgentConfig) error {
+	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`UPDATE agents
+			 SET name=$1, description=$2, system_prompt=$3,
+			     llm_model=$4, max_iterations=$5, max_context_tokens=$6,
+			     memory_scope=$7, updated_at=NOW()
+			 WHERE system_key=$8`,
+			cfg.Name, cfg.Description, cfg.SystemPrompt,
+			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope,
+			domain.SystemAssistantKey,
+		)
+		if err != nil {
+			return fmt.Errorf("update system assistant: %w", err)
 		}
-		if err := loadAgentRelations(ctx, tx, &cfg); err != nil {
-			return fmt.Errorf("update system assistant model relations: %w", err)
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("update system assistant: %w", domain.ErrNotFound)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	cfg.Type = domain.AgentType(agentType)
-	setManagedIdentity(&cfg)
-	cfg.AllowedSkills = nonNil(cfg.AllowedSkills)
-	cfg.MCPToolIDs = nonNil(cfg.MCPToolIDs)
-	cfg.KnowledgeWorkspaceIDs = nonNil(cfg.KnowledgeWorkspaceIDs)
-	return &cfg, nil
-}
-
-func (r *PgAgentRepo) UpdateSystemAssistantBindings(
-	ctx context.Context, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills []string,
-) (*domain.AgentConfig, error) {
-	var cfg domain.AgentConfig
-	var agentType string
-	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx,
-			`UPDATE agents SET updated_at=NOW()
-			 WHERE system_key='stratum.platform_assistant'
-			 RETURNING id, name, type, description, system_prompt, llm_model, embed_model,
-			           max_iterations, max_context_tokens, memory_scope, system_key`).
-			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.EmbedModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return fmt.Errorf("update system assistant bindings: %w", domain.ErrNotFound)
-			}
-			return fmt.Errorf("update system assistant bindings: %w", err)
-		}
-		if err := r.replaceSkills(ctx, tx, domain.SystemAssistantID, allowedSkills); err != nil {
+		if err := r.replaceSkills(ctx, tx, cfg.ID, cfg.AllowedSkills); err != nil {
 			return err
 		}
-		if err := r.replaceMCPTools(ctx, tx, domain.SystemAssistantID, mcpToolIDs); err != nil {
+		if err := r.replaceMCPTools(ctx, tx, cfg.ID, cfg.MCPToolIDs); err != nil {
 			return err
 		}
-		if err := r.replaceKnowledgeWorkspaces(ctx, tx, domain.SystemAssistantID, knowledgeWorkspaceIDs); err != nil {
-			return err
-		}
-		if err := loadAgentRelations(ctx, tx, &cfg); err != nil {
+		if err := r.replaceKnowledgeWorkspaces(ctx, tx, cfg.ID, cfg.KnowledgeWorkspaceIDs); err != nil {
 			return err
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	cfg.Type = domain.AgentType(agentType)
-	setManagedIdentity(&cfg)
-	cfg.AllowedSkills = nonNil(cfg.AllowedSkills)
-	cfg.MCPToolIDs = nonNil(cfg.MCPToolIDs)
-	cfg.KnowledgeWorkspaceIDs = nonNil(cfg.KnowledgeWorkspaceIDs)
-	return &cfg, nil
 }
 
 func rejectManagedAssistant(ctx context.Context, tx pgx.Tx, id string) error {
