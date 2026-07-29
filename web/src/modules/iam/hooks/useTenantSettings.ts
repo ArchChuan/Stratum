@@ -10,7 +10,7 @@ export const useTenantSettings = () => {
   const { user, login, tokenRef } = useAuth();
   const [loading, setLoading] = useState(false);
   const [tenantName, setTenantName] = useState('');
-  const [isDefault, setIsDefault] = useState(false);
+  const [isDefault, setIsDefault] = useState<boolean | null>(null);
 
   const role = user?.current_tenant?.role || user?.role;
   const loadSettings = useCallback(async () => {
