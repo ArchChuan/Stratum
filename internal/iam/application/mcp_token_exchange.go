@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/platformmcp"
@@ -146,7 +147,10 @@ func (s *MCPTokenExchange) validateApproval(
 	if err := s.Approvals.ValidatePlatformMCPApproval(
 		ctx, claims.TenantID, claims.ApprovalID, claims.ToolName, resourceID,
 	); err != nil {
-		return errors.Join(ErrPlatformMCPApprovalInvalid, err)
+		if errors.Is(err, domain.ErrPlatformMCPApprovalStale) {
+			return errors.Join(ErrPlatformMCPApprovalInvalid, err)
+		}
+		return fmt.Errorf("validate platform MCP approval: %w", err)
 	}
 	return nil
 }

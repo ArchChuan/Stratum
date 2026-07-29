@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"github.com/golang-jwt/jwt/v5"
@@ -55,7 +56,7 @@ func TestMCPTokenExchangeRejectsInvalidAuthority(t *testing.T) {
 			d.contracts.contracts["tool-1"] = platformmcp.ToolContract{
 				Name: "tool-1", Method: "POST", Path: "/internal/test", RequiresApproval: true,
 			}
-			d.approvals.err = errors.New("stale")
+			d.approvals.err = domain.ErrPlatformMCPApprovalStale
 			d.tokens.claims.ApprovalID = "approval-1"
 		}, want: ErrPlatformMCPApprovalInvalid},
 		{name: "expired token", mutate: func(d *exchangeDeps) {
@@ -77,6 +78,27 @@ func TestMCPTokenExchangeRejectsInvalidAuthority(t *testing.T) {
 				t.Fatalf("error=%v, want %v", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestMCPTokenExchangePreservesApprovalDependencyFailure(t *testing.T) {
+	deps := validExchangeDeps()
+	dependencyErr := errors.New("approval repository unavailable")
+	deps.contracts.contracts["tool-1"] = platformmcp.ToolContract{
+		Name: "tool-1", Method: "POST", Path: "/internal/test", RequiresApproval: true,
+	}
+	deps.approvals.err = dependencyErr
+	deps.tokens.claims.ApprovalID = "approval-1"
+	exchange := NewMCPTokenExchange(deps.asExchange())
+
+	_, err := exchange.Exchange(t.Context(), MCPTokenExchangeRequest{
+		InvocationToken: "invocation", ResourceID: "resource-1",
+	})
+	if !errors.Is(err, dependencyErr) {
+		t.Fatalf("error=%v, want dependency error", err)
+	}
+	if errors.Is(err, ErrPlatformMCPApprovalInvalid) {
+		t.Fatalf("error=%v, must not be classified as invalid approval", err)
 	}
 }
 
