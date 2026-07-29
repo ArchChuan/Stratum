@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 
@@ -66,80 +67,76 @@ func (c *Container) buildMemory(ctx context.Context) error {
 	}
 
 	db := c.dbOrNil()
-	if db != nil {
-		factRepo := persistence.NewFactRepo(db)
-		entityRepo := persistence.NewEntityRepo(db)
-		queue := persistence.NewExtractionQueue(db)
+	c.buildMemoryService(mem, db, memRepo)
+	c.buildMemoryInjector(mem, db)
+	c.buildMemoryRecall(mem, db)
 
-		var messageBufferStore memport.MessageBufferStore
-		if c.Storage != nil && c.Storage.Redis != nil {
-			messageBufferStore = persistence.NewRedisMessageBufferStore(c.Storage.Redis.Client())
-		}
+	c.Memory = mem
+	return c.buildMemoryPipeline(mem, db)
+}
 
-		mem.Service = memory.NewMemoryService(factRepo, entityRepo, queue, nil, nil, nil, messageBufferStore, c.Logger)
-		mem.Service.SetMemoryRepo(memRepo)
-
-		if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
-			llmRes := newTenantCapabilityResolver(
-				db, c.Platform.AESKey, c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
-			).(*tenantCapabilityResolver)
-			mem.Service.SetLLMExtractResolver(func(ctx context.Context, tenantID string) memport.LLMExtractor {
-				llm := llmRes.ResolveLLM(ctx, tenantID)
-				if llm == nil {
-					return nil
-				}
-				return pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm})
-			})
-			// Per-tenant inline supersede judge (nil-safe): mirrors the extractor
-			// resolver so ExtractFacts' mid-similarity LLM branch is live in prod,
-			// not just the standalone SupersedeWorker.
-			mem.Service.SetLLMSupersederResolver(func(ctx context.Context, tenantID string) memport.LLMSuperseder {
-				llm := llmRes.ResolveLLM(ctx, tenantID)
-				if llm == nil {
-					return nil
-				}
-				return memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm})
-			})
-		}
-		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
-			embedRes := c.Knowledge.EmbedResolver
-			mem.Service.SetEmbedClientResolver(func(ctx context.Context, tenantID string) memport.EmbedClient {
-				ec := embedRes(ctx, tenantID)
-				if ec == nil {
-					return nil
-				}
-				return pipeline.NewEmbedClientAdapter(ec)
-			})
-		}
+func (c *Container) buildMemoryService(mem *Memory, db *pgxpool.Pool, memRepo memport.MemoryRepo) {
+	if db == nil {
+		return
 	}
-	if db != nil {
-		vectorStore := c.Storage.Milvus
-		inj := pipeline.NewMemoryInjector(db, c.Logger, nil, vectorStore)
-		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
-			inj.SetEmbedResolver(c.Knowledge.EmbedResolver)
-		}
-		mem.Injector = injectorAdapter{inj: inj}
+	factRepo := persistence.NewFactRepo(db)
+	entityRepo := persistence.NewEntityRepo(db)
+	queue := persistence.NewExtractionQueue(db)
+
+	var messageBufferStore memport.MessageBufferStore
+	if c.Storage != nil && c.Storage.Redis != nil {
+		messageBufferStore = persistence.NewRedisMessageBufferStore(c.Storage.Redis.Client())
 	}
 
-	if db != nil && c.Storage != nil && c.Storage.Milvus != nil {
-		var embedResolver pipeline.EmbedServiceResolver
-		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
-			embedResolver = c.Knowledge.EmbedResolver
-		}
-		recallHandler := pipeline.NewRecallHandler(db, c.Logger, nil, embedResolver, c.Storage.Milvus)
-		if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
-			recallHandler.WithMetrics(c.LLMGateway.Metrics)
-		}
-		mem.RecallFn = func(ctx context.Context, tenantID, userID, agentID, scope string, input map[string]any) (string, error) {
-			return recallHandler.Handle(ctx, tenantID, userID, agentID, scope, input)
-		}
+	mem.Service = memory.NewMemoryService(factRepo, entityRepo, queue, nil, nil, nil, messageBufferStore, c.Logger)
+	mem.Service.SetMemoryRepo(memRepo)
 
-		if mem.Service != nil {
-			mem.Service.SetVectorStore(persistence.NewMilvusPortAdapter(c.Storage.Milvus))
-		}
+	if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
+		llmRes := newTenantCapabilityResolver(
+			db, c.Platform.AESKey, c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
+		).(*tenantCapabilityResolver)
+		mem.Service.SetLLMExtractResolver(makeLLMExtractResolver(llmRes))
+		mem.Service.SetLLMSupersederResolver(makeLLMSupersederResolver(llmRes))
+	}
+	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
+		mem.Service.SetEmbedClientResolver(makeEmbedClientResolver(c.Knowledge.EmbedResolver))
+	}
+}
+
+func (c *Container) buildMemoryInjector(mem *Memory, db *pgxpool.Pool) {
+	if db == nil {
+		return
+	}
+	vectorStore := c.Storage.Milvus
+	inj := pipeline.NewMemoryInjector(db, c.Logger, nil, vectorStore)
+	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
+		inj.SetEmbedResolver(c.Knowledge.EmbedResolver)
+	}
+	mem.Injector = injectorAdapter{inj: inj}
+}
+
+func (c *Container) buildMemoryRecall(mem *Memory, db *pgxpool.Pool) {
+	if db == nil || c.Storage == nil || c.Storage.Milvus == nil {
+		return
+	}
+	var embedResolver pipeline.EmbedServiceResolver
+	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
+		embedResolver = c.Knowledge.EmbedResolver
+	}
+	recallHandler := pipeline.NewRecallHandler(db, c.Logger, nil, embedResolver, c.Storage.Milvus)
+	if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
+		recallHandler.WithMetrics(c.LLMGateway.Metrics)
+	}
+	mem.RecallFn = func(ctx context.Context, tenantID, userID, agentID, scope string, input map[string]any) (string, error) {
+		return recallHandler.Handle(ctx, tenantID, userID, agentID, scope, input)
 	}
 
-	// Memory pipeline — degrades to nil if disabled or NATS unavailable.
+	if mem.Service != nil {
+		mem.Service.SetVectorStore(persistence.NewMilvusPortAdapter(c.Storage.Milvus))
+	}
+}
+
+func (c *Container) buildMemoryPipeline(mem *Memory, db *pgxpool.Pool) error {
 	mp := c.Config.MemoryPipeline
 	pipelineCfg := pipeline.Config{
 		Enabled:               mp.Enabled,
@@ -158,55 +155,80 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		SummaryPrompt:         mp.SummaryPrompt,
 	}
 
-	if pipelineCfg.Enabled && db != nil && c.Storage != nil && c.Storage.Milvus != nil {
-		// Per cmd/server/main.go, the pipeline opens its own NATS connection
-		// independent of Storage.NATS so it can be torn down cleanly.
-		nc, err := nats.Connect(pipelineCfg.NatsURL)
-		if err != nil {
-			c.Logger.Warn("memory-pipeline: NATS connect failed", zap.Error(err))
-			c.Memory = mem
-			return nil
-		}
-		c.shutdown = append(c.shutdown, func(_ context.Context) error { return nc.Drain() })
-
-		dimResolver := pipeline.DimResolver(func(ctx context.Context, tenantID string) int {
-			if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
-				if ec := c.Knowledge.EmbedResolver(ctx, tenantID); ec != nil {
-					if d := ec.GetVectorDimension(); d > 0 {
-						return d
-					}
-				}
-			}
-			return 1536
-		})
-
-		vectorAdapter := pipeline.NewMilvusVectorAdapter(c.Storage.Milvus).WithDimResolver(dimResolver)
-		p := pipeline.New(pipelineCfg, db, nc, vectorAdapter, c.Logger)
-		if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
-			pipeline.RegisterMetrics(c.LLMGateway.Metrics.Registerer())
-		}
-		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
-			p.SetEmbedResolver(c.Knowledge.EmbedResolver)
-		}
-		if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
-			llmRes := newTenantCapabilityResolver(
-				db, c.Platform.AESKey, c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
-			).(*tenantCapabilityResolver)
-			p.SetLLMResolver(func(ctx context.Context, tenantID string) pipeline.LLMClient {
-				gw := llmRes.ResolveLLM(ctx, tenantID)
-				if gw == nil {
-					return nil
-				}
-				return memoryLLMAdapter{client: gw}
-			})
-		}
-		// Pipeline lifecycle (Start/Stop) is owned by the cmd/server Harness
-		// memory-pipeline component, so wiring only constructs and exposes it.
-		mem.Pipeline = p
+	if !pipelineCfg.Enabled || db == nil || c.Storage == nil || c.Storage.Milvus == nil {
+		return nil
 	}
 
-	c.Memory = mem
+	nc, err := nats.Connect(pipelineCfg.NatsURL)
+	if err != nil {
+		c.Logger.Warn("memory-pipeline: NATS connect failed", zap.Error(err))
+		return nil
+	}
+	c.shutdown = append(c.shutdown, func(_ context.Context) error { return nc.Drain() })
+
+	dimResolver := pipeline.DimResolver(func(ctx context.Context, tenantID string) int {
+		if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
+			if ec := c.Knowledge.EmbedResolver(ctx, tenantID); ec != nil {
+				if d := ec.GetVectorDimension(); d > 0 {
+					return d
+				}
+			}
+		}
+		return 1536
+	})
+
+	vectorAdapter := pipeline.NewMilvusVectorAdapter(c.Storage.Milvus).WithDimResolver(dimResolver)
+	p := pipeline.New(pipelineCfg, db, nc, vectorAdapter, c.Logger)
+	if c.LLMGateway != nil && c.LLMGateway.Metrics != nil {
+		pipeline.RegisterMetrics(c.LLMGateway.Metrics.Registerer())
+	}
+	if c.Knowledge != nil && c.Knowledge.EmbedResolver != nil {
+		p.SetEmbedResolver(c.Knowledge.EmbedResolver)
+	}
+	if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
+		llmRes := newTenantCapabilityResolver(
+			db, c.Platform.AESKey, c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
+		).(*tenantCapabilityResolver)
+		p.SetLLMResolver(func(ctx context.Context, tenantID string) pipeline.LLMClient {
+			gw := llmRes.ResolveLLM(ctx, tenantID)
+			if gw == nil {
+				return nil
+			}
+			return memoryLLMAdapter{client: gw}
+		})
+	}
+	mem.Pipeline = p
 	return nil
+}
+
+func makeLLMExtractResolver(llmRes *tenantCapabilityResolver) func(context.Context, string) memport.LLMExtractor {
+	return func(ctx context.Context, tenantID string) memport.LLMExtractor {
+		llm := llmRes.ResolveLLM(ctx, tenantID)
+		if llm == nil {
+			return nil
+		}
+		return pipeline.NewLLMExtractor(memoryLLMAdapter{client: llm})
+	}
+}
+
+func makeLLMSupersederResolver(llmRes *tenantCapabilityResolver) func(context.Context, string) memport.LLMSuperseder {
+	return func(ctx context.Context, tenantID string) memport.LLMSuperseder {
+		llm := llmRes.ResolveLLM(ctx, tenantID)
+		if llm == nil {
+			return nil
+		}
+		return memworkers.NewLLMSuperseder(memoryLLMAdapter{client: llm})
+	}
+}
+
+func makeEmbedClientResolver(embedRes pipeline.EmbedServiceResolver) func(context.Context, string) memport.EmbedClient {
+	return func(ctx context.Context, tenantID string) memport.EmbedClient {
+		ec := embedRes(ctx, tenantID)
+		if ec == nil {
+			return nil
+		}
+		return pipeline.NewEmbedClientAdapter(ec)
+	}
 }
 
 // injectorAdapter adapts *pipeline.MemoryInjector to port.MemoryInjector.
@@ -262,17 +284,8 @@ func BuildMemoryWorkers(c *Container) []interface {
 			memworkers.NewExtractionWorker(tid, queue, c.Memory.Service, c.Logger),
 			memworkers.NewGCWorker(tid, factRepo, c.Logger).WithQueue(queue),
 		}
-		var workerLLMResolver memworkers.TenantLLMResolver
-		if llmRes != nil {
-			workerLLMResolver = func(ctx context.Context, tenantID string) (memworkers.TenantLLMClient, error) {
-				llm, err := llmRes.ResolveWorkerLLM(ctx, tenantID)
-				if err != nil || llm == nil {
-					return nil, err
-				}
-				return memoryLLMAdapter{client: llm}, nil
-			}
-		}
-		return appendTenantLLMWorkers(ws, tid, entityRepo, factRepo, historyRepo, workerLLMResolver, c.Logger)
+		return appendTenantLLMWorkers(ws, tid, entityRepo, factRepo, historyRepo,
+			buildWorkerLLMResolver(llmRes), c.Logger)
 	}, c.Logger)
 
 	result := []interface {
@@ -286,6 +299,19 @@ func BuildMemoryWorkers(c *Container) []interface {
 	}
 
 	return result
+}
+
+func buildWorkerLLMResolver(llmRes *tenantCapabilityResolver) memworkers.TenantLLMResolver {
+	if llmRes == nil {
+		return nil
+	}
+	return func(ctx context.Context, tenantID string) (memworkers.TenantLLMClient, error) {
+		llm, err := llmRes.ResolveWorkerLLM(ctx, tenantID)
+		if err != nil || llm == nil {
+			return nil, err
+		}
+		return memoryLLMAdapter{client: llm}, nil
+	}
 }
 
 func appendTenantLLMWorkers(

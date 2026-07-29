@@ -20,7 +20,26 @@ func ReadySet(spec domain.Spec, attempts []domain.NodeAttempt) ([]domain.Node, [
 	for _, edge := range spec.Edges {
 		incoming[edge.To] = append(incoming[edge.To], edge)
 	}
-	selected := func(edge domain.Edge) (resolved, chosen bool) {
+	selected := edgeSelector(latest)
+
+	skippedSet := propagateSkipped(spec, latest, incoming, selected)
+
+	kernelNodes, statuses, byID := buildKernelGraph(spec.Nodes, latest, incoming, selected, skippedSet)
+	readyIDs, _, _, err := dag.Ready(dag.Snapshot{Nodes: kernelNodes, Statuses: statuses})
+	if err != nil {
+		return nil, sortedKeys(skippedSet)
+	}
+	ready := make([]domain.Node, 0, len(readyIDs))
+	for _, id := range readyIDs {
+		if node, exists := byID[id]; exists {
+			ready = append(ready, node)
+		}
+	}
+	return ready, sortedKeys(skippedSet)
+}
+
+func edgeSelector(latest map[string]domain.NodeAttempt) func(domain.Edge) (bool, bool) {
+	return func(edge domain.Edge) (resolved, chosen bool) {
 		parent, ok := latest[edge.From]
 		if !ok || (parent.Status != domain.AttemptStatusSucceeded && parent.Status != domain.AttemptStatusSkipped) {
 			return false, false
@@ -38,7 +57,9 @@ func ReadySet(spec domain.Spec, attempts []domain.NodeAttempt) ([]domain.Node, [
 		}
 		return true, false
 	}
+}
 
+func propagateSkipped(spec domain.Spec, latest map[string]domain.NodeAttempt, incoming map[string][]domain.Edge, selected func(domain.Edge) (bool, bool)) map[string]bool {
 	skippedSet := map[string]bool{}
 	changed := true
 	for changed {
@@ -47,26 +68,33 @@ func ReadySet(spec domain.Spec, attempts []domain.NodeAttempt) ([]domain.Node, [
 			if _, exists := latest[node.ID]; exists || skippedSet[node.ID] || len(incoming[node.ID]) == 0 {
 				continue
 			}
-			allResolved, anyChosen := true, false
-			for _, edge := range incoming[node.ID] {
-				resolved, chosen := selected(edge)
-				if skippedSet[edge.From] {
-					resolved, chosen = true, false
-				}
-				allResolved = allResolved && resolved
-				anyChosen = anyChosen || chosen
-			}
-			if allResolved && !anyChosen {
+			if allResolvedWithoutChoice(node, incoming, selected, skippedSet) {
 				skippedSet[node.ID] = true
 				changed = true
 			}
 		}
 	}
+	return skippedSet
+}
 
-	kernelNodes := make([]dag.Node, 0, len(spec.Nodes)-len(skippedSet))
+func allResolvedWithoutChoice(node domain.Node, incoming map[string][]domain.Edge, selected func(domain.Edge) (bool, bool), skippedSet map[string]bool) bool {
+	allResolved, anyChosen := true, false
+	for _, edge := range incoming[node.ID] {
+		resolved, chosen := selected(edge)
+		if skippedSet[edge.From] {
+			resolved, chosen = true, false
+		}
+		allResolved = allResolved && resolved
+		anyChosen = anyChosen || chosen
+	}
+	return allResolved && !anyChosen
+}
+
+func buildKernelGraph(nodes []domain.Node, latest map[string]domain.NodeAttempt, incoming map[string][]domain.Edge, selected func(domain.Edge) (bool, bool), skippedSet map[string]bool) ([]dag.Node, map[string]dag.Status, map[string]domain.Node) {
+	kernelNodes := make([]dag.Node, 0, len(nodes)-len(skippedSet))
 	statuses := make(map[string]dag.Status, len(latest))
-	byID := make(map[string]domain.Node, len(spec.Nodes))
-	for _, node := range spec.Nodes {
+	byID := make(map[string]domain.Node, len(nodes))
+	for _, node := range nodes {
 		byID[node.ID] = node
 		if skippedSet[node.ID] {
 			continue
@@ -86,17 +114,7 @@ func ReadySet(spec domain.Spec, attempts []domain.NodeAttempt) ([]domain.Node, [
 			statuses[node.ID] = schedulerStatus(attempt.Status)
 		}
 	}
-	readyIDs, _, _, err := dag.Ready(dag.Snapshot{Nodes: kernelNodes, Statuses: statuses})
-	if err != nil {
-		return nil, sortedKeys(skippedSet)
-	}
-	ready := make([]domain.Node, 0, len(readyIDs))
-	for _, id := range readyIDs {
-		if node, exists := byID[id]; exists {
-			ready = append(ready, node)
-		}
-	}
-	return ready, sortedKeys(skippedSet)
+	return kernelNodes, statuses, byID
 }
 
 func schedulerStatus(status domain.AttemptStatus) dag.Status {

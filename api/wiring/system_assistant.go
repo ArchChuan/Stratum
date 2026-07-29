@@ -285,64 +285,76 @@ func skillDiagnosticCollector(service skillDiagnosticService, evaluations skillE
 		if err != nil {
 			return nil, nil, err
 		}
-		facts := make([]domain.DiagnosticFact, 0, len(items)*4)
-		gaps := make([]domain.EvidenceGap, 0)
-		observedAt := time.Now().UTC()
 		var allowed map[string]struct{}
 		if req.Scope == domain.DiagnosticScopeSelf {
-			if len(memberBindings) == 0 || memberBindings[0] == nil {
-				return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
-			}
-			resolved, resolveErr := memberBindings[0].ResolveMemberBindings(ctx, req)
-			if resolveErr != nil {
-				return nil, nil, resolveErr
-			}
-			allowed = resolved.SkillIDs
-			if len(allowed) == 0 {
-				return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
+			allowed, err = resolveSelfScopeBindings(ctx, req, memberBindings)
+			if err != nil {
+				return nil, nil, err
 			}
 		}
-		for _, item := range items {
-			if req.Scope == domain.DiagnosticScopeSelf {
-				if _, ok := allowed[item.ID]; !ok || item.ActiveRevisionID == "" || item.Status != "published" {
-					continue
-				}
-				facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.ID,
-					Statement: "skill_status=published", Source: "skill_public_status", ObservedAt: observedAt})
-				continue
-			}
-			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.ID,
-				Statement: "skill_status=" + item.Status, Source: "skill_catalog", ObservedAt: observedAt})
-			if item.ActiveRevisionID != "" {
-				facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.ActiveRevisionID,
-					Statement: "revision_status=active", Source: "skill_revision", ObservedAt: observedAt})
-			}
-			if item.DraftRevisionID != "" {
-				facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.DraftRevisionID,
-					Statement: "revision_status=draft", Source: "skill_revision", ObservedAt: observedAt})
-			}
-			if evaluations == nil {
-				gaps = append(gaps, domain.EvidenceGap{Area: domain.DiagnosticAreaSkill, Code: domain.DiagnosticGapUnavailable})
-				continue
-			}
-			status, evaluationErr := evaluations.ResolveSkillEvaluation(ctx, req.TenantID, item.ID)
-			if evaluationErr != nil {
-				gaps = append(gaps, domain.EvidenceGap{Area: domain.DiagnosticAreaSkill, Code: diagnosticSafeGapCode(evaluationErr)})
-				continue
-			}
-			if status.ExperimentID != "" {
-				facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: status.ExperimentID,
-					Statement: "evaluation_status=" + status.Status, Source: "skill_evaluation", ObservedAt: observedAt})
-			} else {
-				facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.ID,
-					Statement: "evaluation_status=not_configured", Source: "skill_evaluation", ObservedAt: observedAt})
-			}
-		}
+		facts, gaps := collectSkillItems(items, req, allowed, evaluations, ctx)
 		if req.Scope == domain.DiagnosticScopeSelf && len(facts) == 0 {
 			return nil, nil, domain.ErrDiagnosticEvidenceUnavailable
 		}
 		return facts, gaps, nil
 	}
+}
+
+func resolveSelfScopeBindings(ctx context.Context, req domain.DiagnosticRequest, memberBindings []memberResourceBindingProvider) (map[string]struct{}, error) {
+	if len(memberBindings) == 0 || memberBindings[0] == nil {
+		return nil, domain.ErrDiagnosticEvidenceUnavailable
+	}
+	resolved, err := memberBindings[0].ResolveMemberBindings(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if len(resolved.SkillIDs) == 0 {
+		return nil, domain.ErrDiagnosticEvidenceUnavailable
+	}
+	return resolved.SkillIDs, nil
+}
+
+func collectSkillItems(items []skillapp.SkillProduct, req domain.DiagnosticRequest, allowed map[string]struct{}, evaluations skillEvaluationReader, ctx context.Context) ([]domain.DiagnosticFact, []domain.EvidenceGap) {
+	facts := make([]domain.DiagnosticFact, 0, len(items)*4)
+	gaps := make([]domain.EvidenceGap, 0)
+	observedAt := time.Now().UTC()
+	for _, item := range items {
+		if req.Scope == domain.DiagnosticScopeSelf {
+			if _, ok := allowed[item.ID]; !ok || item.ActiveRevisionID == "" || item.Status != "published" {
+				continue
+			}
+			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.ID,
+				Statement: "skill_status=published", Source: "skill_public_status", ObservedAt: observedAt})
+			continue
+		}
+		facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.ID,
+			Statement: "skill_status=" + item.Status, Source: "skill_catalog", ObservedAt: observedAt})
+		if item.ActiveRevisionID != "" {
+			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.ActiveRevisionID,
+				Statement: "revision_status=active", Source: "skill_revision", ObservedAt: observedAt})
+		}
+		if item.DraftRevisionID != "" {
+			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.DraftRevisionID,
+				Statement: "revision_status=draft", Source: "skill_revision", ObservedAt: observedAt})
+		}
+		if evaluations == nil {
+			gaps = append(gaps, domain.EvidenceGap{Area: domain.DiagnosticAreaSkill, Code: domain.DiagnosticGapUnavailable})
+			continue
+		}
+		status, evaluationErr := evaluations.ResolveSkillEvaluation(ctx, req.TenantID, item.ID)
+		if evaluationErr != nil {
+			gaps = append(gaps, domain.EvidenceGap{Area: domain.DiagnosticAreaSkill, Code: diagnosticSafeGapCode(evaluationErr)})
+			continue
+		}
+		if status.ExperimentID != "" {
+			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: status.ExperimentID,
+				Statement: "evaluation_status=" + status.Status, Source: "skill_evaluation", ObservedAt: observedAt})
+		} else {
+			facts = append(facts, domain.DiagnosticFact{Area: domain.DiagnosticAreaSkill, ObjectID: item.ID,
+				Statement: "evaluation_status=not_configured", Source: "skill_evaluation", ObservedAt: observedAt})
+		}
+	}
+	return facts, gaps
 }
 
 func mcpDiagnosticCollector(service *mcpapp.MCPService, memberBindings ...memberResourceBindingProvider) diagnosticAreaCollector {

@@ -69,19 +69,7 @@ func ExecuteReadyPlanNodes(ctx context.Context, state *ReActState, execute PlanN
 				return
 			}
 			defer func() { <-sem }()
-			var output PlanNodeExecutionResult
-			var execErr error
-			func() {
-				defer func() {
-					if recovered := recover(); recovered != nil {
-						execErr = fmt.Errorf("node panic: %v", recovered)
-					}
-				}()
-				childState := *state
-				childState.ActivePlan = nil
-				childState.PlanToolsDisabled = true
-				output, execErr = execute(waveCtx, childState, node, dependencySummaries(plan, node))
-			}()
+			output, execErr := executePlanNodeSafe(waveCtx, state, node, plan, execute)
 			results <- result{nodeID: node.ID, result: output, err: execErr}
 		}()
 	}
@@ -170,6 +158,23 @@ func dependencySummaries(plan *domain.Plan, node domain.PlanNode) map[string]str
 		}
 	}
 	return summaries
+}
+
+func executePlanNodeSafe(ctx context.Context, state *ReActState, node domain.PlanNode, plan *domain.Plan, execute PlanNodeExecutor) (PlanNodeExecutionResult, error) {
+	childState := *state
+	childState.ActivePlan = nil
+	childState.PlanToolsDisabled = true
+	var output PlanNodeExecutionResult
+	var execErr error
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				execErr = fmt.Errorf("node panic: %v", recovered)
+			}
+		}()
+		output, execErr = execute(ctx, childState, node, dependencySummaries(plan, node))
+	}()
+	return output, execErr
 }
 
 func cloneRuntimePlan(plan *domain.Plan) *domain.Plan {
