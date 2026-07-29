@@ -105,6 +105,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": true}},
 			"serverInfo":      map[string]any{"name": "stratum-fake-mcp", "version": "1.0"},
 		})
+	case "notifications/initialized":
+		w.WriteHeader(http.StatusAccepted)
 	case "tools/list":
 		s.mu.RLock()
 		tools := append([]Tool(nil), s.tools...)

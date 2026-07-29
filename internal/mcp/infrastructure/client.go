@@ -52,6 +52,8 @@ type BaseClient struct {
 	stdout     io.ReadCloser
 	httpClient *http.Client
 	sessionID  string
+	// negotiatedVersion is set only after a valid initialize response.
+	negotiatedVersion string
 }
 
 func (c *BaseClient) nextID() int { return int(c.reqID.Add(1)) }
@@ -156,6 +158,8 @@ func (c *BaseClient) Disconnect(ctx context.Context) error {
 		c.httpClient.CloseIdleConnections()
 		c.httpClient = nil
 	}
+	c.sessionID = ""
+	c.negotiatedVersion = ""
 	c.logger.Info("disconnected from MCP server")
 	return result
 }
@@ -350,9 +354,48 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("MCP HTTP initialize failed with status %d", resp.StatusCode)
 	}
+	initializeResponse, err := decodeHTTPMCPResponse(resp)
+	if err != nil {
+		return fmt.Errorf("decode MCP initialize response: %w", err)
+	}
+	if initializeResponse.JSONRPC != "2.0" || initializeResponse.ID != initReq.ID {
+		return errors.New("MCP initialize response envelope invalid")
+	}
+	if len(initializeResponse.Error) > 0 && string(initializeResponse.Error) != "null" {
+		return errors.New("MCP initialize protocol error")
+	}
+	var initializeResult struct {
+		ProtocolVersion string          `json:"protocolVersion"`
+		Capabilities    json.RawMessage `json:"capabilities"`
+		ServerInfo      struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+	}
+	resultData, err := json.Marshal(initializeResponse.Result)
+	if err != nil {
+		return errors.New("MCP initialize result invalid")
+	}
+	if err := json.Unmarshal(resultData, &initializeResult); err != nil {
+		return errors.New("MCP initialize result invalid")
+	}
+	if initializeResult.ProtocolVersion != mcpProtocolVersion {
+		return errors.New("MCP initialize selected unsupported protocol version")
+	}
+	if len(initializeResult.Capabilities) == 0 || string(initializeResult.Capabilities) == "null" ||
+		initializeResult.ServerInfo.Name == "" || initializeResult.ServerInfo.Version == "" {
+		return errors.New("MCP initialize result incomplete")
+	}
 
 	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
 		c.sessionID = sid
+	}
+	c.negotiatedVersion = initializeResult.ProtocolVersion
+	initialized := MCPRequest{JSONRPC: "2.0", Method: "notifications/initialized", Params: map[string]any{}}
+	if err := c.sendHTTPNotification(ctx, &initialized); err != nil {
+		c.sessionID = ""
+		c.negotiatedVersion = ""
+		return err
 	}
 
 	c.logger.Info("HTTP connection established", zap.String("transport", c.config.Transport),
@@ -440,11 +483,38 @@ func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCP
 		return nil, fmt.Errorf("MCP HTTP request failed with status %d", resp.StatusCode)
 	}
 
+	return decodeHTTPMCPResponse(resp)
+}
+
+func (c *BaseClient) sendHTTPNotification(ctx context.Context, notification *MCPRequest) error {
+	data, err := json.Marshal(notification)
+	if err != nil {
+		return fmt.Errorf("marshal MCP notification: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.config.URL, bytes.NewReader(data))
+	if err != nil {
+		return errors.New("MCP HTTP notification request invalid")
+	}
+	c.applyHTTPHeaders(ctx, req, true)
+	if c.sessionID != "" {
+		req.Header.Set("Mcp-Session-Id", c.sessionID)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return errors.New("MCP HTTP initialized notification transport failed")
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("MCP HTTP initialized notification failed with status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func decodeHTTPMCPResponse(resp *http.Response) (*MCPResponse, error) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, fmt.Errorf("read MCP response: %w", err)
 	}
-
 	jsonBody := body
 	if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "text/event-stream") {
 		for _, line := range bytes.Split(body, []byte("\n")) {
@@ -454,13 +524,11 @@ func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCP
 			}
 		}
 	}
-
-	var mcpResp MCPResponse
-	if err := json.Unmarshal(jsonBody, &mcpResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	var response MCPResponse
+	if err := json.Unmarshal(jsonBody, &response); err != nil {
+		return nil, fmt.Errorf("unmarshal MCP response: %w", err)
 	}
-
-	return &mcpResp, nil
+	return &response, nil
 }
 
 func (c *BaseClient) applyHTTPHeaders(ctx context.Context, req *http.Request, includeProtocolVersion bool) {
@@ -470,7 +538,7 @@ func (c *BaseClient) applyHTTPHeaders(ctx context.Context, req *http.Request, in
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if includeProtocolVersion {
-		req.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
+		req.Header.Set("MCP-Protocol-Version", c.negotiatedVersion)
 	}
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 }

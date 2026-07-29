@@ -41,6 +41,16 @@ func TestStreamableHTTPClientPropagatesMCPAndTraceHeaders(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if request.Method == "initialize" {
 			w.Header().Set("MCP-Session-Id", "session-1")
+			_ = json.NewEncoder(w).Encode(MCPResponse{JSONRPC: "2.0", ID: request.ID, Result: map[string]any{
+				"protocolVersion": "2025-06-18",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]any{"name": "protocol-contract", "version": "1.0.0"},
+			}})
+			return
+		}
+		if request.Method == "notifications/initialized" {
+			w.WriteHeader(http.StatusAccepted)
+			return
 		}
 		result := map[string]any{}
 		if request.Method == "tools/list" {
@@ -87,10 +97,10 @@ func TestStreamableHTTPClientPropagatesMCPAndTraceHeaders(t *testing.T) {
 	mu.Lock()
 	requests := append([]observedRequest(nil), observed...)
 	mu.Unlock()
-	if len(requests) != 3 {
-		t.Fatalf("observed %d requests, want initialize, tools/list, tools/call", len(requests))
+	if len(requests) != 4 {
+		t.Fatalf("observed %d requests, want initialize, notifications/initialized, tools/list, tools/call", len(requests))
 	}
-	wantMethods := []string{"initialize", "tools/list", "tools/call"}
+	wantMethods := []string{"initialize", "notifications/initialized", "tools/list", "tools/call"}
 	for i, request := range requests {
 		if request.method != http.MethodPost {
 			t.Errorf("request %d HTTP method = %q, want POST", i, request.method)
@@ -127,6 +137,46 @@ func TestStreamableHTTPClientPropagatesMCPAndTraceHeaders(t *testing.T) {
 	params, ok := requests[0].request.Params.(map[string]any)
 	if !ok || params["protocolVersion"] != "2025-06-18" {
 		t.Errorf("initialize protocolVersion = %#v, want 2025-06-18", requests[0].request.Params)
+	}
+}
+
+func TestStreamableHTTPClientRejectsInitializeJSONRPCError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(MCPResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Error:   json.RawMessage(`{"code":-32603,"message":"initialization rejected"}`),
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "initialize-error", Name: "initialize-error", Transport: "streamable-http",
+		URL: server.URL, Timeout: time.Second,
+	}, zap.NewNop())
+	if err := client.Connect(context.Background()); err == nil {
+		t.Fatal("Connect succeeded after initialize JSON-RPC error")
+	}
+}
+
+func TestStreamableHTTPClientRejectsUnsupportedSelectedProtocolVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(MCPResponse{JSONRPC: "2.0", ID: 1, Result: map[string]any{
+			"protocolVersion": "2025-11-25",
+			"capabilities":    map[string]any{},
+			"serverInfo":      map[string]any{"name": "incompatible", "version": "1.0.0"},
+		}})
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "unsupported-version", Name: "unsupported-version", Transport: "streamable-http",
+		URL: server.URL, Timeout: time.Second,
+	}, zap.NewNop())
+	if err := client.Connect(context.Background()); err == nil {
+		t.Fatal("Connect succeeded with unsupported selected protocol version")
 	}
 }
 
@@ -431,8 +481,19 @@ func TestHealthCheckDoesNotBlockConcurrentReads(t *testing.T) {
 		slowOnce.Do(func() {
 			time.Sleep(200 * time.Millisecond)
 		})
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(MCPResponse{Result: json.RawMessage(`[]`)})
+		var request MCPRequest
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		switch request.Method {
+		case "initialize":
+			writeTestInitializeResult(w, request.ID)
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(MCPResponse{
+				JSONRPC: "2.0", ID: request.ID, Result: map[string]any{"tools": []any{}},
+			})
+		}
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
