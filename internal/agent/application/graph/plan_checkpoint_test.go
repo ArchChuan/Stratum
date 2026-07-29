@@ -7,6 +7,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/application/graph"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,7 +38,7 @@ func TestPersistPlanCheckpointPropagatesFailureBeforeSuccess(t *testing.T) {
 	writer := &checkpointWriterForPlanTest{err: errors.New("database unavailable")}
 	err := graph.PersistPlanCheckpoint(context.Background(), writer, "tenant-1", graph.PlanCheckpointIdentity{
 		CheckpointID: "checkpoint-1", ExecutionID: "exec-1", TraceID: "trace-1", ConversationID: "conv-1", AgentID: "agent-1", UserID: "user-1",
-	}, graph.PlanCheckpointPayload{Plan: &domain.Plan{ID: "plan-1", Revision: 1}})
+	}, graph.PlanCheckpointPayload{Plan: &domain.Plan{ID: "plan-1", Revision: 1}}, nil)
 	require.ErrorContains(t, err, "plan checkpoint")
 	require.Equal(t, 1, writer.calls)
 }
@@ -50,4 +51,50 @@ type checkpointWriterForPlanTest struct {
 func (w *checkpointWriterForPlanTest) Upsert(_ context.Context, _ string, _ domain.AgentExecutionCheckpoint) error {
 	w.calls++
 	return w.err
+}
+
+func TestPersistReActCheckpointSnapshotsMessagesAndToolCalls(t *testing.T) {
+	writer := &checkpointWriterForPlanTest{}
+	state := &graph.ReActState{
+		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", ConversationID: "conv-1",
+		Messages: []port.LLMMessage{{Role: "user", Content: "hello"}},
+		Steps:    3,
+	}
+	err := graph.PersistReActCheckpoint(
+		context.Background(), writer, "tenant-1",
+		graph.PlanCheckpointIdentity{
+			CheckpointID: "cp-react", ExecutionID: "exec-1", TraceID: "trace-1",
+			ConversationID: "conv-1", AgentID: "agent-1", UserID: "user-1",
+		},
+		state, "llm",
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, writer.calls)
+}
+
+func TestPersistReActCheckpointNilWriterNoops(t *testing.T) {
+	state := &graph.ReActState{TenantID: "t1"}
+	err := graph.PersistReActCheckpoint(
+		context.Background(), nil, "tenant-1",
+		graph.PlanCheckpointIdentity{}, state, "llm",
+	)
+	require.NoError(t, err)
+}
+
+func TestPersistReActCheckpointAutoGeneratesIDWhenEmpty(t *testing.T) {
+	writer := &checkpointWriterForPlanTest{}
+	state := &graph.ReActState{
+		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", ConversationID: "conv-1",
+		Steps: 7,
+	}
+	err := graph.PersistReActCheckpoint(
+		context.Background(), writer, "tenant-1",
+		graph.PlanCheckpointIdentity{
+			ExecutionID: "exec-1", TraceID: "trace-1",
+			ConversationID: "conv-1", AgentID: "agent-1", UserID: "user-1",
+		},
+		state, "tool",
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, writer.calls)
 }

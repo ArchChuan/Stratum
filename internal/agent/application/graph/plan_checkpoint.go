@@ -68,12 +68,21 @@ func DecodePlanCheckpoint(data []byte) (PlanCheckpointPayload, error) {
 	return envelope.PlanCheckpointPayload, nil
 }
 
+// PersistPlanCheckpointSnapshot carries optional ReAct-level state to snapshot
+// alongside the plan checkpoint. All fields are optional; nil values are skipped.
+type PersistPlanCheckpointSnapshot struct {
+	Messages     json.RawMessage // serialized []port.LLMMessage
+	AllToolCalls json.RawMessage // serialized []port.ToolCall
+	Steps        int
+}
+
 func PersistPlanCheckpoint(
 	ctx context.Context,
 	writer PlanCheckpointWriter,
 	tenantID string,
 	identity PlanCheckpointIdentity,
 	payload PlanCheckpointPayload,
+	snapshot *PersistPlanCheckpointSnapshot,
 ) error {
 	if writer == nil {
 		return errors.New("plan checkpoint: writer is required")
@@ -89,8 +98,82 @@ func PersistPlanCheckpoint(
 		RuntimeStateJSON: runtimeState, Status: "running", CreatedAt: now, UpdatedAt: now,
 		ExpiresAt: now.Add(constants.PlanCheckpointTTL),
 	}
+	if snapshot != nil {
+		checkpoint.StepIndex = snapshot.Steps
+		if len(snapshot.Messages) > 0 {
+			checkpoint.MessagesSnapshotJSON = snapshot.Messages
+		}
+		if len(snapshot.AllToolCalls) > 0 {
+			checkpoint.CompletedToolCallsJSON = snapshot.AllToolCalls
+		}
+	}
 	if err := writer.Upsert(ctx, tenantID, checkpoint); err != nil {
 		return fmt.Errorf("plan checkpoint: persist: %w", err)
 	}
 	return nil
+}
+
+// checkpointSnapshot builds a PersistPlanCheckpointSnapshot from a ReActState.
+// Returns nil when state is nil.
+func checkpointSnapshot(state *ReActState) *PersistPlanCheckpointSnapshot {
+	if state == nil {
+		return nil
+	}
+	snapshot := &PersistPlanCheckpointSnapshot{Steps: state.Steps}
+	if len(state.Messages) > 0 {
+		if encoded, err := json.Marshal(state.Messages); err == nil {
+			snapshot.Messages = json.RawMessage(encoded)
+		}
+	}
+	if len(state.AllToolCalls) > 0 {
+		if encoded, err := json.Marshal(state.AllToolCalls); err == nil {
+			snapshot.AllToolCalls = json.RawMessage(encoded)
+		}
+	}
+	return snapshot
+}
+
+// PersistReActCheckpoint persists a lightweight ReAct execution checkpoint
+// (no plan DAG). It snapshots Messages, tool calls, and the current graph node.
+func PersistReActCheckpoint(
+	ctx context.Context,
+	writer PlanCheckpointWriter,
+	tenantID string,
+	identity PlanCheckpointIdentity,
+	state *ReActState,
+	currentNode string,
+) error {
+	if writer == nil || state == nil {
+		return nil
+	}
+	snapshot := checkpointSnapshot(state)
+	now := time.Now().UTC()
+	cp := domain.AgentExecutionCheckpoint{
+		ID:               identity.CheckpointID,
+		ExecutionID:      identity.ExecutionID,
+		TraceID:          identity.TraceID,
+		ConversationID:   identity.ConversationID,
+		AgentID:          identity.AgentID,
+		UserID:           identity.UserID,
+		CurrentNode:      currentNode,
+		StepIndex:        state.Steps,
+		RuntimeStateJSON: json.RawMessage("{}"),
+		Status:           "running",
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		ExpiresAt:        now.Add(constants.PlanCheckpointTTL),
+	}
+	if snapshot != nil {
+		if len(snapshot.Messages) > 0 {
+			cp.MessagesSnapshotJSON = snapshot.Messages
+		}
+		if len(snapshot.AllToolCalls) > 0 {
+			cp.CompletedToolCallsJSON = snapshot.AllToolCalls
+		}
+		cp.StepIndex = snapshot.Steps
+	}
+	if identity.CheckpointID == "" {
+		cp.ID = fmt.Sprintf("%s-step-%d", identity.ExecutionID, state.Steps)
+	}
+	return writer.Upsert(ctx, tenantID, cp)
 }

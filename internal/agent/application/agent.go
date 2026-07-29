@@ -327,6 +327,31 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			ctx, systemPrompt, memCtx, history, input, maxTokens, cfg.HistoryWindow, historyCompactor,
 		)
 
+		// Resume from checkpoint if one exists.
+		var activePlan *domain.Plan
+		if a.CheckpointEnabled && a.CheckpointStore != nil && cfg.ExecutionID != "" {
+			resumeCp, resumeCpErr := a.CheckpointStore.GetLatest(ctx, cfg.TenantID, cfg.ExecutionID)
+			if resumeCpErr == nil && resumeCp != nil && resumeCp.Status == "running" {
+				a.Logger.Info("agent: resuming from checkpoint",
+					zap.String("checkpoint_id", resumeCp.ID),
+					zap.String("execution_id", cfg.ExecutionID),
+					zap.Int("step_index", resumeCp.StepIndex),
+				)
+				if len(resumeCp.MessagesSnapshotJSON) > 0 {
+					var savedMsgs []port.LLMMessage
+					if err := json.Unmarshal(resumeCp.MessagesSnapshotJSON, &savedMsgs); err == nil {
+						initMessages = savedMsgs
+					}
+				}
+				// Restore active plan if present.
+				if len(resumeCp.RuntimeStateJSON) > 0 {
+					if decoded, decErr := agentgraph.DecodePlanCheckpoint(resumeCp.RuntimeStateJSON); decErr == nil && decoded.Plan != nil {
+						activePlan = decoded.Plan
+					}
+				}
+			}
+		}
+
 		availableTools := buildBuiltinTools(workspaceNames, workspaceDescs,
 			len(workspaceNames) > 0 && cfg.RAGSearchFn != nil, a.MemoryInjector != nil)
 		if cfg.SystemAssistantMode {
@@ -356,6 +381,8 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			RAGSearchFn:                cfg.RAGSearchFn,
 			MaxLLMSteps:                cfg.MaxSteps,
 			MaxContextTokens:           maxTokens,
+			CheckpointEnabled:          a.CheckpointEnabled,
+			ActivePlan:                 activePlan,
 			HistoryCompactor:           historyCompactor,
 			PlanCheckpointWriter:       a.CheckpointStore,
 			PlanCheckpointIdentity: agentgraph.PlanCheckpointIdentity{
@@ -383,7 +410,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			child.ActivePlan = nil
 			child.PlanToolsDisabled = true
 			child.MaxLLMSteps = constants.DefaultStepMaxLLMSteps
-			final, invokeErr := nodeGraph.Invoke(nodeCtx, child, agentgraph.RunConfig{MaxSteps: constants.DefaultStepMaxLLMSteps})
+			final, invokeErr := nodeGraph.Invoke(nodeCtx, child, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: constants.DefaultStepMaxLLMSteps})
 			if invokeErr != nil {
 				return agentgraph.PlanNodeExecutionResult{}, invokeErr
 			}
@@ -399,11 +426,25 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		execCtx = reqctx.WithTraceID(execCtx, cfg.TraceID)
 		execCtx = reqctx.WithTenantID(execCtx, cfg.TenantID)
 		defer cancel()
+		runCfg := agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: cfg.MaxSteps}
+		if a.CheckpointEnabled && a.CheckpointStore != nil {
+			runCfg.AfterStep = func(afterCtx context.Context, afterState agentgraph.ReActState) error {
+				return agentgraph.PersistReActCheckpoint(afterCtx, a.CheckpointStore, cfg.TenantID, agentgraph.PlanCheckpointIdentity{
+					ExecutionID: cfg.ExecutionID, TraceID: cfg.TraceID, ConversationID: cfg.ConversationID, AgentID: agentID, UserID: cfg.UserID,
+				}, &afterState, "")
+			}
+		}
 		graphCtx, reactSpan := tracer.Start(execCtx, "react.graph.invoke",
 			oteltrace.WithAttributes(attribute.Int("max_steps", cfg.MaxSteps)),
 		)
-		finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig{MaxSteps: cfg.MaxSteps})
+		finalState, runErr := cg.Invoke(graphCtx, initState, runCfg)
 		reactSpan.End()
+		if runErr == nil && a.CheckpointStore != nil {
+			// Mark checkpoint completed on successful execution.
+			markCtx, markCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+			_ = a.CheckpointStore.MarkCompleted(markCtx, cfg.TenantID, cfg.ExecutionID)
+			markCancel()
+		}
 		if runErr != nil {
 			execErr = fmt.Errorf("react: %w", runErr)
 			break
@@ -515,7 +556,16 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 			MaxContextTokens:           maxTokens,
 			StuckThreshold:             stuckThreshold,
 			CheckpointEnabled:          a.CheckpointEnabled,
-			HistoryCompactor:           historyCompactor,
+			PlanCheckpointWriter:       cpWriter,
+			PlanCheckpointIdentity: agentgraph.PlanCheckpointIdentity{
+				ExecutionID: cfg.ExecutionID, TraceID: cfg.TraceID, ConversationID: cfg.ConversationID, AgentID: agentID, UserID: cfg.UserID,
+			},
+			PlanIDSource: uuid.NewString,
+			PlanLimits: domain.PlanLimits{
+				MaxNodes: constants.DefaultPlanMaxNodes, MaxRevisions: constants.DefaultPlanMaxRevisions,
+				MaxAttemptsPerNode: constants.DefaultPlanMaxAttemptsPerNode, MaxConcurrentNodes: constants.DefaultPlanMaxConcurrentNodes,
+			},
+			HistoryCompactor: historyCompactor,
 		}
 		if a.RecallMemoryFn != nil {
 			fn := a.RecallMemoryFn
@@ -530,7 +580,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		graphCtx, planSpan := tracer.Start(execCtx, "planning.graph.invoke",
 			oteltrace.WithAttributes(attribute.Int("stuck_threshold", stuckThreshold)),
 		)
-		finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig{MaxSteps: cfg.MaxSteps})
+		finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: cfg.MaxSteps})
 		planSpan.End()
 		if runErr != nil {
 			execErr = fmt.Errorf("planning: %w", runErr)

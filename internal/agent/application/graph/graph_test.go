@@ -21,7 +21,7 @@ func TestStateGraph_HappyPath(t *testing.T) {
 	g.SetEntryPoint("inc")
 	cg, err := g.Compile()
 	require.NoError(t, err)
-	out, err := cg.Invoke(context.Background(), counter{}, graph.RunConfig{MaxSteps: 5})
+	out, err := cg.Invoke(context.Background(), counter{}, graph.RunConfig[counter]{MaxSteps: 5})
 	require.NoError(t, err)
 	require.Equal(t, 1, out.N)
 }
@@ -38,7 +38,7 @@ func TestStateGraph_ConditionalEdge(t *testing.T) {
 	g.SetEntryPoint("inc")
 	cg, err := g.Compile()
 	require.NoError(t, err)
-	out, err := cg.Invoke(context.Background(), counter{}, graph.RunConfig{MaxSteps: 10})
+	out, err := cg.Invoke(context.Background(), counter{}, graph.RunConfig[counter]{MaxSteps: 10})
 	require.NoError(t, err)
 	require.Equal(t, 3, out.N)
 }
@@ -50,7 +50,7 @@ func TestStateGraph_MaxSteps(t *testing.T) {
 	g.SetEntryPoint("inc")
 	cg, err := g.Compile()
 	require.NoError(t, err)
-	_, err = cg.Invoke(context.Background(), counter{}, graph.RunConfig{MaxSteps: 3})
+	_, err = cg.Invoke(context.Background(), counter{}, graph.RunConfig[counter]{MaxSteps: 3})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "max steps")
 }
@@ -62,7 +62,7 @@ func TestStateGraph_NodeError(t *testing.T) {
 	g.SetEntryPoint("boom")
 	cg, err := g.Compile()
 	require.NoError(t, err)
-	_, err = cg.Invoke(context.Background(), counter{}, graph.RunConfig{MaxSteps: 5})
+	_, err = cg.Invoke(context.Background(), counter{}, graph.RunConfig[counter]{MaxSteps: 5})
 	require.ErrorContains(t, err, "boom")
 }
 
@@ -73,7 +73,7 @@ func TestStateGraph_PanicRecovery(t *testing.T) {
 	g.SetEntryPoint("panic")
 	cg, err := g.Compile()
 	require.NoError(t, err)
-	_, err = cg.Invoke(context.Background(), counter{}, graph.RunConfig{MaxSteps: 5})
+	_, err = cg.Invoke(context.Background(), counter{}, graph.RunConfig[counter]{MaxSteps: 5})
 	require.ErrorContains(t, err, "panic")
 }
 

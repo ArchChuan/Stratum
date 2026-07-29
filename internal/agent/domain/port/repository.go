@@ -38,6 +38,7 @@ type CheckpointRepo interface {
 	Upsert(ctx context.Context, tenantID string, checkpoint domain.AgentExecutionCheckpoint) error
 	GetLatest(ctx context.Context, tenantID, executionID string) (*domain.AgentExecutionCheckpoint, error)
 	MarkCompleted(ctx context.Context, tenantID, executionID string) error
+	DeleteExpired(ctx context.Context, tenantID string) (int64, error)
 }
 
 type ToolApprovalRepo interface {

@@ -26,7 +26,7 @@ func ExecuteReadyPlanNodes(ctx context.Context, state *ReActState, execute PlanN
 	if execute == nil {
 		return "", fmt.Errorf("plan runtime: executor is required")
 	}
-	if state.PlanCheckpointWriter == nil {
+	if state.CheckpointEnabled && state.PlanCheckpointWriter == nil {
 		return "", ErrPlanCheckpointRequired
 	}
 	plan := cloneRuntimePlan(state.ActivePlan)
@@ -115,16 +115,18 @@ func ExecuteReadyPlanNodes(ctx context.Context, state *ReActState, execute PlanN
 			node.Attempts = append(node.Attempts, domain.PlanAttempt{ID: state.PlanIDSource(), Number: len(node.Attempts) + 1, Summary: item.result.Summary})
 		}
 		plan.Revision++
-		identity := state.PlanCheckpointIdentity
-		identity.CheckpointID = fmt.Sprintf("%s-wave-%d-%s", plan.ID, plan.Revision, node.ID)
-		if err := PersistPlanCheckpoint(ctx, state.PlanCheckpointWriter, state.TenantID, identity, PlanCheckpointPayload{
-			Plan: plan, RemainingNodeBudget: state.PlanLimits.MaxNodes - len(plan.Nodes), RemainingRevisionBudget: state.PlanLimits.MaxRevisions - plan.Revision,
-		}); err != nil {
-			cancel()
-			for range results {
-				// Drain worker results after cancellation so every goroutine can exit.
+		if state.CheckpointEnabled {
+			identity := state.PlanCheckpointIdentity
+			identity.CheckpointID = fmt.Sprintf("%s-wave-%d-%s", plan.ID, plan.Revision, node.ID)
+			if err := PersistPlanCheckpoint(ctx, state.PlanCheckpointWriter, state.TenantID, identity, PlanCheckpointPayload{
+				Plan: plan, RemainingNodeBudget: state.PlanLimits.MaxNodes - len(plan.Nodes), RemainingRevisionBudget: state.PlanLimits.MaxRevisions - plan.Revision,
+			}, checkpointSnapshot(state)); err != nil {
+				cancel()
+				for range results {
+					// Drain worker results after cancellation so every goroutine can exit.
+				}
+				return "", err
 			}
-			return "", err
 		}
 	}
 	state.ActivePlan = plan

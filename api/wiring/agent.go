@@ -3,6 +3,7 @@ package wiring
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
@@ -20,9 +21,30 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	pkgobjectstore "github.com/byteBuilderX/stratum/pkg/storage/objectstore"
+	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
+
+// agentCheckpointTenantLister adapts *pgxpool.Pool to the
+// func(ctx) ([]string, error) signature consumed by
+// CheckpointCleanupWorker.
+type agentCheckpointTenantLister struct {
+	pool *pgxpool.Pool
+}
+
+func (l agentCheckpointTenantLister) list(ctx context.Context) ([]string, error) {
+	schemas, err := postgres.ListTenantSchemas(ctx, l.pool)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(schemas))
+	for _, schema := range schemas {
+		ids = append(ids, strings.TrimPrefix(schema, "tenant_"))
+	}
+	return ids, nil
+}
 
 // Agent groups the agent persistence/registry services and execution
 // stores. The Registry is wired with CapabilityGateway and MemoryInjector
@@ -36,6 +58,7 @@ type Agent struct {
 	TracePayloadStore   agentport.TracePayloadStore
 	RevisionObjectStore pkgobjectstore.Store
 	CheckpointStore     agent.CheckpointStore
+	CheckpointCleanup   *agent.CheckpointCleanupWorker
 	ApprovalStore       agentport.ToolApprovalRepo
 	ApprovalService     *agent.ToolApprovalService
 	TenantResolver      agentport.TenantCapabilityResolver
@@ -193,6 +216,17 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		a.CheckpointStore = persistence.NewPgCheckpointStore(db)
 		a.ApprovalStore = persistence.NewPgToolApprovalStore(db)
 		a.ApprovalService = agent.NewToolApprovalService(a.ApprovalStore, a.CheckpointStore, c.Platform.AESKey)
+		a.CheckpointCleanup = agent.NewCheckpointCleanupWorker(
+			agentCheckpointTenantLister{pool: db}.list,
+			a.CheckpointStore,
+			10*time.Minute,
+			c.Logger,
+		)
+		a.CheckpointCleanup.Start(ctx)
+		c.shutdown = append(c.shutdown, func(context.Context) error {
+			a.CheckpointCleanup.Stop()
+			return nil
+		})
 		a.SkillLookup = persistence.NewPgSkillLookup(db)
 		a.TenantSettings = persistence.NewPgTenantSettings(db)
 		var registry *llmgateway.ModelRegistry
