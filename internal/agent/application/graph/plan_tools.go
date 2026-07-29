@@ -68,9 +68,6 @@ func ExecutePlanTool(ctx context.Context, state *ReActState, call port.ToolCall)
 	if err != nil {
 		return correction(call.Name, err, state.ActivePlan), nil
 	}
-	if state.PlanCheckpointWriter == nil {
-		return "", ErrPlanCheckpointRequired
-	}
 	identity := state.PlanCheckpointIdentity
 	if identity.CheckpointID == "" {
 		identity.CheckpointID = fmt.Sprintf("%s-rev-%d", next.ID, next.Revision)
@@ -84,10 +81,15 @@ func ExecutePlanTool(ctx context.Context, state *ReActState, call port.ToolCall)
 	if identity.ConversationID == "" {
 		identity.ConversationID = state.ConversationID
 	}
-	if err := PersistPlanCheckpoint(ctx, state.PlanCheckpointWriter, state.TenantID, identity, PlanCheckpointPayload{
-		Plan: next, RemainingNodeBudget: state.PlanLimits.MaxNodes - len(next.Nodes), RemainingRevisionBudget: state.PlanLimits.MaxRevisions - next.Revision,
-	}); err != nil {
-		return "", err
+	if state.CheckpointEnabled {
+		if state.PlanCheckpointWriter == nil {
+			return "", ErrPlanCheckpointRequired
+		}
+		if err := PersistPlanCheckpoint(ctx, state.PlanCheckpointWriter, state.TenantID, identity, PlanCheckpointPayload{
+			Plan: next, RemainingNodeBudget: state.PlanLimits.MaxNodes - len(next.Nodes), RemainingRevisionBudget: state.PlanLimits.MaxRevisions - next.Revision,
+		}, checkpointSnapshot(state)); err != nil {
+			return "", err
+		}
 	}
 	state.ActivePlan = next
 	state.PlanCheckpointIdentity = identity

@@ -91,3 +91,26 @@ func TestCheckpointStore_MarkCompleted(t *testing.T) {
 		t.Fatalf("unmet expectations: %v", err)
 	}
 }
+
+func TestCheckpointStore_DeleteExpired(t *testing.T) {
+	pool, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store := NewPgCheckpointStore(pool)
+	expectTenantTx(pool)
+	pool.ExpectExec("DELETE FROM agent_execution_checkpoints").
+		WillReturnResult(pgxmock.NewResult("DELETE", 3))
+	pool.ExpectCommit()
+	deleted, err := store.DeleteExpired(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if deleted != 3 {
+		t.Fatalf("expected 3 deleted rows, got %d", deleted)
+	}
+	if err := pool.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}

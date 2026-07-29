@@ -67,6 +67,24 @@ func (s *PgCheckpointStore) Upsert(
 	})
 }
 
+// DeleteExpired removes checkpoints whose expires_at has passed,
+// excluding completed and failed ones. Returns the number of rows deleted.
+func (s *PgCheckpointStore) DeleteExpired(ctx context.Context, tenantID string) (int64, error) {
+	var deleted int64
+	err := execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`DELETE FROM agent_execution_checkpoints
+			  WHERE expires_at < NOW()
+			    AND status NOT IN ('completed', 'failed', 'expired')`)
+		if err != nil {
+			return fmt.Errorf("checkpoint_store: delete expired: %w", err)
+		}
+		deleted = tag.RowsAffected()
+		return nil
+	})
+	return deleted, err
+}
+
 func (s *PgCheckpointStore) GetLatest(
 	ctx context.Context, tenantID, executionID string,
 ) (*domain.AgentExecutionCheckpoint, error) {

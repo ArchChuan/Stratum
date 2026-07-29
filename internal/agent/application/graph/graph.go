@@ -61,8 +61,9 @@ func (g *StateGraph[S]) SetEntryPoint(name string) *StateGraph[S] {
 type CompiledGraph[S any] struct{ g *StateGraph[S] }
 
 // RunConfig controls execution behaviour.
-type RunConfig struct {
-	MaxSteps int
+type RunConfig[S any] struct {
+	MaxSteps  int
+	AfterStep func(ctx context.Context, state S) error
 }
 
 // Compile validates the graph and returns a runnable CompiledGraph.
@@ -84,7 +85,7 @@ func (g *StateGraph[S]) Compile() (*CompiledGraph[S], error) {
 }
 
 // Invoke runs the graph from the entry node until END or max steps.
-func (c *CompiledGraph[S]) Invoke(ctx context.Context, initial S, cfg RunConfig) (state S, _ error) {
+func (c *CompiledGraph[S]) Invoke(ctx context.Context, initial S, cfg RunConfig[S]) (state S, _ error) {
 	maxSteps := cfg.MaxSteps
 	if maxSteps <= 0 {
 		maxSteps = 10
@@ -115,6 +116,11 @@ func (c *CompiledGraph[S]) Invoke(ctx context.Context, initial S, cfg RunConfig)
 		}()
 		if execErr != nil {
 			return state, execErr
+		}
+		if cfg.AfterStep != nil {
+			if err := cfg.AfterStep(ctx, state); err != nil {
+				return state, err
+			}
 		}
 		if condFn, ok := c.g.condEdges[current]; ok {
 			current = condFn(state)

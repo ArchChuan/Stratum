@@ -52,6 +52,9 @@ func (f completionFailureCheckpoint) GetLatest(context.Context, string, string) 
 func (f completionFailureCheckpoint) MarkCompleted(context.Context, string, string) error {
 	return f.err
 }
+func (f completionFailureCheckpoint) DeleteExpired(context.Context, string) (int64, error) {
+	return 0, nil
+}
 
 func TestCompleteApprovalResumePropagatesCheckpointPersistenceFailure(t *testing.T) {
 	persistErr := errors.New("checkpoint unavailable")

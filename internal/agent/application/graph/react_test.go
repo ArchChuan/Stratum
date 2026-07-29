@@ -38,7 +38,7 @@ func TestBuildReActGraph_DestructiveToolPausesBeforeExecution(t *testing.T) {
 			return nil, &port.ToolApprovalRequiredError{ToolName: "delete_order"}
 		},
 	}
-	_, err = cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 5})
+	_, err = cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{MaxSteps: 5})
 	var approvalErr *port.ToolApprovalRequiredError
 	require.True(t, errors.As(err, &approvalErr))
 	require.Equal(t, "delete_order", approvalErr.ToolName)
@@ -63,7 +63,7 @@ func TestBuildReActGraph_ForgedToolCallUsesExecutionGuard(t *testing.T) {
 			require.Equal(t, "forged-1", request.ToolCallID)
 			return nil, &port.ToolApprovalRequiredError{ApprovalID: "approval-1"}
 		},
-	}, graph.RunConfig{MaxSteps: 5})
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 5})
 
 	var approvalErr *port.ToolApprovalRequiredError
 	require.ErrorAs(t, err, &approvalErr)
@@ -89,7 +89,7 @@ func TestBuildReActGraph_FinalInstructionFitsContextBudget(t *testing.T) {
 		Messages:         messages,
 		MaxLLMSteps:      1,
 		MaxContextTokens: budget,
-	}, graph.RunConfig{MaxSteps: 2})
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
 	require.NoError(t, err)
 	require.Len(t, stub.llmReqs, 1)
 
@@ -119,7 +119,7 @@ func TestBuildReActGraph_FinalInstructionDoesNotReplaceCurrentTask(t *testing.T)
 
 	_, err = cg.Invoke(context.Background(), graph.ReActState{
 		Model: "qwen", Messages: messages, MaxLLMSteps: 1, MaxContextTokens: 800,
-	}, graph.RunConfig{MaxSteps: 2})
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
 	require.NoError(t, err)
 	reqMessages := stub.llmReqs[0].Messages
 	encoded, err := json.Marshal(reqMessages)
@@ -148,7 +148,7 @@ func TestBuildReActGraph_ReservesContextBudgetForToolSchemas(t *testing.T) {
 	const budget = 1000
 	_, err = cg.Invoke(context.Background(), graph.ReActState{
 		Model: "qwen", Messages: messages, AvailableTools: tools, MaxContextTokens: budget,
-	}, graph.RunConfig{MaxSteps: 2})
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
 	require.NoError(t, err)
 	require.Len(t, stub.llmReqs, 1)
 
@@ -176,7 +176,7 @@ func TestBuildReActGraph_DropsToolsThatConsumeMessageAllowance(t *testing.T) {
 			Name: "oversized", Description: strings.Repeat("schema", 1000),
 			InputSchema: map[string]any{"type": "object"},
 		}},
-	}, graph.RunConfig{MaxSteps: 2})
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
 	require.NoError(t, err)
 	require.NotContains(t, toolNames(stub.llmReqs[0].Tools), "oversized")
 	require.Equal(t, "CURRENT TASK", stub.llmReqs[0].Messages[len(stub.llmReqs[0].Messages)-1].Content)
@@ -194,7 +194,7 @@ func TestBuildReActGraph_ReservedPlanToolsConsumeContextBeforeOptionalTools(t *t
 			Name: "large_but_usable", Description: strings.Repeat("schema", 310),
 			InputSchema: map[string]any{"type": "object"},
 		}},
-	}, graph.RunConfig{MaxSteps: 2})
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
 	require.NoError(t, err)
 	require.NotContains(t, toolNames(stub.llmReqs[0].Tools), "large_but_usable")
 }
@@ -209,7 +209,7 @@ func TestBuildReActGraph_UnclassifiedToolAlsoRequiresApproval(t *testing.T) {
 		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) {
 			return nil, &port.ToolApprovalRequiredError{}
 		},
-	}, graph.RunConfig{MaxSteps: 5})
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 5})
 	var approvalErr *port.ToolApprovalRequiredError
 	require.True(t, errors.As(err, &approvalErr))
 }
@@ -229,7 +229,7 @@ func TestBuildReActGraph_ApprovedDestructiveToolUsesExecutionGuardOnce(t *testin
 			guardCalls++
 			return guardedToolOutput("ok"), nil
 		},
-	}, graph.RunConfig{MaxSteps: 5})
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 5})
 	require.NoError(t, err)
 	require.Equal(t, "deleted", out.Output)
 	require.Equal(t, 1, guardCalls)
@@ -279,7 +279,7 @@ func TestBuildReActGraph_ActivatesSingleInstructionSkillAndNarrowsMCPTools(t *te
 			"skill-b": {SkillID: "skill-b", RevisionID: "revision-b", Instructions: "USE INSTRUCTION B", MCPToolIDs: []string{"mcp:orders:delete"}, MemoryScopes: []string{"conversation"}},
 		},
 	}
-	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
+	out, err := cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{MaxSteps: 10})
 	require.NoError(t, err)
 	require.Equal(t, "skill-b", out.ActiveSkill.SkillID)
 	require.Len(t, stub.llmReqs, 3)
@@ -313,7 +313,7 @@ func TestBuildReActGraph_ActiveSkillIntersectsKnowledgeWorkspaces(t *testing.T) 
 			searched = workspaces
 			return "result", nil
 		},
-	}, graph.RunConfig{MaxSteps: 8})
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 8})
 	require.NoError(t, err)
 	require.Equal(t, []string{"kb-allowed"}, searched)
 }
@@ -336,7 +336,7 @@ func TestBuildReActGraph_KnowledgeRevisionFailureStopsBeforeSecondLLMCall(t *tes
 		RAGSearchFn: func(context.Context, []string, string, int) (string, error) {
 			return "", fmt.Errorf("%w: vector backend unavailable", domain.ErrKnowledgeRevisionUnavailable)
 		},
-	}, graph.RunConfig{MaxSteps: 5})
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 5})
 
 	require.ErrorIs(t, err, domain.ErrKnowledgeRevisionUnavailable)
 	require.Len(t, stub.llmReqs, 1)
@@ -383,7 +383,7 @@ func TestBuildReActGraph_DirectAnswer(t *testing.T) {
 		Model:    "qwen-turbo",
 		Messages: []port.LLMMessage{{Role: "user", Content: "what is 6x7?"}},
 	}
-	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 5})
+	out, err := cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{MaxSteps: 5})
 	require.NoError(t, err)
 	require.Equal(t, "42", out.Output)
 	require.Equal(t, 1, out.Steps)
@@ -400,7 +400,7 @@ func TestBuildReActGraph_DoesNotLogLLMResponseContent(t *testing.T) {
 		TenantID: "tenant-1",
 		Model:    "qwen-turbo",
 		Messages: []port.LLMMessage{{Role: "user", Content: "private prompt"}},
-	}, graph.RunConfig{MaxSteps: 2})
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 2})
 	require.NoError(t, err)
 
 	for _, entry := range observed.All() {
@@ -430,7 +430,7 @@ func TestBuildReActGraph_DoesNotLogToolResponseContent(t *testing.T) {
 		ToolExecutionFn: func(context.Context, port.ToolExecutionRequest) (any, error) {
 			return guardedToolOutput("synthetic-private-tool-result"), nil
 		},
-	}, graph.RunConfig{MaxSteps: 4})
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 4})
 	require.NoError(t, err)
 
 	for _, entry := range observed.All() {
@@ -460,7 +460,7 @@ func TestBuildReActGraph_ToolCall(t *testing.T) {
 			return guardedToolOutput("42"), nil
 		},
 	}
-	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
+	out, err := cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{MaxSteps: 10})
 	require.NoError(t, err)
 	require.Equal(t, "The answer is 42", out.Output)
 	require.Equal(t, 2, out.Steps)
@@ -507,7 +507,7 @@ func TestBuildReActGraph_MCPToolCallRecordsProviderMetadata(t *testing.T) {
 			return guardedToolOutput("mcp result"), nil
 		},
 	}
-	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
+	out, err := cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{MaxSteps: 10})
 	require.NoError(t, err)
 	require.Len(t, out.ToolObservations, 1)
 	require.Equal(t, "mcp", out.ToolObservations[0].ProviderType)
@@ -537,7 +537,7 @@ func TestBuildReActGraph_MaxIterations(t *testing.T) {
 			return guardedToolOutput("ok"), nil
 		},
 	}
-	_, err = cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 4})
+	_, err = cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{MaxSteps: 4})
 	require.ErrorContains(t, err, "max steps")
 }
 
@@ -550,7 +550,7 @@ func TestBuildReActGraph_LLMError(t *testing.T) {
 		Model:    "qwen-turbo",
 		Messages: []port.LLMMessage{{Role: "user", Content: "hi"}},
 	}
-	_, err = cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 5})
+	_, err = cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{MaxSteps: 5})
 	require.Error(t, err)
 }
 
@@ -567,7 +567,7 @@ func TestBuildReActGraph_TokensAccumulated(t *testing.T) {
 		Model:    "qwen-turbo",
 		Messages: []port.LLMMessage{{Role: "user", Content: "hi"}},
 	}
-	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 5})
+	out, err := cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{MaxSteps: 5})
 	require.NoError(t, err)
 	require.Equal(t, 15, out.TotalTokens)
 }
@@ -590,7 +590,7 @@ func TestBuildReActGraph_TokensAccumulatedOverMultipleSteps(t *testing.T) {
 			return guardedToolOutput("ok"), nil
 		},
 	}
-	out, err := cg.Invoke(context.Background(), state, graph.RunConfig{MaxSteps: 10})
+	out, err := cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{MaxSteps: 10})
 	require.NoError(t, err)
 	require.Equal(t, 30, out.TotalTokens)
 }
@@ -606,7 +606,7 @@ func TestBuildReActGraph_ContextTimeout(t *testing.T) {
 		Model:    "qwen-turbo",
 		Messages: []port.LLMMessage{{Role: "user", Content: "hi"}},
 	}
-	_, err = cg.Invoke(ctx, state, graph.RunConfig{MaxSteps: 5})
+	_, err = cg.Invoke(ctx, state, graph.RunConfig[graph.ReActState]{MaxSteps: 5})
 	require.Error(t, err)
 }
 
