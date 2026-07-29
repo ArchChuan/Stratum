@@ -837,17 +837,6 @@ func executeLiveAgentFlow(
 	client *http.Client,
 	apiURL, token, serverID, postgresContainer, tenantID, runID string,
 ) map[string]any {
-	const providerMarker = "e2e-provider-marker"
-	requestJSON(client, http.MethodPatch, apiURL+"/tenant/settings", token, map[string]any{
-		"settings": map[string]any{"llm_api_keys": map[string]string{"qwen": providerMarker}},
-	}, http.StatusOK, nil)
-	var settings map[string]any
-	requestJSON(client, http.MethodGet, apiURL+"/tenant/settings", token, nil, http.StatusOK, &settings)
-	encodedSettings, _ := json.Marshal(settings)
-	if bytes.Contains(encodedSettings, []byte(providerMarker)) {
-		panic("tenant settings returned plaintext provider credential")
-	}
-
 	var agent struct {
 		ID string `json:"id"`
 	}
@@ -949,7 +938,7 @@ func executeLiveAgentFlow(
 		panic("live Agent provider failure was not persisted as a failed case outcome")
 	}
 	failureJSON, _ := json.Marshal(failureRun)
-	for _, forbidden := range []string{providerMarker, "provider unavailable", "raw upstream", "upstream body", "upstream response"} {
+	for _, forbidden := range []string{"provider unavailable", "raw upstream", "upstream body", "upstream response"} {
 		if bytes.Contains(bytes.ToLower(failureJSON), []byte(strings.ToLower(forbidden))) {
 			panic("live Agent provider failure exposed sensitive upstream evidence")
 		}

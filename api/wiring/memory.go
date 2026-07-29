@@ -81,7 +81,7 @@ func (c *Container) buildMemory(ctx context.Context) error {
 
 		if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
 			llmRes := newTenantCapabilityResolver(
-				db, c.Platform.AESKey, c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
+				c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
 			).(*tenantCapabilityResolver)
 			mem.Service.SetLLMExtractResolver(func(ctx context.Context, tenantID string) memport.LLMExtractor {
 				llm := llmRes.ResolveLLM(ctx, tenantID)
@@ -190,7 +190,7 @@ func (c *Container) buildMemory(ctx context.Context) error {
 		}
 		if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
 			llmRes := newTenantCapabilityResolver(
-				db, c.Platform.AESKey, c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
+				c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
 			).(*tenantCapabilityResolver)
 			p.SetLLMResolver(func(ctx context.Context, tenantID string) pipeline.LLMClient {
 				gw := llmRes.ResolveLLM(ctx, tenantID)
@@ -253,7 +253,7 @@ func BuildMemoryWorkers(c *Container) []interface {
 	var llmRes *tenantCapabilityResolver
 	if c.LLMGateway != nil && c.LLMGateway.Registry != nil {
 		llmRes = newTenantCapabilityResolver(
-			db, c.Platform.AESKey, c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
+			c.LLMGateway.Registry, c.LLMGateway.Gateway, c.Logger,
 		).(*tenantCapabilityResolver)
 	}
 

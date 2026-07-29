@@ -2,12 +2,9 @@ package wiring
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -15,16 +12,9 @@ import (
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
-	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 )
 
-type tenantSettingsQuerier interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}
-
 type tenantCapabilityResolver struct {
-	db       tenantSettingsQuerier
-	aesKey   [32]byte
 	registry *llmgateway.ModelRegistry
 	gateway  *llmgateway.Gateway
 	logger   *zap.Logger
@@ -33,51 +23,23 @@ type tenantCapabilityResolver struct {
 func (r *tenantCapabilityResolver) DiagnosticModelStatus(
 	ctx context.Context, tenantID string,
 ) (status agentdomain.TenantModelDiagnosticStatus, err error) {
-	if r.db == nil {
-		return status, fmt.Errorf("tenant model diagnostics: settings unavailable")
+	if r.registry == nil {
+		return status, fmt.Errorf("tenant model diagnostics: registry unavailable")
 	}
-	var settingsJSON []byte
-	if err := r.db.QueryRow(ctx,
-		"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL", tenantID,
-	).Scan(&settingsJSON); err != nil {
-		return status, fmt.Errorf("tenant model diagnostics: settings read failed")
+	models, err := r.registry.ListChatModelsByTenant(ctx, tenantID)
+	if err != nil {
+		return status, fmt.Errorf("tenant model diagnostics: list models: %w", err)
 	}
-	var settings map[string]any
-	if err := json.Unmarshal(settingsJSON, &settings); err != nil {
-		return status, fmt.Errorf("tenant model diagnostics: settings invalid")
-	}
-	apiKeys, ok := settings["llm_api_keys"].(map[string]any)
-	if !ok || len(apiKeys) == 0 {
-		return status, nil
-	}
-	for _, provider := range []string{"qwen", "zhipu"} {
-		encrypted, ok := apiKeys[provider].(string)
-		if !ok || encrypted == "" {
-			continue
-		}
-		if _, err := pkgcrypto.Decrypt(r.aesKey, encrypted); err != nil {
-			return status, fmt.Errorf("tenant model diagnostics: credentials invalid")
-		}
-		status.Configured = true
-		return status, nil
-	}
-	return status, fmt.Errorf("tenant model diagnostics: provider unsupported")
+	status.Configured = len(models) > 0
+	return status, nil
 }
 
 func newTenantCapabilityResolver(
-	db *pgxpool.Pool,
-	aesKey [32]byte,
 	registry *llmgateway.ModelRegistry,
 	gateway *llmgateway.Gateway,
 	logger *zap.Logger,
 ) agentport.TenantCapabilityResolver {
-	var settingsDB tenantSettingsQuerier
-	if db != nil {
-		settingsDB = db
-	}
 	return &tenantCapabilityResolver{
-		db:       settingsDB,
-		aesKey:   aesKey,
 		registry: registry,
 		gateway:  gateway,
 		logger:   logger,

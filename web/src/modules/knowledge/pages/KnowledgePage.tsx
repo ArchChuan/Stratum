@@ -13,6 +13,7 @@ export const KnowledgePage = () => {
     setCreateOpen,
     createLoading,
     searchText,
+    embeddingModels,
     setSearchText,
     form,
     navigate,
@@ -46,6 +47,7 @@ export const KnowledgePage = () => {
         open={createOpen}
         loading={createLoading}
         form={form}
+        embeddingModels={embeddingModels}
         onClose={() => setCreateOpen(false)}
         onSubmit={handleCreate}
       />

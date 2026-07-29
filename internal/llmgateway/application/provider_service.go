@@ -36,9 +36,10 @@ type UpdateProviderInput struct {
 // ProviderService orchestrates LLM provider CRUD operations and
 // provider-managed tasks such as model discovery and health checks.
 type ProviderService struct {
-	repo      port.ProviderRepository
-	modelRepo port.ModelRepository
-	runtime   port.ProviderRuntime
+	repo        port.ProviderRepository
+	modelRepo   port.ModelRepository
+	runtime     port.ProviderRuntime
+	invalidator ModelCacheInvalidator
 }
 
 // NewProviderService returns a ProviderService wired with the given
@@ -47,12 +48,17 @@ func NewProviderService(
 	repo port.ProviderRepository,
 	modelRepo port.ModelRepository,
 	runtime port.ProviderRuntime,
+	invalidators ...ModelCacheInvalidator,
 ) *ProviderService {
-	return &ProviderService{
+	service := &ProviderService{
 		repo:      repo,
 		modelRepo: modelRepo,
 		runtime:   runtime,
 	}
+	if len(invalidators) > 0 {
+		service.invalidator = invalidators[0]
+	}
+	return service
 }
 
 // Create persists a new provider and kicks off best-effort model discovery.
@@ -69,6 +75,7 @@ func (s *ProviderService) Create(ctx context.Context, tenantID string, input Cre
 	if err := s.repo.Create(ctx, tenantID, p); err != nil {
 		return nil, fmt.Errorf("provider service: create: %w", err)
 	}
+	s.invalidate(tenantID)
 	// Best-effort model discovery — log but never fail the create operation.
 	_, _ = s.DiscoverModels(ctx, tenantID, p.ID)
 	return p, nil
@@ -98,12 +105,17 @@ func (s *ProviderService) Update(ctx context.Context, tenantID string, input Upd
 	if err := s.repo.Update(ctx, tenantID, existing); err != nil {
 		return nil, fmt.Errorf("provider service: update: %w", err)
 	}
+	s.invalidate(tenantID)
 	return existing, nil
 }
 
 // Delete removes a provider by ID.
 func (s *ProviderService) Delete(ctx context.Context, tenantID, id string) error {
-	return s.repo.Delete(ctx, tenantID, id)
+	if err := s.repo.Delete(ctx, tenantID, id); err != nil {
+		return err
+	}
+	s.invalidate(tenantID)
+	return nil
 }
 
 // DiscoverModels queries the provider's API for available models and upserts
@@ -133,7 +145,18 @@ func (s *ProviderService) DiscoverModels(ctx context.Context, tenantID, provider
 			Enabled:         true,
 		})
 	}
-	return s.modelRepo.UpsertDiscovered(ctx, tenantID, providerID, models)
+	upserted, err := s.modelRepo.UpsertDiscovered(ctx, tenantID, providerID, models)
+	if err != nil {
+		return nil, err
+	}
+	s.invalidate(tenantID)
+	return upserted, nil
+}
+
+func (s *ProviderService) invalidate(tenantID string) {
+	if s.invalidator != nil {
+		s.invalidator.Invalidate(tenantID)
+	}
 }
 
 // HealthCheck verifies that the provider is reachable by calling the

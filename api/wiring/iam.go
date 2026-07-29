@@ -62,8 +62,6 @@ func (c *Container) buildIAM(_ context.Context) error {
 		iam.TenantService = application.NewTenantService(
 			repo,
 			c.Logger,
-			c.Platform.AESKey,
-			c.Platform.ModelRegistry,
 		)
 		iam.InvitationService = application.NewInvitationService(iampersistence.NewInvitationRepo(db))
 		opts := []application.AdminServiceOption{

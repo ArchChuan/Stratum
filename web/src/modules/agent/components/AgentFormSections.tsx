@@ -3,7 +3,7 @@ import { Collapse, Form, Input, InputNumber, Select, Slider, Tag, Typography } f
 
 import { AgentMemoryConfig } from './AgentMemoryConfig';
 
-import { AGENT_MAX_MAX_ITERATIONS, AGENT_MIN_MAX_ITERATIONS, CHAT_MODEL_OPTIONS } from '@/constants';
+import { AGENT_MAX_MAX_ITERATIONS, AGENT_MIN_MAX_ITERATIONS } from '@/constants';
 import type { Workspace } from '@/modules/knowledge';
 import type { MCPToolOption } from '@/modules/mcp';
 import type { Skill } from '@/modules/skill';
@@ -17,12 +17,16 @@ interface AgentFormSectionsProps {
   skills: Skill[];
   mcpTools: MCPToolOption[];
   workspaces: Workspace[];
+  chatModels: string[];
+  currentModel?: string;
 }
 
 export const AgentFormSections = ({
   skills,
   mcpTools,
   workspaces,
+  chatModels,
+  currentModel,
 }: AgentFormSectionsProps) => (
   <>
     <Form.Item name="type" hidden>
@@ -98,7 +102,16 @@ export const AgentFormSections = ({
         subtitle="选择模型并挂载工具和知识"
       />
       <Form.Item label="LLM 模型" name="llmModel" rules={[{ required: true, message: '请选择模型' }]}>
-        <Select placeholder="选择推理模型" options={CHAT_MODEL_OPTIONS} />
+        <Select
+          placeholder="选择推理模型"
+          notFoundContent="模型管理中没有可用的推理模型"
+          options={[
+            ...(currentModel && !chatModels.includes(currentModel)
+              ? [{ value: currentModel, label: `${currentModel}（当前不可用）`, disabled: true }]
+              : []),
+            ...chatModels.map((model) => ({ value: model, label: model })),
+          ]}
+        />
       </Form.Item>
       <Form.Item
         label="技能"

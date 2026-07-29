@@ -2,7 +2,7 @@ import { expect } from '@playwright/test';
 import type { QueryResultRow } from 'pg';
 
 import type { BrowserActor } from '../core/actors';
-import { copyConfiguredLLMCredentials, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
+import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 import { runCleanupTasks } from '../core/errors';
 
@@ -16,7 +16,7 @@ const waitFor = (page: import('@playwright/test').Page, path: string, method: st
 
 export const executeKnowledgePack = async ({ actor, pool, evidence, webURL }: KnowledgePackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
-  await copyConfiguredLLMCredentials(pool, tenantID, process.env.JWT_PRIVATE_KEY_PEM ?? '');
+  await configureManagedModels(pool, tenantID);
   const page = await actor.context.newPage();
   const workspace = `e2e-kb-${Date.now()}`;
   let documentID = '';
@@ -30,6 +30,9 @@ export const executeKnowledgePack = async ({ actor, pool, evidence, webURL }: Kn
     const dialog = page.getByRole('dialog', { name: '新建知识库' });
     await dialog.getByLabel('名称').fill(workspace);
     await dialog.getByLabel('描述').fill('Stateful E2E 产品文档与验收知识');
+    await dialog.getByLabel('嵌入模型').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
+      .filter({ hasText: /^text-embedding-v3$/ }).click();
     const createResponse = waitFor(page, '/knowledge/workspaces', 'POST');
     await dialog.getByRole('button', { name: /创\s*建/ }).click();
     expect((await createResponse).status()).toBe(201);

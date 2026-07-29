@@ -15,19 +15,19 @@ make run
 ## 2. 配置租户模型
 
 1. 登录并选择 tenant。
-2. 在租户设置中配置 provider API key 和默认模型。
-3. 必要时设置 embedding model，用于 Knowledge / Memory。
+2. 在“模型管理”中创建 provider 并配置 API key。
+3. 发现或维护模型目录，启用 chat/embedding 能力模型。
 
 API key 应使用平台的加密配置。不要把真实 key 放入文档、前端 `.env` 或版本库。
 
 ```text
 GET   /models
-GET   /tenant/settings
-PATCH /tenant/settings
-PATCH /tenant/embed-model
+GET/POST /admin/providers
+GET      /admin/models
+GET      /models
 ```
 
-`/models` 无需认证；tenant settings 路由需要 JWT 和 tenant context，写入操作还要求 active tenant。
+这些路由需要 JWT 和 tenant context；模型管理写操作还要求管理员权限与 active tenant。
 
 ## 3. 创建并执行 Agent
 

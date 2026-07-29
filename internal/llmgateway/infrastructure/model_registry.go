@@ -59,7 +59,7 @@ func (r *ModelRegistry) Resolve(ctx context.Context, tenantID, modelName string)
 		}
 		return e.config, proto, nil
 	}
-	cfg, provider, err := r.resolveModelFromDB(ctx, tenantID, modelName, cacheKey)
+	cfg, provider, err := r.resolveModelFromDB(ctx, tenantID, modelName, cacheKey, domain.CapChat)
 	if err != nil {
 		return ProviderConfig{}, nil, err
 	}
@@ -81,7 +81,7 @@ func (r *ModelRegistry) ResolveEmbedding(ctx context.Context, tenantID, modelNam
 		}
 		return e.config, proto, nil
 	}
-	cfg, provider, err := r.resolveModelFromDB(ctx, tenantID, modelName, cacheKey)
+	cfg, provider, err := r.resolveModelFromDB(ctx, tenantID, modelName, cacheKey, domain.CapEmbedding)
 	if err != nil {
 		return ProviderConfig{}, nil, err
 	}
@@ -95,9 +95,13 @@ func (r *ModelRegistry) ResolveEmbedding(ctx context.Context, tenantID, modelNam
 // resolveModelFromDB performs the shared cache-miss resolution: lists enabled
 // models, finds the matching model, looks up its provider, caches the result,
 // and returns the provider config and provider info.
-func (r *ModelRegistry) resolveModelFromDB(ctx context.Context, tenantID, modelName, cacheKey string) (ProviderConfig, domain.Provider, error) {
+func (r *ModelRegistry) resolveModelFromDB(
+	ctx context.Context,
+	tenantID, modelName, cacheKey string,
+	capability domain.ModelCapability,
+) (ProviderConfig, domain.Provider, error) {
 	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled})
+	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled, Capability: capability})
 	if err != nil {
 		return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: list models: %w", err)
 	}
@@ -106,6 +110,9 @@ func (r *ModelRegistry) resolveModelFromDB(ctx context.Context, tenantID, modelN
 			provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
 			if err != nil {
 				return ProviderConfig{}, domain.Provider{}, fmt.Errorf("model registry: get provider: %w", err)
+			}
+			if !provider.Enabled || !r.supports(provider.Kind, capability) {
+				continue
 			}
 			cfg := ProviderConfig{
 				Name:        provider.Name,
@@ -123,38 +130,53 @@ func (r *ModelRegistry) resolveModelFromDB(ctx context.Context, tenantID, modelN
 
 // ListChatModelsByTenant returns sorted enabled chat model names for a tenant.
 func (r *ModelRegistry) ListChatModelsByTenant(ctx context.Context, tenantID string) ([]string, error) {
+	return r.listModelsByCapability(ctx, tenantID, domain.CapChat)
+}
+
+// ListEmbeddingModelsByTenant returns sorted enabled embedding model names for a tenant.
+func (r *ModelRegistry) ListEmbeddingModelsByTenant(ctx context.Context, tenantID string) ([]string, error) {
+	return r.listModelsByCapability(ctx, tenantID, domain.CapEmbedding)
+}
+
+func (r *ModelRegistry) listModelsByCapability(
+	ctx context.Context,
+	tenantID string,
+	capability domain.ModelCapability,
+) ([]string, error) {
 	enabled := true
 	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{
 		Enabled:    &enabled,
-		Capability: domain.CapChat,
+		Capability: capability,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("model registry: list models: %w", err)
 	}
 	names := make([]string, 0, len(models))
 	for _, m := range models {
+		provider, err := r.providerRepo.Get(ctx, tenantID, m.ProviderID)
+		if err != nil {
+			return nil, fmt.Errorf("model registry: get provider: %w", err)
+		}
+		if !provider.Enabled || !r.supports(provider.Kind, capability) {
+			continue
+		}
 		names = append(names, m.Name)
 	}
 	sort.Strings(names)
 	return names, nil
 }
 
-// ListEmbeddingModelsByTenant returns sorted enabled embedding model names for a tenant.
-func (r *ModelRegistry) ListEmbeddingModelsByTenant(ctx context.Context, tenantID string) ([]string, error) {
-	enabled := true
-	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{
-		Enabled:    &enabled,
-		Capability: domain.CapEmbedding,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("model registry: list models: %w", err)
+func (r *ModelRegistry) supports(kind domain.ProviderKind, capability domain.ModelCapability) bool {
+	switch capability {
+	case domain.CapChat:
+		_, ok := r.chatProtos[kind]
+		return ok
+	case domain.CapEmbedding:
+		_, ok := r.embedProtos[kind]
+		return ok
+	default:
+		return false
 	}
-	names := make([]string, 0, len(models))
-	for _, m := range models {
-		names = append(names, m.Name)
-	}
-	sort.Strings(names)
-	return names, nil
 }
 
 // WarmTenant pre-warms the cache by listing enabled models for a tenant and
@@ -171,6 +193,9 @@ func (r *ModelRegistry) WarmTenant(ctx context.Context, tenantID string) error {
 		if err != nil {
 			return fmt.Errorf("model registry: warm tenant: get provider: %w", err)
 		}
+		if !provider.Enabled {
+			continue
+		}
 		cfg := ProviderConfig{
 			Name:        provider.Name,
 			BaseURL:     provider.BaseURL,
@@ -179,6 +204,9 @@ func (r *ModelRegistry) WarmTenant(ctx context.Context, tenantID string) error {
 			Models:      []string{m.Name},
 		}
 		for _, cap := range m.Capabilities {
+			if !r.supports(provider.Kind, cap) {
+				continue
+			}
 			switch cap {
 			case domain.CapChat:
 				r.cacheSet(tenantID, "chat:"+m.Name, cfg, *provider)

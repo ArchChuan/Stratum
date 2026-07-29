@@ -232,7 +232,7 @@ func (rs *RAGService) Query(ctx context.Context, req RAGQueryRequest) (*RAGQuery
 	case "hybrid":
 		embedder := rs.resolveEmbedder(ctx, req)
 		if embedder == nil {
-			return nil, fmt.Errorf("embedding service not configured: set an embedding model in tenant settings")
+			return nil, fmt.Errorf("embedding service not configured: enable an embedding model in model management")
 		}
 		if rs.chunkRepo == nil {
 			return nil, fmt.Errorf("hybrid search not available: chunk store not configured")
@@ -355,7 +355,7 @@ func (rs *RAGService) queryVector(ctx context.Context, question string, collecti
 	rs.logger.Debug("querying vector store")
 
 	if embedder == nil {
-		return nil, fmt.Errorf("embedding service not configured: set an embedding model in tenant settings")
+		return nil, fmt.Errorf("embedding service not configured: enable an embedding model in model management")
 	}
 
 	queryVector, err := embedder.EmbedVector(ctx, question)

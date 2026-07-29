@@ -234,7 +234,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			gw = c.LLMGateway.Gateway
 		}
 		a.TenantResolver = newTenantCapabilityResolver(
-			db, c.Platform.AESKey, registry, gw, c.Logger,
+			registry, gw, c.Logger,
 		)
 	}
 

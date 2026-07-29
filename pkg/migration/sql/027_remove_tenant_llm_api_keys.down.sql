@@ -1,0 +1,1 @@
+-- Irreversible secret removal: deleted credential material cannot be reconstructed.

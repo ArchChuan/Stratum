@@ -9,7 +9,7 @@ import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 const { Title, Text } = Typography;
 
 export const EditAgentPage = () => {
-  const { agent, form, loading, pageLoading, skills, mcpTools, workspaces, navigate, onFinish } =
+  const { agent, form, loading, pageLoading, skills, mcpTools, workspaces, chatModels, navigate, onFinish } =
     useEditAgentPage();
 
   if (pageLoading) {
@@ -68,7 +68,13 @@ export const EditAgentPage = () => {
           memoryScope: 'user',
         }}
       >
-        <AgentFormSections skills={skills} mcpTools={mcpTools} workspaces={workspaces} />
+        <AgentFormSections
+          skills={skills}
+          mcpTools={mcpTools}
+          workspaces={workspaces}
+          chatModels={chatModels}
+          currentModel={agent?.llmModel}
+        />
 
         <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <Button onClick={() => navigate('/agents')}>取消</Button>

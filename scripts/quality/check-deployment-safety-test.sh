@@ -221,7 +221,7 @@ require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'GROUP BY table_schema' \
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" '/api/auth/me' 'administrator bearer identity check'
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" "role IN \('owner',[[:space:]]*'admin'\)" \
     'aggregate tenant administrator count'
-require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" "settings->'llm_api_keys'" \
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" "table_name='providers'" \
     'aggregate configured provider count'
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'stratum_diagnose_tenant' \
     'configured chain diagnostic tool evidence'

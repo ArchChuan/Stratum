@@ -111,14 +111,14 @@ func injectTenant(tenantID string) gin.HandlerFunc {
 }
 
 func newTenantHandler(repo *fakeTenantRepo) *TenantHandler {
-	svc := application.NewTenantService(repo, zap.NewNop(), [32]byte{}, nil)
+	svc := application.NewTenantService(repo, zap.NewNop())
 	return NewTenantHandler(svc, application.NewInvitationService(&fakeInvitationRepo{}), nil, zap.NewNop())
 }
 
 func TestInviteMemberReturnsOneTimeCode(t *testing.T) {
 	repo := &fakeInvitationRepo{}
 	h := NewTenantHandler(
-		application.NewTenantService(&fakeTenantRepo{}, zap.NewNop(), [32]byte{}, nil),
+		application.NewTenantService(&fakeTenantRepo{}, zap.NewNop()),
 		application.NewInvitationService(repo), nil, zap.NewNop(),
 	)
 	gin.SetMode(gin.TestMode)
@@ -150,7 +150,7 @@ func TestInviteMemberReturnsOneTimeCode(t *testing.T) {
 
 func TestInviteMemberRejectsMember(t *testing.T) {
 	h := NewTenantHandler(
-		application.NewTenantService(&fakeTenantRepo{}, zap.NewNop(), [32]byte{}, nil),
+		application.NewTenantService(&fakeTenantRepo{}, zap.NewNop()),
 		application.NewInvitationService(&fakeInvitationRepo{}), nil, zap.NewNop(),
 	)
 	gin.SetMode(gin.TestMode)
@@ -175,7 +175,7 @@ func TestJoinTenantUsesAuthenticatedUser(t *testing.T) {
 		UserID: "user-1", TenantID: "tenant-target", Role: "member",
 	}}
 	h := NewTenantHandler(
-		application.NewTenantService(&fakeTenantRepo{}, zap.NewNop(), [32]byte{}, nil),
+		application.NewTenantService(&fakeTenantRepo{}, zap.NewNop()),
 		application.NewInvitationService(invitationRepo), nil, zap.NewNop(),
 	)
 	gin.SetMode(gin.TestMode)

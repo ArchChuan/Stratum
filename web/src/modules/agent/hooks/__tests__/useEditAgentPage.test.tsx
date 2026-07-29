@@ -16,6 +16,7 @@ vi.mock('../../api/agent.api', () => ({ agentApi: { get: vi.fn(), update: vi.fn(
 vi.mock('@/modules/skill', () => ({ skillApi: { list: vi.fn() } }));
 vi.mock('@/modules/mcp', () => ({ mcpApi: { toolOptions: vi.fn() } }));
 vi.mock('@/modules/knowledge', () => ({ knowledgeApi: { list: vi.fn() } }));
+vi.mock('@/modules/llm', () => ({ llmApi: { getCatalogue: vi.fn().mockResolvedValue({ chatModels: [], embeddingModels: [] }) } }));
 
 const agent = (id: string, isSystem: boolean): Agent => ({
   id,

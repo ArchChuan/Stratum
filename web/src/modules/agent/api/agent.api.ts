@@ -35,10 +35,6 @@ export const agentApi = {
     api.post(`/agents/${id}/execute`, payload, { timeout: AGENT_EXEC_TIMEOUT_MS }),
 	executions: (page = 1, pageSize = DEFAULT_PAGE_SIZE) =>
     api.get('/agents/executions', { params: { page, page_size: pageSize } }),
-	models: async (): Promise<string[]> => {
-    const res = await api.get('/models');
-    return z.array(z.string()).parse(res.data?.models ?? []);
-	},
   getSystemSettings: async (): Promise<SystemAssistantSettings> => {
     const res = await api.get('/agents/system/settings');
     return systemAssistantSettingsSchema.parse(res.data);

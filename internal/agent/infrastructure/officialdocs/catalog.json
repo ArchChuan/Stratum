@@ -105,7 +105,7 @@
     "section": "10.3 关键实现细节",
     "url": "/docs/agent/knowledge-workspace",
     "ordinal": 0,
-    "body": "- **去重键**：`SHA256(fileBytes)` 落 `knowledge_docs.content_hash`；查表用 `(workspace_id, content_hash)` 组合索引。\n- **DocumentID**：uuid v7（含时间序），Milvus chunk ID = `\u003cdocumentID\u003e_chunk_\u003ci\u003e`，parent ID = `\u003cdocumentID\u003e_parent_\u003ci\u003e`。\n- **TextCleaner**（`pkg/textchunk/cleaner.go`）：`Clean` 规范化空白/控制字符，`FilterChunks` 剔除过短片段，在 chunking 前后各执行一次。\n- **PG chunks 落库容错**：`InsertBatch` / `InsertParentBatch` 失败仅 `logger.Warn`，不回滚——向量已入 Milvus，PG 关键词索引可后台补偿。\n- **EmbedResolver**：逐租户从 `public.tenants.settings.llm_api_keys` 解密密钥→构造 `llmgateway.Gateway`→缓存 `TenantGatewayCache`（TTL = `constants.GatewayCacheTTL`）。Workspace-level `EmbeddingModel` 覆盖 tenant 默认。"
+    "body": "- **去重键**：`SHA256(fileBytes)` 落 `knowledge_docs.content_hash`；查表用 `(workspace_id, content_hash)` 组合索引。\n- **DocumentID**：uuid v7（含时间序），Milvus chunk ID = `\u003cdocumentID\u003e_chunk_\u003ci\u003e`，parent ID = `\u003cdocumentID\u003e_parent_\u003ci\u003e`。\n- **TextCleaner**（`pkg/textchunk/cleaner.go`）：`Clean` 规范化空白/控制字符，`FilterChunks` 剔除过短片段，在 chunking 前后各执行一次。\n- **PG chunks 落库容错**：`InsertBatch` / `InsertParentBatch` 失败仅 `logger.Warn`，不回滚——向量已入 Milvus，PG 关键词索引可后台补偿。\n- **EmbedResolver**：逐租户通过 `ModelRegistry` 解析已启用 provider/model；Workspace-level `EmbeddingModel` 优先，未指定时使用可用 embedding 目录的第一项。"
   },
   {
     "documentId": "knowledge-guide",

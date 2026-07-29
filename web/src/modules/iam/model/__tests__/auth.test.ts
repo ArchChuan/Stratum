@@ -35,9 +35,9 @@ describe('iam model schemas', () => {
   });
 
   describe('tenantSettingsSchema', () => {
-    it('llm_api_keys 必须是字符串映射', () => {
+    it('丢弃旧的模型密钥字段', () => {
       const parsed = tenantSettingsSchema.parse({ llm_api_keys: { qwen: 'sk-1' } });
-      expect(parsed.llm_api_keys?.qwen).toBe('sk-1');
+      expect(parsed).not.toHaveProperty('llm_api_keys');
     });
   });
 

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createActorContexts, restoreActorSession } from './actors';
 import {
   assertSafeDatabaseURL,
-  copyConfiguredLLMCredentials,
+  configureManagedModels,
   deleteGeneratedActors,
   deleteGeneratedOAuthUser,
   requireUUID,
@@ -199,34 +199,30 @@ describe('stateful E2E security boundaries', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it('configures encrypted legacy credentials and the tenant model registry', async () => {
+  it('configures the tenant model registry without legacy tenant settings', async () => {
     const tenantID = '123e4567-e89b-42d3-a456-426614174000';
     const query = vi.fn()
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({ rowCount: 1 })
       .mockResolvedValueOnce({ rowCount: 1 })
       .mockResolvedValueOnce({ rowCount: 4 })
       .mockResolvedValueOnce({});
     const release = vi.fn();
     const pool = { connect: vi.fn().mockResolvedValue({ query, release }) };
 
-    await copyConfiguredLLMCredentials(pool, tenantID, 'test-private-key');
+    await configureManagedModels(pool, tenantID);
 
     expect(query).toHaveBeenNthCalledWith(1, 'BEGIN');
     expect(query).toHaveBeenNthCalledWith(2, "SELECT set_config('search_path', $1, true)", [
       `tenant_${tenantID},public`,
     ]);
-    expect(query).toHaveBeenNthCalledWith(3, expect.stringContaining('UPDATE public.tenants'), [
-      expect.objectContaining({ qwen: expect.any(String) }), tenantID,
-    ]);
-    expect(query).toHaveBeenNthCalledWith(4, expect.stringContaining('INSERT INTO providers'), [
+    expect(query).toHaveBeenNthCalledWith(3, expect.stringContaining('INSERT INTO providers'), [
       'stateful-qwen', tenantID, 'http://127.0.0.1:19091/v1', 'stateful-local-provider-key',
     ]);
-    expect(query).toHaveBeenNthCalledWith(5, expect.stringContaining('INSERT INTO models'), [
+    expect(query).toHaveBeenNthCalledWith(4, expect.stringContaining('INSERT INTO models'), [
       tenantID, 'stateful-qwen',
     ]);
-    expect(query).toHaveBeenNthCalledWith(6, 'COMMIT');
+    expect(query).toHaveBeenNthCalledWith(5, 'COMMIT');
     expect(release).toHaveBeenCalledOnce();
   });
 

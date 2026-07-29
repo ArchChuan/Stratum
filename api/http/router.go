@@ -36,6 +36,7 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	requireActive := middleware.RequireActiveTenant(c.DB())
 
 	registerAuth(r, c, requireActive)
+	registerModelCatalogue(r, c)
 	registerHealth(r, c)
 	registerSkills(r, c, requireActive)
 	registerEvaluations(r, c, requireActive)
@@ -209,7 +210,16 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	r.GET("/tenant/list", jwtMW, tenantHandler.ListUserTenants)
 }
 
-// registerHealth wires /metrics, /health, /models — all unauthenticated.
+func registerModelCatalogue(r *gin.Engine, c *wiring.Container) {
+	if c.LLMGateway == nil {
+		return
+	}
+	modelHandler := handler.NewModelHandler(c.LLMGateway.ModelService)
+	models := r.Group("/models", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
+	models.GET("", modelHandler.ListModels)
+}
+
+// registerHealth wires unauthenticated observability and health endpoints.
 func registerHealth(r *gin.Engine, c *wiring.Container) {
 	r.GET("/metrics", gin.WrapH(c.Platform.Metrics.GetHandler()))
 	r.GET("/livez", func(ctx *gin.Context) {
@@ -219,8 +229,6 @@ func registerHealth(r *gin.Engine, c *wiring.Container) {
 	r.GET("/health", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{"status": "ok", "service": "Stratum"})
 	})
-	modelHandler := handler.NewModelHandler(c.LLMGateway.ModelService)
-	r.GET("/models", modelHandler.ListModels)
 }
 
 func readinessHandler(check func(context.Context) map[string]error) gin.HandlerFunc {

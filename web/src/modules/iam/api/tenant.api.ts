@@ -50,11 +50,10 @@ export const tenantApi = {
   settings: async (token?: string): Promise<TenantSettings> => {
     const res = await api.get('/tenant/settings', withBearer(token));
     const data = res.data ?? {};
-    const inner = (data.settings ?? {}) as Record<string, unknown>;
     return tenantSettingsSchema.parse({
       tenant_id: data.tenant_id,
       tenant_name: data.tenant_name,
-      llm_api_keys: inner.llm_api_keys,
+      is_default: data.is_default,
     });
   },
   updateSettings: (patch: Record<string, unknown>) => api.patch('/tenant/settings', patch),
