@@ -529,24 +529,26 @@ execution、proposal 或原始错误作为 label。
 
 | 主张 | 项目证据 | Obsidian 输入 | 外部规范 | 边界 |
 | --- | --- | --- | --- | --- |
-| 当前平台助手工具存在旁路 | `system_assistant_tools.go`、wiring、MCP registry | 已验证 Agent 分层原则 | MCP tools 规范待实施前复核 | 当前仓库事实优先 |
-| 权限和审批属于 Harness/业务层 | proposal service、tool policy、role middleware | “Agent 系统应分离执行循环、编排、状态、记忆与治理” verified | MCP authorization 规范待复核 | MCP 协议本身不替代业务授权 |
+| 当前平台助手工具存在旁路 | `system_assistant_tools.go`、wiring、MCP registry | 已验证 Agent 分层原则 | MCP Tools 2025-06-18、2025-11-25、2026-07-28 已核验 | 当前仓库事实优先 |
+| 权限和审批属于 Harness/业务层 | proposal service、tool policy、role middleware | “Agent 系统应分离执行循环、编排、状态、记忆与治理” verified | MCP Tools 要求 server 实施 access control；Authorization 负责 HTTP OAuth 边界 | MCP 协议本身不替代业务授权 |
 | AIOps 必须区分事实、调查、执行和治理 | 当前诊断 evidence/gap 结构 | 对应笔记为 provisional，仅作设计线索 | 不作为关键外部事实 | 本设计仅做租户业务诊断 |
-| 共享服务不能依赖 URL 代表身份 | 当前 mcp config 可由租户创建 | 最小工具权限原则 | OAuth audience/resource 语义待复核 | 使用系统身份、mTLS 和 scoped JWT |
+| 共享服务不能依赖 URL 代表身份 | 当前 mcp config 可由租户创建 | 最小工具权限原则 | 三个版本均要求 OAuth resource/audience 绑定；当前安全指南仍记录 token passthrough 风险 | 使用系统身份、mTLS 和 scoped JWT |
 
-计划核验的一手来源：
+已核验的一手来源与逐项主张矩阵见
+`docs/evidence/platform-mcp-protocol-2026-07-29.md`。兼容基线固定为 `2025-06-18`，并比较：
 
 - MCP Authorization，固定版本 `2025-06-18`：
   <https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization>
 - MCP Tools，固定版本 `2025-06-18`：
   <https://modelcontextprotocol.io/specification/2025-06-18/server/tools>
+- MCP Authorization/Tools，过渡版本 `2025-11-25`；
+- MCP Authorization/Tools/Streamable HTTP，核验时 current 版本 `2026-07-28`。
 
-实施前还必须从 MCP 官方站点确认当时的 current specification，并记录它与上述固定兼容基线之间的授权、transport
-和 tool contract 差异；不得静默把旧版本语义当作当前规范。
-
-当前环境的网页 fetch 因代理参数错误失败，Playwright 因缺少 Chrome 失败。实施计划开始前必须恢复至少一种官方
-文档读取路径并核对 audience/resource、token passthrough 禁止项和 tool authorization 责任；未完成时身份委托实现
-保持阻断，不以搜索摘要替代正文。
+`/specification/latest` 在 2026-07-29 跳转到 `2026-07-28`。该版本把 Streamable HTTP 改为无 session 的
+per-request metadata 合同，要求每个 POST 带协议版本和 mirrored method/name headers，与 2025 session-based wire
+contract 不兼容。因此阶段一显式实现 `2025-06-18`：初始化协商该版本，后续请求传播协议版本和 session header；
+Authorization、audience/resource、token passthrough、tool input/access-control 仍按证据矩阵中的严格决策执行。
+升级 `2026-07-28` 必须作为独立兼容性变更，禁止静默混用两个 transport 合同。
 
 ## 18. 完成标准
 

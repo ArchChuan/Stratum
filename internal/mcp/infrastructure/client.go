@@ -17,8 +17,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"go.uber.org/zap"
 )
+
+const mcpProtocolVersion = "2025-06-18"
 
 // MCPClient 定义 MCP 客户端接口
 type MCPClient interface {
@@ -322,7 +326,7 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 		ID:      c.nextID(),
 		Method:  "initialize",
 		Params: map[string]interface{}{
-			"protocolVersion": "2024-11-05",
+			"protocolVersion": mcpProtocolVersion,
 			"capabilities":    map[string]interface{}{},
 			"clientInfo":      map[string]interface{}{"name": "stratum", "version": "1.0"},
 		},
@@ -336,8 +340,7 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 	if err != nil {
 		return errors.New("MCP HTTP initialize request invalid")
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
+	c.applyHTTPHeaders(ctx, req, false)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -422,8 +425,7 @@ func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCP
 		return nil, errors.New("MCP HTTP request invalid")
 	}
 
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/json, text/event-stream")
+	c.applyHTTPHeaders(ctx, httpReq, true)
 	if c.sessionID != "" {
 		httpReq.Header.Set("Mcp-Session-Id", c.sessionID)
 	}
@@ -459,6 +461,18 @@ func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCP
 	}
 
 	return &mcpResp, nil
+}
+
+func (c *BaseClient) applyHTTPHeaders(ctx context.Context, req *http.Request, includeProtocolVersion bool) {
+	for name, value := range c.config.Headers {
+		req.Header.Set(name, value)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if includeProtocolVersion {
+		req.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
+	}
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 }
 
 // HealthCheck 执行健康检查
