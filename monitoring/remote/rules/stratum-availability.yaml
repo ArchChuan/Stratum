@@ -2,7 +2,7 @@ groups:
   - name: stratum-availability
     rules:
       - alert: StratumPublicEndpointDown
-        expr: absent(probe_success{job="stratum-blackbox-prometheus-blackbox-exporter",service="stratum",environment="remote-test"}) * 0 or probe_success{job="stratum-blackbox-prometheus-blackbox-exporter",service="stratum",environment="remote-test"} == 0
+        expr: absent(probe_success{service="stratum",environment="remote-test",target="stratum-public-health"}) * 0 or probe_success{service="stratum",environment="remote-test",target="stratum-public-health"} == 0
         for: 3m
         labels:
           severity: critical

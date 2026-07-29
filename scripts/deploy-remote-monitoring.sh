@@ -177,10 +177,12 @@ verify_prometheus() {
     wait_for_prometheus
 
     local targets="${INVENTORY_DIR}/prometheus-targets.json"
+    local probe="${INVENTORY_DIR}/prometheus-public-probe.json"
     local rules="${INVENTORY_DIR}/prometheus-rules.json"
     local smoke_attempts="${MONITORING_SMOKE_ATTEMPTS:-30}"
     local smoke_interval="${MONITORING_SMOKE_INTERVAL_SEC:-2}"
     local targets_healthy=false
+    local probe_healthy=false
     local rules_healthy=false
     local attempt
 
@@ -190,8 +192,6 @@ verify_prometheus() {
       .status == "success" and
       ([.data.activeTargets[] | select(.health == "up") | .labels] as $targets |
         any($targets[]; .namespace == "stratum" and .service == "stratum" and .endpoint == "http") and
-        any($targets[]; .job == "stratum-blackbox-prometheus-blackbox-exporter" and
-            .service == "stratum" and .environment == "remote-test") and
         any($targets[]; .namespace == "monitoring" and .service == "stratum-feishu-alert-adapter") and
         any($targets[]; .namespace == "stratum" and .service == "stratum-etcd-metrics") and
         any($targets[]; .namespace == "stratum" and .service == "stratum-milvus-metrics"))
@@ -202,7 +202,62 @@ verify_prometheus() {
         sleep "${smoke_interval}"
     done
     if [[ "${targets_healthy}" != "true" ]]; then
+        if [[ -s "${targets}" ]]; then
+            jq -r '
+          [.data.activeTargets[]] as $targets |
+          [
+            {name: "backend", present: any($targets[]; .labels.namespace == "stratum" and
+                .labels.service == "stratum" and .labels.endpoint == "http"),
+              up: any($targets[]; .health == "up" and .labels.namespace == "stratum" and
+                .labels.service == "stratum" and .labels.endpoint == "http")},
+            {name: "feishu-adapter", present: any($targets[]; .labels.namespace == "monitoring" and
+                .labels.service == "stratum-feishu-alert-adapter"),
+              up: any($targets[]; .health == "up" and .labels.namespace == "monitoring" and
+                .labels.service == "stratum-feishu-alert-adapter")},
+            {name: "etcd", present: any($targets[]; .labels.namespace == "stratum" and
+                .labels.service == "stratum-etcd-metrics"),
+              up: any($targets[]; .health == "up" and .labels.namespace == "stratum" and
+                .labels.service == "stratum-etcd-metrics")},
+            {name: "milvus", present: any($targets[]; .labels.namespace == "stratum" and
+                .labels.service == "stratum-milvus-metrics"),
+              up: any($targets[]; .health == "up" and .labels.namespace == "stratum" and
+                .labels.service == "stratum-milvus-metrics")}
+          ] | .[] | select(.up | not) |
+          "monitoring target contract failed: \(.name) present=\(.present) up=\(.up)"
+            ' "${targets}" >&2 || :
+        fi
         echo "one or more expected monitoring targets are missing or unhealthy" >&2
+        exit 1
+    fi
+
+    for attempt in $(seq 1 "${smoke_attempts}"); do
+        if curl --fail --silent --show-error --max-time 10 --get \
+            --data-urlencode 'query=probe_success{service="stratum",environment="remote-test",target="stratum-public-health"}' \
+            http://127.0.0.1:19090/api/v1/query >"${probe}" && jq -e '
+      .status == "success" and .data.resultType == "vector" and
+      any(.data.result[];
+        .metric.service == "stratum" and .metric.environment == "remote-test" and
+        .metric.target == "stratum-public-health" and .value[1] == "1")
+        ' "${probe}" >/dev/null; then
+            probe_healthy=true
+            break
+        fi
+        sleep "${smoke_interval}"
+    done
+    if [[ "${probe_healthy}" != "true" ]]; then
+        if [[ -s "${probe}" ]]; then
+            jq -r '
+          [.data.result[]?] as $results |
+          {present: any($results[];
+              .metric.service == "stratum" and .metric.environment == "remote-test" and
+              .metric.target == "stratum-public-health"),
+            healthy: any($results[];
+              .metric.service == "stratum" and .metric.environment == "remote-test" and
+              .metric.target == "stratum-public-health" and .value[1] == "1")} |
+          "monitoring probe contract failed: public-health present=\(.present) healthy=\(.healthy)"
+            ' "${probe}" >&2 || :
+        fi
+        echo "public health probe sample is missing or unhealthy" >&2
         exit 1
     fi
 

@@ -115,6 +115,8 @@ done
 
 jq -e '[.. | objects | .expr? | select(type == "string")] | join(" ") |
     test("probe_success") and test("stratum:http_requests:increase5m") and
+    test("probe_success{service=\"stratum\",environment=\"remote-test\",target=\"stratum-public-health\"}") and
+    (contains("probe_success{job=\"stratum-blackbox-prometheus-blackbox-exporter\"") | not) and
     test("stratum:http_5xx_ratio:ratio5m") and
     test("stratum:http_request_duration_seconds:p95_5m") and
     test("kube_deployment_status_replicas_ready") and test("ALERTS")' \
