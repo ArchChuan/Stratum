@@ -1,6 +1,7 @@
 import { expect, type BrowserContext, type Page } from '@playwright/test';
 import type { QueryResultRow } from 'pg';
 
+import { withRestoredContextCookies } from '../core/actors';
 import {
   deleteGeneratedOAuthUser,
   requireUUID,
@@ -52,7 +53,7 @@ const oauthIdentity = (): OAuthIdentity => {
   return { githubID, login, email };
 };
 
-export const executeIAMOAuthJourney = async ({
+const executeIAMOAuthJourneyWithTemporaryIdentity = async ({
   context, pool, evidence, webURL, backendURL,
 }: OAuthJourneyContext): Promise<string[]> => {
   const identity = oauthIdentity();
@@ -174,3 +175,10 @@ export const executeIAMOAuthJourney = async ({
   if (failure) throw failure;
   return completed;
 };
+
+export const executeIAMOAuthJourney = async (journeyContext: OAuthJourneyContext): Promise<string[]> => (
+  withRestoredContextCookies(
+    journeyContext.context,
+    () => executeIAMOAuthJourneyWithTemporaryIdentity(journeyContext),
+  )
+);

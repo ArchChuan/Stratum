@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createActorContexts, restoreActorSession } from './actors';
+import { createActorContexts, restoreActorSession, withRestoredContextCookies } from './actors';
 import {
   assertSafeDatabaseURL,
   configureManagedModels,
@@ -140,6 +140,24 @@ describe('stateful E2E security boundaries', () => {
       data: { tenant_id: actor.tenantID },
     }));
     expect(actor.accessToken).toBe('replacement-access-token');
+  });
+
+  it('restores actor cookies after a temporary identity session succeeds or fails', async () => {
+    const originalCookies = [{ name: 'refresh_token', value: 'guest-cookie' }];
+    const cookies = vi.fn().mockResolvedValue(originalCookies);
+    const clearCookies = vi.fn().mockResolvedValue(undefined);
+    const addCookies = vi.fn().mockResolvedValue(undefined);
+    const context = { cookies, clearCookies, addCookies };
+
+    await expect(withRestoredContextCookies(context, async () => 'completed')).resolves.toBe('completed');
+    await expect(withRestoredContextCookies(context, async () => {
+      throw new Error('journey failed');
+    })).rejects.toThrow('journey failed');
+
+    expect(cookies).toHaveBeenCalledTimes(2);
+    expect(clearCookies).toHaveBeenCalledTimes(2);
+    expect(addCookies).toHaveBeenNthCalledWith(1, originalCookies);
+    expect(addCookies).toHaveBeenNthCalledWith(2, originalCookies);
   });
 
   it('cleans up only the exact generated user UUIDs', async () => {
