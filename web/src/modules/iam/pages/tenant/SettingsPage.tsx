@@ -3,7 +3,6 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { tenantApi } from '../../api/tenant.api';
-import { TenantApiKeyCard } from '../../components/TenantApiKeyCard';
 import { TenantBasicCard } from '../../components/TenantBasicCard';
 import { useTenantSettings } from '../../hooks/useTenantSettings';
 
@@ -13,15 +12,10 @@ export const SettingsPage = () => {
   const {
     user,
     role,
-    canEditKeys,
     loading,
-    keyLoading,
-    fetchLoading,
-    maskedKeys,
     tenantName,
     isDefault,
     handleBasicSave,
-    handleKeySave,
   } = useTenantSettings();
 
   const navigate = useNavigate();
@@ -57,7 +51,7 @@ export const SettingsPage = () => {
           租户设置
         </Title>
         <Text type="secondary" style={{ fontSize: 13 }}>
-          管理租户基本信息与 LLM 接口配置
+          管理租户基本信息
         </Text>
       </div>
 
@@ -70,15 +64,6 @@ export const SettingsPage = () => {
           />
         </Col>
       </Row>
-
-      <TenantApiKeyCard
-        maskedKeys={maskedKeys}
-        fetchLoading={fetchLoading}
-        keyLoading={keyLoading}
-        canEditKeys={canEditKeys}
-        role={role}
-        onSave={handleKeySave}
-      />
 
       {role === 'owner' && !isDefault && (
         <div

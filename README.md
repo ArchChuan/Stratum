@@ -164,7 +164,7 @@ stratum/
 │   ├── skill/                Skill CRUD · AtomicEngine · PipelineEngine · CircuitBreaker
 │   ├── mcp/                  MCP 服务器管理 · SkillAdapter
 │   ├── iam/                  Tenant · Admin · OAuth · JWT · Onboard
-│   ├── llmgateway/           LLM 统一网关 · TenantGatewayCache · 嵌入服务
+│   ├── llmgateway/           LLM 统一网关 · ModelRegistry · 嵌入服务
 │   ├── platform/             Harness 生命周期与平台领域契约
 │   ├── workflow/             Workflow 定义 · 运行 · 审批 · 人工干预
 │   └── evaluation/           评测套件 · 运行 · 实验 · 优化建议

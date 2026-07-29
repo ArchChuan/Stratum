@@ -22,7 +22,21 @@ func LocalSourceDigest(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return digestPaths(paths, func(path string) ([]byte, error) {
+	deleted, err := gitNullPaths(root, "ls-files", "-z", "--deleted")
+	if err != nil {
+		return "", err
+	}
+	deletedSet := make(map[string]struct{}, len(deleted))
+	for _, path := range deleted {
+		deletedSet[path] = struct{}{}
+	}
+	workingPaths := paths[:0]
+	for _, path := range paths {
+		if _, removed := deletedSet[path]; !removed {
+			workingPaths = append(workingPaths, path)
+		}
+	}
+	return digestPaths(workingPaths, func(path string) ([]byte, error) {
 		content, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
 		if readErr != nil {
 			return nil, fmt.Errorf("read source %q: %w", path, readErr)

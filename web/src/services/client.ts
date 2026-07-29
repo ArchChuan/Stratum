@@ -54,7 +54,6 @@ const PUBLIC_PATH_PREFIXES = [
   '/auth/callback',
   '/health',
   '/metrics',
-  '/models',
 ];
 
 const isPublicRequest = (url: string | undefined): boolean => {

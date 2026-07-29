@@ -101,6 +101,7 @@ export const executeIAMPack = async ({
     await tenantAdminPage.goto(`${webURL}/tenant/settings`);
     await expect(tenantAdminPage).toHaveURL(`${webURL}/tenant/settings`);
     await expect(tenantAdminPage.getByRole('heading', { name: '租户设置' })).toBeVisible();
+    await expect(tenantAdminPage.getByText('LLM API Key')).toHaveCount(0);
     completed.push('iam.route.tenant.settings');
     const tenantNameInput = tenantAdminPage.getByLabel('租户名称');
     await expect(tenantNameInput).toHaveValue(tenantName);

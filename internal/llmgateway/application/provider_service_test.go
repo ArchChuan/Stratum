@@ -179,6 +179,31 @@ func TestProviderService_Create_HappyPath(t *testing.T) {
 	}
 }
 
+type providerInvalidator struct {
+	tenants []string
+}
+
+func (i *providerInvalidator) Invalidate(tenantID string) {
+	i.tenants = append(i.tenants, tenantID)
+}
+
+func TestProviderServiceInvalidatesRegistryAfterUpdate(t *testing.T) {
+	provider := &domain.Provider{ID: "provider-1", Enabled: true}
+	pr := &mockProviderRepo{providers: map[string]*domain.Provider{"provider-1": provider}}
+	invalidator := &providerInvalidator{}
+	svc := application.NewProviderService(pr, &mockModelRepo{}, &mockProviderRuntime{}, invalidator)
+
+	_, err := svc.Update(context.Background(), "tenant-1", application.UpdateProviderInput{
+		ID: "provider-1", Name: "updated", Kind: domain.ProviderOpenAICompat,
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(invalidator.tenants) != 1 || invalidator.tenants[0] != "tenant-1" {
+		t.Fatalf("invalidations = %v", invalidator.tenants)
+	}
+}
+
 func TestProviderService_Create_RepoError(t *testing.T) {
 	pr := &mockProviderRepo{err: errors.New("db error")}
 	mr := &mockModelRepo{}

@@ -161,6 +161,7 @@ describe('responsive page contracts', () => {
           open
           loading={false}
           form={form}
+          embeddingModels={[]}
           onClose={vi.fn()}
           onSubmit={vi.fn()}
         />

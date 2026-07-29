@@ -9,6 +9,11 @@ interface ModelListResponse {
   models: Model[];
 }
 
+export interface ModelCatalogue {
+  chatModels: string[];
+  embeddingModels: string[];
+}
+
 interface DiscoverResponse {
   models: Model[];
   count: number;
@@ -23,6 +28,14 @@ interface MessageResponse {
 }
 
 export const llmApi = {
+  getCatalogue: async (): Promise<ModelCatalogue> => {
+    const res = await api.get<{ models?: string[]; embedding_models?: string[] }>('/models');
+    return {
+      chatModels: res.data.models ?? [],
+      embeddingModels: res.data.embedding_models ?? [],
+    };
+  },
+
   // Providers
   listProviders: async (): Promise<Provider[]> => {
     const res = await api.get<ProviderListResponse>('/admin/providers');

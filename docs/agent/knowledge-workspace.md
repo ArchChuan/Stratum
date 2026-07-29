@@ -404,7 +404,7 @@ flowchart TD
 - **DocumentID**：uuid v7（含时间序），Milvus chunk ID = `<documentID>_chunk_<i>`，parent ID = `<documentID>_parent_<i>`。
 - **TextCleaner**（`pkg/textchunk/cleaner.go`）：`Clean` 规范化空白/控制字符，`FilterChunks` 剔除过短片段，在 chunking 前后各执行一次。
 - **PG chunks 落库容错**：`InsertBatch` / `InsertParentBatch` 失败仅 `logger.Warn`，不回滚——向量已入 Milvus，PG 关键词索引可后台补偿。
-- **EmbedResolver**：逐租户从 `public.tenants.settings.llm_api_keys` 解密密钥→构造 `llmgateway.Gateway`→缓存 `TenantGatewayCache`（TTL = `constants.GatewayCacheTTL`）。Workspace-level `EmbeddingModel` 覆盖 tenant 默认。
+- **EmbedResolver**：逐租户通过 `ModelRegistry` 解析已启用 provider/model；Workspace-level `EmbeddingModel` 优先，未指定时使用可用 embedding 目录的第一项。
 
 ### 10.4 三种 Chunking Strategy（`pkg/textchunk/`）
 

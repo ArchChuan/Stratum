@@ -3,7 +3,7 @@ import type { QueryResultRow } from 'pg';
 
 import type { BrowserActor } from '../core/actors';
 import {
-  copyConfiguredLLMCredentials, requireUUID, withTenantMutation, withTenantQuery, type DatabasePool,
+  configureManagedModels, requireUUID, withTenantMutation, withTenantQuery, type DatabasePool,
 } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 import { runCleanupTasks } from '../core/errors';
@@ -96,7 +96,7 @@ export const executeEvaluationPack = async ({
 }: EvaluationPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   const userID = requireUUID(actor.userID ?? '', 'user_id');
-  await copyConfiguredLLMCredentials(pool, tenantID, process.env.JWT_PRIVATE_KEY_PEM ?? '');
+  await configureManagedModels(pool, tenantID);
   const page = await actor.context.newPage();
   const suffix = String(Date.now());
   const skillName = `E2E-Evaluation-Skill-${suffix}`;
@@ -143,6 +143,9 @@ export const executeEvaluationPack = async ({
       .toEqual(expect.arrayContaining([expect.objectContaining({ id: skillID, name: skillName })]));
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('系统提示词').fill('执行激活的 Skill，并返回确定的 stateful 结果。');
+    await page.getByLabel('LLM 模型').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
+      .filter({ hasText: /^qwen-max$/ }).click();
     const agentResponse = waitFor(page, '/agents', 'POST');
     await page.getByRole('button', { name: '创建 Agent' }).click();
     const createdAgent = await agentResponse;

@@ -47,10 +47,9 @@ export const tenantSettingsSchema = z
   .object({
     tenant_id: z.string().optional(),
     tenant_name: z.string().optional().default(''),
-    llm_api_keys: z.record(z.string()).optional(),
     is_default: z.boolean().optional().default(false),
   })
-  .passthrough();
+  .strip();
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
 
 export const adminTenantSchema = z

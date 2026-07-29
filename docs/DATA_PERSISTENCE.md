@@ -163,7 +163,7 @@ volumes:
 - Memory buffer：消费 NATS 消息后按 `MemoryBufferFlushSize=5` 批量写入 PG
 - refresh token 注销黑名单
 
-`TenantGatewayCache` 是进程内 TTL cache，不存于 Redis。Redis volume 通常不作为业务主数据备份，但丢失会清空尚未 flush 的 memory buffer 和 refresh-token blacklist；重置前应评估在途数据与已注销 token 的安全窗口。
+`ModelRegistry` 是进程内 TTL cache，不存于 Redis。Redis volume 通常不作为业务主数据备份，但丢失会清空尚未 flush 的 memory buffer 和 refresh-token blacklist；重置前应评估在途数据与已注销 token 的安全窗口。
 
 ---
 

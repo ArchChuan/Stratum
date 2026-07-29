@@ -3,6 +3,8 @@ package migration
 
 import (
 	"math"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -64,5 +66,32 @@ func TestDriverURLUsesRegisteredPGXV5Scheme(t *testing.T) {
 				t.Fatalf("driverURL = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRemoveTenantLLMAPIKeysMigration(t *testing.T) {
+	t.Parallel()
+
+	up, err := os.ReadFile("sql/027_remove_tenant_llm_api_keys.up.sql")
+	if err != nil {
+		t.Fatalf("read up migration: %v", err)
+	}
+	down, err := os.ReadFile("sql/027_remove_tenant_llm_api_keys.down.sql")
+	if err != nil {
+		t.Fatalf("read down migration: %v", err)
+	}
+
+	upSQL := string(up)
+	for _, required := range []string{
+		"UPDATE public.tenants",
+		"COALESCE(settings, '{}'::jsonb) - 'llm_api_keys'",
+		"COALESCE(settings, '{}'::jsonb) ? 'llm_api_keys'",
+	} {
+		if !strings.Contains(upSQL, required) {
+			t.Fatalf("up migration missing %q", required)
+		}
+	}
+	if strings.Contains(string(down), "llm_api_keys") {
+		t.Fatal("down migration must not recreate deleted credentials")
 	}
 }

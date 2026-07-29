@@ -472,6 +472,6 @@ func modelDiagnosticCollector(provider agentport.TenantModelDiagnosticProvider) 
 			statement = "model_configured=true"
 		}
 		return []domain.DiagnosticFact{{Area: domain.DiagnosticAreaModel, Statement: statement,
-			Source: "tenant_model_configuration", ObservedAt: time.Now().UTC()}}, nil, nil
+			Source: "managed_model_configuration", ObservedAt: time.Now().UTC()}}, nil, nil
 	}
 }

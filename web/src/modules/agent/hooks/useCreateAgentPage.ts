@@ -5,16 +5,14 @@ import { useNavigate } from 'react-router-dom';
 import { agentApi } from '../api/agent.api';
 import type { AgentFormValues } from '../model/agent';
 
-import { CHAT_MODEL_OPTIONS } from '@/constants';
 import { knowledgeApi } from '@/modules/knowledge';
 import type { Workspace } from '@/modules/knowledge';
+import { llmApi } from '@/modules/llm';
 import { mcpApi } from '@/modules/mcp';
 import type { MCPToolOption } from '@/modules/mcp';
 import { skillApi } from '@/modules/skill';
 import type { Skill } from '@/modules/skill';
 import { extractErrorMessage } from '@/shared/lib';
-
-const DEFAULT_MODEL = CHAT_MODEL_OPTIONS[0].options[1].value;
 
 export const useCreateAgentPage = () => {
   const [form] = Form.useForm<AgentFormValues>();
@@ -22,21 +20,27 @@ export const useCreateAgentPage = () => {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [mcpTools, setMcpTools] = useState<MCPToolOption[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [chatModels, setChatModels] = useState<string[]>([]);
   const navigate = useNavigate();
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [skillsRes, mcpRes, workspacesRes] = await Promise.allSettled([
+      const [skillsRes, mcpRes, workspacesRes, modelsRes] = await Promise.allSettled([
         skillApi.list(),
         mcpApi.toolOptions(),
         knowledgeApi.list(),
+        llmApi.getCatalogue(),
       ]);
       if (cancelled) return;
       if (skillsRes.status === 'fulfilled') setSkills(skillsRes.value);
       if (mcpRes.status === 'fulfilled') setMcpTools(mcpRes.value);
       if (workspacesRes.status === 'fulfilled') setWorkspaces(workspacesRes.value);
-      form.setFieldValue('llmModel', DEFAULT_MODEL);
+      if (modelsRes.status === 'fulfilled') {
+        setChatModels(modelsRes.value.chatModels);
+      } else {
+        message.error({ content: extractErrorMessage(modelsRes.reason, '加载模型目录失败'), duration: 0 });
+      }
     })();
     return () => {
       cancelled = true;
@@ -64,5 +68,5 @@ export const useCreateAgentPage = () => {
     [navigate],
   );
 
-  return { form, loading, skills, mcpTools, workspaces, navigate, onFinish };
+  return { form, loading, skills, mcpTools, workspaces, chatModels, navigate, onFinish };
 };
