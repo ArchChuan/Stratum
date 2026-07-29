@@ -23,11 +23,11 @@ type MCPServerConfigRequest struct {
 	Timeout      time.Duration       `json:"timeout"`
 	Auth         *domain.AuthConfig  `json:"auth,omitempty"`
 	Retry        *domain.RetryConfig `json:"retry,omitempty"`
-	SystemKey    *json.RawMessage    `json:"system_key"`
+	SystemKey    json.RawMessage     `json:"system_key"`
 }
 
 func (r MCPServerConfigRequest) ServerConfig() (*domain.ServerConfig, error) {
-	if r.SystemKey != nil {
+	if len(r.SystemKey) != 0 {
 		return nil, errors.New("system_key is managed by Stratum")
 	}
 	return &domain.ServerConfig{

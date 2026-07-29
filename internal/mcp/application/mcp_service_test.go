@@ -85,6 +85,22 @@ func TestPlatformManagedServerMutationsAreRejectedBeforeLifecycleChange(t *testi
 		})
 	}
 }
+
+func TestPlatformManagedServerSystemKeyFailsClosedWithoutManagementMode(t *testing.T) {
+	manager := &lifecycleManagerFake{stored: &domain.ServerConfig{
+		ID: platformmcp.SystemServerID, SystemKey: platformmcp.SystemServerKey,
+	}}
+	service := NewMCPService(&lifecycleRegistryFake{}, manager, zap.NewNop())
+
+	err := service.DeleteServer(t.Context(), platformmcp.SystemServerID)
+
+	if !errors.Is(err, domain.ErrPlatformManagedServer) {
+		t.Fatalf("error = %v, want ErrPlatformManagedServer", err)
+	}
+	if manager.deleted != "" {
+		t.Fatalf("managed server deleted: %q", manager.deleted)
+	}
+}
 func (f *lifecycleManagerFake) ListTools(context.Context, string) ([]*domain.Tool, error) {
 	return nil, nil
 }

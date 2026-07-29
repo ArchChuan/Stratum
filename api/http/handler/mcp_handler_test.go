@@ -25,17 +25,19 @@ func TestMCPHandlerRejectsTenantSystemKey(t *testing.T) {
 	})
 	router.POST("/servers", h.ConnectServer)
 
-	recorder := httptest.NewRecorder()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "/servers", bytes.NewBufferString(
-		`{"id":"copy","name":"copy","transport":"streamable-http","system_key":"stratum.platform_mcp"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(recorder, req)
+	for _, value := range []string{`"stratum.platform_mcp"`, `null`} {
+		recorder := httptest.NewRecorder()
+		body := `{"id":"copy","name":"copy","transport":"streamable-http","system_key":` + value + `}`
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "/servers", bytes.NewBufferString(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(recorder, req)
 
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d, want 400; body=%s", recorder.Code, recorder.Body.String())
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("system_key=%s: status=%d, want 400; body=%s", value, recorder.Code, recorder.Body.String())
+		}
 	}
 }
 
