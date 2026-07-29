@@ -55,6 +55,10 @@ export const agentApi = {
 		const res = await api.post(`/agents/tool-approvals/${id}/resume`);
 		return res.data as ToolApprovalResumeResult;
 	},
+	pauseExecution: (agentId: string, executionId: string) =>
+		api.post(`/agents/${agentId}/executions/${executionId}/pause`),
+	resumeExecution: (agentId: string, executionId: string, payload: ExecuteAgentPayload) =>
+		api.post(`/agents/${agentId}/executions/${executionId}/resume`, payload, { timeout: AGENT_EXEC_TIMEOUT_MS }),
 };
 
 export const conversationApi = {

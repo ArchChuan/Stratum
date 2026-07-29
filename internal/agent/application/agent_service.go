@@ -118,6 +118,7 @@ type CreateAgentInput struct {
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
+	CheckpointEnabled     bool
 }
 
 type UpdateAgentInput struct {
@@ -132,6 +133,7 @@ type UpdateAgentInput struct {
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
+	CheckpointEnabled     bool
 }
 
 // AgentDTO is the wire shape returned by AgentService for transport
@@ -153,6 +155,7 @@ type AgentDTO struct {
 	SystemKey             string
 	IsSystem              bool
 	ManagementMode        string
+	CheckpointEnabled     bool
 }
 
 type SystemAssistantSettings struct {
@@ -178,6 +181,7 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		MCPToolIDs:            in.MCPToolIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
 		MemoryScope:           in.MemoryScope,
+		CheckpointEnabled:     in.CheckpointEnabled,
 		Capabilities:          []domain.AgentCapability{},
 	}
 
@@ -483,6 +487,7 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		MCPToolIDs:            in.MCPToolIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
 		MemoryScope:           in.MemoryScope,
+		CheckpointEnabled:     in.CheckpointEnabled,
 	}
 	if err := s.deps.Registry.Update(ctx, cfg); err != nil {
 		return AgentDTO{}, err
@@ -585,6 +590,7 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		MemoryScope:           cfg.MemoryScope,
 		SystemKey:             cfg.SystemKey,
 		IsSystem:              cfg.IsSystem,
+		CheckpointEnabled:     cfg.CheckpointEnabled,
 		ManagementMode:        cfg.ManagementMode,
 	}
 }
@@ -605,6 +611,7 @@ type ExecMeta struct {
 	TenantID                   string
 	TraceID                    string
 	Stream                     bool
+	ExecutionID                string // optional; generated if empty, used for resume
 	EvolutionTrace             EvolutionTraceMetadata
 	KnowledgeAssignmentsPinned bool
 	PinnedKnowledgeRevisions   map[string]port.KnowledgeRevisionPin
@@ -746,7 +753,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		return nil, 0, ErrNotFound
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
-	executionID := uuid.Must(uuid.NewV7()).String()
+	executionID := executionIDOrNew(meta.ExecutionID)
 	preparationStart := time.Now()
 	recordExecutionPreparation(ctx, a, req, meta, executionID)
 	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
@@ -1087,6 +1094,27 @@ func completeApprovalResume(
 		return fmt.Errorf("complete approved tool checkpoint: %w", err)
 	}
 	return nil
+}
+
+// PauseExecution marks a running execution's checkpoint as paused so it can be
+// resumed later. No-op when the checkpoint store is not configured.
+func (s *AgentService) PauseExecution(ctx context.Context, tenantID, executionID string) error {
+	if s.deps.CheckpointStore == nil {
+		return fmt.Errorf("pause execution: checkpoint store not configured")
+	}
+	return s.deps.CheckpointStore.UpdateStatus(ctx, tenantID, executionID, "paused")
+}
+
+// ResumeExecution restarts a paused execution from its last checkpoint.
+// The executionID must refer to a paused checkpoint.
+func (s *AgentService) ResumeExecution(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, executionID string) (*AgentResult, int, error) {
+	if s.deps.CheckpointStore != nil {
+		if err := s.deps.CheckpointStore.UpdateStatus(ctx, meta.TenantID, executionID, "running"); err != nil {
+			return nil, 0, fmt.Errorf("resume execution: %w", err)
+		}
+	}
+	meta.ExecutionID = executionID
+	return s.Execute(ctx, agentID, req, meta)
 }
 
 func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, activation port.SkillActivation) (*AgentResult, int, error) {
@@ -1641,4 +1669,12 @@ func truncateRunes(s string, maxRunes int) string {
 		return s
 	}
 	return string(runes[:maxRunes])
+}
+
+// executionIDOrNew returns id if non-empty, otherwise generates a new v7 UUID.
+func executionIDOrNew(id string) string {
+	if id == "" {
+		return uuid.Must(uuid.NewV7()).String()
+	}
+	return id
 }

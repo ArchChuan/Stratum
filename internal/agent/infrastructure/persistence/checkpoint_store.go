@@ -116,17 +116,34 @@ func (s *PgCheckpointStore) GetLatest(
 
 func (s *PgCheckpointStore) MarkCompleted(ctx context.Context, tenantID, executionID string) error {
 	return execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx,
+		_, err := tx.Exec(ctx,
 			`UPDATE agent_execution_checkpoints
 			    SET status = 'completed', updated_at = NOW()
-			  WHERE execution_id = $1`,
+			  WHERE execution_id = $1 AND status = 'running'`,
 			executionID,
 		)
 		if err != nil {
 			return fmt.Errorf("checkpoint_store: mark completed: %w", err)
 		}
+		return nil
+	})
+}
+
+// UpdateStatus transitions a checkpoint to the given status. Only updates
+// when the current status is 'running' to prevent overwriting terminal states.
+func (s *PgCheckpointStore) UpdateStatus(ctx context.Context, tenantID, executionID, status string) error {
+	return execTenantID(ctx, s.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`UPDATE agent_execution_checkpoints
+			    SET status = $1, updated_at = NOW()
+			  WHERE execution_id = $2 AND status = 'running'`,
+			status, executionID,
+		)
+		if err != nil {
+			return fmt.Errorf("checkpoint_store: update status: %w", err)
+		}
 		if tag.RowsAffected() != 1 {
-			return fmt.Errorf("checkpoint_store: mark completed: execution not found")
+			return fmt.Errorf("checkpoint_store: update status: no running checkpoint for execution %s", executionID)
 		}
 		return nil
 	})
