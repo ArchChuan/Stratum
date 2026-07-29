@@ -40,11 +40,6 @@
       "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["claude-mem", "scripts/mcp-server.cjs"]
     },
     {
-      "name": "headroom", "command": "headroom", "args": ["mcp", "serve"], "cwd": "%h",
-      "transport": "stdio", "scope": "user", "session_policy": "isolated",
-      "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["/headroom", "mcp", "serve"]
-    },
-    {
       "name": "playwright", "command": "npx", "args": ["-y", "playwright-mcp"], "cwd": "%h",
       "transport": "stdio", "scope": "session", "session_policy": "session_local",
       "clients": ["codex", "claude", "vscode", "lingma"], "all_args_contain": ["playwright-mcp"]
