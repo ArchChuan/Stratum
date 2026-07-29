@@ -629,10 +629,11 @@ jobs:
             jq '[.data.groups[] | select(.name | startswith("stratum-"))] | length')
           dashboard_count=$(kubectl get configmap -n monitoring -l grafana_dashboard=1 -o json |
             jq '[.items[] | select(.metadata.name | startswith("stratum-"))] | length')
-          echo "monitoring acceptance probe_samples=$probe_count unhealthy_targets=$unhealthy_targets rule_groups=$rule_groups rule_errors=$rule_errors dashboards=$dashboard_count"
+          [[ "$unhealthy_targets" == "0" ]]
           [[ "$rule_errors" == "0" ]]
           [[ "$rule_groups" -ge 6 ]]
           [[ "$dashboard_count" == "4" ]]
+          echo "monitoring acceptance probe_samples=$probe_count unhealthy_targets=$unhealthy_targets rule_groups=$rule_groups rule_errors=$rule_errors dashboards=$dashboard_count"
 
           firing_baseline=$(delivery_success_total)
           kubectl apply -f - <<'RULE'
