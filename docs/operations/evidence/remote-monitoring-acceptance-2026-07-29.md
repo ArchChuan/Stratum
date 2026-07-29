@@ -57,6 +57,11 @@ history、Grafana 状态或 Prometheus TSDB。
 
 `E2E_REQUIRED_MODE=soak E2E_REQUIRED_PROFILE=test make e2e-attestation-check` 已通过。
 
+上述 attestation 绑定监控修复源码，不绑定本证据文档提交。PR #170 为当前源码重新执行 600 秒 soak 时，三次
+运行分别在 guest 响应、Agent Context 聊天页就绪和 Agent-Skill-MCP 创建页就绪处失败；失败点不同，且第三次
+已使用独立数据库 `stratum_e2e_monitoring_acceptance` 排除共享数据库竞争。按照系统化调试门禁，三次状态漂移后
+停止重跑，当前 PR 不得在缺少新 attestation 时合并。独立测试库已精确删除，没有保留测试实体。
+
 本验收分支的部署安全合同和提交钩子通过。`make risk-guardrails` 的后端、架构、迁移、部署、认证、Knowledge、
 Memory、MCP 和 runtime-governance 检查通过，但本机前端依赖状态使 typecheck 失败：缺少
 `vitest/globals` 类型定义，同时本机 TypeScript 版本把 `baseUrl` 弃用升级为错误。远端验收任务自身的完整
