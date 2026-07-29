@@ -624,7 +624,7 @@ jobs:
 
           unhealthy_targets=$(query_prometheus 'up{job=~"monitoring/.+|stratum/.+"} == 0' | jq '.data.result | length')
           rule_errors=$(curl --fail --silent --max-time 10 http://127.0.0.1:19090/api/v1/rules |
-            jq '[.data.groups[] | select(.name | startswith("stratum-")) | select(.lastError != "")] | length')
+            jq '[.data.groups[] | select(.name | startswith("stratum-")) | select((.lastError // "") != "")] | length')
           rule_groups=$(curl --fail --silent --max-time 10 http://127.0.0.1:19090/api/v1/rules |
             jq '[.data.groups[] | select(.name | startswith("stratum-"))] | length')
           dashboard_count=$(kubectl get configmap -n monitoring -l grafana_dashboard=1 -o json |
