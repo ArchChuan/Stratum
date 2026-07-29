@@ -16,6 +16,7 @@ export const agentSchema = z
     mcpToolIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     knowledgeWorkspaceIds: z.array(z.string()).nullish().transform((v) => v ?? []),
     memoryScope: z.string().optional().default('user'),
+    checkpointEnabled: z.boolean().optional().default(false),
     isSystem: z.boolean().optional().default(false),
     managementMode: z.string().optional().default(''),
     created_at: z.string().optional(),
@@ -35,6 +36,7 @@ export interface Agent {
   mcpToolIds: string[];
   knowledgeWorkspaceIds: string[];
   memoryScope: string;
+  checkpointEnabled?: boolean;
   isSystem?: boolean;
   managementMode?: string;
   created_at?: string;
@@ -53,6 +55,7 @@ export interface AgentFormValues {
   mcpToolIds?: string[];
   knowledgeWorkspaceIds?: string[];
   memoryScope?: string;
+  checkpointEnabled?: boolean;
 }
 
 export const conversationSchema = z

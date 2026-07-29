@@ -21,6 +21,7 @@ type CreateAgentRequest struct {
 	MCPToolIDs            []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope           string   `json:"memoryScope"`
+	CheckpointEnabled     bool     `json:"checkpointEnabled"`
 }
 
 // embedding model is immutable post-create.
@@ -36,6 +37,7 @@ type UpdateAgentRequest struct {
 	MCPToolIDs            []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope           string   `json:"memoryScope"`
+	CheckpointEnabled     bool     `json:"checkpointEnabled"`
 }
 
 type AgentResponse struct {
@@ -54,6 +56,7 @@ type AgentResponse struct {
 	MemoryScope           string   `json:"memoryScope"`
 	IsSystem              bool     `json:"isSystem"`
 	ManagementMode        string   `json:"managementMode"`
+	CheckpointEnabled     bool     `json:"checkpointEnabled"`
 }
 
 type ExecuteAgentRequest struct {
@@ -96,5 +99,6 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		MemoryScope:           d.MemoryScope,
 		IsSystem:              d.IsSystem,
 		ManagementMode:        d.ManagementMode,
+		CheckpointEnabled:     d.CheckpointEnabled,
 	}
 }

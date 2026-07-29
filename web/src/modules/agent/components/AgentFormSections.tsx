@@ -1,5 +1,5 @@
 import { RobotOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import { Collapse, Form, Input, InputNumber, Select, Slider, Tag, Typography } from 'antd';
+import { Collapse, Form, Input, InputNumber, Select, Slider, Switch, Tag, Typography } from 'antd';
 
 import { AgentMemoryConfig } from './AgentMemoryConfig';
 
@@ -185,9 +185,17 @@ export const AgentFormSections = ({
                   name="maxContextTokens"
                   rules={[{ required: true, message: '请输入最大上下文 Token' }, { type: 'number', min: 1000, message: '最小值为 1000' }]}
                   extra="推荐值：轻量对话 4000，标准 8000，长文档处理 32000-128000"
-                  style={{ marginBottom: 0 }}
                 >
                   <InputNumber min={1000} max={128000} step={1000} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item
+                  label="执行断点续传"
+                  name="checkpointEnabled"
+                  valuePropName="checked"
+                  extra="启用后，长时间执行任务可在中断后从上次检查点恢复"
+                  style={{ marginBottom: 0 }}
+                >
+                  <Switch />
                 </Form.Item>
               </>
             ),

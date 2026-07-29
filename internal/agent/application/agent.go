@@ -330,7 +330,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		var activePlan *domain.Plan
 		if a.CheckpointEnabled && a.CheckpointStore != nil && cfg.ExecutionID != "" {
 			resumeCp, resumeCpErr := a.CheckpointStore.GetLatest(ctx, cfg.TenantID, cfg.ExecutionID)
-			if resumeCpErr == nil && resumeCp != nil && resumeCp.Status == "running" {
+			if resumeCpErr == nil && resumeCp != nil && isResumableCheckpoint(resumeCp.Status) {
 				a.Logger.Info("agent: resuming from checkpoint",
 					zap.String("checkpoint_id", resumeCp.ID),
 					zap.String("execution_id", cfg.ExecutionID),
@@ -1207,4 +1207,10 @@ func boundExecutionArtifactsJSON(artifacts []domain.ExecutionArtifact) []domain.
 			return []domain.ExecutionArtifact{{Type: "diagnostic_report", ProfileVersion: artifacts[0].ProfileVersion, DiagnosticReport: &domain.DiagnosticReport{Facts: []domain.DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []domain.EvidenceGap{{Source: "artifact_aggregate", Code: "truncated"}}, RecommendedActions: []string{}, Citations: []domain.Citation{}, Steps: []domain.DiagnosticStep{{Tool: "artifact_aggregate", Outcome: "error", ErrorCode: "truncated"}}}}}
 		}
 	}
+}
+
+// isResumableCheckpoint reports whether a checkpoint with status s can be
+// resumed (running or paused).
+func isResumableCheckpoint(s string) bool {
+	return s == "running" || s == "paused"
 }
