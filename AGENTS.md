@@ -84,13 +84,49 @@ CI 全绿后合并，再用 `git worktree remove ../stratum-<feature>` 清理。
 
 ## Backend conventions
 
-- Go 行宽 ≤120；import 按 stdlib、third-party、internal 分组；圈复杂度 ≤10。错误逐层用 `fmt.Errorf("operation: %w", err)` 包装；日志只用 Zap，禁止 `fmt.Print`。
+- Go 行宽 ≤120；import 按 stdlib、third-party、internal 分组。错误逐层用 `fmt.Errorf("operation: %w", err)` 包装；日志只用 Zap，禁止 `fmt.Print`。
 - timeout、TTL、分页、topK、chunkSize、poolSize、retry 等行为数字禁止内联：跨包放 `pkg/constants/<domain>.go`，包内共享放 `internal/<pkg>/defaults.go`，单文件放本文件 `const` 块；名称包含 `Default`/`Max`/`Min` 或单位语义。
 - 外部依赖必须有超时预算、有限重试、熔断/隔离和确定性关闭。瞬态错误指数退避基准 100ms、上限 10s；流式 LLM 不用 flat timeout，使用 header/idle timeout 和外层执行预算。
 - 修改 port 后立即搜索并同步所有 test mock/stub。新增 tenant repository 时同时保证 `execTenant`、port 的 `tenantID` 和测试 mock。
 - pgx v5 向 JSONB 写自定义 Go struct 时，先 `json.Marshal`，再传 `string(b)`；禁止直接传 struct 或 `pgtype.JSONB{}`。
 - `context.WithTimeout` 必须在每次循环迭代内创建并及时 cancel；独立 IO 应有界并发，所有 goroutine 用 WaitGroup 跟踪，错误/停止路径 cancel 后必须 wait。
 - 替换有状态连接/client/worker 时创建新实例、原子写回并关闭旧资源。共享 client 指针须在锁内捕获后使用，避免检查后被 `Close` 置空。超时后仍可能产出资源的 buffered channel 必须排水并关闭迟到资源。
+
+## Code quality
+
+门禁（圈复杂度 ≤10、认知复杂度 ≤15、行数 ≤120、嵌套 ≤4）是底线，以下原则从源头控制复杂度，而非事后拆分凑数：
+
+### Functions
+
+- **单一职责**：一个函数只做一件事，函数名能准确描述全部行为。做两件事的函数天然超复杂度和行数。
+- **early return 消灭 else**：异常/边界先 return，主逻辑保持在左边界，嵌套自然 ≤2。
+- **flag 参数拆函数**：`func Do(verbose bool)` → `func Do()` + `func DoVerbose()`。bool 参数增加圈复杂度和调用方心智负担。
+- **纯函数优先**：无副作用、输出仅依赖输入的函数易测试、易推理。IO 和副作用推到调用链边缘。
+
+### Types and interfaces
+
+- **领域类型替代原始类型**：`userID string` → `type UserID string`。防止参数错位，语义自文档。
+- **小接口（1-3 方法）**：接口越大，抽象越弱。消费方定义接口，实现方不预判。
+- **具体类型作为函数返回值，接口作为参数**：return struct, accept interface.
+
+### Error handling
+
+- **错误逐层 wrap、绝不吞没**：`fmt.Errorf("operation: %w", err)`。忽略 error 或在 error 分支中 fallthrough 是 bug。
+- **error 是最后一个返回值**：`(Result, error)` 而非 `(error, Result)`。
+- **panic 仅用于初始化阶段的不可恢复错误**（如 missing config），业务逻辑用 error 返回。
+
+### Testing
+
+- **表驱动测试**：Go 测试结构统一 —— 定义 cases slice，`t.Run(tc.name, ...)` 迭代。禁止复制粘贴测试函数。
+- **mock 外部依赖，不 mock 领域逻辑**：mock repository/port，不 mock entity/service。
+- **测试意图即文档**：用例名描述行为（"returns error when user not found"），不描述步骤（"calls FindUser then checks error"）。
+
+### Naming and structure
+
+- **短作用域用短名**：`i`, `ctx`, `err`, `ok`；导出符号用描述性名称：`UserRepository`, `FindByTenant`。
+- **注释解释 WHY，不翻译 WHAT**：`// 修复 #42: pgx 不传 *float64` 优于 `// 设置 price 为 nil`。
+- **文件内自上而下阅读顺序**：导出的 public API 在前，私有实现在后。调用方先于被调用方。
+- **import 分组**：stdlib → third-party → internal，组间空行分隔。
 
 ## Frontend conventions
 
