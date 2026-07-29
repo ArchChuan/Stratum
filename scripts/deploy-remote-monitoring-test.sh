@@ -144,7 +144,13 @@ if [[ "$*" == *'/-/ready'* ]]; then
     exit 0
 elif [[ "$*" == *'/api/v1/targets'* ]]; then
     [[ "${SCENARIO:-}" != "target_failure" ]] || exit 45
-    printf '{"status":"success","data":{"activeTargets":[{"labels":{"namespace":"stratum","service":"stratum","endpoint":"http"},"health":"up"},{"labels":{"job":"stratum-blackbox-prometheus-blackbox-exporter","service":"stratum","environment":"remote-test"},"health":"up"},{"labels":{"namespace":"monitoring","service":"stratum-feishu-alert-adapter"},"health":"up"},{"labels":{"namespace":"stratum","service":"stratum-etcd-metrics"},"health":"up"},{"labels":{"namespace":"stratum","service":"stratum-milvus-metrics"},"health":"up"}]}}\n'
+    adapter_health=up
+    [[ "${SCENARIO:-}" != "target_unhealthy" ]] || adapter_health=down
+    printf '{"status":"success","data":{"activeTargets":[{"labels":{"namespace":"stratum","service":"stratum","endpoint":"http"},"health":"up"},{"labels":{"job":"monitoring/stratum-blackbox-prometheus-blackbox-exporter-stratum-public-health/0"},"health":"up"},{"labels":{"namespace":"monitoring","service":"stratum-feishu-alert-adapter"},"health":"%s"},{"labels":{"namespace":"stratum","service":"stratum-etcd-metrics"},"health":"up"},{"labels":{"namespace":"stratum","service":"stratum-milvus-metrics"},"health":"up"}]}}\n' "${adapter_health}"
+elif [[ "$*" == *'/api/v1/query'* ]]; then
+    probe_value=1
+    [[ "${SCENARIO:-}" != "probe_unhealthy" ]] || probe_value=0
+    printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{"service":"stratum","environment":"remote-test","target":"stratum-public-health"},"value":[1,"%s"]}]}}\n' "${probe_value}"
 elif [[ "$*" == *'/api/v1/rules'* ]]; then
     if [[ "${SCENARIO:-}" == "rule_health_failure" ]]; then
         printf '{"status":"success","data":{"groups":[{"name":"stratum","evaluationTime":1,"lastError":"failed"}]}}\n'
@@ -254,7 +260,7 @@ for scenario in inventory_failure status_failure values_failure; do
     assert_inventory_cleaned "${scenario}"
 done
 
-for scenario in helm_failure apply_failure rollout_failure target_failure rule_health_failure; do
+for scenario in helm_failure apply_failure rollout_failure target_failure target_unhealthy probe_unhealthy rule_health_failure; do
     run_case "${scenario}" failure
 done
 assert_contains "${TEST_ROOT}/helm_failure/calls.log" '^helm upgrade' \
@@ -265,9 +271,15 @@ assert_contains "${TEST_ROOT}/rollout_failure/calls.log" '^kubectl rollout statu
     'rollout failure scenario did not reach the readiness gate'
 assert_contains "${TEST_ROOT}/target_failure/calls.log" '/api/v1/targets' \
     'target failure scenario did not reach the target smoke check'
+assert_contains "${TEST_ROOT}/target_unhealthy/stderr.log" \
+    '^monitoring target contract failed: feishu-adapter present=true up=false$' \
+    'unhealthy target diagnostics did not identify the failed contract safely'
+assert_contains "${TEST_ROOT}/probe_unhealthy/stderr.log" \
+    '^monitoring probe contract failed: public-health present=true healthy=false$' \
+    'unhealthy public probe diagnostics did not identify the failed contract safely'
 assert_contains "${TEST_ROOT}/rule_health_failure/calls.log" '/api/v1/rules' \
     'rule-health failure scenario did not reach the rule smoke check'
-for scenario in target_failure rule_health_failure; do
+for scenario in target_failure target_unhealthy probe_unhealthy rule_health_failure; do
     assert_inventory_cleaned "${scenario}"
     assert_port_forward_cleaned "${scenario}"
 done

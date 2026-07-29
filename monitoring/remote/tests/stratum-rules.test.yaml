@@ -429,8 +429,10 @@ tests:
   - name: availability alerts respect persistence and recovery
     interval: 1m
     input_series:
-      - series: 'probe_success{job="stratum-blackbox-prometheus-blackbox-exporter",service="stratum",environment="remote-test"}'
+      - series: 'probe_success{service="stratum",environment="remote-test",target="stratum-public-health"}'
         values: '0x4 1x3'
+      - series: 'probe_success{service="stratum",environment="remote-test",target="decoy"}'
+        values: '0x7'
       - series: 'kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum"}'
         values: '0x4 1x3'
       - series: 'kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"}'
@@ -445,10 +447,10 @@ tests:
         alertname: StratumPublicEndpointDown
         exp_alerts:
           - exp_labels:
-              job: stratum-blackbox-prometheus-blackbox-exporter
               severity: critical
               service: stratum
               environment: remote-test
+              target: stratum-public-health
               component: public-endpoint
             exp_annotations:
               summary: Stratum public endpoint is unavailable
@@ -516,8 +518,10 @@ tests:
   - name: availability alerts detect missing series and resolve after recovery
     interval: 1m
     input_series:
-      - series: 'probe_success{job="stratum-blackbox-prometheus-blackbox-exporter",service="stratum",environment="remote-test"}'
+      - series: 'probe_success{service="stratum",environment="remote-test",target="stratum-public-health"}'
         values: '_x4 1x3'
+      - series: 'probe_success{service="stratum",environment="remote-test",target="decoy"}'
+        values: '0x7'
       - series: 'kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum"}'
         values: '_x4 1x3'
       - series: 'kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"}'
@@ -527,10 +531,10 @@ tests:
         alertname: StratumPublicEndpointDown
         exp_alerts:
           - exp_labels:
-              job: stratum-blackbox-prometheus-blackbox-exporter
               severity: critical
               service: stratum
               environment: remote-test
+              target: stratum-public-health
               component: public-endpoint
             exp_annotations:
               summary: Stratum public endpoint is unavailable
