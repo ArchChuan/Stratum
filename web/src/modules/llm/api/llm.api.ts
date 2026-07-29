@@ -1,5 +1,6 @@
-import api from '@/services/client';
 import type { CreateProviderInput, Model, Provider, UpdateModelInput } from '../model/llm';
+
+import api from '@/services/client';
 
 interface ProviderListResponse {
   providers: Provider[];

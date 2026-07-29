@@ -30,6 +30,8 @@ import (
 	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	iamtoken "github.com/byteBuilderX/stratum/internal/iam/infrastructure/token"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	platformapp "github.com/byteBuilderX/stratum/internal/platform/application"
+	platformdomain "github.com/byteBuilderX/stratum/internal/platform/domain"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
@@ -63,7 +65,8 @@ func TestContracts(t *testing.T) {
 	gateway := llmgateway.NewGateway(nil, nil, nil).WithLogger(logger)
 	router := api.SetupRouter(cfg, logger, gateway, nil, nil, nil, nil)
 	evaluationRouter := apihttp.NewRouter(&wiring.Container{
-		Config: cfg, Logger: logger, Platform: &wiring.Platform{JWTService: iamtoken.NewJWTService(key), Metrics: metrics},
+		Config: cfg, Logger: logger, Platform: &wiring.Platform{JWTService: iamtoken.NewJWTService(key), Metrics: metrics,
+			DashboardService: platformapp.NewDashboardService(contractDashboardRepo{})},
 		LLMGateway: &wiring.LLMGateway{}, Skill: &wiring.Skill{}, Agent: &wiring.Agent{
 			ProposalService: agentapp.NewResourceChangeProposalService(
 				contractProposalRepo{}, contractProposalAuthorizer{}, nil, nil, metrics,
@@ -97,7 +100,7 @@ func TestContracts(t *testing.T) {
 			}
 			for _, c := range cases {
 				req := httptest.NewRequest(c.Method, c.Path, bytes.NewReader(c.Body))
-				if strings.HasPrefix(c.Path, "/evaluations/") ||
+				if strings.HasPrefix(c.Path, "/evaluations/") || strings.HasPrefix(c.Path, "/dashboard/") ||
 					strings.HasPrefix(c.Path, "/resource-change-proposals/") {
 					token, signErr := iamtoken.NewJWTService(key).Sign(iamport.TokenClaims{
 						Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin",
@@ -111,7 +114,7 @@ func TestContracts(t *testing.T) {
 					req.Header.Set(k, v)
 				}
 				rec := httptest.NewRecorder()
-				if strings.HasPrefix(c.Path, "/evaluations/") ||
+				if strings.HasPrefix(c.Path, "/evaluations/") || strings.HasPrefix(c.Path, "/dashboard/") ||
 					strings.HasPrefix(c.Path, "/resource-change-proposals/") {
 					evaluationRouter.ServeHTTP(rec, req)
 				} else {
@@ -126,6 +129,12 @@ func TestContracts(t *testing.T) {
 			}
 		})
 	}
+}
+
+type contractDashboardRepo struct{}
+
+func (contractDashboardRepo) Overview(context.Context, string) (platformdomain.DashboardOverview, error) {
+	return platformdomain.DashboardOverview{}, nil
 }
 
 type contractProposalRepo struct{}
