@@ -512,6 +512,22 @@ VALUES
     ('stratum-platform-assistant', 'stratum-platform-mcp', 'stratum_propose_resource_change')
 ON CONFLICT DO NOTHING;
 
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM agent_mcp_tool_links
+        WHERE agent_id = 'stratum-platform-assistant'
+          AND server_id = 'stratum-platform-mcp'
+          AND tool_name NOT IN (
+              'stratum_search_official_docs',
+              'stratum_diagnose_tenant',
+              'stratum_propose_resource_change'
+          )
+    ) THEN
+        RAISE EXCEPTION 'stratum platform MCP tool binding conflict requires operator action';
+    END IF;
+END $$;
+
 -- Tool risk is tenant-owned policy. MCP servers may describe tools but cannot
 -- assign themselves a trusted risk level.
 CREATE TABLE IF NOT EXISTS mcp_tool_policies (

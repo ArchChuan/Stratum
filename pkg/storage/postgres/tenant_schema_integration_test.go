@@ -79,6 +79,25 @@ func TestProvisionTenantSchemaPlatformMCPIdentityConflictFails(t *testing.T) {
 	require.Equal(t, "ordinary-server", name)
 }
 
+func TestProvisionTenantSchemaPlatformMCPUnexpectedToolBindingFailsClosed(t *testing.T) {
+	pool, ctx, tenantID := systemAssistantTestPool(t, "platform_mcp_unexpected_tool")
+	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
+
+	schema := `"tenant_` + tenantID + `"`
+	_, err := pool.Exec(ctx, `INSERT INTO `+schema+`.agent_mcp_tool_links (agent_id, server_id, tool_name)
+		VALUES ('stratum-platform-assistant', 'stratum-platform-mcp', 'unexpected_platform_tool')`)
+	require.NoError(t, err)
+
+	err = postgres.ProvisionTenantSchema(ctx, pool, tenantID)
+	require.ErrorContains(t, err, "stratum platform MCP tool binding conflict requires operator action")
+
+	var managedPairBindings int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM `+schema+`.agent_mcp_tool_links
+		WHERE agent_id='stratum-platform-assistant' AND server_id='stratum-platform-mcp'`).
+		Scan(&managedPairBindings))
+	require.Equal(t, 4, managedPairBindings, "failed provision must preserve the conflicting binding for operator review")
+}
+
 func TestProvisionTenantSchemaSystemAssistantIsIdempotent(t *testing.T) {
 	pool, ctx, tenantID := systemAssistantTestPool(t, "idempotent")
 	if err := postgres.ProvisionTenantSchema(ctx, pool, tenantID); err != nil {
