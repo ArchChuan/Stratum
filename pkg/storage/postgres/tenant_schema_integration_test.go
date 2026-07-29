@@ -11,10 +11,73 @@ import (
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
 const systemAssistantKey = "stratum.platform_assistant"
+
+func TestProvisionTenantSchemaPlatformMCPIsIdempotent(t *testing.T) {
+	pool, ctx, tenantID := systemAssistantTestPool(t, "platform_mcp")
+	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
+	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
+
+	schema := `"tenant_` + tenantID + `"`
+	var managedCount int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM `+schema+`.mcp_configs
+		WHERE id='stratum-platform-mcp'
+		  AND system_key='stratum.platform_mcp'
+		  AND management_mode='platform_managed'`).Scan(&managedCount))
+	require.Equal(t, 1, managedCount)
+
+	rows, err := pool.Query(ctx, `SELECT agent_id, tool_name FROM `+schema+`.agent_mcp_tool_links
+		WHERE server_id='stratum-platform-mcp' ORDER BY agent_id, tool_name`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var bindings [][2]string
+	for rows.Next() {
+		var binding [2]string
+		require.NoError(t, rows.Scan(&binding[0], &binding[1]))
+		bindings = append(bindings, binding)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, [][2]string{
+		{"stratum-platform-assistant", "stratum_diagnose_tenant"},
+		{"stratum-platform-assistant", "stratum_propose_resource_change"},
+		{"stratum-platform-assistant", "stratum_search_official_docs"},
+	}, bindings)
+}
+
+func TestProvisionTenantSchemaPlatformMCPIdentityConflictFails(t *testing.T) {
+	pool, ctx, tenantID := systemAssistantTestPool(t, "platform_mcp_conflict")
+	schema := `"tenant_` + tenantID + `"`
+	_, err := pool.Exec(ctx, `CREATE TABLE `+schema+`.mcp_configs (
+		id              TEXT PRIMARY KEY,
+		name            TEXT NOT NULL DEFAULT '' UNIQUE,
+		transport       TEXT NOT NULL,
+		command         TEXT NOT NULL DEFAULT '',
+		url             TEXT NOT NULL DEFAULT '',
+		args            JSONB NOT NULL DEFAULT '[]',
+		env             JSONB NOT NULL DEFAULT '{}',
+		capabilities    JSONB NOT NULL DEFAULT '[]',
+		timeout_sec     INT NOT NULL DEFAULT 30,
+		enabled         BOOL NOT NULL DEFAULT true,
+		system_key      TEXT,
+		management_mode TEXT NOT NULL DEFAULT 'tenant_managed'
+	);
+	INSERT INTO `+schema+`.mcp_configs (id, name, transport, system_key, management_mode)
+	VALUES ('stratum-platform-mcp', 'ordinary-server', 'stdio', NULL, 'tenant_managed')`)
+	require.NoError(t, err)
+
+	err = postgres.ProvisionTenantSchema(ctx, pool, tenantID)
+	require.ErrorContains(t, err, "stratum platform MCP identity conflict requires operator action")
+
+	var name string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT name FROM `+schema+`.mcp_configs
+		WHERE id='stratum-platform-mcp'`).Scan(&name))
+	require.Equal(t, "ordinary-server", name)
+}
 
 func TestProvisionTenantSchemaSystemAssistantIsIdempotent(t *testing.T) {
 	pool, ctx, tenantID := systemAssistantTestPool(t, "idempotent")
