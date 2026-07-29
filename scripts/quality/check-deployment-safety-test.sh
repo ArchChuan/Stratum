@@ -27,6 +27,15 @@ require() {
     fi
 }
 
+require_job() {
+    local job="$1" pattern="$2" description="$3" job_block
+    job_block=$(sed -n "/^  ${job}:/,/^  [[:alnum:]_-]\+:$/p" "${WORKFLOW}")
+    if ! grep -Eq -- "${pattern}" <<<"${job_block}"; then
+        echo "deployment safety contract missing: ${description}" >&2
+        exit 1
+    fi
+}
+
 reject() {
     local pattern="$1" description="$2"
     if grep -Eq -- "${pattern}" "${WORKFLOW}"; then
@@ -53,8 +62,22 @@ reject_file() {
 
 require 'group:[[:space:]]*stratum-production' 'fixed production concurrency group'
 require 'cancel-in-progress:[[:space:]]*false' 'non-cancelling active deployment'
-require 'adapter-digest:[[:space:]]*\$\{\{ steps\.adapter-build\.outputs\.digest \}\}' \
-    'adapter build digest output missing'
+require '^  build-backend:' 'parallel backend image build job'
+require '^  build-frontend:' 'parallel frontend image build job'
+require '^  build-feishu-adapter:' 'parallel Feishu adapter image build job'
+require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter\]' \
+    'image build fan-in dependencies'
+for job_scope in build-backend:backend build-frontend:frontend build-feishu-adapter:feishu-alert-adapter; do
+    job=${job_scope%%:*}
+    scope=${job_scope#*:}
+    require_job "${job}" '^    needs:[[:space:]]*test$' "${job} test dependency"
+    require_job "${job}" "cache-from:[[:space:]]*type=gha,scope=${scope}" "${scope} cache import scope"
+    require_job "${job}" "cache-to:[[:space:]]*type=gha,scope=${scope},mode=max" "${scope} cache export scope"
+done
+require 'digest:[[:space:]]*\$\{\{ steps\.adapter-build\.outputs\.digest \}\}' \
+    'adapter build digest job output'
+require 'adapter-digest:[[:space:]]*\$\{\{ needs\.build-feishu-adapter\.outputs\.digest \}\}' \
+    'adapter digest fan-in output'
 require 'file:[[:space:]]*\./docker/feishu-alert-adapter\.Dockerfile' 'adapter image build missing'
 require 'FEISHU_WEBHOOK_URL' 'Feishu secret injection missing'
 require 'kubectl create namespace monitoring --dry-run=client -o yaml \| kubectl apply -f -' \

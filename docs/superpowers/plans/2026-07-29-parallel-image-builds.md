@@ -15,6 +15,7 @@
 **Files:**
 
 - Modify: `.github/workflows/deploy.yml:30-97`
+- Modify: `scripts/quality/check-deployment-safety-test.sh:54-58`
 
 - [ ] **Step 1: Run a failing static assertion against the current workflow**
 
@@ -58,7 +59,7 @@ The job contains only a successful no-op command. Keep `deploy.needs: build-and-
 
 - [ ] **Step 5: Run graph and cache assertions**
 
-Run `rg` assertions for all three job names, all three `needs: test` declarations, unique matching cache scopes, the fan-in dependency list, the adapter digest forwarding expression, and `deploy.needs: build-and-push`.
+Update the deployment safety guard to require all three job names, a `needs: test` declaration in each job, unique matching cache scopes, the fan-in dependency list, and both stages of adapter digest forwarding. Run the guard together with `rg` assertions for `deploy.needs: build-and-push`.
 
 Expected: every assertion exits 0.
 
