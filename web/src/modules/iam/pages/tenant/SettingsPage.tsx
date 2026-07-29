@@ -65,7 +65,7 @@ export const SettingsPage = () => {
         </Col>
       </Row>
 
-      {role === 'owner' && !isDefault && (
+      {role === 'owner' && isDefault === false && (
         <div
           style={{
             marginTop: 24,
