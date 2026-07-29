@@ -459,32 +459,70 @@ func reachable(adj map[string][]string, from, to string) bool {
 }
 
 func validateNode(node Node) error {
+	if err := validateNodeType(node); err != nil {
+		return err
+	}
+	if err := validateExecutionPolicy(node); err != nil {
+		return err
+	}
+	return validateOutputMappings(node.OutputMapping)
+}
+
+func validateNodeType(node Node) error {
 	switch node.Type {
 	case NodeTypeAgent:
-		if node.AgentID == "" {
-			return fmt.Errorf("%w: agent node %q requires agent_id", ErrInvalidSpec, node.ID)
-		}
+		return validateAgentNode(node)
 	case NodeTypeSkill:
-		if node.AgentID == "" || node.SkillID == "" || node.SkillRevisionID == "" {
-			return fmt.Errorf("%w: skill node %q requires agent and pinned revision", ErrInvalidSpec, node.ID)
-		}
+		return validateSkillNode(node)
 	case NodeTypeMCPTool:
-		if node.MCPServerID == "" || node.MCPToolName == "" || !validEffectClass(node.EffectClass) {
-			return fmt.Errorf("%w: mcp node %q requires server, tool and effect class", ErrInvalidSpec, node.ID)
-		}
+		return validateMCPToolNode(node)
 	case NodeTypeCondition:
-		if !validConditionExpression(node.Condition) {
-			return fmt.Errorf("%w: condition node %q requires expression", ErrInvalidSpec, node.ID)
-		}
+		return validateConditionNode(node)
 	case NodeTypeApproval:
 		// Approval nodes are durable control points and need no executor identity.
+		return nil
 	default:
 		return fmt.Errorf("%w: unsupported node type %q", ErrInvalidSpec, node.Type)
 	}
+}
+
+func validateAgentNode(node Node) error {
+	if node.AgentID == "" {
+		return fmt.Errorf("%w: agent node %q requires agent_id", ErrInvalidSpec, node.ID)
+	}
+	return nil
+}
+
+func validateSkillNode(node Node) error {
+	if node.AgentID == "" || node.SkillID == "" || node.SkillRevisionID == "" {
+		return fmt.Errorf("%w: skill node %q requires agent and pinned revision", ErrInvalidSpec, node.ID)
+	}
+	return nil
+}
+
+func validateMCPToolNode(node Node) error {
+	if node.MCPServerID == "" || node.MCPToolName == "" || !validEffectClass(node.EffectClass) {
+		return fmt.Errorf("%w: mcp node %q requires server, tool and effect class", ErrInvalidSpec, node.ID)
+	}
+	return nil
+}
+
+func validateConditionNode(node Node) error {
+	if !validConditionExpression(node.Condition) {
+		return fmt.Errorf("%w: condition node %q requires expression", ErrInvalidSpec, node.ID)
+	}
+	return nil
+}
+
+func validateExecutionPolicy(node Node) error {
 	if node.Retry.MaxAttempts < 0 || node.TimeoutMS < 0 {
 		return fmt.Errorf("%w: invalid execution policy", ErrInvalidSpec)
 	}
-	for _, selector := range node.OutputMapping {
+	return nil
+}
+
+func validateOutputMappings(outputMapping map[string]string) error {
+	for _, selector := range outputMapping {
 		if selector != "$" && (!strings.HasPrefix(selector, "$.") || len(strings.TrimPrefix(selector, "$.")) == 0) {
 			return fmt.Errorf("%w: invalid output selector", ErrInvalidSpec)
 		}
@@ -604,32 +642,44 @@ func validInputValue(field InputField, value any) bool {
 	case InputFieldNumber:
 		return isNumber(value)
 	case InputFieldSingleSelect:
-		selected, ok := value.(string)
-		return ok && optionExists(field.Options, selected)
+		return validSingleSelectInputValue(field, value)
 	case InputFieldMultiSelect:
-		values, ok := stringSlice(value)
-		if !ok {
-			return false
-		}
-		for _, selected := range values {
-			if !optionExists(field.Options, selected) {
-				return false
-			}
-		}
-		return true
+		return validMultiSelectInputValue(field, value)
 	case InputFieldBoolean:
 		_, ok := value.(bool)
 		return ok
 	case InputFieldDate:
-		date, ok := value.(string)
-		if !ok {
-			return false
-		}
-		_, err := time.Parse("2006-01-02", date)
-		return err == nil
+		return validDateInputValue(value)
 	default:
 		return false
 	}
+}
+
+func validSingleSelectInputValue(field InputField, value any) bool {
+	selected, ok := value.(string)
+	return ok && optionExists(field.Options, selected)
+}
+
+func validMultiSelectInputValue(field InputField, value any) bool {
+	values, ok := stringSlice(value)
+	if !ok {
+		return false
+	}
+	for _, selected := range values {
+		if !optionExists(field.Options, selected) {
+			return false
+		}
+	}
+	return true
+}
+
+func validDateInputValue(value any) bool {
+	date, ok := value.(string)
+	if !ok {
+		return false
+	}
+	_, err := time.Parse("2006-01-02", date)
+	return err == nil
 }
 
 func isNumber(value any) bool {

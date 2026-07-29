@@ -127,7 +127,7 @@ routes_log="$(run_guard routes \
   web/package-lock.json)"
 
 for label in architecture migration deployment auth-http knowledge memory mcp \
-  runtime-governance frontend-auth frontend-supply-chain; do
+  runtime-governance frontend-auth frontend-supply-chain code-quality; do
   assert_label "${routes_log}" "${label}"
 done
 
@@ -157,7 +157,7 @@ fi
 
 all_log="$(run_guard all --all)"
 for label in architecture migration deployment auth-http knowledge memory mcp \
-  runtime-governance frontend-auth frontend-supply-chain tool-permissions; do
+  runtime-governance frontend-auth frontend-supply-chain tool-permissions code-quality; do
   assert_label_once "${all_log}" "${label}"
 done
 
@@ -179,6 +179,8 @@ assert_file_contains "${ROOT}/.pre-commit-config.yaml" \
   'entry:[[:space:]]*bash scripts/quality/risk-regression-guard\.sh' 'pre-commit risk guard entry'
 assert_file_contains "${ROOT}/.pre-commit-config.yaml" \
   'require_serial:[[:space:]]*true' 'serialized pre-commit risk guard'
+assert_file_contains "${ROOT}/.pre-commit-config.yaml" \
+  'id:[[:space:]]*code-quality-ratchet' 'pre-commit code quality hook'
 assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'risk-regression-guard-test\.sh' 'CI risk guard self-test'
 assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
@@ -186,6 +188,9 @@ assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
 assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'actions/setup-node@' 'CI Node setup for full risk guard'
 assert_file_contains "${ROOT}/Makefile" '^risk-guardrails:' 'Makefile risk guard target'
+assert_file_contains "${ROOT}/Makefile" '^code-quality:' 'Makefile code quality target'
+assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
+  'make code-quality' 'CI code quality invocation'
 assert_file_contains "${ROOT}/Makefile" '^tool-permission-test:' 'Makefile tool permission test target'
 assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'STRATUM_TEST_POSTGRES_URL:' 'CI tool permission PostgreSQL URL'
