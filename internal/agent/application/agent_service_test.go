@@ -734,6 +734,53 @@ func TestAgentService_UpdateSystemAssistant_IgnoresName(t *testing.T) {
 	repo.AssertExpectations(t)
 }
 
+func TestAgentServiceOrdinaryAgentCannotBindPlatformMCP(t *testing.T) {
+	svc, repo := newTestService(t)
+	ctx := context.Background()
+	repo.On("Get", ctx, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)
+
+	_, err := svc.Update(ctx, "agent-1", application.UpdateAgentInput{
+		MCPToolIDs: []string{"mcp:stratum-platform-mcp:stratum_diagnose_tenant"},
+	})
+
+	assert.ErrorIs(t, err, application.ErrPlatformMCPBindingForbidden)
+	repo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
+}
+
+func TestAgentServiceCreateCannotBindPlatformMCP(t *testing.T) {
+	svc, repo := newTestService(t)
+
+	_, err := svc.Create(t.Context(), application.CreateAgentInput{
+		Name: "ordinary", MCPToolIDs: []string{"mcp:stratum-platform-mcp:stratum_diagnose_tenant"},
+	})
+
+	assert.ErrorIs(t, err, application.ErrPlatformMCPBindingForbidden)
+	repo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+}
+
+func TestAgentServicePlatformAssistantModelOnlyUpdatePreservesSystemBindings(t *testing.T) {
+	svc, repo := newTestService(t)
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	cfg := &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "old-model",
+		MCPToolIDs: []string{"mcp:stratum-platform-mcp:stratum_diagnose_tenant"},
+	}
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
+	repo.On("UpdateSystemAssistantModel", ctx, "new-model").Return(&domain.AgentConfig{
+		ID: cfg.ID, SystemKey: cfg.SystemKey, LLMModel: "new-model", MCPToolIDs: cfg.MCPToolIDs,
+	}, nil)
+	repo.On("UpdateSystemAssistantBindings", ctx, cfg.MCPToolIDs, []string{}, []string{}).
+		Return(&domain.AgentConfig{
+			ID: cfg.ID, SystemKey: cfg.SystemKey, LLMModel: "new-model", MCPToolIDs: cfg.MCPToolIDs,
+		}, nil)
+
+	got, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{LLMModel: "new-model"})
+
+	assert.NoError(t, err)
+	assert.Equal(t, cfg.MCPToolIDs, got.MCPToolIDs)
+	repo.AssertExpectations(t)
+}
+
 func TestAgentService_Delete(t *testing.T) {
 	svc, repo := newTestService(t)
 	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)

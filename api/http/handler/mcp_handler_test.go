@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -8,9 +9,35 @@ import (
 	"github.com/byteBuilderX/stratum/api/middleware"
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
+	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
+
+func TestMCPHandlerRejectsTenantSystemKey(t *testing.T) {
+	h := newTestMCPHandler(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(middleware.ErrorHandler(zap.NewNop()))
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(reqctx.WithTenantID(c.Request.Context(), "tenant-1"))
+		c.Next()
+	})
+	router.POST("/servers", h.ConnectServer)
+
+	recorder := httptest.NewRecorder()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "/servers", bytes.NewBufferString(
+		`{"id":"copy","name":"copy","transport":"streamable-http","system_key":"stratum.platform_mcp"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400; body=%s", recorder.Code, recorder.Body.String())
+	}
+}
 
 func newTestMCPHandler(t *testing.T) *MCPHandler {
 	t.Helper()

@@ -7,6 +7,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"go.uber.org/zap"
 )
 
@@ -112,6 +113,13 @@ func (s *MCPService) ServerStatus(ctx context.Context) ServerStatusBreakdown {
 // ConnectServer registers a new MCP server config and discovers its tools.
 // Returns domain.ErrNameConflict on duplicate name.
 func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig) error {
+	stored, err := s.manager.GetServerConfig(ctx, cfg.ID)
+	if err == nil && isPlatformManaged(stored) {
+		return domain.ErrPlatformManagedServer
+	}
+	if err != nil && !errors.Is(err, domain.ErrServerNotFound) {
+		return err
+	}
 	if err := s.manager.Connect(ctx, cfg); err != nil {
 		return err
 	}
@@ -127,6 +135,9 @@ func (s *MCPService) ConnectServer(ctx context.Context, cfg *domain.ServerConfig
 
 // DeleteServer permanently removes an MCP server config and cascades to agent relations.
 func (s *MCPService) DeleteServer(ctx context.Context, serverID string) error {
+	if err := s.rejectPlatformManaged(ctx, serverID); err != nil {
+		return err
+	}
 	if err := s.manager.Delete(ctx, serverID); err != nil {
 		return err
 	}
@@ -139,6 +150,9 @@ func (s *MCPService) DeleteServer(ctx context.Context, serverID string) error {
 
 // DisconnectServer drops the connection to serverID.
 func (s *MCPService) DisconnectServer(ctx context.Context, serverID string) error {
+	if err := s.rejectPlatformManaged(ctx, serverID); err != nil {
+		return err
+	}
 	if err := s.manager.Disconnect(ctx, serverID); err != nil {
 		return err
 	}
@@ -148,6 +162,9 @@ func (s *MCPService) DisconnectServer(ctx context.Context, serverID string) erro
 
 // ReconnectServer restores a previously disconnected MCP server.
 func (s *MCPService) ReconnectServer(ctx context.Context, serverID string) error {
+	if err := s.rejectPlatformManaged(ctx, serverID); err != nil {
+		return err
+	}
 	if err := s.manager.Reconnect(ctx, serverID); err != nil {
 		return err
 	}
@@ -164,6 +181,9 @@ func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig)
 	if err != nil {
 		return err
 	}
+	if isPlatformManaged(stored) {
+		return domain.ErrPlatformManagedServer
+	}
 	merged := mergeProtectedConfig(stored, cfg)
 	if err := s.manager.UpdateServer(ctx, merged); err != nil {
 		return err
@@ -173,6 +193,21 @@ func (s *MCPService) UpdateServer(ctx context.Context, cfg *domain.ServerConfig)
 		s.logger.Warn("failed to re-register MCP tools", zap.String("server_id", cfg.ID), zap.Error(err))
 	}
 	return nil
+}
+
+func (s *MCPService) rejectPlatformManaged(ctx context.Context, serverID string) error {
+	stored, err := s.manager.GetServerConfig(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	if isPlatformManaged(stored) {
+		return domain.ErrPlatformManagedServer
+	}
+	return nil
+}
+
+func isPlatformManaged(cfg *domain.ServerConfig) bool {
+	return cfg != nil && cfg.ManagementMode == platformmcp.ManagementPlatform
 }
 
 func mergeProtectedConfig(stored, incoming *domain.ServerConfig) *domain.ServerConfig {

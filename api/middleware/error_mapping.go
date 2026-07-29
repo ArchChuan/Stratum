@@ -117,6 +117,7 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, agentdomain.ErrProposalAlreadyClaimed),
 		errors.Is(err, agentdomain.ErrProposalUnknownOutcome),
 		errors.Is(err, agentdomain.ErrSystemAssistantManaged),
+		errors.Is(err, mcpdomain.ErrPlatformManagedServer),
 		errors.Is(err, knowledgedomain.ErrWorkspaceLinked),
 		errors.Is(err, knowledgedomain.ErrDuplicateDocument),
 		errors.Is(err, knowledgedomain.ErrDocumentProcessing),
@@ -180,6 +181,7 @@ func MapErrorToStatus(err error) int {
 		errors.Is(err, iamapp.ErrForbiddenAdminRemove),
 		errors.Is(err, memorydomain.ErrAgentMemoryDisabled),
 		errors.Is(err, memorydomain.ErrScopeMismatch),
+		errors.Is(err, agentapp.ErrPlatformMCPBindingForbidden),
 		errors.Is(err, workflowdomain.ErrForbidden):
 		return http.StatusForbidden
 

@@ -1,10 +1,41 @@
 package dto
 
 import (
+	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/mcp/domain"
 )
+
+// MCPServerConfigRequest is the tenant-editable MCP configuration. Managed identity fields are never converted.
+type MCPServerConfigRequest struct {
+	ID           string              `json:"id"`
+	Name         string              `json:"name"`
+	Version      string              `json:"version"`
+	Transport    string              `json:"transport"`
+	Command      string              `json:"command"`
+	Args         []string            `json:"args"`
+	URL          string              `json:"url"`
+	Env          map[string]string   `json:"env"`
+	Headers      map[string]string   `json:"headers,omitempty"`
+	Capabilities []string            `json:"capabilities"`
+	Timeout      time.Duration       `json:"timeout"`
+	Auth         *domain.AuthConfig  `json:"auth,omitempty"`
+	Retry        *domain.RetryConfig `json:"retry,omitempty"`
+	SystemKey    *json.RawMessage    `json:"system_key"`
+}
+
+func (r MCPServerConfigRequest) ServerConfig() (*domain.ServerConfig, error) {
+	if r.SystemKey != nil {
+		return nil, errors.New("system_key is managed by Stratum")
+	}
+	return &domain.ServerConfig{
+		ID: r.ID, Name: r.Name, Version: r.Version, Transport: r.Transport, Command: r.Command,
+		Args: r.Args, URL: r.URL, Env: r.Env, Headers: r.Headers, Capabilities: r.Capabilities,
+		Timeout: r.Timeout, Auth: r.Auth, Retry: r.Retry,
+	}, nil
+}
 
 // MCPAuthConfigResponse exposes authentication metadata without credential values.
 type MCPAuthConfigResponse struct {
@@ -18,35 +49,37 @@ type MCPAuthConfigResponse struct {
 
 // MCPServerConfigResponse is the browser-safe projection of an MCP server config.
 type MCPServerConfigResponse struct {
-	ID           string                 `json:"id"`
-	Name         string                 `json:"name"`
-	Version      string                 `json:"version"`
-	Transport    string                 `json:"transport"`
-	Command      string                 `json:"command"`
-	Args         []string               `json:"args"`
-	URL          string                 `json:"url"`
-	Env          map[string]string      `json:"env"`
-	Headers      map[string]string      `json:"headers,omitempty"`
-	Capabilities []string               `json:"capabilities"`
-	Timeout      time.Duration          `json:"timeout"`
-	Auth         *MCPAuthConfigResponse `json:"auth,omitempty"`
-	Retry        *domain.RetryConfig    `json:"retry,omitempty"`
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	Version        string                 `json:"version"`
+	Transport      string                 `json:"transport"`
+	Command        string                 `json:"command"`
+	Args           []string               `json:"args"`
+	URL            string                 `json:"url"`
+	Env            map[string]string      `json:"env"`
+	Headers        map[string]string      `json:"headers,omitempty"`
+	Capabilities   []string               `json:"capabilities"`
+	Timeout        time.Duration          `json:"timeout"`
+	Auth           *MCPAuthConfigResponse `json:"auth,omitempty"`
+	Retry          *domain.RetryConfig    `json:"retry,omitempty"`
+	ManagementMode string                 `json:"management_mode"`
 }
 
 func NewMCPServerConfigResponse(cfg *domain.ServerConfig) MCPServerConfigResponse {
 	response := MCPServerConfigResponse{
-		ID:           cfg.ID,
-		Name:         cfg.Name,
-		Version:      cfg.Version,
-		Transport:    cfg.Transport,
-		Command:      cfg.Command,
-		Args:         append([]string(nil), cfg.Args...),
-		URL:          cfg.URL,
-		Env:          filterMCPConfigValues(cfg.Env),
-		Headers:      filterMCPConfigValues(cfg.Headers),
-		Capabilities: append([]string(nil), cfg.Capabilities...),
-		Timeout:      cfg.Timeout,
-		Retry:        cfg.Retry,
+		ID:             cfg.ID,
+		Name:           cfg.Name,
+		Version:        cfg.Version,
+		Transport:      cfg.Transport,
+		Command:        cfg.Command,
+		Args:           append([]string(nil), cfg.Args...),
+		URL:            cfg.URL,
+		Env:            filterMCPConfigValues(cfg.Env),
+		Headers:        filterMCPConfigValues(cfg.Headers),
+		Capabilities:   append([]string(nil), cfg.Capabilities...),
+		Timeout:        cfg.Timeout,
+		Retry:          cfg.Retry,
+		ManagementMode: cfg.ManagementMode,
 	}
 	if cfg.Auth != nil {
 		response.Auth = &MCPAuthConfigResponse{

@@ -454,19 +454,21 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 	}
 
 	type row struct {
-		id          string
-		name        string
-		transport   string
-		command     string
-		url         string
-		version     string
-		args        []byte
-		env         []byte
-		caps        []byte
-		headers     []byte
-		authConfig  []byte
-		retryConfig []byte
-		timeoutSec  int
+		id             string
+		name           string
+		transport      string
+		command        string
+		url            string
+		version        string
+		args           []byte
+		env            []byte
+		caps           []byte
+		headers        []byte
+		authConfig     []byte
+		retryConfig    []byte
+		timeoutSec     int
+		systemKey      string
+		managementMode string
 	}
 
 	for _, schema := range schemas {
@@ -481,7 +483,8 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 		queryErr := tenantdb.ExecTenant(tctx, m.pool, func(qctx context.Context, tx pgx.Tx) error {
 			pgRows, err := tx.Query(qctx, `
 				SELECT id, name, transport, command, url, version,
-				       args, env, capabilities, headers, auth_config, retry_config, timeout_sec
+				       args, env, capabilities, headers, auth_config, retry_config, timeout_sec,
+				       COALESCE(system_key, ''), management_mode
 				FROM mcp_configs WHERE enabled = true`)
 			if err != nil {
 				return fmt.Errorf("restore mcp_configs query: %w", err)
@@ -490,7 +493,8 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 			for pgRows.Next() {
 				var r row
 				if err := pgRows.Scan(&r.id, &r.name, &r.transport, &r.command, &r.url, &r.version,
-					&r.args, &r.env, &r.caps, &r.headers, &r.authConfig, &r.retryConfig, &r.timeoutSec); err != nil {
+					&r.args, &r.env, &r.caps, &r.headers, &r.authConfig, &r.retryConfig, &r.timeoutSec,
+					&r.systemKey, &r.managementMode); err != nil {
 					return fmt.Errorf("restore mcp_configs scan: %w", err)
 				}
 				rows = append(rows, r)
@@ -519,19 +523,21 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 			_ = json.Unmarshal(r.retryConfig, &retry)
 
 			cfg := &MCPServerConfig{
-				ID:           r.id,
-				Name:         r.name,
-				Transport:    r.transport,
-				Command:      r.command,
-				URL:          r.url,
-				Version:      r.version,
-				Args:         args,
-				Env:          env,
-				Capabilities: caps,
-				Headers:      headers,
-				Auth:         auth,
-				Retry:        retry,
-				Timeout:      time.Duration(r.timeoutSec) * time.Second,
+				ID:             r.id,
+				Name:           r.name,
+				Transport:      r.transport,
+				Command:        r.command,
+				URL:            r.url,
+				Version:        r.version,
+				Args:           args,
+				Env:            env,
+				Capabilities:   caps,
+				Headers:        headers,
+				Auth:           auth,
+				Retry:          retry,
+				Timeout:        time.Duration(r.timeoutSec) * time.Second,
+				SystemKey:      r.systemKey,
+				ManagementMode: r.managementMode,
 			}
 
 			connectCtx := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{
@@ -715,14 +721,18 @@ func (m *ClientManager) GetServerConfig(ctx context.Context, serverID string) (*
 	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
 			SELECT id, name, transport, command, url, args, env, capabilities,
-			       timeout_sec, version, headers, auth_config, retry_config
+			       timeout_sec, version, headers, auth_config, retry_config,
+			       COALESCE(system_key, ''), management_mode
 			FROM mcp_configs WHERE id=$1`, serverID).
 			Scan(&out.ID, &out.Name, &out.Transport, &out.Command, &out.URL,
 				&argsStr, &envStr, &capsStr, &timeoutSec,
-				&out.Version, &hdrsStr, &authStr, &retryStr)
+				&out.Version, &hdrsStr, &authStr, &retryStr, &out.SystemKey, &out.ManagementMode)
 	})
 	if err != nil {
-		return nil, mcpdomain.ErrServerNotFound
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, mcpdomain.ErrServerNotFound
+		}
+		return nil, fmt.Errorf("get mcp server config %s: %w", serverID, err)
 	}
 	out.Timeout = time.Duration(timeoutSec) * time.Second
 	_ = json.Unmarshal([]byte(argsStr), &out.Args)

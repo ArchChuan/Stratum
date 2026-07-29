@@ -28,6 +28,11 @@ import (
 	"go.uber.org/zap"
 )
 
+// ErrPlatformMCPBindingForbidden prevents ordinary tenant agents from acquiring platform control-plane tools.
+var ErrPlatformMCPBindingForbidden = errors.New("platform MCP tools may only bind to the platform assistant")
+
+const platformMCPToolIDPrefix = "mcp:stratum-platform-mcp:"
+
 // AgentServiceDeps groups the consumer-side dependencies of AgentService.
 // Everything is an interface or value type — no concrete infrastructure
 // imports allowed.
@@ -164,6 +169,9 @@ type SystemAssistantSettings struct {
 
 // Create persists a new agent for the tenant.
 func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDTO, error) {
+	if containsPlatformMCPToolID(in.MCPToolIDs) {
+		return AgentDTO{}, ErrPlatformMCPBindingForbidden
+	}
 	id := uuid.Must(uuid.NewV7()).String()
 	cfg := &domain.AgentConfig{
 		ID:                    id,
@@ -466,6 +474,9 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	if existing.GetConfig().SystemKey != "" {
 		return s.updateSystemAssistant(ctx, existing.GetConfig(), in)
 	}
+	if containsPlatformMCPToolID(in.MCPToolIDs) {
+		return AgentDTO{}, ErrPlatformMCPBindingForbidden
+	}
 	skills := in.AllowedSkills
 	if skills == nil {
 		skills = []string{}
@@ -518,7 +529,7 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.Ag
 	}
 	mcpTools := in.MCPToolIDs
 	if mcpTools == nil {
-		mcpTools = []string{}
+		mcpTools = append([]string{}, cfg.MCPToolIDs...)
 	}
 	knowledge := in.KnowledgeWorkspaceIDs
 	if knowledge == nil {
@@ -530,6 +541,15 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.Ag
 	}
 	s.deps.Logger.Info("system assistant updated", zap.String("id", cfg.ID))
 	return cfgToDTO(updated.GetConfig()), nil
+}
+
+func containsPlatformMCPToolID(toolIDs []string) bool {
+	for _, toolID := range toolIDs {
+		if strings.HasPrefix(toolID, platformMCPToolIDPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // Delete removes an agent and cascades deletion to conversations and memories.
