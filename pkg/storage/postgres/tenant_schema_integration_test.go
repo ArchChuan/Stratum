@@ -80,7 +80,7 @@ func TestProvisionTenantSchemaPlatformMCPIdentityConflictFails(t *testing.T) {
 }
 
 func TestProvisionTenantSchemaPlatformMCPUnexpectedToolBindingFailsClosed(t *testing.T) {
-	pool, ctx, tenantID := systemAssistantTestPool(t, "platform_mcp_unexpected_tool")
+	pool, ctx, tenantID := systemAssistantTestPool(t, "mcp_extra")
 	require.NoError(t, postgres.ProvisionTenantSchema(ctx, pool, tenantID))
 
 	schema := `"tenant_` + tenantID + `"`
