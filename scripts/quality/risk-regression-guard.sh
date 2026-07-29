@@ -24,7 +24,10 @@ acceptance_mode=short
 classify_acceptance_path() {
   case "${1#./}" in
     internal/iam/*|api/http/handler/auth_*|pkg/migration/*|pkg/storage/postgres/*schema*|internal/platform/messaging/*|\
-    internal/llmgateway/*|internal/mcp/*|pkg/storage/milvus/*|pkg/httpclient/*)
+    internal/llmgateway/*|internal/mcp/*|pkg/storage/milvus/*|pkg/httpclient/*|\
+    monitoring|monitoring/remote|monitoring/remote/*|internal/platform/alerting|internal/platform/alerting/*|\
+    cmd/feishu-alert-adapter|cmd/feishu-alert-adapter/*|cmd/remote-health-monitor|cmd/remote-health-monitor/*|\
+    scripts/deploy-remote-monitoring.sh|.github/workflows/deploy.yml|.github/workflows/remote-health-monitor.yml)
       acceptance_mode=soak
       ;;
   esac

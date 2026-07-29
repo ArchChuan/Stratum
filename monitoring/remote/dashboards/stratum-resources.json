@@ -1,0 +1,46 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [{"title": "资源告警运行手册", "type": "link", "url": "/docs/operations/remote-monitoring-runbook.md#resource-alerts"}],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}, "id": 1,
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "unit": "percentunit"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "(1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))) * on (instance) group_left (node) label_replace(node_uname_info{job=\"node-exporter\"}, \"node\", \"$1\", \"nodename\", \"(.+)\") and on (node) max by (node) (stratum:kube_pod:placement{namespace=\"stratum\"})", "legendFormat": "{{node}}", "refId": "A"}],
+      "title": "Stratum 节点 CPU", "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}, "id": 2,
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "unit": "percentunit"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on (instance) group_left (node) label_replace(node_uname_info{job=\"node-exporter\"}, \"node\", \"$1\", \"nodename\", \"(.+)\") and on (node) max by (node) (stratum:kube_pod:placement{namespace=\"stratum\"})", "legendFormat": "{{node}}", "refId": "A"}],
+      "title": "Stratum 节点内存", "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}, "id": 3,
+      "fieldConfig": {"defaults": {"min": 0, "unit": "bytes"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (pod, container) (container_memory_working_set_bytes{namespace=\"stratum\",container!=\"\",container!=\"POD\"})", "legendFormat": "{{pod}} / {{container}}", "refId": "A"}],
+      "title": "容器工作集内存", "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}, "id": 4,
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "unit": "percentunit"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (pod, container) (rate(container_cpu_cfs_throttled_periods_total{namespace=\"stratum\",container!=\"\",container!=\"POD\"}[5m])) / sum by (pod, container) (rate(container_cpu_cfs_periods_total{namespace=\"stratum\",container!=\"\",container!=\"POD\"}[5m]))", "legendFormat": "{{pod}} / {{container}}", "refId": "A"}],
+      "title": "容器 CPU 限流比例", "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"}, "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16}, "id": 5,
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "unit": "percentunit"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "kubelet_volume_stats_used_bytes{namespace=\"stratum\"} / kubelet_volume_stats_capacity_bytes{namespace=\"stratum\"}", "legendFormat": "{{persistentvolumeclaim}}", "refId": "A"}],
+      "title": "PVC 使用率", "type": "timeseries"
+    }
+  ],
+  "refresh": "30s", "schemaVersion": 39, "tags": ["stratum", "remote-test"],
+  "templating": {"list": []}, "time": {"from": "now-6h", "to": "now"}, "timezone": "browser",
+  "title": "Stratum 资源诊断", "uid": "stratum-remote-resources", "version": 1
+}

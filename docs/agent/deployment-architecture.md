@@ -223,7 +223,7 @@ aliyun-registry        镜像仓库 pull secret
 ```text
 namespace: monitoring
 release:   kps
-chart:     kube-prometheus-stack 87.10.1 + grafana chart 12.7.2
+chart:     kube-prometheus-stack 87.10.1
 ```
 
 远端实际运行的监控组件：
@@ -237,8 +237,9 @@ kps-prometheus-node-exporter
 jaeger
 ```
 
-注意：`kps` 监控栈不是 `.github/workflows/deploy.yml` 里的 `stratum` Helm 部署创建的。
-它是远端集群里单独存在的 Helm release。
+注意：`kps` 监控栈不是 `.github/workflows/deploy.yml` 里的 `stratum` Helm 部署创建的。远端监控的唯一
+GitOps 权威是 `monitoring/remote/`，固定版本在 `monitoring/remote/versions.env`，由
+`scripts/deploy-remote-monitoring.sh` 对这个独立 Helm release 执行安全升级并应用自定义资源。
 
 ## 远端 Grafana 配置来源
 
@@ -519,6 +520,9 @@ GET /auth/me
   如果要让后端 trace 真正进入远端 Jaeger，应改为可达的 collector/Jaeger OTLP 地址，例如
   `jaeger.monitoring.svc.cluster.local:4317` 或新增 collector 后指向 collector。
 - 远端 Grafana 是独立 `kps` 监控栈，不使用仓库根目录 `grafana/`。
+- 远端监控配置只认 `monitoring/remote/`；运行与告警处置见
+  `docs/operations/remote-monitoring-runbook.md` 和 `docs/operations/alerts/`。
+- 监控升级/回滚不得 uninstall release，也不得删除 Prometheus/Grafana PVC、monitoring CRD 或 Helm history。
 - 单节点 K3s 适合 demo，不是高可用生产架构。
 
 ## 后续接入域名和 HTTPS

@@ -1,0 +1,103 @@
+global:
+  resolve_timeout: 5m
+
+templates:
+  - /etc/alertmanager/config/*.tmpl
+
+route:
+  receiver: "null"
+  group_by:
+    - alertname
+    - service
+    - environment
+    - severity
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - receiver: "null"
+      matchers:
+        - alertname = "Watchdog"
+    - receiver: feishu-critical
+      matchers:
+        - severity = "critical"
+    - receiver: "null"
+      matchers:
+        - severity = "warning"
+      routes:
+        - receiver: feishu-warning
+          active_time_intervals:
+            - cn-work-hours
+    - receiver: "null"
+      matchers:
+        - severity = "info"
+
+receivers:
+  - name: "null"
+  - name: feishu-critical
+    webhook_configs:
+      - url: http://stratum-feishu-alert-adapter.monitoring.svc:8080/alertmanager
+        send_resolved: true
+  - name: feishu-warning
+    webhook_configs:
+      - url: http://stratum-feishu-alert-adapter.monitoring.svc:8080/alertmanager
+        send_resolved: true
+
+time_intervals:
+  - name: cn-work-hours
+    time_intervals:
+      - weekdays:
+          - monday:friday
+        times:
+          - start_time: "09:00"
+            end_time: "19:00"
+        location: Asia/Shanghai
+
+inhibit_rules:
+  - source_matchers:
+      - alertname = "StratumPublicEndpointDown"
+    target_matchers:
+      - service = "stratum"
+      - component != ""
+      - component !~ "public-endpoint|prometheus|alertmanager|notification|blackbox"
+    equal:
+      - service
+      - environment
+  - source_matchers:
+      - alertname = "StratumNodeNotReady"
+    target_matchers:
+      - alertname =~ "StratumPod(RestartingFrequently|CrashLooping|PendingTooLong)"
+    equal:
+      - service
+      - environment
+      - node
+  - source_matchers:
+      - alertname =~ "Stratum(Backend|Frontend)Unavailable"
+    target_matchers:
+      - alertname =~ "StratumPod(RestartingFrequently|CrashLooping|PendingTooLong)"
+    equal:
+      - service
+      - environment
+      - namespace
+      - deployment
+  - source_matchers:
+      - severity = "critical"
+      - alert_family != ""
+      - component !~ "prometheus|alertmanager|notification|blackbox"
+    target_matchers:
+      - severity = "warning"
+      - alert_family != ""
+      - component !~ "prometheus|alertmanager|notification|blackbox"
+    equal:
+      - service
+      - environment
+      - alert_family
+      - namespace
+      - deployment
+      - pod
+      - container
+      - persistentvolumeclaim
+      - node
+      - instance
+      - device
+      - mountpoint

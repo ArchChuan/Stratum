@@ -197,3 +197,19 @@ logger.Error("operation failed",
 | Metrics 端点 | <http://localhost:8080/metrics> | Prometheus scrape |
 
 Grafana 数据源：`grafana/datasources/prometheus.yaml`，仪表板：`grafana/dashboards/`。
+
+## 远端服务治理监控
+
+远端测试环境的唯一配置权威是 `monitoring/remote/`，通过 `scripts/deploy-remote-monitoring.sh` 管理既有
+`monitoring/kps`。chart/release 固定版本在 `monitoring/remote/versions.env`；自定义规则、Alertmanager 路由、
+Blackbox、飞书适配器和 Grafana dashboard 均从该目录部署。仓库根目录 `grafana/` 仅用于本地 compose，
+不得作为远端 dashboard 来源。
+
+当前告警范围只覆盖传统服务治理：可用性、HTTP RED、Kubernetes 工作负载、容量、已验证依赖 target 和监控
+系统自身；不覆盖 LLM、Agent、Token 或业务指标。`critical` 全天通知，`warning` 仅工作日 09:00–19:00
+（Asia/Shanghai），`info`/Watchdog 不投递。操作入口是 `docs/operations/remote-monitoring-runbook.md`，每条
+custom alert 的 `runbook_url` 必须指向 `docs/operations/alerts/` 中与 alert heading 一致的锚点，并由
+`scripts/quality/monitoring-config-test.sh` 守卫。
+
+远端部署不得删除 Prometheus/Grafana PVC、monitoring CRD 或 Helm history；禁止使用旧的 standalone
+Prometheus 清单建立第二套远端 authority。

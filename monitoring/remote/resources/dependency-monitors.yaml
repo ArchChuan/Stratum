@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: List
+items:
+  # etcd v3.5.16 serves Prometheus metrics on the configured client URL.
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: stratum-etcd-metrics
+      namespace: stratum
+      labels:
+        app.kubernetes.io/name: stratum-etcd-metrics
+        app.kubernetes.io/part-of: stratum-monitoring
+    spec:
+      selector:
+        app.kubernetes.io/instance: stratum
+        app.kubernetes.io/component: etcd
+      ports:
+        - name: metrics
+          port: 2379
+          targetPort: client
+  - apiVersion: monitoring.coreos.com/v1
+    kind: ServiceMonitor
+    metadata:
+      name: stratum-etcd
+      namespace: monitoring
+      labels:
+        release: kps
+    spec:
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: stratum-etcd-metrics
+      namespaceSelector:
+        matchNames:
+          - stratum
+      endpoints:
+        - port: metrics
+          path: /metrics
+          interval: 30s
+          scrapeTimeout: 10s
+
+  # Milvus v2.4.15 exposes its documented HTTP metrics endpoint on port 9091.
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: stratum-milvus-metrics
+      namespace: stratum
+      labels:
+        app.kubernetes.io/name: stratum-milvus-metrics
+        app.kubernetes.io/part-of: stratum-monitoring
+    spec:
+      selector:
+        app.kubernetes.io/instance: stratum
+        app.kubernetes.io/component: milvus
+      ports:
+        - name: metrics
+          port: 9091
+          targetPort: 9091
+  - apiVersion: monitoring.coreos.com/v1
+    kind: ServiceMonitor
+    metadata:
+      name: stratum-milvus
+      namespace: monitoring
+      labels:
+        release: kps
+    spec:
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: stratum-milvus-metrics
+      namespaceSelector:
+        matchNames:
+          - stratum
+      endpoints:
+        - port: metrics
+          path: /metrics
+          interval: 30s
+          scrapeTimeout: 10s
+
+  # The adapter ServiceMonitor is colocated with its deployment resource.

@@ -262,6 +262,31 @@ done
   echo 'IAM changes must require soak acceptance' >&2
   exit 1
 }
+for monitoring_path in \
+  monitoring/remote \
+  monitoring/remote/rules/stratum-availability.yaml \
+  internal/platform/alerting/delivery.go \
+  cmd/feishu-alert-adapter/main.go \
+  cmd/remote-health-monitor/main.go \
+  scripts/deploy-remote-monitoring.sh \
+  .github/workflows/deploy.yml \
+  .github/workflows/remote-health-monitor.yml; do
+  [[ "$(/bin/bash "${CHECKER}" --acceptance "${monitoring_path}")" == soak ]] || {
+    echo "remote monitoring change must require soak acceptance: ${monitoring_path}" >&2
+    exit 1
+  }
+done
+for ordinary_path in \
+  monitoring/remoteish \
+  internal/platform/alerting2 \
+  cmd/feishu-alert-adapter2 \
+  cmd/remote-health-monitor2 \
+  .github/workflows/deploy-preview.yml; do
+  [[ "$(/bin/bash "${CHECKER}" --acceptance "${ordinary_path}")" == short ]] || {
+    echo "ordinary near-match must require short acceptance: ${ordinary_path}" >&2
+    exit 1
+  }
+done
 if ! grep -q 'make risk-guardrails' <<< "${explanation}"; then
   echo 'risk guard explanation does not expose make risk-guardrails' >&2
   exit 1

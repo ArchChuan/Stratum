@@ -4,6 +4,7 @@ metadata:
   name: {{ include "stratum.fullname" . }}
   labels:
     {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
 spec:
   type: {{ .Values.app.service.type }}
   ports:
