@@ -37,6 +37,7 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 
 	registerAuth(r, c, requireActive)
 	registerModelCatalogue(r, c)
+	registerDashboard(r, c)
 	registerHealth(r, c)
 	registerSkills(r, c, requireActive)
 	registerEvaluations(r, c, requireActive)
@@ -48,6 +49,15 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerMemory(r, c, requireActive)
 	registerLLMAdmin(r, c, requireActive)
 	return r
+}
+
+func registerDashboard(r *gin.Engine, c *wiring.Container) {
+	if c.Platform == nil || c.Platform.DashboardService == nil {
+		return
+	}
+	h := handler.NewDashboardHandler(c.Platform.DashboardService)
+	dashboard := r.Group("/dashboard", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
+	dashboard.GET("/overview", h.Overview)
 }
 
 func registerResourceChangeProposals(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {

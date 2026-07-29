@@ -17,6 +17,8 @@ import (
 	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	iamtoken "github.com/byteBuilderX/stratum/internal/iam/infrastructure/token"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	platformapp "github.com/byteBuilderX/stratum/internal/platform/application"
+	platformpersistence "github.com/byteBuilderX/stratum/internal/platform/infrastructure/persistence"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )
@@ -39,6 +41,7 @@ type Platform struct {
 	ModelRegistry      *llmgateway.ModelRegistry
 	AESKey             [32]byte
 	Metrics            *observability.PrometheusMetrics
+	DashboardService   *platformapp.DashboardService
 }
 
 func (c *Container) buildPlatform(_ context.Context) error {
@@ -48,6 +51,9 @@ func (c *Container) buildPlatform(_ context.Context) error {
 	}
 	if c.LLMGateway != nil {
 		p.ModelRegistry = c.LLMGateway.Registry
+	}
+	if db := c.dbOrNil(); db != nil {
+		p.DashboardService = platformapp.NewDashboardService(platformpersistence.NewDashboardRepository(db))
 	}
 
 	production := os.Getenv("APP_ENV") == "production"
