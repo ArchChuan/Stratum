@@ -42,6 +42,48 @@ func TestNewMCPServerConfigResponseOmitsCredentials(t *testing.T) {
 	}
 }
 
+func TestMCPServerConfigRequestTracksSystemKeyPresence(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{name: "absent", body: `{}`},
+		{name: "null", body: `{"system_key":null}`, wantErr: true},
+		{name: "string", body: `{"system_key":"stratum.platform_mcp"}`, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var req MCPServerConfigRequest
+			if err := json.Unmarshal([]byte(tt.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			_, err := req.ServerConfig()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ServerConfig error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestMCPServerConfigResponseExposesModeWithoutSystemKey(t *testing.T) {
+	t.Parallel()
+	body, err := json.Marshal(NewMCPServerConfigResponse(&domain.ServerConfig{
+		ID: "managed", SystemKey: "secret-identity", ManagementMode: "platform_managed",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialized := string(body)
+	if !strings.Contains(serialized, `"management_mode":"platform_managed"`) {
+		t.Fatalf("response omitted management mode: %s", serialized)
+	}
+	if strings.Contains(serialized, "secret-identity") || strings.Contains(serialized, "system_key") {
+		t.Fatalf("response exposed system identity: %s", serialized)
+	}
+}
+
 func TestIsSensitiveMCPConfigKey(t *testing.T) {
 	t.Parallel()
 
