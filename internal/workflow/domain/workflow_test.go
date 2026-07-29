@@ -176,6 +176,160 @@ func TestValidateSpecAcceptsStaticDiamondAndSupportedNodeTypes(t *testing.T) {
 	require.NoError(t, domain.ValidateSpec(spec))
 }
 
+func TestValidateSpecCharacterizesEveryNodeType(t *testing.T) {
+	tests := []struct {
+		name string
+		node domain.Node
+	}{
+		{name: "agent", node: domain.Node{ID: "node", Type: domain.NodeTypeAgent, AgentID: "agent-1"}},
+		{
+			name: "skill",
+			node: domain.Node{
+				ID: "node", Type: domain.NodeTypeSkill, AgentID: "agent-1",
+				SkillID: "skill-1", SkillRevisionID: "revision-1",
+			},
+		},
+		{
+			name: "mcp tool",
+			node: domain.Node{
+				ID: "node", Type: domain.NodeTypeMCPTool, MCPServerID: "server-1",
+				MCPToolName: "lookup", EffectClass: domain.EffectClassPure,
+			},
+		},
+		{name: "approval", node: domain.Node{ID: "node", Type: domain.NodeTypeApproval}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, domain.ValidateSpec(domain.Spec{Nodes: []domain.Node{tt.node}}))
+		})
+	}
+
+	condition := domain.Spec{
+		Nodes: []domain.Node{
+			{ID: "condition", Type: domain.NodeTypeCondition, Condition: "input.approved == true"},
+			{ID: "next", Type: domain.NodeTypeApproval},
+		},
+		Edges: []domain.Edge{{From: "condition", To: "next", Default: true}},
+	}
+	require.NoError(t, domain.ValidateSpec(condition))
+}
+
+func TestValidateSpecCharacterizesNodeValidationOrderAndMessages(t *testing.T) {
+	tests := []struct {
+		name    string
+		node    domain.Node
+		message string
+	}{
+		{
+			name: "agent identity before policy",
+			node: domain.Node{
+				ID: "node", Type: domain.NodeTypeAgent, Retry: domain.RetryPolicy{MaxAttempts: -1},
+			},
+			message: `agent node "node" requires agent_id`,
+		},
+		{
+			name: "skill identity before policy",
+			node: domain.Node{
+				ID: "node", Type: domain.NodeTypeSkill, Retry: domain.RetryPolicy{MaxAttempts: -1},
+			},
+			message: `skill node "node" requires agent and pinned revision`,
+		},
+		{
+			name: "mcp identity before policy",
+			node: domain.Node{
+				ID: "node", Type: domain.NodeTypeMCPTool, Retry: domain.RetryPolicy{MaxAttempts: -1},
+			},
+			message: `mcp node "node" requires server, tool and effect class`,
+		},
+		{
+			name: "condition expression before policy",
+			node: domain.Node{
+				ID: "node", Type: domain.NodeTypeCondition, Retry: domain.RetryPolicy{MaxAttempts: -1},
+			},
+			message: `condition node "node" requires expression`,
+		},
+		{
+			name: "unknown type before policy",
+			node: domain.Node{
+				ID: "node", Type: "unknown", Retry: domain.RetryPolicy{MaxAttempts: -1},
+			},
+			message: `unsupported node type "unknown"`,
+		},
+		{
+			name: "policy before output mapping",
+			node: domain.Node{
+				ID: "node", Type: domain.NodeTypeApproval,
+				Retry: domain.RetryPolicy{MaxAttempts: -1}, OutputMapping: map[string]string{"result": "bad"},
+			},
+			message: "invalid execution policy",
+		},
+		{
+			name: "output mapping after valid policy",
+			node: domain.Node{
+				ID: "node", Type: domain.NodeTypeApproval, OutputMapping: map[string]string{"result": "bad"},
+			},
+			message: "invalid output selector",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := domain.ValidateSpec(domain.Spec{Nodes: []domain.Node{tt.node}})
+			var validationErr *domain.GraphValidationError
+			require.ErrorAs(t, err, &validationErr)
+			require.Equal(t, tt.message, validationErr.Issues[0].Message)
+		})
+	}
+}
+
+func TestValidateRunInputCharacterizesEveryInputValueType(t *testing.T) {
+	options := []domain.InputOption{{Label: "华东", Value: "east"}, {Label: "华南", Value: "south"}}
+	tests := []struct {
+		name      string
+		fieldType domain.InputFieldType
+		options   []domain.InputOption
+		valid     []any
+		invalid   []any
+	}{
+		{name: "short text", fieldType: domain.InputFieldShortText, valid: []any{"text"}, invalid: []any{1, true}},
+		{name: "long text", fieldType: domain.InputFieldLongText, valid: []any{"text"}, invalid: []any{1, true}},
+		{
+			name: "number", fieldType: domain.InputFieldNumber,
+			valid: []any{int8(1), uint64(2), float32(3)}, invalid: []any{"1", true},
+		},
+		{
+			name: "single select", fieldType: domain.InputFieldSingleSelect, options: options,
+			valid: []any{"east"}, invalid: []any{"west", []string{"east"}},
+		},
+		{
+			name: "multi select", fieldType: domain.InputFieldMultiSelect, options: options,
+			valid:   []any{[]string{"east"}, []any{"east", "south"}},
+			invalid: []any{[]string{"west"}, []any{"east", 1}, "east"},
+		},
+		{name: "boolean", fieldType: domain.InputFieldBoolean, valid: []any{true, false}, invalid: []any{"true", 1}},
+		{
+			name: "date", fieldType: domain.InputFieldDate, valid: []any{"2024-02-29"},
+			invalid: []any{"2023-02-29", "2024-2-29", 20240729},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field := domain.InputField{Key: "value", Label: "值", Type: tt.fieldType, Required: true, Options: tt.options}
+			schema := domain.InputSchema{TaskLabel: "任务", Fields: []domain.InputField{field}}
+			for _, value := range tt.valid {
+				input := map[string]any{"task": "执行", "value": value}
+				require.NoError(t, domain.ValidateRunInput(schema, input), "valid value %#v", value)
+			}
+			for _, value := range tt.invalid {
+				err := domain.ValidateRunInput(schema, map[string]any{"task": "执行", "value": value})
+				var validationErr *domain.InputValidationError
+				require.ErrorAs(t, err, &validationErr, "invalid value %#v", value)
+				expected := []domain.InputIssue{{Field: "value", Code: "invalid", Message: "值格式不正确"}}
+				require.Equal(t, expected, validationErr.Issues)
+			}
+		})
+	}
+}
+
 func TestValidateSpecRejectsUnsafeConditionExpressionAtPublish(t *testing.T) {
 	spec := domain.Spec{Nodes: []domain.Node{{ID: "condition", Type: domain.NodeTypeCondition, Condition: `os.exec('rm')`}, {ID: "next", Type: domain.NodeTypeAgent, AgentID: "a"}}, Edges: []domain.Edge{{From: "condition", To: "next", Default: true}}}
 	require.ErrorIs(t, domain.ValidateSpec(spec), domain.ErrInvalidSpec)
