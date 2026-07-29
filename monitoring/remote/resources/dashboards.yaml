@@ -89,7 +89,7 @@ items:
                     "type": "prometheus",
                     "uid": "prometheus"
                   },
-                  "expr": "probe_success{job=\"stratum-blackbox-prometheus-blackbox-exporter\",service=\"stratum\",environment=\"remote-test\"}",
+                  "expr": "probe_success{service=\"stratum\",environment=\"remote-test\",target=\"stratum-public-health\"}",
                   "legendFormat": "公网探测",
                   "refId": "A"
                 }

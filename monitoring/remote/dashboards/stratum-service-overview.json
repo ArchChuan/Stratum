@@ -10,7 +10,7 @@
       "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
       "id": 1,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "probe_success{job=\"stratum-blackbox-prometheus-blackbox-exporter\",service=\"stratum\",environment=\"remote-test\"}", "legendFormat": "公网探测", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "probe_success{service=\"stratum\",environment=\"remote-test\",target=\"stratum-public-health\"}", "legendFormat": "公网探测", "refId": "A"}],
       "title": "1. 公网探测",
       "type": "stat"
     },
