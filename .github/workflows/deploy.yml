@@ -533,3 +533,139 @@ jobs:
           docker cp "$alertmanager_container:/bin/amtool" "$validator_dir/amtool"
           chmod 0755 "$validator_dir/promtool" "$validator_dir/amtool"
           PATH="$validator_dir:$PATH" bash scripts/deploy-remote-monitoring.sh
+
+      - name: Accept remote monitoring and Feishu delivery
+        if: github.event_name == 'workflow_dispatch' && steps.candidate.outputs.current == 'true'
+        run: |
+          set -euo pipefail
+
+          acceptance_rule=stratum-monitoring-acceptance
+          adapter_pid=""
+          prometheus_pid=""
+          cleanup_acceptance() {
+            kubectl delete prometheusrule "$acceptance_rule" -n monitoring --ignore-not-found >/dev/null 2>&1 || :
+            for pid in "$adapter_pid" "$prometheus_pid"; do
+              if [[ -n "$pid" ]] && kill "$pid" >/dev/null 2>&1; then
+                wait "$pid" >/dev/null 2>&1 || :
+              fi
+            done
+          }
+          trap cleanup_acceptance EXIT
+
+          kubectl port-forward -n monitoring service/stratum-feishu-alert-adapter 18081:8080 \
+            >/tmp/stratum-monitoring-acceptance-adapter.log 2>&1 &
+          adapter_pid=$!
+          kubectl port-forward -n monitoring service/kps-kube-prometheus-stack-prometheus 19090:9090 \
+            >/tmp/stratum-monitoring-acceptance-prometheus.log 2>&1 &
+          prometheus_pid=$!
+
+          wait_ready() {
+            local url="$1"
+            local pid="$2"
+            for _ in $(seq 1 30); do
+              if curl --fail --silent --max-time 2 "$url" >/dev/null; then
+                return
+              fi
+              kill -0 "$pid" >/dev/null 2>&1 || return 1
+              sleep 1
+            done
+            return 1
+          }
+          wait_ready http://127.0.0.1:18081/readyz "$adapter_pid"
+          wait_ready http://127.0.0.1:19090/-/ready "$prometheus_pid"
+
+          query_prometheus() {
+            curl --fail --silent --get --max-time 10 \
+              --data-urlencode "query=$1" http://127.0.0.1:19090/api/v1/query
+          }
+          delivery_success_total() {
+            local value
+            value=$(curl --fail --silent --max-time 5 http://127.0.0.1:18081/metrics |
+              awk '$1 == "feishu_alert_delivery_total{status=\"success\"}" {print $2}' |
+              tail -n 1)
+            awk -v value="${value:-0}" 'BEGIN {print int(value + 0)}'
+          }
+          wait_for_alert_state() {
+            local expected="$1"
+            for _ in $(seq 1 60); do
+              local count
+              count=$(query_prometheus 'ALERTS{alertname="StratumMonitoringAcceptanceTest",alertstate="firing"}' |
+                jq '.data.result | length')
+              if [[ "$expected" == "present" && "$count" == "1" ]]; then
+                return
+              fi
+              if [[ "$expected" == "absent" && "$count" == "0" ]]; then
+                return
+              fi
+              sleep 2
+            done
+            echo "acceptance alert state did not become $expected" >&2
+            return 1
+          }
+          wait_for_delivery() {
+            local baseline="$1"
+            local phase="$2"
+            for _ in $(seq 1 90); do
+              local current
+              current=$(delivery_success_total)
+              if (( current > baseline )); then
+                echo "feishu $phase delivery=success"
+                return
+              fi
+              sleep 5
+            done
+            echo "feishu $phase delivery did not complete" >&2
+            return 1
+          }
+
+          probe_count=$(query_prometheus 'probe_success{service="stratum",environment="remote-test",target="stratum-public-health"} == 1' |
+            jq '.data.result | length')
+          [[ "$probe_count" == "1" ]]
+
+          unhealthy_targets=$(query_prometheus 'up{job=~"monitoring/.+|stratum/.+"} == 0' | jq '.data.result | length')
+          rule_errors=$(curl --fail --silent --max-time 10 http://127.0.0.1:19090/api/v1/rules |
+            jq '[.data.groups[] | select(.name | startswith("stratum-")) | select(.lastError != "")] | length')
+          rule_groups=$(curl --fail --silent --max-time 10 http://127.0.0.1:19090/api/v1/rules |
+            jq '[.data.groups[] | select(.name | startswith("stratum-"))] | length')
+          dashboard_count=$(kubectl get configmap -n monitoring -l grafana_dashboard=1 -o json |
+            jq '[.items[] | select(.metadata.name | startswith("stratum-"))] | length')
+          [[ "$unhealthy_targets" == "0" ]]
+          [[ "$rule_errors" == "0" ]]
+          [[ "$rule_groups" -ge 6 ]]
+          [[ "$dashboard_count" == "4" ]]
+          echo "monitoring acceptance probe_samples=$probe_count unhealthy_targets=$unhealthy_targets rule_groups=$rule_groups rule_errors=$rule_errors dashboards=$dashboard_count"
+
+          firing_baseline=$(delivery_success_total)
+          kubectl apply -f - <<'RULE'
+          apiVersion: monitoring.coreos.com/v1
+          kind: PrometheusRule
+          metadata:
+            name: stratum-monitoring-acceptance
+            namespace: monitoring
+            labels:
+              release: kps
+          spec:
+            groups:
+              - name: stratum-acceptance
+                interval: 5s
+                rules:
+                  - alert: StratumMonitoringAcceptanceTest
+                    expr: vector(1)
+                    for: 0m
+                    labels:
+                      service: stratum
+                      environment: remote-test
+                      severity: critical
+                      component: monitoring-acceptance
+                    annotations:
+                      summary: Stratum 远端监控验收测试
+                      description: 这是临时 firing/resolved 通知测试，验收结束后自动清理。
+          RULE
+          wait_for_alert_state present
+          wait_for_delivery "$firing_baseline" firing
+
+          resolved_baseline=$(delivery_success_total)
+          kubectl delete prometheusrule "$acceptance_rule" -n monitoring --wait=true
+          wait_for_alert_state absent
+          wait_for_delivery "$resolved_baseline" resolved
+          echo 'remote monitoring acceptance=passed cleanup=pending-trap'
