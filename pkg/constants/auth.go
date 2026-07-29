@@ -3,12 +3,14 @@ package constants
 import "time"
 
 const (
-	AccessTokenTTL     = 72 * time.Hour
-	RefreshTokenTTL    = 7 * 24 * time.Hour
-	OnboardingTTL      = 5 * time.Minute
-	InvitationCodeSize = 32
-	OAuthExchangeTTL   = 2 * time.Minute
-	InviteTokenTTL     = 72 * time.Hour
+	AccessTokenTTL                   = 72 * time.Hour
+	RefreshTokenTTL                  = 7 * 24 * time.Hour
+	OnboardingTTL                    = 5 * time.Minute
+	InvitationCodeSize               = 32
+	OAuthExchangeTTL                 = 2 * time.Minute
+	InviteTokenTTL                   = 72 * time.Hour
+	PlatformMCPInvocationTokenTTL    = time.Minute
+	PlatformMCPAPIDelegationTokenTTL = 30 * time.Second
 
 	// OAuthStateCookieMaxAge is in seconds (http.SetCookie accepts int).
 	OAuthStateCookieMaxAge = 300
