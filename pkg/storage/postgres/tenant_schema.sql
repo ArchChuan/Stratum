@@ -528,6 +528,14 @@ BEGIN
     END IF;
 END $$;
 
+CREATE TABLE IF NOT EXISTS mcp_invocation_jtis (
+    jti         TEXT PRIMARY KEY,
+    expires_at  TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_invocation_jtis_expiry
+    ON mcp_invocation_jtis(expires_at);
+
 -- Tool risk is tenant-owned policy. MCP servers may describe tools but cannot
 -- assign themselves a trusted risk level.
 CREATE TABLE IF NOT EXISTS mcp_tool_policies (

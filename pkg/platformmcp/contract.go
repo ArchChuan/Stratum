@@ -1,6 +1,19 @@
 package platformmcp
 
+type ToolContract struct {
+	Name             string
+	Method           string
+	Path             string
+	MinimumRole      string
+	RequiresApproval bool
+}
+
+type ContractRegistry interface {
+	Lookup(toolName string) (ToolContract, bool)
+}
+
 const (
+	SystemAssistantID  = "stratum-platform-assistant"
 	SystemAssistantKey = "stratum.platform_assistant"
 	SystemServerID     = "stratum-platform-mcp"
 	SystemServerKey    = "stratum.platform_mcp"

@@ -21,6 +21,8 @@ func TestTenantSchemaContainsPlatformMCPIdentityAndSeed(t *testing.T) {
 	require.Contains(t, sql, "management_mode TEXT NOT NULL DEFAULT 'tenant_managed'")
 	require.Contains(t, sql, "stratum.platform_mcp")
 	require.Contains(t, sql, "stratum-platform-assistant")
+	require.Contains(t, sql, "CREATE TABLE IF NOT EXISTS mcp_invocation_jtis")
+	require.Contains(t, sql, "CREATE INDEX IF NOT EXISTS idx_mcp_invocation_jtis_expiry")
 	for _, toolName := range []string{
 		"stratum_search_official_docs",
 		"stratum_diagnose_tenant",
