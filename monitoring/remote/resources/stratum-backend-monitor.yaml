@@ -1,0 +1,30 @@
+# ServiceMonitor for the Stratum backend, managed alongside the remote
+# monitoring stack (kube-prometheus-stack). The stratum Helm chart also
+# ships its own ServiceMonitor with the same component selector; that one
+# is correct and verified by the chart rendering test.
+#
+# This resource is the monitoring-side definition deployed into the
+# 'monitoring' namespace and selected by the kps Prometheus instance via
+# the release:kps label. It MUST include app.kubernetes.io/component:backend
+# to avoid accidentally scraping the frontend nginx service (which has no
+# /metrics endpoint and would produce a TargetDown alert).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: stratum-backend
+  namespace: monitoring
+  labels:
+    release: kps
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: stratum
+      app.kubernetes.io/component: backend
+  namespaceSelector:
+    matchNames:
+      - stratum
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
