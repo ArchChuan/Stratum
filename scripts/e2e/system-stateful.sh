@@ -250,7 +250,7 @@ poll() {
 }
 poll 'oauth provider' "${STATEFUL_E2E_OAUTH_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:19090/health}"
 poll 'MCP server' "${STATEFUL_E2E_MCP_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:19091/health}"
-poll 'Platform MCP server' "${STATEFUL_E2E_PLATFORM_MCP_HEALTH_COMMAND:-curl -fsS --cacert '$tls_dir/ca.crt' --cert '$tls_dir/backend.crt' --key '$tls_dir/backend.key' --resolve stratum-platform-mcp:18443:127.0.0.1 https://stratum-platform-mcp:18443/healthz}"
+poll 'Platform MCP server' "${STATEFUL_E2E_PLATFORM_MCP_HEALTH_COMMAND:-curl -fsS --noproxy stratum-platform-mcp --cacert '$tls_dir/ca.crt' --cert '$tls_dir/backend.crt' --key '$tls_dir/backend.key' --resolve stratum-platform-mcp:18443:127.0.0.1 https://stratum-platform-mcp:18443/healthz}"
 poll backend "${STATEFUL_E2E_BACKEND_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:18080/health}"
 poll frontend "${STATEFUL_E2E_FRONTEND_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:15173/}"
 kill -0 "$oauth_pid" 2>/dev/null || { printf 'oauth provider exited before browser execution\n' >&2; exit 1; }

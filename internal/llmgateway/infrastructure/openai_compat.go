@@ -23,11 +23,12 @@ import (
 )
 
 const (
-	maxRetryAttempts   = 3
-	retryBaseDelay     = 100 * time.Millisecond
-	maxRetryDelay      = 10 * time.Second
-	cbFailureThreshold = 5
-	cbRecoveryTimeout  = 30 * time.Second
+	maxRetryAttempts          = 3
+	retryBaseDelay            = 100 * time.Millisecond
+	maxRetryDelay             = 10 * time.Second
+	maxModelListResponseBytes = 1 << 20
+	cbFailureThreshold        = 5
+	cbRecoveryTimeout         = 30 * time.Second
 )
 
 // providerBreaker is a per-provider three-state circuit breaker.
@@ -510,6 +511,54 @@ func (c *OpenAICompatClient) Models() []string {
 	return c.cfg.Models
 }
 
+func (c *OpenAICompatClient) ListModels(ctx context.Context) ([]string, error) {
+	requestURL := strings.TrimRight(c.cfg.BaseURL, "/") + "/models"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%s: build model list request: %w", c.cfg.Name, err)
+	}
+	if c.cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s: request model list: %w", c.cfg.Name, err)
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxModelListResponseBytes+1))
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("%s: read model list: %w", c.cfg.Name, readErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("%s: close model list response: %w", c.cfg.Name, closeErr)
+	}
+	if len(raw) > maxModelListResponseBytes {
+		return nil, fmt.Errorf("%s: model list response exceeds limit", c.cfg.Name)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: model list status %d", c.cfg.Name, resp.StatusCode)
+	}
+	return decodeOpenAIModelIDs(raw, c.cfg.Name)
+}
+
+func decodeOpenAIModelIDs(raw []byte, providerName string) ([]string, error) {
+	var response struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return nil, fmt.Errorf("%s: decode model list: %w", providerName, err)
+	}
+	models := make([]string, 0, len(response.Data))
+	for _, model := range response.Data {
+		if model.ID != "" {
+			models = append(models, model.ID)
+		}
+	}
+	return models, nil
+}
+
 // ---------------------------------------------------------------------------
 // ChatProtocol adapters — stateless wrappers that accept a ProviderConfig at
 // call time, delegating to the existing instance-method implementations.
@@ -595,7 +644,7 @@ func (p *OpenAICompatProtocol) Health(ctx context.Context, cfg ProviderConfig) e
 }
 
 func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]string, error) {
-	return cfg.Models, nil
+	return p.clientFor(cfg).ListModels(ctx)
 }
 
 func (p *OpenAICompatProtocol) CreateEmbeddings(

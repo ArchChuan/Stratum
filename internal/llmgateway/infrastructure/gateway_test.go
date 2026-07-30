@@ -256,6 +256,42 @@ func TestOpenAICompatProtocolUsesResolvedProviderConfig(t *testing.T) {
 	require.Equal(t, "ok", resp.Content)
 }
 
+func TestOpenAICompatProtocolListsProviderModels(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{name: "returns discovered model IDs", body: `{"data":[{"id":"mock-model-1"},{"id":"mock-model-2"}]}`,
+			want: []string{"mock-model-1", "mock-model-2"}},
+		{name: "returns an empty slice when provider has no models", body: `{"data":[]}`, want: []string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, http.MethodGet, r.Method)
+				require.Equal(t, "/models", r.URL.Path)
+				require.Equal(t, "Bearer tenant-key", r.Header.Get("Authorization"))
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			template := infrastructure.NewOpenAICompatClient(infrastructure.ProviderConfig{Name: "template"}, zap.NewNop())
+			protocol := infrastructure.NewOpenAICompatProtocol(template)
+			models, err := protocol.ListModels(context.Background(), infrastructure.ProviderConfig{
+				Name: "tenant-provider", BaseURL: srv.URL, APIKey: "tenant-key",
+			})
+
+			require.NoError(t, err)
+			require.Equal(t, tc.want, models)
+		})
+	}
+}
+
 func TestZhipuComplete_ToolCalls(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

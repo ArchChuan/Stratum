@@ -10,6 +10,10 @@ grep -Eq '^[[:space:]]+- "127\.0\.0\.1:9091:9091"$' "$repo_dir/docker-compose.ym
   printf 'docker compose must publish the Milvus health endpoint used by infra-wait\n' >&2
   exit 1
 }
+grep -Fq -- '--noproxy stratum-platform-mcp' "$runner" || {
+  printf 'Platform MCP health check must bypass external proxies\n' >&2
+  exit 1
+}
 
 expect_failure() {
   local expected=$1; shift
