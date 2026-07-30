@@ -413,7 +413,18 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	execCtx = reqctx.WithTraceID(execCtx, ec.cfg.TraceID)
 	execCtx = reqctx.WithTenantID(execCtx, ec.cfg.TenantID)
 	defer cancel()
-	runCfg := agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: ec.cfg.MaxSteps}
+	// Graph steps count both LLM and Tool node executions.
+	// MaxLLMSteps (set in buildReActInitState from ec.cfg.MaxSteps)
+	// counts only LLM calls and triggers forced answer at
+	// s.Steps >= MaxLLMSteps-1. Double it and add one so the
+	// forced-answer mechanism engages before the graph loop
+	// exhausts the step budget. Keep 0 as-is so Invoke falls
+	// back to its internal default.
+	graphSteps := ec.cfg.MaxSteps
+	if graphSteps > 0 {
+		graphSteps = graphSteps*2 + 1
+	}
+	runCfg := agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: graphSteps}
 	if a.CheckpointEnabled && a.CheckpointStore != nil {
 		runCfg.AfterStep = func(afterCtx context.Context, afterState agentgraph.ReActState) error {
 			return agentgraph.PersistReActCheckpoint(afterCtx, a.CheckpointStore, ec.cfg.TenantID, agentgraph.PlanCheckpointIdentity{
@@ -503,7 +514,11 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 	graphCtx, planSpan := ec.tracer.Start(execCtx, "planning.graph.invoke",
 		oteltrace.WithAttributes(attribute.Int("stuck_threshold", stuckThreshold)),
 	)
-	finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: ec.cfg.MaxSteps})
+	planSteps := ec.cfg.MaxSteps
+	if planSteps > 0 {
+		planSteps = planSteps*2 + 1
+	}
+	finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: planSteps})
 	planSpan.End()
 	if runErr != nil {
 		return fmt.Errorf("planning: %w", runErr)
@@ -576,7 +591,8 @@ func (a *BaseAgent) buildPlanNodeExecutor(ec agentExecContext, capGW port.Capabi
 		child.ActivePlan = nil
 		child.PlanToolsDisabled = true
 		child.MaxLLMSteps = constants.DefaultStepMaxLLMSteps
-		final, invokeErr := nodeGraph.Invoke(nodeCtx, child, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: constants.DefaultStepMaxLLMSteps})
+		subSteps := constants.DefaultStepMaxLLMSteps*2 + 1
+		final, invokeErr := nodeGraph.Invoke(nodeCtx, child, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: subSteps})
 		if invokeErr != nil {
 			return agentgraph.PlanNodeExecutionResult{}, invokeErr
 		}
