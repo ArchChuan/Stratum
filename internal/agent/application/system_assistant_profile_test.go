@@ -74,8 +74,11 @@ func TestComposeSystemAssistantProfileReplacesProtectedFieldsAndPreservesTenantR
 	if got.Name != profile.Name {
 		t.Fatalf("Name not from profile: got %q, want %q", got.Name, profile.Name)
 	}
-	if got.Description != want.Description || got.SystemPrompt != want.SystemPrompt {
-		t.Fatalf("DB text fields not preserved: got %#v, want DB values", got)
+	if got.Description != want.Description {
+		t.Fatalf("DB text field Description not preserved: got %q, want %q", got.Description, want.Description)
+	}
+	if got.SystemPrompt != profile.SystemPrompt {
+		t.Fatalf("SystemPrompt not from profile: got %q, want %q", got.SystemPrompt, profile.SystemPrompt)
 	}
 	if got.MaxIterations != profile.MaxIterations || got.MaxContextTokens != profile.MaxContextTokens {
 		t.Fatalf("protected budgets not replaced: %#v", got)
