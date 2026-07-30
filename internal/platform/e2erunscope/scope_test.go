@@ -117,6 +117,11 @@ func TestValidate(t *testing.T) {
 		{name: "owner PID", mutate: func(s *Scope) { s.OwnerPID = -1 }},
 		{name: "relative repository", mutate: func(s *Scope) { s.Repository = "relative" }},
 		{name: "zero created timestamp", mutate: func(s *Scope) { s.CreatedAt = time.Time{} }},
+		{name: "non UTC timestamps", mutate: func(s *Scope) {
+			offset := time.FixedZone("UTC+8", 8*60*60)
+			s.CreatedAt = s.CreatedAt.In(offset)
+			s.ExpiresAt = s.ExpiresAt.In(offset)
+		}},
 		{name: "wrong expiry", mutate: func(s *Scope) { s.ExpiresAt = s.ExpiresAt.Add(time.Second) }},
 		{name: "port below range", mutate: func(s *Scope) { s.Ports.Frontend = 0 }},
 		{name: "port above range", mutate: func(s *Scope) { s.Ports.Backend = 65536 }},
@@ -187,6 +192,9 @@ func TestDatabaseURLRejectsUnsafeInputsWithoutLeakingCredentials(t *testing.T) {
 		{name: "unsupported scheme", base: "mysql://user:" + secret + "@127.0.0.1/stratum_test", target: safeDatabaseName()},
 		{name: "remote host", base: "postgres://user:" + secret + "@db.example.com/stratum_test", target: safeDatabaseName()},
 		{name: "non E2E base database", base: "postgres://user:" + secret + "@127.0.0.1/production", target: safeDatabaseName()},
+		{name: "test substring", base: "postgres://user:" + secret + "@127.0.0.1/contest", target: safeDatabaseName()},
+		{name: "test suffix on production", base: "postgres://user:" + secret + "@127.0.0.1/production_test_backup", target: safeDatabaseName()},
+		{name: "e2e substring on production", base: "postgres://user:" + secret + "@127.0.0.1/not_e2e_production", target: safeDatabaseName()},
 		{name: "fragment", base: "postgres://user:" + secret + "@127.0.0.1/stratum_test#fragment", target: safeDatabaseName()},
 		{name: "unsafe target", base: "postgres://user:" + secret + "@127.0.0.1/stratum_test", target: "unsafe;drop database"},
 		{name: "missing host", base: "postgres:///stratum_test", target: safeDatabaseName()},
@@ -285,7 +293,7 @@ func assertValidPorts(t *testing.T, ports Ports) {
 func TestDatabaseURLReplacesOnlyPath(t *testing.T) {
 	t.Parallel()
 
-	const base = "postgres://user:password@localhost:5433/my_test_db?sslmode=require&search_path=public"
+	const base = "postgres://user:password@localhost:5433/stratum_test_db?sslmode=require&search_path=public"
 	got, err := DatabaseURL(base, safeDatabaseName())
 	if err != nil {
 		t.Fatalf("DatabaseURL() error = %v", err)

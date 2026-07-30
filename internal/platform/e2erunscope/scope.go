@@ -22,8 +22,9 @@ const (
 )
 
 var (
-	runIDPattern    = regexp.MustCompile(`^[0-9]{8}t[0-9]{6}z-[a-f0-9]{16}$`)
-	databasePattern = regexp.MustCompile(`^stratum_e2e_[0-9]{8}t[0-9]{6}z_[a-f0-9]{16}$`)
+	runIDPattern        = regexp.MustCompile(`^[0-9]{8}t[0-9]{6}z-[a-f0-9]{16}$`)
+	databasePattern     = regexp.MustCompile(`^stratum_e2e_[0-9]{8}t[0-9]{6}z_[a-f0-9]{16}$`)
+	baseDatabasePattern = regexp.MustCompile(`^(?:stratum_)?(?:test|e2e)(?:_[a-z0-9]+)*$`)
 )
 
 type Ports struct {
@@ -162,6 +163,9 @@ func validateMetadata(scope Scope) error {
 	if scope.CreatedAt.IsZero() || scope.ExpiresAt.IsZero() {
 		return errors.New("run scope: timestamps are required")
 	}
+	if scope.CreatedAt.Location() != time.UTC || scope.ExpiresAt.Location() != time.UTC {
+		return errors.New("run scope: timestamps must use UTC")
+	}
 	if !scope.ExpiresAt.Equal(scope.CreatedAt.Add(scopeTTL)) {
 		return errors.New("run scope: expiry must be 24 hours after creation")
 	}
@@ -231,8 +235,7 @@ func safePostgresHost(host string) bool {
 }
 
 func isE2EDatabase(databaseName string) bool {
-	lowerName := strings.ToLower(databaseName)
-	return strings.Contains(lowerName, "test") || strings.Contains(lowerName, "e2e")
+	return baseDatabasePattern.MatchString(strings.ToLower(databaseName))
 }
 
 func validatePorts(ports Ports) error {
