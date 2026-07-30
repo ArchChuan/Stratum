@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
@@ -227,7 +228,8 @@ func (c *OpenAICompatClient) Complete(ctx context.Context, req *CompletionReques
 					}
 				}
 			}
-			lastErr = fmt.Errorf("%s: complete status %d", c.cfg.Name, resp.StatusCode)
+			lastErr = fmt.Errorf("%s: POST %s/chat/completions 返回 %d，请检查 API Key 与 Base URL 是否正确（当前 kind=openai_compat）: %w",
+				c.cfg.Name, strings.TrimSuffix(c.cfg.BaseURL, "/"), resp.StatusCode, domain.ErrUpstreamRequestFailed)
 			if !isRetryableHTTPStatus(resp.StatusCode) {
 				c.logger.Error(c.cfg.Name+": http error (no retry)",
 					zap.String("model", req.Model),

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
@@ -300,6 +301,15 @@ func (c *AnthropicClient) Complete(ctx context.Context, req *CompletionRequest) 
 	return c.toCompletionResponse(&out), nil
 }
 
+// truncateBodyPreview trims body for logging; avoids bloating log lines.
+func truncateBodyPreview(raw []byte) string {
+	s := string(raw)
+	if len(s) > 200 {
+		return s[:200] + "..."
+	}
+	return s
+}
+
 // retryUntilOK sends body to path with retry+backoff and returns the raw OK body.
 func (c *AnthropicClient) retryUntilOK(ctx context.Context, path string, body []byte) ([]byte, error) {
 	var lastErr error
@@ -325,8 +335,12 @@ func (c *AnthropicClient) retryUntilOK(ctx context.Context, path string, body []
 
 		lastErr, retry = c.classifyStatus(status, header)
 		if !retry {
-			lastErr = fmt.Errorf("%s: status %d body=%s", c.cfg.Name, status, string(raw))
-			c.logger.Error(c.cfg.Name+": http error (no retry)", zap.Int("status", status))
+			url := strings.TrimSuffix(c.cfg.BaseURL, "/") + path
+			lastErr = fmt.Errorf("%s: POST %s 返回 %d，请检查 API Key 与 Base URL 是否正确（当前 kind=anthropic）: %w",
+				c.cfg.Name, url, status, domain.ErrUpstreamRequestFailed)
+			c.logger.Error(c.cfg.Name+": http error (no retry)",
+				zap.Int("status", status), zap.String("body", truncateBodyPreview(raw)))
+
 			return nil, lastErr
 		}
 		c.logger.Warn(c.cfg.Name+": http error, retrying",
@@ -503,7 +517,9 @@ func (c *AnthropicClient) ListModels(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("%s: read models body: %w", c.cfg.Name, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: models status %d", c.cfg.Name, resp.StatusCode)
+		url := strings.TrimSuffix(c.cfg.BaseURL, "/") + "/v1/models"
+		return nil, fmt.Errorf("%s: GET %s 返回 %d，请检查 provider kind 与 Base URL 是否正确（当前 kind=anthropic）: %w",
+			c.cfg.Name, url, resp.StatusCode, domain.ErrUpstreamRequestFailed)
 	}
 
 	var out anthropicModelsResponse
