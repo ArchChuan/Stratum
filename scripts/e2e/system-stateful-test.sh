@@ -22,6 +22,10 @@ grep -Fq 'flock "$stateful_e2e_lock_fd"' "$runner" || {
   printf 'stateful E2E runner must serialize shared ports and database access\n' >&2
   exit 1
 }
+grep -Fq 'CI=1 VITE_API_BASE_URL=http://127.0.0.1:18080 npm run dev' "$runner" || {
+  printf 'stateful E2E frontend must disable Vite browser auto-open\n' >&2
+  exit 1
+}
 
 expect_failure() {
   local expected=$1; shift
