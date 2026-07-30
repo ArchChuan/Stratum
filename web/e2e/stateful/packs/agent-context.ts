@@ -5,6 +5,7 @@ import type { BrowserActor } from '../core/actors';
 import {
   configureManagedModels, requireUUID, withTenantMutation, withTenantQuery, type DatabasePool,
 } from '../core/database';
+import { E2E_MCP_BASE_URL } from '../core/endpoints';
 import type { EvidenceRecord } from '../core/evidence';
 import { runCleanupTasks } from '../core/errors';
 
@@ -81,7 +82,7 @@ export const executeAgentContextPack = async ({
       'SELECT workspace_id::text FROM agent_workspaces WHERE agent_id=$1', [agentID]))
       .toEqual([{ workspace_id: workspaceID }]);
 
-    const markerRegistration = await page.request.post('http://127.0.0.1:19091/e2e/context/register', { data: {
+    const markerRegistration = await page.request.post(`${E2E_MCP_BASE_URL}/e2e/context/register`, { data: {
       knowledge_marker: knowledgeMarker, memory_marker: memoryMarker,
     } });
     expect(markerRegistration.status()).toBe(204);
@@ -95,7 +96,7 @@ export const executeAgentContextPack = async ({
     expect((await streamResponse).status()).toBe(200);
     await expect(page.getByText('stateful stream completed', { exact: true }).last()).toBeVisible({ timeout: 120_000 });
     await expect.poll(async () => {
-      const response = await page.request.get('http://127.0.0.1:19091/e2e/context/evidence');
+      const response = await page.request.get(`${E2E_MCP_BASE_URL}/e2e/context/evidence`);
       return await response.json() as { knowledge_seen: boolean; memory_seen: boolean };
     }).toEqual({ knowledge_seen: true, memory_seen: true });
     evidence.ui.push('Agent context execution completed through Chromium chat controls');

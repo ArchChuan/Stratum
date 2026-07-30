@@ -3,6 +3,7 @@ import type { QueryResultRow } from 'pg';
 
 import type { BrowserActor } from '../core/actors';
 import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
+import { E2E_MCP_BASE_URL } from '../core/endpoints';
 import type { EvidenceRecord } from '../core/evidence';
 
 interface CrossPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
@@ -56,7 +57,7 @@ export const executeAgentSkillMCPPack = async ({
     await transportSelect.locator('.ant-select-selector').click();
     await page.getByLabel('传输协议').press('ArrowDown');
     await page.getByLabel('传输协议').press('Enter');
-    await page.getByLabel('服务器 URL').fill('http://127.0.0.1:19091/mcp');
+    await page.getByLabel('服务器 URL').fill(`${E2E_MCP_BASE_URL}/mcp`);
     const mcpResponse = waitForMutation(page, '/mcp/servers', 'POST');
     await page.getByRole('button', { name: '添加服务器' }).click();
     const mcpCreated = await mcpResponse;

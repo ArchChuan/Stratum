@@ -5,6 +5,7 @@ import type { BrowserActor } from '../core/actors';
 import {
   configureManagedModels, requireUUID, withTenantMutation, withTenantQuery, type DatabasePool,
 } from '../core/database';
+import { E2E_MCP_BASE_URL } from '../core/endpoints';
 import type { EvidenceRecord } from '../core/evidence';
 import { runCleanupTasks } from '../core/errors';
 
@@ -267,7 +268,7 @@ export const executeEvaluationPack = async ({
     experimentID = (await experimentCreated.json() as { experiment: { id: string } }).experiment.id;
     await expect(dialog).toBeHidden();
 
-    const evidenceRegistration = await page.request.post('http://127.0.0.1:19091/e2e/opik/register', { data: {
+    const evidenceRegistration = await page.request.post(`${E2E_MCP_BASE_URL}/e2e/opik/register`, { data: {
       trace_id: run.trace_id, tenant_id: tenantID, user_id: userID,
       resource_id: skillID, revision_id: stableRevisionID,
     } });

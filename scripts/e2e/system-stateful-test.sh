@@ -48,6 +48,7 @@ expect_failure 'release profile requires at least 3600' env TEST_DATABASE_URL="$
 expect_failure 'short mode cannot declare' env TEST_DATABASE_URL="$safe_db" STATEFUL_E2E_PROFILE=test bash "$runner" short
 expect_failure 'unknown stateful E2E pack' env TEST_DATABASE_URL="$safe_db" STATEFUL_E2E_PACKS=unknown bash "$runner" short
 expect_failure 'unsafe E2E database target' env TEST_DATABASE_URL='postgres://u:p@prod-db/stratum' bash "$runner" short
+expect_failure 'between 1024 and 65535' env TEST_DATABASE_URL="$safe_db" STATEFUL_E2E_MCP_PORT=1023 bash "$runner" short
 
 cat >"$test_dir/digest" <<'SH'
 #!/usr/bin/env bash
@@ -89,6 +90,7 @@ printf 'backend diagnostic marker\n'
 [[ ${GITHUB_TOKEN_URL:-} == http://127.0.0.1:19090/login/oauth/access_token ]] || exit 34
 [[ ${GITHUB_USER_URL:-} == http://127.0.0.1:19090/user ]] || exit 35
 [[ ${QWEN_BASE_URL:-} == http://127.0.0.1:19091/v1 ]] || exit 37
+[[ ${E2E_MCP_LISTEN_ADDRESS:-} == 127.0.0.1:19091 ]] || exit 39
 trap 'touch "$STATEFUL_E2E_CLEANUP_MARKER"; exit 0' TERM INT
 while :; do read -r -t 1 _ || true; done
 SH
