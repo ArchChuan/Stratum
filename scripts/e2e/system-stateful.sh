@@ -104,6 +104,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 common_git_dir=$(cd "$repo_dir" && git rev-parse --path-format=absolute --git-common-dir)
+common_compose_project=$(basename "$(dirname "$common_git_dir")")
+export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-$common_compose_project}
 stateful_e2e_lock="$common_git_dir/stateful-e2e.lock"
 exec {stateful_e2e_lock_fd}>"$stateful_e2e_lock"
 flock "$stateful_e2e_lock_fd"
