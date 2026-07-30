@@ -364,15 +364,11 @@ func (s *AgentService) List(ctx context.Context) ([]AgentDTO, error) {
 	}
 	out := make([]AgentDTO, 0, len(agents))
 	for _, a := range agents {
-		out = append(out, cfgToDTO(a.GetConfig()))
-	}
-	for i := 1; i < len(out); i++ {
-		if out[i].IsSystem {
-			system := out[i]
-			copy(out[1:i+1], out[0:i])
-			out[0] = system
-			break
+		cfg := a.GetConfig()
+		if cfg.SystemKey != "" {
+			continue
 		}
+		out = append(out, cfgToDTO(cfg))
 	}
 	return out, nil
 }

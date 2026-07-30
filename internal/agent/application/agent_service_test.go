@@ -477,7 +477,7 @@ func TestAgentService_List(t *testing.T) {
 	assert.Equal(t, "react", list[1].Type)
 }
 
-func TestAgentService_ListManagedAssistantFirstPreservesOrdinaryOrder(t *testing.T) {
+func TestAgentService_ListExcludesManagedAssistantAndPreservesOrdinaryOrder(t *testing.T) {
 	svc, repo := newTestService(t)
 	repo.On("GetAll", mock.Anything).Return([]*domain.AgentConfig{
 		{ID: "ordinary-1", Name: "First", Type: domain.ReActAgent},
@@ -488,10 +488,7 @@ func TestAgentService_ListManagedAssistantFirstPreservesOrdinaryOrder(t *testing
 
 	list, err := svc.List(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, []string{domain.SystemAssistantID, "ordinary-1", "ordinary-2"},
-		[]string{list[0].ID, list[1].ID, list[2].ID})
-	assert.True(t, list[0].IsSystem)
-	assert.Equal(t, "platform", list[0].ManagementMode)
+	assert.Equal(t, []string{"ordinary-1", "ordinary-2"}, []string{list[0].ID, list[1].ID})
 }
 
 type stubTenantModelValidator struct {

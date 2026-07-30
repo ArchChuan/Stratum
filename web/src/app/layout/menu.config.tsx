@@ -44,7 +44,7 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
       icon: <RobotOutlined />,
       label: 'Agent',
       children: [
-        { key: '/agents', icon: <RobotOutlined />, label: <Link to="/agents">Agent 列表</Link> },
+        { key: '/agents', icon: <RobotOutlined />, label: <Link to="/agents">Agent 管理</Link> },
         canManageTenant ? {
           key: '/agents/create',
           icon: <PlusCircleOutlined />,

@@ -510,8 +510,7 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 
 	list := request(http.MethodGet, "/agents", "member", "")
 	require.Equal(t, http.StatusOK, list.Code)
-	require.Contains(t, list.Body.String(), `"isSystem":true`)
-	require.Contains(t, list.Body.String(), `"managementMode":"platform"`)
+	require.NotContains(t, list.Body.String(), domain.SystemAssistantID)
 	settings := request(http.MethodGet, "/agents/system/settings", "member", "")
 	require.Equal(t, http.StatusOK, settings.Code)
 	require.JSONEq(t,

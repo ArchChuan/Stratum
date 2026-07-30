@@ -33,6 +33,7 @@ interface Props {
   onRename: (convId: string, name: string) => Promise<void> | void;
   onDelete: (convId: string) => void;
   fluid?: boolean;
+	showAgentSelector?: boolean;
 }
 
 export const ChatConversationSidebar = ({
@@ -47,6 +48,7 @@ export const ChatConversationSidebar = ({
   onRename,
   onDelete,
   fluid = false,
+	showAgentSelector = true,
 }: Props) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
@@ -70,17 +72,17 @@ export const ChatConversationSidebar = ({
       }}
     >
       <div style={{ padding: '16px 12px 12px' }}>
-        <Title level={5} style={{ margin: '0 0 10px', fontSize: 14 }}>
-          Agent 对话
+        <Title level={5} style={{ margin: showAgentSelector ? '0 0 10px' : 0, fontSize: 14 }}>
+          {showAgentSelector ? 'Agent 对话' : '历史会话'}
         </Title>
-        <Select
+				{showAgentSelector && <Select
           style={{ width: '100%' }}
           placeholder="选择 Agent"
           value={selectedAgent}
           onChange={onSelectAgent}
           options={agents.map((agent) => ({ value: agent.id, label: agent.name }))}
           size="small"
-        />
+				/>}
       </div>
       <div style={{ padding: '0 12px 8px' }}>
         <Button
