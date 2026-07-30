@@ -1,6 +1,8 @@
 import { Modal, Table, Typography } from 'antd';
 import { useEffect, useState } from 'react';
+
 import type { Model, ModelCapability } from '../model/llm';
+
 import { ModelCapabilityTags } from './ModelCapabilityTags';
 
 const { Text } = Typography;
@@ -78,7 +80,11 @@ export function DiscoverResultModal({ open, onClose, results, providerName }: Pr
           expandedRowKeys: [...expanded],
           onExpand: (exp, record) => {
             const next = new Set(expanded);
-            exp ? next.add(record.id) : next.delete(record.id);
+            if (exp) {
+              next.add(record.id);
+            } else {
+              next.delete(record.id);
+            }
             setExpanded(next);
           },
         }}

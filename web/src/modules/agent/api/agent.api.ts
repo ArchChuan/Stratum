@@ -35,10 +35,6 @@ export const agentApi = {
     api.post(`/agents/${id}/execute`, payload, { timeout: AGENT_EXEC_TIMEOUT_MS }),
 	executions: (page = 1, pageSize = DEFAULT_PAGE_SIZE) =>
     api.get('/agents/executions', { params: { page, page_size: pageSize } }),
-	models: async (): Promise<string[]> => {
-    const res = await api.get('/models');
-    return z.array(z.string()).parse(res.data?.models ?? []);
-	},
   getSystemSettings: async (): Promise<SystemAssistantSettings> => {
     const res = await api.get('/agents/system/settings');
     return systemAssistantSettingsSchema.parse(res.data);
@@ -59,6 +55,10 @@ export const agentApi = {
 		const res = await api.post(`/agents/tool-approvals/${id}/resume`);
 		return res.data as ToolApprovalResumeResult;
 	},
+	pauseExecution: (agentId: string, executionId: string) =>
+		api.post(`/agents/${agentId}/executions/${executionId}/pause`),
+	resumeExecution: (agentId: string, executionId: string, payload: ExecuteAgentPayload) =>
+		api.post(`/agents/${agentId}/executions/${executionId}/resume`, payload, { timeout: AGENT_EXEC_TIMEOUT_MS }),
 };
 
 export const conversationApi = {

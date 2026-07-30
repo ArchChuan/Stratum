@@ -1,4 +1,5 @@
 import { Tag } from 'antd';
+
 import type { ModelCapability } from '../model/llm';
 
 const CAP_COLORS: Record<ModelCapability, string> = {

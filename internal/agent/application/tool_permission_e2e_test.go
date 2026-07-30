@@ -123,7 +123,7 @@ func runToolPermissionLoop(
 			Metadata: map[string]any{"risk_level": "destructive", "policy_resolved": true},
 		}},
 		ToolExecutionFn: execute,
-	}, graph.RunConfig{MaxSteps: 5})
+	}, graph.RunConfig[graph.ReActState]{MaxSteps: 5})
 }
 
 func bindToolPermissionSubject(request *port.ToolExecutionRequest, agentToolIDs []string) {

@@ -62,13 +62,12 @@ func (c *Container) buildIAM(_ context.Context) error {
 		iam.TenantService = application.NewTenantService(
 			repo,
 			c.Logger,
-			c.Platform.AESKey,
-			c.Platform.GatewayCache,
 		)
 		iam.InvitationService = application.NewInvitationService(iampersistence.NewInvitationRepo(db))
 		opts := []application.AdminServiceOption{
 			application.WithSchemaCleaner(iampersistence.NewTenantSchemaCleaner(db)),
 			application.WithAdminLogger(c.Logger),
+			application.WithCacheInvalidator(c.Platform.ModelRegistry),
 		}
 		if c.Storage != nil && c.Storage.Milvus != nil {
 			opts = append(opts, application.WithVectorCleaner(

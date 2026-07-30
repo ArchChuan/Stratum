@@ -2,12 +2,9 @@ package wiring
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
@@ -15,16 +12,9 @@ import (
 	capgateway "github.com/byteBuilderX/stratum/internal/agent/infrastructure/capability"
 	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
-	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 )
 
-type tenantSettingsQuerier interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}
-
 type tenantCapabilityResolver struct {
-	db       tenantSettingsQuerier
-	aesKey   [32]byte
 	registry *llmgateway.ModelRegistry
 	gateway  *llmgateway.Gateway
 	logger   *zap.Logger
@@ -33,94 +23,66 @@ type tenantCapabilityResolver struct {
 func (r *tenantCapabilityResolver) DiagnosticModelStatus(
 	ctx context.Context, tenantID string,
 ) (status agentdomain.TenantModelDiagnosticStatus, err error) {
-	if r.db == nil {
-		return status, fmt.Errorf("tenant model diagnostics: settings unavailable")
+	if r.registry == nil {
+		return status, fmt.Errorf("tenant model diagnostics: registry unavailable")
 	}
-	var settingsJSON []byte
-	if err := r.db.QueryRow(ctx,
-		"SELECT settings FROM public.tenants WHERE id=$1 AND deleted_at IS NULL", tenantID,
-	).Scan(&settingsJSON); err != nil {
-		return status, fmt.Errorf("tenant model diagnostics: settings read failed")
+	models, err := r.registry.ListChatModelsByTenant(ctx, tenantID)
+	if err != nil {
+		return status, fmt.Errorf("tenant model diagnostics: list models: %w", err)
 	}
-	var settings map[string]any
-	if err := json.Unmarshal(settingsJSON, &settings); err != nil {
-		return status, fmt.Errorf("tenant model diagnostics: settings invalid")
-	}
-	apiKeys, ok := settings["llm_api_keys"].(map[string]any)
-	if !ok || len(apiKeys) == 0 {
-		return status, nil
-	}
-	for _, provider := range []string{"qwen", "zhipu"} {
-		encrypted, ok := apiKeys[provider].(string)
-		if !ok || encrypted == "" {
-			continue
-		}
-		if _, err := pkgcrypto.Decrypt(r.aesKey, encrypted); err != nil {
-			return status, fmt.Errorf("tenant model diagnostics: credentials invalid")
-		}
-		status.Configured = true
-		return status, nil
-	}
-	return status, fmt.Errorf("tenant model diagnostics: provider unsupported")
+	status.Configured = len(models) > 0
+	return status, nil
 }
 
 func newTenantCapabilityResolver(
-	db *pgxpool.Pool,
-	aesKey [32]byte,
 	registry *llmgateway.ModelRegistry,
 	gateway *llmgateway.Gateway,
 	logger *zap.Logger,
 ) agentport.TenantCapabilityResolver {
-	var settingsDB tenantSettingsQuerier
-	if db != nil {
-		settingsDB = db
-	}
 	return &tenantCapabilityResolver{
-		db:       settingsDB,
-		aesKey:   aesKey,
 		registry: registry,
 		gateway:  gateway,
 		logger:   logger,
 	}
 }
 
-func (r *tenantCapabilityResolver) resolveGateway(ctx context.Context, tenantID string) (*llmgateway.Gateway, map[string]string, bool) {
-	gw, keys, ok, _ := r.resolveGatewayResult(ctx, tenantID, false)
-	return gw, keys, ok
+func (r *tenantCapabilityResolver) resolveGateway(ctx context.Context, tenantID string) (*llmgateway.Gateway, bool) {
+	gw, ok, _ := r.resolveGatewayResult(ctx, tenantID, false)
+	return gw, ok
 }
 
-func (r *tenantCapabilityResolver) resolveGatewayResult(ctx context.Context, tenantID string, strict bool) (*llmgateway.Gateway, map[string]string, bool, error) {
+func (r *tenantCapabilityResolver) resolveGatewayResult(ctx context.Context, tenantID string, strict bool) (*llmgateway.Gateway, bool, error) {
 	if r.registry == nil {
 		if strict {
-			return nil, nil, false, fmt.Errorf("tenant llm: registry unavailable")
+			return nil, false, fmt.Errorf("tenant llm: registry unavailable")
 		}
-		return r.gateway, nil, r.gateway != nil, nil
+		return r.gateway, r.gateway != nil, nil
 	}
 	if err := r.registry.WarmTenant(ctx, tenantID); err != nil {
 		if strict {
-			return nil, nil, false, fmt.Errorf("tenant llm: warm: %w", err)
+			return nil, false, fmt.Errorf("tenant llm: warm: %w", err)
 		}
-		return r.gateway, nil, r.gateway != nil, nil
+		return r.gateway, r.gateway != nil, nil
 	}
-	return r.gateway, nil, true, nil
+	return r.gateway, true, nil
 }
 
-// Resolve returns a per-tenant CapabilityGateway and the raw API-key map.
-func (r *tenantCapabilityResolver) Resolve(ctx context.Context, tenantID string) (agentport.CapabilityGateway, map[string]string, bool) {
-	gw, keys, ok := r.resolveGateway(ctx, tenantID)
+// Resolve returns a per-tenant CapabilityGateway.
+func (r *tenantCapabilityResolver) Resolve(ctx context.Context, tenantID string) (agentport.CapabilityGateway, bool) {
+	gw, ok := r.resolveGateway(ctx, tenantID)
 	if !ok {
-		return nil, nil, false
+		return nil, false
 	}
 	llmAdapter := newAgentLLMAdapter(gw)
 	capGW := capgateway.NewDefaultCapabilityGateway(llmAdapter, r.logger)
-	return capGW, keys, true
+	return capGW, true
 }
 
 // ResolveLLM returns the tenant's LLM gateway as a pipeline.LLMClient. Returns
 // nil when the tenant has no provider configured. Used by the memory pipeline
 // to drive enrich/summary jobs against tenant-private gateways.
 func (r *tenantCapabilityResolver) ResolveLLM(ctx context.Context, tenantID string) *llmgateway.Gateway {
-	gw, _, ok := r.resolveGateway(ctx, tenantID)
+	gw, ok := r.resolveGateway(ctx, tenantID)
 	if !ok {
 		return nil
 	}
@@ -130,7 +92,7 @@ func (r *tenantCapabilityResolver) ResolveLLM(ctx context.Context, tenantID stri
 // ResolveWorkerLLM resolves the current tenant gateway without hiding
 // infrastructure or credential failures behind the global fallback.
 func (r *tenantCapabilityResolver) ResolveWorkerLLM(ctx context.Context, tenantID string) (*llmgateway.Gateway, error) {
-	gw, _, ok, err := r.resolveGatewayResult(ctx, tenantID, true)
+	gw, ok, err := r.resolveGatewayResult(ctx, tenantID, true)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +135,7 @@ func (r *tenantCapabilityResolver) ListTenantChatModels(ctx context.Context, ten
 
 // InjectCompleter injects the per-tenant LLM completer into ctx for streaming.
 func (r *tenantCapabilityResolver) InjectCompleter(ctx context.Context, tenantID string) context.Context {
-	gw, _, ok := r.resolveGateway(ctx, tenantID)
+	gw, ok := r.resolveGateway(ctx, tenantID)
 	if !ok {
 		return ctx
 	}

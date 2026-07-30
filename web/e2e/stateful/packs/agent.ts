@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import type { QueryResultRow } from 'pg';
 
 import type { BrowserActor } from '../core/actors';
-import { copyConfiguredLLMCredentials, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
+import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 
 interface AgentPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
@@ -28,7 +28,7 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
   let agentID = '';
   let conversationID = '';
   try {
-    await copyConfiguredLLMCredentials(pool, tenantID, process.env.JWT_PRIVATE_KEY_PEM ?? '');
+    await configureManagedModels(pool, tenantID);
     const listResponse = waitForMutation(page, '/agents', 'GET');
     await page.goto(`${webURL}/agents`);
     expect((await listResponse).status()).toBe(200);
@@ -41,6 +41,9 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('描述').fill('全系统 stateful Agent 验收');
     await page.getByLabel('系统提示词').fill('请简洁回答，并明确包含 stateful。');
+    await page.getByLabel('LLM 模型').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
+      .filter({ hasText: /^qwen-max$/ }).click();
     await expect(page.getByRole('slider', { name: '最大迭代次数' })).toHaveAttribute('aria-valuemax', '90');
     const createResponse = waitForMutation(page, '/agents', 'POST');
     const createdListResponse = waitForMutation(page, '/agents', 'GET');

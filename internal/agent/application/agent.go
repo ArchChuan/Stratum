@@ -53,7 +53,6 @@ type ExecutionConfig struct {
 	TenantID                  string
 	TraceID                   string
 	ExecutionID               string
-	LLMAPIKeys                map[string]string
 	RAGSearchFn               func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
 	ExtraTools                []port.ToolDefinition
 	SkillCatalog              map[string]port.SkillActivation
@@ -396,7 +395,33 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	initMessages := BuildContextMessagesWithCompaction(
 		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow, ec.historyCompactor,
 	)
+
+	// Resume from checkpoint if one exists.
+	var activePlan *domain.Plan
+	if a.CheckpointEnabled && a.CheckpointStore != nil && ec.cfg.ExecutionID != "" {
+		resumeCp, resumeCpErr := a.CheckpointStore.GetLatest(ctx, ec.cfg.TenantID, ec.cfg.ExecutionID)
+		if resumeCpErr == nil && resumeCp != nil && isResumableCheckpoint(resumeCp.Status) {
+			a.Logger.Info("agent: resuming from checkpoint",
+				zap.String("checkpoint_id", resumeCp.ID),
+				zap.String("execution_id", ec.cfg.ExecutionID),
+				zap.Int("step_index", resumeCp.StepIndex),
+			)
+			if len(resumeCp.MessagesSnapshotJSON) > 0 {
+				var savedMsgs []port.LLMMessage
+				if err := json.Unmarshal(resumeCp.MessagesSnapshotJSON, &savedMsgs); err == nil {
+					initMessages = savedMsgs
+				}
+			}
+			if len(resumeCp.RuntimeStateJSON) > 0 {
+				if decoded, decErr := agentgraph.DecodePlanCheckpoint(resumeCp.RuntimeStateJSON); decErr == nil && decoded.Plan != nil {
+					activePlan = decoded.Plan
+				}
+			}
+		}
+	}
+
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
+	initState.ActivePlan = activePlan
 	initState.PlanNodeExecutor = a.buildPlanNodeExecutor(ec, ec.capGW)
 	if !ec.cfg.SystemAssistantMode && a.RecallMemoryFn != nil {
 		fn := a.RecallMemoryFn
@@ -408,11 +433,24 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	execCtx = reqctx.WithTraceID(execCtx, ec.cfg.TraceID)
 	execCtx = reqctx.WithTenantID(execCtx, ec.cfg.TenantID)
 	defer cancel()
+	runCfg := agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: ec.cfg.MaxSteps}
+	if a.CheckpointEnabled && a.CheckpointStore != nil {
+		runCfg.AfterStep = func(afterCtx context.Context, afterState agentgraph.ReActState) error {
+			return agentgraph.PersistReActCheckpoint(afterCtx, a.CheckpointStore, ec.cfg.TenantID, agentgraph.PlanCheckpointIdentity{
+				ExecutionID: ec.cfg.ExecutionID, TraceID: ec.cfg.TraceID, ConversationID: ec.cfg.ConversationID, AgentID: ec.agentID, UserID: ec.cfg.UserID,
+			}, &afterState, "")
+		}
+	}
 	graphCtx, reactSpan := ec.tracer.Start(execCtx, "react.graph.invoke",
 		oteltrace.WithAttributes(attribute.Int("max_steps", ec.cfg.MaxSteps)),
 	)
-	finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig{MaxSteps: ec.cfg.MaxSteps})
+	finalState, runErr := cg.Invoke(graphCtx, initState, runCfg)
 	reactSpan.End()
+	if runErr == nil && a.CheckpointStore != nil {
+		markCtx, markCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+		_ = a.CheckpointStore.MarkCompleted(markCtx, ec.cfg.TenantID, ec.cfg.ExecutionID)
+		markCancel()
+	}
 	if runErr != nil {
 		return fmt.Errorf("react: %w", runErr)
 	}
@@ -485,7 +523,7 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 	graphCtx, planSpan := ec.tracer.Start(execCtx, "planning.graph.invoke",
 		oteltrace.WithAttributes(attribute.Int("stuck_threshold", stuckThreshold)),
 	)
-	finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig{MaxSteps: ec.cfg.MaxSteps})
+	finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: ec.cfg.MaxSteps})
 	planSpan.End()
 	if runErr != nil {
 		return fmt.Errorf("planning: %w", runErr)
@@ -511,7 +549,6 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		TenantID:                   ec.cfg.TenantID,
 		TraceID:                    ec.cfg.TraceID,
 		ConversationID:             ec.cfg.ConversationID,
-		LLMAPIKeys:                 ec.cfg.LLMAPIKeys,
 		Model:                      ec.llmModel,
 		Messages:                   initMessages,
 		OnToken:                    ec.cfg.TokenCallback,
@@ -531,6 +568,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		RAGSearchFn:                ec.cfg.RAGSearchFn,
 		MaxLLMSteps:                ec.cfg.MaxSteps,
 		MaxContextTokens:           maxTokens,
+		CheckpointEnabled:          a.CheckpointEnabled,
 		HistoryCompactor:           ec.historyCompactor,
 		PlanCheckpointWriter:       a.CheckpointStore,
 		PlanCheckpointIdentity: agentgraph.PlanCheckpointIdentity{
@@ -562,7 +600,7 @@ func (a *BaseAgent) buildPlanNodeExecutor(ec agentExecContext, capGW port.Capabi
 		child.ActivePlan = nil
 		child.PlanToolsDisabled = true
 		child.MaxLLMSteps = constants.DefaultStepMaxLLMSteps
-		final, invokeErr := nodeGraph.Invoke(nodeCtx, child, agentgraph.RunConfig{MaxSteps: constants.DefaultStepMaxLLMSteps})
+		final, invokeErr := nodeGraph.Invoke(nodeCtx, child, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: constants.DefaultStepMaxLLMSteps})
 		if invokeErr != nil {
 			return agentgraph.PlanNodeExecutionResult{}, invokeErr
 		}
@@ -808,13 +846,6 @@ func WithTraceID(id string) ExecutionOption {
 func WithExecutionID(id string) ExecutionOption {
 	return func(cfg *ExecutionConfig) {
 		cfg.ExecutionID = id
-	}
-}
-
-// WithLLMAPIKeys injects per-tenant decrypted LLM API keys into the execution.
-func WithLLMAPIKeys(keys map[string]string) ExecutionOption {
-	return func(cfg *ExecutionConfig) {
-		cfg.LLMAPIKeys = keys
 	}
 }
 
@@ -1146,4 +1177,10 @@ func boundExecutionArtifactsJSON(artifacts []domain.ExecutionArtifact) []domain.
 			return []domain.ExecutionArtifact{{Type: "diagnostic_report", ProfileVersion: artifacts[0].ProfileVersion, DiagnosticReport: &domain.DiagnosticReport{Facts: []domain.DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []domain.EvidenceGap{{Source: "artifact_aggregate", Code: "truncated"}}, RecommendedActions: []string{}, Citations: []domain.Citation{}, Steps: []domain.DiagnosticStep{{Tool: "artifact_aggregate", Outcome: "error", ErrorCode: "truncated"}}}}}
 		}
 	}
+}
+
+// isResumableCheckpoint reports whether a checkpoint with status s can be
+// resumed (running or paused).
+func isResumableCheckpoint(s string) bool {
+	return s == "running" || s == "paused"
 }

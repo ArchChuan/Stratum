@@ -31,6 +31,28 @@ describe('api client', () => {
     markAuthReady();
   });
 
+  it('waits for auth and attaches the memory token for the tenant model catalogue', async () => {
+    resetAuthReady();
+    const tokenRef = { current: 'model-catalogue-token' };
+    setupApiInterceptors(tokenRef);
+    const requestInterceptors = api.interceptors.request as unknown as {
+      handlers: Array<{
+        fulfilled?: (config: { headers: Record<string, unknown>; url: string }) => Promise<unknown>;
+      }>;
+    };
+    const latestInterceptor = requestInterceptors.handlers[requestInterceptors.handlers.length - 1];
+    let resolved: { headers?: Record<string, unknown> } | undefined;
+    const pending = latestInterceptor?.fulfilled?.({ headers: {}, url: '/models' }).then((config) => {
+      resolved = config as { headers?: Record<string, unknown> };
+    });
+    await Promise.resolve();
+    expect(resolved).toBeUndefined();
+
+    markAuthReady();
+    await pending;
+    expect(resolved?.headers).toMatchObject({ Authorization: 'Bearer model-catalogue-token' });
+  });
+
   it('does not read or write access tokens from localStorage', async () => {
     const getItem = vi.spyOn(Storage.prototype, 'getItem');
     const setItem = vi.spyOn(Storage.prototype, 'setItem');

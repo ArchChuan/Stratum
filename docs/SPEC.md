@@ -100,11 +100,11 @@ stratum/
 | 表 | 关键字段 | 备注 |
 |----|---------|------|
 | `users` | id (UUID), github_id, github_login, avatar_url, global_role, is_guest, expires_at, created_at | OAuth 与临时访客账号 |
-| `tenants` | id, name, slug, plan(free\|pro\|enterprise), status, settings JSONB, is_default, deleted_at | settings 内置加密 `llm_api_keys` |
+| `tenants` | id, name, slug, plan(free\|pro\|enterprise), status, settings JSONB, is_default, deleted_at | settings 仅保存非模型类租户设置 |
 | `tenant_members` | tenant_id, user_id, role(owner\|admin\|member), UNIQUE(tenant_id,user_id) | |
 | `refresh_tokens` | id, user_id, token_hash(sha256), expires_at | |
 
-`invitations`、`tenant_api_keys`、`audit_logs`、`model_providers` 和 `models` 已由 migration 018 删除。当前公开模型目录来自 `internal/llmgateway/infrastructure/static_catalog.go`。
+`invitations`、`tenant_api_keys`、`audit_logs`、`model_providers` 和旧版 public `models` 已由 migration 018 删除。统一模型配置保存在各租户 schema 的 `providers` 和 `models` 表中，由 `ModelRegistry` 解析。
 
 ### 4.2 Tenant Schema（per-tenant，`SET LOCAL search_path = tenant_{id}, public`）
 
@@ -140,7 +140,7 @@ stratum/
 
 ### 4.3 Migration Timeline
 
-001 public baseline · 002 is_default_tenant · 003 global admin owner · 004/005 agent_executions add+move-to-tenant · 006 agent_skill_links · 007 name unique · 008 memory_pipeline · 009 agent_context_tokens · 010 soft_delete_conversations · 011 uuid_v7 func · 012 pgcrypto · 013 trgm index · 014 cascade-delete fixes · 015 memory v2 marker · 016 agent memory enabled · 017 memory facts hard delete · 018 obsolete public tables cleanup · 019 guest accounts · 020 memory fact quality · 021 active snapshots · 022 history tiers · 023 history source IDs
+001 public baseline · 002 is_default_tenant · 003 global admin owner · 004/005 agent_executions add+move-to-tenant · 006 agent_skill_links · 007 name unique · 008 memory_pipeline · 009 agent_context_tokens · 010 soft_delete_conversations · 011 uuid_v7 func · 012 pgcrypto · 013 trgm index · 014 cascade-delete fixes · 015 memory v2 marker · 016 agent memory enabled · 017 memory facts hard delete · 018 obsolete public tables cleanup · 019 guest accounts · 020 memory fact quality · 021 active snapshots · 022 history tiers · 023 history source IDs · 024 memory fact source identity · 025 OAuth exchange codes · 026 tenant invitations · 027 remove tenant LLM API keys
 
 **多租户 DDL 规则**：编号迁移仅操作 public；引用 tenant-only 表的 DDL 必须放 `pkg/storage/postgres/tenant_schema.sql` 由 `ProvisionAllTenantSchemas` 幂等应用；新增列必须 `ALTER TABLE … ADD COLUMN IF NOT EXISTS` 做 backfill。
 
@@ -253,12 +253,12 @@ stratum/
 3. **Agent 执行**：`ExecuteStream` 构造独立的限时 execution context；SSE handler 监听 client disconnect 并显式 cancel。执行证据通过 OTel Collector 写入 Opik。
 4. **Skill instruction capability package**：draft 可编辑 capability、activation 和 instruction bundle；publish 冻结版本；Agent 正常执行只激活 published instruction bundle。当前没有直接执行或草稿测试 HTTP 路由。
 5. **Workspace 不可变字段**：`embedding_model` / `chunk_size` / `chunk_overlap` 创建后只读（`MergeUpdate` 强制）。
-6. **Embed model**：tenant 级 set-once（`SetEmbedModel` 拒绝二次写入 → `ErrEmbedModelAlreadySet`）；agent 创建时未指定则继承 tenant default。
+6. **模型选择**：所有聊天与 embedding 模型选择均来自统一模型管理；模型和 provider 必须启用、capability 匹配且运行时协议受支持。显式配置优先，未显式配置的 embedding 路径使用排序后的首个可用模型。
 7. **Tenant 角色规则**：
    - `UpdateMemberRole` 仅 owner，禁自我修改，目标必须非 owner
    - `RemoveMember` 仅 owner/admin，禁自删，禁删 owner，admin 不能删 admin
    - 默认 tenant `is_default=true` 不可删（`ErrDefaultTenantDelete`）
-8. **LLM API keys 加密**：AES-256-GCM 写入 `tenant.settings.llm_api_keys`；GET 返回 `mask = first6 + "••••••••"`；UPDATE 跳过 placeholder bullets，merge 已有 keys；写入后 `TenantGatewayCache.Invalidate(tenantID)`。
+8. **模型凭据边界**：provider 凭据只通过统一模型管理维护；租户 settings 不接受或返回模型配置。模型或 provider 变更成功后必须使 `ModelRegistry` 缓存失效。
 9. **JWT**：RS256（拒绝非 RSA 签名方法）；claims `sub/tid/role/global_role/jti/ava/ghl`；refresh token sha256 入库。
 10. **Memory 范围**：entries/facts/entities 都按 tenant + user 隔离，并可进一步按 agent/scope 过滤；Memory v2 对 facts 使用硬删除语义。
 11. **Memory pipeline**：写入 outbox（`message_id NOT NULL`）→ embedder 生成向量 → enricher 写 `memory_facts` / `memory_entities` 并更新 entry；摘要写 `memory_summaries`。

@@ -41,7 +41,6 @@ type AgentConfig struct {
 	Description                    string
 	SystemPrompt                   string
 	LLMModel                       string
-	EmbedModel                     string
 	MaxIterations                  int
 	AllowedSkills                  []string
 	MCPToolIDs                     []string

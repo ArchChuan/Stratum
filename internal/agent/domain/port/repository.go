@@ -21,7 +21,8 @@ type AgentRepo interface {
 	GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 	Remove(ctx context.Context, id string) error
 	Update(ctx context.Context, cfg *domain.AgentConfig) error
-	UpdateSystemAssistant(ctx context.Context, cfg *domain.AgentConfig) error
+	UpdateSystemAssistantModel(ctx context.Context, model string) (*domain.AgentConfig, error)
+	UpdateSystemAssistantBindings(ctx context.Context, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills []string) (*domain.AgentConfig, error)
 }
 
 // AgentSkillBinding resolves which agent is wired to a given skill through the
@@ -38,6 +39,8 @@ type CheckpointRepo interface {
 	Upsert(ctx context.Context, tenantID string, checkpoint domain.AgentExecutionCheckpoint) error
 	GetLatest(ctx context.Context, tenantID, executionID string) (*domain.AgentExecutionCheckpoint, error)
 	MarkCompleted(ctx context.Context, tenantID, executionID string) error
+	UpdateStatus(ctx context.Context, tenantID, executionID, status string) error
+	DeleteExpired(ctx context.Context, tenantID string) (int64, error)
 }
 
 type ToolApprovalRepo interface {

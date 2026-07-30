@@ -15,16 +15,15 @@ type CreateAgentRequest struct {
 	Description           string   `json:"description"`
 	SystemPrompt          string   `json:"systemPrompt"`
 	LLMModel              string   `json:"llmModel" binding:"required"`
-	EmbedModel            string   `json:"embedModel"`
 	MaxIterations         int      `json:"maxIterations" binding:"required"`
 	MaxContextTokens      int      `json:"maxContextTokens"`
 	AllowedSkills         []string `json:"allowedSkills"`
 	MCPToolIDs            []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope           string   `json:"memoryScope"`
+	CheckpointEnabled     bool     `json:"checkpointEnabled"`
 }
 
-// UpdateAgentRequest mirrors CreateAgentRequest minus EmbedModel — the
 // embedding model is immutable post-create.
 type UpdateAgentRequest struct {
 	Name                  string   `json:"name" binding:"required"`
@@ -38,6 +37,7 @@ type UpdateAgentRequest struct {
 	MCPToolIDs            []string `json:"mcpToolIds"`
 	KnowledgeWorkspaceIDs []string `json:"knowledgeWorkspaceIds"`
 	MemoryScope           string   `json:"memoryScope"`
+	CheckpointEnabled     bool     `json:"checkpointEnabled"`
 }
 
 type AgentResponse struct {
@@ -47,7 +47,6 @@ type AgentResponse struct {
 	Description           string   `json:"description"`
 	SystemPrompt          string   `json:"systemPrompt"`
 	LLMModel              string   `json:"llmModel"`
-	EmbedModel            string   `json:"embedModel"`
 	MaxIterations         int      `json:"maxIterations"`
 	MaxContextTokens      int      `json:"maxContextTokens"`
 	AllowedSkills         []string `json:"allowedSkills"`
@@ -57,6 +56,7 @@ type AgentResponse struct {
 	MemoryScope           string   `json:"memoryScope"`
 	IsSystem              bool     `json:"isSystem"`
 	ManagementMode        string   `json:"managementMode"`
+	CheckpointEnabled     bool     `json:"checkpointEnabled"`
 }
 
 type ExecuteAgentRequest struct {
@@ -90,7 +90,6 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		Description:           d.Description,
 		SystemPrompt:          d.SystemPrompt,
 		LLMModel:              d.LLMModel,
-		EmbedModel:            d.EmbedModel,
 		MaxIterations:         d.MaxIterations,
 		MaxContextTokens:      d.MaxContextTokens,
 		AllowedSkills:         d.AllowedSkills,
@@ -100,5 +99,6 @@ func dtoToResponse(d agent.AgentDTO) AgentResponse {
 		MemoryScope:           d.MemoryScope,
 		IsSystem:              d.IsSystem,
 		ManagementMode:        d.ManagementMode,
+		CheckpointEnabled:     d.CheckpointEnabled,
 	}
 }

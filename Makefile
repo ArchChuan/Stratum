@@ -10,11 +10,13 @@
 	migration-guardrails e2e-attestation-check ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	agent-instructions agent-instructions-check \
+	code-quality code-quality-baseline risk-guardrails \
 	tool-permission-test agent-interview-test \
 	dev-up dev-down \
 	run fe-dev help clean
 
 .PHONY: e2e-evaluation-evolution e2e-system-short e2e-system-soak e2e-system-release-soak
+.PHONY: monitoring-config-test
 
 # ─── 全局变量（CI/CD 可自动覆盖）────────────────────────────────────────────
 BE_IMAGE    ?= clawhermes-ai-go
@@ -61,7 +63,7 @@ be-fmt:
 be-lint:
 	@command -v golangci-lint >/dev/null 2>&1 || \
 		(echo "安装 golangci-lint: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest" && exit 1)
-	golangci-lint run ./... --timeout=5m
+	golangci-lint run --timeout=5m ./...
 
 be-test:
 	go test -v -race -coverprofile=coverage.out ./... -timeout=5m
@@ -190,10 +192,23 @@ agent-instructions-check:
 	/bin/bash scripts/quality/generate-agent-instructions-test.sh
 	/bin/bash scripts/quality/generate-agent-instructions.sh --check
 
+code-quality:
+	bash scripts/quality/code-quality-ratchet-test.sh
+	bash scripts/quality/code-quality-ratchet.sh --all
+
+code-quality-baseline:
+	bash scripts/quality/code-quality-ratchet.sh --refresh-baseline
+
 # ─── 风险回归护栏：本地与 CI 复用同一路由和确定性检查 ─────────────────────
 risk-guardrails:
+	bash scripts/quality/code-quality-ratchet-test.sh
 	bash scripts/quality/risk-regression-guard-test.sh
 	bash scripts/quality/risk-regression-guard.sh --all
+
+monitoring-config-test:
+	bash scripts/quality/monitoring-config-test-test.sh
+	bash scripts/quality/monitoring-config-test.sh
+	bash scripts/quality/remote-health-monitor-workflow-test.sh
 
 E2E_REQUIRED_MODE ?= short
 E2E_REQUIRED_PROFILE ?=

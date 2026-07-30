@@ -1,0 +1,1007 @@
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: stratum-service-overview
+      namespace: monitoring
+      labels:
+        grafana_dashboard: "1"
+        app.kubernetes.io/part-of: stratum-monitoring
+    data:
+      stratum-service-overview.json: |-
+        {
+          "annotations": {
+            "list": []
+          },
+          "editable": false,
+          "graphTooltip": 1,
+          "links": [
+            {
+              "title": "远端监控运行手册",
+              "type": "link",
+              "url": "/docs/operations/remote-monitoring-runbook.md"
+            }
+          ],
+          "panels": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "mappings": [
+                    {
+                      "options": {
+                        "0": {
+                          "color": "red",
+                          "text": "失败"
+                        },
+                        "1": {
+                          "color": "green",
+                          "text": "正常"
+                        }
+                      },
+                      "type": "value"
+                    }
+                  ],
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "red",
+                        "value": null
+                      },
+                      {
+                        "color": "green",
+                        "value": 1
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 5,
+                "w": 6,
+                "x": 0,
+                "y": 0
+              },
+              "id": 1,
+              "options": {
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "center",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "textMode": "value_and_name"
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "probe_success{service=\"stratum\",environment=\"remote-test\",target=\"stratum-public-health\"}",
+                  "legendFormat": "公网探测",
+                  "refId": "A"
+                }
+              ],
+              "title": "1. 公网探测",
+              "type": "stat"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "decimals": 2,
+                  "unit": "reqps"
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 5,
+                "w": 6,
+                "x": 6,
+                "y": 0
+              },
+              "id": 2,
+              "options": {
+                "colorMode": "value",
+                "graphMode": "area",
+                "justifyMode": "center",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "textMode": "value_and_name"
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "stratum:http_requests:increase5m{service=\"stratum\",environment=\"remote-test\"} / 300",
+                  "legendFormat": "请求速率",
+                  "refId": "A"
+                }
+              ],
+              "title": "2. HTTP 请求速率",
+              "type": "stat"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "decimals": 0,
+                  "unit": "short"
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 5,
+                "w": 6,
+                "x": 12,
+                "y": 0
+              },
+              "id": 3,
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "justifyMode": "center",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "textMode": "value_and_name"
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "kube_deployment_status_replicas_ready{namespace=\"stratum\",deployment=~\"stratum|stratum-frontend\"}",
+                  "legendFormat": "{{deployment}}",
+                  "refId": "A"
+                }
+              ],
+              "title": "3. 就绪副本",
+              "type": "stat"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      },
+                      {
+                        "color": "red",
+                        "value": 1
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 5,
+                "w": 6,
+                "x": 18,
+                "y": 0
+              },
+              "id": 4,
+              "options": {
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "center",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "textMode": "value_and_name"
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "count(ALERTS{service=\"stratum\",environment=\"remote-test\",alertstate=\"firing\"})",
+                  "legendFormat": "活动告警",
+                  "refId": "A"
+                }
+              ],
+              "title": "4. 活动告警",
+              "type": "stat"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "min": 0,
+                  "unit": "percentunit"
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 5
+              },
+              "id": 5,
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "single"
+                }
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "stratum:http_5xx_ratio:ratio5m{service=\"stratum\",environment=\"remote-test\"}",
+                  "legendFormat": "5xx 比例",
+                  "refId": "A"
+                }
+              ],
+              "title": "HTTP 5xx 比例",
+              "type": "timeseries"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "min": 0,
+                  "unit": "s"
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 5
+              },
+              "id": 6,
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "single"
+                }
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "stratum:http_request_duration_seconds:p95_5m{service=\"stratum\",environment=\"remote-test\"}",
+                  "legendFormat": "P95",
+                  "refId": "A"
+                }
+              ],
+              "title": "HTTP P95 延迟",
+              "type": "timeseries"
+            }
+          ],
+          "refresh": "30s",
+          "schemaVersion": 39,
+          "tags": [
+            "stratum",
+            "remote-test"
+          ],
+          "templating": {
+            "list": []
+          },
+          "time": {
+            "from": "now-6h",
+            "to": "now"
+          },
+          "timezone": "browser",
+          "title": "Stratum 远端服务总览",
+          "uid": "stratum-remote-overview",
+          "version": 1
+        }
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: stratum-http
+      namespace: monitoring
+      labels:
+        grafana_dashboard: "1"
+        app.kubernetes.io/part-of: stratum-monitoring
+    data:
+      stratum-http.json: |-
+        {
+          "annotations": {
+            "list": []
+          },
+          "editable": false,
+          "graphTooltip": 1,
+          "links": [
+            {
+              "title": "HTTP 告警运行手册",
+              "type": "link",
+              "url": "/docs/operations/remote-monitoring-runbook.md#http-alerts"
+            }
+          ],
+          "panels": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "min": 0,
+                  "unit": "reqps"
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 0,
+                "y": 0
+              },
+              "id": 1,
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "single"
+                }
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "stratum:http_requests_by_path:increase5m{service=\"stratum\",environment=\"remote-test\"} / 300",
+                  "legendFormat": "{{path}}",
+                  "refId": "A"
+                }
+              ],
+              "title": "请求速率",
+              "type": "timeseries"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "min": 0,
+                  "unit": "percentunit"
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 8,
+                "y": 0
+              },
+              "id": 2,
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "single"
+                }
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "stratum:http_5xx_ratio_by_path:ratio5m{service=\"stratum\",environment=\"remote-test\"}",
+                  "legendFormat": "{{path}}",
+                  "refId": "A"
+                }
+              ],
+              "title": "5xx 比例",
+              "type": "timeseries"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "min": 0,
+                  "unit": "s"
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 16,
+                "y": 0
+              },
+              "id": 3,
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "single"
+                }
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "stratum:http_request_duration_seconds_by_path:p95_5m{service=\"stratum\",environment=\"remote-test\"}",
+                  "legendFormat": "{{path}}",
+                  "refId": "A"
+                }
+              ],
+              "title": "P95 延迟",
+              "type": "timeseries"
+            },
+            {
+              "gridPos": {
+                "h": 4,
+                "w": 24,
+                "x": 0,
+                "y": 8
+              },
+              "id": 4,
+              "options": {
+                "content": "该视图只使用经过规则测试的路由模板聚合指标。路径来自 Gin 的 `FullPath()`，例如 `/agents/:id`；未匹配请求和原始动态标识不会进入看板。",
+                "mode": "markdown"
+              },
+              "title": "查询边界",
+              "type": "text"
+            }
+          ],
+          "refresh": "30s",
+          "schemaVersion": 39,
+          "tags": [
+            "stratum",
+            "remote-test"
+          ],
+          "templating": {
+            "list": []
+          },
+          "time": {
+            "from": "now-6h",
+            "to": "now"
+          },
+          "timezone": "browser",
+          "title": "Stratum HTTP 诊断",
+          "uid": "stratum-remote-http",
+          "version": 1
+        }
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: stratum-resources
+      namespace: monitoring
+      labels:
+        grafana_dashboard: "1"
+        app.kubernetes.io/part-of: stratum-monitoring
+    data:
+      stratum-resources.json: |-
+        {
+          "annotations": {
+            "list": []
+          },
+          "editable": false,
+          "graphTooltip": 1,
+          "links": [
+            {
+              "title": "资源告警运行手册",
+              "type": "link",
+              "url": "/docs/operations/remote-monitoring-runbook.md#resource-alerts"
+            }
+          ],
+          "panels": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "max": 1,
+                  "min": 0,
+                  "unit": "percentunit"
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 0
+              },
+              "id": 1,
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "multi"
+                }
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "(1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))) * on (instance) group_left (node) label_replace(node_uname_info{job=\"node-exporter\"}, \"node\", \"$1\", \"nodename\", \"(.+)\") and on (node) max by (node) (stratum:kube_pod:placement{namespace=\"stratum\"})",
+                  "legendFormat": "{{node}}",
+                  "refId": "A"
+                }
+              ],
+              "title": "Stratum 节点 CPU",
+              "type": "timeseries"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "max": 1,
+                  "min": 0,
+                  "unit": "percentunit"
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 0
+              },
+              "id": 2,
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "multi"
+                }
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on (instance) group_left (node) label_replace(node_uname_info{job=\"node-exporter\"}, \"node\", \"$1\", \"nodename\", \"(.+)\") and on (node) max by (node) (stratum:kube_pod:placement{namespace=\"stratum\"})",
+                  "legendFormat": "{{node}}",
+                  "refId": "A"
+                }
+              ],
+              "title": "Stratum 节点内存",
+              "type": "timeseries"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "min": 0,
+                  "unit": "bytes"
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 8
+              },
+              "id": 3,
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "multi"
+                }
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "sum by (pod, container) (container_memory_working_set_bytes{namespace=\"stratum\",container!=\"\",container!=\"POD\"})",
+                  "legendFormat": "{{pod}} / {{container}}",
+                  "refId": "A"
+                }
+              ],
+              "title": "容器工作集内存",
+              "type": "timeseries"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "max": 1,
+                  "min": 0,
+                  "unit": "percentunit"
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 8
+              },
+              "id": 4,
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "multi"
+                }
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "sum by (pod, container) (rate(container_cpu_cfs_throttled_periods_total{namespace=\"stratum\",container!=\"\",container!=\"POD\"}[5m])) / sum by (pod, container) (rate(container_cpu_cfs_periods_total{namespace=\"stratum\",container!=\"\",container!=\"POD\"}[5m]))",
+                  "legendFormat": "{{pod}} / {{container}}",
+                  "refId": "A"
+                }
+              ],
+              "title": "容器 CPU 限流比例",
+              "type": "timeseries"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "max": 1,
+                  "min": 0,
+                  "unit": "percentunit"
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 8,
+                "w": 24,
+                "x": 0,
+                "y": 16
+              },
+              "id": 5,
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom"
+                },
+                "tooltip": {
+                  "mode": "multi"
+                }
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "kubelet_volume_stats_used_bytes{namespace=\"stratum\"} / kubelet_volume_stats_capacity_bytes{namespace=\"stratum\"}",
+                  "legendFormat": "{{persistentvolumeclaim}}",
+                  "refId": "A"
+                }
+              ],
+              "title": "PVC 使用率",
+              "type": "timeseries"
+            }
+          ],
+          "refresh": "30s",
+          "schemaVersion": 39,
+          "tags": [
+            "stratum",
+            "remote-test"
+          ],
+          "templating": {
+            "list": []
+          },
+          "time": {
+            "from": "now-6h",
+            "to": "now"
+          },
+          "timezone": "browser",
+          "title": "Stratum 资源诊断",
+          "uid": "stratum-remote-resources",
+          "version": 1
+        }
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: stratum-dependencies
+      namespace: monitoring
+      labels:
+        grafana_dashboard: "1"
+        app.kubernetes.io/part-of: stratum-monitoring
+    data:
+      stratum-dependencies.json: |-
+        {
+          "annotations": {
+            "list": []
+          },
+          "editable": false,
+          "graphTooltip": 1,
+          "links": [
+            {
+              "title": "依赖告警运行手册",
+              "type": "link",
+              "url": "/docs/operations/remote-monitoring-runbook.md#dependency-target-missing"
+            }
+          ],
+          "panels": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "mappings": [
+                    {
+                      "options": {
+                        "0": {
+                          "color": "red",
+                          "text": "不可抓取"
+                        },
+                        "1": {
+                          "color": "green",
+                          "text": "正常"
+                        }
+                      },
+                      "type": "value"
+                    }
+                  ]
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 6,
+                "w": 12,
+                "x": 0,
+                "y": 0
+              },
+              "id": 1,
+              "options": {
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "auto",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "textMode": "value_and_name"
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "up{namespace=\"stratum\",service=\"stratum-etcd-metrics\",endpoint=\"metrics\"}",
+                  "legendFormat": "etcd",
+                  "refId": "A"
+                },
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "up{namespace=\"stratum\",service=\"stratum-milvus-metrics\",endpoint=\"metrics\"}",
+                  "legendFormat": "Milvus",
+                  "refId": "B"
+                }
+              ],
+              "title": "已验证业务依赖",
+              "type": "stat"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "mappings": [
+                    {
+                      "options": {
+                        "0": {
+                          "color": "red",
+                          "text": "不可抓取"
+                        },
+                        "1": {
+                          "color": "green",
+                          "text": "正常"
+                        }
+                      },
+                      "type": "value"
+                    }
+                  ]
+                },
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 6,
+                "w": 12,
+                "x": 12,
+                "y": 0
+              },
+              "id": 2,
+              "options": {
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "auto",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "textMode": "value_and_name"
+              },
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "up{namespace=\"monitoring\",service=\"stratum-feishu-alert-adapter\",endpoint=\"http\"}",
+                  "legendFormat": "飞书适配器",
+                  "refId": "A"
+                },
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "up{namespace=\"monitoring\",service=\"kps-kube-prometheus-stack-prometheus\",endpoint=\"http-web\"}",
+                  "legendFormat": "Prometheus",
+                  "refId": "B"
+                },
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "up{namespace=\"monitoring\",service=\"kps-kube-prometheus-stack-alertmanager\",endpoint=\"http-web\"}",
+                  "legendFormat": "Alertmanager",
+                  "refId": "C"
+                },
+                {
+                  "datasource": {
+                    "type": "prometheus",
+                    "uid": "prometheus"
+                  },
+                  "expr": "up{namespace=\"monitoring\",service=\"stratum-blackbox-prometheus-blackbox-exporter\",endpoint=\"http\"}",
+                  "legendFormat": "Blackbox Exporter",
+                  "refId": "D"
+                }
+              ],
+              "title": "监控链路",
+              "type": "stat"
+            },
+            {
+              "gridPos": {
+                "h": 6,
+                "w": 24,
+                "x": 0,
+                "y": 6
+              },
+              "id": 3,
+              "options": {
+                "content": "**未覆盖 / 不支持**\n\nPostgreSQL、Redis、NATS 与 MinIO 尚无经 Task 7 验证的抓取目标。本看板不推测这些依赖的健康状态；请按运行手册使用应用告警与受控诊断命令排查。",
+                "mode": "markdown"
+              },
+              "title": "覆盖边界",
+              "type": "text"
+            }
+          ],
+          "refresh": "30s",
+          "schemaVersion": 39,
+          "tags": [
+            "stratum",
+            "remote-test"
+          ],
+          "templating": {
+            "list": []
+          },
+          "time": {
+            "from": "now-6h",
+            "to": "now"
+          },
+          "timezone": "browser",
+          "title": "Stratum 依赖与监控链路",
+          "uid": "stratum-remote-dependencies",
+          "version": 1
+        }

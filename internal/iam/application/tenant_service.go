@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/internal/iam/domain"
 	"github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
-	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 )
 
 // UpdateSettingsInput carries the application-level shape of PATCH /tenant/settings.
@@ -29,27 +27,16 @@ var (
 	ErrForbiddenOwnerRole    = errors.New("iam: cannot change owner's role")
 	ErrForbiddenRemoveOwner  = errors.New("iam: cannot remove owner")
 	ErrForbiddenAdminRemove  = errors.New("iam: admin cannot remove another admin")
-	ErrEmbedModelAlreadySet  = errors.New("iam: embed_model already set and cannot be changed")
 	ErrInvalidSettings       = errors.New("iam: invalid settings")
 )
 
-// TenantGatewayCache is the minimal cache invalidation interface needed by
-// TenantService. Satisfied by *llmgateway.TenantGatewayCache without
-// importing the infrastructure package directly.
-type TenantGatewayCache interface {
-	Invalidate(tenantID string)
-}
-
-// TenantService orchestrates tenant member, settings, and embed-model operations.
+// TenantService orchestrates tenant member and settings operations.
 type TenantService struct {
-	repo   port.TenantRepo
-	logger *zap.Logger
-	aesKey [32]byte
-	cache  TenantGatewayCache
+	repo port.TenantRepo
 }
 
-func NewTenantService(repo port.TenantRepo, logger *zap.Logger, aesKey [32]byte, cache TenantGatewayCache) *TenantService {
-	return &TenantService{repo: repo, logger: logger, aesKey: aesKey, cache: cache}
+func NewTenantService(repo port.TenantRepo, _ *zap.Logger) *TenantService {
+	return &TenantService{repo: repo}
 }
 
 // ListMembers returns a paginated list of members; page/pageSize are normalized.
@@ -114,7 +101,7 @@ func (s *TenantService) RemoveMember(ctx context.Context, tenantID, callerID, ca
 	return s.repo.DeleteMember(ctx, tenantID, targetUserID)
 }
 
-// GetSettings reads tenant settings, decrypts and masks llm_api_keys.
+// GetSettings reads tenant settings. Legacy model credentials are never exposed.
 func (s *TenantService) GetSettings(ctx context.Context, tenantID string) (string, bool, map[string]interface{}, error) {
 	name, isDefault, raw, err := s.repo.GetTenantSettings(ctx, tenantID)
 	if err != nil {
@@ -126,26 +113,11 @@ func (s *TenantService) GetSettings(ctx context.Context, tenantID string) (strin
 			return "", false, nil, fmt.Errorf("tenant: settings unmarshal: %w", err)
 		}
 	}
-	if apiKeys, ok := settings["llm_api_keys"].(map[string]interface{}); ok {
-		masked := make(map[string]interface{}, len(apiKeys))
-		for provider, val := range apiKeys {
-			if str, ok := val.(string); ok && str != "" {
-				decrypted, err := pkgcrypto.Decrypt(s.aesKey, str)
-				if err == nil {
-					masked[provider] = maskAPIKey(decrypted)
-				} else {
-					masked[provider] = ""
-				}
-			} else {
-				masked[provider] = ""
-			}
-		}
-		settings["llm_api_keys"] = masked
-	}
+	delete(settings, "llm_api_keys")
 	return name, isDefault, settings, nil
 }
 
-// UpdateSettings merges tenant settings, encrypting any llm_api_keys.
+// UpdateSettings merges ordinary tenant settings. Model credentials are managed by llmgateway providers.
 // Caller-side role enforcement is required (callerRole must be admin or owner).
 func (s *TenantService) UpdateSettings(ctx context.Context, tenantID, callerRole string, req UpdateSettingsInput) error {
 	if callerRole != "admin" && callerRole != "owner" {
@@ -161,6 +133,9 @@ func (s *TenantService) UpdateSettings(ctx context.Context, tenantID, callerRole
 	if req.Settings == nil {
 		return nil
 	}
+	if _, legacyModelConfig := req.Settings["llm_api_keys"]; legacyModelConfig {
+		return ErrInvalidSettings
+	}
 
 	_, _, existingJSON, _ := s.repo.GetTenantSettings(ctx, tenantID)
 	merged := map[string]interface{}{}
@@ -168,40 +143,10 @@ func (s *TenantService) UpdateSettings(ctx context.Context, tenantID, callerRole
 		_ = json.Unmarshal(existingJSON, &merged)
 	}
 
-	if apiKeys, ok := req.Settings["llm_api_keys"].(map[string]interface{}); ok {
-		encrypted := make(map[string]interface{}, len(apiKeys))
-		for provider, val := range apiKeys {
-			plaintext, ok := val.(string)
-			if !ok || plaintext == "" {
-				continue
-			}
-			// skip placeholder values sent back by the frontend (all bullet chars)
-			if strings.Trim(plaintext, "•") == "" {
-				continue
-			}
-			enc, err := pkgcrypto.Encrypt(s.aesKey, plaintext)
-			if err != nil {
-				s.logger.Error("encrypt api key failed", zap.String("provider", provider), zap.Error(err))
-				return fmt.Errorf("tenant: encrypt api key: %w", err)
-			}
-			encrypted[provider] = enc
-		}
-		existing, _ := merged["llm_api_keys"].(map[string]interface{})
-		if existing == nil {
-			existing = map[string]interface{}{}
-		}
-		for k, v := range encrypted {
-			existing[k] = v
-		}
-		merged["llm_api_keys"] = existing
-	}
-
 	for k, v := range req.Settings {
-		if k == "llm_api_keys" {
-			continue
-		}
 		merged[k] = v
 	}
+	delete(merged, "llm_api_keys")
 
 	settingsJSON, err := json.Marshal(merged)
 	if err != nil {
@@ -209,9 +154,6 @@ func (s *TenantService) UpdateSettings(ctx context.Context, tenantID, callerRole
 	}
 	if err := s.repo.UpdateTenantSettings(ctx, tenantID, settingsJSON); err != nil {
 		return err
-	}
-	if s.cache != nil {
-		s.cache.Invalidate(tenantID)
 	}
 	return nil
 }
@@ -224,44 +166,4 @@ func (s *TenantService) ListUserTenants(ctx context.Context, userID string) ([]d
 // GetMemberRole returns the role of a tenant member; ErrMemberNotFound if absent.
 func (s *TenantService) GetMemberRole(ctx context.Context, tenantID, userID string) (string, error) {
 	return s.repo.GetMemberRole(ctx, tenantID, userID)
-}
-
-// SetEmbedModel performs a set-once write of the embed_model setting.
-func (s *TenantService) SetEmbedModel(ctx context.Context, tenantID, callerRole, embedModel string) error {
-	if callerRole != "admin" && callerRole != "owner" {
-		return ErrForbiddenAdminOrOwner
-	}
-	_, _, existingJSON, _ := s.repo.GetTenantSettings(ctx, tenantID)
-	existing := map[string]interface{}{}
-	if len(existingJSON) > 0 {
-		_ = json.Unmarshal(existingJSON, &existing)
-	}
-	if v, ok := existing["embed_model"]; ok && v != "" {
-		return ErrEmbedModelAlreadySet
-	}
-	existing["embed_model"] = embedModel
-	merged, err := json.Marshal(existing)
-	if err != nil {
-		return fmt.Errorf("tenant: marshal embed model: %w", err)
-	}
-	if err := s.repo.UpdateTenantSettings(ctx, tenantID, merged); err != nil {
-		return err
-	}
-	if s.cache != nil {
-		s.cache.Invalidate(tenantID)
-	}
-	return nil
-}
-
-// maskAPIKey shows the first 6 chars then 8 bullets — enough to identify the key without exposing it.
-func maskAPIKey(key string) string {
-	if key == "" {
-		return ""
-	}
-	runes := []rune(key)
-	show := 6
-	if len(runes) <= show {
-		show = len(runes) / 2
-	}
-	return string(runes[:show]) + strings.Repeat("•", 8)
 }

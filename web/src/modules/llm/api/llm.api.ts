@@ -1,5 +1,6 @@
-import api from '@/services/client';
 import type { CreateProviderInput, Model, Provider, UpdateModelInput } from '../model/llm';
+
+import api from '@/services/client';
 
 interface ProviderListResponse {
   providers: Provider[];
@@ -7,6 +8,11 @@ interface ProviderListResponse {
 
 interface ModelListResponse {
   models: Model[];
+}
+
+export interface ModelCatalogue {
+  chatModels: string[];
+  embeddingModels: string[];
 }
 
 interface DiscoverResponse {
@@ -23,6 +29,14 @@ interface MessageResponse {
 }
 
 export const llmApi = {
+  getCatalogue: async (): Promise<ModelCatalogue> => {
+    const res = await api.get<{ models?: string[]; embedding_models?: string[] }>('/models');
+    return {
+      chatModels: res.data.models ?? [],
+      embeddingModels: res.data.embedding_models ?? [],
+    };
+  },
+
   // Providers
   listProviders: async (): Promise<Provider[]> => {
     const res = await api.get<ProviderListResponse>('/admin/providers');

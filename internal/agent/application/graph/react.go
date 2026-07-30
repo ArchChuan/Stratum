@@ -30,7 +30,6 @@ type ReActState struct {
 	TenantID                   string
 	TraceID                    string
 	ConversationID             string
-	LLMAPIKeys                 map[string]string
 	Model                      string
 	AvailableTools             []port.ToolDefinition
 	SkillCatalog               map[string]port.SkillActivation
@@ -199,7 +198,6 @@ func makeLLMNode(capGW port.CapabilityGateway, ledger TokenRecorder, logger *zap
 				TraceID:     s.TraceID,
 				TenantID:    s.TenantID,
 				Type:        port.CapLLM,
-				LLMAPIKeys:  s.LLMAPIKeys,
 				TokenStream: s.OnToken,
 				LLM: &port.LLMCapRequest{
 					Model:    s.Model,

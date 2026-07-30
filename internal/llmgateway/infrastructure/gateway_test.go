@@ -121,14 +121,15 @@ func TestGatewayOTelMarksFailureAsError(t *testing.T) {
 
 	modelRepo := &mockModelRepo{
 		models: []domain.Model{
-			{ID: "m1", ProviderID: "p1", Name: "qwen-turbo", Enabled: true},
+			{ID: "m1", ProviderID: "p1", Name: "qwen-turbo", Enabled: true,
+				Capabilities: []domain.ModelCapability{domain.CapChat}},
 		},
 	}
 	providerRepo := &mockProviderRepo{
 		providers: map[string]*domain.Provider{
 			"p1": {
 				ID: "p1", Name: "Test Qwen", Kind: domain.ProviderOpenAICompat,
-				BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "qwen-turbo",
+				BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "qwen-turbo", Enabled: true,
 			},
 		},
 	}
@@ -157,14 +158,15 @@ func TestGatewayLLMLogsExcludePromptToolAndResponsePayloads(t *testing.T) {
 
 	modelRepo := &mockModelRepo{
 		models: []domain.Model{
-			{ID: "m1", ProviderID: "p1", Name: "qwen-turbo", Enabled: true},
+			{ID: "m1", ProviderID: "p1", Name: "qwen-turbo", Enabled: true,
+				Capabilities: []domain.ModelCapability{domain.CapChat}},
 		},
 	}
 	providerRepo := &mockProviderRepo{
 		providers: map[string]*domain.Provider{
 			"p1": {
 				ID: "p1", Name: "Test Qwen", Kind: domain.ProviderOpenAICompat,
-				BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "qwen-turbo",
+				BaseURL: "https://api.test", APIKey: "sk-test", DefaultModel: "qwen-turbo", Enabled: true,
 			},
 		},
 	}

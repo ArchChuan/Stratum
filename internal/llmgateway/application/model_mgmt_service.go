@@ -23,12 +23,22 @@ type UpdateModelInput struct {
 // ModelMgmtService wraps model CRUD operations that are initiated by
 // tenant administrators (as opposed to auto-discovery or runtime resolution).
 type ModelMgmtService struct {
-	repo port.ModelRepository
+	repo        port.ModelRepository
+	invalidator ModelCacheInvalidator
+}
+
+// ModelCacheInvalidator evicts tenant-scoped runtime model resolutions after management changes.
+type ModelCacheInvalidator interface {
+	Invalidate(tenantID string)
 }
 
 // NewModelMgmtService returns a ModelMgmtService wired with the given repo.
-func NewModelMgmtService(repo port.ModelRepository) *ModelMgmtService {
-	return &ModelMgmtService{repo: repo}
+func NewModelMgmtService(repo port.ModelRepository, invalidators ...ModelCacheInvalidator) *ModelMgmtService {
+	service := &ModelMgmtService{repo: repo}
+	if len(invalidators) > 0 {
+		service.invalidator = invalidators[0]
+	}
+	return service
 }
 
 // List returns models matching the given filter.
@@ -57,15 +67,30 @@ func (s *ModelMgmtService) Update(ctx context.Context, tenantID string, input Up
 	if err := s.repo.Update(ctx, tenantID, m); err != nil {
 		return nil, fmt.Errorf("model mgmt: update: %w", err)
 	}
+	s.invalidate(tenantID)
 	return m, nil
 }
 
 // Toggle enables or disables a model.
 func (s *ModelMgmtService) Toggle(ctx context.Context, tenantID, id string, enabled bool) error {
-	return s.repo.Toggle(ctx, tenantID, id, enabled)
+	if err := s.repo.Toggle(ctx, tenantID, id, enabled); err != nil {
+		return err
+	}
+	s.invalidate(tenantID)
+	return nil
 }
 
 // Delete removes a model by ID.
 func (s *ModelMgmtService) Delete(ctx context.Context, tenantID, id string) error {
-	return s.repo.Delete(ctx, tenantID, id)
+	if err := s.repo.Delete(ctx, tenantID, id); err != nil {
+		return err
+	}
+	s.invalidate(tenantID)
+	return nil
+}
+
+func (s *ModelMgmtService) invalidate(tenantID string) {
+	if s.invalidator != nil {
+		s.invalidator.Invalidate(tenantID)
+	}
 }

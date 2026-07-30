@@ -52,6 +52,12 @@ func (f completionFailureCheckpoint) GetLatest(context.Context, string, string) 
 func (f completionFailureCheckpoint) MarkCompleted(context.Context, string, string) error {
 	return f.err
 }
+func (f completionFailureCheckpoint) UpdateStatus(context.Context, string, string, string) error {
+	return nil
+}
+func (f completionFailureCheckpoint) DeleteExpired(context.Context, string) (int64, error) {
+	return 0, nil
+}
 
 func TestCompleteApprovalResumePropagatesCheckpointPersistenceFailure(t *testing.T) {
 	persistErr := errors.New("checkpoint unavailable")
@@ -65,8 +71,8 @@ func TestCompleteApprovalResumePropagatesCheckpointPersistenceFailure(t *testing
 
 type tenantResolverFake struct{ gateway port.CapabilityGateway }
 
-func (f tenantResolverFake) Resolve(context.Context, string) (port.CapabilityGateway, map[string]string, bool) {
-	return f.gateway, nil, true
+func (f tenantResolverFake) Resolve(context.Context, string) (port.CapabilityGateway, bool) {
+	return f.gateway, true
 }
 
 func (tenantResolverFake) InjectCompleter(ctx context.Context, _ string) context.Context { return ctx }

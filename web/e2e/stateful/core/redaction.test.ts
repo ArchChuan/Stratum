@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createActorContexts, restoreActorSession } from './actors';
+import { createActorContexts, restoreActorSession, withRestoredContextCookies } from './actors';
 import {
   assertSafeDatabaseURL,
-  copyConfiguredLLMCredentials,
+  configureManagedModels,
   deleteGeneratedActors,
   deleteGeneratedOAuthUser,
   requireUUID,
@@ -142,6 +142,24 @@ describe('stateful E2E security boundaries', () => {
     expect(actor.accessToken).toBe('replacement-access-token');
   });
 
+  it('restores actor cookies after a temporary identity session succeeds or fails', async () => {
+    const originalCookies = [{ name: 'refresh_token', value: 'guest-cookie' }];
+    const cookies = vi.fn().mockResolvedValue(originalCookies);
+    const clearCookies = vi.fn().mockResolvedValue(undefined);
+    const addCookies = vi.fn().mockResolvedValue(undefined);
+    const context = { cookies, clearCookies, addCookies };
+
+    await expect(withRestoredContextCookies(context, async () => 'completed')).resolves.toBe('completed');
+    await expect(withRestoredContextCookies(context, async () => {
+      throw new Error('journey failed');
+    })).rejects.toThrow('journey failed');
+
+    expect(cookies).toHaveBeenCalledTimes(2);
+    expect(clearCookies).toHaveBeenCalledTimes(2);
+    expect(addCookies).toHaveBeenNthCalledWith(1, originalCookies);
+    expect(addCookies).toHaveBeenNthCalledWith(2, originalCookies);
+  });
+
   it('cleans up only the exact generated user UUIDs', async () => {
     const query = vi.fn()
       .mockResolvedValueOnce(undefined)
@@ -199,34 +217,30 @@ describe('stateful E2E security boundaries', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it('configures encrypted legacy credentials and the tenant model registry', async () => {
+  it('configures the tenant model registry without legacy tenant settings', async () => {
     const tenantID = '123e4567-e89b-42d3-a456-426614174000';
     const query = vi.fn()
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({ rowCount: 1 })
       .mockResolvedValueOnce({ rowCount: 1 })
       .mockResolvedValueOnce({ rowCount: 4 })
       .mockResolvedValueOnce({});
     const release = vi.fn();
     const pool = { connect: vi.fn().mockResolvedValue({ query, release }) };
 
-    await copyConfiguredLLMCredentials(pool, tenantID, 'test-private-key');
+    await configureManagedModels(pool, tenantID);
 
     expect(query).toHaveBeenNthCalledWith(1, 'BEGIN');
     expect(query).toHaveBeenNthCalledWith(2, "SELECT set_config('search_path', $1, true)", [
       `tenant_${tenantID},public`,
     ]);
-    expect(query).toHaveBeenNthCalledWith(3, expect.stringContaining('UPDATE public.tenants'), [
-      expect.objectContaining({ qwen: expect.any(String) }), tenantID,
-    ]);
-    expect(query).toHaveBeenNthCalledWith(4, expect.stringContaining('INSERT INTO providers'), [
+    expect(query).toHaveBeenNthCalledWith(3, expect.stringContaining('INSERT INTO providers'), [
       'stateful-qwen', tenantID, 'http://127.0.0.1:19091/v1', 'stateful-local-provider-key',
     ]);
-    expect(query).toHaveBeenNthCalledWith(5, expect.stringContaining('INSERT INTO models'), [
+    expect(query).toHaveBeenNthCalledWith(4, expect.stringContaining('INSERT INTO models'), [
       tenantID, 'stateful-qwen',
     ]);
-    expect(query).toHaveBeenNthCalledWith(6, 'COMMIT');
+    expect(query).toHaveBeenNthCalledWith(5, 'COMMIT');
     expect(release).toHaveBeenCalledOnce();
   });
 

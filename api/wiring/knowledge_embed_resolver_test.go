@@ -5,72 +5,99 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
-	"github.com/jackc/pgx/v5"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
-// mockModelRepo implements port.ModelRepository for tests.
-type mockModelRepo struct{}
+type knowledgeModelRepo struct {
+	models []domain.Model
+}
 
-func (m *mockModelRepo) List(_ context.Context, _ string, _ port.ModelFilter) ([]domain.Model, error) {
+func (r *knowledgeModelRepo) List(_ context.Context, _ string, filter port.ModelFilter) ([]domain.Model, error) {
+	models := make([]domain.Model, 0, len(r.models))
+	for _, model := range r.models {
+		if filter.Enabled != nil && model.Enabled != *filter.Enabled {
+			continue
+		}
+		if filter.Capability != "" && !modelHasCapabilityForKnowledge(model, filter.Capability) {
+			continue
+		}
+		models = append(models, model)
+	}
+	return models, nil
+}
+func (r *knowledgeModelRepo) Create(context.Context, string, *domain.Model) error { return nil }
+func (r *knowledgeModelRepo) Get(context.Context, string, string) (*domain.Model, error) {
 	return nil, nil
 }
-func (m *mockModelRepo) Create(_ context.Context, _ string, _ *domain.Model) error { return nil }
-func (m *mockModelRepo) Get(_ context.Context, _, _ string) (*domain.Model, error) { return nil, nil }
-func (m *mockModelRepo) Update(_ context.Context, _ string, _ *domain.Model) error { return nil }
-func (m *mockModelRepo) UpsertDiscovered(_ context.Context, _, _ string, _ []domain.Model) ([]domain.Model, error) {
+func (r *knowledgeModelRepo) Update(context.Context, string, *domain.Model) error { return nil }
+func (r *knowledgeModelRepo) UpsertDiscovered(
+	context.Context, string, string, []domain.Model,
+) ([]domain.Model, error) {
 	return nil, nil
 }
-func (m *mockModelRepo) Delete(_ context.Context, _, _ string) error         { return nil }
-func (m *mockModelRepo) Toggle(_ context.Context, _, _ string, _ bool) error { return nil }
+func (r *knowledgeModelRepo) Delete(context.Context, string, string) error       { return nil }
+func (r *knowledgeModelRepo) Toggle(context.Context, string, string, bool) error { return nil }
 
-// mockProviderRepo implements port.ProviderRepository for tests.
-type mockProviderRepo struct{}
-
-func (m *mockProviderRepo) Create(_ context.Context, _ string, _ *domain.Provider) error { return nil }
-func (m *mockProviderRepo) Get(_ context.Context, _, _ string) (*domain.Provider, error) {
-	return &domain.Provider{
-		Kind: domain.ProviderOpenAICompat,
-	}, nil
+func modelHasCapabilityForKnowledge(model domain.Model, capability domain.ModelCapability) bool {
+	for _, candidate := range model.Capabilities {
+		if candidate == capability {
+			return true
+		}
+	}
+	return false
 }
-func (m *mockProviderRepo) Update(_ context.Context, _ string, _ *domain.Provider) error { return nil }
-func (m *mockProviderRepo) List(_ context.Context, _ string) ([]domain.Provider, error) {
-	return nil, nil
-}
-func (m *mockProviderRepo) Delete(_ context.Context, _, _ string) error { return nil }
 
-func newTestRegistry() *llmgateway.ModelRegistry {
-	chatProtos := map[domain.ProviderKind]llmgateway.ChatProtocol{}
-	embedProtos := map[domain.ProviderKind]llmgateway.EmbedProtocol{}
+type knowledgeProviderRepo struct {
+	provider domain.Provider
+}
+
+func (r *knowledgeProviderRepo) Create(context.Context, string, *domain.Provider) error { return nil }
+func (r *knowledgeProviderRepo) Get(context.Context, string, string) (*domain.Provider, error) {
+	provider := r.provider
+	return &provider, nil
+}
+func (r *knowledgeProviderRepo) Update(context.Context, string, *domain.Provider) error { return nil }
+func (r *knowledgeProviderRepo) List(context.Context, string) ([]domain.Provider, error) {
+	return []domain.Provider{r.provider}, nil
+}
+func (r *knowledgeProviderRepo) Delete(context.Context, string, string) error { return nil }
+
+func newKnowledgeRegistry(models []domain.Model) *llmgateway.ModelRegistry {
 	return llmgateway.NewModelRegistry(
-		&mockModelRepo{},
-		&mockProviderRepo{},
-		chatProtos,
-		embedProtos,
+		&knowledgeModelRepo{models: models},
+		&knowledgeProviderRepo{provider: domain.Provider{
+			ID: "provider-1", Kind: domain.ProviderOpenAICompat, Enabled: true,
+			BaseURL: "https://example.test/v1", APIKey: "test-key",
+		}},
+		nil,
+		map[domain.ProviderKind]llmgateway.EmbedProtocol{domain.ProviderOpenAICompat: nil},
 		time.Minute,
 	)
 }
 
-func TestKnowledgeEmbedResolverBuilds(t *testing.T) {
-	t.Skip("TODO: adapt for ModelRegistry-based resolver with mock provider config")
+func TestKnowledgeEmbedResolversUseManagedModels(t *testing.T) {
+	registry := newKnowledgeRegistry([]domain.Model{{
+		ID: "embedding-1", ProviderID: "provider-1", Name: "managed-embedding", Enabled: true,
+		Capabilities: []domain.ModelCapability{domain.CapEmbedding},
+	}})
 
-	db := tenantSettingsQueryFunc(func(_ context.Context, _ string, _ ...any) pgx.Row {
-		return tenantSettingsRow{settings: []byte(`{"embed_model":"text-embedding-v3"}`)}
-	})
-	registry := newTestRegistry()
-	resolver := buildKnowledgeEmbedResolver(db, registry, zap.NewNop())
-	embedder := resolver(context.Background(), "tenant-1", "text-embedding-v3")
-	require.Nil(t, embedder) // empty registry returns nil
+	pipelineResolver := buildEmbedResolver(registry, zap.NewNop())
+	require.NotNil(t, pipelineResolver(context.Background(), "tenant-1"))
+
+	workspaceResolver := buildKnowledgeEmbedResolver(registry, zap.NewNop())
+	require.NotNil(t, workspaceResolver(context.Background(), "tenant-1", "managed-embedding"))
+	require.NotNil(t, workspaceResolver(context.Background(), "tenant-1", ""))
+	require.Nil(t, workspaceResolver(context.Background(), "tenant-1", "not-managed"))
 }
 
-func TestKnowledgeEmbedResolverUsesConfiguredQwenBaseURL(t *testing.T) {
-	t.Skip("TODO: adapt for ModelRegistry-based resolver")
-}
+func TestKnowledgeEmbedResolversReturnNilForEmptyCatalogue(t *testing.T) {
+	registry := newKnowledgeRegistry(nil)
 
-func TestKnowledgeEmbedResolverKeepsConfiguredBaseURLAfterPipelineCacheLoad(t *testing.T) {
-	t.Skip("TODO: adapt for ModelRegistry-based resolver")
+	require.Nil(t, buildEmbedResolver(registry, zap.NewNop())(context.Background(), "tenant-1"))
+	require.Nil(t, buildKnowledgeEmbedResolver(registry, zap.NewNop())(context.Background(), "tenant-1", ""))
 }

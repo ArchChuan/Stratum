@@ -1,4 +1,9 @@
-import { useCallback, useState } from 'react';
+import {
+  ApiOutlined,
+  DeleteOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
 import {
   Button,
   Card,
@@ -9,21 +14,16 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import {
-  ApiOutlined,
-  DeleteOutlined,
-  PlusOutlined,
-  ReloadOutlined,
-} from '@ant-design/icons';
+import { useCallback, useState } from 'react';
 
+import { llmApi } from '../api/llm.api';
 import { DiscoverResultModal } from '../components/DiscoverResultModal';
 import { ProviderForm } from '../components/ProviderForm';
 import { useProviders } from '../hooks/useProviders';
-import { llmApi } from '../api/llm.api';
 import type { CreateProviderInput, Model, Provider, ProviderKind } from '../model/llm';
 
-import { extractErrorMessage } from '@/shared/lib';
 import { useTenantRole } from '@/modules/iam';
+import { extractErrorMessage } from '@/shared/lib';
 
 const { Text } = Typography;
 

@@ -1,6 +1,7 @@
 import { expect, type BrowserContext, type Page } from '@playwright/test';
 import type { QueryResultRow } from 'pg';
 
+import { withRestoredContextCookies } from '../core/actors';
 import {
   deleteGeneratedOAuthUser,
   requireUUID,
@@ -52,7 +53,7 @@ const oauthIdentity = (): OAuthIdentity => {
   return { githubID, login, email };
 };
 
-export const executeIAMOAuthJourney = async ({
+const executeIAMOAuthJourneyWithTemporaryIdentity = async ({
   context, pool, evidence, webURL, backendURL,
 }: OAuthJourneyContext): Promise<string[]> => {
   const identity = oauthIdentity();
@@ -116,23 +117,7 @@ export const executeIAMOAuthJourney = async ({
     await page.goto(`${webURL}/tenant/settings`);
     expect((await tenantSettingsResponse).status()).toBe(200);
     await expect(page.getByRole('heading', { name: '租户设置' })).toBeVisible();
-    const embeddingCard = page.locator('.tenant-embedding-card');
-    await embeddingCard.getByRole('combobox').click();
-    await page.getByText(/text-embedding-v3（推荐/).click();
-    const embedResponse = waitForRequest(page, '/tenant/embed-model', 'PATCH');
-    await page.getByRole('button', { name: '确认设置' }).click();
-    expect((await embedResponse).status()).toBe(200);
-    await expect(page.getByText('当前嵌入模型：')).toBeVisible();
-    await page.reload();
-    await expect(page.getByText('text-embedding-v3', { exact: true })).toBeVisible();
-    const embedRows = await publicQuery<{ embed_model: string }>(pool,
-      `SELECT settings->>'embed_model' AS embed_model FROM public.tenants WHERE id = $1`,
-      [tenantID]);
-    expect(embedRows).toEqual([{ embed_model: 'text-embedding-v3' }]);
-    evidence.ui.push('owner configured a set-once embedding model and refreshed');
-    evidence.http.push('embed-model mutation returned 200');
-    evidence.database.push('tenant embedding model reconciled');
-    completed.push('iam.mutation.patch.tenant.embed.model');
+    evidence.ui.push('settings page loaded');
 
     await page.getByRole('button', { name: '打开用户菜单' }).click();
     const logoutResponse = waitForRequest(page, '/auth/logout', 'POST');
@@ -190,3 +175,10 @@ export const executeIAMOAuthJourney = async ({
   if (failure) throw failure;
   return completed;
 };
+
+export const executeIAMOAuthJourney = async (journeyContext: OAuthJourneyContext): Promise<string[]> => (
+  withRestoredContextCookies(
+    journeyContext.context,
+    () => executeIAMOAuthJourneyWithTemporaryIdentity(journeyContext),
+  )
+);

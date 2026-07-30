@@ -1,6 +1,7 @@
 import { Tabs, Typography } from 'antd';
-import { ProviderListPage } from './ProviderListPage';
+
 import { ModelListPage } from './ModelListPage';
+import { ProviderListPage } from './ProviderListPage';
 
 const { Title } = Typography;
 

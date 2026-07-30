@@ -1,0 +1,931 @@
+rule_files:
+  - ../rules/stratum-availability.yaml
+  - ../rules/stratum-http.yaml
+  - ../rules/stratum-workloads.yaml
+  - ../rules/stratum-capacity.yaml
+  - ../rules/stratum-dependencies.yaml
+  - ../rules/stratum-monitoring.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - name: HTTP by-path records preserve only bounded route templates
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/agents/:id",status="2xx"}'
+        values: '0+10x8'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/agents/:id",status="5xx"}'
+        values: '0x8'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/workflows/:id",status="5xx"}'
+        values: '0+2x8'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/agents/550e8400-e29b-41d4-a716-446655440000",status="2xx"}'
+        values: '0+100x8'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/agents/:id",le="1"}'
+        values: '0+9x8'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/agents/:id",le="+Inf"}'
+        values: '0+10x8'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/workflows/:id",le="1"}'
+        values: '0x8'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/workflows/:id",le="5"}'
+        values: '0+2x8'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/workflows/:id",le="+Inf"}'
+        values: '0+2x8'
+    promql_expr_test:
+      - expr: stratum:http_requests_by_path:increase5m
+        eval_time: 6m
+        exp_samples:
+          - labels: '{__name__="stratum:http_requests_by_path:increase5m",environment="remote-test",path="/agents/:id",service="stratum"}'
+            value: 50
+          - labels: '{__name__="stratum:http_requests_by_path:increase5m",environment="remote-test",path="/workflows/:id",service="stratum"}'
+            value: 10
+      - expr: stratum:http_5xx_ratio_by_path:ratio5m
+        eval_time: 6m
+        exp_samples:
+          - labels: '{__name__="stratum:http_5xx_ratio_by_path:ratio5m",environment="remote-test",path="/agents/:id",service="stratum"}'
+            value: 0
+          - labels: '{__name__="stratum:http_5xx_ratio_by_path:ratio5m",environment="remote-test",path="/workflows/:id",service="stratum"}'
+            value: 1
+      - expr: stratum:http_request_duration_seconds_by_path:p95_5m
+        eval_time: 6m
+        exp_samples:
+          - labels: '{__name__="stratum:http_request_duration_seconds_by_path:p95_5m",environment="remote-test",path="/agents/:id",service="stratum"}'
+            value: 1
+          - labels: '{__name__="stratum:http_request_duration_seconds_by_path:p95_5m",environment="remote-test",path="/workflows/:id",service="stratum"}'
+            value: 4.799999999999999
+
+  - name: workload rules expose node inhibition input and detect restart growth
+    interval: 1m
+    input_series:
+      - series: 'kube_node_status_condition{node="remote-node",condition="Ready",status="true"}'
+        values: '0x7'
+      - series: 'kube_node_status_condition{node="foreign-node",condition="Ready",status="true"}'
+        values: '0x7'
+      - series: 'kube_pod_container_status_restarts_total{namespace="stratum",pod="stratum-abc",container="stratum"}'
+        values: '0+1x7'
+      - series: 'kube_pod_info{namespace="stratum",pod="stratum-abc",node="remote-node"}'
+        values: '1x7'
+      - series: 'kube_pod_owner{namespace="stratum",pod="stratum-abc",owner_kind="ReplicaSet",owner_name="stratum-abc-rs"}'
+        values: '1x7'
+      - series: 'kube_replicaset_owner{namespace="stratum",replicaset="stratum-abc-rs",owner_kind="Deployment",owner_name="stratum"}'
+        values: '1x7'
+    promql_expr_test:
+      - expr: ALERTS{alertname="StratumNodeNotReady",alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumNodeNotReady",alertstate="firing",component="node",environment="remote-test",node="remote-node",service="stratum",severity="critical"}'
+            value: 1
+      - expr: ALERTS{alertname="StratumPodRestartingFrequently",alertstate="firing"}
+        eval_time: 6m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alert_family="pod-health",alertname="StratumPodRestartingFrequently",alertstate="firing",component="workload",container="stratum",deployment="stratum",environment="remote-test",namespace="stratum",node="remote-node",pod="stratum-abc",service="stratum",severity="warning"}'
+            value: 1
+      - expr: stratum:kube_pod_owner:deployment{namespace="stratum",pod="stratum-abc"}
+        eval_time: 1m
+        exp_samples:
+          - labels: '{__name__="stratum:kube_pod_owner:deployment",deployment="stratum",namespace="stratum",pod="stratum-abc"}'
+            value: 1
+
+  - name: workload rules detect crash loops and prolonged pending pods
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_waiting_reason{namespace="stratum",pod="crashing-pod",container="stratum",reason="CrashLoopBackOff"}'
+        values: '1x18'
+      - series: 'kube_pod_status_phase{namespace="stratum",pod="pending-pod",phase="Pending"}'
+        values: '1x18'
+      - series: 'kube_pod_info{namespace="stratum",pod="crashing-pod",node="remote-node"}'
+        values: '1x18'
+      - series: 'kube_pod_info{namespace="stratum",pod="pending-pod",node="remote-node"}'
+        values: '1x18'
+      - series: 'kube_pod_owner{namespace="stratum",pod="crashing-pod",owner_kind="ReplicaSet",owner_name="stratum-crash-rs"}'
+        values: '1x18'
+      - series: 'kube_replicaset_owner{namespace="stratum",replicaset="stratum-crash-rs",owner_kind="Deployment",owner_name="stratum"}'
+        values: '1x18'
+      - series: 'kube_pod_owner{namespace="stratum",pod="pending-pod",owner_kind="ReplicaSet",owner_name="frontend-pending-rs"}'
+        values: '1x18'
+      - series: 'kube_replicaset_owner{namespace="stratum",replicaset="frontend-pending-rs",owner_kind="Deployment",owner_name="stratum-frontend"}'
+        values: '1x18'
+      - series: 'kube_pod_container_status_waiting_reason{namespace="other",pod="foreign-pod",container="other",reason="CrashLoopBackOff"}'
+        values: '1x18'
+    promql_expr_test:
+      - expr: ALERTS{alertname="StratumPodCrashLooping",alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alert_family="pod-health",alertname="StratumPodCrashLooping",alertstate="firing",component="workload",container="stratum",deployment="stratum",environment="remote-test",namespace="stratum",node="remote-node",pod="crashing-pod",reason="CrashLoopBackOff",service="stratum",severity="critical"}'
+            value: 1
+      - expr: ALERTS{alertname="StratumPodPendingTooLong",alertstate="firing"}
+        eval_time: 15m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumPodPendingTooLong",alertstate="firing",component="workload",deployment="stratum-frontend",environment="remote-test",namespace="stratum",node="remote-node",phase="Pending",pod="pending-pod",service="stratum",severity="warning"}'
+            value: 1
+
+  - name: workload rules preserve Pods without Deployment ownership
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="stratum",pod="direct-pod",container="direct"}'
+        values: '0+1x18'
+      - series: 'kube_pod_container_status_waiting_reason{namespace="stratum",pod="stateful-pod",container="stateful",reason="CrashLoopBackOff"}'
+        values: '1x18'
+      - series: 'kube_pod_status_phase{namespace="stratum",pod="pending-direct-pod",phase="Pending"}'
+        values: '1x18'
+      - series: 'kube_pod_info{namespace="stratum",pod="direct-pod",node="remote-node"}'
+        values: '1x18'
+      - series: 'kube_pod_info{namespace="stratum",pod="stateful-pod",node="remote-node"}'
+        values: '1x18'
+      - series: 'kube_pod_info{namespace="stratum",pod="pending-direct-pod",node="remote-node"}'
+        values: '1x18'
+      - series: 'kube_pod_owner{namespace="stratum",pod="stateful-pod",owner_kind="StatefulSet",owner_name="stateful"}'
+        values: '1x18'
+    promql_expr_test:
+      - expr: ALERTS{alertname="StratumPodRestartingFrequently",alertstate="firing",pod="direct-pod"}
+        eval_time: 6m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alert_family="pod-health",alertname="StratumPodRestartingFrequently",alertstate="firing",component="workload",container="direct",environment="remote-test",namespace="stratum",node="remote-node",pod="direct-pod",service="stratum",severity="warning"}'
+            value: 1
+      - expr: ALERTS{alertname="StratumPodCrashLooping",alertstate="firing",pod="stateful-pod"}
+        eval_time: 5m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alert_family="pod-health",alertname="StratumPodCrashLooping",alertstate="firing",component="workload",container="stateful",environment="remote-test",namespace="stratum",node="remote-node",pod="stateful-pod",reason="CrashLoopBackOff",service="stratum",severity="critical"}'
+            value: 1
+      - expr: ALERTS{alertname="StratumPodPendingTooLong",alertstate="firing",pod="pending-direct-pod"}
+        eval_time: 15m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumPodPendingTooLong",alertstate="firing",component="workload",environment="remote-test",namespace="stratum",node="remote-node",phase="Pending",pod="pending-direct-pod",service="stratum",severity="warning"}'
+            value: 1
+
+  - name: capacity rules detect low node memory and PVC thresholds
+    interval: 1m
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{instance="remote-node"}'
+        values: '90x17'
+      - series: 'node_memory_MemTotal_bytes{instance="remote-node"}'
+        values: '1000x17'
+      - series: 'node_memory_MemAvailable_bytes{instance="foreign-instance"}'
+        values: '10x17'
+      - series: 'node_memory_MemTotal_bytes{instance="foreign-instance"}'
+        values: '1000x17'
+      - series: 'node_uname_info{job="node-exporter",instance="remote-node",nodename="remote-k3s-node"}'
+        values: '1x17'
+      - series: 'node_uname_info{job="node-exporter",instance="foreign-instance",nodename="foreign-node"}'
+        values: '1x17'
+      - series: 'kube_pod_info{namespace="stratum",pod="stratum-abc",node="remote-k3s-node"}'
+        values: '1x17'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="warning-pvc"}'
+        values: '85x17'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="stratum",persistentvolumeclaim="warning-pvc"}'
+        values: '100x17'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="critical-pvc"}'
+        values: '95x17'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="stratum",persistentvolumeclaim="critical-pvc"}'
+        values: '100x17'
+    promql_expr_test:
+      - expr: ALERTS{alertname="StratumNodeMemoryLow",alertstate="firing"}
+        eval_time: 15m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumNodeMemoryLow",alertstate="firing",component="node",environment="remote-test",instance="remote-node",node="remote-k3s-node",service="stratum",severity="warning"}'
+            value: 1
+      - expr: ALERTS{alertname="StratumPVCUsageHigh",alertstate="firing",persistentvolumeclaim="warning-pvc"}
+        eval_time: 15m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alert_family="pvc-usage",alertname="StratumPVCUsageHigh",alertstate="firing",component="storage",environment="remote-test",namespace="stratum",persistentvolumeclaim="warning-pvc",service="stratum",severity="warning"}'
+            value: 1
+      - expr: ALERTS{alertname="StratumPVCUsageCritical",alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alert_family="pvc-usage",alertname="StratumPVCUsageCritical",alertstate="firing",component="storage",environment="remote-test",namespace="stratum",persistentvolumeclaim="critical-pvc",service="stratum",severity="critical"}'
+            value: 1
+
+  - name: capacity rules detect node and container saturation
+    interval: 1m
+    input_series:
+      - series: 'node_cpu_seconds_total{instance="remote-node",cpu="0",mode="idle"}'
+        values: '0+5x20'
+      - series: 'node_filesystem_avail_bytes{instance="remote-node",device="/dev/root",mountpoint="/",fstype="ext4"}'
+        values: '10x20'
+      - series: 'node_filesystem_size_bytes{instance="remote-node",device="/dev/root",mountpoint="/",fstype="ext4"}'
+        values: '100x20'
+      - series: 'node_filesystem_files_free{instance="remote-node",device="/dev/root",mountpoint="/",fstype="ext4"}'
+        values: '10x20'
+      - series: 'node_filesystem_files{instance="remote-node",device="/dev/root",mountpoint="/",fstype="ext4"}'
+        values: '100x20'
+      - series: 'container_memory_working_set_bytes{namespace="stratum",pod="stratum-abc",container="stratum"}'
+        values: '95x20'
+      - series: 'container_spec_memory_limit_bytes{namespace="stratum",pod="stratum-abc",container="stratum"}'
+        values: '100x20'
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="stratum",pod="stratum-abc",container="stratum"}'
+        values: '0+4x20'
+      - series: 'container_cpu_cfs_periods_total{namespace="stratum",pod="stratum-abc",container="stratum"}'
+        values: '0+10x20'
+      - series: 'node_uname_info{job="node-exporter",instance="remote-node",nodename="remote-k3s-node"}'
+        values: '1x20'
+      - series: 'kube_pod_info{namespace="stratum",pod="stratum-abc",node="remote-k3s-node"}'
+        values: '1x20'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"StratumNodeCPUHigh|StratumNodeFilesystemLow|StratumNodeInodesLow|StratumContainerMemoryNearLimit|StratumContainerCPUThrottled",alertstate="firing"}
+        eval_time: 17m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumNodeCPUHigh",alertstate="firing",component="node",environment="remote-test",instance="remote-node",node="remote-k3s-node",service="stratum",severity="warning"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumNodeFilesystemLow",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node",service="stratum",severity="warning"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumNodeInodesLow",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node",service="stratum",severity="warning"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumContainerMemoryNearLimit",alertstate="firing",component="workload",container="stratum",environment="remote-test",namespace="stratum",pod="stratum-abc",service="stratum",severity="warning"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumContainerCPUThrottled",alertstate="firing",component="workload",container="stratum",environment="remote-test",namespace="stratum",pod="stratum-abc",service="stratum",severity="warning"}'
+            value: 1
+
+  - name: PVC prediction requires six hours of positive growth
+    interval: 30s
+    input_series:
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="growing-pvc"}'
+        values: '1000000+1000000x724'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="growing-pvc"}'
+        values: '800000000-1000000x724'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="flat-pvc"}'
+        values: '1000000x724'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="flat-pvc"}'
+        values: '800000000x724'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="shrinking-pvc"}'
+        values: '800000000-1000000x724'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="shrinking-pvc"}'
+        values: '1000000+1000000x724'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="young-pvc"}'
+        values: '_x604 1000000+1000000x120'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="young-pvc"}'
+        values: '_x604 800000000-1000000x120'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="mismatched-pvc"}'
+        values: '1000000+1000000x724'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="mismatched-pvc"}'
+        values: '_x604 800000000-1000000x120'
+    promql_expr_test:
+      - expr: stratum:pvc_exhaustion_within_4d
+        eval_time: 6h2m
+        exp_samples:
+          - labels: '{__name__="stratum:pvc_exhaustion_within_4d",namespace="stratum",persistentvolumeclaim="growing-pvc"}'
+            value: 1
+  - name: PVC prediction history gate is independent of scrape interval
+    interval: 1h
+    input_series:
+      - series: 'kubelet_volume_stats_used_bytes{namespace="stratum",persistentvolumeclaim="hourly-pvc"}'
+        values: '100000000+100000000x7'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="stratum",persistentvolumeclaim="hourly-pvc"}'
+        values: '800000000-100000000x7'
+    promql_expr_test:
+      - expr: stratum:pvc_exhaustion_within_4d
+        eval_time: 6h
+        exp_samples:
+          - labels: '{__name__="stratum:pvc_exhaustion_within_4d",namespace="stratum",persistentvolumeclaim="hourly-pvc"}'
+            value: 1
+      - expr: stratum:pvc_exhaustion_within_1d
+        eval_time: 6h
+        exp_samples:
+          - labels: '{__name__="stratum:pvc_exhaustion_within_1d",namespace="stratum",persistentvolumeclaim="hourly-pvc"}'
+            value: 1
+
+  - name: filesystem prediction requires elapsed history and positive growth
+    interval: 1h
+    input_series:
+      - series: 'node_filesystem_avail_bytes{instance="remote-node",device="/dev/root",mountpoint="/",fstype="ext4"}'
+        values: '800000000-100000000x8'
+      - series: 'node_filesystem_avail_bytes{instance="remote-node",device="/dev/data",mountpoint="/data",fstype="ext4"}'
+        values: '800000000x8'
+      - series: 'node_filesystem_avail_bytes{instance="remote-node",device="/dev/archive",mountpoint="/data",fstype="xfs"}'
+        values: '100000000+100000000x8'
+      - series: 'node_filesystem_avail_bytes{instance="young-node",device="/dev/root",mountpoint="/",fstype="ext4"}'
+        values: '_x2 800000000-100000000x6'
+      - series: 'node_uname_info{job="node-exporter",instance="remote-node",nodename="remote-k3s-node"}'
+        values: '1x8'
+      - series: 'node_uname_info{job="node-exporter",instance="young-node",nodename="young-k3s-node"}'
+        values: '1x8'
+      - series: 'kube_pod_info{namespace="stratum",pod="stratum-abc",node="remote-k3s-node"}'
+        values: '1x8'
+    promql_expr_test:
+      - expr: stratum:filesystem_exhaustion_within_4d
+        eval_time: 6h
+        exp_samples:
+          - labels: '{__name__="stratum:filesystem_exhaustion_within_4d",device="/dev/root",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node"}'
+            value: 1
+      - expr: stratum:filesystem_exhaustion_within_1d
+        eval_time: 6h
+        exp_samples:
+          - labels: '{__name__="stratum:filesystem_exhaustion_within_1d",device="/dev/root",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node"}'
+            value: 1
+  - name: filesystem exhaustion predictions persist into alerts
+    interval: 5m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{instance="remote-node",device="/dev/root",mountpoint="/",fstype="ext4"}'
+        values: '800000000-10000000x76'
+      - series: 'node_uname_info{job="node-exporter",instance="remote-node",nodename="remote-k3s-node"}'
+        values: '1x76'
+      - series: 'kube_pod_info{namespace="stratum",pod="stratum-abc",node="remote-k3s-node"}'
+        values: '1x76'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"StratumFilesystemExhaustionPredicted|StratumFilesystemExhaustionImminent",alertstate="firing"}
+        eval_time: 6h15m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alert_family="filesystem-exhaustion",alertname="StratumFilesystemExhaustionPredicted",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node",service="stratum",severity="warning"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alert_family="filesystem-exhaustion",alertname="StratumFilesystemExhaustionImminent",alertstate="firing",component="storage",device="/dev/root",environment="remote-test",fstype="ext4",instance="remote-node",mountpoint="/",node="remote-k3s-node",service="stratum",severity="critical"}'
+            value: 1
+
+  - name: dependency targets disappear independently
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="stratum",service="stratum-etcd-metrics",endpoint="metrics"}'
+        values: '0x12'
+      - series: 'up{namespace="stratum",service="stratum-milvus-metrics",endpoint="metrics"}'
+        values: '0x12'
+    promql_expr_test:
+      - expr: ALERTS{alertname="StratumDependencyTargetMissing",alertstate="firing"}
+        eval_time: 10m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumDependencyTargetMissing",alertstate="firing",component="dependency",dependency="etcd",endpoint="metrics",environment="remote-test",namespace="stratum",service="stratum",severity="warning"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumDependencyTargetMissing",alertstate="firing",component="dependency",dependency="milvus",endpoint="metrics",environment="remote-test",namespace="stratum",service="stratum",severity="warning"}'
+            value: 1
+
+  - name: absent dependency and exporter series are treated as target loss
+    interval: 1m
+    promql_expr_test:
+      - expr: ALERTS{alertname="StratumDependencyTargetMissing",alertstate="firing"}
+        eval_time: 10m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumDependencyTargetMissing",alertstate="firing",component="dependency",dependency="etcd",endpoint="metrics",environment="remote-test",namespace="stratum",service="stratum",severity="warning"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumDependencyTargetMissing",alertstate="firing",component="dependency",dependency="milvus",endpoint="metrics",environment="remote-test",namespace="stratum",service="stratum",severity="warning"}'
+            value: 1
+      - expr: ALERTS{alertname=~"StratumFeishuAdapterMissing|StratumBlackboxExporterMissing",alertstate="firing"}
+        eval_time: 10m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumFeishuAdapterMissing",alertstate="firing",component="notification",endpoint="http",environment="remote-test",namespace="monitoring",service="stratum",severity="critical"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumBlackboxExporterMissing",alertstate="firing",component="blackbox",endpoint="http",environment="remote-test",namespace="monitoring",service="stratum",severity="critical"}'
+            value: 1
+
+  - name: monitoring pipeline failures are observable
+    interval: 1m
+    input_series:
+      - series: 'prometheus_config_last_reload_successful{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus",endpoint="http-web",instance="prometheus-a"}'
+        values: '0x12'
+      - series: 'prometheus_config_last_reload_successful{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus",endpoint="http-web",instance="prometheus-b"}'
+        values: '1x12'
+      - series: 'prometheus_config_last_reload_successful{namespace="monitoring",service="foreign-prometheus",endpoint="http-web",instance="foreign"}'
+        values: '0x12'
+      - series: 'prometheus_rule_evaluation_failures_total{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus",endpoint="http-web",instance="prometheus-a"}'
+        values: '0+1x12'
+      - series: 'prometheus_rule_evaluation_failures_total{namespace="monitoring",service="kps-kube-prometheus-stack-prometheus",endpoint="http-web",instance="prometheus-b"}'
+        values: '0+2x12'
+      - series: 'prometheus_rule_evaluation_failures_total{namespace="monitoring",service="foreign-prometheus",endpoint="http-web",instance="foreign"}'
+        values: '0+10x12'
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring",service="kps-kube-prometheus-stack-alertmanager",endpoint="http-web",instance="alertmanager-a",integration="webhook"}'
+        values: '0+1x12'
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring",service="kps-kube-prometheus-stack-alertmanager",endpoint="http-web",instance="alertmanager-b",integration="webhook"}'
+        values: '0+2x12'
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring",service="foreign-alertmanager",endpoint="http-web",instance="foreign",integration="webhook"}'
+        values: '0+10x12'
+      - series: 'up{namespace="monitoring",service="stratum-feishu-alert-adapter",endpoint="http"}'
+        values: '0x12'
+      - series: 'up{namespace="monitoring",service="stratum-blackbox-prometheus-blackbox-exporter",endpoint="http"}'
+        values: '0x12'
+      - series: 'feishu_alert_delivery_total{namespace="monitoring",service="stratum-feishu-alert-adapter",endpoint="http",instance="adapter-a",status="failed"}'
+        values: '0+1x12'
+      - series: 'feishu_alert_delivery_total{namespace="monitoring",service="stratum-feishu-alert-adapter",endpoint="http",instance="adapter-b",status="failed"}'
+        values: '0+2x12'
+      - series: 'feishu_alert_delivery_total{namespace="monitoring",service="foreign-adapter",endpoint="http",instance="foreign",status="failed"}'
+        values: '0+10x12'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"StratumPrometheusConfigReloadFailed|StratumPrometheusRuleEvaluationFailures|StratumAlertmanagerNotificationFailures|StratumFeishuAdapterMissing|StratumBlackboxExporterMissing|StratumFeishuDeliveryFailures",alertstate="firing"}
+        eval_time: 10m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alertname="StratumPrometheusConfigReloadFailed",alertstate="firing",component="prometheus",environment="remote-test",namespace="monitoring",service="stratum",severity="critical"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumPrometheusRuleEvaluationFailures",alertstate="firing",component="prometheus",environment="remote-test",namespace="monitoring",service="stratum",severity="warning"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumAlertmanagerNotificationFailures",alertstate="firing",component="alertmanager",environment="remote-test",namespace="monitoring",service="stratum",severity="critical"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumFeishuAdapterMissing",alertstate="firing",component="notification",endpoint="http",environment="remote-test",namespace="monitoring",service="stratum",severity="critical"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumBlackboxExporterMissing",alertstate="firing",component="blackbox",endpoint="http",environment="remote-test",namespace="monitoring",service="stratum",severity="critical"}'
+            value: 1
+          - labels: '{__name__="ALERTS",alertname="StratumFeishuDeliveryFailures",alertstate="firing",component="notification",environment="remote-test",service="stratum",severity="critical"}'
+            value: 1
+
+  - name: monitoring pipeline ignores foreign self metrics
+    interval: 1m
+    input_series:
+      - series: 'prometheus_config_last_reload_successful{namespace="monitoring",service="foreign-prometheus",endpoint="http-web",instance="foreign"}'
+        values: '0x12'
+      - series: 'prometheus_rule_evaluation_failures_total{namespace="monitoring",service="foreign-prometheus",endpoint="http-web",instance="foreign"}'
+        values: '0+10x12'
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring",service="foreign-alertmanager",endpoint="http-web",instance="foreign"}'
+        values: '0+10x12'
+      - series: 'feishu_alert_delivery_total{namespace="monitoring",service="foreign-adapter",endpoint="http",instance="foreign",status="failed"}'
+        values: '0+10x12'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"StratumPrometheusConfigReloadFailed|StratumPrometheusRuleEvaluationFailures|StratumAlertmanagerNotificationFailures|StratumFeishuDeliveryFailures",alertstate="firing"}
+        eval_time: 10m
+        exp_samples: []
+
+  - name: availability alerts respect persistence and recovery
+    interval: 1m
+    input_series:
+      - series: 'probe_success{service="stratum",environment="remote-test",target="stratum-public-health"}'
+        values: '0x4 1x3'
+      - series: 'probe_success{service="stratum",environment="remote-test",target="decoy"}'
+        values: '0x7'
+      - series: 'kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum"}'
+        values: '0x4 1x3'
+      - series: 'kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"}'
+        values: '0x4 1x3'
+      - series: 'up{namespace="stratum",service="stratum",endpoint="http"}'
+        values: '0x11 1x2'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: StratumPublicEndpointDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: StratumPublicEndpointDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: stratum
+              environment: remote-test
+              target: stratum-public-health
+              component: public-endpoint
+            exp_annotations:
+              summary: Stratum public endpoint is unavailable
+              description: The remote public health probe has failed for three minutes (current value 0).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/availability.md#public-endpoint-down
+      - eval_time: 3m
+        alertname: StratumBackendUnavailable
+        exp_alerts:
+          - exp_labels:
+              namespace: stratum
+              deployment: stratum
+              severity: critical
+              service: stratum
+              environment: remote-test
+              component: backend
+            exp_annotations:
+              summary: Stratum backend has no ready replicas
+              description: The backend deployment has had no ready replicas for three minutes (current value 0).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/availability.md#backend-unavailable
+      - eval_time: 3m
+        alertname: StratumFrontendUnavailable
+        exp_alerts:
+          - exp_labels:
+              namespace: stratum
+              deployment: stratum-frontend
+              severity: critical
+              service: stratum
+              environment: remote-test
+              component: frontend
+            exp_annotations:
+              summary: Stratum frontend has no ready replicas
+              description: The frontend deployment has had no ready replicas for three minutes (current value 0).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/availability.md#frontend-unavailable
+      - eval_time: 10m
+        alertname: StratumTargetMissing
+        exp_alerts:
+          - exp_labels:
+              namespace: stratum
+              service: stratum
+              endpoint: http
+              severity: warning
+              environment: remote-test
+              component: backend
+            exp_annotations:
+              summary: Stratum application target is missing
+              description: The expected Stratum scrape target has been absent or down for ten minutes (current value 0).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/availability.md#target-missing
+      - eval_time: 12m
+        alertname: StratumTargetMissing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: StratumPublicEndpointDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: StratumBackendUnavailable
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: StratumFrontendUnavailable
+        exp_alerts: []
+
+  - name: availability alerts detect missing series and resolve after recovery
+    interval: 1m
+    input_series:
+      - series: 'probe_success{service="stratum",environment="remote-test",target="stratum-public-health"}'
+        values: '_x4 1x3'
+      - series: 'probe_success{service="stratum",environment="remote-test",target="decoy"}'
+        values: '0x7'
+      - series: 'kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum"}'
+        values: '_x4 1x3'
+      - series: 'kube_deployment_status_replicas_ready{namespace="stratum",deployment="stratum-frontend"}'
+        values: '_x4 1x3'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: StratumPublicEndpointDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: stratum
+              environment: remote-test
+              target: stratum-public-health
+              component: public-endpoint
+            exp_annotations:
+              summary: Stratum public endpoint is unavailable
+              description: The remote public health probe has failed for three minutes (current value 0).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/availability.md#public-endpoint-down
+      - eval_time: 3m
+        alertname: StratumBackendUnavailable
+        exp_alerts:
+          - exp_labels:
+              namespace: stratum
+              deployment: stratum
+              severity: critical
+              service: stratum
+              environment: remote-test
+              component: backend
+            exp_annotations:
+              summary: Stratum backend has no ready replicas
+              description: The backend deployment has had no ready replicas for three minutes (current value 0).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/availability.md#backend-unavailable
+      - eval_time: 3m
+        alertname: StratumFrontendUnavailable
+        exp_alerts:
+          - exp_labels:
+              namespace: stratum
+              deployment: stratum-frontend
+              severity: critical
+              service: stratum
+              environment: remote-test
+              component: frontend
+            exp_annotations:
+              summary: Stratum frontend has no ready replicas
+              description: The frontend deployment has had no ready replicas for three minutes (current value 0).
+              dashboard_url: /d/stratum-service-overview
+              runbook_url: /docs/operations/alerts/availability.md#frontend-unavailable
+      - eval_time: 6m
+        alertname: StratumPublicEndpointDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: StratumBackendUnavailable
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: StratumFrontendUnavailable
+        exp_alerts: []
+
+  - name: HTTP 5xx warning fires above five percent
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/warning",status="5xx"}'
+        values: '0+2x18'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/warning",status="2xx"}'
+        values: '0+18x18'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: StratumHighHTTP5xxRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: http
+              alert_family: http-5xx-rate
+            exp_annotations:
+              summary: Stratum HTTP 5xx rate is elevated
+              description: The five-minute HTTP 5xx ratio has exceeded 5% for ten minutes (current value 0.1).
+              dashboard_url: /d/stratum-http
+              runbook_url: /docs/operations/alerts/http-performance.md#high-http-5xx-rate
+
+  - name: HTTP 5xx critical fires above twenty percent
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/api/critical",status="5xx"}'
+        values: '0+5x12'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/api/critical",status="2xx"}'
+        values: '0+15x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: StratumCriticalHTTP5xxRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: stratum
+              environment: remote-test
+              component: http
+              alert_family: http-5xx-rate
+            exp_annotations:
+              summary: Stratum HTTP 5xx rate is critical
+              description: The five-minute HTTP 5xx ratio has exceeded 20% for five minutes (current value 0.25).
+              dashboard_url: /d/stratum-http
+              runbook_url: /docs/operations/alerts/http-performance.md#critical-http-5xx-rate
+
+  - name: HTTP 5xx does not alert below twenty requests
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/low-volume",status="5xx"}'
+        values: '0+3x18'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: StratumHighHTTP5xxRate
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: StratumCriticalHTTP5xxRate
+        exp_alerts: []
+
+  - name: HTTP 5xx warning boundary does not alert
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-warning",status="5xx"}'
+        values: '0+1x18'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-warning",status="2xx"}'
+        values: '0+19x18'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: StratumHighHTTP5xxRate
+        exp_alerts: []
+
+  - name: HTTP 5xx critical boundary does not alert
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-critical",status="5xx"}'
+        values: '0+4x18'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-critical",status="2xx"}'
+        values: '0+16x18'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: StratumCriticalHTTP5xxRate
+        exp_alerts: []
+
+  - name: HTTP 5xx probe routes do not alert
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/health",status="5xx"}'
+        values: '0+20x18'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/livez",status="5xx"}'
+        values: '0+20x18'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/readyz",status="5xx"}'
+        values: '0+20x18'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/metrics",status="5xx"}'
+        values: '0+20x18'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: StratumHighHTTP5xxRate
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: StratumCriticalHTTP5xxRate
+        exp_alerts: []
+
+  - name: HTTP 5xx alerts resolve
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",status="5xx"}'
+        values: '0+5x12 60x12'
+      - series: 'http_requests_total{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",status="2xx"}'
+        values: '0+15x12 180+20x12'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: StratumHighHTTP5xxRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: http
+              alert_family: http-5xx-rate
+            exp_annotations:
+              summary: Stratum HTTP 5xx rate is elevated
+              description: The five-minute HTTP 5xx ratio has exceeded 5% for ten minutes (current value 0.25).
+              dashboard_url: /d/stratum-http
+              runbook_url: /docs/operations/alerts/http-performance.md#high-http-5xx-rate
+      - eval_time: 11m
+        alertname: StratumCriticalHTTP5xxRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: stratum
+              environment: remote-test
+              component: http
+              alert_family: http-5xx-rate
+            exp_annotations:
+              summary: Stratum HTTP 5xx rate is critical
+              description: The five-minute HTTP 5xx ratio has exceeded 20% for five minutes (current value 0.25).
+              dashboard_url: /d/stratum-http
+              runbook_url: /docs/operations/alerts/http-performance.md#critical-http-5xx-rate
+      - eval_time: 23m
+        alertname: StratumHighHTTP5xxRate
+        exp_alerts: []
+      - eval_time: 23m
+        alertname: StratumCriticalHTTP5xxRate
+        exp_alerts: []
+
+  - name: HTTP metrics from foreign targets are ignored
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{namespace="other",service="other",endpoint="http",method="GET",path="/api/noisy",status="5xx"}'
+        values: '0+100x18'
+      - series: 'http_request_duration_seconds_bucket{namespace="other",service="other",endpoint="http",method="GET",path="/api/noisy",le="10"}'
+        values: '0+100x18'
+      - series: 'http_request_duration_seconds_bucket{namespace="other",service="other",endpoint="http",method="GET",path="/api/noisy",le="+Inf"}'
+        values: '0+100x18'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: StratumHighHTTP5xxRate
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: StratumCriticalHTTP5xxRate
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: StratumHighHTTPP95Latency
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: StratumCriticalHTTPP95Latency
+        exp_alerts: []
+
+  - name: HTTP P95 warning fires above two seconds
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/warning",le="1"}'
+        values: '0+18x22'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/warning",le="2.5"}'
+        values: '0+18x22'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/warning",le="5"}'
+        values: '0+20x22'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/warning",le="+Inf"}'
+        values: '0+20x22'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: StratumHighHTTPP95Latency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: http
+              alert_family: http-p95-latency
+            exp_annotations:
+              summary: Stratum HTTP P95 latency is elevated
+              description: The five-minute HTTP P95 latency has exceeded two seconds for fifteen minutes (current value 3.75s).
+              dashboard_url: /d/stratum-http
+              runbook_url: /docs/operations/alerts/http-performance.md#high-http-p95-latency
+
+  - name: HTTP P95 critical fires above five seconds
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/api/critical",le="2.5"}'
+        values: '0+18x12'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/api/critical",le="5"}'
+        values: '0+18x12'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/api/critical",le="10"}'
+        values: '0+20x12'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="POST",path="/api/critical",le="+Inf"}'
+        values: '0+20x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: StratumCriticalHTTPP95Latency
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: stratum
+              environment: remote-test
+              component: http
+              alert_family: http-p95-latency
+            exp_annotations:
+              summary: Stratum HTTP P95 latency is critical
+              description: The five-minute HTTP P95 latency has exceeded five seconds for five minutes (current value 7.5s).
+              dashboard_url: /d/stratum-http
+              runbook_url: /docs/operations/alerts/http-performance.md#critical-http-p95-latency
+
+  - name: HTTP P95 warning boundary does not alert
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-two",le="1"}'
+        values: '0+17x29'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-two",le="2.5"}'
+        values: '0+20x29'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-two",le="+Inf"}'
+        values: '0+20x29'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: StratumHighHTTPP95Latency
+        exp_alerts: []
+    promql_expr_test:
+      - expr: stratum:http_request_duration_seconds:p95_5m
+        eval_time: 20m
+        exp_samples:
+          - labels: '{__name__="stratum:http_request_duration_seconds:p95_5m",service="stratum",environment="remote-test"}'
+            value: 2
+
+  - name: HTTP P95 critical boundary does not alert
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-five",le="2.5"}'
+        values: '0+18x29'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-five",le="5"}'
+        values: '0+19x29'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/boundary-five",le="+Inf"}'
+        values: '0+20x29'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: StratumCriticalHTTPP95Latency
+        exp_alerts: []
+    promql_expr_test:
+      - expr: stratum:http_request_duration_seconds:p95_5m
+        eval_time: 20m
+        exp_samples:
+          - labels: '{__name__="stratum:http_request_duration_seconds:p95_5m",service="stratum",environment="remote-test"}'
+            value: 5
+
+  - name: HTTP P95 probe routes do not alert
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/health",le="+Inf"}'
+        values: '0+20x29'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/livez",le="+Inf"}'
+        values: '0+20x29'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/readyz",le="+Inf"}'
+        values: '0+20x29'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/metrics",le="+Inf"}'
+        values: '0+20x29'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: StratumHighHTTPP95Latency
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: StratumCriticalHTTPP95Latency
+        exp_alerts: []
+
+  - name: HTTP P95 does not alert below twenty samples
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/low-volume",le="1"}'
+        values: '0x20'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/low-volume",le="2.5"}'
+        values: '0x20'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/low-volume",le="10"}'
+        values: '0+3x20'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/low-volume",le="+Inf"}'
+        values: '0+3x20'
+    alert_rule_test:
+      - eval_time: 19m
+        alertname: StratumHighHTTPP95Latency
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: StratumCriticalHTTPP95Latency
+        exp_alerts: []
+
+  - name: HTTP P95 alerts resolve
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",le="1"}'
+        values: '0x18 0+20x12'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",le="2.5"}'
+        values: '0+18x17 306+20x12'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",le="5"}'
+        values: '0+18x17 306+20x12'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",le="10"}'
+        values: '0+20x17 340+20x12'
+      - series: 'http_request_duration_seconds_bucket{namespace="stratum",service="stratum",endpoint="http",method="GET",path="/api/recovered",le="+Inf"}'
+        values: '0+20x17 340+20x12'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: StratumHighHTTPP95Latency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: stratum
+              environment: remote-test
+              component: http
+              alert_family: http-p95-latency
+            exp_annotations:
+              summary: Stratum HTTP P95 latency is elevated
+              description: The five-minute HTTP P95 latency has exceeded two seconds for fifteen minutes (current value 7.5s).
+              dashboard_url: /d/stratum-http
+              runbook_url: /docs/operations/alerts/http-performance.md#high-http-p95-latency
+      - eval_time: 16m
+        alertname: StratumCriticalHTTPP95Latency
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: stratum
+              environment: remote-test
+              component: http
+              alert_family: http-p95-latency
+            exp_annotations:
+              summary: Stratum HTTP P95 latency is critical
+              description: The five-minute HTTP P95 latency has exceeded five seconds for five minutes (current value 7.5s).
+              dashboard_url: /d/stratum-http
+              runbook_url: /docs/operations/alerts/http-performance.md#critical-http-p95-latency
+      - eval_time: 28m
+        alertname: StratumHighHTTPP95Latency
+        exp_alerts: []
+      - eval_time: 28m
+        alertname: StratumCriticalHTTPP95Latency
+        exp_alerts: []

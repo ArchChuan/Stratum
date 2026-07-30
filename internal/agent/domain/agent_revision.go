@@ -37,7 +37,6 @@ type AgentRevision struct {
 	Type                   AgentType       `json:"type"`
 	SystemPrompt           string          `json:"system_prompt"`
 	Model                  string          `json:"model"`
-	EmbedModel             string          `json:"embed_model,omitempty"`
 	ModelParameters        ModelParameters `json:"model_parameters,omitempty"`
 	MaxIterations          int             `json:"max_iterations"`
 	Bindings               []AgentBinding  `json:"bindings"`

@@ -69,6 +69,19 @@ export const restoreActorSession = async <C extends SessionContext>(
   }
 };
 
+export const withRestoredContextCookies = async <T>(
+  context: Pick<BrowserContext, 'cookies' | 'clearCookies' | 'addCookies'>,
+  operation: () => Promise<T>,
+): Promise<T> => {
+  const originalCookies = await context.cookies();
+  try {
+    return await operation();
+  } finally {
+    await context.clearCookies();
+    if (originalCookies.length > 0) await context.addCookies(originalCookies);
+  }
+};
+
 interface GuestResponse {
   access_token: string;
   tenant_id: string;

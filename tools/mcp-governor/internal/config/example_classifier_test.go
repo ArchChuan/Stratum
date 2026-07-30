@@ -38,7 +38,6 @@ func TestExampleConfigClassifiesReviewedCommands(t *testing.T) {
 		{"codebase-memory", []string{"codebase-memory-mcp"}},
 		{"obsidian", []string{"node", "/opt/obsidian-mcp-server"}},
 		{"claude-mem", []string{"node", "/opt/claude-mem/plugin/scripts/mcp-server.cjs"}},
-		{"headroom", []string{"python", "/opt/headroom", "mcp", "serve"}},
 		{"playwright", []string{"node", "/opt/playwright-mcp"}},
 		{"chrome-devtools", []string{"npm", "exec", "chrome-devtools-mcp@latest", "--headless"}},
 		{"yinxiang", []string{"yinxiang-mcp"}},

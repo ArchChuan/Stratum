@@ -43,6 +43,14 @@ repos:
         require_serial: true
         files: '^(api/|cmd/|internal/|pkg/|web/|helm/|k8s/|\.github/workflows/)'
 
+      - id: code-quality-ratchet
+        name: incremental Go code quality ratchet
+        language: system
+        entry: bash scripts/quality/code-quality-ratchet.sh
+        pass_filenames: true
+        require_serial: true
+        files: '\.go$'
+
       - id: agent-instructions-check
         name: agent instructions are generated and current
         language: system

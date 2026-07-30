@@ -2,118 +2,153 @@ package wiring
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
-	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
-	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+
+	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	llmport "github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
+	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 )
 
-type tenantSettingsQueryFunc func(context.Context, string, ...any) pgx.Row
-
-func (f tenantSettingsQueryFunc) QueryRow(ctx context.Context, query string, args ...any) pgx.Row {
-	return f(ctx, query, args...)
+type resolverModelRepo struct {
+	models []llmdomain.Model
+	err    error
 }
 
-type tenantSettingsRow struct {
-	settings []byte
-	read     chan<- struct{}
-	release  <-chan struct{}
+func (r *resolverModelRepo) Create(context.Context, string, *llmdomain.Model) error { return r.err }
+func (r *resolverModelRepo) Get(context.Context, string, string) (*llmdomain.Model, error) {
+	return nil, r.err
+}
+func (r *resolverModelRepo) List(_ context.Context, _ string, filter llmport.ModelFilter) ([]llmdomain.Model, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	models := make([]llmdomain.Model, 0, len(r.models))
+	for _, model := range r.models {
+		if filter.Enabled != nil && model.Enabled != *filter.Enabled {
+			continue
+		}
+		if filter.Capability != "" && !modelHasCapability(model, filter.Capability) {
+			continue
+		}
+		models = append(models, model)
+	}
+	return models, nil
+}
+func (r *resolverModelRepo) Update(context.Context, string, *llmdomain.Model) error { return r.err }
+func (r *resolverModelRepo) UpsertDiscovered(
+	context.Context, string, string, []llmdomain.Model,
+) ([]llmdomain.Model, error) {
+	return nil, r.err
+}
+func (r *resolverModelRepo) Delete(context.Context, string, string) error       { return r.err }
+func (r *resolverModelRepo) Toggle(context.Context, string, string, bool) error { return r.err }
+
+func modelHasCapability(model llmdomain.Model, capability llmdomain.ModelCapability) bool {
+	for _, candidate := range model.Capabilities {
+		if candidate == capability {
+			return true
+		}
+	}
+	return false
 }
 
-func (r tenantSettingsRow) Scan(dest ...any) error {
-	if r.read != nil {
-		close(r.read)
-	}
-	if r.release != nil {
-		<-r.release
-	}
-	settings, ok := dest[0].(*[]byte)
+type resolverProviderRepo struct {
+	providers map[string]*llmdomain.Provider
+}
+
+func (r *resolverProviderRepo) Create(context.Context, string, *llmdomain.Provider) error { return nil }
+func (r *resolverProviderRepo) Get(_ context.Context, _, id string) (*llmdomain.Provider, error) {
+	provider, ok := r.providers[id]
 	if !ok {
-		return errors.New("unexpected scan destination")
+		return nil, errors.New("provider not found")
 	}
-	*settings = append([]byte(nil), r.settings...)
-	return nil
+	return provider, nil
+}
+func (r *resolverProviderRepo) List(context.Context, string) ([]llmdomain.Provider, error) {
+	return nil, nil
+}
+func (r *resolverProviderRepo) Update(context.Context, string, *llmdomain.Provider) error { return nil }
+func (r *resolverProviderRepo) Delete(context.Context, string, string) error              { return nil }
+
+func newResolverRegistry(models []llmdomain.Model, providers map[string]*llmdomain.Provider) *llmgateway.ModelRegistry {
+	return llmgateway.NewModelRegistry(
+		&resolverModelRepo{models: models},
+		&resolverProviderRepo{providers: providers},
+		map[llmdomain.ProviderKind]llmgateway.ChatProtocol{llmdomain.ProviderOpenAICompat: nil},
+		map[llmdomain.ProviderKind]llmgateway.EmbedProtocol{llmdomain.ProviderOpenAICompat: nil},
+		time.Minute,
+	)
 }
 
-// TestNewTenantCapabilityResolverPreservesNilDatabaseBehavior verifies that a
-// resolver created with a nil DB returns "database unavailable" errors.
-func TestNewTenantCapabilityResolverPreservesNilDatabaseBehavior(t *testing.T) {
-	resolver := newTenantCapabilityResolver(
-		nil,
-		[32]byte{},
-		nil, // registry
-		nil, // gateway
-		zap.NewNop(),
-	).(*tenantCapabilityResolver)
+func TestNewTenantCapabilityResolverPreservesNilRegistryBehavior(t *testing.T) {
+	resolver := newTenantCapabilityResolver(nil, nil, zap.NewNop()).(*tenantCapabilityResolver)
 
 	client, err := resolver.ResolveWorkerLLM(context.Background(), "tenant-1")
 	require.Nil(t, client)
 	require.ErrorContains(t, err, "registry unavailable")
+	_, err = resolver.DiagnosticModelStatus(context.Background(), "tenant-1")
+	require.ErrorContains(t, err, "registry unavailable")
 }
 
-func TestTenantCapabilityResolverDiagnosticModelStatus(t *testing.T) {
-	aesKey := pkgcrypto.DeriveAESKey("diagnostic-model-key")
-	encrypted, err := pkgcrypto.Encrypt(aesKey, "provider-key")
+func TestTenantCapabilityResolverUsesRegistryForDiagnosticsAndValidation(t *testing.T) {
+	models := []llmdomain.Model{{
+		ID: "model-1", ProviderID: "provider-1", Name: "chat-model", Enabled: true,
+		Capabilities: []llmdomain.ModelCapability{llmdomain.CapChat},
+	}}
+	providers := map[string]*llmdomain.Provider{
+		"provider-1": {ID: "provider-1", Kind: llmdomain.ProviderOpenAICompat, Enabled: true},
+	}
+	resolver := &tenantCapabilityResolver{registry: newResolverRegistry(models, providers), logger: zap.NewNop()}
+
+	status, err := resolver.DiagnosticModelStatus(context.Background(), "tenant-1")
 	require.NoError(t, err)
-	tests := []struct {
-		name       string
-		settings   map[string]any
-		configured bool
-		wantErr    bool
-	}{
-		{name: "not configured", settings: map[string]any{}, configured: false},
-		{name: "configured", settings: map[string]any{"llm_api_keys": map[string]any{"qwen": encrypted}}, configured: true},
-		{name: "decrypt failure", settings: map[string]any{"llm_api_keys": map[string]any{"qwen": "not-ciphertext"}}, wantErr: true},
-		{name: "unsupported", settings: map[string]any{"llm_api_keys": map[string]any{"other": encrypted}}, wantErr: true},
+	require.True(t, status.Configured)
+	require.NoError(t, resolver.ValidateTenantChatModel(context.Background(), "tenant-1", "chat-model"))
+	require.ErrorIs(t,
+		resolver.ValidateTenantChatModel(context.Background(), "tenant-1", "unknown"),
+		agentdomain.ErrInvalidSystemAssistantModel,
+	)
+	require.Equal(t, []string{"chat-model"}, mustListTenantChatModels(t, resolver))
+}
+
+func TestTenantCapabilityResolverReportsEmptyWhenNoEligibleModelExists(t *testing.T) {
+	models := []llmdomain.Model{{
+		ID: "model-1", ProviderID: "provider-1", Name: "chat-model", Enabled: true,
+		Capabilities: []llmdomain.ModelCapability{llmdomain.CapChat},
+	}}
+	providers := map[string]*llmdomain.Provider{
+		"provider-1": {ID: "provider-1", Kind: llmdomain.ProviderAnthropic, Enabled: true},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			raw, marshalErr := json.Marshal(tt.settings)
-			require.NoError(t, marshalErr)
-			resolver := &tenantCapabilityResolver{
-				db: tenantSettingsQueryFunc(func(_ context.Context, _ string, args ...any) pgx.Row {
-					require.Equal(t, "tenant-1", args[0])
-					return tenantSettingsRow{settings: raw}
-				}),
-				aesKey: aesKey,
-				logger: zap.NewNop(),
-			}
-			status, diagnosticErr := resolver.DiagnosticModelStatus(context.Background(), "tenant-1")
-			require.Equal(t, tt.wantErr, diagnosticErr != nil)
-			require.Equal(t, tt.configured, status.Configured)
-		})
-	}
+	resolver := &tenantCapabilityResolver{registry: newResolverRegistry(models, providers), logger: zap.NewNop()}
+
+	status, err := resolver.DiagnosticModelStatus(context.Background(), "tenant-1")
+	require.NoError(t, err)
+	require.False(t, status.Configured)
+	require.Empty(t, mustListTenantChatModels(t, resolver))
 }
 
-// Legacy tests — temporarily skipped until adapted for ModelRegistry-based resolver.
-func TestTenantCapabilityResolverWorkerResolveReportsInfrastructureFailure(t *testing.T) {
-	t.Skip("TODO: adapt for ModelRegistry-based resolver")
+func TestTenantCapabilityResolverPropagatesRegistryFailure(t *testing.T) {
+	registry := llmgateway.NewModelRegistry(
+		&resolverModelRepo{err: errors.New("database unavailable")},
+		&resolverProviderRepo{}, nil, nil, time.Minute,
+	)
+	resolver := &tenantCapabilityResolver{registry: registry, logger: zap.NewNop()}
+
+	_, err := resolver.DiagnosticModelStatus(context.Background(), "tenant-1")
+	require.ErrorContains(t, err, "database unavailable")
+	_, err = resolver.ResolveWorkerLLM(context.Background(), "tenant-1")
+	require.ErrorContains(t, err, "database unavailable")
 }
 
-func TestTenantCapabilityResolverValidateTenantChatModelRejectsFallbackAndUnknownModel(t *testing.T) {
-	t.Skip("TODO: adapt for ModelRegistry-based resolver")
-}
-
-func TestTenantCapabilityResolverListTenantChatModelsIncludesOnlyConfiguredProviders(t *testing.T) {
-	t.Skip("TODO: adapt for ModelRegistry-based resolver")
-}
-
-func TestTenantCapabilityResolverListTenantChatModelsReturnsEmptyWhenUnconfigured(t *testing.T) {
-	t.Skip("TODO: adapt for ModelRegistry-based resolver")
-}
-
-func TestTenantCapabilityResolverListTenantChatModelsReturnsEmptyForUnsupportedProviders(t *testing.T) {
-	t.Skip("TODO: adapt for ModelRegistry-based resolver")
-}
-
-func TestTenantCapabilityResolverRejectsLoadInvalidatedWhileBlocked(t *testing.T) {
-	t.Skip("TODO: adapt for ModelRegistry-based resolver")
-}
-
-func TestTenantCapabilityResolverRejectsUnsupportedProvider(t *testing.T) {
-	t.Skip("TODO: adapt for ModelRegistry-based resolver")
+func mustListTenantChatModels(t *testing.T, resolver *tenantCapabilityResolver) []string {
+	t.Helper()
+	models, err := resolver.ListTenantChatModels(context.Background(), "tenant-1")
+	require.NoError(t, err)
+	return models
 }

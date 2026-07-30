@@ -45,19 +45,36 @@ func (c *Container) buildLLMGateway(_ context.Context) error {
 	}
 	metrics := observability.NewPrometheusMetrics(c.Logger)
 
-	// Protocol singletons — OpenAICompatProtocol wraps an OpenAICompatClient
-	// and satisfies both ChatProtocol and EmbedProtocol.
+	// Protocol singletons:
+	// - OpenAICompatProtocol wraps an OpenAICompatClient, satisfies ChatProtocol + EmbedProtocol.
+	// - OllamaProtocol wraps an OllamaClient, satisfies ChatProtocol + EmbedProtocol.
+	// - AnthropicProtocol wraps an AnthropicClient, satisfies ChatProtocol.
 	openAICompatClient := llmgateway.NewOpenAICompatClient(
 		llmgateway.ProviderConfig{Name: "openai-compat"},
 		c.Logger,
 	)
 	openAICompatProto := llmgateway.NewOpenAICompatProtocol(openAICompatClient)
 
+	ollamaClient := llmgateway.NewOllamaClient(
+		llmgateway.ProviderConfig{Name: "ollama"},
+		c.Logger,
+	)
+	ollamaProto := llmgateway.NewOllamaProtocol(ollamaClient)
+
+	anthropicClient := llmgateway.NewAnthropicClient(
+		llmgateway.ProviderConfig{Name: "anthropic"},
+		c.Logger,
+	)
+	anthropicProto := llmgateway.NewAnthropicProtocol(anthropicClient)
+
 	chatProtos := map[domain.ProviderKind]llmgateway.ChatProtocol{
 		domain.ProviderOpenAICompat: openAICompatProto,
+		domain.ProviderOllama:       ollamaProto,
+		domain.ProviderAnthropic:    anthropicProto,
 	}
 	embedProtos := map[domain.ProviderKind]llmgateway.EmbedProtocol{
 		domain.ProviderOpenAICompat: openAICompatProto,
+		domain.ProviderOllama:       ollamaProto,
 	}
 
 	modelRepo := llmgateway.NewPgModelRepo(db)
@@ -70,8 +87,10 @@ func (c *Container) buildLLMGateway(_ context.Context) error {
 	gw := llmgateway.NewGateway(registry, chatProtos, embedProtos).
 		WithLogger(c.Logger).WithMetrics(metrics)
 
-	providerSvc := llmapp.NewProviderService(providerRepo, modelRepo, llmgateway.NewProviderRuntime(chatProtos))
-	mgmtSvc := llmapp.NewModelMgmtService(modelRepo)
+	providerSvc := llmapp.NewProviderService(
+		providerRepo, modelRepo, llmgateway.NewProviderRuntime(chatProtos), registry,
+	)
+	mgmtSvc := llmapp.NewModelMgmtService(modelRepo, registry)
 
 	c.LLMGateway = &LLMGateway{
 		Gateway:          gw,

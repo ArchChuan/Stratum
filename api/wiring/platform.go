@@ -17,13 +17,15 @@ import (
 	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	iamtoken "github.com/byteBuilderX/stratum/internal/iam/infrastructure/token"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
+	platformapp "github.com/byteBuilderX/stratum/internal/platform/application"
+	platformpersistence "github.com/byteBuilderX/stratum/internal/platform/infrastructure/persistence"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
 // Platform groups cross-cutting application services that other contexts
 // (skill, knowledge, agent, iam) depend on: auth (JWT, GitHub OAuth,
-// token store, onboarding), the per-tenant LLM gateway cache, the AES key
+// token store, onboarding), the per-tenant model registry, the AES key
 // derived from the JWT private key, and the shared metrics provider.
 //
 // Fields are nil when their preconditions are not met (e.g. JWTService
@@ -36,16 +38,22 @@ type Platform struct {
 	OAuthExchangeStore *iampersistence.OAuthExchangeStore
 	OnboardSvc         *application.OnboardService
 	SchemaProvisioner  *iampersistence.AdminTenantRepo
-	GatewayCache       *llmgateway.TenantGatewayCache
+	ModelRegistry      *llmgateway.ModelRegistry
 	AESKey             [32]byte
 	Metrics            *observability.PrometheusMetrics
+	DashboardService   *platformapp.DashboardService
 }
 
 func (c *Container) buildPlatform(_ context.Context) error {
 	p := &Platform{
-		AESKey:       pkgcrypto.DeriveAESKey(c.Config.JWTPrivateKeyPEM),
-		GatewayCache: llmgateway.NewTenantGatewayCache(),
-		Metrics:      c.LLMGateway.Metrics,
+		AESKey:  pkgcrypto.DeriveAESKey(c.Config.JWTPrivateKeyPEM),
+		Metrics: c.LLMGateway.Metrics,
+	}
+	if c.LLMGateway != nil {
+		p.ModelRegistry = c.LLMGateway.Registry
+	}
+	if db := c.dbOrNil(); db != nil {
+		p.DashboardService = platformapp.NewDashboardService(platformpersistence.NewDashboardRepository(db))
 	}
 
 	production := os.Getenv("APP_ENV") == "production"

@@ -8,6 +8,7 @@ import type { Agent, AgentFormValues } from '../model/agent';
 import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 import { knowledgeApi } from '@/modules/knowledge';
 import type { Workspace } from '@/modules/knowledge';
+import { llmApi } from '@/modules/llm';
 import { mcpApi } from '@/modules/mcp';
 import type { MCPToolOption } from '@/modules/mcp';
 import { skillApi } from '@/modules/skill';
@@ -23,6 +24,7 @@ export const useEditAgentPage = () => {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [mcpTools, setMcpTools] = useState<MCPToolOption[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [chatModels, setChatModels] = useState<string[]>([]);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -32,19 +34,25 @@ export const useEditAgentPage = () => {
     setSkills([]);
     setMcpTools([]);
     setWorkspaces([]);
+    setChatModels([]);
     (async () => {
       try {
         const a = await agentApi.get(id);
         if (cancelled) return;
         setAgent(a);
 
-        const [skillsRes, mcpRes, workspacesRes] = await Promise.allSettled([
-          skillApi.list(), mcpApi.toolOptions(), knowledgeApi.list(),
+        const [skillsRes, mcpRes, workspacesRes, modelsRes] = await Promise.allSettled([
+          skillApi.list(), mcpApi.toolOptions(), knowledgeApi.list(), llmApi.getCatalogue(),
         ]);
         if (cancelled) return;
         if (skillsRes.status === 'fulfilled') setSkills(skillsRes.value);
         if (mcpRes.status === 'fulfilled') setMcpTools(mcpRes.value);
         if (workspacesRes.status === 'fulfilled') setWorkspaces(workspacesRes.value);
+        if (modelsRes.status === 'fulfilled') {
+          setChatModels(modelsRes.value.chatModels);
+        } else {
+          message.error({ content: extractErrorMessage(modelsRes.reason, '加载模型目录失败'), duration: 0 });
+        }
         form.setFieldsValue({
           name: a.name,
           description: a.description,
@@ -56,6 +64,7 @@ export const useEditAgentPage = () => {
           mcpToolIds: a.mcpToolIds || [],
           knowledgeWorkspaceIds: a.knowledgeWorkspaceIds || [],
           memoryScope: a.memoryScope || 'user',
+          checkpointEnabled: a.checkpointEnabled ?? false,
         });
       } catch (err) {
         if (!cancelled) {
@@ -92,5 +101,5 @@ export const useEditAgentPage = () => {
     [id, navigate],
   );
 
-  return { id, agent, form, loading, pageLoading, skills, mcpTools, workspaces, navigate, onFinish };
+  return { id, agent, form, loading, pageLoading, skills, mcpTools, workspaces, chatModels, navigate, onFinish };
 };

@@ -17,6 +17,7 @@ labels=(
   frontend-auth
   frontend-supply-chain
   tool-permissions
+  code-quality
 )
 declare -A selected=()
 acceptance_mode=short
@@ -24,7 +25,10 @@ acceptance_mode=short
 classify_acceptance_path() {
   case "${1#./}" in
     internal/iam/*|api/http/handler/auth_*|pkg/migration/*|pkg/storage/postgres/*schema*|internal/platform/messaging/*|\
-    internal/llmgateway/*|internal/mcp/*|pkg/storage/milvus/*|pkg/httpclient/*)
+    internal/llmgateway/*|internal/mcp/*|pkg/storage/milvus/*|pkg/httpclient/*|\
+    monitoring|monitoring/remote|monitoring/remote/*|internal/platform/alerting|internal/platform/alerting/*|\
+    cmd/feishu-alert-adapter|cmd/feishu-alert-adapter/*|cmd/remote-health-monitor|cmd/remote-health-monitor/*|\
+    scripts/deploy-remote-monitoring.sh|.github/workflows/deploy.yml|.github/workflows/remote-health-monitor.yml)
       acceptance_mode=soak
       ;;
   esac
@@ -39,6 +43,11 @@ select_all() {
 
 select_for_path() {
   local path="$1"
+  case "${path}" in
+    *.go|.golangci.yml|scripts/quality/code-quality-*|.pre-commit-config.yaml|Makefile|.github/workflows/ci.yml)
+      selected[code-quality]=1
+      ;;
+  esac
   case "${path}" in
     api/wiring/*|.golangci.yml)
       selected[architecture]=1
@@ -197,6 +206,9 @@ for label in "${labels[@]}"; do
       ;;
     tool-permissions)
       run_check "${label}" make tool-permission-test
+      ;;
+    code-quality)
+      run_check "${label}" /bin/bash scripts/quality/code-quality-ratchet.sh --all
       ;;
   esac
 done

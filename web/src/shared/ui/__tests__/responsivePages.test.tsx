@@ -8,7 +8,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { AgentCard } from '@/modules/agent/components/AgentCard';
 import { AgentsListFilters } from '@/modules/agent/components/AgentsListFilters';
-import { TenantEmbeddingCard } from '@/modules/iam/components/TenantEmbeddingCard';
 import { LoginPage } from '@/modules/iam/pages/auth/LoginPage';
 import { OnboardingPage } from '@/modules/iam/pages/auth/OnboardingPage';
 import { WorkspaceCard } from '@/modules/knowledge/components/WorkspaceCard';
@@ -94,25 +93,6 @@ describe('responsive page contracts', () => {
     expect(onboardingCard).toHaveStyle({ width: '100%', maxWidth: '440px' });
   });
 
-  it('keeps tenant embedding controls fluid without widening them on desktop', () => {
-    const { container } = render(
-      <TenantEmbeddingCard
-        embedModel=""
-        fetchLoading={false}
-        embedLoading={false}
-        canEditKeys
-        onSave={vi.fn()}
-      />,
-    );
-
-    expect(container.querySelector('.tenant-embedding-card')).toBeInTheDocument();
-    expect(container.querySelector('.tenant-embedding-controls')).toHaveStyle({ width: '100%' });
-    expect(container.querySelector('.ant-select')).toHaveStyle({
-      width: '100%',
-      maxWidth: '300px',
-    });
-  });
-
   it('marks card grids and icon actions for narrow touch screens', () => {
     const { container } = render(
       <>
@@ -181,6 +161,7 @@ describe('responsive page contracts', () => {
           open
           loading={false}
           form={form}
+          embeddingModels={[]}
           onClose={vi.fn()}
           onSubmit={vi.fn()}
         />

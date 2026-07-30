@@ -4,9 +4,8 @@
     "method": "GET",
     "path": "/models",
     "body": {
-      "embedding_models": [],
-      "models": []
+      "error": "missing bearer token"
     },
-    "want_status": 200
+    "want_status": 401
   }
 ]

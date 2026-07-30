@@ -58,8 +58,8 @@ func (g *deterministicAssistantGateway) Route(_ context.Context, request agentpo
 
 type deterministicTenantResolver struct{ gateway agentport.CapabilityGateway }
 
-func (r deterministicTenantResolver) Resolve(context.Context, string) (agentport.CapabilityGateway, map[string]string, bool) {
-	return r.gateway, map[string]string{}, true
+func (r deterministicTenantResolver) Resolve(context.Context, string) (agentport.CapabilityGateway, bool) {
+	return r.gateway, true
 }
 
 func (r deterministicTenantResolver) InjectCompleter(ctx context.Context, _ string) context.Context {
@@ -202,7 +202,7 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	existing.LLMModel = "deterministic-e2e-model"
-	err = repo.UpdateSystemAssistant(ctxA, existing)
+	_, err = repo.UpdateSystemAssistantModel(ctxA, existing.LLMModel)
 	require.NoError(t, err)
 	updated, found, err := repo.GetSystemAssistant(ctxA)
 	require.NoError(t, err)
@@ -326,7 +326,7 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 	require.NoError(t, err)
 	require.True(t, found)
 	existing.LLMModel = "deterministic-e2e-model"
-	err = repo.UpdateSystemAssistant(ctx, existing)
+	_, err = repo.UpdateSystemAssistantModel(ctx, existing.LLMModel)
 	require.NoError(t, err)
 
 	gateway := &deterministicAssistantGateway{}

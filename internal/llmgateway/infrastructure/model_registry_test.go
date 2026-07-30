@@ -181,7 +181,8 @@ func TestModelRegistry_Resolve_HappyPath(t *testing.T) {
 		},
 	}
 	models := []domain.Model{
-		{ID: "mod-1", ProviderID: providerID, Name: "gpt-4", Enabled: true},
+		{ID: "mod-1", ProviderID: providerID, Name: "gpt-4", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
 	}
 
 	mr := &mockModelRepo{models: models}
@@ -211,11 +212,12 @@ func TestModelRegistry_Resolve_CacheHit(t *testing.T) {
 	providers := map[string]*domain.Provider{
 		providerID: {
 			ID: providerID, Name: "Cache Prov", Kind: domain.ProviderOpenAICompat,
-			BaseURL: "https://cache.test", APIKey: "sk-cache", DefaultModel: "m2",
+			BaseURL: "https://cache.test", APIKey: "sk-cache", DefaultModel: "m2", Enabled: true,
 		},
 	}
 	models := []domain.Model{
-		{ID: "m2", ProviderID: providerID, Name: "model-two", Enabled: true},
+		{ID: "m2", ProviderID: providerID, Name: "model-two", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
 	}
 
 	mr := &mockModelRepo{models: models}
@@ -261,11 +263,12 @@ func TestModelRegistry_Resolve_NoChatProtocol(t *testing.T) {
 	providers := map[string]*domain.Provider{
 		providerID: {
 			ID: providerID, Name: "Ollama Inst", Kind: domain.ProviderOllama,
-			BaseURL: "http://ollama:11434", APIKey: "", DefaultModel: "llama3",
+			BaseURL: "http://ollama:11434", APIKey: "", DefaultModel: "llama3", Enabled: true,
 		},
 	}
 	models := []domain.Model{
-		{ID: "m3", ProviderID: providerID, Name: "llama3", Enabled: true},
+		{ID: "m3", ProviderID: providerID, Name: "llama3", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
 	}
 
 	// Registry only has OpenAI/Anthropic chat protos — Ollama is not registered
@@ -290,11 +293,12 @@ func TestModelRegistry_ResolveEmbedding_HappyPath(t *testing.T) {
 	providers := map[string]*domain.Provider{
 		providerID: {
 			ID: providerID, Name: "Embed Prov", Kind: domain.ProviderOpenAICompat,
-			BaseURL: "https://embed.test", APIKey: "sk-embed", DefaultModel: "text-embedding-3",
+			BaseURL: "https://embed.test", APIKey: "sk-embed", DefaultModel: "text-embedding-3", Enabled: true,
 		},
 	}
 	models := []domain.Model{
-		{ID: "me1", ProviderID: providerID, Name: "text-embedding-3", Enabled: true},
+		{ID: "me1", ProviderID: providerID, Name: "text-embedding-3", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapEmbedding}},
 	}
 
 	mr := &mockModelRepo{models: models}
@@ -321,11 +325,12 @@ func TestModelRegistry_ResolveEmbedding_NoEmbedProtocol(t *testing.T) {
 	providers := map[string]*domain.Provider{
 		providerID: {
 			ID: providerID, Name: "Anthropic No Embed", Kind: domain.ProviderAnthropic,
-			BaseURL: "https://api.anthropic.com", APIKey: "sk-ant", DefaultModel: "claude-3",
+			BaseURL: "https://api.anthropic.com", APIKey: "sk-ant", DefaultModel: "claude-3", Enabled: true,
 		},
 	}
 	models := []domain.Model{
-		{ID: "me2", ProviderID: providerID, Name: "claude-3", Enabled: true},
+		{ID: "me2", ProviderID: providerID, Name: "claude-3", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapEmbedding}},
 	}
 
 	// Registry's embed protos map only includes OpenAI — Anthropic not registered
@@ -352,12 +357,15 @@ func TestModelRegistry_ResolveEmbedding_ModelNotFound(t *testing.T) {
 
 func TestModelRegistry_ListChatModels(t *testing.T) {
 	models := []domain.Model{
-		{ID: "m1", Name: "gpt-4", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapChat}},
-		{ID: "m2", Name: "claude-3", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapChat, domain.CapVision}},
-		{ID: "m3", Name: "ada-002", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapEmbedding}},
+		{ID: "m1", ProviderID: "openai", Name: "gpt-4", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapChat}},
+		{ID: "m2", ProviderID: "anthropic", Name: "claude-3", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapChat, domain.CapVision}},
+		{ID: "m3", ProviderID: "openai", Name: "ada-002", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapEmbedding}},
 	}
 	mr := &mockModelRepo{models: models}
-	pr := &mockProviderRepo{providers: map[string]*domain.Provider{}}
+	pr := &mockProviderRepo{providers: map[string]*domain.Provider{
+		"openai":    {ID: "openai", Kind: domain.ProviderOpenAICompat, Enabled: true},
+		"anthropic": {ID: "anthropic", Kind: domain.ProviderAnthropic, Enabled: true},
+	}}
 	reg := newTestRegistry(mr, pr)
 
 	names, err := reg.ListChatModelsByTenant(context.Background(), "t1")
@@ -388,11 +396,13 @@ func TestModelRegistry_ListChatModels_Empty(t *testing.T) {
 
 func TestModelRegistry_ListEmbeddingModels(t *testing.T) {
 	models := []domain.Model{
-		{ID: "m1", Name: "ada-002", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapEmbedding}},
-		{ID: "m2", Name: "gpt-4", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapChat}},
+		{ID: "m1", ProviderID: "openai", Name: "ada-002", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapEmbedding}},
+		{ID: "m2", ProviderID: "openai", Name: "gpt-4", Enabled: true, Capabilities: []domain.ModelCapability{domain.CapChat}},
 	}
 	mr := &mockModelRepo{models: models}
-	pr := &mockProviderRepo{providers: map[string]*domain.Provider{}}
+	pr := &mockProviderRepo{providers: map[string]*domain.Provider{
+		"openai": {ID: "openai", Kind: domain.ProviderOpenAICompat, Enabled: true},
+	}}
 	reg := newTestRegistry(mr, pr)
 
 	names, err := reg.ListEmbeddingModelsByTenant(context.Background(), "t1")
@@ -404,12 +414,77 @@ func TestModelRegistry_ListEmbeddingModels(t *testing.T) {
 	}
 }
 
+func TestModelRegistry_ListModelsExcludesDisabledAndUnsupportedProviders(t *testing.T) {
+	models := []domain.Model{
+		{ID: "chat-enabled", ProviderID: "enabled", Name: "chat-ok", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+		{ID: "chat-disabled", ProviderID: "disabled", Name: "chat-disabled", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+		{ID: "embed-unsupported", ProviderID: "anthropic", Name: "embed-unsupported", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapEmbedding}},
+	}
+	providers := map[string]*domain.Provider{
+		"enabled":   {ID: "enabled", Kind: domain.ProviderOpenAICompat, Enabled: true},
+		"disabled":  {ID: "disabled", Kind: domain.ProviderOpenAICompat, Enabled: false},
+		"anthropic": {ID: "anthropic", Kind: domain.ProviderAnthropic, Enabled: true},
+	}
+	reg := newTestRegistry(&mockModelRepo{models: models}, &mockProviderRepo{providers: providers})
+
+	chat, err := reg.ListChatModelsByTenant(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("ListChatModelsByTenant: %v", err)
+	}
+	if len(chat) != 1 || chat[0] != "chat-ok" {
+		t.Fatalf("chat models = %v, want [chat-ok]", chat)
+	}
+	embedding, err := reg.ListEmbeddingModelsByTenant(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("ListEmbeddingModelsByTenant: %v", err)
+	}
+	if len(embedding) != 0 {
+		t.Fatalf("embedding models = %v, want []", embedding)
+	}
+}
+
+func TestModelRegistry_ListModelsFailsClosedWhenProviderLookupFails(t *testing.T) {
+	models := []domain.Model{{
+		ID: "orphan", ProviderID: "missing", Name: "orphan", Enabled: true,
+		Capabilities: []domain.ModelCapability{domain.CapChat},
+	}}
+	reg := newTestRegistry(&mockModelRepo{models: models}, &mockProviderRepo{providers: map[string]*domain.Provider{}})
+
+	if _, err := reg.ListChatModelsByTenant(context.Background(), "t1"); err == nil {
+		t.Fatal("missing provider must fail the catalogue closed")
+	}
+}
+
+func TestModelRegistry_ResolveRequiresEnabledProviderAndMatchingCapability(t *testing.T) {
+	models := []domain.Model{
+		{ID: "embed", ProviderID: "enabled", Name: "embed-only", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapEmbedding}},
+		{ID: "chat", ProviderID: "disabled", Name: "chat-disabled", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+	}
+	providers := map[string]*domain.Provider{
+		"enabled":  {ID: "enabled", Kind: domain.ProviderOpenAICompat, Enabled: true},
+		"disabled": {ID: "disabled", Kind: domain.ProviderOpenAICompat, Enabled: false},
+	}
+	reg := newTestRegistry(&mockModelRepo{models: models}, &mockProviderRepo{providers: providers})
+
+	if _, _, err := reg.Resolve(context.Background(), "t1", "embed-only"); err == nil {
+		t.Fatal("embedding-only model must not resolve for chat")
+	}
+	if _, _, err := reg.Resolve(context.Background(), "t1", "chat-disabled"); err == nil {
+		t.Fatal("model from disabled provider must not resolve")
+	}
+}
+
 func TestModelRegistry_WarmTenant(t *testing.T) {
 	providerID := "prov-warm"
 	providers := map[string]*domain.Provider{
 		providerID: {
 			ID: providerID, Name: "Warm Prov", Kind: domain.ProviderOpenAICompat,
-			BaseURL: "https://warm.test", APIKey: "sk-warm", DefaultModel: "gpt-4",
+			BaseURL: "https://warm.test", APIKey: "sk-warm", DefaultModel: "gpt-4", Enabled: true,
 		},
 	}
 	models := []domain.Model{
@@ -442,11 +517,12 @@ func TestModelRegistry_Invalidate(t *testing.T) {
 	providers := map[string]*domain.Provider{
 		providerID: {
 			ID: providerID, Name: "Inv Prov", Kind: domain.ProviderOpenAICompat,
-			BaseURL: "https://inv.test", APIKey: "sk-inv", DefaultModel: "m",
+			BaseURL: "https://inv.test", APIKey: "sk-inv", DefaultModel: "m", Enabled: true,
 		},
 	}
 	models := []domain.Model{
-		{ID: "m-inv", ProviderID: providerID, Name: "test-model", Enabled: true},
+		{ID: "m-inv", ProviderID: providerID, Name: "test-model", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
 	}
 
 	mr := &mockModelRepo{models: models}
@@ -478,12 +554,14 @@ func TestModelRegistry_Invalidate_OtherTenant(t *testing.T) {
 	providers := map[string]*domain.Provider{
 		providerID: {
 			ID: providerID, Name: "Other Prov", Kind: domain.ProviderOpenAICompat,
-			BaseURL: "https://other.test", APIKey: "sk-other", DefaultModel: "x",
+			BaseURL: "https://other.test", APIKey: "sk-other", DefaultModel: "x", Enabled: true,
 		},
 	}
 	models := []domain.Model{
-		{ID: "m-a", ProviderID: providerID, Name: "model-a", Enabled: true},
-		{ID: "m-b", ProviderID: providerID, Name: "model-b", Enabled: true},
+		{ID: "m-a", ProviderID: providerID, Name: "model-a", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
+		{ID: "m-b", ProviderID: providerID, Name: "model-b", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
 	}
 
 	mr := &mockModelRepo{models: models}
@@ -518,11 +596,12 @@ func TestModelRegistry_Resolve_CacheExpiry(t *testing.T) {
 	providers := map[string]*domain.Provider{
 		providerID: {
 			ID: providerID, Name: "Exp Prov", Kind: domain.ProviderOpenAICompat,
-			BaseURL: "https://exp.test", APIKey: "sk-exp", DefaultModel: "m-exp",
+			BaseURL: "https://exp.test", APIKey: "sk-exp", DefaultModel: "m-exp", Enabled: true,
 		},
 	}
 	models := []domain.Model{
-		{ID: "m-exp", ProviderID: providerID, Name: "exp-model", Enabled: true},
+		{ID: "m-exp", ProviderID: providerID, Name: "exp-model", Enabled: true,
+			Capabilities: []domain.ModelCapability{domain.CapChat}},
 	}
 
 	mr := &mockModelRepo{models: models}

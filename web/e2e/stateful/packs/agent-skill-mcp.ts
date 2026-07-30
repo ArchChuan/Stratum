@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import type { QueryResultRow } from 'pg';
 
 import type { BrowserActor } from '../core/actors';
-import { copyConfiguredLLMCredentials, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
+import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 
 interface CrossPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
@@ -40,7 +40,7 @@ export const executeAgentSkillMCPPack = async ({
   actor, pool, evidence, webURL,
 }: CrossPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
-  await copyConfiguredLLMCredentials(pool, tenantID, process.env.JWT_PRIVATE_KEY_PEM ?? '');
+  await configureManagedModels(pool, tenantID);
   const page = await actor.context.newPage();
   const suffix = Date.now();
   const serverName = `E2E-Cross-MCP-${suffix}`;
@@ -105,6 +105,9 @@ export const executeAgentSkillMCPPack = async ({
     expect(JSON.stringify(await toolsListed.json())).toContain('stateful_echo');
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('系统提示词').fill('必须激活可用 Skill 并调用 MCP 工具。');
+    await page.getByLabel('LLM 模型').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
+      .filter({ hasText: /^qwen-max$/ }).click();
     await chooseOption(page, '技能', skillID, skillName);
     await chooseOption(page, 'MCP 工具', `mcp:${serverID}:stateful_echo`, `${serverName} / stateful_echo`);
     const agentResponse = waitForMutation(page, '/agents', 'POST');

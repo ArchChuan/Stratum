@@ -76,6 +76,7 @@ CI 全绿后合并，再用 `git worktree remove ../stratum-<feature>` 清理。
 ## Development and end-to-end verification
 
 - 编码前运行 `bash scripts/quality/risk-regression-guard.sh --explain`。后端快速验证：`go vet && go test -short ./...`；PR 前：`go test -v -race -timeout 30s ./...`。前端 PR 前：`make fe-lint && make fe-build`。依赖服务可用 `make infra-up`。
+- Go 代码质量采用增量棘轮：新函数必须满足圈复杂度 ≤10、认知复杂度 ≤15、函数长度 ≤120 行、最大嵌套 ≤4；存量超限函数不得恶化。参数数 >6、文件长度 >800 和重复代码候选当前仅告警。运行 `make code-quality` 检查；基线只能通过 `make code-quality-baseline` 显式刷新，并与代码改动一同审查，禁止为通过门禁隐式更新。
 - 功能开发、Bug 修复、前后端联调、数据库链路，或 Agent/Skill/MCP/Memory/Knowledge/IAM 能力改动必须使用 `stratum-e2e-development` skill。普通改动完成后运行 `make e2e-system-short`；认证、租户迁移、消息、向量库、外部依赖或风险规则命中的改动还必须运行 `STATEFUL_E2E_PROFILE=test STATEFUL_E2E_DURATION_SEC=600 STATEFUL_E2E_PACKS=all make e2e-system-soak`。当前远端测试环境使用 600 秒 test profile；正式发布必须显式运行 `make e2e-system-release-soak`，使用 3600 秒 release profile。所有模式都由无头 Chromium 发起真实 UI 操作，以 HTTP 和测试数据库证据对账；可读取测试数据库凭据或精确提升临时身份，但禁止输出 token、cookie、密钥、密码或原始 API key。只有当前源码匹配的 attestation 通过 `make e2e-attestation-check`、无 skipped/unreconciled capability、清理完成且残留风险已明确报告时才可宣告完成；临时 Playwright、纯 API 或手工场景只能诊断，不能替代系统验收。
 - 所有登录测试和验证流程必须使用无头浏览器（Playwright headless）；禁止为测试或验证启动有头浏览器。纯 API/单元测试不属于登录测试，但涉及登录态恢复时必须通过无头浏览器完成。
 - AI 生成测试前必须先读同域优质测试模板，复用 mock 和断言风格。代码是主、测试是行为契约；冲突时依据产品意图判断改实现或改测试，禁止为过测扭曲实现。
@@ -83,13 +84,49 @@ CI 全绿后合并，再用 `git worktree remove ../stratum-<feature>` 清理。
 
 ## Backend conventions
 
-- Go 行宽 ≤120；import 按 stdlib、third-party、internal 分组；圈复杂度 ≤10。错误逐层用 `fmt.Errorf("operation: %w", err)` 包装；日志只用 Zap，禁止 `fmt.Print`。
+- Go 行宽 ≤120；import 按 stdlib、third-party、internal 分组。错误逐层用 `fmt.Errorf("operation: %w", err)` 包装；日志只用 Zap，禁止 `fmt.Print`。
 - timeout、TTL、分页、topK、chunkSize、poolSize、retry 等行为数字禁止内联：跨包放 `pkg/constants/<domain>.go`，包内共享放 `internal/<pkg>/defaults.go`，单文件放本文件 `const` 块；名称包含 `Default`/`Max`/`Min` 或单位语义。
 - 外部依赖必须有超时预算、有限重试、熔断/隔离和确定性关闭。瞬态错误指数退避基准 100ms、上限 10s；流式 LLM 不用 flat timeout，使用 header/idle timeout 和外层执行预算。
 - 修改 port 后立即搜索并同步所有 test mock/stub。新增 tenant repository 时同时保证 `execTenant`、port 的 `tenantID` 和测试 mock。
 - pgx v5 向 JSONB 写自定义 Go struct 时，先 `json.Marshal`，再传 `string(b)`；禁止直接传 struct 或 `pgtype.JSONB{}`。
 - `context.WithTimeout` 必须在每次循环迭代内创建并及时 cancel；独立 IO 应有界并发，所有 goroutine 用 WaitGroup 跟踪，错误/停止路径 cancel 后必须 wait。
 - 替换有状态连接/client/worker 时创建新实例、原子写回并关闭旧资源。共享 client 指针须在锁内捕获后使用，避免检查后被 `Close` 置空。超时后仍可能产出资源的 buffered channel 必须排水并关闭迟到资源。
+
+## Code quality
+
+门禁（圈复杂度 ≤10、认知复杂度 ≤15、行数 ≤120、嵌套 ≤4）是底线，以下原则从源头控制复杂度，而非事后拆分凑数：
+
+### Functions
+
+- **单一职责**：一个函数只做一件事，函数名能准确描述全部行为。做两件事的函数天然超复杂度和行数。
+- **early return 消灭 else**：异常/边界先 return，主逻辑保持在左边界，嵌套自然 ≤2。
+- **flag 参数拆函数**：`func Do(verbose bool)` → `func Do()` + `func DoVerbose()`。bool 参数增加圈复杂度和调用方心智负担。
+- **纯函数优先**：无副作用、输出仅依赖输入的函数易测试、易推理。IO 和副作用推到调用链边缘。
+
+### Types and interfaces
+
+- **领域类型替代原始类型**：`userID string` → `type UserID string`。防止参数错位，语义自文档。
+- **小接口（1-3 方法）**：接口越大，抽象越弱。消费方定义接口，实现方不预判。
+- **具体类型作为函数返回值，接口作为参数**：return struct, accept interface.
+
+### Error handling
+
+- **错误逐层 wrap、绝不吞没**：`fmt.Errorf("operation: %w", err)`。忽略 error 或在 error 分支中 fallthrough 是 bug。
+- **error 是最后一个返回值**：`(Result, error)` 而非 `(error, Result)`。
+- **panic 仅用于初始化阶段的不可恢复错误**（如 missing config），业务逻辑用 error 返回。
+
+### Testing
+
+- **表驱动测试**：Go 测试结构统一 —— 定义 cases slice，`t.Run(tc.name, ...)` 迭代。禁止复制粘贴测试函数。
+- **mock 外部依赖，不 mock 领域逻辑**：mock repository/port，不 mock entity/service。
+- **测试意图即文档**：用例名描述行为（"returns error when user not found"），不描述步骤（"calls FindUser then checks error"）。
+
+### Naming and structure
+
+- **短作用域用短名**：`i`, `ctx`, `err`, `ok`；导出符号用描述性名称：`UserRepository`, `FindByTenant`。
+- **注释解释 WHY，不翻译 WHAT**：`// 修复 #42: pgx 不传 *float64` 优于 `// 设置 price 为 nil`。
+- **文件内自上而下阅读顺序**：导出的 public API 在前，私有实现在后。调用方先于被调用方。
+- **import 分组**：stdlib → third-party → internal，组间空行分隔。
 
 ## Frontend conventions
 

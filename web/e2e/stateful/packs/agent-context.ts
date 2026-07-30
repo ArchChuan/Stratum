@@ -3,7 +3,7 @@ import type { QueryResultRow } from 'pg';
 
 import type { BrowserActor } from '../core/actors';
 import {
-  copyConfiguredLLMCredentials, requireUUID, withTenantMutation, withTenantQuery, type DatabasePool,
+  configureManagedModels, requireUUID, withTenantMutation, withTenantQuery, type DatabasePool,
 } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
 import { runCleanupTasks } from '../core/errors';
@@ -21,7 +21,7 @@ export const executeAgentContextPack = async ({
 }: AgentContextPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   const userID = requireUUID(actor.userID ?? '', 'user_id');
-  await copyConfiguredLLMCredentials(pool, tenantID, process.env.JWT_PRIVATE_KEY_PEM ?? '');
+  await configureManagedModels(pool, tenantID);
   const page = await actor.context.newPage();
   const suffix = String(Date.now());
   const workspace = `e2e-context-${suffix}`;
@@ -36,6 +36,9 @@ export const executeAgentContextPack = async ({
     const workspaceDialog = page.getByRole('dialog', { name: '新建知识库' });
     await workspaceDialog.getByLabel('名称').fill(workspace);
     await workspaceDialog.getByLabel('描述').fill('Agent Knowledge 与 Memory 上下文联动验收');
+    await workspaceDialog.getByLabel('嵌入模型').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
+      .filter({ hasText: /^text-embedding-v3$/ }).click();
     const workspaceResponse = waitFor(page, '/knowledge/workspaces', 'POST');
     await workspaceDialog.getByRole('button', { name: /创\s*建/ }).click();
     expect((await workspaceResponse).status()).toBe(201);
@@ -64,6 +67,9 @@ export const executeAgentContextPack = async ({
     await page.goto(`${webURL}/agents/create`);
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('系统提示词').fill('结合知识与用户记忆回答，并返回 stateful stream completed。');
+    await page.getByLabel('LLM 模型').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
+      .filter({ hasText: /^qwen-max$/ }).click();
     await page.locator('.ant-select-selector').filter({ hasText: '选择知识库' }).click();
     await page.locator('.ant-select-item-option-content').filter({ hasText: workspace }).click();
     const agentResponse = waitFor(page, '/agents', 'POST');

@@ -36,6 +36,8 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	requireActive := middleware.RequireActiveTenant(c.DB())
 
 	registerAuth(r, c, requireActive)
+	registerModelCatalogue(r, c)
+	registerDashboard(r, c)
 	registerHealth(r, c)
 	registerSkills(r, c, requireActive)
 	registerEvaluations(r, c, requireActive)
@@ -47,6 +49,15 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerMemory(r, c, requireActive)
 	registerLLMAdmin(r, c, requireActive)
 	return r
+}
+
+func registerDashboard(r *gin.Engine, c *wiring.Container) {
+	if c.Platform == nil || c.Platform.DashboardService == nil {
+		return
+	}
+	h := handler.NewDashboardHandler(c.Platform.DashboardService)
+	dashboard := r.Group("/dashboard", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
+	dashboard.GET("/overview", h.Overview)
 }
 
 func registerResourceChangeProposals(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
@@ -203,14 +214,22 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		tenantGroup.DELETE("/members/:user_id", tenantHandler.RemoveMember)
 		tenantGroup.GET("/settings", tenantHandler.GetSettings)
 		tenantGroup.PATCH("/settings", requireActive, tenantHandler.UpdateSettings)
-		tenantGroup.PATCH("/embed-model", requireActive, tenantHandler.SetEmbedModel)
 		tenantGroup.DELETE("", middleware.RequireTenantRole("owner"), tenantHandler.DeleteSelf)
 	}
 
 	r.GET("/tenant/list", jwtMW, tenantHandler.ListUserTenants)
 }
 
-// registerHealth wires /metrics, /health, /models — all unauthenticated.
+func registerModelCatalogue(r *gin.Engine, c *wiring.Container) {
+	if c.LLMGateway == nil {
+		return
+	}
+	modelHandler := handler.NewModelHandler(c.LLMGateway.ModelService)
+	models := r.Group("/models", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
+	models.GET("", modelHandler.ListModels)
+}
+
+// registerHealth wires unauthenticated observability and health endpoints.
 func registerHealth(r *gin.Engine, c *wiring.Container) {
 	r.GET("/metrics", gin.WrapH(c.Platform.Metrics.GetHandler()))
 	r.GET("/livez", func(ctx *gin.Context) {
@@ -220,8 +239,6 @@ func registerHealth(r *gin.Engine, c *wiring.Container) {
 	r.GET("/health", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{"status": "ok", "service": "Stratum"})
 	})
-	modelHandler := handler.NewModelHandler(c.LLMGateway.ModelService)
-	r.GET("/models", modelHandler.ListModels)
 }
 
 func readinessHandler(check func(context.Context) map[string]error) gin.HandlerFunc {
@@ -304,6 +321,8 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		})
 		agents.POST("/:id/execute", requireActive, execRateLimit, agentHandler.ExecuteAgent)
 		agents.POST("/:id/execute/stream", requireActive, execRateLimit, agentHandler.ExecuteAgentStream)
+		agents.POST("/:id/executions/:executionID/pause", requireActive, agentHandler.PauseExecution)
+		agents.POST("/:id/executions/:executionID/resume", requireActive, agentHandler.ResumeExecution)
 		agents.PUT("/:id", requireAdmin, requireActive, agentHandler.UpdateAgent)
 		agents.DELETE("/:id", requireAdmin, requireActive, agentHandler.DeleteAgent)
 		agents.POST("/:id/conversations", chatHandler.CreateConversation)

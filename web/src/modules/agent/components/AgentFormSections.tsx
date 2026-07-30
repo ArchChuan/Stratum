@@ -1,9 +1,9 @@
 import { RobotOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import { Collapse, Form, Input, InputNumber, Select, Slider, Tag, Typography } from 'antd';
+import { Collapse, Form, Input, InputNumber, Select, Slider, Switch, Tag, Typography } from 'antd';
 
 import { AgentMemoryConfig } from './AgentMemoryConfig';
 
-import { AGENT_MAX_MAX_ITERATIONS, AGENT_MIN_MAX_ITERATIONS, CHAT_MODEL_OPTIONS } from '@/constants';
+import { AGENT_MAX_MAX_ITERATIONS, AGENT_MIN_MAX_ITERATIONS } from '@/constants';
 import type { Workspace } from '@/modules/knowledge';
 import type { MCPToolOption } from '@/modules/mcp';
 import type { Skill } from '@/modules/skill';
@@ -17,12 +17,16 @@ interface AgentFormSectionsProps {
   skills: Skill[];
   mcpTools: MCPToolOption[];
   workspaces: Workspace[];
+  chatModels: string[];
+  currentModel?: string;
 }
 
 export const AgentFormSections = ({
   skills,
   mcpTools,
   workspaces,
+  chatModels,
+  currentModel,
 }: AgentFormSectionsProps) => (
   <>
     <Form.Item name="type" hidden>
@@ -98,7 +102,16 @@ export const AgentFormSections = ({
         subtitle="选择模型并挂载工具和知识"
       />
       <Form.Item label="LLM 模型" name="llmModel" rules={[{ required: true, message: '请选择模型' }]}>
-        <Select placeholder="选择推理模型" options={CHAT_MODEL_OPTIONS} />
+        <Select
+          placeholder="选择推理模型"
+          notFoundContent="模型管理中没有可用的推理模型"
+          options={[
+            ...(currentModel && !chatModels.includes(currentModel)
+              ? [{ value: currentModel, label: `${currentModel}（当前不可用）`, disabled: true }]
+              : []),
+            ...chatModels.map((model) => ({ value: model, label: model })),
+          ]}
+        />
       </Form.Item>
       <Form.Item
         label="技能"
@@ -172,9 +185,17 @@ export const AgentFormSections = ({
                   name="maxContextTokens"
                   rules={[{ required: true, message: '请输入最大上下文 Token' }, { type: 'number', min: 1000, message: '最小值为 1000' }]}
                   extra="推荐值：轻量对话 4000，标准 8000，长文档处理 32000-128000"
-                  style={{ marginBottom: 0 }}
                 >
                   <InputNumber min={1000} max={128000} step={1000} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item
+                  label="执行断点续传"
+                  name="checkpointEnabled"
+                  valuePropName="checked"
+                  extra="启用后，长时间执行任务可在中断后从上次检查点恢复"
+                  style={{ marginBottom: 0 }}
+                >
+                  <Switch />
                 </Form.Item>
               </>
             ),

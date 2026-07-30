@@ -1,5 +1,6 @@
-import { useEffect } from 'react';
 import { Button, Drawer, Form, Input, InputNumber, Select, Space, Switch } from 'antd';
+import { useEffect } from 'react';
+
 import type { Model, ModelCapability, UpdateModelInput } from '../model/llm';
 
 const CAP_OPTIONS: { label: string; value: ModelCapability }[] = [

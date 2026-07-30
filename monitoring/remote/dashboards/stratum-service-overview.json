@@ -1,0 +1,77 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [{"title": "远端监控运行手册", "type": "link", "url": "/docs/operations/remote-monitoring-runbook.md"}],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "text": "失败"}, "1": {"color": "green", "text": "正常"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "probe_success{service=\"stratum\",environment=\"remote-test\",target=\"stratum-public-health\"}", "legendFormat": "公网探测", "refId": "A"}],
+      "title": "1. 公网探测",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"decimals": 2, "unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "id": 2,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "center", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "stratum:http_requests:increase5m{service=\"stratum\",environment=\"remote-test\"} / 300", "legendFormat": "请求速率", "refId": "A"}],
+      "title": "2. HTTP 请求速率",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"decimals": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "id": 3,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "center", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "kube_deployment_status_replicas_ready{namespace=\"stratum\",deployment=~\"stratum|stratum-frontend\"}", "legendFormat": "{{deployment}}", "refId": "A"}],
+      "title": "3. 就绪副本",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
+      "id": 4,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "count(ALERTS{service=\"stratum\",environment=\"remote-test\",alertstate=\"firing\"})", "legendFormat": "活动告警", "refId": "A"}],
+      "title": "4. 活动告警",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
+      "id": 5,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "stratum:http_5xx_ratio:ratio5m{service=\"stratum\",environment=\"remote-test\"}", "legendFormat": "5xx 比例", "refId": "A"}],
+      "title": "HTTP 5xx 比例",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
+      "id": 6,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "stratum:http_request_duration_seconds:p95_5m{service=\"stratum\",environment=\"remote-test\"}", "legendFormat": "P95", "refId": "A"}],
+      "title": "HTTP P95 延迟",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["stratum", "remote-test"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Stratum 远端服务总览",
+  "uid": "stratum-remote-overview",
+  "version": 1
+}

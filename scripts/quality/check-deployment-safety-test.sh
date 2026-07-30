@@ -15,10 +15,22 @@ POSTGRES_DOCKERFILE="${ROOT}/docker/postgres-zhparser.Dockerfile"
 OPIK_VALUES="${ROOT}/helm/opik/values-demo.yaml"
 OPIK_COLLECTOR="${ROOT}/k8s/opik-otel-collector.yaml"
 PLATFORM_ASSISTANT_REMOTE_VERIFY="${ROOT}/scripts/e2e/platform-assistant-remote-verify.sh"
+FEISHU_ADAPTER_MANIFEST="${ROOT}/monitoring/remote/resources/feishu-alert-adapter.yaml"
+FEISHU_ADAPTER_DOCKERFILE="${ROOT}/docker/feishu-alert-adapter.Dockerfile"
+REMOTE_MONITORING_DEPLOY="${ROOT}/scripts/deploy-remote-monitoring.sh"
 
 require() {
     local pattern="$1" description="$2"
     if ! grep -Eq -- "${pattern}" "${WORKFLOW}"; then
+        echo "deployment safety contract missing: ${description}" >&2
+        exit 1
+    fi
+}
+
+require_job() {
+    local job="$1" pattern="$2" description="$3" job_block
+    job_block=$(sed -n "/^  ${job}:/,/^  [[:alnum:]_-]\+:$/p" "${WORKFLOW}")
+    if ! grep -Eq -- "${pattern}" <<<"${job_block}"; then
         echo "deployment safety contract missing: ${description}" >&2
         exit 1
     fi
@@ -50,6 +62,42 @@ reject_file() {
 
 require 'group:[[:space:]]*stratum-production' 'fixed production concurrency group'
 require 'cancel-in-progress:[[:space:]]*false' 'non-cancelling active deployment'
+require '^  build-backend:' 'parallel backend image build job'
+require '^  build-frontend:' 'parallel frontend image build job'
+require '^  build-feishu-adapter:' 'parallel Feishu adapter image build job'
+require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter\]' \
+    'image build fan-in dependencies'
+for job_scope in build-backend:backend build-frontend:frontend build-feishu-adapter:feishu-alert-adapter; do
+    job=${job_scope%%:*}
+    scope=${job_scope#*:}
+    require_job "${job}" '^    needs:[[:space:]]*test$' "${job} test dependency"
+    require_job "${job}" "cache-from:[[:space:]]*type=gha,scope=${scope}" "${scope} cache import scope"
+    require_job "${job}" "cache-to:[[:space:]]*type=gha,scope=${scope},mode=max" "${scope} cache export scope"
+done
+require 'digest:[[:space:]]*\$\{\{ steps\.adapter-build\.outputs\.digest \}\}' \
+    'adapter build digest job output'
+require 'adapter-digest:[[:space:]]*\$\{\{ needs\.build-feishu-adapter\.outputs\.digest \}\}' \
+    'adapter digest fan-in output'
+require 'file:[[:space:]]*\./docker/feishu-alert-adapter\.Dockerfile' 'adapter image build missing'
+require 'FEISHU_WEBHOOK_URL' 'Feishu secret injection missing'
+require 'kubectl create namespace monitoring --dry-run=client -o yaml \| kubectl apply -f -' \
+    'monitoring namespace idempotent apply missing'
+require 'kubectl create secret generic stratum-monitoring-secrets' 'monitoring secret creation missing'
+require 'FEISHU_WEBHOOK_URL:[[:space:]]*\$\{\{ secrets\.FEISHU_WEBHOOK_URL \}\}' \
+    'Feishu webhook is not passed through the step environment'
+require 'test -n "\$FEISHU_WEBHOOK_URL"' 'Feishu webhook presence validation missing'
+require '--from-literal=FEISHU_WEBHOOK_URL="\$FEISHU_WEBHOOK_URL"' \
+    'monitoring secret does not use the validated environment variable'
+require 'kubectl create secret docker-registry aliyun-registry' 'monitoring registry pull secret creation missing'
+require 'adapter_digest="\$\{\{ needs\.build-and-push\.outputs\.adapter-digest \}\}"' \
+    'adapter digest is not consumed from the build job'
+require '\$adapter_digest.*\^sha256:\[0-9a-f\]\{64\}\$' 'adapter digest validation missing'
+require 'FEISHU_ADAPTER_IMAGE:[[:space:]]*\$\{\{ env\.IMAGE_REPO \}\}/stratum-feishu-alert-adapter@\$\{\{ needs\.build-and-push\.outputs\.adapter-digest \}\}' \
+    'adapter immutable digest is not passed to monitoring reconciliation'
+require 'PATH="\$validator_dir:\$PATH" bash scripts/deploy-remote-monitoring\.sh' \
+    'safe monitoring reconciliation entrypoint missing'
+require 'prom/prometheus:v3\.8\.1' 'pinned Prometheus validation tool image missing'
+require 'prom/alertmanager:v0\.33\.1' 'pinned Alertmanager validation tool image missing'
 require 'Verify deployment candidate' 'stale main SHA gate'
 require 'api\.github\.com/repos/.*/commits/main' 'fail-closed current main lookup'
 require 'sha256:\[0-9a-f\]\{64\}' 'registry digest validation'
@@ -76,6 +124,72 @@ reject 'metrics-server/releases/latest' 'mutable metrics-server latest manifest'
 reject '\|\|[[:space:]]*true' 'suppressed deployment errors'
 reject 'StrictHostKeyChecking=no' 'disabled SSH host verification'
 reject 'insecure-skip-tls-verify|certificate-authority-data:/d' 'disabled Kubernetes API verification'
+
+require_file "${REMOTE_MONITORING_DEPLOY}" '^set -euo pipefail$' \
+    'monitoring deployment strict shell mode missing'
+require_file "${REMOTE_MONITORING_DEPLOY}" 'source .*monitoring/remote/versions\.env' \
+    'monitoring deployment version contract missing'
+require_file "${REMOTE_MONITORING_DEPLOY}" '^umask 077$' 'private monitoring inventory umask missing'
+require_file "${REMOTE_MONITORING_DEPLOY}" 'mktemp -d' 'private monitoring inventory directory missing'
+require_file "${REMOTE_MONITORING_DEPLOY}" 'helm list --all-namespaces --output json' \
+    'read-only Helm release inventory missing'
+require_file "${REMOTE_MONITORING_DEPLOY}" 'helm get values' 'read-only Helm values inventory missing'
+require_file "${REMOTE_MONITORING_DEPLOY}" 'prometheus-community/kube-prometheus-stack' \
+    'pinned kube-prometheus-stack reconciliation missing'
+require_file "${REMOTE_MONITORING_DEPLOY}" 'prometheus-community/prometheus-blackbox-exporter' \
+    'pinned blackbox exporter reconciliation missing'
+require_file "${REMOTE_MONITORING_DEPLOY}" '--atomic --wait --timeout 15m' \
+    'atomic kube-prometheus-stack wait contract missing'
+require_file "${REMOTE_MONITORING_DEPLOY}" '--atomic --wait --timeout 10m' \
+    'atomic blackbox exporter wait contract missing'
+require_file "${REMOTE_MONITORING_DEPLOY}" 'api/v1/targets' 'Prometheus target smoke check missing'
+require_file "${REMOTE_MONITORING_DEPLOY}" 'api/v1/rules' 'Prometheus rule-health smoke check missing'
+reject_file "${REMOTE_MONITORING_DEPLOY}" \
+    'helm uninstall|kubectl delete .*(customresourcedefinition|crd|persistentvolumeclaim|pvc)|k8s/monitoring\.yaml' \
+    'monitoring deployment contains destructive or stale operations'
+
+verify_step_line=$(grep -n 'name: Verify deployment' "${WORKFLOW}" | tail -1 | cut -d: -f1)
+monitoring_step_line=$(grep -n 'name: Reconcile remote monitoring' "${WORKFLOW}" | tail -1 | cut -d: -f1)
+if [[ -z "${verify_step_line}" || -z "${monitoring_step_line}" || ${monitoring_step_line} -le ${verify_step_line} ]]; then
+    echo 'deployment safety contract violated: monitoring reconciliation must follow healthy application rollout' >&2
+    exit 1
+fi
+
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'readOnlyRootFilesystem:[[:space:]]*true' \
+    'adapter filesystem hardening missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'automountServiceAccountToken:[[:space:]]*false' \
+    'adapter service account token automount is not disabled'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'runAsNonRoot:[[:space:]]*true' 'adapter non-root policy missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'runAsUser:[[:space:]]*65532' 'adapter runtime UID missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'runAsGroup:[[:space:]]*65532' 'adapter runtime GID missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'capabilities:' 'adapter capability policy missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'drop:[[:space:]]*$' 'adapter dropped-capability list missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" '^[[:space:]]+- ALL$' 'adapter does not drop every Linux capability'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'allowPrivilegeEscalation:[[:space:]]*false' \
+    'adapter privilege escalation policy missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'seccompProfile:' 'adapter seccomp policy missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'type:[[:space:]]*RuntimeDefault' 'adapter seccomp profile is not RuntimeDefault'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'livenessProbe:' 'adapter liveness probe missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'readinessProbe:' 'adapter readiness probe missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'resources:' 'adapter resource budget missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'terminationGracePeriodSeconds:[[:space:]]*30' \
+    'adapter termination grace period missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'type:[[:space:]]*ClusterIP' 'adapter service is not explicitly ClusterIP'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'kind:[[:space:]]*ServiceMonitor' 'adapter scrape contract missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'release:[[:space:]]*kps' 'adapter ServiceMonitor release selector missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'image:[[:space:]]*__FEISHU_ADAPTER_IMAGE__' \
+    'adapter manifest image placeholder missing'
+require_file "${FEISHU_ADAPTER_MANIFEST}" 'secretKeyRef:' 'adapter webhook Secret reference missing'
+require_file "${FEISHU_ADAPTER_DOCKERFILE}" '^FROM .*@sha256:' 'adapter build image is not digest pinned'
+reject_file "${FEISHU_ADAPTER_DOCKERFILE}" '^FROM .*:latest' 'adapter uses a mutable latest base image'
+require_file "${FEISHU_ADAPTER_DOCKERFILE}" '^FROM scratch$' 'adapter runtime stage is not minimal'
+require_file "${FEISHU_ADAPTER_DOCKERFILE}" \
+    '^COPY --from=builder /etc/ssl/certs/ca-certificates\.crt /etc/ssl/certs/ca-certificates\.crt$' \
+    'adapter runtime CA certificates missing'
+require_file "${FEISHU_ADAPTER_DOCKERFILE}" '^USER 65532:65532$' 'adapter image does not run as UID/GID 65532'
+require_file "${FEISHU_ADAPTER_DOCKERFILE}" '^EXPOSE 8080$' 'adapter image port contract missing'
+require_file "${FEISHU_ADAPTER_DOCKERFILE}" '^ENTRYPOINT \["/feishu-alert-adapter"\]$' \
+    'adapter image entrypoint contract missing'
 
 if grep -Eq 'gosec@latest|gosec .*\|\|[[:space:]]*true' "${CI_WORKFLOW}"; then
     echo 'deployment safety contract violated: security scanner is unpinned or non-blocking' >&2
@@ -221,7 +335,7 @@ require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'GROUP BY table_schema' \
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" '/api/auth/me' 'administrator bearer identity check'
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" "role IN \('owner',[[:space:]]*'admin'\)" \
     'aggregate tenant administrator count'
-require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" "settings->'llm_api_keys'" \
+require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" "table_name='providers'" \
     'aggregate configured provider count'
 require_file "${PLATFORM_ASSISTANT_REMOTE_VERIFY}" 'stratum_diagnose_tenant' \
     'configured chain diagnostic tool evidence'

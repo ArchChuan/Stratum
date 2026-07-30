@@ -35,6 +35,16 @@ func TestLocalSourceDigestCoversTrackedAndUntrackedSource(t *testing.T) {
 	require.NotEqual(t, second, third)
 }
 
+func TestLocalSourceDigestHandlesDeletedTrackedSource(t *testing.T) {
+	root := initDigestRepository(t)
+	before, err := LocalSourceDigest(root)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(filepath.Join(root, "tracked.txt")))
+	after, err := LocalSourceDigest(root)
+	require.NoError(t, err)
+	require.NotEqual(t, before, after)
+}
+
 func TestLocalSourceDigestExcludesAttestationOutputAndIgnoredFiles(t *testing.T) {
 	root := initDigestRepository(t)
 	before, err := LocalSourceDigest(root)

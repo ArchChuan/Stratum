@@ -17,6 +17,7 @@ const baseHook = {
   skills: [],
   mcpTools: [],
   workspaces: [],
+  chatModels: [],
   navigate: vi.fn(),
   onFinish: vi.fn(),
 };
@@ -50,7 +51,7 @@ const renderPage = (agentValues: Pick<Agent, 'isSystem' | 'name'>, id: string) =
 describe('EditAgentPage', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('shows platform assistant title for system agent', () => {
+  it('renders the unified form for the platform assistant', () => {
     renderPage({ isSystem: true, name: 'Stratum 平台助手' }, 'stratum-platform-assistant');
 
     expect(screen.getByText('平台助手设置')).toBeInTheDocument();

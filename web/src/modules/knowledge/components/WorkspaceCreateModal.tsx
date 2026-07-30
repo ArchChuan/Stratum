@@ -2,7 +2,6 @@ import { Button, Collapse, Form, Input, InputNumber, Modal, Select, type FormIns
 
 import {
   CHUNKING_STRATEGY_OPTIONS,
-  EMBEDDING_MODEL_OPTIONS,
   KNOWLEDGE_DEFAULT_CHUNK_OVERLAP,
   KNOWLEDGE_DEFAULT_CHUNK_SIZE,
   KNOWLEDGE_DEFAULT_TOP_K,
@@ -31,6 +30,7 @@ interface WorkspaceCreateModalProps {
   form: FormInstance<WorkspaceCreateValues>;
   onClose: () => void;
   onSubmit: (values: WorkspaceCreateValues) => void;
+  embeddingModels: string[];
 }
 
 export function WorkspaceCreateModal({
@@ -39,6 +39,7 @@ export function WorkspaceCreateModal({
   form,
   onClose,
   onSubmit,
+  embeddingModels,
 }: WorkspaceCreateModalProps) {
   return (
     <Modal
@@ -76,10 +77,13 @@ export function WorkspaceCreateModal({
         <Form.Item
           label="嵌入模型"
           name="embedding_model"
-          initialValue="text-embedding-v3"
           rules={[{ required: true }]}
         >
-          <Select options={EMBEDDING_MODEL_OPTIONS} style={{ width: '100%' }} />
+          <Select
+            options={embeddingModels.map((model) => ({ value: model, label: model }))}
+            notFoundContent="模型管理中没有可用的嵌入模型"
+            style={{ width: '100%' }}
+          />
         </Form.Item>
         <Form.Item
           label="分块策略"

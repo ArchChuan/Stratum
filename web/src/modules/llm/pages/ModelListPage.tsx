@@ -1,4 +1,8 @@
-import { useCallback, useMemo, useState } from 'react';
+import {
+  DeleteOutlined,
+  ReloadOutlined,
+  RobotOutlined,
+} from '@ant-design/icons';
 import {
   Button,
   Card,
@@ -10,11 +14,7 @@ import {
   Table,
   Typography,
 } from 'antd';
-import {
-  DeleteOutlined,
-  ReloadOutlined,
-  RobotOutlined,
-} from '@ant-design/icons';
+import { useCallback, useMemo, useState } from 'react';
 
 import { ModelCapabilityTags } from '../components/ModelCapabilityTags';
 import { ModelEditDrawer } from '../components/ModelEditDrawer';

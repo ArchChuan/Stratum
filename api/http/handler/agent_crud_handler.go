@@ -11,6 +11,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/middleware"
 	agent "github.com/byteBuilderX/stratum/internal/agent/application"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 func (h *AgentHandler) GetAllAgents(c *gin.Context) {
@@ -61,13 +62,13 @@ func (h *AgentHandler) CreateAgent(c *gin.Context) {
 		Description:           req.Description,
 		SystemPrompt:          req.SystemPrompt,
 		LLMModel:              req.LLMModel,
-		EmbedModel:            req.EmbedModel,
 		MaxIterations:         req.MaxIterations,
 		MaxContextTokens:      req.MaxContextTokens,
 		AllowedSkills:         req.AllowedSkills,
 		MCPToolIDs:            req.MCPToolIDs,
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
 		MemoryScope:           req.MemoryScope,
+		CheckpointEnabled:     req.CheckpointEnabled,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -98,6 +99,7 @@ func (h *AgentHandler) UpdateAgent(c *gin.Context) {
 		MCPToolIDs:            req.MCPToolIDs,
 		KnowledgeWorkspaceIDs: req.KnowledgeWorkspaceIDs,
 		MemoryScope:           req.MemoryScope,
+		CheckpointEnabled:     req.CheckpointEnabled,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -117,6 +119,60 @@ func (h *AgentHandler) DeleteAgent(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "agent deleted successfully"})
+}
+
+// PauseExecution marks a running execution as paused so it can be resumed later.
+func (h *AgentHandler) PauseExecution(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	executionID := c.Param("executionID")
+	if err := h.svc.PauseExecution(c.Request.Context(), tenantID, executionID); err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "paused"})
+}
+
+// ResumeExecution restarts a paused execution from its last checkpoint.
+func (h *AgentHandler) ResumeExecution(c *gin.Context) {
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	id := c.Param("id")
+	executionID := c.Param("executionID")
+	var req ExecuteAgentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	userID, _ := userIDFromCtx(c)
+
+	result, _, err := h.svc.ResumeExecution(c.Request.Context(), id, agent.ExecRequest{
+		Query:          req.Query,
+		ConversationID: req.ConversationID,
+		UserID:         userID,
+		MaxSteps:       intOption(req.Options, "maxSteps"),
+		Timeout:        timeoutOption(req.Options, "timeout"),
+	}, agent.ExecMeta{
+		TenantID: tenantID,
+		TraceID:  middleware.GetTraceID(c),
+	}, executionID)
+
+	if err != nil {
+		h.logger.Error("resume execution failed",
+			zap.String("agentId", id),
+			zap.String("executionId", executionID),
+			zap.Error(err),
+		)
+		respondAgentExecutionError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, agentExecutionResultDTO(result))
 }
 
 // executionRow is the wire shape rendered by ListExecutions. JSON tags

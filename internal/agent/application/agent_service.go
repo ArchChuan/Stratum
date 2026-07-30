@@ -33,7 +33,6 @@ import (
 // imports allowed.
 type AgentServiceDeps struct {
 	Registry                  *Registry
-	TenantSettings            port.TenantSettings
 	SkillLookup               port.SkillLookup
 	SkillActivationResolver   port.SkillActivationResolver
 	SkillRevisionResolver     port.SkillRevisionResolver
@@ -113,16 +112,15 @@ type CreateAgentInput struct {
 	Description           string
 	SystemPrompt          string
 	LLMModel              string
-	EmbedModel            string
 	MaxIterations         int
 	MaxContextTokens      int
 	AllowedSkills         []string
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
+	CheckpointEnabled     bool
 }
 
-// UpdateAgentInput mirrors CreateAgentInput minus immutable EmbedModel.
 type UpdateAgentInput struct {
 	Name                  string
 	Type                  string
@@ -135,6 +133,7 @@ type UpdateAgentInput struct {
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
+	CheckpointEnabled     bool
 }
 
 // AgentDTO is the wire shape returned by AgentService for transport
@@ -146,7 +145,6 @@ type AgentDTO struct {
 	Description           string
 	SystemPrompt          string
 	LLMModel              string
-	EmbedModel            string
 	MaxIterations         int
 	MaxContextTokens      int
 	AllowedSkills         []string
@@ -157,6 +155,7 @@ type AgentDTO struct {
 	SystemKey             string
 	IsSystem              bool
 	ManagementMode        string
+	CheckpointEnabled     bool
 }
 
 type SystemAssistantSettings struct {
@@ -166,18 +165,8 @@ type SystemAssistantSettings struct {
 	AvailableModels []string
 }
 
-// Create persists a new agent for the tenant. Inherits embed_model from
-// tenant defaults when caller omits it.
+// Create persists a new agent for the tenant.
 func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDTO, error) {
-	embedModel := in.EmbedModel
-	if embedModel == "" && s.deps.TenantSettings != nil {
-		inherited, err := s.deps.TenantSettings.GetEmbedModel(ctx, in.TenantID)
-		if err != nil {
-			return AgentDTO{}, fmt.Errorf("agent service: get embed_model: %w", err)
-		}
-		embedModel = inherited
-	}
-
 	id := uuid.Must(uuid.NewV7()).String()
 	cfg := &domain.AgentConfig{
 		ID:                    id,
@@ -186,13 +175,13 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		Description:           in.Description,
 		SystemPrompt:          in.SystemPrompt,
 		LLMModel:              in.LLMModel,
-		EmbedModel:            embedModel,
 		MaxIterations:         in.MaxIterations,
 		MaxContextTokens:      in.MaxContextTokens,
 		AllowedSkills:         in.AllowedSkills,
 		MCPToolIDs:            in.MCPToolIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
 		MemoryScope:           in.MemoryScope,
+		CheckpointEnabled:     in.CheckpointEnabled,
 		Capabilities:          []domain.AgentCapability{},
 	}
 
@@ -239,7 +228,7 @@ func (s *AgentService) SnapshotRevision(ctx context.Context, tenantID, id string
 	}
 	revision := domain.AgentRevision{
 		AgentID: cfg.ID, Type: cfg.Type, SystemPrompt: cfg.SystemPrompt, Model: cfg.LLMModel,
-		EmbedModel: cfg.EmbedModel, MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
+		MaxIterations: cfg.MaxIterations, MemoryScope: cfg.MemoryScope,
 		CheckpointEnabled: cfg.CheckpointEnabled,
 		StuckThreshold:    cfg.StuckThreshold,
 		ModelParameters:   domain.ModelParameters{MaxContextTokens: cfg.MaxContextTokens},
@@ -339,7 +328,7 @@ func (s *AgentService) buildRevisionAgent(revision domain.AgentRevision) (*BaseA
 func revisionConfig(revision domain.AgentRevision) *domain.AgentConfig {
 	cfg := &domain.AgentConfig{
 		ID: revision.AgentID, Type: revision.Type, SystemPrompt: revision.SystemPrompt,
-		LLMModel: revision.Model, EmbedModel: revision.EmbedModel, MaxIterations: revision.MaxIterations,
+		LLMModel: revision.Model, MaxIterations: revision.MaxIterations,
 		MaxContextTokens: revision.ModelParameters.MaxContextTokens, MemoryScope: revision.MemoryScope,
 		CheckpointEnabled: revision.CheckpointEnabled,
 		StuckThreshold:    revision.StuckThreshold,
@@ -447,18 +436,14 @@ func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model str
 	if err != nil {
 		return SystemAssistantSettings{}, err
 	}
-	existing, _, err := s.deps.Registry.Get(ctx, domain.SystemAssistantID)
+	a, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model)
 	if err != nil {
-		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model get: %w", err)
-	}
-	cfg := existing.GetConfig()
-	cfg.LLMModel = model
-	if err := s.deps.Registry.UpdateSystemAssistant(ctx, cfg); err != nil {
 		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: %w", err)
 	}
+	cfg := a.GetConfig()
 	return SystemAssistantSettings{
-		AgentID: cfg.ID, Model: model,
-		Ready: true, AvailableModels: models,
+		AgentID: cfg.ID, Model: cfg.LLMModel,
+		Ready: cfg.LLMModel == model, AvailableModels: models,
 	}, nil
 }
 
@@ -473,7 +458,6 @@ func (s *AgentService) listTenantChatModels(ctx context.Context, tenantID string
 	return append([]string(nil), models...), nil
 }
 
-// Update replaces mutable fields on an existing agent. EmbedModel is
 // immutable post-create — callers cannot change it through Update.
 func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInput) (AgentDTO, error) {
 	existing, ok, err := s.deps.Registry.Get(ctx, id)
@@ -497,13 +481,13 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		Description:           in.Description,
 		SystemPrompt:          in.SystemPrompt,
 		LLMModel:              in.LLMModel,
-		EmbedModel:            existing.GetConfig().EmbedModel,
 		MaxIterations:         in.MaxIterations,
 		MaxContextTokens:      in.MaxContextTokens,
 		AllowedSkills:         skills,
 		MCPToolIDs:            in.MCPToolIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
 		MemoryScope:           in.MemoryScope,
+		CheckpointEnabled:     in.CheckpointEnabled,
 	}
 	if err := s.deps.Registry.Update(ctx, cfg); err != nil {
 		return AgentDTO{}, err
@@ -512,13 +496,12 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	return cfgToDTO(cfg), nil
 }
 
-func (s *AgentService) updateSystemAssistant(ctx context.Context, existing *domain.AgentConfig, in UpdateAgentInput) (AgentDTO, error) {
+func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.AgentConfig, in UpdateAgentInput) (AgentDTO, error) {
 	tenantID := reqctx.TenantIDFromContext(ctx)
 	if tenantID == "" {
 		return AgentDTO{}, fmt.Errorf("update system assistant: tenant id required")
 	}
-	// Validate model change through tenant policy.
-	if in.LLMModel != "" && in.LLMModel != existing.LLMModel {
+	if in.LLMModel != "" && in.LLMModel != cfg.LLMModel {
 		if s.deps.TenantModelValidator != nil {
 			if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, in.LLMModel); err != nil {
 				if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
@@ -528,40 +511,30 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, existing *doma
 				return AgentDTO{}, fmt.Errorf("update system assistant model: %w", err)
 			}
 		}
+		updated, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, in.LLMModel)
+		if err != nil {
+			return AgentDTO{}, fmt.Errorf("update system assistant model: %w", err)
+		}
+		cfg = updated.GetConfig()
 	}
 	skills := in.AllowedSkills
 	if skills == nil {
 		skills = []string{}
 	}
-	cfg := &domain.AgentConfig{
-		ID:                    existing.ID,
-		Name:                  existing.Name, // system assistant name is immutable
-		Type:                  domain.ReActAgent,
-		Description:           existing.Description,
-		SystemPrompt:          existing.SystemPrompt,
-		LLMModel:              in.LLMModel,
-		EmbedModel:            existing.EmbedModel,
-		MaxIterations:         existing.MaxIterations,
-		MaxContextTokens:      existing.MaxContextTokens,
-		AllowedSkills:         skills,
-		MCPToolIDs:            in.MCPToolIDs,
-		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
-		MemoryScope:           in.MemoryScope,
-		SystemKey:             existing.SystemKey,
+	mcpTools := in.MCPToolIDs
+	if mcpTools == nil {
+		mcpTools = []string{}
 	}
-	if err := s.deps.Registry.UpdateSystemAssistant(ctx, cfg); err != nil {
-		return AgentDTO{}, fmt.Errorf("update system assistant: %w", err)
+	knowledge := in.KnowledgeWorkspaceIDs
+	if knowledge == nil {
+		knowledge = []string{}
 	}
-	// Re-fetch to return the composed config (profile may override some fields).
-	a, found, err := s.deps.Registry.Get(ctx, existing.ID)
+	updated, err := s.deps.Registry.UpdateSystemAssistantBindings(ctx, mcpTools, knowledge, skills)
 	if err != nil {
-		return AgentDTO{}, fmt.Errorf("update system assistant re-fetch: %w", err)
+		return AgentDTO{}, fmt.Errorf("update system assistant bindings: %w", err)
 	}
-	if !found {
-		return AgentDTO{}, ErrNotFound
-	}
-	s.deps.Logger.Info("system assistant updated", zap.String("id", existing.ID))
-	return cfgToDTO(a.GetConfig()), nil
+	s.deps.Logger.Info("system assistant updated", zap.String("id", cfg.ID))
+	return cfgToDTO(updated.GetConfig()), nil
 }
 
 // Delete removes an agent and cascades deletion to conversations and memories.
@@ -608,7 +581,6 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		Description:           cfg.Description,
 		SystemPrompt:          cfg.SystemPrompt,
 		LLMModel:              cfg.LLMModel,
-		EmbedModel:            cfg.EmbedModel,
 		MaxIterations:         cfg.MaxIterations,
 		MaxContextTokens:      cfg.MaxContextTokens,
 		AllowedSkills:         cfg.AllowedSkills,
@@ -618,6 +590,7 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		MemoryScope:           cfg.MemoryScope,
 		SystemKey:             cfg.SystemKey,
 		IsSystem:              cfg.IsSystem,
+		CheckpointEnabled:     cfg.CheckpointEnabled,
 		ManagementMode:        cfg.ManagementMode,
 	}
 }
@@ -638,6 +611,7 @@ type ExecMeta struct {
 	TenantID                   string
 	TraceID                    string
 	Stream                     bool
+	ExecutionID                string // optional; generated if empty, used for resume
 	EvolutionTrace             EvolutionTraceMetadata
 	KnowledgeAssignmentsPinned bool
 	PinnedKnowledgeRevisions   map[string]port.KnowledgeRevisionPin
@@ -779,7 +753,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		return nil, 0, ErrNotFound
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
-	executionID := uuid.Must(uuid.NewV7()).String()
+	executionID := executionIDOrNew(meta.ExecutionID)
 	preparationStart := time.Now()
 	recordExecutionPreparation(ctx, a, req, meta, executionID)
 	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
@@ -1122,6 +1096,27 @@ func completeApprovalResume(
 	return nil
 }
 
+// PauseExecution marks a running execution's checkpoint as paused so it can be
+// resumed later. No-op when the checkpoint store is not configured.
+func (s *AgentService) PauseExecution(ctx context.Context, tenantID, executionID string) error {
+	if s.deps.CheckpointStore == nil {
+		return fmt.Errorf("pause execution: checkpoint store not configured")
+	}
+	return s.deps.CheckpointStore.UpdateStatus(ctx, tenantID, executionID, "paused")
+}
+
+// ResumeExecution restarts a paused execution from its last checkpoint.
+// The executionID must refer to a paused checkpoint.
+func (s *AgentService) ResumeExecution(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, executionID string) (*AgentResult, int, error) {
+	if s.deps.CheckpointStore != nil {
+		if err := s.deps.CheckpointStore.UpdateStatus(ctx, meta.TenantID, executionID, "running"); err != nil {
+			return nil, 0, fmt.Errorf("resume execution: %w", err)
+		}
+	}
+	meta.ExecutionID = executionID
+	return s.Execute(ctx, agentID, req, meta)
+}
+
 func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, activation port.SkillActivation) (*AgentResult, int, error) {
 	a, ok, err := s.deps.Registry.Get(ctx, agentID)
 	if err != nil {
@@ -1166,7 +1161,7 @@ func (s *AgentService) assembleOptions(
 		}
 	}
 	if s.deps.TenantResolver != nil {
-		if capGW, apiKeys, ok := s.deps.TenantResolver.Resolve(ctx, meta.TenantID); ok {
+		if capGW, ok := s.deps.TenantResolver.Resolve(ctx, meta.TenantID); ok {
 			ctx = s.deps.TenantResolver.InjectCompleter(ctx, meta.TenantID)
 			type capGWSetter interface {
 				SetCapGateway(port.CapabilityGateway)
@@ -1183,9 +1178,6 @@ func (s *AgentService) assembleOptions(
 						setter.SetHistoryCompactor(compactor)
 					}
 				}
-			}
-			if len(apiKeys) > 0 {
-				options = append(options, WithLLMAPIKeys(apiKeys))
 			}
 		}
 	}
@@ -1677,4 +1669,12 @@ func truncateRunes(s string, maxRunes int) string {
 		return s
 	}
 	return string(runes[:maxRunes])
+}
+
+// executionIDOrNew returns id if non-empty, otherwise generates a new v7 UUID.
+func executionIDOrNew(id string) string {
+	if id == "" {
+		return uuid.Must(uuid.NewV7()).String()
+	}
+	return id
 }
