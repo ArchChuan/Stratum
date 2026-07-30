@@ -23,6 +23,20 @@
 - 前端位于 `web/`，使用 React 18.3、Vite 6.4、Ant Design 5.20、React Router 6.26、Axios 1.18、TypeScript。代码按 `web/src/modules/` 业务域组织，共享 API 客户端是 `web/src/services/client.ts`。
 - 部署资源位于 `k8s/`、`helm/`、`grafana/`；模块的细节以本文件末尾索引为准。
 
+## Remote environment
+
+远端生产集群部署在阿里云 ECS，用于排查告警和运维诊断：
+
+- **SSH 连接**：`ssh root@101.200.181.141`（已免密登录）
+- **集群类型**：单节点 k3s v1.36.2
+- **节点 IP**：172.20.139.203（内网 Pod 无法访问 localhost 时使用）
+- **Prometheus**：`kube-prometheus-stack`（helm release: `kps`），namespace `monitoring`
+
+**规则**：
+
+- 排查告警、查看日志、检查 Pod/Service/Endpoint 状态 → 直接 SSH 自动执行，无需确认
+- 修改远程状态（重启服务、改配置、建资源、kubectl apply/edit/delete）→ 必须先获用户许可
+
 ## Architecture decisions
 
 - PostgreSQL 采用多租户 schema 隔离；事务内通过 `SET LOCAL search_path` 切换，统一走 `pkg/tenantdb`。
@@ -126,6 +140,7 @@ CI 全绿后合并，再用 `git worktree remove ../stratum-<feature>` 清理。
 - 错误通知统一为 `message.error({ content: err.response?.data?.error || '操作失败', duration: 0 })`；成功通知使用 `message.success({ content: '操作成功', duration: 2 })` 或等价的 `duration <= 2` 形式。使用 `message` 和 `Modal.confirm`，禁止 `alert()`、`confirm()` 和提交 `console.log`。
 - 页面不得跨 `pages/` 导入；组件超过 200 行应提取 hook、component 或纯函数。`useEffect` 依赖完整，异步 effect 使用 cancelled 标志清理。
 - 用户可见字符串使用中文。Bearer token 不得存入 localStorage/Web Storage；使用 HttpOnly cookie 或内存 Context。
+- Modal 状态命名：`createOpen/editOpen`；loading 命名：`createLoading/deleteLoading`；service 命名：`动词+实体名` 如 `createWorkspace`；Hook 返回值直接解构，不加 `state` 前缀。
 
 ## Logging and security
 
@@ -152,13 +167,7 @@ CI 全绿后合并，再用 `git worktree remove ../stratum-<feature>` 清理。
 
 ## Product design rules
 
-- 意图优先：首屏聚焦用户目标，技术参数折叠进高级设置，首屏 ≤3 个决策点。列表页 ≤5 列；表单首屏 ≤8 项，基础展开、高级折叠。
-- AI 执行中展示流式输出和工具调用步骤；执行后用折叠面板展示工具名、耗时和摘要；失败定位到具体步骤。
-- 管理员负责配置，终端用户负责对话；管理操作二次确认，终端用户界面不暴露配置入口。
-- 知识库 `description` 必填，`name` 创建后不可改；Agent `max_iterations` 为 1–20 slider，绑定知识库时展示 description；Skill temperature 用带标签 Slider，并支持不经过 Agent 的独立测试运行；Memory 用户侧只读 content、时间、importance，管理侧增加 scope、agent_id。
-- 交互三态：进行中使用 loading/Skeleton；成功通知最多显示 2 秒，失败通知不自动消失，调用形式遵循上述 Frontend conventions。所有列表都有 Empty 和引导操作；无数据提示“X 还是空的”，搜索无结果提示“没有找到…”。
-- 删除、停用、清空使用 `Modal.confirm` 并描述后果；必填通过 `rules`，说明用 `extra`，补充信息用 `tooltip`，避免重复。
-- 命名：Modal 状态用 `createOpen/editOpen`，loading 用 `createLoading/deleteLoading`，service 用动词+实体名如 `createWorkspace`，Hook 返回值直接解构而不加 `state` 前缀。
+产品交互规格与实体约束详见 `docs/agent/product.md`。
 
 ## Layered context index
 
