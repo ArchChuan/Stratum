@@ -65,9 +65,10 @@ require 'cancel-in-progress:[[:space:]]*false' 'non-cancelling active deployment
 require '^  build-backend:' 'parallel backend image build job'
 require '^  build-frontend:' 'parallel frontend image build job'
 require '^  build-feishu-adapter:' 'parallel Feishu adapter image build job'
-require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter\]' \
+require '^  build-platform-mcp:' 'parallel platform MCP image build job'
+require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter,[[:space:]]*build-platform-mcp\]' \
     'image build fan-in dependencies'
-for job_scope in build-backend:backend build-frontend:frontend build-feishu-adapter:feishu-alert-adapter; do
+for job_scope in build-backend:backend build-frontend:frontend build-feishu-adapter:feishu-alert-adapter build-platform-mcp:platform-mcp; do
     job=${job_scope%%:*}
     scope=${job_scope#*:}
     require_job "${job}" '^    needs:[[:space:]]*test$' "${job} test dependency"
@@ -106,6 +107,18 @@ require '--set-string frontend\.image\.digest=' 'frontend digest deployment'
 require 'opik-2\.1\.32\.tgz' 'versioned Opik Helm chart artifact'
 require 'sha256sum --check' 'Opik Helm chart checksum verification'
 require 'helm upgrade --install opik /tmp/opik-2\.1\.32\.tgz' 'verified local Opik chart installation'
+require 'helm upgrade --install cert-manager jetstack/cert-manager' 'cert-manager release installation'
+require '--version v1\.21\.1' 'pinned cert-manager chart version'
+require '--set crds\.enabled=true' 'cert-manager CRD installation'
+require 'kubectl wait --for=condition=Established crd/certificates\.cert-manager\.io' \
+    'Certificate CRD readiness wait'
+require 'name:[[:space:]]*stratum-internal-root-bootstrap' 'internal root bootstrap issuer missing'
+require 'namespace:[[:space:]]*cert-manager' 'internal CA Secret namespace missing'
+require 'isCA:[[:space:]]*true' 'internal root certificate CA constraint missing'
+require 'secretName:[[:space:]]*stratum-internal-root-ca' 'internal root CA Secret missing'
+require 'name:[[:space:]]*stratum-internal-ca' 'internal workload ClusterIssuer missing'
+require 'kubectl wait --for=condition=Ready clusterissuer/stratum-internal-ca' \
+    'internal workload ClusterIssuer readiness wait'
 require_file "${OPIK_COLLECTOR}" 'opentelemetry-collector-contrib@sha256:[0-9a-f]{64}' \
     'collector image digest pin'
 require 'opik-backend\.opik\.svc\.cluster\.local:8080' 'in-cluster Opik API URL'
@@ -124,6 +137,16 @@ reject 'metrics-server/releases/latest' 'mutable metrics-server latest manifest'
 reject '\|\|[[:space:]]*true' 'suppressed deployment errors'
 reject 'StrictHostKeyChecking=no' 'disabled SSH host verification'
 reject 'insecure-skip-tls-verify|certificate-authority-data:/d' 'disabled Kubernetes API verification'
+
+cert_manager_step_line=$(grep -n 'name: Install pinned cert-manager release' "${WORKFLOW}" | cut -d: -f1)
+internal_ca_step_line=$(grep -n 'name: Bootstrap internal workload CA' "${WORKFLOW}" | cut -d: -f1)
+helm_deploy_step_line=$(grep -n 'name: Helm deploy' "${WORKFLOW}" | cut -d: -f1)
+if [[ -z "${cert_manager_step_line}" || -z "${internal_ca_step_line}" || -z "${helm_deploy_step_line}" ||
+    ${cert_manager_step_line} -ge ${internal_ca_step_line} ||
+    ${internal_ca_step_line} -ge ${helm_deploy_step_line} ]]; then
+    echo 'deployment safety contract violated: cert-manager and internal CA must be ready before Stratum Helm deploy' >&2
+    exit 1
+fi
 
 require_file "${REMOTE_MONITORING_DEPLOY}" '^set -euo pipefail$' \
     'monitoring deployment strict shell mode missing'
