@@ -40,10 +40,15 @@ func BuiltinSystemAssistantProfiles() map[string]domain.SystemAssistantProfile {
 			Name: "Stratum 平台助手", Description: "基于官方资料提供平台使用指导和当前租户的只读诊断。",
 			SystemPrompt: systemAssistantPrompt, MaxIterations: 6, MaxContextTokens: 24576,
 		},
+		"2026-07-23.v1": {
+			Key: domain.SystemAssistantKey, Version: "2026-07-23.v1",
+			Name: "Stratum 平台助手", Description: "基于官方资料提供平台使用指导和当前租户的只读诊断。",
+			SystemPrompt: systemAssistantPrompt, MaxIterations: 8, MaxContextTokens: 32768,
+		},
 		domain.CurrentSystemAssistantProfileVersion: {
 			Key: domain.SystemAssistantKey, Version: domain.CurrentSystemAssistantProfileVersion,
 			Name: "Stratum 平台助手", Description: "基于官方资料提供平台使用指导和当前租户的只读诊断。",
-			SystemPrompt: systemAssistantPrompt, MaxIterations: 8, MaxContextTokens: 32768,
+			SystemPrompt: systemAssistantPrompt, MaxIterations: 90, MaxContextTokens: 32768,
 		},
 	}
 }
