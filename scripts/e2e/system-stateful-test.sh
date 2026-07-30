@@ -14,6 +14,14 @@ grep -Fq -- '--noproxy stratum-platform-mcp' "$runner" || {
   printf 'Platform MCP health check must bypass external proxies\n' >&2
   exit 1
 }
+grep -Fq 'stateful_e2e_lock="$common_git_dir/stateful-e2e.lock"' "$runner" || {
+  printf 'stateful E2E lock must be shared by all worktrees\n' >&2
+  exit 1
+}
+grep -Fq 'flock "$stateful_e2e_lock_fd"' "$runner" || {
+  printf 'stateful E2E runner must serialize shared ports and database access\n' >&2
+  exit 1
+}
 
 expect_failure() {
   local expected=$1; shift

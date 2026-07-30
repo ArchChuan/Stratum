@@ -104,6 +104,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 common_git_dir=$(cd "$repo_dir" && git rev-parse --path-format=absolute --git-common-dir)
+stateful_e2e_lock="$common_git_dir/stateful-e2e.lock"
+exec {stateful_e2e_lock_fd}>"$stateful_e2e_lock"
+flock "$stateful_e2e_lock_fd"
 env_file=${STATEFUL_E2E_ENV_FILE:-$(dirname "$common_git_dir")/.env}
 if [[ -r "$env_file" ]]; then
   set -a
