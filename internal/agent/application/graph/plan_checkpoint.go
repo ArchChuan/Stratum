@@ -34,6 +34,8 @@ type PlanCheckpointPayload struct {
 	RemainingNodeBudget     int          `json:"remaining_node_budget"`
 	RemainingRevisionBudget int64        `json:"remaining_revision_budget"`
 	ActiveAttemptIDs        []string     `json:"active_attempt_ids,omitempty"`
+	ActiveSkillID           string       `json:"active_skill_id,omitempty"`
+	ActiveSkillRevisionID   string       `json:"active_skill_revision_id,omitempty"`
 }
 
 type planCheckpointEnvelope struct {
@@ -62,8 +64,8 @@ func DecodePlanCheckpoint(data []byte) (PlanCheckpointPayload, error) {
 	if envelope.Version != planCheckpointVersion {
 		return PlanCheckpointPayload{}, fmt.Errorf("%w: %d", ErrUnsupportedPlanCheckpoint, envelope.Version)
 	}
-	if envelope.Plan == nil || envelope.Plan.ID == "" {
-		return PlanCheckpointPayload{}, errors.New("decode plan checkpoint: plan is required")
+	if envelope.Plan != nil && envelope.Plan.ID == "" {
+		return PlanCheckpointPayload{}, errors.New("decode plan checkpoint: plan id is required when plan is present")
 	}
 	return envelope.PlanCheckpointPayload, nil
 }
@@ -133,6 +135,22 @@ func checkpointSnapshot(state *ReActState) *PersistPlanCheckpointSnapshot {
 	return snapshot
 }
 
+// buildReActRuntimeState encodes ReAct-only runtime state (ActiveSkill) into
+// the checkpoint's RuntimeStateJSON. Returns {} when there is nothing to persist.
+func buildReActRuntimeState(state *ReActState) json.RawMessage {
+	if state == nil || state.ActiveSkill == nil {
+		return json.RawMessage("{}")
+	}
+	payload := PlanCheckpointPayload{
+		ActiveSkillID:         state.ActiveSkill.SkillID,
+		ActiveSkillRevisionID: state.ActiveSkill.RevisionID,
+	}
+	if encoded, err := EncodePlanCheckpoint(payload); err == nil {
+		return json.RawMessage(encoded)
+	}
+	return json.RawMessage("{}")
+}
+
 // PersistReActCheckpoint persists a lightweight ReAct execution checkpoint
 // (no plan DAG). It snapshots Messages, tool calls, and the current graph node.
 func PersistReActCheckpoint(
@@ -157,7 +175,7 @@ func PersistReActCheckpoint(
 		UserID:           identity.UserID,
 		CurrentNode:      currentNode,
 		StepIndex:        state.Steps,
-		RuntimeStateJSON: json.RawMessage("{}"),
+		RuntimeStateJSON: buildReActRuntimeState(state),
 		Status:           "running",
 		CreatedAt:        now,
 		UpdatedAt:        now,

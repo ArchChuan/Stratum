@@ -170,6 +170,8 @@ func (r publishedSkillActivationResolver) ResolveSkills(
 			Name:                  view.Name,
 			Description:           view.Description,
 			Instructions:          view.Instructions,
+			InputSchema:           view.InputSchema,
+			OutputSchema:          view.OutputSchema,
 			MCPToolIDs:            view.MCPToolIDs,
 			KnowledgeWorkspaceIDs: view.KnowledgeWorkspaceIDs,
 			MemoryScopes:          view.MemoryScopes,

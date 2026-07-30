@@ -103,14 +103,14 @@ func TestCompletionAdvancesFromSkillActivationToMCPTool(t *testing.T) {
 	t.Parallel()
 	tools := `"tools":[` +
 		`{"type":"function","function":{"name":"stratum_create_plan","parameters":{"type":"object"}}},` +
-		`{"type":"function","function":{"name":"stratum_activate_skill","parameters":{"type":"object","properties":{"skill_id":{"type":"string","enum":["skill-1"]}}}}},` +
+		`{"type":"function","function":{"name":"skill-1","parameters":{"type":"object","properties":{"input":{"type":"string"}}}}},` +
 		`{"type":"function","function":{"name":"mcp:server-1:stateful_echo","parameters":{"type":"object"}}}]`
 
 	activation := completionToolName(t, `{"messages":[{"role":"user"}],`+tools+`}`)
-	if activation != "stratum_activate_skill" {
+	if activation != "skill-1" {
 		t.Fatalf("first tool=%q", activation)
 	}
-	mcp := completionToolName(t, `{"messages":[{"role":"assistant","tool_calls":[{"function":{"name":"stratum_activate_skill"}}]},{"role":"tool"}],`+tools+`}`)
+	mcp := completionToolName(t, `{"messages":[{"role":"assistant","tool_calls":[{"function":{"name":"skill-1"}}]},{"role":"tool"}],`+tools+`}`)
 	if mcp != "mcp:server-1:stateful_echo" {
 		t.Fatalf("second tool=%q", mcp)
 	}
