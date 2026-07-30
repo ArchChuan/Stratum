@@ -229,10 +229,7 @@ export const deleteGeneratedOAuthUser = async (
   githubID: string,
   email: string,
 ): Promise<void> => {
-  if (!/^[1-9][0-9]*$/.test(githubID)) throw new Error('generated oauth github id must be a positive integer');
-  if (!/^[a-z0-9._+-]+@example\.test$/i.test(email)) {
-    throw new Error('generated oauth email must use example.test');
-  }
+  validateGeneratedOAuthIdentity(githubID, email);
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -244,6 +241,31 @@ export const deleteGeneratedOAuthUser = async (
     if (result.rowCount !== 1) throw new Error('generated oauth cleanup did not delete exactly one user');
   } finally {
     client.release();
+  }
+};
+
+export const deleteGeneratedOAuthUserIfExists = async (
+  pool: DatabasePool,
+  githubID: string,
+  email: string,
+): Promise<void> => {
+  validateGeneratedOAuthIdentity(githubID, email);
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `DELETE FROM public.users
+       WHERE github_id = $1 AND email = $2 AND is_guest = false`,
+      [githubID, email],
+    );
+  } finally {
+    client.release();
+  }
+};
+
+const validateGeneratedOAuthIdentity = (githubID: string, email: string): void => {
+  if (!/^[1-9][0-9]*$/.test(githubID)) throw new Error('generated oauth github id must be a positive integer');
+  if (!/^[a-z0-9._+-]+@example\.test$/i.test(email)) {
+    throw new Error('generated oauth email must use example.test');
   }
 };
 

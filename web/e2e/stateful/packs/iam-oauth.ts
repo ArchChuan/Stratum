@@ -4,6 +4,7 @@ import type { QueryResultRow } from 'pg';
 import { withRestoredContextCookies } from '../core/actors';
 import {
   deleteGeneratedOAuthUser,
+  deleteGeneratedOAuthUserIfExists,
   requireUUID,
   restoreDefaultTenant,
   suspendDefaultTenant,
@@ -63,6 +64,7 @@ const executeIAMOAuthJourneyWithTemporaryIdentity = async ({
   let registered = false;
   let executionError: unknown;
   try {
+    await deleteGeneratedOAuthUserIfExists(pool, identity.githubID, identity.email);
     const defaultTenantID = await suspendDefaultTenant(pool);
     const firstExchange = waitForRequest(page, '/auth/oauth/exchange', 'POST');
     try {

@@ -6,6 +6,7 @@ import {
   configureManagedModels,
   deleteGeneratedActors,
   deleteGeneratedOAuthUser,
+  deleteGeneratedOAuthUserIfExists,
   requireUUID,
   restoreDefaultTenant,
   SAFE_POOL_OPTIONS,
@@ -255,6 +256,21 @@ describe('stateful E2E security boundaries', () => {
       `DELETE FROM public.users
        WHERE github_id = $1 AND email = $2 AND is_guest = false
        RETURNING id`,
+      ['730001', 'stateful-oauth@example.test'],
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('removes a stale generated oauth user before a repeated soak journey', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 0 });
+    const release = vi.fn();
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release }) };
+
+    await deleteGeneratedOAuthUserIfExists(pool, '730001', 'stateful-oauth@example.test');
+
+    expect(query).toHaveBeenCalledWith(
+      `DELETE FROM public.users
+       WHERE github_id = $1 AND email = $2 AND is_guest = false`,
       ['730001', 'stateful-oauth@example.test'],
     );
     expect(release).toHaveBeenCalledOnce();
