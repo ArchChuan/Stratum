@@ -133,6 +133,15 @@ func parseRetryAfter(header string) time.Duration {
 	return 0
 }
 
+// openaiModelsResponse is the JSON body from GET /models (OpenAI-compatible).
+type openaiModelsResponse struct {
+	Data []openaiModelItem `json:"data"`
+}
+
+type openaiModelItem struct {
+	ID string `json:"id"`
+}
+
 // ProviderConfig holds the minimal configuration that differentiates one
 // OpenAI-compatible provider from another.
 type ProviderConfig struct {
@@ -597,7 +606,37 @@ func (p *OpenAICompatProtocol) Health(ctx context.Context, cfg ProviderConfig) e
 }
 
 func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]string, error) {
-	return cfg.Models, nil
+	url := strings.TrimSuffix(cfg.BaseURL, "/") + "/models"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("openai compat: build models request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+
+	resp, err := p.client.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("openai compat: do models request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("openai compat: read models body: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("openai compat: GET %s returned %d: check API key and base URL",
+			url, resp.StatusCode)
+	}
+
+	var out openaiModelsResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("openai compat: decode models: %w", err)
+	}
+	models := make([]string, len(out.Data))
+	for i, m := range out.Data {
+		models[i] = m.ID
+	}
+	return models, nil
 }
 
 func (p *OpenAICompatProtocol) CreateEmbeddings(
