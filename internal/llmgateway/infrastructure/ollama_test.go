@@ -128,7 +128,10 @@ func TestOllamaListModels(t *testing.T) {
 	)
 	models, err := client.ListModels(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, []string{"llama3.2:latest", "mistral:7b"}, models)
+	require.Equal(t, []infrastructure.DiscoveredModel{
+		{Name: "llama3.2:latest"},
+		{Name: "mistral:7b"},
+	}, models)
 }
 
 func TestOllamaCreateEmbeddings(t *testing.T) {

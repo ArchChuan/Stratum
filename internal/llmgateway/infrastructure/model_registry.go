@@ -218,6 +218,23 @@ func (r *ModelRegistry) WarmTenant(ctx context.Context, tenantID string) error {
 	return nil
 }
 
+// GetChatModelContextWindow returns the ContextWindow for a named chat model
+// belonging to tenantID. Returns 0 when the model is not found or has no
+// known context window.
+func (r *ModelRegistry) GetChatModelContextWindow(ctx context.Context, tenantID, modelName string) (int, error) {
+	enabled := true
+	models, err := r.modelRepo.List(ctx, tenantID, port.ModelFilter{Enabled: &enabled, Capability: domain.CapChat})
+	if err != nil {
+		return 0, fmt.Errorf("model registry: get context window: %w", err)
+	}
+	for _, m := range models {
+		if m.Name == modelName {
+			return m.ContextWindow, nil
+		}
+	}
+	return 0, nil
+}
+
 // ListChatModels returns an empty slice. Tenant-scoped model lists are
 // available via ListChatModels(ctx, tenantID). This method satisfies
 // port.ModelCatalog for non-tenant contexts.

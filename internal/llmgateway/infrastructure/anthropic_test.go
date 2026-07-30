@@ -217,7 +217,10 @@ func TestAnthropicListModels(t *testing.T) {
 	)
 	models, err := client.ListModels(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, []string{"claude-sonnet-4-20250514", "claude-opus-4-8"}, models)
+	require.Equal(t, []infrastructure.DiscoveredModel{
+		{Name: "claude-sonnet-4-20250514"},
+		{Name: "claude-opus-4-8"},
+	}, models)
 }
 
 func TestAnthropicProtocolUsesResolvedProviderConfig(t *testing.T) {

@@ -26,19 +26,20 @@ import (
 )
 
 type Evaluation struct {
-	Service             *evalapp.Service
-	SuiteService        *evalapp.SuiteService
-	JobService          *evalapp.JobService
-	Worker              *evalapp.Worker
-	OptimizationService *evalapp.OptimizationService
-	ExperimentService   *evalapp.ExperimentService
-	FeedbackService     *evalapp.FeedbackService
-	QueryService        *evalapp.QueryService
-	CandidateService    *evalapp.CandidateCommandService
-	AgentProvider       evalport.AgentRevisionProvider
-	MCPProvider         evalport.ResourceRevisionProvider
-	KnowledgeProvider   evalport.ResourceRevisionProvider
-	BaselineService     *evalapp.BaselineService
+	Service              *evalapp.Service
+	SuiteService         *evalapp.SuiteService
+	JobService           *evalapp.JobService
+	Worker               *evalapp.Worker
+	OptimizationService  *evalapp.OptimizationService
+	ExperimentService    *evalapp.ExperimentService
+	FeedbackService      *evalapp.FeedbackService
+	QueryService         *evalapp.QueryService
+	CandidateService     *evalapp.CandidateCommandService
+	AgentProvider        evalport.AgentRevisionProvider
+	MCPProvider          evalport.ResourceRevisionProvider
+	KnowledgeProvider    evalport.ResourceRevisionProvider
+	BaselineService      *evalapp.BaselineService
+	AgentRevisionApplier evalport.AgentRevisionApplier
 }
 
 type evaluationResourceRouter struct {
@@ -694,7 +695,8 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	}
 	if c.Agent != nil && sharedRevisionService != nil {
 		agentAdapter := agentEvaluationAdapter{
-			revisions: sharedRevisionService, agents: c.Agent.Service, actorID: "evaluation-worker",
+			revisions: sharedRevisionService, agents: c.Agent.Service,
+			agentUpdater: c.Agent.Service, actorID: "evaluation-worker",
 		}
 		resourceAdapters[evaldomain.ResourceKindAgent] = agentAdapter
 		candidateCreators[evaldomain.ResourceKindAgent] = agentAdapter
@@ -739,20 +741,25 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	worker.Start(ctx)
 	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })
 	baselineService := newEvaluationBaselineService(manager, agentProvider, mcpProvider, knowledgeProvider)
+	var agentRevisionApplier evalport.AgentRevisionApplier
+	if runtimeAgentAdapter != nil {
+		agentRevisionApplier = *runtimeAgentAdapter
+	}
 	c.Evaluation = &Evaluation{
-		Service:             service,
-		SuiteService:        suiteService,
-		JobService:          jobService,
-		Worker:              worker,
-		OptimizationService: optimizationService,
-		ExperimentService:   experimentService,
-		FeedbackService:     feedbackService,
-		QueryService:        evalapp.NewQueryService(queryRepo),
-		CandidateService:    evalapp.NewCandidateCommandService(candidateRepo),
-		AgentProvider:       agentProvider,
-		MCPProvider:         mcpProvider,
-		KnowledgeProvider:   knowledgeProvider,
-		BaselineService:     baselineService,
+		Service:              service,
+		SuiteService:         suiteService,
+		JobService:           jobService,
+		Worker:               worker,
+		OptimizationService:  optimizationService,
+		ExperimentService:    experimentService,
+		FeedbackService:      feedbackService,
+		QueryService:         evalapp.NewQueryService(queryRepo),
+		CandidateService:     evalapp.NewCandidateCommandService(candidateRepo),
+		AgentProvider:        agentProvider,
+		MCPProvider:          mcpProvider,
+		KnowledgeProvider:    knowledgeProvider,
+		BaselineService:      baselineService,
+		AgentRevisionApplier: agentRevisionApplier,
 	}
 	if c.Agent != nil && c.Agent.Service != nil {
 		c.Agent.Service.SetSkillRevisionResolver(experimentSkillRevisionResolver{service: experimentService})

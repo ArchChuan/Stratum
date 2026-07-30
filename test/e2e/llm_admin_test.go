@@ -26,15 +26,15 @@ import (
 
 // mockProviderRuntime stubs provider model discovery for E2E tests.
 type mockProviderRuntime struct {
-	listModels func(ctx context.Context, provider domain.Provider) ([]string, error)
+	listModels func(ctx context.Context, provider domain.Provider) ([]port.DiscoveredModel, error)
 	health     func(ctx context.Context, provider domain.Provider) error
 }
 
-func (m *mockProviderRuntime) ListModels(ctx context.Context, provider domain.Provider) ([]string, error) {
+func (m *mockProviderRuntime) ListModels(ctx context.Context, provider domain.Provider) ([]port.DiscoveredModel, error) {
 	if m.listModels != nil {
 		return m.listModels(ctx, provider)
 	}
-	return []string{"mock-model-1", "mock-model-2"}, nil
+	return []port.DiscoveredModel{{Name: "mock-model-1"}, {Name: "mock-model-2"}}, nil
 }
 
 func (m *mockProviderRuntime) Health(ctx context.Context, provider domain.Provider) error {

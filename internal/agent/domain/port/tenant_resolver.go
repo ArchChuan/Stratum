@@ -27,3 +27,9 @@ type TenantChatModelValidator interface {
 type TenantChatModelCatalog interface {
 	ListTenantChatModels(ctx context.Context, tenantID string) ([]string, error)
 }
+
+// ModelContextProvider resolves per-model metadata such as ContextWindow
+// for the current tenant's configured models.
+type ModelContextProvider interface {
+	GetChatModelContextWindow(ctx context.Context, tenantID, model string) (int, error)
+}

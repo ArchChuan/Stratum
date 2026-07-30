@@ -38,4 +38,91 @@ const (
 	// LoopCompactionSafetyRatio triggers compaction before the hard token ceiling,
 	// leaving margin for the EstimateText heuristic error (<20%).
 	LoopCompactionSafetyRatio = 0.8
+
+	// DefaultAgentContextTokensCeiling caps auto-derived MaxContextTokens to avoid
+	// 128K+ models exhausting memory with full-window context budgets.
+	DefaultAgentContextTokensCeiling = 32768
+
+	// DefaultContextWindowRatio is the fraction of a model's context window
+	// used as the agent's MaxContextTokens when the user does not set one explicitly.
+	DefaultContextWindowRatio = 0.85
+
+	// ---- adaptive compaction thresholds (Context Phase 3) ----
+
+	// CompactionRecentGroupsSmall is the number of recent message groups kept
+	// verbatim when the context window is below 16K tokens.
+	CompactionRecentGroupsSmall = 2
+	// CompactionRecentGroupsLarge is the number of recent message groups kept
+	// verbatim when the context window exceeds 64K tokens.
+	CompactionRecentGroupsLarge = 5
+
+	// CompactionRecentGroupsThresholdSmall is the window size below which the
+	// small recent-groups count applies.
+	CompactionRecentGroupsThresholdSmall = 16_000
+	// CompactionRecentGroupsThresholdLarge is the window size above which the
+	// large recent-groups count applies.
+	CompactionRecentGroupsThresholdLarge = 64_000
+
+	// CompactionSummaryReserveRatio is the fraction of the context budget
+	// reserved for the history compaction summary (5%).
+	CompactionSummaryReserveRatio = 0.05
+	// CompactionSummaryReserveFloor is the minimum summary reserve in tokens.
+	CompactionSummaryReserveFloor = 200
+
+	// CompactionMaxTokensRatio is the fraction of MaxContextTokens used to cap
+	// the compaction LLM's output (10%). See DynamicCompactionMaxTokens.
+	CompactionMaxTokensRatio = 0.10
+	// CompactionMaxTokensFloor is the minimum output budget for compaction.
+	CompactionMaxTokensFloor = 400
+	// CompactionMaxTokensCeiling caps the compaction output regardless of window.
+	CompactionMaxTokensCeiling = 800
 )
+
+// DynamicRecentGroups returns the number of recent message groups to preserve
+// during in-loop compaction, scaled by the agent's MaxContextTokens.
+//
+//	< 16K → 2 groups (tight budget)
+//	16K–64K → 3 groups (default)
+//	> 64K → 5 groups (ample budget)
+func DynamicRecentGroups(maxContextTokens int) int {
+	if maxContextTokens <= 0 {
+		return LoopCompactionRecentGroups
+	}
+	switch {
+	case maxContextTokens < CompactionRecentGroupsThresholdSmall:
+		return CompactionRecentGroupsSmall
+	case maxContextTokens > CompactionRecentGroupsThresholdLarge:
+		return CompactionRecentGroupsLarge
+	default:
+		return LoopCompactionRecentGroups
+	}
+}
+
+// DynamicSummaryReserve returns the token budget reserved for a conversation
+// history compaction summary. It scales as 5% of budget with a 200-token floor,
+// replacing the fixed budget/4 previously used.
+func DynamicSummaryReserve(budget int) int {
+	reserve := int(float64(budget) * CompactionSummaryReserveRatio)
+	if reserve < CompactionSummaryReserveFloor {
+		return CompactionSummaryReserveFloor
+	}
+	return reserve
+}
+
+// DynamicCompactionMaxTokens returns the max output tokens for a compaction
+// LLM call. It scales as ~10% of the agent's MaxContextTokens, bounded to
+// [CompactionMaxTokensFloor, CompactionMaxTokensCeiling].
+//
+//	4K → 400 (floor)
+//	8K → 800 (ceiling)
+//	32K → 800 (ceiling)
+func DynamicCompactionMaxTokens(maxContextTokens int) int {
+	derived := int(float64(maxContextTokens) * CompactionMaxTokensRatio)
+	if derived < CompactionMaxTokensFloor {
+		return CompactionMaxTokensFloor
+	}
+	if derived > CompactionMaxTokensCeiling {
+		return CompactionMaxTokensCeiling
+	}
+	return derived
+}
