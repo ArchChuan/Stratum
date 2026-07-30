@@ -23,17 +23,19 @@ const revisionClientCleanupTimeout = 5 * time.Second
 
 // ClientManager 管理多个 MCP 客户端
 type ClientManager struct {
-	clients    map[string]MCPClient
-	configs    map[string]*MCPServerConfig
-	connecting map[string]struct{}
-	cache      *CapabilityCache
-	mu         sync.RWMutex
-	logger     *zap.Logger
-	poolConfig *ConnectionPoolConfig
-	stopCh     chan struct{}
-	stopOnce   sync.Once
-	wg         sync.WaitGroup
-	pool       *pgxpool.Pool
+	clients     map[string]MCPClient
+	configs     map[string]*MCPServerConfig
+	connecting  map[string]struct{}
+	cache       *CapabilityCache
+	mu          sync.RWMutex
+	logger      *zap.Logger
+	poolConfig  *ConnectionPoolConfig
+	stopCh      chan struct{}
+	stopOnce    sync.Once
+	wg          sync.WaitGroup
+	pool        *pgxpool.Pool
+	credentials InvocationCredentialProvider
+	transport   ManagedHTTPTransportProvider
 
 	clientFactory func(*MCPServerConfig, *zap.Logger) MCPClient
 }
@@ -49,17 +51,63 @@ func NewClientManager(logger *zap.Logger, poolConfig *ConnectionPoolConfig, pool
 		}
 	}
 
-	return &ClientManager{
-		clients:       make(map[string]MCPClient),
-		configs:       make(map[string]*MCPServerConfig),
-		connecting:    make(map[string]struct{}),
-		cache:         NewCapabilityCache(1000, 1*time.Hour),
-		logger:        logger.Named("mcp.client_manager"),
-		poolConfig:    poolConfig,
-		stopCh:        make(chan struct{}),
-		pool:          pool,
-		clientFactory: func(cfg *MCPServerConfig, logger *zap.Logger) MCPClient { return NewBaseClient(cfg, logger) },
+	manager := &ClientManager{
+		clients:    make(map[string]MCPClient),
+		configs:    make(map[string]*MCPServerConfig),
+		connecting: make(map[string]struct{}),
+		cache:      NewCapabilityCache(1000, 1*time.Hour),
+		logger:     logger.Named("mcp.client_manager"),
+		poolConfig: poolConfig,
+		stopCh:     make(chan struct{}),
+		pool:       pool,
 	}
+	manager.clientFactory = func(cfg *MCPServerConfig, logger *zap.Logger) MCPClient {
+		client := NewBaseClient(cfg, logger)
+		client.SetInvocationCredentialProvider(manager.invocationCredentialProvider())
+		client.SetManagedHTTPTransportProvider(manager.managedHTTPTransportProvider())
+		return client
+	}
+	return manager
+}
+
+func (m *ClientManager) SetManagedHTTPTransportProvider(provider ManagedHTTPTransportProvider) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.transport = provider
+	for _, client := range m.clients {
+		configurable, ok := client.(interface {
+			SetManagedHTTPTransportProvider(ManagedHTTPTransportProvider)
+		})
+		if ok {
+			configurable.SetManagedHTTPTransportProvider(provider)
+		}
+	}
+}
+
+func (m *ClientManager) SetInvocationCredentialProvider(provider InvocationCredentialProvider) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.credentials = provider
+	for _, client := range m.clients {
+		configurable, ok := client.(interface {
+			SetInvocationCredentialProvider(InvocationCredentialProvider)
+		})
+		if ok {
+			configurable.SetInvocationCredentialProvider(provider)
+		}
+	}
+}
+
+func (m *ClientManager) invocationCredentialProvider() InvocationCredentialProvider {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.credentials
+}
+
+func (m *ClientManager) managedHTTPTransportProvider() ManagedHTTPTransportProvider {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.transport
 }
 
 // ErrNameConflict is the canonical sentinel for an MCP server name collision.

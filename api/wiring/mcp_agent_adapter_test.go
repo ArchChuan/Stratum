@@ -9,10 +9,50 @@ import (
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
+	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+type invocationSignerFake struct {
+	claims platformmcp.InvocationClaims
+}
+
+func (f *invocationSignerFake) SignInvocation(claims platformmcp.InvocationClaims, _ time.Duration) (string, error) {
+	f.claims = claims
+	return "signed", nil
+}
+
+func TestPlatformMCPInvocationCredentialsBindExecutionIdentity(t *testing.T) {
+	signer := &invocationSignerFake{}
+	provider := platformMCPInvocationCredentials{tokens: signer}
+	ctx := platformmcp.WithInvocationContext(t.Context(), platformmcp.InvocationContext{
+		TenantID: "tenant-1", UserID: "user-1", AgentID: platformmcp.SystemAssistantID,
+		ExecutionID: "execution-1", ApprovalID: "approval-1",
+	})
+
+	authorization, err := provider.Authorization(
+		ctx, platformmcp.SystemServerID, "stratum_propose_resource_change",
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, "Bearer signed", authorization)
+	require.Equal(t, "tenant-1", signer.claims.TenantID)
+	require.Equal(t, "execution-1", signer.claims.ExecutionID)
+	require.Equal(t, "approval-1", signer.claims.ApprovalID)
+	require.NotEmpty(t, signer.claims.ID)
+}
+
+func TestPlatformMCPInvocationCredentialsFailClosedWithoutExecutionIdentity(t *testing.T) {
+	provider := platformMCPInvocationCredentials{tokens: &invocationSignerFake{}}
+
+	_, err := provider.Authorization(
+		t.Context(), platformmcp.SystemServerID, "stratum_diagnose_tenant",
+	)
+
+	require.Error(t, err)
+}
 
 func TestMCPAgentToolAdapterKeepsStableExposedIDAndRawToolName(t *testing.T) {
 	logger := zap.NewNop()

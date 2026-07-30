@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
@@ -11,8 +12,11 @@ import (
 	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	iamtoken "github.com/byteBuilderX/stratum/internal/iam/infrastructure/token"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 type PlatformMCP struct {
@@ -44,7 +48,43 @@ func (c *Container) buildPlatformMCP(_ context.Context) error {
 		Contracts: platformmcp.NewPhase1Contracts(),
 	})
 	c.PlatformMCP = &PlatformMCP{TokenExchange: exchange, Tokens: tokens}
+	c.MCP.Manager.SetInvocationCredentialProvider(platformMCPInvocationCredentials{tokens: tokens})
+	c.MCP.Manager.SetManagedHTTPTransportProvider(platformMCPTransportProvider{files: c.Config.InternalAPI})
 	return nil
+}
+
+type invocationTokenSigner interface {
+	SignInvocation(platformmcp.InvocationClaims, time.Duration) (string, error)
+}
+
+type platformMCPInvocationCredentials struct {
+	tokens invocationTokenSigner
+}
+
+func (p platformMCPInvocationCredentials) Authorization(
+	ctx context.Context,
+	serverID, toolName string,
+) (string, error) {
+	invocation, ok := platformmcp.InvocationContextFrom(ctx)
+	if !ok || !validPlatformMCPInvocation(invocation, serverID, toolName) || p.tokens == nil {
+		return "", fmt.Errorf("issue Platform MCP invocation token: execution identity unavailable")
+	}
+	token, err := p.tokens.SignInvocation(platformmcp.InvocationClaims{
+		TenantID: invocation.TenantID, UserID: invocation.UserID, AgentID: invocation.AgentID,
+		ServerID: serverID, ToolName: toolName, ExecutionID: invocation.ExecutionID,
+		ApprovalID:       invocation.ApprovalID,
+		RegisteredClaims: jwt.RegisteredClaims{ID: uuid.NewString()},
+	}, constants.PlatformMCPInvocationTokenTTL)
+	if err != nil {
+		return "", fmt.Errorf("sign Platform MCP invocation token: %w", err)
+	}
+	return "Bearer " + token, nil
+}
+
+func validPlatformMCPInvocation(invocation platformmcp.InvocationContext, serverID, toolName string) bool {
+	return invocation.TenantID != "" && invocation.UserID != "" && invocation.AgentID != "" &&
+		invocation.ExecutionID != "" && serverID == platformmcp.SystemServerID &&
+		slices.Contains(platformmcp.Phase1ToolNames, toolName)
 }
 
 func (c *Container) validatePlatformMCPDependencies() error {

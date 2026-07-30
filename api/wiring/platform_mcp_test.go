@@ -2,7 +2,10 @@ package wiring
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"net/url"
 	"testing"
 
 	"github.com/byteBuilderX/stratum/config"
@@ -11,6 +14,31 @@ import (
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 )
+
+func TestVerifyPlatformMCPServerRequiresExactWorkloadIdentity(t *testing.T) {
+	tests := []struct {
+		name    string
+		uri     string
+		wantErr bool
+	}{
+		{name: "platform MCP", uri: "spiffe://stratum.local/ns/stratum/sa/stratum-platform-mcp"},
+		{name: "copycat", uri: "spiffe://stratum.local/ns/stratum/sa/copycat", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			identity, err := url.Parse(tc.uri)
+			if err != nil {
+				t.Fatal(err)
+			}
+			certificate := &x509.Certificate{URIs: []*url.URL{identity}}
+			state := tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate},
+				VerifiedChains: [][]*x509.Certificate{{certificate}}}
+			if gotErr := verifyPlatformMCPServer(state); (gotErr != nil) != tc.wantErr {
+				t.Fatalf("error=%v, wantErr=%v", gotErr, tc.wantErr)
+			}
+		})
+	}
+}
 
 func TestBuildPlatformMCPFailsClosedWhenEnabledDependenciesAreMissing(t *testing.T) {
 	container := &Container{

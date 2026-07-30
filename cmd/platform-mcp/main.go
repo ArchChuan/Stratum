@@ -53,11 +53,11 @@ func servePlatformMCP(ctx context.Context, cfg runtimeConfig, logger *zap.Logger
 	if err := reloader.Reload(); err != nil {
 		return fmt.Errorf("initialize Platform MCP TLS: %w", err)
 	}
-	httpClient, closeClient, err := newBackendHTTPClient(reloader, cfg.backendServerName)
+	httpClient, err := infrastructure.NewReloadableBackendClient(reloader, cfg.backendServerName)
 	if err != nil {
-		return err
+		return fmt.Errorf("create Stratum backend HTTP client: %w", err)
 	}
-	defer closeClient()
+	defer httpClient.Close()
 	handler, err := buildHandler(cfg, reloader, httpClient, logger)
 	if err != nil {
 		return err
@@ -71,7 +71,7 @@ func servePlatformMCP(ctx context.Context, cfg runtimeConfig, logger *zap.Logger
 	reloadDone := make(chan struct{})
 	go func() {
 		defer close(reloadDone)
-		reloadTLSOnSignal(serveCtx, reloader, logger)
+		reloadTLSOnSignal(serveCtx, reloader, httpClient, logger)
 	}()
 	defer func() {
 		cancel()
@@ -84,7 +84,7 @@ func servePlatformMCP(ctx context.Context, cfg runtimeConfig, logger *zap.Logger
 func buildHandler(
 	cfg runtimeConfig,
 	reloader *infrastructure.TLSReloader,
-	client *http.Client,
+	client infrastructure.HTTPDoer,
 	logger *zap.Logger,
 ) (http.Handler, error) {
 	stratumClient, err := infrastructure.NewStratumClient(client, cfg.backendBaseURL)
@@ -109,20 +109,12 @@ func buildHandler(
 	return server.Handler(), nil
 }
 
-func newBackendHTTPClient(
+func reloadTLSOnSignal(
+	ctx context.Context,
 	reloader *infrastructure.TLSReloader,
-	serverName string,
-) (*http.Client, func(), error) {
-	tlsConfig, err := reloader.BackendClientConfig(serverName)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create Stratum client TLS config: %w", err)
-	}
-	transport := &http.Transport{TLSClientConfig: tlsConfig}
-	client := &http.Client{Transport: transport, Timeout: constants.SystemAssistantToolTimeout}
-	return client, transport.CloseIdleConnections, nil
-}
-
-func reloadTLSOnSignal(ctx context.Context, reloader *infrastructure.TLSReloader, logger *zap.Logger) {
+	backend *infrastructure.ReloadableBackendClient,
+	logger *zap.Logger,
+) {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGHUP)
 	defer signal.Stop(signals)
@@ -133,6 +125,10 @@ func reloadTLSOnSignal(ctx context.Context, reloader *infrastructure.TLSReloader
 		case <-signals:
 			if err := reloader.Reload(); err != nil {
 				logger.Error("platform_mcp.tls.reload_failed", zap.Error(err))
+				continue
+			}
+			if err := backend.Reload(); err != nil {
+				logger.Error("platform_mcp.backend_tls.reload_failed", zap.Error(err))
 				continue
 			}
 			logger.Info("platform_mcp.tls.reloaded")

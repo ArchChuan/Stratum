@@ -20,6 +20,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"go.uber.org/zap"
+
+	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 )
 
 const mcpProtocolVersion = "2025-06-18"
@@ -36,6 +38,14 @@ type MCPClient interface {
 	GetServerInfo() *MCPServerInfo
 }
 
+type InvocationCredentialProvider interface {
+	Authorization(ctx context.Context, serverID, toolName string) (string, error)
+}
+
+type ManagedHTTPTransportProvider interface {
+	Transport() (http.RoundTripper, error)
+}
+
 // BaseClient 实现基础 MCP 客户端
 type BaseClient struct {
 	config      *MCPServerConfig
@@ -47,13 +57,27 @@ type BaseClient struct {
 	logger      *zap.Logger
 	reqID       atomic.Int32
 	// 传输相关字段
-	cmd        *exec.Cmd
-	stdin      io.WriteCloser
-	stdout     io.ReadCloser
-	httpClient *http.Client
-	sessionID  string
+	cmd         *exec.Cmd
+	stdin       io.WriteCloser
+	stdout      io.ReadCloser
+	httpClient  *http.Client
+	sessionID   string
+	credentials InvocationCredentialProvider
+	transport   ManagedHTTPTransportProvider
 	// negotiatedVersion is set only after a valid initialize response.
 	negotiatedVersion string
+}
+
+func (c *BaseClient) SetInvocationCredentialProvider(provider InvocationCredentialProvider) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.credentials = provider
+}
+
+func (c *BaseClient) SetManagedHTTPTransportProvider(provider ManagedHTTPTransportProvider) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.transport = provider
 }
 
 func (c *BaseClient) nextID() int { return int(c.reqID.Add(1)) }
@@ -323,7 +347,11 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 		return fmt.Errorf("URL not specified for HTTP transport")
 	}
 
-	c.httpClient = &http.Client{Timeout: c.config.Timeout}
+	transport, err := c.httpTransport()
+	if err != nil {
+		return err
+	}
+	c.httpClient = &http.Client{Transport: transport, Timeout: c.config.Timeout}
 
 	initReq := MCPRequest{
 		JSONRPC: "2.0",
@@ -344,7 +372,9 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 	if err != nil {
 		return errors.New("MCP HTTP initialize request invalid")
 	}
-	c.applyHTTPHeaders(ctx, req, false)
+	if err := c.applyHTTPHeaders(ctx, req, false, ""); err != nil {
+		return err
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -401,6 +431,24 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 	c.logger.Info("HTTP connection established", zap.String("transport", c.config.Transport),
 		zap.String("server_id", c.config.ID))
 	return nil
+}
+
+func (c *BaseClient) httpTransport() (http.RoundTripper, error) {
+	if c.config.SystemKey != platformmcp.SystemServerKey ||
+		c.config.ManagementMode != platformmcp.ManagementPlatform {
+		return nil, nil
+	}
+	c.mu.RLock()
+	provider := c.transport
+	c.mu.RUnlock()
+	if provider == nil {
+		return nil, errors.New("Platform MCP mTLS transport provider is not configured")
+	}
+	transport, err := provider.Transport()
+	if err != nil {
+		return nil, fmt.Errorf("create Platform MCP mTLS transport: %w", err)
+	}
+	return transport, nil
 }
 
 func (c *BaseClient) sendRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {
@@ -468,7 +516,9 @@ func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCP
 		return nil, errors.New("MCP HTTP request invalid")
 	}
 
-	c.applyHTTPHeaders(ctx, httpReq, true)
+	if err := c.applyHTTPHeaders(ctx, httpReq, true, toolNameFromRequest(req)); err != nil {
+		return nil, err
+	}
 	if c.sessionID != "" {
 		httpReq.Header.Set("Mcp-Session-Id", c.sessionID)
 	}
@@ -495,7 +545,9 @@ func (c *BaseClient) sendHTTPNotification(ctx context.Context, notification *MCP
 	if err != nil {
 		return errors.New("MCP HTTP notification request invalid")
 	}
-	c.applyHTTPHeaders(ctx, req, true)
+	if err := c.applyHTTPHeaders(ctx, req, true, ""); err != nil {
+		return err
+	}
 	if c.sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", c.sessionID)
 	}
@@ -531,9 +583,17 @@ func decodeHTTPMCPResponse(resp *http.Response) (*MCPResponse, error) {
 	return &response, nil
 }
 
-func (c *BaseClient) applyHTTPHeaders(ctx context.Context, req *http.Request, includeProtocolVersion bool) {
+func (c *BaseClient) applyHTTPHeaders(
+	ctx context.Context,
+	req *http.Request,
+	includeProtocolVersion bool,
+	toolName string,
+) error {
 	for name, value := range c.config.Headers {
 		req.Header.Set(name, value)
+	}
+	if err := c.applyInvocationCredential(ctx, req, toolName); err != nil {
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
@@ -541,6 +601,41 @@ func (c *BaseClient) applyHTTPHeaders(ctx context.Context, req *http.Request, in
 		req.Header.Set("MCP-Protocol-Version", c.negotiatedVersion)
 	}
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+	return nil
+}
+
+func (c *BaseClient) applyInvocationCredential(ctx context.Context, req *http.Request, toolName string) error {
+	if toolName == "" || c.config.SystemKey != platformmcp.SystemServerKey ||
+		c.config.ManagementMode != platformmcp.ManagementPlatform {
+		return nil
+	}
+	c.mu.RLock()
+	provider := c.credentials
+	c.mu.RUnlock()
+	if provider == nil {
+		return errors.New("Platform MCP invocation credential provider is not configured")
+	}
+	authorization, err := provider.Authorization(ctx, c.config.ID, toolName)
+	if err != nil {
+		return fmt.Errorf("issue Platform MCP invocation credential: %w", err)
+	}
+	if !strings.HasPrefix(authorization, "Bearer ") {
+		return errors.New("Platform MCP invocation credential is invalid")
+	}
+	req.Header.Set("Authorization", authorization)
+	return nil
+}
+
+func toolNameFromRequest(req *MCPRequest) string {
+	if req.Method != "tools/call" {
+		return ""
+	}
+	params, ok := req.Params.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	name, _ := params["name"].(string)
+	return name
 }
 
 // HealthCheck 执行健康检查
