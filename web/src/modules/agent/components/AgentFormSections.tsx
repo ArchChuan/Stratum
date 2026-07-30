@@ -105,6 +105,8 @@ export const AgentFormSections = ({
         <Select
           placeholder="选择推理模型"
           notFoundContent="模型管理中没有可用的推理模型"
+          showSearch
+          optionFilterProp="label"
           options={[
             ...(currentModel && !chatModels.includes(currentModel)
               ? [{ value: currentModel, label: `${currentModel}（当前不可用）`, disabled: true }]

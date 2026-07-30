@@ -75,8 +75,13 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
 		await expect(page.getByRole('heading', { name: 'Agent 列表' })).toBeVisible();
 		completed.push('agent.route.agents.list');
 
+    const catalogueResponse = waitForMutation(page, '/models', 'GET');
     await page.getByRole('button', { name: '创建 Agent' }).click();
     await expect(page).toHaveURL(`${webURL}/agents/create`);
+    const catalogue = await catalogueResponse;
+    expect(catalogue.status()).toBe(200);
+    const catalogueBody = await catalogue.json() as { models?: string[] };
+    expect(catalogueBody.models, `chat models=${catalogueBody.models?.join(',')}`).toContain('qwen-max');
     completed.push('agent.route.agents.create');
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('描述').fill('全系统 stateful Agent 验收');
@@ -84,8 +89,8 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     const createModelInput = page.getByRole('combobox', { name: 'LLM 模型' });
     await createModelInput.scrollIntoViewIfNeeded();
     await createModelInput.click({ force: true });
-    await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
-      .filter({ hasText: /^qwen-max$/ }).click();
+    await createModelInput.fill('qwen-max');
+    await createModelInput.press('Enter');
     await expect(page.getByRole('slider', { name: '最大迭代次数' })).toHaveAttribute('aria-valuemax', '90');
     const createResponse = waitForMutation(page, '/agents', 'POST');
     const createdListResponse = waitForMutation(page, '/agents', 'GET');

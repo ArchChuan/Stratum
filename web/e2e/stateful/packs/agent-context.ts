@@ -67,9 +67,9 @@ export const executeAgentContextPack = async ({
     await page.goto(`${webURL}/agents/create`);
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('系统提示词').fill('结合知识与用户记忆回答，并返回 stateful stream completed。');
-    await page.getByLabel('LLM 模型').click();
-    await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
-      .filter({ hasText: /^qwen-max$/ }).click();
+    const modelInput = page.getByRole('combobox', { name: 'LLM 模型' });
+    await modelInput.fill('qwen-max');
+    await modelInput.press('Enter');
     await page.locator('.ant-select-selector').filter({ hasText: '选择知识库' }).click();
     await page.locator('.ant-select-item-option-content').filter({ hasText: workspace }).click();
     const agentResponse = waitFor(page, '/agents', 'POST');

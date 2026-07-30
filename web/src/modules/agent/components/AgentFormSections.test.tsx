@@ -30,6 +30,21 @@ describe('AgentFormSections', () => {
     expect(screen.queryByText(/qwen-plus/)).not.toBeInTheDocument();
   });
 
+  it('allows filtering a large model catalogue by name', () => {
+    render(
+      <Form>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          chatModels={['qwen-max']}
+        />
+      </Form>,
+    );
+
+    expect(screen.getByRole('combobox', { name: 'LLM 模型' })).not.toHaveAttribute('readonly');
+  });
+
   it('labels an unavailable current model without adding it to new forms', () => {
     render(
       <Form>

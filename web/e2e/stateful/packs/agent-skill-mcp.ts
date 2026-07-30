@@ -105,9 +105,9 @@ export const executeAgentSkillMCPPack = async ({
     expect(JSON.stringify(await toolsListed.json())).toContain('stateful_echo');
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('系统提示词').fill('必须激活可用 Skill 并调用 MCP 工具。');
-    await page.getByLabel('LLM 模型').click();
-    await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
-      .filter({ hasText: /^qwen-max$/ }).click();
+    const modelInput = page.getByRole('combobox', { name: 'LLM 模型' });
+    await modelInput.fill('qwen-max');
+    await modelInput.press('Enter');
     await chooseOption(page, '技能', skillID, skillName);
     await chooseOption(page, 'MCP 工具', `mcp:${serverID}:stateful_echo`, `${serverName} / stateful_echo`);
     const agentResponse = waitForMutation(page, '/agents', 'POST');
