@@ -132,7 +132,7 @@
     {
       "id": "agent.route.agents",
       "domain": "agent",
-      "user_goal": "Open /agents",
+      "user_goal": "Open the fixed platform assistant at /agents without choosing an Agent",
       "route": "/agents",
       "roles": {
         "allowed": [
@@ -145,8 +145,28 @@
       },
       "mutation": "NAVIGATE /agents",
       "browser_action_id": "agent.route.agents",
-      "http_evidence": "The route and required read requests complete successfully for /agents",
-      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "http_evidence": "The fixed platform assistant and conversation requests complete successfully",
+      "db_evidence": "The rendered assistant agrees with the tenant-managed system Agent",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.route.agents.list",
+      "domain": "agent",
+      "user_goal": "Open the ordinary Agent list without exposing the system assistant",
+      "route": "/agents/list",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /agents/list",
+      "browser_action_id": "agent.route.agents.list",
+      "http_evidence": "GET /agents excludes every system-managed Agent",
+      "db_evidence": "The ordinary list remains tenant-scoped while the managed assistant persists separately",
       "coverage": "short"
     },
     {
@@ -972,6 +992,26 @@
       "browser_action_id": "agent.mutation.put.agents.system.settings",
       "http_evidence": "The browser observes the expected successful response for PUT /agents/:id",
       "db_evidence": "Persisted state is reconciled after PUT /agents/:id",
+      "coverage": "short"
+    },
+    {
+      "id": "agent.mutation.post.agents.platform.conversations",
+      "domain": "agent",
+      "user_goal": "Create and reload a conversation for the fixed platform assistant",
+      "route": "/agents",
+      "roles": {
+        "allowed": [
+          "tenant_admin",
+          "member"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /agents/stratum-platform-assistant/conversations",
+      "browser_action_id": "agent.mutation.post.agents.platform.conversations",
+      "http_evidence": "The browser creates and reloads the fixed assistant conversation",
+      "db_evidence": "chat_conversations.agent_id equals stratum-platform-assistant after reload",
       "coverage": "short"
     },
     {

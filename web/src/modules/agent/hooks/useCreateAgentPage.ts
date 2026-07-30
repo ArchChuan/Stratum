@@ -57,7 +57,7 @@ export const useCreateAgentPage = () => {
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],
         });
         message.success(`Agent "${values.name}" 创建成功`);
-        navigate('/agents');
+        navigate('/agents/list');
       } catch (err) {
         const status = (err as { response?: { status?: number } })?.response?.status;
         if (status !== 403) message.error(extractErrorMessage(err) || '创建失败');
