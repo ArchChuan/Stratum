@@ -9,7 +9,7 @@ import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 const { Title, Text } = Typography;
 
 export const EditAgentPage = () => {
-  const { agent, form, loading, pageLoading, skills, mcpTools, workspaces, chatModels, navigate, onFinish } =
+  const { agent, form, loading, pageLoading, skills, mcpTools, workspaces, groupedModels, navigate, onFinish } =
     useEditAgentPage();
 
   if (pageLoading) {
@@ -72,7 +72,7 @@ export const EditAgentPage = () => {
           skills={skills}
           mcpTools={mcpTools}
           workspaces={workspaces}
-          chatModels={chatModels}
+          groupedModels={groupedModels}
           currentModel={agent?.llmModel}
         />
 

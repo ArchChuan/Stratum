@@ -14,32 +14,49 @@ import { skillApi } from '@/modules/skill';
 import type { Skill } from '@/modules/skill';
 import { extractErrorMessage } from '@/shared/lib';
 
+import type { GroupedModelOption } from '../components/AgentFormSections';
+
 export const useCreateAgentPage = () => {
   const [form] = Form.useForm<AgentFormValues>();
   const [loading, setLoading] = useState(false);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [mcpTools, setMcpTools] = useState<MCPToolOption[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [chatModels, setChatModels] = useState<string[]>([]);
+  const [groupedModels, setGroupedModels] = useState<GroupedModelOption[]>([]);
   const navigate = useNavigate();
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [skillsRes, mcpRes, workspacesRes, modelsRes] = await Promise.allSettled([
+      const [skillsRes, mcpRes, workspacesRes, modelsRes, providersRes] = await Promise.allSettled([
         skillApi.list(),
         mcpApi.toolOptions(),
         knowledgeApi.list(),
-        llmApi.getCatalogue(),
+        llmApi.listModels({ capability: 'chat' }),
+        llmApi.listProviders(),
       ]);
       if (cancelled) return;
       if (skillsRes.status === 'fulfilled') setSkills(skillsRes.value);
       if (mcpRes.status === 'fulfilled') setMcpTools(mcpRes.value);
       if (workspacesRes.status === 'fulfilled') setWorkspaces(workspacesRes.value);
-      if (modelsRes.status === 'fulfilled') {
-        setChatModels(modelsRes.value.chatModels);
+      if (modelsRes.status === 'fulfilled' && providersRes.status === 'fulfilled') {
+        const providers = providersRes.value;
+        const models = modelsRes.value;
+        const providerMap = new Map(providers.map((p) => [p.id, p.name]));
+        const grouped = new Map<string, { value: string; label: string }[]>();
+        for (const m of models) {
+          const pName = providerMap.get(m.providerId) || m.providerId;
+          if (!grouped.has(pName)) grouped.set(pName, []);
+          grouped.get(pName)!.push({ value: m.name, label: m.displayName || m.name });
+        }
+        setGroupedModels(
+          Array.from(grouped.entries()).map(([provider, models]) => ({ provider, models })),
+        );
       } else {
-        message.error({ content: extractErrorMessage(modelsRes.reason, '加载模型目录失败'), duration: 0 });
+        const failed = [modelsRes, providersRes].find((r) => r.status === 'rejected');
+        if (failed && failed.status === 'rejected') {
+          message.error({ content: extractErrorMessage(failed.reason, '加载模型目录失败'), duration: 0 });
+        }
       }
     })();
     return () => {
@@ -68,5 +85,5 @@ export const useCreateAgentPage = () => {
     [navigate],
   );
 
-  return { form, loading, skills, mcpTools, workspaces, chatModels, navigate, onFinish };
+  return { form, loading, skills, mcpTools, workspaces, groupedModels, navigate, onFinish };
 };
