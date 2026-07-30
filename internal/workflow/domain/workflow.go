@@ -387,20 +387,27 @@ func validateSpec(spec Spec) error {
 		return fmt.Errorf("%w: disconnected graph", ErrInvalidSpec)
 	}
 	for _, node := range spec.Nodes {
-		for _, reference := range node.InputMapping {
-			upstreamID, ok := referencedNode(reference)
-			if !ok {
-				continue
-			}
-			if upstreamID == node.ID || !reachable(adj, upstreamID, node.ID) {
-				return fmt.Errorf("%w: node %q input references non-upstream node %q", ErrInvalidSpec, node.ID, upstreamID)
-			}
+		if err := validateNodeConnections(node, nodes, adj); err != nil {
+			return err
 		}
-		if node.Type == NodeTypeCondition {
-			if upstreamID, ok := conditionReferencedNode(node.Condition); ok {
-				if _, exists := nodes[upstreamID]; !exists || upstreamID == node.ID || !reachable(adj, upstreamID, node.ID) {
-					return fmt.Errorf("%w: condition %q references non-upstream node %q", ErrInvalidSpec, node.ID, upstreamID)
-				}
+	}
+	return nil
+}
+
+func validateNodeConnections(node Node, nodes map[string]Node, adj map[string][]string) error {
+	for _, reference := range node.InputMapping {
+		upstreamID, ok := referencedNode(reference)
+		if !ok {
+			continue
+		}
+		if upstreamID == node.ID || !reachable(adj, upstreamID, node.ID) {
+			return fmt.Errorf("%w: node %q input references non-upstream node %q", ErrInvalidSpec, node.ID, upstreamID)
+		}
+	}
+	if node.Type == NodeTypeCondition {
+		if upstreamID, ok := conditionReferencedNode(node.Condition); ok {
+			if _, exists := nodes[upstreamID]; !exists || upstreamID == node.ID || !reachable(adj, upstreamID, node.ID) {
+				return fmt.Errorf("%w: condition %q references non-upstream node %q", ErrInvalidSpec, node.ID, upstreamID)
 			}
 		}
 	}

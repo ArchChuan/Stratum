@@ -46,6 +46,118 @@ func NewHTTPError(status int, err error) *HTTPError {
 	return &HTTPError{Status: status, Err: err}
 }
 
+// errorStatusTable maps sentinel domain errors to HTTP status codes.
+// New entries only need to be added here; MapErrorToStatus walks the table.
+var errorStatusTable = map[error]int{
+	agentdomain.ErrEvidenceUnavailable:            http.StatusServiceUnavailable,
+	agentdomain.ErrAssistantModelUnavailable:      http.StatusServiceUnavailable,
+	agentdomain.ErrEvidenceInvalid:                http.StatusBadGateway,
+	pgx.ErrNoRows:                                 http.StatusNotFound,
+	agentdomain.ErrEvidenceNotFound:               http.StatusNotFound,
+	knowledgedomain.ErrWorkspaceNotFound:          http.StatusNotFound,
+	knowledgedomain.ErrDocumentNotFound:           http.StatusNotFound,
+	iamdomain.ErrMemberNotFound:                   http.StatusNotFound,
+	iamdomain.ErrTenantNotFound:                   http.StatusNotFound,
+	agentapp.ErrNotFound:                          http.StatusNotFound,
+	agentdomain.ErrApprovalNotFound:               http.StatusNotFound,
+	agentdomain.ErrProposalNotFound:               http.StatusNotFound,
+	agentdomain.ErrNotFound:                       http.StatusNotFound,
+	memoryapp.ErrNotFound:                         http.StatusNotFound,
+	memorydomain.ErrEntryNotFound:                 http.StatusNotFound,
+	memorydomain.ErrSessionNotFound:               http.StatusNotFound,
+	memorydomain.ErrFactNotFound:                  http.StatusNotFound,
+	memorydomain.ErrEntityNotFound:                http.StatusNotFound,
+	skilldomain.ErrSkillNotFound:                  http.StatusNotFound,
+	mcpdomain.ErrServerNotFound:                   http.StatusNotFound,
+	evalapp.ErrSuiteNotFound:                      http.StatusNotFound,
+	evalapp.ErrJobNotFound:                        http.StatusNotFound,
+	evalapp.ErrRunNotFound:                        http.StatusNotFound,
+	evalapp.ErrExperimentNotFound:                 http.StatusNotFound,
+	evaldomain.ErrCenterResourceNotFound:          http.StatusNotFound,
+	evaldomain.ErrCandidateNotFound:               http.StatusNotFound,
+	workflowdomain.ErrNotFound:                    http.StatusNotFound,
+	agentapp.ErrApprovalExpired:                   http.StatusGone,
+	knowledgedomain.ErrWorkspaceConflict:          http.StatusConflict,
+	agentdomain.ErrProposalStale:                  http.StatusConflict,
+	agentdomain.ErrProposalExpired:                http.StatusConflict,
+	agentdomain.ErrProposalAlreadyClaimed:         http.StatusConflict,
+	agentdomain.ErrProposalUnknownOutcome:         http.StatusConflict,
+	agentdomain.ErrSystemAssistantManaged:         http.StatusConflict,
+	knowledgedomain.ErrWorkspaceLinked:            http.StatusConflict,
+	knowledgedomain.ErrDuplicateDocument:          http.StatusConflict,
+	knowledgedomain.ErrDocumentProcessing:         http.StatusConflict,
+	agentapp.ErrNameConflict:                      http.StatusConflict,
+	mcpdomain.ErrNameConflict:                     http.StatusConflict,
+	skilldomain.ErrSkillNameConflict:              http.StatusConflict,
+	skilldomain.ErrSkillDraftNotFound:             http.StatusConflict,
+	skilldomain.ErrSkillLinked:                    http.StatusConflict,
+	memorydomain.ErrFactQuotaExceeded:             http.StatusConflict,
+	memorydomain.ErrFactAlreadyDeleted:            http.StatusConflict,
+	evaldomain.ErrOptimizationIdempotencyConflict: http.StatusConflict,
+	evaldomain.ErrFeedbackIdempotencyConflict:     http.StatusConflict,
+	agentapp.ErrApprovalNotApproved:               http.StatusConflict,
+	agentapp.ErrApprovalOutcomeUnknown:            http.StatusConflict,
+	agentdomain.ErrApprovalAlreadyDecided:         http.StatusConflict,
+	agentdomain.ErrApprovalAlreadyExecuted:        http.StatusConflict,
+	workflowdomain.ErrRevisionConflict:            http.StatusConflict,
+	workflowdomain.ErrIdempotencyConflict:         http.StatusConflict,
+	workflowdomain.ErrInvalidTransition:           http.StatusConflict,
+	workflowdomain.ErrGenerationConflict:          http.StatusConflict,
+	workflowdomain.ErrFenceConflict:               http.StatusConflict,
+	workflowdomain.ErrDecisionConflict:            http.StatusConflict,
+	workflowdomain.ErrApprovalRequired:            http.StatusConflict,
+	evaldomain.ErrExperimentStateConflict:         http.StatusConflict,
+	evaldomain.ErrExperimentCommandConflict:       http.StatusConflict,
+	evaldomain.ErrExperimentDeploymentConflict:    http.StatusConflict,
+	evaldomain.ErrExperimentStableNotPublished:    http.StatusConflict,
+	evaldomain.ErrExperimentInvalidCandidate:      http.StatusConflict,
+	evaldomain.ErrExperimentSuiteNotPublished:     http.StatusConflict,
+	evaldomain.ErrExperimentOfflineRunRequired:    http.StatusConflict,
+	evaldomain.ErrExperimentCommandNotAllowed:     http.StatusConflict,
+	evaldomain.ErrCandidateStateConflict:          http.StatusConflict,
+	evaldomain.ErrCandidateCommandConflict:        http.StatusConflict,
+	evaldomain.ErrCandidateCommandNotAllowed:      http.StatusConflict,
+	evaldomain.ErrFeedbackTraceForbidden:          http.StatusForbidden,
+	agentapp.ErrInvalidSkill:                      http.StatusUnprocessableEntity,
+	agentdomain.ErrProposalApplyFailed:            http.StatusUnprocessableEntity,
+	skilldomain.ErrConcurrencyLimit:               http.StatusTooManyRequests,
+	knowledgedomain.ErrIngestQueueFull:            http.StatusTooManyRequests,
+	iamapp.ErrForbiddenAdminOrOwner:               http.StatusForbidden,
+	agentdomain.ErrProposalForbidden:              http.StatusForbidden,
+	iamapp.ErrForbiddenOwner:                      http.StatusForbidden,
+	iamapp.ErrForbiddenSelfModify:                 http.StatusForbidden,
+	iamapp.ErrForbiddenOwnerRole:                  http.StatusForbidden,
+	iamapp.ErrForbiddenRemoveOwner:                http.StatusForbidden,
+	iamapp.ErrForbiddenAdminRemove:                http.StatusForbidden,
+	memorydomain.ErrAgentMemoryDisabled:           http.StatusForbidden,
+	memorydomain.ErrScopeMismatch:                 http.StatusForbidden,
+	workflowdomain.ErrForbidden:                   http.StatusForbidden,
+	iamapp.ErrInvalidSettings:                     http.StatusBadRequest,
+	agentdomain.ErrProposalInvalid:                http.StatusBadRequest,
+	agentdomain.ErrInvalidSystemAssistantModel:    http.StatusBadRequest,
+	iamdomain.ErrDefaultTenantDelete:              http.StatusBadRequest,
+	knowledgedomain.ErrInvalidEmbeddingModel:      http.StatusBadRequest,
+	knowledgedomain.ErrInvalidQueryMode:           http.StatusBadRequest,
+	knowledgedomain.ErrEmbeddingModelImmutable:    http.StatusBadRequest,
+	knowledgedomain.ErrChunkSizeImmutable:         http.StatusBadRequest,
+	knowledgedomain.ErrChunkOverlapImmutable:      http.StatusBadRequest,
+	knowledgedomain.ErrChunkLimitExceeded:         http.StatusBadRequest,
+	skilldomain.ErrSkillTypeImmutable:             http.StatusBadRequest,
+	skilldomain.ErrNotCodeSkill:                   http.StatusBadRequest,
+	skilldomain.ErrSkillUnsupportedType:           http.StatusBadRequest,
+	skilldomain.ErrSkillCodeAnalysis:              http.StatusBadRequest,
+	skilldomain.ErrSkillNotPublishable:            http.StatusBadRequest,
+	evalapp.ErrSuiteNameRequired:                  http.StatusBadRequest,
+	evalapp.ErrSuiteCasesRequired:                 http.StatusBadRequest,
+	evaldomain.ErrInvalidCenterQuery:              http.StatusBadRequest,
+	evaldomain.ErrInvalidCandidateCommand:         http.StatusBadRequest,
+	memorydomain.ErrInvalidStatus:                 http.StatusBadRequest,
+	memorydomain.ErrUserIDMismatch:                http.StatusBadRequest,
+	memorydomain.ErrEmptyContent:                  http.StatusBadRequest,
+	workflowdomain.ErrInvalidSpec:                 http.StatusBadRequest,
+	workflowdomain.ErrInvalidInputSchema:          http.StatusBadRequest,
+}
+
 // MapErrorToStatus walks the wrap chain and returns the HTTP status that
 // should be sent for err. Handlers that emit `c.Error(err)` must rely on
 // this table — no scattered `errors.Is` switch blocks elsewhere.
@@ -74,143 +186,10 @@ func MapErrorToStatus(err error) int {
 		return http.StatusRequestEntityTooLarge
 	}
 
-	switch {
-	case errors.Is(err, agentdomain.ErrEvidenceUnavailable):
-		return http.StatusServiceUnavailable
-	case errors.Is(err, agentdomain.ErrAssistantModelUnavailable):
-		return http.StatusServiceUnavailable
-	case errors.Is(err, agentdomain.ErrEvidenceInvalid):
-		return http.StatusBadGateway
-	// 404 — NotFound
-	case errors.Is(err, pgx.ErrNoRows),
-		errors.Is(err, agentdomain.ErrEvidenceNotFound),
-		errors.Is(err, knowledgedomain.ErrWorkspaceNotFound),
-		errors.Is(err, knowledgedomain.ErrDocumentNotFound),
-		errors.Is(err, iamdomain.ErrMemberNotFound),
-		errors.Is(err, iamdomain.ErrTenantNotFound),
-		errors.Is(err, agentapp.ErrNotFound),
-		errors.Is(err, agentdomain.ErrApprovalNotFound),
-		errors.Is(err, agentdomain.ErrProposalNotFound),
-		errors.Is(err, agentdomain.ErrNotFound),
-		errors.Is(err, memoryapp.ErrNotFound),
-		errors.Is(err, memorydomain.ErrEntryNotFound),
-		errors.Is(err, memorydomain.ErrSessionNotFound),
-		errors.Is(err, memorydomain.ErrFactNotFound),
-		errors.Is(err, memorydomain.ErrEntityNotFound),
-		errors.Is(err, skilldomain.ErrSkillNotFound),
-		errors.Is(err, mcpdomain.ErrServerNotFound),
-		errors.Is(err, evalapp.ErrSuiteNotFound),
-		errors.Is(err, evalapp.ErrJobNotFound),
-		errors.Is(err, evalapp.ErrRunNotFound),
-		errors.Is(err, evalapp.ErrExperimentNotFound),
-		errors.Is(err, evaldomain.ErrCenterResourceNotFound),
-		errors.Is(err, evaldomain.ErrCandidateNotFound),
-		errors.Is(err, workflowdomain.ErrNotFound):
-		return http.StatusNotFound
-	case errors.Is(err, agentapp.ErrApprovalExpired):
-		return http.StatusGone
-
-	// 409 — Conflict
-	case errors.Is(err, knowledgedomain.ErrWorkspaceConflict),
-		errors.Is(err, agentdomain.ErrProposalStale),
-		errors.Is(err, agentdomain.ErrProposalExpired),
-		errors.Is(err, agentdomain.ErrProposalAlreadyClaimed),
-		errors.Is(err, agentdomain.ErrProposalUnknownOutcome),
-		errors.Is(err, agentdomain.ErrSystemAssistantManaged),
-		errors.Is(err, knowledgedomain.ErrWorkspaceLinked),
-		errors.Is(err, knowledgedomain.ErrDuplicateDocument),
-		errors.Is(err, knowledgedomain.ErrDocumentProcessing),
-		errors.Is(err, agentapp.ErrNameConflict),
-		errors.Is(err, mcpdomain.ErrNameConflict),
-		errors.Is(err, skilldomain.ErrSkillNameConflict),
-		errors.Is(err, skilldomain.ErrSkillDraftNotFound),
-		errors.Is(err, skilldomain.ErrSkillLinked):
-		return http.StatusConflict
-	case errors.Is(err, memorydomain.ErrFactQuotaExceeded),
-		errors.Is(err, memorydomain.ErrFactAlreadyDeleted):
-		return http.StatusConflict
-	case errors.Is(err, evaldomain.ErrOptimizationIdempotencyConflict),
-		errors.Is(err, evaldomain.ErrFeedbackIdempotencyConflict):
-		return http.StatusConflict
-	case errors.Is(err, evaldomain.ErrFeedbackTraceForbidden):
-		return http.StatusForbidden
-	case errors.Is(err, agentapp.ErrApprovalNotApproved),
-		errors.Is(err, agentapp.ErrApprovalOutcomeUnknown),
-		errors.Is(err, agentdomain.ErrApprovalAlreadyDecided),
-		errors.Is(err, agentdomain.ErrApprovalAlreadyExecuted),
-		errors.Is(err, workflowdomain.ErrRevisionConflict),
-		errors.Is(err, workflowdomain.ErrIdempotencyConflict),
-		errors.Is(err, workflowdomain.ErrInvalidTransition),
-		errors.Is(err, workflowdomain.ErrGenerationConflict),
-		errors.Is(err, workflowdomain.ErrFenceConflict),
-		errors.Is(err, workflowdomain.ErrDecisionConflict),
-		errors.Is(err, workflowdomain.ErrApprovalRequired):
-		return http.StatusConflict
-	case errors.Is(err, evaldomain.ErrExperimentStateConflict),
-		errors.Is(err, evaldomain.ErrExperimentCommandConflict),
-		errors.Is(err, evaldomain.ErrExperimentDeploymentConflict),
-		errors.Is(err, evaldomain.ErrExperimentStableNotPublished),
-		errors.Is(err, evaldomain.ErrExperimentInvalidCandidate),
-		errors.Is(err, evaldomain.ErrExperimentSuiteNotPublished),
-		errors.Is(err, evaldomain.ErrExperimentOfflineRunRequired),
-		errors.Is(err, evaldomain.ErrExperimentCommandNotAllowed),
-		errors.Is(err, evaldomain.ErrCandidateStateConflict),
-		errors.Is(err, evaldomain.ErrCandidateCommandConflict),
-		errors.Is(err, evaldomain.ErrCandidateCommandNotAllowed):
-		return http.StatusConflict
-
-	// 422 — Unprocessable Entity
-	case errors.Is(err, agentapp.ErrInvalidSkill):
-		return http.StatusUnprocessableEntity
-	case errors.Is(err, agentdomain.ErrProposalApplyFailed):
-		return http.StatusUnprocessableEntity
-
-	// 429 — Too Many Requests
-	case errors.Is(err, skilldomain.ErrConcurrencyLimit),
-		errors.Is(err, knowledgedomain.ErrIngestQueueFull):
-		return http.StatusTooManyRequests
-
-	// 403 — Forbidden
-	case errors.Is(err, iamapp.ErrForbiddenAdminOrOwner),
-		errors.Is(err, agentdomain.ErrProposalForbidden),
-		errors.Is(err, iamapp.ErrForbiddenOwner),
-		errors.Is(err, iamapp.ErrForbiddenSelfModify),
-		errors.Is(err, iamapp.ErrForbiddenOwnerRole),
-		errors.Is(err, iamapp.ErrForbiddenRemoveOwner),
-		errors.Is(err, iamapp.ErrForbiddenAdminRemove),
-		errors.Is(err, memorydomain.ErrAgentMemoryDisabled),
-		errors.Is(err, memorydomain.ErrScopeMismatch),
-		errors.Is(err, workflowdomain.ErrForbidden):
-		return http.StatusForbidden
-
-	// 400 — Validation / Bad Request
-	case errors.Is(err, iamapp.ErrInvalidSettings),
-		errors.Is(err, agentdomain.ErrProposalInvalid),
-		errors.Is(err, agentdomain.ErrInvalidSystemAssistantModel),
-		errors.Is(err, iamdomain.ErrDefaultTenantDelete),
-		errors.Is(err, knowledgedomain.ErrInvalidEmbeddingModel),
-		errors.Is(err, knowledgedomain.ErrInvalidQueryMode),
-		errors.Is(err, knowledgedomain.ErrEmbeddingModelImmutable),
-		errors.Is(err, knowledgedomain.ErrChunkSizeImmutable),
-		errors.Is(err, knowledgedomain.ErrChunkOverlapImmutable),
-		errors.Is(err, knowledgedomain.ErrChunkLimitExceeded),
-		errors.Is(err, skilldomain.ErrSkillTypeImmutable),
-		errors.Is(err, skilldomain.ErrNotCodeSkill),
-		errors.Is(err, skilldomain.ErrSkillUnsupportedType),
-		errors.Is(err, skilldomain.ErrSkillCodeAnalysis),
-		errors.Is(err, skilldomain.ErrSkillNotPublishable),
-		errors.Is(err, evalapp.ErrSuiteNameRequired),
-		errors.Is(err, evalapp.ErrSuiteCasesRequired):
-		return http.StatusBadRequest
-	case errors.Is(err, evaldomain.ErrInvalidCenterQuery),
-		errors.Is(err, evaldomain.ErrInvalidCandidateCommand):
-		return http.StatusBadRequest
-	case errors.Is(err, memorydomain.ErrInvalidStatus),
-		errors.Is(err, memorydomain.ErrUserIDMismatch),
-		errors.Is(err, memorydomain.ErrEmptyContent),
-		errors.Is(err, workflowdomain.ErrInvalidSpec),
-		errors.Is(err, workflowdomain.ErrInvalidInputSchema):
-		return http.StatusBadRequest
+	for sentinel, status := range errorStatusTable {
+		if errors.Is(err, sentinel) {
+			return status
+		}
 	}
 
 	return http.StatusInternalServerError

@@ -27,71 +27,95 @@ func NewRAGSearchFn(rs *RAGService, tenantID string) func(
 	ctx context.Context, workspaces []string, query string, topK int,
 ) (string, error) {
 	return func(ctx context.Context, workspaces []string, query string, topK int) (string, error) {
-		type wsResult struct {
-			content string
-			err     error
-		}
 		results := make([]wsResult, len(workspaces))
 		var wg sync.WaitGroup
 		for i, ws := range workspaces {
 			wg.Add(1)
 			go func(i int, ws string) {
 				defer wg.Done()
-				mode := domain.DefaultQueryMode
-				effectiveTopK := topK
-				embedModel := ""
-				workspaceID := ""
-				if rs.wsRepo != nil {
-					if w, err := rs.wsRepo.GetByName(ctx, tenantID, ws); err == nil && w != nil {
-						workspaceID = w.ID
-						if w.Config.TopK > 0 {
-							effectiveTopK = w.Config.TopK
-						}
-						embedModel = w.Config.EmbeddingModel
-						if w.Config.QueryMode != "" {
-							mode = w.Config.QueryMode
-						}
-					} else if err != nil {
-						results[i] = wsResult{err: ErrRAGDependency}
-						return
-					}
-				}
-				out, err := rs.Query(ctx, RAGQueryRequest{
-					WorkspaceID:    workspaceID,
-					Workspace:      ws,
-					Question:       query,
-					TenantID:       tenantID,
-					Mode:           mode,
-					TopK:           effectiveTopK,
-					EmbeddingModel: embedModel,
-				})
-				if err != nil {
-					results[i] = wsResult{err: err}
-					return
-				}
-				var sb strings.Builder
-				for _, src := range out.Sources {
-					sb.WriteString(src.Content)
-					sb.WriteString("\n---\n")
-				}
-				results[i] = wsResult{content: sb.String()}
+				results[i] = searchWorkspace(ctx, rs, tenantID, ws, query, topK)
 			}(i, ws)
 		}
 		wg.Wait()
-		var combined strings.Builder
-		var firstErr error
-		for _, r := range results {
-			if r.err != nil && firstErr == nil {
-				firstErr = r.err
-				continue
-			}
-			combined.WriteString(r.content)
-		}
-		if combined.Len() == 0 && firstErr != nil {
-			return "", firstErr
-		}
-		return combined.String(), nil
+		return mergeResults(results)
 	}
+}
+
+func searchWorkspace(ctx context.Context, rs *RAGService, tenantID, ws, query string, topK int) wsResult {
+	mode, effectiveTopK, embedModel, workspaceID, err := resolveWorkspaceConfig(ctx, rs, tenantID, ws, topK)
+	if err != nil {
+		return wsResult{err: err}
+	}
+	out, err := rs.Query(ctx, RAGQueryRequest{
+		WorkspaceID:    workspaceID,
+		Workspace:      ws,
+		Question:       query,
+		TenantID:       tenantID,
+		Mode:           mode,
+		TopK:           effectiveTopK,
+		EmbeddingModel: embedModel,
+	})
+	if err != nil {
+		return wsResult{err: err}
+	}
+	return wsResult{content: formatSources(out.Sources)}
+}
+
+func resolveWorkspaceConfig(ctx context.Context, rs *RAGService, tenantID, ws string, topK int) (
+	mode string, effectiveTopK int, embedModel string, workspaceID string, err error,
+) {
+	mode = domain.DefaultQueryMode
+	effectiveTopK = topK
+	if rs.wsRepo == nil {
+		return
+	}
+	w, getErr := rs.wsRepo.GetByName(ctx, tenantID, ws)
+	if getErr != nil {
+		err = ErrRAGDependency
+		return
+	}
+	if w == nil {
+		return
+	}
+	workspaceID = w.ID
+	if w.Config.TopK > 0 {
+		effectiveTopK = w.Config.TopK
+	}
+	embedModel = w.Config.EmbeddingModel
+	if w.Config.QueryMode != "" {
+		mode = w.Config.QueryMode
+	}
+	return
+}
+
+func formatSources(sources []Source) string {
+	var sb strings.Builder
+	for _, src := range sources {
+		sb.WriteString(src.Content)
+		sb.WriteString("\n---\n")
+	}
+	return sb.String()
+}
+
+type wsResult struct {
+	content string
+	err     error
+}
+
+func mergeResults(results []wsResult) (string, error) {
+	var combined strings.Builder
+	var firstErr error
+	for _, r := range results {
+		if r.err != nil && firstErr == nil {
+			firstErr = r.err
+			continue
+		}
+		combined.WriteString(r.content)
+	}
+	if combined.Len() == 0 && firstErr != nil {
+		return "", firstErr
+	}
+	return combined.String(), nil
 }
 
 type RAGService struct {

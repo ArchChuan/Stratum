@@ -148,7 +148,11 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     await systemCard.getByRole('button', { name: '编辑 Agent' }).click();
     expect((await systemAgentResponse).status()).toBe(200);
     await expect(page).toHaveURL(`${webURL}/agents/${systemAgent.id}/edit`);
-    await expect(page.getByLabel('LLM 模型')).toBeVisible();
+    const modelInput = page.getByRole('combobox', { name: 'LLM 模型' });
+    await expect(modelInput).toBeEnabled();
+    await modelInput.click();
+    await modelInput.press('ArrowDown');
+    await modelInput.press('Enter');
     const settingsResponse = waitForMutation(page, `/agents/${systemAgent.id}`, 'PUT');
     await page.getByRole('button', { name: '保存修改' }).click();
     expect((await settingsResponse).status()).toBe(200);

@@ -121,10 +121,13 @@ func ComposeSystemAssistantProfile(
 	profile = &known
 
 	return &domain.AgentConfig{
-		ID: cfg.ID, Name: profile.Name, Type: domain.ReActAgent, Description: profile.Description,
-		SystemPrompt: profile.SystemPrompt, LLMModel: cfg.LLMModel,
-		MaxIterations: profile.MaxIterations, MaxContextTokens: profile.MaxContextTokens,
-		MemoryScope: cfg.MemoryScope, SystemKey: profile.Key, IsSystem: true, ManagementMode: "platform",
+		ID: cfg.ID, Name: profile.Name, Type: domain.ReActAgent,
+		Description:      cfg.Description,
+		SystemPrompt:     cfg.SystemPrompt,
+		LLMModel:         cfg.LLMModel,
+		MaxIterations:    profile.MaxIterations,
+		MaxContextTokens: profile.MaxContextTokens,
+		MemoryScope:      cfg.MemoryScope, SystemKey: profile.Key, IsSystem: true, ManagementMode: "platform",
 		MCPToolIDs: copyCfg.MCPToolIDs, KnowledgeWorkspaceIDs: copyCfg.KnowledgeWorkspaceIDs,
 		AllowedSkills: copyCfg.AllowedSkills,
 	}, nil

@@ -110,35 +110,15 @@ func Ready(snapshot Snapshot) (ready, blocked []string, complete bool, err error
 		statuses[id] = status
 	}
 
-	changed := true
-	for changed {
-		changed = false
-		for _, node := range snapshot.Nodes {
-			if statuses[node.ID] != StatusPending {
-				continue
-			}
-			for _, dependency := range node.DependsOn {
-				if preventsExecution(statuses[dependency]) {
-					statuses[node.ID] = StatusBlocked
-					changed = true
-					break
-				}
-			}
-		}
-	}
+	// Propagate blocked status: a pending node becomes blocked when any
+	// dependency reached a terminal failure state.
+	propagateBlocked(snapshot.Nodes, statuses)
 
 	complete = true
 	for _, node := range snapshot.Nodes {
 		status := statuses[node.ID]
 		if status == StatusPending {
-			allSucceeded := true
-			for _, dependency := range node.DependsOn {
-				if statuses[dependency] != StatusSucceeded {
-					allSucceeded = false
-					break
-				}
-			}
-			if allSucceeded {
+			if allDepsSucceeded(node, statuses) {
 				ready = append(ready, node.ID)
 			}
 		}
@@ -152,6 +132,40 @@ func Ready(snapshot Snapshot) (ready, blocked []string, complete bool, err error
 	sort.Strings(ready)
 	sort.Strings(blocked)
 	return ready, blocked, complete, nil
+}
+
+func propagateBlocked(nodes []Node, statuses map[string]Status) {
+	changed := true
+	for changed {
+		changed = false
+		for _, node := range nodes {
+			if statuses[node.ID] != StatusPending {
+				continue
+			}
+			if hasBlockingDep(node, statuses) {
+				statuses[node.ID] = StatusBlocked
+				changed = true
+			}
+		}
+	}
+}
+
+func hasBlockingDep(node Node, statuses map[string]Status) bool {
+	for _, dep := range node.DependsOn {
+		if preventsExecution(statuses[dep]) {
+			return true
+		}
+	}
+	return false
+}
+
+func allDepsSucceeded(node Node, statuses map[string]Status) bool {
+	for _, dep := range node.DependsOn {
+		if statuses[dep] != StatusSucceeded {
+			return false
+		}
+	}
+	return true
 }
 
 func validStatus(status Status) bool {

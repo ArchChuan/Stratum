@@ -269,39 +269,60 @@ func completionHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func nextToolCall(tools []struct {
-	Function struct {
-		Name       string         `json:"name"`
-		Parameters map[string]any `json:"parameters"`
-	} `json:"function"`
-}, called map[string]bool) (string, string) {
+func nextToolCall(tools []toolDef, called map[string]bool) (string, string) {
 	contextEvidence.Lock()
 	contextMode := contextEvidence.KnowledgeMarker != "" && contextEvidence.MemoryMarker != ""
 	contextEvidence.Unlock()
 	if contextMode {
-		for _, expected := range []string{"stratum_search_knowledge", "stratum_recall_memory"} {
-			for _, tool := range tools {
-				if tool.Function.Name != expected || called[expected] {
-					continue
-				}
-				if expected == "stratum_recall_memory" {
-					return expected, `{"query":"历史偏好","limit":5}`
-				}
-				properties, _ := tool.Function.Parameters["properties"].(map[string]any)
-				workspaces, _ := properties["workspaces"].(map[string]any)
-				items, _ := workspaces["items"].(map[string]any)
-				values, _ := items["enum"].([]any)
-				if len(values) > 0 {
-					if workspace, ok := values[0].(string); ok {
-						arguments, _ := json.Marshal(map[string]any{
-							"workspaces": []string{workspace}, "query": "知识库上下文", "top_k": 5,
-						})
-						return expected, string(arguments)
-					}
+		if name, args := findContextTool(tools, called); name != "" {
+			return name, args
+		}
+	}
+	if name, args := findSkillTool(tools, called); name != "" {
+		return name, args
+	}
+	for _, tool := range tools {
+		if len(tool.Function.Name) >= 4 && tool.Function.Name[:4] == "mcp:" && !called[tool.Function.Name] {
+			return tool.Function.Name, `{"text":"stateful approval"}`
+		}
+	}
+	return "", ""
+}
+
+type toolDef = struct {
+	Function struct {
+		Name       string         `json:"name"`
+		Parameters map[string]any `json:"parameters"`
+	} `json:"function"`
+}
+
+func findContextTool(tools []toolDef, called map[string]bool) (string, string) {
+	for _, expected := range []string{"stratum_search_knowledge", "stratum_recall_memory"} {
+		for _, tool := range tools {
+			if tool.Function.Name != expected || called[expected] {
+				continue
+			}
+			if expected == "stratum_recall_memory" {
+				return expected, `{"query":"历史偏好","limit":5}`
+			}
+			properties, _ := tool.Function.Parameters["properties"].(map[string]any)
+			workspaces, _ := properties["workspaces"].(map[string]any)
+			items, _ := workspaces["items"].(map[string]any)
+			values, _ := items["enum"].([]any)
+			if len(values) > 0 {
+				if workspace, ok := values[0].(string); ok {
+					arguments, _ := json.Marshal(map[string]any{
+						"workspaces": []string{workspace}, "query": "知识库上下文", "top_k": 5,
+					})
+					return expected, string(arguments)
 				}
 			}
 		}
 	}
+	return "", ""
+}
+
+func findSkillTool(tools []toolDef, called map[string]bool) (string, string) {
 	for _, tool := range tools {
 		if tool.Function.Name != "stratum_activate_skill" || called[tool.Function.Name] {
 			continue
@@ -314,11 +335,6 @@ func nextToolCall(tools []struct {
 				arguments, _ := json.Marshal(map[string]string{"skill_id": skillID})
 				return tool.Function.Name, string(arguments)
 			}
-		}
-	}
-	for _, tool := range tools {
-		if len(tool.Function.Name) >= 4 && tool.Function.Name[:4] == "mcp:" && !called[tool.Function.Name] {
-			return tool.Function.Name, `{"text":"stateful approval"}`
 		}
 	}
 	return "", ""
