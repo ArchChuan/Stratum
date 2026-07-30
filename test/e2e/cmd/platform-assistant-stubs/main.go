@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 const (
@@ -293,7 +295,7 @@ func (s *stubServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 	case "initialize":
 		s.initialize.increment()
 		result = map[string]any{
-			"protocolVersion": "2025-06-18",
+			"protocolVersion": constants.MCPProtocolVersion,
 			"capabilities": map[string]any{
 				"tools": map[string]any{"listChanged": false}, "resources": map[string]any{"listChanged": false},
 			},
