@@ -6,7 +6,7 @@ import { AgentFormSections } from './AgentFormSections';
 
 describe('AgentFormSections', () => {
   it('limits max iterations to the product range with a slider', () => {
-    render(<Form initialValues={{ maxIterations: 10 }}><AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} chatModels={[]} /></Form>);
+    render(<Form initialValues={{ maxIterations: 10 }}><AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} /></Form>);
     const slider = screen.getByRole('slider', { name: '最大迭代次数' });
     expect(slider).toHaveAttribute('aria-valuemin', '1');
     expect(slider).toHaveAttribute('aria-valuemax', '90');
@@ -20,7 +20,7 @@ describe('AgentFormSections', () => {
           skills={[]}
           mcpTools={[]}
           workspaces={[]}
-          chatModels={['managed-chat']}
+          groupedModels={[{ provider: 'test', models: [{ value: 'managed-chat', label: 'managed-chat' }] }]}
         />
       </Form>,
     );
@@ -37,7 +37,7 @@ describe('AgentFormSections', () => {
           skills={[]}
           mcpTools={[]}
           workspaces={[]}
-          chatModels={['managed-chat']}
+          groupedModels={[{ provider: 'test', models: [{ value: 'managed-chat', label: 'managed-chat' }] }]}
           currentModel="retired-chat"
         />
       </Form>,
