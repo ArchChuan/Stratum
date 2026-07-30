@@ -75,13 +75,14 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
 		await expect(page.getByRole('heading', { name: 'Agent 列表' })).toBeVisible();
 		completed.push('agent.route.agents.list');
 
-    const catalogueResponse = waitForMutation(page, '/models', 'GET');
+    const catalogueResponse = waitForMutation(page, '/admin/models', 'GET');
     await page.getByRole('button', { name: '创建 Agent' }).click();
     await expect(page).toHaveURL(`${webURL}/agents/create`);
     const catalogue = await catalogueResponse;
     expect(catalogue.status()).toBe(200);
-    const catalogueBody = await catalogue.json() as { models?: string[] };
-    expect(catalogueBody.models, `chat models=${catalogueBody.models?.join(',')}`).toContain('qwen-max');
+    const catalogueBody = await catalogue.json() as { models?: Array<{ name: string }> };
+    const chatModels = catalogueBody.models?.map(({ name }) => name);
+    expect(chatModels, `chat models=${chatModels?.join(',')}`).toContain('qwen-max');
     completed.push('agent.route.agents.create');
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('描述').fill('全系统 stateful Agent 验收');
