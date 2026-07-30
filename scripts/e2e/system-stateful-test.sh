@@ -50,10 +50,17 @@ touch "$STATEFUL_E2E_MCP_STARTED_MARKER"
 trap 'touch "$STATEFUL_E2E_MCP_CLEANUP_MARKER"; exit 0' TERM INT
 while :; do read -r -t 1 _ || true; done
 SH
+cat >"$test_dir/platform-mcp-process" <<'SH'
+#!/usr/bin/env bash
+touch "$STATEFUL_E2E_PLATFORM_MCP_STARTED_MARKER"
+trap 'touch "$STATEFUL_E2E_PLATFORM_MCP_CLEANUP_MARKER"; exit 0' TERM INT
+while :; do read -r -t 1 _ || true; done
+SH
 cat >"$test_dir/backend-process" <<'SH'
 #!/usr/bin/env bash
 [[ -e "$STATEFUL_E2E_OAUTH_STARTED_MARKER" ]] || exit 31
 [[ -e "$STATEFUL_E2E_MCP_STARTED_MARKER" ]] || exit 36
+[[ -e "$STATEFUL_E2E_PLATFORM_MCP_STARTED_MARKER" ]] || exit 38
 [[ ${STRATUM_E2E_MODE:-} == true ]] || exit 32
 [[ ${GITHUB_AUTHORIZE_URL:-} == http://127.0.0.1:19090/login/oauth/authorize ]] || exit 33
 [[ ${GITHUB_TOKEN_URL:-} == http://127.0.0.1:19090/login/oauth/access_token ]] || exit 34
@@ -116,7 +123,8 @@ cat >"$test_dir/milvus-stop" <<'SH'
 touch "$STATEFUL_E2E_SHARED_MILVUS_STOPPED_MARKER"
 SH
 chmod +x "$test_dir/digest" "$test_dir/process" "$test_dir/playwright-pass" "$test_dir/playwright-skip" \
-  "$test_dir/oauth-process" "$test_dir/mcp-process" "$test_dir/backend-process" "$test_dir/digest-change" "$test_dir/attest" \
+  "$test_dir/oauth-process" "$test_dir/mcp-process" "$test_dir/platform-mcp-process" "$test_dir/backend-process" \
+  "$test_dir/digest-change" "$test_dir/attest" \
   "$test_dir/migrate" "$test_dir/migrate-fail" "$test_dir/milvus-find" "$test_dir/milvus-start" "$test_dir/milvus-stop"
 
 common=(env TEST_DATABASE_URL="$safe_db" STATEFUL_E2E_DIGEST_COMMAND="$test_dir/digest"
@@ -124,13 +132,17 @@ common=(env TEST_DATABASE_URL="$safe_db" STATEFUL_E2E_DIGEST_COMMAND="$test_dir/
   STATEFUL_E2E_DATABASE_PREPARE_COMMAND=true STATEFUL_E2E_ENV_FILE="$test_dir/missing.env"
   STATEFUL_E2E_MIGRATION_COMMAND="$test_dir/migrate"
   STATEFUL_E2E_OAUTH_COMMAND="$test_dir/oauth-process" STATEFUL_E2E_MCP_COMMAND="$test_dir/mcp-process"
+  STATEFUL_E2E_PLATFORM_MCP_COMMAND="$test_dir/platform-mcp-process"
   STATEFUL_E2E_BACKEND_COMMAND="$test_dir/backend-process"
   STATEFUL_E2E_FRONTEND_COMMAND="$test_dir/process" STATEFUL_E2E_HEALTH_ATTEMPTS=1
-  STATEFUL_E2E_OAUTH_HEALTH_COMMAND=true STATEFUL_E2E_MCP_HEALTH_COMMAND=true STATEFUL_E2E_FRONTEND_HEALTH_COMMAND=true
+  STATEFUL_E2E_OAUTH_HEALTH_COMMAND=true STATEFUL_E2E_MCP_HEALTH_COMMAND=true
+  STATEFUL_E2E_PLATFORM_MCP_HEALTH_COMMAND=true STATEFUL_E2E_FRONTEND_HEALTH_COMMAND=true
   STATEFUL_E2E_OAUTH_STARTED_MARKER="$test_dir/oauth-started"
   STATEFUL_E2E_OAUTH_CLEANUP_MARKER="$test_dir/oauth-cleaned"
   STATEFUL_E2E_MCP_STARTED_MARKER="$test_dir/mcp-started"
-  STATEFUL_E2E_MCP_CLEANUP_MARKER="$test_dir/mcp-cleaned")
+  STATEFUL_E2E_MCP_CLEANUP_MARKER="$test_dir/mcp-cleaned"
+  STATEFUL_E2E_PLATFORM_MCP_STARTED_MARKER="$test_dir/platform-mcp-started"
+  STATEFUL_E2E_PLATFORM_MCP_CLEANUP_MARKER="$test_dir/platform-mcp-cleaned")
 cleanup_marker="$test_dir/cleaned"
 expect_failure 'backend failed health check' "${common[@]}" STATEFUL_E2E_CLEANUP_MARKER="$cleanup_marker" \
   STATEFUL_E2E_BACKEND_HEALTH_COMMAND=false bash "$runner" short
@@ -145,11 +157,18 @@ mcp_cleanup_marker="$test_dir/mcp-cleaned"
 for _ in {1..20}; do [[ -e "$mcp_cleanup_marker" ]] && break; sleep 0.05; done
 [[ -e "$mcp_cleanup_marker" ]] || { printf 'runner did not clean up MCP process\n' >&2; exit 1; }
 
+platform_mcp_cleanup_marker="$test_dir/platform-mcp-cleaned"
+for _ in {1..20}; do [[ -e "$platform_mcp_cleanup_marker" ]] && break; sleep 0.05; done
+[[ -e "$platform_mcp_cleanup_marker" ]] || { printf 'runner did not clean up Platform MCP process\n' >&2; exit 1; }
+
 expect_failure 'oauth provider failed health check' "${common[@]}" \
   STATEFUL_E2E_OAUTH_HEALTH_COMMAND=false STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true bash "$runner" short
 
 expect_failure 'MCP server failed health check' "${common[@]}" \
   STATEFUL_E2E_MCP_HEALTH_COMMAND=false STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true bash "$runner" short
+
+expect_failure 'Platform MCP server failed health check' "${common[@]}" \
+  STATEFUL_E2E_PLATFORM_MCP_HEALTH_COMMAND=false STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true bash "$runner" short
 
 expect_failure 'failed or skipped coverage' "${common[@]}" STATEFUL_E2E_CLEANUP_MARKER="$cleanup_marker" \
   STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true STATEFUL_E2E_PLAYWRIGHT_COMMAND="$test_dir/playwright-skip" \

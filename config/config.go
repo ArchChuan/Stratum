@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"time"
@@ -37,10 +38,11 @@ type Config struct {
 }
 
 type InternalAPIConfig struct {
-	Port         string
-	CertFile     string
-	KeyFile      string
-	ClientCAFile string
+	Port                   string
+	CertFile               string
+	KeyFile                string
+	ClientCAFile           string
+	PlatformMCPDialAddress string
 }
 
 func (c InternalAPIConfig) Configured() bool {
@@ -54,10 +56,27 @@ func (c InternalAPIConfig) validate() error {
 			configuredFiles++
 		}
 	}
-	if configuredFiles == 0 || configuredFiles == 3 {
+	if configuredFiles == 0 {
+		if c.PlatformMCPDialAddress != "" {
+			return fmt.Errorf("Platform MCP dial address requires internal API workload TLS")
+		}
 		return nil
 	}
+	if configuredFiles == 3 {
+		return validatePlatformMCPDialAddress(c.PlatformMCPDialAddress)
+	}
 	return fmt.Errorf("internal API TLS certificate, key, and client CA must be configured together")
+}
+
+func validatePlatformMCPDialAddress(address string) error {
+	if address == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" || port == "" {
+		return fmt.Errorf("Platform MCP dial address must be host:port")
+	}
+	return nil
 }
 
 type OpikConfig struct {
@@ -151,10 +170,11 @@ func Load() (*Config, error) {
 			SummaryTokenThreshold: constants.EnricherSummaryTokenThreshold,
 		},
 		InternalAPI: InternalAPIConfig{
-			Port:         getEnv("INTERNAL_API_PORT", "8443"),
-			CertFile:     getEnv("INTERNAL_API_TLS_CERT_FILE", ""),
-			KeyFile:      getEnv("INTERNAL_API_TLS_KEY_FILE", ""),
-			ClientCAFile: getEnv("INTERNAL_API_CLIENT_CA_FILE", ""),
+			Port:                   getEnv("INTERNAL_API_PORT", "8443"),
+			CertFile:               getEnv("INTERNAL_API_TLS_CERT_FILE", ""),
+			KeyFile:                getEnv("INTERNAL_API_TLS_KEY_FILE", ""),
+			ClientCAFile:           getEnv("INTERNAL_API_CLIENT_CA_FILE", ""),
+			PlatformMCPDialAddress: getEnv("PLATFORM_MCP_DIAL_ADDRESS", ""),
 		},
 	}
 	if err := cfg.InternalAPI.validate(); err != nil {

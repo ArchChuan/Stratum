@@ -1,10 +1,12 @@
 package wiring
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 
@@ -27,11 +29,18 @@ func (p platformMCPTransportProvider) Transport() (http.RoundTripper, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &http.Transport{TLSClientConfig: &tls.Config{
+	transport := &http.Transport{TLSClientConfig: &tls.Config{
 		MinVersion: tls.VersionTLS12, ServerName: platformMCPServerName,
 		RootCAs: roots, Certificates: []tls.Certificate{certificate},
 		VerifyConnection: verifyPlatformMCPServer,
-	}}, nil
+	}}
+	if p.files.PlatformMCPDialAddress != "" {
+		dialer := &net.Dialer{}
+		transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, p.files.PlatformMCPDialAddress)
+		}
+	}
+	return transport, nil
 }
 
 func platformMCPRootCAs(path string) (*x509.CertPool, error) {
