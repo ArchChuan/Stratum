@@ -1,0 +1,11 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "POST",
+    "path": "/admin/providers/contract-id/health",
+    "want_status": 200,
+    "want_body": {
+      "status": "healthy"
+    }
+  }
+]

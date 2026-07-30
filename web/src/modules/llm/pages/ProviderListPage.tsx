@@ -1,6 +1,7 @@
 import {
   ApiOutlined,
   DeleteOutlined,
+  EditOutlined,
   PlusOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
@@ -19,6 +20,7 @@ import { useCallback, useState } from 'react';
 import { llmApi } from '../api/llm.api';
 import { DiscoverResultModal } from '../components/DiscoverResultModal';
 import { ProviderForm } from '../components/ProviderForm';
+import type { ProviderFormValues } from '../components/ProviderForm';
 import { useProviders } from '../hooks/useProviders';
 import type { CreateProviderInput, Model, Provider, ProviderKind } from '../model/llm';
 
@@ -40,9 +42,11 @@ const KIND_COLORS: Record<ProviderKind, string> = {
 };
 
 export function ProviderListPage() {
-  const { providers, loading, createLoading, refresh, createProvider, deleteProvider } = useProviders();
+  const { providers, loading, createLoading, updateLoading, refresh, createProvider, updateProvider, deleteProvider } = useProviders();
   const { isAdmin } = useTenantRole();
   const [createOpen, setCreateOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [discoveringIds, setDiscoveringIds] = useState<Set<string>>(new Set());
   const [discoverResults, setDiscoverResults] = useState<Model[]>([]);
   const [discoverProviderName, setDiscoverProviderName] = useState('');
@@ -54,6 +58,28 @@ export function ProviderListPage() {
       setCreateOpen(false);
     },
     [createProvider],
+  );
+
+  const handleEdit = useCallback((record: Provider) => {
+    setEditingProvider(record);
+    setEditOpen(true);
+  }, []);
+
+  const handleEditSubmit = useCallback(
+    async (values: ProviderFormValues) => {
+      if (!editingProvider) return;
+      // Send all fields; backend treats empty apiKey as "keep existing".
+      await updateProvider(editingProvider.id, {
+        name: values.name,
+        kind: values.kind,
+        baseUrl: values.baseUrl,
+        apiKey: values.apiKey,
+        defaultModel: values.defaultModel,
+      });
+      setEditOpen(false);
+      setEditingProvider(null);
+    },
+    [editingProvider, updateProvider],
   );
 
   const handleDelete = useCallback(
@@ -156,7 +182,7 @@ export function ProviderListPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 240,
+      width: 300,
       render: (_: unknown, record: Provider) => (
         <span style={{ display: 'flex', gap: 8 }}>
           <Button
@@ -169,6 +195,15 @@ export function ProviderListPage() {
           <Button size="small" onClick={() => handleHealthCheck(record)}>
             健康检查
           </Button>
+          {isAdmin && (
+            <Tooltip title="编辑">
+              <Button
+                size="small"
+                icon={<EditOutlined />}
+                onClick={() => handleEdit(record)}
+              />
+            </Tooltip>
+          )}
           {isAdmin && (
             <Tooltip title="删除">
               <Button
@@ -231,6 +266,17 @@ export function ProviderListPage() {
         onCancel={() => setCreateOpen(false)}
         onSubmit={handleCreate}
         loading={createLoading}
+      />
+
+      <ProviderForm
+        open={editOpen}
+        onCancel={() => {
+          setEditOpen(false);
+          setEditingProvider(null);
+        }}
+        onSubmit={handleEditSubmit}
+        loading={updateLoading}
+        provider={editingProvider}
       />
 
       <DiscoverResultModal

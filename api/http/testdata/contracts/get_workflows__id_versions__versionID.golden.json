@@ -1,0 +1,11 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/workflows/contract-id/versions/:versionID",
+    "want_status": 404,
+    "want_body": {
+      "error": "workflow not found"
+    }
+  }
+]

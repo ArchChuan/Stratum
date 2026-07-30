@@ -1,0 +1,11 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "PATCH",
+    "path": "/tenant/members/:user_id/role",
+    "want_status": 403,
+    "want_body": {
+      "error": "iam: owner role required"
+    }
+  }
+]

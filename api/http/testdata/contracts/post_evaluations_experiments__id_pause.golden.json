@@ -9,6 +9,8 @@
       "expected_state_version": 1
     },
     "want_status": 409,
-    "want_body": {"error":"experiment state version conflict"}
+    "want_body": {
+      "error": "experiment state version conflict"
+    }
   }
 ]

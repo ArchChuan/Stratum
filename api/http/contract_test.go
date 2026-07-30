@@ -10,11 +10,14 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,11 +30,19 @@ import (
 	evalapp "github.com/byteBuilderX/stratum/internal/evaluation/application"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain"
 	"github.com/byteBuilderX/stratum/internal/evaluation/domain/port"
+	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
+	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
 	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	iamtoken "github.com/byteBuilderX/stratum/internal/iam/infrastructure/token"
+	llmapp "github.com/byteBuilderX/stratum/internal/llmgateway/application"
+	llmdomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	llmport "github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 	llmgateway "github.com/byteBuilderX/stratum/internal/llmgateway/infrastructure"
 	platformapp "github.com/byteBuilderX/stratum/internal/platform/application"
 	platformdomain "github.com/byteBuilderX/stratum/internal/platform/domain"
+	workflowapp "github.com/byteBuilderX/stratum/internal/workflow/application"
+	workflowdomain "github.com/byteBuilderX/stratum/internal/workflow/domain"
+	workflowport "github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
@@ -50,8 +61,6 @@ func TestContracts(t *testing.T) {
 	if err != nil {
 		t.Skipf("config load failed: %v", err)
 	}
-	// Mirror record-contracts: force auth-gated routes to register so the
-	// replayed router exposes the same surface as the recorder.
 	cfg.GitHubClientID = "contract-recorder"
 	cfg.GitHubClientSecret = "contract-recorder"
 	cfg.JWTPrivateKeyPEM = mustGeneratePEM(t)
@@ -63,23 +72,68 @@ func TestContracts(t *testing.T) {
 	}
 	metrics := observability.NewPrometheusMetrics(logger)
 	gateway := llmgateway.NewGateway(nil, nil, nil).WithLogger(logger)
+
+	// ── Legacy router (auth, health, models catalogue, etc.) ──────────────
 	router := api.SetupRouter(cfg, logger, gateway, nil, nil, nil, nil)
-	evaluationRouter := apihttp.NewRouter(&wiring.Container{
-		Config: cfg, Logger: logger, Platform: &wiring.Platform{JWTService: iamtoken.NewJWTService(key), Metrics: metrics,
-			DashboardService: platformapp.NewDashboardService(contractDashboardRepo{})},
-		LLMGateway: &wiring.LLMGateway{}, Skill: &wiring.Skill{}, Agent: &wiring.Agent{
+
+	// ── DDD router with full stub population ──────────────────────────────
+	var idCounter atomic.Int64
+	nextID := func() string { return fmt.Sprintf("contract-%d", idCounter.Add(1)) }
+
+	contractProvRepo := contractProviderRepo{}
+	contractModRepo := contractModelRepo{}
+	contractDefRepo := contractDefRepo{}
+	contractVerRepo := contractVersionRepo{}
+	contractRunStore := contractRunStore{}
+	contractCtrlRepo := contractControlRepo{}
+	contractAgtExec := contractAgentExecutor{}
+	contractAdminTR := contractAdminTenantRepo{}
+	contractTenantR := contractTenantRepo{}
+	contractInvR := contractInvitationRepo{}
+
+	dddRouter := apihttp.NewRouter(&wiring.Container{
+		Config: cfg, Logger: logger,
+		Platform: &wiring.Platform{
+			JWTService: iamtoken.NewJWTService(key), Metrics: metrics,
+			DashboardService: platformapp.NewDashboardService(contractDashboardRepo{}),
+		},
+		LLMGateway: &wiring.LLMGateway{
+			ProviderService:  llmapp.NewProviderService(contractProvRepo, contractModRepo, contractProviderRuntime{}),
+			ModelMgmtService: llmapp.NewModelMgmtService(contractModRepo),
+		},
+		Skill: &wiring.Skill{}, MCP: &wiring.MCP{}, Memory: &wiring.Memory{},
+		Agent: &wiring.Agent{
 			ProposalService: agentapp.NewResourceChangeProposalService(
 				contractProposalRepo{}, contractProposalAuthorizer{}, nil, nil, metrics,
 			),
-		}, Workflow: &wiring.Workflow{},
-		Knowledge: &wiring.Knowledge{}, MCP: &wiring.MCP{}, Memory: &wiring.Memory{},
+		},
+		Workflow: &wiring.Workflow{
+			DefinitionService: workflowapp.NewDefinitionService(contractDefRepo, contractVerRepo, nextID),
+			RunService:        workflowapp.NewRunService(contractVerRepo, contractRunStore, contractAgtExec, nextID),
+			ControlService:    workflowapp.NewControlService(contractCtrlRepo, nextID),
+		},
+		Knowledge: &wiring.Knowledge{},
 		Evaluation: &wiring.Evaluation{
 			SuiteService: evalapp.NewSuiteService(nil), JobService: evalapp.NewJobService(nil, nil),
 			QueryService:      evalapp.NewQueryService(contractQueryRepo{}),
 			ExperimentService: evalapp.NewExperimentService(contractExperimentRepo{}),
 			CandidateService:  evalapp.NewCandidateCommandService(contractCandidateRepo{}),
 		},
+		IAM: &wiring.IAM{
+			AdminService:      iamapp.NewAdminService(contractAdminTR),
+			TenantService:     iamapp.NewTenantService(contractTenantR, logger),
+			InvitationService: iamapp.NewInvitationService(contractInvR),
+		},
 	})
+
+	jwtSvc := iamtoken.NewJWTService(key)
+
+	// ── Route dispatch: paths handled by the DDD router ───────────────────
+	dddPrefixes := []string{
+		"/evaluations/", "/dashboard/", "/resource-change-proposals/",
+		"/admin/providers", "/admin/models", "/admin/tenants",
+		"/tenant/", "/workflows", "/workflow-runs", "/workflow-approvals",
+	}
 
 	files, err := filepath.Glob("testdata/contracts/*.golden.json")
 	if err != nil {
@@ -100,26 +154,40 @@ func TestContracts(t *testing.T) {
 			}
 			for _, c := range cases {
 				req := httptest.NewRequest(c.Method, c.Path, bytes.NewReader(c.Body))
-				if strings.HasPrefix(c.Path, "/evaluations/") || strings.HasPrefix(c.Path, "/dashboard/") ||
-					strings.HasPrefix(c.Path, "/resource-change-proposals/") {
-					token, signErr := iamtoken.NewJWTService(key).Sign(iamport.TokenClaims{
-						Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin",
-					}, time.Hour)
+
+				useDDD := false
+				for _, prefix := range dddPrefixes {
+					if strings.HasPrefix(c.Path, prefix) {
+						useDDD = true
+						break
+					}
+				}
+
+				if useDDD {
+					var claims iamport.TokenClaims
+					switch {
+					case strings.HasPrefix(c.Path, "/admin/tenants"):
+						claims = iamport.TokenClaims{Sub: "contract-admin", GlobalRole: "global_admin"}
+					default:
+						claims = iamport.TokenClaims{Sub: "contract-admin", TenantID: "contract-tenant", Role: "admin"}
+					}
+					token, signErr := jwtSvc.Sign(claims, time.Hour)
 					if signErr != nil {
 						t.Fatal(signErr)
 					}
 					req.Header.Set("Authorization", "Bearer "+token)
 				}
+
 				for k, v := range c.Headers {
 					req.Header.Set(k, v)
 				}
 				rec := httptest.NewRecorder()
-				if strings.HasPrefix(c.Path, "/evaluations/") || strings.HasPrefix(c.Path, "/dashboard/") ||
-					strings.HasPrefix(c.Path, "/resource-change-proposals/") {
-					evaluationRouter.ServeHTTP(rec, req)
+				if useDDD {
+					dddRouter.ServeHTTP(rec, req)
 				} else {
 					router.ServeHTTP(rec, req)
 				}
+
 				if rec.Code != c.WantStatus {
 					t.Errorf("%s %s: got status %d, want %d", c.Method, c.Path, rec.Code, c.WantStatus)
 				}
@@ -130,6 +198,204 @@ func TestContracts(t *testing.T) {
 		})
 	}
 }
+
+// ── Stub repositories ──────────────────────────────────────────────────────
+
+var errStubNotFound = errors.New("stub: not found")
+
+type contractProviderRepo struct{}
+
+func (contractProviderRepo) Create(_ context.Context, _ string, _ *llmdomain.Provider) error {
+	return nil
+}
+func (contractProviderRepo) Get(_ context.Context, _ string, _ string) (*llmdomain.Provider, error) {
+	return &llmdomain.Provider{
+		ID: "contract-provider", Name: "stub", Kind: llmdomain.ProviderOpenAICompat,
+		BaseURL: "https://stub.example.com/v1", Enabled: true,
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}, nil
+}
+func (contractProviderRepo) List(_ context.Context, _ string) ([]llmdomain.Provider, error) {
+	return nil, nil
+}
+func (contractProviderRepo) Update(_ context.Context, _ string, _ *llmdomain.Provider) error {
+	return nil
+}
+func (contractProviderRepo) Delete(_ context.Context, _ string, _ string) error { return nil }
+
+type contractModelRepo struct{}
+
+func (contractModelRepo) Create(_ context.Context, _ string, _ *llmdomain.Model) error { return nil }
+func (contractModelRepo) Get(_ context.Context, _ string, _ string) (*llmdomain.Model, error) {
+	return nil, errStubNotFound
+}
+func (contractModelRepo) List(_ context.Context, _ string, _ llmport.ModelFilter) ([]llmdomain.Model, error) {
+	return nil, nil
+}
+func (contractModelRepo) Update(_ context.Context, _ string, _ *llmdomain.Model) error { return nil }
+func (contractModelRepo) UpsertDiscovered(_ context.Context, _ string, _ string, _ []llmdomain.Model) ([]llmdomain.Model, error) {
+	return nil, nil
+}
+func (contractModelRepo) Delete(_ context.Context, _ string, _ string) error         { return nil }
+func (contractModelRepo) Toggle(_ context.Context, _ string, _ string, _ bool) error { return nil }
+
+type contractProviderRuntime struct{}
+
+func (contractProviderRuntime) ListModels(_ context.Context, _ llmdomain.Provider) ([]string, error) {
+	return []string{"mock-model-1", "mock-model-2"}, nil
+}
+func (contractProviderRuntime) Health(_ context.Context, _ llmdomain.Provider) error { return nil }
+
+// ── Workflow stubs ─────────────────────────────────────────────────────────
+
+type contractDefRepo struct{}
+
+func (contractDefRepo) CreateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition) error {
+	return nil
+}
+func (contractDefRepo) GetDefinition(_ context.Context, _ string, _ string) (*workflowdomain.Definition, error) {
+	return &workflowdomain.Definition{
+		ID: "contract-def", Name: "stub-workflow", Description: "contract stub",
+		Revision: 1, Spec: workflowdomain.Spec{Nodes: []workflowdomain.Node{}, Edges: []workflowdomain.Edge{}},
+		InputSchema: workflowdomain.InputSchema{Fields: []workflowdomain.InputField{}},
+		CreatedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}, nil
+}
+func (contractDefRepo) UpdateDefinition(_ context.Context, _ string, _ *workflowdomain.Definition, _ int64) error {
+	return nil
+}
+func (contractDefRepo) DeleteDefinition(_ context.Context, _ string, _ string) error { return nil }
+func (contractDefRepo) ListDefinitions(_ context.Context, _ string, _ workflowport.DefinitionListQuery) ([]workflowdomain.Definition, int, error) {
+	return nil, 0, nil
+}
+
+type contractVersionRepo struct{}
+
+func (contractVersionRepo) CreateVersion(_ context.Context, _ string, _ *workflowdomain.Version) error {
+	return nil
+}
+func (contractVersionRepo) GetVersion(_ context.Context, _ string, _ string) (*workflowdomain.Version, error) {
+	return nil, workflowdomain.ErrNotFound
+}
+func (contractVersionRepo) NextVersionNumber(_ context.Context, _ string, _ string) (int64, error) {
+	return 1, nil
+}
+func (contractVersionRepo) ListVersions(_ context.Context, _ string, _ string, _ workflowport.VersionListQuery) ([]workflowdomain.Version, int, error) {
+	return nil, 0, nil
+}
+
+type contractRunStore struct{}
+
+func (contractRunStore) FindRunByIdempotency(_ context.Context, _ string, _ string) (*workflowdomain.Run, error) {
+	return nil, workflowdomain.ErrNotFound
+}
+func (contractRunStore) CreateRun(_ context.Context, _ string, _ *workflowdomain.Run) error {
+	return nil
+}
+func (contractRunStore) GetRun(_ context.Context, _ string, _ string) (*workflowdomain.Run, error) {
+	return nil, workflowdomain.ErrNotFound
+}
+func (contractRunStore) UpdateRun(_ context.Context, _ string, _ *workflowdomain.Run) error {
+	return nil
+}
+func (contractRunStore) SaveAttempt(_ context.Context, _ string, _ workflowdomain.NodeAttempt) error {
+	return nil
+}
+func (contractRunStore) ListAttempts(_ context.Context, _ string, _ string) ([]workflowdomain.NodeAttempt, error) {
+	return nil, nil
+}
+func (contractRunStore) ListRuns(_ context.Context, _ string, _ workflowport.RunListQuery) ([]workflowdomain.Run, int, error) {
+	return nil, 0, nil
+}
+
+type contractControlRepo struct{}
+
+func (contractControlRepo) GetRun(_ context.Context, _ string, _ string) (*workflowdomain.Run, error) {
+	return nil, workflowdomain.ErrNotFound
+}
+func (contractControlRepo) ControlRun(_ context.Context, _ string, _ string, _ int64, _ workflowdomain.RunStatus, _ string, _ workflowdomain.Event) error {
+	return nil
+}
+func (contractControlRepo) ListApprovals(_ context.Context, _ string, _ string, _ bool) ([]workflowdomain.Approval, error) {
+	return nil, nil
+}
+func (contractControlRepo) DecideApproval(_ context.Context, _ string, _ string, _ int64, _ string, _ workflowdomain.ApprovalDecision, _ string, _ string, _ workflowdomain.Event) error {
+	return nil
+}
+func (contractControlRepo) ListEffectIntents(_ context.Context, _ string, _ string) ([]workflowdomain.EffectIntent, error) {
+	return nil, nil
+}
+func (contractControlRepo) ResolveEffect(_ context.Context, _ string, _ string, _ int64, _ workflowdomain.ManualAction, _ string, _ string, _ workflowdomain.Event) error {
+	return nil
+}
+
+type contractAgentExecutor struct{}
+
+func (contractAgentExecutor) ExecuteAgent(_ context.Context, _ string, _ string, _ string) (string, string, error) {
+	return "", "", errors.New("stub: agent execution unavailable")
+}
+
+// ── IAM stubs ──────────────────────────────────────────────────────────────
+
+type contractAdminTenantRepo struct{}
+
+func (contractAdminTenantRepo) Count(_ context.Context, _ iamdomain.TenantFilter) (int, error) {
+	return 0, nil
+}
+func (contractAdminTenantRepo) List(_ context.Context, _ iamdomain.TenantFilter) ([]iamdomain.Tenant, error) {
+	return nil, nil
+}
+func (contractAdminTenantRepo) Get(_ context.Context, _ string) (*iamdomain.Tenant, error) {
+	return nil, errStubNotFound
+}
+func (contractAdminTenantRepo) Create(_ context.Context, _ iamdomain.Tenant) error { return nil }
+func (contractAdminTenantRepo) UpdatePatch(_ context.Context, _ string, _ iamdomain.TenantPatch) error {
+	return nil
+}
+func (contractAdminTenantRepo) HardDelete(_ context.Context, _ string) error { return nil }
+func (contractAdminTenantRepo) ProvisionSchema(_ context.Context, _ string) error {
+	return nil
+}
+
+type contractTenantRepo struct{}
+
+func (contractTenantRepo) CountMembers(_ context.Context, _ string) (int, error) { return 0, nil }
+func (contractTenantRepo) ListMembers(_ context.Context, _ string, _ int, _ int) ([]iamdomain.Member, error) {
+	return nil, nil
+}
+func (contractTenantRepo) GetMemberRole(_ context.Context, _ string, _ string) (string, error) {
+	return "member", nil
+}
+func (contractTenantRepo) UpdateMemberRole(_ context.Context, _ string, _ string, _ string) error {
+	return nil
+}
+func (contractTenantRepo) DeleteMember(_ context.Context, _ string, _ string) error { return nil }
+func (contractTenantRepo) GetTenantSettings(_ context.Context, _ string) (string, bool, []byte, error) {
+	return "stub-tenant", false, []byte(`{}`), nil
+}
+func (contractTenantRepo) UpdateTenantName(_ context.Context, _ string, _ string) error { return nil }
+func (contractTenantRepo) UpdateTenantSettings(_ context.Context, _ string, _ []byte) error {
+	return nil
+}
+func (contractTenantRepo) ListUserTenants(_ context.Context, _ string) ([]iamdomain.UserTenantInfo, error) {
+	return nil, nil
+}
+
+type contractInvitationRepo struct{}
+
+func (contractInvitationRepo) Create(_ context.Context, _ iamdomain.TenantInvitation) error {
+	return nil
+}
+func (contractInvitationRepo) ConsumeAndJoin(_ context.Context, _ iamdomain.InvitationJoinInput) (*iamdomain.InvitationJoinResult, error) {
+	return nil, errStubNotFound
+}
+func (contractInvitationRepo) ConsumeAndJoinExisting(_ context.Context, _ iamdomain.ExistingInvitationJoinInput) (*iamdomain.InvitationJoinResult, error) {
+	return nil, errStubNotFound
+}
+
+// ── Existing stubs ─────────────────────────────────────────────────────────
 
 type contractDashboardRepo struct{}
 
@@ -197,15 +463,7 @@ func (contractQueryRepo) ListCandidates(context.Context, string, port.CenterFilt
 	return domain.CandidatePage{Items: []domain.CandidateSummary{}}, nil
 }
 func (contractQueryRepo) ListExperiments(context.Context, string, port.CenterFilter) (domain.ExperimentPage, error) {
-	return domain.ExperimentPage{Items: []domain.ExperimentSummary{{
-		ID: "experiment-contract", ResourceID: "agent-contract", StableRevisionID: "stable-contract",
-		CanaryRevisionID: "canary-contract", Status: "running", Recommendation: "promote",
-		ResourceKind: domain.ResourceKindAgent, StagePercent: 100, StateVersion: 2,
-		PromotionEvidence: domain.PromotionEvidence{Eligible: true, Gates: domain.PromotionGates{
-			Quality: domain.GatePassed, Cost: domain.GatePassed, Latency: domain.GatePassed,
-			ErrorRate: domain.GatePassed, Security: domain.GatePassed,
-		}, Blockers: []domain.PromotionBlocker{}},
-	}}}, nil
+	return domain.ExperimentPage{Items: []domain.ExperimentSummary{}}, nil
 }
 func (contractQueryRepo) Timeline(context.Context, string, port.CenterFilter) (domain.TimelinePage, error) {
 	return domain.TimelinePage{Items: []domain.TimelineEvent{}}, nil

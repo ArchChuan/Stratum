@@ -297,7 +297,13 @@ clean:
 	rm -rf bin/ coverage.out
 	rm -rf $(WEB_DIR)/dist $(WEB_DIR)/node_modules/.cache
 
-# ─── HTTP 契约录制（DDD 重构 Phase 0）─────────────────────────────────────
-.PHONY: record-contracts
+# ─── HTTP 契约测试 ────────────────────────────────────────────────────────
+.PHONY: contract-test contract-enforce record-contracts
+contract-test:
+	go test -run TestContracts ./api/http/ -count=1
+
+contract-enforce: contract-test
+	bash scripts/quality/camelcase-enforce.sh
+
 record-contracts:
 	go run -tags=contracts ./scripts/record-contracts.go api/http/testdata/contracts

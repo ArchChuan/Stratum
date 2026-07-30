@@ -42,10 +42,11 @@ export interface CreateProviderInput {
 }
 
 export interface UpdateProviderInput {
-  name?: string;
-  kind?: ProviderKind;
-  baseUrl?: string;
-  apiKey?: string;
+  name: string;
+  kind: ProviderKind;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
 }
 
 export interface UpdateModelInput {

@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "POST",
+    "path": "/auth/oauth/exchange",
+    "body": {
+      "error": "code required"
+    },
+    "want_status": 400
+  }
+]

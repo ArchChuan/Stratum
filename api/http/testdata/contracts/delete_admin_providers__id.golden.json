@@ -1,0 +1,11 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "DELETE",
+    "path": "/admin/providers/contract-id",
+    "want_status": 200,
+    "want_body": {
+      "message": "已删除"
+    }
+  }
+]
