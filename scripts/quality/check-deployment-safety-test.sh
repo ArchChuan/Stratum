@@ -106,6 +106,11 @@ require '--set-string frontend\.image\.digest=' 'frontend digest deployment'
 require 'opik-2\.1\.32\.tgz' 'versioned Opik Helm chart artifact'
 require 'sha256sum --check' 'Opik Helm chart checksum verification'
 require 'helm upgrade --install opik /tmp/opik-2\.1\.32\.tgz' 'verified local Opik chart installation'
+require 'helm upgrade --install cert-manager jetstack/cert-manager' 'cert-manager release installation'
+require '--version v1\.21\.1' 'pinned cert-manager chart version'
+require '--set crds\.enabled=true' 'cert-manager CRD installation'
+require 'kubectl wait --for=condition=Established crd/certificates\.cert-manager\.io' \
+    'Certificate CRD readiness wait'
 require_file "${OPIK_COLLECTOR}" 'opentelemetry-collector-contrib@sha256:[0-9a-f]{64}' \
     'collector image digest pin'
 require 'opik-backend\.opik\.svc\.cluster\.local:8080' 'in-cluster Opik API URL'
@@ -124,6 +129,14 @@ reject 'metrics-server/releases/latest' 'mutable metrics-server latest manifest'
 reject '\|\|[[:space:]]*true' 'suppressed deployment errors'
 reject 'StrictHostKeyChecking=no' 'disabled SSH host verification'
 reject 'insecure-skip-tls-verify|certificate-authority-data:/d' 'disabled Kubernetes API verification'
+
+cert_manager_step_line=$(grep -n 'name: Install pinned cert-manager release' "${WORKFLOW}" | cut -d: -f1)
+helm_deploy_step_line=$(grep -n 'name: Helm deploy' "${WORKFLOW}" | cut -d: -f1)
+if [[ -z "${cert_manager_step_line}" || -z "${helm_deploy_step_line}" ||
+    ${cert_manager_step_line} -ge ${helm_deploy_step_line} ]]; then
+    echo 'deployment safety contract violated: cert-manager must be ready before Stratum Helm deploy' >&2
+    exit 1
+fi
 
 require_file "${REMOTE_MONITORING_DEPLOY}" '^set -euo pipefail$' \
     'monitoring deployment strict shell mode missing'
