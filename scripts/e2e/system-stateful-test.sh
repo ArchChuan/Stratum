@@ -53,6 +53,8 @@ SH
 cat >"$test_dir/platform-mcp-process" <<'SH'
 #!/usr/bin/env bash
 touch "$STATEFUL_E2E_PLATFORM_MCP_STARTED_MARKER"
+setsid sleep 300 &
+printf '%s\n' "$!" >"$STATEFUL_E2E_PLATFORM_MCP_CHILD_PID_FILE"
 trap 'touch "$STATEFUL_E2E_PLATFORM_MCP_CLEANUP_MARKER"; exit 0' TERM INT
 while :; do read -r -t 1 _ || true; done
 SH
@@ -142,7 +144,8 @@ common=(env TEST_DATABASE_URL="$safe_db" STATEFUL_E2E_DIGEST_COMMAND="$test_dir/
   STATEFUL_E2E_MCP_STARTED_MARKER="$test_dir/mcp-started"
   STATEFUL_E2E_MCP_CLEANUP_MARKER="$test_dir/mcp-cleaned"
   STATEFUL_E2E_PLATFORM_MCP_STARTED_MARKER="$test_dir/platform-mcp-started"
-  STATEFUL_E2E_PLATFORM_MCP_CLEANUP_MARKER="$test_dir/platform-mcp-cleaned")
+  STATEFUL_E2E_PLATFORM_MCP_CLEANUP_MARKER="$test_dir/platform-mcp-cleaned"
+  STATEFUL_E2E_PLATFORM_MCP_CHILD_PID_FILE="$test_dir/platform-mcp-child-pid")
 cleanup_marker="$test_dir/cleaned"
 expect_failure 'backend failed health check' "${common[@]}" STATEFUL_E2E_CLEANUP_MARKER="$cleanup_marker" \
   STATEFUL_E2E_BACKEND_HEALTH_COMMAND=false bash "$runner" short
@@ -160,6 +163,11 @@ for _ in {1..20}; do [[ -e "$mcp_cleanup_marker" ]] && break; sleep 0.05; done
 platform_mcp_cleanup_marker="$test_dir/platform-mcp-cleaned"
 for _ in {1..20}; do [[ -e "$platform_mcp_cleanup_marker" ]] && break; sleep 0.05; done
 [[ -e "$platform_mcp_cleanup_marker" ]] || { printf 'runner did not clean up Platform MCP process\n' >&2; exit 1; }
+platform_mcp_child_pid=$(<"$test_dir/platform-mcp-child-pid")
+if kill -0 "$platform_mcp_child_pid" 2>/dev/null; then
+  printf 'runner did not clean up Platform MCP child process\n' >&2
+  exit 1
+fi
 
 expect_failure 'oauth provider failed health check' "${common[@]}" \
   STATEFUL_E2E_OAUTH_HEALTH_COMMAND=false STATEFUL_E2E_BACKEND_HEALTH_COMMAND=true bash "$runner" short

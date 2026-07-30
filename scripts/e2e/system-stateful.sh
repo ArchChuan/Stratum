@@ -46,13 +46,35 @@ database_name=${database_name##*/}
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/stratum-system-stateful.XXXXXX")
 oauth_pid='' mcp_pid='' platform_mcp_pid='' backend_pid='' frontend_pid='' infra_started=false infra_owned=false
 shared_milvus_container='' shared_milvus_started=false
+stop_process_tree() {
+  local root=$1 child
+  [[ "$root" =~ ^[1-9][0-9]*$ ]] || return 0
+  local -a descendants=()
+  while IFS= read -r child; do
+    [[ "$child" =~ ^[1-9][0-9]*$ ]] && descendants+=("$child")
+  done < <(ps -eo pid=,ppid= | awk -v root="$root" '
+    { parent[$1]=$2 }
+    END {
+      for (pid in parent) {
+        current=pid
+        while (current in parent && current != 1) {
+          if (parent[current] == root) { print pid; break }
+          current=parent[current]
+        }
+      }
+    }
+  ')
+  kill -- "-$root" 2>/dev/null || true
+  ((${#descendants[@]} == 0)) || kill "${descendants[@]}" 2>/dev/null || true
+  wait "$root" 2>/dev/null || true
+}
 cleanup() {
   local status=$?
-  [[ -z "$frontend_pid" ]] || { kill -- "-$frontend_pid" 2>/dev/null || true; wait "$frontend_pid" 2>/dev/null || true; }
-  [[ -z "$backend_pid" ]] || { kill -- "-$backend_pid" 2>/dev/null || true; wait "$backend_pid" 2>/dev/null || true; }
-  [[ -z "$platform_mcp_pid" ]] || { kill -- "-$platform_mcp_pid" 2>/dev/null || true; wait "$platform_mcp_pid" 2>/dev/null || true; }
-  [[ -z "$mcp_pid" ]] || { kill -- "-$mcp_pid" 2>/dev/null || true; wait "$mcp_pid" 2>/dev/null || true; }
-  [[ -z "$oauth_pid" ]] || { kill -- "-$oauth_pid" 2>/dev/null || true; wait "$oauth_pid" 2>/dev/null || true; }
+	[[ -z "$frontend_pid" ]] || stop_process_tree "$frontend_pid"
+	[[ -z "$backend_pid" ]] || stop_process_tree "$backend_pid"
+	[[ -z "$platform_mcp_pid" ]] || stop_process_tree "$platform_mcp_pid"
+	[[ -z "$mcp_pid" ]] || stop_process_tree "$mcp_pid"
+	[[ -z "$oauth_pid" ]] || stop_process_tree "$oauth_pid"
   if [[ "$shared_milvus_started" == true ]]; then
     export STATEFUL_E2E_SHARED_MILVUS_CONTAINER=$shared_milvus_container
     bash -c "${STATEFUL_E2E_SHARED_MILVUS_STOP_COMMAND:-docker stop \"\$STATEFUL_E2E_SHARED_MILVUS_CONTAINER\"}" \
