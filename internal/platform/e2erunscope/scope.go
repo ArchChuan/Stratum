@@ -1,6 +1,7 @@
 package e2erunscope
 
 import (
+	cryptorand "crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -66,7 +67,7 @@ func NewScope(repository string, ownerPID int, now time.Time, random io.Reader) 
 		return Scope{}, errors.New("run scope: owner PID must be positive")
 	}
 	if random == nil {
-		return Scope{}, errors.New("run scope: random reader is required")
+		random = cryptorand.Reader
 	}
 
 	suffixBytes := make([]byte, randomSuffixBytes)
@@ -227,7 +228,7 @@ func parseE2EBaseURL(base string) (*url.URL, error) {
 
 func safePostgresHost(host string) bool {
 	switch strings.ToLower(host) {
-	case "127.0.0.1", "localhost", "postgres":
+	case "127.0.0.1", "localhost":
 		return true
 	default:
 		return false

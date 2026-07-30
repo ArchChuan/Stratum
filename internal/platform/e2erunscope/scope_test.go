@@ -53,6 +53,21 @@ func TestNewScope(t *testing.T) {
 	assertValidPorts(t, scope.Ports)
 }
 
+func TestNewScopeUsesSecureDefaultRandomReader(t *testing.T) {
+	t.Parallel()
+
+	scope, err := NewScope(t.TempDir(), 12345, time.Now(), nil)
+	if err != nil {
+		t.Fatalf("NewScope() error = %v", err)
+	}
+	if !runIDPattern.MatchString(scope.RunID) {
+		t.Errorf("RunID %q does not match the safe grammar", scope.RunID)
+	}
+	if !databasePattern.MatchString(scope.DatabaseName) {
+		t.Errorf("DatabaseName %q does not match the safe grammar", scope.DatabaseName)
+	}
+}
+
 func TestNewScopeRejectsInvalidInputs(t *testing.T) {
 	t.Parallel()
 
@@ -161,11 +176,6 @@ func TestDatabaseURL(t *testing.T) {
 			base: "postgresql://user:secret@localhost/e2e_base?sslmode=disable",
 			want: "postgresql://user:secret@localhost/" + target + "?sslmode=disable",
 		},
-		{
-			name: "compose postgres host",
-			base: "postgres://user:secret@postgres:5432/stratum_e2e",
-			want: "postgres://user:secret@postgres:5432/" + target,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -191,6 +201,7 @@ func TestDatabaseURLRejectsUnsafeInputsWithoutLeakingCredentials(t *testing.T) {
 	}{
 		{name: "unsupported scheme", base: "mysql://user:" + secret + "@127.0.0.1/stratum_test", target: safeDatabaseName()},
 		{name: "remote host", base: "postgres://user:" + secret + "@db.example.com/stratum_test", target: safeDatabaseName()},
+		{name: "compose postgres host", base: "postgres://user:" + secret + "@postgres:5432/stratum_e2e", target: safeDatabaseName()},
 		{name: "non E2E base database", base: "postgres://user:" + secret + "@127.0.0.1/production", target: safeDatabaseName()},
 		{name: "test substring", base: "postgres://user:" + secret + "@127.0.0.1/contest", target: safeDatabaseName()},
 		{name: "test suffix on production", base: "postgres://user:" + secret + "@127.0.0.1/production_test_backup", target: safeDatabaseName()},
@@ -236,6 +247,7 @@ func TestMaintenanceURLRejectsUnsafeBaseWithoutLeakingCredentials(t *testing.T) 
 		base string
 	}{
 		{name: "remote host", base: "postgres://user:" + secret + "@remote/stratum_test"},
+		{name: "compose postgres host", base: "postgres://user:" + secret + "@postgres:5432/stratum_e2e"},
 		{name: "production database", base: "postgres://user:" + secret + "@localhost/production"},
 		{name: "fragment", base: "postgres://user:" + secret + "@localhost/e2e#fragment"},
 	}
