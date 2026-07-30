@@ -272,6 +272,49 @@ jobs:
             --atomic --wait --timeout=10m
           kubectl wait --for=condition=Established crd/certificates.cert-manager.io --timeout=2m
 
+      - name: Bootstrap internal workload CA
+        if: steps.candidate.outputs.current == 'true'
+        run: |
+          cat <<'YAML' | kubectl apply -f -
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: stratum-internal-root-bootstrap
+          spec:
+            selfSigned: {}
+          ---
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: stratum-internal-root-ca
+            namespace: cert-manager
+          spec:
+            isCA: true
+            commonName: stratum-internal-root-ca
+            subject:
+              organizations:
+                - Stratum
+            secretName: stratum-internal-root-ca
+            duration: 87600h
+            renewBefore: 720h
+            issuerRef:
+              name: stratum-internal-root-bootstrap
+              kind: ClusterIssuer
+              group: cert-manager.io
+          ---
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: stratum-internal-ca
+          spec:
+            ca:
+              secretName: stratum-internal-root-ca
+          YAML
+          kubectl wait --for=condition=Ready clusterissuer/stratum-internal-root-bootstrap --timeout=2m
+          kubectl wait --for=condition=Ready certificate/stratum-internal-root-ca \
+            --namespace cert-manager --timeout=2m
+          kubectl wait --for=condition=Ready clusterissuer/stratum-internal-ca --timeout=2m
+
       - name: Apply monitoring credentials
         if: steps.candidate.outputs.current == 'true'
         env:
