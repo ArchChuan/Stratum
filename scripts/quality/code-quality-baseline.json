@@ -57,17 +57,6 @@
       "body_hash": "77da53a2f20fc5e26cb88e87f1f98b0a1ffeb23afe56d7fa68c17075eeebaf5b"
     },
     {
-      "id": "api/middleware/error_mapping.go:MapErrorToStatus",
-      "file": "api/middleware/error_mapping.go",
-      "name": "MapErrorToStatus",
-      "cyclomatic": 23,
-      "cognitive": 22,
-      "lines": 156,
-      "max_nesting": 1,
-      "params": 1,
-      "body_hash": "172fc3f4ee8561cd1da81c9cc919d6f4747839f411aacfb73c9e4f7da6ff35bb"
-    },
-    {
       "id": "api/middleware/middleware.go:ErrorHandler$literal1",
       "file": "api/middleware/middleware.go",
       "name": "ErrorHandler$literal1",
@@ -200,26 +189,15 @@
       "body_hash": "fc2f5923dcb6940cfc6501492cadb5f5d1291c6c30afe378880fbde86b1ecc47"
     },
     {
-      "id": "api/wiring/memory.go:BuildMemoryWorkers",
+      "id": "api/wiring/memory.go:Container.buildMemoryPipeline",
       "file": "api/wiring/memory.go",
-      "name": "BuildMemoryWorkers",
-      "cyclomatic": 11,
-      "cognitive": 10,
-      "lines": 58,
+      "name": "Container.buildMemoryPipeline",
+      "cyclomatic": 13,
+      "cognitive": 12,
+      "lines": 64,
       "max_nesting": 1,
-      "params": 1,
-      "body_hash": "a186abb41d77a83a655bbb6c9db116752d047ca182f5a2703f47da1b1ee175b2"
-    },
-    {
-      "id": "api/wiring/memory.go:Container.buildMemory",
-      "file": "api/wiring/memory.go",
-      "name": "Container.buildMemory",
-      "cyclomatic": 31,
-      "cognitive": 41,
-      "lines": 149,
-      "max_nesting": 2,
-      "params": 1,
-      "body_hash": "c44c7ea34eba77bc3c4a958ece2061855b8d06b8d77cce2793b96d80b460a1ae"
+      "params": 2,
+      "body_hash": "16b5e09b9831fdd28dde7db9435dc8aa2aef3ff030b94de9aa918505ed520b36"
     },
     {
       "id": "api/wiring/platform.go:Container.buildPlatform",
@@ -244,6 +222,17 @@
       "body_hash": "f1a42ff5621fab3aeb1d45face2b7aca9f088e68377588d927aaa69753eb033c"
     },
     {
+      "id": "api/wiring/system_assistant.go:collectSkillItems",
+      "file": "api/wiring/system_assistant.go",
+      "name": "collectSkillItems",
+      "cyclomatic": 11,
+      "cognitive": 18,
+      "lines": 42,
+      "max_nesting": 3,
+      "params": 5,
+      "body_hash": "4089608705074a2b13261b2827430572b29ec3d8675fb7f16ab2cb8e5064ce7c"
+    },
+    {
       "id": "api/wiring/system_assistant.go:knowledgeDiagnosticCollector$literal1",
       "file": "api/wiring/system_assistant.go",
       "name": "knowledgeDiagnosticCollector$literal1",
@@ -264,17 +253,6 @@
       "max_nesting": 3,
       "params": 2,
       "body_hash": "6f37ed1df72a7291efb9a1f10fd51145d32a6549c09ca1da03b24bec08507f6e"
-    },
-    {
-      "id": "api/wiring/system_assistant.go:skillDiagnosticCollector$literal1",
-      "file": "api/wiring/system_assistant.go",
-      "name": "skillDiagnosticCollector$literal1",
-      "cyclomatic": 19,
-      "cognitive": 29,
-      "lines": 63,
-      "max_nesting": 3,
-      "params": 2,
-      "body_hash": "7a07c78e719fdcf67a65cc12c191feb043715d5693441ed5ff1f7e8f1db0178e"
     },
     {
       "id": "api/wiring/system_assistant.go:systemAssistantDiagnosticCollectors",
@@ -343,15 +321,15 @@
       "body_hash": "814175339e4ea4775fc0a446be677866fa3365e08fbddfd398865641c53230e6"
     },
     {
-      "id": "cmd/e2e-mcp-server/main.go:nextToolCall",
+      "id": "cmd/e2e-mcp-server/main.go:findContextTool",
       "file": "cmd/e2e-mcp-server/main.go",
-      "name": "nextToolCall",
-      "cyclomatic": 19,
-      "cognitive": 39,
-      "lines": 54,
-      "max_nesting": 5,
+      "name": "findContextTool",
+      "cyclomatic": 8,
+      "cognitive": 17,
+      "lines": 25,
+      "max_nesting": 4,
       "params": 2,
-      "body_hash": "9457a4ef036bb69d6b769059346e7a7ff2b40072ca8f87f313bb724b2ff5f0ef"
+      "body_hash": "8bb3c8684e5ac8259339d742af1dc5068f2662189e38fccac9aabd5673a04198"
     },
     {
       "id": "cmd/e2e-mcp-server/main.go:opikHandler",
@@ -409,17 +387,6 @@
       "body_hash": "b12647b3ad15ffd5753f13cf5b72832ad6e2ea4317d335e81e99692ba5993d30"
     },
     {
-      "id": "cmd/server/runtime.go:runGuestReaper",
-      "file": "cmd/server/runtime.go",
-      "name": "runGuestReaper",
-      "cyclomatic": 10,
-      "cognitive": 28,
-      "lines": 33,
-      "max_nesting": 5,
-      "params": 5,
-      "body_hash": "3b91c503a1ec67e90a517091ca581515dfbad7e7bd0243f68d045af2c1c44239"
-    },
-    {
       "id": "config/config.go:githubOAuthEndpoints",
       "file": "config/config.go",
       "name": "githubOAuthEndpoints",
@@ -453,15 +420,15 @@
       "body_hash": "72fedfa652c5d4aac5d8c6a20a6f9855b14c289c0ee7f2f24ac99d4f0bf4e8ad"
     },
     {
-      "id": "internal/agent/application/agent.go:BaseAgent.Execute",
+      "id": "internal/agent/application/agent.go:BaseAgent.executeReAct",
       "file": "internal/agent/application/agent.go",
-      "name": "BaseAgent.Execute",
-      "cyclomatic": 58,
-      "cognitive": 101,
-      "lines": 510,
-      "max_nesting": 5,
+      "name": "BaseAgent.executeReAct",
+      "cyclomatic": 23,
+      "cognitive": 33,
+      "lines": 84,
+      "max_nesting": 4,
       "params": 3,
-      "body_hash": "a70ea784675ede7adcd4fdc612bf545a085825b75cda4264223d1909f84b4487"
+      "body_hash": "6519113f203bc52a5328e608ab52c76ad26c1bffe29259de0e657b3fc773c777"
     },
     {
       "id": "internal/agent/application/agent.go:boundExecutionArtifactsJSON",
@@ -516,7 +483,7 @@
       "lines": 80,
       "max_nesting": 2,
       "params": 4,
-      "body_hash": "28f501c4a857e03f425c95146065a661f8f7c7b51595723811a5e4d40a8d0199"
+      "body_hash": "f5c19eb7f2b70e442a615b69899063bb7e6d7cbe95194583e29edbf3369d71a5"
     },
     {
       "id": "internal/agent/application/agent_service.go:AgentService.ExecuteStream",
@@ -634,10 +601,10 @@
       "name": "ExecuteReadyPlanNodes",
       "cyclomatic": 25,
       "cognitive": 39,
-      "lines": 113,
+      "lines": 101,
       "max_nesting": 4,
       "params": 3,
-      "body_hash": "77233552b12d2d693e24fd69d4e31dd4575985fedde2e9fb1ea2a907f7fc3111"
+      "body_hash": "b4be4395fcaf580c61b9a511b7e1a44045d0659aa7db6ee8d0ea92ebc705330c"
     },
     {
       "id": "internal/agent/application/graph/plan_tools.go:ExecutePlanTool",
@@ -693,28 +660,6 @@
       "max_nesting": 2,
       "params": 2,
       "body_hash": "6fd22fb51ffd5d03735a5237715521465a341e9f9235f2fa4f5d3d9eedf08937"
-    },
-    {
-      "id": "internal/agent/application/graph/react.go:makeToolNode",
-      "file": "internal/agent/application/graph/react.go",
-      "name": "makeToolNode",
-      "cyclomatic": 8,
-      "cognitive": 7,
-      "lines": 391,
-      "max_nesting": 0,
-      "params": 2,
-      "body_hash": "3f678b56cec7d69967a5b4fd39d0c2d9712c014a9dda548717ae71a3da4e4cc5"
-    },
-    {
-      "id": "internal/agent/application/graph/react.go:makeToolNode$literal1",
-      "file": "internal/agent/application/graph/react.go",
-      "name": "makeToolNode$literal1",
-      "cyclomatic": 55,
-      "cognitive": 148,
-      "lines": 389,
-      "max_nesting": 6,
-      "params": 2,
-      "body_hash": "d621dc78d199d6b0c3e557fb67c8f607591e2ee9dbb65eae8f32c48f327d9f69"
     },
     {
       "id": "internal/agent/application/resource_change_proposal_service.go:ResourceChangeProposalService.ConfirmAndApply",
@@ -1531,15 +1476,15 @@
       "body_hash": "5cefcd48bebfadb9096aa42126f8ac35e93b0cf36f5f3a18a89559787cc5739e"
     },
     {
-      "id": "internal/platform/e2eattestation/attestation.go:VerifyAttestation",
+      "id": "internal/platform/e2eattestation/attestation.go:verifyAttestationIdentity",
       "file": "internal/platform/e2eattestation/attestation.go",
-      "name": "VerifyAttestation",
-      "cyclomatic": 47,
-      "cognitive": 57,
-      "lines": 120,
+      "name": "verifyAttestationIdentity",
+      "cyclomatic": 11,
+      "cognitive": 12,
+      "lines": 24,
       "max_nesting": 2,
-      "params": 3,
-      "body_hash": "b6e18d654a6e93c61969c032391dfe963b8895e3a49030a6129441e9de6b0fc3"
+      "params": 2,
+      "body_hash": "d731bdcef6b118a60e3dc3229d2c17cceea3f4426a2bebd9d3eaa1270bba3a3e"
     },
     {
       "id": "internal/platform/e2eattestation/manifest.go:ValidateManifest",
@@ -1573,17 +1518,6 @@
       "max_nesting": 2,
       "params": 5,
       "body_hash": "670f297a71b44dbc441b4cab43f64d1082ab5da47866e4a9c3df17cd34c235bd"
-    },
-    {
-      "id": "internal/workflow/application/ready_set.go:ReadySet",
-      "file": "internal/workflow/application/ready_set.go",
-      "name": "ReadySet",
-      "cyclomatic": 30,
-      "cognitive": 48,
-      "lines": 89,
-      "max_nesting": 4,
-      "params": 2,
-      "body_hash": "b99d2ec18b98986e664321165c80526828a8857f99638763e662bd73c0fd777a"
     },
     {
       "id": "internal/workflow/application/runtime.go:Worker.heartbeat",
@@ -1641,6 +1575,17 @@
       "body_hash": "bbba68bea5f51f1287a1d48301229d615955cdb72245243825174c01711caadf"
     },
     {
+      "id": "internal/workflow/application/service.go:countIncomingEdgeResolutions",
+      "file": "internal/workflow/application/service.go",
+      "name": "countIncomingEdgeResolutions",
+      "cyclomatic": 9,
+      "cognitive": 19,
+      "lines": 29,
+      "max_nesting": 4,
+      "params": 4,
+      "body_hash": "f58dfed41683871ca5df1634c094572b5eb59308d75ef78af709572ae0cb5e65"
+    },
+    {
       "id": "internal/workflow/application/service.go:nodeInput",
       "file": "internal/workflow/application/service.go",
       "name": "nodeInput",
@@ -1655,12 +1600,12 @@
       "id": "internal/workflow/application/service.go:readySet",
       "file": "internal/workflow/application/service.go",
       "name": "readySet",
-      "cyclomatic": 23,
-      "cognitive": 57,
-      "lines": 75,
-      "max_nesting": 5,
+      "cyclomatic": 16,
+      "cognitive": 32,
+      "lines": 52,
+      "max_nesting": 4,
       "params": 2,
-      "body_hash": "eca6997dbf440ce2dc6ee36aef46fcdd1480735320428ec3c78d3293c0f75034"
+      "body_hash": "c723350d9c15d26cd8c5427c0dde90fb9a9fd441e497e405aa5d242b11fd9c2b"
     },
     {
       "id": "internal/workflow/application/service.go:readySetFromKernel",
@@ -1710,12 +1655,12 @@
       "id": "internal/workflow/domain/workflow.go:validateSpec",
       "file": "internal/workflow/domain/workflow.go",
       "name": "validateSpec",
-      "cyclomatic": 39,
-      "cognitive": 64,
-      "lines": 107,
-      "max_nesting": 4,
+      "cyclomatic": 31,
+      "cognitive": 46,
+      "lines": 94,
+      "max_nesting": 3,
       "params": 1,
-      "body_hash": "5b364fbb79f938b9720b1608e96e96a018a5ddfd21f5fbbb62f43851c74ced6b"
+      "body_hash": "161e01f3b21a387496e41da623dbda5640735d0dbd6bac19f2b3540c48a0865a"
     },
     {
       "id": "internal/workflow/infrastructure/executor/registry.go:Registry.executeMCP",
@@ -1754,12 +1699,12 @@
       "id": "pkg/dag/dag.go:Ready",
       "file": "pkg/dag/dag.go",
       "name": "Ready",
-      "cyclomatic": 19,
-      "cognitive": 38,
-      "lines": 63,
-      "max_nesting": 4,
+      "cyclomatic": 12,
+      "cognitive": 18,
+      "lines": 43,
+      "max_nesting": 3,
       "params": 1,
-      "body_hash": "838ae6e1ef4f58024c5094068d2707db16cfe9f0217a4022676a7b51d085be44"
+      "body_hash": "c1b170a7b9c38f7180e26b97f9a678dc03fcad929a873a862468c058303e7f37"
     },
     {
       "id": "pkg/dag/dag.go:Validate",

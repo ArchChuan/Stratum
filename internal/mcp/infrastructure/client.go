@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
 
@@ -322,7 +323,7 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 		ID:      c.nextID(),
 		Method:  "initialize",
 		Params: map[string]interface{}{
-			"protocolVersion": "2024-11-05",
+			"protocolVersion": constants.MCPProtocolVersion,
 			"capabilities":    map[string]interface{}{},
 			"clientInfo":      map[string]interface{}{"name": "stratum", "version": "1.0"},
 		},

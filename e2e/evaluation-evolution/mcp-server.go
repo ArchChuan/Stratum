@@ -8,6 +8,8 @@ import (
 	"os"
 	"sync/atomic"
 	"time"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 type rpcRequest struct {
@@ -31,7 +33,7 @@ func main() {
 		result := any(map[string]any{})
 		switch request.Method {
 		case "initialize":
-			result = map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}}
+			result = map[string]any{"protocolVersion": constants.MCPProtocolVersion, "capabilities": map[string]any{}}
 		case "tools/list":
 			result = map[string]any{"tools": []map[string]any{{
 				"name": "e2e_lookup", "description": "Returns bounded E2E evidence",
