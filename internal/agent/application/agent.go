@@ -43,32 +43,28 @@ type (
 // in the application layer because it references port.ToolDefinition and
 // function types that depend on cross-context ports.
 type ExecutionConfig struct {
-	MaxSteps                  int
-	Timeout                   time.Duration
-	Temperature               float32
-	EnableTools               bool
-	AvailableTools            []string
-	Stream                    bool
-	TokenCallback             func(string)
-	TenantID                  string
-	TraceID                   string
-	ExecutionID               string
-	RAGSearchFn               func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
-	ExtraTools                []port.ToolDefinition
-	SkillCatalog              map[string]port.SkillActivation
-	ToolExecutionFn           port.ToolExecutionFn
-	ActiveSkill               *port.SkillActivation
-	TracePayloadStore         port.TracePayloadStore
-	ConversationID            string
-	UserID                    string
-	HistoryWindow             int
-	EvolutionTrace            EvolutionTraceMetadata
-	OfficialDocsSearchFn      func(context.Context, string) ([]domain.Citation, error)
-	DiagnosticFn              func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
-	ProposalCreateFn          func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
-	SystemAssistantMode       bool
-	SystemAssistantRoleClass  string
-	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)
+	MaxSteps                 int
+	Timeout                  time.Duration
+	Temperature              float32
+	EnableTools              bool
+	AvailableTools           []string
+	Stream                   bool
+	TokenCallback            func(string)
+	TenantID                 string
+	TraceID                  string
+	ExecutionID              string
+	RAGSearchFn              func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	ExtraTools               []port.ToolDefinition
+	SkillCatalog             map[string]port.SkillActivation
+	ToolExecutionFn          port.ToolExecutionFn
+	ActiveSkill              *port.SkillActivation
+	TracePayloadStore        port.TracePayloadStore
+	ConversationID           string
+	UserID                   string
+	HistoryWindow            int
+	EvolutionTrace           EvolutionTraceMetadata
+	SystemAssistantMode      bool
+	SystemAssistantRoleClass string
 }
 
 // EvolutionTraceMetadata attributes an execution to evaluation and rollout evidence.
@@ -397,31 +393,15 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	)
 
 	// Resume from checkpoint if one exists.
-	var activePlan *domain.Plan
-	if a.CheckpointEnabled && a.CheckpointStore != nil && ec.cfg.ExecutionID != "" {
-		resumeCp, resumeCpErr := a.CheckpointStore.GetLatest(ctx, ec.cfg.TenantID, ec.cfg.ExecutionID)
-		if resumeCpErr == nil && resumeCp != nil && isResumableCheckpoint(resumeCp.Status) {
-			a.Logger.Info("agent: resuming from checkpoint",
-				zap.String("checkpoint_id", resumeCp.ID),
-				zap.String("execution_id", ec.cfg.ExecutionID),
-				zap.Int("step_index", resumeCp.StepIndex),
-			)
-			if len(resumeCp.MessagesSnapshotJSON) > 0 {
-				var savedMsgs []port.LLMMessage
-				if err := json.Unmarshal(resumeCp.MessagesSnapshotJSON, &savedMsgs); err == nil {
-					initMessages = savedMsgs
-				}
-			}
-			if len(resumeCp.RuntimeStateJSON) > 0 {
-				if decoded, decErr := agentgraph.DecodePlanCheckpoint(resumeCp.RuntimeStateJSON); decErr == nil && decoded.Plan != nil {
-					activePlan = decoded.Plan
-				}
-			}
-		}
-	}
+	activePlan, restoredActiveSkill, initMessages := a.resumeFromCheckpoint(
+		ctx, ec, initMessages,
+	)
 
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
 	initState.ActivePlan = activePlan
+	if restoredActiveSkill != nil {
+		initState.ActiveSkill = restoredActiveSkill
+	}
 	initState.PlanNodeExecutor = a.buildPlanNodeExecutor(ec, ec.capGW)
 	if !ec.cfg.SystemAssistantMode && a.RecallMemoryFn != nil {
 		fn := a.RecallMemoryFn
@@ -433,7 +413,18 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	execCtx = reqctx.WithTraceID(execCtx, ec.cfg.TraceID)
 	execCtx = reqctx.WithTenantID(execCtx, ec.cfg.TenantID)
 	defer cancel()
-	runCfg := agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: ec.cfg.MaxSteps}
+	// Graph steps count both LLM and Tool node executions.
+	// MaxLLMSteps (set in buildReActInitState from ec.cfg.MaxSteps)
+	// counts only LLM calls and triggers forced answer at
+	// s.Steps >= MaxLLMSteps-1. Double it and add one so the
+	// forced-answer mechanism engages before the graph loop
+	// exhausts the step budget. Keep 0 as-is so Invoke falls
+	// back to its internal default.
+	graphSteps := ec.cfg.MaxSteps
+	if graphSteps > 0 {
+		graphSteps = graphSteps*2 + 1
+	}
+	runCfg := agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: graphSteps}
 	if a.CheckpointEnabled && a.CheckpointStore != nil {
 		runCfg.AfterStep = func(afterCtx context.Context, afterState agentgraph.ReActState) error {
 			return agentgraph.PersistReActCheckpoint(afterCtx, a.CheckpointStore, ec.cfg.TenantID, agentgraph.PlanCheckpointIdentity{
@@ -523,7 +514,11 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 	graphCtx, planSpan := ec.tracer.Start(execCtx, "planning.graph.invoke",
 		oteltrace.WithAttributes(attribute.Int("stuck_threshold", stuckThreshold)),
 	)
-	finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: ec.cfg.MaxSteps})
+	planSteps := ec.cfg.MaxSteps
+	if planSteps > 0 {
+		planSteps = planSteps*2 + 1
+	}
+	finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: planSteps})
 	planSpan.End()
 	if runErr != nil {
 		return fmt.Errorf("planning: %w", runErr)
@@ -557,11 +552,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		ActiveSkill:                ec.cfg.ActiveSkill,
 		TracePayloadStore:          ec.cfg.TracePayloadStore,
 		ToolExecutionFn:            ec.cfg.ToolExecutionFn,
-		OfficialDocsSearchFn:       ec.cfg.OfficialDocsSearchFn,
-		DiagnosticFn:               ec.cfg.DiagnosticFn,
-		ProposalCreateFn:           ec.cfg.ProposalCreateFn,
 		GovernedAssistant:          ec.cfg.SystemAssistantMode,
-		InternalToolResultGuardFn:  ec.cfg.InternalToolResultGuardFn,
 		ExecutionID:                ec.cfg.ExecutionID,
 		AgentKnowledgeWorkspaceIDs: ec.workspaceNames,
 		AgentMemoryScope:           ec.memoryScope,
@@ -600,7 +591,8 @@ func (a *BaseAgent) buildPlanNodeExecutor(ec agentExecContext, capGW port.Capabi
 		child.ActivePlan = nil
 		child.PlanToolsDisabled = true
 		child.MaxLLMSteps = constants.DefaultStepMaxLLMSteps
-		final, invokeErr := nodeGraph.Invoke(nodeCtx, child, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: constants.DefaultStepMaxLLMSteps})
+		subSteps := constants.DefaultStepMaxLLMSteps*2 + 1
+		final, invokeErr := nodeGraph.Invoke(nodeCtx, child, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: subSteps})
 		if invokeErr != nil {
 			return agentgraph.PlanNodeExecutionResult{}, invokeErr
 		}
@@ -916,28 +908,12 @@ func WithEvolutionTraceMetadata(metadata EvolutionTraceMetadata) ExecutionOption
 	}
 }
 
-func WithOfficialDocsSearchFn(fn func(context.Context, string) ([]domain.Citation, error)) ExecutionOption {
-	return func(cfg *ExecutionConfig) { cfg.OfficialDocsSearchFn = fn }
-}
-
-func WithDiagnosticFn(fn func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)) ExecutionOption {
-	return func(cfg *ExecutionConfig) { cfg.DiagnosticFn = fn }
-}
-
-func withProposalCreateFn(fn func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)) ExecutionOption {
-	return func(cfg *ExecutionConfig) { cfg.ProposalCreateFn = fn }
-}
-
 func WithSystemAssistantMode() ExecutionOption {
 	return func(cfg *ExecutionConfig) { cfg.SystemAssistantMode = true }
 }
 
 func withSystemAssistantRoleClass(roleClass string) ExecutionOption {
 	return func(cfg *ExecutionConfig) { cfg.SystemAssistantRoleClass = roleClass }
-}
-
-func withInternalToolResultGuard(fn func(any) (port.GuardedToolResult, error)) ExecutionOption {
-	return func(cfg *ExecutionConfig) { cfg.InternalToolResultGuardFn = fn }
 }
 
 func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cfg ExecutionConfig) []attribute.KeyValue {
@@ -1183,4 +1159,58 @@ func boundExecutionArtifactsJSON(artifacts []domain.ExecutionArtifact) []domain.
 // resumed (running or paused).
 func isResumableCheckpoint(s string) bool {
 	return s == "running" || s == "paused"
+}
+
+// resumeFromCheckpoint restores execution state from the latest checkpoint.
+func (a *BaseAgent) resumeFromCheckpoint(
+	ctx context.Context, ec agentExecContext, msgs []port.LLMMessage,
+) (*domain.Plan, *port.SkillActivation, []port.LLMMessage) {
+	if !a.CheckpointEnabled || a.CheckpointStore == nil || ec.cfg.ExecutionID == "" {
+		return nil, nil, msgs
+	}
+	resumeCp, err := a.CheckpointStore.GetLatest(ctx, ec.cfg.TenantID, ec.cfg.ExecutionID)
+	if err != nil || resumeCp == nil || !isResumableCheckpoint(resumeCp.Status) {
+		return nil, nil, msgs
+	}
+	a.Logger.Info("agent: resuming from checkpoint",
+		zap.String("checkpoint_id", resumeCp.ID),
+		zap.String("execution_id", ec.cfg.ExecutionID),
+		zap.Int("step_index", resumeCp.StepIndex),
+	)
+	msgs = restoreMessages(resumeCp.MessagesSnapshotJSON, msgs)
+	plan, skill := restorePlanCheckpointState(resumeCp.RuntimeStateJSON, ec.cfg.SkillCatalog)
+	return plan, skill, msgs
+}
+
+func restoreMessages(raw json.RawMessage, fallback []port.LLMMessage) []port.LLMMessage {
+	if len(raw) == 0 {
+		return fallback
+	}
+	var saved []port.LLMMessage
+	if json.Unmarshal(raw, &saved) == nil {
+		return saved
+	}
+	return fallback
+}
+
+func restorePlanCheckpointState(raw json.RawMessage, catalog map[string]port.SkillActivation) (*domain.Plan, *port.SkillActivation) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	decoded, err := agentgraph.DecodePlanCheckpoint(raw)
+	if err != nil {
+		return nil, nil
+	}
+	var plan *domain.Plan
+	if decoded.Plan != nil {
+		plan = decoded.Plan
+	}
+	var skill *port.SkillActivation
+	if decoded.ActiveSkillID != "" {
+		if activation, ok := catalog[decoded.ActiveSkillID]; ok &&
+			(decoded.ActiveSkillRevisionID == "" || activation.RevisionID == decoded.ActiveSkillRevisionID) {
+			skill = &activation
+		}
+	}
+	return plan, skill
 }

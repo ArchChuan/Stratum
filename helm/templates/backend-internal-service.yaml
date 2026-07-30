@@ -1,0 +1,19 @@
+{{- if .Values.platformMCP.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: stratum-internal
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  ports:
+    - name: https-internal
+      port: 8443
+      targetPort: https-internal
+      protocol: TCP
+  selector:
+    {{- include "stratum.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+{{- end }}

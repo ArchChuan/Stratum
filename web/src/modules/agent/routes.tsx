@@ -1,7 +1,7 @@
 import { Route } from 'react-router-dom';
 
 import { AgentChatPage } from './pages/AgentChatPage';
-import { AgentsListPage } from './pages/AgentsListPage';
+import { AgentManagementPage } from './pages/AgentManagementPage';
 import { CreateAgentPage } from './pages/CreateAgentPage';
 import { EditAgentPage } from './pages/EditAgentPage';
 import { ResourceChangeProposalPage } from './pages/ResourceChangeProposalPage';
@@ -23,10 +23,15 @@ export const agentRoutes = [
     path="/agents"
     element={
       <PrivateRoute>
-        <AgentsListPage />
+        <AgentManagementPage />
       </PrivateRoute>
     }
   />,
+	<Route
+		key="agents-list"
+		path="/agents/list"
+		element={<PrivateRoute><AgentManagementPage /></PrivateRoute>}
+	/>,
   <Route
     key="agents-create"
     path="/agents/create"

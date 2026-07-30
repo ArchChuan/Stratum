@@ -3,6 +3,7 @@ import type { QueryResultRow } from 'pg';
 
 import type { BrowserActor } from '../core/actors';
 import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
+import { E2E_MCP_BASE_URL } from '../core/endpoints';
 import type { EvidenceRecord } from '../core/evidence';
 
 interface CrossPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
@@ -56,7 +57,7 @@ export const executeAgentSkillMCPPack = async ({
     await transportSelect.locator('.ant-select-selector').click();
     await page.getByLabel('传输协议').press('ArrowDown');
     await page.getByLabel('传输协议').press('Enter');
-    await page.getByLabel('服务器 URL').fill('http://127.0.0.1:19091/mcp');
+    await page.getByLabel('服务器 URL').fill(`${E2E_MCP_BASE_URL}/mcp`);
     const mcpResponse = waitForMutation(page, '/mcp/servers', 'POST');
     await page.getByRole('button', { name: '添加服务器' }).click();
     const mcpCreated = await mcpResponse;
@@ -105,9 +106,9 @@ export const executeAgentSkillMCPPack = async ({
     expect(JSON.stringify(await toolsListed.json())).toContain('stateful_echo');
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('系统提示词').fill('必须激活可用 Skill 并调用 MCP 工具。');
-    await page.getByLabel('LLM 模型').click();
-    await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
-      .filter({ hasText: /^qwen-max$/ }).first().click();
+    const modelInput = page.getByRole('combobox', { name: 'LLM 模型' });
+    await modelInput.fill('qwen-max');
+    await modelInput.press('Enter');
     await chooseOption(page, '技能', skillID, skillName);
     await chooseOption(page, 'MCP 工具', `mcp:${serverID}:stateful_echo`, `${serverName} / stateful_echo`);
     const agentResponse = waitForMutation(page, '/agents', 'POST');
@@ -148,7 +149,7 @@ export const executeAgentSkillMCPPack = async ({
     evidence.http.push('Agent Skill MCP decision, resume, provider, and tool calls succeeded');
     evidence.database.push('Agent Skill MCP approval reached executed state');
 
-    await page.goto(`${webURL}/agents`);
+		await page.goto(`${webURL}/agents/list`);
     const agentCard = page.locator('.ant-card').filter({ hasText: agentName });
     await agentCard.getByRole('button', { name: '删除 Agent' }).click();
     await page.locator('.ant-popconfirm').getByRole('button', { name: /删\s*除/ }).click();

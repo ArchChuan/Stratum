@@ -10,7 +10,17 @@ import { useChatPage } from '../hooks/useChatPage';
 import { useTenantRole } from '@/modules/iam';
 import { useResponsive } from '@/shared/hooks/useResponsive';
 
-export const AgentChatPage = () => {
+type AgentChatPageProps = {
+	fixedAgentId?: string;
+	showAgentSelector?: boolean;
+	embedded?: boolean;
+};
+
+export const AgentChatPage = ({
+	fixedAgentId,
+	showAgentSelector = true,
+	embedded = false,
+}: AgentChatPageProps = {}) => {
   const { isMobile } = useResponsive();
   const [conversationDrawerOpen, setConversationDrawerOpen] = useState(false);
   const { isAdmin } = useTenantRole();
@@ -39,7 +49,7 @@ export const AgentChatPage = () => {
     handleApprove,
 		handleReject,
 		streamFailure,
-  } = useChatPage();
+  } = useChatPage({ fixedAgentId });
 
   const agentObj = agents.find((a) => a.id === selectedAgent);
   const pendingApproval = pendingApprovals.find(
@@ -65,6 +75,7 @@ export const AgentChatPage = () => {
       onRename={handleRenameConv}
       onDelete={handleDeleteConv}
       fluid={isMobile}
+			showAgentSelector={showAgentSelector}
     />
   );
 
@@ -77,7 +88,9 @@ export const AgentChatPage = () => {
       className="agent-chat-page"
       style={{
         display: 'flex',
-        height: isMobile ? 'calc(100vh - 56px)' : 'calc(100vh - 56px - 48px)',
+			height: embedded
+				? 'calc(100vh - 56px - 112px)'
+				: isMobile ? 'calc(100vh - 56px)' : 'calc(100vh - 56px - 48px)',
         maxHeight: isMobile ? 'calc(100dvh - 56px)' : undefined,
         background: '#f5f5f5',
         overflow: 'hidden',

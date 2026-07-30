@@ -2,6 +2,7 @@ package graph_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -29,6 +30,19 @@ func TestPlanCheckpointCodecRoundTripsRevisionAndAttempts(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+func TestPlanCheckpointCodecRoundTripsActiveSkill(t *testing.T) {
+	want := graph.PlanCheckpointPayload{
+		ActiveSkillID:         "skill-a",
+		ActiveSkillRevisionID: "rev-1",
+	}
+	encoded, err := graph.EncodePlanCheckpoint(want)
+	require.NoError(t, err)
+	got, err := graph.DecodePlanCheckpoint(encoded)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.Nil(t, got.Plan, "Plan should be nil when only ActiveSkill is persisted")
+}
+
 func TestPlanCheckpointCodecRejectsUnsupportedVersion(t *testing.T) {
 	_, err := graph.DecodePlanCheckpoint([]byte(`{"version":99,"plan":{"id":"plan-1"}}`))
 	require.ErrorIs(t, err, graph.ErrUnsupportedPlanCheckpoint)
@@ -44,12 +58,14 @@ func TestPersistPlanCheckpointPropagatesFailureBeforeSuccess(t *testing.T) {
 }
 
 type checkpointWriterForPlanTest struct {
-	err   error
-	calls int
+	err            error
+	calls          int
+	lastCheckpoint *domain.AgentExecutionCheckpoint
 }
 
-func (w *checkpointWriterForPlanTest) Upsert(_ context.Context, _ string, _ domain.AgentExecutionCheckpoint) error {
+func (w *checkpointWriterForPlanTest) Upsert(_ context.Context, _ string, cp domain.AgentExecutionCheckpoint) error {
 	w.calls++
+	w.lastCheckpoint = &cp
 	return w.err
 }
 
@@ -97,4 +113,53 @@ func TestPersistReActCheckpointAutoGeneratesIDWhenEmpty(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, writer.calls)
+}
+
+func TestPersistReActCheckpointEncodesActiveSkill(t *testing.T) {
+	writer := &checkpointWriterForPlanTest{}
+	state := &graph.ReActState{
+		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", ConversationID: "conv-1",
+		ActiveSkill: &port.SkillActivation{SkillID: "skill-a", RevisionID: "rev-1"},
+		Steps:       1,
+	}
+	err := graph.PersistReActCheckpoint(
+		context.Background(), writer, "tenant-1",
+		graph.PlanCheckpointIdentity{
+			CheckpointID: "cp-active-skill", ExecutionID: "exec-1", TraceID: "trace-1",
+			ConversationID: "conv-1", AgentID: "agent-1", UserID: "user-1",
+		},
+		state, "tool",
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, writer.calls)
+	cp := writer.lastCheckpoint
+	require.NotNil(t, cp)
+	require.NotEqual(t, json.RawMessage("{}"), cp.RuntimeStateJSON)
+
+	decoded, decErr := graph.DecodePlanCheckpoint(cp.RuntimeStateJSON)
+	require.NoError(t, decErr)
+	require.Equal(t, "skill-a", decoded.ActiveSkillID)
+	require.Equal(t, "rev-1", decoded.ActiveSkillRevisionID)
+	require.Nil(t, decoded.Plan)
+}
+
+func TestPersistReActCheckpointEmptyActiveSkillWritesEmptyJSON(t *testing.T) {
+	writer := &checkpointWriterForPlanTest{}
+	state := &graph.ReActState{
+		TenantID: "tenant-1", ExecutionID: "exec-1", TraceID: "trace-1", ConversationID: "conv-1",
+		Steps: 1,
+	}
+	err := graph.PersistReActCheckpoint(
+		context.Background(), writer, "tenant-1",
+		graph.PlanCheckpointIdentity{
+			CheckpointID: "cp-empty", ExecutionID: "exec-1", TraceID: "trace-1",
+			ConversationID: "conv-1", AgentID: "agent-1", UserID: "user-1",
+		},
+		state, "tool",
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, writer.calls)
+	cp := writer.lastCheckpoint
+	require.NotNil(t, cp)
+	require.Equal(t, json.RawMessage("{}"), cp.RuntimeStateJSON)
 }

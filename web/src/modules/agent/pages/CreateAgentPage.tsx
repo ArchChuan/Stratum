@@ -9,13 +9,13 @@ import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 const { Title, Text } = Typography;
 
 export const CreateAgentPage = () => {
-  const { form, loading, skills, mcpTools, workspaces, chatModels, navigate, onFinish } =
+  const { form, loading, skills, mcpTools, workspaces, groupedModels, navigate, onFinish } =
     useCreateAgentPage();
 
   return (
     <div className="responsive-form-page">
       <div className="responsive-detail-header" style={{ marginBottom: 24 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/agents')} type="text">
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/agents/list')} type="text">
           返回
         </Button>
         <div>
@@ -43,11 +43,11 @@ export const CreateAgentPage = () => {
           skills={skills}
           mcpTools={mcpTools}
           workspaces={workspaces}
-          chatModels={chatModels}
+          groupedModels={groupedModels}
         />
 
         <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <Button onClick={() => navigate('/agents')}>取消</Button>
+          <Button onClick={() => navigate('/agents/list')}>取消</Button>
           <Button type="primary" htmlType="submit" loading={loading}>
             创建 Agent
           </Button>

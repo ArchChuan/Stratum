@@ -58,6 +58,11 @@ export interface AgentFormValues {
   checkpointEnabled?: boolean;
 }
 
+export interface GroupedModelOption {
+  provider: string;
+  models: { value: string; label: string }[];
+}
+
 export const conversationSchema = z
   .object({
     id: z.string(),

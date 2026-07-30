@@ -43,6 +43,15 @@ repos:
         require_serial: true
         files: '^(api/|cmd/|internal/|pkg/|web/|helm/|k8s/|\.github/workflows/)'
 
+      # 基线完整性：禁止单独刷新基线绕门禁
+      - id: baseline-integrity
+        name: baseline integrity check
+        language: system
+        entry: bash scripts/quality/check-baseline-integrity.sh
+        pass_filenames: false
+        require_serial: true
+        files: '^scripts/quality/code-quality-baseline\.json$'
+
       - id: code-quality-ratchet
         name: incremental Go code quality ratchet
         language: system

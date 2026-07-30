@@ -8,6 +8,7 @@ import {
   PROVIDER_CAMEL_KEYS, PROVIDER_PASCAL_BANNED,
 } from '../core/camelcase';
 import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
+import { E2E_MCP_BASE_URL } from '../core/endpoints';
 import type { EvidenceRecord } from '../core/evidence';
 
 interface LLMAdminPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
@@ -62,7 +63,7 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
     await page.locator('.ant-form-item').filter({ hasText: '类型' })
       .locator('.ant-select-selector').click();
     await page.locator('.ant-select-item-option').filter({ hasText: 'OpenAI 兼容' }).click();
-    await page.getByLabel('Base URL').fill('http://127.0.0.1:19091/v1');
+    await page.getByLabel('Base URL').fill(`${E2E_MCP_BASE_URL}/v1`);
     await page.getByLabel('API Key').fill('sk-e2e-test-key');
 
     const createResponse = waitForMutation(page, '/admin/providers', 'POST');
@@ -114,9 +115,8 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
 
     // ── Discover models from edited provider ──────────────────────────────────
     const editedRow = page.locator('tr').filter({ hasText: `${providerName}-edited` });
-    await editedRow.getByRole('button', { name: '发现模型' }).click();
-
     const discoverResponse = waitForMutation(page, `/admin/providers/${providerID}/discover`, 'POST');
+    await editedRow.getByRole('button', { name: '发现模型' }).click();
     await expect(page.locator('.ant-modal-content').filter({ hasText: '发现模型' })).toBeVisible();
     const discoverData = await discoverResponse;
     expect(discoverData.status()).toBe(200);
@@ -163,9 +163,8 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
     // ── Model edit via drawer ─────────────────────────────────────────────────
     if (firstModelName) {
       const modelRow = providerModelRow(firstModelName);
-      await modelRow.locator('.ant-btn').first().click();
-      await expect(page.locator('.ant-drawer')).toBeVisible();
-      await expect(page.locator('.ant-drawer .ant-btn-primary')).toBeVisible();
+      await modelRow.getByRole('button', { name: /编\s*辑/ }).first().click();
+      await expect(page.getByRole('button', { name: /保\s*存/ })).toBeVisible();
       await expect(page.getByLabel('显示名称')).toBeVisible();
 
       await page.getByLabel('显示名称').fill(`E2E-${firstModelName}`);
@@ -173,7 +172,7 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
       await page.getByLabel('输出价格 ($/1M tokens)').fill('4.56');
 
       const modelUpdateResponse = waitForMutation(page, /\/admin\/models\/[^/]+$/, 'PUT');
-      await page.locator('.ant-drawer .ant-btn-primary').click();
+      await page.getByRole('button', { name: /保\s*存/ }).click();
       const modelUpdated = await modelUpdateResponse;
       expect(modelUpdated.status()).toBe(200);
       const modelUpdateBody = await modelUpdated.json();

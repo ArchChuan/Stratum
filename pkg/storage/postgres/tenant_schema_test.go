@@ -1,12 +1,65 @@
 package postgres_test
 
 import (
+	"encoding/json"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/stretchr/testify/require"
 )
+
+func TestTenantSchemaContainsPlatformMCPIdentityAndSeed(t *testing.T) {
+	data, err := os.ReadFile("tenant_schema.sql")
+	require.NoError(t, err)
+	sql := string(data)
+
+	require.Contains(t, sql, "system_key TEXT")
+	require.Contains(t, sql, "management_mode TEXT NOT NULL DEFAULT 'tenant_managed'")
+	require.Contains(t, sql, "stratum.platform_mcp")
+	require.Contains(t, sql, "stratum-platform-assistant")
+	require.Contains(t, sql, "CREATE TABLE IF NOT EXISTS mcp_invocation_jtis")
+	require.Contains(t, sql, "CREATE INDEX IF NOT EXISTS idx_mcp_invocation_jtis_expiry")
+	for _, toolName := range []string{
+		"stratum_search_official_docs",
+		"stratum_diagnose_tenant",
+		"stratum_propose_resource_change",
+	} {
+		require.Contains(t, sql, toolName)
+	}
+}
+
+func TestTenantSchemaPlatformMCPDomainIdentityFieldsAreProtected(t *testing.T) {
+	for _, target := range []struct {
+		name string
+		typ  reflect.Type
+	}{
+		{name: "ServerConfig", typ: reflect.TypeOf(mcpdomain.ServerConfig{})},
+		{name: "Server", typ: reflect.TypeOf(mcpdomain.Server{})},
+	} {
+		systemKey, ok := target.typ.FieldByName("SystemKey")
+		require.True(t, ok, "%s.SystemKey must exist", target.name)
+		require.Equal(t, "-", systemKey.Tag.Get("json"))
+		require.Equal(t, "-", systemKey.Tag.Get("yaml"))
+
+		managementMode, ok := target.typ.FieldByName("ManagementMode")
+		require.True(t, ok, "%s.ManagementMode must exist", target.name)
+		require.Equal(t, "management_mode", managementMode.Tag.Get("json"))
+		require.Equal(t, "management_mode", managementMode.Tag.Get("yaml"))
+	}
+
+	var cfg mcpdomain.ServerConfig
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"system_key":"stratum.platform_mcp",
+		"management_mode":"platform_managed"
+	}`), &cfg))
+	value := reflect.ValueOf(cfg)
+	require.Empty(t, value.FieldByName("SystemKey").String(), "public JSON binding must ignore system_key")
+	require.Equal(t, "platform_managed", value.FieldByName("ManagementMode").String())
+}
 
 func TestTenantSchemaDefaultsSystemAssistantModelWithoutOverwritingTenantChoice(t *testing.T) {
 	if constants.DefaultSystemAssistantModel != "glm-5.2" {

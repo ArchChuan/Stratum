@@ -1,0 +1,68 @@
+{{- if and .Values.platformMCP.enabled .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: stratum-platform-mcp
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: stratum-platform-mcp
+      rules:
+        - alert: StratumPlatformMCPNoReadyReplicas
+          expr: kube_deployment_status_replicas_available{deployment="stratum-platform-mcp"} < 1
+          for: 2m
+          labels: { severity: critical }
+          annotations: { summary: "Platform MCP has no ready replicas" }
+        - alert: StratumPlatformMCPReadinessFailure
+          expr: up{service="stratum-platform-mcp"} == 0
+          for: 5m
+          labels: { severity: critical }
+          annotations: { summary: "Platform MCP metrics endpoint is persistently unreachable" }
+        - alert: StratumPlatformMCPTokenExchangeErrors
+          expr: rate(platform_mcp_token_exchanges_total{outcome="error"}[5m]) > 0.05
+          for: 5m
+          labels: { severity: warning }
+          annotations: { summary: "Platform MCP token exchange errors are elevated" }
+        - alert: StratumPlatformMCPBackendFailures
+          expr: sum(rate(platform_mcp_backend_requests_total{status_class=~"5xx|timeout|transport_error"}[5m])) > 0.05
+          for: 5m
+          labels: { severity: warning }
+          annotations: { summary: "Platform MCP backend failures are elevated" }
+        - alert: StratumPlatformMCPAuthorizationDenials
+          expr: sum(rate(platform_mcp_auth_denials_total[5m])) > 0.2
+          for: 5m
+          labels: { severity: warning }
+          annotations: { summary: "Platform MCP authorization denials are elevated" }
+        - alert: StratumPlatformMCPReplayDenials
+          expr: sum(rate(platform_mcp_replay_denials_total[5m])) > 0
+          for: 2m
+          labels: { severity: critical }
+          annotations: { summary: "Platform MCP invocation replay attempts detected" }
+        - alert: StratumPlatformMCPUnknownOutcomes
+          expr: increase(platform_mcp_unknown_outcomes_total[10m]) > 0
+          labels: { severity: critical }
+          annotations: { summary: "Platform MCP reported an unknown mutation outcome" }
+        - alert: StratumPlatformMCPContractMismatch
+          expr: increase(platform_mcp_contract_mismatches_total[10m]) > 0
+          labels: { severity: critical }
+          annotations: { summary: "Platform MCP tool contract mismatch detected" }
+        - alert: StratumPlatformMCPCertificateExpiring
+          expr: platform_mcp_certificate_expiry_seconds < 604800
+          for: 10m
+          labels: { severity: warning }
+          annotations: { summary: "Platform MCP certificate expires within seven days" }
+        - alert: StratumPlatformMCPCertificateRotationFailed
+          expr: platform_mcp_certificate_rotation{status_class="error"} == 1
+          for: 5m
+          labels: { severity: critical }
+          annotations: { summary: "Platform MCP certificate rotation failed" }
+        - alert: StratumPlatformMCPLatencyBudgetBreach
+          expr: histogram_quantile(0.95, sum by (le) (rate(platform_mcp_request_duration_seconds_bucket[10m]))) > 5
+          for: 10m
+          labels: { severity: warning }
+          annotations: { summary: "Platform MCP p95 request latency exceeds five seconds" }
+{{- end }}

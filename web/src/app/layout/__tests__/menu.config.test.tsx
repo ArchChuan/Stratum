@@ -31,7 +31,7 @@ describe('buildMenuItems', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('link', { name: 'Agent 列表' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Agent 管理' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '技能列表' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '服务器列表' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '工作流' })).toBeInTheDocument();

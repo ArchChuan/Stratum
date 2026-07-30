@@ -359,17 +359,17 @@ func buildKnowledgeArgs(tool toolDef) string {
 
 func findSkillTool(tools []toolDef, called map[string]bool) (string, string) {
 	for _, tool := range tools {
-		if tool.Function.Name != "stratum_activate_skill" || called[tool.Function.Name] {
+		name := tool.Function.Name
+		if called[name] || strings.HasPrefix(name, "stratum_") || strings.HasPrefix(name, "mcp:") {
 			continue
 		}
-		properties, _ := tool.Function.Parameters["properties"].(map[string]any)
-		skill, _ := properties["skill_id"].(map[string]any)
-		values, _ := skill["enum"].([]any)
-		if len(values) > 0 {
-			if skillID, ok := values[0].(string); ok {
-				arguments, _ := json.Marshal(map[string]string{"skill_id": skillID})
-				return tool.Function.Name, string(arguments)
-			}
+		props, _ := tool.Function.Parameters["properties"].(map[string]any)
+		if len(props) == 0 {
+			continue
+		}
+		for k := range props {
+			args, _ := json.Marshal(map[string]any{k: "default"})
+			return name, string(args)
 		}
 	}
 	return "", ""

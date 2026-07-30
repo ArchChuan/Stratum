@@ -477,7 +477,7 @@ func TestAgentService_List(t *testing.T) {
 	assert.Equal(t, "react", list[1].Type)
 }
 
-func TestAgentService_ListManagedAssistantFirstPreservesOrdinaryOrder(t *testing.T) {
+func TestAgentService_ListExcludesManagedAssistantAndPreservesOrdinaryOrder(t *testing.T) {
 	svc, repo := newTestService(t)
 	repo.On("GetAll", mock.Anything).Return([]*domain.AgentConfig{
 		{ID: "ordinary-1", Name: "First", Type: domain.ReActAgent},
@@ -488,10 +488,7 @@ func TestAgentService_ListManagedAssistantFirstPreservesOrdinaryOrder(t *testing
 
 	list, err := svc.List(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, []string{domain.SystemAssistantID, "ordinary-1", "ordinary-2"},
-		[]string{list[0].ID, list[1].ID, list[2].ID})
-	assert.True(t, list[0].IsSystem)
-	assert.Equal(t, "platform", list[0].ManagementMode)
+	assert.Equal(t, []string{"ordinary-1", "ordinary-2"}, []string{list[0].ID, list[1].ID})
 }
 
 type stubTenantModelValidator struct {
@@ -731,6 +728,70 @@ func TestAgentService_UpdateSystemAssistant_IgnoresName(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, domain.SystemAssistantID, dto.ID)
+	repo.AssertExpectations(t)
+}
+
+func TestAgentServiceOrdinaryAgentCannotBindPlatformMCP(t *testing.T) {
+	svc, repo := newTestService(t)
+	ctx := context.Background()
+	repo.On("Get", ctx, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)
+
+	_, err := svc.Update(ctx, "agent-1", application.UpdateAgentInput{
+		MCPToolIDs: []string{"mcp:stratum-platform-mcp:stratum_diagnose_tenant"},
+	})
+
+	assert.ErrorIs(t, err, application.ErrPlatformMCPBindingForbidden)
+	repo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
+}
+
+func TestAgentServiceCreateCannotBindPlatformMCP(t *testing.T) {
+	svc, repo := newTestService(t)
+
+	_, err := svc.Create(t.Context(), application.CreateAgentInput{
+		Name: "ordinary", MCPToolIDs: []string{"mcp:stratum-platform-mcp:stratum_diagnose_tenant"},
+	})
+
+	assert.ErrorIs(t, err, application.ErrPlatformMCPBindingForbidden)
+	repo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+}
+
+func TestAgentServicePlatformAssistantModelOnlyUpdatePreservesSystemBindings(t *testing.T) {
+	svc, repo := newTestService(t)
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	cfg := &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, LLMModel: "old-model",
+		MCPToolIDs: []string{"mcp:stratum-platform-mcp:stratum_diagnose_tenant"},
+	}
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
+	repo.On("UpdateSystemAssistantModel", ctx, "new-model").Return(&domain.AgentConfig{
+		ID: cfg.ID, SystemKey: cfg.SystemKey, LLMModel: "new-model", MCPToolIDs: cfg.MCPToolIDs,
+	}, nil)
+	repo.On("UpdateSystemAssistantBindings", ctx, cfg.MCPToolIDs, []string{}, []string{}).
+		Return(&domain.AgentConfig{
+			ID: cfg.ID, SystemKey: cfg.SystemKey, LLMModel: "new-model", MCPToolIDs: cfg.MCPToolIDs,
+		}, nil)
+
+	got, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{LLMModel: "new-model"})
+
+	assert.NoError(t, err)
+	assert.Equal(t, cfg.MCPToolIDs, got.MCPToolIDs)
+	repo.AssertExpectations(t)
+}
+
+func TestAgentServicePlatformAssistantRejectsBindingRemovalByPreservingManagedTools(t *testing.T) {
+	svc, repo := newTestService(t)
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	managedTools := []string{"mcp:stratum-platform-mcp:stratum_diagnose_tenant"}
+	cfg := &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, MCPToolIDs: managedTools,
+	}
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
+	repo.On("UpdateSystemAssistantBindings", ctx, managedTools, []string{}, []string{}).Return(cfg, nil)
+
+	got, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{MCPToolIDs: []string{}})
+
+	assert.NoError(t, err)
+	assert.Equal(t, managedTools, got.MCPToolIDs)
 	repo.AssertExpectations(t)
 }
 

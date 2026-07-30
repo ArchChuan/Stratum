@@ -189,6 +189,9 @@ func (r agentMCPPolicyResolver) ResolveMCPToolRisk(ctx context.Context, _, serve
 func (c *Container) buildMCP(ctx context.Context) error {
 	var db = c.dbOrNil()
 	manager := mcp.NewClientManager(c.Logger, nil, db)
+	if c.Config != nil && c.Config.InternalAPI.Configured() {
+		manager.SetManagedHTTPTransportProvider(platformMCPTransportProvider{files: c.Config.InternalAPI})
+	}
 	registry := mcp.NewMCPToolRegistry(manager, c.Logger)
 	svc := mcpapp.NewMCPService(
 		mcp.ToolRegistryAsPort(registry),

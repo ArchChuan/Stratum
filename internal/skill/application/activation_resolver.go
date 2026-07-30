@@ -17,6 +17,8 @@ type SkillActivationView struct {
 	Name                  string
 	Description           string
 	Instructions          string
+	InputSchema           map[string]any
+	OutputSchema          map[string]any
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScopes          []string
@@ -73,6 +75,8 @@ func (s *VersionService) ResolveActivation(
 		Name:                  name,
 		Description:           description,
 		Instructions:          revision.Instructions,
+		InputSchema:           revision.ActivationContract.InputSchema,
+		OutputSchema:          revision.ActivationContract.OutputSchema,
 		MCPToolIDs:            revision.Requirements.MCPToolIDs,
 		KnowledgeWorkspaceIDs: revision.Requirements.KnowledgeWorkspaceIDs,
 		MemoryScopes:          revision.Requirements.MemoryScopes,

@@ -258,8 +258,8 @@ func (s *capGWSequence) Route(_ context.Context, req port.CapabilityRequest) (po
 
 func TestBuildReActGraph_ActivatesSingleInstructionSkillAndNarrowsMCPTools(t *testing.T) {
 	stub := &capGWSequence{responses: []port.CapabilityResponse{
-		{ToolCalls: []port.ToolCall{{ID: "activate-1", Name: "stratum_activate_skill", Arguments: map[string]any{"skill_id": "skill-a"}}}},
-		{ToolCalls: []port.ToolCall{{ID: "activate-2", Name: "stratum_activate_skill", Arguments: map[string]any{"skill_id": "skill-b"}}}},
+		{ToolCalls: []port.ToolCall{{ID: "activate-1", Name: "skill-a", Arguments: map[string]any{}}}},
+		{ToolCalls: []port.ToolCall{{ID: "activate-2", Name: "skill-b", Arguments: map[string]any{}}}},
 		{Content: "done"},
 	}}
 	cg, err := graph.BuildReActGraph(stub, graph.NoopTokenRecorder{}, zap.NewNop())
@@ -275,8 +275,8 @@ func TestBuildReActGraph_ActivatesSingleInstructionSkillAndNarrowsMCPTools(t *te
 		},
 		AgentMemoryScope: "user",
 		SkillCatalog: map[string]port.SkillActivation{
-			"skill-a": {SkillID: "skill-a", RevisionID: "revision-a", Instructions: "USE INSTRUCTION A", MCPToolIDs: []string{"mcp:orders:get"}, MemoryScopes: []string{"user"}},
-			"skill-b": {SkillID: "skill-b", RevisionID: "revision-b", Instructions: "USE INSTRUCTION B", MCPToolIDs: []string{"mcp:orders:delete"}, MemoryScopes: []string{"conversation"}},
+			"skill-a": {SkillID: "skill-a", Name: "skill-a", RevisionID: "revision-a", Instructions: "USE INSTRUCTION A", MCPToolIDs: []string{"mcp:orders:get"}, MemoryScopes: []string{"user"}},
+			"skill-b": {SkillID: "skill-b", Name: "skill-b", RevisionID: "revision-b", Instructions: "USE INSTRUCTION B", MCPToolIDs: []string{"mcp:orders:delete"}, MemoryScopes: []string{"conversation"}},
 		},
 	}
 	out, err := cg.Invoke(context.Background(), state, graph.RunConfig[graph.ReActState]{MaxSteps: 10})
@@ -287,17 +287,17 @@ func TestBuildReActGraph_ActivatesSingleInstructionSkillAndNarrowsMCPTools(t *te
 	secondMessages, _ := json.Marshal(stub.llmReqs[1].Messages)
 	require.Contains(t, string(secondMessages), "USE INSTRUCTION A")
 	require.NotContains(t, string(secondMessages), "USE INSTRUCTION B")
-	require.Equal(t, []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "stratum_activate_skill", "mcp:orders:get", "stratum_recall_memory"}, toolNames(stub.llmReqs[1].Tools))
+	require.Equal(t, []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "skill-a", "skill-b", "mcp:orders:get", "stratum_recall_memory"}, toolNames(stub.llmReqs[1].Tools))
 
 	thirdMessages, _ := json.Marshal(stub.llmReqs[2].Messages)
 	require.Contains(t, string(thirdMessages), "USE INSTRUCTION B")
 	require.NotContains(t, string(thirdMessages), "USE INSTRUCTION A")
-	require.Equal(t, []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "stratum_activate_skill", "mcp:orders:delete"}, toolNames(stub.llmReqs[2].Tools))
+	require.Equal(t, []string{"stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan", "skill-a", "skill-b", "mcp:orders:delete"}, toolNames(stub.llmReqs[2].Tools))
 }
 
 func TestBuildReActGraph_ActiveSkillIntersectsKnowledgeWorkspaces(t *testing.T) {
 	stub := &capGWSequence{responses: []port.CapabilityResponse{
-		{ToolCalls: []port.ToolCall{{ID: "a1", Name: "stratum_activate_skill", Arguments: map[string]any{"skill_id": "skill-a"}}}},
+		{ToolCalls: []port.ToolCall{{ID: "a1", Name: "skill-a", Arguments: map[string]any{}}}},
 		{ToolCalls: []port.ToolCall{{ID: "k1", Name: "stratum_search_knowledge", Arguments: map[string]any{"workspaces": []any{"kb-allowed", "kb-agent-only", "kb-skill-only"}, "query": "q"}}}},
 		{Content: "done"},
 	}}
@@ -308,7 +308,7 @@ func TestBuildReActGraph_ActiveSkillIntersectsKnowledgeWorkspaces(t *testing.T) 
 		Model: "qwen", Messages: []port.LLMMessage{{Role: "user", Content: "search"}},
 		AvailableTools:             []port.ToolDefinition{{Name: "stratum_search_knowledge", ProviderType: "builtin"}},
 		AgentKnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-agent-only"},
-		SkillCatalog:               map[string]port.SkillActivation{"skill-a": {SkillID: "skill-a", KnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-skill-only"}}},
+		SkillCatalog:               map[string]port.SkillActivation{"skill-a": {SkillID: "skill-a", Name: "skill-a", KnowledgeWorkspaceIDs: []string{"kb-allowed", "kb-skill-only"}}},
 		RAGSearchFn: func(_ context.Context, workspaces []string, _ string, _ int) (string, error) {
 			searched = workspaces
 			return "result", nil

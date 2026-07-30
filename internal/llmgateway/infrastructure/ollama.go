@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
@@ -202,12 +203,12 @@ func (c *OllamaClient) classifyStatus(status int, header http.Header) (error, bo
 	if status == http.StatusTooManyRequests {
 		sleepRetryAfter(context.Background(), header.Get("Retry-After"))
 	}
-	err := fmt.Errorf("%s: complete status %d", c.cfg.Name, status)
 	if !isRetryableHTTPStatus(status) {
 		c.logger.Error(c.cfg.Name+": http error (no retry)", zap.Int("status", status))
-		return err, false
+		return fmt.Errorf("%s: POST %s 返回 %d，请检查 API Key 与 Base URL 是否正确（当前 kind=ollama）: %w",
+			c.cfg.Name, strings.TrimSuffix(c.cfg.BaseURL, "/")+"/api/chat", status, domain.ErrUpstreamRequestFailed), false
 	}
-	return err, true
+	return fmt.Errorf("%s: complete status %d", c.cfg.Name, status), true
 }
 
 // retryUntilOK sends body to path with retry+backoff and returns the raw OK body.
@@ -382,7 +383,9 @@ func (c *OllamaClient) Health(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: health status %d", c.cfg.Name, resp.StatusCode)
+		url := strings.TrimSuffix(c.cfg.BaseURL, "/") + "/api/tags"
+		return fmt.Errorf("%s: GET %s 返回 %d，请检查 provider kind 与 Base URL 是否正确（当前 kind=ollama）: %w",
+			c.cfg.Name, url, resp.StatusCode, domain.ErrUpstreamRequestFailed)
 	}
 	return nil
 }
@@ -407,7 +410,9 @@ func (c *OllamaClient) ListModels(ctx context.Context) ([]DiscoveredModel, error
 		return nil, fmt.Errorf("%s: read tags body: %w", c.cfg.Name, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: tags status %d", c.cfg.Name, resp.StatusCode)
+		url := strings.TrimSuffix(c.cfg.BaseURL, "/") + "/api/tags"
+		return nil, fmt.Errorf("%s: GET %s 返回 %d，请检查 provider kind 与 Base URL 是否正确（当前 kind=ollama）: %w",
+			c.cfg.Name, url, resp.StatusCode, domain.ErrUpstreamRequestFailed)
 	}
 
 	var out ollamaTagsResponse

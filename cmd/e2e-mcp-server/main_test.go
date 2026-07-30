@@ -65,6 +65,29 @@ func TestHandlerServesOpenAICompatibleCompletion(t *testing.T) {
 	}
 }
 
+func TestHandlerServesOpenAICompatibleModels(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Data) != 2 || response.Data[0].ID != "mock-model-1" || response.Data[1].ID != "mock-model-2" {
+		t.Fatalf("response=%s", rec.Body.String())
+	}
+}
+
 func TestCompletionReturnsOptimizationCandidatesForQwenPlus(t *testing.T) {
 	t.Parallel()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(
@@ -103,14 +126,14 @@ func TestCompletionAdvancesFromSkillActivationToMCPTool(t *testing.T) {
 	t.Parallel()
 	tools := `"tools":[` +
 		`{"type":"function","function":{"name":"stratum_create_plan","parameters":{"type":"object"}}},` +
-		`{"type":"function","function":{"name":"stratum_activate_skill","parameters":{"type":"object","properties":{"skill_id":{"type":"string","enum":["skill-1"]}}}}},` +
+		`{"type":"function","function":{"name":"skill-1","parameters":{"type":"object","properties":{"input":{"type":"string"}}}}},` +
 		`{"type":"function","function":{"name":"mcp:server-1:stateful_echo","parameters":{"type":"object"}}}]`
 
 	activation := completionToolName(t, `{"messages":[{"role":"user"}],`+tools+`}`)
-	if activation != "stratum_activate_skill" {
+	if activation != "skill-1" {
 		t.Fatalf("first tool=%q", activation)
 	}
-	mcp := completionToolName(t, `{"messages":[{"role":"assistant","tool_calls":[{"function":{"name":"stratum_activate_skill"}}]},{"role":"tool"}],`+tools+`}`)
+	mcp := completionToolName(t, `{"messages":[{"role":"assistant","tool_calls":[{"function":{"name":"skill-1"}}]},{"role":"tool"}],`+tools+`}`)
 	if mcp != "mcp:server-1:stateful_echo" {
 		t.Fatalf("second tool=%q", mcp)
 	}

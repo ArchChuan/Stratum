@@ -95,11 +95,14 @@ export const createGuestActor = async (
   pool: DatabasePool,
 ): Promise<BrowserActor> => {
   const page = await actor.context.newPage();
-  const guestPromise = page.waitForResponse((response) => (
-    response.url() === `${backendURL}/auth/guest`
-    && response.request().method() === 'POST'
-  ));
-  await page.goto(`${webURL}/login`);
+  const guestPromise = page.waitForResponse(
+    (response) => (
+      response.url() === `${backendURL}/auth/guest`
+      && response.request().method() === 'POST'
+    ),
+    { timeout: 15_000 },
+  );
+  await page.goto(`${webURL}/login`, { waitUntil: 'domcontentloaded', timeout: 15_000 });
   await expect(page.getByRole('button', { name: /快速体验/ })).toBeVisible();
   await page.getByRole('button', { name: /快速体验/ }).click();
   const guest = await guestPromise;

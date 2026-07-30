@@ -23,17 +23,19 @@ const revisionClientCleanupTimeout = 5 * time.Second
 
 // ClientManager 管理多个 MCP 客户端
 type ClientManager struct {
-	clients    map[string]MCPClient
-	configs    map[string]*MCPServerConfig
-	connecting map[string]struct{}
-	cache      *CapabilityCache
-	mu         sync.RWMutex
-	logger     *zap.Logger
-	poolConfig *ConnectionPoolConfig
-	stopCh     chan struct{}
-	stopOnce   sync.Once
-	wg         sync.WaitGroup
-	pool       *pgxpool.Pool
+	clients     map[string]MCPClient
+	configs     map[string]*MCPServerConfig
+	connecting  map[string]struct{}
+	cache       *CapabilityCache
+	mu          sync.RWMutex
+	logger      *zap.Logger
+	poolConfig  *ConnectionPoolConfig
+	stopCh      chan struct{}
+	stopOnce    sync.Once
+	wg          sync.WaitGroup
+	pool        *pgxpool.Pool
+	credentials InvocationCredentialProvider
+	transport   ManagedHTTPTransportProvider
 
 	clientFactory func(*MCPServerConfig, *zap.Logger) MCPClient
 }
@@ -49,17 +51,63 @@ func NewClientManager(logger *zap.Logger, poolConfig *ConnectionPoolConfig, pool
 		}
 	}
 
-	return &ClientManager{
-		clients:       make(map[string]MCPClient),
-		configs:       make(map[string]*MCPServerConfig),
-		connecting:    make(map[string]struct{}),
-		cache:         NewCapabilityCache(1000, 1*time.Hour),
-		logger:        logger.Named("mcp.client_manager"),
-		poolConfig:    poolConfig,
-		stopCh:        make(chan struct{}),
-		pool:          pool,
-		clientFactory: func(cfg *MCPServerConfig, logger *zap.Logger) MCPClient { return NewBaseClient(cfg, logger) },
+	manager := &ClientManager{
+		clients:    make(map[string]MCPClient),
+		configs:    make(map[string]*MCPServerConfig),
+		connecting: make(map[string]struct{}),
+		cache:      NewCapabilityCache(1000, 1*time.Hour),
+		logger:     logger.Named("mcp.client_manager"),
+		poolConfig: poolConfig,
+		stopCh:     make(chan struct{}),
+		pool:       pool,
 	}
+	manager.clientFactory = func(cfg *MCPServerConfig, logger *zap.Logger) MCPClient {
+		client := NewBaseClient(cfg, logger)
+		client.SetInvocationCredentialProvider(manager.invocationCredentialProvider())
+		client.SetManagedHTTPTransportProvider(manager.managedHTTPTransportProvider())
+		return client
+	}
+	return manager
+}
+
+func (m *ClientManager) SetManagedHTTPTransportProvider(provider ManagedHTTPTransportProvider) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.transport = provider
+	for _, client := range m.clients {
+		configurable, ok := client.(interface {
+			SetManagedHTTPTransportProvider(ManagedHTTPTransportProvider)
+		})
+		if ok {
+			configurable.SetManagedHTTPTransportProvider(provider)
+		}
+	}
+}
+
+func (m *ClientManager) SetInvocationCredentialProvider(provider InvocationCredentialProvider) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.credentials = provider
+	for _, client := range m.clients {
+		configurable, ok := client.(interface {
+			SetInvocationCredentialProvider(InvocationCredentialProvider)
+		})
+		if ok {
+			configurable.SetInvocationCredentialProvider(provider)
+		}
+	}
+}
+
+func (m *ClientManager) invocationCredentialProvider() InvocationCredentialProvider {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.credentials
+}
+
+func (m *ClientManager) managedHTTPTransportProvider() ManagedHTTPTransportProvider {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.transport
 }
 
 // ErrNameConflict is the canonical sentinel for an MCP server name collision.
@@ -454,19 +502,21 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 	}
 
 	type row struct {
-		id          string
-		name        string
-		transport   string
-		command     string
-		url         string
-		version     string
-		args        []byte
-		env         []byte
-		caps        []byte
-		headers     []byte
-		authConfig  []byte
-		retryConfig []byte
-		timeoutSec  int
+		id             string
+		name           string
+		transport      string
+		command        string
+		url            string
+		version        string
+		args           []byte
+		env            []byte
+		caps           []byte
+		headers        []byte
+		authConfig     []byte
+		retryConfig    []byte
+		timeoutSec     int
+		systemKey      string
+		managementMode string
 	}
 
 	for _, schema := range schemas {
@@ -481,7 +531,8 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 		queryErr := tenantdb.ExecTenant(tctx, m.pool, func(qctx context.Context, tx pgx.Tx) error {
 			pgRows, err := tx.Query(qctx, `
 				SELECT id, name, transport, command, url, version,
-				       args, env, capabilities, headers, auth_config, retry_config, timeout_sec
+				       args, env, capabilities, headers, auth_config, retry_config, timeout_sec,
+				       COALESCE(system_key, ''), management_mode
 				FROM mcp_configs WHERE enabled = true`)
 			if err != nil {
 				return fmt.Errorf("restore mcp_configs query: %w", err)
@@ -490,7 +541,8 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 			for pgRows.Next() {
 				var r row
 				if err := pgRows.Scan(&r.id, &r.name, &r.transport, &r.command, &r.url, &r.version,
-					&r.args, &r.env, &r.caps, &r.headers, &r.authConfig, &r.retryConfig, &r.timeoutSec); err != nil {
+					&r.args, &r.env, &r.caps, &r.headers, &r.authConfig, &r.retryConfig, &r.timeoutSec,
+					&r.systemKey, &r.managementMode); err != nil {
 					return fmt.Errorf("restore mcp_configs scan: %w", err)
 				}
 				rows = append(rows, r)
@@ -519,19 +571,21 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 			_ = json.Unmarshal(r.retryConfig, &retry)
 
 			cfg := &MCPServerConfig{
-				ID:           r.id,
-				Name:         r.name,
-				Transport:    r.transport,
-				Command:      r.command,
-				URL:          r.url,
-				Version:      r.version,
-				Args:         args,
-				Env:          env,
-				Capabilities: caps,
-				Headers:      headers,
-				Auth:         auth,
-				Retry:        retry,
-				Timeout:      time.Duration(r.timeoutSec) * time.Second,
+				ID:             r.id,
+				Name:           r.name,
+				Transport:      r.transport,
+				Command:        r.command,
+				URL:            r.url,
+				Version:        r.version,
+				Args:           args,
+				Env:            env,
+				Capabilities:   caps,
+				Headers:        headers,
+				Auth:           auth,
+				Retry:          retry,
+				Timeout:        time.Duration(r.timeoutSec) * time.Second,
+				SystemKey:      r.systemKey,
+				ManagementMode: r.managementMode,
 			}
 
 			connectCtx := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{
@@ -715,14 +769,18 @@ func (m *ClientManager) GetServerConfig(ctx context.Context, serverID string) (*
 	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
 			SELECT id, name, transport, command, url, args, env, capabilities,
-			       timeout_sec, version, headers, auth_config, retry_config
+			       timeout_sec, version, headers, auth_config, retry_config,
+			       COALESCE(system_key, ''), management_mode
 			FROM mcp_configs WHERE id=$1`, serverID).
 			Scan(&out.ID, &out.Name, &out.Transport, &out.Command, &out.URL,
 				&argsStr, &envStr, &capsStr, &timeoutSec,
-				&out.Version, &hdrsStr, &authStr, &retryStr)
+				&out.Version, &hdrsStr, &authStr, &retryStr, &out.SystemKey, &out.ManagementMode)
 	})
 	if err != nil {
-		return nil, mcpdomain.ErrServerNotFound
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, mcpdomain.ErrServerNotFound
+		}
+		return nil, fmt.Errorf("get mcp server config %s: %w", serverID, err)
 	}
 	out.Timeout = time.Duration(timeoutSec) * time.Second
 	_ = json.Unmarshal([]byte(argsStr), &out.Args)

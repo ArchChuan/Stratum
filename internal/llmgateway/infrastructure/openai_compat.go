@@ -23,11 +23,12 @@ import (
 )
 
 const (
-	maxRetryAttempts   = 3
-	retryBaseDelay     = 100 * time.Millisecond
-	maxRetryDelay      = 10 * time.Second
-	cbFailureThreshold = 5
-	cbRecoveryTimeout  = 30 * time.Second
+	maxRetryAttempts          = 3
+	retryBaseDelay            = 100 * time.Millisecond
+	maxRetryDelay             = 10 * time.Second
+	cbFailureThreshold        = 5
+	cbRecoveryTimeout         = 30 * time.Second
+	maxModelListResponseBytes = 1 << 20
 )
 
 // providerBreaker is a per-provider three-state circuit breaker.
@@ -540,17 +541,24 @@ func (c *OpenAICompatClient) fetchModelNames(ctx context.Context) ([]string, err
 	if err != nil {
 		return nil, fmt.Errorf("%s: build models request: %w", c.cfg.Name, err)
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	if c.cfg.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	}
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("%s: do models request: %w", c.cfg.Name, err)
 	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("%s: read models body: %w", c.cfg.Name, err)
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxModelListResponseBytes+1))
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("%s: read models body: %w", c.cfg.Name, readErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("%s: close models response: %w", c.cfg.Name, closeErr)
+	}
+	if len(raw) > maxModelListResponseBytes {
+		return nil, fmt.Errorf("%s: GET %s response exceeds size limit", c.cfg.Name, url)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: GET %s returned %d: check API key and base URL",
@@ -653,38 +661,7 @@ func (p *OpenAICompatProtocol) Health(ctx context.Context, cfg ProviderConfig) e
 }
 
 func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]DiscoveredModel, error) {
-	url := strings.TrimSuffix(cfg.BaseURL, "/") + "/models"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("openai compat: build models request: %w", err)
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-
-	resp, err := p.client.http.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("openai compat: do models request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("openai compat: read models body: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("openai compat: GET %s returned %d: check API key and base URL",
-			url, resp.StatusCode)
-	}
-
-	var out openaiModelsResponse
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("openai compat: decode models: %w", err)
-	}
-	models := make([]DiscoveredModel, len(out.Data))
-	for i, m := range out.Data {
-		ctxWin, maxOut := lookupModelSpec(m.ID)
-		models[i] = DiscoveredModel{Name: m.ID, ContextWindow: ctxWin, MaxOutputTokens: maxOut}
-	}
-	return models, nil
+	return p.clientFor(cfg).ListModels(ctx)
 }
 
 func (p *OpenAICompatProtocol) CreateEmbeddings(

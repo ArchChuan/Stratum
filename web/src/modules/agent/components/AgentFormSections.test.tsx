@@ -6,7 +6,11 @@ import { AgentFormSections } from './AgentFormSections';
 
 describe('AgentFormSections', () => {
   it('limits max iterations to the product range with a slider', () => {
-    render(<Form initialValues={{ maxIterations: 10 }}><AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} chatModels={[]} /></Form>);
+    render(
+      <Form initialValues={{ maxIterations: 10 }}>
+        <AgentFormSections skills={[]} mcpTools={[]} workspaces={[]} groupedModels={[]} />
+      </Form>,
+    );
     const slider = screen.getByRole('slider', { name: '最大迭代次数' });
     expect(slider).toHaveAttribute('aria-valuemin', '1');
     expect(slider).toHaveAttribute('aria-valuemax', '90');
@@ -20,7 +24,7 @@ describe('AgentFormSections', () => {
           skills={[]}
           mcpTools={[]}
           workspaces={[]}
-          chatModels={['managed-chat']}
+          groupedModels={[{ provider: '托管厂商', models: [{ value: 'managed-chat', label: 'managed-chat' }] }]}
         />
       </Form>,
     );
@@ -30,6 +34,21 @@ describe('AgentFormSections', () => {
     expect(screen.queryByText(/qwen-plus/)).not.toBeInTheDocument();
   });
 
+  it('allows filtering a large model catalogue by name', () => {
+    render(
+      <Form>
+        <AgentFormSections
+          skills={[]}
+          mcpTools={[]}
+          workspaces={[]}
+          groupedModels={[{ provider: 'Qwen', models: [{ value: 'qwen-max', label: 'qwen-max' }] }]}
+        />
+      </Form>,
+    );
+
+    expect(screen.getByRole('combobox', { name: 'LLM 模型' })).not.toHaveAttribute('readonly');
+  });
+
   it('labels an unavailable current model without adding it to new forms', () => {
     render(
       <Form>
@@ -37,7 +56,7 @@ describe('AgentFormSections', () => {
           skills={[]}
           mcpTools={[]}
           workspaces={[]}
-          chatModels={['managed-chat']}
+          groupedModels={[{ provider: '托管厂商', models: [{ value: 'managed-chat', label: 'managed-chat' }] }]}
           currentModel="retired-chat"
         />
       </Form>,

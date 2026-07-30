@@ -44,14 +44,47 @@ database_name=${database_name##*/}
 [[ "$database_name" =~ ^[A-Za-z0-9_]+$ ]] || { printf 'unsafe E2E database name\n' >&2; exit 2; }
 
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/stratum-system-stateful.XXXXXX")
-oauth_pid='' mcp_pid='' backend_pid='' frontend_pid='' infra_started=false infra_owned=false
+oauth_pid='' mcp_pid='' platform_mcp_pid='' backend_pid='' frontend_pid='' infra_started=false infra_owned=false
 shared_milvus_container='' shared_milvus_started=false
+stop_process_tree() {
+  local root=$1 child
+  [[ "$root" =~ ^[1-9][0-9]*$ ]] || return 0
+  local -a descendants=()
+  while IFS= read -r child; do
+    [[ "$child" =~ ^[1-9][0-9]*$ ]] && descendants+=("$child")
+  done < <(ps -eo pid=,ppid= | awk -v root="$root" '
+    { parent[$1]=$2 }
+    END {
+      for (pid in parent) {
+        current=pid
+        while (current in parent && current != 1) {
+          if (parent[current] == root) { print pid; break }
+          current=parent[current]
+        }
+      }
+    }
+  ')
+  kill -- "-$root" 2>/dev/null || true
+  ((${#descendants[@]} == 0)) || kill "${descendants[@]}" 2>/dev/null || true
+  wait "$root" 2>/dev/null || true
+}
+export_failure_logs() {
+  local target=${STATEFUL_E2E_FAILURE_LOG_DIR:-} log
+  [[ -n "$target" ]] || return 0
+  mkdir -p "$target"
+  chmod 0700 "$target"
+  for log in oauth mcp platform-mcp backend frontend; do
+    [[ -f "$work_dir/$log.log" ]] || continue
+    install -m 0600 "$work_dir/$log.log" "$target/$log.log"
+  done
+}
 cleanup() {
   local status=$?
-  [[ -z "$frontend_pid" ]] || { kill -- "-$frontend_pid" 2>/dev/null || true; wait "$frontend_pid" 2>/dev/null || true; }
-  [[ -z "$backend_pid" ]] || { kill -- "-$backend_pid" 2>/dev/null || true; wait "$backend_pid" 2>/dev/null || true; }
-  [[ -z "$mcp_pid" ]] || { kill -- "-$mcp_pid" 2>/dev/null || true; wait "$mcp_pid" 2>/dev/null || true; }
-  [[ -z "$oauth_pid" ]] || { kill -- "-$oauth_pid" 2>/dev/null || true; wait "$oauth_pid" 2>/dev/null || true; }
+	[[ -z "$frontend_pid" ]] || stop_process_tree "$frontend_pid"
+	[[ -z "$backend_pid" ]] || stop_process_tree "$backend_pid"
+	[[ -z "$platform_mcp_pid" ]] || stop_process_tree "$platform_mcp_pid"
+	[[ -z "$mcp_pid" ]] || stop_process_tree "$mcp_pid"
+	[[ -z "$oauth_pid" ]] || stop_process_tree "$oauth_pid"
   if [[ "$shared_milvus_started" == true ]]; then
     export STATEFUL_E2E_SHARED_MILVUS_CONTAINER=$shared_milvus_container
     bash -c "${STATEFUL_E2E_SHARED_MILVUS_STOP_COMMAND:-docker stop \"\$STATEFUL_E2E_SHARED_MILVUS_CONTAINER\"}" \
@@ -59,6 +92,9 @@ cleanup() {
   fi
   if [[ "$infra_started" == true ]]; then
     bash -c "${STATEFUL_E2E_INFRA_DOWN_COMMAND:-make -C '$repo_dir' infra-down}" >/dev/null 2>&1 || status=1
+  fi
+  if ((status != 0)); then
+    export_failure_logs || status=1
   fi
   rm -rf "$work_dir"
   exit "$status"
@@ -68,6 +104,11 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 common_git_dir=$(cd "$repo_dir" && git rev-parse --path-format=absolute --git-common-dir)
+common_compose_project=$(basename "$(dirname "$common_git_dir")")
+export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-$common_compose_project}
+stateful_e2e_lock="$common_git_dir/stateful-e2e.lock"
+exec {stateful_e2e_lock_fd}>"$stateful_e2e_lock"
+flock "$stateful_e2e_lock_fd"
 env_file=${STATEFUL_E2E_ENV_FILE:-$(dirname "$common_git_dir")/.env}
 if [[ -r "$env_file" ]]; then
   set -a
@@ -76,7 +117,12 @@ if [[ -r "$env_file" ]]; then
   set +a
 fi
 export TEST_DATABASE_URL=$database_url STRATUM_TEST_POSTGRES_URL=$database_url POSTGRES_URL=$database_url
-export QWEN_BASE_URL=http://127.0.0.1:19091/v1
+mcp_port=${STATEFUL_E2E_MCP_PORT:-19091}
+[[ "$mcp_port" =~ ^[0-9]+$ ]] && ((mcp_port >= 1024 && mcp_port <= 65535)) || {
+  printf 'STATEFUL_E2E_MCP_PORT must be between 1024 and 65535\n' >&2; exit 2;
+}
+export STATEFUL_E2E_MCP_PORT=$mcp_port E2E_MCP_LISTEN_ADDRESS=127.0.0.1:$mcp_port
+export QWEN_BASE_URL=http://127.0.0.1:$mcp_port/v1
 
 # Ephemeral RSA key for JWT signing — E2E never shares keys with production.
 if [[ -z "${JWT_PRIVATE_KEY_PEM:-}" ]]; then
@@ -97,6 +143,33 @@ export GITHUB_TOKEN_URL=http://127.0.0.1:19090/login/oauth/access_token
 export GITHUB_USER_URL=http://127.0.0.1:19090/user
 export E2E_GITHUB_LISTEN_ADDRESS=127.0.0.1:19090 E2E_GITHUB_ID=$oauth_github_id
 export E2E_GITHUB_LOGIN="stateful-oauth-$oauth_suffix" E2E_GITHUB_EMAIL="stateful-oauth-$oauth_suffix@example.test"
+
+tls_dir="$work_dir/tls"
+mkdir -p "$tls_dir"
+umask 077
+openssl req -x509 -newkey rsa:2048 -nodes -days 2 -sha256 \
+  -keyout "$tls_dir/ca.key" -out "$tls_dir/ca.crt" -subj '/CN=Stratum Stateful E2E CA' >/dev/null 2>&1
+cat >"$tls_dir/backend.ext" <<'EOF'
+subjectAltName=DNS:stratum-internal,URI:spiffe://stratum.local/ns/stratum/sa/stratum-backend
+extendedKeyUsage=serverAuth,clientAuth
+EOF
+cat >"$tls_dir/platform-mcp.ext" <<'EOF'
+subjectAltName=DNS:stratum-platform-mcp,URI:spiffe://stratum.local/ns/stratum/sa/stratum-platform-mcp
+extendedKeyUsage=serverAuth,clientAuth
+EOF
+for workload in backend platform-mcp; do
+  openssl req -new -newkey rsa:2048 -nodes -keyout "$tls_dir/$workload.key" \
+    -out "$tls_dir/$workload.csr" -subj "/CN=stratum-$workload" >/dev/null 2>&1
+  openssl x509 -req -in "$tls_dir/$workload.csr" -CA "$tls_dir/ca.crt" -CAkey "$tls_dir/ca.key" \
+    -CAcreateserial -days 2 -sha256 -extfile "$tls_dir/$workload.ext" \
+    -out "$tls_dir/$workload.crt" >/dev/null 2>&1
+done
+export INTERNAL_API_PORT=18444 INTERNAL_API_TLS_CERT_FILE="$tls_dir/backend.crt"
+export INTERNAL_API_TLS_KEY_FILE="$tls_dir/backend.key" INTERNAL_API_CLIENT_CA_FILE="$tls_dir/ca.crt"
+export PLATFORM_MCP_DIAL_ADDRESS=127.0.0.1:18443 PLATFORM_MCP_PORT=18443
+export PLATFORM_MCP_TLS_CERT_FILE="$tls_dir/platform-mcp.crt"
+export PLATFORM_MCP_TLS_KEY_FILE="$tls_dir/platform-mcp.key" PLATFORM_MCP_CLIENT_CA_FILE="$tls_dir/ca.crt"
+export STRATUM_INTERNAL_BASE_URL=https://127.0.0.1:18444 STRATUM_INTERNAL_SERVER_NAME=stratum-internal
 
 digest_command=${STATEFUL_E2E_DIGEST_COMMAND:-go run ./cmd/e2e-attestation digest --root .}
 source_before=$(cd "$repo_dir" && bash -c "$digest_command")
@@ -177,9 +250,11 @@ oauth_command=${STATEFUL_E2E_OAUTH_COMMAND:-"cd '$repo_dir' && go run ./cmd/e2e-
 setsid bash -c "exec bash -c \"\$1\"" _ "$oauth_command" >"$work_dir/oauth.log" 2>&1 & oauth_pid=$!
 mcp_command=${STATEFUL_E2E_MCP_COMMAND:-"cd '$repo_dir' && go run ./cmd/e2e-mcp-server"}
 setsid bash -c "exec bash -c \"\$1\"" _ "$mcp_command" >"$work_dir/mcp.log" 2>&1 & mcp_pid=$!
-backend_command=${STATEFUL_E2E_BACKEND_COMMAND:-"cd '$repo_dir' && FRONTEND_URL=http://127.0.0.1:15173 OPIK_URL=http://127.0.0.1:19091/opik PORT=18080 SECURE_COOKIES=false go run ./cmd/server"}
+platform_mcp_command=${STATEFUL_E2E_PLATFORM_MCP_COMMAND:-"cd '$repo_dir' && go run ./cmd/platform-mcp"}
+setsid bash -c "exec bash -c \"\$1\"" _ "$platform_mcp_command" >"$work_dir/platform-mcp.log" 2>&1 & platform_mcp_pid=$!
+backend_command=${STATEFUL_E2E_BACKEND_COMMAND:-"cd '$repo_dir' && FRONTEND_URL=http://127.0.0.1:15173 OPIK_URL=http://127.0.0.1:$mcp_port/opik PORT=18080 SECURE_COOKIES=false go run ./cmd/server"}
 setsid bash -c "exec bash -c \"\$1\"" _ "$backend_command" >"$work_dir/backend.log" 2>&1 & backend_pid=$!
-frontend_command=${STATEFUL_E2E_FRONTEND_COMMAND:-"cd '$repo_dir/web' && VITE_API_BASE_URL=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 15173"}
+frontend_command=${STATEFUL_E2E_FRONTEND_COMMAND:-"cd '$repo_dir/web' && CI=1 VITE_API_BASE_URL=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 15173"}
 setsid bash -c "exec bash -c \"\$1\"" _ "$frontend_command" >"$work_dir/frontend.log" 2>&1 & frontend_pid=$!
 
 poll() {
@@ -192,11 +267,13 @@ poll() {
   return 1
 }
 poll 'oauth provider' "${STATEFUL_E2E_OAUTH_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:19090/health}"
-poll 'MCP server' "${STATEFUL_E2E_MCP_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:19091/health}"
+poll 'MCP server' "${STATEFUL_E2E_MCP_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:$mcp_port/health}"
+poll 'Platform MCP server' "${STATEFUL_E2E_PLATFORM_MCP_HEALTH_COMMAND:-curl -fsS --noproxy stratum-platform-mcp --cacert '$tls_dir/ca.crt' --cert '$tls_dir/backend.crt' --key '$tls_dir/backend.key' --resolve stratum-platform-mcp:18443:127.0.0.1 https://stratum-platform-mcp:18443/healthz}"
 poll backend "${STATEFUL_E2E_BACKEND_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:18080/health}"
 poll frontend "${STATEFUL_E2E_FRONTEND_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:15173/}"
 kill -0 "$oauth_pid" 2>/dev/null || { printf 'oauth provider exited before browser execution\n' >&2; exit 1; }
 kill -0 "$mcp_pid" 2>/dev/null || { printf 'MCP server exited before browser execution\n' >&2; exit 1; }
+kill -0 "$platform_mcp_pid" 2>/dev/null || { printf 'Platform MCP server exited before browser execution\n' >&2; exit 1; }
 kill -0 "$backend_pid" 2>/dev/null || { printf 'backend exited before browser execution\n' >&2; exit 1; }
 kill -0 "$frontend_pid" 2>/dev/null || { printf 'frontend exited before browser execution\n' >&2; exit 1; }
 
