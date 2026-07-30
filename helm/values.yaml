@@ -51,6 +51,9 @@ app:
     failureThreshold: 30
     periodSeconds: 5
     timeoutSeconds: 3
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
 
 platformMCP:
   enabled: true
@@ -285,3 +288,16 @@ serviceMonitor:
   scrapeTimeout: 10s
   path: /metrics
   additionalLabels: {}
+
+# Pre-upgrade validation: fails fast if listed secrets are missing.
+# Lists the main credentials secret, ingress TLS secrets, and any
+# additional secrets (e.g. mTLS certs) whose absence would block
+# pod startup (ContainerCreating).
+requiredSecrets:
+  enabled: true
+  # Secret names that must exist before install/upgrade.
+  # The credentials secret (secrets.name) and ingress TLS secrets
+  # are checked automatically.
+  names: []
+  # - stratum-backend-internal-tls
+  # - stratum-platform-mcp-tls
