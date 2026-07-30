@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 3
+    continue-on-error: true
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

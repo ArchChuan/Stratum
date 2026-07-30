@@ -1,6 +1,7 @@
 .PHONY: \
 	be-install be-fmt be-lint be-test be-build be-docker-build \
-	fe-install fe-lint fe-build fe-docker-build \
+	fe-install fe-lint fe-typecheck fe-build fe-docker-build \
+		check \
 	infra-up infra-down infra-wait infra-status \
 	zhparser-build-local \
 	obs-up obs-down \
@@ -87,11 +88,18 @@ fe-install:
 fe-lint:
 	cd $(WEB_DIR) && npm run lint
 
+fe-typecheck:
+	cd $(WEB_DIR) && npx tsc --noEmit
+
 fe-build:
 	cd $(WEB_DIR) && npm run build
 
 fe-docker-build:
 	docker build -t $(FE_IMAGE):$(IMAGE_TAG) -f $(WEB_DIR)/Dockerfile $(WEB_DIR)/
+
+# ─── Pre-merge 快速门禁（本地一键跑完，PR 前必过）────────────────────────
+check: fe-typecheck fe-lint contract-enforce code-quality
+	@echo "pre-merge checks passed"
 
 # ─── 本地基础设施 Infra ───────────────────────────────────────────────────
 # 本地构建带 zhparser（中文全文检索）的 postgres 镜像。有宿主代理会自动加速 PGDG 源；
@@ -251,7 +259,7 @@ ci-backend: migration-guardrails arch-guardrails be-install be-fmt be-lint
 	$(MAKE) be-test be-build
 	$(MAKE) infra-down
 
-ci-frontend: fe-install fe-lint fe-build
+ci-frontend: fe-install fe-lint fe-typecheck fe-build
 
 ci-docker:
 	docker build -t $(REGISTRY)/$(BE_IMAGE):$(IMAGE_TAG) -f Dockerfile .
