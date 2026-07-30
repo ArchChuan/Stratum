@@ -260,6 +260,18 @@ jobs:
         if: steps.candidate.outputs.current == 'true'
         run: kubectl get nodes
 
+      - name: Install pinned cert-manager release
+        if: steps.candidate.outputs.current == 'true'
+        run: |
+          helm repo add jetstack https://charts.jetstack.io
+          helm repo update jetstack
+          helm upgrade --install cert-manager jetstack/cert-manager \
+            --namespace cert-manager --create-namespace \
+            --version v1.21.1 \
+            --set crds.enabled=true \
+            --atomic --wait --timeout=10m
+          kubectl wait --for=condition=Established crd/certificates.cert-manager.io --timeout=2m
+
       - name: Apply monitoring credentials
         if: steps.candidate.outputs.current == 'true'
         env:
