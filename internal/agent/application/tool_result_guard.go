@@ -3,11 +3,13 @@ package application
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/safetext"
 )
 
 const MaxToolResultRunes = 32 * 1024
@@ -49,12 +51,55 @@ func (g *ToolResultGuard) Validate(
 		summary = string([]rune(summary)[:800]) + "...[truncated]"
 	}
 	return port.GuardedToolResult{
-		ModelContent: modelContent,
-		Summary:      summary,
-		SHA256:       safe.SHA256,
-		Untrusted:    true,
-		Truncated:    safe.Truncated,
+		ModelContent:      modelContent,
+		Summary:           summary,
+		SHA256:            safe.SHA256,
+		StructuredContent: cloneStructuredContent(result.StructuredContent),
+		Untrusted:         true,
+		Truncated:         safe.Truncated,
 	}, nil
+}
+
+func cloneStructuredContent(content map[string]any) map[string]any {
+	if content == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(content))
+	for key, value := range content {
+		if sensitiveStructuredKey(key) {
+			cloned[key] = "[REDACTED]"
+			continue
+		}
+		cloned[key] = sanitizeStructuredValue(value)
+	}
+	return cloned
+}
+
+func sensitiveStructuredKey(key string) bool {
+	normalized := strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(key))
+	switch normalized {
+	case "authorization", "password", "token", "apikey", "secret":
+		return true
+	default:
+		return false
+	}
+}
+
+func sanitizeStructuredValue(value any) any {
+	switch typed := value.(type) {
+	case string:
+		return safetext.RedactCredentials(typed)
+	case map[string]any:
+		return cloneStructuredContent(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = sanitizeStructuredValue(item)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func validateToolResultSchema(schema map[string]any, value any) error {

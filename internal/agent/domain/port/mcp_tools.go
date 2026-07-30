@@ -38,12 +38,13 @@ type MCPToolResult struct {
 }
 
 type GuardedToolResult struct {
-	ModelContent string
-	Summary      string
-	SHA256       string
-	Untrusted    bool
-	Truncated    bool
-	IsError      bool
+	ModelContent      string
+	Summary           string
+	SHA256            string
+	StructuredContent map[string]any
+	Untrusted         bool
+	Truncated         bool
+	IsError           bool
 }
 
 type ToolExecutionOutcome string

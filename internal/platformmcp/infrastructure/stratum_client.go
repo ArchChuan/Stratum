@@ -111,7 +111,7 @@ func (c *StratumClient) callDelegated(
 	if err != nil {
 		return agentport.MCPToolResult{}, fmt.Errorf("call delegated Stratum API: %w", err)
 	}
-	var projected any
+	var projected map[string]any
 	if err := decodeSuccessfulResponse(response, &projected); err != nil {
 		return agentport.MCPToolResult{}, fmt.Errorf("decode delegated Stratum API response: %w", err)
 	}
@@ -120,7 +120,8 @@ func (c *StratumClient) callDelegated(
 		return agentport.MCPToolResult{}, fmt.Errorf("project delegated Stratum API response: %w", err)
 	}
 	return agentport.MCPToolResult{
-		Content: []agentport.MCPContent{{Type: "text", Text: string(encoded)}},
+		Content:           []agentport.MCPContent{{Type: "text", Text: string(encoded)}},
+		StructuredContent: projected,
 	}, nil
 }
 

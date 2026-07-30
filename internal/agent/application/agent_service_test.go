@@ -781,6 +781,23 @@ func TestAgentServicePlatformAssistantModelOnlyUpdatePreservesSystemBindings(t *
 	repo.AssertExpectations(t)
 }
 
+func TestAgentServicePlatformAssistantRejectsBindingRemovalByPreservingManagedTools(t *testing.T) {
+	svc, repo := newTestService(t)
+	ctx := reqctx.WithTenantID(context.Background(), "tenant-1")
+	managedTools := []string{"mcp:stratum-platform-mcp:stratum_diagnose_tenant"}
+	cfg := &domain.AgentConfig{
+		ID: domain.SystemAssistantID, SystemKey: domain.SystemAssistantKey, MCPToolIDs: managedTools,
+	}
+	repo.On("Get", ctx, domain.SystemAssistantID).Return(cfg, true, nil)
+	repo.On("UpdateSystemAssistantBindings", ctx, managedTools, []string{}, []string{}).Return(cfg, nil)
+
+	got, err := svc.Update(ctx, domain.SystemAssistantID, application.UpdateAgentInput{MCPToolIDs: []string{}})
+
+	assert.NoError(t, err)
+	assert.Equal(t, managedTools, got.MCPToolIDs)
+	repo.AssertExpectations(t)
+}
+
 func TestAgentService_Delete(t *testing.T) {
 	svc, repo := newTestService(t)
 	repo.On("Get", mock.Anything, "agent-1").Return(&domain.AgentConfig{ID: "agent-1"}, true, nil)

@@ -12,7 +12,7 @@ func InputSchema(toolName string) (map[string]any, bool) {
 		return closedObject(map[string]any{"areas": map[string]any{
 			"type": "array", "minItems": 1, "maxItems": constants.SystemAssistantAreasMaxCount,
 			"uniqueItems": true, "items": map[string]any{
-				"type": "string", "enum": []string{"agent", "skill", "mcp", "knowledge", "model"},
+				"type": "string", "enum": jsonStringArray("agent", "skill", "mcp", "knowledge", "model"),
 			},
 		}}, []string{"areas"}), true
 	case ToolProposeResourceChange:
@@ -65,7 +65,7 @@ func proposalPayloadSchemas() map[string]map[string]any {
 		}, []string{"name", "description", "instructions"}),
 		"mcp_config": closedObject(map[string]any{
 			"name": map[string]any{"type": "string", "minLength": 1}, "version": map[string]any{"type": "string"},
-			"transport": map[string]any{"type": "string", "enum": []string{"stdio", "streamable-http"}},
+			"transport": map[string]any{"type": "string", "enum": jsonStringArray("stdio", "streamable-http")},
 			"command":   map[string]any{"type": "string"}, "args": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"url": map[string]any{"type": "string"}, "capabilities": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "uniqueItems": true},
 			"timeoutSec": map[string]any{"type": "integer", "minimum": 1, "maximum": 300}, "retry": proposalRetrySchema(),
@@ -88,6 +88,15 @@ func proposalRetrySchema() map[string]any {
 
 func closedObject(properties map[string]any, required []string) map[string]any {
 	return map[string]any{
-		"type": "object", "additionalProperties": false, "properties": properties, "required": required,
+		"type": "object", "additionalProperties": false, "properties": properties,
+		"required": jsonStringArray(required...),
 	}
+}
+
+func jsonStringArray(values ...string) []any {
+	result := make([]any, len(values))
+	for i, value := range values {
+		result[i] = value
+	}
+	return result
 }

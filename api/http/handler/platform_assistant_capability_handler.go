@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/gin-gonic/gin"
 )
 
@@ -63,9 +66,9 @@ func (h *PlatformAssistantCapabilityHandler) SearchDocs(c *gin.Context) {
 		respondCapabilityBadRequest(c, err)
 		return
 	}
-	query, err := domain.ParseOfficialDocsToolArguments(map[string]any{"query": request.Query})
-	if err != nil {
-		respondCapabilityBadRequest(c, err)
+	query := strings.TrimSpace(request.Query)
+	if query == "" || utf8.RuneCountInString(query) > constants.SystemAssistantQueryMaxRunes {
+		respondCapabilityBadRequest(c, errors.New("invalid official docs query"))
 		return
 	}
 	citations, err := h.docs.Search(c.Request.Context(), query)
@@ -88,9 +91,9 @@ func (h *PlatformAssistantCapabilityHandler) DiagnoseTenant(c *gin.Context) {
 		respondCapabilityBadRequest(c, err)
 		return
 	}
-	areas, err := domain.ParseDiagnosticToolArguments(map[string]any{"areas": request.Areas})
-	if err != nil {
-		respondCapabilityBadRequest(c, err)
+	areas, ok := validDiagnosticAreas(request.Areas)
+	if !ok {
+		respondCapabilityBadRequest(c, errors.New("invalid diagnostic areas"))
 		return
 	}
 	evidence, err := h.diagnostics.Collect(c.Request.Context(), domain.DiagnosticRequest{
@@ -142,4 +145,21 @@ func capabilityIdentity(c *gin.Context) (string, string, bool) {
 
 func respondCapabilityBadRequest(c *gin.Context, err error) {
 	_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+}
+
+func validDiagnosticAreas(areas []domain.DiagnosticArea) ([]domain.DiagnosticArea, bool) {
+	if len(areas) == 0 || len(areas) > constants.SystemAssistantAreasMaxCount {
+		return nil, false
+	}
+	seen := make(map[domain.DiagnosticArea]struct{}, len(areas))
+	for _, area := range areas {
+		if !area.Valid() {
+			return nil, false
+		}
+		if _, exists := seen[area]; exists {
+			return nil, false
+		}
+		seen[area] = struct{}{}
+	}
+	return areas, true
 }
