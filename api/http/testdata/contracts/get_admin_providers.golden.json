@@ -1,0 +1,11 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/admin/providers",
+    "want_status": 200,
+    "want_body": {
+      "providers": null
+    }
+  }
+]

@@ -27,18 +27,15 @@ func (r *PgProviderRepo) execTenant(ctx context.Context, tenantID string, fn fun
 	return tenantdb.ExecTenant(ctx, r.pool, fn)
 }
 
-// Create inserts a new provider row.
+// Create inserts a new provider row and populates DB-generated timestamps on p.
 func (r *PgProviderRepo) Create(ctx context.Context, tenantID string, p *domain.Provider) error {
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx,
+		return tx.QueryRow(ctx,
 			`INSERT INTO providers (id, tenant_id, name, kind, base_url, api_key, default_model, enabled)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+			 RETURNING created_at, updated_at`,
 			p.ID, tenantID, p.Name, string(p.Kind), p.BaseURL, p.APIKey, p.DefaultModel, p.Enabled,
-		)
-		if err != nil {
-			return fmt.Errorf("create provider: %w", err)
-		}
-		return nil
+		).Scan(&p.CreatedAt, &p.UpdatedAt)
 	})
 }
 

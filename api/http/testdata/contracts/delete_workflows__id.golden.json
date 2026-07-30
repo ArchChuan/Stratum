@@ -1,0 +1,11 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "DELETE",
+    "path": "/workflows/contract-id",
+    "want_status": 200,
+    "want_body": {
+      "message": "workflow deleted"
+    }
+  }
+]

@@ -3,7 +3,9 @@
     "name": "default-unauth",
     "method": "PATCH",
     "path": "/skills/:id/draft/instructions",
-    "body": {"error": "missing bearer token"},
+    "body": {
+      "error": "missing bearer token"
+    },
     "want_status": 401
   }
 ]

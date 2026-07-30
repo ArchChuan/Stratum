@@ -1,0 +1,8 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/workflow-runs/contract-id/events/stream",
+    "want_status": 200
+  }
+]

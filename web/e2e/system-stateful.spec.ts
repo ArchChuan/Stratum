@@ -24,6 +24,7 @@ import { executeEvaluationPack } from './stateful/packs/evaluation';
 import { executeEvaluationPromotionPack } from './stateful/packs/evaluation-promotion';
 import { executeIAMPack } from './stateful/packs/iam';
 import { executeKnowledgePack } from './stateful/packs/knowledge';
+import { executeLLMAdminPack } from './stateful/packs/llm-admin';
 import { executeMCPPack } from './stateful/packs/mcp';
 import { executeMemoryPack } from './stateful/packs/memory';
 import { executeSkillPack } from './stateful/packs/skill';
@@ -197,6 +198,10 @@ const executePack = async (
   }
   if (pack === 'memory') {
     completedActions.push(...await executeMemoryPack({ actor: actors.memberA, pool, evidence, webURL }));
+    return;
+  }
+  if (pack === 'llm-admin') {
+    completedActions.push(...await executeLLMAdminPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
     return;
   }
   if (pack !== 'dashboard') throw new Error(`stateful pack ${pack} is not implemented`);

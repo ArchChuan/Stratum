@@ -189,7 +189,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		authRoutes.POST("/create-tenant", authHandler.CreateUserTenant)
 	}
 
-	if c.DB() == nil {
+	if c.IAM == nil || c.IAM.AdminService == nil || c.IAM.TenantService == nil {
 		return
 	}
 	jwtMW := middleware.JWTMiddleware(jwtSvc)

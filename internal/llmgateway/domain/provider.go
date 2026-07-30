@@ -12,15 +12,16 @@ const (
 )
 
 // Provider represents a configured LLM provider instance.
+// apiKey is write-only: it is accepted on create/update but never returned.
 type Provider struct {
-	ID           string
-	TenantID     string
-	Name         string
-	Kind         ProviderKind
-	BaseURL      string
-	APIKey       string
-	DefaultModel string
-	Enabled      bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID           string       `json:"id"`
+	TenantID     string       `json:"-"`
+	Name         string       `json:"name"`
+	Kind         ProviderKind `json:"kind"`
+	BaseURL      string       `json:"baseUrl"`
+	APIKey       string       `json:"-"`
+	DefaultModel string       `json:"defaultModel"`
+	Enabled      bool         `json:"enabled"`
+	CreatedAt    time.Time    `json:"createdAt"`
+	UpdatedAt    time.Time    `json:"updatedAt"`
 }

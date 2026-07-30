@@ -1853,6 +1853,139 @@
       "http_evidence": "The browser observes the expected successful response for POST /workflow-runs/:runId/manual-interventions/:effectId/resolve",
       "db_evidence": "Persisted state is reconciled after POST /workflow-runs/:runId/manual-interventions/:effectId/resolve",
       "coverage": "short"
+    },
+    {
+      "id": "llm-admin.route.models",
+      "domain": "llm-admin",
+      "user_goal": "Open /models",
+      "route": "/models",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "NAVIGATE /models",
+      "browser_action_id": "llm-admin.route.models",
+      "http_evidence": "The route and required read requests complete successfully for /models",
+      "db_evidence": "The selected tenant and persisted view state agree with the rendered page",
+      "coverage": "short"
+    },
+    {
+      "id": "llm-admin.mutation.post.admin.providers",
+      "domain": "llm-admin",
+      "user_goal": "Complete POST /admin/providers",
+      "route": "/models",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /admin/providers",
+      "browser_action_id": "llm-admin.mutation.post.admin.providers",
+      "http_evidence": "The browser observes the expected successful response for POST /admin/providers",
+      "db_evidence": "Persisted state is reconciled after POST /admin/providers",
+      "coverage": "short"
+    },
+    {
+      "id": "llm-admin.mutation.put.admin.providers.id",
+      "domain": "llm-admin",
+      "user_goal": "Complete PUT /admin/providers/:id",
+      "route": "/models",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PUT /admin/providers/:id",
+      "browser_action_id": "llm-admin.mutation.put.admin.providers.id",
+      "http_evidence": "The browser observes the expected successful response for PUT /admin/providers/:id",
+      "db_evidence": "Persisted state is reconciled after PUT /admin/providers/:id",
+      "coverage": "short"
+    },
+    {
+      "id": "llm-admin.mutation.post.admin.providers.id.discover",
+      "domain": "llm-admin",
+      "user_goal": "Complete POST /admin/providers/:id/discover",
+      "route": "/models",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "POST /admin/providers/:id/discover",
+      "browser_action_id": "llm-admin.mutation.post.admin.providers.id.discover",
+      "http_evidence": "The browser observes the expected successful response for POST /admin/providers/:id/discover",
+      "db_evidence": "Persisted state is reconciled after POST /admin/providers/:id/discover",
+      "coverage": "short"
+    },
+    {
+      "id": "llm-admin.mutation.put.admin.models.id",
+      "domain": "llm-admin",
+      "user_goal": "Complete PUT /admin/models/:id",
+      "route": "/models",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PUT /admin/models/:id",
+      "browser_action_id": "llm-admin.mutation.put.admin.models.id",
+      "http_evidence": "The browser observes the expected successful response for PUT /admin/models/:id",
+      "db_evidence": "Persisted state is reconciled after PUT /admin/models/:id",
+      "coverage": "short"
+    },
+    {
+      "id": "llm-admin.mutation.patch.admin.models.id.toggle",
+      "domain": "llm-admin",
+      "user_goal": "Complete PATCH /admin/models/:id/toggle",
+      "route": "/models",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "PATCH /admin/models/:id/toggle",
+      "browser_action_id": "llm-admin.mutation.patch.admin.models.id.toggle",
+      "http_evidence": "The browser observes the expected successful response for PATCH /admin/models/:id/toggle",
+      "db_evidence": "Persisted state is reconciled after PATCH /admin/models/:id/toggle",
+      "coverage": "short"
+    },
+    {
+      "id": "llm-admin.mutation.delete.admin.providers.id",
+      "domain": "llm-admin",
+      "user_goal": "Complete DELETE /admin/providers/:id",
+      "route": "/models",
+      "roles": {
+        "allowed": [
+          "tenant_admin"
+        ],
+        "denied": [
+          "unauthenticated"
+        ]
+      },
+      "mutation": "DELETE /admin/providers/:id",
+      "browser_action_id": "llm-admin.mutation.delete.admin.providers.id",
+      "http_evidence": "The browser observes the expected successful response for DELETE /admin/providers/:id",
+      "db_evidence": "Persisted state is reconciled after DELETE /admin/providers/:id",
+      "coverage": "short"
     }
   ]
 }

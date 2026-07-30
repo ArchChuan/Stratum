@@ -1,0 +1,23 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/workflows/contract-id",
+    "want_status": 200,
+    "want_body": {
+      "id": "contract-def",
+      "name": "stub-workflow",
+      "description": "contract stub",
+      "revision": 1,
+      "spec": {
+        "nodes": [],
+        "edges": []
+      },
+      "input_schema": {
+        "task_label": ""
+      },
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z"
+    }
+  }
+]

@@ -1,0 +1,18 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "POST",
+    "path": "/workflows/contract-id/validate",
+    "want_status": 400,
+    "want_body": {
+      "error": "workflow graph validation failed",
+      "issues": [
+        {
+          "path": "graph",
+          "code": "invalid",
+          "message": "at least one node is required"
+        }
+      ]
+    }
+  }
+]

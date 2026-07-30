@@ -1,4 +1,4 @@
-import type { CreateProviderInput, Model, Provider, UpdateModelInput } from '../model/llm';
+import type { CreateProviderInput, Model, Provider, UpdateModelInput, UpdateProviderInput } from '../model/llm';
 
 import api from '@/services/client';
 
@@ -48,7 +48,7 @@ export const llmApi = {
     return res.data;
   },
 
-  updateProvider: (id: string, data: Partial<CreateProviderInput>) =>
+  updateProvider: (id: string, data: UpdateProviderInput) =>
     api.put(`/admin/providers/${id}`, data),
 
   deleteProvider: async (id: string): Promise<void> => {

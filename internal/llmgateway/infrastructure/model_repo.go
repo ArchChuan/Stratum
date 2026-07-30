@@ -29,22 +29,19 @@ func (r *PgModelRepo) execTenant(ctx context.Context, tenantID string, fn func(c
 	return tenantdb.ExecTenant(ctx, r.pool, fn)
 }
 
-// Create inserts a new model row.
+// Create inserts a new model row and populates DB-generated timestamps on m.
 func (r *PgModelRepo) Create(ctx context.Context, tenantID string, m *domain.Model) error {
 	return r.execTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		caps := modelCapsToStrings(m.Capabilities)
-		_, err := tx.Exec(ctx,
+		return tx.QueryRow(ctx,
 			`INSERT INTO models (id, tenant_id, provider_id, name, display_name, capabilities,
 			 context_window, max_tokens, input_price, output_price, recommended, enabled, provider_managed)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			 RETURNING created_at, updated_at`,
 			m.ID, tenantID, m.ProviderID, m.Name, m.DisplayName, caps,
 			m.ContextWindow, m.MaxTokens, m.InputPrice, m.OutputPrice,
 			m.Recommended, m.Enabled, m.ProviderManaged,
-		)
-		if err != nil {
-			return fmt.Errorf("create model: %w", err)
-		}
-		return nil
+		).Scan(&m.CreatedAt, &m.UpdatedAt)
 	})
 }
 
