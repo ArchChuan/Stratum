@@ -32,7 +32,8 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "stratum.serviceAccountName" . }}
+      serviceAccountName: {{ if .Values.platformMCP.enabled }}stratum-backend{{ else }}{{ include "stratum.serviceAccountName" . }}{{ end }}
+      automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -45,6 +46,11 @@ spec:
             - name: http
               containerPort: {{ .Values.config.port }}
               protocol: TCP
+            {{- if .Values.platformMCP.enabled }}
+            - name: https-internal
+              containerPort: 8443
+              protocol: TCP
+            {{- end }}
           env:
             - name: PORT
               valueFrom:
@@ -236,6 +242,22 @@ spec:
                   name: {{ .Values.secrets.name | quote }}
                   key: GLOBAL_AGENT_SYSTEM_PROMPT
                   optional: true
+            {{- if .Values.platformMCP.enabled }}
+            - name: INTERNAL_API_PORT
+              value: "8443"
+            - name: INTERNAL_API_TLS_CERT_FILE
+              value: /var/run/stratum/internal-tls/tls.crt
+            - name: INTERNAL_API_TLS_KEY_FILE
+              value: /var/run/stratum/internal-tls/tls.key
+            - name: INTERNAL_API_CLIENT_CA_FILE
+              value: /var/run/stratum/internal-tls/ca.crt
+            {{- end }}
+          {{- if .Values.platformMCP.enabled }}
+          volumeMounts:
+            - name: internal-tls
+              mountPath: /var/run/stratum/internal-tls
+              readOnly: true
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /livez
@@ -259,6 +281,12 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.app.resources | nindent 12 }}
+      {{- if .Values.platformMCP.enabled }}
+      volumes:
+        - name: internal-tls
+          secret:
+            secretName: stratum-backend-internal-tls
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
