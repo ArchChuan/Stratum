@@ -45,6 +45,14 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
   const webURL = process.env.E2E_WEB_URL ?? 'http://127.0.0.1:15173';
   if (!databaseURL || !resultsPath) throw new Error('stateful E2E database and results paths are required');
 
+  const health = await Promise.all([
+    fetch(`${webURL}/`).then((r) => ({ ok: r.ok, label: 'frontend' })),
+    fetch(`${backendURL}/health`).then((r) => ({ ok: r.ok, label: 'backend' })),
+  ]);
+  for (const h of health) {
+    if (!h.ok) throw new Error(`${h.label} unreachable — start services before running this test`);
+  }
+
   const pool = await createSafePool(databaseURL);
   const contexts = await createActorContexts(browser);
   const actors = {} as Record<ActorLabel, BrowserActor>;
