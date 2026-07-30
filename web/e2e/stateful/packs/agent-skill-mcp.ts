@@ -148,7 +148,7 @@ export const executeAgentSkillMCPPack = async ({
     evidence.http.push('Agent Skill MCP decision, resume, provider, and tool calls succeeded');
     evidence.database.push('Agent Skill MCP approval reached executed state');
 
-    await page.goto(`${webURL}/agents`);
+		await page.goto(`${webURL}/agents/list`);
     const agentCard = page.locator('.ant-card').filter({ hasText: agentName });
     await agentCard.getByRole('button', { name: '删除 Agent' }).click();
     await page.locator('.ant-popconfirm').getByRole('button', { name: /删\s*除/ }).click();
