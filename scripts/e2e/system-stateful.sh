@@ -179,7 +179,7 @@ mcp_command=${STATEFUL_E2E_MCP_COMMAND:-"cd '$repo_dir' && go run ./cmd/e2e-mcp-
 setsid bash -c "exec bash -c \"\$1\"" _ "$mcp_command" >"$work_dir/mcp.log" 2>&1 & mcp_pid=$!
 backend_command=${STATEFUL_E2E_BACKEND_COMMAND:-"cd '$repo_dir' && FRONTEND_URL=http://127.0.0.1:15173 OPIK_URL=http://127.0.0.1:19091/opik PORT=18080 SECURE_COOKIES=false go run ./cmd/server"}
 setsid bash -c "exec bash -c \"\$1\"" _ "$backend_command" >"$work_dir/backend.log" 2>&1 & backend_pid=$!
-frontend_command=${STATEFUL_E2E_FRONTEND_COMMAND:-"cd '$repo_dir/web' && VITE_API_BASE_URL=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 15173"}
+frontend_command=${STATEFUL_E2E_FRONTEND_COMMAND:-"cd '$repo_dir/web' && CI=1 VITE_API_BASE_URL=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 15173"}
 setsid bash -c "exec bash -c \"\$1\"" _ "$frontend_command" >"$work_dir/frontend.log" 2>&1 & frontend_pid=$!
 
 poll() {

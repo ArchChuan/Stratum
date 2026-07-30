@@ -10,6 +10,10 @@ grep -Eq '^[[:space:]]+- "127\.0\.0\.1:9091:9091"$' "$repo_dir/docker-compose.ym
   printf 'docker compose must publish the Milvus health endpoint used by infra-wait\n' >&2
   exit 1
 }
+grep -Fq 'CI=1 VITE_API_BASE_URL=http://127.0.0.1:18080 npm run dev' "$runner" || {
+  printf 'stateful E2E frontend must disable Vite browser auto-open\n' >&2
+  exit 1
+}
 
 expect_failure() {
   local expected=$1; shift
