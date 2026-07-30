@@ -36,10 +36,6 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
   const providerName = `E2E-Provider-${Date.now()}`;
   let providerID = '';
   try {
-    await withTenantQuery(pool, tenantID, {
-      text: `DELETE FROM providers WHERE tenant_id=$1 AND name LIKE 'E2E-Provider-%'`,
-      values: [tenantID],
-    });
     // Ensure baseline models are present (stateful-qwen provider + qwen models)
     await configureManagedModels(pool, tenantID);
 

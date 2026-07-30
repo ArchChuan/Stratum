@@ -223,6 +223,7 @@ describe('stateful E2E security boundaries', () => {
     const query = vi.fn()
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ rowCount: 0 })
       .mockResolvedValueOnce({ rowCount: 1 })
       .mockResolvedValueOnce({ rowCount: 4 })
       .mockResolvedValueOnce({});
@@ -235,13 +236,14 @@ describe('stateful E2E security boundaries', () => {
     expect(query).toHaveBeenNthCalledWith(2, "SELECT set_config('search_path', $1, true)", [
       `tenant_${tenantID},public`,
     ]);
-    expect(query).toHaveBeenNthCalledWith(3, expect.stringContaining('INSERT INTO providers'), [
+    expect(query).toHaveBeenNthCalledWith(3, expect.stringContaining("name LIKE 'E2E-Provider-%'"), [tenantID]);
+    expect(query).toHaveBeenNthCalledWith(4, expect.stringContaining('INSERT INTO providers'), [
       'stateful-qwen', tenantID, 'http://127.0.0.1:19091/v1', 'stateful-local-provider-key',
     ]);
-    expect(query).toHaveBeenNthCalledWith(4, expect.stringContaining('INSERT INTO models'), [
+    expect(query).toHaveBeenNthCalledWith(5, expect.stringContaining('INSERT INTO models'), [
       tenantID, 'stateful-qwen',
     ]);
-    expect(query).toHaveBeenNthCalledWith(5, 'COMMIT');
+    expect(query).toHaveBeenNthCalledWith(6, 'COMMIT');
     expect(release).toHaveBeenCalledOnce();
   });
 

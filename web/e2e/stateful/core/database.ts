@@ -155,6 +155,11 @@ export const configureManagedModels = async (pool: DatabasePool, tenantID: strin
     await client.query('BEGIN');
     began = true;
     await client.query("SELECT set_config('search_path', $1, true)", [`tenant_${tenantID},public`]);
+    await client.query(
+      `DELETE FROM providers
+       WHERE tenant_id = $1 AND name LIKE 'E2E-Provider-%'`,
+      [tenantID],
+    );
     const providerResult = await client.query(
       `INSERT INTO providers (id, tenant_id, name, kind, base_url, api_key, default_model, enabled)
        VALUES ($1, $2, 'stateful-qwen', 'openai_compat', $3, $4, 'qwen-max', true)
