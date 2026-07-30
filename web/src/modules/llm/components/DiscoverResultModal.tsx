@@ -16,6 +16,7 @@ interface Props {
 
 export function DiscoverResultModal({ open, onClose, results, providerName }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const safeResults: Model[] = results ?? [];
 
   useEffect(() => { setExpanded(new Set()); }, [results]);
 
@@ -47,11 +48,11 @@ export function DiscoverResultModal({ open, onClose, results, providerName }: Pr
     >
       <div style={{ marginBottom: 16 }}>
         <Text>
-          共发现 <Text strong>{results.length}</Text> 个模型
+          共发现 <Text strong>{safeResults.length}</Text> 个模型
         </Text>
       </div>
       <Table
-        dataSource={results}
+        dataSource={safeResults}
         columns={columns}
         rowKey="id"
         pagination={false}

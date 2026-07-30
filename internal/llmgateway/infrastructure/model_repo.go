@@ -205,6 +205,9 @@ func (r *PgModelRepo) UpsertDiscovered(ctx context.Context, tenantID, providerID
 		}
 		return rows.Err()
 	})
+	if result == nil {
+		result = []domain.Model{}
+	}
 	return result, err
 }
 

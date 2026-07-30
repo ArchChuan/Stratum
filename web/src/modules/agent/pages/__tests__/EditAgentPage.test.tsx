@@ -17,8 +17,8 @@ const baseHook = {
   skills: [],
   mcpTools: [],
   workspaces: [],
-  chatModels: [],
-	managementPath: '/agents/list',
+  groupedModels: [],
+  managementPath: '/agents/list',
   navigate: vi.fn(),
   onFinish: vi.fn(),
 };

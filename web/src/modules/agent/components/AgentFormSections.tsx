@@ -11,13 +11,18 @@ import { SectionHeader } from '@/shared/ui';
 
 const { Text } = Typography;
 const { TextArea } = Input;
-const { Option } = Select;
+const { Option, OptGroup } = Select;
+
+export interface GroupedModelOption {
+  provider: string;
+  models: { value: string; label: string }[];
+}
 
 interface AgentFormSectionsProps {
   skills: Skill[];
   mcpTools: MCPToolOption[];
   workspaces: Workspace[];
-  chatModels: string[];
+  groupedModels: GroupedModelOption[];
   currentModel?: string;
 }
 
@@ -25,10 +30,11 @@ export const AgentFormSections = ({
   skills,
   mcpTools,
   workspaces,
-  chatModels,
+  groupedModels,
   currentModel,
-}: AgentFormSectionsProps) => (
-  <>
+}: AgentFormSectionsProps) => {
+  return (
+    <>
     <Form.Item name="type" hidden>
       <Input />
     </Form.Item>
@@ -106,14 +112,24 @@ export const AgentFormSections = ({
           placeholder="选择推理模型"
           notFoundContent="模型管理中没有可用的推理模型"
           showSearch
-          optionFilterProp="label"
-          options={[
-            ...(currentModel && !chatModels.includes(currentModel)
-              ? [{ value: currentModel, label: `${currentModel}（当前不可用）`, disabled: true }]
-              : []),
-            ...chatModels.map((model) => ({ value: model, label: model })),
-          ]}
-        />
+          optionFilterProp="children"
+        >
+          {currentModel &&
+            !groupedModels.some((g) => g.models.some((m) => m.value === currentModel)) && (
+              <Option value={currentModel} disabled>
+                {currentModel}（当前不可用）
+              </Option>
+            )}
+          {groupedModels.map((group) => (
+            <OptGroup key={group.provider} label={group.provider}>
+              {group.models.map((m) => (
+                <Option key={m.value} value={m.value}>
+                  {m.label}
+                </Option>
+              ))}
+            </OptGroup>
+          ))}
+        </Select>
       </Form.Item>
       <Form.Item
         label="技能"
@@ -208,4 +224,5 @@ export const AgentFormSections = ({
 
     <AgentMemoryConfig />
   </>
-);
+  );
+};

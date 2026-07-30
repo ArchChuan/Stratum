@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
+	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 )
 
 const CodeSystemAssistantModelUnavailable = "SYSTEM_ASSISTANT_MODEL_UNAVAILABLE"
@@ -19,6 +20,9 @@ func DescribePublicError(err error, status int) PublicErrorDescriptor {
 			Message: "租户尚未配置平台助手模型",
 			Code:    CodeSystemAssistantModelUnavailable,
 		}
+	}
+	if errors.Is(err, llmgatewaydomain.ErrUpstreamRequestFailed) {
+		return PublicErrorDescriptor{Message: err.Error()}
 	}
 	if status >= 500 {
 		return PublicErrorDescriptor{Message: "internal server error"}

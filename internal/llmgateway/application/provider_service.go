@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"strings"
+
 	"github.com/google/uuid"
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
@@ -122,8 +124,9 @@ func (s *ProviderService) Delete(ctx context.Context, tenantID, id string) error
 }
 
 // DiscoverModels queries the provider's API for available models and upserts
-// them into the model repository. Only chat models are discovered (embedding
-// model discovery is handled separately when needed).
+// them into the model repository. Model capabilities are inferred from the
+// model name — models containing "embed" are classified as embedding, others
+// default to chat.
 func (s *ProviderService) DiscoverModels(ctx context.Context, tenantID, providerID string) ([]domain.Model, error) {
 	provider, err := s.repo.Get(ctx, tenantID, providerID)
 	if err != nil {
@@ -143,7 +146,7 @@ func (s *ProviderService) DiscoverModels(ctx context.Context, tenantID, provider
 			ProviderID:      providerID,
 			Name:            name,
 			DisplayName:     name,
-			Capabilities:    []domain.ModelCapability{domain.CapChat},
+			Capabilities:    inferCapabilities(name),
 			ProviderManaged: true,
 			Enabled:         true,
 		})
@@ -160,6 +163,17 @@ func (s *ProviderService) invalidate(tenantID string) {
 	if s.invalidator != nil {
 		s.invalidator.Invalidate(tenantID)
 	}
+}
+
+// inferCapabilities deduces model capabilities from the model name using
+// provider-agnostic naming conventions. All major LLM providers follow the
+// pattern of including "embed" in embedding model names.
+func inferCapabilities(name string) []domain.ModelCapability {
+	lower := strings.ToLower(name)
+	if strings.Contains(lower, "embed") {
+		return []domain.ModelCapability{domain.CapEmbedding}
+	}
+	return []domain.ModelCapability{domain.CapChat}
 }
 
 // HealthCheck verifies that the provider is reachable by calling the

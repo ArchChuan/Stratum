@@ -10,7 +10,7 @@ const { Title, Text } = Typography;
 
 export const EditAgentPage = () => {
   const {
-    agent, form, loading, pageLoading, skills, mcpTools, workspaces, chatModels,
+    agent, form, loading, pageLoading, skills, mcpTools, workspaces, groupedModels,
     navigate, managementPath, onFinish,
   } = useEditAgentPage();
 
@@ -74,7 +74,7 @@ export const EditAgentPage = () => {
           skills={skills}
           mcpTools={mcpTools}
           workspaces={workspaces}
-          chatModels={chatModels}
+          groupedModels={groupedModels}
           currentModel={agent?.llmModel}
         />
 

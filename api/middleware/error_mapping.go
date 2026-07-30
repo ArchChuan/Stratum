@@ -11,6 +11,7 @@ import (
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	iamdomain "github.com/byteBuilderX/stratum/internal/iam/domain"
 	knowledgedomain "github.com/byteBuilderX/stratum/internal/knowledge/domain"
+	llmgatewaydomain "github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	memoryapp "github.com/byteBuilderX/stratum/internal/memory/application"
 	memorydomain "github.com/byteBuilderX/stratum/internal/memory/domain"
@@ -49,6 +50,7 @@ func NewHTTPError(status int, err error) *HTTPError {
 // errorStatusTable maps sentinel domain errors to HTTP status codes.
 // New entries only need to be added here; MapErrorToStatus walks the table.
 var errorStatusTable = map[error]int{
+	llmgatewaydomain.ErrUpstreamRequestFailed:     http.StatusBadGateway,
 	agentdomain.ErrEvidenceUnavailable:            http.StatusServiceUnavailable,
 	agentdomain.ErrAssistantModelUnavailable:      http.StatusServiceUnavailable,
 	agentdomain.ErrEvidenceInvalid:                http.StatusBadGateway,

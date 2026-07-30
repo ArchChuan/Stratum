@@ -9,7 +9,7 @@ import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 const { Title, Text } = Typography;
 
 export const CreateAgentPage = () => {
-  const { form, loading, skills, mcpTools, workspaces, chatModels, navigate, onFinish } =
+  const { form, loading, skills, mcpTools, workspaces, groupedModels, navigate, onFinish } =
     useCreateAgentPage();
 
   return (
@@ -43,7 +43,7 @@ export const CreateAgentPage = () => {
           skills={skills}
           mcpTools={mcpTools}
           workspaces={workspaces}
-          chatModels={chatModels}
+          groupedModels={groupedModels}
         />
 
         <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

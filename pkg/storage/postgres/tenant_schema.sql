@@ -37,6 +37,7 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_context_tokens INTEGER NOT NULL 
 ALTER TABLE agents DROP COLUMN IF EXISTS embed_model;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'agent';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS system_key TEXT;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS checkpoint_enabled BOOLEAN NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_system_key
     ON agents(system_key) WHERE system_key IS NOT NULL;
 
