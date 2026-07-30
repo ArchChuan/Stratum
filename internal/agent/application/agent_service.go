@@ -43,7 +43,8 @@ type AgentServiceDeps struct {
 	TenantResolver            port.TenantCapabilityResolver
 	TenantModelValidator      port.TenantChatModelValidator
 	TenantModelCatalog        port.TenantChatModelCatalog
-	HistoryCompactorFactory   func(port.CapabilityGateway, string, *zap.Logger) port.HistoryCompactor
+	ModelContextProvider      port.ModelContextProvider
+	HistoryCompactorFactory   func(port.CapabilityGateway, string, *zap.Logger, int) port.HistoryCompactor
 	MCPTools                  port.MCPToolProvider
 	MCPToolExecutor           port.MCPToolExecutor
 	MCPToolPolicy             port.MCPToolPolicyResolver
@@ -168,6 +169,10 @@ type SystemAssistantSettings struct {
 // Create persists a new agent for the tenant.
 func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDTO, error) {
 	id := uuid.Must(uuid.NewV7()).String()
+	maxCtxTokens := in.MaxContextTokens
+	if maxCtxTokens <= 0 {
+		maxCtxTokens = s.deriveMaxContextTokens(ctx, in.TenantID, in.LLMModel)
+	}
 	cfg := &domain.AgentConfig{
 		ID:                    id,
 		Name:                  in.Name,
@@ -176,7 +181,7 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		SystemPrompt:          in.SystemPrompt,
 		LLMModel:              in.LLMModel,
 		MaxIterations:         in.MaxIterations,
-		MaxContextTokens:      in.MaxContextTokens,
+		MaxContextTokens:      maxCtxTokens,
 		AllowedSkills:         in.AllowedSkills,
 		MCPToolIDs:            in.MCPToolIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
@@ -474,6 +479,11 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 	if skills == nil {
 		skills = []string{}
 	}
+	maxCtxTokens := in.MaxContextTokens
+	if maxCtxTokens <= 0 {
+		tenantID := reqctx.TenantIDFromContext(ctx)
+		maxCtxTokens = s.deriveMaxContextTokens(ctx, tenantID, in.LLMModel)
+	}
 	cfg := &domain.AgentConfig{
 		ID:                    id,
 		Name:                  in.Name,
@@ -482,7 +492,7 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		SystemPrompt:          in.SystemPrompt,
 		LLMModel:              in.LLMModel,
 		MaxIterations:         in.MaxIterations,
-		MaxContextTokens:      in.MaxContextTokens,
+		MaxContextTokens:      maxCtxTokens,
 		AllowedSkills:         skills,
 		MCPToolIDs:            in.MCPToolIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
@@ -1170,7 +1180,8 @@ func (s *AgentService) assembleOptions(
 				setter.SetCapGateway(capGW)
 			}
 			if s.deps.HistoryCompactorFactory != nil {
-				if compactor := s.deps.HistoryCompactorFactory(capGW, a.GetConfig().LLMModel, s.deps.Logger); compactor != nil {
+				compactionMaxTokens := constants.DynamicCompactionMaxTokens(a.GetConfig().MaxContextTokens)
+				if compactor := s.deps.HistoryCompactorFactory(capGW, a.GetConfig().LLMModel, s.deps.Logger, compactionMaxTokens); compactor != nil {
 					type historyCompactorSetter interface {
 						SetHistoryCompactor(port.HistoryCompactor)
 					}
@@ -1677,4 +1688,23 @@ func executionIDOrNew(id string) string {
 		return uuid.Must(uuid.NewV7()).String()
 	}
 	return id
+}
+
+// deriveMaxContextTokens returns a sensible MaxContextTokens for the given model.
+// User-explicit value always wins; when zero the method derives from the model's
+// known ContextWindow capped by DefaultAgentContextTokensCeiling; fallback is
+// DefaultAgentContextTokens.
+func (s *AgentService) deriveMaxContextTokens(ctx context.Context, tenantID, model string) int {
+	if model == "" || s.deps.ModelContextProvider == nil {
+		return constants.DefaultAgentContextTokens
+	}
+	cw, err := s.deps.ModelContextProvider.GetChatModelContextWindow(ctx, tenantID, model)
+	if err != nil || cw <= 0 {
+		return constants.DefaultAgentContextTokens
+	}
+	derived := int(float64(cw) * constants.DefaultContextWindowRatio)
+	if derived > constants.DefaultAgentContextTokensCeiling {
+		return constants.DefaultAgentContextTokensCeiling
+	}
+	return derived
 }

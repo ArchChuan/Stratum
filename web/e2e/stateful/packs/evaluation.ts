@@ -145,7 +145,7 @@ export const executeEvaluationPack = async ({
     await page.getByLabel('系统提示词').fill('执行激活的 Skill，并返回确定的 stateful 结果。');
     await page.getByLabel('LLM 模型').click();
     await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
-      .filter({ hasText: /^qwen-max$/ }).click();
+      .filter({ hasText: /^qwen-max$/ }).first().click();
     const agentResponse = waitFor(page, '/agents', 'POST');
     await page.getByRole('button', { name: '创建 Agent' }).click();
     const createdAgent = await agentResponse;

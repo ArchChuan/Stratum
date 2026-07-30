@@ -38,7 +38,7 @@ export const executeAgentContextPack = async ({
     await workspaceDialog.getByLabel('描述').fill('Agent Knowledge 与 Memory 上下文联动验收');
     await workspaceDialog.getByLabel('嵌入模型').click();
     await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
-      .filter({ hasText: /^text-embedding-v3$/ }).click();
+      .filter({ hasText: /^text-embedding-v3$/ }).first().click();
     const workspaceResponse = waitFor(page, '/knowledge/workspaces', 'POST');
     await workspaceDialog.getByRole('button', { name: /创\s*建/ }).click();
     expect((await workspaceResponse).status()).toBe(201);
@@ -69,7 +69,7 @@ export const executeAgentContextPack = async ({
     await page.getByLabel('系统提示词').fill('结合知识与用户记忆回答，并返回 stateful stream completed。');
     await page.getByLabel('LLM 模型').click();
     await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
-      .filter({ hasText: /^qwen-max$/ }).click();
+      .filter({ hasText: /^qwen-max$/ }).first().click();
     await page.locator('.ant-select-selector').filter({ hasText: '选择知识库' }).click();
     await page.locator('.ant-select-item-option-content').filter({ hasText: workspace }).click();
     const agentResponse = waitFor(page, '/agents', 'POST');

@@ -35,7 +35,7 @@ func (errChatProto) CompleteStream(ctx context.Context, cfg infrastructure.Provi
 func (errChatProto) Health(ctx context.Context, cfg infrastructure.ProviderConfig) error {
 	return errors.New("provider error")
 }
-func (errChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]string, error) {
+func (errChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]infrastructure.DiscoveredModel, error) {
 	return nil, nil
 }
 
@@ -52,7 +52,7 @@ func (successChatProto) CompleteStream(ctx context.Context, cfg infrastructure.P
 func (successChatProto) Health(ctx context.Context, cfg infrastructure.ProviderConfig) error {
 	return nil
 }
-func (successChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]string, error) {
+func (successChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]infrastructure.DiscoveredModel, error) {
 	return nil, nil
 }
 

@@ -89,6 +89,7 @@ type ProposalEnvelope struct {
 type AgentChange struct {
 	Name             string   `json:"name"`
 	Description      string   `json:"description"`
+	SystemPrompt     string   `json:"systemPrompt,omitempty"`
 	Model            string   `json:"model"`
 	MaxIterations    int      `json:"maxIterations"`
 	MaxContextTokens int      `json:"maxContextTokens"`

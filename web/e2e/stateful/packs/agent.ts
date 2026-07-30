@@ -43,7 +43,7 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     await page.getByLabel('系统提示词').fill('请简洁回答，并明确包含 stateful。');
     await page.getByLabel('LLM 模型').click();
     await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
-      .filter({ hasText: /^qwen-max$/ }).click();
+      .filter({ hasText: /^qwen-max$/ }).first().click();
     await expect(page.getByRole('slider', { name: '最大迭代次数' })).toHaveAttribute('aria-valuemax', '90');
     const createResponse = waitForMutation(page, '/agents', 'POST');
     const createdListResponse = waitForMutation(page, '/agents', 'GET');

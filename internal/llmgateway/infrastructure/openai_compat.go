@@ -519,6 +519,55 @@ func (c *OpenAICompatClient) Models() []string {
 	return c.cfg.Models
 }
 
+// ListModels discovers models via GET /models with static context-window fallback.
+func (c *OpenAICompatClient) ListModels(ctx context.Context) ([]DiscoveredModel, error) {
+	names, err := c.fetchModelNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DiscoveredModel, len(names))
+	for i, name := range names {
+		ctxWin, maxOut := lookupModelSpec(name)
+		out[i] = DiscoveredModel{Name: name, ContextWindow: ctxWin, MaxOutputTokens: maxOut}
+	}
+	return out, nil
+}
+
+// fetchModelNames calls GET /models and returns the raw name list.
+func (c *OpenAICompatClient) fetchModelNames(ctx context.Context) ([]string, error) {
+	url := strings.TrimSuffix(c.cfg.BaseURL, "/") + "/models"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%s: build models request: %w", c.cfg.Name, err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("%s: do models request: %w", c.cfg.Name, err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("%s: read models body: %w", c.cfg.Name, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: GET %s returned %d: check API key and base URL",
+			c.cfg.Name, url, resp.StatusCode)
+	}
+
+	var out openaiModelsResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("%s: decode models: %w", c.cfg.Name, err)
+	}
+	models := make([]string, len(out.Data))
+	for i, m := range out.Data {
+		models[i] = m.ID
+	}
+	return models, nil
+}
+
 // ---------------------------------------------------------------------------
 // ChatProtocol adapters — stateless wrappers that accept a ProviderConfig at
 // call time, delegating to the existing instance-method implementations.
@@ -541,9 +590,9 @@ func (c *OpenAICompatClient) ChatHealth(ctx context.Context, cfg ProviderConfig)
 	return c.Health(ctx)
 }
 
-// ChatListModels delegates to the instance's Models method.
-func (c *OpenAICompatClient) ChatListModels(ctx context.Context, cfg ProviderConfig) ([]string, error) {
-	return c.Models(), nil
+// ChatListModels delegates to the instance's ListModels method.
+func (c *OpenAICompatClient) ChatListModels(ctx context.Context, cfg ProviderConfig) ([]DiscoveredModel, error) {
+	return c.ListModels(ctx)
 }
 
 // EmbedCreateEmbeddings delegates to the instance's CreateEmbeddings method.
@@ -603,7 +652,7 @@ func (p *OpenAICompatProtocol) Health(ctx context.Context, cfg ProviderConfig) e
 	return p.clientFor(cfg).Health(ctx)
 }
 
-func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]string, error) {
+func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]DiscoveredModel, error) {
 	url := strings.TrimSuffix(cfg.BaseURL, "/") + "/models"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -630,9 +679,10 @@ func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfi
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("openai compat: decode models: %w", err)
 	}
-	models := make([]string, len(out.Data))
+	models := make([]DiscoveredModel, len(out.Data))
 	for i, m := range out.Data {
-		models[i] = m.ID
+		ctxWin, maxOut := lookupModelSpec(m.ID)
+		models[i] = DiscoveredModel{Name: m.ID, ContextWindow: ctxWin, MaxOutputTokens: maxOut}
 	}
 	return models, nil
 }

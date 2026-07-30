@@ -387,8 +387,9 @@ func (c *OllamaClient) Health(ctx context.Context) error {
 	return nil
 }
 
-// ListModels discovers models via GET /api/tags.
-func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
+// ListModels discovers models via GET /api/tags. Ollama does not expose
+// context-window metadata in its tags response, so those fields are zero.
+func (c *OllamaClient) ListModels(ctx context.Context) ([]DiscoveredModel, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		strings.TrimSuffix(c.cfg.BaseURL, "/")+"/api/tags", nil)
 	if err != nil {
@@ -414,9 +415,9 @@ func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("%s: decode tags: %w", c.cfg.Name, err)
 	}
 
-	models := make([]string, len(out.Models))
+	models := make([]DiscoveredModel, len(out.Models))
 	for i, m := range out.Models {
-		models[i] = m.Name
+		models[i] = DiscoveredModel{Name: m.Name}
 	}
 	return models, nil
 }
@@ -577,7 +578,7 @@ func (p *OllamaProtocol) Health(ctx context.Context, cfg ProviderConfig) error {
 }
 
 // ListModels implements ChatProtocol.
-func (p *OllamaProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]string, error) {
+func (p *OllamaProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]DiscoveredModel, error) {
 	return p.clientFor(cfg).ListModels(ctx)
 }
 

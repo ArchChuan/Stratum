@@ -128,7 +128,7 @@ func (m *mockChatProto) Health(ctx context.Context, cfg infrastructure.ProviderC
 	return nil
 }
 
-func (m *mockChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]string, error) {
+func (m *mockChatProto) ListModels(ctx context.Context, cfg infrastructure.ProviderConfig) ([]infrastructure.DiscoveredModel, error) {
 	return nil, nil
 }
 

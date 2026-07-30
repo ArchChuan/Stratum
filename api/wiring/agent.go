@@ -245,8 +245,9 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		TenantResolver:          a.TenantResolver,
 		TenantModelValidator:    tenantModelValidator(a.TenantResolver),
 		TenantModelCatalog:      tenantModelCatalog(a.TenantResolver),
-		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger) agentport.HistoryCompactor {
-			return capgateway.NewLLMHistoryCompactor(gw, model, logger)
+		ModelContextProvider:    modelContextProvider(a.TenantResolver),
+		HistoryCompactorFactory: func(gw agentport.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int) agentport.HistoryCompactor {
+			return capgateway.NewLLMHistoryCompactor(gw, model, logger, compactionMaxTokens)
 		},
 		ChatStore:         a.ChatStore,
 		EvidenceProvider:  a.EvidenceProvider,
@@ -330,4 +331,9 @@ func tenantModelValidator(resolver agentport.TenantCapabilityResolver) agentport
 func tenantModelCatalog(resolver agentport.TenantCapabilityResolver) agentport.TenantChatModelCatalog {
 	catalog, _ := resolver.(agentport.TenantChatModelCatalog)
 	return catalog
+}
+
+func modelContextProvider(resolver agentport.TenantCapabilityResolver) agentport.ModelContextProvider {
+	provider, _ := resolver.(agentport.ModelContextProvider)
+	return provider
 }
