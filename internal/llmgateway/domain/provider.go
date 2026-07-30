@@ -1,6 +1,14 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+// ErrUpstreamRequestFailed indicates the provider's API returned an unexpected
+// HTTP status on an operational endpoint (model discovery, health check).
+// The wrapping error carries diagnostic details: provider name, URL, status code.
+var ErrUpstreamRequestFailed = errors.New("upstream provider request failed")
 
 // ProviderKind enumerates supported LLM provider categories.
 type ProviderKind string
