@@ -1000,32 +1000,9 @@ func readySet(spec domain.Spec, states map[string]domain.NodeAttempt) (ready, sk
 			ready = append(ready, node)
 			continue
 		}
-		resolved, selected, selectedSucceeded := 0, 0, 0
-		for _, edge := range edges {
-			source, ok := states[edge.From]
-			if !ok {
-				continue
-			}
-			switch source.Status {
-			case domain.AttemptStatusSkipped:
-				resolved++
-			case domain.AttemptStatusSucceeded:
-				resolved++
-				chosen := true
-				if byID[edge.From].Type == domain.NodeTypeCondition {
-					value, parseErr := strconv.ParseBool(source.OutputSummary)
-					if parseErr != nil {
-						return nil, nil, false, parseErr
-					}
-					chosen = conditionEdgeSelected(spec, edge.From, edge, value)
-				}
-				if chosen {
-					selected++
-					selectedSucceeded++
-				}
-			case domain.AttemptStatusFailed:
-				return nil, nil, false, fmt.Errorf("upstream node %s failed", edge.From)
-			}
+		resolved, selected, selectedSucceeded, err := countIncomingEdgeResolutions(edges, states, byID, spec)
+		if err != nil {
+			return nil, nil, false, err
 		}
 		if resolved == len(edges) {
 			if selected == 0 {
@@ -1038,6 +1015,36 @@ func readySet(spec domain.Spec, states map[string]domain.NodeAttempt) (ready, sk
 	sort.Slice(ready, func(i, j int) bool { return ready[i].ID < ready[j].ID })
 	sort.Slice(skipped, func(i, j int) bool { return skipped[i].ID < skipped[j].ID })
 	return ready, skipped, terminal == len(spec.Nodes), nil
+}
+
+func countIncomingEdgeResolutions(edges []domain.Edge, states map[string]domain.NodeAttempt, byID map[string]domain.Node, spec domain.Spec) (resolved, selected, selectedSucceeded int, err error) {
+	for _, edge := range edges {
+		source, ok := states[edge.From]
+		if !ok {
+			continue
+		}
+		switch source.Status {
+		case domain.AttemptStatusSkipped:
+			resolved++
+		case domain.AttemptStatusSucceeded:
+			resolved++
+			chosen := true
+			if byID[edge.From].Type == domain.NodeTypeCondition {
+				value, parseErr := strconv.ParseBool(source.OutputSummary)
+				if parseErr != nil {
+					return 0, 0, 0, parseErr
+				}
+				chosen = conditionEdgeSelected(spec, edge.From, edge, value)
+			}
+			if chosen {
+				selected++
+				selectedSucceeded++
+			}
+		case domain.AttemptStatusFailed:
+			return 0, 0, 0, fmt.Errorf("upstream node %s failed", edge.From)
+		}
+	}
+	return resolved, selected, selectedSucceeded, nil
 }
 
 func hasConditionalRouting(spec domain.Spec) bool {

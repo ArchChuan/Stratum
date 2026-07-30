@@ -19,12 +19,14 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 )
 
-const mcpProtocolVersion = "2025-06-18"
+const mcpProtocolVersion = constants.MCPProtocolVersion
 
 // MCPClient 定义 MCP 客户端接口
 type MCPClient interface {
@@ -353,71 +355,16 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 		return err
 	}
 	c.httpClient = &http.Client{Transport: transport, Timeout: c.config.Timeout}
-
-	initReq := MCPRequest{
-		JSONRPC: "2.0",
-		ID:      c.nextID(),
-		Method:  "initialize",
-		Params: map[string]interface{}{
-			"protocolVersion": mcpProtocolVersion,
-			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "stratum", "version": "1.0"},
-		},
-	}
-	data, err := json.Marshal(initReq)
+	initReq := c.newHTTPInitializeRequest()
+	resp, err := c.sendHTTPInitialize(ctx, &initReq)
 	if err != nil {
-		return fmt.Errorf("failed to marshal initialize request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", c.config.URL, bytes.NewReader(data))
-	if err != nil {
-		return errors.New("MCP HTTP initialize request invalid")
-	}
-	if err := c.applyHTTPHeaders(ctx, req, false, ""); err != nil {
 		return err
 	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return errors.New("MCP HTTP initialize transport failed")
-	}
 	defer resp.Body.Close() //nolint:errcheck
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("MCP HTTP initialize failed with status %d", resp.StatusCode)
-	}
-	initializeResponse, err := decodeHTTPMCPResponse(resp)
+	initializeResult, err := validateHTTPInitializeResponse(resp, initReq.ID)
 	if err != nil {
-		return fmt.Errorf("decode MCP initialize response: %w", err)
+		return err
 	}
-	if initializeResponse.JSONRPC != "2.0" || initializeResponse.ID != initReq.ID {
-		return errors.New("MCP initialize response envelope invalid")
-	}
-	if len(initializeResponse.Error) > 0 && string(initializeResponse.Error) != "null" {
-		return errors.New("MCP initialize protocol error")
-	}
-	var initializeResult struct {
-		ProtocolVersion string          `json:"protocolVersion"`
-		Capabilities    json.RawMessage `json:"capabilities"`
-		ServerInfo      struct {
-			Name    string `json:"name"`
-			Version string `json:"version"`
-		} `json:"serverInfo"`
-	}
-	resultData, err := json.Marshal(initializeResponse.Result)
-	if err != nil {
-		return errors.New("MCP initialize result invalid")
-	}
-	if err := json.Unmarshal(resultData, &initializeResult); err != nil {
-		return errors.New("MCP initialize result invalid")
-	}
-	if initializeResult.ProtocolVersion != mcpProtocolVersion {
-		return errors.New("MCP initialize selected unsupported protocol version")
-	}
-	if len(initializeResult.Capabilities) == 0 || string(initializeResult.Capabilities) == "null" ||
-		initializeResult.ServerInfo.Name == "" || initializeResult.ServerInfo.Version == "" {
-		return errors.New("MCP initialize result incomplete")
-	}
-
 	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
 		c.sessionID = sid
 	}
@@ -428,9 +375,98 @@ func (c *BaseClient) connectHTTP(ctx context.Context) error {
 		c.negotiatedVersion = ""
 		return err
 	}
-
 	c.logger.Info("HTTP connection established", zap.String("transport", c.config.Transport),
 		zap.String("server_id", c.config.ID))
+	return nil
+}
+
+type httpInitializeResult struct {
+	ProtocolVersion string          `json:"protocolVersion"`
+	Capabilities    json.RawMessage `json:"capabilities"`
+	ServerInfo      struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	} `json:"serverInfo"`
+}
+
+func (c *BaseClient) newHTTPInitializeRequest() MCPRequest {
+	return MCPRequest{
+		JSONRPC: "2.0",
+		ID:      c.nextID(),
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": constants.MCPProtocolVersion,
+			"capabilities":    map[string]interface{}{},
+			"clientInfo":      map[string]interface{}{"name": "stratum", "version": "1.0"},
+		},
+	}
+}
+
+func (c *BaseClient) sendHTTPInitialize(ctx context.Context, initReq *MCPRequest) (*http.Response, error) {
+	data, err := json.Marshal(initReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal initialize request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.config.URL, bytes.NewReader(data))
+	if err != nil {
+		return nil, errors.New("MCP HTTP initialize request invalid")
+	}
+	if err := c.applyHTTPHeaders(ctx, req, false, ""); err != nil {
+		return nil, err
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, errors.New("MCP HTTP initialize transport failed")
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("MCP HTTP initialize failed with status %d", resp.StatusCode)
+	}
+	return resp, nil
+}
+
+func validateHTTPInitializeResponse(resp *http.Response, requestID int) (httpInitializeResult, error) {
+	initializeResponse, err := decodeHTTPMCPResponse(resp)
+	if err != nil {
+		return httpInitializeResult{}, fmt.Errorf("decode MCP initialize response: %w", err)
+	}
+	if err := validateHTTPInitializeEnvelope(initializeResponse, requestID); err != nil {
+		return httpInitializeResult{}, err
+	}
+	var initializeResult httpInitializeResult
+	resultData, err := json.Marshal(initializeResponse.Result)
+	if err != nil {
+		return httpInitializeResult{}, errors.New("MCP initialize result invalid")
+	}
+	if err := json.Unmarshal(resultData, &initializeResult); err != nil {
+		return httpInitializeResult{}, errors.New("MCP initialize result invalid")
+	}
+	if err := validateHTTPInitializeResult(initializeResult); err != nil {
+		return httpInitializeResult{}, err
+	}
+	return initializeResult, nil
+}
+
+func validateHTTPInitializeEnvelope(response *MCPResponse, requestID int) error {
+	if response.JSONRPC != "2.0" || response.ID != requestID {
+		return errors.New("MCP initialize response envelope invalid")
+	}
+	if len(response.Error) > 0 && string(response.Error) != "null" {
+		return errors.New("MCP initialize protocol error")
+	}
+	return nil
+}
+
+func validateHTTPInitializeResult(result httpInitializeResult) error {
+	if result.ProtocolVersion != mcpProtocolVersion {
+		return errors.New("MCP initialize selected unsupported protocol version")
+	}
+	if len(result.Capabilities) == 0 || string(result.Capabilities) == "null" ||
+		result.ServerInfo.Name == "" || result.ServerInfo.Version == "" {
+		return errors.New("MCP initialize result incomplete")
+	}
 	return nil
 }
 

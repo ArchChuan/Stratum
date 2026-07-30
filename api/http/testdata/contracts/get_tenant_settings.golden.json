@@ -1,0 +1,14 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/tenant/settings",
+    "want_status": 200,
+    "want_body": {
+      "tenant_id": "contract-tenant",
+      "tenant_name": "stub-tenant",
+      "is_default": false,
+      "settings": {}
+    }
+  }
+]

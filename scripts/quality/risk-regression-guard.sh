@@ -17,6 +17,7 @@ labels=(
   frontend-auth
   frontend-supply-chain
   tool-permissions
+  code-quality
 )
 declare -A selected=()
 acceptance_mode=short
@@ -42,6 +43,11 @@ select_all() {
 
 select_for_path() {
   local path="$1"
+  case "${path}" in
+    *.go|.golangci.yml|scripts/quality/code-quality-*|.pre-commit-config.yaml|Makefile|.github/workflows/ci.yml)
+      selected[code-quality]=1
+      ;;
+  esac
   case "${path}" in
     api/wiring/*|.golangci.yml)
       selected[architecture]=1
@@ -200,6 +206,9 @@ for label in "${labels[@]}"; do
       ;;
     tool-permissions)
       run_check "${label}" make tool-permission-test
+      ;;
+    code-quality)
+      run_check "${label}" /bin/bash scripts/quality/code-quality-ratchet.sh --all
       ;;
   esac
 done

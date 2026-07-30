@@ -139,9 +139,23 @@ func NewFromExisting(
 	memPipeline *mempipeline.Pipeline,
 ) (*Container, error) {
 	c := &Container{Config: cfg, Logger: logger}
+	if err := c.adoptExistingStorage(ctx, db, rdb); err != nil {
+		return nil, err
+	}
+	if err := c.adoptExistingGateway(ctx, gateway, db); err != nil {
+		_ = c.Shutdown(ctx)
+		return nil, err
+	}
+	if err := c.buildExistingRuntime(ctx, memPipeline); err != nil {
+		_ = c.Shutdown(ctx)
+		return nil, err
+	}
+	return c, nil
+}
 
-	// Storage: adopt existing pgx + redis; Milvus + NATS still owned by
-	// downstream sub-builders that need them (knowledge / memory).
+func (c *Container) adoptExistingStorage(
+	ctx context.Context, db *pgxpool.Pool, rdb *goredis.Client,
+) error {
 	storage := &Storage{}
 	if db != nil {
 		storage.PG = postgres.Wrap(db)
@@ -149,47 +163,43 @@ func NewFromExisting(
 	if rdb != nil {
 		storage.Redis = pkgredis.Wrap(rdb)
 	}
-	mil := milvus.NewVectorStore(cfg.MilvusHost, cfg.MilvusPort, logger)
+	mil := milvus.NewVectorStore(c.Config.MilvusHost, c.Config.MilvusPort, c.Logger)
 	if err := mil.Connect(ctx); err != nil {
-		logger.Warn("failed to connect to Milvus", zap.Error(err))
+		c.Logger.Warn("failed to connect to Milvus", zap.Error(err))
 	}
 	storage.Milvus = mil
 	c.Storage = storage
 	c.shutdown = append(c.shutdown, func(_ context.Context) error { return mil.Close() })
+	return nil
+}
 
-	// LLMGateway: build from DB using the standard builder.
-	// When db is unavailable (contract test path), use the gateway
-	// constructed by the caller so downstream sub-builders (platform)
-	// don't panic on a nil c.LLMGateway.
+func (c *Container) adoptExistingGateway(
+	ctx context.Context, gateway *llmgateway.Gateway, db *pgxpool.Pool,
+) error {
 	if db != nil {
 		if err := c.buildLLMGateway(ctx); err != nil {
-			_ = c.Shutdown(ctx)
-			return nil, fmt.Errorf("wiring.llmgateway: %w", err)
+			return fmt.Errorf("wiring.llmgateway: %w", err)
 		}
-	} else if gateway != nil {
+		return nil
+	}
+	if gateway != nil {
 		c.LLMGateway = &LLMGateway{
 			Gateway: gateway,
-			Metrics: observability.NewPrometheusMetrics(logger),
+			Metrics: observability.NewPrometheusMetrics(c.Logger),
 		}
 	}
+	return nil
+}
 
-	// Run the derived sub-builders that don't need Skill or Memory yet.
-	for _, step := range c.newFromExistingInitialSteps() {
-		if err := step.fn(ctx); err != nil {
-			_ = c.Shutdown(ctx)
-			return nil, fmt.Errorf("wiring.%s: %w", step.name, err)
-		}
+func (c *Container) buildExistingRuntime(ctx context.Context, memPipeline *mempipeline.Pipeline) error {
+	if err := runBuildSteps(ctx, c.newFromExistingInitialSteps()); err != nil {
+		return err
 	}
-
 	if err := c.buildSkill(ctx); err != nil {
-		_ = c.Shutdown(ctx)
-		return nil, fmt.Errorf("wiring.skill: %w", err)
+		return fmt.Errorf("wiring.skill: %w", err)
 	}
-
-	// Memory: build injector + reuse caller's pipeline.
 	if err := c.buildMemory(ctx); err != nil {
-		_ = c.Shutdown(ctx)
-		return nil, fmt.Errorf("wiring.memory: %w", err)
+		return fmt.Errorf("wiring.memory: %w", err)
 	}
 	if memPipeline != nil {
 		// Replace freshly-built pipeline with the caller's instance.
@@ -198,23 +208,21 @@ func NewFromExisting(
 			memPipeline.SetEmbedResolver(c.Knowledge.EmbedResolver)
 		}
 	}
-	if err := c.buildIAM(ctx); err != nil {
-		_ = c.Shutdown(ctx)
-		return nil, fmt.Errorf("wiring.iam: %w", err)
+	return runBuildSteps(ctx, []buildStep{
+		{"iam", c.buildIAM},
+		{"agent", c.buildAgent},
+		{"platform-mcp", c.buildPlatformMCP},
+		{"evaluation", c.buildEvaluation},
+	})
+}
+
+func runBuildSteps(ctx context.Context, steps []buildStep) error {
+	for _, step := range steps {
+		if err := step.fn(ctx); err != nil {
+			return fmt.Errorf("wiring.%s: %w", step.name, err)
+		}
 	}
-	if err := c.buildAgent(ctx); err != nil {
-		_ = c.Shutdown(ctx)
-		return nil, fmt.Errorf("wiring.agent: %w", err)
-	}
-	if err := c.buildPlatformMCP(ctx); err != nil {
-		_ = c.Shutdown(ctx)
-		return nil, fmt.Errorf("wiring.platform-mcp: %w", err)
-	}
-	if err := c.buildEvaluation(ctx); err != nil {
-		_ = c.Shutdown(ctx)
-		return nil, fmt.Errorf("wiring.evaluation: %w", err)
-	}
-	return c, nil
+	return nil
 }
 
 func (c *Container) newFromExistingInitialSteps() []buildStep {

@@ -197,7 +197,34 @@ func VerifyAttestation(root string, report Attestation, options VerifyOptions) e
 	if err := rejectCredentials(data); err != nil {
 		return err
 	}
+	if err := verifyAttestationDigests(root, report, options); err != nil {
+		return err
+	}
+	manifest, err := LoadManifest(filepath.Join(root, options.ManifestPath))
+	if err != nil {
+		return err
+	}
+	if err := verifyAttestationIdentity(report, options); err != nil {
+		return err
+	}
+	if err := verifyAttestationIntegrity(report); err != nil {
+		return err
+	}
+	if err := verifyAttestationFreshness(report, options); err != nil {
+		return err
+	}
+	if err := verifyAttestationPacks(report, options); err != nil {
+		return err
+	}
+	if err := verifyAttestationCapabilities(report, manifest); err != nil {
+		return err
+	}
+	return verifyAttestationArtifacts(root, report)
+}
+
+func verifyAttestationDigests(root string, report Attestation, options VerifyOptions) error {
 	var sourceDigest string
+	var err error
 	if options.Ref == "" {
 		sourceDigest, err = LocalSourceDigest(root)
 	} else {
@@ -216,10 +243,10 @@ func VerifyAttestation(root string, report Attestation, options VerifyOptions) e
 	if report.ManifestDigest != manifestDigest {
 		return errors.New("manifest digest mismatch")
 	}
-	manifest, err := LoadManifest(filepath.Join(root, options.ManifestPath))
-	if err != nil {
-		return err
-	}
+	return nil
+}
+
+func verifyAttestationIdentity(report Attestation, options VerifyOptions) error {
 	if report.SchemaVersion != 1 {
 		return errors.New("unsupported attestation schema version")
 	}
@@ -241,9 +268,10 @@ func VerifyAttestation(root string, report Attestation, options VerifyOptions) e
 				report.AcceptanceProfile, options.RequiredProfile)
 		}
 	}
-	if err := validateAcceptanceProfile(report.Mode, report.AcceptanceProfile, report.DurationSeconds); err != nil {
-		return err
-	}
+	return validateAcceptanceProfile(report.Mode, report.AcceptanceProfile, report.DurationSeconds)
+}
+
+func verifyAttestationIntegrity(report Attestation) error {
 	if !report.Cleanup.Passed || len(report.Cleanup.ResidualEntityIDs) != 0 {
 		return errors.New("cleanup did not complete without residual entities")
 	}
@@ -257,39 +285,56 @@ func VerifyAttestation(root string, report Attestation, options VerifyOptions) e
 	if !validDigest(report.SequenceDigest) {
 		return errors.New("invalid sequence digest")
 	}
-	if options.Now.IsZero() {
-		options.Now = time.Now().UTC()
+	return nil
+}
+
+func verifyAttestationFreshness(report Attestation, options VerifyOptions) error {
+	now := options.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
 	}
-	if report.ExpiresAt.IsZero() || !options.Now.Before(report.ExpiresAt) {
+	if report.ExpiresAt.IsZero() || !now.Before(report.ExpiresAt) {
 		return errors.New("attestation expired")
 	}
+	return nil
+}
+
+func verifyAttestationPacks(report Attestation, options VerifyOptions) error {
 	packs := make(map[string]string, len(report.Packs))
 	for _, pack := range report.Packs {
-		packs[pack.ID] = pack.Status
 		if pack.Status != StatusPassed {
 			return fmt.Errorf("pack %q did not pass", pack.ID)
 		}
+		packs[pack.ID] = pack.Status
 	}
 	for _, required := range options.RequiredPacks {
 		if packs[required] != StatusPassed {
 			return fmt.Errorf("required pack %q missing or not passed", required)
 		}
 	}
+	return nil
+}
+
+func verifyAttestationCapabilities(report Attestation, manifest Manifest) error {
 	capabilities := make(map[string]string, len(report.Capabilities))
 	for _, capability := range report.Capabilities {
 		if _, duplicate := capabilities[capability.ID]; duplicate {
 			return fmt.Errorf("duplicate capability result %q", capability.ID)
 		}
-		capabilities[capability.ID] = capability.Status
 		if capability.Status != StatusPassed {
 			return fmt.Errorf("capability %q did not pass", capability.ID)
 		}
+		capabilities[capability.ID] = capability.Status
 	}
 	for _, capability := range manifest.Capabilities {
 		if capability.Coverage != "lower_layer" && capabilities[capability.ID] != StatusPassed {
 			return fmt.Errorf("required capability %q missing or not passed", capability.ID)
 		}
 	}
+	return nil
+}
+
+func verifyAttestationArtifacts(root string, report Attestation) error {
 	for _, artifact := range report.Artifacts {
 		artifactPath, pathErr := safeRepositoryPath(root, artifact.Path)
 		if pathErr != nil {

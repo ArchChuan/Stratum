@@ -11,7 +11,7 @@ import (
 
 var manifestDomains = map[string]struct{}{
 	"dashboard": {}, "iam": {}, "agent": {}, "skill": {}, "mcp": {},
-	"knowledge": {}, "memory": {}, "evaluation": {}, "workflow": {},
+	"knowledge": {}, "memory": {}, "evaluation": {}, "workflow": {}, "llm-admin": {},
 }
 
 var coverageLevels = map[string]struct{}{

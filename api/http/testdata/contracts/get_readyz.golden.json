@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "GET",
+    "path": "/readyz",
+    "body": {
+      "status": "not_ready"
+    },
+    "want_status": 503
+  }
+]

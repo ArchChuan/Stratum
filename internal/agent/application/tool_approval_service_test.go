@@ -368,5 +368,6 @@ func (f *checkpointFake) Upsert(_ context.Context, _ string, row domain.AgentExe
 func (f *checkpointFake) GetLatest(context.Context, string, string) (*domain.AgentExecutionCheckpoint, error) {
 	return nil, errors.New("unused")
 }
-func (f *checkpointFake) MarkCompleted(context.Context, string, string) error  { return nil }
-func (f *checkpointFake) DeleteExpired(context.Context, string) (int64, error) { return 0, nil }
+func (f *checkpointFake) MarkCompleted(context.Context, string, string) error        { return nil }
+func (f *checkpointFake) UpdateStatus(context.Context, string, string, string) error { return nil }
+func (f *checkpointFake) DeleteExpired(context.Context, string) (int64, error)       { return 0, nil }

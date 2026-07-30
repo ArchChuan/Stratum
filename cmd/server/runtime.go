@@ -260,32 +260,40 @@ func runGuestReaper(ctx context.Context, onboard *iamapp.OnboardService, admin *
 	for {
 		select {
 		case <-ticker.C:
-			guestIDs, err := onboard.ListExpiredGuests(ctx, time.Now())
-			if err != nil {
-				logger.Warn("guest-reaper: list expired guests", zap.Error(err))
-				continue
-			}
-			for _, userID := range guestIDs {
-				tenantIDs, err := onboard.ListOwnedNonDefaultTenants(ctx, userID)
-				if err != nil {
-					logger.Warn("guest-reaper: list owned tenants", zap.String("user_id", userID), zap.Error(err))
-					continue
-				}
-				for _, tenantID := range tenantIDs {
-					if err := admin.DeleteTenant(ctx, tenantID); err != nil {
-						logger.Warn("guest-reaper: delete tenant", zap.String("tenant_id", tenantID), zap.Error(err))
-					}
-				}
-				if err := onboard.DeleteUser(ctx, userID); err != nil {
-					logger.Warn("guest-reaper: delete user", zap.String("user_id", userID), zap.Error(err))
-					continue
-				}
-				logger.Info("guest-reaper: reaped expired guest", zap.String("user_id", userID), zap.Int("tenants_deleted", len(tenantIDs)))
-			}
+			reapExpiredGuests(ctx, onboard, admin, logger)
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+func reapExpiredGuests(ctx context.Context, onboard *iamapp.OnboardService, admin *iamapp.AdminService, logger *zap.Logger) {
+	guestIDs, err := onboard.ListExpiredGuests(ctx, time.Now())
+	if err != nil {
+		logger.Warn("guest-reaper: list expired guests", zap.Error(err))
+		return
+	}
+	for _, userID := range guestIDs {
+		reapGuest(ctx, userID, onboard, admin, logger)
+	}
+}
+
+func reapGuest(ctx context.Context, userID string, onboard *iamapp.OnboardService, admin *iamapp.AdminService, logger *zap.Logger) {
+	tenantIDs, err := onboard.ListOwnedNonDefaultTenants(ctx, userID)
+	if err != nil {
+		logger.Warn("guest-reaper: list owned tenants", zap.String("user_id", userID), zap.Error(err))
+		return
+	}
+	for _, tenantID := range tenantIDs {
+		if err := admin.DeleteTenant(ctx, tenantID); err != nil {
+			logger.Warn("guest-reaper: delete tenant", zap.String("tenant_id", tenantID), zap.Error(err))
+		}
+	}
+	if err := onboard.DeleteUser(ctx, userID); err != nil {
+		logger.Warn("guest-reaper: delete user", zap.String("user_id", userID), zap.Error(err))
+		return
+	}
+	logger.Info("guest-reaper: reaped expired guest", zap.String("user_id", userID), zap.Int("tenants_deleted", len(tenantIDs)))
 }
 
 func registerHTTPServer(appHarness *harnesspkg.Harness, cfg *config.Config, c *wiring.Container, logger *zap.Logger) {

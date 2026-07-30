@@ -207,6 +207,25 @@ func (a *BaseAgent) AddToMemory(msg Message) {
 	}
 }
 
+// agentExecContext bundles immutable execution-scope values extracted under lock.
+type agentExecContext struct {
+	cfg              *ExecutionConfig
+	tracer           oteltrace.Tracer
+	agentID          string
+	agentName        string
+	systemPrompt     string
+	llmModel         string
+	capGW            port.CapabilityGateway
+	historyCompactor port.HistoryCompactor
+	maxContextTokens int
+	memoryScope      string
+	workspaceNames   []string
+	workspaceDescs   []string
+	memCtx           string
+	history          []*ChatMessage
+	input            string
+}
+
 // Execute implements the Agent interface - base implementation with ReAct pattern
 func (a *BaseAgent) Execute(ctx context.Context, input string, options ...ExecutionOption) (*AgentResult, error) {
 	startTime := time.Now()
@@ -224,7 +243,6 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	}
 	agentID := a.ID
 	agentName := a.Name
-	// Architecture is unified: historical persisted type values are compatibility data only.
 	agentType := domain.ReActAgent
 	systemPrompt := a.SystemPrompt
 	if a.GlobalSystemSuffix != "" {
@@ -250,28 +268,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	)
 	defer execSpan.End()
 
-	// Inject memory context into system prompt
-	var memCtx string
-	if !cfg.SystemAssistantMode && a.MemoryInjector != nil && cfg.ConversationID != "" {
-		ic := port.InjectionContext{
-			TenantID:       cfg.TenantID,
-			UserID:         cfg.UserID,
-			AgentID:        agentID,
-			ConversationID: cfg.ConversationID,
-			Query:          input,
-			Scope:          memoryScope,
-		}
-		memSpanCtx, memSpan := tracer.Start(ctx, "agent.memory_inject")
-		memInjectCtx, memInjectCancel := context.WithTimeout(memSpanCtx, constants.AgentMemoryInjectTimeout)
-		mctx, memInjectErr := a.MemoryInjector.BuildContext(memInjectCtx, ic)
-		memInjectCancel()
-		memSpan.End()
-		if memInjectErr != nil {
-			a.Logger.Warn("memory injection failed", zap.Error(memInjectErr))
-		} else {
-			memCtx = mctx
-		}
-	}
+	memCtx := a.injectMemoryContext(ctx, tracer, cfg, agentID, memoryScope, input)
 
 	a.Logger.Info("agent execution started",
 		zap.String("agent_id", agentID),
@@ -285,334 +282,25 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 		Metadata: map[string]interface{}{},
 	}
 
-	// Load short-term conversation history from ChatStore (single source of truth).
-	var history []*ChatMessage
-	if chatStore != nil && cfg.ConversationID != "" {
-		histSpanCtx, histSpan := tracer.Start(ctx, "agent.history_load")
-		histCtx, histCancel := context.WithTimeout(histSpanCtx, constants.AgentDBQueryTimeout)
-		msgs, histErr := chatStore.ListMessages(histCtx, cfg.TenantID, cfg.ConversationID, cfg.UserID)
-		histCancel()
-		histSpan.End()
-		if histErr != nil {
-			a.Logger.Warn("agent: failed to load conversation history",
-				zap.String("conversation_id", cfg.ConversationID),
-				zap.Error(histErr))
-		} else {
-			history = msgs
-		}
+	history := a.loadConversationHistory(ctx, tracer, chatStore, cfg)
+
+	ec := agentExecContext{
+		cfg: cfg, tracer: tracer, agentID: agentID, agentName: agentName,
+		systemPrompt: systemPrompt, llmModel: llmModel, capGW: capGW,
+		historyCompactor: historyCompactor, maxContextTokens: maxContextTokens,
+		memoryScope: memoryScope, workspaceNames: workspaceNames,
+		workspaceDescs: workspaceDescs, memCtx: memCtx, history: history,
+		input: input,
 	}
 
 	var execErr error
 	switch agentType {
 	case ReActAgent:
-		if capGW == nil {
-			execErr = fmt.Errorf("react: CapGateway not set")
-			break
-		}
-		cg, buildErr := agentgraph.BuildReActGraph(capGW, a.Ledger, a.Logger)
-		if buildErr != nil {
-			execErr = fmt.Errorf("react: build graph: %w", buildErr)
-			break
-		}
-		maxTokens := maxContextTokens
-		if maxTokens <= 0 {
-			maxTokens = constants.DefaultAgentContextTokens
-		}
-		initMessages := BuildContextMessagesWithCompaction(
-			ctx, systemPrompt, memCtx, history, input, maxTokens, cfg.HistoryWindow, historyCompactor,
-		)
-
-		// Resume from checkpoint if one exists.
-		var activePlan *domain.Plan
-		if a.CheckpointEnabled && a.CheckpointStore != nil && cfg.ExecutionID != "" {
-			resumeCp, resumeCpErr := a.CheckpointStore.GetLatest(ctx, cfg.TenantID, cfg.ExecutionID)
-			if resumeCpErr == nil && resumeCp != nil && resumeCp.Status == "running" {
-				a.Logger.Info("agent: resuming from checkpoint",
-					zap.String("checkpoint_id", resumeCp.ID),
-					zap.String("execution_id", cfg.ExecutionID),
-					zap.Int("step_index", resumeCp.StepIndex),
-				)
-				if len(resumeCp.MessagesSnapshotJSON) > 0 {
-					var savedMsgs []port.LLMMessage
-					if err := json.Unmarshal(resumeCp.MessagesSnapshotJSON, &savedMsgs); err == nil {
-						initMessages = savedMsgs
-					}
-				}
-				// Restore active plan if present.
-				if len(resumeCp.RuntimeStateJSON) > 0 {
-					if decoded, decErr := agentgraph.DecodePlanCheckpoint(resumeCp.RuntimeStateJSON); decErr == nil && decoded.Plan != nil {
-						activePlan = decoded.Plan
-					}
-				}
-			}
-		}
-
-		availableTools := buildBuiltinTools(workspaceNames, workspaceDescs,
-			len(workspaceNames) > 0 && cfg.RAGSearchFn != nil, a.MemoryInjector != nil)
-		if cfg.SystemAssistantMode {
-			availableTools = nil
-		}
-		initState := agentgraph.ReActState{
-			TenantID:                   cfg.TenantID,
-			TraceID:                    cfg.TraceID,
-			ConversationID:             cfg.ConversationID,
-			Model:                      llmModel,
-			Messages:                   initMessages,
-			OnToken:                    cfg.TokenCallback,
-			AvailableTools:             mergeTools(availableTools, cfg.ExtraTools, a.Logger),
-			SkillCatalog:               cfg.SkillCatalog,
-			ActiveSkill:                cfg.ActiveSkill,
-			TracePayloadStore:          cfg.TracePayloadStore,
-			ToolExecutionFn:            cfg.ToolExecutionFn,
-			GovernedAssistant:          cfg.SystemAssistantMode,
-			ExecutionID:                cfg.ExecutionID,
-			AgentKnowledgeWorkspaceIDs: workspaceNames,
-			AgentMemoryScope:           memoryScope,
-			RAGSearchFn:                cfg.RAGSearchFn,
-			MaxLLMSteps:                cfg.MaxSteps,
-			MaxContextTokens:           maxTokens,
-			CheckpointEnabled:          a.CheckpointEnabled,
-			ActivePlan:                 activePlan,
-			HistoryCompactor:           historyCompactor,
-			PlanCheckpointWriter:       a.CheckpointStore,
-			PlanCheckpointIdentity: agentgraph.PlanCheckpointIdentity{
-				ExecutionID: cfg.ExecutionID, TraceID: cfg.TraceID, ConversationID: cfg.ConversationID, AgentID: agentID, UserID: cfg.UserID,
-			},
-			PlanIDSource: uuid.NewString,
-			PlanLimits: domain.PlanLimits{
-				MaxNodes: constants.DefaultPlanMaxNodes, MaxRevisions: constants.DefaultPlanMaxRevisions,
-				MaxAttemptsPerNode: constants.DefaultPlanMaxAttemptsPerNode, MaxConcurrentNodes: constants.DefaultPlanMaxConcurrentNodes,
-			},
-		}
-		initState.PlanNodeExecutor = func(nodeCtx context.Context, parent agentgraph.ReActState, node domain.PlanNode, summaries map[string]string) (agentgraph.PlanNodeExecutionResult, error) {
-			nodeGraph, graphErr := agentgraph.BuildReActGraph(capGW, a.Ledger, a.Logger)
-			if graphErr != nil {
-				return agentgraph.PlanNodeExecutionResult{}, graphErr
-			}
-			systemMessage := port.LLMMessage{Role: "system", Content: systemPrompt}
-			goal := node.Goal
-			if len(summaries) > 0 {
-				encoded, _ := json.Marshal(summaries)
-				goal += "\nDependency summaries: " + string(encoded)
-			}
-			child := parent
-			child.Messages = []port.LLMMessage{systemMessage, {Role: "user", Content: goal}}
-			child.ActivePlan = nil
-			child.PlanToolsDisabled = true
-			child.MaxLLMSteps = constants.DefaultStepMaxLLMSteps
-			final, invokeErr := nodeGraph.Invoke(nodeCtx, child, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: constants.DefaultStepMaxLLMSteps})
-			if invokeErr != nil {
-				return agentgraph.PlanNodeExecutionResult{}, invokeErr
-			}
-			return agentgraph.PlanNodeExecutionResult{Summary: final.Output}, nil
-		}
-		if !cfg.SystemAssistantMode && a.RecallMemoryFn != nil {
-			fn := a.RecallMemoryFn
-			initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
-				return fn(ctx, cfg.TenantID, cfg.UserID, agentID, memoryScope, input)
-			}
-		}
-		execCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-		execCtx = reqctx.WithTraceID(execCtx, cfg.TraceID)
-		execCtx = reqctx.WithTenantID(execCtx, cfg.TenantID)
-		defer cancel()
-		runCfg := agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: cfg.MaxSteps}
-		if a.CheckpointEnabled && a.CheckpointStore != nil {
-			runCfg.AfterStep = func(afterCtx context.Context, afterState agentgraph.ReActState) error {
-				return agentgraph.PersistReActCheckpoint(afterCtx, a.CheckpointStore, cfg.TenantID, agentgraph.PlanCheckpointIdentity{
-					ExecutionID: cfg.ExecutionID, TraceID: cfg.TraceID, ConversationID: cfg.ConversationID, AgentID: agentID, UserID: cfg.UserID,
-				}, &afterState, "")
-			}
-		}
-		graphCtx, reactSpan := tracer.Start(execCtx, "react.graph.invoke",
-			oteltrace.WithAttributes(attribute.Int("max_steps", cfg.MaxSteps)),
-		)
-		finalState, runErr := cg.Invoke(graphCtx, initState, runCfg)
-		reactSpan.End()
-		if runErr == nil && a.CheckpointStore != nil {
-			// Mark checkpoint completed on successful execution.
-			markCtx, markCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
-			_ = a.CheckpointStore.MarkCompleted(markCtx, cfg.TenantID, cfg.ExecutionID)
-			markCancel()
-		}
-		if runErr != nil {
-			execErr = fmt.Errorf("react: %w", runErr)
-			break
-		}
-		result.Output = finalState.Output
-		result.Steps = finalState.Steps
-		result.TokensUsed = finalState.TotalTokens
-		result.CostUSD = finalState.TotalCostUSD
-		result.ToolObservations = enrichToolObservations(finalState.ToolObservations, cfg.TraceID, cfg.ExecutionID, cfg.ConversationID, agentID, cfg.UserID)
-		result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, cfg.TraceID, cfg.ExecutionID, cfg.ConversationID, agentID, cfg.UserID)
-		result.AssistantToolArtifacts = append([]domain.SystemAssistantToolArtifact(nil), finalState.AssistantToolArtifacts...)
-		finalAnswerAt := time.Now()
-		result.TraceEvents = append(result.TraceEvents, domain.AgentTraceEvent{
-			TraceID:         cfg.TraceID,
-			ExecutionID:     cfg.ExecutionID,
-			ConversationID:  cfg.ConversationID,
-			AgentID:         agentID,
-			UserID:          cfg.UserID,
-			RunType:         domain.RunTypeAgent,
-			ObservationType: domain.ObservationTypeAgent,
-			EventType:       domain.TraceEventFinalAnswer,
-			StepIndex:       finalState.Steps,
-			Status:          domain.ToolTraceStatusSuccess,
-			Output:          map[string]any{"content": finalState.Output},
-			Summary:         truncateRunes(finalState.Output, 500),
-			Model:           llmModel,
-			TotalTokens:     finalState.TotalTokens,
-			CostUSD:         finalState.TotalCostUSD,
-			ProviderType:    domain.ProviderTypeLLM,
-			ProviderID:      llmModel,
-			SequenceNo:      int64(len(result.TraceEvents) + 1),
-			StartedAt:       finalAnswerAt,
-			EndedAt:         finalAnswerAt,
-		})
-		a.mu.Lock()
-		a.State.StepsTaken = finalState.Steps
-		a.mu.Unlock()
-		for _, tc := range finalState.AllToolCalls {
-			result.ToolCalls = append(result.ToolCalls, ToolCall{
-				ToolName: tc.Name,
-				Input:    tc.Arguments,
-			})
-		}
-
+		execErr = a.executeReAct(ctx, ec, result)
 	case CoTAgent:
-		for i := 0; i < cfg.MaxSteps; i++ {
-			thought := Thought{
-				Step:        i + 1,
-				Observation: "Thinking about: " + input,
-				Thought:     "Considering possible responses",
-			}
-			result.Thoughts = append(result.Thoughts, thought)
-			a.mu.Lock()
-			a.State.StepsTaken++
-			a.mu.Unlock()
-
-			if i >= 2 {
-				result.Output = fmt.Sprintf("Response for: %s", input)
-				break
-			}
-		}
-
+		execErr = a.executeCoT(cfg, input, result)
 	case PlanningAgent:
-		if capGW == nil {
-			execErr = fmt.Errorf("planning: CapGateway not set")
-			break
-		}
-		stuckThreshold := a.StuckThreshold
-		if stuckThreshold <= 0 {
-			stuckThreshold = constants.DefaultStuckThreshold
-		}
-		var cpWriter agentgraph.PlanCheckpointWriter
-		if a.CheckpointStore != nil {
-			cpWriter = a.CheckpointStore
-		}
-		cg, buildErr := agentgraph.BuildPlanExecuteGraph(capGW, a.Ledger, cpWriter, nil, a.Logger)
-		if buildErr != nil {
-			execErr = fmt.Errorf("planning: build graph: %w", buildErr)
-			break
-		}
-		maxTokens := maxContextTokens
-		if maxTokens <= 0 {
-			maxTokens = constants.DefaultAgentContextTokens
-		}
-		initMessages := BuildContextMessagesWithCompaction(
-			ctx, systemPrompt, memCtx, history, input, maxTokens, cfg.HistoryWindow, historyCompactor,
-		)
-		availableTools := buildBuiltinTools(workspaceNames, workspaceDescs,
-			len(workspaceNames) > 0 && cfg.RAGSearchFn != nil,
-			a.MemoryInjector != nil)
-		initState := agentgraph.ReActState{
-			TenantID:                   cfg.TenantID,
-			TraceID:                    cfg.TraceID,
-			ConversationID:             cfg.ConversationID,
-			Model:                      llmModel,
-			Messages:                   initMessages,
-			OnToken:                    cfg.TokenCallback,
-			AvailableTools:             mergeTools(availableTools, cfg.ExtraTools, a.Logger),
-			SkillCatalog:               cfg.SkillCatalog,
-			ActiveSkill:                cfg.ActiveSkill,
-			TracePayloadStore:          cfg.TracePayloadStore,
-			ToolExecutionFn:            cfg.ToolExecutionFn,
-			ExecutionID:                cfg.ExecutionID,
-			AgentKnowledgeWorkspaceIDs: workspaceNames,
-			AgentMemoryScope:           memoryScope,
-			RAGSearchFn:                cfg.RAGSearchFn,
-			MaxLLMSteps:                cfg.MaxSteps,
-			MaxContextTokens:           maxTokens,
-			StuckThreshold:             stuckThreshold,
-			CheckpointEnabled:          a.CheckpointEnabled,
-			PlanCheckpointWriter:       cpWriter,
-			PlanCheckpointIdentity: agentgraph.PlanCheckpointIdentity{
-				ExecutionID: cfg.ExecutionID, TraceID: cfg.TraceID, ConversationID: cfg.ConversationID, AgentID: agentID, UserID: cfg.UserID,
-			},
-			PlanIDSource: uuid.NewString,
-			PlanLimits: domain.PlanLimits{
-				MaxNodes: constants.DefaultPlanMaxNodes, MaxRevisions: constants.DefaultPlanMaxRevisions,
-				MaxAttemptsPerNode: constants.DefaultPlanMaxAttemptsPerNode, MaxConcurrentNodes: constants.DefaultPlanMaxConcurrentNodes,
-			},
-			HistoryCompactor: historyCompactor,
-		}
-		if a.RecallMemoryFn != nil {
-			fn := a.RecallMemoryFn
-			initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
-				return fn(ctx, cfg.TenantID, cfg.UserID, agentID, memoryScope, input)
-			}
-		}
-		execCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-		execCtx = reqctx.WithTraceID(execCtx, cfg.TraceID)
-		execCtx = reqctx.WithTenantID(execCtx, cfg.TenantID)
-		defer cancel()
-		graphCtx, planSpan := tracer.Start(execCtx, "planning.graph.invoke",
-			oteltrace.WithAttributes(attribute.Int("stuck_threshold", stuckThreshold)),
-		)
-		finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: cfg.MaxSteps})
-		planSpan.End()
-		if runErr != nil {
-			execErr = fmt.Errorf("planning: %w", runErr)
-			break
-		}
-		result.Output = finalState.Output
-		result.Steps = finalState.Steps
-		result.TokensUsed = finalState.TotalTokens
-		result.CostUSD = finalState.TotalCostUSD
-		result.ToolObservations = enrichToolObservations(finalState.ToolObservations, cfg.TraceID, cfg.ExecutionID, cfg.ConversationID, agentID, cfg.UserID)
-		result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, cfg.TraceID, cfg.ExecutionID, cfg.ConversationID, agentID, cfg.UserID)
-		finalAnswerAt := time.Now()
-		result.TraceEvents = append(result.TraceEvents, domain.AgentTraceEvent{
-			TraceID:         cfg.TraceID,
-			ExecutionID:     cfg.ExecutionID,
-			ConversationID:  cfg.ConversationID,
-			AgentID:         agentID,
-			UserID:          cfg.UserID,
-			RunType:         domain.RunTypeAgent,
-			ObservationType: domain.ObservationTypeAgent,
-			EventType:       domain.TraceEventFinalAnswer,
-			StepIndex:       finalState.Steps,
-			Status:          domain.ToolTraceStatusSuccess,
-			Output:          map[string]any{"content": finalState.Output},
-			Summary:         truncateRunes(finalState.Output, 500),
-			Model:           llmModel,
-			TotalTokens:     finalState.TotalTokens,
-			CostUSD:         finalState.TotalCostUSD,
-			ProviderType:    domain.ProviderTypeLLM,
-			ProviderID:      llmModel,
-			SequenceNo:      int64(len(result.TraceEvents) + 1),
-			StartedAt:       finalAnswerAt,
-			EndedAt:         finalAnswerAt,
-		})
-		a.mu.Lock()
-		a.State.StepsTaken = finalState.Steps
-		a.mu.Unlock()
-		for _, tc := range finalState.AllToolCalls {
-			result.ToolCalls = append(result.ToolCalls, ToolCall{
-				ToolName: tc.Name,
-				Input:    tc.Arguments,
-			})
-		}
+		execErr = a.executePlanning(ctx, ec, result)
 
 	case ToolCallingAgent, RAGAgent, SwarmAgent:
 		result.Output = fmt.Sprintf("%s agent type not yet implemented", string(agentType))
@@ -624,72 +312,7 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	}
 	result.Artifacts = buildExecutionArtifacts(result.AssistantToolArtifacts, cfg.EvolutionTrace.ResourceManifest["system-assistant-profile"])
 
-	// Persist user input and agent output to ChatStore (outside switch — all agent types benefit).
-	if chatStore != nil && cfg.ConversationID != "" && execErr == nil {
-		userMsg := &ChatMessage{
-			ConversationID: cfg.ConversationID,
-			Role:           "user",
-			Content:        input,
-			UserID:         cfg.UserID,
-			AgentID:        agentID,
-			MemoryScope:    memoryScope,
-			SkipOutbox:     false,
-			Visibility:     domain.ChatMessageVisibilityUser,
-		}
-		_, saveUserSpan := tracer.Start(ctx, "agent.chat_store.save_user")
-		saveCtx1, saveCancel1 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
-		addUserErr := chatStore.AddMessage(saveCtx1, cfg.TenantID, userMsg)
-		saveCancel1()
-		saveUserSpan.End()
-		if addUserErr != nil {
-			a.Logger.Warn("agent: failed to save user message",
-				zap.String("conversation_id", cfg.ConversationID),
-				zap.Error(addUserErr))
-		}
-		agentMsg := &ChatMessage{
-			ConversationID: cfg.ConversationID,
-			Role:           "assistant",
-			Content:        result.Output,
-			UserID:         cfg.UserID,
-			AgentID:        agentID,
-			MemoryScope:    memoryScope,
-			SkipOutbox:     false,
-			Visibility:     domain.ChatMessageVisibilityUser,
-			Artifacts:      result.Artifacts,
-		}
-		_, saveAgentSpan := tracer.Start(ctx, "agent.chat_store.save_assistant")
-		saveCtx2, saveCancel2 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
-		addAgentErr := chatStore.AddMessage(saveCtx2, cfg.TenantID, agentMsg)
-		saveCancel2()
-		saveAgentSpan.End()
-		if addAgentErr != nil {
-			a.Logger.Warn("agent: failed to save agent message",
-				zap.String("conversation_id", cfg.ConversationID),
-				zap.Error(addAgentErr))
-		}
-		if summary := buildToolObservationSummary(result.ToolObservations); summary != "" {
-			summaryMsg := &ChatMessage{
-				ConversationID: cfg.ConversationID,
-				Role:           "assistant",
-				Content:        summary,
-				UserID:         cfg.UserID,
-				AgentID:        agentID,
-				MemoryScope:    memoryScope,
-				SkipOutbox:     true,
-				Visibility:     domain.ChatMessageVisibilityInternal,
-			}
-			_, saveSummarySpan := tracer.Start(ctx, "agent.chat_store.save_tool_summary")
-			saveCtx3, saveCancel3 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
-			addSummaryErr := chatStore.AddMessage(saveCtx3, cfg.TenantID, summaryMsg)
-			saveCancel3()
-			saveSummarySpan.End()
-			if addSummaryErr != nil {
-				a.Logger.Warn("agent: failed to save tool summary message",
-					zap.String("conversation_id", cfg.ConversationID),
-					zap.Error(addSummaryErr))
-			}
-		}
-	}
+	a.persistChatMessages(ctx, tracer, chatStore, cfg, result, input, agentID, memoryScope, execErr)
 
 	result.Duration = time.Since(startTime)
 	a.mu.Lock()
@@ -713,6 +336,353 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	metrics.RecordAgentStepCount(agentID, string(agentType), result.Steps)
 
 	return result, execErr
+}
+
+func (a *BaseAgent) injectMemoryContext(ctx context.Context, tracer oteltrace.Tracer, cfg *ExecutionConfig, agentID, memoryScope, input string) string {
+	if cfg.SystemAssistantMode || a.MemoryInjector == nil || cfg.ConversationID == "" {
+		return ""
+	}
+	ic := port.InjectionContext{
+		TenantID: cfg.TenantID, UserID: cfg.UserID, AgentID: agentID,
+		ConversationID: cfg.ConversationID, Query: input, Scope: memoryScope,
+	}
+	memSpanCtx, memSpan := tracer.Start(ctx, "agent.memory_inject")
+	memInjectCtx, memInjectCancel := context.WithTimeout(memSpanCtx, constants.AgentMemoryInjectTimeout)
+	mctx, memInjectErr := a.MemoryInjector.BuildContext(memInjectCtx, ic)
+	memInjectCancel()
+	memSpan.End()
+	if memInjectErr != nil {
+		a.Logger.Warn("memory injection failed", zap.Error(memInjectErr))
+		return ""
+	}
+	return mctx
+}
+
+func (a *BaseAgent) loadConversationHistory(ctx context.Context, tracer oteltrace.Tracer, chatStore ChatStore, cfg *ExecutionConfig) []*ChatMessage {
+	if chatStore == nil || cfg.ConversationID == "" {
+		return nil
+	}
+	histSpanCtx, histSpan := tracer.Start(ctx, "agent.history_load")
+	histCtx, histCancel := context.WithTimeout(histSpanCtx, constants.AgentDBQueryTimeout)
+	msgs, histErr := chatStore.ListMessages(histCtx, cfg.TenantID, cfg.ConversationID, cfg.UserID)
+	histCancel()
+	histSpan.End()
+	if histErr != nil {
+		a.Logger.Warn("agent: failed to load conversation history",
+			zap.String("conversation_id", cfg.ConversationID),
+			zap.Error(histErr))
+		return nil
+	}
+	return msgs
+}
+
+func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, result *AgentResult) error {
+	if ec.capGW == nil {
+		return fmt.Errorf("react: CapGateway not set")
+	}
+	cg, buildErr := agentgraph.BuildReActGraph(ec.capGW, a.Ledger, a.Logger)
+	if buildErr != nil {
+		return fmt.Errorf("react: build graph: %w", buildErr)
+	}
+	maxTokens := ec.maxContextTokens
+	if maxTokens <= 0 {
+		maxTokens = constants.DefaultAgentContextTokens
+	}
+	initMessages := BuildContextMessagesWithCompaction(
+		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow, ec.historyCompactor,
+	)
+
+	// Resume from checkpoint if one exists.
+	var activePlan *domain.Plan
+	if a.CheckpointEnabled && a.CheckpointStore != nil && ec.cfg.ExecutionID != "" {
+		resumeCp, resumeCpErr := a.CheckpointStore.GetLatest(ctx, ec.cfg.TenantID, ec.cfg.ExecutionID)
+		if resumeCpErr == nil && resumeCp != nil && isResumableCheckpoint(resumeCp.Status) {
+			a.Logger.Info("agent: resuming from checkpoint",
+				zap.String("checkpoint_id", resumeCp.ID),
+				zap.String("execution_id", ec.cfg.ExecutionID),
+				zap.Int("step_index", resumeCp.StepIndex),
+			)
+			if len(resumeCp.MessagesSnapshotJSON) > 0 {
+				var savedMsgs []port.LLMMessage
+				if err := json.Unmarshal(resumeCp.MessagesSnapshotJSON, &savedMsgs); err == nil {
+					initMessages = savedMsgs
+				}
+			}
+			if len(resumeCp.RuntimeStateJSON) > 0 {
+				if decoded, decErr := agentgraph.DecodePlanCheckpoint(resumeCp.RuntimeStateJSON); decErr == nil && decoded.Plan != nil {
+					activePlan = decoded.Plan
+				}
+			}
+		}
+	}
+
+	initState := a.buildReActInitState(ec, initMessages, maxTokens)
+	initState.ActivePlan = activePlan
+	initState.PlanNodeExecutor = a.buildPlanNodeExecutor(ec, ec.capGW)
+	if !ec.cfg.SystemAssistantMode && a.RecallMemoryFn != nil {
+		fn := a.RecallMemoryFn
+		initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
+			return fn(ctx, ec.cfg.TenantID, ec.cfg.UserID, ec.agentID, ec.memoryScope, input)
+		}
+	}
+	execCtx, cancel := context.WithTimeout(ctx, ec.cfg.Timeout)
+	execCtx = reqctx.WithTraceID(execCtx, ec.cfg.TraceID)
+	execCtx = reqctx.WithTenantID(execCtx, ec.cfg.TenantID)
+	defer cancel()
+	runCfg := agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: ec.cfg.MaxSteps}
+	if a.CheckpointEnabled && a.CheckpointStore != nil {
+		runCfg.AfterStep = func(afterCtx context.Context, afterState agentgraph.ReActState) error {
+			return agentgraph.PersistReActCheckpoint(afterCtx, a.CheckpointStore, ec.cfg.TenantID, agentgraph.PlanCheckpointIdentity{
+				ExecutionID: ec.cfg.ExecutionID, TraceID: ec.cfg.TraceID, ConversationID: ec.cfg.ConversationID, AgentID: ec.agentID, UserID: ec.cfg.UserID,
+			}, &afterState, "")
+		}
+	}
+	graphCtx, reactSpan := ec.tracer.Start(execCtx, "react.graph.invoke",
+		oteltrace.WithAttributes(attribute.Int("max_steps", ec.cfg.MaxSteps)),
+	)
+	finalState, runErr := cg.Invoke(graphCtx, initState, runCfg)
+	reactSpan.End()
+	if runErr == nil && a.CheckpointStore != nil {
+		markCtx, markCancel := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+		_ = a.CheckpointStore.MarkCompleted(markCtx, ec.cfg.TenantID, ec.cfg.ExecutionID)
+		markCancel()
+	}
+	if runErr != nil {
+		return fmt.Errorf("react: %w", runErr)
+	}
+	a.collectGraphResult(result, finalState, ec)
+	a.appendFinalAnswerEvent(result, finalState, ec)
+	a.mu.Lock()
+	a.State.StepsTaken = finalState.Steps
+	a.mu.Unlock()
+	for _, tc := range finalState.AllToolCalls {
+		result.ToolCalls = append(result.ToolCalls, ToolCall{ToolName: tc.Name, Input: tc.Arguments})
+	}
+	return nil
+}
+
+func (a *BaseAgent) executeCoT(cfg *ExecutionConfig, input string, result *AgentResult) error {
+	for i := 0; i < cfg.MaxSteps; i++ {
+		thought := Thought{
+			Step:        i + 1,
+			Observation: "Thinking about: " + input,
+			Thought:     "Considering possible responses",
+		}
+		result.Thoughts = append(result.Thoughts, thought)
+		a.mu.Lock()
+		a.State.StepsTaken++
+		a.mu.Unlock()
+		if i >= 2 {
+			result.Output = fmt.Sprintf("Response for: %s", input)
+			return nil
+		}
+	}
+	return nil
+}
+
+func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, result *AgentResult) error {
+	if ec.capGW == nil {
+		return fmt.Errorf("planning: CapGateway not set")
+	}
+	stuckThreshold := a.StuckThreshold
+	if stuckThreshold <= 0 {
+		stuckThreshold = constants.DefaultStuckThreshold
+	}
+	var cpWriter agentgraph.PlanCheckpointWriter
+	if a.CheckpointStore != nil {
+		cpWriter = a.CheckpointStore
+	}
+	cg, buildErr := agentgraph.BuildPlanExecuteGraph(ec.capGW, a.Ledger, cpWriter, nil, a.Logger)
+	if buildErr != nil {
+		return fmt.Errorf("planning: build graph: %w", buildErr)
+	}
+	maxTokens := ec.maxContextTokens
+	if maxTokens <= 0 {
+		maxTokens = constants.DefaultAgentContextTokens
+	}
+	initMessages := BuildContextMessagesWithCompaction(
+		ctx, ec.systemPrompt, ec.memCtx, ec.history, ec.input, maxTokens, ec.cfg.HistoryWindow, ec.historyCompactor,
+	)
+	initState := a.buildReActInitState(ec, initMessages, maxTokens)
+	initState.StuckThreshold = stuckThreshold
+	initState.CheckpointEnabled = a.CheckpointEnabled
+	if a.RecallMemoryFn != nil {
+		fn := a.RecallMemoryFn
+		initState.RecallMemoryFn = func(ctx context.Context, input map[string]any) (string, error) {
+			return fn(ctx, ec.cfg.TenantID, ec.cfg.UserID, ec.agentID, ec.memoryScope, input)
+		}
+	}
+	execCtx, cancel := context.WithTimeout(ctx, ec.cfg.Timeout)
+	execCtx = reqctx.WithTraceID(execCtx, ec.cfg.TraceID)
+	execCtx = reqctx.WithTenantID(execCtx, ec.cfg.TenantID)
+	defer cancel()
+	graphCtx, planSpan := ec.tracer.Start(execCtx, "planning.graph.invoke",
+		oteltrace.WithAttributes(attribute.Int("stuck_threshold", stuckThreshold)),
+	)
+	finalState, runErr := cg.Invoke(graphCtx, initState, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: ec.cfg.MaxSteps})
+	planSpan.End()
+	if runErr != nil {
+		return fmt.Errorf("planning: %w", runErr)
+	}
+	a.collectGraphResult(result, finalState, ec)
+	a.appendFinalAnswerEvent(result, finalState, ec)
+	a.mu.Lock()
+	a.State.StepsTaken = finalState.Steps
+	a.mu.Unlock()
+	for _, tc := range finalState.AllToolCalls {
+		result.ToolCalls = append(result.ToolCalls, ToolCall{ToolName: tc.Name, Input: tc.Arguments})
+	}
+	return nil
+}
+
+func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port.LLMMessage, maxTokens int) agentgraph.ReActState {
+	availableTools := buildBuiltinTools(ec.workspaceNames, ec.workspaceDescs,
+		len(ec.workspaceNames) > 0 && ec.cfg.RAGSearchFn != nil, a.MemoryInjector != nil)
+	if ec.cfg.SystemAssistantMode {
+		availableTools = nil
+	}
+	return agentgraph.ReActState{
+		TenantID:                   ec.cfg.TenantID,
+		TraceID:                    ec.cfg.TraceID,
+		ConversationID:             ec.cfg.ConversationID,
+		Model:                      ec.llmModel,
+		Messages:                   initMessages,
+		OnToken:                    ec.cfg.TokenCallback,
+		AvailableTools:             mergeTools(availableTools, ec.cfg.ExtraTools, a.Logger),
+		SkillCatalog:               ec.cfg.SkillCatalog,
+		ActiveSkill:                ec.cfg.ActiveSkill,
+		TracePayloadStore:          ec.cfg.TracePayloadStore,
+		ToolExecutionFn:            ec.cfg.ToolExecutionFn,
+		GovernedAssistant:          ec.cfg.SystemAssistantMode,
+		ExecutionID:                ec.cfg.ExecutionID,
+		AgentKnowledgeWorkspaceIDs: ec.workspaceNames,
+		AgentMemoryScope:           ec.memoryScope,
+		RAGSearchFn:                ec.cfg.RAGSearchFn,
+		MaxLLMSteps:                ec.cfg.MaxSteps,
+		MaxContextTokens:           maxTokens,
+		CheckpointEnabled:          a.CheckpointEnabled,
+		HistoryCompactor:           ec.historyCompactor,
+		PlanCheckpointWriter:       a.CheckpointStore,
+		PlanCheckpointIdentity: agentgraph.PlanCheckpointIdentity{
+			ExecutionID: ec.cfg.ExecutionID, TraceID: ec.cfg.TraceID,
+			ConversationID: ec.cfg.ConversationID, AgentID: ec.agentID, UserID: ec.cfg.UserID,
+		},
+		PlanIDSource: uuid.NewString,
+		PlanLimits: domain.PlanLimits{
+			MaxNodes: constants.DefaultPlanMaxNodes, MaxRevisions: constants.DefaultPlanMaxRevisions,
+			MaxAttemptsPerNode: constants.DefaultPlanMaxAttemptsPerNode, MaxConcurrentNodes: constants.DefaultPlanMaxConcurrentNodes,
+		},
+	}
+}
+
+func (a *BaseAgent) buildPlanNodeExecutor(ec agentExecContext, capGW port.CapabilityGateway) agentgraph.PlanNodeExecutor {
+	return func(nodeCtx context.Context, parent agentgraph.ReActState, node domain.PlanNode, summaries map[string]string) (agentgraph.PlanNodeExecutionResult, error) {
+		nodeGraph, graphErr := agentgraph.BuildReActGraph(capGW, a.Ledger, a.Logger)
+		if graphErr != nil {
+			return agentgraph.PlanNodeExecutionResult{}, graphErr
+		}
+		systemMessage := port.LLMMessage{Role: "system", Content: ec.systemPrompt}
+		goal := node.Goal
+		if len(summaries) > 0 {
+			encoded, _ := json.Marshal(summaries)
+			goal += "\nDependency summaries: " + string(encoded)
+		}
+		child := parent
+		child.Messages = []port.LLMMessage{systemMessage, {Role: "user", Content: goal}}
+		child.ActivePlan = nil
+		child.PlanToolsDisabled = true
+		child.MaxLLMSteps = constants.DefaultStepMaxLLMSteps
+		final, invokeErr := nodeGraph.Invoke(nodeCtx, child, agentgraph.RunConfig[agentgraph.ReActState]{MaxSteps: constants.DefaultStepMaxLLMSteps})
+		if invokeErr != nil {
+			return agentgraph.PlanNodeExecutionResult{}, invokeErr
+		}
+		return agentgraph.PlanNodeExecutionResult{Summary: final.Output}, nil
+	}
+}
+
+func (a *BaseAgent) collectGraphResult(result *AgentResult, finalState agentgraph.ReActState, ec agentExecContext) {
+	result.Output = finalState.Output
+	result.Steps = finalState.Steps
+	result.TokensUsed = finalState.TotalTokens
+	result.CostUSD = finalState.TotalCostUSD
+	result.ToolObservations = enrichToolObservations(finalState.ToolObservations, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
+	result.TraceEvents = enrichTraceEvents(finalState.TraceEvents, ec.cfg.TraceID, ec.cfg.ExecutionID, ec.cfg.ConversationID, ec.agentID, ec.cfg.UserID)
+	result.AssistantToolArtifacts = append([]domain.SystemAssistantToolArtifact(nil), finalState.AssistantToolArtifacts...)
+}
+
+func (a *BaseAgent) appendFinalAnswerEvent(result *AgentResult, finalState agentgraph.ReActState, ec agentExecContext) {
+	finalAnswerAt := time.Now()
+	result.TraceEvents = append(result.TraceEvents, domain.AgentTraceEvent{
+		TraceID:         ec.cfg.TraceID,
+		ExecutionID:     ec.cfg.ExecutionID,
+		ConversationID:  ec.cfg.ConversationID,
+		AgentID:         ec.agentID,
+		UserID:          ec.cfg.UserID,
+		RunType:         domain.RunTypeAgent,
+		ObservationType: domain.ObservationTypeAgent,
+		EventType:       domain.TraceEventFinalAnswer,
+		StepIndex:       finalState.Steps,
+		Status:          domain.ToolTraceStatusSuccess,
+		Output:          map[string]any{"content": finalState.Output},
+		Summary:         truncateRunes(finalState.Output, 500),
+		Model:           ec.llmModel,
+		TotalTokens:     finalState.TotalTokens,
+		CostUSD:         finalState.TotalCostUSD,
+		ProviderType:    domain.ProviderTypeLLM,
+		ProviderID:      ec.llmModel,
+		SequenceNo:      int64(len(result.TraceEvents) + 1),
+		StartedAt:       finalAnswerAt,
+		EndedAt:         finalAnswerAt,
+	})
+}
+
+func (a *BaseAgent) persistChatMessages(ctx context.Context, tracer oteltrace.Tracer, chatStore ChatStore, cfg *ExecutionConfig, result *AgentResult, input, agentID, memoryScope string, execErr error) {
+	if chatStore == nil || cfg.ConversationID == "" || execErr != nil {
+		return
+	}
+	userMsg := &ChatMessage{
+		ConversationID: cfg.ConversationID, Role: "user", Content: input,
+		UserID: cfg.UserID, AgentID: agentID, MemoryScope: memoryScope,
+		SkipOutbox: false, Visibility: domain.ChatMessageVisibilityUser,
+	}
+	_, saveUserSpan := tracer.Start(ctx, "agent.chat_store.save_user")
+	saveCtx1, saveCancel1 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+	addUserErr := chatStore.AddMessage(saveCtx1, cfg.TenantID, userMsg)
+	saveCancel1()
+	saveUserSpan.End()
+	if addUserErr != nil {
+		a.Logger.Warn("agent: failed to save user message", zap.String("conversation_id", cfg.ConversationID), zap.Error(addUserErr))
+	}
+	agentMsg := &ChatMessage{
+		ConversationID: cfg.ConversationID, Role: "assistant", Content: result.Output,
+		UserID: cfg.UserID, AgentID: agentID, MemoryScope: memoryScope,
+		SkipOutbox: false, Visibility: domain.ChatMessageVisibilityUser, Artifacts: result.Artifacts,
+	}
+	_, saveAgentSpan := tracer.Start(ctx, "agent.chat_store.save_assistant")
+	saveCtx2, saveCancel2 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+	addAgentErr := chatStore.AddMessage(saveCtx2, cfg.TenantID, agentMsg)
+	saveCancel2()
+	saveAgentSpan.End()
+	if addAgentErr != nil {
+		a.Logger.Warn("agent: failed to save agent message", zap.String("conversation_id", cfg.ConversationID), zap.Error(addAgentErr))
+	}
+	summary := buildToolObservationSummary(result.ToolObservations)
+	if summary == "" {
+		return
+	}
+	summaryMsg := &ChatMessage{
+		ConversationID: cfg.ConversationID, Role: "assistant", Content: summary,
+		UserID: cfg.UserID, AgentID: agentID, MemoryScope: memoryScope,
+		SkipOutbox: true, Visibility: domain.ChatMessageVisibilityInternal,
+	}
+	_, saveSummarySpan := tracer.Start(ctx, "agent.chat_store.save_tool_summary")
+	saveCtx3, saveCancel3 := context.WithTimeout(ctx, constants.AgentDBQueryTimeout)
+	addSummaryErr := chatStore.AddMessage(saveCtx3, cfg.TenantID, summaryMsg)
+	saveCancel3()
+	saveSummarySpan.End()
+	if addSummaryErr != nil {
+		a.Logger.Warn("agent: failed to save tool summary message", zap.String("conversation_id", cfg.ConversationID), zap.Error(addSummaryErr))
+	}
 }
 
 func enrichToolObservations(in []domain.ToolObservation, traceID, executionID, conversationID, agentID, userID string) []domain.ToolObservation {
@@ -1183,4 +1153,10 @@ func boundExecutionArtifactsJSON(artifacts []domain.ExecutionArtifact) []domain.
 			return []domain.ExecutionArtifact{{Type: "diagnostic_report", ProfileVersion: artifacts[0].ProfileVersion, DiagnosticReport: &domain.DiagnosticReport{Facts: []domain.DiagnosticFact{}, Inferences: []string{}, EvidenceGaps: []domain.EvidenceGap{{Source: "artifact_aggregate", Code: "truncated"}}, RecommendedActions: []string{}, Citations: []domain.Citation{}, Steps: []domain.DiagnosticStep{{Tool: "artifact_aggregate", Outcome: "error", ErrorCode: "truncated"}}}}}
 		}
 	}
+}
+
+// isResumableCheckpoint reports whether a checkpoint with status s can be
+// resumed (running or paused).
+func isResumableCheckpoint(s string) bool {
+	return s == "running" || s == "paused"
 }

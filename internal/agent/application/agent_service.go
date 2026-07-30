@@ -124,6 +124,7 @@ type CreateAgentInput struct {
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
+	CheckpointEnabled     bool
 }
 
 type UpdateAgentInput struct {
@@ -138,6 +139,7 @@ type UpdateAgentInput struct {
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScope           string
+	CheckpointEnabled     bool
 }
 
 // AgentDTO is the wire shape returned by AgentService for transport
@@ -159,6 +161,7 @@ type AgentDTO struct {
 	SystemKey             string
 	IsSystem              bool
 	ManagementMode        string
+	CheckpointEnabled     bool
 }
 
 type SystemAssistantSettings struct {
@@ -187,6 +190,7 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (AgentDT
 		MCPToolIDs:            in.MCPToolIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
 		MemoryScope:           in.MemoryScope,
+		CheckpointEnabled:     in.CheckpointEnabled,
 		Capabilities:          []domain.AgentCapability{},
 	}
 
@@ -491,6 +495,7 @@ func (s *AgentService) Update(ctx context.Context, id string, in UpdateAgentInpu
 		MCPToolIDs:            in.MCPToolIDs,
 		KnowledgeWorkspaceIDs: in.KnowledgeWorkspaceIDs,
 		MemoryScope:           in.MemoryScope,
+		CheckpointEnabled:     in.CheckpointEnabled,
 	}
 	if err := s.deps.Registry.Update(ctx, cfg); err != nil {
 		return AgentDTO{}, err
@@ -599,6 +604,7 @@ func cfgToDTO(cfg *domain.AgentConfig) AgentDTO {
 		MemoryScope:           cfg.MemoryScope,
 		SystemKey:             cfg.SystemKey,
 		IsSystem:              cfg.IsSystem,
+		CheckpointEnabled:     cfg.CheckpointEnabled,
 		ManagementMode:        cfg.ManagementMode,
 	}
 }
@@ -619,6 +625,7 @@ type ExecMeta struct {
 	TenantID                   string
 	TraceID                    string
 	Stream                     bool
+	ExecutionID                string // optional; generated if empty, used for resume
 	EvolutionTrace             EvolutionTraceMetadata
 	KnowledgeAssignmentsPinned bool
 	PinnedKnowledgeRevisions   map[string]port.KnowledgeRevisionPin
@@ -760,7 +767,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		return nil, 0, ErrNotFound
 	}
 	s.ensureConversation(ctx, meta.TenantID, agentID, req.UserID, &req)
-	executionID := uuid.Must(uuid.NewV7()).String()
+	executionID := executionIDOrNew(meta.ExecutionID)
 	preparationStart := time.Now()
 	recordExecutionPreparation(ctx, a, req, meta, executionID)
 	a, assignment, err := s.resolveExecutionAgent(ctx, a, meta.TenantID, agentID, executionSubject(req, meta))
@@ -1092,6 +1099,27 @@ func completeApprovalResume(
 		return fmt.Errorf("complete approved tool checkpoint: %w", err)
 	}
 	return nil
+}
+
+// PauseExecution marks a running execution's checkpoint as paused so it can be
+// resumed later. No-op when the checkpoint store is not configured.
+func (s *AgentService) PauseExecution(ctx context.Context, tenantID, executionID string) error {
+	if s.deps.CheckpointStore == nil {
+		return fmt.Errorf("pause execution: checkpoint store not configured")
+	}
+	return s.deps.CheckpointStore.UpdateStatus(ctx, tenantID, executionID, "paused")
+}
+
+// ResumeExecution restarts a paused execution from its last checkpoint.
+// The executionID must refer to a paused checkpoint.
+func (s *AgentService) ResumeExecution(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, executionID string) (*AgentResult, int, error) {
+	if s.deps.CheckpointStore != nil {
+		if err := s.deps.CheckpointStore.UpdateStatus(ctx, meta.TenantID, executionID, "running"); err != nil {
+			return nil, 0, fmt.Errorf("resume execution: %w", err)
+		}
+	}
+	meta.ExecutionID = executionID
+	return s.Execute(ctx, agentID, req, meta)
 }
 
 func (s *AgentService) ExecuteSkillScenario(ctx context.Context, agentID string, req ExecRequest, meta ExecMeta, activation port.SkillActivation) (*AgentResult, int, error) {
@@ -1454,9 +1482,18 @@ func (s *AgentService) buildExtraToolsChecked(
 	tenantID, subjectID string,
 	mcpToolIDs, allowedSkills []string,
 ) ([]port.ToolDefinition, map[string]port.SkillActivation, error) {
-	var tools []port.ToolDefinition
-	refs := make([]port.SkillRevisionRef, 0, len(allowedSkills))
+	tools := s.buildMCPTools(ctx, tenantID, mcpToolIDs)
+	catalog, err := s.buildSkillCatalog(ctx, tenantID, subjectID, allowedSkills)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tools, catalog, nil
+}
 
+func (s *AgentService) buildMCPTools(
+	ctx context.Context, tenantID string, mcpToolIDs []string,
+) []port.ToolDefinition {
+	var tools []port.ToolDefinition
 	allowedTools := make(map[string]struct{}, len(mcpToolIDs))
 	servers := map[string]struct{}{}
 	for _, toolID := range mcpToolIDs {
@@ -1474,45 +1511,82 @@ func (s *AgentService) buildExtraToolsChecked(
 			if _, ok := allowedTools[tool.Name]; !ok {
 				continue
 			}
-			if tool.ProviderType == "" {
-				tool.ProviderType = domain.ProviderTypeMCP
-			}
-			if tool.ProviderID == "" {
-				tool.ProviderID = serverID
-			}
-			if tool.ServerID == "" {
-				tool.ServerID = serverID
-			}
-			if tool.CapabilityID == "" {
-				tool.CapabilityID = tool.Name
-			}
-			if tool.NodeType == "" {
-				tool.NodeType = domain.ObservationTypeMCP
-			}
-			if tool.Metadata == nil {
-				tool.Metadata = make(map[string]any)
-			}
-			risk := port.ToolRiskUnclassified
-			policyResolved := false
-			if serverID == platformmcp.SystemServerID {
-				if contract, ok := platformmcp.NewPhase1Contracts().Lookup(tool.CapabilityID); ok {
-					risk = platformMCPRisk(contract.Risk)
-					policyResolved = true
-				}
-			}
-			if s.deps.MCPToolPolicy != nil {
-				resolved, err := s.deps.MCPToolPolicy.ResolveMCPToolRisk(ctx, tenantID, serverID, tool.CapabilityID)
-				if err == nil && resolved != "" {
-					risk = stricterToolRisk(risk, resolved)
-					policyResolved = true
-				}
-			}
+			tool = normalizeMCPTool(tool, serverID)
+			risk, policyResolved := s.resolveMCPToolRisk(ctx, tenantID, serverID, tool.CapabilityID)
 			tool.Metadata["risk_level"] = string(risk)
 			tool.Metadata["policy_resolved"] = policyResolved
 			tools = append(tools, tool)
 		}
 	}
+	return tools
+}
 
+func normalizeMCPTool(tool port.ToolDefinition, serverID string) port.ToolDefinition {
+	if tool.ProviderType == "" {
+		tool.ProviderType = domain.ProviderTypeMCP
+	}
+	if tool.ProviderID == "" {
+		tool.ProviderID = serverID
+	}
+	if tool.ServerID == "" {
+		tool.ServerID = serverID
+	}
+	if tool.CapabilityID == "" {
+		tool.CapabilityID = tool.Name
+	}
+	if tool.NodeType == "" {
+		tool.NodeType = domain.ObservationTypeMCP
+	}
+	if tool.Metadata == nil {
+		tool.Metadata = make(map[string]any)
+	}
+	return tool
+}
+
+func (s *AgentService) resolveMCPToolRisk(
+	ctx context.Context, tenantID, serverID, capabilityID string,
+) (port.ToolRiskLevel, bool) {
+	risk := port.ToolRiskUnclassified
+	resolved := false
+	if serverID == platformmcp.SystemServerID {
+		if contract, ok := platformmcp.NewPhase1Contracts().Lookup(capabilityID); ok {
+			risk = platformMCPRisk(contract.Risk)
+			resolved = true
+		}
+	}
+	if s.deps.MCPToolPolicy == nil {
+		return risk, resolved
+	}
+	policyRisk, err := s.deps.MCPToolPolicy.ResolveMCPToolRisk(ctx, tenantID, serverID, capabilityID)
+	if err != nil || policyRisk == "" {
+		return risk, resolved
+	}
+	return stricterToolRisk(risk, policyRisk), true
+}
+
+func (s *AgentService) buildSkillCatalog(
+	ctx context.Context, tenantID, subjectID string, allowedSkills []string,
+) (map[string]port.SkillActivation, error) {
+	refs, assignments, err := s.resolveSkillRevisionRefs(ctx, tenantID, subjectID, allowedSkills)
+	if err != nil {
+		return nil, err
+	}
+	catalog := make(map[string]port.SkillActivation)
+	if s.deps.SkillActivationResolver != nil && len(refs) > 0 {
+		resolved, err := s.deps.SkillActivationResolver.ResolveSkills(ctx, tenantID, refs)
+		if err != nil {
+			return nil, fmt.Errorf("resolve Skill experiment revisions: %w", err)
+		}
+		catalog = resolved
+	}
+	applySkillAssignments(catalog, assignments)
+	return catalog, nil
+}
+
+func (s *AgentService) resolveSkillRevisionRefs(
+	ctx context.Context, tenantID, subjectID string, allowedSkills []string,
+) ([]port.SkillRevisionRef, map[string]port.SkillRevisionAssignment, error) {
+	refs := make([]port.SkillRevisionRef, 0, len(allowedSkills))
 	assignments := make(map[string]port.SkillRevisionAssignment)
 	for _, skillID := range allowedSkills {
 		ref := port.SkillRevisionRef{SkillID: skillID}
@@ -1532,14 +1606,12 @@ func (s *AgentService) buildExtraToolsChecked(
 			assignments[skillID] = assignment
 		}
 	}
-	catalog := make(map[string]port.SkillActivation)
-	if s.deps.SkillActivationResolver != nil && len(refs) > 0 {
-		resolved, err := s.deps.SkillActivationResolver.ResolveSkills(ctx, tenantID, refs)
-		if err != nil {
-			return nil, nil, fmt.Errorf("resolve Skill experiment revisions: %w", err)
-		}
-		catalog = resolved
-	}
+	return refs, assignments, nil
+}
+
+func applySkillAssignments(
+	catalog map[string]port.SkillActivation, assignments map[string]port.SkillRevisionAssignment,
+) {
 	for skillID, assignment := range assignments {
 		activation := catalog[skillID]
 		activation.SkillID = skillID
@@ -1548,7 +1620,6 @@ func (s *AgentService) buildExtraToolsChecked(
 		activation.Variant = assignment.Variant
 		catalog[skillID] = activation
 	}
-	return tools, catalog, nil
 }
 
 func platformMCPRisk(risk platformmcp.RiskLevel) port.ToolRiskLevel {
@@ -1620,4 +1691,12 @@ func truncateRunes(s string, maxRunes int) string {
 		return s
 	}
 	return string(runes[:maxRunes])
+}
+
+// executionIDOrNew returns id if non-empty, otherwise generates a new v7 UUID.
+func executionIDOrNew(id string) string {
+	if id == "" {
+		return uuid.Must(uuid.NewV7()).String()
+	}
+	return id
 }

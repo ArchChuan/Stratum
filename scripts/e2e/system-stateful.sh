@@ -27,7 +27,7 @@ esac
   printf 'STATEFUL_E2E_DURATION_SEC must be between 600 and 14400\n' >&2; exit 2;
 }
 
-all_packs='dashboard,iam,workflow,agent,skill,mcp,agent-skill-mcp,knowledge,memory,evaluation,agent-context,evaluation-promotion'
+all_packs='dashboard,iam,workflow,agent,skill,mcp,agent-skill-mcp,knowledge,memory,evaluation,agent-context,evaluation-promotion,llm-admin'
 packs=${STATEFUL_E2E_PACKS:-all}
 [[ "$packs" == all ]] && packs=$all_packs
 IFS=',' read -r -a selected_packs <<<"$packs"
@@ -90,7 +90,7 @@ cleanup() {
     bash -c "${STATEFUL_E2E_SHARED_MILVUS_STOP_COMMAND:-docker stop \"\$STATEFUL_E2E_SHARED_MILVUS_CONTAINER\"}" \
       >/dev/null 2>&1 || status=1
   fi
-  if [[ "$infra_started" == true && "$infra_owned" == true ]]; then
+  if [[ "$infra_started" == true ]]; then
     bash -c "${STATEFUL_E2E_INFRA_DOWN_COMMAND:-make -C '$repo_dir' infra-down}" >/dev/null 2>&1 || status=1
   fi
   if ((status != 0)); then

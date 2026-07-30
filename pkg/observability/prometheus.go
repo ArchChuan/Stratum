@@ -124,11 +124,13 @@ func newPlatformMCPMetrics(factory promauto.Factory, latencyBuckets []float64) p
 	}
 }
 
+var (
+	tokenBuckets   = []float64{64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384}
+	latencyBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60}
+)
+
 // NewPrometheusMetrics registers all metrics and returns a ready MetricsProvider.
 func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
-	tokenBuckets := []float64{64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384}
-	latencyBuckets := []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60}
-
 	// Use a private registry so multiple instances (e.g. in tests) don't conflict.
 	reg := prometheus.NewRegistry()
 	factory := promauto.With(reg)

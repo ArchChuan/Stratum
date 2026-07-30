@@ -3,6 +3,9 @@
     "name": "default-unauth",
     "method": "GET",
     "path": "/mcp/tool-policies",
+    "body": {
+      "error": "missing bearer token"
+    },
     "want_status": 401
   }
 ]

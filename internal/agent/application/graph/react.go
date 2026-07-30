@@ -359,6 +359,15 @@ func fitToolsToContextBudget(tools []port.ToolDefinition, messages []port.LLMMes
 	return fitted
 }
 
+// toolExecResult captures the outcome of a single tool call execution.
+type toolExecResult struct {
+	content      string
+	status       string
+	errMsg       string
+	fatalToolErr error
+	artifact     *domain.SystemAssistantToolArtifact
+}
+
 func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReActState] {
 	return func(ctx context.Context, s ReActState) (ReActState, error) {
 		if len(s.Messages) == 0 {
@@ -370,28 +379,7 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 			toolStart := time.Now()
 			provider := classifyToolProvider(tc.Name, s.AvailableTools)
 			argumentsPayload := observability.SafeTracePayload(tc.Arguments, constants.AgentToolTraceMaxRawJSONBytes)
-			toolAttributes := []attribute.KeyValue{
-				attribute.String("tool.name", tc.Name),
-				attribute.String("gen_ai.tool.name", tc.Name),
-				attribute.String("gen_ai.tool.call.id", tc.ID),
-				attribute.Int("react.step", s.Steps),
-				attribute.String("stratum.provider.type", provider.ProviderType),
-				attribute.String("stratum.provider.id", provider.ProviderID),
-				attribute.String("stratum.server.id", provider.ServerID),
-				attribute.String("stratum.capability.id", provider.CapabilityID),
-				attribute.String("stratum.resource.revision_id", metadataString(provider.Metadata, "version_id")),
-				attribute.String("stratum.arguments.sha256", argumentsPayload.SHA256),
-				attribute.Bool("stratum.arguments.truncated", argumentsPayload.Truncated),
-				attribute.String("opik.metadata.stratum.tenant_id", s.TenantID),
-				attribute.String("opik.metadata.stratum.trace_id", s.TraceID),
-				attribute.String("opik.metadata.stratum.tool_call_id", tc.ID),
-				attribute.String("opik.metadata.stratum.tool_name", tc.Name),
-				attribute.String("opik.metadata.stratum.provider_type", provider.ProviderType),
-				attribute.String("opik.metadata.stratum.provider_id", provider.ProviderID),
-				attribute.String("opik.metadata.stratum.server_id", provider.ServerID),
-				attribute.String("opik.metadata.stratum.capability_id", provider.CapabilityID),
-				attribute.String("opik.metadata.stratum.resource_revision_id", metadataString(provider.Metadata, "version_id")),
-			}
+			toolAttributes := buildToolAttributes(tc, s, provider, argumentsPayload)
 			if !s.GovernedAssistant {
 				toolAttributes = append(toolAttributes, tracePayloadAttributes(
 					ctx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-arguments", tc.Arguments,
@@ -400,282 +388,239 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 			toolCtx, toolSpan := tracer.Start(ctx, "react.tool",
 				oteltrace.WithAttributes(toolAttributes...),
 			)
-			var content string
-			status := domain.ToolTraceStatusSuccess
-			errMsg := ""
-			var fatalToolErr error
-			s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
-				TraceID:         s.TraceID,
-				ConversationID:  s.ConversationID,
-				RunType:         domain.RunTypeAgent,
-				ObservationType: domain.ObservationTypeTool,
-				EventType:       domain.TraceEventToolStarted,
-				StepIndex:       s.Steps,
-				SpanName:        "react.tool",
-				Status:          status,
-				ProviderType:    provider.ProviderType,
-				ProviderID:      provider.ProviderID,
-				NodeID:          provider.NodeID,
-				NodeType:        provider.NodeType,
-				Input:           map[string]any{"tool_call_id": tc.ID, "tool_name": tc.Name, "arguments": tc.Arguments},
-				Summary:         fmt.Sprintf("calling tool %s", tc.Name),
-				StartedAt:       toolStart,
-				EndedAt:         toolStart,
-			})
-			switch tc.Name {
-			case "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan":
-				var planErr error
-				content, planErr = ExecutePlanTool(toolCtx, &s, tc)
-				if planErr != nil {
-					status = domain.ToolTraceStatusError
-					errMsg = planErr.Error()
-				}
-			case "stratum_continue_reasoning":
-				content = "Continuing reasoning..."
-			case "stratum_activate_skill":
-				skillID, _ := tc.Arguments["skill_id"].(string)
-				activation, ok := s.SkillCatalog[skillID]
-				if !ok {
-					content = fmt.Sprintf("error: skill %q is not available in this run", skillID)
-					status = domain.ToolTraceStatusError
-					errMsg = content
-					break
-				}
-				s.ActiveSkill = &activation
-				content = fmt.Sprintf("activated skill %s revision %s", activation.SkillID, activation.RevisionID)
-			case "stratum_search_knowledge":
-				if s.RAGSearchFn == nil {
-					content = "error: stratum_search_knowledge tool not configured"
-				} else {
-					var workspaces []string
-					if raw, ok := tc.Arguments["workspaces"].([]interface{}); ok {
-						for _, v := range raw {
-							if s, ok := v.(string); ok {
-								workspaces = append(workspaces, s)
-							}
-						}
-					}
-					query, _ := tc.Arguments["query"].(string)
-					workspaces = allowedKnowledgeWorkspaces(workspaces, s.AgentKnowledgeWorkspaceIDs, s.ActiveSkill)
-					if len(workspaces) == 0 {
-						content = "error: no authorized knowledge workspace"
-						status = domain.ToolTraceStatusError
-						errMsg = content
-						break
-					}
-					topK := 5
-					if v, ok := tc.Arguments["top_k"].(float64); ok {
-						topK = int(v)
-						if topK > constants.MaxRAGTopK {
-							topK = constants.MaxRAGTopK
-						}
-					}
-					var ragErr error
-					ragCtx, ragCancel := context.WithTimeout(toolCtx, constants.AgentRAGSearchTimeout)
-					content, ragErr = s.RAGSearchFn(ragCtx, workspaces, query, topK)
-					ragCancel()
-					if ragErr != nil {
-						content = fmt.Sprintf("error: %v", ragErr)
-						status = domain.ToolTraceStatusError
-						errMsg = ragErr.Error()
-						if errors.Is(ragErr, domain.ErrKnowledgeRevisionUnavailable) {
-							fatalToolErr = ragErr
-						}
-					}
-				}
-				toolLatencyMs := time.Since(toolStart).Milliseconds()
-				logger.Info("react.tool",
-					zap.String("trace_id", s.TraceID),
-					zap.String("tenant_id", s.TenantID),
-					zap.String("conversation_id", s.ConversationID),
-					zap.String("tool_name", tc.Name),
-					zap.Int64("latency_ms", toolLatencyMs),
-				)
-			case "stratum_recall_memory":
-				switch {
-				case s.ActiveSkill != nil && !containsString(s.ActiveSkill.MemoryScopes, s.AgentMemoryScope):
-					content = "error: active skill does not permit this memory scope"
-					status = domain.ToolTraceStatusError
-					errMsg = content
-				case s.RecallMemoryFn == nil:
-					content = "error: stratum_recall_memory tool not configured"
-				default:
-					var recallErr error
-					recallCtx, recallCancel := context.WithTimeout(toolCtx, constants.AgentMemoryRecallTimeout)
-					content, recallErr = s.RecallMemoryFn(recallCtx, tc.Arguments)
-					recallCancel()
-					if recallErr != nil {
-						content = fmt.Sprintf("error: %v", recallErr)
-						status = domain.ToolTraceStatusError
-						errMsg = recallErr.Error()
-					}
-				}
-				toolLatencyMs := time.Since(toolStart).Milliseconds()
-				logger.Info("react.tool",
-					zap.String("trace_id", s.TraceID),
-					zap.String("tenant_id", s.TenantID),
-					zap.String("conversation_id", s.ConversationID),
-					zap.String("tool_name", tc.Name),
-					zap.Int64("latency_ms", toolLatencyMs),
-				)
-			default:
-				tool, ok := findTool(tc.Name, s.AvailableTools)
-				if !ok || provider.ProviderType != domain.ProviderTypeMCP {
-					content = fmt.Sprintf("error: unknown tool %q", tc.Name)
-					status = domain.ToolTraceStatusError
-					errMsg = fmt.Sprintf("unknown tool %q", tc.Name)
-					logger.Error("react.tool.unknown",
-						zap.String("trace_id", s.TraceID),
-						zap.String("tool_name", tc.Name),
-						zap.String("tool_call_id", tc.ID),
-					)
-					break
-				}
-				if s.ToolExecutionFn == nil {
-					content = "error: MCP tool executor not configured"
-					status = domain.ToolTraceStatusError
-					errMsg = content
-					break
-				}
-				callCtx, cancel := context.WithTimeout(toolCtx, constants.AgentMCPToolCallTimeout)
-				toolOutput, callErr := s.ToolExecutionFn(callCtx, port.ToolExecutionRequest{
-					ToolCallID: tc.ID, Tool: tool, Arguments: tc.Arguments, ActiveSkill: s.ActiveSkill,
-				})
-				cancel()
-				var approvalRequired *port.ToolApprovalRequiredError
-				if errors.As(callErr, &approvalRequired) {
-					return s, callErr
-				}
-				toolLatencyMs := time.Since(toolStart).Milliseconds()
-				switch {
-				case callErr != nil:
-					status = domain.ToolTraceStatusError
-					errMsg = callErr.Error()
-					logger.Error("react.tool",
-						zap.String("trace_id", s.TraceID),
-						zap.String("tenant_id", s.TenantID),
-						zap.String("conversation_id", s.ConversationID),
-						zap.String("tool_name", tc.Name),
-						zap.Int64("latency_ms", toolLatencyMs),
-						zap.Error(callErr),
-					)
-					content = fmt.Sprintf("error: %v", callErr)
-				case toolOutput != nil:
-					logger.Info("react.tool",
-						zap.String("trace_id", s.TraceID),
-						zap.String("tenant_id", s.TenantID),
-						zap.String("conversation_id", s.ConversationID),
-						zap.String("tool_name", tc.Name),
-						zap.Int64("latency_ms", toolLatencyMs),
-					)
-					guarded, ok := toolOutput.(port.GuardedToolResult)
-					if !ok {
-						status = domain.ToolTraceStatusError
-						errMsg = "tool result was not validated"
-						content = "error: tool result validation failed"
-						break
-					}
-					content = guarded.ModelContent
-					if artifact := platformMCPArtifact(provider.CapabilityID, guarded.StructuredContent, toolLatencyMs); artifact != nil {
-						s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, *artifact)
-					}
-				default:
-					logger.Info("react.tool",
-						zap.String("trace_id", s.TraceID),
-						zap.String("tenant_id", s.TenantID),
-						zap.String("conversation_id", s.ConversationID),
-						zap.String("tool_name", tc.Name),
-						zap.Int64("latency_ms", toolLatencyMs),
-					)
-					content = ""
-				}
+			s.TraceEvents = append(s.TraceEvents, buildToolStartedEvent(s, tc, provider, toolStart))
+			result := dispatchToolCall(toolCtx, tc, &s, toolStart, provider, logger)
+			if result.artifact != nil {
+				s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, *result.artifact)
 			}
-			if status == domain.ToolTraceStatusError && isPlatformMCPTool(provider.CapabilityID) {
-				s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
-					Tool: provider.CapabilityID, LatencyMs: time.Since(toolStart).Milliseconds(),
-					Outcome: "error", ErrorCode: assistantToolErrorCode(errMsg),
-				})
-			}
+			recordToolErrorArtifact(&s, provider.CapabilityID, toolStart, result)
 			toolLatencyMs := time.Since(toolStart).Milliseconds()
-			if errMsg != "" {
-				toolSpan.RecordError(fmt.Errorf("%s", errMsg))
-				toolSpan.SetStatus(codes.Error, "tool call failed")
-			}
-			resultPayload := observability.SafeTracePayload(content, constants.AgentToolTraceMaxRawTextBytes)
-			resultAttributes := []attribute.KeyValue{
-				attribute.String("stratum.result.sha256", resultPayload.SHA256),
-				attribute.Bool("stratum.result.truncated", resultPayload.Truncated),
-				attribute.Int64("stratum.latency_ms", toolLatencyMs),
-				attribute.Int64("opik.metadata.stratum.latency_ms", toolLatencyMs),
-				attribute.String("opik.metadata.stratum.status", status),
-			}
+			recordToolSpanResult(toolSpan, result.errMsg, result.content, toolLatencyMs)
 			if !s.GovernedAssistant {
-				resultAttributes = append(resultAttributes, tracePayloadAttributes(
-					toolCtx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-result", content,
+				toolSpan.SetAttributes(tracePayloadAttributes(
+					toolCtx, s.TracePayloadStore, s.TenantID, s.TraceID, "tool-result", result.content,
 				)...)
 			}
-			toolSpan.SetAttributes(resultAttributes...)
-			summary := summarizeToolObservation(tc.Name, content, status, errMsg)
-			s.ToolObservations = append(s.ToolObservations, domain.ToolObservation{
-				TraceID:        s.TraceID,
-				ConversationID: s.ConversationID,
-				StepIndex:      s.Steps,
-				ToolCallID:     tc.ID,
-				ToolName:       tc.Name,
-				ToolType:       provider.ToolType,
-				ProviderType:   provider.ProviderType,
-				ProviderID:     provider.ProviderID,
-				ServerID:       provider.ServerID,
-				CapabilityID:   provider.CapabilityID,
-				Arguments:      tc.Arguments,
-				RawResult:      content,
-				RawText:        content,
-				Summary:        summary,
-				Status:         status,
-				ErrorMessage:   errMsg,
-				LatencyMs:      toolLatencyMs,
-				Metadata:       provider.Metadata,
-				StartedAt:      toolStart,
-				EndedAt:        toolStart.Add(time.Duration(toolLatencyMs) * time.Millisecond),
-			})
-			eventType := domain.TraceEventToolFinished
-			if status == domain.ToolTraceStatusError {
-				eventType = domain.TraceEventToolFailed
-			}
-			s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
-				TraceID:         s.TraceID,
-				ConversationID:  s.ConversationID,
-				RunType:         domain.RunTypeAgent,
-				ObservationType: domain.ObservationTypeTool,
-				EventType:       eventType,
-				StepIndex:       s.Steps,
-				SpanName:        "react.tool",
-				Status:          status,
-				ProviderType:    provider.ProviderType,
-				ProviderID:      provider.ProviderID,
-				NodeID:          provider.NodeID,
-				NodeType:        provider.NodeType,
-				Metadata:        provider.Metadata,
-				Output:          map[string]any{"tool_call_id": tc.ID, "tool_name": tc.Name, "summary": summary},
-				Summary:         summary,
-				ErrorMessage:    errMsg,
-				LatencyMs:       toolLatencyMs,
-				ToolTraceID:     tc.ID,
-				StartedAt:       toolStart,
-				EndedAt:         toolStart.Add(time.Duration(toolLatencyMs) * time.Millisecond),
-			})
+			appendToolObservation(&s, tc, provider, result, toolStart, toolLatencyMs)
+			appendToolTraceEvent(&s, tc, provider, result, toolStart, toolLatencyMs)
 			s.Messages = append(s.Messages, port.LLMMessage{
 				Role:       "tool",
-				Content:    content,
+				Content:    result.content,
 				ToolCallID: tc.ID,
 			})
 			toolSpan.End()
 			s.AllToolCalls = append(s.AllToolCalls, tc)
-			if fatalToolErr != nil {
-				return s, fatalToolErr
+			if result.fatalToolErr != nil {
+				return s, result.fatalToolErr
 			}
 		}
 		return s, nil
+	}
+}
+
+func buildToolAttributes(tc port.ToolCall, s ReActState, provider toolProviderRef, argumentsPayload observability.TracePayload) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.String("tool.name", tc.Name),
+		attribute.String("gen_ai.tool.name", tc.Name),
+		attribute.String("gen_ai.tool.call.id", tc.ID),
+		attribute.Int("react.step", s.Steps),
+		attribute.String("stratum.provider.type", provider.ProviderType),
+		attribute.String("stratum.provider.id", provider.ProviderID),
+		attribute.String("stratum.server.id", provider.ServerID),
+		attribute.String("stratum.capability.id", provider.CapabilityID),
+		attribute.String("stratum.resource.revision_id", metadataString(provider.Metadata, "version_id")),
+		attribute.String("stratum.arguments.sha256", argumentsPayload.SHA256),
+		attribute.Bool("stratum.arguments.truncated", argumentsPayload.Truncated),
+		attribute.String("opik.metadata.stratum.tenant_id", s.TenantID),
+		attribute.String("opik.metadata.stratum.trace_id", s.TraceID),
+		attribute.String("opik.metadata.stratum.tool_call_id", tc.ID),
+		attribute.String("opik.metadata.stratum.tool_name", tc.Name),
+		attribute.String("opik.metadata.stratum.provider_type", provider.ProviderType),
+		attribute.String("opik.metadata.stratum.provider_id", provider.ProviderID),
+		attribute.String("opik.metadata.stratum.server_id", provider.ServerID),
+		attribute.String("opik.metadata.stratum.capability_id", provider.CapabilityID),
+		attribute.String("opik.metadata.stratum.resource_revision_id", metadataString(provider.Metadata, "version_id")),
+	}
+}
+
+func buildToolStartedEvent(s ReActState, tc port.ToolCall, provider toolProviderRef, toolStart time.Time) domain.AgentTraceEvent {
+	return domain.AgentTraceEvent{
+		TraceID:         s.TraceID,
+		ConversationID:  s.ConversationID,
+		RunType:         domain.RunTypeAgent,
+		ObservationType: domain.ObservationTypeTool,
+		EventType:       domain.TraceEventToolStarted,
+		StepIndex:       s.Steps,
+		SpanName:        "react.tool",
+		Status:          domain.ToolTraceStatusSuccess,
+		ProviderType:    provider.ProviderType,
+		ProviderID:      provider.ProviderID,
+		NodeID:          provider.NodeID,
+		NodeType:        provider.NodeType,
+		Input:           map[string]any{"tool_call_id": tc.ID, "tool_name": tc.Name, "arguments": tc.Arguments},
+		Summary:         fmt.Sprintf("calling tool %s", tc.Name),
+		StartedAt:       toolStart,
+		EndedAt:         toolStart,
+	}
+}
+
+func dispatchToolCall(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time, provider toolProviderRef, logger *zap.Logger) toolExecResult {
+	switch tc.Name {
+	case "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan":
+		return execPlanTool(toolCtx, tc, s)
+	case "stratum_continue_reasoning":
+		return toolExecResult{content: "Continuing reasoning...", status: domain.ToolTraceStatusSuccess}
+	case "stratum_activate_skill":
+		return execActivateSkillTool(tc, s)
+	case "stratum_search_knowledge":
+		return execSearchKnowledgeTool(toolCtx, tc, s, toolStart, logger)
+	case "stratum_recall_memory":
+		return execRecallMemoryTool(toolCtx, tc, s, toolStart, logger)
+	default:
+		return execMCPTool(toolCtx, tc, s, toolStart, provider, logger)
+	}
+}
+
+func execPlanTool(toolCtx context.Context, tc port.ToolCall, s *ReActState) toolExecResult {
+	content, planErr := ExecutePlanTool(toolCtx, s, tc)
+	if planErr != nil {
+		return toolExecResult{content: content, status: domain.ToolTraceStatusError, errMsg: planErr.Error()}
+	}
+	return toolExecResult{content: content, status: domain.ToolTraceStatusSuccess}
+}
+
+func execActivateSkillTool(tc port.ToolCall, s *ReActState) toolExecResult {
+	skillID, _ := tc.Arguments["skill_id"].(string)
+	activation, ok := s.SkillCatalog[skillID]
+	if !ok {
+		msg := fmt.Sprintf("error: skill %q is not available in this run", skillID)
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: msg, content: msg}
+	}
+	s.ActiveSkill = &activation
+	return toolExecResult{
+		content: fmt.Sprintf("activated skill %s revision %s", activation.SkillID, activation.RevisionID),
+		status:  domain.ToolTraceStatusSuccess,
+	}
+}
+
+func execSearchKnowledgeTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time, logger *zap.Logger) toolExecResult {
+	if s.RAGSearchFn == nil {
+		return toolExecResult{content: "error: stratum_search_knowledge tool not configured", status: domain.ToolTraceStatusSuccess}
+	}
+	workspaces := extractStringSliceArg(tc.Arguments, "workspaces")
+	query, _ := tc.Arguments["query"].(string)
+	workspaces = allowedKnowledgeWorkspaces(workspaces, s.AgentKnowledgeWorkspaceIDs, s.ActiveSkill)
+	if len(workspaces) == 0 {
+		msg := "error: no authorized knowledge workspace"
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: msg, content: msg}
+	}
+	topK := clampTopK(tc.Arguments)
+	ragCtx, ragCancel := context.WithTimeout(toolCtx, constants.AgentRAGSearchTimeout)
+	content, ragErr := s.RAGSearchFn(ragCtx, workspaces, query, topK)
+	ragCancel()
+	if ragErr != nil {
+		r := toolExecResult{status: domain.ToolTraceStatusError, errMsg: ragErr.Error(), content: fmt.Sprintf("error: %v", ragErr)}
+		if errors.Is(ragErr, domain.ErrKnowledgeRevisionUnavailable) {
+			r.fatalToolErr = ragErr
+		}
+		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
+			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
+			zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
+		return r
+	}
+	logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
+		zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
+		zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
+	return toolExecResult{content: content, status: domain.ToolTraceStatusSuccess}
+}
+
+func execRecallMemoryTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time, logger *zap.Logger) toolExecResult {
+	switch {
+	case s.ActiveSkill != nil && !containsString(s.ActiveSkill.MemoryScopes, s.AgentMemoryScope):
+		msg := "error: active skill does not permit this memory scope"
+		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
+			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
+			zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: msg, content: msg}
+	case s.RecallMemoryFn == nil:
+		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
+			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
+			zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
+		return toolExecResult{content: "error: stratum_recall_memory tool not configured", status: domain.ToolTraceStatusSuccess}
+	default:
+		recallCtx, recallCancel := context.WithTimeout(toolCtx, constants.AgentMemoryRecallTimeout)
+		content, recallErr := s.RecallMemoryFn(recallCtx, tc.Arguments)
+		recallCancel()
+		if recallErr != nil {
+			logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
+				zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
+				zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
+			return toolExecResult{status: domain.ToolTraceStatusError, errMsg: recallErr.Error(), content: fmt.Sprintf("error: %v", recallErr)}
+		}
+		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
+			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
+			zap.Int64("latency_ms", time.Since(toolStart).Milliseconds()))
+		return toolExecResult{content: content, status: domain.ToolTraceStatusSuccess}
+	}
+}
+
+func execMCPTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time, provider toolProviderRef, logger *zap.Logger) toolExecResult {
+	tool, ok := findTool(tc.Name, s.AvailableTools)
+	if !ok || provider.ProviderType != domain.ProviderTypeMCP {
+		logger.Error("react.tool.unknown", zap.String("trace_id", s.TraceID),
+			zap.String("tool_name", tc.Name), zap.String("tool_call_id", tc.ID))
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: fmt.Sprintf("unknown tool %q", tc.Name), content: fmt.Sprintf("error: unknown tool %q", tc.Name)}
+	}
+	if s.ToolExecutionFn == nil {
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "MCP tool executor not configured", content: "error: MCP tool executor not configured"}
+	}
+	callCtx, cancel := context.WithTimeout(toolCtx, constants.AgentMCPToolCallTimeout)
+	toolOutput, callErr := s.ToolExecutionFn(callCtx, port.ToolExecutionRequest{
+		ToolCallID: tc.ID, Tool: tool, Arguments: tc.Arguments, ActiveSkill: s.ActiveSkill,
+	})
+	cancel()
+	var approvalRequired *port.ToolApprovalRequiredError
+	if errors.As(callErr, &approvalRequired) {
+		// Approval is a fatal signal — caller must bubble it up.
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: callErr.Error(), content: "", fatalToolErr: callErr}
+	}
+	toolLatencyMs := time.Since(toolStart).Milliseconds()
+	switch {
+	case callErr != nil:
+		logger.Error("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
+			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
+			zap.Int64("latency_ms", toolLatencyMs), zap.Error(callErr))
+		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: callErr.Error(), content: fmt.Sprintf("error: %v", callErr)}
+	case toolOutput != nil:
+		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
+			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
+			zap.Int64("latency_ms", toolLatencyMs))
+		guarded, safe := toolOutput.(port.GuardedToolResult)
+		if !safe {
+			return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "tool result was not validated", content: "error: tool result validation failed"}
+		}
+		return toolExecResult{
+			content: guarded.ModelContent,
+			status:  domain.ToolTraceStatusSuccess,
+			artifact: platformMCPArtifact(
+				provider.CapabilityID,
+				guarded.StructuredContent,
+				toolLatencyMs,
+			),
+		}
+	default:
+		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
+			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
+			zap.Int64("latency_ms", toolLatencyMs))
+		return toolExecResult{content: "", status: domain.ToolTraceStatusSuccess}
+	}
+}
+
+func recordToolErrorArtifact(s *ReActState, capabilityID string, toolStart time.Time, result toolExecResult) {
+	if result.status == domain.ToolTraceStatusError && isPlatformMCPTool(capabilityID) {
+		s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
+			Tool: capabilityID, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "error", ErrorCode: assistantToolErrorCode(result.errMsg),
+		})
 	}
 }
 
@@ -735,6 +680,101 @@ func isPlatformMCPTool(toolName string) bool {
 		}
 	}
 	return false
+}
+
+func recordToolSpanResult(toolSpan oteltrace.Span, errMsg, content string, toolLatencyMs int64) {
+	if errMsg != "" {
+		toolSpan.RecordError(fmt.Errorf("%s", errMsg))
+		toolSpan.SetStatus(codes.Error, "tool call failed")
+	}
+	resultPayload := observability.SafeTracePayload(content, constants.AgentToolTraceMaxRawTextBytes)
+	toolSpan.SetAttributes(
+		attribute.String("stratum.result.sha256", resultPayload.SHA256),
+		attribute.Bool("stratum.result.truncated", resultPayload.Truncated),
+		attribute.Int64("stratum.latency_ms", toolLatencyMs),
+		attribute.Int64("opik.metadata.stratum.latency_ms", toolLatencyMs),
+	)
+}
+
+func appendToolObservation(s *ReActState, tc port.ToolCall, provider toolProviderRef, result toolExecResult, toolStart time.Time, toolLatencyMs int64) {
+	summary := summarizeToolObservation(tc.Name, result.content, result.status, result.errMsg)
+	s.ToolObservations = append(s.ToolObservations, domain.ToolObservation{
+		TraceID:        s.TraceID,
+		ConversationID: s.ConversationID,
+		StepIndex:      s.Steps,
+		ToolCallID:     tc.ID,
+		ToolName:       tc.Name,
+		ToolType:       provider.ToolType,
+		ProviderType:   provider.ProviderType,
+		ProviderID:     provider.ProviderID,
+		ServerID:       provider.ServerID,
+		CapabilityID:   provider.CapabilityID,
+		Arguments:      tc.Arguments,
+		RawResult:      result.content,
+		RawText:        result.content,
+		Summary:        summary,
+		Status:         result.status,
+		ErrorMessage:   result.errMsg,
+		LatencyMs:      toolLatencyMs,
+		Metadata:       provider.Metadata,
+		StartedAt:      toolStart,
+		EndedAt:        toolStart.Add(time.Duration(toolLatencyMs) * time.Millisecond),
+	})
+}
+
+func appendToolTraceEvent(s *ReActState, tc port.ToolCall, provider toolProviderRef, result toolExecResult, toolStart time.Time, toolLatencyMs int64) {
+	eventType := domain.TraceEventToolFinished
+	if result.status == domain.ToolTraceStatusError {
+		eventType = domain.TraceEventToolFailed
+	}
+	summary := summarizeToolObservation(tc.Name, result.content, result.status, result.errMsg)
+	s.TraceEvents = append(s.TraceEvents, domain.AgentTraceEvent{
+		TraceID:         s.TraceID,
+		ConversationID:  s.ConversationID,
+		RunType:         domain.RunTypeAgent,
+		ObservationType: domain.ObservationTypeTool,
+		EventType:       eventType,
+		StepIndex:       s.Steps,
+		SpanName:        "react.tool",
+		Status:          result.status,
+		ProviderType:    provider.ProviderType,
+		ProviderID:      provider.ProviderID,
+		NodeID:          provider.NodeID,
+		NodeType:        provider.NodeType,
+		Metadata:        provider.Metadata,
+		Output:          map[string]any{"tool_call_id": tc.ID, "tool_name": tc.Name, "summary": summary},
+		Summary:         summary,
+		ErrorMessage:    result.errMsg,
+		LatencyMs:       toolLatencyMs,
+		ToolTraceID:     tc.ID,
+		StartedAt:       toolStart,
+		EndedAt:         toolStart.Add(time.Duration(toolLatencyMs) * time.Millisecond),
+	})
+}
+
+func extractStringSliceArg(args map[string]any, key string) []string {
+	raw, ok := args[key].([]interface{})
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+func clampTopK(args map[string]any) int {
+	topK := 5
+	if v, ok := args["top_k"].(float64); ok {
+		topK = int(v)
+		if topK > constants.MaxRAGTopK {
+			topK = constants.MaxRAGTopK
+		}
+	}
+	return topK
 }
 
 func tracePayloadAttributes(

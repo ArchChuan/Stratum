@@ -218,51 +218,22 @@ func (p *Pipeline) Stop() {
 // exponential backoff. Returns only when ctx is cancelled.
 func runWithRestart(ctx context.Context, label string, logger *zap.Logger, fn func(context.Context)) {
 	const (
-		baseBackoff = 100 * time.Millisecond
-		maxBackoff  = 30 * time.Second
-		// 单位窗口内连续快速退出多少次后强制冷却到 maxBackoff，避免 stopCh 被关闭但 ctx 未取消时的死循环
+		baseBackoff       = 100 * time.Millisecond
+		maxBackoff        = 30 * time.Second
 		fastExitThreshold = 5
 		fastExitWindow    = 5 * time.Second
 	)
-	backoff := baseBackoff
-	fastExits := 0
+	b := newBackoffController(baseBackoff, maxBackoff, fastExitThreshold, fastExitWindow)
 	for {
 		start := time.Now()
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.Error("memory.pipeline.worker_panic",
-						zap.String("worker", label),
-						zap.Any("panic", r),
-						zap.Stack("stack"))
-				}
-			}()
-			fn(ctx)
-		}()
+		runWithRecovery(label, logger, fn, ctx)
 
 		if ctx.Err() != nil {
 			return
 		}
 
 		runtime := time.Since(start)
-		if runtime > time.Minute {
-			backoff = baseBackoff
-			fastExits = 0
-		}
-		if runtime < fastExitWindow {
-			fastExits++
-			if fastExits >= fastExitThreshold {
-				logger.Error("memory.pipeline.worker_fast_exit_loop",
-					zap.String("worker", label),
-					zap.Int("consecutive_fast_exits", fastExits),
-					zap.Duration("last_runtime", runtime),
-					zap.Duration("forced_backoff", maxBackoff))
-				backoff = maxBackoff
-				fastExits = 0
-			}
-		} else {
-			fastExits = 0
-		}
+		backoff := b.compute(runtime)
 		logger.Warn("memory.pipeline.worker_exited",
 			zap.String("worker", label),
 			zap.Duration("runtime", runtime),
@@ -273,8 +244,57 @@ func runWithRestart(ctx context.Context, label string, logger *zap.Logger, fn fu
 			return
 		case <-time.After(backoff):
 		}
-		backoff = min(backoff*2, maxBackoff)
 	}
+}
+
+func runWithRecovery(label string, logger *zap.Logger, fn func(context.Context), ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("memory.pipeline.worker_panic",
+				zap.String("worker", label),
+				zap.Any("panic", r),
+				zap.Stack("stack"))
+		}
+	}()
+	fn(ctx)
+}
+
+type backoffController struct {
+	base, max         time.Duration
+	fastExitThreshold int
+	fastExitWindow    time.Duration
+	current           time.Duration
+	fastExits         int
+}
+
+func newBackoffController(base, max time.Duration, threshold int, window time.Duration) *backoffController {
+	return &backoffController{
+		base:              base,
+		max:               max,
+		fastExitThreshold: threshold,
+		fastExitWindow:    window,
+		current:           base,
+	}
+}
+
+func (b *backoffController) compute(runtime time.Duration) time.Duration {
+	if runtime > time.Minute {
+		b.current = b.base
+		b.fastExits = 0
+		return b.current
+	}
+	if runtime < b.fastExitWindow {
+		b.fastExits++
+		if b.fastExits >= b.fastExitThreshold {
+			b.current = b.max
+			b.fastExits = 0
+		}
+	} else {
+		b.fastExits = 0
+	}
+	result := b.current
+	b.current = min(b.current*2, b.max)
+	return result
 }
 
 // sleepCtx 等待 d，期间若 ctx 取消或 stopCh 关闭立即返回 false。

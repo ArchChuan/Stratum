@@ -266,7 +266,7 @@ func TestExampleConfigContract(t *testing.T) {
 		t.Fatalf("Decode example config: %v", err)
 	}
 	wantNames := []string{
-		"chroma", "codegraph", "code-review-graph", "codebase-memory", "obsidian", "claude-mem", "headroom",
+		"chroma", "codegraph", "code-review-graph", "codebase-memory", "obsidian", "claude-mem",
 		"playwright", "chrome-devtools", "yinxiang", "fetch", "memory", "sequential-thinking", "mcp-delve",
 		"tokensave", "context7", "figma",
 	}

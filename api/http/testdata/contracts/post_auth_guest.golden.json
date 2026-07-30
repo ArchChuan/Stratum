@@ -1,0 +1,11 @@
+[
+  {
+    "name": "default-unauth",
+    "method": "POST",
+    "path": "/auth/guest",
+    "body": {
+      "error": "internal server error"
+    },
+    "want_status": 500
+  }
+]

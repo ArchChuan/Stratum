@@ -1,0 +1,14 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/admin/tenants",
+    "want_status": 200,
+    "want_body": {
+      "tenants": [],
+      "total": 0,
+      "page": 1,
+      "page_size": 20
+    }
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "GET",
+    "path": "/workflows",
+    "want_status": 200,
+    "want_body": {
+      "workflows": [],
+      "total": 0,
+      "page": 1,
+      "page_size": 20
+    }
+  }
+]

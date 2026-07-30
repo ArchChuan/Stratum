@@ -1,0 +1,12 @@
+[
+  {
+    "name": "authenticated-success",
+    "method": "POST",
+    "path": "/admin/providers/contract-id/discover",
+    "want_status": 200,
+    "want_body": {
+      "count": 0,
+      "models": null
+    }
+  }
+]

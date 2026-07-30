@@ -92,6 +92,7 @@ func (s *ProviderService) Get(ctx context.Context, tenantID, id string) (*domain
 }
 
 // Update applies partial updates to an existing provider.
+// An empty APIKey means "keep existing".
 func (s *ProviderService) Update(ctx context.Context, tenantID string, input UpdateProviderInput) (*domain.Provider, error) {
 	existing, err := s.repo.Get(ctx, tenantID, input.ID)
 	if err != nil {
@@ -100,8 +101,10 @@ func (s *ProviderService) Update(ctx context.Context, tenantID string, input Upd
 	existing.Name = input.Name
 	existing.Kind = input.Kind
 	existing.BaseURL = input.BaseURL
-	existing.APIKey = input.APIKey
 	existing.DefaultModel = input.DefaultModel
+	if input.APIKey != "" {
+		existing.APIKey = input.APIKey
+	}
 	if err := s.repo.Update(ctx, tenantID, existing); err != nil {
 		return nil, fmt.Errorf("provider service: update: %w", err)
 	}
@@ -109,10 +112,10 @@ func (s *ProviderService) Update(ctx context.Context, tenantID string, input Upd
 	return existing, nil
 }
 
-// Delete removes a provider by ID.
+// Delete removes a provider by ID. Associated models are cascade-deleted by FK.
 func (s *ProviderService) Delete(ctx context.Context, tenantID, id string) error {
 	if err := s.repo.Delete(ctx, tenantID, id); err != nil {
-		return err
+		return fmt.Errorf("provider service: delete: %w", err)
 	}
 	s.invalidate(tenantID)
 	return nil

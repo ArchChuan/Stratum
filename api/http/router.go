@@ -189,7 +189,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		authRoutes.POST("/create-tenant", authHandler.CreateUserTenant)
 	}
 
-	if c.DB() == nil {
+	if c.IAM == nil || c.IAM.AdminService == nil || c.IAM.TenantService == nil {
 		return
 	}
 	jwtMW := middleware.JWTMiddleware(jwtSvc)
@@ -321,6 +321,8 @@ func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 		})
 		agents.POST("/:id/execute", requireActive, execRateLimit, agentHandler.ExecuteAgent)
 		agents.POST("/:id/execute/stream", requireActive, execRateLimit, agentHandler.ExecuteAgentStream)
+		agents.POST("/:id/executions/:executionID/pause", requireActive, agentHandler.PauseExecution)
+		agents.POST("/:id/executions/:executionID/resume", requireActive, agentHandler.ResumeExecution)
 		agents.PUT("/:id", requireAdmin, requireActive, agentHandler.UpdateAgent)
 		agents.DELETE("/:id", requireAdmin, requireActive, agentHandler.DeleteAgent)
 		agents.POST("/:id/conversations", chatHandler.CreateConversation)

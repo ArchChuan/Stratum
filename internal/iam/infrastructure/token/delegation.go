@@ -134,12 +134,17 @@ func validateAPIDelegationClaims(claims *platformmcp.APIDelegationClaims) error 
 	if claims.TokenUse != platformmcp.TokenUseAPIDelegation {
 		return errors.New("invalid API delegation token use")
 	}
-	if claims.TenantID == "" || claims.AgentID == "" || claims.ServerID == "" || claims.ToolName == "" ||
-		claims.ExecutionID == "" || claims.HTTPMethod == "" || claims.PathTemplate == "" || claims.Role == "" ||
-		claims.ID == "" {
+	if apiDelegationClaimsMissing(claims) {
 		return errors.New("API delegation token missing required claims")
 	}
 	return nil
+}
+
+func apiDelegationClaimsMissing(claims *platformmcp.APIDelegationClaims) bool {
+	identityMissing := claims.TenantID == "" || claims.AgentID == "" || claims.ServerID == "" || claims.ID == ""
+	requestMissing := claims.ToolName == "" || claims.ExecutionID == "" || claims.HTTPMethod == "" ||
+		claims.PathTemplate == "" || claims.Role == ""
+	return identityMissing || requestMissing
 }
 
 func matchesTokenProfile(claims jwt.RegisteredClaims, issuer, audience string) bool {

@@ -59,7 +59,7 @@ describe('EditAgentPage', () => {
     expect(screen.getByText('普通 Agent 完整表单')).toBeInTheDocument();
   });
 
-  it('retains the complete form for an ordinary Agent', () => {
+  it('shows edit title and form for an ordinary Agent', () => {
     renderPage({ isSystem: false, name: '普通 Agent' }, 'agent-1');
 
     expect(screen.getByText('编辑 Agent')).toBeInTheDocument();

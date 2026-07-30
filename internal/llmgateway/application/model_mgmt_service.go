@@ -80,10 +80,10 @@ func (s *ModelMgmtService) Toggle(ctx context.Context, tenantID, id string, enab
 	return nil
 }
 
-// Delete removes a model by ID.
+// Delete removes a non-provider-managed model by ID.
 func (s *ModelMgmtService) Delete(ctx context.Context, tenantID, id string) error {
 	if err := s.repo.Delete(ctx, tenantID, id); err != nil {
-		return err
+		return fmt.Errorf("model mgmt: delete: %w", err)
 	}
 	s.invalidate(tenantID)
 	return nil

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/byteBuilderX/stratum/pkg/constants"
 )
 
 type Tool struct {
@@ -101,7 +103,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	switch request.Method {
 	case "initialize":
 		writeRPCResult(w, request.ID, map[string]any{
-			"protocolVersion": "2025-06-18",
+			"protocolVersion": constants.MCPProtocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": true}},
 			"serverInfo":      map[string]any{"name": "stratum-fake-mcp", "version": "1.0"},
 		})

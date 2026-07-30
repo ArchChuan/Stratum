@@ -2,7 +2,7 @@ import { message } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 
 import { llmApi } from '../api/llm.api';
-import type { Provider, CreateProviderInput } from '../model/llm';
+import type { Provider, CreateProviderInput, UpdateProviderInput } from '../model/llm';
 
 import { extractErrorMessage } from '@/shared/lib';
 
@@ -10,6 +10,7 @@ export function useProviders() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
+  const [updateLoading, setUpdateLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   const fetch = useCallback(async () => {
@@ -53,6 +54,19 @@ export function useProviders() {
     }
   }, [fetch]);
 
+  const updateProvider = useCallback(async (id: string, values: UpdateProviderInput) => {
+    setUpdateLoading(true);
+    try {
+      await llmApi.updateProvider(id, values);
+      message.success({ content: '厂商已更新', duration: 2 });
+      await fetch();
+    } catch (err: any) {
+      message.error({ content: err.response?.data?.error || '更新厂商失败', duration: 0 });
+    } finally {
+      setUpdateLoading(false);
+    }
+  }, [fetch]);
+
   const deleteProvider = useCallback(async (id: string) => {
     setDeleteLoading(true);
     try {
@@ -66,5 +80,15 @@ export function useProviders() {
     }
   }, [fetch]);
 
-  return { providers, loading, createLoading, deleteLoading, refresh: fetch, createProvider, deleteProvider };
+  return {
+    providers,
+    loading,
+    createLoading,
+    updateLoading,
+    deleteLoading,
+    refresh: fetch,
+    createProvider,
+    updateProvider,
+    deleteProvider,
+  };
 }
