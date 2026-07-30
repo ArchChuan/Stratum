@@ -262,11 +262,11 @@ func TestOpenAICompatProtocolListsProviderModels(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
-		want []string
+		want []infrastructure.DiscoveredModel
 	}{
 		{name: "returns discovered model IDs", body: `{"data":[{"id":"mock-model-1"},{"id":"mock-model-2"}]}`,
-			want: []string{"mock-model-1", "mock-model-2"}},
-		{name: "returns an empty slice when provider has no models", body: `{"data":[]}`, want: []string{}},
+			want: []infrastructure.DiscoveredModel{{Name: "mock-model-1"}, {Name: "mock-model-2"}}},
+		{name: "returns an empty slice when provider has no models", body: `{"data":[]}`, want: []infrastructure.DiscoveredModel{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
