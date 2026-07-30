@@ -65,9 +65,10 @@ require 'cancel-in-progress:[[:space:]]*false' 'non-cancelling active deployment
 require '^  build-backend:' 'parallel backend image build job'
 require '^  build-frontend:' 'parallel frontend image build job'
 require '^  build-feishu-adapter:' 'parallel Feishu adapter image build job'
-require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter\]' \
+require '^  build-platform-mcp:' 'parallel platform MCP image build job'
+require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter,[[:space:]]*build-platform-mcp\]' \
     'image build fan-in dependencies'
-for job_scope in build-backend:backend build-frontend:frontend build-feishu-adapter:feishu-alert-adapter; do
+for job_scope in build-backend:backend build-frontend:frontend build-feishu-adapter:feishu-alert-adapter build-platform-mcp:platform-mcp; do
     job=${job_scope%%:*}
     scope=${job_scope#*:}
     require_job "${job}" '^    needs:[[:space:]]*test$' "${job} test dependency"
