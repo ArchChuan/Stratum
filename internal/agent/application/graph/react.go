@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -464,6 +465,9 @@ func buildToolStartedEvent(s ReActState, tc port.ToolCall, provider toolProvider
 }
 
 func dispatchToolCall(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time, provider toolProviderRef, logger *zap.Logger) toolExecResult {
+	if result, matched := dispatchSkillTool(tc, s); matched {
+		return result
+	}
 	switch tc.Name {
 	case "stratum_search_official_docs":
 		return execOfficialDocsTool(toolCtx, tc, s, toolStart)
@@ -475,8 +479,6 @@ func dispatchToolCall(toolCtx context.Context, tc port.ToolCall, s *ReActState, 
 		return execPlanTool(toolCtx, tc, s)
 	case "stratum_continue_reasoning":
 		return toolExecResult{content: "Continuing reasoning...", status: domain.ToolTraceStatusSuccess}
-	case "stratum_activate_skill":
-		return execActivateSkillTool(tc, s)
 	case "stratum_search_knowledge":
 		return execSearchKnowledgeTool(toolCtx, tc, s, toolStart, logger)
 	case "stratum_recall_memory":
@@ -484,6 +486,21 @@ func dispatchToolCall(toolCtx context.Context, tc port.ToolCall, s *ReActState, 
 	default:
 		return execMCPTool(toolCtx, tc, s, toolStart, provider, logger)
 	}
+}
+
+// dispatchSkillTool matches a tool call against the skill catalog.
+// The tool name is the ActivationContract name, not a hardcoded prefix.
+func dispatchSkillTool(tc port.ToolCall, s *ReActState) (toolExecResult, bool) {
+	for _, activation := range s.SkillCatalog {
+		if activation.Name == tc.Name || (activation.Name == "" && activation.SkillID == tc.Name) {
+			s.ActiveSkill = &activation
+			return toolExecResult{
+				content: fmt.Sprintf("activated skill %s revision %s", activation.SkillID, activation.RevisionID),
+				status:  domain.ToolTraceStatusSuccess,
+			}, true
+		}
+	}
+	return toolExecResult{}, false
 }
 
 func execOfficialDocsTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
@@ -566,20 +583,6 @@ func execPlanTool(toolCtx context.Context, tc port.ToolCall, s *ReActState) tool
 		return toolExecResult{content: content, status: domain.ToolTraceStatusError, errMsg: planErr.Error()}
 	}
 	return toolExecResult{content: content, status: domain.ToolTraceStatusSuccess}
-}
-
-func execActivateSkillTool(tc port.ToolCall, s *ReActState) toolExecResult {
-	skillID, _ := tc.Arguments["skill_id"].(string)
-	activation, ok := s.SkillCatalog[skillID]
-	if !ok {
-		msg := fmt.Sprintf("error: skill %q is not available in this run", skillID)
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: msg, content: msg}
-	}
-	s.ActiveSkill = &activation
-	return toolExecResult{
-		content: fmt.Sprintf("activated skill %s revision %s", activation.SkillID, activation.RevisionID),
-		status:  domain.ToolTraceStatusSuccess,
-	}
 }
 
 func execSearchKnowledgeTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time, logger *zap.Logger) toolExecResult {
@@ -842,8 +845,6 @@ func classifyToolProvider(name string, tools []port.ToolDefinition) toolProvider
 		return toolProviderRef{ToolType: domain.ToolTypeBuiltinRAG, ProviderType: domain.ProviderTypeBuiltin, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	case "stratum_recall_memory":
 		return toolProviderRef{ToolType: domain.ToolTypeBuiltinMemory, ProviderType: domain.ProviderTypeBuiltin, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
-	case "stratum_activate_skill":
-		return toolProviderRef{ToolType: domain.ToolTypeSkill, ProviderType: domain.ProviderTypeSkill, ProviderID: name, CapabilityID: name, NodeID: name, NodeType: domain.ObservationTypeSkill}
 	case "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan":
 		return toolProviderRef{ToolType: domain.ToolTypeInternal, ProviderType: domain.ProviderTypeInternal, ProviderID: name, CapabilityID: name, NodeID: nodeTool, NodeType: domain.ObservationTypeTool}
 	default:
@@ -931,6 +932,44 @@ func allowedKnowledgeWorkspaces(requested, agentAllowed []string, active *port.S
 	return out
 }
 
+// buildSkillToolDefinitions returns one tool definition per skill in the
+// catalog, sorted by SkillID for deterministic ordering. Each tool uses the
+// ActivationContract name, description, and input schema so the LLM selects
+// by semantics rather than by opaque skill ID.
+func buildSkillToolDefinitions(catalog map[string]port.SkillActivation) []port.ToolDefinition {
+	if len(catalog) == 0 {
+		return nil
+	}
+	sorted := make([]string, 0, len(catalog))
+	for id := range catalog {
+		sorted = append(sorted, id)
+	}
+	sort.Strings(sorted)
+	out := make([]port.ToolDefinition, 0, len(sorted))
+	for _, skillID := range sorted {
+		activation := catalog[skillID]
+		schema := activation.InputSchema
+		if schema == nil {
+			schema = map[string]any{"type": "object", "properties": map[string]any{}}
+		}
+		toolName := activation.Name
+		if toolName == "" {
+			toolName = activation.SkillID
+		}
+		out = append(out, port.ToolDefinition{
+			Name:         toolName,
+			Description:  activation.Description,
+			InputSchema:  schema,
+			ProviderType: domain.ProviderTypeSkill,
+			ProviderID:   activation.SkillID,
+			CapabilityID: activation.SkillID,
+			NodeID:       toolName,
+			NodeType:     domain.ObservationTypeSkill,
+		})
+	}
+	return out
+}
+
 func effectiveTools(
 	available []port.ToolDefinition,
 	catalog map[string]port.SkillActivation,
@@ -944,22 +983,7 @@ func effectiveTools(
 	}
 	out := make([]port.ToolDefinition, 0, len(available)+5)
 	out = append(out, PlanToolDefinitions()...)
-	if len(catalog) > 0 {
-		ids := make([]any, 0, len(catalog))
-		for id := range catalog {
-			ids = append(ids, id)
-		}
-		out = append(out, port.ToolDefinition{
-			Name:         "stratum_activate_skill",
-			Description:  "Activate one versioned task method for the current run. Activating another skill replaces the current one.",
-			ProviderType: domain.ProviderTypeSkill,
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"skill_id": map[string]any{"type": "string", "enum": ids}},
-				"required":   []string{"skill_id"},
-			},
-		})
-	}
+	out = append(out, buildSkillToolDefinitions(catalog)...)
 	allowedMCP := map[string]struct{}{}
 	if active != nil {
 		for _, id := range active.MCPToolIDs {

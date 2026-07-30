@@ -397,31 +397,15 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 	)
 
 	// Resume from checkpoint if one exists.
-	var activePlan *domain.Plan
-	if a.CheckpointEnabled && a.CheckpointStore != nil && ec.cfg.ExecutionID != "" {
-		resumeCp, resumeCpErr := a.CheckpointStore.GetLatest(ctx, ec.cfg.TenantID, ec.cfg.ExecutionID)
-		if resumeCpErr == nil && resumeCp != nil && isResumableCheckpoint(resumeCp.Status) {
-			a.Logger.Info("agent: resuming from checkpoint",
-				zap.String("checkpoint_id", resumeCp.ID),
-				zap.String("execution_id", ec.cfg.ExecutionID),
-				zap.Int("step_index", resumeCp.StepIndex),
-			)
-			if len(resumeCp.MessagesSnapshotJSON) > 0 {
-				var savedMsgs []port.LLMMessage
-				if err := json.Unmarshal(resumeCp.MessagesSnapshotJSON, &savedMsgs); err == nil {
-					initMessages = savedMsgs
-				}
-			}
-			if len(resumeCp.RuntimeStateJSON) > 0 {
-				if decoded, decErr := agentgraph.DecodePlanCheckpoint(resumeCp.RuntimeStateJSON); decErr == nil && decoded.Plan != nil {
-					activePlan = decoded.Plan
-				}
-			}
-		}
-	}
+	activePlan, restoredActiveSkill, initMessages := a.resumeFromCheckpoint(
+		ctx, ec, initMessages,
+	)
 
 	initState := a.buildReActInitState(ec, initMessages, maxTokens)
 	initState.ActivePlan = activePlan
+	if restoredActiveSkill != nil {
+		initState.ActiveSkill = restoredActiveSkill
+	}
 	initState.PlanNodeExecutor = a.buildPlanNodeExecutor(ec, ec.capGW)
 	if !ec.cfg.SystemAssistantMode && a.RecallMemoryFn != nil {
 		fn := a.RecallMemoryFn
@@ -1183,4 +1167,58 @@ func boundExecutionArtifactsJSON(artifacts []domain.ExecutionArtifact) []domain.
 // resumed (running or paused).
 func isResumableCheckpoint(s string) bool {
 	return s == "running" || s == "paused"
+}
+
+// resumeFromCheckpoint restores execution state from the latest checkpoint.
+func (a *BaseAgent) resumeFromCheckpoint(
+	ctx context.Context, ec agentExecContext, msgs []port.LLMMessage,
+) (*domain.Plan, *port.SkillActivation, []port.LLMMessage) {
+	if !a.CheckpointEnabled || a.CheckpointStore == nil || ec.cfg.ExecutionID == "" {
+		return nil, nil, msgs
+	}
+	resumeCp, err := a.CheckpointStore.GetLatest(ctx, ec.cfg.TenantID, ec.cfg.ExecutionID)
+	if err != nil || resumeCp == nil || !isResumableCheckpoint(resumeCp.Status) {
+		return nil, nil, msgs
+	}
+	a.Logger.Info("agent: resuming from checkpoint",
+		zap.String("checkpoint_id", resumeCp.ID),
+		zap.String("execution_id", ec.cfg.ExecutionID),
+		zap.Int("step_index", resumeCp.StepIndex),
+	)
+	msgs = restoreMessages(resumeCp.MessagesSnapshotJSON, msgs)
+	plan, skill := restorePlanCheckpointState(resumeCp.RuntimeStateJSON, ec.cfg.SkillCatalog)
+	return plan, skill, msgs
+}
+
+func restoreMessages(raw json.RawMessage, fallback []port.LLMMessage) []port.LLMMessage {
+	if len(raw) == 0 {
+		return fallback
+	}
+	var saved []port.LLMMessage
+	if json.Unmarshal(raw, &saved) == nil {
+		return saved
+	}
+	return fallback
+}
+
+func restorePlanCheckpointState(raw json.RawMessage, catalog map[string]port.SkillActivation) (*domain.Plan, *port.SkillActivation) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	decoded, err := agentgraph.DecodePlanCheckpoint(raw)
+	if err != nil {
+		return nil, nil
+	}
+	var plan *domain.Plan
+	if decoded.Plan != nil {
+		plan = decoded.Plan
+	}
+	var skill *port.SkillActivation
+	if decoded.ActiveSkillID != "" {
+		if activation, ok := catalog[decoded.ActiveSkillID]; ok &&
+			(decoded.ActiveSkillRevisionID == "" || activation.RevisionID == decoded.ActiveSkillRevisionID) {
+			skill = &activation
+		}
+	}
+	return plan, skill
 }

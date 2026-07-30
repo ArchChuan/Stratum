@@ -175,10 +175,10 @@ func loadKnowledgeWorkspaces(ctx context.Context, tx pgx.Tx, agentID string) ([]
 func (r *PgAgentRepo) Register(ctx context.Context, cfg *domain.AgentConfig) error {
 	return r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
-			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL)`,
+			`INSERT INTO agents (id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10)`,
 			cfg.ID, cfg.Name, string(cfg.Type), cfg.Description,
-			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope,
+			cfg.SystemPrompt, cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CheckpointEnabled,
 		)
 		if err != nil {
 			var pgErr *pgconn.PgError
@@ -207,11 +207,11 @@ func (r *PgAgentRepo) Get(ctx context.Context, id string) (*domain.AgentConfig, 
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
 			`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope,
-			        COALESCE(system_key, '')
+			        COALESCE(system_key, ''), COALESCE(checkpoint_enabled, false)
 			 FROM agents WHERE id = $1`, id).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
 				&cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
-				&cfg.SystemKey); err != nil {
+				&cfg.SystemKey, &cfg.CheckpointEnabled); err != nil {
 			return err
 		}
 		skillIDs, err := loadSkillIDs(ctx, tx, id)
@@ -253,10 +253,10 @@ func (r *PgAgentRepo) GetSystemAssistant(ctx context.Context) (*domain.AgentConf
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
 			`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens,
-			        memory_scope, system_key
+			        memory_scope, system_key, COALESCE(checkpoint_enabled, false)
 			 FROM agents WHERE system_key = 'stratum.platform_assistant'`).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey); err != nil {
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled); err != nil {
 			return err
 		}
 		if err := loadAgentRelations(ctx, tx, &cfg); err != nil {
@@ -320,7 +320,7 @@ func (r *PgAgentRepo) GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT id, name, type, description, system_prompt, llm_model, max_iterations, max_context_tokens, memory_scope,
-		        COALESCE(system_key, '')
+		        COALESCE(system_key, ''), COALESCE(checkpoint_enabled, false)
 		 FROM agents ORDER BY created_at`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list agents: %w", err)
@@ -333,7 +333,7 @@ func scanAgents(ctx context.Context, tx pgx.Tx) ([]*domain.AgentConfig, []string
 		var agentType string
 		if err := rows.Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description,
 			&cfg.SystemPrompt, &cfg.LLMModel, &cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope,
-			&cfg.SystemKey); err != nil {
+			&cfg.SystemKey, &cfg.CheckpointEnabled); err != nil {
 			return nil, nil, fmt.Errorf("scan agent row: %w", err)
 		}
 		cfg.Type = domain.AgentType(agentType)
@@ -441,10 +441,10 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig) error
 			`UPDATE agents
 			 SET name=$1, description=$2, system_prompt=$3,
 			     llm_model=$4, max_iterations=$5, max_context_tokens=$6,
-			     memory_scope=$7, updated_at=NOW()
-			 WHERE id=$8`,
+			     memory_scope=$7, checkpoint_enabled=$8, updated_at=NOW()
+			 WHERE id=$9`,
 			cfg.Name, cfg.Description, cfg.SystemPrompt,
-			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.ID,
+			cfg.LLMModel, cfg.MaxIterations, cfg.MaxContextTokens, cfg.MemoryScope, cfg.CheckpointEnabled, cfg.ID,
 		)
 		if err != nil {
 			return fmt.Errorf("update agent %s: %w", cfg.ID, err)
@@ -472,9 +472,9 @@ func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model stri
 		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, updated_at=NOW()
 			WHERE system_key='stratum.platform_assistant'
 			RETURNING id, name, type, description, system_prompt, llm_model,
-			          max_iterations, max_context_tokens, memory_scope, system_key`, model).
+			          max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled`, model).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey); err != nil {
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("update system assistant model: %w", domain.ErrNotFound)
 			}
@@ -506,9 +506,9 @@ func (r *PgAgentRepo) UpdateSystemAssistantBindings(
 			`UPDATE agents SET updated_at=NOW()
 			 WHERE system_key='stratum.platform_assistant'
 			 RETURNING id, name, type, description, system_prompt, llm_model,
-			           max_iterations, max_context_tokens, memory_scope, system_key`).
+			           max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled`).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
-				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey); err != nil {
+				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("update system assistant bindings: %w", domain.ErrNotFound)
 			}

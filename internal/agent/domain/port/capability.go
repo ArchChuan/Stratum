@@ -93,6 +93,8 @@ type SkillActivation struct {
 	Name                  string
 	Description           string
 	Instructions          string
+	InputSchema           map[string]any
+	OutputSchema          map[string]any
 	MCPToolIDs            []string
 	KnowledgeWorkspaceIDs []string
 	MemoryScopes          []string
