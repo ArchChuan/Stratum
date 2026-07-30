@@ -299,29 +299,39 @@ type toolDef = struct {
 }
 
 func findContextTool(tools []toolDef, called map[string]bool) (string, string) {
-	for _, expected := range []string{"stratum_search_knowledge", "stratum_recall_memory"} {
-		for _, tool := range tools {
-			if tool.Function.Name != expected || called[expected] {
-				continue
-			}
-			if expected == "stratum_recall_memory" {
-				return expected, `{"query":"历史偏好","limit":5}`
-			}
-			properties, _ := tool.Function.Parameters["properties"].(map[string]any)
-			workspaces, _ := properties["workspaces"].(map[string]any)
-			items, _ := workspaces["items"].(map[string]any)
-			values, _ := items["enum"].([]any)
-			if len(values) > 0 {
-				if workspace, ok := values[0].(string); ok {
-					arguments, _ := json.Marshal(map[string]any{
-						"workspaces": []string{workspace}, "query": "知识库上下文", "top_k": 5,
-					})
-					return expected, string(arguments)
-				}
+	for _, tool := range tools {
+		name := tool.Function.Name
+		if called[name] {
+			continue
+		}
+		switch name {
+		case "stratum_recall_memory":
+			return name, `{"query":"历史偏好","limit":5}`
+		case "stratum_search_knowledge":
+			if args := buildKnowledgeArgs(tool); args != "" {
+				return name, args
 			}
 		}
 	}
 	return "", ""
+}
+
+func buildKnowledgeArgs(tool toolDef) string {
+	properties, _ := tool.Function.Parameters["properties"].(map[string]any)
+	workspaces, _ := properties["workspaces"].(map[string]any)
+	items, _ := workspaces["items"].(map[string]any)
+	values, _ := items["enum"].([]any)
+	if len(values) == 0 {
+		return ""
+	}
+	workspace, ok := values[0].(string)
+	if !ok {
+		return ""
+	}
+	args, _ := json.Marshal(map[string]any{
+		"workspaces": []string{workspace}, "query": "知识库上下文", "top_k": 5,
+	})
+	return string(args)
 }
 
 func findSkillTool(tools []toolDef, called map[string]bool) (string, string) {
