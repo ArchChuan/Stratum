@@ -6,13 +6,18 @@ import (
 	"crypto/x509"
 	"errors"
 	"net/url"
+	"strings"
 	"testing"
+
+	"go.uber.org/zap"
 
 	"github.com/byteBuilderX/stratum/config"
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	mcpinfra "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
 	"github.com/byteBuilderX/stratum/pkg/platformmcp"
+	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 )
 
 func TestVerifyPlatformMCPServerRequiresExactWorkloadIdentity(t *testing.T) {
@@ -61,6 +66,29 @@ func TestBuildPlatformMCPSkipsDisabledInternalAPI(t *testing.T) {
 
 	if err := container.buildPlatformMCP(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBuildMCPConfiguresManagedTransportBeforeRestoringConnections(t *testing.T) {
+	container := &Container{
+		Config: &config.Config{InternalAPI: config.InternalAPIConfig{
+			CertFile: "missing-server.crt", KeyFile: "missing-server.key", ClientCAFile: "missing-ca.crt",
+		}},
+		Logger: zap.NewNop(),
+	}
+	if err := container.buildMCP(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = container.MCP.Manager.Stop(t.Context()) })
+	ctx := tenantdb.WithTenant(t.Context(), &tenantdb.TenantContext{TenantID: "tenant-1"})
+
+	err := container.MCP.Manager.Connect(ctx, &mcpinfra.MCPServerConfig{
+		ID: platformmcp.SystemServerID, Transport: "streamable-http", URL: "https://stratum-platform-mcp:8443/mcp",
+		SystemKey: platformmcp.SystemServerKey, ManagementMode: platformmcp.ManagementPlatform,
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "load Stratum backend workload certificate") {
+		t.Fatalf("error=%v, want configured managed transport failure", err)
 	}
 }
 
