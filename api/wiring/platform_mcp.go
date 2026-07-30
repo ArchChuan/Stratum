@@ -3,7 +3,6 @@ package wiring
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"slices"
 
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
@@ -42,7 +41,7 @@ func (c *Container) buildPlatformMCP(_ context.Context) error {
 			agents: c.Agent.Service, servers: c.MCP.Service,
 		},
 		Replay:    iampersistence.NewMCPTokenReplayRepo(c.dbOrNil()),
-		Contracts: newPhase1PlatformMCPContracts(),
+		Contracts: platformmcp.NewPhase1Contracts(),
 	})
 	c.PlatformMCP = &PlatformMCP{TokenExchange: exchange, Tokens: tokens}
 	return nil
@@ -120,32 +119,6 @@ func (a platformMCPRoleAdapter) CurrentRole(
 		return "", fmt.Errorf("resolve platform MCP role: %w", err)
 	}
 	return role, nil
-}
-
-type staticPlatformMCPContracts struct {
-	contracts map[string]platformmcp.ToolContract
-}
-
-func (r staticPlatformMCPContracts) Lookup(name string) (platformmcp.ToolContract, bool) {
-	contract, ok := r.contracts[name]
-	return contract, ok
-}
-
-func newPhase1PlatformMCPContracts() staticPlatformMCPContracts {
-	return staticPlatformMCPContracts{contracts: map[string]platformmcp.ToolContract{
-		"stratum_search_official_docs": {
-			Name: "stratum_search_official_docs", Method: http.MethodPost,
-			Path: "/internal/platform-assistant/docs/search", MinimumRole: "member",
-		},
-		"stratum_diagnose_tenant": {
-			Name: "stratum_diagnose_tenant", Method: http.MethodPost,
-			Path: "/internal/platform-assistant/diagnostics", MinimumRole: "member",
-		},
-		"stratum_propose_resource_change": {
-			Name: "stratum_propose_resource_change", Method: http.MethodPost,
-			Path: "/internal/platform-assistant/proposals", MinimumRole: "admin",
-		},
-	}}
 }
 
 func platformMCPTenantContext(ctx context.Context, tenantID string) context.Context {

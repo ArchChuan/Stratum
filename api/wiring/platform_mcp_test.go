@@ -73,7 +73,7 @@ func TestPlatformMCPRoleAdapterPreservesMembershipFailure(t *testing.T) {
 }
 
 func TestPhase1PlatformMCPContractsAreClosed(t *testing.T) {
-	registry := newPhase1PlatformMCPContracts()
+	registry := platformmcp.NewPhase1Contracts()
 	for _, name := range platformmcp.Phase1ToolNames {
 		contract, ok := registry.Lookup(name)
 		if !ok || contract.Name != name || contract.Method == "" || contract.Path == "" {
