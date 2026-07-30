@@ -123,7 +123,7 @@ func ComposeSystemAssistantProfile(
 	return &domain.AgentConfig{
 		ID: cfg.ID, Name: profile.Name, Type: domain.ReActAgent,
 		Description:      cfg.Description,
-		SystemPrompt:     cfg.SystemPrompt,
+		SystemPrompt:     profile.SystemPrompt,
 		LLMModel:         cfg.LLMModel,
 		MaxIterations:    profile.MaxIterations,
 		MaxContextTokens: profile.MaxContextTokens,

@@ -150,7 +150,8 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     await expect(page).toHaveURL(`${webURL}/agents/${systemAgent.id}/edit`);
     const modelInput = page.getByRole('combobox', { name: 'LLM 模型' });
     await expect(modelInput).toBeEnabled();
-    await modelInput.click();
+    await modelInput.scrollIntoViewIfNeeded();
+    await modelInput.click({ force: true });
     await modelInput.press('ArrowDown');
     await modelInput.press('Enter');
     const settingsResponse = waitForMutation(page, `/agents/${systemAgent.id}`, 'PUT');
