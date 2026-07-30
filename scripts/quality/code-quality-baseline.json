@@ -321,17 +321,6 @@
       "body_hash": "814175339e4ea4775fc0a446be677866fa3365e08fbddfd398865641c53230e6"
     },
     {
-      "id": "cmd/e2e-mcp-server/main.go:findContextTool",
-      "file": "cmd/e2e-mcp-server/main.go",
-      "name": "findContextTool",
-      "cyclomatic": 8,
-      "cognitive": 17,
-      "lines": 25,
-      "max_nesting": 4,
-      "params": 2,
-      "body_hash": "8bb3c8684e5ac8259339d742af1dc5068f2662189e38fccac9aabd5673a04198"
-    },
-    {
       "id": "cmd/e2e-mcp-server/main.go:opikHandler",
       "file": "cmd/e2e-mcp-server/main.go",
       "name": "opikHandler",
