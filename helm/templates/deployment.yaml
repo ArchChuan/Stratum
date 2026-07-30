@@ -8,6 +8,11 @@ spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.app.replicaCount }}
   {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.app.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ .Values.app.rollingUpdate.maxSurge }}
   selector:
     matchLabels:
       {{- include "stratum.selectorLabels" . | nindent 6 }}

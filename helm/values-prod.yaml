@@ -101,3 +101,10 @@ autoscaling:
   maxReplicas: 10
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 80
+
+# Pre-upgrade: validate production secrets before any resource change.
+requiredSecrets:
+  enabled: true
+  names: []
+  # Add TLS/mTLS secrets when enabled:
+  # - stratum-backend-internal-tls
