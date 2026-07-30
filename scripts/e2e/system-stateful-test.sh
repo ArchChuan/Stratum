@@ -60,6 +60,7 @@ while :; do read -r -t 1 _ || true; done
 SH
 cat >"$test_dir/backend-process" <<'SH'
 #!/usr/bin/env bash
+printf 'backend diagnostic marker\n'
 [[ -e "$STATEFUL_E2E_OAUTH_STARTED_MARKER" ]] || exit 31
 [[ -e "$STATEFUL_E2E_MCP_STARTED_MARKER" ]] || exit 36
 [[ -e "$STATEFUL_E2E_PLATFORM_MCP_STARTED_MARKER" ]] || exit 38
@@ -147,8 +148,14 @@ common=(env TEST_DATABASE_URL="$safe_db" STATEFUL_E2E_DIGEST_COMMAND="$test_dir/
   STATEFUL_E2E_PLATFORM_MCP_CLEANUP_MARKER="$test_dir/platform-mcp-cleaned"
   STATEFUL_E2E_PLATFORM_MCP_CHILD_PID_FILE="$test_dir/platform-mcp-child-pid")
 cleanup_marker="$test_dir/cleaned"
+failure_log_dir="$test_dir/failure-logs"
 expect_failure 'backend failed health check' "${common[@]}" STATEFUL_E2E_CLEANUP_MARKER="$cleanup_marker" \
+  STATEFUL_E2E_FAILURE_LOG_DIR="$failure_log_dir" \
   STATEFUL_E2E_BACKEND_HEALTH_COMMAND=false bash "$runner" short
+grep -q 'backend diagnostic marker' "$failure_log_dir/backend.log" || {
+  printf 'runner did not export backend failure log\n' >&2
+  exit 1
+}
 for _ in {1..20}; do [[ -e "$cleanup_marker" ]] && break; sleep 0.05; done
 [[ -e "$cleanup_marker" ]] || { printf 'runner did not clean up owned child processes\n' >&2; exit 1; }
 

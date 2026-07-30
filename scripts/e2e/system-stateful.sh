@@ -68,6 +68,16 @@ stop_process_tree() {
   ((${#descendants[@]} == 0)) || kill "${descendants[@]}" 2>/dev/null || true
   wait "$root" 2>/dev/null || true
 }
+export_failure_logs() {
+  local target=${STATEFUL_E2E_FAILURE_LOG_DIR:-} log
+  [[ -n "$target" ]] || return 0
+  mkdir -p "$target"
+  chmod 0700 "$target"
+  for log in oauth mcp platform-mcp backend frontend; do
+    [[ -f "$work_dir/$log.log" ]] || continue
+    install -m 0600 "$work_dir/$log.log" "$target/$log.log"
+  done
+}
 cleanup() {
   local status=$?
 	[[ -z "$frontend_pid" ]] || stop_process_tree "$frontend_pid"
@@ -82,6 +92,9 @@ cleanup() {
   fi
   if [[ "$infra_started" == true && "$infra_owned" == true ]]; then
     bash -c "${STATEFUL_E2E_INFRA_DOWN_COMMAND:-make -C '$repo_dir' infra-down}" >/dev/null 2>&1 || status=1
+  fi
+  if ((status != 0)); then
+    export_failure_logs || status=1
   fi
   rm -rf "$work_dir"
   exit "$status"

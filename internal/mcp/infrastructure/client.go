@@ -64,19 +64,20 @@ type BaseClient struct {
 	sessionID   string
 	credentials InvocationCredentialProvider
 	transport   ManagedHTTPTransportProvider
+	providerMu  sync.RWMutex
 	// negotiatedVersion is set only after a valid initialize response.
 	negotiatedVersion string
 }
 
 func (c *BaseClient) SetInvocationCredentialProvider(provider InvocationCredentialProvider) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.providerMu.Lock()
+	defer c.providerMu.Unlock()
 	c.credentials = provider
 }
 
 func (c *BaseClient) SetManagedHTTPTransportProvider(provider ManagedHTTPTransportProvider) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.providerMu.Lock()
+	defer c.providerMu.Unlock()
 	c.transport = provider
 }
 
@@ -438,9 +439,9 @@ func (c *BaseClient) httpTransport() (http.RoundTripper, error) {
 		c.config.ManagementMode != platformmcp.ManagementPlatform {
 		return nil, nil
 	}
-	c.mu.RLock()
+	c.providerMu.RLock()
 	provider := c.transport
-	c.mu.RUnlock()
+	c.providerMu.RUnlock()
 	if provider == nil {
 		return nil, errors.New("Platform MCP mTLS transport provider is not configured")
 	}
@@ -609,9 +610,9 @@ func (c *BaseClient) applyInvocationCredential(ctx context.Context, req *http.Re
 		c.config.ManagementMode != platformmcp.ManagementPlatform {
 		return nil
 	}
-	c.mu.RLock()
+	c.providerMu.RLock()
 	provider := c.credentials
-	c.mu.RUnlock()
+	c.providerMu.RUnlock()
 	if provider == nil {
 		return errors.New("Platform MCP invocation credential provider is not configured")
 	}

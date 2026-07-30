@@ -16,6 +16,14 @@ type invocationCredentialFake struct {
 	calls int
 }
 
+type managedTransportFake struct {
+	transport http.RoundTripper
+}
+
+func (f managedTransportFake) Transport() (http.RoundTripper, error) {
+	return f.transport, nil
+}
+
 func (f *invocationCredentialFake) Authorization(context.Context, string, string) (string, error) {
 	f.calls++
 	return "Bearer invocation-secret", nil
@@ -64,5 +72,37 @@ func TestBaseClientUsesInvocationCredentialOnlyForManagedPlatformIdentity(t *tes
 				t.Fatalf("provider calls=%d authorization=%q", provider.calls, authorization)
 			}
 		})
+	}
+}
+
+func TestBaseClientConnectsManagedPlatformTransportWithoutLockingItself(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var request MCPRequest
+		if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		if request.Method == "notifications/initialized" {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		writeTestInitializeResult(w, request.ID)
+	}))
+	t.Cleanup(server.Close)
+	client := NewBaseClient(&MCPServerConfig{
+		ID: "stratum-platform-mcp", Transport: "streamable-http", URL: server.URL,
+		Timeout: time.Second, SystemKey: platformmcp.SystemServerKey, ManagementMode: platformmcp.ManagementPlatform,
+	}, zap.NewNop())
+	client.SetManagedHTTPTransportProvider(managedTransportFake{transport: server.Client().Transport})
+
+	done := make(chan error, 1)
+	go func() { done <- client.Connect(t.Context()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("managed Platform MCP connection deadlocked")
 	}
 }
