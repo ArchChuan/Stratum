@@ -111,6 +111,13 @@ require '--version v1\.21\.1' 'pinned cert-manager chart version'
 require '--set crds\.enabled=true' 'cert-manager CRD installation'
 require 'kubectl wait --for=condition=Established crd/certificates\.cert-manager\.io' \
     'Certificate CRD readiness wait'
+require 'name:[[:space:]]*stratum-internal-root-bootstrap' 'internal root bootstrap issuer missing'
+require 'namespace:[[:space:]]*cert-manager' 'internal CA Secret namespace missing'
+require 'isCA:[[:space:]]*true' 'internal root certificate CA constraint missing'
+require 'secretName:[[:space:]]*stratum-internal-root-ca' 'internal root CA Secret missing'
+require 'name:[[:space:]]*stratum-internal-ca' 'internal workload ClusterIssuer missing'
+require 'kubectl wait --for=condition=Ready clusterissuer/stratum-internal-ca' \
+    'internal workload ClusterIssuer readiness wait'
 require_file "${OPIK_COLLECTOR}" 'opentelemetry-collector-contrib@sha256:[0-9a-f]{64}' \
     'collector image digest pin'
 require 'opik-backend\.opik\.svc\.cluster\.local:8080' 'in-cluster Opik API URL'
@@ -131,10 +138,12 @@ reject 'StrictHostKeyChecking=no' 'disabled SSH host verification'
 reject 'insecure-skip-tls-verify|certificate-authority-data:/d' 'disabled Kubernetes API verification'
 
 cert_manager_step_line=$(grep -n 'name: Install pinned cert-manager release' "${WORKFLOW}" | cut -d: -f1)
+internal_ca_step_line=$(grep -n 'name: Bootstrap internal workload CA' "${WORKFLOW}" | cut -d: -f1)
 helm_deploy_step_line=$(grep -n 'name: Helm deploy' "${WORKFLOW}" | cut -d: -f1)
-if [[ -z "${cert_manager_step_line}" || -z "${helm_deploy_step_line}" ||
-    ${cert_manager_step_line} -ge ${helm_deploy_step_line} ]]; then
-    echo 'deployment safety contract violated: cert-manager must be ready before Stratum Helm deploy' >&2
+if [[ -z "${cert_manager_step_line}" || -z "${internal_ca_step_line}" || -z "${helm_deploy_step_line}" ||
+    ${cert_manager_step_line} -ge ${internal_ca_step_line} ||
+    ${internal_ca_step_line} -ge ${helm_deploy_step_line} ]]; then
+    echo 'deployment safety contract violated: cert-manager and internal CA must be ready before Stratum Helm deploy' >&2
     exit 1
 fi
 
