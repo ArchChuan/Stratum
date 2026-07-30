@@ -143,6 +143,7 @@ func buildInternalRouter(container *wiring.Container) (http.Handler, error) {
 		Tokens:       container.PlatformMCP.Tokens,
 		Capabilities: container.PlatformMCP.Capabilities,
 		Logger:       container.Logger,
+		Metrics:      container.Platform.Metrics,
 	})
 }
 

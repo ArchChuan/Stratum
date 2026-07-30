@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/byteBuilderX/stratum/api/middleware"
@@ -16,10 +17,26 @@ type mcpTokenExchanger interface {
 
 type MCPTokenExchangeHandler struct {
 	exchange mcpTokenExchanger
+	metrics  PlatformMCPExchangeMetrics
+}
+
+type PlatformMCPExchangeMetrics interface {
+	IncPlatformMCPReplayDenial(statusClass string)
+	IncPlatformMCPContractMismatch(toolClass string)
 }
 
 func NewMCPTokenExchangeHandler(exchange mcpTokenExchanger) *MCPTokenExchangeHandler {
-	return &MCPTokenExchangeHandler{exchange: exchange}
+	return NewObservedMCPTokenExchangeHandler(exchange, noopMCPTokenExchangeMetrics{})
+}
+
+func NewObservedMCPTokenExchangeHandler(
+	exchange mcpTokenExchanger,
+	metrics PlatformMCPExchangeMetrics,
+) *MCPTokenExchangeHandler {
+	if metrics == nil {
+		metrics = noopMCPTokenExchangeMetrics{}
+	}
+	return &MCPTokenExchangeHandler{exchange: exchange, metrics: metrics}
 }
 
 func (h *MCPTokenExchangeHandler) Exchange(c *gin.Context) {
@@ -36,6 +53,7 @@ func (h *MCPTokenExchangeHandler) Exchange(c *gin.Context) {
 		ResourceID:      req.ResourceID,
 	})
 	if err != nil {
+		h.recordDenial(err)
 		_ = c.Error(err)
 		return
 	}
@@ -45,3 +63,17 @@ func (h *MCPTokenExchangeHandler) Exchange(c *gin.Context) {
 		"expires_in":   int(constants.PlatformMCPAPIDelegationTokenTTL.Seconds()),
 	})
 }
+
+func (h *MCPTokenExchangeHandler) recordDenial(err error) {
+	if errors.Is(err, iamapp.ErrPlatformMCPInvocationReplayed) {
+		h.metrics.IncPlatformMCPReplayDenial("4xx")
+	}
+	if errors.Is(err, iamapp.ErrPlatformMCPContractInvalid) {
+		h.metrics.IncPlatformMCPContractMismatch("unknown")
+	}
+}
+
+type noopMCPTokenExchangeMetrics struct{}
+
+func (noopMCPTokenExchangeMetrics) IncPlatformMCPReplayDenial(_ string)     {}
+func (noopMCPTokenExchangeMetrics) IncPlatformMCPContractMismatch(_ string) {}

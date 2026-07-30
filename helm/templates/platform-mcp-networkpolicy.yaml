@@ -18,6 +18,18 @@ spec:
       ports:
         - protocol: TCP
           port: 8443
+    {{- if .Values.serviceMonitor.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.platformMCP.monitoring.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.platformMCP.monitoring.podSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8443
+    {{- end }}
   egress:
     - ports:
         - protocol: UDP

@@ -38,6 +38,7 @@ type PrometheusMetrics struct {
 	resourceProposalsTotal            *prometheus.CounterVec
 	resourceProposalReviewDuration    *prometheus.HistogramVec
 	resourceProposalDraftEdits        *prometheus.HistogramVec
+	platformMCP                       platformMCPMetrics
 
 	// LLM – core
 	llmRequestsTotal   *prometheus.CounterVec
@@ -60,6 +61,67 @@ type PrometheusMetrics struct {
 	hermesEventsProcessed *prometheus.CounterVec
 
 	logger *zap.Logger
+}
+
+type platformMCPMetrics struct {
+	requests            *prometheus.CounterVec
+	requestDuration     *prometheus.HistogramVec
+	requestsInFlight    prometheus.Gauge
+	authDenials         *prometheus.CounterVec
+	tokenExchanges      *prometheus.CounterVec
+	replayDenials       *prometheus.CounterVec
+	backendRequests     *prometheus.CounterVec
+	unknownOutcomes     *prometheus.CounterVec
+	contractMismatches  *prometheus.CounterVec
+	certificateExpiry   prometheus.Gauge
+	certificateRotation *prometheus.GaugeVec
+}
+
+func newPlatformMCPMetrics(factory promauto.Factory, latencyBuckets []float64) platformMCPMetrics {
+	return platformMCPMetrics{
+		requests: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "platform_mcp_requests_total", Help: "Platform MCP requests by bounded class and outcome"},
+			[]string{"tool_class", "risk_level", "outcome"},
+		),
+		requestDuration: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "platform_mcp_request_duration_seconds", Help: "Platform MCP request latency", Buckets: latencyBuckets},
+			[]string{"tool_class", "outcome"},
+		),
+		requestsInFlight: factory.NewGauge(
+			prometheus.GaugeOpts{Name: "platform_mcp_requests_in_flight", Help: "Platform MCP requests in flight"},
+		),
+		authDenials: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "platform_mcp_auth_denials_total", Help: "Platform MCP authorization denials"},
+			[]string{"status_class"},
+		),
+		tokenExchanges: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "platform_mcp_token_exchanges_total", Help: "Platform MCP token exchanges"},
+			[]string{"outcome"},
+		),
+		replayDenials: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "platform_mcp_replay_denials_total", Help: "Platform MCP replay denials"},
+			[]string{"status_class"},
+		),
+		backendRequests: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "platform_mcp_backend_requests_total", Help: "Platform MCP backend request outcomes"},
+			[]string{"tool_class", "status_class"},
+		),
+		unknownOutcomes: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "platform_mcp_unknown_outcomes_total", Help: "Platform MCP unknown outcomes"},
+			[]string{"tool_class"},
+		),
+		contractMismatches: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "platform_mcp_contract_mismatches_total", Help: "Platform MCP contract mismatches"},
+			[]string{"tool_class"},
+		),
+		certificateExpiry: factory.NewGauge(
+			prometheus.GaugeOpts{Name: "platform_mcp_certificate_expiry_seconds", Help: "Seconds until Platform MCP certificate expiry"},
+		),
+		certificateRotation: factory.NewGaugeVec(
+			prometheus.GaugeOpts{Name: "platform_mcp_certificate_rotation", Help: "Latest certificate rotation status"},
+			[]string{"status_class"},
+		),
+	}
 }
 
 // NewPrometheusMetrics registers all metrics and returns a ready MetricsProvider.
@@ -153,6 +215,7 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 			},
 			[]string{"kind", "operation"},
 		),
+		platformMCP: newPlatformMCPMetrics(factory, latencyBuckets),
 
 		// LLM – core
 		llmRequestsTotal: factory.NewCounterVec(
@@ -303,6 +366,41 @@ func (m *PrometheusMetrics) RecordResourceProposalReviewDuration(kind, operation
 
 func (m *PrometheusMetrics) RecordResourceProposalDraftEdits(kind, operation string, count int) {
 	m.resourceProposalDraftEdits.WithLabelValues(kind, operation).Observe(float64(count))
+}
+
+func (m *PrometheusMetrics) IncPlatformMCPRequest(toolClass, riskLevel, outcome string) {
+	m.platformMCP.requests.WithLabelValues(toolClass, riskLevel, outcome).Inc()
+}
+
+func (m *PrometheusMetrics) RecordPlatformMCPRequestDuration(toolClass, outcome string, duration float64) {
+	m.platformMCP.requestDuration.WithLabelValues(toolClass, outcome).Observe(duration)
+}
+
+func (m *PrometheusMetrics) IncPlatformMCPRequestsInFlight() { m.platformMCP.requestsInFlight.Inc() }
+func (m *PrometheusMetrics) DecPlatformMCPRequestsInFlight() { m.platformMCP.requestsInFlight.Dec() }
+func (m *PrometheusMetrics) IncPlatformMCPAuthDenial(statusClass string) {
+	m.platformMCP.authDenials.WithLabelValues(statusClass).Inc()
+}
+func (m *PrometheusMetrics) IncPlatformMCPTokenExchange(outcome string) {
+	m.platformMCP.tokenExchanges.WithLabelValues(outcome).Inc()
+}
+func (m *PrometheusMetrics) IncPlatformMCPReplayDenial(statusClass string) {
+	m.platformMCP.replayDenials.WithLabelValues(statusClass).Inc()
+}
+func (m *PrometheusMetrics) IncPlatformMCPBackendRequest(toolClass, statusClass string) {
+	m.platformMCP.backendRequests.WithLabelValues(toolClass, statusClass).Inc()
+}
+func (m *PrometheusMetrics) IncPlatformMCPUnknownOutcome(toolClass string) {
+	m.platformMCP.unknownOutcomes.WithLabelValues(toolClass).Inc()
+}
+func (m *PrometheusMetrics) IncPlatformMCPContractMismatch(toolClass string) {
+	m.platformMCP.contractMismatches.WithLabelValues(toolClass).Inc()
+}
+func (m *PrometheusMetrics) SetPlatformMCPCertificateExpiry(seconds float64) {
+	m.platformMCP.certificateExpiry.Set(seconds)
+}
+func (m *PrometheusMetrics) SetPlatformMCPCertificateRotation(statusClass string, value float64) {
+	m.platformMCP.certificateRotation.WithLabelValues(statusClass).Set(value)
 }
 
 // --- LLM ---

@@ -26,4 +26,18 @@ spec:
     - stratum-platform-mcp
   uris:
     - spiffe://stratum.local/ns/stratum/sa/stratum-platform-mcp
+{{- if .Values.serviceMonitor.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: stratum-platform-mcp-monitor
+spec:
+  secretName: stratum-platform-mcp-monitor-tls
+  issuerRef:
+    name: {{ .Values.platformMCP.tls.issuerName }}
+    kind: {{ .Values.platformMCP.tls.issuerKind }}
+  uris:
+    - spiffe://stratum.local/ns/stratum/sa/stratum-platform-mcp-monitor
+{{- end }}
 {{- end }}

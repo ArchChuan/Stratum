@@ -26,6 +26,11 @@ platformMCP:
     issuerName: stratum-internal-ca
     issuerKind: ClusterIssuer
 
+serviceMonitor:
+  enabled: true
+  additionalLabels:
+    release: kps
+
 # Frontend settings
 frontend:
   enabled: true

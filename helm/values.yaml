@@ -64,6 +64,11 @@ platformMCP:
   tls:
     issuerName: stratum-internal-ca
     issuerKind: ClusterIssuer
+  monitoring:
+    namespaceSelector:
+      kubernetes.io/metadata.name: monitoring
+    podSelector:
+      app.kubernetes.io/name: prometheus
   resources:
     requests:
       cpu: "100m"

@@ -23,9 +23,20 @@ type StratumClient struct {
 	client    HTTPDoer
 	baseURL   *url.URL
 	contracts platformmcp.StaticContracts
+	metrics   ClientMetrics
+}
+
+type ClientMetrics interface {
+	IncPlatformMCPTokenExchange(outcome string)
+	IncPlatformMCPBackendRequest(toolClass, statusClass string)
+	IncPlatformMCPUnknownOutcome(toolClass string)
 }
 
 func NewStratumClient(client HTTPDoer, rawBaseURL string) (*StratumClient, error) {
+	return NewObservedStratumClient(client, rawBaseURL, noopClientMetrics{})
+}
+
+func NewObservedStratumClient(client HTTPDoer, rawBaseURL string, metrics ClientMetrics) (*StratumClient, error) {
 	if client == nil {
 		return nil, errors.New("Stratum API HTTP client is not configured")
 	}
@@ -33,8 +44,11 @@ func NewStratumClient(client HTTPDoer, rawBaseURL string) (*StratumClient, error
 	if err != nil {
 		return nil, err
 	}
+	if metrics == nil {
+		metrics = noopClientMetrics{}
+	}
 	return &StratumClient{
-		client: client, baseURL: baseURL, contracts: platformmcp.NewPhase1Contracts(),
+		client: client, baseURL: baseURL, contracts: platformmcp.NewPhase1Contracts(), metrics: metrics,
 	}, nil
 }
 
@@ -55,8 +69,10 @@ func (c *StratumClient) Call(
 	defer cancel()
 	delegationToken, err := c.exchangeToken(callCtx, invocationToken, resourceID(arguments))
 	if err != nil {
+		c.metrics.IncPlatformMCPTokenExchange("error")
 		return agentport.MCPToolResult{}, err
 	}
+	c.metrics.IncPlatformMCPTokenExchange("success")
 	return c.callDelegated(callCtx, contract, delegationToken, arguments)
 }
 
@@ -109,8 +125,14 @@ func (c *StratumClient) callDelegated(
 	req.Header.Set("Authorization", "Bearer "+delegationToken)
 	response, err := c.client.Do(req)
 	if err != nil {
+		class := toolClass(contract.Name)
+		c.metrics.IncPlatformMCPBackendRequest(class, transportStatus(err))
+		if class == "proposal" {
+			c.metrics.IncPlatformMCPUnknownOutcome(class)
+		}
 		return agentport.MCPToolResult{}, fmt.Errorf("call delegated Stratum API: %w", err)
 	}
+	c.metrics.IncPlatformMCPBackendRequest(toolClass(contract.Name), httpStatusClass(response.StatusCode))
 	var projected map[string]any
 	if err := decodeSuccessfulResponse(response, &projected); err != nil {
 		return agentport.MCPToolResult{}, fmt.Errorf("decode delegated Stratum API response: %w", err)
@@ -182,3 +204,42 @@ func resourceID(arguments map[string]any) string {
 	resourceID, _ := arguments["resourceId"].(string)
 	return resourceID
 }
+
+func toolClass(name string) string {
+	switch name {
+	case platformmcp.ToolSearchOfficialDocs:
+		return "docs"
+	case platformmcp.ToolDiagnoseTenant:
+		return "diagnostic"
+	case platformmcp.ToolProposeResourceChange:
+		return "proposal"
+	default:
+		return "unknown"
+	}
+}
+
+func httpStatusClass(status int) string {
+	switch {
+	case status >= http.StatusOK && status < http.StatusMultipleChoices:
+		return "2xx"
+	case status >= http.StatusBadRequest && status < http.StatusInternalServerError:
+		return "4xx"
+	case status >= http.StatusInternalServerError:
+		return "5xx"
+	default:
+		return "other"
+	}
+}
+
+func transportStatus(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "transport_error"
+}
+
+type noopClientMetrics struct{}
+
+func (noopClientMetrics) IncPlatformMCPTokenExchange(_ string)     {}
+func (noopClientMetrics) IncPlatformMCPBackendRequest(_, _ string) {}
+func (noopClientMetrics) IncPlatformMCPUnknownOutcome(_ string)    {}

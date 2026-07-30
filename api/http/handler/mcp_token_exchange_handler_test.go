@@ -36,10 +36,52 @@ func TestMCPTokenExchangeHandlerReturnsDelegationToken(t *testing.T) {
 	}
 }
 
+func TestMCPTokenExchangeHandlerRecordsSecurityDenials(t *testing.T) {
+	tests := []struct {
+		name         string
+		exchangeErr  error
+		wantReplay   int
+		wantContract int
+	}{
+		{name: "replay", exchangeErr: iamapp.ErrPlatformMCPInvocationReplayed, wantReplay: 1},
+		{name: "contract mismatch", exchangeErr: iamapp.ErrPlatformMCPContractInvalid, wantContract: 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			metrics := &tokenExchangeMetricsFake{}
+			handler := NewObservedMCPTokenExchangeHandler(
+				&mcpTokenExchangerFake{err: tc.exchangeErr}, metrics,
+			)
+			router := gin.New()
+			router.Use(middleware.ErrorHandler(zap.NewNop()))
+			router.POST("/exchange", handler.Exchange)
+			req := httptest.NewRequest(http.MethodPost, "/exchange", bytes.NewBufferString(
+				`{"invocation_token":"invocation"}`,
+			))
+			req.Header.Set("Content-Type", "application/json")
+
+			router.ServeHTTP(httptest.NewRecorder(), req)
+
+			if metrics.replay != tc.wantReplay || metrics.contract != tc.wantContract {
+				t.Fatalf("metrics=%+v", metrics)
+			}
+		})
+	}
+}
+
 type mcpTokenExchangerFake struct {
 	token string
 	err   error
 	req   iamapp.MCPTokenExchangeRequest
+}
+
+type tokenExchangeMetricsFake struct {
+	replay, contract int
+}
+
+func (f *tokenExchangeMetricsFake) IncPlatformMCPReplayDenial(_ string) { f.replay++ }
+func (f *tokenExchangeMetricsFake) IncPlatformMCPContractMismatch(_ string) {
+	f.contract++
 }
 
 func (f *mcpTokenExchangerFake) Exchange(

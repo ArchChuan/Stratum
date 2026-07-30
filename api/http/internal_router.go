@@ -29,6 +29,7 @@ type InternalRouterDeps struct {
 	Tokens       internalDelegationVerifier
 	Capabilities handler.PlatformAssistantCapabilityDeps
 	Logger       *zap.Logger
+	Metrics      handler.PlatformMCPExchangeMetrics
 }
 
 func NewInternalRouter(deps InternalRouterDeps) (*gin.Engine, error) {
@@ -51,7 +52,7 @@ func NewInternalRouter(deps InternalRouterDeps) (*gin.Engine, error) {
 	router.Use(middleware.SecurityHeaders())
 	router.Use(middleware.RequirePlatformMCPIdentity())
 
-	exchange := handler.NewMCPTokenExchangeHandler(deps.Exchange)
+	exchange := handler.NewObservedMCPTokenExchangeHandler(deps.Exchange, deps.Metrics)
 	capabilities, err := handler.NewPlatformAssistantCapabilityHandler(deps.Capabilities)
 	if err != nil {
 		return nil, err

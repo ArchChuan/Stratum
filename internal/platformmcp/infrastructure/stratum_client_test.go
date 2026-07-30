@@ -3,8 +3,11 @@ package infrastructure
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -76,5 +79,80 @@ func TestStratumClientRejectsMissingInvocationAndUnknownTool(t *testing.T) {
 				t.Fatal("expected call to fail")
 			}
 		})
+	}
+}
+
+func TestStratumClientRecordsTokenExchangeAndBackendOutcomes(t *testing.T) {
+	metrics := &clientMetricsFake{}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/internal/platform-mcp/token/exchange":
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "delegation"})
+		case "/internal/platform-assistant/diagnostics":
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewObservedStratumClient(server.Client(), server.URL, metrics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := requestctx.WithInvocationToken(t.Context(), "invocation")
+
+	_, err = client.Call(ctx, "stratum_diagnose_tenant", map[string]any{"areas": []any{"agents"}})
+
+	if err == nil || metrics.exchangeOutcome != "success" || metrics.toolClass != "diagnostic" ||
+		metrics.backendStatus != "5xx" {
+		t.Fatalf("err=%v metrics=%+v", err, metrics)
+	}
+}
+
+func TestStratumClientRecordsUnknownProposalOutcomeOnTransportFailure(t *testing.T) {
+	metrics := &clientMetricsFake{}
+	client, err := NewObservedStratumClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/internal/platform-mcp/token/exchange" {
+			return jsonResponse(http.StatusOK, `{"access_token":"delegation"}`), nil
+		}
+		return nil, errors.New("connection reset")
+	}), "https://stratum-internal:8443", metrics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := requestctx.WithInvocationToken(t.Context(), "invocation")
+
+	_, err = client.Call(ctx, "stratum_propose_resource_change", map[string]any{
+		"kind": "agent", "operation": "create", "payload": map[string]any{"name": "test"},
+	})
+
+	if err == nil || metrics.unknownOutcome != "proposal" {
+		t.Fatalf("err=%v metrics=%+v", err, metrics)
+	}
+}
+
+type clientMetricsFake struct {
+	exchangeOutcome, toolClass, backendStatus, unknownOutcome string
+}
+
+func (f *clientMetricsFake) IncPlatformMCPTokenExchange(outcome string) {
+	f.exchangeOutcome = outcome
+}
+func (f *clientMetricsFake) IncPlatformMCPBackendRequest(toolClass, statusClass string) {
+	f.toolClass, f.backendStatus = toolClass, statusClass
+}
+func (f *clientMetricsFake) IncPlatformMCPUnknownOutcome(toolClass string) {
+	f.unknownOutcome = toolClass
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) Do(req *http.Request) (*http.Response, error) { return f(req) }
+
+func jsonResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
 	}
 }

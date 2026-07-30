@@ -35,7 +35,7 @@ func TestTLSReloaderPublishesCompleteSnapshotAndPreservesOldOnFailure(t *testing
 	}
 }
 
-func TestTLSReloaderVerifiesExactBackendWorkloadURI(t *testing.T) {
+func TestTLSReloaderVerifiesAllowedClientWorkloadURI(t *testing.T) {
 	files := writeReloadTestFiles(t)
 	reloader := NewTLSReloader(files)
 	if err := reloader.Reload(); err != nil {
@@ -48,6 +48,7 @@ func TestTLSReloaderVerifiesExactBackendWorkloadURI(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "backend", uri: BackendWorkloadURI},
+		{name: "metrics scraper", uri: MetricsWorkloadURI},
 		{name: "other workload", uri: "spiffe://stratum.local/ns/stratum/sa/other", wantErr: true},
 	}
 	for _, tc := range tests {
@@ -83,6 +84,19 @@ func TestTLSReloaderBuildsBackendClientConfigFromCurrentSnapshot(t *testing.T) {
 	if clientConfig.ServerName != "stratum-internal" || clientConfig.RootCAs == nil ||
 		len(clientConfig.Certificates) != 1 || clientConfig.VerifyConnection == nil {
 		t.Fatalf("client TLS config=%+v", clientConfig)
+	}
+}
+
+func TestTLSReloaderReportsCurrentCertificateExpiry(t *testing.T) {
+	reloader := NewTLSReloader(writeReloadTestFiles(t))
+	if err := reloader.Reload(); err != nil {
+		t.Fatal(err)
+	}
+
+	seconds, err := reloader.CertificateExpirySeconds()
+
+	if err != nil || seconds <= 0 {
+		t.Fatalf("seconds=%f err=%v", seconds, err)
 	}
 }
 

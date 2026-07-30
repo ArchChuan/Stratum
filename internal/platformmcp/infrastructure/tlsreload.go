@@ -8,9 +8,13 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
-const BackendWorkloadURI = "spiffe://stratum.local/ns/stratum/sa/stratum-backend"
+const (
+	BackendWorkloadURI = "spiffe://stratum.local/ns/stratum/sa/stratum-backend"
+	MetricsWorkloadURI = "spiffe://stratum.local/ns/stratum/sa/stratum-platform-mcp-monitor"
+)
 
 type TLSFiles struct {
 	CertFile     string
@@ -41,7 +45,7 @@ func (r *TLSReloader) Reload() error {
 		Certificates:     []tls.Certificate{certificate},
 		ClientAuth:       tls.RequireAndVerifyClientCert,
 		ClientCAs:        clientCAs,
-		VerifyConnection: verifyBackendConnection,
+		VerifyConnection: verifyAllowedClientConnection,
 	}
 	r.current.Store(next)
 	return nil
@@ -53,6 +57,18 @@ func (r *TLSReloader) Ready() bool {
 
 func (r *TLSReloader) Current() *tls.Config {
 	return r.current.Load()
+}
+
+func (r *TLSReloader) CertificateExpirySeconds() (float64, error) {
+	current := r.current.Load()
+	if current == nil || len(current.Certificates) != 1 || len(current.Certificates[0].Certificate) == 0 {
+		return 0, errors.New("Platform MCP certificate is not loaded")
+	}
+	leaf, err := x509.ParseCertificate(current.Certificates[0].Certificate[0])
+	if err != nil {
+		return 0, fmt.Errorf("parse Platform MCP certificate: %w", err)
+	}
+	return time.Until(leaf.NotAfter).Seconds(), nil
 }
 
 func (r *TLSReloader) ServerConfig() *tls.Config {
@@ -104,6 +120,21 @@ func verifyBackendConnection(state tls.ConnectionState) error {
 	leaf := state.PeerCertificates[0]
 	if len(leaf.URIs) != 1 || leaf.URIs[0].String() != BackendWorkloadURI {
 		return errors.New("Stratum backend SPIFFE identity denied")
+	}
+	return nil
+}
+
+func verifyAllowedClientConnection(state tls.ConnectionState) error {
+	if len(state.VerifiedChains) == 0 || len(state.PeerCertificates) == 0 {
+		return errors.New("Platform MCP client certificate was not verified")
+	}
+	leaf := state.PeerCertificates[0]
+	if len(leaf.URIs) != 1 {
+		return errors.New("Platform MCP client SPIFFE identity denied")
+	}
+	identity := leaf.URIs[0].String()
+	if identity != BackendWorkloadURI && identity != MetricsWorkloadURI {
+		return errors.New("Platform MCP client SPIFFE identity denied")
 	}
 	return nil
 }
