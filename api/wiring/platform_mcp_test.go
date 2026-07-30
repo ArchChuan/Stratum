@@ -104,7 +104,7 @@ func TestPhase1PlatformMCPContractsAreClosed(t *testing.T) {
 	registry := platformmcp.NewPhase1Contracts()
 	for _, name := range platformmcp.Phase1ToolNames {
 		contract, ok := registry.Lookup(name)
-		if !ok || contract.Name != name || contract.Method == "" || contract.Path == "" {
+		if !ok || contract.Name != name || contract.Method == "" || contract.Path == "" || contract.Risk == "" {
 			t.Fatalf("contract %q=%+v, found=%v", name, contract, ok)
 		}
 	}

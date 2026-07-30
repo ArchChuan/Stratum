@@ -10,6 +10,7 @@ import (
 	"slices"
 	"unicode/utf8"
 
+	agentdomain "github.com/byteBuilderX/stratum/internal/agent/domain"
 	agentport "github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
@@ -61,60 +62,35 @@ func (d *ToolDispatcher) CallTool(
 func phase1Tools() []mcpdomain.Tool {
 	return []mcpdomain.Tool{
 		{
-			Name:        "stratum_search_official_docs",
+			Name:        platformmcp.ToolSearchOfficialDocs,
 			Description: "检索当前版本的 Stratum 官方文档。",
-			InputSchema: objectSchema(map[string]any{
-				"query": map[string]any{
-					"type": "string", "minLength": 1, "maxLength": constants.SystemAssistantQueryMaxRunes,
-				},
-			}, []string{"query"}),
+			InputSchema: mustInputSchema(platformmcp.ToolSearchOfficialDocs),
 		},
 		{
-			Name:        "stratum_diagnose_tenant",
+			Name:        platformmcp.ToolDiagnoseTenant,
 			Description: "按当前成员权限只读诊断当前租户业务资源。",
-			InputSchema: objectSchema(map[string]any{
-				"areas": map[string]any{
-					"type": "array", "minItems": 1, "maxItems": constants.SystemAssistantAreasMaxCount,
-					"uniqueItems": true,
-					"items": map[string]any{
-						"type": "string", "enum": diagnosticAreas(),
-					},
-				},
-			}, []string{"areas"}),
+			InputSchema: mustInputSchema(platformmcp.ToolDiagnoseTenant),
 		},
 		{
-			Name:        "stratum_propose_resource_change",
+			Name:        platformmcp.ToolProposeResourceChange,
 			Description: "创建受治理的资源变更提案，不直接修改资源。",
-			InputSchema: objectSchema(map[string]any{
-				"resourceKind": map[string]any{
-					"type": "string", "enum": proposalResourceKinds(),
-				},
-				"operation": map[string]any{
-					"type": "string", "enum": []string{"create", "update"},
-				},
-				"resourceId": map[string]any{"type": "string", "minLength": 1},
-				"payload":    map[string]any{"type": "object"},
-			}, []string{"resourceKind", "operation", "payload"}),
+			InputSchema: mustInputSchema(platformmcp.ToolProposeResourceChange),
 		},
 	}
 }
 
-func objectSchema(properties map[string]any, required []string) map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"properties":           properties,
-		"required":             required,
-	}
+func mustInputSchema(toolName string) map[string]any {
+	schema, _ := platformmcp.InputSchema(toolName)
+	return schema
 }
 
 func validateToolArguments(name string, arguments map[string]any) error {
 	switch name {
-	case "stratum_search_official_docs":
+	case platformmcp.ToolSearchOfficialDocs:
 		return validateDocsArguments(arguments)
-	case "stratum_diagnose_tenant":
+	case platformmcp.ToolDiagnoseTenant:
 		return validateDiagnosticArguments(arguments)
-	case "stratum_propose_resource_change":
+	case platformmcp.ToolProposeResourceChange:
 		return validateProposalArguments(arguments)
 	default:
 		return ErrUnknownTool
@@ -171,6 +147,9 @@ func validateProposalArguments(arguments map[string]any) error {
 	if !slices.Contains(proposalResourceKinds(), input.ResourceKind) || input.Payload == nil {
 		return errors.New("proposal resource is invalid")
 	}
+	if err := validateProposalPayload(input.ResourceKind, input.Operation, input.Payload); err != nil {
+		return err
+	}
 	if input.Operation == "create" {
 		if input.ResourceID != "" {
 			return errors.New("create proposal must not include resource ID")
@@ -179,6 +158,20 @@ func validateProposalArguments(arguments map[string]any) error {
 	}
 	if input.Operation != "update" || input.ResourceID == "" {
 		return errors.New("update proposal requires resource ID")
+	}
+	return nil
+}
+
+func validateProposalPayload(resourceKind, operation string, payload map[string]any) error {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode proposal payload: %w", err)
+	}
+	_, err = agentdomain.DecodeProposalPayload(
+		agentdomain.ResourceKind(resourceKind), agentdomain.ProposalOperation(operation), encoded,
+	)
+	if err != nil {
+		return errors.New("proposal payload is invalid")
 	}
 	return nil
 }

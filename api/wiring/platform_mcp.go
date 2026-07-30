@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/byteBuilderX/stratum/api/http/handler"
 	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
 	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
@@ -22,6 +23,7 @@ import (
 type PlatformMCP struct {
 	TokenExchange *iamapp.MCPTokenExchange
 	Tokens        iamport.DelegationTokenService
+	Capabilities  handler.PlatformAssistantCapabilityDeps
 }
 
 func (c *Container) buildPlatformMCP(_ context.Context) error {
@@ -47,7 +49,17 @@ func (c *Container) buildPlatformMCP(_ context.Context) error {
 		Replay:    iampersistence.NewMCPTokenReplayRepo(c.dbOrNil()),
 		Contracts: platformmcp.NewPhase1Contracts(),
 	})
-	c.PlatformMCP = &PlatformMCP{TokenExchange: exchange, Tokens: tokens}
+	c.PlatformMCP = &PlatformMCP{
+		TokenExchange: exchange,
+		Tokens:        tokens,
+		Capabilities: handler.PlatformAssistantCapabilityDeps{
+			Docs: platformAssistantDocsAdapter{},
+			Diagnostics: platformAssistantDiagnosticAdapter{
+				provider: c.Agent.DiagnosticProvider,
+			},
+			Proposals: platformAssistantProposalAdapter{service: c.Agent.ProposalService},
+		},
+	}
 	c.MCP.Manager.SetInvocationCredentialProvider(platformMCPInvocationCredentials{tokens: tokens})
 	c.MCP.Manager.SetManagedHTTPTransportProvider(platformMCPTransportProvider{files: c.Config.InternalAPI})
 	return nil
@@ -99,6 +111,9 @@ func (c *Container) validatePlatformMCPDependencies() error {
 	}
 	if c.MCP == nil || c.MCP.Service == nil {
 		return fmt.Errorf("platform MCP service is not configured")
+	}
+	if c.Agent.DiagnosticProvider == nil || c.Agent.ProposalService == nil {
+		return fmt.Errorf("platform MCP capabilities are not configured")
 	}
 	return nil
 }

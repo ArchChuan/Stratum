@@ -139,8 +139,10 @@ func buildInternalRouter(container *wiring.Container) (http.Handler, error) {
 		return nil, errors.New("internal API Platform MCP token exchange is not wired")
 	}
 	return apihttp.NewInternalRouter(apihttp.InternalRouterDeps{
-		Exchange: container.PlatformMCP.TokenExchange,
-		Logger:   container.Logger,
+		Exchange:     container.PlatformMCP.TokenExchange,
+		Tokens:       container.PlatformMCP.Tokens,
+		Capabilities: container.PlatformMCP.Capabilities,
+		Logger:       container.Logger,
 	})
 }
 

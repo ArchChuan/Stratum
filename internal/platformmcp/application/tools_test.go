@@ -27,6 +27,27 @@ func TestToolDispatcherExposesOnlyPhase1Tools(t *testing.T) {
 	}
 }
 
+func TestPhase1ProposalToolSchemaClosesResourcePayloads(t *testing.T) {
+	dispatcher, err := NewToolDispatcher(&toolInvokerFake{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := dispatcher.ListTools(t.Context())
+	proposal := tools[len(tools)-1].InputSchema
+	branches, ok := proposal["oneOf"].([]any)
+	if !ok || len(branches) != 8 {
+		t.Fatalf("proposal schema=%v", proposal)
+	}
+	for i, raw := range branches {
+		branch := raw.(map[string]any)
+		properties := branch["properties"].(map[string]any)
+		payload := properties["payload"].(map[string]any)
+		if branch["additionalProperties"] != false || payload["additionalProperties"] != false {
+			t.Fatalf("branch %d is not closed: %v", i, branch)
+		}
+	}
+}
+
 func TestToolDispatcherRejectsUnknownToolBeforeInvocation(t *testing.T) {
 	invoker := &toolInvokerFake{}
 	dispatcher, err := NewToolDispatcher(invoker)
@@ -51,6 +72,9 @@ func TestToolDispatcherRejectsInvalidArgumentsBeforeInvocation(t *testing.T) {
 		{name: "unknown diagnostic area", tool: "stratum_diagnose_tenant", arguments: map[string]any{"areas": []any{"iam"}}},
 		{name: "update without resource ID", tool: "stratum_propose_resource_change", arguments: map[string]any{
 			"resourceKind": "agent", "operation": "update", "payload": map[string]any{"name": "updated"},
+		}},
+		{name: "proposal payload with unknown field", tool: platformmcp.ToolProposeResourceChange, arguments: map[string]any{
+			"resourceKind": "agent", "operation": "create", "payload": map[string]any{"forged": true},
 		}},
 	}
 	for _, tc := range tests {

@@ -10,8 +10,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
+	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
+	"github.com/byteBuilderX/stratum/pkg/platformmcp"
+	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap"
 )
 
@@ -28,7 +32,7 @@ func TestInternalRouterTokenExchangeRequiresPlatformMCPIdentity(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			exchange := &internalExchangeFake{}
-			router, err := NewInternalRouter(InternalRouterDeps{Exchange: exchange, Logger: zap.NewNop()})
+			router, err := NewInternalRouter(internalRouterTestDeps(exchange))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -57,8 +61,81 @@ func TestInternalRouterRejectsMissingTokenExchange(t *testing.T) {
 	}
 }
 
+func TestInternalRouterCapabilitiesRequireExactDelegatedScope(t *testing.T) {
+	deps := internalRouterTestDeps(&internalExchangeFake{})
+	deps.Tokens = internalTokensFake{claims: &platformmcp.APIDelegationClaims{
+		TenantID: "tenant-1", Role: "member", HTTPMethod: http.MethodPost,
+		PathTemplate:     "/internal/platform-assistant/docs/search",
+		RegisteredClaims: jwt.RegisteredClaims{Subject: "user-1"},
+	}}
+	router, err := NewInternalRouter(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, authorization string
+		wantStatus          int
+	}{
+		{name: "allows exact delegation", authorization: "Bearer delegation", wantStatus: http.StatusOK},
+		{name: "rejects missing delegation", wantStatus: http.StatusForbidden},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/internal/platform-assistant/docs/search",
+				strings.NewReader(`{"query":"Agent"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", tc.authorization)
+			req.TLS = platformMCPTestTLS(t)
+			res := httptest.NewRecorder()
+			router.ServeHTTP(res, req)
+			if res.Code != tc.wantStatus {
+				t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
 type internalExchangeFake struct {
 	calls int
+}
+
+type internalTokensFake struct {
+	claims *platformmcp.APIDelegationClaims
+}
+
+func (f internalTokensFake) VerifyAPIDelegation(string) (*platformmcp.APIDelegationClaims, error) {
+	return f.claims, nil
+}
+
+type internalDocsFake struct{}
+
+func (internalDocsFake) Search(context.Context, string) ([]domain.Citation, error) { return nil, nil }
+
+type internalDiagnosticsFake struct{}
+
+func (internalDiagnosticsFake) Collect(
+	context.Context,
+	domain.DiagnosticRequest,
+) (domain.DiagnosticEvidence, error) {
+	return domain.DiagnosticEvidence{}, nil
+}
+
+type internalProposalsFake struct{}
+
+func (internalProposalsFake) Create(
+	context.Context,
+	handler.PlatformAssistantProposalInput,
+) (domain.ResourceChangeProposalArtifact, error) {
+	return domain.ResourceChangeProposalArtifact{}, nil
+}
+
+func internalRouterTestDeps(exchange internalTokenExchanger) InternalRouterDeps {
+	return InternalRouterDeps{
+		Exchange: exchange, Tokens: internalTokensFake{}, Logger: zap.NewNop(),
+		Capabilities: handler.PlatformAssistantCapabilityDeps{
+			Docs: internalDocsFake{}, Diagnostics: internalDiagnosticsFake{}, Proposals: internalProposalsFake{},
+		},
+	}
 }
 
 func (f *internalExchangeFake) Exchange(

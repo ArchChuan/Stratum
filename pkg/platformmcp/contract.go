@@ -6,9 +6,21 @@ type ToolContract struct {
 	Name             string
 	Method           string
 	Path             string
+	Risk             RiskLevel
 	MinimumRole      string
 	RequiresApproval bool
 }
+
+type RiskLevel string
+
+const (
+	RiskRead            RiskLevel = "read"
+	RiskWriteReversible RiskLevel = "write_reversible"
+
+	ToolSearchOfficialDocs    = "stratum_search_official_docs"
+	ToolDiagnoseTenant        = "stratum_diagnose_tenant"
+	ToolProposeResourceChange = "stratum_propose_resource_change"
+)
 
 type ContractRegistry interface {
 	Lookup(toolName string) (ToolContract, bool)
@@ -20,17 +32,17 @@ type StaticContracts struct {
 
 func NewPhase1Contracts() StaticContracts {
 	return StaticContracts{contracts: map[string]ToolContract{
-		"stratum_search_official_docs": {
-			Name: "stratum_search_official_docs", Method: http.MethodPost,
-			Path: "/internal/platform-assistant/docs/search", MinimumRole: "member",
+		ToolSearchOfficialDocs: {
+			Name: ToolSearchOfficialDocs, Method: http.MethodPost,
+			Path: "/internal/platform-assistant/docs/search", Risk: RiskRead, MinimumRole: "member",
 		},
-		"stratum_diagnose_tenant": {
-			Name: "stratum_diagnose_tenant", Method: http.MethodPost,
-			Path: "/internal/platform-assistant/diagnostics", MinimumRole: "member",
+		ToolDiagnoseTenant: {
+			Name: ToolDiagnoseTenant, Method: http.MethodPost,
+			Path: "/internal/platform-assistant/diagnostics", Risk: RiskRead, MinimumRole: "member",
 		},
-		"stratum_propose_resource_change": {
-			Name: "stratum_propose_resource_change", Method: http.MethodPost,
-			Path: "/internal/platform-assistant/proposals", MinimumRole: "admin",
+		ToolProposeResourceChange: {
+			Name: ToolProposeResourceChange, Method: http.MethodPost,
+			Path: "/internal/platform-assistant/proposals", Risk: RiskWriteReversible, MinimumRole: "admin",
 		},
 	}}
 }
@@ -50,7 +62,7 @@ const (
 )
 
 var Phase1ToolNames = []string{
-	"stratum_search_official_docs",
-	"stratum_diagnose_tenant",
-	"stratum_propose_resource_change",
+	ToolSearchOfficialDocs,
+	ToolDiagnoseTenant,
+	ToolProposeResourceChange,
 }
