@@ -18,6 +18,7 @@ const baseHook = {
   mcpTools: [],
   workspaces: [],
   groupedModels: [],
+  managementPath: '/agents/list',
   navigate: vi.fn(),
   onFinish: vi.fn(),
 };

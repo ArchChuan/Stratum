@@ -10,6 +10,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 )
 
 var (
@@ -41,6 +42,10 @@ func NewToolExecutionGuard(deps ToolExecutionGuardDeps) *ToolExecutionGuard {
 }
 
 func (g *ToolExecutionGuard) Execute(ctx context.Context, req ToolExecutionRequest) (any, error) {
+	ctx = platformmcp.WithInvocationContext(ctx, platformmcp.InvocationContext{
+		TenantID: req.TenantID, UserID: req.UserID, AgentID: req.AgentID,
+		ExecutionID: req.ExecutionID, ApprovalID: req.ApprovalID,
+	})
 	if g == nil || g.deps.Authorizer == nil {
 		return nil, fmt.Errorf("%w: %s", ErrToolAuthorizationDenied, domain.ToolReasonPolicyLookupFailed)
 	}

@@ -65,6 +65,29 @@ func TestHandlerServesOpenAICompatibleCompletion(t *testing.T) {
 	}
 }
 
+func TestHandlerServesOpenAICompatibleModels(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Data) != 2 || response.Data[0].ID != "mock-model-1" || response.Data[1].ID != "mock-model-2" {
+		t.Fatalf("response=%s", rec.Body.String())
+	}
+}
+
 func TestCompletionReturnsOptimizationCandidatesForQwenPlus(t *testing.T) {
 	t.Parallel()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(

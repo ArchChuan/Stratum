@@ -76,7 +76,7 @@ type ResourceFilter struct {
 // MCPRequest 定义 MCP 请求
 type MCPRequest struct {
 	JSONRPC string      `json:"jsonrpc"`
-	ID      int         `json:"id"`
+	ID      int         `json:"id,omitempty"`
 	Method  string      `json:"method"`
 	Params  interface{} `json:"params,omitempty"`
 }

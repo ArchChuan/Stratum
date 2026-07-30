@@ -2,6 +2,7 @@ package infrastructure
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,12 +19,16 @@ import (
 )
 
 func TestHTTPClientErrorDoesNotExposeResponseBody(t *testing.T) {
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		if calls == 1 {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request MCPRequest
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		switch request.Method {
+		case "initialize":
 			w.Header().Set("Mcp-Session-Id", "session-1")
-			w.WriteHeader(http.StatusOK)
+			writeTestInitializeResult(w, request.ID)
+			return
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
 			return
 		}
 		w.WriteHeader(http.StatusBadGateway)
@@ -51,7 +56,11 @@ func TestHTTPClientRejectsJSONRPCProtocolErrorWithoutLeakingMessage(t *testing.T
 		w.Header().Set("Content-Type", "application/json")
 		body, _ := io.ReadAll(r.Body)
 		if strings.Contains(string(body), `"method":"initialize"`) {
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+			writeTestInitializeResult(w, 1)
+			return
+		}
+		if strings.Contains(string(body), `"method":"notifications/initialized"`) {
+			w.WriteHeader(http.StatusAccepted)
 			return
 		}
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"` + sentinel + `"}}`))
@@ -444,9 +453,15 @@ func TestBaseClientCallToolTransportFailureDoesNotLeakURLOrSession(t *testing.T)
 	core, observed := observer.New(zap.DebugLevel)
 	secretQuery := "credential=synthetic-query-secret"
 	secretSession := "synthetic-session-secret"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Mcp-Session-Id", secretSession)
-		w.WriteHeader(http.StatusOK)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request MCPRequest
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		if request.Method == "initialize" {
+			w.Header().Set("Mcp-Session-Id", secretSession)
+			writeTestInitializeResult(w, request.ID)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
 	}))
 	client := NewBaseClient(&MCPServerConfig{
 		ID: "server-1", Transport: "http", URL: server.URL + "?" + secretQuery, Timeout: time.Second,
@@ -469,6 +484,15 @@ func TestBaseClientCallToolTransportFailureDoesNotLeakURLOrSession(t *testing.T)
 			t.Fatalf("HTTP secret leaked in logs: %s", logged)
 		}
 	}
+}
+
+func writeTestInitializeResult(w http.ResponseWriter, id int) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(MCPResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{
+		"protocolVersion": "2025-06-18",
+		"capabilities":    map[string]any{},
+		"serverInfo":      map[string]any{"name": "test-server", "version": "1.0.0"},
+	}})
 }
 
 func TestBaseClientDisconnectKillsAndWaitsForStdioChild(t *testing.T) {

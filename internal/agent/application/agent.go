@@ -43,32 +43,28 @@ type (
 // in the application layer because it references port.ToolDefinition and
 // function types that depend on cross-context ports.
 type ExecutionConfig struct {
-	MaxSteps                  int
-	Timeout                   time.Duration
-	Temperature               float32
-	EnableTools               bool
-	AvailableTools            []string
-	Stream                    bool
-	TokenCallback             func(string)
-	TenantID                  string
-	TraceID                   string
-	ExecutionID               string
-	RAGSearchFn               func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
-	ExtraTools                []port.ToolDefinition
-	SkillCatalog              map[string]port.SkillActivation
-	ToolExecutionFn           port.ToolExecutionFn
-	ActiveSkill               *port.SkillActivation
-	TracePayloadStore         port.TracePayloadStore
-	ConversationID            string
-	UserID                    string
-	HistoryWindow             int
-	EvolutionTrace            EvolutionTraceMetadata
-	OfficialDocsSearchFn      func(context.Context, string) ([]domain.Citation, error)
-	DiagnosticFn              func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
-	ProposalCreateFn          func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
-	SystemAssistantMode       bool
-	SystemAssistantRoleClass  string
-	InternalToolResultGuardFn func(any) (port.GuardedToolResult, error)
+	MaxSteps                 int
+	Timeout                  time.Duration
+	Temperature              float32
+	EnableTools              bool
+	AvailableTools           []string
+	Stream                   bool
+	TokenCallback            func(string)
+	TenantID                 string
+	TraceID                  string
+	ExecutionID              string
+	RAGSearchFn              func(ctx context.Context, workspaces []string, query string, topK int) (string, error)
+	ExtraTools               []port.ToolDefinition
+	SkillCatalog             map[string]port.SkillActivation
+	ToolExecutionFn          port.ToolExecutionFn
+	ActiveSkill              *port.SkillActivation
+	TracePayloadStore        port.TracePayloadStore
+	ConversationID           string
+	UserID                   string
+	HistoryWindow            int
+	EvolutionTrace           EvolutionTraceMetadata
+	SystemAssistantMode      bool
+	SystemAssistantRoleClass string
 }
 
 // EvolutionTraceMetadata attributes an execution to evaluation and rollout evidence.
@@ -541,11 +537,7 @@ func (a *BaseAgent) buildReActInitState(ec agentExecContext, initMessages []port
 		ActiveSkill:                ec.cfg.ActiveSkill,
 		TracePayloadStore:          ec.cfg.TracePayloadStore,
 		ToolExecutionFn:            ec.cfg.ToolExecutionFn,
-		OfficialDocsSearchFn:       ec.cfg.OfficialDocsSearchFn,
-		DiagnosticFn:               ec.cfg.DiagnosticFn,
-		ProposalCreateFn:           ec.cfg.ProposalCreateFn,
 		GovernedAssistant:          ec.cfg.SystemAssistantMode,
-		InternalToolResultGuardFn:  ec.cfg.InternalToolResultGuardFn,
 		ExecutionID:                ec.cfg.ExecutionID,
 		AgentKnowledgeWorkspaceIDs: ec.workspaceNames,
 		AgentMemoryScope:           ec.memoryScope,
@@ -900,28 +892,12 @@ func WithEvolutionTraceMetadata(metadata EvolutionTraceMetadata) ExecutionOption
 	}
 }
 
-func WithOfficialDocsSearchFn(fn func(context.Context, string) ([]domain.Citation, error)) ExecutionOption {
-	return func(cfg *ExecutionConfig) { cfg.OfficialDocsSearchFn = fn }
-}
-
-func WithDiagnosticFn(fn func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)) ExecutionOption {
-	return func(cfg *ExecutionConfig) { cfg.DiagnosticFn = fn }
-}
-
-func withProposalCreateFn(fn func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)) ExecutionOption {
-	return func(cfg *ExecutionConfig) { cfg.ProposalCreateFn = fn }
-}
-
 func WithSystemAssistantMode() ExecutionOption {
 	return func(cfg *ExecutionConfig) { cfg.SystemAssistantMode = true }
 }
 
 func withSystemAssistantRoleClass(roleClass string) ExecutionOption {
 	return func(cfg *ExecutionConfig) { cfg.SystemAssistantRoleClass = roleClass }
-}
-
-func withInternalToolResultGuard(fn func(any) (port.GuardedToolResult, error)) ExecutionOption {
-	return func(cfg *ExecutionConfig) { cfg.InternalToolResultGuardFn = fn }
 }
 
 func agentExecutionAttributes(agentID, agentName string, agentType AgentType, cfg ExecutionConfig) []attribute.KeyValue {

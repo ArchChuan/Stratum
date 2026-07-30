@@ -1,0 +1,39 @@
+{{- if and .Values.platformMCP.enabled .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: stratum-platform-mcp
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "stratum.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: platform-mcp
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: https
+      path: /metrics
+      scheme: https
+      interval: {{ .Values.serviceMonitor.interval | quote }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout | quote }}
+      honorLabels: false
+      tlsConfig:
+        serverName: stratum-platform-mcp
+        ca:
+          secret:
+            name: stratum-platform-mcp-monitor-tls
+            key: ca.crt
+        cert:
+          secret:
+            name: stratum-platform-mcp-monitor-tls
+            key: tls.crt
+        keySecret:
+          name: stratum-platform-mcp-monitor-tls
+          key: tls.key
+{{- end }}

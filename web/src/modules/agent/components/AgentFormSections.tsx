@@ -1,6 +1,8 @@
 import { RobotOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Collapse, Form, Input, InputNumber, Select, Slider, Switch, Tag, Typography } from 'antd';
 
+import type { GroupedModelOption } from '../model/agent';
+
 import { AgentMemoryConfig } from './AgentMemoryConfig';
 
 import { AGENT_MAX_MAX_ITERATIONS, AGENT_MIN_MAX_ITERATIONS } from '@/constants';
@@ -12,11 +14,6 @@ import { SectionHeader } from '@/shared/ui';
 const { Text } = Typography;
 const { TextArea } = Input;
 const { Option, OptGroup } = Select;
-
-export interface GroupedModelOption {
-  provider: string;
-  models: { value: string; label: string }[];
-}
 
 interface AgentFormSectionsProps {
   skills: Skill[];
@@ -108,7 +105,12 @@ export const AgentFormSections = ({
         subtitle="选择模型并挂载工具和知识"
       />
       <Form.Item label="LLM 模型" name="llmModel" rules={[{ required: true, message: '请选择模型' }]}>
-        <Select placeholder="选择推理模型" notFoundContent="模型管理中没有可用的推理模型">
+        <Select
+          placeholder="选择推理模型"
+          notFoundContent="模型管理中没有可用的推理模型"
+          showSearch
+          optionFilterProp="children"
+        >
           {currentModel &&
             !groupedModels.some((g) => g.models.some((m) => m.value === currentModel)) && (
               <Option value={currentModel} disabled>

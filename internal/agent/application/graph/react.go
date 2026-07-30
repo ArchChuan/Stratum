@@ -18,6 +18,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"github.com/byteBuilderX/stratum/pkg/tokenutil"
 )
 
@@ -37,12 +38,8 @@ type ReActState struct {
 	ActiveSkill                *port.SkillActivation
 	TracePayloadStore          port.TracePayloadStore
 	ToolExecutionFn            port.ToolExecutionFn
-	OfficialDocsSearchFn       func(context.Context, string) ([]domain.Citation, error)
-	DiagnosticFn               func(context.Context, []domain.DiagnosticArea) (domain.DiagnosticEvidence, error)
-	ProposalCreateFn           func(context.Context, map[string]any) (domain.ResourceChangeProposalArtifact, error)
 	GovernedAssistant          bool
 	AssistantToolArtifacts     []domain.SystemAssistantToolArtifact
-	InternalToolResultGuardFn  func(any) (port.GuardedToolResult, error)
 	ExecutionID                string
 	AgentKnowledgeWorkspaceIDs []string
 	AgentMemoryScope           string
@@ -369,6 +366,7 @@ type toolExecResult struct {
 	status       string
 	errMsg       string
 	fatalToolErr error
+	artifact     *domain.SystemAssistantToolArtifact
 }
 
 func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReActState] {
@@ -393,7 +391,10 @@ func makeToolNode(capGW port.CapabilityGateway, logger *zap.Logger) NodeFunc[ReA
 			)
 			s.TraceEvents = append(s.TraceEvents, buildToolStartedEvent(s, tc, provider, toolStart))
 			result := dispatchToolCall(toolCtx, tc, &s, toolStart, provider, logger)
-			recordToolErrorArtifact(&s, tc.Name, toolStart, result)
+			if result.artifact != nil {
+				s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, *result.artifact)
+			}
+			recordToolErrorArtifact(&s, provider.CapabilityID, toolStart, result)
 			toolLatencyMs := time.Since(toolStart).Milliseconds()
 			recordToolSpanResult(toolSpan, result.errMsg, result.content, toolLatencyMs)
 			if !s.GovernedAssistant {
@@ -469,12 +470,6 @@ func dispatchToolCall(toolCtx context.Context, tc port.ToolCall, s *ReActState, 
 		return result
 	}
 	switch tc.Name {
-	case "stratum_search_official_docs":
-		return execOfficialDocsTool(toolCtx, tc, s, toolStart)
-	case "stratum_diagnose_tenant":
-		return execDiagnoseTenantTool(toolCtx, tc, s, toolStart)
-	case "stratum_propose_resource_change":
-		return execProposalTool(toolCtx, tc, s, toolStart)
 	case "stratum_create_plan", "stratum_revise_plan", "stratum_continue_plan", "stratum_cancel_plan":
 		return execPlanTool(toolCtx, tc, s)
 	case "stratum_continue_reasoning":
@@ -501,80 +496,6 @@ func dispatchSkillTool(tc port.ToolCall, s *ReActState) (toolExecResult, bool) {
 		}
 	}
 	return toolExecResult{}, false
-}
-
-func execOfficialDocsTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
-	if !s.GovernedAssistant || s.OfficialDocsSearchFn == nil {
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "official docs tool unavailable", content: "error: tool unavailable"}
-	}
-	query, parseErr := domain.ParseOfficialDocsToolArguments(tc.Arguments)
-	if parseErr != nil {
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: parseErr.Error(), content: "error: invalid tool arguments"}
-	}
-	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
-	citations, callErr := s.OfficialDocsSearchFn(callCtx, query)
-	cancel()
-	if callErr != nil {
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: safeAssistantToolError(callErr), content: "error: " + safeAssistantToolError(callErr)}
-	}
-	citations = domain.BoundCitations(citations)
-	content, guardErr := guardInternalAssistantEvidence(s.InternalToolResultGuardFn, map[string]any{"citations": citations})
-	if guardErr != nil {
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result exceeded safe bounds"}
-	}
-	s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
-		Tool: tc.Name, Citations: citations, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
-	})
-	return toolExecResult{content: content, status: domain.ToolTraceStatusSuccess}
-}
-
-func execDiagnoseTenantTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
-	if !s.GovernedAssistant || s.DiagnosticFn == nil {
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "diagnostic tool unavailable", content: "error: tool unavailable"}
-	}
-	areas, parseErr := domain.ParseDiagnosticToolArguments(tc.Arguments)
-	if parseErr != nil {
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: parseErr.Error(), content: "error: invalid tool arguments"}
-	}
-	callCtx, cancel := context.WithTimeout(toolCtx, constants.SystemAssistantToolTimeout)
-	evidence, callErr := s.DiagnosticFn(callCtx, areas)
-	cancel()
-	if callErr != nil {
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: safeAssistantToolError(callErr), content: "error: " + safeAssistantToolError(callErr)}
-	}
-	evidence = domain.BoundDiagnosticEvidence(evidence)
-	content, guardErr := guardInternalAssistantEvidence(s.InternalToolResultGuardFn, map[string]any{"evidence": evidence})
-	if guardErr != nil {
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result exceeded safe bounds"}
-	}
-	s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
-		Tool: tc.Name, Evidence: &evidence, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
-	})
-	return toolExecResult{content: content, status: domain.ToolTraceStatusSuccess}
-}
-
-func execProposalTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolStart time.Time) toolExecResult {
-	if !s.GovernedAssistant || s.ProposalCreateFn == nil {
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "proposal tool unavailable", content: "error: tool unavailable"}
-	}
-	proposal, callErr := s.ProposalCreateFn(toolCtx, tc.Arguments)
-	if callErr != nil {
-		if proposal.ID != "" {
-			s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
-				Tool: tc.Name, Proposal: &proposal, LatencyMs: time.Since(toolStart).Milliseconds(),
-				Outcome: "error", ErrorCode: assistantToolErrorCode(callErr.Error()),
-			})
-		}
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: safeAssistantToolError(callErr), content: "error: " + safeAssistantToolError(callErr)}
-	}
-	content, guardErr := guardInternalAssistantEvidence(s.InternalToolResultGuardFn, map[string]any{"proposal": proposal})
-	if guardErr != nil {
-		return toolExecResult{status: domain.ToolTraceStatusError, errMsg: guardErr.Error(), content: "error: tool result exceeded safe bounds"}
-	}
-	s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
-		Tool: tc.Name, Proposal: &proposal, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "success",
-	})
-	return toolExecResult{content: content, status: domain.ToolTraceStatusSuccess}
 }
 
 func execPlanTool(toolCtx context.Context, tc port.ToolCall, s *ReActState) toolExecResult {
@@ -681,7 +602,15 @@ func execMCPTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolS
 		if !safe {
 			return toolExecResult{status: domain.ToolTraceStatusError, errMsg: "tool result was not validated", content: "error: tool result validation failed"}
 		}
-		return toolExecResult{content: guarded.ModelContent, status: domain.ToolTraceStatusSuccess}
+		return toolExecResult{
+			content: guarded.ModelContent,
+			status:  domain.ToolTraceStatusSuccess,
+			artifact: platformMCPArtifact(
+				provider.CapabilityID,
+				guarded.StructuredContent,
+				toolLatencyMs,
+			),
+		}
 	default:
 		logger.Info("react.tool", zap.String("trace_id", s.TraceID), zap.String("tenant_id", s.TenantID),
 			zap.String("conversation_id", s.ConversationID), zap.String("tool_name", tc.Name),
@@ -690,12 +619,70 @@ func execMCPTool(toolCtx context.Context, tc port.ToolCall, s *ReActState, toolS
 	}
 }
 
-func recordToolErrorArtifact(s *ReActState, toolName string, toolStart time.Time, result toolExecResult) {
-	if result.status == domain.ToolTraceStatusError && (toolName == "stratum_search_official_docs" || toolName == "stratum_diagnose_tenant") {
+func recordToolErrorArtifact(s *ReActState, capabilityID string, toolStart time.Time, result toolExecResult) {
+	if result.status == domain.ToolTraceStatusError && isPlatformMCPTool(capabilityID) {
 		s.AssistantToolArtifacts = append(s.AssistantToolArtifacts, domain.SystemAssistantToolArtifact{
-			Tool: toolName, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "error", ErrorCode: assistantToolErrorCode(result.errMsg),
+			Tool: capabilityID, LatencyMs: time.Since(toolStart).Milliseconds(), Outcome: "error", ErrorCode: assistantToolErrorCode(result.errMsg),
 		})
 	}
+}
+
+func platformMCPArtifact(
+	toolName string,
+	structured map[string]any,
+	latencyMs int64,
+) *domain.SystemAssistantToolArtifact {
+	artifact := &domain.SystemAssistantToolArtifact{
+		Tool: toolName, LatencyMs: latencyMs, Outcome: "success",
+	}
+	switch toolName {
+	case platformmcp.ToolSearchOfficialDocs:
+		var response struct {
+			Citations []domain.Citation `json:"citations"`
+		}
+		if !decodeStructuredContent(structured, &response) {
+			return nil
+		}
+		artifact.Citations = domain.BoundCitations(response.Citations)
+	case platformmcp.ToolDiagnoseTenant:
+		var response struct {
+			Evidence domain.DiagnosticEvidence `json:"evidence"`
+		}
+		if !decodeStructuredContent(structured, &response) {
+			return nil
+		}
+		evidence := domain.BoundDiagnosticEvidence(response.Evidence)
+		artifact.Evidence = &evidence
+	case platformmcp.ToolProposeResourceChange:
+		var proposal domain.ResourceChangeProposalArtifact
+		if !decodeStructuredContent(structured, &proposal) || proposal.ID == "" {
+			return nil
+		}
+		artifact.Proposal = &proposal
+	default:
+		return nil
+	}
+	return artifact
+}
+
+func decodeStructuredContent(content map[string]any, target any) bool {
+	if content == nil {
+		return false
+	}
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return false
+	}
+	return json.Unmarshal(encoded, target) == nil
+}
+
+func isPlatformMCPTool(toolName string) bool {
+	for _, name := range platformmcp.Phase1ToolNames {
+		if toolName == name {
+			return true
+		}
+	}
+	return false
 }
 
 func recordToolSpanResult(toolSpan oteltrace.Span, errMsg, content string, toolLatencyMs int64) {
@@ -1010,36 +997,6 @@ func effectiveTools(
 	return out
 }
 
-func guardInternalAssistantEvidence(fn func(any) (port.GuardedToolResult, error), value any) (string, error) {
-	raw, err := json.Marshal(value)
-	if err != nil || len(raw) > constants.SystemAssistantToolMaxJSONBytes {
-		return "", domain.ErrSystemAssistantEvidenceTooLarge
-	}
-	if fn == nil {
-		return "", errors.New("internal tool result guard unavailable")
-	}
-	guarded, err := fn(value)
-	if err != nil {
-		return "", err
-	}
-	return guarded.ModelContent, nil
-}
-
-func safeAssistantToolError(err error) string {
-	switch {
-	case errors.Is(err, context.DeadlineExceeded):
-		return "tool timeout"
-	case errors.Is(err, context.Canceled):
-		return "tool cancelled"
-	case errors.Is(err, domain.ErrOfficialEvidenceNotFound):
-		return "official evidence not found"
-	case errors.Is(err, domain.ErrDiagnosticForbidden):
-		return "diagnostic forbidden"
-	default:
-		return "evidence unavailable"
-	}
-}
-
 func assistantToolErrorCode(message string) string {
 	switch message {
 	case "tool timeout":
@@ -1052,10 +1009,6 @@ func assistantToolErrorCode(message string) string {
 		return "forbidden"
 	case "invalid official docs arguments", "invalid diagnostic arguments":
 		return "invalid_arguments"
-	case domain.ErrInvalidSystemAssistantToolArguments.Error():
-		return "invalid_arguments"
-	case domain.ErrSystemAssistantEvidenceTooLarge.Error():
-		return "evidence_too_large"
 	default:
 		return "unavailable"
 	}

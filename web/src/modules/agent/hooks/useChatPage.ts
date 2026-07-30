@@ -21,10 +21,12 @@ const normalizeArtifacts = (value: unknown) => {
   return parsed.success ? parsed.data : [];
 };
 
-export const useChatPage = () => {
+type UseChatPageOptions = { fixedAgentId?: string };
+
+export const useChatPage = ({ fixedAgentId }: UseChatPageOptions = {}) => {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(
-    () => sessionStorage.getItem(SS_AGENT),
+    () => fixedAgentId ?? sessionStorage.getItem(SS_AGENT),
   );
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConv, setSelectedConv] = useState<string | null>(null);
@@ -76,6 +78,13 @@ export const useChatPage = () => {
     let cancelled = false;
     (async () => {
       try {
+				if (fixedAgentId) {
+					const assistant = await agentApi.get(fixedAgentId);
+					if (cancelled) return;
+					setAgents([assistant]);
+					setSelectedAgent(fixedAgentId);
+					return;
+				}
         const list = await agentApi.list();
         if (cancelled) return;
         const ordered = [...list].sort((left, right) => Number(right.isSystem) - Number(left.isSystem));
@@ -94,7 +103,7 @@ export const useChatPage = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [fixedAgentId]);
 
   useEffect(() => {
     if (!selectedAgent) {

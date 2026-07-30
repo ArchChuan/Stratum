@@ -154,13 +154,18 @@ func (h *MCPHandler) UpdateServer(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	var cfg mcpdomain.ServerConfig
-	if err := c.ShouldBindJSON(&cfg); err != nil {
+	var req dto.MCPServerConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	cfg, err := req.ServerConfig()
+	if err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
 	cfg.ID = c.Param("id")
-	if err := h.svc.UpdateServer(c.Request.Context(), &cfg); err != nil {
+	if err := h.svc.UpdateServer(c.Request.Context(), cfg); err != nil {
 		h.logger.Error("failed to update MCP server",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", cfg.ID),
@@ -177,12 +182,17 @@ func (h *MCPHandler) ConnectServer(c *gin.Context) {
 		respondMissingTenant(c)
 		return
 	}
-	var cfg mcpdomain.ServerConfig
-	if err := c.ShouldBindJSON(&cfg); err != nil {
+	var req dto.MCPServerConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	if err := h.svc.ConnectServer(c.Request.Context(), &cfg); err != nil {
+	cfg, err := req.ServerConfig()
+	if err != nil {
+		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
+		return
+	}
+	if err := h.svc.ConnectServer(c.Request.Context(), cfg); err != nil {
 		h.logger.Error("failed to connect MCP server",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", cfg.ID),

@@ -1,0 +1,43 @@
+{{- if .Values.platformMCP.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: stratum-backend-internal
+spec:
+  secretName: stratum-backend-internal-tls
+  issuerRef:
+    name: {{ .Values.platformMCP.tls.issuerName }}
+    kind: {{ .Values.platformMCP.tls.issuerKind }}
+  dnsNames:
+    - stratum-internal
+  uris:
+    - spiffe://stratum.local/ns/stratum/sa/stratum-backend
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: stratum-platform-mcp
+spec:
+  secretName: stratum-platform-mcp-tls
+  issuerRef:
+    name: {{ .Values.platformMCP.tls.issuerName }}
+    kind: {{ .Values.platformMCP.tls.issuerKind }}
+  dnsNames:
+    - stratum-platform-mcp
+  uris:
+    - spiffe://stratum.local/ns/stratum/sa/stratum-platform-mcp
+{{- if .Values.serviceMonitor.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: stratum-platform-mcp-monitor
+spec:
+  secretName: stratum-platform-mcp-monitor-tls
+  issuerRef:
+    name: {{ .Values.platformMCP.tls.issuerName }}
+    kind: {{ .Values.platformMCP.tls.issuerKind }}
+  uris:
+    - spiffe://stratum.local/ns/stratum/sa/stratum-platform-mcp-monitor
+{{- end }}
+{{- end }}

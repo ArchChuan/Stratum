@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -95,7 +96,7 @@ func bootstrapTenantSchemas(
 	})
 }
 
-func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *zap.Logger) {
+func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *zap.Logger) error {
 	appHarness := harnesspkg.New(logger)
 	registerHermes(appHarness, cfg, logger)
 	registerMemoryPipeline(appHarness, c, logger)
@@ -114,6 +115,9 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 		return postgresstorage.CheckDefaultTenantReadiness(ctx, db)
 	})
 	registerHTTPServer(appHarness, cfg, c, logger)
+	if err := registerInternalHTTPServer(appHarness, cfg, c, logger); err != nil {
+		return fmt.Errorf("register internal HTTP server: %w", err)
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -121,11 +125,8 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigChan)
 
-	go func() {
-		if err := appHarness.Run(ctx); err != nil {
-			logger.Error("Harness run error", zap.Error(err))
-		}
-	}()
+	runErr := make(chan error, 1)
+	go func() { runErr <- appHarness.Run(ctx) }()
 
 	select {
 	case <-sigChan:
@@ -133,8 +134,18 @@ func Run(ctx context.Context, cfg *config.Config, c *wiring.Container, logger *z
 		cancel()
 	case <-ctx.Done():
 		logger.Info("Context cancelled")
+	case err := <-runErr:
+		return normalizeHarnessError(err)
 	}
 	logger.Info("Application shutting down")
+	return normalizeHarnessError(<-runErr)
+}
+
+func normalizeHarnessError(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return fmt.Errorf("run application harness: %w", err)
 }
 
 func registerWorkflowWorker(appHarness *harnesspkg.Harness, c *wiring.Container, logger *zap.Logger) {

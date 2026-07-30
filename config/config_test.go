@@ -87,6 +87,46 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestLoadInternalAPIConfig(t *testing.T) {
+	t.Setenv("INTERNAL_API_PORT", "9443")
+	t.Setenv("INTERNAL_API_TLS_CERT_FILE", "/tls/server.crt")
+	t.Setenv("INTERNAL_API_TLS_KEY_FILE", "/tls/server.key")
+	t.Setenv("INTERNAL_API_CLIENT_CA_FILE", "/tls/ca.crt")
+	t.Setenv("PLATFORM_MCP_DIAL_ADDRESS", "127.0.0.1:18443")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.InternalAPI.Port != "9443" || !cfg.InternalAPI.Configured() ||
+		cfg.InternalAPI.PlatformMCPDialAddress != "127.0.0.1:18443" {
+		t.Fatalf("internal API config=%+v", cfg.InternalAPI)
+	}
+}
+
+func TestLoadRejectsPartialInternalAPITLSConfig(t *testing.T) {
+	t.Setenv("INTERNAL_API_TLS_CERT_FILE", "/tls/server.crt")
+	t.Setenv("INTERNAL_API_TLS_KEY_FILE", "")
+	t.Setenv("INTERNAL_API_CLIENT_CA_FILE", "")
+
+	_, err := Load()
+
+	if err == nil {
+		t.Fatal("expected partial internal API TLS config to fail")
+	}
+}
+
+func TestLoadRejectsPlatformMCPDialWithoutInternalTLS(t *testing.T) {
+	t.Setenv("PLATFORM_MCP_DIAL_ADDRESS", "127.0.0.1:18443")
+	t.Setenv("INTERNAL_API_TLS_CERT_FILE", "")
+	t.Setenv("INTERNAL_API_TLS_KEY_FILE", "")
+	t.Setenv("INTERNAL_API_CLIENT_CA_FILE", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Platform MCP dial override without workload TLS to fail")
+	}
+}
+
 func TestLoadWithEnv(t *testing.T) {
 	_ = os.Setenv("PORT", "9000")
 	_ = os.Setenv("NATS_URL", "nats://custom:4222")

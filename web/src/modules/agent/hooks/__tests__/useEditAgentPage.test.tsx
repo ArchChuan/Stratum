@@ -56,4 +56,29 @@ describe('useEditAgentPage', () => {
 
     await act(async () => resolveOrdinary(agent('ordinary', false)));
   });
+
+  it.each([
+		{ isSystem: true, wantPath: '/agents' },
+		{ isSystem: false, wantPath: '/agents/list' },
+	])('returns to the correct management tab after saving', async ({ isSystem, wantPath }) => {
+		vi.mocked(agentApi.get).mockResolvedValue(agent(mocks.id, isSystem));
+		vi.mocked(agentApi.update).mockResolvedValue({} as never);
+		const { result } = renderHook(() => useEditAgentPage());
+		await waitFor(() => expect(result.current.agent?.isSystem).toBe(isSystem));
+
+		await act(async () => result.current.onFinish({
+			name: mocks.id,
+			description: '',
+			systemPrompt: '',
+			llmModel: 'glm-5.2',
+			maxIterations: 10,
+			maxContextTokens: 8000,
+			allowedSkills: [],
+			mcpToolIds: [],
+			knowledgeWorkspaceIds: [],
+			memoryScope: 'user',
+		}));
+
+		expect(mocks.navigate).toHaveBeenCalledWith(wantPath);
+	});
 });

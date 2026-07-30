@@ -29,6 +29,20 @@ type MetricsProvider interface {
 	RecordResourceProposalReviewDuration(kind, operation string, duration float64)
 	RecordResourceProposalDraftEdits(kind, operation string, count int)
 
+	// Platform MCP uses only bounded operational labels.
+	IncPlatformMCPRequest(toolClass, riskLevel, outcome string)
+	RecordPlatformMCPRequestDuration(toolClass, outcome string, duration float64)
+	IncPlatformMCPRequestsInFlight()
+	DecPlatformMCPRequestsInFlight()
+	IncPlatformMCPAuthDenial(statusClass string)
+	IncPlatformMCPTokenExchange(outcome string)
+	IncPlatformMCPReplayDenial(statusClass string)
+	IncPlatformMCPBackendRequest(toolClass, statusClass string)
+	IncPlatformMCPUnknownOutcome(toolClass string)
+	IncPlatformMCPContractMismatch(toolClass string)
+	SetPlatformMCPCertificateExpiry(seconds float64)
+	SetPlatformMCPCertificateRotation(statusClass string, value float64)
+
 	// LLM
 	IncLLMRequest(model, provider, status string)
 	RecordLLMRequestDuration(model, provider string, duration float64)
@@ -71,6 +85,18 @@ func (NoopMetrics) RecordSystemAssistantEvidenceGaps(_, _ string, _ int)        
 func (NoopMetrics) IncResourceProposal(_, _, _ string)                            {}
 func (NoopMetrics) RecordResourceProposalReviewDuration(_, _ string, _ float64)   {}
 func (NoopMetrics) RecordResourceProposalDraftEdits(_, _ string, _ int)           {}
+func (NoopMetrics) IncPlatformMCPRequest(_, _, _ string)                          {}
+func (NoopMetrics) RecordPlatformMCPRequestDuration(_, _ string, _ float64)       {}
+func (NoopMetrics) IncPlatformMCPRequestsInFlight()                               {}
+func (NoopMetrics) DecPlatformMCPRequestsInFlight()                               {}
+func (NoopMetrics) IncPlatformMCPAuthDenial(_ string)                             {}
+func (NoopMetrics) IncPlatformMCPTokenExchange(_ string)                          {}
+func (NoopMetrics) IncPlatformMCPReplayDenial(_ string)                           {}
+func (NoopMetrics) IncPlatformMCPBackendRequest(_, _ string)                      {}
+func (NoopMetrics) IncPlatformMCPUnknownOutcome(_ string)                         {}
+func (NoopMetrics) IncPlatformMCPContractMismatch(_ string)                       {}
+func (NoopMetrics) SetPlatformMCPCertificateExpiry(_ float64)                     {}
+func (NoopMetrics) SetPlatformMCPCertificateRotation(_ string, _ float64)         {}
 func (NoopMetrics) IncLLMRequest(_, _, _ string)                                  {}
 func (NoopMetrics) RecordLLMRequestDuration(_, _ string, _ float64)               {}
 func (NoopMetrics) IncLLMTokenUsage(_, _ string, _ int64)                         {}

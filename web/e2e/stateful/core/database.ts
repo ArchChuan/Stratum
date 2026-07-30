@@ -1,5 +1,7 @@
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 
+import { E2E_MCP_BASE_URL } from './endpoints';
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const LOCAL_DATABASE_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', 'postgres']);
 export const SAFE_POOL_OPTIONS = {
@@ -155,6 +157,11 @@ export const configureManagedModels = async (pool: DatabasePool, tenantID: strin
     await client.query('BEGIN');
     began = true;
     await client.query("SELECT set_config('search_path', $1, true)", [`tenant_${tenantID},public`]);
+    await client.query(
+      `DELETE FROM providers
+       WHERE tenant_id = $1 AND name LIKE 'E2E-Provider-%'`,
+      [tenantID],
+    );
     const providerResult = await client.query(
       `INSERT INTO providers (id, tenant_id, name, kind, base_url, api_key, default_model, enabled)
        VALUES ($1, $2, 'stateful-qwen', 'openai_compat', $3, $4, 'qwen-max', true)
@@ -165,7 +172,7 @@ export const configureManagedModels = async (pool: DatabasePool, tenantID: strin
          default_model = EXCLUDED.default_model,
          enabled = true,
          updated_at = now()`,
-      ['stateful-qwen', tenantID, 'http://127.0.0.1:19091/v1', 'stateful-local-provider-key'],
+      ['stateful-qwen', tenantID, `${E2E_MCP_BASE_URL}/v1`, 'stateful-local-provider-key'],
     );
     if (providerResult.rowCount !== 1) throw new Error('synthetic LLM provider setup did not affect exactly one row');
     const modelResult = await client.query(
@@ -229,10 +236,7 @@ export const deleteGeneratedOAuthUser = async (
   githubID: string,
   email: string,
 ): Promise<void> => {
-  if (!/^[1-9][0-9]*$/.test(githubID)) throw new Error('generated oauth github id must be a positive integer');
-  if (!/^[a-z0-9._+-]+@example\.test$/i.test(email)) {
-    throw new Error('generated oauth email must use example.test');
-  }
+  validateGeneratedOAuthIdentity(githubID, email);
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -244,6 +248,31 @@ export const deleteGeneratedOAuthUser = async (
     if (result.rowCount !== 1) throw new Error('generated oauth cleanup did not delete exactly one user');
   } finally {
     client.release();
+  }
+};
+
+export const deleteGeneratedOAuthUserIfExists = async (
+  pool: DatabasePool,
+  githubID: string,
+  email: string,
+): Promise<void> => {
+  validateGeneratedOAuthIdentity(githubID, email);
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `DELETE FROM public.users
+       WHERE github_id = $1 AND email = $2 AND is_guest = false`,
+      [githubID, email],
+    );
+  } finally {
+    client.release();
+  }
+};
+
+const validateGeneratedOAuthIdentity = (githubID: string, email: string): void => {
+  if (!/^[1-9][0-9]*$/.test(githubID)) throw new Error('generated oauth github id must be a positive integer');
+  if (!/^[a-z0-9._+-]+@example\.test$/i.test(email)) {
+    throw new Error('generated oauth email must use example.test');
   }
 };
 

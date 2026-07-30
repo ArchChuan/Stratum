@@ -66,11 +66,29 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		completionHandler(w, r)
 		return
 	}
+	if r.URL.Path == "/v1/models" {
+		modelsHandler(w, r)
+		return
+	}
 	if r.URL.Path == "/v1/embeddings" {
 		embeddingsHandler(w, r)
 		return
 	}
 	mcpHandler(w, r)
+}
+
+func modelsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"object": "list",
+		"data": []any{
+			map[string]any{"id": "mock-model-1", "object": "model"},
+			map[string]any{"id": "mock-model-2", "object": "model"},
+		},
+	})
 }
 
 func contextEvidenceHandler(w http.ResponseWriter, r *http.Request) {

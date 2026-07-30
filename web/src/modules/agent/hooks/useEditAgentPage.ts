@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { agentApi } from '../api/agent.api';
-import type { Agent, AgentFormValues } from '../model/agent';
+import type { Agent, AgentFormValues, GroupedModelOption } from '../model/agent';
 
 import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 import { knowledgeApi } from '@/modules/knowledge';
@@ -14,8 +14,6 @@ import type { MCPToolOption } from '@/modules/mcp';
 import { skillApi } from '@/modules/skill';
 import type { Skill } from '@/modules/skill';
 import { extractErrorMessage } from '@/shared/lib';
-
-import type { GroupedModelOption } from '../components/AgentFormSections';
 
 export const useEditAgentPage = () => {
   const { id = '' } = useParams<{ id: string }>();
@@ -28,6 +26,7 @@ export const useEditAgentPage = () => {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [groupedModels, setGroupedModels] = useState<GroupedModelOption[]>([]);
   const navigate = useNavigate();
+  const managementPath = agent?.isSystem ? '/agents' : '/agents/list';
 
   useEffect(() => {
     let cancelled = false;
@@ -86,7 +85,7 @@ export const useEditAgentPage = () => {
       } catch (err) {
         if (!cancelled) {
           message.error({ content: extractErrorMessage(err, '加载 Agent 信息失败'), duration: 0 });
-          navigate('/agents');
+          navigate('/agents/list');
         }
       } finally {
         if (!cancelled) setPageLoading(false);
@@ -107,7 +106,7 @@ export const useEditAgentPage = () => {
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],
         });
         message.success(`Agent "${values.name}" 保存成功`);
-        navigate('/agents');
+        navigate(agent?.isSystem ? '/agents' : '/agents/list');
       } catch (err) {
         const status = (err as { response?: { status?: number } })?.response?.status;
         if (status !== 403) message.error(extractErrorMessage(err) || '保存失败');
@@ -115,8 +114,11 @@ export const useEditAgentPage = () => {
         setLoading(false);
       }
     },
-    [id, navigate],
+    [id, navigate, agent?.isSystem],
   );
 
-  return { id, agent, form, loading, pageLoading, skills, mcpTools, workspaces, groupedModels, navigate, onFinish };
+  return {
+    id, agent, form, loading, pageLoading, skills, mcpTools, workspaces, groupedModels,
+    navigate, managementPath, onFinish,
+  };
 };

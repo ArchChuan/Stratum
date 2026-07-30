@@ -3,6 +3,7 @@ import type { QueryResultRow } from 'pg';
 
 import type { BrowserActor } from '../core/actors';
 import { requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
+import { E2E_MCP_BASE_URL } from '../core/endpoints';
 import type { EvidenceRecord } from '../core/evidence';
 
 interface MCPPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
@@ -59,7 +60,7 @@ export const executeMCPPack = async ({ actor, pool, evidence, webURL }: MCPPackC
     await openSelect(page, '传输协议');
     await page.getByLabel('传输协议').press('ArrowDown');
     await page.getByLabel('传输协议').press('Enter');
-    await page.getByLabel('服务器 URL').fill('http://127.0.0.1:19091/mcp');
+    await page.getByLabel('服务器 URL').fill(`${E2E_MCP_BASE_URL}/mcp`);
     const createResponse = waitForMutation(page, '/mcp/servers', 'POST');
     const createdListResponse = waitForMutation(page, '/mcp/servers', 'GET');
     await page.getByRole('button', { name: '添加服务器' }).click();

@@ -442,19 +442,62 @@ CREATE INDEX IF NOT EXISTS idx_evaluation_jobs_claim
     ON evaluation_jobs(status, lease_until, created_at);
 
 CREATE TABLE IF NOT EXISTS mcp_configs (
-    id            TEXT PRIMARY KEY,
-    name          TEXT NOT NULL DEFAULT '' UNIQUE,
-    transport     TEXT NOT NULL,
-    command       TEXT NOT NULL DEFAULT '',
-    url           TEXT NOT NULL DEFAULT '',
-    args          JSONB NOT NULL DEFAULT '[]',
-    env           JSONB NOT NULL DEFAULT '{}',
-    capabilities  JSONB NOT NULL DEFAULT '[]',
-    timeout_sec   INT  NOT NULL DEFAULT 30,
-    enabled       BOOL NOT NULL DEFAULT true,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL DEFAULT '' UNIQUE,
+    transport       TEXT NOT NULL,
+    command         TEXT NOT NULL DEFAULT '',
+    url             TEXT NOT NULL DEFAULT '',
+    args            JSONB NOT NULL DEFAULT '[]',
+    env             JSONB NOT NULL DEFAULT '{}',
+    capabilities    JSONB NOT NULL DEFAULT '[]',
+    timeout_sec     INT  NOT NULL DEFAULT 30,
+    enabled         BOOL NOT NULL DEFAULT true,
+    system_key      TEXT,
+    management_mode TEXT NOT NULL DEFAULT 'tenant_managed',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS system_key TEXT;
+ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS management_mode TEXT NOT NULL DEFAULT 'tenant_managed';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_configs_system_key
+    ON mcp_configs(system_key) WHERE system_key IS NOT NULL;
+
+DO $$
+DECLARE
+    server_name TEXT := '__stratum_platform_mcp__';
+    suffix INTEGER := 0;
+BEGIN
+    WHILE EXISTS (
+        SELECT 1 FROM mcp_configs
+        WHERE name = server_name
+          AND id <> 'stratum-platform-mcp'
+    ) LOOP
+        suffix := suffix + 1;
+        server_name := '__stratum_platform_mcp__' || suffix::TEXT;
+    END LOOP;
+
+    INSERT INTO mcp_configs (
+        id, name, transport, command, url, args, env, capabilities,
+        timeout_sec, enabled, system_key, management_mode
+    ) VALUES (
+        'stratum-platform-mcp', server_name, 'streamable-http', '',
+        'https://stratum-platform-mcp:8443/mcp', '[]'::jsonb, '{}'::jsonb, '[]'::jsonb,
+        30, true, 'stratum.platform_mcp', 'platform_managed'
+    )
+    ON CONFLICT DO NOTHING;
+END $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM mcp_configs
+        WHERE id = 'stratum-platform-mcp'
+          AND system_key = 'stratum.platform_mcp'
+          AND management_mode = 'platform_managed'
+    ) THEN
+        RAISE EXCEPTION 'stratum platform MCP identity conflict requires operator action';
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS agent_mcp_tool_links (
     agent_id  TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -462,6 +505,37 @@ CREATE TABLE IF NOT EXISTS agent_mcp_tool_links (
     tool_name TEXT NOT NULL,
     PRIMARY KEY (agent_id, server_id, tool_name)
 );
+
+INSERT INTO agent_mcp_tool_links (agent_id, server_id, tool_name)
+VALUES
+    ('stratum-platform-assistant', 'stratum-platform-mcp', 'stratum_search_official_docs'),
+    ('stratum-platform-assistant', 'stratum-platform-mcp', 'stratum_diagnose_tenant'),
+    ('stratum-platform-assistant', 'stratum-platform-mcp', 'stratum_propose_resource_change')
+ON CONFLICT DO NOTHING;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM agent_mcp_tool_links
+        WHERE agent_id = 'stratum-platform-assistant'
+          AND server_id = 'stratum-platform-mcp'
+          AND tool_name NOT IN (
+              'stratum_search_official_docs',
+              'stratum_diagnose_tenant',
+              'stratum_propose_resource_change'
+          )
+    ) THEN
+        RAISE EXCEPTION 'stratum platform MCP tool binding conflict requires operator action';
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS mcp_invocation_jtis (
+    jti         TEXT PRIMARY KEY,
+    expires_at  TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_invocation_jtis_expiry
+    ON mcp_invocation_jtis(expires_at);
 
 -- Tool risk is tenant-owned policy. MCP servers may describe tools but cannot
 -- assign themselves a trusted risk level.

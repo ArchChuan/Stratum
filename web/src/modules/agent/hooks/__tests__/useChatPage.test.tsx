@@ -14,7 +14,9 @@ const mocks = vi.hoisted(() => ({
     status: string;
   },
   listAgents: vi.fn(),
+	getAgent: vi.fn(),
   listConversations: vi.fn(),
+	createConversation: vi.fn(),
   decide: vi.fn(),
   listApprovals: vi.fn(),
   resume: vi.fn(),
@@ -48,12 +50,14 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../api/agent.api', () => ({
   agentApi: {
     list: mocks.listAgents,
+		get: mocks.getAgent,
     listToolApprovals: mocks.listApprovals,
     decideToolApproval: mocks.decide,
     resumeToolApproval: mocks.resume,
   },
   conversationApi: {
     list: mocks.listConversations,
+		create: mocks.createConversation,
     messages: vi.fn().mockResolvedValue([]),
   },
 }));
@@ -74,7 +78,9 @@ describe('useChatPage tool approvals', () => {
     sessionStorage.clear();
     vi.clearAllMocks();
     mocks.listAgents.mockResolvedValue([]);
+		mocks.getAgent.mockResolvedValue({ id: 'system', name: '平台助手', isSystem: true });
     mocks.listConversations.mockResolvedValue([]);
+		mocks.createConversation.mockResolvedValue({ id: 'conversation-new', name: '新会话' });
     mocks.listApprovals.mockResolvedValue(mocks.approval ? [mocks.approval] : []);
     mocks.decide.mockResolvedValue({});
     mocks.stream.streamConversationId = null;
@@ -178,4 +184,16 @@ describe('useChatPage tool approvals', () => {
         ?.artifacts?.[0]?.diagnosticReport?.evidenceGaps,
     ).toEqual([]);
   });
+
+	it('loads and creates conversations only for a fixed platform assistant', async () => {
+		const fixedID = 'stratum-platform-assistant';
+		mocks.getAgent.mockResolvedValue({ id: fixedID, name: 'Stratum 平台助手', isSystem: true });
+		const { result } = renderHook(() => useChatPage({ fixedAgentId: fixedID }));
+
+		await waitFor(() => expect(result.current.selectedAgent).toBe(fixedID));
+		expect(mocks.listAgents).not.toHaveBeenCalled();
+		expect(mocks.getAgent).toHaveBeenCalledWith(fixedID);
+		await act(async () => result.current.handleCreateConv());
+		expect(mocks.createConversation).toHaveBeenCalledWith(fixedID);
+	});
 });

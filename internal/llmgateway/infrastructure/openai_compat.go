@@ -18,17 +18,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
 
 const (
-	maxRetryAttempts   = 3
-	retryBaseDelay     = 100 * time.Millisecond
-	maxRetryDelay      = 10 * time.Second
-	cbFailureThreshold = 5
-	cbRecoveryTimeout  = 30 * time.Second
+	maxRetryAttempts          = 3
+	retryBaseDelay            = 100 * time.Millisecond
+	maxRetryDelay             = 10 * time.Second
+	maxModelListResponseBytes = 1 << 20
+	cbFailureThreshold        = 5
+	cbRecoveryTimeout         = 30 * time.Second
 )
 
 // providerBreaker is a per-provider three-state circuit breaker.
@@ -133,15 +133,6 @@ func parseRetryAfter(header string) time.Duration {
 	return 0
 }
 
-// openaiModelsResponse is the JSON body from GET /models (OpenAI-compatible).
-type openaiModelsResponse struct {
-	Data []openaiModelItem `json:"data"`
-}
-
-type openaiModelItem struct {
-	ID string `json:"id"`
-}
-
 // ProviderConfig holds the minimal configuration that differentiates one
 // OpenAI-compatible provider from another.
 type ProviderConfig struct {
@@ -237,8 +228,7 @@ func (c *OpenAICompatClient) Complete(ctx context.Context, req *CompletionReques
 					}
 				}
 			}
-			lastErr = fmt.Errorf("%s: POST %s/chat/completions 返回 %d，请检查 API Key 与 Base URL 是否正确（当前 kind=openai_compat）: %w",
-				c.cfg.Name, strings.TrimSuffix(c.cfg.BaseURL, "/"), resp.StatusCode, domain.ErrUpstreamRequestFailed)
+			lastErr = fmt.Errorf("%s: complete status %d", c.cfg.Name, resp.StatusCode)
 			if !isRetryableHTTPStatus(resp.StatusCode) {
 				c.logger.Error(c.cfg.Name+": http error (no retry)",
 					zap.String("model", req.Model),
@@ -521,6 +511,54 @@ func (c *OpenAICompatClient) Models() []string {
 	return c.cfg.Models
 }
 
+func (c *OpenAICompatClient) ListModels(ctx context.Context) ([]string, error) {
+	requestURL := strings.TrimRight(c.cfg.BaseURL, "/") + "/models"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%s: build model list request: %w", c.cfg.Name, err)
+	}
+	if c.cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s: request model list: %w", c.cfg.Name, err)
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxModelListResponseBytes+1))
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("%s: read model list: %w", c.cfg.Name, readErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("%s: close model list response: %w", c.cfg.Name, closeErr)
+	}
+	if len(raw) > maxModelListResponseBytes {
+		return nil, fmt.Errorf("%s: model list response exceeds limit", c.cfg.Name)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: model list status %d", c.cfg.Name, resp.StatusCode)
+	}
+	return decodeOpenAIModelIDs(raw, c.cfg.Name)
+}
+
+func decodeOpenAIModelIDs(raw []byte, providerName string) ([]string, error) {
+	var response struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return nil, fmt.Errorf("%s: decode model list: %w", providerName, err)
+	}
+	models := make([]string, 0, len(response.Data))
+	for _, model := range response.Data {
+		if model.ID != "" {
+			models = append(models, model.ID)
+		}
+	}
+	return models, nil
+}
+
 // ---------------------------------------------------------------------------
 // ChatProtocol adapters — stateless wrappers that accept a ProviderConfig at
 // call time, delegating to the existing instance-method implementations.
@@ -606,37 +644,7 @@ func (p *OpenAICompatProtocol) Health(ctx context.Context, cfg ProviderConfig) e
 }
 
 func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]string, error) {
-	url := strings.TrimSuffix(cfg.BaseURL, "/") + "/models"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("openai compat: build models request: %w", err)
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-
-	resp, err := p.client.http.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("openai compat: do models request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("openai compat: read models body: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("openai compat: GET %s returned %d: check API key and base URL",
-			url, resp.StatusCode)
-	}
-
-	var out openaiModelsResponse
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("openai compat: decode models: %w", err)
-	}
-	models := make([]string, len(out.Data))
-	for i, m := range out.Data {
-		models[i] = m.ID
-	}
-	return models, nil
+	return p.clientFor(cfg).ListModels(ctx)
 }
 
 func (p *OpenAICompatProtocol) CreateEmbeddings(

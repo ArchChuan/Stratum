@@ -33,6 +33,7 @@ func TestToolResultGuardRedactsSensitiveValues(t *testing.T) {
 	require.NotContains(t, result.ModelContent, sentinel)
 	require.NotContains(t, result.Summary, sentinel)
 	require.Contains(t, result.ModelContent, "[REDACTED]")
+	require.NotContains(t, result.StructuredContent["api_key"], sentinel)
 }
 
 func TestToolResultGuardRejectsIsErrorWithoutLeakingContent(t *testing.T) {

@@ -8,6 +8,7 @@ import {
   PROVIDER_CAMEL_KEYS, PROVIDER_PASCAL_BANNED,
 } from '../core/camelcase';
 import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
+import { E2E_MCP_BASE_URL } from '../core/endpoints';
 import type { EvidenceRecord } from '../core/evidence';
 
 interface LLMAdminPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
@@ -53,7 +54,7 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
     await page.locator('.ant-form-item').filter({ hasText: '类型' })
       .locator('.ant-select-selector').click();
     await page.locator('.ant-select-item-option').filter({ hasText: 'OpenAI 兼容' }).click();
-    await page.getByLabel('Base URL').fill('https://api.e2e-test.example.com/v1');
+    await page.getByLabel('Base URL').fill(`${E2E_MCP_BASE_URL}/v1`);
     await page.getByLabel('API Key').fill('sk-e2e-test-key');
 
     const createResponse = waitForMutation(page, '/admin/providers', 'POST');
@@ -105,9 +106,8 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
 
     // ── Discover models from edited provider ──────────────────────────────────
     const editedRow = page.locator('tr').filter({ hasText: `${providerName}-edited` });
-    await editedRow.getByRole('button', { name: '发现模型' }).click();
-
     const discoverResponse = waitForMutation(page, `/admin/providers/${providerID}/discover`, 'POST');
+    await editedRow.getByRole('button', { name: '发现模型' }).click();
     await expect(page.locator('.ant-modal-content').filter({ hasText: '发现模型' })).toBeVisible();
     const discoverData = await discoverResponse;
     expect(discoverData.status()).toBe(200);
@@ -136,17 +136,24 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
     assertNoPascalCase(modelsBody, MODEL_PASCAL_BANNED, 'model list');
 
     // Verify discovered models appear (mock runtime returns mock-model-1, mock-model-2)
-    const discoverModelNames = (discoverBody.models as Array<{ name: string }>).map(m => m.name);
-    const firstModelName = discoverModelNames[0];
-    if (firstModelName) {
-      await expect(page.locator('tr').filter({ hasText: firstModelName })).toBeVisible();
+    const modelCatalogue = page.locator('.ant-card').filter({ hasText: '模型目录' }).last();
+    const discoveredModels = discoverBody.models as Array<{ id: string; name: string }>;
+    const firstModel = discoveredModels[0];
+    const firstModelName = firstModel?.name;
+    const listedModels = modelsBody.models as Array<{ id: string; name: string; providerId: string }>;
+    const listedModel = listedModels.find(model => model.name === firstModelName && model.providerId === providerID);
+    expect(listedModel).toBeDefined();
+    const modelRows = modelCatalogue.locator('tr')
+      .filter({ hasText: providerID })
+      .filter({ hasText: firstModelName ?? '' });
+    if (firstModel) {
+      await expect(modelCatalogue.locator('tr').filter({ hasText: firstModel.name, visible: true }).first()).toBeVisible();
     }
 
     // ── Model edit via drawer ─────────────────────────────────────────────────
-    if (firstModelName) {
-      const modelRow = page.locator('tr').filter({ hasText: firstModelName });
-      await modelRow.getByRole('button', { name: '编辑' }).click();
-      await expect(page.getByRole('button', { name: '保存' })).toBeVisible();
+    if (firstModel) {
+      await modelRows.getByRole('button', { name: /编\s*辑/ }).first().click();
+      await expect(page.getByRole('button', { name: /保\s*存/ })).toBeVisible();
       await expect(page.getByLabel('显示名称')).toBeVisible();
 
       await page.getByLabel('显示名称').fill(`E2E-${firstModelName}`);
@@ -154,7 +161,7 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
       await page.getByLabel('输出价格 ($/1M tokens)').fill('4.56');
 
       const modelUpdateResponse = waitForMutation(page, /\/admin\/models\/[^/]+$/, 'PUT');
-      await page.getByRole('button', { name: '保存' }).click();
+      await page.getByRole('button', { name: /保\s*存/ }).click();
       const modelUpdated = await modelUpdateResponse;
       expect(modelUpdated.status()).toBe(200);
       const modelUpdateBody = await modelUpdated.json();
@@ -163,24 +170,22 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
       recordEvidence(evidence, 'LLM model update');
 
       // ── Model toggle ──────────────────────────────────────────────────────
-      const updatedTableRow = page.locator('tr').filter({ hasText: `E2E-${firstModelName}` });
-      const toggleSwitch = updatedTableRow.locator('.ant-switch');
+      const toggleSwitch = modelRows.locator('.ant-switch').first();
       const ariaChecked = await toggleSwitch.getAttribute('aria-checked');
       const wasEnabled = ariaChecked === 'true';
 
-      await toggleSwitch.click();
       const toggleResponse = waitForMutation(page, /\/admin\/models\/[^/]+\/toggle/, 'PATCH');
+      await toggleSwitch.click();
       expect((await toggleResponse).status()).toBe(200);
 
       expect(await rows<{ enabled: boolean }>(pool, tenantID,
-        'SELECT enabled FROM models WHERE display_name=$1 AND tenant_id=$2',
-        [`E2E-${firstModelName}`, tenantID]))
+        'SELECT enabled FROM models WHERE id=$1 AND tenant_id=$2',
+        [listedModel!.id, tenantID]))
         .toEqual([{ enabled: !wasEnabled }]);
 
       // Toggle back
-      const rowAfterToggle = page.locator('tr').filter({ hasText: `E2E-${firstModelName}` });
-      await rowAfterToggle.locator('.ant-switch').click();
       const toggleBack = waitForMutation(page, /\/admin\/models\/[^/]+\/toggle/, 'PATCH');
+      await modelRows.locator('.ant-switch').first().click();
       expect((await toggleBack).status()).toBe(200);
       completed.push('llm-admin.mutation.patch.admin.models.id.toggle');
       recordEvidence(evidence, 'LLM model toggle');
@@ -189,11 +194,13 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
     // ── Switch back to provider tab, delete provider ──────────────────────────
     await page.locator('.ant-tabs-tab').filter({ hasText: '厂商管理' }).click();
 
-    const finalRow = page.locator('tr').filter({ hasText: `${providerName}-edited` });
-    await finalRow.locator('button:has(.anticon-delete)').click();
-    await page.locator('.ant-popconfirm').getByRole('button', { name: /删\s*除/ }).click();
-
+    const providerCatalogue = page.locator('.ant-card').filter({ hasText: '厂商管理' }).last();
+    const finalRow = providerCatalogue.locator('tr')
+      .filter({ hasText: `${providerName}-edited`, visible: true }).first();
     const deleteResponse = waitForMutation(page, `/admin/providers/${providerID}`, 'DELETE');
+    await finalRow.locator('button:has(.anticon-delete)').click();
+    await page.locator('.ant-modal-content').filter({ hasText: '确认删除' })
+      .getByRole('button', { name: /删\s*除/ }).click();
     expect((await deleteResponse).status()).toBe(200);
 
     expect(await rows<{ count: string }>(pool, tenantID,

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { agentApi } from '../api/agent.api';
-import type { AgentFormValues } from '../model/agent';
+import type { AgentFormValues, GroupedModelOption } from '../model/agent';
 
 import { knowledgeApi } from '@/modules/knowledge';
 import type { Workspace } from '@/modules/knowledge';
@@ -13,8 +13,6 @@ import type { MCPToolOption } from '@/modules/mcp';
 import { skillApi } from '@/modules/skill';
 import type { Skill } from '@/modules/skill';
 import { extractErrorMessage } from '@/shared/lib';
-
-import type { GroupedModelOption } from '../components/AgentFormSections';
 
 export const useCreateAgentPage = () => {
   const [form] = Form.useForm<AgentFormValues>();
@@ -74,7 +72,7 @@ export const useCreateAgentPage = () => {
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],
         });
         message.success(`Agent "${values.name}" 创建成功`);
-        navigate('/agents');
+        navigate('/agents/list');
       } catch (err) {
         const status = (err as { response?: { status?: number } })?.response?.status;
         if (status !== 403) message.error(extractErrorMessage(err) || '创建失败');
