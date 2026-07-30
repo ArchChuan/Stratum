@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { agentApi } from '../api/agent.api';
-import type { Agent, AgentFormValues } from '../model/agent';
+import type { Agent, AgentFormValues, GroupedModelOption } from '../model/agent';
 
 import { AGENT_DEFAULT_MAX_ITERATIONS } from '@/constants';
 import { knowledgeApi } from '@/modules/knowledge';
@@ -14,8 +14,6 @@ import type { MCPToolOption } from '@/modules/mcp';
 import { skillApi } from '@/modules/skill';
 import type { Skill } from '@/modules/skill';
 import { extractErrorMessage } from '@/shared/lib';
-
-import type { GroupedModelOption } from '../components/AgentFormSections';
 
 export const useEditAgentPage = () => {
   const { id = '' } = useParams<{ id: string }>();

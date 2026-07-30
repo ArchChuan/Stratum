@@ -1,6 +1,8 @@
 import { RobotOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Collapse, Form, Input, InputNumber, Select, Slider, Switch, Tag, Typography } from 'antd';
 
+import type { GroupedModelOption } from '../model/agent';
+
 import { AgentMemoryConfig } from './AgentMemoryConfig';
 
 import { AGENT_MAX_MAX_ITERATIONS, AGENT_MIN_MAX_ITERATIONS } from '@/constants';
@@ -12,11 +14,6 @@ import { SectionHeader } from '@/shared/ui';
 const { Text } = Typography;
 const { TextArea } = Input;
 const { Option, OptGroup } = Select;
-
-export interface GroupedModelOption {
-  provider: string;
-  models: { value: string; label: string }[];
-}
 
 interface AgentFormSectionsProps {
   skills: Skill[];
