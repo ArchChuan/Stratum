@@ -33,6 +33,31 @@ type Config struct {
 	Opik                    OpikConfig
 	TracePayload            TracePayloadConfig
 	MemoryPipeline          MemoryPipelineConfig
+	InternalAPI             InternalAPIConfig
+}
+
+type InternalAPIConfig struct {
+	Port         string
+	CertFile     string
+	KeyFile      string
+	ClientCAFile string
+}
+
+func (c InternalAPIConfig) Configured() bool {
+	return c.CertFile != "" && c.KeyFile != "" && c.ClientCAFile != ""
+}
+
+func (c InternalAPIConfig) validate() error {
+	configuredFiles := 0
+	for _, path := range []string{c.CertFile, c.KeyFile, c.ClientCAFile} {
+		if path != "" {
+			configuredFiles++
+		}
+	}
+	if configuredFiles == 0 || configuredFiles == 3 {
+		return nil
+	}
+	return fmt.Errorf("internal API TLS certificate, key, and client CA must be configured together")
 }
 
 type OpikConfig struct {
@@ -75,7 +100,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Config{
+	cfg := &Config{
 		Port:                    getEnv("PORT", "8080"),
 		NatsURL:                 natsURL,
 		MilvusHost:              getEnv("MILVUS_HOST", "localhost"),
@@ -125,7 +150,17 @@ func Load() (*Config, error) {
 			SummaryModel:          getEnv("MEMORY_SUMMARY_MODEL", "qwen-plus"),
 			SummaryTokenThreshold: constants.EnricherSummaryTokenThreshold,
 		},
-	}, nil
+		InternalAPI: InternalAPIConfig{
+			Port:         getEnv("INTERNAL_API_PORT", "8443"),
+			CertFile:     getEnv("INTERNAL_API_TLS_CERT_FILE", ""),
+			KeyFile:      getEnv("INTERNAL_API_TLS_KEY_FILE", ""),
+			ClientCAFile: getEnv("INTERNAL_API_CLIENT_CA_FILE", ""),
+		},
+	}
+	if err := cfg.InternalAPI.validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 func githubOAuthEndpoints() (string, string, string, error) {

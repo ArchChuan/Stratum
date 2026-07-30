@@ -1,0 +1,118 @@
+package wiring
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/byteBuilderX/stratum/config"
+	agentapp "github.com/byteBuilderX/stratum/internal/agent/application"
+	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
+	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	"github.com/byteBuilderX/stratum/pkg/platformmcp"
+)
+
+func TestBuildPlatformMCPFailsClosedWhenEnabledDependenciesAreMissing(t *testing.T) {
+	container := &Container{
+		Config: &config.Config{
+			InternalAPI: config.InternalAPIConfig{
+				CertFile: "server.crt", KeyFile: "server.key", ClientCAFile: "ca.crt",
+			},
+		},
+	}
+
+	err := container.buildPlatformMCP(t.Context())
+
+	if err == nil {
+		t.Fatal("expected enabled Platform MCP wiring with missing dependencies to fail")
+	}
+}
+
+func TestBuildPlatformMCPSkipsDisabledInternalAPI(t *testing.T) {
+	container := &Container{Config: &config.Config{}}
+
+	if err := container.buildPlatformMCP(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPlatformMCPBindingAdapterValidatesManagedResourcesAndToolLink(t *testing.T) {
+	adapter := platformMCPBindingAdapter{
+		agents: platformMCPAgentFake{agent: agentapp.AgentDTO{
+			ID: platformmcp.SystemAssistantID, SystemKey: platformmcp.SystemAssistantKey,
+			MCPToolIDs: []string{"mcp:stratum-platform-mcp:stratum_diagnose_tenant"},
+		}},
+		servers: platformMCPServerFake{server: &mcpdomain.ServerConfig{
+			ID: platformmcp.SystemServerID, SystemKey: platformmcp.SystemServerKey,
+			ManagementMode: platformmcp.ManagementPlatform,
+		}},
+	}
+
+	binding, err := adapter.ReadPlatformMCPBinding(
+		t.Context(), "tenant-1", platformmcp.SystemAssistantID, platformmcp.SystemServerID,
+		"stratum_diagnose_tenant",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !binding.Bound || binding.AgentSystemKey != platformmcp.SystemAssistantKey ||
+		binding.ServerSystemKey != platformmcp.SystemServerKey {
+		t.Fatalf("binding=%+v", binding)
+	}
+}
+
+func TestPlatformMCPRoleAdapterPreservesMembershipFailure(t *testing.T) {
+	wantErr := context.Canceled
+	adapter := platformMCPRoleAdapter{members: platformMCPMemberFake{err: wantErr}}
+
+	_, err := adapter.CurrentRole(t.Context(), "tenant-1", "user-1")
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error=%v, want %v", err, wantErr)
+	}
+}
+
+func TestPhase1PlatformMCPContractsAreClosed(t *testing.T) {
+	registry := newPhase1PlatformMCPContracts()
+	for _, name := range platformmcp.Phase1ToolNames {
+		contract, ok := registry.Lookup(name)
+		if !ok || contract.Name != name || contract.Method == "" || contract.Path == "" {
+			t.Fatalf("contract %q=%+v, found=%v", name, contract, ok)
+		}
+	}
+	if _, ok := registry.Lookup("tenant_supplied_tool"); ok {
+		t.Fatal("unexpected tenant-supplied tool contract")
+	}
+}
+
+type platformMCPAgentFake struct {
+	agent agentapp.AgentDTO
+	err   error
+}
+
+func (f platformMCPAgentFake) Get(context.Context, string) (agentapp.AgentDTO, error) {
+	return f.agent, f.err
+}
+
+type platformMCPServerFake struct {
+	server *mcpdomain.ServerConfig
+	err    error
+}
+
+func (f platformMCPServerFake) GetServerConfig(context.Context, string) (*mcpdomain.ServerConfig, error) {
+	return f.server, f.err
+}
+
+type platformMCPMemberFake struct {
+	role string
+	err  error
+}
+
+func (f platformMCPMemberFake) GetMemberRole(context.Context, string, string) (string, error) {
+	return f.role, f.err
+}
+
+var (
+	_ iamport.PlatformMCPBindingReader = platformMCPBindingAdapter{}
+	_ iamport.TenantRoleResolver       = platformMCPRoleAdapter{}
+)

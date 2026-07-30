@@ -41,6 +41,7 @@ type Container struct {
 	Memory               *Memory
 	IAM                  *IAM
 	Agent                *Agent
+	PlatformMCP          *PlatformMCP
 	Workflow             *Workflow
 	ReadinessCheck       func(context.Context) map[string]error
 	RevisionObjectStore  pkgobjectstore.Store
@@ -76,6 +77,7 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 		{"memory", c.buildMemory},
 		{"iam", c.buildIAM},
 		{"agent", c.buildAgent},
+		{"platform-mcp", c.buildPlatformMCP},
 		{"workflow", c.buildWorkflow},
 		{"evaluation", c.buildEvaluation},
 	}
@@ -203,6 +205,10 @@ func NewFromExisting(
 	if err := c.buildAgent(ctx); err != nil {
 		_ = c.Shutdown(ctx)
 		return nil, fmt.Errorf("wiring.agent: %w", err)
+	}
+	if err := c.buildPlatformMCP(ctx); err != nil {
+		_ = c.Shutdown(ctx)
+		return nil, fmt.Errorf("wiring.platform-mcp: %w", err)
 	}
 	if err := c.buildEvaluation(ctx); err != nil {
 		_ = c.Shutdown(ctx)

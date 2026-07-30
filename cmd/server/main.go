@@ -54,5 +54,7 @@ func main() {
 	}
 	container.RecoverStuckKnowledgeIngests(ctx)
 	container.SeedBuiltinKnowledgeDocs(ctx)
-	Run(ctx, cfg, container, logger)
+	if err := Run(ctx, cfg, container, logger); err != nil {
+		logger.Fatal("Application runtime failed", zap.Error(err))
+	}
 }
