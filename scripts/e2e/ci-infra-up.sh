@@ -21,10 +21,10 @@ services:
     environment:
       POSTGRES_USER: stratum
       POSTGRES_PASSWORD: stratum
-      POSTGRES_DB: stratum
+      POSTGRES_DB: stratum_e2e
     ports: ["127.0.0.1:5432:5432"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U stratum -d stratum"]
+      test: ["CMD-SHELL", "pg_isready -U stratum -d stratum_e2e"]
       interval: 2s
       timeout: 2s
       retries: 30

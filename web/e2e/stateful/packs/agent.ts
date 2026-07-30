@@ -81,7 +81,9 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('描述').fill('全系统 stateful Agent 验收');
     await page.getByLabel('系统提示词').fill('请简洁回答，并明确包含 stateful。');
-    await page.getByLabel('LLM 模型').click();
+    const createModelInput = page.getByRole('combobox', { name: 'LLM 模型' });
+    await createModelInput.scrollIntoViewIfNeeded();
+    await createModelInput.click({ force: true });
     await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
       .filter({ hasText: /^qwen-max$/ }).click();
     await expect(page.getByRole('slider', { name: '最大迭代次数' })).toHaveAttribute('aria-valuemax', '90');
@@ -172,7 +174,12 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
 		await page.getByRole('link', { name: '平台助手设置' }).click();
 		expect((await systemAgentResponse).status()).toBe(200);
 		await expect(page).toHaveURL(`${webURL}/agents/stratum-platform-assistant/edit`);
-    await expect(page.getByLabel('LLM 模型')).toBeVisible();
+		const settingsModelInput = page.getByRole('combobox', { name: 'LLM 模型' });
+		await expect(settingsModelInput).toBeEnabled();
+		await settingsModelInput.scrollIntoViewIfNeeded();
+		await settingsModelInput.click({ force: true });
+		await settingsModelInput.press('ArrowDown');
+		await settingsModelInput.press('Enter');
 		const settingsResponse = waitForMutation(page, '/agents/stratum-platform-assistant', 'PUT');
     await page.getByRole('button', { name: '保存修改' }).click();
     expect((await settingsResponse).status()).toBe(200);

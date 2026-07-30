@@ -114,6 +114,14 @@ fi
 export TEST_DATABASE_URL=$database_url STRATUM_TEST_POSTGRES_URL=$database_url POSTGRES_URL=$database_url
 export QWEN_BASE_URL=http://127.0.0.1:19091/v1
 
+# Ephemeral RSA key for JWT signing — E2E never shares keys with production.
+if [[ -z "${JWT_PRIVATE_KEY_PEM:-}" ]]; then
+  JWT_PRIVATE_KEY_PEM=$(openssl genrsa 2048 2>/dev/null) || {
+    printf 'failed to generate E2E JWT private key\n' >&2; exit 1
+  }
+  export JWT_PRIVATE_KEY_PEM
+fi
+
 oauth_suffix="$(date +%s)-$$"
 oauth_client_secret=$(openssl rand -hex 32)
 oauth_github_id=$(($(date +%s) * 100000 + $$ % 100000))
