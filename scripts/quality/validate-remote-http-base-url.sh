@@ -10,6 +10,9 @@ invalid() {
 [[ "$#" -eq 1 ]] || invalid
 
 url="$1"
+# trim leading/trailing whitespace (GitHub vars may have stray spaces)
+url="${url#"${url%%[![:space:]]*}"}"
+url="${url%"${url##*[![:space:]]}"}"
 if [[ ! "${url}" =~ ^https://([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3}):8443$ ]]; then
     invalid
 fi
