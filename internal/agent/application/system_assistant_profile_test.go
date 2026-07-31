@@ -80,8 +80,9 @@ func TestComposeSystemAssistantProfileReplacesProtectedFieldsAndPreservesTenantR
 	if got.SystemPrompt != profile.SystemPrompt {
 		t.Fatalf("SystemPrompt not from profile: got %q, want %q", got.SystemPrompt, profile.SystemPrompt)
 	}
-	if got.MaxIterations != profile.MaxIterations || got.MaxContextTokens != profile.MaxContextTokens {
-		t.Fatalf("protected budgets not replaced: %#v", got)
+	if got.MaxIterations != want.MaxIterations || got.MaxContextTokens != want.MaxContextTokens {
+		t.Fatalf("tenant budgets not preserved: got MaxIterations=%d MaxContextTokens=%d, want %d / %d",
+			got.MaxIterations, got.MaxContextTokens, want.MaxIterations, want.MaxContextTokens)
 	}
 	if got.SystemKey != profile.Key || !got.IsSystem || got.ManagementMode != "platform" {
 		t.Fatalf("managed identity not composed: %#v", got)
@@ -95,8 +96,11 @@ func TestComposeSystemAssistantProfileReplacesProtectedFieldsAndPreservesTenantR
 	if len(got.KnowledgeWorkspaceIDs) != 1 || got.KnowledgeWorkspaceIDs[0] != "knowledge-1" {
 		t.Fatal("tenant knowledge workspaces not preserved")
 	}
+	if got.CheckpointEnabled != want.CheckpointEnabled {
+		t.Fatalf("tenant checkpoint not preserved: got %v, want %v", got.CheckpointEnabled, want.CheckpointEnabled)
+	}
 	if len(got.KnowledgeWorkspaceNames) != 0 || len(got.KnowledgeWorkspaceDescriptions) != 0 ||
-		len(got.Capabilities) != 0 || got.StuckThreshold != 0 || got.CheckpointEnabled {
+		len(got.Capabilities) != 0 || got.StuckThreshold != 0 {
 		t.Fatalf("unexpected tenant extensions survived composition: %#v", got)
 	}
 }
@@ -166,7 +170,7 @@ func (r systemAssistantProfileRepo) GetAll(context.Context) ([]*domain.AgentConf
 	return r.cfgs, r.err
 }
 func (r systemAssistantProfileRepo) Update(context.Context, *domain.AgentConfig) error { return nil }
-func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(context.Context, string) (*domain.AgentConfig, error) {
+func (r systemAssistantProfileRepo) UpdateSystemAssistantModel(context.Context, string, string, bool, int, int) (*domain.AgentConfig, error) {
 	return nil, nil
 }
 func (r systemAssistantProfileRepo) Remove(context.Context, string) error { return nil }

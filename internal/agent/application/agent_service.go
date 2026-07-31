@@ -315,7 +315,7 @@ func (s *AgentService) ExecuteRevision(
 }
 
 func revisionExecutionContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), constants.AgentExecTimeout)
+	return context.WithCancel(context.WithoutCancel(ctx))
 }
 
 func (s *AgentService) buildRevisionAgent(revision domain.AgentRevision) (*BaseAgent, error) {
@@ -373,11 +373,7 @@ func (s *AgentService) List(ctx context.Context) ([]AgentDTO, error) {
 	}
 	out := make([]AgentDTO, 0, len(agents))
 	for _, a := range agents {
-		cfg := a.GetConfig()
-		if cfg.SystemKey != "" {
-			continue
-		}
-		out = append(out, cfgToDTO(cfg))
+		out = append(out, cfgToDTO(a.GetConfig()))
 	}
 	return out, nil
 }
@@ -424,29 +420,23 @@ func (s *AgentService) systemAssistantSettings(ctx context.Context, a Agent) (Sy
 }
 
 func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model string) (SystemAssistantSettings, error) {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return SystemAssistantSettings{}, domain.ErrInvalidSystemAssistantModel
-	}
-	if s.deps.TenantModelValidator == nil {
-		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: validator unavailable")
-	}
-	tenantID := reqctx.TenantIDFromContext(ctx)
-	if tenantID == "" {
-		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: tenant id required")
-	}
-	if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, model); err != nil {
-		if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
-			errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
-			return SystemAssistantSettings{}, domain.ErrInvalidSystemAssistantModel
-		}
-		return SystemAssistantSettings{}, fmt.Errorf("agent service validate system assistant model: %w", err)
+	model, tenantID, err := s.validateSystemAssistantModel(ctx, model)
+	if err != nil {
+		return SystemAssistantSettings{}, err
 	}
 	models, err := s.listTenantChatModels(ctx, tenantID)
 	if err != nil {
 		return SystemAssistantSettings{}, err
 	}
-	a, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model)
+	existing, found, err := s.deps.Registry.GetSystemAssistant(ctx)
+	if err != nil {
+		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: %w", err)
+	}
+	if !found {
+		return SystemAssistantSettings{}, ErrNotFound
+	}
+	existingCfg := existing.GetConfig()
+	a, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model, existingCfg.MemoryScope, existingCfg.CheckpointEnabled, existingCfg.MaxIterations, existingCfg.MaxContextTokens)
 	if err != nil {
 		return SystemAssistantSettings{}, fmt.Errorf("agent service update system assistant model: %w", err)
 	}
@@ -455,6 +445,28 @@ func (s *AgentService) UpdateSystemAssistantModel(ctx context.Context, model str
 		AgentID: cfg.ID, Model: cfg.LLMModel,
 		Ready: cfg.LLMModel == model, AvailableModels: models,
 	}, nil
+}
+
+func (s *AgentService) validateSystemAssistantModel(ctx context.Context, model string) (string, string, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "", "", domain.ErrInvalidSystemAssistantModel
+	}
+	if s.deps.TenantModelValidator == nil {
+		return "", "", fmt.Errorf("agent service validate system assistant model: validator unavailable")
+	}
+	tenantID := reqctx.TenantIDFromContext(ctx)
+	if tenantID == "" {
+		return "", "", fmt.Errorf("agent service validate system assistant model: tenant id required")
+	}
+	if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, model); err != nil {
+		if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
+			errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
+			return "", "", domain.ErrInvalidSystemAssistantModel
+		}
+		return "", "", fmt.Errorf("agent service validate system assistant model: %w", err)
+	}
+	return model, tenantID, nil
 }
 
 func (s *AgentService) listTenantChatModels(ctx context.Context, tenantID string) ([]string, error) {
@@ -519,9 +531,13 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.Ag
 	if tenantID == "" {
 		return AgentDTO{}, fmt.Errorf("update system assistant: tenant id required")
 	}
-	if in.LLMModel != "" && in.LLMModel != cfg.LLMModel {
+	model := in.LLMModel
+	if model == "" {
+		model = cfg.LLMModel
+	}
+	if model != cfg.LLMModel {
 		if s.deps.TenantModelValidator != nil {
-			if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, in.LLMModel); err != nil {
+			if err := s.deps.TenantModelValidator.ValidateTenantChatModel(ctx, tenantID, model); err != nil {
 				if errors.Is(err, domain.ErrAssistantModelUnavailable) ||
 					errors.Is(err, domain.ErrInvalidSystemAssistantModel) {
 					return AgentDTO{}, domain.ErrInvalidSystemAssistantModel
@@ -529,22 +545,25 @@ func (s *AgentService) updateSystemAssistant(ctx context.Context, cfg *domain.Ag
 				return AgentDTO{}, fmt.Errorf("update system assistant model: %w", err)
 			}
 		}
-		updated, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, in.LLMModel)
-		if err != nil {
-			return AgentDTO{}, fmt.Errorf("update system assistant model: %w", err)
-		}
-		cfg = updated.GetConfig()
 	}
-	skills := in.AllowedSkills
-	if skills == nil {
-		skills = []string{}
+	memoryScope := in.MemoryScope
+	maxIterations := in.MaxIterations
+	if maxIterations <= 0 {
+		maxIterations = cfg.MaxIterations
 	}
+	maxContextTokens := in.MaxContextTokens
+	if maxContextTokens <= 0 {
+		maxContextTokens = cfg.MaxContextTokens
+	}
+	updated, err := s.deps.Registry.UpdateSystemAssistantModel(ctx, model, memoryScope, in.CheckpointEnabled, maxIterations, maxContextTokens)
+	if err != nil {
+		return AgentDTO{}, fmt.Errorf("update system assistant model: %w", err)
+	}
+	cfg = updated.GetConfig()
+	skills := append([]string{}, cfg.AllowedSkills...)
 	mcpTools := append([]string{}, cfg.MCPToolIDs...)
-	knowledge := in.KnowledgeWorkspaceIDs
-	if knowledge == nil {
-		knowledge = []string{}
-	}
-	updated, err := s.deps.Registry.UpdateSystemAssistantBindings(ctx, mcpTools, knowledge, skills)
+	knowledge := append([]string{}, cfg.KnowledgeWorkspaceIDs...)
+	updated, err = s.deps.Registry.UpdateSystemAssistantBindings(ctx, mcpTools, knowledge, skills)
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("update system assistant bindings: %w", err)
 	}
@@ -805,7 +824,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		zap.String("conversation_id", req.ConversationID),
 	)
 
-	execCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), constants.AgentExecTimeout)
+	execCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 
 	start := time.Now()
@@ -900,7 +919,7 @@ func (s *AgentService) ExecuteStream(
 	options = append(options, WithTokenCallback(wrappedTokenCb))
 	options = append(options, WithExecutionID(executionID))
 
-	execCtx, cancel = context.WithTimeout(context.WithoutCancel(streamCtx), constants.AgentExecTimeout)
+	execCtx, cancel = context.WithCancel(context.WithoutCancel(streamCtx))
 	run = func() (*AgentResult, int, error) {
 		s.deps.Logger.Debug("agent.execute_stream",
 			zap.String("agent_id", agentID),
@@ -1161,6 +1180,9 @@ func (s *AgentService) assembleOptions(
 	options := []ExecutionOption{WithMaxSteps(a.GetConfig().MaxIterations)}
 	if req.MaxSteps > 0 {
 		options = append(options, WithMaxSteps(req.MaxSteps))
+	}
+	if req.Timeout > 0 {
+		options = append(options, WithTimeout(req.Timeout))
 	}
 	isSystemAssistant := a.GetConfig().SystemKey == domain.SystemAssistantKey
 	if isSystemAssistant {

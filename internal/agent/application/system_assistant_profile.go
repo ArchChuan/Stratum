@@ -40,10 +40,15 @@ func BuiltinSystemAssistantProfiles() map[string]domain.SystemAssistantProfile {
 			Name: "Stratum 平台助手", Description: "基于官方资料提供平台使用指导和当前租户的只读诊断。",
 			SystemPrompt: systemAssistantPrompt, MaxIterations: 6, MaxContextTokens: 24576,
 		},
+		"2026-07-23.v1": {
+			Key: domain.SystemAssistantKey, Version: "2026-07-23.v1",
+			Name: "Stratum 平台助手", Description: "基于官方资料提供平台使用指导和当前租户的只读诊断。",
+			SystemPrompt: systemAssistantPrompt, MaxIterations: 8, MaxContextTokens: 32768,
+		},
 		domain.CurrentSystemAssistantProfileVersion: {
 			Key: domain.SystemAssistantKey, Version: domain.CurrentSystemAssistantProfileVersion,
 			Name: "Stratum 平台助手", Description: "基于官方资料提供平台使用指导和当前租户的只读诊断。",
-			SystemPrompt: systemAssistantPrompt, MaxIterations: 8, MaxContextTokens: 32768,
+			SystemPrompt: systemAssistantPrompt, MaxIterations: 90, MaxContextTokens: 32768,
 		},
 	}
 }
@@ -126,10 +131,11 @@ func ComposeSystemAssistantProfile(
 		Description:      cfg.Description,
 		SystemPrompt:     profile.SystemPrompt,
 		LLMModel:         cfg.LLMModel,
-		MaxIterations:    profile.MaxIterations,
-		MaxContextTokens: profile.MaxContextTokens,
+		MaxIterations:    cfg.MaxIterations,
+		MaxContextTokens: cfg.MaxContextTokens,
 		MemoryScope:      cfg.MemoryScope, SystemKey: profile.Key, IsSystem: true, ManagementMode: "platform",
-		MCPToolIDs: copyCfg.MCPToolIDs, KnowledgeWorkspaceIDs: copyCfg.KnowledgeWorkspaceIDs,
+		CheckpointEnabled: cfg.CheckpointEnabled,
+		MCPToolIDs:        copyCfg.MCPToolIDs, KnowledgeWorkspaceIDs: copyCfg.KnowledgeWorkspaceIDs,
 		AllowedSkills: copyCfg.AllowedSkills,
 	}, nil
 }

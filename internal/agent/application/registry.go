@@ -129,8 +129,8 @@ func (r *Registry) GetSystemAssistant(ctx context.Context) (Agent, bool, error) 
 	return a, true, nil
 }
 
-func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string) (Agent, error) {
-	cfg, err := r.repo.UpdateSystemAssistantModel(ctx, model)
+func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int) (Agent, error) {
+	cfg, err := r.repo.UpdateSystemAssistantModel(ctx, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens)
 	if err != nil {
 		return nil, fmt.Errorf("registry update system assistant model: %w", err)
 	}
@@ -142,7 +142,7 @@ func (r *Registry) UpdateSystemAssistantModel(ctx context.Context, model string)
 }
 
 func (r *Registry) UpdateSystemAssistant(ctx context.Context, cfg *domain.AgentConfig) error {
-	if _, err := r.repo.UpdateSystemAssistantModel(ctx, cfg.LLMModel); err != nil {
+	if _, err := r.repo.UpdateSystemAssistantModel(ctx, cfg.LLMModel, cfg.MemoryScope, cfg.CheckpointEnabled, cfg.MaxIterations, cfg.MaxContextTokens); err != nil {
 		return fmt.Errorf("registry update system assistant: %w", err)
 	}
 	if r.logger != nil {

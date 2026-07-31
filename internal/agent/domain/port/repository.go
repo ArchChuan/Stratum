@@ -21,7 +21,7 @@ type AgentRepo interface {
 	GetAll(ctx context.Context) ([]*domain.AgentConfig, error)
 	Remove(ctx context.Context, id string) error
 	Update(ctx context.Context, cfg *domain.AgentConfig) error
-	UpdateSystemAssistantModel(ctx context.Context, model string) (*domain.AgentConfig, error)
+	UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int) (*domain.AgentConfig, error)
 	UpdateSystemAssistantBindings(ctx context.Context, mcpToolIDs, knowledgeWorkspaceIDs, allowedSkills []string) (*domain.AgentConfig, error)
 }
 

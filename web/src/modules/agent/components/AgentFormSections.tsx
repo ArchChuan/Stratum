@@ -21,6 +21,7 @@ interface AgentFormSectionsProps {
   workspaces: Workspace[];
   groupedModels: GroupedModelOption[];
   currentModel?: string;
+  isSystem?: boolean;
 }
 
 export const AgentFormSections = ({
@@ -29,6 +30,7 @@ export const AgentFormSections = ({
   workspaces,
   groupedModels,
   currentModel,
+  isSystem = false,
 }: AgentFormSectionsProps) => {
   return (
     <>
@@ -132,9 +134,9 @@ export const AgentFormSections = ({
         label="技能"
         name="allowedSkills"
         style={{ marginBottom: 16 }}
-        extra="激活后向 Agent 注入版本化指令，并按要求收窄 MCP、知识和记忆权限"
+        extra={isSystem ? '系统助手的技能由平台统一管理，不可修改' : '激活后向 Agent 注入版本化指令，并按要求收窄 MCP、知识和记忆权限'}
       >
-        <Select mode="multiple" placeholder="选择 Agent 可调用的技能">
+        <Select mode="multiple" placeholder="选择 Agent 可调用的技能" disabled={isSystem}>
           {skills.map((s) => (
             <Option key={s.id} value={s.id}>
               <Tag style={{ margin: '0 6px 0 0', border: 'none', fontSize: 11 }} color={s.status === 'published' ? 'green' : 'default'}>
@@ -149,9 +151,9 @@ export const AgentFormSections = ({
         label="MCP 工具"
         name="mcpToolIds"
         style={{ marginBottom: 16 }}
-        extra="符合 Model Context Protocol 协议的结构化工具"
+        extra={isSystem ? '系统助手的 MCP 工具由平台统一管理，不可修改' : '符合 Model Context Protocol 协议的结构化工具'}
       >
-        <Select mode="multiple" placeholder="选择允许调用的 MCP 工具">
+        <Select mode="multiple" placeholder="选择允许调用的 MCP 工具" disabled={isSystem}>
           {mcpTools.map((tool) => (
             <Option key={tool.id} value={tool.id}>
               {tool.label}
@@ -159,8 +161,8 @@ export const AgentFormSections = ({
           ))}
         </Select>
       </Form.Item>
-      <Form.Item label="知识库" name="knowledgeWorkspaceIds" extra="执行时自动检索相关文档">
-        <Select mode="multiple" placeholder="选择知识库">
+      <Form.Item label="知识库" name="knowledgeWorkspaceIds" extra={isSystem ? '系统助手的知识库由平台统一管理，不可修改' : '执行时自动检索相关文档'}>
+        <Select mode="multiple" placeholder="选择知识库" disabled={isSystem}>
           {workspaces.map((w) => (
             <Option key={w.id || w.name} value={w.id || w.name}>
               {w.name}

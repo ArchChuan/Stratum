@@ -52,12 +52,14 @@ var AllowedQueryModes = map[string]bool{
 
 // Workspace is a knowledge RAG workspace owned by a tenant.
 type Workspace struct {
-	ID          string
-	Name        string
-	Description string
-	Config      WorkspaceConfig
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID             string
+	Name           string
+	Description    string
+	Config         WorkspaceConfig
+	SystemKey      string `json:"-"`
+	ManagementMode string `json:"management_mode"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // WorkspaceConfig is the per-workspace RAG configuration persisted as JSONB.

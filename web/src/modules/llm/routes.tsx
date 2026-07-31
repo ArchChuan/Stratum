@@ -9,7 +9,7 @@ export const llmRoutes = [
     key="models"
     path="/models"
     element={
-      <PrivateRoute requiredTenantRole="admin">
+      <PrivateRoute requiredTenantRole="member">
         <ModelManagementPage />
       </PrivateRoute>
     }

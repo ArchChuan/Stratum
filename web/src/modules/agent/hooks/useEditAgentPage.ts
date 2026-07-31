@@ -26,7 +26,7 @@ export const useEditAgentPage = () => {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [groupedModels, setGroupedModels] = useState<GroupedModelOption[]>([]);
   const navigate = useNavigate();
-  const managementPath = agent?.isSystem ? '/agents' : '/agents/list';
+  const managementPath = '/agents';
 
   useEffect(() => {
     let cancelled = false;
@@ -85,7 +85,7 @@ export const useEditAgentPage = () => {
       } catch (err) {
         if (!cancelled) {
           message.error({ content: extractErrorMessage(err, '加载 Agent 信息失败'), duration: 0 });
-          navigate('/agents/list');
+          navigate('/agents');
         }
       } finally {
         if (!cancelled) setPageLoading(false);
@@ -106,7 +106,7 @@ export const useEditAgentPage = () => {
           knowledgeWorkspaceIds: values.knowledgeWorkspaceIds || [],
         });
         message.success(`Agent "${values.name}" 保存成功`);
-        navigate(agent?.isSystem ? '/agents' : '/agents/list');
+        navigate(agent?.isSystem ? '/agents' : '/agents');
       } catch (err) {
         const status = (err as { response?: { status?: number } })?.response?.status;
         if (status !== 403) message.error(extractErrorMessage(err) || '保存失败');
