@@ -216,5 +216,8 @@ jq --arg run "$run_id" --arg db "$database_name" --argjson fp "$frontend_port" -
   "$results_path" >"$work_dir/results-v2.json"
 mv "$work_dir/results-v2.json" "$results_path"
 phase=attestation
-attestation_command=${STATEFUL_E2E_ATTESTATION_COMMAND:-"cd '$repo_dir' && go run ./cmd/e2e-attestation generate --input '$results_path' --output-dir 'test/e2e/attestations/$run_id'"}; bash -c "$attestation_command"
+attestation_profile=
+[[ "$mode" == soak ]] && attestation_profile=" --profile '$profile'"
+attestation_command=${STATEFUL_E2E_ATTESTATION_COMMAND:-"cd '$repo_dir' && go run ./cmd/e2e-attestation generate --input '$results_path' --output-dir 'test/e2e/attestations/$run_id'$attestation_profile"}
+bash -c "$attestation_command"
 trap - EXIT; rm -rf "$work_dir"

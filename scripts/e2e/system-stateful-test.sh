@@ -16,6 +16,10 @@ done
 grep -Fq 'stateful E2E failed during' "$runner" || { printf 'runner must expose the failing lifecycle phase\n' >&2; exit 1; }
 grep -Eq -- '--owner-pid.*\$\$' "$runner" || { printf 'runner lease must record the runner PID\n' >&2; exit 1; }
 grep -Fq '.schema_version == 2' "$runner" || { printf 'runner must require scope schema v2\n' >&2; exit 1; }
+grep -Fq -- "--profile '\$profile'" "$runner" || {
+  printf 'soak attestation must bind the acceptance profile\n' >&2
+  exit 1
+}
 promotion_pack=$repo_dir/web/e2e/stateful/packs/evaluation-promotion.ts
 system_spec=$repo_dir/web/e2e/system-stateful.spec.ts
 grep -Eq 'webURL: string; fixtureURL: string' "$promotion_pack" || {
