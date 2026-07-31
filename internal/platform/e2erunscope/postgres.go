@@ -93,7 +93,13 @@ func DropDatabase(ctx context.Context, admin DatabaseAdmin, name string) error {
 	return nil
 }
 
-func ReapDatabases(ctx context.Context, registry Registry, admin DatabaseAdmin, now time.Time, processAlive func(int, string) bool) ([]string, error) {
+func ReapDatabases(
+	ctx context.Context,
+	registry Registry,
+	admin DatabaseAdmin,
+	now time.Time,
+	processAlive func(int, string) bool,
+) ([]string, error) {
 	stale, err := registry.Stale(now, processAlive)
 	if err != nil {
 		return nil, fmt.Errorf("find stale runs: %w", err)
@@ -101,10 +107,10 @@ func ReapDatabases(ctx context.Context, registry Registry, admin DatabaseAdmin, 
 	removed := make([]string, 0, len(stale))
 	for _, scope := range stale {
 		if err := DropDatabase(ctx, admin, scope.DatabaseName); err != nil {
-			return removed, fmt.Errorf("reap database %s: %w", scope.DatabaseName, err)
+			return removed, err
 		}
 		if _, err := registry.Release(scope.RunID); err != nil {
-			return removed, fmt.Errorf("release stale lease %s: %w", scope.RunID, err)
+			return removed, fmt.Errorf("release stale run %s: %w", scope.RunID, err)
 		}
 		removed = append(removed, scope.DatabaseName)
 	}

@@ -155,10 +155,17 @@ func validateIdentity(scope Scope) error {
 	if !databasePattern.MatchString(scope.DatabaseName) {
 		return errors.New("run scope: invalid database name")
 	}
+	if scope.DatabaseName != databaseNameForRun(scope.RunID) {
+		return errors.New("run scope: database name does not match run ID")
+	}
 	if scope.Infrastructure.LeaseID != scope.RunID {
 		return errors.New("run scope: infrastructure lease does not match run ID")
 	}
 	return nil
+}
+
+func databaseNameForRun(runID string) string {
+	return "stratum_e2e_" + strings.ReplaceAll(runID, "-", "_")
 }
 
 func validateMetadata(scope Scope) error {

@@ -72,7 +72,7 @@ This provides strong isolation but duplicates infrastructure containers and incr
   | Run A              |              | Run B              |
   | run_id A           |              | run_id B           |
   | database A         |              | database B         |
-  | four dynamic ports |              | four dynamic ports |
+  | six dynamic ports  |              | six dynamic ports  |
   | OAuth instance A   |              | OAuth instance B   |
   | result directory A |              | result directory B |
   | attestation A      |              | attestation B      |
@@ -98,7 +98,9 @@ The helper emits one JSON run-scope document into a mode-`0700` temporary direct
     "frontend": 24101,
     "backend": 24102,
     "oauth": 24103,
-    "fixture": 24104
+    "fixture": 24104,
+    "platform_mcp": 24105,
+    "internal_api": 24106
   },
   "infrastructure": {
     "lease_id": "20260730t120102z-a1b2c3d4",
@@ -113,16 +115,16 @@ The lease registry lives below `${TMPDIR:-/tmp}/stratum-stateful-e2e/`. Registry
 
 ## 7. Dynamic Port Allocation
 
-The helper allocates four distinct IPv4 loopback ports. It asks the kernel for unused ports by binding `127.0.0.1:0`, records the returned port values, and closes the probes only after registering the complete set under the short allocation lock.
+The helper allocates six distinct IPv4 loopback ports. It asks the kernel for unused ports by binding `127.0.0.1:0`, records the returned port values, and closes the probes only after registering the complete set under the short allocation lock.
 
 Closing a probe before the target process binds leaves a small race with non-cooperating processes. Therefore allocation is not treated as ownership proof:
 
 1. every service receives an explicit listen address;
 2. Vite receives `--strictPort` and cannot silently move;
-3. all four child processes must remain alive after health checks;
+3. all five child process-group leaders must remain alive after health checks;
 4. OAuth health must echo the current `E2E_RUN_INSTANCE_ID`;
 5. the fixture server gains the same instance identity contract;
-6. a bind/startup failure stops the partial process group, releases the port lease, and retries a fresh four-port set;
+6. a bind/startup failure stops the partial process group, releases the port lease, and retries a fresh six-port set;
 7. retries are finite, with a default maximum of three complete allocation attempts.
 
 All URLs are derived once from the selected set:
@@ -222,7 +224,7 @@ Backend and frontend ownership are established by child-process liveness plus ru
 Attestation remains source-bound and generated only after all selected capabilities pass and cleanup reconciliation succeeds. The result and attestation add:
 
 - `run_id`;
-- the four port roles and numeric ports;
+- the six port roles and numeric ports;
 - the generated database name;
 - cleanup status for database and lease removal.
 
@@ -276,7 +278,7 @@ Run A                  short lock                 Run B
 ### 16.1 Unit and contract tests
 
 - Run ID and database-name grammar.
-- Four distinct dynamic loopback ports.
+- Six distinct dynamic loopback ports.
 - Lease registry permissions and symlink rejection.
 - Port-set retry after simulated bind failure.
 - DSN path replacement without credential disclosure.
@@ -291,7 +293,7 @@ Run A                  short lock                 Run B
 
 The repository runner contract starts two controlled stateful runner instances concurrently against one set of fake shared-infrastructure commands and asserts:
 
-- distinct run IDs, databases, and all eight ports;
+- distinct run IDs, databases, and all twelve ports;
 - overlapping browser-execution intervals;
 - independent process cleanup;
 - deleting Run A does not remove Run B's lease or database;

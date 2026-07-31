@@ -223,6 +223,25 @@ func TestRegistryRegisterRejectsDuplicateLease(t *testing.T) {
 	}
 }
 
+func TestRegistryRegisterRejectsPortConflictWithExistingLease(t *testing.T) {
+	r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
+	first := registryTestScope(t, "20260730t120102z-a1b2c3d4e5f60718", 101)
+	second := registryTestScope(t, "20260730t120103z-b1b2c3d4e5f60718", 102)
+	second.Ports = Ports{
+		Frontend: 22001, Backend: 22002, OAuth: 22003, Fixture: 22004,
+		PlatformMCP: 22005, InternalAPI: first.Ports.PlatformMCP,
+	}
+	if err := r.Register(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Register(second); err == nil || !strings.Contains(err.Error(), "port conflict") {
+		t.Fatalf("Register() error = %v, want six-role port conflict", err)
+	}
+	if _, err := r.Read(second.RunID); err == nil {
+		t.Fatal("conflicting lease was published")
+	}
+}
+
 func TestRegistryRegisterPublishesCompleteLeaseExclusively(t *testing.T) {
 	r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
 	scope := registryTestScope(t, "20260730t120102z-a1b2c3d4e5f60718", 101)
@@ -395,6 +414,40 @@ func TestRegistryStale(t *testing.T) {
 				t.Fatalf("len(Stale()) = %d, want %d", len(got), tt.want)
 			}
 		})
+	}
+}
+
+func TestRegistryPrepareRejectsSymlinkRoot(t *testing.T) {
+	target := t.TempDir()
+	root := filepath.Join(t.TempDir(), "registry")
+	if err := os.Symlink(target, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Registry{Root: root}).Prepare(); err == nil {
+		t.Fatal("Prepare() error = nil, want symlink rejection")
+	}
+}
+
+func TestRegistryStaleRetainsInfrastructureOwner(t *testing.T) {
+	now := time.Date(2026, time.July, 31, 12, 0, 0, 0, time.UTC)
+	r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
+	owner := registryTestScopeAt(t, "20260730t100000z-a1b2c3d4e5f60718", 101, now.Add(-25*time.Hour))
+	peer := registryTestScopeAt(t, "20260730t100001z-b1b2c3d4e5f60718", 102, now.Add(-25*time.Hour))
+	if err := r.Register(owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Register(peer); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.MarkInfrastructureOwned(owner.RunID, now.Add(-25*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := r.Stale(now, func(int, string) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 1 || stale[0].RunID != peer.RunID {
+		t.Fatalf("Stale() = %+v, want only peer %q", stale, peer.RunID)
 	}
 }
 
@@ -606,12 +659,13 @@ func registryTestScope(t *testing.T, runID string, pid int) Scope {
 
 func registryTestScopeAt(t *testing.T, runID string, pid int, createdAt time.Time) Scope {
 	t.Helper()
+	portBase := 20000 + pid*10
 	scope := Scope{
 		SchemaVersion: 2, RunID: runID, OwnerPID: pid, CreatedAt: createdAt, ExpiresAt: createdAt.Add(24 * time.Hour),
 		Repository: t.TempDir(), DatabaseName: "stratum_e2e_" + runID[:16] + "_" + runID[17:],
 		Ports: Ports{
-			Frontend: 21001, Backend: 21002, OAuth: 21003, Fixture: 21004,
-			PlatformMCP: 21005, InternalAPI: 21006,
+			Frontend: portBase + 1, Backend: portBase + 2, OAuth: portBase + 3, Fixture: portBase + 4,
+			PlatformMCP: portBase + 5, InternalAPI: portBase + 6,
 		},
 		Infrastructure: InfrastructureLease{LeaseID: runID},
 	}

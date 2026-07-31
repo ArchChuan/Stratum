@@ -49,10 +49,12 @@ Define tests around these exact public types and functions:
 
 ```go
 type Ports struct {
- Frontend int `json:"frontend"`
- Backend  int `json:"backend"`
- OAuth    int `json:"oauth"`
- Fixture  int `json:"fixture"`
+ Frontend    int `json:"frontend"`
+ Backend     int `json:"backend"`
+ OAuth       int `json:"oauth"`
+ Fixture     int `json:"fixture"`
+ PlatformMCP int `json:"platform_mcp"`
+ InternalAPI int `json:"internal_api"`
 }
 
 type Scope struct {
@@ -75,7 +77,7 @@ func MaintenanceURL(base string) (string, error)
 func URLs(ports Ports) RuntimeURLs
 ```
 
-Cover UTC-plus-random ID grammar, PostgreSQL-safe name grammar, absolute repository paths, positive PID, four distinct non-zero ports, loopback URLs, preservation of DSN credentials/query/TLS parameters, replacement of only the database path, and rejection of non-loopback or non-E2E base DSNs.
+Cover UTC-plus-random ID grammar, PostgreSQL-safe name grammar, absolute repository paths, positive PID, six distinct non-zero ports, loopback URLs, preservation of DSN credentials/query/TLS parameters, replacement of only the database path, and rejection of non-loopback or non-E2E base DSNs.
 
 - [ ] **Step 3: Run the new tests and observe the expected compile failure**
 
@@ -85,7 +87,7 @@ Expected: FAIL because `Scope`, `NewScope`, and related functions do not exist.
 
 - [ ] **Step 4: Implement the minimal scope package**
 
-Use `crypto/rand`, `encoding/hex`, `net.ListenTCP("tcp4", 127.0.0.1:0)`, and `net/url`. Bind all four probes before reading addresses, reject duplicates, then close every listener with joined errors. Use these validation expressions:
+Use `crypto/rand`, `encoding/hex`, `net.ListenTCP("tcp4", 127.0.0.1:0)`, and `net/url`. Bind all six probes before reading addresses, reject duplicates, then close every listener with joined errors. Use these validation expressions:
 
 ```go
 var runIDPattern = regexp.MustCompile(`^[0-9]{8}t[0-9]{6}z-[a-f0-9]{16}$`)
@@ -392,7 +394,7 @@ Expected: FAIL because schema v2 and topology validation are absent.
 
 - [ ] **Step 3: Implement dual-version verification and v2 generation**
 
-`GenerateAttestation` always emits version `2` and requires valid topology/owned cleanup. `VerifyAttestation` accepts versions `1` and `2`; version `1` follows the current rules unchanged, while version `2` additionally calls `verifyRunTopology`. Require exactly the roles `frontend`, `backend`, `oauth`, and `fixture`, host `127.0.0.1`, four distinct ports, safe generated database grammar, and both cleanup booleans true.
+`GenerateAttestation` always emits version `2` and requires valid topology/owned cleanup. `VerifyAttestation` accepts versions `1` and `2`; version `1` follows the current rules unchanged, while version `2` additionally calls `verifyRunTopology`. Require exactly the roles `frontend`, `backend`, `oauth`, `fixture`, `platform_mcp`, and `internal_api`, host `127.0.0.1`, six distinct ports, safe generated database grammar, and both cleanup booleans true.
 
 - [ ] **Step 4: Update the JSON schema to v2**
 
@@ -438,7 +440,7 @@ Expected: FAIL because the runner still takes the global lock and uses fixed por
 
 - [ ] **Step 3: Introduce one idempotent owned-resource cleanup function**
 
-Track `scope_file`, four child PIDs, `database_created`, `lease_registered`, `infra_reference`, and cleanup booleans. The function must execute in this order:
+Track `scope_file`, five child process-group leaders, `database_created`, `lease_registered`, `infra_reference`, and cleanup booleans. The function must execute in this order:
 
 ```text
 stop/wait frontend -> backend -> fixture -> OAuth
@@ -455,7 +457,7 @@ The trap calls the same function, joins cleanup status with the current exit sta
 
 - [ ] **Step 4: Allocate/register under only the short lock**
 
-Use `${STATEFUL_E2E_REGISTRY_ROOT:-${TMPDIR:-/tmp}/stratum-stateful-e2e}` and a lock file inside that root. Under `flock`, run stale audit/reaping, allocate/register scope, check/start shared infrastructure, and mark ownership. Release the lock before `create-database`, migration, or any child process start.
+Use `${STATEFUL_E2E_REGISTRY_ROOT:-${TMPDIR:-/tmp}/stratum-stateful-e2e}` and lock the securely opened registry directory file descriptor. Under `flock`, run stale audit/reaping, allocate/register scope, check/start shared infrastructure, and mark ownership. Release the lock before `create-database`, migration, or any child process start.
 
 Keep existing command overrides for contract tests, but replace fixed-port overrides with one `STATEFUL_E2E_SCOPE_COMMAND` seam that emits a validated scope document.
 
@@ -474,13 +476,15 @@ export GITHUB_USER_URL="$oauth_url/user"
 export QWEN_BASE_URL="$E2E_FIXTURE_URL/v1"
 export E2E_GITHUB_LISTEN_ADDRESS="127.0.0.1:$oauth_port"
 export E2E_MCP_LISTEN_ADDRESS="127.0.0.1:$fixture_port"
+export PLATFORM_MCP_LISTEN_ADDRESS="127.0.0.1:$platform_mcp_port"
+export INTERNAL_API_PORT="$internal_api_port"
 ```
 
 Build backend/frontend commands from these variables. The Vite command must end with `--host 127.0.0.1 --port "$frontend_port" --strictPort`.
 
 - [ ] **Step 6: Implement finite whole-set retry**
 
-For at most `${STATEFUL_E2E_PORT_ALLOCATION_ATTEMPTS:-3}` attempts, start all four processes, perform identity-aware health checks, and verify all PIDs are alive. On any bind/start/identity failure, stop every partial child, release the current lease, allocate a completely new scope and database, and retry. Migration or browser failures do not retry.
+For at most `${STATEFUL_E2E_PORT_ALLOCATION_ATTEMPTS:-3}` attempts, start all five process groups, perform identity-aware health checks for all six roles, and verify all process-group leaders are alive. On any bind/start/identity failure, stop every partial process group, release the current lease, allocate a completely new scope and database, and retry. Migration or browser failures do not retry.
 
 - [ ] **Step 7: Clean successfully before attestation**
 
@@ -517,7 +521,7 @@ Start two runner processes concurrently against one temporary registry and fake 
 ```text
 run IDs differ
 database names differ
-all eight role ports differ
+all twelve role ports differ
 both entered markers existed before either exited
 Run A cleanup never removes Run B lease/database markers
 infrastructure up executes once
@@ -606,7 +610,7 @@ Expected: one shared PostgreSQL, Redis, NATS, and Milvus stack is ready.
 
 From two feature worktrees at the same source revision, start `make e2e-system-short` in separate shells. Record start/end timestamps and resulting attestation paths without printing credentials.
 
-Expected: execution intervals overlap; both pass all 13 packs; attestations contain different run IDs, database names, and eight distinct ports.
+Expected: execution intervals overlap; both pass all 13 packs; attestations contain different run IDs, database names, and twelve distinct ports.
 
 - [ ] **Step 3: Verify cleanup isolation after both runs**
 

@@ -238,7 +238,7 @@ describe('stateful E2E security boundaries', () => {
     ]);
     expect(query).toHaveBeenNthCalledWith(3, expect.stringContaining("name LIKE 'E2E-Provider-%'"), [tenantID]);
     expect(query).toHaveBeenNthCalledWith(4, expect.stringContaining('INSERT INTO providers'), [
-      'stateful-qwen', tenantID, 'http://127.0.0.1:19091/v1', 'stateful-local-provider-key',
+      'stateful-qwen', tenantID, 'http://127.0.0.1:39091/v1', 'stateful-local-provider-key',
     ]);
     expect(query).toHaveBeenNthCalledWith(5, expect.stringContaining('INSERT INTO models'), [
       tenantID, 'stateful-qwen',

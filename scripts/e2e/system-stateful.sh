@@ -21,18 +21,30 @@ env_file=${STATEFUL_E2E_ENV_FILE:-$(dirname "$common_git_dir")/.env}
 if [[ -r "$env_file" ]]; then set -a; source "$env_file"; set +a; fi
 base_dsn=${TEST_DATABASE_URL:-${STRATUM_TEST_POSTGRES_URL:-postgres://stratum:stratum@127.0.0.1:5432/stratum_e2e?sslmode=disable}}
 registry_root=${STATEFUL_E2E_REGISTRY_ROOT:-${TMPDIR:-/tmp}/stratum-stateful-e2e}
-mkdir -p "$registry_root"; chmod 700 "$registry_root"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/stratum-stateful-run.XXXXXX")
 scope_file=$work_dir/scope.json; results_path=${STATEFUL_E2E_RESULTS_PATH:-$work_dir/safe-results.json}
 scope_command=${STATEFUL_E2E_SCOPE_COMMAND:-"go run ./cmd/e2e-run-scope"}
 oauth_pid= mcp_pid= platform_mcp_pid= backend_pid= frontend_pid=; lease_registered=false; database_created=false
 database_dropped=false; lease_removed=false; cleanup_done=false
 infra_started_unmarked=false
-infra_up_command=${STATEFUL_E2E_INFRA_UP_COMMAND:-"make -C '$repo_dir' infra-up infra-wait"}
+infra_up_command=${STATEFUL_E2E_INFRA_UP_COMMAND:-"make -C '$repo_dir' infra-up"}
+infra_wait_command=${STATEFUL_E2E_INFRA_WAIT_COMMAND:-"make -C '$repo_dir' infra-wait"}
 infra_down_command=${STATEFUL_E2E_INFRA_DOWN_COMMAND:-"make -C '$repo_dir' infra-down"}
 phase=initialization
 
-stop_process() { local pid=${1:-}; [[ -z "$pid" ]] || { kill -- "-$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }; }
+run_scope() { (cd "$repo_dir" && TEST_DATABASE_URL="$base_dsn" bash -c "$scope_command $*"); }
+
+stop_process() {
+  local pid=${1:-} iteration
+  [[ -n "$pid" ]] || return 0
+  kill -TERM -- "-$pid" 2>/dev/null || true
+  for iteration in $(seq 1 $((child_term_timeout_sec * 10))); do
+    pgrep -g "$pid" >/dev/null || { wait "$pid" 2>/dev/null || true; return 0; }
+    sleep 0.1
+  done
+  kill -KILL -- "-$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
 export_failure_logs() {
   local target=${STATEFUL_E2E_FAILURE_LOG_DIR:-} log
   [[ -n "$target" ]] || return 0
@@ -53,40 +65,51 @@ infra_ready() {
 }
 cleanup_owned() {
   [[ "$cleanup_done" == true ]] && return 0
-  local release_json=$work_dir/release.json
+  local status=0 release_json=$work_dir/release.json
   stop_process "$frontend_pid"; stop_process "$backend_pid"; stop_process "$platform_mcp_pid"
   stop_process "$mcp_pid"; stop_process "$oauth_pid"
   if [[ "$database_created" == true && "$database_dropped" != true ]]; then
-    (cd "$repo_dir" && bash -c "$scope_command drop-database --scope '$scope_file' --base-dsn-env TEST_DATABASE_URL") || return 1
-    database_dropped=true
-  elif [[ "$database_created" != true ]]; then database_dropped=true; fi
-  if [[ "$lease_registered" == true && "$lease_removed" != true ]]; then
-    exec 9>"$registry_root/registry.lock"; flock 9
-    if ! (cd "$repo_dir" && bash -c "$scope_command release --scope '$scope_file' --registry '$registry_root'") >"$release_json"; then
-      flock -u 9
-      return 1
+    if ! run_scope "drop-database --scope '$scope_file' --base-dsn-env TEST_DATABASE_URL"; then
+      printf 'stateful E2E residual database: %s; lease: %s/runs/%s.json\n' \
+        "$database_name" "$registry_root" "$run_id" >&2
+      status=1
     fi
-    lease_removed=true
+    [[ "$status" -ne 0 ]] || database_dropped=true
+  else database_dropped=true; fi
+  if [[ "$lease_registered" == true && "$database_dropped" == true ]]; then
+    exec 9<"$registry_root"; flock 9
+    if [[ "$lease_removed" != true ]]; then
+      run_scope "release --scope '$scope_file' --registry '$registry_root'" >"$release_json" || status=1
+    fi
+    if [[ "$status" -eq 0 && "$lease_removed" != true ]]; then
+      lease_removed=true
+    fi
+    if [[ "$status" -eq 0 && -f "$release_json" ]] && \
+      jq -e '.stop_owned_infrastructure == true' "$release_json" >/dev/null; then
+      bash -c "$infra_down_command" || status=1
+      if [[ "$status" -eq 0 ]]; then
+        owner=$(jq -er .ownership_run_id "$release_json")
+        run_scope "confirm-infrastructure-stopped --ownership-run-id '$owner' --registry '$registry_root'" || status=1
+      fi
+    fi
+    if [[ "$infra_started_unmarked" == true ]]; then
+      bash -c "$infra_down_command" || status=1
+      [[ "$status" -ne 0 ]] || infra_started_unmarked=false
+    fi
     flock -u 9
-  else lease_removed=true; fi
-  if [[ -f "$release_json" ]] && jq -e '.stop_owned_infrastructure == true' "$release_json" >/dev/null; then
-    bash -c "$infra_down_command" || return 1
-    owner=$(jq -er .ownership_run_id "$release_json")
-    (cd "$repo_dir" && bash -c "$scope_command confirm-infrastructure-stopped --ownership-run-id '$owner' --registry '$registry_root'") || return 1
+  elif [[ "$lease_registered" == false ]]; then lease_removed=true
   fi
-  if [[ "$infra_started_unmarked" == true ]]; then
-    bash -c "$infra_down_command" || return 1
-    infra_started_unmarked=false
-  fi
-  cleanup_done=true
-  return 0
+  [[ "$status" -ne 0 ]] || cleanup_done=true
+  return "$status"
 }
 on_exit() {
-  local status=$?
-  cleanup_owned || status=1
-  ((status == 0)) || export_failure_logs || status=1
+  local primary=$? cleanup_status=0 log_status=0
+  cleanup_owned || cleanup_status=$?
+  ((primary == 0 && cleanup_status == 0)) || export_failure_logs || log_status=$?
   rm -rf "$work_dir"
-  exit "$status"
+  ((primary != 0)) && exit "$primary"
+  ((cleanup_status != 0)) && exit "$cleanup_status"
+  exit "$log_status"
 }
 trap on_exit EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
 trap 'status=$?; printf "stateful E2E failed during %s\n" "$phase" >&2; exit "$status"' ERR
@@ -97,22 +120,39 @@ reset_attempt() {
 }
 allocate_scope() {
   phase=scope-allocation
-  exec 9>"$registry_root/registry.lock"; flock 9
-  (cd "$repo_dir" && bash -c "$scope_command allocate --repository '$repo_dir' --registry '$registry_root' --owner-pid \"$$\"") >"$scope_file"
+  exec 9<"$registry_root"; flock 9
+  run_scope "reap --registry '$registry_root' --base-dsn-env TEST_DATABASE_URL" >/dev/null
+  run_scope "allocate --repository '$repo_dir' --registry '$registry_root' --owner-pid '$$'" >"$scope_file"
   lease_registered=true
   if ! infra_ready; then
-    bash -c "$infra_up_command"
     infra_started_unmarked=true
-    infra_ready || { printf 'shared E2E infrastructure failed readiness\n' >&2; return 1; }
-    (cd "$repo_dir" && bash -c "$scope_command mark-infrastructure-owned --scope '$scope_file' --registry '$registry_root'")
+    if ! bash -c "$infra_up_command"; then
+      if ! bash -c "$infra_down_command"; then flock -u 9; return 1; fi
+      infra_started_unmarked=false
+      flock -u 9
+      return 1
+    fi
+    if ! bash -c "$infra_wait_command" || ! infra_ready; then
+      printf 'shared E2E infrastructure failed readiness\n' >&2
+      if ! bash -c "$infra_down_command"; then flock -u 9; return 1; fi
+      infra_started_unmarked=false
+      flock -u 9
+      return 1
+    fi
+    if ! run_scope "mark-infrastructure-owned --scope '$scope_file' --registry '$registry_root'"; then
+      if ! bash -c "$infra_down_command"; then flock -u 9; return 1; fi
+      infra_started_unmarked=false
+      flock -u 9
+      return 1
+    fi
     infra_started_unmarked=false
   fi
-  (cd "$repo_dir" && TEST_DATABASE_URL="$base_dsn" bash -c "$scope_command reap --registry '$registry_root' --base-dsn-env TEST_DATABASE_URL") >/dev/null
   flock -u 9
 }
 load_scope() {
   phase=scope-validation
-  jq -e '.schema_version == 2 and (.run_id|type=="string") and (.database_name|type=="string")' "$scope_file" >/dev/null
+  run_scope "validate --scope '$scope_file'"
+  jq -e '.schema_version == 2 and (.run_id|type=="string") and (.database_name|type=="string") and ([.ports[]]|length==6) and ([.ports[]]|unique|length==6)' "$scope_file" >/dev/null
   run_id=$(jq -er .run_id "$scope_file"); database_name=$(jq -er .database_name "$scope_file")
   frontend_port=$(jq -er .ports.frontend "$scope_file"); backend_port=$(jq -er .ports.backend "$scope_file")
   oauth_port=$(jq -er .ports.oauth "$scope_file"); fixture_port=$(jq -er .ports.fixture "$scope_file")
@@ -150,10 +190,10 @@ export STRATUM_INTERNAL_SERVER_NAME=stratum-internal
 }
 prepare_database() {
   phase=database-creation
-  (cd "$repo_dir" && TEST_DATABASE_URL="$base_dsn" bash -c "$scope_command create-database --scope '$scope_file' --base-dsn-env TEST_DATABASE_URL")
-  TEST_DATABASE_URL=$(BASE_DSN="$base_dsn" DATABASE_NAME="$database_name" node --input-type=module -e 'const u=new URL(process.env.BASE_DSN); u.pathname="/"+process.env.DATABASE_NAME; process.stdout.write(u.toString())')
-  export TEST_DATABASE_URL STRATUM_TEST_POSTGRES_URL=$TEST_DATABASE_URL POSTGRES_URL=$TEST_DATABASE_URL
+  run_scope "create-database --scope '$scope_file' --base-dsn-env TEST_DATABASE_URL"
   database_created=true
+  TEST_DATABASE_URL=$(run_scope "database-url --base-dsn-env TEST_DATABASE_URL --database-name '$database_name'")
+  export TEST_DATABASE_URL STRATUM_TEST_POSTGRES_URL=$TEST_DATABASE_URL POSTGRES_URL=$TEST_DATABASE_URL
   phase=migration
   migration_command=${STATEFUL_E2E_MIGRATION_COMMAND:-"cd '$repo_dir' && go run ./cmd/migrate-public --sql-dir '$repo_dir/pkg/migration/sql'"}
   bash -c "$migration_command"
@@ -170,6 +210,7 @@ poll() { local label=$1 command=$2; for _ in $(seq 1 "${STATEFUL_E2E_HEALTH_ATTE
 poll oauth "${STATEFUL_E2E_OAUTH_HEALTH_COMMAND:-curl -fsS -D - -H 'X-Stratum-E2E-Instance: $run_id' 'http://127.0.0.1:$oauth_port/health' | grep -Fi 'X-Stratum-E2E-Instance: $run_id'}" || return 1
 poll MCP "${STATEFUL_E2E_MCP_HEALTH_COMMAND:-curl -fsS -D - -H 'X-Stratum-E2E-Instance: $run_id' '$E2E_FIXTURE_URL/health' | grep -Fi 'X-Stratum-E2E-Instance: $run_id'}" || return 1
 poll 'Platform MCP' "${STATEFUL_E2E_PLATFORM_MCP_HEALTH_COMMAND:-curl -fsS --noproxy stratum-platform-mcp --cacert '$tls_dir/ca.crt' --cert '$tls_dir/backend.crt' --key '$tls_dir/backend.key' --resolve 'stratum-platform-mcp:$platform_mcp_port:127.0.0.1' 'https://stratum-platform-mcp:$platform_mcp_port/healthz'}" || return 1
+poll 'Internal API' "${STATEFUL_E2E_INTERNAL_API_HEALTH_COMMAND:-curl -fsS --noproxy stratum-internal --cacert '$tls_dir/ca.crt' --cert '$tls_dir/platform-mcp.crt' --key '$tls_dir/platform-mcp.key' --resolve 'stratum-internal:$internal_api_port:127.0.0.1' 'https://stratum-internal:$internal_api_port/internal/livez'}" || return 1
 poll backend "${STATEFUL_E2E_BACKEND_HEALTH_COMMAND:-curl -fsS '$E2E_API_URL/health'}" || return 1
 poll frontend "${STATEFUL_E2E_FRONTEND_HEALTH_COMMAND:-curl -fsS '$E2E_WEB_URL/'}" || return 1
 for pid in "$oauth_pid" "$mcp_pid" "$platform_mcp_pid" "$backend_pid" "$frontend_pid"; do
@@ -181,7 +222,12 @@ port_attempts=${STATEFUL_E2E_PORT_ALLOCATION_ATTEMPTS:-3}
 [[ "$port_attempts" =~ ^[1-9][0-9]*$ ]] && ((port_attempts <= 10)) || {
   printf 'STATEFUL_E2E_PORT_ALLOCATION_ATTEMPTS must be between 1 and 10\n' >&2; exit 2
 }
+child_term_timeout_sec=${STATEFUL_E2E_CHILD_TERM_TIMEOUT_SEC:-5}
+[[ "$child_term_timeout_sec" =~ ^[1-9][0-9]*$ ]] && ((child_term_timeout_sec <= 30)) || {
+  printf 'STATEFUL_E2E_CHILD_TERM_TIMEOUT_SEC must be between 1 and 30\n' >&2; exit 2
+}
 phase=source-digest
+run_scope "prepare-registry --registry '$registry_root'"
 digest_command=${STATEFUL_E2E_DIGEST_COMMAND:-"go run ./cmd/e2e-attestation digest --root ."}
 source_before=$(cd "$repo_dir" && bash -c "$digest_command")
 [[ -n "${JWT_PRIVATE_KEY_PEM:-}" ]] || { JWT_PRIVATE_KEY_PEM=$(openssl genrsa 2048 2>/dev/null); export JWT_PRIVATE_KEY_PEM; }

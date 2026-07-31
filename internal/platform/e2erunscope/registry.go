@@ -47,6 +47,15 @@ type registryDirectories struct {
 	runs *os.File
 }
 
+func (r Registry) Prepare() error {
+	directories, err := r.openDirectories(true)
+	if err != nil {
+		return err
+	}
+	directories.close()
+	return nil
+}
+
 func (r Registry) Register(scope Scope) error {
 	if err := Validate(scope); err != nil {
 		return fmt.Errorf("registry: validate scope: %w", err)
@@ -64,8 +73,36 @@ func (r Registry) Register(scope Scope) error {
 		return fmt.Errorf("registry: encode lease: %w", err)
 	}
 	return withRegistryMutation(directories.root, func() error {
+		leases, err := readAllLeasesAt(directories.runs)
+		if err != nil {
+			return err
+		}
+		if err := rejectPortConflicts(scope, leases); err != nil {
+			return err
+		}
 		return atomicCreateAt(directories.root, directories.runs, scope.RunID+".json", data)
 	})
+}
+
+func rejectPortConflicts(candidate Scope, leases []Scope) error {
+	used := make(map[int]struct{}, len(leases)*6)
+	for _, lease := range leases {
+		for _, port := range scopePorts(lease.Ports) {
+			used[port] = struct{}{}
+		}
+	}
+	for _, port := range scopePorts(candidate.Ports) {
+		if _, exists := used[port]; exists {
+			return fmt.Errorf("registry: port conflict: %d", port)
+		}
+	}
+	return nil
+}
+
+func scopePorts(ports Ports) []int {
+	return []int{
+		ports.Frontend, ports.Backend, ports.OAuth, ports.Fixture, ports.PlatformMCP, ports.InternalAPI,
+	}
 }
 
 func (r Registry) Read(runID string) (Scope, error) {
@@ -178,8 +215,15 @@ func (r Registry) Stale(now time.Time, processAlive func(int, string) bool) ([]S
 	if err != nil {
 		return nil, err
 	}
+	state, stateExists, err := readInfrastructureAt(directories.root)
+	if err != nil {
+		return nil, err
+	}
 	stale := make([]Scope, 0, len(leases))
 	for _, lease := range leases {
+		if stateExists && lease.RunID == state.StartedByRun {
+			continue
+		}
 		if now.After(lease.ExpiresAt) && !processAlive(lease.OwnerPID, lease.Repository) {
 			stale = append(stale, lease)
 		}
@@ -327,7 +371,8 @@ func createRegistryRoot(filesystemRoot *os.File, relative string, path string) (
 		return nil, fmt.Errorf("registry: open root parent: %w", err)
 	}
 	defer parent.Close()
-	if err := unix.Mkdirat(fileDescriptor(parent), base, registryDirectoryMode); err != nil && !errors.Is(err, unix.EEXIST) {
+	err = unix.Mkdirat(fileDescriptor(parent), base, registryDirectoryMode)
+	if err != nil && !errors.Is(err, unix.EEXIST) {
 		return nil, fmt.Errorf("registry: create root: %w", err)
 	}
 	if err := syncRegistryDirectory(parent); err != nil {

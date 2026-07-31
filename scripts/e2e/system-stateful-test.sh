@@ -7,12 +7,23 @@ runner=$repo_dir/scripts/e2e/system-stateful.sh
 bash -n "$runner"
 for required in \
   'e2e-run-scope' '--strictPort' 'E2E_FIXTURE_URL' 'cleanup_owned' 'database_dropped' 'lease_removed' \
-  'run_topology' 'owned_cleanup' 'registry.lock' 'mark-infrastructure-owned' \
+  'run_topology' 'owned_cleanup' 'mark-infrastructure-owned' \
   'STATEFUL_E2E_INFRA_UP_COMMAND' 'STATEFUL_E2E_INFRA_DOWN_COMMAND' \
   'PLATFORM_MCP_DIAL_ADDRESS' 'INTERNAL_API_PORT' 'PLATFORM_MCP_TLS_CERT_FILE' 'platform_mcp_pid' \
   '--owner-pid'; do
   grep -Fq -- "$required" "$runner" || { printf 'runner missing dynamic lifecycle contract: %s\n' "$required" >&2; exit 1; }
 done
+grep -Fq 'prepare-registry' "$runner" || { printf 'runner must safely prepare the registry\n' >&2; exit 1; }
+grep -Fq 'database-url' "$runner" || { printf 'runner must derive the database URL through run-scope\n' >&2; exit 1; }
+grep -Fq '/internal/livez' "$runner" || { printf 'runner must probe the internal API live route\n' >&2; exit 1; }
+if grep -Eq 'mkdir -p "?\$registry_root|chmod 700 "?\$registry_root' "$runner"; then
+  printf 'runner must not create or chmod the registry root in shell\n' >&2
+  exit 1
+fi
+if grep -Fq 'registry.lock' "$runner"; then
+  printf 'runner must lock the validated registry directory without following a lock-file symlink\n' >&2
+  exit 1
+fi
 grep -Fq 'stateful E2E failed during' "$runner" || { printf 'runner must expose the failing lifecycle phase\n' >&2; exit 1; }
 grep -Eq -- '--owner-pid.*\$\$' "$runner" || { printf 'runner lease must record the runner PID\n' >&2; exit 1; }
 grep -Fq '.schema_version == 2' "$runner" || { printf 'runner must require scope schema v2\n' >&2; exit 1; }

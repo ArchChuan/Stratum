@@ -188,7 +188,7 @@ The script uses a random localhost port and always removes its temporary contain
 
 ## Parallel Stateful System Runs
 
-Codex, Claude Code, and manual feature worktrees use the same `scripts/e2e/system-stateful.sh` entry point and may run concurrently. Each invocation receives a run ID matching `YYYYMMDDtHHMMSSz-<16 hex>`, four distinct loopback ports, and a PostgreSQL database named `stratum_e2e_YYYYMMDDtHHMMSSz_<16 hex>`.
+Codex, Claude Code, and manual feature worktrees use the same `scripts/e2e/system-stateful.sh` entry point and may run concurrently. Each invocation receives a run ID matching `YYYYMMDDtHHMMSSz-<16 hex>`, six distinct loopback ports, and a PostgreSQL database named `stratum_e2e_YYYYMMDDtHHMMSSz_<16 hex>`.
 
 Lease metadata is stored below `${STATEFUL_E2E_REGISTRY_ROOT:-${TMPDIR}/stratum-stateful-e2e}` with directory mode `0700` and metadata mode `0600`. Registry mutations use a short lock; browser execution does not hold a global lock. PostgreSQL, Redis, NATS, and Milvus processes remain shared in phase one, while PostgreSQL data is isolated by database and application cleanup remains tenant/run scoped.
 

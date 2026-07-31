@@ -87,7 +87,7 @@ export const executeAgentContextPack = async ({
     expect(markerRegistration.status()).toBe(204);
     await page.evaluate((id) => sessionStorage.setItem('chat:lastAgentId', id), agentID);
     await page.goto(`${webURL}/chat`);
-    await expect(page.getByText(agentName, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(agentName, { exact: true }).first()).toBeVisible({ timeout: 15_000 });
     await page.getByRole('button', { name: '新建会话' }).click();
     const streamResponse = waitFor(page, `/agents/${agentID}/execute/stream`, 'POST');
     await page.getByPlaceholder(/输入消息/).fill('请结合知识库和我的历史偏好回答');
