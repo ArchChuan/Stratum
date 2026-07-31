@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS public.tenant_members (
   tenant_id  UUID        NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
   user_id    UUID        NOT NULL REFERENCES public.users(id)   ON DELETE CASCADE,
   role       TEXT        NOT NULL DEFAULT 'member',
-  invited_by UUID        REFERENCES public.users(id),
+  invited_by UUID        REFERENCES public.users(id) ON DELETE SET NULL,
   joined_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, user_id)
 );

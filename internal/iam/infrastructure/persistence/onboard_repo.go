@@ -394,7 +394,23 @@ func (r *OnboardRepo) ListOwnedNonDefaultTenants(ctx context.Context, userID str
 }
 
 // DeleteUser hard-deletes the user row; FK cascades remove tenant_members and refresh_tokens.
+// Before deleting, it removes FK references that lack ON DELETE CASCADE so the DELETE
+// does not fail for users who created invitations or invited other members.
 func (r *OnboardRepo) DeleteUser(ctx context.Context, userID string) error {
+	// Clean tenant_invitations referencing the user as inviter or consumer.
+	if _, err := r.db.Exec(ctx,
+		`DELETE FROM tenant_invitations WHERE invited_by = $1 OR consumed_by = $1`,
+		userID,
+	); err != nil {
+		return fmt.Errorf("onboard_repo: cleanup invitations: %w", err)
+	}
+	// Null out invited_by on tenant_members — guest may have invited others into the default tenant.
+	if _, err := r.db.Exec(ctx,
+		`UPDATE tenant_members SET invited_by = NULL WHERE invited_by = $1`,
+		userID,
+	); err != nil {
+		return fmt.Errorf("onboard_repo: cleanup member invited_by: %w", err)
+	}
 	if _, err := r.db.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID); err != nil {
 		return fmt.Errorf("onboard_repo: delete user: %w", err)
 	}
