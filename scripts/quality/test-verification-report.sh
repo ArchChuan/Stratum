@@ -12,6 +12,8 @@ oidc_issuer=https://token.actions.githubusercontent.com
 [[ -f "$plan" ]] || { printf 'verification plan is missing: %s\n' "$plan" >&2; exit 1; }
 
 mode=$(jq -er .mode "$plan"); risk=$(jq -er .risk_level "$plan")
+commit=$(jq -er .commit "$plan")
+policy_digest=$(jq -er '.manifest_digest | sub("^sha256:"; "")' "$plan")
 required_mode=$mode; required_profile=
 [[ "$mode" == release-soak ]] && { required_mode=soak; required_profile=release; }
 [[ "$mode" == soak ]] && required_profile=test
@@ -20,17 +22,15 @@ digest=$(go run "$root/cmd/e2e-attestation" digest --root "$root" --ref HEAD)
 mapfile -t candidates < <(find "$attestation_dir" -type f -name "$digest.json" -print | sort)
 selected=
 for candidate in "${candidates[@]}"; do
+  if ! jq -e --arg commit "$commit" --arg policy "$policy_digest" \
+    '.tested_git_parent == $commit and .policy_manifest_digest == $policy' "$candidate" >/dev/null; then
+    continue
+  fi
   args=(verify --root "$root" --ref HEAD --required-mode "$required_mode" --attestation "$candidate")
   [[ -z "$required_profile" ]] || args+=(--required-profile "$required_profile")
   if go run "$root/cmd/e2e-attestation" "${args[@]}" >/dev/null 2>&1; then selected=$candidate; break; fi
 done
 [[ -n "$selected" ]] || { printf 'no verified attestation is available for completion reporting\n' >&2; exit 1; }
-
-commit=$(jq -er .commit "$plan")
-policy_digest=$(jq -er '.manifest_digest | sub("^sha256:"; "")' "$plan")
-[[ $(jq -er .policy_manifest_digest "$selected") == "$policy_digest" ]] || {
-  printf 'attestation verification policy digest does not match plan\n' >&2; exit 1
-}
 
 reviews='[]'; reviews_ok=true
 mapfile -t required_reviews < <(jq -r '.reviews[]' "$plan")

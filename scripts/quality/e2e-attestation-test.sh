@@ -30,6 +30,7 @@ grep -Fq -- '--signer-workflow' scripts/quality/test-verification-report.sh
 grep -Fq -- '--source-digest' scripts/quality/test-verification-report.sh
 grep -Fq -- '--source-ref' scripts/quality/test-verification-report.sh
 grep -Fq 'https://token.actions.githubusercontent.com' scripts/quality/test-verification-report.sh
+grep -Fq '.tested_git_parent == $commit' scripts/quality/test-verification-report.sh
 if grep -Fq 'GITHUB_ACTIONS' scripts/quality/test-verification-report.sh; then
   printf 'completion report still trusts the caller-declared GitHub Actions environment\n' >&2
   exit 1
