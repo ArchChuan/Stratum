@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -32,7 +34,7 @@ type ReleaseResult struct {
 	OwnershipRunID          string `json:"ownership_run_id,omitempty"`
 }
 
-func (r Registry) Register(scope Scope) (err error) {
+func (r Registry) Register(scope Scope) error {
 	if err := Validate(scope); err != nil {
 		return fmt.Errorf("registry: validate scope: %w", err)
 	}
@@ -46,30 +48,7 @@ func (r Registry) Register(scope Scope) (err error) {
 	if err != nil {
 		return fmt.Errorf("registry: encode lease: %w", err)
 	}
-	lockPath := filepath.Join(r.Root, "."+scope.RunID+".lock")
-	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, registryMetadataMode)
-	if err != nil {
-		return fmt.Errorf("registry: reserve lease: %w", err)
-	}
-	if err := lock.Close(); err != nil {
-		cleanupErr := os.Remove(lockPath)
-		if cleanupErr != nil {
-			cleanupErr = fmt.Errorf("registry: remove lease reservation: %w", cleanupErr)
-		}
-		return errors.Join(fmt.Errorf("registry: close lease reservation: %w", err), cleanupErr)
-	}
-	defer func() {
-		if cleanupErr := os.Remove(lockPath); cleanupErr != nil {
-			err = errors.Join(err, fmt.Errorf("registry: remove lease reservation: %w", cleanupErr))
-		}
-	}()
-	path := r.leasePath(scope.RunID)
-	if _, err := os.Lstat(path); err == nil {
-		return errors.New("registry: lease already exists")
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("registry: inspect lease: %w", err)
-	}
-	return atomicCreate(path, data)
+	return atomicCreate(r.leasePath(scope.RunID), data)
 }
 
 func (r Registry) Read(runID string) (Scope, error) {
@@ -441,16 +420,17 @@ func atomicCreate(path string, data []byte) (err error) {
 	if err := validateDirectory(directory, info); err != nil {
 		return err
 	}
-	if _, err := os.Lstat(path); err == nil {
-		return errors.New("registry: lease already exists")
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("registry: inspect lease before rename: %w", err)
-	}
-	if err := os.Rename(tempPath, path); err != nil {
+	if err := renameNoReplace(tempPath, path); errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("registry: lease already exists: %w", err)
+	} else if err != nil {
 		return fmt.Errorf("registry: rename lease: %w", err)
 	}
 	renamed = true
 	return nil
+}
+
+func renameNoReplace(oldPath string, newPath string) error {
+	return unix.Renameat2(unix.AT_FDCWD, oldPath, unix.AT_FDCWD, newPath, unix.RENAME_NOREPLACE)
 }
 
 func cleanupTemporaryMetadata(path string, renamed bool, err error) error {

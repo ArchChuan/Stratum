@@ -297,6 +297,31 @@ func TestRegistryRegisterRejectsRacingDuplicateLease(t *testing.T) {
 	}
 }
 
+func TestRegistryRenameNoReplacePreservesExistingDestination(t *testing.T) {
+	directory := t.TempDir()
+	tempPath := filepath.Join(directory, "lease.tmp")
+	finalPath := filepath.Join(directory, "lease.json")
+	if err := os.WriteFile(tempPath, []byte("complete lease"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hostile := []byte("hostile lease")
+	if err := os.WriteFile(finalPath, hostile, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := renameNoReplace(tempPath, finalPath)
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("renameNoReplace() error = %v, want already exists", err)
+	}
+	got, err := os.ReadFile(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(hostile) {
+		t.Fatalf("destination = %q, want preserved %q", got, hostile)
+	}
+}
+
 func TestRegistryStale(t *testing.T) {
 	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
