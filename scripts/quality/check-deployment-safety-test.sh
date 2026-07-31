@@ -68,7 +68,7 @@ require '^  build-feishu-adapter:' 'parallel Feishu adapter image build job'
 require '^  build-platform-mcp:' 'parallel platform MCP image build job'
 require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter,[[:space:]]*build-platform-mcp\]' \
     'image build fan-in dependencies'
-for job_scope in build-backend:backend build-frontend:frontend build-feishu-adapter:feishu-alert-adapter build-platform-mcp:platform-mcp; do
+for job_scope in build-backend:backend build-frontend:frontend-v2 build-feishu-adapter:feishu-alert-adapter build-platform-mcp:platform-mcp; do
     job=${job_scope%%:*}
     scope=${job_scope#*:}
     require_job "${job}" '^    needs:[[:space:]]*test$' "${job} test dependency"
@@ -261,8 +261,8 @@ reject_file "${DEMO_LOCAL_VALUES}" 'http://([0-9]{1,3}\.){3}[0-9]{1,3}' \
 
 require_file "${REMOTE_HTTP_VALUES}" 'secureCookies:[[:space:]]*"false"' \
     'remote HTTP profile disables secure cookies'
-require_file "${REMOTE_HTTP_VALUES}" 'router\.entrypoints:[[:space:]]*"web,web2"' \
-    'remote HTTP profile uses the Traefik web and public web2 entrypoints'
+require_file "${REMOTE_HTTP_VALUES}" 'router\.entrypoints:[[:space:]]*"web,web2,websecure"' \
+    'remote HTTP profile uses the Traefik web, public web2, and TLS websecure entrypoints'
 require_file "${REMOTE_HTTP_VALUES}" 'host:[[:space:]]*""' 'remote HTTP profile uses a hostless Ingress'
 require_file "${REMOTE_HTTP_VALUES}" 'tls:[[:space:]]*\[\]' 'remote HTTP profile disables TLS'
 reject_file "${REMOTE_HTTP_VALUES}" 'frontendUrl:|githubCallbackUrl:|http://([0-9]{1,3}\.){3}[0-9]{1,3}' \
