@@ -18,7 +18,7 @@
 
 .PHONY: e2e-evaluation-evolution e2e-system-short e2e-system-soak e2e-system-release-soak
 .PHONY: monitoring-config-test
-.PHONY: verification-manifest-test test-verify-plan test-verify-local test-verify-ci test-verify-attestation test-verify-report
+.PHONY: verification-manifest-test
 
 # ─── 全局变量（CI/CD 可自动覆盖）────────────────────────────────────────────
 BE_IMAGE    ?= clawhermes-ai-go

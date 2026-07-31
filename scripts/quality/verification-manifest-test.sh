@@ -23,9 +23,9 @@ require 'levels:[[:space:]]*\[R0, R1, R2, R3, R4\]' 'risk levels'
 for level in R0 R1 R2 R3 R4; do require "^  ${level}:" "${level} checks"; done
 awk '
   /^    - id:/ { if (seen && !level) exit 1; seen=1; level=0 }
-  /^      level:/ { level=1 }
+  /^      level: R[0-4]$/ { level=1 }
   END { if (seen && !level) exit 1 }
-' "$manifest" || fail 'risk rule missing level'
+' "$manifest" || fail 'risk rule missing valid R0-R4 level'
 require 'id: tenant-boundary' 'tenant risk rule'
 require 'id: agent-tool-chain' 'agent/MCP risk rule'
 require 'id: deployment' 'deployment risk rule'
