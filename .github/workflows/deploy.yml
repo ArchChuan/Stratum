@@ -95,6 +95,49 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,scope=frontend,mode=max
 
+  build-platform-mcp:
+    name: Build Platform MCP
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: true
+
+      - name: Build Go binary
+        run: CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/platform-mcp
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_REPO }}/stratum-platform-mcp
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=${{ github.sha }}
+
+      - name: Build and push platform MCP
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.ci
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=platform-mcp
+          cache-to: type=gha,scope=platform-mcp,mode=max
+
   build-feishu-adapter:
     name: Build Feishu Alert Adapter
     runs-on: ubuntu-latest
@@ -126,7 +169,7 @@ jobs:
   build-and-push:
     name: Build and Push
     runs-on: ubuntu-latest
-    needs: [build-backend, build-frontend, build-feishu-adapter]
+    needs: [build-backend, build-frontend, build-feishu-adapter, build-platform-mcp]
     outputs:
       image-tag: ${{ github.sha }}
       adapter-digest: ${{ needs.build-feishu-adapter.outputs.digest }}
@@ -224,6 +267,7 @@ jobs:
 
           require_digest "${{ env.IMAGE_REPO }}/stratum-backend:${{ needs.build-and-push.outputs.image-tag }}" backend
           require_digest "${{ env.IMAGE_REPO }}/stratum-frontend:${{ needs.build-and-push.outputs.image-tag }}" frontend
+          require_digest "${{ env.IMAGE_REPO }}/stratum-platform-mcp:${{ needs.build-and-push.outputs.image-tag }}" platform_mcp
 
       - uses: azure/setup-kubectl@v4
         if: steps.candidate.outputs.current == 'true'
@@ -472,6 +516,8 @@ jobs:
             -f helm/values-demo-remote-http.yaml \
             --set app.image.repository="${{ env.IMAGE_REPO }}/stratum-backend" \
             --set-string app.image.digest="${{ steps.images.outputs.backend }}" \
+            --set platformMCP.image.repository="${{ env.IMAGE_REPO }}/stratum-platform-mcp" \
+            --set-string platformMCP.image.digest="${{ steps.images.outputs.platform_mcp }}" \
             --set frontend.image.repository="${{ env.IMAGE_REPO }}/stratum-frontend" \
             --set-string frontend.image.digest="${{ steps.images.outputs.frontend }}" \
             --set database.image.repository="${{ env.IMAGE_REPO }}/postgres" \

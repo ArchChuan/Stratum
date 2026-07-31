@@ -20,7 +20,7 @@ func (g *deadlineRecordingGateway) Route(ctx context.Context, _ port.CapabilityR
 
 func TestLLMHistoryCompactor_UsesIndependentShortDeadline(t *testing.T) {
 	gw := &deadlineRecordingGateway{}
-	compactor := NewLLMHistoryCompactor(gw, "qwen", nil)
+	compactor := NewLLMHistoryCompactor(gw, "qwen", nil, 0)
 	parent, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

@@ -171,10 +171,13 @@ func (r *PgModelRepo) UpsertDiscovered(ctx context.Context, tenantID, providerID
 					return fmt.Errorf("upsert models: insert %s: %w", m.Name, err)
 				}
 			} else {
-				// Existing -- re-enable, preserve user edits
+				// Existing -- re-enable, sync provider-reported context metadata
+				// while preserving user-editable fields (display_name, capabilities,
+				// pricing, recommended).
 				_, err = tx.Exec(ctx,
-					`UPDATE models SET enabled=true, updated_at=now()
-					 WHERE id=$1`, existingID)
+					`UPDATE models SET enabled=true, context_window=$1, max_tokens=$2, updated_at=now()
+					 WHERE id=$3`,
+					m.ContextWindow, m.MaxTokens, existingID)
 				if err != nil {
 					return fmt.Errorf("upsert models: update %s: %w", m.Name, err)
 				}

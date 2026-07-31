@@ -39,7 +39,7 @@ export const executeAgentContextPack = async ({
     await workspaceDialog.getByLabel('描述').fill('Agent Knowledge 与 Memory 上下文联动验收');
     await workspaceDialog.getByLabel('嵌入模型').click();
     await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
-      .filter({ hasText: /^text-embedding-v3$/ }).click();
+      .filter({ hasText: /^text-embedding-v3$/ }).first().click();
     const workspaceResponse = waitFor(page, '/knowledge/workspaces', 'POST');
     await workspaceDialog.getByRole('button', { name: /创\s*建/ }).click();
     expect((await workspaceResponse).status()).toBe(201);

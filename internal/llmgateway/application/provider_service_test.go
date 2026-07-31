@@ -120,7 +120,7 @@ func (m *mockModelRepo) Toggle(_ context.Context, _, _ string, _ bool) error {
 }
 
 type mockProviderRuntime struct {
-	listModelsFn func(ctx context.Context, provider domain.Provider) ([]string, error)
+	listModelsFn func(ctx context.Context, provider domain.Provider) ([]port.DiscoveredModel, error)
 	healthFn     func(ctx context.Context, provider domain.Provider) error
 }
 
@@ -131,7 +131,7 @@ func (m *mockProviderRuntime) Health(ctx context.Context, provider domain.Provid
 	return nil
 }
 
-func (m *mockProviderRuntime) ListModels(ctx context.Context, provider domain.Provider) ([]string, error) {
+func (m *mockProviderRuntime) ListModels(ctx context.Context, provider domain.Provider) ([]port.DiscoveredModel, error) {
 	if m.listModelsFn != nil {
 		return m.listModelsFn(ctx, provider)
 	}
@@ -331,8 +331,8 @@ func TestProviderService_DiscoverModels_HappyPath(t *testing.T) {
 	}
 	mr := &mockModelRepo{}
 	runtime := &mockProviderRuntime{
-		listModelsFn: func(_ context.Context, _ domain.Provider) ([]string, error) {
-			return []string{"gpt-4", "gpt-3.5-turbo"}, nil
+		listModelsFn: func(_ context.Context, _ domain.Provider) ([]port.DiscoveredModel, error) {
+			return []port.DiscoveredModel{{Name: "gpt-4"}, {Name: "gpt-3.5-turbo"}}, nil
 		},
 	}
 	svc := newTestProviderService(pr, mr, runtime)

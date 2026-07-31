@@ -66,29 +66,15 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		completionHandler(w, r)
 		return
 	}
-	if r.URL.Path == "/v1/models" {
-		modelsHandler(w, r)
-		return
-	}
 	if r.URL.Path == "/v1/embeddings" {
 		embeddingsHandler(w, r)
 		return
 	}
-	mcpHandler(w, r)
-}
-
-func modelsHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if r.URL.Path == "/v1/models" || r.URL.Path == "/models" {
+		modelsHandler(w, r)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"object": "list",
-		"data": []any{
-			map[string]any{"id": "mock-model-1", "object": "model"},
-			map[string]any{"id": "mock-model-2", "object": "model"},
-		},
-	})
+	mcpHandler(w, r)
 }
 
 func contextEvidenceHandler(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +178,25 @@ func embeddingsHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"object": "list", "model": request.Model, "data": data,
 		"usage": map[string]any{"prompt_tokens": len(request.Input), "total_tokens": len(request.Input)},
+	})
+}
+
+// modelsHandler returns a static model list compatible with the OpenAI /v1/models response
+// format. This lets stateful E2E tests exercise real model discovery via the provider API.
+func modelsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"object": "list",
+		"data": []map[string]any{
+			{"id": "qwen-turbo", "object": "model"},
+			{"id": "qwen-plus", "object": "model"},
+			{"id": "qwen-max", "object": "model"},
+			{"id": "text-embedding-v3", "object": "model"},
+		},
 	})
 }
 

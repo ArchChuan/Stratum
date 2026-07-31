@@ -116,7 +116,7 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		c.Evaluation.OptimizationService, c.Evaluation.ExperimentService,
 		c.Evaluation.FeedbackService, c.Evaluation.QueryService, c.Evaluation.CandidateService,
 		c.Logger,
-	).WithBaselineService(c.Evaluation.BaselineService)
+	).WithBaselineService(c.Evaluation.BaselineService).WithAgentRevisionApplier(c.Evaluation.AgentRevisionApplier)
 	requireAdmin := middleware.RequireTenantRole("admin")
 	evaluations := r.Group("/evaluations", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
