@@ -20,7 +20,6 @@ import (
 )
 
 const (
-	defaultListenAddress = "127.0.0.1:19090"
 	serverHeaderTimeout  = 5 * time.Second
 	serverReadTimeout    = 10 * time.Second
 	serverWriteTimeout   = 10 * time.Second
@@ -208,9 +207,6 @@ func serve() error {
 
 func loadProviderConfig(getenv func(string) string) (providerConfig, string, error) {
 	address := getenv("E2E_GITHUB_LISTEN_ADDRESS")
-	if address == "" {
-		address = defaultListenAddress
-	}
 	host, _, err := net.SplitHostPort(address)
 	if err != nil || (host != "127.0.0.1" && host != "localhost") {
 		return providerConfig{}, "", fmt.Errorf("listen address must be loopback host:port")

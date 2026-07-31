@@ -8,6 +8,39 @@ import (
 	"testing"
 )
 
+func TestHealthRequiresCurrentRunnerIdentity(t *testing.T) {
+	h := newHandler("run-1")
+	for _, tc := range []struct {
+		header string
+		status int
+	}{{"run-1", http.StatusNoContent}, {"wrong", http.StatusConflict}, {"", http.StatusConflict}} {
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		req.Header.Set("X-Stratum-E2E-Instance", tc.header)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != tc.status {
+			t.Fatalf("header=%q status=%d", tc.header, rec.Code)
+		}
+		if tc.status == http.StatusNoContent && rec.Header().Get("X-Stratum-E2E-Instance") != "run-1" {
+			t.Fatal("missing identity response header")
+		}
+	}
+}
+
+func TestServerConfigRequiresExplicitLoopbackAddress(t *testing.T) {
+	if err := validateServerConfig("127.0.0.1:12345", "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, address := range []string{"", ":19091", "0.0.0.0:19091", "example.com:19091"} {
+		if err := validateServerConfig(address, "run-1"); err == nil {
+			t.Fatalf("address %q accepted", address)
+		}
+	}
+	if err := validateServerConfig("127.0.0.1:12345", ""); err == nil {
+		t.Fatal("missing identity accepted")
+	}
+}
+
 func TestMCPHandlerServesDeterministicProtocol(t *testing.T) {
 	t.Parallel()
 	for _, method := range []string{"initialize", "tools/list", "tools/call", "resources/list"} {
