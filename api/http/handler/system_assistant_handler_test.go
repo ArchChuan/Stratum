@@ -49,7 +49,7 @@ func (r *settingsAgentRepo) UpdateSystemAssistant(_ context.Context, cfg *domain
 	return nil
 }
 
-func (r *settingsAgentRepo) UpdateSystemAssistantModel(_ context.Context, model string) (*domain.AgentConfig, error) {
+func (r *settingsAgentRepo) UpdateSystemAssistantModel(_ context.Context, model string, _ string, _ bool, _ int, _ int) (*domain.AgentConfig, error) {
 	if r.updateErr != nil {
 		return nil, r.updateErr
 	}

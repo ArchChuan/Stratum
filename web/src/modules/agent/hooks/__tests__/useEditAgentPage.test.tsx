@@ -59,7 +59,7 @@ describe('useEditAgentPage', () => {
 
   it.each([
 		{ isSystem: true, wantPath: '/agents' },
-		{ isSystem: false, wantPath: '/agents/list' },
+		{ isSystem: false, wantPath: '/agents' },
 	])('returns to the correct management tab after saving', async ({ isSystem, wantPath }) => {
 		vi.mocked(agentApi.get).mockResolvedValue(agent(mocks.id, isSystem));
 		vi.mocked(agentApi.update).mockResolvedValue({} as never);

@@ -93,16 +93,14 @@ export const buildMenuItems = (user: User | null | undefined): MenuItem[] => {
     },
   ];
 
-  if (canManageTenant) {
-    base.push({
-      key: 'model-group',
-      icon: <ApiOutlined />,
-      label: '模型管理',
-      children: [
-        { key: '/models', icon: <SettingOutlined />, label: <Link to="/models">模型管理</Link> },
-      ],
-    });
-  }
+  base.push({
+    key: 'model-group',
+    icon: <ApiOutlined />,
+    label: '模型管理',
+    children: [
+      { key: '/models', icon: <SettingOutlined />, label: <Link to="/models">模型管理</Link> },
+    ],
+  });
 
   if (user?.current_tenant) {
     base.push({

@@ -27,63 +27,27 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
   const agentName = `E2E-Agent-${Date.now()}`;
   let agentID = '';
   let conversationID = '';
-	let platformConversationID = '';
   try {
     await configureManagedModels(pool, tenantID);
-		const assistantResponse = waitForMutation(page, '/agents/stratum-platform-assistant', 'GET');
+
+    const listResponse = waitForMutation(page, '/agents', 'GET');
     await page.goto(`${webURL}/agents`);
-		expect((await assistantResponse).status()).toBe(200);
-		await expect(page.getByRole('tab', { name: '平台助手' })).toHaveAttribute('aria-selected', 'true');
-		await expect(page.getByText('Stratum 平台助手', { exact: true }).first()).toBeVisible();
-		await expect(page.locator('.agent-chat-page .ant-select')).toHaveCount(0);
-    completed.push('agent.route.agents');
+    expect((await listResponse).status()).toBe(200);
+    await expect(page).toHaveURL(`${webURL}/agents`);
+    await expect(page.getByRole('heading', { name: 'Agent 列表' })).toBeVisible();
+    await expect(page.getByText('Stratum 平台助手', { exact: true }).first()).toBeVisible();
+    completed.push('agent.route.agents', 'agent.route.agents.includesSystemAssistant');
 
-		const platformConversationResponse = waitForMutation(
-			page, '/agents/stratum-platform-assistant/conversations', 'POST',
-		);
-		await page.getByRole('button', { name: '新建会话' }).click();
-		const platformConversation = await platformConversationResponse;
-		expect(platformConversation.status()).toBe(201);
-		platformConversationID = (await platformConversation.json() as { id: string }).id;
-		await page.getByRole('button', { name: '重命名' }).click();
-		const platformRenameInput = page.locator('.agent-chat-page input.ant-input').last();
-		await platformRenameInput.fill('E2E Platform Conversation');
-		const platformRenameResponse = waitForMutation(
-			page, `/conversations/${platformConversationID}`, 'PATCH',
-		);
-		await platformRenameInput.press('Enter');
-		expect((await platformRenameResponse).status()).toBe(204);
-		const platformReloadResponse = waitForMutation(
-			page, '/agents/stratum-platform-assistant/conversations', 'GET',
-		);
-		await page.reload();
-		expect((await platformReloadResponse).status()).toBe(200);
-		await expect(page.getByText('E2E Platform Conversation', { exact: true })).toBeVisible();
-		expect(await rows<{ agent_id: string }>(pool, tenantID,
-			'SELECT agent_id FROM chat_conversations WHERE id=$1', [platformConversationID]))
-			.toEqual([{ agent_id: 'stratum-platform-assistant' }]);
-		completed.push('agent.mutation.post.agents.platform.conversations');
-		recordEvidence(evidence, 'Platform assistant fixed conversation');
-
-		const listResponse = waitForMutation(page, '/agents', 'GET');
-		await page.getByRole('tab', { name: 'Agent 列表' }).click();
-		await expect(page).toHaveURL(`${webURL}/agents/list`);
-		const agentList = await listResponse;
-		expect(agentList.status()).toBe(200);
-		const agentListBody = await agentList.json() as { agents?: Array<{ isSystem?: boolean }> };
-		expect(agentListBody.agents?.some(({ isSystem }) => isSystem)).toBe(false);
-		await expect(page.getByRole('heading', { name: 'Agent 列表' })).toBeVisible();
-		completed.push('agent.route.agents.list');
-
-    const catalogueResponse = waitForMutation(page, '/admin/models', 'GET');
+    const catResp = waitForMutation(page, '/admin/models', 'GET');
     await page.getByRole('button', { name: '创建 Agent' }).click();
     await expect(page).toHaveURL(`${webURL}/agents/create`);
-    const catalogue = await catalogueResponse;
+    const catalogue = await catResp;
     expect(catalogue.status()).toBe(200);
     const catalogueBody = await catalogue.json() as { models?: Array<{ name: string }> };
     const chatModels = catalogueBody.models?.map(({ name }) => name);
     expect(chatModels, `chat models=${chatModels?.join(',')}`).toContain('qwen-max');
     completed.push('agent.route.agents.create');
+
     await page.getByLabel('名称').fill(agentName);
     await page.getByLabel('描述').fill('全系统 stateful Agent 验收');
     await page.getByLabel('系统提示词').fill('请简洁回答，并明确包含 stateful。');
@@ -93,13 +57,14 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     await createModelInput.fill('qwen-max');
     await createModelInput.press('Enter');
     await expect(page.getByRole('slider', { name: '最大迭代次数' })).toHaveAttribute('aria-valuemax', '90');
+
     const createResponse = waitForMutation(page, '/agents', 'POST');
     const createdListResponse = waitForMutation(page, '/agents', 'GET');
     await page.getByRole('button', { name: '创建 Agent' }).click();
     const created = await createResponse;
     expect(created.status()).toBe(201);
     agentID = (await created.json() as { id: string }).id;
-		await expect(page).toHaveURL(`${webURL}/agents/list`);
+    await expect(page).toHaveURL(`${webURL}/agents`);
     expect((await createdListResponse).status()).toBe(200);
     completed.push('agent.mutation.post.agents');
     recordEvidence(evidence, 'Agent creation');
@@ -108,6 +73,7 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     await card.getByRole('button', { name: '编辑 Agent' }).click();
     await expect(page).toHaveURL(`${webURL}/agents/${agentID}/edit`);
     completed.push('agent.route.agents.id.edit');
+
     await page.getByLabel('描述').fill('全系统 stateful Agent 验收，已更新');
     const updateResponse = waitForMutation(page, `/agents/${agentID}`, 'PUT');
     const updatedListResponse = waitForMutation(page, '/agents', 'GET');
@@ -143,6 +109,7 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     await expect(page.getByRole('heading', { name: 'Agent 对话' })).toBeVisible();
     completed.push('agent.route.chat');
     await expect(page.getByText(agentName, { exact: true }).first()).toBeVisible();
+
     const conversationResponse = waitForMutation(page, `/agents/${agentID}/conversations`, 'POST');
     await page.getByRole('button', { name: '新建会话' }).click();
     const conversation = await conversationResponse;
@@ -175,18 +142,19 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     expect((await deleteConversationResponse).status()).toBe(204);
     completed.push('agent.mutation.delete.conversations.convid');
 
-		const systemAgentResponse = waitForMutation(page, '/agents/stratum-platform-assistant', 'GET');
-		await page.goto(`${webURL}/agents`);
-		await page.getByRole('link', { name: '平台助手设置' }).click();
-		expect((await systemAgentResponse).status()).toBe(200);
-		await expect(page).toHaveURL(`${webURL}/agents/stratum-platform-assistant/edit`);
-		const settingsModelInput = page.getByRole('combobox', { name: 'LLM 模型' });
-		await expect(settingsModelInput).toBeEnabled();
-		await settingsModelInput.scrollIntoViewIfNeeded();
-		await settingsModelInput.click({ force: true });
-		await settingsModelInput.press('ArrowDown');
-		await settingsModelInput.press('Enter');
-		const settingsResponse = waitForMutation(page, '/agents/stratum-platform-assistant', 'PUT');
+    await page.goto(`${webURL}/agents`);
+    const systemCard = page.locator('.ant-card').filter({ hasText: 'Stratum 平台助手' });
+    await systemCard.getByRole('button', { name: '编辑 Agent' }).click();
+    await expect(page).toHaveURL(`${webURL}/agents/stratum-platform-assistant/edit`);
+    await expect(page.getByRole('heading', { name: '平台助手设置' })).toBeVisible();
+
+    const settingsModelInput = page.getByRole('combobox', { name: 'LLM 模型' });
+    await expect(settingsModelInput).toBeEnabled();
+    await settingsModelInput.scrollIntoViewIfNeeded();
+    await settingsModelInput.click({ force: true });
+    await settingsModelInput.press('ArrowDown');
+    await settingsModelInput.press('Enter');
+    const settingsResponse = waitForMutation(page, '/agents/stratum-platform-assistant', 'PUT');
     await page.getByRole('button', { name: '保存修改' }).click();
     expect((await settingsResponse).status()).toBe(200);
     const savedSystemModel = await rows<{ llm_model: string }>(pool, tenantID,
@@ -195,22 +163,14 @@ export const executeAgentPack = async ({ actor, pool, evidence, webURL }: AgentP
     completed.push('agent.mutation.put.agents.system.settings');
     recordEvidence(evidence, 'system assistant model settings');
 
-		await page.goto(`${webURL}/agents/list`);
+    await page.goto(`${webURL}/agents`);
     const deleteCard = page.locator('.ant-card').filter({ hasText: agentName });
     const deleteResponse = waitForMutation(page, `/agents/${agentID}`, 'DELETE');
     await deleteCard.getByRole('button', { name: '删除 Agent' }).click();
     await page.locator('.ant-popconfirm').getByRole('button', { name: /删\s*除/ }).click();
     expect((await deleteResponse).status()).toBe(200);
     completed.push('agent.mutation.delete.agents.id');
-		recordEvidence(evidence, 'Agent deletion');
-
-		await page.goto(`${webURL}/agents`);
-		const deletePlatformConversationResponse = waitForMutation(
-			page, `/conversations/${platformConversationID}`, 'DELETE',
-		);
-		await page.getByRole('button', { name: '删除' }).click();
-		await page.locator('.ant-popconfirm').getByRole('button', { name: /删\s*除/ }).click();
-		expect((await deletePlatformConversationResponse).status()).toBe(204);
+    recordEvidence(evidence, 'Agent deletion');
   } finally {
     await page.close();
   }

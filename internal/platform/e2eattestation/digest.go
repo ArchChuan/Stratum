@@ -32,9 +32,14 @@ func LocalSourceDigest(root string) (string, error) {
 	}
 	workingPaths := paths[:0]
 	for _, path := range paths {
-		if _, removed := deletedSet[path]; !removed {
-			workingPaths = append(workingPaths, path)
+		if _, removed := deletedSet[path]; removed {
+			continue
 		}
+		fullPath := filepath.Join(root, filepath.FromSlash(path))
+		if info, err := os.Stat(fullPath); err == nil && info != nil && info.IsDir() {
+			continue
+		}
+		workingPaths = append(workingPaths, path)
 	}
 	return digestPaths(workingPaths, func(path string) ([]byte, error) {
 		content, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))

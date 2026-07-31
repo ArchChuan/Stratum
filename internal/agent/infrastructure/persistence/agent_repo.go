@@ -465,14 +465,15 @@ func (r *PgAgentRepo) Update(ctx context.Context, cfg *domain.AgentConfig) error
 	})
 }
 
-func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string) (*domain.AgentConfig, error) {
+func (r *PgAgentRepo) UpdateSystemAssistantModel(ctx context.Context, model string, memoryScope string, checkpointEnabled bool, maxIterations int, maxContextTokens int) (*domain.AgentConfig, error) {
 	var cfg domain.AgentConfig
 	var agentType string
 	err := r.execTenant(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, updated_at=NOW()
+		if err := tx.QueryRow(ctx, `UPDATE agents SET llm_model=$1, memory_scope=$2, checkpoint_enabled=$3,
+			max_iterations=$4, max_context_tokens=$5, updated_at=NOW()
 			WHERE system_key='stratum.platform_assistant'
 			RETURNING id, name, type, description, system_prompt, llm_model,
-			          max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled`, model).
+			          max_iterations, max_context_tokens, memory_scope, system_key, checkpoint_enabled`, model, memoryScope, checkpointEnabled, maxIterations, maxContextTokens).
 			Scan(&cfg.ID, &cfg.Name, &agentType, &cfg.Description, &cfg.SystemPrompt, &cfg.LLMModel,
 				&cfg.MaxIterations, &cfg.MaxContextTokens, &cfg.MemoryScope, &cfg.SystemKey, &cfg.CheckpointEnabled); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {

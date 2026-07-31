@@ -27,11 +27,6 @@ export const agentRoutes = [
       </PrivateRoute>
     }
   />,
-	<Route
-		key="agents-list"
-		path="/agents/list"
-		element={<PrivateRoute><AgentManagementPage /></PrivateRoute>}
-	/>,
   <Route
     key="agents-create"
     path="/agents/create"

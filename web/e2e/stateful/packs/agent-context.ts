@@ -106,7 +106,7 @@ export const executeAgentContextPack = async ({
     await runCleanupTasks([
       async () => {
         if (!agentID) return;
-				await page.goto(`${webURL}/agents/list`);
+				await page.goto(`${webURL}/agents`);
         const card = page.locator('.ant-card').filter({ hasText: agentName });
         if (await card.count()) {
           await card.getByRole('button', { name: '删除 Agent' }).click();
