@@ -8,6 +8,7 @@ on:
         required: true
 
 permissions:
+  actions: read
   contents: read
   id-token: write
   attestations: write
@@ -69,6 +70,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DEPLOYMENT_RUN_ID: ${{ inputs.deployment_run_id }}
         run: |
+          run_json=$(gh run view "$DEPLOYMENT_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --json workflowName,conclusion,headSha,headBranch)
+          jq -e --arg sha "$GITHUB_SHA" '
+            .workflowName == "Build and Deploy" and
+            .conclusion == "success" and
+            .headSha == $sha and
+            .headBranch == "main"
+          ' <<<"$run_json" >/dev/null
           gh run download "$DEPLOYMENT_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --name deployment-evidence --dir tmp/deployment-evidence
       - name: Verify deployment evidence
