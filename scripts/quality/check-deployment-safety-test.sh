@@ -97,6 +97,10 @@ require 'adapter_digest="\$\{\{ needs\.build-and-push\.outputs\.adapter-digest \
 require '\$adapter_digest.*\^sha256:\[0-9a-f\]\{64\}\$' 'adapter digest validation missing'
 require 'FEISHU_ADAPTER_IMAGE:[[:space:]]*\$\{\{ env\.IMAGE_REPO \}\}/stratum-feishu-alert-adapter@\$\{\{ needs\.build-and-push\.outputs\.adapter-digest \}\}' \
     'adapter immutable digest is not passed to monitoring reconciliation'
+require 'feishu_adapter=\$\(kubectl get deployment stratum-feishu-alert-adapter -n monitoring' \
+    'deployment receipt does not read the deployed Feishu adapter image'
+require 'images:\{backend:\$backend,frontend:\$frontend,platform_mcp:\$platform_mcp,feishu_adapter:\$feishu_adapter\}' \
+    'deployment receipt does not bind the Feishu adapter image'
 require 'PATH="\$validator_dir:\$PATH" bash scripts/deploy-remote-monitoring\.sh' \
     'safe monitoring reconciliation entrypoint missing'
 require 'prom/prometheus:v3\.8\.1' 'pinned Prometheus validation tool image missing'

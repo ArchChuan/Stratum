@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/byteBuilderX/stratum/internal/platform/e2eattestation"
@@ -53,6 +54,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		inputPath := flags.String("input", "", "safe results JSON")
 		outputDir := flags.String("output-dir", "test/e2e/attestations", "attestation output directory")
 		manifest := flags.String("manifest", "test/e2e/stateful/manifest.json", "coverage manifest")
+		policyManifest := flags.String("policy-manifest", ".test/verification.yaml", "verification policy manifest")
 		profile := flags.String("profile", "", "soak acceptance profile: test or release")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
@@ -75,7 +77,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("safe results profile %q does not match --profile %q", results.AcceptanceProfile, *profile)
 		}
 		path, _, err := e2eattestation.GenerateAttestation(*root, results, e2eattestation.GenerateOptions{
-			ManifestPath: *manifest, OutputDir: *outputDir,
+			ManifestPath: *manifest, PolicyManifestPath: *policyManifest, OutputDir: *outputDir,
 		})
 		if err != nil {
 			return err
@@ -87,39 +89,98 @@ func run(args []string, stdout, stderr io.Writer) error {
 		_, err = fmt.Fprintln(stdout, absolute)
 		return err
 	case "verify":
-		flags := flag.NewFlagSet("verify", flag.ContinueOnError)
-		flags.SetOutput(stderr)
-		root := flags.String("root", ".", "repository root")
-		path := flags.String("attestation", "", "attestation JSON")
-		manifest := flags.String("manifest", "test/e2e/stateful/manifest.json", "coverage manifest")
-		ref := flags.String("ref", "", "committed Git ref; defaults to local source")
-		requiredMode := flags.String("required-mode", "short", "required execution mode: short or soak")
-		requiredProfile := flags.String("required-profile", "", "required soak acceptance profile: test or release")
-		packs := stringListFlag{}
-		flags.Var(&packs, "required-pack", "required passing pack; repeat to override full-system defaults")
-		if err := flags.Parse(args[1:]); err != nil {
-			return err
-		}
-		if *path == "" {
-			return errors.New("--attestation is required")
-		}
-		if *requiredMode != "short" && *requiredMode != "soak" {
-			return errors.New("--required-mode must be short or soak")
-		}
-		if err := validateProfileFlags(*requiredMode, *requiredProfile); err != nil {
-			return err
-		}
-		required := systemPacks
-		if len(packs) > 0 {
-			required = packs
-		}
-		return e2eattestation.VerifyAttestationFile(*root, *path, e2eattestation.VerifyOptions{
-			ManifestPath: *manifest, Ref: *ref, RequiredMode: *requiredMode,
-			RequiredProfile: *requiredProfile, RequiredPacks: required,
-		})
+		return runVerify(args[1:], stderr)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runVerify(args []string, stderr io.Writer) error {
+	flags := flag.NewFlagSet("verify", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", ".", "repository root")
+	path := flags.String("attestation", "", "attestation JSON")
+	directory := flags.String("attestation-dir", "", "directory containing run-specific attestations")
+	manifest := flags.String("manifest", "test/e2e/stateful/manifest.json", "coverage manifest")
+	policyManifest := flags.String("policy-manifest", ".test/verification.yaml", "verification policy manifest")
+	ref := flags.String("ref", "", "committed Git ref; defaults to local source")
+	requiredMode := flags.String("required-mode", "short", "required execution mode: short or soak")
+	requiredProfile := flags.String("required-profile", "", "required soak acceptance profile: test or release")
+	packs := stringListFlag{}
+	flags.Var(&packs, "required-pack", "required passing pack; repeat to override full-system defaults")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if (*path == "") == (*directory == "") {
+		return errors.New("exactly one of --attestation or --attestation-dir is required")
+	}
+	if *requiredMode != "short" && *requiredMode != "soak" {
+		return errors.New("--required-mode must be short or soak")
+	}
+	if err := validateProfileFlags(*requiredMode, *requiredProfile); err != nil {
+		return err
+	}
+	required := systemPacks
+	if len(packs) > 0 {
+		required = packs
+	}
+	options := e2eattestation.VerifyOptions{
+		ManifestPath: *manifest, PolicyManifestPath: *policyManifest, Ref: *ref, RequiredMode: *requiredMode,
+		RequiredProfile: *requiredProfile, RequiredPacks: required,
+	}
+	if *path != "" {
+		return e2eattestation.VerifyAttestationFile(*root, *path, options)
+	}
+	return verifyAttestationDirectory(*root, *directory, options)
+}
+
+func verifyAttestationDirectory(root, directory string, options e2eattestation.VerifyOptions) error {
+	digest, err := sourceDigest(root, options.Ref)
+	if err != nil {
+		return err
+	}
+	candidates, err := findAttestationCandidates(directory, digest)
+	if err != nil {
+		return err
+	}
+	errs := make([]error, 0, len(candidates))
+	for _, candidate := range candidates {
+		if err := e2eattestation.VerifyAttestationFile(root, candidate, options); err == nil {
+			return nil
+		} else {
+			errs = append(errs, fmt.Errorf("verify %s: %w", candidate, err))
+		}
+	}
+	return fmt.Errorf("no current source attestation satisfies the verification contract: %w", errors.Join(errs...))
+}
+
+func sourceDigest(root, ref string) (string, error) {
+	if ref == "" {
+		return e2eattestation.LocalSourceDigest(root)
+	}
+	return e2eattestation.CommittedSourceDigest(root, ref)
+}
+
+func findAttestationCandidates(directory, digest string) ([]string, error) {
+	target := digest + ".json"
+	paths := make([]string, 0)
+	err := filepath.WalkDir(directory, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() && entry.Name() == target {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan attestation directory: %w", err)
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("missing current source attestation for %.16s in %s", digest, directory)
+	}
+	sort.Strings(paths)
+	return paths, nil
 }
 
 func validateProfileFlags(mode, profile string) error {

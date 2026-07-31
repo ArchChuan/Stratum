@@ -28,8 +28,17 @@ cat >"$test_dir/scope-command" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 command=$1; shift
+evidence_root=${ATTEMPT_ROOT:-$FAKE_ROOT}
 case "$command" in
-  prepare-registry|release|mark-infrastructure-owned|confirm-infrastructure-stopped|validate)
+  prepare-registry|mark-infrastructure-owned|validate)
+    exec "$FAKE_ROOT/e2e-run-scope" "$command" "$@" ;;
+  release)
+    printf 'release\n' >>"$evidence_root/release-attempts"
+    [[ ! -e "$FAKE_ROOT/fail-release" ]] || exit 10
+    exec "$FAKE_ROOT/e2e-run-scope" "$command" "$@" ;;
+  confirm-infrastructure-stopped)
+    printf 'confirm\n' >>"$evidence_root/confirm-attempts"
+    [[ ! -e "$FAKE_ROOT/fail-confirm" ]] || exit 11
     exec "$FAKE_ROOT/e2e-run-scope" "$command" "$@" ;;
   allocate)
     output=$("$FAKE_ROOT/e2e-run-scope" allocate "$@")
@@ -42,6 +51,7 @@ case "$command" in
   drop-database)
     while (($#)); do [[ "$1" == --scope ]] && { scope=$2; break; }; shift; done
     database=$(jq -er .database_name "$scope")
+    printf 'drop\n' >>"$evidence_root/drop-attempts"
     [[ ! -e "$FAKE_ROOT/fail-drop" ]] || exit 9
     [[ -e "$FAKE_ROOT/db-$database" ]] || exit 1
     find "$FAKE_ROOT" -maxdepth 1 -name 'db-*' | wc -l >>"$FAKE_ROOT/databases-before-drop"
@@ -243,5 +253,34 @@ while read -r descendant; do
   ! kill -0 "$descendant" 2>/dev/null || { printf 'TERM-resistant descendant survived cleanup\n' >&2; exit 1; }
 done <"$test_dir/term-descendants"
 [[ -z $(find "$test_dir/descendant-registry/runs" -name '*.json' -print -quit) ]]
+
+for failure in drop release confirm; do
+  registry="$test_dir/$failure-failure-registry"
+  attempts="$test_dir/$failure-failure-attempts"
+  rm -rf "$registry"
+  mkdir "$attempts"
+  rm -f "$test_dir/infra-ready"
+  : >"$test_dir/fail-$failure"
+  set +e
+  env "${fake_env[@]}" STATEFUL_E2E_REGISTRY_ROOT="$registry" \
+    ATTEMPT_ROOT="$attempts" \
+    STATEFUL_E2E_PLAYWRIGHT_COMMAND="$test_dir/playwright-pass" bash "$runner" short \
+    >"$test_dir/$failure-failure.log" 2>&1
+  status=$?
+  set -e
+  rm -f "$test_dir/fail-$failure"
+  ((status != 0))
+  case "$failure" in
+    drop)
+      [[ $(wc -l <"$attempts/drop-attempts") -eq 2 ]]
+      [[ ! -e "$attempts/release-attempts" ]] ;;
+    release)
+      [[ $(wc -l <"$attempts/release-attempts") -eq 2 ]]
+      [[ ! -e "$attempts/confirm-attempts" ]] ;;
+    confirm)
+      [[ $(wc -l <"$attempts/release-attempts") -eq 1 ]]
+      [[ $(wc -l <"$attempts/confirm-attempts") -eq 2 ]] ;;
+  esac
+done
 
 printf 'stateful runner behavior contract passed\n'

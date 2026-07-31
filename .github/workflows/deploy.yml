@@ -6,6 +6,11 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
 env:
   REGISTRY: ${{ secrets.DOCKER_REGISTRY_URL }}
   IMAGE_REPO: ${{ secrets.DOCKER_REGISTRY_URL }}/stratum-demo
@@ -613,6 +618,38 @@ jobs:
             echo "public health response did not match the backend contract" >&2
             exit 1
           fi
+
+      - name: Record deployed application digests
+        id: deployment-evidence
+        if: steps.candidate.outputs.current == 'true'
+        run: |
+          mkdir -p tmp/deployment-evidence
+          backend=$(kubectl get deployment stratum -n stratum -o jsonpath='{.spec.template.spec.containers[0].image}')
+          frontend=$(kubectl get deployment stratum-frontend -n stratum -o jsonpath='{.spec.template.spec.containers[0].image}')
+          platform_mcp=$(kubectl get deployment stratum-platform-mcp -n stratum -o jsonpath='{.spec.template.spec.containers[0].image}')
+          feishu_adapter=$(kubectl get deployment stratum-feishu-alert-adapter -n monitoring -o jsonpath='{.spec.template.spec.containers[0].image}')
+          jq -n --arg commit "$GITHUB_SHA" --arg backend "$backend" --arg frontend "$frontend" \
+            --arg platform_mcp "$platform_mcp" --arg feishu_adapter "$feishu_adapter" \
+            '{version:1,commit:$commit,images:{backend:$backend,frontend:$frontend,platform_mcp:$platform_mcp,feishu_adapter:$feishu_adapter}}' \
+            > tmp/deployment-evidence/deployment-receipt.json
+          jq -e 'all(.images[]; test("@sha256:[0-9a-f]{64}$"))' \
+            tmp/deployment-evidence/deployment-receipt.json >/dev/null
+
+      - name: Attest deployment evidence
+        id: attest-deployment
+        if: steps.candidate.outputs.current == 'true'
+        uses: actions/attest@v4
+        with: {subject-path: tmp/deployment-evidence/deployment-receipt.json}
+
+      - name: Upload deployment evidence
+        if: steps.candidate.outputs.current == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-evidence
+          path: |
+            tmp/deployment-evidence/deployment-receipt.json
+            ${{ steps.attest-deployment.outputs.bundle-path }}
+          retention-days: 90
 
       - name: Reconcile remote monitoring
         if: steps.candidate.outputs.current == 'true'
