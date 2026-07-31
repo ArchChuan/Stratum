@@ -1,9 +1,12 @@
 package e2erunscope
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -190,6 +193,107 @@ func TestRegistryRegisterRejectsDuplicateLease(t *testing.T) {
 	}
 	if got.OwnerPID != scope.OwnerPID {
 		t.Fatalf("OwnerPID = %d, want original %d", got.OwnerPID, scope.OwnerPID)
+	}
+}
+
+func TestRegistryRegisterPublishesCompleteLeaseExclusively(t *testing.T) {
+	r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
+	scope := registryTestScope(t, "20260730t120102z-a1b2c3d4e5f60718", 101)
+	scope.Repository = "/" + strings.Repeat("r", 64<<20)
+	leasePath := r.leasePath(scope.RunID)
+	data, err := json.Marshal(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ensureDirectories(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- r.Register(scope)
+	}()
+
+	registrationDone := false
+	for {
+		info, err := os.Lstat(leasePath)
+		if err == nil {
+			if info.Size() != int64(len(data)) {
+				t.Fatalf("visible lease size = %d, want complete size %d", info.Size(), len(data))
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Read() observed incomplete lease at %q: %v", leasePath, err)
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Register() error = %v", err)
+			}
+			registrationDone = true
+		default:
+		}
+	}
+	if !registrationDone {
+		if err := <-done; err != nil {
+			t.Fatalf("Register() error = %v", err)
+		}
+	}
+
+	changed := scope
+	changed.OwnerPID = 202
+	if err := r.Register(changed); err == nil {
+		t.Fatal("second Register() error = nil, want exclusive-create failure")
+	}
+	got, err := r.Read(scope.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OwnerPID != scope.OwnerPID {
+		t.Fatalf("OwnerPID = %d, want original %d", got.OwnerPID, scope.OwnerPID)
+	}
+}
+
+func TestRegistryRegisterRejectsRacingDuplicateLease(t *testing.T) {
+	r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
+	first := registryTestScope(t, "20260730t120102z-a1b2c3d4e5f60718", 101)
+	second := first
+	second.OwnerPID = 202
+	start := make(chan struct{})
+	results := make(chan struct {
+		pid int
+		err error
+	}, 2)
+	for _, scope := range []Scope{first, second} {
+		go func() {
+			<-start
+			results <- struct {
+				pid int
+				err error
+			}{pid: scope.OwnerPID, err: r.Register(scope)}
+		}()
+	}
+	close(start)
+
+	winnerPID := 0
+	for range 2 {
+		result := <-results
+		if result.err == nil {
+			if winnerPID != 0 {
+				t.Fatal("both racing Register() calls succeeded")
+			}
+			winnerPID = result.pid
+		}
+	}
+	if winnerPID == 0 {
+		t.Fatal("both racing Register() calls failed")
+	}
+	got, err := r.Read(first.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OwnerPID != winnerPID {
+		t.Fatalf("OwnerPID = %d, want winning PID %d", got.OwnerPID, winnerPID)
 	}
 }
 

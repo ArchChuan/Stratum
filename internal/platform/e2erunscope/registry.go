@@ -32,7 +32,7 @@ type ReleaseResult struct {
 	OwnershipRunID          string `json:"ownership_run_id,omitempty"`
 }
 
-func (r Registry) Register(scope Scope) error {
+func (r Registry) Register(scope Scope) (err error) {
 	if err := Validate(scope); err != nil {
 		return fmt.Errorf("registry: validate scope: %w", err)
 	}
@@ -46,21 +46,30 @@ func (r Registry) Register(scope Scope) error {
 	if err != nil {
 		return fmt.Errorf("registry: encode lease: %w", err)
 	}
+	lockPath := filepath.Join(r.Root, "."+scope.RunID+".lock")
+	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, registryMetadataMode)
+	if err != nil {
+		return fmt.Errorf("registry: reserve lease: %w", err)
+	}
+	if err := lock.Close(); err != nil {
+		cleanupErr := os.Remove(lockPath)
+		if cleanupErr != nil {
+			cleanupErr = fmt.Errorf("registry: remove lease reservation: %w", cleanupErr)
+		}
+		return errors.Join(fmt.Errorf("registry: close lease reservation: %w", err), cleanupErr)
+	}
+	defer func() {
+		if cleanupErr := os.Remove(lockPath); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("registry: remove lease reservation: %w", cleanupErr))
+		}
+	}()
 	path := r.leasePath(scope.RunID)
 	if _, err := os.Lstat(path); err == nil {
 		return errors.New("registry: lease already exists")
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("registry: inspect lease: %w", err)
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, registryMetadataMode)
-	if err != nil {
-		return fmt.Errorf("registry: create lease: %w", err)
-	}
-	if err := writeAndClose(file, data); err != nil {
-		_ = os.Remove(path)
-		return fmt.Errorf("registry: write lease: %w", err)
-	}
-	return nil
+	return atomicCreate(path, data)
 }
 
 func (r Registry) Read(runID string) (Scope, error) {
@@ -402,6 +411,54 @@ func atomicWrite(path string, data []byte) (err error) {
 		return fmt.Errorf("registry: rename metadata: %w", err)
 	}
 	return nil
+}
+
+func atomicCreate(path string, data []byte) (err error) {
+	directory := filepath.Dir(path)
+	temp, err := os.CreateTemp(filepath.Dir(directory), ".registry-*.tmp")
+	if err != nil {
+		return fmt.Errorf("registry: create temporary metadata: %w", err)
+	}
+	tempPath := temp.Name()
+	renamed := false
+	defer func() {
+		err = cleanupTemporaryMetadata(tempPath, renamed, err)
+	}()
+	if err := temp.Chmod(registryMetadataMode); err != nil {
+		closeErr := temp.Close()
+		if closeErr != nil {
+			closeErr = fmt.Errorf("registry: close temporary metadata: %w", closeErr)
+		}
+		return errors.Join(fmt.Errorf("registry: chmod temporary metadata: %w", err), closeErr)
+	}
+	if err := writeAndClose(temp, data); err != nil {
+		return fmt.Errorf("registry: write temporary metadata: %w", err)
+	}
+	info, err := os.Lstat(directory)
+	if err != nil {
+		return fmt.Errorf("registry: inspect destination directory: %w", err)
+	}
+	if err := validateDirectory(directory, info); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return errors.New("registry: lease already exists")
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("registry: inspect lease before rename: %w", err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("registry: rename lease: %w", err)
+	}
+	renamed = true
+	return nil
+}
+
+func cleanupTemporaryMetadata(path string, renamed bool, err error) error {
+	cleanupErr := os.Remove(path)
+	if cleanupErr == nil || (renamed && os.IsNotExist(cleanupErr)) {
+		return err
+	}
+	return errors.Join(err, fmt.Errorf("registry: remove temporary metadata: %w", cleanupErr))
 }
 
 func writeAndClose(file *os.File, data []byte) error {
