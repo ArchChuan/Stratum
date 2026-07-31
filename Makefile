@@ -19,7 +19,7 @@
 
 .PHONY: e2e-evaluation-evolution e2e-system-short e2e-system-soak e2e-system-release-soak
 .PHONY: monitoring-config-test
-.PHONY: verification-manifest-test verification-schemas-test test-verification-entrypoints-test
+.PHONY: verification-manifest-test verification-schemas-test verification-ci-contract-test test-verification-entrypoints-test
 
 # ─── 全局变量（CI/CD 可自动覆盖）────────────────────────────────────────────
 BE_IMAGE    ?= clawhermes-ai-go
@@ -225,6 +225,9 @@ verification-manifest-test:
 
 verification-schemas-test:
 	bash scripts/quality/verification-schemas-test.sh
+
+verification-ci-contract-test:
+	bash scripts/quality/verification-ci-contract-test.sh
 
 E2E_REQUIRED_MODE ?= short
 E2E_REQUIRED_PROFILE ?=
