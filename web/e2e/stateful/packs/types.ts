@@ -9,6 +9,7 @@ export interface PackContext {
   pool: DatabasePool;
   tenantID: string;
   webURL: string;
+  fixtureURL: string;
 }
 
 export interface BrowserAction {

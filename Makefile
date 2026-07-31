@@ -222,13 +222,18 @@ E2E_REQUIRED_MODE ?= short
 E2E_REQUIRED_PROFILE ?=
 e2e-attestation-check:
 	@digest=$$(go run ./cmd/e2e-attestation digest --root . --ref HEAD); \
-	attestation="test/e2e/attestations/$$digest.json"; \
-	if [ -f "$$attestation" ]; then \
-		go run ./cmd/e2e-attestation verify --root . --ref HEAD --required-mode $(E2E_REQUIRED_MODE) \
+	legacy="test/e2e/attestations/$$digest.json"; found=false; verified=false; \
+	for attestation in "$$legacy" test/e2e/attestations/*/$$digest.json; do \
+		[ -f "$$attestation" ] || continue; found=true; \
+		if go run ./cmd/e2e-attestation verify --root . --ref HEAD --required-mode $(E2E_REQUIRED_MODE) \
 			$$(if [ -n "$(E2E_REQUIRED_PROFILE)" ]; then echo "--required-profile $(E2E_REQUIRED_PROFILE)"; fi) \
-			--attestation "$$attestation"; \
-	else \
+			--attestation "$$attestation"; then verified=true; break; fi; \
+	done; \
+	if [ "$$verified" = true ]; then :; \
+	elif [ "$$found" = false ]; then \
 		printf 'No local attestation for %.16s - stateful E2E gate covers this\n' "$$digest" >&2; \
+	else \
+		printf 'No local attestation satisfies mode/profile requirements\n' >&2; exit 1; \
 	fi
 
 tool-permission-test:

@@ -5,11 +5,10 @@ import type { BrowserActor } from '../core/actors';
 import {
   configureManagedModels, requireUUID, withTenantMutation, withTenantQuery, type DatabasePool,
 } from '../core/database';
-import { E2E_MCP_BASE_URL } from '../core/endpoints';
 import type { EvidenceRecord } from '../core/evidence';
 import { runCleanupTasks } from '../core/errors';
 
-interface EvaluationPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
+interface EvaluationPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string }
 const waitFor = async (page: Page, path: string | RegExp, method: string) => {
   try {
     return await page.waitForResponse((response) => {
@@ -93,11 +92,11 @@ const seedDecisionFixtures = async (
 };
 
 export const executeEvaluationPack = async ({
-  actor, pool, evidence, webURL,
+  actor, pool, evidence, webURL, fixtureURL,
 }: EvaluationPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   const userID = requireUUID(actor.userID ?? '', 'user_id');
-  await configureManagedModels(pool, tenantID);
+  await configureManagedModels(pool, tenantID, fixtureURL);
   const page = await actor.context.newPage();
   const suffix = String(Date.now());
   const skillName = `E2E-Evaluation-Skill-${suffix}`;
@@ -198,12 +197,19 @@ export const executeEvaluationPack = async ({
     await expect.poll(async () => (await rows<{ id: string; status: string }>(pool, tenantID,
       `SELECT id,status FROM eval_runs WHERE resource_id=$1 AND suite_revision_id=$2 ORDER BY created_at DESC LIMIT 1`,
     [skillID, suiteRevisionID]))[0]?.status, { timeout: 120_000 }).toBe('succeeded');
-    const run = (await rows<{ id: string; trace_id: string }>(pool, tenantID, `
-      SELECT r.id,cr.trace_id FROM eval_runs r JOIN eval_case_results cr ON cr.run_id=r.id
+    const run = (await rows<{ id: string; trace_id: string; error_message: string; actual_output: string }>(pool, tenantID, `
+      SELECT r.id,
+             cr.trace_id,
+             COALESCE(cr.error_message, '') AS error_message,
+             COALESCE(cr.actual_output::text, '') AS actual_output
+      FROM eval_runs r
+      JOIN eval_case_results cr ON cr.run_id = r.id
       WHERE r.resource_id=$1 AND r.suite_revision_id=$2 ORDER BY r.created_at DESC LIMIT 1`,
     [skillID, suiteRevisionID]))[0];
+    if (!run) throw new Error('evaluation run result was not persisted');
     runID = run.id;
-    expect(run.trace_id).not.toBe('');
+    expect(run.trace_id,
+      `evaluation trace missing; error=${run.error_message.slice(0, 240)} actual=${run.actual_output.slice(0, 240)}`).not.toBe('');
 
     let dialog = await openEvolution(page);
     let panel = dialog.locator('.ant-tabs-tabpane-active');
@@ -268,7 +274,7 @@ export const executeEvaluationPack = async ({
     experimentID = (await experimentCreated.json() as { experiment: { id: string } }).experiment.id;
     await expect(dialog).toBeHidden();
 
-    const evidenceRegistration = await page.request.post(`${E2E_MCP_BASE_URL}/e2e/opik/register`, { data: {
+    const evidenceRegistration = await page.request.post(`${fixtureURL}/e2e/opik/register`, { data: {
       trace_id: run.trace_id, tenant_id: tenantID, user_id: userID,
       resource_id: skillID, revision_id: stableRevisionID,
     } });
