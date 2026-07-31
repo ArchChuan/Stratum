@@ -91,6 +91,8 @@ jobs:
       - name: Generate verification plan
         env: {TEST_VERIFY_RISK_LEVEL: R3}
         run: make test-verify-plan
+      - name: Start planned-check infrastructure
+        run: bash scripts/e2e/ci-infra-up.sh
       - name: Run planned non-soak checks
         run: |
           make risk-guardrails code-quality
@@ -144,6 +146,9 @@ jobs:
       - if: failure()
         uses: actions/upload-artifact@v4
         with: {name: stateful-e2e-failure-logs, path: tmp/test-verification/failure-logs/, retention-days: 3}
+      - name: Stop verification infrastructure
+        if: always()
+        run: bash scripts/e2e/ci-infra-down.sh
       - if: always()
         uses: actions/upload-artifact@v4
         with:
