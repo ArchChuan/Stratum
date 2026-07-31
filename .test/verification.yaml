@@ -1,0 +1,44 @@
+version: 1
+
+policy:
+  authority: ci
+  fail_closed: true
+  default_mode: short
+  flaky:
+    rerun_for_diagnostics: true
+    quarantine_requires_owner: true
+    quarantine_ttl_days: 14
+
+risk:
+  levels: [R0, R1, R2, R3, R4]
+  rules:
+    - id: tenant-boundary
+      level: R3
+      paths: [internal/*/infrastructure/persistence/**, internal/tenant/**]
+    - id: agent-tool-chain
+      level: R3
+      paths: [internal/agent/**, internal/mcp/**, test/e2e/**]
+    - id: deployment
+      level: R3
+      paths: [.github/workflows/**, helm/**, k8s/**]
+
+levels:
+  R0: {checks: [docs-lint]}
+  R1: {checks: [static, unit, build, code-quality]}
+  R2: {checks: [static, unit, integration, contract, e2e-short]}
+  R3: {checks: [static, unit, integration, contract, e2e-short, domain-failure-paths, e2e-soak, specification-review, code-quality-review]}
+  R4: {checks: [static, unit, integration, contract, e2e-short, domain-failure-paths, e2e-soak, specification-review, code-quality-review, release-soak, deployment, production-verification]}
+
+capabilities:
+  - id: platform-assistant
+    packs: [platform-assistant-browser, platform-assistant-proposal, agent-tool-permission]
+    evidence: [ui, http, database, trace, cleanup]
+
+reviews:
+  required:
+    R3: [specification, code-quality]
+    R4: [specification, code-quality, release-evidence]
+
+attestation:
+  schema: 2
+  required: [commit, manifest_digest, runner_identity, capability_results, cleanup, artifact_digests]
