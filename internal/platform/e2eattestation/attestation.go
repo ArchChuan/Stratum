@@ -331,7 +331,8 @@ func validateGenerateInput(input SafeResults) error {
 func verifyTopologyIdentity(topology *RunTopology) error {
 	validRun := topologyRunIDPattern.MatchString(topology.RunID)
 	validDatabase := topologyDatabasePattern.MatchString(topology.DatabaseName)
-	if !validRun || topology.Host != "127.0.0.1" || !validDatabase {
+	expectedDatabase := "stratum_e2e_" + strings.ReplaceAll(topology.RunID, "-", "_")
+	if !validRun || topology.Host != "127.0.0.1" || !validDatabase || topology.DatabaseName != expectedDatabase {
 		return errors.New("invalid run topology identity")
 	}
 	return nil

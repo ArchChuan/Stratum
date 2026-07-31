@@ -170,6 +170,14 @@ func TestVerifyRunTopologyRequiresAllRuntimePorts(t *testing.T) {
 	}
 }
 
+func TestVerifyTopologyIdentityBindsDatabaseToRun(t *testing.T) {
+	t.Parallel()
+	topology := *validResults(time.Now().UTC()).RunTopology
+	topology.DatabaseName = "stratum_e2e_20260730t120102z_1111111111111111"
+
+	require.ErrorContains(t, verifyTopologyIdentity(&topology), "topology identity")
+}
+
 func TestGenerateAttestationRejectsCredentialBearingArtifact(t *testing.T) {
 	t.Parallel()
 	root := initDigestRepository(t)
