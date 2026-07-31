@@ -77,14 +77,36 @@ func run(args []string) error {
 }
 
 func changedPaths(root, baseRef string) ([]string, error) {
-	output, err := gitOutput(root, "diff", "--name-only", baseRef+"...HEAD")
-	if err != nil {
-		return nil, err
+	commands := [][]string{
+		{"diff", "--name-only", baseRef + "...HEAD"},
+		{"diff", "--name-only", "HEAD"},
+		{"ls-files", "--others", "--exclude-standard"},
 	}
+	paths := make(map[string]struct{})
+	for _, args := range commands {
+		output, err := gitOutput(root, args...)
+		if err != nil {
+			return nil, err
+		}
+		for _, path := range splitPaths(output) {
+			if strings.HasPrefix(path, "test/e2e/attestations/") {
+				continue
+			}
+			paths[path] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(paths))
+	for path := range paths {
+		result = append(result, path)
+	}
+	return result, nil
+}
+
+func splitPaths(output string) []string {
 	if output == "" {
-		return nil, nil
+		return nil
 	}
-	return strings.Split(output, "\n"), nil
+	return strings.Split(output, "\n")
 }
 
 func gitOutput(root string, args ...string) (string, error) {

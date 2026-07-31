@@ -107,6 +107,10 @@ func TestVerificationSchemas(t *testing.T) {
 			value: changedNested(validReport, "attestation", "signed", false), wantErr: true,
 		},
 		{
+			name: "rejects accepted report with a failed planned check", schema: report,
+			value: changedCheckStatus(validReport, "failed"), wantErr: true,
+		},
+		{
 			name: "rejects R4 report without release artifact", schema: report,
 			value: changed(reportWithRisk(validReport, "R4", []any{
 				review("specification", "passed"), review("code-quality", "passed"),
@@ -150,6 +154,7 @@ func baseReport() map[string]any {
 		"version": 1, "status": "accepted", "commit": hex(40),
 		"manifest_digest": "sha256:" + hex(64), "risk_level": "R3", "mode": "soak",
 		"reviews": []any{review("specification", "passed"), review("code-quality", "passed")},
+		"checks":  []any{check("static", "passed"), check("unit", "passed")},
 		"capabilities": map[string]any{
 			"passed": 3, "failed": 0, "blocked": 0, "skipped": 0, "unreconciled": 0,
 		},
@@ -160,6 +165,16 @@ func baseReport() map[string]any {
 		"cleanup":   map[string]any{"complete": true, "residual_entities": 0},
 		"artifacts": []any{"sha256:" + hex(64)},
 	}
+}
+
+func check(id, status string) map[string]any {
+	return map[string]any{"id": id, "status": status, "evidence": "github-run:1"}
+}
+
+func changedCheckStatus(src map[string]any, status string) map[string]any {
+	dst := clone(src)
+	dst["checks"].([]any)[0].(map[string]any)["status"] = status
+	return dst
 }
 
 func changed(src map[string]any, key string, value any) map[string]any {

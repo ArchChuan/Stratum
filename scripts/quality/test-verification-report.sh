@@ -7,6 +7,7 @@ output=${TEST_VERIFY_REPORT_PATH:-$root/tmp/test-verification/completion-report.
 attestation_dir=${E2E_ATTESTATION_DIR:-$root/test/e2e/attestations}
 review_dir=${TEST_VERIFY_REVIEW_DIR:-$root/tmp/test-verification/reviews}
 signature_receipt=${TEST_VERIFY_SIGNATURE_RECEIPT:-}
+check_receipt=${TEST_VERIFY_CHECK_RECEIPT:-$root/tmp/test-verification/checks.json}
 trusted_repository=byteBuilderX/stratum
 oidc_issuer=https://token.actions.githubusercontent.com
 [[ -f "$plan" ]] || { printf 'verification plan is missing: %s\n' "$plan" >&2; exit 1; }
@@ -56,6 +57,19 @@ for review_type in "${required_reviews[@]}"; do
   reviews=$(jq --argjson receipt "$(cat "$receipt")" '. + [$receipt]' <<<"$reviews")
 done
 
+checks='[]'; checks_ok=false
+if [[ -f "$check_receipt" ]] && jq -e --arg commit "$commit" --arg manifest "$(jq -er .manifest_digest "$plan")" '
+  .version == 1 and .commit == $commit and .manifest_digest == $manifest and .issuer == "github-actions" and
+  (.results | type == "array" and length > 0 and all(.[];
+    .status == "passed" and (.id | length > 0) and (.evidence | length > 0)))' "$check_receipt" >/dev/null; then
+  planned=$(jq -cS '.checks | sort' "$plan")
+  reported=$(jq -cS '[.results[].id] | sort | unique' "$check_receipt")
+  if [[ "$planned" == "$reported" ]]; then
+    checks=$(jq -c '.results' "$check_receipt")
+    checks_ok=true
+  fi
+fi
+
 signed=false; bundle=unavailable; signature_ok=false
 signer_workflow=github.com/$trusted_repository/.github/workflows/stateful-e2e.yml
 [[ "$risk" == R4 ]] && signer_workflow=github.com/$trusted_repository/.github/workflows/release-verification.yml
@@ -76,20 +90,20 @@ artifacts=${TEST_VERIFY_RELEASE_ARTIFACTS_JSON:-[]}
 jq -e 'type == "array" and all(.[]; test("^sha256:[0-9a-f]{64}$"))' <<<"$artifacts" >/dev/null
 [[ "$risk" != R4 || $(jq length <<<"$artifacts") -gt 0 ]] || reviews_ok=false
 status=incomplete
-[[ "$reviews_ok" == true && "$signature_ok" == true ]] && status=accepted
+[[ "$reviews_ok" == true && "$checks_ok" == true && "$signature_ok" == true ]] && status=accepted
 
 mkdir -p "$(dirname "$output")"
 temporary=$output.tmp
 jq -n --argjson plan "$(cat "$plan")" --argjson evidence "$evidence" \
   --argjson capabilities "$capabilities" --argjson cleanup "$cleanup" \
-  --argjson reviews "$reviews" --argjson artifacts "$artifacts" --arg status "$status" \
+  --argjson reviews "$reviews" --argjson checks "$checks" --argjson artifacts "$artifacts" --arg status "$status" \
   --arg path "$selected" --argjson signed "$signed" --arg bundle "$bundle" '
   def attestation_summary:
     if $evidence == null then null else
       {schema:$evidence.schema_version,verified:true,signed:$signed,issuer:"github-actions-sigstore",path:$path,bundle:$bundle}
     end;
   {version:1,status:$status,commit:$plan.commit,manifest_digest:$plan.manifest_digest,
-   risk_level:$plan.risk_level,mode:$plan.mode,reviews:$reviews,
+   risk_level:$plan.risk_level,mode:$plan.mode,reviews:$reviews,checks:$checks,
    capabilities:$capabilities,attestation:attestation_summary,cleanup:$cleanup,
    artifacts:$artifacts}' >"$temporary"
 mv "$temporary" "$output"

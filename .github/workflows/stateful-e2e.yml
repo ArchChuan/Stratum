@@ -88,13 +88,24 @@ jobs:
         with: {node-version: "22", cache: npm, cache-dependency-path: web/package-lock.json}
       - run: npm ci --prefix web
       - run: npx --prefix web playwright install --with-deps chromium
+      - name: Generate verification plan
+        env: {TEST_VERIFY_RISK_LEVEL: R3}
+        run: make test-verify-plan
+      - name: Run planned non-soak checks
+        run: |
+          make risk-guardrails code-quality
+          go vet ./...
+          go test -short ./...
+          go test ./... -count=1
+          make contract-test fe-lint fe-build
+      - name: Run short browser E2E
+        run: make e2e-system-short
       - uses: actions/download-artifact@v4
         with: {pattern: '*-review-receipt', path: tmp/test-verification/reviews, merge-multiple: true}
       - name: Run stateful browser E2E
         run: make e2e-system-soak
-      - name: Generate and verify plan
-        env: {TEST_VERIFY_RISK_LEVEL: R3}
-        run: make test-verify-plan && make test-verify-attestation E2E_REQUIRED_MODE=soak E2E_REQUIRED_PROFILE=test
+      - name: Verify planned soak evidence
+        run: make test-verify-attestation E2E_REQUIRED_MODE=soak E2E_REQUIRED_PROFILE=test
       - id: evidence
         name: Resolve current evidence
         run: |
@@ -119,9 +130,13 @@ jobs:
           jq -n --arg bundle "$BUNDLE_PATH" --arg source_ref "$GITHUB_REF" \
             '{bundle:$bundle,source_ref:$source_ref}' \
             > tmp/test-verification/signature-receipt.json
+      - name: Record commit-bound planned checks
+        run: bash scripts/quality/write-verification-check-receipt.sh \
+          tmp/test-verification/plan.json tmp/test-verification/checks.json
       - name: Produce authoritative completion report
         env:
           TEST_VERIFY_SIGNATURE_RECEIPT: tmp/test-verification/signature-receipt.json
+          TEST_VERIFY_CHECK_RECEIPT: tmp/test-verification/checks.json
           TEST_VERIFY_REQUIRE_ACCEPTED: "true"
         run: make test-verify-report E2E_REQUIRED_MODE=soak E2E_REQUIRED_PROFILE=test
       - if: failure()
@@ -135,5 +150,6 @@ jobs:
             test/e2e/attestations/
             tmp/test-verification/plan.json
             tmp/test-verification/completion-report.json
+            tmp/test-verification/checks.json
             tmp/test-verification/signature-receipt.json
           retention-days: 30

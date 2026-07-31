@@ -3,7 +3,7 @@
   "$id": "https://stratum.local/schemas/completion-report.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "status", "commit", "manifest_digest", "risk_level", "mode", "reviews", "capabilities", "attestation", "cleanup", "artifacts"],
+  "required": ["version", "status", "commit", "manifest_digest", "risk_level", "mode", "reviews", "checks", "capabilities", "attestation", "cleanup", "artifacts"],
   "properties": {
     "version": { "const": 1 },
     "status": { "enum": ["accepted", "failed", "blocked", "incomplete"] },
@@ -12,6 +12,7 @@
     "risk_level": { "enum": ["R0", "R1", "R2", "R3", "R4"] },
     "mode": { "enum": ["none", "short", "soak", "release-soak"] },
     "reviews": { "type": "array", "items": { "$ref": "#/$defs/review" }, "uniqueItems": true },
+    "checks": { "type": "array", "items": { "$ref": "#/$defs/check" } },
     "capabilities": {
       "type": "object",
       "additionalProperties": false,
@@ -71,7 +72,8 @@
             }
           },
           "cleanup": { "properties": { "complete": { "const": true }, "residual_entities": { "const": 0 } } },
-          "reviews": { "items": { "properties": { "status": { "const": "passed" } } } }
+          "reviews": { "items": { "properties": { "status": { "const": "passed" } } } },
+          "checks": { "minItems": 1, "items": { "properties": { "status": { "const": "passed" } } } }
         }
       }
     },
@@ -168,6 +170,15 @@
     }
   ],
   "$defs": {
+    "check": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "status", "evidence"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["passed", "failed", "blocked"] },
+        "evidence": { "type": "string", "minLength": 1 }
+      }
+    },
     "review": {
       "type": "object", "additionalProperties": false,
       "required": ["type", "status", "reviewer", "commit", "policy_version", "findings", "evidence"],

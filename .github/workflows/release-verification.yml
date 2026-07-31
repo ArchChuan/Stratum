@@ -65,6 +65,17 @@ jobs:
       - uses: actions/setup-node@v4
         with: {node-version: "22", cache: npm, cache-dependency-path: web/package-lock.json}
       - run: npm ci --prefix web && npx --prefix web playwright install --with-deps chromium
+      - name: Generate release verification plan
+        env: {TEST_VERIFY_RELEASE_INTENT: "true"}
+        run: make test-verify-plan
+      - name: Run planned non-release checks
+        run: |
+          make risk-guardrails code-quality
+          go vet ./...
+          go test -short ./...
+          go test ./... -count=1
+          make contract-test fe-lint fe-build
+          make e2e-system-short
       - name: Download deployment evidence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -120,20 +131,25 @@ jobs:
             > tmp/signature-receipt.json
       - uses: actions/download-artifact@v4
         with: {pattern: 'release-*-review*', path: tmp/test-verification/reviews, merge-multiple: true}
+      - name: Record commit-bound planned checks
+        run: bash scripts/quality/write-verification-check-receipt.sh \
+          tmp/test-verification/plan.json tmp/test-verification/checks.json
       - name: Produce R4 completion report
         env:
           TEST_VERIFY_RELEASE_INTENT: "true"
           TEST_VERIFY_SIGNATURE_RECEIPT: tmp/signature-receipt.json
+          TEST_VERIFY_CHECK_RECEIPT: tmp/test-verification/checks.json
           TEST_VERIFY_REQUIRE_ACCEPTED: "true"
         run: |
           artifacts=$(jq -c '[.images[] | capture("@(?<digest>sha256:[0-9a-f]{64})$").digest]' \
             tmp/deployment-evidence/deployment-receipt.json)
-          TEST_VERIFY_RELEASE_ARTIFACTS_JSON="$artifacts" make test-verify-plan test-verify-report
+          TEST_VERIFY_RELEASE_ARTIFACTS_JSON="$artifacts" make test-verify-report
       - uses: actions/upload-artifact@v4
         with:
           name: release-verification
           path: |
             test/e2e/attestations/
             tmp/test-verification/completion-report.json
+            tmp/test-verification/checks.json
             tmp/signature-receipt.json
           retention-days: 90
