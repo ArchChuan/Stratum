@@ -24,6 +24,12 @@ grep -Fq 'gh attestation verify' "$ci"
 grep -Fq 'environment: specification-review' "$ci"
 grep -Fq 'environment: code-quality-review' "$ci"
 grep -Fq 'TEST_VERIFY_SIGNATURE_RECEIPT' "$ci"
+stateful_job=$(awk '
+  /^  stateful-e2e:/ { capture=1 }
+  capture && /^  [a-zA-Z0-9_-]+:/ && !/^  stateful-e2e:/ { exit }
+  capture { print }
+' "$ci")
+grep -Fq 'fetch-depth: 0' <<<"$stateful_job"
 grep -Fq 'PolicyManifestPath' internal/platform/e2eattestation/attestation.go
 grep -Fq -- '--bundle' scripts/quality/test-verification-report.sh
 grep -Fq -- '--signer-workflow' scripts/quality/test-verification-report.sh
@@ -78,4 +84,5 @@ fi
 
 go test ./internal/platform/e2eattestation ./cmd/e2e-attestation \
   -run 'Attestation|AcceptanceProfile|RunRejects|RunTopology' -count=1
+bash scripts/quality/test-verification-report-test.sh
 printf 'E2E attestation guard tests passed\n'

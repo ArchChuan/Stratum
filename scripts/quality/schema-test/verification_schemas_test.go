@@ -25,7 +25,7 @@ func TestVerificationSchemas(t *testing.T) {
 		{name: "accepts authoritative report", schema: report, value: validReport},
 		{
 			name: "accepts R0 report without reviews", schema: report,
-			value: reportWithRisk(validReport, "R0", []any{}),
+			value: reportWithoutE2E(validReport, "R0", []any{}),
 		},
 		{
 			name: "rejects R1 report without code quality review", schema: report,
@@ -33,7 +33,11 @@ func TestVerificationSchemas(t *testing.T) {
 		},
 		{
 			name: "accepts R1 report with code quality review", schema: report,
-			value: reportWithRisk(validReport, "R1", []any{review("code-quality", "passed")}),
+			value: reportWithoutE2E(validReport, "R1", []any{review("code-quality", "passed")}),
+		},
+		{
+			name: "rejects none mode with an E2E attestation", schema: report,
+			value: changed(reportWithRisk(validReport, "R0", []any{}), "mode", "none"), wantErr: true,
 		},
 		{
 			name: "rejects R2 report without reviews", schema: report,
@@ -166,6 +170,16 @@ func reportWithReviews(src map[string]any, reviews []any) map[string]any {
 
 func reportWithRisk(src map[string]any, risk string, reviews []any) map[string]any {
 	return changed(reportWithReviews(src, reviews), "risk_level", risk)
+}
+
+func reportWithoutE2E(src map[string]any, risk string, reviews []any) map[string]any {
+	report := reportWithRisk(src, risk, reviews)
+	report["mode"] = "none"
+	report["attestation"] = nil
+	report["capabilities"] = map[string]any{
+		"passed": 0, "failed": 0, "blocked": 0, "skipped": 0, "unreconciled": 0,
+	}
+	return report
 }
 
 func review(reviewType, status string) map[string]any {

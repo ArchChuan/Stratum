@@ -25,17 +25,22 @@
       }
     },
     "attestation": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["schema", "verified", "signed", "issuer", "path", "bundle"],
-      "properties": {
-        "schema": { "const": 2 },
-        "verified": { "type": "boolean" },
-        "signed": { "type": "boolean" },
-        "issuer": { "const": "github-actions-sigstore" },
-        "path": { "type": "string", "minLength": 1 },
-        "bundle": { "type": "string", "minLength": 1 }
-      }
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schema", "verified", "signed", "issuer", "path", "bundle"],
+          "properties": {
+            "schema": { "const": 2 },
+            "verified": { "type": "boolean" },
+            "signed": { "type": "boolean" },
+            "issuer": { "const": "github-actions-sigstore" },
+            "path": { "type": "string", "minLength": 1 },
+            "bundle": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
     },
     "cleanup": {
       "type": "object",
@@ -65,9 +70,40 @@
               "unreconciled": { "const": 0 }
             }
           },
-          "attestation": { "properties": { "verified": { "const": true }, "signed": { "const": true } } },
           "cleanup": { "properties": { "complete": { "const": true }, "residual_entities": { "const": 0 } } },
           "reviews": { "items": { "properties": { "status": { "const": "passed" } } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "none" } }, "required": ["mode"] },
+      "then": {
+        "properties": {
+          "attestation": { "type": "null" },
+          "capabilities": {
+            "properties": {
+              "passed": { "const": 0 },
+              "failed": { "const": 0 },
+              "blocked": { "const": 0 },
+              "skipped": { "const": 0 },
+              "unreconciled": { "const": 0 }
+            }
+          }
+        }
+      },
+      "else": { "properties": { "attestation": { "type": "object" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": { "const": "accepted" },
+          "mode": { "enum": ["short", "soak", "release-soak"] }
+        },
+        "required": ["status", "mode"]
+      },
+      "then": {
+        "properties": {
+          "attestation": { "properties": { "verified": { "const": true }, "signed": { "const": true } } }
         }
       }
     },

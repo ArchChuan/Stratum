@@ -12,6 +12,7 @@ for target in plan local ci attestation report; do
 done
 grep -Fq 'scripts/quality/test-verification-plan.sh' "$makefile"
 grep -Fq 'scripts/quality/test-verification-report.sh' "$makefile"
+grep -Eq '^test-verify-report:[[:space:]]*$' "$makefile"
 grep -Fq 'e2e-attestation-check' "$makefile"
 grep -Fq 'verification-schema' "$makefile"
 
