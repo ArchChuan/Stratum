@@ -49,17 +49,17 @@ select_attestation() {
 
 record_outcome() {
   local outcome=$1
-  LOCAL_VERIFY_OUTCOME=$outcome "$writer"
+  LOCAL_VERIFY_OUTCOME=$outcome bash "$writer"
 }
 
-"$plan_command" >/dev/null
+bash "$plan_command" >/dev/null
 [[ -f "$plan" ]] || { printf 'before-PR verification plan is missing: %s\n' "$plan" >&2; exit 1; }
 mode=$(jq -er .mode "$plan")
 commit=$(jq -er .commit "$plan")
 manifest_digest=$(jq -er .manifest_digest "$plan")
 
 first_failure=0
-"$checks_command" || first_failure=$?
+bash "$checks_command" || first_failure=$?
 if ((first_failure == 0)); then
   run_browser_mode "$mode" || first_failure=$?
 fi
@@ -74,6 +74,6 @@ if [[ "$mode" != none ]] && ! select_attestation "$commit" "$manifest_digest"; t
 fi
 record_outcome "$outcome" >/dev/null || { ((first_failure != 0)) || first_failure=$?; }
 if ((first_failure == 0)); then
-  "$checker" >/dev/null || first_failure=$?
+  bash "$checker" >/dev/null || first_failure=$?
 fi
 exit "$first_failure"

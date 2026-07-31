@@ -24,6 +24,7 @@ write_command plan plan
 write_command focused focused
 write_command writer write-report
 write_command checker check-report
+chmod 0644 "$test_dir/plan" "$test_dir/focused" "$test_dir/writer" "$test_dir/checker"
 
 run_case() {
   local risk=$1 mode=$2 expected=$3
