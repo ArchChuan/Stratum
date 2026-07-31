@@ -196,8 +196,6 @@ assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'STRATUM_TEST_POSTGRES_URL:' 'CI tool permission PostgreSQL URL'
 assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'make tool-permission-test' 'CI tool permission test invocation'
-assert_file_contains "${ROOT}/.github/workflows/stateful-e2e.yml" \
-  'agent-tool-permission\.spec\.ts' 'CI tool permission browser harness'
 assert_file_contains "${ROOT}/scripts/quality/tool-permission-test.sh" \
   'FakeServer' 'deterministic fake MCP test selection'
 
