@@ -72,6 +72,8 @@ func TestVerifyAttestationEnforcesAcceptanceProfileDuration(t *testing.T) {
 	}{
 		{name: "test minimum", mode: "soak", profile: AcceptanceProfileTest, duration: 600,
 			requiredMode: "soak", requiredProfile: AcceptanceProfileTest},
+		{name: "soak satisfies short minimum", mode: "soak", profile: AcceptanceProfileTest, duration: 600,
+			requiredMode: "short"},
 		{name: "test below minimum", mode: "soak", profile: AcceptanceProfileTest, duration: 599,
 			requiredMode: "soak", requiredProfile: AcceptanceProfileTest, wantError: "below test minimum"},
 		{name: "release minimum", mode: "soak", profile: AcceptanceProfileRelease, duration: 3600,
@@ -203,6 +205,8 @@ func validResults(now time.Time) SafeResults {
 		SequenceDigest: strings.Repeat("a", 64), Evidence: EvidenceCounts{UI: 1, HTTP: 1, Database: 1, Reconciled: 1},
 		Cleanup: CleanupResult{Passed: true, ResidualEntityIDs: []string{}}, UnverifiedCapabilities: []string{},
 		RiskClassification: "short", Status: StatusPassed,
+		RunTopology:  &RunTopology{RunID: "20260730t120102z-a1b2c3d4e5f60718", Host: "127.0.0.1", DatabaseName: "stratum_e2e_20260730t120102z_a1b2c3d4e5f60718", Ports: map[string]int{"frontend": 15174, "backend": 18081, "oauth": 19092, "fixture": 19093}},
+		OwnedCleanup: &OwnedCleanup{DatabaseDropped: true, LeaseRemoved: true},
 	}
 }
 

@@ -54,6 +54,16 @@ type CleanupResult struct {
 	Passed            bool     `json:"passed"`
 	ResidualEntityIDs []string `json:"residual_entity_ids"`
 }
+type RunTopology struct {
+	RunID        string         `json:"run_id"`
+	Host         string         `json:"host"`
+	Ports        map[string]int `json:"ports"`
+	DatabaseName string         `json:"database_name"`
+}
+type OwnedCleanup struct {
+	DatabaseDropped bool `json:"database_dropped"`
+	LeaseRemoved    bool `json:"lease_removed"`
+}
 
 type SafeResults struct {
 	TestedGitParent        string             `json:"tested_git_parent"`
@@ -74,6 +84,8 @@ type SafeResults struct {
 	UnverifiedCapabilities []string           `json:"unverified_capabilities"`
 	RiskClassification     string             `json:"risk_classification"`
 	Status                 string             `json:"status"`
+	RunTopology            *RunTopology       `json:"run_topology,omitempty"`
+	OwnedCleanup           *OwnedCleanup      `json:"owned_cleanup,omitempty"`
 }
 
 type Attestation struct {
@@ -112,7 +124,7 @@ func GenerateAttestation(root string, input SafeResults, options GenerateOptions
 	if options.Validity <= 0 {
 		options.Validity = defaultValidity
 	}
-	if err := validateAcceptanceProfile(input.Mode, input.AcceptanceProfile, input.DurationSeconds); err != nil {
+	if err := validateGenerateInput(input); err != nil {
 		return "", Attestation{}, err
 	}
 	sourceDigest, err := LocalSourceDigest(root)
@@ -139,7 +151,7 @@ func GenerateAttestation(root string, input SafeResults, options GenerateOptions
 		input.Artifacts[i].SHA256 = hex.EncodeToString(sum[:])
 	}
 	report := Attestation{
-		SchemaVersion:  1,
+		SchemaVersion:  2,
 		SourceDigest:   sourceDigest,
 		ManifestDigest: manifestDigest,
 		SafeResults:    input,
@@ -247,13 +259,81 @@ func verifyAttestationDigests(root string, report Attestation, options VerifyOpt
 }
 
 func verifyAttestationIdentity(report Attestation, options VerifyOptions) error {
-	if report.SchemaVersion != 1 {
+	if err := verifyAttestationEnvelope(report); err != nil {
+		return err
+	}
+	if report.SchemaVersion == 2 {
+		if err := verifyRunTopology(report.RunTopology, report.OwnedCleanup); err != nil {
+			return err
+		}
+	}
+	if err := verifyRequiredAcceptanceMode(report, options); err != nil {
+		return err
+	}
+	return validateAcceptanceProfile(report.Mode, report.AcceptanceProfile, report.DurationSeconds)
+}
+
+func verifyAttestationEnvelope(report Attestation) error {
+	if report.SchemaVersion != 1 && report.SchemaVersion != 2 {
 		return errors.New("unsupported attestation schema version")
 	}
 	if report.Status != StatusPassed {
 		return errors.New("attestation status is not passed")
 	}
-	if options.RequiredMode != "" && report.Mode != options.RequiredMode {
+	return nil
+}
+
+var topologyRunIDPattern = regexp.MustCompile(`^[0-9]{8}t[0-9]{6}z-[a-f0-9]{16}$`)
+var topologyDatabasePattern = regexp.MustCompile(`^stratum_e2e_[0-9]{8}t[0-9]{6}z_[a-f0-9]{16}$`)
+
+func verifyRunTopology(topology *RunTopology, cleanup *OwnedCleanup) error {
+	if topology == nil || cleanup == nil {
+		return errors.New("schema v2 requires run topology and owned cleanup")
+	}
+	if err := verifyTopologyIdentity(topology); err != nil {
+		return err
+	}
+	if err := verifyTopologyPorts(topology.Ports); err != nil {
+		return err
+	}
+	if !cleanup.DatabaseDropped || !cleanup.LeaseRemoved {
+		return errors.New("owned cleanup is incomplete")
+	}
+	return nil
+}
+
+func validateGenerateInput(input SafeResults) error {
+	if err := validateAcceptanceProfile(input.Mode, input.AcceptanceProfile, input.DurationSeconds); err != nil {
+		return err
+	}
+	return verifyRunTopology(input.RunTopology, input.OwnedCleanup)
+}
+
+func verifyTopologyIdentity(topology *RunTopology) error {
+	if !topologyRunIDPattern.MatchString(topology.RunID) || topology.Host != "127.0.0.1" || !topologyDatabasePattern.MatchString(topology.DatabaseName) {
+		return errors.New("invalid run topology identity")
+	}
+	return nil
+}
+
+func verifyTopologyPorts(ports map[string]int) error {
+	roles := []string{"frontend", "backend", "oauth", "fixture"}
+	seen := map[int]bool{}
+	if len(ports) != len(roles) {
+		return errors.New("run topology requires four role ports")
+	}
+	for _, role := range roles {
+		port := ports[role]
+		if port <= 0 || port > 65535 || seen[port] {
+			return errors.New("invalid or duplicate topology port")
+		}
+		seen[port] = true
+	}
+	return nil
+}
+
+func verifyRequiredAcceptanceMode(report Attestation, options VerifyOptions) error {
+	if !acceptanceModeSatisfies(report.Mode, options.RequiredMode) {
 		return fmt.Errorf("attestation mode %q does not satisfy required mode %q", report.Mode, options.RequiredMode)
 	}
 	if options.RequiredMode == "short" && options.RequiredProfile != "" {
@@ -269,6 +349,10 @@ func verifyAttestationIdentity(report Attestation, options VerifyOptions) error 
 		}
 	}
 	return validateAcceptanceProfile(report.Mode, report.AcceptanceProfile, report.DurationSeconds)
+}
+
+func acceptanceModeSatisfies(actual, required string) bool {
+	return required == "" || actual == required || (actual == "soak" && required == "short")
 }
 
 func verifyAttestationIntegrity(report Attestation) error {
