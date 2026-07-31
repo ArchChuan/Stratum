@@ -15,7 +15,8 @@ description: >-
 本 Skill 是 Stratum 唯一的测试、独立审查、系统验收和发布收口入口；不得创建平行 Test Skill。
 Claude Code、Codex 和人工开发都读取同一份 `.test/verification.yaml`，调用相同的仓库脚本和 CI。
 
-CI 是唯一验收权威。本地测试、Agent 自述和独立审查只能推动流程，不能签发 `accepted`。只有当前 commit、
+CI 是唯一验收权威。本地测试、Agent 自述和独立审查只能推动流程，不能签发 `accepted`。CI 必须使用
+GitHub Actions OIDC/Sigstore 签名运行 attestation，并消费受保护 environment 的 commit-bound review receipt。只有当前 commit、
 manifest digest、runner identity、capability、cleanup 和 artifact digest 对应的 attestation 验证通过后，
 本 Skill 才能报告完成。
 

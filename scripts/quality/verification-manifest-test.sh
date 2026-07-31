@@ -20,6 +20,11 @@ require 'quarantine_requires_owner:[[:space:]]*true' 'quarantine owner requireme
 require 'skipped_allowed:[[:space:]]*false' 'fail-closed skipped capability policy'
 require 'unreconciled_allowed:[[:space:]]*false' 'fail-closed unreconciled capability policy'
 require 'levels:[[:space:]]*\[R0, R1, R2, R3, R4\]' 'risk levels'
+require '^  default_level:[[:space:]]*R2$' 'default executable risk'
+require '^  release_level:[[:space:]]*R4$' 'release intent risk'
+for mapping in 'R0:.*mode: none' 'R1:.*mode: none' 'R2:.*mode: short' 'R3:.*mode: soak' 'R4:.*mode: release-soak'; do
+  require "^  ${mapping}" "${mapping%%:*} mode"
+done
 for level in R0 R1 R2 R3 R4; do require "^  ${level}:" "${level} checks"; done
 awk '
   /^    - id:/ { if (seen && !level) exit 1; seen=1; level=0 }

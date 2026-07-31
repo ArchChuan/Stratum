@@ -89,23 +89,23 @@ type SafeResults struct {
 }
 
 type Attestation struct {
-	SchemaVersion  int    `json:"schema_version"`
-	SourceDigest   string `json:"source_digest"`
-	ManifestDigest string `json:"manifest_digest"`
+	SchemaVersion        int    `json:"schema_version"`
+	SourceDigest         string `json:"source_digest"`
+	ManifestDigest       string `json:"manifest_digest"`
+	PolicyManifestDigest string `json:"policy_manifest_digest"`
 	SafeResults
 	ExpiresAt time.Time `json:"expires_at"`
-	Signature string    `json:"signature,omitempty"`
 }
 
 type GenerateOptions struct {
-	ManifestPath, OutputDir string
-	Now                     time.Time
-	Validity                time.Duration
+	ManifestPath, PolicyManifestPath, OutputDir string
+	Now                                         time.Time
+	Validity                                    time.Duration
 }
 type VerifyOptions struct {
-	ManifestPath, Ref, RequiredMode, RequiredProfile string
-	Now                                              time.Time
-	RequiredPacks                                    []string
+	ManifestPath, PolicyManifestPath, Ref, RequiredMode, RequiredProfile string
+	Now                                                                  time.Time
+	RequiredPacks                                                        []string
 }
 
 var credentialPatterns = []*regexp.Regexp{
@@ -131,9 +131,9 @@ func GenerateAttestation(root string, input SafeResults, options GenerateOptions
 	if err != nil {
 		return "", Attestation{}, err
 	}
-	manifestDigest, err := fileDigest(filepath.Join(root, options.ManifestPath))
+	manifestDigest, policyManifestDigest, err := attestationManifestDigests(root, options)
 	if err != nil {
-		return "", Attestation{}, fmt.Errorf("manifest digest: %w", err)
+		return "", Attestation{}, err
 	}
 	for i := range input.Artifacts {
 		artifactPath, pathErr := safeRepositoryPath(root, input.Artifacts[i].Path)
@@ -153,9 +153,9 @@ func GenerateAttestation(root string, input SafeResults, options GenerateOptions
 	report := Attestation{
 		SchemaVersion:  2,
 		SourceDigest:   sourceDigest,
-		ManifestDigest: manifestDigest,
-		SafeResults:    input,
-		ExpiresAt:      options.Now.Add(options.Validity),
+		ManifestDigest: manifestDigest, PolicyManifestDigest: policyManifestDigest,
+		SafeResults: input,
+		ExpiresAt:   options.Now.Add(options.Validity),
 	}
 	canonicalize(&report)
 	data, err := MarshalCanonical(report)
@@ -177,6 +177,18 @@ func GenerateAttestation(root string, input SafeResults, options GenerateOptions
 		return "", Attestation{}, fmt.Errorf("write attestation: %w", err)
 	}
 	return outputPath, report, nil
+}
+
+func attestationManifestDigests(root string, options GenerateOptions) (string, string, error) {
+	manifestDigest, err := fileDigest(filepath.Join(root, options.ManifestPath))
+	if err != nil {
+		return "", "", fmt.Errorf("manifest digest: %w", err)
+	}
+	policyDigest, err := fileDigest(filepath.Join(root, options.PolicyManifestPath))
+	if err != nil {
+		return "", "", fmt.Errorf("verification policy digest: %w", err)
+	}
+	return manifestDigest, policyDigest, nil
 }
 
 func VerifyAttestationFile(root, path string, options VerifyOptions) error {
@@ -255,6 +267,13 @@ func verifyAttestationDigests(root string, report Attestation, options VerifyOpt
 	if report.ManifestDigest != manifestDigest {
 		return errors.New("manifest digest mismatch")
 	}
+	policyManifestDigest, err := fileDigest(filepath.Join(root, options.PolicyManifestPath))
+	if err != nil {
+		return fmt.Errorf("verification policy digest: %w", err)
+	}
+	if report.PolicyManifestDigest != policyManifestDigest {
+		return errors.New("verification policy digest mismatch")
+	}
 	return nil
 }
 
@@ -310,7 +329,9 @@ func validateGenerateInput(input SafeResults) error {
 }
 
 func verifyTopologyIdentity(topology *RunTopology) error {
-	if !topologyRunIDPattern.MatchString(topology.RunID) || topology.Host != "127.0.0.1" || !topologyDatabasePattern.MatchString(topology.DatabaseName) {
+	validRun := topologyRunIDPattern.MatchString(topology.RunID)
+	validDatabase := topologyDatabasePattern.MatchString(topology.DatabaseName)
+	if !validRun || topology.Host != "127.0.0.1" || !validDatabase {
 		return errors.New("invalid run topology identity")
 	}
 	return nil

@@ -14,7 +14,15 @@ policy:
 
 risk:
   levels: [R0, R1, R2, R3, R4]
+  default_level: R2
+  release_level: R4
   rules:
+    - id: non-executable-docs
+      level: R0
+      paths: [docs/**, "*.md"]
+    - id: local-frontend-style
+      level: R1
+      paths: [web/src/**/*.css]
     - id: tenant-boundary
       level: R3
       paths: [internal/*/infrastructure/persistence/**, internal/tenant/**]
@@ -53,11 +61,11 @@ risk:
         - test/e2e/**
 
 levels:
-  R0: {checks: [docs-lint]}
-  R1: {checks: [static, unit, build, code-quality]}
-  R2: {checks: [static, unit, integration, contract, e2e-short]}
-  R3: {checks: [static, unit, integration, contract, e2e-short, domain-failure-paths, e2e-soak, specification-review, code-quality-review]}
-  R4: {checks: [static, unit, integration, contract, e2e-short, domain-failure-paths, e2e-soak, specification-review, code-quality-review, release-soak, deployment, production-verification]}
+  R0: {mode: none, checks: [docs-lint]}
+  R1: {mode: none, checks: [static, unit, build, code-quality]}
+  R2: {mode: short, checks: [static, unit, integration, contract, e2e-short]}
+  R3: {mode: soak, checks: [static, unit, integration, contract, e2e-short, domain-failure-paths, e2e-soak, specification-review, code-quality-review]}
+  R4: {mode: release-soak, checks: [static, unit, integration, contract, e2e-short, domain-failure-paths, e2e-soak, specification-review, code-quality-review, release-soak, deployment, production-verification]}
 
 capabilities:
   - id: platform-assistant

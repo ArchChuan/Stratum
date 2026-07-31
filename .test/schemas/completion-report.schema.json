@@ -11,10 +11,7 @@
     "manifest_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "risk_level": { "enum": ["R0", "R1", "R2", "R3", "R4"] },
     "mode": { "enum": ["none", "short", "soak", "release-soak"] },
-    "reviews": {
-      "type": "object",
-      "additionalProperties": { "enum": ["passed", "changes_requested", "blocked", "not_required"] }
-    },
+    "reviews": { "type": "array", "items": { "$ref": "#/$defs/review" }, "uniqueItems": true },
     "capabilities": {
       "type": "object",
       "additionalProperties": false,
@@ -30,11 +27,14 @@
     "attestation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema", "verified", "path"],
+      "required": ["schema", "verified", "signed", "issuer", "path", "bundle"],
       "properties": {
         "schema": { "const": 2 },
         "verified": { "type": "boolean" },
-        "path": { "type": "string", "minLength": 1 }
+        "signed": { "type": "boolean" },
+        "issuer": { "const": "github-actions-sigstore" },
+        "path": { "type": "string", "minLength": 1 },
+        "bundle": { "type": "string", "minLength": 1 }
       }
     },
     "cleanup": {
@@ -65,9 +65,9 @@
               "unreconciled": { "const": 0 }
             }
           },
-          "attestation": { "properties": { "verified": { "const": true } } },
+          "attestation": { "properties": { "verified": { "const": true }, "signed": { "const": true } } },
           "cleanup": { "properties": { "complete": { "const": true }, "residual_entities": { "const": 0 } } },
-          "artifacts": { "minItems": 1 }
+          "reviews": { "items": { "properties": { "status": { "const": "passed" } } } }
         }
       }
     },
@@ -82,9 +82,9 @@
       "then": {
         "properties": {
           "reviews": {
-            "required": ["code-quality"],
-            "properties": {
-              "code-quality": { "const": "passed" }
+            "contains": {
+              "properties": { "type": { "const": "code-quality" }, "status": { "const": "passed" } },
+              "required": ["type", "status"]
             }
           }
         }
@@ -101,8 +101,10 @@
       "then": {
         "properties": {
           "reviews": {
-            "required": ["specification"],
-            "properties": { "specification": { "const": "passed" } }
+            "contains": {
+              "properties": { "type": { "const": "specification" }, "status": { "const": "passed" } },
+              "required": ["type", "status"]
+            }
           }
         }
       }
@@ -118,11 +120,29 @@
       "then": {
         "properties": {
           "reviews": {
-            "required": ["release-evidence"],
-            "properties": { "release-evidence": { "const": "passed" } }
-          }
+            "contains": {
+              "properties": { "type": { "const": "release-evidence" }, "status": { "const": "passed" } },
+              "required": ["type", "status"]
+            }
+          },
+          "artifacts": { "minItems": 1 }
         }
       }
     }
-  ]
+  ],
+  "$defs": {
+    "review": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "status", "reviewer", "commit", "policy_version", "findings", "evidence"],
+      "properties": {
+        "type": { "enum": ["specification", "code-quality", "release-evidence"] },
+        "status": { "enum": ["passed", "changes_requested", "blocked"] },
+        "reviewer": { "type": "string", "minLength": 1 },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "policy_version": { "type": "integer", "minimum": 1 },
+        "findings": { "type": "array", "items": { "type": "string" } },
+        "evidence": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
 }

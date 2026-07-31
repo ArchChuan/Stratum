@@ -22,6 +22,9 @@ func TestVerifyAttestationRejectsInvalidClaims(t *testing.T) {
 		want   string
 	}{
 		{"manifest mismatch", func(a *Attestation) { a.ManifestDigest = strings.Repeat("0", 64) }, "manifest digest"},
+		{"verification policy mismatch", func(a *Attestation) {
+			a.PolicyManifestDigest = strings.Repeat("0", 64)
+		}, "verification policy digest"},
 		{"missing pack", func(a *Attestation) { a.Packs = a.Packs[1:] }, "required pack"},
 		{"skipped capability", func(a *Attestation) { a.Capabilities[0].Status = StatusSkipped }, "capability"},
 		{"missing capability", func(a *Attestation) { a.Capabilities = nil }, "required capability"},
@@ -47,7 +50,8 @@ func TestVerifyAttestationRejectsInvalidClaims(t *testing.T) {
 				requiredMode = "soak"
 			}
 			err := VerifyAttestation(root, copy, VerifyOptions{
-				Now: now, ManifestPath: "manifest.json", RequiredMode: requiredMode,
+				Now: now, ManifestPath: "manifest.json", PolicyManifestPath: "verification.yaml",
+				RequiredMode:  requiredMode,
 				RequiredPacks: []string{"agent", "iam"},
 			})
 			require.ErrorContains(t, err, tt.want)
@@ -96,7 +100,8 @@ func TestVerifyAttestationEnforcesAcceptanceProfileDuration(t *testing.T) {
 			candidate.AcceptanceProfile = tt.profile
 			candidate.DurationSeconds = tt.duration
 			err := VerifyAttestation(root, candidate, VerifyOptions{
-				Now: now, ManifestPath: "manifest.json", RequiredMode: tt.requiredMode,
+				Now: now, ManifestPath: "manifest.json", PolicyManifestPath: "verification.yaml",
+				RequiredMode:    tt.requiredMode,
 				RequiredProfile: tt.requiredProfile, RequiredPacks: []string{"agent", "iam"},
 			})
 			if tt.wantError == "" {
@@ -113,6 +118,7 @@ func TestGenerateAttestationCanonicalizesAndBindsSource(t *testing.T) {
 	root := initDigestRepository(t)
 	manifest := testManifest("agent.create", "iam.login")
 	require.NoError(t, os.WriteFile(filepath.Join(root, "manifest.json"), manifest, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "verification.yaml"), []byte("version: 1\n"), 0o600))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "test/e2e/attestations"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "test/e2e/attestations/safe.log"), []byte("safe evidence"), 0o600))
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
@@ -124,14 +130,16 @@ func TestGenerateAttestationCanonicalizesAndBindsSource(t *testing.T) {
 	input.Artifacts = []Artifact{{Kind: "safe_log", Path: "test/e2e/attestations/safe.log"}}
 
 	path, generated, err := GenerateAttestation(root, input, GenerateOptions{
-		ManifestPath: "manifest.json", OutputDir: "test/e2e/attestations", Now: now,
+		ManifestPath: "manifest.json", PolicyManifestPath: "verification.yaml",
+		OutputDir: "test/e2e/attestations", Now: now,
 	})
 	require.NoError(t, err)
 	require.Equal(t, []PackResult{{ID: "agent", Status: StatusPassed}, {ID: "iam", Status: StatusPassed}}, generated.Packs)
 	require.Equal(t, generated.SourceDigest+".json", filepath.Base(path))
 	require.Len(t, generated.Artifacts[0].SHA256, 64)
 	require.NoError(t, VerifyAttestationFile(root, path, VerifyOptions{
-		Now: now, ManifestPath: "manifest.json", RequiredPacks: []string{"agent", "iam"},
+		Now: now, ManifestPath: "manifest.json", PolicyManifestPath: "verification.yaml",
+		RequiredPacks: []string{"agent", "iam"},
 	}))
 }
 
@@ -166,6 +174,7 @@ func TestGenerateAttestationRejectsCredentialBearingArtifact(t *testing.T) {
 	t.Parallel()
 	root := initDigestRepository(t)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "manifest.json"), testManifest("agent.create"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "verification.yaml"), []byte("version: 1\n"), 0o600))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "test/e2e/attestations"), 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(root, "test/e2e/attestations/unsafe.log"), []byte("password=fixture-secret"), 0o600,
@@ -173,7 +182,8 @@ func TestGenerateAttestationRejectsCredentialBearingArtifact(t *testing.T) {
 	input := validResults(time.Now().UTC())
 	input.Artifacts = []Artifact{{Kind: "safe_log", Path: "test/e2e/attestations/unsafe.log"}}
 	_, _, err := GenerateAttestation(root, input, GenerateOptions{
-		ManifestPath: "manifest.json", OutputDir: "out", Now: time.Now().UTC(),
+		ManifestPath: "manifest.json", PolicyManifestPath: "verification.yaml",
+		OutputDir: "out", Now: time.Now().UTC(),
 	})
 	require.ErrorContains(t, err, "credential")
 }
@@ -196,6 +206,8 @@ func validAttestationFixture(t *testing.T) (string, Attestation, time.Time) {
 	root := initDigestRepository(t)
 	manifest := testManifest("agent.create")
 	require.NoError(t, os.WriteFile(filepath.Join(root, "manifest.json"), manifest, 0o600))
+	policyManifest := []byte("version: 1\npolicy:\n  authority: ci\n")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "verification.yaml"), policyManifest, 0o600))
 	artifact := []byte("safe evidence")
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "test/e2e/attestations"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "test/e2e/attestations/safe.log"), artifact, 0o600))
@@ -203,9 +215,11 @@ func validAttestationFixture(t *testing.T) (string, Attestation, time.Time) {
 	sourceDigest, err := LocalSourceDigest(root)
 	require.NoError(t, err)
 	manifestSum := sha256.Sum256(manifest)
+	policyManifestSum := sha256.Sum256(policyManifest)
 	artifactSum := sha256.Sum256(artifact)
 	report := Attestation{
 		SchemaVersion: 1, SourceDigest: sourceDigest, ManifestDigest: hex.EncodeToString(manifestSum[:]),
+		PolicyManifestDigest: hex.EncodeToString(policyManifestSum[:]),
 		SafeResults: SafeResults{
 			TestedGitParent: "HEAD", Browser: Browser{Name: "chromium", Version: "127"},
 			Mode: "short", Seed: 42, StartedAt: now.Add(-time.Minute), DurationSeconds: 60, HostClass: "developer",

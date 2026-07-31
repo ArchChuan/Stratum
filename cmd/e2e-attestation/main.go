@@ -54,6 +54,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		inputPath := flags.String("input", "", "safe results JSON")
 		outputDir := flags.String("output-dir", "test/e2e/attestations", "attestation output directory")
 		manifest := flags.String("manifest", "test/e2e/stateful/manifest.json", "coverage manifest")
+		policyManifest := flags.String("policy-manifest", ".test/verification.yaml", "verification policy manifest")
 		profile := flags.String("profile", "", "soak acceptance profile: test or release")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
@@ -76,7 +77,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("safe results profile %q does not match --profile %q", results.AcceptanceProfile, *profile)
 		}
 		path, _, err := e2eattestation.GenerateAttestation(*root, results, e2eattestation.GenerateOptions{
-			ManifestPath: *manifest, OutputDir: *outputDir,
+			ManifestPath: *manifest, PolicyManifestPath: *policyManifest, OutputDir: *outputDir,
 		})
 		if err != nil {
 			return err
@@ -101,6 +102,7 @@ func runVerify(args []string, stderr io.Writer) error {
 	path := flags.String("attestation", "", "attestation JSON")
 	directory := flags.String("attestation-dir", "", "directory containing run-specific attestations")
 	manifest := flags.String("manifest", "test/e2e/stateful/manifest.json", "coverage manifest")
+	policyManifest := flags.String("policy-manifest", ".test/verification.yaml", "verification policy manifest")
 	ref := flags.String("ref", "", "committed Git ref; defaults to local source")
 	requiredMode := flags.String("required-mode", "short", "required execution mode: short or soak")
 	requiredProfile := flags.String("required-profile", "", "required soak acceptance profile: test or release")
@@ -123,7 +125,7 @@ func runVerify(args []string, stderr io.Writer) error {
 		required = packs
 	}
 	options := e2eattestation.VerifyOptions{
-		ManifestPath: *manifest, Ref: *ref, RequiredMode: *requiredMode,
+		ManifestPath: *manifest, PolicyManifestPath: *policyManifest, Ref: *ref, RequiredMode: *requiredMode,
 		RequiredProfile: *requiredProfile, RequiredPacks: required,
 	}
 	if *path != "" {

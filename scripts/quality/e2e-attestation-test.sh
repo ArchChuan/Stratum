@@ -14,6 +14,24 @@ grep -Fq 'make e2e-system-soak' "$ci"
 grep -Fq 'specification-review' "$ci"
 grep -Fq 'code-quality-review' "$ci"
 grep -Fq 'completion-report.json' "$ci"
+grep -Fq 'actions/attest@v4' "$ci"
+grep -Fq 'gh attestation verify' "$ci"
+grep -Fq 'environment: specification-review' "$ci"
+grep -Fq 'environment: code-quality-review' "$ci"
+grep -Fq 'TEST_VERIFY_SIGNATURE_RECEIPT' "$ci"
+grep -Fq 'PolicyManifestPath' internal/platform/e2eattestation/attestation.go
+grep -Fq 'GITHUB_ACTIONS' scripts/quality/test-verification-report.sh
+grep -Fq 'subject_digest' scripts/quality/test-verification-report.sh
+if grep -Eq 'TEST_VERIFY_(SPEC|QUALITY|RELEASE)_REVIEW' scripts/quality/test-verification-report.sh "$ci"; then
+  printf 'verification workflow still accepts self-declared review status\n' >&2
+  exit 1
+fi
+
+release_ci="$root/.github/workflows/release-verification.yml"
+grep -Fq 'make e2e-system-release-soak' "$release_ci"
+grep -Fq 'environment: release-evidence-review' "$release_ci"
+grep -Fq 'environment: production-verification' "$release_ci"
+grep -Fq 'subject-digest:' "$release_ci"
 
 empty_attestations=$(mktemp -d)
 trap 'rm -rf "$empty_attestations"' EXIT
