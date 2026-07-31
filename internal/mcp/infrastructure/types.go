@@ -91,10 +91,22 @@ type MCPResponse struct {
 
 // ConnectionPoolConfig 定义连接池配置
 type ConnectionPoolConfig struct {
-	MaxConnections int           `yaml:"max_connections"`
-	IdleTimeout    time.Duration `yaml:"idle_timeout"`
-	MaxRetries     int           `yaml:"max_retries"`
-	RetryBackoff   time.Duration `yaml:"retry_backoff"`
+	// MaxConnections caps total concurrent MCP connections (all transports).
+	MaxConnections int `yaml:"max_connections"`
+	// MaxPerTenant caps concurrent MCP connections per tenant.
+	MaxPerTenant int `yaml:"max_per_tenant"`
+	// IdleTimeout evicts clients that have been idle longer than this duration.
+	IdleTimeout time.Duration `yaml:"idle_timeout"`
+	// CgroupEnable enables cgroups v2 resource limits for stdio child processes.
+	CgroupEnable bool `yaml:"cgroup_enable"`
+	// MemoryLimit is the per-tenant cgroup memory limit (bytes).
+	MemoryLimit int64 `yaml:"memory_limit"`
+	// CPULimit is the per-tenant cgroup CPU quota (microseconds per 100ms).
+	CPULimit int64 `yaml:"cpu_limit"`
+	// MaxRetries is deprecated and unused — retained for config compatibility.
+	MaxRetries int `yaml:"max_retries"`
+	// RetryBackoff is deprecated and unused — retained for config compatibility.
+	RetryBackoff time.Duration `yaml:"retry_backoff"`
 }
 
 // CacheConfig 定义缓存配置

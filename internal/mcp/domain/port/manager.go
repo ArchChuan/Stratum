@@ -18,6 +18,16 @@ type ServerManager interface {
 	ListResources(ctx context.Context, serverID string) ([]*domain.Resource, error)
 	GetServerInfo(ctx context.Context, serverID string) *domain.ServerInfo
 	GetAllServerInfo(ctx context.Context) []*domain.ServerInfo
+	// RemoveTenant disconnects all connections belonging to tenantID.
+	RemoveTenant(ctx context.Context, tenantID string) error
+	// Quota returns connection accounting for the tenant derived from ctx.
+	Quota(ctx context.Context) domain.Quota
+	// HandleForwardedToolCall executes a locally owned tool call on behalf of
+	// another cluster node (internal mTLS forwarding).
+	HandleForwardedToolCall(
+		ctx context.Context, tenantID, serverID, toolName string,
+		args map[string]any,
+	) (domain.ForwardedCallResult, error)
 }
 
 // ToolRegistry registers live MCP tools discovered from a server.

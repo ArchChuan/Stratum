@@ -28,9 +28,21 @@ export const mcpServerSchema = z
     status: z.string().optional().default('disconnected'),
     version: z.string().optional().default(''),
     tools: z.array(mcpToolSchema).optional(),
+    pid: z.number().optional(),
+    started_at: z.string().optional(),
+    error: z.string().optional(),
   })
   .passthrough();
 export type MCPServer = z.infer<typeof mcpServerSchema>;
+
+export const mcpQuotaSchema = z.object({
+  tenant_id: z.string(),
+  used: z.number(),
+  limit: z.number(),
+  healthy: z.number(),
+  dead: z.number(),
+});
+export type MCPQuota = z.infer<typeof mcpQuotaSchema>;
 
 export interface MCPRetryConfig {
   enabled: boolean;

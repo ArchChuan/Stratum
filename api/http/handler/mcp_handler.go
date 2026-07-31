@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/byteBuilderX/stratum/api/http/dto"
@@ -102,6 +103,11 @@ func (h *MCPHandler) ListResources(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"resources": resources, "count": len(resources)})
 }
 
+// GetQuota GET /mcp/quota
+func (h *MCPHandler) GetQuota(c *gin.Context) {
+	c.JSON(http.StatusOK, h.svc.GetQuota(c.Request.Context()))
+}
+
 // GetServerStatus GET /mcp/status
 func (h *MCPHandler) GetServerStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, h.svc.ServerStatus(c.Request.Context()))
@@ -136,6 +142,7 @@ func (h *MCPHandler) RegisterRoutes(router *gin.Engine, mw []gin.HandlerFunc, _ 
 	v1.DELETE("/servers/:id/config", admin(h.DeleteServerConfig)...)
 	v1.POST("/servers/:id/reconnect", admin(h.ReconnectServer)...)
 	v1.GET("/status", h.GetServerStatus)
+	v1.GET("/quota", h.GetQuota)
 }
 
 // GetServerConfig GET /mcp/servers/:id/config
@@ -192,7 +199,7 @@ func (h *MCPHandler) ConnectServer(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusBadRequest, err))
 		return
 	}
-	if err := h.svc.ConnectServer(c.Request.Context(), cfg); err != nil {
+	if err := h.svc.ConnectServer(context.WithoutCancel(c.Request.Context()), cfg); err != nil {
 		h.logger.Error("failed to connect MCP server",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", cfg.ID),
@@ -246,7 +253,7 @@ func (h *MCPHandler) ReconnectServer(c *gin.Context) {
 		return
 	}
 	serverID := c.Param("id")
-	if err := h.svc.ReconnectServer(c.Request.Context(), serverID); err != nil {
+	if err := h.svc.ReconnectServer(context.WithoutCancel(c.Request.Context()), serverID); err != nil {
 		h.logger.Error("failed to reconnect MCP server",
 			zap.String("trace_id", middleware.GetTraceID(c)),
 			zap.String("server_id", serverID),

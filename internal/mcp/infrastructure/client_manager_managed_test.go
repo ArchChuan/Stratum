@@ -18,7 +18,7 @@ import (
 
 func TestGetServerConfigDatabaseFailureIsNotNotFound(t *testing.T) {
 	pool := postgrestest.NewPool(t)
-	manager := NewClientManager(zap.NewNop(), nil, pool)
+	manager := NewClientManager(zap.NewNop(), nil, pool, "")
 	pool.Close()
 	ctx := tenantdb.WithTenant(t.Context(), &tenantdb.TenantContext{
 		TenantID: "database_failure",
@@ -42,7 +42,7 @@ func TestGetServerConfigLoadsPlatformManagedIdentity(t *testing.T) {
 		TenantID: tenantID,
 		Role:     tenantdb.RoleTenantAdmin,
 	})
-	manager := NewClientManager(zap.NewNop(), nil, pool)
+	manager := NewClientManager(zap.NewNop(), nil, pool, "")
 
 	cfg, err := manager.GetServerConfig(tenantCtx, platformmcp.SystemServerID)
 	if err != nil {

@@ -26,21 +26,29 @@ const TRANSPORT_COLORS: Record<string, string> = {
   http: 'cyan',
   'streamable-http': 'purple',
 };
-const STATUS_MAP: Record<string, 'success' | 'default' | 'error'> = {
+const STATUS_MAP: Record<string, 'success' | 'default' | 'error' | 'processing' | 'warning'> = {
   connected: 'success',
   disconnected: 'default',
+  connecting: 'processing',
+  idle: 'warning',
+  unhealthy: 'warning',
+  dead: 'error',
   error: 'error',
 };
 const STATUS_LABELS: Record<string, string> = {
   connected: '已连接',
   disconnected: '未连接',
+  connecting: '连接中',
+  idle: '空闲',
+  unhealthy: '异常',
+  dead: '已失效',
   error: '错误',
 };
 
 export const MCPServersPage = () => {
   const navigate = useNavigate();
   const { isAdmin } = useTenantRole();
-  const { servers, loading, detailServer, setDetailServer, fetchServers, handleDisconnect, handleReconnect, handleDelete } =
+  const { servers, loading, quota, detailServer, setDetailServer, fetchServers, handleDisconnect, handleReconnect, handleDelete } =
     useMCPServersPage();
 
   const columns = [
@@ -160,6 +168,22 @@ export const MCPServersPage = () => {
           )}
         </Space>
       </div>
+
+      {quota && (
+        <div style={{ marginBottom: 12, display: 'flex', gap: 16 }}>
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            MCP 服务器 <Text strong>{quota.used}/{quota.limit}</Text> 已用
+          </Text>
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            健康 <Text strong style={{ color: '#52c41a' }}>{quota.healthy}</Text>
+          </Text>
+          {quota.dead > 0 && (
+            <Text type="secondary" style={{ fontSize: 13 }}>
+              已失效 <Text strong type="danger">{quota.dead}</Text>
+            </Text>
+          )}
+        </div>
+      )}
 
       <Card style={{ borderRadius: 12, border: '1px solid #f0f0f0' }} styles={{ body: { padding: 0 } }}>
         <ResponsiveDataView

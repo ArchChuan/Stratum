@@ -10,3 +10,6 @@ var ErrServerNotFound = errors.New("mcp server not found")
 
 // ErrPlatformManagedServer rejects tenant lifecycle changes to the built-in MCP server.
 var ErrPlatformManagedServer = errors.New("platform-managed MCP server cannot be changed")
+
+// ErrConnectionLimitExceeded is returned when the global or per-tenant MCP connection cap is hit.
+var ErrConnectionLimitExceeded = errors.New("MCP connection limit exceeded")
