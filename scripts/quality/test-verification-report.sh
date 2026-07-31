@@ -71,7 +71,8 @@ if [[ -f "$check_receipt" ]] && jq -e --arg commit "$commit" --arg manifest "$(j
 fi
 
 signed=false; bundle=unavailable; signature_ok=false
-signer_workflow=github.com/$trusted_repository/.github/workflows/deploy.yml
+signer_workflow=github.com/$trusted_repository/.github/workflows/stateful-e2e.yml
+[[ "$risk" == R4 ]] && signer_workflow=github.com/$trusted_repository/.github/workflows/release-verification.yml
 if [[ -n "$selected" && -n "$signature_receipt" && -f "$signature_receipt" ]] && jq -e '
   (.bundle | length > 0) and (.source_ref | test("^refs/(heads/main|pull/[0-9]+/merge)$"))' \
   "$signature_receipt" >/dev/null; then
