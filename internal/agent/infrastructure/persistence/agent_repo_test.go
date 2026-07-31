@@ -354,8 +354,8 @@ func TestAgentRepo_UpdateSystemAssistantModel(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1, updated_at=NOW\\(\\).*RETURNING id").
-		WithArgs("qwen-plus").WillReturnRows(pgxmock.NewRows([]string{
+	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*updated_at=NOW\\(\\).*RETURNING id").
+		WithArgs("qwen-plus", "user", false, 10, 8000).WillReturnRows(pgxmock.NewRows([]string{
 		"id", "name", "type", "description", "system_prompt", "llm_model",
 		"max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled",
 	}).AddRow(domain.SystemAssistantID, "平台助手", string(domain.ReActAgent), "", "", "qwen-plus", 5, 0,
@@ -369,7 +369,7 @@ func TestAgentRepo_UpdateSystemAssistantModel(t *testing.T) {
 	pool.ExpectCommit()
 
 	repo := &PgAgentRepo{pool: pool}
-	cfg, err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus")
+	cfg, err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000)
 	if err != nil {
 		t.Fatalf("UpdateSystemAssistantModel: %v", err)
 	}
@@ -390,12 +390,12 @@ func TestAgentRepo_UpdateSystemAssistantModelNotFound(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1, updated_at=NOW\\(\\).*RETURNING id").
-		WithArgs("qwen-plus").WillReturnError(pgx.ErrNoRows)
+	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*updated_at=NOW\\(\\).*RETURNING id").
+		WithArgs("qwen-plus", "user", false, 10, 8000).WillReturnError(pgx.ErrNoRows)
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
-	_, err = repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus")
+	_, err = repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000)
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("expected not found, got %v", err)
 	}
@@ -413,8 +413,8 @@ func TestAgentRepo_UpdateSystemAssistantModelRelationFailureRollsBack(t *testing
 
 	pool.ExpectBegin()
 	pool.ExpectExec("SET LOCAL search_path").WillReturnResult(pgxmock.NewResult("SET", 0))
-	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1, updated_at=NOW\\(\\).*RETURNING id").
-		WithArgs("qwen-plus").WillReturnRows(pgxmock.NewRows([]string{
+	pool.ExpectQuery("UPDATE agents SET llm_model=\\$1.*updated_at=NOW\\(\\).*RETURNING id").
+		WithArgs("qwen-plus", "user", false, 10, 8000).WillReturnRows(pgxmock.NewRows([]string{
 		"id", "name", "type", "description", "system_prompt", "llm_model",
 		"max_iterations", "max_context_tokens", "memory_scope", "system_key", "checkpoint_enabled",
 	}).AddRow(domain.SystemAssistantID, "平台助手", string(domain.ReActAgent), "", "", "qwen-plus", 5, 0,
@@ -424,7 +424,7 @@ func TestAgentRepo_UpdateSystemAssistantModelRelationFailureRollsBack(t *testing
 	pool.ExpectRollback()
 
 	repo := &PgAgentRepo{pool: pool}
-	cfg, err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus")
+	cfg, err := repo.UpdateSystemAssistantModel(tenantCtx("t1"), "qwen-plus", "user", false, 10, 8000)
 	if err == nil || cfg != nil || !strings.Contains(err.Error(), "relations unavailable") {
 		t.Fatalf("expected rollback relation error, cfg=%+v err=%v", cfg, err)
 	}

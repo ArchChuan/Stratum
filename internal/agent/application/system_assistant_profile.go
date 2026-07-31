@@ -131,10 +131,11 @@ func ComposeSystemAssistantProfile(
 		Description:      cfg.Description,
 		SystemPrompt:     profile.SystemPrompt,
 		LLMModel:         cfg.LLMModel,
-		MaxIterations:    profile.MaxIterations,
-		MaxContextTokens: profile.MaxContextTokens,
+		MaxIterations:    cfg.MaxIterations,
+		MaxContextTokens: cfg.MaxContextTokens,
 		MemoryScope:      cfg.MemoryScope, SystemKey: profile.Key, IsSystem: true, ManagementMode: "platform",
-		MCPToolIDs: copyCfg.MCPToolIDs, KnowledgeWorkspaceIDs: copyCfg.KnowledgeWorkspaceIDs,
+		CheckpointEnabled: cfg.CheckpointEnabled,
+		MCPToolIDs:        copyCfg.MCPToolIDs, KnowledgeWorkspaceIDs: copyCfg.KnowledgeWorkspaceIDs,
 		AllowedSkills: copyCfg.AllowedSkills,
 	}, nil
 }
