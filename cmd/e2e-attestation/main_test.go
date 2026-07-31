@@ -2,12 +2,40 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestFindAttestationCandidatesRecursesBySourceDigest(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	digest := strings.Repeat("a", 64)
+	paths := []string{
+		filepath.Join(root, "run-b", digest+".json"),
+		filepath.Join(root, "run-a", digest+".json"),
+		filepath.Join(root, "run-a", strings.Repeat("b", 64)+".json"),
+	}
+	for _, path := range paths {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+		require.NoError(t, os.WriteFile(path, []byte("{}"), 0o600))
+	}
+
+	got, err := findAttestationCandidates(root, digest)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{paths[1], paths[0]}, got)
+}
+
+func TestFindAttestationCandidatesRejectsMissingDigest(t *testing.T) {
+	t.Parallel()
+	_, err := findAttestationCandidates(t.TempDir(), strings.Repeat("a", 64))
+	require.ErrorContains(t, err, "missing current source attestation")
+}
 
 func TestRunDigestPrintsLocalSourceDigest(t *testing.T) {
 	t.Parallel()

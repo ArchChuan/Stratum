@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 
 	"github.com/byteBuilderX/stratum/internal/iam/application"
@@ -16,6 +17,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
+
+// AvatarStore is the subset of filestore.AvatarStore used by auth handlers.
+type AvatarStore interface {
+	SaveAvatarMultipart(fh *multipart.FileHeader, userID string) (string, error)
+	DeleteAvatar(filename string) error
+}
 
 const refreshTokenCookie = "refresh_token"
 
@@ -40,6 +47,7 @@ type AuthHandlerDeps struct {
 	FrontendURL        string
 	GlobalAdmin        string
 	SecureCookies      bool
+	AvatarStore        AvatarStore
 }
 
 // AuthHandler implements the /auth/* HTTP routes.

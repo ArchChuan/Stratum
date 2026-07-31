@@ -7,6 +7,9 @@ config:
         method: GET
         preferred_ip_protocol: ip4
         follow_redirects: false
+        fail_if_ssl: false
+        tls_config:
+          insecure_skip_verify: true
         valid_status_codes:
           - 200
         fail_if_body_not_matches_regexp:
@@ -22,7 +25,7 @@ serviceMonitor:
     scrapeTimeout: 10s
   targets:
     - name: stratum-public-health
-      url: http://101.200.181.141:6879/api/health
+      url: https://101.200.181.141:8443/api/health
       module: stratum_http_health
       labels:
         release: kps

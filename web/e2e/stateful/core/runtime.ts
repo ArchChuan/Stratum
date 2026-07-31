@@ -15,7 +15,18 @@ export interface RuntimeOptions {
   maxCycles: number;
   seed: number;
   packs: SystemPack[];
+  urls: { api: string; web: string; fixture: string };
 }
+
+export const parseLoopbackBaseURL = (raw: string | undefined, name: string): string => {
+  if (!raw) throw new Error(`${name} is required`);
+  const value = new URL(raw);
+  if (value.protocol !== 'http:' || value.hostname !== '127.0.0.1' || !value.port || value.port === '0' ||
+      value.username || value.password || value.pathname !== '/' || value.search || value.hash) {
+    throw new Error(`${name} must be an explicit 127.0.0.1 HTTP base URL`);
+  }
+  return value.origin;
+};
 
 const parsePositiveInteger = (raw: string | undefined, fallback: number, name: string): number => {
   const value = raw === undefined ? fallback : Number(raw);
@@ -56,6 +67,14 @@ export const parseRuntimeOptions = (environment: NodeJS.ProcessEnv): RuntimeOpti
     throw new Error(`unknown stateful E2E pack in: ${requested.join(',')}`);
   }
   if (new Set(packs).size !== packs.length) throw new Error('stateful E2E packs must be unique');
+  const urls = {
+    api: parseLoopbackBaseURL(environment.E2E_API_URL, 'E2E_API_URL'),
+    web: parseLoopbackBaseURL(environment.E2E_WEB_URL, 'E2E_WEB_URL'),
+    fixture: parseLoopbackBaseURL(environment.E2E_FIXTURE_URL, 'E2E_FIXTURE_URL'),
+  };
+  if (new Set(Object.values(urls).map((value) => new URL(value).port)).size !== 3) {
+    throw new Error('stateful E2E role ports must be distinct');
+  }
   return {
     mode,
     acceptanceProfile,
@@ -63,5 +82,6 @@ export const parseRuntimeOptions = (environment: NodeJS.ProcessEnv): RuntimeOpti
     maxCycles: parsePositiveInteger(environment.STATEFUL_E2E_MAX_CYCLES, mode === 'short' ? 100 : 10_000, 'STATEFUL_E2E_MAX_CYCLES'),
     seed,
     packs: packs as SystemPack[],
+    urls,
   };
 };

@@ -42,4 +42,18 @@ type OnboardRepo interface {
 
 	// DeleteUser hard-deletes the user row; FK cascades remove tenant_members and refresh_tokens.
 	DeleteUser(ctx context.Context, userID string) error
+
+	// RegisterByUsername creates a local user (github_id='local:<username>') and joins the default tenant.
+	// Returns user UUID and tenant ID.
+	RegisterByUsername(ctx context.Context, username, passwordHash string) (userID, tenantID string, err error)
+	// FindByUsername looks up a local user by username. Returns zero values with found=false when absent.
+	FindByUsername(ctx context.Context, username string) (userID, passwordHash, globalRole string, found bool, err error)
+	// FindByUsernameWithLogin is like FindByUsername but also returns github_login (display name).
+	FindByUsernameWithLogin(ctx context.Context, username string) (userID, passwordHash, githubLogin, globalRole string, found bool, err error)
+	// FindUsernameByUserID returns the user's username (empty if not a password user).
+	FindUsernameByUserID(ctx context.Context, userID string) (string, error)
+	// GetUserTenantByUserID returns the user's default tenant ID and role by user UUID.
+	GetUserTenantByUserID(ctx context.Context, userID string) (tenantID, role string, err error)
+	// UpdateProfile updates the user's display name and/or avatar URL.
+	UpdateProfile(ctx context.Context, userID, displayName, avatarURL string) error
 }

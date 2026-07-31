@@ -68,13 +68,15 @@ require '^  build-feishu-adapter:' 'parallel Feishu adapter image build job'
 require '^  build-platform-mcp:' 'parallel platform MCP image build job'
 require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter,[[:space:]]*build-platform-mcp\]' \
     'image build fan-in dependencies'
-for job_scope in build-backend:backend build-frontend:frontend build-feishu-adapter:feishu-alert-adapter build-platform-mcp:platform-mcp; do
+for job_scope in build-backend:backend build-feishu-adapter:feishu-alert-adapter build-platform-mcp:platform-mcp; do
     job=${job_scope%%:*}
     scope=${job_scope#*:}
     require_job "${job}" '^    needs:[[:space:]]*test$' "${job} test dependency"
     require_job "${job}" "cache-from:[[:space:]]*type=gha,scope=${scope}" "${scope} cache import scope"
     require_job "${job}" "cache-to:[[:space:]]*type=gha,scope=${scope},mode=max" "${scope} cache export scope"
 done
+require_job build-frontend '^    needs:[[:space:]]*test$' 'frontend test dependency'
+require_job build-frontend 'no-cache:[[:space:]]*true' 'frontend GHA cache disabled (BuildKit bug)'
 require 'digest:[[:space:]]*\$\{\{ steps\.adapter-build\.outputs\.digest \}\}' \
     'adapter build digest job output'
 require 'adapter-digest:[[:space:]]*\$\{\{ needs\.build-feishu-adapter\.outputs\.digest \}\}' \
@@ -95,6 +97,10 @@ require 'adapter_digest="\$\{\{ needs\.build-and-push\.outputs\.adapter-digest \
 require '\$adapter_digest.*\^sha256:\[0-9a-f\]\{64\}\$' 'adapter digest validation missing'
 require 'FEISHU_ADAPTER_IMAGE:[[:space:]]*\$\{\{ env\.IMAGE_REPO \}\}/stratum-feishu-alert-adapter@\$\{\{ needs\.build-and-push\.outputs\.adapter-digest \}\}' \
     'adapter immutable digest is not passed to monitoring reconciliation'
+require 'feishu_adapter=\$\(kubectl get deployment stratum-feishu-alert-adapter -n monitoring' \
+    'deployment receipt does not read the deployed Feishu adapter image'
+require 'images:\{backend:\$backend,frontend:\$frontend,platform_mcp:\$platform_mcp,feishu_adapter:\$feishu_adapter\}' \
+    'deployment receipt does not bind the Feishu adapter image'
 require 'PATH="\$validator_dir:\$PATH" bash scripts/deploy-remote-monitoring\.sh' \
     'safe monitoring reconciliation entrypoint missing'
 require 'prom/prometheus:v3\.8\.1' 'pinned Prometheus validation tool image missing'
@@ -259,14 +265,17 @@ require_file "${DEMO_LOCAL_VALUES}" 'ginMode:[[:space:]]*"debug"' 'local demo Gi
 reject_file "${DEMO_LOCAL_VALUES}" 'http://([0-9]{1,3}\.){3}[0-9]{1,3}' \
     'local demo contains a remote IP URL'
 
-require_file "${REMOTE_HTTP_VALUES}" 'secureCookies:[[:space:]]*"false"' \
-    'remote HTTP profile disables secure cookies'
-require_file "${REMOTE_HTTP_VALUES}" 'router\.entrypoints:[[:space:]]*"web,web2"' \
-    'remote HTTP profile uses the Traefik web and public web2 entrypoints'
-require_file "${REMOTE_HTTP_VALUES}" 'host:[[:space:]]*""' 'remote HTTP profile uses a hostless Ingress'
-require_file "${REMOTE_HTTP_VALUES}" 'tls:[[:space:]]*\[\]' 'remote HTTP profile disables TLS'
+require_file "${REMOTE_HTTP_VALUES}" 'secureCookies:[[:space:]]*"true"' \
+    'remote HTTPS profile enables secure cookies'
+require_file "${REMOTE_HTTP_VALUES}" 'router\.entrypoints:[[:space:]]*"websecure"' \
+    'remote HTTPS profile uses only the TLS websecure entrypoint'
+require_file "${REMOTE_HTTP_VALUES}" 'router\.tls:[[:space:]]*"true"' \
+    'remote HTTPS profile enables Traefik router TLS'
+require_file "${REMOTE_HTTP_VALUES}" 'host:[[:space:]]*""' 'remote HTTPS profile uses a hostless Ingress'
+require_file "${REMOTE_HTTP_VALUES}" 'secretName:[[:space:]]*stratum-ingress-tls' \
+    'remote HTTPS profile references the stratum-ingress-tls Secret'
 reject_file "${REMOTE_HTTP_VALUES}" 'frontendUrl:|githubCallbackUrl:|http://([0-9]{1,3}\.){3}[0-9]{1,3}' \
-    'remote HTTP profile hard-codes its public address'
+    'remote HTTPS profile hard-codes its public address'
 
 require_file "${HELM_CONFIGMAP}" 'GIN_MODE:.*config\.ginMode' 'Gin mode ConfigMap entry'
 require_file "${HELM_DEPLOYMENT}" 'name:[[:space:]]*APP_ENV' 'application environment injection'
@@ -280,13 +289,12 @@ require '--set-string[[:space:]]+config\.githubCallbackUrl="\$PUBLIC_BASE_URL/ap
     'public OAuth callback URL injection'
 require 'kubectl get ingress -n stratum -o wide' 'deployed Ingress diagnostics'
 require 'kubectl get endpoints stratum stratum-frontend -n stratum' 'service endpoint diagnostics'
-require 'ss -H -ltnp.*sport = :80.*sport = :443.*sport = :6879' \
-    'host HTTP edge listener diagnostics'
-require 'http://127\.0\.0\.1/api/health' 'host-local Traefik health diagnostic'
-require '--header[[:space:]]+"Host:[[:space:]]*\$PUBLIC_AUTHORITY"[[:space:]]+http://127\.0\.0\.1/api/health' \
-    'host-local port 80 public Host diagnostic'
-require '--header[[:space:]]+"Host:[[:space:]]*\$PUBLIC_AUTHORITY"[[:space:]]+http://127\.0\.0\.1:6879/api/health' \
-    'host-local port 6879 public Host diagnostic'
+require 'ss -H -ltnp.*sport = :443.*sport = :8443' \
+    'host HTTPS edge listener diagnostics'
+require 'https://127\.0\.0\.1:8443/api/health' 'host-local Traefik HTTPS health diagnostic'
+require '--insecure' 'host-local HTTPS diagnostics tolerate self-signed certificates'
+require '--header[[:space:]]+"Host:[[:space:]]*\$PUBLIC_AUTHORITY"[[:space:]]+https://127\.0\.0\.1:8443/api/health' \
+    'host-local port 8443 public Host diagnostic'
 require 'kubectl get service traefik -n kube-system -o wide' 'Traefik service exposure diagnostics'
 require 'kubectl get service traefik -n kube-system -o json' 'Traefik service port mapping diagnostics'
 require 'kubectl get deployment traefik -n kube-system -o json' 'Traefik entrypoint argument diagnostics'

@@ -50,11 +50,12 @@ func run(logger *zap.Logger) error {
 
 func servePlatformMCP(ctx context.Context, cfg runtimeConfig, logger *zap.Logger) error {
 	metrics := observability.NewPrometheusMetrics(logger)
+	metrics.InitPlatformMCPMetrics()
 	reloader := infrastructure.NewTLSReloader(cfg.tlsFiles)
 	if err := reloader.Reload(); err != nil {
 		return fmt.Errorf("initialize Platform MCP TLS: %w", err)
 	}
-	if err := updateCertificateMetrics(reloader, metrics); err != nil {
+	if err := updateCertificateMetrics(reloader, metrics, logger); err != nil {
 		return err
 	}
 	httpClient, err := infrastructure.NewReloadableBackendClient(reloader, cfg.backendServerName)
@@ -140,7 +141,7 @@ func reloadTLSOnSignal(
 				logger.Error("platform_mcp.backend_tls.reload_failed", zap.Error(err))
 				continue
 			}
-			if err := updateCertificateMetrics(reloader, metrics); err != nil {
+			if err := updateCertificateMetrics(reloader, metrics, logger); err != nil {
 				metrics.SetPlatformMCPCertificateRotation("error", 1)
 				logger.Error("platform_mcp.tls.metrics_failed", zap.Error(err))
 				continue
@@ -155,12 +156,25 @@ func reloadTLSOnSignal(
 func updateCertificateMetrics(
 	reloader *infrastructure.TLSReloader,
 	metrics *observability.PrometheusMetrics,
+	logger *zap.Logger,
 ) error {
 	seconds, err := reloader.CertificateExpirySeconds()
 	if err != nil {
 		return fmt.Errorf("read Platform MCP certificate expiry: %w", err)
 	}
 	metrics.SetPlatformMCPCertificateExpiry(seconds)
+
+	leaf, err := reloader.CertificateLeaf()
+	if err != nil {
+		return err
+	}
+	logger.Info("platform_mcp.certificate",
+		zap.String("subject", leaf.Subject.String()),
+		zap.String("issuer", leaf.Issuer.String()),
+		zap.Time("not_after", leaf.NotAfter),
+		zap.Float64("remaining_seconds", seconds),
+		zap.Strings("dns_names", leaf.DNSNames),
+	)
 	return nil
 }
 

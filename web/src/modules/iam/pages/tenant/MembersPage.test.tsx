@@ -34,7 +34,7 @@ describe('MembersPage pagination', () => {
     });
     fetchPage.mockReset();
     vi.mocked(useTenantMembers).mockReturnValue({
-      user: { sub: 'owner-1', role: 'owner', avatar_url: '', github_login: 'owner' },
+      user: { sub: 'owner-1', role: 'owner', avatar_url: '', github_login: 'owner', username: '' },
       members: Array.from({ length: 20 }, (_, index) => ({
         user_id: `user-${index + 1}`,
         github_login: `member-${index + 1}`,

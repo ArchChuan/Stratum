@@ -197,7 +197,11 @@ assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
 assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'make tool-permission-test' 'CI tool permission test invocation'
 assert_file_contains "${ROOT}/.github/workflows/stateful-e2e.yml" \
-  'agent-tool-permission\.spec\.ts' 'CI tool permission browser harness'
+  'STATEFUL_E2E_PACKS:[[:space:]]*all' 'unified CI browser harness'
+assert_file_contains "${ROOT}/web/e2e/stateful/packs/agent-skill-mcp.ts" \
+  'agents\.tool\.approvals\.id\.decision' 'browser tool approval decision capability'
+assert_file_contains "${ROOT}/web/e2e/stateful/packs/agent-skill-mcp.ts" \
+  'agents\.tool\.approvals\.id\.resume' 'browser tool approval resume capability'
 assert_file_contains "${ROOT}/scripts/quality/tool-permission-test.sh" \
   'FakeServer' 'deterministic fake MCP test selection'
 
@@ -267,6 +271,16 @@ done
   echo 'IAM changes must require soak acceptance' >&2
   exit 1
 }
+for verification_path in \
+  scripts/e2e/system-stateful.sh \
+  cmd/e2e-attestation/main.go \
+  internal/platform/e2erunscope/scope.go \
+  .agents/skills/stratum-e2e-development/SKILL.md; do
+  [[ "$(/bin/bash "${CHECKER}" --acceptance "${verification_path}")" == soak ]] || {
+    echo "verification kernel change must require soak acceptance: ${verification_path}" >&2
+    exit 1
+  }
+done
 for monitoring_path in \
   monitoring/remote \
   monitoring/remote/rules/stratum-availability.yaml \

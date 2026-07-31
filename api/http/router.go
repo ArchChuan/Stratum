@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
@@ -48,6 +49,11 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerMCP(r, c, requireActive)
 	registerMemory(r, c, requireActive)
 	registerLLMAdmin(r, c, requireActive)
+	if c.Config.AvatarDir != "" {
+		r.GET("/avatars/:filename", func(ctx *gin.Context) {
+			ctx.File(filepath.Join(c.Config.AvatarDir, ctx.Param("filename")))
+		})
+	}
 	return r
 }
 
@@ -171,6 +177,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 		FrontendURL:        cfg.FrontendURL,
 		GlobalAdmin:        cfg.GlobalAdminGitHubLogin,
 		SecureCookies:      cfg.SecureCookies,
+		AvatarStore:        c.Platform.AvatarStore,
 	})
 	authLimiter := newRateLimiterStore(c, middleware.AuthRate, middleware.AuthBurst)
 	authRoutes := r.Group("/auth")
@@ -180,11 +187,17 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 			authRoutes.GET("/github/callback", middleware.RateLimit(authLimiter), authHandler.GitHubCallback)
 		}
 		authRoutes.POST("/register", middleware.RateLimit(authLimiter), authHandler.Register)
+		if cfg.PasswordAuthEnabled {
+			authRoutes.POST("/password/register", middleware.RateLimit(authLimiter), authHandler.UsernameRegister)
+			authRoutes.POST("/password/login", middleware.RateLimit(authLimiter), authHandler.UsernameLogin)
+		}
 		authRoutes.POST("/oauth/exchange", middleware.RateLimit(authLimiter), authHandler.OAuthExchange)
 		authRoutes.POST("/guest", middleware.RateLimit(authLimiter), authHandler.GuestLogin)
 		authRoutes.POST("/refresh", middleware.RateLimit(authLimiter), authHandler.Refresh)
 		authRoutes.POST("/logout", authHandler.Logout)
 		authRoutes.GET("/me", authHandler.Me)
+		authRoutes.PATCH("/me", authHandler.UpdateProfile)
+		authRoutes.POST("/me/avatar", authHandler.UploadAvatar)
 		authRoutes.POST("/switch-tenant", authHandler.SwitchTenant)
 		authRoutes.POST("/create-tenant", authHandler.CreateUserTenant)
 	}

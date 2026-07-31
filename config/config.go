@@ -18,6 +18,10 @@ type Config struct {
 	OtelEndpoint            string
 	PostgresURL             string
 	RedisURL                string
+	PasswordAuthEnabled     bool
+	AdminUsername           string
+	AdminPassword           string
+	AvatarDir               string
 	GitHubClientID          string
 	GitHubClientSecret      string
 	GitHubAuthorizeURL      string
@@ -120,6 +124,10 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg := &Config{
+		PasswordAuthEnabled:     getEnv("PASSWORD_AUTH_ENABLED", "") == "true",
+		AdminUsername:           getEnv("STRATUM_ADMIN_USERNAME", ""),
+		AdminPassword:           getEnv("STRATUM_ADMIN_PASSWORD", ""),
+		AvatarDir:               getEnv("AVATAR_DIR", "/data/avatars"),
 		Port:                    getEnv("PORT", "8080"),
 		NatsURL:                 natsURL,
 		MilvusHost:              getEnv("MILVUS_HOST", "localhost"),
