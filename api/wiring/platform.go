@@ -58,14 +58,7 @@ func (c *Container) buildPlatform(_ context.Context) error {
 		p.DashboardService = platformapp.NewDashboardService(platformpersistence.NewDashboardRepository(db))
 	}
 
-	if c.Config.AvatarDir != "" {
-		store, err := filestore.NewAvatarStore(c.Config.AvatarDir)
-		if err != nil {
-			c.Logger.Warn("avatar store unavailable, avatar upload disabled", zap.Error(err))
-		} else {
-			p.AvatarStore = store
-		}
-	}
+	c.initAvatarStore(p)
 
 	production := os.Getenv("APP_ENV") == "production"
 	if production {
@@ -103,6 +96,18 @@ func (c *Container) buildPlatform(_ context.Context) error {
 
 	c.Platform = p
 	return nil
+}
+
+func (c *Container) initAvatarStore(p *Platform) {
+	if c.Config.AvatarDir == "" {
+		return
+	}
+	store, err := filestore.NewAvatarStore(c.Config.AvatarDir)
+	if err != nil {
+		c.Logger.Warn("avatar store unavailable, avatar upload disabled", zap.Error(err))
+		return
+	}
+	p.AvatarStore = store
 }
 
 // parseRSAPrivateKey decodes a PEM-encoded RSA private key. It accepts both
