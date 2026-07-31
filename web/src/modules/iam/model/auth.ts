@@ -28,6 +28,7 @@ export const userSchema = z
     current_tenant: currentTenantSchema.nullable().optional(),
     avatar_url: z.string().optional().default(''),
     github_login: z.string().optional().default(''),
+    username: z.string().optional().default(''),
   })
   .passthrough();
 export type User = z.infer<typeof userSchema>;
