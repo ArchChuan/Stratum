@@ -390,29 +390,27 @@ jobs:
       - name: Diagnose ingress edge
         if: steps.candidate.outputs.current == 'true'
         run: |
-          PUBLIC_AUTHORITY="${PUBLIC_BASE_URL#http://}"
+          PUBLIC_AUTHORITY="${PUBLIC_BASE_URL#https://}"
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
             -i ~/.ssh/deploy_key root@${{ secrets.SSH_DEPLOY_HOST }} \
             bash -s -- "$PUBLIC_AUTHORITY" <<'REMOTE'
           PUBLIC_AUTHORITY="$1"
           echo "=== Host edge listeners ==="
-          ss -H -ltnp "( sport = :80 or sport = :443 or sport = :6879 )"
+          ss -H -ltnp "( sport = :443 or sport = :8443 )"
           echo "=== Host-local HTTP health ==="
           probe_status() {
             local label="$1"
             shift
-            if status=$(curl --silent --output /dev/null --max-time 5 \
+            if status=$(curl --silent --insecure --output /dev/null --max-time 5 \
               --write-out "%{http_code}" "$@"); then
               echo "$label status=$status"
             else
               echo "$label request failed before receiving an HTTP response"
             fi
           }
-          probe_status "host-local default Host" http://127.0.0.1/api/health
-          probe_status "host-local port 80 public Host" \
-            --header "Host: $PUBLIC_AUTHORITY" http://127.0.0.1/api/health
-          probe_status "host-local port 6879 public Host" \
-            --header "Host: $PUBLIC_AUTHORITY" http://127.0.0.1:6879/api/health
+          probe_status "host-local default Host" https://127.0.0.1:8443/api/health
+          probe_status "host-local port 8443 public Host" \
+            --header "Host: $PUBLIC_AUTHORITY" https://127.0.0.1:8443/api/health
           REMOTE
           echo "=== Traefik service ==="
           kubectl get service traefik -n kube-system -o wide
@@ -595,7 +593,7 @@ jobs:
           fi
           echo "internal frontend health status=200"
 
-          if ! public_status=$(curl --silent --output "$public_health_body" --max-time 15 \
+          if ! public_status=$(curl --silent --insecure --output "$public_health_body" --max-time 15 \
             --write-out '%{http_code}' "$PUBLIC_BASE_URL/api/health"); then
             echo "public health request failed before receiving an HTTP response" >&2
             exit 1
