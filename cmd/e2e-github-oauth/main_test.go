@@ -16,6 +16,34 @@ const (
 	testCallbackURL  = "http://127.0.0.1:18080/auth/github/callback"
 )
 
+func TestProviderHealthRequiresCurrentRunnerIdentity(t *testing.T) {
+	t.Parallel()
+	handler := newProvider(providerConfig{instanceID: "run-1"}).routes()
+	tests := []struct {
+		name   string
+		header string
+		status int
+	}{
+		{name: "current runner", header: "run-1", status: http.StatusNoContent},
+		{name: "different runner", header: "run-2", status: http.StatusConflict},
+		{name: "missing identity", status: http.StatusConflict},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/health", nil)
+			request.Header.Set("X-Stratum-E2E-Instance", tt.header)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != tt.status {
+				t.Fatalf("status = %d, want %d", response.Code, tt.status)
+			}
+			if tt.status == http.StatusNoContent && response.Header().Get("X-Stratum-E2E-Instance") != "run-1" {
+				t.Fatal("missing identity response header")
+			}
+		})
+	}
+}
+
 func TestProviderCompletesAuthorizeTokenAndProfileProtocol(t *testing.T) {
 	provider := newProvider(providerConfig{
 		clientID: testClientID, clientSecret: testClientSecret, callbackURL: testCallbackURL,

@@ -72,6 +72,8 @@ func TestVerifyAttestationEnforcesAcceptanceProfileDuration(t *testing.T) {
 	}{
 		{name: "test minimum", mode: "soak", profile: AcceptanceProfileTest, duration: 600,
 			requiredMode: "soak", requiredProfile: AcceptanceProfileTest},
+		{name: "soak satisfies short minimum", mode: "soak", profile: AcceptanceProfileTest, duration: 600,
+			requiredMode: "short"},
 		{name: "test below minimum", mode: "soak", profile: AcceptanceProfileTest, duration: 599,
 			requiredMode: "soak", requiredProfile: AcceptanceProfileTest, wantError: "below test minimum"},
 		{name: "release minimum", mode: "soak", profile: AcceptanceProfileRelease, duration: 3600,
@@ -131,6 +133,60 @@ func TestGenerateAttestationCanonicalizesAndBindsSource(t *testing.T) {
 	require.NoError(t, VerifyAttestationFile(root, path, VerifyOptions{
 		Now: now, ManifestPath: "manifest.json", RequiredPacks: []string{"agent", "iam"},
 	}))
+}
+
+func TestVerifyRunTopologyRequiresAllRuntimePorts(t *testing.T) {
+	t.Parallel()
+	validResults := validResults(time.Now().UTC())
+	tests := []struct {
+		name   string
+		mutate func(**RunTopology, **OwnedCleanup)
+	}{
+		{name: "valid", mutate: func(**RunTopology, **OwnedCleanup) {}},
+		{name: "missing topology", mutate: func(topology **RunTopology, _ **OwnedCleanup) { *topology = nil }},
+		{name: "wrong host", mutate: func(topology **RunTopology, _ **OwnedCleanup) { (*topology).Host = "localhost" }},
+		{name: "unsafe database", mutate: func(topology **RunTopology, _ **OwnedCleanup) {
+			(*topology).DatabaseName = "postgres"
+		}},
+		{name: "database identity mismatch", mutate: func(topology **RunTopology, _ **OwnedCleanup) {
+			(*topology).DatabaseName = "stratum_e2e_20260730t120102z_1111111111111111"
+		}},
+		{name: "missing Platform MCP", mutate: func(topology **RunTopology, _ **OwnedCleanup) {
+			delete((*topology).Ports, "platform_mcp")
+		}},
+		{name: "missing internal API", mutate: func(topology **RunTopology, _ **OwnedCleanup) {
+			delete((*topology).Ports, "internal_api")
+		}},
+		{name: "non-positive port", mutate: func(topology **RunTopology, _ **OwnedCleanup) {
+			(*topology).Ports["fixture"] = 0
+		}},
+		{name: "duplicate internal API", mutate: func(topology **RunTopology, _ **OwnedCleanup) {
+			(*topology).Ports["internal_api"] = (*topology).Ports["backend"]
+		}},
+		{name: "missing cleanup", mutate: func(_ **RunTopology, cleanup **OwnedCleanup) { *cleanup = nil }},
+		{name: "database not dropped", mutate: func(_ **RunTopology, cleanup **OwnedCleanup) {
+			(*cleanup).DatabaseDropped = false
+		}},
+		{name: "lease not removed", mutate: func(_ **RunTopology, cleanup **OwnedCleanup) {
+			(*cleanup).LeaseRemoved = false
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			topologyValue := *validResults.RunTopology
+			topologyValue.Ports = clonePorts(validResults.RunTopology.Ports)
+			topology := &topologyValue
+			cleanupValue := *validResults.OwnedCleanup
+			cleanup := &cleanupValue
+			tt.mutate(&topology, &cleanup)
+			err := verifyRunTopology(topology, cleanup)
+			if tt.name == "valid" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestGenerateAttestationRejectsCredentialBearingArtifact(t *testing.T) {
@@ -203,7 +259,24 @@ func validResults(now time.Time) SafeResults {
 		SequenceDigest: strings.Repeat("a", 64), Evidence: EvidenceCounts{UI: 1, HTTP: 1, Database: 1, Reconciled: 1},
 		Cleanup: CleanupResult{Passed: true, ResidualEntityIDs: []string{}}, UnverifiedCapabilities: []string{},
 		RiskClassification: "short", Status: StatusPassed,
+		RunTopology: &RunTopology{
+			RunID: "20260730t120102z-a1b2c3d4e5f60718", Host: "127.0.0.1",
+			DatabaseName: "stratum_e2e_20260730t120102z_a1b2c3d4e5f60718",
+			Ports: map[string]int{
+				"frontend": 15174, "backend": 18081, "oauth": 19092, "fixture": 19093,
+				"platform_mcp": 18443, "internal_api": 18444,
+			},
+		},
+		OwnedCleanup: &OwnedCleanup{DatabaseDropped: true, LeaseRemoved: true},
 	}
+}
+
+func clonePorts(source map[string]int) map[string]int {
+	result := make(map[string]int, len(source))
+	for role, port := range source {
+		result[role] = port
+	}
+	return result
 }
 
 func cloneAttestation(t *testing.T, source Attestation) Attestation {
