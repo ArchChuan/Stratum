@@ -1,7 +1,9 @@
 version: 1
 
 policy:
-  authority: ci
+  browser_e2e_authority: local
+  merge_authority: ci
+  deployment_authority: release_pipeline
   fail_closed: true
   default_mode: short
   flaky:
@@ -68,11 +70,26 @@ risk:
         - CLAUDE.md
 
 levels:
-  R0: {mode: none, checks: [docs-lint]}
-  R1: {mode: none, checks: [static, unit, build, code-quality]}
-  R2: {mode: short, checks: [static, unit, integration, contract, e2e-short]}
-  R3: {mode: soak, checks: [static, unit, integration, contract, e2e-short, domain-failure-paths, e2e-soak, specification-review, code-quality-review]}
-  R4: {mode: release-soak, checks: [static, unit, integration, contract, e2e-short, domain-failure-paths, e2e-soak, specification-review, code-quality-review, release-soak, deployment, production-verification]}
+  R0:
+    mode: none
+    local_checks: [docs-lint]
+    ci_checks: [static]
+  R1:
+    mode: none
+    local_checks: [static, unit, build, code-quality]
+    ci_checks: [static, unit, build, code-quality]
+  R2:
+    mode: short
+    local_checks: [static, unit, integration, contract, e2e-short]
+    ci_checks: [static, unit, integration, contract, build]
+  R3:
+    mode: soak
+    local_checks: [static, unit, integration, contract, domain-failure-paths, e2e-short, e2e-soak]
+    ci_checks: [static, unit, integration, contract, build, security, risk-guardrails]
+  R4:
+    mode: release-soak
+    local_checks: [static, unit, integration, contract, domain-failure-paths, e2e-short, e2e-soak, release-soak]
+    ci_checks: [static, unit, integration, contract, build, security, risk-guardrails]
 
 capabilities:
   - id: platform-assistant

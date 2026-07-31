@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,6 +9,27 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestWritePlanSeparatesLocalAndCIChecks(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "plan.json")
+	value := plan{
+		Version: 1, Commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ManifestDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		RiskLevel:      "R3", Mode: "soak", LocalChecks: []string{"e2e-short", "e2e-soak"},
+		CIChecks: []string{"static", "unit"},
+	}
+
+	require.NoError(t, writePlan(path, value))
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.Equal(t, []any{"e2e-short", "e2e-soak"}, got["local_checks"])
+	require.Equal(t, []any{"static", "unit"}, got["ci_checks"])
+	require.NotContains(t, got, "checks")
+	require.NotContains(t, got, "reviews")
+}
 
 func TestChangedPathsIncludesWorkingTreeChanges(t *testing.T) {
 	t.Parallel()
@@ -30,5 +52,7 @@ func TestChangedPathsIncludesWorkingTreeChanges(t *testing.T) {
 func runGit(t *testing.T, root string, args ...string) {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", root}, args...)...)
-	require.NoError(t, command.Run())
+	command.Env = cleanGitEnvironment(os.Environ())
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
 }

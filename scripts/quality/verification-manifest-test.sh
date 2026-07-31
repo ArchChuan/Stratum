@@ -12,7 +12,9 @@ require() {
 
 [[ -f "$manifest" ]] || fail '.test/verification.yaml'
 require '^version:[[:space:]]*1$' 'schema version'
-require '^  authority:[[:space:]]*ci$' 'CI authority'
+require '^  browser_e2e_authority:[[:space:]]*local$' 'local browser authority'
+require '^  merge_authority:[[:space:]]*ci$' 'CI merge authority'
+require '^  deployment_authority:[[:space:]]*release_pipeline$' 'release pipeline authority'
 require '^  fail_closed:[[:space:]]*true$' 'fail-closed policy'
 require '^  default_mode:[[:space:]]*(short|soak)$' 'default mode'
 require 'rerun_for_diagnostics:[[:space:]]*true' 'diagnostic-only reruns'
@@ -22,10 +24,13 @@ require 'unreconciled_allowed:[[:space:]]*false' 'fail-closed unreconciled capab
 require 'levels:[[:space:]]*\[R0, R1, R2, R3, R4\]' 'risk levels'
 require '^  default_level:[[:space:]]*R2$' 'default executable risk'
 require '^  release_level:[[:space:]]*R4$' 'release intent risk'
-for mapping in 'R0:.*mode: none' 'R1:.*mode: none' 'R2:.*mode: short' 'R3:.*mode: soak' 'R4:.*mode: release-soak'; do
-  require "^  ${mapping}" "${mapping%%:*} mode"
+for mapping in 'R0:none' 'R1:none' 'R2:short' 'R3:soak' 'R4:release-soak'; do
+  level=${mapping%%:*}; mode=${mapping#*:}
+  block=$(sed -n "/^  ${level}:/,/^  R[0-4]:/p" "$manifest")
+  grep -Eq "mode:[[:space:]]*${mode}" <<<"$block" || fail "missing ${level} mode"
+  grep -Eq 'local_checks:' <<<"$block" || fail "missing ${level} local checks"
+  grep -Eq 'ci_checks:' <<<"$block" || fail "missing ${level} CI checks"
 done
-for level in R0 R1 R2 R3 R4; do require "^  ${level}:" "${level} checks"; done
 awk '
   /^    - id:/ { if (seen && !level) exit 1; seen=1; level=0 }
   /^      level: R[0-4]$/ { level=1 }
@@ -44,12 +49,6 @@ require 'docs/agent/\*\*' 'generated Agent instruction sources'
 require 'AGENTS.md' 'generated Agent instructions'
 require 'CLAUDE.md' 'Claude instructions'
 require 'id: platform-assistant' 'Platform Assistant capability'
-require 'specification-review' 'specification review check'
-require 'code-quality-review' 'code quality review check'
-require '^    R1: \[code-quality\]$' 'R1 review requirement'
-require '^    R2: \[specification, code-quality\]$' 'R2 review requirement'
-require '^    R3: \[specification, code-quality\]$' 'R3 review requirement'
-require '^    R4: \[specification, code-quality, release-evidence\]$' 'R4 review requirement'
 require '^  schema:[[:space:]]*2$' 'attestation schema v2'
 require 'manifest_digest' 'manifest digest binding'
 require 'artifact_digests' 'artifact digest binding'
