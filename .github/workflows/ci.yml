@@ -61,6 +61,9 @@ jobs:
       - name: Test risk regression guard
         run: bash scripts/quality/risk-regression-guard-test.sh
 
+      - name: Test incremental Go test harness
+        run: bash scripts/quality/incremental-go-test-test.sh
+
       - name: Enforce incremental Go code quality
         run: make code-quality
 

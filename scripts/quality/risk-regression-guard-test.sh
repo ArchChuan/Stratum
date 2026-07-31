@@ -181,6 +181,10 @@ assert_file_contains "${ROOT}/.pre-commit-config.yaml" \
   'require_serial:[[:space:]]*true' 'serialized pre-commit risk guard'
 assert_file_contains "${ROOT}/.pre-commit-config.yaml" \
   'id:[[:space:]]*code-quality-ratchet' 'pre-commit code quality hook'
+assert_file_contains "${ROOT}/.pre-commit-config.yaml" \
+  'id:[[:space:]]*incremental-go-test' 'pre-commit incremental go test hook'
+assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
+  'incremental-go-test-test\.sh' 'CI incremental go test self-test'
 assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'risk-regression-guard-test\.sh' 'CI risk guard self-test'
 assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
