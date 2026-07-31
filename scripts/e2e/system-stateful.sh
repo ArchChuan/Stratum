@@ -68,7 +68,7 @@ cleanup_owned() {
   local status=0 release_json=$work_dir/release.json
   stop_process "$frontend_pid"; stop_process "$backend_pid"; stop_process "$platform_mcp_pid"
   stop_process "$mcp_pid"; stop_process "$oauth_pid"
-  if [[ "$database_created" == true ]]; then
+  if [[ "$database_created" == true && "$database_dropped" != true ]]; then
     if ! run_scope "drop-database --scope '$scope_file' --base-dsn-env TEST_DATABASE_URL"; then
       printf 'stateful E2E residual database: %s; lease: %s/runs/%s.json\n' \
         "$database_name" "$registry_root" "$run_id" >&2
@@ -78,15 +78,18 @@ cleanup_owned() {
   else database_dropped=true; fi
   if [[ "$lease_registered" == true && "$database_dropped" == true ]]; then
     exec 9<"$registry_root"; flock 9
-    run_scope "release --scope '$scope_file' --registry '$registry_root'" >"$release_json" || status=1
-    if [[ "$status" -eq 0 ]]; then
+    if [[ "$lease_removed" != true ]]; then
+      run_scope "release --scope '$scope_file' --registry '$registry_root'" >"$release_json" || status=1
+    fi
+    if [[ "$status" -eq 0 && "$lease_removed" != true ]]; then
       lease_removed=true
-      if jq -e '.stop_owned_infrastructure == true' "$release_json" >/dev/null; then
-        bash -c "$infra_down_command" || status=1
-        if [[ "$status" -eq 0 ]]; then
-          owner=$(jq -er .ownership_run_id "$release_json")
-          run_scope "confirm-infrastructure-stopped --ownership-run-id '$owner' --registry '$registry_root'" || status=1
-        fi
+    fi
+    if [[ "$status" -eq 0 && -f "$release_json" ]] && \
+      jq -e '.stop_owned_infrastructure == true' "$release_json" >/dev/null; then
+      bash -c "$infra_down_command" || status=1
+      if [[ "$status" -eq 0 ]]; then
+        owner=$(jq -er .ownership_run_id "$release_json")
+        run_scope "confirm-infrastructure-stopped --ownership-run-id '$owner' --registry '$registry_root'" || status=1
       fi
     fi
     if [[ "$infra_started_unmarked" == true ]]; then
@@ -96,7 +99,7 @@ cleanup_owned() {
     flock -u 9
   elif [[ "$lease_registered" == false ]]; then lease_removed=true
   fi
-  cleanup_done=true
+  [[ "$status" -ne 0 ]] || cleanup_done=true
   return "$status"
 }
 on_exit() {

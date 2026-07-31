@@ -1,0 +1,170 @@
+name: Stateful Browser E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+env:
+  GO_VERSION: "1.25"
+  GOPROXY: "https://goproxy.cn,direct"
+
+jobs:
+  specification-gates:
+    name: Verification Specification Gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: "1.25", cache: true}
+      - run: make verification-manifest-test verification-schemas-test test-verification-entrypoints-test
+
+  code-quality-gates:
+    name: Verification Code Quality Gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: "1.25", cache: true}
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm, cache-dependency-path: web/package-lock.json}
+      - uses: actions/cache@v4
+        id: node-modules
+        with:
+          path: web/node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}
+      - run: npm ci --prefix web
+      - run: make code-quality && go vet ./... && make fe-lint fe-build
+
+  specification-review:
+    needs: specification-gates
+    environment: specification-review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env: {REVIEW_ENVIRONMENT: specification-review}
+        run: bash scripts/quality/write-verification-review-receipt.sh specification tmp/reviews/specification.json
+      - uses: actions/upload-artifact@v4
+        with: {name: specification-review-receipt, path: tmp/reviews/specification.json, retention-days: 30}
+
+  code-quality-review:
+    needs: code-quality-gates
+    environment: code-quality-review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env: {REVIEW_ENVIRONMENT: code-quality-review}
+        run: bash scripts/quality/write-verification-review-receipt.sh code-quality tmp/reviews/code-quality.json
+      - uses: actions/upload-artifact@v4
+        with: {name: code-quality-review-receipt, path: tmp/reviews/code-quality.json, retention-days: 30}
+
+  stateful-e2e:
+    name: Stateful Browser E2E
+    needs: [specification-review, code-quality-review]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      STRATUM_TEST_POSTGRES_URL: postgres://stratum:stratum@127.0.0.1:5432/stratum_e2e?sslmode=disable
+      REDIS_URL: redis://127.0.0.1:6379
+      NATS_URL: nats://127.0.0.1:4222
+      MILVUS_HOST: 127.0.0.1
+      MILVUS_PORT: "19530"
+      STATEFUL_E2E_PROFILE: test
+      STATEFUL_E2E_PACKS: all
+      STATEFUL_E2E_DURATION_SEC: "600"
+      STATEFUL_E2E_FAILURE_LOG_DIR: tmp/test-verification/failure-logs
+      STATEFUL_E2E_INFRA_UP_COMMAND: bash scripts/e2e/ci-infra-up.sh
+      STATEFUL_E2E_INFRA_DOWN_COMMAND: bash scripts/e2e/ci-infra-down.sh
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: "1.25", cache: true}
+      - uses: actions/setup-node@v4
+        with: {node-version: "22"}
+      - uses: actions/cache@v4
+        id: node-modules
+        with:
+          path: web/node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}
+      - if: steps.node-modules.outputs.cache-hit != 'true'
+        run: npm ci --prefix web
+      - run: npx --prefix web playwright install --with-deps chromium
+      - name: Generate verification plan
+        env: {TEST_VERIFY_RISK_LEVEL: R3}
+        run: make test-verify-plan
+      - name: Start planned-check infrastructure
+        run: bash scripts/e2e/ci-infra-up.sh
+      - name: Run planned non-soak checks
+        run: bash scripts/quality/run-planned-checks.sh
+      - name: Run short browser E2E
+        env: {STATEFUL_E2E_PROFILE: ""}
+        run: make e2e-system-short
+      - uses: actions/download-artifact@v4
+        with: {pattern: '*-review-receipt', path: tmp/test-verification/reviews, merge-multiple: true}
+      - name: Run stateful browser E2E
+        run: make e2e-system-soak
+      - name: Verify planned soak evidence
+        run: make test-verify-attestation E2E_REQUIRED_MODE=soak E2E_REQUIRED_PROFILE=test
+      - id: evidence
+        name: Resolve current evidence
+        run: |
+          digest=$(go run ./cmd/e2e-attestation digest --root . --ref HEAD)
+          path=$(find test/e2e/attestations -type f -name "$digest.json" | sort | tail -1)
+          test -n "$path"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+      - id: attest
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ steps.evidence.outputs.path }}
+      - name: Verify Sigstore attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_PATH: ${{ steps.evidence.outputs.path }}
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          gh attestation verify "$EVIDENCE_PATH" --bundle "$BUNDLE_PATH" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "github.com/$GITHUB_REPOSITORY/.github/workflows/stateful-e2e.yml" \
+            --source-digest "$GITHUB_SHA" --source-ref "$GITHUB_REF" \
+            --cert-oidc-issuer https://token.actions.githubusercontent.com
+          jq -n --arg bundle "$BUNDLE_PATH" --arg source_ref "$GITHUB_REF" \
+            '{bundle:$bundle,source_ref:$source_ref}' \
+            > tmp/test-verification/signature-receipt.json
+      - name: Record commit-bound planned checks
+        run: |
+          bash scripts/quality/write-verification-check-receipt.sh \
+            tmp/test-verification/plan.json tmp/test-verification/checks.json \
+            static unit integration contract e2e-short domain-failure-paths e2e-soak \
+            specification-review code-quality-review
+      - name: Produce authoritative completion report
+        env:
+          TEST_VERIFY_SIGNATURE_RECEIPT: tmp/test-verification/signature-receipt.json
+          TEST_VERIFY_CHECK_RECEIPT: tmp/test-verification/checks.json
+          TEST_VERIFY_REQUIRE_ACCEPTED: "true"
+        run: make test-verify-report E2E_REQUIRED_MODE=soak E2E_REQUIRED_PROFILE=test
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with: {name: stateful-e2e-failure-logs, path: tmp/test-verification/failure-logs/, retention-days: 3}
+      - name: Stop verification infrastructure
+        if: always()
+        run: bash scripts/e2e/ci-infra-down.sh
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stateful-e2e-verification
+          path: |
+            test/e2e/attestations/
+            tmp/test-verification/plan.json
+            tmp/test-verification/completion-report.json
+            tmp/test-verification/checks.json
+            tmp/test-verification/signature-receipt.json
+          retention-days: 30

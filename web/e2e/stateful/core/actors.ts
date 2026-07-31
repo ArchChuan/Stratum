@@ -103,6 +103,7 @@ export const createGuestActor = async (
     { timeout: 15_000 },
   );
   await page.goto(`${webURL}/login`, { waitUntil: 'domcontentloaded', timeout: 15_000 });
+  await page.getByRole('tab', { name: '第三方登录' }).click();
   await expect(page.getByRole('button', { name: /快速体验/ })).toBeVisible();
   await page.getByRole('button', { name: /快速体验/ }).click();
   const guest = await guestPromise;
