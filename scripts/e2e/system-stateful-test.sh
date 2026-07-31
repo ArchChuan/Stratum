@@ -26,4 +26,19 @@ expect_failure 'between 600 and 14400' env TEST_DATABASE_URL=postgres://u:p@127.
 expect_failure 'short mode cannot declare' env TEST_DATABASE_URL=postgres://u:p@127.0.0.1/e2e STATEFUL_E2E_PROFILE=test bash "$runner" short
 expect_failure 'unknown stateful E2E pack' env TEST_DATABASE_URL=postgres://u:p@127.0.0.1/e2e STATEFUL_E2E_PACKS=unknown bash "$runner" short
 
+test_dir=$(mktemp -d "${TMPDIR:-/tmp}/stratum-stateful-concurrency.XXXXXX")
+trap 'rm -rf "$test_dir"' EXIT
+registry=$test_dir/registry
+(cd "$repo_dir" && go run ./cmd/e2e-run-scope allocate --repository "$repo_dir" --registry "$registry") >"$test_dir/a.json" & a_pid=$!
+(cd "$repo_dir" && go run ./cmd/e2e-run-scope allocate --repository "$repo_dir" --registry "$registry") >"$test_dir/b.json" & b_pid=$!
+wait "$a_pid"; wait "$b_pid"
+jq -e --slurp '
+  .[0].run_id != .[1].run_id and .[0].database_name != .[1].database_name and
+  (([.[0].ports[], .[1].ports[]] | unique | length) == 8)
+' "$test_dir/a.json" "$test_dir/b.json" >/dev/null
+(cd "$repo_dir" && go run ./cmd/e2e-run-scope release --scope "$test_dir/a.json" --registry "$registry") >/dev/null
+[[ -e "$registry/runs/$(jq -r .run_id "$test_dir/b.json").json" ]] || { printf 'run A release removed run B lease\n' >&2; exit 1; }
+(cd "$repo_dir" && go run ./cmd/e2e-run-scope release --scope "$test_dir/b.json" --registry "$registry") >/dev/null
+[[ -z "$(find "$registry/runs" -type f -name '*.json' -print -quit)" ]] || { printf 'leases remained after both releases\n' >&2; exit 1; }
+
 printf 'stateful runner dynamic lifecycle contract passed\n'
