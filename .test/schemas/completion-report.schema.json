@@ -79,6 +79,7 @@
       "if": { "properties": { "mode": { "const": "none" } }, "required": ["mode"] },
       "then": {
         "properties": {
+          "status": { "const": "incomplete" },
           "attestation": { "type": "null" },
           "capabilities": {
             "properties": {

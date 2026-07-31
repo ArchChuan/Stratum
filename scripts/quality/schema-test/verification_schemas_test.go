@@ -36,6 +36,10 @@ func TestVerificationSchemas(t *testing.T) {
 			value: reportWithoutE2E(validReport, "R1", []any{review("code-quality", "passed")}),
 		},
 		{
+			name: "rejects accepted report without signed E2E evidence", schema: report,
+			value: changed(reportWithoutE2E(validReport, "R0", []any{}), "status", "accepted"), wantErr: true,
+		},
+		{
 			name: "rejects none mode with an E2E attestation", schema: report,
 			value: changed(reportWithRisk(validReport, "R0", []any{}), "mode", "none"), wantErr: true,
 		},
@@ -174,6 +178,7 @@ func reportWithRisk(src map[string]any, risk string, reviews []any) map[string]a
 
 func reportWithoutE2E(src map[string]any, risk string, reviews []any) map[string]any {
 	report := reportWithRisk(src, risk, reviews)
+	report["status"] = "incomplete"
 	report["mode"] = "none"
 	report["attestation"] = nil
 	report["capabilities"] = map[string]any{
