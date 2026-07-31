@@ -135,18 +135,20 @@ func (s *ProviderService) DiscoverModels(ctx context.Context, tenantID, provider
 	if s.runtime == nil {
 		return nil, fmt.Errorf("discover models: no runtime for kind %q", provider.Kind)
 	}
-	names, err := s.runtime.ListModels(ctx, *provider)
+	discovered, err := s.runtime.ListModels(ctx, *provider)
 	if err != nil {
 		return nil, fmt.Errorf("discover models: list from provider: %w", err)
 	}
-	models := make([]domain.Model, 0, len(names))
-	for _, name := range names {
+	models := make([]domain.Model, 0, len(discovered))
+	for _, dm := range discovered {
 		models = append(models, domain.Model{
 			TenantID:        tenantID,
 			ProviderID:      providerID,
-			Name:            name,
-			DisplayName:     name,
-			Capabilities:    inferCapabilities(name),
+			Name:            dm.Name,
+			DisplayName:     dm.Name,
+			Capabilities:    inferCapabilities(dm.Name),
+			ContextWindow:   dm.ContextWindow,
+			MaxTokens:       dm.MaxOutputTokens,
 			ProviderManaged: true,
 			Enabled:         true,
 		})

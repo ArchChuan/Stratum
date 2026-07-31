@@ -105,7 +105,9 @@ type anthropicModelsResponse struct {
 }
 
 type anthropicModelItem struct {
-	ID string `json:"id"`
+	ID            string `json:"id"`
+	DisplayName   string `json:"display_name"`
+	ContextWindow int    `json:"context_window"`
 }
 
 // ---------------------------------------------------------------------------
@@ -497,8 +499,8 @@ func (c *AnthropicClient) Health(ctx context.Context) error {
 	return err
 }
 
-// ListModels discovers models via GET /v1/models.
-func (c *AnthropicClient) ListModels(ctx context.Context) ([]string, error) {
+// ListModels discovers models via GET /v1/models, including context_window metadata.
+func (c *AnthropicClient) ListModels(ctx context.Context) ([]DiscoveredModel, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		strings.TrimSuffix(c.cfg.BaseURL, "/")+"/v1/models", nil)
 	if err != nil {
@@ -527,9 +529,12 @@ func (c *AnthropicClient) ListModels(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("%s: decode models: %w", c.cfg.Name, err)
 	}
 
-	models := make([]string, len(out.Data))
+	models := make([]DiscoveredModel, len(out.Data))
 	for i, m := range out.Data {
-		models[i] = m.ID
+		models[i] = DiscoveredModel{
+			Name:          m.ID,
+			ContextWindow: m.ContextWindow,
+		}
 	}
 	return models, nil
 }
@@ -710,7 +715,7 @@ func (p *AnthropicProtocol) Health(ctx context.Context, cfg ProviderConfig) erro
 }
 
 // ListModels implements ChatProtocol.
-func (p *AnthropicProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]string, error) {
+func (p *AnthropicProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]DiscoveredModel, error) {
 	return p.clientFor(cfg).ListModels(ctx)
 }
 

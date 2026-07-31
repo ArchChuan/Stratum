@@ -133,6 +133,13 @@ func (r *tenantCapabilityResolver) ListTenantChatModels(ctx context.Context, ten
 	return names, nil
 }
 
+func (r *tenantCapabilityResolver) GetChatModelContextWindow(ctx context.Context, tenantID, model string) (int, error) {
+	if r.registry == nil {
+		return 0, nil
+	}
+	return r.registry.GetChatModelContextWindow(ctx, tenantID, model)
+}
+
 // InjectCompleter injects the per-tenant LLM completer into ctx for streaming.
 func (r *tenantCapabilityResolver) InjectCompleter(ctx context.Context, tenantID string) context.Context {
 	gw, ok := r.resolveGateway(ctx, tenantID)

@@ -26,9 +26,9 @@ const (
 	maxRetryAttempts          = 3
 	retryBaseDelay            = 100 * time.Millisecond
 	maxRetryDelay             = 10 * time.Second
-	maxModelListResponseBytes = 1 << 20
 	cbFailureThreshold        = 5
 	cbRecoveryTimeout         = 30 * time.Second
+	maxModelListResponseBytes = 1 << 20
 )
 
 // providerBreaker is a per-provider three-state circuit breaker.
@@ -131,6 +131,15 @@ func parseRetryAfter(header string) time.Duration {
 		}
 	}
 	return 0
+}
+
+// openaiModelsResponse is the JSON body from GET /models (OpenAI-compatible).
+type openaiModelsResponse struct {
+	Data []openaiModelItem `json:"data"`
+}
+
+type openaiModelItem struct {
+	ID string `json:"id"`
 }
 
 // ProviderConfig holds the minimal configuration that differentiates one
@@ -511,50 +520,58 @@ func (c *OpenAICompatClient) Models() []string {
 	return c.cfg.Models
 }
 
-func (c *OpenAICompatClient) ListModels(ctx context.Context) ([]string, error) {
-	requestURL := strings.TrimRight(c.cfg.BaseURL, "/") + "/models"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+// ListModels discovers models via GET /models with static context-window fallback.
+func (c *OpenAICompatClient) ListModels(ctx context.Context) ([]DiscoveredModel, error) {
+	names, err := c.fetchModelNames(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("%s: build model list request: %w", c.cfg.Name, err)
+		return nil, err
+	}
+	out := make([]DiscoveredModel, len(names))
+	for i, name := range names {
+		ctxWin, maxOut := lookupModelSpec(name)
+		out[i] = DiscoveredModel{Name: name, ContextWindow: ctxWin, MaxOutputTokens: maxOut}
+	}
+	return out, nil
+}
+
+// fetchModelNames calls GET /models and returns the raw name list.
+func (c *OpenAICompatClient) fetchModelNames(ctx context.Context) ([]string, error) {
+	url := strings.TrimSuffix(c.cfg.BaseURL, "/") + "/models"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%s: build models request: %w", c.cfg.Name, err)
 	}
 	if c.cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+		httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 	}
-	resp, err := c.http.Do(req)
+
+	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("%s: request model list: %w", c.cfg.Name, err)
+		return nil, fmt.Errorf("%s: do models request: %w", c.cfg.Name, err)
 	}
 	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxModelListResponseBytes+1))
 	closeErr := resp.Body.Close()
 	if readErr != nil {
-		return nil, fmt.Errorf("%s: read model list: %w", c.cfg.Name, readErr)
+		return nil, fmt.Errorf("%s: read models body: %w", c.cfg.Name, readErr)
 	}
 	if closeErr != nil {
-		return nil, fmt.Errorf("%s: close model list response: %w", c.cfg.Name, closeErr)
+		return nil, fmt.Errorf("%s: close models response: %w", c.cfg.Name, closeErr)
 	}
 	if len(raw) > maxModelListResponseBytes {
-		return nil, fmt.Errorf("%s: model list response exceeds limit", c.cfg.Name)
+		return nil, fmt.Errorf("%s: GET %s response exceeds size limit", c.cfg.Name, url)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: model list status %d", c.cfg.Name, resp.StatusCode)
+		return nil, fmt.Errorf("%s: GET %s returned %d: check API key and base URL",
+			c.cfg.Name, url, resp.StatusCode)
 	}
-	return decodeOpenAIModelIDs(raw, c.cfg.Name)
-}
 
-func decodeOpenAIModelIDs(raw []byte, providerName string) ([]string, error) {
-	var response struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+	var out openaiModelsResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("%s: decode models: %w", c.cfg.Name, err)
 	}
-	if err := json.Unmarshal(raw, &response); err != nil {
-		return nil, fmt.Errorf("%s: decode model list: %w", providerName, err)
-	}
-	models := make([]string, 0, len(response.Data))
-	for _, model := range response.Data {
-		if model.ID != "" {
-			models = append(models, model.ID)
-		}
+	models := make([]string, len(out.Data))
+	for i, m := range out.Data {
+		models[i] = m.ID
 	}
 	return models, nil
 }
@@ -581,9 +598,9 @@ func (c *OpenAICompatClient) ChatHealth(ctx context.Context, cfg ProviderConfig)
 	return c.Health(ctx)
 }
 
-// ChatListModels delegates to the instance's Models method.
-func (c *OpenAICompatClient) ChatListModels(ctx context.Context, cfg ProviderConfig) ([]string, error) {
-	return c.Models(), nil
+// ChatListModels delegates to the instance's ListModels method.
+func (c *OpenAICompatClient) ChatListModels(ctx context.Context, cfg ProviderConfig) ([]DiscoveredModel, error) {
+	return c.ListModels(ctx)
 }
 
 // EmbedCreateEmbeddings delegates to the instance's CreateEmbeddings method.
@@ -643,7 +660,7 @@ func (p *OpenAICompatProtocol) Health(ctx context.Context, cfg ProviderConfig) e
 	return p.clientFor(cfg).Health(ctx)
 }
 
-func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]string, error) {
+func (p *OpenAICompatProtocol) ListModels(ctx context.Context, cfg ProviderConfig) ([]DiscoveredModel, error) {
 	return p.clientFor(cfg).ListModels(ctx)
 }
 

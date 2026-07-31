@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/byteBuilderX/stratum/internal/llmgateway/domain"
+	"github.com/byteBuilderX/stratum/internal/llmgateway/domain/port"
 )
 
 // ProviderRuntime adapts provider domain data to infrastructure protocols.
@@ -31,12 +32,24 @@ func (r *ProviderRuntime) protocol(provider domain.Provider) (ChatProtocol, Prov
 }
 
 // ListModels lists models exposed by the configured provider.
-func (r *ProviderRuntime) ListModels(ctx context.Context, provider domain.Provider) ([]string, error) {
+func (r *ProviderRuntime) ListModels(ctx context.Context, provider domain.Provider) ([]port.DiscoveredModel, error) {
 	proto, cfg, err := r.protocol(provider)
 	if err != nil {
 		return nil, err
 	}
-	return proto.ListModels(ctx, cfg)
+	infraModels, err := proto.ListModels(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]port.DiscoveredModel, len(infraModels))
+	for i, m := range infraModels {
+		out[i] = port.DiscoveredModel{
+			Name:            m.Name,
+			ContextWindow:   m.ContextWindow,
+			MaxOutputTokens: m.MaxOutputTokens,
+		}
+	}
+	return out, nil
 }
 
 // Health checks whether the configured provider is reachable.

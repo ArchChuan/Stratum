@@ -105,6 +105,13 @@ type ResourceRevisionProvider interface {
 	CreatePublishedBaseline(context.Context, string, string) (domain.ResourceRef, error)
 }
 
+// AgentRevisionApplier writes an already-published optimization revision
+// back to the production Agent table — closing the evaluation → production loop.
+// Only Agent resources need this; Skill write-back is handled in promoteCandidateTx.
+type AgentRevisionApplier interface {
+	ApplyPublishedRevision(ctx context.Context, tenantID, agentID, revisionID string) error
+}
+
 type AgentRevisionProvider = ResourceRevisionProvider
 
 type RevisionObjectStore interface {

@@ -55,6 +55,7 @@ type AgentCandidatePatch struct {
 	MaxIterations   int
 	Bindings        []AgentBinding
 	Permissions     []string
+	PromptOverrides map[string]string // key → prompt text; stored outside AgentRevision
 }
 
 func (r AgentRevision) Validate() error {

@@ -28,10 +28,18 @@ type agentRevisionExecutor interface {
 	ExecuteRevision(context.Context, agentdomain.AgentRevision, agentapp.ExecRequest, agentapp.ExecMeta) (*agentapp.AgentResult, int, error)
 }
 
+// agentReadWriter provides read-write access to the Agent table for
+// applying published optimization revisions back to production agents.
+type agentReadWriter interface {
+	Get(context.Context, string) (agentapp.AgentDTO, error)
+	Update(context.Context, string, agentapp.UpdateAgentInput) (agentapp.AgentDTO, error)
+}
+
 type agentEvaluationAdapter struct {
-	revisions agentRevisionService
-	agents    agentRevisionExecutor
-	actorID   string
+	revisions    agentRevisionService
+	agents       agentRevisionExecutor
+	agentUpdater agentReadWriter
+	actorID      string
 }
 
 func (a agentEvaluationAdapter) CreatePublishedBaseline(
@@ -71,6 +79,57 @@ func (a agentEvaluationAdapter) CreatePublishedBaseline(
 		return evaldomain.ResourceRef{}, fmt.Errorf("evaluation Agent adapter: publish baseline: %w", err)
 	}
 	return ref, nil
+}
+
+// ApplyPublishedRevision loads an already-published agent revision and writes
+// the optimized SystemPrompt, Model, MaxIterations, and MaxContextTokens back to
+// the agents table — closing the evaluation → production loop.
+//
+// Callers must ensure the revision is already published (e.g., by
+// promoteCandidateTx).  This method is idempotent: repeated calls with the same
+// revision produce the same Agent state.
+func (a agentEvaluationAdapter) ApplyPublishedRevision(
+	ctx context.Context, tenantID, agentID, revisionID string,
+) error {
+	if a.agentUpdater == nil {
+		return errors.New("evaluation Agent adapter: agent updater unavailable")
+	}
+	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(agentID) == "" || strings.TrimSpace(revisionID) == "" {
+		return errors.New("evaluation Agent adapter: tenant, agent and revision IDs required")
+	}
+	ref := evaldomain.ResourceRef{
+		Kind: evaldomain.ResourceKindAgent, ResourceID: agentID, RevisionID: revisionID,
+	}
+	_, snapshot, found, err := a.get(ctx, tenantID, ref)
+	if err != nil {
+		return fmt.Errorf("evaluation Agent adapter: load revision: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("evaluation Agent adapter: revision %s not found", revisionID)
+	}
+	existing, err := a.agentUpdater.Get(ctx, agentID)
+	if err != nil {
+		return fmt.Errorf("evaluation Agent adapter: get agent: %w", err)
+	}
+	// Preserve every field except those the optimization pipeline is authorized to change.
+	_, err = a.agentUpdater.Update(ctx, agentID, agentapp.UpdateAgentInput{
+		Name:                  existing.Name,
+		Type:                  existing.Type,
+		Description:           existing.Description,
+		SystemPrompt:          snapshot.SystemPrompt,
+		LLMModel:              snapshot.Model,
+		MaxIterations:         snapshot.MaxIterations,
+		MaxContextTokens:      snapshot.ModelParameters.MaxContextTokens,
+		AllowedSkills:         existing.AllowedSkills,
+		MCPToolIDs:            existing.MCPToolIDs,
+		KnowledgeWorkspaceIDs: existing.KnowledgeWorkspaceIDs,
+		MemoryScope:           existing.MemoryScope,
+		CheckpointEnabled:     existing.CheckpointEnabled,
+	})
+	if err != nil {
+		return fmt.Errorf("evaluation Agent adapter: apply to agent: %w", err)
+	}
+	return nil
 }
 
 func (a agentEvaluationAdapter) LoadOptimizableSnapshot(
@@ -251,14 +310,24 @@ func parseAgentCandidatePatch(
 ) (agentdomain.AgentCandidatePatch, error) {
 	result := agentdomain.AgentCandidatePatch{}
 	for key, value := range patch.PromptPatch {
-		if key != "instructions" {
-			return result, fmt.Errorf("evaluation Agent adapter: prompt field is not optimizable: %s", key)
-		}
 		prompt, ok := value.(string)
 		if !ok || strings.TrimSpace(prompt) == "" {
-			return result, errors.New("evaluation Agent adapter: instructions must be non-empty")
+			return result, fmt.Errorf("evaluation Agent adapter: prompt field %s must be non-empty", key)
 		}
-		result.SystemPrompt = prompt
+		switch key {
+		case "instructions", "system_prompt":
+			result.SystemPrompt = prompt
+		case "memory_extraction_prompt",
+			"memory_summary_prompt",
+			"memory_enrichment_prompt",
+			"compaction_prompt":
+			if result.PromptOverrides == nil {
+				result.PromptOverrides = make(map[string]string)
+			}
+			result.PromptOverrides[key] = prompt
+		default:
+			return result, fmt.Errorf("evaluation Agent adapter: prompt field is not optimizable: %s", key)
+		}
 	}
 	params := baseline.ModelParameters
 	parametersChanged := false
