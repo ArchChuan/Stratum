@@ -2,308 +2,94 @@
 set -euo pipefail
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-mode=${1:-short}
-duration=${STATEFUL_E2E_DURATION_SEC:-}
-profile=${STATEFUL_E2E_PROFILE:-}
+mode=${1:-short}; profile=${STATEFUL_E2E_PROFILE:-}; duration=${STATEFUL_E2E_DURATION_SEC:-}
 case "$mode" in
-  short)
-    [[ -z "$profile" ]] || { printf 'short mode cannot declare an acceptance profile\n' >&2; exit 2; }
-    duration=${duration:-600}
-    ;;
-  soak)
-    profile=${profile:-test}
-    case "$profile" in
-      test) duration=${duration:-600} ;;
-      release)
-        duration=${duration:-3600}
-        ((duration >= 3600)) || { printf 'release profile requires at least 3600 seconds\n' >&2; exit 2; }
-        ;;
-      *) printf 'unsupported stateful E2E profile: %s\n' "$profile" >&2; exit 2 ;;
-    esac
-    ;;
+  short) [[ -z "$profile" ]] || { printf 'short mode cannot declare an acceptance profile\n' >&2; exit 2; }; duration=${duration:-600} ;;
+  soak) profile=${profile:-test}; [[ "$profile" == test || "$profile" == release ]] || { printf 'unsupported stateful E2E profile: %s\n' "$profile" >&2; exit 2; }; duration=${duration:-$([[ "$profile" == release ]] && printf 3600 || printf 600)} ;;
   *) printf 'unsupported stateful E2E mode: %s\n' "$mode" >&2; exit 2 ;;
 esac
-[[ "$duration" =~ ^[0-9]+$ ]] && ((duration >= 600 && duration <= 14400)) || {
-  printf 'STATEFUL_E2E_DURATION_SEC must be between 600 and 14400\n' >&2; exit 2;
-}
+[[ "$duration" =~ ^[0-9]+$ ]] && ((duration >= 600 && duration <= 14400)) || { printf 'STATEFUL_E2E_DURATION_SEC must be between 600 and 14400\n' >&2; exit 2; }
+[[ "$profile" != release || "$duration" -ge 3600 ]] || { printf 'release profile requires at least 3600 seconds\n' >&2; exit 2; }
 
 all_packs='dashboard,iam,workflow,agent,skill,mcp,agent-skill-mcp,knowledge,memory,evaluation,agent-context,evaluation-promotion,llm-admin'
-packs=${STATEFUL_E2E_PACKS:-all}
-[[ "$packs" == all ]] && packs=$all_packs
+packs=${STATEFUL_E2E_PACKS:-all}; [[ "$packs" == all ]] && packs=$all_packs
 IFS=',' read -r -a selected_packs <<<"$packs"
-for pack in "${selected_packs[@]}"; do
-  [[ ",$all_packs," == *",$pack,"* ]] || { printf 'unknown stateful E2E pack: %s\n' "$pack" >&2; exit 2; }
-done
+for pack in "${selected_packs[@]}"; do [[ ",$all_packs," == *",$pack,"* ]] || { printf 'unknown stateful E2E pack: %s\n' "$pack" >&2; exit 2; }; done
 
-database_url=${TEST_DATABASE_URL:-${STRATUM_TEST_POSTGRES_URL:-postgres://stratum:stratum@127.0.0.1:5432/stratum_e2e?sslmode=disable}}
-[[ "$database_url" =~ ^postgres(ql)?://[^[:space:]]+@(127\.0\.0\.1|localhost|postgres)(:[0-9]+)?/[^/?]*(test|e2e)[^/?]*([?].*)?$ ]] || {
-  printf 'unsafe E2E database target\n' >&2; exit 2;
+base_dsn=${TEST_DATABASE_URL:-${STRATUM_TEST_POSTGRES_URL:-}}
+[[ -n "$base_dsn" ]] || { printf 'TEST_DATABASE_URL is required\n' >&2; exit 2; }
+registry_root=${STATEFUL_E2E_REGISTRY_ROOT:-${TMPDIR:-/tmp}/stratum-stateful-e2e}
+mkdir -p "$registry_root"; chmod 700 "$registry_root"
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/stratum-stateful-run.XXXXXX")
+scope_file=$work_dir/scope.json; results_path=${STATEFUL_E2E_RESULTS_PATH:-$work_dir/safe-results.json}
+scope_command=${STATEFUL_E2E_SCOPE_COMMAND:-"go run ./cmd/e2e-run-scope"}
+oauth_pid= mcp_pid= backend_pid= frontend_pid=; lease_registered=false; database_created=false
+database_dropped=false; lease_removed=false; cleanup_done=false
+
+stop_process() { local pid=${1:-}; [[ -z "$pid" ]] || { kill -- "-$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }; }
+cleanup_owned() {
+  [[ "$cleanup_done" == true ]] && return 0
+  local status=0 release_json=$work_dir/release.json
+  stop_process "$frontend_pid"; stop_process "$backend_pid"; stop_process "$mcp_pid"; stop_process "$oauth_pid"
+  if [[ "$database_created" == true ]]; then
+    (cd "$repo_dir" && bash -c "$scope_command drop-database --scope '$scope_file' --base-dsn-env TEST_DATABASE_URL") || status=1
+    [[ "$status" -ne 0 ]] || database_dropped=true
+  else database_dropped=true; fi
+  if [[ "$lease_registered" == true ]]; then
+    exec 9>"$registry_root/registry.lock"; flock 9
+    (cd "$repo_dir" && bash -c "$scope_command release --scope '$scope_file' --registry '$registry_root'") >"$release_json" || status=1
+    flock -u 9
+    [[ "$status" -ne 0 ]] || lease_removed=true
+  else lease_removed=true; fi
+  cleanup_done=true
+  return "$status"
 }
-database_name=${database_url%%\?*}
-database_name=${database_name##*/}
-[[ "$database_name" =~ ^[A-Za-z0-9_]+$ ]] || { printf 'unsafe E2E database name\n' >&2; exit 2; }
+on_exit() { local status=$?; cleanup_owned || status=1; rm -rf "$work_dir"; exit "$status"; }
+trap on_exit EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
 
-work_dir=$(mktemp -d "${TMPDIR:-/tmp}/stratum-system-stateful.XXXXXX")
-oauth_pid='' mcp_pid='' platform_mcp_pid='' backend_pid='' frontend_pid='' infra_started=false infra_owned=false
-shared_milvus_container='' shared_milvus_started=false
-stop_process_tree() {
-  local root=$1 child
-  [[ "$root" =~ ^[1-9][0-9]*$ ]] || return 0
-  local -a descendants=()
-  while IFS= read -r child; do
-    [[ "$child" =~ ^[1-9][0-9]*$ ]] && descendants+=("$child")
-  done < <(ps -eo pid=,ppid= | awk -v root="$root" '
-    { parent[$1]=$2 }
-    END {
-      for (pid in parent) {
-        current=pid
-        while (current in parent && current != 1) {
-          if (parent[current] == root) { print pid; break }
-          current=parent[current]
-        }
-      }
-    }
-  ')
-  kill -- "-$root" 2>/dev/null || true
-  ((${#descendants[@]} == 0)) || kill "${descendants[@]}" 2>/dev/null || true
-  wait "$root" 2>/dev/null || true
-}
-export_failure_logs() {
-  local target=${STATEFUL_E2E_FAILURE_LOG_DIR:-} log
-  [[ -n "$target" ]] || return 0
-  mkdir -p "$target"
-  chmod 0700 "$target"
-  for log in oauth mcp platform-mcp backend frontend; do
-    [[ -f "$work_dir/$log.log" ]] || continue
-    install -m 0600 "$work_dir/$log.log" "$target/$log.log"
-  done
-}
-cleanup() {
-  local status=$?
-	[[ -z "$frontend_pid" ]] || stop_process_tree "$frontend_pid"
-	[[ -z "$backend_pid" ]] || stop_process_tree "$backend_pid"
-	[[ -z "$platform_mcp_pid" ]] || stop_process_tree "$platform_mcp_pid"
-	[[ -z "$mcp_pid" ]] || stop_process_tree "$mcp_pid"
-	[[ -z "$oauth_pid" ]] || stop_process_tree "$oauth_pid"
-  if [[ "$shared_milvus_started" == true ]]; then
-    export STATEFUL_E2E_SHARED_MILVUS_CONTAINER=$shared_milvus_container
-    bash -c "${STATEFUL_E2E_SHARED_MILVUS_STOP_COMMAND:-docker stop \"\$STATEFUL_E2E_SHARED_MILVUS_CONTAINER\"}" \
-      >/dev/null 2>&1 || status=1
-  fi
-  if [[ "$infra_started" == true ]]; then
-    bash -c "${STATEFUL_E2E_INFRA_DOWN_COMMAND:-make -C '$repo_dir' infra-down}" >/dev/null 2>&1 || status=1
-  fi
-  if ((status != 0)); then
-    export_failure_logs || status=1
-  fi
-  rm -rf "$work_dir"
-  exit "$status"
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+exec 9>"$registry_root/registry.lock"; flock 9
+(cd "$repo_dir" && bash -c "$scope_command allocate --repository '$repo_dir' --registry '$registry_root'") >"$scope_file"
+lease_registered=true
+flock -u 9
+jq -e '.schema_version == 1 and (.run_id|type=="string") and (.database_name|type=="string")' "$scope_file" >/dev/null
+run_id=$(jq -er .run_id "$scope_file"); database_name=$(jq -er .database_name "$scope_file")
+frontend_port=$(jq -er .ports.frontend "$scope_file"); backend_port=$(jq -er .ports.backend "$scope_file")
+oauth_port=$(jq -er .ports.oauth "$scope_file"); fixture_port=$(jq -er .ports.fixture "$scope_file")
+export E2E_API_URL="http://127.0.0.1:$backend_port" E2E_WEB_URL="http://127.0.0.1:$frontend_port"
+export E2E_FIXTURE_URL="http://127.0.0.1:$fixture_port" E2E_RUN_INSTANCE_ID=$run_id
+export GITHUB_CALLBACK_URL="$E2E_API_URL/auth/github/callback"
+export GITHUB_AUTHORIZE_URL="http://127.0.0.1:$oauth_port/login/oauth/authorize"
+export GITHUB_TOKEN_URL="http://127.0.0.1:$oauth_port/login/oauth/access_token" GITHUB_USER_URL="http://127.0.0.1:$oauth_port/user"
+export QWEN_BASE_URL="$E2E_FIXTURE_URL/v1" E2E_GITHUB_LISTEN_ADDRESS="127.0.0.1:$oauth_port" E2E_MCP_LISTEN_ADDRESS="127.0.0.1:$fixture_port"
+(cd "$repo_dir" && TEST_DATABASE_URL="$base_dsn" bash -c "$scope_command create-database --scope '$scope_file' --base-dsn-env TEST_DATABASE_URL")
+TEST_DATABASE_URL=$(BASE_DSN="$base_dsn" DATABASE_NAME="$database_name" node --input-type=module -e 'const u=new URL(process.env.BASE_DSN); u.pathname="/"+process.env.DATABASE_NAME; process.stdout.write(u.toString())')
+export STRATUM_TEST_POSTGRES_URL=$TEST_DATABASE_URL POSTGRES_URL=$TEST_DATABASE_URL; database_created=true
 
-common_git_dir=$(cd "$repo_dir" && git rev-parse --path-format=absolute --git-common-dir)
-common_compose_project=$(basename "$(dirname "$common_git_dir")")
-export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-$common_compose_project}
-stateful_e2e_lock="$common_git_dir/stateful-e2e.lock"
-exec {stateful_e2e_lock_fd}>"$stateful_e2e_lock"
-flock "$stateful_e2e_lock_fd"
-env_file=${STATEFUL_E2E_ENV_FILE:-$(dirname "$common_git_dir")/.env}
-if [[ -r "$env_file" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$env_file"
-  set +a
-fi
-export TEST_DATABASE_URL=$database_url STRATUM_TEST_POSTGRES_URL=$database_url POSTGRES_URL=$database_url
-mcp_port=${STATEFUL_E2E_MCP_PORT:-19091}
-[[ "$mcp_port" =~ ^[0-9]+$ ]] && ((mcp_port >= 1024 && mcp_port <= 65535)) || {
-  printf 'STATEFUL_E2E_MCP_PORT must be between 1024 and 65535\n' >&2; exit 2;
-}
-export STATEFUL_E2E_MCP_PORT=$mcp_port E2E_MCP_LISTEN_ADDRESS=127.0.0.1:$mcp_port
-export QWEN_BASE_URL=http://127.0.0.1:$mcp_port/v1
+common_git_dir=$(cd "$repo_dir" && git rev-parse --path-format=absolute --git-common-dir); env_file=${STATEFUL_E2E_ENV_FILE:-$(dirname "$common_git_dir")/.env}
+if [[ -r "$env_file" ]]; then set -a; source "$env_file"; set +a; fi
+export TEST_DATABASE_URL STRATUM_TEST_POSTGRES_URL POSTGRES_URL E2E_API_URL E2E_WEB_URL E2E_FIXTURE_URL E2E_RUN_INSTANCE_ID
+[[ -n "${JWT_PRIVATE_KEY_PEM:-}" ]] || { JWT_PRIVATE_KEY_PEM=$(openssl genrsa 2048 2>/dev/null); export JWT_PRIVATE_KEY_PEM; }
+export STRATUM_E2E_MODE=true GITHUB_CLIENT_ID=stratum-stateful-e2e GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-$(openssl rand -hex 32)}
+export E2E_GITHUB_ID=${E2E_GITHUB_ID:-730001} E2E_GITHUB_LOGIN=${E2E_GITHUB_LOGIN:-stateful-oauth-$run_id} E2E_GITHUB_EMAIL=${E2E_GITHUB_EMAIL:-stateful-$run_id@example.test}
 
-# Ephemeral RSA key for JWT signing — E2E never shares keys with production.
-if [[ -z "${JWT_PRIVATE_KEY_PEM:-}" ]]; then
-  JWT_PRIVATE_KEY_PEM=$(openssl genrsa 2048 2>/dev/null) || {
-    printf 'failed to generate E2E JWT private key\n' >&2; exit 1
-  }
-  export JWT_PRIVATE_KEY_PEM
-fi
+migration_command=${STATEFUL_E2E_MIGRATION_COMMAND:-"cd '$repo_dir' && go run ./cmd/migrate-public --sql-dir '$repo_dir/pkg/migration/sql'"}; bash -c "$migration_command"
+start_child() { local variable=$1 command=$2 log=$3 pid; setsid bash -c "exec $command" >"$log" 2>&1 & pid=$!; printf -v "$variable" '%s' "$pid"; }
+start_child oauth_pid "${STATEFUL_E2E_OAUTH_COMMAND:-cd '$repo_dir' && go run ./cmd/e2e-github-oauth}" "$work_dir/oauth.log"
+start_child mcp_pid "${STATEFUL_E2E_MCP_COMMAND:-cd '$repo_dir' && go run ./cmd/e2e-mcp-server}" "$work_dir/mcp.log"
+start_child backend_pid "${STATEFUL_E2E_BACKEND_COMMAND:-cd '$repo_dir' && FRONTEND_URL='$E2E_WEB_URL' OPIK_URL='$E2E_FIXTURE_URL/opik' PORT='$backend_port' SECURE_COOKIES=false go run ./cmd/server}" "$work_dir/backend.log"
+start_child frontend_pid "${STATEFUL_E2E_FRONTEND_COMMAND:-cd '$repo_dir/web' && CI=1 VITE_API_BASE_URL='$E2E_API_URL' npm run dev -- --host 127.0.0.1 --port '$frontend_port' --strictPort}" "$work_dir/frontend.log"
+poll() { local label=$1 command=$2; for _ in $(seq 1 "${STATEFUL_E2E_HEALTH_ATTEMPTS:-120}"); do bash -c "$command" >/dev/null 2>&1 && return 0; sleep 1; done; printf '%s failed health check\n' "$label" >&2; return 1; }
+poll oauth "${STATEFUL_E2E_OAUTH_HEALTH_COMMAND:-curl -fsS -D - -H 'X-Stratum-E2E-Instance: $run_id' 'http://127.0.0.1:$oauth_port/health' | grep -F 'X-Stratum-E2E-Instance: $run_id'}"
+poll MCP "${STATEFUL_E2E_MCP_HEALTH_COMMAND:-curl -fsS -D - -H 'X-Stratum-E2E-Instance: $run_id' '$E2E_FIXTURE_URL/health' | grep -F 'X-Stratum-E2E-Instance: $run_id'}"
+poll backend "${STATEFUL_E2E_BACKEND_HEALTH_COMMAND:-curl -fsS '$E2E_API_URL/health'}"; poll frontend "${STATEFUL_E2E_FRONTEND_HEALTH_COMMAND:-curl -fsS '$E2E_WEB_URL/'}"
 
-oauth_suffix="$(date +%s)-$$"
-oauth_client_secret=$(openssl rand -hex 32)
-oauth_github_id=$(($(date +%s) * 100000 + $$ % 100000))
-export STRATUM_E2E_MODE=true
-export GITHUB_CLIENT_ID=stratum-stateful-e2e GITHUB_CLIENT_SECRET=$oauth_client_secret
-export GITHUB_CALLBACK_URL=http://127.0.0.1:18080/auth/github/callback
-export GITHUB_AUTHORIZE_URL=http://127.0.0.1:19090/login/oauth/authorize
-export GITHUB_TOKEN_URL=http://127.0.0.1:19090/login/oauth/access_token
-export GITHUB_USER_URL=http://127.0.0.1:19090/user
-export E2E_GITHUB_LISTEN_ADDRESS=127.0.0.1:19090 E2E_GITHUB_ID=$oauth_github_id
-export E2E_GITHUB_LOGIN="stateful-oauth-$oauth_suffix" E2E_GITHUB_EMAIL="stateful-oauth-$oauth_suffix@example.test"
-
-tls_dir="$work_dir/tls"
-mkdir -p "$tls_dir"
-umask 077
-openssl req -x509 -newkey rsa:2048 -nodes -days 2 -sha256 \
-  -keyout "$tls_dir/ca.key" -out "$tls_dir/ca.crt" -subj '/CN=Stratum Stateful E2E CA' >/dev/null 2>&1
-cat >"$tls_dir/backend.ext" <<'EOF'
-subjectAltName=DNS:stratum-internal,URI:spiffe://stratum.local/ns/stratum/sa/stratum-backend
-extendedKeyUsage=serverAuth,clientAuth
-EOF
-cat >"$tls_dir/platform-mcp.ext" <<'EOF'
-subjectAltName=DNS:stratum-platform-mcp,URI:spiffe://stratum.local/ns/stratum/sa/stratum-platform-mcp
-extendedKeyUsage=serverAuth,clientAuth
-EOF
-for workload in backend platform-mcp; do
-  openssl req -new -newkey rsa:2048 -nodes -keyout "$tls_dir/$workload.key" \
-    -out "$tls_dir/$workload.csr" -subj "/CN=stratum-$workload" >/dev/null 2>&1
-  openssl x509 -req -in "$tls_dir/$workload.csr" -CA "$tls_dir/ca.crt" -CAkey "$tls_dir/ca.key" \
-    -CAcreateserial -days 2 -sha256 -extfile "$tls_dir/$workload.ext" \
-    -out "$tls_dir/$workload.crt" >/dev/null 2>&1
-done
-export INTERNAL_API_PORT=18444 INTERNAL_API_TLS_CERT_FILE="$tls_dir/backend.crt"
-export INTERNAL_API_TLS_KEY_FILE="$tls_dir/backend.key" INTERNAL_API_CLIENT_CA_FILE="$tls_dir/ca.crt"
-export PLATFORM_MCP_DIAL_ADDRESS=127.0.0.1:18443 PLATFORM_MCP_PORT=18443
-export PLATFORM_MCP_TLS_CERT_FILE="$tls_dir/platform-mcp.crt"
-export PLATFORM_MCP_TLS_KEY_FILE="$tls_dir/platform-mcp.key" PLATFORM_MCP_CLIENT_CA_FILE="$tls_dir/ca.crt"
-export STRATUM_INTERNAL_BASE_URL=https://127.0.0.1:18444 STRATUM_INTERNAL_SERVER_NAME=stratum-internal
-
-digest_command=${STATEFUL_E2E_DIGEST_COMMAND:-go run ./cmd/e2e-attestation digest --root .}
-source_before=$(cd "$repo_dir" && bash -c "$digest_command")
-
-base_infra_ready() {
-  if [[ -n "${STATEFUL_E2E_BASE_INFRA_HEALTH_COMMAND:-}" ]]; then
-    bash -c "$STATEFUL_E2E_BASE_INFRA_HEALTH_COMMAND"
-    return
-  fi
-  local port
-  for port in 5432 6379 4222; do
-    timeout 1 bash -c "</dev/tcp/127.0.0.1/$port" 2>/dev/null || return 1
-  done
-}
-milvus_ready() {
-  if [[ -n "${STATEFUL_E2E_MILVUS_HEALTH_COMMAND:-}" ]]; then
-    bash -c "$STATEFUL_E2E_MILVUS_HEALTH_COMMAND"
-    return
-  fi
-  timeout 1 bash -c '</dev/tcp/127.0.0.1/19530' 2>/dev/null
-}
-find_shared_milvus() {
-  if [[ -n "${STATEFUL_E2E_SHARED_MILVUS_FIND_COMMAND:-}" ]]; then
-    bash -c "$STATEFUL_E2E_SHARED_MILVUS_FIND_COMMAND"
-    return
-  fi
-  local projects project candidate found=''
-  projects=$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Label "com.docker.compose.service"}}' | awk '
-    $1 != "" && ($2 == "postgres" || $2 == "redis" || $2 == "nats") { seen[$1 ":" $2]=1; projects[$1]=1 }
-    END { for (p in projects) if (seen[p ":postgres"] && seen[p ":redis"] && seen[p ":nats"]) print p }
-  ')
-  while IFS= read -r project; do
-    [[ -n "$project" ]] || continue
-    candidate=$(docker ps -a \
-      --filter "label=com.docker.compose.project=$project" \
-      --filter 'label=com.docker.compose.service=milvus' \
-      --filter 'status=exited' --format '{{.ID}}')
-    [[ -n "$candidate" && "$candidate" != *$'\n'* ]] || continue
-    [[ -z "$found" ]] || return 1
-    found=$candidate
-  done <<<"$projects"
-  [[ -n "$found" ]] || return 1
-  printf '%s\n' "$found"
-}
-if [[ -n "${STATEFUL_E2E_INFRA_UP_COMMAND:-}" ]]; then
-  infra_started=true
-  bash -c "$STATEFUL_E2E_INFRA_UP_COMMAND"
-elif ! base_infra_ready; then
-  infra_owned=true
-  infra_started=true
-  make -C "$repo_dir" infra-up infra-wait
-elif ! milvus_ready; then
-  shared_milvus_container=$(find_shared_milvus) || {
-    printf 'shared core infrastructure is running but a unique stopped Milvus container was not found\n' >&2
-    exit 1
-  }
-  [[ "$shared_milvus_container" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]+$ ]] || {
-    printf 'unsafe shared Milvus container identifier\n' >&2
-    exit 1
-  }
-  export STATEFUL_E2E_SHARED_MILVUS_CONTAINER=$shared_milvus_container
-  bash -c "${STATEFUL_E2E_SHARED_MILVUS_START_COMMAND:-docker start \"\$STATEFUL_E2E_SHARED_MILVUS_CONTAINER\"}"
-  shared_milvus_started=true
-  for _ in {1..60}; do
-    milvus_ready && break
-    sleep 1
-  done
-  milvus_ready || { printf 'shared Milvus failed health check\n' >&2; exit 1; }
-fi
-database_prepare_command=${STATEFUL_E2E_DATABASE_PREPARE_COMMAND:-\
-"cd '$repo_dir/web' && node --input-type=module -e 'import pg from \"pg\"; const target=new URL(process.env.TEST_DATABASE_URL); const name=target.pathname.slice(1); target.pathname=\"/postgres\"; const client=new pg.Client({connectionString:target.toString()}); await client.connect(); const found=await client.query(\"SELECT 1 FROM pg_database WHERE datname = \$1\",[name]); if (found.rowCount === 0) await client.query(\"CREATE DATABASE \\\"\"+name+\"\\\"\"); await client.end();'"}
-bash -c "$database_prepare_command"
-migration_command=${STATEFUL_E2E_MIGRATION_COMMAND:-\
-"cd '$repo_dir' && go run ./cmd/migrate-public --sql-dir '$repo_dir/pkg/migration/sql'"}
-bash -c "$migration_command"
-
-oauth_command=${STATEFUL_E2E_OAUTH_COMMAND:-"cd '$repo_dir' && go run ./cmd/e2e-github-oauth"}
-setsid bash -c "exec bash -c \"\$1\"" _ "$oauth_command" >"$work_dir/oauth.log" 2>&1 & oauth_pid=$!
-mcp_command=${STATEFUL_E2E_MCP_COMMAND:-"cd '$repo_dir' && go run ./cmd/e2e-mcp-server"}
-setsid bash -c "exec bash -c \"\$1\"" _ "$mcp_command" >"$work_dir/mcp.log" 2>&1 & mcp_pid=$!
-platform_mcp_command=${STATEFUL_E2E_PLATFORM_MCP_COMMAND:-"cd '$repo_dir' && go run ./cmd/platform-mcp"}
-setsid bash -c "exec bash -c \"\$1\"" _ "$platform_mcp_command" >"$work_dir/platform-mcp.log" 2>&1 & platform_mcp_pid=$!
-backend_command=${STATEFUL_E2E_BACKEND_COMMAND:-"cd '$repo_dir' && FRONTEND_URL=http://127.0.0.1:15173 OPIK_URL=http://127.0.0.1:$mcp_port/opik PORT=18080 SECURE_COOKIES=false go run ./cmd/server"}
-setsid bash -c "exec bash -c \"\$1\"" _ "$backend_command" >"$work_dir/backend.log" 2>&1 & backend_pid=$!
-frontend_command=${STATEFUL_E2E_FRONTEND_COMMAND:-"cd '$repo_dir/web' && CI=1 VITE_API_BASE_URL=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 15173"}
-setsid bash -c "exec bash -c \"\$1\"" _ "$frontend_command" >"$work_dir/frontend.log" 2>&1 & frontend_pid=$!
-
-poll() {
-  local label=$1 command=$2 attempts=${STATEFUL_E2E_HEALTH_ATTEMPTS:-120}
-  for ((index=1; index<=attempts; index++)); do
-    bash -c "$command" >/dev/null 2>&1 && return 0
-    sleep 1
-  done
-  printf '%s failed health check\n' "$label" >&2
-  return 1
-}
-poll 'oauth provider' "${STATEFUL_E2E_OAUTH_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:19090/health}"
-poll 'MCP server' "${STATEFUL_E2E_MCP_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:$mcp_port/health}"
-poll 'Platform MCP server' "${STATEFUL_E2E_PLATFORM_MCP_HEALTH_COMMAND:-curl -fsS --noproxy stratum-platform-mcp --cacert '$tls_dir/ca.crt' --cert '$tls_dir/backend.crt' --key '$tls_dir/backend.key' --resolve stratum-platform-mcp:18443:127.0.0.1 https://stratum-platform-mcp:18443/healthz}"
-poll backend "${STATEFUL_E2E_BACKEND_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:18080/health}"
-poll frontend "${STATEFUL_E2E_FRONTEND_HEALTH_COMMAND:-curl -fsS http://127.0.0.1:15173/}"
-kill -0 "$oauth_pid" 2>/dev/null || { printf 'oauth provider exited before browser execution\n' >&2; exit 1; }
-kill -0 "$mcp_pid" 2>/dev/null || { printf 'MCP server exited before browser execution\n' >&2; exit 1; }
-kill -0 "$platform_mcp_pid" 2>/dev/null || { printf 'Platform MCP server exited before browser execution\n' >&2; exit 1; }
-kill -0 "$backend_pid" 2>/dev/null || { printf 'backend exited before browser execution\n' >&2; exit 1; }
-kill -0 "$frontend_pid" 2>/dev/null || { printf 'frontend exited before browser execution\n' >&2; exit 1; }
-
-results_path=${STATEFUL_E2E_RESULTS_PATH:-$work_dir/safe-results.json}
-export STATEFUL_E2E_MODE=$mode STATEFUL_E2E_DURATION_SEC=$duration STATEFUL_E2E_PACKS=$packs
-if [[ "$mode" == soak ]]; then
-  export STATEFUL_E2E_PROFILE=$profile
-else
-  unset STATEFUL_E2E_PROFILE
-fi
-export E2E_API_URL=http://127.0.0.1:18080 E2E_WEB_URL=http://127.0.0.1:15173 STATEFUL_E2E_RESULTS_PATH=$results_path
-playwright_command=${STATEFUL_E2E_PLAYWRIGHT_COMMAND:-"cd '$repo_dir/web' && npx playwright test --config playwright.stateful.config.ts"}
-bash -c "$playwright_command"
-
-[[ -s "$results_path" ]] || { printf 'stateful E2E safe results are missing\n' >&2; exit 1; }
-jq -e '
-  .status == "passed" and
-  (.cleanup.passed == true) and
-  (.unverified_capabilities | length == 0) and
-  (all(.packs[]; .status == "passed")) and
-  (all(.capabilities[]; .status == "passed"))
-' "$results_path" >/dev/null || { printf 'stateful E2E results contain failed or skipped coverage\n' >&2; exit 1; }
-
-source_after=$(cd "$repo_dir" && bash -c "$digest_command")
-[[ "$source_before" == "$source_after" ]] || { printf 'covered source changed during stateful E2E execution\n' >&2; exit 1; }
-
-if [[ -n "$profile" ]]; then
-  default_attestation_command="go run ./cmd/e2e-attestation generate --input '$results_path' --profile '$profile' --output-dir test/e2e/attestations"
-else
-  default_attestation_command="go run ./cmd/e2e-attestation generate --input '$results_path' --output-dir test/e2e/attestations"
-fi
-attestation_command=${STATEFUL_E2E_ATTESTATION_COMMAND:-$default_attestation_command}
-(cd "$repo_dir" && bash -c "$attestation_command")
+export STATEFUL_E2E_MODE=$mode STATEFUL_E2E_DURATION_SEC=$duration STATEFUL_E2E_PACKS=$packs STATEFUL_E2E_RESULTS_PATH=$results_path
+[[ "$mode" == soak ]] && export STATEFUL_E2E_PROFILE=$profile || unset STATEFUL_E2E_PROFILE
+bash -c "${STATEFUL_E2E_PLAYWRIGHT_COMMAND:-cd '$repo_dir/web' && npx playwright test --config playwright.stateful.config.ts}"
+jq -e '.status == "passed" and .cleanup.passed and (.unverified_capabilities|length==0)' "$results_path" >/dev/null
+cleanup_owned
+[[ "$database_dropped" == true && "$lease_removed" == true ]] || { printf 'owned cleanup incomplete\n' >&2; exit 1; }
+jq --arg run "$run_id" --arg db "$database_name" --argjson fp "$frontend_port" --argjson bp "$backend_port" --argjson op "$oauth_port" --argjson xp "$fixture_port" '. + {run_topology:{run_id:$run,host:"127.0.0.1",ports:{frontend:$fp,backend:$bp,oauth:$op,fixture:$xp},database_name:$db},owned_cleanup:{database_dropped:true,lease_removed:true}}' "$results_path" >"$work_dir/results-v2.json"
+mv "$work_dir/results-v2.json" "$results_path"
+attestation_command=${STATEFUL_E2E_ATTESTATION_COMMAND:-"cd '$repo_dir' && go run ./cmd/e2e-attestation generate --input '$results_path' --output-dir test/e2e/attestations"}; bash -c "$attestation_command"
+trap - EXIT; rm -rf "$work_dir"
