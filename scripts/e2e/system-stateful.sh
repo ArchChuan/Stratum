@@ -91,5 +91,5 @@ cleanup_owned
 [[ "$database_dropped" == true && "$lease_removed" == true ]] || { printf 'owned cleanup incomplete\n' >&2; exit 1; }
 jq --arg run "$run_id" --arg db "$database_name" --argjson fp "$frontend_port" --argjson bp "$backend_port" --argjson op "$oauth_port" --argjson xp "$fixture_port" '. + {run_topology:{run_id:$run,host:"127.0.0.1",ports:{frontend:$fp,backend:$bp,oauth:$op,fixture:$xp},database_name:$db},owned_cleanup:{database_dropped:true,lease_removed:true}}' "$results_path" >"$work_dir/results-v2.json"
 mv "$work_dir/results-v2.json" "$results_path"
-attestation_command=${STATEFUL_E2E_ATTESTATION_COMMAND:-"cd '$repo_dir' && go run ./cmd/e2e-attestation generate --input '$results_path' --output-dir test/e2e/attestations"}; bash -c "$attestation_command"
+attestation_command=${STATEFUL_E2E_ATTESTATION_COMMAND:-"cd '$repo_dir' && go run ./cmd/e2e-attestation generate --input '$results_path' --output-dir 'test/e2e/attestations/$run_id'"}; bash -c "$attestation_command"
 trap - EXIT; rm -rf "$work_dir"
