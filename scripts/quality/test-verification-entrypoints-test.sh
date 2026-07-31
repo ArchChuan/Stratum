@@ -17,6 +17,13 @@ grep -Fq 'scripts/quality/run-planned-checks.sh' "$root/.github/workflows/statef
 grep -Fq 'scripts/quality/run-planned-checks.sh' "$root/.github/workflows/release-verification.yml"
 grep -Fq 'env -u STRATUM_TEST_POSTGRES_URL' "$root/scripts/quality/run-planned-checks.sh"
 grep -Fq 'STATEFUL_E2E_PROFILE: ""' "$root/.github/workflows/stateful-e2e.yml"
+for workflow in stateful-e2e.yml release-verification.yml; do
+  if grep -Fq 'run: bash scripts/quality/write-verification-check-receipt.sh \' \
+    "$root/.github/workflows/$workflow"; then
+    printf 'check receipt command uses a folded YAML scalar: %s\n' "$workflow" >&2
+    exit 1
+  fi
+done
 grep -Eq '^test-verify-report:[[:space:]]*$' "$makefile"
 grep -Fq 'e2e-attestation-check' "$makefile"
 grep -Fq 'verification-schema' "$makefile"
