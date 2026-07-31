@@ -38,7 +38,7 @@ jobs:
         run: make agent-instructions-check
 
       - name: Verify unified verification contracts
-        run: make verification-manifest-test verification-schemas-test
+        run: make verification-manifest-test verification-schemas-test test-verification-entrypoints-test
 
       - uses: actions/setup-go@v5
         with:
@@ -63,6 +63,9 @@ jobs:
 
       - name: Enforce incremental Go code quality
         run: make code-quality
+
+      - name: Lint and build frontend
+        run: make fe-lint fe-build
 
       - name: Test Agent tool permission harness
         run: make tool-permission-test
@@ -194,9 +197,6 @@ jobs:
 
       - name: Build binary
         run: go build -o bin/server ./cmd/server
-
-      - name: go vet
-        run: go vet ./...
 
   security:
     name: Security Scan
