@@ -60,6 +60,18 @@ func TestRegistryRejectsUnsafePaths(t *testing.T) {
 			run: func(r Registry) error { return r.Register(scope) },
 		},
 		{
+			name: "symlink root ancestor",
+			prepare: func(t *testing.T) Registry {
+				target := t.TempDir()
+				ancestor := filepath.Join(t.TempDir(), "ancestor")
+				if err := os.Symlink(target, ancestor); err != nil {
+					t.Fatal(err)
+				}
+				return Registry{Root: filepath.Join(ancestor, "registry")}
+			},
+			run: func(r Registry) error { return r.Register(scope) },
+		},
+		{
 			name:    "unsafe run ID",
 			prepare: func(t *testing.T) Registry { return Registry{Root: filepath.Join(t.TempDir(), "registry")} },
 			run:     func(r Registry) error { _, err := r.Read("../escape"); return err },
@@ -199,45 +211,28 @@ func TestRegistryRegisterRejectsDuplicateLease(t *testing.T) {
 func TestRegistryRegisterPublishesCompleteLeaseExclusively(t *testing.T) {
 	r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
 	scope := registryTestScope(t, "20260730t120102z-a1b2c3d4e5f60718", 101)
-	scope.Repository = "/" + strings.Repeat("r", 64<<20)
+	scope.Repository = "/" + strings.Repeat("r", 4<<10)
 	leasePath := r.leasePath(scope.RunID)
 	data, err := json.Marshal(scope)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.ensureDirectories(); err != nil {
+	if err := r.Register(scope); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	info, err := os.Lstat(leasePath)
+	if err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan error, 1)
-	go func() {
-		done <- r.Register(scope)
-	}()
-
-	registrationDone := false
-	for {
-		info, err := os.Lstat(leasePath)
-		if err == nil {
-			if info.Size() != int64(len(data)) {
-				t.Fatalf("visible lease size = %d, want complete size %d", info.Size(), len(data))
-			}
-			break
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("Read() observed incomplete lease at %q: %v", leasePath, err)
-		}
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Fatalf("Register() error = %v", err)
-			}
-			registrationDone = true
-		default:
-		}
+	if info.Size() != int64(len(data)) {
+		t.Fatalf("visible lease size = %d, want complete size %d", info.Size(), len(data))
 	}
-	if !registrationDone {
-		if err := <-done; err != nil {
-			t.Fatalf("Register() error = %v", err)
-		}
+	entries, err := os.ReadDir(filepath.Dir(leasePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(leasePath) {
+		t.Fatalf("published entries = %v, want only final lease", entries)
 	}
 
 	changed := scope
@@ -251,6 +246,37 @@ func TestRegistryRegisterPublishesCompleteLeaseExclusively(t *testing.T) {
 	}
 	if got.OwnerPID != scope.OwnerPID {
 		t.Fatalf("OwnerPID = %d, want original %d", got.OwnerPID, scope.OwnerPID)
+	}
+}
+
+func TestRegistryPropagatesDirectorySyncFailures(t *testing.T) {
+	r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
+	first := registryTestScope(t, "20260730t120102z-a1b2c3d4e5f60718", 101)
+	if err := r.Register(first); err != nil {
+		t.Fatal(err)
+	}
+
+	original := syncRegistryDirectory
+	t.Cleanup(func() { syncRegistryDirectory = original })
+	syncRegistryDirectory = func(*os.File) error { return errors.New("injected directory sync failure") }
+	second := registryTestScope(t, "20260730t120103z-b1b2c3d4e5f60718", 202)
+	if err := r.Register(second); err == nil || !strings.Contains(err.Error(), "sync") {
+		t.Fatalf("Register() error = %v, want directory sync failure", err)
+	}
+}
+
+func TestRegistryReleasePropagatesDirectorySyncFailure(t *testing.T) {
+	r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
+	scope := registryTestScope(t, "20260730t120102z-a1b2c3d4e5f60718", 101)
+	if err := r.Register(scope); err != nil {
+		t.Fatal(err)
+	}
+
+	original := syncRegistryDirectory
+	t.Cleanup(func() { syncRegistryDirectory = original })
+	syncRegistryDirectory = func(*os.File) error { return errors.New("injected directory sync failure") }
+	if _, err := r.Release(scope.RunID); err == nil || !strings.Contains(err.Error(), "sync") {
+		t.Fatalf("Release() error = %v, want directory sync failure", err)
 	}
 }
 

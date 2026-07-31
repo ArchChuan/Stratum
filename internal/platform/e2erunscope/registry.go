@@ -1,12 +1,15 @@
 package e2erunscope
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,7 +19,10 @@ import (
 const (
 	registryDirectoryMode = 0o700
 	registryMetadataMode  = 0o600
+	registryTempAttempts  = 16
 )
+
+var syncRegistryDirectory = func(directory *os.File) error { return directory.Sync() }
 
 type Registry struct {
 	Root string
@@ -34,6 +40,11 @@ type ReleaseResult struct {
 	OwnershipRunID          string `json:"ownership_run_id,omitempty"`
 }
 
+type registryDirectories struct {
+	root *os.File
+	runs *os.File
+}
+
 func (r Registry) Register(scope Scope) error {
 	if err := Validate(scope); err != nil {
 		return fmt.Errorf("registry: validate scope: %w", err)
@@ -41,66 +52,120 @@ func (r Registry) Register(scope Scope) error {
 	if err := safeRunID(scope.RunID); err != nil {
 		return err
 	}
-	if err := r.ensureDirectories(); err != nil {
+	directories, err := r.openDirectories(true)
+	if err != nil {
 		return err
 	}
+	defer directories.close()
 	data, err := json.Marshal(scope)
 	if err != nil {
 		return fmt.Errorf("registry: encode lease: %w", err)
 	}
-	return atomicCreate(r.leasePath(scope.RunID), data)
+	return atomicCreateAt(directories.root, directories.runs, scope.RunID+".json", data)
 }
 
 func (r Registry) Read(runID string) (Scope, error) {
 	if err := safeRunID(runID); err != nil {
 		return Scope{}, err
 	}
-	if err := r.validateDirectories(); err != nil {
+	directories, err := r.openDirectories(false)
+	if err != nil {
 		return Scope{}, err
 	}
-	return readLease(r.leasePath(runID), runID)
+	defer directories.close()
+	return readLeaseAt(directories.runs, runID+".json", runID)
 }
 
 func (r Registry) MarkInfrastructureOwned(runID string, now time.Time) error {
 	if err := safeRunID(runID); err != nil {
 		return err
 	}
-	if _, err := r.Read(runID); err != nil {
+	directories, err := r.openDirectories(false)
+	if err != nil {
+		return err
+	}
+	defer directories.close()
+	if _, err := readLeaseAt(directories.runs, runID+".json", runID); err != nil {
 		return fmt.Errorf("registry: read owner lease: %w", err)
 	}
 	state := InfrastructureState{StartedByE2E: true, StartedAt: now.UTC(), StartedByRun: runID}
-	return r.writeInfrastructure(state)
+	return writeInfrastructureAt(directories.root, state)
 }
 
 func (r Registry) Release(runID string) (ReleaseResult, error) {
 	if err := safeRunID(runID); err != nil {
 		return ReleaseResult{}, err
 	}
-	if err := r.validateDirectories(); err != nil {
+	directories, err := r.openDirectories(false)
+	if err != nil {
 		return ReleaseResult{}, err
 	}
-	leases, err := r.readAllLeases()
+	defer directories.close()
+	leases, err := readAllLeasesAt(directories.runs)
 	if err != nil {
 		return ReleaseResult{}, err
 	}
 	if err := requireLease(leases, runID); err != nil {
 		return ReleaseResult{}, err
 	}
-	state, stateExists, err := r.readInfrastructure()
+	state, stateExists, err := readInfrastructureAt(directories.root)
 	if err != nil {
 		return ReleaseResult{}, err
 	}
-	path := r.leasePath(runID)
-	if _, err := inspectMetadata(path); err != nil {
-		return ReleaseResult{}, fmt.Errorf("registry: inspect lease before removal: %w", err)
-	}
-	if err := os.Remove(path); err != nil {
+	if err := removeMetadataAt(directories.runs, runID+".json"); err != nil {
 		return ReleaseResult{}, fmt.Errorf("registry: remove lease: %w", err)
 	}
 	if len(leases) != 1 {
 		return ReleaseResult{}, nil
 	}
 	return lastReleaseResult(state, stateExists), nil
+}
+
+func (r Registry) ConfirmInfrastructureStopped(ownershipRunID string) error {
+	if err := safeRunID(ownershipRunID); err != nil {
+		return err
+	}
+	directories, err := r.openDirectories(false)
+	if err != nil {
+		return err
+	}
+	defer directories.close()
+	state, exists, err := readInfrastructureAt(directories.root)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return errors.New("registry: infrastructure ownership not found")
+	}
+	if state.StartedByRun != ownershipRunID {
+		return errors.New("registry: infrastructure ownership changed")
+	}
+	if err := removeMetadataAt(directories.root, "infrastructure.json"); err != nil {
+		return fmt.Errorf("registry: remove infrastructure metadata: %w", err)
+	}
+	return nil
+}
+
+func (r Registry) Stale(now time.Time, processAlive func(int, string) bool) ([]Scope, error) {
+	if processAlive == nil {
+		return nil, errors.New("registry: process liveness callback is required")
+	}
+	directories, err := r.openDirectories(false)
+	if err != nil {
+		return nil, err
+	}
+	defer directories.close()
+	leases, err := readAllLeasesAt(directories.runs)
+	if err != nil {
+		return nil, err
+	}
+	stale := make([]Scope, 0, len(leases))
+	for _, lease := range leases {
+		if now.After(lease.ExpiresAt) && !processAlive(lease.OwnerPID, lease.Repository) {
+			stale = append(stale, lease)
+		}
+	}
+	return stale, nil
 }
 
 func lastReleaseResult(state InfrastructureState, stateExists bool) ReleaseResult {
@@ -121,99 +186,109 @@ func requireLease(leases []Scope, runID string) error {
 	return errors.New("registry: lease not found")
 }
 
-func (r Registry) ConfirmInfrastructureStopped(ownershipRunID string) error {
-	if err := safeRunID(ownershipRunID); err != nil {
-		return err
-	}
-	if err := r.validateDirectories(); err != nil {
-		return err
-	}
-	state, exists, err := r.readInfrastructure()
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return errors.New("registry: infrastructure ownership not found")
-	}
-	if state.StartedByRun != ownershipRunID {
-		return errors.New("registry: infrastructure ownership changed")
-	}
-	path := r.infrastructurePath()
-	if _, err := inspectMetadata(path); err != nil {
-		return fmt.Errorf("registry: inspect infrastructure before removal: %w", err)
-	}
-	if err := os.Remove(path); err != nil {
-		return fmt.Errorf("registry: remove infrastructure metadata: %w", err)
-	}
-	return nil
-}
-
-func (r Registry) Stale(now time.Time, processAlive func(int, string) bool) ([]Scope, error) {
-	if processAlive == nil {
-		return nil, errors.New("registry: process liveness callback is required")
-	}
-	if err := r.validateDirectories(); err != nil {
-		return nil, err
-	}
-	leases, err := r.readAllLeases()
+func (r Registry) openDirectories(create bool) (*registryDirectories, error) {
+	root, err := openRegistryRoot(r.Root, create)
 	if err != nil {
 		return nil, err
 	}
-	stale := make([]Scope, 0, len(leases))
-	for _, lease := range leases {
-		if now.After(lease.ExpiresAt) && !processAlive(lease.OwnerPID, lease.Repository) {
-			stale = append(stale, lease)
-		}
-	}
-	return stale, nil
-}
-
-func (r Registry) ensureDirectories() error {
-	if r.Root == "" || !filepath.IsAbs(r.Root) {
-		return errors.New("registry: root must be absolute")
-	}
-	if info, err := os.Lstat(r.Root); err == nil {
-		if err := validateDirectory(r.Root, info); err != nil {
-			return err
-		}
-	} else if os.IsNotExist(err) {
-		if err := os.Mkdir(r.Root, registryDirectoryMode); err != nil {
-			return fmt.Errorf("registry: create root: %w", err)
-		}
-	} else {
-		return fmt.Errorf("registry: inspect root: %w", err)
-	}
-	runs := r.runsPath()
-	if info, err := os.Lstat(runs); err == nil {
-		return validateDirectory(runs, info)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("registry: inspect runs directory: %w", err)
-	}
-	if err := os.Mkdir(runs, registryDirectoryMode); err != nil {
-		return fmt.Errorf("registry: create runs directory: %w", err)
-	}
-	return nil
-}
-
-func (r Registry) validateDirectories() error {
-	if r.Root == "" || !filepath.IsAbs(r.Root) {
-		return errors.New("registry: root must be absolute")
-	}
-	for _, path := range []string{r.Root, r.runsPath()} {
-		info, err := os.Lstat(path)
-		if err != nil {
-			return fmt.Errorf("registry: inspect directory: %w", err)
-		}
-		if err := validateDirectory(path, info); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (r Registry) readAllLeases() ([]Scope, error) {
-	entries, err := os.ReadDir(r.runsPath())
+	runs, err := openRegistrySubdirectory(root, "runs", create)
 	if err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	return &registryDirectories{root: root, runs: runs}, nil
+}
+
+func (d *registryDirectories) close() {
+	_ = d.runs.Close()
+	_ = d.root.Close()
+}
+
+func openRegistryRoot(path string, create bool) (*os.File, error) {
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) == "/" {
+		return nil, errors.New("registry: root must be an absolute non-root path")
+	}
+	filesystemRoot, err := os.Open("/")
+	if err != nil {
+		return nil, fmt.Errorf("registry: open filesystem root: %w", err)
+	}
+	defer filesystemRoot.Close()
+	relative := strings.TrimPrefix(filepath.Clean(path), "/")
+	root, err := openDirectoryAt(filesystemRoot, relative, path)
+	if err == nil || !create || !errors.Is(err, os.ErrNotExist) {
+		return root, err
+	}
+	return createRegistryRoot(filesystemRoot, relative, path)
+}
+
+func createRegistryRoot(filesystemRoot *os.File, relative string, path string) (*os.File, error) {
+	parentName, base := filepath.Split(relative)
+	parentName = strings.TrimSuffix(parentName, string(filepath.Separator))
+	parent, err := openUnvalidatedDirectoryAt(filesystemRoot, parentName, filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("registry: open root parent: %w", err)
+	}
+	defer parent.Close()
+	if err := unix.Mkdirat(fileDescriptor(parent), base, registryDirectoryMode); err != nil && !errors.Is(err, unix.EEXIST) {
+		return nil, fmt.Errorf("registry: create root: %w", err)
+	}
+	if err := syncRegistryDirectory(parent); err != nil {
+		return nil, fmt.Errorf("registry: sync root parent: %w", err)
+	}
+	return openDirectoryAt(parent, base, path)
+}
+
+func openRegistrySubdirectory(root *os.File, name string, create bool) (*os.File, error) {
+	directory, err := openDirectoryAt(root, name, name)
+	if err == nil || !create || !errors.Is(err, os.ErrNotExist) {
+		return directory, err
+	}
+	if err := unix.Mkdirat(fileDescriptor(root), name, registryDirectoryMode); err != nil && !errors.Is(err, unix.EEXIST) {
+		return nil, fmt.Errorf("registry: create %s directory: %w", name, err)
+	}
+	if err := syncRegistryDirectory(root); err != nil {
+		return nil, fmt.Errorf("registry: sync root directory: %w", err)
+	}
+	return openDirectoryAt(root, name, name)
+}
+
+func openDirectoryAt(parent *os.File, name string, displayPath string) (*os.File, error) {
+	directory, err := openUnvalidatedDirectoryAt(parent, name, displayPath)
+	if err != nil {
+		return nil, err
+	}
+	info, err := directory.Stat()
+	if err == nil {
+		err = validateDirectory(displayPath, info)
+	}
+	if err != nil {
+		_ = directory.Close()
+		return nil, err
+	}
+	return directory, nil
+}
+
+func openUnvalidatedDirectoryAt(parent *os.File, name string, displayPath string) (*os.File, error) {
+	how := &unix.OpenHow{
+		Flags:   unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC,
+		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
+	}
+	fd, err := unix.Openat2(fileDescriptor(parent), name, how)
+	if err != nil {
+		return nil, fmt.Errorf("registry: open directory %q: %w", displayPath, err)
+	}
+	return fileFromDescriptor(fd, displayPath), nil
+}
+
+func readAllLeasesAt(runs *os.File) ([]Scope, error) {
+	fd, err := unix.Dup(fileDescriptor(runs))
+	if err != nil {
+		return nil, fmt.Errorf("registry: duplicate runs directory: %w", err)
+	}
+	directory := fileFromDescriptor(fd, "runs")
+	entries, readErr := directory.ReadDir(-1)
+	closeErr := directory.Close()
+	if err := errors.Join(readErr, closeErr); err != nil {
 		return nil, fmt.Errorf("registry: list leases: %w", err)
 	}
 	leases := make([]Scope, 0, len(entries))
@@ -222,11 +297,11 @@ func (r Registry) readAllLeases() ([]Scope, error) {
 		if filepath.Ext(name) != ".json" {
 			return nil, fmt.Errorf("registry: unexpected lease entry %q", name)
 		}
-		runID := name[:len(name)-len(".json")]
+		runID := strings.TrimSuffix(name, ".json")
 		if err := safeRunID(runID); err != nil {
 			return nil, fmt.Errorf("registry: invalid lease filename: %w", err)
 		}
-		lease, err := readLease(filepath.Join(r.runsPath(), name), runID)
+		lease, err := readLeaseAt(runs, name, runID)
 		if err != nil {
 			return nil, err
 		}
@@ -235,37 +310,27 @@ func (r Registry) readAllLeases() ([]Scope, error) {
 	return leases, nil
 }
 
-func (r Registry) writeInfrastructure(state InfrastructureState) error {
+func writeInfrastructureAt(root *os.File, state InfrastructureState) error {
 	if err := validateInfrastructure(state); err != nil {
 		return err
 	}
-	if err := r.validateDirectories(); err != nil {
+	if _, _, err := readInfrastructureAt(root); err != nil {
 		return err
-	}
-	path := r.infrastructurePath()
-	if _, err := os.Lstat(path); err == nil {
-		if _, _, readErr := r.readInfrastructure(); readErr != nil {
-			return readErr
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("registry: inspect infrastructure: %w", err)
 	}
 	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("registry: encode infrastructure: %w", err)
 	}
-	return atomicWrite(path, data)
+	return atomicWriteAt(root, "infrastructure.json", data)
 }
 
-func (r Registry) readInfrastructure() (InfrastructureState, bool, error) {
-	path := r.infrastructurePath()
-	if _, err := os.Lstat(path); os.IsNotExist(err) {
-		return InfrastructureState{}, false, nil
-	} else if err != nil {
-		return InfrastructureState{}, false, fmt.Errorf("registry: inspect infrastructure: %w", err)
-	}
+func readInfrastructureAt(root *os.File) (InfrastructureState, bool, error) {
 	var state InfrastructureState
-	if err := decodeMetadata(path, &state); err != nil {
+	err := decodeMetadataAt(root, "infrastructure.json", &state)
+	if errors.Is(err, os.ErrNotExist) {
+		return InfrastructureState{}, false, nil
+	}
+	if err != nil {
 		return InfrastructureState{}, false, fmt.Errorf("registry: read infrastructure: %w", err)
 	}
 	if err := validateInfrastructure(state); err != nil {
@@ -274,9 +339,9 @@ func (r Registry) readInfrastructure() (InfrastructureState, bool, error) {
 	return state, true, nil
 }
 
-func readLease(path string, runID string) (Scope, error) {
+func readLeaseAt(runs *os.File, name string, runID string) (Scope, error) {
 	var scope Scope
-	if err := decodeMetadata(path, &scope); err != nil {
+	if err := decodeMetadataAt(runs, name, &scope); err != nil {
 		return Scope{}, fmt.Errorf("registry: read lease: %w", err)
 	}
 	if scope.RunID != runID {
@@ -288,13 +353,10 @@ func readLease(path string, runID string) (Scope, error) {
 	return scope, nil
 }
 
-func decodeMetadata(path string, destination any) error {
-	if _, err := inspectMetadata(path); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+func decodeMetadataAt(directory *os.File, name string, destination any) error {
+	file, err := openMetadataAt(directory, name)
 	if err != nil {
-		return fmt.Errorf("open metadata: %w", err)
+		return err
 	}
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
@@ -305,32 +367,43 @@ func decodeMetadata(path string, destination any) error {
 			decodeErr = errors.New("metadata contains trailing JSON")
 		}
 	}
-	if closeErr := file.Close(); closeErr != nil {
-		decodeErr = errors.Join(decodeErr, closeErr)
-	}
-	return decodeErr
+	return errors.Join(decodeErr, file.Close())
 }
 
-func inspectMetadata(path string) (os.FileInfo, error) {
-	info, err := os.Lstat(path)
+func openMetadataAt(directory *os.File, name string) (*os.File, error) {
+	how := &unix.OpenHow{
+		Flags:   unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW,
+		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
+	}
+	fd, err := unix.Openat2(fileDescriptor(directory), name, how)
 	if err != nil {
+		return nil, fmt.Errorf("open metadata: %w", err)
+	}
+	file := fileFromDescriptor(fd, name)
+	info, err := file.Stat()
+	if err == nil {
+		err = validateMetadataFile(info)
+	}
+	if err != nil {
+		_ = file.Close()
 		return nil, err
 	}
+	return file, nil
+}
+
+func validateMetadataFile(info os.FileInfo) error {
 	if !info.Mode().IsRegular() {
-		return nil, errors.New("metadata is not a regular file")
+		return errors.New("metadata is not a regular file")
 	}
 	if info.Mode().Perm()&0o022 != 0 {
-		return nil, errors.New("metadata is group or world writable")
+		return errors.New("metadata is group or world writable")
 	}
-	if err := validateUID(info); err != nil {
-		return nil, err
-	}
-	return info, nil
+	return validateUID(info)
 }
 
 func validateDirectory(path string, info os.FileInfo) error {
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("registry: %q is not a real directory", path)
+	if !info.IsDir() {
+		return fmt.Errorf("registry: %q is not a directory", path)
 	}
 	if info.Mode().Perm() != registryDirectoryMode {
 		return fmt.Errorf("registry: directory %q must have mode 0700", path)
@@ -363,79 +436,166 @@ func safeRunID(runID string) error {
 	return nil
 }
 
-func atomicWrite(path string, data []byte) (err error) {
-	directory := filepath.Dir(path)
-	temp, err := os.CreateTemp(directory, ".registry-*.tmp")
+func atomicWriteAt(directory *os.File, name string, data []byte) (err error) {
+	temp, tempName, err := createTemporaryMetadataAt(directory)
 	if err != nil {
-		return fmt.Errorf("registry: create temporary metadata: %w", err)
+		return err
 	}
-	tempPath := temp.Name()
-	defer func() {
-		cleanupErr := os.Remove(tempPath)
-		if cleanupErr != nil && !os.IsNotExist(cleanupErr) {
-			err = errors.Join(err, fmt.Errorf("registry: remove temporary metadata: %w", cleanupErr))
-		}
-	}()
-	if err := temp.Chmod(registryMetadataMode); err != nil {
-		_ = temp.Close()
-		return fmt.Errorf("registry: chmod temporary metadata: %w", err)
-	}
+	renamed := false
+	defer func() { err = cleanupTemporaryMetadataAt(directory, tempName, renamed, err) }()
 	if err := writeAndClose(temp, data); err != nil {
 		return fmt.Errorf("registry: write temporary metadata: %w", err)
 	}
-	if _, err := os.Lstat(directory); err != nil {
-		return fmt.Errorf("registry: inspect destination directory: %w", err)
-	}
-	if err := os.Rename(tempPath, path); err != nil {
+	if err := unix.Renameat(fileDescriptor(directory), tempName, fileDescriptor(directory), name); err != nil {
 		return fmt.Errorf("registry: rename metadata: %w", err)
+	}
+	renamed = true
+	if err := syncRegistryDirectory(directory); err != nil {
+		return fmt.Errorf("registry: sync metadata directory: %w", err)
 	}
 	return nil
 }
 
-func atomicCreate(path string, data []byte) (err error) {
-	directory := filepath.Dir(path)
-	temp, err := os.CreateTemp(filepath.Dir(directory), ".registry-*.tmp")
+func atomicCreateAt(source *os.File, destination *os.File, name string, data []byte) (err error) {
+	temp, tempName, err := createTemporaryMetadataAt(source)
 	if err != nil {
-		return fmt.Errorf("registry: create temporary metadata: %w", err)
+		return err
 	}
-	tempPath := temp.Name()
 	renamed := false
-	defer func() {
-		err = cleanupTemporaryMetadata(tempPath, renamed, err)
-	}()
-	if err := temp.Chmod(registryMetadataMode); err != nil {
-		closeErr := temp.Close()
-		if closeErr != nil {
-			closeErr = fmt.Errorf("registry: close temporary metadata: %w", closeErr)
-		}
-		return errors.Join(fmt.Errorf("registry: chmod temporary metadata: %w", err), closeErr)
-	}
+	defer func() { err = cleanupTemporaryMetadataAt(source, tempName, renamed, err) }()
 	if err := writeAndClose(temp, data); err != nil {
 		return fmt.Errorf("registry: write temporary metadata: %w", err)
 	}
-	info, err := os.Lstat(directory)
-	if err != nil {
-		return fmt.Errorf("registry: inspect destination directory: %w", err)
-	}
-	if err := validateDirectory(directory, info); err != nil {
-		return err
-	}
-	if err := renameNoReplace(tempPath, path); errors.Is(err, os.ErrExist) {
+	if err := renameAtNoReplace(source, tempName, destination, name); errors.Is(err, os.ErrExist) {
 		return fmt.Errorf("registry: lease already exists: %w", err)
 	} else if err != nil {
 		return fmt.Errorf("registry: rename lease: %w", err)
 	}
 	renamed = true
+	sourceSyncErr := syncRegistryDirectory(source)
+	destinationSyncErr := syncRegistryDirectory(destination)
+	if err := errors.Join(sourceSyncErr, destinationSyncErr); err != nil {
+		return fmt.Errorf("registry: sync lease namespace: %w", err)
+	}
 	return nil
+}
+
+func createTemporaryMetadataAt(directory *os.File) (*os.File, string, error) {
+	for range registryTempAttempts {
+		name, err := randomTemporaryName()
+		if err != nil {
+			return nil, "", fmt.Errorf("registry: generate temporary metadata name: %w", err)
+		}
+		fd, err := unix.Openat(
+			fileDescriptor(directory), name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC,
+			registryMetadataMode,
+		)
+		if err == nil {
+			return fileFromDescriptor(fd, name), name, nil
+		}
+		if !errors.Is(err, unix.EEXIST) {
+			return nil, "", fmt.Errorf("registry: create temporary metadata: %w", err)
+		}
+	}
+	return nil, "", errors.New("registry: create temporary metadata: name attempts exhausted")
+}
+
+func randomTemporaryName() (string, error) {
+	var suffix [16]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", err
+	}
+	return ".registry-" + hex.EncodeToString(suffix[:]) + ".tmp", nil
+}
+
+func removeMetadataAt(directory *os.File, name string) error {
+	file, err := openMetadataAt(directory, name)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	quarantineName, err := unusedTemporaryNameAt(directory)
+	if err != nil {
+		return err
+	}
+	if err := renameAtNoReplace(directory, name, directory, quarantineName); err != nil {
+		return fmt.Errorf("quarantine metadata before removal: %w", err)
+	}
+	quarantined, err := openMetadataAt(directory, quarantineName)
+	if err != nil {
+		return restoreQuarantinedMetadata(directory, quarantineName, name, err)
+	}
+	sameErr := requireSameFile(file, quarantined)
+	closeErr := quarantined.Close()
+	if err := errors.Join(sameErr, closeErr); err != nil {
+		return restoreQuarantinedMetadata(directory, quarantineName, name, err)
+	}
+	if err := unix.Unlinkat(fileDescriptor(directory), quarantineName, 0); err != nil {
+		return err
+	}
+	if err := syncRegistryDirectory(directory); err != nil {
+		return fmt.Errorf("sync metadata directory: %w", err)
+	}
+	return nil
+}
+
+func unusedTemporaryNameAt(directory *os.File) (string, error) {
+	for range registryTempAttempts {
+		name, err := randomTemporaryName()
+		if err != nil {
+			return "", fmt.Errorf("registry: generate quarantine name: %w", err)
+		}
+		var stat unix.Stat_t
+		err = unix.Fstatat(fileDescriptor(directory), name, &stat, unix.AT_SYMLINK_NOFOLLOW)
+		if errors.Is(err, unix.ENOENT) {
+			return name, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("registry: inspect quarantine name: %w", err)
+		}
+	}
+	return "", errors.New("registry: generate quarantine name: attempts exhausted")
+}
+
+func requireSameFile(first *os.File, second *os.File) error {
+	firstInfo, firstErr := first.Stat()
+	secondInfo, secondErr := second.Stat()
+	if err := errors.Join(firstErr, secondErr); err != nil {
+		return fmt.Errorf("stat metadata identity: %w", err)
+	}
+	firstStat, firstOK := firstInfo.Sys().(*syscall.Stat_t)
+	secondStat, secondOK := secondInfo.Sys().(*syscall.Stat_t)
+	if !firstOK || !secondOK || firstStat.Dev != secondStat.Dev || firstStat.Ino != secondStat.Ino {
+		return errors.New("metadata changed before removal")
+	}
+	return nil
+}
+
+func restoreQuarantinedMetadata(directory *os.File, quarantineName string, name string, cause error) error {
+	restoreErr := renameAtNoReplace(directory, quarantineName, directory, name)
+	syncErr := syncRegistryDirectory(directory)
+	if restoreErr != nil {
+		restoreErr = fmt.Errorf("restore quarantined metadata: %w", restoreErr)
+	}
+	if syncErr != nil {
+		syncErr = fmt.Errorf("sync restored metadata directory: %w", syncErr)
+	}
+	return errors.Join(cause, restoreErr, syncErr)
+}
+
+func renameAtNoReplace(oldDirectory *os.File, oldName string, newDirectory *os.File, newName string) error {
+	return unix.Renameat2(
+		fileDescriptor(oldDirectory), oldName, fileDescriptor(newDirectory), newName, unix.RENAME_NOREPLACE,
+	)
 }
 
 func renameNoReplace(oldPath string, newPath string) error {
 	return unix.Renameat2(unix.AT_FDCWD, oldPath, unix.AT_FDCWD, newPath, unix.RENAME_NOREPLACE)
 }
 
-func cleanupTemporaryMetadata(path string, renamed bool, err error) error {
-	cleanupErr := os.Remove(path)
-	if cleanupErr == nil || (renamed && os.IsNotExist(cleanupErr)) {
+func cleanupTemporaryMetadataAt(directory *os.File, name string, renamed bool, err error) error {
+	cleanupErr := unix.Unlinkat(fileDescriptor(directory), name, 0)
+	if cleanupErr == nil || (renamed && errors.Is(cleanupErr, unix.ENOENT)) {
 		return err
 	}
 	return errors.Join(err, fmt.Errorf("registry: remove temporary metadata: %w", cleanupErr))
@@ -449,6 +609,15 @@ func writeAndClose(file *os.File, data []byte) error {
 	return errors.Join(writeErr, file.Close())
 }
 
+func fileDescriptor(file *os.File) int {
+	// #nosec G115 -- Unix file descriptors are non-negative int values exposed by os.File as uintptr.
+	return int(file.Fd())
+}
+
+func fileFromDescriptor(fd int, name string) *os.File {
+	// #nosec G115 -- successful Unix open/dup calls return non-negative int file descriptors.
+	return os.NewFile(uintptr(fd), name)
+}
+
 func (r Registry) runsPath() string              { return filepath.Join(r.Root, "runs") }
 func (r Registry) leasePath(runID string) string { return filepath.Join(r.runsPath(), runID+".json") }
-func (r Registry) infrastructurePath() string    { return filepath.Join(r.Root, "infrastructure.json") }
