@@ -30,6 +30,7 @@ type encryptedClientAdapter struct {
 		PutObject(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions) (minio.UploadInfo, error)
 		GetObject(context.Context, string, string, minio.GetObjectOptions) (*minio.Object, error)
 		RemoveObject(context.Context, string, string, minio.RemoveObjectOptions) error
+		ListObjects(ctx context.Context, bucket string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 	}
 }
 
@@ -41,6 +42,9 @@ func (a encryptedClientAdapter) GetObject(ctx context.Context, bucket, key strin
 }
 func (a encryptedClientAdapter) RemoveObject(ctx context.Context, bucket, key string, opts minio.RemoveObjectOptions) error {
 	return a.client.RemoveObject(ctx, bucket, key, opts)
+}
+func (a encryptedClientAdapter) ListObjects(ctx context.Context, bucket string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo {
+	return a.client.ListObjects(ctx, bucket, opts)
 }
 
 type Store struct {
@@ -65,6 +69,7 @@ func NewStore(client objectPutter, bucket string, key [32]byte) *Store {
 		PutObject(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions) (minio.UploadInfo, error)
 		GetObject(context.Context, string, string, minio.GetObjectOptions) (*minio.Object, error)
 		RemoveObject(context.Context, string, string, minio.RemoveObjectOptions) error
+		ListObjects(ctx context.Context, bucket string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 	}); ok {
 		s.generic = genericstore.NewEncryptedStore(encryptedClientAdapter{client: full}, bucket, key)
 	}

@@ -364,6 +364,9 @@ func (s *fakeMCPRuntimeStore) Delete(_ context.Context, ref pkgobjectstore.Refer
 	delete(s.values, ref.URI)
 	return nil
 }
+func (s *fakeMCPRuntimeStore) DeleteByPrefix(_ context.Context, _ string, _ string) error {
+	return nil
+}
 
 type fakeMCPRevisionService struct {
 	revision     evaldomain.ResourceRevision
