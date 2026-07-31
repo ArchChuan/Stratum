@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/byteBuilderX/stratum/internal/agent/domain"
 	"github.com/byteBuilderX/stratum/internal/agent/domain/port"
-	"github.com/byteBuilderX/stratum/pkg/constants"
 	"go.uber.org/zap"
 )
 
@@ -20,16 +18,12 @@ func TestParseAgentTypeWireIsCompatibilityOnly(t *testing.T) {
 	}
 }
 
-func TestRevisionExecutionContextUsesAgentBudget(t *testing.T) {
+func TestRevisionExecutionContextNoWallClockDeadline(t *testing.T) {
 	ctx, cancel := revisionExecutionContext(context.Background())
 	defer cancel()
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		t.Fatal("revision execution has no deadline")
-	}
-	remaining := time.Until(deadline)
-	if remaining <= 0 || remaining > constants.AgentExecTimeout {
-		t.Fatalf("revision execution budget = %v", remaining)
+	if _, ok := ctx.Deadline(); ok {
+		t.Fatal("revision execution should not carry a wall-clock deadline; " +
+			"step limits + per-operation timeouts bound execution")
 	}
 }
 

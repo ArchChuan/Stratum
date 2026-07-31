@@ -7,20 +7,16 @@ const (
 	HTTPReadHeaderTimeout = 10 * time.Second
 	HTTPShutdownTimeout   = 10 * time.Second
 
-	// Agent execution — kept under Cloudflare's 100s proxy read timeout so the
-	// origin always closes before CF fires a 524.
-	AgentExecTimeout = 90 * time.Second
-
 	// SSE heartbeat interval — keep well below proxy idle-connection timeout (CF: 100s,
-	// nginx default: 60s). 5s prevents slow LLMs from triggering proxy disconnects.
+	// nginx default: 60s). 5s heartbeat prevents Cloudflare from tearing down idle
+	// connections during long-running LLM streams. Step limits + per-operation timeouts
+	// bound execution; no global wall-clock deadline is imposed.
 	SSEHeartbeatInterval = 5 * time.Second
 
 	// LLM per-request
 	LLMRequestTimeout = 60 * time.Second
 
 	// Sub-operation timeouts within a single agent execution turn.
-	// These are shorter than AgentExecTimeout so one stuck sub-call
-	// doesn't silently consume the entire outer budget.
 	AgentDBQueryTimeout      = 5 * time.Second  // single indexed DB read/write
 	AgentMemoryInjectTimeout = 10 * time.Second // memory context build (recall + prompt assembly)
 	AgentRAGSearchTimeout    = 15 * time.Second // knowledge-base vector search + reranking

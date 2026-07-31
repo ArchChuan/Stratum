@@ -238,9 +238,9 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	if cfg.MaxSteps == 0 {
 		cfg.MaxSteps = a.MaxIterations
 	}
-	if cfg.Timeout == 0 {
-		cfg.Timeout = 120 * time.Second
-	}
+	// cfg.Timeout stays 0 (no deadline) unless the client explicitly passes a
+	// timeout option. Step limits + per-operation timeouts bound execution;
+	// a wall-clock deadline is optional and client-controlled.
 	agentID := a.ID
 	agentName := a.Name
 	agentType := domain.ReActAgent
@@ -409,7 +409,13 @@ func (a *BaseAgent) executeReAct(ctx context.Context, ec agentExecContext, resul
 			return fn(ctx, ec.cfg.TenantID, ec.cfg.UserID, ec.agentID, ec.memoryScope, input)
 		}
 	}
-	execCtx, cancel := context.WithTimeout(ctx, ec.cfg.Timeout)
+	var execCtx context.Context
+	var cancel context.CancelFunc
+	if ec.cfg.Timeout > 0 {
+		execCtx, cancel = context.WithTimeout(ctx, ec.cfg.Timeout)
+	} else {
+		execCtx, cancel = context.WithCancel(ctx)
+	}
 	execCtx = reqctx.WithTraceID(execCtx, ec.cfg.TraceID)
 	execCtx = reqctx.WithTenantID(execCtx, ec.cfg.TenantID)
 	defer cancel()
@@ -475,14 +481,20 @@ func (a *BaseAgent) executeCoT(cfg *ExecutionConfig, input string, result *Agent
 	return nil
 }
 
+// effectiveStuckThreshold returns the configured stuck threshold or the
+// default when unset (≤0).
+func (a *BaseAgent) effectiveStuckThreshold() int {
+	if a.StuckThreshold <= 0 {
+		return constants.DefaultStuckThreshold
+	}
+	return a.StuckThreshold
+}
+
 func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, result *AgentResult) error {
 	if ec.capGW == nil {
 		return fmt.Errorf("planning: CapGateway not set")
 	}
-	stuckThreshold := a.StuckThreshold
-	if stuckThreshold <= 0 {
-		stuckThreshold = constants.DefaultStuckThreshold
-	}
+	stuckThreshold := a.effectiveStuckThreshold()
 	var cpWriter agentgraph.PlanCheckpointWriter
 	if a.CheckpointStore != nil {
 		cpWriter = a.CheckpointStore
@@ -507,7 +519,13 @@ func (a *BaseAgent) executePlanning(ctx context.Context, ec agentExecContext, re
 			return fn(ctx, ec.cfg.TenantID, ec.cfg.UserID, ec.agentID, ec.memoryScope, input)
 		}
 	}
-	execCtx, cancel := context.WithTimeout(ctx, ec.cfg.Timeout)
+	var execCtx context.Context
+	var cancel context.CancelFunc
+	if ec.cfg.Timeout > 0 {
+		execCtx, cancel = context.WithTimeout(ctx, ec.cfg.Timeout)
+	} else {
+		execCtx, cancel = context.WithCancel(ctx)
+	}
 	execCtx = reqctx.WithTraceID(execCtx, ec.cfg.TraceID)
 	execCtx = reqctx.WithTenantID(execCtx, ec.cfg.TenantID)
 	defer cancel()
