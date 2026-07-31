@@ -400,3 +400,104 @@ func (r *OnboardRepo) DeleteUser(ctx context.Context, userID string) error {
 	}
 	return nil
 }
+
+// RegisterByUsername creates a local user with synthetic github_id and joins
+// the default tenant in one transaction.
+func (r *OnboardRepo) RegisterByUsername(ctx context.Context, username, passwordHash string) (string, string, error) {
+	githubID := "local:" + username
+
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return "", "", fmt.Errorf("onboard_repo: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var uid string
+	err = tx.QueryRow(ctx,
+		`INSERT INTO users (github_id, github_login, username, password_hash)
+		 VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (username) DO NOTHING
+		 RETURNING id`,
+		githubID, username, username, passwordHash,
+	).Scan(&uid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", domain.ErrUsernameTaken
+		}
+		return "", "", fmt.Errorf("onboard_repo: insert user: %w", err)
+	}
+
+	var tid string
+	if err = tx.QueryRow(ctx,
+		`SELECT id FROM tenants WHERE is_default = true LIMIT 1`,
+	).Scan(&tid); err != nil {
+		return "", "", fmt.Errorf("onboard_repo: default tenant not found: %w", err)
+	}
+
+	if _, err = tx.Exec(ctx,
+		`INSERT INTO tenant_members (tenant_id, user_id, role)
+		 VALUES ($1, $2, 'member')
+		 ON CONFLICT (tenant_id, user_id) DO NOTHING`,
+		tid, uid,
+	); err != nil {
+		return "", "", fmt.Errorf("onboard_repo: join default tenant: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", "", fmt.Errorf("onboard_repo: commit: %w", err)
+	}
+	return uid, tid, nil
+}
+
+// FindByUsername looks up a local user by username.
+func (r *OnboardRepo) FindByUsername(ctx context.Context, username string) (string, string, string, bool, error) {
+	uid, ph, _, gr, found, err := r.FindByUsernameWithLogin(ctx, username)
+	return uid, ph, gr, found, err
+}
+
+// UpdateProfile updates the user's display name (github_login) and/or avatar URL.
+// Only non-empty fields are applied.
+func (r *OnboardRepo) UpdateProfile(ctx context.Context, userID, displayName, avatarURL string) error {
+	if userID == "" {
+		return errors.New("onboard_repo: userID required")
+	}
+	if displayName == "" && avatarURL == "" {
+		return nil
+	}
+	var sets []string
+	var args []any
+	idx := 1
+	if displayName != "" {
+		sets = append(sets, fmt.Sprintf("github_login = $%d", idx))
+		args = append(args, displayName)
+		idx++
+	}
+	if avatarURL != "" {
+		sets = append(sets, fmt.Sprintf("avatar_url = $%d", idx))
+		args = append(args, avatarURL)
+		idx++
+	}
+	args = append(args, userID)
+	query := fmt.Sprintf("UPDATE users SET %s WHERE id = $%d", strings.Join(sets, ", "), idx)
+	if _, err := r.db.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("onboard_repo: update profile: %w", err)
+	}
+	return nil
+}
+
+// FindByUsernameWithLogin looks up a local user by username, returning all auth-relevant fields.
+func (r *OnboardRepo) FindByUsernameWithLogin(ctx context.Context, username string) (string, string, string, string, bool, error) {
+	var uid, ph, gl, gr string
+	err := r.db.QueryRow(ctx,
+		`SELECT id, COALESCE(password_hash, ''), github_login, COALESCE(global_role, '')
+		 FROM users WHERE username = $1`,
+		username,
+	).Scan(&uid, &ph, &gl, &gr)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", "", "", false, nil
+		}
+		return "", "", "", "", false, fmt.Errorf("onboard_repo: find by username: %w", err)
+	}
+	return uid, ph, gl, gr, true, nil
+}
