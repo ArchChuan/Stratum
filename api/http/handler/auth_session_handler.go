@@ -120,6 +120,7 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		_ = c.Error(middleware.NewHTTPError(http.StatusUnauthorized, errors.New("invalid token")))
 		return
 	}
+	username, _ := h.deps.OnboardSvc.FindUsernameByUserID(c.Request.Context(), claims.Sub)
 	c.JSON(http.StatusOK, gin.H{
 		"sub":          claims.Sub,
 		"tenant_id":    claims.TenantID,
@@ -128,5 +129,6 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		"system_role":  string(claims.SystemRole),
 		"avatar_url":   claims.AvatarURL,
 		"github_login": claims.GitHubLogin,
+		"username":     username,
 	})
 }

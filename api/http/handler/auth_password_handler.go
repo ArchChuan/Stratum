@@ -98,7 +98,7 @@ func (h *AuthHandler) UsernameLogin(c *gin.Context) {
 		return
 	}
 
-	_, passwordHash, githubLogin, globalRole, found, err := h.deps.OnboardSvc.FindByUsernameWithLogin(ctx, req.Username)
+	userID, passwordHash, githubLogin, globalRole, found, err := h.deps.OnboardSvc.FindByUsernameWithLogin(ctx, req.Username)
 	if err != nil {
 		h.deps.Logger.Error("find user", zap.Error(err))
 		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("login failed")))
@@ -113,29 +113,25 @@ func (h *AuthHandler) UsernameLogin(c *gin.Context) {
 		return
 	}
 
-	// Look up user's tenant membership for role + tenant ID.
-	uid, tid, found, lookupErr := h.deps.OnboardSvc.GetUserTenant(ctx, "local:"+req.Username)
-	if lookupErr != nil || !found {
-		h.deps.Logger.Error("get user tenant", zap.String("username", req.Username), zap.Error(lookupErr))
+	// Look up user's default tenant by UUID.
+	tid, role, lookupErr := h.deps.OnboardSvc.GetUserTenantByUserID(ctx, userID)
+	if lookupErr != nil {
+		h.deps.Logger.Error("get user tenant", zap.String("user_id", userID), zap.Error(lookupErr))
 		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("account not fully provisioned")))
 		return
-	}
-	role, roleErr := h.deps.OnboardSvc.GetTenantRole(ctx, uid, tid)
-	if roleErr != nil {
-		role = "member"
 	}
 
 	systemRole := domain.DeriveSystemRole([]domain.TenantMembership{
 		{TenantID: tid, Role: role},
 	})
-	rawRT, accessJWT, err := h.issueTokenPair(ctx, uid, tid, role, globalRole, systemRole, "", githubLogin)
+	rawRT, accessJWT, err := h.issueTokenPair(ctx, userID, tid, role, globalRole, systemRole, "", githubLogin)
 	if err != nil {
 		h.deps.Logger.Error("issue token pair for login", zap.Error(err))
 		_ = c.Error(middleware.NewHTTPError(http.StatusInternalServerError, errors.New("token issuance failed")))
 		return
 	}
 	h.setRefreshCookie(c, rawRT)
-	h.deps.Logger.Info("user logged in", zap.String("username", req.Username), zap.String("user_id", uid))
+	h.deps.Logger.Info("user logged in", zap.String("username", req.Username), zap.String("user_id", userID))
 	c.JSON(http.StatusOK, gin.H{"access_token": accessJWT, "tenant_id": tid})
 }
 
