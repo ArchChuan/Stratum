@@ -17,6 +17,24 @@ func TestMigrationSetup(t *testing.T) {
 	})
 }
 
+func TestMigrationVersionsAreUnique(t *testing.T) {
+	t.Parallel()
+	entries, err := os.ReadDir("sql")
+	if err != nil {
+		t.Fatalf("read migrations: %v", err)
+	}
+	versions := make(map[string]string)
+	for _, entry := range entries {
+		parts := strings.SplitN(entry.Name(), ".", 2)
+		base := strings.TrimSuffix(strings.TrimSuffix(parts[0], ".up"), ".down")
+		version := strings.SplitN(base, "_", 2)[0]
+		if existing, ok := versions[version]; ok && existing != base {
+			t.Fatalf("migration version %s is used by %s and %s", version, existing, base)
+		}
+		versions[version] = base
+	}
+}
+
 func TestPreviousVersionRejectsIntegerOverflow(t *testing.T) {
 	t.Parallel()
 	if got, err := previousVersion(0); err != nil || got != -1 {
