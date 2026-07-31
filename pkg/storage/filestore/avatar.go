@@ -39,7 +39,7 @@ type AvatarStore struct {
 // NewAvatarStore creates an AvatarStore rooted at dir. The directory is created
 // if it does not exist.
 func NewAvatarStore(dir string) (*AvatarStore, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("filestore: create avatar dir %s: %w", dir, err)
 	}
 	return &AvatarStore{dir: dir}, nil
@@ -70,7 +70,7 @@ func (s *AvatarStore) SaveAvatar(reader io.Reader, userID string) (string, error
 	filename := fmt.Sprintf("%s_%d%s", userID, time.Now().UnixMilli(), ext)
 	dst := filepath.Join(s.dir, filename)
 
-	if err := os.WriteFile(dst, buf, 0o644); err != nil {
+	if err := os.WriteFile(dst, buf, 0o600); err != nil {
 		return "", fmt.Errorf("filestore: write avatar: %w", err)
 	}
 	return filename, nil

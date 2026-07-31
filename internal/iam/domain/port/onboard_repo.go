@@ -50,6 +50,10 @@ type OnboardRepo interface {
 	FindByUsername(ctx context.Context, username string) (userID, passwordHash, globalRole string, found bool, err error)
 	// FindByUsernameWithLogin is like FindByUsername but also returns github_login (display name).
 	FindByUsernameWithLogin(ctx context.Context, username string) (userID, passwordHash, githubLogin, globalRole string, found bool, err error)
+	// FindUsernameByUserID returns the user's username (empty if not a password user).
+	FindUsernameByUserID(ctx context.Context, userID string) (string, error)
+	// GetUserTenantByUserID returns the user's default tenant ID and role by user UUID.
+	GetUserTenantByUserID(ctx context.Context, userID string) (tenantID, role string, err error)
 	// UpdateProfile updates the user's display name and/or avatar URL.
 	UpdateProfile(ctx context.Context, userID, displayName, avatarURL string) error
 }

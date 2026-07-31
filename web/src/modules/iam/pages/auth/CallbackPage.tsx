@@ -50,6 +50,7 @@ export const CallbackPage = () => {
               current_tenant: me.tenant_id ? { id: me.tenant_id, name: '' } : null,
               avatar_url: me.avatar_url || '',
               github_login: me.github_login || '',
+              username: me.username || '',
             },
             exchange.access_token,
           );

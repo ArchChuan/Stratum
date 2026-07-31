@@ -22,9 +22,11 @@ func EnsureAdminUser(ctx context.Context, pool *pgxpool.Pool, username, password
 		return nil
 	}
 
+	// Only skip if this specific username already exists as global_admin.
 	var count int
 	err := pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM public.users WHERE global_role = 'global_admin'`,
+		`SELECT COUNT(*) FROM public.users WHERE username = $1 AND global_role = 'global_admin'`,
+		username,
 	).Scan(&count)
 	if err != nil {
 		return fmt.Errorf("admin seed: check existing: %w", err)
@@ -39,6 +41,13 @@ func EnsureAdminUser(ctx context.Context, pool *pgxpool.Pool, username, password
 		return fmt.Errorf("admin seed: hash password: %w", err)
 	}
 
+	return ensureAdminUserTx(ctx, pool, username, hash, logger)
+}
+
+// ensureAdminUserTx inserts the admin user row and joins the default tenant
+// inside a single transaction. Extracted from EnsureAdminUser to keep
+// cyclomatic complexity below the 10-threshold.
+func ensureAdminUserTx(ctx context.Context, pool *pgxpool.Pool, username, hash string, logger *zap.Logger) error {
 	githubID := "local:" + username
 
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})

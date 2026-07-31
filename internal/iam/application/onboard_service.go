@@ -152,3 +152,13 @@ func (s *OnboardService) FindByUsernameWithLogin(ctx context.Context, username s
 func (s *OnboardService) UpdateProfile(ctx context.Context, userID, displayName, avatarURL string) error {
 	return s.repo.UpdateProfile(ctx, userID, displayName, avatarURL)
 }
+
+// FindUsernameByUserID returns the user's username (empty if not a password user).
+func (s *OnboardService) FindUsernameByUserID(ctx context.Context, userID string) (string, error) {
+	return s.repo.FindUsernameByUserID(ctx, userID)
+}
+
+// GetUserTenantByUserID returns the user's default tenant by UUID.
+func (s *OnboardService) GetUserTenantByUserID(ctx context.Context, userID string) (string, string, error) {
+	return s.repo.GetUserTenantByUserID(ctx, userID)
+}
