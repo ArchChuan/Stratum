@@ -221,6 +221,12 @@ jobs:
         if: steps.candidate.outputs.current == 'true'
         run: bash scripts/quality/validate-remote-http-base-url.sh "$PUBLIC_BASE_URL"
 
+      - name: Sanitize PUBLIC_BASE_URL
+        if: steps.candidate.outputs.current == 'true'
+        run: |
+          CLEAN_URL="$(echo "$PUBLIC_BASE_URL" | xargs)"
+          echo "PUBLIC_BASE_URL=$CLEAN_URL" >> "$GITHUB_ENV"
+
       - uses: docker/setup-buildx-action@v3
         if: steps.candidate.outputs.current == 'true'
 
@@ -395,7 +401,8 @@ jobs:
       - name: Diagnose ingress edge
         if: steps.candidate.outputs.current == 'true'
         run: |
-          PUBLIC_AUTHORITY="${PUBLIC_BASE_URL#https://}"
+          # github vars may contain leading/trailing whitespace — sanitize
+          PUBLIC_AUTHORITY="$(echo "${PUBLIC_BASE_URL#https://}" | xargs)"
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
             -i ~/.ssh/deploy_key root@${{ secrets.SSH_DEPLOY_HOST }} \
             bash -s -- "$PUBLIC_AUTHORITY" <<'REMOTE'
