@@ -92,7 +92,10 @@ func TestWorkerRenewsLeaseDuringLongNode(t *testing.T) {
 	advancer := &runAdvancerFake{run: func(context.Context) error { time.Sleep(45 * time.Millisecond); return nil }}
 	worker := application.NewWorker("worker-1", runtime, advancer, 20*time.Millisecond)
 	require.True(t, worker.RunOnce(context.Background()))
-	require.GreaterOrEqual(t, runtime.renewals, 2)
+	runtime.mu.Lock()
+	renewals := runtime.renewals
+	runtime.mu.Unlock()
+	require.GreaterOrEqual(t, renewals, 2)
 }
 
 func TestWorkerCancelsExecutionContextWhenPersistentCancelObserved(t *testing.T) {
