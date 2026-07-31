@@ -26,14 +26,14 @@
 
 ## 简介
 
-Stratum 是一套面向私有化部署的 AI 应用底座。后端用 Go 实现，按 DDD 划分为 10 个 bounded context；前端基于 React 18 + Ant Design 5。它把 Agent 编排、Workflow、Evaluation、Skill 网关、记忆系统、GraphRAG、MCP 协议和多租户 IAM 串成统一的开发与运行链路。
+Stratum 是一套面向私有化部署的 AI 应用底座。后端用 Go 实现，按 DDD 划分为 10 个 bounded context；前端基于 React 18 + Ant Design 5。它把 Agent 编排、Workflow、Evaluation、Skill 网关、记忆系统、RAG 知识库、MCP 协议和多租户 IAM 串成统一的开发与运行链路。
 
 ## 核心特性
 
 - **Agent 编排** — ReAct StateGraph，工具调用 / 流式输出 / 中断恢复
 - **Skill Gateway** — 原子化执行、流水线 DSL、熔断器、审计日志
-- **记忆系统** — PostgreSQL 持久化 + 向量语义检索 + 实体图谱 + JetStream 三阶段 Pipeline
-- **GraphRAG** — Milvus 向量库 + Neo4j 知识图谱，文档摄取自动分块向量化
+- **记忆系统** — PostgreSQL 持久化 + 向量语义检索 + 实体提取 + JetStream 三阶段 Pipeline
+- **RAG 知识库** — Milvus 向量检索，文档摄取自动分块向量化，语义检索
 - **MCP 协议** — Model Context Protocol 适配，工具与模型统一接入
 - **多租户隔离** — PostgreSQL schema 级租户隔离 · GitHub OAuth · JWT RS256
 - **可观测性** — Zap 结构化日志 · OpenTelemetry · Prometheus 指标
@@ -86,7 +86,7 @@ Stratum 是一套面向私有化部署的 AI 应用底座。后端用 Go 实现�
 
 1. 打开 Demo 首页，点击右上角 **GitHub 登录**
 2. 授权后自动创建租户，进入工作台
-3. 在 **Agent** 页发起对话，或去 **知识库** 上传文档体验 GraphRAG
+3. 在 **Agent** 页发起对话，或去 **知识库** 上传文档体验 RAG 检索
 4. 通过 **Skill** 编排原子技能，或在 **MCP** 页接入外部工具
 
 > Demo 环境为单节点 K3s 部署，仅用于功能演示，请勿存放真实或敏感数据。生产部署请参考 [`docs/DEPLOYMENT_GUIDE.md`](docs/DEPLOYMENT_GUIDE.md)。
@@ -99,7 +99,7 @@ Stratum 是一套面向私有化部署的 AI 应用底座。后端用 Go 实现�
 **功能覆盖**
 
 ✅ Agent 对话（ReAct）
-✅ GraphRAG 知识库
+✅ RAG 知识库（Milvus）
 ✅ Skill 原子/流水线编排
 ✅ MCP 工具集成
 ✅ Anthropic · Ollama · Qwen · Zhipu
@@ -119,7 +119,6 @@ Stratum 是一套面向私有化部署的 AI 应用底座。后端用 Go 实现�
 | 数据库 | PostgreSQL（pgx v5）· Redis（go-redis v9） |
 | 消息总线 | NATS JetStream（nats.go v1.51） |
 | 向量库 | Milvus v2.4.2 |
-| 图数据库 | Neo4j v5 |
 | 鉴权 | JWT RS256（golang-jwt v5）+ GitHub OAuth |
 | 可观测性 | Zap · OpenTelemetry v1.40 · Prometheus |
 | LLM | 通义千问（Qwen）· 智谱 AI（Zhipu）· Anthropic · Ollama · OpenAI 兼容 |
@@ -141,7 +140,7 @@ git clone https://github.com/byteBuilderX/stratum.git
 cd stratum
 cp .env.example .env          # 填入 GitHub OAuth、LLM API Key 等
 
-# 2. 拉起本地基础设施（Postgres · Redis · NATS · Milvus · Neo4j）
+# 2. 拉起本地基础设施（Postgres · Redis · NATS · Milvus）
 make dev-up
 
 # 3. 启动后端
@@ -162,8 +161,8 @@ stratum/
 │   └── wiring/               组合根：Container 装配 · Resolver 跨租户解析
 ├── internal/                 10 个 bounded context（DDD 分层）
 │   ├── agent/                ReAct 编排 · A2A 协议 · ChatStore · ExecutionStore
-│   ├── memory/               记忆持久化 · 向量检索 · JetStream Pipeline
-│   ├── knowledge/            GraphRAG · 文档摄取 · Neo4j 实体图谱
+│   ├── memory/               记忆持久化 · 实体提取 · 向量检索 · JetStream Pipeline
+│   ├── knowledge/            RAG 知识库 · 文档摄取 · Milvus 向量检索
 │   ├── skill/                Skill CRUD · AtomicEngine · PipelineEngine · CircuitBreaker
 │   ├── mcp/                  MCP 服务器管理 · SkillAdapter
 │   ├── iam/                  Tenant · Admin · OAuth · JWT · Onboard
