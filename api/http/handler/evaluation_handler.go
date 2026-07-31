@@ -77,6 +77,10 @@ type evaluationBaselineService interface {
 	) (domain.ResourceRef, error)
 }
 
+type evaluationAgentRevisionApplier interface {
+	ApplyPublishedRevision(ctx context.Context, tenantID, agentID, revisionID string) error
+}
+
 type EvaluationHandler struct {
 	suites       evaluationSuiteService
 	jobs         evaluationJobService
@@ -87,6 +91,7 @@ type EvaluationHandler struct {
 	queries      evaluationQueryService
 	candidates   evaluationCandidateCommandService
 	baselines    evaluationBaselineService
+	agentApplier evaluationAgentRevisionApplier
 	logger       *zap.Logger
 }
 
@@ -109,6 +114,11 @@ func NewEvaluationHandler(
 
 func (h *EvaluationHandler) WithBaselineService(service evaluationBaselineService) *EvaluationHandler {
 	h.baselines = service
+	return h
+}
+
+func (h *EvaluationHandler) WithAgentRevisionApplier(applier evaluationAgentRevisionApplier) *EvaluationHandler {
+	h.agentApplier = applier
 	return h
 }
 
@@ -416,8 +426,38 @@ func (h *EvaluationHandler) experimentCommand(c *gin.Context, call func(context.
 func (h *EvaluationHandler) PauseExperiment(c *gin.Context) {
 	h.experimentCommand(c, h.experiments.Pause)
 }
+
+// PromoteExperiment promotes an experiment's canary to stable.  For Agent
+// resources it additionally writes the optimized revision payload back to the
+// agents table, closing the evaluation → production loop.
 func (h *EvaluationHandler) PromoteExperiment(c *gin.Context) {
-	h.experimentCommand(c, h.experiments.Promote)
+	tenantID, ok := tenantIDFromCtx(c)
+	if !ok {
+		respondMissingTenant(c)
+		return
+	}
+	input, ok := commandInput(c)
+	if !ok {
+		return
+	}
+	result, err := h.experiments.Promote(c.Request.Context(), tenantID, c.Param("id"), input)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	// Write optimized Agent revision back to the production agents table.
+	if result.ResourceKind == domain.ResourceKindAgent && h.agentApplier != nil {
+		if applyErr := h.agentApplier.ApplyPublishedRevision(
+			c.Request.Context(), tenantID, result.ResourceID, result.CanaryRevisionID,
+		); applyErr != nil {
+			h.logger.Warn("promote experiment: agent write-back failed",
+				zap.String("agent_id", result.ResourceID),
+				zap.String("revision_id", result.CanaryRevisionID),
+				zap.Error(applyErr),
+			)
+		}
+	}
+	c.JSON(http.StatusOK, result)
 }
 func (h *EvaluationHandler) RollbackExperiment(c *gin.Context) {
 	h.experimentCommand(c, h.experiments.Rollback)

@@ -242,8 +242,8 @@ func (contractModelRepo) Toggle(_ context.Context, _ string, _ string, _ bool) e
 
 type contractProviderRuntime struct{}
 
-func (contractProviderRuntime) ListModels(_ context.Context, _ llmdomain.Provider) ([]string, error) {
-	return []string{"mock-model-1", "mock-model-2"}, nil
+func (contractProviderRuntime) ListModels(_ context.Context, _ llmdomain.Provider) ([]llmport.DiscoveredModel, error) {
+	return []llmport.DiscoveredModel{{Name: "mock-model-1"}, {Name: "mock-model-2"}}, nil
 }
 func (contractProviderRuntime) Health(_ context.Context, _ llmdomain.Provider) error { return nil }
 

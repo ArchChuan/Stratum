@@ -73,32 +73,32 @@
       "name": "Container.buildAgent",
       "cyclomatic": 25,
       "cognitive": 26,
-      "lines": 143,
+      "lines": 144,
       "max_nesting": 2,
       "params": 1,
-      "body_hash": "0662b47e541f9e3c35e4908fa1b8bda5ff5c56c8ab0c5ef7ba1c28a53e002b97"
+      "body_hash": "6edb933d9c7dae6eecfc1bc786f398d7d4008c881b05718bb317c1d4984bd7d5"
     },
     {
       "id": "api/wiring/evaluation.go:Container.buildEvaluation",
       "file": "api/wiring/evaluation.go",
       "name": "Container.buildEvaluation",
-      "cyclomatic": 29,
-      "cognitive": 32,
-      "lines": 135,
+      "cyclomatic": 30,
+      "cognitive": 33,
+      "lines": 141,
       "max_nesting": 2,
       "params": 1,
-      "body_hash": "2092ffe3113a1b95e926090989233a51e9d82b0319324567d7843b220445880b"
+      "body_hash": "f8a4de8650bbe173cb9451527d8a3bae15515ed51c7a3a7a4d3f1bd671019c7a"
     },
     {
       "id": "api/wiring/evaluation_agent_adapter.go:parseAgentCandidatePatch",
       "file": "api/wiring/evaluation_agent_adapter.go",
       "name": "parseAgentCandidatePatch",
-      "cyclomatic": 15,
-      "cognitive": 28,
-      "lines": 50,
+      "cyclomatic": 17,
+      "cognitive": 33,
+      "lines": 60,
       "max_nesting": 3,
       "params": 2,
-      "body_hash": "f9540e09318d15ae3545f8a6ca43ce0bb6298975a519ea8378f8c0dec4ce624b"
+      "body_hash": "01764b29d2f3f0e072ed79d55ba31c5ad5cb75a4ae0ec9f12ca9f43a3a2697e3"
     },
     {
       "id": "api/wiring/evaluation_knowledge_adapter.go:applyKnowledgeCandidatePatch",
@@ -513,10 +513,10 @@
       "name": "AgentService.assembleOptions",
       "cyclomatic": 64,
       "cognitive": 125,
-      "lines": 352,
+      "lines": 353,
       "max_nesting": 5,
       "params": 5,
-      "body_hash": "57b0b9c85fa769a31abc3b036013985d99bafaf22820cbe43814ead2e4d1c0e7"
+      "body_hash": "3e662eb36b51a7f847cd4d83a8d8236274de9ace75239002cdd538e714d6aa8a"
     },
     {
       "id": "internal/agent/application/agent_service.go:AgentService.buildExtraToolsChecked",

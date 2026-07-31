@@ -16,7 +16,12 @@ var allowedParameterFields = map[string]struct{}{
 }
 
 var allowedPromptFields = map[string]struct{}{
-	"instructions": {},
+	"instructions":             {},
+	"system_prompt":            {},
+	"memory_extraction_prompt": {},
+	"memory_summary_prompt":    {},
+	"memory_enrichment_prompt": {},
+	"compaction_prompt":        {},
 }
 
 func GenerateParameterPatches(searchSpace map[string][]any) ([]map[string]any, error) {

@@ -32,7 +32,7 @@ export const executeKnowledgePack = async ({ actor, pool, evidence, webURL }: Kn
     await dialog.getByLabel('描述').fill('Stateful E2E 产品文档与验收知识');
     await dialog.getByLabel('嵌入模型').click();
     await page.locator('.ant-select-dropdown:visible .ant-select-item-option')
-      .filter({ hasText: /^text-embedding-v3$/ }).click();
+      .filter({ hasText: /^text-embedding-v3$/ }).first().click();
     const createResponse = waitFor(page, '/knowledge/workspaces', 'POST');
     await dialog.getByRole('button', { name: /创\s*建/ }).click();
     expect((await createResponse).status()).toBe(201);

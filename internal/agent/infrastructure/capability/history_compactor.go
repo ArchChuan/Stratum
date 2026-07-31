@@ -9,9 +9,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// compactionMaxTokens 限制摘要输出的 token 预算，防止摘要本身反噬上下文。
-const compactionMaxTokens = 800
-
 const historyCompactionTimeout = 5 * time.Second
 
 // compactionSystemPrompt 指令 LLM 生成保留关键语义的要点摘要。
@@ -22,18 +19,24 @@ const compactionSystemPrompt = "你是对话历史压缩器。请把以下对话
 // LLMHistoryCompactor 通过 CapabilityGateway 调用 LLM，实现
 // port.HistoryCompactor：把一段对话历史压缩成一条纯文本摘要。
 type LLMHistoryCompactor struct {
-	gw     port.CapabilityGateway
-	model  string
-	logger *zap.Logger
+	gw                  port.CapabilityGateway
+	model               string
+	logger              *zap.Logger
+	compactionMaxTokens int
 }
 
 // NewLLMHistoryCompactor 构造摘要器。gw 为统一路由门面，model 指定用于
 // 压缩的模型（可与主对话模型不同，通常选更廉价的），logger 用于观测。
-func NewLLMHistoryCompactor(gw port.CapabilityGateway, model string, logger *zap.Logger) *LLMHistoryCompactor {
+// compactionMaxTokens 是压缩 LLM 调用的最大输出 token 数；传 0 则使用
+// 默认值 800。
+func NewLLMHistoryCompactor(gw port.CapabilityGateway, model string, logger *zap.Logger, compactionMaxTokens int) *LLMHistoryCompactor {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &LLMHistoryCompactor{gw: gw, model: model, logger: logger}
+	if compactionMaxTokens <= 0 {
+		compactionMaxTokens = 800
+	}
+	return &LLMHistoryCompactor{gw: gw, model: model, logger: logger, compactionMaxTokens: compactionMaxTokens}
 }
 
 // CompactHistory 把 messages 拼成一段可读对话，交由 LLM 生成要点摘要。
@@ -54,7 +57,7 @@ func (c *LLMHistoryCompactor) CompactHistory(ctx context.Context, messages []por
 				{Role: "user", Content: convo},
 			},
 			Temperature: 0.3,
-			MaxTokens:   compactionMaxTokens,
+			MaxTokens:   c.compactionMaxTokens,
 		},
 	}
 

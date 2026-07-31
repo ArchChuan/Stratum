@@ -116,7 +116,7 @@ func registerEvaluations(r *gin.Engine, c *wiring.Container, requireActive gin.H
 		c.Evaluation.OptimizationService, c.Evaluation.ExperimentService,
 		c.Evaluation.FeedbackService, c.Evaluation.QueryService, c.Evaluation.CandidateService,
 		c.Logger,
-	).WithBaselineService(c.Evaluation.BaselineService)
+	).WithBaselineService(c.Evaluation.BaselineService).WithAgentRevisionApplier(c.Evaluation.AgentRevisionApplier)
 	requireAdmin := middleware.RequireTenantRole("admin")
 	evaluations := r.Group("/evaluations", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
@@ -408,22 +408,24 @@ func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.Hand
 	modelMgmtH := handler.NewModelMgmtHandler(c.LLMGateway.ModelMgmtService)
 	adminMW := middleware.RequireTenantRole("admin")
 
-	providers := r.Group("/admin/providers", protectedTenantMiddleware(c, adminMW)...)
+	// Providers: list is readable by any tenant member; write ops require admin.
+	providers := r.Group("/admin/providers", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
 		providers.GET("", providerH.List)
-		providers.POST("", requireActive, providerH.Create)
-		providers.PUT("/:id", requireActive, providerH.Update)
-		providers.DELETE("/:id", requireActive, providerH.Delete)
-		providers.POST("/:id/discover", requireActive, providerH.Discover)
-		providers.POST("/:id/health", requireActive, providerH.HealthCheck)
+		providers.POST("", adminMW, requireActive, providerH.Create)
+		providers.PUT("/:id", adminMW, requireActive, providerH.Update)
+		providers.DELETE("/:id", adminMW, requireActive, providerH.Delete)
+		providers.POST("/:id/discover", adminMW, requireActive, providerH.Discover)
+		providers.POST("/:id/health", adminMW, requireActive, providerH.HealthCheck)
 	}
 
-	models := r.Group("/admin/models", protectedTenantMiddleware(c, adminMW)...)
+	// Models: list and get are readable by any tenant member; write ops require admin.
+	models := r.Group("/admin/models", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
 	{
 		models.GET("", modelMgmtH.List)
 		models.GET("/:id", modelMgmtH.Get)
-		models.PUT("/:id", modelMgmtH.Update)
-		models.PATCH("/:id/toggle", modelMgmtH.Toggle)
-		models.DELETE("/:id", modelMgmtH.Delete)
+		models.PUT("/:id", adminMW, modelMgmtH.Update)
+		models.PATCH("/:id/toggle", adminMW, modelMgmtH.Toggle)
+		models.DELETE("/:id", adminMW, modelMgmtH.Delete)
 	}
 }

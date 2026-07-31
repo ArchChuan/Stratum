@@ -293,7 +293,7 @@ func TestAssembleOptionsBuildsHistoryCompactorFromTenantGateway(t *testing.T) {
 	var factoryModel string
 	svc := NewAgentService(AgentServiceDeps{
 		TenantResolver: tenantResolverFake{gateway: gateway},
-		HistoryCompactorFactory: func(got port.CapabilityGateway, model string, _ *zap.Logger) port.HistoryCompactor {
+		HistoryCompactorFactory: func(got port.CapabilityGateway, model string, _ *zap.Logger, _ int) port.HistoryCompactor {
 			if got != gateway {
 				t.Fatalf("factory gateway = %#v, want tenant gateway", got)
 			}

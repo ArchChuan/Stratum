@@ -83,7 +83,8 @@ func TestHandlerServesOpenAICompatibleModels(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Data) != 2 || response.Data[0].ID != "mock-model-1" || response.Data[1].ID != "mock-model-2" {
+	// modelsHandler returns 4 models: qwen-turbo, qwen-plus, qwen-max, text-embedding-v3
+	if len(response.Data) != 4 || response.Data[0].ID != "qwen-turbo" || response.Data[3].ID != "text-embedding-v3" {
 		t.Fatalf("response=%s", rec.Body.String())
 	}
 }
