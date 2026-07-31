@@ -42,5 +42,7 @@ bash "$root/scripts/quality/generate-agent-instructions.sh" --check
 for generated in "$root/AGENTS.md" "$root/CLAUDE.md"; do
   grep -Fq 'make e2e-system-short' "$generated"
   grep -Fq 'make e2e-attestation-check' "$generated"
+  grep -Fq '.test/verification.yaml' "$generated"
+  grep -Fq '唯一测试和验收 Skill' "$generated"
 done
 printf 'system E2E instruction contract tests passed\n'

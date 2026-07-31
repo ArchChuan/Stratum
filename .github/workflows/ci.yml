@@ -59,6 +59,9 @@ jobs:
       - name: Verify generated agent instructions
         run: make agent-instructions-check
 
+      - name: Verify unified verification contracts
+        run: make verification-manifest-test verification-schemas-test
+
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
