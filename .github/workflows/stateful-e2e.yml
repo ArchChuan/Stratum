@@ -3,6 +3,8 @@ name: Stateful Browser E2E
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
   schedule:
     - cron: '0 */6 * * *'
@@ -12,59 +14,40 @@ env:
   GOPROXY: "https://goproxy.cn,direct"
 
 jobs:
-  platform-assistant-browser-e2e:
-    name: Platform Assistant Browser E2E
+  specification-review:
+    name: Verification Specification Review
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+      - name: Review verification contracts
+        run: make verification-manifest-test verification-schemas-test test-verification-entrypoints-test
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Install frontend dependencies
-        run: npm ci --prefix web
-
-      - name: Install Chromium
-        run: npx --prefix web playwright install --with-deps chromium
-
-      - name: Run platform assistant browser E2E
-        run: bash scripts/test-platform-assistant-browser-e2e.sh
-
-  tool-permission-browser:
-    name: Agent Tool Permission Browser
+  code-quality-review:
+    name: Verification Code Quality Review
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
-
       - name: Install frontend dependencies
-        working-directory: web
-        run: npm ci
-
-      - name: Install Chromium
-        working-directory: web
-        run: npx playwright install --with-deps chromium
-
-      - name: Run Agent tool permission browser harness
-        working-directory: web
-        run: npx playwright test e2e/agent-tool-permission.spec.ts --project=mobile-320 --project=desktop-1440
+        run: npm ci --prefix web
+      - name: Review code quality
+        run: make code-quality && go vet ./... && make fe-lint fe-build
 
   stateful-e2e:
     name: Stateful Browser E2E
+    needs: [specification-review, code-quality-review]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -73,8 +56,10 @@ jobs:
       NATS_URL: nats://127.0.0.1:4222
       MILVUS_HOST: 127.0.0.1
       MILVUS_PORT: "19530"
-      STATEFUL_E2E_PACKS: dashboard,iam,workflow,agent,skill,mcp,agent-skill-mcp,knowledge,memory,llm-admin
+      STATEFUL_E2E_PROFILE: test
+      STATEFUL_E2E_PACKS: all
       STATEFUL_E2E_DURATION_SEC: "600"
+      STATEFUL_E2E_FAILURE_LOG_DIR: tmp/test-verification/failure-logs
       STATEFUL_E2E_INFRA_UP_COMMAND: bash scripts/e2e/ci-infra-up.sh
       STATEFUL_E2E_INFRA_DOWN_COMMAND: bash scripts/e2e/ci-infra-down.sh
     steps:
@@ -98,12 +83,39 @@ jobs:
         run: npx --prefix web playwright install --with-deps chromium
 
       - name: Run stateful browser E2E
-        run: make e2e-system-short
+        run: make e2e-system-soak
 
-      - name: Upload attestation
+      - name: Generate verification plan
+        env:
+          TEST_VERIFY_RISK_LEVEL: R3
+        run: make test-verify-plan
+
+      - name: Verify attestation
+        run: make test-verify-attestation E2E_REQUIRED_MODE=soak E2E_REQUIRED_PROFILE=test
+
+      - name: Produce authoritative completion report
+        env:
+          TEST_VERIFY_RISK_LEVEL: R3
+          TEST_VERIFY_SPEC_REVIEW: passed
+          TEST_VERIFY_QUALITY_REVIEW: passed
+          TEST_VERIFY_REQUIRE_ACCEPTED: "true"
+        run: make test-verify-report E2E_REQUIRED_MODE=soak E2E_REQUIRED_PROFILE=test
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stateful-e2e-failure-logs
+          path: tmp/test-verification/failure-logs/
+          retention-days: 3
+
+      - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: stateful-e2e-attestation
-          path: test/e2e/attestations/
-          retention-days: 7
+          name: stateful-e2e-verification
+          path: |
+            test/e2e/attestations/
+            tmp/test-verification/plan.json
+            tmp/test-verification/completion-report.json
+          retention-days: 30

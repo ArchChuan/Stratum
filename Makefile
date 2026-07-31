@@ -8,7 +8,8 @@
 	docker-start \
 	k8s-deploy k8s-delete k8s-logs \
 	helm-install helm-upgrade helm-uninstall helm-diff helm-lint \
-	migration-guardrails e2e-attestation-check ci-backend ci-frontend ci-docker \
+	migration-guardrails e2e-attestation-check test-verify-plan test-verify-local test-verify-ci \
+	test-verify-attestation test-verify-report ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	agent-instructions agent-instructions-check \
 	code-quality code-quality-baseline risk-guardrails \
@@ -18,7 +19,7 @@
 
 .PHONY: e2e-evaluation-evolution e2e-system-short e2e-system-soak e2e-system-release-soak
 .PHONY: monitoring-config-test
-.PHONY: verification-manifest-test verification-schemas-test
+.PHONY: verification-manifest-test verification-schemas-test test-verification-entrypoints-test
 
 # ─── 全局变量（CI/CD 可自动覆盖）────────────────────────────────────────────
 BE_IMAGE    ?= clawhermes-ai-go
@@ -229,16 +230,29 @@ E2E_REQUIRED_MODE ?= short
 E2E_REQUIRED_PROFILE ?=
 E2E_ATTESTATION_DIR ?= test/e2e/attestations
 e2e-attestation-check:
-	@digest=$$(go run ./cmd/e2e-attestation digest --root . --ref HEAD); \
-	attestation="$(E2E_ATTESTATION_DIR)/$$digest.json"; \
-	if [ -f "$$attestation" ]; then \
-		go run ./cmd/e2e-attestation verify --root . --ref HEAD --required-mode $(E2E_REQUIRED_MODE) \
-			$$(if [ -n "$(E2E_REQUIRED_PROFILE)" ]; then echo "--required-profile $(E2E_REQUIRED_PROFILE)"; fi) \
-			--attestation "$$attestation"; \
-	else \
-		printf 'missing current source attestation for %.16s at %s\n' "$$digest" "$$attestation" >&2; \
-		exit 1; \
-	fi
+	@go run ./cmd/e2e-attestation verify --root . --ref HEAD --required-mode $(E2E_REQUIRED_MODE) \
+		$$(if [ -n "$(E2E_REQUIRED_PROFILE)" ]; then echo "--required-profile $(E2E_REQUIRED_PROFILE)"; fi) \
+		--attestation-dir "$(E2E_ATTESTATION_DIR)"
+
+test-verification-entrypoints-test:
+	bash scripts/quality/test-verification-entrypoints-test.sh
+
+test-verify-plan: verification-manifest-test verification-schemas-test
+	bash scripts/quality/test-verification-plan.sh
+
+test-verify-local: test-verify-plan
+	bash scripts/quality/system-e2e-instructions-test.sh
+	$(MAKE) risk-guardrails code-quality
+	go vet ./...
+	go test -short ./...
+	$(MAKE) fe-lint fe-build
+
+test-verify-attestation: e2e-attestation-check
+
+test-verify-report: test-verify-attestation
+	bash scripts/quality/test-verification-report.sh
+
+test-verify-ci: test-verify-local test-verify-report
 
 tool-permission-test:
 	bash scripts/quality/tool-permission-test.sh

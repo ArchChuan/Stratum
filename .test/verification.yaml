@@ -41,6 +41,16 @@ risk:
     - id: deployment
       level: R3
       paths: [.github/workflows/**, helm/**, k8s/**]
+    - id: verification-kernel
+      level: R3
+      paths:
+        - .agents/skills/stratum-e2e-development/**
+        - cmd/e2e-*/**
+        - internal/platform/e2eattestation/**
+        - internal/platform/e2erunscope/**
+        - scripts/e2e/**
+        - scripts/quality/test-verification-*.sh
+        - test/e2e/**
 
 levels:
   R0: {checks: [docs-lint]}
