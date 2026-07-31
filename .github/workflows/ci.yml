@@ -137,6 +137,13 @@ jobs:
       - name: Test Agent tool permission harness
         run: make tool-permission-test
 
+  guardrails:
+    name: Migration Guardrails
+    runs-on: ubuntu-latest
+    needs: [static-checks, code-quality, frontend, safety-guards]
+    steps:
+      - run: echo 'All guardrail checks passed'
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -247,7 +254,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [static-checks, code-quality, frontend, safety-guards, lint, test, contract, workflow-e2e, platform-assistant-e2e]
+    needs: [guardrails, lint, test, contract, workflow-e2e, platform-assistant-e2e]
     steps:
       - uses: actions/checkout@v4
 
