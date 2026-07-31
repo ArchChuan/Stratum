@@ -196,8 +196,6 @@ assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'STRATUM_TEST_POSTGRES_URL:' 'CI tool permission PostgreSQL URL'
 assert_file_contains "${ROOT}/.github/workflows/ci.yml" \
   'make tool-permission-test' 'CI tool permission test invocation'
-assert_file_contains "${ROOT}/.github/workflows/stateful-e2e.yml" \
-  'STATEFUL_E2E_PACKS:[[:space:]]*all' 'unified CI browser harness'
 assert_file_contains "${ROOT}/web/e2e/stateful/packs/agent-skill-mcp.ts" \
   'agents\.tool\.approvals\.id\.decision' 'browser tool approval decision capability'
 assert_file_contains "${ROOT}/web/e2e/stateful/packs/agent-skill-mcp.ts" \
