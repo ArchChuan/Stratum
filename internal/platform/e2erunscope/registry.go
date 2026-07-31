@@ -20,9 +20,11 @@ const (
 	registryDirectoryMode = 0o700
 	registryMetadataMode  = 0o600
 	registryTempAttempts  = 16
+	registryLockName      = ".registry.lock"
 )
 
 var syncRegistryDirectory = func(directory *os.File) error { return directory.Sync() }
+var releaseSnapshotHook = func() {}
 
 type Registry struct {
 	Root string
@@ -61,7 +63,9 @@ func (r Registry) Register(scope Scope) error {
 	if err != nil {
 		return fmt.Errorf("registry: encode lease: %w", err)
 	}
-	return atomicCreateAt(directories.root, directories.runs, scope.RunID+".json", data)
+	return withRegistryMutation(directories.root, func() error {
+		return atomicCreateAt(directories.root, directories.runs, scope.RunID+".json", data)
+	})
 }
 
 func (r Registry) Read(runID string) (Scope, error) {
@@ -85,11 +89,13 @@ func (r Registry) MarkInfrastructureOwned(runID string, now time.Time) error {
 		return err
 	}
 	defer directories.close()
-	if _, err := readLeaseAt(directories.runs, runID+".json", runID); err != nil {
-		return fmt.Errorf("registry: read owner lease: %w", err)
-	}
-	state := InfrastructureState{StartedByE2E: true, StartedAt: now.UTC(), StartedByRun: runID}
-	return writeInfrastructureAt(directories.root, state)
+	return withRegistryMutation(directories.root, func() error {
+		if _, err := readLeaseAt(directories.runs, runID+".json", runID); err != nil {
+			return fmt.Errorf("registry: read owner lease: %w", err)
+		}
+		state := InfrastructureState{StartedByE2E: true, StartedAt: now.UTC(), StartedByRun: runID}
+		return writeInfrastructureAt(directories.root, state)
+	})
 }
 
 func (r Registry) Release(runID string) (ReleaseResult, error) {
@@ -101,10 +107,21 @@ func (r Registry) Release(runID string) (ReleaseResult, error) {
 		return ReleaseResult{}, err
 	}
 	defer directories.close()
+	var result ReleaseResult
+	err = withRegistryMutation(directories.root, func() error {
+		var releaseErr error
+		result, releaseErr = releaseAt(directories, runID)
+		return releaseErr
+	})
+	return result, err
+}
+
+func releaseAt(directories *registryDirectories, runID string) (ReleaseResult, error) {
 	leases, err := readAllLeasesAt(directories.runs)
 	if err != nil {
 		return ReleaseResult{}, err
 	}
+	releaseSnapshotHook()
 	if err := requireLease(leases, runID); err != nil {
 		return ReleaseResult{}, err
 	}
@@ -130,20 +147,22 @@ func (r Registry) ConfirmInfrastructureStopped(ownershipRunID string) error {
 		return err
 	}
 	defer directories.close()
-	state, exists, err := readInfrastructureAt(directories.root)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return errors.New("registry: infrastructure ownership not found")
-	}
-	if state.StartedByRun != ownershipRunID {
-		return errors.New("registry: infrastructure ownership changed")
-	}
-	if err := removeMetadataAt(directories.root, "infrastructure.json"); err != nil {
-		return fmt.Errorf("registry: remove infrastructure metadata: %w", err)
-	}
-	return nil
+	return withRegistryMutation(directories.root, func() error {
+		state, exists, err := readInfrastructureAt(directories.root)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return errors.New("registry: infrastructure ownership not found")
+		}
+		if state.StartedByRun != ownershipRunID {
+			return errors.New("registry: infrastructure ownership changed")
+		}
+		if err := removeMetadataAt(directories.root, "infrastructure.json"); err != nil {
+			return fmt.Errorf("registry: remove infrastructure metadata: %w", err)
+		}
+		return nil
+	})
 }
 
 func (r Registry) Stale(now time.Time, processAlive func(int, string) bool) ([]Scope, error) {
@@ -202,6 +221,85 @@ func (r Registry) openDirectories(create bool) (*registryDirectories, error) {
 func (d *registryDirectories) close() {
 	_ = d.runs.Close()
 	_ = d.root.Close()
+}
+
+func withRegistryMutation(root *os.File, operation func() error) (err error) {
+	lock, err := acquireRegistryMutationLock(root)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, releaseRegistryMutationLock(lock)) }()
+	return operation()
+}
+
+func acquireRegistryMutationLock(root *os.File) (*os.File, error) {
+	lock, created, err := openRegistryMutationLock(root)
+	if err != nil {
+		return nil, err
+	}
+	if created {
+		if err := syncRegistryDirectory(root); err != nil {
+			_ = lock.Close()
+			return nil, fmt.Errorf("registry: sync mutation lock directory: %w", err)
+		}
+	}
+	if err := lockRegistryFile(lock); err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	return lock, nil
+}
+
+func openRegistryMutationLock(root *os.File) (*os.File, bool, error) {
+	how := &unix.OpenHow{
+		Flags:   unix.O_RDWR | unix.O_CREAT | unix.O_EXCL | unix.O_CLOEXEC | unix.O_NOFOLLOW,
+		Mode:    registryMetadataMode,
+		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
+	}
+	fd, err := unix.Openat2(fileDescriptor(root), registryLockName, how)
+	created := err == nil
+	if errors.Is(err, unix.EEXIST) {
+		how.Flags = unix.O_RDWR | unix.O_CLOEXEC | unix.O_NOFOLLOW
+		how.Mode = 0
+		fd, err = unix.Openat2(fileDescriptor(root), registryLockName, how)
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("registry: open mutation lock: %w", err)
+	}
+	lock := fileFromDescriptor(fd, registryLockName)
+	info, err := lock.Stat()
+	if err == nil {
+		err = validateMetadataFile(info)
+	}
+	if err != nil {
+		_ = lock.Close()
+		return nil, false, fmt.Errorf("registry: validate mutation lock: %w", err)
+	}
+	return lock, created, nil
+}
+
+func lockRegistryFile(lock *os.File) error {
+	for {
+		err := unix.Flock(fileDescriptor(lock), unix.LOCK_EX)
+		if !errors.Is(err, unix.EINTR) {
+			if err != nil {
+				return fmt.Errorf("registry: lock mutation transaction: %w", err)
+			}
+			return nil
+		}
+	}
+}
+
+func releaseRegistryMutationLock(lock *os.File) error {
+	unlockErr := unix.Flock(fileDescriptor(lock), unix.LOCK_UN)
+	closeErr := lock.Close()
+	if unlockErr != nil {
+		unlockErr = fmt.Errorf("registry: unlock mutation transaction: %w", unlockErr)
+	}
+	if closeErr != nil {
+		closeErr = fmt.Errorf("registry: close mutation lock: %w", closeErr)
+	}
+	return errors.Join(unlockErr, closeErr)
 }
 
 func openRegistryRoot(path string, create bool) (*os.File, error) {

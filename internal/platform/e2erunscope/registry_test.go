@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -432,6 +433,105 @@ func TestRegistryReleaseLifecycle(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(r.Root, "infrastructure.json")); !os.IsNotExist(err) {
 		t.Fatalf("infrastructure metadata still exists: %v", err)
+	}
+}
+
+func TestRegistryReleaseSerializesConcurrentRegister(t *testing.T) {
+	r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
+	a := registryTestScope(t, "20260730t120102z-a1b2c3d4e5f60718", 101)
+	b := registryTestScope(t, "20260730t120103z-b1b2c3d4e5f60718", 102)
+	if err := r.Register(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.MarkInfrastructureOwned(a.RunID, a.CreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{}, 1)
+	proceed := make(chan struct{})
+	original := releaseSnapshotHook
+	t.Cleanup(func() { releaseSnapshotHook = original })
+	releaseSnapshotHook = func() {
+		entered <- struct{}{}
+		<-proceed
+	}
+	releaseDone := make(chan struct {
+		result ReleaseResult
+		err    error
+	}, 1)
+	go func() {
+		result, err := r.Release(a.RunID)
+		releaseDone <- struct {
+			result ReleaseResult
+			err    error
+		}{result: result, err: err}
+	}()
+	<-entered
+	registerDone := make(chan error, 1)
+	go func() { registerDone <- r.Register(b) }()
+	select {
+	case err := <-registerDone:
+		t.Fatalf("Register(B) completed during Release(A) transaction: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+	close(proceed)
+	released := <-releaseDone
+	if released.err != nil {
+		t.Fatal(released.err)
+	}
+	if !released.result.LastReference || !released.result.StopOwnedInfrastructure {
+		t.Fatalf("Release(A) = %+v, want last owned reference", released.result)
+	}
+	if err := <-registerDone; err != nil {
+		t.Fatalf("Register(B) error = %v", err)
+	}
+}
+
+func TestRegistryReleaseSerializesConcurrentReleases(t *testing.T) {
+	r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
+	a := registryTestScope(t, "20260730t120102z-a1b2c3d4e5f60718", 101)
+	b := registryTestScope(t, "20260730t120103z-b1b2c3d4e5f60718", 102)
+	if err := r.Register(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Register(b); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{}, 2)
+	proceed := make(chan struct{})
+	original := releaseSnapshotHook
+	t.Cleanup(func() { releaseSnapshotHook = original })
+	var first sync.Once
+	releaseSnapshotHook = func() {
+		entered <- struct{}{}
+		first.Do(func() { <-proceed })
+	}
+	results := make(chan ReleaseResult, 2)
+	errors := make(chan error, 2)
+	for _, runID := range []string{a.RunID, b.RunID} {
+		go func() {
+			result, err := r.Release(runID)
+			results <- result
+			errors <- err
+		}()
+	}
+	<-entered
+	select {
+	case <-entered:
+		t.Fatal("both Release transactions took concurrent lease snapshots")
+	case <-time.After(250 * time.Millisecond):
+	}
+	close(proceed)
+	lastReferences := 0
+	for range 2 {
+		if err := <-errors; err != nil {
+			t.Fatal(err)
+		}
+		if (<-results).LastReference {
+			lastReferences++
+		}
+	}
+	if lastReferences != 1 {
+		t.Fatalf("last-reference results = %d, want exactly one", lastReferences)
 	}
 }
 
