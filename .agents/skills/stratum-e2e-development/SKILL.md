@@ -15,33 +15,42 @@ description: >-
 本 Skill 是 Stratum 唯一的测试、独立审查、系统验收和发布收口入口；不得创建平行 Test Skill。
 Claude Code、Codex 和人工开发都读取同一份 `.test/verification.yaml`，调用相同的仓库脚本和 CI。
 
-CI 是唯一验收权威。本地测试、Agent 自述和独立审查只能推动流程，不能签发 `accepted`。CI 必须使用
-GitHub Actions OIDC/Sigstore 签名运行 attestation，并消费受保护 environment 的 commit-bound review receipt。只有当前 commit、
-manifest digest、runner identity、capability、cleanup 和 artifact digest 对应的 attestation 验证通过后，
-本 Skill 才能报告完成。
+三种权威必须分开，不能用一个 `accepted` 状态互相替代：
+
+```yaml
+browser_e2e_authority: local
+merge_authority: ci
+deployment_authority: release_pipeline
+```
+
+本地 `make test-verify-before-pr` 是浏览器验收入口。它生成的 local report 是 developer **audit assertion**，
+绑定当前 commit、manifest digest、capability、cleanup 和 attestation v2，但不是 GitHub trusted status。
+PR CI 只运行确定性的非浏览器 L0-L2 检查并决定是否合并；发布流水线验证 CI 测试过的精确 commit、不可变
+镜像 digest、迁移、rollout、health 和 rollback，不运行浏览器。
 
 ### 确定性状态机
 
 ```text
-received -> scoped -> classified -> planned -> local_verified
-  -> reviewed -> ci_running -> attestation_verified -> accepted
+local:   planned -> focused_checked -> browser_verified -> reported
+CI:      pending -> checks_running -> passed | failed
+release: candidate_resolved -> digests_pinned -> deployed | blocked
 ```
 
-失败终态为 `failed`、`blocked` 或 `incomplete`。状态不可由语言判断跳转；每次跳转必须有脚本、审查或 CI
-证据。重跑只能用于诊断，第一次失败仍保留为失败证据，不能以重跑成功覆盖。
+本地失败终态为 `failed` 或 `infra_failed`，源码变化后为 `stale`。状态不可由语言判断跳转。重跑只能用于诊断，
+第一次失败必须进入历史证据，不能被后续成功静默覆盖。
 
 ### 风险与审查
 
 - `R0`：非执行文档；执行文档和生成一致性检查。
-- `R1`：局部逻辑；执行静态检查、单测、构建和代码质量审查。
-- `R2`：行为变化；增加真实集成/合同测试和 short E2E。
-- `R3`：认证、租户、迁移、Agent/MCP/Memory、外部依赖或部署；增加失败路径、规格审查、代码质量审查，
-  并执行 `STATEFUL_E2E_PROFILE=test STATEFUL_E2E_DURATION_SEC=600 STATEFUL_E2E_PACKS=all make e2e-system-soak`。
-- `R4`：正式发布；增加同 digest 晋升、发布证据审查和生产只读验证。release soak 的固定配置是
+- `R1`：局部逻辑；执行静态检查、单测、构建和代码质量检查。
+- `R2`：行为变化；增加真实集成/合同测试和本地 short E2E。
+- `R3`：认证、租户、迁移、Agent/MCP/Memory、外部依赖或部署；增加失败路径，并在本地执行
+  `STATEFUL_E2E_PROFILE=test STATEFUL_E2E_DURATION_SEC=600 STATEFUL_E2E_PACKS=all make e2e-system-soak`。
+- `R4`：显式正式发布意图；增加同 digest 晋升和生产验证。local release soak 的固定配置是
   `STATEFUL_E2E_PROFILE=release STATEFUL_E2E_DURATION_SEC=3600`，通过 `make e2e-system-release-soak` 执行。
 
-确定性分类器结果只能提高，不能由 Agent 降低；分类失败时 fail closed。实现 Agent 不能批准自己的规格审查
-或代码质量审查，审查结果必须绑定 commit。
+确定性分类器结果只能提高，不能由 Agent 降低；分类失败时 fail closed。人工或 Agent review 是协作证据，
+不是本地浏览器、CI merge 或 release authority，也不得生成虚假的机器 receipt。
 
 ### Runner 边界
 
@@ -51,7 +60,6 @@ received -> scoped -> classified -> planned -> local_verified
 按需读取：
 
 - `references/verification-manifest.md`
-- `references/review-contract.md`
 - `references/failure-taxonomy.md`
 - `references/agent-adapters.md`
 
@@ -59,16 +67,18 @@ received -> scoped -> classified -> planned -> local_verified
 
 功能开发或 Bug 修复的普通测试通过后，必须使用仓库版本化实现完成系统验收，不能由 Skill 临时拼装另一套流程：
 
-1. 运行 `bash scripts/quality/risk-regression-guard.sh --acceptance <changed-file...>`；输出 `short` 时运行
-   `make e2e-system-short`。R3 的 `soak` 使用 600 秒 test profile；R4 必须升级为 3600 秒 release profile，命令以上述
-   风险分级为准。
+1. 在准备创建 PR 的 clean commit 上运行 `make test-verify-before-pr`。该命令确定性分类并执行 focused checks；
+   R2 自动运行 `make e2e-system-short`，R3 自动追加 600 秒 test soak，R4 显式 release intent 自动追加
+   `make e2e-system-release-soak`。单独命令只用于开发迭代，不能写最终 local report。
 2. 持续监控 runner 到终态。失败时定位产品、环境或测试合同根因，修复后从失效阶段重新运行；不得跳过 pack、capability、清理或证据对账来取得通过。
 3. 所有被选 capability 的主要操作必须由无头 Chromium 中的真实点击、输入、选择、刷新和跨角色会话发起。HTTP 只用于准备、响应证据和明确的拒绝断言；SQL 只用于测试身份、精确对账与清理。
 4. 允许读取本地/临时测试数据库凭据，并只对本轮生成的 UUID 身份精确提升角色。凭据、token、cookie、密码、私钥、API key 和原始敏感响应只能保存在进程内，不得打印或写入 trace、日志、attestation。
-5. runner 完成后运行 `make e2e-attestation-check`。源码变化、manifest 不匹配、报告过期、artifact 篡改、secret pattern、failed/skipped/unverified capability、未对账证据、清理失败或未声明残留实体都必须拒绝完成。
+5. canonical entrypoint 自动验证 attestation 和 local report freshness。源码变化、manifest 不匹配、报告过期、
+   failed/skipped/unverified capability、未对账证据、清理失败或未声明残留实体都必须拒绝本地通过。
 6. 最终报告列出 mode、seed、packs、action/evidence 计数、attestation 安全路径、清理结果、残留实体和未验证风险，并停止本轮启动的所有进程。
 
-临时 Playwright spec、curl、手工浏览器和纯 API/数据库验证仅用于复现与诊断，不能替代系统验收。CI 强制运行 headless Chromium stateful E2E（`stateful-e2e` job），10 个关键 pack 全部通过才允许合并。
+临时 Playwright spec、curl、手工浏览器和纯 API/数据库验证仅用于复现与诊断，不能替代系统验收。PR CI
+不得安装或启动 Chromium；它独立运行 static、unit、integration、contract、security 和 build jobs。
 
 ## 基本原则
 
@@ -232,9 +242,9 @@ npm --prefix web run build
 npm --prefix web test -- <相关测试文件>
 ```
 
-#### WSL2 前端验证（接口推断为主）
+#### WSL2 前端诊断（不能替代验收）
 
-WSL2 headless 截图有字体缺失问题（中文乱码），**不使用截图**。改用以下方式（优先级从高到低）：
+WSL2 headless 截图有字体缺失问题（中文乱码）时，不用截图作为文字证据。诊断方式按以下优先级：
 
 1. **纯 API 验证（最快）**：用 curl + JWT 验证后端接口返回值，从接口数据推断前端应渲染的内容。详见 Step 3 的 JWT Self-Mint。
 2. **Playwright DOM 断言 + 网络拦截**：`page.evaluate()` 提取文本、`page.waitForResponse()` 捕获 API 响应。**模板详见 `references/playwright-tmp-spec-template.md`**。
