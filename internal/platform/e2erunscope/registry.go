@@ -493,8 +493,8 @@ func validateMetadataFile(info os.FileInfo) error {
 	if !info.Mode().IsRegular() {
 		return errors.New("metadata is not a regular file")
 	}
-	if info.Mode().Perm()&0o022 != 0 {
-		return errors.New("metadata is group or world writable")
+	if info.Mode().Perm() != registryMetadataMode {
+		return fmt.Errorf("metadata mode %04o is not %04o", info.Mode().Perm(), registryMetadataMode)
 	}
 	return validateUID(info)
 }

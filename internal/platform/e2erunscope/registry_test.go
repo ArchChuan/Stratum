@@ -114,6 +114,20 @@ func TestRegistryRejectsUnsafePaths(t *testing.T) {
 			run: func(r Registry) error { _, err := r.Read(scope.RunID); return err },
 		},
 		{
+			name: "non-exact lease mode",
+			prepare: func(t *testing.T) Registry {
+				r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
+				if err := r.Register(scope); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(filepath.Join(r.Root, "runs", scope.RunID+".json"), 0o400); err != nil {
+					t.Fatal(err)
+				}
+				return r
+			},
+			run: func(r Registry) error { _, err := r.Read(scope.RunID); return err },
+		},
+		{
 			name: "world writable infrastructure",
 			prepare: func(t *testing.T) Registry {
 				r := Registry{Root: filepath.Join(t.TempDir(), "registry")}
