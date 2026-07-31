@@ -49,4 +49,29 @@ export const authApi = {
     api
       .post<CreateTenantResp>('/auth/create-tenant', { tenant_name: name })
       .then((r) => r.data),
+  updateProfile: (displayName: string) =>
+    api.patch<{ display_name: string }>('/auth/me', { display_name: displayName }).then((r) => r.data),
+  uploadAvatar: (file: File) => {
+    const fd = new FormData();
+    fd.append('avatar', file);
+    return api
+      .post<{ avatar_url: string }>('/auth/me/avatar', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      .then((r) => r.data);
+  },
+  passwordLogin: (username: string, password: string) =>
+    api
+      .post<{ access_token: string; tenant_id: string }>('/auth/password/login', {
+        username,
+        password,
+      })
+      .then((r) => r.data),
+  passwordRegister: (username: string, password: string) =>
+    api
+      .post<{ access_token: string; tenant_id: string }>('/auth/password/register', {
+        username,
+        password,
+      })
+      .then((r) => r.data),
 };

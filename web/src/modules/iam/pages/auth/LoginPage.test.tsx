@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { authApi } from '../../api/auth.api';
@@ -60,7 +61,9 @@ describe('LoginPage guest login', () => {
       },
     } as Awaited<ReturnType<typeof authApi.guest>>);
 
-    render(<LoginPage />);
+    render(<MemoryRouter><LoginPage /></MemoryRouter>);
+    // Switch to the third-party tab — guest button is on the second tab.
+    fireEvent.click(screen.getByText('第三方登录'));
     fireEvent.click(screen.getByRole('button', { name: /快速体验/ }));
 
     await waitFor(() => expect(login).toHaveBeenCalled());
