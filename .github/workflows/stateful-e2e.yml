@@ -37,6 +37,11 @@ jobs:
         with: {go-version: "1.25", cache: true}
       - uses: actions/setup-node@v4
         with: {node-version: "22", cache: npm, cache-dependency-path: web/package-lock.json}
+      - uses: actions/cache@v4
+        id: node-modules
+        with:
+          path: web/node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}
       - run: npm ci --prefix web
       - run: make code-quality && go vet ./... && make fe-lint fe-build
 
@@ -85,8 +90,14 @@ jobs:
       - uses: actions/setup-go@v5
         with: {go-version: "1.25", cache: true}
       - uses: actions/setup-node@v4
-        with: {node-version: "22", cache: npm, cache-dependency-path: web/package-lock.json}
-      - run: npm ci --prefix web
+        with: {node-version: "22"}
+      - uses: actions/cache@v4
+        id: node-modules
+        with:
+          path: web/node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}
+      - if: steps.node-modules.outputs.cache-hit != 'true'
+        run: npm ci --prefix web
       - run: npx --prefix web playwright install --with-deps chromium
       - name: Generate verification plan
         env: {TEST_VERIFY_RISK_LEVEL: R3}
