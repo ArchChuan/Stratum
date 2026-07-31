@@ -10,6 +10,48 @@ description: >-
 
 核心目标：不是"代码写完"，而是"用户目标在真实系统里跑通"。
 
+## 统一验证入口
+
+本 Skill 是 Stratum 唯一的测试、独立审查、系统验收和发布收口入口；不得创建平行 Test Skill。
+Claude Code、Codex 和人工开发都读取同一份 `.test/verification.yaml`，调用相同的仓库脚本和 CI。
+
+CI 是唯一验收权威。本地测试、Agent 自述和独立审查只能推动流程，不能签发 `accepted`。只有当前 commit、
+manifest digest、runner identity、capability、cleanup 和 artifact digest 对应的 attestation 验证通过后，
+本 Skill 才能报告完成。
+
+### 确定性状态机
+
+```text
+received -> scoped -> classified -> planned -> local_verified
+  -> reviewed -> ci_running -> attestation_verified -> accepted
+```
+
+失败终态为 `failed`、`blocked` 或 `incomplete`。状态不可由语言判断跳转；每次跳转必须有脚本、审查或 CI
+证据。重跑只能用于诊断，第一次失败仍保留为失败证据，不能以重跑成功覆盖。
+
+### 风险与审查
+
+- `R0`：非执行文档；执行文档和生成一致性检查。
+- `R1`：局部逻辑；执行静态检查、单测、构建和代码质量审查。
+- `R2`：行为变化；增加真实集成/合同测试和 short E2E。
+- `R3`：认证、租户、迁移、Agent/MCP/Memory、外部依赖或部署；增加失败路径、soak、规格审查和代码质量审查。
+- `R4`：正式发布；增加 release soak、同 digest 晋升、发布证据审查和生产只读验证。
+
+确定性分类器结果只能提高，不能由 Agent 降低；分类失败时 fail closed。实现 Agent 不能批准自己的规格审查
+或代码质量审查，审查结果必须绑定 commit。
+
+### Runner 边界
+
+本 Skill 编排仓库 runner，但不实现 run-scope、lease、共享引用、动态端口、cleanup 或 attestation v2。
+这些能力属于版本化验证内核。任何 lease、清理或证明字段缺失，都必须阻断 `accepted`。
+
+按需读取：
+
+- `references/verification-manifest.md`
+- `references/review-contract.md`
+- `references/failure-taxonomy.md`
+- `references/agent-adapters.md`
+
 ## 系统级 stateful/soak 验收门禁
 
 功能开发或 Bug 修复的普通测试通过后，必须使用仓库版本化实现完成系统验收，不能由 Skill 临时拼装另一套流程：
