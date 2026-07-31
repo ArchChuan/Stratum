@@ -33,7 +33,7 @@ invocation contract, attestation v2 schema, cleanup result, and run identity.
 - Modify: `AGENTS.md` generated source under `docs/agent/` only through the project generation workflow; do not hand-edit generated `AGENTS.md`.
 - Modify: `.github/workflows/ci.yml` - invoke CI-authoritative verification and attestation checks after existing required jobs.
 - Modify: `.github/workflows/stateful-e2e.yml` - consume runner contract and expose attestation artifact metadata.
-- Modify: `Makefile` - add canonical `test-verify-*` targets as thin wrappers.
+- Modify: `Makefile` - expose each canonical `test-verify-*` target only when its corresponding implementation exists.
 - Test: `test/e2e/attestations/` fixtures and existing `cmd/e2e-attestation` tests; only add fixtures after the Task 1-10 schema is final.
 
 ### Task 1: Freeze the runner integration contract
@@ -94,12 +94,11 @@ evidence, review requirements, and attestation schema `2`.
 
 Run the same command. Expected: `verification manifest tests passed`.
 
-- [ ] **Step 5: Add thin Make targets**
+- [ ] **Step 5: Add the manifest guard target**
 
-Add `test-verify-plan`, `test-verify-local`, `test-verify-ci`,
-`test-verify-attestation`, and `test-verify-report` targets. Each target must
-delegate to an existing script or the Task 1-10 runner; no target may contain
-business classification logic.
+Add only `verification-manifest-test`. Canonical lifecycle targets must not be
+added until their corresponding planner, runner, CI verifier, attestation
+verifier, or report generator exists; a manifest-only alias is a false success.
 
 - [ ] **Step 6: Commit the manifest contract**
 

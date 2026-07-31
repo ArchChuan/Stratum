@@ -222,21 +222,6 @@ monitoring-config-test:
 verification-manifest-test:
 	bash scripts/quality/verification-manifest-test.sh
 
-test-verify-plan:
-	bash scripts/quality/verification-manifest-test.sh plan
-
-test-verify-local:
-	bash scripts/quality/verification-manifest-test.sh local
-
-test-verify-ci:
-	bash scripts/quality/verification-manifest-test.sh ci
-
-test-verify-attestation:
-	bash scripts/quality/verification-manifest-test.sh attestation
-
-test-verify-report:
-	bash scripts/quality/verification-manifest-test.sh report
-
 E2E_REQUIRED_MODE ?= short
 E2E_REQUIRED_PROFILE ?=
 e2e-attestation-check:

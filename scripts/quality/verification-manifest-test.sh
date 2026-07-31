@@ -3,7 +3,6 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 manifest="${root}/.test/verification.yaml"
-scope="${1:-contract}"
 
 fail() { printf 'verification manifest: %s\n' "$1" >&2; exit 1; }
 require() {
@@ -37,8 +36,4 @@ require '^  schema:[[:space:]]*2$' 'attestation schema v2'
 require 'manifest_digest' 'manifest digest binding'
 require 'artifact_digests' 'artifact digest binding'
 
-case "$scope" in
-  contract|plan|local|ci|attestation|report) ;;
-  *) fail "unknown verification scope: ${scope}" ;;
-esac
-printf 'verification manifest %s check passed\n' "$scope"
+printf 'verification manifest contract passed\n'
