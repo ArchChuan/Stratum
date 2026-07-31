@@ -4,7 +4,7 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 makefile=$root/Makefile
 
-for target in plan local ci attestation report; do
+for target in plan fast before-pr local ci attestation report; do
   grep -Eq "^test-verify-${target}:" "$makefile" || {
     printf 'missing canonical verification target: test-verify-%s\n' "$target" >&2
     exit 1

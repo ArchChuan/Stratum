@@ -8,7 +8,7 @@
 	docker-start \
 	k8s-deploy k8s-delete k8s-logs \
 	helm-install helm-upgrade helm-uninstall helm-diff helm-lint \
-	migration-guardrails e2e-attestation-check test-verify-plan test-verify-local test-verify-ci \
+	migration-guardrails e2e-attestation-check test-verify-plan test-verify-fast test-verify-before-pr test-verify-local test-verify-ci \
 	test-verify-attestation test-verify-report ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	agent-instructions agent-instructions-check \
@@ -236,9 +236,17 @@ e2e-attestation-check:
 
 test-verification-entrypoints-test:
 	bash scripts/quality/test-verification-entrypoints-test.sh
+	bash scripts/quality/run-planned-checks-test.sh
+	bash scripts/quality/test-verify-before-pr-test.sh
 
 test-verify-plan: verification-manifest-test verification-schemas-test
 	bash scripts/quality/test-verification-plan.sh
+
+test-verify-fast: test-verify-plan
+	bash scripts/quality/run-planned-checks.sh
+
+test-verify-before-pr:
+	bash scripts/quality/test-verify-before-pr.sh
 
 test-verify-local: test-verify-plan
 	bash scripts/quality/system-e2e-instructions-test.sh
