@@ -18,6 +18,7 @@ ingress:
   className: "traefik"
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: "web,web2,websecure"
+    traefik.ingress.kubernetes.io/router.tls: "false"
   hosts:
     - host: ""
       paths:
