@@ -183,9 +183,6 @@ func (s *MCPService) DisconnectServer(ctx context.Context, serverID string) erro
 
 // ReconnectServer restores a previously disconnected MCP server.
 func (s *MCPService) ReconnectServer(ctx context.Context, serverID string) error {
-	if err := s.rejectPlatformManaged(ctx, serverID); err != nil {
-		return err
-	}
 	if err := s.manager.Reconnect(ctx, serverID); err != nil {
 		return err
 	}
