@@ -185,3 +185,22 @@ The script uses a random localhost port and always removes its temporary contain
 - Memory v2 SPEC: `docs/memory/memory-v2-spec.md`
 - Agent integration: `docs/agent/agent-chat-flow.md`
 - Migration guide: `docs/memory/memory-v1-to-v2-migration.md`
+
+## Parallel Stateful System Runs
+
+Codex, Claude Code, and manual feature worktrees use the same `scripts/e2e/system-stateful.sh` entry point and may run concurrently. Each invocation receives a run ID matching `YYYYMMDDtHHMMSSz-<16 hex>`, four distinct loopback ports, and a PostgreSQL database named `stratum_e2e_YYYYMMDDtHHMMSSz_<16 hex>`.
+
+Lease metadata is stored below `${STATEFUL_E2E_REGISTRY_ROOT:-${TMPDIR}/stratum-stateful-e2e}` with directory mode `0700` and metadata mode `0600`. Registry mutations use a short lock; browser execution does not hold a global lock. PostgreSQL, Redis, NATS, and Milvus processes remain shared in phase one, while PostgreSQL data is isolated by database and application cleanup remains tenant/run scoped.
+
+Leases are eligible for conservative reaping only after 24 hours and only when their owner process is no longer associated with the recorded repository. Inspect a residual lease before cleanup:
+
+```bash
+jq . "${TMPDIR:-/tmp}/stratum-stateful-e2e/runs/<run-id>.json"
+```
+
+Use the validated CLI for exact cleanup; never drop databases by wildcard:
+
+```bash
+go run ./cmd/e2e-run-scope drop-database --scope /absolute/path/to/scope.json --base-dsn-env TEST_DATABASE_URL
+go run ./cmd/e2e-run-scope release --scope /absolute/path/to/scope.json --registry "${TMPDIR:-/tmp}/stratum-stateful-e2e"
+```
