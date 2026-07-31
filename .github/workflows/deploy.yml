@@ -123,13 +123,42 @@ jobs:
           cache-from: type=gha,scope=feishu-alert-adapter
           cache-to: type=gha,scope=feishu-alert-adapter,mode=max
 
+  build-platform-mcp:
+    name: Build Platform MCP
+    runs-on: ubuntu-latest
+    needs: test
+    outputs:
+      digest: ${{ steps.platform-mcp-build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Platform MCP
+        id: platform-mcp-build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/platform-mcp.Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_REPO }}/stratum-platform-mcp:${{ github.sha }}
+          cache-from: type=gha,scope=platform-mcp
+          cache-to: type=gha,scope=platform-mcp,mode=max
+
   build-and-push:
     name: Build and Push
     runs-on: ubuntu-latest
-    needs: [build-backend, build-frontend, build-feishu-adapter]
+    needs: [build-backend, build-frontend, build-feishu-adapter, build-platform-mcp]
     outputs:
       image-tag: ${{ github.sha }}
       adapter-digest: ${{ needs.build-feishu-adapter.outputs.digest }}
+      platform-mcp-digest: ${{ needs.build-platform-mcp.outputs.digest }}
     steps:
       - name: Confirm image builds
         run: echo "All application images were built and pushed successfully."
@@ -474,6 +503,8 @@ jobs:
             --set-string app.image.digest="${{ steps.images.outputs.backend }}" \
             --set frontend.image.repository="${{ env.IMAGE_REPO }}/stratum-frontend" \
             --set-string frontend.image.digest="${{ steps.images.outputs.frontend }}" \
+            --set platformMCP.image.repository="${{ env.IMAGE_REPO }}/stratum-platform-mcp" \
+            --set-string platformMCP.image.digest="${{ needs.build-and-push.outputs.platform-mcp-digest }}" \
             --set database.image.repository="${{ env.IMAGE_REPO }}/postgres" \
             --set-string database.image.digest="${{ steps.images.outputs.postgres }}" \
             --set redis.image.repository="${{ env.IMAGE_REPO }}/redis" \

@@ -17,6 +17,7 @@ OPIK_COLLECTOR="${ROOT}/k8s/opik-otel-collector.yaml"
 PLATFORM_ASSISTANT_REMOTE_VERIFY="${ROOT}/scripts/e2e/platform-assistant-remote-verify.sh"
 FEISHU_ADAPTER_MANIFEST="${ROOT}/monitoring/remote/resources/feishu-alert-adapter.yaml"
 FEISHU_ADAPTER_DOCKERFILE="${ROOT}/docker/feishu-alert-adapter.Dockerfile"
+PLATFORM_MCP_DOCKERFILE="${ROOT}/docker/platform-mcp.Dockerfile"
 REMOTE_MONITORING_DEPLOY="${ROOT}/scripts/deploy-remote-monitoring.sh"
 
 require() {
@@ -65,9 +66,11 @@ require 'cancel-in-progress:[[:space:]]*false' 'non-cancelling active deployment
 require '^  build-backend:' 'parallel backend image build job'
 require '^  build-frontend:' 'parallel frontend image build job'
 require '^  build-feishu-adapter:' 'parallel Feishu adapter image build job'
-require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter\]' \
+require '^  build-platform-mcp:' 'parallel Platform MCP image build job'
+require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter,[[:space:]]*build-platform-mcp\]' \
     'image build fan-in dependencies'
-for job_scope in build-backend:backend build-frontend:frontend build-feishu-adapter:feishu-alert-adapter; do
+for job_scope in build-backend:backend build-frontend:frontend build-feishu-adapter:feishu-alert-adapter \
+    build-platform-mcp:platform-mcp; do
     job=${job_scope%%:*}
     scope=${job_scope#*:}
     require_job "${job}" '^    needs:[[:space:]]*test$' "${job} test dependency"
@@ -78,7 +81,10 @@ require 'digest:[[:space:]]*\$\{\{ steps\.adapter-build\.outputs\.digest \}\}' \
     'adapter build digest job output'
 require 'adapter-digest:[[:space:]]*\$\{\{ needs\.build-feishu-adapter\.outputs\.digest \}\}' \
     'adapter digest fan-in output'
+require 'platform-mcp-digest:[[:space:]]*\$\{\{ needs\.build-platform-mcp\.outputs\.digest \}\}' \
+    'Platform MCP digest fan-in output'
 require 'file:[[:space:]]*\./docker/feishu-alert-adapter\.Dockerfile' 'adapter image build missing'
+require 'file:[[:space:]]*\./docker/platform-mcp\.Dockerfile' 'Platform MCP image build missing'
 require 'FEISHU_WEBHOOK_URL' 'Feishu secret injection missing'
 require 'kubectl create namespace monitoring --dry-run=client -o yaml \| kubectl apply -f -' \
     'monitoring namespace idempotent apply missing'
@@ -103,6 +109,8 @@ require 'api\.github\.com/repos/.*/commits/main' 'fail-closed current main looku
 require 'sha256:\[0-9a-f\]\{64\}' 'registry digest validation'
 require '--set-string app\.image\.digest=' 'backend digest deployment'
 require '--set-string frontend\.image\.digest=' 'frontend digest deployment'
+require '--set-string platformMCP\.image\.digest=' 'Platform MCP digest deployment'
+require '--set platformMCP\.image\.repository=' 'Platform MCP registry deployment'
 require 'opik-2\.1\.32\.tgz' 'versioned Opik Helm chart artifact'
 require 'sha256sum --check' 'Opik Helm chart checksum verification'
 require 'helm upgrade --install opik /tmp/opik-2\.1\.32\.tgz' 'verified local Opik chart installation'
@@ -212,6 +220,12 @@ require_file "${FEISHU_ADAPTER_DOCKERFILE}" '^USER 65532:65532$' 'adapter image 
 require_file "${FEISHU_ADAPTER_DOCKERFILE}" '^EXPOSE 8080$' 'adapter image port contract missing'
 require_file "${FEISHU_ADAPTER_DOCKERFILE}" '^ENTRYPOINT \["/feishu-alert-adapter"\]$' \
     'adapter image entrypoint contract missing'
+require_file "${PLATFORM_MCP_DOCKERFILE}" '^FROM .*@sha256:' \
+    'Platform MCP build image is not digest pinned'
+require_file "${PLATFORM_MCP_DOCKERFILE}" '^FROM scratch$' 'Platform MCP runtime stage is not minimal'
+require_file "${PLATFORM_MCP_DOCKERFILE}" 'go build .*\./cmd/platform-mcp' 'Platform MCP binary build missing'
+require_file "${PLATFORM_MCP_DOCKERFILE}" '^USER 65532:65532$' 'Platform MCP image does not run as UID/GID 65532'
+require_file "${PLATFORM_MCP_DOCKERFILE}" '^ENTRYPOINT \["/platform-mcp"\]$' 'Platform MCP image entrypoint missing'
 
 if grep -Eq 'gosec@latest|gosec .*\|\|[[:space:]]*true' "${CI_WORKFLOW}"; then
     echo 'deployment safety contract violated: security scanner is unpinned or non-blocking' >&2
