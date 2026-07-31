@@ -52,5 +52,8 @@ require 'id: platform-assistant' 'Platform Assistant capability'
 require '^  schema:[[:space:]]*2$' 'attestation schema v2'
 require 'manifest_digest' 'manifest digest binding'
 require 'artifact_digests' 'artifact digest binding'
+if grep -Eq '^reviews:|specification-review|code-quality-review' "$manifest"; then
+  fail 'legacy review authority is still declared'
+fi
 
 printf 'verification manifest contract passed\n'

@@ -11,7 +11,7 @@ for target in plan local ci attestation report; do
   }
 done
 grep -Fq 'scripts/quality/test-verification-plan.sh' "$makefile"
-grep -Fq 'scripts/quality/test-verification-report.sh' "$makefile"
+grep -Fq 'scripts/quality/check-local-verification-report.sh' "$makefile"
 grep -Fq 'env -u STRATUM_TEST_POSTGRES_URL' "$root/scripts/quality/run-planned-checks.sh"
 grep -Eq '^test-verify-report:[[:space:]]*$' "$makefile"
 grep -Fq 'e2e-attestation-check' "$makefile"

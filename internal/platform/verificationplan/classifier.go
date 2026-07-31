@@ -17,7 +17,6 @@ type Manifest struct {
 	Policy  AuthorityPolicy        `yaml:"policy"`
 	Risk    RiskPolicy             `yaml:"risk"`
 	Levels  map[string]LevelPolicy `yaml:"levels"`
-	Reviews ReviewPolicy           `yaml:"reviews"`
 }
 
 type AuthorityPolicy struct {
@@ -42,10 +41,6 @@ type LevelPolicy struct {
 	Mode        string   `yaml:"mode"`
 	LocalChecks []string `yaml:"local_checks"`
 	CIChecks    []string `yaml:"ci_checks"`
-}
-
-type ReviewPolicy struct {
-	Required map[string][]string `yaml:"required"`
 }
 
 func Load(path string) (Manifest, error) {

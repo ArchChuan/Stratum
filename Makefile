@@ -250,7 +250,7 @@ test-verify-local: test-verify-plan
 test-verify-attestation: e2e-attestation-check
 
 test-verify-report:
-	bash scripts/quality/test-verification-report.sh
+	bash scripts/quality/check-local-verification-report.sh
 
 test-verify-ci: test-verify-local test-verify-report
 

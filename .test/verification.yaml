@@ -96,13 +96,6 @@ capabilities:
     packs: [platform-assistant-browser, platform-assistant-proposal, agent-tool-permission]
     evidence: [ui, http, database, trace, cleanup]
 
-reviews:
-  required:
-    R1: [code-quality]
-    R2: [specification, code-quality]
-    R3: [specification, code-quality]
-    R4: [specification, code-quality, release-evidence]
-
 attestation:
   schema: 2
   required: [commit, manifest_digest, runner_identity, capability_results, cleanup, artifact_digests]
