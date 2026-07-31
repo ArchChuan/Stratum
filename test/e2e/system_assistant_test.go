@@ -289,7 +289,7 @@ func TestSystemAssistantTenantIsolationAndRoleScope(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	existing.LLMModel = "deterministic-e2e-model"
-	_, err = repo.UpdateSystemAssistantModel(ctxA, existing.LLMModel)
+	_, err = repo.UpdateSystemAssistantModel(ctxA, existing.LLMModel, existing.MemoryScope, existing.CheckpointEnabled, existing.MaxIterations, existing.MaxContextTokens)
 	require.NoError(t, err)
 	updated, found, err := repo.GetSystemAssistant(ctxA)
 	require.NoError(t, err)
@@ -414,7 +414,7 @@ func TestSystemAssistantDeterministicAgentLoopPersistsTypedArtifacts(t *testing.
 	require.NoError(t, err)
 	require.True(t, found)
 	existing.LLMModel = "deterministic-e2e-model"
-	_, err = repo.UpdateSystemAssistantModel(ctx, existing.LLMModel)
+	_, err = repo.UpdateSystemAssistantModel(ctx, existing.LLMModel, existing.MemoryScope, existing.CheckpointEnabled, existing.MaxIterations, existing.MaxContextTokens)
 	require.NoError(t, err)
 
 	gateway := &deterministicAssistantGateway{}
@@ -510,7 +510,7 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 
 	list := request(http.MethodGet, "/agents", "member", "")
 	require.Equal(t, http.StatusOK, list.Code)
-	require.NotContains(t, list.Body.String(), domain.SystemAssistantID)
+	require.Contains(t, list.Body.String(), domain.SystemAssistantID)
 	settings := request(http.MethodGet, "/agents/system/settings", "member", "")
 	require.Equal(t, http.StatusOK, settings.Code)
 	require.JSONEq(t,
@@ -540,9 +540,9 @@ func TestSystemAssistantHTTPContractsUseRealHandlerServiceAndPostgres(t *testing
 	require.True(t, found)
 	require.Equal(t, domain.SystemAssistantID, persisted.ID)
 	require.Equal(t, domain.SystemAssistantKey, persisted.SystemKey)
-	require.Empty(t, persisted.AllowedSkills)
+	require.Equal(t, []string{"builtin:platform-guide", "builtin:tenant-diagnostic"}, persisted.AllowedSkills)
 	require.Equal(t, platformToolIDs(), persisted.MCPToolIDs)
-	require.Empty(t, persisted.KnowledgeWorkspaceIDs)
+	require.Equal(t, []string{"a0a0a0a0-0000-0000-0000-000000000001"}, persisted.KnowledgeWorkspaceIDs)
 	require.Equal(t, http.StatusConflict,
 		request(http.MethodDelete, "/agents/"+domain.SystemAssistantID, "admin", "").Code)
 }

@@ -76,6 +76,7 @@ export const EditAgentPage = () => {
           workspaces={workspaces}
           groupedModels={groupedModels}
           currentModel={agent?.llmModel}
+          isSystem={agent?.isSystem}
         />
 
         <div className="responsive-form-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
