@@ -15,6 +15,7 @@ for required in \
 done
 grep -Fq 'prepare-registry' "$runner" || { printf 'runner must safely prepare the registry\n' >&2; exit 1; }
 grep -Fq 'database-url' "$runner" || { printf 'runner must derive the database URL through run-scope\n' >&2; exit 1; }
+grep -Fq '/internal/livez' "$runner" || { printf 'runner must probe the internal API live route\n' >&2; exit 1; }
 if grep -Eq 'mkdir -p "?\$registry_root|chmod 700 "?\$registry_root' "$runner"; then
   printf 'runner must not create or chmod the registry root in shell\n' >&2
   exit 1

@@ -207,7 +207,7 @@ poll() { local label=$1 command=$2; for _ in $(seq 1 "${STATEFUL_E2E_HEALTH_ATTE
 poll oauth "${STATEFUL_E2E_OAUTH_HEALTH_COMMAND:-curl -fsS -D - -H 'X-Stratum-E2E-Instance: $run_id' 'http://127.0.0.1:$oauth_port/health' | grep -Fi 'X-Stratum-E2E-Instance: $run_id'}" || return 1
 poll MCP "${STATEFUL_E2E_MCP_HEALTH_COMMAND:-curl -fsS -D - -H 'X-Stratum-E2E-Instance: $run_id' '$E2E_FIXTURE_URL/health' | grep -Fi 'X-Stratum-E2E-Instance: $run_id'}" || return 1
 poll 'Platform MCP' "${STATEFUL_E2E_PLATFORM_MCP_HEALTH_COMMAND:-curl -fsS --noproxy stratum-platform-mcp --cacert '$tls_dir/ca.crt' --cert '$tls_dir/backend.crt' --key '$tls_dir/backend.key' --resolve 'stratum-platform-mcp:$platform_mcp_port:127.0.0.1' 'https://stratum-platform-mcp:$platform_mcp_port/healthz'}" || return 1
-poll 'Internal API' "${STATEFUL_E2E_INTERNAL_API_HEALTH_COMMAND:-curl -fsS --noproxy stratum-internal --cacert '$tls_dir/ca.crt' --cert '$tls_dir/platform-mcp.crt' --key '$tls_dir/platform-mcp.key' --resolve 'stratum-internal:$internal_api_port:127.0.0.1' 'https://stratum-internal:$internal_api_port/health'}" || return 1
+poll 'Internal API' "${STATEFUL_E2E_INTERNAL_API_HEALTH_COMMAND:-curl -fsS --noproxy stratum-internal --cacert '$tls_dir/ca.crt' --cert '$tls_dir/platform-mcp.crt' --key '$tls_dir/platform-mcp.key' --resolve 'stratum-internal:$internal_api_port:127.0.0.1' 'https://stratum-internal:$internal_api_port/internal/livez'}" || return 1
 poll backend "${STATEFUL_E2E_BACKEND_HEALTH_COMMAND:-curl -fsS '$E2E_API_URL/health'}" || return 1
 poll frontend "${STATEFUL_E2E_FRONTEND_HEALTH_COMMAND:-curl -fsS '$E2E_WEB_URL/'}" || return 1
 for pid in "$oauth_pid" "$mcp_pid" "$platform_mcp_pid" "$backend_pid" "$frontend_pid"; do
