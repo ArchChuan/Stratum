@@ -96,6 +96,7 @@ jobs:
       - name: Run planned non-soak checks
         run: bash scripts/quality/run-planned-checks.sh
       - name: Run short browser E2E
+        env: {STATEFUL_E2E_PROFILE: ""}
         run: make e2e-system-short
       - uses: actions/download-artifact@v4
         with: {pattern: '*-review-receipt', path: tmp/test-verification/reviews, merge-multiple: true}

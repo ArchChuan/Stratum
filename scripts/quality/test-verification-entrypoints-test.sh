@@ -16,6 +16,7 @@ grep -Fq 'scripts/quality/write-verification-check-receipt.sh' "$root/.github/wo
 grep -Fq 'scripts/quality/run-planned-checks.sh' "$root/.github/workflows/stateful-e2e.yml"
 grep -Fq 'scripts/quality/run-planned-checks.sh' "$root/.github/workflows/release-verification.yml"
 grep -Fq 'env -u STRATUM_TEST_POSTGRES_URL' "$root/scripts/quality/run-planned-checks.sh"
+grep -Fq 'STATEFUL_E2E_PROFILE: ""' "$root/.github/workflows/stateful-e2e.yml"
 grep -Eq '^test-verify-report:[[:space:]]*$' "$makefile"
 grep -Fq 'e2e-attestation-check' "$makefile"
 grep -Fq 'verification-schema' "$makefile"
