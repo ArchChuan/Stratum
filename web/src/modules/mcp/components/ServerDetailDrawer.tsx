@@ -15,14 +15,22 @@ const TRANSPORT_COLORS: Record<string, string> = {
   http: 'cyan',
   'streamable-http': 'purple',
 };
-const STATUS_MAP: Record<string, 'success' | 'default' | 'error'> = {
+const STATUS_MAP: Record<string, 'success' | 'default' | 'error' | 'processing' | 'warning'> = {
   connected: 'success',
   disconnected: 'default',
+  connecting: 'processing',
+  idle: 'warning',
+  unhealthy: 'warning',
+  dead: 'error',
   error: 'error',
 };
 const STATUS_LABELS: Record<string, string> = {
   connected: '已连接',
   disconnected: '未连接',
+  connecting: '连接中',
+  idle: '空闲',
+  unhealthy: '异常',
+  dead: '已失效',
   error: '错误',
 };
 
@@ -162,6 +170,16 @@ export const ServerDetailDrawer = ({ server, onClose, isAdmin = false }: Props) 
             </Descriptions.Item>
             <Descriptions.Item label="版本">{server.version || '-'}</Descriptions.Item>
             <Descriptions.Item label="工具数">{tools.length}</Descriptions.Item>
+            {server.pid ? (
+              <>
+                <Descriptions.Item label="PID">
+                  <Text code>{server.pid}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="启动时间">
+                  {server.started_at ? new Date(server.started_at).toLocaleString() : '-'}
+                </Descriptions.Item>
+              </>
+            ) : null}
           </Descriptions>
           <Tabs defaultActiveKey="tools" items={tabItems} />
         </>

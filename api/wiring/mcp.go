@@ -13,6 +13,7 @@ import (
 	mcpapp "github.com/byteBuilderX/stratum/internal/mcp/application"
 	mcpport "github.com/byteBuilderX/stratum/internal/mcp/domain/port"
 	mcp "github.com/byteBuilderX/stratum/internal/mcp/infrastructure"
+	"github.com/byteBuilderX/stratum/internal/mcp/infrastructure/mcpnode"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 )
 
@@ -188,7 +189,7 @@ func (r agentMCPPolicyResolver) ResolveMCPToolRisk(ctx context.Context, _, serve
 
 func (c *Container) buildMCP(ctx context.Context) error {
 	var db = c.dbOrNil()
-	manager := mcp.NewClientManager(c.Logger, nil, db)
+	manager := mcp.NewClientManager(c.Logger, nil, db, mcpnode.NodeID())
 	if c.Config != nil && c.Config.InternalAPI.Configured() {
 		manager.SetManagedHTTPTransportProvider(platformMCPTransportProvider{files: c.Config.InternalAPI})
 	}
@@ -209,6 +210,9 @@ func (c *Container) buildMCP(ctx context.Context) error {
 	}
 
 	manager.StartHealthCheck(30 * time.Second)
+	manager.StartIdleEviction(0, 0)
+	manager.StartHeartbeat(0)
+	manager.StartFailoverScanner(0)
 	c.shutdown = append(c.shutdown, manager.Stop)
 
 	c.MCP = &MCP{

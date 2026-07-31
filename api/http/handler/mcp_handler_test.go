@@ -44,7 +44,7 @@ func TestMCPHandlerRejectsTenantSystemKey(t *testing.T) {
 func newTestMCPHandler(t *testing.T) *MCPHandler {
 	t.Helper()
 	logger := zap.NewNop()
-	manager := mcp.NewClientManager(logger, nil, nil)
+	manager := mcp.NewClientManager(logger, nil, nil, "")
 	registry := mcp.NewMCPToolRegistry(manager, logger)
 	svc := mcpapp.NewMCPService(mcp.ToolRegistryAsPort(registry), mcp.ServerManagerAsPort(manager), logger)
 	return NewMCPHandler(svc, logger)

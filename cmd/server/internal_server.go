@@ -138,13 +138,17 @@ func buildInternalRouter(container *wiring.Container) (http.Handler, error) {
 	if container == nil || container.PlatformMCP == nil || container.PlatformMCP.TokenExchange == nil {
 		return nil, errors.New("internal API Platform MCP token exchange is not wired")
 	}
-	return apihttp.NewInternalRouter(apihttp.InternalRouterDeps{
+	deps := apihttp.InternalRouterDeps{
 		Exchange:     container.PlatformMCP.TokenExchange,
 		Tokens:       container.PlatformMCP.Tokens,
 		Capabilities: container.PlatformMCP.Capabilities,
 		Logger:       container.Logger,
 		Metrics:      container.Platform.Metrics,
-	})
+	}
+	if container.MCP != nil && container.MCP.Manager != nil {
+		deps.MCPForward = container.MCP.Manager
+	}
+	return apihttp.NewInternalRouter(deps)
 }
 
 func loadInternalServerTLS(files config.InternalAPIConfig) (*tls.Config, error) {

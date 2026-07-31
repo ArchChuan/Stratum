@@ -19,6 +19,15 @@ type ServerStatusBreakdown struct {
 	Error        int `json:"error"`
 }
 
+// QuotaResponse is the shape returned by GET /mcp/quota.
+type QuotaResponse struct {
+	TenantID string `json:"tenant_id"`
+	Used     int    `json:"used"`
+	Limit    int    `json:"limit"`
+	Healthy  int    `json:"healthy"`
+	Dead     int    `json:"dead"`
+}
+
 // MCPService orchestrates MCP HTTP use-cases on top of port interfaces.
 type MCPService struct {
 	toolRegistry port.ToolRegistry
@@ -91,6 +100,18 @@ func (s *MCPService) ListTools(ctx context.Context, serverID string) ([]*domain.
 // ListResources fetches the live resource catalogue for serverID.
 func (s *MCPService) ListResources(ctx context.Context, serverID string) ([]*domain.Resource, error) {
 	return s.manager.ListResources(ctx, serverID)
+}
+
+// GetQuota returns per-tenant connection accounting.
+func (s *MCPService) GetQuota(ctx context.Context) QuotaResponse {
+	q := s.manager.Quota(ctx)
+	return QuotaResponse{
+		TenantID: q.TenantID,
+		Used:     q.Used,
+		Limit:    q.Limit,
+		Healthy:  q.Healthy,
+		Dead:     q.Dead,
+	}
 }
 
 // ServerStatus aggregates connection counts across all servers.

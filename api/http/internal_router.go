@@ -12,6 +12,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/http/handler"
 	"github.com/byteBuilderX/stratum/api/middleware"
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
+	mcpport "github.com/byteBuilderX/stratum/internal/mcp/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 )
@@ -28,6 +29,7 @@ type InternalRouterDeps struct {
 	Exchange     internalTokenExchanger
 	Tokens       internalDelegationVerifier
 	Capabilities handler.PlatformAssistantCapabilityDeps
+	MCPForward   mcpport.ServerManager
 	Logger       *zap.Logger
 	Metrics      handler.PlatformMCPExchangeMetrics
 }
@@ -62,6 +64,10 @@ func NewInternalRouter(deps InternalRouterDeps) (*gin.Engine, error) {
 	delegated.POST("/internal/platform-assistant/docs/search", capabilities.SearchDocs)
 	delegated.POST("/internal/platform-assistant/diagnostics", capabilities.DiagnoseTenant)
 	delegated.POST("/internal/platform-assistant/proposals", capabilities.ProposeResourceChange)
+	if deps.MCPForward != nil {
+		fwd := handler.NewMCPForwardHandler(deps.MCPForward, deps.Logger)
+		router.POST("/internal/mcp/tools/call", fwd.ForwardToolCall)
+	}
 	router.GET("/internal/livez", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})

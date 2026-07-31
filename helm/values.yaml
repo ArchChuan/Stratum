@@ -54,6 +54,12 @@ app:
   rollingUpdate:
     maxUnavailable: 0
     maxSurge: 1
+  # deployment strategy: rolling (default) or blueGreen.
+  # blueGreen renders two Deployments (stable + canary) and selects
+  # active track via deployment.track label on Service.
+  strategy: rolling
+  # Active track when strategy=blueGreen. Ignored for rolling.
+  track: stable
 
 platformMCP:
   enabled: true
@@ -141,6 +147,7 @@ secrets:
 
 database:
   external: false
+  migrationHookEnabled: false
   host: "stratum-postgresql"
   port: 5432
   name: "stratum"

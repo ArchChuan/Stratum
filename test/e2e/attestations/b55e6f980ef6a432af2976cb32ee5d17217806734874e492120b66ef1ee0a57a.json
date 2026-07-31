@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "source_digest": "b55e6f980ef6a432af2976cb32ee5d17217806734874e492120b66ef1ee0a57a",
+  "manifest_digest": "deb774e3193d9e52da2757548f699f53f70c74eeb4980373a79d4d22558e22a3",
+  "tested_git_parent": "1135032b8828d29649cacbe0f3d3a20fdef9329e",
+  "browser": {
+    "name": "chromium",
+    "version": "149.0.7827.55"
+  },
+  "mode": "short",
+  "seed": 1,
+  "started_at": "2026-07-31T08:16:51.45Z",
+  "duration_seconds": 14,
+  "host_class": "developer",
+  "packs": [
+    {
+      "id": "mcp",
+      "status": "passed"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "mcp.mutation.delete.mcp.servers.id",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.mutation.delete.mcp.servers.id.config",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.mutation.post.mcp.servers",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.mutation.post.mcp.servers.id.reconnect",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.mutation.put.mcp.servers.id",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.mutation.put.mcp.tool.policies.serverid.toolname",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.route.mcp",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.route.mcp.create",
+      "status": "passed"
+    },
+    {
+      "id": "mcp.route.mcp.id.edit",
+      "status": "passed"
+    }
+  ],
+  "action_count": 9,
+  "sequence_digest": "f492ad3fedd47881eacb5b8a1ae641fa90eaa1eed2d0c2c31172352ee7fd55d6",
+  "evidence": {
+    "ui": 4,
+    "http": 4,
+    "database": 4,
+    "reconciled": 9
+  },
+  "artifacts": [],
+  "cleanup": {
+    "passed": true,
+    "residual_entity_ids": []
+  },
+  "unverified_capabilities": [],
+  "risk_classification": "short",
+  "status": "passed",
+  "expires_at": "2026-08-03T08:17:05.853846038Z"
+}

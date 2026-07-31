@@ -1,0 +1,46 @@
+{{/*
+Pre-upgrade database migration.
+Runs golang-migrate against the public schema before new Pods start,
+preventing concurrent migration races in multi-replica deployments.
+*/}}
+{{- if .Values.database.migrationHookEnabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "stratum.fullname" . }}-db-migration
+  labels:
+    {{- include "stratum.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-upgrade,pre-install
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      name: {{ include "stratum.fullname" . }}-db-migration
+      labels:
+        {{- include "stratum.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: {{ include "stratum.image" . }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["./migrate-public"]
+          env:
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: POSTGRES_URL
+            - name: APP_ENV
+              value: {{ .Values.config.environment | quote }}
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+{{- end }}

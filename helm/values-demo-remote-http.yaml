@@ -1,5 +1,17 @@
+app:
+  replicaCount: 2
+
 config:
   secureCookies: "false"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
 
 ingress:
   enabled: true

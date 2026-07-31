@@ -1,10 +1,12 @@
 import { z } from 'zod';
 
 import {
+  mcpQuotaSchema,
   mcpResourceSchema,
   mcpServerSchema,
   mcpToolSchema,
-  type MCPResource,
+  type MCPQuota,
+	type MCPResource,
 	type MCPServer,
 	type MCPServerConfig,
 	type MCPServerConfigResponse,
@@ -20,6 +22,10 @@ export const mcpApi = {
   list: async (): Promise<MCPServer[]> => {
     const res = await api.get('/mcp/servers');
     return z.array(mcpServerSchema).parse(res.data?.servers ?? []);
+  },
+  quota: async (): Promise<MCPQuota> => {
+    const res = await api.get('/mcp/quota');
+    return mcpQuotaSchema.parse(res.data);
   },
   connect: (cfg: MCPServerConfig) => api.post('/mcp/servers', cfg),
   update: (id: string, cfg: MCPServerConfig) => api.put(`/mcp/servers/${id}`, cfg),

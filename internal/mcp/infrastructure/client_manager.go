@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
+	"github.com/byteBuilderX/stratum/internal/mcp/infrastructure/mcpnode"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
@@ -37,11 +39,26 @@ type ClientManager struct {
 	credentials InvocationCredentialProvider
 	transport   ManagedHTTPTransportProvider
 
+	// serverCtx is the lifecycle context for spawned child processes.
+	// Cancelled only when the server shuts down, not on HTTP request end.
+	serverCtx    context.Context
+	serverCancel context.CancelFunc
+
+	// nodeID identifies this instance in a multi-pod deployment. Only
+	// stdio servers owned by this node are restored/spawned locally.
+	nodeID string
+
+	// fwdTransport is the mTLS HTTP transport used for internal node-to-node
+	// forwarding. Injected by wiring when the internal API is configured.
+	fwdTransport *http.Transport
+
 	clientFactory func(*MCPServerConfig, *zap.Logger) MCPClient
 }
 
 // NewClientManager 创建新的客户端管理器
-func NewClientManager(logger *zap.Logger, poolConfig *ConnectionPoolConfig, pool *pgxpool.Pool) *ClientManager {
+func NewClientManager(
+	logger *zap.Logger, poolConfig *ConnectionPoolConfig, pool *pgxpool.Pool, nodeID string,
+) *ClientManager {
 	if poolConfig == nil {
 		poolConfig = &ConnectionPoolConfig{
 			MaxConnections: 10,
@@ -49,6 +66,9 @@ func NewClientManager(logger *zap.Logger, poolConfig *ConnectionPoolConfig, pool
 			MaxRetries:     3,
 			RetryBackoff:   1 * time.Second,
 		}
+	}
+	if nodeID == "" {
+		nodeID = mcpnode.NodeID()
 	}
 
 	manager := &ClientManager{
@@ -60,7 +80,10 @@ func NewClientManager(logger *zap.Logger, poolConfig *ConnectionPoolConfig, pool
 		poolConfig: poolConfig,
 		stopCh:     make(chan struct{}),
 		pool:       pool,
+		nodeID:     nodeID,
 	}
+	//nolint:gosec // serverCancel is called in Stop()
+	manager.serverCtx, manager.serverCancel = context.WithCancel(context.Background())
 	manager.clientFactory = func(cfg *MCPServerConfig, logger *zap.Logger) MCPClient {
 		client := NewBaseClient(cfg, logger)
 		client.SetInvocationCredentialProvider(manager.invocationCredentialProvider())
@@ -121,6 +144,41 @@ func tenantIDFromCtx(ctx context.Context) string {
 		return tc.TenantID
 	}
 	return ""
+}
+
+func (m *ClientManager) checkConnectionLimits(tenantID string) error {
+	m.mu.RLock()
+	prefix := tenantID + ":"
+	totalCount := len(m.clients) + len(m.connecting)
+	tenantCount := 0
+	for k := range m.clients {
+		if strings.HasPrefix(k, prefix) {
+			tenantCount++
+		}
+	}
+	for k := range m.connecting {
+		if strings.HasPrefix(k, prefix) {
+			tenantCount++
+		}
+	}
+	m.mu.RUnlock()
+
+	maxTotal := m.poolConfig.MaxConnections
+	if maxTotal <= 0 {
+		maxTotal = constants.MCPMaxTotalConnections
+	}
+	maxPerTenant := m.poolConfig.MaxPerTenant
+	if maxPerTenant <= 0 {
+		maxPerTenant = constants.MCPMaxConnectionsPerTenant
+	}
+
+	if totalCount >= maxTotal {
+		return fmt.Errorf("%w: global limit %d", mcpdomain.ErrConnectionLimitExceeded, maxTotal)
+	}
+	if tenantCount >= maxPerTenant {
+		return fmt.Errorf("%w: tenant limit %d", mcpdomain.ErrConnectionLimitExceeded, maxPerTenant)
+	}
+	return nil
 }
 
 func (m *ClientManager) persistConnect(ctx context.Context, cfg *MCPServerConfig) error {
@@ -190,42 +248,40 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 	m.connecting[key] = struct{}{}
 	m.mu.Unlock()
 
-	client := m.clientFactory(config, m.logger)
-	finish := func() {
+	// Enforce connection limits.
+	tenantID := tenantIDFromCtx(ctx)
+	if err := m.checkConnectionLimits(tenantID); err != nil {
 		m.mu.Lock()
 		delete(m.connecting, key)
 		m.mu.Unlock()
-	}
-
-	if err := client.Connect(ctx); err != nil {
-		cleanupErr := disconnectMCPClient(client)
-		finish()
-		if cleanupErr != nil {
-			return errors.Join(err, fmt.Errorf("cleanup failed MCP connection: %w", cleanupErr))
-		}
 		return err
 	}
 
-	tools, err := client.ListTools(ctx)
-	if err != nil {
-		_ = disconnectMCPClient(client)
-		finish()
-		return fmt.Errorf("discover MCP tools: %w", err)
+	client := m.clientFactory(config, m.logger)
+
+	// Derive connection context from server lifecycle, NOT the HTTP request.
+	connCtx := m.serverCtx
+	if tc, ok := tenantdb.FromContext(ctx); ok {
+		connCtx = tenantdb.WithTenant(connCtx, tc)
 	}
 
-	resources, err := client.ListResources(ctx)
-	if err != nil {
-		_ = disconnectMCPClient(client)
-		finish()
-		return fmt.Errorf("discover MCP resources: %w", err)
+	if err := client.Connect(connCtx); err != nil {
+		cleanupErr := disconnectMCPClient(client)
+		if cleanupErr != nil {
+			return errors.Join(err, fmt.Errorf("cleanup failed MCP connection: %w", cleanupErr))
+		}
+		m.mu.Lock()
+		delete(m.connecting, key)
+		m.mu.Unlock()
+		return err
 	}
 
-	m.cache.Store(key, tools, resources)
-
-	if err := m.persistConnect(ctx, config); err != nil {
-		m.cache.Delete(key)
-		_ = client.Disconnect(ctx)
-		finish()
+	tools, resources, err := m.scanCapabilities(ctx, client, config, key)
+	if err != nil {
+		_ = disconnectMCPClient(client)
+		m.mu.Lock()
+		delete(m.connecting, key)
+		m.mu.Unlock()
 		return err
 	}
 
@@ -247,6 +303,27 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 		zap.Int("resources", len(resources)))
 
 	return nil
+}
+
+// scanCapabilities discovers tools and resources from a connected client,
+// caches them, and persists the config.
+func (m *ClientManager) scanCapabilities(
+	ctx context.Context, client MCPClient, config *MCPServerConfig, key string,
+) ([]*MCPTool, []*MCPResource, error) {
+	tools, err := client.ListTools(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("discover MCP tools: %w", err)
+	}
+	resources, err := client.ListResources(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("discover MCP resources: %w", err)
+	}
+	m.cache.Store(key, tools, resources)
+	if err := m.persistConnect(ctx, config); err != nil {
+		m.cache.Delete(key)
+		return nil, nil, err
+	}
+	return tools, resources, nil
 }
 
 func disconnectMCPClient(client MCPClient) error {
@@ -426,6 +503,65 @@ func (m *ClientManager) StartHealthCheck(interval time.Duration) {
 	}()
 }
 
+// StartIdleEviction starts a background goroutine that periodically disconnects
+// clients that have been idle longer than the configured idle timeout.
+func (m *ClientManager) StartIdleEviction(interval, idleTimeout time.Duration) {
+	if interval <= 0 {
+		interval = constants.MCPIdleEvictionInterval
+	}
+	if idleTimeout <= 0 {
+		idleTimeout = constants.MCPIdleTimeout
+	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.stopCh:
+				return
+			case <-ticker.C:
+				m.evictIdle(idleTimeout)
+			}
+		}
+	}()
+}
+
+func (m *ClientManager) evictIdle(idleTimeout time.Duration) {
+	now := time.Now()
+	m.mu.RLock()
+	var idle []struct {
+		key    string
+		client MCPClient
+	}
+	for key, client := range m.clients {
+		if now.Sub(client.LastActivity()) > idleTimeout {
+			idle = append(idle, struct {
+				key    string
+				client MCPClient
+			}{key, client})
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, entry := range idle {
+		m.mu.Lock()
+		_, stillIdle := m.clients[entry.key]
+		if !stillIdle || now.Sub(entry.client.LastActivity()) <= idleTimeout {
+			m.mu.Unlock()
+			continue
+		}
+		delete(m.clients, entry.key)
+		delete(m.configs, entry.key)
+		m.cache.Delete(entry.key)
+		m.mu.Unlock()
+
+		_ = disconnectMCPClient(entry.client)
+		m.logger.Info("evicted idle MCP client", zap.String("key", entry.key))
+	}
+}
+
 // performHealthCheck 执行健康检查
 func (m *ClientManager) performHealthCheck() {
 	type reconnectCandidate struct {
@@ -495,123 +631,317 @@ func (m *ClientManager) RestoreFromDB(ctx context.Context) error {
 		return nil
 	}
 
-	// mcp_configs 是 per-tenant 表，必须逐租户注入 TenantContext 后查询。
 	schemas, err := tenantdb.ListTenantSchemas(ctx, m.pool)
 	if err != nil {
 		return fmt.Errorf("RestoreFromDB: list tenants: %w", err)
 	}
 
-	type row struct {
-		id             string
-		name           string
-		transport      string
-		command        string
-		url            string
-		version        string
-		args           []byte
-		env            []byte
-		caps           []byte
-		headers        []byte
-		authConfig     []byte
-		retryConfig    []byte
-		timeoutSec     int
-		systemKey      string
-		managementMode string
-	}
-
 	for _, schema := range schemas {
-		// schema 格式为 "tenant_<id>"
 		tenantID := strings.TrimPrefix(schema, "tenant_")
-		tctx := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{
-			TenantID: tenantID,
-			Role:     tenantdb.RoleTenantAdmin,
-		})
-
-		var rows []row
-		queryErr := tenantdb.ExecTenant(tctx, m.pool, func(qctx context.Context, tx pgx.Tx) error {
-			pgRows, err := tx.Query(qctx, `
-				SELECT id, name, transport, command, url, version,
-				       args, env, capabilities, headers, auth_config, retry_config, timeout_sec,
-				       COALESCE(system_key, ''), management_mode
-				FROM mcp_configs WHERE enabled = true`)
-			if err != nil {
-				return fmt.Errorf("restore mcp_configs query: %w", err)
-			}
-			defer pgRows.Close()
-			for pgRows.Next() {
-				var r row
-				if err := pgRows.Scan(&r.id, &r.name, &r.transport, &r.command, &r.url, &r.version,
-					&r.args, &r.env, &r.caps, &r.headers, &r.authConfig, &r.retryConfig, &r.timeoutSec,
-					&r.systemKey, &r.managementMode); err != nil {
-					return fmt.Errorf("restore mcp_configs scan: %w", err)
-				}
-				rows = append(rows, r)
-			}
-			return pgRows.Err()
-		})
-		if queryErr != nil {
-			m.logger.Warn("RestoreFromDB: failed to query tenant",
-				zap.String("tenant_id", tenantID),
-				zap.Error(queryErr))
-			continue
+		if err := m.restoreTenantServers(ctx, tenantID); err != nil {
+			m.logger.Warn("RestoreFromDB: failed to restore tenant",
+				zap.String("tenant_id", tenantID), zap.Error(err))
 		}
+	}
+	return nil
+}
 
-		for _, r := range rows {
-			var args []string
-			var env map[string]string
-			var caps []string
-			var headers map[string]string
-			var auth *MCPAuthConfig
-			var retry *MCPRetryConfig
-			_ = json.Unmarshal(r.args, &args)
-			_ = json.Unmarshal(r.env, &env)
-			_ = json.Unmarshal(r.caps, &caps)
-			_ = json.Unmarshal(r.headers, &headers)
-			_ = json.Unmarshal(r.authConfig, &auth)
-			_ = json.Unmarshal(r.retryConfig, &retry)
+type mcpConfigRow struct {
+	id, name, transport, command, url, version  string
+	args, env, caps, headers, authCfg, retryCfg []byte
+	timeoutSec                                  int
+	systemKey, managementMode                   string
+}
 
-			cfg := &MCPServerConfig{
-				ID:             r.id,
-				Name:           r.name,
-				Transport:      r.transport,
-				Command:        r.command,
-				URL:            r.url,
-				Version:        r.version,
-				Args:           args,
-				Env:            env,
-				Capabilities:   caps,
-				Headers:        headers,
-				Auth:           auth,
-				Retry:          retry,
-				Timeout:        time.Duration(r.timeoutSec) * time.Second,
-				SystemKey:      r.systemKey,
-				ManagementMode: r.managementMode,
+func (m *ClientManager) restoreTenantServers(ctx context.Context, tenantID string) error {
+	tctx := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{
+		TenantID: tenantID, Role: tenantdb.RoleTenantAdmin,
+	})
+
+	rows, err := m.loadMCPConfigRows(tctx, tenantID)
+	if err != nil {
+		return err
+	}
+
+	for _, r := range rows {
+		cfg := configFromDBRow(r)
+		m.restoreServer(ctx, tenantID, cfg)
+	}
+	return nil
+}
+
+func (m *ClientManager) loadMCPConfigRows(ctx context.Context, _ string) ([]mcpConfigRow, error) {
+	var rows []mcpConfigRow
+	err := tenantdb.ExecTenant(ctx, m.pool, func(qctx context.Context, tx pgx.Tx) error {
+		pgRows, qErr := tx.Query(qctx, `
+			SELECT id, name, transport, command, url, version,
+			       args, env, capabilities, headers, auth_config, retry_config, timeout_sec,
+			       COALESCE(system_key, ''), management_mode
+			FROM mcp_configs WHERE enabled = true`)
+		if qErr != nil {
+			return fmt.Errorf("restore mcp_configs query: %w", qErr)
+		}
+		defer pgRows.Close()
+		for pgRows.Next() {
+			var r mcpConfigRow
+			if sErr := pgRows.Scan(&r.id, &r.name, &r.transport, &r.command, &r.url, &r.version,
+				&r.args, &r.env, &r.caps, &r.headers, &r.authCfg, &r.retryCfg, &r.timeoutSec,
+				&r.systemKey, &r.managementMode); sErr != nil {
+				return fmt.Errorf("restore mcp_configs scan: %w", sErr)
 			}
+			rows = append(rows, r)
+		}
+		return pgRows.Err()
+	})
+	return rows, err
+}
 
-			connectCtx := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{
-				TenantID: tenantID,
-				Role:     tenantdb.RoleTenantAdmin,
-			})
-			if err := m.Connect(connectCtx, cfg); err != nil {
-				m.logger.Warn("RestoreFromDB: failed to reconnect MCP server",
-					zap.String("tenant_id", tenantID),
-					zap.String("server_id", cfg.ID),
-					zap.Error(err))
-			} else {
-				m.logger.Info("RestoreFromDB: reconnected MCP server",
-					zap.String("tenant_id", tenantID),
-					zap.String("server_id", cfg.ID))
-			}
+func configFromDBRow(r mcpConfigRow) *MCPServerConfig {
+	var args []string
+	var env map[string]string
+	var caps []string
+	var headers map[string]string
+	var auth *MCPAuthConfig
+	var retry *MCPRetryConfig
+	_ = json.Unmarshal(r.args, &args)
+	_ = json.Unmarshal(r.env, &env)
+	_ = json.Unmarshal(r.caps, &caps)
+	_ = json.Unmarshal(r.headers, &headers)
+	_ = json.Unmarshal(r.authCfg, &auth)
+	_ = json.Unmarshal(r.retryCfg, &retry)
+	return &MCPServerConfig{
+		ID: r.id, Name: r.name, Transport: r.transport,
+		Command: r.command, URL: r.url, Version: r.version,
+		Args: args, Env: env, Capabilities: caps, Headers: headers,
+		Auth: auth, Retry: retry,
+		Timeout:        time.Duration(r.timeoutSec) * time.Second,
+		SystemKey:      r.systemKey,
+		ManagementMode: r.managementMode,
+	}
+}
+
+func (m *ClientManager) restoreServer(ctx context.Context, tenantID string, cfg *MCPServerConfig) {
+	// stdio servers are node-local — only the owning node spawns.
+	if cfg.Transport == "stdio" {
+		claimed, claimErr := m.claimOwnership(ctx, tenantID, cfg.ID)
+		if claimErr != nil {
+			m.logger.Warn("RestoreFromDB: claim ownership failed",
+				zap.String("tenant_id", tenantID),
+				zap.String("server_id", cfg.ID),
+				zap.Error(claimErr))
+			return
+		}
+		if !claimed {
+			return // owned by another node
 		}
 	}
 
-	return nil
+	connectCtx := tenantdb.WithTenant(ctx, &tenantdb.TenantContext{
+		TenantID: tenantID, Role: tenantdb.RoleTenantAdmin,
+	})
+	if err := m.Connect(connectCtx, cfg); err != nil {
+		m.logger.Warn("RestoreFromDB: failed to reconnect MCP server",
+			zap.String("tenant_id", tenantID),
+			zap.String("server_id", cfg.ID),
+			zap.Error(err))
+	} else {
+		m.logger.Info("RestoreFromDB: reconnected MCP server",
+			zap.String("tenant_id", tenantID),
+			zap.String("server_id", cfg.ID))
+	}
+}
+
+// claimOwnership atomically adopts a stdio server for this node. Only
+// succeeds when owner_node is empty or the previous heartbeat is stale.
+func (m *ClientManager) claimOwnership(ctx context.Context, tenantID, serverID string) (bool, error) {
+	if m.pool == nil {
+		return true, nil // single node with no DB fallback
+	}
+	var claimed bool
+	err := tenantdb.ExecTenant(ctx, m.pool, func(ctx context.Context, tx pgx.Tx) error {
+		var ownerNode string
+		var heartbeat time.Time
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(owner_node,''), COALESCE(owner_heartbeat, '1970-01-01'::timestamptz)
+			FROM mcp_configs WHERE id=$1 FOR UPDATE`,
+			serverID,
+		).Scan(&ownerNode, &heartbeat); err != nil {
+			return err
+		}
+		if ownerNode == "" || time.Since(heartbeat) > mcpnode.FailoverTimeout {
+			_, err := tx.Exec(ctx, `
+				UPDATE mcp_configs SET owner_node=$1, owner_heartbeat=NOW()
+				WHERE id=$2`, m.nodeID, serverID)
+			if err != nil {
+				return err
+			}
+			claimed = true
+		}
+		return nil
+	})
+	return claimed, err
+}
+
+// StartHeartbeat starts a background goroutine that refreshes the
+// owner_heartbeat for every stdio server this node owns.
+func (m *ClientManager) StartHeartbeat(interval time.Duration) {
+	if interval <= 0 {
+		interval = mcpnode.HeartbeatInterval
+	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.stopCh:
+				return
+			case <-ticker.C:
+				m.refreshHeartbeat()
+			}
+		}
+	}()
+}
+
+func (m *ClientManager) refreshHeartbeat() {
+	if m.pool == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	m.mu.RLock()
+	owned := make(map[string]string)
+	for key, cfg := range m.configs {
+		if cfg.Transport == "stdio" {
+			owned[key] = cfg.ID
+		}
+	}
+	m.mu.RUnlock()
+	for _, serverID := range owned {
+		// Heartbeat uses public schema; mcp_configs is tenant-scoped but
+		// owner_node/heartbeat columns are in the public-facing table.
+		// We simply refresh via public exec since owner NodeID is
+		// not tenant-specific.
+		_ = m.pool.AcquireFunc(ctx, func(conn *pgxpool.Conn) error {
+			_, err := conn.Exec(ctx,
+				`UPDATE mcp_configs SET owner_heartbeat=NOW()
+				 WHERE id=$1 AND owner_node=$2`,
+				serverID, m.nodeID)
+			return err
+		})
+	}
+}
+
+// StartFailoverScanner periodically scans for stdio servers whose owner
+// heartbeat has expired and attempts to take them over.
+func (m *ClientManager) StartFailoverScanner(interval time.Duration) {
+	if interval <= 0 {
+		interval = mcpnode.FailoverTimeout
+	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.stopCh:
+				return
+			case <-ticker.C:
+				m.scanOrphaned()
+			}
+		}
+	}()
+}
+
+func (m *ClientManager) scanOrphaned() {
+	if m.pool == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// We need to query across all tenant schemas. For simplicity,
+	// iterate tenants and check each one.
+	schemas, err := tenantdb.ListTenantSchemas(ctx, m.pool)
+	if err != nil {
+		m.logger.Warn("failover scan: list tenants failed", zap.Error(err))
+		return
+	}
+	for _, schema := range schemas {
+		tenantID := strings.TrimPrefix(schema, "tenant_")
+		_ = tenantdb.ExecTenant(ctx, m.pool, func(qctx context.Context, tx pgx.Tx) error {
+			rows, qErr := tx.Query(qctx, `
+				SELECT id FROM mcp_configs
+				WHERE transport='stdio'
+				  AND owner_heartbeat < NOW() - $1::interval`,
+				fmt.Sprintf("%.0f seconds", mcpnode.FailoverTimeout.Seconds()))
+			if qErr != nil {
+				return qErr
+			}
+			defer rows.Close()
+			var orphans []string
+			for rows.Next() {
+				var id string
+				if scanErr := rows.Scan(&id); scanErr != nil {
+					return scanErr
+				}
+				orphans = append(orphans, id)
+			}
+			_ = rows.Err()
+			for _, serverID := range orphans {
+				claimed, claimErr := m.claimOwnership(ctx, tenantID, serverID)
+				if claimErr != nil {
+					m.logger.Warn("failover claim error",
+						zap.String("tenant_id", tenantID),
+						zap.String("server_id", serverID),
+						zap.Error(claimErr))
+					continue
+				}
+				if !claimed {
+					continue
+				}
+				m.logger.Warn("failover: taking over orphaned stdio server",
+					zap.String("tenant_id", tenantID),
+					zap.String("server_id", serverID))
+				// Restore single server via Connect.
+				cfg, cfgErr := m.GetServerConfig(ctx, serverID)
+				if cfgErr != nil {
+					m.logger.Warn("failover: get config failed",
+						zap.String("server_id", serverID),
+						zap.Error(cfgErr))
+					continue
+				}
+				// Remove stale local state if any.
+				m.mu.Lock()
+				key := tenantKey(tenantID, serverID)
+				if old, ok := m.clients[key]; ok {
+					delete(m.clients, key)
+					delete(m.configs, key)
+					m.cache.Delete(key)
+					_ = disconnectMCPClient(old)
+				}
+				m.mu.Unlock()
+				if connErr := m.Connect(ctx, cfg); connErr != nil {
+					m.logger.Warn("failover: connect failed",
+						zap.String("server_id", serverID),
+						zap.Error(connErr))
+				}
+			}
+			return nil
+		})
+	}
 }
 
 // Stop 停止管理器
 func (m *ClientManager) Stop(ctx context.Context) error {
 	m.stopOnce.Do(func() { close(m.stopCh) })
 	m.wg.Wait()
+
+	// Cancel serverCtx first — kills all child processes spawned via serverCtx.
+	if m.serverCancel != nil {
+		m.serverCancel()
+	}
 
 	m.mu.Lock()
 	clients := m.clients
@@ -749,6 +1079,69 @@ func (m *ClientManager) Delete(ctx context.Context, serverID string) error {
 		_, err := tx.Exec(ctx, `DELETE FROM mcp_configs WHERE id=$1`, serverID)
 		return err
 	})
+}
+
+// RemoveTenant disconnects all MCP clients belonging to tenantID across all
+// transports, clears memory state, and deletes tenant-scoped DB configs.
+func (m *ClientManager) RemoveTenant(ctx context.Context, tenantID string) error {
+	prefix := tenantID + ":"
+	m.mu.Lock()
+	var toRemove []MCPClient
+	var toDelete []string
+	for key, client := range m.clients {
+		if strings.HasPrefix(key, prefix) {
+			toRemove = append(toRemove, client)
+			toDelete = append(toDelete, key)
+		}
+	}
+	for _, key := range toDelete {
+		delete(m.clients, key)
+		delete(m.configs, key)
+		m.cache.Delete(key)
+	}
+	m.mu.Unlock()
+
+	for _, client := range toRemove {
+		if err := disconnectMCPClient(client); err != nil {
+			m.logger.Warn("RemoveTenant: disconnect failed",
+				zap.String("tenant_id", tenantID), zap.Error(err))
+		}
+	}
+
+	m.logger.Info("RemoveTenant: evicted all MCP connections",
+		zap.String("tenant_id", tenantID), zap.Int("count", len(toRemove)))
+	return nil
+}
+
+// Quota returns per-tenant connection accounting for the current tenant
+// derived from ctx.
+func (m *ClientManager) Quota(ctx context.Context) mcpdomain.Quota {
+	tenantID := tenantIDFromCtx(ctx)
+	limit := m.poolConfig.MaxPerTenant
+	if limit <= 0 {
+		limit = constants.MCPMaxConnectionsPerTenant
+	}
+	prefix := tenantID + ":"
+	var healthy, unhealthy int
+	m.mu.RLock()
+	for key, client := range m.clients {
+		if strings.HasPrefix(key, prefix) {
+			if client.IsHealthy() {
+				healthy++
+			} else {
+				unhealthy++
+			}
+		}
+	}
+	used := healthy + unhealthy
+	m.mu.RUnlock()
+	return mcpdomain.Quota{
+		TenantID: tenantID,
+		Used:     used,
+		Limit:    limit,
+		Healthy:  healthy,
+		Dead:     unhealthy,
+	}
 }
 
 // GetServerConfig returns the full config for serverID, checking memory then DB.

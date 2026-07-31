@@ -1,7 +1,10 @@
 // Package domain holds mcp context entities.
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Server is a lightweight projection of an MCP server (read-side).
 type Server struct {
@@ -94,4 +97,22 @@ type ServerInfo struct {
 	Status      string      `json:"status"`
 	LastUpdated time.Time   `json:"last_updated"`
 	Error       string      `json:"error,omitempty"`
+	// Process info — only populated for stdio transport.
+	Pid       int       `json:"pid,omitempty"`
+	StartedAt time.Time `json:"started_at,omitempty"`
+}
+
+// ForwardedCallResult is the result of a forwarded MCP tool call.
+type ForwardedCallResult struct {
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  string          `json:"error,omitempty"`
+}
+
+// Quota represents per-tenant MCP connection accounting.
+type Quota struct {
+	TenantID string `json:"tenant_id"`
+	Used     int    `json:"used"`
+	Limit    int    `json:"limit"`
+	Healthy  int    `json:"healthy"`
+	Dead     int    `json:"dead"`
 }

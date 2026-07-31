@@ -99,6 +99,7 @@ func (c *reconnectMCPClient) ListResources(context.Context) ([]*MCPResource, err
 	return nil, nil
 }
 func (c *reconnectMCPClient) GetServerInfo() *MCPServerInfo { return &MCPServerInfo{} }
+func (c *reconnectMCPClient) LastActivity() time.Time       { return time.Now() }
 
 func (c *blockingMCPClient) Connect(ctx context.Context) error {
 	close(c.connectStarted)
@@ -123,6 +124,7 @@ func (c *blockingMCPClient) ListResources(context.Context) ([]*MCPResource, erro
 	return nil, nil
 }
 func (c *blockingMCPClient) GetServerInfo() *MCPServerInfo { return &MCPServerInfo{} }
+func (c *blockingMCPClient) LastActivity() time.Time       { return time.Now() }
 
 // TestNewCapabilityCache 测试缓存创建
 func TestNewCapabilityCache(t *testing.T) {
@@ -203,7 +205,7 @@ func TestCacheExpiration(t *testing.T) {
 // TestClientManagerConnect 测试客户端管理器连接
 func TestClientManagerConnect(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	manager := NewClientManager(logger, nil, nil)
+	manager := NewClientManager(logger, nil, nil, "")
 
 	_ = &MCPServerConfig{
 		ID:        "test-server",
@@ -224,7 +226,7 @@ func TestClientManagerConnect(t *testing.T) {
 
 func TestClientManagerConnectDoesNotBlockReadersWhileDialing(t *testing.T) {
 	logger := zap.NewNop()
-	manager := NewClientManager(logger, nil, nil)
+	manager := NewClientManager(logger, nil, nil, "")
 	started := make(chan struct{})
 	release := make(chan struct{})
 	manager.clientFactory = func(*MCPServerConfig, *zap.Logger) MCPClient {
@@ -265,7 +267,7 @@ func TestClientManagerConnectDoesNotBlockReadersWhileDialing(t *testing.T) {
 }
 
 func TestClientManagerHealthReconnectClosesDisplacedClient(t *testing.T) {
-	manager := NewClientManager(zap.NewNop(), nil, nil)
+	manager := NewClientManager(zap.NewNop(), nil, nil, "")
 	key := tenantKey("", "server-1")
 	old := &reconnectMCPClient{healthy: false}
 	manager.clients[key] = old
@@ -289,7 +291,7 @@ func TestClientManagerHealthReconnectClosesDisplacedClient(t *testing.T) {
 // TestMCPToolHandle 测试 MCP Skill 包装器
 func TestMCPToolHandle(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	manager := NewClientManager(logger, nil, nil)
+	manager := NewClientManager(logger, nil, nil, "")
 
 	tool := &MCPTool{
 		Name:        "test_tool",
@@ -323,7 +325,7 @@ func TestMCPToolHandle(t *testing.T) {
 // TestMCPToolRegistry 测试 MCP Skill 注册表
 func TestMCPToolRegistry(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	manager := NewClientManager(logger, nil, nil)
+	manager := NewClientManager(logger, nil, nil, "")
 	registry := NewMCPToolRegistry(manager, logger)
 
 	if len(registry.GetAllTools()) != 0 {
@@ -340,7 +342,7 @@ func TestMCPToolRegistry(t *testing.T) {
 // TestMCPToolRegistryExecute 测试执行不存在的 Skill
 func TestMCPToolRegistryExecute(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	manager := NewClientManager(logger, nil, nil)
+	manager := NewClientManager(logger, nil, nil, "")
 	registry := NewMCPToolRegistry(manager, logger)
 
 	_, err := registry.ExecuteToolByID("nonexistent", nil)
@@ -400,7 +402,7 @@ func TestBaseClientGetServerInfo(t *testing.T) {
 }
 
 func TestClientManagerCallToolWithConfigClosesIsolatedClient(t *testing.T) {
-	manager := NewClientManager(zap.NewNop(), nil, nil)
+	manager := NewClientManager(zap.NewNop(), nil, nil, "")
 	client := &revisionClientFake{result: map[string]any{"ok": true}}
 	manager.clientFactory = func(config *MCPServerConfig, _ *zap.Logger) MCPClient {
 		client.config = config
@@ -512,7 +514,7 @@ func TestBaseClientDisconnectKillsAndWaitsForStdioChild(t *testing.T) {
 }
 
 func TestClientManagerConnectFailsClosedWhenDiscoveryFails(t *testing.T) {
-	manager := NewClientManager(zap.NewNop(), nil, nil)
+	manager := NewClientManager(zap.NewNop(), nil, nil, "")
 	client := &revisionClientFake{listToolsErr: errors.New("discovery failed")}
 	manager.clientFactory = func(*MCPServerConfig, *zap.Logger) MCPClient { return client }
 	err := manager.Connect(context.Background(), &MCPServerConfig{ID: "server-1"})
@@ -522,7 +524,7 @@ func TestClientManagerConnectFailsClosedWhenDiscoveryFails(t *testing.T) {
 }
 
 func TestClientManagerConnectFailureAlwaysDisconnects(t *testing.T) {
-	manager := NewClientManager(zap.NewNop(), nil, nil)
+	manager := NewClientManager(zap.NewNop(), nil, nil, "")
 	client := &revisionClientFake{connectErr: errors.New("initialize failed")}
 	manager.clientFactory = func(*MCPServerConfig, *zap.Logger) MCPClient { return client }
 	if err := manager.Connect(context.Background(), &MCPServerConfig{ID: "server-1"}); err == nil {
@@ -538,7 +540,7 @@ func TestClientManagerHTTPInitializeFailureClosesPartialClient(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
-	manager := NewClientManager(zap.NewNop(), nil, nil)
+	manager := NewClientManager(zap.NewNop(), nil, nil, "")
 	var client *BaseClient
 	manager.clientFactory = func(config *MCPServerConfig, logger *zap.Logger) MCPClient {
 		client = NewBaseClient(config, logger)
@@ -576,11 +578,12 @@ func (c *revisionClientFake) ListTools(context.Context) ([]*MCPTool, error) {
 }
 func (*revisionClientFake) ListResources(context.Context) ([]*MCPResource, error) { return nil, nil }
 func (*revisionClientFake) GetServerInfo() *MCPServerInfo                         { return nil }
+func (*revisionClientFake) LastActivity() time.Time                               { return time.Now() }
 
 // TestClientManagerGetAllServerInfo 测试获取所有服务器信息
 func TestClientManagerGetAllServerInfo(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	manager := NewClientManager(logger, nil, nil)
+	manager := NewClientManager(logger, nil, nil, "")
 
 	infos := manager.GetAllServerInfo(context.Background())
 	if len(infos) != 0 {
@@ -628,7 +631,7 @@ func TestCacheClear(t *testing.T) {
 // TestMCPToolCatalogGetAllTools 测试获取所有 Skills
 func TestMCPToolCatalogGetAllTools(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	manager := NewClientManager(logger, nil, nil)
+	manager := NewClientManager(logger, nil, nil, "")
 	adapter := NewMCPToolCatalog("test", manager, logger)
 
 	skills := adapter.GetAllTools()
@@ -723,7 +726,7 @@ func TestMCPToolHandleUsesStoredContext(t *testing.T) {
 		Type:     "mcp",
 		ServerID: "test-server",
 		Tool:     &MCPTool{Name: "tool"},
-		Manager:  NewClientManager(logger, nil, nil),
+		Manager:  NewClientManager(logger, nil, nil, ""),
 		logger:   logger,
 	}
 
@@ -747,7 +750,7 @@ func BenchmarkCacheGetTools(b *testing.B) {
 
 func TestPersistConnectNilPool(t *testing.T) {
 	logger := zap.NewNop()
-	m := NewClientManager(logger, nil, nil)
+	m := NewClientManager(logger, nil, nil, "")
 	cfg := &MCPServerConfig{
 		ID:           "test-id",
 		Name:         "Test Server",
@@ -763,7 +766,7 @@ func TestPersistConnectNilPool(t *testing.T) {
 
 func TestRestoreFromDB_NilPool(t *testing.T) {
 	logger := zap.NewNop()
-	m := NewClientManager(logger, nil, nil)
+	m := NewClientManager(logger, nil, nil, "")
 	err := m.RestoreFromDB(context.Background())
 	if err != nil {
 		t.Errorf("expected nil error with nil pool, got %v", err)
