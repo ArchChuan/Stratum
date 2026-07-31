@@ -148,8 +148,8 @@ func (m *ClientManager) HandleForwardedToolCall(
 	tenantID, serverID, toolName string,
 	args map[string]any,
 ) (mcpdomain.ForwardedCallResult, error) {
-	client := m.GetClient(ctx, serverID)
-	if client == nil {
+	client, err := m.getOrRestoreClient(ctx, serverID)
+	if err != nil {
 		return mcpdomain.ForwardedCallResult{
 			Error: fmt.Sprintf("server %s not connected on this node", serverID),
 		}, nil
