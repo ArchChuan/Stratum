@@ -19,7 +19,7 @@ risk:
   rules:
     - id: non-executable-docs
       level: R0
-      paths: [docs/**, "*.md"]
+      paths: [docs/product/**, docs/user/**, "README.md"]
     - id: local-frontend-style
       level: R1
       paths: [web/src/**/*.css]
@@ -59,6 +59,13 @@ risk:
         - scripts/e2e/**
         - scripts/quality/test-verification-*.sh
         - test/e2e/**
+    - id: agent-governance
+      level: R3
+      paths:
+        - .agents/**
+        - docs/agent/**
+        - AGENTS.md
+        - CLAUDE.md
 
 levels:
   R0: {mode: none, checks: [docs-lint]}

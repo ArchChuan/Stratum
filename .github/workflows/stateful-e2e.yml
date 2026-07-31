@@ -111,10 +111,12 @@ jobs:
           EVIDENCE_PATH: ${{ steps.evidence.outputs.path }}
           BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
         run: |
-          gh attestation verify "$EVIDENCE_PATH" --repo "$GITHUB_REPOSITORY"
-          subject="sha256:$(sha256sum "$EVIDENCE_PATH" | cut -d' ' -f1)"
-          jq -n --arg commit "$GITHUB_SHA" --arg bundle "$BUNDLE_PATH" --arg subject "$subject" \
-            '{verified:true,issuer:"github-actions-sigstore",commit:$commit,bundle:$bundle,subject_digest:$subject}' \
+          gh attestation verify "$EVIDENCE_PATH" --bundle "$BUNDLE_PATH" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "github.com/$GITHUB_REPOSITORY/.github/workflows/stateful-e2e.yml" \
+            --source-digest "$GITHUB_SHA" --source-ref "$GITHUB_REF" \
+            --cert-oidc-issuer https://token.actions.githubusercontent.com
+          jq -n --arg bundle "$BUNDLE_PATH" --arg source_ref "$GITHUB_REF" \
+            '{bundle:$bundle,source_ref:$source_ref}' \
             > tmp/test-verification/signature-receipt.json
       - name: Produce authoritative completion report
         env:

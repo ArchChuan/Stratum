@@ -20,8 +20,15 @@ grep -Fq 'environment: specification-review' "$ci"
 grep -Fq 'environment: code-quality-review' "$ci"
 grep -Fq 'TEST_VERIFY_SIGNATURE_RECEIPT' "$ci"
 grep -Fq 'PolicyManifestPath' internal/platform/e2eattestation/attestation.go
-grep -Fq 'GITHUB_ACTIONS' scripts/quality/test-verification-report.sh
-grep -Fq 'subject_digest' scripts/quality/test-verification-report.sh
+grep -Fq -- '--bundle' scripts/quality/test-verification-report.sh
+grep -Fq -- '--signer-workflow' scripts/quality/test-verification-report.sh
+grep -Fq -- '--source-digest' scripts/quality/test-verification-report.sh
+grep -Fq -- '--source-ref' scripts/quality/test-verification-report.sh
+grep -Fq 'https://token.actions.githubusercontent.com' scripts/quality/test-verification-report.sh
+if grep -Fq 'GITHUB_ACTIONS' scripts/quality/test-verification-report.sh; then
+  printf 'completion report still trusts the caller-declared GitHub Actions environment\n' >&2
+  exit 1
+fi
 if grep -Eq 'TEST_VERIFY_(SPEC|QUALITY|RELEASE)_REVIEW' scripts/quality/test-verification-report.sh "$ci"; then
   printf 'verification workflow still accepts self-declared review status\n' >&2
   exit 1
@@ -31,7 +38,16 @@ release_ci="$root/.github/workflows/release-verification.yml"
 grep -Fq 'make e2e-system-release-soak' "$release_ci"
 grep -Fq 'environment: release-evidence-review' "$release_ci"
 grep -Fq 'environment: production-verification' "$release_ci"
-grep -Fq 'subject-digest:' "$release_ci"
+grep -Fq 'deployment-evidence' "$release_ci"
+grep -Fq 'deployment-receipt.json' "$release_ci"
+grep -Fq -- '--signer-workflow' "$release_ci"
+grep -Fq 'test "$GITHUB_REF" = refs/heads/main' "$release_ci"
+grep -Fq 'kubectl get deployment' .github/workflows/deploy.yml
+grep -Fq 'deployment-receipt.json' .github/workflows/deploy.yml
+if grep -Fq 'inputs.artifact_digest' "$release_ci"; then
+  printf 'release verification still accepts a caller-provided artifact digest\n' >&2
+  exit 1
+fi
 
 empty_attestations=$(mktemp -d)
 trap 'rm -rf "$empty_attestations"' EXIT
