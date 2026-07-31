@@ -192,6 +192,7 @@ arch-guardrails:
 
 deployment-safety-test:
 	bash scripts/quality/check-deployment-safety-test.sh
+	bash scripts/quality/release-verification-test.sh
 	bash scripts/quality/check-helm-image-rendering-test.sh
 
 # ─── Agent 指令：生成入口与一致性门禁 ────────────────────────────────────

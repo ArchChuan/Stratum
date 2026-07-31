@@ -66,7 +66,7 @@ require '^  build-backend:' 'parallel backend image build job'
 require '^  build-frontend:' 'parallel frontend image build job'
 require '^  build-feishu-adapter:' 'parallel Feishu adapter image build job'
 require '^  build-platform-mcp:' 'parallel platform MCP image build job'
-require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter,[[:space:]]*build-platform-mcp\]' \
+require 'needs:[[:space:]]*\[candidate,[[:space:]]*build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter,[[:space:]]*build-platform-mcp\]' \
     'image build fan-in dependencies'
 
 # Test dependency is satisfied at workflow level via workflow_run (deploy waits for CI)
@@ -74,7 +74,9 @@ require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]
 has_workflow_run_ci=false
 if grep -Eq 'workflow_run:' "${WORKFLOW}" && grep -Eq 'workflows:[[:space:]]*\[CI\]' "${WORKFLOW}"; then
     has_workflow_run_ci=true
-    require 'github\.event\.workflow_run\.conclusion.*success' 'workflow_run CI success gate'
+    require 'WORKFLOW_CONCLUSION:[[:space:]]*\$\{\{ github\.event\.workflow_run\.conclusion \}\}' \
+        'workflow_run conclusion binding'
+    require '\$WORKFLOW_CONCLUSION.*==.*success' 'workflow_run CI success gate'
 fi
 
 for job_scope in build-backend:backend build-feishu-adapter:feishu-alert-adapter build-platform-mcp:platform-mcp; do
@@ -118,7 +120,9 @@ require 'PATH="\$validator_dir:\$PATH" bash scripts/deploy-remote-monitoring\.sh
     'safe monitoring reconciliation entrypoint missing'
 require 'prom/prometheus:v3\.8\.1' 'pinned Prometheus validation tool image missing'
 require 'prom/alertmanager:v0\.33\.1' 'pinned Alertmanager validation tool image missing'
-require 'Verify deployment candidate' 'stale main SHA gate'
+require 'Resolve and verify immutable candidate' 'pre-build deployment candidate gate'
+require 'github\.event\.workflow_run\.head_sha' 'workflow-run head SHA binding'
+require 'ref:[[:space:]]*\$\{\{ needs\.candidate\.outputs\.sha \}\}' 'candidate-pinned checkout'
 require 'api\.github\.com/repos/.*/commits/main' 'fail-closed current main lookup'
 require 'sha256:\[0-9a-f\]\{64\}' 'registry digest validation'
 require '--set-string app\.image\.digest=' 'backend digest deployment'

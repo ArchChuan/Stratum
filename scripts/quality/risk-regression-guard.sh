@@ -182,7 +182,8 @@ for label in "${labels[@]}"; do
         'bash scripts/quality/check-migration-boundaries-test.sh && bash scripts/quality/check-migration-boundaries.sh && go test ./pkg/storage/postgres ./pkg/tenantdb'
       ;;
     deployment)
-      run_check "${label}" /bin/bash scripts/quality/check-deployment-safety-test.sh
+      run_check "${label}" /bin/bash -c \
+        'bash scripts/quality/check-deployment-safety-test.sh && bash scripts/quality/release-verification-test.sh'
       ;;
     auth-http)
       run_check "${label}" go test ./api/http/... ./internal/iam/...
