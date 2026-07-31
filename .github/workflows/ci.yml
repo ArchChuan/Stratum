@@ -183,7 +183,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [system-e2e-attestation, guardrails, lint, test, contract, workflow-e2e, platform-assistant-e2e]
+    needs: [guardrails, lint, test, contract, workflow-e2e, platform-assistant-e2e]
     steps:
       - uses: actions/checkout@v4
 

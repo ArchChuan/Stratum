@@ -101,7 +101,10 @@ func ReapDatabases(ctx context.Context, registry Registry, admin DatabaseAdmin, 
 	removed := make([]string, 0, len(stale))
 	for _, scope := range stale {
 		if err := DropDatabase(ctx, admin, scope.DatabaseName); err != nil {
-			return removed, err
+			return removed, fmt.Errorf("reap database %s: %w", scope.DatabaseName, err)
+		}
+		if _, err := registry.Release(scope.RunID); err != nil {
+			return removed, fmt.Errorf("release stale lease %s: %w", scope.RunID, err)
 		}
 		removed = append(removed, scope.DatabaseName)
 	}

@@ -31,8 +31,12 @@ case "$command" in
       ports:{frontend:$base,backend:($base+1),oauth:($base+2),fixture:($base+3),platform_mcp:($base+4),internal_api:($base+5)},
       infrastructure:{lease_id:("20260731t000000z-"+$suffix),started_by_e2e:false}}'
     ;;
-  create-database|drop-database)
+  create-database)
     printf '%s:%s\n' "$command" "$(jq -r .run_id "$scope_path")" >>"$events"
+    ;;
+  drop-database)
+    printf '%s:%s\n' "$command" "$(jq -r .run_id "$scope_path")" >>"$events"
+    [[ "${FAIL_DROP:-false}" != true ]]
     ;;
   mark-infrastructure-owned)
     printf 'mark:%s\n' "$(jq -r .run_id "$scope_path")" >>"$events"
@@ -40,10 +44,14 @@ case "$command" in
     ;;
   release)
     printf 'release:%s\n' "$(jq -r .run_id "$scope_path")" >>"$events"
+    [[ "${FAIL_RELEASE:-false}" != true ]] || exit 1
     jq -n --arg owner "$(jq -r .run_id "$scope_path")" --argjson stop "${RELEASE_STOPS_INFRA:-true}" \
       '{stop_owned_infrastructure:$stop,ownership_run_id:$owner}'
     ;;
-  confirm-infrastructure-stopped) printf 'confirm\n' >>"$events" ;;
+  confirm-infrastructure-stopped)
+    printf 'confirm\n' >>"$events"
+    [[ "${FAIL_CONFIRM:-false}" != true ]]
+    ;;
   reap) printf '[]\n' ;;
   *) printf 'unexpected fake scope command: %s\n' "$command" >&2; exit 1 ;;
 esac
@@ -109,5 +117,23 @@ set -e
 ((mark_status != 0))
 [[ $(grep -c '^infra-up$' "$test_dir/mark-failure/events") == 1 ]]
 [[ $(grep -c '^infra-down$' "$test_dir/mark-failure/events") == 1 ]]
+
+for failure in drop release confirm; do
+  set +e
+  case "$failure" in
+    drop) run_case drop-failure FAIL_DROP=true STATEFUL_E2E_OAUTH_HEALTH_COMMAND=true ;;
+    release) run_case release-failure FAIL_RELEASE=true STATEFUL_E2E_OAUTH_HEALTH_COMMAND=true ;;
+    confirm) run_case confirm-failure FAIL_CONFIRM=true STATEFUL_E2E_OAUTH_HEALTH_COMMAND=true ;;
+  esac
+  failure_status=$?
+  set -e
+  ((failure_status != 0))
+done
+[[ $(grep -c '^drop-database:' "$test_dir/drop-failure/events") == 2 ]]
+[[ $(grep -c '^release:' "$test_dir/drop-failure/events" || true) == 0 ]]
+[[ $(grep -c '^release:' "$test_dir/release-failure/events") == 2 ]]
+[[ $(grep -c '^infra-down$' "$test_dir/release-failure/events" || true) == 0 ]]
+[[ $(grep -c '^release:' "$test_dir/confirm-failure/events") == 1 ]]
+[[ $(grep -c '^confirm$' "$test_dir/confirm-failure/events") == 2 ]]
 
 printf 'stateful runner behavioral lifecycle contract passed\n'

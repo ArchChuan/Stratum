@@ -5,6 +5,11 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 ci="$root/.github/workflows/stateful-e2e.yml"
 cd "$root"
 
+if grep -Fq 'system-e2e-attestation' .github/workflows/ci.yml; then
+  printf 'primary CI still references the removed system-e2e-attestation job\n' >&2
+  exit 1
+fi
+
 grep -Fq 'name: Stateful Browser E2E' "$ci"
 grep -Fq 'make test-verify-attestation' "$ci"
 grep -Fq 'make test-verify-report' "$ci"

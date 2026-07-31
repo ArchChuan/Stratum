@@ -53,34 +53,33 @@ infra_ready() {
 }
 cleanup_owned() {
   [[ "$cleanup_done" == true ]] && return 0
-  local status=0 release_json=$work_dir/release.json
+  local release_json=$work_dir/release.json
   stop_process "$frontend_pid"; stop_process "$backend_pid"; stop_process "$platform_mcp_pid"
   stop_process "$mcp_pid"; stop_process "$oauth_pid"
-  if [[ "$database_created" == true ]]; then
-    (cd "$repo_dir" && bash -c "$scope_command drop-database --scope '$scope_file' --base-dsn-env TEST_DATABASE_URL") || status=1
-    [[ "$status" -ne 0 ]] || database_dropped=true
-  else database_dropped=true; fi
-  if [[ "$lease_registered" == true ]]; then
+  if [[ "$database_created" == true && "$database_dropped" != true ]]; then
+    (cd "$repo_dir" && bash -c "$scope_command drop-database --scope '$scope_file' --base-dsn-env TEST_DATABASE_URL") || return 1
+    database_dropped=true
+  elif [[ "$database_created" != true ]]; then database_dropped=true; fi
+  if [[ "$lease_registered" == true && "$lease_removed" != true ]]; then
     exec 9>"$registry_root/registry.lock"; flock 9
-    (cd "$repo_dir" && bash -c "$scope_command release --scope '$scope_file' --registry '$registry_root'") >"$release_json" || status=1
-    if [[ "$status" -eq 0 ]]; then
-      lease_removed=true
-      if jq -e '.stop_owned_infrastructure == true' "$release_json" >/dev/null; then
-        bash -c "$infra_down_command" || status=1
-        if [[ "$status" -eq 0 ]]; then
-          owner=$(jq -er .ownership_run_id "$release_json")
-          (cd "$repo_dir" && bash -c "$scope_command confirm-infrastructure-stopped --ownership-run-id '$owner' --registry '$registry_root'") || status=1
-        fi
-      fi
+    if ! (cd "$repo_dir" && bash -c "$scope_command release --scope '$scope_file' --registry '$registry_root'") >"$release_json"; then
+      flock -u 9
+      return 1
     fi
+    lease_removed=true
     flock -u 9
   else lease_removed=true; fi
+  if [[ -f "$release_json" ]] && jq -e '.stop_owned_infrastructure == true' "$release_json" >/dev/null; then
+    bash -c "$infra_down_command" || return 1
+    owner=$(jq -er .ownership_run_id "$release_json")
+    (cd "$repo_dir" && bash -c "$scope_command confirm-infrastructure-stopped --ownership-run-id '$owner' --registry '$registry_root'") || return 1
+  fi
   if [[ "$infra_started_unmarked" == true ]]; then
-    bash -c "$infra_down_command" || status=1
-    [[ "$status" -ne 0 ]] || infra_started_unmarked=false
+    bash -c "$infra_down_command" || return 1
+    infra_started_unmarked=false
   fi
   cleanup_done=true
-  return "$status"
+  return 0
 }
 on_exit() {
   local status=$?
