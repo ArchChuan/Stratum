@@ -587,6 +587,12 @@ CREATE TABLE IF NOT EXISTS rag_workspaces (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Platform-managed workspace markers (self-healing backfill for legacy tenants).
+ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS system_key TEXT;
+ALTER TABLE rag_workspaces ADD COLUMN IF NOT EXISTS management_mode TEXT NOT NULL DEFAULT 'tenant_managed';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rag_workspaces_system_key
+    ON rag_workspaces(system_key) WHERE system_key IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS chat_conversations (
     id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id   TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -1436,13 +1442,19 @@ WHERE NOT EXISTS (
     WHERE agent_id = 'stratum-platform-assistant' AND skill_id = 'builtin:tenant-diagnostic'
 );
 
--- Built-in knowledge workspace: platform documentation
-INSERT INTO rag_workspaces (id, name, description, config, created_at, updated_at)
+-- Built-in knowledge workspace: platform documentation.
+-- ON CONFLICT … DO UPDATE backfills system_key / management_mode for legacy tenants
+-- whose rag_workspaces row already exists but lacks the platform markers.
+INSERT INTO rag_workspaces (id, name, description, config, system_key, management_mode, created_at, updated_at)
 VALUES ('a0a0a0a0-0000-0000-0000-000000000001', 'stratum_docs',
         'Stratum 平台官方文档知识库',
         '{"embedding_model":"text-embedding-v3","chunk_size":512,"chunk_overlap":64,"query_mode":"hybrid","top_k":5,"chunking_strategy":"structure_recursive"}'::jsonb,
+        'stratum.knowledge_docs', 'platform_managed',
         NOW(), NOW())
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+    system_key = EXCLUDED.system_key,
+    management_mode = EXCLUDED.management_mode
+WHERE rag_workspaces.system_key IS NULL;
 
 INSERT INTO agent_workspaces (agent_id, workspace_id)
 VALUES ('stratum-platform-assistant', 'a0a0a0a0-0000-0000-0000-000000000001')

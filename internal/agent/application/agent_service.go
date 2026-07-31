@@ -310,7 +310,7 @@ func (s *AgentService) ExecuteRevision(
 }
 
 func revisionExecutionContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), constants.AgentExecTimeout)
+	return context.WithCancel(context.WithoutCancel(ctx))
 }
 
 func (s *AgentService) buildRevisionAgent(revision domain.AgentRevision) (*BaseAgent, error) {
@@ -795,7 +795,7 @@ func (s *AgentService) Execute(ctx context.Context, agentID string, req ExecRequ
 		zap.String("conversation_id", req.ConversationID),
 	)
 
-	execCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), constants.AgentExecTimeout)
+	execCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 
 	start := time.Now()
@@ -890,7 +890,7 @@ func (s *AgentService) ExecuteStream(
 	options = append(options, WithTokenCallback(wrappedTokenCb))
 	options = append(options, WithExecutionID(executionID))
 
-	execCtx, cancel = context.WithTimeout(context.WithoutCancel(streamCtx), constants.AgentExecTimeout)
+	execCtx, cancel = context.WithCancel(context.WithoutCancel(streamCtx))
 	run = func() (*AgentResult, int, error) {
 		s.deps.Logger.Debug("agent.execute_stream",
 			zap.String("agent_id", agentID),
@@ -1151,6 +1151,9 @@ func (s *AgentService) assembleOptions(
 	options := []ExecutionOption{WithMaxSteps(a.GetConfig().MaxIterations)}
 	if req.MaxSteps > 0 {
 		options = append(options, WithMaxSteps(req.MaxSteps))
+	}
+	if req.Timeout > 0 {
+		options = append(options, WithTimeout(req.Timeout))
 	}
 	isSystemAssistant := a.GetConfig().SystemKey == domain.SystemAssistantKey
 	if isSystemAssistant {

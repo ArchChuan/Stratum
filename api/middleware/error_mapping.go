@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -50,6 +51,7 @@ func NewHTTPError(status int, err error) *HTTPError {
 // errorStatusTable maps sentinel domain errors to HTTP status codes.
 // New entries only need to be added here; MapErrorToStatus walks the table.
 var errorStatusTable = map[error]int{
+	context.DeadlineExceeded:                      http.StatusGatewayTimeout,
 	llmgatewaydomain.ErrUpstreamRequestFailed:     http.StatusBadGateway,
 	agentdomain.ErrEvidenceUnavailable:            http.StatusServiceUnavailable,
 	agentdomain.ErrAssistantModelUnavailable:      http.StatusServiceUnavailable,
@@ -86,6 +88,7 @@ var errorStatusTable = map[error]int{
 	agentdomain.ErrProposalUnknownOutcome:         http.StatusConflict,
 	agentdomain.ErrSystemAssistantManaged:         http.StatusConflict,
 	mcpdomain.ErrPlatformManagedServer:            http.StatusConflict,
+	knowledgedomain.ErrPlatformManagedWorkspace:   http.StatusConflict,
 	knowledgedomain.ErrWorkspaceLinked:            http.StatusConflict,
 	knowledgedomain.ErrDuplicateDocument:          http.StatusConflict,
 	knowledgedomain.ErrDocumentProcessing:         http.StatusConflict,

@@ -14,6 +14,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain"
 	"github.com/byteBuilderX/stratum/internal/knowledge/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/platformknowledge"
 )
 
 // Application-level sentinel errors. They alias domain errors so existing
@@ -97,6 +98,13 @@ func (s *WorkspaceService) SetDocRepo(r port.DocRepo) { s.docRepo = r }
 // SetVectorStore injects vector collection management for workspace lifecycle.
 func (s *WorkspaceService) SetVectorStore(vs collectionProvisioner) { s.vectorStore = vs }
 
+// isPlatformManaged reports whether a workspace is owned by the platform and
+// must not be mutated through user-facing APIs.
+func isPlatformManaged(ws *domain.Workspace) bool {
+	return ws != nil && (ws.SystemKey == platformknowledge.SystemWorkspaceKey ||
+		ws.ManagementMode == platformknowledge.ManagementPlatform)
+}
+
 // CreateWorkspace builds the aggregate via the domain factory then persists it.
 func (s *WorkspaceService) CreateWorkspace(ctx context.Context, tenantID string, in CreateWorkspaceInput) (*domain.Workspace, error) {
 	ws, err := domain.NewWorkspace(in.Name, in.Description, in.Config, domain.DefaultChunkSize, domain.DefaultTopK)
@@ -135,6 +143,9 @@ func (s *WorkspaceService) UpdateWorkspace(ctx context.Context, tenantID, name s
 	current, err := s.repo.GetByName(ctx, tenantID, name)
 	if err != nil {
 		return nil, err
+	}
+	if isPlatformManaged(current) {
+		return nil, domain.ErrPlatformManagedWorkspace
 	}
 
 	if in.Name != nil && *in.Name != name {
@@ -197,6 +208,9 @@ func (s *WorkspaceService) DeleteWorkspace(ctx context.Context, tenantID, name s
 	if err != nil {
 		return err
 	}
+	if isPlatformManaged(ws) {
+		return domain.ErrPlatformManagedWorkspace
+	}
 	if err := s.ingestSvc.DeleteWorkspaceData(ctx, tenantID, ws.ID); err != nil {
 		s.logger.Error("failed to clean workspace storage resources", zap.String("name", name), zap.Error(err))
 		return fmt.Errorf("failed to clean storage: %w", err)
@@ -232,6 +246,9 @@ func (s *WorkspaceService) IngestUpload(ctx context.Context, tenantID, workspace
 	ws, err := s.repo.GetByName(ctx, tenantID, workspace)
 	if err != nil {
 		return nil, err
+	}
+	if isPlatformManaged(ws) {
+		return nil, domain.ErrPlatformManagedWorkspace
 	}
 
 	file, err := fileHeader.Open()
@@ -328,6 +345,21 @@ func (s *WorkspaceService) ListDocuments(ctx context.Context, tenantID, workspac
 	return views, nil
 }
 
+// findDocument returns the document with the given ID within a workspace, or
+// ErrDocumentNotFound.
+func (s *WorkspaceService) findDocument(ctx context.Context, tenantID, workspaceID, documentID string) (*domain.Document, error) {
+	docs, err := s.docRepo.List(ctx, tenantID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	for _, doc := range docs {
+		if doc.ID == documentID {
+			return doc, nil
+		}
+	}
+	return nil, domain.ErrDocumentNotFound
+}
+
 // DeleteDocument removes a terminal document from vector and relational storage.
 // Processing documents are rejected because their background ingest job may still write data.
 func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspace, documentID string) error {
@@ -338,19 +370,12 @@ func (s *WorkspaceService) DeleteDocument(ctx context.Context, tenantID, workspa
 	if err != nil {
 		return err
 	}
-	docs, err := s.docRepo.List(ctx, tenantID, ws.ID)
+	if isPlatformManaged(ws) {
+		return domain.ErrPlatformManagedWorkspace
+	}
+	target, err := s.findDocument(ctx, tenantID, ws.ID, documentID)
 	if err != nil {
 		return err
-	}
-	var target *domain.Document
-	for _, doc := range docs {
-		if doc.ID == documentID {
-			target = doc
-			break
-		}
-	}
-	if target == nil {
-		return domain.ErrDocumentNotFound
 	}
 	if target.IngestStatus == constants.IngestStatusProcessing {
 		return domain.ErrDocumentProcessing
