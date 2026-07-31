@@ -16,8 +16,10 @@ packs=${STATEFUL_E2E_PACKS:-all}; [[ "$packs" == all ]] && packs=$all_packs
 IFS=',' read -r -a selected_packs <<<"$packs"
 for pack in "${selected_packs[@]}"; do [[ ",$all_packs," == *",$pack,"* ]] || { printf 'unknown stateful E2E pack: %s\n' "$pack" >&2; exit 2; }; done
 
-base_dsn=${TEST_DATABASE_URL:-${STRATUM_TEST_POSTGRES_URL:-}}
-[[ -n "$base_dsn" ]] || { printf 'TEST_DATABASE_URL is required\n' >&2; exit 2; }
+common_git_dir=$(cd "$repo_dir" && git rev-parse --path-format=absolute --git-common-dir)
+env_file=${STATEFUL_E2E_ENV_FILE:-$(dirname "$common_git_dir")/.env}
+if [[ -r "$env_file" ]]; then set -a; source "$env_file"; set +a; fi
+base_dsn=${TEST_DATABASE_URL:-${STRATUM_TEST_POSTGRES_URL:-postgres://stratum:stratum@127.0.0.1:5432/stratum_e2e?sslmode=disable}}
 registry_root=${STATEFUL_E2E_REGISTRY_ROOT:-${TMPDIR:-/tmp}/stratum-stateful-e2e}
 mkdir -p "$registry_root"; chmod 700 "$registry_root"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/stratum-stateful-run.XXXXXX")
@@ -65,22 +67,20 @@ export QWEN_BASE_URL="$E2E_FIXTURE_URL/v1" E2E_GITHUB_LISTEN_ADDRESS="127.0.0.1:
 TEST_DATABASE_URL=$(BASE_DSN="$base_dsn" DATABASE_NAME="$database_name" node --input-type=module -e 'const u=new URL(process.env.BASE_DSN); u.pathname="/"+process.env.DATABASE_NAME; process.stdout.write(u.toString())')
 export STRATUM_TEST_POSTGRES_URL=$TEST_DATABASE_URL POSTGRES_URL=$TEST_DATABASE_URL; database_created=true
 
-common_git_dir=$(cd "$repo_dir" && git rev-parse --path-format=absolute --git-common-dir); env_file=${STATEFUL_E2E_ENV_FILE:-$(dirname "$common_git_dir")/.env}
-if [[ -r "$env_file" ]]; then set -a; source "$env_file"; set +a; fi
 export TEST_DATABASE_URL STRATUM_TEST_POSTGRES_URL POSTGRES_URL E2E_API_URL E2E_WEB_URL E2E_FIXTURE_URL E2E_RUN_INSTANCE_ID
 [[ -n "${JWT_PRIVATE_KEY_PEM:-}" ]] || { JWT_PRIVATE_KEY_PEM=$(openssl genrsa 2048 2>/dev/null); export JWT_PRIVATE_KEY_PEM; }
 export STRATUM_E2E_MODE=true GITHUB_CLIENT_ID=stratum-stateful-e2e GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-$(openssl rand -hex 32)}
-export E2E_GITHUB_ID=${E2E_GITHUB_ID:-730001} E2E_GITHUB_LOGIN=${E2E_GITHUB_LOGIN:-stateful-oauth-$run_id} E2E_GITHUB_EMAIL=${E2E_GITHUB_EMAIL:-stateful-$run_id@example.test}
+export E2E_GITHUB_ID=${E2E_GITHUB_ID:-730001} E2E_GITHUB_LOGIN=${E2E_GITHUB_LOGIN:-stateful-oauth-$run_id} E2E_GITHUB_EMAIL=${E2E_GITHUB_EMAIL:-stateful-oauth-$run_id@example.test}
 
 migration_command=${STATEFUL_E2E_MIGRATION_COMMAND:-"cd '$repo_dir' && go run ./cmd/migrate-public --sql-dir '$repo_dir/pkg/migration/sql'"}; bash -c "$migration_command"
-start_child() { local variable=$1 command=$2 log=$3 pid; setsid bash -c "exec $command" >"$log" 2>&1 & pid=$!; printf -v "$variable" '%s' "$pid"; }
+start_child() { local variable=$1 command=$2 log=$3 pid; setsid bash -c "$command" >"$log" 2>&1 & pid=$!; printf -v "$variable" '%s' "$pid"; }
 start_child oauth_pid "${STATEFUL_E2E_OAUTH_COMMAND:-cd '$repo_dir' && go run ./cmd/e2e-github-oauth}" "$work_dir/oauth.log"
 start_child mcp_pid "${STATEFUL_E2E_MCP_COMMAND:-cd '$repo_dir' && go run ./cmd/e2e-mcp-server}" "$work_dir/mcp.log"
 start_child backend_pid "${STATEFUL_E2E_BACKEND_COMMAND:-cd '$repo_dir' && FRONTEND_URL='$E2E_WEB_URL' OPIK_URL='$E2E_FIXTURE_URL/opik' PORT='$backend_port' SECURE_COOKIES=false go run ./cmd/server}" "$work_dir/backend.log"
 start_child frontend_pid "${STATEFUL_E2E_FRONTEND_COMMAND:-cd '$repo_dir/web' && CI=1 VITE_API_BASE_URL='$E2E_API_URL' npm run dev -- --host 127.0.0.1 --port '$frontend_port' --strictPort}" "$work_dir/frontend.log"
 poll() { local label=$1 command=$2; for _ in $(seq 1 "${STATEFUL_E2E_HEALTH_ATTEMPTS:-120}"); do bash -c "$command" >/dev/null 2>&1 && return 0; sleep 1; done; printf '%s failed health check\n' "$label" >&2; return 1; }
-poll oauth "${STATEFUL_E2E_OAUTH_HEALTH_COMMAND:-curl -fsS -D - -H 'X-Stratum-E2E-Instance: $run_id' 'http://127.0.0.1:$oauth_port/health' | grep -F 'X-Stratum-E2E-Instance: $run_id'}"
-poll MCP "${STATEFUL_E2E_MCP_HEALTH_COMMAND:-curl -fsS -D - -H 'X-Stratum-E2E-Instance: $run_id' '$E2E_FIXTURE_URL/health' | grep -F 'X-Stratum-E2E-Instance: $run_id'}"
+poll oauth "${STATEFUL_E2E_OAUTH_HEALTH_COMMAND:-curl -fsS -D - -H 'X-Stratum-E2E-Instance: $run_id' 'http://127.0.0.1:$oauth_port/health' | grep -Fi 'X-Stratum-E2E-Instance: $run_id'}"
+poll MCP "${STATEFUL_E2E_MCP_HEALTH_COMMAND:-curl -fsS -D - -H 'X-Stratum-E2E-Instance: $run_id' '$E2E_FIXTURE_URL/health' | grep -Fi 'X-Stratum-E2E-Instance: $run_id'}"
 poll backend "${STATEFUL_E2E_BACKEND_HEALTH_COMMAND:-curl -fsS '$E2E_API_URL/health'}"; poll frontend "${STATEFUL_E2E_FRONTEND_HEALTH_COMMAND:-curl -fsS '$E2E_WEB_URL/'}"
 
 export STATEFUL_E2E_MODE=$mode STATEFUL_E2E_DURATION_SEC=$duration STATEFUL_E2E_PACKS=$packs STATEFUL_E2E_RESULTS_PATH=$results_path
