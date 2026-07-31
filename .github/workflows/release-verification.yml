@@ -130,10 +130,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with: {pattern: 'release-*-review*', path: tmp/test-verification/reviews, merge-multiple: true}
       - name: Record commit-bound planned checks
-        run: bash scripts/quality/write-verification-check-receipt.sh \
-          tmp/test-verification/plan.json tmp/test-verification/checks.json \
-          static unit integration contract e2e-short domain-failure-paths e2e-soak \
-          specification-review code-quality-review release-soak deployment production-verification
+        run: |
+          bash scripts/quality/write-verification-check-receipt.sh \
+            tmp/test-verification/plan.json tmp/test-verification/checks.json \
+            static unit integration contract e2e-short domain-failure-paths e2e-soak \
+            specification-review code-quality-review release-soak deployment production-verification
       - name: Produce R4 completion report
         env:
           TEST_VERIFY_RELEASE_INTENT: "true"
