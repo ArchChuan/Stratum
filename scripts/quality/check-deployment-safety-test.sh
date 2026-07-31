@@ -68,14 +68,27 @@ require '^  build-feishu-adapter:' 'parallel Feishu adapter image build job'
 require '^  build-platform-mcp:' 'parallel platform MCP image build job'
 require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter,[[:space:]]*build-platform-mcp\]' \
     'image build fan-in dependencies'
+
+# Test dependency is satisfied at workflow level via workflow_run (deploy waits for CI)
+# or at job level via needs:test; guard accepts whichever pattern is present.
+has_workflow_run_ci=false
+if grep -Eq 'workflow_run:' "${WORKFLOW}" && grep -Eq 'workflows:[[:space:]]*\[CI\]' "${WORKFLOW}"; then
+    has_workflow_run_ci=true
+    require 'github\.event\.workflow_run\.conclusion.*success' 'workflow_run CI success gate'
+fi
+
 for job_scope in build-backend:backend build-feishu-adapter:feishu-alert-adapter build-platform-mcp:platform-mcp; do
     job=${job_scope%%:*}
     scope=${job_scope#*:}
-    require_job "${job}" '^    needs:[[:space:]]*test$' "${job} test dependency"
+    if [[ "${has_workflow_run_ci}" != "true" ]]; then
+        require_job "${job}" '^    needs:[[:space:]]*test$' "${job} test dependency"
+    fi
     require_job "${job}" "cache-from:[[:space:]]*type=gha,scope=${scope}" "${scope} cache import scope"
     require_job "${job}" "cache-to:[[:space:]]*type=gha,scope=${scope},mode=max" "${scope} cache export scope"
 done
-require_job build-frontend '^    needs:[[:space:]]*test$' 'frontend test dependency'
+if [[ "${has_workflow_run_ci}" != "true" ]]; then
+    require_job build-frontend '^    needs:[[:space:]]*test$' 'frontend test dependency'
+fi
 require_job build-frontend 'no-cache:[[:space:]]*true' 'frontend GHA cache disabled (BuildKit bug)'
 require 'digest:[[:space:]]*\$\{\{ steps\.adapter-build\.outputs\.digest \}\}' \
     'adapter build digest job output'
