@@ -364,6 +364,63 @@ func (m *ClientManager) GetClient(ctx context.Context, serverID string) MCPClien
 	return m.clients[tenantKey(tenantIDFromCtx(ctx), serverID)]
 }
 
+// getOrRestoreClient returns the live client for serverID, lazily reconnecting
+// from persisted config when the client was evicted by the idle reaper.
+func (m *ClientManager) getOrRestoreClient(ctx context.Context, serverID string) (MCPClient, error) {
+	if client := m.GetClient(ctx, serverID); client != nil {
+		return client, nil
+	}
+
+	cfg, err := m.GetServerConfig(ctx, serverID)
+	if err != nil {
+		return nil, fmt.Errorf("client not found: %s", serverID)
+	}
+	if !cfg.Enabled {
+		return nil, fmt.Errorf("client not found: %s", serverID)
+	}
+
+	if err := m.Connect(ctx, cfg); err != nil {
+		// Re-check: concurrent goroutine may have just registered the client
+		// between our GetClient and Connect (Connect deduplicates via m.connecting).
+		if client := m.GetClient(ctx, serverID); client != nil {
+			return client, nil
+		}
+		// Winner still mid-connect; poll briefly for it to land so a burst
+		// of calls after eviction all succeed.
+		if strings.Contains(err.Error(), "already connected") {
+			client := m.waitForClient(ctx, serverID, 5*time.Second)
+			if client != nil {
+				return client, nil
+			}
+		}
+		m.logger.Warn("mcp auto-reconnect failed",
+			zap.String("server_id", serverID), zap.Error(err))
+		return nil, err
+	}
+
+	if client := m.GetClient(ctx, serverID); client != nil {
+		m.logger.Info("lazily reconnected MCP server", zap.String("server_id", serverID))
+		return client, nil
+	}
+	return nil, fmt.Errorf("client not found: %s", serverID)
+}
+
+// waitForClient polls GetClient until the client appears or the timeout expires.
+func (m *ClientManager) waitForClient(ctx context.Context, serverID string, timeout time.Duration) MCPClient {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if client := m.GetClient(ctx, serverID); client != nil {
+			return client
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	return m.GetClient(ctx, serverID)
+}
+
 // GetAllClients 获取当前租户所有客户端
 func (m *ClientManager) GetAllClients(ctx context.Context) map[string]MCPClient {
 	tenantID := tenantIDFromCtx(ctx)
@@ -382,11 +439,10 @@ func (m *ClientManager) GetAllClients(ctx context.Context) map[string]MCPClient 
 
 // CallTool 调用工具
 func (m *ClientManager) CallTool(ctx context.Context, serverID, toolName string, input any) (any, error) {
-	client := m.GetClient(ctx, serverID)
-	if client == nil {
-		return nil, fmt.Errorf("client not found: %s", serverID)
+	client, err := m.getOrRestoreClient(ctx, serverID)
+	if err != nil {
+		return nil, err
 	}
-
 	return client.CallTool(ctx, toolName, input)
 }
 
@@ -448,9 +504,9 @@ func (m *ClientManager) ListTools(ctx context.Context, serverID string) ([]*MCPT
 		return tools, nil
 	}
 
-	client := m.GetClient(ctx, serverID)
-	if client == nil {
-		return nil, fmt.Errorf("client not found: %s", serverID)
+	client, err := m.getOrRestoreClient(ctx, serverID)
+	if err != nil {
+		return nil, err
 	}
 
 	tools, err := client.ListTools(ctx)
@@ -469,9 +525,9 @@ func (m *ClientManager) ListResources(ctx context.Context, serverID string) ([]*
 		return resources, nil
 	}
 
-	client := m.GetClient(ctx, serverID)
-	if client == nil {
-		return nil, fmt.Errorf("client not found: %s", serverID)
+	client, err := m.getOrRestoreClient(ctx, serverID)
+	if err != nil {
+		return nil, err
 	}
 
 	resources, err := client.ListResources(ctx)
@@ -1163,11 +1219,11 @@ func (m *ClientManager) GetServerConfig(ctx context.Context, serverID string) (*
 		return tx.QueryRow(ctx, `
 			SELECT id, name, transport, command, url, args, env, capabilities,
 			       timeout_sec, version, headers, auth_config, retry_config,
-			       COALESCE(system_key, ''), management_mode
+			       COALESCE(system_key, ''), management_mode, enabled
 			FROM mcp_configs WHERE id=$1`, serverID).
 			Scan(&out.ID, &out.Name, &out.Transport, &out.Command, &out.URL,
 				&argsStr, &envStr, &capsStr, &timeoutSec,
-				&out.Version, &hdrsStr, &authStr, &retryStr, &out.SystemKey, &out.ManagementMode)
+				&out.Version, &hdrsStr, &authStr, &retryStr, &out.SystemKey, &out.ManagementMode, &out.Enabled)
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
