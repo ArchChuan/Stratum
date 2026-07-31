@@ -8,6 +8,9 @@ policy:
     rerun_for_diagnostics: true
     quarantine_requires_owner: true
     quarantine_ttl_days: 14
+  capability_results:
+    skipped_allowed: false
+    unreconciled_allowed: false
 
 risk:
   levels: [R0, R1, R2, R3, R4]
