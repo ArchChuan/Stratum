@@ -23,6 +23,7 @@ describe('buildMenuItems', () => {
           role: 'member',
           avatar_url: '',
           github_login: 'member',
+          username: '',
           current_tenant: { id: 'tenant-1', name: 'Test', role: 'member' },
         }));
     render(
@@ -48,7 +49,7 @@ describe('buildMenuItems', () => {
 
   it('shows workflow authoring only to tenant admins', () => {
     const labels = collectLabels(buildMenuItems({
-      sub: 'admin-1', tenant_id: 'tenant-1', role: 'admin', avatar_url: '', github_login: 'admin',
+      sub: 'admin-1', tenant_id: 'tenant-1', role: 'admin', avatar_url: '', github_login: 'admin', username: '',
       current_tenant: { id: 'tenant-1', name: 'Test', role: 'admin' },
     }));
     render(<MemoryRouter>{labels.map((label, index) => <div key={index}>{label}</div>)}</MemoryRouter>);
@@ -64,6 +65,7 @@ describe('buildMenuItems', () => {
       role: 'member',
       avatar_url: '',
       github_login: 'member',
+      username: '',
       current_tenant: { id: 'tenant-1', name: 'Test', role: 'member' },
     });
 

@@ -146,6 +146,40 @@ func (r *OnboardRepo) GetUserTenant(ctx context.Context, githubID string) (strin
 	return uid, tid, true, nil
 }
 
+// FindUsernameByUserID returns the user's username column (empty if not a password user).
+func (r *OnboardRepo) FindUsernameByUserID(ctx context.Context, userID string) (string, error) {
+	var username string
+	err := r.db.QueryRow(ctx,
+		`SELECT COALESCE(username, '') FROM users WHERE id = $1`, userID,
+	).Scan(&username)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("onboard_repo: find username: %w", err)
+	}
+	return username, nil
+}
+
+// GetUserTenantByUserID returns the user's default tenant ID and role by user UUID.
+func (r *OnboardRepo) GetUserTenantByUserID(ctx context.Context, userID string) (string, string, error) {
+	var tid, role string
+	err := r.db.QueryRow(ctx,
+		`SELECT tm.tenant_id::text, COALESCE(tm.role, 'member')
+		 FROM tenant_members tm
+		 JOIN tenants t ON t.id = tm.tenant_id
+		 WHERE tm.user_id = $1 AND t.is_default = true`,
+		userID,
+	).Scan(&tid, &role)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", fmt.Errorf("onboard_repo: user %s has no default tenant: %w", userID, domain.ErrMemberNotFound)
+		}
+		return "", "", fmt.Errorf("onboard_repo: get user tenant by id: %w", err)
+	}
+	return tid, role, nil
+}
+
 // GetUserTenants returns user UUID, global_role, and all their tenants.
 func (r *OnboardRepo) GetUserTenants(ctx context.Context, githubID string) (string, string, []domain.TenantInfo, bool, error) {
 	var uid, gr string
@@ -218,8 +252,7 @@ func (r *OnboardRepo) AutoJoinDefaultTenant(ctx context.Context, in domain.AutoJ
 		`INSERT INTO users (github_id, github_login, avatar_url, email, email_verified_at)
 		 VALUES ($1, $2, $3, NULLIF($4, ''), CASE WHEN $4 = '' THEN NULL ELSE now() END)
 		 ON CONFLICT (github_id) DO UPDATE
-		   SET github_login  = EXCLUDED.github_login,
-		       avatar_url    = EXCLUDED.avatar_url,
+		   SET avatar_url    = EXCLUDED.avatar_url,
 		       email = COALESCE(EXCLUDED.email, users.email),
 		       email_verified_at = COALESCE(EXCLUDED.email_verified_at, users.email_verified_at),
 		       last_login_at = now()

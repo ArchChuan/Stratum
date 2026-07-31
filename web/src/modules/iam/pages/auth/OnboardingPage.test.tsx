@@ -35,6 +35,7 @@ describe('OnboardingPage existing user', () => {
     vi.mocked(useAuth).mockReturnValue({
       user: {
         sub: 'member-1', tenant_id: 'tenant-source', role: 'member', avatar_url: '', github_login: 'member-1',
+        username: '',
       },
       accessToken: 'in-memory-token', tokenRef: { current: 'in-memory-token' }, loading: false, tenants: [],
       login: vi.fn(), logout: vi.fn(), switchTenant, setAccessToken: vi.fn(),
