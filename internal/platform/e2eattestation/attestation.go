@@ -317,10 +317,10 @@ func verifyTopologyIdentity(topology *RunTopology) error {
 }
 
 func verifyTopologyPorts(ports map[string]int) error {
-	roles := []string{"frontend", "backend", "oauth", "fixture"}
+	roles := []string{"frontend", "backend", "oauth", "fixture", "platform_mcp", "internal_api"}
 	seen := map[int]bool{}
 	if len(ports) != len(roles) {
-		return errors.New("run topology requires four role ports")
+		return errors.New("run topology requires six role ports")
 	}
 	for _, role := range roles {
 		port := ports[role]

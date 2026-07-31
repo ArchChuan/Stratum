@@ -15,11 +15,12 @@ import (
 )
 
 const (
-	scopeSchemaVersion = 1
-	scopeTTL           = 24 * time.Hour
-	randomSuffixBytes  = 8
-	minimumPort        = 1
-	maximumPort        = 65535
+	legacyScopeSchemaVersion = 1
+	scopeSchemaVersion       = 2
+	scopeTTL                 = 24 * time.Hour
+	randomSuffixBytes        = 8
+	minimumPort              = 1
+	maximumPort              = 65535
 )
 
 var (
@@ -29,10 +30,12 @@ var (
 )
 
 type Ports struct {
-	Frontend int `json:"frontend"`
-	Backend  int `json:"backend"`
-	OAuth    int `json:"oauth"`
-	Fixture  int `json:"fixture"`
+	Frontend    int `json:"frontend"`
+	Backend     int `json:"backend"`
+	OAuth       int `json:"oauth"`
+	Fixture     int `json:"fixture"`
+	PlatformMCP int `json:"platform_mcp"`
+	InternalAPI int `json:"internal_api"`
 }
 
 type InfrastructureLease struct {
@@ -53,10 +56,12 @@ type Scope struct {
 }
 
 type RuntimeURLs struct {
-	Frontend string `json:"frontend"`
-	Backend  string `json:"backend"`
-	OAuth    string `json:"oauth"`
-	Fixture  string `json:"fixture"`
+	Frontend    string `json:"frontend"`
+	Backend     string `json:"backend"`
+	OAuth       string `json:"oauth"`
+	Fixture     string `json:"fixture"`
+	PlatformMCP string `json:"platform_mcp"`
+	InternalAPI string `json:"internal_api"`
 }
 
 func NewScope(repository string, ownerPID int, now time.Time, random io.Reader) (Scope, error) {
@@ -103,8 +108,8 @@ func NewScope(repository string, ownerPID int, now time.Time, random io.Reader) 
 }
 
 func AllocatePorts() (Ports, error) {
-	listeners := make([]*net.TCPListener, 0, 4)
-	for range 4 {
+	listeners := make([]*net.TCPListener, 0, 6)
+	for range 6 {
 		listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 		if err != nil {
 			return Ports{}, errors.Join(fmt.Errorf("allocate loopback port: %w", err), closeListeners(listeners))
@@ -113,10 +118,12 @@ func AllocatePorts() (Ports, error) {
 	}
 
 	ports := Ports{
-		Frontend: listeners[0].Addr().(*net.TCPAddr).Port,
-		Backend:  listeners[1].Addr().(*net.TCPAddr).Port,
-		OAuth:    listeners[2].Addr().(*net.TCPAddr).Port,
-		Fixture:  listeners[3].Addr().(*net.TCPAddr).Port,
+		Frontend:    listeners[0].Addr().(*net.TCPAddr).Port,
+		Backend:     listeners[1].Addr().(*net.TCPAddr).Port,
+		OAuth:       listeners[2].Addr().(*net.TCPAddr).Port,
+		Fixture:     listeners[3].Addr().(*net.TCPAddr).Port,
+		PlatformMCP: listeners[4].Addr().(*net.TCPAddr).Port,
+		InternalAPI: listeners[5].Addr().(*net.TCPAddr).Port,
 	}
 	validationErr := validatePorts(ports)
 	if closeErr := closeListeners(listeners); closeErr != nil {
@@ -135,11 +142,11 @@ func Validate(scope Scope) error {
 	if err := validateMetadata(scope); err != nil {
 		return err
 	}
-	return validatePorts(scope.Ports)
+	return validateScopePorts(scope.SchemaVersion, scope.Ports)
 }
 
 func validateIdentity(scope Scope) error {
-	if scope.SchemaVersion != scopeSchemaVersion {
+	if scope.SchemaVersion != legacyScopeSchemaVersion && scope.SchemaVersion != scopeSchemaVersion {
 		return errors.New("run scope: unsupported schema version")
 	}
 	if !runIDPattern.MatchString(scope.RunID) {
@@ -198,10 +205,12 @@ func MaintenanceURL(base string) (string, error) {
 
 func URLs(ports Ports) RuntimeURLs {
 	return RuntimeURLs{
-		Frontend: loopbackURL(ports.Frontend),
-		Backend:  loopbackURL(ports.Backend),
-		OAuth:    loopbackURL(ports.OAuth),
-		Fixture:  loopbackURL(ports.Fixture),
+		Frontend:    loopbackURL(ports.Frontend),
+		Backend:     loopbackURL(ports.Backend),
+		OAuth:       loopbackURL(ports.OAuth),
+		Fixture:     loopbackURL(ports.Fixture),
+		PlatformMCP: loopbackURL(ports.PlatformMCP),
+		InternalAPI: loopbackURL(ports.InternalAPI),
 	}
 }
 
@@ -240,7 +249,20 @@ func isE2EDatabase(databaseName string) bool {
 }
 
 func validatePorts(ports Ports) error {
-	values := []int{ports.Frontend, ports.Backend, ports.OAuth, ports.Fixture}
+	return validatePortValues([]int{
+		ports.Frontend, ports.Backend, ports.OAuth, ports.Fixture,
+		ports.PlatformMCP, ports.InternalAPI,
+	})
+}
+
+func validateScopePorts(schemaVersion int, ports Ports) error {
+	if schemaVersion == legacyScopeSchemaVersion {
+		return validatePortValues([]int{ports.Frontend, ports.Backend, ports.OAuth, ports.Fixture})
+	}
+	return validatePorts(ports)
+}
+
+func validatePortValues(values []int) error {
 	seen := make(map[int]struct{}, len(values))
 	for _, port := range values {
 		if port < minimumPort || port > maximumPort {

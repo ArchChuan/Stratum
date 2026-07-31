@@ -8,7 +8,6 @@ import {
   PROVIDER_CAMEL_KEYS, PROVIDER_PASCAL_BANNED,
 } from '../core/camelcase';
 import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
-import { E2E_MCP_BASE_URL } from '../core/endpoints';
 import type { EvidenceRecord } from '../core/evidence';
 
 interface LLMAdminPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string }
@@ -63,7 +62,7 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL, fixtu
     await page.locator('.ant-form-item').filter({ hasText: '类型' })
       .locator('.ant-select-selector').click();
     await page.locator('.ant-select-item-option').filter({ hasText: 'OpenAI 兼容' }).click();
-    await page.getByLabel('Base URL').fill(`${E2E_MCP_BASE_URL}/v1`);
+    await page.getByLabel('Base URL').fill(`${fixtureURL}/v1`);
     await page.getByLabel('API Key').fill('sk-e2e-test-key');
 
     const createResponse = waitForMutation(page, '/admin/providers', 'POST');

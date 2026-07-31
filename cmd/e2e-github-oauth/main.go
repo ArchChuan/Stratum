@@ -32,6 +32,7 @@ type providerConfig struct {
 	clientID     string
 	clientSecret string
 	callbackURL  string
+	instanceID   string
 	githubID     int64
 	login        string
 	email        string
@@ -50,7 +51,12 @@ func newProvider(config providerConfig) *provider {
 
 func (p *provider) routes() http.Handler {
 	router := http.NewServeMux()
-	router.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+	router.HandleFunc("GET /health", func(w http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("X-Stratum-E2E-Instance") != p.config.instanceID {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		w.Header().Set("X-Stratum-E2E-Instance", p.config.instanceID)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	router.HandleFunc("GET /login/oauth/authorize", p.authorize)
@@ -217,10 +223,10 @@ func loadProviderConfig(getenv func(string) string) (providerConfig, string, err
 	}
 	config := providerConfig{
 		clientID: getenv("GITHUB_CLIENT_ID"), clientSecret: getenv("GITHUB_CLIENT_SECRET"),
-		callbackURL: getenv("GITHUB_CALLBACK_URL"), githubID: githubID,
+		callbackURL: getenv("GITHUB_CALLBACK_URL"), instanceID: getenv("E2E_RUN_INSTANCE_ID"), githubID: githubID,
 		login: getenv("E2E_GITHUB_LOGIN"), email: getenv("E2E_GITHUB_EMAIL"),
 	}
-	if config.clientID == "" || config.clientSecret == "" || config.callbackURL == "" ||
+	if config.clientID == "" || config.clientSecret == "" || config.callbackURL == "" || config.instanceID == "" ||
 		config.login == "" || config.email == "" {
 		return providerConfig{}, "", fmt.Errorf("provider configuration is incomplete")
 	}

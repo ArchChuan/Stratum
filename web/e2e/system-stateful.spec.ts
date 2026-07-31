@@ -202,7 +202,7 @@ const executePack = async (
   }
   if (pack === 'evaluation-promotion') {
     completedActions.push(...await executeEvaluationPromotionPack({
-      actor: actors.tenantAdmin, pool, evidence, webURL,
+      actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL,
     }));
     return;
   }

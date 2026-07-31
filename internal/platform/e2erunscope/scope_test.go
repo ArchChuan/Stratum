@@ -20,8 +20,8 @@ func TestNewScope(t *testing.T) {
 		t.Fatalf("NewScope() error = %v", err)
 	}
 
-	if scope.SchemaVersion != 1 {
-		t.Errorf("SchemaVersion = %d, want 1", scope.SchemaVersion)
+	if scope.SchemaVersion != 2 {
+		t.Errorf("SchemaVersion = %d, want 2", scope.SchemaVersion)
 	}
 	if got, want := scope.RunID, "20260730t120102z-a1b2c3d4e5f60718"; got != want {
 		t.Errorf("RunID = %q, want %q", got, want)
@@ -104,12 +104,17 @@ func TestAllocatePorts(t *testing.T) {
 func TestURLs(t *testing.T) {
 	t.Parallel()
 
-	got := URLs(Ports{Frontend: 21001, Backend: 21002, OAuth: 21003, Fixture: 21004})
+	got := URLs(Ports{
+		Frontend: 21001, Backend: 21002, OAuth: 21003, Fixture: 21004,
+		PlatformMCP: 21005, InternalAPI: 21006,
+	})
 	want := RuntimeURLs{
-		Frontend: "http://127.0.0.1:21001",
-		Backend:  "http://127.0.0.1:21002",
-		OAuth:    "http://127.0.0.1:21003",
-		Fixture:  "http://127.0.0.1:21004",
+		Frontend:    "http://127.0.0.1:21001",
+		Backend:     "http://127.0.0.1:21002",
+		OAuth:       "http://127.0.0.1:21003",
+		Fixture:     "http://127.0.0.1:21004",
+		PlatformMCP: "http://127.0.0.1:21005",
+		InternalAPI: "http://127.0.0.1:21006",
 	}
 	if got != want {
 		t.Errorf("URLs() = %+v, want %+v", got, want)
@@ -125,7 +130,7 @@ func TestValidate(t *testing.T) {
 		mutate func(*Scope)
 	}{
 		{name: "valid", mutate: func(*Scope) {}},
-		{name: "schema version", mutate: func(s *Scope) { s.SchemaVersion = 2 }},
+		{name: "schema version", mutate: func(s *Scope) { s.SchemaVersion = 3 }},
 		{name: "run ID grammar", mutate: func(s *Scope) { s.RunID = "unsafe" }},
 		{name: "database grammar", mutate: func(s *Scope) { s.DatabaseName = "postgres" }},
 		{name: "lease mismatch", mutate: func(s *Scope) { s.Infrastructure.LeaseID = "other" }},
@@ -141,6 +146,8 @@ func TestValidate(t *testing.T) {
 		{name: "port below range", mutate: func(s *Scope) { s.Ports.Frontend = 0 }},
 		{name: "port above range", mutate: func(s *Scope) { s.Ports.Backend = 65536 }},
 		{name: "duplicate port", mutate: func(s *Scope) { s.Ports.OAuth = s.Ports.Backend }},
+		{name: "missing Platform MCP port", mutate: func(s *Scope) { s.Ports.PlatformMCP = 0 }},
+		{name: "duplicate internal API port", mutate: func(s *Scope) { s.Ports.InternalAPI = s.Ports.Backend }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -154,6 +161,17 @@ func TestValidate(t *testing.T) {
 				t.Fatal("Validate() error = nil, want error")
 			}
 		})
+	}
+}
+
+func TestValidateAcceptsLegacyFourPortLease(t *testing.T) {
+	t.Parallel()
+	scope := validTestScope(t)
+	scope.SchemaVersion = 1
+	scope.Ports.PlatformMCP = 0
+	scope.Ports.InternalAPI = 0
+	if err := Validate(scope); err != nil {
+		t.Fatalf("Validate() legacy scope error = %v", err)
 	}
 }
 
@@ -269,14 +287,17 @@ func validTestScope(t *testing.T) Scope {
 	createdAt := time.Date(2026, time.July, 30, 12, 1, 2, 0, time.UTC)
 	runID := "20260730t120102z-a1b2c3d4e5f60718"
 	return Scope{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		RunID:         runID,
 		OwnerPID:      12345,
 		CreatedAt:     createdAt,
 		ExpiresAt:     createdAt.Add(24 * time.Hour),
 		Repository:    t.TempDir(),
 		DatabaseName:  "stratum_e2e_20260730t120102z_a1b2c3d4e5f60718",
-		Ports:         Ports{Frontend: 21001, Backend: 21002, OAuth: 21003, Fixture: 21004},
+		Ports: Ports{
+			Frontend: 21001, Backend: 21002, OAuth: 21003, Fixture: 21004,
+			PlatformMCP: 21005, InternalAPI: 21006,
+		},
 		Infrastructure: InfrastructureLease{
 			LeaseID: runID,
 		},
@@ -289,7 +310,10 @@ func safeDatabaseName() string {
 
 func assertValidPorts(t *testing.T, ports Ports) {
 	t.Helper()
-	values := []int{ports.Frontend, ports.Backend, ports.OAuth, ports.Fixture}
+	values := []int{
+		ports.Frontend, ports.Backend, ports.OAuth, ports.Fixture,
+		ports.PlatformMCP, ports.InternalAPI,
+	}
 	seen := make(map[int]struct{}, len(values))
 	for _, port := range values {
 		if port < 1 || port > 65535 {

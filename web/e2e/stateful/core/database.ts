@@ -1,7 +1,5 @@
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 
-import { E2E_MCP_BASE_URL } from './endpoints';
-
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const LOCAL_DATABASE_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', 'postgres']);
 export const SAFE_POOL_OPTIONS = {

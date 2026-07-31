@@ -135,6 +135,33 @@ func TestGenerateAttestationCanonicalizesAndBindsSource(t *testing.T) {
 	}))
 }
 
+func TestVerifyRunTopologyRequiresAllRuntimePorts(t *testing.T) {
+	t.Parallel()
+	valid := validResults(time.Now().UTC()).RunTopology
+	tests := []struct {
+		name   string
+		mutate func(map[string]int)
+	}{
+		{name: "valid", mutate: func(map[string]int) {}},
+		{name: "missing Platform MCP", mutate: func(ports map[string]int) { delete(ports, "platform_mcp") }},
+		{name: "missing internal API", mutate: func(ports map[string]int) { delete(ports, "internal_api") }},
+		{name: "duplicate internal API", mutate: func(ports map[string]int) { ports["internal_api"] = ports["backend"] }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			topology := *valid
+			topology.Ports = clonePorts(valid.Ports)
+			tt.mutate(topology.Ports)
+			err := verifyRunTopology(&topology, &OwnedCleanup{DatabaseDropped: true, LeaseRemoved: true})
+			if tt.name == "valid" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestGenerateAttestationRejectsCredentialBearingArtifact(t *testing.T) {
 	t.Parallel()
 	root := initDigestRepository(t)
@@ -205,9 +232,24 @@ func validResults(now time.Time) SafeResults {
 		SequenceDigest: strings.Repeat("a", 64), Evidence: EvidenceCounts{UI: 1, HTTP: 1, Database: 1, Reconciled: 1},
 		Cleanup: CleanupResult{Passed: true, ResidualEntityIDs: []string{}}, UnverifiedCapabilities: []string{},
 		RiskClassification: "short", Status: StatusPassed,
-		RunTopology:  &RunTopology{RunID: "20260730t120102z-a1b2c3d4e5f60718", Host: "127.0.0.1", DatabaseName: "stratum_e2e_20260730t120102z_a1b2c3d4e5f60718", Ports: map[string]int{"frontend": 15174, "backend": 18081, "oauth": 19092, "fixture": 19093}},
+		RunTopology: &RunTopology{
+			RunID: "20260730t120102z-a1b2c3d4e5f60718", Host: "127.0.0.1",
+			DatabaseName: "stratum_e2e_20260730t120102z_a1b2c3d4e5f60718",
+			Ports: map[string]int{
+				"frontend": 15174, "backend": 18081, "oauth": 19092, "fixture": 19093,
+				"platform_mcp": 18443, "internal_api": 18444,
+			},
+		},
 		OwnedCleanup: &OwnedCleanup{DatabaseDropped: true, LeaseRemoved: true},
 	}
+}
+
+func clonePorts(source map[string]int) map[string]int {
+	result := make(map[string]int, len(source))
+	for role, port := range source {
+		result[role] = port
+	}
+	return result
 }
 
 func cloneAttestation(t *testing.T, source Attestation) Attestation {

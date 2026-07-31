@@ -607,9 +607,12 @@ func registryTestScope(t *testing.T, runID string, pid int) Scope {
 func registryTestScopeAt(t *testing.T, runID string, pid int, createdAt time.Time) Scope {
 	t.Helper()
 	scope := Scope{
-		SchemaVersion: 1, RunID: runID, OwnerPID: pid, CreatedAt: createdAt, ExpiresAt: createdAt.Add(24 * time.Hour),
+		SchemaVersion: 2, RunID: runID, OwnerPID: pid, CreatedAt: createdAt, ExpiresAt: createdAt.Add(24 * time.Hour),
 		Repository: t.TempDir(), DatabaseName: "stratum_e2e_" + runID[:16] + "_" + runID[17:],
-		Ports:          Ports{Frontend: 21001, Backend: 21002, OAuth: 21003, Fixture: 21004},
+		Ports: Ports{
+			Frontend: 21001, Backend: 21002, OAuth: 21003, Fixture: 21004,
+			PlatformMCP: 21005, InternalAPI: 21006,
+		},
 		Infrastructure: InfrastructureLease{LeaseID: runID},
 	}
 	if err := Validate(scope); err != nil {

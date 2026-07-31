@@ -28,7 +28,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	handlers := map[string]func([]string, io.Writer, io.Writer) error{
 		"allocate": runAllocate, "release": runRelease, "create-database": runCreateDatabase,
-		"drop-database": runDropDatabase, "confirm-infrastructure-stopped": runConfirmStopped, "reap": runReap,
+		"drop-database": runDropDatabase, "mark-infrastructure-owned": runMarkInfrastructureOwned,
+		"confirm-infrastructure-stopped": runConfirmStopped, "reap": runReap,
 	}
 	handler, ok := handlers[args[0]]
 	if !ok {
@@ -37,17 +38,30 @@ func run(args []string, stdout, stderr io.Writer) error {
 	return handler(args[1:], stdout, stderr)
 }
 
+func runMarkInfrastructureOwned(args []string, _ io.Writer, stderr io.Writer) error {
+	scopePath, root, err := parseScopeRegistryArgs("mark-infrastructure-owned", args, stderr)
+	if err != nil {
+		return err
+	}
+	scope, err := readScope(scopePath)
+	if err != nil {
+		return err
+	}
+	return (e2erunscope.Registry{Root: root}).MarkInfrastructureOwned(scope.RunID, time.Now().UTC())
+}
+
 func runAllocate(args []string, stdout, stderr io.Writer) error {
 	fs := newFlags("allocate", stderr)
 	repository := fs.String("repository", "", "repository")
 	root := fs.String("registry", "", "registry")
+	ownerPID := fs.Int("owner-pid", 0, "runner process ID")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if !filepath.IsAbs(*repository) || !filepath.IsAbs(*root) {
 		return errors.New("repository and registry must be absolute")
 	}
-	scope, err := e2erunscope.NewScope(*repository, os.Getpid(), time.Now().UTC(), nil)
+	scope, err := e2erunscope.NewScope(*repository, *ownerPID, time.Now().UTC(), nil)
 	if err != nil {
 		return err
 	}
