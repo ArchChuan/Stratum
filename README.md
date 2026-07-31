@@ -4,20 +4,22 @@
 
 **企业级 AI 原生应用编排平台 · DDD 分层架构 · 多租户隔离**
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-101.200.181.141%3A6879-2ea44f?style=flat&logo=vercel&logoColor=white)](http://101.200.181.141:6879)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-101.200.181.141%3A8443-2ea44f?style=flat&logo=vercel&logoColor=white)](https://101.200.181.141:8443)
+[![CI](https://github.com/byteBuilderX/stratum/actions/workflows/ci.yml/badge.svg)](https://github.com/byteBuilderX/stratum/actions/workflows/ci.yml)
+[![Stateful E2E](https://github.com/byteBuilderX/stratum/actions/workflows/stateful-e2e.yml/badge.svg)](https://github.com/byteBuilderX/stratum/actions/workflows/stateful-e2e.yml)
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](go.mod)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](web/package.json)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-[🚀 在线体验](http://101.200.181.141:6879) · [📖 文档](#文档) · [⚡ 快速开始](#快速开始) · [🏛 架构总览](#架构总览) · [🤝 贡献](#贡献)
+[🚀 在线体验](https://101.200.181.141:8443) · [📖 文档](#文档) · [⚡ 快速开始](#快速开始) · [🏛 架构总览](#架构总览) · [🤝 贡献](#贡献)
 
 </div>
 
 ---
 
-> **🌐 在线 Demo** — 公网入口为 **<http://101.200.181.141:6879>**，健康检查为
-> **<http://101.200.181.141:6879/api/health>**。该部署使用公网 IP 和明文 HTTP，不要求域名或 HTTPS。
+> **🌐 在线 Demo** — 公网入口为 **<https://101.200.181.141:8443>**，健康检查为
+> **<https://101.200.181.141:8443/api/health>**。该部署使用公网 IP 和自签名 TLS，不要求域名。
 > GitHub OAuth 仅在部署环境完成对应 OAuth App 配置后可用。
 
 ---
@@ -78,7 +80,7 @@ Stratum 是一套面向私有化部署的 AI 应用底座。后端用 Go 实现�
 <tr>
 <td width="60%">
 
-**🌐 Demo 地址**：<http://101.200.181.141:6879>
+**🌐 Demo 地址**：<https://101.200.181.141:8443>
 
 **试用步骤**：
 
@@ -92,7 +94,7 @@ Stratum 是一套面向私有化部署的 AI 应用底座。后端用 Go 实现�
 </td>
 <td width="40%" align="center">
 
-[![Try it Live](https://img.shields.io/badge/Try%20it%20Live-101.200.181.141%3A6879-2ea44f?style=for-the-badge)](http://101.200.181.141:6879)
+[![Try it Live](https://img.shields.io/badge/Try%20it%20Live-101.200.181.141%3A8443-2ea44f?style=for-the-badge)](https://101.200.181.141:8443)
 
 **功能覆盖**
 
@@ -100,6 +102,7 @@ Stratum 是一套面向私有化部署的 AI 应用底座。后端用 Go 实现�
 ✅ GraphRAG 知识库
 ✅ Skill 原子/流水线编排
 ✅ MCP 工具集成
+✅ Anthropic · Ollama · Qwen · Zhipu
 ✅ 多租户隔离
 ✅ GitHub OAuth
 
@@ -119,7 +122,7 @@ Stratum 是一套面向私有化部署的 AI 应用底座。后端用 Go 实现�
 | 图数据库 | Neo4j v5 |
 | 鉴权 | JWT RS256（golang-jwt v5）+ GitHub OAuth |
 | 可观测性 | Zap · OpenTelemetry v1.40 · Prometheus |
-| LLM | 通义千问（Qwen）· 智谱 AI（Zhipu）· OpenAI 兼容 |
+| LLM | 通义千问（Qwen）· 智谱 AI（Zhipu）· Anthropic · Ollama · OpenAI 兼容 |
 | 前端 | React 18.3 · Vite 6.4 · Ant Design 5.20 · TanStack Query · Zustand |
 
 ## 快速开始
@@ -127,7 +130,7 @@ Stratum 是一套面向私有化部署的 AI 应用底座。后端用 Go 实现�
 ### 前置要求
 
 - Go 1.25+
-- Node.js 18+ / npm
+- Node.js 22+ / npm
 - Docker + Docker Compose（本地基础设施）
 
 ### 启动
@@ -239,18 +242,21 @@ make help                     # 完整命令清单
 ## 路线图
 
 - [ ] Agent 多步骤规划（Plan-and-Execute）
-- [ ] 更多 LLM 提供商（Anthropic · Ollama · 本地推理）
 - [ ] 端到端 OTEL Trace 串联（HTTP → Agent → Skill → LLM）
 - [ ] WASM Sandbox 替代 goja（Skill 沙箱执行）
+- [ ] 多模态 Agent（图片理解 · 语音交互）
 
 ## 贡献
 
 欢迎 Issue 与 PR。提交前请阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md) 与 [`docs/engineering-standards.md`](docs/engineering-standards.md)，确保：
 
-1. 通过 `make be-fmt be-lint be-test`
-2. 前端改动通过 `make fe-lint fe-build`
-3. PR 标题格式：`[type](scope): description`（type: feat/fix/refactor/perf/test/docs/chore/ci）
-4. PR 描述包含 **What · Why · HowToTest** 三段
+1. 后端通过 `make be-fmt be-lint be-test`
+2. 前端通过 `make fe-lint fe-build`
+3. 质量门禁通过 `make code-quality && go vet ./...`
+4. PR 标题格式：`[type](scope): description`（type: feat/fix/refactor/perf/test/docs/chore/ci）
+5. PR 描述包含 **What · Why · HowToTest** 三段
+
+CI 包含单元测试、lint、合约 golden 测试、质量棘轮、迁移护栏和 Stateful Browser E2E 验证，PR 合并前全部通过。
 
 ## 协议
 
