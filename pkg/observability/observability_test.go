@@ -40,6 +40,7 @@ func TestSystemAssistantMetricsUseOnlyBoundedLabels(t *testing.T) {
 
 func TestPlatformMCPMetricsUseOnlyBoundedLabels(t *testing.T) {
 	m := NewPrometheusMetrics(zap.NewNop())
+	m.InitPlatformMCPMetrics()
 	m.IncPlatformMCPRequest("diagnostic", "read", "success")
 	m.RecordPlatformMCPRequestDuration("diagnostic", "success", 0.1)
 	m.IncPlatformMCPRequestsInFlight()
