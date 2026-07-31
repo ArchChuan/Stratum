@@ -17,3 +17,8 @@ type TenantVectorCleaner interface {
 type TenantCacheInvalidator interface {
 	Invalidate(tenantID string)
 }
+
+// TenantObjectCleaner deletes all MinIO objects belonging to the tenant.
+type TenantObjectCleaner interface {
+	DropTenantObjects(ctx context.Context, tenantID string) error
+}

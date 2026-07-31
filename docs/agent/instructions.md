@@ -34,8 +34,8 @@
 
 **规则**：
 
-- 排查告警、查看日志、检查 Pod/Service/Endpoint 状态 → 直接 SSH 自动执行，无需确认
-- 修改远程状态（重启服务、改配置、建资源、kubectl apply/edit/delete）→ 必须先获用户许可
+- **只读操作**（无需确认）：`kubectl get/describe/logs/top`、`curl` health/metrics、`psql` SELECT、Prometheus 查询等
+- **写入操作**（必须先获用户许可）：`kubectl apply/edit/patch/delete/set image/scale/rollout`、`helm install/upgrade/rollback`、`docker build+push` 后更新部署、修改 ingress/service/configmap/secret、重启 pod、数据库 DDL/DML 等。**E2E 验证优先使用本地 Docker，只有明确确认后才部署到远端**
 
 ## Architecture decisions
 

@@ -32,6 +32,7 @@ export const OnboardingPage = () => {
         current_tenant: { id: tenantId, name: '' },
         avatar_url: onboardingState?.avatarURL || '',
         github_login: onboardingState?.githubLogin || '',
+        username: '',
       },
       accessToken,
     );
@@ -47,6 +48,7 @@ export const OnboardingPage = () => {
           current_tenant: { id: me.tenant_id || tenantId, name: '' },
           avatar_url: me.avatar_url || '',
           github_login: me.github_login || '',
+          username: me.username || '',
         },
         accessToken,
       );

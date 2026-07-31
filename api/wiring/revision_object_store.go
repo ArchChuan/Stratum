@@ -31,6 +31,12 @@ func (c revisionMinIOClient) RemoveObject(
 	return c.client.RemoveObject(ctx, bucket, key, options)
 }
 
+func (c revisionMinIOClient) ListObjects(
+	ctx context.Context, bucket string, opts minio.ListObjectsOptions,
+) <-chan minio.ObjectInfo {
+	return c.client.ListObjects(ctx, bucket, opts)
+}
+
 func (c *Container) buildRevisionObjectStore(ctx context.Context) error {
 	if c.RevisionObjectStore != nil {
 		return nil

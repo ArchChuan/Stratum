@@ -9,19 +9,23 @@ import (
 
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/storage/milvus"
+	"go.uber.org/zap"
 )
 
 // TenantVectorCleaner drops all Milvus collections for a tenant:
 //   - memory collection: "memory_<tenantID with dashes replaced by underscores>"
+//   - memory facts collection: "memory_facts_<tenantID with dashes replaced by underscores>"
+//   - knowledge collection: "tenant_<tenantID with dashes replaced by underscores>_kb"
 //   - RAG workspace collections: "<workspace_name>_kb" (queried from PG)
 type TenantVectorCleaner struct {
-	pool *pgxpool.Pool
-	vs   *milvus.VectorStore
+	pool   *pgxpool.Pool
+	vs     *milvus.VectorStore
+	logger *zap.Logger
 }
 
 // NewTenantVectorCleaner wires the dependencies.
-func NewTenantVectorCleaner(pool *pgxpool.Pool, vs *milvus.VectorStore) *TenantVectorCleaner {
-	return &TenantVectorCleaner{pool: pool, vs: vs}
+func NewTenantVectorCleaner(pool *pgxpool.Pool, vs *milvus.VectorStore, logger *zap.Logger) *TenantVectorCleaner {
+	return &TenantVectorCleaner{pool: pool, vs: vs, logger: logger}
 }
 
 // DropTenantCollections deletes all Milvus collections belonging to tenantID.
@@ -37,6 +41,7 @@ func (c *TenantVectorCleaner) DropTenantCollections(ctx context.Context, tenantI
 	for _, col := range []string{
 		"memory_" + tid,
 		"memory_facts_" + tid,
+		"tenant_" + tid + "_kb", // KnowledgeCollection — single-collection-per-tenant model
 	} {
 		if err := c.vs.DeleteCollection(ctx, col); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", col, err))
@@ -49,7 +54,10 @@ func (c *TenantVectorCleaner) DropTenantCollections(ctx context.Context, tenantI
 		rows, err := c.pool.Query(ctx,
 			fmt.Sprintf(`SELECT id FROM "%s".rag_workspaces`, schema),
 		)
-		if err == nil {
+		if err != nil {
+			c.logger.Warn("failed to query rag_workspaces for vector cleanup, workspace collections may leak",
+				zap.String("tenant_id", tenantID), zap.Error(err))
+		} else {
 			defer rows.Close()
 			for rows.Next() {
 				var id string
