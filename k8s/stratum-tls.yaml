@@ -1,0 +1,33 @@
+# stratum ingress TLS — cert-manager Certificate + Traefik TLSStore
+# The Certificate is signed by stratum-internal-ca ClusterIssuer (internal CA).
+# Because the ingress uses path-based routing without a domain, the TLSStore
+# makes this certificate the default for the stratum namespace.
+# Prerequisites (created by infrastructure bootstrap):
+#   - cert-manager
+#   - stratum-internal-root-bootstrap ClusterIssuer (self-signed root)
+#   - stratum-internal-ca ClusterIssuer (CA, signed by root)
+#   - Traefik ingress controller (k3s default)
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: stratum-ingress-tls
+  namespace: stratum
+spec:
+  secretName: stratum-ingress-tls
+  ipAddresses:
+    - 101.200.181.141
+  dnsNames:
+    - localhost
+  issuerRef:
+    kind: ClusterIssuer
+    name: stratum-internal-ca
+---
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: stratum
+spec:
+  defaultCertificate:
+    secretName: stratum-ingress-tls
