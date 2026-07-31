@@ -5,11 +5,10 @@ import type { BrowserActor } from '../core/actors';
 import {
   configureManagedModels, requireUUID, withTenantMutation, withTenantQuery, type DatabasePool,
 } from '../core/database';
-import { E2E_MCP_BASE_URL } from '../core/endpoints';
 import type { EvidenceRecord } from '../core/evidence';
 import { runCleanupTasks } from '../core/errors';
 
-interface EvaluationPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
+interface EvaluationPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string }
 const waitFor = async (page: Page, path: string | RegExp, method: string) => {
   try {
     return await page.waitForResponse((response) => {
@@ -93,11 +92,11 @@ const seedDecisionFixtures = async (
 };
 
 export const executeEvaluationPack = async ({
-  actor, pool, evidence, webURL,
+  actor, pool, evidence, webURL, fixtureURL,
 }: EvaluationPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   const userID = requireUUID(actor.userID ?? '', 'user_id');
-  await configureManagedModels(pool, tenantID);
+  await configureManagedModels(pool, tenantID, fixtureURL);
   const page = await actor.context.newPage();
   const suffix = String(Date.now());
   const skillName = `E2E-Evaluation-Skill-${suffix}`;
@@ -268,7 +267,7 @@ export const executeEvaluationPack = async ({
     experimentID = (await experimentCreated.json() as { experiment: { id: string } }).experiment.id;
     await expect(dialog).toBeHidden();
 
-    const evidenceRegistration = await page.request.post(`${E2E_MCP_BASE_URL}/e2e/opik/register`, { data: {
+    const evidenceRegistration = await page.request.post(`${fixtureURL}/e2e/opik/register`, { data: {
       trace_id: run.trace_id, tenant_id: tenantID, user_id: userID,
       resource_id: skillID, revision_id: stableRevisionID,
     } });

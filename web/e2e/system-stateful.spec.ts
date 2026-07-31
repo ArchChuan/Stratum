@@ -42,8 +42,9 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
   expect(browserName).toBe('chromium');
   const databaseURL = process.env.TEST_DATABASE_URL;
   const resultsPath = process.env.STATEFUL_E2E_RESULTS_PATH;
-  const backendURL = process.env.E2E_API_URL ?? 'http://127.0.0.1:18080';
-  const webURL = process.env.E2E_WEB_URL ?? 'http://127.0.0.1:15173';
+  const backendURL = runtime.urls.api;
+  const webURL = runtime.urls.web;
+  const fixtureURL = runtime.urls.fixture;
   if (!databaseURL || !resultsPath) throw new Error('stateful E2E database and results paths are required');
 
   const health = await Promise.all([
@@ -78,7 +79,7 @@ test('system stateful acceptance', async ({ browser, browserName }) => {
           http: evidence.http.length,
           database: evidence.database.length,
         };
-        await executePack(pack, actors, pool, evidence, webURL, backendURL, completedActions);
+        await executePack(pack, actors, pool, evidence, webURL, backendURL, fixtureURL, completedActions);
         return {
           ui: evidence.ui.length - before.ui,
           http: evidence.http.length - before.http,
@@ -160,6 +161,7 @@ const executePack = async (
   evidence: EvidenceRecord,
   webURL: string,
   backendURL: string,
+  fixtureURL: string,
   completedActions: string[],
 ): Promise<void> => {
   if (pack === 'iam') {
@@ -167,15 +169,15 @@ const executePack = async (
     return;
   }
   if (pack === 'agent') {
-    completedActions.push(...await executeAgentPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    completedActions.push(...await executeAgentPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
     return;
   }
   if (pack === 'agent-context') {
-    completedActions.push(...await executeAgentContextPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    completedActions.push(...await executeAgentContextPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
     return;
   }
   if (pack === 'agent-skill-mcp') {
-    completedActions.push(...await executeAgentSkillMCPPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    completedActions.push(...await executeAgentSkillMCPPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
     return;
   }
   if (pack === 'workflow') {
@@ -187,15 +189,15 @@ const executePack = async (
     return;
   }
   if (pack === 'mcp') {
-    completedActions.push(...await executeMCPPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    completedActions.push(...await executeMCPPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
     return;
   }
   if (pack === 'knowledge') {
-    completedActions.push(...await executeKnowledgePack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    completedActions.push(...await executeKnowledgePack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
     return;
   }
   if (pack === 'evaluation') {
-    completedActions.push(...await executeEvaluationPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    completedActions.push(...await executeEvaluationPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
     return;
   }
   if (pack === 'evaluation-promotion') {
@@ -209,7 +211,7 @@ const executePack = async (
     return;
   }
   if (pack === 'llm-admin') {
-    completedActions.push(...await executeLLMAdminPack({ actor: actors.tenantAdmin, pool, evidence, webURL }));
+    completedActions.push(...await executeLLMAdminPack({ actor: actors.tenantAdmin, pool, evidence, webURL, fixtureURL }));
     return;
   }
   if (pack !== 'dashboard') throw new Error(`stateful pack ${pack} is not implemented`);
@@ -218,7 +220,7 @@ const executePack = async (
   const page = await actor.context.newPage();
   try {
     for (const action of dashboardActions) {
-      await action.execute({ page, evidence, pool, tenantID: actor.tenantID, webURL });
+      await action.execute({ page, evidence, pool, tenantID: actor.tenantID, webURL, fixtureURL });
       completedActions.push(action.id);
     }
   } finally {

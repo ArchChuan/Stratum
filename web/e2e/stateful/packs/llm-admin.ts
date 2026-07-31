@@ -11,7 +11,7 @@ import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool
 import { E2E_MCP_BASE_URL } from '../core/endpoints';
 import type { EvidenceRecord } from '../core/evidence';
 
-interface LLMAdminPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
+interface LLMAdminPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string }
 
 const waitForMutation = (page: Page, path: string | RegExp, method: string) => page.waitForResponse((response) => {
   const urlPath = new URL(response.url()).pathname;
@@ -30,7 +30,7 @@ const recordEvidence = (evidence: EvidenceRecord, label: string) => {
 const clickModalOK = (page: Page) => page.locator('.ant-modal-content')
   .getByRole('button', { name: /确\s*定/ }).click();
 
-export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLMAdminPackContext): Promise<string[]> => {
+export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL, fixtureURL }: LLMAdminPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   const completed: string[] = [];
   const page = await actor.context.newPage();
@@ -47,7 +47,7 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
       values: [],
     });
     // Ensure baseline models are present (stateful-qwen provider + qwen models)
-    await configureManagedModels(pool, tenantID);
+    await configureManagedModels(pool, tenantID, fixtureURL);
 
     // ── Navigate to model management ──────────────────────────────────────────
     const listResponse = waitForMutation(page, '/admin/providers', 'GET');

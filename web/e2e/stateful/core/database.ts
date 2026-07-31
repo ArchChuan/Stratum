@@ -149,7 +149,7 @@ export const setGeneratedActorVerifiedEmail = async (
   }
 };
 
-export const configureManagedModels = async (pool: DatabasePool, tenantID: string): Promise<void> => {
+export const configureManagedModels = async (pool: DatabasePool, tenantID: string, fixtureURL: string): Promise<void> => {
   requireUUID(tenantID, 'tenant_id');
   const client = await pool.connect();
   let began = false;
@@ -172,7 +172,7 @@ export const configureManagedModels = async (pool: DatabasePool, tenantID: strin
          default_model = EXCLUDED.default_model,
          enabled = true,
          updated_at = now()`,
-      ['stateful-qwen', tenantID, `${E2E_MCP_BASE_URL}/v1`, 'stateful-local-provider-key'],
+      ['stateful-qwen', tenantID, `${fixtureURL}/v1`, 'stateful-local-provider-key'],
     );
     if (providerResult.rowCount !== 1) throw new Error('synthetic LLM provider setup did not affect exactly one row');
     const modelResult = await client.query(

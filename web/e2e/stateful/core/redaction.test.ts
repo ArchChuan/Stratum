@@ -230,7 +230,7 @@ describe('stateful E2E security boundaries', () => {
     const release = vi.fn();
     const pool = { connect: vi.fn().mockResolvedValue({ query, release }) };
 
-    await configureManagedModels(pool, tenantID);
+    await configureManagedModels(pool, tenantID, 'http://127.0.0.1:39091');
 
     expect(query).toHaveBeenNthCalledWith(1, 'BEGIN');
     expect(query).toHaveBeenNthCalledWith(2, "SELECT set_config('search_path', $1, true)", [
