@@ -58,6 +58,10 @@ fi
 jq -e '.status == "failed" and (.source_clean | not)' "$test_dir/report.json" >/dev/null
 
 git -C "$repo" restore source.go
+mv "$test_dir/attestation.json" "$test_dir/attestation.saved.json"
+run_writer infra_failed
+jq -e '.status == "infra_failed" and .attestation_path == ""' "$test_dir/report.json" >/dev/null
+mv "$test_dir/attestation.saved.json" "$test_dir/attestation.json"
 run_writer infra_failed
 run_writer failed
 find "$test_dir/history" -type f -name '*.json' | grep -q .

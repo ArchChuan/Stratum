@@ -13,6 +13,11 @@ EOF
 cat >"$test_dir/go" <<EOF
 #!/usr/bin/env bash
 printf 'go:%s\\n' "\$*" >>'$log'
+if [[ "\$1" == list ]]; then
+  printf '%s\\n' github.com/byteBuilderX/stratum/internal/agent \
+    github.com/byteBuilderX/stratum/test/e2e \
+    github.com/byteBuilderX/stratum/web/node_modules/example
+fi
 EOF
 chmod +x "$test_dir/make" "$test_dir/go"
 
@@ -31,8 +36,8 @@ run_case() {
 
 run_case '["docs-lint"]' 'make:agent-instructions-check'
 run_case '["static","unit","build","code-quality"]' \
-  'make:risk-guardrails code-quality go:vet ./... go:test -short ./... go:build ./cmd/server make:fe-lint fe-build'
+  'make:risk-guardrails code-quality go:vet ./... go:list ./... go:test -short github.com/byteBuilderX/stratum/internal/agent go:build ./cmd/server make:fe-lint fe-build'
 run_case '["static","unit","integration","contract","domain-failure-paths","e2e-short","e2e-soak"]' \
-  'make:risk-guardrails code-quality go:vet ./... go:test -short ./... make:contract-test'
+  'make:risk-guardrails code-quality go:vet ./... go:list ./... go:test -short github.com/byteBuilderX/stratum/internal/agent make:contract-test'
 
 printf 'planned local check behavior passed\n'

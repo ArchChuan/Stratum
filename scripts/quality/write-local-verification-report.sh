@@ -89,7 +89,13 @@ actual_digest=sha256:$(sha256sum "$manifest" | awk '{print $1}')
 
 capabilities='{"passed":0,"failed":0,"blocked":0,"skipped":0,"unreconciled":0}'
 cleanup='{"complete":true,"residual_entities":0}'
-[[ "$mode" == none ]] || { verify_attestation "$commit" "$manifest_digest" "$mode"; summarize_attestation; }
+if [[ "$mode" != none && "$outcome" != infra_failed && "$outcome" != not_run ]]; then
+  verify_attestation "$commit" "$manifest_digest" "$mode"
+  summarize_attestation
+elif [[ "$outcome" == infra_failed ]]; then
+  attestation=
+  cleanup='{"complete":false,"residual_entities":0}'
+fi
 clean=true
 source_is_clean || clean=false
 status=$outcome

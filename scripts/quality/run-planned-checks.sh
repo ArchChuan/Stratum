@@ -18,7 +18,10 @@ run_static_checks() {
 }
 
 run_go_tests() {
-  "${clean_env[@]}" "$go_command" test -short ./...
+  local packages=()
+  mapfile -t packages < <("$go_command" list ./... | grep -Ev '/test/e2e($|/)|/web/node_modules/')
+  ((${#packages[@]} > 0)) || { printf 'no focused Go test packages selected\n' >&2; return 1; }
+  "${clean_env[@]}" "$go_command" test -short "${packages[@]}"
 }
 
 run_build_checks() {
