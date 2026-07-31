@@ -132,7 +132,9 @@ jobs:
             > tmp/test-verification/signature-receipt.json
       - name: Record commit-bound planned checks
         run: bash scripts/quality/write-verification-check-receipt.sh \
-          tmp/test-verification/plan.json tmp/test-verification/checks.json
+          tmp/test-verification/plan.json tmp/test-verification/checks.json \
+          static unit integration contract e2e-short domain-failure-paths e2e-soak \
+          specification-review code-quality-review
       - name: Produce authoritative completion report
         env:
           TEST_VERIFY_SIGNATURE_RECEIPT: tmp/test-verification/signature-receipt.json

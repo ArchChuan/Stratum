@@ -96,12 +96,20 @@ if PATH="$test_dir/bin:$PATH" TEST_VERIFY_PLAN_PATH="$test_dir/plan.json" \
 fi
 GITHUB_SHA="$commit" GITHUB_RUN_ID=1 GITHUB_REPOSITORY=byteBuilderX/stratum \
   bash "$root/scripts/quality/write-verification-check-receipt.sh" \
-  "$test_dir/plan.json" "$test_dir/checks.json"
+  "$test_dir/plan.json" "$test_dir/checks.json" static
 PATH="$test_dir/bin:$PATH" TEST_VERIFY_PLAN_PATH="$test_dir/plan.json" \
   TEST_VERIFY_REPORT_PATH="$test_dir/report.json" E2E_ATTESTATION_DIR="$test_dir/attestations" \
   TEST_VERIFY_REVIEW_DIR="$test_dir/reviews" TEST_VERIFY_SIGNATURE_RECEIPT="$test_dir/signature.json" \
   TEST_VERIFY_CHECK_RECEIPT="$test_dir/checks.json" TEST_VERIFY_REQUIRE_ACCEPTED=true \
   bash "$subject" >/dev/null
 jq -e '.status == "accepted" and (.checks | map(.id) == ["static"])' "$test_dir/report.json" >/dev/null
+
+jq '.checks += ["unexecuted-check"]' "$test_dir/plan.json" >"$test_dir/plan-with-unexecuted-check.json"
+if GITHUB_SHA="$commit" GITHUB_RUN_ID=1 GITHUB_REPOSITORY=byteBuilderX/stratum \
+  bash "$root/scripts/quality/write-verification-check-receipt.sh" \
+  "$test_dir/plan-with-unexecuted-check.json" "$test_dir/checks.json" static 2>/dev/null; then
+  printf 'check receipt certified a planned check that was not executed\n' >&2
+  exit 1
+fi
 
 printf 'verification completion report behavior passed\n'
