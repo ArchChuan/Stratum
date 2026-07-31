@@ -35,7 +35,7 @@ func (r *TenantRepo) CountMembers(ctx context.Context, tenantID string) (int, er
 // ListMembers returns a page of members ordered by joined_at DESC.
 func (r *TenantRepo) ListMembers(ctx context.Context, tenantID string, limit, offset int) ([]domain.Member, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT tm.user_id, u.github_login, u.avatar_url, tm.role, tm.joined_at
+		`SELECT tm.user_id, u.github_login, COALESCE(u.avatar_url,''), tm.role, tm.joined_at
 		 FROM public.tenant_members tm
 		 JOIN public.users u ON u.id = tm.user_id
 		 WHERE tm.tenant_id=$1
