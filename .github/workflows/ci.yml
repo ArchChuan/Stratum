@@ -31,6 +31,21 @@ jobs:
   code-quality:
     name: Code Quality
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: tool_permission_ci_only
+          POSTGRES_DB: stratum_tool_permission
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stratum_tool_permission"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      STRATUM_TEST_POSTGRES_URL: postgres://postgres:tool_permission_ci_only@127.0.0.1:5432/stratum_tool_permission?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 
