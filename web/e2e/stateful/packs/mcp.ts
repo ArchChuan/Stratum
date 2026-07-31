@@ -3,10 +3,9 @@ import type { QueryResultRow } from 'pg';
 
 import type { BrowserActor } from '../core/actors';
 import { requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
-import { E2E_MCP_BASE_URL } from '../core/endpoints';
 import type { EvidenceRecord } from '../core/evidence';
 
-interface MCPPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
+interface MCPPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string }
 
 const waitForMutation = (page: Page, path: string, method: string) => page.waitForResponse((response) => (
   new URL(response.url()).pathname === path && response.request().method() === method
@@ -39,7 +38,7 @@ const findServerRow = async (page: Page, serverName: string) => {
   return row;
 };
 
-export const executeMCPPack = async ({ actor, pool, evidence, webURL }: MCPPackContext): Promise<string[]> => {
+export const executeMCPPack = async ({ actor, pool, evidence, webURL, fixtureURL }: MCPPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   const completed: string[] = [];
   const page = await actor.context.newPage();
@@ -60,7 +59,7 @@ export const executeMCPPack = async ({ actor, pool, evidence, webURL }: MCPPackC
     await openSelect(page, '传输协议');
     await page.getByLabel('传输协议').press('ArrowDown');
     await page.getByLabel('传输协议').press('Enter');
-    await page.getByLabel('服务器 URL').fill(`${E2E_MCP_BASE_URL}/mcp`);
+    await page.getByLabel('服务器 URL').fill(`${fixtureURL}/mcp`);
     const createResponse = waitForMutation(page, '/mcp/servers', 'POST');
     const createdListResponse = waitForMutation(page, '/mcp/servers', 'GET');
     await page.getByRole('button', { name: '添加服务器' }).click();

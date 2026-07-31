@@ -21,5 +21,6 @@ if grep -Eq 'playwright install|Install Chromium|npm ci|go run ./cmd/server|dock
   exit 1
 fi
 
-go test ./internal/platform/e2eattestation ./cmd/e2e-attestation -run 'Attestation|AcceptanceProfile|RunRejects' -count=1
+go test ./internal/platform/e2eattestation ./cmd/e2e-attestation \
+  -run 'Attestation|AcceptanceProfile|RunRejects|RunTopology' -count=1
 printf 'E2E attestation guard tests passed\n'

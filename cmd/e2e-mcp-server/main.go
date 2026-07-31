@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -13,9 +15,8 @@ import (
 )
 
 const (
-	defaultListenAddress = "127.0.0.1:19091"
-	readHeaderTimeout    = 5 * time.Second
-	optimizationContent  = `[{"prompt_patch":{"instructions":"先分析 stateful 输入，再按明确步骤输出。"},"rationale":"提高可验证性"},{"prompt_patch":{"instructions":"对 stateful 输入给出简洁且可核对的结果。"},"rationale":"减少歧义"}]`
+	readHeaderTimeout   = 5 * time.Second
+	optimizationContent = `[{"prompt_patch":{"instructions":"先分析 stateful 输入，再按明确步骤输出。"},"rationale":"提高可验证性"},{"prompt_patch":{"instructions":"对 stateful 输入给出简洁且可核对的结果。"},"rationale":"减少歧义"}]`
 )
 
 type rpcRequest struct {
@@ -43,13 +44,40 @@ var contextEvidence = struct {
 
 func main() {
 	address := os.Getenv("E2E_MCP_LISTEN_ADDRESS")
-	if address == "" {
-		address = defaultListenAddress
+	instanceID := os.Getenv("E2E_RUN_INSTANCE_ID")
+	if err := validateServerConfig(address, instanceID); err != nil {
+		log.Fatal(err)
 	}
-	server := &http.Server{Addr: address, Handler: http.HandlerFunc(handler), ReadHeaderTimeout: readHeaderTimeout}
+	server := &http.Server{Addr: address, Handler: newHandler(instanceID), ReadHeaderTimeout: readHeaderTimeout}
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+func validateServerConfig(address, instanceID string) error {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || port == "" || (host != "127.0.0.1" && host != "localhost") {
+		return errors.New("listen address must be explicit loopback host:port")
+	}
+	if instanceID == "" {
+		return errors.New("E2E_RUN_INSTANCE_ID is required")
+	}
+	return nil
+}
+
+func newHandler(instanceID string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			if r.Header.Get("X-Stratum-E2E-Instance") != instanceID {
+				w.WriteHeader(http.StatusConflict)
+				return
+			}
+			w.Header().Set("X-Stratum-E2E-Instance", instanceID)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		handler(w, r)
+	})
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {

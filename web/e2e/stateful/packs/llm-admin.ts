@@ -8,10 +8,9 @@ import {
   PROVIDER_CAMEL_KEYS, PROVIDER_PASCAL_BANNED,
 } from '../core/camelcase';
 import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
-import { E2E_MCP_BASE_URL } from '../core/endpoints';
 import type { EvidenceRecord } from '../core/evidence';
 
-interface LLMAdminPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
+interface LLMAdminPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string }
 
 const waitForMutation = (page: Page, path: string | RegExp, method: string) => page.waitForResponse((response) => {
   const urlPath = new URL(response.url()).pathname;
@@ -30,7 +29,7 @@ const recordEvidence = (evidence: EvidenceRecord, label: string) => {
 const clickModalOK = (page: Page) => page.locator('.ant-modal-content')
   .getByRole('button', { name: /确\s*定/ }).click();
 
-export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLMAdminPackContext): Promise<string[]> => {
+export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL, fixtureURL }: LLMAdminPackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
   const completed: string[] = [];
   const page = await actor.context.newPage();
@@ -47,7 +46,7 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
       values: [],
     });
     // Ensure baseline models are present (stateful-qwen provider + qwen models)
-    await configureManagedModels(pool, tenantID);
+    await configureManagedModels(pool, tenantID, fixtureURL);
 
     // ── Navigate to model management ──────────────────────────────────────────
     const listResponse = waitForMutation(page, '/admin/providers', 'GET');
@@ -63,7 +62,7 @@ export const executeLLMAdminPack = async ({ actor, pool, evidence, webURL }: LLM
     await page.locator('.ant-form-item').filter({ hasText: '类型' })
       .locator('.ant-select-selector').click();
     await page.locator('.ant-select-item-option').filter({ hasText: 'OpenAI 兼容' }).click();
-    await page.getByLabel('Base URL').fill(`${E2E_MCP_BASE_URL}/v1`);
+    await page.getByLabel('Base URL').fill(`${fixtureURL}/v1`);
     await page.getByLabel('API Key').fill('sk-e2e-test-key');
 
     const createResponse = waitForMutation(page, '/admin/providers', 'POST');
