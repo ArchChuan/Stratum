@@ -28,12 +28,22 @@ func TestVerificationSchemas(t *testing.T) {
 			value: reportWithRisk(validReport, "R0", map[string]any{}),
 		},
 		{
-			name: "accepts R1 report without reviews", schema: report,
-			value: reportWithRisk(validReport, "R1", map[string]any{}),
+			name: "rejects R1 report without code quality review", schema: report,
+			value: reportWithRisk(validReport, "R1", map[string]any{}), wantErr: true,
 		},
 		{
-			name: "accepts R2 report without reviews", schema: report,
-			value: reportWithRisk(validReport, "R2", map[string]any{}),
+			name: "accepts R1 report with code quality review", schema: report,
+			value: reportWithRisk(validReport, "R1", map[string]any{"code-quality": "passed"}),
+		},
+		{
+			name: "rejects R2 report without reviews", schema: report,
+			value: reportWithRisk(validReport, "R2", map[string]any{}), wantErr: true,
+		},
+		{
+			name: "accepts R2 report with required reviews", schema: report,
+			value: reportWithRisk(validReport, "R2", map[string]any{
+				"specification": "passed", "code-quality": "passed",
+			}),
 		},
 		{name: "accepts blocked report", schema: report, value: changed(validReport, "status", "blocked")},
 		{

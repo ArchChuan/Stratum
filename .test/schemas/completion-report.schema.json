@@ -75,18 +75,34 @@
       "if": {
         "properties": {
           "status": { "const": "accepted" },
-          "risk_level": { "enum": ["R3", "R4"] }
+          "risk_level": { "enum": ["R1", "R2", "R3", "R4"] }
         },
         "required": ["status", "risk_level"]
       },
       "then": {
         "properties": {
           "reviews": {
-            "required": ["specification", "code-quality"],
+            "required": ["code-quality"],
             "properties": {
-              "specification": { "const": "passed" },
               "code-quality": { "const": "passed" }
             }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": { "const": "accepted" },
+          "risk_level": { "enum": ["R2", "R3", "R4"] }
+        },
+        "required": ["status", "risk_level"]
+      },
+      "then": {
+        "properties": {
+          "reviews": {
+            "required": ["specification"],
+            "properties": { "specification": { "const": "passed" } }
           }
         }
       }

@@ -56,6 +56,8 @@ capabilities:
 
 reviews:
   required:
+    R1: [code-quality]
+    R2: [specification, code-quality]
     R3: [specification, code-quality]
     R4: [specification, code-quality, release-evidence]
 
