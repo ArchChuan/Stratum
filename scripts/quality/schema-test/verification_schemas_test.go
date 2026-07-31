@@ -23,8 +23,54 @@ func TestVerificationSchemas(t *testing.T) {
 	}{
 		{name: "accepts R3 plan", schema: plan, value: validPlan},
 		{name: "accepts authoritative report", schema: report, value: validReport},
+		{
+			name: "accepts R0 report without reviews", schema: report,
+			value: reportWithRisk(validReport, "R0", map[string]any{}),
+		},
+		{
+			name: "accepts R1 report without reviews", schema: report,
+			value: reportWithRisk(validReport, "R1", map[string]any{}),
+		},
+		{
+			name: "accepts R2 report without reviews", schema: report,
+			value: reportWithRisk(validReport, "R2", map[string]any{}),
+		},
 		{name: "accepts blocked report", schema: report, value: changed(validReport, "status", "blocked")},
+		{
+			name: "rejects plan missing manifest digest", schema: plan,
+			value: removed(validPlan, "manifest_digest"), wantErr: true,
+		},
 		{name: "rejects missing commit", schema: report, value: removed(validReport, "commit"), wantErr: true},
+		{
+			name: "rejects report missing manifest digest", schema: report,
+			value: removed(validReport, "manifest_digest"), wantErr: true,
+		},
+		{
+			name: "rejects R3 report missing specification review", schema: report,
+			value: reportWithReviews(validReport, map[string]any{"code-quality": "passed"}), wantErr: true,
+		},
+		{
+			name: "rejects R3 report with failed specification review", schema: report,
+			value: reportWithReviews(validReport, map[string]any{
+				"specification": "changes_requested", "code-quality": "passed",
+			}), wantErr: true,
+		},
+		{
+			name: "rejects R3 report missing code quality review", schema: report,
+			value: reportWithReviews(validReport, map[string]any{"specification": "passed"}), wantErr: true,
+		},
+		{
+			name: "rejects R4 report missing release evidence review", schema: report,
+			value: reportWithRisk(validReport, "R4", map[string]any{
+				"specification": "passed", "code-quality": "passed",
+			}), wantErr: true,
+		},
+		{
+			name: "accepts R4 report with required reviews", schema: report,
+			value: reportWithRisk(validReport, "R4", map[string]any{
+				"specification": "passed", "code-quality": "passed", "release-evidence": "passed",
+			}),
+		},
 		{
 			name: "rejects skipped accepted capability", schema: report,
 			value: changedCount(validReport, "skipped", 1), wantErr: true,
@@ -93,6 +139,14 @@ func changed(src map[string]any, key string, value any) map[string]any {
 	dst := clone(src)
 	dst[key] = value
 	return dst
+}
+
+func reportWithReviews(src map[string]any, reviews map[string]any) map[string]any {
+	return changed(src, "reviews", reviews)
+}
+
+func reportWithRisk(src map[string]any, risk string, reviews map[string]any) map[string]any {
+	return changed(reportWithReviews(src, reviews), "risk_level", risk)
 }
 
 func removed(src map[string]any, key string) map[string]any {

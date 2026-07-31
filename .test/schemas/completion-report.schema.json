@@ -70,6 +70,43 @@
           "artifacts": { "minItems": 1 }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": { "const": "accepted" },
+          "risk_level": { "enum": ["R3", "R4"] }
+        },
+        "required": ["status", "risk_level"]
+      },
+      "then": {
+        "properties": {
+          "reviews": {
+            "required": ["specification", "code-quality"],
+            "properties": {
+              "specification": { "const": "passed" },
+              "code-quality": { "const": "passed" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": { "const": "accepted" },
+          "risk_level": { "const": "R4" }
+        },
+        "required": ["status", "risk_level"]
+      },
+      "then": {
+        "properties": {
+          "reviews": {
+            "required": ["release-evidence"],
+            "properties": { "release-evidence": { "const": "passed" } }
+          }
+        }
+      }
     }
   ]
 }

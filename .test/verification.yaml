@@ -21,6 +21,23 @@ risk:
     - id: agent-tool-chain
       level: R3
       paths: [internal/agent/**, internal/mcp/**, test/e2e/**]
+    - id: auth
+      level: R3
+      paths: [api/http/handler/auth*.go, internal/iam/**]
+    - id: migration
+      level: R3
+      paths: [pkg/migration/**, pkg/storage/postgres/tenant_schema.sql]
+    - id: memory
+      level: R3
+      paths: [internal/memory/**]
+    - id: external-dependency
+      level: R3
+      paths:
+        - pkg/httpclient/**
+        - pkg/messaging/**
+        - pkg/storage/milvus/**
+        - pkg/storage/redis/**
+        - internal/llmgateway/**
     - id: deployment
       level: R3
       paths: [.github/workflows/**, helm/**, k8s/**]

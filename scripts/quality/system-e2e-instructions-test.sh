@@ -27,6 +27,8 @@ for phrase in \
   'CI 是唯一验收权威' \
   '重跑只能用于诊断' \
   '规格审查' '代码质量审查' \
+  'STATEFUL_E2E_PROFILE=test STATEFUL_E2E_DURATION_SEC=600' \
+  'STATEFUL_E2E_PROFILE=release STATEFUL_E2E_DURATION_SEC=3600' \
   'run-scope' 'lease' 'attestation v2'; do
   grep -Fq "$phrase" "$skill_file" || { printf 'unified E2E skill missing: %s\n' "$phrase" >&2; exit 1; }
 done

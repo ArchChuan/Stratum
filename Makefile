@@ -227,15 +227,17 @@ verification-schemas-test:
 
 E2E_REQUIRED_MODE ?= short
 E2E_REQUIRED_PROFILE ?=
+E2E_ATTESTATION_DIR ?= test/e2e/attestations
 e2e-attestation-check:
 	@digest=$$(go run ./cmd/e2e-attestation digest --root . --ref HEAD); \
-	attestation="test/e2e/attestations/$$digest.json"; \
+	attestation="$(E2E_ATTESTATION_DIR)/$$digest.json"; \
 	if [ -f "$$attestation" ]; then \
 		go run ./cmd/e2e-attestation verify --root . --ref HEAD --required-mode $(E2E_REQUIRED_MODE) \
 			$$(if [ -n "$(E2E_REQUIRED_PROFILE)" ]; then echo "--required-profile $(E2E_REQUIRED_PROFILE)"; fi) \
 			--attestation "$$attestation"; \
 	else \
-		printf 'No local attestation for %.16s - stateful E2E gate covers this\n' "$$digest" >&2; \
+		printf 'missing current source attestation for %.16s at %s\n' "$$digest" "$$attestation" >&2; \
+		exit 1; \
 	fi
 
 tool-permission-test:

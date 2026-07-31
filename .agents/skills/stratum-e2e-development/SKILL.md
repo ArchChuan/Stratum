@@ -34,8 +34,10 @@ received -> scoped -> classified -> planned -> local_verified
 - `R0`：非执行文档；执行文档和生成一致性检查。
 - `R1`：局部逻辑；执行静态检查、单测、构建和代码质量审查。
 - `R2`：行为变化；增加真实集成/合同测试和 short E2E。
-- `R3`：认证、租户、迁移、Agent/MCP/Memory、外部依赖或部署；增加失败路径、soak、规格审查和代码质量审查。
-- `R4`：正式发布；增加 release soak、同 digest 晋升、发布证据审查和生产只读验证。
+- `R3`：认证、租户、迁移、Agent/MCP/Memory、外部依赖或部署；增加失败路径、规格审查、代码质量审查，
+  并执行 `STATEFUL_E2E_PROFILE=test STATEFUL_E2E_DURATION_SEC=600 STATEFUL_E2E_PACKS=all make e2e-system-soak`。
+- `R4`：正式发布；增加同 digest 晋升、发布证据审查和生产只读验证。release soak 的固定配置是
+  `STATEFUL_E2E_PROFILE=release STATEFUL_E2E_DURATION_SEC=3600`，通过 `make e2e-system-release-soak` 执行。
 
 确定性分类器结果只能提高，不能由 Agent 降低；分类失败时 fail closed。实现 Agent 不能批准自己的规格审查
 或代码质量审查，审查结果必须绑定 commit。
@@ -56,7 +58,9 @@ received -> scoped -> classified -> planned -> local_verified
 
 功能开发或 Bug 修复的普通测试通过后，必须使用仓库版本化实现完成系统验收，不能由 Skill 临时拼装另一套流程：
 
-1. 运行 `bash scripts/quality/risk-regression-guard.sh --acceptance <changed-file...>`；输出 `short` 时运行 `make e2e-system-short`，输出 `soak` 时还要运行 `STATEFUL_E2E_DURATION_SEC=3600 STATEFUL_E2E_PACKS=all make e2e-system-soak`。
+1. 运行 `bash scripts/quality/risk-regression-guard.sh --acceptance <changed-file...>`；输出 `short` 时运行
+   `make e2e-system-short`。R3 的 `soak` 使用 600 秒 test profile；R4 必须升级为 3600 秒 release profile，命令以上述
+   风险分级为准。
 2. 持续监控 runner 到终态。失败时定位产品、环境或测试合同根因，修复后从失效阶段重新运行；不得跳过 pack、capability、清理或证据对账来取得通过。
 3. 所有被选 capability 的主要操作必须由无头 Chromium 中的真实点击、输入、选择、刷新和跨角色会话发起。HTTP 只用于准备、响应证据和明确的拒绝断言；SQL 只用于测试身份、精确对账与清理。
 4. 允许读取本地/临时测试数据库凭据，并只对本轮生成的 UUID 身份精确提升角色。凭据、token、cookie、密码、私钥、API key 和原始敏感响应只能保存在进程内，不得打印或写入 trace、日志、attestation。
