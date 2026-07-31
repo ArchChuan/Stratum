@@ -261,14 +261,17 @@ require_file "${DEMO_LOCAL_VALUES}" 'ginMode:[[:space:]]*"debug"' 'local demo Gi
 reject_file "${DEMO_LOCAL_VALUES}" 'http://([0-9]{1,3}\.){3}[0-9]{1,3}' \
     'local demo contains a remote IP URL'
 
-require_file "${REMOTE_HTTP_VALUES}" 'secureCookies:[[:space:]]*"false"' \
-    'remote HTTP profile disables secure cookies'
-require_file "${REMOTE_HTTP_VALUES}" 'router\.entrypoints:[[:space:]]*"web,web2,websecure"' \
-    'remote HTTP profile uses the Traefik web, public web2, and TLS websecure entrypoints'
-require_file "${REMOTE_HTTP_VALUES}" 'host:[[:space:]]*""' 'remote HTTP profile uses a hostless Ingress'
-require_file "${REMOTE_HTTP_VALUES}" 'tls:[[:space:]]*\[\]' 'remote HTTP profile disables TLS'
+require_file "${REMOTE_HTTP_VALUES}" 'secureCookies:[[:space:]]*"true"' \
+    'remote HTTPS profile enables secure cookies'
+require_file "${REMOTE_HTTP_VALUES}" 'router\.entrypoints:[[:space:]]*"websecure"' \
+    'remote HTTPS profile uses only the TLS websecure entrypoint'
+require_file "${REMOTE_HTTP_VALUES}" 'router\.tls:[[:space:]]*"true"' \
+    'remote HTTPS profile enables Traefik router TLS'
+require_file "${REMOTE_HTTP_VALUES}" 'host:[[:space:]]*""' 'remote HTTPS profile uses a hostless Ingress'
+require_file "${REMOTE_HTTP_VALUES}" 'secretName:[[:space:]]*stratum-ingress-tls' \
+    'remote HTTPS profile references the stratum-ingress-tls Secret'
 reject_file "${REMOTE_HTTP_VALUES}" 'frontendUrl:|githubCallbackUrl:|http://([0-9]{1,3}\.){3}[0-9]{1,3}' \
-    'remote HTTP profile hard-codes its public address'
+    'remote HTTPS profile hard-codes its public address'
 
 require_file "${HELM_CONFIGMAP}" 'GIN_MODE:.*config\.ginMode' 'Gin mode ConfigMap entry'
 require_file "${HELM_DEPLOYMENT}" 'name:[[:space:]]*APP_ENV' 'application environment injection'
@@ -282,13 +285,12 @@ require '--set-string[[:space:]]+config\.githubCallbackUrl="\$PUBLIC_BASE_URL/ap
     'public OAuth callback URL injection'
 require 'kubectl get ingress -n stratum -o wide' 'deployed Ingress diagnostics'
 require 'kubectl get endpoints stratum stratum-frontend -n stratum' 'service endpoint diagnostics'
-require 'ss -H -ltnp.*sport = :80.*sport = :443.*sport = :6879' \
-    'host HTTP edge listener diagnostics'
-require 'http://127\.0\.0\.1/api/health' 'host-local Traefik health diagnostic'
-require '--header[[:space:]]+"Host:[[:space:]]*\$PUBLIC_AUTHORITY"[[:space:]]+http://127\.0\.0\.1/api/health' \
-    'host-local port 80 public Host diagnostic'
-require '--header[[:space:]]+"Host:[[:space:]]*\$PUBLIC_AUTHORITY"[[:space:]]+http://127\.0\.0\.1:6879/api/health' \
-    'host-local port 6879 public Host diagnostic'
+require 'ss -H -ltnp.*sport = :443.*sport = :8443' \
+    'host HTTPS edge listener diagnostics'
+require 'https://127\.0\.0\.1:8443/api/health' 'host-local Traefik HTTPS health diagnostic'
+require '--insecure' 'host-local HTTPS diagnostics tolerate self-signed certificates'
+require '--header[[:space:]]+"Host:[[:space:]]*\$PUBLIC_AUTHORITY"[[:space:]]+https://127\.0\.0\.1:8443/api/health' \
+    'host-local port 8443 public Host diagnostic'
 require 'kubectl get service traefik -n kube-system -o wide' 'Traefik service exposure diagnostics'
 require 'kubectl get service traefik -n kube-system -o json' 'Traefik service port mapping diagnostics'
 require 'kubectl get deployment traefik -n kube-system -o json' 'Traefik entrypoint argument diagnostics'
