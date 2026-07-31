@@ -247,6 +247,14 @@ spec:
                   name: {{ .Values.secrets.name | quote }}
                   key: GLOBAL_AGENT_SYSTEM_PROMPT
                   optional: true
+            - name: STRATUM_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: STRATUM_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
             {{- if .Values.platformMCP.enabled }}
             - name: INTERNAL_API_PORT
               value: "8443"

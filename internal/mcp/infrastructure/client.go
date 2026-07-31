@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -38,6 +39,7 @@ type MCPClient interface {
 	ListTools(ctx context.Context) ([]*MCPTool, error)
 	ListResources(ctx context.Context) ([]*MCPResource, error)
 	GetServerInfo() *MCPServerInfo
+	LastActivity() time.Time
 }
 
 type InvocationCredentialProvider interface {
@@ -59,14 +61,17 @@ type BaseClient struct {
 	logger      *zap.Logger
 	reqID       atomic.Int32
 	// 传输相关字段
-	cmd         *exec.Cmd
-	stdin       io.WriteCloser
-	stdout      io.ReadCloser
-	httpClient  *http.Client
-	sessionID   string
-	credentials InvocationCredentialProvider
-	transport   ManagedHTTPTransportProvider
-	providerMu  sync.RWMutex
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	stdout     io.ReadCloser
+	stdinLock  sync.Mutex // serialises writes to stdin
+	httpClient *http.Client
+	sessionID  string
+	// lastActivity records the wall time of the most recent CallTool / ListTools / ListResources.
+	lastActivity time.Time
+	credentials  InvocationCredentialProvider
+	transport    ManagedHTTPTransportProvider
+	providerMu   sync.RWMutex
 	// negotiatedVersion is set only after a valid initialize response.
 	negotiatedVersion string
 }
@@ -86,6 +91,7 @@ func (c *BaseClient) SetManagedHTTPTransportProvider(provider ManagedHTTPTranspo
 func (c *BaseClient) nextID() int { return int(c.reqID.Add(1)) }
 
 func NewBaseClient(config *MCPServerConfig, logger *zap.Logger) *BaseClient {
+	now := time.Now()
 	return &BaseClient{
 		config: config,
 		serverInfo: &MCPServerInfo{
@@ -95,9 +101,23 @@ func NewBaseClient(config *MCPServerConfig, logger *zap.Logger) *BaseClient {
 			Transport: config.Transport,
 			Status:    "disconnected",
 		},
-		logger:      logger.Named("mcp.client").With(zap.String("server_id", config.ID)),
-		lastHealthy: time.Now(),
+		logger:       logger.Named("mcp.client").With(zap.String("server_id", config.ID)),
+		lastHealthy:  now,
+		lastActivity: now,
 	}
+}
+
+// LastActivity returns the wall time of the most recent tool/resource interaction.
+func (c *BaseClient) LastActivity() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lastActivity
+}
+
+func (c *BaseClient) markActivity() {
+	c.mu.Lock()
+	c.lastActivity = time.Now()
+	c.mu.Unlock()
 }
 
 // Connect 连接到 MCP 服务器
@@ -170,14 +190,21 @@ func (c *BaseClient) Disconnect(ctx context.Context) error {
 	}
 	if c.cmd != nil && c.cmd.Process != nil {
 		command := c.cmd
-		if err := command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			result = errors.Join(result, fmt.Errorf("stop MCP process: %w", err))
+		done := make(chan struct{})
+		go func() {
+			_ = command.Wait()
+			close(done)
+		}()
+		// Kill process group: SIGTERM first, then SIGKILL after grace period.
+		pgid := -command.Process.Pid
+		if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			result = errors.Join(result, fmt.Errorf("SIGTERM MCP process group: %w", err))
 		}
-		if err := command.Wait(); err != nil {
-			var exitErr *exec.ExitError
-			if !errors.As(err, &exitErr) {
-				result = errors.Join(result, fmt.Errorf("wait MCP process: %w", err))
-			}
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			_ = syscall.Kill(pgid, syscall.SIGKILL)
+			<-done
 		}
 		c.cmd = nil
 	}
@@ -228,6 +255,7 @@ func (c *BaseClient) CallTool(ctx context.Context, toolName string, input interf
 		c.logger.Error("failed to call tool", zap.String("tool", toolName), zap.Error(err))
 		return nil, err
 	}
+	c.markActivity()
 
 	return resp.Result, nil
 }
@@ -262,6 +290,7 @@ func (c *BaseClient) ListTools(ctx context.Context) ([]*MCPTool, error) {
 	c.mu.Lock()
 	c.serverInfo.Tools = tools
 	c.mu.Unlock()
+	c.markActivity()
 
 	return tools, nil
 }
@@ -296,6 +325,7 @@ func (c *BaseClient) ListResources(ctx context.Context) ([]*MCPResource, error) 
 	c.mu.Lock()
 	c.serverInfo.Resources = resources
 	c.mu.Unlock()
+	c.markActivity()
 
 	return resources, nil
 }
@@ -315,6 +345,7 @@ func (c *BaseClient) connectStdio(ctx context.Context) error {
 	}
 
 	cmd := exec.CommandContext(ctx, c.config.Command, c.config.Args...) //nolint:gosec
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = os.Environ()
 	for k, v := range c.config.Env {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
@@ -340,6 +371,8 @@ func (c *BaseClient) connectStdio(ctx context.Context) error {
 	c.cmd = cmd
 	c.stdin = stdin
 	c.stdout = stdout
+	c.serverInfo.Pid = cmd.Process.Pid
+	c.serverInfo.StartedAt = time.Now()
 
 	c.logger.Info("stdio connection established", zap.String("command", c.config.Command))
 	return nil
@@ -513,29 +546,48 @@ func (c *BaseClient) sendStdioRequest(ctx context.Context, req *MCPRequest) (*MC
 		return nil, fmt.Errorf("stdio connection not established")
 	}
 
-	// 发送请求
 	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	if _, err := c.stdin.Write(append(data, '\n')); err != nil {
-		return nil, fmt.Errorf("failed to write to stdin: %w", err)
+	// Serialise writes across concurrent goroutines.
+	c.stdinLock.Lock()
+	_, writeErr := c.stdin.Write(append(data, '\n'))
+	c.stdinLock.Unlock()
+	if writeErr != nil {
+		return nil, fmt.Errorf("failed to write to stdin: %w", writeErr)
 	}
 
-	// 读取响应
-	reader := bufio.NewReader(c.stdout)
-	line, err := reader.ReadBytes('\n')
-	if err != nil {
-		return nil, fmt.Errorf("failed to read from stdout: %w", err)
+	// Read response in a goroutine so ctx cancellation is honoured.
+	// Limit reads to 8 MiB to prevent memory exhaustion.
+	type readResult struct {
+		resp *MCPResponse
+		err  error
 	}
+	ch := make(chan readResult, 1)
+	go func() {
+		limitReader := io.LimitReader(c.stdout, 8<<20)
+		reader := bufio.NewReader(limitReader)
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			ch <- readResult{err: fmt.Errorf("failed to read from stdout: %w", err)}
+			return
+		}
+		var resp MCPResponse
+		if err := json.Unmarshal(bytes.TrimSpace(line), &resp); err != nil {
+			ch <- readResult{err: fmt.Errorf("failed to unmarshal response: %w", err)}
+			return
+		}
+		ch <- readResult{resp: &resp}
+	}()
 
-	var resp MCPResponse
-	if err := json.Unmarshal(bytes.TrimSpace(line), &resp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-ch:
+		return r.resp, r.err
 	}
-
-	return &resp, nil
 }
 
 func (c *BaseClient) sendHTTPRequest(ctx context.Context, req *MCPRequest) (*MCPResponse, error) {

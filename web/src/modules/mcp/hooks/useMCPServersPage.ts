@@ -2,20 +2,25 @@ import { message } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 
 import { mcpApi } from '../api/mcp.api';
-import type { MCPServer } from '../model/mcp';
+import type { MCPQuota, MCPServer } from '../model/mcp';
 
 import { extractErrorMessage } from '@/shared/lib';
 
 export const useMCPServersPage = () => {
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [loading, setLoading] = useState(false);
+  const [quota, setQuota] = useState<MCPQuota | null>(null);
   const [detailServer, setDetailServer] = useState<MCPServer | null>(null);
 
   const fetchServers = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await mcpApi.list();
+      const [list, q] = await Promise.all([
+        mcpApi.list(),
+        mcpApi.quota().catch(() => null),
+      ]);
       setServers(list);
+      setQuota(q);
       return { ok: true as const };
     } catch {
       return { ok: false as const };
@@ -85,6 +90,7 @@ export const useMCPServersPage = () => {
   return {
     servers,
     loading,
+    quota,
     detailServer,
     setDetailServer,
     fetchServers: refreshServers,

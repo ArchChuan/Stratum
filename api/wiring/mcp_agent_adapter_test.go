@@ -56,7 +56,7 @@ func TestPlatformMCPInvocationCredentialsFailClosedWithoutExecutionIdentity(t *t
 
 func TestMCPAgentToolAdapterKeepsStableExposedIDAndRawToolName(t *testing.T) {
 	logger := zap.NewNop()
-	manager := mcp.NewClientManager(logger, nil, nil)
+	manager := mcp.NewClientManager(logger, nil, nil, "")
 	registry := mcp.NewMCPToolRegistry(manager, logger)
 	catalog := mcp.NewMCPToolCatalog("orders", manager, logger)
 	catalog.AddToolForTest(&mcp.MCPToolHandle{
@@ -94,6 +94,7 @@ func (c failingAgentMCPClient) ListResources(context.Context) ([]*mcp.MCPResourc
 	return nil, nil
 }
 func (c failingAgentMCPClient) GetServerInfo() *mcp.MCPServerInfo { return &mcp.MCPServerInfo{} }
+func (failingAgentMCPClient) LastActivity() time.Time             { return time.Now() }
 
 func TestAgentMCPExecutorClassifiesMissingClientAsNotSent(t *testing.T) {
 	_, err := (agentMCPExecutor{clients: stubMCPClientResolver{}}).ExecuteMCPTool(

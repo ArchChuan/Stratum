@@ -224,7 +224,7 @@ func TestMCPIntegration(t *testing.T) {
 	defer func() { _ = logger.Sync() }()
 
 	// 创建客户端管理器
-	manager := NewClientManager(logger, nil, nil)
+	manager := NewClientManager(logger, nil, nil, "")
 
 	// 创建技能注册表
 	registry := NewMCPToolRegistry(manager, logger)
@@ -361,7 +361,7 @@ func TestMCPToolExecutionFlow(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	defer func() { _ = logger.Sync() }()
 
-	manager := NewClientManager(logger, nil, nil)
+	manager := NewClientManager(logger, nil, nil, "")
 
 	// 创建测试工具
 	tool := &MCPTool{

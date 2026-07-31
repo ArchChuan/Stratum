@@ -38,7 +38,7 @@ type PrometheusMetrics struct {
 	resourceProposalsTotal            *prometheus.CounterVec
 	resourceProposalReviewDuration    *prometheus.HistogramVec
 	resourceProposalDraftEdits        *prometheus.HistogramVec
-	platformMCP                       platformMCPMetrics
+	platformMCP                       *platformMCPMetrics
 
 	// LLM – core
 	llmRequestsTotal   *prometheus.CounterVec
@@ -217,7 +217,7 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 			},
 			[]string{"kind", "operation"},
 		),
-		platformMCP: newPlatformMCPMetrics(factory, latencyBuckets),
+		platformMCP: nil, // initialized via InitPlatformMCPMetrics
 
 		// LLM – core
 		llmRequestsTotal: factory.NewCounterVec(
@@ -370,38 +370,87 @@ func (m *PrometheusMetrics) RecordResourceProposalDraftEdits(kind, operation str
 	m.resourceProposalDraftEdits.WithLabelValues(kind, operation).Observe(float64(count))
 }
 
+// InitPlatformMCPMetrics registers platform MCP metrics with the provider's
+// registry. Callers that do not serve the Platform MCP protocol (e.g. the main
+// stratum backend) must not call this so that unset metrics do not trigger false
+// Prometheus alerts.
+func (m *PrometheusMetrics) InitPlatformMCPMetrics() {
+	metrics := newPlatformMCPMetrics(promauto.With(m.reg), latencyBuckets)
+	m.platformMCP = &metrics
+}
+
 func (m *PrometheusMetrics) IncPlatformMCPRequest(toolClass, riskLevel, outcome string) {
+	if m.platformMCP == nil {
+		return
+	}
 	m.platformMCP.requests.WithLabelValues(toolClass, riskLevel, outcome).Inc()
 }
 
 func (m *PrometheusMetrics) RecordPlatformMCPRequestDuration(toolClass, outcome string, duration float64) {
+	if m.platformMCP == nil {
+		return
+	}
 	m.platformMCP.requestDuration.WithLabelValues(toolClass, outcome).Observe(duration)
 }
 
-func (m *PrometheusMetrics) IncPlatformMCPRequestsInFlight() { m.platformMCP.requestsInFlight.Inc() }
-func (m *PrometheusMetrics) DecPlatformMCPRequestsInFlight() { m.platformMCP.requestsInFlight.Dec() }
+func (m *PrometheusMetrics) IncPlatformMCPRequestsInFlight() {
+	if m.platformMCP == nil {
+		return
+	}
+	m.platformMCP.requestsInFlight.Inc()
+}
+func (m *PrometheusMetrics) DecPlatformMCPRequestsInFlight() {
+	if m.platformMCP == nil {
+		return
+	}
+	m.platformMCP.requestsInFlight.Dec()
+}
 func (m *PrometheusMetrics) IncPlatformMCPAuthDenial(statusClass string) {
+	if m.platformMCP == nil {
+		return
+	}
 	m.platformMCP.authDenials.WithLabelValues(statusClass).Inc()
 }
 func (m *PrometheusMetrics) IncPlatformMCPTokenExchange(outcome string) {
+	if m.platformMCP == nil {
+		return
+	}
 	m.platformMCP.tokenExchanges.WithLabelValues(outcome).Inc()
 }
 func (m *PrometheusMetrics) IncPlatformMCPReplayDenial(statusClass string) {
+	if m.platformMCP == nil {
+		return
+	}
 	m.platformMCP.replayDenials.WithLabelValues(statusClass).Inc()
 }
 func (m *PrometheusMetrics) IncPlatformMCPBackendRequest(toolClass, statusClass string) {
+	if m.platformMCP == nil {
+		return
+	}
 	m.platformMCP.backendRequests.WithLabelValues(toolClass, statusClass).Inc()
 }
 func (m *PrometheusMetrics) IncPlatformMCPUnknownOutcome(toolClass string) {
+	if m.platformMCP == nil {
+		return
+	}
 	m.platformMCP.unknownOutcomes.WithLabelValues(toolClass).Inc()
 }
 func (m *PrometheusMetrics) IncPlatformMCPContractMismatch(toolClass string) {
+	if m.platformMCP == nil {
+		return
+	}
 	m.platformMCP.contractMismatches.WithLabelValues(toolClass).Inc()
 }
 func (m *PrometheusMetrics) SetPlatformMCPCertificateExpiry(seconds float64) {
+	if m.platformMCP == nil {
+		return
+	}
 	m.platformMCP.certificateExpiry.Set(seconds)
 }
 func (m *PrometheusMetrics) SetPlatformMCPCertificateRotation(statusClass string, value float64) {
+	if m.platformMCP == nil {
+		return
+	}
 	m.platformMCP.certificateRotation.WithLabelValues(statusClass).Set(value)
 }
 

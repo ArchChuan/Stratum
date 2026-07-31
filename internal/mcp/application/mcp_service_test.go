@@ -44,6 +44,11 @@ func (f *lifecycleManagerFake) Delete(_ context.Context, serverID string) error 
 func (f *lifecycleManagerFake) GetServerConfig(context.Context, string) (*domain.ServerConfig, error) {
 	return f.stored, nil
 }
+func (f *lifecycleManagerFake) HandleForwardedToolCall(
+	context.Context, string, string, string, map[string]any,
+) (domain.ForwardedCallResult, error) {
+	return domain.ForwardedCallResult{}, nil
+}
 
 func TestPlatformManagedServerMutationsAreRejectedBeforeLifecycleChange(t *testing.T) {
 	t.Parallel()
@@ -109,6 +114,8 @@ func (f *lifecycleManagerFake) ListResources(context.Context, string) ([]*domain
 }
 func (f *lifecycleManagerFake) GetServerInfo(context.Context, string) *domain.ServerInfo { return nil }
 func (f *lifecycleManagerFake) GetAllServerInfo(context.Context) []*domain.ServerInfo    { return nil }
+func (f *lifecycleManagerFake) RemoveTenant(context.Context, string) error               { return nil }
+func (f *lifecycleManagerFake) Quota(context.Context) domain.Quota                       { return domain.Quota{} }
 
 func TestDeleteServerUnregistersDiscoveredTools(t *testing.T) {
 	registry := &lifecycleRegistryFake{}

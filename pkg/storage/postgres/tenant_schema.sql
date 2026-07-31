@@ -1087,6 +1087,8 @@ ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS version TEXT NOT NULL DEFAULT '
 ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS headers JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS auth_config JSONB NOT NULL DEFAULT '{}';
 ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS retry_config JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS owner_node TEXT;
+ALTER TABLE mcp_configs ADD COLUMN IF NOT EXISTS owner_heartbeat TIMESTAMPTZ;
 
 -- chat_messages: rename role 'agent' → 'assistant' (LLM protocol alignment).
 -- Idempotent: drop old check, backfill rows, re-add with new constraint.

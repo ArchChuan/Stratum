@@ -61,7 +61,7 @@ func TestSystemAssistantProposalRealServices(t *testing.T) {
 	mcpServer.SetTools([]testserver.Tool{{
 		Name: "read_verified_docs", InputSchema: map[string]any{"type": "object"},
 	}})
-	manager := mcpinfra.NewClientManager(zap.NewNop(), nil, pool)
+	manager := mcpinfra.NewClientManager(zap.NewNop(), nil, pool, "")
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	registry := mcpinfra.NewMCPToolRegistry(manager, zap.NewNop())
 	mcpSvc := mcpapp.NewMCPService(

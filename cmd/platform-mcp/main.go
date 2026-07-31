@@ -50,6 +50,7 @@ func run(logger *zap.Logger) error {
 
 func servePlatformMCP(ctx context.Context, cfg runtimeConfig, logger *zap.Logger) error {
 	metrics := observability.NewPrometheusMetrics(logger)
+	metrics.InitPlatformMCPMetrics()
 	reloader := infrastructure.NewTLSReloader(cfg.tlsFiles)
 	if err := reloader.Reload(); err != nil {
 		return fmt.Errorf("initialize Platform MCP TLS: %w", err)
