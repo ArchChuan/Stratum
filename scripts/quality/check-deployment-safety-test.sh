@@ -68,13 +68,15 @@ require '^  build-feishu-adapter:' 'parallel Feishu adapter image build job'
 require '^  build-platform-mcp:' 'parallel platform MCP image build job'
 require 'needs:[[:space:]]*\[build-backend,[[:space:]]*build-frontend,[[:space:]]*build-feishu-adapter,[[:space:]]*build-platform-mcp\]' \
     'image build fan-in dependencies'
-for job_scope in build-backend:backend build-frontend:frontend-v2 build-feishu-adapter:feishu-alert-adapter build-platform-mcp:platform-mcp; do
+for job_scope in build-backend:backend build-feishu-adapter:feishu-alert-adapter build-platform-mcp:platform-mcp; do
     job=${job_scope%%:*}
     scope=${job_scope#*:}
     require_job "${job}" '^    needs:[[:space:]]*test$' "${job} test dependency"
     require_job "${job}" "cache-from:[[:space:]]*type=gha,scope=${scope}" "${scope} cache import scope"
     require_job "${job}" "cache-to:[[:space:]]*type=gha,scope=${scope},mode=max" "${scope} cache export scope"
 done
+require_job build-frontend '^    needs:[[:space:]]*test$' 'frontend test dependency'
+require_job build-frontend 'no-cache:[[:space:]]*true' 'frontend GHA cache disabled (BuildKit bug)'
 require 'digest:[[:space:]]*\$\{\{ steps\.adapter-build\.outputs\.digest \}\}' \
     'adapter build digest job output'
 require 'adapter-digest:[[:space:]]*\$\{\{ needs\.build-feishu-adapter\.outputs\.digest \}\}' \
