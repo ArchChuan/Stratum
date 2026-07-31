@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/byteBuilderX/stratum/internal/platform/e2erunscope"
+	"golang.org/x/sys/unix"
 )
 
 func main() {
@@ -120,7 +121,7 @@ func runReap(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	ctx := context.Background()
-	removed, opErr := e2erunscope.ReapDatabases(ctx, e2erunscope.Registry{Root: *root}, admin, time.Now().UTC(), func(int, string) bool { return false })
+	removed, opErr := e2erunscope.ReapDatabases(ctx, e2erunscope.Registry{Root: *root}, admin, time.Now().UTC(), processAlive)
 	if err := errors.Join(opErr, admin.Close(ctx)); err != nil {
 		return err
 	}
@@ -147,6 +148,14 @@ func openAdmin(envName string) (e2erunscope.DatabaseAdmin, error) {
 		return nil, errors.New("database DSN environment variable is empty")
 	}
 	return e2erunscope.NewPostgresAdmin(context.Background(), dsn)
+}
+
+func processAlive(pid int, repository string) bool {
+	if pid <= 0 || unix.Kill(pid, 0) != nil {
+		return false
+	}
+	cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
+	return err != nil || filepath.Clean(cwd) == filepath.Clean(repository)
 }
 
 func readScope(path string) (e2erunscope.Scope, error) {

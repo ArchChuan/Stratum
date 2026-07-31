@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const databaseOperationTimeout = 15 * time.Second
+
 type DatabaseAdmin interface {
 	Exec(context.Context, string) error
 	Exists(context.Context, string) (bool, error)
@@ -22,9 +24,11 @@ func NewPostgresAdmin(ctx context.Context, baseDSN string) (DatabaseAdmin, error
 	if err != nil {
 		return nil, err
 	}
-	conn, err := pgx.Connect(ctx, maintenance)
+	connectCtx, cancel := context.WithTimeout(ctx, databaseOperationTimeout)
+	defer cancel()
+	conn, err := pgx.Connect(connectCtx, maintenance)
 	if err != nil {
-		return nil, fmt.Errorf("connect database admin: %w", err)
+		return nil, errors.New("connect database admin failed")
 	}
 	return &pgxDatabaseAdmin{conn: conn}, nil
 }
@@ -52,6 +56,8 @@ func validateDatabaseName(name string) error {
 }
 
 func CreateDatabase(ctx context.Context, admin DatabaseAdmin, name string) error {
+	ctx, cancel := context.WithTimeout(ctx, databaseOperationTimeout)
+	defer cancel()
 	if err := validateDatabaseName(name); err != nil {
 		return err
 	}
@@ -69,6 +75,8 @@ func CreateDatabase(ctx context.Context, admin DatabaseAdmin, name string) error
 }
 
 func DropDatabase(ctx context.Context, admin DatabaseAdmin, name string) error {
+	ctx, cancel := context.WithTimeout(ctx, databaseOperationTimeout)
+	defer cancel()
 	if err := validateDatabaseName(name); err != nil {
 		return err
 	}
