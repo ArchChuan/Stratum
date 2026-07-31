@@ -2,7 +2,7 @@ app:
   replicaCount: 2
 
 config:
-  secureCookies: "false"
+  secureCookies: "true"
 
 autoscaling:
   enabled: true
@@ -17,11 +17,13 @@ ingress:
   enabled: true
   className: "traefik"
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: "web,web2,websecure"
+    traefik.ingress.kubernetes.io/router.entrypoints: "websecure"
+    traefik.ingress.kubernetes.io/router.tls: "true"
   hosts:
     - host: ""
       paths:
         - path: /
           pathType: Prefix
           service: frontend
-  tls: []
+  tls:
+    - secretName: stratum-ingress-tls
