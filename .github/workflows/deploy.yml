@@ -416,7 +416,6 @@ jobs:
           probe_status "host-local default Host" https://127.0.0.1:8443/api/health
           probe_status "host-local port 8443 public Host" \
             --header "Host: $PUBLIC_AUTHORITY" https://127.0.0.1:8443/api/health
-          REMOTE
           echo "=== Traefik service ==="
           kubectl get service traefik -n kube-system -o wide
           kubectl get service traefik -n kube-system -o json | jq -r \
@@ -427,6 +426,7 @@ jobs:
           echo "=== Traefik ServiceLB pods ==="
           kubectl get pods -n kube-system \
             -l svccontroller.k3s.cattle.io/svcname=traefik -o wide
+          REMOTE
 
       - name: Apply namespace and secrets
         if: steps.candidate.outputs.current == 'true'
