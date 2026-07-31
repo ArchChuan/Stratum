@@ -21,6 +21,7 @@ import (
 	platformpersistence "github.com/byteBuilderX/stratum/internal/platform/infrastructure/persistence"
 	pkgcrypto "github.com/byteBuilderX/stratum/pkg/crypto"
 	"github.com/byteBuilderX/stratum/pkg/observability"
+	"github.com/byteBuilderX/stratum/pkg/storage/filestore"
 )
 
 // Platform groups cross-cutting application services that other contexts
@@ -39,6 +40,7 @@ type Platform struct {
 	OnboardSvc         *application.OnboardService
 	SchemaProvisioner  *iampersistence.AdminTenantRepo
 	ModelRegistry      *llmgateway.ModelRegistry
+	AvatarStore        *filestore.AvatarStore
 	AESKey             [32]byte
 	Metrics            *observability.PrometheusMetrics
 	DashboardService   *platformapp.DashboardService
@@ -54,6 +56,15 @@ func (c *Container) buildPlatform(_ context.Context) error {
 	}
 	if db := c.dbOrNil(); db != nil {
 		p.DashboardService = platformapp.NewDashboardService(platformpersistence.NewDashboardRepository(db))
+	}
+
+	if c.Config.AvatarDir != "" {
+		store, err := filestore.NewAvatarStore(c.Config.AvatarDir)
+		if err != nil {
+			c.Logger.Warn("avatar store unavailable, avatar upload disabled", zap.Error(err))
+		} else {
+			p.AvatarStore = store
+		}
 	}
 
 	production := os.Getenv("APP_ENV") == "production"

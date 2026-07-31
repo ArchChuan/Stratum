@@ -143,6 +143,7 @@ var errorStatusTable = map[error]int{
 	agentdomain.ErrProposalInvalid:                http.StatusBadRequest,
 	agentdomain.ErrInvalidSystemAssistantModel:    http.StatusBadRequest,
 	iamdomain.ErrDefaultTenantDelete:              http.StatusBadRequest,
+	iamdomain.ErrUsernameTaken:                    http.StatusConflict,
 	knowledgedomain.ErrInvalidEmbeddingModel:      http.StatusBadRequest,
 	knowledgedomain.ErrInvalidQueryMode:           http.StatusBadRequest,
 	knowledgedomain.ErrEmbeddingModelImmutable:    http.StatusBadRequest,
