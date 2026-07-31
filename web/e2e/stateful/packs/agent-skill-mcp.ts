@@ -4,6 +4,7 @@ import type { QueryResultRow } from 'pg';
 import type { BrowserActor } from '../core/actors';
 import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool } from '../core/database';
 import type { EvidenceRecord } from '../core/evidence';
+import { openAgentCreation } from '../core/navigation';
 
 interface CrossPackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string }
 const waitForMutation = (page: Page, path: string, method: string) => page.waitForResponse((response) => (
@@ -95,7 +96,7 @@ export const executeAgentSkillMCPPack = async ({
       new URL(response.url()).pathname === `/mcp/servers/${serverID}/tools`
       && response.request().method() === 'GET'
     ));
-    await page.goto(`${webURL}/agents/create`);
+    await openAgentCreation(page);
     const [skillsListed, toolsListed] = await Promise.all([skillsListResponse, toolOptionsResponse]);
     expect(skillsListed.status()).toBe(200);
     const skillsBody = JSON.stringify(await skillsListed.json());
