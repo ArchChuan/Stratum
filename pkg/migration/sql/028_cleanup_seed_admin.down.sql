@@ -1,0 +1,1 @@
+-- 不可逆操作，不提供回滚。如需恢复，手动 INSERT INTO public.users。
