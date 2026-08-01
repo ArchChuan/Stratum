@@ -1,26 +1,26 @@
-# Verification CI Authority
+# Verification Authorities
 
-The repository's `accepted` status is issued only after the completion report
-verifies a Sigstore bundle itself. Verification pins the GitHub OIDC issuer,
-repository, signer workflow, source commit, and source ref. Caller-provided CI
-flags and `verified` JSON fields are not trust boundaries. Local evidence and
-agent reviews remain diagnostic and produce `incomplete` reports.
+Stratum uses three independent authorities instead of one overloaded `accepted` status.
 
-Repository administrators must protect these GitHub environments with required
-reviewers who are not implementation authors:
+## Local browser authority
 
-- `specification-review`
-- `code-quality-review`
-- `release-evidence-review`
-- `production-verification`
+`make test-verify-before-pr` runs risk-selected headless browser verification on a clean commit. Its local report binds
+the tested commit, verification manifest digest, attestation v2 capability results, and cleanup outcome. This report is
+a developer audit assertion. GitHub does not download it, sign it, or treat it as a required status check.
 
-The R3 workflow consumes commit-bound review receipts from the first two
-environments and signs evidence only after those jobs complete. The R4 workflow
-additionally requires release evidence approval, a 3600-second release soak,
-and read-only production health verification. It accepts a successful Build and
-Deploy run ID, verifies that workflow's signed deployment receipt, and obtains
-immutable application image digests from the images actually recorded on the
-cluster. It does not accept a manually entered artifact digest.
+## CI merge authority
 
-Environment protection and branch protection are external control-plane
-prerequisites; a repository workflow cannot grant its own approval.
+GitHub Actions decides whether a PR may merge through real parallel jobs for static analysis, unit tests, integration
+tests, contract goldens, security checks, and builds. Browser tools are absent from this workflow. Every
+`ci_checks` identifier in `.test/verification.yaml` maps to a workflow job, and the compatibility aggregate fails unless
+every required dependency result is `success`.
+
+## Release pipeline authority
+
+For a `workflow_run` deployment, the candidate is `github.event.workflow_run.head_sha`. It must be a successful CI run
+for `main` and must still equal the current `main` tip before any image is built. All checkouts and image tags use this
+candidate. Deployment pins registry digests and records the actual backend, frontend, Platform MCP, and adapter image
+digests observed from the cluster together with migration, health, and rollback results.
+
+The release record may be attested by GitHub because it is produced inside the release control plane. That attestation
+does not retroactively make local browser evidence a GitHub trust boundary.

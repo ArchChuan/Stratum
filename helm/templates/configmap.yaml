@@ -32,3 +32,4 @@ data:
   FRONTEND_URL: {{ .Values.config.frontendUrl | quote }}
   GITHUB_CALLBACK_URL: {{ .Values.config.githubCallbackUrl | quote }}
   SECURE_COOKIES: {{ .Values.config.secureCookies | quote }}
+  GLOBAL_ADMIN_GITHUB_LOGIN: {{ .Values.config.globalAdminGitHubLogin | quote }}

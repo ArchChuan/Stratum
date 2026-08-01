@@ -8,7 +8,7 @@
 	docker-start \
 	k8s-deploy k8s-delete k8s-logs \
 	helm-install helm-upgrade helm-uninstall helm-diff helm-lint \
-	migration-guardrails e2e-attestation-check test-verify-plan test-verify-local test-verify-ci \
+	migration-guardrails e2e-attestation-check test-verify-plan test-verify-fast test-verify-before-pr test-verify-local test-verify-ci \
 	test-verify-attestation test-verify-report ci-backend ci-frontend ci-docker \
 	cd-deploy-dev cd-deploy-staging cd-deploy-prod cd-validate ci-cd-full \
 	agent-instructions agent-instructions-check \
@@ -19,7 +19,7 @@
 
 .PHONY: e2e-evaluation-evolution e2e-system-short e2e-system-soak e2e-system-release-soak
 .PHONY: monitoring-config-test
-.PHONY: verification-manifest-test verification-schemas-test test-verification-entrypoints-test
+.PHONY: verification-manifest-test verification-schemas-test verification-ci-contract-test test-verification-entrypoints-test
 
 # ─── 全局变量（CI/CD 可自动覆盖）────────────────────────────────────────────
 BE_IMAGE    ?= clawhermes-ai-go
@@ -192,6 +192,7 @@ arch-guardrails:
 
 deployment-safety-test:
 	bash scripts/quality/check-deployment-safety-test.sh
+	bash scripts/quality/release-verification-test.sh
 	bash scripts/quality/check-helm-image-rendering-test.sh
 
 # ─── Agent 指令：生成入口与一致性门禁 ────────────────────────────────────
@@ -226,6 +227,9 @@ verification-manifest-test:
 verification-schemas-test:
 	bash scripts/quality/verification-schemas-test.sh
 
+verification-ci-contract-test:
+	bash scripts/quality/verification-ci-contract-test.sh
+
 E2E_REQUIRED_MODE ?= short
 E2E_REQUIRED_PROFILE ?=
 E2E_ATTESTATION_DIR ?= test/e2e/attestations
@@ -236,9 +240,17 @@ e2e-attestation-check:
 
 test-verification-entrypoints-test:
 	bash scripts/quality/test-verification-entrypoints-test.sh
+	bash scripts/quality/run-planned-checks-test.sh
+	bash scripts/quality/test-verify-before-pr-test.sh
 
 test-verify-plan: verification-manifest-test verification-schemas-test
 	bash scripts/quality/test-verification-plan.sh
+
+test-verify-fast: test-verify-plan
+	bash scripts/quality/run-planned-checks.sh
+
+test-verify-before-pr:
+	bash scripts/quality/test-verify-before-pr.sh
 
 test-verify-local: test-verify-plan
 	bash scripts/quality/system-e2e-instructions-test.sh
@@ -250,7 +262,7 @@ test-verify-local: test-verify-plan
 test-verify-attestation: e2e-attestation-check
 
 test-verify-report:
-	bash scripts/quality/test-verification-report.sh
+	bash scripts/quality/check-local-verification-report.sh
 
 test-verify-ci: test-verify-local test-verify-report
 

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stratum.local/schemas/local-verification.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "status",
+    "tested_commit",
+    "manifest_digest",
+    "risk_level",
+    "mode",
+    "source_clean",
+    "capabilities",
+    "cleanup",
+    "attestation_path"
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "status": { "enum": ["passed", "failed", "not_run", "stale", "infra_failed"] },
+    "tested_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "manifest_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "risk_level": { "enum": ["R0", "R1", "R2", "R3", "R4"] },
+    "mode": { "enum": ["none", "short", "soak", "release-soak"] },
+    "source_clean": { "type": "boolean" },
+    "capabilities": { "$ref": "#/$defs/capabilities" },
+    "cleanup": { "$ref": "#/$defs/cleanup" },
+    "attestation_path": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "source_clean": { "const": true },
+          "capabilities": {
+            "properties": {
+              "failed": { "const": 0 },
+              "blocked": { "const": 0 },
+              "skipped": { "const": 0 },
+              "unreconciled": { "const": 0 }
+            }
+          },
+          "cleanup": {
+            "properties": {
+              "complete": { "const": true },
+              "residual_entities": { "const": 0 }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "failed", "blocked", "skipped", "unreconciled"],
+      "properties": {
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "blocked": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "unreconciled": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["complete", "residual_entities"],
+      "properties": {
+        "complete": { "type": "boolean" },
+        "residual_entities": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
