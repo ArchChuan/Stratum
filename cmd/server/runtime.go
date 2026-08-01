@@ -17,6 +17,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/wiring"
 	"github.com/byteBuilderX/stratum/config"
 	iamapp "github.com/byteBuilderX/stratum/internal/iam/application"
+	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	harnesspkg "github.com/byteBuilderX/stratum/internal/platform/harness"
 	"github.com/byteBuilderX/stratum/pkg/constants"
 	"github.com/byteBuilderX/stratum/pkg/observability"
@@ -73,7 +74,10 @@ func InitTracingFromEnv(logger *zap.Logger) func(context.Context) error {
 }
 
 func BootstrapTenants(ctx context.Context, c *wiring.Container, logger *zap.Logger) error {
-	return bootstrapTenantSchemas(ctx, c.DB(), logger, defaultTenantBootstrapDeps)
+	if err := bootstrapTenantSchemas(ctx, c.DB(), logger, defaultTenantBootstrapDeps); err != nil {
+		return err
+	}
+	return iampersistence.EnsureAdminUser(ctx, c.DB(), c.Config.AdminUsername, c.Config.AdminPassword, logger)
 }
 
 func bootstrapTenantSchemas(

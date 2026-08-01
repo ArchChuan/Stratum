@@ -6,7 +6,7 @@ import { configureManagedModels, requireUUID, withTenantQuery, type DatabasePool
 import type { EvidenceRecord } from '../core/evidence';
 import { runCleanupTasks } from '../core/errors';
 
-interface KnowledgePackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string }
+interface KnowledgePackContext { actor: BrowserActor; pool: DatabasePool; evidence: EvidenceRecord; webURL: string; fixtureURL: string }
 const rows = async <R extends QueryResultRow>(pool: DatabasePool, tenantID: string, text: string, values: unknown[]) => (
   await withTenantQuery<R>(pool, tenantID, { text, values })
 ).rows;
@@ -14,9 +14,9 @@ const waitFor = (page: import('@playwright/test').Page, path: string, method: st
   new URL(response.url()).pathname === path && response.request().method() === method
 ));
 
-export const executeKnowledgePack = async ({ actor, pool, evidence, webURL }: KnowledgePackContext): Promise<string[]> => {
+export const executeKnowledgePack = async ({ actor, pool, evidence, webURL, fixtureURL }: KnowledgePackContext): Promise<string[]> => {
   const tenantID = requireUUID(actor.tenantID ?? '', 'tenant_id');
-  await configureManagedModels(pool, tenantID);
+  await configureManagedModels(pool, tenantID, fixtureURL);
   const page = await actor.context.newPage();
   const workspace = `e2e-kb-${Date.now()}`;
   let documentID = '';

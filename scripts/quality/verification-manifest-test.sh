@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+manifest="${root}/.test/verification.yaml"
+
+fail() { printf 'verification manifest: %s\n' "$1" >&2; exit 1; }
+require() {
+  local pattern="$1" label="$2"
+  grep -Eq -- "$pattern" "$manifest" || fail "missing ${label}"
+}
+
+[[ -f "$manifest" ]] || fail '.test/verification.yaml'
+require '^version:[[:space:]]*1$' 'schema version'
+require '^  browser_e2e_authority:[[:space:]]*local$' 'local browser authority'
+require '^  merge_authority:[[:space:]]*ci$' 'CI merge authority'
+require '^  deployment_authority:[[:space:]]*release_pipeline$' 'release pipeline authority'
+require '^  fail_closed:[[:space:]]*true$' 'fail-closed policy'
+require '^  default_mode:[[:space:]]*(short|soak)$' 'default mode'
+require 'rerun_for_diagnostics:[[:space:]]*true' 'diagnostic-only reruns'
+require 'quarantine_requires_owner:[[:space:]]*true' 'quarantine owner requirement'
+require 'skipped_allowed:[[:space:]]*false' 'fail-closed skipped capability policy'
+require 'unreconciled_allowed:[[:space:]]*false' 'fail-closed unreconciled capability policy'
+require 'levels:[[:space:]]*\[R0, R1, R2, R3, R4\]' 'risk levels'
+require '^  default_level:[[:space:]]*R2$' 'default executable risk'
+require '^  release_level:[[:space:]]*R4$' 'release intent risk'
+for mapping in 'R0:none' 'R1:none' 'R2:short' 'R3:soak' 'R4:release-soak'; do
+  level=${mapping%%:*}; mode=${mapping#*:}
+  block=$(sed -n "/^  ${level}:/,/^  R[0-4]:/p" "$manifest")
+  grep -Eq "mode:[[:space:]]*${mode}" <<<"$block" || fail "missing ${level} mode"
+  grep -Eq 'local_checks:' <<<"$block" || fail "missing ${level} local checks"
+  grep -Eq 'ci_checks:' <<<"$block" || fail "missing ${level} CI checks"
+done
+awk '
+  /^    - id:/ { if (seen && !level) exit 1; seen=1; level=0 }
+  /^      level: R[0-4]$/ { level=1 }
+  END { if (seen && !level) exit 1 }
+' "$manifest" || fail 'risk rule missing valid R0-R4 level'
+require '^    - id: tenant-boundary$' 'tenant risk rule'
+require '^    - id: agent-tool-chain$' 'agent/MCP risk rule'
+require '^    - id: auth$' 'authentication risk rule'
+require '^    - id: migration$' 'migration risk rule'
+require '^    - id: memory$' 'Memory risk rule'
+require '^    - id: external-dependency$' 'external dependency risk rule'
+require '^    - id: deployment$' 'deployment risk rule'
+require '^    - id: verification-kernel$' 'verification kernel risk rule'
+require '^    - id: agent-governance$' 'Agent governance risk rule'
+require 'docs/agent/\*\*' 'generated Agent instruction sources'
+require 'AGENTS.md' 'generated Agent instructions'
+require 'CLAUDE.md' 'Claude instructions'
+require 'id: platform-assistant' 'Platform Assistant capability'
+require '^  schema:[[:space:]]*2$' 'attestation schema v2'
+require 'manifest_digest' 'manifest digest binding'
+require 'artifact_digests' 'artifact digest binding'
+if grep -Eq '^reviews:|specification-review|code-quality-review' "$manifest"; then
+  fail 'legacy review authority is still declared'
+fi
+
+printf 'verification manifest contract passed\n'

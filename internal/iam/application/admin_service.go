@@ -18,6 +18,7 @@ type AdminService struct {
 	repo             port.AdminTenantRepo
 	schemaCleaner    port.TenantSchemaCleaner
 	vectorCleaner    port.TenantVectorCleaner
+	objectCleaner    port.TenantObjectCleaner
 	cacheInvalidator port.TenantCacheInvalidator
 	logger           *zap.Logger
 }
@@ -33,6 +34,11 @@ func WithSchemaCleaner(c port.TenantSchemaCleaner) AdminServiceOption {
 // WithVectorCleaner sets the Milvus collection cleaner.
 func WithVectorCleaner(c port.TenantVectorCleaner) AdminServiceOption {
 	return func(s *AdminService) { s.vectorCleaner = c }
+}
+
+// WithObjectCleaner sets the MinIO object cleaner.
+func WithObjectCleaner(c port.TenantObjectCleaner) AdminServiceOption {
+	return func(s *AdminService) { s.objectCleaner = c }
 }
 
 // WithCacheInvalidator sets the in-process cache invalidator.
@@ -121,6 +127,11 @@ func (s *AdminService) DeleteTenant(ctx context.Context, id string) error {
 	if s.vectorCleaner != nil {
 		if err := s.vectorCleaner.DropTenantCollections(ctx, id); err != nil {
 			s.logger.Warn("failed to drop tenant vector collections", zap.String("tenant_id", id), zap.Error(err))
+		}
+	}
+	if s.objectCleaner != nil {
+		if err := s.objectCleaner.DropTenantObjects(ctx, id); err != nil {
+			s.logger.Warn("failed to drop tenant objects", zap.String("tenant_id", id), zap.Error(err))
 		}
 	}
 	if s.schemaCleaner != nil {

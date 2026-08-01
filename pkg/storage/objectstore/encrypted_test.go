@@ -42,6 +42,22 @@ func (m *memoryClient) RemoveObject(_ context.Context, bucket, key string, _ min
 	delete(m.objects, bucket+"/"+key)
 	return nil
 }
+func (m *memoryClient) ListObjects(_ context.Context, _ string, _ minio.ListObjectsOptions) <-chan minio.ObjectInfo {
+	ch := make(chan minio.ObjectInfo)
+	close(ch)
+	return ch
+}
+func (m *memoryClient) DeleteByPrefix(ctx context.Context, bucket, prefix string) error {
+	for k := range m.objects {
+		if len(k) > len(bucket)+1 && k[:len(bucket)+1] == bucket+"/" && strings.HasPrefix(k[len(bucket)+1:], prefix) {
+			delete(m.objects, k)
+		}
+	}
+	return nil
+}
+func (m *memoryClient) DeleteByPrefixForTest(ctx context.Context, bucket, prefix string) error {
+	return m.DeleteByPrefix(ctx, bucket, prefix)
+}
 
 func TestEncryptedStorePutGetDeleteAndIntegrity(t *testing.T) {
 	m := &memoryClient{}

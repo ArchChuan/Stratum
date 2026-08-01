@@ -1,4 +1,4 @@
-import { ClearOutlined, UserOutlined, LogoutOutlined } from '@ant-design/icons';
+import { ClearOutlined, UserOutlined, LogoutOutlined, SettingOutlined } from '@ant-design/icons';
 import { Avatar, Button, Dropdown, Modal, Space, message } from 'antd';
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -31,6 +31,11 @@ export const UserMenu = () => {
   };
 
   const items = [
+    {
+      key: 'profile',
+      icon: <SettingOutlined aria-hidden />,
+      label: <Link to="/profile">个人设置</Link>,
+    },
     {
       key: 'clear-memory',
       icon: <ClearOutlined aria-hidden />,

@@ -60,15 +60,24 @@ func (r *TLSReloader) Current() *tls.Config {
 }
 
 func (r *TLSReloader) CertificateExpirySeconds() (float64, error) {
+	leaf, err := r.CertificateLeaf()
+	if err != nil {
+		return 0, err
+	}
+	return time.Until(leaf.NotAfter).Seconds(), nil
+}
+
+// CertificateLeaf returns the parsed leaf certificate for diagnostics.
+func (r *TLSReloader) CertificateLeaf() (*x509.Certificate, error) {
 	current := r.current.Load()
 	if current == nil || len(current.Certificates) != 1 || len(current.Certificates[0].Certificate) == 0 {
-		return 0, errors.New("Platform MCP certificate is not loaded")
+		return nil, errors.New("Platform MCP certificate is not loaded")
 	}
 	leaf, err := x509.ParseCertificate(current.Certificates[0].Certificate[0])
 	if err != nil {
-		return 0, fmt.Errorf("parse Platform MCP certificate: %w", err)
+		return nil, fmt.Errorf("parse Platform MCP certificate: %w", err)
 	}
-	return time.Until(leaf.NotAfter).Seconds(), nil
+	return leaf, nil
 }
 
 func (r *TLSReloader) ServerConfig() *tls.Config {

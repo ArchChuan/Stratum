@@ -8,4 +8,5 @@ var (
 	ErrTenantNotFound           = errors.New("iam: tenant not found")
 	ErrDefaultTenantDelete      = errors.New("iam: default tenant cannot be deleted")
 	ErrPlatformMCPApprovalStale = errors.New("iam: platform MCP approval is stale")
+	ErrUsernameTaken            = errors.New("iam: username already taken")
 )

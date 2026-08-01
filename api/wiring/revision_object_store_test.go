@@ -43,3 +43,4 @@ func (*compositionObjectStore) Get(context.Context, pkgobjectstore.Reference) ([
 	return nil, nil
 }
 func (*compositionObjectStore) Delete(context.Context, pkgobjectstore.Reference) error { return nil }
+func (*compositionObjectStore) DeleteByPrefix(context.Context, string, string) error   { return nil }

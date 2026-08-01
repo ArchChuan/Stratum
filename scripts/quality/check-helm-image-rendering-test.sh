@@ -63,13 +63,13 @@ done
 helm template stratum "${ROOT}/helm" \
     -f "${ROOT}/helm/values-demo.yaml" \
     -f "${REMOTE_HTTP_VALUES}" \
-    --set-string config.frontendUrl=http://203.0.113.10:6879 \
-    --set-string config.githubCallbackUrl=http://203.0.113.10:6879/api/auth/github/callback \
+    --set-string config.frontendUrl=https://203.0.113.10:8443 \
+    --set-string config.githubCallbackUrl=https://203.0.113.10:8443/api/auth/github/callback \
     >"${REMOTE_HTTP_RENDER}"
 
-grep -Fq 'FRONTEND_URL: "http://203.0.113.10:6879"' "${REMOTE_HTTP_RENDER}"
-grep -Fq 'GITHUB_CALLBACK_URL: "http://203.0.113.10:6879/api/auth/github/callback"' "${REMOTE_HTTP_RENDER}"
-grep -Fq 'SECURE_COOKIES: "false"' "${REMOTE_HTTP_RENDER}"
+grep -Fq 'FRONTEND_URL: "https://203.0.113.10:8443"' "${REMOTE_HTTP_RENDER}"
+grep -Fq 'GITHUB_CALLBACK_URL: "https://203.0.113.10:8443/api/auth/github/callback"' "${REMOTE_HTTP_RENDER}"
+grep -Fq 'SECURE_COOKIES: "true"' "${REMOTE_HTTP_RENDER}"
 grep -Fq 'OPIK_URL: "http://opik-backend.opik.svc.cluster.local:8080"' "${REMOTE_HTTP_RENDER}"
 grep -Fq 'ENVIRONMENT: "production"' "${REMOTE_HTTP_RENDER}"
 grep -Fq 'GIN_MODE: "release"' "${REMOTE_HTTP_RENDER}"
@@ -91,11 +91,12 @@ grep -Fq 'opik-backend.opik.svc.cluster.local:8080/v1/private/otel' "${OPIK_COLL
 
 awk '/^kind: Ingress$/{found=1} found{print} found && /^---$/{exit}' \
     "${REMOTE_HTTP_RENDER}" >"${REMOTE_HTTP_INGRESS}"
-grep -Eq 'traefik\.ingress\.kubernetes\.io/router\.entrypoints:[[:space:]]*"?web,web2"?$' \
+grep -Eq 'traefik\.ingress\.kubernetes\.io/router\.entrypoints:[[:space:]]*"?websecure"?$' \
     "${REMOTE_HTTP_INGRESS}"
-if grep -Eq '^[[:space:]]+(host|tls):' "${REMOTE_HTTP_INGRESS}"; then
-    echo 'remote HTTP Ingress unexpectedly contains a host or TLS section' >&2
+grep -Eq 'router\.tls:[[:space:]]*"?true"?$' "${REMOTE_HTTP_INGRESS}"
+grep -Eq '[[:space:]]+tls:' "${REMOTE_HTTP_INGRESS}" || {
+    echo 'remote HTTPS Ingress is missing TLS section' >&2
     exit 1
-fi
+}
 
 echo 'Helm image rendering tests passed'

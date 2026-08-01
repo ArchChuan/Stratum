@@ -3,12 +3,11 @@ FROM node:18-alpine AS builder
 
 WORKDIR /app
 
-# 先复制依赖文件，利用 layer 缓存
-COPY package.json package-lock.json ./
-RUN npm ci --prefer-offline
-
-# 复制源码并构建
+# 复制全部源码（node_modules 由 .dockerignore 排除）
+# COPY 在 npm ci 之前执行，避免 BuildKit overlay 层残留 node_modules
+# 导致 "cannot replace to directory with file" 错误
 COPY . .
+RUN npm ci --prefer-offline
 ARG BUILD_MODE=production
 RUN npm run build -- --mode ${BUILD_MODE}
 

@@ -1,0 +1,101 @@
+version: 1
+
+policy:
+  browser_e2e_authority: local
+  merge_authority: ci
+  deployment_authority: release_pipeline
+  fail_closed: true
+  default_mode: short
+  flaky:
+    rerun_for_diagnostics: true
+    quarantine_requires_owner: true
+    quarantine_ttl_days: 14
+  capability_results:
+    skipped_allowed: false
+    unreconciled_allowed: false
+
+risk:
+  levels: [R0, R1, R2, R3, R4]
+  default_level: R2
+  release_level: R4
+  rules:
+    - id: non-executable-docs
+      level: R0
+      paths: [docs/product/**, docs/user/**, "README.md"]
+    - id: local-frontend-style
+      level: R1
+      paths: [web/src/**/*.css]
+    - id: tenant-boundary
+      level: R3
+      paths: [internal/*/infrastructure/persistence/**, internal/tenant/**]
+    - id: agent-tool-chain
+      level: R3
+      paths: [internal/agent/**, internal/mcp/**, test/e2e/**]
+    - id: auth
+      level: R3
+      paths: [api/http/handler/auth*.go, internal/iam/**]
+    - id: migration
+      level: R3
+      paths: [pkg/migration/**, pkg/storage/postgres/tenant_schema.sql]
+    - id: memory
+      level: R3
+      paths: [internal/memory/**]
+    - id: external-dependency
+      level: R3
+      paths:
+        - pkg/httpclient/**
+        - pkg/messaging/**
+        - pkg/storage/milvus/**
+        - pkg/storage/redis/**
+        - internal/llmgateway/**
+    - id: deployment
+      level: R3
+      paths: [.github/workflows/**, helm/**, k8s/**]
+    - id: verification-kernel
+      level: R3
+      paths:
+        - .agents/skills/stratum-e2e-development/**
+        - cmd/e2e-*/**
+        - internal/platform/e2eattestation/**
+        - internal/platform/e2erunscope/**
+        - scripts/e2e/**
+        - scripts/quality/test-verification-*.sh
+        - test/e2e/**
+    - id: agent-governance
+      level: R3
+      paths:
+        - .agents/**
+        - docs/agent/**
+        - AGENTS.md
+        - CLAUDE.md
+
+levels:
+  R0:
+    mode: none
+    local_checks: [docs-lint]
+    ci_checks: [static]
+  R1:
+    mode: none
+    local_checks: [static, unit, build, code-quality]
+    ci_checks: [static, unit, build, code-quality]
+  R2:
+    mode: short
+    local_checks: [static, unit, integration, contract, e2e-short]
+    ci_checks: [static, unit, integration, contract, build]
+  R3:
+    mode: soak
+    local_checks: [static, unit, integration, contract, domain-failure-paths, e2e-short, e2e-soak]
+    ci_checks: [static, unit, integration, contract, build, security, risk-guardrails]
+  R4:
+    mode: release-soak
+    local_checks: [static, unit, integration, contract, domain-failure-paths, e2e-short, e2e-soak, release-soak]
+    ci_checks: [static, unit, integration, contract, build, security, risk-guardrails]
+
+capabilities:
+  - id: platform-assistant
+    packs: [platform-assistant-browser, platform-assistant-proposal, agent-tool-permission]
+    evidence: [ui, http, database, trace, cleanup]
+
+attestation:
+  schema: 2
+  required: [commit, manifest_digest, runner_identity, capability_results, cleanup, artifact_digests]

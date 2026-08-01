@@ -29,12 +29,16 @@ type Store interface {
 	Put(context.Context, Payload) (Reference, error)
 	Get(context.Context, Reference) ([]byte, error)
 	Delete(context.Context, Reference) error
+	// DeleteByPrefix removes all objects under the given prefix in the bucket.
+	// Errors are joined; the call continues on individual object failures.
+	DeleteByPrefix(ctx context.Context, bucket, prefix string) error
 }
 
 type client interface {
 	PutObject(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions) (minio.UploadInfo, error)
 	GetObject(context.Context, string, string, minio.GetObjectOptions) (io.ReadCloser, error)
 	RemoveObject(context.Context, string, string, minio.RemoveObjectOptions) error
+	ListObjects(ctx context.Context, bucket string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 }
 
 type EncryptedStore struct {
@@ -110,6 +114,34 @@ func (s *EncryptedStore) Delete(ctx context.Context, ref Reference) error {
 	}
 	if err := s.client.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{}); err != nil {
 		return fmt.Errorf("delete payload: %w", err)
+	}
+	return nil
+}
+
+// DeleteByPrefix removes all objects whose key starts with prefix.
+// Objects are listed and removed in batches; individual removal errors are collected.
+func (s *EncryptedStore) DeleteByPrefix(ctx context.Context, bucket, prefix string) error {
+	if s == nil || s.client == nil || bucket == "" {
+		return fmt.Errorf("object store unavailable")
+	}
+	if prefix == "" {
+		return fmt.Errorf("prefix is required")
+	}
+	var errs []string
+	var count int
+	for obj := range s.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if obj.Err != nil {
+			return fmt.Errorf("list objects by prefix %q: %w", prefix, obj.Err)
+		}
+		if err := s.client.RemoveObject(ctx, bucket, obj.Key, minio.RemoveObjectOptions{}); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", obj.Key, err))
+			continue
+		}
+		count++
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("delete by prefix %q: %d objects deleted, %d failures: %s",
+			prefix, count, len(errs), strings.Join(errs, "; "))
 	}
 	return nil
 }

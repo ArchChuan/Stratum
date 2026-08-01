@@ -1,14 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://stratum.local/schemas/e2e-attestation-v1.json",
+  "$id": "https://stratum.local/schemas/e2e-attestation-v2.json",
   "title": "Stratum system E2E attestation",
   "type": "object",
-  "required": ["schema_version", "source_digest", "manifest_digest", "tested_git_parent", "browser", "mode", "seed", "started_at", "duration_seconds", "host_class", "packs", "capabilities", "action_count", "sequence_digest", "evidence", "artifacts", "cleanup", "unverified_capabilities", "risk_classification", "status", "expires_at"],
+  "required": ["schema_version", "source_digest", "manifest_digest", "policy_manifest_digest", "tested_git_parent", "browser", "mode", "seed", "started_at", "duration_seconds", "host_class", "packs", "capabilities", "action_count", "sequence_digest", "evidence", "artifacts", "cleanup", "unverified_capabilities", "risk_classification", "status", "run_topology", "owned_cleanup", "expires_at"],
   "additionalProperties": false,
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "source_digest": {"$ref": "#/$defs/digest"},
     "manifest_digest": {"$ref": "#/$defs/digest"},
+    "policy_manifest_digest": {"$ref": "#/$defs/digest"},
     "tested_git_parent": {"type": "string", "minLength": 1},
     "browser": {"type": "object", "additionalProperties": false, "required": ["name", "version"], "properties": {"name": {"const": "chromium"}, "version": {"type": "string", "minLength": 1}}},
     "mode": {"enum": ["short", "soak"]},
@@ -27,8 +28,9 @@
     "unverified_capabilities": {"type": "array", "items": {"type": "string"}},
     "risk_classification": {"type": "string", "minLength": 1},
     "status": {"enum": ["passed", "failed"]},
-    "expires_at": {"type": "string", "format": "date-time"},
-    "signature": {"type": "string"}
+    "run_topology": {"type": "object", "additionalProperties": false, "required": ["run_id", "host", "ports", "database_name"], "properties": {"run_id": {"type": "string", "pattern": "^[0-9]{8}t[0-9]{6}z-[a-f0-9]{16}$"}, "host": {"const": "127.0.0.1"}, "database_name": {"type": "string", "pattern": "^stratum_e2e_[0-9]{8}t[0-9]{6}z_[a-f0-9]{16}$"}, "ports": {"type": "object", "additionalProperties": false, "required": ["frontend", "backend", "oauth", "fixture", "platform_mcp", "internal_api"], "properties": {"frontend": {"type": "integer", "minimum": 1, "maximum": 65535}, "backend": {"type": "integer", "minimum": 1, "maximum": 65535}, "oauth": {"type": "integer", "minimum": 1, "maximum": 65535}, "fixture": {"type": "integer", "minimum": 1, "maximum": 65535}, "platform_mcp": {"type": "integer", "minimum": 1, "maximum": 65535}, "internal_api": {"type": "integer", "minimum": 1, "maximum": 65535}}}}},
+    "owned_cleanup": {"type": "object", "additionalProperties": false, "required": ["database_dropped", "lease_removed"], "properties": {"database_dropped": {"const": true}, "lease_removed": {"const": true}}},
+    "expires_at": {"type": "string", "format": "date-time"}
   },
   "$defs": {
     "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},

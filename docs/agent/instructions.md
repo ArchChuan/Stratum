@@ -34,8 +34,8 @@
 
 **规则**：
 
-- 排查告警、查看日志、检查 Pod/Service/Endpoint 状态 → 直接 SSH 自动执行，无需确认
-- 修改远程状态（重启服务、改配置、建资源、kubectl apply/edit/delete）→ 必须先获用户许可
+- **只读操作**（无需确认）：`kubectl get/describe/logs/top`、`curl` health/metrics、`psql` SELECT、Prometheus 查询等
+- **写入操作**（必须先获用户许可）：`kubectl apply/edit/patch/delete/set image/scale/rollout`、`helm install/upgrade/rollback`、`docker build+push` 后更新部署、修改 ingress/service/configmap/secret、重启 pod、数据库 DDL/DML 等。**E2E 验证优先使用本地 Docker，只有明确确认后才部署到远端**
 
 ## Architecture decisions
 
@@ -82,7 +82,8 @@ CI 全绿后合并，再用 `git worktree remove ../stratum-<feature>` 清理。
 
 - 编码前运行 `bash scripts/quality/risk-regression-guard.sh --explain`。后端快速验证：`go vet && go test -short ./...`；PR 前：`go test -v -race -timeout 30s ./...`。前端 PR 前：`make fe-lint && make fe-build`。依赖服务可用 `make infra-up`。
 - Go 代码质量采用增量棘轮：新函数必须满足圈复杂度 ≤10、认知复杂度 ≤15、函数长度 ≤120 行、最大嵌套 ≤4；存量超限函数不得恶化。参数数 >6、文件长度 >800 和重复代码候选当前仅告警。运行 `make code-quality` 检查；基线只能通过 `make code-quality-baseline` 显式刷新，并与代码改动一同审查，禁止为通过门禁隐式更新。
-- 功能开发、Bug 修复、前后端联调、数据库链路，或 Agent/Skill/MCP/Memory/Knowledge/IAM 能力改动必须使用 `stratum-e2e-development` skill。普通改动完成后运行 `make e2e-system-short`；认证、租户迁移、消息、向量库、外部依赖或风险规则命中的改动还必须运行 `STATEFUL_E2E_PROFILE=test STATEFUL_E2E_DURATION_SEC=600 STATEFUL_E2E_PACKS=all make e2e-system-soak`。当前远端测试环境使用 600 秒 test profile；正式发布必须显式运行 `make e2e-system-release-soak`，使用 3600 秒 release profile。所有模式都由无头 Chromium 发起真实 UI 操作，以 HTTP 和测试数据库证据对账；可读取测试数据库凭据或精确提升临时身份，但禁止输出 token、cookie、密钥、密码或原始 API key。只有当前源码匹配的 attestation 通过 `make e2e-attestation-check`、无 skipped/unreconciled capability、清理完成且残留风险已明确报告时才可宣告完成；临时 Playwright、纯 API 或手工场景只能诊断，不能替代系统验收。
+- 功能开发、Bug 修复、前后端联调、数据库链路，或 Agent/Skill/MCP/Memory/Knowledge/IAM 能力改动必须使用 `stratum-e2e-development` skill。创建 PR 前在 clean commit 上运行 `make test-verify-before-pr`；它按 `.test/verification.yaml` 自动选择本地无头 Chromium short，R3 自动执行 `STATEFUL_E2E_PROFILE=test STATEFUL_E2E_DURATION_SEC=600 STATEFUL_E2E_PACKS=all` soak，R4 显式发布意图追加 `make e2e-system-release-soak` 的 3600 秒 release profile。浏览器操作以 HTTP 和测试数据库凭据证据对账，但禁止输出 token、cookie、密钥、密码或原始 API key。failed/skipped/unreconciled capability、清理失败、残留实体或 stale report 都必须阻断；临时 Playwright、纯 API 或手工场景不能替代系统验收。
+- `stratum-e2e-development` 是 Claude Code 与 Codex 共用的唯一测试和验收 Skill。`browser_e2e_authority: local`、`merge_authority: ci`、`deployment_authority: release_pipeline` 分别管理本地浏览器、非浏览器 PR CI 和发布验证；local report 只是 developer audit assertion，不是 GitHub trusted status。
 - 所有登录测试和验证流程必须使用无头浏览器（Playwright headless）；禁止为测试或验证启动有头浏览器。纯 API/单元测试不属于登录测试，但涉及登录态恢复时必须通过无头浏览器完成。
 - AI 生成测试前必须先读同域优质测试模板，复用 mock 和断言风格。代码是主、测试是行为契约；冲突时依据产品意图判断改实现或改测试，禁止为过测扭曲实现。
 - API 兼容性由 `api/http/contract_test.go` 和 `api/http/testdata/contracts/*.golden.json` 守护。业务逻辑目标覆盖率 ≥80%，外部依赖须 mock，完整套件使用 `-race`。

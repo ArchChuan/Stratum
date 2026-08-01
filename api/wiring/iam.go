@@ -71,7 +71,12 @@ func (c *Container) buildIAM(_ context.Context) error {
 		}
 		if c.Storage != nil && c.Storage.Milvus != nil {
 			opts = append(opts, application.WithVectorCleaner(
-				knowledgepersistence.NewTenantVectorCleaner(db, c.Storage.Milvus),
+				knowledgepersistence.NewTenantVectorCleaner(db, c.Storage.Milvus, c.Logger),
+			))
+		}
+		if c.RevisionObjectStore != nil {
+			opts = append(opts, application.WithObjectCleaner(
+				iampersistence.NewTenantObjectCleaner(c.RevisionObjectStore, c.Config.TracePayload.Bucket, c.Logger),
 			))
 		}
 		iam.AdminService = application.NewAdminService(

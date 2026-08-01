@@ -96,14 +96,12 @@ validate_ci_integration() {
   local file="$1" block
   block="$(awk '
     /^jobs:$/ { jobs++; in_jobs = 1; next }
-    /^[^ #]/ && !/^jobs:$/ { in_jobs = 0; in_guardrails = 0; in_steps = 0 }
-    in_jobs && /^  guardrails:$/ { guardrails++; in_guardrails = 1; in_steps = 0; next }
-    in_jobs && /^  [^ ]/ && !/^  guardrails:$/ { in_guardrails = 0; in_steps = 0 }
-    in_guardrails && /^    steps:$/ { steps++; in_steps = 1; next }
+    /^[^ #]/ && !/^jobs:$/ { in_jobs = 0; in_target = 0; in_steps = 0 }
+    in_jobs && /^  static-checks:$/ { target_job++; in_target = 1; in_steps = 0; next }
+    in_jobs && /^  [^ ]/ && !/^  static-checks:$/ { in_target = 0; in_steps = 0 }
+    in_target && /^    steps:$/ { steps++; in_steps = 1; next }
     in_steps && /^    [^ ]/ && !/^    steps:$/ { in_steps = 0 }
     in_steps && /^      - uses: actions\/checkout@v4$/ { checkout = NR }
-    in_steps && !setup_go && /^      - uses: actions\/setup-go@/ { setup_go = NR }
-    in_steps && !setup_node && /^      - uses: actions\/setup-node@/ { setup_node = NR }
     in_steps && /^      - name: Verify generated agent instructions$/ {
       targets++
       target_line = NR
@@ -115,10 +113,9 @@ validate_ci_integration() {
     printing && /^[^ ]|^  [^ ]|^    [^ ]/ { printing = 0 }
     printing { block = block $0 ORS }
     END {
-      if (jobs != 1 || guardrails != 1 || steps != 1 || targets != 1 ||
-          !checkout || !setup_go || !setup_node || target_line <= checkout ||
-          target_line >= setup_go || target_line >= setup_node) {
-        print "invalid jobs/guardrails/steps hierarchy or step ordering" > "/dev/stderr"
+      if (jobs != 1 || target_job != 1 || steps != 1 || targets != 1 ||
+          !checkout || target_line <= checkout) {
+        print "invalid jobs/static-checks/steps hierarchy or step ordering" > "/dev/stderr"
         exit 1
       }
       printf "%s", block
@@ -362,11 +359,9 @@ fi
 wrong_parent_ci="${TEST_ROOT}/wrong-parent-ci.yml"
 cat >"${wrong_parent_ci}" <<'EOF'
 jobs:
-  guardrails:
+  static-checks:
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-      - uses: actions/setup-node@v4
   lint:
     steps:
       - name: Verify generated agent instructions
@@ -379,18 +374,14 @@ fi
 late_instruction_ci="${TEST_ROOT}/late-instruction-ci.yml"
 cat >"${late_instruction_ci}" <<'EOF'
 jobs:
-  guardrails:
+  static-checks:
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-      - uses: actions/setup-node@v4
       - name: Verify generated agent instructions
         run: make agent-instructions-check
-      - uses: actions/setup-go@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
 EOF
 if validate_ci_integration "${late_instruction_ci}" >/dev/null 2>&1; then
-  fail 'CI validation accepted instruction check after the first dependency setup'
+  fail 'CI validation accepted instruction check before checkout'
 fi
 
 echo 'agent instruction generator tests passed'

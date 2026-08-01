@@ -75,6 +75,7 @@ type ServerConfig struct {
 	Retry          *RetryConfig      `json:"retry,omitempty"    yaml:"retry,omitempty"`
 	SystemKey      string            `json:"-"                  yaml:"-"`
 	ManagementMode string            `json:"management_mode"    yaml:"management_mode"`
+	Enabled        bool              `json:"-"                  yaml:"-"`
 }
 
 // Resource represents an MCP resource in the domain.

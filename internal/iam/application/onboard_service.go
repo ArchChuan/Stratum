@@ -132,3 +132,33 @@ func (s *OnboardService) ListOwnedNonDefaultTenants(ctx context.Context, userID 
 func (s *OnboardService) DeleteUser(ctx context.Context, userID string) error {
 	return s.repo.DeleteUser(ctx, userID)
 }
+
+// RegisterByUsername creates a local user and joins the default tenant.
+func (s *OnboardService) RegisterByUsername(ctx context.Context, username, passwordHash string) (string, string, error) {
+	return s.repo.RegisterByUsername(ctx, username, passwordHash)
+}
+
+// FindByUsername looks up a local user by username.
+func (s *OnboardService) FindByUsername(ctx context.Context, username string) (string, string, string, bool, error) {
+	return s.repo.FindByUsername(ctx, username)
+}
+
+// FindByUsernameWithLogin looks up a local user including their display login.
+func (s *OnboardService) FindByUsernameWithLogin(ctx context.Context, username string) (string, string, string, string, bool, error) {
+	return s.repo.FindByUsernameWithLogin(ctx, username)
+}
+
+// UpdateProfile updates the user's display name and/or avatar URL.
+func (s *OnboardService) UpdateProfile(ctx context.Context, userID, displayName, avatarURL string) error {
+	return s.repo.UpdateProfile(ctx, userID, displayName, avatarURL)
+}
+
+// FindUsernameByUserID returns the user's username (empty if not a password user).
+func (s *OnboardService) FindUsernameByUserID(ctx context.Context, userID string) (string, error) {
+	return s.repo.FindUsernameByUserID(ctx, userID)
+}
+
+// GetUserTenantByUserID returns the user's default tenant by UUID.
+func (s *OnboardService) GetUserTenantByUserID(ctx context.Context, userID string) (string, string, error) {
+	return s.repo.GetUserTenantByUserID(ctx, userID)
+}

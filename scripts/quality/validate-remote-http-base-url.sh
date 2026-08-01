@@ -3,14 +3,17 @@
 set -euo pipefail
 
 invalid() {
-    echo 'invalid PUBLIC_BASE_URL: expected http://<public-ip>:6879' >&2
+    echo 'invalid PUBLIC_BASE_URL: expected https://<public-ip>:8443' >&2
     exit 1
 }
 
 [[ "$#" -eq 1 ]] || invalid
 
 url="$1"
-if [[ ! "${url}" =~ ^http://([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3}):6879$ ]]; then
+# trim leading/trailing whitespace (GitHub vars may have stray spaces)
+url="${url#"${url%%[![:space:]]*}"}"
+url="${url%"${url##*[![:space:]]}"}"
+if [[ ! "${url}" =~ ^https://([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3}):8443$ ]]; then
     invalid
 fi
 

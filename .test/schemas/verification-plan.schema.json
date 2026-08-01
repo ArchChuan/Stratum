@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stratum.local/schemas/verification-plan.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "commit", "manifest_digest", "risk_level", "mode", "local_checks", "ci_checks"],
+  "properties": {
+    "version": { "const": 1 },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "manifest_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "risk_level": { "enum": ["R0", "R1", "R2", "R3", "R4"] },
+    "mode": { "enum": ["none", "short", "soak", "release-soak"] },
+    "local_checks": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "ci_checks": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+  }
+}

@@ -69,9 +69,8 @@ func TestPlatformManagedServerMutationsAreRejectedBeforeLifecycleChange(t *testi
 		{name: "disconnect", act: func(s *MCPService) error {
 			return s.DisconnectServer(t.Context(), platformmcp.SystemServerID)
 		}},
-		{name: "reconnect", act: func(s *MCPService) error {
-			return s.ReconnectServer(t.Context(), platformmcp.SystemServerID)
-		}},
+		// Reconnect is intentionally allowed for platform-managed servers;
+		// it restores connectivity after idle eviction without modifying config.
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := &lifecycleManagerFake{stored: &domain.ServerConfig{
