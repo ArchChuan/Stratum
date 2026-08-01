@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stratum.local/schemas/ci-verification.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "status", "commit", "checks"],
+  "properties": {
+    "version": { "const": 1 },
+    "status": { "enum": ["passed", "failed", "pending"] },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["static", "unit", "integration", "contract", "build", "security"],
+      "properties": {
+        "static": { "$ref": "#/$defs/checkStatus" },
+        "unit": { "$ref": "#/$defs/checkStatus" },
+        "integration": { "$ref": "#/$defs/checkStatus" },
+        "contract": { "$ref": "#/$defs/checkStatus" },
+        "build": { "$ref": "#/$defs/checkStatus" },
+        "security": { "$ref": "#/$defs/checkStatus" }
+      }
+    }
+  },
+  "$defs": {
+    "checkStatus": { "enum": ["passed", "failed", "pending"] }
+  }
+}

@@ -1,16 +1,11 @@
-# Independent Review Contract
+# Review Boundary
 
-| Risk | Required review |
-| --- | --- |
-| R0 | automated checks |
-| R1 | code quality |
-| R2 | code quality; specification when behavior changes |
-| R3 | specification and code quality |
-| R4 | specification, code quality, and release evidence |
+规格审查和代码质量审查用于发现需求偏差、缺陷和测试缺口，但不签发浏览器、合并或部署状态。
 
-审查者不得是实现 Agent。先进行规格审查，规格通过后才能进行代码质量审查。任何 finding 修复后必须由原审查
-类型复审。审查结果记录 reviewer identity、review type、commit、policy version、findings 和 verification evidence。
-相关代码变化后审查自动失效。
+- review finding 必须绑定所审 diff 或 commit；代码变化后重新判断其有效性。
+- lint、schema、单测和质量门禁是 review 输入，不冒充人工审查。
+- review 不生成 fake receipt，不用字符串 `passed` 伪装 protected control-plane evidence。
+- local browser report 是 developer audit assertion；CI job results 是 merge authority；release record 是 deployment authority。
+- 三种状态不可由 review 文本互相转换。
 
-自动 lint、schema、单测和质量门禁是 review 输入，不能自称独立审查。CI 只接受受保护 GitHub environment
-签发的结构化 review receipt；环境必须配置非实现者 required reviewer。字符串环境变量 `passed` 不是审查证据。
+需要独立审查时仍遵循“先规格、后质量”，但是否合并只由仓库真实 required checks 和分支保护决定。

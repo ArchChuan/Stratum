@@ -10,18 +10,11 @@ if grep -Fq 'system-e2e-attestation' .github/workflows/ci.yml; then
 fi
 
 grep -Fq 'PolicyManifestPath' internal/platform/e2eattestation/attestation.go
-grep -Fq -- '--bundle' scripts/quality/test-verification-report.sh
-grep -Fq -- '--signer-workflow' scripts/quality/test-verification-report.sh
-grep -Fq -- '--source-digest' scripts/quality/test-verification-report.sh
-grep -Fq -- '--source-ref' scripts/quality/test-verification-report.sh
-grep -Fq 'https://token.actions.githubusercontent.com' scripts/quality/test-verification-report.sh
-grep -Fq '.tested_git_parent == $commit' scripts/quality/test-verification-report.sh
-if grep -Fq 'GITHUB_ACTIONS' scripts/quality/test-verification-report.sh; then
-  printf 'completion report still trusts the caller-declared GitHub Actions environment\n' >&2
-  exit 1
-fi
-if grep -Eq 'TEST_VERIFY_(SPEC|QUALITY|RELEASE)_REVIEW' scripts/quality/test-verification-report.sh; then
-  printf 'verification workflow still accepts self-declared review status\n' >&2
+grep -Fq '.tested_git_parent == $commit' scripts/quality/write-local-verification-report.sh
+grep -Fq -- '--required-mode' scripts/quality/write-local-verification-report.sh
+if grep -Eq 'Sigstore|github-actions-sigstore|TEST_VERIFY_(SIGNATURE|CHECK|REVIEW)' \
+  scripts/quality/write-local-verification-report.sh; then
+  printf 'local report still contains CI or signature authority\n' >&2
   exit 1
 fi
 
@@ -45,5 +38,5 @@ fi
 
 go test ./internal/platform/e2eattestation ./cmd/e2e-attestation \
   -run 'Attestation|AcceptanceProfile|RunRejects|RunTopology' -count=1
-bash scripts/quality/test-verification-report-test.sh
+bash scripts/quality/local-verification-report-test.sh
 printf 'E2E attestation guard tests passed\n'

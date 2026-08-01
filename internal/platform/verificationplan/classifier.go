@@ -14,9 +14,15 @@ var levels = map[string]int{"R0": 0, "R1": 1, "R2": 2, "R3": 3, "R4": 4}
 
 type Manifest struct {
 	Version int                    `yaml:"version"`
+	Policy  AuthorityPolicy        `yaml:"policy"`
 	Risk    RiskPolicy             `yaml:"risk"`
 	Levels  map[string]LevelPolicy `yaml:"levels"`
-	Reviews ReviewPolicy           `yaml:"reviews"`
+}
+
+type AuthorityPolicy struct {
+	BrowserE2EAuthority string `yaml:"browser_e2e_authority"`
+	MergeAuthority      string `yaml:"merge_authority"`
+	DeploymentAuthority string `yaml:"deployment_authority"`
 }
 
 type RiskPolicy struct {
@@ -32,12 +38,9 @@ type RiskRule struct {
 }
 
 type LevelPolicy struct {
-	Mode   string   `yaml:"mode"`
-	Checks []string `yaml:"checks"`
-}
-
-type ReviewPolicy struct {
-	Required map[string][]string `yaml:"required"`
+	Mode        string   `yaml:"mode"`
+	LocalChecks []string `yaml:"local_checks"`
+	CIChecks    []string `yaml:"ci_checks"`
 }
 
 func Load(path string) (Manifest, error) {
@@ -88,13 +91,47 @@ func validate(manifest Manifest) error {
 	if manifest.Version != 1 || manifest.Risk.DefaultLevel == "" || manifest.Risk.ReleaseLevel != "R4" {
 		return errors.New("verification manifest policy is incomplete")
 	}
+	if err := validateAuthorities(manifest.Policy); err != nil {
+		return err
+	}
+	return validateLevels(manifest.Levels)
+}
+
+func validateLevels(policies map[string]LevelPolicy) error {
 	for level := range levels {
-		policy, ok := manifest.Levels[level]
-		if !ok || policy.Mode == "" || len(policy.Checks) == 0 {
+		policy, ok := policies[level]
+		if !ok || policy.Mode == "" || len(policy.LocalChecks) == 0 || len(policy.CIChecks) == 0 {
 			return fmt.Errorf("verification level %s is incomplete", level)
+		}
+		if err := rejectCIBrowserChecks(level, policy.CIChecks); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func validateAuthorities(policy AuthorityPolicy) error {
+	if policy.BrowserE2EAuthority != "local" || policy.MergeAuthority != "ci" ||
+		policy.DeploymentAuthority != "release_pipeline" {
+		return errors.New("verification authorities must be local, ci, and release_pipeline")
+	}
+	return nil
+}
+
+func rejectCIBrowserChecks(level string, checks []string) error {
+	for _, check := range checks {
+		if isBrowserCheck(check) {
+			return fmt.Errorf("verification level %s assigns browser check %s to CI", level, check)
+		}
+	}
+	return nil
+}
+
+func isBrowserCheck(check string) bool {
+	value := strings.ToLower(check)
+	return strings.Contains(value, "browser") || strings.Contains(value, "playwright") ||
+		strings.Contains(value, "chromium") || strings.HasPrefix(value, "e2e-short") ||
+		strings.HasPrefix(value, "e2e-soak") || strings.HasPrefix(value, "release-soak")
 }
 
 func matchesAny(patterns, paths []string) bool {

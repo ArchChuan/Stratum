@@ -1,10 +1,52 @@
 package verificationplan
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestLoadValidatesVerificationAuthorities(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		policy  string
+		levels  string
+		wantErr string
+	}{
+		{
+			name:   "accepts separate authorities",
+			policy: validAuthorityPolicy(),
+			levels: validLevelPolicies(),
+		},
+		{
+			name:    "rejects missing local browser authority",
+			policy:  "  merge_authority: ci\n  deployment_authority: release_pipeline\n",
+			levels:  validLevelPolicies(),
+			wantErr: "verification authorities",
+		},
+		{
+			name:    "rejects browser check owned by CI",
+			policy:  validAuthorityPolicy(),
+			levels:  strings.Replace(validLevelPolicies(), "ci_checks: [static]", "ci_checks: [e2e-short]", 1),
+			wantErr: "browser check",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeManifest(t, tt.policy, tt.levels)
+			_, err := Load(path)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
 
 func TestClassifyUsesManifestRulesAndCannotLowerRisk(t *testing.T) {
 	t.Parallel()
@@ -40,4 +82,33 @@ func TestMatchGlobSupportsRecursivePaths(t *testing.T) {
 	t.Parallel()
 	require.True(t, matchGlob("internal/**/persistence/**", "internal/agent/infrastructure/persistence/store.go"))
 	require.False(t, matchGlob("docs/**", "internal/docs/service.go"))
+}
+
+func validAuthorityPolicy() string {
+	return "  browser_e2e_authority: local\n  merge_authority: ci\n  deployment_authority: release_pipeline\n"
+}
+
+func validLevelPolicies() string {
+	return `  R0: {mode: none, local_checks: [docs-lint], ci_checks: [static]}
+  R1: {mode: none, local_checks: [static], ci_checks: [static]}
+  R2: {mode: short, local_checks: [static, e2e-short], ci_checks: [static]}
+  R3: {mode: soak, local_checks: [static, e2e-short, e2e-soak], ci_checks: [static]}
+  R4: {mode: release-soak, local_checks: [static, e2e-short, e2e-soak, release-soak], ci_checks: [static]}
+`
+}
+
+func writeManifest(t *testing.T, policy, levelPolicies string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "verification.yaml")
+	content := "version: 1\npolicy:\n" + policy + `risk:
+  default_level: R2
+  release_level: R4
+  rules:
+    - id: docs
+      level: R0
+      paths: [docs/**]
+levels:
+` + levelPolicies
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
 }

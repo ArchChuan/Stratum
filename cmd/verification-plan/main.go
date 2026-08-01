@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,8 +25,8 @@ type plan struct {
 	ManifestDigest string   `json:"manifest_digest"`
 	RiskLevel      string   `json:"risk_level"`
 	Mode           string   `json:"mode"`
-	Checks         []string `json:"checks"`
-	Reviews        []string `json:"reviews"`
+	LocalChecks    []string `json:"local_checks"`
+	CIChecks       []string `json:"ci_checks"`
 }
 
 func main() {
@@ -70,9 +71,9 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	policy := manifest.Levels[risk]
 	result := plan{Version: 1, Commit: commit, ManifestDigest: "sha256:" + digest, RiskLevel: risk,
-		Mode: manifest.Levels[risk].Mode, Checks: manifest.Levels[risk].Checks,
-		Reviews: manifest.Reviews.Required[risk]}
+		Mode: policy.Mode, LocalChecks: policy.LocalChecks, CIChecks: policy.CIChecks}
 	return writePlan(*output, result)
 }
 
@@ -113,11 +114,18 @@ func gitOutput(root string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+	command.Env = cleanGitEnvironment(os.Environ())
 	output, err := command.Output()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+func cleanGitEnvironment(environment []string) []string {
+	return slices.DeleteFunc(environment, func(value string) bool {
+		return strings.HasPrefix(value, "GIT_")
+	})
 }
 
 func fileDigest(path string) (string, error) {

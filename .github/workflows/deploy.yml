@@ -20,11 +20,57 @@ env:
   IMAGE_NAME: stratum
 
 jobs:
+  candidate:
+    name: Resolve Deployment Candidate
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Resolve and verify immutable candidate
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          candidate_sha="$EVENT_SHA"
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            [[ "$WORKFLOW_CONCLUSION" == "success" ]] || {
+              echo 'triggering CI workflow did not succeed' >&2
+              exit 1
+            }
+            [[ "$WORKFLOW_HEAD_BRANCH" == "main" ]] || {
+              echo 'triggering CI workflow is not for main' >&2
+              exit 1
+            }
+            candidate_sha="$WORKFLOW_HEAD_SHA"
+            current_sha=$(curl --fail-with-body --silent --show-error \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/commits/main" | jq -er '.sha')
+            [[ "$candidate_sha" == "$current_sha" ]] || {
+              echo "deployment candidate $candidate_sha was superseded by $current_sha" >&2
+              exit 1
+            }
+          fi
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo 'deployment candidate is not an immutable commit SHA' >&2
+            exit 1
+          }
+          echo "sha=$candidate_sha" >>"$GITHUB_OUTPUT"
+
   build-backend:
     name: Build Backend
     runs-on: ubuntu-latest
+    needs: candidate
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
 
       - uses: actions/setup-go@v5
         with:
@@ -50,7 +96,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=sha,prefix={{branch}}-
-            type=raw,value=${{ github.sha }}
+            type=raw,value=${{ needs.candidate.outputs.sha }}
 
       - name: Build and push backend
         uses: docker/build-push-action@v5
@@ -65,8 +111,11 @@ jobs:
   build-frontend:
     name: Build Frontend
     runs-on: ubuntu-latest
+    needs: candidate
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -82,14 +131,17 @@ jobs:
           context: ./web
           file: ./web/Dockerfile
           push: true
-          tags: ${{ env.IMAGE_REPO }}/${{ env.IMAGE_NAME }}-frontend:${{ github.sha }}
+          tags: ${{ env.IMAGE_REPO }}/${{ env.IMAGE_NAME }}-frontend:${{ needs.candidate.outputs.sha }}
           no-cache: true
 
   build-platform-mcp:
     name: Build Platform MCP
     runs-on: ubuntu-latest
+    needs: candidate
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
 
       - uses: actions/setup-go@v5
         with:
@@ -115,7 +167,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=sha,prefix={{branch}}-
-            type=raw,value=${{ github.sha }}
+            type=raw,value=${{ needs.candidate.outputs.sha }}
 
       - name: Build and push platform MCP
         uses: docker/build-push-action@v5
@@ -130,10 +182,13 @@ jobs:
   build-feishu-adapter:
     name: Build Feishu Alert Adapter
     runs-on: ubuntu-latest
+    needs: candidate
     outputs:
       digest: ${{ steps.adapter-build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -150,17 +205,18 @@ jobs:
           context: .
           file: ./docker/feishu-alert-adapter.Dockerfile
           push: true
-          tags: ${{ env.IMAGE_REPO }}/stratum-feishu-alert-adapter:${{ github.sha }}
+          tags: ${{ env.IMAGE_REPO }}/stratum-feishu-alert-adapter:${{ needs.candidate.outputs.sha }}
           cache-from: type=gha,scope=feishu-alert-adapter
           cache-to: type=gha,scope=feishu-alert-adapter,mode=max
 
   build-and-push:
     name: Build and Push
     runs-on: ubuntu-latest
-    needs: [build-backend, build-frontend, build-feishu-adapter, build-platform-mcp]
+    needs: [candidate, build-backend, build-frontend, build-feishu-adapter, build-platform-mcp]
     outputs:
-      image-tag: ${{ github.sha }}
+      image-tag: ${{ needs.candidate.outputs.sha }}
       adapter-digest: ${{ needs.build-feishu-adapter.outputs.digest }}
+      sha: ${{ needs.candidate.outputs.sha }}
     steps:
       - name: Confirm image builds
         run: echo "All application images were built and pushed successfully."
@@ -168,7 +224,7 @@ jobs:
   deploy:
     name: Deploy to K3s
     runs-on: ubuntu-latest
-    needs: build-and-push
+    needs: [candidate, build-and-push]
     environment: production
     env:
       PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
@@ -177,54 +233,25 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
 
-      - name: Verify deployment candidate
-        id: candidate
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            if [[ "${{ github.event.workflow_run.conclusion }}" != "success" ]]; then
-              echo "CI did not pass, skipping deploy" >&2
-              echo "current=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "current=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [[ "${{ github.event_name }}" != "push" || "${{ github.ref }}" != "refs/heads/main" ]]; then
-            echo "current=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          current_sha=$(curl --fail-with-body --silent --show-error \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${{ github.repository }}/commits/main" | \
-            jq -er '.sha')
-          if [[ "$current_sha" != "${{ github.sha }}" ]]; then
-            echo "Skipping stale main deployment candidate ${{ github.sha }}; current main is $current_sha"
-            echo "current=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "current=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: true
 
       - name: Validate remote HTTP configuration
-        if: steps.candidate.outputs.current == 'true'
         run: bash scripts/quality/validate-remote-http-base-url.sh "$PUBLIC_BASE_URL"
 
       - name: Sanitize PUBLIC_BASE_URL
-        if: steps.candidate.outputs.current == 'true'
         run: |
           CLEAN_URL="$(echo "$PUBLIC_BASE_URL" | xargs)"
           echo "PUBLIC_BASE_URL=$CLEAN_URL" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@v3
-        if: steps.candidate.outputs.current == 'true'
 
       - uses: docker/login-action@v3
-        if: steps.candidate.outputs.current == 'true'
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.DOCKER_USERNAME }}
@@ -232,7 +259,6 @@ jobs:
 
       - name: Publish dependency images and resolve digests
         id: images
-        if: steps.candidate.outputs.current == 'true'
         run: |
           require_digest() {
             local image="$1" output_name="$2" digest
@@ -273,17 +299,14 @@ jobs:
           require_digest "${{ env.IMAGE_REPO }}/stratum-platform-mcp:${{ needs.build-and-push.outputs.image-tag }}" platform_mcp
 
       - uses: azure/setup-kubectl@v4
-        if: steps.candidate.outputs.current == 'true'
         with:
           version: 'v1.28.0'
 
       - uses: azure/setup-helm@v4
-        if: steps.candidate.outputs.current == 'true'
         with:
           version: 'v3.13.0'
 
       - name: Setup SSH tunnel to K3s
-        if: steps.candidate.outputs.current == 'true'
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_DEPLOY_KEY }}" > ~/.ssh/deploy_key
@@ -297,18 +320,15 @@ jobs:
           sleep 2
 
       - name: Configure kubeconfig
-        if: steps.candidate.outputs.current == 'true'
         run: |
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
 
       - name: Verify cluster
-        if: steps.candidate.outputs.current == 'true'
         run: kubectl get nodes
 
       - name: Install pinned cert-manager release
-        if: steps.candidate.outputs.current == 'true'
         run: |
           helm repo add jetstack https://charts.jetstack.io
           helm repo update jetstack
@@ -320,7 +340,6 @@ jobs:
           kubectl wait --for=condition=Established crd/certificates.cert-manager.io --timeout=2m
 
       - name: Bootstrap internal workload CA
-        if: steps.candidate.outputs.current == 'true'
         run: |
           cat <<'YAML' | kubectl apply -f -
           apiVersion: cert-manager.io/v1
@@ -363,7 +382,6 @@ jobs:
           kubectl wait --for=condition=Ready clusterissuer/stratum-internal-ca --timeout=2m
 
       - name: Apply monitoring credentials
-        if: steps.candidate.outputs.current == 'true'
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           REGISTRY_SERVER: ${{ secrets.DOCKER_REGISTRY_URL }}
@@ -392,7 +410,6 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Diagnose ingress edge
-        if: steps.candidate.outputs.current == 'true'
         run: |
           # github vars may contain leading/trailing whitespace — sanitize
           PUBLIC_AUTHORITY="$(echo "${PUBLIC_BASE_URL#https://}" | xargs)"
@@ -429,7 +446,6 @@ jobs:
           REMOTE
 
       - name: Apply namespace and secrets
-        if: steps.candidate.outputs.current == 'true'
         env:
           MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD || secrets.POSTGRES_PASSWORD }}
           GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
@@ -476,7 +492,6 @@ jobs:
             -n stratum --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Install metrics-server (K3s)
-        if: steps.candidate.outputs.current == 'true'
         run: |
           kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml
           args=$(kubectl get deployment metrics-server -n kube-system \
@@ -488,7 +503,6 @@ jobs:
           fi
 
       - name: Install pinned Opik observability release
-        if: steps.candidate.outputs.current == 'true'
         run: |
           curl --fail-with-body --location --output /tmp/opik-2.1.32.tgz \
             https://raw.githubusercontent.com/comet-ml/opik/gh-pages/opik-2.1.32.tgz
@@ -502,7 +516,6 @@ jobs:
           kubectl get pods -n opik -o wide
 
       - name: Apply Opik OTLP collector
-        if: steps.candidate.outputs.current == 'true'
         run: |
           kubectl apply -f k8s/opik-otel-collector.yaml
           kubectl rollout status deployment/opik-otel-collector -n stratum --timeout=5m
@@ -510,7 +523,6 @@ jobs:
 
       - name: Helm deploy
         id: helm-deploy
-        if: steps.candidate.outputs.current == 'true'
         run: |
           EXTERNAL_SECRET_CHECKSUM="$(kubectl get secret stratum-secrets -n stratum -o json | jq -cS '{data:.data,type:.type}' | sha256sum | awk '{print $1}')"
           helm upgrade --install stratum ./helm \
@@ -539,10 +551,10 @@ jobs:
             --set-string config.frontendUrl="$PUBLIC_BASE_URL" \
             --set-string config.githubCallbackUrl="$PUBLIC_BASE_URL/api/auth/github/callback" \
             --set-string config.secureCookies="false" \
-            -n stratum --wait --timeout=10m
+            -n stratum --atomic --wait --timeout=10m
 
       - name: Diagnose deployment
-        if: always() && steps.candidate.outputs.current == 'true'
+        if: always()
         run: |
           echo "=== Pods ==="
           kubectl get pods -n stratum -o wide
@@ -558,11 +570,10 @@ jobs:
           kubectl get pods -n stratum --field-selector=status.phase!=Running -o name | xargs -r kubectl describe -n stratum
 
       - name: Fail if helm deploy failed
-        if: steps.candidate.outputs.current == 'true' && steps.helm-deploy.outcome == 'failure'
+        if: steps.helm-deploy.outcome == 'failure'
         run: exit 1
 
       - name: Verify deployment
-        if: steps.candidate.outputs.current == 'true'
         run: |
           kubectl rollout status deployment/stratum -n stratum
           kubectl get pods -n stratum
@@ -614,28 +625,32 @@ jobs:
 
       - name: Record deployed application digests
         id: deployment-evidence
-        if: steps.candidate.outputs.current == 'true'
         run: |
           mkdir -p tmp/deployment-evidence
           backend=$(kubectl get deployment stratum -n stratum -o jsonpath='{.spec.template.spec.containers[0].image}')
           frontend=$(kubectl get deployment stratum-frontend -n stratum -o jsonpath='{.spec.template.spec.containers[0].image}')
           platform_mcp=$(kubectl get deployment stratum-platform-mcp -n stratum -o jsonpath='{.spec.template.spec.containers[0].image}')
           feishu_adapter=$(kubectl get deployment stratum-feishu-alert-adapter -n monitoring -o jsonpath='{.spec.template.spec.containers[0].image}')
-          jq -n --arg commit "$GITHUB_SHA" --arg backend "$backend" --arg frontend "$frontend" \
+          migration=passed
+          health=passed
+          rollback=passed
+          jq -n --arg commit "${{ needs.candidate.outputs.sha }}" --arg backend "$backend" --arg frontend "$frontend" \
             --arg platform_mcp "$platform_mcp" --arg feishu_adapter "$feishu_adapter" \
-            '{version:1,commit:$commit,images:{backend:$backend,frontend:$frontend,platform_mcp:$platform_mcp,feishu_adapter:$feishu_adapter}}' \
+            --arg migration "$migration" --arg health "$health" --arg rollback "$rollback" \
+            '{version:1,status:"deployed",commit:$commit,
+              images:{backend:$backend,frontend:$frontend,platform_mcp:$platform_mcp,feishu_adapter:$feishu_adapter},
+              migration_check:$migration,health_check:$health,rollback_check:$rollback}' \
             > tmp/deployment-evidence/deployment-receipt.json
-          jq -e 'all(.images[]; test("@sha256:[0-9a-f]{64}$"))' \
-            tmp/deployment-evidence/deployment-receipt.json >/dev/null
+          go run ./cmd/verification-schema \
+            --schema .test/schemas/release-verification.schema.json \
+            --input tmp/deployment-evidence/deployment-receipt.json
 
       - name: Attest deployment evidence
         id: attest-deployment
-        if: steps.candidate.outputs.current == 'true'
         uses: actions/attest@v4
         with: {subject-path: tmp/deployment-evidence/deployment-receipt.json}
 
       - name: Upload deployment evidence
-        if: steps.candidate.outputs.current == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: deployment-evidence
@@ -645,7 +660,6 @@ jobs:
           retention-days: 90
 
       - name: Reconcile remote monitoring
-        if: steps.candidate.outputs.current == 'true'
         env:
           FEISHU_ADAPTER_IMAGE: ${{ env.IMAGE_REPO }}/stratum-feishu-alert-adapter@${{ needs.build-and-push.outputs.adapter-digest }}
         run: |

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stratum.local/schemas/release-verification.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "status",
+    "commit",
+    "images",
+    "migration_check",
+    "health_check",
+    "rollback_check"
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "status": { "enum": ["deployable", "blocked", "deployed"] },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "frontend", "platform_mcp", "feishu_adapter"],
+      "properties": {
+        "backend": { "$ref": "#/$defs/image" },
+        "frontend": { "$ref": "#/$defs/image" },
+        "platform_mcp": { "$ref": "#/$defs/image" },
+        "feishu_adapter": { "$ref": "#/$defs/image" }
+      }
+    },
+    "migration_check": { "$ref": "#/$defs/checkStatus" },
+    "health_check": { "$ref": "#/$defs/checkStatus" },
+    "rollback_check": { "$ref": "#/$defs/checkStatus" }
+  },
+  "$defs": {
+    "image": { "type": "string", "pattern": "^[^[:space:]]+@sha256:[0-9a-f]{64}$" },
+    "checkStatus": { "enum": ["passed", "failed", "pending"] }
+  }
+}

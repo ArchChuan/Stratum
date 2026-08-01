@@ -6,23 +6,23 @@
 
 | 层 | 机制 | 缺陷类型 | 运行方式 |
 |----|------|----------|----------|
-| 1. 单元测试 | `go test -race` / `npm test` | 分支逻辑、错误语义 | CI `test` job |
-| 2. 集成测试 | `go test -tags=integration` | 真实协议/数据库行为 | CI `workflow-e2e` job |
-| 3. 契约金丝雀 | `make contract-test` | JSON 序列化形状 | CI `contract` job |
-| 4. Manifest 能力声明 | `manifest.json` capabilities | 声明覆盖缺口 | `make e2e-attestation-check` |
-| 5. 浏览器 E2E | Playwright headless | 真实 UI 用户旅程 | CI `stateful-e2e` job |
+| 1. 单元测试 | `go test -race` / `npm test` | 分支逻辑、错误语义 | Local focused + CI `test` |
+| 2. 集成测试 | `go test -tags=integration` | 真实协议/数据库行为 | Local focused + CI integration jobs |
+| 3. 契约金丝雀 | `make contract-test` | JSON 序列化形状 | Local focused + CI `contract` |
+| 4. Manifest 能力声明 | `manifest.json` capabilities | 声明覆盖缺口 | Local attestation v2 |
+| 5. 浏览器 E2E | Playwright headless | 真实 UI 用户旅程 | Local before PR |
 
 **规则**：新增端点必须覆盖全部 5 层。存量缺口按风险优先级渐进补齐。
 
 ## 三层风险策略
 
-| 层级 | 触发条件 | 时长 | Packs | CI 行为 |
+| 层级 | 触发条件 | 时长 | Packs | 执行位置 |
 |------|----------|------|-------|---------|
-| **short** | 每次 PR | ~10min | 关键 packs | **强制门禁** — `stateful-e2e` job |
-| **soak** | auth/tenant/迁移/msg/vector/外部依赖 | 600s | all eligible | **强制门禁** — `make e2e-system-soak` |
-| **release-soak** | 正式发布 | 3600s | all | 发布 workflow 中运行 |
+| **short** | R2+ 创建 PR 前 | ~10min | 关键 packs | 本地 `make test-verify-before-pr` |
+| **soak** | R3 auth/tenant/迁移/msg/vector/外部依赖 | 600s | all eligible | 本地 canonical entrypoint |
+| **release-soak** | R4 显式发布意图 | 3600s | all | 本地显式执行 |
 
-### Short mode packs（CI 默认）
+### Short mode packs（本地默认）
 
 ```
 dashboard,iam,workflow,agent,skill,mcp,agent-skill-mcp,knowledge,memory,llm-admin
@@ -77,21 +77,15 @@ Go struct 缺少 `json:"camelCase"` tag 时序列化为 PascalCase，前端取�
 - [ ] 运行 `make e2e-system-short` 验证全链路
 - [ ] 风险规则命中时运行 `make e2e-system-soak`
 
-## CI 门禁链
+## 三种验证权威
 
 ```
-PR open
-  ├── system-e2e-attestation   (30s)
-  ├── guardrails                (3min)
-  ├── lint                      (2min)
-  ├── test                      (5min)
-  ├── contract                  (3s)    ← 新增：141 golden + camelCase
-  ├── workflow-e2e              (2min)
-  ├── platform-assistant-e2e    (2min)
-  ├── platform-assistant-browser-e2e (10min)
-  ├── tool-permission-browser   (3min)
-  ├── stateful-e2e              (15min) ← 新增：10 pack 浏览器 E2E
-  └── build (needs all above)   — 全部通过才允许合并
+Local before PR
+  └── focused -> headless short -> R3 600s soak -> local report
+PR CI
+  └── static + unit + integration + contract + security + build（无浏览器）
+Release pipeline
+  └── exact CI head SHA + immutable digests + migration + rollout + health + rollback
 ```
 
 ## 常用命令
@@ -103,8 +97,9 @@ make contract-enforce       # 契约测试 + camelCase 扫描
 make record-contracts       # 录制/更新 golden files
 
 # E2E 执行
-make e2e-system-short       # short 模式（CI 默认）
-make e2e-system-soak        # soak 模式（需要 STATEFUL_E2E_PACKS=all）
+make test-verify-before-pr  # PR 前 canonical 入口，自动按风险选择
+make e2e-system-short       # short 模式（仅开发迭代）
+make e2e-system-soak        # soak 模式（仅开发迭代，需要 STATEFUL_E2E_PACKS=all）
 make e2e-system-release-soak # release soak（3600s）
 
 # 审计
