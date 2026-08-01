@@ -37,14 +37,19 @@ relative_attestation_path() {
 }
 
 verify_attestation() {
-  local commit=$1 digest=$2 mode=$3 required_mode=$3
+  local commit=$1 digest=$2 mode=$3 required_mode=$3 required_profile=
   [[ -n "$attestation" && -f "$attestation" ]] || fail 'attestation is missing'
-  [[ "$mode" != release-soak ]] || required_mode=soak
+  case "$mode" in
+    soak) required_profile=test ;;
+    release-soak) required_mode=soak; required_profile=release ;;
+  esac
   jq -e --arg commit "$commit" --arg digest "${digest#sha256:}" '
     .tested_git_parent == $commit and .policy_manifest_digest == $digest and .schema_version == 2
   ' "$attestation" >/dev/null || fail 'attestation identity does not match the plan'
-  go run "$root/cmd/e2e-attestation" verify --root "$source_root" --ref HEAD \
-    --required-mode "$required_mode" --attestation "$attestation" >/dev/null || fail 'attestation verification failed'
+  local args=(verify --root "$source_root" --ref HEAD --required-mode "$required_mode")
+  [[ -z "$required_profile" ]] || args+=(--required-profile "$required_profile")
+  args+=(--attestation "$attestation")
+  go run "$root/cmd/e2e-attestation" "${args[@]}" >/dev/null || fail 'attestation verification failed'
 }
 
 summarize_attestation() {

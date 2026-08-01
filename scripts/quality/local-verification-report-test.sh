@@ -16,8 +16,9 @@ git -C "$repo" commit -qm initial
 commit=$(git -C "$repo" rev-parse HEAD)
 manifest_digest=sha256:$(sha256sum "$repo/manifest.yaml" | awk '{print $1}')
 
-cat >"$test_dir/bin/go" <<'EOF'
+cat >"$test_dir/bin/go" <<EOF
 #!/usr/bin/env bash
+printf '%s\n' "\$*" >>'$test_dir/go.log'
 exit 0
 EOF
 chmod +x "$test_dir/bin/go"
@@ -46,9 +47,18 @@ run_checker() {
 }
 
 run_writer passed
+grep -Fq -- '--required-profile test' "$test_dir/go.log"
 jq -e '.status == "passed" and .source_clean and .capabilities.passed == 1 and
   .cleanup.complete and .cleanup.residual_entities == 0' "$test_dir/report.json" >/dev/null
 run_checker
+
+jq '.mode = "release-soak"' "$test_dir/plan.json" >"$test_dir/release-plan.json"
+mv "$test_dir/release-plan.json" "$test_dir/plan.json"
+: >"$test_dir/go.log"
+run_writer passed
+grep -Fq -- '--required-profile release' "$test_dir/go.log"
+jq '.mode = "soak"' "$test_dir/plan.json" >"$test_dir/soak-plan.json"
+mv "$test_dir/soak-plan.json" "$test_dir/plan.json"
 
 printf 'dirty\n' >>"$repo/source.go"
 if run_writer passed 2>/dev/null; then
