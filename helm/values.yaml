@@ -135,6 +135,7 @@ config:
   frontendUrl: "http://localhost:3002"
   githubCallbackUrl: "http://localhost:8080/auth/github/callback"
   secureCookies: "false"
+  globalAdminGitHubLogin: "ArchChuan"
 
 secrets:
   create: false
