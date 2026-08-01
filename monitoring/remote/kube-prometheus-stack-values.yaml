@@ -153,3 +153,7 @@ kubeControllerManager:
   enabled: false
 kubeScheduler:
   enabled: false
+
+defaultRules:
+  rules:
+    kubeProxy: false
