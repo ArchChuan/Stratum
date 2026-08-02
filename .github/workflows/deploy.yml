@@ -18,6 +18,7 @@ env:
   REGISTRY: ${{ secrets.DOCKER_REGISTRY_URL }}
   IMAGE_REPO: ${{ secrets.DOCKER_REGISTRY_URL }}/stratum-demo
   IMAGE_NAME: stratum
+  DOCKER_HUB_MIRROR: ${{ vars.DOCKER_HUB_MIRROR || 'https://docker.m.daocloud.io' }}
 
 jobs:
   candidate:
@@ -81,6 +82,10 @@ jobs:
         run: CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
 
       - uses: docker/setup-buildx-action@v3
+        with:
+          config: |
+            [registry."docker.io"]
+              mirrors = ["${{ env.DOCKER_HUB_MIRROR }}"]
 
       - uses: docker/login-action@v3
         with:
@@ -117,8 +122,6 @@ jobs:
         with:
           ref: ${{ needs.candidate.outputs.sha }}
 
-      - uses: docker/setup-buildx-action@v3
-
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -152,6 +155,10 @@ jobs:
         run: CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/platform-mcp
 
       - uses: docker/setup-buildx-action@v3
+        with:
+          config: |
+            [registry."docker.io"]
+              mirrors = ["${{ env.DOCKER_HUB_MIRROR }}"]
 
       - uses: docker/login-action@v3
         with:
@@ -191,6 +198,10 @@ jobs:
           ref: ${{ needs.candidate.outputs.sha }}
 
       - uses: docker/setup-buildx-action@v3
+        with:
+          config: |
+            [registry."docker.io"]
+              mirrors = ["${{ env.DOCKER_HUB_MIRROR }}"]
 
       - uses: docker/login-action@v3
         with:
@@ -250,6 +261,10 @@ jobs:
           echo "PUBLIC_BASE_URL=$CLEAN_URL" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@v3
+        with:
+          config: |
+            [registry."docker.io"]
+              mirrors = ["${{ env.DOCKER_HUB_MIRROR }}"]
 
       - uses: docker/login-action@v3
         with:
