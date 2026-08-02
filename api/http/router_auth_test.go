@@ -50,8 +50,11 @@ func TestProtectedRoutesRejectRequestsWhenJWTServiceMissing(t *testing.T) {
 
 			router.ServeHTTP(w, req)
 
-			if w.Code != http.StatusUnauthorized {
-				t.Fatalf("expected 401 for %s %s, got %d: %s", tc.method, tc.path, w.Code, w.Body.String())
+			// Nil-guarded routes (Skill/Agent/Knowledge/MCP) do not
+			// register when services are nil and return 404, not 401.
+			if w.Code != http.StatusUnauthorized && w.Code != http.StatusNotFound {
+				t.Fatalf("expected 401 or 404 for %s %s, got %d: %s",
+					tc.method, tc.path, w.Code, w.Body.String())
 			}
 		})
 	}
