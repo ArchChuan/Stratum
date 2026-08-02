@@ -23,6 +23,7 @@ type AuditService struct {
 
 	buf     chan domain.AuditEvent
 	closeCh chan struct{}
+	done    chan struct{}
 	closed  bool
 	mu      sync.Mutex
 }
@@ -52,6 +53,7 @@ func NewAuditService(repo AuditRepo, metrics observability.MetricsProvider, logg
 		logger:  logger,
 		buf:     make(chan domain.AuditEvent, constants.AuditBufferSize),
 		closeCh: make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 	go s.batchWriter()
 	return s
@@ -106,7 +108,10 @@ func (s *AuditService) Stop(ctx context.Context) error {
 	close(s.closeCh)
 	s.mu.Unlock()
 
-	// Drain remaining events from the channel.
+	// Wait for batchWriter to flush its local batch and return.
+	<-s.done
+
+	// Drain any events that landed in the channel after batchWriter returned.
 	remaining := make([]domain.AuditEvent, 0)
 	for {
 		select {
@@ -133,6 +138,7 @@ func (s *AuditService) DeleteOlderThan(ctx context.Context, before time.Time) er
 
 // batchWriter is the background goroutine that flushes the buffer.
 func (s *AuditService) batchWriter() {
+	defer close(s.done)
 	ticker := time.NewTicker(time.Duration(constants.AuditFlushInterval) * time.Millisecond)
 	defer ticker.Stop()
 
@@ -145,13 +151,17 @@ func (s *AuditService) batchWriter() {
 				s.flush(&batch)
 			}
 		case <-ticker.C:
-			if len(batch) > 0 {
-				s.flush(&batch)
-			}
+			s.flushIfNotEmpty(&batch)
 		case <-s.closeCh:
-			// Final drain handled by Stop().
+			s.flushIfNotEmpty(&batch)
 			return
 		}
+	}
+}
+
+func (s *AuditService) flushIfNotEmpty(batch *[]domain.AuditEvent) {
+	if len(*batch) > 0 {
+		s.flush(batch)
 	}
 }
 
