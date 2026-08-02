@@ -1,0 +1,111 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: 'Helm release revision (0 = previous version)'
+        required: false
+        default: '0'
+      namespace:
+        description: 'Namespace'
+        required: false
+        default: 'stratum'
+      release:
+        description: 'Helm release name'
+        required: false
+        default: 'stratum'
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    name: Rollback Stratum
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: stratum-production
+      cancel-in-progress: false
+    steps:
+      - name: Setup SSH tunnel to K3s
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/known_hosts
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o ExitOnForwardFailure=yes \
+            -i ~/.ssh/deploy_key \
+            -fN -L 6443:127.0.0.1:6443 \
+            root@${{ secrets.SSH_DEPLOY_HOST }}
+          sleep 2
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Verify cluster
+        run: kubectl cluster-info
+
+      - name: Show Helm history
+        run: |
+          echo "=== Helm release history ==="
+          helm history "${{ inputs.release }}" -n "${{ inputs.namespace }}" --max 10
+
+      - name: Capture pre-rollback state
+        id: pre
+        run: |
+          echo "=== Current deployment state ==="
+          kubectl get deployments -n "${{ inputs.namespace }}" -o wide
+          echo "---"
+          kubectl get pods -n "${{ inputs.namespace }}" -o wide
+          echo "---"
+          CURRENT_REV=$(helm history "${{ inputs.release }}" -n "${{ inputs.namespace }}" --max 1 -o json | jq -r '.[0].revision')
+          echo "current_revision=$CURRENT_REV" >> "$GITHUB_OUTPUT"
+          echo "Current revision: $CURRENT_REV"
+
+      - name: Execute rollback
+        id: rollback
+        run: |
+          if [[ "${{ inputs.revision }}" == "0" ]]; then
+            echo "Rolling back to previous revision..."
+            helm rollback "${{ inputs.release }}" -n "${{ inputs.namespace }}" --wait --timeout=5m
+          else
+            echo "Rolling back to revision ${{ inputs.revision }}..."
+            helm rollback "${{ inputs.release }}" "${{ inputs.revision }}" -n "${{ inputs.namespace }}" --wait --timeout=5m
+          fi
+
+      - name: Verify rollout
+        run: |
+          echo "=== Waiting for rollout ==="
+          kubectl rollout status deployment/stratum -n "${{ inputs.namespace }}" --timeout=5m
+          kubectl rollout status deployment/stratum-frontend -n "${{ inputs.namespace }}" --timeout=5m
+          kubectl rollout status deployment/stratum-platform-mcp -n "${{ inputs.namespace }}" --timeout=5m || true
+          echo ""
+          echo "=== Post-rollback state ==="
+          kubectl get deployments -n "${{ inputs.namespace }}" -o wide
+          echo "---"
+          kubectl get pods -n "${{ inputs.namespace }}" -o wide
+          echo ""
+          echo "=== Rollback complete ==="
+          helm history "${{ inputs.release }}" -n "${{ inputs.namespace }}" --max 3
+
+      - name: Quick health check
+        run: |
+          PUBLIC_BASE_URL="${{ vars.PUBLIC_BASE_URL }}"
+          echo "Health check against $PUBLIC_BASE_URL/api/health"
+          for i in $(seq 1 10); do
+            status=$(curl --silent --insecure --output /dev/null --max-time 5 \
+              --write-out '%{http_code}' "$PUBLIC_BASE_URL/api/health" || echo "fail")
+            if [[ "$status" == "200" ]]; then
+              echo "Health check passed (status=$status)"
+              exit 0
+            fi
+            echo "Attempt $i: status=$status, retrying..."
+            sleep 3
+          done
+          echo "Health check failed after 10 attempts" >&2
+          exit 1
