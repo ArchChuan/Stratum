@@ -4,6 +4,8 @@ import (
 	"context"
 	"embed"
 	"fmt"
+
+	"github.com/byteBuilderX/stratum/internal/prompt/application"
 )
 
 // PromptKey identifies a specific prompt component that can be overridden.
@@ -35,12 +37,14 @@ type PromptOverrideRepo interface {
 	GetOverrides(ctx context.Context, tenantID string) (map[string]string, error)
 }
 
-// PromptResolver resolves prompt text at runtime using a Go-embed default
-// overridden by DB-stored values. Prompts whose DB override is empty fall
-// back to the embedded default.
+// PromptResolver resolves prompt text at runtime. Resolution order:
+// 1. PromptRegistry (agent > tenant > global, with A/B split)
+// 2. PromptOverrideRepo (legacy DB overrides)
+// 3. Embedded defaults from prompts/*.txt
 type PromptResolver struct {
 	defaults  map[string]string
 	overrides PromptOverrideRepo
+	registry  *application.RegistryService
 }
 
 // NewPromptResolver loads default prompts from the embedded prompts/ directory
@@ -53,7 +57,6 @@ func NewPromptResolver(repo PromptOverrideRepo) *PromptResolver {
 	for _, key := range AllPromptKeys {
 		b, err := defaultPrompts.ReadFile("prompts/" + string(key) + ".txt")
 		if err != nil {
-			// Missing default is a startup error — the binary is broken.
 			panic(fmt.Sprintf("prompt_resolver: missing default prompt %s: %v", key, err))
 		}
 		r.defaults[string(key)] = string(b)
@@ -61,23 +64,40 @@ func NewPromptResolver(repo PromptOverrideRepo) *PromptResolver {
 	return r
 }
 
-// Resolve returns the effective prompt text for key, preferring DB override
-// over embedded default. An empty tenantID skips the DB lookup.
+// SetRegistry injects the prompt registry for centralized version resolution.
+func (r *PromptResolver) SetRegistry(registry *application.RegistryService) {
+	r.registry = registry
+}
+
+// Resolve returns the effective prompt text for key.
+// Priority: registry(agent>tenant>global) > DB override > embedded default.
 func (r *PromptResolver) Resolve(ctx context.Context, tenantID string, key PromptKey) (string, error) {
+	return r.ResolveWithRequest(ctx, tenantID, "", "", key)
+}
+
+// ResolveWithRequest resolves with agentID and requestID for A/B split support.
+func (r *PromptResolver) ResolveWithRequest(ctx context.Context, tenantID, agentID, requestID string, key PromptKey) (string, error) {
 	defaultText, ok := r.defaults[string(key)]
 	if !ok {
 		return "", fmt.Errorf("prompt_resolver: unknown prompt key %q", key)
 	}
-	if tenantID == "" || r.overrides == nil {
-		return defaultText, nil
+	// 1. Try registry first (agent > tenant > global, with A/B split).
+	if r.registry != nil {
+		if text, err := r.registry.GetEffectivePrompt(ctx, string(key), tenantID, agentID, requestID); err == nil && text != "" {
+			return text, nil
+		}
 	}
-	overrides, err := r.overrides.GetOverrides(ctx, tenantID)
-	if err != nil {
-		return defaultText, fmt.Errorf("prompt_resolver: load overrides: %w", err)
+	// 2. Fall back to legacy DB overrides.
+	if tenantID != "" && r.overrides != nil {
+		overrides, err := r.overrides.GetOverrides(ctx, tenantID)
+		if err != nil {
+			return defaultText, fmt.Errorf("prompt_resolver: load overrides: %w", err)
+		}
+		if text, ok := overrides[string(key)]; ok && text != "" {
+			return text, nil
+		}
 	}
-	if text, ok := overrides[string(key)]; ok && text != "" {
-		return text, nil
-	}
+	// 3. Embedded default.
 	return defaultText, nil
 }
 

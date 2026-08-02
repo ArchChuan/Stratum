@@ -33,6 +33,9 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.CORSMiddleware(c.Config.FrontendURL))
 	r.Use(middleware.MetricsMiddleware(c.Platform.Metrics))
+	if c.Audit != nil && c.Audit.Recorder != nil {
+		r.Use(middleware.AuditMiddleware(c.Audit.Recorder))
+	}
 
 	requireActive := middleware.RequireActiveTenant(c.DB())
 
@@ -48,6 +51,8 @@ func NewRouter(c *wiring.Container) *gin.Engine {
 	registerKnowledge(r, c, requireActive)
 	registerMCP(r, c, requireActive)
 	registerMemory(r, c, requireActive)
+	registerAudit(r, c, requireActive)
+	registerPrompt(r, c, requireActive)
 	registerLLMAdmin(r, c, requireActive)
 	if c.Config.AvatarDir != "" {
 		r.GET("/avatars/:filename", func(ctx *gin.Context) {
@@ -413,6 +418,34 @@ func registerMemory(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 // registerLLMAdmin wires /admin/providers and /admin/models under JWT + tenant
 // context with the admin role. These routes are only registered when the
 // LLMGateway is fully built (DB available).
+func registerAudit(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Audit == nil || c.Audit.QueryService == nil {
+		return
+	}
+	h := handler.NewAuditHandler(c.Audit.QueryService, c.Logger)
+	auditGroup := r.Group("/audit", protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"))...)
+	auditGroup.Use(requireActive)
+	auditGroup.GET("/events", h.ListEvents)
+	auditGroup.GET("/events/:id", h.GetEvent)
+}
+
+func registerPrompt(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Prompt == nil || c.Prompt.Registry == nil {
+		return
+	}
+	h := handler.NewPromptHandler(c.Prompt.Registry, c.Prompt.AB, c.Logger)
+	adminMW := middleware.RequireTenantRole("admin")
+
+	prompts := r.Group("/prompts", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
+	prompts.POST("", adminMW, requireActive, h.CreatePrompt)
+	prompts.GET("/:key/versions", h.ListVersions)
+	prompts.POST("/:key/versions/:version/publish", adminMW, requireActive, h.PublishVersion)
+
+	bindings := r.Group("/prompts/bindings", protectedTenantMiddleware(c, middleware.RequireTenantRole("admin"))...)
+	bindings.PUT("", requireActive, h.UpsertBinding)
+	bindings.DELETE("/:key/:scope", requireActive, h.DeleteBinding)
+}
+
 func registerLLMAdmin(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
 	if c.LLMGateway == nil || c.LLMGateway.ProviderService == nil || c.LLMGateway.ModelMgmtService == nil {
 		return

@@ -63,6 +63,43 @@ type MetricsProvider interface {
 	IncHermesEvent(eventType string)
 	IncHermesEventProcessed(eventType, status string)
 
+	// Agent KPI (F3)
+	IncAgentTaskCompleted(agentID, agentType, taskKind, outcome string)
+	RecordAgentTaskLatency(agentID, taskKind string, seconds float64)
+	RecordAgentCostPerTask(agentID, taskKind string, costUSD float64)
+	RecordAgentEvalScore(agentID, metric string, score float64)
+	RecordAgentConversationTurn(agentID string, turnCount int)
+
+	// Scheduler (F3)
+	IncScheduledFire(scheduleType, status string)
+
+	// Reranker (F3)
+	IncRerankRequest(model, status string)
+	RecordRerankDuration(model string, seconds float64)
+
+	// Model Router (F3)
+	IncRouteFallback(fromModel, toModel string)
+	RecordBudgetRatio(scope string, pct float64)
+
+	// Audit (F3)
+	IncAuditEvent(risk, outcome string)
+	RecordAuditWriteQueueDepth(depth int)
+
+	// Collab (F3)
+	IncCollabPlan(strategy string)
+	RecordCollabTaskDuration(strategy string, seconds float64)
+
+	// Optimizer (F3)
+	IncOptimizerCandidate(strategy, outcome string)
+	RecordOptimizerCycleDuration(seconds float64)
+
+	// Operation Gate (F3)
+	IncOperationProposal(kind, outcome string)
+	RecordApprovalLatency(kind string, seconds float64)
+
+	// Schedule skew (F3)
+	RecordScheduleSkew(skewSeconds float64)
+
 	// Reaper
 	IncReaperCycle(outcome string)
 	SetReaperCycleTimestamp(ts float64)
@@ -139,6 +176,25 @@ func (NoopMetrics) IncKnowledgeIngestInFlight()                                 
 func (NoopMetrics) DecKnowledgeIngestInFlight()                                   {}
 func (NoopMetrics) IncHermesEvent(_ string)                                       {}
 func (NoopMetrics) IncHermesEventProcessed(_, _ string)                           {}
+func (NoopMetrics) IncAgentTaskCompleted(_, _, _, _ string)                       {}
+func (NoopMetrics) RecordAgentTaskLatency(_, _ string, _ float64)                 {}
+func (NoopMetrics) RecordAgentCostPerTask(_, _ string, _ float64)                 {}
+func (NoopMetrics) RecordAgentEvalScore(_, _ string, _ float64)                   {}
+func (NoopMetrics) RecordAgentConversationTurn(_ string, _ int)                   {}
+func (NoopMetrics) IncScheduledFire(_, _ string)                                  {}
+func (NoopMetrics) IncRerankRequest(_, _ string)                                  {}
+func (NoopMetrics) RecordRerankDuration(_ string, _ float64)                      {}
+func (NoopMetrics) IncRouteFallback(_, _ string)                                  {}
+func (NoopMetrics) RecordBudgetRatio(_ string, _ float64)                         {}
+func (NoopMetrics) IncAuditEvent(_, _ string)                                     {}
+func (NoopMetrics) RecordAuditWriteQueueDepth(_ int)                              {}
+func (NoopMetrics) IncCollabPlan(_ string)                                        {}
+func (NoopMetrics) RecordCollabTaskDuration(_ string, _ float64)                  {}
+func (NoopMetrics) IncOptimizerCandidate(_, _ string)                             {}
+func (NoopMetrics) RecordOptimizerCycleDuration(_ float64)                        {}
+func (NoopMetrics) IncOperationProposal(_, _ string)                              {}
+func (NoopMetrics) RecordApprovalLatency(_ string, _ float64)                     {}
+func (NoopMetrics) RecordScheduleSkew(_ float64)                                  {}
 func (NoopMetrics) IncReaperCycle(_ string)                                       {}
 func (NoopMetrics) SetReaperCycleTimestamp(_ float64)                             {}
 func (NoopMetrics) IncReaperGuestDeleted()                                        {}

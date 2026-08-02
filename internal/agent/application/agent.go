@@ -335,7 +335,27 @@ func (a *BaseAgent) Execute(ctx context.Context, input string, options ...Execut
 	metrics.RecordAgentExecutionDuration(agentID, string(agentType), result.Duration.Seconds())
 	metrics.RecordAgentStepCount(agentID, string(agentType), result.Steps)
 
+	recordFingerprintAndKPI(metrics, execSpan, requestSpan, agentID, string(agentType), llmModel, systemPrompt, cfg, result, status)
+
 	return result, execErr
+}
+
+func recordFingerprintAndKPI(
+	metrics observability.MetricsProvider,
+	execSpan, requestSpan oteltrace.Span,
+	agentID, taskKind, llmModel, systemPrompt string,
+	cfg *ExecutionConfig,
+	result *AgentResult,
+	status string,
+) {
+	metrics.IncAgentTaskCompleted(agentID, taskKind, taskKind, status)
+	metrics.RecordAgentTaskLatency(agentID, taskKind, result.Duration.Seconds())
+	metrics.RecordAgentCostPerTask(agentID, taskKind, result.CostUSD)
+	metrics.RecordAgentConversationTurn(agentID, result.Steps)
+	fp := CaptureFingerprint(llmModel, nil, systemPrompt, skillRevisionHashes(cfg.SkillCatalog), nil, 0)
+	fpAttrs := fingerprintAttributes(fp)
+	execSpan.SetAttributes(fpAttrs...)
+	requestSpan.SetAttributes(fpAttrs...)
 }
 
 func (a *BaseAgent) injectMemoryContext(ctx context.Context, tracer oteltrace.Tracer, cfg *ExecutionConfig, agentID, memoryScope, input string) string {
@@ -1209,6 +1229,44 @@ func restoreMessages(raw json.RawMessage, fallback []port.LLMMessage) []port.LLM
 		return saved
 	}
 	return fallback
+}
+
+// skillRevisionHashes extracts skillID → revision hash from the skill catalog.
+func skillRevisionHashes(catalog map[string]port.SkillActivation) map[string]string {
+	if len(catalog) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(catalog))
+	for id, act := range catalog {
+		out[id] = act.RevisionID
+	}
+	return out
+}
+
+// fingerprintAttributes converts an ExecutionFingerprint into OTEL span attributes.
+func fingerprintAttributes(fp *domain.ExecutionFingerprint) []attribute.KeyValue {
+	if fp == nil {
+		return nil
+	}
+	attrs := []attribute.KeyValue{
+		attribute.String("stratum.fingerprint.model_resolved", fp.ModelResolved),
+		attribute.String("stratum.fingerprint.prompt_version", fp.PromptVersion),
+		attribute.String("stratum.fingerprint.content_hash", fp.ContentHash()),
+		attribute.Int("stratum.fingerprint.ab_bucket", fp.ABBucket),
+	}
+	if len(fp.ModelRoutedVia) > 0 {
+		b, _ := json.Marshal(fp.ModelRoutedVia)
+		attrs = append(attrs, attribute.String("stratum.fingerprint.model_routed_via", string(b)))
+	}
+	if len(fp.SkillRevisions) > 0 {
+		b, _ := json.Marshal(fp.SkillRevisions)
+		attrs = append(attrs, attribute.String("stratum.fingerprint.skill_revisions", string(b)))
+	}
+	if len(fp.TunableSnapshot) > 0 {
+		b, _ := json.Marshal(fp.TunableSnapshot)
+		attrs = append(attrs, attribute.String("stratum.fingerprint.tunable_snapshot", string(b)))
+	}
+	return attrs
 }
 
 func restorePlanCheckpointState(raw json.RawMessage, catalog map[string]port.SkillActivation) (*domain.Plan, *port.SkillActivation) {

@@ -43,6 +43,8 @@ type Container struct {
 	Agent                *Agent
 	PlatformMCP          *PlatformMCP
 	Workflow             *Workflow
+	Audit                *Audit
+	Prompt               *Prompt
 	ReadinessCheck       func(context.Context) map[string]error
 	RevisionObjectStore  pkgobjectstore.Store
 	revisionObjectClient *minio.Client
@@ -68,6 +70,8 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 
 	steps := []buildStep{
 		{"storage", c.buildStorage},
+		{"audit", c.buildAudit},
+		{"prompt", c.buildPrompt},
 		{"llmgateway", c.buildLLMGateway},
 		{"platform", c.buildPlatform},
 		{"revision-object-store", c.buildRevisionObjectStore},
@@ -234,8 +238,31 @@ func runBuildSteps(ctx context.Context, steps []buildStep) error {
 	return nil
 }
 
+func (c *Container) buildAudit(ctx context.Context) error {
+	db := c.dbOrNil()
+	if db == nil {
+		return nil
+	}
+	c.Audit = buildAudit(db, c.Logger)
+	c.shutdown = append(c.shutdown, func(ctx context.Context) error {
+		if c.Audit != nil && c.Audit.Recorder != nil {
+			return c.Audit.Recorder.Stop(ctx)
+		}
+		return nil
+	})
+	return nil
+}
+
+func (c *Container) buildPrompt(ctx context.Context) error {
+	db := c.dbOrNil()
+	c.Prompt = buildPrompt(db)
+	return nil
+}
+
 func (c *Container) newFromExistingInitialSteps() []buildStep {
 	return []buildStep{
+		{"audit", c.buildAudit},
+		{"prompt", c.buildPrompt},
 		{"platform", c.buildPlatform},
 		{"revision-object-store", c.buildRevisionObjectStore},
 		{"mcp", c.buildMCP},

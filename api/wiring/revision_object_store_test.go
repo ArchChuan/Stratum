@@ -12,9 +12,19 @@ func TestNewFromExistingCompositionBuildsRevisionStoreBeforeMCP(t *testing.T) {
 	store := &compositionObjectStore{}
 	container := &Container{RevisionObjectStore: store}
 	steps := container.newFromExistingInitialSteps()
-	if len(steps) < 3 || steps[0].name != "platform" || steps[1].name != "revision-object-store" ||
-		steps[2].name != "mcp" {
-		t.Fatalf("unexpected NewFromExisting initial composition: %+v", steps)
+	// Verify revision-object-store is built before mcp (the invariant;
+	// absolute positions shift as new steps are added before platform).
+	var revIdx, mcpIdx = -1, -1
+	for i, s := range steps {
+		if s.name == "revision-object-store" {
+			revIdx = i
+		}
+		if s.name == "mcp" {
+			mcpIdx = i
+		}
+	}
+	if revIdx < 0 || mcpIdx < 0 || revIdx >= mcpIdx {
+		t.Fatalf("revision-object-store must precede mcp in NewFromExisting initial composition: %+v", steps)
 	}
 	if err := container.buildRevisionObjectStore(context.Background()); err != nil {
 		t.Fatal(err)
