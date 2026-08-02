@@ -290,6 +290,9 @@ func protectedTenantMiddleware(c *wiring.Container, extra ...gin.HandlerFunc) []
 // registerSkills wires versioned instruction bundles. Skills are activated by
 // the Agent loop; they are never executed directly through an HTTP endpoint.
 func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Skill == nil || c.Skill.VersionService == nil {
+		return
+	}
 	skillHandler := handler.NewSkillHandler(c.Skill.VersionService, c.Logger)
 
 	skills := r.Group("/skills", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
@@ -313,6 +316,9 @@ func registerSkills(r *gin.Engine, c *wiring.Container, requireActive gin.Handle
 // stay open to members; create/update/delete require admin so ordinary
 // tenant members can only use agents, not modify them.
 func registerAgents(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Agent == nil || c.Agent.Service == nil {
+		return
+	}
 	agentHandler := handler.NewAgentHandler(c.Agent.Service, c.Logger)
 	chatHandler := handler.NewChatHandler(c.Agent.ChatStore, c.Logger)
 
@@ -365,6 +371,9 @@ func newRateLimiterStore(c *wiring.Container, limit rate.Limit, burst int) *midd
 // registerKnowledge wires /knowledge/* under JWT + tenant context with
 // member/admin role split for read vs write.
 func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.Knowledge == nil || c.Knowledge.RAGService == nil {
+		return
+	}
 	ragHandler := handler.NewRAGHandler(c.Knowledge.RAGService, c.Knowledge.WorkspaceService, c.Logger)
 
 	knowledgeGroup := r.Group("/knowledge", protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))...)
@@ -388,6 +397,9 @@ func registerKnowledge(r *gin.Engine, c *wiring.Container, requireActive gin.Han
 //   - write: member 可执行的运行时操作追加 requireActive（工具执行）。
 //   - admin: 服务器管理类操作（连接/更新/断开/删除配置/重连/刷新技能）要求 admin+。
 func registerMCP(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerFunc) {
+	if c.MCP == nil || c.MCP.Service == nil {
+		return
+	}
 	mcpHandler := handler.NewMCPHandler(c.MCP.Service, c.Logger)
 
 	base := protectedTenantMiddleware(c, middleware.RequireTenantRole("member"))

@@ -4,8 +4,8 @@
     "method": "POST",
     "path": "/skills",
     "body": {
-      "error": "missing bearer token"
+      "error": "not found"
     },
-    "want_status": 401
+    "want_status": 404
   }
 ]
