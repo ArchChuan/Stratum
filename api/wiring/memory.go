@@ -295,7 +295,9 @@ func BuildMemoryWorkers(c *Container) []interface {
 
 	if c.Storage != nil && c.Storage.Redis != nil {
 		store := persistence.NewRedisMessageBufferStore(c.Storage.Redis.Client())
-		result = append(result, memory.NewBufferScanner(store, queue, c.Logger))
+		scanner := memory.NewBufferScanner(store, queue, c.Logger)
+		scanner.SetMetrics(c.Platform.Metrics)
+		result = append(result, scanner)
 	}
 
 	return result

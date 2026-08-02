@@ -66,6 +66,28 @@ type PrometheusMetrics struct {
 	reaperDeleteErrors   *prometheus.CounterVec
 	reaperCycleTimestamp prometheus.Gauge
 
+	// Background components (generic)
+	componentCyclesTotal    *prometheus.CounterVec
+	componentCycleTimestamp *prometheus.GaugeVec
+	componentErrorsTotal    *prometheus.CounterVec
+
+	// Goroutine panics
+	goroutinePanicsTotal *prometheus.CounterVec
+
+	// Workflow
+	workflowRunsTotal   *prometheus.CounterVec
+	workflowRunDuration *prometheus.HistogramVec
+
+	// MCP internal client
+	mcpClientRequestsTotal   *prometheus.CounterVec
+	mcpClientReconnectsTotal *prometheus.CounterVec
+
+	// Evaluation
+	evaluationJobsTotal *prometheus.CounterVec
+
+	// Auth
+	authFailuresTotal *prometheus.CounterVec
+
 	logger *zap.Logger
 }
 
@@ -301,6 +323,58 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 		),
 		reaperCycleTimestamp: factory.NewGauge(
 			prometheus.GaugeOpts{Name: "reaper_last_cycle_timestamp_seconds", Help: "Unix timestamp of last reaper cycle"},
+		),
+
+		// Background components (generic)
+		componentCyclesTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "component_cycles_total", Help: "Background component cycles by outcome"},
+			[]string{"component", "outcome"},
+		),
+		componentCycleTimestamp: factory.NewGaugeVec(
+			prometheus.GaugeOpts{Name: "component_last_cycle_timestamp_seconds", Help: "Unix timestamp of last component cycle"},
+			[]string{"component"},
+		),
+		componentErrorsTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "component_errors_total", Help: "Component errors by phase"},
+			[]string{"component", "phase"},
+		),
+
+		// Goroutine panics
+		goroutinePanicsTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "goroutine_panics_total", Help: "Total goroutine panics recovered"},
+			[]string{"component"},
+		),
+
+		// Workflow
+		workflowRunsTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "workflow_runs_total", Help: "Total workflow runs by status"},
+			[]string{"tenant_id", "status"},
+		),
+		workflowRunDuration: factory.NewHistogramVec(
+			prometheus.HistogramOpts{Name: "workflow_run_duration_seconds", Help: "Workflow run duration", Buckets: latencyBuckets},
+			[]string{"tenant_id"},
+		),
+
+		// MCP internal client
+		mcpClientRequestsTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "mcp_client_requests_total", Help: "Internal MCP client requests by operation and status"},
+			[]string{"server_name", "operation", "status"},
+		),
+		mcpClientReconnectsTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "mcp_client_reconnects_total", Help: "Internal MCP client reconnect attempts"},
+			[]string{"server_name"},
+		),
+
+		// Evaluation
+		evaluationJobsTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "evaluation_jobs_total", Help: "Evaluation jobs by outcome"},
+			[]string{"status"},
+		),
+
+		// Auth
+		authFailuresTotal: factory.NewCounterVec(
+			prometheus.CounterOpts{Name: "auth_failures_total", Help: "Auth failures by reason"},
+			[]string{"reason"},
 		),
 
 		logger: logger,
@@ -549,4 +623,57 @@ func (m *PrometheusMetrics) IncReaperGuestDeleted() {
 
 func (m *PrometheusMetrics) IncReaperDeleteError(phase string) {
 	m.reaperDeleteErrors.WithLabelValues(phase).Inc()
+}
+
+// --- Background components (generic) ---
+
+func (m *PrometheusMetrics) RecordComponentCycle(component string) {
+	m.componentCyclesTotal.WithLabelValues(component, "ok").Inc()
+}
+
+func (m *PrometheusMetrics) SetComponentCycleTimestamp(component string, ts float64) {
+	m.componentCycleTimestamp.WithLabelValues(component).Set(ts)
+}
+
+func (m *PrometheusMetrics) IncComponentError(component, phase string) {
+	m.componentErrorsTotal.WithLabelValues(component, phase).Inc()
+	m.componentCyclesTotal.WithLabelValues(component, "error").Inc()
+}
+
+// --- Goroutine panics ---
+
+func (m *PrometheusMetrics) IncGoroutinePanic(component string) {
+	m.goroutinePanicsTotal.WithLabelValues(component).Inc()
+}
+
+// --- Workflow ---
+
+func (m *PrometheusMetrics) IncWorkflowRun(tenantID, status string) {
+	m.workflowRunsTotal.WithLabelValues(tenantID, status).Inc()
+}
+
+func (m *PrometheusMetrics) RecordWorkflowRunDuration(tenantID string, duration float64) {
+	m.workflowRunDuration.WithLabelValues(tenantID).Observe(duration)
+}
+
+// --- MCP internal client ---
+
+func (m *PrometheusMetrics) IncMCPClientRequest(serverName, operation, status string) {
+	m.mcpClientRequestsTotal.WithLabelValues(serverName, operation, status).Inc()
+}
+
+func (m *PrometheusMetrics) IncMCPClientReconnect(serverName string) {
+	m.mcpClientReconnectsTotal.WithLabelValues(serverName).Inc()
+}
+
+// --- Evaluation ---
+
+func (m *PrometheusMetrics) IncEvaluationJob(status string) {
+	m.evaluationJobsTotal.WithLabelValues(status).Inc()
+}
+
+// --- Auth ---
+
+func (m *PrometheusMetrics) IncAuthFailure(reason string) {
+	m.authFailuresTotal.WithLabelValues(reason).Inc()
 }

@@ -90,6 +90,7 @@ func (w *ExtractionWorker) processTask(ctx context.Context, task *port.Extractio
 				w.logger.Error("memory.extraction_worker.mark_failed_failed", zap.Int64("task_id", task.ID), zap.Error(err))
 			}
 			incWorkerMessages("extraction", task.UserID, "panic")
+			incWorkerPanics("extraction_worker")
 		}
 	}()
 

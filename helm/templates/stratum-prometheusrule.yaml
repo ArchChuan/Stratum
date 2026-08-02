@@ -10,7 +10,8 @@ metadata:
     {{- end }}
 spec:
   groups:
-    - name: stratum-ai
+    # ── Reaper ──────────────────────────────────────────────────────
+    - name: stratum-reaper
       rules:
         - alert: StratumReaperDown
           expr: (time() - reaper_last_cycle_timestamp_seconds) > 7200
@@ -55,4 +56,226 @@ spec:
             description: >
               ErrorCycles: {{ `{{ $value }}` }} (1h),
               Pod: {{ `{{ $labels.pod }}` }}
+
+    # ── Background components (chat-cleanup, checkpoint-cleanup, etc.) ──
+    - name: stratum-background
+      rules:
+        - alert: StratumComponentStale
+          expr: (time() - component_last_cycle_timestamp_seconds{component=~"chat-cleanup|checkpoint-cleanup"}) > 172800
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: '{{ `{{ $labels.component }}` }} 超过 48h 未运行'
+            description: >
+              Component: {{ `{{ $labels.component }}` }},
+              LastCycle: {{ `{{ $value | humanizeDuration }}` }} ago,
+              Threshold: 172800s (48h)
+
+        - alert: StratumComponentErrorRate
+          expr: increase(component_errors_total[1h]) > 5
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: '{{ `{{ $labels.component }}` }}.{{ `{{ $labels.phase }}` }} 最近 1h 错误 {{ `{{ $value }}` }}'
+            description: >
+              Component: {{ `{{ $labels.component }}` }},
+              Phase: {{ `{{ $labels.phase }}` }},
+              Increase1h: {{ `{{ $value }}` }}
+
+    # ── Goroutine panics ────────────────────────────────────────────
+    - name: stratum-panics
+      rules:
+        - alert: StratumGoroutinePanic
+          expr: increase(goroutine_panics_total[10m]) > 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: '{{ `{{ $labels.component }}` }} goroutine panic (10m)'
+            description: >
+              Component: {{ `{{ $labels.component }}` }},
+              Increase10m: {{ `{{ $value }}` }}
+
+        - alert: StratumGoroutinePanicCritical
+          expr: increase(goroutine_panics_total[1h]) > 10
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: '{{ `{{ $labels.component }}` }} goroutine panic 风暴 (1h ≥{{ `{{ $value }}` }})'
+            description: >
+              Component: {{ `{{ $labels.component }}` }},
+              Increase1h: {{ `{{ $value }}` }}
+
+    # ── Workflow ────────────────────────────────────────────────────
+    - name: stratum-workflow
+      rules:
+        - alert: StratumWorkflowRunErrors
+          expr: increase(workflow_runs_total{status="error"}[10m]) > 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Workflow run 错误 (10m ↑{{ `{{ $value }}` }})'
+            description: >
+              Tenant: {{ `{{ $labels.tenant_id }}` }},
+              Increase10m: {{ `{{ $value }}` }}
+
+        - alert: StratumWorkflowErrorRate
+          expr: rate(workflow_runs_total{status="error"}[30m]) > 0.1
+          for: 15m
+          labels: { severity: critical }
+          annotations:
+            summary: 'Workflow 错误率 >10% (30m)'
+            description: >
+              Tenant: {{ `{{ $labels.tenant_id }}` }},
+              ErrorRate: {{ `{{ $value }}` }}
+
+    # ── MCP internal client ─────────────────────────────────────────
+    - name: stratum-mcp
+      rules:
+        - alert: StratumMCPClientErrors
+          expr: increase(mcp_client_requests_total{status="error"}[10m]) > 3
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: 'MCP client {{ `{{ $labels.server_name }}` }}.{{ `{{ $labels.operation }}` }} 错误'
+            description: >
+              Server: {{ `{{ $labels.server_name }}` }},
+              Operation: {{ `{{ $labels.operation }}` }},
+              Increase10m: {{ `{{ $value }}` }}
+
+        - alert: StratumMCPClientReconnects
+          expr: increase(mcp_client_reconnects_total[1h]) > 5
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: 'MCP client {{ `{{ $labels.server_name }}` }} 频繁重连'
+            description: >
+              Server: {{ `{{ $labels.server_name }}` }},
+              Reconnects1h: {{ `{{ $value }}` }}
+
+    # ── Auth ────────────────────────────────────────────────────────
+    - name: stratum-auth
+      rules:
+        - alert: StratumAuthFailures
+          expr: increase(auth_failures_total[10m]) > 5
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Auth 失败 {{ `{{ $labels.reason }}` }} (10m ↑{{ `{{ $value }}` }})'
+            description: >
+              Reason: {{ `{{ $labels.reason }}` }},
+              Increase10m: {{ `{{ $value }}` }}
+
+    # ── HTTP ────────────────────────────────────────────────────────
+    - name: stratum-http
+      rules:
+        - alert: StratumHTTP5xxRate
+          expr: rate(http_requests_total{status="5xx"}[5m]) > 0.5
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: 'HTTP 5xx rate >0.5/s (5m)'
+            description: >
+              Method: {{ `{{ $labels.method }}` }},
+              Path: {{ `{{ $labels.path }}` }},
+              Rate5m: {{ `{{ $value }}` }}
+
+    # ── Knowledge ───────────────────────────────────────────────────
+    - name: stratum-knowledge
+      rules:
+        - alert: StratumKnowledgeIngestFailures
+          expr: increase(knowledge_ingest_total{status=~"failed|error"}[30m]) > 3
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Knowledge ingest 失败 (30m ↑{{ `{{ $value }}` }})'
+            description: >
+              Status: {{ `{{ $labels.status }}` }},
+              Increase30m: {{ `{{ $value }}` }}
+
+    # ── Hermes ──────────────────────────────────────────────────────
+    - name: stratum-hermes
+      rules:
+        - alert: StratumHermesErrors
+          expr: increase(hermes_events_processed_total{status=~"publish_error|handler_error|unmarshal_error"}[10m]) > 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Hermes event 处理错误 {{ `{{ $labels.event_type }}` }}'
+            description: >
+              EventType: {{ `{{ $labels.event_type }}` }},
+              Status: {{ `{{ $labels.status }}` }},
+              Increase10m: {{ `{{ $value }}` }}
+
+    # ── Memory pipeline ─────────────────────────────────────────────
+    - name: stratum-memory-pipeline
+      rules:
+        - alert: StratumMemoryPipelinePanics
+          expr: increase(memory_pipeline_panics_total[10m]) > 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Memory pipeline panic {{ `{{ $labels.component }}` }}'
+            description: >
+              Component: {{ `{{ $labels.component }}` }},
+              Increase10m: {{ `{{ $value }}` }}
+
+        - alert: StratumMemoryDLQ
+          expr: increase(memory_dlq_total[1h]) > 5
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Memory DLQ 消息累积 (1h ↑{{ `{{ $value }}` }})'
+            description: >
+              Tenant: {{ `{{ $labels.tenant_id }}` }},
+              Stage: {{ `{{ $labels.stage }}` }},
+              Increase1h: {{ `{{ $value }}` }}
+
+        - alert: StratumMemoryDLQCritical
+          expr: increase(memory_dlq_total[1h]) > 50
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: 'Memory DLQ 消息大量堆积 (1h ↑{{ `{{ $value }}` }})'
+            description: >
+              Tenant: {{ `{{ $labels.tenant_id }}` }},
+              Stage: {{ `{{ $labels.stage }}` }},
+              Increase1h: {{ `{{ $value }}` }}
+
+    # ── Memory workers ──────────────────────────────────────────────
+    - name: stratum-memory-workers
+      rules:
+        - alert: StratumMemoryWorkerPanics
+          expr: increase(memory_worker_panics_total[10m]) > 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Memory worker panic {{ `{{ $labels.worker }}` }}'
+            description: >
+              Worker: {{ `{{ $labels.worker }}` }},
+              Increase10m: {{ `{{ $value }}` }}
+
+        - alert: StratumMemoryWorkerErrorRate
+          expr: rate(memory_worker_messages_total{status="error"}[30m]) > 0.1
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Memory worker {{ `{{ $labels.worker }}` }} 错误率 >10%'
+            description: >
+              Worker: {{ `{{ $labels.worker }}` }},
+              Tenant: {{ `{{ $labels.tenant_id }}` }},
+              ErrorRate: {{ `{{ $value }}` }}
+
+    # ── Evaluation ──────────────────────────────────────────────────
+    - name: stratum-evaluation
+      rules:
+        - alert: StratumEvaluationJobErrors
+          expr: increase(evaluation_jobs_total{status=~"error|list_error"}[10m]) > 3
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: 'Evaluation job 错误 (10m ↑{{ `{{ $value }}` }})'
+            description: >
+              Status: {{ `{{ $labels.status }}` }},
+              Increase10m: {{ `{{ $value }}` }}
+
 {{- end }}

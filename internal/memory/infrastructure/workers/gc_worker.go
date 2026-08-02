@@ -68,14 +68,19 @@ func (w *GCWorker) RunOnce(ctx context.Context) {
 			w.logger.Error("memory.gc_worker.panic",
 				zap.Any("panic", r),
 				zap.Stack("stack"))
+			incWorkerPanics("gc_worker")
 		}
 	}()
+
+	start := time.Now()
+	hasErr := false
 
 	if w.queue != nil {
 		n, err := w.queue.DeleteOldCompleted(ctx, w.tenantID, constants.MemoryGCQueueRetentionDays)
 		if err != nil {
 			w.logger.Error("memory.gc_worker.delete_old_completed_failed",
 				zap.String("tenant_id", w.tenantID), zap.Error(err))
+			hasErr = true
 		} else if n > 0 {
 			w.logger.Info("memory.gc_worker.deleted_old_completed",
 				zap.String("tenant_id", w.tenantID), zap.Int("count", n))
@@ -83,6 +88,12 @@ func (w *GCWorker) RunOnce(ctx context.Context) {
 	}
 
 	w.purgeSupersededFacts(ctx)
+	status := "success"
+	if hasErr {
+		status = "error"
+	}
+	incWorkerMessages("gc", w.tenantID, status)
+	observeWorkerDuration("gc", w.tenantID, time.Since(start).Seconds())
 }
 
 // purgeSupersededFacts hard-deletes superseded facts older than the retention

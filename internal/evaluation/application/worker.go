@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/google/uuid"
 )
 
@@ -22,15 +23,18 @@ type Worker struct {
 	runner   TenantJobRunner
 	interval time.Duration
 	workerID string
+	metrics  observability.MetricsProvider
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 }
 
-func NewWorker(lister TenantLister, runner TenantJobRunner, interval time.Duration) *Worker {
+func NewWorker(lister TenantLister, runner TenantJobRunner, interval time.Duration, metrics observability.MetricsProvider) *Worker {
 	return &Worker{
 		lister: lister, runner: runner, interval: interval,
-		workerID: uuid.Must(uuid.NewV7()).String(), stopCh: make(chan struct{}),
+		workerID: uuid.Must(uuid.NewV7()).String(),
+		metrics:  metrics,
+		stopCh:   make(chan struct{}),
 	}
 }
 
@@ -61,6 +65,7 @@ func (w *Worker) Stop() {
 func (w *Worker) PollOnce(ctx context.Context) error {
 	tenantIDs, err := w.lister.ListTenantIDs(ctx)
 	if err != nil {
+		w.metrics.IncEvaluationJob("list_error")
 		return err
 	}
 	var failures []error
@@ -68,6 +73,9 @@ func (w *Worker) PollOnce(ctx context.Context) error {
 		_, err := w.runner.RunOnce(ctx, tenantID, w.workerID, time.Minute)
 		if err != nil {
 			failures = append(failures, err)
+			w.metrics.IncEvaluationJob("error")
+		} else {
+			w.metrics.IncEvaluationJob("ok")
 		}
 	}
 	return errors.Join(failures...)

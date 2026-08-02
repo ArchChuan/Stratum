@@ -11,6 +11,7 @@ import (
 	"github.com/byteBuilderX/stratum/api/middleware"
 	iamport "github.com/byteBuilderX/stratum/internal/iam/domain/port"
 	iamtoken "github.com/byteBuilderX/stratum/internal/iam/infrastructure/token"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/gin-gonic/gin"
 )
 
@@ -23,7 +24,7 @@ func TestJWTMiddleware_ValidToken(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(middleware.JWTMiddleware(svc))
+	r.Use(middleware.JWTMiddleware(svc, observability.NoopMetrics{}))
 	r.GET("/protected", func(c *gin.Context) {
 		sub, _ := c.Get(middleware.ContextKeySub)
 		tid, _ := c.Get(middleware.ContextKeyTenantID)
@@ -46,7 +47,7 @@ func TestJWTMiddleware_MissingToken(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(middleware.JWTMiddleware(svc))
+	r.Use(middleware.JWTMiddleware(svc, observability.NoopMetrics{}))
 	r.GET("/protected", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil) //nolint:noctx

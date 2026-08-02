@@ -68,6 +68,28 @@ type MetricsProvider interface {
 	SetReaperCycleTimestamp(ts float64)
 	IncReaperGuestDeleted()
 	IncReaperDeleteError(phase string)
+
+	// Background components (generic ticker-based components)
+	RecordComponentCycle(component string)
+	SetComponentCycleTimestamp(component string, ts float64)
+	IncComponentError(component, phase string)
+
+	// Goroutine panic recovery
+	IncGoroutinePanic(component string)
+
+	// Workflow
+	IncWorkflowRun(tenantID, status string)
+	RecordWorkflowRunDuration(tenantID string, duration float64)
+
+	// MCP internal client (backend→MCP server calls)
+	IncMCPClientRequest(serverName, operation, status string)
+	IncMCPClientReconnect(serverName string)
+
+	// Evaluation
+	IncEvaluationJob(status string)
+
+	// Auth
+	IncAuthFailure(reason string)
 }
 
 // NoopMetrics satisfies MetricsProvider with no-ops. Safe for tests and disabled mode.
@@ -121,3 +143,13 @@ func (NoopMetrics) IncReaperCycle(_ string)                                     
 func (NoopMetrics) SetReaperCycleTimestamp(_ float64)                             {}
 func (NoopMetrics) IncReaperGuestDeleted()                                        {}
 func (NoopMetrics) IncReaperDeleteError(_ string)                                 {}
+func (NoopMetrics) RecordComponentCycle(_ string)                                 {}
+func (NoopMetrics) SetComponentCycleTimestamp(_ string, _ float64)                {}
+func (NoopMetrics) IncComponentError(_, _ string)                                 {}
+func (NoopMetrics) IncGoroutinePanic(_ string)                                    {}
+func (NoopMetrics) IncWorkflowRun(_, _ string)                                    {}
+func (NoopMetrics) RecordWorkflowRunDuration(_ string, _ float64)                 {}
+func (NoopMetrics) IncMCPClientRequest(_, _, _ string)                            {}
+func (NoopMetrics) IncMCPClientReconnect(_ string)                                {}
+func (NoopMetrics) IncEvaluationJob(_ string)                                     {}
+func (NoopMetrics) IncAuthFailure(_ string)                                       {}

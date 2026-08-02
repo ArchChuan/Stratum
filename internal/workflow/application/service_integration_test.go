@@ -15,6 +15,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
 	workflowpersist "github.com/byteBuilderX/stratum/internal/workflow/infrastructure/persistence"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -182,7 +183,7 @@ func TestStage1BRealPostgresIndependentWorkerRunsDiamondAndPersistsEvents(t *tes
 	runs := application.NewRunServiceWithRegistry(store, store, integrationRegistry{}, newID)
 	run, _, err := runs.Start(tenantCtx, tenantID, application.StartRunCommand{VersionID: version.ID, Input: map[string]any{"query": "hello"}, IdempotencyKey: "independent-worker"})
 	require.NoError(t, err)
-	worker := application.NewWorker("integration-worker", store, runs, time.Minute)
+	worker := application.NewWorker("integration-worker", store, runs, time.Minute, observability.NoopMetrics{})
 	require.True(t, worker.RunOnce(ctx))
 	got, attempts, err := runs.Get(tenantCtx, tenantID, run.ID, adminActor())
 	require.NoError(t, err)
@@ -224,7 +225,7 @@ func TestStage1CPauseResumeAcrossWorkersUsesPostgresCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	_, err = controls.Pause(tenantCtx, tenantID, run.ID, run.Generation, "admin", "maintenance")
 	require.NoError(t, err)
-	workerA := application.NewWorker("worker-a", store, runs, time.Minute)
+	workerA := application.NewWorker("worker-a", store, runs, time.Minute, observability.NoopMetrics{})
 	require.True(t, workerA.RunOnce(ctx))
 	paused, _, err := runs.Get(tenantCtx, tenantID, run.ID, adminActor())
 	require.NoError(t, err)
@@ -232,7 +233,7 @@ func TestStage1CPauseResumeAcrossWorkersUsesPostgresCheckpoint(t *testing.T) {
 	resumed, err := controls.Resume(tenantCtx, tenantID, run.ID, paused.Generation, "admin")
 	require.NoError(t, err)
 	require.Equal(t, domain.RunStatusQueued, resumed.Status)
-	workerB := application.NewWorker("worker-b", store, runs, time.Minute)
+	workerB := application.NewWorker("worker-b", store, runs, time.Minute, observability.NoopMetrics{})
 	require.True(t, workerB.RunOnce(ctx))
 	completed, attempts, err := runs.Get(tenantCtx, tenantID, run.ID, adminActor())
 	require.NoError(t, err)

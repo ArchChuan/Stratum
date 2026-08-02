@@ -14,6 +14,7 @@ import (
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	"github.com/byteBuilderX/stratum/internal/mcp/infrastructure/mcpnode"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -53,6 +54,8 @@ type ClientManager struct {
 	fwdTransport *http.Transport
 
 	clientFactory func(*MCPServerConfig, *zap.Logger) MCPClient
+
+	metrics observability.MetricsProvider
 }
 
 // NewClientManager 创建新的客户端管理器
@@ -81,6 +84,7 @@ func NewClientManager(
 		stopCh:     make(chan struct{}),
 		pool:       pool,
 		nodeID:     nodeID,
+		metrics:    observability.NoopMetrics{},
 	}
 	//nolint:gosec // serverCancel is called in Stop()
 	manager.serverCtx, manager.serverCancel = context.WithCancel(context.Background())
@@ -91,6 +95,14 @@ func NewClientManager(
 		return client
 	}
 	return manager
+}
+
+// SetMetrics injects the observability MetricsProvider (no-ops until set).
+func (m *ClientManager) SetMetrics(metrics observability.MetricsProvider) {
+	if metrics == nil {
+		metrics = observability.NoopMetrics{}
+	}
+	m.metrics = metrics
 }
 
 func (m *ClientManager) SetManagedHTTPTransportProvider(provider ManagedHTTPTransportProvider) {
@@ -266,6 +278,7 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 	}
 
 	if err := client.Connect(connCtx); err != nil {
+		m.metrics.IncMCPClientRequest(config.ID, "connect", "error")
 		cleanupErr := disconnectMCPClient(client)
 		if cleanupErr != nil {
 			return errors.Join(err, fmt.Errorf("cleanup failed MCP connection: %w", cleanupErr))
@@ -301,6 +314,7 @@ func (m *ClientManager) Connect(ctx context.Context, config *MCPServerConfig) er
 		zap.String("server_id", config.ID),
 		zap.Int("tools", len(tools)),
 		zap.Int("resources", len(resources)))
+	m.metrics.IncMCPClientRequest(config.ID, "connect", "ok")
 
 	return nil
 }
@@ -395,6 +409,7 @@ func (m *ClientManager) getOrRestoreClient(ctx context.Context, serverID string)
 		}
 		m.logger.Warn("mcp auto-reconnect failed",
 			zap.String("server_id", serverID), zap.Error(err))
+		m.metrics.IncMCPClientReconnect(serverID)
 		return nil, err
 	}
 
@@ -451,9 +466,15 @@ func (m *ClientManager) CallTool(ctx context.Context, serverID, toolName string,
 func (m *ClientManager) CallToolWithConfig(
 	ctx context.Context, config *MCPServerConfig, toolName string, input any,
 ) (result any, resultErr error) {
-	return m.withRevisionClient(ctx, config, func(client MCPClient) (any, error) {
+	result, resultErr = m.withRevisionClient(ctx, config, func(client MCPClient) (any, error) {
 		return client.CallTool(ctx, toolName, input)
 	})
+	if resultErr != nil {
+		m.metrics.IncMCPClientRequest(config.ID, "call_tool", "error")
+	} else {
+		m.metrics.IncMCPClientRequest(config.ID, "call_tool", "ok")
+	}
+	return
 }
 
 // ListToolsWithConfig discovers the contract through the same immutable

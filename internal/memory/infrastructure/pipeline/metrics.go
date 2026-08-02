@@ -41,6 +41,10 @@ var (
 		Name: "memory_entities_extracted_total",
 		Help: "Total entities extracted",
 	})
+	pipelinePanics = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "memory_pipeline_panics_total",
+		Help: "Total goroutine panics recovered in memory pipeline",
+	}, []string{"component"})
 )
 
 // RegisterMetrics registers all pipeline metrics with the given registerer.
@@ -50,5 +54,6 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		embedDuration, embedTotal,
 		enrichDuration, enrichTotal,
 		summaryTriggered, dlqTotal, entitiesExtracted,
+		pipelinePanics,
 	)
 }

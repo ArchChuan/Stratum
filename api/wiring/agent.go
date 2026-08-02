@@ -217,11 +217,16 @@ func (c *Container) buildAgent(ctx context.Context) error {
 		a.CheckpointStore = persistence.NewPgCheckpointStore(db)
 		a.ApprovalStore = persistence.NewPgToolApprovalStore(db)
 		a.ApprovalService = agent.NewToolApprovalService(a.ApprovalStore, a.CheckpointStore, c.Platform.AESKey)
+		var cpMetrics observability.MetricsProvider = observability.NoopMetrics{}
+		if c.Platform != nil && c.Platform.Metrics != nil {
+			cpMetrics = c.Platform.Metrics
+		}
 		a.CheckpointCleanup = agent.NewCheckpointCleanupWorker(
 			agentCheckpointTenantLister{pool: db}.list,
 			a.CheckpointStore,
 			10*time.Minute,
 			c.Logger,
+			cpMetrics,
 		)
 		a.CheckpointCleanup.Start(ctx)
 		c.shutdown = append(c.shutdown, func(context.Context) error {
