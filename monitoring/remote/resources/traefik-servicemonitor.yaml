@@ -1,0 +1,23 @@
+# ServiceMonitor for k3s-built-in Traefik reverse-proxy metrics.
+# Tells Prometheus to scrape Traefik port 9100 so we can alert on
+# ingress-level 502/503 errors that bypass Stratum's own metrics.
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: traefik
+  namespace: monitoring
+  labels:
+    release: kps
+spec:
+  namespaceSelector:
+    matchNames:
+      - kube-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: traefik
+      app.kubernetes.io/instance: traefik-kube-system
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics

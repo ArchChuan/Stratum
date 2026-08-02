@@ -76,7 +76,9 @@ func (s *AuditService) Record(ctx context.Context, event domain.AuditEvent) erro
 	}
 	select {
 	case s.buf <- event:
-		s.metrics.IncAuditEvent(event.RiskLevel, event.Outcome)
+		if s.metrics != nil {
+			s.metrics.IncAuditEvent(event.RiskLevel, event.Outcome)
+		}
 		return nil
 	default:
 		s.logger.Warn("audit buffer full, dropping event",
@@ -168,7 +170,9 @@ func (s *AuditService) flushIfNotEmpty(batch *[]domain.AuditEvent) {
 func (s *AuditService) flush(batch *[]domain.AuditEvent) {
 	toWrite := *batch
 	*batch = (*batch)[:0]
-	s.metrics.RecordAuditWriteQueueDepth(len(toWrite))
+	if s.metrics != nil {
+		s.metrics.RecordAuditWriteQueueDepth(len(toWrite))
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := s.repo.InsertBatch(ctx, toWrite); err != nil {

@@ -85,6 +85,29 @@ tests:
           - labels: '{__name__="stratum:kube_pod_owner:deployment",deployment="stratum",namespace="stratum",pod="stratum-abc"}'
             value: 1
 
+  - name: workload rules detect intermittent cumulative restarts below CrashLoop threshold
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="stratum",pod="intermittent-pod",container="stratum"}'
+        values: '0+1x40'
+      - series: 'kube_pod_info{namespace="stratum",pod="intermittent-pod",node="remote-node"}'
+        values: '1x40'
+      - series: 'kube_pod_owner{namespace="stratum",pod="intermittent-pod",owner_kind="ReplicaSet",owner_name="stratum-intermittent-rs"}'
+        values: '1x40'
+      - series: 'kube_replicaset_owner{namespace="stratum",replicaset="stratum-intermittent-rs",owner_kind="Deployment",owner_name="stratum"}'
+        values: '1x40'
+      - series: 'kube_pod_container_status_restarts_total{namespace="stratum",pod="stable-pod",container="stratum"}'
+        values: '0+1x10 11x40'
+    promql_expr_test:
+      - expr: ALERTS{alertname="StratumPodCumulativeRestarts",alertstate="firing"}
+        eval_time: 31m
+        exp_samples:
+          - labels: '{__name__="ALERTS",alert_family="pod-health",alertname="StratumPodCumulativeRestarts",alertstate="firing",component="workload",container="stratum",deployment="stratum",environment="remote-test",namespace="stratum",node="remote-node",pod="intermittent-pod",service="stratum",severity="warning"}'
+            value: 1
+      - expr: ALERTS{alertname="StratumPodCumulativeRestarts",alertstate="firing",pod="stable-pod"}
+        eval_time: 31m
+        exp_samples: []
+
   - name: workload rules detect crash loops and prolonged pending pods
     interval: 1m
     input_series:
