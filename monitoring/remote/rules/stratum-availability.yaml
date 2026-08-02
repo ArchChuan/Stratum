@@ -56,3 +56,21 @@ groups:
           description: The expected Stratum scrape target has been absent or down for ten minutes (current value {{ $value }}).
           dashboard_url: /d/stratum-service-overview
           runbook_url: /docs/operations/alerts/availability.md#target-missing
+
+      - alert: StratumIngressBackendUnreachable
+        expr: |
+          sum(rate(traefik_service_requests_total{service="stratum-stratum@http",code=~"50[23]"}[5m]))
+            /
+          clamp_min(sum(rate(traefik_service_requests_total{service="stratum-stratum@http"}[5m])), 1)
+          > 0.10
+        for: 5m
+        labels:
+          severity: critical
+          service: stratum
+          environment: remote-test
+          component: ingress
+        annotations:
+          summary: Traefik reports high 502/503 rate to backend
+          description: More than 10% of requests from Traefik to the Stratum backend are returning 502 or 503 in the last five minutes (current value {{ $value }}). The backend pods may be crashing.
+          dashboard_url: /d/stratum-http
+          runbook_url: /docs/operations/alerts/availability.md#ingress-backend-unreachable

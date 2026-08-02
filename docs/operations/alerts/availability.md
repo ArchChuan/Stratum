@@ -42,3 +42,12 @@ Grafana 对照后端可用性。若后端正常，检查前端 Service/Ingress/�
 影响：监控失明，应用未必故障；紧急度：warning。查询
 `absent(up{namespace="stratum",service="stratum",endpoint="http"})`。检查 ServiceMonitor selector、Service
 标签、端口名和 Prometheus targets；只修复发现链，不重启健康应用。恢复标准是目标重新出现并连续为 up。
+
+<a id="ingress-backend-unreachable"></a>
+
+## StratumIngressBackendUnreachable
+
+影响：Traefik 入口层向后端返回高比例 502/503，后端 Pod 可能间歇崩溃；紧急度：critical。查询
+`traefik_service_requests_total{service="stratum-stratum@http",code=~"50[23]"}`。
+优先确认后端 Pod 重启数和 CrashLoop；后端健康但仍有 502 时检查 Service endpoints 和 Traefik 配置。
+恢复后验证 502/503 率降至正常。该告警被 `StratumBackendUnavailable` 抑制——若两者同时出现，后者已覆盖根因。

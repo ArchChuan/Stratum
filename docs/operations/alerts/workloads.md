@@ -30,6 +30,16 @@ revision 和时间线，不输出 Secret、env 或日志中的敏感正文。
 `increase(kube_pod_container_status_restarts_total{namespace="stratum"}[10m])`。按 exit reason、events、OOM、
 probe 和发布顺序定位；若新版本相关则回滚，恢复后观察重启计数不再增长。
 
+<a id="pod-cumulative-restarts"></a>
+
+## StratumPodCumulativeRestarts
+
+影响：Pod 间歇崩溃并自行恢复，未达到 CrashLoopBackOff 阈值但持续累积；紧急度：warning。查询
+`increase(kube_pod_container_status_restarts_total{namespace="stratum"}[30m])`。
+此告警填补短窗口 `StratumPodRestartingFrequently`（10 分钟 3 次）与 `StratumPodCrashLooping` 之间的盲区——
+每秒崩溃一次但进程立刻退出，10 分钟内累积 600 次重启，滑动窗口仍可能漏报。
+按 exit code、events、应用日志定位根因；新版本相关则回滚，恢复后确认 30 分钟窗口重启增量回归正常。
+
 <a id="pod-crash-looping"></a>
 
 ## StratumPodCrashLooping

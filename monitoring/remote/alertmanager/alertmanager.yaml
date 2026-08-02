@@ -66,7 +66,7 @@ inhibit_rules:
   - source_matchers:
       - alertname = "StratumNodeNotReady"
     target_matchers:
-      - alertname =~ "StratumPod(RestartingFrequently|CrashLooping|PendingTooLong)"
+      - alertname =~ "StratumPod(RestartingFrequently|CrashLooping|PendingTooLong|CumulativeRestarts)"
     equal:
       - service
       - environment
@@ -74,12 +74,19 @@ inhibit_rules:
   - source_matchers:
       - alertname =~ "Stratum(Backend|Frontend)Unavailable"
     target_matchers:
-      - alertname =~ "StratumPod(RestartingFrequently|CrashLooping|PendingTooLong)"
+      - alertname =~ "StratumPod(RestartingFrequently|CrashLooping|PendingTooLong|CumulativeRestarts)"
     equal:
       - service
       - environment
       - namespace
       - deployment
+  - source_matchers:
+      - alertname =~ "Stratum(Backend|Frontend)Unavailable"
+    target_matchers:
+      - alertname = "StratumIngressBackendUnreachable"
+    equal:
+      - service
+      - environment
   - source_matchers:
       - severity = "critical"
       - alert_family != ""
