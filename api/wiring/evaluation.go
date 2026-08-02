@@ -737,7 +737,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	feedbackService := evalapp.NewFeedbackService(
 		feedbackRepo, experimentService, evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider},
 	)
-	worker := evalapp.NewWorker(evaluationTenantLister{pool: db}, jobService, time.Second)
+	worker := evalapp.NewWorker(evaluationTenantLister{pool: db}, jobService, time.Second, c.platformMetrics())
 	worker.Start(ctx)
 	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })
 	baselineService := newEvaluationBaselineService(manager, agentProvider, mcpProvider, knowledgeProvider)

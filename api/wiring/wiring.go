@@ -95,6 +95,15 @@ func BuildContainer(ctx context.Context, cfg *config.Config, logger *zap.Logger)
 	return c, nil
 }
 
+// platformMetrics returns the configured MetricsProvider or a safe
+// no-op default when Platform has not been wired yet (e.g. in tests).
+func (c *Container) platformMetrics() observability.MetricsProvider {
+	if c.Platform != nil && c.Platform.Metrics != nil {
+		return c.Platform.Metrics
+	}
+	return observability.NoopMetrics{}
+}
+
 // Shutdown invokes registered teardown hooks in reverse order. The
 // first error encountered is returned; remaining hooks still run.
 func (c *Container) Shutdown(ctx context.Context) error {

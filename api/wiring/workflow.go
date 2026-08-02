@@ -177,6 +177,6 @@ func (c *Container) buildWorkflow(_ context.Context) error {
 	registry := workflowexec.NewRegistry(agentExecutor, workflowSkillExecutor{agents: c.Agent.Service, versions: c.Skill.VersionService}, workflowMCPExecutor{policies: c.MCP.Service, manager: c.MCP.Manager})
 	runs := workflowapp.NewRunServiceWithRegistry(store, store, registry, newID)
 	c.Workflow = &Workflow{DefinitionService: workflowapp.NewDefinitionService(store, store, newID), RunService: runs, ControlService: workflowapp.NewControlService(store, newID)}
-	c.Workflow.Worker = workflowapp.NewWorker("workflow-"+newID(), store, workflowRunAdvancer{runs: runs}, 30*time.Second)
+	c.Workflow.Worker = workflowapp.NewWorker("workflow-"+newID(), store, workflowRunAdvancer{runs: runs}, 30*time.Second, c.platformMetrics())
 	return nil
 }

@@ -210,7 +210,7 @@ func registerAuth(r *gin.Engine, c *wiring.Container, requireActive gin.HandlerF
 	if c.IAM == nil || c.IAM.AdminService == nil || c.IAM.TenantService == nil {
 		return
 	}
-	jwtMW := middleware.JWTMiddleware(jwtSvc)
+	jwtMW := middleware.JWTMiddleware(jwtSvc, c.Platform.Metrics)
 	adminHandler := handler.NewAdminHandler(c.IAM.AdminService, c.Logger)
 	tenantHandler := handler.NewTenantHandler(c.IAM.TenantService, c.IAM.InvitationService, c.IAM.AdminService, c.Logger)
 
@@ -283,7 +283,7 @@ func protectedTenantMiddleware(c *wiring.Container, extra ...gin.HandlerFunc) []
 			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
 		}}
 	}
-	mw := []gin.HandlerFunc{middleware.JWTMiddleware(c.Platform.JWTService), middleware.InjectTenantContext()}
+	mw := []gin.HandlerFunc{middleware.JWTMiddleware(c.Platform.JWTService, c.Platform.Metrics), middleware.InjectTenantContext()}
 	return append(mw, extra...)
 }
 

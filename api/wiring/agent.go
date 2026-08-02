@@ -222,6 +222,7 @@ func (c *Container) buildAgent(ctx context.Context) error {
 			a.CheckpointStore,
 			10*time.Minute,
 			c.Logger,
+			c.platformMetrics(),
 		)
 		a.CheckpointCleanup.Start(ctx)
 		c.shutdown = append(c.shutdown, func(context.Context) error {

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/platformmcp"
 	"github.com/byteBuilderX/stratum/pkg/reqctx"
 	"github.com/byteBuilderX/stratum/pkg/tenantdb"
@@ -49,7 +50,7 @@ func TestRequireDelegatedScopeEnforcesExactRouteScope(t *testing.T) {
 func TestRequireDelegatedScopeInjectsTenantContext(t *testing.T) {
 	verifier := &delegationVerifierFake{claims: validDelegationClaims()}
 	router := gin.New()
-	router.GET("/internal/models/:id", RequireDelegatedScope(verifier), func(c *gin.Context) {
+	router.GET("/internal/models/:id", RequireDelegatedScope(verifier, observability.NoopMetrics{}), func(c *gin.Context) {
 		tenant, ok := tenantdb.FromContext(c.Request.Context())
 		if !ok || tenant.TenantID != "tenant-1" || tenant.UserID != "user-1" || string(tenant.Role) != "admin" {
 			c.Status(http.StatusInternalServerError)
@@ -74,7 +75,7 @@ func TestRequireDelegatedScopeInjectsTenantContext(t *testing.T) {
 
 func delegatedScopeTestRouter(verifier delegationVerifier) *gin.Engine {
 	router := gin.New()
-	router.Any("/internal/models/:id", RequireDelegatedScope(verifier), func(c *gin.Context) {
+	router.Any("/internal/models/:id", RequireDelegatedScope(verifier, observability.NoopMetrics{}), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
 	return router

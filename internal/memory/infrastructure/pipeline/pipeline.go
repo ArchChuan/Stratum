@@ -254,6 +254,7 @@ func runWithRecovery(label string, logger *zap.Logger, fn func(context.Context),
 				zap.String("worker", label),
 				zap.Any("panic", r),
 				zap.Stack("stack"))
+			pipelinePanics.WithLabelValues(label).Inc()
 		}
 	}()
 	fn(ctx)

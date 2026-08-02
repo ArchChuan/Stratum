@@ -190,6 +190,7 @@ func (r agentMCPPolicyResolver) ResolveMCPToolRisk(ctx context.Context, _, serve
 func (c *Container) buildMCP(ctx context.Context) error {
 	var db = c.dbOrNil()
 	manager := mcp.NewClientManager(c.Logger, nil, db, mcpnode.NodeID())
+	manager.SetMetrics(c.platformMetrics())
 	if c.Config != nil && c.Config.InternalAPI.Configured() {
 		manager.SetManagedHTTPTransportProvider(platformMCPTransportProvider{files: c.Config.InternalAPI})
 	}

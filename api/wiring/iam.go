@@ -11,6 +11,7 @@ import (
 	"github.com/byteBuilderX/stratum/internal/iam/infrastructure/hermes"
 	iampersistence "github.com/byteBuilderX/stratum/internal/iam/infrastructure/persistence"
 	knowledgepersistence "github.com/byteBuilderX/stratum/internal/knowledge/infrastructure/persistence"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
 // BuildHermesFuncs returns start/stop/healthCheck closures for the NATS
@@ -23,7 +24,7 @@ func BuildHermesFuncs(cfg *config.Config, logger *zap.Logger) (
 ) {
 	var client *hermes.Client
 	start = func(_ context.Context) error {
-		c, err := hermes.NewClient(cfg.NatsURL, logger)
+		c, err := hermes.NewClient(cfg.NatsURL, logger, observability.NoopMetrics{})
 		if err != nil {
 			logger.Warn("Failed to connect to NATS", zap.Error(err))
 			return nil

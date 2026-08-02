@@ -61,8 +61,11 @@ func (w *HistoryWorker) RunOnce(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			w.logger.Error("memory.history_worker.panic", zap.Any("panic", r), zap.Stack("stack"))
+			incWorkerPanics("history_worker")
 		}
 	}()
+
+	start := time.Now()
 	for range historyAggregationMaxBatchesPerRun {
 		if !w.aggregateNext(ctx) {
 			break
@@ -75,6 +78,8 @@ func (w *HistoryWorker) RunOnce(ctx context.Context) {
 	if _, err := w.repo.ArchiveColdFacts(ctx, w.tenantID); err != nil {
 		w.logger.Warn("memory.history.archive_facts_failed", zap.Error(err))
 	}
+	incWorkerMessages("history", w.tenantID, "success")
+	observeWorkerDuration("history", w.tenantID, time.Since(start).Seconds())
 }
 
 func (w *HistoryWorker) aggregateNext(ctx context.Context) bool {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/workflow/domain"
 	"github.com/byteBuilderX/stratum/internal/workflow/domain/port"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
 type RunAdvancer interface {
@@ -17,6 +18,7 @@ type Worker struct {
 	runtime port.RuntimePort
 	runs    RunAdvancer
 	lease   time.Duration
+	metrics observability.MetricsProvider
 }
 
 type leaseHeartbeat interface {
@@ -27,8 +29,8 @@ type runControlObserver interface {
 	RunControlState(context.Context, string, string, int64) (domain.RunStatus, error)
 }
 
-func NewWorker(owner string, runtime port.RuntimePort, runs RunAdvancer, lease time.Duration) *Worker {
-	return &Worker{owner: owner, runtime: runtime, runs: runs, lease: lease}
+func NewWorker(owner string, runtime port.RuntimePort, runs RunAdvancer, lease time.Duration, metrics observability.MetricsProvider) *Worker {
+	return &Worker{owner: owner, runtime: runtime, runs: runs, lease: lease, metrics: metrics}
 }
 
 func (w *Worker) RunOnce(ctx context.Context) bool {
@@ -39,10 +41,18 @@ func (w *Worker) RunOnce(ctx context.Context) bool {
 	execCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go w.heartbeat(execCtx, cancel, done, tenantID, run.ID, run.Generation)
-	_ = w.runs.Execute(execCtx, tenantID, run.ID)
+	start := time.Now()
+	execErr := w.runs.Execute(execCtx, tenantID, run.ID)
 	close(done)
 	cancel()
+	duration := time.Since(start).Seconds()
+	w.metrics.RecordWorkflowRunDuration(tenantID, duration)
 	_ = w.runtime.ReleaseRun(ctx, tenantID, run.ID, w.owner, run.Generation)
+	if execErr != nil {
+		w.metrics.IncWorkflowRun(tenantID, "error")
+	} else {
+		w.metrics.IncWorkflowRun(tenantID, "ok")
+	}
 	return true
 }
 

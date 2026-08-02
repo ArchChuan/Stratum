@@ -11,6 +11,7 @@ import (
 
 	"github.com/byteBuilderX/stratum/internal/memory/domain/port"
 	"github.com/byteBuilderX/stratum/pkg/constants"
+	"github.com/byteBuilderX/stratum/pkg/observability"
 )
 
 // BufferScanner is a global worker that flushes idle/aged Redis message buffers.
@@ -19,16 +20,25 @@ type BufferScanner struct {
 	buffer   *MessageBuffer
 	store    port.MessageBufferStore
 	logger   *zap.Logger
+	metrics  observability.MetricsProvider
 	stopCh   chan struct{}
 	stopOnce sync.Once
 }
 
 func NewBufferScanner(store port.MessageBufferStore, q port.ExtractionQueue, logger *zap.Logger) *BufferScanner {
 	return &BufferScanner{
-		buffer: NewMessageBuffer(store, q),
-		store:  store,
-		logger: logger,
-		stopCh: make(chan struct{}),
+		buffer:  NewMessageBuffer(store, q),
+		store:   store,
+		logger:  logger,
+		metrics: observability.NoopMetrics{},
+		stopCh:  make(chan struct{}),
+	}
+}
+
+// SetMetrics injects a metrics provider. Call before Start.
+func (s *BufferScanner) SetMetrics(m observability.MetricsProvider) {
+	if m != nil {
+		s.metrics = m
 	}
 }
 
@@ -52,6 +62,7 @@ func (s *BufferScanner) run(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			s.logger.Error("memory.buffer_scanner.panic", zap.Any("panic", r), zap.Stack("stack"))
+			s.metrics.IncGoroutinePanic("memory.buffer_scanner")
 		}
 	}()
 	ticker := time.NewTicker(constants.MemoryBufferScanInterval)

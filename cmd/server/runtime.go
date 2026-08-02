@@ -247,7 +247,11 @@ func registerChatCleanup(appHarness *harnesspkg.Harness, c *wiring.Container, lo
 				logger.Warn("chat-cleanup: no DB or ChatStore available, skipping")
 				return nil
 			}
-			go runChatCleanup(ctx, db, c.Agent.ChatStore, chatCleanupInterval, logger)
+			var metrics observability.MetricsProvider = observability.NoopMetrics{}
+			if c.Platform != nil && c.Platform.Metrics != nil {
+				metrics = c.Platform.Metrics
+			}
+			go runChatCleanup(ctx, db, c.Agent.ChatStore, chatCleanupInterval, metrics, logger)
 			return nil
 		}),
 		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
@@ -266,52 +270,64 @@ func registerGuestReaper(appHarness *harnesspkg.Harness, c *wiring.Container, lo
 				logger.Warn("guest-reaper: OnboardSvc or AdminService unavailable, skipping")
 				return nil
 			}
-			go runGuestReaper(ctx, c.Platform.OnboardSvc, c.IAM.AdminService, constants.GuestReaperInterval, logger)
+			var metrics observability.MetricsProvider = observability.NoopMetrics{}
+			if c.Platform.Metrics != nil {
+				metrics = c.Platform.Metrics
+			}
+			go runGuestReaper(ctx, c.Platform.OnboardSvc, c.IAM.AdminService, metrics, constants.GuestReaperInterval, logger)
 			return nil
 		}),
 		harnesspkg.WithStopFunc(func(context.Context) error { return nil }),
 	), logger)
 }
 
-func runGuestReaper(ctx context.Context, onboard *iamapp.OnboardService, admin *iamapp.AdminService, interval time.Duration, logger *zap.Logger) {
+func runGuestReaper(ctx context.Context, onboard *iamapp.OnboardService, admin *iamapp.AdminService, metrics observability.MetricsProvider, interval time.Duration, logger *zap.Logger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			reapExpiredGuests(ctx, onboard, admin, logger)
+			reapExpiredGuests(ctx, onboard, admin, metrics, logger)
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func reapExpiredGuests(ctx context.Context, onboard *iamapp.OnboardService, admin *iamapp.AdminService, logger *zap.Logger) {
+func reapExpiredGuests(ctx context.Context, onboard *iamapp.OnboardService, admin *iamapp.AdminService, metrics observability.MetricsProvider, logger *zap.Logger) {
+	metrics.SetReaperCycleTimestamp(float64(time.Now().Unix()))
 	guestIDs, err := onboard.ListExpiredGuests(ctx, time.Now())
 	if err != nil {
 		logger.Warn("guest-reaper: list expired guests", zap.Error(err))
+		metrics.IncReaperCycle("error")
+		metrics.IncReaperDeleteError("list")
 		return
 	}
 	for _, userID := range guestIDs {
-		reapGuest(ctx, userID, onboard, admin, logger)
+		reapGuest(ctx, userID, onboard, admin, metrics, logger)
 	}
+	metrics.IncReaperCycle("ok")
 }
 
-func reapGuest(ctx context.Context, userID string, onboard *iamapp.OnboardService, admin *iamapp.AdminService, logger *zap.Logger) {
+func reapGuest(ctx context.Context, userID string, onboard *iamapp.OnboardService, admin *iamapp.AdminService, metrics observability.MetricsProvider, logger *zap.Logger) {
 	tenantIDs, err := onboard.ListOwnedNonDefaultTenants(ctx, userID)
 	if err != nil {
 		logger.Warn("guest-reaper: list owned tenants", zap.String("user_id", userID), zap.Error(err))
+		metrics.IncReaperDeleteError("list_tenants")
 		return
 	}
 	for _, tenantID := range tenantIDs {
 		if err := admin.DeleteTenant(ctx, tenantID); err != nil {
 			logger.Warn("guest-reaper: delete tenant", zap.String("tenant_id", tenantID), zap.Error(err))
+			metrics.IncReaperDeleteError("delete_tenant")
 		}
 	}
 	if err := onboard.DeleteUser(ctx, userID); err != nil {
 		logger.Warn("guest-reaper: delete user", zap.String("user_id", userID), zap.Error(err))
+		metrics.IncReaperDeleteError("delete_user")
 		return
 	}
+	metrics.IncReaperGuestDeleted()
 	logger.Info("guest-reaper: reaped expired guest", zap.String("user_id", userID), zap.Int("tenants_deleted", len(tenantIDs)))
 }
 
@@ -352,15 +368,17 @@ func mustRegister(h *harnesspkg.Harness, c harnesspkg.Component, logger *zap.Log
 	}
 }
 
-func runChatCleanup(ctx context.Context, db *pgxpool.Pool, store chatCleaner, interval time.Duration, logger *zap.Logger) {
+func runChatCleanup(ctx context.Context, db *pgxpool.Pool, store chatCleaner, interval time.Duration, metrics observability.MetricsProvider, logger *zap.Logger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
+			metrics.SetComponentCycleTimestamp("chat-cleanup", float64(time.Now().Unix()))
 			rows, err := db.Query(ctx, `SELECT id::text FROM tenants WHERE deleted_at IS NULL`)
 			if err != nil {
 				logger.Warn("chat-cleanup: list tenants", zap.Error(err))
+				metrics.IncComponentError("chat-cleanup", "list_tenants")
 				continue
 			}
 			var tenantIDs []string
@@ -374,8 +392,10 @@ func runChatCleanup(ctx context.Context, db *pgxpool.Pool, store chatCleaner, in
 			for _, tenantID := range tenantIDs {
 				if err := store.CleanupExpired(ctx, tenantID); err != nil {
 					logger.Warn("chat-cleanup: cleanup tenant", zap.String("tenant_id", tenantID), zap.Error(err))
+					metrics.IncComponentError("chat-cleanup", "cleanup")
 				}
 			}
+			metrics.RecordComponentCycle("chat-cleanup")
 		case <-ctx.Done():
 			return
 		}
