@@ -14,7 +14,6 @@ import (
 	workflowexec "github.com/byteBuilderX/stratum/internal/workflow/infrastructure/executor"
 	workflowpersist "github.com/byteBuilderX/stratum/internal/workflow/infrastructure/persistence"
 	"github.com/byteBuilderX/stratum/pkg/constants"
-	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
 )
@@ -178,10 +177,6 @@ func (c *Container) buildWorkflow(_ context.Context) error {
 	registry := workflowexec.NewRegistry(agentExecutor, workflowSkillExecutor{agents: c.Agent.Service, versions: c.Skill.VersionService}, workflowMCPExecutor{policies: c.MCP.Service, manager: c.MCP.Manager})
 	runs := workflowapp.NewRunServiceWithRegistry(store, store, registry, newID)
 	c.Workflow = &Workflow{DefinitionService: workflowapp.NewDefinitionService(store, store, newID), RunService: runs, ControlService: workflowapp.NewControlService(store, newID)}
-	var wfMetrics observability.MetricsProvider = observability.NoopMetrics{}
-	if c.Platform != nil && c.Platform.Metrics != nil {
-		wfMetrics = c.Platform.Metrics
-	}
-	c.Workflow.Worker = workflowapp.NewWorker("workflow-"+newID(), store, workflowRunAdvancer{runs: runs}, 30*time.Second, wfMetrics)
+	c.Workflow.Worker = workflowapp.NewWorker("workflow-"+newID(), store, workflowRunAdvancer{runs: runs}, 30*time.Second, c.platformMetrics())
 	return nil
 }

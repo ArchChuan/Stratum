@@ -163,7 +163,7 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 	reg := prometheus.NewRegistry()
 	factory := promauto.With(reg)
 
-	return &PrometheusMetrics{
+	m := &PrometheusMetrics{
 		reg: reg,
 		// HTTP
 		httpRequestsTotal: factory.NewCounterVec(
@@ -324,61 +324,56 @@ func NewPrometheusMetrics(logger *zap.Logger) *PrometheusMetrics {
 		reaperCycleTimestamp: factory.NewGauge(
 			prometheus.GaugeOpts{Name: "reaper_last_cycle_timestamp_seconds", Help: "Unix timestamp of last reaper cycle"},
 		),
-
-		// Background components (generic)
-		componentCyclesTotal: factory.NewCounterVec(
-			prometheus.CounterOpts{Name: "component_cycles_total", Help: "Background component cycles by outcome"},
-			[]string{"component", "outcome"},
-		),
-		componentCycleTimestamp: factory.NewGaugeVec(
-			prometheus.GaugeOpts{Name: "component_last_cycle_timestamp_seconds", Help: "Unix timestamp of last component cycle"},
-			[]string{"component"},
-		),
-		componentErrorsTotal: factory.NewCounterVec(
-			prometheus.CounterOpts{Name: "component_errors_total", Help: "Component errors by phase"},
-			[]string{"component", "phase"},
-		),
-
-		// Goroutine panics
-		goroutinePanicsTotal: factory.NewCounterVec(
-			prometheus.CounterOpts{Name: "goroutine_panics_total", Help: "Total goroutine panics recovered"},
-			[]string{"component"},
-		),
-
-		// Workflow
-		workflowRunsTotal: factory.NewCounterVec(
-			prometheus.CounterOpts{Name: "workflow_runs_total", Help: "Total workflow runs by status"},
-			[]string{"tenant_id", "status"},
-		),
-		workflowRunDuration: factory.NewHistogramVec(
-			prometheus.HistogramOpts{Name: "workflow_run_duration_seconds", Help: "Workflow run duration", Buckets: latencyBuckets},
-			[]string{"tenant_id"},
-		),
-
-		// MCP internal client
-		mcpClientRequestsTotal: factory.NewCounterVec(
-			prometheus.CounterOpts{Name: "mcp_client_requests_total", Help: "Internal MCP client requests by operation and status"},
-			[]string{"server_name", "operation", "status"},
-		),
-		mcpClientReconnectsTotal: factory.NewCounterVec(
-			prometheus.CounterOpts{Name: "mcp_client_reconnects_total", Help: "Internal MCP client reconnect attempts"},
-			[]string{"server_name"},
-		),
-
-		// Evaluation
-		evaluationJobsTotal: factory.NewCounterVec(
-			prometheus.CounterOpts{Name: "evaluation_jobs_total", Help: "Evaluation jobs by outcome"},
-			[]string{"status"},
-		),
-
-		// Auth
-		authFailuresTotal: factory.NewCounterVec(
-			prometheus.CounterOpts{Name: "auth_failures_total", Help: "Auth failures by reason"},
-			[]string{"reason"},
-		),
-
 		logger: logger,
 	}
+	m.registerExtendedMetrics(factory)
+	return m
+}
+
+// registerExtendedMetrics registers metrics added after the initial
+// implementation to keep NewPrometheusMetrics under the file-wide
+// 120-line ratchet limit.
+func (m *PrometheusMetrics) registerExtendedMetrics(factory promauto.Factory) {
+	m.componentCyclesTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "component_cycles_total", Help: "Background component cycles by outcome"},
+		[]string{"component", "outcome"},
+	)
+	m.componentCycleTimestamp = factory.NewGaugeVec(
+		prometheus.GaugeOpts{Name: "component_last_cycle_timestamp_seconds", Help: "Unix timestamp of last component cycle"},
+		[]string{"component"},
+	)
+	m.componentErrorsTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "component_errors_total", Help: "Component errors by phase"},
+		[]string{"component", "phase"},
+	)
+	m.goroutinePanicsTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "goroutine_panics_total", Help: "Total goroutine panics recovered"},
+		[]string{"component"},
+	)
+	m.workflowRunsTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "workflow_runs_total", Help: "Total workflow runs by status"},
+		[]string{"tenant_id", "status"},
+	)
+	m.workflowRunDuration = factory.NewHistogramVec(
+		prometheus.HistogramOpts{Name: "workflow_run_duration_seconds", Help: "Workflow run duration", Buckets: latencyBuckets},
+		[]string{"tenant_id"},
+	)
+	m.mcpClientRequestsTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "mcp_client_requests_total", Help: "Internal MCP client requests by operation and status"},
+		[]string{"server_name", "operation", "status"},
+	)
+	m.mcpClientReconnectsTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "mcp_client_reconnects_total", Help: "Internal MCP client reconnect attempts"},
+		[]string{"server_name"},
+	)
+	m.evaluationJobsTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "evaluation_jobs_total", Help: "Evaluation jobs by outcome"},
+		[]string{"status"},
+	)
+	m.authFailuresTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{Name: "auth_failures_total", Help: "Auth failures by reason"},
+		[]string{"reason"},
+	)
 }
 
 // Registerer returns the private prometheus.Registerer so callers (e.g. pipeline)

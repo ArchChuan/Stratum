@@ -73,10 +73,10 @@
       "name": "Container.buildAgent",
       "cyclomatic": 25,
       "cognitive": 26,
-      "lines": 144,
+      "lines": 145,
       "max_nesting": 2,
       "params": 1,
-      "body_hash": "6edb933d9c7dae6eecfc1bc786f398d7d4008c881b05718bb317c1d4984bd7d5"
+      "body_hash": "c22d31f61c2cc6aa29c70364a43226f8c05f14abad5d9325dda212e1c371eeca"
     },
     {
       "id": "api/wiring/evaluation.go:Container.buildEvaluation",
@@ -87,7 +87,7 @@
       "lines": 141,
       "max_nesting": 2,
       "params": 1,
-      "body_hash": "f8a4de8650bbe173cb9451527d8a3bae15515ed51c7a3a7a4d3f1bd671019c7a"
+      "body_hash": "c32e84a6dc8942b02dd73063eaa76ff9ffe381440e14a5e03d2cf5c4d1076240"
     },
     {
       "id": "api/wiring/evaluation_agent_adapter.go:parseAgentCandidatePatch",
@@ -205,10 +205,10 @@
       "name": "Container.buildPlatform",
       "cyclomatic": 12,
       "cognitive": 19,
-      "lines": 49,
+      "lines": 51,
       "max_nesting": 4,
       "params": 1,
-      "body_hash": "b474622fd0defa1aa564ce7fa85aa3fa1ad473c78bf02a4e820e8b1cef5bc3a7"
+      "body_hash": "43fdc6ac4e05cdfe145b3e0526c2733065a19c1e8f38379983df682c36cc9ccf"
     },
     {
       "id": "api/wiring/resource_change_proposal.go:ResourceChangeProposalAdapters.ResolveBaseline",
@@ -277,26 +277,15 @@
       "body_hash": "b1fa5a93bbd8dfc20baa12b0f3deb5f59a7c41cfc9b7ee29feae797c35c0e9ee"
     },
     {
-      "id": "api/wiring/wiring.go:NewFromExisting",
-      "file": "api/wiring/wiring.go",
-      "name": "NewFromExisting",
-      "cyclomatic": 17,
-      "cognitive": 19,
-      "lines": 84,
-      "max_nesting": 2,
-      "params": 8,
-      "body_hash": "92acfa6c424f75ced4be1961ee60bd24733582351a3b162fe6a06c0c3060c6ea"
-    },
-    {
       "id": "cmd/e2e-attestation/main.go:run",
       "file": "cmd/e2e-attestation/main.go",
       "name": "run",
-      "cyclomatic": 22,
-      "cognitive": 37,
-      "lines": 100,
+      "cyclomatic": 16,
+      "cognitive": 26,
+      "lines": 72,
       "max_nesting": 2,
       "params": 3,
-      "body_hash": "0693a4b3f011e25340081e5c01b3bd32b5cebfff89955a1abaa9dca1f188f6d6"
+      "body_hash": "05f11c24a2277dc88d90c178be6bb20d21cdd177640aa2d5de9cc599022b0eec"
     },
     {
       "id": "cmd/e2e-github-oauth/main.go:loadProviderConfig",
@@ -304,10 +293,10 @@
       "name": "loadProviderConfig",
       "cyclomatic": 12,
       "cognitive": 11,
-      "lines": 24,
+      "lines": 21,
       "max_nesting": 1,
       "params": 1,
-      "body_hash": "5c5814b2357bffef4c334c08cb2f15e65518194037f1d10985d6278f2d7a1ecb"
+      "body_hash": "0a83c8fe8e8dcff83b6140afcc3c814349110b87926d573666d7f038a45d5769"
     },
     {
       "id": "cmd/e2e-mcp-server/main.go:completionHandler",
@@ -370,10 +359,10 @@
       "name": "runChatCleanup",
       "cyclomatic": 9,
       "cognitive": 22,
-      "lines": 29,
+      "lines": 33,
       "max_nesting": 4,
-      "params": 5,
-      "body_hash": "b12647b3ad15ffd5753f13cf5b72832ad6e2ea4317d335e81e99692ba5993d30"
+      "params": 6,
+      "body_hash": "9e4ff71ad5a959617a7ac4a3446fd5bfa89f47b9f413aedcc02cd375ac844181"
     },
     {
       "id": "config/config.go:githubOAuthEndpoints",
@@ -412,12 +401,12 @@
       "id": "internal/agent/application/agent.go:BaseAgent.executeReAct",
       "file": "internal/agent/application/agent.go",
       "name": "BaseAgent.executeReAct",
-      "cyclomatic": 23,
-      "cognitive": 33,
-      "lines": 84,
-      "max_nesting": 4,
+      "cyclomatic": 15,
+      "cognitive": 14,
+      "lines": 85,
+      "max_nesting": 1,
       "params": 3,
-      "body_hash": "6519113f203bc52a5328e608ab52c76ad26c1bffe29259de0e657b3fc773c777"
+      "body_hash": "0e41c9b47297601a655d858a6069ba2d1eed068bd5743c036f8ead604d374e32"
     },
     {
       "id": "internal/agent/application/agent.go:boundExecutionArtifactsJSON",
@@ -472,7 +461,7 @@
       "lines": 80,
       "max_nesting": 2,
       "params": 4,
-      "body_hash": "f5c19eb7f2b70e442a615b69899063bb7e6d7cbe95194583e29edbf3369d71a5"
+      "body_hash": "d193f60673142d936e5846080305907d4ff5afda38f60dc99c605d2c84a35c39"
     },
     {
       "id": "internal/agent/application/agent_service.go:AgentService.ExecuteStream",
@@ -483,7 +472,7 @@
       "lines": 94,
       "max_nesting": 1,
       "params": 5,
-      "body_hash": "e7e8b8dc8498e9bf8606d152d32d58ff89f802eb03d0eb46741dec394feed99a"
+      "body_hash": "e9f80c55f7ea8433583974406368844cd8989ae66a0be8748003550f5eb270d2"
     },
     {
       "id": "internal/agent/application/agent_service.go:AgentService.ResumeToolApproval",
@@ -511,34 +500,23 @@
       "id": "internal/agent/application/agent_service.go:AgentService.assembleOptions",
       "file": "internal/agent/application/agent_service.go",
       "name": "AgentService.assembleOptions",
-      "cyclomatic": 64,
-      "cognitive": 125,
-      "lines": 353,
+      "cyclomatic": 59,
+      "cognitive": 115,
+      "lines": 287,
       "max_nesting": 5,
       "params": 5,
-      "body_hash": "3e662eb36b51a7f847cd4d83a8d8236274de9ace75239002cdd538e714d6aa8a"
-    },
-    {
-      "id": "internal/agent/application/agent_service.go:AgentService.buildExtraToolsChecked",
-      "file": "internal/agent/application/agent_service.go",
-      "name": "AgentService.buildExtraToolsChecked",
-      "cyclomatic": 26,
-      "cognitive": 54,
-      "lines": 95,
-      "max_nesting": 4,
-      "params": 5,
-      "body_hash": "5b090ed915ee2862858cdba767704242f2e32cd2a2cc178328bf1077192c6dda"
+      "body_hash": "adbd19667888528fff81cf19127fcdda4ee59b1d20605e849b5f9b76976474d5"
     },
     {
       "id": "internal/agent/application/agent_service.go:AgentService.updateSystemAssistant",
       "file": "internal/agent/application/agent_service.go",
       "name": "AgentService.updateSystemAssistant",
-      "cyclomatic": 13,
-      "cognitive": 19,
-      "lines": 40,
+      "cyclomatic": 12,
+      "cognitive": 17,
+      "lines": 44,
       "max_nesting": 4,
       "params": 3,
-      "body_hash": "99a1691d515cdeb11d479f9fd909ed43e441ec723ec0e3234db0fee261f62dda"
+      "body_hash": "d5b65abee3a0427622bdd8bdb05a9731bcbb4b818238f98a12cb4321d4efa029"
     },
     {
       "id": "internal/agent/application/context_budget.go:BuildContextMessagesWithCompaction",
@@ -610,23 +588,23 @@
       "id": "internal/agent/application/graph/react.go:classifyToolProvider",
       "file": "internal/agent/application/graph/react.go",
       "name": "classifyToolProvider",
-      "cyclomatic": 15,
-      "cognitive": 29,
-      "lines": 53,
+      "cyclomatic": 14,
+      "cognitive": 28,
+      "lines": 51,
       "max_nesting": 3,
       "params": 2,
-      "body_hash": "0539c111d317bbf8898828de4d2fec2ffd166be177b33d25d9d6c17bc76be849"
+      "body_hash": "0da0721f1e9daa70caf312c3f8477d4cd62d5821051b880aa4d2c8e699cf206b"
     },
     {
       "id": "internal/agent/application/graph/react.go:effectiveTools",
       "file": "internal/agent/application/graph/react.go",
       "name": "effectiveTools",
-      "cyclomatic": 17,
-      "cognitive": 24,
-      "lines": 54,
+      "cyclomatic": 15,
+      "cognitive": 21,
+      "lines": 39,
       "max_nesting": 3,
       "params": 6,
-      "body_hash": "654d6c1df19d0707c5b892abfde96be8389de25b0cdd5f84d36e57c7f9b324de"
+      "body_hash": "fc774cb42760a7e63ae6b9c7310cc5cf1441d864f282d384f7bd18632dfeb1d6"
     },
     {
       "id": "internal/agent/application/graph/react.go:makeLLMNode",
@@ -733,10 +711,10 @@
       "name": "ToolExecutionGuard.Execute",
       "cyclomatic": 16,
       "cognitive": 21,
-      "lines": 70,
+      "lines": 74,
       "max_nesting": 3,
       "params": 2,
-      "body_hash": "eea0761e09cc96d42f5313f32f9e0f36816947020451871d70cfb0ed0b4a25d6"
+      "body_hash": "2383a8414f4b94082c62340d5e52c09832720e5cfc46c8f7e2336110d81f5edf"
     },
     {
       "id": "internal/agent/domain/agent_revision.go:AgentRevision.ApplyCandidate",
@@ -1102,17 +1080,6 @@
       "body_hash": "748bd9046badc697a8eff64307f67aace6bddcf454d0c40a2167026e27205357"
     },
     {
-      "id": "internal/knowledge/application/workspace_service.go:WorkspaceService.DeleteDocument",
-      "file": "internal/knowledge/application/workspace_service.go",
-      "name": "WorkspaceService.DeleteDocument",
-      "cyclomatic": 11,
-      "cognitive": 11,
-      "lines": 34,
-      "max_nesting": 2,
-      "params": 4,
-      "body_hash": "1292a79357cbfe91d13c09977135c3f36b6ebe8227789b57e03b12af599cfa29"
-    },
-    {
       "id": "internal/knowledge/domain/workspace.go:WorkspaceConfig.MergeUpdate",
       "file": "internal/knowledge/domain/workspace.go",
       "name": "WorkspaceConfig.MergeUpdate",
@@ -1129,10 +1096,10 @@
       "name": "TenantVectorCleaner.DropTenantCollections",
       "cyclomatic": 10,
       "cognitive": 19,
-      "lines": 43,
+      "lines": 47,
       "max_nesting": 4,
       "params": 2,
-      "body_hash": "95ca7d58d50fa8bd315a53b10ccfac194c6df35e592a5e2eb8092a9a28550497"
+      "body_hash": "1b384b7f6ae02f70334c78aa1c0295a8e022ebe7af929c6734d1e49bdd1dd2af"
     },
     {
       "id": "internal/llmgateway/infrastructure/model_registry.go:ModelRegistry.WarmTenant",
@@ -1194,22 +1161,11 @@
       "file": "internal/mcp/infrastructure/client.go",
       "name": "BaseClient.Disconnect",
       "cyclomatic": 12,
-      "cognitive": 17,
-      "lines": 39,
-      "max_nesting": 3,
+      "cognitive": 16,
+      "lines": 48,
+      "max_nesting": 2,
       "params": 1,
-      "body_hash": "aa6fb6814ad56ad8ceedd75f7d352e39ae86181630ba083679556cadb4ed4dbb"
-    },
-    {
-      "id": "internal/mcp/infrastructure/client.go:BaseClient.sendHTTPRequest",
-      "file": "internal/mcp/infrastructure/client.go",
-      "name": "BaseClient.sendHTTPRequest",
-      "cyclomatic": 12,
-      "cognitive": 14,
-      "lines": 53,
-      "max_nesting": 3,
-      "params": 2,
-      "body_hash": "d99f78427679e6f665a5f85edaf44e32df83b9a4c8021c75a47fae62bbb40c62"
+      "body_hash": "942d9270ba373d3f458d6c3565895f4bb1bbb02d2c023ce5d80f5b5effde6a65"
     },
     {
       "id": "internal/memory/application/extraction.go:MemoryService.ExtractFacts",
@@ -1426,10 +1382,10 @@
       "name": "runWithRestart",
       "cyclomatic": 11,
       "cognitive": 20,
-      "lines": 51,
+      "lines": 52,
       "max_nesting": 3,
       "params": 5,
-      "body_hash": "fbcf6083e1c5c9e9cee5ae6cd90ec72b67a7eb5494ff46d6f3f699e8185ebc27"
+      "body_hash": "5f6327ec36ec818ae78c76d272e3be041fa6a6b03ef10504e8a8c872add21b29"
     },
     {
       "id": "internal/memory/infrastructure/workers/history_worker.go:HistoryWorker.compressNext",
@@ -1448,10 +1404,10 @@
       "name": "SupersedeWorker.RunOnce",
       "cyclomatic": 14,
       "cognitive": 31,
-      "lines": 98,
+      "lines": 105,
       "max_nesting": 4,
       "params": 1,
-      "body_hash": "e19e3cca9fc58c043e4f685e9b280ffcdea1ff1aa523881c66fb9c1815e78ecb"
+      "body_hash": "01cf12b97a0aa919fbe6e4d244db2637ad736d7756f14e5549721d0143e8c359"
     },
     {
       "id": "internal/platform/e2eattestation/attestation.go:GenerateAttestation",
@@ -1462,18 +1418,7 @@
       "lines": 61,
       "max_nesting": 2,
       "params": 3,
-      "body_hash": "5cefcd48bebfadb9096aa42126f8ac35e93b0cf36f5f3a18a89559787cc5739e"
-    },
-    {
-      "id": "internal/platform/e2eattestation/attestation.go:verifyAttestationIdentity",
-      "file": "internal/platform/e2eattestation/attestation.go",
-      "name": "verifyAttestationIdentity",
-      "cyclomatic": 11,
-      "cognitive": 12,
-      "lines": 24,
-      "max_nesting": 2,
-      "params": 2,
-      "body_hash": "d731bdcef6b118a60e3dc3229d2c17cceea3f4426a2bebd9d3eaa1270bba3a3e"
+      "body_hash": "2ceb8782e61b7458e8e7a6bae95d4a950686eeffaf8cfe427b119277ad014ece"
     },
     {
       "id": "internal/platform/e2eattestation/manifest.go:ValidateManifest",
@@ -1723,10 +1668,10 @@
       "name": "NewPrometheusMetrics",
       "cyclomatic": 1,
       "cognitive": 0,
-      "lines": 156,
+      "lines": 171,
       "max_nesting": 0,
       "params": 1,
-      "body_hash": "28599ea39b3730c14bab6b588d9395968870b9371164cbe48ccd800d41cb8f99"
+      "body_hash": "24b235d65b4d26254d2b76d17c3fc8bdc16f073f9637800d8742295ecd5115e0"
     },
     {
       "id": "pkg/storage/milvus/client.go:VectorStore.HybridSearch",

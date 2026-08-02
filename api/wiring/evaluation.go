@@ -20,7 +20,6 @@ import (
 	mcpdomain "github.com/byteBuilderX/stratum/internal/mcp/domain"
 	skillapp "github.com/byteBuilderX/stratum/internal/skill/application"
 	skilldomain "github.com/byteBuilderX/stratum/internal/skill/domain"
-	"github.com/byteBuilderX/stratum/pkg/observability"
 	"github.com/byteBuilderX/stratum/pkg/storage/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -738,11 +737,7 @@ func (c *Container) buildEvaluation(ctx context.Context) error {
 	feedbackService := evalapp.NewFeedbackService(
 		feedbackRepo, experimentService, evaluationTraceEvidenceAdapter{provider: c.Agent.EvidenceProvider},
 	)
-	var evalMetrics observability.MetricsProvider = observability.NoopMetrics{}
-	if c.Platform != nil && c.Platform.Metrics != nil {
-		evalMetrics = c.Platform.Metrics
-	}
-	worker := evalapp.NewWorker(evaluationTenantLister{pool: db}, jobService, time.Second, evalMetrics)
+	worker := evalapp.NewWorker(evaluationTenantLister{pool: db}, jobService, time.Second, c.platformMetrics())
 	worker.Start(ctx)
 	c.shutdown = append(c.shutdown, func(context.Context) error { worker.Stop(); return nil })
 	baselineService := newEvaluationBaselineService(manager, agentProvider, mcpProvider, knowledgeProvider)
